@@ -1,0 +1,628 @@
+{
+ "config": {
+  "rootDir": "/fixture/tests/e2e",
+  "version": "1.61.1"
+ },
+ "suites": [
+  {
+   "title": "01-frontpage.spec.ts",
+   "file": "01-frontpage.spec.ts",
+   "column": 0,
+   "line": 0,
+   "specs": [
+    {
+     "title": "front page loads over generated certs and gates anonymous visitors to native sign-in",
+     "ok": false,
+     "tags": [],
+     "tests": [
+      {
+       "timeout": 90000,
+       "annotations": [],
+       "expectedStatus": "passed",
+       "projectId": "chromium",
+       "projectName": "chromium",
+       "results": [
+        {
+         "workerIndex": 0,
+         "parallelIndex": 0,
+         "status": "failed",
+         "duration": 0,
+         "error": {
+          "message": "Error: browserType.launch: Executable doesn't exist at /home/magus/.cache/ms-playwright/chromium_headless_shell-1228/chrome-headless-shell-linux64/chrome-headless-shell",
+          "stack": "<trimmed for the fixture>"
+         },
+         "errors": [
+          {
+           "message": "Error: browserType.launch: Executable doesn't exist at /home/magus/.cache/ms-playwright/chromium_headless_shell-1228/chrome-headless-shell-linux64/chrome-headless-shell"
+          }
+         ],
+         "stdout": [],
+         "stderr": [],
+         "retry": 0,
+         "startTime": "2026-08-23T02:36:46.250Z",
+         "annotations": [],
+         "attachments": [
+          {
+           "name": "error-context",
+           "contentType": "text/markdown",
+           "path": "test-results/studio-20260822-193645/test-results/01-frontpage-front-page-lo-b2308--visitors-to-native-sign-in-chromium/error-context.md"
+          },
+          {
+           "name": "screenshot",
+           "contentType": "image/png",
+           "path": "test-results/01-frontpage-chromium/test-failed-1.png"
+          }
+         ]
+        },
+        {
+         "workerIndex": 1,
+         "parallelIndex": 0,
+         "status": "failed",
+         "duration": 0,
+         "error": {
+          "message": "Error: browserType.launch: Executable doesn't exist at /home/magus/.cache/ms-playwright/chromium_headless_shell-1228/chrome-headless-shell-linux64/chrome-headless-shell",
+          "stack": "<trimmed for the fixture>"
+         },
+         "errors": [
+          {
+           "message": "Error: browserType.launch: Executable doesn't exist at /home/magus/.cache/ms-playwright/chromium_headless_shell-1228/chrome-headless-shell-linux64/chrome-headless-shell"
+          }
+         ],
+         "stdout": [],
+         "stderr": [],
+         "retry": 1,
+         "startTime": "2026-08-23T02:36:46.481Z",
+         "annotations": [],
+         "attachments": [
+          {
+           "name": "error-context",
+           "contentType": "text/markdown",
+           "path": "test-results/studio-20260822-193645/test-results/01-frontpage-front-page-lo-b2308--visitors-to-native-sign-in-chromium-retry1/error-context.md"
+          },
+          {
+           "name": "screenshot",
+           "contentType": "image/png",
+           "path": "test-results/01-frontpage-chromium/test-failed-1.png"
+          }
+         ]
+        }
+       ],
+       "status": "unexpected"
+      }
+     ],
+     "id": "dd1feebe4b781db39ff2-89733a8e672ec886a4b8",
+     "file": "01-frontpage.spec.ts",
+     "line": 4,
+     "column": 5
+    }
+   ]
+  },
+  {
+   "title": "12-rbac-gateway-route-access.spec.ts",
+   "file": "12-rbac-gateway-route-access.spec.ts",
+   "column": 0,
+   "line": 0,
+   "specs": [],
+   "suites": [
+    {
+     "title": "RBAC: gateway route-access ALLOW/DENY (schema.sql contract)",
+     "file": "12-rbac-gateway-route-access.spec.ts",
+     "line": 84,
+     "column": 6,
+     "specs": [
+      {
+       "title": "hugmesh-fe-gateway /admin/usage \u2014 e2e-admin => ALLOW (admin reaches the admin UI)",
+       "ok": true,
+       "tags": [],
+       "tests": [
+        {
+         "timeout": 90000,
+         "annotations": [],
+         "expectedStatus": "passed",
+         "projectId": "chromium",
+         "projectName": "chromium",
+         "results": [
+          {
+           "workerIndex": 32,
+           "parallelIndex": 0,
+           "status": "passed",
+           "duration": 2,
+           "errors": [],
+           "stdout": [],
+           "stderr": [],
+           "retry": 0,
+           "startTime": "2026-08-23T02:36:53.556Z",
+           "annotations": [],
+           "attachments": []
+          }
+         ],
+         "status": "expected"
+        }
+       ],
+       "id": "8408c68153f24f38bdb3-bba1287580d7b0f88abc",
+       "file": "12-rbac-gateway-route-access.spec.ts",
+       "line": 86,
+       "column": 9
+      },
+      {
+       "title": "hugmesh-fe-gateway /admin/usage \u2014 e2e-adminonly => ALLOW (ROLE_ADMIN alone reaches /admin)",
+       "ok": true,
+       "tags": [],
+       "tests": [
+        {
+         "timeout": 90000,
+         "annotations": [],
+         "expectedStatus": "passed",
+         "projectId": "chromium",
+         "projectName": "chromium",
+         "results": [
+          {
+           "workerIndex": 32,
+           "parallelIndex": 0,
+           "status": "passed",
+           "duration": 0,
+           "errors": [],
+           "stdout": [],
+           "stderr": [],
+           "retry": 0,
+           "startTime": "2026-08-23T02:36:53.571Z",
+           "annotations": [],
+           "attachments": []
+          }
+         ],
+         "status": "expected"
+        }
+       ],
+       "id": "8408c68153f24f38bdb3-bab096873e7d637ca173",
+       "file": "12-rbac-gateway-route-access.spec.ts",
+       "line": 86,
+       "column": 9
+      }
+     ],
+     "suites": []
+    }
+   ]
+  },
+  {
+   "title": "14-rbac-gateway-live.spec.ts",
+   "file": "14-rbac-gateway-live.spec.ts",
+   "column": 0,
+   "line": 0,
+   "specs": [],
+   "suites": [
+    {
+     "title": "RBAC: LIVE gateway route-access enforcement",
+     "file": "14-rbac-gateway-live.spec.ts",
+     "line": 86,
+     "column": 6,
+     "specs": [
+      {
+       "title": "hugmesh-fe-gateway /admin/usage \u2014 e2e-admin should be ALLOW (live)",
+       "ok": true,
+       "tags": [],
+       "tests": [
+        {
+         "timeout": 90000,
+         "annotations": [
+          {
+           "type": "skip",
+           "description": "pending: needs LIVE_GATEWAY=1 + a real SYSTEMS_CASDOOR_URL seeded via seed-accounts.sh --roles (fe/be/pki gateways are README-only today \u2014 Phase 8/10).",
+           "location": {
+            "file": "specs/14-rbac-gateway-live.spec.ts",
+            "line": 87,
+            "column": 8
+           }
+          }
+         ],
+         "expectedStatus": "skipped",
+         "projectId": "chromium",
+         "projectName": "chromium",
+         "results": [
+          {
+           "workerIndex": -1,
+           "parallelIndex": -1,
+           "status": "skipped",
+           "duration": 0,
+           "errors": [],
+           "stdout": [],
+           "stderr": [],
+           "retry": 0,
+           "startTime": "2026-08-23T02:36:54.733Z",
+           "annotations": [
+            {
+             "type": "skip",
+             "description": "pending: needs LIVE_GATEWAY=1 + a real SYSTEMS_CASDOOR_URL seeded via seed-accounts.sh --roles (fe/be/pki gateways are README-only today \u2014 Phase 8/10).",
+             "location": {
+              "file": "specs/14-rbac-gateway-live.spec.ts",
+              "line": 87,
+              "column": 8
+             }
+            }
+           ],
+           "attachments": []
+          }
+         ],
+         "status": "skipped"
+        }
+       ],
+       "id": "c4f552d8d36f84e01e9a-a78d1726c1db98778d99",
+       "file": "14-rbac-gateway-live.spec.ts",
+       "line": 97,
+       "column": 11
+      },
+      {
+       "title": "hugmesh-fe-gateway /admin/usage \u2014 e2e-adminonly should be ALLOW (live)",
+       "ok": true,
+       "tags": [],
+       "tests": [
+        {
+         "timeout": 90000,
+         "annotations": [
+          {
+           "type": "skip",
+           "description": "pending: needs LIVE_GATEWAY=1 + a real SYSTEMS_CASDOOR_URL seeded via seed-accounts.sh --roles (fe/be/pki gateways are README-only today \u2014 Phase 8/10).",
+           "location": {
+            "file": "specs/14-rbac-gateway-live.spec.ts",
+            "line": 87,
+            "column": 8
+           }
+          }
+         ],
+         "expectedStatus": "skipped",
+         "projectId": "chromium",
+         "projectName": "chromium",
+         "results": [
+          {
+           "workerIndex": -1,
+           "parallelIndex": -1,
+           "status": "skipped",
+           "duration": 0,
+           "errors": [],
+           "stdout": [],
+           "stderr": [],
+           "retry": 0,
+           "startTime": "2026-08-23T02:36:54.733Z",
+           "annotations": [
+            {
+             "type": "skip",
+             "description": "pending: needs LIVE_GATEWAY=1 + a real SYSTEMS_CASDOOR_URL seeded via seed-accounts.sh --roles (fe/be/pki gateways are README-only today \u2014 Phase 8/10).",
+             "location": {
+              "file": "specs/14-rbac-gateway-live.spec.ts",
+              "line": 87,
+              "column": 8
+             }
+            }
+           ],
+           "attachments": []
+          }
+         ],
+         "status": "skipped"
+        }
+       ],
+       "id": "c4f552d8d36f84e01e9a-2b8bd97163e51ddca027",
+       "file": "14-rbac-gateway-live.spec.ts",
+       "line": 97,
+       "column": 11
+      }
+     ],
+     "suites": []
+    }
+   ]
+  },
+  {
+   "title": "18-rbac-phase8-10-pending.spec.ts",
+   "file": "18-rbac-phase8-10-pending.spec.ts",
+   "column": 0,
+   "line": 0,
+   "specs": [],
+   "suites": [
+    {
+     "title": "PENDING (Phase 8/10): systems host shell role-conditional nav",
+     "file": "18-rbac-phase8-10-pending.spec.ts",
+     "line": 21,
+     "column": 6,
+     "specs": [
+      {
+       "title": "host shell shows admin nav for ROLE_ADMIN, hides it for ROLE_USER",
+       "ok": true,
+       "tags": [],
+       "tests": [
+        {
+         "timeout": 90000,
+         "annotations": [
+          {
+           "type": "skip",
+           "location": {
+            "file": "specs/18-rbac-phase8-10-pending.spec.ts",
+            "line": 22,
+            "column": 8
+           }
+          }
+         ],
+         "expectedStatus": "skipped",
+         "projectId": "chromium",
+         "projectName": "chromium",
+         "results": [
+          {
+           "workerIndex": -1,
+           "parallelIndex": -1,
+           "status": "skipped",
+           "duration": 0,
+           "errors": [],
+           "stdout": [],
+           "stderr": [],
+           "retry": 0,
+           "startTime": "2026-08-23T02:36:56.554Z",
+           "annotations": [
+            {
+             "type": "skip",
+             "location": {
+              "file": "specs/18-rbac-phase8-10-pending.spec.ts",
+              "line": 22,
+              "column": 8
+             }
+            }
+           ],
+           "attachments": []
+          }
+         ],
+         "status": "skipped"
+        }
+       ],
+       "id": "f5e5c8b4d45ec49aa622-ca7796dffeb6433ae6ee",
+       "file": "18-rbac-phase8-10-pending.spec.ts",
+       "line": 22,
+       "column": 8
+      },
+      {
+       "title": "host shell shows a ROLE_GAMES games entry-point only for games members",
+       "ok": true,
+       "tags": [],
+       "tests": [
+        {
+         "timeout": 90000,
+         "annotations": [
+          {
+           "type": "skip",
+           "location": {
+            "file": "specs/18-rbac-phase8-10-pending.spec.ts",
+            "line": 29,
+            "column": 8
+           }
+          }
+         ],
+         "expectedStatus": "skipped",
+         "projectId": "chromium",
+         "projectName": "chromium",
+         "results": [
+          {
+           "workerIndex": -1,
+           "parallelIndex": -1,
+           "status": "skipped",
+           "duration": 0,
+           "errors": [],
+           "stdout": [],
+           "stderr": [],
+           "retry": 0,
+           "startTime": "2026-08-23T02:36:56.554Z",
+           "annotations": [
+            {
+             "type": "skip",
+             "location": {
+              "file": "specs/18-rbac-phase8-10-pending.spec.ts",
+              "line": 29,
+              "column": 8
+             }
+            }
+           ],
+           "attachments": []
+          }
+         ],
+         "status": "skipped"
+        }
+       ],
+       "id": "f5e5c8b4d45ec49aa622-7352eb150b50b83c8d8d",
+       "file": "18-rbac-phase8-10-pending.spec.ts",
+       "line": 29,
+       "column": 8
+      },
+      {
+       "title": "host shell shows a ROLE_MOD moderation entry-point only for moderators",
+       "ok": true,
+       "tags": [],
+       "tests": [
+        {
+         "timeout": 90000,
+         "annotations": [
+          {
+           "type": "skip",
+           "location": {
+            "file": "specs/18-rbac-phase8-10-pending.spec.ts",
+            "line": 37,
+            "column": 8
+           }
+          }
+         ],
+         "expectedStatus": "skipped",
+         "projectId": "chromium",
+         "projectName": "chromium",
+         "results": [
+          {
+           "workerIndex": -1,
+           "parallelIndex": -1,
+           "status": "skipped",
+           "duration": 0,
+           "errors": [],
+           "stdout": [],
+           "stderr": [],
+           "retry": 0,
+           "startTime": "2026-08-23T02:36:56.554Z",
+           "annotations": [
+            {
+             "type": "skip",
+             "location": {
+              "file": "specs/18-rbac-phase8-10-pending.spec.ts",
+              "line": 37,
+              "column": 8
+             }
+            }
+           ],
+           "attachments": []
+          }
+         ],
+         "status": "skipped"
+        }
+       ],
+       "id": "f5e5c8b4d45ec49aa622-639dd3e2d8d8cac256f2",
+       "file": "18-rbac-phase8-10-pending.spec.ts",
+       "line": 37,
+       "column": 8
+      }
+     ],
+     "suites": []
+    }
+   ]
+  },
+  {
+   "title": "23-domainlock-mod-ban-interaction.spec.ts",
+   "file": "23-domainlock-mod-ban-interaction.spec.ts",
+   "column": 0,
+   "line": 0,
+   "specs": [],
+   "suites": [
+    {
+     "title": "domain-lock \u00d7 mod-ban: independent axes, no federation leak",
+     "file": "23-domainlock-mod-ban-interaction.spec.ts",
+     "line": 51,
+     "column": 6,
+     "specs": [
+      {
+       "title": "a plain ROLE_USER is DENIED the mod ban surface (and the subject is unaffected) @role:ROLE_USER @layer:bff",
+       "ok": true,
+       "tags": [
+        "role:ROLE_USER",
+        "layer:bff"
+       ],
+       "tests": [
+        {
+         "timeout": 90000,
+         "annotations": [
+          {
+           "type": "skip",
+           "description": "SNAP_FEDERATION_PEER unset (akkoma-peer not deployed \u2014 lean/no-x86 run)",
+           "location": {
+            "file": "specs/23-domainlock-mod-ban-interaction.spec.ts",
+            "line": 54,
+            "column": 10
+           }
+          }
+         ],
+         "expectedStatus": "skipped",
+         "projectId": "chromium",
+         "projectName": "chromium",
+         "results": [
+          {
+           "workerIndex": 42,
+           "parallelIndex": 0,
+           "status": "skipped",
+           "duration": 1,
+           "errors": [],
+           "stdout": [],
+           "stderr": [],
+           "retry": 0,
+           "startTime": "2026-08-23T02:36:56.805Z",
+           "annotations": [
+            {
+             "type": "skip",
+             "description": "SNAP_FEDERATION_PEER unset (akkoma-peer not deployed \u2014 lean/no-x86 run)",
+             "location": {
+              "file": "specs/23-domainlock-mod-ban-interaction.spec.ts",
+              "line": 54,
+              "column": 10
+             }
+            }
+           ],
+           "attachments": []
+          }
+         ],
+         "status": "skipped"
+        }
+       ],
+       "id": "09b330508e2eac9d50a3-76bd4af3b63bbf79b099",
+       "file": "23-domainlock-mod-ban-interaction.spec.ts",
+       "line": 52,
+       "column": 7
+      },
+      {
+       "title": "domain-locked user banned by mod: local ban, no federated state, lock survives the lift @role:ROLE_MOD @layer:homeserver",
+       "ok": true,
+       "tags": [
+        "role:ROLE_MOD",
+        "layer:homeserver"
+       ],
+       "tests": [
+        {
+         "timeout": 90000,
+         "annotations": [
+          {
+           "type": "skip",
+           "description": "SNAP_FEDERATION_PEER unset (akkoma-peer not deployed \u2014 lean/no-x86 run)",
+           "location": {
+            "file": "specs/23-domainlock-mod-ban-interaction.spec.ts",
+            "line": 78,
+            "column": 10
+           }
+          }
+         ],
+         "expectedStatus": "skipped",
+         "projectId": "chromium",
+         "projectName": "chromium",
+         "results": [
+          {
+           "workerIndex": 42,
+           "parallelIndex": 0,
+           "status": "skipped",
+           "duration": 1,
+           "errors": [],
+           "stdout": [],
+           "stderr": [],
+           "retry": 0,
+           "startTime": "2026-08-23T02:36:56.810Z",
+           "annotations": [
+            {
+             "type": "skip",
+             "description": "SNAP_FEDERATION_PEER unset (akkoma-peer not deployed \u2014 lean/no-x86 run)",
+             "location": {
+              "file": "specs/23-domainlock-mod-ban-interaction.spec.ts",
+              "line": 78,
+              "column": 10
+             }
+            }
+           ],
+           "attachments": []
+          }
+         ],
+         "status": "skipped"
+        }
+       ],
+       "id": "09b330508e2eac9d50a3-a676057151e4838507dd",
+       "file": "23-domainlock-mod-ban-interaction.spec.ts",
+       "line": 76,
+       "column": 7
+      }
+     ],
+     "suites": []
+    }
+   ]
+  }
+ ],
+ "errors": [],
+ "stats": {
+  "startTime": "2026-08-23T02:36:45.982Z",
+  "duration": 1234.5,
+  "expected": 2,
+  "skipped": 7,
+  "unexpected": 2,
+  "flaky": 0
+ }
+}

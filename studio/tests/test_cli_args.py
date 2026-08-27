@@ -1431,9 +1431,12 @@ def test_non_argv_fields_set():
     # accounts gen-provision-keys.sh mints. Each gates its table STEP and nothing else:
     # no builder parses either, and the rows they gate reach the cluster through the mesh
     # manifest, not the argv.
-    # qemu_e2e (post-build emulated-device tests) follows the pentest precedent
-    # exactly: a Studio-driven step AFTER the build (tests/qemu/run-qemu-docker.sh),
-    # forwarded to the build environment as HUGMESH_QEMU_E2E=1 — never a builder flag.
+    # qemu_device_tests (post-build emulated-device tests) follows the pentest
+    # precedent exactly: a Studio-driven step AFTER the build
+    # (tests/qemu/run-qemu-docker.sh), forwarded to the build environment as
+    # HUGMESH_QEMU_E2E=1 — never a builder flag. It was called `qemu_e2e` until
+    # 2026-08-26; the rename is what keeps it distinct from the PLAYWRIGHT lane
+    # (tests/qemu/run-qemu-e2e.sh), a different harness the same word named.
     # login_header_*/login_footer_*/login_bg_effect (the Themes editor's web-chrome
     # half, #50 item 2) joined the login_* family: same SNAP_THEME_CSS channel
     # (literal --sd-header-*/--sd-footer-*/--sd-bg-effect tokens), never argv.
@@ -1447,17 +1450,32 @@ def test_non_argv_fields_set():
         "login_footer_hidden", "login_footer_size", "login_footer_bg",
         "login_footer_text",
         "login_bg_effect",
-        "additional_domains", "configure_users", "qemu_e2e"}
+        "additional_domains", "configure_users", "qemu_device_tests"}
     # no flow flag may reach ANY builder argv, on any platform, in any mode
     for mode, role in (("mesh", "omnibus"), ("cloud", "desktop")):
         cfg = ImageConfig(mode=mode, role=role, platform="x86",
                           additional_domains=True, configure_users=True,
-                          qemu_e2e=True)
+                          qemu_device_tests=True)
         args = cfg.to_cli_args()
         for token in ("--additional-domains", "--configure-users",
                       "additional_domains", "configure_users",
-                      "--qemu-e2e", "qemu_e2e"):
+                      "--qemu-e2e", "qemu_e2e",
+                      "--qemu-device-tests", "qemu_device_tests"):
             assert token not in args
+
+    # A config saved under the PRE-2026-08-26 spelling must still arm the opt-in.
+    # from_dict filters unknown keys, so without the migration the operator's choice
+    # would load as False with nothing said — the failure mode the `games` migration
+    # beside it exists to prevent.
+    migrated = ImageConfig.from_dict({"mode": "mesh", "role": "omnibus",
+                                      "platform": "x86", "qemu_e2e": True})
+    assert migrated.qemu_device_tests is True
+    assert not hasattr(migrated, "qemu_e2e")
+    # ...and an explicit NEW-name value wins over a stale old one.
+    both = ImageConfig.from_dict({"mode": "mesh", "role": "omnibus",
+                                  "platform": "x86", "qemu_e2e": True,
+                                  "qemu_device_tests": False})
+    assert both.qemu_device_tests is False
     # and none of them appear in the capability table (they are not "silently dropped")
     for f in NON_ARGV_FIELDS:
         assert f not in PLATFORM_FIELD_SUPPORT

@@ -643,11 +643,16 @@ class BuildPage(QtWidgets.QWizardPage):
         # of its ArgoCD app tree, so booting one would assert against a stack that was
         # deliberately removed. Greyed rather than hidden, because the reason is a
         # decision the operator made one dropdown above and can reverse.
-        self.qemu_e2e = QtWidgets.QCheckBox(
-            "After the build, run the QEMU emulated-device tests in Docker "
-            "(all platforms, Pi first)")
-        pl.addWidget(self.qemu_e2e)
-        self.env.currentTextChanged.connect(self._sync_qemu_e2e_gate)
+        # THE LABEL NAMES THE LANE. It used to be reachable as "the e2e suite", which
+        # is a DIFFERENT harness (tests/qemu/run-qemu-e2e.sh drives Playwright against
+        # a booted image's UI; this box drives tests/qemu/run-qemu-docker.sh's in-guest
+        # assertions). Saying "in-guest assertions" and naming the script is what keeps
+        # the two apart on screen.
+        self.qemu_device_tests = QtWidgets.QCheckBox(
+            "After the build, run the QEMU emulated-device tests in Docker — in-guest "
+            "assertions over every image (run-qemu-docker.sh; all platforms, Pi first)")
+        pl.addWidget(self.qemu_device_tests)
+        self.env.currentTextChanged.connect(self._sync_qemu_device_tests_gate)
         # escape hatch: EVERY builder CLI option stays expressible, fielded or not
         self.extra_flags = QtWidgets.QLineEdit()
         self.extra_flags.setPlaceholderText(
@@ -897,15 +902,15 @@ class BuildPage(QtWidgets.QWizardPage):
         self.build_subdir.setText(c.build_subdir)
         self.seed_url.setText(c.seed_url)
         self.pentest.setChecked(c.pentest)
-        self.qemu_e2e.setChecked(c.qemu_e2e)
-        self._sync_qemu_e2e_gate()
-        # From here on this checkbox is the SOLE writer of cfg.qemu_e2e. QemuPage's radio
-        # seeds the field on the way in, but collect_all() re-runs the validatePage of
+        self.qemu_device_tests.setChecked(c.qemu_device_tests)
+        self._sync_qemu_device_tests_gate()
+        # From here on this checkbox is the SOLE writer of cfg.qemu_device_tests.
+        # QemuPage's radio seeds the field on the way in, but collect_all() re-runs the validatePage of
         # every visited page, so without this latch a revisit of THIS page re-asserted the
         # radio over an opt-out the operator had just made here — and line above then
         # re-ticked the box from it. Latched on the wizard rather than read back from
         # hasVisitedPage(), which back() pops and which therefore silently fails to hold.
-        self.wiz.qemu_e2e_owned_by_build = True
+        self.wiz.qemu_device_tests_owned_by_build = True
         self.extra_flags.setText(c.extra_flags)
         # mesh shows the per-image worklist summary + node-key opt-out; standalone/cloud
         # show the single-image Packages… button (each image's tri-tier package dialog).
@@ -990,10 +995,10 @@ class BuildPage(QtWidgets.QWizardPage):
         plumbing_default = all(
             getattr(c, f) == _field_default(f)
             for f in ("skip_kernel", "skip_clean", "distdir", "build_subdir",
-                      "seed_url", "pentest", "qemu_e2e", "extra_flags"))
+                      "seed_url", "pentest", "qemu_device_tests", "extra_flags"))
         self.plumbing_section.set_default_expanded(not plumbing_default)
 
-    def _sync_qemu_e2e_gate(self, *_a):
+    def _sync_qemu_device_tests_gate(self, *_a):
         """Enable the post-build device tests only for --env test.
 
         A prod build prunes the in-cluster test runner out of its app tree, so the
@@ -1002,12 +1007,14 @@ class BuildPage(QtWidgets.QWizardPage):
         one row above and can set it back. Unticking on the way out stops a config
         saved as prod from carrying a flag its own env forbids."""
         is_test = self.env.currentText() == "test"
-        self.qemu_e2e.setEnabled(is_test)
+        self.qemu_device_tests.setEnabled(is_test)
         if not is_test:
-            self.qemu_e2e.setChecked(False)
-        self.qemu_e2e.setToolTip(
-            "Boots each image this build produces as an emulated device in Docker and "
-            "runs the assertions — Pi roles first, then x86."
+            self.qemu_device_tests.setChecked(False)
+        self.qemu_device_tests.setToolTip(
+            "Boots each image this build produces as an emulated device in Docker "
+            "and runs the IN-GUEST assertions (tests/qemu/run-qemu-docker.sh) — Pi "
+            "roles first, then x86. This is not the Playwright browser suite: that "
+            "one is on the QEMU device tests screen."
             if is_test else
             "Only available for --env test: a prod image has the test runner pruned "
             "from its app tree, so the assertions would check for a stack that was "
@@ -1090,7 +1097,8 @@ class BuildPage(QtWidgets.QWizardPage):
         c.pentest = self.pentest.isChecked()
         # Only a test-env build can carry the post-build device tests (see the gate);
         # collecting the raw checkbox would let a test->prod switch strand a True.
-        c.qemu_e2e = self.qemu_e2e.isChecked() and self.env.currentText() == "test"
+        c.qemu_device_tests = (self.qemu_device_tests.isChecked()
+                               and self.env.currentText() == "test")
         c.extra_flags = self.extra_flags.text().strip()
         # the greyed (platform-unsupported) widgets were still collected above —
         # reset those fields to their defaults so a value picked while another

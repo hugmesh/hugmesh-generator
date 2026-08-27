@@ -75,7 +75,22 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # test-route-access-oracle.sh into the pull_request workflow. MEASURED at the
 # merge, not carried over from either side -- the branch itself said 120, main
 # said 130, and neither number is true of the merged tree.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-135}"
+#
+# 133 -> 135 on integrate/studio-e2e, and for the same reason a third time. That
+# integration wires two more: tests/scripts/test-stack-e2e-argv.sh (from
+# feat/stack-e2e-argv-passthrough, which listed it itself) and
+# tests/qemu/qemu-e2e-lane_test.sh (from feat/studio-qemu-e2e-lane, which did
+# NOT -- its own copy of this file predates the *_test.sh census and could not
+# see its own new suite). NO branch's number was correct for the merged tree:
+# the two e2e branches both said 118, main said 133. This is the number this
+# file printed when run against the merged tree, and nothing else.
+#
+# 135 -> 137 / denominator 145 -> 148 when main was merged in. Main had moved
+# under this branch three times (the tube signed-media gate, the fragment route
+# target gate, the password-reset front door, the federation module-slug gate).
+# MEASURED on the merged tree by running this file and reading its own line:
+#     137 of 148 suites are named by a pull_request-triggered workflow
+PREMERGE_BASELINE="${GUARD_PREMERGE:-137}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a

@@ -1,0 +1,37 @@
+{
+ "tier": "LEAN",
+ "runId": "fixture",
+ "result": "failed",
+ "passed": 2,
+ "failed": 2,
+ "skipped": 7,
+ "perRole": [
+  {
+   "role": "unknown",
+   "passed": 2,
+   "failed": 2,
+   "skipped": 0
+  },
+  {
+   "role": "ROLE_MOD",
+   "passed": 0,
+   "failed": 0,
+   "skipped": 7
+  }
+ ],
+ "perLayer": [
+  {
+   "layer": "unknown",
+   "passed": 2,
+   "failed": 2,
+   "skipped": 0
+  },
+  {
+   "layer": "gateway",
+   "passed": 0,
+   "failed": 0,
+   "skipped": 7
+  }
+ ],
+ "finishedAt": "2026-08-23T02:37:06.352Z"
+}

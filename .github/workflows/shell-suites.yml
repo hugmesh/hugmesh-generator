@@ -227,6 +227,7 @@ jobs:
             tests/qemu/mesh-cluster_test.sh
             tests/qemu/save_test.sh
             tests/qemu/verdict_test.sh
+            tests/qemu/qemu-e2e-lane_test.sh
             tests/scripts/test-anubis-env-gate.sh
             tests/scripts/test-arm-ro-distdir.sh
             tests/scripts/test-binpkg-pool-fingerprint.sh
@@ -275,6 +276,7 @@ jobs:
             tests/scripts/test-rpi5-per-board-pkgdir.sh
             tests/scripts/test-shared-build-assets.sh
             tests/scripts/test-spec-use-parity.sh
+            tests/scripts/test-stack-e2e-argv.sh
             tests/scripts/test-studio-launch.sh
             tests/scripts/test-sunshine-fence.sh
             tests/scripts/test-tools-path-lib.sh

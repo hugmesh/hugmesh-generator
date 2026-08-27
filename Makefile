@@ -381,9 +381,9 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         quest-plan quest-detect quest-mdm-enroll quest-enroll quest-ingest quest-status quest-wizard \
         deploy-plan deploy-apply deploy-status deploy-destroy \
         flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate qemu-mesh qemu-mesh-enumerate \
-        playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
+        playwright-deps e2e e2e-list ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
-        stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e \
+        stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e stack-e2e-list \
         kind-images kind-up kind-e2e kind-e2e-mfa kind-mfa-posture kind-down kind-honesty \
         view view-list view-stop view-trust view-untrust view-honesty \
         scan-hardware sessions-list sessions-show sessions-artifacts sessions-delete
@@ -1341,8 +1341,27 @@ playwright-deps: ## install the Playwright deps + chromium (needed once for e2e)
 	cd tests/e2e && { [ -d node_modules ] || npm ci || npm install; } \
 	  && npx playwright install --with-deps chromium
 
+# E2E_ARGS here is NOT the same shape as stack-e2e's. There, `npx playwright test`
+# is the DIRECT consumer and bare argv is correct. This lane interposes a shell
+# script whose parser ends in `*) echo "Unknown arg: $1"; usage 1`, so an
+# unseparated `--grep @smoke` (or a bare spec path) is a HARD ERROR, not a
+# passthrough — which is exactly how this target shipped broken on 2026-08-26.
+# The `--` is therefore load-bearing, and the $(if ...) keeps an unset E2E_ARGS
+# from emitting a dangling separator. e2e-list below must stay identical, and
+# tests/qemu/qemu-e2e-lane_test.sh asserts BOTH by rendering `make -n` and feeding
+# the result to the real parser.
 e2e: playwright-deps ## boot ROLE/ARCH in QEMU and run the Playwright e2e (default: x86 be+gpu)
-	$(SUDO) tests/qemu/run-qemu-e2e.sh -w "$(WORK_DIR)" --target $(if $(filter arm64,$(ARCH)),pi,x86) --role $(ROLE)
+	$(SUDO) tests/qemu/run-qemu-e2e.sh -w "$(WORK_DIR)" --target $(if $(filter arm64,$(ARCH)),pi,x86) --role $(ROLE) $(if $(E2E_ARGS),-- $(E2E_ARGS))
+
+# Enumerate what the QEMU Playwright lane WOULD run — the boot plan plus the spec
+# tree — as one JSON document. NO root, no image, no network, no boot: `--list`
+# runs before run-qemu-e2e.sh's artifact-autodetect, so a tree that has built
+# nothing yet still describes the lane (missing artifacts come back as nulls).
+# Deliberately NOT gated on playwright-deps: the spec half degrades to a LOUD,
+# named skip inside the JSON when tests/e2e/node_modules is absent, and the boot
+# plan is still worth answering. tests/qemu/qemu-e2e-lane_test.sh pins both halves.
+e2e-list: ## enumerate the QEMU Playwright lane (boot plan + specs) as JSON; boots nothing, needs no root
+	@tests/qemu/run-qemu-e2e.sh -w "$(WORK_DIR)" --target $(if $(filter arm64,$(ARCH)),pi,x86) --role $(ROLE) --list $(if $(E2E_ARGS),-- $(E2E_ARGS))
 
 ci: ## FULL pipeline: wipe -> build the whole fleet (Docker) -> QEMU-emulate + e2e (long; hours)
 	$(MAKE) rebuild
@@ -1817,10 +1836,93 @@ stack-clean: ## stop the local stack AND remove the images it built + the m2 reg
 # stay an explicit once-per-box step. SNAP_REPORT_DIR (optional, tests/e2e-
 # relative, inherited from the environment) redirects the junit/json/summary
 # artifacts; the hugmesh reporter's summary.json there is the durable result.
-stack-e2e: ## run the Playwright e2e suite against the RUNNING local stack (needs stack-up + stack-seed; once: make playwright-deps)
+#
+# E2E_ARGS — EXTRA ARGV HANDED STRAIGHT TO `playwright test`. Until 2026-08-26 this
+# target was the only way to drive the suite against the compose stack and it took
+# NO arguments at all, so there was no way to run one spec, one --grep or one
+# --repeat-each: every iteration on a single failing spec paid for all 33 files /
+# 221 tests. kind-e2e and kind-e2e-mfa had always named their single spec inline
+# (specs/27-…, specs/29-…), so the capability existed everywhere except the lane
+# people actually use.
+#
+# It is deliberately a VARIABLE, not a `%`-target or an argv trick, because make
+# imports the environment as make variables: `E2E_ARGS='specs/01-frontpage.spec.ts'
+# make stack-e2e` and `make stack-e2e E2E_ARGS=...` are then the same thing. That
+# matters for the Studio, whose LocalStackNode._make(extra_env=...) can add an env
+# var but cannot change the argv it builds.
+#
+# UNQUOTED on purpose — the shell word-splits it, so `E2E_ARGS='--grep @smoke -x'`
+# passes two arguments. The cost is that a spec path with a space in it needs the
+# caller's own quoting; no spec in tests/e2e/specs has one, and the alternative
+# (quoting here) would break multi-argument use, which is the common case.
+# Unset it expands to nothing and the recipe is byte-identical to the old one, so
+# the DEFAULT is still the full suite. tests/scripts/test-stack-e2e-argv.sh asserts
+# exactly that in both directions, by rendering and by running.
+#
+# WHY THIS DOES NOT DELEGATE TO tests/e2e/run.sh, which already forwards "$@".
+# Because they are not the same invocation and never were:
+#   * run.sh hardcodes `--reporter=list`, and a CLI --reporter REPLACES the config's
+#     reporter array. Delegating would silently drop junit.xml, report.json and the
+#     hugmesh reporter's summary.json — the artifacts the paragraph above calls the
+#     durable result, and the ones the admin-bff TestReportsController serves.
+#   * run.sh picks its ENGINE from whether the image named by PW_IMAGE
+#     (default hugmeshgames-e2e:latest) happens to exist on the box, falling back to
+#     host npx. Whether `make stack-e2e` runs in a container would then depend on an
+#     unrelated `docker image ls`, and the container path passes neither
+#     SNAP_REPORT_DIR nor SNAP_HOST_RESOLVER through.
+#   * run.sh's job is "run these specs from a machine that may not have browsers" —
+#     its callers are run-all.sh (mock stack) and tests/qemu/run-qemu-e2e.sh (a VM's
+#     front door). This target's job is "run them against THIS repo's compose stack
+#     with the durable reporters on."
+# Collapsing the two is a real cleanup, but it means changing run.sh's reporter
+# handling, which the QEMU lane depends on and which cannot be verified from here.
+# So: two callers, one documented reason, and the divergence is now written down
+# instead of merely existing.
+# E2E_SPECS (optional) narrows the run to named spec FILES, as Playwright positional
+# filters relative to tests/e2e — e.g.
+#     make stack-e2e E2E_SPECS='specs/01-frontpage.spec.ts specs/04-five-users.spec.ts'
+# This is what the Studio's e2e feature tree passes for a checked selection. UNSET
+# runs the WHOLE suite, which is the historical behaviour and stays the default: an
+# empty value must never be able to mean "run nothing" silently, and here it cannot,
+# because an empty variable expands to no arguments at all.
+#
+# TWO VARIABLES, ONE RECIPE, AND THEY ARE NOT REDUNDANT. E2E_ARGS is FREE ARGV
+# (flags: --grep, --repeat-each, -x) and is word-split by the shell; E2E_SPECS is
+# the STUDIO's channel and carries spec PATHS ONLY, every one of which
+# core.e2e_catalogue.safe_spec_args has matched against SPEC_ARG_RE before it is
+# allowed near this unquoted expansion. Collapsing the two would either give the
+# Studio's checkbox tree a door to arbitrary flags, or take --grep away from the
+# command line. They are expanded in this order because Playwright reads flags
+# first and positional filters last, and BOTH default to empty, so an unset pair
+# renders the historical full-suite command byte for byte.
+E2E_SPECS ?=
+stack-e2e: ## run the Playwright e2e suite against the RUNNING local stack (E2E_ARGS='--grep …' / E2E_SPECS='specs/NN-….spec.ts' narrow it; needs stack-up + stack-seed)
 	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
 	cd tests/e2e && SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' \
-	  npx playwright test -c playwright.config.ts
+	  npx playwright test -c playwright.config.ts $(E2E_ARGS) $(E2E_SPECS)
+
+# Enumerate the suite WITHOUT running it: `playwright test --list` resolves and
+# loads every spec file and prints the test tree, then exits. Nothing is launched —
+# no browser, no request — so this is the one e2e target that needs neither
+# `stack-up` nor a network. MEASURED, not assumed, on 2026-08-26: run under
+# `unshare -rn` (no network interfaces at all) with the stack down it exits 0 in
+# ~1.1s and enumerates 33 spec files / 221 tests.
+#
+# --reporter=json is FORCED rather than left to the caller, and that is not cosmetic.
+# MEASURED on 2026-08-26: a bare `--list` under the config's own reporter array
+# still fires every FILE writer — SNAP_REPORT_DIR/ came out holding junit.xml,
+# report.json AND the hugmesh reporter's summary.json, all describing zero tests. A
+# mere enumeration would therefore CLOBBER the durable artifacts of the last real
+# run. With `--reporter=json` the same directory stays empty (also measured). A CLI
+# --reporter replaces the whole array, so one flag both makes the output
+# machine-readable for a feature tree and disarms the writers.
+#
+# E2E_ARGS narrows the listing the same way it narrows a run, so
+# `make stack-e2e-list E2E_ARGS=--grep=@smoke` answers "what WOULD that run?"
+# without running it.
+stack-e2e-list: ## enumerate the e2e specs as JSON without running them (no stack, no network; E2E_ARGS narrows)
+	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	@cd tests/e2e && npx playwright test -c playwright.config.ts --list --reporter=json $(E2E_ARGS) $(E2E_SPECS)
 
 stack-logs: ## tail logs from the running local stack
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
