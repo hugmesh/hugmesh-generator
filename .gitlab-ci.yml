@@ -165,6 +165,24 @@ lint:client-connect-routes:
   script:
     - bash tests/scripts/test-client-connect-routes.sh
 
+# /_fragments/** must be routed at something that can SERVE bundles. The compose
+# lane pointed it at the remote-fragment SYNC app on its ACTUATOR port, and ran
+# no fragment web server at all — so SYNC_TARGET_DIR was a docroot nothing
+# served and federated remotes could not load (which presents as a BLANK PAGE,
+# not a 404). This asserts the route's target service EXISTS in the compose
+# project, that its port is DERIVED from the target's own nginx conf rather than
+# hardcoded, that the served docroot is a volume some service actually writes,
+# and that compose and the cluster agree on WHICH COMPONENT serves the path.
+# Eight negative controls must each trip it. Offline, no docker, no network.
+lint:fragment-route-target:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-fragment-route-target.sh
+
 # ExternalSecret TARGET-OWNERSHIP gate. The job above reads this repo's own
 # manifests; it cannot know what an UPSTREAM chart creates, and that is exactly
 # where this bug lived. specs/cluster declared an ExternalSecret targeting Secret
