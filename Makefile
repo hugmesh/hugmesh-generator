@@ -1836,24 +1836,60 @@ stack-ps: ## list the local stack's containers + status
 # tests/e2e/features/**/*.feature is compiled by `npx bddgen` into the GITIGNORED
 # tests/e2e/.features-gen/, which playwright.config.ts's `bdd` project runs.
 # Conventions every feature author follows: tests/e2e/features/README.md.
-.PHONY: stack-e2e-bdd stack-e2e-bdd-gen stack-e2e-bdd-check
+#
+# EVERY TARGET BELOW DELEGATES TO tests/e2e/run.sh. That script is the single
+# CLI entry point for this suite; when these recipes spelled the invocation
+# themselves there were two divergent ways to run one lane, and they drifted.
+# Anything you can do here you can do by hand with the same flags, which is the
+# point -- `make stack-e2e-bdd BDD_ENV=qemu` is exactly
+# `bash tests/e2e/run.sh --bdd --env qemu`.
+#
+# KNOBS (all optional):
+#   BDD_ENV=docker|kind|qemu  which mesh (default docker; NOTHING is started)
+#   BDD_TAGS='@interface:cli' Gherkin tag expression, forwarded to bddgen
+#   BDD_FEATURES='cli/'       feature path(s), forwarded to playwright
+#   BDD_ARGS='--reporter=line' extra playwright arguments, verbatim
+#   SNAP_PLATFORM=rpi5|x86    narrows the PLATFORM axis to the image running
+#   SNAP_REPORT_DIR / SNAP_RUN_ID   where junit/json/summary + bdd-steps/ land
+.PHONY: stack-e2e-bdd stack-e2e-bdd-gen stack-e2e-bdd-check stack-e2e-bdd-evidence
+
+BDD_ENV ?= docker
+BDD_RUN  = bash tests/e2e/run.sh --bdd --env $(BDD_ENV) \
+             $(if $(strip $(BDD_TAGS)),--tags '$(BDD_TAGS)',) \
+             $(if $(strip $(BDD_FEATURES)),--features '$(BDD_FEATURES)',)
 
 stack-e2e-bdd-gen: ## compile tests/e2e/features/*.feature into runnable Playwright specs (bddgen)
 	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
-	cd tests/e2e && npx bddgen
+	$(BDD_RUN) --gen
 
 # OFFLINE gate. No stack, no network. Proves every .feature compiles, every step
 # is bound (bddgen is missingSteps:fail-on-gen, so an undefined step FAILS here),
 # Playwright collects the generated tests, and no generated artefact is tracked.
 # This is the one to run before committing a feature.
-stack-e2e-bdd-check: stack-e2e-bdd-gen ## OFFLINE: verify every .feature generates, binds and is collected (+ the anti-decoration guard)
-	cd tests/e2e && npx playwright test --list --project=bdd --reporter=line
+stack-e2e-bdd-check: ## OFFLINE: verify every .feature generates, binds and is collected (+ the anti-decoration guards)
+	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	$(BDD_RUN) --list --reporter=line
 	bash tests/scripts/test-e2e-gherkin-harness.sh
+	bash tests/scripts/test-e2e-env-interface-dimensions.sh
+	bash tests/scripts/test-e2e-cli-lane.sh
 
 # LIVE lane. Same preconditions as stack-e2e (stack-up + stack-seed; once:
-# make playwright-deps). SNAP_PLATFORM=rpi5|x86 narrows the PLATFORM axis to the
-# image target actually running; unset runs every platform row. SNAP_REPORT_DIR
-# redirects junit/json/summary AND the per-step evidence under bdd-steps/.
-stack-e2e-bdd: stack-e2e-bdd-gen ## run the GHERKIN e2e lane against the RUNNING local stack (needs stack-up + stack-seed)
-	cd tests/e2e && SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' \
-	  npx playwright test -c playwright.config.ts --project=bdd
+# make playwright-deps) when BDD_ENV=docker. SNAP_PLATFORM=rpi5|x86 narrows the
+# PLATFORM axis to the image target actually running; unset runs every platform
+# row. SNAP_REPORT_DIR redirects junit/json/summary AND the per-step evidence
+# under bdd-steps/, which `make stack-e2e-bdd-evidence` then summarises.
+#
+# SNAP_BASE_URL is passed for BDD_ENV=docker only: run.sh reads it as the docker
+# mesh's address (PUBLIC_HTTPS_PORT is this repo's front door, not 8443), and
+# for kind/qemu run.sh resolves the address itself.
+stack-e2e-bdd: ## run the GHERKIN e2e lane (BDD_ENV=docker|kind|qemu; docker needs stack-up + stack-seed)
+	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	$(if $(filter docker,$(BDD_ENV)),SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' ,)$(BDD_RUN) $(BDD_ARGS)
+
+# Where did this run's screenshots / transcripts / widget grabs go, and what is
+# in them? Reads the manifest the lane wrote and breaks it down per environment
+# and per interface. Exits non-zero when there is nothing there -- an empty
+# summary reported as success is how a lane that ran NOTHING passes for one that
+# ran everything.
+stack-e2e-bdd-evidence: ## summarise the Gherkin lane's evidence manifest (per env / per interface)
+	bash tests/e2e/run.sh --evidence
