@@ -234,7 +234,7 @@ Then(
 
 // ── 2. the route-access seed ─────────────────────────────────────────────────
 
-interface AccessRow { gateway: string; pattern: string; role: string; allow: boolean }
+export interface AccessRow { gateway: string; pattern: string; role: string; allow: boolean }
 
 let accessRowsCache: AccessRow[] | undefined;
 
@@ -242,7 +242,7 @@ let accessRowsCache: AccessRow[] | undefined;
  *  of the committed route-access schema. Same authority the 33 handwritten specs
  *  mirror by hand in specs/rbac-route-access.ts — read here rather than copied,
  *  because a copy is how this repo grew three divergent persona lists. */
-function accessRows(): AccessRow[] {
+export function accessRows(): AccessRow[] {
   if (accessRowsCache) return accessRowsCache;
   const re = /\(\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*(true|false)\s*\)/g;
   const out: AccessRow[] = [];

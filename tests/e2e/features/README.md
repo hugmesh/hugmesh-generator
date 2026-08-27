@@ -175,6 +175,67 @@ Scenario: the QEMU page renders
 the studio scenarios naming the package to install, rather than dying inside a
 python traceback four layers down.
 
+### 2g. FUNCTION — what the user is actually DOING (owncast, tube, games, character tools)
+
+Role, platform, service, env and interface say *who*, *where* and *how*. None of
+them says *what*. "owncast is covered" was true of a suite that opened the console
+and never asked whether a stream can be published, watched, granted or moderated —
+four code paths, four gates, one green tick.
+
+So the media/games domain carries a fourth thing: an enumerated FUNCTION, spelled
+once in **`steps/function-catalogue.ts`**. It is deliberately **not** an axis in
+`steps/dimensions.ts`: an axis is validated in the `Before` hook for all 573
+scenarios, and a vocabulary only one domain uses has no business gating the whole
+suite. The function id travels two ways instead:
+
+* as a **step argument**, so the Gherkin says out loud which function it drives:
+  `Then the "grant-audit" function is gated by "ROLE_OWNCAST" at "/bff/owncast/**"`
+* as a **`@function:<id>` tag**, which the census step reads straight off the
+  feature files. Unknown tags are inert — `parseDimensionText` only looks at the
+  axes it knows.
+
+Each catalogue entry carries the gateway + url pattern the function really
+travels, the role the route-access seed grants there, and a **driveability
+verdict**:
+
+| verdict | means | a pending scenario is waiting on |
+|---|---|---|
+| `ui` | a seeded persona can drive it in a browser today | — |
+| `no-audience` | the surface is wired; **no persona in either roster holds the role** | a **seeder line** |
+| `absent` | nothing is mounted to drive at all | a **build** |
+
+That difference is the whole point of the verdict: `owncast/publish` unblocks the
+day somebody adds one line to `tests/e2e-extra-personas.sh`, and `games/launch`
+does not unblock at all until a client exists. Folding both into "pending" would
+hide which of the two is one line away.
+
+**The guard is the deliverable, the scenarios are its output.**
+`features/uncovered-services/media-games-function-matrix.feature` runs offline and:
+
+1. **censuses** — every catalogued function must be named by a `@function:<id>`
+   tag somewhere under `features/`. Add a function, and it goes red until a
+   scenario exists. A PENDING one naming what it needs counts; a comment does
+   not (comments are stripped before counting).
+2. **pins the gate three ways** — the role and pattern written in the feature
+   file, the catalogue's copy, and the committed route-access seed must all three
+   agree. The seed leg is the one that bites: the gateway is default-deny, so a
+   function whose surface has no row is a 403 for everyone however correct the UI
+   guard above it looks.
+3. **derives the access matrix** — the persona sets are computed by walking BOTH
+   rosters (`specs/rbac-roles.ts` and `tests/e2e-extra-personas.sh`) and asking
+   who holds a role the seed grants there. Seed one more persona and the computed
+   set moves while the written one does not: red, naming exactly who arrived.
+
+It deliberately does **not** model the gateway **admin-bypass**. "Reachable by
+exactly `<nobody>`" means *the seed names nobody*, not *nobody gets through* — the
+seed's own comments say admins reach a floor row via the bypass, which is why
+`/owncast/**`, `/tube/**` and `/social/forum/**` pair no `ROLE_ADMIN`. Who
+actually gets through is what the driven `@env:docker` scenarios answer. Two
+honest facts beat one blended number.
+
+Verify with `bash ../scripts/test-e2e-func-media-games.sh` (offline; seven
+mutations, tree restored on exit).
+
 ## 3. Steps
 
 * Reuse `common.steps.ts` first. A duplicate step text is a hard generation error
@@ -278,6 +339,7 @@ From `tests/e2e`:
 npx bddgen && npx playwright test --list --project=bdd
 bash ../scripts/test-e2e-gherkin-harness.sh
 bash ../scripts/test-e2e-env-interface-dimensions.sh   # env/interface axes + evidence
+bash ../scripts/test-e2e-func-media-games.sh           # the media/games FUNCTION census
 ```
 
 or, from the repo root, `make stack-e2e-bdd-check` (generation + the guard, no
