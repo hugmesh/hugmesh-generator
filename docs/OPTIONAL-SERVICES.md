@@ -537,7 +537,7 @@ alone keeps the console unusable; lighting it is a deliberate, ordered act:
 
 | # | OFF | Owner | Dark behaviour |
 |---|-----|-------|----------------|
-| 1 | **Generator gate** — `WORKLOAD_CONSOLE_ENABLED=false` (the `app.workload-console.enabled` default) *and* the two route-access rows pruned | build-time (`workloadConsole` slug) | the gateway **404s** the whole prefix (no route rows), and even a direct in-cluster call 404s (the BFF's `WorkloadAuthorizationFilter` denies a disabled prefix) |
+| 1 | **Generator gate** — `WORKLOAD_CONSOLE_ENABLED=false` (the `app.workload-console.enabled` default) *and* the two route-access rows pruned | build-time (`workloadConsole` slug) | the BFF's `WorkloadAuthorizationFilter` **404s** the disabled prefix — in-cluster calls included, so there is no gateway-only bypass. Note the pruned rows are **not** what refuses it: a path with no matching `url_pattern` is `NO_RULE` and the gateway filter **forwards** it (see [`ROUTE-ACCESS.md`](ROUTE-ACCESS.md) — *"'No matching row' is NOT a denial. Three verdicts, not two."*). Pruning them **ungoverns** the prefix; the app-side gate is the authority |
 | 2 | **k8s seam** — `WORKLOAD_CONSOLE_K8S_ENABLED=false`, no SA tokens mounted | build-time (same slug) | the fail-closed `NoopWorkloadClient` **503s every call**; no k8s API is ever dialed |
 | 3 | **DB master flag + TTL'd grants** — `workload_console_config.admin_enabled` / `dangerous_tier_enabled` default false; every admin needs an active grant lease (~24 h TTL, expiry-swept) | runtime (SUPERADMIN + step-up) | a fully lit-wired cluster still shows **nobody anything** |
 
