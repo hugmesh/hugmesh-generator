@@ -42,6 +42,8 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 from hugmesh_studio.core import build_sessions as bs                # noqa: E402
 from hugmesh_studio.core.fleet import FleetConfig, FleetDriver      # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo              # noqa: E402
+from hugmesh_studio.core import host_resources as hr                # noqa: E402
+from hugmesh_studio.core import resource_limits as rl               # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                 # noqa: E402
 from hugmesh_studio.gui.pages import fleet as fleet_mod             # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets                         # noqa: E402
@@ -62,6 +64,26 @@ def _pinned_host(monkeypatch):
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+
+
+@pytest.fixture
+def limits_off(monkeypatch):
+    """Pin every resource limit OFF for the byte-identity goldens below.
+
+    ``FleetDriver.command`` splats ``build_driver.docker_limit_args()`` into the
+    docker argv, and that resolves through ``resource_limits.effective()``, whose
+    auto formula is ``os.cpu_count() - 1``. With nothing pinned the goldens therefore
+    encode the TEST HOST's core count — they failed on this box with ``--cpus 27`` and
+    would have failed with a different number on any other machine. The limits module
+    documents its own contract as "with every limit OFF the argv is byte-identical to
+    the pre-limit command"; this fixture is how that contract gets asserted rather
+    than assumed. The wrapper's presence is covered separately, by
+    ``test_docker_argv_carries_the_resource_limit_wrapper``.
+    """
+    monkeypatch.setenv(rl.CPUS_ENV, "0")
+    monkeypatch.setenv(hr.MEMORY_ENV, "0")
+    monkeypatch.setenv(rl.GPUS_ENV, "0")
+    assert rl.effective().is_unlimited(), "limits_off did not actually disable the limits"
 
 
 @pytest.fixture(scope="session")
@@ -202,7 +224,7 @@ def _drive(page, choices):
 
 
 @pytest.mark.parametrize("name", sorted(GOLDEN_CHOICES))
-def test_progressive_steps_emit_identical_config_and_argv(qapp, name):
+def test_progressive_steps_emit_identical_config_and_argv(qapp, name, limits_off):
     """Driving the step widgets yields the exact FleetConfig AND the exact
     pre-refactor build-all-roles.sh argv on both backends (mutation-proof)."""
     page = fleet_mod.FleetPage(GENERATOR_DIR)
@@ -222,6 +244,32 @@ def test_progressive_steps_emit_identical_config_and_argv(qapp, name):
     assert d.command(cfg, "native") == GOLDEN_ARGV[name]["native"]
     assert d.command(cfg, "docker") == GOLDEN_ARGV[name]["docker"]
     page.deleteLater()
+
+
+def test_docker_argv_carries_the_resource_limit_wrapper(qapp, monkeypatch):
+    """The fleet lane is THE lane the 2026-07-15 host freeze came from, and the one
+    that had no cap at all — so its docker argv must carry the limit flags, in the
+    slot right after ``--privileged`` and before the bind mounts.
+
+    tests/test_resource_limits.py exercises the limits module in isolation and its
+    docstring claims coverage "across the build, fleet, compose and QEMU lanes", but
+    nothing there asserts an ASSEMBLED fleet command. That gap is why the goldens
+    above could silently absorb the wrapper appearing: the only test that saw the new
+    flags read them as a diff to be explained away rather than a contract to pin.
+    """
+    monkeypatch.setenv(rl.CPUS_ENV, "6")
+    monkeypatch.setenv(hr.MEMORY_ENV, "8g")
+    monkeypatch.setenv(rl.GPUS_ENV, "all")
+    cfg = FleetConfig(**GOLDEN_CHOICES["defaults"])
+    cmd = FleetDriver("/gen", HOST).command(cfg, "docker")
+    assert cmd[:4] == ["docker", "run", "--rm", "--privileged"]
+    assert cmd[4:12] == ["--cpus", "6", "--memory", "8g", "--memory-swap", "8g",
+                         "--gpus", "all"], cmd[:14]
+    assert cmd[12:14] == ["-v", "/gen:/src"], "limits must precede the bind mounts"
+    # and with them off the argv is the pre-limit one, byte for byte
+    for k in (rl.CPUS_ENV, hr.MEMORY_ENV, rl.GPUS_ENV):
+        monkeypatch.setenv(k, "0")
+    assert FleetDriver("/gen", HOST).command(cfg, "docker") == GOLDEN_ARGV["defaults"]["docker"]
 
 
 def test_hidden_group_keeps_stale_values(qapp):
