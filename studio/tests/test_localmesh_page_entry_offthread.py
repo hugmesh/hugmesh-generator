@@ -68,14 +68,21 @@ class _SlowStack:
     def __init__(self):
         self.threads: list[int] = []
         self.gate = threading.Event()
+        self.environments_asked: list[str] = []
 
     def status(self):
         self.threads.append(threading.get_ident())
         self.gate.wait(10)
         return SimpleNamespace(running=True, detail="49 container(s)")
 
-    def e2e_ready(self):
+    def e2e_ready(self, environment="docker"):
+        # `environment` arrived 2026-08-26 with the Studio's e2e environment
+        # chooser: the readiness question is now asked ABOUT a named mesh, so the
+        # probe carries which one. Recorded rather than ignored, so this fake
+        # also witnesses that the page asks about the environment it is showing
+        # instead of always asking about docker.
         self.threads.append(threading.get_ident())
+        self.environments_asked.append(environment)
         self.gate.wait(10)
         return []                              # ready
 
@@ -216,7 +223,11 @@ def test_a_blocked_gate_never_arms_the_e2e_button(qapp, page):
     assert page.e2e_btn.isEnabled(), "no problems were reported, so the gate opens"
 
     # and once the stack reports a blocker, the button closes with the honest reason
-    page.stack.e2e_ready = lambda: ["the local stack is not running — bring it up first."]
+    assert set(page.stack.environments_asked) == {"docker"}, (
+        "the gate must be asked about the environment the chooser is showing "
+        "(default docker), not about an unspecified one")
+    page.stack.e2e_ready = (
+        lambda environment="docker": ["the local stack is not running — bring it up first."])
     page._set_verbs_enabled(True)
     assert not page.e2e_btn.isEnabled()
     _settle(qapp, page)
