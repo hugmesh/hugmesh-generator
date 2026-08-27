@@ -30,7 +30,7 @@ from hugmesh_studio.core import e2e_environments as env_mod      # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo           # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod              # noqa: E402
 from hugmesh_studio.gui.pages import e2e as e2e_page_mod         # noqa: E402
-from hugmesh_studio.gui.qt import QtWidgets                      # noqa: E402
+from hugmesh_studio.gui.qt import QtCore, QtWidgets, Signal      # noqa: E402
 
 from _helpers import advance_to, pick_mode                       # noqa: E402
 
@@ -242,12 +242,116 @@ def test_a_clean_answer_is_the_only_thing_that_arms_the_door(page):
 
 def test_changing_the_environment_re_shuts_the_door_until_re_answered(page):
     """The gate's answer belongs to ONE environment. Carrying it across a change
-    would arm the button for a mesh nobody probed."""
+    would arm the button for a mesh nobody probed.
+
+    THE BLOCKER LIST IS ASSERTED HERE, not just the button. Review found the first
+    version of this test checking only ``tree_btn``/``gate_note`` while ``_blockers``
+    kept the previous environment's empty answer — and since the tree opens
+    asynchronously, that stale [] was enough to arm the Run button inside a dialog
+    constructed after the switch (the next test walks exactly that).
+    """
     page._on_gate_answer([])
     assert page.tree_btn.isEnabled()
+    assert page.blockers() == []
     page.env_combo.setCurrentIndex(page.env_combo.findData("kind"))
     assert not page.tree_btn.isEnabled()
     assert "Checking" in page.gate_note.text()
+    assert page.blockers() == [e2e_page_mod.UNCHECKED_BLOCKER]
+
+
+def test_the_tree_cannot_open_armed_for_a_mesh_nobody_probed(page, qapp):
+    """The skeptic's scenario, end to end: answer clean for docker, switch the
+    chooser, THEN let the (asynchronous) catalogue land. The dialog must be built
+    from the re-seeded list, not the previous mesh's permission."""
+    from hugmesh_studio.gui.qt import Qt
+    page._on_gate_answer([])                         # docker: clean
+    page.env_combo.setCurrentIndex(page.env_combo.findData("qemu"))
+    page._show_tree(_catalogue())                    # the tree arrives after the switch
+    dlg = page._tree_dialog
+    try:
+        assert dlg.blockers == [e2e_page_mod.UNCHECKED_BLOCKER]
+        item = dlg.feature_items["specs/01-front-page.spec.ts"]
+        item.setCheckState(0, Qt.CheckState.Checked)
+        assert not dlg.run_btn.isEnabled(), (
+            "a selection must not arm Run for an environment nothing has checked")
+        assert "has not been checked yet" in dlg.run_btn.toolTip()
+    finally:
+        dlg.close()
+        dlg.deleteLater()
+        qapp.processEvents()
+
+
+def test_an_answer_about_a_mesh_that_is_no_longer_chosen_is_discarded(page):
+    """The same hole one layer down, on the path the button-only fix does not cover:
+    a probe started for docker can still be in flight when the chooser moves, and its
+    answer arrives afterwards. It is stamped with the mesh it asked about, so it is
+    DISCARDED rather than applied to whatever the combo now says."""
+    page.env_combo.setCurrentIndex(page.env_combo.findData("kind"))
+    page._on_gate_answer([], "docker")               # the stale probe reports clean
+    assert not page.tree_btn.isEnabled()
+    assert page.blockers() == [e2e_page_mod.UNCHECKED_BLOCKER]
+    page._on_gate_answer([], "kind")                 # the CURRENT mesh's answer lands
+    assert page.tree_btn.isEnabled()
+    assert page.blockers() == []
+
+
+def _counting_probe(page, monkeypatch, qapp):
+    """Replace the gate probe with one that RECORDS instead of running.
+
+    It reports ``isRunning()`` honestly (a plain no-op start would defeat the
+    in-flight dedup this is used to measure) and the caller marks it finished at the
+    end so the wiz fixture's drain loop does not spin on it. The page's own real
+    probe — started by the fixture's page entry, answered by the stubbed e2e_ready —
+    is drained first, so what the list holds is only what the test caused.
+    """
+    for _ in range(200):
+        live = getattr(page, "_gate_probe", None)
+        if live is None or not live.isRunning():
+            break
+        qapp.processEvents()
+    page._gate_probe = None
+    started = []
+
+    class _Counting(e2e_page_mod._E2EGateProbe):
+        def start(self, *a, **k):                    # deliberately never runs
+            started.append(self._environment)
+            self._live = True
+
+        def isRunning(self):
+            return bool(getattr(self, "_live", False))
+
+    monkeypatch.setattr(e2e_page_mod, "_E2EGateProbe", _Counting)
+    return started
+
+
+def test_a_moved_chooser_supersedes_the_probe_instead_of_waiting_for_it(
+        page, monkeypatch, qapp):
+    """Waiting on the in-flight probe was how the stale answer got applied at all:
+    the door was re-shut, no new probe was started, and the old one's answer then
+    arrived as permission. A different mesh must start its OWN question."""
+    started = _counting_probe(page, monkeypatch, qapp)
+    page.env_combo.setCurrentIndex(page.env_combo.findData("kind"))
+    assert started == ["kind"]
+    page._sync_gate()                                # same mesh, still out: no second
+    assert started == ["kind"]
+    page.env_combo.setCurrentIndex(page.env_combo.findData("qemu"))
+    assert started == ["kind", "qemu"], "a different mesh must not reuse that answer"
+    page._gate_probe._live = False
+
+
+def test_the_device_lane_arm_starts_no_readiness_probe(page, monkeypatch, qapp):
+    """The QEMU arm hides the whole suite box, so probing for it spends three 30s
+    docker subprocesses plus a 5s urlopen on a question nothing on that arm reads —
+    and every live probe widens the teardown window a destroyed page dies in."""
+    started = _counting_probe(page, monkeypatch, qapp)
+    page.arm_qemu.setChecked(True)
+    page.initializePage()                            # a full re-entry on that arm
+    assert started == []
+    assert not page.tree_btn.isEnabled()
+    assert page.blockers() == [e2e_page_mod.UNCHECKED_BLOCKER]
+    page.arm_suite.setChecked(True)                  # …and coming back re-probes
+    assert started == ["docker"]
+    page._gate_probe._live = False
 
 
 def test_the_gate_probe_is_asked_about_the_chosen_environment(page):
@@ -359,6 +463,65 @@ def test_a_refused_plan_is_rendered_and_never_spawned(page, monkeypatch):
     page._run(())
     assert started == []
     assert "Cannot run e2e" in page.status.text()
+
+
+class _FakeWorker(QtCore.QObject):
+    """A run that never touches the host. The RUN is not what is under test here —
+    what holds the door shut WHILE it runs is."""
+    line = Signal(str)
+    done = Signal(bool)
+
+    def __init__(self, *a, **k):
+        super().__init__()
+
+    def start(self):
+        pass
+
+
+def test_a_run_in_flight_holds_the_list_as_well_as_the_button(page, monkeypatch,
+                                                              qapp):
+    """A catalogue probe started before a run can still deliver its tree after the
+    run began. Shutting only the BUTTON leaves that dialog armed — the same shape as
+    the environment-change hole, one path over."""
+    monkeypatch.setattr(e2e_page_mod, "_MeshWorker", _FakeWorker)
+
+    class ReadyNode:
+        def e2e_ready(self, environment="docker"):
+            return []
+
+        def run_e2e(self, **_k):
+            return True
+
+    monkeypatch.setattr(page.boot, "_stack_node", lambda: ReadyNode())
+    page._on_gate_answer([])
+    assert page.blockers() == []                 # armed, before the run
+    page._run(())
+    try:
+        assert page._running
+        assert not page.tree_btn.isEnabled()
+        assert page.blockers() == [e2e_page_mod.RUNNING_BLOCKER]
+        page._show_tree(_catalogue())            # a tree landing mid-run
+        dlg = page._tree_dialog
+        try:
+            assert dlg.blockers == [e2e_page_mod.RUNNING_BLOCKER]
+            assert not dlg.run_btn.isEnabled()
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+            qapp.processEvents()
+    finally:
+        page._running = False                    # the fake worker never reports done
+        page.worker = None
+
+
+def test_an_answer_landing_on_the_device_arm_does_not_arm_the_hidden_button(page):
+    """The gate answer is asynchronous, so it can arrive after the operator has
+    switched to the device-lane arm — where the button it would arm is hidden. It
+    must not leave an armed button underneath for a switch back to find."""
+    page.arm_qemu.setChecked(True)
+    page._on_gate_answer([])
+    assert not page.tree_btn.isEnabled()
+    assert page.blockers() == [e2e_page_mod.UNCHECKED_BLOCKER]
 
 
 # ── the identity bridge: stated, never silent ────────────────────────────────

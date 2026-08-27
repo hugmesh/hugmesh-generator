@@ -46,10 +46,14 @@ Everything on the suite arm answers to two objects and invents nothing:
     SAME ``_E2EGateProbe`` the Local-Docker-mesh page uses — the probe class is
     reused, its ANSWER is not: this page probes for ITS OWN chosen environment.
 
-TRI-STATE, seeded as a blocker. ``_blockers`` starts non-empty: before any probe has
-reported, "nothing established" must read as a blocker, never as permission. The list
-rides into ``E2ETreeDialog(blockers=...)``, which disables its Run and NAMES every
-reason, so the tree can never be armed against a mesh that cannot host the suite.
+TRI-STATE, seeded as a blocker, AND RE-SEEDED ON EVERY RE-GATE. ``_blockers`` starts
+non-empty: before any probe has reported, "nothing established" must read as a
+blocker, never as permission. The list rides into ``E2ETreeDialog(blockers=...)``,
+which disables its Run and NAMES every reason, so the tree can never be armed against
+a mesh that cannot host the suite. The half review caught: shutting the BUTTON is not
+enough — the tree opens asynchronously, so every path that shuts the door re-seeds
+the list too (``_sync_gate`` and ``_launch``). ``_on_gate_answer`` is the only place
+an empty list — permission — can come from.
 
 THE GATE IS PER-ENVIRONMENT AND SO IS THE HONESTY. ``e2e_ready`` deliberately answers
 only the tests/e2e + node_modules half for ``kind`` and ``qemu`` and leaves liveness
@@ -92,6 +96,11 @@ from .localmesh import _E2ECatalogueProbe, _E2EGateProbe, _MeshWorker
 UNCHECKED_BLOCKER = ("the chosen environment has not been checked yet — the "
                      "readiness probe has not reported.")
 
+#: The other shut state that is not a refusal. A run holds the door closed for as
+#: long as it is in flight, and an already-open feature tree must be told the same
+#: thing the button is showing.
+RUNNING_BLOCKER = "an e2e run is already in flight on this page."
+
 
 class E2EPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
@@ -106,6 +115,11 @@ class E2EPage(QtWidgets.QWizardPage):
         self.worker: _MeshWorker | None = None
         self._running = False
         self._blockers: list[str] = [UNCHECKED_BLOCKER]
+        #: Which environment the gate probe currently in flight was started for. Only
+        #: used to avoid stacking an identical probe; the ANSWER is stamped per-probe
+        #: (see _sync_gate), because "the last probe I started" is not the same fact as
+        #: "the probe this answer came from".
+        self._gate_env: str | None = None
 
         self.setTitle("Run e2e tests")
         self.setSubTitle(
@@ -272,10 +286,12 @@ class E2EPage(QtWidgets.QWizardPage):
     def initializePage(self):
         # Re-assert the flag from the radio on every entry: a True left over from an
         # earlier visit must not survive a Back-and-switch to the suite arm.
+        # _sync_arm re-gates as part of landing on an arm, so there is no separate
+        # _sync_gate() call here: a second one would only be swallowed by the
+        # probe-in-flight guard, and reading as if the gate had two owners.
         self._sync_arm()
         self._refresh_env_note()
         self._render_identity_note()
-        self._sync_gate()
 
     # ── the two arms ───────────────────────────────────────────────────────────
     def _sync_arm(self, *_a):
@@ -299,6 +315,11 @@ class E2EPage(QtWidgets.QWizardPage):
         # them (the trap qemu.py::_source_changed documents at length).
         self.setFinalPage(suite)
         self.completeChanged.emit()
+        # Re-gate for the arm we just landed on: the suite arm probes, the device
+        # arm shuts the door without spending a subprocess (see _sync_gate). During
+        # __init__ this is a no-op — tree_btn does not exist yet — and the tri-state
+        # seed set in __init__ stands.
+        self._sync_gate()
 
     # ── the environment ────────────────────────────────────────────────────────
     def environment(self) -> str:
@@ -410,36 +431,84 @@ class E2EPage(QtWidgets.QWizardPage):
         probe, and running it inline from initializePage could freeze the window for
         ~95s against a wedged daemon. A probe already in flight is left alone rather
         than stacking threads.
+
+        THE BLOCKER LIST MOVES WITH THE BUTTON, ALWAYS. Review found the first
+        version re-shutting the button on an environment change while leaving
+        ``_blockers`` holding the PREVIOUS environment's answer — and since the tree
+        opens asynchronously (``npx playwright test --list``, up to 180s), a dialog
+        constructed after the switch got ``blockers=[]`` and an armed Run for a mesh
+        nothing had checked. Every path that shuts the door therefore re-seeds the
+        list in the same breath; ``_on_gate_answer`` is the ONLY place an empty list
+        can come from.
         """
         btn = getattr(self, "tree_btn", None)
         if btn is None:
             return
         if self._running:
+            self._blockers = [RUNNING_BLOCKER]
             btn.setEnabled(False)
             btn.setToolTip("A run is in flight — wait for it to finish.")
             self.gate_note.setText("A run is in flight.")
             return
+        if not self.arm_suite.isChecked():
+            # THE DEVICE-LANE ARM. suite_box — and this button with it — is hidden,
+            # and nothing on that arm reads the answer, so probing here would spend
+            # three 30s docker subprocesses plus a 5s urlopen on a question nobody
+            # asked, and widen the window in which a live probe thread outlives the
+            # page (the teardown qFatal LocalMeshPage already carries). Shut the
+            # door, re-seed the tri-state, start nothing: switching BACK comes
+            # through _sync_arm, which lands here again with the arm checked.
+            self._blockers = [UNCHECKED_BLOCKER]
+            btn.setEnabled(False)
+            return
         # TRI-STATE, and this runs BEFORE the in-flight guard on purpose: a caller
         # that just blanket-enabled the buttons must not be able to leave this one
         # armed by arriving while a probe happens to be out.
+        self._blockers = [UNCHECKED_BLOCKER]
         btn.setEnabled(False)
         btn.setToolTip("Checking whether the chosen mesh can host the e2e suite…")
         self.gate_note.setText(
             "Checking whether the <b>%s</b> mesh can host the suite "
             "(read-only probes — this can take a few seconds)…" % self.environment())
-        if probe_running(self, "_gate_probe"):
-            return                       # its answer is already on the way
+        env_id = self.environment()
+        if probe_running(self, "_gate_probe") and self._gate_env == env_id:
+            return                       # its answer is already on the way, for THIS mesh
+        # A probe out for a DIFFERENT mesh is not reusable and must not be waited on:
+        # it is superseded here and its answer is discarded on arrival. Two probes
+        # briefly in flight is safe — own_probe gives each one its own deleteLater —
+        # whereas waiting for the stale one is how the door came to be armed for a
+        # mesh nobody asked about.
+        self._gate_env = env_id
         probe = own_probe(self, "_gate_probe",
                           _E2EGateProbe(self.boot._stack_node(),
-                                        environment=self.environment(),
+                                        environment=env_id,
                                         parent=self))
-        probe.result.connect(self._on_gate_answer)
+        # STAMPED WITH ITS OWN QUESTION. _E2EGateProbe.result carries only the problem
+        # list (it is shared with the local-mesh page, whose chooser cannot move), so
+        # the environment is bound here at connect time. Without it an answer about
+        # docker, arriving after the chooser moved to kind, reads as permission for
+        # kind — the exact lying button this page exists not to be.
+        probe.result.connect(lambda problems, asked=env_id:
+                             self._on_gate_answer(problems, asked))
         probe.start()
 
-    def _on_gate_answer(self, problems):
-        """The gate's answer arrived (GUI thread)."""
+    def _on_gate_answer(self, problems, asked: str | None = None):
+        """The gate's answer arrived (GUI thread).
+
+        ``asked`` is the environment the answering probe was started for. An answer
+        about a mesh that is no longer chosen is DISCARDED — never applied to the
+        chooser's current value — and the door stays shut on the seed _sync_gate
+        already put there. It defaults to None so a test (and any future caller that
+        knows the answer is current) can hand an answer in directly.
+        """
         btn = getattr(self, "tree_btn", None)
         if btn is None or self._running:
+            return
+        if asked is not None and asked != self.environment():
+            return
+        if not self.arm_suite.isChecked():
+            # The device-lane arm hides this button; an answer landing here must not
+            # leave it armed underneath for a Back-and-switch to find.
             return
         problems = list(problems or [])
         # Kept so an OPEN feature tree is gated by the same answer, in the same
@@ -548,6 +617,10 @@ class E2EPage(QtWidgets.QWizardPage):
 
     def _launch(self, env_id, node, bridge, specs):
         self._running = True
+        # The list, not just the button: a catalogue probe launched before this run
+        # can still deliver its tree after it started, and it must not be built from
+        # the pre-run answer. _done() re-gates and the real answer comes back.
+        self._blockers = [RUNNING_BLOCKER]
         self.tree_btn.setEnabled(False)
         self.env_combo.setEnabled(False)
         self.arm_qemu.setEnabled(False)

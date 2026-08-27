@@ -56,6 +56,23 @@ def test_every_canonical_slug_has_a_journey_screen():
         assert j.screen_for(slug).slug == slug
 
 
+def test_qemu_stays_a_side_flow_slug_even_though_its_card_went():
+    """A "dead branch" that must NOT be tidied away.
+
+    ``commit_mode`` builds its flags from SIDE_FLOW_SLUGS, and since 2026-08-27
+    "qemu" is no longer a mode-menu id on either face — so that comprehension's qemu
+    arm only ever CLEARS the flag, which reads like leftovers. It is not: membership
+    is what keeps the positional walk from ever landing on the qemu screen
+    (``_advance`` skips SIDE_FLOW_SLUGS, pinned in the standalone-walk test below)
+    and what lets ``goto("qemu")`` resolve a registered screen. Removing it to kill
+    the dead comparison would put a device-test page in the middle of an image walk.
+    """
+    assert "qemu" in journey.SIDE_FLOW_SLUGS
+    assert "qemu" not in [mid for mid, *_ in journey.MODE_CHOICES]
+    j = journey.Journey(".")
+    assert j.screen_for("qemu") is not None
+
+
 def test_the_hosted_screens_are_real_not_honest_stubs():
     """Which flows the TUI actually HOSTS, pinned by name so a screen can never
     silently regress into a stub (and a stub can never quietly claim a slug)."""

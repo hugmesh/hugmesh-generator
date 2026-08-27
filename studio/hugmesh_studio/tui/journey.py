@@ -756,6 +756,10 @@ class Journey:
         # "qemu" is in SIDE_FLOW_SLUGS but is no longer a mode-menu id, so this
         # comprehension only ever CLEARS qemu_selected. The single writer that can
         # RAISE it is E2EScreen's device-lane door (the GUI twin: E2EPage._sync_arm).
+        # Its MEMBERSHIP is still load-bearing and must not be tidied away with the
+        # dead comparison: it is what keeps _advance's positional walk off the qemu
+        # screen and what lets goto("qemu") resolve. Pinned by
+        # test_tui_journey::test_qemu_stays_a_side_flow_slug_even_though_its_card_went.
         #
         # ModePage's mirror of this line is deliberately CONDITIONAL
         # (``qemu_selected and mid == "e2e"``) rather than a flat clear, because Qt
