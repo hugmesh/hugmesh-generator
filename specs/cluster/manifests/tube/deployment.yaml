@@ -77,11 +77,12 @@ spec:
             seccompProfile: { type: RuntimeDefault }
 
         # ── tube-media — Nginx sidecar serving signed-URL-gated content ──────────
-        # Serves /tube/content/** from /var/tube-content. Validates presence of the
-        # HMAC sig= query parameter as a stub gate (full HMAC-SHA256 + expiry
-        # verification is enforced inside tube-bff-api before the signed URL is
-        # issued; the gateway additionally requires ROLE_TUBE). Stub: reject if sig
-        # is absent; the real owner + expiry two-wall lives in tube-bff-api.
+        # Serves /tube/content/** from /var/tube-content. Every request is decided by
+        # an auth_request subrequest to tube-bff-api's GET /bff/tube/media/verify
+        # (same pod, 127.0.0.1:8080), which performs the real constant-time HMAC-SHA256
+        # + expiry check over (sub, domain, path, exp). nginx holds NO key and makes no
+        # authorisation decision of its own. The gateway additionally requires
+        # ROLE_TUBE, and the owner two-wall is enforced at SIGN time in tube-bff-api.
         - name: tube-media
           image: nginx
           ports:
@@ -103,9 +104,20 @@ spec:
             name: tube-media-nginx-conf
 
 ---
-# tube-media nginx configuration — stub signed-URL gate.
-# Requires sig= query param; returns 403 if absent. Full HMAC-SHA256 + expiry
-# validation is the tube-bff-api's responsibility (this is defense-in-depth only).
+# tube-media nginx configuration — signed-URL gate, ENFORCED via auth_request.
+#
+# WAS a stub that only checked `if ($arg_sig = "")`. That is not a signature check:
+# it accepts ANY non-empty value, so `?sig=x` served any user's bytes. The HMAC
+# verifier already existed and was already permitAll for exactly this purpose
+# (tube-bff-api TubeMediaController#verify, GET /bff/tube/media/verify) — nginx just
+# never called it. It does now: every request for /tube/content/** is decided by an
+# auth_request subrequest to that endpoint, which returns 200 only for an authentic,
+# unexpired HMAC over the exact (sub, domain, path, exp) tuple, and an empty-bodied
+# 403 for every other case (blank param, unparseable exp, expired, forged).
+#
+# No HMAC is reimplemented here — nginx has no key and must not have one. The three
+# containers share one pod (one network namespace), so the sidecar reaches the BFF on
+# 127.0.0.1:8080 without leaving the pod.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -113,17 +125,71 @@ metadata:
   namespace: hugmesh-tube
 data:
   default.conf: |
+    # tube-bff-api, same pod, same network namespace.
+    # Declared as an upstream because proxy_pass below interpolates variables: with a
+    # variable in the URL nginx resolves the host at request time and would demand a
+    # `resolver`, UNLESS the host names a declared upstream. It does.
+    upstream tube_bff_verify {
+      server 127.0.0.1:8080;
+    }
+
     server {
       listen 8081;
       server_name _;
 
-      location /tube/content/ {
-        # Stub signed-URL gate: reject if sig param absent.
-        # Full HMAC-SHA256 + exp= + sub= + domain= validation enforced by tube-bff.
-        if ($arg_sig = "") {
-          return 403 "missing sig";
-        }
-        alias /var/tube-content/;
+      # This sidecar serves exactly one thing. Without this, an unmatched URI would
+      # fall through to nginx's compiled-in default root.
+      location / {
+        return 404;
+      }
+
+      # The signed-media gate.
+      #
+      # The named capture is the SIGNED path — byte-for-byte the `path` the BFF minted
+      # the MAC over (TubeMediaTokenService signs "${sub}|${domain}|${path}|${exp}"),
+      # i.e. the request URI minus the /tube/content prefix. nginx has already
+      # normalised $uri (so ../ cannot survive into the capture), and the character
+      # class matches TubeMediaController's PATH_PATTERN allowlist, so no percent-
+      # decoding skew can open a gap between what is verified and what is served.
+      location ~ ^/tube/content(?<media_path>/[A-Za-z0-9._/-]+)$ {
+
+        # Copy the four signed query parameters into plain variables HERE, in the
+        # parent request's rewrite phase (which runs before the access phase that
+        # auth_request lives in). $arg_* is read from the request it is evaluated
+        # against, and the auth_request subrequest is created with an EMPTY argument
+        # string — reading $arg_sig for the first time inside the subrequest would
+        # yield "" and hand the verifier a blank signature to reject. The subrequest
+        # shares the parent's variable array, so these resolved values do reach it.
+        set $media_sig    $arg_sig;
+        set $media_exp    $arg_exp;
+        set $media_sub    $arg_sub;
+        set $media_domain $arg_domain;
+
+        # THE gate. 2xx from the verifier allows; anything else denies. There is no
+        # second, weaker path to the bytes below — the alias is only reached after
+        # this subrequest returns 200.
+        auth_request /__tube_media_verify;
+
+        alias /var/tube-content$media_path;
+      }
+
+      # auth_request target. `internal` makes it unreachable from outside nginx, so it
+      # cannot be probed as an HMAC oracle directly.
+      location = /__tube_media_verify {
+        internal;
+
+        # The values are forwarded still percent-encoded exactly as they arrived
+        # ($arg_* is NOT decoded by nginx), so the base64url signature survives
+        # unchanged and Spring decodes it once, symmetrically with sign().
+        proxy_pass http://tube_bff_verify/bff/tube/media/verify?path=$media_path&sig=$media_sig&exp=$media_exp&sub=$media_sub&domain=$media_domain;
+        proxy_method GET;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        # The subrequest carries no user credential by design: the short-TTL HMAC IS
+        # the credential. Strip anything the client sent so a stolen bearer cannot
+        # influence the verdict.
+        proxy_set_header Authorization "";
+        proxy_set_header Cookie "";
       }
     }
 
