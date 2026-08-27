@@ -1,6 +1,20 @@
-# Vendor-agnostic open GPU stack — Mesa with all open drivers + Vulkan.
-# GPU-ONLY: the builder copies this file ONLY for be+gpu / omnibus roles; headless
-# pki/be/fe roles skip it (the role-independent container/iptables flags now live
-# in package.use/containers, which is always copied).
-media-libs/mesa vulkan vaapi vdpau gles2 gbm egl llvm video_cards_amdgpu video_cards_radeonsi video_cards_intel video_cards_iris video_cards_nouveau
+# Vendor-agnostic open GPU stack — Mesa with Vulkan/VA-API.
+# GPU-ONLY: the builder copies this file for GPU roles (be+gpu / omnibus / edge_ai
+# and every client desktop); headless pki/be/fe roles skip it (the role-independent
+# container/iptables flags now live in package.use/containers, which is always copied).
+#
+# NO video_cards_* TOKENS HERE. The card set is a per-build decision made exactly
+# once, by --gpu-driver, and rendered into make.conf's VIDEO_CARDS; mesa (and
+# libdrm, and every other package with a video_cards_* IUSE) inherits THAT list.
+# Forcing cards here instead pulled in each forced card's dependency chain while
+# its deps kept inheriting the narrower make.conf list — unsatisfiable, and it
+# aborts the whole 'image' emerge GROUP. This file used to force the all-free set
+# (amdgpu radeonsi intel iris nouveau), which is why it went unnoticed: be+gpu and
+# omnibus default to --gpu-driver all-free and agreed by accident, while edge_ai
+# (default --gpu-driver nvidia ⇒ VIDEO_CARDS="nouveau nvidia") walled on
+#   ">=x11-libs/libdrm-2.4.121[video_cards_amdgpu]" ... required by media-libs/mesa
+# ~40min into the 2026-08-22 fleet run, reported as a missing grub/dracut/kubelet
+# payload. build-x86-host-stage4.sh's assert_spec_video_cards() now refuses such a
+# spec at argv time, and tests/scripts/test-spec-use-parity.sh pins it.
+media-libs/mesa vulkan vaapi vdpau gles2 gbm egl llvm
 media-libs/libva vaapi
