@@ -80,8 +80,8 @@ from ...core.local_mesh_bootstrap import (
     discover_brands)
 from ...core.local_mesh_stages import verb_phases
 from ...core.local_services import (
-    UNAVAILABLE_LOCALLY, by_slug as local_service, default_selection,
-    describe as local_describe, local_groups, local_slugs)
+    KIND_ADDONS, UNAVAILABLE_LOCALLY, by_slug as local_service, default_selection,
+    describe as local_describe, kind_addon_slugs, local_groups, local_slugs)
 from ...core.progress_parse import ProgressParser
 from ...core.seeded_credentials import load_roster
 from ...core.instance import state_dir
@@ -1048,6 +1048,26 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "either is missing.")
         self.devops_up_btn.clicked.connect(self._devops_up)
         brow.addWidget(self.devops_up_btn)
+        # ── the DevOps lane's OWN service selection (operator ask 2026-08-26) ──
+        # Until this row existed, "Start DevOps lane" took no selection at all:
+        # `make kind-up` passed KIND_PROFILE and MFA, so the curated Application
+        # set could only be changed by editing bootstrap-kind.sh. These boxes ARE
+        # live — they become KIND_ADDONS on the bring-up's env — which is what
+        # separates them from the greyed argocd/workloadConsole rows in the
+        # services table above (those name a lane; these drive one).
+        #
+        # They start at the LANE's shipped default (metrics-server ON), not at
+        # off: the seven HPAs the lane deploys are already applied and already
+        # inert without it, so an unticked default would render the broken state
+        # as the normal one.
+        self.kind_addon_boxes: dict[str, QtWidgets.QCheckBox] = {}
+        for _addon in KIND_ADDONS:
+            _box = QtWidgets.QCheckBox(_addon.label)
+            _box.setChecked(_addon.default_on)
+            _box.setToolTip(_addon.note + "  Applied by 'Start DevOps lane' "
+                            "(KIND_ADDONS); the docker mesh above ignores it.")
+            self.kind_addon_boxes[_addon.slug] = _box
+            brow.addWidget(_box)
         self.devops_down_btn = QtWidgets.QPushButton("Delete DevOps lane")
         self.devops_down_btn.setToolTip(
             "Delete the local Kubernetes cluster. Destroys the DevOps lane ONLY "
@@ -1219,7 +1239,23 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                            if self.selected_idp() != "casdoor" else ""),
             idp_jwks=(self.idp_jwks.text().strip()
                       if self.selected_idp() != "casdoor" else ""),
+            # ALWAYS a tuple, never None: this page HAS a picker for the DevOps
+            # lane now, so its selection is explicit even when it equals the
+            # lane's default. Byte-identity on the untouched path is preserved in
+            # core instead (kind_addon_env exports nothing while the selection
+            # matches what the lane ships) — the same split collect_services()
+            # uses, and for the same reason.
+            kind_addons=self.collect_kind_addons(),
         )
+
+    def collect_kind_addons(self) -> tuple[str, ...]:
+        """The ticked DevOps-lane add-ons, in catalogue order (never widget order).
+
+        An EMPTY tuple is meaningful and is NOT None: it means the operator
+        deliberately unticked everything, which core exports as the literal
+        `none`. Collapsing the two would silently re-enable metrics-server."""
+        return tuple(s for s in kind_addon_slugs()
+                     if self.kind_addon_boxes[s].isChecked())
 
     def selected_idp(self) -> str:
         """The provider id behind the combo's current row (data role, never the
@@ -1875,6 +1911,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         """Start the DevOps (Kubernetes) lane. The tool check runs HERE too, so
         the operator gets the missing-prerequisite sentence instead of a failed
         make deep in a streamed log."""
+        # REBUILD from the live widgets first, exactly like every docker verb
+        # below does. self.boot is only refreshed by _refresh_plan, which the
+        # DevOps add-on boxes deliberately do not drive (they say nothing about
+        # the docker plan) — so without this line the lane would start with
+        # whatever add-on selection the config happened to be holding, which is
+        # the stale-selection bug this channel exists to remove.
+        self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
         node = self.boot._stack_node()
         problems = node.devops_available()
         if problems:

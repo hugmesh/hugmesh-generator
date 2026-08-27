@@ -44,10 +44,14 @@ info(){ :; }; warn(){ :; }
 for fn in _mgd_die _mgd_tier3_blocker _mgd_endpoint _mgd_selected _mgd_is_tier12 \
           _mgd_is_tier3 validate_managed_services _mgd_rewrite_env _mgd_pg \
           _mgd_pg_casdoor _mgd_velero _mgd_fed_bundles _mgd_bake_readme \
-          gate_backing_services _opt_drop_kustomize_line; do
+          gate_backing_services; do
     eval "$(extract_fn "${fn}")"
     type "${fn}" >/dev/null 2>&1 || { echo "  FAIL could not extract ${fn}"; exit 1; }
 done
+# _opt_drop_kustomize_line moved into the SHARED scripts/_optional-services-lib.sh
+# on 2026-08-26 (one gate, two builders). Load it the way the builder resolves it.
+source "${REPO}/tests/lib/opt-gate-source.sh"
+opt_gate_load "${BUILDER}" _opt_drop_kustomize_line || exit 1
 
 echo "== managed backing services gate unit test =="
 

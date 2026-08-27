@@ -1,5 +1,20 @@
-# Root "app-of-apps". Applied once by the bootstrap on the pki control-plane;
-# ArgoCD then syncs every Application under cluster/apps/ from the GitOps repo.
+# Root "app-of-apps" — the OPT-IN, REPO-DRIVEN topology. NOT applied by default.
+#
+# ⚠ THIS ROOT IGNORES EVERY BUILD-TIME GATE. Its source is
+# `path: specs/cluster/apps` + `directory.recurse: true` against the GitOps REPO,
+# so ArgoCD instantiates specs/cluster/apps AS IT EXISTS ON ${REV} — not the
+# tree baked into the image at /var/lib/hugmesh/cluster/apps. Applying it was
+# bootstrap.sh's only apply step until 2026-08-26, which is why every `rm -f` in
+# gate_optional_services()/gate_env_apps() was INERT on a real device: a device
+# built with `--optional-services akkoma` still received tuwunel, phpbb, games,
+# owncast and tube, straight from the repo.
+#
+# specs/cluster/bootstrap/bootstrap.sh now applies the BAKED apps/ tree directly
+# instead. This file is kept for the cluster that genuinely wants to be driven
+# from a git branch (a dev/staging cluster tracking main), and bootstrap.sh
+# applies it ONLY under HUGMESH_GITOPS_ROOT_RECURSE=1, printing what that costs.
+# Do not re-wire it as the default without re-reading specs/cluster/README.md
+# "What the device syncs".
 #
 # repoURL / targetRevision are patched at bootstrap time from
 # /etc/hugmesh/gitops.env (HUGMESH_GITOPS_REPO / _REV), default below.

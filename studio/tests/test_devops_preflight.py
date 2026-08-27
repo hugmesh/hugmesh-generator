@@ -277,15 +277,26 @@ def test_devops_up_proceeds_and_names_the_mode(monkeypatch, tmp_path):
                         lambda self: [], raising=True)
     ran: dict = {}
 
-    def _fake_make(self, target, timeout, on_line=None, cancel=None):
+    # extra_env is part of the call now (the DevOps lane's KIND_ADDONS selection
+    # channel, 2026-08-26). A double that does not accept it would make every
+    # devops_up test fail with a TypeError that says nothing about the mode line
+    # under test — so it is accepted here AND asserted, rather than swallowed by
+    # a **kwargs that would let the wire be cut without a word.
+    def _fake_make(self, target, timeout, extra_env=None, on_line=None, cancel=None):
         ran["target"] = target
+        ran["env"] = extra_env
         return True, "done"
     monkeypatch.setattr(LocalStackNode, "_make", _fake_make, raising=True)
 
     lines: list[str] = []
     ok, _ = node.devops_up(on_line=lines.append)
     assert ok is True and ran["target"] == "kind-up"
+    # No add-on picker was used, so NOTHING is added to make's env: the bring-up
+    # is byte-identical to one from before that axis existed, and the script's own
+    # default (metrics-server ON) stands.
+    assert ran["env"] == {}
     assert any("tokenless local sync" in ln for ln in lines)
+    assert any("infra add-ons" in ln for ln in lines), lines
 
 
 def test_devops_up_token_mode_is_named(monkeypatch, tmp_path):
@@ -294,8 +305,8 @@ def test_devops_up_token_mode_is_named(monkeypatch, tmp_path):
     monkeypatch.setattr(LocalStackNode, "devops_available",
                         lambda self: [], raising=True)
     monkeypatch.setattr(LocalStackNode, "_make",
-                        lambda self, target, timeout, on_line=None, cancel=None:
-                        (True, "done"), raising=True)
+                        lambda self, target, timeout, extra_env=None,
+                        on_line=None, cancel=None: (True, "done"), raising=True)
     lines: list[str] = []
     ok, _ = node.devops_up(on_line=lines.append)
     assert ok is True
@@ -468,8 +479,8 @@ def test_devops_up_names_the_clusters_own_credential(monkeypatch, tmp_path):
     monkeypatch.setattr(LocalStackNode, "devops_available",
                         lambda self: [], raising=True)
     monkeypatch.setattr(LocalStackNode, "_make",
-                        lambda self, target, timeout, on_line=None, cancel=None:
-                        (True, "done"), raising=True)
+                        lambda self, target, timeout, extra_env=None,
+                        on_line=None, cancel=None: (True, "done"), raising=True)
     lines: list[str] = []
     ok, _ = node.devops_up(on_line=lines.append)
     assert ok is True

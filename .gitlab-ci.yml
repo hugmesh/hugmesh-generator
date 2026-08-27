@@ -1089,6 +1089,23 @@ lint:kind-profile-app-closure:
   script:
     - bash tests/scripts/test-kind-profile-app-closure.sh
 
+# The kind lane's SERVICE-SELECTION CHANNEL, end to end and offline: a selection
+# made in the Studio must survive the Makefile and arrive at bootstrap-kind.sh.
+# It exists because `make kind-up` passed only KIND_PROFILE and MFA, so
+# apps/01-metrics-server.yaml sat in no profile while KIND_PROFILE=sso deployed
+# seven HorizontalPodAutoscalers with no resource-metrics API to read — HPAs that
+# report <unknown> forever and look exactly like an idle cluster. Needs make and
+# python3 (the Studio half is asserted by CAPTURING the env `make` is handed, not
+# by reading the source for the word extra_env), hence python:3-slim + make.
+lint:kind-addon-channel:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends make >/dev/null
+  script:
+    - bash tests/scripts/test-kind-addon-channel.sh
+
 # A curated kind profile must also DEPLOY every in-cluster Service its own applied
 # gateway ROUTES point at. KIND_PROFILE=sso applied apps/20-gateway-fe.yaml — route
 # table included — but never apps/47-user-ui.yaml, so
@@ -1240,8 +1257,10 @@ lint:e2e-persona-catalogue:
   script:
     - bash tests/scripts/test-e2e-persona-catalogue.sh
 
-# Optional-services BUILD-TIME EXCLUSION gate. Sources the REAL gate + helper
-# functions from build-rpi5-stage4.sh and runs gate_optional_services against a
+# Optional-services BUILD-TIME EXCLUSION gate. Loads the REAL gate + helper
+# functions as build-rpi5-stage4.sh RESOLVES them (they live in the shared
+# scripts/_optional-services-lib.sh since 2026-08-26; tests/lib/opt-gate-source.sh
+# walks the builder's source chain) and runs gate_optional_services against a
 # sandbox tree seeded from specs/cluster, proving EVERY user-level service
 # (akkoma/tuwunel/phpbb/games/owncast/tube) is build-time excludable: excluded =>
 # its Application/manifests/routes/rows OMITTED + installed-services ConfigMap
@@ -1255,6 +1274,58 @@ lint:optional-services-exclude:
     - pip install --quiet pyyaml
   script:
     - bash tests/stack/test-optional-services-exclude.sh
+
+# Optional-services CROSS-BUILDER BEHAVIOURAL PARITY gate. The suite above proves
+# the gate is correct for build-rpi5-stage4.sh. This one proves build-x86-host-stage4.sh
+# renders the SAME ARTEFACTS — asserted on the rendered YAML, never on the builder
+# source. Three defects shipped in x86 images on 2026-08-26 that every source-level
+# guard missed: no 13a ApplicationSet flag render (a repo-synced ArgoCD re-forced
+# deselected services back on), no anubis handling at all (prod images shipped the
+# public PoW shield off and the ingress un-rerouted), and the edge-ai-analysis
+# dependsOn guard running BEFORE EXCLUDE_SERVICES (orphan wrapper shipped). A parity
+# check that greps for the FUNCTION NAMES would have passed through all three — the
+# name is satisfied by a comment and says nothing about the body. Cheap; no
+# privileged runner, no pyyaml.
+lint:optional-services-parity:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/stack/test-optional-services-parity.sh
+
+# federation_modules BUILD-TIME GATE. The exclusion gate above proves a deselected
+# slug is pruned from apps/, manifests/, gateway routes, route-access rows, the
+# installed-services ConfigMap and the 13a element — and a USB built that way STILL
+# showed the service's menu entry, because the host shell resolves its remotes from
+# `federation_modules` (GET /api/federation/capabilities) and nothing in the
+# selection ever touched that table. This suite sources the REAL renderer out of
+# BOTH stage4 builders and asserts the POST-CONDITION on the rendered
+# manifests/federation-modules-gate/sql/gate.sql for all eight gated slugs.
+# Its behavioural legs skip LOUDLY here (no local stack on a CI runner).
+lint:federation-modules-selection:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/federation/test-federation-modules-selection.sh
+
+# THE KEYSTONE for "images with services selected only start those services".
+# The suite above proves the BAKED TREE is pruned; it proves NOTHING about what
+# ArgoCD syncs, and it was green through the entire lifetime of the bug where
+# bootstrap.sh applied only app-of-apps.yaml and ArgoCD therefore instantiated
+# specs/cluster/apps from GITHUB MAIN. This suite drives the real
+# specs/cluster/bootstrap/bootstrap.sh under a stub `kubectl` that captures every
+# applied manifest, then asserts on the RESOLVED SOURCE of what was applied: no
+# Application may resolve to path=specs/cluster/apps, and the applied Application
+# set must equal the SELECTION. Cheap; no cluster and no privileged runner.
+lint:bootstrap-applies-baked-apps:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/cluster/test-bootstrap-applies-baked-apps.sh
 
 # Merge-conflict-marker gate. A WIP checkpoint PR once merged an UNRESOLVED
 # conflict hunk into tests/stack/gateway-routes/fe/application-routes.yml — a file
@@ -2800,6 +2871,7 @@ orphan-guards-verify:
         tests/auto-update/test-provision-update.sh
         tests/auto-update/test-update-poller.sh
         tests/cloud-deploy/test-cloud-deploy-driver.sh
+        tests/cluster/test-bootstrap-applies-baked-apps.sh
         tests/device-registry/test-registry-allow-deny.sh
         tests/device-registry/test-self-report.sh
         tests/domain-registry/test-domain-reconcile-fuzz.sh

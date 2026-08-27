@@ -108,6 +108,20 @@
 #       systems.hugmesh -> net.hugmesh package move (#141), and census_files()
 #       used `grep --exclude-dir`, which busybox does not have, so on alpine the
 #       census came back empty and reported nine false "blind spots".
+#   * tests/scripts/test-kind-metrics-api.sh
+#       structurally SKIP-ONLY here, MEASURED IN THIS IMAGE (2026-08-26,
+#       integration): `docker run --rm --network host alpine:3` + this job's apk
+#       set, then `bash tests/scripts/test-kind-metrics-api.sh` -> "SKIP kubectl is
+#       not on PATH", rc=0, zero assertions run. It asks a LIVE kind cluster
+#       whether metrics.k8s.io answers and whether a named HPA has stopped
+#       reporting <unknown>; no hosted runner has a cluster and this image has no
+#       kubectl, so listing it would raise the coverage number by one while gating
+#       exactly nothing — the inflation this block exists to prevent. NOT a
+#       claim that it passes: measured on a box WITH a kind cluster up but without
+#       metrics-server synced it goes RED (2 failures), which is the suite working.
+#       Run it after `make kind-up` (or `make kind-metrics-check`). Its OFFLINE
+#       half — the whole selection channel — IS gated, as
+#       tests/scripts/test-kind-addon-channel.sh.
 #   * tests/scripts/test-federation-module-slugs.sh
 #       leg A runs the federation_modules registration gate against the REAL
 #       hugmesh-federation-api Liquibase changelog, which is a sibling checkout this
@@ -191,6 +205,7 @@ jobs:
             tests/auto-update/test-update-poller.sh
             tests/boot/test-kubelet-join-bootstrap.sh
             tests/cloud-deploy/test-cloud-deploy-driver.sh
+            tests/cluster/test-bootstrap-applies-baked-apps.sh
             tests/desktop-governance/test-desktop-sudo-mapper.sh
             tests/desktop-governance/test-gen-sso-session-start.sh
             tests/desktop-governance/test-provision-desktop-governance.sh
@@ -204,6 +219,7 @@ jobs:
             tests/egress-vpn/test-vpn-mark.sh
             tests/egress-vpn/test-vpn-secret-projector.sh
             tests/egress-vpn/test-x86-role-gate.sh
+            tests/federation/test-federation-modules-selection.sh
             tests/go-live/test-go-live-driver.sh
             tests/go-live/test-go-live-reconcile-verify.sh
             tests/keystores/test-keystores-external-ca.sh
@@ -258,6 +274,7 @@ jobs:
             tests/scripts/test-image-builder-always-on.sh
             tests/scripts/test-installer-ui-node-default.sh
             tests/scripts/test-kernel-artifact-cache.sh
+            tests/scripts/test-kind-addon-channel.sh
             tests/scripts/test-kind-bootstrap-honesty.sh
             tests/scripts/test-kind-profile-app-closure.sh
             tests/scripts/test-kind-profile-route-closure.sh
@@ -287,6 +304,7 @@ jobs:
             tests/stack/test-front-door-client-surface.sh
             tests/stack/test-no-store-posture.sh
             tests/stack/test-optional-services-exclude.sh
+            tests/stack/test-optional-services-parity.sh
             tests/stack/test-probe-auth-surface.sh
             tests/stack/test-tls-front.sh
             tests/stack/test-tube-media-signed-gate.sh

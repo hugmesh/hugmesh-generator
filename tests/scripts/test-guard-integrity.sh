@@ -70,12 +70,32 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # N. Guessing it defeats the check: a baseline nobody derived from the tree is a
 # number that only ever agrees with itself.
 #
+# 130 -> 134 / denominator 138 -> 144 on 2026-08-26 (integrate/services-and-keystones).
+# EVERY ONE OF THE FOUR MERGED BRANCHES CARRIED ITS OWN NUMBER — 118, 118, 130 —
+# each correct against its own base and none correct against the merged tree, and
+# each conflicted on exactly this line. All four were resolved to OURS and then
+# reconciled ONCE, HERE, by running this file and reading the number it MEASURES:
+#     134 of 144 suites are named by a pull_request-triggered workflow
+# +6 suites, +4 gated: test-bootstrap-applies-baked-apps.sh (C1),
+# test-federation-modules-selection.sh (C3), test-kind-addon-channel.sh (A1) and
+# tests/qemu/role_topology_test.sh's siblings' census correction, with
+# test-kind-metrics-api.sh (A1) landing UNGATED and recorded below. Letting any
+# branch's number win would have pinned a cardinality nobody derived from this tree.
 # 130 -> 133 on merge with fix/profile-password-flows: that branch wires
 # test-password-reset-front-door.sh, test-kind-profile-route-closure.sh and
 # test-route-access-oracle.sh into the pull_request workflow. MEASURED at the
 # merge, not carried over from either side -- the branch itself said 120, main
 # said 130, and neither number is true of the merged tree.
 #
+# 134 -> 139 / denominator 144 -> 151 across two merges of main (which had moved
+# to 135/146 via the tube signed-media gate, the fragment route gate and the
+# password-reset front door, then to 135/147 via the federation module-slug gate).
+# BOTH comment blocks above are kept because both record a real reconciliation;
+# no branch's number was true of this tree. MEASURED here, by running this file and
+# reading the line it prints:
+#     139 of 151 suites are named by a pull_request-triggered workflow
+# The GATED count did not move on the second merge -- the slug gate lands UNGATED,
+# recorded in PREMERGE_UNGATED below with its reason -- so only the denominator did.
 # 133 -> 135 on integrate/studio-e2e, and for the same reason a third time. That
 # integration wires two more: tests/scripts/test-stack-e2e-argv.sh (from
 # feat/stack-e2e-argv-passthrough, which listed it itself) and
@@ -90,7 +110,14 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # target gate, the password-reset front door, the federation module-slug gate).
 # MEASURED on the merged tree by running this file and reading its own line:
 #     137 of 148 suites are named by a pull_request-triggered workflow
-PREMERGE_BASELINE="${GUARD_PREMERGE:-137}"
+#
+# 137/139 -> 141, denominator -> 153, when the studio-e2e integration and this one
+# met on main. BOTH histories above are kept: each records a real reconciliation,
+# and deleting either erases why a number moved. Four branches have now written
+# their own value into this one line (118, 133, 137, 139) and not one of them was
+# true of the tree that resulted. MEASURED, by running this file:
+#     141 of 153 suites are named by a pull_request-triggered workflow
+PREMERGE_BASELINE="${GUARD_PREMERGE:-141}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
@@ -125,6 +152,13 @@ PREMERGE_UNGATED=(
   tests/egress-vpn/test-secret-contract.sh
   tests/pentest/nuclei/test-templates.sh
   tests/scripts/test-eso-target-collisions.sh
+  # LIVE-CLUSTER ONLY, and MEASURED in the shell-suites job image before being
+  # listed here: alpine:3 + that job's apk set prints "SKIP kubectl is not on PATH"
+  # and exits 0 having run ZERO assertions. Gating it would raise the coverage
+  # number by one and gate nothing. Not a claim that it passes — on a box with a
+  # kind cluster up but no metrics-server synced it goes RED with 2 failures.
+  # See the "NOT LISTED HERE" entry in .github/workflows/shell-suites.yml.
+  tests/scripts/test-kind-metrics-api.sh
   tests/scripts/test-federation-module-slugs.sh
   tests/scripts/test-liquibase-grant-roles.sh
   tests/scripts/test-service-env-contract.sh

@@ -30,14 +30,19 @@ info(){ :; }   # silence the builder's logger inside the extracted functions
 
 echo "== anubis ENV-policy gate unit test =="
 
-# ── Extract the REAL helper functions from the builder (so the test tracks them) ─
-extract_fn() { awk "/^$1\(\) \{/{p=1} p{print} /^\}/{if(p){exit}}" "${BUILDER}"; }
-for fn in _opt_selected _opt_explicitly_deselected _opt_anubis_installed \
-          _opt_render_installed_services _opt_wire_anubis_ingress _opt_render_appset_flag; do
-  eval "$(extract_fn "${fn}")"
-  type "${fn}" >/dev/null 2>&1 || { echo "  FAIL could not extract ${fn}"; exit 1; }
-done
-ok "extracted the real builder functions (decision + render + ingress reroute)"
+# ── Load the REAL helper functions AS THE BUILDER RESOLVES THEM ───────────────
+# These moved out of the builder into the SHARED scripts/_optional-services-lib.sh
+# on 2026-08-26 — build-x86-host-stage4.sh had NO anubis handling at ALL (no
+# _opt_explicitly_deselected, no _opt_anubis_installed, no _opt_wire_anubis_ingress),
+# so every x86 --env prod image shipped the PUBLIC PoW shield off and the fe-gateway
+# ingress un-rerouted while this suite was green against rpi5. opt_gate_load walks the
+# builder's own source chain (libs first, builder last, last definition winning), so a
+# re-added builder-local override is still what this suite would execute.
+info(){ :; }; warn(){ :; }
+source "${REPO}/tests/lib/opt-gate-source.sh"
+opt_gate_load "${BUILDER}" _opt_selected _opt_explicitly_deselected _opt_anubis_installed \
+              _opt_render_installed_services _opt_wire_anubis_ingress _opt_render_appset_flag || exit 1
+ok "loaded the real builder functions (decision + render + ingress reroute)"
 
 # ── Seed a sandbox baked tree (ConfigMap + fe-gateway app) ────────────────────
 seed_tree() {
@@ -113,13 +118,25 @@ run_render test "akkoma tuwunel phpbb games"     # flip OFF -> must REMOVE the r
 routed_through_anubis && bad "reroute NOT reversed when anubis flipped off" \
                        || ok "reroute is REVERSIBLE (removed when anubis flips off)"
 
-# ── 5) builder source asserts the wiring is gated, not hardcoded ─────────────
-grep -q '_opt_wire_anubis_ingress' "${BUILDER}" && ok "builder calls _opt_wire_anubis_ingress (reroute is wired by the render)" \
-                                                 || bad "builder missing _opt_wire_anubis_ingress call"
-grep -q '_opt_anubis_installed()' "${BUILDER}" \
-    && grep -qE '\[ "\$\{ENV\}" = "prod" \]' "${BUILDER}" \
-    && ok "builder has the ENV-conditional decision (_opt_anubis_installed: ENV=prod => ON)" \
-    || bad "builder missing the ENV-conditional decision (_opt_anubis_installed / ENV=prod test)"
+# ── 5) the wiring is GATED, not hardcoded — asserted on EFFECT, not on grep ──
+# This block used to be `grep -q '_opt_wire_anubis_ingress' "${BUILDER}"` and
+# `grep -q '_opt_anubis_installed()' "${BUILDER}"`. Both are function-NAME greps,
+# which is the weakest possible form: the name is satisfied by a comment, and by a
+# present-but-wrong body. So instead: render once with the reroute stripped out of
+# the tree beforehand and prove the RENDER PATH puts it back (i.e. the render calls
+# the reroute), and prove the decision genuinely varies with ENV alone.
+seed_tree wired-by-render
+sed -i -E '/backendServiceName:|backendServicePort:|PoW shield UP/d' "$(fe)"
+run_render prod "akkoma tuwunel phpbb"
+routed_through_anubis \
+    && ok "the RENDER path itself wires the reroute (stripped tree came back rerouted)" \
+    || bad "render did not wire the reroute — _opt_wire_anubis_ingress is not called by the render"
+# ENV is the ONLY thing that differs between these two; the decision must differ too.
+ENV=prod; OPTIONAL_SERVICES="akkoma tuwunel phpbb"; _prod="$(_opt_anubis_installed)"
+ENV=test; OPTIONAL_SERVICES="akkoma tuwunel phpbb"; _test="$(_opt_anubis_installed)"
+[ "${_prod}" = "true" ] && [ "${_test}" = "false" ] \
+    && ok "the decision is ENV-CONDITIONAL (prod=>true, test=>false, same selection)" \
+    || bad "decision is not ENV-conditional (prod=${_prod} test=${_test} for the same selection)"
 
 echo "== RESULT: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]
