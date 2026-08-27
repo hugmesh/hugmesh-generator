@@ -155,10 +155,10 @@ exactly):
 
 | Worktree path | Branch |
 |---|---|
-| `/home/magus/Github/hugmesh-generator-apidocs-prefix` | `fix/route-access-api-docs-prefix` |
-| `/home/magus/Github/hugmesh-generator-studio-qemu` | `feat/studio-qemu-e2e` |
-| `/home/magus/Github/hugmesh-generator-orgmove` | `chore/org-move-prep-hugmesh-net` |
-| `/home/magus/Github/hugmesh-generator-localmesh` | `feat/local-mesh-bringup-and-credentials` |
+| `<checkout-root>/hugmesh-generator-apidocs-prefix` | `fix/route-access-api-docs-prefix` |
+| `<checkout-root>/hugmesh-generator-studio-qemu` | `feat/studio-qemu-e2e` |
+| `<checkout-root>/hugmesh-generator-orgmove` | `chore/org-move-prep-hugmesh-net` |
+| `<checkout-root>/hugmesh-generator-localmesh` | `feat/local-mesh-bringup-and-credentials` |
 
 To restore a deleted remote branch from any clone that still has the object:
 
@@ -177,7 +177,7 @@ branches, and a worktree-held branch cannot be deleted locally.
 
 1. Re-run [Re-verification](#re-verification) and confirm the SHAs still match.
 2. Remove the local worktree for each branch:
-   `git -C /home/magus/Github/hugmesh-generator worktree remove <path>`
+   `git -C <checkout-root>/hugmesh-generator worktree remove <path>`
 3. Delete the local branch: `git branch -D <branch>`
 4. Delete the remote ref: `git push origin --delete <branch>`
 

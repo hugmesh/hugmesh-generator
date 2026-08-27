@@ -36,7 +36,12 @@
 #                  the full 3-node plan (L2 spec, MACs, IPs, ports, launcher
 #                  argv). This is the CI-green hermetic path.
 #   * boot path    runs ONLY when HUGMESH_QEMU_MESH=1 AND qemu is installed;
-#                  otherwise SKIP-clean (exit 0).
+#                  otherwise SKIP-clean (exit 0) — but LOUDLY: a skipped run
+#                  prints a WARN line on stderr AND a machine-readable
+#                  'RESULT:  SKIP reason=<no-opt-in|no-qemu> detail=...' line on
+#                  stdout, so no consumer can mistake "did not run" for "ran and
+#                  passed". The exit code is deliberate policy; the silence was
+#                  not (see skip_out below).
 #
 # Phases (issue #48 design comment): this driver is execution phase 2 — a LAN
 # cluster over the shared L2 with a pinned-token join, headscale/tailscale OFF.
@@ -160,6 +165,39 @@ step() { echo "${CYAN}==> $*${RST}"; }
 warn() { echo "${YEL}[mesh-cluster] WARN:${RST} $*"; }
 die()  { echo "${RED}[mesh-cluster] ERROR:${RST} $*" >&2; exit 1; }
 
+# skip_out REASON DETAIL — announce a not-run, LOUDLY and machine-readably.
+#
+# WHY THIS EXISTS (2026-08-26). Both gates below are legitimately exit-0: this
+# driver boots three real x86 guests, so on a CI runner with no qemu and no
+# opt-in there is nothing to run and nothing to fail. THAT EXIT CODE IS
+# DECLARED POLICY (see the GATING block in this file's header, and the identical
+# contract in run-matrix-e2e.sh) and it is NOT what this changes.
+#
+# What it changes is that the not-run used to be indistinguishable from a run.
+# The gates printed one green info() line — the same colour, prefix and stream
+# as every ordinary progress message this driver emits — and then exited 0. A
+# log scraper looking for the driver's verdict found NO 'RESULT:' line at all,
+# which is exactly how it looks when a driver runs and passes quietly, and a
+# human skimming a green pipeline saw a green line. This is the failure mode
+# that let DAST sit inert for weeks org-wide (four silent-skip paths, fixed in
+# PR #139): the danger was never the exit code, it was that nobody could tell
+# from the output whether the thing had run.
+#
+# So a skip now says three things a reader (or a grep) can act on:
+#   * a WARN-coloured line on STDERR, because a not-run is not progress;
+#   * a machine-readable 'RESULT:  SKIP reason=<slug> ...' line on STDOUT, in
+#     the same 'RESULT:' shape as the --dry-run and PASS/FAIL verdicts, so a
+#     consumer that scrapes for a verdict now always finds one;
+#   * a REASON SLUG, so "not run because nobody opted in" and "not run because
+#     the tool is missing" are two different, greppable answers.
+# The caller still writes its own `exit 0` — the policy stays visible at the
+# gate rather than buried in a helper that could quietly start exiting nonzero.
+skip_out() {
+    local reason="$1" detail="$2"
+    echo "${YEL}[mesh-cluster] SKIP (${reason}):${RST} ${detail}" >&2
+    echo "RESULT:  SKIP reason=${reason} detail=${detail}"
+}
+
 # ── The node table (index / kind / image role / static mesh identity) ────────
 # node1 = control-plane, node2+3 = joiners. MACs match launch-x86.sh's
 # --mesh-id derivation (52:54:00:6d:65:NN) and the nmconnection profiles bind
@@ -258,14 +296,16 @@ fi
 
 # ── Opt-in gate for the boot path (mirrors run-matrix-e2e.sh) ────────────────
 if [ "${HUGMESH_QEMU_MESH:-}" != "1" ]; then
-    info "SKIP: the 3-node QEMU mesh cluster is opt-in — set HUGMESH_QEMU_MESH=1 (with qemu) or pass --dry-run."
-    exit 0
+    skip_out no-opt-in \
+        "the 3-node QEMU mesh cluster is opt-in and HUGMESH_QEMU_MESH is not 1 — set HUGMESH_QEMU_MESH=1 (with qemu) to boot it, or pass --dry-run for the hermetic plan. NOTHING WAS BOOTED OR ASSERTED."
+    exit 0    # DECLARED POLICY (see the GATING block in the header) — a skip is not a failure.
 fi
 # The stub-launcher seam (MESH_LAUNCH_CMD) replaces qemu for the hermetic
 # wiring test, so the real qemu binary is only required on the genuine boot path.
 if [ -z "${MESH_LAUNCH_CMD:-}" ] && ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
-    info "SKIP: qemu-system-x86_64 not installed — the boot path cannot run here."
-    exit 0
+    skip_out no-qemu \
+        "qemu-system-x86_64 is not on PATH, so the boot path cannot run on this host even though HUGMESH_QEMU_MESH=1 asked for it. NOTHING WAS BOOTED OR ASSERTED."
+    exit 0    # DECLARED POLICY (see the GATING block in the header) — a skip is not a failure.
 fi
 command -v openssl >/dev/null 2>&1 || die "missing openssl (needed to mint the offline cluster CA)"
 

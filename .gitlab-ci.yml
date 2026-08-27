@@ -577,6 +577,47 @@ lint:qemu-mesh-cluster:
   script:
     - bash tests/qemu/mesh-cluster_test.sh
 
+# QEMU runner-hygiene lane. NOTHING boots and no container is created: `docker`
+# and `losetup` are PATH stubs recording their argv, and the loop-device
+# preflight is driven against a seam directory instead of the real /dev.
+#
+# It pins three 2026-08-26 defects, all of which were invisible from a green run:
+# (1) the host boots with max_loop=0, so /dev carries only loop-control until the
+# first attach materialises loop0 — and a container's /dev is a CREATION-TIME
+# SNAPSHOT, so rows whose containers were created before that instant died in
+# extract_kernel while the row that created the node passed. Every failure leaves
+# the node behind, so the harness HEALS ITSELF INTO PASSING; the suite therefore
+# forces the visible node count low, which a check against the real /dev cannot.
+# (2) --jobs 0 is documented (and implemented in the keep-alive lane) as "ungated,
+# all at once", but the plain fan-out's `running >= JOBS` gate read 1 >= 0 as true
+# and FULLY SERIALIZED the matrix — never red, only slow. (3) emit_result
+# interpolated label/platform/board/role/mode/image RAW into its result JSON, so
+# one quote in an operator-supplied --label or in an image path wrote a row the
+# Studio renders as '?', and its FAILED count was scraped with an unanchored
+# '[0-9]+ failed' that matched rc-status's "0 failed" long before the verdict line.
+# Every check carries a negative control, and the file prints what it does NOT
+# prove rather than implying a green run covers it.
+lint:qemu-runner-hygiene:
+  stage: lint
+  image: alpine:3
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache bash python3
+  script:
+    - bash tests/qemu/loop_preflight_test.sh
+    # And prove the suite above can FAIL. The battery breaks run-qemu-docker.sh
+    # thirteen ways — partition nodes counted as devices, `-v /dev:/dev` bent to
+    # `-v /dev:/dev-host`, `--privileged` to `--privileged=false-not-really`,
+    # --rm dropped, attach/detach interleaved, the verdict taken from docker's
+    # exit code, --jobs 0 re-serialized, the call site deleted — and demands RED
+    # for each, verifying every mutation actually changed the file first. It
+    # restores the tree on EXIT and ends on a positive control that the restored
+    # tree is green. Two of these (the -v and --privileged bends) survived at a
+    # full 30/0 before the assertions were changed from substring greps to
+    # whole-argv-word matches, which is exactly why this runs in CI and not once
+    # by hand.
+    - bash tests/qemu/loop_preflight_mutations.sh
+
 # ALWAYS-ON in-cluster Kaniko image-builder gate. Nothing in CI referenced the
 # image-builder at all before this, and its on/off switch is THE DIRECTORY A FILE
 # SITS IN: the root app-of-apps recurses specs/cluster/apps, so moving
