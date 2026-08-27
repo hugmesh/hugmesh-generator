@@ -254,6 +254,7 @@ jobs:
             tests/scripts/test-rpi5-per-board-pkgdir.sh
             tests/scripts/test-shared-build-assets.sh
             tests/scripts/test-spec-use-parity.sh
+            tests/scripts/test-stack-e2e-argv.sh
             tests/scripts/test-studio-launch.sh
             tests/scripts/test-sunshine-fence.sh
             tests/scripts/test-tools-path-lib.sh
