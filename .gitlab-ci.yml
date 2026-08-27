@@ -268,6 +268,39 @@ lint:workload-console:
   script:
     - bash tests/workload-console/test-workload-console.sh
 
+# ADMIN-BFF PLATFORM-CAPABILITY PROBE gates. Two suites, one job — both are pure
+# manifest/SQL post-condition checks (offline python3+PyYAML, same recipe as
+# lint:cluster-manifest-integrity above), no cluster and no build.
+#
+#  1. test-probe-rbac-namespaces.sh — the probe RBAC shipped a Role + RoleBinding in
+#     an `argocd` namespace that this platform NEVER creates (ArgoCD is installed into
+#     `devops`: both bootstrap scripts default ARGOCD_NS=devops and re-namespace the
+#     upstream install, which hardcodes `argocd`). Application 31a syncs with
+#     CreateNamespace=false, so that half could never apply — the same permanent
+#     `namespaces "<ns>" not found` failure that left external-secrets-config and
+#     workload-console-rbac unsynced for MONTHS. The namespace inventory is DERIVED
+#     from the committed manifests + the bootstraps' ensure-namespaces loops, so a new
+#     phantom namespace anywhere in this RBAC is caught without a hand-maintained list.
+#  2. test-argocd-route-honesty.sh — pins the DELIBERATE ABSENCE of a dedicated
+#     /bff/admin/argocd/** route-access row. The admin-ui ArgoCD dashboard has NO
+#     backend controller in any repo; the '/bff/admin/**' ROLE_ADMIN floor already
+#     covers the prefix, so adding a narrower row would be a no-op that also SHADOWS
+#     the floor (most-specific wins) and dresses a 404 up as wiring.
+#
+# NOTE both suites guard only THIS repo's half of two cross-repo defects. The probe's
+# own ARGOCD_NAMESPACE constant (hugmesh-admin-bff-api) and the dashboard page removal
+# (hugmesh-admin-ui + hugmesh-host-shell) are specified in docs/ADMIN-CONSOLES.md §2
+# and CANNOT be asserted from here.
+lint:platform-capability-rbac:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/platform-capability-rbac/test-probe-rbac-namespaces.sh
+    - bash tests/platform-capability-rbac/test-argocd-route-honesty.sh
+
 # This file's own well-formedness. Three branches appended a lint job here and
 # every pair merged WITHOUT a git conflict into a file where one job had lost
 # its body — GitLab rejects a null job at pipeline creation, so the whole
@@ -1250,6 +1283,20 @@ lint:mfa-raw-jwt-posture:
 # granting ROLE_FLEET_ADMIN on /bff/admin/phone-fleet/**, while the Casdoor seed
 # never declared that role — so no account on any cluster could hold it and the
 # fleet-owner phone console was unreachable. Both halves ran RED before the fix.
+# A generated credential that lands INSIDE a URL must be URL-safe. `openssl rand
+# -base64` emits + / and =; R2DBC URL-decodes the userinfo, so a `+` reaches Postgres
+# as a SPACE and the gateway cannot read route_access — at which point it enforces
+# NOTHING and a plain ROLE_USER gets the admin shell. ~63% of bootstraps mint at
+# least one such password; three of six were affected on the live cluster.
+lint:url-embedded-credentials:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache python3 openssl coreutils
+  script:
+    - bash tests/scripts/test-url-embedded-credentials.sh
+
 # Reading the e2e suite must not require a seeded stack. `playwright --list` starts
 # no browser and contacts nothing, but a credential resolved at MODULE SCOPE throws
 # at import, so enumeration returned 0 specs / 21 errors on main. The Studio's e2e

@@ -17,6 +17,34 @@
 # No root required. Requires: openssl, python3. Optional: vault CLI (online).
 set -euo pipefail
 
+# ── credentials that get EMBEDDED IN A URL ───────────────────────────────────
+# `openssl rand -base64` draws from the base64 alphabet, which includes + / and =.
+# A password carrying any of those cannot survive being interpolated into a URL:
+#
+#     r2dbc:postgresql://fe_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db...
+#
+# R2DBC parses that with ConnectionFactoryOptions.parse(), which URL-DECODES the
+# userinfo — so a literal `+` arrives at Postgres as a SPACE and authentication
+# fails. `/` ends the authority early; `=` is harmless here but is dropped for the
+# same reason: this alphabet has no business in a URL.
+#
+# THE FAILURE IS SILENT AND IT FAILS OPEN. When a gateway cannot reach
+# route-access-db it has no route_access rows, so it enforces NOTHING: a plain
+# ROLE_USER gets HTTP 200 with the admin UI shell. Nothing logs "RBAC is off".
+#
+# NOT HYPOTHETICAL, AND NOT RARE. A 24-byte base64 string is 32 characters, each
+# with a 2-in-64 chance of being + or /, so ~63% of bootstraps mint at least one
+# unusable route-access credential. Measured on the live kind cluster on
+# 2026-08-27: THREE of the six route-access passwords contained `+`, two of them
+# (fe_gateway, pki_gateway) on gateways whose URL embeds it.
+#
+# base64url keeps every bit of entropy (same byte count) and its alphabet
+# [A-Za-z0-9-_] is entirely URI-unreserved, so it needs no escaping anywhere.
+rand_urlsafe() { # <bytes> -> unpadded base64url
+  openssl rand -base64 "$1" | tr '+/' '-_' | tr -d '='
+}
+
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -368,7 +396,7 @@ CASDOOR_APP_KV_ARGS+=("signup-gate-webhook=${SIGNUP_GATE_WEBHOOK_SECRET}")
 printf -v APPSEC_SIGNUP_GATE_WEBHOOK '%s' "${SIGNUP_GATE_WEBHOOK_SECRET}"
 CASDOOR_APP_JSON_ENV+=("APPSEC_SIGNUP_GATE_WEBHOOK")
 
-CLICKHOUSE_PASSWORD="$(openssl rand -base64 24)"
+CLICKHOUSE_PASSWORD="$(rand_urlsafe 24)"    # embedded in uptrace.yml's clickhouse:// DSN
 
 # Dedicated per-app Postgres passwords (federation-db / admin-bff-db / mod-bff-db /
 # user-bff-db). The OWNER password (DDL/Liquibase) stays the existing `password`
@@ -469,12 +497,12 @@ AKKOMA_DB_PASSWORD="$(openssl rand -base64 24)"
 # gateway/admin-bff Deployment mounts ONLY its own password; the route-access-db pod
 # seeds all five roles from route-access-db-roles, and its initdb/10-roles.sh
 # `require`s every one of them.
-ROUTE_ACCESS_OWNER_PASSWORD="$(openssl rand -base64 24)"
-ROUTE_ACCESS_ADMIN_BFF_PASSWORD="$(openssl rand -base64 24)"
-ROUTE_ACCESS_PKI_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
-ROUTE_ACCESS_BE_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
-ROUTE_ACCESS_FE_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
-ROUTE_ACCESS_SUPERADMIN_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
+ROUTE_ACCESS_OWNER_PASSWORD="$(rand_urlsafe 24)"
+ROUTE_ACCESS_ADMIN_BFF_PASSWORD="$(rand_urlsafe 24)"
+ROUTE_ACCESS_PKI_GATEWAY_PASSWORD="$(rand_urlsafe 24)"
+ROUTE_ACCESS_BE_GATEWAY_PASSWORD="$(rand_urlsafe 24)"
+ROUTE_ACCESS_FE_GATEWAY_PASSWORD="$(rand_urlsafe 24)"
+ROUTE_ACCESS_SUPERADMIN_GATEWAY_PASSWORD="$(rand_urlsafe 24)"
 
 # Cassandra auth. These were seeded believing they fed a DARK, operator-staged
 # flip; they do not. The bitnami image runs PasswordAuthenticator by DEFAULT, so
@@ -497,7 +525,7 @@ CASSANDRA_APP_FE_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
 CASSANDRA_APP_SUPERADMIN_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
 CASSANDRA_APP_FEDERATION_PASSWORD="$(openssl rand -base64 24)"
 
-UPTRACE_PG_PASSWORD="$(openssl rand -base64 24)"
+UPTRACE_PG_PASSWORD="$(rand_urlsafe 24)"
 UPTRACE_PROJECT_TOKEN="$(openssl rand -hex 32)"
 
 # ── Vault token (real, or a generated placeholder for the bundle) ───

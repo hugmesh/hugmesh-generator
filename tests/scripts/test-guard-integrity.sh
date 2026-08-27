@@ -138,39 +138,63 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     141 of 163 suites are named by a pull_request-triggered workflow
 # and by nothing else.
 #
-# 141 -> 142, denominator 163 -> 164, on merging main into
-# feat/workload-console-versions (2026-08-27). ONE suite landed and it landed
-# GATED: tests/workload-console/test-console-posture-and-inventory.sh, wired by
-# the single line this branch adds to .github/workflows/shell-suites.yml. Both
-# numbers move by exactly one for that one reason. The branch carried 118, which
-# was true of its own base (117 + its new suite) and true of nothing else -- the
-# eighth value written into this line by a branch that believed it, and the
-# eighth that was wrong about the merged tree. Resolved to main's side WHOLE,
-# not because main is newer but because the branch's side is a lone number and
-# main's carries PREMERGE_UNGATED, which the code below reads: taking the branch
-# would have left UNGATED_TEXT unset. Then MEASURED, by running this file:
-#     142 of 164 suites are named by a pull_request-triggered workflow
-# The ungated SET is unchanged at 22 -- which is the check that proves the new
-# suite is gated rather than merely counted.
-# 141 -> 142 when test-e2e-enumeration-without-credentials.sh was gated. Small, but
-# recorded for the same reason as the reconciliations above: this branch expected
-# 142 and main said 141, and the only number worth writing down is the one MEASURED
-# on the merged tree. It happened to agree with the branch this time; the previous
-# entries in this block are all cases where it did not.
+# 141 -> 142 when test-e2e-enumeration-without-credentials.sh was gated, and
+# 141 -> 142 again, independently, when test-url-embedded-credentials.sh was gated
+# on a sibling branch. BOTH measured 142, and both were right about the tree they
+# measured and wrong about the merge: each was looking at a tree containing only
+# its OWN addition. This block exists because that keeps happening.
 #
-# 142 / 143 -> 144, denominator 164 / 165 -> 165, when the two met.
-# BOTH blocks above are kept, for the reason this file already gives twice: each
-# records a real reconciliation, and deleting either erases why a number moved.
-# The two sides are INDEPENDENT +1s over a shared 141 -- main gated
-# test-e2e-enumeration-without-credentials.sh, this branch gates
-# test-console-posture-and-inventory.sh -- so neither side's number is true of a
-# tree that has both. Ninth and tenth values written into this line by sides that
-# each believed theirs. MEASURED on the merged tree, by running this file:
-#     144 of 165 suites are named by a pull_request-triggered workflow
-# and by nothing else. The ungated SET also moved, 22 -> 21, and that is main's
-# doing rather than this branch's: PR #193 gated a suite that was previously
-# listed as ungated. This branch's suite lands GATED and never enters that list.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-144}"
+# The value below is MEASURED on the integrated tree, not carried over from either
+# branch — the merge measured 144, which is neither branch's 142 nor the 143 main
+# carried in. Re-run this file after any merge that adds a suite; do not reason about
+# what the number "should" be.
+#
+# 144 -> 146, denominator 165 -> 167, when fix/argocd-dashboard-honesty landed. This
+# branch wires TWO new suites into shell-suites.yml
+# (tests/platform-capability-rbac/test-probe-rbac-namespaces.sh and
+# test-argocd-route-honesty.sh) and has now been re-measured THREE times against three
+# different mains: it wrote 119 for its own base, then 145 when main was 143/164, and
+# 146 here, because main moved to 144/165 underneath it when test-url-embedded-credentials.sh
+# was gated. Every one of those three was correct about the tree it measured. That is
+# the ninth value a branch has believed on this line, and the eighth time this exact
+# line has conflicted.
+#
+# Resolved as a union, per the rule the blocks above already state: main's record and
+# this branch's are complementary, not competing, so BOTH are kept. Note that the first
+# resolution of this conflict had to take main's side WHOLESALE rather than line-wise --
+# main did not merely hold a bigger number, it added the PREMERGE_UNGATED set-pin below,
+# which this branch's side predates entirely, and a line-wise keep of 119 would have
+# silently dropped that mechanism.
+#
+# MEASURED on the integrated tree by running this file and reading the line it prints:
+#     146 of 167 suites are named by a pull_request-triggered workflow
+# +2 gated, +2 total: both of this branch's suites are named by shell-suites.yml, which
+# is why the gated count and the denominator moved together and the ungated SET pin
+# below was untouched (it stays 21). That this agrees with 144+2 is a CHECK on the
+# measurement, not a substitute for it -- the seven entries above are all cases where
+# the arithmetic and the measurement disagreed.
+#
+# 146 -> 147, denominator 167 -> 168, when feat/workload-console-versions met main
+# again. This branch previously measured 144 of 165 and was right about that tree; main
+# has since gained the argocd pair (fix/argocd-dashboard-honesty), so 144 describes a
+# tree that no longer exists. Tenth and eleventh values written into this one line by
+# sides that each believed theirs.
+#
+# Main's side is taken WHOLESALE rather than line-wise, and the comment blocks are kept
+# as a UNION -- both for the reasons the entries above already give: main's half carries
+# the PREMERGE_UNGATED set-pin that several branch halves predate, and each block records
+# a real reconciliation whose deletion would erase why a number moved.
+#
+# MEASURED on the merged tree by running this file and reading the line it prints:
+#     147 of 168 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total: this branch's suite is named by shell-suites.yml, so it lands GATED
+# and never enters PREMERGE_UNGATED, which stays 21.
+#
+# READ THIS IF YOU ARE LANDING THIS BRANCH AFTER feat/appstore-effector-enable: that
+# branch also sits at 147/168 right now, because it too adds exactly one gated suite to
+# main-at-146. The two are NOT compatible -- whichever lands second faces a main at
+# 147/168 and must measure 148/169. Do not carry this 147 forward; re-run this file.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-147}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
