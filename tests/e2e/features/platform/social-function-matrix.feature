@@ -132,15 +132,28 @@ Feature: Every seeded persona is decided across every social function, and the c
   Scenario: every social service carries functions @layer:gateway
     Then every social service the catalogue covers carries at least one function
 
-  # WHY THIS MATRIX READS THE SQL AND NOT specs/rbac-route-access.ts. There are
-  # two route-access oracles in this repo. Measured on this tree: the TypeScript
-  # mirror the 33 handwritten specs assert against carries 50 rows, the deployed
-  # seed carries 150, and every mirror row exists in the seed — the mirror is a
-  # strict SUBSET that has simply never grown the forum, media, streaming and
-  # external-client planes. Pinning that turns the day the mirror CONTRADICTS the
-  # seed (rather than merely lagging it) into a named failure.
-  Scenario: the TypeScript route-access mirror lags the deployed seed but never contradicts it @layer:gateway
-    Then the route-access mirror the handwritten specs use is a strict subset of the deployed seed
+  # WHY THIS MATRIX READS THE SQL, AND WHY THAT IS NOW THE SAME TABLE THE 33
+  # HANDWRITTEN SPECS READ. This scenario used to pin a GAP: the TypeScript
+  # mirror was hand-copied, carried 50 of the seed's 150 rows, and the property
+  # worth asserting was "it lags but never contradicts". THAT GAP CLOSED on
+  # 2026-08-26 — tests/e2e/specs/rbac-route-access.ts now re-exports
+  # rbac-route-access.seed.ts, which scripts/gen-route-access-oracle.py GENERATES
+  # from this very SQL (tests/scripts/test-route-access-oracle.sh gates the
+  # generator; this asserts it from the CONSUMER side, where the function matrix
+  # actually decides).
+  #
+  # The old assertion did not merely become redundant, it became FALSE, and it
+  # said so itself: it required "the seed carries rows beyond the mirror" and
+  # failed with "the mirror is not a strict SUBSET but a copy ... this scenario
+  # should be deleted rather than left claiming a gap that closed". MEASURED on
+  # the merged tree: seed 152 rows, mirror 152 rows, 0 beyond the mirror. It also
+  # flagged 4 rows as contradictions that are the seed's EXPLICIT DENY rows — the
+  # subset test never modelled `allow`, and the generated mirror carries it.
+  #
+  # So the pin moves to the relationship that now holds, in BOTH directions and
+  # including allow/deny: a row either table gains without the other is named.
+  Scenario: the TypeScript route-access mirror is generated from the deployed seed and agrees with it exactly @layer:gateway
+    Then the route-access mirror the handwritten specs use agrees with the deployed seed exactly
 
   # The whole matrix in ONE assertion. The per-row scenarios above exist for the
   # REPORT (reporters/hugmesh-reporter.ts pivots perRole off the test title);

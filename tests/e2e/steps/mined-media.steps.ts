@@ -360,10 +360,22 @@ Then('the tube deployment declares a {string} sidecar serving {string}',
       `${TUBE_DEPLOYMENT} declares no container named '${container}'. The signed-URL gate `
       + `lives in that sidecar's nginx config; with no sidecar there is no gate at all.`,
     ).toMatch(new RegExp(`^\\s*-\\s*name:\\s*${container}\\s*$`, 'm'));
+    // The location may be a LITERAL prefix or a regex capture — main's enforced
+    // gate matches `location ~ ^/tube/content(?<media_path>/[A-Za-z0-9._/-]+)$`
+    // so it can hand the path to the verifier. Asserting the literal spelling
+    // would fail on a config that serves exactly the same tree.
+    const bare = prefix.replace(/\/$/, '');
+    const locations = nginxConf().split('\n').filter((l) => /^\s*location\b/.test(l));
     expect(
-      nginxConf(),
-      `the '${container}' nginx config declares no 'location ${prefix}'.`,
-    ).toContain(`location ${prefix}`);
+      locations.length,
+      `the '${container}' nginx config declares NO location block at all, so it serves `
+      + `nothing and every assertion about the gate below would be vacuous.`,
+    ).toBeGreaterThan(0);
+    expect(
+      locations.some((l) => l.includes(bare)),
+      `the '${container}' nginx config declares no location covering '${prefix}'. Its `
+      + `location lines are:\n  ${locations.map((l) => l.trim()).join('\n  ')}`,
+    ).toBe(true);
   });
 
 /** The ConfigMap's `default.conf` block, verbatim. */
@@ -393,31 +405,41 @@ function nginxConf(): string {
 }
 
 /** The gate that IS shipped: a presence check on one query parameter. */
-Then('the tube-media nginx config rejects a request whose {string} query parameter is empty',
-  async ({}, param: string) => {
-    expect(
-      nginxConf(),
-      `the tube-media nginx config carries no 'if ($arg_${param} = "")' guard, so the `
-      + `content tree is served with NO gate whatsoever. This row is the floor, not the `
-      + `ceiling — see the PENDING scenario in this feature for what is still missing.`,
-    ).toMatch(new RegExp(`if\\s*\\(\\s*\\$arg_${param}\\s*=\\s*""\\s*\\)`));
-    expect(nginxConf(), 'the empty-sig branch must return 403').toMatch(/return\s+403/);
-  });
-
 /**
- * THE TRIPWIRE. This asserts an ABSENCE, and it is meant to FAIL one day: the
- * day it does, the sidecar has been wired to the BFF and the driven verify
- * scenarios can leave their PENDING block.
+ * WAS THE TRIPWIRE — "this asserts an ABSENCE, and it is meant to FAIL one day".
+ * It did. The sidecar is wired to the BFF, so what is worth asserting now is the
+ * SHAPE that makes the wiring a gate: an `internal` authoriser (unreachable from
+ * outside nginx) and the subrequest ahead of the alias, so there is no second,
+ * weaker path to the bytes.
  */
-Then('the tube-media nginx config issues no auth_request subrequest', async ({}) => {
-  expect(
-    nginxConf().includes('auth_request'),
-    `the tube-media nginx config NOW issues an auth_request — the stub gate has become a `
-    + `real one. That is the good news and this assertion is the prompt: delete this `
-    + `scenario, un-PEND the sibling 'delegates to the BFF verify route' scenario, and `
-    + `promote features/mined-media/tube-signed-media.feature's verify rows to the live lane.`,
-  ).toBe(false);
-});
+Then('the tube-media nginx config keeps its auth_request target internal and ahead of the alias',
+  async ({}) => {
+    const conf = nginxConf();
+    const target = /auth_request\s+(\/[A-Za-z0-9_./-]+)\s*;/.exec(conf);
+    expect(target, 'no auth_request directive in the tube-media nginx config').not.toBeNull();
+    const name = target![1];
+    const block = new RegExp(`location\\s*=\\s*${name}\\s*\\{([^}]*)\\}`);
+    const body = block.exec(conf);
+    expect(
+      body,
+      `the auth_request target '${name}' has no 'location = ${name} { ... }' block, so the `
+      + `subrequest 404s and nginx fails the request for the wrong reason.`,
+    ).not.toBeNull();
+    expect(
+      body![1],
+      `the auth_request target '${name}' is not 'internal', so a caller can reach the `
+      + `authoriser directly instead of the content it authorises.`,
+    ).toMatch(/\binternal\s*;/);
+    const at = conf.indexOf('auth_request ');
+    const alias = conf.indexOf('alias ');
+    expect(alias, 'the tube-media nginx config aliases nothing, so it serves no content')
+      .toBeGreaterThan(-1);
+    expect(
+      at < alias,
+      `the alias at offset ${alias} is reached before the auth_request at ${at}: the bytes `
+      + `are served without waiting for the verifier.`,
+    ).toBe(true);
+  });
 
 Then('the tube-media nginx config issues an auth_request subrequest to the tube bff verify route',
   async ({}) => {

@@ -131,38 +131,68 @@ export function sqlRouteRows(): RouteRow[] {
   return out;
 }
 
-/** The TS mirror, in the same shape, so one decision engine scores both tables. */
+/** The TS mirror, in the same shape, so one decision engine scores both tables.
+ *
+ *  `allow: r.allow` — NOT the `allow: true` this carried when RouteRule had no
+ *  `allow` field. The generated mirror now carries the seed's four EXPLICIT DENY
+ *  rows (fe '/bff/internal/**', '/bff/user/internal/**', '/bff/mesh/internal/**'
+ *  and superadmin '/attest/api/create-account'), and flattening them to grants
+ *  made mirrorGrantsTheSeedDoesNot() report four phantom over-grants — the
+ *  DANGEROUS direction, reported as a defect while the mirror was in fact right. */
 export const TS_MIRROR_ROWS: RouteRow[] = ROUTE_ACCESS.map((r) => ({
-  gateway: r.gateway, pattern: r.urlPattern, role: r.role, allow: true,
+  gateway: r.gateway, pattern: r.urlPattern, role: r.role, allow: r.allow,
 }));
 
 // ── 2. THE DECISION ENGINE (transcribed; equivalence is EXECUTED, not claimed) ─
 
 /**
- * Line-by-line transcription of `patternMatch` in specs/rbac-route-access.ts.
- * DO NOT "clean this up": the three formulas below (glob = prefix.length * 2
- * AFTER stripping `/**`; '/' = 1; exact = pattern.length * 2 + 1) are the
- * oracle's, and the exact-vs-glob ordering they produce is load-bearing.
+ * Line-by-line transcription of `antMatch` + the winner-scoring in
+ * `decideAgainst`, both in specs/rbac-route-access.ts.
  *
- * KNOWN DIVERGENCE, ledgered rather than hidden: the seed carries two
- * mid-wildcard patterns, '/*.js' and '/*.css' (fe-gateway, PUBLIC). Neither the
- * oracle nor this transcription globs them — both treat them as exact literals —
- * so a real Spring gateway admits '/main.js' where both readings deny it. No
- * governance function is probed through them (asserted by
- * governanceCatalogueProblems), so the divergence cannot reach a decision this
- * suite makes.
+ * RE-TRANSCRIBED 2026-08-26 AT THE INTEGRATION, and the old text is worth keeping
+ * as the reason this scenario exists. It used to say "the three formulas below
+ * (glob = prefix.length * 2 AFTER stripping `/**`; '/' = 1; exact =
+ * pattern.length * 2 + 1) are the oracle's". They WERE. The oracle was then
+ * rewritten on main to score by the RAW url_pattern length — the measure the
+ * gateway itself uses (`int len = r.urlPattern().length()`) — and to match four
+ * shapes rather than two. A transcription of a function that has moved is exactly
+ * the silent drift this module warned about; it was caught by EXECUTION, by the
+ * equivalence scenario below, at 7473 of 14760 triples.
+ *
+ * The four shapes, from the oracle's own `antMatch`:
+ *   '/**'          matches EVERY path (the pki-gateway floor row is one)
+ *   '<prefix>/**'  the prefix itself, '<prefix>/', or any '/'-delimited subpath;
+ *                  it must NOT swallow a textual sibling ('/admin/**' rejects
+ *                  '/administrator')
+ *   a '*' glob     single-segment; '*' never spans a '/'
+ *   a literal      exact match
+ *
+ * THE OLD KNOWN DIVERGENCE IS GONE, not merely unledgered: the seed's '/*.js' and
+ * '/*.css' fe-gateway rows were read as exact literals by both sides. The oracle
+ * now globs them and so does this, which is why the single-segment branch is here
+ * rather than folded into the literal one.
+ *
+ * Specificity is the raw pattern length, so `/api/federation/vanity` (22) LOSES to
+ * `/api/federation/vanity/**` (25) — the opposite of what the old formulas said,
+ * and the reason this had to move rather than be tidied.
  */
 export function patternScore(pattern: string, p: string): { matched: boolean; specificity: number } {
+  const score = pattern.length;
+  if (pattern === '/**') return { matched: true, specificity: score };
   if (pattern.endsWith('/**')) {
     const prefix = pattern.slice(0, -3);
     const matched = p === prefix || p.startsWith(prefix + '/');
-    return { matched, specificity: matched ? prefix.length * 2 : -1 };
+    return { matched, specificity: matched ? score : -1 };
   }
-  if (pattern === '/') {
-    return { matched: p === '/', specificity: p === '/' ? 1 : -1 };
+  if (pattern.includes('*')) {
+    const rx = new RegExp('^' + pattern.split('*')
+      .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('[^/]*') + '$');
+    const matched = rx.test(p);
+    return { matched, specificity: matched ? score : -1 };
   }
   const matched = p === pattern;
-  return { matched, specificity: matched ? pattern.length * 2 + 1 : -1 };
+  return { matched, specificity: matched ? score : -1 };
 }
 
 export interface RouteVerdict {
@@ -202,9 +232,16 @@ export function decideWith(
     if (specificity === best) (r.allow ? allowRoles : denyRoles).push(r.role);
   }
   if (best < 0) {
+    // NO_RULE, NOT DENY. GatewayRouteAccessService.decide() returns NO_RULE for a
+    // path no url_pattern matches and GatewayRouteAccessFilter rejects ONLY on
+    // DENY, so an ungoverned path is FORWARDED to the coarse authenticated floor
+    // (docs/ROUTE-ACCESS.md, "No matching row is NOT a denial"). Collapsing the
+    // two made "denied to everyone" and "rides the coarse floor" — opposite
+    // security claims — report identically; features/mined-platform-edge/
+    // ungoverned-vs-denied.feature is the lane that exists to keep them apart.
     return {
-      decision: 'DENY', pattern: null, winningRoles: [], deniedRoles: [],
-      why: `no ${gateway} row matches ${p} — default-deny`,
+      decision: 'NO_RULE', pattern: null, winningRoles: [], deniedRoles: [],
+      why: `no ${gateway} row matches ${p} — UNGOVERNED, the filter forwards`,
     };
   }
   const held = new Set(roles);
@@ -753,7 +790,10 @@ export function swarmTierSizes(): Record<string, number> {
  */
 export function expectedDecision(fn: GovernanceFunction, roles: readonly string[]): GatewayDecision {
   if (fn.keyedOn.some((r) => PUBLIC_ROLES.has(r))) return 'ALLOW';
-  if (fn.keyedOn.length === 0) return 'DENY';   // wall, or no row at all
+  // A WALL and NO ROW AT ALL are different verdicts, not two spellings of one:
+  // a wall is an explicit allow=false row (DENY), no row at all is NO_RULE and
+  // the filter forwards. `defaultDeny` is the catalogue's word for the latter.
+  if (fn.keyedOn.length === 0) return fn.defaultDeny ? 'NO_RULE' : 'DENY';
   return fn.keyedOn.some((r) => roles.includes(r)) ? 'ALLOW' : 'DENY';
 }
 
@@ -913,7 +953,10 @@ export function tsMirrorGaps(): MirrorGap[] {
 export function mirrorGrantsTheSeedDoesNot(): string[] {
   const rows = sqlRouteRows();
   const out: string[] = [];
-  for (const m of TS_MIRROR_ROWS) {
+  // ALLOW rows only. A mirror row with allow=false is a WALL, not a grant, and
+  // reading the seed's four explicit denies as claims of access reported the
+  // mirror over-granting exactly where it was right.
+  for (const m of TS_MIRROR_ROWS.filter((r) => r.allow)) {
     const sqlRole = PUBLIC_ROLES.has(m.role) ? null : m.role;
     const match = rows.some((r) =>
       r.gateway === m.gateway && r.pattern === m.pattern && r.allow
@@ -993,11 +1036,18 @@ export function collisionCorpus(): { gateway: Gateway; path: string; roles: stri
 export function withOracleCollisionRows<T>(body: (rows: RouteRow[]) => T): T {
   const originalLength = ROUTE_ACCESS.length;
   for (const r of COLLISION_PROBE_ROWS) {
-    ROUTE_ACCESS.push({ gateway: r.gateway as Gateway, urlPattern: r.pattern, role: r.role });
+    // `allow` is REQUIRED on RouteRule now. Omitting it does not fail to compile
+    // here — playwright transpiles without type-checking — it leaves the field
+    // `undefined`, which decideAgainst() reads as an explicit DENY row. The probe
+    // would then compare two engines over rows that mean the opposite of what
+    // this array says.
+    ROUTE_ACCESS.push({
+      gateway: r.gateway as Gateway, urlPattern: r.pattern, role: r.role, allow: r.allow,
+    });
   }
   try {
     return body(ROUTE_ACCESS.map((r) => ({
-      gateway: r.gateway, pattern: r.urlPattern, role: r.role, allow: true,
+      gateway: r.gateway, pattern: r.urlPattern, role: r.role, allow: r.allow,
     })));
   } finally {
     ROUTE_ACCESS.length = originalLength;

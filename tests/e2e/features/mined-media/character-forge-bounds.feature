@@ -62,7 +62,7 @@ Feature: The forge's save, activate and id-addressed read surfaces are bounded
       | another-brands |
       | not-a-uuid     |
 
-  Scenario Outline: a lookup of <count> subjects is refused at validation @role:e2e-user @service:character-forge @layer:bff
+  Scenario Outline: a lookup of <count> subjects is rejected at validation @role:e2e-user @service:character-forge @layer:bff
     Given I am signed in as the persona for this scenario
     When I look up the active characters of <count> subjects
     Then the lookup was rejected with HTTP 400

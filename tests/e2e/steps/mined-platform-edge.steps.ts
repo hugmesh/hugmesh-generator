@@ -410,18 +410,21 @@ Then(
 );
 
 Then(
-  'the only role the oracle names that the route-access seed never emits is {string}',
-  async ({}, expected: string) => {
+  'the route-access oracle names no role the route-access seed never emits',
+  async ({}) => {
     const seededRoles = new Set(seedRows().map((r) => r.role));
+    expect(seededRoles.size, 'the seed parsed to zero distinct roles, so this comparison '
+      + 'would be vacuous').toBeGreaterThan(0);
     const strangers = [...new Set(ROUTE_ACCESS.map((o) => o.role))]
       .filter((r) => !seededRoles.has(r))
       .sort();
     expect(
       strangers,
-      `the oracle invents role name(s) the seed never emits. One such translation `
-      + `(${expected} for the seed's PUBLIC) is a known, contained mismatch; a SECOND one is a `
-      + `role no gateway can ever match, i.e. a row that silently grants nobody.`,
-    ).toEqual([expected]);
+      `the oracle names role(s) the seed never emits: ${strangers.join(', ')}. The oracle is `
+      + `GENERATED from the seed, so a role only it knows is a row no gateway can ever match — `
+      + `i.e. a row that silently grants nobody. (Until 2026-08-26 there was ONE such name by `
+      + `design: ROLE_ANONYMOUS, the hand copy's translation of the seed's PUBLIC.)`,
+    ).toEqual([]);
   },
 );
 
@@ -445,67 +448,121 @@ Then('the route-access oracle carries no more rows than the seed on any gateway'
   ).toEqual([]);
 });
 
-Then('the route-access oracle carries no explicit-deny field', async ({}) => {
+Then('the route-access oracle carries every explicit-deny row the seed carries', async ({}) => {
+  // Structural first: read the TYPE off the source rather than trusting a comment.
+  // This step used to assert the ABSENCE of `allow` — the limitation that made
+  // deny-wins unrepresentable centrally — with a message telling whoever added it
+  // to turn the scenario around. This is that turn.
   const src = readRepoFile('tests/e2e/specs/rbac-route-access.ts');
   const rowType = /export interface RouteRule \{([\s\S]*?)\n\}/.exec(src);
   expect(rowType, 'the RouteRule interface is gone from rbac-route-access.ts').not.toBeNull();
   const stripped = rowType![1].split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
   expect(
     /\ballow\b/.test(stripped),
-    `GOOD NEWS AND A PROMPT, not a lament. RouteRule now carries an 'allow' field, so the `
-    + `oracle can finally express the seed's four allow=false rows (/bff/user/internal/**, `
-    + `/bff/mesh/internal/**, /bff/internal/** on the fe gateway and `
-    + `/attest/api/create-account on the superadmin gateway). Teach gatewayDecision() `
-    + `deny-wins, then delete this scenario and move those rows into the oracle lane.`,
-  ).toBe(false);
+    `RouteRule carries no 'allow' field, so the oracle cannot express the seed's allow=false `
+    + `rows at all and every wall reads as merely ungranted.`,
+  ).toBe(true);
+  // Then the rows themselves, both directions.
+  const key = (g: string, p: string, r: string): string => `${g} ${p} ${r}`;
+  const seedDeny = seedRows().filter((r) => !r.allow)
+    .map((r) => key(r.gateway, r.pattern, r.role)).sort();
+  const oracleDeny = ROUTE_ACCESS.filter((o) => !o.allow)
+    .map((o) => key(o.gateway, o.urlPattern, o.role)).sort();
+  expect(seedDeny.length, 'the seed carries NO explicit deny row, so comparing the two lists '
+    + 'would prove nothing').toBeGreaterThan(0);
+  expect(
+    oracleDeny,
+    `the oracle models ${oracleDeny.length} of the seed's ${seedDeny.length} explicit deny `
+    + `row(s). A deny row only the seed knows is a wall the offline lane reports as merely `
+    + `ungranted — and an ungranted path opens the moment somebody adds an allow row beside `
+    + `it, where a deny row survives (deny-wins).`,
+  ).toEqual(seedDeny);
 });
 
-Then('the route-access oracle carries no fe gateway row for {string}', async ({}, pattern: string) => {
-  const hits = ROUTE_ACCESS.filter(
-    (o) => o.gateway === 'hugmesh-fe-gateway' && o.urlPattern === pattern,
-  );
-  expect(
-    hits.map((o) => o.role),
-    `GOOD NEWS AND A PROMPT: the oracle now carries '${pattern}'. That row was missing while `
-    + `the seed granted it PUBLIC, which is why the oracle reported DENY for the anonymous `
-    + `SPA shell. Check gatewayDecision()'s patternMatch() handles a single '*' before `
-    + `trusting the new row, then fold this pattern into the oracle-driven scenarios.`,
-  ).toHaveLength(0);
-});
+Then('the route-access oracle carries the fe gateway row for {string} that the seed grants PUBLIC',
+  async ({}, pattern: string) => {
+    // This step used to assert the row's ABSENCE, with a message saying to fold the
+    // pattern into the oracle-driven scenarios once it appeared. It appeared.
+    const seeded = seedRows().filter(
+      (r) => r.gateway === 'hugmesh-fe-gateway' && r.pattern === pattern && r.allow
+        && r.role === 'PUBLIC',
+    );
+    expect(
+      seeded,
+      `the SEED no longer grants PUBLIC at fe '${pattern}', so this scenario would be `
+      + `comparing the oracle against nothing.`,
+    ).not.toHaveLength(0);
+    const hits = ROUTE_ACCESS.filter(
+      (o) => o.gateway === 'hugmesh-fe-gateway' && o.urlPattern === pattern && o.allow,
+    );
+    expect(
+      hits.map((o) => o.role),
+      `the oracle carries no allow row at fe '${pattern}' while the seed grants it PUBLIC. `
+      + `That is the shape that made the oracle report DENY for the anonymous SPA shell: an `
+      + `offline ALLOW/DENY read from it would say the front door is shut when it is open.`,
+    ).toContain('PUBLIC');
+  });
 
 Then(
   'the route-access oracle decides {string} for a caller holding {string} at {string} on the {string} gateway',
   async ({}, expected: string, roles: string, requestPath: string, gateway: string) => {
-    // Deliberately re-implemented against ROUTE_ACCESS rather than calling
-    // gatewayDecision(): this step exists to STATE the divergence, and importing
-    // the function under discussion would make the assertion circular the day
-    // somebody changes it. Same model gatewayDecision() documents.
+    // RE-IMPLEMENTED ON PURPOSE, AND IT HAD TO CHANGE WITH THE ORACLE. The point
+    // of the second reading is that this step used to STATE a divergence, so
+    // calling gatewayDecision() would have made the assertion circular. The model
+    // below is therefore transcribed from the oracle rather than imported — and
+    // when the oracle's model moved (single-segment globs, raw pattern length,
+    // NO_RULE, deny-wins), the transcription had to move with it or it would have
+    // gone on describing a function nobody runs. Kept because features/rbac/
+    // governance-function-matrix.feature proves the two agree by EXECUTION.
     const rows = ROUTE_ACCESS.filter((o) => o.gateway === gateway);
     const held = roles.split(',').map((r) => r.trim()).filter(Boolean);
-    let best = -1;
-    let winning: string[] = [];
+    const PUBLIC_ROLES = new Set(['PUBLIC', 'ROLE_ANONYMOUS']);
+    // antMatch's four shapes.
+    const matches = (pattern: string): boolean => {
+      if (pattern === '/**') return true;
+      if (pattern.endsWith('/**')) {
+        const prefix = pattern.slice(0, -3);
+        return requestPath === prefix || requestPath.startsWith(`${prefix}/`);
+      }
+      if (pattern.includes('*')) {
+        const rx = new RegExp('^' + pattern.split('*')
+          .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+          .join('[^/]*') + '$');
+        return rx.test(requestPath);
+      }
+      return requestPath === pattern;
+    };
+    // Longest matching url_pattern wins — by LENGTH, as the gateway measures it.
+    let bestLen = -1;
     for (const r of rows) {
-      const glob = r.urlPattern.endsWith('/**');
-      const prefix = glob ? r.urlPattern.slice(0, -3) : r.urlPattern;
-      const matched = glob
-        ? (requestPath === prefix || requestPath.startsWith(`${prefix}/`))
-        : requestPath === r.urlPattern;
-      if (!matched) continue;
-      const spec = glob ? prefix.length * 2 : r.urlPattern.length * 2 + 1;
-      if (spec > best) { best = spec; winning = []; }
-      if (spec === best) winning.push(r.role);
+      if (!matches(r.urlPattern)) continue;
+      if (r.urlPattern.length > bestLen) bestLen = r.urlPattern.length;
     }
-    const decision = best < 0
-      ? 'DENY'
-      : (winning.includes('ROLE_ANONYMOUS') || winning.some((w) => held.includes(w)))
-        ? 'ALLOW' : 'DENY';
+    let decision: string;
+    const winning: string[] = [];
+    if (bestLen < 0) {
+      // NO matching pattern is NO_RULE, and the filter FORWARDS on it.
+      decision = 'NO_RULE';
+    } else {
+      let allowed = false;
+      let explicitDeny = false;
+      for (const r of rows) {
+        if (r.urlPattern.length !== bestLen || !matches(r.urlPattern)) continue;
+        winning.push(`${r.role}${r.allow ? '' : '(DENY)'}`);
+        if (r.allow && PUBLIC_ROLES.has(r.role)) { allowed = true; continue; }
+        if (!held.includes(r.role)) continue;
+        if (r.allow) allowed = true; else explicitDeny = true;
+      }
+      decision = explicitDeny || !allowed ? 'DENY' : 'ALLOW';
+    }
     expect(
       decision,
-      `the hand-written oracle decides '${decision}' at ${gateway} ${requestPath} for `
-      + `[${held.join(', ') || 'no roles'}] (winning oracle rows: `
-      + `${winning.join(', ') || '<none: the oracle has NO matching pattern, and its best<0 branch calls that DENY>'}`
-      + `). This scenario pins the DIVERGENCE from the seed; when it `
-      + `fails, the oracle has been corrected and the seed-side scenario is now the only one needed.`,
+      `the oracle decides '${decision}' at ${gateway} ${requestPath} for `
+      + `[${held.join(', ') || 'no roles'}] (rows at the winning pattern: `
+      + `${winning.join(', ') || '<none: NO pattern matches, which is NO_RULE, not DENY>'}). `
+      + `This reading is transcribed from specs/rbac-route-access.ts rather than imported, so `
+      + `the scenario cannot be circular; features/rbac/governance-function-matrix.feature `
+      + `proves the transcription and the oracle agree by executing both over every triple.`,
     ).toBe(expected);
   },
 );

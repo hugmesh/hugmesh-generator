@@ -1,9 +1,11 @@
 # UNGOVERNED is not DENIED — and the difference is the whole posture of the gate.
 #
-# THE ORACLE COLLAPSES THEM. gatewayDecision()'s `if (best < 0) return 'DENY'`
-# means "no pattern matched" and "matched but not granted" come back identical,
-# and features/rbac/gateway-route-access.feature's DEFAULT-DENY block reads that
-# as the contract: e2e-admin and e2e-mod both DENY at /infra/logs.
+# THE ORACLE USED TO COLLAPSE THEM. gatewayDecision()'s `if (best < 0) return
+# 'DENY'` meant "no pattern matched" and "matched but not granted" came back
+# identical, and features/rbac/gateway-route-access.feature's DEFAULT-DENY block
+# read that as the contract: e2e-admin and e2e-mod both DENY at /infra/logs.
+# main taught the oracle NO_RULE, this lane's tripwire fired, and that block now
+# says NO_RULE — which is what the tripwire below existed to make happen.
 #
 # THE GATE DOES NOT. GatewayRouteAccessService.decide() returns a THIRD value,
 # NO_RULE, for a path no url_pattern matches, and only Decision.DENY rejects — a
@@ -37,12 +39,14 @@ Feature: An ungoverned path is not the same thing as a denied path
       | e2e-mod   |
       | e2e-user  |
 
-  # THE TRIPWIRE. The oracle answers DENY for the same three personas at the same
-  # path. When this scenario fails, the oracle has learned NO_RULE and the
-  # DEFAULT-DENY Examples block in features/rbac/gateway-route-access.feature is
-  # the thing to correct.
-  Scenario Outline: the oracle still reports DENY where the seed reports NO_RULE for <role> @role:<role> @layer:gateway @service:gateway
-    Then the route-access oracle decides "DENY" for a caller holding "<roles>" at "/infra/logs" on the "hugmesh-be-gateway" gateway
+  # WAS THE TRIPWIRE, NOW THE AGREEMENT. The oracle used to answer DENY for these
+  # three personas at this path while the seed said NO_RULE; the scenario existed
+  # so that the day the oracle learned NO_RULE it would fail and name
+  # features/rbac/gateway-route-access.feature's DEFAULT-DENY block as the thing
+  # to correct. Both happened at the 2026-08-26 integration, so the two
+  # authorities now agree and this asserts the agreement.
+  Scenario Outline: the oracle and the seed both report NO_RULE for <role> @role:<role> @layer:gateway @service:gateway
+    Then the route-access oracle decides "NO_RULE" for a caller holding "<roles>" at "/infra/logs" on the "hugmesh-be-gateway" gateway
 
     Examples:
       | role      | roles                 |

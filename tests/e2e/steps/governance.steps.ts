@@ -64,11 +64,12 @@ async function recordLedger($testInfo: { attach: Function; title: string }, name
   return file;
 }
 
-function decisionWord(v: string): 'ALLOW' | 'DENY' {
-  if (v !== 'ALLOW' && v !== 'DENY') {
+function decisionWord(v: string): 'ALLOW' | 'DENY' | 'NO_RULE' {
+  if (v !== 'ALLOW' && v !== 'DENY' && v !== 'NO_RULE') {
     throw new Error(
-      `a governance decision is 'ALLOW' or 'DENY', never '${v}'. (Legal values are the same `
-      + `two the route-access oracle uses — do not invent 'allowed'/'denied'/'403'.)`,
+      `a governance decision is 'ALLOW', 'DENY' or 'NO_RULE', never '${v}'. (Legal values are `
+      + `the same THREE the route-access oracle uses — NO_RULE is a path no url_pattern `
+      + `matches, which the filter FORWARDS; do not invent 'allowed'/'denied'/'403'.)`,
     );
   }
   return v;
@@ -381,18 +382,24 @@ Then('the {string} governance function is an explicit deny wall rather than an a
     }
   });
 
-/** Default-deny asserted as a property, not as a sample: the winning pattern
- *  must be NULL. A DENY produced by some over-broad glob quietly swallowing the
- *  path looks identical in the verdict and is a completely different posture. */
+/** Ungoverned asserted as a property, not as a sample: the winning pattern must
+ *  be NULL. A verdict produced by some over-broad glob quietly swallowing the
+ *  path looks identical and is a completely different posture.
+ *
+ *  THE VERDICT IS NO_RULE, NOT DENY. It said DENY while the engine collapsed the
+ *  two; the seed governs no /infra pattern, so the table refuses nothing here and
+ *  the filter forwards to the coarse authenticated floor. Asserting DENY claimed
+ *  a closed door the route-access table does not close. */
 Then('the {string} governance function is governed by no route row at all',
   async ({}, fnId: string) => {
     const fn = governanceFunction(fnId);
     const v = sqlDecision(fn.gateway, fn.probePath, []);
     expect(v.pattern, `${fn.gateway} ${fn.probePath} is matched by '${v.pattern}' — the `
-      + `default-deny property this asserts is no longer what denies it`).toBeNull();
+      + `ungoverned property this asserts is no longer what decides it`).toBeNull();
     for (const p of governancePersonas()) {
       const d = sqlDecision(fn.gateway, fn.probePath, p.roles);
-      expect(d.decision, `${p.handle} reached an unrouted path: ${d.why}`).toBe('DENY');
+      expect(d.decision, `${p.handle} was DECIDED at an ungoverned path: ${d.why}`)
+        .toBe('NO_RULE');
     }
   });
 

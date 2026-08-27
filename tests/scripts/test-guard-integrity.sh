@@ -75,6 +75,12 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # test-route-access-oracle.sh into the pull_request workflow. MEASURED at the
 # merge, not carried over from either side -- the branch itself said 120, main
 # said 130, and neither number is true of the merged tree.
+# 135 -> 135 at the 2026-08-26 gherkin/e2e integration, and the number staying put
+# is the finding, not a non-event: the merged tree gained NINE suites and the
+# DENOMINATOR moved 146 -> 155 while the gated count did not move at all, because
+# not one of the nine is named by a pull_request workflow. MEASURED by running
+# this file on the merged tree; the branches said 117 and main said 135, and
+# 117 was true of neither.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-135}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
@@ -104,11 +110,60 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-135}"
 # prints on mismatch, or `GUARD_PREMERGE_UNGATED=x bash tests/scripts/test-guard-integrity.sh`
 # to have it print the whole corrected list. Nothing is exempted by being here —
 # an entry is a statement that the suite does not gate a PR, not permission.
+#
+# THE NINE test-e2e-* ENTRIES (added 2026-08-26 at the gherkin/e2e integration).
+# Every one of them is RUN — the Makefile's stack-e2e-bdd-check / -guards /
+# e2e-reporter-check targets invoke all nine, which is why check 3 above is green
+# — but a make target gates nothing, so they belong here and the reason is stated
+# per suite rather than as a shrug.
+#
+# EIGHT of the nine REFUSE TO RUN without tests/e2e/node_modules/playwright-bdd
+# and a Playwright browser: they exit 2 with "SKIPPED-LOUDLY ... this guard
+# checked NOTHING" rather than 0. MEASURED, not read: each was executed on this
+# tree with tests/e2e/node_modules moved aside and each exited 2 — which was true
+# of only seven of them when the measurement started: test-e2e-func-media-games.sh
+# had no such preflight and exited 1, indistinguishable from a real drift finding,
+# so it was given the block its eight siblings already carried. No image the
+# shell-suites workflow runs carries that install — alpine:3, python:3.12-slim
+# (x2) and node:24-alpine — and THREE of the eight additionally build the REAL
+# PyQt wizard offscreen and need a Qt6 binding (the three marked '+ Qt6' below). Listing them would gate a job
+# that can only ever skip, which is the failure mode
+# .github/workflows/shell-suites.yml's header describes at length.
+#
+#   test-e2e-cli-lane.sh                 needs node_modules + a chromium
+#   test-e2e-coverage-matrix.sh          needs node_modules + a chromium
+#   test-e2e-env-interface-dimensions.sh needs node_modules + chromium + Qt6
+#   test-e2e-func-media-games.sh         needs node_modules + chromium + Qt6
+#   test-e2e-gherkin-harness.sh          needs node_modules + a chromium
+#   test-e2e-governance-function-matrix.sh needs node_modules + a chromium
+#   test-e2e-social-function-matrix.sh   needs node_modules + a chromium
+#   test-e2e-studio-gui-lane.sh          needs node_modules + chromium + Qt6
+#
+# THE NINTH IS DIFFERENT AND IS SAID SO OUT LOUD. tests/scripts/test-e2e-reporter-shape.sh
+# needs NOTHING but node >= 23.6 and python3 — its own header says "OFFLINE, NO
+# STACK, NO ROOT, NO node_modules", and MEASURED here with node_modules moved
+# aside it still exits 0 with 30 passed. The node:24-alpine job already installs
+# python3, so it is gateable as a one-line addition. It is recorded rather than
+# wired because this workflow's own rule is that "every suite below was EXECUTED
+# in the image named by its job before being listed here — not classified by
+# reading it", and the integration session that merged these lanes could not run
+# containers to do that. Run it in node:24-alpine, add it to that job's SUITES
+# list, and raise PREMERGE_BASELINE by one. THAT IS A REAL, NAMED FOLLOW-UP, not
+# an exemption.
 PREMERGE_UNGATED=(
   tests/casdoor/test-jwt-custom-token.sh
   tests/device-registry/test-layer-a-headscale-acl.sh
   tests/egress-vpn/test-secret-contract.sh
   tests/pentest/nuclei/test-templates.sh
+  tests/scripts/test-e2e-cli-lane.sh
+  tests/scripts/test-e2e-coverage-matrix.sh
+  tests/scripts/test-e2e-env-interface-dimensions.sh
+  tests/scripts/test-e2e-func-media-games.sh
+  tests/scripts/test-e2e-gherkin-harness.sh
+  tests/scripts/test-e2e-governance-function-matrix.sh
+  tests/scripts/test-e2e-reporter-shape.sh
+  tests/scripts/test-e2e-social-function-matrix.sh
+  tests/scripts/test-e2e-studio-gui-lane.sh
   tests/scripts/test-eso-target-collisions.sh
   tests/scripts/test-federation-module-slugs.sh
   tests/scripts/test-liquibase-grant-roles.sh

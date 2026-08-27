@@ -39,15 +39,22 @@ Feature: ROLE_MOD reaches moderation and nothing else
       | tuwunel | hugmesh-be-gateway | /_synapse/client/versions     | ALLOW    |
 
     # DENY — everything outside moderation, including both games-admin surfaces
-    # (ROLE_MOD alone is not the derived ROLE_GAMES_ADMIN) and the routeless infra
-    # paths that default-deny.
+    # (ROLE_MOD alone is not the derived ROLE_GAMES_ADMIN).
+    #
+    # THE TWO /infra ROWS ARE NO_RULE, NOT DENY, and they used to say DENY because
+    # the oracle collapsed the two. They are ROUTELESS — /infra appears nowhere in
+    # the seed — so the table refuses nothing there and the request rides the
+    # coarse anyExchange().authenticated() floor. That is still "a moderator does
+    # not get infra by way of a route-access grant", which is what this scenario
+    # is about; it is NOT "the route-access table shuts the door", which is what
+    # DENY claimed. See features/mined-platform-edge/ungoverned-vs-denied.feature.
     Examples:
       | service | gateway            | path                          | decision |
       | admin   | hugmesh-be-gateway | /api/admin/route-access       | DENY     |
       | admin   | hugmesh-fe-gateway | /admin/usage                  | DENY     |
       | admin   | hugmesh-fe-gateway | /bff/admin/allowlist          | DENY     |
-      | gateway | hugmesh-be-gateway | /infra/vault/secret           | DENY     |
-      | gateway | hugmesh-be-gateway | /infra/logs                   | DENY     |
+      | gateway | hugmesh-be-gateway | /infra/vault/secret           | NO_RULE  |
+      | gateway | hugmesh-be-gateway | /infra/logs                   | NO_RULE  |
       | games   | hugmesh-fe-gateway | /games/admin/sessions         | DENY     |
       | games   | hugmesh-be-gateway | /games/api/admin/role-grants  | DENY     |
 
