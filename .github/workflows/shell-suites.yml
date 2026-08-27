@@ -76,6 +76,14 @@
 # second batch are gated.
 #   * tests/scripts/test-liquibase-grant-roles.sh
 #       python:3.12-slim + perl/PyYAML, with the checkout parent mounted and SERVICE_SRC_ROOT set
+#   * tests/scripts/test-optional-service-slug-closure.sh
+#       the hugmesh-admin-bff-api sibling checkout, for the fifth surface (the
+#       controller's OptionalServiceRegistry). A hosted runner cannot clone the
+#       org-private repo, and the suite reports INCOMPLETE and FAILS rather than
+#       checking four surfaces of five and calling that a pass — so listing it here
+#       would just paint the PR gate red for a missing clone rather than a real
+#       defect. It IS gated post-merge by .gitlab-ci.yml's
+#       lint:optional-service-slug-closure, which clones it sparsely.
 #   * tests/scripts/test-service-env-contract.sh
 #       alpine:3 + apk add bash python3 py3-yaml, PLUS the 9 first-party BFF checkouts mounted and SERVI
 #   * tests/scripts/test-eso-target-collisions.sh

@@ -136,6 +136,12 @@ PREMERGE_UNGATED=(
   # See the "NOT LISTED HERE" entry in .github/workflows/shell-suites.yml.
   tests/scripts/test-kind-metrics-api.sh
   tests/scripts/test-liquibase-grant-roles.sh
+  # Needs the hugmesh-admin-bff-api checkout for its fifth surface (the
+  # controller's OptionalServiceRegistry). It reports INCOMPLETE and FAILS without
+  # it rather than checking four surfaces of five, so a hosted runner that cannot
+  # clone the org-private repo would go red for a missing clone, not a defect.
+  # Gated post-merge by .gitlab-ci.yml's lint:optional-service-slug-closure.
+  tests/scripts/test-optional-service-slug-closure.sh
   tests/scripts/test-service-env-contract.sh
   tests/stack/test-gateway-auth-flag-parity.sh
   tests/stack/test-m2-bootstrap.sh

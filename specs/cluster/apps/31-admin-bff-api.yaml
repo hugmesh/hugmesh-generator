@@ -19,3 +19,34 @@ spec:
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]
+# ── NO ignoreDifferences HERE, AND THAT IS THE DECISION (2026-08-26) ──────────
+# The optional-services reconciler's master switch
+# (APP_OPTIONAL_SERVICES_RECONCILE_ENABLED -> app.optional-services.reconcile.
+# enabled) is now DECLARED in manifests/admin-bff-api/deployment.yaml. It was
+# previously settable from nowhere at all, and the obvious repair — "let the
+# operator `kubectl set env` it and exempt that from selfHeal" — is refused here
+# on purpose. Two reasons, both structural:
+#
+#   1. ArgoCD ignoreDifferences addresses a container's env by ARRAY INDEX
+#      (/spec/template/spec/containers/0/env/N). There is no by-name pointer.
+#      That index is correct only until someone inserts an env var above it, at
+#      which point the exemption silently starts covering a DIFFERENT variable —
+#      and this container's env list carries secretKeyRefs. An exemption that
+#      quietly migrates onto a credential is worse than no exemption. The
+#      alternative, exempting the whole /env array, un-enforces every variable in
+#      the pod to make ONE of them settable.
+#
+#   2. This flag is not a runtime toggle in the first place. Turning it on is
+#      only legal AFTER the hardcoded-app cut-over (docs/OPTIONAL-SERVICES.md
+#      §10) because the reconciler becomes authoritative over the entire closed
+#      slug set on its first tick — see the long comment at the env var. A change
+#      with that precondition wants a reviewed commit and an audit trail, which
+#      is exactly what GitOps-only gives it. selfHeal REVERTING an ad-hoc
+#      `kubectl set env` of this key is now correct behaviour, not the defect it
+#      looks like.
+#
+# The RUNTIME surface an operator/superadmin actually drives is the per-slug
+# OptionalService CRs, and those writes ARE exempted from selfHeal — on their own
+# objects, by NAME, not by index: apps/16-reserved-prefixes-policy.yaml for the
+# installed-services ConfigMap data keys, and app-of-apps.yaml + apps/00-app-of-
+# apps-waved.yaml for the 13a ApplicationSet elements.
