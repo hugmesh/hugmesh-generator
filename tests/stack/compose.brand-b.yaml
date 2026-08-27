@@ -19,7 +19,9 @@ services:
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U casdoor"], interval: 5s, retries: 20 }
 
   casdoor-brandb:
-    image: casbin/casdoor:latest
+    # Same pin as brand A (compose.real.yaml): the seed's set-password
+    # reconcile depends on this version's already-current refusal semantics.
+    image: casbin/casdoor:3.80.0
     profiles: ["brandb"]
     depends_on: { casdoor-brandb-db: { condition: service_healthy } }
     environment:

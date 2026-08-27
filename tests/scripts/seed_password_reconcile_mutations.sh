@@ -110,6 +110,15 @@ mutate "M4  invalid_grant zero-mint collapsed into the generic message" "${SA}" 
 '    *" invalid_grant "*)' \
 '    *" never-match-xyzzy "*)'
 
+# The skeptic's S1 (2026-08-27): this survived the suite's first cut, because
+# every stubbed create landed the credential and the add branch's proof was
+# defensive-only. Scenario 3b (adduser-droppw) is what catches it now.
+mutate "M15 add-branch proof skipped (cold-stack credential never proven)" "${SA}" \
+'  verb="$(apply_password "${ORG}" "${name}" "${pass}")"
+  log "add-user ${name} -> ok (${affected:-ok}; password ${verb})"' \
+'  verb="already current"
+  log "add-user ${name} -> ok (${affected:-ok}; password ${verb})"'
+
 # ── seed-e2e.sh (leg 1c honesty) ─────────────────────────────────────────────
 mutate "M5  total-failure exit swallowed (falls through to PARTIAL)" "${SE}" \
 '    exit 3' \
@@ -122,6 +131,13 @@ mutate "M12 total-failure exits 0 (dishonest exit status)" "${SE}" \
 mutate "M9  total-failure condition can never fire" "${SE}" \
 '  if [ "${reg_fail}" -gt 0 ] && [ "${reg_ok}" -eq 0 ]; then' \
 '  if [ "${reg_fail}" -gt 999 ] && [ "${reg_ok}" -eq 0 ]; then'
+
+# The skeptic's S3 (2026-08-27): dropping the reg_fail>0 conjunct makes the
+# fatal fire on a run where every persona was deliberately gated and ZERO were
+# attempted. Scenario 5d (all-gated roster) is what catches it now.
+mutate "M16 total-failure fires on ZERO attempts too (spurious fatal when all gated)" "${SE}" \
+'  if [ "${reg_fail}" -gt 0 ] && [ "${reg_ok}" -eq 0 ]; then' \
+'  if [ "${reg_ok}" -eq 0 ]; then'
 
 mutate "M6  partial failure relabelled OK" "${SE}" \
 'log "leg 1c PARTIAL: ${reg_ok} onboarded, ${reg_gated} left gated on purpose (${SEED_REGISTRATION_SKIP}), ${reg_fail} FAILED"' \

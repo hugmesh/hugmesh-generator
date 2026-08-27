@@ -1850,8 +1850,10 @@ stack-up: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## clone ->
 ifeq ($(SEED_COMPLETE_REGISTRATION),1)
 define STACK_SEED_STAGE2_NOTE
 @echo "    Registration STAGE 2 ran in this seed (SEED_COMPLETE_REGISTRATION=1): the personas are"
-@echo "    onboarded (minus the deliberately-gated set: e2e-pending, rbac-pending, e2e-banned) and"
-@echo "    mesh-operator can navigate every app. Verify by outcome, not by this banner:"
+@echo "    onboarded — minus the deliberately-gated set (e2e-pending, rbac-pending-gmail-com,"
+@echo "    e2e-banned, plus every email-shaped invite fixture; the seed log's 'left gated on"
+@echo "    purpose' count is the exact tally) — and mesh-operator can navigate every app."
+@echo "    Verify by outcome, not by this banner:"
 @echo "    GET /bff/session must report registrationComplete=true for an onboarded persona."
 endef
 else

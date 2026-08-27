@@ -310,6 +310,30 @@ if stub_up setpw-noop ok "${WORK}/seed-stale2.json"; then
         || bad "(3) the failure does not say the write failed to persist: $(tail -3 "${WORK}/out")"
 fi
 
+# ═════ 3b. THE DROPPED CREATE: add-user says Affected, no credential lands ═══
+# The add branch's apply_password call is DEFENSIVE — a well-behaved add-user
+# stores the body's password itself — so in a world where every create lands
+# the credential, deleting that proof changes nothing any scenario above can
+# see (measured: exactly that mutation SURVIVED the suite's first cut). Here
+# the create drops the password field; only the add branch's rotate-and-prove
+# can make these accounts able to log in, so the proof is load-bearing and its
+# deletion goes red. Same oracle as scenario 1: a mint, never a log line.
+seed_roles_only "${WORK}/seed-roles-drop.json"
+if stub_up adduser-droppw ok "${WORK}/seed-roles-drop.json"; then
+    run_hook
+    [ "${RC}" -eq 0 ] \
+        && ok "(3b) apply hook exits 0 when add-user drops the password (the add-branch reconcile repairs it)" \
+        || bad "(3b) apply hook failed (rc=${RC}) on the dropped-create shape: $(tail -3 "${WORK}/out")"
+    if mint e2e-admin "${NEW_PW}" && mint e2e-user "${NEW_PW}" && mint e2e-matrix "${NEW_PW}"; then
+        ok "(3b) every freshly-created user's stored credential IS the rendered value (the add-branch proof caught the drop)"
+    else
+        bad "(3b) a freshly-created user cannot mint with the rendered password — the add branch assumed the create landed the credential"
+    fi
+    grep -q "password rotated" "${WORK}/out" \
+        && ok "(3b) ...and the add path reported the repair (\"password rotated\", not \"already current\")" \
+        || bad "(3b) the add path did not report repairing the dropped credential: $(grep 'add-user' "${WORK}/out" | head -3)"
+fi
+
 # ═════ 4. ZERO-MINT ATTRIBUTION: grant config vs wrong credentials ═══════════
 seed_roles_only "${WORK}/seed-roles.json"
 if stub_up ok unsupported "${WORK}/seed-roles.json"; then
@@ -345,10 +369,14 @@ run_seed_e2e_fresh() { # <fd-expected-password> [fail-user] — out -> ${WORK}/s
     stub_up ok ok || return 1
     fd_up "${expect}" "${failuser}" || return 1
     rm -rf "${WORK}/seedwork"
+    # SKIP_OVERRIDE (optional, callers set it as a prefix assignment) feeds
+    # SEED_REGISTRATION_SKIP; empty falls through to the seed's own default
+    # (its `:-` expansion treats empty as unset), so only 5d ever changes it.
     PATH="${WORK}/bin:${PATH}" \
     E2E_PASSWORD="${NEW_PW}" E2E_CREDENTIALS_FILE="${NO_CREDS}" \
     CASDOOR_URL="${CASDOOR}" FRONT_DOOR="${FRONT}" \
     SEED_CASDOOR_ONLY=1 SEED_COMPLETE_REGISTRATION=1 SEED_WAIT_S=10 \
+    SEED_REGISTRATION_SKIP="${SKIP_OVERRIDE:-}" \
     SEED_WORKDIR="${WORK}/seedwork" \
         timeout 300 bash "${SEED_E2E}" >"${WORK}/seedout" 2>&1
     RC=$?
@@ -394,6 +422,34 @@ if run_seed_e2e_fresh "${NEW_PW}" "e2e-admin"; then
     grep -q "leg 1c PARTIAL" "${WORK}/seedout" && ! grep -q "leg 1c OK" "${WORK}/seedout" \
         && ok "(5b) ...and is labelled PARTIAL, not OK" \
         || bad "(5b) partial failure mislabelled: $(grep -E 'leg 1c (OK|PARTIAL)' "${WORK}/seedout" | tail -1 || echo '(no label)')"
+fi
+
+# (5d) ALL-GATED: every persona deliberately gated → ZERO attempted onboards,
+# and zero attempted is NOT zero succeeded. The total-failure exit must demand
+# an actual failed attempt (reg_fail>0), or a legitimately all-gated seed dies
+# spuriously — the ungated edge of the same honesty rule 5a pins. The roster
+# is derived from the seed's OWN render (the last run's workdir), never a
+# second copy of the table; email-shaped fixtures are gated by shape anyway.
+# The front door only accepts the STALE password here on purpose: if gating
+# ever stopped short-circuiting before the login, every persona would 401 and
+# this scenario would go red on that regression too.
+ROSTER="$(jq -r '[.users[].name | select(contains("@") | not)] | join(" ")' \
+            "${WORK}/seedwork/roles-render/roles/casdoor-systems-roles.json" 2>/dev/null || true)"
+if [ -n "${ROSTER}" ]; then
+    ok "(5d) fixture: derived the full persona roster from the seed's own render ($(echo ${ROSTER} | wc -w) name(s))"
+else
+    bad "(5d) could not derive the persona roster from ${WORK}/seedwork — the all-gated edge cannot be exercised"
+fi
+if [ -n "${ROSTER}" ] && SKIP_OVERRIDE="${ROSTER}" run_seed_e2e_fresh "${OLD_PW}"; then
+    [ "${RC}" -eq 0 ] \
+        && ok "(5d) an all-gated run (0 attempted, 0 failed) exits 0 — zero attempts is not a total failure" \
+        || bad "(5d) an all-gated run exits ${RC} — the total-failure exit fires on ZERO attempts (spurious fatal): $(tail -3 "${WORK}/seedout")"
+    grep -q "leg 1c OK: 0 onboarded" "${WORK}/seedout" \
+        && ok "(5d) ...and reports 'leg 1c OK: 0 onboarded' with every persona left gated" \
+        || bad "(5d) all-gated run mislabelled: $(grep -E 'leg 1c' "${WORK}/seedout" | tail -1 || echo '(no leg 1c line)')"
+    grep -q "leg 1c FAILED" "${WORK}/seedout" \
+        && bad "(5d) 'leg 1c FAILED' printed on a run that attempted nothing" \
+        || ok "(5d) no failure banner on the all-gated run"
 fi
 stub_down
 

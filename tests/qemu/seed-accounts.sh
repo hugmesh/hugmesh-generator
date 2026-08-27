@@ -484,9 +484,11 @@ REMOTE
 #   casdoor-games-users.json     native player(s) for the games Casdoor (org
 #                                "threewizards"). The synced games admin is NOT
 #                                seeded here (it appears via systems->games sync).
-#   apply-systems-roles.sh       idempotent Casdoor admin-API hook (add-user with
-#                                the e2e password, then update-role) so a REAL
-#                                Casdoor carries the right JWT `roles` claim.
+#   apply-systems-roles.sh       idempotent Casdoor admin-API hook (add-user, or
+#                                for an EXISTING user a set-password reconcile of
+#                                its stored password to the e2e render — never a
+#                                skip — then update-role) so a REAL Casdoor
+#                                carries the right JWT `roles` claim.
 #                                Envelope-checked + read-back-verified: it fails
 #                                loudly rather than reporting a seed it did not
 #                                perform (see its own header for the HTTP-200
@@ -604,15 +606,17 @@ ROLE_FORUM ROLE_FORUM_MOD ROLE_WIKI ROLE_GAMES ROLE_GAMES_ADMIN ROLE_USER"
            users: $users
          }' > "${dir}/casdoor-games-users.json"
 
-    # The apply hook: login as the Casdoor admin, ensure each user (with its
-    # deterministic e2e password) exists, then set each role's members. Idempotent.
+    # The apply hook: login as the Casdoor admin, ensure each user exists AND
+    # holds the rendered e2e password (existing users are RECONCILED via
+    # set-password, never skipped), then set each role's members. Idempotent.
     cat > "${dir}/apply-systems-roles.sh" <<'APPLY'
 #!/usr/bin/env bash
 # apply-systems-roles.sh — push the systems RBAC role matrix into a REAL Casdoor
 # (org "hugmesh") so the rbac-*.spec.ts JWT-role assertions work. Reads the
-# sibling casdoor-systems-roles.json. Idempotent: add-user is skipped when the
-# user already exists, update-role overwrites the member set. Requires curl + jq
-# + Casdoor admin creds.
+# sibling casdoor-systems-roles.json. Idempotent: an existing user is never
+# skipped — apply_password() reconciles its stored password to the rendered
+# value and proves it (see below) — and update-role overwrites the member set.
+# Requires curl + jq + Casdoor admin creds.
 #
 #   CASDOOR_URL          (default http://127.0.0.1:8000)
 #   CASDOOR_ADMIN_USER   (default admin)
