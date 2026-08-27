@@ -39,6 +39,41 @@
 # above or listed here: six were in NEITHER place until 2026-08-22, which made this
 # very block's claim false. Each of the six was then RUN in alpine:3 to decide
 # which it was -- three are now gated, three are below.
+# THE SECOND NAMING CONVENTION (2026-08-26). The 2026-08-22 sweep below closed the
+# "in NEITHER place" hole for suites named `test-*.sh`. A naming difference reopened
+# it the same week: tests/qemu/ and tests/menu/ name their suites `*_test.sh`, and
+# check 7's census walked for `test-*.sh` only. Eight suites were therefore counted
+# nowhere and gated nowhere -- invisible to the very number that exists to make this
+# gap visible. tests/qemu/verdict_test.sh was one of them: it exists to stop the QEMU
+# matrix reporting PASS rows whose assertions.log holds real FAILs, and it could not
+# stop a merge. Seven of the eight are gated in the alpine job below and one in the
+# node job; each was EXECUTED in that image first, and each was then MUTATION-TESTED
+# there -- a real defect planted in the production script it covers -- so "it passes"
+# is not being confused with "it asserts something". The census in
+# tests/scripts/test-guard-integrity.sh now matches BOTH spellings, and its negative
+# control (j) plants an orphaned `*_test.sh` to prove the walker really reaches the
+# second one.
+#
+# ONE OF THE EIGHT IS NOT IN THE ALPINE JOB, ON PURPOSE.
+#   * tests/menu/ncurses_charset_test.sh -> the NODE job.
+#       Its central assertion ("after transliteration, no byte above 0x7F survives")
+#       is a `grep -P`, and alpine:3 ships busybox grep, which has no -P: it exits 2
+#       with a usage message, the `if` reads false, and the suite records a PASS.
+#       Measured with the ⚙ mapping deleted from scripts/build-menu.sh: alpine 20
+#       passed / 0 failed (VACUOUS), node:24-alpine -- which apk-installs GNU grep
+#       3.12 -- 19 passed / 1 failed. The node job's preflight now asserts `grep -P`
+#       works, so that dependency cannot rot back into a silent skip.
+#   The other seven run correctly on alpine:3 with the package line below and need
+#   nothing it does not install: no QEMU, no docker, no root, no sibling checkout.
+#   Two of them (avc-workout_test.sh, mesh-cluster_test.sh) are alpine-ONLY -- they
+#   are RED in node:24-alpine, which has no make/gawk/util-linux (31/9 and 137/27).
+#
+# NOT LISTED HERE (deliberate, with reasons). Every suite on disk -- under EITHER
+# naming convention -- is either listed above or listed here: six were in NEITHER
+# place until 2026-08-22 and eight more until 2026-08-26, which made this very
+# block's claim false both times. Each was then RUN in a CI image to decide which it
+# was -- of the first six, three are now gated and three are below; all eight of the
+# second batch are gated.
 #   * tests/scripts/test-liquibase-grant-roles.sh
 #       python:3.12-slim + perl/PyYAML, with /home/magus/Github mounted and SERVICE_SRC_ROOT set
 #   * tests/scripts/test-service-env-contract.sh
@@ -155,6 +190,7 @@ jobs:
             tests/go-live/test-go-live-reconcile-verify.sh
             tests/keystores/test-keystores-external-ca.sh
             tests/keystores/test-keystores.sh
+            tests/menu/build_menu_cmd_test.sh
             tests/node-storage/test-bake-coverage.sh
             tests/node-storage/test-degrade.sh
             tests/node-storage/test-pool-entrypoint.sh
@@ -165,6 +201,12 @@ jobs:
             tests/qemu/kernel_extract_test.sh
             tests/qemu/launch_pi_kernel_test.sh
             tests/qemu/role_topology_test.sh
+            tests/qemu/assertions_test.sh
+            tests/qemu/avc-workout_test.sh
+            tests/qemu/devices_test.sh
+            tests/qemu/mesh-cluster_test.sh
+            tests/qemu/save_test.sh
+            tests/qemu/verdict_test.sh
             tests/scripts/test-anubis-env-gate.sh
             tests/scripts/test-arm-ro-distdir.sh
             tests/scripts/test-binpkg-pool-fingerprint.sh
@@ -383,13 +425,24 @@ jobs:
           for b in bash jq openssl python3 git node; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
           [ -d scripts/tooling/node_modules/handlebars ] || { echo "::error::handlebars absent — the drift gate would render nothing"; exit 1; }
-          echo "preflight ok: bash jq openssl python3 git node handlebars"
+          # PCRE grep. tests/menu/ncurses_charset_test.sh proves the menu's non-UTF-8
+          # transliteration leaves NO byte above 0x7F, and the only assertion that can
+          # say so is `grep -P '[^\x00-\x7F]'`. busybox grep has no -P: it exits 2 with
+          # a usage message, the `if` reads false, and the suite records a PASS having
+          # checked nothing. MEASURED 2026-08-26 on alpine:3 with a real regression
+          # planted (the ⚙ mapping deleted from scripts/build-menu.sh): alpine 20
+          # passed / 0 failed, this image 19 passed / 1 failed. That is why the suite
+          # lives in THIS job and not the alpine one, and why its dependency is
+          # asserted here instead of assumed.
+          printf '\303\251\n' | grep -P '[^\x00-\x7F]' >/dev/null || { echo "::error::grep has no working -P — ncurses_charset_test.sh's non-ASCII assertion would pass vacuously"; exit 1; }
+          echo "preflight ok: bash jq openssl python3 git node handlebars grep-P"
       - name: run suites
         shell: bash
         run: |
           SUITES="
             tests/domain-registry/test-domain-reconcile-fuzz.sh
             tests/domain-registry/test-templating-rename-pr.sh
+            tests/menu/ncurses_charset_test.sh
           "
           # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
           # suite's status and silently forgives every earlier one — that is defect
