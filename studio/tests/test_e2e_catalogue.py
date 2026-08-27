@@ -26,6 +26,7 @@ import subprocess
 import pytest
 
 from hugmesh_studio.core import e2e_catalogue as ec
+from hugmesh_studio.core.seeded_credentials import Roster, SeededUser
 from hugmesh_studio.core.e2e_catalogue import (
     LINK_FILENAME_PREFIX, LINK_TEST, STATUS_FAILED, STATUS_NOT_RUN, STATUS_PASSED,
     STATUS_SKIPPED, UNKNOWN_SKIP_REASON, Catalogue, E2ETest, build_features,
@@ -845,6 +846,142 @@ def test_the_real_playwright_list_enumerates_this_checkouts_specs():
     # and the tree really is built from it
     features = build_features(got.tests, index_screenshots(GENERATOR_DIR))
     assert len(features) == len(files)
+
+
+# ── the feature TREE's own model additions (unit E5) ─────────────────────────────
+# These are the Qt-free half of the tree: the .feature index the operator asked for by
+# name, the per-spec persona resolution behind "the table of users they draw from",
+# and the argv safety on the selection. They live here so they gate in the plain-python
+# lane too — the Qt half of the tree can only be exercised where a binding exists.
+
+_FEATURE_SRC = """# a comment that mentions Scenario: and must not become one
+@service:login @layer:ui
+Feature: Front door over the generated TLS certs
+
+  Scenario Outline: gates anonymous visitors on <platform> @platform:<platform> @layer:ui
+    When I open the path "/"
+
+  @wip
+  Scenario: a second one
+    Then something
+"""
+
+
+def test_parse_gherkin_reads_the_feature_its_scenarios_and_their_tags():
+    title, scenarios, ftags = ec.parse_gherkin(_FEATURE_SRC)
+    assert title == "Front door over the generated TLS certs"
+    assert ftags == ("@service:login", "@layer:ui")
+    assert [s.name for s in scenarios] == [
+        "gates anonymous visitors on <platform>", "a second one"]
+    # Inline trailing tags belong in `tags`, not in the title — a row full of raw
+    # @-noise with tags reported EMPTY is two wrongs.
+    assert scenarios[0].tags == ("@platform:<platform>", "@layer:ui")
+    assert scenarios[0].keyword == "Scenario Outline"
+    # …and a tag above a scenario scopes to THAT scenario only, the way Gherkin does.
+    assert scenarios[1].tags == ("@wip",)
+    # a '#' comment naming a keyword is not a scenario
+    assert len(scenarios) == 2
+
+
+def test_a_missing_features_dir_is_a_NAMED_absence_not_an_empty_list(tmp_path):
+    idx = ec.index_gherkin(str(tmp_path))
+    assert idx.features == ()
+    assert "feat/e2e-gherkin-harness" in idx.error, (
+        "'not merged into this checkout yet' and 'there are no feature files' are "
+        "different facts")
+
+
+def test_index_gherkin_walks_subdirectories(tmp_path):
+    d = tmp_path / "tests" / "e2e" / "features" / "onboarding"
+    d.mkdir(parents=True)
+    (d / "frontpage.feature").write_text(_FEATURE_SRC, encoding="utf-8")
+    (tmp_path / "tests" / "e2e" / "features" / "top.feature").write_text(
+        "Feature: top\n", encoding="utf-8")
+    idx = ec.index_gherkin(str(tmp_path))
+    assert idx.error == ""
+    rels = [f.rel for f in idx.features]
+    assert os.path.join("tests", "e2e", "features", "onboarding",
+                        "frontpage.feature") in rels
+    assert len(idx.features) == 2
+
+
+def test_spec_personas_ignores_a_persona_named_only_in_a_comment():
+    """HOUSE RULE, and it is load-bearing here: a persona a spec only MENTIONS is not
+    a persona it drives, and `phpbb`-in-a-comment already inverted this exact class of
+    check four times in this repo."""
+    roster = Roster(users=[SeededUser(username=u, roles=(), password="x")
+                           for u in ("e2e-admin", "e2e-adminonly", "e2e-user")])
+    sources = {
+        "a.spec.ts": "// e2e-admin is only named here\nconst x = 1;\n",
+        "b.spec.ts": "const who = 'e2e-admin';\n",
+        "c.spec.ts": "/* e2e-user */\nconst z = 'e2e-adminonly';\n",
+    }
+    got = ec.spec_personas("/nonexistent", roster, sources)
+    assert got["a.spec.ts"] == ()
+    assert got["b.spec.ts"] == ("e2e-admin",)
+    assert got["c.spec.ts"] == ("e2e-adminonly",)
+
+
+def test_a_persona_handle_does_not_match_inside_a_longer_one():
+    """`e2e-user` must not match `e2e-user-2`: '-' is part of a handle, so \\b is the
+    wrong boundary and would over-report every roster prefix."""
+    roster = Roster(users=[SeededUser(username=u, roles=(), password="x")
+                           for u in ("e2e-user", "e2e-pending")])
+    got = ec.spec_personas("/nonexistent", roster, {
+        "a.spec.ts": "const a = 'e2e-user-2'; const b = 'rbac-pending';\n"})
+    assert got["a.spec.ts"] == ()
+
+
+def test_safe_spec_args_refuses_anything_a_shell_could_read_as_more_than_a_path():
+    """E2E_SPECS is expanded inside a /bin/sh recipe, so a value is an unquoted shell
+    word. Rejects are RETURNED, never dropped — a surface that silently discards half
+    a selection and runs anyway is the vacuity the tree exists to prevent."""
+    ok, bad = ec.safe_spec_args([
+        "01-frontpage.spec.ts",                 # bare: prefixed
+        "specs/04-five-users.spec.ts",          # already prefixed
+        "specs/04-five-users.spec.ts",          # de-duplicated
+        "; rm -rf /",
+        "specs/$(id).spec.ts",
+        "specs/a b.spec.ts",
+        "specs/../../etc/passwd",
+    ])
+    assert ok == ("specs/01-frontpage.spec.ts", "specs/04-five-users.spec.ts")
+    assert set(bad) == {"; rm -rf /", "specs/$(id).spec.ts", "specs/a b.spec.ts",
+                        "specs/../../etc/passwd"}
+
+
+def test_spec_path_does_not_prefix_specs_twice():
+    assert ec.spec_path("/g", "01-x.spec.ts") == "/g/tests/e2e/specs/01-x.spec.ts"
+    assert ec.spec_path("/g", "specs/01-x.spec.ts") == "/g/tests/e2e/specs/01-x.spec.ts"
+
+
+def test_stack_src_is_never_writable():
+    """`make stack-clone` deletes and re-clones .stack-src, so a save there is thrown
+    away with nothing on screen to say so."""
+    assert ec.is_readonly_source("/g/.stack-src/x/a.spec.ts")
+    assert ec.is_readonly_source("/g/.stack-src")
+    assert not ec.is_readonly_source("/g/tests/e2e/specs/a.spec.ts")
+    # not a substring match: a directory merely CONTAINING the name is not it
+    assert not ec.is_readonly_source("/g/my.stack-src-notes/a.ts")
+
+
+def test_orphan_screenshots_are_not_lost(tmp_path):
+    """A shot whose NN- prefix matches no spec belongs to nobody. Dropping it is how a
+    flat tracked directory of 38 PNGs stops being looked at."""
+    shots = tmp_path / "tests" / "e2e" / "screenshots"
+    shots.mkdir(parents=True)
+    for n in ("01-a.png", "97-nobody.png", "unnumbered.png"):
+        (shots / n).write_bytes(b"x")
+    (tmp_path / "tests" / "e2e" / "node_modules").mkdir(parents=True)
+    cat = load_catalogue(str(tmp_path), runner=_stub_runner(
+        json.dumps({"suites": [{"title": "01-a.spec.ts", "file": "01-a.spec.ts",
+                                "specs": [{"title": "t", "file": "01-a.spec.ts",
+                                           "line": 1, "id": "i",
+                                           "tests": [{"results": []}]}]}]})))
+    names = {s.name for s in cat.orphan_screenshots}
+    assert names == {"97-nobody", "unnumbered"}, names
+    # the one that DID match hangs off its feature instead
+    assert [s.name for s in cat.features[0].screenshots] == ["01-a"]
 
 
 def test_module_imports_no_qt():

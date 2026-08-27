@@ -1817,10 +1817,19 @@ stack-clean: ## stop the local stack AND remove the images it built + the m2 reg
 # stay an explicit once-per-box step. SNAP_REPORT_DIR (optional, tests/e2e-
 # relative, inherited from the environment) redirects the junit/json/summary
 # artifacts; the hugmesh reporter's summary.json there is the durable result.
+#
+# E2E_SPECS (optional) narrows the run to named spec FILES, as Playwright positional
+# filters relative to tests/e2e — e.g.
+#     make stack-e2e E2E_SPECS='specs/01-frontpage.spec.ts specs/04-five-users.spec.ts'
+# This is what the Studio's e2e feature tree passes for a checked selection. UNSET
+# runs the WHOLE suite, which is the historical behaviour and stays the default: an
+# empty value must never be able to mean "run nothing" silently, and here it cannot,
+# because an empty variable expands to no arguments at all.
+E2E_SPECS ?=
 stack-e2e: ## run the Playwright e2e suite against the RUNNING local stack (needs stack-up + stack-seed; once: make playwright-deps)
 	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
 	cd tests/e2e && SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' \
-	  npx playwright test -c playwright.config.ts
+	  npx playwright test -c playwright.config.ts $(E2E_SPECS)
 
 stack-logs: ## tail logs from the running local stack
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
