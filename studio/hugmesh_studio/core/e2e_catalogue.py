@@ -855,7 +855,13 @@ def _token_re(token: str) -> re.Pattern:
 # covered. Only the EVIDENCE shrinks, and it shrinks to evidence that runs.
 _DRIVES_RE = re.compile(
     r"\b(?:page|request|context|apiRequest)\s*\.|"
-    r"(?<![A-Za-z0-9_])(?:test|expect)\s*\(")
+    # The lookbehind excludes a leading DOT as well as word characters, because
+    # `RegExp(...).test(p)` is not Playwright's `test(`. Without it a pure
+    # source-READER module (governance-sources.ts uses .test() for pattern
+    # matching, and starts no browser and opens no port) reads as runnable, and
+    # every service it merely NAMES — wiki, via a path string in a map — flips to
+    # covered. A false "covered" is worse than an uncovered row: it hides the gap.
+    r"(?<![A-Za-z0-9_.])(?:test|expect)\s*\(")
 
 
 def is_runnable_source(name: str, stripped_text: str) -> bool:

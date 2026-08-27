@@ -28,6 +28,7 @@ import pytest
 
 from hugmesh_studio.core import e2e_catalogue as ec
 from hugmesh_studio.core.local_stack_node import LocalStackNode
+from hugmesh_studio.core import e2e_environments as _e2e_env
 
 #: A stub `make` that RECORDS ITS ARGV and nothing else. The refusal test reads the
 #: recording's ABSENCE, so the sentinel path is baked in at fixture time rather than
@@ -64,7 +65,8 @@ def node(tmp_path, monkeypatch):
     # honest reasons (no stack running, nothing seeded). Held open so that the only
     # thing left that can refuse is the guard under test — otherwise this file would
     # pass with the guard deleted.
-    monkeypatch.setattr(LocalStackNode, "e2e_ready", lambda self: [])
+    monkeypatch.setattr(LocalStackNode, "e2e_ready",
+                        lambda self, environment="docker": [])
 
     def spawned():
         if not record.exists():
@@ -119,8 +121,9 @@ def test_a_legitimate_selection_still_reaches_make_argv(node):
                                "specs/12-rbac-gateway-route-access.spec.ts"])
 
     assert ok is True, msg
+    target = _e2e_env.plan("docker").make_target
     assert spawned() == [
-        "stack-e2e E2E_SPECS=specs/01-frontpage.spec.ts "
+        f"{target} E2E_SPECS=specs/01-frontpage.spec.ts "
         "specs/12-rbac-gateway-route-access.spec.ts"], spawned()
 
 
@@ -131,4 +134,4 @@ def test_no_selection_at_all_still_runs_the_whole_suite(node):
     n, spawned = node
     ok, _ = n.run_e2e()
     assert ok is True
-    assert spawned() == ["stack-e2e"], spawned()
+    assert spawned() == [_e2e_env.plan("docker").make_target], spawned()
