@@ -1,5 +1,6 @@
 import { test, expect, request } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
+import { sharedPassword } from './rbac-roles';
 
 /**
  * Handles this spec names that must NEVER be provisioned. Read by the Studio's
@@ -38,8 +39,9 @@ export const NEVER_SEEDED_PERSONAS: readonly string[] = ['should-not@gmail.com']
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@hugmesh.net';
 // The deterministic native password every seeded/invited persona signs in with —
-// mirrors the mock-bff LOGIN_PASSWORD and the e2e helper (E2E_PASSWORD ?? 'e2e-pass').
-const LOGIN_PASSWORD = process.env.E2E_PASSWORD || 'e2e-pass';
+// mirrors the mock-bff LOGIN_PASSWORD and the e2e helper (rbac-roles.ts
+// sharedPassword(): env, else the run-state credentials file, else throw).
+const LOGIN_PASSWORD = sharedPassword();
 
 // Every admin-only BFF endpoint the mock enforces (mirrors mock-bff routeAccess
 // + the /bff/admin/** route-access row). GET is non-mutating, safe to probe.

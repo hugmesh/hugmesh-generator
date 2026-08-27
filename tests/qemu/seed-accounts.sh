@@ -55,6 +55,8 @@
 # The catalogue is kept in lock-step with tests/e2e/specs/rbac-roles.ts.
 set -euo pipefail
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ── Identity defaults (kept in lock-step with tests/e2e/specs + mock-bff.mjs) ──
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@hugmesh.net}"
 GMAIL_USERS_DEFAULT="alice@gmail.com bob@gmail.com carol@gmail.com dave@gmail.com eve@gmail.com frank@gmail.com"
@@ -65,9 +67,17 @@ SVC_PASSWORD="${SVC_PASSWORD:-hugmesh-svc-pw}"
 CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-hugmesh.net}"
 
 # ── RBAC role matrix (kept in lock-step with tests/e2e/specs/rbac-roles.ts) ──
-# Deterministic e2e password, same convention as the games harness (E2E_PASSWORD
-# default 'e2e-pass', per-user override via E2E_<UPPER>_PASSWORD).
-E2E_PASSWORD="${E2E_PASSWORD:-e2e-pass}"
+# Deterministic e2e password, same convention as the games harness (per-user
+# override via E2E_<UPPER>_PASSWORD, else the shared E2E_PASSWORD below).
+# E2E_PASSWORD itself is GENERATED, never hardcoded: this script is one of the
+# three separate processes (with tests/stack/seed-e2e.sh and bootstrap-kind.sh)
+# that can be the first in a run to need a password, so it resolves an explicit
+# override, else the run-state credentials file, else mints + persists a fresh
+# CSPRNG value — see tests/stack/e2e-password.sh's header for the full chain.
+# shellcheck source=../stack/e2e-password.sh
+. "${HERE}/../stack/e2e-password.sh"
+e2e_password_ensure \
+  || { echo "seed-accounts.sh: could not resolve/generate E2E_PASSWORD (see tests/stack/e2e-password.sh)" >&2; exit 1; }
 SYSTEMS_CASDOOR_ORG="${SYSTEMS_CASDOOR_ORG:-hugmesh}"
 GAMES_CASDOOR_ORG="${GAMES_CASDOOR_ORG:-threewizards}"
 SYSTEMS_CASDOOR_URL="${SYSTEMS_CASDOOR_URL:-http://127.0.0.1:8000}"
@@ -104,7 +114,7 @@ SYSTEMS_ROLE_USERS="${SYSTEMS_ROLE_USERS} ${EXTRA_ROLE_USERS:-}"
 # share one deterministic password (E2E_SWARM_PASSWORD) so a single env var
 # unlocks the population (per-user env vars for 126 identities would be unusable).
 # Kept in lock-step with tests/e2e/specs/rbac-roles.ts generateSwarm().
-E2E_SWARM_PASSWORD="${E2E_SWARM_PASSWORD:-e2e-swarm-pass}"
+E2E_SWARM_PASSWORD="${E2E_SWARM_PASSWORD:-${E2E_PASSWORD}}"
 SWARM_USERS="${SWARM_USERS:-120}"
 SWARM_MODS="${SWARM_MODS:-4}"
 SWARM_ADMINS="${SWARM_ADMINS:-2}"
@@ -247,8 +257,9 @@ if [ -n "${SWARM_N}" ]; then
 fi
 
 # Resolve a seed user's deterministic e2e password: per-user env override
-# (E2E_<UPPER>_PASSWORD) -> shared E2E_PASSWORD -> 'e2e-pass'. Mirrors
-# tests/e2e/specs/rbac-roles.ts passwordFor() + games e2e roles.ts.
+# (E2E_<UPPER>_PASSWORD) -> shared E2E_PASSWORD, which by this point is a REAL
+# resolved/generated value (e2e_password_ensure ran above), never a literal.
+# Mirrors tests/e2e/specs/rbac-roles.ts passwordFor() + games e2e roles.ts.
 role_password() {  # <passwordEnvName>
     local env_name="$1" val=""
     [ -n "${env_name}" ] && val="$(printenv "${env_name}" 2>/dev/null || true)"

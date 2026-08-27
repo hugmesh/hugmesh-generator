@@ -23,7 +23,9 @@
 # build if either lane stops consuming it.
 #
 # Format is seed-accounts.sh's: "username:ROLE_A,ROLE_B:passwordEnv", space
-# separated. A passwordEnv that is unset falls back to E2E_PASSWORD -> 'e2e-pass'.
+# separated. A passwordEnv that is unset falls back to the shared E2E_PASSWORD,
+# which is GENERATED per run (tests/stack/e2e-password.sh) rather than a fixed
+# literal — see that file's header for the resolution chain.
 
 # ROLE_SUPERADMIN persona. Defaults to e2e-superadmin so ordinary e2e runs (and
 # every UI spec that logs in as e2e-superadmin) are unchanged. The from-scratch
