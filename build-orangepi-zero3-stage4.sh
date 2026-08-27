@@ -937,26 +937,48 @@ rebrand_sysroot() {
     _hproj="$(_sed_rep_escape "${HARBOR_PROJECT:-${BRAND}}")"
     local f
     while IFS= read -r -d '' f; do
-        # FROZEN k8s label-KEY / API-group namespace `hugmesh.net/<suffix>` must NOT
-        # rebrand (it is compiled into operators/JVM and used as node/pod selectors). Every
-        # KEY form is preceded by a YAML-structural boundary (line-start, space, {, (, comma,
-        # equals, quote, backtick); every HOST/URL form is preceded by a dot or slash. The
-        # equals is the KEY=VALUE shape of specs/cluster/egress-vpn-secret-contract.env:
-        # without it every non-default-domain build rebranded that env contract to
-        # <org>.net/ while the manifests' nodeSelector stayed literal, so the two halves
-        # disagreed on a FROZEN label key (tests/scripts/test-rebrand-frozen-label-keys.sh
-        # drives this exact function over every builder). Protect the KEY
-        # namespace behind a sentinel (first two -e), rebrand hosts/URLs/emails/CORS in the
-        # middle, then restore the KEY namespace verbatim (last -e). The sentinel contains
-        # neither `hugmesh.net` nor `hugmesh-`, so the middle rules skip it.
+        # FROZEN protocol identity must NOT rebrand (scripts/tooling/tokens.json
+        # frozen_protocol_constants; tests/scripts/test-rebrand-frozen-label-keys.sh
+        # drives this exact function over every builder):
+        #   * the k8s label-KEY / annotation-key namespace `hugmesh.net/<suffix>` —
+        #     node/pod selectors, compiled into operators/JVM;
+        #   * the CRD API group `platform.hugmesh.net` — compiled into
+        #     hugmesh-admin-bff-api (Fabric8 .withGroup("platform.hugmesh.net")), so a
+        #     rebranded CRD/RBAC would 404 the optional-services client on every fork.
+        # KEY forms are preceded by a structural boundary — line-start, space, {, (,
+        # comma, EQUALS, quote, backtick — or spelt with an escaped dot (a kubectl
+        # jsonpath `hugmesh\.net/seam-probe`); HOST/URL forms are preceded by a dot or
+        # slash and DO rebrand. The `=` is the KEY=VALUE shape of
+        # specs/cluster/egress-vpn-secret-contract.env: without it every non-default
+        # build rebranded that contract while the manifests' nodeSelector stayed
+        # literal, so the two halves disagreed on a frozen key (2026-08-27). Pinned
+        # consequence: `=hugmesh.net/<anything>` reads as a KEY — a bare host WITH a
+        # path after `=` must be written as a URL (scheme://). Deliberately NOT in the
+        # class (0 instances under either rebrand root, census 2026-08-27): tab, `[`,
+        # `:`, `/`, `;`, `>`, `!`, `|`, `*` and `-` (`${VAR:-hugmesh.net/x}`) — a file
+        # under /etc/hugmesh or /var/lib/hugmesh/cluster using one of those shapes
+        # WILL rebrand its key; widen the class when one appears.
+        # ORDER: sentinels first; then the EXPLICIT knobs (title, games, domain,
+        # registry project, brand); the catch-all `hugmesh -> ORG` runs LAST. It used
+        # to run first, so with a non-default --org every `hugmesh.net` host became
+        # <org>.net and CLUSTER_DOMAIN, HARBOR_PROJECT and BRAND were silently ignored
+        # (Studio passes --org from the profile). A CLUSTER_DOMAIN/BRAND/title that
+        # itself contains the literal `hugmesh`, combined with a non-default --org, is
+        # still rewritten by that catch-all: unsupported. The sentinels contain neither
+        # `hugmesh` nor `hugmesh-`, so the middle rules skip them; the last -e rules
+        # restore them verbatim.
         sed -i \
             -e "s|^hugmesh\.net/|@@SDSYSKEY@@/|g" \
             -e "s|\([ {(,=\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
+            -e "s|hugmesh\\\\\.net/|@@SDSYSKEYESC@@/|g" \
+            -e "s|platform\.hugmesh\.net|@@SDSYSAPIGRP@@|g" \
             -e "s|HugMesh Systems|${_btitle}|g" \
-            -e "s|hugmesh|${_org}|g" \
             -e "s|hugmesh\.net|${_domain}|g" \
             -e "s|\(registry\.[A-Za-z0-9.-]*\)/hugmesh/|\1/${_hproj}/|g" \
             -e "s|hugmesh-|${_brand}-|g" \
+            -e "s|hugmesh|${_org}|g" \
+            -e "s|@@SDSYSAPIGRP@@|platform.hugmesh.net|g" \
+            -e "s|@@SDSYSKEYESC@@/|hugmesh\\\\.net/|g" \
             -e "s|@@SDSYSKEY@@/|hugmesh.net/|g" \
             "${f}"
     done < <(find "${SYSROOT}/etc/hugmesh" -type f -print0 2>/dev/null)
