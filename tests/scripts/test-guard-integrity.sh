@@ -270,7 +270,20 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     152 of 174 suites are named by a pull_request-triggered workflow
 # +2 gated from this branch, +1 total from main; PREMERGE_UNGATED stays at
 # main's 22. Carried by re-running this file, not by arithmetic.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-152}"
+#
+# RE-MEASURED 2026-08-27 on the MERGE of fix/e2e-toolchain-readiness with main at
+# 5c5c6320 (which carried 152 of 174 above). This branch adds ONE gated suite,
+# tests/scripts/test-e2e-toolchain-readiness.sh (the guard over
+# tests/e2e/check-toolchain.sh, the probe every e2e make target and every Gherkin
+# guard now runs in place of `[ -d tests/e2e/node_modules ]`), named in
+# shell-suites.yml's NODE job — it builds its fixtures with node and needs no
+# node_modules (its real-tree leg SKIPS LOUDLY without one, counted as a skip).
+# On its own base (f1c41bb3) this file printed 151 of 172; on the merged tree it
+# printed
+#     153 of 175 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total; PREMERGE_UNGATED stays at main's 22. Carried by re-running
+# this file, not by arithmetic on either side's number.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-153}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a

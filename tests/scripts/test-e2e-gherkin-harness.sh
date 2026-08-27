@@ -54,10 +54,12 @@ for t in node python3 git; do
     exit 2
   }
 done
-if [ ! -d "${E2E}/node_modules/playwright-bdd" ]; then
-  echo "SKIPPED-LOUDLY: ${E2E}/node_modules/playwright-bdd is missing — run" >&2
-  echo "  (cd ${E2E} && npm install)   [or: make playwright-deps]" >&2
-  echo "This guard checked NOTHING. Exiting 2 rather than 0." >&2
+# ONE readiness opinion, not a second one: tests/e2e/check-toolchain.sh verifies
+# node_modules against the COMMITTED lock (this guard launches no browser, so it
+# runs the probe with the ambient browsers path). `[ -d node_modules/playwright-bdd ]`
+# used to stand here and accepted any stale install.
+if ! bash "${E2E}/check-toolchain.sh"; then
+  echo "SKIPPED-LOUDLY: the e2e toolchain is not ready (above). This guard checked NOTHING. Exiting 2 rather than 0." >&2
   exit 2
 fi
 if [ ! -d "${FEATURES}" ]; then
