@@ -2,7 +2,7 @@ import { Page, expect, request } from '@playwright/test';
 import type { APIRequestContext, APIResponse } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { SUPERADMIN_USERNAME, SYSTEMS_SEED_USERS, passwordFor, sharedPassword } from './rbac-roles';
+import { SUPERADMIN_USERNAME, SYSTEMS_SEED_USERS, passwordFor, loginPassword } from './rbac-roles';
 export { SUPERADMIN_USERNAME };
 import type { SystemsRole } from './rbac-roles';
 
@@ -117,7 +117,7 @@ export async function apiContext(baseUrl: string | undefined): Promise<APIReques
  * account (username = the persona handle) with this SAME password (`make
  * stack-seed` does, via that same generator).
  */
-export const LOGIN_PASSWORD = sharedPassword();
+export { loginPassword };
 
 /**
  * The SUPERADMIN identity is the one persona whose login handle is not fixed:
@@ -130,16 +130,16 @@ export const LOGIN_PASSWORD = sharedPassword();
 /**
  * Per-persona password resolution, mirroring seed-e2e.sh persona_password():
  * the persona's own E2E_<FOLDED>_PASSWORD env (non-alphanumerics fold to '_',
- * so 'e2e-mod' -> E2E_MOD_PASSWORD) -> shared LOGIN_PASSWORD. The superadmin's
+ * so 'e2e-mod' -> E2E_MOD_PASSWORD) -> shared loginPassword(). The superadmin's
  * env is pinned to E2E_SUPERADMIN_PASSWORD whatever its username (the seed
  * render pins the same passwordEnv on the persona).
  */
 export function personaPassword(username: string): string {
   if (username === SUPERADMIN_USERNAME) {
-    return process.env.E2E_SUPERADMIN_PASSWORD ?? LOGIN_PASSWORD;
+    return process.env.E2E_SUPERADMIN_PASSWORD ?? loginPassword();
   }
   const folded = username.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-  return process.env[`${folded}_PASSWORD`] ?? LOGIN_PASSWORD;
+  return process.env[`${folded}_PASSWORD`] ?? loginPassword();
 }
 
 // ── platform-access personas (who may drive Matrix / Mastodon at all) ─────────
@@ -161,7 +161,8 @@ export function personaPassword(username: string): string {
 export interface PlatformPersona {
   /** Casdoor login handle. */
   username: string;
-  /** Resolved per the catalogue's env-override chain (rbac-roles.ts passwordFor). */
+  /** Resolved per the catalogue's env-override chain (rbac-roles.ts passwordFor).
+   *  Resolved ON READ — see platformPersonas() for why it must not be eager. */
   password: string;
   /** Roles granted in the seed — carried for assertion/diagnostic use. */
   roles: readonly SystemsRole[];
@@ -173,7 +174,16 @@ export function platformPersonas(role: 'ROLE_MATRIX' | 'ROLE_MASTODON'): Platfor
     : 'ROLE_MASTODON_DOMAINLOCKED';
   return SYSTEMS_SEED_USERS
     .filter((u) => u.roles.includes(role) && !u.roles.includes(locked) && u.registrationComplete)
-    .map((u) => ({ username: u.username, password: passwordFor(u), roles: u.roles }));
+    // `password` is a GETTER, not a resolved value. Specs 05/06/10/11 call
+    // requirePlatformPersonas() at MODULE SCOPE, so resolving here would drag the
+    // credential throw back into import time and break `--list` all over again —
+    // the same defect the lazy loginPassword() removes one layer up. A getter
+    // still satisfies `password: string` for every reader.
+    .map((u) => ({
+      username: u.username,
+      get password() { return passwordFor(u); },
+      roles: u.roles,
+    }));
 }
 
 /**
@@ -269,7 +279,7 @@ export async function getSession(page: Page, username: string): Promise<Session>
  * (login.component pending()); an unprovisioned identity surfaces a `login-error`
  * instead (native login has no self-registration surface).
  */
-export async function registerOnly(page: Page, username: string, password = LOGIN_PASSWORD): Promise<void> {
+export async function registerOnly(page: Page, username: string, password = loginPassword()): Promise<void> {
   PERSONA.set(page, username); // so a later helper failure can name the actor
   await page.goto('/login');
   await page.getByTestId('login-username').fill(username);
@@ -316,7 +326,7 @@ const SHELL_AFTER_PROVISION_MS = 60_000;
  * Full onboarding: native sign-in (stage 1) + complete registration (stage 2).
  * Returns the fully-registered session hydrated from GET /bff/session.
  */
-export async function onboard(page: Page, username: string, password = LOGIN_PASSWORD): Promise<Session> {
+export async function onboard(page: Page, username: string, password = loginPassword()): Promise<Session> {
   await registerOnly(page, username, password);
   // IDEMPOTENT: a first-time (provisioned-but-incomplete) sign-in lands on the
   // complete-registration card (register-display-name); a RETURNING account that has
