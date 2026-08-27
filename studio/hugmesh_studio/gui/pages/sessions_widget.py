@@ -252,16 +252,24 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         self._build_windows: list = []      # keep the non-modal windows alive
         lay.addWidget(self.table)
 
-        # GRID, not a single QHBoxLayout. Six buttons in one row give this group box a
-        # minimumSizeHint of 670px + margins = 724px, which exceeds the wizard's 736px
-        # medium width once the page's own margins are added — and a QWizard sizes to its
-        # WIDEST page, so one un-shrinkable row here dragged EVERY page wider,
-        # permanently. A push button will not shrink below its own text, so no amount of
-        # stretch fixes a row that is simply too long; the row has to wrap.
-        # 3 columns x 2 rows: min width becomes max-per-column (~402px), not the sum.
+        # GRID, not a single QHBoxLayout. Six-plus buttons in one row give this group
+        # box a minimumSizeHint well past the wizard's 736px medium width once the
+        # page's own margins are added — and a QWizard sizes to its WIDEST page, so one
+        # un-shrinkable row here dragged EVERY page wider, permanently. A push button
+        # will not shrink below its own text, so no amount of stretch fixes a row that
+        # is simply too long; the row has to wrap.
+        # 3 columns x 3 rows: min width becomes max-per-column, not the sum.
         # Buttons are still exposed under the SAME attribute names, so nothing that
         # reaches for self.restart_btn & co. (tests included) changes.
         btns = QtWidgets.QGridLayout()
+        # "Open build window", never a bare "Open": the row already has "Open
+        # artifacts" (a directory handed to the desktop), and this one opens the
+        # per-build ACTIONS window — the same thing clicking/activating the row opens.
+        # Same route on purpose (_open_build_window -> open_build_window), so the
+        # button can never drift from activation; it is an addition for
+        # discoverability, not a second implementation.
+        self.open_window_btn = QtWidgets.QPushButton("Open build window")
+        self.open_window_btn.clicked.connect(self._open_build_window)
         self.restart_btn = QtWidgets.QPushButton("Restart")
         self.restart_btn.clicked.connect(self._restart)
         self.redo_btn = QtWidgets.QPushButton("Redo (edit as new)")
@@ -277,9 +285,12 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         self.delete_btn.clicked.connect(self._delete)
         self.delete_all_btn = QtWidgets.QPushButton("Delete all finished…")
         self.delete_all_btn.clicked.connect(self._delete_all)
-        for i, b in enumerate((self.restart_btn, self.redo_btn, self.open_btn,
-                               self.log_btn, self.delete_btn, self.delete_all_btn)):
-            btns.addWidget(b, i // 3, i % 3)
+        for row_i, row_btns in enumerate((
+                (self.open_window_btn, self.restart_btn, self.redo_btn),
+                (self.open_btn, self.log_btn),
+                (self.delete_btn, self.delete_all_btn))):
+            for col_i, b in enumerate(row_btns):
+                btns.addWidget(b, row_i, col_i)
         btns.setColumnStretch(3, 1)     # keep the buttons left-packed
         lay.addLayout(btns)
         self._update_buttons()
@@ -309,7 +320,9 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
             item.setForeground(QtGui.QBrush(QtGui.QColor(colour)))
             self.table.setItem(i, 2, item)
             nxt = QtWidgets.QTableWidgetItem(build_window.next_action(r))
-            nxt.setToolTip("Click the row to open this build in its own window.")
+            # a neutral description of the CELL — the open affordance is the
+            # "Open build window" button (row activation still works too).
+            nxt.setToolTip("The next action available for this build.")
             self.table.setItem(i, 3, nxt)
             self.table.setItem(i, 4, QtWidgets.QTableWidgetItem(r.images_text()))
             loc = QtWidgets.QTableWidgetItem(self._elide(r.location))
@@ -377,6 +390,11 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
 
     def _update_buttons(self) -> None:
         r = self._selected()
+        # "Open build window" mirrors row activation EXACTLY: open_build_window()
+        # accepts every row kind (an unreadable record's window still offers Delete,
+        # honestly gated inside by build_window.actions_for), so the only guard —
+        # the same one _open_build_window() applies — is that one row is selected.
+        self.open_window_btn.setEnabled(r is not None)
         is_session = r is not None and r.kind == "session"
         self.restart_btn.setEnabled(is_session)
         self.redo_btn.setEnabled(is_session)

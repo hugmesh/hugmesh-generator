@@ -65,10 +65,17 @@ for t in node python3 git bash; do
     exit 2
   }
 done
-if [ ! -d "${E2E}/node_modules/playwright-bdd" ]; then
-  echo "SKIPPED-LOUDLY: ${E2E}/node_modules/playwright-bdd is missing — run" >&2
-  echo "  (cd ${E2E} && npm install)   [or: make playwright-deps]" >&2
-  echo "This guard checked NOTHING. Exiting 2 rather than 0." >&2
+# ONE readiness opinion, not a second one: tests/e2e/check-toolchain.sh verifies
+# node_modules against the COMMITTED lock and the browser revision under THE
+# BROWSERS PATH THIS GUARD RUNS WITH. `[ -d node_modules/playwright-bdd ]` used to
+# stand here and said nothing about either — MEASURED 2026-08-27: with
+# /var/tmp/portage/pw-browsers holding dangling r1228 -> r1234 aliases, this guard
+# got past its preflight and reported its lane as "not green" with every browser
+# scenario dying on "Executable doesn't exist at .../chromium_headless_shell-1228",
+# the toolchain gap wearing the costume of a product failure. The probe names the
+# path and the fix (PLAYWRIGHT_BROWSERS_PATH=... make playwright-deps) instead.
+if ! PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/var/tmp/portage/pw-browsers}" bash "${E2E}/check-toolchain.sh"; then
+  echo "SKIPPED-LOUDLY: the e2e toolchain is not ready (above). This guard checked NOTHING. Exiting 2 rather than 0." >&2
   exit 2
 fi
 for f in "${CATALOGUE}" "${EMITTER}" "${E2E}/gen-coverage-matrix.sh"; do

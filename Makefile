@@ -1374,9 +1374,57 @@ view-stop: ## stop the background view session (and sweep any stale port-forward
 view-honesty: ## offline: prove the view tool's rewrites, CA constraints, collisions and cleanup
 	bash tests/scripts/test-hugmesh-view.sh
 
-playwright-deps: ## install the Playwright deps + chromium (needed once for e2e)
-	cd tests/e2e && { [ -d node_modules ] || npm ci || npm install; } \
-	  && npx playwright install --with-deps chromium
+# ── THE e2e TOOLCHAIN PROBE ──────────────────────────────────────────────────
+# ONE readiness check, tests/e2e/check-toolchain.sh, and every e2e target below
+# runs it in place of the `[ -d tests/e2e/node_modules ]` it used to carry.
+#
+# WHY. MEASURED 2026-08-27 on origin/main f1c41bb3: `[ -d node_modules ]` is
+# satisfied by ANY node_modules, however stale. This box's install predated the
+# Gherkin lane, so every e2e target passed its own precondition and then died on
+# "Error: Cannot find module 'playwright-bdd'" (playwright.config.ts:2) or "To get
+# bddgen CLI please install playwright-bdd" — the OFFLINE guards could not even
+# start. The browser half was worse: a Studio-driven run
+# (tests/e2e/test-results/studio-20260827-062152/report.json) had 36 of its 38
+# failures as "browserType.launch: Executable doesn't exist at
+# .../chromium_headless_shell-1228/..." — the pinned @playwright/test wanted
+# headless-shell r1228, only r1234 was in ~/.cache/ms-playwright, every browser
+# test failed for the TOOLCHAIN and nothing before the run said so.
+#
+# The probe verifies, offline and in ~0.2s: package.json agrees with the COMMITTED
+# package-lock.json; node_modules was written by npm and matches the lock (hidden
+# lockfile AND the files on disk); every declared dep require.resolve()s; and the
+# chromium + chromium-headless-shell revision the INSTALLED playwright-core's
+# browsers.json names is present (INSTALLATION_COMPLETE) under the Playwright
+# browsers path (PLAYWRIGHT_BROWSERS_PATH honoured). It prints every missing
+# thing and the one command that fixes it. tests/scripts/test-e2e-toolchain-
+# readiness.sh is its guard: it breaks synthesised trees each of those ways and
+# requires the probe to go red, and renders every target below to prove the
+# probe is what they run.
+E2E_READY = bash tests/e2e/check-toolchain.sh
+
+# INSTALL, and only when the probe says something is missing. A READY tree is
+# left alone (kind-e2e / kind-e2e-mfa / e2e depend on this target, so it has to
+# be free when there is nothing to do) — but the skip is decided by the PROBE,
+# never by the directory existing.
+#
+# `npm ci`, with NO `|| npm install` fallback. The old recipe's fallback is how a
+# lock that had drifted from package.json (playwright-bdd declared, never locked)
+# installed "successfully" for weeks while `npm ci` on the same tree could not
+# succeed at all. package-lock.json is now COMMITTED; drift between it and
+# package.json is a repo defect, and this target says so and stops.
+#
+# `--with-deps` is OPT-IN (PLAYWRIGHT_WITH_DEPS=1): it runs the distro package
+# manager under sudo, wants a Debian-ish root, and this box has NO sudo, so the
+# default is the plain `npx playwright install chromium` that works anywhere the
+# system libraries are already present. Set it once on a fresh Debian/Ubuntu CI
+# image. The probe runs again at the end so the target cannot exit 0 with the
+# toolchain still broken.
+playwright-deps: ## install the e2e toolchain (npm ci + chromium) unless tests/e2e/check-toolchain.sh already says READY (PLAYWRIGHT_WITH_DEPS=1 adds --with-deps; needs sudo)
+	@if $(E2E_READY); then exit 0; fi; \
+	  cd tests/e2e && \
+	  { npm ci || { echo "==> npm ci FAILED. If it reported package.json and package-lock.json out of sync: run 'npm install' in tests/e2e and COMMIT tests/e2e/package-lock.json (it is tracked; the old fallback to a plain install, which hid exactly this, is gone on purpose)."; exit 2; }; } && \
+	  npx playwright install $(if $(PLAYWRIGHT_WITH_DEPS),--with-deps ,)chromium && \
+	  cd ../.. && $(E2E_READY)
 
 # E2E_ARGS here is NOT the same shape as stack-e2e's. There, `npx playwright test`
 # is the DIRECT consumer and bare argv is correct. This lane interposes a shell
@@ -1910,9 +1958,10 @@ stack-clean: ## stop the local stack AND remove the images it built + the m2 reg
 # front door. Preconditions: `make stack-up` + `make stack-seed` (stack-seed's
 # SEED_REGISTRATION_SKIP keeps the pending/banned personas gated even under
 # SEED_COMPLETE_REGISTRATION=1, so a Studio-seeded stack still satisfies specs
-# 17/28/29). node_modules is CHECKED, not auto-installed: playwright-deps runs
-# `npx playwright install --with-deps`, which wants a Debian-ish root and must
-# stay an explicit once-per-box step. SNAP_REPORT_DIR (optional, tests/e2e-
+# 17/28/29). The toolchain is CHECKED, not auto-installed: every e2e target runs
+# tests/e2e/check-toolchain.sh (see E2E_READY above playwright-deps), which
+# names what is missing and stops, and `make playwright-deps` stays an explicit
+# once-per-box step. SNAP_REPORT_DIR (optional, tests/e2e-
 # relative, inherited from the environment) redirects the junit/json/summary
 # artifacts; the hugmesh reporter's summary.json there is the durable result.
 #
@@ -1976,7 +2025,7 @@ stack-clean: ## stop the local stack AND remove the images it built + the m2 reg
 # renders the historical full-suite command byte for byte.
 E2E_SPECS ?=
 stack-e2e: ## run the Playwright e2e suite against the RUNNING local stack (E2E_ARGS='--grep …' / E2E_SPECS='specs/NN-….spec.ts' narrow it; needs stack-up + stack-seed)
-	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	@$(E2E_READY) || exit 2
 	cd tests/e2e && SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' \
 	  npx playwright test -c playwright.config.ts $(E2E_ARGS) $(E2E_SPECS)
 
@@ -2000,7 +2049,7 @@ stack-e2e: ## run the Playwright e2e suite against the RUNNING local stack (E2E_
 # `make stack-e2e-list E2E_ARGS=--grep=@smoke` answers "what WOULD that run?"
 # without running it.
 stack-e2e-list: ## enumerate the e2e specs as JSON without running them (no stack, no network; E2E_ARGS narrows)
-	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	@$(E2E_READY) || exit 2
 	@cd tests/e2e && npx playwright test -c playwright.config.ts --list --reporter=json $(E2E_ARGS) $(E2E_SPECS)
 
 stack-logs: ## tail logs from the running local stack
@@ -2041,7 +2090,7 @@ BDD_RUN  = bash tests/e2e/run.sh --bdd --env $(BDD_ENV) \
              $(if $(strip $(BDD_FEATURES)),--features '$(BDD_FEATURES)',)
 
 stack-e2e-bdd-gen: ## compile tests/e2e/features/*.feature into runnable Playwright specs (bddgen)
-	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	@$(E2E_READY) || exit 2
 	$(BDD_RUN) --gen
 
 # OFFLINE gate. No stack, no network. Proves every .feature compiles, every step
@@ -2056,7 +2105,7 @@ stack-e2e-bdd-gen: ## compile tests/e2e/features/*.feature into runnable Playwri
 #   env x interface — was UNWIRED on arrival (tests/scripts/test-guard-integrity.sh
 #   check 3 listed it as "suite(s) nothing runs" on this very tree); wired here.
 stack-e2e-bdd-check: ## OFFLINE: verify every .feature generates, binds and is collected (+ the anti-decoration guards)
-	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	@$(E2E_READY) || exit 2
 	$(BDD_RUN) --list --reporter=line
 	bash tests/scripts/test-e2e-gherkin-harness.sh
 	bash tests/scripts/test-e2e-env-interface-dimensions.sh
@@ -2116,7 +2165,7 @@ e2e-reporter-check: ## OFFLINE: verify the e2e reporter emits a per-spec/per-tes
 # mesh's address (PUBLIC_HTTPS_PORT is this repo's front door, not 8443), and
 # for kind/qemu run.sh resolves the address itself.
 stack-e2e-bdd: ## run the GHERKIN e2e lane (BDD_ENV=docker|kind|qemu; docker needs stack-up + stack-seed)
-	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	@$(E2E_READY) || exit 2
 	$(if $(filter docker,$(BDD_ENV)),SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' ,)$(BDD_RUN) $(BDD_ARGS)
 
 # Where did this run's screenshots / transcripts / widget grabs go, and what is
@@ -2155,7 +2204,7 @@ stack-e2e-bdd-env: ## run the GHERKIN lane against the mesh SNAP_ENV names (dock
 .PHONY: stack-e2e-coverage-gen stack-e2e-coverage-check
 
 stack-e2e-coverage-gen: ## re-emit tests/e2e/features/coverage/ from the persona/service/function catalogues
-	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	@$(E2E_READY) || exit 2
 	bash tests/e2e/gen-coverage-matrix.sh
 
 # OFFLINE gate. Starts nothing. Re-emits into a scratch dir and DIFFS against the
