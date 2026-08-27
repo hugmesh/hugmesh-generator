@@ -173,7 +173,31 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # below was untouched (it stays 21). That this agrees with 144+2 is a CHECK on the
 # measurement, not a substitute for it -- the seven entries above are all cases where
 # the arithmetic and the measurement disagreed.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-146}"
+#
+# 146 -> 147, denominator 167 -> 168, when feat/appstore-effector-enable landed. This
+# branch has now met main FOUR times and written a different number each time: 118
+# against its own base of 117, then 142, then 144, and 147 here. Every one of the four
+# was correct about the tree in front of it and wrong about the merge, because main
+# gained suites underneath it each time -- most recently the two from
+# fix/argocd-dashboard-honesty.
+#
+# The shape of this merge is the benign one and is STILL not a free pass: each side
+# gates suites the other does not have (tests/scripts/test-appstore-effector-flags.sh
+# here; main's argocd pair and the url-credentials suite), so the merged tree sits above
+# the higher of the two and neither side's number describes it. Adding the deltas by hand
+# would have been right by luck.
+#
+# Note also why main's side is taken WHOLESALE rather than line-wise: main's half carries
+# the PREMERGE_UNGATED set-pin, which the branch's half predates. A resolution that kept
+# only the branch's number would have deleted that mechanism while looking like a
+# one-line change -- the same trap the first appstore reconciliation recorded.
+#
+# MEASURED by running this file against the merged tree and reading the line it prints:
+#     147 of 168 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total: the branch's single new suite is named by shell-suites.yml, so it
+# lands GATED and does not belong in PREMERGE_UNGATED -- which is why that list is
+# unchanged at 21 and check 7's set assertion stayed green across this merge.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-147}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a

@@ -3000,6 +3000,7 @@ orphan-guards-verify:
         tests/managed-services/test-managed-services-gate.sh
         tests/node-storage/test-bake-coverage.sh
         tests/scripts/test-anubis-env-gate.sh
+        tests/scripts/test-appstore-effector-flags.sh
         tests/scripts/test-arm-ro-distdir.sh
         tests/scripts/test-binpkg-pool-fingerprint.sh
         tests/scripts/test-builder-log-paths.sh
