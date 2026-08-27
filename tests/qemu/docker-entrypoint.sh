@@ -250,33 +250,87 @@ HOST_UID="${HOST_UID:-}"
 HOST_GID="${HOST_GID:-}"
 reown() {
     [ -n "${HOST_UID}" ] || return 0
+    # ${WORK}/.loop-mount.lock is in this list for a reason that only bites the
+    # SECOND run (2026-08-26). extract_kernel's fallback pass opens it with
+    # `exec 9>>`, which CREATES it root-owned and mode 0644 the first time a
+    # privileged container needs the loop-mount path. Everything else this
+    # container writes was already handed back here; the lock was not, so a later
+    # unprivileged run — the host-side `bash tests/qemu/...`, or a rootless
+    # container — got EACCES opening it for append, `exec 9>>` failed, and with
+    # no fd 9 the flock serialization silently degraded to the sleep-retry
+    # backstop. That is the same host-wide loop-device race the flock exists to
+    # remove, re-armed by a file mode, and it reports as a per-row "could not
+    # extract kernel" rather than as a permission problem.
+    #
+    # chown -R over a path that does not exist is not an error worth handling:
+    # every row that took the mtools pass leaves no lock file at all, and the
+    # 2>/dev/null || true below already absorbs that.
     chown -R "${HOST_UID}:${HOST_GID:-${HOST_UID}}" \
-        "${RUN_DIR}" "${RESULT_DIR}" "${WORK}/images" 2>/dev/null || true
+        "${RUN_DIR}" "${RESULT_DIR}" "${WORK}/images" \
+        "${WORK}/.loop-mount.lock" 2>/dev/null || true
 }
 trap reown EXIT
 
-# json_str VALUE — VALUE as a JSON string literal, backslash escaped FIRST and
-# then the quote (the other order double-escapes the backslashes it just
-# inserted). Bash substitution rather than sed, because an EMPTY value here is
-# routine, not hypothetical: "board" is "" for every platform except the
-# multi-board ARM ones, and "qmp" is "" whenever --qmp was not passed. Piping ""
-# into sed feeds it ZERO lines, so `s/^/"/` never runs and the field comes out
-# bare — `"board": ,` — which is not JSON, and the Studio drops records it
-# cannot parse. Substitution has no such edge and forks nothing.
+# json_str VALUE — VALUE as a JSON string literal, quotes included.
 #
-# DEFINED HERE, ABOVE emit_result, ON PURPOSE (2026-08-26). It used to sit ~50
-# lines further down, next to write_device_record, its only caller. emit_result
-# now calls it too, and emit_result is reachable from die() — which is armed
-# from the top of this file, long before any later definition would exist. A
-# json_str called before it is defined is not a loud failure: the prologue is
-# `set -uo pipefail` with NO -e, so `$(json_str ...)` inside the heredoc would
-# print "command not found" to stderr and substitute NOTHING, leaving
-# `"label": ,` on disk — the exact unparseable-record shape this helper exists
-# to prevent. Keep this block above emit_result.
+# THE ONE PLACE ANY OF THIS FILE'S JSON GETS ITS QUOTING. Both writers below
+# (emit_result and write_device_record) route every string field through here,
+# so there is exactly one escaping rule to audit rather than one per heredoc.
+#
+# Defined HERE, above its first caller (emit_result, immediately below) rather
+# than next to write_device_record where it used to live. That is ORDERING
+# HYGIENE AND NOTHING MORE. Bash resolves a function name at CALL time, so the
+# old placement worked and this one changes no behaviour — do not read it as
+# closing an arg-parse-time hole, because it closes nothing. An earlier draft of
+# this comment claimed die() calls emit_result "during argument parsing"; the
+# line numbers refute that, and the claim is withdrawn (2026-08-26). The parse
+# loop calls neither helper, and its only bail-out is `usage 1`, which exits
+# without a result row at all — a separate, pre-existing gap, not this one.
+#
+# The file's REAL ordering constraint is already recorded further down, at the
+# --timeout check: die() calls emit_result, so every die() SITE must sit after
+# emit_result's definition. The first die() call in the file is that --timeout
+# check, and it is deliberately placed below both definitions.
+#
+# Bash substitution rather than sed, because an EMPTY value here is routine, not
+# hypothetical: "board" is "" for every platform except the multi-board ARM
+# ones, "qmp" is "" whenever --qmp was not passed, and "detail" is "" on any
+# emit_result call that passes only a status. Piping "" into sed feeds it ZERO
+# lines, so `s/^/"/` never runs and the field comes out bare — `"board": ,` —
+# which is not JSON, and every consumer drops a record it cannot parse.
+# Substitution has no such edge and forks nothing.
+#
+# ORDER IS LOAD-BEARING: backslash FIRST, then quote, then the control
+# characters. Escaping the quote first would then have its own new backslash
+# doubled by the backslash pass, turning \" into \\" — a literal backslash
+# followed by an unescaped quote, i.e. the exact corruption this is here to
+# prevent.
+#
+# THE CONTROL CHARACTERS ARE NOT PARANOIA (2026-08-26). RFC 8259 forbids a raw
+# U+0000–U+001F inside a JSON string, and these values are not sanitized inputs:
+# ${LABEL} comes straight off argv, and emit_result's ${detail} carries ssh and
+# launcher error text, which routinely holds tabs and newlines and sometimes an
+# ANSI escape from a coloured upstream message. A row that landed one of those
+# was written as unparseable JSON and then rendered as '?' in the Studio matrix
+# — an INVISIBLE failure: no error anywhere, just a row that silently stopped
+# saying anything. \n \r \t \b \f get their short spellings; every remaining C0
+# control is spelled \u00XX by the loop, which terminates because the text it
+# substitutes in contains no control characters of its own.
 json_str() {
     local s="${1:-}"
+    local c u
     s="${s//\\/\\\\}"
     s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    s="${s//$'\b'/\\b}"
+    s="${s//$'\f'/\\f}"
+    while [[ "${s}" =~ [$'\x01'-$'\x07'$'\x0b'$'\x0e'-$'\x1f'] ]]; do
+        c="${BASH_REMATCH[0]}"
+        printf -v u '\\u%04x' "'${c}"
+        s="${s//"${c}"/${u}}"
+    done
     printf '"%s"' "${s}"
 }
 
@@ -801,8 +855,19 @@ if [ "${MODE}" = "stage4" ]; then
     # path below: under `set -e` + pipefail these assignments ABORT the script
     # whenever the log has no RESULT line, skipping every emit_result and leaving
     # the row's previous result JSON in place to be reported as this run's.
-    p="$(grep -oE 'RESULT: [0-9]+ passed' "${RUN_DIR}/stage4.log" | grep -oE '[0-9]+' | head -1 || true)"
-    f="$(grep -oE '[0-9]+ failed'         "${RUN_DIR}/stage4.log" | grep -oE '[0-9]+' | head -1 || true)"
+    #
+    # BOTH scrapes ANCHOR ON THE RESULT LINE, and they have to stay symmetric
+    # (2026-08-26). The pass scrape always did; the fail scrape matched a bare
+    # '[0-9]+ failed' ANYWHERE in the log, and the log is the guest's whole
+    # stdout — an assertion whose own message says "2 failed", a kubelet line,
+    # an emerge summary, anything. Whichever came FIRST won, because of the
+    # `head -1`, and a run that really ended '0 failed' could be filed with a
+    # nonzero fail count scraped off unrelated prose. Anchoring both on the same
+    # '== RESULT: N passed, M failed ==' line makes the two counts come from the
+    # SAME sentence, which is the only way they can be consistent with each other.
+    p="$(grep -oE 'RESULT: [0-9]+ passed'             "${RUN_DIR}/stage4.log" | grep -oE '[0-9]+' | head -1 || true)"
+    f="$(grep -oE 'RESULT: [0-9]+ passed, [0-9]+ failed' "${RUN_DIR}/stage4.log" \
+            | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+' | head -1 || true)"
     if [ "${rc}" -eq 0 ]; then emit_result PASS "stage4 provisioning test passed" "${p:-0}" "${f:-0}"
     else                       emit_result FAIL "run-qemu-test.sh rc=${rc}"       "${p:-0}" "${f:-0}"; fi
     exit "${rc}"
@@ -820,8 +885,21 @@ ssh-keygen -t ed25519 -N '' -C "qemu-docker@${LABEL}" -f "${SSHKEY}" >/dev/null 
 PUBKEY="$(cat "${SSHKEY}.pub")"
 
 KEYS_SRC="${RUN_DIR}/keys"; rm -rf "${KEYS_SRC}"; mkdir -p "${KEYS_SRC}/ssh" "${KEYS_SRC}/headscale"
-[ -f "${SRC}/specs/etc/headscale/config.yaml" ] \
-    && cp "${SRC}/specs/etc/headscale/config.yaml" "${KEYS_SRC}/headscale/config.yaml"
+# A MISSING headscale config USED TO PASS IN SILENCE (2026-08-26). This was a
+# bare `[ -f ... ] && cp ...`: when /src was mounted from a tree without
+# specs/etc/headscale/config.yaml the test simply evaluated false, the cp never
+# ran, nothing was printed, and provision.json below still declared
+# "config_file": "headscale/config.yaml" for the control-tier roles. The guest
+# then found no such file on the KEYS stick, headscale came up on its baked
+# defaults or not at all, and the row failed its headscale assertions with a
+# guest-side symptom whose CAUSE was a file absent on the HOST minutes earlier.
+# Say it out loud instead: this is a harness/mount problem, not a device defect.
+if [ -f "${SRC}/specs/etc/headscale/config.yaml" ]; then
+    cp "${SRC}/specs/etc/headscale/config.yaml" "${KEYS_SRC}/headscale/config.yaml" \
+        || warn "could not copy specs/etc/headscale/config.yaml onto the KEYS payload — headscale assertions will grade a guest configured from its baked defaults"
+else
+    warn "no ${SRC}/specs/etc/headscale/config.yaml — the KEYS payload ships NO headscale config. Any pki/generic/omnibus row will assert headscale against the image's baked defaults; check the /src mount before believing a headscale failure."
+fi
 
 # --extra-user accounts, appended to the SAME users.json that already creates
 # ${SSH_USER}, because that is the file the guest will actually read:
@@ -885,6 +963,39 @@ case "${ROLE}" in
     pki|generic|omnibus) HS_ENABLED=true ;;
 esac
 
+# kubernetes.role, likewise ROLE-ACCURATE rather than a constant (2026-08-26).
+# Every row used to be handed "control-plane", so provision.sh's
+# provision_kubernetes() logged `Kubernetes role: control-plane` on a frontend,
+# a worker and a client desktop alike — the manifest asserted a cluster shape
+# the product never builds, and the one line of evidence a triager reads to find
+# out what a row THOUGHT it was said the same thing on all of them.
+#
+# THE MAPPING IS NOT INVENTED HERE; it is copied from the builders' own ROLE_K8S
+# tables, which are the authority on what each image actually is:
+#   build-rpi5-stage4.sh:2822   ROLE_CLIENT -> none, pki -> control-plane, else worker
+#   build-x86-host-stage4.sh:1245-1325  pki -> control-plane, omnibus -> single-node,
+#                               be/fe/be+gpu/edge_ai -> worker,
+#                               laptop|chromebook|desktop|standalone-* -> none
+# Two spellings need translating on the way into the KEYS manifest:
+#   * omnibus is ROLE_K8S=single-node to the builder, but provision.sh's case
+#     (specs/etc/keys-provision/provision.sh:1443) knows only
+#     control-plane|master|server and worker|node|agent — "single-node" falls
+#     into its `*)` arm and logs "Unknown kubernetes.role". A single node IS its
+#     own control plane, and studio/.../worklist_driver.py:60 already collapses
+#     omnibus->pki for exactly this reason, so it is spelled control-plane.
+#   * the client roles get "none", which provision_kubernetes short-circuits on
+#     ("No Kubernetes role set"). That is CORRECT and not a downgrade: the
+#     desktop sysroot never gets kubeadm/kubelet/kubectl at all
+#     (build-rpi5-stage4.sh:5184) and never joins a cluster (:3896-3897).
+# NOTE generic is a WORKER even though headscale runs on it — that is precisely
+# why this is a second case statement and not another arm of the one above.
+K8S_ROLE="worker"
+case "${ROLE}" in
+    pki)                                    K8S_ROLE="control-plane" ;;
+    omnibus)                                K8S_ROLE="control-plane" ;;
+    desktop|laptop|chromebook|standalone-*) K8S_ROLE="none" ;;
+esac
+
 cat > "${KEYS_SRC}/provision.json" <<EOF
 {
   "version": 1,
@@ -892,7 +1003,7 @@ cat > "${KEYS_SRC}/provision.json" <<EOF
   "timezone": "UTC",
   "headscale": { "enabled": ${HS_ENABLED}, "config_file": "headscale/config.yaml" },
   "tailscale": { "enabled": false },
-  "kubernetes": { "role": "control-plane", "bootstrap": false },
+  "kubernetes": { "role": "${K8S_ROLE}", "bootstrap": false },
   "hugmesh": { "role": "${ROLE}", "cluster_domain": "hugmesh.local",
                "gitops": { "enabled": false } }
 }
@@ -1222,21 +1333,20 @@ emit_assertion_verdict() {
     # "RESULT: N passed" line would make these assignments ABORT the script —
     # past both emit_result calls — leaving the row's PREVIOUS result JSON on
     # disk to be reported as this run's.
-    PASSED="$(grep -oE 'RESULT: [0-9]+ passed' "${log}" 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
-    # ANCHORED TO THE RESULT LINE, exactly like PASSED one line above. It used to
-    # be a bare '[0-9]+ failed' over the WHOLE log, which is not the verdict —
-    # it is the first thing anywhere in the guest transcript that happens to read
-    # "<n> failed", and a golden run's log is full of them: `rc-status` prints
-    # "0 failed" service lines, systemd/OpenRC summaries and dmesg tails print
-    # their own counts, and every one of those sorts BEFORE the verdict line the
-    # log ends with. The scraped number then had nothing to do with the
-    # assertions, and it is the number the Studio's FAIL column shows and the
-    # number a reviewer reads when triaging a red row — a run with 12 real
-    # failures reported as "0 failed" next to a FAIL status, or a clean run
-    # reported with a fabricated failure count. assertions.sh:366 prints the one
-    # line that counts: '== RESULT: ${PASS} passed, ${FAIL} failed =='.
+    #
+    # ANCHOR BOTH SCRAPES ON THE RESULT LINE (2026-08-26). PASSED always did;
+    # FAILED matched a bare '[0-9]+ failed' anywhere in assertions.log, which is
+    # the guest's entire stdout — the AVC harvest, service logs, and the text of
+    # the assertions themselves all flow through it. Any line reading "3 failed"
+    # BEFORE the verdict line won the `head -1` and became this row's failure
+    # count, so a genuinely clean run could be reported with fabricated failures
+    # (and, worse, a real count could be masked by an earlier unrelated one).
+    # Anchoring on '== RESULT: N passed, M failed ==' makes both numbers come off
+    # the SAME sentence — assertions.sh's own verdict — which is the only source
+    # that can make them agree.
+    PASSED="$(grep -oE 'RESULT: [0-9]+ passed'              "${log}" 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
     FAILED="$(grep -oE 'RESULT: [0-9]+ passed, [0-9]+ failed' "${log}" 2>/dev/null \
-              | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+' | head -1 || true)"
+                | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+' | head -1 || true)"
     if [ "${ARC}" -eq 0 ] && ! grep -q '== RESULT:' "${log}" 2>/dev/null; then
         # THE VERDICT LINE IS PART OF THE CONTRACT. assertions.sh is STREAMED
         # into `bash -s`, so anything in it that reads stdin can eat the rest of
