@@ -9,6 +9,11 @@
 # it absent; the 13a ApplicationSet element flips to installed:"false"; gateway
 # routes + route-access rows are removed so no 502/stale-grant).
 #
+# 13a NOTE (2026-08-26): a SELECTED slug's 13a element is asserted to STAY
+# installed:"false" while its hardcoded apps/30-*/50-* Application exists — see
+# the long comment at that assertion in section 3. Selection is proven by the
+# surviving Application + the ConfigMap boolean, not by a 13a flip.
+#
 # WHAT THIS PROVES (WITHOUT a full cross-build) by loading the REAL helper + gate
 # functions AS build-rpi5-stage4.sh RESOLVES THEM and running them against a
 # realistic sandbox baked tree (seeded from the live specs/cluster files):
@@ -16,7 +21,8 @@
 #   * for EACH slug: EXCLUDED => its owned apps/*.yaml + manifests/<dir> are gone,
 #     its gateway routes + route-access rows are gone, the ConfigMap boolean is
 #     "false", and the 13a ApplicationSet element is installed:"false";
-#   * INCLUDED => app present, manifests present, ConfigMap "true", 13a "true";
+#   * INCLUDED => app present, manifests present, ConfigMap "true", and 13a HELD
+#     at "false" (the pre-cut-over no-double-management rule);
 #   * the EXCLUDE_SERVICES subtractive knob removes a slug from a full positive
 #     selection (force-OFF regardless of how it was selected);
 #   * the DEFAULT-INCLUSION POLICY (user 2026-06-17): a DEFAULT build (no
@@ -80,7 +86,8 @@ echo "== optional-services BUILD-TIME EXCLUSION unit test =="
 source "${REPO}/tests/lib/opt-gate-source.sh"
 opt_gate_load "${BUILDER}" _opt_selected _opt_explicitly_deselected _opt_anubis_installed \
           _opt_drop_kustomize_line _opt_drop_route _opt_drop_extrahost _opt_drop_rows \
-          _opt_fix_trailing_comma _opt_wire_anubis_ingress _opt_render_appset_flag \
+          _opt_fix_trailing_comma _opt_wire_anubis_ingress \
+          _opt_appset_element_path _opt_appset_cutover_done _opt_render_appset_flag \
           _opt_render_installed_services _opt_set_cr_enabled _opt_render_optionalservice_cr \
           _opt_federation_module _opt_gate_sql_value _opt_render_federation_modules \
           gate_optional_services || exit 1
@@ -514,6 +521,27 @@ grep -q "'/bff/character-forge/\*\*'" "${TREE}/manifests/route-access/initdb/20-
 # ── 3) INCLUDED: each user-level slug kept => present + ConfigMap/13a 'true' ──
 echo "-- INCLUDED (all user services): apps + manifests present, ConfigMap+13a 'true' --"
 seed_tree "incl-all"
+# ── NON-VACUITY CANARY (added 2026-08-26 after review) ───────────────────────
+# The INCLUDED 13a assertion below was INVERTED from installed:"true" to
+# installed:"false" when the double-management guard landed. Every element in
+# specs/cluster/apps/13a-optional-services.yaml ALREADY ships installed:"false",
+# so on the pristine fixture the inverted assertion was satisfied by a file
+# NOBODY TOUCHED: stubbing _opt_render_appset_flag() to `return 0` — deleting the
+# renderer outright — still gave 164 passed, 0 failed. The "held false" invariant
+# is right, but it has to PROVE THE RENDERER RAN, not just observe the scaffold.
+# So flip every selected slug's element to "true" FIRST. The gate must rewrite it
+# back to "false"; a renderer that stops running leaves the canary at "true" and
+# the assertion below goes red.
+for slug in ${USER_SERVICES}; do
+  sed -i -E "s#(\{[[:space:]]*slug:[[:space:]]*${slug}[[:space:]]*,.*installed:[[:space:]]*\")(true|false)(\")#\1true\3#" \
+      "${TREE}/apps/13a-optional-services.yaml"
+done
+_canary_n=$(grep -cE '\{[[:space:]]*slug:.*installed:[[:space:]]*"true"' "${TREE}/apps/13a-optional-services.yaml" || true)
+if [ "${_canary_n}" -ge 4 ]; then
+  ok "13a canary armed: ${_canary_n} element(s) pre-set installed:\"true\" before gating (so 'held false' below proves the renderer RAN)"
+else
+  bad "13a canary FAILED TO ARM (${_canary_n} elements set true) — every 'held false' assertion below would be vacuous"
+fi
 OPTIONAL_SERVICES="${USER_SERVICES}"
 gate_optional_services
 for slug in ${USER_SERVICES}; do
@@ -522,8 +550,24 @@ for slug in ${USER_SERVICES}; do
   [ -d "${TREE}/manifests/${dir}" ] && ok "${slug}: manifests/${dir} PRESENT"         || bad "${slug}: manifests/${dir} pruned despite selection"
   grep -qE "^[[:space:]]*${slug}:[[:space:]]*\"true\"" "${TREE}/manifests/policy/installed-services-configmap.yaml" \
       && ok "${slug}: ConfigMap installed (true)" || bad "${slug}: ConfigMap not true despite selection"
-  grep -qE "\{[[:space:]]*slug:[[:space:]]*${slug}[[:space:]]*,.*installed:[[:space:]]*\"true\"" "${TREE}/apps/13a-optional-services.yaml" \
-      && ok "${slug}: 13a element installed:\"true\"" || bad "${slug}: 13a element not true despite selection"
+  # 13a stays installed:"false" for a SELECTED slug while its hardcoded
+  # apps/30-*/50-* Application still exists — CHANGED 2026-08-26, and the change
+  # is the point, not a relaxation. 13a-optional-services.yaml's own header says
+  # "keep every element installed:false" until the cut-over, and
+  # docs/OPTIONAL-SERVICES.md forbids two owners of one manifest directory: the
+  # generated `optional-<slug>` Application and the hardcoded `<slug>` one would
+  # BOTH carry automated{prune,selfHeal} over specs/cluster/manifests/<dir>.
+  # That flip was harmless only because bootstrap.sh never applied the baked tree
+  # at all (it synced specs/cluster/apps from GitHub); now that
+  # specs/cluster/bootstrap/bootstrap.sh applies the BAKED tree, the flip is
+  # REACHABLE and the double management is real. _opt_appset_cutover_done() in
+  # build-rpi5-stage4.sh is the guard, and it is self-maintaining: delete
+  # apps/30-<slug>.yaml in a real cut-over and the element starts flipping true
+  # again with no edit here. The INSTALL signal for a selected slug is the
+  # ConfigMap boolean asserted immediately above plus the surviving Application.
+  grep -qE "\{[[:space:]]*slug:[[:space:]]*${slug}[[:space:]]*,.*installed:[[:space:]]*\"false\"" "${TREE}/apps/13a-optional-services.yaml" \
+      && ok "${slug}: 13a element held installed:\"false\" (hardcoded ${app} still owns manifests/${dir}; no double management)" \
+      || bad "${slug}: 13a element flipped true while ${app} still exists — DOUBLE MANAGEMENT of manifests/${dir}"
 done
 
 # ── 4) EXCLUDE_SERVICES subtractive knob (force-OFF from a full selection) ─────

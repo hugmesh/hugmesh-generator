@@ -2351,8 +2351,17 @@ GROWFS_EOF
 }
 
 # ── ENV app-gate (deterministic prune of the BAKED apps/ tree) ─────────────
-# ArgoCD recurses specs/cluster/apps with recurse:true, so physically removing
-# a YAML from the baked copy is the gate (no live-cluster conditional needed).
+# Physically removing a YAML from the baked copy is the gate (no live-cluster
+# conditional needed) — because specs/cluster/bootstrap/bootstrap.sh applies the
+# BAKED ${CLUSTER_DIR}/apps tree one file at a time.
+#
+# ⚠ THAT WAS NOT TRUE BEFORE 2026-08-26, and this comment used to assert the
+# opposite of the truth: it said ArgoCD "recurses specs/cluster/apps with
+# recurse:true", which it did — from GITHUB, via app-of-apps.yaml, the only thing
+# bootstrap.sh ever applied. Nothing read the baked tree, so every `rm -f` below
+# edited a directory ArgoCD never looked at and the whole gate was INERT on a
+# real device. Do not re-point bootstrap.sh at the repo-recursing root without
+# reading specs/cluster/README.md "What the device syncs".
 # Operates ONLY on ${SYSROOT}/var/lib/hugmesh/cluster/apps — never the repo.
 #   prod => prune the LAN wildcard-DNS app (public DNS is authoritative instead).
 #   test => prune the go-live cloudflared app (no Cloudflare/ACME on a LAN). The
