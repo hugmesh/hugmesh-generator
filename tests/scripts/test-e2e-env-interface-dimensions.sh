@@ -76,7 +76,13 @@ done
 # scenario dying on "Executable doesn't exist at .../chromium_headless_shell-1228",
 # the toolchain gap wearing the costume of a product failure. The probe names the
 # path and the fix (PLAYWRIGHT_BROWSERS_PATH=... make playwright-deps) instead.
-if ! PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/var/tmp/portage/pw-browsers}" bash "${E2E}/check-toolchain.sh"; then
+# The probe sees the AMBIENT browsers path — PLAYWRIGHT_BROWSERS_PATH only if
+# the caller set it, Playwright's default cache otherwise — because that is
+# exactly how the lane below resolves browsers since the forced
+# /var/tmp/portage/pw-browsers override was dropped (see THE BROWSER MUST
+# LAUNCH below); probing a path the lane no longer uses would be a second,
+# wrong opinion.
+if ! bash "${E2E}/check-toolchain.sh"; then
   echo "SKIPPED-LOUDLY: the e2e toolchain is not ready (above). This guard checked NOTHING. Exiting 2 rather than 0." >&2
   exit 2
 fi

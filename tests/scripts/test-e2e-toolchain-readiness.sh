@@ -49,8 +49,10 @@
 #      a pass) — the pre-merge images carry no node_modules.
 #   F. The eight Gherkin guards under tests/scripts/test-e2e-*.sh run the probe as
 #      their preflight (not a private `[ -d node_modules/playwright-bdd ]`), the
-#      seven that launch a browser hand it the SAME PLAYWRIGHT_BROWSERS_PATH they
-#      run the lane with, and a failing probe makes each exit 2 SKIPPED-LOUDLY
+#      six that launch a browser through their own pw-browsers default hand it
+#      the SAME PLAYWRIGHT_BROWSERS_PATH they run the lane with (env-interface
+#      resolves ambiently since PR #215 and its probe sees the ambient path),
+#      and a failing probe makes each exit 2 SKIPPED-LOUDLY
 #      before any npx. MEASURED 2026-08-27: stack-e2e-coverage-check got past the
 #      make-level probe (READY on the default cache) and then died 20+ times on
 #      "Executable doesn't exist at /var/tmp/portage/pw-browsers/chromium_headless_
@@ -558,12 +560,17 @@ echo "-- F) the Gherkin guards run the probe as THEIR preflight, with THEIR brow
 # path), with a stub probe that records the PLAYWRIGHT_BROWSERS_PATH it was handed
 # and exits 1, and a stub npx that must never be reached. python3/git are on the
 # guards' own `command -v` preflights, so they are needed here too.
-GUARDS_WITH_BROWSER="test-e2e-cli-lane test-e2e-coverage-matrix test-e2e-env-interface-dimensions test-e2e-func-media-games test-e2e-governance-function-matrix test-e2e-social-function-matrix test-e2e-studio-gui-lane"
+GUARDS_WITH_BROWSER="test-e2e-cli-lane test-e2e-coverage-matrix test-e2e-func-media-games test-e2e-governance-function-matrix test-e2e-social-function-matrix test-e2e-studio-gui-lane"
+# env-interface-dimensions launches a browser but resolves it AMBIENTLY since
+# PR #215 dropped its forced /var/tmp/portage/pw-browsers override (honour
+# PLAYWRIGHT_BROWSERS_PATH only if the caller set it) — so its probe must see
+# the ambient (unset) path too, or it would vet a path the lane never uses.
+GUARDS_AMBIENT="test-e2e-env-interface-dimensions"
 GUARDS_WITHOUT="test-e2e-gherkin-harness"
 if ! command -v python3 >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1; then
   _skip "python3/git absent — the guards' own preflights would exit before reaching the probe; leg F asserted nothing"
 else
-  for g in ${GUARDS_WITH_BROWSER} ${GUARDS_WITHOUT}; do
+  for g in ${GUARDS_WITH_BROWSER} ${GUARDS_AMBIENT} ${GUARDS_WITHOUT}; do
     src="${REPO}/tests/scripts/${g}.sh"
     if [ ! -f "${src}" ]; then _bad "F ${g}.sh is missing"; continue; fi
     G="${TMP}/guard-${g}"; mkdir -p "${G}/tests/scripts" "${G}/tests/e2e" "${G}/bin"
@@ -577,7 +584,11 @@ else
     got="$(cat "${G}/probe.env" 2>/dev/null || echo '<probe never ran>')"
     case " ${GUARDS_WITH_BROWSER} " in
       *" ${g} "*) eq "${got}" "/var/tmp/portage/pw-browsers" "F ${g}: the probe is handed the guard's own default browsers path (unset -> /var/tmp/portage/pw-browsers)" ;;
-      *)          eq "${got}" "<unset>" "F ${g}: launches no browser, so the probe sees the ambient (unset) browsers path" ;;
+      *)
+        case " ${GUARDS_AMBIENT} " in
+          *" ${g} "*) eq "${got}" "<unset>" "F ${g}: resolves browsers ambiently (PR #215), so the probe sees the ambient (unset) browsers path — the same one the lane runs with" ;;
+          *)          eq "${got}" "<unset>" "F ${g}: launches no browser, so the probe sees the ambient (unset) browsers path" ;;
+        esac ;;
     esac
   done
   # ... and the operator's own value wins over the default, as it does for the lane.
