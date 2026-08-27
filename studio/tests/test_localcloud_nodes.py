@@ -152,11 +152,12 @@ def test_mode_card_routes_to_the_gate_page_for_the_new_slug(wiz):
     assert wiz.phone_selected is False
     assert wiz.quest_selected is False
     assert wiz.deploy_selected is False
+    assert wiz.e2e_selected is False
     assert wiz.qemu_selected is False
     # nothing is committed until the gate is confirmed: cfg.mode untouched, and the
     # sibling side-flow pages were skipped, not visited.
     assert wiz.cfg.mode == before
-    for slug in ("localmesh", "phone", "quest", "deploy", "qemu"):
+    for slug in ("localmesh", "phone", "quest", "deploy", "e2e", "qemu"):
         assert not wiz.hasVisitedPage(wiz._page_ids[slug])
 
 

@@ -64,14 +64,36 @@ def test_the_hosted_screens_are_real_not_honest_stubs():
               if not isinstance(j.screen_for(slug), journey.PendingSideFlow)}
     # qemu joined localcloud/meshemu once tui/qemu.py landed: both emulation
     # lanes (TEST and DEPLOY) are hosted here; the MDM/cloud drivers are not.
-    assert hosted == {"localcloud", "qemu", "meshemu"}
+    # "e2e" joined them on 2026-08-27 — it is a mode-menu card on BOTH faces, so a
+    # stub here would be the TUI breaking a promise the menu makes. "qemu" STAYS
+    # hosted even though its own card went: it is reached from the e2e screen.
+    assert hosted == {"localcloud", "e2e", "qemu", "meshemu"}
 
 
-def test_the_qemu_card_opens_the_real_device_test_screen():
-    from hugmesh_studio.tui.qemu import QemuScreen
+def test_the_e2e_card_opens_the_real_e2e_screen():
+    from hugmesh_studio.tui.e2e import E2EScreen
     j = _walk("", "4")
+    assert j.slug == "e2e"
+    assert isinstance(j.screen_for("e2e"), E2EScreen)
+    text = "\n".join(j.lines())
+    assert "not yet ported to the TUI" not in text
+    # the three catalogued environments, read from the core rather than restated
+    from hugmesh_studio.core import e2e_environments as env_mod
+    for env_id in env_mod.environment_ids():
+        assert env_id in text
+
+
+def test_the_e2e_screen_is_the_qemu_screens_only_door_now():
+    """The "QEMU device tests" mode card was removed on 2026-08-27. Removing a MENU
+    CARD must not delete a LANE, so the device-test screen is still real and still
+    reachable — from the e2e card, on both faces (the GUI twin is E2EPage's second
+    radio arm)."""
+    from hugmesh_studio.tui.qemu import QemuScreen
+    assert "qemu" not in [mid for mid, _, _ in journey.MODE_CHOICES]
+    j = _walk("", "4", "d")
     assert j.slug == "qemu"
     assert isinstance(j.screen_for("qemu"), QemuScreen)
+    assert j.flags["qemu_selected"] is True
     text = "\n".join(j.lines())
     assert "not yet ported to the TUI" not in text
     assert "pick the session" in text
@@ -142,7 +164,7 @@ def test_welcome_explainer_names_the_getting_started_guide():
 # ── mode: the journey-ordered menu (#67, with the #65/#69 cards) ───────────────────
 def test_mode_menu_ids_in_the_operator_journey_order():
     assert [mid for mid, _, _ in journey.MODE_CHOICES] == [
-        "localmesh", "localcloud", "mesh", "qemu", "meshemu",
+        "localmesh", "localcloud", "mesh", "e2e", "meshemu",
         "deploy", "phone", "quest", "cloud", "standalone"]
 
 
@@ -154,7 +176,7 @@ def test_mode_default_is_standalone_by_id():
 
 
 def test_each_side_flow_card_routes_to_its_slug_and_commits_no_mode():
-    for number, slug in (("1", "localmesh"), ("4", "qemu"), ("5", "meshemu"),
+    for number, slug in (("1", "localmesh"), ("4", "e2e"), ("5", "meshemu"),
                          ("6", "deploy"), ("7", "phone"), ("8", "quest")):
         j = _walk("", number)
         assert j.slug == slug, (number, slug, j.slug)

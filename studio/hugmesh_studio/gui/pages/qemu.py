@@ -13,6 +13,21 @@ screens rather than two copies of one:
 Both slugs survive in the frozen wizard order (``core/config.WIZARD_PAGE_SLUGS``);
 what changed is that this one stopped trying to be both.
 
+HOW YOU GET HERE, SINCE 2026-08-27
+-----------------------------------
+This page no longer has a mode-menu card. The operator asked for it to go ("remove
+QEMU device emulation menu item as it does not do anything that cannot be done from
+the other menu, but add the run e2e tests button") and ``ModePage``'s slot now holds
+RUN E2E TESTS. Nothing about THIS page changed: its second radio arm
+(``gui/pages/e2e.py::E2EPage``, "Emulated-device test lanes") is what writes
+``wiz.qemu_selected`` now, and ``applies_to`` still reads that same flag.
+
+The card was removed; the LANE was not, and could not be — items 5 and 6 below
+(``tests/qemu/avc-workout.sh`` and ``tests/qemu/run-qemu-e2e.sh``) have no other door
+anywhere in the Studio, and the mesh-emulation page the request pointed at offers
+neither. The THIRD route in is unchanged and needs no menu at all: BuildPage's
+``cfg.qemu_device_tests`` opt-in, run post-build by ``progress.py::_maybe_qemu_tests``.
+
 WHY THE DEVICE CONSOLE LEFT THIS PAGE
 --------------------------------------
 It was here because ``--keep-alive`` was here, and it grew a SECOND process lane

@@ -238,7 +238,9 @@ def test_mode_page_order_matches_the_operators_journey(wiz):
         "localmesh",     # local mesh first…
         "localcloud",    # …turning that local mesh into node images (#65)
         "mesh",          # …then the production mesh (node images)
-        "qemu",          # …then QEMU emulation of the built images
+        "e2e",           # …then the e2e test lane (2026-08-27: it took the
+                         #    "QEMU device tests" card's slot, and is that page's
+                         #    only remaining door)
         "meshemu",       # …then whole-mesh emulation (#69)
         "deploy", "phone", "quest",   # publish / flash+enroll side-flows
         "cloud", "standalone",        # the single-image desktop builds

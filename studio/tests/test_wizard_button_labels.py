@@ -71,6 +71,17 @@ def _pinned_host(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _e2e_gate_stubbed(monkeypatch):
+    """E2EPage's entry starts an off-thread readiness probe that shells docker (three
+    30s subprocesses plus an HTTP probe). This file walks that page — it is the RUN
+    E2E TESTS card, and since 2026-08-27 also the route to QemuPage — and none of its
+    assertions are about the host's daemon, so the probe answers instantly here."""
+    from hugmesh_studio.core.local_stack_node import LocalStackNode
+    monkeypatch.setattr(LocalStackNode, "e2e_ready",
+                        lambda self, environment="docker": ["stubbed probe"])
+
+
+@pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
     # ProgressPage writes a tray build-status file; keep it out of the real ~/.hugmesh.
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
@@ -121,9 +132,13 @@ TERMINAL_SIDE_FLOWS = [
     ("phone", "PhonePage"),
     ("quest", "QuestPage"),
     ("deploy", "DeployPage"),
-    ("qemu", "QemuPage"),
+    ("e2e", "E2EPage"),
     ("meshemu", "MeshEmulationPage"),
 ]
+
+#: QemuPage is terminal and Exit-labelled too, but it is no longer reached from a
+#: mode-menu card — its own card was removed on 2026-08-27 and E2EPage's second radio
+#: arm is the door. It gets its own walk below rather than a row here.
 
 
 @pytest.mark.parametrize("mode,page_name", TERMINAL_SIDE_FLOWS,
@@ -143,6 +158,23 @@ def test_terminal_side_flow_pages_render_exit_not_finish(wiz, mode, page_name):
     assert btn.isVisible(), f"{page_name} is final but renders no Finish button"
     assert btn.text() == EXIT_BUTTON_TEXT == "Exit", (
         f"{page_name} still renders {btn.text()!r}")
+
+
+def test_the_qemu_page_still_renders_exit_behind_the_e2e_card(wiz):
+    """The removed card's page, walked to through its NEW door.
+
+    ``TERMINAL_SIDE_FLOWS`` drives ``pick_mode``, and "qemu" is no longer a mode id —
+    but the page is still terminal on its default arm and still Exit-labelled, so the
+    guard has to keep reaching it. This is that walk."""
+    pick_mode(wiz, "e2e")
+    e2e_page = advance_to(wiz, wizard_mod.E2EPage)
+    e2e_page.arm_qemu.setChecked(True)
+    page = advance_to(wiz, wizard_mod.QemuPage)
+
+    assert page.nextId() == -1, "QemuPage stopped being terminal"
+    btn = _finish_button(wiz)
+    assert btn.isVisible(), "QemuPage is final but renders no Finish button"
+    assert btn.text() == EXIT_BUTTON_TEXT == "Exit"
 
 
 def test_progress_page_renders_exit_once_the_build_has_settled(wiz):
@@ -186,7 +218,7 @@ def test_every_terminal_page_is_labelled_exit_and_no_other_page_is(wiz):
             labelled.add(name)
 
     assert terminal == {"LocalMeshPage", "PhonePage", "QuestPage", "DeployPage",
-                        "QemuPage", "MeshEmulationPage", "ProgressPage"}
+                        "E2EPage", "QemuPage", "MeshEmulationPage", "ProgressPage"}
     assert labelled == terminal
 
 
