@@ -18,6 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
+from hugmesh_studio.core import keyzip as core_keyzip   # noqa: E402
 from hugmesh_studio.core.config import (   # noqa: E402  (after the importorskip gate)
     BUILTIN_DEFAULT_SERVICES, ImageConfig, MODE_SKIPPED_PAGES,
     OPTIONAL_SERVICES_CHOICES, ROLE_CHOICES,
@@ -1027,6 +1028,19 @@ def _make_keys_zip(path):
         zf.writestr("vault/secrets.json", json.dumps(_KEYS_SECRETS_JSON))
 
 
+@pytest.fixture
+def isolated_keyzip_staging(tmp_path, monkeypatch):
+    """Point the key-zip staging dir at tmp_path for the tests below.
+
+    Without this they ran the production import against the operator's real
+    ``~/.hugmesh/keyzip``, which core.keyzip.extract() recursively deletes before
+    unpacking — the fixture data found on the live machine (`keys/ca.crt` == the
+    literal "dummy-ca" written above) was this suite's own. See
+    tests/test_keyzip_staging_isolation.py."""
+    monkeypatch.setenv(core_keyzip.STATE_DIR_ENV, str(tmp_path / "studio-state"))
+    return core_keyzip.staging_dir()
+
+
 def test_keyzip_page_checkbox_defaults_off_regardless_of_wizard(qapp):
     """Even when the Studio-level flag is on, a fresh checkbox instance still
     starts from that same explicit value — never silently True by omission."""
@@ -1047,7 +1061,8 @@ def test_keyzip_page_checkbox_defaults_off_regardless_of_wizard(qapp):
         w_on.deleteLater()
 
 
-def test_keyzip_page_import_opt_in_off_writes_no_manifest(qapp, tmp_path):
+def test_keyzip_page_import_opt_in_off_writes_no_manifest(qapp, tmp_path,
+                                                          isolated_keyzip_staging):
     zip_path = tmp_path / "acme-keys.zip"
     _make_keys_zip(str(zip_path))
     manifest_path = tmp_path / "roles.json"
@@ -1065,7 +1080,8 @@ def test_keyzip_page_import_opt_in_off_writes_no_manifest(qapp, tmp_path):
         w.deleteLater()
 
 
-def test_keyzip_page_import_opt_in_on_writes_only_superadmin(qapp, tmp_path):
+def test_keyzip_page_import_opt_in_on_writes_only_superadmin(qapp, tmp_path,
+                                                             isolated_keyzip_staging):
     zip_path = tmp_path / "acme-keys.zip"
     _make_keys_zip(str(zip_path))
     manifest_path = tmp_path / "roles.json"
@@ -1086,7 +1102,8 @@ def test_keyzip_page_import_opt_in_on_writes_only_superadmin(qapp, tmp_path):
         w.deleteLater()
 
 
-def test_keyzip_page_unchecking_the_box_overrides_the_wizard_default(qapp, tmp_path):
+def test_keyzip_page_unchecking_the_box_overrides_the_wizard_default(
+        qapp, tmp_path, isolated_keyzip_staging):
     """The checkbox is the real gate at import time — flipping it off must suppress
     emission even though the wizard was constructed with the flag on."""
     zip_path = tmp_path / "acme-keys.zip"

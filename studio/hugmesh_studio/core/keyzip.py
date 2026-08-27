@@ -28,6 +28,41 @@ from .validate import (
 MAX_TOTAL = 512 * 1024 * 1024   # 512 MiB extracted ceiling
 MAX_FILES = 5000
 
+#: The one environment override the whole Studio state family honours
+#: (``core.instance.state_dir``, ``core.build_sessions``, ``core.crashlog``). The
+#: key-zip host dirs were the ONE member of that family with no seam at all: they
+#: were hard-coded to ``os.path.expanduser("~")``, so nothing — no test, no second
+#: profile, no sandbox — could point them anywhere else. Since :func:`extract`
+#: *recursively deletes* its staging dir before unpacking, "no seam" meant the
+#: studio test suite wiped the operator's real ``~/.hugmesh/keyzip`` (staged
+#: Secure-Boot signing material and the offline vault bundle) on every run, green.
+STATE_DIR_ENV = "HUGMESH_STUDIO_STATE_DIR"
+
+#: Written into a staging dir the moment :func:`extract` claims it. Its only job is
+#: to answer "did THIS module create this directory?" before anything is deleted.
+STAGING_MARKER = ".hugmesh-keyzip-staging"
+
+
+def _hugmesh_home() -> str:
+    """Base dir for the key-zip host-side scratch dirs.
+
+    ``$HUGMESH_STUDIO_STATE_DIR`` wins when set — the same override the rest of the
+    state family reads — so an isolated state dir isolates key-zip staging too.
+    """
+    return os.environ.get(STATE_DIR_ENV) or os.path.join(
+        os.path.expanduser("~"), ".hugmesh")
+
+
+def staging_dir() -> str:
+    """Where an imported key-zip is unpacked. NOTE: :func:`extract` clears this dir,
+    so it must never be a path holding anything but a previous extraction."""
+    return os.path.join(_hugmesh_home(), "keyzip")
+
+
+def fetch_zip_path() -> str:
+    """Where a key-zip fetched from a remote-config link is written before import."""
+    return os.path.join(_hugmesh_home(), "keyzip-fetch", "admin-config.zip")
+
 
 @dataclass
 class KeyZipContents:
@@ -129,10 +164,38 @@ def _looks_wireguard(path: str) -> bool:
         return False
 
 
+def _claim_staging(path: str) -> None:
+    """Leave ``path`` existing and EMPTY, deleting only a directory this module owns.
+
+    :func:`extract` has to start clean, or a previous zip's files get mis-classified
+    into this result. "Start clean" used to be an unconditional
+    ``shutil.rmtree(staging_dir, ignore_errors=True)`` on whatever path the caller
+    handed in, which made a wrong path a silent recursive delete of real data.
+
+    A directory is only ever deleted when it is empty, carries this module's
+    :data:`STAGING_MARKER`, or IS the app's own :func:`staging_dir` (adopted once, so
+    installs that staged a key-zip before the marker existed keep working). Anything
+    else raises ``ValueError`` before a single file is removed.
+    """
+    if not path or not path.strip():
+        raise ValueError("key-zip staging dir must be a real path, not empty")
+    if os.path.isdir(path) and os.listdir(path):
+        owned = os.path.exists(os.path.join(path, STAGING_MARKER))
+        canonical = os.path.abspath(path) == os.path.abspath(staging_dir())
+        if not owned and not canonical:
+            raise ValueError(
+                f"refusing to clear {path}: it is not a key-zip staging dir (no "
+                f"{STAGING_MARKER} marker) and it is not empty. Extracting here "
+                f"would have recursively deleted its contents.")
+    shutil.rmtree(path, ignore_errors=True)
+    os.makedirs(path, exist_ok=True)
+    with open(os.path.join(path, STAGING_MARKER), "w", encoding="utf-8") as fh:
+        fh.write("hugmesh-studio key-zip staging — recreated on every import.\n")
+
+
 def extract(zip_path: str, staging_dir: str) -> KeyZipContents:
     # start clean so a previous zip's files can't be mis-classified into this result
-    shutil.rmtree(staging_dir, ignore_errors=True)
-    os.makedirs(staging_dir, exist_ok=True)
+    _claim_staging(staging_dir)
     c = KeyZipContents(staging_dir=staging_dir)
     with zipfile.ZipFile(zip_path) as zf:
         infos = zf.infolist()
