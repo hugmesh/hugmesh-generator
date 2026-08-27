@@ -31,6 +31,7 @@ from ..core import build_sessions
 from ..core import resource_limits as _resource_limits
 from ..core.mesh_node import MeshNode
 from ..core.local_stack_node import LocalStackNode
+from ..core.state_paths import state_dir
 
 # the four build states a badge can show; anything else renders as the plain brand icon.
 _BUILD_STATES = ("idle", "building", "error", "complete")
@@ -155,11 +156,11 @@ def _status_suffix(state: str, percent: int | None) -> str:
 
 # ── build-status channel: a tiny JSON file the tray polls (works window-closed) ───────
 def build_status_path() -> str:
-    """The tray<->build status file. Honours ``$HUGMESH_STUDIO_STATE_DIR`` (for tests /
-    hygiene); defaults to ``~/.hugmesh/studio/build-status.json``."""
-    base = os.environ.get("HUGMESH_STUDIO_STATE_DIR") or os.path.join(
-        os.path.expanduser("~"), ".hugmesh", "studio")
-    return os.path.join(base, "build-status.json")
+    """The tray<->build status file: ``<state>/build-status.json``. The state dir comes
+    from :func:`...core.state_paths.state_dir`, the single resolver, so the
+    ``$HUGMESH_STUDIO_STATE_DIR`` override and the pytest home-fallback guard apply
+    here too."""
+    return os.path.join(state_dir(), "build-status.json")
 
 
 def write_build_status(state: str, *, percent: int | None = None,
