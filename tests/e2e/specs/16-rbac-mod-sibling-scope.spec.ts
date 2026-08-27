@@ -8,7 +8,8 @@ import { gatewayDecision, effectiveRoles } from './rbac-route-access';
 // (PL50) + akkoma/Mastodon moderation ONLY, and is DENIED infra, logs,
 // server-admin, and the hugmesh admin surfaces (/api/admin/**, /admin/**,
 // /bff/admin/**). Observability (uptrace/grafana/clickhouse) has NO external
-// gateway route at all, so default-deny keeps mod off it.
+// gateway route at all — see the UNGOVERNED block below for what that actually
+// means, which is NOT what this comment used to claim.
 //
 // This asserts the full mod posture against the schema.sql contract oracle. The
 // application-layer half (mod DENIED the BFF admin API) is covered live in spec
@@ -47,8 +48,6 @@ test.describe('RBAC: ROLE_MOD sibling scope (reaches moderation, denied infra/ad
     { gw: 'hugmesh-be-gateway', path: '/api/admin/route-access', what: 'hugmesh admin API' },
     { gw: 'hugmesh-fe-gateway', path: '/admin/usage', what: 'admin UI' },
     { gw: 'hugmesh-fe-gateway', path: '/bff/admin/allowlist', what: 'BFF admin allowlist' },
-    { gw: 'hugmesh-be-gateway', path: '/infra/vault/secret', what: 'infra/vault (no route)' },
-    { gw: 'hugmesh-be-gateway', path: '/infra/logs', what: 'logs (no route)' },
     // NOTE: /_synapse/admin/v1/server_version is NOT here — /_synapse/** (added by
     // commit 0100d3b) is a GENERAL host-scoped Synapse-compat catch-all, not a
     // Matrix-admin-specific row, so mod (a paired superset) reaches it; see the
@@ -61,6 +60,36 @@ test.describe('RBAC: ROLE_MOD sibling scope (reaches moderation, denied infra/ad
   for (const c of MOD_DENIED) {
     test(`mod DENIED ${c.path} (${c.what})`, async () => {
       expect(gatewayDecision(c.gw, c.path, MOD)).toBe('DENY');
+    });
+  }
+
+  // ── UNGOVERNED: no row at all is NOT a deny, and saying so was a lie ──────
+  //
+  // These two cases used to sit in MOD_DENIED above with the comment "default-deny
+  // keeps mod off it". That was FALSE for this gateway and the falsehood was
+  // load-bearing: it is exactly the belief that made the old oracle return DENY
+  // for every path the mirror had drifted away from, including the entire
+  // /bff/user/** profile+password surface.
+  //
+  // GatewayRouteAccessService.decide() returns NO_RULE for an unmatched path
+  // (:185) and GatewayRouteAccessFilter rejects ONLY on Decision.DENY (:345,
+  // javadoc :68-70 "ALLOW / NO_RULE -> forward"). So the route-access TABLE does
+  // not wall /infra/** at all. What walls it is that NO GATEWAY ROUTES IT: neither
+  // specs/cluster/apps/20-gateway-be.yaml nor tests/stack/gateway-routes/be/
+  // application-routes.yml carries an /infra route, so SCG answers its own
+  // no-route-matched 404 and the request never leaves the gateway.
+  //
+  // Asserting the truth here is what makes the assertion useful: if someone ever
+  // ADDS an /infra/** route without adding a governing row, this flips to
+  // NO_RULE-with-a-route — a real hole — and the mod posture below is the place
+  // that has to notice.
+  const MOD_UNGOVERNED: { gw: any; path: string; what: string }[] = [
+    { gw: 'hugmesh-be-gateway', path: '/infra/vault/secret', what: 'infra/vault — no route, no row' },
+    { gw: 'hugmesh-be-gateway', path: '/infra/logs', what: 'logs — no route, no row' },
+  ];
+  for (const c of MOD_UNGOVERNED) {
+    test(`mod: ${c.path} is UNGOVERNED by the route table (${c.what})`, async () => {
+      expect(gatewayDecision(c.gw, c.path, MOD)).toBe('NO_RULE');
     });
   }
 
