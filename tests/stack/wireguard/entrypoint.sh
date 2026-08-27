@@ -1,7 +1,8 @@
 #!/bin/sh
 # Fail-closed VPN client for the local mesh's egress-vpn profile — WireGuard
 # (wg-quick .conf) or OpenVPN (.ovpn), sniffed from the mounted conf's content.
-# * refuses to start without a real conf (build-x86-host-stage4.sh:4052, translated):
+# * refuses to start without a real conf (build-x86-host-stage4.sh:4259, the
+#   `[ -f "${EGRESS_VPN_FILE}" ] || { err ... }` refusal — translated):
 #   attached services then never start, so nothing falls back to direct;
 # * WireGuard lane: strips DNS= — docker's embedded 127.0.0.11 must keep resolving
 #   compose service names for attached containers (external lookups therefore
@@ -21,6 +22,11 @@ SRC=/etc/wireguard/wg0.conf
 if grep -q '^\[Interface\]' "$SRC"; then
     # ── WireGuard (wg-quick .conf) ───────────────────────────────────────────
     mkdir -p /run/wg
+    # 0600 BEFORE the write: this copy carries the provider's PrivateKey, and a
+    # default-umask create leaves it world-readable — wg-quick says so out loud
+    # ("Warning: `/run/wg/wg0.conf' is world accessible") on every start, which
+    # reads like a defect in the lane.
+    (umask 077; : > /run/wg/wg0.conf)
     grep -viE '^[[:space:]]*(DNS|Table)[[:space:]]*=' "$SRC" > /run/wg/wg0.conf
     wg-quick up /run/wg/wg0.conf
     echo "[egress-vpn] wg0 up (wireguard) — attached services egress via the tunnel (fail-closed)"
