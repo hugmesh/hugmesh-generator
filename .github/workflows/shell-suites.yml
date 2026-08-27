@@ -128,7 +128,7 @@ jobs:
     container:
       image: alpine:3
     steps:
-      - run: apk add --no-cache bash coreutils curl flock gawk git helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 util-linux xz
+      - run: apk add --no-cache attr bash coreutils curl e2fsprogs-extra flock gawk git helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xz
       - uses: actions/checkout@v4
       - name: trust the workspace
         # Container jobs run as root against a checkout git considers foreign, so
@@ -198,6 +198,8 @@ jobs:
             tests/pentest/test-dast-honesty.sh
             tests/phone/test-make-phone-face.sh
             tests/phone/test-mdm-providers.sh
+            tests/qemu/loop_preflight_test.sh
+            tests/qemu/stage4_rootfs_test.sh
             tests/qemu/kernel_extract_test.sh
             tests/qemu/launch_pi_kernel_test.sh
             tests/qemu/role_topology_test.sh

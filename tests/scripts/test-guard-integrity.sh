@@ -69,7 +69,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # "N of M suites are named by a pull_request-triggered workflow" line, and set it to
 # N. Guessing it defeats the check: a baseline nobody derived from the tree is a
 # number that only ever agrees with itself.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-125}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-130}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
