@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hugmesh-frontend
+resources:
+  - service-account.yaml
+  - deployment.yaml
+
+# First-party image from the in-cluster Harbor registry (registry.hugmesh.net,
+# project path <group>/<repo>). The CI in the UI repo pushes :<branch> + :<sha>;
+# we track the moving :main here for dev, exactly as character-forge/character-studio
+# and user-ui/wiki-ui do. Pulls need the harbor-registry imagePullSecret
+# (ESO-materialized, manifests/external-secrets).
+#
+# NOTE the repo/image name carries the FULL `hugmesh-superadmin-service-catalog-ui`
+# spelling (docs/ARCHITECTURE.md's repo table), while the in-manifest placeholder is
+# the short `hugmesh/superadmin-service-catalog-ui` — the transform is what joins them,
+# so neither spelling may be "tidied" into the other.
+images:
+  - name: hugmesh/superadmin-service-catalog-ui
+    newName: registry.hugmesh.net/hugmesh/hugmesh-superadmin-service-catalog-ui
+    newTag: main
+patches:
+  - target: { kind: Deployment }
+    patch: |
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: harbor-registry

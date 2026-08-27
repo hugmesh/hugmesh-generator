@@ -595,7 +595,7 @@ implementation on `main`.
 | `hugmesh/hugmesh-owncast-ui` | Owncast console remote (My Stream + admin broadcast grants + mod view) |
 | `hugmesh/hugmesh-tube-ui` | Tube console remote (My Tube + admin access grants + storage budgets) |
 | `hugmesh/hugmesh-api-docs` | Admin-gated remote: browse the platform OpenAPI specs |
-| `hugmesh/hugmesh-superadmin-service-catalog-ui` | Superadmin App-Store / Service Catalog console (tailnet-only, mounted at `/appstore`) |
+| `hugmesh/hugmesh-superadmin-service-catalog-ui` | Superadmin App-Store / Service Catalog console (tailnet-only, mounted at `/superadmin/service-catalog`) |
 | `hugmesh/hugmesh-remote-fragment` | Sync-and-serve-static nginx fleet serving DB-hosted federated fragment bundles |
 | `hugmesh/hugmesh-games` | Godot 4 WASM game studio and portal (runs on the x86_64 GPU worker) |
 | `owncast` / LocalTube (`tube`) | Upstream GPU-dependent video services (per-domain enable, federated per-user remotes) |

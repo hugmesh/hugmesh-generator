@@ -1,0 +1,39 @@
+# hugmesh-superadmin-service-catalog-ui — the SUPERADMIN Service Catalog console
+# (Angular native-federation remote, exposes ./ServiceCatalog), mounted at
+# /superadmin/service-catalog and reachable ONLY over the tailnet
+# superadmin-gateway (apps/22-gateway-superadmin.yaml).
+#
+# NUMBERING — 49d, chosen rather than found: the UI remotes occupy the 45-49 band
+# (45 social-ui, 46 mod-ui, 47 user-ui, 48 api-docs, 49 forum-ui, 49a wiki-ui,
+# 49b character-studio-ui, 49c character-forge-ui), so 49d is the next free suffix
+# in the band this workload belongs to. The file has NO
+# `argocd.argoproj.io/sync-wave` annotation, and that is deliberate rather than an
+# omission: every other UI Application in the band (45-49c) is likewise unwaved and
+# therefore lands in the default wave 0. A static nginx pod has no ordering
+# dependency to express — it does not need a database, a keyspace or a Casdoor role
+# to exist first (contrast apps/22-gateway-superadmin.yaml, which is pinned to wave
+# 2 precisely because starting before the Cassandra keyspace Job is a
+# CrashLoopBackOff, not a slow start).
+#
+# NOT AN OPTIONAL SERVICE: unlike character-forge/character-studio there is no
+# optional-services slug for this console and gate_optional_services() does not prune
+# it. It is part of the superadmin control plane, which the platform always ships;
+# its three tailnet locks (internal-only ingress class, ROLE_SUPERADMIN route-access
+# rows, in-remote Angular superadminGuard) are the boundary, not an install-time gate.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-superadmin-service-catalog-ui
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/superadmin-service-catalog-ui
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

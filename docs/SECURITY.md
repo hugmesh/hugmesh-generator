@@ -50,7 +50,7 @@ Vault-managed mTLS keystore:
 | `forum-bff-db` | `sa-forum-bff-db` | `s0:c52` | (DB) | (non-Java: PEM, no JKS) |
 | `wiki-bff-api` | `sa-wiki-bff` | `s0:c69` | `svc-wiki-bff` / `ROLE_WIKI_API` | `wiki-bff.hugmesh-backend.svc` |
 | `wiki-bff-db` | `sa-wiki-bff-db` | `s0:c68` | (DB) | (non-Java: PEM, no JKS) |
-| `service-catalog-ui` (no Deployment yet — see note) | `sa-service-catalog-ui` | `s0:c49` *(reserved)* | `svc-service-catalog-ui` / `ROLE_SUPERADMIN_UI` | `hugmesh-superadmin-service-catalog-ui.hugmesh-frontend.svc` |
+| `service-catalog-ui` (superadmin Service Catalog console; tailnet-only) | `sa-service-catalog-ui` | `s0:c49` | `svc-service-catalog-ui` / `ROLE_SUPERADMIN_UI` | `hugmesh-superadmin-service-catalog-ui.hugmesh-frontend.svc` |
 | `service-catalog-builder` (Kaniko build pods) | (per-build) | `s0:c54` | (build pod) | (non-Java: no JKS) |
 | `route-access` | `sa-route-access` | `s0:c15` | (DB) | — |
 | `forgejo` (GitOps) | `sa-forgejo` | `s0:c16` | per-app svc user | — |
@@ -90,6 +90,7 @@ Vault-managed mTLS keystore:
 | `backups-status-sweep` (cloud-backup CR-status sweep CronJob) | `backups-sweep` | `s0:c66` | — | (non-Java: no JKS) |
 | coturn (TURN/STUN — optional, default-off) | `sa-coturn` | `s0:c67` | per-app svc user | (non-Java: no JKS) |
 | `edge-ai` (ollama inference — GPU) | per-app SA | `s0:c73` | — | (non-Java: no JKS) |
+| `edge-ai-analysis` (task-oriented analysis API in front of edge-ai — optional, default-off) | per-app SA | `s0:c87` | — | (non-Java: no JKS) |
 | `character-studio` (ui) | per-app SA | `s0:c74` | — | — |
 | `image-builder` (app-image Kaniko build pods) | (per-build) | `s0:c75` | (build pod) | (non-Java: no JKS) |
 | `edge-ai-tts` (Piper TTS) | per-app SA | `s0:c72` | — | (non-Java: no JKS) |
@@ -109,13 +110,23 @@ at bootstrap, and a JKS keystore issued by `gen-keystores.sh`. Each MCS category
 (`s0:cNN`) is **unique** — no two workloads may share one, so a compromised pod
 cannot read another's category-isolated volumes.
 
-> **service-catalog-ui note:** the rebranded `hugmesh-superadmin-service-catalog-ui`
-> currently ships only a federation descriptor
+> **service-catalog-ui note (reservation DISCHARGED 2026-08-26):** this row used to
+> read "no Deployment yet" and mark `s0:c49` *(reserved)* — the console shipped only a
+> federation descriptor
 > (`manifests/federation-api/register-superadmin-service-catalog.descriptor.yaml`),
-> **not** a Deployment. Category `s0:c49` and SA `sa-service-catalog-ui` are
-> **reserved** here so that when its Deployment is added it inherits a
-> non-colliding identity; the Deployment must carry
+> a gateway route and route-access rows, with nothing to serve them. The Deployment +
+> Service now exist (`manifests/superadmin-service-catalog-ui/`) and carry exactly the
+> reserved identity: `serviceAccountName: sa-service-catalog-ui` and
 > `securityContext.seLinuxOptions: { type: container_t, level: "s0:c49" }`.
+>
+> **What that reservation cost while it was only prose:** `s0:c49` was silently taken
+> by `edge-ai-analysis`, whose manifest picked it as "next free" — correctly, by the
+> only evidence available to it, because a reservation with no Deployment is invisible
+> to both a manifest scan and the `[mcs]` uniqueness gate (which compares *workloads*).
+> The clash surfaced the moment the Deployment was written, and `edge-ai-analysis`
+> was moved to `s0:c87`. The durable fix is not the renumber, it is that
+> `edge-ai-analysis` had **no row in this matrix at all** — an unlisted workload
+> cannot be avoided. Anything holding a category must appear above.
 
 > **`cassandra` MCS note:** category `s0:c63` is injected via the bitnami
 > cassandra 12.3.11 chart's **supported** `podSecurityContext.seLinuxOptions`
