@@ -359,6 +359,7 @@ jobs:
             tests/scripts/test-x86-artifact-integrity.sh
             tests/stack/test-mfa-flip-wiring.sh
             tests/stack/test-patch-stack-src.sh
+            tests/workload-console/test-console-posture-and-inventory.sh
             tests/workload-console/test-workload-console.sh
           "
           # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
