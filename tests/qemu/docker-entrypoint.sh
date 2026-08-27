@@ -255,24 +255,57 @@ reown() {
 }
 trap reown EXIT
 
+# json_str VALUE — VALUE as a JSON string literal, backslash escaped FIRST and
+# then the quote (the other order double-escapes the backslashes it just
+# inserted). Bash substitution rather than sed, because an EMPTY value here is
+# routine, not hypothetical: "board" is "" for every platform except the
+# multi-board ARM ones, and "qmp" is "" whenever --qmp was not passed. Piping ""
+# into sed feeds it ZERO lines, so `s/^/"/` never runs and the field comes out
+# bare — `"board": ,` — which is not JSON, and the Studio drops records it
+# cannot parse. Substitution has no such edge and forks nothing.
+#
+# DEFINED HERE, ABOVE emit_result, ON PURPOSE (2026-08-26). It used to sit ~50
+# lines further down, next to write_device_record, its only caller. emit_result
+# now calls it too, and emit_result is reachable from die() — which is armed
+# from the top of this file, long before any later definition would exist. A
+# json_str called before it is defined is not a loud failure: the prologue is
+# `set -uo pipefail` with NO -e, so `$(json_str ...)` inside the heredoc would
+# print "command not found" to stderr and substitute NOTHING, leaving
+# `"label": ,` on disk — the exact unparseable-record shape this helper exists
+# to prevent. Keep this block above emit_result.
+json_str() {
+    local s="${1:-}"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    printf '"%s"' "${s}"
+}
+
 # emit_result STATUS DETAIL [PASS] [FAIL] — one machine-readable row per run, so
 # the Studio can render the matrix without scraping console text.
 emit_result() {
     local status="$1" detail="${2:-}" pass="${3:-0}" fail="${4:-0}"
     mkdir -p "${RESULT_DIR}" 2>/dev/null || true
+    # EVERY string field goes through json_str — none of them is guaranteed to be
+    # JSON-safe. --label is operator input (the Studio's per-device Start passes
+    # it verbatim) and "image" is a PATH: one double quote or one backslash in
+    # either wrote a row no parser accepts, and the Studio renders an unparseable
+    # row as '?' — a silent failure that looks like a harness that never ran.
+    # "detail" was the only escaped field, and by sed, which has the empty-value
+    # hole json_str was written for: an empty detail pipes ZERO lines into sed,
+    # `s/^/"/` never fires, and the field comes out bare as `"detail": ,`.
     cat > "${RESULT_JSON}" <<EOF
 {
-  "label": "${LABEL}",
-  "platform": "${PLATFORM}",
-  "board": "${BOARD}",
-  "role": "${ROLE}",
-  "mode": "${MODE}",
-  "status": "${status}",
-  "detail": $(printf '%s' "${detail}" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/'),
+  "label": $(json_str "${LABEL}"),
+  "platform": $(json_str "${PLATFORM}"),
+  "board": $(json_str "${BOARD}"),
+  "role": $(json_str "${ROLE}"),
+  "mode": $(json_str "${MODE}"),
+  "status": $(json_str "${status}"),
+  "detail": $(json_str "${detail}"),
   "assertions_passed": ${pass},
   "assertions_failed": ${fail},
-  "image": "${IMG}",
-  "started_at": "${STARTED_AT}",
+  "image": $(json_str "${IMG}"),
+  "started_at": $(json_str "${STARTED_AT}"),
   "duration_s": $((SECONDS - START_S))
 }
 EOF
@@ -303,20 +336,6 @@ host_path() {
         "${WORK}"/*) printf '%s\n' "${HOST_WORK}/${p#"${WORK}"/}" ;;
         *)           printf '%s\n' "${p}" ;;
     esac
-}
-
-# Same escape ORDER as emit_result's detail (backslash first, then quote) but
-# done with bash substitution rather than sed, because an EMPTY value here is
-# routine, not hypothetical: "board" is "" for every platform except the
-# multi-board ARM ones, and "qmp" is "" whenever --qmp was not passed. Piping ""
-# into sed feeds it ZERO lines, so `s/^/"/` never runs and the field comes out
-# bare — `"board": ,` — which is not JSON, and the Studio drops records it
-# cannot parse. Substitution has no such edge and forks nothing.
-json_str() {
-    local s="${1:-}"
-    s="${s//\\/\\\\}"
-    s="${s//\"/\\\"}"
-    printf '"%s"' "${s}"
 }
 
 # write_device_record STATE — booting|running|assertions|stopped
@@ -1204,7 +1223,20 @@ emit_assertion_verdict() {
     # past both emit_result calls — leaving the row's PREVIOUS result JSON on
     # disk to be reported as this run's.
     PASSED="$(grep -oE 'RESULT: [0-9]+ passed' "${log}" 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
-    FAILED="$(grep -oE '[0-9]+ failed'          "${log}" 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
+    # ANCHORED TO THE RESULT LINE, exactly like PASSED one line above. It used to
+    # be a bare '[0-9]+ failed' over the WHOLE log, which is not the verdict —
+    # it is the first thing anywhere in the guest transcript that happens to read
+    # "<n> failed", and a golden run's log is full of them: `rc-status` prints
+    # "0 failed" service lines, systemd/OpenRC summaries and dmesg tails print
+    # their own counts, and every one of those sorts BEFORE the verdict line the
+    # log ends with. The scraped number then had nothing to do with the
+    # assertions, and it is the number the Studio's FAIL column shows and the
+    # number a reviewer reads when triaging a red row — a run with 12 real
+    # failures reported as "0 failed" next to a FAIL status, or a clean run
+    # reported with a fabricated failure count. assertions.sh:366 prints the one
+    # line that counts: '== RESULT: ${PASS} passed, ${FAIL} failed =='.
+    FAILED="$(grep -oE 'RESULT: [0-9]+ passed, [0-9]+ failed' "${log}" 2>/dev/null \
+              | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+' | head -1 || true)"
     if [ "${ARC}" -eq 0 ] && ! grep -q '== RESULT:' "${log}" 2>/dev/null; then
         # THE VERDICT LINE IS PART OF THE CONTRACT. assertions.sh is STREAMED
         # into `bash -s`, so anything in it that reads stdin can eat the rest of
