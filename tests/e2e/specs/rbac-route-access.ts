@@ -99,6 +99,16 @@ export const ROUTE_ACCESS: RouteRule[] = [
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/provision/**',   role: 'ROLE_USER' },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/me/**',          role: 'ROLE_USER' },
   { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/admin/**',       role: 'ROLE_ADMIN' },
+  // The superadmin console AT THE FRONT DOOR (2026-08-26). The fe-gateway routes
+  // /bff/** to the admin-bff but had NO /bff/superadmin row, so every shipped
+  // admin-ui superadmin page (backing-services, fleet-entitlements, phone-devices,
+  // the desktop dials, the superadmin half of the workload console) default-denied.
+  // The rows that existed lived on hugmesh-be-gateway, which routes no /bff path at
+  // all — governance and routing had drifted apart in opposite directions. Mirrors
+  // the seed row in manifests/route-access/initdb/20-schema.sql. NB it is MORE
+  // specific than /bff/admin/** above and does NOT down-cascade to ROLE_ADMIN:
+  // superadmin is a sibling tier, not a superset admin inherits.
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/superadmin/**', role: 'ROLE_SUPERADMIN' },
 
   // superadmin-gateway — TAILNET-ONLY infra control plane (apps/22-gateway-superadmin.yaml).
   // Every row here is ROLE_SUPERADMIN; there is NO down-cascade row for ROLE_ADMIN,
@@ -111,8 +121,20 @@ export const ROUTE_ACCESS: RouteRule[] = [
 
 /** Translate a Spring path pattern (`/a/**`, `/a/b`) into a matcher + a
  *  specificity score (longer literal prefix = more specific, an exact path beats
- *  a `/**` glob). Mirrors Spring's most-specific-pattern-wins. */
-function patternMatch(pattern: string, path: string): { matched: boolean; specificity: number } {
+ *  a `/**` glob). Mirrors Spring's most-specific-pattern-wins.
+ *
+ *  EXPORTED for cross-model verification (2026-08-26). This function is the repo
+ *  ORACLE for "most specific wins", and tests/scripts/test-superadmin-bff-
+ *  reachability.sh transcribes it into Python to reason about the full
+ *  20-schema.sql table (which is larger than the mirror below). A transcription
+ *  that is never executed against its source drifts silently: the first cut of
+ *  that suite scored a glob as `literalPrefixLen * 2` where THIS function scores
+ *  `prefix.length * 2` after stripping `/**`, which is the same for glob-vs-glob
+ *  but INVERTS exact-vs-glob — and `/api/federation/vanity` vs
+ *  `/api/federation/vanity/**` is exactly that collision, live in the seed today.
+ *  §12 of that suite now imports this symbol and asserts the two agree, so the
+ *  export is load-bearing: do not un-export it. */
+export function patternMatch(pattern: string, path: string): { matched: boolean; specificity: number } {
   if (pattern.endsWith('/**')) {
     const prefix = pattern.slice(0, -3);           // strip /**
     // Spring `/**` matches the prefix itself or any `/`-delimited subpath — it

@@ -200,9 +200,83 @@ if command -v python3 >/dev/null; then
     python3 - "${_b}" "${REPO}/specs/cluster/manifests/route-access/initdb/20-schema.sql" <<'PY'
 import collections, re, sys
 bld, sql = (open(p, encoding="utf-8").read() for p in sys.argv[1:3])
+
+
+def strip_sql_comments(text):
+    """Drop `--` comments before ANY row is matched.
+
+    2026-08-26: this sweep read the RAW file, and 20-schema.sql documents its rows
+    in `--` prose that quotes row tuples VERBATIM. The note added above the new
+    hugmesh-fe-gateway '/bff/superadmin/**' row spells out
+
+        ('hugmesh-fe-gateway','/bff/superadmin/workloads/**','ROLE_SUPERADMIN',false)
+
+    as the deny row an operator would add to restore the tailnet-only posture for
+    the workload console's dangerous tier. The regex below happily parsed that
+    SUGGESTION as a live grant and reported "'/bff/superadmin/workloads/**' still
+    granted on hugmesh-fe-gateway — that case never cleans it there" against BOTH
+    builders. No such row exists; a comment had forged one.
+
+    This is the same defect shape that has inverted four other checks in this repo,
+    only in the false-POSITIVE direction, which is just as corrosive: a gate that
+    cries wolf about a row nobody wrote teaches people to ignore it. The scanner is
+    character-wise rather than a regex because `--` inside a single-quoted literal
+    is data, not a comment (no url_pattern contains one today; one legitimately
+    could).
+    """
+    out = []
+    i, n = 0, len(text)
+    in_str = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == "'":
+                if i + 1 < n and text[i + 1] == "'":   # '' escape
+                    out.append(text[i + 1])
+                    i += 2
+                    continue
+                in_str = False
+            i += 1
+            continue
+        if c == "'":
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "-" and i + 1 < n and text[i + 1] == "-":
+            j = text.find("\n", i)
+            i = n if j < 0 else j                      # keep the newline
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+sql_code = strip_sql_comments(sql)
+if len(sql_code) >= len(sql):
+    print("         the SQL comment stripper removed NOTHING from a file that is "
+          "mostly `--` prose — it is a no-op and this sweep would read comments "
+          "as rows")
+    sys.exit(2)
+# ONLY `allow = true` rows count as a GRANT that could outlive its service.
+# 2026-08-26: 20-schema.sql gained an explicit DENY row
+# ('hugmesh-fe-gateway','/bff/superadmin/games-services/**','ROLE_SUPERADMIN',false)
+# — a WALL that keeps the games app-store control plane off the public front door
+# whether or not the slug is selected. This sweep keys on the PATH and unions the
+# gateways that carry it, so a two-column read counted that wall as a grant and
+# reported "still granted on hugmesh-fe-gateway — that case never cleans it there".
+# A gate that demands a service's own DENY row be deleted is worse than no gate.
 rows = collections.defaultdict(set)
-for gw, path in re.findall(r"\(\s*'([^']+)'\s*,\s*'([^']+)'", sql):
-    rows[path].add(gw)
+denies = collections.defaultdict(set)
+for gw, path, _role, allow in re.findall(
+        r"\(\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*(true|false)\s*\)",
+        sql_code):
+    (rows if allow == "true" else denies)[path].add(gw)
+if not rows:
+    print("         the 4-column row regex matched NOTHING — the seed's row shape "
+          "changed and this sweep would report every dropped path as clean")
+    sys.exit(2)
 drops = collections.defaultdict(set)
 for gw, blob in re.findall(
         r"_opt_drop_rows\s+\"[^\"]+\"\s+(\S+)\s*\\?\s*\n?\s*((?:'[^']*'\s*)+)", bld):
@@ -215,7 +289,14 @@ gaps = {p: sorted(rows.get(p, set()) - g) for p, g in drops.items() if rows.get(
 for p, gws in sorted(gaps.items()):
     print("         '%s' still granted on %s — that case never cleans it there"
           % (p, ", ".join(gws)))
-print("         swept %d dropped path(s) against %d schema path(s)" % (len(drops), len(rows)))
+walled = sorted(p for p in drops if denies.get(p))
+for p in walled:
+    print("         (not a gap) '%s' also carries an explicit DENY row on %s — a "
+          "wall, not a grant, so it is exempt from the coverage requirement"
+          % (p, ", ".join(sorted(denies[p]))))
+print("         swept %d dropped path(s) against %d granted schema path(s) "
+      "(+%d path(s) carrying an explicit deny)"
+      % (len(drops), len(rows), len(denies)))
 sys.exit(1 if gaps else 0)
 PY
     _rc=$?

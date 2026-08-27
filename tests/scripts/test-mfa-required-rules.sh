@@ -1924,11 +1924,25 @@ nd "the runbook's scope-boundary query narrowed back to LIKE '/bff/%admin%' (ret
 anchor(a)
 s = s.replace(a, "      AND url_pattern LIKE %s" % repr("/bff/%admin%"), 1)'
 
+# 2026-08-26: the runbook's verify query gained `allow = true` — the same predicate
+# the flip UPDATE uses — because 20-schema.sql now carries an explicit DENY row under
+# /bff/superadmin% (the games app-store wall), which the flip correctly leaves at
+# mfa_required=false. Without the clause the query returned that row and the block's
+# "expect=flipped" contract failed. The anchor tracks the live text; if it stops
+# matching, this control fails LOUDLY (its own precondition check) rather than
+# silently proving nothing.
 nd "the runbook's verification query silently widened to every row" DOC_SQL_BAD 0 \
-   'a = "    WHERE url_pattern LIKE %s\n       OR url_pattern LIKE %s" % (
+   'a = "    WHERE allow = true\n      AND (url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
     repr("/bff/admin%"), repr("/bff/superadmin%"))
 anchor(a)
 s = s.replace(a, "    WHERE 1 = 1", 1)'
+
+nd "the runbook's verification query drops its allow = true clause (the DENY rows come back and read as a failed rollout)" DOC_SQL_BAD 0 \
+   'a = "    WHERE allow = true\n      AND (url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
+    repr("/bff/admin%"), repr("/bff/superadmin%"))
+anchor(a)
+s = s.replace(a, "    WHERE url_pattern LIKE %s\n       OR url_pattern LIKE %s" % (
+    repr("/bff/admin%"), repr("/bff/superadmin%")), 1)'
 
 nd "the runbook's quoted UPDATE drifts from the seed's real one (per-domain arm dropped from the doc)" DOC_SQL_BAD 0 \
    'a = "\n     OR (COALESCE(NULLIF(lower(trim(domain)), %s), %s) <> %s\n         AND url_pattern IN (%s)))\n   AND mfa_required IS DISTINCT FROM true;" % (repr("default"), repr(""), repr(""), repr(""))

@@ -562,12 +562,21 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
    ```sql
    SELECT gateway, url_pattern, role, mfa_required
      FROM gateway_route_access
-    WHERE url_pattern LIKE '/bff/admin%'
-       OR url_pattern LIKE '/bff/superadmin%'
+    WHERE allow = true
+      AND (url_pattern LIKE '/bff/admin%'
+        OR url_pattern LIKE '/bff/superadmin%')
     ORDER BY 1, 2, 3;
    ```
 
-   Expect the 9 rows in §1.2 at `true`, and nothing else.
+   Expect every row in §1.2 at `true`, and nothing else. The `allow = true` clause
+   is not cosmetic — it is the **same predicate the flip `UPDATE` uses**. Without
+   it this query also returns the seed's explicit DENY rows under those prefixes
+   (`hugmesh-fe-gateway` `/bff/superadmin/games-services/**`, which keeps the
+   optional games app-store control plane off the public front door), and those are
+   correctly left `mfa_required = false`: a deny row denies at the longest match
+   regardless of MFA, so flipping one would be noise. An operator reading an
+   un-filtered result would see a `false` under a "fully flipped" prefix and think
+   the rollout had failed.
 
    To see the **scope boundary** instead — the 9 gated rows *and* the six §1.2a
    rows that are `false` by design — use this, which is the same admin-ish
