@@ -78,7 +78,7 @@ registry is that missing list). Each service entry carries:
 | `esoFile` | its **per-service** ExternalSecret file (post-split; see §9) |
 | `gatewayHost` / `gatewayRouteIds` | its public host + the gateway route ids to drop |
 | `routeAccessRows` | the `gateway_route_access` rows it owns (dropped so a matched route to a deleted upstream cannot 502 / stale-grant) |
-| `federationModule` | the `federation_modules` registration (federation-api wave) |
+| `federationModule` | the `federation_modules` registration. **`federationModule.slug` is now READ at build time** by `_opt_render_federation_modules()` in the shared `scripts/_optional-services-lib.sh` (both stage4 builders source it) — it is the catalogue-slug → module-slug map (the mapping is **not** 1:1: `phpbb` → `forum`), and it renders `manifests/federation-modules-gate/sql/gate.sql`. See §3.1 |
 | `casdoorSeed` | a dedicated Casdoor it owns (games → `casdoor-games`) |
 | `deliveryManifestPath` / `deliveryApp` | (node slugs) a SECOND, dark manifest tree + its MANUAL-sync Application that delivers runtime bytes to the node — `egress-vpn` uses it for the secret-projector (`manifests/egress-vpn` + `apps/13e-egress-vpn.yaml`); pruned with the slug like `manifestPath` |
 | `secretContract` | (node slugs) the file that OWNS the cross-lane delivery contract. When present, the three fields below are **copies** of it and lose every argument to it |
@@ -91,6 +91,73 @@ parameterized files) — see §5.
 **Rule:** edit `optional-services.yaml`, the generator derives the build-time
 prune, the runtime `installed-services` ConfigMap, and (in the federation wave)
 the `federation_modules` seed.
+
+## 3.1 Build-time: the `federation_modules` half (menu visibility)
+
+**What was observed (2026-08-26).** A USB built with `--exclude-services akkoma`
+pruned akkoma's Application, manifests, gateway routes and route-access rows,
+rendered `installed: "false"` into **both** the installed-services ConfigMap and
+the `apps/13a-optional-services.yaml` element — and the host shell **still**
+rendered the Mastodon menu entry, reporting `installed=true`.
+
+**Why.** The host shell bootstraps its install-state from the public
+`GET /api/federation/capabilities` projection (§10), which is built from
+`federation_modules` rows — not from the ConfigMap. Every registration is an
+**unconditional** Liquibase changeset seeding `enabled = true`, so the build-time
+selection had no say at all. The `federationModule` field that names each
+service's module slug existed in `optional-services.yaml` and **nothing read it**.
+
+**The fix, and why it is a post-seed UPDATE rather than a changeset.** The
+registration changesets (`022`/`023`/`024`/`025`/`031`/`033` + the `character-*`
+ones) live in the **separate `hugmesh-federation-api` repo**, so the generator
+can neither add one nor safely edit one — editing an **applied** changeset breaks
+Liquibase's checksum on every existing mesh. The generator therefore renders a
+post-seed UPDATE into the GitOps tree it does own:
+
+* `manifests/federation-modules-gate/sql/gate.sql` — one
+  `UPDATE federation_modules SET enabled = <bool> WHERE slug = '<module>';` per
+  gated module, rewritten by `_opt_render_federation_modules()` from the resolved
+  `OPTIONAL_SERVICES`. Committed values are the registry's `default: on|off`
+  baseline, so an unrendered tree still says something true.
+* `manifests/federation-modules-gate/job.yaml` — an ArgoCD `PostSync` hook Job
+  (`hook-delete-policy: BeforeHookCreation`, so a re-rendered gate.sql is actually
+  applied) running `psql` as the least-privilege `federation_app` role.
+* `apps/29b-federation-modules-gate.yaml` — sync-wave `"3"`, after federation-db
+  (wave 1) and hugmesh-federation-api (wave 2, which runs the changelog at boot).
+  Waves cannot wait on another pod's startup work, so the SQL `RAISE`s while the
+  table is absent and the Job's `backoffLimit` retries.
+
+This is the **same shape** the local-mesh lane already uses: leg 4 of
+`tests/stack/seed-e2e.sh` UPDATEs these exact rows from the Studio's
+`HUGMESH_FEDERATION_ENABLE` / `_DISABLE` pair.
+
+> ⚠ **THE BUILD-TIME RENDER IS INERT ON A DEVICE TODAY — this lands the mechanism
+> and the guard, not the fixed behaviour.** `apps/29b-federation-modules-gate.yaml`
+> pins `repoURL: https://github.com/hugmesh/hugmesh-generator.git` +
+> `targetRevision: main`, and `specs/cluster/bootstrap/bootstrap.sh` rewrites that
+> literal into **`app-of-apps.yaml` only** — the single file it pipes to `kubectl`.
+> It does not rewrite child Applications; only the kind-local `bootstrap-kind.sh`
+> does. So ArgoCD's repo-server clones GitHub `main` and kustomize-generates the
+> ConfigMap from the **committed** `gate.sql`, never from the USB's rendered copy:
+> a USB built with `--exclude-services akkoma` bakes `enabled = false` into
+> `${SYSROOT}/var/lib/hugmesh/cluster/...` and the cluster still applies
+> `enabled = true`. **The observed bug is therefore not yet fixed on a device**, UI
+> half included. Closing it needs the gate's Application to source the device's
+> baked tree (the shape `fix/device-syncs-pruned-apps` is taking for `apps/`).
+> Leg 4c of the gate suite asserts this **both ways**, so the sentence cannot
+> quietly become false in either direction.
+>
+> ⚠ **And even then: UI half only.** Flipping `enabled` hides the **menu entry**.
+> The deselected service's Deployment keeps running. The workload half needs the
+> device to sync from a **pruned** tree, which it also does not do today
+> (`bootstrap.sh` applies only `app-of-apps.yaml`, whose root Application syncs
+> `specs/cluster/apps` from `github.com/hugmesh/hugmesh-generator@main` with
+> `recurse:true`). Do not read a green gate Job as "only selected services start".
+
+Gate: `tests/federation/test-federation-modules-selection.sh` (sources the real
+renderer as **both** stage4 builders resolve it (one shared library, no per-builder copy); asserts post-conditions on the rendered
+`gate.sql`, never the renderer's exit code; behavioural legs against a live
+federation-db/capabilities endpoint skip **loudly** when no stack is up).
 
 ## 3. Build-time: select services on a USB
 

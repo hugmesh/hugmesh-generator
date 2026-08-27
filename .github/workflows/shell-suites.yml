@@ -186,6 +186,7 @@ jobs:
             tests/egress-vpn/test-vpn-mark.sh
             tests/egress-vpn/test-vpn-secret-projector.sh
             tests/egress-vpn/test-x86-role-gate.sh
+            tests/federation/test-federation-modules-selection.sh
             tests/go-live/test-go-live-driver.sh
             tests/go-live/test-go-live-reconcile-verify.sh
             tests/keystores/test-keystores-external-ca.sh

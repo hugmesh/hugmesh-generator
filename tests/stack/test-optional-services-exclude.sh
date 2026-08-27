@@ -82,8 +82,17 @@ opt_gate_load "${BUILDER}" _opt_selected _opt_explicitly_deselected _opt_anubis_
           _opt_drop_kustomize_line _opt_drop_route _opt_drop_extrahost _opt_drop_rows \
           _opt_fix_trailing_comma _opt_wire_anubis_ingress _opt_render_appset_flag \
           _opt_render_installed_services _opt_set_cr_enabled _opt_render_optionalservice_cr \
+          _opt_federation_module _opt_gate_sql_value _opt_render_federation_modules \
           gate_optional_services || exit 1
 ok "loaded the real gate + helper functions as build-rpi5-stage4.sh resolves them"
+# _opt_render_optionalservice_cr + _opt_render_federation_modules are loaded too,
+# not because THIS suite asserts on them (their own gates do — tests/federation/
+# test-federation-modules-selection.sh for the federation half), but because
+# gate_optional_services CALLS them: without the definitions every run printed
+# "command not found" to stderr while still reporting 0 failed, which is the exact
+# shape of a suite that looks gateable and is quietly running less code than it
+# claims. Both return 0 immediately when their artefact is absent from this
+# sandbox tree, so the assertions below are unchanged.
 
 # ── PREFLIGHT: python3 + PyYAML are MANDATORY here, not optional ─────────────
 # This suite used to `echo "  SKIP registry assertion (no python3)"` and carry on.
