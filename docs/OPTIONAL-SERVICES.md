@@ -522,6 +522,15 @@ still-present hardcoded `apps/30-akkoma.yaml` (Application `akkoma`).
 
 ## 7.2. Workload Console (`workloadConsole`): the three OFFs & the flip order
 
+> **Trying to see stats, or which versions are running?** The three OFFs below are
+> **four gates** in practice — the DB master flag and the per-admin grant are separate
+> rows in separate tables with separate lifetimes, and flipping only the flag shows an
+> operator exactly as much as flipping nothing. Run
+> `scripts/workload-console-posture.sh` to see which of the four are open, and read
+> [`WORKLOAD-CONSOLE-STATS-AND-VERSIONS.md`](WORKLOAD-CONSOLE-STATS-AND-VERSIONS.md)
+> for why the version question has no usable answer today (31 of 31 first-party image
+> refs are the moving tag `:main`; the resolved digest is dropped by the projection).
+
 The Workload Console (the `/bff/{admin,superadmin}/workloads/**` pod console inside
 the always-present admin-bff) **ships dark behind three INDEPENDENT OFFs**. Each one
 alone keeps the console unusable; lighting it is a deliberate, ordered act:

@@ -197,7 +197,28 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # +1 gated, +1 total: the branch's single new suite is named by shell-suites.yml, so it
 # lands GATED and does not belong in PREMERGE_UNGATED -- which is why that list is
 # unchanged at 21 and check 7's set assertion stayed green across this merge.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-147}"
+#
+# 147 -> 148, denominator 168 -> 169, when feat/workload-console-versions landed. This
+# branch has now written three numbers into this line: 144 of 165, then 147 of 168, and
+# 148 of 169 here. Each was measured and each was correct about the tree in front of it.
+#
+# THE PREVIOUS ENTRY IS THE WORKED EXAMPLE, so it is left standing above rather than
+# tidied away. When this branch measured 147/168, feat/appstore-effector-enable ALSO sat
+# at 147/168 -- both add exactly one gated suite to a main at 146/167, so both were right
+# and the two were mutually exclusive. That branch landed first, main became 147/168, and
+# this one had to be re-measured at 148/169. The prediction was written into this file
+# before it happened and is what made the re-measure routine instead of a surprise.
+#
+# Main's side is taken WHOLESALE rather than line-wise, and both comment blocks are kept
+# as a union, for the reasons the entries above give: main's half carries the
+# PREMERGE_UNGATED set-pin that older branch halves predate, so a line-wise keep would
+# delete that mechanism while looking like a number change.
+#
+# MEASURED on the integrated tree by running this file and reading the line it prints:
+#     148 of 169 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total: this branch's suite is named by shell-suites.yml, so it lands GATED
+# and never enters PREMERGE_UNGATED, which stays 21.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-148}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a

@@ -244,6 +244,11 @@ _As of 2026-08-05. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   restricted to a read-only first-token allowlist, port-forward to a curated
   app-tier triple list, and namespaces to an allowlist that mirrors the RBAC
   bindings. See [`docs/OPTIONAL-SERVICES.md`](docs/OPTIONAL-SERVICES.md) §7.2.
+  **For "how do I see stats / which versions are running?"** — the four gates
+  counted separately, the exact order to open them, and the missing aggregate
+  version surface — see
+  [`docs/WORKLOAD-CONSOLE-STATS-AND-VERSIONS.md`](docs/WORKLOAD-CONSOLE-STATS-AND-VERSIONS.md),
+  and read your own posture with `scripts/workload-console-posture.sh`.
 - **✅ Games App-Store control plane**, **✅ Device-license registry** (per-node
   sshd obeys the signed export), **✅ Superadmin Service Catalog** (data layer +
   tailnet superadmin-gateway + Kaniko builder, ships dark), **✅ Pen-test CI**
