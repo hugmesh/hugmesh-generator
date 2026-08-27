@@ -30,7 +30,7 @@ emulation). Pass `--keep` and SSH in to drive a real `kubeadm init` manually.
 sudo emerge -av \
     app-emulation/qemu \      # USE="qemu_softmmu_targets_aarch64"
     sys-fs/dosfstools \       # mkfs.vfat
-    sys-fs/e2fsprogs          # mkfs.ext4
+    sys-fs/e2fsprogs          # mkfs.ext4 (>= 1.43, for -d) + debugfs
 # mtools is optional (lets make-test-keys.sh build the FAT image without root)
 ```
 
@@ -43,7 +43,10 @@ Ensure QEMU is built with the aarch64 system target
 # 1. Build an image first (kernel must be built — do NOT pass --skip-kernel)
 ./build-rpi5-stage4.sh --role pki
 
-# 2. Run the test (root: it loop-mounts and extracts a stage4 with xattrs)
+# 2. Run the test. Root is needed to extract a stage4 with its ownership and
+#    security.* xattrs intact — NOT for a loop mount: since 2026-08-26 the
+#    rootfs is populated with `mkfs.ext4 -d`, so stage4 mode takes no loop
+#    device and holds no mount for the boot+assert window.
 sudo ./tests/qemu/run-qemu-test.sh --role pki
 ```
 
@@ -82,6 +85,7 @@ mesh code cut out (pinned that way in `mesh-cluster_test.sh`).
 | `avc-workload.sh` | The in-guest probe list (one probe per workload the `specs/selinux/*.te` modules confine; presence-gated = role-appropriate). |
 | `avc-report.sh` | Groups a raw AVC harvest by source type → the owning `specs/selinux/*.te` (hermetic text processing). |
 | `avc-workout_test.sh` | Hermetic tests + mutation legs for the whole workout lane (nothing boots; also run by `check.sh`'s smokes). |
+| `stage4_rootfs_test.sh` | Hermetic tests + mutation legs for the stage4 rootfs lane: `build_rootfs()` driven against fixture tarballs with `mount`/`umount`/`losetup` stubbed to fail loudly, and `assertions.sh`'s rootfs-is-labelled precondition (nothing boots, no root; also run by `check.sh`'s smokes). |
 
 ## 3-node emulated k8s cluster (`mesh-cluster.sh`, issue #48)
 
