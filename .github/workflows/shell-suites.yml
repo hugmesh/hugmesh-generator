@@ -122,6 +122,14 @@
 #       Run it after `make kind-up` (or `make kind-metrics-check`). Its OFFLINE
 #       half — the whole selection channel — IS gated, as
 #       tests/scripts/test-kind-addon-channel.sh.
+#   * tests/scripts/test-federation-module-slugs.sh
+#       leg A runs the federation_modules registration gate against the REAL
+#       hugmesh-federation-api Liquibase changelog, which is a sibling checkout this
+#       workflow does not have; with it absent the suite reports leg A UNVERIFIED and
+#       exits 3 (its hermetic mutation legs still all pass). That is the honest answer
+#       and not a gateable one, so it gates on GitLab instead
+#       (lint:federation-module-slugs-gate-honesty clones the sibling first). Same
+#       shape and same reason as tests/egress-vpn/test-secret-contract.sh above.
 #   * tests/pentest/nuclei/test-templates.sh
 #       RED on issue #146; also needs a pinned nuclei v3.9.0 the CI images do not
 #       carry. #157 may already have fixed it (the failing check was a

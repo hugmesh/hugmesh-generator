@@ -208,9 +208,17 @@ PY
         bad "edge-ai has federationModule: null but the parser returned '$(_opt_federation_module "${REG}" edge-ai)'"
     fi
     # Both spellings: akkoma is the inline flow map, character-forge is the block form.
-    if [ "$(_opt_federation_module "${REG}" akkoma)" = "akkoma" ] &&
+    # akkoma's module is `mastodon`, NOT `akkoma`. This assertion used to read
+    # akkoma -> "akkoma" and passed only because the registry itself was wrong (fixed
+    # in the five-row federationModule correction). An identity mapping is the WEAKEST
+    # possible case for a mapping parser -- catalogue and module being the same string
+    # means a parser that returns its own input scores a PASS. So pin the NON-IDENTITY
+    # explicitly: if this ever collapses back to akkoma -> akkoma, that is the registry
+    # regressing, not the parser working.
+    if [ "$(_opt_federation_module "${REG}" akkoma)" = "mastodon" ] &&
+       [ "$(_opt_federation_module "${REG}" akkoma)" != "akkoma" ] &&
        [ "$(_opt_federation_module "${REG}" character-forge)" = "character-forge" ]; then
-        ok "both registry spellings parse (inline flow map + multi-line block)"
+        ok "both registry spellings parse (inline flow map + multi-line block), and akkoma maps NON-identically to mastodon"
     else
         bad "one of the two federationModule spellings does not parse"
     fi
@@ -456,12 +464,21 @@ esac
 # ENABLED — a read-back stub that always answers "true" would still look correct on
 # a disabled slug, and would sail through the disabled case.)
 seed_tree "anchorless"
-sed -i "/WHERE slug = 'akkoma';/d" "$(gate_file)"
+# Delete the line by its MODULE slug, DERIVED -- not by the catalogue slug. gate.sql is
+# keyed on the module (`mastodon`), and akkoma's module is not `akkoma`. Hardcoding the
+# catalogue slug here made this sed delete NOTHING once the registry was corrected: the
+# anchor stayed present, the renderer succeeded, and this negative control silently
+# stopped being one. A control that cannot fail is worse than no control.
+_anchorless_mod="$(_opt_federation_module "${REG}" akkoma)"
+[ -n "${_anchorless_mod}" ] || { echo "  FAIL could not derive akkoma's module slug — this control would be vacuous"; F=$((F+1)); }
+sed -i "/WHERE slug = '${_anchorless_mod}';/d" "$(gate_file)"
+grep -q "WHERE slug = '${_anchorless_mod}';" "$(gate_file)" \
+    && { echo "  FAIL the anchor deletion did not take — the control below proves nothing"; F=$((F+1)); }
 export OPTIONAL_SERVICES="akkoma tuwunel"
 out="$(_opt_render_federation_modules 2>&1)"
 case "${out}" in
-    *"FAILED to render 'akkoma'"*) ok "an unrenderable anchor is reported by name (the read-back is real, not decorative)" ;;
-    *) bad "gate.sql lost akkoma's line and the renderer said nothing (output: ${out:-<empty>}) — a silent sed no-op" ;;
+    *"FAILED to render '${_anchorless_mod}'"*) ok "an unrenderable anchor is reported by name '${_anchorless_mod}' (the read-back is real, not decorative)" ;;
+    *) bad "gate.sql lost ${_anchorless_mod}'s line and the renderer said nothing (output: ${out:-<empty>}) — a silent sed no-op" ;;
 esac
 
 # ── 4) the delivery path is coherent ───────────────────────────────────────────

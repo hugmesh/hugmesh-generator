@@ -74,9 +74,9 @@ END
 $gate$;
 
 -- ── akkoma (Mastodon) — catalogue slug: akkoma ───────────────────────────────
-UPDATE federation_modules SET enabled = true WHERE slug = 'akkoma';
+UPDATE federation_modules SET enabled = true WHERE slug = 'mastodon';
 -- ── tuwunel (Matrix) — catalogue slug: tuwunel ───────────────────────────────
-UPDATE federation_modules SET enabled = true WHERE slug = 'tuwunel';
+UPDATE federation_modules SET enabled = true WHERE slug = 'matrix';
 -- ── phpBB forum — catalogue slug: phpbb (MODULE slug differs: forum) ─────────
 UPDATE federation_modules SET enabled = true WHERE slug = 'forum';
 -- ── games — catalogue slug: games ────────────────────────────────────────────

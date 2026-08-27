@@ -643,7 +643,7 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             reason and next step: (1) an UNKNOWN slug (a typo);
                             (2) a slug the registry marks "gate: none" —
                             registered, read by nothing anywhere; (3) a slug whose
-                            registry `buildGate:` omits x86 — coturn, meshbridge
+                            registry 'buildGate:' omits x86 — coturn, meshbridge
                             and anubis are RUNTIME-ONLY here (anubis is baked by
                             build-rpi5-stage4.sh only), so they are flipped on a
                             LIVE cluster via the installed-services ConfigMap +

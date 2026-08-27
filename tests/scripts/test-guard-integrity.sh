@@ -87,12 +87,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # merge, not carried over from either side -- the branch itself said 120, main
 # said 130, and neither number is true of the merged tree.
 #
-# 134 -> 139 / denominator 144 -> 150 when main was merged in (it had moved to
-# 135/146 meanwhile via the tube signed-media gate, the fragment route gate and
-# the password-reset front door). BOTH comment blocks above are kept because both
-# record a real reconciliation; neither number is true of THIS tree. MEASURED here
-# by running this file and reading the line it prints:
-#     139 of 150 suites are named by a pull_request-triggered workflow
+# 134 -> 139 / denominator 144 -> 151 across two merges of main (which had moved
+# to 135/146 via the tube signed-media gate, the fragment route gate and the
+# password-reset front door, then to 135/147 via the federation module-slug gate).
+# BOTH comment blocks above are kept because both record a real reconciliation;
+# no branch's number was true of this tree. MEASURED here, by running this file and
+# reading the line it prints:
+#     139 of 151 suites are named by a pull_request-triggered workflow
+# The GATED count did not move on the second merge -- the slug gate lands UNGATED,
+# recorded in PREMERGE_UNGATED below with its reason -- so only the denominator did.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-139}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
@@ -135,6 +138,7 @@ PREMERGE_UNGATED=(
   # kind cluster up but no metrics-server synced it goes RED with 2 failures.
   # See the "NOT LISTED HERE" entry in .github/workflows/shell-suites.yml.
   tests/scripts/test-kind-metrics-api.sh
+  tests/scripts/test-federation-module-slugs.sh
   tests/scripts/test-liquibase-grant-roles.sh
   tests/scripts/test-service-env-contract.sh
   tests/stack/test-gateway-auth-flag-parity.sh

@@ -787,10 +787,15 @@ else
       SYSROOT="${root}"; ENV="test"; OPTIONAL_SERVICES="${sel}"
       # 20-gateway-fe.yaml and the CR seed are deliberately NOT seeded: both callees
       # return 0 on a missing file, so this exercises the render loop alone.
-      opt_gate_load "${BUILDER}" _opt_selected _opt_explicitly_deselected \
-          _opt_anubis_installed _opt_render_appset_flag _opt_wire_anubis_ingress \
-          _opt_set_cr_enabled _opt_render_optionalservice_cr \
-          _opt_render_installed_services || exit 3
+      # DERIVE the whole gate function set instead of naming it. This list was
+      # hand-written and it rotted the moment the 13a cut-over guard landed:
+      # _opt_render_appset_flag calls _opt_appset_cutover_done and
+      # _opt_appset_element_path, neither of which was named here, so both died as
+      # `command not found` -- to stderr, unchecked -- and the render loop then left
+      # the 13a element false while the suite went on reporting a verdict. That is the
+      # third time in this file family that a hand-maintained function list has silently
+      # under-loaded; opt_gate_load_all fails LOUDLY when the derivation yields zero.
+      opt_gate_load_all "${BUILDER}" || exit 3
       _opt_render_installed_services
     )
   }

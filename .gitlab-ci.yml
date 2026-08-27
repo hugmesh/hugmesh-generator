@@ -55,6 +55,56 @@ lint:reserved-prefixes:
   script:
     - bash scripts/validate-reserved-prefixes.sh
 
+# federation_modules REGISTRATION drift gate. optional-services.yaml declares, per
+# optional service, the federation module slug + mountAt + the hugmesh-federation-api
+# Liquibase changeset that seeds the row; every `kind: FederationModuleRegistration`
+# descriptor under manifests/ declares the same shape. Nothing checked that the two
+# sides agree, and on 2026-08-26 they did not: `akkoma` and `tuwunel` were declared as
+# module slugs, but 023/024 seed `mastodon`/`matrix` and no changeset ever seeds an
+# akkoma or tuwunel row — so anything resolving the module by the registry's slug
+# looked it up under a name no row carries, silently (the host shell just never finds
+# the remote; tests/stack/seed-e2e.sh leg 4 logs "no federation_modules row … skipped"
+# and stays green). Three changeset forward-references were also pointing at numbers
+# that had since been taken by unrelated changesets.
+#
+# The changelog lives in ANOTHER repo, so this job clones it — same recipe as
+# lint:reserved-prefixes above, and for the same reason: without it the script exits 3
+# (INCOMPLETE) rather than reporting a green run it did not earn.
+lint:federation-module-slugs:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  variables:
+    FEDERATION_SIBLING_ROOT: "${CI_PROJECT_DIR}/.federation-siblings"
+  before_script:
+    - pip install --quiet pyyaml
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - mkdir -p "${FEDERATION_SIBLING_ROOT}"
+    - git clone --depth 1 "${ORG_BASE}/hugmesh-federation-api.git" "${FEDERATION_SIBLING_ROOT}/hugmesh-federation-api"
+  script:
+    - bash scripts/validate-federation-module-slugs.sh
+
+# Guards THAT guard. Synthesises a changelog FROM the registry (so both sides agree by
+# construction) and then mutates one side at a time — slug drift, a forward reference
+# onto a taken number, a missing <include>, mountAt drift, and BOTH vacuity shapes
+# (deriver yields nothing / declarations derived but none landed). A guard that
+# compares an empty set passes, which is exactly how this class of check dies. Leg A
+# also runs the gate against the real clone, so a green run here is not purely
+# synthetic; without the clone the suite exits 3 (UNVERIFIED), never 0.
+lint:federation-module-slugs-gate-honesty:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  variables:
+    FEDERATION_SIBLING_ROOT: "${CI_PROJECT_DIR}/.federation-siblings"
+  before_script:
+    - pip install --quiet pyyaml
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - mkdir -p "${FEDERATION_SIBLING_ROOT}"
+    - git clone --depth 1 "${ORG_BASE}/hugmesh-federation-api.git" "${FEDERATION_SIBLING_ROOT}/hugmesh-federation-api"
+  script:
+    - bash tests/scripts/test-federation-module-slugs.sh
+
 # Guards the guard: proves validate-reserved-prefixes.sh cannot report a clean
 # PASS when its ReservedNames.java code-copy assertion did not actually run — the
 # silent-skip hole that let a five-label hugmesh-actions drift sit on a "green"
@@ -1048,6 +1098,14 @@ lint:kind-profile-app-closure:
 # python3 (the Studio half is asserted by CAPTURING the env `make` is handed, not
 # by reading the source for the word extra_env), hence python:3-slim + make.
 lint:kind-addon-channel:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends make >/dev/null
+  script:
+    - bash tests/scripts/test-kind-addon-channel.sh
+
 # A curated kind profile must also DEPLOY every in-cluster Service its own applied
 # gateway ROUTES point at. KIND_PROFILE=sso applied apps/20-gateway-fe.yaml — route
 # table included — but never apps/47-user-ui.yaml, so
@@ -1063,9 +1121,6 @@ lint:kind-profile-route-closure:
   image: python:3-slim
   tags: [hugmesh-x86]
   before_script:
-    - apt-get update -qq && apt-get install -y --no-install-recommends make >/dev/null
-  script:
-    - bash tests/scripts/test-kind-addon-channel.sh
     - pip install --quiet pyyaml
     - apt-get update -qq && apt-get install -y --no-install-recommends bash >/dev/null
   script:
