@@ -41,6 +41,17 @@ COVERAGE_DIR="${E2E}/features/coverage"
 CATALOGUE="${E2E}/steps/coverage-catalogue.ts"
 EMITTER="${E2E}/tools/emit-coverage-matrix.ts"
 
+# WHERE THE BROWSER LIVES. Six of this suite's nine e2e siblings already carry
+# this exact line; this one did not, and it is the only one of the nine that both
+# LAUNCHES a browser and left the path to the ambient default. MEASURED at the
+# 2026-08-26 integration on a host whose ~/.cache/ms-playwright holds a chromium
+# for a DIFFERENT playwright: the lane reported "2101 failed" with 2101 copies of
+# "browserType.launch: Executable doesn't exist at .../chromium_headless_shell-1228",
+# i.e. a tooling gap wearing the costume of a total coverage collapse. The default
+# is the same one `make playwright-deps` installs into, and an operator who has set
+# the variable keeps their own value.
+export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/var/tmp/portage/pw-browsers}"
+
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }
 bad() { echo "  FAIL $*"; F=$((F+1)); }

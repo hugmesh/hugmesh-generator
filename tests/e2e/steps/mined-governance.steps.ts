@@ -51,11 +51,17 @@ function list(csv: string): string[] {
   return csv.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
-/** The central TS mirror, in the same shape as a seed row (allow-only by construction). */
+/** The central TS mirror, in the same shape as a seed row.
+ *
+ *  `allow: r.allow` — it was `allow: true` while RouteRule had no allow field and
+ *  every mirror row really was a grant by construction. The generated mirror now
+ *  carries the seed's four allow=false rows, and flattening them to grants made
+ *  this lane report them as four permissions "production never gives" — the
+ *  mirror was right and the reader was wrong. */
 function mirrorRows(): SeedRow[] {
   return ROUTE_ACCESS.map((r) => ({
     gateway: r.gateway, urlPattern: r.urlPattern, role: r.role,
-    allow: true, origin: 'tests/e2e/specs/rbac-route-access.ts',
+    allow: r.allow, origin: 'tests/e2e/specs/rbac-route-access.ts',
   }));
 }
 
@@ -154,8 +160,17 @@ Then('the cluster seed carries an explicit deny row on {string} at gateway {stri
 // ── mirror vs seed ───────────────────────────────────────────────────────────
 
 Then('every central mirror row exists in the cluster seed as an allow row', async ({ world }) => {
+  // GRANTS, so ALLOW rows on BOTH sides. The mirror carries the seed's four
+  // allow=false rows now; a wall is not a claim of access, and comparing one
+  // against the seed's grant list reported the mirror over-granting exactly where
+  // it was faithfully mirroring a refusal.
   const seed = new Set(world.get<SeedRow[]>('seed').filter((r) => r.allow).map(rowKey));
-  const invented = world.get<SeedRow[]>('mirror').map(rowKey).filter((k) => !seed.has(k));
+  expect(seed.size, 'the cluster seed parsed to zero ALLOW rows, so this comparison would be '
+    + 'vacuous').toBeGreaterThan(0);
+  const grants = world.get<SeedRow[]>('mirror').filter((r) => r.allow);
+  expect(grants.length, 'the mirror carries zero ALLOW rows, so this comparison would be '
+    + 'vacuous').toBeGreaterThan(0);
+  const invented = grants.map(rowKey).filter((k) => !seed.has(k));
   expect(
     invented,
     `the TS mirror GRANTS ${invented.length} row(s) the cluster seed does not. A mirror row `
@@ -185,20 +200,31 @@ Then('the central mirror carries every allow row the cluster seed carries', asyn
   ).toEqual([]);
 });
 
-Then('the central mirror cannot express an explicit deny row', async ({ world }) => {
-  // Structural, not a sample: the mirror's row type has no allow/deny field at
-  // all, so every row it holds is an allow by construction. Read the TYPE off
-  // the source rather than trusting the comment above it.
-  const mirror = world.get<SeedRow[]>('mirror');
-  expect(mirror.every((r) => r.allow), 'a mirror row claimed allow=false').toBe(true);
-  const declared = Object.keys(ROUTE_ACCESS[0]);
-  expect(
-    declared,
-    `RouteRule fields: ${declared.join(', ')}. Adding a boolean here is the ONLY way the `
-    + `central oracle could ever model deny-wins; until then every /bff/*/internal/** `
-    + `deny row is unrepresentable and the four explicit denies are untestable centrally.`,
-  ).toEqual(['gateway', 'urlPattern', 'role']);
-});
+Then('the central mirror models every explicit deny row the cluster seed carries',
+  async ({ world }) => {
+    // Structural first, then the sample. The mirror's row TYPE used to have no
+    // allow/deny field at all, which made deny-wins unrepresentable centrally;
+    // this step asserted that limitation so that lifting it would fail here and
+    // name the follow-up. It was lifted — RouteRule carries `allow` — so the
+    // assertion becomes the positive one it was holding the place for.
+    const declared = Object.keys(ROUTE_ACCESS[0]);
+    expect(
+      declared,
+      `RouteRule fields: ${declared.join(', ')}. Without an allow boolean the central `
+      + `oracle cannot model deny-wins at all and every /bff/*/internal/** deny row is `
+      + `unrepresentable.`,
+    ).toEqual(['gateway', 'urlPattern', 'role', 'allow']);
+    const seedDeny = world.get<SeedRow[]>('seed').filter((r) => !r.allow).map(rowKey).sort();
+    const mirrorDeny = world.get<SeedRow[]>('mirror').filter((r) => !r.allow).map(rowKey).sort();
+    expect(seedDeny.length, 'the cluster seed carries NO explicit deny row, so this scenario '
+      + 'would compare two empty lists and prove nothing').toBeGreaterThan(0);
+    expect(
+      mirrorDeny,
+      `the mirror models ${mirrorDeny.length} of the seed's ${seedDeny.length} explicit deny `
+      + `row(s). A deny row the central oracle cannot see is a wall it reports as merely `
+      + `ungranted — which disappears the moment somebody adds an allow row at that pattern.`,
+    ).toEqual(seedDeny);
+  });
 
 // ── floor vs seed (the fail-closed parity property) ──────────────────────────
 

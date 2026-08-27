@@ -81,11 +81,23 @@ Feature: Gateway route-access ALLOW/DENY across the systems role matrix
       | e2e-gamesonly  | games   | hugmesh-be-gateway | /games/api/admin/role-grants  | DENY     |
       | e2e-adminonly  | games   | hugmesh-be-gateway | /games/api/admin/role-grants  | DENY     |
 
-    # DEFAULT-DENY. A path with no route row is denied to everyone, admin included.
+    # NO RULE AT ALL — which is NOT default-deny, and the difference is the whole
+    # posture of the gate. /infra appears nowhere in the seed, so
+    # GatewayRouteAccessService.decide() answers NO_RULE and
+    # GatewayRouteAccessFilter FORWARDS it to the coarse
+    # anyExchange().authenticated() floor (docs/ROUTE-ACCESS.md, "No matching row
+    # is NOT a denial"). These rows said DENY while the oracle collapsed the two;
+    # main taught the oracle NO_RULE on 2026-08-26 and
+    # features/mined-platform-edge/ungoverned-vs-denied.feature is the lane that
+    # pinned this file as the thing to correct when it did.
+    #
+    # "Denied to everyone" and "rides the coarse authenticated floor" are opposite
+    # security claims. Asserting the first while the mesh does the second keeps
+    # reporting a closed door after somebody opens one.
     Examples:
       | role           | service | gateway            | path                          | decision |
-      | e2e-admin      | gateway | hugmesh-be-gateway | /infra/logs                   | DENY     |
-      | e2e-mod        | gateway | hugmesh-be-gateway | /infra/logs                   | DENY     |
+      | e2e-admin      | gateway | hugmesh-be-gateway | /infra/logs                   | NO_RULE  |
+      | e2e-mod        | gateway | hugmesh-be-gateway | /infra/logs                   | NO_RULE  |
 
   # The gate PROPERTY itself, not a sample of it: no single granted role reaches
   # the games-admin surfaces; only the derived intersection role does.

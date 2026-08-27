@@ -40,6 +40,27 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${HERE}/../.." && pwd)"
 E2E="${REPO}/tests/e2e"
 
+# PRECONDITIONS: refuse to be RED for the wrong reason, and never to be green for
+# no reason. MEASURED at the 2026-08-26 integration with tests/e2e/node_modules
+# moved aside: this suite was the ONLY one of the nine e2e guards without this
+# block, and it exited 1 — indistinguishable from a real drift finding — where its
+# eight siblings exit 2 naming the missing install. Its own header already said it
+# "needs node + the Playwright install + a Qt6 binding"; this is that sentence made
+# executable. Exit 2 is never mistaken for a pass and never mistaken for a failure.
+for t in node python3 git; do
+  command -v "${t}" >/dev/null 2>&1 || {
+    echo "SKIPPED-LOUDLY: ${t} is required and absent — this guard checked NOTHING." >&2
+    echo "Exiting 2 rather than 0." >&2
+    exit 2
+  }
+done
+if [ ! -d "${E2E}/node_modules/playwright-bdd" ]; then
+  echo "SKIPPED-LOUDLY: ${E2E}/node_modules/playwright-bdd is missing — run" >&2
+  echo "  (cd ${E2E} && npm install)   [or: make playwright-deps]" >&2
+  echo "This guard checked NOTHING. Exiting 2 rather than 0." >&2
+  exit 2
+fi
+
 CATALOGUE="${E2E}/steps/function-catalogue.ts"
 PERSONAS="${REPO}/tests/e2e-extra-personas.sh"
 SEED_SQL="${REPO}/specs/cluster/manifests/route-access/initdb/20-schema.sql"

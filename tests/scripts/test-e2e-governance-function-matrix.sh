@@ -31,6 +31,7 @@
 # FILES THE BATTERY TOUCHES (all restored, all verified):
 #   specs/cluster/manifests/route-access/initdb/20-schema.sql
 #   tests/e2e/specs/rbac-route-access.ts
+#   tests/e2e/specs/rbac-route-access.seed.ts   (M8's target since main GENERATED it)
 #   tests/e2e/specs/rbac-roles.ts
 #   tests/e2e-extra-personas.sh
 #   tests/e2e/steps/governance.ts
@@ -80,6 +81,7 @@ mkdir -p "${WORK}"
 MUTABLE=(
   "${SEED}"
   "tests/e2e/specs/rbac-route-access.ts"
+  "tests/e2e/specs/rbac-route-access.seed.ts"
   "tests/e2e/specs/rbac-roles.ts"
   "tests/e2e-extra-personas.sh"
   "tests/e2e/steps/governance.ts"
@@ -374,17 +376,37 @@ PY
 then expect_red M2 "seed narrowed: the only ROLE_FLEET_ADMIN row deleted"
 else bad "M2 could not be applied"; fi
 
-# M3 — THE TRANSCRIPTION TRAP: score a glob the way the last agent got it wrong.
+# M3 — THE TRANSCRIPTION TRAP: measure a glob the way a transcriber slips.
 #      Identical for glob-vs-glob, INVERTED for exact-vs-glob.
+#
+#      RE-BASED 2026-08-26. It used to patch "prefix.length * 2" -> "pattern.length
+#      * 2", which was the exact bug fix/superadmin-route-access-row found. main
+#      then rewrote the oracle to score by the RAW url_pattern length, patternScore
+#      was re-transcribed to match, and that string stopped existing — the mutation
+#      died with "M3 could not be applied", which is a mutation proving NOTHING and
+#      it took the battery's CAUGHT>=9 floor down with it. The slip is the same slip
+#      re-based on the current formula: measure the STRIPPED prefix instead of the
+#      pattern. '/api/federation/vanity/**' then scores 22 rather than 25 and ties
+#      with the literal '/api/federation/vanity', so both rows land at the winning
+#      pattern and a ROLE_USER caller is admitted where the oracle admits only
+#      ROLE_SUPERADMIN.
 if mutate "tests/e2e/steps/governance.ts" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
-old = "    return { matched, specificity: matched ? prefix.length * 2 : -1 };"
-new = "    return { matched, specificity: matched ? pattern.length * 2 : -1 };"
+old = """  if (pattern.endsWith('/**')) {
+    const prefix = pattern.slice(0, -3);
+    const matched = p === prefix || p.startsWith(prefix + '/');
+    return { matched, specificity: matched ? score : -1 };
+  }"""
+new = """  if (pattern.endsWith('/**')) {
+    const prefix = pattern.slice(0, -3);
+    const matched = p === prefix || p.startsWith(prefix + '/');
+    return { matched, specificity: matched ? prefix.length : -1 };
+  }"""
 assert old in s
 open(p, 'w').write(s.replace(old, new, 1))
 PY
-then expect_red M3 "decision engine: glob specificity scored from the UNSTRIPPED pattern (inverts exact-vs-glob only)"
+then expect_red M3 "decision engine: glob specificity measured from the STRIPPED prefix (inverts exact-vs-glob only)"
 else bad "M3 could not be applied"; fi
 
 # M4 — DRIFT: a catalogued function no scenario reaches. The whole point of the
@@ -467,12 +489,22 @@ fi
 
 # M8 — MIRROR OVER-GRANT, the dangerous direction: the TS mirror grants a route
 #      the shipped seed does not, so an ALLOW would certify a shut door.
-if mutate "tests/e2e/specs/rbac-route-access.ts" <<'PY'
+#
+#      THE TARGET FILE MOVED (2026-08-26). specs/rbac-route-access.ts used to hold
+#      the rows inline and this mutation anchored on its "  // superadmin-gateway"
+#      comment. main then split the oracle: rbac-route-access.ts re-exports the
+#      GENERATED rbac-route-access.seed.ts, that comment is in neither file, and
+#      the patch died with "substring not found" — an unapplied mutation proves
+#      nothing and silently dropped the battery below its CAUGHT floor. The anchor
+#      is now the generated array's opening line, and the row carries `allow`
+#      because RouteRule requires it.
+if mutate "tests/e2e/specs/rbac-route-access.seed.ts" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
-anchor = "  // superadmin-gateway"
-i = s.index(anchor)
-extra = "  { gateway: 'hugmesh-fe-gateway', urlPattern: '/mutation-probe/**', role: 'ROLE_USER' },\n"
+anchor = "export const ROUTE_ACCESS_SEED: readonly RouteRule[] = [\n"
+i = s.index(anchor) + len(anchor)
+extra = ("  { gateway: 'hugmesh-fe-gateway', urlPattern: '/mutation-probe/**', "
+         "role: 'ROLE_USER', allow: true },\n")
 open(p, 'w').write(s[:i] + extra + s[i:])
 PY
 then expect_red M8 "route mirror grants /mutation-probe/** which the shipped seed does not"

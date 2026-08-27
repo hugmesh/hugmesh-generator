@@ -102,8 +102,13 @@ function gatewayId(name: string): Gateway {
 }
 
 function decisionValue(v: string): GatewayDecision {
-  if (v !== 'ALLOW' && v !== 'DENY') {
-    throw new Error(`a route-access decision is 'ALLOW' or 'DENY', never '${v}'.`);
+  // THREE verdicts, not two. GatewayRouteAccessService.decide() answers NO_RULE
+  // for a path no url_pattern matches and the filter FORWARDS on it, so
+  // "ungoverned" and "refused" are different claims about the mesh. This guard
+  // used to reject the spelling, which is why an Examples table could only say
+  // DENY about a path the table does not govern at all.
+  if (v !== 'ALLOW' && v !== 'DENY' && v !== 'NO_RULE') {
+    throw new Error(`a route-access decision is 'ALLOW', 'DENY' or 'NO_RULE', never '${v}'.`);
   }
   return v;
 }

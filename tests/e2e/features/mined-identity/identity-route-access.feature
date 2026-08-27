@@ -65,11 +65,17 @@ Feature: The identity tier of the route-access seed is a governed contract
     And the route-access seed decides "ALLOW" for a principal holding only "ROLE_ANONYMOUS" at "/login/appeal"
     And the route-access seed decides "ALLOW" for a principal holding only "ROLE_ANONYMOUS" at "/bff/login"
 
-  # THE DRIFT ITSELF, measured once. @fail because it is a DEFECT DETECTOR: the
-  # mirror is stale today, playwright-bdd maps @fail to test.fail(), and the day
-  # someone refreshes specs/rbac-route-access.ts this scenario turns "expected to
-  # fail, but passed" and forces the tag off. The mirror is deliberately NOT
-  # edited from this branch — several lanes assert against it concurrently.
-  @fail
-  Scenario: the TS route-access mirror still claims to be the seed copied 1:1 @layer:gateway
+  # THE DRIFT, CLOSED. This shipped @fail — playwright-bdd maps that to
+  # test.fail() — because the mirror really was stale: it claimed to be the seed
+  # "copied 1:1" and carried 11 of the fe gateway's 77 rows. The comment said the
+  # day someone refreshed specs/rbac-route-access.ts the scenario would turn
+  # "expected to fail, but passed" and force the tag off.
+  #
+  # That is exactly what happened, and it was MEASURED rather than assumed: on the
+  # merged tree this scenario reported "Expected to fail, but passed". main
+  # replaced the hand copy with specs/rbac-route-access.seed.ts, GENERATED from
+  # this seed by scripts/gen-route-access-oracle.py. So the tag is off and the
+  # scenario asserts the property forward: a future hand-edit that drops an fe
+  # allow row fails here.
+  Scenario: the TS route-access mirror is the seed copied 1:1 @layer:gateway
     Then the route-access oracle mirrors every fe gateway allow row in the seed

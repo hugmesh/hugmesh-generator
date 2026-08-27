@@ -190,16 +190,28 @@ Feature: Governance functions — every seeded identity against every console fu
     # ── LOGIN + THE GATEWAY'S OWN WALLS. The login door is PUBLIC and must admit
     #    the un-onboarded and the banned alike — the gate is what happens AFTER
     #    the door, and a door that pre-judges cannot be tested. The two gateway
-    #    functions refuse everyone including the superadmin, by two DIFFERENT
-    #    mechanisms (an explicit allow=false wall, and no row at all).
+    #    functions are the two DIFFERENT mechanisms, and they do NOT produce the
+    #    same verdict:
+    #
+    #      internal-bff-wall  an explicit allow=false row -> DENY. The table
+    #                         refuses it, and it stays refused even if somebody
+    #                         adds an allow row at the same pattern (deny-wins).
+    #      unrouted-infra     NO ROW AT ALL -> NO_RULE. The table decides nothing,
+    #                         GatewayRouteAccessFilter forwards, and the request
+    #                         meets the coarse anyExchange().authenticated() floor.
+    #
+    #    These two rows said DENY while the oracle collapsed NO_RULE into it. They
+    #    are opposite claims — "the route-access table shuts this door" versus "the
+    #    route-access table has no opinion" — and the second is what /infra is.
+    #    See features/mined-platform-edge/ungoverned-vs-denied.feature.
     Examples:
       | identity       | decision | function          |
       | e2e-banned     | ALLOW    | login-front-door  |
       | e2e-pending    | ALLOW    | login-front-door  |
       | e2e-superadmin | DENY     | internal-bff-wall |
       | e2e-admin      | DENY     | internal-bff-wall |
-      | e2e-superadmin | DENY     | unrouted-infra    |
-      | e2e-admin      | DENY     | unrouted-infra    |
+      | e2e-superadmin | NO_RULE  | unrouted-infra    |
+      | e2e-admin      | NO_RULE  | unrouted-infra    |
 
   # ═════════════════════════════════════════════════════════════════════════
   # THE SAME CELLS, ADDRESSED THROUGH THE HARNESS'S OWN @role: AXIS rather than
