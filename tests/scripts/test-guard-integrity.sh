@@ -137,7 +137,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # and reading the line it prints:
 #     141 of 163 suites are named by a pull_request-triggered workflow
 # and by nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-141}"
+#
+# 141 -> 142 when test-url-embedded-credentials.sh was gated. MEASURED on this
+# branch merged with main. NOTE FOR WHOEVER LANDS THE SECOND ONE: a sibling branch
+# (fix/e2e-enumeration-needs-no-credential) also gates one new suite and also
+# measures 142, because each is measuring a tree containing only ITS OWN addition.
+# The merged result is 143. Do not take either branch's number on faith — re-run
+# this file on the integrated tree, which is the entire lesson the entries above
+# record.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-142}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
