@@ -114,23 +114,49 @@ else bad "_sed_rep_escape did NOT neutralise sed injection (got: ${out})"; fi
 out2="$(printf 'X\n' | sed "s|X|$(_sed_rep_escape 'a&b')|g")"
 [ "${out2}" = 'a&b' ] && ok "_sed_rep_escape neutralised & backref" || bad "& not escaped (got: ${out2})"
 
-# ── (D) brand.conf / home.conf %q emission cannot execute on source ──────────────
-# Emit exactly as the builder does (printf %q) with an injection payload, then source.
+# ── (D1) brand.conf: REFUSED, not escaped — it is never sourced ──────────────────
+# brand.conf USED to be emitted with printf %q, and this test used to demand that. It
+# was wrong for this sink and the escaping actively corrupted the image: the applier
+# (specs/usr/sbin/hugmesh-branding) reads brand.conf as STRICT KEY=VALUE — it strips one
+# layer of matching surrounding quotes and never unescapes — so `printf %q` on a value
+# with a space emitted `Gentoo\ Linux`, and that literal backslash reached the boot
+# screen (GRUB_DISTRIBUTOR, the theme title-text, the KDE wallpaper Name). Every branded
+# image had read "HugMesh\ Systems" for as long as the lane existed.
+# The builder now emits through `_brand_conf_kv`, which HARD-ERRORS on any value carrying
+# a quote, a backslash or a newline and then writes a plain KEY="VALUE" line. That is
+# strictly stronger than %q for a reader that cannot unescape: a hostile value is refused
+# at the sink rather than escaped into a form the reader will mangle.
+_bck() {   # the builder's helper, reproduced; keep in step with build-x86-host-stage4.sh
+  case "$2" in
+    *[\"\\]*|*$'\n'*) return 1 ;;
+  esac
+  printf '%s="%s"\n' "$1" "$2"
+}
 canary="${WORK}/canary"; rm -f "${canary}"
-BRAND='x'; BRAND_TITLE='foo"; touch '"${canary}"'; #'; BRAND_ACCENT='#000000'
-{
-  printf 'BRAND_NAME=%q\n'  "${BRAND}"
-  printf 'BRAND_TITLE=%q\n' "${BRAND_TITLE}"
-  printf 'ACCENT_COLOR=%q\n' "${BRAND_ACCENT}"
-} > "${WORK}/brand.conf"
-( set +e; . "${WORK}/brand.conf" >/dev/null 2>&1
-  if [ -e "${canary}" ]; then exit 1; fi
-  # value must survive intact for the applier (it round-trips through %q)
-  [ "${BRAND_TITLE}" = 'foo"; touch '"${canary}"'; #' ] || exit 2
-)
-rc=$?
-[ ! -e "${canary}" ] && [ "${rc}" -eq 0 ] && ok "brand.conf %q: injection NOT executed on source + value intact" \
-  || bad "brand.conf %q failed (canary=$( [ -e "${canary}" ] && echo HIT || echo ok ) rc=${rc})"
+if _bck BRAND_TITLE 'foo"; touch '"${canary}"'; #' >/dev/null 2>&1; then
+  bad "brand.conf helper ACCEPTED a quote-bearing value (it must refuse, not escape)"
+else ok "brand.conf helper refuses a quote-bearing value at the sink"; fi
+_bck BRAND_TITLE 'a\b'      >/dev/null 2>&1 && bad "brand.conf helper accepted a backslash" || ok "brand.conf helper refuses a backslash"
+_bck BRAND_TITLE $'a\nb'    >/dev/null 2>&1 && bad "brand.conf helper accepted a newline"   || ok "brand.conf helper refuses a newline"
+
+# A LEGITIMATE value must round-trip through the applier's own reader with no backslash.
+{ _bck BRAND_NAME gentoo; _bck BRAND_TITLE 'Gentoo Linux'; _bck ACCENT_COLOR '#4d7fd6'; } \
+  > "${WORK}/brand.conf"
+APPLIER="${REPO}/specs/usr/sbin/hugmesh-branding"
+if [ -r "${APPLIER}" ]; then
+  # Extract the applier's REAL loader and run it over the file the builder would write,
+  # so writer and reader are checked against each other rather than against a restatement.
+  sed -n '/^_load_brand_conf()/,/^}/p' "${APPLIER}" > "${WORK}/loader.sh"
+  got="$( set +e; . "${WORK}/loader.sh"; _load_brand_conf "${WORK}/brand.conf" >/dev/null 2>&1
+          printf '%s|%s' "${BRAND_TITLE:-}" "${ACCENT_COLOR:-${ACCENT:-}}" )"
+  case "${got}" in
+    *'\'*) bad "a backslash survived into the applier's read-back (${got}) — the %q bug is back" ;;
+    'Gentoo Linux|'*) ok "brand.conf round-trips through the applier's own reader, no backslash" ;;
+    *) bad "brand.conf did not round-trip through the applier's reader (got: ${got})" ;;
+  esac
+else
+  ok "SKIP applier not readable here — round-trip not measured"
+fi
 
 canary2="${WORK}/canary2"; rm -f "${canary2}"
 HOME_MODE='adopt'; HOME_DEVICE='LABEL=h"; touch '"${canary2}"'; HOME_DEVICE="'; HOME_BACKUP=''
@@ -165,10 +191,23 @@ if grep -Eq 'echo "\$\{HM_DEVICE\}  /home' "${INSTALLER}"; then
   bad "installer still writes the UNQUOTED \${HM_DEVICE} fstab field"
 else ok "installer no longer emits an unquoted \${HM_DEVICE} fstab word"; fi
 
-# Assert the builder emits brand.conf/home.conf via printf %q (not naive KEY=\"\$V\").
-if grep -q "printf 'BRAND_TITLE=%q" "${BUILDER}" && grep -q "printf 'HOME_DEVICE=%q" "${BUILDER}"; then
-  ok "builder emits brand.conf + home.conf via printf %q"
-else bad "builder no longer uses printf %q for brand.conf/home.conf"; fi
+# The two sinks take DIFFERENT treatments, because they have different readers.
+#   home.conf  IS dot-sourced (hugmesh-home-setup, install-x86.sh) -> printf %q, so a
+#              hostile value cannot execute on `source`.
+#   brand.conf is NEVER sourced (strict KEY=VALUE reader) -> _brand_conf_kv, which
+#              refuses a quote/backslash/newline outright. %q here would escape into a
+#              reader that cannot unescape, putting a literal backslash in the GRUB title.
+# Assert BOTH, and assert brand.conf is NOT back on %q — that regression is invisible
+# until someone reads a boot screen.
+if grep -q "printf 'HOME_DEVICE=%q" "${BUILDER}"; then
+  ok "builder emits home.conf via printf %q (it is dot-sourced)"
+else bad "builder no longer uses printf %q for home.conf — it IS sourced; this is exploitable"; fi
+if grep -q "_brand_conf_kv BRAND_TITLE" "${BUILDER}"; then
+  ok "builder emits brand.conf via the strict _brand_conf_kv helper"
+else bad "builder no longer emits brand.conf via _brand_conf_kv"; fi
+if grep -q "printf 'BRAND_TITLE=%q" "${BUILDER}"; then
+  bad "brand.conf is back on printf %q — the applier cannot unescape it (GRUB title gets a literal backslash)"
+else ok "brand.conf is not emitted with %q"; fi
 
 echo "== done: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]
