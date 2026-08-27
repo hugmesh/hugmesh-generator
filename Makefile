@@ -1883,16 +1883,43 @@ stack-up: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## clone ->
 	@echo "    (https uses the per-machine CA $(STACK_TLS_DIR)/ca.crt - import it to trust, or accept the browser warning)"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
 
+# The post-seed registration note, chosen at PARSE time by
+# SEED_COMPLETE_REGISTRATION (a command-line assignment and an environment
+# export both reach make's variable space, so either spelling flips it). The
+# old block printed the "Re-run with SEED_COMPLETE_REGISTRATION=1" hint
+# UNCONDITIONALLY — a static @echo, not a report — so a run where the flag WAS
+# set (and leg 1c had just run, or just failed loudly) still ended by implying
+# the flag had not been passed. reference: the 2026-08-27 recreated-stack
+# incident, where that hint sent the diagnosis toward "make does not forward
+# the variable" (it does — leg 1c running at all proves it).
+# `make -n stack-seed [SEED_COMPLETE_REGISTRATION=1]` shows only the live
+# variant, which is how tests/scripts/test-seed-password-reconcile.sh pins this
+# without running a stack.
+ifeq ($(SEED_COMPLETE_REGISTRATION),1)
+define STACK_SEED_STAGE2_NOTE
+@echo "    Registration STAGE 2 ran in this seed (SEED_COMPLETE_REGISTRATION=1): the personas are"
+@echo "    onboarded — minus the deliberately-gated set (e2e-pending, rbac-pending-gmail-com,"
+@echo "    e2e-banned, plus every email-shaped invite fixture; the seed log's 'left gated on"
+@echo "    purpose' count is the exact tally) — and mesh-operator can navigate every app."
+@echo "    Verify by outcome, not by this banner:"
+@echo "    GET /bff/session must report registrationComplete=true for an onboarded persona."
+endef
+else
+define STACK_SEED_STAGE2_NOTE
+@echo "    NOTE: this seeds registration STAGE 1 (the Casdoor identity) only. Until stage 2"
+@echo "    (POST /bff/register/complete) runs, GET /bff/session reports registrationComplete=false,"
+@echo "    the gateway grants only a bare ROLE_USER, and every service route 403s — you can sign in"
+@echo "    but not navigate. Re-run with SEED_COMPLETE_REGISTRATION=1 to onboard the personas too"
+@echo "    (the Studio's local-mesh bring-up passes it; the e2e suite deliberately does not)."
+endef
+endif
+
 stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real SSO login; SOCIAL=1 also seeds Matrix/Mastodon
 	@echo "==> Seeding the running stack (Casdoor$(if $(strip $(SOCIAL)), + social,) tier)"
 	$(if $(strip $(SOCIAL)),,SEED_CASDOOR_ONLY=1 )$(if $(strip $(BRAND_B)),CASDOOR_BRAND_B_URL='$(BRANDB_CASDOOR)' )bash tests/stack/seed-e2e.sh
 	@pw="$$(bash tests/stack/e2e-password.sh)"; \
 	  echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin / $$pw) — $$pw is also readable from .e2e-credentials at the repo root."
-	@echo "    NOTE: this seeds registration STAGE 1 (the Casdoor identity) only. Until stage 2"
-	@echo "    (POST /bff/register/complete) runs, GET /bff/session reports registrationComplete=false,"
-	@echo "    the gateway grants only a bare ROLE_USER, and every service route 403s — you can sign in"
-	@echo "    but not navigate. Re-run with SEED_COMPLETE_REGISTRATION=1 to onboard the personas too"
-	@echo "    (the Studio's local-mesh bring-up passes it; the e2e suite deliberately does not)."
+	$(STACK_SEED_STAGE2_NOTE)
 
 stack-halt: ## stop the local stack but KEEP its data (identity, rooms, accounts, DBs)
 	# The NON-DESTRUCTIVE stop. `stack-down` below passes -v, which drops every

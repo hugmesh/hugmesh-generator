@@ -303,7 +303,33 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     154 of 176 suites are named by a pull_request-triggered workflow
 # +1 gated +1 total from each side; PREMERGE_UNGATED stays 22. Carried by
 # re-running this file, not by arithmetic — but the arithmetic agrees.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-154}"
+# RE-MEASURED 2026-08-27 on the MERGE of fix/seed-password-contract-on-recreated-
+# stack with main at 91fefe05 (which carried the 153 of 175 above). This branch
+# adds ONE gated suite, tests/scripts/test-seed-password-reconcile.sh (stub
+# Casdoor + stub front door + a `make -n` probe; named in shell-suites.yml's
+# ALPINE job and, with its mutation battery, in .gitlab-ci.yml's
+# lint:seed-password-reconcile). Both sides had independently written 153 on
+# this line — each measuring its OWN suite against a base that lacked the
+# other's — so the textual merge was CLEAN and still wrong: the merged tree
+# really gates both. Running this file on the merged tree printed
+#     154 of 176 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total from each side; PREMERGE_UNGATED stays at main's 22.
+# Carried by re-running this file, not by arithmetic on either side's number —
+# a clean auto-merge of this line is exactly how a baseline goes silently stale.
+#
+# RE-MEASURED 2026-08-27 on the MERGE of fix/coverage-check-runtime with main at
+# 0e904b7a (which carried the seed-password-reconcile suite above: 154 of 176 on
+# its own merged tree, exactly as this branch's 154 of 176 on ITS 91fefe05
+# merge — each side added one gated suite to the same 153/175). The union is
+# both again, and again the VALUE line under this comment auto-merged CLEAN at
+# 154 while the merged tree really gates more — the exact silently-stale shape
+# the block above warns about, caught because check 7 stays red until the
+# baseline is raised to what this file MEASURES. Running this file on THIS
+# merged tree printed
+#     155 of 177 suites are named by a pull_request-triggered workflow
+# +1 gated +1 total from each side; PREMERGE_UNGATED stays 22. Carried by
+# re-running this file, not by arithmetic - but the arithmetic agrees.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-155}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a

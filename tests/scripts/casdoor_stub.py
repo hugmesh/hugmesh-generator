@@ -45,6 +45,14 @@ Modes (STUB_MODE), each a shape observed or reasoned about on the live cluster:
                 write still work, so the script gets all the way to its write.
   setpw-noop    like `ok`, except /api/set-password reports success without
                 changing the password.
+  adduser-droppw
+                like `ok`, except /api/add-user answers "Affected" while the
+                body's password field never lands in the credential store — a
+                create that LOOKS complete and leaves the account unable to
+                log in. The shape the seed apply hook's add-branch
+                apply_password() proof exists to catch (and repair): with
+                every stubbed create storing the credential, that proof would
+                be unfalsifiable by any scenario.
 
 /api/set-password models casdoor's own refusal to re-set a password that already
 matches the stored one (object/check_password_complexity.go:104-124 ->
@@ -84,9 +92,28 @@ JOURNAL = os.environ.get("STUB_JOURNAL", "")
 SEED_FILE = os.environ.get("STUB_SEED", "")
 
 VALID_MODES = {"ok", "deny-login", "deny-writes", "writes-vanish",
-               "readback-denied", "setpw-noop"}
+               "readback-denied", "setpw-noop", "adduser-droppw"}
 if MODE not in VALID_MODES:
     sys.exit(f"casdoor_stub: unknown STUB_MODE {MODE!r} (want one of {sorted(VALID_MODES)})")
+
+# /api/login/oauth/access_token behaviour (used by the seed apply hook's JWT
+# pre-mint and by tests probing whether a credential REALLY landed — the
+# password grant validates against the same _user_passwords store set-password
+# and add-user write to, so a token IS proof of convergence):
+#   ok           validate the request: client_credentials always mints;
+#                password mints iff the username's stored password matches,
+#                else {"error":"invalid_grant"} — casdoor's wrong-credential
+#                shape.
+#   unsupported  always {"error":"unsupported_grant_type"} — the grant is a
+#                casdoor CONFIG option and its absence is a legitimate
+#                deployment state the pre-mint must report as such.
+#   invalid      always {"error":"invalid_grant"} — for asserting a zero-mint
+#                summary blames the credentials, never the grant config.
+OAUTH_MODE = os.environ.get("STUB_OAUTH", "ok")
+VALID_OAUTH_MODES = {"ok", "unsupported", "invalid"}
+if OAUTH_MODE not in VALID_OAUTH_MODES:
+    sys.exit(f"casdoor_stub: unknown STUB_OAUTH {OAUTH_MODE!r} "
+             f"(want one of {sorted(VALID_OAUTH_MODES)})")
 
 _lock = threading.Lock()
 # The password the stub currently accepts for ADMIN_USER. Starts at whatever the
@@ -112,7 +139,9 @@ SAME_AS_CURRENT = "The new password must be different from your current password
 
 API_RE = re.compile(r"^/api/(get|add|update)-([a-z-]+)$")
 # Endpoints reachable without a session, exactly like casdoor's own public set.
-PUBLIC = {"/api/health", "/api/login"}
+# The OAuth token endpoint is public by definition — the pre-mint and the
+# machine-client self-check both call it with no cookie jar.
+PUBLIC = {"/api/health", "/api/login", "/api/login/oauth/access_token"}
 
 
 def _journal(entry):
@@ -191,6 +220,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._ok("ok")
         if path == "/api/login":
             return self._login(body or {})
+        if path == "/api/login/oauth/access_token":
+            return self._oauth(form or {})
         if path not in PUBLIC and not self._authed():
             # casdoor's authz filter: HTTP 200, status error.
             return self._error("Unauthorized operation")
@@ -219,6 +250,39 @@ class Handler(BaseHTTPRequestHandler):
             _sessions.add(token)
         self._cookies = [f"casdoor_session_id={token}; Path=/"]
         return self._ok(f"built-in/{ADMIN_USER}")
+
+    def _oauth(self, form):
+        # The token endpoint answers HTTP 200 for errors too (RFC-shaped JSON
+        # body); callers here classify on the `error` field, never the status.
+        if OAUTH_MODE == "unsupported":
+            return self._send({"error": "unsupported_grant_type",
+                               "error_description": "stub: the password grant is disabled"})
+        if OAUTH_MODE == "invalid":
+            return self._send({"error": "invalid_grant",
+                               "error_description": "stub: forced invalid_grant"})
+        grant = form.get("grant_type") or ""
+        if grant == "client_credentials":
+            with _lock:
+                _counter[0] += 1
+                return self._send({"access_token": f"stub-cc-token-{_counter[0]}",
+                                   "token_type": "Bearer"})
+        if grant == "password":
+            user = form.get("username") or ""
+            pw = form.get("password") or ""
+            with _lock:
+                stored = _user_passwords.get(user)
+                if stored is not None and pw != "" and pw == stored:
+                    _counter[0] += 1
+                    return self._send({"access_token": f"stub-pw-token-{_counter[0]}",
+                                       "token_type": "Bearer"})
+            # Wrong password AND unknown user both land here, exactly like
+            # casdoor: the caller cannot enumerate accounts through this
+            # endpoint, and a seeder must not treat either as a grant-config
+            # problem.
+            return self._send({"error": "invalid_grant",
+                               "error_description": "stub: invalid username or password"})
+        return self._send({"error": "unsupported_grant_type",
+                           "error_description": f"stub: grant {grant!r} not modelled"})
 
     def _set_password(self, form):
         if MODE == "deny-writes":
@@ -293,7 +357,10 @@ class Handler(BaseHTTPRequestHandler):
                     # DOES set the credential — which is why the shipped script's
                     # proof on the create path must come out "already the
                     # provisioned value" rather than "rotated".
-                    if obj.get("password"):
+                    # adduser-droppw: the row is stored and "Affected" is
+                    # answered, but the credential never lands — the dropped
+                    # create the add branch's rotate-and-prove must repair.
+                    if obj.get("password") and MODE != "adduser-droppw":
                         _user_passwords[ident] = obj["password"]
                 else:
                     stored_id = (_store.get(key) or {}).get("id")

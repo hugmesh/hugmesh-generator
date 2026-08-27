@@ -484,9 +484,11 @@ REMOTE
 #   casdoor-games-users.json     native player(s) for the games Casdoor (org
 #                                "threewizards"). The synced games admin is NOT
 #                                seeded here (it appears via systems->games sync).
-#   apply-systems-roles.sh       idempotent Casdoor admin-API hook (add-user with
-#                                the e2e password, then update-role) so a REAL
-#                                Casdoor carries the right JWT `roles` claim.
+#   apply-systems-roles.sh       idempotent Casdoor admin-API hook (add-user, or
+#                                for an EXISTING user a set-password reconcile of
+#                                its stored password to the e2e render — never a
+#                                skip — then update-role) so a REAL Casdoor
+#                                carries the right JWT `roles` claim.
 #                                Envelope-checked + read-back-verified: it fails
 #                                loudly rather than reporting a seed it did not
 #                                perform (see its own header for the HTTP-200
@@ -604,15 +606,17 @@ ROLE_FORUM ROLE_FORUM_MOD ROLE_WIKI ROLE_GAMES ROLE_GAMES_ADMIN ROLE_USER"
            users: $users
          }' > "${dir}/casdoor-games-users.json"
 
-    # The apply hook: login as the Casdoor admin, ensure each user (with its
-    # deterministic e2e password) exists, then set each role's members. Idempotent.
+    # The apply hook: login as the Casdoor admin, ensure each user exists AND
+    # holds the rendered e2e password (existing users are RECONCILED via
+    # set-password, never skipped), then set each role's members. Idempotent.
     cat > "${dir}/apply-systems-roles.sh" <<'APPLY'
 #!/usr/bin/env bash
 # apply-systems-roles.sh — push the systems RBAC role matrix into a REAL Casdoor
 # (org "hugmesh") so the rbac-*.spec.ts JWT-role assertions work. Reads the
-# sibling casdoor-systems-roles.json. Idempotent: add-user is skipped when the
-# user already exists, update-role overwrites the member set. Requires curl + jq
-# + Casdoor admin creds.
+# sibling casdoor-systems-roles.json. Idempotent: an existing user is never
+# skipped — apply_password() reconciles its stored password to the rendered
+# value and proves it (see below) — and update-role overwrites the member set.
+# Requires curl + jq + Casdoor admin creds.
 #
 #   CASDOOR_URL          (default http://127.0.0.1:8000)
 #   CASDOOR_ADMIN_USER   (default admin)
@@ -687,6 +691,92 @@ casdoor_call() {
   cat "${WORK}/body"
 }
 
+# ── set-password transport + the rotate-and-prove reconcile ─────────────────
+# /api/set-password is FORM-encoded (the shape controllers/user.go parses), and
+# unlike every other call in this hook a status=error answer can be a NORMAL
+# outcome (see apply_password below), so this helper RETURNS the envelope
+# verdict instead of dying on it:
+#   rc 0   status=ok
+#   rc 1   status=error — the message is left in ${SETPW_MSG}
+#   dies   on transport / HTTP>=400 / non-JSON failures, same as casdoor_call
+SETPW_MSG=""
+casdoor_setpw() { # <userOwner> <userName> <newPassword>
+  local code status
+  : > "${WORK}/body"
+  code="$(curl -s -o "${WORK}/body" -w '%{http_code}' -b "${CJ}" -c "${CJ}" \
+            -X POST -H 'content-type: application/x-www-form-urlencoded' \
+            --data-urlencode "userOwner=$1" \
+            --data-urlencode "userName=$2" \
+            --data-urlencode "oldPassword=" \
+            --data-urlencode "newPassword=$3" \
+            "${BASE}/api/set-password" 2>/dev/null)" \
+    || die "POST /api/set-password: curl transport failure (is ${BASE} reachable?)"
+  case "${code}" in
+    2*) : ;;
+    *)  die "POST /api/set-password: HTTP ${code} — $(head -c 200 "${WORK}/body" 2>/dev/null)" ;;
+  esac
+  jq -e 'type == "object"' "${WORK}/body" >/dev/null 2>&1 \
+    || die "POST /api/set-password: HTTP ${code} but the body is not a JSON object — $(head -c 200 "${WORK}/body")"
+  status="$(jq -r '.status // empty' "${WORK}/body")"
+  SETPW_MSG="$(jq -r '.msg // ""' "${WORK}/body")"
+  [ "${status}" = "ok" ]
+}
+
+# Casdoor REFUSES a set-password whose new value already hashes to the stored
+# one (object/check_password_complexity.go:104-124 -> controllers/user.go:
+# 629-633; English text from i18n/locales/en/data.json). That refusal is the
+# ONLY read-back a password has — /api/get-user masks it as "***"
+# (object/user.go:678) — which is what makes it usable as PROOF here. Same
+# contract as manifests/casdoor/init-job.yaml apply_password(), which
+# tests/scripts/test-casdoor-init-honesty.sh pins.
+PASSWORD_ALREADY_SET="must be different from your current password"
+
+# apply_password <owner> <name> <password> — make the account's password the
+# rendered value, and PROVE it. Echoes "rotated" or "already current". Never
+# echoes, logs or stores the password itself.
+#
+# WHY THIS EXISTS (measured 2026-08-27, 19/19 onboard logins 401ing): this hook
+# used to SKIP an existing user entirely, so a Casdoor whose volume survived a
+# stop/recreate kept the password of whatever run seeded it first, while the
+# run-state file (tests/stack/e2e-password.sh, .e2e-credentials) had moved on —
+# e.g. regenerated in a different checkout. Every later login used the file's
+# value, Casdoor held the old one, and NOTHING in the seed chain could
+# reconcile them (update-user cannot change a password; only /api/set-password
+# can). The run-state file is the contract's single source of truth
+# (e2e-password.sh: every process in a run "MUST all end up with the SAME
+# password"), so an existing user must CONVERGE on it, not be skipped.
+#
+# Two calls, always (the init-job apply_password contract):
+#   1. set-password with the rendered value. "ok" = the stored hash did NOT
+#      match and now does; the PASSWORD_ALREADY_SET refusal = it already did;
+#      anything else is a real failure and dies.
+#   2. the same call again, purely as verification: it must now be REFUSED with
+#      PASSWORD_ALREADY_SET — i.e. Casdoor itself, comparing against persisted
+#      state, says the credential IS the rendered value. A second "ok" means
+#      the first write did not persist (the setpw-noop shape), and that is a
+#      hard failure rather than a "reconciled" line nobody can check.
+#
+# NO LOGIN IS ATTEMPTED: this runs in the admin session, and SetPassword checks
+# oldPassword only when one is supplied on the isAdmin branch (controllers/
+# user.go:597-606). Verifying by signing in as the target would burn a failed
+# attempt on every mismatch, and Casdoor locks an account after five.
+apply_password() { # <owner> <name> <password>
+  local owner="$1" name="$2" pw="$3" verb
+  if casdoor_setpw "${owner}" "${name}" "${pw}"; then
+    verb="rotated"
+  elif [[ "${SETPW_MSG}" == *"${PASSWORD_ALREADY_SET}"* ]]; then
+    verb="already current"
+  else
+    die "set-password for ${owner}/${name} failed: ${SETPW_MSG}"
+  fi
+  if casdoor_setpw "${owner}" "${name}" "${pw}"; then
+    die "set-password for ${owner}/${name} reported success but Casdoor accepted the identical write a second time — the password did NOT persist (the setpw-noop shape)"
+  fi
+  [[ "${SETPW_MSG}" == *"${PASSWORD_ALREADY_SET}"* ]] \
+    || die "set-password for ${owner}/${name}: verification expected Casdoor's already-current refusal but got: ${SETPW_MSG}"
+  printf '%s' "${verb}"
+}
+
 # ── 1. Admin session ────────────────────────────────────────────────────────
 log "admin login as '${AU}' at ${BASE}"
 casdoor_call POST /api/login \
@@ -700,17 +790,30 @@ cookies="$(awk -F'\t' 'NF>=7 {n++} END {print n+0}' "${CJ}" 2>/dev/null || echo 
 [ "${cookies}" -gt 0 ] \
   || die "/api/login returned status=ok but set NO session cookie — every call after this would be anonymous (and denied with HTTP 200)."
 
-# ── 2. Ensure every seed user exists with its deterministic e2e password ────
+# ── 2. Ensure every seed user exists WITH its rendered e2e password ─────────
+# Existing users are RECONCILED, never skipped: a Casdoor whose volume survived
+# a stop/recreate holds the password of whatever run seeded it first, and a
+# skip leaves every rendered credential a lie (measured 2026-08-27: 19/19
+# onboard logins 401'd against a recreated stack). apply_password() converges
+# each account on the rendered value and PROVES it through set-password's own
+# already-current refusal — for freshly-added users too, because add-user
+# reporting "Affected" is not evidence the password field landed.
 users_total="$(jq '.users | length' "${ROLES_JSON}")"
 [ "${users_total}" -gt 0 ] || die "role matrix declares zero users — nothing to seed"
-added=0; already=0
+added=0; already=0; rotated=0
 while IFS= read -r u; do
   [ -n "${u}" ] || continue
   name="$(printf '%s' "$u" | jq -r '.name')"
+  pass="$(printf '%s' "$u" | jq -r '.password // empty')"
+  [ -n "${pass}" ] || die "user ${name}: the rendered matrix carries no password — refusing to seed an account whose credential nobody can resolve"
   resp="$(casdoor_call GET "/api/get-user?id=${ORG}/${name}")"
   exists="$(printf '%s' "${resp}" | jq -r '.data.name // empty')"
   if [ -n "${exists}" ]; then
-    log "user ${name} exists"; already=$((already+1)); continue
+    verb="$(apply_password "${ORG}" "${name}" "${pass}")"
+    log "user ${name} exists (password ${verb})"
+    already=$((already+1))
+    [ "${verb}" = "rotated" ] && rotated=$((rotated+1))
+    continue
   fi
   payload="$(printf '%s' "$u" | jq -c '{owner, name, displayName, email, password, type, isAdmin, isForbidden, isDeleted, signupApplication:"app-built-in"}')"
   add="$(casdoor_call POST /api/add-user "${payload}")"
@@ -721,10 +824,16 @@ while IFS= read -r u; do
   affected="$(printf '%s' "${add}" | jq -r '.data // empty')"
   [ "${affected}" != "Unaffected" ] \
     || die "add-user ${name}: Casdoor returned status=ok data=Unaffected — the user was NOT created"
-  log "add-user ${name} -> ok (${affected:-ok})"
+  # Prove the credential landed with the create, exactly as for existing users.
+  # AddUser hashes the body's password into the row (object/user.go:1029-1031),
+  # so the expected verb is "already current"; "rotated" means add-user dropped
+  # the password field and the reconcile just repaired it — converged either
+  # way, which is why both are accepted and logged rather than asserted.
+  verb="$(apply_password "${ORG}" "${name}" "${pass}")"
+  log "add-user ${name} -> ok (${affected:-ok}; password ${verb})"
   added=$((added+1))
 done < <(jq -c '.users[]' "${ROLES_JSON}")
-log "users: ${added} added, ${already} already present (${users_total} declared)"
+log "users: ${added} added, ${already} already present, ${rotated} password(s) reconciled to this run's rendered credentials (${users_total} declared)"
 
 # ── 3. Set each role's member set to EXACTLY the seeded list ────────────────
 # Round-trip the existing role object so other fields survive. ROLE_GAMES_ADMIN
@@ -785,15 +894,27 @@ minted=0; premint_total=0
 # PLAIN username is the canonical spelling — the org/name form answers "the
 # user does not exist" there. Try plain first; keep org/name as a fallback for
 # deployments that accepted it.
+# Runs inside $( ) command substitutions, so failures are recorded to a FILE —
+# a variable incremented here would die in the subshell, which is exactly the
+# lying-counter bug the comment above describes.
 premint_token() { # <username> <password>
-  curl -s "${BASE}/api/login/oauth/access_token" \
+  local body tok err
+  body="$(curl -s "${BASE}/api/login/oauth/access_token" \
       -H 'content-type: application/x-www-form-urlencoded' \
       --data-urlencode "grant_type=password" \
       --data-urlencode "username=$1" \
       --data-urlencode "password=$2" \
       --data-urlencode "client_id=${APP}" \
-      ${APP_SECRET:+--data-urlencode "client_secret=${APP_SECRET}"} 2>/dev/null \
-    | jq -r '.access_token // empty' 2>/dev/null || true
+      ${APP_SECRET:+--data-urlencode "client_secret=${APP_SECRET}"} 2>/dev/null || true)"
+  tok="$(printf '%s' "${body}" | jq -r '.access_token // empty' 2>/dev/null || true)"
+  if [ -z "${tok}" ]; then
+    # Keep the OAuth error CODE (never the description — it can echo the
+    # username) so the zero-mint summary can say WHICH failure this was
+    # instead of blaming the grant config for every one of them.
+    err="$(printf '%s' "${body}" | jq -r '.error // empty' 2>/dev/null || true)"
+    printf '%s\n' "${err:-no-oauth-error-body}" >> "${WORK}/premint-errors"
+  fi
+  printf '%s' "${tok}"
 }
 while IFS= read -r u; do
   [ -n "${u}" ] || continue
@@ -808,7 +929,19 @@ while IFS= read -r u; do
   fi
 done < <(jq -c '.users[]' "${ROLES_JSON}")
 if [ "${minted}" -eq 0 ]; then
-  log "pre-mint: 0 of ${premint_total} JWTs (password grant unavailable) — the swarm harness will fall back to interactive login; spec 24's concurrency invariant still gates serialization"
+  # SAY WHICH failure this was. The old fixed string here ("password grant
+  # unavailable") fired on ANY zero-mint outcome — including wrong credentials,
+  # where it actively pointed AWAY from the real cause (measured 2026-08-27:
+  # a recreated stack's stale passwords printed as a grant-config problem).
+  # Casdoor's token endpoint distinguishes them: error=unsupported_grant_type
+  # is the grant config, error=invalid_grant is the credential/user lookup.
+  premint_errs="$(sort -u "${WORK}/premint-errors" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+  case " ${premint_errs} " in
+    *" invalid_grant "*)
+      log "pre-mint: 0 of ${premint_total} JWTs — Casdoor answered invalid_grant: the CREDENTIALS were rejected (or the user is outside app ${APP}'s organization); the password grant itself responded. The passwords section above reconciled every account to the rendered credentials, so this should be impossible — if you see it, this Casdoor holds identities from a different run-state file than this run resolved (see tests/stack/e2e-password.sh / .e2e-credentials)." ;;
+    *)
+      log "pre-mint: 0 of ${premint_total} JWTs (${premint_errs:-no OAuth error body} — password grant unavailable or misconfigured) — the swarm harness will fall back to interactive login; spec 24's concurrency invariant still gates serialization" ;;
+  esac
 else
   log "pre-mint: ${minted} of ${premint_total} JWTs cached in ${PREMINT_DIR} (load them in the swarm harness to avoid serializing Casdoor logins)"
 fi
