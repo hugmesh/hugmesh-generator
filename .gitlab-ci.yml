@@ -1485,6 +1485,60 @@ lint:liquibase-grant-roles:
     # service sources, then re-run the checker against them.
     - bash tests/scripts/test-liquibase-grant-roles.sh
 
+# Optional-service slug closure. The OPTIONAL-service slug set must be ONE set across
+# five surfaces: the 13a ApplicationSet elements, the installed-services ConfigMap
+# booleans, the OptionalService CRD spec.slug enum, the seed CRs, and admin-bff's
+# OptionalServiceRegistry. Measured 2026-08-26 it was five different cardinalities
+# (17/14/13/13/12) and three live defects lived in the gaps — the worst being a slug
+# the CRD ACCEPTS and the registry silently ignores, which actuates nothing and does
+# not even write the CR's /status, so no observable trace says the toggle did nothing.
+# The checker DERIVES the set (13a element AND ConfigMap boolean) rather than listing
+# it, so the next slug cannot repeat this.
+#
+# The admin-bff checkout is part of the gate, not a convenience: the Java leg is the
+# one that catches the silent case, and without the clone the checker exits 3
+# INCOMPLETE and the suite FAILS rather than reporting four green legs of five.
+#
+# ⚠ EXPECTED RED until hugmesh-admin-bff-api's OptionalServiceRegistry gains
+# character-forge and meshbridge (in flight on that repo's
+# feat/superadmin-optional-services-endpoint). That red is the defect, not a flaw in
+# the gate: it is a live, named, one-merge-away inconsistency. Do NOT add
+# allow_failure and do NOT weaken the Java leg to get green — the suite's own
+# positive control stages exactly that landing and requires the whole gate to pass,
+# so the exit criterion is executable.
+# Offline apart from the clone: no cluster, no kubectl.
+lint:optional-service-slug-closure:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  variables:
+    SERVICE_SRC_ROOT: "${CI_PROJECT_DIR}/.slug-closure-src"
+  before_script:
+    - pip install --quiet pyyaml
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - mkdir -p "${SERVICE_SRC_ROOT}"
+    # Blobless + sparse: only the optionalservices package is ever materialised.
+    - |
+      set -e
+      for r in $(python3 tests/scripts/optional_service_slug_closure.py --list-repos); do
+        git clone --depth 1 --filter=blob:none --sparse "${ORG_BASE}/${r}.git" "${SERVICE_SRC_ROOT}/${r}"
+        git -C "${SERVICE_SRC_ROOT}/${r}" sparse-checkout set src/main/java/net/hugmesh/adminbff/optionalservices
+      done
+    # A repo --list-repos demands but the loop did not materialise must stop the job
+    # here, loudly. Checking four surfaces of five is the failure this gate exists for.
+    - |
+      set -e
+      for r in $(python3 tests/scripts/optional_service_slug_closure.py --list-repos); do
+        test -f "${SERVICE_SRC_ROOT}/${r}/src/main/java/net/hugmesh/adminbff/optionalservices/OptionalServiceRegistry.java" || {
+          echo "FATAL: ${r} has no OptionalServiceRegistry.java after cloning — the gate would be blind to it"
+          exit 1
+        }
+      done
+  script:
+    # bash is required: the negative controls stage copies of the five surfaces and
+    # re-run the checker against each planted defect.
+    - bash tests/scripts/test-optional-service-slug-closure.sh
+
 # Local-stack source-patch gate. Unit-tests scripts/patch-stack-src.sh (the
 # post-clone pass that rewrites files in ./.stack-src which `docker compose build`
 # then consumes) against synthetic checkouts: the pre-rename private dependency is

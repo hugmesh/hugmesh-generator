@@ -780,6 +780,90 @@ When a service is **absent**, a user sees:
 `WorkloadSuperadminController`/`GoLiveController` + a step-up gate) that patches the CR
 via the fabric8 client admin-bff already holds, and a toggle screen in
 `hugmesh-superadmin-service-catalog-ui`. kubectl-first; BFF endpoint + UI later.
+The gateway route AND the `ROLE_SUPERADMIN` `route_access` floor for that path are
+ALREADY in place, so the handler needs no new rows — today a superadmin calling it
+gets a 404 from admin-bff because no `@RequestMapping` matches.
+
+### 10.1 Turning the reconciler on — the lever, and why it is GitOps-only
+
+Until 2026-08-26 there was **no supported way to enable this feature at all**.
+`APP_OPTIONAL_SERVICES_RECONCILE_ENABLED` appeared exactly ONCE in the whole
+platform — as the `:false` default of `app.optional-services.reconcile.enabled` in
+admin-bff's own `application.yml`. It was set by no manifest, no builder, no
+`brand.conf` and no CLI flag, and `kubectl set env` was **reverted on the next
+selfHeal pass** because `apps/31-admin-bff-api.yaml` carries
+`automated: {prune: true, selfHeal: true}` with no `ignoreDifferences`. A flag that
+can only be set by a write ArgoCD undoes is not "opt-in", it is unreachable.
+
+**The lever now exists and is a one-line commit.** The flag is DECLARED in
+`specs/cluster/manifests/admin-bff-api/deployment.yaml`:
+
+```yaml
+- { name: APP_OPTIONAL_SERVICES_RECONCILE_ENABLED, value: "false" }
+```
+
+That manifest is the **single source**. Flip the value to `"true"`, merge, let ArgoCD
+sync — and selfHeal then *enforces* it instead of fighting it.
+
+**It is deliberately NOT operator-settable at runtime**, and `apps/31` deliberately
+has NO `ignoreDifferences`:
+
+- ArgoCD addresses container env by **array index**
+  (`/spec/template/spec/containers/0/env/N`); there is no by-name pointer. Such an
+  exemption is correct only until someone inserts an env var above it, after which it
+  silently exempts a *different* variable — and this container's env carries
+  `secretKeyRef`s. Exempting the whole `/env` array un-enforces every variable in the
+  pod to make one settable.
+- Enabling this is not a routine toggle. It has a hard precondition (below), so it
+  wants a reviewed commit and an audit trail. selfHeal reverting an ad-hoc
+  `kubectl set env` of this key is **correct behaviour**, not a defect.
+
+The **runtime** surface an operator or superadmin drives is the per-slug
+`OptionalService` CRs — and *those* writes ARE exempted from selfHeal, on their own
+objects and **by name, not by index** (`apps/16` for the ConfigMap data keys;
+`app-of-apps.yaml` + `apps/00-app-of-apps-waved.yaml` for the 13a elements).
+
+**⚠ BLAST RADIUS — why the default is NOT flipped.** On its first lit tick the
+reconciler becomes authoritative over the entire closed slug set: a known slug with
+**no** CR is reconciled to `false`. The seed CRs ship `akkoma`/`tuwunel`/`phpbb`
+`enabled: true` while `apps/30-akkoma.yaml`, `apps/30-tuwunel.yaml` and
+`apps/30-phpbb.yaml` are still **hardcoded** Applications — so the first tick makes
+the 13a ApplicationSet create `optional-akkoma` / `optional-tuwunel` /
+`optional-phpbb`, each double-managing a manifest directory a hardcoded Application
+already owns, on every live mesh at once. The hardcoded-app **cut-over is the
+precondition for flipping this flag**, not a follow-up to it.
+
+### 10.2 The slug set is DERIVED, and one guard pins all five surfaces
+
+The set was described for months as a "closed 1:1 set". Measured, it was **five
+different cardinalities at once**: 17 ConfigMap booleans, 14 13a elements, 13 CRD
+enum values, 13 seed CRs, 12 Java registry entries. The governable set is
+
+```
+G = { slug : has a 13a ApplicationSet element AND an installed-services ConfigMap boolean }
+```
+
+— exactly what the reconciler can actuate. `tests/scripts/test-optional-service-slug-closure.sh`
+recomputes `G` and requires the CRD enum, the seed CRs, `apps/16`'s
+`ignoreDifferences` pointers and admin-bff's `OptionalServiceRegistry` to equal it.
+Nothing hard-codes the slugs, so adding one to 13a + the ConfigMap makes the guard
+name every surface still missing it. It reads the **sibling `hugmesh-admin-bff-api`
+checkout** for the Java leg and exits INCOMPLETE (a FAILURE) without it, because the
+worst defect it catches is invisible from inside this repo.
+
+> **⚠ RECORDED, NOT FIXED — the `installed-services` ConfigMap is WRITE-ONLY.**
+> A grep for the literal `installed-services` across every `.java/.ts/.py/.go` in the
+> org returns exactly one distinct line naming *that* object: `CONFIGMAP_NAME` in the
+> writer itself. No Deployment mounts it; no `configMapKeyRef` references it. Half of
+> every reconcile pass maintains an artefact with no consumer. What actually drives
+> the user-facing greying is the **`federation_modules` table** in the federation
+> Postgres, read via `GET /api/federation/capabilities` (§3.1) — which is precisely
+> why `manifests/federation-modules-gate/` had to exist. The absence is easy to miss
+> because the name collides with a *different*, per-brand ConfigMap
+> `hugmesh-installed-services-<domainSlug>` in `hugmesh-backend` that **is** read (by
+> `ConfigMapRunningServiceProvider`, for the cloud-backup menu). Do **not** close this
+> by inventing a consumer; it is recorded so the next reader does not infer one from
+> the writer's existence.
 
 ## 11. Verification & rollback
 
