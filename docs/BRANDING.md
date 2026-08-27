@@ -27,10 +27,16 @@ three — still live on adopter repos' and other meshes' disks, see
 
 * the repo name `hugmesh-generator` and every `hugmesh` in
   `scripts/**`, `specs/**`, builder entrypoints — code identity;
-* `hugmesh.net/*` label KEYS, `X-HugMesh-Local` and the other wire
-  headers, the `hugmesh.device-terminal.stepup.` subprotocol prefix — FROZEN
-  protocol constants (`scripts/tooling/tokens.json`
-  `frozen_protocol_constants`), enforced fail-closed at render;
+* `hugmesh.net/*` label KEYS, the `platform.hugmesh.net` CRD API group
+  (compiled into `hugmesh-admin-bff-api`'s Fabric8 client), `X-HugMesh-Local`
+  and the other wire headers, the `hugmesh.device-terminal.stepup.`
+  subprotocol prefix — FROZEN protocol constants (`scripts/tooling/tokens.json`
+  `frozen_protocol_constants`), enforced fail-closed at render, and protected
+  behind sentinels by every builder's `rebrand_sysroot()` in the baked device
+  tree (label keys in every structural-boundary shape incl. `KEY=hugmesh.net/…`
+  and the escaped-dot jsonpath spelling; the API group in every spelling).
+  `<sub>.hugmesh.net` as a HOST is not frozen — it rebrands to
+  `<sub>.<CLUSTER_DOMAIN>`;
 * …and their RETIRED pre-rebrand spellings are BANNED, not merely un-frozen:
   `scripts/tooling/tokens.json` `retired_protocol_constants` names them, and
   `token-classifier.isFrozen()` refuses them at emit exactly like the live ones,

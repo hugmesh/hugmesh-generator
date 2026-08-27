@@ -310,6 +310,7 @@ jobs:
             tests/scripts/test-portage-config-sync.sh
             tests/scripts/test-provision-manifest-injection.sh
             tests/scripts/test-publish-images.sh
+            tests/scripts/test-rebrand-frozen-label-keys.sh
             tests/scripts/test-reserved-prefix-copy-gate.sh
             tests/scripts/test-route-access-oracle.sh
             tests/scripts/test-rpi5-builder-input-validation.sh
@@ -317,6 +318,7 @@ jobs:
             tests/scripts/test-shared-build-assets.sh
             tests/scripts/test-spec-use-parity.sh
             tests/scripts/test-stack-e2e-argv.sh
+            tests/scripts/test-stack-fetch-repos.sh
             tests/scripts/test-studio-launch.sh
             tests/scripts/test-sunshine-fence.sh
             tests/scripts/test-tools-path-lib.sh

@@ -18,7 +18,9 @@ cd "${HERE}"
 compose(){ if docker compose version >/dev/null 2>&1; then docker compose "$@"; else docker-compose "$@"; fi; }
 
 case "${1:-help}" in
-    fetch)   [ -x ./fetch-repos.sh ] && ./fetch-repos.sh || echo "no fetch-repos.sh (repos may be bundled already)";;
+    # `[ -x f ] && f || echo` would turn a FAILED fetch into the "no fetch-repos.sh"
+    # message and exit 0 — the failure has to reach the console and the exit status.
+    fetch)   if [ -x ./fetch-repos.sh ]; then ./fetch-repos.sh; else echo "no fetch-repos.sh (repos may be bundled already)"; fi;;
     up)      compose -f docker-compose.yml --profile infra --profile app up -d "${@:2}";;
     mesh-up) compose -f docker-compose.yml -f docker-compose.mesh.yml --profile infra --profile mesh up -d "${@:2}";;
     down)    compose -f docker-compose.yml -f docker-compose.mesh.yml down "${@:2}";;

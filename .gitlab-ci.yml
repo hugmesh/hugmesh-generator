@@ -3112,9 +3112,11 @@ orphan-guards-verify:
         tests/scripts/test-platform-key-spelling.sh
         tests/scripts/test-portage-config-sync.sh
         tests/scripts/test-python-targets-seed.sh
+        tests/scripts/test-rebrand-frozen-label-keys.sh
         tests/scripts/test-rpi5-per-board-pkgdir.sh
         tests/scripts/test-shared-build-assets.sh
         tests/scripts/test-spec-use-parity.sh
+        tests/scripts/test-stack-fetch-repos.sh
         tests/scripts/test-x86-artifact-integrity.sh
         tests/stack/test-front-door-client-surface.sh
       "

@@ -255,7 +255,22 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # recorded denominator, 153, to a measured 154). Both were true of that tree and
 # neither describes this one: the entries above record how main moved underneath
 # it. Carried by re-running this file, not by arithmetic on either side's number.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-150}"
+#
+# RE-MEASURED 2026-08-27 on fix/rebrand-sentinel-eq-and-fetch-repos, same procedure:
+# that branch adds tests/scripts/test-rebrand-frozen-label-keys.sh (drives the REAL
+# rebrand_sysroot of all ten builders over a fixture sysroot; bash + sed + awk) and
+# tests/scripts/test-stack-fetch-repos.sh (pins the home-seeded stack's repo list
+# against the org listing and exercises fetch-repos.sh against file:// bases; bash
+# + git), both named in shell-suites.yml's ALPINE job. On its base (8165b81a) this
+# file printed 150 of 171; with the two suites, 152 of 173.
+#
+# RE-MEASURED 2026-08-27 on the MERGE of that branch with main at f14e2949 (which
+# carried the ungated test-selected-services-only.sh above: +0 gated, +1 total,
+# PREMERGE_UNGATED 21 -> 22). Running this file on the merged tree printed
+#     152 of 174 suites are named by a pull_request-triggered workflow
+# +2 gated from this branch, +1 total from main; PREMERGE_UNGATED stays at
+# main's 22. Carried by re-running this file, not by arithmetic.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-152}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a

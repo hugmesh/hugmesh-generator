@@ -45,10 +45,16 @@ const RETIRED = spec.retired_protocol_constants || {};
 const FROZEN_LABEL_NS = [...(FROZEN.label_key_namespaces || []), ...(RETIRED.label_key_namespaces || [])];
 const FROZEN_HEADERS = [...(FROZEN.wire_headers || []), ...(RETIRED.wire_headers || [])].map((h) => h.toLowerCase());
 const FROZEN_SUBPROTO = [...(FROZEN.subprotocol_prefixes || []), ...(RETIRED.subprotocol_prefixes || [])];
+// The k8s CRD API group (tokens.json `api_groups`, e.g. platform.hugmesh.net) is
+// compiled into hugmesh-admin-bff-api's Fabric8 client the way a label key is
+// compiled into an operator; a token landing on it in ANY spelling (with or
+// without the /v1alpha1 suffix, quoted in apiGroups, the CRD's own name) is refused.
+const FROZEN_API_GROUPS = [...(FROZEN.api_groups || []), ...(RETIRED.api_groups || [])];
 const RETIRED_TERMS = [
   ...(RETIRED.label_key_namespaces || []),
   ...(RETIRED.wire_headers || []),
   ...(RETIRED.subprotocol_prefixes || []),
+  ...(RETIRED.api_groups || []),
 ];
 
 /** A token whose render TARGET is a RETIRED protocol constant — a spelling the
@@ -76,6 +82,7 @@ function isFrozen(token) {
   if (FROZEN_LABEL_NS.some((ns) => t.includes(ns))) return true;
   if (FROZEN_HEADERS.includes(tl)) return true;
   if (FROZEN_SUBPROTO.some((p) => t.startsWith(p) || t.includes(p))) return true;
+  if (FROZEN_API_GROUPS.some((g) => t.includes(g))) return true;
   return false;
 }
 
