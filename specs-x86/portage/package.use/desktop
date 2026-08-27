@@ -5,7 +5,6 @@
 #   freetype[harfbuzz] — the GTK3 stack (pango → openbox/lxpanel/lightdm-gtk-greeter)
 #   libdom[xml]        — www-client/netsurf (svgtiny/svg)
 #   nftables[...]      — net-firewall/firewalld backend (FD-06 shields-up)
-#   libdrm[radeon]     — xf86-video-ati DDX pulled by xorg-drivers (VIDEO_CARDS radeon*)
 #   discover[flatpak]  — the desktop-app-governance store backend (FD-09 inc 7 /
 #                        admin-bff #115): builds Discover's Flatpak backend so the
 #                        provision_desktop_governance() Flatpak-remote config has a
@@ -32,7 +31,14 @@ dev-libs/libdbusmenu gtk3
 xfce-base/thunar udisks
 gnome-base/gvfs udisks
 net-firewall/nftables python json xtables
-x11-libs/libdrm video_cards_radeon
+# 'x11-libs/libdrm video_cards_radeon' USED to sit here, for the xf86-video-ati DDX
+# that x11-base/xorg-drivers pulls. Removed: it was redundant when it mattered and a
+# lie when it did not. libdrm has a video_cards_* IUSE, so it INHERITS make.conf's
+# VIDEO_CARDS — which carries 'radeon' exactly for --gpu-driver amd-free, the only
+# selection under which xorg-drivers pulls xf86-video-ati at all. Under every other
+# --gpu-driver the pin claimed a card the image does not have, which is the same
+# class of spec/argv disagreement that killed the 2026-08-22 edge_ai build via
+# package.use/gpu. No video_cards_* token belongs in package.use — see that file.
 kde-plasma/discover flatpak
 # Discover's Qt6/appstream stack tightened in newer releases (the note above is now
 # stale): the AppStream backend needs qt6, xdg-utils' man pages need xmlto[text], and

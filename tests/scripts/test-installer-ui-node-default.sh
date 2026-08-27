@@ -65,9 +65,16 @@ fi
 
 # 3. The desktop USE closure is still ROLE_CLIENT-gated — the reason a node CANNOT build
 #    calamares. If this gate ever goes away the rule's rationale changes.
-if sed -n '/^for puf in "\${SPECS_DIR}\/portage\/package\.use\/"\*/,/^done$/p' "${X86}" |
-       grep -qE '^\s*desktop\) \$\{ROLE_CLIENT\} \|\| continue ;;'; then
-    ok "package.use/desktop is still gated on ROLE_CLIENT (a node cannot resolve calamares)"
+#    The gate MOVED (2026-08-27) out of the copy loop's inline case into
+#    pu_copied_for_role(), the one predicate the copy loop AND the argv-time
+#    VIDEO_CARDS agreement assert both consult. So both halves are checked: the
+#    predicate must still say ROLE_CLIENT, AND the copy loop must still delegate to
+#    it — a predicate the loop ignores gates nothing.
+if sed -n '/^pu_copied_for_role() {/,/^}$/p' "${X86}" |
+       grep -qE '^\s*desktop\)\s+\$\{ROLE_CLIENT\} ;;' &&
+   sed -n '/^for puf in "\${SPECS_DIR}\/portage\/package\.use\/"\*/,/^done$/p' "${X86}" |
+       grep -qF 'pu_copied_for_role "$(basename "${puf}")"'; then
+    ok "package.use/desktop is still gated on ROLE_CLIENT via pu_copied_for_role(), which the copy loop still delegates to (a node cannot resolve calamares)"
 else
     bad "the ROLE_CLIENT gate on package.use/desktop moved — recheck the node rule"
 fi
