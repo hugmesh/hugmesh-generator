@@ -1,25 +1,68 @@
-// rbac-route-access.ts — the authoritative gateway_route_access matrix, encoded
-// from manifests/route-access/schema.sql, plus the gateway decision function the
-// RBAC gateway specs assert against.
+// rbac-route-access.ts — the gateway_route_access decision ORACLE the RBAC specs
+// assert against. The TABLE is generated (rbac-route-access.seed.ts); this file
+// is only the DECISION FUNCTION, and it mirrors the real gateway.
 //
-// WHY a TS mirror of schema.sql: the gateways that ENFORCE this table
-// (hugmesh-fe-gateway / -be-gateway / -pki-gateway) are README-only today
-// (Phase 8/10), so the live deny/allow path cannot be hit yet. This file lets the
-// specs assert the CONTRACT the gateways must implement: given a role-set and a
-// URL, does the most-specific matching allow row admit the request? When a real
-// gateway lands (or the mock stack grows a route-access enforcer), the same specs
-// point `evaluateAt` at the live endpoint and the expectations are unchanged.
+// ─────────────────────────────────────────────────────────────────────────────
+// WHAT WAS WRONG WITH THE PREVIOUS VERSION, AND WHY IT MATTERED
 //
-// Decision model (mirrors the schema.sql header + the games SecurityConfig
-// casdoorAuthoritiesConverter):
-//   * ROLE_ANONYMOUS rows are public — admitted with NO Casdoor JWT.
-//   * ROLE_USER is the authenticated floor.
-//   * A request is ALLOWED iff the caller holds the role of a matching allow row
-//     for THIS gateway at the MOST-SPECIFIC matching url_pattern. The table is an
-//     OR-of-allow-rows, so the games-admin AND ( ROLE_GAMES ∩ (ROLE_ADMIN ∪
-//     ROLE_MOD) ) is expressed as a SINGLE row keyed on the derived
-//     ROLE_GAMES_ADMIN — a single input role is default-deny.
-//   * Everything not matched by an allow row is DENY (default-deny).
+// 1. THE TABLE WAS COPIED BY HAND. The header said "copied 1:1 from
+//    manifests/route-access/schema.sql. Keep in lockstep with that file" — a path
+//    that has not existed since the seed moved to
+//    specs/cluster/manifests/route-access/initdb/20-schema.sql. Measured
+//    2026-08-26: the mirror held 11 hugmesh-fe-gateway rows against the seed's 77
+//    (50 rows against 150 overall). Everything the operator's profile/password
+//    report touches — /bff/user/**, /user/**, /bff/session, /_fragments/** — was
+//    simply absent, so this oracle answered DENY for all of it while the real
+//    gateway ALLOWs it. The specs were green the whole time, because they assert
+//    the oracle. The table now comes from the seed, generated, with a CI gate
+//    (tests/scripts/test-route-access-oracle.sh).
+//
+// 2. THE POLARITY WAS INVERTED FOR UNGOVERNED PATHS. The old line read
+//    `if (best < 0) return 'DENY'; // no matching pattern -> default-deny`.
+//    The gateway does the OPPOSITE:
+//      GatewayRouteAccessService.decide()  :185  `if (bestLen < 0) return Decision.NO_RULE;`
+//      GatewayRouteAccessFilter            :345  rejects ONLY on `== Decision.DENY`
+//      GatewayRouteAccessFilter javadoc  :68-70  "ALLOW / NO_RULE -> forward.
+//                                                 NO_RULE means the path isn't governed"
+//    "No row" and "denied" are DIFFERENT verdicts: an ungoverned path is forwarded
+//    and the coarse SecurityConfig gate is the authority. Encoding them as one
+//    verdict made every unmodelled path look walled, which is precisely how a
+//    missing row goes unnoticed. `GatewayDecision` now has three values and
+//    `gatewayForwards()` reproduces the filter's actual reject predicate.
+//
+// 3. `allow` WAS INEXPRESSIBLE. `interface RouteRule` had no `allow` field, so the
+//    seed's explicit-DENY rows (/bff/user/internal/**, /bff/mesh/internal/**,
+//    /bff/internal/**, /attest/api/create-account) could not be represented. The
+//    oracle got them right only by ACCIDENT — it had no row at all — and would
+//    have silently ALLOWed them the moment someone added one. `allow` is now a
+//    required field and deny-wins is implemented at the winning pattern.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// THE MODEL, mirroring GatewayRouteAccessService.decide() line for line:
+//   1. find the LONGEST url_pattern (by string length, exactly as the gateway
+//      does — `int len = r.urlPattern().length()`) that Ant-matches the path;
+//   2. no match at all              -> NO_RULE (the gateway FORWARDS);
+//   3. among the rows at that pattern: a role='PUBLIC' allow row admits without
+//      any Casdoor check; any satisfied allow=false row denies (deny-wins);
+//   4. governed but nothing granted -> DENY;
+//   5. otherwise                    -> ALLOW.
+//
+// NOT MODELLED, deliberately, and stated out loud rather than implied:
+//   * per-row `domain` scoping and the `casdoor_user` pin — the canonical seed
+//     sets neither (the generator ASSERTS the INSERT's column list is exactly
+//     (gateway, url_pattern, role, allow), so a row that starts scoping cannot
+//     arrive unnoticed);
+//   * the D8 `mfa_required` floor — that lives in the seed's separate UPDATE and
+//     is covered by tests/e2e/specs/29-mfa-privileged-floor.spec.ts against the
+//     LIVE posture, which is a stronger check than a mirror of it here;
+//   * the gateway's ROLE-typed authority match (a bare Casdoor PERMISSION must not
+//     satisfy a ROLE_ rule). Callers here pass Spring authority strings directly,
+//     and every caller in this suite passes ROLE_-prefixed values.
+//   * the admin bypass in GatewayRouteAccessFilter (ROLE_ADMIN on the internal
+//     Casdoor JWT forwards before decide() is consulted) — this is the TABLE's
+//     verdict, not the filter's end-to-end one.
+
+import { ROUTE_ACCESS_SEED } from './rbac-route-access.seed';
 
 export type Gateway =
   | 'hugmesh-pki-gateway'
@@ -28,136 +71,116 @@ export type Gateway =
   | 'hugmesh-superadmin-gateway';   // tailnet-only infra control plane (ROLE_SUPERADMIN)
 
 export interface RouteRule {
-  gateway: Gateway;
+  gateway: Gateway | string;
   urlPattern: string;   // Spring path pattern, e.g. /api/admin/**
-  role: string;         // ROLE_ANONYMOUS | ROLE_USER | ROLE_ADMIN | ROLE_MOD | ROLE_MATRIX |
-                         // ROLE_MASTODON | ROLE_GAMES_ADMIN
+  role: string;         // ROLE_* | PUBLIC (Casdoor check skipped)
+  allow: boolean;       // false = EXPLICIT DENY row; deny-wins at the winning pattern
 }
 
-// Canonical seed — one allow row per (gateway, url_pattern, role), copied 1:1 from
-// manifests/route-access/schema.sql. Keep in lockstep with that file.
-//
-// PLATFORM ACCESS roles (ROLE_MATRIX / ROLE_MASTODON) gate the Matrix/Mastodon
-// homeserver CLIENT surfaces on the be-gateway (commit 0100d3b, 2026-06-10) — the
-// broad ROLE_USER homeserver floor was REMOVED and replaced with these per-platform
-// rows (ROLE_MOD/ROLE_ADMIN paired on each as supersets). Holding plain ROLE_USER
-// no longer reaches Matrix or Mastodon; a platform ban is the ABSENCE of the role.
-export const ROUTE_ACCESS: RouteRule[] = [
-  // pki-gateway
-  { gateway: 'hugmesh-pki-gateway', urlPattern: '/api/auth/**',    role: 'ROLE_USER' },
-  { gateway: 'hugmesh-pki-gateway', urlPattern: '/login/**',       role: 'ROLE_ANONYMOUS' },
-  { gateway: 'hugmesh-pki-gateway', urlPattern: '/.well-known/**', role: 'ROLE_ANONYMOUS' },
+/** The canonical seed, GENERATED from
+ *  specs/cluster/manifests/route-access/initdb/20-schema.sql. Never edit by hand;
+ *  run `python3 scripts/gen-route-access-oracle.py`. */
+export const ROUTE_ACCESS: readonly RouteRule[] = ROUTE_ACCESS_SEED;
 
-  // be-gateway — akkoma moderation (ROLE_MOD + ROLE_ADMIN superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/pleroma/admin/**', role: 'ROLE_MOD' },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/pleroma/admin/**', role: 'ROLE_ADMIN' },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/pleroma/admin/**',    role: 'ROLE_MOD' },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/pleroma/admin/**',    role: 'ROLE_ADMIN' },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/pleroma/admin/**',        role: 'ROLE_MOD' },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/pleroma/admin/**',        role: 'ROLE_ADMIN' },
-  // ── PER-PLATFORM ACCESS roles (ban/congruence foundation, commit 0100d3b) ──
-  // Matrix client surface: /_matrix/** + the spec-required /.well-known/matrix/**
-  // delegation + /_synapse/** (host-scoped Synapse-compat catch-all).
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/_matrix/**',               role: 'ROLE_MATRIX' },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/_matrix/**',               role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/_matrix/**',               role: 'ROLE_ADMIN' },   // (admin superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/.well-known/matrix/**',    role: 'ROLE_MATRIX' },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/.well-known/matrix/**',    role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/.well-known/matrix/**',    role: 'ROLE_ADMIN' },   // (admin superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/_synapse/**',              role: 'ROLE_MATRIX' },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/_synapse/**',              role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/_synapse/**',              role: 'ROLE_ADMIN' },   // (admin superset)
-  // Mastodon client surface: /api/v1/** + /api/v2/** + /oauth/** + media/streaming.
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/**',                role: 'ROLE_MASTODON' },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/**',                role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/**',                role: 'ROLE_ADMIN' },   // (admin superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v2/**',                role: 'ROLE_MASTODON' },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v2/**',                role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v2/**',                role: 'ROLE_ADMIN' },   // (admin superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/oauth/**',                 role: 'ROLE_MASTODON' },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/oauth/**',                 role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/oauth/**',                 role: 'ROLE_ADMIN' },   // (admin superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/media/**',                 role: 'ROLE_MASTODON' },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/media/**',                 role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/media/**',                 role: 'ROLE_ADMIN' },   // (admin superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/streaming/**',      role: 'ROLE_MASTODON' },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/streaming/**',      role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/streaming/**',      role: 'ROLE_ADMIN' },   // (admin superset)
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/admin/**',       role: 'ROLE_ADMIN' },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/games/api/admin/**', role: 'ROLE_GAMES_ADMIN' },
-  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/**',             role: 'ROLE_USER' },
-
-  // fe-gateway
-  { gateway: 'hugmesh-fe-gateway', urlPattern: '/',                   role: 'ROLE_ANONYMOUS' },
-  { gateway: 'hugmesh-fe-gateway', urlPattern: '/social/matrix/**',   role: 'ROLE_USER' },
-  { gateway: 'hugmesh-fe-gateway', urlPattern: '/social/mastodon/**', role: 'ROLE_USER' },
-  { gateway: 'hugmesh-fe-gateway', urlPattern: '/login/**',           role: 'ROLE_ANONYMOUS' },
-  { gateway: 'hugmesh-fe-gateway', urlPattern: '/admin/**',           role: 'ROLE_ADMIN' },
-  { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/admin/**',     role: 'ROLE_GAMES_ADMIN' },
-  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/login',          role: 'ROLE_ANONYMOUS' },
-  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/register/**',    role: 'ROLE_USER' },
-  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/provision/**',   role: 'ROLE_USER' },
-  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/me/**',          role: 'ROLE_USER' },
-  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/admin/**',       role: 'ROLE_ADMIN' },
-
-  // superadmin-gateway — TAILNET-ONLY infra control plane (apps/22-gateway-superadmin.yaml).
-  // Every row here is ROLE_SUPERADMIN; there is NO down-cascade row for ROLE_ADMIN,
-  // so admin is default-denied. NB /api/federation/** is ROLE_USER on the be-gateway
-  // but ROLE_SUPERADMIN on THIS gateway — the gateway NAME scopes the decision.
-  { gateway: 'hugmesh-superadmin-gateway', urlPattern: '/bff/superadmin/**',      role: 'ROLE_SUPERADMIN' },
-  { gateway: 'hugmesh-superadmin-gateway', urlPattern: '/superadmin/service-catalog/**', role: 'ROLE_SUPERADMIN' },
-  { gateway: 'hugmesh-superadmin-gateway', urlPattern: '/api/federation/**',      role: 'ROLE_SUPERADMIN' },
-];
-
-/** Translate a Spring path pattern (`/a/**`, `/a/b`) into a matcher + a
- *  specificity score (longer literal prefix = more specific, an exact path beats
- *  a `/**` glob). Mirrors Spring's most-specific-pattern-wins. */
-function patternMatch(pattern: string, path: string): { matched: boolean; specificity: number } {
-  if (pattern.endsWith('/**')) {
-    const prefix = pattern.slice(0, -3);           // strip /**
-    // Spring `/**` matches the prefix itself or any `/`-delimited subpath — it
-    // must NOT swallow a sibling that merely shares a textual prefix (e.g.
-    // `/admin/**` must reject `/administrator`). A bare startsWith(prefix) would
-    // over-match, so require a segment boundary.
-    const matched = path === prefix || path.startsWith(prefix + '/');
-    // specificity = literal prefix length; a glob is less specific than an exact
-    // path of the same length, so subtract a hair.
-    return { matched, specificity: matched ? prefix.length * 2 : -1 };
-  }
-  if (pattern === '/') {
-    return { matched: path === '/', specificity: path === '/' ? 1 : -1 };
-  }
-  const matched = path === pattern;
-  return { matched, specificity: matched ? pattern.length * 2 + 1 : -1 };
-}
-
-export type GatewayDecision = 'ALLOW' | 'DENY';
+/** Spring's PUBLIC sentinel: an allow row whose role is PUBLIC admits with no
+ *  Casdoor JWT at all (GatewayRouteAccessService.isPublic). The seed also uses
+ *  ROLE_ANONYMOUS for the same intent on the browser-facing rows. */
+const PUBLIC_ROLES = new Set(['PUBLIC', 'ROLE_ANONYMOUS']);
 
 /**
- * The gateway decision the route-access table dictates for a caller holding
- * `roles` requesting `path` from OUTSIDE `gateway`. This is the oracle the specs
- * assert against — it encodes the schema.sql contract, NOT a live gateway.
+ * Ant-match a seed url_pattern against a path.
+ *
+ * The seed uses exactly four pattern shapes and the generator REFUSES to emit a
+ * fifth (scripts/gen-route-access-oracle.py:pattern_shape), so this stays a
+ * faithful stand-in for Spring's AntPathMatcher without reimplementing it:
+ *   `/**`            — matches every path
+ *   `<prefix>/**`    — the prefix itself, `<prefix>/`, or any `/`-delimited subpath.
+ *                      Must NOT swallow a textual sibling: `/admin/**` rejects
+ *                      `/administrator`.
+ *   `/<seg>` literal — exact match
+ *   `/*.css`-style   — single-segment glob; `*` never spans a `/`
+ */
+export function antMatch(pattern: string, path: string): boolean {
+  if (pattern === '/**') return true;
+  if (pattern.endsWith('/**')) {
+    const prefix = pattern.slice(0, -3);
+    return path === prefix || path.startsWith(prefix + '/');
+  }
+  if (pattern.includes('*')) {
+    // Single-segment glob: `*` matches anything but `/`.
+    const rx = new RegExp('^' + pattern.split('*')
+      .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('[^/]*') + '$');
+    return rx.test(path);
+  }
+  return path === pattern;
+}
+
+/** The three verdicts GatewayRouteAccessService.Decision carries. NO_RULE is NOT
+ *  a denial: the filter forwards on it (GatewayRouteAccessFilter:345). */
+export type GatewayDecision = 'ALLOW' | 'DENY' | 'NO_RULE';
+
+/**
+ * The route-access TABLE's verdict for a caller holding `roles` requesting `path`
+ * from outside `gateway` — a mirror of GatewayRouteAccessService.decide().
  *
  * `roles` should be the EFFECTIVE Casdoor role-set, i.e. include the DERIVED
  * ROLE_GAMES_ADMIN when (and only when) the user qualifies for it (games-admin
- * sync). Pass roles:[] for an unauthenticated caller (only ROLE_ANONYMOUS rows
- * admit).
+ * sync). Pass roles:[] for an unauthenticated caller (only PUBLIC/ROLE_ANONYMOUS
+ * rows admit).
+ *
+ * Returns NO_RULE — never DENY — when no pattern matches. Use `gatewayForwards`
+ * if what you mean is "does the request get through this filter".
  */
 export function gatewayDecision(gateway: Gateway, path: string, roles: string[]): GatewayDecision {
-  const rows = ROUTE_ACCESS.filter((r) => r.gateway === gateway);
-  // Find the most-specific matching url_pattern (across ALL roles), then check
-  // whether ANY allow row at that winning pattern is satisfied by the caller.
-  let best = -1;
-  const winningRoles: string[] = [];
+  return decideAgainst(ROUTE_ACCESS, gateway, path, roles);
+}
+
+/**
+ * The same decision against an ARBITRARY rule table.
+ *
+ * Exists so the deny-wins branch can be tested. It cannot be reached through the
+ * committed seed: the seed's four allow=false rows are the ONLY rows at their
+ * url_pattern, so removing deny-wins entirely still yields DENY through the
+ * governed-but-ungranted path. A mutation battery run on 2026-08-26 proved that —
+ * deleting `else explicitDeny = true` left all 99 RBAC assertions green. A branch
+ * no test can distinguish is a branch that will be wrong the first day the seed
+ * pairs an allow row with a deny row at one pattern, which is exactly the shape
+ * docs/ROUTE-ACCESS.md describes for a future per-user ban row.
+ */
+export function decideAgainst(
+  table: readonly RouteRule[], gateway: Gateway | string,
+  path: string, roles: string[],
+): GatewayDecision {
+  if (path == null) return 'NO_RULE';
+  const rows = table.filter((r) => r.gateway === gateway);
+
+  // 1) longest matching url_pattern wins — by LENGTH, as the gateway measures it.
+  let bestLen = -1;
   for (const r of rows) {
-    const { matched, specificity } = patternMatch(r.urlPattern, path);
-    if (!matched) continue;
-    if (specificity > best) { best = specificity; winningRoles.length = 0; }
-    if (specificity === best) winningRoles.push(r.role);
+    if (!antMatch(r.urlPattern, path)) continue;
+    if (r.urlPattern.length > bestLen) bestLen = r.urlPattern.length;
   }
-  if (best < 0) return 'DENY';                          // no matching pattern → default-deny
-  if (winningRoles.includes('ROLE_ANONYMOUS')) return 'ALLOW';
-  return winningRoles.some((wr) => roles.includes(wr)) ? 'ALLOW' : 'DENY';
+  if (bestLen < 0) return 'NO_RULE';                    // ungoverned path — the gateway FORWARDS
+
+  // 2) deny-wins among the rows AT that pattern.
+  let allowed = false;
+  let explicitDeny = false;
+  for (const r of rows) {
+    if (r.urlPattern.length !== bestLen || !antMatch(r.urlPattern, path)) continue;
+    if (r.allow && PUBLIC_ROLES.has(r.role)) { allowed = true; continue; }
+    if (!roles.includes(r.role)) continue;              // rule's role not held
+    if (r.allow) allowed = true; else explicitDeny = true;
+  }
+  if (explicitDeny) return 'DENY';
+  if (!allowed) return 'DENY';                          // governed-but-ungranted
+  return 'ALLOW';
+}
+
+/** What GatewayRouteAccessFilter actually does with the verdict: reject ONLY on
+ *  DENY; ALLOW and NO_RULE both forward (filter javadoc :68-70, code :345). */
+export function gatewayForwards(gateway: Gateway, path: string, roles: string[]): boolean {
+  return gatewayDecision(gateway, path, roles) !== 'DENY';
 }
 
 /** The effective role-set a systems seed user presents to a gateway: the granted

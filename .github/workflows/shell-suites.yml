@@ -52,6 +52,16 @@
 #       alpine:3 has neither docker nor podman and no daemon socket is mounted
 #   * tests/device-registry/test-layer-a-headscale-acl.sh
 #       the hugmesh-admin-bff-api sibling checkout, for the BFF-side Layer-A compiler
+#   * tests/stack/test-gateway-auth-flag-parity.sh
+#       the hugmesh-gateway sibling checkout. It compares the EFFECTIVE auth-carrier
+#       flags on the two lanes, and "effective" means resolving each key through the
+#       IMAGE DEFAULT in hugmesh-gateway/src/main/resources/application.yml
+#       (bff-exchange defaults FALSE, bff-session defaults TRUE — so "set on one side
+#       only" means opposite things for the two keys and a presence check would be
+#       wrong in both directions). A hosted runner cannot clone the org-private repo,
+#       and the suite reports INCOMPLETE and FAILS rather than degrading, so listing
+#       it here would just paint the PR gate red. It IS gated post-merge by
+#       .gitlab-ci.yml's lint:gateway-auth-flag-parity, which clones it.
 #   * tests/stack/test-m2-bootstrap.sh
 #       the ${STACK_SRC:-.stack-src} consumer checkouts its pin-drift leg walks
 #       (`make stack-clone`), or M2_PIN_DRIFT_SKIP=1
@@ -179,6 +189,7 @@ jobs:
             tests/scripts/test-kernel-artifact-cache.sh
             tests/scripts/test-kind-bootstrap-honesty.sh
             tests/scripts/test-kind-profile-app-closure.sh
+            tests/scripts/test-kind-profile-route-closure.sh
             tests/scripts/test-lsm-posture-honesty.sh
             tests/scripts/test-no-duplicate-env.sh
             tests/scripts/test-nullmailer-cross-postinst.sh
@@ -188,6 +199,7 @@ jobs:
             tests/scripts/test-provision-manifest-injection.sh
             tests/scripts/test-publish-images.sh
             tests/scripts/test-reserved-prefix-copy-gate.sh
+            tests/scripts/test-route-access-oracle.sh
             tests/scripts/test-rpi5-builder-input-validation.sh
             tests/scripts/test-rpi5-per-board-pkgdir.sh
             tests/scripts/test-shared-build-assets.sh

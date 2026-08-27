@@ -3,7 +3,10 @@
 > **`KIND_PROFILE=sso`** extends the core slice below with the **native-login
 > path** — Cassandra, the route-access seed DB, the fe-gateway chart (Ingress
 > re-classed to `nginx-internal`), admin-bff + user-bff (+ their Postgres), the
-> Angular host shell and the login/social UI remotes — then seeds Vault KV
+> Angular host shell, the login/social UI remotes, the **`/user/**` self-service
+> remote** (profile, preferences, password change) and **federation-api + its
+> Postgres** (the vanity/public-profile publish target a profile save calls) —
+> then seeds Vault KV
 > (`scripts/gen-cluster-secrets.sh` ONLINE mode through a `kubectl exec` shim
 > into `vault-0`, so no host `vault` CLI is needed) and the deterministic e2e
 > identity catalogue (`tests/qemu/seed-accounts.sh --roles` applied over a
@@ -11,6 +14,19 @@
 > `kind load`ed** under the exact refs the manifests render
 > (`registry.hugmesh.net/hugmesh/<repo>:main`, gateway `:dev`) — the
 > in-cluster Harbor is empty on a fresh cluster and is not used.
+>
+> **What this profile does NOT deploy, said plainly.** It is a slice, not a small
+> production cluster. The fe-gateway's route table is applied WHOLE, so roughly a
+> dozen routes point at tiers this profile never brings up — be-gateway, Matrix
+> (tuwunel), Mastodon (akkoma), the mod/forum/wiki/mesh/character-forge tiers and
+> their UIs, api-docs and remote-fragment. Those paths answer **503 behind a live
+> route**, which looks nothing like "not installed". The full, current inventory
+> with a reason per entry is the `EXEMPT` table in
+> `tests/scripts/kind_route_closure.py`, and
+> `tests/scripts/test-kind-profile-route-closure.sh` fails the build if a routed
+> Service is undeployed and *unexplained* — which is how `/user/**` was routed into
+> the void on every kind cluster until 2026-08-26 while `/bff/user/**` answered
+> `curl` perfectly.
 >
 > Driven end-to-end from the repo root:
 >
