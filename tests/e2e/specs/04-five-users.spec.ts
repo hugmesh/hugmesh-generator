@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { onboard, LOGIN_PASSWORD, shot } from './helpers';
+import { onboard, loginPassword, shot } from './helpers';
 
 const USERS = ['alice@gmail.com', 'bob@gmail.com', 'carol@gmail.com', 'dave@gmail.com', 'eve@gmail.com'];
 
@@ -30,7 +30,7 @@ test('a returning user signs in through the native login form (records a login e
   // returning user (POST /bff/login — the browser is never redirected to Casdoor).
   await page.goto('/login');
   await page.getByTestId('login-username').fill('alice@gmail.com');
-  await page.getByTestId('login-password').fill(LOGIN_PASSWORD);
+  await page.getByTestId('login-password').fill(loginPassword());
   await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('nav-user')).toBeAttached();
   await expect(page.getByTestId('nav-matrix')).toBeVisible(); // already registered → unlocked

@@ -1,6 +1,6 @@
 import { test, expect, request } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
-import { sharedPassword } from './rbac-roles';
+import { loginPassword } from './rbac-roles';
 
 /**
  * Handles this spec names that must NEVER be provisioned. Read by the Studio's
@@ -41,7 +41,6 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@hugmesh.net';
 // The deterministic native password every seeded/invited persona signs in with —
 // mirrors the mock-bff LOGIN_PASSWORD and the e2e helper (rbac-roles.ts
 // sharedPassword(): env, else the run-state credentials file, else throw).
-const LOGIN_PASSWORD = sharedPassword();
 
 // Every admin-only BFF endpoint the mock enforces (mirrors mock-bff routeAccess
 // + the /bff/admin/** route-access row). GET is non-mutating, safe to probe.
@@ -57,7 +56,7 @@ const ADMIN_GET_ENDPOINTS = [
 // stored in THIS request context's cookie jar and rides every subsequent /bff/**
 // call automatically (credentials are implicit to the context; no bearer token is
 // ever handed to the caller). An un-provisioned username 401s.
-async function loginAs(api: APIRequestContext, username: string, password = LOGIN_PASSWORD): Promise<void> {
+async function loginAs(api: APIRequestContext, username: string, password = loginPassword()): Promise<void> {
   const r = await api.post('/bff/login', { data: { username, password } });
   expect(r.status(), `native login ${username} -> ${r.status()}`).toBe(200);
 }

@@ -153,7 +153,28 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # assertion stayed green across this merge. MEASURED by running this file against
 # the merged tree and reading the line it prints:
 #     142 of 164 suites are named by a pull_request-triggered workflow
-PREMERGE_BASELINE="${GUARD_PREMERGE:-142}"
+# 141 -> 142 when test-e2e-enumeration-without-credentials.sh was gated. Small, but
+# recorded for the same reason as the reconciliations above: this branch expected
+# 142 and main said 141, and the only number worth writing down is the one MEASURED
+# on the merged tree. It happened to agree with the branch this time; the previous
+# entries in this block are all cases where it did not.
+#
+# 142 / 143 -> 144, denominator 164 / 164 -> 165, when this branch and main met a
+# SECOND time. Both
+# histories immediately above are kept, for the reason this block already gives
+# twice: each records a real reconciliation and deleting either erases why a
+# number moved. The shape here is the benign one and is still not a free pass --
+# each side gated exactly ONE new suite that the other does not have
+# (tests/scripts/test-appstore-effector-flags.sh here, and main's
+# test-e2e-enumeration-without-credentials.sh) -- so the merged tree is one
+# above the HIGHER of the two, and neither side's number is true of it. Adding
+# the two deltas by hand would have been right by luck; it is MEASURED, by
+# running this file against the merged tree and reading the line it prints:
+#     144 of 165 suites are named by a pull_request-triggered workflow
+# The ungated SET also shrank 22 -> 21 in main's half of this merge (it gated
+# test-e2e-reporter-shape.sh, the named follow-up the block below recorded), and
+# that is why main moved TWO while its own comment names one suite.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-144}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
@@ -211,17 +232,16 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-142}"
 #   test-e2e-social-function-matrix.sh   needs node_modules + a chromium
 #   test-e2e-studio-gui-lane.sh          needs node_modules + chromium + Qt6
 #
-# THE NINTH IS DIFFERENT AND IS SAID SO OUT LOUD. tests/scripts/test-e2e-reporter-shape.sh
-# needs NOTHING but node >= 23.6 and python3 — its own header says "OFFLINE, NO
-# STACK, NO ROOT, NO node_modules", and MEASURED here with node_modules moved
-# aside it still exits 0 with 30 passed. The node:24-alpine job already installs
-# python3, so it is gateable as a one-line addition. It is recorded rather than
-# wired because this workflow's own rule is that "every suite below was EXECUTED
-# in the image named by its job before being listed here — not classified by
-# reading it", and the integration session that merged these lanes could not run
-# containers to do that. Run it in node:24-alpine, add it to that job's SUITES
-# list, and raise PREMERGE_BASELINE by one. THAT IS A REAL, NAMED FOLLOW-UP, not
-# an exemption.
+# THE NINTH WAS DIFFERENT, AND IS NOW WIRED. tests/scripts/test-e2e-reporter-shape.sh
+# needs NOTHING but node >= 23.6 and python3 -- its own header says "OFFLINE, NO
+# STACK, NO ROOT, NO node_modules". The session that merged the gherkin lanes
+# recorded it here instead of gating it because it could not run containers to
+# measure it, and named the follow-up out loud rather than dressing it up as an
+# exemption. THAT FOLLOW-UP IS NOW DONE: MEASURED in node:24-alpine under that
+# job's own apk set, with tests/e2e/node_modules absent from the tree entirely
+# rather than merely moved aside -- 30 passed, 0 failed, rc=0 -- and added to that
+# job's SUITES list. Nothing about the other eight changed; they still need a
+# node_modules and a chromium no shell-suites image carries.
 PREMERGE_UNGATED=(
   tests/casdoor/test-jwt-custom-token.sh
   tests/device-registry/test-layer-a-headscale-acl.sh
@@ -233,7 +253,6 @@ PREMERGE_UNGATED=(
   tests/scripts/test-e2e-func-media-games.sh
   tests/scripts/test-e2e-gherkin-harness.sh
   tests/scripts/test-e2e-governance-function-matrix.sh
-  tests/scripts/test-e2e-reporter-shape.sh
   tests/scripts/test-e2e-social-function-matrix.sh
   tests/scripts/test-e2e-studio-gui-lane.sh
   tests/scripts/test-eso-target-collisions.sh
