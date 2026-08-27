@@ -468,6 +468,28 @@ export function sharedPassword(): string {
   );
 }
 
+/**
+ * The shared password, resolved LAZILY and memoised.
+ *
+ * WHY THIS EXISTS. sharedPassword() throws when nothing has seeded a credential
+ * — deliberately, because a guessable literal that still authenticates and goes
+ * green is the exact bug the random-per-run password work removed. But callers
+ * used to invoke it at MODULE SCOPE (`const LOGIN_PASSWORD = sharedPassword()`),
+ * which made that throw fire at IMPORT time. The casualty was enumeration:
+ * `playwright test --list` starts no browser and contacts nothing, yet could not
+ * list a single spec without a seeded stack — so the Studio's e2e feature tree
+ * could not show an operator what the suite even covers until they had already
+ * brought a mesh up.
+ *
+ * Deferring the call to first USE keeps the contract (still no literal, still
+ * throws when a real login is attempted with nothing seeded) while letting the
+ * suite be READ without credentials.
+ */
+let _sharedPassword: string | undefined;
+export function loginPassword(): string {
+  return (_sharedPassword ??= sharedPassword());
+}
+
 /** Resolve a seed user's password — per-user env override, else
  *  sharedPassword() (E2E_PASSWORD, resolved/generated/thrown — see that
  *  function). Mirrors games roles.ts passwordFor(). */
