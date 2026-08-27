@@ -75,7 +75,7 @@
 # was -- of the first six, three are now gated and three are below; all eight of the
 # second batch are gated.
 #   * tests/scripts/test-liquibase-grant-roles.sh
-#       python:3.12-slim + perl/PyYAML, with /home/magus/Github mounted and SERVICE_SRC_ROOT set
+#       python:3.12-slim + perl/PyYAML, with the checkout parent mounted and SERVICE_SRC_ROOT set
 #   * tests/scripts/test-service-env-contract.sh
 #       alpine:3 + apk add bash python3 py3-yaml, PLUS the 9 first-party BFF checkouts mounted and SERVI
 #   * tests/scripts/test-eso-target-collisions.sh
