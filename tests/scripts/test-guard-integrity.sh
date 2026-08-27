@@ -138,14 +138,17 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     141 of 163 suites are named by a pull_request-triggered workflow
 # and by nothing else.
 #
-# 141 -> 142 when test-url-embedded-credentials.sh was gated. MEASURED on this
-# branch merged with main. NOTE FOR WHOEVER LANDS THE SECOND ONE: a sibling branch
-# (fix/e2e-enumeration-needs-no-credential) also gates one new suite and also
-# measures 142, because each is measuring a tree containing only ITS OWN addition.
-# The merged result is 143. Do not take either branch's number on faith — re-run
-# this file on the integrated tree, which is the entire lesson the entries above
-# record.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-142}"
+# 141 -> 142 when test-e2e-enumeration-without-credentials.sh was gated, and
+# 141 -> 142 again, independently, when test-url-embedded-credentials.sh was gated
+# on a sibling branch. BOTH measured 142, and both were right about the tree they
+# measured and wrong about the merge: each was looking at a tree containing only
+# its OWN addition. This block exists because that keeps happening.
+#
+# The value below is MEASURED on the integrated tree, not carried over from either
+# branch — the merge measured 144, which is neither branch's 142 nor the 143 main
+# carried in. Re-run this file after any merge that adds a suite; do not reason about
+# what the number "should" be.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-144}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
@@ -203,17 +206,16 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-142}"
 #   test-e2e-social-function-matrix.sh   needs node_modules + a chromium
 #   test-e2e-studio-gui-lane.sh          needs node_modules + chromium + Qt6
 #
-# THE NINTH IS DIFFERENT AND IS SAID SO OUT LOUD. tests/scripts/test-e2e-reporter-shape.sh
-# needs NOTHING but node >= 23.6 and python3 — its own header says "OFFLINE, NO
-# STACK, NO ROOT, NO node_modules", and MEASURED here with node_modules moved
-# aside it still exits 0 with 30 passed. The node:24-alpine job already installs
-# python3, so it is gateable as a one-line addition. It is recorded rather than
-# wired because this workflow's own rule is that "every suite below was EXECUTED
-# in the image named by its job before being listed here — not classified by
-# reading it", and the integration session that merged these lanes could not run
-# containers to do that. Run it in node:24-alpine, add it to that job's SUITES
-# list, and raise PREMERGE_BASELINE by one. THAT IS A REAL, NAMED FOLLOW-UP, not
-# an exemption.
+# THE NINTH WAS DIFFERENT, AND IS NOW WIRED. tests/scripts/test-e2e-reporter-shape.sh
+# needs NOTHING but node >= 23.6 and python3 -- its own header says "OFFLINE, NO
+# STACK, NO ROOT, NO node_modules". The session that merged the gherkin lanes
+# recorded it here instead of gating it because it could not run containers to
+# measure it, and named the follow-up out loud rather than dressing it up as an
+# exemption. THAT FOLLOW-UP IS NOW DONE: MEASURED in node:24-alpine under that
+# job's own apk set, with tests/e2e/node_modules absent from the tree entirely
+# rather than merely moved aside -- 30 passed, 0 failed, rc=0 -- and added to that
+# job's SUITES list. Nothing about the other eight changed; they still need a
+# node_modules and a chromium no shell-suites image carries.
 PREMERGE_UNGATED=(
   tests/casdoor/test-jwt-custom-token.sh
   tests/device-registry/test-layer-a-headscale-acl.sh
@@ -225,7 +227,6 @@ PREMERGE_UNGATED=(
   tests/scripts/test-e2e-func-media-games.sh
   tests/scripts/test-e2e-gherkin-harness.sh
   tests/scripts/test-e2e-governance-function-matrix.sh
-  tests/scripts/test-e2e-reporter-shape.sh
   tests/scripts/test-e2e-social-function-matrix.sh
   tests/scripts/test-e2e-studio-gui-lane.sh
   tests/scripts/test-eso-target-collisions.sh
