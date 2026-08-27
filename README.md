@@ -1111,7 +1111,19 @@ screenshots in `tests/e2e/screenshots/`:
 
 # or, against an already-running stack (tests/stack/up.sh):
 ./tests/e2e/run.sh
+
+# the GHERKIN lane, against any of the three meshes (NOTHING is started for you):
+./tests/e2e/run.sh --bdd --env docker      # the compose stack above
+./tests/e2e/run.sh --bdd --env kind        # the local devops cluster
+./tests/e2e/run.sh --bdd --env qemu        # an emulated device
+./tests/e2e/run.sh --print-command --env kind   # the plan as JSON; executes nothing
+./tests/e2e/run.sh --evidence              # where this run's screenshots/transcripts went
 ```
+
+`run.sh` is the single entry point: `make stack-e2e-bdd [BDD_ENV=…] [BDD_TAGS=…]
+[BDD_FEATURES=…]` and `make stack-e2e-bdd-evidence` delegate to it, so there is
+one way to spell a run rather than several that drift. `tests/e2e/features/README.md`
+§4d has the whole flag set; `tests/scripts/test-e2e-cli-lane.sh` is its gate.
 
 > `tests/stack/mock-*.mjs` are fast in-memory test doubles. `tests/stack/up-real.sh`
 > brings up real tuwunel + Casdoor + Mastodon (+ the platform Cassandra) from

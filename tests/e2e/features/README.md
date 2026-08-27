@@ -393,6 +393,63 @@ These read `manifest.jsonl` (the append log), so they see rows written by
 *earlier steps of the same scenario*. This is the anti-decoration assertion for
 the evidence lane itself.
 
+## 4d. The CLI entry point — ONE way to run this lane
+
+`tests/e2e/run.sh` is the only invocation path. Every `stack-e2e-bdd*` Makefile
+target delegates to it, so `make stack-e2e-bdd BDD_ENV=qemu` and
+`bash tests/e2e/run.sh --bdd --env qemu` are the same run. When these were two
+recipes they drifted; do not add a third.
+
+```sh
+tests/e2e/run.sh --bdd --env docker|kind|qemu   # which mesh (NOTHING is started)
+tests/e2e/run.sh --bdd --tags '@interface:cli'  # -> bddgen --tags (filters GENERATION)
+tests/e2e/run.sh --bdd --features cli/          # -> playwright (filters COLLECTION)
+tests/e2e/run.sh --bdd --list                   # collect, run nothing
+tests/e2e/run.sh --bdd --gen                    # generate, run nothing
+tests/e2e/run.sh --print-command --env kind     # the whole plan as JSON, executes nothing
+tests/e2e/run.sh --evidence [--json]            # where this run's artefacts are, per env/interface
+```
+
+With **no** new flag it behaves exactly as it always did (legacy specs, both
+projects, arguments forwarded verbatim, SNAP_BASE_URL untouched) — that is what
+`tests/e2e/run-all.sh` and `tests/qemu/run-qemu-e2e.sh` rely on, and it is
+asserted, not assumed.
+
+Three properties are gated by `tests/scripts/test-e2e-cli-lane.sh`, which drives
+the script with a **stub `npx` on PATH** and reads the argv that really came
+out — grepping the source for `SNAP_ENV` would prove a token exists, not that it
+is forwarded:
+
+* `--env` reaches the runner as `SNAP_ENV` + `SNAP_BASE_URL` (+ the chromium
+  resolver map for kind), and the bash table agrees with
+  `ENVIRONMENT_DEFS` in `steps/dimensions.ts` for **every** mesh;
+* `--tags` reaches the generator and `--features` reaches the runner, translated
+  from the source path you type to the `.features-gen/` mirror;
+* the runner's exit code is the script's exit code, and a failed `bddgen` aborts
+  instead of running a smaller suite.
+
+An unknown `--env` **fails naming the legal set**; it never falls through to the
+default mesh. `--evidence` counts the manifest's rows itself (never
+`manifest.counts`) and exits non-zero when there is nothing to report — an empty
+summary printed as success is how a lane that ran nothing passes for one that
+ran everything.
+
+**Writing a cli-interface scenario.** Drive a real command line and assert on
+what came back. Reuse the shared vocabulary — `I run the shell command`,
+`I run the Studio CLI with`, `the command succeeded/failed`,
+`the command exit code was N`, `the command output contains`. For a structured
+answer use the JSON steps in `steps/cli-lane.steps.ts`
+(`the command output JSON field "counts.byInterface.cli" is at least 1`) rather
+than a substring match on a JSON blob, which passes for the wrong reasons.
+`I run the e2e CLI with` accepts only run.sh's read-only modes: a scenario that
+executed the lane would recurse, and `--gen` would rewrite `.features-gen/` —
+shared mutable state — underneath the run that asked.
+
+Do **not** tag a cli scenario `@env:` unless it genuinely needs that mesh
+running. `make help`, `make qemu-matrix-enumerate`, `make kind-honesty` and the
+Studio's Qt-free channels all answer with everything down; gating them would
+turn honest coverage into permanent skips.
+
 ## 5. Verify your feature before you commit
 
 From `tests/e2e`:
@@ -402,10 +459,12 @@ npx bddgen && npx playwright test --list --project=bdd
 bash ../scripts/test-e2e-gherkin-harness.sh
 bash ../scripts/test-e2e-env-interface-dimensions.sh   # env/interface axes + evidence
 bash ../scripts/test-e2e-func-media-games.sh           # the media/games FUNCTION census
+bash ../scripts/test-e2e-cli-lane.sh                   # the CLI entry point + evidence summary
 ```
 
-or, from the repo root, `make stack-e2e-bdd-check` (generation + the guard, no
-stack needed). `make stack-e2e-bdd` runs the lane against a live stack.
+or, from the repo root, `make stack-e2e-bdd-check` (generation + all three
+guards, no stack needed). `make stack-e2e-bdd` runs the lane against a live
+mesh; `make stack-e2e-bdd-evidence` says where the artefacts went.
 
 If `bddgen` exits non-zero your feature uses a step nobody defined — that is the
 anti-decoration gate doing its job. Define the step or fix the wording; never
