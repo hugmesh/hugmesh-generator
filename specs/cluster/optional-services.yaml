@@ -113,7 +113,14 @@ spec:
         - { gateway: hugmesh-be-gateway, urlPattern: /api/pleroma/admin/** }
         - { gateway: hugmesh-be-gateway, urlPattern: /pleroma/admin/** }
       # federation_modules registration (federation-api repo — separate wave).
-      federationModule: { slug: akkoma, mountAt: /social/mastodon, changeset: "023-register-akkoma-module.xml" }
+      # NOTE the module slug is `mastodon`, NOT the catalogue slug `akkoma`: the row
+      # 023-register-akkoma-module.xml actually seeds is `slug=mastodon`, and that is
+      # the string the host shell resolves the remote by at runtime and the seeder
+      # (tests/stack/seed-e2e.sh leg 4) UPDATEs federation_modules on. `mastodon` is
+      # also FROZEN as a feature slug (reserved-prefixes.yaml + 041's header), so the
+      # DB side is authoritative and this metadata mirrors it. Asserted per-slug by
+      # scripts/validate-federation-module-slugs.sh, which re-derives BOTH sides.
+      federationModule: { slug: mastodon, mountAt: /social/mastodon, changeset: "023-register-akkoma-module.xml" }
       casdoorSeed: null
 
     # ── tuwunel — Matrix homeserver (Conduit fork) ─────────────────────────────
@@ -134,7 +141,12 @@ spec:
         - { gateway: hugmesh-be-gateway, urlPattern: /_matrix/** }
         - { gateway: hugmesh-be-gateway, urlPattern: /.well-known/matrix/** }
         - { gateway: hugmesh-be-gateway, urlPattern: /_synapse/** }
-      federationModule: { slug: tuwunel, mountAt: /social/matrix, changeset: "024-register-tuwunel-module.xml" }
+      # federation_modules registration. Module slug is `matrix`, NOT the catalogue
+      # slug `tuwunel` — same rule as akkoma/mastodon above: 024 seeds `slug=matrix`,
+      # that is what the host shell and the seeder key on, and `matrix` is a frozen
+      # feature slug. Re-derived and compared by
+      # scripts/validate-federation-module-slugs.sh.
+      federationModule: { slug: matrix, mountAt: /social/matrix, changeset: "024-register-tuwunel-module.xml" }
       casdoorSeed: null
 
     # ── phpbb — forum homeserver (backend-only, isolated namespace) ────────────
@@ -286,22 +298,22 @@ spec:
       routeAccessRows:
         - { gateway: hugmesh-fe-gateway, urlPattern: /character-studio/** }
       # federation_modules registration lives in the SEPARATE hugmesh-federation-api
-      # repo (Liquibase changelog), NOT in this generator repo. The changeset to add
-      # there is 036-register-character-studio-module.xml (next free number after 035),
-      # mirroring 025-register-games-module.xml field-for-field with
-      # slug=character-studio, kind=remote-shell, exposed_module=./routes,
-      # mountAt=/character-studio, requiresRole=ROLE_USER,
-      # remote_entry_url=http://hugmesh-character-studio-ui:8080/remoteEntry.json,
-      # plus a db.changelog-master.xml <include>. Documented in the generator manifest
-      # dir (manifests/character-studio/FEDERATION-REGISTRATION-TODO.md) until that
-      # repo's wave lands. mountAt/requiresRole/exposed are recorded inline here so the
-      # generator can derive the registration when the federation-api wave runs.
+      # repo (Liquibase changelog), NOT in this generator repo. That wave HAS LANDED:
+      # the changeset is 040-register-character-studio-module.xml (this file predicted
+      # "036, the next free number after 035" — 036/037 were taken by the
+      # system-findings pair first, so the prediction went stale and pointed at a
+      # changeset that does not exist). It mirrors 025-register-games-module.xml
+      # field-for-field: slug=character-studio, kind=remote-shell,
+      # exposed_module=./routes, mountAt=/character-studio, requiresRole=ROLE_USER.
+      # mountAt/requiresRole/exposed are recorded inline here so the generator can
+      # derive the registration; scripts/validate-federation-module-slugs.sh re-reads
+      # the named changeset and fails if it is absent or disagrees.
       federationModule:
         slug: character-studio
         mountAt: /character-studio
         requiresRole: ROLE_USER
         exposed: ./routes
-        changeset: "036-register-character-studio-module.xml"   # in hugmesh-federation-api (separate repo)
+        changeset: "040-register-character-studio-module.xml"   # in hugmesh-federation-api (separate repo)
       casdoorSeed: null
 
     # ── character-forge — Character Forge (3D character maker + XR chat avatars) ──

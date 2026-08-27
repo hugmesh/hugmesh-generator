@@ -84,7 +84,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # see its own new suite). NO branch's number was correct for the merged tree:
 # the two e2e branches both said 118, main said 133. This is the number this
 # file printed when run against the merged tree, and nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-135}"
+#
+# 135 -> 137 / denominator 145 -> 148 when main was merged in. Main had moved
+# under this branch three times (the tube signed-media gate, the fragment route
+# target gate, the password-reset front door, the federation module-slug gate).
+# MEASURED on the merged tree by running this file and reading its own line:
+#     137 of 148 suites are named by a pull_request-triggered workflow
+PREMERGE_BASELINE="${GUARD_PREMERGE:-137}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
@@ -119,6 +125,7 @@ PREMERGE_UNGATED=(
   tests/egress-vpn/test-secret-contract.sh
   tests/pentest/nuclei/test-templates.sh
   tests/scripts/test-eso-target-collisions.sh
+  tests/scripts/test-federation-module-slugs.sh
   tests/scripts/test-liquibase-grant-roles.sh
   tests/scripts/test-service-env-contract.sh
   tests/stack/test-gateway-auth-flag-parity.sh

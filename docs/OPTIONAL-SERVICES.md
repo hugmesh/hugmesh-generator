@@ -78,7 +78,7 @@ registry is that missing list). Each service entry carries:
 | `esoFile` | its **per-service** ExternalSecret file (post-split; see §9) |
 | `gatewayHost` / `gatewayRouteIds` | its public host + the gateway route ids to drop |
 | `routeAccessRows` | the `gateway_route_access` rows it owns (dropped so a matched route to a deleted upstream cannot 502 / stale-grant) |
-| `federationModule` | the `federation_modules` registration (federation-api wave) |
+| `federationModule` | the `federation_modules` registration (federation-api wave). **Its `slug` is the MODULE slug, which is not always the catalogue slug on the left** — `phpbb`'s module is `forum`, `akkoma`'s is `mastodon`, `tuwunel`'s is `matrix`. The module slug is what the host shell resolves the remote by at runtime and what `tests/stack/seed-e2e.sh` leg 4 UPDATEs, so the changeset's `<column name="slug">` is authoritative and this field mirrors it. `changeset` names the file in `hugmesh-federation-api` that seeds the row; if it has not landed yet the number must still be FREE there. Both facts are re-derived and compared every run by `scripts/validate-federation-module-slugs.sh` (CI job `lint:federation-module-slugs`) |
 | `casdoorSeed` | a dedicated Casdoor it owns (games → `casdoor-games`) |
 | `deliveryManifestPath` / `deliveryApp` | (node slugs) a SECOND, dark manifest tree + its MANUAL-sync Application that delivers runtime bytes to the node — `egress-vpn` uses it for the secret-projector (`manifests/egress-vpn` + `apps/13e-egress-vpn.yaml`); pruned with the slug like `manifestPath` |
 | `secretContract` | (node slugs) the file that OWNS the cross-lane delivery contract. When present, the three fields below are **copies** of it and lose every argument to it |
