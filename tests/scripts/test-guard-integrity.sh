@@ -137,7 +137,88 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # and reading the line it prints:
 #     141 of 163 suites are named by a pull_request-triggered workflow
 # and by nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-141}"
+#
+# 141 -> 142 when test-e2e-enumeration-without-credentials.sh was gated, and
+# 141 -> 142 again, independently, when test-url-embedded-credentials.sh was gated
+# on a sibling branch. BOTH measured 142, and both were right about the tree they
+# measured and wrong about the merge: each was looking at a tree containing only
+# its OWN addition. This block exists because that keeps happening.
+#
+# The value below is MEASURED on the integrated tree, not carried over from either
+# branch — the merge measured 144, which is neither branch's 142 nor the 143 main
+# carried in. Re-run this file after any merge that adds a suite; do not reason about
+# what the number "should" be.
+#
+# 144 -> 146, denominator 165 -> 167, when fix/argocd-dashboard-honesty landed. This
+# branch wires TWO new suites into shell-suites.yml
+# (tests/platform-capability-rbac/test-probe-rbac-namespaces.sh and
+# test-argocd-route-honesty.sh) and has now been re-measured THREE times against three
+# different mains: it wrote 119 for its own base, then 145 when main was 143/164, and
+# 146 here, because main moved to 144/165 underneath it when test-url-embedded-credentials.sh
+# was gated. Every one of those three was correct about the tree it measured. That is
+# the ninth value a branch has believed on this line, and the eighth time this exact
+# line has conflicted.
+#
+# Resolved as a union, per the rule the blocks above already state: main's record and
+# this branch's are complementary, not competing, so BOTH are kept. Note that the first
+# resolution of this conflict had to take main's side WHOLESALE rather than line-wise --
+# main did not merely hold a bigger number, it added the PREMERGE_UNGATED set-pin below,
+# which this branch's side predates entirely, and a line-wise keep of 119 would have
+# silently dropped that mechanism.
+#
+# MEASURED on the integrated tree by running this file and reading the line it prints:
+#     146 of 167 suites are named by a pull_request-triggered workflow
+# +2 gated, +2 total: both of this branch's suites are named by shell-suites.yml, which
+# is why the gated count and the denominator moved together and the ungated SET pin
+# below was untouched (it stays 21). That this agrees with 144+2 is a CHECK on the
+# measurement, not a substitute for it -- the seven entries above are all cases where
+# the arithmetic and the measurement disagreed.
+#
+# 146 -> 147, denominator 167 -> 168, when feat/appstore-effector-enable landed. This
+# branch has now met main FOUR times and written a different number each time: 118
+# against its own base of 117, then 142, then 144, and 147 here. Every one of the four
+# was correct about the tree in front of it and wrong about the merge, because main
+# gained suites underneath it each time -- most recently the two from
+# fix/argocd-dashboard-honesty.
+#
+# The shape of this merge is the benign one and is STILL not a free pass: each side
+# gates suites the other does not have (tests/scripts/test-appstore-effector-flags.sh
+# here; main's argocd pair and the url-credentials suite), so the merged tree sits above
+# the higher of the two and neither side's number describes it. Adding the deltas by hand
+# would have been right by luck.
+#
+# Note also why main's side is taken WHOLESALE rather than line-wise: main's half carries
+# the PREMERGE_UNGATED set-pin, which the branch's half predates. A resolution that kept
+# only the branch's number would have deleted that mechanism while looking like a
+# one-line change -- the same trap the first appstore reconciliation recorded.
+#
+# MEASURED by running this file against the merged tree and reading the line it prints:
+#     147 of 168 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total: the branch's single new suite is named by shell-suites.yml, so it
+# lands GATED and does not belong in PREMERGE_UNGATED -- which is why that list is
+# unchanged at 21 and check 7's set assertion stayed green across this merge.
+#
+# 147 -> 148, denominator 168 -> 169, when feat/workload-console-versions landed. This
+# branch has now written three numbers into this line: 144 of 165, then 147 of 168, and
+# 148 of 169 here. Each was measured and each was correct about the tree in front of it.
+#
+# THE PREVIOUS ENTRY IS THE WORKED EXAMPLE, so it is left standing above rather than
+# tidied away. When this branch measured 147/168, feat/appstore-effector-enable ALSO sat
+# at 147/168 -- both add exactly one gated suite to a main at 146/167, so both were right
+# and the two were mutually exclusive. That branch landed first, main became 147/168, and
+# this one had to be re-measured at 148/169. The prediction was written into this file
+# before it happened and is what made the re-measure routine instead of a surprise.
+#
+# Main's side is taken WHOLESALE rather than line-wise, and both comment blocks are kept
+# as a union, for the reasons the entries above give: main's half carries the
+# PREMERGE_UNGATED set-pin that older branch halves predate, so a line-wise keep would
+# delete that mechanism while looking like a number change.
+#
+# MEASURED on the integrated tree by running this file and reading the line it prints:
+#     148 of 169 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total: this branch's suite is named by shell-suites.yml, so it lands GATED
+# and never enters PREMERGE_UNGATED, which stays 21.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-148}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
@@ -195,17 +276,16 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-141}"
 #   test-e2e-social-function-matrix.sh   needs node_modules + a chromium
 #   test-e2e-studio-gui-lane.sh          needs node_modules + chromium + Qt6
 #
-# THE NINTH IS DIFFERENT AND IS SAID SO OUT LOUD. tests/scripts/test-e2e-reporter-shape.sh
-# needs NOTHING but node >= 23.6 and python3 — its own header says "OFFLINE, NO
-# STACK, NO ROOT, NO node_modules", and MEASURED here with node_modules moved
-# aside it still exits 0 with 30 passed. The node:24-alpine job already installs
-# python3, so it is gateable as a one-line addition. It is recorded rather than
-# wired because this workflow's own rule is that "every suite below was EXECUTED
-# in the image named by its job before being listed here — not classified by
-# reading it", and the integration session that merged these lanes could not run
-# containers to do that. Run it in node:24-alpine, add it to that job's SUITES
-# list, and raise PREMERGE_BASELINE by one. THAT IS A REAL, NAMED FOLLOW-UP, not
-# an exemption.
+# THE NINTH WAS DIFFERENT, AND IS NOW WIRED. tests/scripts/test-e2e-reporter-shape.sh
+# needs NOTHING but node >= 23.6 and python3 -- its own header says "OFFLINE, NO
+# STACK, NO ROOT, NO node_modules". The session that merged the gherkin lanes
+# recorded it here instead of gating it because it could not run containers to
+# measure it, and named the follow-up out loud rather than dressing it up as an
+# exemption. THAT FOLLOW-UP IS NOW DONE: MEASURED in node:24-alpine under that
+# job's own apk set, with tests/e2e/node_modules absent from the tree entirely
+# rather than merely moved aside -- 30 passed, 0 failed, rc=0 -- and added to that
+# job's SUITES list. Nothing about the other eight changed; they still need a
+# node_modules and a chromium no shell-suites image carries.
 PREMERGE_UNGATED=(
   tests/casdoor/test-jwt-custom-token.sh
   tests/device-registry/test-layer-a-headscale-acl.sh
@@ -217,7 +297,6 @@ PREMERGE_UNGATED=(
   tests/scripts/test-e2e-func-media-games.sh
   tests/scripts/test-e2e-gherkin-harness.sh
   tests/scripts/test-e2e-governance-function-matrix.sh
-  tests/scripts/test-e2e-reporter-shape.sh
   tests/scripts/test-e2e-social-function-matrix.sh
   tests/scripts/test-e2e-studio-gui-lane.sh
   tests/scripts/test-eso-target-collisions.sh
