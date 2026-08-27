@@ -84,6 +84,20 @@
 #       would just paint the PR gate red for a missing clone rather than a real
 #       defect. It IS gated post-merge by .gitlab-ci.yml's
 #       lint:optional-service-slug-closure, which clones it sparsely.
+#   * tests/scripts/test-selected-services-only.sh
+#       RED ON MAIN ON PURPOSE, and therefore NOT listed above: a red suite in this
+#       workflow blocks every pull request in the repo. It pins the whole
+#       selected-services chain (build render -> boot delivery -> superadmin enable)
+#       and FIVE of its checks name live defects — the jetson baker that resolves no
+#       gate at all, the two install-state artefacts the boot path still sources
+#       from git, the ON git baseline, the unlit reconciler switch, and the missing
+#       resources-finalizer (A4 B2 B3 C5b C7). Its sixth red, C8, went green when
+#       hugmesh-admin-bff-api PR #43 merged on 2026-08-27. It still needs that
+#       sibling checkout for C8 and reports UNVERIFIED + exits 3 without it, which a
+#       hosted runner cannot give it. Gated post-merge by .gitlab-ci.yml's
+#       lint:selected-services-only-chain, which clones it sparsely. Move it into
+#       the list above when the five go green — each prints its own "GREEN WHEN"
+#       line and each has a control that plants the fix and requires green.
 #   * tests/scripts/test-service-env-contract.sh
 #       alpine:3 + apk add bash python3 py3-yaml, PLUS the 9 first-party BFF checkouts mounted and SERVI
 #   * tests/scripts/test-eso-target-collisions.sh
@@ -296,6 +310,7 @@ jobs:
             tests/scripts/test-portage-config-sync.sh
             tests/scripts/test-provision-manifest-injection.sh
             tests/scripts/test-publish-images.sh
+            tests/scripts/test-rebrand-frozen-label-keys.sh
             tests/scripts/test-reserved-prefix-copy-gate.sh
             tests/scripts/test-route-access-oracle.sh
             tests/scripts/test-rpi5-builder-input-validation.sh
@@ -303,6 +318,7 @@ jobs:
             tests/scripts/test-shared-build-assets.sh
             tests/scripts/test-spec-use-parity.sh
             tests/scripts/test-stack-e2e-argv.sh
+            tests/scripts/test-stack-fetch-repos.sh
             tests/scripts/test-studio-launch.sh
             tests/scripts/test-sunshine-fence.sh
             tests/scripts/test-tools-path-lib.sh

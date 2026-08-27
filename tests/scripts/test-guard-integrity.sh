@@ -234,16 +234,56 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     150 of 171 suites are named by a pull_request-triggered workflow
 # +1 gated, +1 total; PREMERGE_UNGATED is untouched and stays 21.
 #
-# RE-MEASURED 2026-08-27 on fix/e2e-toolchain-readiness, same procedure: this
-# branch adds tests/scripts/test-e2e-toolchain-readiness.sh (the guard over
-# tests/e2e/check-toolchain.sh, the probe every e2e make target now runs in place
-# of `[ -d tests/e2e/node_modules ]`) and names it in shell-suites.yml's NODE job —
-# it builds its fixtures with node and needs no node_modules (its real-tree leg
-# SKIPS LOUDLY without one, counted as a skip). Running this file on the branch
+# RE-MEASURED 2026-08-27 on sync3/selected-services-gate-v3, which carries the
+# never-pushed local commit 85f868ca onto main at 6ba15d35. This branch lands ONE
+# new suite, tests/scripts/test-selected-services-only.sh, and lands it UNGATED:
+# five of its checks are RED on main by design (A4 B2 B3 C5b C7 -- the
+# selected-services cut-over has not happened), and a red suite in the
+# pull_request workflow blocks every PR in the repo. It is recorded in
+# PREMERGE_UNGATED below with that reason and gated post-merge by .gitlab-ci.yml's
+# lint:selected-services-only-chain. So the GATED count does not move and only
+# the denominator does. Running this file on a clean
+# `git archive origin/main | tar -x` extract of 6ba15d35 printed
+#     150 of 171 suites are named by a pull_request-triggered workflow
+# and on the integrated tree it printed
+#     150 of 172 suites are named by a pull_request-triggered workflow
+# +0 gated, +1 total; PREMERGE_UNGATED grows 21 -> 22, and the SET pin below moves
+# with it -- the new entry is NAMED, which is what a set pin is for.
+#
+# The commit being carried had written "141 of 155" into this line, measured
+# against main at db8d7697 the same morning (and had itself corrected main's then
+# recorded denominator, 153, to a measured 154). Both were true of that tree and
+# neither describes this one: the entries above record how main moved underneath
+# it. Carried by re-running this file, not by arithmetic on either side's number.
+#
+# RE-MEASURED 2026-08-27 on fix/rebrand-sentinel-eq-and-fetch-repos, same procedure:
+# that branch adds tests/scripts/test-rebrand-frozen-label-keys.sh (drives the REAL
+# rebrand_sysroot of all ten builders over a fixture sysroot; bash + sed + awk) and
+# tests/scripts/test-stack-fetch-repos.sh (pins the home-seeded stack's repo list
+# against the org listing and exercises fetch-repos.sh against file:// bases; bash
+# + git), both named in shell-suites.yml's ALPINE job. On its base (8165b81a) this
+# file printed 150 of 171; with the two suites, 152 of 173.
+#
+# RE-MEASURED 2026-08-27 on the MERGE of that branch with main at f14e2949 (which
+# carried the ungated test-selected-services-only.sh above: +0 gated, +1 total,
+# PREMERGE_UNGATED 21 -> 22). Running this file on the merged tree printed
+#     152 of 174 suites are named by a pull_request-triggered workflow
+# +2 gated from this branch, +1 total from main; PREMERGE_UNGATED stays at
+# main's 22. Carried by re-running this file, not by arithmetic.
+#
+# RE-MEASURED 2026-08-27 on the MERGE of fix/e2e-toolchain-readiness with main at
+# 5c5c6320 (which carried 152 of 174 above). This branch adds ONE gated suite,
+# tests/scripts/test-e2e-toolchain-readiness.sh (the guard over
+# tests/e2e/check-toolchain.sh, the probe every e2e make target and every Gherkin
+# guard now runs in place of `[ -d tests/e2e/node_modules ]`), named in
+# shell-suites.yml's NODE job — it builds its fixtures with node and needs no
+# node_modules (its real-tree leg SKIPS LOUDLY without one, counted as a skip).
+# On its own base (f1c41bb3) this file printed 151 of 172; on the merged tree it
 # printed
-#     151 of 172 suites are named by a pull_request-triggered workflow
-# +1 gated, +1 total; PREMERGE_UNGATED is untouched and stays 21.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-151}"
+#     153 of 175 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total; PREMERGE_UNGATED stays at main's 22. Carried by re-running
+# this file, not by arithmetic on either side's number.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-153}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
@@ -334,6 +374,23 @@ PREMERGE_UNGATED=(
   tests/scripts/test-kind-metrics-api.sh
   tests/scripts/test-federation-module-slugs.sh
   tests/scripts/test-liquibase-grant-roles.sh
+  # RED ON MAIN, and the reds are real defects rather than suite bugs: a jetson
+  # builder that bakes the cluster tree without resolving the gate at all, two
+  # selection-rendered artefacts the boot path still sources from git, a git
+  # baseline that ships three services ON, the reconciler master switch
+  # deliberately off pending the hardcoded-app cut-over, and a missing ArgoCD
+  # resources-finalizer — A4 B2 B3 C5b C7. (Its C8 leg was ALSO red under the
+  # entry written on 2026-08-26; that text was stale. hugmesh-admin-bff-api PR #43
+  # merged 2026-08-27 07:04 UTC, the handler is on that repo's main, and C8
+  # measures green. It had been reading a working tree 9 commits behind its own
+  # origin/main.) Gating a red suite in the pull_request workflow blocks every PR
+  # in the repo, so it is gated post-merge by .gitlab-ci.yml's
+  # lint:selected-services-only-chain instead. It ALSO needs the
+  # hugmesh-admin-bff-api checkout for its C8 leg and reports UNVERIFIED + exits 3
+  # without it, which a hosted runner cannot satisfy. Not an exemption: EACH of the
+  # five reds has a control that plants the fix and requires it to go green
+  # (A4 NC10e, B2 NC21, B3 NC22, C5b NC23, C7 NC14).
+  tests/scripts/test-selected-services-only.sh
   # Needs the hugmesh-admin-bff-api checkout for its fifth surface (the
   # controller's OptionalServiceRegistry). It reports INCOMPLETE and FAILS without
   # it rather than checking four surfaces of five, so a hosted runner that cannot

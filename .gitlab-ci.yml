@@ -1601,6 +1601,98 @@ lint:optional-service-slug-closure:
     # re-run the checker against each planted defect.
     - bash tests/scripts/test-optional-service-slug-closure.sh
 
+# The WHOLE selected-services chain, end to end: an image built with services X,Y
+# must boot with only X,Y, and a superadmin must then be able to enable Z. Four
+# legs — A build-time render, B does the render reach the cluster, C the runtime
+# enable path, and the sibling half that owns the endpoint itself.
+#
+# NOT in the pre-merge gate, on purpose. This suite is RED on today's main and the
+# reds are real defects, not suite bugs (see below); a red suite in
+# .github/workflows/shell-suites.yml blocks EVERY pull request in the repo, which
+# trains everyone to ignore the board. It is recorded in PREMERGE_UNGATED in
+# tests/scripts/test-guard-integrity.sh with that reason and gated HERE instead,
+# the same shape as lint:optional-service-slug-closure and
+# lint:gateway-auth-flag-parity.
+#
+# ⚠ EXPECTED RED (measured 2026-08-27 against main at db8d7697, and RE-MEASURED the
+# same day when carried onto main at 6ba15d35: the same five, nothing else). FIVE
+# checks, each naming a live defect and each printing its own "GREEN WHEN" line:
+#   A4  build-jetson-stage4.sh bakes ${SYSROOT}/var/lib/hugmesh/cluster and never
+#       resolves gate_optional_services at all (it does not source
+#       scripts/_optional-services-lib.sh). Its own comment admits it. Since
+#       PR #183 the baked tree is what a device APPLIES, so a jetson image deploys
+#       every optional service whatever was selected.
+#   B2  the installed-services ConfigMap and the seed OptionalService CRs are
+#       rendered into the baked sysroot and then synced FROM GIT by
+#       apps/16-reserved-prefixes-policy.yaml and apps/13d-optional-services-
+#       operator.yaml, so those two renders are written to files nothing reads.
+#       (apps/13a IS applied from the baked tree now — that half PR #183 closed.)
+#   B3  the git baseline ships akkoma/tuwunel/phpbb ON in both of those artefacts,
+#       so they land on every device regardless of the selection.
+#   C5b the reconciler master switch is "false". The LEVER exists (C5 is green,
+#       PR #186), but until the hardcoded apps/30-* Applications are cut over,
+#       lighting it would double-manage eleven manifest directories.
+#   C7  apps/13a's template carries no resources-finalizer.argocd.argoproj.io, so
+#       disabling a slug deletes the Application and orphans its workloads.
+#
+# C8 IS NO LONGER RED, AND THE OLD TEXT HERE WAS STALE. It used to read
+# "hugmesh-admin-bff-api declares no /bff/superadmin/optional-services handler …
+# lands with that repo's PR #43". PR #43 MERGED 2026-08-27 07:04 UTC and
+# OptionalServiceSuperadminController is on that repo's main, so C8 measures GREEN.
+# What hid that: C8 read a WORKING TREE, and the developer checkout it read was 9
+# commits behind its own origin/main. C8 is a SOURCE check, so it now measures the
+# remote-tracking default branch whenever the tree is behind it and NAMES the
+# source it measured in the verdict line. TWO SEPARATE FACTS, do not merge them:
+#   * SOURCE — the handler IS on hugmesh-admin-bff-api's main. C8 asserts this.
+#   * DEPLOYMENT — the admin-bff jar running on kind-hugmesh-local was built at
+#     06:19 UTC, 45 minutes BEFORE the endpoint merged, so that image does NOT
+#     serve it. That is deployment lag. NO check in this suite measures it, and it
+#     is not what C8 is for.
+#
+# Do NOT add allow_failure and do NOT relax a check to get the colour. Every one of
+# the five has a negative control that plants the FIX and requires the check to go
+# GREEN — A4 NC10e, B2 NC21, B3 NC22, C5b NC23, C7 NC14 — so none of them is stuck
+# red and the exit criterion is executable. (V2's text here made that claim of all
+# six; MEASURED, only C7 and C8 had such a control. NC12 planted half of B2's fix
+# and only required B2 to stop naming that half, and NC13 requires C5b to STAY red.
+# The four missing controls were written rather than the claim softened.)
+#
+# The admin-bff checkout is part of the gate, not a convenience: C8 is the only leg
+# that can see the endpoint, and without the clone it reports UNVERIFIED and the
+# suite exits 3 rather than calling the rest a pass. SELSVC_ADMIN_BFF_ROOT is
+# authoritative when set, so a clone that silently did not happen is reported
+# instead of being papered over by some other copy on the runner.
+# Offline apart from the clone: no cluster, no kubectl, no docker, no root.
+lint:selected-services-only-chain:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  variables:
+    SELSVC_ADMIN_BFF_ROOT: "${CI_PROJECT_DIR}/.selsvc-src/hugmesh-admin-bff-api"
+  before_script:
+    - pip install --quiet pyyaml
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - mkdir -p "$(dirname "${SELSVC_ADMIN_BFF_ROOT}")"
+    # Blobless + sparse: only the adminbff package tree is ever materialised.
+    - git clone --depth 1 --filter=blob:none --sparse "${ORG_BASE}/hugmesh-admin-bff-api.git" "${SELSVC_ADMIN_BFF_ROOT}"
+    - git -C "${SELSVC_ADMIN_BFF_ROOT}" sparse-checkout set src/main/java/net/hugmesh/adminbff
+    # A clone that did not materialise the package must stop the job HERE, loudly.
+    # C8 would otherwise report UNVERIFIED for a missing clone and the run would
+    # exit 3 — a failure that looks like the defect it exists to name.
+    - |
+      set -e
+      test -d "${SELSVC_ADMIN_BFF_ROOT}/src/main/java/net/hugmesh/adminbff" || {
+        echo "FATAL: hugmesh-admin-bff-api has no src/main/java/net/hugmesh/adminbff after cloning — C8 would be blind"
+        exit 1
+      }
+  script:
+    # bash is required: the 41 negative controls stage copies of the real tree and
+    # re-run both analysers against each planted defect or planted fix. That is the
+    # bulk of the ~3 minutes this job takes; SELSVC_NO_NC=1 skips them and is NOT
+    # set here, because the controls are the half that proves the checks still read
+    # what they claim to.
+    - bash tests/scripts/test-selected-services-only.sh
+
 # Local-stack source-patch gate. Unit-tests scripts/patch-stack-src.sh (the
 # post-clone pass that rewrites files in ./.stack-src which `docker compose build`
 # then consumes) against synthetic checkouts: the pre-rename private dependency is
@@ -3020,9 +3112,11 @@ orphan-guards-verify:
         tests/scripts/test-platform-key-spelling.sh
         tests/scripts/test-portage-config-sync.sh
         tests/scripts/test-python-targets-seed.sh
+        tests/scripts/test-rebrand-frozen-label-keys.sh
         tests/scripts/test-rpi5-per-board-pkgdir.sh
         tests/scripts/test-shared-build-assets.sh
         tests/scripts/test-spec-use-parity.sh
+        tests/scripts/test-stack-fetch-repos.sh
         tests/scripts/test-x86-artifact-integrity.sh
         tests/stack/test-front-door-client-surface.sh
       "

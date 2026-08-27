@@ -1737,6 +1737,110 @@ if [ "${STEAM_DELIVERY}" = "native" ] && ${ROLE_CLIENT} && ${MEDIA_DATA} \
    && { ${STANDALONE} || [ "${DESKTOP}" = "full" ]; }; then
     STEAM_NATIVE=true
 fi
+
+# ── GPU card matrix + package.use ⇄ VIDEO_CARDS agreement (fails at ARGV time) ──
+# gpu_video_cards() is THE driver→VIDEO_CARDS matrix: the make.conf render
+# (@@VIDEO_CARDS@@, make.conf.tmpl:68) and the assert below both read it, so the
+# builder cannot hold two opinions about which cards this image has.
+gpu_video_cards() { # <gpu-driver> -> the VIDEO_CARDS list for it
+    case "$1" in
+        all-free)    echo "amdgpu radeonsi intel iris nouveau" ;;
+        nvidia-free) echo "nouveau" ;;
+        nvidia)      echo "nouveau nvidia" ;;
+        amd-free)    echo "amdgpu radeonsi radeon" ;;
+        amd-pro)     echo "amdgpu radeonsi" ;;
+        intel-free)  echo "intel iris" ;;
+        intel-pro)   echo "intel iris" ;;
+        *)           echo "" ;;                  # 'none' and any non-GPU role
+    esac
+}
+# Vendor stack flags, derived here (not 600 lines later) so the assert can use the
+# SAME role gating the Phase-4 package.use copy uses. The 'GPU_DRIVER not none/
+# all-free forces GPU=true' rule just above means these can never be true on a
+# non-GPU role.
+NVIDIA_PROPRIETARY=false; AMD_PRO=false; INTEL_PRO=false
+if ${GPU}; then
+    case "${GPU_DRIVER}" in
+        nvidia)    NVIDIA_PROPRIETARY=true ;;
+        amd-pro)   AMD_PRO=true ;;
+        intel-pro) INTEL_PRO=true ;;
+    esac
+fi
+# pu_copied_for_role(): is specs-x86/portage/package.use/<name> installed into THIS
+# image's sysroot? ONE predicate, consumed by the Phase-4 copy loop and by the
+# assert — a file the assert checks is exactly a file the build will install.
+pu_copied_for_role() { # <basename> -> 0 iff this role/driver gets the file
+    case "$1" in
+        gpu)             ${GPU} ;;
+        desktop)         ${ROLE_CLIENT} ;;
+        capable)         ${CAPABLE} ;;
+        nvidia)          ${NVIDIA_PROPRIETARY} ;;
+        # nvidia-headless (-tools) ONLY for HEADLESS proprietary-NVIDIA roles
+        # (edge_ai/be+gpu): nvidia-settings' gtk+:3[X] dep walls under the node
+        # -X posture (issue #60 item 3). Desktop GPU roles keep 'tools'.
+        nvidia-headless) ${NVIDIA_PROPRIETARY} && ! ${ROLE_CLIENT} ;;
+        amd-pro)         ${AMD_PRO} ;;
+        intel-pro)       ${INTEL_PRO} ;;
+        steam)           ${STEAM_NATIVE} ;;
+        *)               true ;;                 # role-independent
+    esac
+}
+# assert_spec_video_cards(): a package.use file may NOT hard-code a video_cards_*
+# token. The card set is a per-build decision made exactly ONCE, by --gpu-driver,
+# and rendered into make.conf's VIDEO_CARDS; every package that has a video_cards_*
+# IUSE inherits THAT list. Forcing a card on one package therefore does not merely
+# add a flag — it drags in that card's dependency chain, and each dependency
+# inherits the (narrower) make.conf list, so the chain is unsatisfiable and the
+# whole 'image' emerge GROUP aborts with a payload-incomplete error naming grub/
+# dracut/parted/kubelet, i.e. pointing nowhere near the GPU.
+# Measured: 2026-08-22 edge_ai fleet run (out/sessions/20260822-225110-80c83a) —
+# edge_ai defaults --gpu-driver nvidia ⇒ VIDEO_CARDS="nouveau nvidia", while
+# package.use/gpu forced mesa's cards to the all-free set, so:
+#   emerge: there are no ebuilds built with USE flags to satisfy
+#           ">=x11-libs/libdrm-2.4.121[video_cards_amdgpu]"
+#   (dependency required by "media-libs/mesa-26.1.6::gentoo")
+# ~40 minutes into the merge. Nothing that runs during that build could have seen
+# it coming. This runs before the first byte is downloaded.
+assert_spec_video_cards() {
+    local pud="${SPECS_DIR}/portage/package.use"
+    [ -d "${pud}" ] || return 0
+    local cards; cards="$(${GPU} && gpu_video_cards "${GPU_DRIVER}" || echo "")"
+    local puf base offenders="" scanned=0
+    for puf in "${pud}/"*; do
+        [ -f "${puf}" ] || continue
+        base="$(basename "${puf}")"
+        pu_copied_for_role "${base}" || continue
+        scanned=$((scanned + 1))
+        # FIELDS, not a regex over the line: a package.use line is
+        # "<atom> <flag>…", an enabled flag is a bare word, a disabled one is
+        # '-'-prefixed, and the prose about these flags lives in '#' comments —
+        # a substring match would fire on the comments and miss nothing else.
+        local hit
+        while read -r hit; do
+            [ -n "${hit}" ] || continue
+            local atom="${hit%% *}" tok="${hit##* }" card="${hit##*video_cards_}"
+            case " ${cards} " in
+                *" ${card} "*) : ;;   # make.conf agrees — redundant, but not a lie
+                *) offenders+="    ${base}: ${atom} ${tok}  (card '${card}' is NOT in VIDEO_CARDS)"$'\n' ;;
+            esac
+        done < <(awk '/^[[:space:]]*#/ { next }
+                      NF > 1 { for (i = 2; i <= NF; i++) if ($i ~ /^video_cards_/) print $1, $i }' "${puf}")
+    done
+    if [ -n "${offenders}" ]; then
+        err "spec/argv disagree about VIDEO_CARDS — this build cannot resolve."
+        err "  --gpu-driver ${GPU_DRIVER}  ⇒  VIDEO_CARDS=\"${cards}\"  (make.conf)"
+        err "  but these package.use entries force cards make.conf did not select:"
+        printf '%s' "${offenders}" >&2
+        err "  Every dependency of those packages inherits make.conf's VIDEO_CARDS, so the"
+        err "  forced card's dep chain is UNSATISFIABLE and the whole 'image' emerge group"
+        err "  aborts (~40min in) reporting a missing grub/dracut/kubelet payload instead."
+        err "  Fix the SPEC, not the argv: drop the video_cards_* token and let the package"
+        err "  inherit VIDEO_CARDS (${SPECS_DIR#"${SCRIPT_DIR}/"}/portage/package.use/)."
+        exit 1
+    fi
+    [ "${scanned}" -gt 0 ] || { err "internal: no package.use files scanned for role '${ROLE}' — the VIDEO_CARDS agreement check would pass vacuously"; exit 1; }
+}
+assert_spec_video_cards
 # Thin-desktop stream host (--with-sunshine): CLIENT desktops WITH a tailnet
 # only. Sunshine streams THIS node's desktop session and the fence admits it
 # exclusively on the tailscale iface — a server/cluster role has no desktop
@@ -2284,19 +2388,12 @@ info "Build stamp: ${BUILD_TS} (UTC; brand=${BRAND}, env=${ENV})"
 # 'nvidia' value pulls a proprietary DISPLAY driver (nvidia-drivers, nouveau
 # blacklisted). amd-pro / intel-pro keep the OPEN display driver and add the
 # vendor's proprietary/closed compute + Vulkan stack (see packages-gpu-*-pro.list).
-NVIDIA_PROPRIETARY=false; AMD_PRO=false; INTEL_PRO=false
+# The card list itself comes from gpu_video_cards() — the SAME matrix
+# assert_spec_video_cards() already checked the specs against at argv time — and
+# NVIDIA_PROPRIETARY/AMD_PRO/INTEL_PRO were derived there too.
 if ${GPU}; then
     GPU_USE="vulkan vaapi vdpau gbm egl gles2"
-    case "${GPU_DRIVER}" in
-        all-free)    VIDEO_CARDS="amdgpu radeonsi intel iris nouveau" ;;
-        nvidia-free) VIDEO_CARDS="nouveau" ;;
-        nvidia)      VIDEO_CARDS="nouveau nvidia"; NVIDIA_PROPRIETARY=true ;;
-        amd-free)    VIDEO_CARDS="amdgpu radeonsi radeon" ;;
-        amd-pro)     VIDEO_CARDS="amdgpu radeonsi"; AMD_PRO=true ;;
-        intel-free)  VIDEO_CARDS="intel iris" ;;
-        intel-pro)   VIDEO_CARDS="intel iris"; INTEL_PRO=true ;;
-        none)        VIDEO_CARDS="" ;;
-    esac
+    VIDEO_CARDS="$(gpu_video_cards "${GPU_DRIVER}")"
     info "GPU driver: ${GPU_DRIVER} (VIDEO_CARDS='${VIDEO_CARDS}')$(${NVIDIA_PROPRIETARY} && echo ' — NVIDIA proprietary, nouveau blacklisted'; ${AMD_PRO} && echo ' — + AMDGPU-PRO Vulkan/OpenCL'; ${INTEL_PRO} && echo ' — + Intel compute/media stack')${NVIDIA_CUDA:+ + CUDA toolkit}"
 else
     GPU_USE=""
@@ -2955,23 +3052,50 @@ rebrand_sysroot() {
     _hproj="$(_sed_rep_escape "${HARBOR_PROJECT:-${BRAND}}")"
     local f
     while IFS= read -r -d '' f; do
-        # FROZEN k8s label-KEY / API-group namespace `hugmesh.net/<suffix>` must NOT
-        # rebrand (it is compiled into operators/JVM and used as node/pod selectors). Every
-        # KEY form is preceded by a YAML-structural boundary (line-start, space, {, (, comma,
-        # quote, backtick); every HOST/URL form is preceded by a dot or slash. Protect the KEY
-        # namespace behind a sentinel (first two -e), rebrand hosts/URLs/emails/CORS in the
-        # middle, then restore the KEY namespace verbatim (last -e). The sentinel contains
-        # neither `hugmesh.net` nor `hugmesh-`, so the middle rules skip it.
+        # FROZEN protocol identity must NOT rebrand (scripts/tooling/tokens.json
+        # frozen_protocol_constants; tests/scripts/test-rebrand-frozen-label-keys.sh
+        # drives this exact function over every builder):
+        #   * the k8s label-KEY / annotation-key namespace `hugmesh.net/<suffix>` —
+        #     node/pod selectors, compiled into operators/JVM;
+        #   * the CRD API group `platform.hugmesh.net` — compiled into
+        #     hugmesh-admin-bff-api (Fabric8 .withGroup("platform.hugmesh.net")), so a
+        #     rebranded CRD/RBAC would 404 the optional-services client on every fork.
+        # KEY forms are preceded by a structural boundary — line-start, space, {, (,
+        # comma, EQUALS, quote, backtick — or spelt with an escaped dot (a kubectl
+        # jsonpath `hugmesh\.net/seam-probe`); HOST/URL forms are preceded by a dot or
+        # slash and DO rebrand. The `=` is the KEY=VALUE shape of
+        # specs/cluster/egress-vpn-secret-contract.env: without it every non-default
+        # build rebranded that contract while the manifests' nodeSelector stayed
+        # literal, so the two halves disagreed on a frozen key (2026-08-27). Pinned
+        # consequence: `=hugmesh.net/<anything>` reads as a KEY — a bare host WITH a
+        # path after `=` must be written as a URL (scheme://). Deliberately NOT in the
+        # class (0 instances under either rebrand root, census 2026-08-27): tab, `[`,
+        # `:`, `/`, `;`, `>`, `!`, `|`, `*` and `-` (`${VAR:-hugmesh.net/x}`) — a file
+        # under /etc/hugmesh or /var/lib/hugmesh/cluster using one of those shapes
+        # WILL rebrand its key; widen the class when one appears.
+        # ORDER: sentinels first; then the EXPLICIT knobs (title, games, domain,
+        # registry project, brand); the catch-all `hugmesh -> ORG` runs LAST. It used
+        # to run first, so with a non-default --org every `hugmesh.net` host became
+        # <org>.net and CLUSTER_DOMAIN, HARBOR_PROJECT and BRAND were silently ignored
+        # (Studio passes --org from the profile). A CLUSTER_DOMAIN/BRAND/title that
+        # itself contains the literal `hugmesh`, combined with a non-default --org, is
+        # still rewritten by that catch-all: unsupported. The sentinels contain neither
+        # `hugmesh` nor `hugmesh-`, so the middle rules skip them; the last -e rules
+        # restore them verbatim.
         sed -i \
             -e "s|^hugmesh\.net/|@@SDSYSKEY@@/|g" \
-            -e "s|\([ {(,\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
+            -e "s|\([ {(,=\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
+            -e "s|hugmesh\\\\\.net/|@@SDSYSKEYESC@@/|g" \
+            -e "s|platform\.hugmesh\.net|@@SDSYSAPIGRP@@|g" \
             -e "s|HugMesh Systems|${_btitle}|g" \
-            -e "s|hugmesh|${_org}|g" \
             -e "s|//id\.hugmesh\.games|//id.${_games}|g" \
             -e "s|//hugmesh\.games|//${_games}|g" \
             -e "s|hugmesh\.net|${_domain}|g" \
             -e "s|\(registry\.[A-Za-z0-9.-]*\)/hugmesh/|\1/${_hproj}/|g" \
             -e "s|hugmesh-|${_brand}-|g" \
+            -e "s|hugmesh|${_org}|g" \
+            -e "s|@@SDSYSAPIGRP@@|platform.hugmesh.net|g" \
+            -e "s|@@SDSYSKEYESC@@/|hugmesh\\\\.net/|g" \
             -e "s|@@SDSYSKEY@@/|hugmesh.net/|g" \
             "${f}"
     done < <(find "${SYSROOT}/var/lib/hugmesh/cluster" "${SYSROOT}/etc/hugmesh" -type f -print0 2>/dev/null)
@@ -3428,24 +3552,15 @@ done
 pcs_sync_dir "${PCS_STAGE_AK}" "${SYSROOT}/etc/portage/package.accept_keywords"
 rm -rf "${PCS_STAGE_AK}"
 # package.use: copy all role-independent files; the GPU-only 'gpu' file (Mesa
-# vulkan/vaapi video_cards_*) is copied ONLY for GPU roles, 'desktop' ONLY for
-# client roles, 'nvidia' ONLY for the proprietary stack, 'capable' ONLY for the
-# capable Plasma set — so a headless image never references USE/cards it isn't building.
+# vulkan/vaapi) is copied ONLY for GPU roles, 'desktop' ONLY for client roles,
+# 'nvidia' ONLY for the proprietary stack, 'capable' ONLY for the capable Plasma
+# set — so a headless image never references USE it isn't building. The role
+# gating lives in pu_copied_for_role() (defined next to assert_spec_video_cards),
+# so what the assert checked at argv time is EXACTLY what lands here; an inline
+# copy of the case here is how the two drifted apart before.
 for puf in "${SPECS_DIR}/portage/package.use/"*; do
     [ -e "${puf}" ] || continue
-    case "$(basename "${puf}")" in
-        gpu)     ${GPU} || continue ;;
-        desktop) ${ROLE_CLIENT} || continue ;;
-        capable) ${CAPABLE} || continue ;;
-        nvidia)  ${NVIDIA_PROPRIETARY} || continue ;;
-        # nvidia-headless (-tools) ONLY for HEADLESS proprietary-NVIDIA roles
-        # (edge_ai/be+gpu): nvidia-settings' gtk+:3[X] dep walls under the node
-        # -X posture (issue #60 item 3). Desktop GPU roles keep 'tools'.
-        nvidia-headless) ${NVIDIA_PROPRIETARY} && ! ${ROLE_CLIENT} || continue ;;
-        amd-pro) ${AMD_PRO} || continue ;;
-        intel-pro) ${INTEL_PRO} || continue ;;
-        steam)   ${STEAM_NATIVE} || continue ;;
-    esac
+    pu_copied_for_role "$(basename "${puf}")" || continue
     cp "${puf}" "${PCS_STAGE_PU}/"
 done
 pcs_sync_dir "${PCS_STAGE_PU}" "${SYSROOT}/etc/portage/package.use"

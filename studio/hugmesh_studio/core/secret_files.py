@@ -33,8 +33,9 @@ Scope — which browse targets are vaulted (:data:`VAULT_FIELDS`) and which are 
   Material that is baked into every shipped image is not something that "should not
   linger on disk" — it stays a plain path, and the BuildPage row says so.
 * ``keyzip`` (the admin key-zip, gui/pages/keyzip.py) — NOT vaulted. Its import is
-  an extract-TO-DISK design by contract: :func:`core.keyzip.extract` unpacks to the
-  ``~/.hugmesh/keyzip`` staging dir and ``apply_to`` wires STAGING paths into the
+  an extract-TO-DISK design by contract: :func:`core.keyzip.extract` unpacks to
+  :func:`core.keyzip.staging_dir` (``~/.hugmesh/keyzip``, or under
+  ``$HUGMESH_STUDIO_STATE_DIR``) and ``apply_to`` wires STAGING paths into the
   config (branding_dir/egress_vpn/...), which the builder then reads as files.
   Holding the zip bytes in memory would not remove that on-disk footprint, so
   pretending vault coverage there would be dishonest; it is out of scope here.

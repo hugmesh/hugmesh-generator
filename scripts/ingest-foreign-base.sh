@@ -598,7 +598,8 @@ ingest_foreign_base() {
   frozen_terms="$(jq -r '
       ((.frozen_protocol_constants.label_key_namespaces // [])
        + (.frozen_protocol_constants.wire_headers // [])
-       + (.frozen_protocol_constants.subprotocol_prefixes // []))[]' \
+       + (.frozen_protocol_constants.subprotocol_prefixes // [])
+       + (.frozen_protocol_constants.api_groups // []))[]' \
       "$FIB_TOKENS_JSON" 2>/dev/null)"
   if [ -n "$frozen_terms" ]; then
     local term hit

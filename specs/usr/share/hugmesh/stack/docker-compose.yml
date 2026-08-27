@@ -1,6 +1,7 @@
 # HugMesh stack — local dockerized run. Brought up by ./hugmesh-stack up.
 # Infra (Postgres + Casdoor) is always needed; app services build from the repos
-# fetched next to this file and are gated behind the "app" profile so you can
+# fetched next to this file (contexts are the REAL repo names, exactly as
+# fetch-repos.sh clones them) and are gated behind the "app" profile so you can
 # start only what you want:  ./hugmesh-stack up admin-bff login-ui
 #
 # This is a SCAFFOLD that tracks your checked-out repos — extend the `app` block
@@ -33,7 +34,7 @@ services:
 
   admin-bff:
     profiles: ["app"]
-    build: { context: ./admin-bff }
+    build: { context: ./hugmesh-admin-bff-api }
     depends_on:
       postgres: { condition: service_healthy }
     environment:
@@ -44,7 +45,7 @@ services:
 
   login-ui:
     profiles: ["app"]
-    build: { context: ./login-ui }
+    build: { context: ./hugmesh-login-ui }
     ports: ["4200:80"]
 
 volumes:

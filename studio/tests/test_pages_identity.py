@@ -26,6 +26,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
+from hugmesh_studio.core import keyzip as core_keyzip   # noqa: E402
 from hugmesh_studio.core.config import (   # noqa: E402  (after the importorskip gate)
     BUILTIN_DEFAULT_SERVICES, Domain, OPTIONAL_SERVICES_BY_PLATFORM,
     OPTIONAL_SERVICES_CHOICES, PERSON_ROLE_CHOICES, SERVICES_ALL, SERVICES_NONE,
@@ -831,7 +832,19 @@ def test_domains_applies_to_writes_domain_images(wiz):
 
 # ---- KeyZipPage/core.keyzip: Secure-Boot key wiring (G5) -----------------------------
 
-STAGING = os.path.join(os.path.expanduser("~"), ".hugmesh", "keyzip")
+@pytest.fixture
+def staging(tmp_path, monkeypatch):
+    """The key-zip staging dir, isolated per test.
+
+    This used to be a module constant computed from ``expanduser("~")``, so these
+    tests drove the production import against the OPERATOR'S OWN
+    ``~/.hugmesh/keyzip`` — which core.keyzip.extract() recursively deletes before
+    unpacking. Four green tests wiped real staged Secure-Boot material every run.
+    core.keyzip now honours ``$HUGMESH_STUDIO_STATE_DIR`` (see
+    tests/test_keyzip_staging_isolation.py); point it at tmp_path and the import
+    stages there instead."""
+    monkeypatch.setenv(core_keyzip.STATE_DIR_ENV, str(tmp_path / "studio-state"))
+    return core_keyzip.staging_dir()
 
 
 def _import_zip(wiz, zip_path):
@@ -841,7 +854,7 @@ def _import_zip(wiz, zip_path):
     return page
 
 
-def test_keyzip_keys_usb_layout_wires_keys_usb(wiz, tmp_path):
+def test_keyzip_keys_usb_layout_wires_keys_usb(wiz, tmp_path, staging):
     """A key-zip carrying the builder's KEYS-USB layout (Keys/kernel_key.{pem,der})
     threads the WHOLE staging dir as --keys-usb, so the image signs with the fleet
     Secure-Boot key instead of a per-build throwaway."""
@@ -851,12 +864,12 @@ def test_keyzip_keys_usb_layout_wires_keys_usb(wiz, tmp_path):
         zf.writestr("Keys/kernel_key.der", "dummy-der")
     page = _import_zip(wiz, zp)
     assert "Secure-Boot signing key" in page.out.text()
-    assert wiz.cfg.keys_usb == STAGING
+    assert wiz.cfg.keys_usb == staging
     assert wiz.cfg.secureboot_key == "" and wiz.cfg.secureboot_cert == ""
-    assert ("--keys-usb", STAGING) in pairs(wiz.cfg.to_cli_args())
+    assert ("--keys-usb", staging) in pairs(wiz.cfg.to_cli_args())
 
 
-def test_keyzip_loose_key_material_wires_explicit_paths(wiz, tmp_path):
+def test_keyzip_loose_key_material_wires_explicit_paths(wiz, tmp_path, staging):
     zp = tmp_path / "acme-keys.zip"
     with zipfile.ZipFile(zp, "w") as zf:
         zf.writestr("secureboot/kernel_key.pem", "dummy-pem")
@@ -864,24 +877,24 @@ def test_keyzip_loose_key_material_wires_explicit_paths(wiz, tmp_path):
     page = _import_zip(wiz, zp)
     assert "Secure-Boot signing key" in page.out.text()
     assert wiz.cfg.keys_usb == ""
-    key = os.path.join(STAGING, "secureboot", "kernel_key.pem")
-    cert = os.path.join(STAGING, "secureboot", "kernel_key.der")
+    key = os.path.join(staging, "secureboot", "kernel_key.pem")
+    cert = os.path.join(staging, "secureboot", "kernel_key.der")
     assert wiz.cfg.secureboot_key == key and wiz.cfg.secureboot_cert == cert
     p = pairs(wiz.cfg.to_cli_args())
     assert ("--secureboot-key", key) in p and ("--secureboot-cert", cert) in p
 
 
-def test_keyzip_prefers_the_keys_usb_layout_over_loose_files(wiz, tmp_path):
+def test_keyzip_prefers_the_keys_usb_layout_over_loose_files(wiz, tmp_path, staging):
     zp = tmp_path / "acme-keys.zip"
     with zipfile.ZipFile(zp, "w") as zf:
         zf.writestr("Keys/kernel_key.pem", "dummy-pem")
         zf.writestr("secureboot/kernel_key.der", "stray-der")
     _import_zip(wiz, zp)
-    assert wiz.cfg.keys_usb == STAGING
+    assert wiz.cfg.keys_usb == staging
     assert wiz.cfg.secureboot_cert == ""      # one channel, no mixed chains
 
 
-def test_keyzip_without_key_material_leaves_sb_fields_alone(wiz, tmp_path):
+def test_keyzip_without_key_material_leaves_sb_fields_alone(wiz, tmp_path, staging):
     zp = tmp_path / "acme-keys.zip"
     with zipfile.ZipFile(zp, "w") as zf:
         zf.writestr("branding/logo.svg", "<svg/>")

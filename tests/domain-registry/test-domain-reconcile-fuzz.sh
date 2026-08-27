@@ -217,7 +217,9 @@ if command -v node >/dev/null && [ -r "${TOKEN_CLASSIFIER}" ]; then
       // header, subprotocol prefix. (The tag:hugmesh.net mesh form is rejected
       // by the DNS/mesh VALIDATOR on the reconcile path — asserted in d1 above — not
       // by isFrozen, whose label-ns match is the slashed 'hugmesh.net/' key.)
-      const frozen = ["hugmesh.net/domain","X-HugMesh-Local","hugmesh.device-terminal.stepup.x"];
+      // + the CRD API group (tokens.json api_groups), in the bare spelling the
+      // label-ns substring match cannot see (no slash): compiled into admin-bff.
+      const frozen = ["hugmesh.net/domain","X-HugMesh-Local","hugmesh.device-terminal.stepup.x","platform.hugmesh.net"];
       // THE BAN SIDE (tokens.json retired_protocol_constants): the spellings the
       // HugMesh rebrand RETIRED must still be refused at emit, or the templating
       // path silently becomes the way the dead token comes back.
