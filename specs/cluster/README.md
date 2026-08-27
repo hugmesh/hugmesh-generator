@@ -1,8 +1,84 @@
 # HugMesh cluster GitOps payload
 
-This tree is baked into every image at `/var/lib/hugmesh/cluster` and is the
-single source of truth ArgoCD syncs from. Everything sits **behind
-hugmesh.net** via the per-namespace Spring Cloud Gateways.
+This tree is baked into every image at `/var/lib/hugmesh/cluster`. Everything
+sits **behind hugmesh.net** via the per-namespace Spring Cloud Gateways.
+
+## What the device syncs
+
+**Read this before changing anything in `apps/`.** This section replaces the
+claim that used to sit here — "the single source of truth ArgoCD syncs from" —
+which was **false for `apps/`** until 2026-08-26, and false in the direction that
+mattered.
+
+`bootstrap/bootstrap.sh` used to apply exactly one Application,
+`app-of-apps.yaml`, whose source is `repoURL: …/hugmesh-generator.git`,
+`targetRevision: main`, `path: specs/cluster/apps`, `directory.recurse: true`.
+So ArgoCD instantiated **`specs/cluster/apps` as it exists on GitHub `main`** and
+never read the baked tree at all. Every build-time gate that edits `apps/` —
+`gate_optional_services()` and `gate_env_apps()` in `build-rpi5-stage4.sh` /
+`build-x86-host-stage4.sh` — was therefore **inert on a real device**: an image
+built with `--optional-services akkoma` still received tuwunel, phpbb, games,
+owncast and tube.
+
+What is true now, and exactly how far it goes:
+
+| Layer | Source on a real device | Gated at build time? |
+|---|---|---|
+| `apps/*.yaml` (the **Application set**) | the **baked tree**, `kubectl apply`d one file at a time by `bootstrap/bootstrap.sh` | **yes** — a pruned file is never applied, and in-file edits (dropped gateway routes/extraHosts, baked domains) are the bytes that reach the cluster |
+| `manifests/<dir>/**` (each Application's **content**) | still the **git repo**, fetched by ArgoCD from each Application's own `repoURL`/`path` | **no** — a baked edit under `manifests/` (installed-services ConfigMap, `seed-optionalservices.yaml`, route-access SQL) still does **not** reach the cluster |
+| `charts/`, `namespaces/`, `manifests/local-path` | applied directly by `bootstrap.sh` from the baked tree | n/a |
+
+Closing the second row needs a **pruned source**, not another apply: an
+in-cluster read-only git server over the baked tree, the shape
+`bootstrap/kind-local/gitops-repo-server.yaml` already implements for kind. That
+is deliberately **not** done here — on a device it adds a network dependency
+(`apk add git-daemon` at pod start) to an offline-first mesh.
+
+Consequences of applying `apps/` directly, taken deliberately:
+
+* **No app-of-apps prune.** A file removed in a later image is not retro-deleted
+  from a running cluster. Within one image the baked tree is immutable, so there
+  is nothing to prune; across images the operator re-provisions.
+* **No app-of-apps selfHeal of the Application objects.** Every child Application
+  keeps its own `syncPolicy.automated {prune, selfHeal}`, so all **workloads**
+  still self-heal; only the Application object stops being re-asserted.
+  **The re-assert path is OPERATOR-INITIATED, not automatic** — corrected
+  2026-08-26 after review; the sentence that used to sit here ("`bootstrap.sh` is
+  idempotent and `keys-provision` re-runs it") described a loop that does not
+  exist. `bootstrap.sh` is idempotent, but its **only** caller in this tree is
+  `provision_hugmesh()` in `specs/etc/keys-provision/provision.sh`, and
+  `keys-provision`'s `main()` short-circuits on the `/var/lib/keys-provision/done`
+  marker: after first boot it re-runs **only** with the KEYS USB inserted **and**
+  `.provision-force` on that media (or `KEYS_FORCE=1`). There is no timer, no
+  periodic unit, and no boot-time re-run. **Residual exposure, stated plainly:**
+  an Application OBJECT deleted or edited on a live cluster (`kubectl delete
+  application akkoma`, a hand-edit of its spec) **stays that way** until an
+  operator re-provisions from the KEYS USB. The workloads under a *surviving*
+  Application still self-heal; a *deleted* Application does not come back. If
+  continuous re-assert is wanted, the cheap shape is an OpenRC oneshot/timer that
+  re-runs `bootstrap.sh` — deliberately **not** done here, and a separate unit.
+* **No cross-Application sync-wave ordering** (ArgoCD enforces waves only among
+  children of a common parent). Every hook Job here is idempotent/retrying, so
+  the set converges in a few reconcile loops — the same trade
+  `bootstrap/kind-local/bootstrap-kind.sh` documents for its curated subset.
+* The root's `ignoreDifferences` keystone (the admin-bff
+  `OptionalServiceReconciler`'s single-writer claim on the `optional-services`
+  ApplicationSet element list) becomes **moot** rather than lost: with no root
+  selfHealing `apps/13a-optional-services.yaml`, nothing reverts the runtime write.
+
+`HUGMESH_GITOPS_ROOT_RECURSE=1` restores the old repo-recursing root for a
+cluster that genuinely wants to track a git branch. It prints, out loud, that it
+ignores every build-time prune.
+
+`apps/00-app-of-apps-waved.yaml` is the **alternative** waved/hook-gated root and
+carries the same repo-recursing source, so `bootstrap.sh` skips it by name when
+applying the baked set — point a bootstrap at it deliberately, never as a
+rider.
+
+Guarded by `tests/cluster/test-bootstrap-applies-baked-apps.sh`, which drives the
+real `bootstrap.sh` under a stub `kubectl` and asserts on the **resolved source**
+of everything applied. A test that merely asserts the pruned sysroot lacks
+`30-tuwunel.yaml` would have been green through this whole bug.
 
 ## Build ENV: test (LAN) vs prod (public)
 

@@ -25,11 +25,11 @@ echo "-- identity --"
 # Assert the value provisioning actually APPLIED instead: provision_identity() logs
 # "Hostname set to <hn>" only after the manifest's .hostname passed RFC-1123
 # validation and was written (specs/etc/keys-provision/provision.sh:477-483).
-# Exactly two scripts feed this file to a guest — tests/qemu/run-qemu-test.sh:243 and
-# tests/qemu/docker-entrypoint.sh:488-511 (whole-repo grep for "assertions.sh",
-# 2026-08-14: every other hit is prose or matrix-assertions.sh; run-qemu-e2e.sh boots
+# Exactly two scripts feed this file to a guest — tests/qemu/run-qemu-test.sh:257 and
+# tests/qemu/docker-entrypoint.sh:1011-1050 (whole-repo grep for "assertions.sh",
+# re-run 2026-08-26: every other hit is prose or matrix-assertions.sh; run-qemu-e2e.sh boots
 # guests but never runs this file) — and both always put .hostname in the manifest
-# (run-qemu-test.sh:169 "hugmesh-test", docker-entrypoint.sh:401
+# (run-qemu-test.sh:183 "hugmesh-test", docker-entrypoint.sh:795
 # "hugmesh-${ROLE}-qemu"), so a missing log line here means provisioning did not apply
 # one. Deliberately strict: a manifest with no .hostname at all fails this too.
 _hn_applied="$(sed -n 's/^.*Hostname set to \(..*\)$/\1/p' /var/log/keys-provision.log 2>/dev/null | tail -1)"
@@ -61,7 +61,7 @@ check "headscale binary present"                  'command -v headscale'
 # catch. INTENT is resolved below from what the MANIFEST asked, strongest source first:
 #
 #  1. provision.json on the KEYS media, which is still attached at assertion time:
-#     run-qemu-test.sh:215 and launch-pi.sh:258-261 / launch-arm.sh:309-313 /
+#     run-qemu-test.sh:229 and launch-pi.sh:258-261 / launch-arm.sh:309-313 /
 #     launch-x86.sh:234-237 keep the
 #     disk plugged in for the whole run, at the same label and layout provision.sh
 #     itself mounts at boot (specs/etc/keys-provision/provision.sh:207-241). This is
@@ -81,8 +81,11 @@ check "headscale binary present"                  'command -v headscale'
 #     an enabled node that logged none of them lands in "unknown", not in "wanted".
 #
 # Unknown emits neither a PASS nor a FAIL — it is not evidence in either direction.
-# Both payload generators are covered: run-qemu-test.sh:171 hardcodes enabled:true for
-# EVERY role, docker-entrypoint.sh:393-396 derives it per role (pki|generic|omnibus).
+# Both payload generators are covered, and BOTH now derive the value per role
+# (run-qemu-test.sh:175-178, docker-entrypoint.sh:787-790 — pki|generic|omnibus).
+# run-qemu-test.sh used to hardcode enabled:true for EVERY role; the role/manifest
+# cross-check below turned that stale payload into a FAIL against a correct backend
+# image, so it was ported to the same derivation rather than special-cased here.
 _hs_want=unknown          # true = manifest asked for it | false = it did not | unknown
 _hs_src=""
 # Second consumer of the same mount: the SELinux mode the manifest ASKED for
@@ -154,6 +157,267 @@ check "ip_forward enabled"                         '[ "$(cat /proc/sys/net/ipv4/
 echo "-- tooling --"
 check "jq present (JSON provisioning)"            'command -v jq'
 
+
+echo "-- role topology --"
+# WHAT THE 42 EXISTING ASSERTIONS COULD NOT SEE: WHICH ROLE THIS IMAGE ACTUALLY IS.
+#
+# Measured 2026-08-26 by reading the ext4 root of the three 2026-08-23 rpi5 images
+# WITHOUT mounting them (debugfs -R "ls /etc/runlevels/default" "<img>?offset=$((1050624*512))",
+# images under out/sessions/20260822-225110-80c83a):
+#
+#   backend  : sshd NetworkManager cronie haveged growroot keys-provision auditd
+#              hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile
+#              containerd kubelet hugmesh-update tailscaled local netmount
+#   frontend : ** BYTE-FOR-BYTE THE SAME SET **
+#   pki      : the same set + headscale
+#
+# and the ONLY file whose CONTENT differs between backend and frontend is
+# /etc/hugmesh/role. Every assertion in this file above ran on a property all three
+# images share, so a build that shipped the WRONG ROLE PAYLOAD — a frontend rootfs
+# stamped 'backend', or a pki rootfs stamped 'frontend' — scored a clean 42/42 PASS.
+#
+# IS THAT A BUG IN THE IMAGES? NO — AND THIS SECTION DELIBERATELY DOES NOT INVENT
+# DIFFERENCES THAT SHOULD NOT EXIST. build-rpi5-stage4.sh:3949-4046 builds DEFAULT_SVCS
+# from exactly two branches: ROLE_CLIENT (desktop) vs cluster node, and
+# `ROLE = pki|generic` for headscale. Nothing else reads ROLE: the cluster GitOps tree
+# is `cp -r`'d wholesale at :3898 with ROLE appearing only in the info log. That is the
+# architecture — every cluster-node image is an identical k8s node (containerd+kubelet)
+# carrying an identical GitOps payload, and WHICH WORKLOAD LANDS WHERE IS KUBERNETES'
+# DECISION, not the image's. backend and frontend are SUPPOSED to be identical here.
+#
+# So the invariant worth testing is NOT "backend runs X, frontend runs Y". It is:
+#   THE ROLE MARKER AND THE SERVICE TOPOLOGY MUST AGREE.
+# The marker is load-bearing (provision.sh:2323 keys the maintenance-wave update cadence
+# off it; the cluster labels nodes from it), so an image whose marker contradicts its own
+# payload is a real defect — and headscale is the one place where the payload can
+# contradict the marker. Asserted BOTH WAYS below: required where the role says control
+# server, FORBIDDEN where it does not (a worker silently running a headscale control
+# server is the failure the build script's own :4044 belt-and-suspenders rm -f exists to
+# prevent — Pi audit finding 2026-06-13).
+#
+# HONEST LIMIT, STATED HERE SO NOBODY MISREADS A GREEN RUN: a backend<->frontend marker
+# swap is UNDETECTABLE from inside the guest, because the two rootfs images are
+# identical apart from that one file. There is nothing to cross-check it against. This
+# section catches every swap that IS a payload difference (pki<->backend, pki<->frontend,
+# desktop<->anything) and the manifest-vs-marker contradiction below; it cannot catch
+# backend<->frontend, and no in-guest assertion can.
+
+_rl_has() {  # $1=root prefix  $2=service — linked into the default runlevel?
+    # -e OR -L: a DANGLING symlink still counts as "linked" here (OpenRC will try to
+    # start it and fail). Dangling entries are graded separately below — the build
+    # script carried exactly such a dangling 'firewall' entry once
+    # (build-rpi5-stage4.sh:3945-3947).
+    [ -e "$1/etc/runlevels/default/$2" ] || [ -L "$1/etc/runlevels/default/$2" ]
+}
+_rl_dangling() {  # $1=root prefix  $2=service — a runlevel symlink with no target
+    # PREFIX-AWARE, AND IT HAS TO BE. Both builders write ABSOLUTE runlevel symlinks —
+    # build-rpi5-stage4.sh:4038 and build-x86-host-stage4.sh:4526 are both
+    # `ln -sf "/etc/init.d/${svc}"` — and so does OpenRC's own rc-update. The naive
+    # form (`[ -L link ] && [ ! -e link ]`) resolves such a target against the HOST's
+    # /etc/init.d as soon as $1 is non-empty, so under any root prefix it called every
+    # entry of a PERFECTLY CORRECT image dangling — and did it NONDETERMINISTICALLY,
+    # since whichever service names the host happened to have installed silently
+    # "resolved". Read the target and re-root an absolute one inside the prefix.
+    local _l
+    local _t
+    _l="$1/etc/runlevels/default/$2"
+    [ -L "${_l}" ] || return 1
+    _t="$(readlink "${_l}" 2>/dev/null || true)"
+    case "${_t}" in
+        "")  return 0 ;;               # unreadable link — nothing can start it
+        /*)  [ ! -e "$1${_t}" ] ;;     # absolute: resolve INSIDE the prefix
+        *)   [ ! -e "${_l}" ] ;;       # relative: already resolves inside the tree
+    esac
+}
+
+assert_role_topology() {  # $1 = root prefix ("" on the live guest; a fixture root in tests)
+    # bash 5.3 localises every name BEFORE assigning, so `local a=$1 b=$a` dies under
+    # set -u on this box (green on CI's 5.2). Declare separately. Always.
+    local _R
+    local _role
+    local _class
+    local _hs_expect
+    local _req
+    local _forbid
+    local _svc
+    _R="${1-}"
+
+    _role="$(sed -n '1p' "${_R}/etc/hugmesh/role" 2>/dev/null | tr -d '[:space:]')"
+
+    # The ROLE COMES FROM THE IMAGE, never from the environment. Reading it from an env
+    # var the harness also sets would make this section grade the harness's own opinion
+    # of what it built instead of what came back — which is precisely the vacuous pass
+    # being fixed. assertions_test.sh mutation (c) pins this.
+    case "${_role}" in
+        pki|generic)       _class=cluster; _hs_expect=required  ;;
+        backend|frontend)  _class=cluster; _hs_expect=forbidden ;;
+        desktop)           _class=client;  _hs_expect=forbidden ;;
+        "") bad "/etc/hugmesh/role is missing or empty — the image cannot say which role it is, so NO role assertion below can run"
+            return ;;
+        *)  bad "/etc/hugmesh/role holds '${_role}', which is not one of the five roles build-rpi5-stage4.sh:1244 accepts (generic pki backend frontend desktop)"
+            return ;;
+    esac
+    ok "role marker names a known role ('${_role}' => ${_class} node)"
+
+    # ── The baseline every node of this class MUST run ──────────────────────
+    if [ "${_class}" = cluster ]; then
+        _req="sshd NetworkManager cronie haveged growroot keys-provision auditd local hugmesh-update hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile containerd kubelet"
+        # A cluster node is HEADLESS (build-rpi5-stage4.sh:1264-1271 leaves CLIENT_USE
+        # empty and never adds the desktop trio). A seat/login/display stack scheduled
+        # on a k8s node means a desktop payload landed on a server image.
+        _forbid="dbus elogind display-manager"
+    else
+        _req="sshd NetworkManager cronie haveged growroot keys-provision auditd local hugmesh-update dbus elogind display-manager"
+        # --role desktop never joins the cluster: build-rpi5-stage4.sh:3896 skips the
+        # GitOps tree and :3956 keeps containerd/kubelet/the firewall reconcilers out of
+        # DEFAULT_SVCS entirely. Any of these on a client is a mis-built image.
+        _forbid="containerd kubelet hugmesh-firewall-reconcile hugmesh-coturn-firewall hugmesh-go-live-reconcile"
+    fi
+
+    for _svc in ${_req}; do
+        if _rl_has "${_R}" "${_svc}"; then
+            ok "role ${_role}: ${_svc} is in the default runlevel"
+        else
+            bad "role ${_role}: ${_svc} MISSING from the default runlevel (required for every ${_class} node)"
+        fi
+    done
+    for _svc in ${_forbid}; do
+        if _rl_has "${_R}" "${_svc}"; then
+            bad "role ${_role}: ${_svc} is in the default runlevel but MUST NOT be on a ${_class} node"
+        else
+            ok "role ${_role}: ${_svc} correctly absent from the default runlevel"
+        fi
+    done
+
+    # ── tailscaled: required unless the image was built with no mesh client ──
+    # --standalone bakes a marker (build-rpi5-stage4.sh:3892). --skip-mesh and
+    # --skip-tailscale do NOT: they are pre-existing, ROLE-INDEPENDENT build options
+    # (build-rpi5-stage4.sh:1055-1056 parsing; :5264 calls --skip-mesh exactly that)
+    # which legitimately produce an image with no tailscale client and NO standalone
+    # marker. Keying only off --standalone graded `--role pki --skip-tailscale` — a
+    # correct image — as a defect, i.e. it counted a build option this section does
+    # not know about as evidence, the one thing the section's own rule forbids.
+    #
+    # The posture is resolved FROM THE ARTIFACT, never from an env var (mutation (c)).
+    # The INIT SCRIPT proves nothing: build-rpi5-stage4.sh:3670-3673 copies
+    # /etc/init.d/tailscaled unconditionally, --skip-tailscale included. The BINARY
+    # does: both builders install /usr/sbin/tailscaled only on the non-skipped path
+    # (build-rpi5-stage4.sh:4343, build-x86-host-stage4.sh:5349) and abort the build
+    # outright if that fetch fails (build-rpi5-stage4.sh:4347), so a shipped image has
+    # the binary iff a mesh client was asked for. Hence: no binary => no client was
+    # ever meant to be here (SKIP, not evidence); binary present but unscheduled, or
+    # scheduled with no binary, => a real defect.
+    if [ -f "${_R}/etc/hugmesh/standalone" ]; then
+        skip "role ${_role}: tailscaled — STANDALONE image (build-rpi5-stage4.sh:3892 marker), --standalone sets SKIP_TAILSCALE"
+    elif _rl_has "${_R}" tailscaled; then
+        if [ -e "${_R}/usr/sbin/tailscaled" ]; then
+            ok "role ${_role}: tailscaled is in the default runlevel (and /usr/sbin/tailscaled is installed)"
+        else
+            bad "role ${_role}: tailscaled is in the default runlevel but /usr/sbin/tailscaled is NOT installed — an inert mesh client that fails to start every boot"
+        fi
+    elif [ ! -e "${_R}/usr/sbin/tailscaled" ]; then
+        skip "role ${_role}: tailscaled — no /usr/sbin/tailscaled in this image, so no mesh client was built into it (--skip-mesh / --skip-tailscale); NOT evidence the mesh posture is right"
+    else
+        bad "role ${_role}: /usr/sbin/tailscaled is installed but tailscaled is MISSING from the default runlevel — a mesh client that never starts"
+    fi
+
+    # ── THE ROLE-DISCRIMINATING ASSERTION ───────────────────────────────────
+    # headscale is the ONE service whose scheduling is keyed off ROLE
+    # (build-rpi5-stage4.sh:3981 links it for pki|generic; :4044 rm -f's it for every
+    # other role). Both halves asserted: a missing control server on pki, and a rogue
+    # control server on a worker, are both graded FAIL.
+    if [ "${_hs_expect}" = required ]; then
+        if _rl_has "${_R}" headscale; then
+            ok "role ${_role}: headscale IS in the default runlevel (this role is the control server)"
+        else
+            bad "role ${_role}: headscale MISSING from the default runlevel — a pki/generic node that never starts the control server"
+        fi
+    else
+        if _rl_has "${_R}" headscale; then
+            bad "role ${_role}: headscale IS in the default runlevel but this role MUST NOT run a control server — either the wrong role payload shipped, or build-rpi5-stage4.sh:4044's rm -f did not fire on a --resume sysroot"
+        else
+            ok "role ${_role}: headscale correctly absent from the default runlevel (worker role)"
+        fi
+    fi
+
+    # ── MARKER vs MANIFEST: two independent statements of the same intent ────
+    # _hs_want was resolved far above from the KEYS manifest (the harness's request);
+    # _hs_expect is resolved here from the image's own baked marker (what came back).
+    # They are produced by different halves of the pipeline, so a disagreement is the
+    # cleanest evidence available in-guest that the build shipped a role payload other
+    # than the one that was asked for. Only graded when the manifest actually stated an
+    # intent — "unknown" is not evidence in either direction (same rule as above).
+    if [ "${_hs_want}" = unknown ]; then
+        skip "role/manifest cross-check — the manifest stated no headscale intent (${_hs_src:-no source}); NOT evidence the role payload is correct"
+    elif { [ "${_hs_want}" = true ] && [ "${_hs_expect}" = required ]; } || \
+         { [ "${_hs_want}" = false ] && [ "${_hs_expect}" = forbidden ]; }; then
+        ok "role/manifest cross-check: marker says '${_role}' (headscale ${_hs_expect}) and the ${_hs_src} asked headscale=${_hs_want} — they agree"
+    else
+        bad "role/manifest cross-check: the ${_hs_src} asked headscale=${_hs_want} but this image's marker says '${_role}' (headscale ${_hs_expect}) — the image does not match the role that was requested"
+    fi
+
+    # ── The agents that ship in EVERY image and are scheduled in NONE ────────
+    # Measured 2026-08-26: all three images carry these seven init scripts and link none
+    # of them at build time. That is DELIBERATE, not an oversight, and they split into
+    # two kinds — so this asserts PRESENCE (the plumbing must be baked or runtime
+    # activation is impossible) and deliberately does NOT assert runlevel membership
+    # either way, because provisioning legitimately adds several of them at first boot:
+    #
+    #   RUNTIME-ACTIVATED by keys-provision when the manifest asks —
+    #     hugmesh-device-registry-sync (provision.sh:1116), hugmesh-policy-sync (:1242),
+    #     hugmesh-node-storage-reconcile (:1789), hugmesh-domain-reconcile (:2021).
+    #   BUILD-TIME OPTIONAL, linked only when the slug is selected —
+    #     hugmesh-vpn-reconcile (egress-vpn), hugmesh-tor-reconcile (tor).
+    #   NEVER LINKED DIRECTLY, EVER — hugmesh-egress-vpn: its reconcile agent owns its
+    #     lifecycle and rc-update adds it only once a verified assignment lands
+    #     (specs/usr/sbin/hugmesh-vpn-reconcile:202). Linking it directly would bring a
+    #     tunnel up on a selected-but-unassigned node. That one IS asserted, below.
+    for _svc in hugmesh-device-registry-sync hugmesh-policy-sync hugmesh-node-storage-reconcile \
+                hugmesh-domain-reconcile hugmesh-vpn-reconcile hugmesh-tor-reconcile hugmesh-egress-vpn; do
+        if [ -f "${_R}/etc/init.d/${_svc}" ]; then
+            ok "role ${_role}: ${_svc} init script is baked (activation plumbing present)"
+        else
+            bad "role ${_role}: ${_svc} init script NOT baked — this agent can never be activated on this node"
+        fi
+    done
+
+    # hugmesh-egress-vpn must never be scheduled without the agent that owns it.
+    if _rl_has "${_R}" hugmesh-egress-vpn && ! _rl_has "${_R}" hugmesh-vpn-reconcile; then
+        bad "role ${_role}: hugmesh-egress-vpn is scheduled with NO hugmesh-vpn-reconcile owning it — an egress tunnel that no signed assignment can revoke"
+    else
+        ok "role ${_role}: no unowned hugmesh-egress-vpn in the default runlevel"
+    fi
+
+    # HALF-ACTIVATION. provision.sh enables the boot oneshot and installs the 60s/24h
+    # convergence cron in two SEPARATE ifs (e.g. :1115 and :1122) — if the staged cron
+    # is missing the service still gets rc-update'd and the node silently runs the sync
+    # ONCE at boot with no convergence floor. Scheduled therefore implies cron-installed.
+    for _svc in hugmesh-device-registry-sync hugmesh-policy-sync hugmesh-node-storage-reconcile \
+                hugmesh-domain-reconcile hugmesh-vpn-reconcile hugmesh-tor-reconcile; do
+        _rl_has "${_R}" "${_svc}" || continue
+        if [ -f "${_R}/etc/cron.d/${_svc}" ]; then
+            ok "role ${_role}: ${_svc} is scheduled AND its convergence cron is installed"
+        else
+            bad "role ${_role}: ${_svc} is scheduled but /etc/cron.d/${_svc} is absent — boot-once with no convergence floor"
+        fi
+    done
+
+    # No entry in the default runlevel may dangle. OpenRC reports a start failure for a
+    # symlink whose /etc/init.d target does not exist, and nothing else in this file
+    # would notice.
+    local _dangle
+    _dangle=""
+    for _svc in $(ls -1 "${_R}/etc/runlevels/default" 2>/dev/null); do
+        _rl_dangling "${_R}" "${_svc}" && _dangle="${_dangle} ${_svc}"
+    done
+    if [ -z "${_dangle}" ]; then
+        ok "role ${_role}: no dangling symlinks in the default runlevel"
+    else
+        bad "role ${_role}: dangling default-runlevel symlink(s) with no /etc/init.d target:${_dangle}"
+    fi
+}
+
+assert_role_topology ""
 echo "-- kernel hardening --"
 # THE LSM STACK THE IMAGE ASKED FOR MUST BE THE ONE THE KERNEL IS RUNNING.
 #
@@ -196,6 +460,107 @@ else
     # node is healthy. Counting it as a PASS inflated every ARM-board row.
     skip "kernel lockdown — this image requests none; lockdown is x86 + rpi5 only"
 fi
+# ── PRECONDITION FOR EVERY SELINUX ASSERTION BELOW ─────────────────────────
+# AN UNLABELLED ROOTFS PASSES ALL ~10 SELINUX CHECKS BELOW. That is not a
+# hypothetical: tests/qemu/run-qemu-test.sh used to build the stage4 rootfs with
+#
+#     tar --xattrs-include='*.*' -xpf "${STAGE4}" 2>/dev/null || tar -xpf "${STAGE4}"
+#
+# — stderr discarded, fallback unannounced — so any failure of the
+# xattr-preserving extraction silently produced a rootfs with NO
+# security.selinux on anything. Nothing below can see that. `getenforce` still
+# says Permissive, `semodule -l` still lists every module in the manifest, the
+# mode still matches the manifest, no load-failed marker is standing: a full
+# sweep of green on a filesystem where SELinux is grading nothing at all. Those
+# PASSes are not evidence; they are the shape evidence would have.
+#
+# So establish the precondition FIRST, and let it be the thing that fails.
+# Note this asserts the POSTCONDITION, not the tar: labels can legitimately
+# arrive either from the extraction's xattrs or from provision_selinux()'s
+# first-boot `restorecon -RF /` (specs/etc/keys-provision/provision.sh:2880).
+# Either route is fine. Neither having worked is what must be loud.
+#
+# Reader ladder, strongest first — all three read the same on-disk xattr:
+#   1. getfattr (sys-apps/attr), which names the attribute explicitly;
+#   2. secon (sys-apps/policycoreutils, in every specs-*/packages.list, while
+#      sys-apps/attr is in NONE of them — so on a real image this is usually the
+#      only rung that exists besides ls -Z);
+#   3. ls -Zd (coreutils built with SELinux support).
+# EACH RUNG FALLS THROUGH ON AN EMPTY ANSWER, NOT MERELY ON A MISSING TOOL. The
+# first cut of this function returned unconditionally from whichever rung's
+# binary happened to be installed, so a getfattr that EXISTS but cannot answer
+# (EOPNOTSUPP, attr built without the security namespace, a bind-mounted path)
+# produced an empty context and FAILed the assertion below on a rootfs that
+# secon would have reported as perfectly labelled. Presence is not an answer.
+# If none of the three can answer, this FAILS rather than skipping: on an image
+# that ships getenforce and semodule — which the checks below all assume —
+# being unable to read a single file's label is itself a broken SELinux
+# userland, and a skip here would hand the vacuity straight back.
+_slx_secon_label() { # _slx_secon_label PATH -> context via secon, or empty
+    # secon takes the file as the ARGUMENT OF --file ("secon --file FILE"), so
+    # the earlier "secon --file --rawcontext -- FILE" spelling made secon read a
+    # file literally named --rawcontext; and the raw flag is -R/--raw, not
+    # --rawcontext. Both spellings have moved across policycoreutils releases,
+    # so try the raw form, then the plain one: a rejected option just exits
+    # nonzero and the caller falls through to the next rung.
+    local s=""
+    s="$(secon --raw --file "$1" 2>/dev/null || true)"
+    [ -n "${s}" ] || s="$(secon --file "$1" 2>/dev/null || true)"
+    [ -n "${s}" ] || return 0
+    # secon's default output is one "key: value" line per component, NOT a bare
+    # context, so a naive *:*:*: match on the whole blob would "succeed" on
+    # "user: ...\nrole: ..." — four colons, no context. Test the FIRST line, and
+    # only accept it as a context if it holds no whitespace.
+    local first="${s%%$'\n'*}"
+    case "${first}" in
+        *[[:space:]]*) : ;;
+        *:*:*:*) printf '%s' "${first}"; return 0 ;;
+    esac
+    # Otherwise reassemble user:role:type:range from the labelled lines.
+    printf '%s\n' "${s}" | awk '
+        /^[[:space:]]*user:/  { u = $2 }
+        /^[[:space:]]*role:/  { r = $2 }
+        /^[[:space:]]*type:/  { t = $2 }
+        /^[[:space:]]*(range|level|sensitivity):/ { if (l == "") l = $2 }
+        END { if (u != "" && r != "" && t != "") printf "%s:%s:%s:%s", u, r, t, (l == "" ? "s0" : l) }'
+}
+_slx_label_of() {   # _slx_label_of PATH -> the file's SELinux context, or empty
+    local v=""
+    if command -v getfattr >/dev/null 2>&1; then
+        v="$(getfattr --absolute-names --only-values -n security.selinux -- "$1" 2>/dev/null | tr -d '\000')"
+        [ -n "${v}" ] && { printf '%s' "${v}"; return 0; }
+    fi
+    if command -v secon >/dev/null 2>&1; then
+        v="$(_slx_secon_label "$1")"
+        [ -n "${v}" ] && { printf '%s' "${v}"; return 0; }
+    fi
+    if command -v ls >/dev/null 2>&1; then
+        v="$(ls -Zd -- "$1" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i ~ /^[^ :]+:[^ :]+:[^ :]+:/) {print $i; exit}}')"
+        [ -n "${v}" ] && { printf '%s' "${v}"; return 0; }
+    fi
+    return 0
+}
+# Probe files that come out of the stage4 tarball itself. NOT /etc/fstab and NOT
+# /etc/inittab: run-qemu-test.sh writes both of those on the host after the
+# untar, so their labels say nothing about whether the tarball's survived.
+_slx_xattr_probe="${SELINUX_XATTR_PROBE:-/sbin/init /bin/bash /bin/sh /etc/passwd}"
+_slx_probe_file=""
+for _slx_f in ${_slx_xattr_probe}; do
+    [ -e "${_slx_f}" ] && { _slx_probe_file="${_slx_f}"; break; }
+done
+_slx_probe_label=""
+[ -n "${_slx_probe_file}" ] && _slx_probe_label="$(_slx_label_of "${_slx_probe_file}")"
+# unlabeled_t is what an unlabelled file reports on a node whose policy IS
+# loaded, so an empty answer and unlabeled_t are the same verdict here. '?' is
+# what ls -Z prints when it cannot get a context at all.
+_slx_labelled=0
+case "${_slx_probe_label}" in
+    ''|'?'|*unlabeled_t*|*unlabeled:*) _slx_labelled=0 ;;
+    *:*:*:*)                           _slx_labelled=1 ;;
+    *)                                 _slx_labelled=0 ;;
+esac
+check "rootfs carries SELinux labels on disk — every SELinux check below is vacuous without this (probe:'${_slx_probe_file:-<none of ${_slx_xattr_probe}>}' label:'${_slx_probe_label:-<none>}')" \
+    '[ "${_slx_labelled}" = 1 ]'
 # SELinux: a policy must be LOADED, and the RUNNING mode must be the one that
 # was ASKED for — not merely "some real mode". The old check accepted either
 # mode unconditionally, which is one of the two seams that let the 2026-08-14

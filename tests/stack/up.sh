@@ -18,6 +18,14 @@ SYNAPSE_URL="${SYNAPSE_URL:-http://127.0.0.1:8008}"
 if [ "${REAL_MATRIX:-0}" = "1" ]; then MATRIX_TARGET="${SYNAPSE_URL}"; else MATRIX_TARGET="http://127.0.0.1:${MATRIX_PORT}"; fi
 
 [ -f "${CERTS}/server.crt" ] || bash "${HERE}/gen-certs.sh" "${CERTS}"
+
+# mock-bff.mjs resolves the seeded password and THROWS if it cannot (it used to
+# default to the literal "e2e-pass"). The mock lane never runs stack-seed, so
+# nothing else in this path would ever set it — resolve here, or `make stack-up`
+# dies at BFF startup on a fresh checkout.
+. "${HERE}/e2e-password.sh"
+e2e_password_ensure \
+  || { echo "up.sh: could not resolve or generate E2E_PASSWORD — mock-bff.mjs cannot start without it." >&2; exit 1; }
 [ -d "${UI_DIST}" ] || { echo "ERROR: built UI not found at ${UI_DIST}. Build it first (see README)."; exit 1; }
 
 # The host is a native-federation shell; the 4 remotes must be assembled under

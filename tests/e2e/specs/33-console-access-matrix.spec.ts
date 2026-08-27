@@ -1,6 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 import { onboard } from './helpers';
 import { tags } from './report-tags';
+import { sharedPassword } from './rbac-roles';
 
 // ────────────────────────────────────────────────────────────────────────────
 // 33 — CONSOLE ACCESS MATRIX: can each identity FIND and OPEN its consoles?
@@ -30,7 +31,8 @@ import { tags } from './report-tags';
 // has no such account.
 // ────────────────────────────────────────────────────────────────────────────
 
-const PASSWORD = process.env.E2E_PASSWORD ?? 'e2e-pass';
+// Resolved/generated, never a literal (see rbac-roles.ts sharedPassword()).
+const PASSWORD = sharedPassword();
 
 interface ConsoleExpectation {
   /** data-testid of the menubar entry. */

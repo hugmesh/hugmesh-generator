@@ -2324,6 +2324,8 @@ run_nongating_smokes() {
                 "idp-builder-functions:${REPO_DIR}/tests/scripts/test-idp-builder-functions.sh" \
                 "qemu-matrix-assertions:${REPO_DIR}/tests/qemu/assertions_test.sh" \
                 "qemu-avc-workout:${REPO_DIR}/tests/qemu/avc-workout_test.sh" \
+                "qemu-stage4-rootfs:${REPO_DIR}/tests/qemu/stage4_rootfs_test.sh" \
+                "qemu-e2e-lane:${REPO_DIR}/tests/qemu/qemu-e2e-lane_test.sh" \
                 "qemu-mesh-cluster:${REPO_DIR}/tests/qemu/mesh-cluster_test.sh" \
                 "kubelet-join-bootstrap:${REPO_DIR}/tests/boot/test-kubelet-join-bootstrap.sh" \
                 "platform-key-spelling:${REPO_DIR}/tests/scripts/test-platform-key-spelling.sh" \

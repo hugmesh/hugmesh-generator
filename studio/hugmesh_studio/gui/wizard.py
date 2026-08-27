@@ -126,7 +126,7 @@ class StudioWizard(QtWidgets.QWizard):
         self.deploy_selected = False
         # transient: ModePage's QEMU DEVICE TESTS choice — read by QemuPage.applies_to(),
         # likewise NEVER persisted into cfg (running tests is not an image mode; the one
-        # durable thing QemuPage may set is cfg.qemu_e2e, the same NON-ARGV field the
+        # durable thing QemuPage may set is cfg.qemu_device_tests, the same NON-ARGV field the
         # BuildPage checkbox drives, when the operator picks "build first, then test").
         self.qemu_selected = False
         # transient: ModePage's MESH EMULATION choice — read by

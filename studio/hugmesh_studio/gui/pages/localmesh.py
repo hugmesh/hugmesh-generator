@@ -72,6 +72,7 @@ from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
 from ...core import vaults
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
+from ...core.e2e_catalogue import Catalogue, load_catalogue
 from ...core.egress_conf import validate_egress_conf
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
 from ...core.local_mesh_bootstrap import (
@@ -79,8 +80,8 @@ from ...core.local_mesh_bootstrap import (
     discover_brands)
 from ...core.local_mesh_stages import verb_phases
 from ...core.local_services import (
-    UNAVAILABLE_LOCALLY, by_slug as local_service, default_selection,
-    describe as local_describe, local_groups, local_slugs)
+    KIND_ADDONS, UNAVAILABLE_LOCALLY, by_slug as local_service, default_selection,
+    describe as local_describe, kind_addon_slugs, local_groups, local_slugs)
 from ...core.progress_parse import ProgressParser
 from ...core.seeded_credentials import load_roster
 from ...core.instance import state_dir
@@ -185,6 +186,35 @@ class _E2EGateProbe(QtCore.QThread):
             self.result.emit(list(self._node.e2e_ready()))
         except Exception as e:                  # never kill the page over a probe
             self.result.emit([f"the readiness probe failed: {type(e).__name__}: {e}"])
+
+
+class _E2ECatalogueProbe(QtCore.QThread):
+    """Build the e2e CATALOGUE off the GUI thread, for the feature tree.
+
+    core.e2e_catalogue.load_catalogue() shells `npx playwright test --list` (0.3s on a
+    warm checkout, but a 180s ceiling), reads the last run's report.json and walks every
+    spec source. That is the same class of call _E2EGateProbe exists for, so it gets the
+    same treatment: a button press must never be able to freeze the window, however
+    briefly, and a box with no node_modules is exactly where the ceiling bites.
+
+    Emits the Catalogue. Never raises — load_catalogue already folds every failure into
+    its own `problems` list, and an exception escaping run() would leave the operator
+    with a button that did nothing at all."""
+    result = Signal(object)                     # e2e_catalogue.Catalogue
+
+    def __init__(self, generator_dir: str, env=None, parent=None):
+        super().__init__(parent)
+        self._dir = generator_dir
+        self._env = env
+
+    def run(self):
+        try:
+            self.result.emit(load_catalogue(self._dir, env=self._env))
+        except Exception as e:                  # never kill the page over a probe
+            cat = Catalogue()
+            cat.problems.append(
+                f"the e2e catalogue could not be built: {type(e).__name__}: {e}")
+            self.result.emit(cat)
 
 
 class _MeshWorker(QtCore.QThread):
@@ -306,6 +336,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._added_user_specs: list[str] = []
         self._running = False
         self._running_label = ""
+        # The e2e gate's last ANSWER, kept so an open feature tree can be gated by
+        # the same sentences the button's tooltip carries. Starts non-empty on
+        # purpose: before any probe reports, "nothing established" must read as a
+        # blocker, never as permission.
+        self._e2e_blockers: list[str] = [
+            "the running stack has not been checked yet — the readiness probe has "
+            "not reported."]
         self.setTitle("Local Docker mesh")
         self.setSubTitle("Run a HugMesh mesh on THIS machine in Docker — no image "
                          "build, no server hardware. This is the end of this path: "
@@ -948,12 +985,22 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "for this local stack only.")
         self.creds_btn.clicked.connect(self._show_credentials)
         brow.addWidget(self.creds_btn)
-        # Runs tests/e2e against the RUNNING stack. Enablement + tooltip are
-        # owned by _sync_e2e_gate (test env + stack up + seeded — live probes,
-        # never the form's un-applied selection).
-        self.e2e_btn = QtWidgets.QPushButton("Run e2e suite")
+        # THE E2E FEATURE TREE (operator ask 2026-08-26). This was "Run e2e suite":
+        # one button that ran all 221 specs and went one colour, so nothing on this
+        # page could answer "which feature broke?", "who was the failing persona?" or
+        # "what does the suite even cover?". It now opens a TREE — Gherkin features,
+        # spec files with their last verdicts, the personas each draws from, an
+        # editable source pane and a screenshot browser — and the run is whatever the
+        # operator CHECKS there.
+        #
+        # Its enablement is UNCHANGED and still owned by _sync_e2e_gate (test env +
+        # stack up + seeded — live probes, never the form's un-applied selection),
+        # because the thing behind it is still, ultimately, a run against the RUNNING
+        # stack, and the blocker-listing tooltip is the only place those blockers are
+        # ever named.
+        self.e2e_btn = QtWidgets.QPushButton("e2e features…")
         self.e2e_btn.setEnabled(False)
-        self.e2e_btn.clicked.connect(self._run_e2e)
+        self.e2e_btn.clicked.connect(self._open_e2e_tree)
         brow.addWidget(self.e2e_btn)
         # ── vaults + managed volumes (operator ask 2026-08-14) ──────────────
         # Always enabled: unlike the verbs above, this opens a READ-FIRST view
@@ -1001,6 +1048,26 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "either is missing.")
         self.devops_up_btn.clicked.connect(self._devops_up)
         brow.addWidget(self.devops_up_btn)
+        # ── the DevOps lane's OWN service selection (operator ask 2026-08-26) ──
+        # Until this row existed, "Start DevOps lane" took no selection at all:
+        # `make kind-up` passed KIND_PROFILE and MFA, so the curated Application
+        # set could only be changed by editing bootstrap-kind.sh. These boxes ARE
+        # live — they become KIND_ADDONS on the bring-up's env — which is what
+        # separates them from the greyed argocd/workloadConsole rows in the
+        # services table above (those name a lane; these drive one).
+        #
+        # They start at the LANE's shipped default (metrics-server ON), not at
+        # off: the seven HPAs the lane deploys are already applied and already
+        # inert without it, so an unticked default would render the broken state
+        # as the normal one.
+        self.kind_addon_boxes: dict[str, QtWidgets.QCheckBox] = {}
+        for _addon in KIND_ADDONS:
+            _box = QtWidgets.QCheckBox(_addon.label)
+            _box.setChecked(_addon.default_on)
+            _box.setToolTip(_addon.note + "  Applied by 'Start DevOps lane' "
+                            "(KIND_ADDONS); the docker mesh above ignores it.")
+            self.kind_addon_boxes[_addon.slug] = _box
+            brow.addWidget(_box)
         self.devops_down_btn = QtWidgets.QPushButton("Delete DevOps lane")
         self.devops_down_btn.setToolTip(
             "Delete the local Kubernetes cluster. Destroys the DevOps lane ONLY "
@@ -1172,7 +1239,23 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                            if self.selected_idp() != "casdoor" else ""),
             idp_jwks=(self.idp_jwks.text().strip()
                       if self.selected_idp() != "casdoor" else ""),
+            # ALWAYS a tuple, never None: this page HAS a picker for the DevOps
+            # lane now, so its selection is explicit even when it equals the
+            # lane's default. Byte-identity on the untouched path is preserved in
+            # core instead (kind_addon_env exports nothing while the selection
+            # matches what the lane ships) — the same split collect_services()
+            # uses, and for the same reason.
+            kind_addons=self.collect_kind_addons(),
         )
+
+    def collect_kind_addons(self) -> tuple[str, ...]:
+        """The ticked DevOps-lane add-ons, in catalogue order (never widget order).
+
+        An EMPTY tuple is meaningful and is NOT None: it means the operator
+        deliberately unticked everything, which core exports as the literal
+        `none`. Collapsing the two would silently re-enable metrics-server."""
+        return tuple(s for s in kind_addon_slugs()
+                     if self.kind_addon_boxes[s].isChecked())
 
     def selected_idp(self) -> str:
         """The provider id behind the combo's current row (data role, never the
@@ -1797,13 +1880,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if btn is None or self._running:
             return
         problems = list(problems or [])
+        # Kept so an OPEN feature tree's Run button can be gated by the same answer
+        # (and named with the same sentences) as the page button's tooltip.
+        self._e2e_blockers = list(problems)
         btn.setEnabled(not problems)
         btn.setToolTip(
-            "Run the Playwright e2e suite (tests/e2e) against the running "
-            "local mesh's TLS front door. Output streams below; specs that "
-            "need the mock lane or a federation peer SKIP with their reason, "
-            "and the final line reports passed/failed/skipped from the "
-            "reporter's summary.json."
+            "Browse the e2e suite as a tree — Gherkin features, spec files with "
+            "their last verdicts and skip reasons, the seeded personas each draws "
+            "from, the source (editable), and the screenshots a run produced — then "
+            "run the features you CHECK against the running local mesh's TLS front "
+            "door. Output streams below; the final line reports "
+            "passed/failed/skipped from the reporter's summary.json."
             if not problems else
             "Disabled:\n- " + "\n- ".join(problems))
 
@@ -1824,6 +1911,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         """Start the DevOps (Kubernetes) lane. The tool check runs HERE too, so
         the operator gets the missing-prerequisite sentence instead of a failed
         make deep in a streamed log."""
+        # REBUILD from the live widgets first, exactly like every docker verb
+        # below does. self.boot is only refreshed by _refresh_plan, which the
+        # DevOps add-on boxes deliberately do not drive (they say nothing about
+        # the docker plan) — so without this line the lane would start with
+        # whatever add-on selection the config happened to be holding, which is
+        # the stale-selection bug this channel exists to remove.
+        self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
         node = self.boot._stack_node()
         problems = node.devops_available()
         if problems:
@@ -1865,18 +1959,82 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         node = getattr(self, "node", None)
         return getattr(node, "compose_project", None) or vaults.DEFAULT_PROJECT
 
-    def _run_e2e(self):
-        """Run the e2e suite against the RUNNING stack. The gate is re-probed
+    def _open_e2e_tree(self):
+        """Open the e2e feature tree. The catalogue is built OFF-THREAD.
+
+        load_catalogue shells `npx playwright test --list` and walks every spec source
+        — a subprocess with a 180s ceiling. Building it inline would freeze the window
+        on the very click meant to open a browser, which is the defect _E2EGateProbe
+        and _StatusProbe already exist for on this page; this is the same shape.
+
+        A probe already in flight is left alone rather than stacking `npx` processes.
+        """
+        if probe_running(self, "_e2e_cat_probe"):
+            self.status.setText("Still enumerating the e2e suite — one moment.")
+            return
+        self.status.setText(
+            "Enumerating the e2e suite (asking Playwright for the spec list; this "
+            "works with the stack down) …")
+        probe = own_probe(self, "_e2e_cat_probe",
+                          _E2ECatalogueProbe(self.generator_dir,
+                                             env=self.boot._stack_node()._build_env(),
+                                             parent=self))
+        probe.result.connect(self._show_e2e_tree)
+        probe.start()
+
+    def _show_e2e_tree(self, catalogue):
+        """The catalogue arrived (GUI thread): put the tree on screen.
+
+        NON-MODAL, deliberately. A run started from the tree streams into THIS page's
+        log, and a modal would sit on top of the thing the operator needs to watch.
+        `accepted` carries the selection back, so the dialog is also drivable by a
+        headless test without exec() ever being called (house rule).
+        """
+        from .e2e_tree_dialog import E2ETreeDialog
+        # The gate's own blockers, so the tree's Run button can never be armed for a
+        # stack that cannot host the suite — and NAMES them when it is not, which is
+        # the same contract the page button's tooltip carries.
+        blockers = list(self._e2e_blockers)
+        # A previous tree is CLOSED and destroyed first. These are parented to the
+        # page, so rebinding the attribute alone would leak the old dialog for the
+        # life of the page (own_probe's docstring documents exactly this trap for
+        # QThreads; a QDialog child is the same object graph).
+        old = getattr(self, "_e2e_dialog", None)
+        if old is not None:
+            old.close()
+            old.deleteLater()
+        dlg = E2ETreeDialog(catalogue, self.generator_dir, blockers=blockers,
+                            parent=self)
+        self._e2e_dialog = dlg              # held: a local would be collected
+        dlg.accepted.connect(lambda: self._run_e2e(dlg.run_specs))
+        dlg.show()
+        self.status.setText(
+            f"e2e feature tree: {len(catalogue.features)} spec file(s), "
+            f"{len(catalogue.tests)} test(s). Check what to run.")
+
+    def _run_e2e(self, specs=()):
+        """Run the SELECTED e2e specs against the RUNNING stack. The gate is re-probed
         here (and again inside run_e2e) because enablement can go stale the
-        moment the stack changes underneath the page."""
+        moment the stack changes underneath the page.
+
+        ``specs`` is the tree's selection — Playwright positional filters, already
+        validated by e2e_catalogue.safe_spec_args. It is passed THROUGH to run_e2e,
+        which puts it in the spawned `make` argv. An empty tuple runs the whole suite
+        and is only reachable from a caller that never made a selection: the tree
+        refuses an empty selection rather than falling back to everything.
+        """
         node = self.boot._stack_node()
         problems = node.e2e_ready()
         if problems:
             self.status.setText("Cannot run e2e: " + "; ".join(problems))
             self._sync_e2e_gate()
             return
+        specs = tuple(specs or ())
         self._note(f"[e2e] running the Playwright suite against {node.web_url} "
                    f"(seeded ENV=test stack) …")
+        self._note("[e2e] selection: "
+                   + (", ".join(specs) if specs
+                      else "none — the WHOLE suite"))
         # Bridge the mesh's REAL superadmin identity (minted by this bootstrap)
         # into the suite: without it every superadmin login 401s, because the
         # seeded handle/password are the minted ones, not the e2e defaults.
@@ -1890,7 +2048,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._launch("Running the e2e suite",
                      lambda on_line, cancel: node.run_e2e(extra_env=bridge,
                                                           on_line=on_line,
-                                                          cancel=cancel),
+                                                          cancel=cancel,
+                                                          specs=specs),
                      stream=True, cancellable=True, verb="e2e")
 
     def _open_web_ui(self):
