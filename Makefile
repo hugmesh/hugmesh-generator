@@ -1447,6 +1447,16 @@ SOCIAL          ?=
 #   make stack-up SOCIAL=1 AKKOMA=1     (Mastodon AND Akkoma side by side)
 PHPBB           ?=
 AKKOMA          ?=
+# ANUBIS=1 — the Techaro Anubis proof-of-work anti-scraper gate in front of the
+# web routes (compose.local.yaml's `anubis` profile; the cluster's
+# specs/cluster/manifests/anubis). The gate publishes on ANUBIS_HOST_PORT (8923)
+# and forwards to the fe-gateway, so 8088/8488 stay the DIRECT doors and 8923 is
+# the PoW-gated one. STACK_EGRESS_FLAGS already consumed $(ANUBIS) to select the
+# profile, but the knob was never DECLARED here and threaded no env, so
+# admin-bff's Anubis console stayed dark even with the gate up;
+# STACK_ANUBIS_ENV below is what lights it.
+#   make stack-up ANUBIS=1
+ANUBIS          ?=
 # TTS=1 — edge-ai-tts (Piper TTS + visemes; compose.edge-ai-tts.yaml, DEFAULT-OFF)
 TTS             ?=
 # POISONER=1 — the AI MEDIA CLOAK worker (hugmesh-media-poisoner;
@@ -1472,7 +1482,8 @@ POISON_FALLBACK ?= light
 # Egress VPN for the local mesh (tests/stack/compose.egress-vpn.yaml): EGRESS_VPN=1
 # brings up a fail-closed WireGuard CLIENT container and attaches mastodon-sidekiq's
 # netns to it, so Mastodon's outbound federation egresses via the tunnel — the local
-# translation of the builder's --egress-vpn FILE lane (build-x86-host-stage4.sh:4044).
+# translation of the builder's --egress-vpn FILE lane (build-x86-host-stage4.sh:4258,
+# `if ${ROLE_CLIENT} && [ -n "${EGRESS_VPN_FILE}" ]` — the line number drifts, the anchor does not).
 # EGRESS_VPN_CONF must point at a provider wg-quick .conf (WireGuard ONLY — .ovpn is
 # not supported locally). DEFAULT-OFF; without the conf the VPN container refuses to
 # start and the attached service stays down (fail-closed, never a direct leak).
@@ -1595,6 +1606,9 @@ MANAGED_WIKI_BFF_LIQUIBASE_URL  ?=
 #   make stack-up MFA_FLOOR=1
 MFA_FLOOR ?=
 STACK_MFA_FLOOR_ENV := $(if $(strip $(MFA_FLOOR)), APP_MFA_ENFORCE_PRIVILEGED_FLOOR='true',)
+# ANUBIS=1 also flips admin-bff's Anubis console on (compose defaults it false so
+# an untouched bring-up stays byte-identical — the STACK_MFA_FLOOR_ENV rule).
+STACK_ANUBIS_ENV := $(if $(strip $(ANUBIS)), ANUBIS_ENABLED='true',)
 # MFA OPERATIONAL FLIP, opt-in per run — issue #47, following the PHPBB=1/AKKOMA=1
 # knob precedent. ONE switch, three lanes, and it flips ONLY app.mfa.enabled — the
 # freshness window keeps its default (600000) and the privileged floor stays on its
@@ -1663,7 +1677,7 @@ STACK_ENV := $(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_T
              MANAGED_FORUM_BFF_R2DBC_URL='$(MANAGED_FORUM_BFF_R2DBC_URL)' \
              MANAGED_FORUM_BFF_LIQUIBASE_URL='$(MANAGED_FORUM_BFF_LIQUIBASE_URL)' \
              MANAGED_WIKI_BFF_R2DBC_URL='$(MANAGED_WIKI_BFF_R2DBC_URL)' \
-             MANAGED_WIKI_BFF_LIQUIBASE_URL='$(MANAGED_WIKI_BFF_LIQUIBASE_URL)'$(STACK_MFA_FLOOR_ENV)$(STACK_MFA_ENV) \
+             MANAGED_WIKI_BFF_LIQUIBASE_URL='$(MANAGED_WIKI_BFF_LIQUIBASE_URL)'$(STACK_MFA_FLOOR_ENV)$(STACK_MFA_ENV)$(STACK_ANUBIS_ENV) \
              EGRESS_VPN_CONF='$(abspath $(EGRESS_VPN_CONF))' \
              DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)

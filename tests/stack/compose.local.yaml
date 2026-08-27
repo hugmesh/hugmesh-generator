@@ -768,6 +768,19 @@ services:
       # console actually talks to the forum BFF that compose already runs.
       EXTERNAL_FORUM_ENABLED: "true"
       EXTERNAL_FORUM_BASE_URL: "http://hugmesh-forum-bff-api:8080"
+      # Anubis (the PoW anti-scraper gate, `make stack-up ANUBIS=1`) — the SAME
+      # shape of gap as the forum console above: admin-ui ships the Anubis panel
+      # and the fe-gateway already routes /bff/admin/anubis/** here, but
+      # application.yml defaults `hugmesh.anubis.enabled` to FALSE and its
+      # management-url to http://localhost:9090 — which inside this container is
+      # admin-bff itself, not the gate. So even with the profile up the panel
+      # could only ever report "not enabled". Point it at the compose gate
+      # (hugmesh-anubis's METRICS_BIND :9090); the default stays false so an
+      # ANUBIS-less bring-up is byte-identical, and AnubisClient degrades to a
+      # structured "unreachable" when the profile is off — the same posture as
+      # specs/cluster/manifests/admin-bff-api/deployment.yaml, which sets both.
+      ANUBIS_ENABLED: ${ANUBIS_ENABLED:-false}
+      ANUBIS_MANAGEMENT_URL: ${ANUBIS_MANAGEMENT_URL:-http://hugmesh-anubis:9090}
       # Platform-capability k8s probe: application.yml defaults
       # PLATFORM_CAPABILITIES_K8S_ENABLED to TRUE (cluster deployments), but compose has
       # no k8s API server — the fabric8 client autoconfigures to the unresolvable

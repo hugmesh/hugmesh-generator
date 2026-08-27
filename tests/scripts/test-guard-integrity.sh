@@ -218,7 +218,14 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     148 of 169 suites are named by a pull_request-triggered workflow
 # +1 gated, +1 total: this branch's suite is named by shell-suites.yml, so it lands GATED
 # and never enters PREMERGE_UNGATED, which stays 21.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-148}"
+#
+# RE-MEASURED 2026-08-27 on fix/anubis-compose-knob-and-wg-perms, exactly as the
+# worked example above prescribes: this branch adds tests/stack/test-anubis-flip-wiring.sh
+# and names it in shell-suites.yml's debian job, so it lands GATED. Running this
+# file on the integrated tree printed
+#     149 of 170 suites are named by a pull_request-triggered workflow
+# +1 gated, +1 total; PREMERGE_UNGATED is untouched and stays 21.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-149}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
