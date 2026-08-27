@@ -81,6 +81,23 @@ fi
 
 WORK="${TMPDIR:-/var/tmp/portage}/env-iface-guard.$$"
 mkdir -p "${WORK}"
+# The FULL cleanup (mutation restore + stand-in stop) is armed further down,
+# after the helpers it calls exist. Until then, guard the work dir itself: a
+# SIGTERM/SIGINT during the studio self-check or the browser preflight must not
+# leak env-iface-guard.<pid> under ${TMPDIR:-/var/tmp/portage} (one such stale
+# dir from a killed pre-fix run was found on this box). Two rules, both load-
+# bearing and both replaced by the full trap below (bash traps do not stack):
+#   * cleanup lives on EXIT only;
+#   * the signal traps EXIT rather than fall through. A bash signal trap that
+#     does not exit lets the script RESUME after the handler — measured here:
+#     a plain `trap 'rm -rf $WORK' EXIT INT TERM HUP` took a SIGTERM at t=4s,
+#     deleted WORK, kept running, and the battery then mutated production with
+#     its bookkeeping directory gone — four steps/*.ts files were left mutated
+#     on disk. Exiting turns the signal into a normal EXIT-trap teardown.
+trap 'rm -rf "${WORK}"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # The baseline lane is analysed in `full` mode, which REQUIRES a widget-grab and
 # a studio interface row. On a host with no Qt6 binding the studio scenario
@@ -96,7 +113,6 @@ if ! QT_QPA_PLATFORM=offscreen python3 "${E2E}/studio-driver.py" --self-check \
   echo "  or point SNAP_STUDIO_PYTHON at an interpreter that has one." >&2
   sed -n '1,10p' "${WORK}/studio-selfcheck.out" >&2
   echo "This guard checked NOTHING. Exiting 2 rather than 0." >&2
-  rm -rf "${WORK}"   # the EXIT trap is armed further down; do not leak the work dir
   exit 2
 fi
 
@@ -144,7 +160,6 @@ if ! ( cd "${E2E}" && npx playwright test -c "${PREFLIGHT}/pw.config.ts" \
   fi
   grep -m1 -E "Executable doesn't exist|browserType.launch|Error:" "${WORK}/preflight.out" >&2
   echo "This guard checked NOTHING. Exiting 2 rather than 0." >&2
-  rm -rf "${WORK}"   # the EXIT trap is armed further down; do not leak the work dir
   exit 2
 fi
 
@@ -178,7 +193,34 @@ restore_all() {
   MUTATED=()
 }
 
-cleanup() { restore_all; m7_standin_stop; rm -rf "${WORK}"; }
+# m7_standin_stop is defined much further down (with the M7 rewrite); an exit
+# taken BEFORE that definition runs — a signal during the baseline lane, or any
+# early failure — must not abort cleanup on `command not found` and leak WORK
+# (measured: a SIGTERM at t=4s did exactly that). Guard the call.
+#
+# kill_tree: on a signal, bash 5.3 runs the trap WITHOUT waiting for a lane's
+# `( cd ... && npx playwright test ... )` subshell (measured in an xtrace:
+# `exit 143` fired 1.2s into vocab_lane m1's npx). The orphaned node/browser
+# tree then keeps writing under WORK while `rm -rf` walks it, and whatever it
+# recreates behind the walk survives as a leaked dir (measured: one kill in
+# five leaked baseline/ fragments). TERM the descendants children-first, then
+# remove — and re-check once, because rm against a dying writer is a race.
+# pgrep -P is by parent pid (no -f), so it cannot self-match.
+kill_tree() {
+  local p
+  for p in $(pgrep -P "$1" 2>/dev/null || true); do kill_tree "${p}"; done
+  [ "$1" != "$$" ] && kill -TERM "$1" 2>/dev/null
+  return 0
+}
+cleanup() {
+  restore_all
+  if declare -F m7_standin_stop >/dev/null; then m7_standin_stop; fi
+  local p
+  for p in $(pgrep -P $$ 2>/dev/null || true); do kill_tree "${p}"; done
+  rm -rf "${WORK}" 2>/dev/null
+  if [ -d "${WORK}" ]; then sleep 1; rm -rf "${WORK}" 2>/dev/null; fi
+  return 0
+}
 # INT TERM HUP as well as EXIT, because this guard MUTATES production files and
 # restores them in the trap. Bash runs no EXIT trap for an untrapped SIGTERM, so
 # a `timeout`, a Ctrl-C or a killed CI job could leave the tree MUTATED.
@@ -190,7 +232,13 @@ cleanup() { restore_all; m7_standin_stop; rm -rf "${WORK}"; }
 # the M4 always-admit stub after the process was gone. The real protection is
 # the preflight below, which makes the NEXT run refuse instead of silently
 # trusting a poisoned oracle. Worktrees are shared here; that is the hazard.
-trap cleanup EXIT INT TERM HUP
+trap cleanup EXIT
+# The signal traps EXIT so the EXIT trap runs cleanup exactly once; a handler
+# that falls through would let the script RESUME past the teardown (measured —
+# see the early trap above) and re-mutate with its backups already deleted.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # mutate <relpath> <python-expression-file> — applies a python patch and PROVES
 # the file actually changed. A mutation that silently failed to apply would make
