@@ -69,7 +69,7 @@ function readRepoFile(rel: string): string {
 
 // ── 1. the fe-gateway route table ────────────────────────────────────────────
 
-interface FeRoute {
+export interface FeRoute {
   id: string;
   uri: string;
   paths: string[];
@@ -91,7 +91,7 @@ let feRoutesCache: FeRoute[] | undefined;
  * pattern below is anchored at `- <key>:` / `- Path=` with only whitespace
  * before it, and every comment in that file starts with `#`.
  */
-function feRoutes(): FeRoute[] {
+export function feRoutes(): FeRoute[] {
   if (feRoutesCache) return feRoutesCache;
   const out: FeRoute[] = [];
   let cur: FeRoute | undefined;
