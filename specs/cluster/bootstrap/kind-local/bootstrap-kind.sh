@@ -673,6 +673,43 @@ SSO_APPS=(
   37-user-bff-api.yaml    # POST /bff/login (native-login relocation)
   40-frontend.yaml        # Angular host shell (hugmesh-host-shell)
   45-social-ui.yaml       # login-ui remote (+ matrix/mastodon/admin remotes)
+  # ── SELF-SERVICE PROFILE + PASSWORD SURFACE ────────────────────────────────
+  # 47-user-ui is the /user/** micro-frontend: profile, preferences, email and
+  # PASSWORD CHANGE. It was never in this list, and the consequence was not a
+  # missing feature but a LIE: apps/20-gateway-fe.yaml:225-227 applies the route
+  #
+  #     - id: user-ui
+  #       uri: http://hugmesh-user-ui.hugmesh-frontend.svc.cluster.local:80
+  #       path: /user/**
+  #
+  # unconditionally, so on kind GET /user/** hit a live route pointing at a
+  # Service with no endpoints. The API behind it (/bff/user/**) was fine — routed
+  # at 20-gateway-fe.yaml:276-278 and ALLOWed by the route-access seed — so the
+  # endpoint answered a curl and was dead in a browser, and the host shell's
+  # remote mount (hugmesh-host-shell app.routes.ts, remoteName 'user') could not
+  # fetch its remoteEntry. tests/scripts/test-kind-profile-route-closure.sh now
+  # fails a routed-but-undeployed Service, so this cannot recur silently.
+  47-user-ui.yaml         # /user/** remote: profile, preferences, PASSWORD CHANGE
+  # federation-api is the vanity/public-profile publish target user-bff calls when
+  # a profile save turns Public on. Without it that call is a CONNECTION failure,
+  # not an HTTP status, and hugmesh-user-bff-api's FederationApiClient.onErrorMap
+  # translates only WebClientResponseException — so an unreachable federation-api
+  # surfaces to the browser as an untranslated 500 rather than an honest 503.
+  # (Widening that onErrorMap is a hugmesh-user-bff-api change and is NOT landable
+  # from this repo — see the unit report.)
+  #
+  # Its DB Application comes with it (wave 1 before wave 2). The ESO Secrets both
+  # need (federation-db-auth / federation-db-app-auth) are already created by
+  # 04-external-secrets-config in CORE_APPS, and scripts/gen-cluster-secrets.sh
+  # already seeds secret/<brand>/federation-db, so nothing else has to move.
+  #
+  # ⚠ NOT A CLAIM OF PARITY WITH DOCKER: `make kind-images` must build these two
+  # images (scripts/kind-load-images.sh now lists hugmesh-user-ui and
+  # hugmesh-federation-api). An operator who brings the profile up with a stale
+  # image set gets ImagePullBackOff — which is at least a POD saying so, instead
+  # of a 503 from a route into the void.
+  28-federation-db.yaml   # federation-api's Postgres (sync-wave 1)
+  29-federation-api.yaml  # module-federation registry + vanity publish (sync-wave 2)
   # Kyverno MUST precede 14-workload-console-rbac: that Application carries the
   # deploy-provenance ClusterPolicy, and without kyverno.io/v1 registered ArgoCD
   # cannot even render it —

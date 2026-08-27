@@ -37,7 +37,7 @@ this module exists instead of a bare slug list:
 
 Because the second mechanism is a DB row on an already-running stack, it is applied at
 SEED time, not at up time, and it is carried on the same env channel every other stack
-knob rides (see ``federation_env`` + the TODO below) — never a new file format.
+knob rides (see ``federation_env``) — never a new file format.
 
 A service the local stack simply cannot run is NOT offered: ``UNAVAILABLE_LOCALLY``
 names it with the concrete reason instead, so the surface can show a greyed row that

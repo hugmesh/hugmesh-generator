@@ -87,6 +87,16 @@
 #       alpine:3 has neither docker nor podman and no daemon socket is mounted
 #   * tests/device-registry/test-layer-a-headscale-acl.sh
 #       the hugmesh-admin-bff-api sibling checkout, for the BFF-side Layer-A compiler
+#   * tests/stack/test-gateway-auth-flag-parity.sh
+#       the hugmesh-gateway sibling checkout. It compares the EFFECTIVE auth-carrier
+#       flags on the two lanes, and "effective" means resolving each key through the
+#       IMAGE DEFAULT in hugmesh-gateway/src/main/resources/application.yml
+#       (bff-exchange defaults FALSE, bff-session defaults TRUE — so "set on one side
+#       only" means opposite things for the two keys and a presence check would be
+#       wrong in both directions). A hosted runner cannot clone the org-private repo,
+#       and the suite reports INCOMPLETE and FAILS rather than degrading, so listing
+#       it here would just paint the PR gate red. It IS gated post-merge by
+#       .gitlab-ci.yml's lint:gateway-auth-flag-parity, which clones it.
 #   * tests/stack/test-m2-bootstrap.sh
 #       the ${STACK_SRC:-.stack-src} consumer checkouts its pin-drift leg walks
 #       (`make stack-clone`), or M2_PIN_DRIFT_SKIP=1
@@ -98,6 +108,14 @@
 #       systems.hugmesh -> net.hugmesh package move (#141), and census_files()
 #       used `grep --exclude-dir`, which busybox does not have, so on alpine the
 #       census came back empty and reported nine false "blind spots".
+#   * tests/scripts/test-federation-module-slugs.sh
+#       leg A runs the federation_modules registration gate against the REAL
+#       hugmesh-federation-api Liquibase changelog, which is a sibling checkout this
+#       workflow does not have; with it absent the suite reports leg A UNVERIFIED and
+#       exits 3 (its hermetic mutation legs still all pass). That is the honest answer
+#       and not a gateable one, so it gates on GitLab instead
+#       (lint:federation-module-slugs-gate-honesty clones the sibling first). Same
+#       shape and same reason as tests/egress-vpn/test-secret-contract.sh above.
 #   * tests/pentest/nuclei/test-templates.sh
 #       RED on issue #146; also needs a pinned nuclei v3.9.0 the CI images do not
 #       carry. #157 may already have fixed it (the failing check was a
@@ -241,15 +259,18 @@ jobs:
             tests/scripts/test-kernel-artifact-cache.sh
             tests/scripts/test-kind-bootstrap-honesty.sh
             tests/scripts/test-kind-profile-app-closure.sh
+            tests/scripts/test-kind-profile-route-closure.sh
             tests/scripts/test-lsm-posture-honesty.sh
             tests/scripts/test-no-duplicate-env.sh
             tests/scripts/test-nullmailer-cross-postinst.sh
             tests/scripts/test-outbound-mtls-client.sh
+            tests/scripts/test-password-reset-front-door.sh
             tests/scripts/test-platform-key-spelling.sh
             tests/scripts/test-portage-config-sync.sh
             tests/scripts/test-provision-manifest-injection.sh
             tests/scripts/test-publish-images.sh
             tests/scripts/test-reserved-prefix-copy-gate.sh
+            tests/scripts/test-route-access-oracle.sh
             tests/scripts/test-rpi5-builder-input-validation.sh
             tests/scripts/test-rpi5-per-board-pkgdir.sh
             tests/scripts/test-shared-build-assets.sh
@@ -266,6 +287,7 @@ jobs:
             tests/stack/test-optional-services-exclude.sh
             tests/stack/test-probe-auth-surface.sh
             tests/stack/test-tls-front.sh
+            tests/stack/test-tube-media-signed-gate.sh
           "
           # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
           # suite's status and silently forgives every earlier one — that is defect
@@ -346,6 +368,7 @@ jobs:
             tests/scripts/test-eso-provider-refs.sh
             tests/scripts/test-eso-seed-contract.sh
             tests/scripts/test-first-run-lib.sh
+            tests/scripts/test-fragment-route-target.sh
             tests/scripts/test-gitlab-ci-wellformed.sh
             tests/scripts/test-headscale-oidc-secret-staging.sh
             tests/scripts/test-mfa-raw-jwt-posture.sh

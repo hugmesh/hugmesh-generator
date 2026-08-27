@@ -55,6 +55,56 @@ lint:reserved-prefixes:
   script:
     - bash scripts/validate-reserved-prefixes.sh
 
+# federation_modules REGISTRATION drift gate. optional-services.yaml declares, per
+# optional service, the federation module slug + mountAt + the hugmesh-federation-api
+# Liquibase changeset that seeds the row; every `kind: FederationModuleRegistration`
+# descriptor under manifests/ declares the same shape. Nothing checked that the two
+# sides agree, and on 2026-08-26 they did not: `akkoma` and `tuwunel` were declared as
+# module slugs, but 023/024 seed `mastodon`/`matrix` and no changeset ever seeds an
+# akkoma or tuwunel row — so anything resolving the module by the registry's slug
+# looked it up under a name no row carries, silently (the host shell just never finds
+# the remote; tests/stack/seed-e2e.sh leg 4 logs "no federation_modules row … skipped"
+# and stays green). Three changeset forward-references were also pointing at numbers
+# that had since been taken by unrelated changesets.
+#
+# The changelog lives in ANOTHER repo, so this job clones it — same recipe as
+# lint:reserved-prefixes above, and for the same reason: without it the script exits 3
+# (INCOMPLETE) rather than reporting a green run it did not earn.
+lint:federation-module-slugs:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  variables:
+    FEDERATION_SIBLING_ROOT: "${CI_PROJECT_DIR}/.federation-siblings"
+  before_script:
+    - pip install --quiet pyyaml
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - mkdir -p "${FEDERATION_SIBLING_ROOT}"
+    - git clone --depth 1 "${ORG_BASE}/hugmesh-federation-api.git" "${FEDERATION_SIBLING_ROOT}/hugmesh-federation-api"
+  script:
+    - bash scripts/validate-federation-module-slugs.sh
+
+# Guards THAT guard. Synthesises a changelog FROM the registry (so both sides agree by
+# construction) and then mutates one side at a time — slug drift, a forward reference
+# onto a taken number, a missing <include>, mountAt drift, and BOTH vacuity shapes
+# (deriver yields nothing / declarations derived but none landed). A guard that
+# compares an empty set passes, which is exactly how this class of check dies. Leg A
+# also runs the gate against the real clone, so a green run here is not purely
+# synthetic; without the clone the suite exits 3 (UNVERIFIED), never 0.
+lint:federation-module-slugs-gate-honesty:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  variables:
+    FEDERATION_SIBLING_ROOT: "${CI_PROJECT_DIR}/.federation-siblings"
+  before_script:
+    - pip install --quiet pyyaml
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - mkdir -p "${FEDERATION_SIBLING_ROOT}"
+    - git clone --depth 1 "${ORG_BASE}/hugmesh-federation-api.git" "${FEDERATION_SIBLING_ROOT}/hugmesh-federation-api"
+  script:
+    - bash tests/scripts/test-federation-module-slugs.sh
+
 # Guards the guard: proves validate-reserved-prefixes.sh cannot report a clean
 # PASS when its ReservedNames.java code-copy assertion did not actually run — the
 # silent-skip hole that let a five-label hugmesh-actions drift sit on a "green"
@@ -114,6 +164,24 @@ lint:client-connect-routes:
     - pip install --quiet pyyaml
   script:
     - bash tests/scripts/test-client-connect-routes.sh
+
+# /_fragments/** must be routed at something that can SERVE bundles. The compose
+# lane pointed it at the remote-fragment SYNC app on its ACTUATOR port, and ran
+# no fragment web server at all — so SYNC_TARGET_DIR was a docroot nothing
+# served and federated remotes could not load (which presents as a BLANK PAGE,
+# not a 404). This asserts the route's target service EXISTS in the compose
+# project, that its port is DERIVED from the target's own nginx conf rather than
+# hardcoded, that the served docroot is a volume some service actually writes,
+# and that compose and the cluster agree on WHICH COMPONENT serves the path.
+# Eight negative controls must each trip it. Offline, no docker, no network.
+lint:fragment-route-target:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-fragment-route-target.sh
 
 # ExternalSecret TARGET-OWNERSHIP gate. The job above reads this repo's own
 # manifests; it cannot know what an UPSTREAM chart creates, and that is exactly
@@ -1020,6 +1088,84 @@ lint:kind-profile-app-closure:
   tags: [hugmesh-x86]
   script:
     - bash tests/scripts/test-kind-profile-app-closure.sh
+
+# A curated kind profile must also DEPLOY every in-cluster Service its own applied
+# gateway ROUTES point at. KIND_PROFILE=sso applied apps/20-gateway-fe.yaml — route
+# table included — but never apps/47-user-ui.yaml, so
+#   - id: user-ui / uri: http://hugmesh-user-ui.hugmesh-frontend…:80 / path: /user/**
+# was live against a Service nothing created. The API on the same surface
+# (/bff/user/**) WAS routed and WAS allowed by the route-access seed, so curl proved
+# the profile/password endpoint healthy while a browser got 503 from a route into
+# the void. ArgoCD stayed Healthy throughout: a route to nowhere is not a sync error,
+# and the sibling app-closure gate cannot see it because a gateway does not "declare"
+# its route targets anywhere except the route table.
+lint:kind-profile-route-closure:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+    - apt-get update -qq && apt-get install -y --no-install-recommends bash >/dev/null
+  script:
+    - bash tests/scripts/test-kind-profile-route-closure.sh
+
+# The e2e route-access ORACLE must be GENERATED from the seed, never hand-copied.
+#
+# tests/e2e/specs/rbac-route-access.ts carried a hand-maintained mirror of
+# gateway_route_access with the instruction "keep in lockstep". Measured by
+# execution on 2026-08-26 it held 11 of the seed's 77 hugmesh-fe-gateway rows and
+# answered DENY for every /bff/user/** profile and password path the real gateway
+# ALLOWs — while six RBAC spec files asserted against it and all six were green.
+lint:route-access-oracle:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends bash diffutils >/dev/null
+  script:
+    - bash tests/scripts/test-route-access-oracle.sh
+
+# The anonymous forgot-password legs must be reachable in EVERY lane that has a
+# front door. Four files have to agree and each fails silently alone: the cluster
+# route, the compose route, the route-access PUBLIC rows, and (OUT OF REPO, so
+# only documented) hugmesh-gateway SecurityConfig.PUBLIC_PATHS. Before this surface
+# existed a forgotten password was permanent; a silently-unrouted one restores that.
+lint:password-reset-front-door:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends bash diffutils >/dev/null
+  script:
+    - bash tests/scripts/test-password-reset-front-door.sh
+
+# The docker lane and the cluster lane must run the SAME gateway auth carrier.
+#
+# HUGMESH_GATEWAY_BFF_EXCHANGE_ENABLED gates BOTH halves of the bff_ cookie ->
+# custody-JWT swap (@ConditionalOnProperty on BffCookieToBearerWebFilter and
+# BffJwtExchangeConfig). compose.local.yaml has set it since the consequence was
+# diagnosed; specs/cluster never did — `grep -rn BFF_EXCHANGE specs/cluster` was
+# empty — so kind and every baked device image forwarded the raw opaque bff_ as the
+# Bearer and the pure-JWT BFFs (forum/wiki/tube/owncast) answered a bare 401 with
+# nothing in any log, in exactly the two lanes nobody exercises locally.
+#
+# Needs the hugmesh-gateway checkout: the comparison is of EFFECTIVE values, and the
+# IMAGE DEFAULTS come from that repo's application.yml (bff-exchange defaults FALSE,
+# bff-session defaults TRUE — so "set on one side only" means opposite things for
+# the two keys). Without it the suite reports INCOMPLETE and FAILS, never skips.
+lint:gateway-auth-flag-parity:
+  stage: lint
+  image: python:3
+  tags: [hugmesh-x86]
+  variables:
+    GATEWAY_SRC: "${CI_PROJECT_DIR}/.gateway-src"
+  before_script:
+    - pip install --quiet pyyaml
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - git clone --depth 1 --filter=blob:none --sparse "${ORG_BASE}/hugmesh-gateway.git" "${GATEWAY_SRC}"
+    - git -C "${GATEWAY_SRC}" sparse-checkout set src/main/resources
+  script:
+    - bash tests/stack/test-gateway-auth-flag-parity.sh
 
 # Per-domain Casdoor lane (issue #47, Domain.idp=own): the casdoor-domains
 # ApplicationSet must ship an EMPTY element scaffold, both roots must carry the
