@@ -1,0 +1,501 @@
+{
+ "_provenance": "SYNTHETIC, and deliberately so. A recorded run cannot be used for these: the scrub cases require REAL-SHAPED CREDENTIALS in a title, an error and a skip reason, and committing those from a real run is the leak this reporter exists to prevent. Every other case here is a shape the real suite produces but the 2026-08-22 slice happens not to contain.",
+ "_cases": [
+  "1 failure whose error carries Bearer/password/access_token, with screenshot+trace+video attachments",
+  "2 skip whose REASON carries a bearer token",
+  "3 test.fixme() with a description, recorded on the TEST and not the result",
+  "4 skip whose annotation exists but has an EMPTY description -> NOT a reason",
+  "5 skip with no annotation anywhere -> unknown",
+  "6 a test with no id, retried: must fold into ONE record",
+  "7 a spec file OUTSIDE rootDir -> absolute path kept",
+  "8 a body-only attachment with no path -> still listed",
+  "9 a credential in the TEST TITLE (and therefore in titlePath)",
+  "10 a credential in an ATTACHMENT's name and its on-disk path",
+  "11 a JSON-QUOTED credential in the TITLE - invisible to the whole-document scrub",
+  "12 a JSON-QUOTED credential in the SKIP REASON",
+  "13 a JSON-QUOTED credential in an ATTACHMENT's name"
+ ],
+ "_expect": {
+  "_why": "Floors, not predictions. See recorded-run.json. minSecretShapedStrings is the one that matters here: it is what stops the scrub assertion from passing over a fixture with nothing to scrub.",
+  "minTests": 13,
+  "minSpecFiles": 11,
+  "minUnexplainedSkips": 2,
+  "minExplainedSkips": 3,
+  "minAttachments": 6,
+  "minRetriedTests": 1,
+  "minSecretShapedStrings": 12
+ },
+ "config": {
+  "rootDir": "/fixture/tests/e2e"
+ },
+ "runStatus": "failed",
+ "events": [
+  {
+   "test": {
+    "id": "sec-1",
+    "title": "admin console rejects a stale session @role:ROLE_ADMIN @layer:bff",
+    "titlePath": [
+     "",
+     "chromium",
+     "90-secret-shapes.spec.ts",
+     "admin console rejects a stale session @role:ROLE_ADMIN @layer:bff"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/specs/90-secret-shapes.spec.ts",
+     "line": 12,
+     "column": 3
+    },
+    "annotations": [],
+    "expectedStatus": "passed",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "failed",
+    "duration": 10,
+    "retry": 0,
+    "error": {
+     "message": "expect(received).toBe(expected)\n  request headers: {\"authorization\": \"Bearer eyJhbGciOiJIUzI1NiJ9.PAYLOAD.SIGNATURE\"}\n  body: {\"password\": \"hunter2-correct-horse\", \"access_token\": \"ya29.A0ARrdaM-LEAKED\"}\n"
+    },
+    "annotations": [],
+    "attachments": [
+     {
+      "name": "screenshot",
+      "contentType": "image/png",
+      "path": "/fixture/tests/e2e/test-results/90-secret-shapes-chromium/test-failed-1.png"
+     },
+     {
+      "name": "trace",
+      "contentType": "application/zip",
+      "path": "/fixture/tests/e2e/test-results/90-secret-shapes-chromium/trace.zip"
+     },
+     {
+      "name": "video",
+      "contentType": "video/webm",
+      "path": "/fixture/tests/e2e/test-results/90-secret-shapes-chromium/video.webm"
+     }
+    ]
+   }
+  },
+  {
+   "test": {
+    "id": "sec-2",
+    "title": "federated peer ban propagates @role:ROLE_MOD @layer:homeserver",
+    "titlePath": [
+     "",
+     "chromium",
+     "90-secret-shapes.spec.ts",
+     "federated peer ban propagates @role:ROLE_MOD @layer:homeserver"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/specs/90-secret-shapes.spec.ts",
+     "line": 40,
+     "column": 3
+    },
+    "annotations": [
+     {
+      "type": "skip",
+      "description": "SNAP_FEDERATION_PEER unset; tried Bearer sk-live-abcdef0123456789 against the peer"
+     }
+    ],
+    "expectedStatus": "skipped",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "skipped",
+    "duration": 10,
+    "retry": 0,
+    "error": null,
+    "annotations": [
+     {
+      "type": "skip",
+      "description": "SNAP_FEDERATION_PEER unset; tried Bearer sk-live-abcdef0123456789 against the peer"
+     }
+    ],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "fixme-1",
+    "title": "usage page paginates past 100 rows @role:ROLE_ADMIN @layer:ui",
+    "titlePath": [
+     "",
+     "chromium",
+     "91-fixme.spec.ts",
+     "usage page paginates past 100 rows @role:ROLE_ADMIN @layer:ui"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/specs/91-fixme.spec.ts",
+     "line": 8,
+     "column": 3
+    },
+    "annotations": [
+     {
+      "type": "fixme",
+      "description": "pagination is unimplemented (issue #212)"
+     }
+    ],
+    "expectedStatus": "skipped",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "skipped",
+    "duration": 10,
+    "retry": 0,
+    "error": null,
+    "annotations": [],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "blank-1",
+    "title": "host shell hides admin nav for ROLE_USER @role:ROLE_USER @layer:ui",
+    "titlePath": [
+     "",
+     "chromium",
+     "92-blank-skip.spec.ts",
+     "host shell hides admin nav for ROLE_USER @role:ROLE_USER @layer:ui"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/specs/92-blank-skip.spec.ts",
+     "line": 22,
+     "column": 3
+    },
+    "annotations": [
+     {
+      "type": "skip",
+      "location": {
+       "file": "specs/92-blank-skip.spec.ts",
+       "line": 22
+      }
+     }
+    ],
+    "expectedStatus": "skipped",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "skipped",
+    "duration": 10,
+    "retry": 0,
+    "error": null,
+    "annotations": [
+     {
+      "type": "skip"
+     }
+    ],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "blank-2",
+    "title": "games entry-point visible for ROLE_GAMES @role:ROLE_GAMES @layer:ui",
+    "titlePath": [
+     "",
+     "chromium",
+     "92-blank-skip.spec.ts",
+     "games entry-point visible for ROLE_GAMES @role:ROLE_GAMES @layer:ui"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/specs/92-blank-skip.spec.ts",
+     "line": 29,
+     "column": 3
+    },
+    "annotations": [],
+    "expectedStatus": "skipped",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "skipped",
+    "duration": 10,
+    "retry": 0,
+    "error": null,
+    "annotations": [],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "",
+    "title": "flaky login redirect @role:ROLE_USER @layer:gateway",
+    "titlePath": [
+     "",
+     "chromium",
+     "93-no-id.spec.ts",
+     "flaky login redirect @role:ROLE_USER @layer:gateway"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/specs/93-no-id.spec.ts",
+     "line": 5,
+     "column": 3
+    },
+    "annotations": [],
+    "expectedStatus": "passed",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "failed",
+    "duration": 10,
+    "retry": 0,
+    "error": {
+     "message": "Timeout 15000ms exceeded"
+    },
+    "annotations": [],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "",
+    "title": "flaky login redirect @role:ROLE_USER @layer:gateway",
+    "titlePath": [
+     "",
+     "chromium",
+     "93-no-id.spec.ts",
+     "flaky login redirect @role:ROLE_USER @layer:gateway"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/specs/93-no-id.spec.ts",
+     "line": 5,
+     "column": 3
+    },
+    "annotations": [],
+    "expectedStatus": "passed",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "passed",
+    "duration": 900,
+    "retry": 1,
+    "error": null,
+    "annotations": [],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "ext-1",
+    "title": "operator signs in @role:alice@gmail.com @layer:casdoor",
+    "titlePath": [
+     "",
+     "bdd",
+     "onboarding.feature.spec.js",
+     "operator signs in @role:alice@gmail.com @layer:casdoor"
+    ],
+    "location": {
+     "file": "/elsewhere/.features-gen/features/onboarding.feature.spec.js",
+     "line": 3,
+     "column": 1
+    },
+    "annotations": [],
+    "expectedStatus": "passed",
+    "projectName": "bdd"
+   },
+   "result": {
+    "status": "passed",
+    "duration": 42,
+    "retry": 0,
+    "error": null,
+    "annotations": [],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "body-1",
+    "title": "usage CSV export @role:ROLE_ADMIN @layer:bff",
+    "titlePath": [
+     "",
+     "chromium",
+     "94-body-attachment.spec.ts",
+     "usage CSV export @role:ROLE_ADMIN @layer:bff"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/specs/94-body-attachment.spec.ts",
+     "line": 17,
+     "column": 3
+    },
+    "annotations": [],
+    "expectedStatus": "passed",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "passed",
+    "duration": 10,
+    "retry": 0,
+    "error": null,
+    "annotations": [],
+    "attachments": [
+     {
+      "name": "usage.csv",
+      "contentType": "text/csv",
+      "path": ""
+     }
+    ]
+   }
+  },
+  {
+   "test": {
+    "id": "title-1",
+    "title": "GET /admin/usage?access_token=ya29.TITLE-LEAK-0123456789 returns 200 @role:ROLE_ADMIN @layer:gateway",
+    "titlePath": [
+     "",
+     "chromium",
+     "95-title-leak.spec.ts",
+     "GET /admin/usage?access_token=ya29.TITLE-LEAK-0123456789 returns 200 @role:ROLE_ADMIN @layer:gateway"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/specs/95-title-leak.spec.ts",
+     "line": 11,
+     "column": 3
+    },
+    "annotations": [],
+    "expectedStatus": "passed",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "passed",
+    "duration": 15,
+    "retry": 0,
+    "error": null,
+    "annotations": [],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "att-1",
+    "title": "usage export is downloadable @role:ROLE_ADMIN @layer:bff",
+    "titlePath": [
+     "",
+     "chromium",
+     "96-attachment-leak.spec.ts",
+     "usage export is downloadable @role:ROLE_ADMIN @layer:bff"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/specs/96-attachment-leak.spec.ts",
+     "line": 7,
+     "column": 3
+    },
+    "annotations": [],
+    "expectedStatus": "passed",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "passed",
+    "duration": 20,
+    "retry": 0,
+    "error": null,
+    "annotations": [],
+    "attachments": [
+     {
+      "name": "GET /export?access_token=ya29.NAME-LEAK-0123456789",
+      "contentType": "text/csv",
+      "path": "/fixture/tests/e2e/test-results/96-attachment-leak/export-access_token=ya29.PATH-LEAK-0123456789.csv"
+     }
+    ]
+   }
+  },
+  {
+   "test": {
+    "id": "json-title",
+    "title": "login rejects {\"password\": \"hunter2-title-json-leak\"} @role:ROLE_USER @layer:ui",
+    "titlePath": [
+     "",
+     "chromium",
+     "97-json-quoted-title.spec.ts",
+     "login rejects {\"password\": \"hunter2-title-json-leak\"} @role:ROLE_USER @layer:ui"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/specs/97-json-quoted-title.spec.ts",
+     "line": 9,
+     "column": 3
+    },
+    "annotations": [],
+    "expectedStatus": "passed",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "passed",
+    "duration": 11,
+    "retry": 0,
+    "error": null,
+    "annotations": [],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "json-skip",
+    "title": "federated announcement lands on the peer @role:ROLE_ADMIN @layer:homeserver",
+    "titlePath": [
+     "",
+     "chromium",
+     "98-json-quoted-skip.spec.ts",
+     "federated announcement lands on the peer @role:ROLE_ADMIN @layer:homeserver"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/specs/98-json-quoted-skip.spec.ts",
+     "line": 14,
+     "column": 3
+    },
+    "annotations": [
+     {
+      "type": "skip",
+      "description": "peer refused the probe: {\"access_token\": \"ya29.SKIP-JSON-LEAK-0123456789\"}"
+     }
+    ],
+    "expectedStatus": "skipped",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "skipped",
+    "duration": 0,
+    "retry": 0,
+    "error": null,
+    "annotations": [
+     {
+      "type": "skip",
+      "description": "peer refused the probe: {\"access_token\": \"ya29.SKIP-JSON-LEAK-0123456789\"}"
+     }
+    ],
+    "attachments": []
+   }
+  },
+  {
+   "test": {
+    "id": "json-att",
+    "title": "login POST is captured @role:ROLE_USER @layer:bff",
+    "titlePath": [
+     "",
+     "chromium",
+     "99-json-quoted-attachment.spec.ts",
+     "login POST is captured @role:ROLE_USER @layer:bff"
+    ],
+    "location": {
+     "file": "/fixture/tests/e2e/specs/99-json-quoted-attachment.spec.ts",
+     "line": 6,
+     "column": 3
+    },
+    "annotations": [],
+    "expectedStatus": "passed",
+    "projectName": "chromium"
+   },
+   "result": {
+    "status": "passed",
+    "duration": 13,
+    "retry": 0,
+    "error": null,
+    "annotations": [],
+    "attachments": [
+     {
+      "name": "POST /login {\"password\": \"hunter2-att-json-leak\"}",
+      "contentType": "application/json",
+      "path": "/fixture/tests/e2e/test-results/99-json-quoted-attachment/request.json"
+     }
+    ]
+   }
+  }
+ ]
+}
