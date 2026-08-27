@@ -37,28 +37,33 @@ echo "== e2e enumeration without credentials =="
 # is the exact shape that broke enumeration.
 echo "-- 1. no spec resolves a credential at module scope --"
 scanned=0
+# The scan is a PYTHON helper, not an inline grep, because the shape that matters
+# is not one line: a module-scope arrow that resolves a credential, plus a
+# module-scope const assigned from CALLING it, is the same defect wearing a
+# variable. A literal-string grep is defeated by exactly that indirection (the
+# M4 mutation proved it), so the checker resolves one level of it.
+files=()
+while IFS= read -r f; do files+=("$f"); scanned=$((scanned + 1)); done \
+  < <(find "${E2E}/specs" "${E2E}/steps" -name '*.ts' -type f 2>/dev/null | sort)
+
+CHECKER="${HERE}/e2e_module_scope_credentials.py"
 offenders=""
-while IFS= read -r f; do
-  scanned=$((scanned + 1))
-  # Module scope == column 0. An indented call is inside a function or a getter,
-  # which is what we WANT, so anchor at the start of the line.
-  hits="$(grep -nE '^(export )?(const|let|var) [A-Za-z_][A-Za-z0-9_]* *= *(sharedPassword|passwordFor|swarmPassword)\(' "$f" || true)"
-  if [ -n "${hits}" ]; then
-    offenders="${offenders}
-    ${f#"${REPO}/"}:
-$(echo "${hits}" | sed 's/^/      /')"
-  fi
-done < <(find "${E2E}/specs" "${E2E}/steps" -name '*.ts' -type f 2>/dev/null)
+if [ "${scanned}" -gt 0 ] && [ -f "${CHECKER}" ]; then
+  offenders="$(python3 "${CHECKER}" "${files[@]}" 2>/dev/null)"
+fi
 
 # VACUITY FLOOR: a find that matched nothing would report a clean pass forever.
 if [ "${scanned}" -lt 20 ]; then
   bad "only ${scanned} .ts file(s) scanned under tests/e2e/{specs,steps} — expected 20+; the scan found nothing to check, so its verdict is meaningless"
+elif [ ! -f "${CHECKER}" ]; then
+  bad "${CHECKER##*/} is missing — section 1 asserted NOTHING"
 elif [ -n "${offenders}" ]; then
-  bad "credential resolved at MODULE SCOPE (fires at import, so --list dies):${offenders}
+  bad "credential resolved at MODULE SCOPE (fires at import, so --list dies):
+$(echo "${offenders}" | sed 's/^/      /')
        => make it lazy: a function, a getter, or a default parameter (defaults
           evaluate at CALL time). See loginPassword() in specs/rbac-roles.ts."
 else
-  ok "${scanned} spec/step file(s) scanned, none resolves a credential at module scope"
+  ok "${scanned} spec/step file(s) scanned, none resolves a credential at module scope (direct, or via a module-scope resolver)"
 fi
 
 # ── 2. the no-literal contract still holds ───────────────────────────────────
@@ -88,7 +93,11 @@ fi
 echo "-- 3. playwright --list with NO credential --"
 NM="${E2E_NODE_MODULES:-${E2E}/node_modules}"
 if [ ! -x "${NM}/.bin/playwright" ]; then
-  skip "no Playwright at ${NM}/.bin/playwright — set E2E_NODE_MODULES=<installed tests/e2e/node_modules> to run the real enumeration leg (nothing in section 3 was asserted)"
+  skip "no Playwright at ${NM}/.bin/playwright — set E2E_NODE_MODULES=<installed tests/e2e/node_modules> to run the real enumeration leg (nothing in section 3 was asserted).
+         SECTION 1 IS NOT A SUBSTITUTE: it reads source and resolves ONE level of
+         indirection, so an eager resolution reached through a deeper chain, or
+         through a helper in another module, is invisible to it. Only this leg
+         actually imports the specs."
 else
   TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
   LIVE="${TMP}/live"; mkdir -p "${LIVE}"
