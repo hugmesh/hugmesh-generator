@@ -348,8 +348,28 @@ spring:
               filters:
                 - StripPrefix=2
             # DB-hosted module-federation FRAGMENT bundles (static fleet).
+            #
+            # TARGETS THE WEB HALF, NOT THE SYNC APP. This route used to read
+            #   uri: http://hugmesh-remote-fragment:8081
+            # which was wrong twice over. :8081 is the sync service's ACTUATOR
+            # port (SERVER_PORT in compose.local.yaml, and in the cluster pod
+            # nginx owns :8080 while the sidecar's actuator takes :8081) — it
+            # serves no bundle bytes. And the compose lane had no fragment web
+            # server at all, so the sync app's SYNC_TARGET_DIR
+            # (/usr/share/nginx/html) was a docroot NOTHING SERVED. The failure
+            # shape is the dangerous one: loadRemoteModule fails at the network
+            # layer and the host renders a BLANK PAGE rather than a 404.
+            #
+            # PARITY with specs/cluster/apps/20-gateway-fe.yaml, whose uri is the
+            # hugmesh-remote-fragment Service — port 80 -> targetPort `http` ->
+            # the pod's `web` container (nginxinc/nginx-unprivileged, :8080).
+            # Compose has no Service indirection, so the nginx half is its own
+            # service and the route names it directly. Both lanes therefore
+            # resolve to the SAME image; tests/scripts/test-fragment-route-target.sh
+            # asserts that, and derives the port from the nginx conf rather than
+            # hardcoding it — a hardcoded expectation is how this drifted.
             - id: remote-fragment
-              uri: http://hugmesh-remote-fragment:8081
+              uri: http://hugmesh-remote-fragment-web:8080
               predicates:
                 - Path=/_fragments/**
             # ── EXTERNAL CLIENT PROTOCOL SURFACES (Element / Tusky / Ivory) ───

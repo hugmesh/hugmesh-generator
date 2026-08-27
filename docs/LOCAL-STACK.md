@@ -410,7 +410,8 @@ not verify.
 | `hugmesh-forum-bff-api` / `-wiki-bff-api` / `-owncast-bff-api` / `-tube-bff-api` | build the respective repos (spring-bff archetype siblings of admin-bff/federation-api) | `manifests/forum-bff-api` / `wiki-bff-api` / (owncast + tube ship co-located in-cluster; no dedicated BFF manifest dir yet) |
 | `hugmesh-character-forge-bff-api` | build `hugmesh-character-forge-bff-api` (spring-bff archetype sibling) | `manifests/character-forge-bff-api` |
 | `hugmesh-api` | build `hugmesh-actions` | `manifests/hugmesh-apis` |
-| `hugmesh-remote-fragment` | build `hugmesh-remote-fragment` (sync image) | `manifests/remote-fragment` |
+| `hugmesh-remote-fragment` | build `hugmesh-remote-fragment` (the SYNC image — writes bundles into the shared docroot; its `SERVER_PORT: 8081` listener is actuator-only and serves no bundle bytes) | `manifests/remote-fragment` (the pod's `sync` container) |
+| `hugmesh-remote-fragment-web` | `nginxinc/nginx-unprivileged` serving the shared `remote-fragment-bundles` volume; **this is what the fe-gateway's `/_fragments/**` route targets**. Its nginx config is the cluster's own ConfigMap file, bind-mounted so the lanes cannot drift. | `manifests/remote-fragment` (the pod's `web` container + its `nginx.conf`) |
 | `hugmesh-host-shell` (service name kept — the fe-gateway route target) | build `hugmesh-host-shell` | `manifests/frontend` |
 | `hugmesh-{admin,mod,user,login,mastodon,matrix,forum}-ui`, `-api-docs` | build each UI repo | `manifests/social-ui` + the remote repos |
 | `hugmesh-{wiki,owncast,tube}-ui` | build the respective repos | cluster serves these via the module-federation remote-fragment fleet, not a fixed gateway path; this compose stack adds a direct `/<slug>/**` route (mirroring mod-ui/user-ui) for local reachability + e2e |
