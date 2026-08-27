@@ -21,9 +21,20 @@ the page registry + mode-gated flow are in
 ## Screen 0 — Welcome
 
 [`welcome.py`](../studio/hugmesh_studio/gui/pages/welcome.py) — the hugmesh explainer
-(with the README getting-started link) plus THREE large icon buttons (issue #50):
-**Start building** (→ the mode menu below, journey-ordered), **Start a local mesh**
-(→ the local-stack flow directly), and **Review prior sessions** (→ Screen 0b).
+(with the README getting-started link) plus TWO large icon buttons (issue #50):
+**Start building** (→ the mode menu below, journey-ordered) and **Review prior
+sessions** (→ Screen 0b).
+
+The third card, **Start a local mesh**, was removed on **2026-08-26**. It routed to the
+same `LocalMeshPage` as the mode menu's own "Local Docker mesh" card, raising the same
+transient `wiz.localmesh_selected` flag — two doors onto one flow, and one of the
+duplicates behind the operator's report that the wizard "is asking same questions
+seemingly multiple times". The mode menu keeps the card; welcome carries no routing
+target for it, because a target for a card nobody can pick is an unreachable branch in
+`nextId()`. `WelcomePage.validatePage` still lowers the flag unconditionally, so a Back
+navigation out of the mode menu cannot strand a stale `True`. The TUI
+(`tui/journey.py`, `WELCOME_CHOICES`/`WELCOME_TARGET`) dropped the same entry and is
+parity-pinned against this page.
 
 ## Screen 0b — Prior sessions
 
@@ -100,12 +111,72 @@ collected into `cfg`.
   `welcome → mode → role → hardware → branding → network → keyzip → domains → users → system → home → build`
 - **Standalone Gentoo desktop** (`standalone`) — skips idp/worklist/keyzip/domains/users:
   `welcome → mode → role → hardware → branding → network → system → home → build`
+  (then `launch → progress`). **The unaffiliated role walks the identical
+  sequence.** It used to be this same walk *minus* `branding`, because
+  `BrandingPage.applies_to` removed the page for that role; the 2026-08-26
+  identity/look split put the page back (see below), so there is no longer any
+  page-level difference between an unaffiliated and a branded standalone image —
+  the difference moved inside the branding screen, to two hidden identity widgets.
 
 `ProgressPage` terminates each image path once it lands (WS-REVIEWUI).
 
+## Duplicate-question collapse (2026-08-26)
+
+Operator report, against session `20260826-151356-64070a`
+(`role=standalone-unaffiliated`, `platform=x86`):
+
+> "standalone menu is asking same questions seemingly multiple times when nothing
+> should be an image there related to the mesh or domain at all. There should also be
+> no inbetween menu for configuring domain. There should be the menu for adding the
+> themes as in the branded images"
+
+No page was ever visited twice — the repeats were the *same question asked by different
+widgets on different screens*. Each was collapsed to a single asker. Every hide below is
+**emission-neutral**: the widget is hidden *and* its field reset to the `ImageConfig`
+dataclass default, and the gate is re-evaluated on every `initializePage` so a field that
+becomes applicable again is both reachable and emitted.
+
+| Duplicate | Kept | Removed from |
+|---|---|---|
+| "Identity & domain" (apex domain / games domain / release state) | cloud + mesh, and every ARM platform | `network.py` on a standalone x86 image — the "in-between menu for configuring domain" (`cluster_identity_applies`) |
+| Default account | `home.py` "Local user" | `system.py` "Default user" on desktop-class flows (`default_user_is_local_user`) |
+| Machine hardware scan | `hardware.py` | the synthetic `this-machine-scan` profile row on `role.py` |
+| "Themes" (web login) vs "Desktop theme" | both, retitled | the bare "Themes" label — the web group is now "Web login theme", and is mesh-only |
+| "Seed stack code" | branded images | `home.py` on an unaffiliated image |
+| Image posture / `--capable` / desktop weight | roles where they genuinely compose | roles whose builder arm already pins them (`role_presets_standalone` / `role_presets_capable`) |
+| Sunshine | tailnet client desktops | standalone mode |
+| "Unaffiliated" | the role ROW | the composable checkbox, in standalone mode only |
+| "Start a local mesh" | the mode menu | the welcome screen |
+
+Two hides are deliberately **not** paired with a clear. `--standalone` and `--capable` on a
+role whose builder arm already sets them are *redundant*, not inapplicable: the image is
+byte-identical either way, and clearing would silently rewrite a loaded config on a mere
+page visit. Inapplicable hides (Sunshine, the composable unaffiliated flag) do clear.
+
+### Identity vs look on an unaffiliated image
+
+The third ask reverses part of an earlier fix. `BrandingPage` used to delete itself for
+`standalone-unaffiliated`, which was correct while *every* branding flag was a builder
+hard conflict — the screen could only render greyed behind an apology note. The rule is
+now split: **a brand names whose image this is; a wallpaper names nobody.**
+
+- **Identity — still refused**: `--brand`, `--brand-title`, `--org`, `--brand-logo`,
+  `--brand-locked`, and a `--config` brand profile.
+- **Look — now allowed**: `--theme`, `--branding-dir`, `--wallpaper`,
+  `--grub-background`, `--grub-theme`, `--login-background`, `--accent-color`,
+  `--color-scheme`, baked under neutral artefact names (`/etc/gentoo/branding`,
+  `/usr/sbin/branding`, `gentoo-background.png`).
+
+So the page is back in the flow and only its two identity widgets (the brand-logo row and
+"Lock branding") are hidden and cleared. `--brand-logo` stays on the identity side because
+the logo *is* the mark — the applier installs it as the greeter's default-user-image — and
+because every `--theme` preset ships one, the unaffiliated bake removes `logo.png` from the
+assembled brand dir so the conflict cannot be walked around through a preset.
+
 ## What got clearer in this pass
 
-- The first screen presents **four** usable choices; the fourth (Local Docker mesh) is
+- The first screen presents **two** cards (was three — see Screen 0); the mode menu it
+  opens presents **four** usable choices; the fourth (Local Docker mesh) is
   **functional** end-to-end (was previously a crash-on-click dead end — its
   `LocalMeshConfig`/`LocalMeshDialog` modules now exist and are test-covered).
 - The Welcome subtitle names **all four** paths (dropped the retired "branded cloud

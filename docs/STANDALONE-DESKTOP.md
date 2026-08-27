@@ -125,13 +125,15 @@ backgrounds / logo / accent / color scheme), home provisioning
 **extra-builder-flags escape hatch** so any remaining CLI flag stays reachable
 without dropping to the shell.
 
-One menu default to know about: **branded** standalone builds from the ncurses
-menu start with `--theme dark` preselected (the persisted `OPT_SA_THEME`
-default in `scripts/build-menu.sh`; pick **None** under "Branding theme" for
-the stock look), while the `standalone-unaffiliated` entry suppresses all
-theming (`--theme` is a hard conflict there, so the menu hides the option and
-never emits its persisted default). Direct `make` / CLI builds apply no theme
-unless you pass one — see the Desktop branding section below.
+One menu default to know about: standalone builds from the ncurses menu start
+with `--theme dark` preselected (the persisted `OPT_SA_THEME` default in
+`scripts/build-menu.sh`; pick **None** under "Branding theme" for the stock
+look). Since **2026-08-26** that includes the `standalone-unaffiliated` entry:
+a theme is a LOOK, not an affiliation, so the option is offered there too and
+its artefacts bake under neutral names. What that entry still refuses is brand
+**identity** — `--brand` / `--brand-title` / `--org` / `--brand-logo` /
+`--brand-locked`. Direct `make` / CLI builds apply no theme unless you pass one
+— see the Desktop branding section below.
 
 Use the big scratch disk for the heavy build (namespaced; never touches portage's
 own dirs):
@@ -437,11 +439,52 @@ unless you pass one explicitly: `make x86-standalone` / `make
 x86-standalone-thick STANDALONE_FLAGS='--theme dark'`, or a fleet run
 (`scripts/build-all-roles.sh`; `X86_STANDALONE=1` appends the three standalone
 variants to the role set, `X86_STANDALONE_ONLY=1` builds only them) with
-`--theme purple` in its pass-through builder args. The
-`standalone-unaffiliated` role suppresses theming entirely: any `--theme` is a
-hard conflict, the menu never emits its persisted theme default for it, and a
-branded fleet run skips the unaffiliated role loudly (build it separately with
-`make x86-standalone-unaffiliated`).
+`--theme purple` in its pass-through builder args. The `standalone-unaffiliated` role **accepts a theme** (changed 2026-08-26 — it
+used to refuse every branding flag alike). See "Identity vs look on an
+unaffiliated image" below for what it bakes and what it still refuses; a
+branded fleet run still skips the unaffiliated role loudly, so build it
+separately with `make x86-standalone-unaffiliated`.
+
+### Identity vs look on an unaffiliated image
+
+`standalone-unaffiliated` builds a plain Gentoo desktop with zero HugMesh
+affiliation. Until 2026-08-26 that was enforced by refusing all ten branding
+flags in one conflict check, which also removed the whole theme step from the
+image — reported by the operator as "there should be the menu for adding the
+themes as in the branded images". The rule is now split along the axis that
+actually matters: **a brand names WHOSE image this is; a wallpaper names
+nobody.**
+
+| | Flags | On an unaffiliated build |
+|---|---|---|
+| **Identity** | `--brand`, `--brand-title`, `--org`, `--brand-logo`, `--brand-locked` (and a `--config` brand profile) | **Hard conflict** — the build exits 1 |
+| **Look** | `--theme`, `--branding-dir`, `--wallpaper`, `--grub-background`, `--grub-theme`, `--login-background`, `--accent-color`, `--color-scheme` | **Allowed** |
+
+`--brand-logo` stays on the identity side because the logo *is* the mark: the
+applier installs it as the greeter's default-user-image. A `--theme` preset
+ships its own `logo.png`, so the unaffiliated bake **removes** it from the
+assembled brand dir — the conflict cannot be walked around through a preset or
+a `--branding-dir`. `--brand-locked` stays because locking a look is an
+administrator's act on a managed (i.e. affiliated) fleet image.
+
+Everything the look half bakes uses **neutral artefact names** on this image,
+the same way the home/installer/media machinery already renames itself:
+
+| Branded build | Unaffiliated build |
+|---|---|
+| `/etc/hugmesh/branding`, `/etc/hugmesh/brand.conf` | `/etc/gentoo/branding`, `/etc/gentoo/brand.conf` |
+| `/usr/sbin/hugmesh-branding` | `/usr/sbin/branding` |
+| `/usr/share/hugmesh/branding` | `/usr/share/gentoo/branding` |
+| `/boot/grub/hugmesh-background.png` | `/boot/grub/gentoo-background.png` |
+| `/boot/grub/themes/hugmesh` | `/boot/grub/themes/gentoo` |
+| `/usr/share/color-schemes/HugMesh.colors` | `/usr/share/color-schemes/Gentoo.colors` |
+| `/usr/share/wallpapers/HugMesh` | `/usr/share/wallpapers/Gentoo` |
+| `/etc/xdg/autostart/hugmesh-branding.desktop` | `/etc/xdg/autostart/branding.desktop` |
+| `HUGMESH_BRANDING_ROOT` / `_BUILD` | `BRANDING_ROOT` / `BRANDING_BUILD` |
+
+Known gap: the four preset **wallpapers** still carry the mesh hexagon mark
+that `scripts/gen-branding-themes.py` draws (geometry only — no text, no
+logotype). The names are neutral; the artwork is not yet.
 
 ### Premade themes
 

@@ -781,9 +781,15 @@ build_make_cmd() {
             [ "${OPT_SA_KEYFILE}" != none ] && bf+=" --unlock-keyfile ${OPT_SA_KEYFILE}"
             [ "${OPT_SA_YUBIKEY}" != none ] && bf+=" --unlock-yubikey ${OPT_SA_YUBIKEY}"
             # branding theme + security stack + monolithic kernel + egress VPN.
-            # unaffiliated: NEVER --theme (a hard conflict), even though
-            # OPT_SA_THEME's persisted default is 'dark'.
-            { [ "${unaff}" = no ] && [ -n "${OPT_SA_THEME}" ] && [ "${OPT_SA_THEME}" != none ]; } && bf+=" --theme ${OPT_SA_THEME}"
+            # --theme APPLIES TO THE UNAFFILIATED DESKTOP TOO since 2026-08-26. It used
+            # to be suppressed here as a hard conflict; the builder's unaffiliated fold
+            # now refuses brand IDENTITY only (--brand/--brand-title/--org/--brand-logo/
+            # --brand-locked) and bakes a theme's artefacts under NEUTRAL names
+            # (/etc/gentoo/branding, /usr/sbin/branding, gentoo-background.png). The
+            # operator's report is the reason: the old blanket conflict removed the whole
+            # theme step from that image ("There should be the menu for adding the themes
+            # as in the branded images").
+            { [ -n "${OPT_SA_THEME}" ] && [ "${OPT_SA_THEME}" != none ]; } && bf+=" --theme ${OPT_SA_THEME}"
             [ "${OPT_SA_PROXY}" = no ]    && bf+=" --no-proxy-stack"
             [ "${OPT_SA_SNORT}" = no ]    && bf+=" --no-snort"
             [ "${OPT_SA_AIDE}" = yes ]    && bf+=" --with-aide"
@@ -854,16 +860,19 @@ build_make_cmd() {
         esac
         # Advanced branding OVERRIDES — single artwork/palette pieces layered on top
         # of the brand profile / theme preset. Apply to ANY x86 image (x86-only
-        # flags: the Jetson builder has no branding-override surface yet) EXCEPT
-        # the unaffiliated desktop, where every branding flag is a hard conflict.
-        if [ "${unaff}" = no ]; then
-            [ -n "${OPT_BR_WALLPAPER}" ] && bf+=" --wallpaper ${OPT_BR_WALLPAPER}"
-            [ -n "${OPT_BR_GRUB_BG}" ]   && bf+=" --grub-background ${OPT_BR_GRUB_BG}"
-            [ -n "${OPT_BR_LOGIN_BG}" ]  && bf+=" --login-background ${OPT_BR_LOGIN_BG}"
-            [ -n "${OPT_BR_LOGO}" ]      && bf+=" --brand-logo ${OPT_BR_LOGO}"
-            [ -n "${OPT_BR_ACCENT}" ]    && bf+=" --accent-color ${OPT_BR_ACCENT}"
-            [ -n "${OPT_BR_SCHEME}" ]    && bf+=" --color-scheme ${OPT_BR_SCHEME}"
-        fi
+        # flags: the Jetson builder has no branding-override surface yet).
+        # SPLIT 2026-08-26 along the identity/look line the builder now draws. These
+        # five say what the desktop LOOKS LIKE and name nobody, so they apply to the
+        # unaffiliated desktop as well; they bake under neutral artefact names there.
+        [ -n "${OPT_BR_WALLPAPER}" ] && bf+=" --wallpaper ${OPT_BR_WALLPAPER}"
+        [ -n "${OPT_BR_GRUB_BG}" ]   && bf+=" --grub-background ${OPT_BR_GRUB_BG}"
+        [ -n "${OPT_BR_LOGIN_BG}" ]  && bf+=" --login-background ${OPT_BR_LOGIN_BG}"
+        [ -n "${OPT_BR_ACCENT}" ]    && bf+=" --accent-color ${OPT_BR_ACCENT}"
+        [ -n "${OPT_BR_SCHEME}" ]    && bf+=" --color-scheme ${OPT_BR_SCHEME}"
+        # ...and the ONE that stays gated: a logo is the brand MARK, not a look. The
+        # builder installs it as the greeter's default-user-image, so it is the single
+        # asset that says WHOSE image this is — still a hard conflict on --unaffiliated.
+        { [ "${unaff}" = no ] && [ -n "${OPT_BR_LOGO}" ]; } && bf+=" --brand-logo ${OPT_BR_LOGO}"
         # Home provisioning — standalone + tailnet CLIENT desktops only (a cluster
         # node has no provisioned user home to adopt/restore).
         case "${target}" in
@@ -1753,7 +1762,11 @@ standalone_screen() {
         unaff=yes; weight="UNAFFILIATED (plain Gentoo, thick weight)"
     fi
     prompt="Hardened NVIDIA standalone desktop — no mesh, no SSO, local login. Installed system is LUKS2-encrypted (you set the root passphrase at install)."
-    [ "${unaff}" = yes ] && prompt="UNAFFILIATED plain hardened Gentoo desktop — ZERO HugMesh affiliation: no brand, no theme, no source seed, no mesh/SSO. The role presets the neutral identity; branding/seed options are hidden (they hard-conflict). Installed system is LUKS2-encrypted (you set the root passphrase at install)."
+    # 2026-08-26: "no theme" was removed from this sentence because it stopped being
+    # true — the identity/look split lets this role carry a theme (baked under neutral
+    # artefact names). Brand IDENTITY and the source seed are still hidden and still
+    # hard-conflict, so the sentence now names those instead of branding wholesale.
+    [ "${unaff}" = yes ] && prompt="UNAFFILIATED plain hardened Gentoo desktop — ZERO HugMesh affiliation: no brand identity, no source seed, no mesh/SSO. A THEME is allowed (it says how the desktop looks, not whose it is) and bakes under neutral names. The role presets the neutral identity; brand/logo and seed options are hidden (they hard-conflict). Installed system is LUKS2-encrypted (you set the root passphrase at install)."
     while :; do
         local media_l home_l
         media_l="$([ "${OPT_SA_MEDIA}" = yes ] && echo "ON (/media Vaults+Steam auto-detect)" || echo OFF)"
@@ -1772,8 +1785,12 @@ standalone_screen() {
             keyfile "Keyfile unlock ..... ${OPT_SA_KEYFILE}   (boot=LUKS keyslot / login=PAM)"
             yubikey "YubiKey unlock ..... ${OPT_SA_YUBIKEY}   (boot=FIDO2 / login=pam_u2f)"
         )
-        # branding theme: hidden for the unaffiliated role (hard conflict).
-        [ "${unaff}" = no ] && items+=(theme "Branding theme ..... ${OPT_SA_THEME}")
+        # branding theme: offered on EVERY standalone role, the unaffiliated one
+        # included (2026-08-26 — it used to be hidden here as a hard conflict; a theme
+        # is a look, and the operator asked for "the menu for adding the themes as in
+        # the branded images"). What that role still refuses is brand IDENTITY, which
+        # this menu never offered on the standalone screen anyway.
+        items+=(theme "Branding theme ..... ${OPT_SA_THEME}")
         items+=(
             security "Security stack .... proxy=${OPT_SA_PROXY} snort=${OPT_SA_SNORT} aide=${OPT_SA_AIDE}"
             kernel  "Kernel built-in .... ${OPT_SA_KBUILTIN}   (=y vs modules)"

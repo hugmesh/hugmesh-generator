@@ -129,7 +129,7 @@ def test_ask7_person_role_label_is_no_longer_the_unclear_one(wiz):
     assert "artifact's filename" in intro                 # the other thing it really does
     assert "GRANTS nothing" in intro                      # what it is NOT
     # ...and it does not claim a behaviour the code does not have. `git grep
-    # identity-role` finds ONE writer (build-x86-host-stage4.sh:4102) and ONE reader
+    # identity-role` finds ONE writer (build-x86-host-stage4.sh:4356) and ONE reader
     # (tests/qemu/verify-client.sh, a verification probe); keys-provision reads the
     # SIBLING `domains` marker, never this one. Saying the tier binds the device to an
     # account today would be inventing a semantic — exactly what ask 7 forbids.
@@ -139,7 +139,7 @@ def test_ask7_person_role_label_is_no_longer_the_unclear_one(wiz):
 def test_ask7_every_option_carries_its_own_description(wiz):
     """Per-option prose: selecting any option updates a visible description, and the
     superadmin option names its real, non-obvious consequence (the device-password
-    hardening the builder bakes at build-x86-host-stage4.sh:4076)."""
+    hardening the builder bakes at build-x86-host-stage4.sh:4375-4376)."""
     pick_mode(wiz, "cloud")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     assert set(_PERSON_ROLE_HELP) == {"derive", *PERSON_ROLE_CHOICES}
@@ -450,8 +450,19 @@ def test_ask9_timezone_falls_back_when_the_database_is_present_but_empty(monkeyp
 
 def test_ask9_three_fields_are_preselected_not_blank(wiz):
     """The whole ask: none of the three arrives empty on a single-image flow, and the
-    two derived ones equal what the builder itself would have produced."""
+    two derived ones equal what the builder itself would have produced.
+
+    RE-DRIVEN onto a NODE-class flow (was cloud's default desktop role) by the
+    operator's 2026-08-26 duplicate collapse. On a DESKTOP image --local-user IS the
+    baked default account, so SystemPage's "Default user" row was asking the same
+    question HomePage's "Local user" row asks two screens later — one of the "same
+    questions seemingly multiple times". The row is now hidden and the field cleared
+    there (system.default_user_is_local_user). A node image still owns -u outright, so
+    this is where all three fields are live together and the ask is testable whole.
+    The desktop half is covered by the companion test below."""
     pick_mode(wiz, "cloud")
+    role = advance_to(wiz, wizard_mod.RolePage)
+    assert role.select_role("orangepizero2"), "no node-class role offered in cloud"
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     c = wiz.cfg
     assert sysp.hostname.text() == derive_hostname(c) != ""
@@ -462,6 +473,113 @@ def test_ask9_three_fields_are_preselected_not_blank(wiz):
     assert ("--hostname", derive_hostname(c)) in got
     assert ("--user", derive_default_user(c)) in got
     assert ("--timezone", timezones.default_timezone()) in got
+
+
+def test_ask9_a_desktop_asks_for_the_account_exactly_once(wiz):
+    """The other half of the same ask after the 2026-08-26 collapse: on a DESKTOP flow
+    the account is asked ONCE, on HomePage, and the two derived fields are still
+    preselected on SystemPage.
+
+    This is the test that would catch the collapse going too far — losing the account
+    question altogether rather than deduplicating it. The image still gets a default
+    account either way: with -u unset the builder falls back to its own DEFAULT_USER,
+    which is byte-identical to the value the hidden row was prefilling."""
+    pick_mode(wiz, "cloud")           # cloud's default role is desktop-class
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    c = wiz.cfg
+    # the two that are NOT duplicated are still preselected, exactly as before
+    assert sysp.hostname.text() == derive_hostname(c) != ""
+    assert sysp.timezone.currentText() == timezones.default_timezone() != ""
+    # ...and the duplicate row is gone, not merely greyed
+    assert not sysp.user.isVisibleTo(sysp), (
+        "the 'Default user' row still duplicates HomePage's 'Local user' on a desktop")
+    home = advance_to(wiz, wizard_mod.HomePage)
+    assert home.local_user.isVisibleTo(home), (
+        "the account question vanished entirely instead of moving")
+    assert home.local_user_note.isVisibleTo(home), (
+        "HomePage must SAY that this account is also the image's default user")
+    # emission-neutral: the hidden row emits nothing, and the surviving one does emit
+    got = pairs(c.to_cli_args())
+    assert ("--hostname", derive_hostname(c)) in got
+    assert "--user" not in c.to_cli_args()
+    assert ("--local-user", c.local_user) in got
+
+
+def test_ask9_an_arm_desktop_can_still_name_its_baked_account(wiz):
+    """REGRESSION (2026-08-26 change set): the duplicate collapse hid -u on EVERY desktop
+    image, on the strength of "a custom --local-user is honoured by the ARM builders too".
+
+    It is — but --local-user is only EMITTED to an ARM builder under
+    `if self.standalone or self.local_user != default_local_user() or self.local_pass:`
+    (config.py:3166; x86 emits it unconditionally at config.py:3536). So a PLAIN ARM
+    desktop received neither flag: `build-rpi5-stage4.sh` kept DEFAULT_USER="pi" (:288)
+    while the wizard displayed the local user's name, and the operator could no longer
+    name the baked account AT ALL — something they could do before the change set.
+    Measured on this exact flow, pre-fix:
+
+        --role desktop --board rpi5 --env test --hostname hugmesh-rpi5-desktop
+        --timezone America/Los_Angeles --compress --resume --encrypt-root ...
+
+    with no --user and no --local-user in it. This is that walk, pinned."""
+    pick_mode(wiz, "cloud")
+    role = advance_to(wiz, wizard_mod.RolePage)
+    assert role.select_role("rpi5-desktop"), "rpi5-desktop not offered in cloud"
+    assert wiz.cfg.local_user == default_local_user(), "no longer a DEFAULT account name"
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    # RolePage commits the machine on its validatePage, so this reads AFTER the advance
+    assert wiz.cfg.platform == "rpi5", "this test no longer exercises an ARM image"
+    # the row is OFFERED (it is the only channel here) and prefilled with the builder's
+    # own account, which is ask 9's contract for the fields that survive
+    assert sysp.user.isVisibleTo(sysp), (
+        "an ARM desktop lost its only way to name the baked account")
+    assert sysp.user.text() == derive_default_user(wiz.cfg) == "pi"
+    sysp.user.setText("operator")
+    home = advance_to(wiz, wizard_mod.HomePage)
+    # ...and HomePage does NOT claim a flag this argv lacks
+    assert home.local_user_note.isHidden(), (
+        "the note asserts --local-user on a build that does not pass it")
+    wiz.next()
+    args = wiz.cfg.to_cli_args()
+    assert ("--user", "operator") in pairs(args), (
+        "the operator named the account and the builder was never told")
+    assert "--local-user" not in args
+
+
+@pytest.mark.parametrize("mode,role", [
+    ("cloud", "rpi5-desktop"),          # ARM desktop: NEITHER flag -> -u is the channel
+    ("cloud", "orangepi5"),             # ARM desktop: NEITHER flag -> -u is the channel
+    ("cloud", "frite"),                 # ARM desktop: NEITHER flag -> -u is the channel
+    ("cloud", "laptop"),                # x86 desktop: --local-user, unconditional
+    ("cloud", "desktop"),               # x86 desktop
+    ("standalone", "standalone-thick"),
+    ("standalone", "standalone-unaffiliated"),
+])
+def test_ask9_the_local_user_note_never_claims_a_flag_the_argv_lacks(wiz, mode, role):
+    """The invariant behind both halves of the collapse, as ONE property: HomePage's note
+    names --local-user, so it must be visible if and only if --local-user is in the argv,
+    and SystemPage's -u row must be offered exactly where it is NOT.
+
+    Written as an iff rather than five hand-picked cases because both directions are real
+    defects: the note appearing on an ARM desktop (measured — it claimed the builder makes
+    --local-user the DEFAULT_USER while the argv carried no such flag) and the row
+    disappearing on one (the same walk lost the account name entirely)."""
+    pick_mode(wiz, mode)
+    rp = advance_to(wiz, wizard_mod.RolePage)
+    assert rp.select_role(role), f"{role} not offered in {mode}"
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    row_shown = sysp.user.isVisibleTo(sysp)
+    home = advance_to(wiz, wizard_mod.HomePage)
+    note_shown = not home.local_user_note.isHidden()
+    wiz.next()
+    args = wiz.cfg.to_cli_args()
+    emitted = "--local-user" in args
+    assert note_shown == emitted, (
+        f"{mode}/{role}: note shown={note_shown} but --local-user emitted={emitted}")
+    assert row_shown == (not emitted), (
+        f"{mode}/{role}: -u row shown={row_shown} while --local-user emitted={emitted} "
+        "— the row is asked exactly where --local-user is NOT the account")
+    # exactly one of the two flags names the account, never zero
+    assert ("--user" in args) or emitted, f"{mode}/{role}: NO account flag in the argv"
 
 
 def test_ask9_derived_hostname_matches_the_builder_role_switch():
@@ -588,11 +706,20 @@ def test_ask9_the_per_row_account_probe_matches_the_materialized_rows(wiz):
 def test_ask9_a_single_arm_image_prefills_its_own_platform_account(wiz):
     """Per-platform, not x86-and-hope: a lone rpi5 image preselects the rpi5 builder's
     account, which is the only value that makes ask 9's "exactly what this build would
-    produce if you left it blank" true."""
-    pick_mode(wiz, "cloud")
+    produce if you left it blank" true.
+
+    RE-DRIVEN from cloud/rpi5-desktop onto standalone/generic — still a lone rpi5
+    image (the "Generic arm64 server" row IS a Raspberry Pi 5), and still derives "pi",
+    so the property under test is untouched. The old subject was DESKTOP-class, and
+    since the 2026-08-26 duplicate collapse a desktop has no "Default user" row to
+    read (system.default_user_is_local_user) — the assertion would have been checking
+    a hidden widget's leftover text rather than the preselect."""
+    pick_mode(wiz, "standalone")
     role = advance_to(wiz, wizard_mod.RolePage)
-    assert role.select_role("rpi5-desktop"), "rpi5-desktop not offered in cloud"
+    assert role.select_role("generic"), "generic (rpi5 node) not offered in standalone"
     sysp = advance_to(wiz, wizard_mod.SystemPage)
+    assert wiz.cfg.platform == "rpi5", "this test no longer exercises an ARM image"
+    assert sysp.user.isVisibleTo(sysp), "a node image must still own the -u question"
     assert sysp.user.text() == derive_default_user(wiz.cfg) == "pi"
     assert not sysp.user_note.isVisible()
 
@@ -841,7 +968,7 @@ def test_ask21_encryption_is_always_on_outside_mesh_too(wiz, mode):
     assert home.encrypt_root.isChecked() and not home.encrypt_root.isEnabled()
     # ...and the consequence is stated HERE, not only on the mesh note: on x86 the
     # builder turns --encrypt-root into INSTALLER_ISO=true unconditionally
-    # (build-x86-host-stage4.sh:1472), so a cloud client that never asked for an
+    # (build-x86-host-stage4.sh:1780), so a cloud client that never asked for an
     # installer ISO now gets one.
     assert home.enc_always_note.isVisible()
     assert "installer ISO" in home.enc_always_note.text()
@@ -1072,9 +1199,22 @@ def test_ask21_standalone_live_on_the_node_class_appliance(qapp, appliance):
     assert "--standalone" in cfg.to_cli_args()
 
 
-def test_ask21_standalone_live_on_a_standalone_desktop(qapp):
-    """The other direction — the gate must not eat the flow --standalone exists for."""
-    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
+def test_ask21_standalone_live_where_the_posture_genuinely_composes(qapp):
+    """The other direction — the gate must not eat the flow --standalone exists for.
+
+    RE-POINTED from standalone-thick to CHROMEBOOK-in-standalone by DECISION 2(b)
+    (operator, 2026-08-26: the wizard "asking same questions seemingly multiple
+    times"). standalone-thick is one of the three roles whose builder arm PRESETS the
+    posture — build-x86-host-stage4.sh:1505 sets STANDALONE=true from the role case
+    itself — so offering a "Standalone image" tick beside an image type already
+    called "Standalone thick" asked the same question twice, with only one legal
+    answer. Those roles now hide the box.
+
+    Chromebook is the shape where the tick still MEANS something: its role arm sets
+    no posture, so ticking it genuinely composes one. That is the flow --standalone
+    exists for, so that is where this test belongs; the property it pins (visible,
+    in-scope tooltip, committed, emitted) is unchanged."""
+    cfg = ImageConfig(mode="standalone", role="chromebook", platform="x86")
     page = _role_page(cfg)
     page.initializePage()
     assert page.standalone.isVisibleTo(page)
@@ -1085,6 +1225,25 @@ def test_ask21_standalone_live_on_a_standalone_desktop(qapp):
     assert page.validatePage()
     assert cfg.standalone is True
     assert "--standalone" in cfg.to_cli_args()
+
+
+def test_ask21_standalone_is_hidden_where_the_role_already_pins_it(qapp):
+    """The NEGATIVE the re-point above created, kept as a negative rather than lost.
+
+    DECISION 2(b): a knob whose value the chosen role already decided is a duplicate
+    question. The three x86 standalone-* desktop roles preset STANDALONE=true in the
+    builder's own role case (build-x86-host-stage4.sh:1505/:1332/:1344), so the box goes —
+    box AND section, leaving no orphan header.
+
+    The FIELD is deliberately NOT cleared here, unlike an out-of-scope hide: this is
+    the REDUNDANT kind of hide, the image is byte-identical either way, and clearing
+    would silently rewrite a loaded config on a mere page visit."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
+    page = _role_page(cfg)
+    page.initializePage()
+    assert not page.standalone.isVisibleTo(page), (
+        "standalone-thick's builder arm already sets this posture — asking is a "
+        "duplicate question with one legal answer")
 
 
 def test_ask21_standalone_is_cleared_when_the_role_moves_out_of_scope(qapp):
@@ -1156,8 +1315,13 @@ def test_ask21_clear_role_class_fields_owns_the_standalone_clear(qapp):
 def test_ask21_standalone_gate_follows_the_live_role_selection(qapp):
     """On RolePage the role IS what the operator is moving through, so the gate is
     re-evaluated on every selection change — not once per page visit, which would show
-    the box for the PREVIOUS role."""
-    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
+    the box for the PREVIOUS role.
+
+    Started from CHROMEBOOK rather than standalone-thick (DECISION 2(b) hides the box
+    on the latter, so the visibility assertion had nothing left to prove). The real
+    property — the gate re-evaluates, and probing it does not mutate the live cfg —
+    needs a role where the box is SHOWN, so the composing role is the right start."""
+    cfg = ImageConfig(mode="standalone", role="chromebook", platform="x86")
     page = _role_page(cfg)
     page.initializePage()
     assert page.standalone.isVisibleTo(page)
@@ -1315,9 +1479,9 @@ def test_ask7_only_superadmin_is_claimed_to_change_the_image(wiz):
     """ASK 7's "describe what it ACTUALLY does" clause, held to the code.
 
     Exactly one tier changes what gets built — `superadmin`, which bakes
-    /etc/hugmesh/device-password-required (build-x86-host-stage4.sh:4121-4122), the one
+    /etc/hugmesh/device-password-required (build-x86-host-stage4.sh:4375-4376), the one
     person-role marker the shipped first-boot path really consumes
-    (specs/etc/keys-provision/provision.sh:394). The other three are labels. The page
+    (specs/etc/keys-provision/provision.sh:395). The other three are labels. The page
     must say so both ways round, or an operator picking `admin` will believe they have
     hardened a device they have not."""
     pick_mode(wiz, "cloud")

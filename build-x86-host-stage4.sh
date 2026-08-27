@@ -329,8 +329,12 @@ LOCAL_USER_PASS=""      # --local-pass PASS : plaintext; hashed at build, never 
 # NO bundled generator source or brand-repo templates, and NO k8s/mesh package
 # payload or config remnants. The result is a plain hardened Gentoo desktop.
 # Preset by the `standalone-unaffiliated` role arm; composable onto any client/
-# standalone role with --unaffiliated. Brand/branding/seed-code/mesh/SSO flags
-# CONFLICT with it (hard error) — unaffiliated means no brand identity at all.
+# standalone role with --unaffiliated. Brand-IDENTITY (--brand/--brand-title/--org/
+# --brand-logo/--brand-locked), seed-code, mesh and SSO flags CONFLICT with it (hard
+# error). The LOOK flags (--theme/--branding-dir/--wallpaper/--grub-background/
+# --grub-theme/--login-background/--accent-color/--color-scheme) do NOT: since the
+# 2026-08-26 "split identity from look" decision they are allowed and are baked under
+# neutral names — unaffiliated means no brand IDENTITY, not no wallpaper.
 UNAFFILIATED=false      # --unaffiliated : plain Gentoo desktop, no HugMesh affiliation
 MEDIA_DATA_FORCED=""    # ''|on|off — tracks an explicit --media-data/--no-media-data
                         #   (unaffiliated defaults media-data OFF unless forced on)
@@ -499,6 +503,10 @@ BUNDLE_SOURCE=""
 # --brand-logo/--accent-color/--color-scheme flags override single pieces on top.
 # Everything is baked by hugmesh-branding at build time and stays user-changeable
 # afterwards UNLESS --brand-locked is set (managed image). Empty => stock look.
+# UNAFFILIATED: these flags are ALLOWED (2026-08-26 decision) except --brand-logo and
+# --brand-locked, and the whole lane is renamed on the way into the image — the applier
+# ships as /usr/sbin/branding, the assets as /etc/gentoo/branding. See the naming table
+# beside BRAND_GRUB_BG_STAGED for the full old->new map.
 BRANDING_THEME=""        # --theme NAME (bundled preset dir name)
 BRANDING_DIR=""          # --branding-dir DIR (full brand dir)
 BRAND_WALLPAPER=""       # --wallpaper FILE
@@ -748,8 +756,15 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             GRUB titles/ISO volids/UKI/installer text derived
                             from a forced neutral brand), no hugmesh-* tools
                             or /etc/hugmesh markers, no bundled generator
-                            source, no k8s/mesh payload. Brand/branding/
-                            seed-code/mesh/SSO flags HARD-CONFLICT with it.
+                            source, no k8s/mesh payload. Brand-IDENTITY
+                            (--brand/--brand-title/--org/--brand-logo/
+                            --brand-locked), seed-code, mesh and SSO flags
+                            HARD-CONFLICT with it. The LOOK flags (--theme/
+                            --branding-dir/--wallpaper/--grub-background/
+                            --grub-theme/--login-background/--accent-color/
+                            --color-scheme) are ALLOWED and are baked under
+                            neutral names (/usr/sbin/branding,
+                            /etc/gentoo/branding).
                             (role standalone-unaffiliated presets this at the
                             thick/Plasma weight.)
       --capable             Pull the "most capable" Plasma workstation package
@@ -1516,11 +1531,31 @@ esac
 # ── UNAFFILIATED plain desktop (composable: --unaffiliated onto any client/
 # standalone role, or the standalone-unaffiliated role arm above). Runs BEFORE
 # the STANDALONE fold so the STANDALONE=true it forces is folded normally.
-# Contract: the produced image carries NO HugMesh (or any other brand)
-# affiliation — so every flag that would bake a brand identity, brand assets,
-# HugMesh source, or platform machinery into the image is a HARD CONFLICT,
-# not a silent override. What remains: stock Gentoo + the hardened desktop
-# stack + the (neutral-named) installer/FDE/home machinery. ──────────────────
+# Contract (REVISED 2026-08-26 — operator decision "split identity from look"):
+# the produced image carries no brand IDENTITY and no HugMesh-NAMED machinery,
+# but it MAY carry a LOOK.
+#   IDENTITY stays a HARD CONFLICT: --brand/--brand-title/--org (and any --config
+#     brand profile), --brand-logo, --brand-locked — plus HugMesh source and the
+#     platform machinery (bundle-source / home-seed-code / tailscale / sso /
+#     person-role / domains). A brand IS an affiliation, including a custom one.
+#   LOOK is now ALLOWED: --theme, --branding-dir, --wallpaper, --grub-background,
+#     --grub-theme, --login-background, --accent-color, --color-scheme. A plain
+#     Gentoo desktop that carries a wallpaper and a colour scheme is still a plain
+#     Gentoo desktop; wallpaper-vs-affiliation was never the same axis.
+# WHY THE LINE MOVED: the old single conflict (one `if` over all ten flags) meant
+# the whole theme step vanished from an unaffiliated build. Reported by the
+# operator 2026-08-26 against out/sessions/20260826-151356-64070a/
+# build-standalone-unaffiliated.x86.log (role=standalone-unaffiliated, x86):
+# "There should be the menu for adding the themes as in the branded images."
+# WHAT MAKES IT SAFE: the branding bake below now neutral-names every artefact it
+# stages when ${UNAFFILIATED} (search BRAND_CONF_DIR / BRANDING_APPLIER_NAME) —
+# assets land in /etc/gentoo/branding, the applier installs as /usr/sbin/branding,
+# and its internal HugMesh-named paths/labels are rewritten on the staged copy.
+# That is the SAME pattern the home-provisioning lane already uses to rename
+# hugmesh-home-setup -> home-setup (see HOME_CONF_DIR/HOME_SETUP_NAME below) and
+# the Calamares lane uses for hugmesh-calamares-install -> gentoo-calamares-install.
+# What remains otherwise: stock Gentoo + the hardened desktop stack + the
+# (neutral-named) installer/FDE/home machinery. ──────────────────────────────
 if ${UNAFFILIATED}; then
     ${ROLE_CLIENT} || { err "--unaffiliated composes onto desktop/client roles only (got --role ${ROLE} — a cluster node is HugMesh platform machinery by definition)"; exit 1; }
     STANDALONE=true
@@ -1528,12 +1563,27 @@ if ${UNAFFILIATED}; then
     if [ "${BRAND}" != "hugmesh" ] || [ "${BRAND_TITLE}" != "HugMesh Systems" ] || [ "${ORG}" != "hugmesh" ]; then
         err "--unaffiliated builds carry no brand identity: drop --brand/--brand-title/--org (and any --config brand profile)"; exit 1
     fi
-    # Branding-asset flags conflict (nothing to theme against).
-    if [ -n "${BRANDING_THEME}" ] || [ -n "${BRANDING_DIR}" ] || [ -n "${BRAND_WALLPAPER}" ] \
-       || [ -n "${BRAND_GRUB_BG}" ] || [ -n "${BRAND_GRUB_THEME}" ] || [ -n "${BRAND_LOGIN_BG}" ] \
-       || [ -n "${BRAND_LOGO}" ] || [ -n "${BRAND_ACCENT}" ] || [ -n "${BRAND_COLOR_SCHEME}" ] || ${BRAND_LOCKED}; then
-        err "--unaffiliated conflicts with branding flags (--theme/--branding-dir/--wallpaper/--grub-background/--grub-theme/--login-background/--brand-logo/--accent-color/--color-scheme/--brand-locked)"; exit 1
+    # ...and so are a brand MARK and a brand LOCK. These two are the ONLY survivors of
+    # the ten-flag branding conflict this block used to carry; the other eight moved to
+    # the allowed side on 2026-08-26 (see the contract note above). They stayed because
+    # neither is about what the desktop LOOKS like:
+    #   --brand-logo    the logo IS the mark. hugmesh-branding installs it as the lightdm
+    #                   greeter's default-user-image and into the brand dir (see
+    #                   specs/usr/sbin/hugmesh-branding apply_login_background / apply_dir):
+    #                   it is the one asset that says WHOSE image this is, not how it looks.
+    #   --brand-locked  locking a look is an ADMINISTRATOR's act on a MANAGED (i.e.
+    #                   affiliated) fleet image — the applier's require_unlocked() exists
+    #                   for exactly that. An unaffiliated desktop has no administrator to
+    #                   obey, and its owner must stay free to re-theme it afterwards.
+    if [ -n "${BRAND_LOGO}" ] || ${BRAND_LOCKED}; then
+        err "--unaffiliated builds carry no brand identity: drop --brand-logo/--brand-locked (a logo is the brand MARK; a lock implies a managed brand image). The LOOK flags --theme/--branding-dir/--wallpaper/--grub-background/--grub-theme/--login-background/--accent-color/--color-scheme ARE allowed on an unaffiliated build."; exit 1
     fi
+    # NOTE (2026-08-26): --theme/--branding-dir/--wallpaper/--grub-background/--grub-theme/
+    # --login-background/--accent-color/--color-scheme are deliberately NOT checked here
+    # any more. They flow into the branding bake further down, which neutral-names every
+    # path and label it stages while ${UNAFFILIATED} — and which additionally DROPS a
+    # logo.png that arrived indirectly through a --theme preset or a --branding-dir, so
+    # the --brand-logo conflict above cannot be walked around by the back door.
     # Platform-machinery flags conflict: bundled generator source, the dockerized
     # HugMesh stack seed, the mesh/SSO agents, and person-device identity all
     # tie the image back to the platform.
@@ -1608,6 +1658,39 @@ else
     SB_ETC_DIR="/etc/hugmesh/secureboot"; SB_EFI_VENDOR="hugmesh"
 fi
 
+# ── modprobe.d drop-in NAMES (the last two hugmesh-* files an unaffiliated image
+# could still acquire). --unaffiliated's usage text promises "no hugmesh-* tools or
+# /etc/hugmesh markers" and docs/STANDALONE-DESKTOP.md's naming table asserts the
+# neutral-artefact rule; these two writers were missed by both:
+#   * harden_radios() has ONE call site, at top level with NO unaffiliated gate, and it
+#     truncates its blacklist file UNCONDITIONALLY — so the file exists on EVERY x86
+#     image, including one built with both radios enabled.
+#   * the nouveau blacklist is gated only on ${NVIDIA_PROPRIETARY}, and
+#     `--role standalone-unaffiliated --gpu-driver nvidia` is an ACCEPTED combination
+#     (nothing in the UNAFFILIATED fold touches --gpu-driver).
+# Same one-variable-per-name pattern as HOME_CONF_DIR/HOME_SETUP_NAME,
+# CALAMARES_BRIDGE/AUTOSTART_NAME and BRAND_CONF_DIR/BRANDING_APPLIER_NAME: the BRANDED
+# path keeps its exact historical filenames (docs/RUNNING.md documents
+# /etc/modprobe.d/hugmesh-radio-blacklist.conf and stays correct), only the unaffiliated
+# arm is neutral.
+# WHY HERE and not in the BRAND_CONF_DIR block: that block sits ~2700 lines further down,
+# but the nouveau writer runs BEFORE it — under `set -euo pipefail` an unbound
+# ${MODPROBE_NVIDIA_CONF} there would abort the build outright. Declared next to the
+# boot-chain identifiers instead: the first top-level ${UNAFFILIATED} name block after
+# the fold, hence ahead of every consumer.
+# NVIDIA_NOUVEAU_NOTE is the drop-in's own first line; the branded spelling names HugMesh
+# inside a file on a plain-Gentoo image, so the unaffiliated arm states the same fact
+# without the affiliation.
+if ${UNAFFILIATED}; then
+    MODPROBE_RADIO_CONF="gentoo-radio-blacklist.conf"   # was hugmesh-radio-blacklist.conf
+    MODPROBE_NVIDIA_CONF="gentoo-nvidia.conf"           # was hugmesh-nvidia.conf
+    NVIDIA_NOUVEAU_NOTE="# Proprietary NVIDIA driver owns the GPU; keep nouveau out."
+else
+    MODPROBE_RADIO_CONF="hugmesh-radio-blacklist.conf"
+    MODPROBE_NVIDIA_CONF="hugmesh-nvidia.conf"
+    NVIDIA_NOUVEAU_NOTE="# HugMesh: proprietary NVIDIA driver owns the GPU; keep nouveau out."
+fi
+
 # ── Validate + normalize the GPU driver selection (the full vendor matrix) ──
 # Default resolves to all-free (open drivers for every vendor — works on any GPU,
 # uses the FREE NVIDIA driver nouveau) on a GPU role; 'none' on a non-GPU role.
@@ -1664,8 +1747,29 @@ if ${WANT_SUNSHINE} && ! ${ROLE_CLIENT}; then
     warn "--with-sunshine on a non-client role has no effect (Sunshine streams a desktop session; this role has none) — dropping it."
     WANT_SUNSHINE=false
 fi
-if ${WANT_SUNSHINE} && { ${SKIP_TAILSCALE} || ${UNAFFILIATED}; }; then
-    warn "--with-sunshine needs the tailnet (the fence admits stream traffic ONLY on the tailscale iface); this desktop has none (standalone/unaffiliated/--skip-tailscale) — dropping it."
+# ${SKIP_MESH} ADDED 2026-08-26 — the warning above has always CLAIMED to cover
+# "standalone/--skip-tailscale", but the test did not. Measured hole:
+#   ./build-x86-host-stage4.sh --role chromebook --no-tailscale --no-sso --with-sunshine
+# --no-tailscale (an alias of --no-mesh, :1038) sets SKIP_MESH=true and leaves
+# SKIP_TAILSCALE false; chromebook is ROLE_CLIENT so the :1746 guard passes; and
+# STANDALONE is false, so the STANDALONE fold at :1617 — the only thing that would
+# have raised SKIP_TAILSCALE — never runs. Sunshine was therefore baked, together
+# with its tailscale-ONLY nftables fence, onto an image that has no tailscale
+# interface at all: the stream port is fenced to an iface that never appears, so
+# the feature is silently dead rather than merely unreachable.
+# SKIP_MESH is the RIGHT second test, not a belt-and-braces one: tailscaled is
+# installed only when BOTH are false (`${SKIP_MESH} || ${SKIP_TAILSCALE} ||
+# SVCS+=(tailscaled)`, :4485; the same posture guards the binary install at
+# :5418/:5448), so SKIP_MESH=true means no tailnet, full stop.
+# DELIBERATELY NOT ${STANDALONE}: the STANDALONE fold supports an explicit
+# --with-tailscale (MESH_FORCED=on keeps the tailnet, :1624-1447 — "composable: a
+# standalone desktop that still joins the tailnet"), and testing STANDALONE here
+# would drop Sunshine from exactly that supported combination. UNAFFILIATED is
+# kept although it now implies SKIP_MESH (it hard-conflicts with --with-tailscale
+# at :1592, so its standalone fold always raises SKIP_MESH) — it is the cheapest
+# possible statement of intent for the role that must never stream anything.
+if ${WANT_SUNSHINE} && { ${SKIP_TAILSCALE} || ${SKIP_MESH} || ${UNAFFILIATED}; }; then
+    warn "--with-sunshine needs the tailnet (the fence admits stream traffic ONLY on the tailscale iface); this desktop has none (standalone/unaffiliated/--skip-tailscale/--no-tailscale) — dropping it."
     WANT_SUNSHINE=false
 fi
 [ -n "${UNLOCK_KEYFILE}" ] && { case "${UNLOCK_KEYFILE}" in boot|login) ;; *) err "--unlock-keyfile must be: boot | login"; exit 1 ;; esac; }
@@ -1851,8 +1955,11 @@ if [ -n "${DOMAINS}" ]; then
     for _d in ${DOMAINS//,/ }; do _validate_dnsname "--domains element" "${_d}"; done
     unset _d
 fi
-# Accent is written as ACCENT_COLOR="..." into the sourced brand.conf; gate it with
-# the same #RRGGBB shape the applier's _norm_accent enforces (empty = default later).
+# Accent is written as ACCENT_COLOR="..." into brand.conf — which the applier reads with
+# its STRICT KEY=VALUE parser, never by dot-sourcing (specs/usr/sbin/hugmesh-branding:83).
+# Gate it with the same #RRGGBB shape the applier's _norm_accent enforces (empty = default
+# later). Get this wrong and the failure is SILENT: _norm_accent warns and swaps in the
+# stock blue, which is exactly what a `printf %q`-escaped `\#4d7fd6` used to do.
 case "${BRAND_ACCENT}" in
     '') : ;;
     '#'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) : ;;
@@ -2277,7 +2384,12 @@ harden_radios() {
     local sysroot="$1"
     mkdir -p "${sysroot}/etc/modprobe.d" "${sysroot}/etc/local.d" \
              "${sysroot}/etc/NetworkManager/conf.d"
-    local bl="${sysroot}/etc/modprobe.d/hugmesh-radio-blacklist.conf"
+    # Per-affiliation name (${MODPROBE_RADIO_CONF}, declared next to the boot-chain
+    # identifiers): this function is called UNGATED for every x86 role, so a literal
+    # hugmesh-* name here would put one on the operator's unaffiliated image. The
+    # truncation is unconditional and deliberate (idempotent re-runs / --resume), which
+    # is precisely why the file — and therefore the name — is always present.
+    local bl="${sysroot}/etc/modprobe.d/${MODPROBE_RADIO_CONF}"
     : > "${bl}"
     local act="${sysroot}/etc/local.d/02-radio-hardening.start"
 
@@ -3039,7 +3151,7 @@ fi
 
 # ── BEGIN shared block: SELinux node-policy host tools ────────────────────────
 # The other NINE builders already gate the host SELinux policy toolchain
-# (HOST_POLICY_TOOLS, e.g. build-rpi5-stage4.sh:3013) because selinux-base's
+# (HOST_POLICY_TOOLS, e.g. build-rpi5-stage4.sh:2536) because selinux-base's
 # `emake base` shells out to it. This builder never needed it — until now: the
 # SELinux node-policy step (scripts/_selinux-policy-lib.sh, called before
 # "Packaging stage4 tarball") compiles specs/selinux/*.te with exactly these
@@ -3377,10 +3489,15 @@ if ${STEAM_NATIVE} && [ -f "${SPECS_DIR}/portage/package.license/steam" ]; then
     cp "${SPECS_DIR}/portage/package.license/steam" "${SYSROOT}/etc/portage/package.license/"
 fi
 # Blacklist nouveau when the proprietary NVIDIA kmod is in play, so it owns the GPU.
+# Per-affiliation FILENAME and first LINE (${MODPROBE_NVIDIA_CONF} /
+# ${NVIDIA_NOUVEAU_NOTE}, declared next to the boot-chain identifiers): this block is
+# gated on the driver, not on the affiliation, and
+# `--role standalone-unaffiliated --gpu-driver nvidia` is an accepted combination — so
+# both the name and the comment would otherwise land on an unaffiliated image.
 if ${NVIDIA_PROPRIETARY}; then
     mkdir -p "${SYSROOT}/etc/modprobe.d"
-    printf '# HugMesh: proprietary NVIDIA driver owns the GPU; keep nouveau out.\nblacklist nouveau\noptions nouveau modeset=0\n' \
-        > "${SYSROOT}/etc/modprobe.d/hugmesh-nvidia.conf"
+    printf '%s\nblacklist nouveau\noptions nouveau modeset=0\n' "${NVIDIA_NOUVEAU_NOTE}" \
+        > "${SYSROOT}/etc/modprobe.d/${MODPROBE_NVIDIA_CONF}"
 fi
 
 # Per-package build env (e.g. env/llvm-lowmem.conf caps MAKEOPTS for the
@@ -3408,7 +3525,24 @@ fi
 # the container's own portage (host-guard gated) for builder images older than
 # the Dockerfile.build twin. Never fatal. Root cause, refs and the patch:
 # scripts/patch-portage-file-copy.py.
-pcs_quiet_sendfile_noise "${SYSROOT}"
+#
+# `backup` (2nd arg) is the OPT-IN that saves a pristine <file>.hugmesh-orig beside
+# the patched file. x86 is the ONE lane allowed to ask for it, because x86 is the one
+# lane that consumes it: pcs_unquiet_sendfile_noise runs before packaging (search
+# "Make the sendfile-noise patch a BUILD-TIME artifact"). The nine ARM/Jetson lanes
+# call this helper with ONE argument and therefore leave nothing behind — the default
+# was the other way round for one change set and every ARM image shipped a 4 KB
+# vdb-unowned copy of a portage source file. Do NOT copy the `backup` word into a
+# builder that does not also revert; tests/build-matrix/check.sh's SFO bucket fails
+# the build matrix if you do.
+#
+# WHY ALSO HERE and not only on the in-chroot re-patch: if the payload's
+# sys-apps/portage self-update FAILS (it is a `|| echo WARN`, non-fatal), file_copy.py
+# still carries THIS patch, the in-chroot re-patch early-returns "already patched" and
+# writes no backup — and the revert would then have nothing to restore and would ship
+# the patched file. Backing up on both patches closes that path: patch_one only writes
+# the backup when it actually patches, so the copy always matches the version on disk.
+pcs_quiet_sendfile_noise "${SYSROOT}" backup
 
 # x86 GRUB cmdline (SELinux LSM + KSPP hardening). Disable os-prober so a
 # grub-mkconfig (installer / chroot) can never enumerate the host's other disks.
@@ -3861,6 +3995,42 @@ fi
 # (standalone OR tailnet client; any installer front-end).
 BRAND_GRUB_BG_STAGED=""
 BRAND_GRUB_THEME_STAGED=""
+# ── Neutral naming for the UNAFFILIATED image (operator decision 2026-08-26) ──
+# --theme/--wallpaper/--accent-color/... are ALLOWED on an unaffiliated build now
+# (see the UNAFFILIATED fold's contract note above), so this lane is the one that
+# has to keep the promise the fold makes: a look, but no HugMesh-NAMED artefact.
+# Same shape as HOME_CONF_DIR/HOME_SETUP_NAME (home provisioning) and
+# CALAMARES_BRIDGE/AUTOSTART_NAME (graphical installer) further up — one pair of
+# variables per name, chosen by ${UNAFFILIATED}, so the BRANDED path keeps every
+# byte of its existing layout (/etc/hugmesh, /usr/sbin/hugmesh-branding,
+# /boot/grub/hugmesh-background.png, /boot/grub/themes/hugmesh) untouched.
+# These are declared HERE, unconditionally at top level, and not inside the
+# branding-flags `if` below, because the live-ISO packer (grub.cfg generation, far
+# below) reads BRAND_GRUB_BG_NAME/BRAND_GRUB_THEME_NAME on every build — including
+# builds that passed no branding flag at all, where the `if` never runs (set -u).
+if ${UNAFFILIATED}; then
+    BRAND_CONF_DIR="/etc/gentoo"                     # was /etc/hugmesh
+    BRANDING_APPLIER_NAME="branding"                 # was hugmesh-branding
+    BRAND_SHARE_REAL="/usr/share/gentoo/branding"    # was /usr/share/hugmesh/branding
+    BRAND_GRUB_BG_NAME="gentoo-background.png"       # was hugmesh-background.png
+    BRAND_GRUB_THEME_NAME="gentoo"                   # was themes/hugmesh
+    BRAND_COLORSCHEME_FILE="Gentoo.colors"           # was HugMesh.colors
+    BRAND_WALLPAPER_PKG="Gentoo"                     # was wallpapers/HugMesh
+    # env-var PREFIX the applier reads for its build-time staging contract
+    # (HUGMESH_BRANDING_ROOT / _BUILD). Renamed with everything else, because the
+    # staged copy is rewritten to read the neutral spelling — a plain-Gentoo image
+    # must not ship a /usr/sbin/branding that greps for a HUGMESH_* env var.
+    BRAND_ENV_PREFIX="BRANDING"
+else
+    BRAND_CONF_DIR="/etc/hugmesh"
+    BRANDING_APPLIER_NAME="hugmesh-branding"
+    BRAND_SHARE_REAL="/usr/share/hugmesh/branding"
+    BRAND_GRUB_BG_NAME="hugmesh-background.png"
+    BRAND_GRUB_THEME_NAME="hugmesh"
+    BRAND_COLORSCHEME_FILE="HugMesh.colors"
+    BRAND_WALLPAPER_PKG="HugMesh"
+    BRAND_ENV_PREFIX="HUGMESH_BRANDING"
+fi
 # Branding flags only apply to desktop (ROLE_CLIENT) images; warn if set on a server role.
 if ! ${ROLE_CLIENT} && { [ -n "${BRANDING_THEME}" ] || [ -n "${BRANDING_DIR}" ] \
         || [ -n "${BRAND_WALLPAPER}" ] || [ -n "${BRAND_GRUB_BG}" ] || [ -n "${BRAND_GRUB_THEME}" ] \
@@ -3894,41 +4064,187 @@ if ${ROLE_CLIENT} && { [ -n "${BRANDING_THEME}" ] || [ -n "${BRANDING_DIR}" ] \
     [ -n "${BRAND_LOGO}" ]         && { [ -f "${BRAND_LOGO}" ]         || { err "--brand-logo not found: ${BRAND_LOGO}"; exit 1; };          cp "${BRAND_LOGO}"         "${_bd}/logo.png"; }
     [ -n "${BRAND_COLOR_SCHEME}" ] && { [ -f "${BRAND_COLOR_SCHEME}" ] || { err "--color-scheme not found: ${BRAND_COLOR_SCHEME}"; exit 1; }; cp "${BRAND_COLOR_SCHEME}" "${_bd}/colors.colors"; }
     [ -n "${BRAND_GRUB_THEME}" ]   && { [ -d "${BRAND_GRUB_THEME}" ]   || { err "--grub-theme dir not found: ${BRAND_GRUB_THEME}"; exit 1; }; rm -rf "${_bd}/grub-theme"; cp -r "${BRAND_GRUB_THEME}" "${_bd}/grub-theme"; }
+    # 3b) UNAFFILIATED: close the --brand-logo back door and neutralize the TEXT
+    #     assets. --brand-logo/--brand-locked are hard conflicts for this role (see
+    #     the UNAFFILIATED fold above), but a --theme preset dir carries its own
+    #     logo.png (specs-x86/branding/themes/*/logo.png — the accent hexagon MARK
+    #     rendered by scripts/gen-branding-themes.py render_logo), and so may a
+    #     --branding-dir. apply_dir() installs it as ${SHARE_DIR}/logo.png and
+    #     apply_login_background() wires it as the lightdm greeter's
+    #     default-user-image, i.e. the mark would appear on the login screen of an
+    #     image that is not allowed to carry one. Drop it here rather than weaken
+    #     the flag check: the flag conflict and this removal are the same rule.
+    #
+    #     brand.conf and colors.colors are plain KEY=VALUE/INI text that the preset
+    #     ships with HugMesh literals baked in ("# HugMesh premade branding theme:
+    #     dark", COLOR_SCHEME_NAME=HugMesh Dark, Name=HugMesh Dark). They are copied
+    #     verbatim into the image, so they leak the name even though no HugMesh
+    #     machinery is present. Rewrite BOTH with the same substitution so the
+    #     kdeglobals ColorScheme value keeps matching the .colors file's Name= (KDE
+    #     selects a scheme by that Name, not by the filename) — rewriting only one
+    #     of the two would silently give every user an unresolvable scheme name.
+    if ${UNAFFILIATED}; then
+        rm -f "${_bd}/logo.png"
+        for _txt in brand.conf colors.colors; do
+            [ -f "${_bd}/${_txt}" ] || continue
+            sed -i -e 's|hugmesh-branding|branding|g' \
+                   -e 's|HugMesh|Gentoo|g' \
+                   -e 's|hugmesh|gentoo|g' "${_bd}/${_txt}"
+        done
+    fi
     # 4) brand.conf — preset's values first (already copied), then identity + accent
-    #    override (later assignments win when sourced). brand.conf is dot-sourced as
-    #    root by hugmesh-branding at build AND first boot, so emit every value with
-    #    `printf %q` (shell-safe quoting): a dot-sourced file can never execute injected
-    #    code even if a value slipped past the up-front validators (defense-in-depth).
+    #    override (a later assignment of the same key wins: _load_brand_conf keeps the
+    #    LAST one, exactly as dot-sourcing used to).
+    #
+    #    EMIT WHAT THE READER PARSES — NOT `printf %q`. THE READER IS NOT A SHELL.
+    #    The applier reads this file with the strict parser headed
+    #    "brand.conf loader (STRICT KEY=VALUE — never dot-source)" at
+    #    specs/usr/sbin/hugmesh-branding:83; its _load_brand_conf (:102-128) strips ONE
+    #    layer of matching surrounding quotes and then takes the value LITERALLY — it
+    #    never unescapes a backslash. `printf %q` escapes a space as `\ ` and a leading
+    #    `#` as `\#`, and those escapes SURVIVE the read.
+    #    MEASURED before this fix, running the REAL applier over a staged sysroot with
+    #    BRAND_TITLE="Gentoo Linux" / ACCENT_COLOR="#4d7fd6":
+    #      etc/default/grub                         GRUB_DISTRIBUTOR="Gentoo\ Linux"
+    #      boot/grub/themes/*/theme.txt             title-text: "Gentoo\ Linux"
+    #                                               text = "Gentoo\ Linux — booting ..."
+    #      usr/share/wallpapers/*/metadata.desktop  Name=Gentoo\ Linux
+    #      [branding] WARNING: invalid accent '\#4d7fd6'; using default #1f6feb
+    #    i.e. the BOOT SCREEN read "Gentoo\ Linux" on the operator's unaffiliated image
+    #    (and "HugMesh\ Systems" on every branded image ever built), and the operator's
+    #    --accent-color was silently DISCARDED — _norm_accent rejects `\#4d7fd6` and
+    #    falls back to the stock blue.
+    #    The spelling the reader round-trips is KEY="<literal>": one layer of double
+    #    quotes, which it strips. That matches the preset brand.conf files
+    #    scripts/gen-branding-themes.py writes and the loader's own documented example
+    #    (`BRAND_TITLE="Acme Corp"`).
+    #    %q's stated job — "a dot-sourced file can never execute injected code" — died
+    #    with the dot-source; the strict parser cannot execute anything by construction.
+    #    The up-front validators (_validate_slug for BRAND, _validate_title for
+    #    BRAND_TITLE, the #RRGGBB case for the accent) already forbid every character
+    #    that could break out of the line, and _brand_conf_kv re-asserts that AT THE
+    #    SINK so a future value source cannot corrupt the file quietly.
+    #    tests/build-matrix/check.sh's BCF bucket feeds a staged brand.conf through the
+    #    applier's OWN _load_brand_conf and fails on a surviving backslash, so writer
+    #    and reader cannot drift apart again.
+    _brand_conf_kv() {   # KEY VALUE -> one strict KEY="VALUE" line the applier can read
+        case "$2" in
+            *[\"\\]*|*$'\n'*)
+                err "brand.conf value for $1 contains a quote, backslash or newline ('$2') — the strict KEY=VALUE reader cannot round-trip it; refusing to bake a corrupt brand.conf"
+                exit 1 ;;
+        esac
+        printf '%s="%s"\n' "$1" "$2"
+    }
     {
         echo "# appended by build-x86-host-stage4.sh"
-        printf 'BRAND_NAME=%q\n' "${BRAND}"
-        printf 'BRAND_TITLE=%q\n' "${BRAND_TITLE}"
-        [ -n "${BRAND_ACCENT}" ] && printf 'ACCENT_COLOR=%q\n' "${BRAND_ACCENT}"
+        echo "# Read as strict KEY=VALUE by ${BRANDING_APPLIER_NAME} (never sourced)."
+        _brand_conf_kv BRAND_NAME  "${BRAND}"
+        _brand_conf_kv BRAND_TITLE "${BRAND_TITLE}"
+        # trailing `&&`: an empty accent means "keep the preset's / the applier's default".
+        # Left operand of a && list, so its non-zero status is exempt from `set -e`.
+        [ -n "${BRAND_ACCENT}" ] && _brand_conf_kv ACCENT_COLOR "${BRAND_ACCENT}"
     } >> "${_bd}/brand.conf"
-    # stage assets + canonical brand.conf into the image
-    mkdir -p "${SYSROOT}/etc/hugmesh/branding"
-    cp -r "${_bd}/." "${SYSROOT}/etc/hugmesh/branding/" 2>/dev/null || true
-    cp "${_bd}/brand.conf" "${SYSROOT}/etc/hugmesh/brand.conf" 2>/dev/null || true
-    # copy the applier, then bake static pieces into the sysroot FROM THE HOST
-    cp "${SHARED_SPECS}/usr/sbin/hugmesh-branding" "${SYSROOT}/usr/sbin/hugmesh-branding"; chmod +x "${SYSROOT}/usr/sbin/hugmesh-branding"
-    HUGMESH_BRANDING_ROOT="${SYSROOT}" HUGMESH_BRANDING_BUILD=1 \
-        bash "${SHARED_SPECS}/usr/sbin/hugmesh-branding" apply "${SYSROOT}/etc/hugmesh/branding" \
+    # stage assets + canonical brand.conf into the image (${BRAND_CONF_DIR} is
+    # /etc/hugmesh for a branded build and /etc/gentoo for an unaffiliated one)
+    mkdir -p "${SYSROOT}${BRAND_CONF_DIR}/branding"
+    cp -r "${_bd}/." "${SYSROOT}${BRAND_CONF_DIR}/branding/" 2>/dev/null || true
+    cp "${_bd}/brand.conf" "${SYSROOT}${BRAND_CONF_DIR}/brand.conf" 2>/dev/null || true
+    # copy the applier under its per-affiliation name, then bake static pieces into the
+    # sysroot FROM THE HOST.
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-branding" "${SYSROOT}/usr/sbin/${BRANDING_APPLIER_NAME}"
+    chmod +x "${SYSROOT}/usr/sbin/${BRANDING_APPLIER_NAME}"
+    if ${UNAFFILIATED}; then
+        # Neutralize the STAGED COPY's internal literals — same technique, and the same
+        # fail-loudly-on-drift guard, as the hugmesh-home-setup rename above. Every
+        # anchor below is the sole reason one of the sed rules exists; if the applier
+        # is refactored and an anchor disappears, the rule would match nothing and the
+        # rename would break SILENTLY (a /usr/sbin/branding that still writes
+        # /etc/hugmesh, or a greeter pointed at /usr/share/hugmesh/branding that the
+        # image does not contain). Fail the build instead.
+        _bapp="${SYSROOT}/usr/sbin/${BRANDING_APPLIER_NAME}"
+        for _anchor in \
+            'BRAND_ETC="${ROOT}/etc/hugmesh"' \
+            'SHARE_DIR="${ROOT}/usr/share/hugmesh/branding"' \
+            'SHARE_DIR_REAL=/usr/share/hugmesh/branding' \
+            'GRUB_BG_REAL=/boot/grub/hugmesh-background.png' \
+            'GRUB_THEME_DIR_REAL=/boot/grub/themes/hugmesh' \
+            'COLORSCHEME_DST="${ROOT}/usr/share/color-schemes/HugMesh.colors"' \
+            '/usr/share/wallpapers/HugMesh' \
+            'X-KDE-PluginInfo-Name=HugMesh' \
+            'BRAND_NAME=hugmesh' \
+            'BRAND_TITLE="HugMesh Systems"' \
+            'COLOR_SCHEME_NAME="HugMesh"' \
+            'HugMesh Regular' \
+            'Name=HugMesh branding' \
+            '.hugmesh-branding-applied' \
+            '${ROOT}/usr/sbin/hugmesh-branding' \
+            'HUGMESH_BRANDING_ROOT' \
+            'HUGMESH_BRANDING_BUILD'; do
+            grep -qF "${_anchor}" "${_bapp}" \
+                || { err "hugmesh-branding drifted: anchor not found -> ${_anchor} (the unaffiliated rename would break silently)"; exit 1; }
+        done
+        # Order matters: the specific PATH rules run before the generic tool-name rule,
+        # so '/boot/grub/hugmesh-background.png' is renamed as a path and never as a
+        # fragment. There is deliberately NO blanket s/HugMesh/…/ — 'HugMesh Systems'
+        # (title), 'HugMesh Regular' (GRUB font), 'HugMesh.colors' (path) and
+        # 'HugMesh branding' (autostart Name=) each need a DIFFERENT replacement.
+        # 's|hugmesh-branding|branding|g' is safe as one blanket rule because every
+        # occurrence — /usr/sbin path, autostart .desktop name, Exec=, the
+        # ~/.config/.hugmesh-branding-applied stamp, the usage block and the log
+        # sentences ("run 'hugmesh-branding session-apply'") — wants the identical
+        # replacement: they all name the SAME tool, which really is renamed.
+        sed -i \
+            -e "s|/usr/share/hugmesh/branding|${BRAND_SHARE_REAL}|g" \
+            -e "s|/etc/hugmesh|${BRAND_CONF_DIR}|g" \
+            -e "s|/boot/grub/hugmesh-background.png|/boot/grub/${BRAND_GRUB_BG_NAME}|g" \
+            -e "s|/boot/grub/themes/hugmesh|/boot/grub/themes/${BRAND_GRUB_THEME_NAME}|g" \
+            -e "s|/usr/share/color-schemes/HugMesh.colors|/usr/share/color-schemes/${BRAND_COLORSCHEME_FILE}|g" \
+            -e "s|/usr/share/wallpapers/HugMesh|/usr/share/wallpapers/${BRAND_WALLPAPER_PKG}|g" \
+            -e "s|X-KDE-PluginInfo-Name=HugMesh|X-KDE-PluginInfo-Name=${BRAND_WALLPAPER_PKG}|g" \
+            -e 's|^BRAND_NAME=hugmesh$|BRAND_NAME=gentoo|' \
+            -e 's|BRAND_TITLE="HugMesh Systems"|BRAND_TITLE="Gentoo Linux"|' \
+            -e 's|COLOR_SCHEME_NAME="HugMesh"|COLOR_SCHEME_NAME="Gentoo"|' \
+            -e 's|HugMesh Regular|Gentoo Regular|g' \
+            -e 's|Name=HugMesh branding|Name=Desktop branding|' \
+            -e "s|hugmesh-branding|${BRANDING_APPLIER_NAME}|g" \
+            -e "s|HUGMESH_BRANDING_|${BRAND_ENV_PREFIX}_|g" \
+            "${_bapp}"
+        # Residual check: catches a literal a FUTURE applier revision adds that no rule
+        # above knows about (the anchor loop only proves the rules we HAVE still bite).
+        if grep -n -i 'hugmesh' "${_bapp}"; then
+            err "unaffiliated branding applier still contains HugMesh literals (listed above) — add a rename rule for each before shipping this image"; exit 1
+        fi
+    fi
+    # Bake from the STAGED copy, not from ${SHARED_SPECS}: on an unaffiliated build the
+    # staged copy is the rewritten one, and baking from the pristine spec would write
+    # /etc/hugmesh + /boot/grub/hugmesh-background.png straight back into the sysroot.
+    # For a branded build the two files are byte-identical (the cp above), so this is a
+    # no-op there. One consequence, harmless and pre-guarded: the applier's
+    # install_session_autostart() does `install -D "$0" .../usr/sbin/<name>`, which is
+    # now source==destination and fails with "same file" — it already carries
+    # `2>/dev/null || true`, and the file it would have written is the one already there.
+    env "${BRAND_ENV_PREFIX}_ROOT=${SYSROOT}" "${BRAND_ENV_PREFIX}_BUILD=1" \
+        bash "${SYSROOT}/usr/sbin/${BRANDING_APPLIER_NAME}" apply "${SYSROOT}${BRAND_CONF_DIR}/branding" \
         || warn "branding bake reported a problem (continuing)"
-    if ${BRAND_LOCKED}; then : > "${SYSROOT}/etc/hugmesh/branding.lock"; info "Branding LOCKED (users cannot re-theme this image)"; fi
+    if ${BRAND_LOCKED}; then : > "${SYSROOT}${BRAND_CONF_DIR}/branding.lock"; info "Branding LOCKED (users cannot re-theme this image)"; fi
     # first-boot hook: re-apply on the real system so the INSTALLED grub.cfg picks up
     # the background (the build-time host run has no grub.cfg / block devices).
-    cat > "${SYSROOT}/etc/local.d/04-branding.start" <<'HOOK'
+    # The heredoc is UNQUOTED so ${BRANDING_APPLIER_NAME}/${BRAND_CONF_DIR} are baked in
+    # at BUILD time; \$0 is escaped so it survives into the hook and is expanded at RUN
+    # time by the hook itself (that is the self-removal, and it must not resolve to the
+    # builder's own $0). Same trick as the 03-home-setup.start hook above.
+    cat > "${SYSROOT}/etc/local.d/04-branding.start" <<HOOK
 #!/bin/bash
 # First-boot: finish branding on the real system (regenerate grub.cfg with the brand
 # background). Idempotent; self-removes after a clean run.
-[ -x /usr/sbin/hugmesh-branding ] && /usr/sbin/hugmesh-branding apply /etc/hugmesh/branding && rm -f "$0"
+[ -x /usr/sbin/${BRANDING_APPLIER_NAME} ] && /usr/sbin/${BRANDING_APPLIER_NAME} apply ${BRAND_CONF_DIR}/branding && rm -f "\$0"
 HOOK
     chmod +x "${SYSROOT}/etc/local.d/04-branding.start"
     # hand the resolved GRUB background + theme to the live-ISO builder (boot-screen brand)
-    [ -f "${SYSROOT}/boot/grub/hugmesh-background.png" ] && BRAND_GRUB_BG_STAGED="${SYSROOT}/boot/grub/hugmesh-background.png"
-    [ -f "${SYSROOT}/boot/grub/themes/hugmesh/theme.txt" ] && BRAND_GRUB_THEME_STAGED="${SYSROOT}/boot/grub/themes/hugmesh"
+    [ -f "${SYSROOT}/boot/grub/${BRAND_GRUB_BG_NAME}" ] && BRAND_GRUB_BG_STAGED="${SYSROOT}/boot/grub/${BRAND_GRUB_BG_NAME}"
+    [ -f "${SYSROOT}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/theme.txt" ] && BRAND_GRUB_THEME_STAGED="${SYSROOT}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}"
     rm -rf "${_bd}"
-    info "Branding baked: $(ls "${SYSROOT}/etc/hugmesh/branding" 2>/dev/null | tr '\n' ' ')"
+    info "Branding baked into ${BRAND_CONF_DIR}/branding: $(ls "${SYSROOT}${BRAND_CONF_DIR}/branding" 2>/dev/null | tr '\n' ' ')"
 fi
 
 # ── Egress VPN (NetworkManager) staging ──────────────────────────────────────
@@ -4680,6 +4996,20 @@ fi
 cp "${SCRIPT_DIR}/scripts/_emerge-plan-lib.sh" "${SYSROOT}/tmp/hugmesh-emerge-plan-lib.sh" \
     || info "WARN: emerge-plan lib staging failed — plan preview will be skipped"
 # ── END shared block: emerge-plan preview (lib staging) ───────────────────────
+# ── sendfile-noise re-patch (lib staging) ────────────────────────────────────
+# pcs_quiet_sendfile_noise patched THIS sysroot's portage long before the chroot
+# (see the call next to the /etc/portage sync). That patch does not survive the
+# payload: the chroot's FIRST act is a sys-apps/portage self-update, which
+# overwrites util/file_copy.py with the pristine upstream file — so every merge
+# after it (i.e. the whole @world + ${PKGS} payload, the bulk of the build) goes
+# back to logging a full WARNING traceback per merged file. That is the "KNOWN
+# RESIDUAL" scripts/patch-portage-file-copy.py documents; on x86 it is not rare,
+# it is EVERY build. Stage the patcher so the heredoc can re-apply it in-chroot
+# immediately after that self-update. Guarded exactly like the plan lib: log
+# cosmetics must never abort an hours-long build.
+cp "${SCRIPT_DIR}/scripts/patch-portage-file-copy.py" "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py" \
+    || info "WARN: sendfile-noise patcher staging failed — per-file sendfile tracebacks will spam the payload emerge log"
+# ── END sendfile-noise re-patch (lib staging) ────────────────────────────────
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 # NOTE: MAKEOPTS is NOT exported here on purpose. It comes from the chroot's
 # make.conf (rendered "-j${JOBS} -l${JOBS}"). An exported MAKEOPTS env var takes
@@ -4796,6 +5126,28 @@ echo "==> Emerge group: system"
 # directly below already carries --newuse for the same reason.
 emerge --oneshot --update --newuse sys-apps/portage \
     || echo "[build-x86] WARN: standalone sys-apps/portage update failed; continuing with the seed portage (the passes below exclude it, so the mid-run self-replace hazard stays closed)"
+# The self-update above just replaced portage/util/file_copy.py with the pristine
+# upstream file, undoing the sendfile-noise patch pcs_quiet_sendfile_noise applied
+# to this sysroot before the chroot. Re-apply it HERE, before the @world and
+# payload passes below merge hundreds of thousands of files under it — otherwise
+# each one logs a full "_do_sendfile failed unexpectedly" WARNING traceback
+# (~300k lines, measured) and drowns the Studio log pane. Idempotent, and never
+# fatal: rc 2 (no portage found) and rc 3 (upstream rewrote file_copy.py, so the
+# pin needs a human) both degrade to a warning. Root cause and refs live in
+# scripts/patch-portage-file-copy.py.
+# --backup: the self-update above may have installed a DIFFERENT portage version, so
+# the pristine bytes the pre-chroot patch saved are now the OLD version's. Re-saving
+# here (patch_one overwrites the copy on every real patch) is what makes the revert
+# before packaging restore the file this image actually merged with. Spelled "/"
+# because we are inside the chroot; the revert spells the same file "SYSROOT" from
+# outside, which is why the copy has to live BESIDE the file, not in a root-keyed
+# sidecar tree.
+if [ -f /tmp/hugmesh-patch-portage-file-copy.py ]; then
+    python3 /tmp/hugmesh-patch-portage-file-copy.py --backup / \
+        || echo "[build-x86] WARN: sendfile-noise re-patch after the portage self-update failed; the payload emerge log will carry a traceback per merged file"
+else
+    echo "[build-x86] WARN: sendfile-noise patcher not staged — the payload emerge log will carry a traceback per merged file"
+fi
 emerge --oneshot --update --newuse sys-apps/baselayout || true
 # gettext-0.23.x empty-\$(DOMAIN) .mo-collision pin (see package.mask/gettext):
 # the stage3 seed ships gettext-0.23.2, so the mask (which only blocks upgrades)
@@ -5818,6 +6170,35 @@ slx_stage_node_policy "${SYSROOT}" "${SHARED_SPECS}" \
     || { err "SELinux node-policy staging failed (see above) — refusing to ship an image whose policy modules did not build."; exit 1; }
 # ── END shared block: SELinux node-policy modules ─────────────────────────────
 
+# Make the sendfile-noise patch a BUILD-TIME artifact only. It was applied to this
+# sysroot's portage twice (pcs_quiet_sendfile_noise before the chroot, then again
+# in-chroot after the payload's sys-apps/portage self-update) so the payload merges
+# would stop spamming a WARNING traceback per merged file. The SHIPPED image does not
+# need it — the device merges onto its own root, not onto the builder's eCryptfs work
+# dir — and leaving it in place would make the delivered file disagree with the md5
+# sys-apps/portage recorded in var/db/pkg/.../CONTENTS forever, so `equery check
+# sys-apps/portage` and any file-integrity baseline (this image stages AIDE) would
+# report a modified file for a workaround with no purpose there. --revert restores the
+# pristine bytes from the .hugmesh-orig copies saved at patch time and deletes them.
+#
+# ORDER MATTERS: this runs AFTER the kernel chroot (which merges gentoo-sources under
+# the same portage) and BEFORE the stage4 tar, the .img extracted from it and the live
+# ISO squash — so nothing shipped carries either the patch or its backup file.
+#
+# ONLY the sysroot. The container root "/" keeps its patch: it is disposable, and it is
+# the portage the ARM lanes' cross-emerge --root=SYSROOT merges actually run under.
+# Via the lib twin (scripts/_portage-config-lib.sh) rather than the patcher directly:
+# it carries the same never-fatal warn-and-return-0 contract as pcs_quiet_sendfile_noise,
+# and it gives the nine ARM lanes a one-line way to adopt the revert without each
+# re-deriving the argv. It is also the spelling the SFO bucket looks for when it checks
+# that every `backup` opt-in in this repo is paired with a revert.
+pcs_unquiet_sendfile_noise "${SYSROOT}"
+# The staged patcher itself must not ship either. The stage4 tar excludes ./tmp/*, but
+# the live-ISO squash does NOT (mksquashfs -e / the tar2sqfs fallback list proc, sys,
+# dev, run, var/cache/distfiles and the local user's home — no tmp), so a file left in
+# ${SYSROOT}/tmp rides into the ISO's rootfs.
+rm -f "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py"
+
 banner "Packaging stage4 tarball"
 # Filename-safe role tag. be+gpu keeps the legacy 'host' tag so existing
 # flashers/launchers/gen-provision-keys examples that reference 'host' keep
@@ -6244,10 +6625,17 @@ CHROOT
         cp "${SYSROOT}/boot/initramfs-live.img" "${ISO_DIR}/boot/initramfs.img"
         # Brand the live/installer GRUB boot screen with the same background + full GRUB
         # theme baked into the image, so the boot -> login -> desktop chain is consistent.
-        [ -n "${BRAND_GRUB_BG_STAGED:-}" ] && cp "${BRAND_GRUB_BG_STAGED}" "${ISO_DIR}/boot/grub/hugmesh-background.png" 2>/dev/null || true
+        # ${BRAND_GRUB_BG_NAME}/${BRAND_GRUB_THEME_NAME} keep the ISO's own /boot/grub
+        # tree named the same way the installed system's is (see the neutral-naming
+        # table next to BRAND_GRUB_BG_STAGED): hugmesh-background.png + themes/hugmesh
+        # for a branded build, gentoo-background.png + themes/gentoo for an unaffiliated
+        # one. The names must match the grub.cfg emitted below, which reads the same
+        # two variables — the ISO is a self-contained filesystem, so the pair only has
+        # to agree with itself.
+        [ -n "${BRAND_GRUB_BG_STAGED:-}" ] && cp "${BRAND_GRUB_BG_STAGED}" "${ISO_DIR}/boot/grub/${BRAND_GRUB_BG_NAME}" 2>/dev/null || true
         if [ -n "${BRAND_GRUB_THEME_STAGED:-}" ] && [ -d "${BRAND_GRUB_THEME_STAGED}" ]; then
-            mkdir -p "${ISO_DIR}/boot/grub/themes/hugmesh"
-            cp -r "${BRAND_GRUB_THEME_STAGED}/." "${ISO_DIR}/boot/grub/themes/hugmesh/" 2>/dev/null || true
+            mkdir -p "${ISO_DIR}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}"
+            cp -r "${BRAND_GRUB_THEME_STAGED}/." "${ISO_DIR}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/" 2>/dev/null || true
         fi
         rm -f "${ISO_DIR}/LiveOS/squashfs.img"
         if command -v mksquashfs >/dev/null; then
@@ -6305,21 +6693,21 @@ CHROOT
             # theme (gfxmenu: title, accent-highlighted menu, countdown) or, failing
             # that, the background image alone. Same brand baked into the installed
             # system's /etc/default/grub (GRUB_THEME/GRUB_BACKGROUND/GRUB_COLOR_*).
-            if [ -f "${ISO_DIR}/boot/grub/hugmesh-background.png" ] \
-                    || [ -f "${ISO_DIR}/boot/grub/themes/hugmesh/theme.txt" ]; then
+            if [ -f "${ISO_DIR}/boot/grub/${BRAND_GRUB_BG_NAME}" ] \
+                    || [ -f "${ISO_DIR}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/theme.txt" ]; then
                 echo "insmod all_video"
                 echo "insmod png"
                 echo "insmod gfxterm"
                 echo "set gfxmode=1920x1080,1280x720,auto"
                 echo "terminal_output gfxterm"
-                if [ -f "${ISO_DIR}/boot/grub/themes/hugmesh/theme.txt" ]; then
+                if [ -f "${ISO_DIR}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/theme.txt" ]; then
                     echo "insmod gfxmenu"
-                    [ -f "${ISO_DIR}/boot/grub/themes/hugmesh/font.pf2" ] \
-                        && echo "loadfont /boot/grub/themes/hugmesh/font.pf2"
-                    echo "set theme=/boot/grub/themes/hugmesh/theme.txt"
+                    [ -f "${ISO_DIR}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/font.pf2" ] \
+                        && echo "loadfont /boot/grub/themes/${BRAND_GRUB_THEME_NAME}/font.pf2"
+                    echo "set theme=/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/theme.txt"
                 fi
-                [ -f "${ISO_DIR}/boot/grub/hugmesh-background.png" ] \
-                    && echo "background_image /boot/grub/hugmesh-background.png"
+                [ -f "${ISO_DIR}/boot/grub/${BRAND_GRUB_BG_NAME}" ] \
+                    && echo "background_image /boot/grub/${BRAND_GRUB_BG_NAME}"
             fi
             echo "menuentry \"${BRAND_TITLE} ${ROLE} (live)\" {"
             echo "    linux /boot/vmlinuz ${_LBASE} ${LIVE_CMDLINE}"

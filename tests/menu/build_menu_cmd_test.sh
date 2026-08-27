@@ -225,25 +225,38 @@ build_make_cmd x86-pki "pki" 1
 assert_not "cluster: no home flags"     "--home-mode"
 
 # ── UNAFFILIATED standalone desktop: plain Gentoo, ZERO HugMesh affiliation ──
-# The role PRESETS the neutral identity builder-side and HARD-ERRORS on any
-# brand/branding/bundle-source/seed-code flag, so the menu channel must emit the
-# x86-standalone-unaffiliated target + the generic desktop options ONLY. The trap:
-# OPT_SA_THEME's persisted default is 'dark' (reset_opts leaves it there) and
-# a branded run can leave OPT_BRAND/OPT_BR_*/OPT_HOME_SEED behind in menu.conf —
-# none of them may leak into this target's argv.
+# The role PRESETS the neutral identity builder-side and HARD-ERRORS on brand
+# IDENTITY, so the menu channel must emit the x86-standalone-unaffiliated target
+# plus the generic desktop options AND the look options — but no identity.
+#
+# REVISED 2026-08-26 ("split identity from look"). This block used to assert that
+# NOTHING branding-shaped survived, --theme and --wallpaper included. The builder's
+# unaffiliated fold no longer refuses those: a wallpaper names nobody, and its
+# artefacts bake under neutral names (/etc/gentoo/branding, gentoo-background.png).
+# Suppressing them here is what removed the theme step from the operator's image
+# entirely ("There should be the menu for adding the themes as in the branded
+# images"), so the two assertions are INVERTED rather than dropped.
+#
+# The trap this block exists for is unchanged and still tested, just narrowed to the
+# flags that are still conflicts: a branded run can leave OPT_BRAND / OPT_BR_LOGO /
+# OPT_HOME_SEED behind in menu.conf, and none of those may leak into this argv.
 reset_opts   # note: OPT_SA_THEME stays at its dark default on purpose
 OPT_SA_USER=alice OPT_SA_GPU=nvidia OPT_SA_KEYFILE=boot OPT_SA_YUBIKEY=login
 OPT_HOME_MODE=create OPT_HOME_SEED=stack        # seed left over from a branded run
 OPT_BRAND=acme OPT_BR_WALLPAPER=/tmp/wall.png   # brand/branding leftovers too
+OPT_BR_LOGO=/tmp/logo.png                       # the IDENTITY leftover: must NOT leak
 OPT_EXTRA_FLAGS="--compress"
 build_make_cmd x86-standalone-unaffiliated "unaff" 1
 assert_eq  "unaff: make target"         "${RUN_MAKE[0]}" "x86-standalone-unaffiliated"
-assert_not "unaff: no --theme (dark default suppressed)" "--theme"
+# LOOK — now emitted (both assertions inverted 2026-08-26; see the note above)
+assert_has "unaff: --theme IS emitted (a look, not an identity)" "--theme dark"
+assert_has "unaff: --wallpaper IS emitted" "--wallpaper /tmp/wall.png"
+# IDENTITY — still suppressed, which is the half this block really guards
 assert_not "unaff: no BRAND= profile"   "BRAND="
+assert_not "unaff: no --brand-logo (the logo IS the mark)" "--brand-logo"
 assert_not "unaff: no --brand"          "--brand"
 assert_not "unaff: no --bundle-source"  "--bundle-source"
 assert_not "unaff: no --home-seed-code" "--home-seed-code"
-assert_not "unaff: no --wallpaper"      "--wallpaper"
 assert_has "unaff: local user collected" "--local-user 'alice'"
 assert_has "unaff: gpu driver"          "--gpu-driver nvidia"
 assert_has "unaff: unlock keyfile"      "--unlock-keyfile boot"
@@ -258,6 +271,10 @@ assert_has "thick sibling: theme intact" "--theme dark"
 assert_has "thick sibling: seed intact" "--home-seed-code stack"
 assert_has "thick sibling: brand intact" "BRAND=acme"
 assert_has "thick sibling: wallpaper intact" "--wallpaper /tmp/wall.png"
+# the mutation guard for the ONE flag that is still gated: the branded sibling
+# must still get the logo the unaffiliated target was denied, or the gate above
+# would be passing because the option never reached the emitter at all.
+assert_has "thick sibling: brand logo intact" "--brand-logo /tmp/logo.png"
 
 # ── extra flags ride IMG_FLAGS on the targets without STANDALONE_FLAGS ──────────
 # rpi-<role> (single-role) moved to the STANDALONE_FLAGS channel alongside
