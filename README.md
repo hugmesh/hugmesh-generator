@@ -487,13 +487,30 @@ none), and compose green is not evidence for the cluster._
   the namespace + NetworkPolicy, the ESO wiring, the always-on ArgoCD Application
   (out of `apps-optional/`) and the `ROLE_IMAGE_BUILDER` seed + gateway route row
   all landed; the pipeline is correct-by-construction and lint-gated but has never
-  run a real build, blocked behind bringing a cluster up. Two things are fixable
-  without one: the `service-catalog-builder-registry` push credential mounted by
-  `kaniko-build-job.template.yaml` has **no ExternalSecret** anywhere (its
-  image-builder twin does), and the three AddServiceEffector legs
-  (`APPSTORE_EFFECTOR_ENABLED`, `APPSTORE_BUILDER_ENABLED`,
-  `CASDOOR_ADMIN_ENABLED`) are still absent from the admin-BFF deployment, so the
-  "always-on flip" is wired but not thrown.
+  run a real build, blocked behind bringing a cluster up. `APPSTORE_EFFECTOR_ENABLED`
+  and `APPSTORE_FEDERATION_ENABLED` are now **`true`** in the admin-BFF deployment
+  (the ArgoCD and federation seams are the real clients, not the Noop ones), but
+  neither leg's bearer token has a source in this tree — `APPSTORE_ARGOCD_AUTH_TOKEN`
+  and `APPSTORE_FEDERATION_AUTH_TOKEN` both default empty and there is no
+  ExternalSecret for either, so both legs make a real call that comes back **401**
+  until they are provisioned. `APPSTORE_BUILDER_ENABLED` is deliberately still
+  **`false`**: the push credential the Kaniko build pod mounts has **no
+  ExternalSecret** anywhere (its image-builder twin does), and because that mount is
+  NOT `optional`, enabling the builder first leaves the build pod wedged in
+  `ContainerCreating` for 1800s rather than failing. Worse, the two Kaniko templates
+  disagree about what to create: this repo's ships
+  `service-catalog-builder-registry` / key `.dockerconfigjson`, while the template
+  `KanikoBuildLauncher` actually loads from the admin-BFF classpath asks for
+  `service-catalog-registry-credentials` / key `config.json` — **the runtime name is
+  the one that must exist**. Both must be created **in `hugmesh-service-catalog-builds`**
+  (the namespace `APPSTORE_BUILDER_NAMESPACE` pins): a pod can only mount a Secret
+  from its own namespace, so copying `external-secrets/image-builder-externalsecrets.yaml`
+  and leaving its `namespace: hugmesh-image-builds` in place reproduces the wedge with
+  every name and key correct. `tests/scripts/test-appstore-effector-flags.sh` derives
+  both contracts from the templates, requires them in that namespace from a manifest
+  the kustomization actually applies, and turns RED if the builder flag is flipped
+  without them, so the ordering cannot be got wrong silently. `CASDOOR_ADMIN_ENABLED`
+  is still absent from the deployment (the per-service role leg stays skipped).
 - **🔭 DB-hardening flips. (needs a live cluster)** Merged dark, awaiting an
   operator: PG in-cluster TLS is implemented but `PG_TLS_ENABLED` is `"false"` on
   all 9 DB deployments (flip per DB only after each `<db>-mtls` ESO Secret

@@ -341,6 +341,7 @@ jobs:
             tests/node-storage/test-appset.sh
             tests/node-storage/test-node-agent.sh
             tests/phone/test-phone-wizard.sh
+            tests/scripts/test-appstore-effector-flags.sh
             tests/scripts/test-cassandra-cluster-wiring.sh
             tests/scripts/test-client-connect-routes.sh
             tests/scripts/test-cluster-manifest-integrity.sh
