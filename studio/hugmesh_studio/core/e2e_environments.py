@@ -285,7 +285,20 @@ def default_pin(var: str, env_id: str, ambient: "dict[str, str] | None" = None) 
         if env_id == "qemu":
             port = amb.get("SNAP_QEMU_UI_PORT") or amb.get("UI_PORT") or "8443"
             return "https://localhost:%s" % port
-        return "https://localhost:8443"
+        # THE COMPOSE DOOR IS 8488, NOT 8443. compose.local.yaml publishes
+        # `${PUBLIC_HTTPS_PORT:-8488}:8443` — 8443 is the port INSIDE the
+        # container. This literal said 8443 while the `source` field three
+        # screens up correctly quoted the Makefile as
+        # SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' (8488): the
+        # docstring's own promise ("every literal here is quoted in the matching
+        # E2EEnvironment.source") was broken by this line.
+        # MEASURED on this box 2026-08-27 with both lanes up: :8443 is published
+        # by the KIND NODE and answers 404 from its nginx, while :8488 is
+        # hugmesh-https-front and answers 200 with the platform shell. So the
+        # Studio handed the docker lane the address of the OTHER mesh.
+        # Same defect, same day, in tests/e2e/steps/dimensions.ts (PR #203) and
+        # tests/e2e/playwright.config.ts — three copies of one fallback.
+        return "https://localhost:%s" % (amb.get("PUBLIC_HTTPS_PORT") or "8488")
     if var == HOST_RESOLVER_VAR:
         return "MAP hugmesh.net 127.0.0.1, MAP *.hugmesh.net 127.0.0.1"
     return ""

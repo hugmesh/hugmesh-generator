@@ -96,7 +96,15 @@ export default defineConfig({
     ? `${process.env.SNAP_REPORT_DIR}/test-results`
     : 'test-results',
   use: {
-    baseURL: process.env.SNAP_BASE_URL || 'https://localhost:8443',
+    // 8488, NOT 8443: compose.local.yaml publishes `${PUBLIC_HTTPS_PORT:-8488}:8443`,
+    // so 8443 is the port inside the container and the HOST door is 8488. Every run
+    // through the Makefile sets SNAP_BASE_URL and was always right; the bare fallback
+    // was not, and on a box that also runs the kind lane :8443 belongs to the KIND
+    // NODE (measured 2026-08-27: 404 from its nginx, while :8488 served the platform).
+    // Sibling of tests/e2e/steps/dimensions.ts (PR #203) and of the Studio's
+    // core/e2e_environments.py default_pin — one fallback, three copies.
+    baseURL: process.env.SNAP_BASE_URL
+      || `https://localhost:${process.env.PUBLIC_HTTPS_PORT || '8488'}`,
     ignoreHTTPSErrors: true,
     screenshot: 'only-on-failure',
     viewport: { width: 1280, height: 900 },
