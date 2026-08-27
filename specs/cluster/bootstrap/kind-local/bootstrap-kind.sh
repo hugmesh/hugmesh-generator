@@ -645,7 +645,8 @@ git -C "${REPO_ROOT}" show "${HREF}:specs/cluster/apps/03b-harbor-provision.yaml
 # Idempotent (create --dry-run=client | apply), like the cluster-CA step above.
 log "Ensuring the namespaces the curated Applications target"
 for ns in hugmesh-forum hugmesh-games hugmesh-games-instances hugmesh-owncast \
-          hugmesh-tube hugmesh-image-builds observability velero; do
+          hugmesh-tube hugmesh-image-builds hugmesh-service-catalog-builds \
+          observability velero; do
   kubectl create namespace "${ns}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 done
 
