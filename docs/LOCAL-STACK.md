@@ -434,8 +434,13 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
   `make stack-seed` (`tests/stack/seed-e2e.sh`) is a **required** follow-up step,
   not optional: it creates the `app-user-bff` OAuth2 client + the org/roles +
   e2e personas, and once it has run, **real browser SSO login works end-to-end**
-  (`/login` with an e2e persona, e.g. `e2e-admin`/`e2e-pass` — see "Seeding the
-  e2e fixtures" above). Before seeding — or for Casdoor **apps/users** this
+  (`/login` with an e2e persona, e.g. `e2e-admin` — see "Seeding the e2e
+  fixtures" above). **The password is generated fresh per run, never a fixed
+  literal**: `make stack-seed`'s banner prints the actual value, it's readable
+  afterward from the run-state file (`${E2E_CREDENTIALS_FILE:-.e2e-credentials}`
+  at the repo root), and the Studio's local-mesh page shows it in a copyable
+  credentials table (or "not seeded yet" if that run hasn't happened). Before
+  seeding — or for Casdoor **apps/users** this
   stack still doesn't provision (the federation manifest's fragment-sync client,
   an `actions` client) — expect the UIs to load but those specific auth-gated
   flows to 401 (the cluster seeds those via `manifests/casdoor/init-*`). The

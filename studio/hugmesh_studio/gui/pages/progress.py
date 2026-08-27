@@ -691,7 +691,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._drain.timeout.connect(self._drain_lines)
         # flash-to-a-device state (post-build)
         self.flash_worker: _FlashWorker | None = None
-        # post-build QEMU emulated-device tests (BuildPage's qemu_e2e opt-in) — its own
+        # post-build QEMU emulated-device tests (BuildPage's qemu_device_tests opt-in) — its own
         # worker slot, never flash_worker's: a flash plan and a device-test run are
         # independent opt-ins and must not steal each other's done signal.
         self.qemu_worker: _FlashWorker | None = None
@@ -2566,10 +2566,10 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._refresh_flash_targets()
         self._flash_next()                    # chain the next plan assignment (if any)
 
-    # ---- post-build QEMU emulated-device tests (cfg.qemu_e2e opt-in) ------------
+    # ---- post-build QEMU emulated-device tests (cfg.qemu_device_tests opt-in) ---
     def _maybe_qemu_tests(self) -> None:
         """BuildPage's "after the build, run the QEMU emulated-device tests" opt-in
-        (cfg.qemu_e2e — a NON-ARGV field, offered only for --env test builds; the
+        (cfg.qemu_device_tests — a NON-ARGV field, offered only for --env test builds; the
         gate lives on BuildPage and is re-enforced at collect time).
 
         Runs tests/qemu/run-qemu-docker.sh against THIS session's workdir — the same
@@ -2579,7 +2579,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         artifacts of a failed run would assert against images that were never fully
         produced. The checkbox WAS the explicit opt-in, so there is no second
         confirm (the _maybe_auto_flash precedent)."""
-        if not getattr(self.wiz.cfg, "qemu_e2e", False):
+        if not getattr(self.wiz.cfg, "qemu_device_tests", False):
             return
         workdir = self._session.workdir if self._session is not None else ""
         if not workdir or not os.path.isdir(workdir):

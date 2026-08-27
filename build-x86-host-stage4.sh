@@ -49,6 +49,15 @@ source "${SCRIPT_DIR}/scripts/_shared-assets-lib.sh"
 # misses instead of silently reusing artifacts signed by a retired key.
 # shellcheck source=scripts/_kernel-cache-lib.sh
 source "${SCRIPT_DIR}/scripts/_kernel-cache-lib.sh"
+# OPTIONAL-SERVICE gate: gate_optional_services() + every _opt_* helper/renderer
+# (prune, ConfigMap + 13a ApplicationSet install flags, OptionalService CR seed,
+# the anubis ENV decision and the public-ingress PoW reroute). ONE definition
+# shared with build-rpi5-stage4.sh. This file previously carried its own copy,
+# which was MISSING the 13a flag render and the anubis handling entirely, and ran
+# the edge-ai-analysis dependsOn guard BEFORE EXCLUDE_SERVICES subtracted. See
+# the lib header for the observed symptoms of all three.
+# shellcheck source=scripts/_optional-services-lib.sh
+source "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"
 # Seed-derived PYTHON_TARGETS/PYTHON_SINGLE_TARGET (pt_apply_seed_targets).
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
@@ -125,6 +134,52 @@ GAMES_DOMAIN="games.hugmesh.net"
 # infra slugs egress-vpn / tor / workloadConsole / anubis). It is what
 # OPTIONAL_SERVICES=all / --all-services expands to.
 USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio character-forge"
+# ── The FULL registry mirror, for FAIL-CLOSED slug validation (2026-08-26) ────
+# Until this landed, --optional-services took ANY string. The selection is only
+# ever consumed by `_opt_selected` (a bare string compare inside
+# gate_optional_services' hardcoded slug loop), so a slug that is not in that loop
+# simply never matches anything: `--optional-services akoma` (one k) built an image
+# with NO Akkoma and printed nothing, and `--optional-services metrics-server`
+# looked accepted while gating nothing at all. Its sibling knob MANAGED_SERVICES
+# has failed closed on an unknown id since it shipped (validate_managed_services /
+# _mgd_die); this is that same treatment for the optional-services path.
+#
+# All THREE lists MIRROR specs/cluster/optional-services.yaml and are asserted
+# set-equal against it by tests/stack/test-optional-services-exclude.sh, so they
+# cannot rot into a comment:
+#   KNOWN_OPTIONAL_SERVICES      = every `slug:` in the registry (spec.services).
+#   GATED_OPTIONAL_SERVICES      = the subset whose registry row has `gate:` != none,
+#                                  i.e. the ones something reads SOMEWHERE.
+#   SELECTABLE_OPTIONAL_SERVICES = the subset whose registry row lists x86 in its
+#                                  `buildGate:` column — the ones THIS builder
+#                                  actually reads out of OPTIONAL_SERVICES.
+#
+# SELECTABLE, not GATED, is what --optional-services must gate on, and the gap
+# between the two is not academic. `gate: runtime` says IN AS MANY WORDS that a
+# row has no build-time consumer: coturn/meshbridge are turned on by flipping
+# their key in the installed-services ConfigMap + the 13a element on a LIVE
+# cluster, and no builder can bake them. anubis USED to be worse — it had a
+# build-time consumer in build-rpi5-stage4.sh (_opt_anubis_installed) and NONE
+# here, so a consumer set unioned over both builders reported it as gated when
+# this builder would silently drop it. The shared-gate extraction closed that:
+# _opt_anubis_installed now resolves here from scripts/_optional-services-lib.sh,
+# anubis IS in this column, and the registry's buildGate: says [rpi5, x86].
+# Gating on `gate: != none` still accepts coturn/meshbridge, which this script
+# honours nowhere, so SELECTABLE stays strictly narrower than GATED. Each refusal
+# below names the reason and the lever that DOES work.
+KNOWN_OPTIONAL_SERVICES="akkoma tuwunel phpbb games tube owncast character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts coturn meshbridge egress-vpn tor workloadConsole headwind attestation-server anubis metrics-server keda kyverno observability service-catalog-builder optional-services-operator"
+GATED_OPTIONAL_SERVICES="akkoma tuwunel phpbb games tube owncast character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts coturn meshbridge egress-vpn tor workloadConsole headwind attestation-server anubis"
+SELECTABLE_OPTIONAL_SERVICES="akkoma tuwunel phpbb games tube owncast character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts egress-vpn tor workloadConsole headwind attestation-server anubis"
+# DESELECTABLE_OPTIONAL_SERVICES = the subset for which the `-<slug>`/`no-<slug>`
+# EXPLICIT-DESELECT spelling has a real consumer. Exactly one slug does, and the
+# reason is structural rather than historical: the spelling is read ONLY by
+# _opt_anubis_installed(), because anubis is the ONLY slug whose install decision
+# is ENV-conditional (prod-on/test-off) instead of plain presence. For every other
+# slug, absence from OPTIONAL_SERVICES already means "off", so `-games` matches no
+# arm and is dropped on the floor — on BOTH builders, not just this one.
+# Asserted set-equal to the slugs scripts/_optional-services-lib.sh really passes
+# to _opt_explicitly_deselected, so it cannot rot into a comment.
+DESELECTABLE_OPTIONAL_SERVICES="anubis"
 # OPTIONAL services selected on this image (subset of USER_LEVEL_SERVICES).
 #   DEFAULT-ON  (the built-in default when NO selection is given): akkoma tuwunel phpbb.
 #   DEFAULT-OFF (must be specifically added): games owncast tube character-studio
@@ -582,12 +637,28 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             games/owncast/tube/character-studio/character-forge are
                             DEFAULT-OFF.
                             (env/brand.conf: OPTIONAL_SERVICES; =all = the full set)
+                            FAIL-CLOSED since 2026-08-26: a slug this builder
+                            cannot honour ABORTS the build instead of being
+                            silently ignored. Three refusals, each with its own
+                            reason and next step: (1) an UNKNOWN slug (a typo);
+                            (2) a slug the registry marks "gate: none" —
+                            registered, read by nothing anywhere; (3) a slug whose
+                            registry 'buildGate:' omits x86 — coturn, meshbridge
+                            and anubis are RUNTIME-ONLY here (anubis is baked by
+                            build-rpi5-stage4.sh only), so they are flipped on a
+                            LIVE cluster via the installed-services ConfigMap +
+                            apps/13a element, never by --optional-services. The
+                            '-<slug>'/'no-<slug>' deselect spelling is rpi5-only
+                            and is refused too — use --exclude-services. Same
+                            rules for --exclude-services' own tokens.
       --all-services        Bake EVERY user-level OPTIONAL service — the FULL-SET
                             shortcut, equivalent to --optional-services all.
                             EXCLUDE_SERVICES still subtracts (e.g. --all-services
                             --exclude-services "games" bakes everything but games).
                             NOTE: the INFRA-level slugs (egress-vpn, tor,
                             workloadConsole, anubis) are NOT included by "all".
+                            anubis/coturn/meshbridge are not selectable here at
+                            all — see the fail-closed note above.
       --exclude-services "<slugs>"
                             The SUBTRACTIVE build-time exclusion list: force-OFF
                             these user-level slugs no matter how they were selected
@@ -1090,7 +1161,16 @@ OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
 # `all`, not `all akkoma`). Mirrors build-rpi5-stage4.sh.
 case " ${OPTIONAL_SERVICES} " in
     *" all "*)
+        # Carry the EXPLICIT-DESELECT tokens across the expansion. `all` is a
+        # positive allow-list; "-anubis"/"no-anubis" is not a member of that set,
+        # and replacing the whole token list used to DROP it — so `all -anubis`
+        # shipped a prod image with the PoW shield up and said nothing. The rule
+        # for what counts as a negative token lives in _opt_negative_tokens()
+        # (scripts/_optional-services-lib.sh) so both builders cannot drift on it.
+        _opt_neg="$(_opt_negative_tokens)"
         OPTIONAL_SERVICES="${USER_LEVEL_SERVICES}"
+        OPTIONAL_SERVICES="${OPTIONAL_SERVICES}${_opt_neg}"
+        unset _opt_neg
         info "OPTIONAL_SERVICES: 'all' sentinel expanded to every user-level slug: ${OPTIONAL_SERVICES}"
         ;;
 esac
@@ -1177,17 +1257,20 @@ if [ "${WANT_EDGE_AI_ANALYSIS}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in *" edge-ai "*) ;; *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} edge-ai" ;; esac
     case " ${OPTIONAL_SERVICES} " in *" edge-ai-analysis "*) ;; *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} edge-ai-analysis" ;; esac
 fi
-# Dependency guard: edge-ai-analysis is useless without the edge-ai model server. If it
-# was selected without edge-ai, drop it (its gate prune then runs) — never ship a wrapper
-# with no upstream.
-case " ${OPTIONAL_SERVICES} " in
-    *" edge-ai-analysis "*)
-        case " ${OPTIONAL_SERVICES} " in
-            *" edge-ai "*) ;;
-            *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES//edge-ai-analysis/}"
-               warn "edge-ai-analysis requires edge-ai — dropping it (no model server selected)" ;;
-        esac ;;
-esac
+# NOTE (2026-08-26): the edge-ai-analysis dependsOn-edge-ai guard USED TO SIT HERE,
+# at top level — i.e. BEFORE the EXCLUDE_SERVICES subtraction ~30 lines below. That
+# ordering is why `--optional-services "edge-ai edge-ai-analysis"
+# --exclude-services edge-ai` shipped the analysis wrapper with NO model server
+# behind it: the guard saw edge-ai still selected and kept the wrapper, and only
+# then did EXCLUDE_SERVICES remove edge-ai. The guard now runs INSIDE
+# gate_optional_services() (scripts/_optional-services-lib.sh), which is the LAST
+# word on the selection and therefore sees the post-exclusion list — matching
+# build-rpi5-stage4.sh, which always had it there and was never wrong.
+#
+# CONSEQUENCE, stated honestly: PLAN_OPTIONAL_SERVICES is printed BEFORE the gate
+# runs, so a build that will drop edge-ai-analysis still lists it in the plan. That
+# is exactly what build-rpi5-stage4.sh has always done; the BAKED TREE is correct on
+# both, and the plan line is a preview, not the contract.
 
 # edge-ai-tts (VN voice synthesis) selection: --with-edge-ai-tts folds 'edge-ai-tts'
 # into OPTIONAL_SERVICES (idempotent). DEFAULT-OFF; never auto-selected. UNLIKE
@@ -1229,6 +1312,103 @@ if [ -n "${EXCLUDE_SERVICES//[[:space:],]/}" ]; then
     info "OPTIONAL_SERVICES: EXCLUDE_SERVICES removed:${_excl_x} (final selection: ${OPTIONAL_SERVICES:-none})"
     unset _excl_x _x _s _kept
 fi
+
+# ── FAIL-CLOSED optional-service slug validation (2026-08-26) ────────────────
+# WHAT WAS OBSERVED: --optional-services accepted anything. The value is consumed
+# ONLY by _opt_selected(), a bare `[ "${s}" = "$1" ]` compare driven by
+# gate_optional_services()' hardcoded slug loop, so an unrecognised token matches
+# no arm and is simply dropped on the floor. A typo (`akoma`) silently produced an
+# image with no Akkoma; a registered-but-ungated infra slug (`metrics-server`)
+# looked accepted and gated nothing; `coturn`/`meshbridge` — registered,
+# `gate: runtime`, and read by NOTHING this builder sources — looked accepted too,
+# and that one is worse than silence: the operator gets an AFFIRMATIVE signal for a
+# flag nothing will honour. (anubis was in that list too until the shared-gate
+# extraction; it now HAS a consumer here — see DESELECTABLE_OPTIONAL_SERVICES and
+# the EXCLUDE_SERVICES leg below.) None of them printed a word of warning. The
+# MANAGED_SERVICES sibling has failed closed on an unknown id since it shipped
+# (validate_managed_services -> _mgd_die); this is the same posture for the
+# optional-services path, and for the EXCLUDE_SERVICES knob, where a typo is worse
+# still: the operator asked for a service to be REMOVED and it shipped anyway.
+#
+# RUNS HERE, deliberately: AFTER the `all` sentinel expansion and every
+# --with-<x> fold (so `all` and the folded slugs are already real slugs by now)
+# and AFTER EXCLUDE_SERVICES subtracts. EXCLUDE_SERVICES itself is read, never
+# rewritten, by that block, so validating it here still catches a typo in it.
+# Multi-line on purpose: the test suite sed-extracts these functions with the
+# repo-standard `/^name() {/,/^}/` range, which a one-line body defeats.
+#
+# DEFINED BEFORE IT IS CALLED, and that ordering is load-bearing, not style: the
+# call below is a TOP-LEVEL statement, so bash resolves it at the moment it reaches
+# this line. Moving the definition after it leaves `bash -n` perfectly happy and
+# makes EVERY invocation of this script die with "validate_optional_services:
+# command not found" (rc=127). The same is true of the `source` line that supplies
+# the _opt_svc_* primitives. The suite asserts BOTH orderings AND runs this script
+# for real, because a static extraction of the function bodies into a scratch file
+# re-orders them and structurally cannot see a definition-after-use fault.
+# _opt_svc_die / _opt_svc_known / _opt_svc_gated / _opt_svc_selectable /
+# _opt_svc_deselectable are NOT defined here. They live in
+# scripts/_optional-services-lib.sh, sourced at the top of this file (line ~60),
+# alongside gate_optional_services() and every other `_opt_*` function. A local
+# copy here would be defined AFTER that source line, so BASH WOULD RUN THE LOCAL
+# COPY — which is exactly how three optional-service defects shipped on x86 only,
+# and is why tests/stack/test-optional-services-exclude.sh fails any builder that
+# defines an `_opt_*` name. What this builder owns is the four CONSTANTS above
+# (its own registry columns) and the policy below.
+validate_optional_services() {
+    # Separate declaration lines: bash 5.3 localises every name in a `local a=$1
+    # b=$a` list BEFORE any assignment runs, so the second would die under set -u.
+    local _tok
+    local _base
+    # ── the SELECTION knob ────────────────────────────────────────────────────
+    for _tok in ${OPTIONAL_SERVICES}; do
+        _base="${_tok#no-}"; _base="${_base#-}"
+        if [ "${_base}" != "${_tok}" ]; then
+            # An EXPLICIT-DESELECT token. This used to be refused wholesale as an
+            # "rpi5-only spelling", and that was true only while this builder had
+            # no anubis handling — defect #2 of the x86 drift. The gate is now ONE
+            # sourced library, so _opt_anubis_installed() resolves here identically
+            # to rpi5 and `-anubis` genuinely works. Refusing it left an x86
+            # `--env prod` build with NO way to turn the public PoW shield off:
+            # --exclude-services cannot, because the ENV-conditional decision never
+            # reads EXCLUDE_SERVICES. So the refusal is per-slug now, not blanket.
+            _opt_svc_deselectable "${_base}" || _opt_svc_die \
+                "'${_tok}' uses the '-<slug>' / 'no-<slug>' EXPLICIT-DESELECT spelling, which is honoured for exactly these slugs: ${DESELECTABLE_OPTIONAL_SERVICES}. It is read ONLY by _opt_anubis_installed() in scripts/_optional-services-lib.sh, because anubis is the only slug whose install decision is ENV-conditional instead of plain presence. For '${_base}', absence from --optional-services ALREADY means off, so this token would match no arm and be silently ignored — on BOTH builders. To drop a default-on service use --exclude-services '${_base}' (EXCLUDE_SERVICES), which subtracts AFTER the 'all' sentinel expands."
+        fi
+        _opt_svc_known "${_base}" || _opt_svc_die \
+            "unknown optional-service slug '${_base}'. Known slugs: ${KNOWN_OPTIONAL_SERVICES}. See specs/cluster/optional-services.yaml."
+        # Two DIFFERENT refusals, because the operator's next move differs.
+        _opt_svc_gated "${_base}" || _opt_svc_die \
+            "'${_base}' is REGISTERED but not GATED ANYWHERE (specs/cluster/optional-services.yaml gives it 'gate: none'): no gate_optional_services arm, no installed-services ConfigMap key and no 13a ApplicationSet element read it, in either builder. Selecting it would do nothing at build time OR at runtime. Refusing rather than silently ignoring it. Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
+        _opt_svc_selectable "${_base}" || _opt_svc_die \
+            "'${_base}' is RUNTIME-ONLY on this builder (specs/cluster/optional-services.yaml does not list x86 in its 'buildGate:'): --optional-services cannot bake it, because nothing this builder sources reads it out of the selection. Turn it on/off on the LIVE cluster instead: flip the '${_base}' key in manifests/policy/installed-services-configmap.yaml and the matching element in apps/13a-optional-services.yaml (or its OptionalService CR). Refusing rather than accepting a flag this builder honours nowhere. Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
+    done
+    # ── the SUBTRACTIVE knob ──────────────────────────────────────────────────
+    # EXCLUDE_SERVICES is read, never rewritten, by the subtraction block above, so
+    # validating it here still catches a typo in it. Two refusals are specific to
+    # this knob:
+    #   * a deselect spelling here is a DOUBLE NEGATIVE honoured by nothing;
+    #   * an ENV-CONDITIONAL slug cannot be turned off by subtraction at all.
+    #     `--exclude-services anubis` removes the token from OPTIONAL_SERVICES and
+    #     _opt_anubis_installed() then falls through to the ENV default, so in prod
+    #     the shield stays UP and the operator was told nothing. That is the exact
+    #     empty-promise shape this validator exists to abolish, so it is refused
+    #     and pointed at the negative token, which does work.
+    for _tok in ${EXCLUDE_SERVICES//,/ }; do
+        _base="${_tok#no-}"; _base="${_base#-}"
+        [ "${_base}" = "${_tok}" ] || _opt_svc_die \
+            "'${_tok}' uses the '-<slug>' / 'no-<slug>' explicit-deselect spelling inside --exclude-services, which is a double negative honoured by nothing: EXCLUDE_SERVICES subtracts whole tokens from the selection, and no code path ever compares one to '-${_base}'. Use --exclude-services '${_base}'."
+        _opt_svc_known "${_base}" || _opt_svc_die \
+            "unknown optional-service slug '${_base}'. Known slugs: ${KNOWN_OPTIONAL_SERVICES}. See specs/cluster/optional-services.yaml."
+        _opt_svc_gated "${_base}" || _opt_svc_die \
+            "'${_base}' is REGISTERED but not GATED ANYWHERE (specs/cluster/optional-services.yaml gives it 'gate: none'): no gate_optional_services arm, no installed-services ConfigMap key and no 13a ApplicationSet element read it, in either builder. Excluding it would do nothing at build time OR at runtime. Refusing rather than silently ignoring it. Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
+        _opt_svc_selectable "${_base}" || _opt_svc_die \
+            "'${_base}' is RUNTIME-ONLY on this builder (specs/cluster/optional-services.yaml does not list x86 in its 'buildGate:'): --exclude-services cannot un-bake what was never bakeable here, which is the same empty promise as selecting it. Turn it on/off on the LIVE cluster instead: flip the '${_base}' key in manifests/policy/installed-services-configmap.yaml and the matching element in apps/13a-optional-services.yaml (or its OptionalService CR). Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
+        _opt_svc_deselectable "${_base}" && _opt_svc_die \
+            "'${_base}' is ENV-CONDITIONAL and CANNOT be turned off by --exclude-services. Subtraction only removes the token from the selection; _opt_anubis_installed() then falls through to the ENV default, so an '--env prod' build would ship '${_base}' ON anyway and say nothing. Use --optional-services '-${_base}' (or 'no-${_base}'), the explicit-deselect spelling, which this builder honours for: ${DESELECTABLE_OPTIONAL_SERVICES}."
+    done
+    unset _tok _base
+}
+validate_optional_services
 
 # ── Validate role; derive GPU, hostname, node labels and init/join intent ──
 # Node labels/taints are applied at RUNTIME by provision.sh from the KEYS stick;
@@ -2171,8 +2351,17 @@ GROWFS_EOF
 }
 
 # ── ENV app-gate (deterministic prune of the BAKED apps/ tree) ─────────────
-# ArgoCD recurses specs/cluster/apps with recurse:true, so physically removing
-# a YAML from the baked copy is the gate (no live-cluster conditional needed).
+# Physically removing a YAML from the baked copy is the gate (no live-cluster
+# conditional needed) — because specs/cluster/bootstrap/bootstrap.sh applies the
+# BAKED ${CLUSTER_DIR}/apps tree one file at a time.
+#
+# ⚠ THAT WAS NOT TRUE BEFORE 2026-08-26, and this comment used to assert the
+# opposite of the truth: it said ArgoCD "recurses specs/cluster/apps with
+# recurse:true", which it did — from GITHUB, via app-of-apps.yaml, the only thing
+# bootstrap.sh ever applied. Nothing read the baked tree, so every `rm -f` below
+# edited a directory ArgoCD never looked at and the whole gate was INERT on a
+# real device. Do not re-point bootstrap.sh at the repo-recursing root without
+# reading specs/cluster/README.md "What the device syncs".
 # Operates ONLY on ${SYSROOT}/var/lib/hugmesh/cluster/apps — never the repo.
 #   prod => prune the LAN wildcard-DNS app (public DNS is authoritative instead).
 #   test => prune the go-live cloudflared app (no Cloudflare/ACME on a LAN). The
@@ -2227,438 +2416,11 @@ rewrite_prod_image_tags() {
 }
 
 # ── OPTIONAL-SERVICE gate ───────────────────────────────────────────────────
-# Prune every OPTIONAL service (akkoma/tuwunel/phpbb/games) NOT selected in
-# OPTIONAL_SERVICES from the baked GitOps tree, enumerated by
-# specs/cluster/optional-services.yaml. Mirrors the gate_env_apps `rm -f` design
-# (physically removing a baked YAML IS the gate: ArgoCD recurse:true never
-# instantiates a removed Application). For each unselected slug it removes the
-# owned apps/*.yaml + manifests dir, its per-service ESO file (+ its kustomization
-# line), its gateway HOST routes (apps/20-gateway-*.yaml) and route-access rows
-# (route-access/initdb/20-schema.sql) so a matched route to a deleted upstream
-# cannot 502 and a leftover role row cannot stale-grant. Shared apps (social-ui,
-# serving BOTH homeservers) are removed only when ALL owners are deselected.
-#
-# ⚠ RUNTIME NOTE: build-time prune only stops the ONE-TIME bootstrap seed; the
-# live cluster syncs apps/ from the gitops repo. True runtime add/remove uses the
-# installed-services ConfigMap + the optional-services ApplicationSet
-# (apps/13a-optional-services.yaml). See docs/OPTIONAL-SERVICES.md.
-#
-# ⚠ CROSS-REPO TODO (gateway wave): CanonicalSeed.java (hugmesh-gateway) bakes
-# a route-access floor + the cloudflared configmap hardcodes matrix./mastodon.
-# reserved hostnames — keep those in sync with the rows pruned here. NOT edited by
-# this build (separate repo / image rebuild).
-_opt_selected() {
-    # $1 = slug; returns 0 if selected (present in OPTIONAL_SERVICES), else 1.
-    local s; for s in ${OPTIONAL_SERVICES}; do [ "${s}" = "$1" ] && return 0; done
-    return 1
-}
-gate_optional_services() {
-    local tree="${SYSROOT}/var/lib/hugmesh/cluster"
-    local apps="${tree}/apps"
-    [ -d "${apps}" ] || return 0
-    local slug
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio character-forge headwind attestation-server egress-vpn workloadConsole edge-ai edge-ai-analysis edge-ai-tts tor; do
-        _opt_selected "${slug}" && continue
-        info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
-        case "${slug}" in
-            akkoma)
-                rm -f "${apps}/30-akkoma.yaml"
-                rm -rf "${tree}/manifests/akkoma"
-                rm -f "${tree}/manifests/external-secrets/akkoma-externalsecrets.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" akkoma-externalsecrets.yaml
-                _opt_drop_route "${apps}/20-gateway-be.yaml" mastodon-oauth mastodon-api mastodon-web
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/api/v1/pleroma/admin/**' '/api/pleroma/admin/**' '/pleroma/admin/**'
-                ;;
-            tuwunel)
-                rm -f "${apps}/30-tuwunel.yaml"
-                rm -rf "${tree}/manifests/tuwunel"
-                rm -f "${tree}/manifests/external-secrets/tuwunel-externalsecrets.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" tuwunel-externalsecrets.yaml
-                _opt_drop_route "${apps}/20-gateway-be.yaml" matrix-api matrix-wellknown matrix
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/_matrix/**' '/.well-known/matrix/**' '/_synapse/**'
-                # The front door grants the same Matrix surface on its own gateway
-                # (20-schema.sql has a second block of /_matrix rows under
-                # hugmesh-fe-gateway). Dropping only the be-gateway leg left
-                # three live ROLE_MATRIX/MOD/ADMIN grants pointing at a
-                # homeserver that is not installed. See #143.
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/_matrix/**' '/.well-known/matrix/**'
-                ;;
-            phpbb)
-                rm -f "${apps}/30-phpbb.yaml" "${apps}/38-forum-bff-db.yaml" \
-                      "${apps}/39-forum-bff-api.yaml" "${apps}/49-forum-ui.yaml"
-                rm -rf "${tree}/manifests/forum"
-                _opt_drop_route "${apps}/20-gateway-fe.yaml" forum-ui hugmesh-forum-bff-api hugmesh-forum-bff-api-moderation
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/social/forum/**' '/bff/forum/admin/**' '/bff/forum/moderation/**' '/bff/forum/**'
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/api/forum/admin/**'
-                ;;
-            games)
-                rm -f "${apps}/06-casdoor-games.yaml" "${apps}/50-games.yaml"
-                rm -rf "${tree}/manifests/games" "${tree}/manifests/casdoor-games"
-                _opt_drop_route     "${apps}/20-gateway-be.yaml" games
-                _opt_drop_extrahost "${apps}/20-gateway-be.yaml" games.
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/games/api/admin/**' '/games/**'
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/games/admin/**'
-                # ── GAMES APP-STORE (games-services control plane) — degrade with games ──
-                # The app-store rides the games slug (it needs the games namespace up), so
-                # deselecting games prunes the WHOLE control plane: the 13c instances
-                # ApplicationSet + the games-instances namespace/isolation manifests, the two
-                # intersection-sync Jobs (+ their casdoor/kustomization lines), the be-gateway
-                # HTTP-console route, and the games-services route-access rows (be + fe).
-                rm -f "${apps}/13c-games-instances.yaml"
-                rm -rf "${tree}/manifests/games-instances"
-                rm -f "${tree}/manifests/casdoor/games-services-admin-sync-job.yaml" \
-                      "${tree}/manifests/casdoor/games-services-runner-sync-job.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/casdoor/kustomization.yaml" games-services-admin-sync-job.yaml
-                _opt_drop_kustomize_line "${tree}/manifests/casdoor/kustomization.yaml" games-services-runner-sync-job.yaml
-                _opt_drop_route "${apps}/20-gateway-be.yaml" games-servers-console
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/bff/superadmin/games-services/**' '/bff/games-services/instances/**' \
-                    '/bff/games-services/catalog/**' '/games/servers/**'
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/admin/games-services/**'
-                ;;
-            edge-ai)
-                rm -f "${apps}/54-edge-ai.yaml"
-                rm -rf "${tree}/manifests/edge-ai"
-                _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/v1/**'
-                ;;
-            edge-ai-analysis)
-                rm -f "${apps}/55-edge-ai-analysis.yaml"
-                rm -rf "${tree}/manifests/edge-ai-analysis"
-                _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai-analysis
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/v1/analyze/**'
-                ;;
-            edge-ai-tts)
-                # Piper TTS + viseme timeline (VN voice, B3) — DEFAULT-OFF, NO
-                # dependsOn (CPU-only, self-contained). Owns app 55b +
-                # manifests/edge-ai-tts + the /v1/synthesize/** route + route-access
-                # row. Image is a separate build artifact.
-                rm -f "${apps}/55b-edge-ai-tts.yaml"
-                rm -rf "${tree}/manifests/edge-ai-tts"
-                _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai-tts
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/v1/synthesize/**'
-                ;;
-            owncast)
-                # Owncast live-streaming — GPU-gated x86 service (DEFAULT-OFF). Owns its
-                # bootstrap Application + manifests dir + its fe-gateway BFF route-access
-                # rows (no gateway HOST route + no per-service ESO today). When deselected
-                # the user/admin live-stream panels grey out (installed-services "false").
-                rm -f "${apps}/52-owncast.yaml"
-                rm -rf "${tree}/manifests/owncast"
-                _opt_drop_route "${apps}/20-gateway-fe.yaml" hugmesh-owncast-bff-api
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/bff/owncast/admin/**' '/bff/owncast/**'
-                ;;
-            character-studio)
-                # Character Studio (VN) — FRONTEND micro-frontend remote (DEFAULT-OFF, admin
-                # gate). Owns its bootstrap Application + manifests dir + its ONE fe-gateway
-                # path route (character-studio-ui) + its ONE route-access row (no gateway
-                # HOST + no per-service ESO + no BFF in this slug). When deselected the host
-                # greys the /character-studio entry out (installed-services "false").
-                rm -f "${apps}/49b-character-studio-ui.yaml"
-                rm -rf "${tree}/manifests/character-studio"
-                _opt_drop_route "${apps}/20-gateway-fe.yaml" character-studio-ui
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/character-studio/**'
-                ;;
-            character-forge)
-                # Character Forge (3D) — MULTI-APP slug (DEFAULT-OFF, admin gate): BFF db +
-                # BFF api + UI remote (phpbb shape). Owns its three bootstrap Applications +
-                # three manifest dirs + its TWO fe-gateway path routes (character-forge-ui +
-                # hugmesh-character-forge-bff-api) + its TWO route-access rows (no gateway
-                # HOST; its ESO secrets ride the SHARED secretstore/pki files like forum-bff's
-                # — inert without their consumer pods, so NOT pruned here). When deselected
-                # the host greys the /character-forge entry out (installed-services "false").
-                # See docs/XR-CHAT.md.
-                rm -f "${apps}/38b-character-forge-bff-db.yaml" \
-                      "${apps}/39b-character-forge-bff-api.yaml" \
-                      "${apps}/49c-character-forge-ui.yaml"
-                rm -rf "${tree}/manifests/character-forge" \
-                       "${tree}/manifests/character-forge-bff-api" \
-                       "${tree}/manifests/character-forge-bff-db"
-                _opt_drop_route "${apps}/20-gateway-fe.yaml" character-forge-ui hugmesh-character-forge-bff-api
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/character-forge/**' '/bff/character-forge/**'
-                ;;
-            tube)
-                # LocalTube (YouTube archive) — GPU-gated x86 service (DEFAULT-OFF). Owns
-                # its bootstrap Application + manifests dir + its per-service ESO file
-                # (tube-externalsecrets.yaml; standalone, not in the ESO kustomization) +
-                # its fe/be route-access rows. When deselected the tube panel greys out.
-                rm -f "${apps}/53-tube.yaml"
-                rm -rf "${tree}/manifests/tube"
-                rm -f "${tree}/manifests/external-secrets/tube-externalsecrets.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" tube-externalsecrets.yaml
-                _opt_drop_route "${apps}/20-gateway-fe.yaml" hugmesh-tube-bff-api tube-content
-                _opt_drop_route "${apps}/20-gateway-be.yaml" tube-content
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/bff/tube/**'
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/tube/content/**'
-                ;;
-            egress-vpn)
-                # NODE service (not a cluster Application). Prune the per-service NetworkPolicy
-                # interaction (file + kustomization line) so no vpn-egress label is ever
-                # honoured. On x86 egress-vpn is the DESKTOP --egress-vpn FILE path (never a
-                # registry _opt_selected), so this prune always runs — the registry interaction
-                # NetworkPolicy is moot on x86; the node-package/service handling is its own path.
-                rm -f "${tree}/manifests/networkpolicy/egress-vpn-interaction.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/networkpolicy/kustomization.yaml" egress-vpn-interaction.yaml
-                # AND the runtime config-byte DELIVERY half: the (dark) secret-projector
-                # overlay + its MANUAL-sync Application. A tree that never selected the VPN
-                # must not carry a DaemonSet that writes VPN key bytes onto node hostPaths,
-                # even inert — so the whole dir + app go, not just a kustomize line.
-                rm -f "${apps}/13e-egress-vpn.yaml"
-                rm -rf "${tree}/manifests/egress-vpn"
-                ;;
-            workloadConsole)
-                # The WORKLOAD CONSOLE is RBAC + route-access + an admin-bff deployment
-                # overlay (the BFF endpoints live in the always-present admin-bff).
-                # Deselecting it prunes the two-SA RBAC Application + its manifests (so
-                # the SA token Secrets are never minted), the two route-access rows (the
-                # gateway 404s the whole /bff/{admin,superadmin}/workloads/** prefix),
-                # AND the deployment overlay workload-console-patch.yaml + its single
-                # kustomization `- path:` line — so the dark admin-bff renders
-                # byte-identical to a tree that never had the feature (no
-                # WORKLOAD_CONSOLE_* env, no token mounts, Noop k8s seam). Selected, the
-                # overlay survives and lights the gate + k8s seam; the DB master flag +
-                # TTL'd grants still keep the console dark (docs/OPTIONAL-SERVICES.md
-                # §7.2).
-                rm -f "${apps}/14-workload-console-rbac.yaml"
-                rm -rf "${tree}/manifests/workload-console-rbac"
-                rm -f "${tree}/manifests/admin-bff-api/workload-console-patch.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/admin-bff-api/kustomization.yaml" 'path: workload-console-patch.yaml'
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/bff/superadmin/workloads/**' '/bff/admin/workloads/**'
-                ;;
-            headwind)
-                # Headwind MDM (managed phones) — DEFAULT-OFF, admin-only devops
-                # service (Harbor/superadmin posture). Owns its bootstrap Application +
-                # manifests dir + per-service ESO file + TWO routes on the EXISTING
-                # tailnet superadmin-gateway (NOT be/fe — no gatewayHost of its own)
-                # + their route-access rows. When deselected the superadmin console's
-                # Headwind entry greys out (installed-services "false").
-                rm -f "${apps}/23-headwind.yaml"
-                rm -rf "${tree}/manifests/headwind"
-                rm -f "${tree}/manifests/external-secrets/headwind-externalsecrets.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" headwind-externalsecrets.yaml
-                _opt_drop_route "${apps}/22-gateway-superadmin.yaml" headwind-console headwind-checkin
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-superadmin-gateway \
-                    '/hmdm/manage/**' '/hmdm/rest/**'
-                ;;
-            attestation-server)
-                # AttestationServer (GrapheneOS Hardware Trust Root) — DEFAULT-OFF,
-                # admin-only devops service (Harbor/superadmin posture). Owns its
-                # bootstrap Application + manifests dir + per-service ESO file +
-                # THREE routes on the EXISTING tailnet superadmin-gateway (NOT be/fe
-                # — no gatewayHost of its own) + their route-access rows. When
-                # deselected the superadmin console's AttestationServer entry greys
-                # out (installed-services "false").
-                rm -f "${apps}/24-attestation-server.yaml"
-                rm -rf "${tree}/manifests/attestation-server"
-                rm -f "${tree}/manifests/external-secrets/attestation-server-externalsecrets.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" attestation-server-externalsecrets.yaml
-                _opt_drop_route "${apps}/22-gateway-superadmin.yaml" attestation-auditor attestation-status attestation-console
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-superadmin-gateway \
-                    '/attest/auditor/**' '/attest/api/status' '/attest/api/create-account' '/attest/api/**'
-                ;;
-            tor)
-                # NODE service (DISTRO tor daemon + a reconcile agent), not a cluster
-                # Application. Prune the per-service NetworkPolicy interaction (file +
-                # kustomization line) so an x86 image built WITHOUT tor does not ship the
-                # tor-onion egress hook (honours the "PRUNED when not selected" contract
-                # in tor-onion-marked.yaml + the kustomization comment). The net-vpn/tor
-                # omission + the service-link SKIP are handled in the SVCS/PKGS gates.
-                rm -f "${tree}/manifests/networkpolicy/tor-onion-marked.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/networkpolicy/kustomization.yaml" tor-onion-marked.yaml
-                ;;
-        esac
-    done
-    # Edge-AI model library: when selected, patch the edge-ai-models ConfigMap from
-    # the --edge-ai-* flags (the model catalog/preload/runtime knobs exposed to the
-    # mesh). EDGE_AI_RUNTIME always set (defaults ollama); models/default only if given.
-    if _opt_selected edge-ai; then
-        local mc="${tree}/manifests/edge-ai/models-configmap.yaml"
-        if [ -f "${mc}" ]; then
-            [ -n "${EDGE_AI_RUNTIME}" ]       && sed -i -E "s#^(  runtime: ).*#\\1\"${EDGE_AI_RUNTIME}\"#"       "${mc}"
-            [ -n "${EDGE_AI_MODELS}" ]        && sed -i -E "s#^(  preload: ).*#\\1\"${EDGE_AI_MODELS}\"#"        "${mc}"
-            [ -n "${EDGE_AI_MODEL_DEFAULT}" ] && sed -i -E "s#^(  default-model: ).*#\\1\"${EDGE_AI_MODEL_DEFAULT}\"#" "${mc}"
-            info "Edge-AI model library: runtime=${EDGE_AI_RUNTIME} preload='${EDGE_AI_MODELS:-<default>}' default='${EDGE_AI_MODEL_DEFAULT:-<default>}'"
-        fi
-    fi
-    # Shared social-ui (matrix + mastodon micro-frontends in ONE app) — remove only
-    # when BOTH homeservers are deselected (otherwise the surviving platform keeps
-    # its UI; the federation manifest greys out the absent one).
-    if ! _opt_selected akkoma && ! _opt_selected tuwunel; then
-        rm -f "${apps}/45-social-ui.yaml"
-        info "OPTIONAL_SERVICES: both homeservers deselected — pruned shared apps/45-social-ui.yaml"
-    fi
-    # Repair a possible trailing comma: if pruning removed the LAST VALUES row of an
-    # INSERT (the one that ended with ')' not '),'), the new last row ends with ','
-    # -> a fatal trailing comma before ON CONFLICT. Re-terminate the last data row.
-    _opt_fix_trailing_comma "${tree}/manifests/route-access/initdb/20-schema.sql"
-    # Re-render the installed-services ConfigMap from the surviving selection so the
-    # runtime ApplicationSet + admin console see the build-time install-state.
-    _opt_render_installed_services
-    # Seed each per-slug OptionalService CR's `enabled` from the SAME selection so the
-    # (dark-by-default) admin-bff OptionalServiceReconciler's desired-state baseline
-    # matches this build (a USB built WITHOUT a slug ships its CR enabled:false).
-    _opt_render_optionalservice_cr
-}
-# Fix the dangling trailing comma left when the LAST VALUES row of an INSERT was
-# pruned: rewrite the trailing '),' of the final data row before 'ON CONFLICT' to
-# ')'. Operates only on the data row immediately preceding the ON CONFLICT line.
-_opt_fix_trailing_comma() {
-    local f="$1"
-    [ -f "${f}" ] || return 0
-    awk '
-        { lines[NR]=$0 }
-        END {
-            # find the ON CONFLICT line; walk back to the last VALUES data row.
-            oc=0
-            for (i=NR; i>=1; i--) { if (lines[i] ~ /ON CONFLICT/) { oc=i; break } }
-            if (oc>0) {
-                for (i=oc-1; i>=1; i--) {
-                    if (lines[i] ~ /^[[:space:]]*\(.*\)[[:space:]]*,([[:space:]]*--.*)?$/) {
-                        # strip the comma right after the closing paren of this row.
-                        sub(/\)[[:space:]]*,/, ")", lines[i]); break
-                    }
-                    if (lines[i] ~ /^[[:space:]]*\(.*\)([[:space:]]*--.*)?$/) break  # already terminated
-                }
-            }
-            for (i=1;i<=NR;i++) print lines[i]
-        }
-    ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
-}
-# Drop a `- <resource>` line from a kustomize resources: list.
-_opt_drop_kustomize_line() {
-    local f="$1" res="$2"
-    [ -f "${f}" ] || return 0
-    sed -i -E "\\|^[[:space:]]*-[[:space:]]+${res}([[:space:]].*)?\$|d" "${f}"
-}
-# Delete one or more Spring-Cloud-Gateway route blocks (a `- id: <rid>` item plus
-# its indented continuation lines) from a baked gateway app's helm values.
-_opt_drop_route() {
-    local f="$1"; shift
-    [ -f "${f}" ] || return 0
-    local rid
-    for rid in "$@"; do
-        awk -v rid="${rid}" '
-            BEGIN { skip=0; ind=-1 }
-            {
-                line=$0
-                # indentation of this line (leading spaces)
-                match(line, /^ */); cur=RLENGTH
-                if (skip) {
-                    # Stop skipping once we reach ANY non-blank line at or below the
-                    # captured item indent — including a comment, since a trailing
-                    # comment block at this indent may document the NEXT surviving
-                    # route rather than the one being removed (excluding comments
-                    # from this check would silently swallow that documentation).
-                    if (line !~ /^ *$/ && cur<=ind) { skip=0 }
-                    else { next }
-                }
-                if (line ~ ("^ *- id: " rid "$")) { skip=1; ind=cur; next }
-                print line
-            }
-        ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
-    done
-}
-# Drop the `- <host-prefix>...` extraHosts entry (+ any leading comment block) for
-# a games-style host from a gateway app's ingress.extraHosts.
-_opt_drop_extrahost() {
-    local f="$1" prefix="$2"
-    [ -f "${f}" ] || return 0
-    sed -i -E "\\|^[[:space:]]*-[[:space:]]+\"?${prefix}[^[:space:]\"]*\"?[[:space:]]*\$|d" "${f}"
-}
-# Delete gateway_route_access INSERT VALUES rows matching (gateway, url_pattern)
-# from the baked schema.sql. Rows are `  ('<gw>', '<pat>', 'ROLE', bool), -- ...`.
-# Uses awk with LITERAL substring matching (the url_patterns carry ** / . which are
-# regex metachars) on the row's leading `('<gw>', '<pat>',` so only the data rows
-# are removed and the surrounding comments are left intact.
-_opt_drop_rows() {
-    local f="$1" gw="$2"; shift 2
-    [ -f "${f}" ] || return 0
-    local pat
-    for pat in "$@"; do
-        awk -v gw="${gw}" -v pat="${pat}" '
-            BEGIN { needle = "(\x27" gw "\x27" }   # ('gw'   (x27 = single quote)
-            {
-                line=$0
-                # Strip leading whitespace for the prefix test.
-                t=line; sub(/^[[:space:]]+/, "", t)
-                if (index(t, needle)==1) {
-                    # This is a VALUES row for THIS gateway; check the url_pattern is
-                    # the 2nd quoted field and equals pat exactly.
-                    rest=t; sub(/^\([[:space:]]*\x27[^\x27]*\x27[[:space:]]*,[[:space:]]*\x27/, "", rest)
-                    # rest now begins with the url_pattern; cut at its closing quote.
-                    q=index(rest, "\x27")
-                    if (q>0 && substr(rest,1,q-1)==pat) { next }
-                }
-                print line
-            }
-        ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
-    done
-}
-# Render manifests/policy/installed-services-configmap.yaml install-state booleans
-# from the surviving OPTIONAL_SERVICES selection (the runtime ApplicationSet +
-# admin console read this). Idempotent: rewrites the data: block in place.
-_opt_render_installed_services() {
-    local cm="${SYSROOT}/var/lib/hugmesh/cluster/manifests/policy/installed-services-configmap.yaml"
-    [ -f "${cm}" ] || return 0
-    local slug val
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio character-forge headwind attestation-server workloadConsole edge-ai edge-ai-analysis edge-ai-tts; do
-        if _opt_selected "${slug}"; then val="true"; else val="false"; fi
-        # '#'-delimited so the (true|false) alternation does not collide with the delimiter.
-        sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
-    done
-    info "OPTIONAL_SERVICES: rendered installed-services ConfigMap (selected: ${OPTIONAL_SERVICES:-none})"
-}
-# Flip the `enabled:` value of ONE OptionalService CR (the block whose `slug: <slug>`)
-# in the baked seed file. awk anchors on the slug line then rewrites the FIRST enabled
-# line after it, preserving indentation (sub only touches the matched substring). The
-# end-anchored slug compare keeps edge-ai distinct from edge-ai-analysis/edge-ai-tts.
-_opt_set_cr_enabled() {
-    local f="$1" slug="$2" val="$3"
-    [ -f "${f}" ] || return 0
-    awk -v slug="${slug}" -v val="${val}" '
-        /^[[:space:]]*slug:[[:space:]]/ {
-            s=$0; sub(/^[[:space:]]*slug:[[:space:]]*/,"",s); sub(/[[:space:]]*$/,"",s)
-            arm=(s==slug)
-        }
-        arm && /^[[:space:]]*enabled:[[:space:]]*(true|false)[[:space:]]*$/ {
-            sub(/enabled:[[:space:]]*(true|false)/, "enabled: " val); arm=0
-        }
-        { print }
-    ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
-}
-# Seed the per-slug OptionalService CRs (manifests/optional-services-operator/
-# seed-optionalservices.yaml) from the resolved OPTIONAL_SERVICES selection, mirroring
-# _opt_render_installed_services above (the CR is the runtime desired-state twin of the
-# installed-services ConfigMap boolean). coturn stays at its false baseline (not in the
-# selection loop, matching the ConfigMap); anubis is ENV-conditional and is NOT rewritten
-# on x86 (as with the ConfigMap here) — its CR keeps the safe test baseline.
-_opt_render_optionalservice_cr() {
-    local seed="${SYSROOT}/var/lib/hugmesh/cluster/manifests/optional-services-operator/seed-optionalservices.yaml"
-    [ -f "${seed}" ] || return 0
-    local slug val
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts; do
-        if _opt_selected "${slug}"; then val="true"; else val="false"; fi
-        _opt_set_cr_enabled "${seed}" "${slug}" "${val}"
-    done
-    info "OPTIONAL_SERVICES: seeded OptionalService CR enabled flags (selected: ${OPTIONAL_SERVICES:-none})"
-}
+# gate_optional_services() and its _opt_* helpers/renderers (including the
+# anubis ENV decision + public-ingress PoW reroute, NEITHER of which this file
+# ever had) now live in the SHARED scripts/_optional-services-lib.sh, sourced at
+# the top of this file. This file used to carry its own copy; see the lib header
+# for the three divergences that copy shipped.
 
 # ============================================================================
 # MANAGED BACKING SERVICES — gate_backing_services() + helpers. See
