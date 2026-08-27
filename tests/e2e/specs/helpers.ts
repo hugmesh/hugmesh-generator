@@ -2,7 +2,7 @@ import { Page, expect, request } from '@playwright/test';
 import type { APIRequestContext, APIResponse } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { SUPERADMIN_USERNAME, SYSTEMS_SEED_USERS, passwordFor } from './rbac-roles';
+import { SUPERADMIN_USERNAME, SYSTEMS_SEED_USERS, passwordFor, sharedPassword } from './rbac-roles';
 export { SUPERADMIN_USERNAME };
 import type { SystemsRole } from './rbac-roles';
 
@@ -111,11 +111,13 @@ export async function apiContext(baseUrl: string | undefined): Promise<APIReques
 /**
  * Default native sign-in password for the ad-hoc e2e personas these specs drive
  * (alice@…, bob@…, admin@…, dragoneer, …). Mirrors the seed-catalogue resolver in
- * rbac-roles.ts (passwordFor): a shared E2E_PASSWORD, falling back to the
- * deterministic 'e2e-pass' the seeder uses. The LIVE run must seed each persona
- * as a native Casdoor account (username = the persona handle) with this password.
+ * rbac-roles.ts (sharedPassword): explicit E2E_PASSWORD, else the run-state
+ * credentials file tests/stack/e2e-password.sh maintains, else THROW — never a
+ * literal fallback. The LIVE run must seed each persona as a native Casdoor
+ * account (username = the persona handle) with this SAME password (`make
+ * stack-seed` does, via that same generator).
  */
-export const LOGIN_PASSWORD = process.env.E2E_PASSWORD ?? 'e2e-pass';
+export const LOGIN_PASSWORD = sharedPassword();
 
 /**
  * The SUPERADMIN identity is the one persona whose login handle is not fixed:

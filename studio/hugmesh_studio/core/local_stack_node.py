@@ -21,11 +21,14 @@ import signal
 import subprocess
 import time
 import urllib.request
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-from . import devops_tools, own_casdoor, proc_group, proc_text
+from . import devops_tools, e2e_catalogue, own_casdoor, proc_group, proc_text
 from . import resource_limits, stack_limits
-from .local_services import federation_env
+from .local_services import (KIND_ADDONS_ENV, KIND_ADDONS_NONE, federation_env,
+                             kind_addon_default_selection, kind_addon_env,
+                             validate_kind_addons)
 
 _COMPOSE_FILE = os.path.join("tests", "stack", "compose.local.yaml")
 
@@ -153,7 +156,8 @@ class LocalStackNode:
                  idp: str = "casdoor",
                  idp_issuer: str = "", idp_client_id: str = "", idp_jwks: str = "",
                  services=None,
-                 own_idp_domains: tuple[str, ...] = ()):
+                 own_idp_domains: tuple[str, ...] = (),
+                 kind_addons=None):
         self.generator_dir = os.path.abspath(generator_dir)
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
@@ -254,6 +258,18 @@ class LocalStackNode:
         # each mechanism is applied. None (and a selection equal to what the registry
         # ships) exports NOTHING — see local_services.federation_env.
         self.services = tuple(services) if services is not None else None
+        # The DEVOPS lane's own service selection (core/local_services.KIND_ADDONS
+        # slugs), or None when no picker was used. A SEPARATE axis from `services`
+        # on purpose: these are Kubernetes Applications the kind bootstrap adds to
+        # its curated set, they have no compose profile and no federation row, and
+        # folding them into the docker lane's list is the lane confusion
+        # local_services exists to prevent.
+        #
+        # None — and a selection equal to what the lane already ships — exports
+        # NOTHING, so `make kind-up` runs with the same env, byte for byte, as
+        # before this axis existed (the same invariant `services`/federation_env
+        # holds). See local_services.kind_addon_env.
+        self.kind_addons = tuple(kind_addons) if kind_addons is not None else None
         self.idp = idp
         self.idp_issuer = idp_issuer
         self.idp_client_id = idp_client_id
@@ -692,8 +708,17 @@ class LocalStackNode:
 
     def _make(self, target: str, timeout: int,
               extra_env: dict[str, str] | None = None,
-              on_line=None, cancel=None) -> tuple[bool, str]:
-        """Run ``make <target>``. Without ``on_line``/``cancel`` this is the original
+              on_line=None, cancel=None,
+              args: Sequence[str] | None = None) -> tuple[bool, str]:
+        """Run ``make <target> [args...]``.
+
+        ``args`` is appended to ARGV (never to a shell string) — it exists so a caller
+        can pass make VARIABLE ASSIGNMENTS such as ``E2E_SPECS=specs/01-x.spec.ts``.
+        A make variable set on the command line overrides the makefile's own default,
+        which is the only way to narrow a target without the recipe growing a second
+        spelling. It is argv rather than env on purpose: env would work for make, but
+        then nothing about the selection would be visible in the process the operator
+        (or a test) can actually see. Without ``on_line``/``cancel`` this is the original
         buffered contract (subprocess.run, full output at the end). WITH them it
         STREAMS: merged stdout+stderr line-by-line into ``on_line`` as the build
         runs (what makes an hour-long cold compose build watchable in the GUI), and
@@ -712,16 +737,17 @@ class LocalStackNode:
         reason nowhere in the log it points at. They are new sentences, not
         replays, so streaming them cannot double anything."""
         env = self._build_env(extra_env)
+        argv = ["make", target, *[str(a) for a in (args or ())]]
         if on_line is None and cancel is None:
             try:
-                r = subprocess.run(["make", target], cwd=self.generator_dir, env=env,
+                r = subprocess.run(argv, cwd=self.generator_dir, env=env,
                                    capture_output=True, text=True, timeout=timeout)
                 return (r.returncode == 0), (r.stderr or r.stdout).strip()
             except (OSError, subprocess.SubprocessError) as e:
                 return False, str(e)
         try:
             proc = subprocess.Popen(
-                ["make", target], cwd=self.generator_dir, env=env,
+                argv, cwd=self.generator_dir, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                 # Had errors="replace" but no encoding, so it could not CRASH — it just
                 # decoded with the launcher's locale and mojibaked under C/POSIX. Pinning
@@ -891,11 +917,25 @@ class LocalStackNode:
                        "but unseeded; run `make stack-seed` (the bootstrap's "
                        "bring-up seeds automatically)")
 
-    def e2e_ready(self) -> list[str]:
+    def e2e_ready(self, environment: str = "docker") -> list[str]:
         """Every reason the e2e suite cannot run RIGHT NOW (empty = ready) —
         read-only probes only, cheapest first. This one list is BOTH the GUI
         button's enablement and run_e2e()'s fail-fast gate, so they can never
-        disagree."""
+        disagree.
+
+        SCOPED BY ENVIRONMENT (2026-08-26). Everything below the node_modules
+        check is a probe of the LOCAL DOCKER MESH: is this compose project up,
+        was it started with ENV=test, are its personas seeded. Those questions
+        are meaningless for the kind cluster and for an emulated device, and
+        answering them anyway would grey the Run button for a mesh the operator
+        never selected — the exact dishonesty the tri-state gate exists to
+        avoid. For a non-docker environment this returns only the checks that
+        still apply, and readiness of the mesh ITSELF is left to the harness,
+        which already skips per scenario with a reason naming what to start
+        (tests/e2e/steps/world.ts). Two components answering the same question
+        is how they come to disagree."""
+        from . import e2e_environments as _e2e_env
+        env_def = _e2e_env.environment(environment)   # raises on an unknown id
         problems: list[str] = []
         e2e_dir = os.path.join(self.generator_dir, "tests", "e2e")
         if not os.path.isdir(e2e_dir):
@@ -903,6 +943,10 @@ class LocalStackNode:
         elif not os.path.isdir(os.path.join(e2e_dir, "node_modules")):
             problems.append("tests/e2e/node_modules missing — run `make "
                             "playwright-deps` once (npm ci + chromium).")
+        if env_def.id != "docker":
+            # Nothing else here describes this mesh. Say so rather than
+            # silently returning a short list that reads like a full check.
+            return problems
         if not self.status().running:
             problems.append("the local stack is not running — bring it up first.")
             return problems
@@ -919,7 +963,9 @@ class LocalStackNode:
         return problems
 
     def run_e2e(self, extra_env: dict[str, str] | None = None,
-                on_line=None, cancel=None) -> tuple[bool, str]:
+                on_line=None, cancel=None,
+                environment: str = "docker",
+                specs: Sequence[str] | None = None) -> tuple[bool, str]:
         """`make stack-e2e` — the Playwright suite (tests/e2e) against the
         RUNNING local stack's TLS front door (SNAP_BASE_URL=web_url's port).
         Streams like the other long verbs; Cancel kills the whole process
@@ -927,7 +973,22 @@ class LocalStackNode:
         hugmesh reporter's DURABLE artifact: passed/failed/skipped) is read
         back and reported as ONE honest counts line — never scraped from the
         scrolling list output; a missing summary is reported as exactly that."""
-        problems = self.e2e_ready()
+        from . import e2e_environments as _e2e_env
+        # THE ENVIRONMENT CHANNEL. One contract with the terminal: the chosen
+        # environment rides as SNAP_ENV on the child's environment, which is
+        # exactly what `SNAP_ENV=kind make stack-e2e-bdd-env` sets and what
+        # tests/e2e/steps/world.ts reads. Nothing about the choice is encoded in
+        # the target or in a config file, so there is no second spelling to
+        # drift. plan() also carries the per-environment pins (kind needs the
+        # chromium host-resolver rules; qemu's base URL follows the forwarded
+        # UI port) — restating those here would be that second spelling.
+        try:
+            plan = _e2e_env.plan(environment)
+        except ValueError as exc:
+            return False, str(exc)
+        if not plan.runnable:
+            return False, "\n".join(plan.refusals)
+        problems = self.e2e_ready(environment)
         if problems:
             return False, "\n".join(problems)
         report_rel = os.path.join(
@@ -937,22 +998,45 @@ class LocalStackNode:
         # into the suite — without it every superadmin login 401s on a
         # studio-bootstrapped mesh (spec-28 failure, 2026-08-14). Values ride
         # the subprocess env, never argv.
-        env = {"SNAP_REPORT_DIR": report_rel}
+        # plan.env FIRST, then the report dir and the identity bridge. run_env()
+        # already refuses to let a bridge dict re-point SNAP_ENV, so a caller
+        # cannot make the label say kind while the run drives docker.
+        env = dict(plan.env)
+        env["SNAP_REPORT_DIR"] = report_rel
         env.update(extra_env or {})
-        ok, msg = self._make("stack-e2e", timeout=E2E_TIMEOUT_S,
-                             extra_env=env,
+        # THE SELECTION, on its way to argv. `specs` are Playwright positional
+        # filters (``specs/NN-x.spec.ts``, cwd tests/e2e) chosen in the feature tree;
+        # they ride `make stack-e2e E2E_SPECS=...` so the narrowing is visible in the
+        # spawned command rather than hidden in an environment nobody can see.
+        # EMPTY MEANS EVERYTHING, and only because no selection was made at all —
+        # never as a fallback for a selection that failed to compile: the caller
+        # refuses that case before it reaches here.
+        accepted, rejected = e2e_catalogue.safe_spec_args(specs or ())
+        if rejected:
+            return False, ("refusing to run: these selected paths are "
+                           + e2e_catalogue.SPEC_ARG_REJECT_REASON + " "
+                           + ", ".join(rejected))
+        args = [f"E2E_SPECS={' '.join(accepted)}"] if accepted else []
+        if accepted and on_line is not None:
+            on_line(f"[e2e] running {len(accepted)} selected spec file(s): "
+                    + ", ".join(accepted))
+        ok, msg = self._make(plan.make_target, timeout=E2E_TIMEOUT_S,
+                             extra_env=env, args=args,
                              on_line=on_line, cancel=cancel)
         summary_path = os.path.join(self.generator_dir, "tests", "e2e",
                                     report_rel, "summary.json")
         try:
             with open(summary_path, encoding="utf-8") as fh:
                 s = json.load(fh)
-            line = (f"[e2e] {s.get('passed', 0)} passed, "
+            line = (f"[e2e/{plan.environment}] {s.get('passed', 0)} passed, "
                     f"{s.get('failed', 0)} failed, "
                     f"{s.get('skipped', 0)} skipped — summary: {summary_path}")
         except (OSError, ValueError):
-            line = ("[e2e] no summary.json written (the run ended before the "
-                    "reporter finished) — see the log above.")
+            # The environment tag is on THIS line too, not only the happy one:
+            # a log whose only result line is "no summary" still has to say
+            # which of three meshes the run was pointed at.
+            line = (f"[e2e/{plan.environment}] no summary.json written (the run "
+                    "ended before the reporter finished) — see the log above.")
         if on_line is not None:
             on_line(line)
         return ok, f"{line}\n{msg}"
@@ -1207,7 +1291,33 @@ class LocalStackNode:
                         "last commit (committed objects only; a dirty tree serves "
                         "stale-but-consistent HEAD).")
             on_line("[devops] repo access preflight OK: " + mode)
+        # The add-on selection is validated BEFORE the long verb, and streamed,
+        # for the same reason the two preflights above are: the GUI's streaming
+        # worker drops a returned message, so a reason that is only returned is a
+        # reason the operator never sees. bootstrap-kind.sh refuses an unknown slug
+        # too — but only after cluster-create and the ArgoCD install.
+        addon_problems = validate_kind_addons(self.kind_addons)
+        if addon_problems:
+            if on_line:
+                for p in addon_problems:
+                    on_line(f"[devops] {p}")
+            return False, "\n".join(addon_problems)
+        addon_env = kind_addon_env(self.kind_addons)
+        if on_line:
+            # Say WHICH infra add-ons this run applies, and say it from the value
+            # actually being exported rather than from the picker — a log that
+            # describes the selection instead of the env is how a threading bug
+            # stays invisible. Empty env = the lane's shipped default.
+            on_line("[devops] infra add-ons: "
+                    + (addon_env[KIND_ADDONS_ENV]
+                       if KIND_ADDONS_ENV in addon_env else
+                       "%s (lane default)" % (",".join(kind_addon_default_selection())
+                                              or KIND_ADDONS_NONE)))
+        # extra_env is the wire that was missing: _make has always ACCEPTED it and
+        # this call has always passed None, so nothing the Studio knew about a kind
+        # bring-up could reach bootstrap-kind.sh.
         return self._make("kind-up", timeout=DEVOPS_UP_TIMEOUT_S,
+                          extra_env=addon_env,
                           on_line=on_line, cancel=cancel)
 
     def devops_running(self) -> bool:

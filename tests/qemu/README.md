@@ -30,7 +30,7 @@ emulation). Pass `--keep` and SSH in to drive a real `kubeadm init` manually.
 sudo emerge -av \
     app-emulation/qemu \      # USE="qemu_softmmu_targets_aarch64"
     sys-fs/dosfstools \       # mkfs.vfat
-    sys-fs/e2fsprogs          # mkfs.ext4
+    sys-fs/e2fsprogs          # mkfs.ext4 (>= 1.43, for -d) + debugfs
 # mtools is optional (lets make-test-keys.sh build the FAT image without root)
 ```
 
@@ -43,7 +43,10 @@ Ensure QEMU is built with the aarch64 system target
 # 1. Build an image first (kernel must be built — do NOT pass --skip-kernel)
 ./build-rpi5-stage4.sh --role pki
 
-# 2. Run the test (root: it loop-mounts and extracts a stage4 with xattrs)
+# 2. Run the test. Root is needed to extract a stage4 with its ownership and
+#    security.* xattrs intact — NOT for a loop mount: since 2026-08-26 the
+#    rootfs is populated with `mkfs.ext4 -d`, so stage4 mode takes no loop
+#    device and holds no mount for the boot+assert window.
 sudo ./tests/qemu/run-qemu-test.sh --role pki
 ```
 
@@ -59,7 +62,8 @@ runner polls until `--timeout`. Console output is captured to
 | File | Purpose |
 |---|---|
 | `run-qemu-test.sh` | Pi: orchestrates build disks, boot QEMU, wait for SSH, assert, power off (root). |
-| `run-qemu-e2e.sh` | Node E2E: boot a role image + run the Playwright suite against the forwarded UI (root). |
+| `run-qemu-e2e.sh` | Node E2E: boot a role image + run the **Playwright** suite against the forwarded UI (root to boot; `--list` / `--dry-run` need none). |
+| `qemu-e2e-lane_test.sh` | Hermetic tests for that lane's `--list`, `--dry-run`, non-root refusal and the `make e2e`/`e2e-list` argv (no boot, no docker, no root — and **no skip under uid 0**: the refusal legs use a proven `id -u` shim). |
 | `verify-client.sh` | Client desktop: non-root boot + console-assertion verification (laptop/chromebook/desktop). |
 | `launch-x86.sh` | Boot a self-booting x86 `.img` under OVMF/KVM (`--gpu`, `--keys-img`, `--run-dir`). |
 | `launch-pi.sh` | Boot a Pi **golden `.img`** under `-M virt` with a KEYS disk (`--kernel` loaded directly — QEMU has no BCM2712 model; it takes no `--stage4`, that is `run-qemu-test.sh`'s input). |
@@ -82,6 +86,7 @@ mesh code cut out (pinned that way in `mesh-cluster_test.sh`).
 | `avc-workload.sh` | The in-guest probe list (one probe per workload the `specs/selinux/*.te` modules confine; presence-gated = role-appropriate). |
 | `avc-report.sh` | Groups a raw AVC harvest by source type → the owning `specs/selinux/*.te` (hermetic text processing). |
 | `avc-workout_test.sh` | Hermetic tests + mutation legs for the whole workout lane (nothing boots; also run by `check.sh`'s smokes). |
+| `stage4_rootfs_test.sh` | Hermetic tests + mutation legs for the stage4 rootfs lane: `build_rootfs()` driven against fixture tarballs with `mount`/`umount`/`losetup` stubbed to fail loudly, and `assertions.sh`'s rootfs-is-labelled precondition (nothing boots, no root; also run by `check.sh`'s smokes). |
 
 ## 3-node emulated k8s cluster (`mesh-cluster.sh`, issue #48)
 
@@ -192,6 +197,54 @@ make avc-workout PLATFORM=x86 ROLE=pki ENFORCING=1 WORK_DIR=...
 Artifacts land in `out/qemu-runs/avc/<platform>_<role>_<ts>/` (`report.txt`,
 `avc-raw.txt`, `probes.log`, `semodule-l.txt`, `selinux-modules.status`,
 `keys-provision.log`, `launch/console.log`).
+
+## Enumerating the Playwright lane (`run-qemu-e2e.sh --list`)
+
+`--list` answers "what would this lane actually run?" without booting anything: it
+emits one JSON document holding the resolved boot plan (target, role, ports,
+base URL, the artifacts it found or `null` for the ones it did not) **and** the
+Playwright spec tree, then exits.
+
+```bash
+make e2e-list                                   # ROLE/ARCH as usual
+make e2e-list E2E_ARGS='--grep @smoke'          # what would that narrowing run?
+make e2e      E2E_ARGS='--grep @smoke'          # and the real (root) boot, narrowed
+tests/qemu/run-qemu-e2e.sh -w /srv/img --list -- specs/01-frontpage.spec.ts
+```
+
+`E2E_ARGS` reaches Playwright through the `--` separator both targets render. That
+separator is **not optional here**, unlike `make stack-e2e` where `npx playwright
+test` is the direct consumer: this lane interposes a shell script whose parser
+hard-errors on any word it does not recognise, so a bare `--grep @smoke` — or a bare
+spec path — is `Unknown arg`, not a passthrough. `make e2e` shipped without it on
+2026-08-26 and was dead for every value; `qemu-e2e-lane_test.sh` now renders both
+targets with `make -n` and feeds the result to the real parser.
+
+It needs **no root, no image and no network**: it runs before the artifact
+autodetect, so a tree that has built nothing still describes the lane. The spec half
+is `playwright test --list --reporter=json`; `--reporter=json` is **forced**, because
+a bare `--list` under this config's reporter array still fires every file writer and
+would clobber the last real run's `junit.xml`/`report.json`/`summary.json` in
+`SNAP_REPORT_DIR`. Measured 2026-08-26: 33 spec files / 221 tests enumerated, and
+`SNAP_REPORT_DIR` left empty. When `tests/e2e/node_modules` is missing the spec half
+skips **loudly and by name** (`playwright_skipped` in the JSON, plus a line on
+stderr) and the boot-plan half still answers.
+
+## Why this lane refuses instead of calling `sudo`
+
+Booting needs uid 0 — `launch-x86.sh`/`launch-pi.sh` loop-mount the golden image to
+lift its kernel out of the boot partition. `run-qemu-e2e.sh` never invokes `sudo`:
+the Studio drives it, and a GUI cannot answer an interactive password prompt. Its
+refusal instead names the three real routes — `--list`/`--dry-run` (no root), the
+**privileged container** the device-test lane already uses for this same constraint
+(`make qemu-docker-image`, then `docker run --privileged … --entrypoint …`), or a
+shell that is already root.
+
+The container path is **not automatic yet**, and the reason is written in the script:
+`docker/Dockerfile.qemu-runner` deliberately keeps the guest's port forwards inside
+the container and ships no Node, so the browser half would have to run on the host
+against a published `--ui-port` while phases 1-3 run inside. That is a new entrypoint,
+and it cannot be verified without booting a guest.
 
 ## Client desktop images (`verify-client.sh`)
 

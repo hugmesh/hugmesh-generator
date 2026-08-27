@@ -17,12 +17,73 @@
 # into an error. tests/scripts/test-guard-integrity.sh check 7 counts these names
 # and pins the total, so neither adding nor dropping one can be silent.
 #
+# ...WITH ONE HOLE, and it is named here rather than left to be discovered. check 7
+# builds its census by walking tests/ for files called test-*.sh, so the *_test.sh
+# convention that tests/qemu/ and tests/menu/ use is outside that census entirely.
+# tests/qemu/kernel_extract_test.sh below IS gated by this file, but it does not
+# move check 7's number and neither would deleting it — the pin cannot see it. The
+# other eight suites on that convention are gated NOWHERE and counted nowhere:
+#   tests/menu/build_menu_cmd_test.sh      tests/qemu/devices_test.sh
+#   tests/menu/ncurses_charset_test.sh     tests/qemu/mesh-cluster_test.sh
+#   tests/qemu/assertions_test.sh          tests/qemu/save_test.sh
+#   tests/qemu/avc-workout_test.sh         tests/qemu/verdict_test.sh
+# That is the same "in NEITHER place" hole the 2026-08-22 sweep closed for the
+# test-*.sh convention, re-opened by a naming difference. Closing it means running
+# each of the eight in a CI image first to decide gated-vs-documented (the
+# measure-by-execution rule above), and widening check 7's census so the number
+# stays honest afterwards. Deliberately NOT bundled into the PR that added the
+# suite below: that PR fixes a harness defect, and this is a coverage change that
+# has to be measured on its own.
+#
 # NOT LISTED HERE (deliberate, with reasons). Every suite on disk is either listed
 # above or listed here: six were in NEITHER place until 2026-08-22, which made this
 # very block's claim false. Each of the six was then RUN in alpine:3 to decide
 # which it was -- three are now gated, three are below.
+# THE SECOND NAMING CONVENTION (2026-08-26). The 2026-08-22 sweep below closed the
+# "in NEITHER place" hole for suites named `test-*.sh`. A naming difference reopened
+# it the same week: tests/qemu/ and tests/menu/ name their suites `*_test.sh`, and
+# check 7's census walked for `test-*.sh` only. Eight suites were therefore counted
+# nowhere and gated nowhere -- invisible to the very number that exists to make this
+# gap visible. tests/qemu/verdict_test.sh was one of them: it exists to stop the QEMU
+# matrix reporting PASS rows whose assertions.log holds real FAILs, and it could not
+# stop a merge. Seven of the eight are gated in the alpine job below and one in the
+# node job; each was EXECUTED in that image first, and each was then MUTATION-TESTED
+# there -- a real defect planted in the production script it covers -- so "it passes"
+# is not being confused with "it asserts something". The census in
+# tests/scripts/test-guard-integrity.sh now matches BOTH spellings, and its negative
+# control (j) plants an orphaned `*_test.sh` to prove the walker really reaches the
+# second one.
+#
+# ONE OF THE EIGHT IS NOT IN THE ALPINE JOB, ON PURPOSE.
+#   * tests/menu/ncurses_charset_test.sh -> the NODE job.
+#       Its central assertion ("after transliteration, no byte above 0x7F survives")
+#       is a `grep -P`, and alpine:3 ships busybox grep, which has no -P: it exits 2
+#       with a usage message, the `if` reads false, and the suite records a PASS.
+#       Measured with the ⚙ mapping deleted from scripts/build-menu.sh: alpine 20
+#       passed / 0 failed (VACUOUS), node:24-alpine -- which apk-installs GNU grep
+#       3.12 -- 19 passed / 1 failed. The node job's preflight now asserts `grep -P`
+#       works, so that dependency cannot rot back into a silent skip.
+#   The other seven run correctly on alpine:3 with the package line below and need
+#   nothing it does not install: no QEMU, no docker, no root, no sibling checkout.
+#   Two of them (avc-workout_test.sh, mesh-cluster_test.sh) are alpine-ONLY -- they
+#   are RED in node:24-alpine, which has no make/gawk/util-linux (31/9 and 137/27).
+#
+# NOT LISTED HERE (deliberate, with reasons). Every suite on disk -- under EITHER
+# naming convention -- is either listed above or listed here: six were in NEITHER
+# place until 2026-08-22 and eight more until 2026-08-26, which made this very
+# block's claim false both times. Each was then RUN in a CI image to decide which it
+# was -- of the first six, three are now gated and three are below; all eight of the
+# second batch are gated.
 #   * tests/scripts/test-liquibase-grant-roles.sh
-#       python:3.12-slim + perl/PyYAML, with /home/magus/Github mounted and SERVICE_SRC_ROOT set
+#       python:3.12-slim + perl/PyYAML, with the checkout parent mounted and SERVICE_SRC_ROOT set
+#   * tests/scripts/test-optional-service-slug-closure.sh
+#       the hugmesh-admin-bff-api sibling checkout, for the fifth surface (the
+#       controller's OptionalServiceRegistry). A hosted runner cannot clone the
+#       org-private repo, and the suite reports INCOMPLETE and FAILS rather than
+#       checking four surfaces of five and calling that a pass — so listing it here
+#       would just paint the PR gate red for a missing clone rather than a real
+#       defect. It IS gated post-merge by .gitlab-ci.yml's
+#       lint:optional-service-slug-closure, which clones it sparsely.
 #   * tests/scripts/test-service-env-contract.sh
 #       alpine:3 + apk add bash python3 py3-yaml, PLUS the 9 first-party BFF checkouts mounted and SERVI
 #   * tests/scripts/test-eso-target-collisions.sh
@@ -34,6 +95,16 @@
 #       alpine:3 has neither docker nor podman and no daemon socket is mounted
 #   * tests/device-registry/test-layer-a-headscale-acl.sh
 #       the hugmesh-admin-bff-api sibling checkout, for the BFF-side Layer-A compiler
+#   * tests/stack/test-gateway-auth-flag-parity.sh
+#       the hugmesh-gateway sibling checkout. It compares the EFFECTIVE auth-carrier
+#       flags on the two lanes, and "effective" means resolving each key through the
+#       IMAGE DEFAULT in hugmesh-gateway/src/main/resources/application.yml
+#       (bff-exchange defaults FALSE, bff-session defaults TRUE — so "set on one side
+#       only" means opposite things for the two keys and a presence check would be
+#       wrong in both directions). A hosted runner cannot clone the org-private repo,
+#       and the suite reports INCOMPLETE and FAILS rather than degrading, so listing
+#       it here would just paint the PR gate red. It IS gated post-merge by
+#       .gitlab-ci.yml's lint:gateway-auth-flag-parity, which clones it.
 #   * tests/stack/test-m2-bootstrap.sh
 #       the ${STACK_SRC:-.stack-src} consumer checkouts its pin-drift leg walks
 #       (`make stack-clone`), or M2_PIN_DRIFT_SKIP=1
@@ -45,6 +116,28 @@
 #       systems.hugmesh -> net.hugmesh package move (#141), and census_files()
 #       used `grep --exclude-dir`, which busybox does not have, so on alpine the
 #       census came back empty and reported nine false "blind spots".
+#   * tests/scripts/test-kind-metrics-api.sh
+#       structurally SKIP-ONLY here, MEASURED IN THIS IMAGE (2026-08-26,
+#       integration): `docker run --rm --network host alpine:3` + this job's apk
+#       set, then `bash tests/scripts/test-kind-metrics-api.sh` -> "SKIP kubectl is
+#       not on PATH", rc=0, zero assertions run. It asks a LIVE kind cluster
+#       whether metrics.k8s.io answers and whether a named HPA has stopped
+#       reporting <unknown>; no hosted runner has a cluster and this image has no
+#       kubectl, so listing it would raise the coverage number by one while gating
+#       exactly nothing — the inflation this block exists to prevent. NOT a
+#       claim that it passes: measured on a box WITH a kind cluster up but without
+#       metrics-server synced it goes RED (2 failures), which is the suite working.
+#       Run it after `make kind-up` (or `make kind-metrics-check`). Its OFFLINE
+#       half — the whole selection channel — IS gated, as
+#       tests/scripts/test-kind-addon-channel.sh.
+#   * tests/scripts/test-federation-module-slugs.sh
+#       leg A runs the federation_modules registration gate against the REAL
+#       hugmesh-federation-api Liquibase changelog, which is a sibling checkout this
+#       workflow does not have; with it absent the suite reports leg A UNVERIFIED and
+#       exits 3 (its hermetic mutation legs still all pass). That is the honest answer
+#       and not a gateable one, so it gates on GitLab instead
+#       (lint:federation-module-slugs-gate-honesty clones the sibling first). Same
+#       shape and same reason as tests/egress-vpn/test-secret-contract.sh above.
 #   * tests/pentest/nuclei/test-templates.sh
 #       RED on issue #146; also needs a pinned nuclei v3.9.0 the CI images do not
 #       carry. #157 may already have fixed it (the failing check was a
@@ -75,7 +168,7 @@ jobs:
     container:
       image: alpine:3
     steps:
-      - run: apk add --no-cache bash coreutils curl flock gawk git helm jq make nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 util-linux xz
+      - run: apk add --no-cache attr bash coreutils curl e2fsprogs-extra flock gawk git helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xz
       - uses: actions/checkout@v4
       - name: trust the workspace
         # Container jobs run as root against a checkout git considers foreign, so
@@ -92,18 +185,35 @@ jobs:
           # If the install step ever silently degrades, the whole job would go green
           # having asserted almost nothing. Fail here instead.
           missing=""
-          for b in bash jq openssl python3 git make flock gawk; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+          # mcopy/minfo/mformat (mtools) + sfdisk (util-linux) + cmp are what
+          # tests/qemu/launch_pi_kernel_test.sh builds its fixture image with. That
+          # suite exits 2 with a named reason when they are absent rather than
+          # exiting 0, so it cannot go quietly inert — but a missing package here
+          # would still cost the whole job that suite, so name it at the door.
+          for b in bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
-          echo "preflight ok: bash jq openssl python3 git make flock gawk"
+          echo "preflight ok: bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp"
       - name: run suites
         shell: bash
         run: |
+          # tests/qemu/role_topology_test.sh is the ONE tests/qemu suite listed here.
+          # That family is named <thing>_test.sh, and test-guard-integrity.sh discovers
+          # only test-*.sh (:89), so NOTHING in tests/qemu/ has ever been counted by
+          # check 7 or gated by this workflow — it is a blind spot, not a decision, and
+          # it is why a role_topology suite added under the house naming would have sat
+          # inert exactly like DAST did. This one is hermetic (no guest, no image, no
+          # loop device; bash + sed + grep + cmp only), so it is cheap to gate and there
+          # is no reason not to. Its neighbours (verdict_test.sh, assertions_test.sh,
+          # devices_test.sh, save_test.sh, mesh-cluster_test.sh, avc-workout_test.sh)
+          # remain ungated — they were NOT measured in this image and are not being
+          # claimed as covered here.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
             tests/auto-update/test-update-poller.sh
             tests/boot/test-kubelet-join-bootstrap.sh
             tests/cloud-deploy/test-cloud-deploy-driver.sh
+            tests/cluster/test-bootstrap-applies-baked-apps.sh
             tests/desktop-governance/test-desktop-sudo-mapper.sh
             tests/desktop-governance/test-gen-sso-session-start.sh
             tests/desktop-governance/test-provision-desktop-governance.sh
@@ -117,10 +227,12 @@ jobs:
             tests/egress-vpn/test-vpn-mark.sh
             tests/egress-vpn/test-vpn-secret-projector.sh
             tests/egress-vpn/test-x86-role-gate.sh
+            tests/federation/test-federation-modules-selection.sh
             tests/go-live/test-go-live-driver.sh
             tests/go-live/test-go-live-reconcile-verify.sh
             tests/keystores/test-keystores-external-ca.sh
             tests/keystores/test-keystores.sh
+            tests/menu/build_menu_cmd_test.sh
             tests/node-storage/test-bake-coverage.sh
             tests/node-storage/test-degrade.sh
             tests/node-storage/test-pool-entrypoint.sh
@@ -128,6 +240,18 @@ jobs:
             tests/pentest/test-dast-honesty.sh
             tests/phone/test-make-phone-face.sh
             tests/phone/test-mdm-providers.sh
+            tests/qemu/loop_preflight_test.sh
+            tests/qemu/stage4_rootfs_test.sh
+            tests/qemu/kernel_extract_test.sh
+            tests/qemu/launch_pi_kernel_test.sh
+            tests/qemu/role_topology_test.sh
+            tests/qemu/assertions_test.sh
+            tests/qemu/avc-workout_test.sh
+            tests/qemu/devices_test.sh
+            tests/qemu/mesh-cluster_test.sh
+            tests/qemu/save_test.sh
+            tests/qemu/verdict_test.sh
+            tests/qemu/qemu-e2e-lane_test.sh
             tests/scripts/test-anubis-env-gate.sh
             tests/scripts/test-arm-ro-distdir.sh
             tests/scripts/test-binpkg-pool-fingerprint.sh
@@ -158,21 +282,26 @@ jobs:
             tests/scripts/test-image-builder-always-on.sh
             tests/scripts/test-installer-ui-node-default.sh
             tests/scripts/test-kernel-artifact-cache.sh
+            tests/scripts/test-kind-addon-channel.sh
             tests/scripts/test-kind-bootstrap-honesty.sh
             tests/scripts/test-kind-profile-app-closure.sh
+            tests/scripts/test-kind-profile-route-closure.sh
             tests/scripts/test-lsm-posture-honesty.sh
             tests/scripts/test-no-duplicate-env.sh
             tests/scripts/test-nullmailer-cross-postinst.sh
             tests/scripts/test-outbound-mtls-client.sh
+            tests/scripts/test-password-reset-front-door.sh
             tests/scripts/test-platform-key-spelling.sh
             tests/scripts/test-portage-config-sync.sh
             tests/scripts/test-provision-manifest-injection.sh
             tests/scripts/test-publish-images.sh
             tests/scripts/test-reserved-prefix-copy-gate.sh
+            tests/scripts/test-route-access-oracle.sh
             tests/scripts/test-rpi5-builder-input-validation.sh
             tests/scripts/test-rpi5-per-board-pkgdir.sh
             tests/scripts/test-shared-build-assets.sh
             tests/scripts/test-spec-use-parity.sh
+            tests/scripts/test-stack-e2e-argv.sh
             tests/scripts/test-studio-launch.sh
             tests/scripts/test-sunshine-fence.sh
             tests/scripts/test-tools-path-lib.sh
@@ -183,8 +312,10 @@ jobs:
             tests/stack/test-front-door-client-surface.sh
             tests/stack/test-no-store-posture.sh
             tests/stack/test-optional-services-exclude.sh
+            tests/stack/test-optional-services-parity.sh
             tests/stack/test-probe-auth-surface.sh
             tests/stack/test-tls-front.sh
+            tests/stack/test-tube-media-signed-gate.sh
           "
           # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
           # suite's status and silently forgives every earlier one — that is defect
@@ -265,6 +396,7 @@ jobs:
             tests/scripts/test-eso-provider-refs.sh
             tests/scripts/test-eso-seed-contract.sh
             tests/scripts/test-first-run-lib.sh
+            tests/scripts/test-fragment-route-target.sh
             tests/scripts/test-gitlab-ci-wellformed.sh
             tests/scripts/test-headscale-oidc-secret-staging.sh
             tests/scripts/test-mfa-raw-jwt-posture.sh
@@ -347,13 +479,24 @@ jobs:
           for b in bash jq openssl python3 git node; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
           [ -d scripts/tooling/node_modules/handlebars ] || { echo "::error::handlebars absent — the drift gate would render nothing"; exit 1; }
-          echo "preflight ok: bash jq openssl python3 git node handlebars"
+          # PCRE grep. tests/menu/ncurses_charset_test.sh proves the menu's non-UTF-8
+          # transliteration leaves NO byte above 0x7F, and the only assertion that can
+          # say so is `grep -P '[^\x00-\x7F]'`. busybox grep has no -P: it exits 2 with
+          # a usage message, the `if` reads false, and the suite records a PASS having
+          # checked nothing. MEASURED 2026-08-26 on alpine:3 with a real regression
+          # planted (the ⚙ mapping deleted from scripts/build-menu.sh): alpine 20
+          # passed / 0 failed, this image 19 passed / 1 failed. That is why the suite
+          # lives in THIS job and not the alpine one, and why its dependency is
+          # asserted here instead of assumed.
+          printf '\303\251\n' | grep -P '[^\x00-\x7F]' >/dev/null || { echo "::error::grep has no working -P — ncurses_charset_test.sh's non-ASCII assertion would pass vacuously"; exit 1; }
+          echo "preflight ok: bash jq openssl python3 git node handlebars grep-P"
       - name: run suites
         shell: bash
         run: |
           SUITES="
             tests/domain-registry/test-domain-reconcile-fuzz.sh
             tests/domain-registry/test-templating-rename-pr.sh
+            tests/menu/ncurses_charset_test.sh
           "
           # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
           # suite's status and silently forgives every earlier one — that is defect

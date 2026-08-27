@@ -22,12 +22,49 @@ already-known services.
 
 On every request the gateway:
 1. loads its access rules (Cassandra cache, backed by Postgres at boot),
-2. matches the request path against `url_pattern` for **its** gateway,
-3. **allows only if** the caller's Casdoor roles (or pinned user) match an
-   `allow` rule; otherwise 403. Casdoor's own login UI is **never** exposed through
-   a gateway; the only unauthenticated login surface is the native `POST /bff/login`
-   (permitAll at the BFF, seeded open so an anonymous browser can sign in), alongside
-   the public `/api/auth`,`/login`,`/api/registration` paths seeded as `ROLE_USER`.
+2. matches the request path against `url_pattern` for **its** gateway, taking the
+   **longest** matching pattern (`GatewayRouteAccessService.decide()` compares
+   `url_pattern.length()`),
+3. among the rows at that winning pattern, applies **deny-wins**: a satisfied
+   `allow = false` row 403s regardless of any allow row beside it; a `role = PUBLIC`
+   allow row admits with no Casdoor check at all.
+
+Casdoor's own login UI is **never** exposed through a gateway; the only
+unauthenticated login surface is the native `POST /bff/login` (permitAll at the BFF,
+seeded open so an anonymous browser can sign in), alongside the public
+`/api/auth`,`/login`,`/api/registration` paths seeded as `ROLE_USER`.
+
+### ⚠ "No matching row" is NOT a denial. Three verdicts, not two.
+
+This section used to read "**allows only if** … otherwise 403", and that sentence
+was wrong in a way that cost real time. `Decision` has **three** values:
+
+| situation | verdict | what the filter does |
+|---|---|---|
+| a matching row the caller satisfies | `ALLOW` | forward |
+| a matching row the caller does **not** satisfy, or a satisfied `allow=false` row | `DENY` | **403** + `X-Route-Denied: <gateway>:<path>` |
+| **no matching `url_pattern` at all** | `NO_RULE` | **forward** — the path is simply not governed here |
+
+`GatewayRouteAccessService.decide()` returns `Decision.NO_RULE` for an unmatched
+path and `GatewayRouteAccessFilter` rejects **only** on `== Decision.DENY` (its
+class javadoc: *"ALLOW / NO_RULE → forward. NO_RULE means the path isn't governed
+by any rule at this gateway, so the coarse SecurityConfig gate (already passed) is
+the authority."*).
+
+Consequences, both of which have bitten:
+
+* **A routed path with no governing row is reachable, not walled.** There is no
+  `/bff/**` floor row on `hugmesh-fe-gateway` today, so any `/bff/<unnamed>` subpath
+  is `NO_RULE` and forwards to admin-bff, whose own `SecurityConfig` is the only
+  authority left. Do not read "not in the seed" as "denied".
+* **A test oracle that collapses `NO_RULE` into `DENY` manufactures confidence.**
+  `tests/e2e/specs/rbac-route-access.ts` did exactly that while its hand-copied
+  table had drifted to 11 of the seed's 77 fe rows — so it answered `DENY` for
+  every `/bff/user/**` profile and password path the real gateway `ALLOW`s, and six
+  RBAC spec files asserted against it and stayed green. That table is now
+  **generated** from `20-schema.sql` by `scripts/gen-route-access-oracle.py`, gated
+  by `tests/scripts/test-route-access-oracle.sh`, and the oracle returns the third
+  verdict.
 
 Each gateway is pointed at the store via `ROUTE_ACCESS_R2DBC_URL`
 (set in `apps/20-gateway-*.yaml`).

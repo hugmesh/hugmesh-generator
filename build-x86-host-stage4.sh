@@ -49,6 +49,15 @@ source "${SCRIPT_DIR}/scripts/_shared-assets-lib.sh"
 # misses instead of silently reusing artifacts signed by a retired key.
 # shellcheck source=scripts/_kernel-cache-lib.sh
 source "${SCRIPT_DIR}/scripts/_kernel-cache-lib.sh"
+# OPTIONAL-SERVICE gate: gate_optional_services() + every _opt_* helper/renderer
+# (prune, ConfigMap + 13a ApplicationSet install flags, OptionalService CR seed,
+# the anubis ENV decision and the public-ingress PoW reroute). ONE definition
+# shared with build-rpi5-stage4.sh. This file previously carried its own copy,
+# which was MISSING the 13a flag render and the anubis handling entirely, and ran
+# the edge-ai-analysis dependsOn guard BEFORE EXCLUDE_SERVICES subtracted. See
+# the lib header for the observed symptoms of all three.
+# shellcheck source=scripts/_optional-services-lib.sh
+source "${SCRIPT_DIR}/scripts/_optional-services-lib.sh"
 # Seed-derived PYTHON_TARGETS/PYTHON_SINGLE_TARGET (pt_apply_seed_targets).
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
@@ -125,6 +134,52 @@ GAMES_DOMAIN="games.hugmesh.net"
 # infra slugs egress-vpn / tor / workloadConsole / anubis). It is what
 # OPTIONAL_SERVICES=all / --all-services expands to.
 USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio character-forge"
+# ── The FULL registry mirror, for FAIL-CLOSED slug validation (2026-08-26) ────
+# Until this landed, --optional-services took ANY string. The selection is only
+# ever consumed by `_opt_selected` (a bare string compare inside
+# gate_optional_services' hardcoded slug loop), so a slug that is not in that loop
+# simply never matches anything: `--optional-services akoma` (one k) built an image
+# with NO Akkoma and printed nothing, and `--optional-services metrics-server`
+# looked accepted while gating nothing at all. Its sibling knob MANAGED_SERVICES
+# has failed closed on an unknown id since it shipped (validate_managed_services /
+# _mgd_die); this is that same treatment for the optional-services path.
+#
+# All THREE lists MIRROR specs/cluster/optional-services.yaml and are asserted
+# set-equal against it by tests/stack/test-optional-services-exclude.sh, so they
+# cannot rot into a comment:
+#   KNOWN_OPTIONAL_SERVICES      = every `slug:` in the registry (spec.services).
+#   GATED_OPTIONAL_SERVICES      = the subset whose registry row has `gate:` != none,
+#                                  i.e. the ones something reads SOMEWHERE.
+#   SELECTABLE_OPTIONAL_SERVICES = the subset whose registry row lists x86 in its
+#                                  `buildGate:` column — the ones THIS builder
+#                                  actually reads out of OPTIONAL_SERVICES.
+#
+# SELECTABLE, not GATED, is what --optional-services must gate on, and the gap
+# between the two is not academic. `gate: runtime` says IN AS MANY WORDS that a
+# row has no build-time consumer: coturn/meshbridge are turned on by flipping
+# their key in the installed-services ConfigMap + the 13a element on a LIVE
+# cluster, and no builder can bake them. anubis USED to be worse — it had a
+# build-time consumer in build-rpi5-stage4.sh (_opt_anubis_installed) and NONE
+# here, so a consumer set unioned over both builders reported it as gated when
+# this builder would silently drop it. The shared-gate extraction closed that:
+# _opt_anubis_installed now resolves here from scripts/_optional-services-lib.sh,
+# anubis IS in this column, and the registry's buildGate: says [rpi5, x86].
+# Gating on `gate: != none` still accepts coturn/meshbridge, which this script
+# honours nowhere, so SELECTABLE stays strictly narrower than GATED. Each refusal
+# below names the reason and the lever that DOES work.
+KNOWN_OPTIONAL_SERVICES="akkoma tuwunel phpbb games tube owncast character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts coturn meshbridge egress-vpn tor workloadConsole headwind attestation-server anubis metrics-server keda kyverno observability service-catalog-builder optional-services-operator"
+GATED_OPTIONAL_SERVICES="akkoma tuwunel phpbb games tube owncast character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts coturn meshbridge egress-vpn tor workloadConsole headwind attestation-server anubis"
+SELECTABLE_OPTIONAL_SERVICES="akkoma tuwunel phpbb games tube owncast character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts egress-vpn tor workloadConsole headwind attestation-server anubis"
+# DESELECTABLE_OPTIONAL_SERVICES = the subset for which the `-<slug>`/`no-<slug>`
+# EXPLICIT-DESELECT spelling has a real consumer. Exactly one slug does, and the
+# reason is structural rather than historical: the spelling is read ONLY by
+# _opt_anubis_installed(), because anubis is the ONLY slug whose install decision
+# is ENV-conditional (prod-on/test-off) instead of plain presence. For every other
+# slug, absence from OPTIONAL_SERVICES already means "off", so `-games` matches no
+# arm and is dropped on the floor — on BOTH builders, not just this one.
+# Asserted set-equal to the slugs scripts/_optional-services-lib.sh really passes
+# to _opt_explicitly_deselected, so it cannot rot into a comment.
+DESELECTABLE_OPTIONAL_SERVICES="anubis"
 # OPTIONAL services selected on this image (subset of USER_LEVEL_SERVICES).
 #   DEFAULT-ON  (the built-in default when NO selection is given): akkoma tuwunel phpbb.
 #   DEFAULT-OFF (must be specifically added): games owncast tube character-studio
@@ -274,8 +329,12 @@ LOCAL_USER_PASS=""      # --local-pass PASS : plaintext; hashed at build, never 
 # NO bundled generator source or brand-repo templates, and NO k8s/mesh package
 # payload or config remnants. The result is a plain hardened Gentoo desktop.
 # Preset by the `standalone-unaffiliated` role arm; composable onto any client/
-# standalone role with --unaffiliated. Brand/branding/seed-code/mesh/SSO flags
-# CONFLICT with it (hard error) — unaffiliated means no brand identity at all.
+# standalone role with --unaffiliated. Brand-IDENTITY (--brand/--brand-title/--org/
+# --brand-logo/--brand-locked), seed-code, mesh and SSO flags CONFLICT with it (hard
+# error). The LOOK flags (--theme/--branding-dir/--wallpaper/--grub-background/
+# --grub-theme/--login-background/--accent-color/--color-scheme) do NOT: since the
+# 2026-08-26 "split identity from look" decision they are allowed and are baked under
+# neutral names — unaffiliated means no brand IDENTITY, not no wallpaper.
 UNAFFILIATED=false      # --unaffiliated : plain Gentoo desktop, no HugMesh affiliation
 MEDIA_DATA_FORCED=""    # ''|on|off — tracks an explicit --media-data/--no-media-data
                         #   (unaffiliated defaults media-data OFF unless forced on)
@@ -444,6 +503,10 @@ BUNDLE_SOURCE=""
 # --brand-logo/--accent-color/--color-scheme flags override single pieces on top.
 # Everything is baked by hugmesh-branding at build time and stays user-changeable
 # afterwards UNLESS --brand-locked is set (managed image). Empty => stock look.
+# UNAFFILIATED: these flags are ALLOWED (2026-08-26 decision) except --brand-logo and
+# --brand-locked, and the whole lane is renamed on the way into the image — the applier
+# ships as /usr/sbin/branding, the assets as /etc/gentoo/branding. See the naming table
+# beside BRAND_GRUB_BG_STAGED for the full old->new map.
 BRANDING_THEME=""        # --theme NAME (bundled preset dir name)
 BRANDING_DIR=""          # --branding-dir DIR (full brand dir)
 BRAND_WALLPAPER=""       # --wallpaper FILE
@@ -582,12 +645,28 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             games/owncast/tube/character-studio/character-forge are
                             DEFAULT-OFF.
                             (env/brand.conf: OPTIONAL_SERVICES; =all = the full set)
+                            FAIL-CLOSED since 2026-08-26: a slug this builder
+                            cannot honour ABORTS the build instead of being
+                            silently ignored. Three refusals, each with its own
+                            reason and next step: (1) an UNKNOWN slug (a typo);
+                            (2) a slug the registry marks "gate: none" —
+                            registered, read by nothing anywhere; (3) a slug whose
+                            registry 'buildGate:' omits x86 — coturn, meshbridge
+                            and anubis are RUNTIME-ONLY here (anubis is baked by
+                            build-rpi5-stage4.sh only), so they are flipped on a
+                            LIVE cluster via the installed-services ConfigMap +
+                            apps/13a element, never by --optional-services. The
+                            '-<slug>'/'no-<slug>' deselect spelling is rpi5-only
+                            and is refused too — use --exclude-services. Same
+                            rules for --exclude-services' own tokens.
       --all-services        Bake EVERY user-level OPTIONAL service — the FULL-SET
                             shortcut, equivalent to --optional-services all.
                             EXCLUDE_SERVICES still subtracts (e.g. --all-services
                             --exclude-services "games" bakes everything but games).
                             NOTE: the INFRA-level slugs (egress-vpn, tor,
                             workloadConsole, anubis) are NOT included by "all".
+                            anubis/coturn/meshbridge are not selectable here at
+                            all — see the fail-closed note above.
       --exclude-services "<slugs>"
                             The SUBTRACTIVE build-time exclusion list: force-OFF
                             these user-level slugs no matter how they were selected
@@ -677,8 +756,15 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             GRUB titles/ISO volids/UKI/installer text derived
                             from a forced neutral brand), no hugmesh-* tools
                             or /etc/hugmesh markers, no bundled generator
-                            source, no k8s/mesh payload. Brand/branding/
-                            seed-code/mesh/SSO flags HARD-CONFLICT with it.
+                            source, no k8s/mesh payload. Brand-IDENTITY
+                            (--brand/--brand-title/--org/--brand-logo/
+                            --brand-locked), seed-code, mesh and SSO flags
+                            HARD-CONFLICT with it. The LOOK flags (--theme/
+                            --branding-dir/--wallpaper/--grub-background/
+                            --grub-theme/--login-background/--accent-color/
+                            --color-scheme) are ALLOWED and are baked under
+                            neutral names (/usr/sbin/branding,
+                            /etc/gentoo/branding).
                             (role standalone-unaffiliated presets this at the
                             thick/Plasma weight.)
       --capable             Pull the "most capable" Plasma workstation package
@@ -1090,7 +1176,16 @@ OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
 # `all`, not `all akkoma`). Mirrors build-rpi5-stage4.sh.
 case " ${OPTIONAL_SERVICES} " in
     *" all "*)
+        # Carry the EXPLICIT-DESELECT tokens across the expansion. `all` is a
+        # positive allow-list; "-anubis"/"no-anubis" is not a member of that set,
+        # and replacing the whole token list used to DROP it — so `all -anubis`
+        # shipped a prod image with the PoW shield up and said nothing. The rule
+        # for what counts as a negative token lives in _opt_negative_tokens()
+        # (scripts/_optional-services-lib.sh) so both builders cannot drift on it.
+        _opt_neg="$(_opt_negative_tokens)"
         OPTIONAL_SERVICES="${USER_LEVEL_SERVICES}"
+        OPTIONAL_SERVICES="${OPTIONAL_SERVICES}${_opt_neg}"
+        unset _opt_neg
         info "OPTIONAL_SERVICES: 'all' sentinel expanded to every user-level slug: ${OPTIONAL_SERVICES}"
         ;;
 esac
@@ -1177,17 +1272,20 @@ if [ "${WANT_EDGE_AI_ANALYSIS}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in *" edge-ai "*) ;; *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} edge-ai" ;; esac
     case " ${OPTIONAL_SERVICES} " in *" edge-ai-analysis "*) ;; *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} edge-ai-analysis" ;; esac
 fi
-# Dependency guard: edge-ai-analysis is useless without the edge-ai model server. If it
-# was selected without edge-ai, drop it (its gate prune then runs) — never ship a wrapper
-# with no upstream.
-case " ${OPTIONAL_SERVICES} " in
-    *" edge-ai-analysis "*)
-        case " ${OPTIONAL_SERVICES} " in
-            *" edge-ai "*) ;;
-            *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES//edge-ai-analysis/}"
-               warn "edge-ai-analysis requires edge-ai — dropping it (no model server selected)" ;;
-        esac ;;
-esac
+# NOTE (2026-08-26): the edge-ai-analysis dependsOn-edge-ai guard USED TO SIT HERE,
+# at top level — i.e. BEFORE the EXCLUDE_SERVICES subtraction ~30 lines below. That
+# ordering is why `--optional-services "edge-ai edge-ai-analysis"
+# --exclude-services edge-ai` shipped the analysis wrapper with NO model server
+# behind it: the guard saw edge-ai still selected and kept the wrapper, and only
+# then did EXCLUDE_SERVICES remove edge-ai. The guard now runs INSIDE
+# gate_optional_services() (scripts/_optional-services-lib.sh), which is the LAST
+# word on the selection and therefore sees the post-exclusion list — matching
+# build-rpi5-stage4.sh, which always had it there and was never wrong.
+#
+# CONSEQUENCE, stated honestly: PLAN_OPTIONAL_SERVICES is printed BEFORE the gate
+# runs, so a build that will drop edge-ai-analysis still lists it in the plan. That
+# is exactly what build-rpi5-stage4.sh has always done; the BAKED TREE is correct on
+# both, and the plan line is a preview, not the contract.
 
 # edge-ai-tts (VN voice synthesis) selection: --with-edge-ai-tts folds 'edge-ai-tts'
 # into OPTIONAL_SERVICES (idempotent). DEFAULT-OFF; never auto-selected. UNLIKE
@@ -1229,6 +1327,103 @@ if [ -n "${EXCLUDE_SERVICES//[[:space:],]/}" ]; then
     info "OPTIONAL_SERVICES: EXCLUDE_SERVICES removed:${_excl_x} (final selection: ${OPTIONAL_SERVICES:-none})"
     unset _excl_x _x _s _kept
 fi
+
+# ── FAIL-CLOSED optional-service slug validation (2026-08-26) ────────────────
+# WHAT WAS OBSERVED: --optional-services accepted anything. The value is consumed
+# ONLY by _opt_selected(), a bare `[ "${s}" = "$1" ]` compare driven by
+# gate_optional_services()' hardcoded slug loop, so an unrecognised token matches
+# no arm and is simply dropped on the floor. A typo (`akoma`) silently produced an
+# image with no Akkoma; a registered-but-ungated infra slug (`metrics-server`)
+# looked accepted and gated nothing; `coturn`/`meshbridge` — registered,
+# `gate: runtime`, and read by NOTHING this builder sources — looked accepted too,
+# and that one is worse than silence: the operator gets an AFFIRMATIVE signal for a
+# flag nothing will honour. (anubis was in that list too until the shared-gate
+# extraction; it now HAS a consumer here — see DESELECTABLE_OPTIONAL_SERVICES and
+# the EXCLUDE_SERVICES leg below.) None of them printed a word of warning. The
+# MANAGED_SERVICES sibling has failed closed on an unknown id since it shipped
+# (validate_managed_services -> _mgd_die); this is the same posture for the
+# optional-services path, and for the EXCLUDE_SERVICES knob, where a typo is worse
+# still: the operator asked for a service to be REMOVED and it shipped anyway.
+#
+# RUNS HERE, deliberately: AFTER the `all` sentinel expansion and every
+# --with-<x> fold (so `all` and the folded slugs are already real slugs by now)
+# and AFTER EXCLUDE_SERVICES subtracts. EXCLUDE_SERVICES itself is read, never
+# rewritten, by that block, so validating it here still catches a typo in it.
+# Multi-line on purpose: the test suite sed-extracts these functions with the
+# repo-standard `/^name() {/,/^}/` range, which a one-line body defeats.
+#
+# DEFINED BEFORE IT IS CALLED, and that ordering is load-bearing, not style: the
+# call below is a TOP-LEVEL statement, so bash resolves it at the moment it reaches
+# this line. Moving the definition after it leaves `bash -n` perfectly happy and
+# makes EVERY invocation of this script die with "validate_optional_services:
+# command not found" (rc=127). The same is true of the `source` line that supplies
+# the _opt_svc_* primitives. The suite asserts BOTH orderings AND runs this script
+# for real, because a static extraction of the function bodies into a scratch file
+# re-orders them and structurally cannot see a definition-after-use fault.
+# _opt_svc_die / _opt_svc_known / _opt_svc_gated / _opt_svc_selectable /
+# _opt_svc_deselectable are NOT defined here. They live in
+# scripts/_optional-services-lib.sh, sourced at the top of this file (line ~60),
+# alongside gate_optional_services() and every other `_opt_*` function. A local
+# copy here would be defined AFTER that source line, so BASH WOULD RUN THE LOCAL
+# COPY — which is exactly how three optional-service defects shipped on x86 only,
+# and is why tests/stack/test-optional-services-exclude.sh fails any builder that
+# defines an `_opt_*` name. What this builder owns is the four CONSTANTS above
+# (its own registry columns) and the policy below.
+validate_optional_services() {
+    # Separate declaration lines: bash 5.3 localises every name in a `local a=$1
+    # b=$a` list BEFORE any assignment runs, so the second would die under set -u.
+    local _tok
+    local _base
+    # ── the SELECTION knob ────────────────────────────────────────────────────
+    for _tok in ${OPTIONAL_SERVICES}; do
+        _base="${_tok#no-}"; _base="${_base#-}"
+        if [ "${_base}" != "${_tok}" ]; then
+            # An EXPLICIT-DESELECT token. This used to be refused wholesale as an
+            # "rpi5-only spelling", and that was true only while this builder had
+            # no anubis handling — defect #2 of the x86 drift. The gate is now ONE
+            # sourced library, so _opt_anubis_installed() resolves here identically
+            # to rpi5 and `-anubis` genuinely works. Refusing it left an x86
+            # `--env prod` build with NO way to turn the public PoW shield off:
+            # --exclude-services cannot, because the ENV-conditional decision never
+            # reads EXCLUDE_SERVICES. So the refusal is per-slug now, not blanket.
+            _opt_svc_deselectable "${_base}" || _opt_svc_die \
+                "'${_tok}' uses the '-<slug>' / 'no-<slug>' EXPLICIT-DESELECT spelling, which is honoured for exactly these slugs: ${DESELECTABLE_OPTIONAL_SERVICES}. It is read ONLY by _opt_anubis_installed() in scripts/_optional-services-lib.sh, because anubis is the only slug whose install decision is ENV-conditional instead of plain presence. For '${_base}', absence from --optional-services ALREADY means off, so this token would match no arm and be silently ignored — on BOTH builders. To drop a default-on service use --exclude-services '${_base}' (EXCLUDE_SERVICES), which subtracts AFTER the 'all' sentinel expands."
+        fi
+        _opt_svc_known "${_base}" || _opt_svc_die \
+            "unknown optional-service slug '${_base}'. Known slugs: ${KNOWN_OPTIONAL_SERVICES}. See specs/cluster/optional-services.yaml."
+        # Two DIFFERENT refusals, because the operator's next move differs.
+        _opt_svc_gated "${_base}" || _opt_svc_die \
+            "'${_base}' is REGISTERED but not GATED ANYWHERE (specs/cluster/optional-services.yaml gives it 'gate: none'): no gate_optional_services arm, no installed-services ConfigMap key and no 13a ApplicationSet element read it, in either builder. Selecting it would do nothing at build time OR at runtime. Refusing rather than silently ignoring it. Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
+        _opt_svc_selectable "${_base}" || _opt_svc_die \
+            "'${_base}' is RUNTIME-ONLY on this builder (specs/cluster/optional-services.yaml does not list x86 in its 'buildGate:'): --optional-services cannot bake it, because nothing this builder sources reads it out of the selection. Turn it on/off on the LIVE cluster instead: flip the '${_base}' key in manifests/policy/installed-services-configmap.yaml and the matching element in apps/13a-optional-services.yaml (or its OptionalService CR). Refusing rather than accepting a flag this builder honours nowhere. Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
+    done
+    # ── the SUBTRACTIVE knob ──────────────────────────────────────────────────
+    # EXCLUDE_SERVICES is read, never rewritten, by the subtraction block above, so
+    # validating it here still catches a typo in it. Two refusals are specific to
+    # this knob:
+    #   * a deselect spelling here is a DOUBLE NEGATIVE honoured by nothing;
+    #   * an ENV-CONDITIONAL slug cannot be turned off by subtraction at all.
+    #     `--exclude-services anubis` removes the token from OPTIONAL_SERVICES and
+    #     _opt_anubis_installed() then falls through to the ENV default, so in prod
+    #     the shield stays UP and the operator was told nothing. That is the exact
+    #     empty-promise shape this validator exists to abolish, so it is refused
+    #     and pointed at the negative token, which does work.
+    for _tok in ${EXCLUDE_SERVICES//,/ }; do
+        _base="${_tok#no-}"; _base="${_base#-}"
+        [ "${_base}" = "${_tok}" ] || _opt_svc_die \
+            "'${_tok}' uses the '-<slug>' / 'no-<slug>' explicit-deselect spelling inside --exclude-services, which is a double negative honoured by nothing: EXCLUDE_SERVICES subtracts whole tokens from the selection, and no code path ever compares one to '-${_base}'. Use --exclude-services '${_base}'."
+        _opt_svc_known "${_base}" || _opt_svc_die \
+            "unknown optional-service slug '${_base}'. Known slugs: ${KNOWN_OPTIONAL_SERVICES}. See specs/cluster/optional-services.yaml."
+        _opt_svc_gated "${_base}" || _opt_svc_die \
+            "'${_base}' is REGISTERED but not GATED ANYWHERE (specs/cluster/optional-services.yaml gives it 'gate: none'): no gate_optional_services arm, no installed-services ConfigMap key and no 13a ApplicationSet element read it, in either builder. Excluding it would do nothing at build time OR at runtime. Refusing rather than silently ignoring it. Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
+        _opt_svc_selectable "${_base}" || _opt_svc_die \
+            "'${_base}' is RUNTIME-ONLY on this builder (specs/cluster/optional-services.yaml does not list x86 in its 'buildGate:'): --exclude-services cannot un-bake what was never bakeable here, which is the same empty promise as selecting it. Turn it on/off on the LIVE cluster instead: flip the '${_base}' key in manifests/policy/installed-services-configmap.yaml and the matching element in apps/13a-optional-services.yaml (or its OptionalService CR). Selectable slugs: ${SELECTABLE_OPTIONAL_SERVICES}."
+        _opt_svc_deselectable "${_base}" && _opt_svc_die \
+            "'${_base}' is ENV-CONDITIONAL and CANNOT be turned off by --exclude-services. Subtraction only removes the token from the selection; _opt_anubis_installed() then falls through to the ENV default, so an '--env prod' build would ship '${_base}' ON anyway and say nothing. Use --optional-services '-${_base}' (or 'no-${_base}'), the explicit-deselect spelling, which this builder honours for: ${DESELECTABLE_OPTIONAL_SERVICES}."
+    done
+    unset _tok _base
+}
+validate_optional_services
 
 # ── Validate role; derive GPU, hostname, node labels and init/join intent ──
 # Node labels/taints are applied at RUNTIME by provision.sh from the KEYS stick;
@@ -1336,11 +1531,31 @@ esac
 # ── UNAFFILIATED plain desktop (composable: --unaffiliated onto any client/
 # standalone role, or the standalone-unaffiliated role arm above). Runs BEFORE
 # the STANDALONE fold so the STANDALONE=true it forces is folded normally.
-# Contract: the produced image carries NO HugMesh (or any other brand)
-# affiliation — so every flag that would bake a brand identity, brand assets,
-# HugMesh source, or platform machinery into the image is a HARD CONFLICT,
-# not a silent override. What remains: stock Gentoo + the hardened desktop
-# stack + the (neutral-named) installer/FDE/home machinery. ──────────────────
+# Contract (REVISED 2026-08-26 — operator decision "split identity from look"):
+# the produced image carries no brand IDENTITY and no HugMesh-NAMED machinery,
+# but it MAY carry a LOOK.
+#   IDENTITY stays a HARD CONFLICT: --brand/--brand-title/--org (and any --config
+#     brand profile), --brand-logo, --brand-locked — plus HugMesh source and the
+#     platform machinery (bundle-source / home-seed-code / tailscale / sso /
+#     person-role / domains). A brand IS an affiliation, including a custom one.
+#   LOOK is now ALLOWED: --theme, --branding-dir, --wallpaper, --grub-background,
+#     --grub-theme, --login-background, --accent-color, --color-scheme. A plain
+#     Gentoo desktop that carries a wallpaper and a colour scheme is still a plain
+#     Gentoo desktop; wallpaper-vs-affiliation was never the same axis.
+# WHY THE LINE MOVED: the old single conflict (one `if` over all ten flags) meant
+# the whole theme step vanished from an unaffiliated build. Reported by the
+# operator 2026-08-26 against out/sessions/20260826-151356-64070a/
+# build-standalone-unaffiliated.x86.log (role=standalone-unaffiliated, x86):
+# "There should be the menu for adding the themes as in the branded images."
+# WHAT MAKES IT SAFE: the branding bake below now neutral-names every artefact it
+# stages when ${UNAFFILIATED} (search BRAND_CONF_DIR / BRANDING_APPLIER_NAME) —
+# assets land in /etc/gentoo/branding, the applier installs as /usr/sbin/branding,
+# and its internal HugMesh-named paths/labels are rewritten on the staged copy.
+# That is the SAME pattern the home-provisioning lane already uses to rename
+# hugmesh-home-setup -> home-setup (see HOME_CONF_DIR/HOME_SETUP_NAME below) and
+# the Calamares lane uses for hugmesh-calamares-install -> gentoo-calamares-install.
+# What remains otherwise: stock Gentoo + the hardened desktop stack + the
+# (neutral-named) installer/FDE/home machinery. ──────────────────────────────
 if ${UNAFFILIATED}; then
     ${ROLE_CLIENT} || { err "--unaffiliated composes onto desktop/client roles only (got --role ${ROLE} — a cluster node is HugMesh platform machinery by definition)"; exit 1; }
     STANDALONE=true
@@ -1348,12 +1563,27 @@ if ${UNAFFILIATED}; then
     if [ "${BRAND}" != "hugmesh" ] || [ "${BRAND_TITLE}" != "HugMesh Systems" ] || [ "${ORG}" != "hugmesh" ]; then
         err "--unaffiliated builds carry no brand identity: drop --brand/--brand-title/--org (and any --config brand profile)"; exit 1
     fi
-    # Branding-asset flags conflict (nothing to theme against).
-    if [ -n "${BRANDING_THEME}" ] || [ -n "${BRANDING_DIR}" ] || [ -n "${BRAND_WALLPAPER}" ] \
-       || [ -n "${BRAND_GRUB_BG}" ] || [ -n "${BRAND_GRUB_THEME}" ] || [ -n "${BRAND_LOGIN_BG}" ] \
-       || [ -n "${BRAND_LOGO}" ] || [ -n "${BRAND_ACCENT}" ] || [ -n "${BRAND_COLOR_SCHEME}" ] || ${BRAND_LOCKED}; then
-        err "--unaffiliated conflicts with branding flags (--theme/--branding-dir/--wallpaper/--grub-background/--grub-theme/--login-background/--brand-logo/--accent-color/--color-scheme/--brand-locked)"; exit 1
+    # ...and so are a brand MARK and a brand LOCK. These two are the ONLY survivors of
+    # the ten-flag branding conflict this block used to carry; the other eight moved to
+    # the allowed side on 2026-08-26 (see the contract note above). They stayed because
+    # neither is about what the desktop LOOKS like:
+    #   --brand-logo    the logo IS the mark. hugmesh-branding installs it as the lightdm
+    #                   greeter's default-user-image and into the brand dir (see
+    #                   specs/usr/sbin/hugmesh-branding apply_login_background / apply_dir):
+    #                   it is the one asset that says WHOSE image this is, not how it looks.
+    #   --brand-locked  locking a look is an ADMINISTRATOR's act on a MANAGED (i.e.
+    #                   affiliated) fleet image — the applier's require_unlocked() exists
+    #                   for exactly that. An unaffiliated desktop has no administrator to
+    #                   obey, and its owner must stay free to re-theme it afterwards.
+    if [ -n "${BRAND_LOGO}" ] || ${BRAND_LOCKED}; then
+        err "--unaffiliated builds carry no brand identity: drop --brand-logo/--brand-locked (a logo is the brand MARK; a lock implies a managed brand image). The LOOK flags --theme/--branding-dir/--wallpaper/--grub-background/--grub-theme/--login-background/--accent-color/--color-scheme ARE allowed on an unaffiliated build."; exit 1
     fi
+    # NOTE (2026-08-26): --theme/--branding-dir/--wallpaper/--grub-background/--grub-theme/
+    # --login-background/--accent-color/--color-scheme are deliberately NOT checked here
+    # any more. They flow into the branding bake further down, which neutral-names every
+    # path and label it stages while ${UNAFFILIATED} — and which additionally DROPS a
+    # logo.png that arrived indirectly through a --theme preset or a --branding-dir, so
+    # the --brand-logo conflict above cannot be walked around by the back door.
     # Platform-machinery flags conflict: bundled generator source, the dockerized
     # HugMesh stack seed, the mesh/SSO agents, and person-device identity all
     # tie the image back to the platform.
@@ -1428,6 +1658,39 @@ else
     SB_ETC_DIR="/etc/hugmesh/secureboot"; SB_EFI_VENDOR="hugmesh"
 fi
 
+# ── modprobe.d drop-in NAMES (the last two hugmesh-* files an unaffiliated image
+# could still acquire). --unaffiliated's usage text promises "no hugmesh-* tools or
+# /etc/hugmesh markers" and docs/STANDALONE-DESKTOP.md's naming table asserts the
+# neutral-artefact rule; these two writers were missed by both:
+#   * harden_radios() has ONE call site, at top level with NO unaffiliated gate, and it
+#     truncates its blacklist file UNCONDITIONALLY — so the file exists on EVERY x86
+#     image, including one built with both radios enabled.
+#   * the nouveau blacklist is gated only on ${NVIDIA_PROPRIETARY}, and
+#     `--role standalone-unaffiliated --gpu-driver nvidia` is an ACCEPTED combination
+#     (nothing in the UNAFFILIATED fold touches --gpu-driver).
+# Same one-variable-per-name pattern as HOME_CONF_DIR/HOME_SETUP_NAME,
+# CALAMARES_BRIDGE/AUTOSTART_NAME and BRAND_CONF_DIR/BRANDING_APPLIER_NAME: the BRANDED
+# path keeps its exact historical filenames (docs/RUNNING.md documents
+# /etc/modprobe.d/hugmesh-radio-blacklist.conf and stays correct), only the unaffiliated
+# arm is neutral.
+# WHY HERE and not in the BRAND_CONF_DIR block: that block sits ~2700 lines further down,
+# but the nouveau writer runs BEFORE it — under `set -euo pipefail` an unbound
+# ${MODPROBE_NVIDIA_CONF} there would abort the build outright. Declared next to the
+# boot-chain identifiers instead: the first top-level ${UNAFFILIATED} name block after
+# the fold, hence ahead of every consumer.
+# NVIDIA_NOUVEAU_NOTE is the drop-in's own first line; the branded spelling names HugMesh
+# inside a file on a plain-Gentoo image, so the unaffiliated arm states the same fact
+# without the affiliation.
+if ${UNAFFILIATED}; then
+    MODPROBE_RADIO_CONF="gentoo-radio-blacklist.conf"   # was hugmesh-radio-blacklist.conf
+    MODPROBE_NVIDIA_CONF="gentoo-nvidia.conf"           # was hugmesh-nvidia.conf
+    NVIDIA_NOUVEAU_NOTE="# Proprietary NVIDIA driver owns the GPU; keep nouveau out."
+else
+    MODPROBE_RADIO_CONF="hugmesh-radio-blacklist.conf"
+    MODPROBE_NVIDIA_CONF="hugmesh-nvidia.conf"
+    NVIDIA_NOUVEAU_NOTE="# HugMesh: proprietary NVIDIA driver owns the GPU; keep nouveau out."
+fi
+
 # ── Validate + normalize the GPU driver selection (the full vendor matrix) ──
 # Default resolves to all-free (open drivers for every vendor — works on any GPU,
 # uses the FREE NVIDIA driver nouveau) on a GPU role; 'none' on a non-GPU role.
@@ -1484,8 +1747,29 @@ if ${WANT_SUNSHINE} && ! ${ROLE_CLIENT}; then
     warn "--with-sunshine on a non-client role has no effect (Sunshine streams a desktop session; this role has none) — dropping it."
     WANT_SUNSHINE=false
 fi
-if ${WANT_SUNSHINE} && { ${SKIP_TAILSCALE} || ${UNAFFILIATED}; }; then
-    warn "--with-sunshine needs the tailnet (the fence admits stream traffic ONLY on the tailscale iface); this desktop has none (standalone/unaffiliated/--skip-tailscale) — dropping it."
+# ${SKIP_MESH} ADDED 2026-08-26 — the warning above has always CLAIMED to cover
+# "standalone/--skip-tailscale", but the test did not. Measured hole:
+#   ./build-x86-host-stage4.sh --role chromebook --no-tailscale --no-sso --with-sunshine
+# --no-tailscale (an alias of --no-mesh, :1038) sets SKIP_MESH=true and leaves
+# SKIP_TAILSCALE false; chromebook is ROLE_CLIENT so the :1746 guard passes; and
+# STANDALONE is false, so the STANDALONE fold at :1617 — the only thing that would
+# have raised SKIP_TAILSCALE — never runs. Sunshine was therefore baked, together
+# with its tailscale-ONLY nftables fence, onto an image that has no tailscale
+# interface at all: the stream port is fenced to an iface that never appears, so
+# the feature is silently dead rather than merely unreachable.
+# SKIP_MESH is the RIGHT second test, not a belt-and-braces one: tailscaled is
+# installed only when BOTH are false (`${SKIP_MESH} || ${SKIP_TAILSCALE} ||
+# SVCS+=(tailscaled)`, :4485; the same posture guards the binary install at
+# :5418/:5448), so SKIP_MESH=true means no tailnet, full stop.
+# DELIBERATELY NOT ${STANDALONE}: the STANDALONE fold supports an explicit
+# --with-tailscale (MESH_FORCED=on keeps the tailnet, :1624-1447 — "composable: a
+# standalone desktop that still joins the tailnet"), and testing STANDALONE here
+# would drop Sunshine from exactly that supported combination. UNAFFILIATED is
+# kept although it now implies SKIP_MESH (it hard-conflicts with --with-tailscale
+# at :1592, so its standalone fold always raises SKIP_MESH) — it is the cheapest
+# possible statement of intent for the role that must never stream anything.
+if ${WANT_SUNSHINE} && { ${SKIP_TAILSCALE} || ${SKIP_MESH} || ${UNAFFILIATED}; }; then
+    warn "--with-sunshine needs the tailnet (the fence admits stream traffic ONLY on the tailscale iface); this desktop has none (standalone/unaffiliated/--skip-tailscale/--no-tailscale) — dropping it."
     WANT_SUNSHINE=false
 fi
 [ -n "${UNLOCK_KEYFILE}" ] && { case "${UNLOCK_KEYFILE}" in boot|login) ;; *) err "--unlock-keyfile must be: boot | login"; exit 1 ;; esac; }
@@ -1671,8 +1955,11 @@ if [ -n "${DOMAINS}" ]; then
     for _d in ${DOMAINS//,/ }; do _validate_dnsname "--domains element" "${_d}"; done
     unset _d
 fi
-# Accent is written as ACCENT_COLOR="..." into the sourced brand.conf; gate it with
-# the same #RRGGBB shape the applier's _norm_accent enforces (empty = default later).
+# Accent is written as ACCENT_COLOR="..." into brand.conf — which the applier reads with
+# its STRICT KEY=VALUE parser, never by dot-sourcing (specs/usr/sbin/hugmesh-branding:83).
+# Gate it with the same #RRGGBB shape the applier's _norm_accent enforces (empty = default
+# later). Get this wrong and the failure is SILENT: _norm_accent warns and swaps in the
+# stock blue, which is exactly what a `printf %q`-escaped `\#4d7fd6` used to do.
 case "${BRAND_ACCENT}" in
     '') : ;;
     '#'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) : ;;
@@ -2097,7 +2384,12 @@ harden_radios() {
     local sysroot="$1"
     mkdir -p "${sysroot}/etc/modprobe.d" "${sysroot}/etc/local.d" \
              "${sysroot}/etc/NetworkManager/conf.d"
-    local bl="${sysroot}/etc/modprobe.d/hugmesh-radio-blacklist.conf"
+    # Per-affiliation name (${MODPROBE_RADIO_CONF}, declared next to the boot-chain
+    # identifiers): this function is called UNGATED for every x86 role, so a literal
+    # hugmesh-* name here would put one on the operator's unaffiliated image. The
+    # truncation is unconditional and deliberate (idempotent re-runs / --resume), which
+    # is precisely why the file — and therefore the name — is always present.
+    local bl="${sysroot}/etc/modprobe.d/${MODPROBE_RADIO_CONF}"
     : > "${bl}"
     local act="${sysroot}/etc/local.d/02-radio-hardening.start"
 
@@ -2171,8 +2463,17 @@ GROWFS_EOF
 }
 
 # ── ENV app-gate (deterministic prune of the BAKED apps/ tree) ─────────────
-# ArgoCD recurses specs/cluster/apps with recurse:true, so physically removing
-# a YAML from the baked copy is the gate (no live-cluster conditional needed).
+# Physically removing a YAML from the baked copy is the gate (no live-cluster
+# conditional needed) — because specs/cluster/bootstrap/bootstrap.sh applies the
+# BAKED ${CLUSTER_DIR}/apps tree one file at a time.
+#
+# ⚠ THAT WAS NOT TRUE BEFORE 2026-08-26, and this comment used to assert the
+# opposite of the truth: it said ArgoCD "recurses specs/cluster/apps with
+# recurse:true", which it did — from GITHUB, via app-of-apps.yaml, the only thing
+# bootstrap.sh ever applied. Nothing read the baked tree, so every `rm -f` below
+# edited a directory ArgoCD never looked at and the whole gate was INERT on a
+# real device. Do not re-point bootstrap.sh at the repo-recursing root without
+# reading specs/cluster/README.md "What the device syncs".
 # Operates ONLY on ${SYSROOT}/var/lib/hugmesh/cluster/apps — never the repo.
 #   prod => prune the LAN wildcard-DNS app (public DNS is authoritative instead).
 #   test => prune the go-live cloudflared app (no Cloudflare/ACME on a LAN). The
@@ -2227,438 +2528,11 @@ rewrite_prod_image_tags() {
 }
 
 # ── OPTIONAL-SERVICE gate ───────────────────────────────────────────────────
-# Prune every OPTIONAL service (akkoma/tuwunel/phpbb/games) NOT selected in
-# OPTIONAL_SERVICES from the baked GitOps tree, enumerated by
-# specs/cluster/optional-services.yaml. Mirrors the gate_env_apps `rm -f` design
-# (physically removing a baked YAML IS the gate: ArgoCD recurse:true never
-# instantiates a removed Application). For each unselected slug it removes the
-# owned apps/*.yaml + manifests dir, its per-service ESO file (+ its kustomization
-# line), its gateway HOST routes (apps/20-gateway-*.yaml) and route-access rows
-# (route-access/initdb/20-schema.sql) so a matched route to a deleted upstream
-# cannot 502 and a leftover role row cannot stale-grant. Shared apps (social-ui,
-# serving BOTH homeservers) are removed only when ALL owners are deselected.
-#
-# ⚠ RUNTIME NOTE: build-time prune only stops the ONE-TIME bootstrap seed; the
-# live cluster syncs apps/ from the gitops repo. True runtime add/remove uses the
-# installed-services ConfigMap + the optional-services ApplicationSet
-# (apps/13a-optional-services.yaml). See docs/OPTIONAL-SERVICES.md.
-#
-# ⚠ CROSS-REPO TODO (gateway wave): CanonicalSeed.java (hugmesh-gateway) bakes
-# a route-access floor + the cloudflared configmap hardcodes matrix./mastodon.
-# reserved hostnames — keep those in sync with the rows pruned here. NOT edited by
-# this build (separate repo / image rebuild).
-_opt_selected() {
-    # $1 = slug; returns 0 if selected (present in OPTIONAL_SERVICES), else 1.
-    local s; for s in ${OPTIONAL_SERVICES}; do [ "${s}" = "$1" ] && return 0; done
-    return 1
-}
-gate_optional_services() {
-    local tree="${SYSROOT}/var/lib/hugmesh/cluster"
-    local apps="${tree}/apps"
-    [ -d "${apps}" ] || return 0
-    local slug
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio character-forge headwind attestation-server egress-vpn workloadConsole edge-ai edge-ai-analysis edge-ai-tts tor; do
-        _opt_selected "${slug}" && continue
-        info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
-        case "${slug}" in
-            akkoma)
-                rm -f "${apps}/30-akkoma.yaml"
-                rm -rf "${tree}/manifests/akkoma"
-                rm -f "${tree}/manifests/external-secrets/akkoma-externalsecrets.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" akkoma-externalsecrets.yaml
-                _opt_drop_route "${apps}/20-gateway-be.yaml" mastodon-oauth mastodon-api mastodon-web
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/api/v1/pleroma/admin/**' '/api/pleroma/admin/**' '/pleroma/admin/**'
-                ;;
-            tuwunel)
-                rm -f "${apps}/30-tuwunel.yaml"
-                rm -rf "${tree}/manifests/tuwunel"
-                rm -f "${tree}/manifests/external-secrets/tuwunel-externalsecrets.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" tuwunel-externalsecrets.yaml
-                _opt_drop_route "${apps}/20-gateway-be.yaml" matrix-api matrix-wellknown matrix
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/_matrix/**' '/.well-known/matrix/**' '/_synapse/**'
-                # The front door grants the same Matrix surface on its own gateway
-                # (20-schema.sql has a second block of /_matrix rows under
-                # hugmesh-fe-gateway). Dropping only the be-gateway leg left
-                # three live ROLE_MATRIX/MOD/ADMIN grants pointing at a
-                # homeserver that is not installed. See #143.
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/_matrix/**' '/.well-known/matrix/**'
-                ;;
-            phpbb)
-                rm -f "${apps}/30-phpbb.yaml" "${apps}/38-forum-bff-db.yaml" \
-                      "${apps}/39-forum-bff-api.yaml" "${apps}/49-forum-ui.yaml"
-                rm -rf "${tree}/manifests/forum"
-                _opt_drop_route "${apps}/20-gateway-fe.yaml" forum-ui hugmesh-forum-bff-api hugmesh-forum-bff-api-moderation
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/social/forum/**' '/bff/forum/admin/**' '/bff/forum/moderation/**' '/bff/forum/**'
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/api/forum/admin/**'
-                ;;
-            games)
-                rm -f "${apps}/06-casdoor-games.yaml" "${apps}/50-games.yaml"
-                rm -rf "${tree}/manifests/games" "${tree}/manifests/casdoor-games"
-                _opt_drop_route     "${apps}/20-gateway-be.yaml" games
-                _opt_drop_extrahost "${apps}/20-gateway-be.yaml" games.
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/games/api/admin/**' '/games/**'
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/games/admin/**'
-                # ── GAMES APP-STORE (games-services control plane) — degrade with games ──
-                # The app-store rides the games slug (it needs the games namespace up), so
-                # deselecting games prunes the WHOLE control plane: the 13c instances
-                # ApplicationSet + the games-instances namespace/isolation manifests, the two
-                # intersection-sync Jobs (+ their casdoor/kustomization lines), the be-gateway
-                # HTTP-console route, and the games-services route-access rows (be + fe).
-                rm -f "${apps}/13c-games-instances.yaml"
-                rm -rf "${tree}/manifests/games-instances"
-                rm -f "${tree}/manifests/casdoor/games-services-admin-sync-job.yaml" \
-                      "${tree}/manifests/casdoor/games-services-runner-sync-job.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/casdoor/kustomization.yaml" games-services-admin-sync-job.yaml
-                _opt_drop_kustomize_line "${tree}/manifests/casdoor/kustomization.yaml" games-services-runner-sync-job.yaml
-                _opt_drop_route "${apps}/20-gateway-be.yaml" games-servers-console
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/bff/superadmin/games-services/**' '/bff/games-services/instances/**' \
-                    '/bff/games-services/catalog/**' '/games/servers/**'
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/admin/games-services/**'
-                ;;
-            edge-ai)
-                rm -f "${apps}/54-edge-ai.yaml"
-                rm -rf "${tree}/manifests/edge-ai"
-                _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/v1/**'
-                ;;
-            edge-ai-analysis)
-                rm -f "${apps}/55-edge-ai-analysis.yaml"
-                rm -rf "${tree}/manifests/edge-ai-analysis"
-                _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai-analysis
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/v1/analyze/**'
-                ;;
-            edge-ai-tts)
-                # Piper TTS + viseme timeline (VN voice, B3) — DEFAULT-OFF, NO
-                # dependsOn (CPU-only, self-contained). Owns app 55b +
-                # manifests/edge-ai-tts + the /v1/synthesize/** route + route-access
-                # row. Image is a separate build artifact.
-                rm -f "${apps}/55b-edge-ai-tts.yaml"
-                rm -rf "${tree}/manifests/edge-ai-tts"
-                _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai-tts
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/v1/synthesize/**'
-                ;;
-            owncast)
-                # Owncast live-streaming — GPU-gated x86 service (DEFAULT-OFF). Owns its
-                # bootstrap Application + manifests dir + its fe-gateway BFF route-access
-                # rows (no gateway HOST route + no per-service ESO today). When deselected
-                # the user/admin live-stream panels grey out (installed-services "false").
-                rm -f "${apps}/52-owncast.yaml"
-                rm -rf "${tree}/manifests/owncast"
-                _opt_drop_route "${apps}/20-gateway-fe.yaml" hugmesh-owncast-bff-api
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/bff/owncast/admin/**' '/bff/owncast/**'
-                ;;
-            character-studio)
-                # Character Studio (VN) — FRONTEND micro-frontend remote (DEFAULT-OFF, admin
-                # gate). Owns its bootstrap Application + manifests dir + its ONE fe-gateway
-                # path route (character-studio-ui) + its ONE route-access row (no gateway
-                # HOST + no per-service ESO + no BFF in this slug). When deselected the host
-                # greys the /character-studio entry out (installed-services "false").
-                rm -f "${apps}/49b-character-studio-ui.yaml"
-                rm -rf "${tree}/manifests/character-studio"
-                _opt_drop_route "${apps}/20-gateway-fe.yaml" character-studio-ui
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/character-studio/**'
-                ;;
-            character-forge)
-                # Character Forge (3D) — MULTI-APP slug (DEFAULT-OFF, admin gate): BFF db +
-                # BFF api + UI remote (phpbb shape). Owns its three bootstrap Applications +
-                # three manifest dirs + its TWO fe-gateway path routes (character-forge-ui +
-                # hugmesh-character-forge-bff-api) + its TWO route-access rows (no gateway
-                # HOST; its ESO secrets ride the SHARED secretstore/pki files like forum-bff's
-                # — inert without their consumer pods, so NOT pruned here). When deselected
-                # the host greys the /character-forge entry out (installed-services "false").
-                # See docs/XR-CHAT.md.
-                rm -f "${apps}/38b-character-forge-bff-db.yaml" \
-                      "${apps}/39b-character-forge-bff-api.yaml" \
-                      "${apps}/49c-character-forge-ui.yaml"
-                rm -rf "${tree}/manifests/character-forge" \
-                       "${tree}/manifests/character-forge-bff-api" \
-                       "${tree}/manifests/character-forge-bff-db"
-                _opt_drop_route "${apps}/20-gateway-fe.yaml" character-forge-ui hugmesh-character-forge-bff-api
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/character-forge/**' '/bff/character-forge/**'
-                ;;
-            tube)
-                # LocalTube (YouTube archive) — GPU-gated x86 service (DEFAULT-OFF). Owns
-                # its bootstrap Application + manifests dir + its per-service ESO file
-                # (tube-externalsecrets.yaml; standalone, not in the ESO kustomization) +
-                # its fe/be route-access rows. When deselected the tube panel greys out.
-                rm -f "${apps}/53-tube.yaml"
-                rm -rf "${tree}/manifests/tube"
-                rm -f "${tree}/manifests/external-secrets/tube-externalsecrets.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" tube-externalsecrets.yaml
-                _opt_drop_route "${apps}/20-gateway-fe.yaml" hugmesh-tube-bff-api tube-content
-                _opt_drop_route "${apps}/20-gateway-be.yaml" tube-content
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
-                    '/bff/tube/**'
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/tube/content/**'
-                ;;
-            egress-vpn)
-                # NODE service (not a cluster Application). Prune the per-service NetworkPolicy
-                # interaction (file + kustomization line) so no vpn-egress label is ever
-                # honoured. On x86 egress-vpn is the DESKTOP --egress-vpn FILE path (never a
-                # registry _opt_selected), so this prune always runs — the registry interaction
-                # NetworkPolicy is moot on x86; the node-package/service handling is its own path.
-                rm -f "${tree}/manifests/networkpolicy/egress-vpn-interaction.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/networkpolicy/kustomization.yaml" egress-vpn-interaction.yaml
-                # AND the runtime config-byte DELIVERY half: the (dark) secret-projector
-                # overlay + its MANUAL-sync Application. A tree that never selected the VPN
-                # must not carry a DaemonSet that writes VPN key bytes onto node hostPaths,
-                # even inert — so the whole dir + app go, not just a kustomize line.
-                rm -f "${apps}/13e-egress-vpn.yaml"
-                rm -rf "${tree}/manifests/egress-vpn"
-                ;;
-            workloadConsole)
-                # The WORKLOAD CONSOLE is RBAC + route-access + an admin-bff deployment
-                # overlay (the BFF endpoints live in the always-present admin-bff).
-                # Deselecting it prunes the two-SA RBAC Application + its manifests (so
-                # the SA token Secrets are never minted), the two route-access rows (the
-                # gateway 404s the whole /bff/{admin,superadmin}/workloads/** prefix),
-                # AND the deployment overlay workload-console-patch.yaml + its single
-                # kustomization `- path:` line — so the dark admin-bff renders
-                # byte-identical to a tree that never had the feature (no
-                # WORKLOAD_CONSOLE_* env, no token mounts, Noop k8s seam). Selected, the
-                # overlay survives and lights the gate + k8s seam; the DB master flag +
-                # TTL'd grants still keep the console dark (docs/OPTIONAL-SERVICES.md
-                # §7.2).
-                rm -f "${apps}/14-workload-console-rbac.yaml"
-                rm -rf "${tree}/manifests/workload-console-rbac"
-                rm -f "${tree}/manifests/admin-bff-api/workload-console-patch.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/admin-bff-api/kustomization.yaml" 'path: workload-console-patch.yaml'
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
-                    '/bff/superadmin/workloads/**' '/bff/admin/workloads/**'
-                ;;
-            headwind)
-                # Headwind MDM (managed phones) — DEFAULT-OFF, admin-only devops
-                # service (Harbor/superadmin posture). Owns its bootstrap Application +
-                # manifests dir + per-service ESO file + TWO routes on the EXISTING
-                # tailnet superadmin-gateway (NOT be/fe — no gatewayHost of its own)
-                # + their route-access rows. When deselected the superadmin console's
-                # Headwind entry greys out (installed-services "false").
-                rm -f "${apps}/23-headwind.yaml"
-                rm -rf "${tree}/manifests/headwind"
-                rm -f "${tree}/manifests/external-secrets/headwind-externalsecrets.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" headwind-externalsecrets.yaml
-                _opt_drop_route "${apps}/22-gateway-superadmin.yaml" headwind-console headwind-checkin
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-superadmin-gateway \
-                    '/hmdm/manage/**' '/hmdm/rest/**'
-                ;;
-            attestation-server)
-                # AttestationServer (GrapheneOS Hardware Trust Root) — DEFAULT-OFF,
-                # admin-only devops service (Harbor/superadmin posture). Owns its
-                # bootstrap Application + manifests dir + per-service ESO file +
-                # THREE routes on the EXISTING tailnet superadmin-gateway (NOT be/fe
-                # — no gatewayHost of its own) + their route-access rows. When
-                # deselected the superadmin console's AttestationServer entry greys
-                # out (installed-services "false").
-                rm -f "${apps}/24-attestation-server.yaml"
-                rm -rf "${tree}/manifests/attestation-server"
-                rm -f "${tree}/manifests/external-secrets/attestation-server-externalsecrets.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" attestation-server-externalsecrets.yaml
-                _opt_drop_route "${apps}/22-gateway-superadmin.yaml" attestation-auditor attestation-status attestation-console
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-superadmin-gateway \
-                    '/attest/auditor/**' '/attest/api/status' '/attest/api/create-account' '/attest/api/**'
-                ;;
-            tor)
-                # NODE service (DISTRO tor daemon + a reconcile agent), not a cluster
-                # Application. Prune the per-service NetworkPolicy interaction (file +
-                # kustomization line) so an x86 image built WITHOUT tor does not ship the
-                # tor-onion egress hook (honours the "PRUNED when not selected" contract
-                # in tor-onion-marked.yaml + the kustomization comment). The net-vpn/tor
-                # omission + the service-link SKIP are handled in the SVCS/PKGS gates.
-                rm -f "${tree}/manifests/networkpolicy/tor-onion-marked.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/networkpolicy/kustomization.yaml" tor-onion-marked.yaml
-                ;;
-        esac
-    done
-    # Edge-AI model library: when selected, patch the edge-ai-models ConfigMap from
-    # the --edge-ai-* flags (the model catalog/preload/runtime knobs exposed to the
-    # mesh). EDGE_AI_RUNTIME always set (defaults ollama); models/default only if given.
-    if _opt_selected edge-ai; then
-        local mc="${tree}/manifests/edge-ai/models-configmap.yaml"
-        if [ -f "${mc}" ]; then
-            [ -n "${EDGE_AI_RUNTIME}" ]       && sed -i -E "s#^(  runtime: ).*#\\1\"${EDGE_AI_RUNTIME}\"#"       "${mc}"
-            [ -n "${EDGE_AI_MODELS}" ]        && sed -i -E "s#^(  preload: ).*#\\1\"${EDGE_AI_MODELS}\"#"        "${mc}"
-            [ -n "${EDGE_AI_MODEL_DEFAULT}" ] && sed -i -E "s#^(  default-model: ).*#\\1\"${EDGE_AI_MODEL_DEFAULT}\"#" "${mc}"
-            info "Edge-AI model library: runtime=${EDGE_AI_RUNTIME} preload='${EDGE_AI_MODELS:-<default>}' default='${EDGE_AI_MODEL_DEFAULT:-<default>}'"
-        fi
-    fi
-    # Shared social-ui (matrix + mastodon micro-frontends in ONE app) — remove only
-    # when BOTH homeservers are deselected (otherwise the surviving platform keeps
-    # its UI; the federation manifest greys out the absent one).
-    if ! _opt_selected akkoma && ! _opt_selected tuwunel; then
-        rm -f "${apps}/45-social-ui.yaml"
-        info "OPTIONAL_SERVICES: both homeservers deselected — pruned shared apps/45-social-ui.yaml"
-    fi
-    # Repair a possible trailing comma: if pruning removed the LAST VALUES row of an
-    # INSERT (the one that ended with ')' not '),'), the new last row ends with ','
-    # -> a fatal trailing comma before ON CONFLICT. Re-terminate the last data row.
-    _opt_fix_trailing_comma "${tree}/manifests/route-access/initdb/20-schema.sql"
-    # Re-render the installed-services ConfigMap from the surviving selection so the
-    # runtime ApplicationSet + admin console see the build-time install-state.
-    _opt_render_installed_services
-    # Seed each per-slug OptionalService CR's `enabled` from the SAME selection so the
-    # (dark-by-default) admin-bff OptionalServiceReconciler's desired-state baseline
-    # matches this build (a USB built WITHOUT a slug ships its CR enabled:false).
-    _opt_render_optionalservice_cr
-}
-# Fix the dangling trailing comma left when the LAST VALUES row of an INSERT was
-# pruned: rewrite the trailing '),' of the final data row before 'ON CONFLICT' to
-# ')'. Operates only on the data row immediately preceding the ON CONFLICT line.
-_opt_fix_trailing_comma() {
-    local f="$1"
-    [ -f "${f}" ] || return 0
-    awk '
-        { lines[NR]=$0 }
-        END {
-            # find the ON CONFLICT line; walk back to the last VALUES data row.
-            oc=0
-            for (i=NR; i>=1; i--) { if (lines[i] ~ /ON CONFLICT/) { oc=i; break } }
-            if (oc>0) {
-                for (i=oc-1; i>=1; i--) {
-                    if (lines[i] ~ /^[[:space:]]*\(.*\)[[:space:]]*,([[:space:]]*--.*)?$/) {
-                        # strip the comma right after the closing paren of this row.
-                        sub(/\)[[:space:]]*,/, ")", lines[i]); break
-                    }
-                    if (lines[i] ~ /^[[:space:]]*\(.*\)([[:space:]]*--.*)?$/) break  # already terminated
-                }
-            }
-            for (i=1;i<=NR;i++) print lines[i]
-        }
-    ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
-}
-# Drop a `- <resource>` line from a kustomize resources: list.
-_opt_drop_kustomize_line() {
-    local f="$1" res="$2"
-    [ -f "${f}" ] || return 0
-    sed -i -E "\\|^[[:space:]]*-[[:space:]]+${res}([[:space:]].*)?\$|d" "${f}"
-}
-# Delete one or more Spring-Cloud-Gateway route blocks (a `- id: <rid>` item plus
-# its indented continuation lines) from a baked gateway app's helm values.
-_opt_drop_route() {
-    local f="$1"; shift
-    [ -f "${f}" ] || return 0
-    local rid
-    for rid in "$@"; do
-        awk -v rid="${rid}" '
-            BEGIN { skip=0; ind=-1 }
-            {
-                line=$0
-                # indentation of this line (leading spaces)
-                match(line, /^ */); cur=RLENGTH
-                if (skip) {
-                    # Stop skipping once we reach ANY non-blank line at or below the
-                    # captured item indent — including a comment, since a trailing
-                    # comment block at this indent may document the NEXT surviving
-                    # route rather than the one being removed (excluding comments
-                    # from this check would silently swallow that documentation).
-                    if (line !~ /^ *$/ && cur<=ind) { skip=0 }
-                    else { next }
-                }
-                if (line ~ ("^ *- id: " rid "$")) { skip=1; ind=cur; next }
-                print line
-            }
-        ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
-    done
-}
-# Drop the `- <host-prefix>...` extraHosts entry (+ any leading comment block) for
-# a games-style host from a gateway app's ingress.extraHosts.
-_opt_drop_extrahost() {
-    local f="$1" prefix="$2"
-    [ -f "${f}" ] || return 0
-    sed -i -E "\\|^[[:space:]]*-[[:space:]]+\"?${prefix}[^[:space:]\"]*\"?[[:space:]]*\$|d" "${f}"
-}
-# Delete gateway_route_access INSERT VALUES rows matching (gateway, url_pattern)
-# from the baked schema.sql. Rows are `  ('<gw>', '<pat>', 'ROLE', bool), -- ...`.
-# Uses awk with LITERAL substring matching (the url_patterns carry ** / . which are
-# regex metachars) on the row's leading `('<gw>', '<pat>',` so only the data rows
-# are removed and the surrounding comments are left intact.
-_opt_drop_rows() {
-    local f="$1" gw="$2"; shift 2
-    [ -f "${f}" ] || return 0
-    local pat
-    for pat in "$@"; do
-        awk -v gw="${gw}" -v pat="${pat}" '
-            BEGIN { needle = "(\x27" gw "\x27" }   # ('gw'   (x27 = single quote)
-            {
-                line=$0
-                # Strip leading whitespace for the prefix test.
-                t=line; sub(/^[[:space:]]+/, "", t)
-                if (index(t, needle)==1) {
-                    # This is a VALUES row for THIS gateway; check the url_pattern is
-                    # the 2nd quoted field and equals pat exactly.
-                    rest=t; sub(/^\([[:space:]]*\x27[^\x27]*\x27[[:space:]]*,[[:space:]]*\x27/, "", rest)
-                    # rest now begins with the url_pattern; cut at its closing quote.
-                    q=index(rest, "\x27")
-                    if (q>0 && substr(rest,1,q-1)==pat) { next }
-                }
-                print line
-            }
-        ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
-    done
-}
-# Render manifests/policy/installed-services-configmap.yaml install-state booleans
-# from the surviving OPTIONAL_SERVICES selection (the runtime ApplicationSet +
-# admin console read this). Idempotent: rewrites the data: block in place.
-_opt_render_installed_services() {
-    local cm="${SYSROOT}/var/lib/hugmesh/cluster/manifests/policy/installed-services-configmap.yaml"
-    [ -f "${cm}" ] || return 0
-    local slug val
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio character-forge headwind attestation-server workloadConsole edge-ai edge-ai-analysis edge-ai-tts; do
-        if _opt_selected "${slug}"; then val="true"; else val="false"; fi
-        # '#'-delimited so the (true|false) alternation does not collide with the delimiter.
-        sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
-    done
-    info "OPTIONAL_SERVICES: rendered installed-services ConfigMap (selected: ${OPTIONAL_SERVICES:-none})"
-}
-# Flip the `enabled:` value of ONE OptionalService CR (the block whose `slug: <slug>`)
-# in the baked seed file. awk anchors on the slug line then rewrites the FIRST enabled
-# line after it, preserving indentation (sub only touches the matched substring). The
-# end-anchored slug compare keeps edge-ai distinct from edge-ai-analysis/edge-ai-tts.
-_opt_set_cr_enabled() {
-    local f="$1" slug="$2" val="$3"
-    [ -f "${f}" ] || return 0
-    awk -v slug="${slug}" -v val="${val}" '
-        /^[[:space:]]*slug:[[:space:]]/ {
-            s=$0; sub(/^[[:space:]]*slug:[[:space:]]*/,"",s); sub(/[[:space:]]*$/,"",s)
-            arm=(s==slug)
-        }
-        arm && /^[[:space:]]*enabled:[[:space:]]*(true|false)[[:space:]]*$/ {
-            sub(/enabled:[[:space:]]*(true|false)/, "enabled: " val); arm=0
-        }
-        { print }
-    ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
-}
-# Seed the per-slug OptionalService CRs (manifests/optional-services-operator/
-# seed-optionalservices.yaml) from the resolved OPTIONAL_SERVICES selection, mirroring
-# _opt_render_installed_services above (the CR is the runtime desired-state twin of the
-# installed-services ConfigMap boolean). coturn stays at its false baseline (not in the
-# selection loop, matching the ConfigMap); anubis is ENV-conditional and is NOT rewritten
-# on x86 (as with the ConfigMap here) — its CR keeps the safe test baseline.
-_opt_render_optionalservice_cr() {
-    local seed="${SYSROOT}/var/lib/hugmesh/cluster/manifests/optional-services-operator/seed-optionalservices.yaml"
-    [ -f "${seed}" ] || return 0
-    local slug val
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio character-forge edge-ai edge-ai-analysis edge-ai-tts; do
-        if _opt_selected "${slug}"; then val="true"; else val="false"; fi
-        _opt_set_cr_enabled "${seed}" "${slug}" "${val}"
-    done
-    info "OPTIONAL_SERVICES: seeded OptionalService CR enabled flags (selected: ${OPTIONAL_SERVICES:-none})"
-}
+# gate_optional_services() and its _opt_* helpers/renderers (including the
+# anubis ENV decision + public-ingress PoW reroute, NEITHER of which this file
+# ever had) now live in the SHARED scripts/_optional-services-lib.sh, sourced at
+# the top of this file. This file used to carry its own copy; see the lib header
+# for the three divergences that copy shipped.
 
 # ============================================================================
 # MANAGED BACKING SERVICES — gate_backing_services() + helpers. See
@@ -3277,7 +3151,7 @@ fi
 
 # ── BEGIN shared block: SELinux node-policy host tools ────────────────────────
 # The other NINE builders already gate the host SELinux policy toolchain
-# (HOST_POLICY_TOOLS, e.g. build-rpi5-stage4.sh:3013) because selinux-base's
+# (HOST_POLICY_TOOLS, e.g. build-rpi5-stage4.sh:2536) because selinux-base's
 # `emake base` shells out to it. This builder never needed it — until now: the
 # SELinux node-policy step (scripts/_selinux-policy-lib.sh, called before
 # "Packaging stage4 tarball") compiles specs/selinux/*.te with exactly these
@@ -3615,10 +3489,15 @@ if ${STEAM_NATIVE} && [ -f "${SPECS_DIR}/portage/package.license/steam" ]; then
     cp "${SPECS_DIR}/portage/package.license/steam" "${SYSROOT}/etc/portage/package.license/"
 fi
 # Blacklist nouveau when the proprietary NVIDIA kmod is in play, so it owns the GPU.
+# Per-affiliation FILENAME and first LINE (${MODPROBE_NVIDIA_CONF} /
+# ${NVIDIA_NOUVEAU_NOTE}, declared next to the boot-chain identifiers): this block is
+# gated on the driver, not on the affiliation, and
+# `--role standalone-unaffiliated --gpu-driver nvidia` is an accepted combination — so
+# both the name and the comment would otherwise land on an unaffiliated image.
 if ${NVIDIA_PROPRIETARY}; then
     mkdir -p "${SYSROOT}/etc/modprobe.d"
-    printf '# HugMesh: proprietary NVIDIA driver owns the GPU; keep nouveau out.\nblacklist nouveau\noptions nouveau modeset=0\n' \
-        > "${SYSROOT}/etc/modprobe.d/hugmesh-nvidia.conf"
+    printf '%s\nblacklist nouveau\noptions nouveau modeset=0\n' "${NVIDIA_NOUVEAU_NOTE}" \
+        > "${SYSROOT}/etc/modprobe.d/${MODPROBE_NVIDIA_CONF}"
 fi
 
 # Per-package build env (e.g. env/llvm-lowmem.conf caps MAKEOPTS for the
@@ -3646,7 +3525,24 @@ fi
 # the container's own portage (host-guard gated) for builder images older than
 # the Dockerfile.build twin. Never fatal. Root cause, refs and the patch:
 # scripts/patch-portage-file-copy.py.
-pcs_quiet_sendfile_noise "${SYSROOT}"
+#
+# `backup` (2nd arg) is the OPT-IN that saves a pristine <file>.hugmesh-orig beside
+# the patched file. x86 is the ONE lane allowed to ask for it, because x86 is the one
+# lane that consumes it: pcs_unquiet_sendfile_noise runs before packaging (search
+# "Make the sendfile-noise patch a BUILD-TIME artifact"). The nine ARM/Jetson lanes
+# call this helper with ONE argument and therefore leave nothing behind — the default
+# was the other way round for one change set and every ARM image shipped a 4 KB
+# vdb-unowned copy of a portage source file. Do NOT copy the `backup` word into a
+# builder that does not also revert; tests/build-matrix/check.sh's SFO bucket fails
+# the build matrix if you do.
+#
+# WHY ALSO HERE and not only on the in-chroot re-patch: if the payload's
+# sys-apps/portage self-update FAILS (it is a `|| echo WARN`, non-fatal), file_copy.py
+# still carries THIS patch, the in-chroot re-patch early-returns "already patched" and
+# writes no backup — and the revert would then have nothing to restore and would ship
+# the patched file. Backing up on both patches closes that path: patch_one only writes
+# the backup when it actually patches, so the copy always matches the version on disk.
+pcs_quiet_sendfile_noise "${SYSROOT}" backup
 
 # x86 GRUB cmdline (SELinux LSM + KSPP hardening). Disable os-prober so a
 # grub-mkconfig (installer / chroot) can never enumerate the host's other disks.
@@ -4099,6 +3995,42 @@ fi
 # (standalone OR tailnet client; any installer front-end).
 BRAND_GRUB_BG_STAGED=""
 BRAND_GRUB_THEME_STAGED=""
+# ── Neutral naming for the UNAFFILIATED image (operator decision 2026-08-26) ──
+# --theme/--wallpaper/--accent-color/... are ALLOWED on an unaffiliated build now
+# (see the UNAFFILIATED fold's contract note above), so this lane is the one that
+# has to keep the promise the fold makes: a look, but no HugMesh-NAMED artefact.
+# Same shape as HOME_CONF_DIR/HOME_SETUP_NAME (home provisioning) and
+# CALAMARES_BRIDGE/AUTOSTART_NAME (graphical installer) further up — one pair of
+# variables per name, chosen by ${UNAFFILIATED}, so the BRANDED path keeps every
+# byte of its existing layout (/etc/hugmesh, /usr/sbin/hugmesh-branding,
+# /boot/grub/hugmesh-background.png, /boot/grub/themes/hugmesh) untouched.
+# These are declared HERE, unconditionally at top level, and not inside the
+# branding-flags `if` below, because the live-ISO packer (grub.cfg generation, far
+# below) reads BRAND_GRUB_BG_NAME/BRAND_GRUB_THEME_NAME on every build — including
+# builds that passed no branding flag at all, where the `if` never runs (set -u).
+if ${UNAFFILIATED}; then
+    BRAND_CONF_DIR="/etc/gentoo"                     # was /etc/hugmesh
+    BRANDING_APPLIER_NAME="branding"                 # was hugmesh-branding
+    BRAND_SHARE_REAL="/usr/share/gentoo/branding"    # was /usr/share/hugmesh/branding
+    BRAND_GRUB_BG_NAME="gentoo-background.png"       # was hugmesh-background.png
+    BRAND_GRUB_THEME_NAME="gentoo"                   # was themes/hugmesh
+    BRAND_COLORSCHEME_FILE="Gentoo.colors"           # was HugMesh.colors
+    BRAND_WALLPAPER_PKG="Gentoo"                     # was wallpapers/HugMesh
+    # env-var PREFIX the applier reads for its build-time staging contract
+    # (HUGMESH_BRANDING_ROOT / _BUILD). Renamed with everything else, because the
+    # staged copy is rewritten to read the neutral spelling — a plain-Gentoo image
+    # must not ship a /usr/sbin/branding that greps for a HUGMESH_* env var.
+    BRAND_ENV_PREFIX="BRANDING"
+else
+    BRAND_CONF_DIR="/etc/hugmesh"
+    BRANDING_APPLIER_NAME="hugmesh-branding"
+    BRAND_SHARE_REAL="/usr/share/hugmesh/branding"
+    BRAND_GRUB_BG_NAME="hugmesh-background.png"
+    BRAND_GRUB_THEME_NAME="hugmesh"
+    BRAND_COLORSCHEME_FILE="HugMesh.colors"
+    BRAND_WALLPAPER_PKG="HugMesh"
+    BRAND_ENV_PREFIX="HUGMESH_BRANDING"
+fi
 # Branding flags only apply to desktop (ROLE_CLIENT) images; warn if set on a server role.
 if ! ${ROLE_CLIENT} && { [ -n "${BRANDING_THEME}" ] || [ -n "${BRANDING_DIR}" ] \
         || [ -n "${BRAND_WALLPAPER}" ] || [ -n "${BRAND_GRUB_BG}" ] || [ -n "${BRAND_GRUB_THEME}" ] \
@@ -4132,41 +4064,187 @@ if ${ROLE_CLIENT} && { [ -n "${BRANDING_THEME}" ] || [ -n "${BRANDING_DIR}" ] \
     [ -n "${BRAND_LOGO}" ]         && { [ -f "${BRAND_LOGO}" ]         || { err "--brand-logo not found: ${BRAND_LOGO}"; exit 1; };          cp "${BRAND_LOGO}"         "${_bd}/logo.png"; }
     [ -n "${BRAND_COLOR_SCHEME}" ] && { [ -f "${BRAND_COLOR_SCHEME}" ] || { err "--color-scheme not found: ${BRAND_COLOR_SCHEME}"; exit 1; }; cp "${BRAND_COLOR_SCHEME}" "${_bd}/colors.colors"; }
     [ -n "${BRAND_GRUB_THEME}" ]   && { [ -d "${BRAND_GRUB_THEME}" ]   || { err "--grub-theme dir not found: ${BRAND_GRUB_THEME}"; exit 1; }; rm -rf "${_bd}/grub-theme"; cp -r "${BRAND_GRUB_THEME}" "${_bd}/grub-theme"; }
+    # 3b) UNAFFILIATED: close the --brand-logo back door and neutralize the TEXT
+    #     assets. --brand-logo/--brand-locked are hard conflicts for this role (see
+    #     the UNAFFILIATED fold above), but a --theme preset dir carries its own
+    #     logo.png (specs-x86/branding/themes/*/logo.png — the accent hexagon MARK
+    #     rendered by scripts/gen-branding-themes.py render_logo), and so may a
+    #     --branding-dir. apply_dir() installs it as ${SHARE_DIR}/logo.png and
+    #     apply_login_background() wires it as the lightdm greeter's
+    #     default-user-image, i.e. the mark would appear on the login screen of an
+    #     image that is not allowed to carry one. Drop it here rather than weaken
+    #     the flag check: the flag conflict and this removal are the same rule.
+    #
+    #     brand.conf and colors.colors are plain KEY=VALUE/INI text that the preset
+    #     ships with HugMesh literals baked in ("# HugMesh premade branding theme:
+    #     dark", COLOR_SCHEME_NAME=HugMesh Dark, Name=HugMesh Dark). They are copied
+    #     verbatim into the image, so they leak the name even though no HugMesh
+    #     machinery is present. Rewrite BOTH with the same substitution so the
+    #     kdeglobals ColorScheme value keeps matching the .colors file's Name= (KDE
+    #     selects a scheme by that Name, not by the filename) — rewriting only one
+    #     of the two would silently give every user an unresolvable scheme name.
+    if ${UNAFFILIATED}; then
+        rm -f "${_bd}/logo.png"
+        for _txt in brand.conf colors.colors; do
+            [ -f "${_bd}/${_txt}" ] || continue
+            sed -i -e 's|hugmesh-branding|branding|g' \
+                   -e 's|HugMesh|Gentoo|g' \
+                   -e 's|hugmesh|gentoo|g' "${_bd}/${_txt}"
+        done
+    fi
     # 4) brand.conf — preset's values first (already copied), then identity + accent
-    #    override (later assignments win when sourced). brand.conf is dot-sourced as
-    #    root by hugmesh-branding at build AND first boot, so emit every value with
-    #    `printf %q` (shell-safe quoting): a dot-sourced file can never execute injected
-    #    code even if a value slipped past the up-front validators (defense-in-depth).
+    #    override (a later assignment of the same key wins: _load_brand_conf keeps the
+    #    LAST one, exactly as dot-sourcing used to).
+    #
+    #    EMIT WHAT THE READER PARSES — NOT `printf %q`. THE READER IS NOT A SHELL.
+    #    The applier reads this file with the strict parser headed
+    #    "brand.conf loader (STRICT KEY=VALUE — never dot-source)" at
+    #    specs/usr/sbin/hugmesh-branding:83; its _load_brand_conf (:102-128) strips ONE
+    #    layer of matching surrounding quotes and then takes the value LITERALLY — it
+    #    never unescapes a backslash. `printf %q` escapes a space as `\ ` and a leading
+    #    `#` as `\#`, and those escapes SURVIVE the read.
+    #    MEASURED before this fix, running the REAL applier over a staged sysroot with
+    #    BRAND_TITLE="Gentoo Linux" / ACCENT_COLOR="#4d7fd6":
+    #      etc/default/grub                         GRUB_DISTRIBUTOR="Gentoo\ Linux"
+    #      boot/grub/themes/*/theme.txt             title-text: "Gentoo\ Linux"
+    #                                               text = "Gentoo\ Linux — booting ..."
+    #      usr/share/wallpapers/*/metadata.desktop  Name=Gentoo\ Linux
+    #      [branding] WARNING: invalid accent '\#4d7fd6'; using default #1f6feb
+    #    i.e. the BOOT SCREEN read "Gentoo\ Linux" on the operator's unaffiliated image
+    #    (and "HugMesh\ Systems" on every branded image ever built), and the operator's
+    #    --accent-color was silently DISCARDED — _norm_accent rejects `\#4d7fd6` and
+    #    falls back to the stock blue.
+    #    The spelling the reader round-trips is KEY="<literal>": one layer of double
+    #    quotes, which it strips. That matches the preset brand.conf files
+    #    scripts/gen-branding-themes.py writes and the loader's own documented example
+    #    (`BRAND_TITLE="Acme Corp"`).
+    #    %q's stated job — "a dot-sourced file can never execute injected code" — died
+    #    with the dot-source; the strict parser cannot execute anything by construction.
+    #    The up-front validators (_validate_slug for BRAND, _validate_title for
+    #    BRAND_TITLE, the #RRGGBB case for the accent) already forbid every character
+    #    that could break out of the line, and _brand_conf_kv re-asserts that AT THE
+    #    SINK so a future value source cannot corrupt the file quietly.
+    #    tests/build-matrix/check.sh's BCF bucket feeds a staged brand.conf through the
+    #    applier's OWN _load_brand_conf and fails on a surviving backslash, so writer
+    #    and reader cannot drift apart again.
+    _brand_conf_kv() {   # KEY VALUE -> one strict KEY="VALUE" line the applier can read
+        case "$2" in
+            *[\"\\]*|*$'\n'*)
+                err "brand.conf value for $1 contains a quote, backslash or newline ('$2') — the strict KEY=VALUE reader cannot round-trip it; refusing to bake a corrupt brand.conf"
+                exit 1 ;;
+        esac
+        printf '%s="%s"\n' "$1" "$2"
+    }
     {
         echo "# appended by build-x86-host-stage4.sh"
-        printf 'BRAND_NAME=%q\n' "${BRAND}"
-        printf 'BRAND_TITLE=%q\n' "${BRAND_TITLE}"
-        [ -n "${BRAND_ACCENT}" ] && printf 'ACCENT_COLOR=%q\n' "${BRAND_ACCENT}"
+        echo "# Read as strict KEY=VALUE by ${BRANDING_APPLIER_NAME} (never sourced)."
+        _brand_conf_kv BRAND_NAME  "${BRAND}"
+        _brand_conf_kv BRAND_TITLE "${BRAND_TITLE}"
+        # trailing `&&`: an empty accent means "keep the preset's / the applier's default".
+        # Left operand of a && list, so its non-zero status is exempt from `set -e`.
+        [ -n "${BRAND_ACCENT}" ] && _brand_conf_kv ACCENT_COLOR "${BRAND_ACCENT}"
     } >> "${_bd}/brand.conf"
-    # stage assets + canonical brand.conf into the image
-    mkdir -p "${SYSROOT}/etc/hugmesh/branding"
-    cp -r "${_bd}/." "${SYSROOT}/etc/hugmesh/branding/" 2>/dev/null || true
-    cp "${_bd}/brand.conf" "${SYSROOT}/etc/hugmesh/brand.conf" 2>/dev/null || true
-    # copy the applier, then bake static pieces into the sysroot FROM THE HOST
-    cp "${SHARED_SPECS}/usr/sbin/hugmesh-branding" "${SYSROOT}/usr/sbin/hugmesh-branding"; chmod +x "${SYSROOT}/usr/sbin/hugmesh-branding"
-    HUGMESH_BRANDING_ROOT="${SYSROOT}" HUGMESH_BRANDING_BUILD=1 \
-        bash "${SHARED_SPECS}/usr/sbin/hugmesh-branding" apply "${SYSROOT}/etc/hugmesh/branding" \
+    # stage assets + canonical brand.conf into the image (${BRAND_CONF_DIR} is
+    # /etc/hugmesh for a branded build and /etc/gentoo for an unaffiliated one)
+    mkdir -p "${SYSROOT}${BRAND_CONF_DIR}/branding"
+    cp -r "${_bd}/." "${SYSROOT}${BRAND_CONF_DIR}/branding/" 2>/dev/null || true
+    cp "${_bd}/brand.conf" "${SYSROOT}${BRAND_CONF_DIR}/brand.conf" 2>/dev/null || true
+    # copy the applier under its per-affiliation name, then bake static pieces into the
+    # sysroot FROM THE HOST.
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-branding" "${SYSROOT}/usr/sbin/${BRANDING_APPLIER_NAME}"
+    chmod +x "${SYSROOT}/usr/sbin/${BRANDING_APPLIER_NAME}"
+    if ${UNAFFILIATED}; then
+        # Neutralize the STAGED COPY's internal literals — same technique, and the same
+        # fail-loudly-on-drift guard, as the hugmesh-home-setup rename above. Every
+        # anchor below is the sole reason one of the sed rules exists; if the applier
+        # is refactored and an anchor disappears, the rule would match nothing and the
+        # rename would break SILENTLY (a /usr/sbin/branding that still writes
+        # /etc/hugmesh, or a greeter pointed at /usr/share/hugmesh/branding that the
+        # image does not contain). Fail the build instead.
+        _bapp="${SYSROOT}/usr/sbin/${BRANDING_APPLIER_NAME}"
+        for _anchor in \
+            'BRAND_ETC="${ROOT}/etc/hugmesh"' \
+            'SHARE_DIR="${ROOT}/usr/share/hugmesh/branding"' \
+            'SHARE_DIR_REAL=/usr/share/hugmesh/branding' \
+            'GRUB_BG_REAL=/boot/grub/hugmesh-background.png' \
+            'GRUB_THEME_DIR_REAL=/boot/grub/themes/hugmesh' \
+            'COLORSCHEME_DST="${ROOT}/usr/share/color-schemes/HugMesh.colors"' \
+            '/usr/share/wallpapers/HugMesh' \
+            'X-KDE-PluginInfo-Name=HugMesh' \
+            'BRAND_NAME=hugmesh' \
+            'BRAND_TITLE="HugMesh Systems"' \
+            'COLOR_SCHEME_NAME="HugMesh"' \
+            'HugMesh Regular' \
+            'Name=HugMesh branding' \
+            '.hugmesh-branding-applied' \
+            '${ROOT}/usr/sbin/hugmesh-branding' \
+            'HUGMESH_BRANDING_ROOT' \
+            'HUGMESH_BRANDING_BUILD'; do
+            grep -qF "${_anchor}" "${_bapp}" \
+                || { err "hugmesh-branding drifted: anchor not found -> ${_anchor} (the unaffiliated rename would break silently)"; exit 1; }
+        done
+        # Order matters: the specific PATH rules run before the generic tool-name rule,
+        # so '/boot/grub/hugmesh-background.png' is renamed as a path and never as a
+        # fragment. There is deliberately NO blanket s/HugMesh/…/ — 'HugMesh Systems'
+        # (title), 'HugMesh Regular' (GRUB font), 'HugMesh.colors' (path) and
+        # 'HugMesh branding' (autostart Name=) each need a DIFFERENT replacement.
+        # 's|hugmesh-branding|branding|g' is safe as one blanket rule because every
+        # occurrence — /usr/sbin path, autostart .desktop name, Exec=, the
+        # ~/.config/.hugmesh-branding-applied stamp, the usage block and the log
+        # sentences ("run 'hugmesh-branding session-apply'") — wants the identical
+        # replacement: they all name the SAME tool, which really is renamed.
+        sed -i \
+            -e "s|/usr/share/hugmesh/branding|${BRAND_SHARE_REAL}|g" \
+            -e "s|/etc/hugmesh|${BRAND_CONF_DIR}|g" \
+            -e "s|/boot/grub/hugmesh-background.png|/boot/grub/${BRAND_GRUB_BG_NAME}|g" \
+            -e "s|/boot/grub/themes/hugmesh|/boot/grub/themes/${BRAND_GRUB_THEME_NAME}|g" \
+            -e "s|/usr/share/color-schemes/HugMesh.colors|/usr/share/color-schemes/${BRAND_COLORSCHEME_FILE}|g" \
+            -e "s|/usr/share/wallpapers/HugMesh|/usr/share/wallpapers/${BRAND_WALLPAPER_PKG}|g" \
+            -e "s|X-KDE-PluginInfo-Name=HugMesh|X-KDE-PluginInfo-Name=${BRAND_WALLPAPER_PKG}|g" \
+            -e 's|^BRAND_NAME=hugmesh$|BRAND_NAME=gentoo|' \
+            -e 's|BRAND_TITLE="HugMesh Systems"|BRAND_TITLE="Gentoo Linux"|' \
+            -e 's|COLOR_SCHEME_NAME="HugMesh"|COLOR_SCHEME_NAME="Gentoo"|' \
+            -e 's|HugMesh Regular|Gentoo Regular|g' \
+            -e 's|Name=HugMesh branding|Name=Desktop branding|' \
+            -e "s|hugmesh-branding|${BRANDING_APPLIER_NAME}|g" \
+            -e "s|HUGMESH_BRANDING_|${BRAND_ENV_PREFIX}_|g" \
+            "${_bapp}"
+        # Residual check: catches a literal a FUTURE applier revision adds that no rule
+        # above knows about (the anchor loop only proves the rules we HAVE still bite).
+        if grep -n -i 'hugmesh' "${_bapp}"; then
+            err "unaffiliated branding applier still contains HugMesh literals (listed above) — add a rename rule for each before shipping this image"; exit 1
+        fi
+    fi
+    # Bake from the STAGED copy, not from ${SHARED_SPECS}: on an unaffiliated build the
+    # staged copy is the rewritten one, and baking from the pristine spec would write
+    # /etc/hugmesh + /boot/grub/hugmesh-background.png straight back into the sysroot.
+    # For a branded build the two files are byte-identical (the cp above), so this is a
+    # no-op there. One consequence, harmless and pre-guarded: the applier's
+    # install_session_autostart() does `install -D "$0" .../usr/sbin/<name>`, which is
+    # now source==destination and fails with "same file" — it already carries
+    # `2>/dev/null || true`, and the file it would have written is the one already there.
+    env "${BRAND_ENV_PREFIX}_ROOT=${SYSROOT}" "${BRAND_ENV_PREFIX}_BUILD=1" \
+        bash "${SYSROOT}/usr/sbin/${BRANDING_APPLIER_NAME}" apply "${SYSROOT}${BRAND_CONF_DIR}/branding" \
         || warn "branding bake reported a problem (continuing)"
-    if ${BRAND_LOCKED}; then : > "${SYSROOT}/etc/hugmesh/branding.lock"; info "Branding LOCKED (users cannot re-theme this image)"; fi
+    if ${BRAND_LOCKED}; then : > "${SYSROOT}${BRAND_CONF_DIR}/branding.lock"; info "Branding LOCKED (users cannot re-theme this image)"; fi
     # first-boot hook: re-apply on the real system so the INSTALLED grub.cfg picks up
     # the background (the build-time host run has no grub.cfg / block devices).
-    cat > "${SYSROOT}/etc/local.d/04-branding.start" <<'HOOK'
+    # The heredoc is UNQUOTED so ${BRANDING_APPLIER_NAME}/${BRAND_CONF_DIR} are baked in
+    # at BUILD time; \$0 is escaped so it survives into the hook and is expanded at RUN
+    # time by the hook itself (that is the self-removal, and it must not resolve to the
+    # builder's own $0). Same trick as the 03-home-setup.start hook above.
+    cat > "${SYSROOT}/etc/local.d/04-branding.start" <<HOOK
 #!/bin/bash
 # First-boot: finish branding on the real system (regenerate grub.cfg with the brand
 # background). Idempotent; self-removes after a clean run.
-[ -x /usr/sbin/hugmesh-branding ] && /usr/sbin/hugmesh-branding apply /etc/hugmesh/branding && rm -f "$0"
+[ -x /usr/sbin/${BRANDING_APPLIER_NAME} ] && /usr/sbin/${BRANDING_APPLIER_NAME} apply ${BRAND_CONF_DIR}/branding && rm -f "\$0"
 HOOK
     chmod +x "${SYSROOT}/etc/local.d/04-branding.start"
     # hand the resolved GRUB background + theme to the live-ISO builder (boot-screen brand)
-    [ -f "${SYSROOT}/boot/grub/hugmesh-background.png" ] && BRAND_GRUB_BG_STAGED="${SYSROOT}/boot/grub/hugmesh-background.png"
-    [ -f "${SYSROOT}/boot/grub/themes/hugmesh/theme.txt" ] && BRAND_GRUB_THEME_STAGED="${SYSROOT}/boot/grub/themes/hugmesh"
+    [ -f "${SYSROOT}/boot/grub/${BRAND_GRUB_BG_NAME}" ] && BRAND_GRUB_BG_STAGED="${SYSROOT}/boot/grub/${BRAND_GRUB_BG_NAME}"
+    [ -f "${SYSROOT}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/theme.txt" ] && BRAND_GRUB_THEME_STAGED="${SYSROOT}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}"
     rm -rf "${_bd}"
-    info "Branding baked: $(ls "${SYSROOT}/etc/hugmesh/branding" 2>/dev/null | tr '\n' ' ')"
+    info "Branding baked into ${BRAND_CONF_DIR}/branding: $(ls "${SYSROOT}${BRAND_CONF_DIR}/branding" 2>/dev/null | tr '\n' ' ')"
 fi
 
 # ── Egress VPN (NetworkManager) staging ──────────────────────────────────────
@@ -4918,6 +4996,20 @@ fi
 cp "${SCRIPT_DIR}/scripts/_emerge-plan-lib.sh" "${SYSROOT}/tmp/hugmesh-emerge-plan-lib.sh" \
     || info "WARN: emerge-plan lib staging failed — plan preview will be skipped"
 # ── END shared block: emerge-plan preview (lib staging) ───────────────────────
+# ── sendfile-noise re-patch (lib staging) ────────────────────────────────────
+# pcs_quiet_sendfile_noise patched THIS sysroot's portage long before the chroot
+# (see the call next to the /etc/portage sync). That patch does not survive the
+# payload: the chroot's FIRST act is a sys-apps/portage self-update, which
+# overwrites util/file_copy.py with the pristine upstream file — so every merge
+# after it (i.e. the whole @world + ${PKGS} payload, the bulk of the build) goes
+# back to logging a full WARNING traceback per merged file. That is the "KNOWN
+# RESIDUAL" scripts/patch-portage-file-copy.py documents; on x86 it is not rare,
+# it is EVERY build. Stage the patcher so the heredoc can re-apply it in-chroot
+# immediately after that self-update. Guarded exactly like the plan lib: log
+# cosmetics must never abort an hours-long build.
+cp "${SCRIPT_DIR}/scripts/patch-portage-file-copy.py" "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py" \
+    || info "WARN: sendfile-noise patcher staging failed — per-file sendfile tracebacks will spam the payload emerge log"
+# ── END sendfile-noise re-patch (lib staging) ────────────────────────────────
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 # NOTE: MAKEOPTS is NOT exported here on purpose. It comes from the chroot's
 # make.conf (rendered "-j${JOBS} -l${JOBS}"). An exported MAKEOPTS env var takes
@@ -5034,6 +5126,28 @@ echo "==> Emerge group: system"
 # directly below already carries --newuse for the same reason.
 emerge --oneshot --update --newuse sys-apps/portage \
     || echo "[build-x86] WARN: standalone sys-apps/portage update failed; continuing with the seed portage (the passes below exclude it, so the mid-run self-replace hazard stays closed)"
+# The self-update above just replaced portage/util/file_copy.py with the pristine
+# upstream file, undoing the sendfile-noise patch pcs_quiet_sendfile_noise applied
+# to this sysroot before the chroot. Re-apply it HERE, before the @world and
+# payload passes below merge hundreds of thousands of files under it — otherwise
+# each one logs a full "_do_sendfile failed unexpectedly" WARNING traceback
+# (~300k lines, measured) and drowns the Studio log pane. Idempotent, and never
+# fatal: rc 2 (no portage found) and rc 3 (upstream rewrote file_copy.py, so the
+# pin needs a human) both degrade to a warning. Root cause and refs live in
+# scripts/patch-portage-file-copy.py.
+# --backup: the self-update above may have installed a DIFFERENT portage version, so
+# the pristine bytes the pre-chroot patch saved are now the OLD version's. Re-saving
+# here (patch_one overwrites the copy on every real patch) is what makes the revert
+# before packaging restore the file this image actually merged with. Spelled "/"
+# because we are inside the chroot; the revert spells the same file "SYSROOT" from
+# outside, which is why the copy has to live BESIDE the file, not in a root-keyed
+# sidecar tree.
+if [ -f /tmp/hugmesh-patch-portage-file-copy.py ]; then
+    python3 /tmp/hugmesh-patch-portage-file-copy.py --backup / \
+        || echo "[build-x86] WARN: sendfile-noise re-patch after the portage self-update failed; the payload emerge log will carry a traceback per merged file"
+else
+    echo "[build-x86] WARN: sendfile-noise patcher not staged — the payload emerge log will carry a traceback per merged file"
+fi
 emerge --oneshot --update --newuse sys-apps/baselayout || true
 # gettext-0.23.x empty-\$(DOMAIN) .mo-collision pin (see package.mask/gettext):
 # the stage3 seed ships gettext-0.23.2, so the mask (which only blocks upgrades)
@@ -6056,6 +6170,35 @@ slx_stage_node_policy "${SYSROOT}" "${SHARED_SPECS}" \
     || { err "SELinux node-policy staging failed (see above) — refusing to ship an image whose policy modules did not build."; exit 1; }
 # ── END shared block: SELinux node-policy modules ─────────────────────────────
 
+# Make the sendfile-noise patch a BUILD-TIME artifact only. It was applied to this
+# sysroot's portage twice (pcs_quiet_sendfile_noise before the chroot, then again
+# in-chroot after the payload's sys-apps/portage self-update) so the payload merges
+# would stop spamming a WARNING traceback per merged file. The SHIPPED image does not
+# need it — the device merges onto its own root, not onto the builder's eCryptfs work
+# dir — and leaving it in place would make the delivered file disagree with the md5
+# sys-apps/portage recorded in var/db/pkg/.../CONTENTS forever, so `equery check
+# sys-apps/portage` and any file-integrity baseline (this image stages AIDE) would
+# report a modified file for a workaround with no purpose there. --revert restores the
+# pristine bytes from the .hugmesh-orig copies saved at patch time and deletes them.
+#
+# ORDER MATTERS: this runs AFTER the kernel chroot (which merges gentoo-sources under
+# the same portage) and BEFORE the stage4 tar, the .img extracted from it and the live
+# ISO squash — so nothing shipped carries either the patch or its backup file.
+#
+# ONLY the sysroot. The container root "/" keeps its patch: it is disposable, and it is
+# the portage the ARM lanes' cross-emerge --root=SYSROOT merges actually run under.
+# Via the lib twin (scripts/_portage-config-lib.sh) rather than the patcher directly:
+# it carries the same never-fatal warn-and-return-0 contract as pcs_quiet_sendfile_noise,
+# and it gives the nine ARM lanes a one-line way to adopt the revert without each
+# re-deriving the argv. It is also the spelling the SFO bucket looks for when it checks
+# that every `backup` opt-in in this repo is paired with a revert.
+pcs_unquiet_sendfile_noise "${SYSROOT}"
+# The staged patcher itself must not ship either. The stage4 tar excludes ./tmp/*, but
+# the live-ISO squash does NOT (mksquashfs -e / the tar2sqfs fallback list proc, sys,
+# dev, run, var/cache/distfiles and the local user's home — no tmp), so a file left in
+# ${SYSROOT}/tmp rides into the ISO's rootfs.
+rm -f "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py"
+
 banner "Packaging stage4 tarball"
 # Filename-safe role tag. be+gpu keeps the legacy 'host' tag so existing
 # flashers/launchers/gen-provision-keys examples that reference 'host' keep
@@ -6482,10 +6625,17 @@ CHROOT
         cp "${SYSROOT}/boot/initramfs-live.img" "${ISO_DIR}/boot/initramfs.img"
         # Brand the live/installer GRUB boot screen with the same background + full GRUB
         # theme baked into the image, so the boot -> login -> desktop chain is consistent.
-        [ -n "${BRAND_GRUB_BG_STAGED:-}" ] && cp "${BRAND_GRUB_BG_STAGED}" "${ISO_DIR}/boot/grub/hugmesh-background.png" 2>/dev/null || true
+        # ${BRAND_GRUB_BG_NAME}/${BRAND_GRUB_THEME_NAME} keep the ISO's own /boot/grub
+        # tree named the same way the installed system's is (see the neutral-naming
+        # table next to BRAND_GRUB_BG_STAGED): hugmesh-background.png + themes/hugmesh
+        # for a branded build, gentoo-background.png + themes/gentoo for an unaffiliated
+        # one. The names must match the grub.cfg emitted below, which reads the same
+        # two variables — the ISO is a self-contained filesystem, so the pair only has
+        # to agree with itself.
+        [ -n "${BRAND_GRUB_BG_STAGED:-}" ] && cp "${BRAND_GRUB_BG_STAGED}" "${ISO_DIR}/boot/grub/${BRAND_GRUB_BG_NAME}" 2>/dev/null || true
         if [ -n "${BRAND_GRUB_THEME_STAGED:-}" ] && [ -d "${BRAND_GRUB_THEME_STAGED}" ]; then
-            mkdir -p "${ISO_DIR}/boot/grub/themes/hugmesh"
-            cp -r "${BRAND_GRUB_THEME_STAGED}/." "${ISO_DIR}/boot/grub/themes/hugmesh/" 2>/dev/null || true
+            mkdir -p "${ISO_DIR}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}"
+            cp -r "${BRAND_GRUB_THEME_STAGED}/." "${ISO_DIR}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/" 2>/dev/null || true
         fi
         rm -f "${ISO_DIR}/LiveOS/squashfs.img"
         if command -v mksquashfs >/dev/null; then
@@ -6543,21 +6693,21 @@ CHROOT
             # theme (gfxmenu: title, accent-highlighted menu, countdown) or, failing
             # that, the background image alone. Same brand baked into the installed
             # system's /etc/default/grub (GRUB_THEME/GRUB_BACKGROUND/GRUB_COLOR_*).
-            if [ -f "${ISO_DIR}/boot/grub/hugmesh-background.png" ] \
-                    || [ -f "${ISO_DIR}/boot/grub/themes/hugmesh/theme.txt" ]; then
+            if [ -f "${ISO_DIR}/boot/grub/${BRAND_GRUB_BG_NAME}" ] \
+                    || [ -f "${ISO_DIR}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/theme.txt" ]; then
                 echo "insmod all_video"
                 echo "insmod png"
                 echo "insmod gfxterm"
                 echo "set gfxmode=1920x1080,1280x720,auto"
                 echo "terminal_output gfxterm"
-                if [ -f "${ISO_DIR}/boot/grub/themes/hugmesh/theme.txt" ]; then
+                if [ -f "${ISO_DIR}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/theme.txt" ]; then
                     echo "insmod gfxmenu"
-                    [ -f "${ISO_DIR}/boot/grub/themes/hugmesh/font.pf2" ] \
-                        && echo "loadfont /boot/grub/themes/hugmesh/font.pf2"
-                    echo "set theme=/boot/grub/themes/hugmesh/theme.txt"
+                    [ -f "${ISO_DIR}/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/font.pf2" ] \
+                        && echo "loadfont /boot/grub/themes/${BRAND_GRUB_THEME_NAME}/font.pf2"
+                    echo "set theme=/boot/grub/themes/${BRAND_GRUB_THEME_NAME}/theme.txt"
                 fi
-                [ -f "${ISO_DIR}/boot/grub/hugmesh-background.png" ] \
-                    && echo "background_image /boot/grub/hugmesh-background.png"
+                [ -f "${ISO_DIR}/boot/grub/${BRAND_GRUB_BG_NAME}" ] \
+                    && echo "background_image /boot/grub/${BRAND_GRUB_BG_NAME}"
             fi
             echo "menuentry \"${BRAND_TITLE} ${ROLE} (live)\" {"
             echo "    linux /boot/vmlinuz ${_LBASE} ${LIVE_CMDLINE}"

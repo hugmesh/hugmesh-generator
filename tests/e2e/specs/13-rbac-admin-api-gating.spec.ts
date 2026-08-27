@@ -1,5 +1,21 @@
 import { test, expect, request } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
+import { sharedPassword } from './rbac-roles';
+
+/**
+ * Handles this spec names that must NEVER be provisioned. Read by the Studio's
+ * spec->persona index (studio/hugmesh_studio/core/e2e_personas.py), which otherwise
+ * cannot tell a handle nobody seeded ON PURPOSE from one somebody forgot to seed —
+ * and reports the latter as a defect, because that is the shape of the 2026-08-06
+ * spec-29 failure (a native-login 401 that read as a broken password and was really
+ * an account nothing ever created).
+ *
+ * 'should-not@gmail.com' is never signed in as: it is the EMAIL PAYLOAD of the
+ * mutating POST /bff/admin/allowlist that a plain user must be denied. If that
+ * deny ever regressed the address would be allowlisted for real, so it is
+ * declared here to keep it out of every roster and to say why it is in the file.
+ */
+export const NEVER_SEEDED_PERSONAS: readonly string[] = ['should-not@gmail.com'];
 
 // 13 — ROLE_ADMIN vs non-admin gating at the BFF admin API (EXISTS TODAY).
 //
@@ -23,8 +39,9 @@ import type { APIRequestContext } from '@playwright/test';
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@hugmesh.net';
 // The deterministic native password every seeded/invited persona signs in with —
-// mirrors the mock-bff LOGIN_PASSWORD and the e2e helper (E2E_PASSWORD ?? 'e2e-pass').
-const LOGIN_PASSWORD = process.env.E2E_PASSWORD || 'e2e-pass';
+// mirrors the mock-bff LOGIN_PASSWORD and the e2e helper (rbac-roles.ts
+// sharedPassword(): env, else the run-state credentials file, else throw).
+const LOGIN_PASSWORD = sharedPassword();
 
 // Every admin-only BFF endpoint the mock enforces (mirrors mock-bff routeAccess
 // + the /bff/admin/** route-access row). GET is non-mutating, safe to probe.

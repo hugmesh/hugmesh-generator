@@ -78,7 +78,7 @@ registry is that missing list). Each service entry carries:
 | `esoFile` | its **per-service** ExternalSecret file (post-split; see §9) |
 | `gatewayHost` / `gatewayRouteIds` | its public host + the gateway route ids to drop |
 | `routeAccessRows` | the `gateway_route_access` rows it owns (dropped so a matched route to a deleted upstream cannot 502 / stale-grant) |
-| `federationModule` | the `federation_modules` registration (federation-api wave) |
+| `federationModule` | the `federation_modules` registration (federation-api wave). **Its `slug` is the MODULE slug, which is not always the catalogue slug on the left** — `phpbb`'s module is `forum`, `akkoma`'s is `mastodon`, `tuwunel`'s is `matrix`. The module slug is what the host shell resolves the remote by at runtime and what `tests/stack/seed-e2e.sh` leg 4 UPDATEs, so the changeset's `<column name="slug">` is authoritative and this field mirrors it. `changeset` names the file in `hugmesh-federation-api` that seeds the row; if it has not landed yet the number must still be FREE there. Both facts are re-derived and compared every run by `scripts/validate-federation-module-slugs.sh` (CI job `lint:federation-module-slugs`) |
 | `casdoorSeed` | a dedicated Casdoor it owns (games → `casdoor-games`) |
 | `deliveryManifestPath` / `deliveryApp` | (node slugs) a SECOND, dark manifest tree + its MANUAL-sync Application that delivers runtime bytes to the node — `egress-vpn` uses it for the secret-projector (`manifests/egress-vpn` + `apps/13e-egress-vpn.yaml`); pruned with the slug like `manifestPath` |
 | `secretContract` | (node slugs) the file that OWNS the cross-lane delivery contract. When present, the three fields below are **copies** of it and lose every argument to it |
@@ -91,6 +91,80 @@ parameterized files) — see §5.
 **Rule:** edit `optional-services.yaml`, the generator derives the build-time
 prune, the runtime `installed-services` ConfigMap, and (in the federation wave)
 the `federation_modules` seed.
+
+## 3.1 Build-time: the `federation_modules` half (menu visibility)
+
+**What was observed (2026-08-26).** A USB built with `--exclude-services akkoma`
+pruned akkoma's Application, manifests, gateway routes and route-access rows,
+rendered `installed: "false"` into **both** the installed-services ConfigMap and
+the `apps/13a-optional-services.yaml` element — and the host shell **still**
+rendered the Mastodon menu entry, reporting `installed=true`.
+
+**Why.** The host shell bootstraps its install-state from the public
+`GET /api/federation/capabilities` projection (§10), which is built from
+`federation_modules` rows — not from the ConfigMap. Every registration is an
+**unconditional** Liquibase changeset seeding `enabled = true`, so the build-time
+selection had no say at all. The `federationModule` field that names each
+service's module slug existed in `optional-services.yaml` and **nothing read it**.
+
+**The fix, and why it is a post-seed UPDATE rather than a changeset.** The
+registration changesets (`022`/`023`/`024`/`025`/`031`/`033` + the `character-*`
+ones) live in the **separate `hugmesh-federation-api` repo**, so the generator
+can neither add one nor safely edit one — editing an **applied** changeset breaks
+Liquibase's checksum on every existing mesh. The generator therefore renders a
+post-seed UPDATE into the GitOps tree it does own:
+
+* `manifests/federation-modules-gate/sql/gate.sql` — one
+  `UPDATE federation_modules SET enabled = <bool> WHERE slug = '<module>';` per
+  gated module, rewritten by `_opt_render_federation_modules()` from the resolved
+  `OPTIONAL_SERVICES`. Committed values are the registry's `default: on|off`
+  baseline, so an unrendered tree still says something true.
+* `manifests/federation-modules-gate/job.yaml` — an ArgoCD `PostSync` hook Job
+  (`hook-delete-policy: BeforeHookCreation`, so a re-rendered gate.sql is actually
+  applied) running `psql` as the least-privilege `federation_app` role.
+* `apps/29b-federation-modules-gate.yaml` — sync-wave `"3"`, after federation-db
+  (wave 1) and hugmesh-federation-api (wave 2, which runs the changelog at boot).
+  Waves cannot wait on another pod's startup work, so the SQL `RAISE`s while the
+  table is absent and the Job's `backoffLimit` retries.
+
+This is the **same shape** the local-mesh lane already uses: leg 4 of
+`tests/stack/seed-e2e.sh` UPDATEs these exact rows from the Studio's
+`HUGMESH_FEDERATION_ENABLE` / `_DISABLE` pair.
+
+> ⚠ **THE BUILD-TIME RENDER IS INERT ON A DEVICE TODAY — this lands the mechanism
+> and the guard, not the fixed behaviour.** The *reason* changed on 2026-08-26 and
+> the conclusion did not, so read the current one rather than the remembered one.
+>
+> It **used to be**: `bootstrap.sh` applies `app-of-apps.yaml` only, so no child
+> Application is ever retargeted. `fix/device-syncs-pruned-apps` deleted that
+> premise — `bootstrap.sh` now applies **every baked `apps/*.yaml`** directly,
+> `apps/29b-federation-modules-gate.yaml` included.
+>
+> What is **still** true is narrower, and is what keeps this render inert:
+> `apply_baked_app()` rewrites `repoURL` and `targetRevision` and **nothing else**.
+> `source.path: specs/cluster/manifests/federation-modules-gate` is untouched, so
+> ArgoCD's repo-server still clones a **git repo** and kustomize-generates the
+> ConfigMap from the **committed** `gate.sql`, never from the USB's rendered copy:
+> a USB built with `--exclude-services akkoma` bakes `enabled = false` into
+> `${SYSROOT}/var/lib/hugmesh/cluster/...` and the cluster still applies
+> `enabled = true`. **The observed bug is therefore not yet fixed on a device**, UI
+> half included. Closing it needs a **pruned source** for `manifests/` — which the
+> keystone deliberately did not attempt (see `specs/cluster/README.md`, "What the
+> device syncs"). Leg 4c of the gate suite asserts this **both ways**, and now asks
+> the load-bearing question — *does the bootstrap rewrite `path:`/`source:` at all* —
+> rather than the obsolete one, so the sentence cannot quietly become false in
+> either direction.
+>
+> ⚠ **And even then: UI half only.** Flipping `enabled` hides the **menu entry**.
+> The deselected service's Deployment keeps running. The workload half needs the
+> device to sync from a **pruned** tree: the *Application set* is pruned now, but
+> each surviving Application still pulls `specs/cluster/manifests/<dir>` from the
+> git repo. Do not read a green gate Job as "only selected services start".
+
+Gate: `tests/federation/test-federation-modules-selection.sh` (sources the real
+renderer as **both** stage4 builders resolve it (one shared library, no per-builder copy); asserts post-conditions on the rendered
+`gate.sql`, never the renderer's exit code; behavioural legs against a live
+federation-db/capabilities endpoint skip **loudly** when no stack is up).
 
 ## 3. Build-time: select services on a USB
 
@@ -188,15 +262,32 @@ EXCLUDE_SERVICES="phpbb tuwunel"        # forum-less + Matrix-less, keep the res
 - the shared `45-social-ui.yaml` only when **both** homeservers are deselected.
 
 It then re-renders `manifests/policy/installed-services-configmap.yaml` to match
-the surviving selection. ArgoCD's `recurse:true`+`prune:true` then never
-instantiates a removed Application.
+the surviving selection.
 
-> ⚠️ **Runtime caveat:** build-time `rm -f` only stops the **one-time bootstrap
-> seed**. The live cluster's ArgoCD root app syncs `apps/` from the **gitops
-> repo**, not the baked copy, so on a cluster pointed at the upstream repo a
-> pruned Application would be re-created. Build-time prune truly removes a
-> workload only when the build targets a gitops repo/branch that **also** lacks
-> it. For live add/remove use the runtime model in §7.
+`specs/cluster/bootstrap/bootstrap.sh` applies the **baked** `apps/` tree
+directly, one file at a time, so a pruned Application is simply never
+instantiated — and the *in-file* edits above (dropped gateway routes and
+extraHosts) are the bytes that reach the cluster.
+
+> ⚠️ **This was NOT true before 2026-08-26,** and the caveat that used to sit
+> here understated it. `bootstrap.sh` applied exactly one Application —
+> `app-of-apps.yaml`, whose source is `path: specs/cluster/apps` +
+> `directory.recurse: true` against the **GitOps repo** — and nothing anywhere
+> read the baked tree. So the build-time prune was not "only a bootstrap seed",
+> it was **inert**: a device built with `--optional-services akkoma` received
+> tuwunel, phpbb, games, owncast and tube from `main` regardless. Guarded now by
+> `tests/cluster/test-bootstrap-applies-baked-apps.sh`.
+
+> ⚠️ **What the prune still does NOT cover.** Each surviving Application fetches
+> its own `specs/cluster/manifests/<dir>` from the **git repo**, so a baked edit
+> *under* `manifests/` (the installed-services ConfigMap, `seed-optionalservices.yaml`,
+> the route-access SQL) still does not reach the cluster. Closing that needs a
+> pruned *source*, not another apply — see `specs/cluster/README.md`
+> "What the device syncs". For live add/remove use the runtime model in §7.
+
+> ⚠️ **`HUGMESH_GITOPS_ROOT_RECURSE=1`** restores the old repo-recursing root for
+> a cluster deliberately tracking a git branch. It re-creates every pruned
+> Application from the repo — the build-time selection is ignored, loudly.
 
 ## 4. Worked example — build a USB without akkoma + phpBB
 
@@ -220,8 +311,9 @@ grep -E '^  (akkoma|tuwunel|phpbb|games):' manifests/policy/installed-services-c
 #   akkoma: "false"  tuwunel: "true"  phpbb: "false"  games: "true"
 ```
 
-On the cluster, `argocd app list` shows no `akkoma`/`phpbb`/`forum-*` apps;
-`recurse:true`+`prune:true` never instantiated them.
+On the cluster, `argocd app list` shows no `akkoma`/`phpbb`/`forum-*` apps:
+`bootstrap.sh` applied only the Application files that survived the prune, so
+those were never created (not created-then-pruned).
 
 ## 5. Games subdomain (opt-in; subdomain by default when enabled)
 
@@ -289,7 +381,13 @@ Internal mTLS / `svc.cluster.local` SANs are unaffected.
 
 ## 7. Runtime add/remove on a LIVE cluster
 
-> **STATUS: build-time prune ✅ SHIPPED · build-time 13a render ✅ SHIPPED ·
+> **STATUS: build-time prune ✅ SHIPPED **and now actually governing a device**
+> (`bootstrap.sh` applies the baked `apps/` tree; before 2026-08-26 it applied
+> the repo-recursing root and the prune was inert) · build-time 13a render
+> ✅ SHIPPED **but held at `installed:"false"` for any slug whose hardcoded
+> `apps/30-*`/`50-*` Application still exists** — flipping it would doubly manage
+> one manifest dir (§10); `_opt_appset_cutover_done()` in `build-rpi5-stage4.sh`
+> is the guard and lifts itself at cut-over ·
 > federation `OverrideService` + public `GET /api/federation/capabilities` ✅ SHIPPED ·
 > host (hugmesh.net) capabilities consumption + `menu.component` `enabled()`
 > greying ✅ SHIPPED · live admin-driven flip 🟡 CODE-COMPLETE, SHIPS DARK (the
@@ -389,6 +487,16 @@ the live-flip CRD mechanism does not cover it.
 ArgoCD's automated recurse roots (`app-of-apps.yaml` + `apps/00-app-of-apps-waved.
 yaml`, `selfHeal:true`) and the policy app (`apps/16`) would REVERT any live element /
 ConfigMap write back to git's inert baseline. So:
+
+> **Since 2026-08-26 neither root is applied by default** — `bootstrap.sh` applies
+> the baked `apps/` tree directly — so on a device the 13a half of this is **moot
+> rather than load-bearing**: nothing selfHeals `apps/13a-optional-services.yaml`.
+> The `ignoreDifferences` below are KEPT, unchanged: they are still required for a
+> cluster run under `HUGMESH_GITOPS_ROOT_RECURSE=1` or pointed at the waved root,
+> and removing them would silently re-arm the revert for exactly those clusters.
+> The `apps/16` ConfigMap clause is **unaffected** and still load-bearing — the
+> policy app is applied from the baked tree like every other child and keeps its
+> own `selfHeal`.
 
 - both roots carry `ignoreDifferences` on `argoproj.io ApplicationSet
   optional-services` `jsonPointers:[/spec/generators/0/list/elements]` **+
@@ -681,6 +789,90 @@ When a service is **absent**, a user sees:
 `WorkloadSuperadminController`/`GoLiveController` + a step-up gate) that patches the CR
 via the fabric8 client admin-bff already holds, and a toggle screen in
 `hugmesh-superadmin-service-catalog-ui`. kubectl-first; BFF endpoint + UI later.
+The gateway route AND the `ROLE_SUPERADMIN` `route_access` floor for that path are
+ALREADY in place, so the handler needs no new rows — today a superadmin calling it
+gets a 404 from admin-bff because no `@RequestMapping` matches.
+
+### 10.1 Turning the reconciler on — the lever, and why it is GitOps-only
+
+Until 2026-08-26 there was **no supported way to enable this feature at all**.
+`APP_OPTIONAL_SERVICES_RECONCILE_ENABLED` appeared exactly ONCE in the whole
+platform — as the `:false` default of `app.optional-services.reconcile.enabled` in
+admin-bff's own `application.yml`. It was set by no manifest, no builder, no
+`brand.conf` and no CLI flag, and `kubectl set env` was **reverted on the next
+selfHeal pass** because `apps/31-admin-bff-api.yaml` carries
+`automated: {prune: true, selfHeal: true}` with no `ignoreDifferences`. A flag that
+can only be set by a write ArgoCD undoes is not "opt-in", it is unreachable.
+
+**The lever now exists and is a one-line commit.** The flag is DECLARED in
+`specs/cluster/manifests/admin-bff-api/deployment.yaml`:
+
+```yaml
+- { name: APP_OPTIONAL_SERVICES_RECONCILE_ENABLED, value: "false" }
+```
+
+That manifest is the **single source**. Flip the value to `"true"`, merge, let ArgoCD
+sync — and selfHeal then *enforces* it instead of fighting it.
+
+**It is deliberately NOT operator-settable at runtime**, and `apps/31` deliberately
+has NO `ignoreDifferences`:
+
+- ArgoCD addresses container env by **array index**
+  (`/spec/template/spec/containers/0/env/N`); there is no by-name pointer. Such an
+  exemption is correct only until someone inserts an env var above it, after which it
+  silently exempts a *different* variable — and this container's env carries
+  `secretKeyRef`s. Exempting the whole `/env` array un-enforces every variable in the
+  pod to make one settable.
+- Enabling this is not a routine toggle. It has a hard precondition (below), so it
+  wants a reviewed commit and an audit trail. selfHeal reverting an ad-hoc
+  `kubectl set env` of this key is **correct behaviour**, not a defect.
+
+The **runtime** surface an operator or superadmin drives is the per-slug
+`OptionalService` CRs — and *those* writes ARE exempted from selfHeal, on their own
+objects and **by name, not by index** (`apps/16` for the ConfigMap data keys;
+`app-of-apps.yaml` + `apps/00-app-of-apps-waved.yaml` for the 13a elements).
+
+**⚠ BLAST RADIUS — why the default is NOT flipped.** On its first lit tick the
+reconciler becomes authoritative over the entire closed slug set: a known slug with
+**no** CR is reconciled to `false`. The seed CRs ship `akkoma`/`tuwunel`/`phpbb`
+`enabled: true` while `apps/30-akkoma.yaml`, `apps/30-tuwunel.yaml` and
+`apps/30-phpbb.yaml` are still **hardcoded** Applications — so the first tick makes
+the 13a ApplicationSet create `optional-akkoma` / `optional-tuwunel` /
+`optional-phpbb`, each double-managing a manifest directory a hardcoded Application
+already owns, on every live mesh at once. The hardcoded-app **cut-over is the
+precondition for flipping this flag**, not a follow-up to it.
+
+### 10.2 The slug set is DERIVED, and one guard pins all five surfaces
+
+The set was described for months as a "closed 1:1 set". Measured, it was **five
+different cardinalities at once**: 17 ConfigMap booleans, 14 13a elements, 13 CRD
+enum values, 13 seed CRs, 12 Java registry entries. The governable set is
+
+```
+G = { slug : has a 13a ApplicationSet element AND an installed-services ConfigMap boolean }
+```
+
+— exactly what the reconciler can actuate. `tests/scripts/test-optional-service-slug-closure.sh`
+recomputes `G` and requires the CRD enum, the seed CRs, `apps/16`'s
+`ignoreDifferences` pointers and admin-bff's `OptionalServiceRegistry` to equal it.
+Nothing hard-codes the slugs, so adding one to 13a + the ConfigMap makes the guard
+name every surface still missing it. It reads the **sibling `hugmesh-admin-bff-api`
+checkout** for the Java leg and exits INCOMPLETE (a FAILURE) without it, because the
+worst defect it catches is invisible from inside this repo.
+
+> **⚠ RECORDED, NOT FIXED — the `installed-services` ConfigMap is WRITE-ONLY.**
+> A grep for the literal `installed-services` across every `.java/.ts/.py/.go` in the
+> org returns exactly one distinct line naming *that* object: `CONFIGMAP_NAME` in the
+> writer itself. No Deployment mounts it; no `configMapKeyRef` references it. Half of
+> every reconcile pass maintains an artefact with no consumer. What actually drives
+> the user-facing greying is the **`federation_modules` table** in the federation
+> Postgres, read via `GET /api/federation/capabilities` (§3.1) — which is precisely
+> why `manifests/federation-modules-gate/` had to exist. The absence is easy to miss
+> because the name collides with a *different*, per-brand ConfigMap
+> `hugmesh-installed-services-<domainSlug>` in `hugmesh-backend` that **is** read (by
+> `ConfigMapRunningServiceProvider`, for the cloud-backup menu). Do **not** close this
+> by inventing a consumer; it is recorded so the next reader does not infer one from
+> the writer's existence.
 
 ## 11. Verification & rollback
 

@@ -12,7 +12,7 @@
 # --dry-run to validate args + render the KEYS payload without booting.
 #
 # Usage:
-#   ./verify-client.sh -w /home/magus/x86-client-build [--role laptop] \
+#   ./verify-client.sh -w "$HOME/x86-client-build" [--role laptop] \
 #                      [--person-role user|superadmin] [--img FILE] [--keep] [--dry-run]
 set -euo pipefail
 

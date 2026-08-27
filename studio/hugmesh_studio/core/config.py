@@ -426,8 +426,8 @@ SERVICES_NONE = "none"
 SERVICES_ALL = "all"
 
 # The builders' OWN built-in default selection when no --optional-services is given:
-#   build-x86-host-stage4.sh:134   OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
-#   build-rpi5-stage4.sh:218       (identical line)
+#   build-x86-host-stage4.sh:196   OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
+#   build-rpi5-stage4.sh:254       (identical line)
 # The services table PRE-TICKS exactly these rows on arrival, because they are what an
 # untouched build genuinely ships — eight unticked boxes over a mesh that runs three of
 # them anyway is the same lie as a part-checked square (ask 23: "anything off by default
@@ -439,11 +439,11 @@ BUILTIN_DEFAULT_SERVICES = ("akkoma", "tuwunel", "phpbb")
 
 # What the `all` sentinel / --all-services ACTUALLY expands to, mirrored from the single
 # line both node builders declare it on:
-#   build-x86-host-stage4.sh:127   USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast
+#   build-x86-host-stage4.sh:136   USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast
 #                                  tube character-studio character-forge"
-#   build-rpi5-stage4.sh:212       (identical line)
-# and expanded into OPTIONAL_SERVICES at build-x86-host-stage4.sh:1067-1069 /
-# build-rpi5-stage4.sh:1075 — BEFORE the --with-<x> opt-in folds, so a slug in this set is
+#   build-rpi5-stage4.sh:241       (identical line)
+# and expanded into OPTIONAL_SERVICES at build-x86-host-stage4.sh:1177-1191 /
+# build-rpi5-stage4.sh:1111-1125 — BEFORE the --with-<x> opt-in folds, so a slug in this set is
 # BAKED by --all-services no matter what the dedicated flag says. That last clause is the
 # whole reason this constant exists in Studio: the wizard has to know which rows the "every
 # user-level service" preset takes over, or it shows `character-studio` unticked (and emits
@@ -516,7 +516,7 @@ SERVICE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # --person-role client-identity picker (FD-08). The x86 builder honours --person-role/
 # --domains only for ROLE_CLIENT roles (the person-device desktops laptop/chromebook/
 # desktop AND the standalone desktops); on a cluster NODE role it warns + IGNORES them
-# (build-x86:1219-1221), so the Studio must NOT emit them for a node role (G18).
+# (build-x86:1722-1724), so the Studio must NOT emit them for a node role (G18).
 PERSON_ROLE_CHOICES = ("user", "mod", "admin", "superadmin")
 X86_CLIENT_ROLES = ("laptop", "chromebook", "desktop")
 # The cluster NODE roles (ROLE_CLIENT=false) — the roles for which the builder drops
@@ -525,7 +525,8 @@ X86_CLIENT_ROLES = ("laptop", "chromebook", "desktop")
 X86_NODE_ROLES = ("pki", "be", "fe", "be+gpu", "omnibus", "edge_ai")
 
 # --release-state: cluster ingress + Layer-3 nftables posture baked into the image
-# (build-x86:674 / bake_host_firewall:2888; rpi5:1089-1091). Only x86 + rpi5 parse it.
+# (build-x86:909 parses it, :3174 bakes /etc/hugmesh/release-state inside
+# bake_host_firewall(); rpi5:1000). Only x86 + rpi5 parse it.
 RELEASE_STATE_CHOICES = ("internal", "public")
 
 # Mesh-node identity provider (I6). Casdoor is the NATIVE DEFAULT: with idp left at
@@ -763,7 +764,7 @@ NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile",
                    "login_footer_hidden", "login_footer_size", "login_footer_bg",
                    "login_footer_text",
                    "login_bg_effect",
-                   "additional_domains", "configure_users", "qemu_e2e")
+                   "additional_domains", "configure_users", "qemu_device_tests")
 
 
 # ── role-class capability layer (Qt-free; BESIDE PLATFORM_FIELD_SUPPORT, NEVER inside
@@ -837,8 +838,8 @@ class BuilderDefault:
 
     DESIGN DEVIATION, and the code is why: the audited shape for this record was
     ``(var, when_standalone, otherwise, policy)`` — it assumed every sentinel forks on
-    ``${STANDALONE}``. Only two of the four do (INSTALLER_UI :1244, BUNDLE_SOURCE :1248).
-    GPU_DRIVER :1190 forks on ``${GPU}`` and HOME_MODE :1227 on
+    ``${STANDALONE}``. Only two of the four do (INSTALLER_UI :1619, BUNDLE_SOURCE :1623).
+    GPU_DRIVER :1517 forks on ``${GPU}`` and HOME_MODE :1602 on
     ``[ -n "${INCLUDE_HOME_ARCHIVE}" ]``. A ``when_standalone`` field would therefore have
     recorded a fiction for half the table, and GUARD A could only ever have checked the
     variable NAMES. Carrying the fork ``condition`` verbatim instead lets the guard pin the
@@ -888,11 +889,11 @@ class FieldScope:
 
       * build-x86-host-stage4.sh   — 48 ROLE_CLIENT refs; ACCEPTS --standalone on a node
                                      role and builds the wrong image  -> class rule is real
-      * build-rpi5-stage4.sh:1037  — ${ROLE_CLIENT} || err ...; exit 1 -> class rule is real
+      * build-rpi5-stage4.sh:1302  — ${ROLE_CLIENT} || err ...; exit 1 -> class rule is real
       * build-frite / -orangepi5 / -orangepi-zero2-stage4.sh
                                    — ZERO occurrences of ROLE_CLIENT or ROLE_K8S. They
                                      compose ${STANDALONE} unconditionally, and
-                                     build-orangepi-zero2-stage4.sh:218-226 documents
+                                     build-orangepi-zero2-stage4.sh:301-310 documents
                                      --standalone as a posture this image composes.
 
     The orangepizero2 role IS node-class (a headless appliance) AND its defining posture is
@@ -902,12 +903,35 @@ class FieldScope:
     class axis carries the platforms it is TRUE on: None means "everywhere" (the common
     case), a tuple means the narrowing applies only on those builders and every other
     platform stays fully open. GUARD B cannot catch this — it pins image_class to the x86
-    builder, which is exactly the builder that does not govern orangepizero2."""
+    builder, which is exactly the builder that does not govern orangepizero2.
+
+    ``mode_platforms`` is the EXACT TWIN of that carrier for the MODE axis, and it exists
+    for the same reason: a field's mode rule can be true on one builder and false on
+    another. The cluster-identity trio is the measured case (2026-08-26, operator report
+    "There should also be no inbetween menu for configuring domain"):
+
+      * ``_x86_args`` (:3518; the mode fork at :3564-3574) emits --cluster-domain /
+        --games-domain / --release-state ONLY under ``mode in ("cloud", "mesh")`` -> on x86
+        the mode rule is real;
+      * ``_arm_common_args`` (:3128; the unconditional --cluster-domain at :3139) emits it
+        in EVERY mode and is shared by all NINE arm64 builder methods (call sites at :3213
+        rpi5, :3271, :3287, :3304, :3323, :3343, :3370, :3389, :3428 jetson), and
+        build-rpi5-stage4.sh:3386 bakes ${CLUSTER_DOMAIN} into /etc/hugmesh/cluster-domain
+        with no role or mode fork at all. A standalone rpi5 'generic' image GENUINELY
+        carries a cluster domain.
+
+    A blanket ``modes=("cloud","mesh")`` would therefore have hidden a widget whose value
+    the ARM builders really do take, and (via the emission-neutral clear the wizard pairs
+    with every hide) silently reset it to "hugmesh.net" on an operator who had typed
+    something else. Same shape of bug as the orangepizero2 --standalone regression above,
+    on the other axis. None means "the mode rule holds everywhere"; a tuple means it holds
+    ONLY on those builders and every other platform stays fully open."""
     platforms: tuple[str, ...] = _ALL_PLATFORMS
     classes: tuple[str, ...] = _ALL_CLASSES
     modes: tuple[str, ...] = _ALL_MODES
     builder_default: "BuilderDefault | None" = None
     class_platforms: "tuple[str, ...] | None" = None
+    mode_platforms: "tuple[str, ...] | None" = None
 
 
 # The builder's four self-resolving defaults, transcribed from build-x86-host-stage4.sh.
@@ -951,6 +975,25 @@ _BD_BUNDLE_SOURCE = BuilderDefault(
 # rather than letting the tuple rot into a fiction.
 _STANDALONE_CLASS_GATED_PLATFORMS = ("x86", "rpi5")
 
+# The CLUSTER-IDENTITY trio — the three fields NetworkPage's "Identity & domain"
+# collapsible collects (network.py:494/:499/:504: "Public apex domain", "Games domain",
+# "Release state"). Declared as ONE tuple because they are ONE question to the operator
+# and one predicate answers for all of them (cluster_identity_applies), not because they
+# share a platform axis — they do not: --cluster-domain is parsed by all TEN builder
+# scripts (verified: every build-*-stage4.sh has exactly one `--cluster-domain|--domain)`
+# arm), --games-domain / --release-state by x86 + rpi5 only.
+_CLUSTER_IDENTITY_FIELDS = ("cluster_domain", "games_domain", "release_state")
+
+# The modes in which the cluster plane is baked AT ALL, and the builders on which that
+# rule is true. Transcribed from the emitters, not from intent:
+#   _x86_args:3582        if self.mode in ("cloud", "mesh"):  -> the trio is inside it
+#   _arm_common_args:3157 --cluster-domain, unconditional     -> no mode fork on ARM
+#   _rpi5_args:3236-3238  --release-state / --games-domain    -> also unconditional
+# so the narrowing is x86-ONLY. See FieldScope.mode_platforms for the regression this
+# shape prevents (a blanket mode key would hide + clear a domain the ARM builders bake).
+_CLUSTER_PLANE_MODES = ("cloud", "mesh")
+_CLUSTER_PLANE_MODE_GATED_PLATFORMS = ("x86",)
+
 # Role-class / mode narrowings. Entries here either restate a rule the codebase ALREADY
 # enforces elsewhere — a test pins each to the predicate that owns it so the two cannot
 # disagree — or carry an enforcement landing in the SAME commit:
@@ -976,7 +1019,7 @@ _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
     # containerd and no cluster GitOps tree, while the full desktop stack IS built
     # (packages-desktop.list, ROOT_MiB 16384, Xorg/openbox/lightdm) — a node that can
     # never join the mesh it was built for, discovered hours later at deploy time. On rpi5
-    # the same worklist hard-errors at build-rpi5-stage4.sh:1037, after dispatch.
+    # the same worklist hard-errors at build-rpi5-stage4.sh:1046, after dispatch.
     # ...but ONLY on the two builders that actually have a role-class concept. frite,
     # orangepi5 and orangepi-zero2 have ZERO occurrences of ROLE_CLIENT/ROLE_K8S and
     # compose ${STANDALONE} unconditionally; orangepizero2's role is node-class and
@@ -988,7 +1031,7 @@ _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
     # NO MODE AXIS — deliberately, and this was a REGRESSION this branch shipped and had to
     # take back. The first cut read modes=(standalone, cloud), on the reasoning above that
     # "--standalone is self-contradictory in mesh mode". That reasoning is prose, not builder
-    # truth, and it invented a constraint: build-rpi5-stage4.sh:1037 gates --standalone on
+    # truth, and it invented a constraint: build-rpi5-stage4.sh:1046 gates --standalone on
     # ROLE_CLIENT *only*, never on mode, and :998 sets ROLE_CLIENT=true for its desktop arm.
     # So mesh + rpi5-desktop + --standalone is ACCEPTED by the builder — and is a DOCUMENTED
     # combination: ROLE_CHOICES describes rpi5-desktop as "compose with --standalone for FDE,
@@ -1001,17 +1044,17 @@ _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
     "standalone": FieldScope(platforms=_FIELD_PLATFORMS["standalone"], classes=("desktop",),
                              class_platforms=_STANDALONE_CLASS_GATED_PLATFORMS),
     # Egress VPN is a DESKTOP/tailnet-client feature and the builder says so itself:
-    #   build-x86-host-stage4.sh:3962  if ! ${ROLE_CLIENT} && [ -n "${EGRESS_VPN_FILE}" ]; then
-    #                          :3963      warn "--egress-vpn given for a non-desktop role
+    #   build-x86-host-stage4.sh:4255  if ! ${ROLE_CLIENT} && [ -n "${EGRESS_VPN_FILE}" ]; then
+    #                          :4494      warn "--egress-vpn given for a non-desktop role
     #                                      (${ROLE}); ... — ignoring."
     # HISTORY — why this scope entry exists, and what is no longer true. When it was written
     # (#387) "ignoring" was only HALF true: the STAGING leg was role-gated but the PACKAGE leg
     # (`if [ -n "${EGRESS_VPN_FILE}" ]` — net-vpn/wireguard-tools, or networkmanager-openvpn +
     # openvpn for a .ovpn) was NOT, so a node still emerged the VPN userspace it was just told
-    # it would not use. That leg is now gated on the SAME ROLE_CLIENT condition (:4569), so the
+    # it would not use. That leg is now gated on the SAME ROLE_CLIENT condition (:5123), so the
     # builder no longer contradicts itself. The old note ALSO named the CONFIG_WIREGUARD kernel
     # fragment as ungated — that was wrong when written: the fragment has always sat INSIDE the
-    # `if ${ROLE_CLIENT}` kernel arm (:5237, verified back to #189, the commit that added it).
+    # `if ${ROLE_CLIENT}` kernel arm (:5895, verified back to #189, the commit that added it).
     # The scope entry STAYS regardless: with every leg role-gated, offering the field on a node
     # class would only produce a flag the builder warns about and ignores. Mode is deliberately
     # unrestricted: the builder gates on ROLE_CLIENT alone, and a cloud or standalone DESKTOP
@@ -1027,9 +1070,24 @@ _FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
                                builder_default=_BD_INSTALLER_UI),
     # bundle_source bakes the 33MB generator tree + /usr/sbin/hugmesh-regenerate into
     # the image: the self-hosting posture of a branded STANDALONE appliance, and dead
-    # weight on a headless PKI/backend node. The builder says so itself at :1248.
+    # weight on a headless PKI/backend node. The builder says so itself at :1623
+    # (`[ -z "${BUNDLE_SOURCE}" ] && { ${STANDALONE} && BUNDLE_SOURCE=true || … }`).
     "bundle_source": FieldScope(platforms=_FIELD_PLATFORMS["bundle_source"],
                                 classes=("desktop",), builder_default=_BD_BUNDLE_SOURCE),
+    # Cluster identity (--cluster-domain / --games-domain / --release-state): a MODE
+    # narrowing that is TRUE ON x86 ONLY. Enforcement lands with the declaration —
+    # cluster_identity_applies() reads it and NetworkPage gates the "Identity & domain"
+    # collapsible on that, closing the operator's 2026-08-26 report ("There should also be
+    # no inbetween menu for configuring domain" on the standalone flow; the image was
+    # role=standalone-unaffiliated / platform=x86, session 20260826-151356-64070a).
+    #
+    # NO CLASS AXIS, deliberately: --cluster-domain is baked for every mesh NODE and every
+    # CLIENT alike (_x86_args:3582-3584 emits it outside the `role not in X86_NODE_ROLES`
+    # gate that --person-role/--domains sit behind), so a class rule here would be an
+    # invented constraint of exactly the kind FieldScope's docstring warns about.
+    **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], modes=_CLUSTER_PLANE_MODES,
+                     mode_platforms=_CLUSTER_PLANE_MODE_GATED_PLATFORMS)
+       for f in _CLUSTER_IDENTITY_FIELDS},
 }
 
 FIELD_SCOPE: dict[str, FieldScope] = {
@@ -1090,6 +1148,43 @@ def x86_desktop_axis(role: str) -> tuple[str, ...]:
     return ()
 
 
+def role_presets_standalone(role: str) -> bool:
+    """Does ``role``'s own builder arm already set STANDALONE=true?
+
+    The x86 standalone-* desktop roles ARE the standalone posture — the builder's role
+    case sets it for them (build-x86-host-stage4.sh: the standalone-thin arm, the
+    standalone-thick|standalone-full arm, and the standalone-unaffiliated arm each
+    assign ``STANDALONE=true``), so ``--standalone`` on those roles is a no-op.
+
+    Named here rather than spelled in a page (house rule: no second, page-local
+    implementation of an axis rule). gui/pages/role.py uses it to HIDE the "Image
+    posture" box on those roles — the operator's 2026-08-26 report is that the wizard
+    "is asking same questions seemingly multiple times", and a tick box whose value the
+    chosen image type already decided is exactly that: one question, two screens' worth
+    of asking, one legal answer.
+
+    NOT a general "hide what the role implies" rule. ``--standalone`` genuinely COMPOSES
+    onto chromebook-in-standalone and onto every ARM appliance role, and those keep the
+    box; this predicate is False for them."""
+    return role in _STANDALONE_DESKTOP_ROLES
+
+
+def role_presets_capable(role: str) -> bool:
+    """Does ``role``'s own builder arm already set CAPABLE=true?
+
+    DERIVED, not restated: it is the standalone-desktop role whose pinned desktop weight
+    is "full". That mirrors the builder's own structure — ``CAPABLE=true`` appears only
+    on the two arms that also pin ``DESKTOP="full"`` (standalone-thick|standalone-full
+    and standalone-unaffiliated) and never on the thin arm, which is why
+    standalone-thin KEEPS its --capable tick: that is the composition G21 exists for.
+
+    The coupling ("capable iff the weight is pinned to full") is an INFERENCE from the
+    builder's role case, true today and the reason this is expressed through
+    x86_desktop_axis rather than as a third hand-written role list — if the builder ever
+    pins a weight without CAPABLE, the axis table is the one place that has to change."""
+    return role in _STANDALONE_DESKTOP_ROLES and x86_desktop_axis(role) == ("full",)
+
+
 def branding_allowed(cfg: "ImageConfig") -> bool:
     """Desktop theming is offered on desktop-class images in ANY mode (operator ask,
     2026-08-14 — supersedes spec 2's never-in-mesh). A mesh WORKLIST has no single
@@ -1113,6 +1208,80 @@ def home_options_allowed(cfg: "ImageConfig") -> bool:
     return image_class(cfg.mode, cfg.role) == "desktop"
 
 
+def unaffiliated_image(cfg) -> bool:
+    """Is THIS image unaffiliated — the dedicated ``standalone-unaffiliated`` role id, OR
+    the composable ``--unaffiliated`` flag on any other x86 client role (G22)?
+
+    THE CONTRACT gui/pages/branding.py:134-146 filed for this lane, honoured here so the axis
+    rule has ONE implementation. Their note records why it had to exist at all: before it,
+    ``BrandingPage.applies_to`` tested ``role == UNAFFILIATED_ROLE or cfg.unaffiliated``
+    while ``initializePage``/``validatePage`` tested ONLY the role, so
+    ``role="standalone-thick", unaffiliated=True`` rendered the page fully live for a
+    config whose ``to_cli_args()`` raises. ``_x86_args`` had a THIRD copy of the same
+    expression inline (the one that decides whether to run the conflict check and suppress
+    the brand plane); it now calls this, so the emitter and the wizard cannot disagree
+    about what "unaffiliated" means.
+
+    Tolerant ``getattr``: pages hand this ImageConfigs, ``ImageAxes`` shims and worklist
+    rows alike, and a shim carrying neither attribute is simply not unaffiliated.
+
+    NO PLATFORM AXIS on purpose, even though ``--unaffiliated`` is x86-only in emission
+    (PLATFORM_FIELD_SUPPORT["unaffiliated"] == ("x86",), pinned by
+    test_g22/test_platform_field_support_unaffiliated_is_x86_only). The question here is
+    "did the operator ask for an unaffiliated image", which is answered before the
+    platform gate strips the flag — mixing the two would make the predicate say "no" for
+    a config that is mid-switch between platforms and quietly re-enable the brand plane
+    on it."""
+    return bool(getattr(cfg, "role", "") == UNAFFILIATED_ROLE
+                or getattr(cfg, "unaffiliated", False))
+
+
+def cluster_identity_applies(cfg: "ImageConfig") -> bool:
+    """Does the CLUSTER-IDENTITY surface — NetworkPage's "Identity & domain" collapsible
+    (network.py:494/:499/:504: "Public apex domain" / "Games domain" / "Release state") — apply
+    to THIS image? Signature: ``cluster_identity_applies(cfg: ImageConfig) -> bool``,
+    reading ONLY ``cfg.platform`` and ``cfg.mode`` (so an ``ImageAxes`` shim satisfies it
+    like every other predicate in this module).
+
+    THE QUESTION IT ANSWERS is deliberately narrow: "are --cluster-domain /
+    --games-domain / --release-state actually EMITTED for this image". Not "does this
+    image have a domain", not "is this a mesh". Emission is the only thing a widget gate
+    may key on, because the wizard's hide contract is EMISSION-NEUTRAL — a hidden field
+    is cleared to its dataclass default in validatePage, so hiding a field that IS emitted
+    silently changes the built image.
+
+    Operator report, 2026-08-26, verbatim: "There should also be no inbetween menu for
+    configuring domain" on the standalone flow. Measured: their image is
+    role=standalone-unaffiliated / platform=x86 (session 20260826-151356-64070a,
+    out/sessions/.../build-standalone-unaffiliated.x86.log), and the "Identity & domain"
+    group was the ONLY mode-ungated group left on NetworkPage — the static
+    MODE_SKIPPED_PAGES["standalone"] skip already removes the domains_choice/domains
+    PAGES, so this group was the whole of the leak.
+
+    IT IS A FUNCTION OF (platform, mode), NOT MODE ALONE — this is the entire subtlety and
+    the reason the answer is not a two-line `cfg.mode in ("cloud","mesh")`:
+
+      * x86:  _x86_args:3582 wraps all three flags in ``if self.mode in ("cloud","mesh")``.
+      * ARM:  _arm_common_args:3156-3157 emits --cluster-domain in EVERY mode, and is
+              shared by all NINE arm64 builder methods; build-rpi5-stage4.sh:3386 writes
+              ${CLUSTER_DOMAIN} to /etc/hugmesh/cluster-domain with no mode or role fork,
+              and _rpi5_args:3236-3238 emits --release-state/--games-domain unconditionally
+              too. A standalone rpi5 'generic' appliance genuinely carries a cluster
+              domain, so a blanket mode-keyed answer would hide a live flag AND (via the
+              paired clear) reset a typed domain to "hugmesh.net" behind the operator.
+
+    NO SECOND IMPLEMENTATION OF THE AXIS RULE: the rule is DECLARED in FIELD_SCOPE
+    (``modes=_CLUSTER_PLANE_MODES`` + ``mode_platforms=("x86",)``) and this predicate just
+    composes ``field_in_scope`` over the trio, so the wizard gate, the Qt-free
+    ``--config`` validator and ``_gating.scope_allows`` cannot drift apart from each other
+    or from this function. ``any`` rather than ``all`` is the honest quantifier: on frite/
+    jetson/orangepi* only --cluster-domain is parsed at all (--games-domain/--release-state
+    are _X86_RPI5), yet that one flag IS baked, so the group must be shown — its two
+    x86+rpi5 rows stay greyed there by NetworkPage's existing platform gate
+    (gate_widgets, network.py:1429-1432), which is a different axis and already correct."""
+    return any(field_in_scope(f, cfg) for f in _CLUSTER_IDENTITY_FIELDS)
+
+
 def local_login_applies(cfg: "ImageConfig") -> bool:
     """Whether the "Your login & standalone account" surface (the --local-user /
     --local-pass desktop account, and the --standalone posture it frames) applies to
@@ -1129,7 +1298,7 @@ def local_login_applies(cfg: "ImageConfig") -> bool:
     DESKTOP-CLASS, no mode axis — deliberately, and grounded the same way
     ``FieldScope.class_platforms`` is: a mesh flow made entirely of rpi5-desktop rows is
     the documented "desktop mesh track" the operator asked us to keep this on, and
-    build-rpi5-stage4.sh:998 sets ROLE_CLIENT=true for exactly that arm. A mode axis
+    build-rpi5-stage4.sh:1007 sets ROLE_CLIENT=true for exactly that arm. A mode axis
     would hide the group on the one flow it belongs to.
 
     ...OR wherever ``--standalone`` itself is still in scope, and that second arm is not
@@ -1147,8 +1316,9 @@ def local_login_applies(cfg: "ImageConfig") -> bool:
     (Pinned by test_pages_home.test_home_standalone_live_on_the_orangepizero2_node_class_appliance.)
 
     NOT a claim about the builder, and it deliberately declares no FIELD_SCOPE
-    narrowing of its own: build-x86-host-stage4.sh:1597 honours --local-user on EVERY role
-    (it overrides DEFAULT_USER, :1598), so narrowing the FIELD would invent a builder
+    narrowing of its own: build-x86-host-stage4.sh:1912 honours --local-user on EVERY role
+    (its guard is `${STANDALONE} || [ -n "${LOCAL_USER}" ] || [ -n "${LOCAL_USER_PASS}" ]`,
+    with no role test in it; :1733 overrides DEFAULT_USER), so narrowing the FIELD would invent a builder
     constraint that does not exist. This is a WIZARD-surface rule of the same family as
     ``home_options_allowed``: it hides a group, and emission stays byte-identical because
     ``local_user`` keeps its dataclass default (``default_local_user()``, the invoking
@@ -1165,10 +1335,16 @@ def external_media_applies(cfg: "ImageConfig") -> bool:
 
     Same evidence shape as ``egress_vpn``'s role-class narrowing, which is why it gets a
     predicate rather than a shrug: the x86 builder half-honours the option on a node.
-    ``build-x86-host-stage4.sh:1442`` role-gates only the STEAM leg
-    (``${ROLE_CLIENT} && ${MEDIA_DATA}``), while ``:4158`` and the package leg ``:4524``
-    (``packages-media-data.list``) are NOT role-gated — so a headless PKI node emerged a
-    Steam/Vaults media stack it has no session to use. It was reachable on every mesh node
+    ``build-x86-host-stage4.sh:1736`` role-gates the STEAM leg
+    (``${ROLE_CLIENT} && ${MEDIA_DATA}``). HISTORY, re-verified 2026-08-26 rather than
+    copied forward: when this predicate was written the media-detect STAGING leg and the
+    ``packages-media-data.list`` PACKAGE leg were NOT role-gated, so a headless PKI node
+    emerged a Steam/Vaults media stack it has no session to use. The builder has since
+    closed both — staging now sits inside the ``if ${ROLE_CLIENT}`` service/desktop arm
+    (:4658, the ``if ${MEDIA_DATA}`` at :4695) and the package leg inside the ROLE_CLIENT
+    PKG_LISTS arm (:5070, the list append at :5084-5085). The predicate STAYS: with every
+    leg role-gated, offering the group on a node class can only produce flags the builder
+    ignores. It was reachable on every mesh node
     because ``FIELD_SCOPE`` has no entry for ``media_data`` at all and the only gate was
     the PLATFORM one, which a mesh flow passes unconditionally (WorklistPage forces the
     shared base to platform="x86")."""
@@ -1256,7 +1432,7 @@ def superadmin_plane_applies(cfg: "ImageConfig") -> bool:
 
     The CLOUD arm is deliberately untouched: a cloud desktop client's Domains/Users step
     carries the FD-08 --domains + --person-role tie the image is literally built around
-    (build-x86-host-stage4.sh:4057-4058), which is not an "additional" domain at all."""
+    (build-x86-host-stage4.sh:4356-4357), which is not an "additional" domain at all."""
     if cfg.mode == "mesh":
         return bool(cfg.additional_domains)
     if cfg.mode == "cloud":
@@ -1316,9 +1492,9 @@ def person_role_applies(cfg: "ImageConfig") -> bool:
     Mirrors to_cli_args' own emission condition exactly (see the ``mode in
     ("cloud","mesh")`` / ``role not in X86_NODE_ROLES`` block): the builder writes
     /etc/hugmesh/identity-role from inside its ``elif ${ROLE_CLIENT}`` branch
-    (build-x86-host-stage4.sh:4052-4057) and warns "--person-role/--domains are ignored
-    for non-client role" otherwise (:1587-1588). A standalone build emits it never, and
-    ``--unaffiliated`` hard-CONFLICTS with it (:1333).
+    (build-x86-host-stage4.sh:4351-4356) and warns "--person-role/--domains are ignored
+    for non-client role" otherwise (:1722-1723). A standalone build emits it never, and
+    ``--unaffiliated`` hard-CONFLICTS with it (:1414).
 
     Used by SystemPage to hide the control rather than offer a knob whose value the
     builder would discard — the same class of leak asks 3 and 11 are about."""
@@ -1341,39 +1517,39 @@ def person_role_applies(cfg: "ImageConfig") -> bool:
 # part after "{brand}-"; a role absent from a platform's map falls through to
 # "{brand}-{role}" (every builder's `*)` arm).
 _HOSTNAME_SUFFIX = {
-    # build-x86-host-stage4.sh:1218-1287
+    # build-x86-host-stage4.sh:1440-1529 (the `case "${ROLE}" in` role switch)
     "x86": {"pki": "pki", "be": "be", "fe": "fe", "be+gpu": "host", "host": "host",
             "omnibus": "omnibus", "edge_ai": "edge-ai", "edge-ai": "edge-ai",
             "desktop": "desktop",
             "standalone-thin": "standalone-thin",
             "standalone-thick": "standalone", "standalone-full": "standalone"},
-    # build-rpi5-stage4.sh:1238-1244 — `generic` is the ONE role whose default drops
+    # build-rpi5-stage4.sh:1294-1295 — `generic` is the ONE role whose default drops
     # the brand entirely ("gentoo-${BOARD}"); handled in derive_hostname.
     "rpi5": {},
-    "frite": {"desktop": "frite", "generic": "frite"},            # :533-534
+    "frite": {"desktop": "frite", "generic": "frite"},            # :569-570
     "jetson": {"edge_ai": "jetson-edge-ai", "edge-ai": "jetson-edge-ai",
                "gpu-host": "jetson-gpu", "gpu_host": "jetson-gpu",
-               "full": "jetson-full", "desktop": "jetson"},       # :487-503
-    "orangepi5": {"desktop": "orangepi5", "generic": "orangepi5"},          # :564-565
-    "orangepizero2": {"appliance": "orangepizero2", "generic": "orangepizero2"},    # :596
-    "orangepizero2w": {"appliance": "orangepizero2w", "generic": "orangepizero2w"},  # :607
-    "orangepizero3": {"appliance": "orangepizero3", "generic": "orangepizero3"},    # :610
-    "orangepi3-lts": {"appliance": "orangepi3-lts", "generic": "orangepi3-lts"},    # :602
-    "orangepi4-lts": {"desktop": "orangepi4-lts", "generic": "orangepi4-lts"},      # :645
+               "full": "jetson-full", "desktop": "jetson"},       # :523-539
+    "orangepi5": {"desktop": "orangepi5", "generic": "orangepi5"},          # :600-601
+    "orangepizero2": {"appliance": "orangepizero2", "generic": "orangepizero2"},    # build-orangepi-zero2-stage4.sh:632
+    "orangepizero2w": {"appliance": "orangepizero2w", "generic": "orangepizero2w"},  # build-orangepi-zero2w-stage4.sh:643
+    "orangepizero3": {"appliance": "orangepizero3", "generic": "orangepizero3"},    # build-orangepi-zero3-stage4.sh:646
+    "orangepi3-lts": {"appliance": "orangepi3-lts", "generic": "orangepi3-lts"},    # :638
+    "orangepi4-lts": {"desktop": "orangepi4-lts", "generic": "orangepi4-lts"},      # :681
 }
 
 # Each builder's DEFAULT_USER initialiser — the account created when -u is omitted.
 _BUILDER_DEFAULT_USER = {
-    "x86": "snap",                       # build-x86-host-stage4.sh:184
-    "rpi5": "pi",                        # :261
-    "frite": "frite",                    # :192
-    "jetson": "jetson",                  # :176
-    "orangepi5": "orangepi5",            # :219
-    "orangepizero2": "orangepizero2",    # :266
-    "orangepizero2w": "orangepizero2w",  # :273
-    "orangepizero3": "orangepizero3",    # :276
-    "orangepi3-lts": "orangepi3lts",     # :269
-    "orangepi4-lts": "orangepi4-lts",    # :287
+    "x86": "snap",                       # build-x86-host-stage4.sh:246
+    "rpi5": "pi",                        # :288
+    "frite": "frite",                    # :219
+    "jetson": "jetson",                  # :203
+    "orangepi5": "orangepi5",            # :246
+    "orangepizero2": "orangepizero2",    # build-orangepi-zero2-stage4.sh:293
+    "orangepizero2w": "orangepizero2w",  # build-orangepi-zero2w-stage4.sh:300
+    "orangepizero3": "orangepizero3",    # build-orangepi-zero3-stage4.sh:303
+    "orangepi3-lts": "orangepi3lts",     # :296
+    "orangepi4-lts": "orangepi4-lts",    # :314
 }
 
 
@@ -1404,18 +1580,18 @@ def derive_hostname(cfg: "ImageConfig") -> str:
 
     Notes that make this honest rather than decorative:
     * the UNAFFILIATED x86 desktop is special-cased to ``gentoo-desktop``
-      (build-x86-host-stage4.sh:1343, applied AFTER the brand is neutralised);
-    * rpi5's ``generic`` role drops the brand entirely (``gentoo-${BOARD}``, :1241);
+      (build-x86-host-stage4.sh:1604, applied AFTER the brand is neutralised);
+    * rpi5's ``generic`` role drops the brand entirely (``gentoo-${BOARD}``, :1276);
     * an unknown role on any platform falls through to ``{brand}-{role}``, and an
-      unset role on x86 to ``{brand}-host`` (:1889).
+      unset role on x86 to ``{brand}-host`` (:2072).
     """
     brand = (cfg.brand or "hugmesh").strip() or "hugmesh"
     role = (cfg.role or "").strip()
     plat = (cfg.platform or "x86").strip() or "x86"
     if plat == "x86" and (role == UNAFFILIATED_ROLE or cfg.unaffiliated):
-        return "gentoo-desktop"           # build-x86-host-stage4.sh:1343
+        return "gentoo-desktop"           # build-x86-host-stage4.sh:1604
     if plat == "rpi5" and role == "generic":
-        return f"gentoo-{cfg.board or 'rpi5'}"   # build-rpi5-stage4.sh:1241
+        return f"gentoo-{cfg.board or 'rpi5'}"   # build-rpi5-stage4.sh:1294
     suffix = _HOSTNAME_SUFFIX.get(plat, {}).get(role)
     if suffix:
         return f"{brand}-{suffix}"
@@ -1430,7 +1606,7 @@ def derive_default_user(cfg: "ImageConfig") -> str:
     Two layers, both real:
     1. every builder ships a platform DEFAULT_USER (``_BUILDER_DEFAULT_USER``);
     2. **``--local-user`` overrides it** — ``[ -n "${LOCAL_USER}" ] && DEFAULT_USER=
-       "${LOCAL_USER}"`` (build-x86-host-stage4.sh:1598 and the ARM twins). x86 emits
+       "${LOCAL_USER}"`` (build-x86-host-stage4.sh:1913 and the ARM twins). x86 emits
        ``--local-user`` on EVERY image (``_x86_args``, an unconditional argv element),
        so on x86 the effective default is ``cfg.local_user``, not ``snap``. The ARM
        builders only receive it when standalone / a non-default name / a local password
@@ -1531,13 +1707,13 @@ def resolve_platform_defaults(cfg: "ImageConfig") -> None:
 
 
 # The --installer-ui values that flip the builder's WANT_CALAMARES true, hence pull
-# app-admin/calamares into PKGS (build-x86-host-stage4.sh:1246 / :3532). Mirrored here
+# app-admin/calamares into PKGS (build-x86-host-stage4.sh:1801 / :5115). Mirrored here
 # deliberately; tests/scripts/test-installer-ui-node-default.sh re-extracts the set from
 # that LIVE builder line and fails if the two ever drift.
 _CALAMARES_INSTALLER_UI = ("calamares", "all")
 # What a headless node emits instead. Explicit (not "" = defer-to-builder) so the intent
 # is auditable in --print-command / --print-specs rather than inferred from an absence;
-# same WANT_CALAMARES=false outcome as the builder's own :1244 non-standalone default.
+# same WANT_CALAMARES=false outcome as the builder's own :1619 non-standalone default.
 _NODE_INSTALLER_UI = "cli"
 
 
@@ -1545,13 +1721,13 @@ def resolve_installer_ui_default(cfg: "ImageConfig") -> str | None:
     """Role-class twin of resolve_platform_defaults (#337/#344): a headless x86 NODE must
     never request a graphical installer front-end.
 
-    The builder ALREADY implements this rule — build-x86-host-stage4.sh:1244 defaults an
+    The builder ALREADY implements this rule — build-x86-host-stage4.sh:1799 defaults an
     UNSET ``INSTALLER_UI`` to ``all`` for --standalone and ``cli`` for every other role —
     but the Studio's flat dataclass default (``installer_ui: str = "all"``) means
-    to_cli_args:1732 always passes an explicit value, so that ``[ -z ... ]`` guard can
+    to_cli_args:3794 always passes an explicit value, so that ``[ -z ... ]`` guard can
     never fire and every node inherits the standalone-only ``all``. That is not merely
     wasteful: the USE closure app-admin/calamares needs (specs-x86/portage/package.use/
-    desktop) is copied ONLY for ROLE_CLIENT roles (:2496), so on a node calamares is
+    desktop) is copied ONLY for ROLE_CLIENT roles (:3676), so on a node calamares is
     UNSATISFIABLE, not just heavy — it killed 5 x86 node images on boost[python] (#380)
     and 5 more on libpwquality[python] the next run. image_class() is the exact
     ROLE_CLIENT complement, so it is the right predicate.
@@ -1568,14 +1744,14 @@ def resolve_installer_ui_default(cfg: "ImageConfig") -> str | None:
     theme/home fields on a node for the same "the role class does not permit this" reason.
 
     Mutates ``cfg`` in place. Returns a human-readable note iff it changed something, else
-    None (the core/ house idiom — cf. save():896 — since core/ has no logger; the caller
+    None (the core/ house idiom — cf. save():2559 — since core/ has no logger; the caller
     routes it to STDERR, never stdout, which is app.py's argv channel). Called at
     MATERIALIZE time only (WorklistConfig._materialize_one) and on app.py's headless
     --print-command cfg — NEVER in to_cli_args, so emission stays a faithful field->argv
     translation (invariant I3).
     """
     if (cfg.platform or "x86") != "x86":
-        return None                       # installer_ui is _X86-only (PLATFORM_FIELD_SUPPORT:389)
+        return None                       # installer_ui is _X86-only (PLATFORM_FIELD_SUPPORT:1101)
     if image_class(cfg.mode, cfg.role) != "node":
         return None                       # client / standalone: untouched, byte-identical
     if cfg.installer_ui not in _CALAMARES_INSTALLER_UI:
@@ -1584,7 +1760,7 @@ def resolve_installer_ui_default(cfg: "ImageConfig") -> str | None:
     cfg.installer_ui = _NODE_INSTALLER_UI
     return (f"installer_ui {prev!r} -> {_NODE_INSTALLER_UI!r} for headless node role "
             f"{cfg.role!r}: build-x86-host-stage4.sh gates the calamares USE closure "
-            f"(package.use/desktop) on ROLE_CLIENT:2496, so a node cannot resolve "
+            f"(package.use/desktop) on ROLE_CLIENT:3676, so a node cannot resolve "
             f"app-admin/calamares — and has no display to run it.")
 
 
@@ -1645,10 +1821,23 @@ def effective_installer_ui(cfg: "ImageConfig") -> str:
     return probe.installer_ui
 
 
-def _field_default(name: str):
-    """The dataclass default for one ImageConfig field."""
+def field_default(name: str):
+    """The dataclass default for one ImageConfig field.
+
+    PUBLIC since 2026-08-26. Every emission-neutral hide in the page set has to reset
+    its field to this value, so three GUI pages had grown their own byte-identical
+    copy (network.py, build.py, and role.py by importing the underscore name). They all
+    delegate here now: the dataclass is the single truth, and a page that compares
+    against a literal instead gets fields like ``snort`` — which defaults to True —
+    exactly backwards.
+    """
     f = ImageConfig.__dataclass_fields__[name]  # type: ignore[attr-defined]
     return f.default_factory() if f.default is MISSING else f.default
+
+
+#: Private alias kept for this module's own long-standing call sites. Same object, so
+#: there is exactly one implementation; new callers should use the public name.
+_field_default = field_default
 
 
 def class_axis_violated(fld: str, cfg: "ImageConfig") -> bool:
@@ -1676,6 +1865,35 @@ def class_axis_violated(fld: str, cfg: "ImageConfig") -> bool:
     return image_class(cfg.mode, cfg.role) not in scope.classes
 
 
+def mode_axis_violated(fld: str, cfg: "ImageConfig") -> bool:
+    """Is ``fld``'s MODE narrowing violated by this image, on a platform where that
+    narrowing is actually builder-true?
+
+    The exact twin of ``class_axis_violated``, and it exists for the same reason that one
+    does: the raw ``cfg.mode not in scope.modes`` test asserts a field's mode rule holds on
+    EVERY builder that parses the flag, and for the cluster-identity trio that is FALSE.
+    ``_x86_args:3582`` wraps --cluster-domain/--games-domain/--release-state in
+    ``mode in ("cloud","mesh")``; ``_arm_common_args:3156-3157`` emits --cluster-domain in
+    every mode for all nine ARM builders, and build-rpi5-stage4.sh:3386 bakes it into
+    /etc/hugmesh/cluster-domain unconditionally. Reading the mode tuple flat would put a
+    standalone rpi5 image's REAL, EMITTED cluster domain out of scope — hiding the widget
+    and (the wizard pairs every hide with an emission-neutral clear) resetting the typed
+    value to the "hugmesh.net" default behind the operator's back.
+
+    Returns False when the platform axis already owns the rejection (that gate, and
+    strip_platform_unsupported, are the flag-not-parsed story) and False when the field's
+    mode rule simply does not hold on this builder (``mode_platforms``)."""
+    scope = FIELD_SCOPE.get(fld)
+    if scope is None:
+        return False
+    plat = cfg.platform or "x86"
+    if plat not in scope.platforms:
+        return False
+    if scope.mode_platforms is not None and plat not in scope.mode_platforms:
+        return False
+    return cfg.mode not in scope.modes
+
+
 def scope_reject_reason(fld: str, cfg: "ImageConfig") -> str | None:
     """Which AXIS puts ``fld`` out of scope for this image — ``"platform"`` | ``"class"`` |
     ``"mode"`` — or None if it is in scope. The ONE implementation of the axis rules: the
@@ -1692,7 +1910,12 @@ def scope_reject_reason(fld: str, cfg: "ImageConfig") -> str | None:
         return "platform"
     if class_axis_violated(fld, cfg):
         return "class"
-    if cfg.mode not in scope.modes:
+    # mode_axis_violated, NOT the flat `cfg.mode not in scope.modes` this line used to be:
+    # the mode rule, like the class rule, can be true on one builder and false on another
+    # (the cluster-identity trio — see FieldScope.mode_platforms). The flat test was correct
+    # only while every mode narrowing happened to be platform-uniform, which stopped being
+    # true on 2026-08-26.
+    if mode_axis_violated(fld, cfg):
         return "mode"
     return None
 
@@ -1705,7 +1928,7 @@ def field_in_scope(fld: str, cfg: "ImageConfig") -> bool:
 
 
 # Platforms whose builder HARD-ERRORS on --standalone with a cluster-node role, verbatim:
-#   build-rpi5-stage4.sh:1037
+#   build-rpi5-stage4.sh:1046
 #     ${ROLE_CLIENT} || { err "--standalone only composes onto --role desktop (got --role
 #                        ${ROLE})"; exit 1; }
 # x86 is deliberately NOT here: build-x86-host-stage4.sh ACCEPTS --standalone on a pki/be
@@ -1801,7 +2024,7 @@ def scope_violations(cfg: "ImageConfig") -> tuple[list[str], list[str]]:
 #
 # The honest fix is therefore in to_cli_args (which both channels share) — i.e. stop emitting
 # the flag when the field is at its default and the role-class is out of scope, letting
-# build-x86:1248 fire. That changes emission for existing node configs, so it belongs with
+# build-x86:1623 fire. That changes emission for existing node configs, so it belongs with
 # finding 4/5 proper (step (c)), not here. BUILDER_DEFAULTS declares the gap as `override`
 # and GUARD A pins it, so it cannot be forgotten.
 #
@@ -1826,7 +2049,7 @@ def scope_violations(cfg: "ImageConfig") -> tuple[list[str], list[str]]:
 #   means "nobody said" and the flag is simply not emitted. bundle_source wants the same
 #   shape, so the builder's :1248 fork owns the value whenever the operator stayed quiet.
 #
-#   SEQUENCING, and the reason this waits rather than races: --installer-ui :1244 is the
+#   SEQUENCING, and the reason this waits rather than races: --installer-ui :1619 is the
 #   IDENTICAL sentinel four lines above :1248, with the identical `override` gap, and its fix
 #   is owned by fix/studio-installer-ui-node-default. That PR is the reference exemplar. It
 #   also decides the shape of the shared surface (a to_cli_args role-gate splits
@@ -1900,7 +2123,7 @@ def enter_mesh_defaults(cfg: "ImageConfig", *, fresh: bool = False) -> None:
       any row can still be forced "off", and a jetson row is still auto-exempted.
 
     THIS CHANGES WHAT A MESH BUILD PRODUCES — see the mesh note on HomePage: on x86
-    ``--encrypt-root`` also sets ``INSTALLER_ISO=true`` (build-x86-host-stage4.sh:1465),
+    ``--encrypt-root`` also sets ``INSTALLER_ISO=true`` (build-x86-host-stage4.sh:1780),
     so an encrypted node additionally yields an installer ISO, and without ``--luks-pass``
     the installer PROMPTS for a passphrase at install time.
 
@@ -2269,7 +2492,18 @@ class ImageConfig:
     # reaches argv. Only meaningful on ENV=test images: a prod build has the test
     # runner pruned out of its app tree, so booting one proves nothing about the
     # stack the assertions look for (BuildPage gates the checkbox on env accordingly).
-    qemu_e2e: bool = False
+    #
+    # NAMED FOR THE LANE IT ACTUALLY DRIVES. Until 2026-08-26 this field was called
+    # `qemu_e2e`, and every label built from that name promised the OTHER lane: THREE
+    # different harnesses in this tree are called "e2e" —
+    #   * tests/qemu/run-qemu-docker.sh   in-guest ASSERTIONS over a matrix of images
+    #                                     (this field, and the only one the Studio ran);
+    #   * tests/qemu/run-qemu-e2e.sh      the PLAYWRIGHT browser suite against ONE booted
+    #                                     image's forwarded UI (core/emulation.playwright_argv);
+    #   * tests/qemu/run-matrix-e2e.sh    the size/load matrix gated on HUGMESH_QEMU_E2E=1.
+    # An operator who ticked "run the e2e suite on the built image" got the first and
+    # expected the second. The name now says assertions, not e2e.
+    qemu_device_tests: bool = False
     extra_flags: str = ""              # escape hatch — shlex-split, appended verbatim
 
     # ---- (de)serialization -------------------------------------------------
@@ -2331,6 +2565,12 @@ class ImageConfig:
             if k in d:
                 v = cls._tri_explicit(d[k], k)
                 d[k] = "" if v is None else v
+        # MIGRATE the pre-2026-08-26 spelling of the post-build device-test opt-in.
+        # from_dict filters unknown keys, so without this a config saved under the old
+        # name would load with the opt-in silently OFF — the `games` precedent above:
+        # intent preserved, never silently dropped.
+        if "qemu_e2e" in d and "qemu_device_tests" not in d:
+            d["qemu_device_tests"] = d.pop("qemu_e2e")
         known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         return cls(**{k: v for k, v in d.items() if k in known})
 
@@ -3218,26 +3458,57 @@ class ImageConfig:
         """Mirror build-x86-host-stage4.sh's standalone-unaffiliated HARD CONFLICTS.
 
         The role presets a plain, brand-free Gentoo desktop; every field that would
-        bake a brand identity, branding assets, the bundled HugMesh source, the
-        stack seed, or platform machinery (mesh/SSO/person-device identity) into the
-        image raises ValueError HERE — so --print-command and the GUI preview fail
-        loudly with the same contract the builder enforces (it exits non-zero on the
-        equivalent flags; an explicit --brand gentoo errors too — the builder forces
-        the neutral identity itself)."""
+        bake a brand IDENTITY, the bundled HugMesh source, the stack seed, or platform
+        machinery (mesh/SSO/person-device identity) into the image raises ValueError
+        HERE — so --print-command and the GUI preview fail loudly with the same contract
+        the builder enforces (it exits non-zero on the equivalent flags; an explicit
+        --brand gentoo errors too — the builder forces the neutral identity itself).
+
+        IDENTITY vs LOOK — the 2026-08-26 split, and the reason this docstring's "mirror"
+        claim is still true. The operator's report, verbatim: "There should be the menu
+        for adding the themes as in the branded images". Their image is
+        role=standalone-unaffiliated / platform=x86 (session 20260826-151356-64070a).
+        Until this change ALL TEN branding fields were lumped into one "branding assets"
+        conflict, which is what made a theme illegal and, in turn, what made
+        BrandingPage.applies_to() drop the whole page (and the theme menu with it) from
+        the flow. The operator's decision: a BRAND is an affiliation, a WALLPAPER is not.
+
+          FORBIDDEN (identity): brand / brand_title / org (above) + brand_logo +
+            brand_locked. A LOGO is the mark of an organization — the builder feeds
+            BRAND_LOGO into plymouth/lightdm/GRUB/ISO artwork, so baking one IS declaring
+            an affiliation. --brand-locked exists solely to make a BRAND unremovable by
+            the user; with no brand baked it would lock nothing, so accepting it would
+            advertise a knob that cannot act.
+          ALLOWED (look): theme / branding_dir / wallpaper / grub_background / grub_theme /
+            login_background / accent_color / color_scheme. These are desktop appearance
+            and carry no identity of their own.
+
+        THE BUILDER SPLIT HAS LANDED — this is no longer "in progress", and the line
+        numbers moved with it. build-x86-host-stage4.sh's unaffiliated fold now runs
+        TWO identity checks and no look check at all:
+          :1383-1385  brand/brand_title/org (and any --config brand profile) — the
+                      original check, untouched by the split;
+          :1398-1400  --brand-logo / --brand-locked — NEW, carrying the eight allowed
+                      LOOK flags in its own error text so the operator is told what IS
+                      legal at the moment they hit the wall.
+        The eight LOOK flags are not tested there any more. Keep the two sides in step: this function's whole value is that a config Studio accepts is a
+        config the builder accepts. Note the LOOK flags need NO emission change to become
+        live — _x86_args emits them from a block that was already OUTSIDE the
+        `if not unaffiliated:` brand-plane gate, so the ValueError was the only thing
+        stopping them; deleting it makes --theme reach the builder rather than being
+        silently dropped."""
         conflicts: list[str] = []
         if (self.brand != "hugmesh" or self.brand_title != "HugMesh Systems"
                 or self.org != "hugmesh"):
             conflicts.append("a brand identity (brand/brand_title/org — the builder "
                              "forces the neutral gentoo identity itself)")
-        assets = [name for name, val in (
-            ("theme", self.theme), ("branding_dir", self.branding_dir),
-            ("wallpaper", self.wallpaper), ("grub_background", self.grub_background),
-            ("grub_theme", self.grub_theme),
-            ("login_background", self.login_background), ("brand_logo", self.brand_logo),
-            ("accent_color", self.accent_color), ("color_scheme", self.color_scheme),
-        ) if val] + (["brand_locked"] if self.brand_locked else [])
-        if assets:
-            conflicts.append("branding assets (" + ", ".join(assets) + " — nothing to theme against)")
+        identity_assets = (["brand_logo"] if self.brand_logo else []) \
+                        + (["brand_locked"] if self.brand_locked else [])
+        if identity_assets:
+            conflicts.append(
+                "brand identity assets (" + ", ".join(identity_assets)
+                + " — a logo is an organization's mark and --brand-locked locks a brand "
+                  "this image does not have; see build-x86-host-stage4.sh:1578-1580)")
         # bundle_source is NOT flagged here: its dataclass default is True (the
         # branded-standalone self-hosting default), so an untouched config would
         # false-conflict. The wizard clears it on role selection and _x86_args()
@@ -3266,7 +3537,10 @@ class ImageConfig:
         # unaffiliated is reachable two ways: the dedicated role id (presets it inside
         # the builder's own role-switch) OR the composable --unaffiliated flag on any
         # role (G22). Both suppress the brand plane and hard-conflict on affiliation.
-        unaffiliated = self.role == UNAFFILIATED_ROLE or self.unaffiliated
+        # Delegated to the module predicate rather than restated: gui/pages/branding.py
+        # and gui/pages/home.py gate their surfaces on the SAME rule, and the inline copy
+        # that used to live here was the third spelling of it.
+        unaffiliated = unaffiliated_image(self)
         if unaffiliated:
             self._check_unaffiliated_conflicts()
         a: list[str] = ["--role", self.role, "--env", self.env, "--local-user", self.local_user]

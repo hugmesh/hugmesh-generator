@@ -49,7 +49,6 @@ from __future__ import annotations
 import copy
 import os
 
-from dataclasses import MISSING
 
 from ..qt import Qt, QtCore, QtWidgets, Signal
 from .. import console
@@ -62,7 +61,7 @@ from ...core import secret_files
 from ...core import worklist as worklist_mod
 from ...core.build_driver import BuildDriver
 from ...core.config import (ENV_CHOICES, ImageConfig, UNAFFILIATED_ROLE,
-                            effective_installer_ui, image_class,
+                            effective_installer_ui, field_default, image_class,
                             resolve_installer_ui_default, resolve_platform_defaults)
 from ...core.worklist_driver import WorklistDriver
 from ._device_table import DeviceTable
@@ -108,10 +107,10 @@ def _installer_ui_reason(shown: str, rewritten: bool) -> str:
 #
 # UNSET READS AS CHECKED, and that is not a guess: every flag-pair on this page has a
 # builder default of TRUE on every builder that parses it —
-#   BUILD_IMG=true   build-x86-host-stage4.sh:231, build-rpi5-stage4.sh:173, build-jetson-stage4.sh:154
-#   LIVE_ISO=true    build-x86-host-stage4.sh:236
-#   BUILD_TAR=true   build-x86-host-stage4.sh:238, build-rpi5-stage4.sh:175
-#   SECURE_BOOT=true build-x86-host-stage4.sh:484
+#   BUILD_IMG=true   build-x86-host-stage4.sh:293, build-rpi5-stage4.sh:209, build-jetson-stage4.sh:181
+#   LIVE_ISO=true    build-x86-host-stage4.sh:298
+#   BUILD_TAR=true   build-x86-host-stage4.sh:300, build-rpi5-stage4.sh:211
+#   SECURE_BOOT=true build-x86-host-stage4.sh:571
 # so "leave the builder's default" and "checked" were always the same PICTURE; the square
 # only ever advertised a distinction in the argv, not in the image. Making it explicit
 # adds --img/--live-iso/--tar/--secure-boot to the emitted command and changes nothing
@@ -159,12 +158,12 @@ def _hint(text):
     return lab
 
 
-def _field_default(name):
-    """An ImageConfig field's declared default (mirrors NetworkPage._field_default and
-    _gating.clear_unsupported's lookup) — the default-expansion rule compares against
-    the dataclass's own truth, never literals restated in the GUI."""
-    f = ImageConfig.__dataclass_fields__[name]
-    return f.default_factory() if f.default is MISSING else f.default
+#: An ImageConfig field's declared default — ``core.config.field_default`` under this
+#: module's historical name. Was a third byte-identical copy of the same four lines
+#: until 2026-08-26 (see the note in network.py); the default-expansion rule must
+#: compare against the dataclass's own truth, never literals restated in the GUI, and
+#: that truth is now stated in exactly one place.
+_field_default = field_default
 
 
 def _picker_row(parent, line_edit, caption, file_filter="All files (*)", directory=False):
@@ -413,7 +412,7 @@ class BuildPage(QtWidgets.QWizardPage):
         # than assumed, because getting this wrong means quietly changing what a build
         # produces while claiming to have changed a checkbox:
         #
-        #   cached    ISO_CACHED=false   (build-x86-host-stage4.sh:403)  -> CHANGES the
+        #   cached    ISO_CACHED=false   (build-x86-host-stage4.sh:470)  -> CHANGES the
         #             build. Embeds the binpkg cache + distfiles in the live ISO: a
         #             materially larger ISO that can rebuild offline.
         #   compress  COMPRESS_IMG=false (x86:242, rpi5:186, jetson:165) -> CHANGES the
@@ -643,11 +642,16 @@ class BuildPage(QtWidgets.QWizardPage):
         # of its ArgoCD app tree, so booting one would assert against a stack that was
         # deliberately removed. Greyed rather than hidden, because the reason is a
         # decision the operator made one dropdown above and can reverse.
-        self.qemu_e2e = QtWidgets.QCheckBox(
-            "After the build, run the QEMU emulated-device tests in Docker "
-            "(all platforms, Pi first)")
-        pl.addWidget(self.qemu_e2e)
-        self.env.currentTextChanged.connect(self._sync_qemu_e2e_gate)
+        # THE LABEL NAMES THE LANE. It used to be reachable as "the e2e suite", which
+        # is a DIFFERENT harness (tests/qemu/run-qemu-e2e.sh drives Playwright against
+        # a booted image's UI; this box drives tests/qemu/run-qemu-docker.sh's in-guest
+        # assertions). Saying "in-guest assertions" and naming the script is what keeps
+        # the two apart on screen.
+        self.qemu_device_tests = QtWidgets.QCheckBox(
+            "After the build, run the QEMU emulated-device tests in Docker — in-guest "
+            "assertions over every image (run-qemu-docker.sh; all platforms, Pi first)")
+        pl.addWidget(self.qemu_device_tests)
+        self.env.currentTextChanged.connect(self._sync_qemu_device_tests_gate)
         # escape hatch: EVERY builder CLI option stays expressible, fielded or not
         self.extra_flags = QtWidgets.QLineEdit()
         self.extra_flags.setPlaceholderText(
@@ -820,7 +824,7 @@ class BuildPage(QtWidgets.QWizardPage):
         self.installer_ui.setEnabled(c.platform in ("", "x86"))
         # Role-class honesty (#355 idiom): a headless x86 NODE cannot build the graphical
         # Calamares front-end — the desktop USE closure it needs is ROLE_CLIENT-gated in
-        # build-x86-host-stage4.sh:2496 — so materialize rewrites installer_ui to "cli"
+        # build-x86-host-stage4.sh:3438 — so materialize rewrites installer_ui to "cli"
         # (core.config.resolve_installer_ui_default). Show THAT, not a stale "all" the
         # image will never honour: without the setCurrentText the combo would lie, and
         # validatePage would write the lie back into the config.
@@ -897,15 +901,15 @@ class BuildPage(QtWidgets.QWizardPage):
         self.build_subdir.setText(c.build_subdir)
         self.seed_url.setText(c.seed_url)
         self.pentest.setChecked(c.pentest)
-        self.qemu_e2e.setChecked(c.qemu_e2e)
-        self._sync_qemu_e2e_gate()
-        # From here on this checkbox is the SOLE writer of cfg.qemu_e2e. QemuPage's radio
-        # seeds the field on the way in, but collect_all() re-runs the validatePage of
+        self.qemu_device_tests.setChecked(c.qemu_device_tests)
+        self._sync_qemu_device_tests_gate()
+        # From here on this checkbox is the SOLE writer of cfg.qemu_device_tests.
+        # QemuPage's radio seeds the field on the way in, but collect_all() re-runs the validatePage of
         # every visited page, so without this latch a revisit of THIS page re-asserted the
         # radio over an opt-out the operator had just made here — and line above then
         # re-ticked the box from it. Latched on the wizard rather than read back from
         # hasVisitedPage(), which back() pops and which therefore silently fails to hold.
-        self.wiz.qemu_e2e_owned_by_build = True
+        self.wiz.qemu_device_tests_owned_by_build = True
         self.extra_flags.setText(c.extra_flags)
         # mesh shows the per-image worklist summary + node-key opt-out; standalone/cloud
         # show the single-image Packages… button (each image's tri-tier package dialog).
@@ -990,10 +994,10 @@ class BuildPage(QtWidgets.QWizardPage):
         plumbing_default = all(
             getattr(c, f) == _field_default(f)
             for f in ("skip_kernel", "skip_clean", "distdir", "build_subdir",
-                      "seed_url", "pentest", "qemu_e2e", "extra_flags"))
+                      "seed_url", "pentest", "qemu_device_tests", "extra_flags"))
         self.plumbing_section.set_default_expanded(not plumbing_default)
 
-    def _sync_qemu_e2e_gate(self, *_a):
+    def _sync_qemu_device_tests_gate(self, *_a):
         """Enable the post-build device tests only for --env test.
 
         A prod build prunes the in-cluster test runner out of its app tree, so the
@@ -1002,12 +1006,14 @@ class BuildPage(QtWidgets.QWizardPage):
         one row above and can set it back. Unticking on the way out stops a config
         saved as prod from carrying a flag its own env forbids."""
         is_test = self.env.currentText() == "test"
-        self.qemu_e2e.setEnabled(is_test)
+        self.qemu_device_tests.setEnabled(is_test)
         if not is_test:
-            self.qemu_e2e.setChecked(False)
-        self.qemu_e2e.setToolTip(
-            "Boots each image this build produces as an emulated device in Docker and "
-            "runs the assertions — Pi roles first, then x86."
+            self.qemu_device_tests.setChecked(False)
+        self.qemu_device_tests.setToolTip(
+            "Boots each image this build produces as an emulated device in Docker "
+            "and runs the IN-GUEST assertions (tests/qemu/run-qemu-docker.sh) — Pi "
+            "roles first, then x86. This is not the Playwright browser suite: that "
+            "one is on the QEMU device tests screen."
             if is_test else
             "Only available for --env test: a prod image has the test runner pruned "
             "from its app tree, so the assertions would check for a stack that was "
@@ -1090,7 +1096,8 @@ class BuildPage(QtWidgets.QWizardPage):
         c.pentest = self.pentest.isChecked()
         # Only a test-env build can carry the post-build device tests (see the gate);
         # collecting the raw checkbox would let a test->prod switch strand a True.
-        c.qemu_e2e = self.qemu_e2e.isChecked() and self.env.currentText() == "test"
+        c.qemu_device_tests = (self.qemu_device_tests.isChecked()
+                               and self.env.currentText() == "test")
         c.extra_flags = self.extra_flags.text().strip()
         # the greyed (platform-unsupported) widgets were still collected above —
         # reset those fields to their defaults so a value picked while another

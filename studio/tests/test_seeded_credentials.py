@@ -15,7 +15,7 @@ other GUI assertions; this file is Qt-free and runs in the system-python CI lane
 import os
 
 from hugmesh_studio.core.seeded_credentials import (
-    ROSTER_SCRIPT, Roster, SeededUser, as_copyable_text, load_roster,
+    ROSTER_SCRIPT, Roster, SeededUser, _NOT_SEEDED, as_copyable_text, load_roster,
     parse_roster_body, resolve_password, suggested_signin,
 )
 
@@ -56,8 +56,10 @@ def test_password_precedence_per_user_wins_then_shared_then_default():
     env = {"E2E_ADMIN_PASSWORD": "peruser", "E2E_PASSWORD": "shared"}
     assert resolve_password("E2E_ADMIN_PASSWORD", env) == "peruser"
     assert resolve_password("E2E_OTHER_PASSWORD", env) == "shared"   # falls to shared
-    assert resolve_password("E2E_OTHER_PASSWORD", {}) == "e2e-pass"  # falls to default
-    assert resolve_password("", {}) == "e2e-pass"
+    # no per-user/shared env AND no generator_dir to find a credentials file in ->
+    # nothing resolved, so the NOT-SEEDED marker, never a literal fallback password.
+    assert resolve_password("E2E_OTHER_PASSWORD", {}) == _NOT_SEEDED
+    assert resolve_password("", {}) == _NOT_SEEDED
 
 
 def test_password_reads_the_passed_env_not_os_environ(monkeypatch):
@@ -68,10 +70,46 @@ def test_password_reads_the_passed_env_not_os_environ(monkeypatch):
     assert resolve_password("", {"E2E_PASSWORD": "from-studio-env"}) == "from-studio-env"
 
 
+# ── the run-state credentials file (CONTRACT rule 3, the 3rd link in the chain) ──
+
+def test_password_falls_back_to_the_credentials_file(tmp_path):
+    # No per-user/shared env set, but tests/stack/e2e-password.sh already wrote a
+    # value into the run-state file for this generator checkout — the table must
+    # show THAT, not the not-seeded marker.
+    (tmp_path / ".e2e-credentials").write_text("E2E_PASSWORD=from-the-file\n")
+    assert resolve_password("", {}, str(tmp_path)) == "from-the-file"
+
+
+def test_password_env_still_wins_over_the_credentials_file(tmp_path):
+    (tmp_path / ".e2e-credentials").write_text("E2E_PASSWORD=from-the-file\n")
+    env = {"E2E_PASSWORD": "from-env"}
+    assert resolve_password("", env, str(tmp_path)) == "from-env"
+
+
+def test_credentials_file_path_is_overridable(tmp_path):
+    custom = tmp_path / "elsewhere" / "creds"
+    custom.parent.mkdir()
+    custom.write_text("E2E_PASSWORD=from-custom-path\n")
+    env = {"E2E_CREDENTIALS_FILE": str(custom)}
+    # a bogus generator_dir must be ignored once E2E_CREDENTIALS_FILE names a path
+    assert resolve_password("", env, str(tmp_path / "not-the-real-checkout")) \
+        == "from-custom-path"
+
+
+def test_missing_credentials_file_reports_not_seeded(tmp_path):
+    assert resolve_password("", {}, str(tmp_path)) == _NOT_SEEDED
+
+
 # ── against the REAL seeder in this checkout (the anti-drift pin) ─────────────
 
-def test_loads_the_real_roster_from_this_checkout():
-    r = load_roster(GENERATOR_DIR)
+def test_loads_the_real_roster_from_this_checkout(tmp_path):
+    # ISOLATED FROM AMBIENT STATE. Passing an explicit env makes resolve_password
+    # read this dict instead of os.environ, and pointing E2E_CREDENTIALS_FILE at a
+    # path that does not exist keeps the file step out of it too. Without both,
+    # this test asserts on whatever the developer's checkout happens to hold: it
+    # went green here only because nothing had run `make stack-seed` yet, and
+    # would fail on any box that had (or that exports E2E_PASSWORD).
+    r = load_roster(GENERATOR_DIR, {"E2E_CREDENTIALS_FILE": str(tmp_path / "absent")})
     assert r.error == "", r.error
     assert r.users, "the real seeder declared no personas"
     names = {u.username for u in r.users}
@@ -79,7 +117,9 @@ def test_loads_the_real_roster_from_this_checkout():
     assert {"e2e-admin", "e2e-mod", "e2e-user"} <= names
     admin = next(u for u in r.users if u.username == "e2e-admin")
     assert "ROLE_ADMIN" in admin.roles
-    assert admin.password == "e2e-pass"          # the documented default
+    # Nothing seeded in the isolated env above, so the honest answer is the
+    # not-seeded marker — never a guessed/literal password.
+    assert admin.password == _NOT_SEEDED
     assert bool(r) is True
 
 

@@ -381,10 +381,11 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         quest-plan quest-detect quest-mdm-enroll quest-enroll quest-ingest quest-status quest-wizard \
         deploy-plan deploy-apply deploy-status deploy-destroy \
         flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate qemu-mesh qemu-mesh-enumerate \
-        playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
+        playwright-deps e2e e2e-list ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
-        stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e \
+        stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e stack-e2e-list \
         kind-images kind-up kind-e2e kind-e2e-mfa kind-mfa-posture kind-down kind-honesty \
+        kind-metrics-check kind-addon-check \
         view view-list view-stop view-trust view-untrust view-honesty \
         scan-hardware sessions-list sessions-show sessions-artifacts sessions-delete
 
@@ -1236,7 +1237,7 @@ mesh-emu-down: ## stop every emulated device the harness started (sweeps stale p
 # kind-e2e resolver-maps hugmesh.net -> 127.0.0.1 (kind-local.yaml maps
 # the internal ingress out on :8443) and runs spec 27. No /etc/hosts edits,
 # no sudo. See specs/cluster/bootstrap/kind-local/README.md.
-# ONLY=<repo>[,<repo>...] rebuilds a SUBSET rather than all eight images — the
+# ONLY=<repo>[,<repo>...] rebuilds a SUBSET rather than every image — the
 # difference between a one-image UI iteration and a full rebuild that includes
 # three unrelated Java builds. Unknown names FAIL rather than filtering to
 # nothing, because a typo that loads no image while exiting 0 leaves the cluster
@@ -1246,8 +1247,28 @@ mesh-emu-down: ## stop every emulated device the harness started (sweeps stale p
 kind-images: stack-clone stack-m2-bootstrap ## build + `kind load` the SSO-slice first-party images (ONLY=repo[,repo] for a subset)
 	ONLY='$(ONLY)' bash scripts/kind-load-images.sh
 
-kind-up: ## bring up the kind SSO slice (KIND_PROFILE=sso bootstrap: apps + Vault KV + e2e seeds; MFA=1 flips gateway mfa.enabled)
-	KIND_PROFILE=sso MFA='$(MFA)' bash specs/cluster/bootstrap/kind-local/bootstrap-kind.sh
+# KIND_ADDONS — the infra add-on SELECTION channel (operator ask 2026-08-26).
+# `make kind-up` used to pass KIND_PROFILE and MFA and nothing else, so the only
+# way to add an infra Application to the curated set was to edit
+# bootstrap-kind.sh. That is why apps/01-metrics-server.yaml sat in no profile
+# while the sso profile deployed seven HPAs with no resource-metrics API to read.
+#
+#   make kind-up                              # default: KIND_ADDONS=metrics-server
+#   make kind-up KIND_ADDONS=metrics-server,keda
+#   make kind-up KIND_ADDONS=none             # opt OUT (the HPAs go inert again)
+#
+# PASSED ONLY WHEN NON-EMPTY, and that is load-bearing rather than tidy. make
+# expands an unset variable to the empty string, so an unconditional
+# `KIND_ADDONS='$(KIND_ADDONS)'` would hand the script an EMPTY value on every
+# plain `make kind-up`. The script reads empty as UNSET (falling back to its own
+# default) for exactly that reason — but relying on that would put the default in
+# two places, and the one in the Makefile would be the silent one. Leaving the
+# assignment out entirely keeps bootstrap-kind.sh the single authority on what
+# "no selection" means. `none` is the spelling for "none of them".
+_KIND_ADDONS_ENV := $(if $(strip $(KIND_ADDONS)),KIND_ADDONS='$(strip $(KIND_ADDONS))',)
+
+kind-up: ## bring up the kind SSO slice (KIND_PROFILE=sso bootstrap: apps + Vault KV + e2e seeds; MFA=1 flips gateway mfa.enabled; KIND_ADDONS=<slug,...>|none selects infra add-ons)
+	KIND_PROFILE=sso MFA='$(MFA)' $(_KIND_ADDONS_ENV) bash specs/cluster/bootstrap/kind-local/bootstrap-kind.sh
 
 kind-e2e: playwright-deps ## run the native-login e2e (spec 27) against the kind cluster
 	cd tests/e2e && \
@@ -1281,6 +1302,22 @@ kind-e2e-mfa: playwright-deps ## run the MFA e2e (spec 29) against the kind clus
 
 kind-mfa-posture: ## print the kind gateway's LIVE APP_MFA_ENABLED (fail-closed; never guesses)
 	@bash scripts/kind-mfa-posture.sh
+
+# The BEHAVIOURAL half of the metrics-server add-on. Asserting that
+# 01-metrics-server.yaml is in an array proves the string is in the array and
+# nothing else; this asks the CLUSTER whether metrics.k8s.io answers and whether a
+# named HPA has stopped reporting <unknown>. SKIPS LOUDLY (exit 0, with the reason
+# and the words "nothing was measured") when there is no cluster, and never
+# creates one — a bring-up is minutes of image pulls and is the operator's call.
+# NOT in the pre-merge shell-suite gate for exactly that reason: on a hosted
+# runner it could only ever skip. Run it after `make kind-up`.
+kind-metrics-check: ## ask the LIVE kind cluster whether the metrics API answers and the HPAs read real numbers
+	bash tests/scripts/test-kind-metrics-api.sh
+
+# The kind lane's service-selection channel, offline (Studio -> Makefile ->
+# bootstrap-kind.sh). Also gated pre-merge in .github/workflows/shell-suites.yml.
+kind-addon-check: ## offline: prove a KIND_ADDONS selection reaches bootstrap-kind.sh
+	bash tests/scripts/test-kind-addon-channel.sh
 
 kind-down: ## delete the kind cluster
 	kind delete cluster --name $${KIND_CLUSTER_NAME:-hugmesh-local}
@@ -1341,8 +1378,27 @@ playwright-deps: ## install the Playwright deps + chromium (needed once for e2e)
 	cd tests/e2e && { [ -d node_modules ] || npm ci || npm install; } \
 	  && npx playwright install --with-deps chromium
 
+# E2E_ARGS here is NOT the same shape as stack-e2e's. There, `npx playwright test`
+# is the DIRECT consumer and bare argv is correct. This lane interposes a shell
+# script whose parser ends in `*) echo "Unknown arg: $1"; usage 1`, so an
+# unseparated `--grep @smoke` (or a bare spec path) is a HARD ERROR, not a
+# passthrough — which is exactly how this target shipped broken on 2026-08-26.
+# The `--` is therefore load-bearing, and the $(if ...) keeps an unset E2E_ARGS
+# from emitting a dangling separator. e2e-list below must stay identical, and
+# tests/qemu/qemu-e2e-lane_test.sh asserts BOTH by rendering `make -n` and feeding
+# the result to the real parser.
 e2e: playwright-deps ## boot ROLE/ARCH in QEMU and run the Playwright e2e (default: x86 be+gpu)
-	$(SUDO) tests/qemu/run-qemu-e2e.sh -w "$(WORK_DIR)" --target $(if $(filter arm64,$(ARCH)),pi,x86) --role $(ROLE)
+	$(SUDO) tests/qemu/run-qemu-e2e.sh -w "$(WORK_DIR)" --target $(if $(filter arm64,$(ARCH)),pi,x86) --role $(ROLE) $(if $(E2E_ARGS),-- $(E2E_ARGS))
+
+# Enumerate what the QEMU Playwright lane WOULD run — the boot plan plus the spec
+# tree — as one JSON document. NO root, no image, no network, no boot: `--list`
+# runs before run-qemu-e2e.sh's artifact-autodetect, so a tree that has built
+# nothing yet still describes the lane (missing artifacts come back as nulls).
+# Deliberately NOT gated on playwright-deps: the spec half degrades to a LOUD,
+# named skip inside the JSON when tests/e2e/node_modules is absent, and the boot
+# plan is still worth answering. tests/qemu/qemu-e2e-lane_test.sh pins both halves.
+e2e-list: ## enumerate the QEMU Playwright lane (boot plan + specs) as JSON; boots nothing, needs no root
+	@tests/qemu/run-qemu-e2e.sh -w "$(WORK_DIR)" --target $(if $(filter arm64,$(ARCH)),pi,x86) --role $(ROLE) --list $(if $(E2E_ARGS),-- $(E2E_ARGS))
 
 ci: ## FULL pipeline: wipe -> build the whole fleet (Docker) -> QEMU-emulate + e2e (long; hours)
 	$(MAKE) rebuild
@@ -1768,7 +1824,8 @@ stack-up: stack-clone stack-certs stack-m2-check $(STACK_SOCIAL_DEP) ## clone ->
 stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real SSO login; SOCIAL=1 also seeds Matrix/Mastodon
 	@echo "==> Seeding the running stack (Casdoor$(if $(strip $(SOCIAL)), + social,) tier)"
 	$(if $(strip $(SOCIAL)),,SEED_CASDOOR_ONLY=1 )$(if $(strip $(BRAND_B)),CASDOOR_BRAND_B_URL='$(BRANDB_CASDOOR)' )bash tests/stack/seed-e2e.sh
-	@echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin / e2e-pass)."
+	@pw="$$(bash tests/stack/e2e-password.sh)"; \
+	  echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin / $$pw) — $$pw is also readable from .e2e-credentials at the repo root."
 	@echo "    NOTE: this seeds registration STAGE 1 (the Casdoor identity) only. Until stage 2"
 	@echo "    (POST /bff/register/complete) runs, GET /bff/session reports registrationComplete=false,"
 	@echo "    the gateway grants only a bare ROLE_USER, and every service route 403s — you can sign in"
@@ -1817,13 +1874,254 @@ stack-clean: ## stop the local stack AND remove the images it built + the m2 reg
 # stay an explicit once-per-box step. SNAP_REPORT_DIR (optional, tests/e2e-
 # relative, inherited from the environment) redirects the junit/json/summary
 # artifacts; the hugmesh reporter's summary.json there is the durable result.
-stack-e2e: ## run the Playwright e2e suite against the RUNNING local stack (needs stack-up + stack-seed; once: make playwright-deps)
+#
+# E2E_ARGS — EXTRA ARGV HANDED STRAIGHT TO `playwright test`. Until 2026-08-26 this
+# target was the only way to drive the suite against the compose stack and it took
+# NO arguments at all, so there was no way to run one spec, one --grep or one
+# --repeat-each: every iteration on a single failing spec paid for all 33 files /
+# 221 tests. kind-e2e and kind-e2e-mfa had always named their single spec inline
+# (specs/27-…, specs/29-…), so the capability existed everywhere except the lane
+# people actually use.
+#
+# It is deliberately a VARIABLE, not a `%`-target or an argv trick, because make
+# imports the environment as make variables: `E2E_ARGS='specs/01-frontpage.spec.ts'
+# make stack-e2e` and `make stack-e2e E2E_ARGS=...` are then the same thing. That
+# matters for the Studio, whose LocalStackNode._make(extra_env=...) can add an env
+# var but cannot change the argv it builds.
+#
+# UNQUOTED on purpose — the shell word-splits it, so `E2E_ARGS='--grep @smoke -x'`
+# passes two arguments. The cost is that a spec path with a space in it needs the
+# caller's own quoting; no spec in tests/e2e/specs has one, and the alternative
+# (quoting here) would break multi-argument use, which is the common case.
+# Unset it expands to nothing and the recipe is byte-identical to the old one, so
+# the DEFAULT is still the full suite. tests/scripts/test-stack-e2e-argv.sh asserts
+# exactly that in both directions, by rendering and by running.
+#
+# WHY THIS DOES NOT DELEGATE TO tests/e2e/run.sh, which already forwards "$@".
+# Because they are not the same invocation and never were:
+#   * run.sh hardcodes `--reporter=list`, and a CLI --reporter REPLACES the config's
+#     reporter array. Delegating would silently drop junit.xml, report.json and the
+#     hugmesh reporter's summary.json — the artifacts the paragraph above calls the
+#     durable result, and the ones the admin-bff TestReportsController serves.
+#   * run.sh picks its ENGINE from whether the image named by PW_IMAGE
+#     (default hugmeshgames-e2e:latest) happens to exist on the box, falling back to
+#     host npx. Whether `make stack-e2e` runs in a container would then depend on an
+#     unrelated `docker image ls`, and the container path passes neither
+#     SNAP_REPORT_DIR nor SNAP_HOST_RESOLVER through.
+#   * run.sh's job is "run these specs from a machine that may not have browsers" —
+#     its callers are run-all.sh (mock stack) and tests/qemu/run-qemu-e2e.sh (a VM's
+#     front door). This target's job is "run them against THIS repo's compose stack
+#     with the durable reporters on."
+# Collapsing the two is a real cleanup, but it means changing run.sh's reporter
+# handling, which the QEMU lane depends on and which cannot be verified from here.
+# So: two callers, one documented reason, and the divergence is now written down
+# instead of merely existing.
+# E2E_SPECS (optional) narrows the run to named spec FILES, as Playwright positional
+# filters relative to tests/e2e — e.g.
+#     make stack-e2e E2E_SPECS='specs/01-frontpage.spec.ts specs/04-five-users.spec.ts'
+# This is what the Studio's e2e feature tree passes for a checked selection. UNSET
+# runs the WHOLE suite, which is the historical behaviour and stays the default: an
+# empty value must never be able to mean "run nothing" silently, and here it cannot,
+# because an empty variable expands to no arguments at all.
+#
+# TWO VARIABLES, ONE RECIPE, AND THEY ARE NOT REDUNDANT. E2E_ARGS is FREE ARGV
+# (flags: --grep, --repeat-each, -x) and is word-split by the shell; E2E_SPECS is
+# the STUDIO's channel and carries spec PATHS ONLY, every one of which
+# core.e2e_catalogue.safe_spec_args has matched against SPEC_ARG_RE before it is
+# allowed near this unquoted expansion. Collapsing the two would either give the
+# Studio's checkbox tree a door to arbitrary flags, or take --grep away from the
+# command line. They are expanded in this order because Playwright reads flags
+# first and positional filters last, and BOTH default to empty, so an unset pair
+# renders the historical full-suite command byte for byte.
+E2E_SPECS ?=
+stack-e2e: ## run the Playwright e2e suite against the RUNNING local stack (E2E_ARGS='--grep …' / E2E_SPECS='specs/NN-….spec.ts' narrow it; needs stack-up + stack-seed)
 	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
 	cd tests/e2e && SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' \
-	  npx playwright test -c playwright.config.ts
+	  npx playwright test -c playwright.config.ts $(E2E_ARGS) $(E2E_SPECS)
+
+# Enumerate the suite WITHOUT running it: `playwright test --list` resolves and
+# loads every spec file and prints the test tree, then exits. Nothing is launched —
+# no browser, no request — so this is the one e2e target that needs neither
+# `stack-up` nor a network. MEASURED, not assumed, on 2026-08-26: run under
+# `unshare -rn` (no network interfaces at all) with the stack down it exits 0 in
+# ~1.1s and enumerates 33 spec files / 221 tests.
+#
+# --reporter=json is FORCED rather than left to the caller, and that is not cosmetic.
+# MEASURED on 2026-08-26: a bare `--list` under the config's own reporter array
+# still fires every FILE writer — SNAP_REPORT_DIR/ came out holding junit.xml,
+# report.json AND the hugmesh reporter's summary.json, all describing zero tests. A
+# mere enumeration would therefore CLOBBER the durable artifacts of the last real
+# run. With `--reporter=json` the same directory stays empty (also measured). A CLI
+# --reporter replaces the whole array, so one flag both makes the output
+# machine-readable for a feature tree and disarms the writers.
+#
+# E2E_ARGS narrows the listing the same way it narrows a run, so
+# `make stack-e2e-list E2E_ARGS=--grep=@smoke` answers "what WOULD that run?"
+# without running it.
+stack-e2e-list: ## enumerate the e2e specs as JSON without running them (no stack, no network; E2E_ARGS narrows)
+	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	@cd tests/e2e && npx playwright test -c playwright.config.ts --list --reporter=json $(E2E_ARGS) $(E2E_SPECS)
 
 stack-logs: ## tail logs from the running local stack
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
 
 stack-ps: ## list the local stack's containers + status
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) ps
+
+# ── The Gherkin (BDD) e2e lane ───────────────────────────────────────────────
+# SEPARATE targets on purpose: the `stack-e2e` recipe above is edited by other
+# work in flight, so the BDD lane adds its own targets rather than growing that
+# recipe. Its own .PHONY line, for the same reason.
+#
+# tests/e2e/features/**/*.feature is compiled by `npx bddgen` into the GITIGNORED
+# tests/e2e/.features-gen/, which playwright.config.ts's `bdd` project runs.
+# Conventions every feature author follows: tests/e2e/features/README.md.
+#
+# EVERY TARGET BELOW DELEGATES TO tests/e2e/run.sh. That script is the single
+# CLI entry point for this suite; when these recipes spelled the invocation
+# themselves there were two divergent ways to run one lane, and they drifted.
+# Anything you can do here you can do by hand with the same flags, which is the
+# point -- `make stack-e2e-bdd BDD_ENV=qemu` is exactly
+# `bash tests/e2e/run.sh --bdd --env qemu`.
+#
+# KNOBS (all optional):
+#   BDD_ENV=docker|kind|qemu  which mesh (default docker; NOTHING is started)
+#   BDD_TAGS='@interface:cli' Gherkin tag expression, forwarded to bddgen
+#   BDD_FEATURES='cli/'       feature path(s), forwarded to playwright
+#   BDD_ARGS='--reporter=line' extra playwright arguments, verbatim
+#   SNAP_PLATFORM=rpi5|x86    narrows the PLATFORM axis to the image running
+#   SNAP_REPORT_DIR / SNAP_RUN_ID   where junit/json/summary + bdd-steps/ land
+.PHONY: stack-e2e-bdd stack-e2e-bdd-gen stack-e2e-bdd-check stack-e2e-bdd-evidence \
+        stack-e2e-bdd-env stack-e2e-bdd-guards
+
+BDD_ENV ?= docker
+BDD_RUN  = bash tests/e2e/run.sh --bdd --env $(BDD_ENV) \
+             $(if $(strip $(BDD_TAGS)),--tags '$(BDD_TAGS)',) \
+             $(if $(strip $(BDD_FEATURES)),--features '$(BDD_FEATURES)',)
+
+stack-e2e-bdd-gen: ## compile tests/e2e/features/*.feature into runnable Playwright specs (bddgen)
+	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	$(BDD_RUN) --gen
+
+# OFFLINE gate. No stack, no network. Proves every .feature compiles, every step
+# is bound (bddgen is missingSteps:fail-on-gen, so an undefined step FAILS here),
+# Playwright collects the generated tests, and no generated artefact is tracked.
+# This is the one to run before committing a feature.
+# The three AXIS guards belong here and NOT in .github/workflows/shell-suites.yml:
+# both need tests/e2e/node_modules (playwright + a chromium), which the shell-suite
+# runner image does not carry, so a CI listing would turn their honest
+# "SKIPPED-LOUDLY ... checked NOTHING" exit 2 into a red pipeline. Wired at the
+# Makefile gate instead, exactly as the anti-decoration guard above is.
+#   env x interface — was UNWIRED on arrival (tests/scripts/test-guard-integrity.sh
+#   check 3 listed it as "suite(s) nothing runs" on this very tree); wired here.
+stack-e2e-bdd-check: ## OFFLINE: verify every .feature generates, binds and is collected (+ the anti-decoration guards)
+	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	$(BDD_RUN) --list --reporter=line
+	bash tests/scripts/test-e2e-gherkin-harness.sh
+	bash tests/scripts/test-e2e-env-interface-dimensions.sh
+	bash tests/scripts/test-e2e-social-function-matrix.sh
+	bash tests/scripts/test-e2e-cli-lane.sh
+#   The media/games and governance FUNCTION guards arrived UNWIRED: their author
+#   branches added the scripts and never called them from anywhere, which
+#   tests/scripts/test-guard-integrity.sh check 2 reports as "suite(s) nothing
+#   runs" on the merged tree. A drift guard nothing executes is the decorative
+#   artefact this repo keeps re-learning about, so they are wired here.
+	bash tests/scripts/test-e2e-func-media-games.sh
+	bash tests/scripts/test-e2e-governance-function-matrix.sh
+
+# The Gherkin lane's TWO deeper guards, each with its own mutation battery. Split
+# out of stack-e2e-bdd-check because they are minutes rather than seconds: each
+# breaks production several ways on purpose, re-runs the lane against every
+# mutant, and restores the tree.
+#
+# THEY ARE A MAKE TARGET AND NOT A CI JOB, deliberately, and the reason is
+# written here so nobody "fixes" it by gating them: both need `npx playwright`
+# AND a Qt6 binding (they build the REAL PyQt wizard offscreen), and no image the
+# shell-suites workflow runs carries either. On such a host both exit 2 with a
+# SKIPPED-LOUDLY line naming the missing prerequisite — never 0, so they can
+# never be mistaken for a pass. Gating a suite that can only skip would train
+# everyone to ignore the job.
+#
+# NOTHING IS STARTED. Both are designed to be green with the compose stack, the
+# kind cluster and every emulator DOWN: they test the vocabulary, the chooser and
+# the evidence, not the meshes.
+stack-e2e-bdd-guards: ## OFFLINE: the Gherkin lane's axis + Studio-GUI guards (mutation batteries; minutes)
+	bash tests/scripts/test-e2e-env-interface-dimensions.sh
+	bash tests/scripts/test-e2e-studio-gui-lane.sh
+
+# ── The e2e REPORT's shape ───────────────────────────────────────────────────
+# Its own target and its own .PHONY line, for the same reason the BDD lane has
+# them: the stack-e2e recipe above is edited by other work in flight.
+#
+# What it gates: reporters/hugmesh-reporter.ts must keep emitting a report a
+# feature tree can render - pivoted BY SPEC FILE, one record per test, with
+# attachment paths and a skip REASON on every skipped test - while still writing
+# the legacy role/layer pivot the admin-ui console and hugmesh_studio's
+# parse_summary() read. The shape is pinned in tests/e2e/reporters/summary.schema.json,
+# checked against a REPLAY of a recorded run (no suite, no stack, no browser, no
+# node_modules: bare node + python3, ~4s).
+.PHONY: e2e-reporter-check
+
+e2e-reporter-check: ## OFFLINE: verify the e2e reporter emits a per-spec/per-test/attachment/skip-reason summary.json
+	bash tests/scripts/test-e2e-reporter-shape.sh
+
+# LIVE lane. Same preconditions as stack-e2e (stack-up + stack-seed; once:
+# make playwright-deps) when BDD_ENV=docker. SNAP_PLATFORM=rpi5|x86 narrows the
+# PLATFORM axis to the image target actually running; unset runs every platform
+# row. SNAP_REPORT_DIR redirects junit/json/summary AND the per-step evidence
+# under bdd-steps/, which `make stack-e2e-bdd-evidence` then summarises.
+#
+# SNAP_BASE_URL is passed for BDD_ENV=docker only: run.sh reads it as the docker
+# mesh's address (PUBLIC_HTTPS_PORT is this repo's front door, not 8443), and
+# for kind/qemu run.sh resolves the address itself.
+stack-e2e-bdd: ## run the GHERKIN e2e lane (BDD_ENV=docker|kind|qemu; docker needs stack-up + stack-seed)
+	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	$(if $(filter docker,$(BDD_ENV)),SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' ,)$(BDD_RUN) $(BDD_ARGS)
+
+# Where did this run's screenshots / transcripts / widget grabs go, and what is
+# in them? Reads the manifest the lane wrote and breaks it down per environment
+# and per interface. Exits non-zero when there is nothing there -- an empty
+# summary reported as success is how a lane that ran NOTHING passes for one that
+# ran everything.
+stack-e2e-bdd-evidence: ## summarise the Gherkin lane's evidence manifest (per env / per interface)
+	bash tests/e2e/run.sh --evidence
+
+# ── SNAP_ENV alias: the STUDIO's entry point ─────────────────────────────────
+# studio/hugmesh_studio/core/e2e_environments.py pins RUN_TARGET = this name and
+# studio/tests/test_e2e_environments.py asserts the target exists in this file,
+# so the name is load-bearing. It is deliberately a THIN ALIAS and not a second
+# implementation: the GUI lane and the CLI lane arrived independently, each with
+# its own way to select an environment (SNAP_ENV inline here / BDD_ENV through
+# run.sh), which is precisely the two-divergent-invocations drift the comment at
+# the top of this block warns about. One implementation, two spellings of the
+# knob. Nothing is started; a scenario whose mesh is down SKIPS with a reason.
+#
+#   make stack-e2e-bdd-env                       # docker (default)
+#   SNAP_ENV=kind make stack-e2e-bdd-env         # the kind cluster
+#   SNAP_ENV=qemu make stack-e2e-bdd-env         # a device somebody already booted
+stack-e2e-bdd-env: ## run the GHERKIN lane against the mesh SNAP_ENV names (docker|kind|qemu; nothing is started)
+	@$(MAKE) --no-print-directory stack-e2e-bdd \
+	  BDD_ENV='$(or $(SNAP_ENV),docker)' BDD_ARGS='$(BDD_ARGS) $(E2E_ARGS)'
+
+# ── THE GENERATIVE COVERAGE MATRIX ───────────────────────────────────────────
+# tests/e2e/features/coverage/ is EMITTED, not hand-written: every seeded
+# persona x every catalogued function x every service, with the expected
+# admitted/refused outcome computed from the COMMITTED gateway route-access seed.
+# Adding a persona to tests/e2e-extra-personas.sh, a service to
+# tests/e2e/steps/dimensions.ts SERVICES, or a function to
+# tests/e2e/steps/coverage-catalogue.ts FUNCTIONS expands the matrix
+# automatically — and the drift guard goes RED until it is re-emitted.
+.PHONY: stack-e2e-coverage-gen stack-e2e-coverage-check
+
+stack-e2e-coverage-gen: ## re-emit tests/e2e/features/coverage/ from the persona/service/function catalogues
+	@[ -d tests/e2e/node_modules ] || { echo "==> tests/e2e/node_modules missing - run 'make playwright-deps' first"; exit 2; }
+	bash tests/e2e/gen-coverage-matrix.sh
+
+# OFFLINE gate. Starts nothing. Re-emits into a scratch dir and DIFFS against the
+# committed tree, derives the expected persona/service/function/pair sets from the
+# catalogues and compares them with what `playwright test --list` actually
+# generates, runs the whole coverage lane, then breaks production six ways and
+# requires every break to turn it red. Takes ~10 minutes; COVERAGE_MATRIX_FULL=0
+# runs a representative subset instead while iterating.
+stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is complete, pinned and drift-guarded
+	bash tests/scripts/test-e2e-coverage-matrix.sh
