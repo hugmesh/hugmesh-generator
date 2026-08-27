@@ -34,6 +34,41 @@ spec:
           enabled: false
         reportsController:
           enabled: false
+        # ── the chart's cleanup CronJobs pin a RETIRED image ──────────────────
+        # MEASURED on a live kind cluster: four kyverno-cleanup-* CronJobs were in
+        # ImagePullBackOff, firing every 10 minutes, forever. `cleanupController:
+        # enabled: false` above DID take effect -- there is no cleanup-controller
+        # Deployment -- but the chart creates these CronJobs INDEPENDENTLY of that
+        # flag, and kyverno-3.2.8/values.yaml pins them to bitnami/kubectl:1.28.5.
+        # Bitnami's move to Broadcom retired the free bitnami/* Docker Hub images:
+        # that exact tag now returns 404 (verified against the Docker Hub API), while
+        # bitnamilegacy/kubectl:1.28.5 returns 200.
+        #
+        # WHY THIS ESCAPED tests/scripts/test-container-image-tags.sh: that gate checks
+        # the images specs/cluster PINS. This one was pinned by the CHART we install,
+        # not by us -- an entire class the gate cannot see. Overriding it here brings
+        # the image back under our own pin, and therefore back under that gate.
+        #
+        # reportsController is off above, so nothing GENERATES admission/ephemeral
+        # reports and their four cleanup jobs have no work: disabled outright rather
+        # than repointed, because the cheapest broken thing is the one that does not
+        # run. updateRequests is DIFFERENT -- backgroundController is enabled, so it
+        # really does produce UpdateRequests -- so that one keeps running, on the
+        # image that exists.
+        cleanupJobs:
+          admissionReports:
+            enabled: false
+          clusterAdmissionReports:
+            enabled: false
+          ephemeralReports:
+            enabled: false
+          clusterEphemeralReports:
+            enabled: false
+          updateRequests:
+            enabled: true
+            image:
+              repository: bitnamilegacy/kubectl
+              tag: '1.28.5'
   destination:
     server: https://kubernetes.default.svc
     namespace: kyverno
