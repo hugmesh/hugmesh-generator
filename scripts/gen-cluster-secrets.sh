@@ -17,6 +17,34 @@
 # No root required. Requires: openssl, python3. Optional: vault CLI (online).
 set -euo pipefail
 
+# ── credentials that get EMBEDDED IN A URL ───────────────────────────────────
+# `openssl rand -base64` draws from the base64 alphabet, which includes + / and =.
+# A password carrying any of those cannot survive being interpolated into a URL:
+#
+#     r2dbc:postgresql://fe_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db...
+#
+# R2DBC parses that with ConnectionFactoryOptions.parse(), which URL-DECODES the
+# userinfo — so a literal `+` arrives at Postgres as a SPACE and authentication
+# fails. `/` ends the authority early; `=` is harmless here but is dropped for the
+# same reason: this alphabet has no business in a URL.
+#
+# THE FAILURE IS SILENT AND IT FAILS OPEN. When a gateway cannot reach
+# route-access-db it has no route_access rows, so it enforces NOTHING: a plain
+# ROLE_USER gets HTTP 200 with the admin UI shell. Nothing logs "RBAC is off".
+#
+# NOT HYPOTHETICAL, AND NOT RARE. A 24-byte base64 string is 32 characters, each
+# with a 2-in-64 chance of being + or /, so ~63% of bootstraps mint at least one
+# unusable route-access credential. Measured on the live kind cluster on
+# 2026-08-27: THREE of the six route-access passwords contained `+`, two of them
+# (fe_gateway, pki_gateway) on gateways whose URL embeds it.
+#
+# base64url keeps every bit of entropy (same byte count) and its alphabet
+# [A-Za-z0-9-_] is entirely URI-unreserved, so it needs no escaping anywhere.
+rand_urlsafe() { # <bytes> -> unpadded base64url
+  openssl rand -base64 "$1" | tr '+/' '-_' | tr -d '='
+}
+
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -461,33 +489,6 @@ HEADWIND_ADMIN_PASSWORD="$(openssl rand -base64 24)"
 AKKOMA_SECRET_KEY_BASE="$(openssl rand -base64 64 | tr -d '\n')"
 AKKOMA_SIGNING_SALT="$(openssl rand -base64 24)"
 AKKOMA_DB_PASSWORD="$(openssl rand -base64 24)"
-
-# ── credentials that get EMBEDDED IN A URL ───────────────────────────────────
-# `openssl rand -base64` draws from the base64 alphabet, which includes + / and =.
-# A password carrying any of those cannot survive being interpolated into a URL:
-#
-#     r2dbc:postgresql://fe_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db...
-#
-# R2DBC parses that with ConnectionFactoryOptions.parse(), which URL-DECODES the
-# userinfo — so a literal `+` arrives at Postgres as a SPACE and authentication
-# fails. `/` ends the authority early; `=` is harmless here but is dropped for the
-# same reason: this alphabet has no business in a URL.
-#
-# THE FAILURE IS SILENT AND IT FAILS OPEN. When a gateway cannot reach
-# route-access-db it has no route_access rows, so it enforces NOTHING: a plain
-# ROLE_USER gets HTTP 200 with the admin UI shell. Nothing logs "RBAC is off".
-#
-# NOT HYPOTHETICAL, AND NOT RARE. A 24-byte base64 string is 32 characters, each
-# with a 2-in-64 chance of being + or /, so ~63% of bootstraps mint at least one
-# unusable route-access credential. Measured on the live kind cluster on
-# 2026-08-27: THREE of the six route-access passwords contained `+`, two of them
-# (fe_gateway, pki_gateway) on gateways whose URL embeds it.
-#
-# base64url keeps every bit of entropy (same byte count) and its alphabet
-# [A-Za-z0-9-_] is entirely URI-unreserved, so it needs no escaping anywhere.
-rand_urlsafe() { # <bytes> -> unpadded base64url
-  openssl rand -base64 "$1" | tr '+/' '-_' | tr -d '='
-}
 
 # route-access-db per-machine-user least-privilege passwords. The owner (DDL) plus
 # one password per consuming machine-user: admin-bff (the ONLY writer) and the
