@@ -221,7 +221,9 @@ Usage: $0 [OPTIONS]
                     surprises ("x86/be" never drags in be+gpu/be-ha). This is
                     the spelling a per-device Start uses.
   --mode M          golden (default; boots the real .img) | stage4
-  -j, --jobs N      concurrent emulated devices. Default: ${JOBS}
+  -j, --jobs N      concurrent emulated devices. 0 = UNGATED: start every row at
+                    once, no admission gate at all (see --keep-alive below for
+                    what that gate does). Default: ${JOBS}
   --cache-max-gb N  bound the decompressed-image cache (<work>/images) to N GiB,
                     evicting least-recently-touched images first. NEVER deletes
                     a .part mid-decompress, an image referenced by a device
@@ -2291,6 +2293,130 @@ start_device_row() {
     return 0
 }
 
+# ── Loop-device preflight ───────────────────────────────────────────────────
+# WHAT WAS OBSERVED (2026-08-26). `--jobs 2` over rpi5: pki PASSED, backend and
+# frontend both died in extract_kernel ("could not extract kernel_2712.img"),
+# reproducibly, while the SAME rows passed when run one at a time. The images,
+# the partition tables and the flock were all fine.
+#
+# ROOT CAUSE — the host boots with NO loop devices at all. This box has
+# /sys/module/loop/parameters/max_loop = 0, so devtmpfs carries only
+# /dev/loop-control until something issues LOOP_CTL_GET_FREE; the kernel then
+# materialises /dev/loop0 ON THE HOST devtmpfs at that instant. A container's
+# /dev is a CREATION-TIME SNAPSHOT of what the daemon assembles — a container
+# started BEFORE that instant can never see the node, no matter how privileged
+# it is, and `mount -o offset=` inside it has no loop device to claim. Confirmed
+# by birth times: loop-control 10:02:33 (boot), loop0 11:27:36, and the backend
+# container's image was ready at 11:27:35.94 — 1.06s too early.
+#
+# That also explains why the bug reads as flaky: pki went first, ITS mount is
+# what created loop0, and every failing run leaves the node behind. After two
+# failures the host had loop0 AND loop1 and the matrix "started passing" with
+# nothing fixed. A harness that heals itself into green is the worst kind.
+#
+# THE FIX. Force the nodes to exist on the HOST before any row's container is
+# created, so every later /dev snapshot contains them. `losetup -f` alone will
+# NOT do it: it returns an already-free device without allocating a new one, so
+# on a host with one free loop0 it creates nothing. The nodes only appear when
+# the kernel is OBLIGED to allocate them — attach ${want} throwaway files
+# SIMULTANEOUSLY (each attach holds its device, so the next -f must allocate a
+# fresh one), then detach them all. The attach needs CAP_SYS_ADMIN, which this
+# script does not have, so it happens in ONE short-lived privileged container
+# with the host's /dev bind-mounted in: -v /dev:/dev is load-bearing, both so
+# losetup can open the node it just asked for and so the nodes it creates land
+# on the host devtmpfs rather than in a container-private tmpfs.
+#
+# Never fatal. A host that refuses is a host where the matrix MIGHT still work
+# (one free node is enough when the mounts serialize on the flock), so this
+# warns loudly, names what it could not do, and lets the run proceed.
+
+# Where the loop nodes are counted. A TEST SEAM, and a necessary one: this host
+# has already healed itself into having loop0+loop1, so a regression test that
+# counted the REAL /dev would take the "already enough" early return and prove
+# nothing at all. Production never sets it.
+LOOP_DEV_DIR="${LOOP_DEV_DIR:-/dev}"
+# Upper bound on the preflight. One row needs one loop device at a time and
+# extract_kernel serializes the claim host-wide on ${WORK}/.loop-mount.lock, so
+# a 20-row matrix does not need 20 nodes — this is headroom, not a quota.
+LOOP_PREFLIGHT_MAX="${LOOP_PREFLIGHT_MAX:-8}"
+
+loop_node_count() {
+    local n
+    local f
+    n=0
+    for f in "${LOOP_DEV_DIR}"/loop[0-9]*; do
+        # An unmatched glob comes back as the literal pattern; -e rejects it.
+        # -e rather than -b so the test seam can use a directory of plain files.
+        [ -e "${f}" ] || continue
+        # PARTITION NODES ARE NOT LOOP DEVICES. `loop[0-9]*` is loop + a digit +
+        # ANYTHING, so it also matches /dev/loop0p1, and those are not
+        # hypothetical here: extract_kernel's whole job is `losetup -P` on a
+        # multi-partition golden image, and -P materialises loop0p1..p3 on the
+        # HOST devtmpfs — the same devtmpfs-is-global fact this entire fix rests
+        # on. Concurrent runs against one --work are supported, so run B would
+        # count run A's partition nodes: a host with ONE loop device would look
+        # like four, take the have>=want early return, print the reassuring
+        # "already on the host", create nothing, and leave run B's rows to die in
+        # extract_kernel exactly as before — the guard reporting success at
+        # precisely the moment it is needed. Only `loop` followed by digits ALL
+        # THE WAY is a device; loop10 counts, loop0p1 does not.
+        case "${f##*/}" in loop*[!0-9]*) continue ;; esac
+        n=$((n + 1))
+    done
+    printf '%s\n' "${n}"
+}
+
+ensure_loop_devices() { # ensure_loop_devices WANT
+    local want
+    local have
+    local rc
+    want="${1:-2}"
+    [ "${want}" -ge 2 ] || want=2
+    [ "${want}" -le "${LOOP_PREFLIGHT_MAX}" ] || want="${LOOP_PREFLIGHT_MAX}"
+    have="$(loop_node_count)"
+    if [ "${have}" -ge "${want}" ]; then
+        info "loop preflight: ${have} loop node(s) already on the host (want ${want})"
+        return 0
+    fi
+    step "Loop-device preflight: host shows ${have} loop node(s), forcing ${want}"
+    if ! command -v docker >/dev/null; then
+        warn "LOOP PREFLIGHT SKIPPED: no docker to run the privileged attach in — rows may fail in extract_kernel with 'could not extract kernel' on a host whose /dev has no loop node yet"
+        return 0
+    fi
+    rc=0
+    # `_` is argv[0] for the -c script, so "${want}" arrives as $1 inside it.
+    docker run --rm --privileged -v /dev:/dev --entrypoint /bin/bash \
+        "${IMAGE_TAG}" -c '
+            set -u
+            want="$1"; i=0; held=""
+            while [ "${i}" -lt "${want}" ]; do
+                f="$(mktemp)" || break
+                truncate -s 1M "${f}" 2>/dev/null \
+                    || dd if=/dev/zero of="${f}" bs=1M count=1 2>/dev/null \
+                    || break
+                # --show prints the node; each attach HOLDS it, which is what
+                # obliges the kernel to allocate a fresh one on the next pass.
+                d="$(losetup -f --show "${f}" 2>/dev/null)" || break
+                [ -n "${d}" ] || break
+                held="${held} ${d}"
+                i=$((i + 1))
+            done
+            for d in ${held}; do losetup -d "${d}" 2>/dev/null || true; done
+            [ "${i}" -ge "${want}" ]
+        ' _ "${want}" >/dev/null 2>&1 || rc=$?
+    # Believe the NODE COUNT, not the exit code. The container can fail on its
+    # last attach having already created three nodes, and that is a success for
+    # our purposes; it can also exit 0 in some future rewrite without having
+    # created anything. Only the post-condition on the host says which happened.
+    have="$(loop_node_count)"
+    if [ "${have}" -ge "${want}" ]; then
+        info "loop preflight: ${have} loop node(s) now visible on the host devtmpfs"
+        return 0
+    fi
+    warn "LOOP PREFLIGHT INCOMPLETE: wanted ${want} loop node(s), host shows ${have} (privileged attach rc=${rc}). Rows may fail in extract_kernel with 'could not extract kernel' — a container created before a node exists can never see it. Workaround: 'sudo modprobe loop max_loop=${want}' or run the matrix with --jobs 1."
+    return 0
+}
+
 # ── Keep-alive boot admission ────────────────────────────────────────────────
 # `docker run -d` returns instantly, so the old keep-alive loop started EVERY
 # row's guest within seconds of each other — on 2026-08-19 that was 10 VMs at
@@ -2327,6 +2453,13 @@ admission_wait() {
     while ! admission_poll; do sleep 5; done
     return 0
 }
+
+# EVERY container of this run is created below this line — the keep-alive fan-out
+# immediately after it and the plain one further down — which is the whole point
+# of doing it here: /dev is snapshotted at container CREATION, so a node that
+# does not exist by now is a node those containers can never see. Asked for one
+# per row (capped), never fatal.
+ensure_loop_devices "${#ROWS[@]}"
 
 if ${KEEP_ALIVE}; then
     # Create the registry directory HOST-side, before any container can. Records
@@ -2381,22 +2514,49 @@ if ${KEEP_ALIVE}; then
     exit $?
 fi
 
-step "Running ${#ROWS[@]} row(s), ${JOBS} at a time"
-FAILED=0
-running=0
-for r in "${ROWS[@]}"; do
-    IFS='|' read -r _rank platform role env img <<< "${r}"
-    run_row "${platform}" "${role}" "${img}" &
-    running=$((running+1))
-    if [ "${running}" -ge "${JOBS}" ]; then
+# fan_out_rows — start every row in ${ROWS[@]}, at most ${JOBS} at a time, and
+# leave the number of failed rows in ${FAILED}.
+#
+# A function so tests/qemu/loop_preflight_test.sh can drive the gate itself with
+# a stub `docker` on PATH instead of inferring it from the source. ${FAILED} and
+# ${running} are deliberately NOT `local`: the summary below reads ${FAILED}.
+fan_out_rows() {
+    local r
+    local platform role env img _rank
+    FAILED=0
+    running=0
+    for r in "${ROWS[@]}"; do
+        IFS='|' read -r _rank platform role env img <<< "${r}"
+        run_row "${platform}" "${role}" "${img}" &
+        running=$((running+1))
+        # `[ "${JOBS}" -gt 0 ] &&` IS THE FIX (2026-08-26). --jobs is documented
+        # in the usage text as "0 = ungated, everything at once" and admission_wait
+        # implements exactly that for the keep-alive lane. Here the bare
+        # `running >= JOBS` test read 1 >= 0 as TRUE on the very first row, so it
+        # waited for that row before starting the next: --jobs 0 FULLY SERIALIZED
+        # the matrix — the exact opposite of what it promises, and the slowest
+        # possible run of an option an operator reaches for to go faster. Nothing
+        # complained, because a serialized matrix is merely slow, not red.
+        if [ "${JOBS}" -gt 0 ] && [ "${running}" -ge "${JOBS}" ]; then
+            wait -n 2>/dev/null || FAILED=$((FAILED+1))
+            running=$((running-1))
+        fi
+    done
+    while [ "${running}" -gt 0 ]; do
         wait -n 2>/dev/null || FAILED=$((FAILED+1))
         running=$((running-1))
-    fi
-done
-while [ "${running}" -gt 0 ]; do
-    wait -n 2>/dev/null || FAILED=$((FAILED+1))
-    running=$((running-1))
-done
+    done
+    return 0
+}
+
+if [ "${JOBS}" -gt 0 ]; then
+    step "Running ${#ROWS[@]} row(s), ${JOBS} at a time"
+else
+    step "Running ${#ROWS[@]} row(s), all at once (--jobs 0: ungated)"
+fi
+# ${FAILED} and ${running} are set by fan_out_rows itself (they are globals on
+# purpose — the summary below reads ${FAILED}).
+fan_out_rows
 
 # Second sweep, now that every container has been waited for. The pre-run sweep
 # could not charge this run's fresh decompresses to the budget (they did not

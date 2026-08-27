@@ -37,7 +37,7 @@
 #     (no args → the default DEPENDENTS list below)
 #
 # ENV
-#   GITHUB_ROOT  parent dir holding the repo clones        (default: /home/magus/GitHub)
+#   GITHUB_ROOT  parent dir holding the repo clones        (default: this checkout's parent)
 #   WORK         scratch dir for throwaway worktrees       (default: /var/tmp/portage/hugmesh-mainline-verify)
 #   MVN          maven launcher                            (default: mvn)
 #   SKIP_LIB_BUILD=1   reuse already-installed libs (faster re-runs)
@@ -45,7 +45,12 @@
 # NOT -e on purpose: one red dependent must not abort the rest of the matrix.
 set -uo pipefail
 
-GITHUB_ROOT="${GITHUB_ROOT:-/home/magus/GitHub}"
+# Default to the directory holding THIS checkout, so the script works on any machine
+# and in CI. The previous default was one operator's home dir -- and spelled GitHub
+# with a capital H, which does not resolve on a case-sensitive filesystem, so the
+# default was broken even there.
+_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GITHUB_ROOT="${GITHUB_ROOT:-$(cd "${_SELF_DIR}/../../.." && pwd)}"
 WORK="${WORK:-/var/tmp/portage/hugmesh-mainline-verify}"
 MVN="${MVN:-mvn}"
 

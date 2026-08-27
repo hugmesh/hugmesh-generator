@@ -113,6 +113,36 @@ spec:
                 name: bff-internal-token
                 key: token
                 optional: true
+          # ── bff_ COOKIE -> CUSTODY-JWT EXCHANGE ──────────────────────────────
+          # The session bridge above turns a bff_ cookie into a Spring
+          # SecurityContext AT THE GATEWAY. It does NOT change what is forwarded:
+          # without this flag the gateway proxies the raw OPAQUE `bff_...` value as
+          # the Bearer. admin-bff and mod-bff terminate that themselves, but
+          # forum/wiki/tube/owncast-bff are PURE JWT resource servers — they get
+          # `Bearer bff_...`, which is not a JWT, and answer a bare 401
+          # (`WWW-Authenticate: Bearer`, no error=) with NOTHING in any log. Every
+          # /bff/{forum,wiki,tube,owncast}/** call fails for every cookie-mode user
+          # while their sibling surfaces work, which reads as a role bug.
+          #
+          # tests/stack/compose.local.yaml:546 has set this since that was
+          # diagnosed. The CLUSTER never did — `grep -rn "BFF_EXCHANGE"
+          # specs/cluster` returned nothing — so kind and every baked device image
+          # ran a DIFFERENT auth carrier from the docker lane, and the docker lane
+          # is structurally unable to reproduce it. That drift is what
+          # tests/stack/test-gateway-auth-flag-parity.sh now forbids.
+          #
+          # Fail-safe by design: if the exchange errors the request 401s (the raw
+          # bff_ is never forwarded), so turning it ON cannot widen access.
+          - { name: HUGMESH_GATEWAY_BFF_EXCHANGE_ENABLED, value: "true" }
+          # The image default for the swap target is `http://admin-bff:8080` — a
+          # Service name that exists in NO namespace of this cluster (the Service
+          # is `hugmesh-admin-bff-api` in `hugmesh-backend`), and plain http into
+          # :8080 is answered by a TLS handshake admin-bff's client-auth=need
+          # listener cannot parse. Same address and same scheme as BFF_BASE_URL
+          # above, for the same reason; the fix sketch's assumption that this
+          # "already defaults to the in-cluster name" is false.
+          - name: HUGMESH_GATEWAY_BFF_EXCHANGE_ADMIN_BFF_URI
+            value: https://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080
         # ── THIS TIER IS THE ONE BEHIND A TLS TERMINATOR ─────────────────────
         # The fe-gateway is the PUBLIC front door: every request reaches it from
         # the ingress controller (and, in prod, cloudflared in front of that),
@@ -341,6 +371,29 @@ spec:
           - id: hugmesh-user-bff-api-login
             uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/login
+          # ANONYMOUS PASSWORD RESET -> user-bff (PasswordResetController). The
+          # forgot-password legs, for a visitor with no session and no working
+          # credential. TWO EXACT paths rather than a /bff/password-reset/** subtree,
+          # for the reason the /bff/register/** entry below is a cautionary tale about:
+          # a subtree route SWALLOWS every future sibling under the prefix, and the
+          # cluster table has already shipped that bug once (it routed
+          # /bff/register/complete to a service that does not implement it, so no
+          # account on a cluster could finish onboarding). Exact paths cannot do that.
+          #
+          # MORE SPECIFIC FIRST — Spring Cloud Gateway matches in declared order, the
+          # same reason /bff/login sits above the /bff/** admin-bff catch-all.
+          #
+          # A ROUTE IS NOT ACCESS. These two paths also need a PUBLIC row each in
+          # manifests/route-access/initdb/20-schema.sql AND the same two paths in
+          # hugmesh-gateway SecurityConfig.PUBLIC_PATHS, whose coarse authenticated()
+          # floor 401s an anonymous caller before route-access is consulted. All three
+          # or the reset 401s at the front door while every unit test stays green.
+          - id: hugmesh-user-bff-api-password-reset-request
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/password-reset/request
+          - id: hugmesh-user-bff-api-password-reset-confirm
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/password-reset/confirm
           # REGISTRATION STAGE 2 LIVES ON admin-bff, NOT user-bff. AuthController
           # (admin-bff) owns POST /bff/register/complete — "Registration stage 2:
           # complete; releases service entitlement" — which calls store.markComplete
