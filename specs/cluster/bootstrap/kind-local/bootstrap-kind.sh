@@ -1345,14 +1345,57 @@ EOF
 done
 unset GEN_TOKEN
 
-# Re-run vault-pki-init now that the vault-bootstrap token exists. It's a
-# PostSync ArgoCD hook Job (hook-delete-policy: BeforeHookCreation), so a
-# plain re-apply of its manifests recreates+reruns it directly (bypassing the
-# need to force an ArgoCD resync) — same content ArgoCD already owns/manages.
-log "Re-running vault-pki-init (bootstraps pki_int + per-app issuing roles)"
-recreate_job vault vault-pki-init "${CLUSTER_DIR}/manifests/vault-pki"
-kubectl -n vault wait --for=condition=complete job/vault-pki-init --timeout=180s \
-  || warn "vault-pki-init did not complete within 180s — check 'kubectl -n vault logs job/vault-pki-init'"
+# vault-pki-init: WAIT FOR THE EFFECT, NEVER RECREATE THE JOB.
+#
+# The old code here recreated the Job imperatively and then waited on
+# `job/vault-pki-init`, on the stated assumption that "a plain re-apply of its
+# manifests recreates+reruns it directly". That assumption is FALSE, and it cost a
+# whole bring-up on 2026-08-27:
+#
+#   vault-pki-init never completed — cannot seed KV
+#   Error from server (NotFound): jobs.batch "vault-pki-init" not found
+#
+# MEASURED, not inferred. Applying the manifests exactly as this script did creates
+# the Job and it is GONE within 5 seconds, every time. The ArgoCD controller log says
+# why, in its own words:
+#     PostSync/0 hook batch/Job:vault/vault-pki-init ... waiting for completion of hook
+# The Job carries `argocd.argoproj.io/hook: PostSync` and
+# `hook-delete-policy: BeforeHookCreation`, so ArgoCD OWNS its lifecycle and deletes
+# the previous instance before creating the next. Two writers, one object: whichever
+# `kubectl wait` lands in the delete window reports NotFound, which reads as "the job
+# failed" when the job is in fact fine. Its pod on that very run reached Completed
+# with "==> Vault PKI bootstrap complete".
+#
+# So stop racing the owner. Wait for what the Job is FOR -- pki_int mounted with at
+# least one issuing role -- which is true regardless of which Job instance produced it,
+# survives ArgoCD deleting and recreating the hook mid-check, and is exactly the
+# precondition the KV seed below actually needs. Waiting on an actor you do not own is
+# a race; waiting on the effect is not.
+log "Waiting for vault-pki-init's EFFECT (pki_int + issuing roles), not for the Job object"
+pki_ready() {
+  local tok
+  tok="$(kubectl -n vault get secret vault-bootstrap -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null)"
+  [ -n "${tok}" ] || return 1
+  kubectl -n vault exec vault-0 -c vault -- env \
+      VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true VAULT_TOKEN="${tok}" \
+      vault list -format=json pki_int/roles 2>/dev/null | jq -e 'length > 0' >/dev/null 2>&1
+}
+PKI_DEADLINE=$((SECONDS + 600))
+until pki_ready; do
+  if [ "${SECONDS}" -ge "${PKI_DEADLINE}" ]; then
+    echo "FATAL: pki_int has no issuing roles after 600s — the vault-pki PostSync hook never succeeded." >&2
+    echo "       This is a HARD gate: every per-app TLS Secret below is ESO-materialized from" >&2
+    echo "       pki_int/issue/<app>, so seeding KV now would produce a cluster that looks seeded" >&2
+    echo "       and cannot issue a single certificate." >&2
+    echo "       The hook Job is deleted and recreated by ArgoCD, so it may not exist right now;" >&2
+    echo "       read the POD by label instead of the job by name:" >&2
+    echo "         kubectl -n vault logs -l job-name=vault-pki-init --tail=50" >&2
+    echo "         kubectl -n devops get application vault-pki -o jsonpath='{.status.operationState.message}'" >&2
+    exit 1
+  fi
+  sleep 5
+done
+log "  pki_int is bootstrapped and has issuing roles"
 
 if [ "${KIND_PROFILE}" = "sso" ]; then
   # ───────────────────────────────────────────────────────────────────────
@@ -1371,9 +1414,11 @@ if [ "${KIND_PROFILE}" = "sso" ]; then
   # reachable over the cluster-ca chain, and 403s taught us the soft 180s
   # warn above is not enough — a still-running pki-init means the engine
   # setup (and any policy work) hasn't happened yet.
-  log "Waiting (hard) for vault-pki-init before seeding KV"
-  kubectl -n vault wait --for=condition=complete job/vault-pki-init --timeout=600s \
-    || { echo "vault-pki-init never completed — cannot seed KV (kubectl -n vault logs job/vault-pki-init)" >&2; exit 1; }
+  # The hard gate is now the EFFECT check above, which has already run and already
+  # exits 1 on failure. Re-waiting on job/vault-pki-init here would reintroduce the
+  # exact race it was written to close: ArgoCD can delete the hook between the two
+  # waits, and the second one would then fail on a cluster whose PKI is perfectly fine.
+  log "pki_int verified above (effect, not Job object) — proceeding to KV seed"
 
   log "Seeding Vault KV for the SSO slice (seed-vault-kv.sh -> gen-cluster-secrets.sh ONLINE via vault-0 exec shim)"
   ROOT_TOKEN="$(kubectl -n vault get secret vault-bootstrap -o jsonpath='{.data.token}' | base64 -d)"
