@@ -198,10 +198,10 @@ def test_no_exit_labelled_page_commits_anything_on_the_way_out(wiz):
     wrong. Exactly one of the seven does, for a reason that does not apply on the arm
     where it is terminal:
 
-    ``QemuPage.validatePage`` seeds ``cfg.qemu_e2e`` for the "build first, then test"
+    ``QemuPage.validatePage`` seeds ``cfg.qemu_device_tests`` for the "build first, then test"
     arm — the arm that REJOINS the image flow and therefore shows Next, not Finish. On
     the terminal arm the radio is on "use existing images", so the seed writes
-    ``qemu_e2e = False``, which is already the field's default (config.py: ``qemu_e2e:
+    ``qemu_device_tests = False``, which is already the field's default (config.py: ``qemu_device_tests:
     bool = False``), into a config the closing wizard discards. Nothing is emitted,
     nothing is saved.
 
@@ -225,9 +225,9 @@ def test_no_exit_labelled_page_commits_anything_on_the_way_out(wiz):
 
     qemu = wiz.page(wiz._page_ids["qemu"])
     assert qemu.use_existing.isChecked()          # the terminal arm is the default
-    wiz.cfg.qemu_e2e = True                       # a value the seed must be free to clear
+    wiz.cfg.qemu_device_tests = True                       # a value the seed must be free to clear
     assert qemu.validatePage() is True
-    assert wiz.cfg.qemu_e2e is False              # the field's own default: a no-op write
+    assert wiz.cfg.qemu_device_tests is False              # the field's own default: a no-op write
 
 
 # ---- the deliberate exception: a Finish that really commits ----------------------

@@ -174,6 +174,13 @@ class WorklistPage(QtWidgets.QWizardPage):
             "unsupported tier. Listing them here explains why they are absent; they are "
             "never checkable on this screen.")
         lay.addWidget(self.show_non_mesh)
+        # The half of the sentence a checkbox could not wrap. Same words, a widget that
+        # can reflow them; see the setText call in the ask-18 block below.
+        self._non_mesh_hint = QtWidgets.QLabel(
+            "Read-only \u2014 they build single images on the other path.")
+        self._non_mesh_hint.setWordWrap(True)
+        self._non_mesh_hint.setEnabled(False)
+        lay.addWidget(self._non_mesh_hint)
 
         self.tree = QtWidgets.QTreeWidget()
         self.tree.setRootIsDecorated(True)
@@ -336,9 +343,14 @@ class WorklistPage(QtWidgets.QWizardPage):
             if device_catalog.mesh_capable(dev.id):
                 continue   # covered by its platform's checkable role rows above
             self._info_items.append(self._build_info_row(dev))
+        # SHORT label + a WRAPPED QLabel beneath it. A QCheckBox cannot word-wrap, so
+        # its full prose became a 739px un-shrinkable minimum, which exceeded the
+        # wizard's 736px medium width -- and a QWizard sizes to its widest page, so this
+        # one line dragged EVERY page wider, permanently. The count stays on the control
+        # (it is what the operator is deciding about); the explanation moves to a label
+        # that can actually reflow.
         self.show_non_mesh.setText(
-            f"Also list the {len(self._info_items)} devices that cannot be mesh nodes "
-            "(read-only — they build single images on the other path)")
+            f"Also list the {len(self._info_items)} devices that cannot be mesh nodes")
         self.show_non_mesh.toggled.connect(self._apply_filter)
 
         # expand the buildable groups; collapse the info-only ones (visibility without

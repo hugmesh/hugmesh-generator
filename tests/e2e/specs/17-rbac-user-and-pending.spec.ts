@@ -3,6 +3,22 @@ import { registerOnly, onboard, shot } from './helpers';
 import { systemsUser } from './rbac-roles';
 import { gatewayDecision, effectiveRoles } from './rbac-route-access';
 
+/**
+ * Handles this spec names that must NEVER be provisioned. Read by the Studio's
+ * spec->persona index (studio/hugmesh_studio/core/e2e_personas.py), which otherwise
+ * cannot tell a handle nobody seeded ON PURPOSE from one somebody forgot to seed —
+ * and reports the latter as a defect, because that is the shape of the 2026-08-06
+ * spec-29 failure (a native-login 401 that read as a broken password and was really
+ * an account nothing ever created).
+ *
+ * 'rbac-pending-uninvited@gmail.com' is the identity no admin ever invited; the
+ * first pending test asserts it is refused native sign-in outright. Note the
+ * contrast with 'rbac-pending@gmail.com' two tests below, which IS seeded and is
+ * gated a different way (seed-e2e.sh never completes its registration) — those
+ * are two distinct denials and seeding either one voids its own test.
+ */
+export const NEVER_SEEDED_PERSONAS: readonly string[] = ['rbac-pending-uninvited@gmail.com'];
+
 // 17 — Plain ROLE_USER reaches user surfaces; the pending user is denied until
 // approved.
 //

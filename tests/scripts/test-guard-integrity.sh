@@ -96,7 +96,28 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     139 of 151 suites are named by a pull_request-triggered workflow
 # The GATED count did not move on the second merge -- the slug gate lands UNGATED,
 # recorded in PREMERGE_UNGATED below with its reason -- so only the denominator did.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-139}"
+# 133 -> 135 on integrate/studio-e2e, and for the same reason a third time. That
+# integration wires two more: tests/scripts/test-stack-e2e-argv.sh (from
+# feat/stack-e2e-argv-passthrough, which listed it itself) and
+# tests/qemu/qemu-e2e-lane_test.sh (from feat/studio-qemu-e2e-lane, which did
+# NOT -- its own copy of this file predates the *_test.sh census and could not
+# see its own new suite). NO branch's number was correct for the merged tree:
+# the two e2e branches both said 118, main said 133. This is the number this
+# file printed when run against the merged tree, and nothing else.
+#
+# 135 -> 137 / denominator 145 -> 148 when main was merged in. Main had moved
+# under this branch three times (the tube signed-media gate, the fragment route
+# target gate, the password-reset front door, the federation module-slug gate).
+# MEASURED on the merged tree by running this file and reading its own line:
+#     137 of 148 suites are named by a pull_request-triggered workflow
+#
+# 137/139 -> 141, denominator -> 153, when the studio-e2e integration and this one
+# met on main. BOTH histories above are kept: each records a real reconciliation,
+# and deleting either erases why a number moved. Four branches have now written
+# their own value into this one line (118, 133, 137, 139) and not one of them was
+# true of the tree that resulted. MEASURED, by running this file:
+#     141 of 153 suites are named by a pull_request-triggered workflow
+PREMERGE_BASELINE="${GUARD_PREMERGE:-141}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
