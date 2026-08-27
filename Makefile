@@ -381,7 +381,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         quest-plan quest-detect quest-mdm-enroll quest-enroll quest-ingest quest-status quest-wizard \
         deploy-plan deploy-apply deploy-status deploy-destroy \
         flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate qemu-mesh qemu-mesh-enumerate \
-        playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
+        playwright-deps e2e e2e-list ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e stack-e2e-list \
         kind-images kind-up kind-e2e kind-e2e-mfa kind-mfa-posture kind-down kind-honesty \
@@ -1341,8 +1341,27 @@ playwright-deps: ## install the Playwright deps + chromium (needed once for e2e)
 	cd tests/e2e && { [ -d node_modules ] || npm ci || npm install; } \
 	  && npx playwright install --with-deps chromium
 
+# E2E_ARGS here is NOT the same shape as stack-e2e's. There, `npx playwright test`
+# is the DIRECT consumer and bare argv is correct. This lane interposes a shell
+# script whose parser ends in `*) echo "Unknown arg: $1"; usage 1`, so an
+# unseparated `--grep @smoke` (or a bare spec path) is a HARD ERROR, not a
+# passthrough — which is exactly how this target shipped broken on 2026-08-26.
+# The `--` is therefore load-bearing, and the $(if ...) keeps an unset E2E_ARGS
+# from emitting a dangling separator. e2e-list below must stay identical, and
+# tests/qemu/qemu-e2e-lane_test.sh asserts BOTH by rendering `make -n` and feeding
+# the result to the real parser.
 e2e: playwright-deps ## boot ROLE/ARCH in QEMU and run the Playwright e2e (default: x86 be+gpu)
-	$(SUDO) tests/qemu/run-qemu-e2e.sh -w "$(WORK_DIR)" --target $(if $(filter arm64,$(ARCH)),pi,x86) --role $(ROLE)
+	$(SUDO) tests/qemu/run-qemu-e2e.sh -w "$(WORK_DIR)" --target $(if $(filter arm64,$(ARCH)),pi,x86) --role $(ROLE) $(if $(E2E_ARGS),-- $(E2E_ARGS))
+
+# Enumerate what the QEMU Playwright lane WOULD run — the boot plan plus the spec
+# tree — as one JSON document. NO root, no image, no network, no boot: `--list`
+# runs before run-qemu-e2e.sh's artifact-autodetect, so a tree that has built
+# nothing yet still describes the lane (missing artifacts come back as nulls).
+# Deliberately NOT gated on playwright-deps: the spec half degrades to a LOUD,
+# named skip inside the JSON when tests/e2e/node_modules is absent, and the boot
+# plan is still worth answering. tests/qemu/qemu-e2e-lane_test.sh pins both halves.
+e2e-list: ## enumerate the QEMU Playwright lane (boot plan + specs) as JSON; boots nothing, needs no root
+	@tests/qemu/run-qemu-e2e.sh -w "$(WORK_DIR)" --target $(if $(filter arm64,$(ARCH)),pi,x86) --role $(ROLE) --list $(if $(E2E_ARGS),-- $(E2E_ARGS))
 
 ci: ## FULL pipeline: wipe -> build the whole fleet (Docker) -> QEMU-emulate + e2e (long; hours)
 	$(MAKE) rebuild

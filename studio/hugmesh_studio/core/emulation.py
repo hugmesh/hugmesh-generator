@@ -69,6 +69,45 @@ from . import proc_group
 #: drives the confined workloads and harvests every AVC into a narrowing report.
 AVC_SCRIPT = os.path.join("tests", "qemu", "avc-workout.sh")
 
+#: THE PLAYWRIGHT LANE — a DIFFERENT harness from ``qemu_tests.RUNNER_SCRIPT``, and
+#: the distinction is the whole reason this constant exists rather than a string at a
+#: call site. Three things in this tree are called "e2e":
+#:
+#:   * ``tests/qemu/run-qemu-docker.sh``  (``qemu_tests.RUNNER_SCRIPT``) — boots a
+#:     MATRIX of images in a privileged container and runs IN-GUEST assertions. This
+#:     is what ``run_argv``/``start_device_argv`` drive and what the post-build
+#:     opt-in (``cfg.qemu_device_tests``) runs.
+#:   * ``tests/qemu/run-qemu-e2e.sh``     (BELOW) — boots ONE role VM through
+#:     launch-x86.sh/launch-pi.sh, seeds the e2e identities over SSH and runs the
+#:     UNCHANGED Playwright specs from ``tests/e2e`` against the guest's forwarded
+#:     UI. Browsers, not ssh assertions.
+#:   * ``tests/qemu/run-matrix-e2e.sh``   — the size/load matrix gated on
+#:     ``HUGMESH_QEMU_E2E=1``. Nothing here drives it.
+#:
+#: Pointing an envelope at the wrong one of these is exactly the confusion the
+#: rename of ``cfg.qemu_e2e`` -> ``cfg.qemu_device_tests`` was about, so
+#: test_emulation.py pins WHICH script each author emits.
+PLAYWRIGHT_SCRIPT = os.path.join("tests", "qemu", "run-qemu-e2e.sh")
+
+#: ``run-qemu-e2e.sh --target``: which launcher boots the guest. It wires exactly two
+#: (launch-x86.sh and launch-pi.sh), so these three are the whole vocabulary.
+PLAYWRIGHT_TARGET_X86 = "x86"
+PLAYWRIGHT_TARGET_PI = "pi"
+PLAYWRIGHT_TARGET_BOTH = "both"
+PLAYWRIGHT_TARGETS = (PLAYWRIGHT_TARGET_X86, PLAYWRIGHT_TARGET_PI,
+                      PLAYWRIGHT_TARGET_BOTH)
+
+#: Platforms that map onto a launcher run-qemu-e2e.sh actually wires. Everything
+#: else (jetson, the OrangePi boards, frite) has no launcher in that script — its
+#: arg parser would take ``--target jetson`` and ``die`` — so the author REFUSES
+#: rather than silently boot some other board's image.
+_PLAYWRIGHT_PLATFORM_TARGETS = {
+    "x86": PLAYWRIGHT_TARGET_X86,
+    "rpi5": PLAYWRIGHT_TARGET_PI,
+    "rpi4": PLAYWRIGHT_TARGET_PI,
+    "rpi3": PLAYWRIGHT_TARGET_PI,
+}
+
 #: Wall clock for the ``--devices`` shell-out in :func:`status`. The subcommand
 #: boots nothing (a file read plus one ``docker ps``), so anything slower than
 #: this is a wedged daemon — and the registry fallback answers instead.
@@ -127,6 +166,68 @@ class RunEnvelope:
     extra_users: tuple[str, ...] = ()    # additional wheel logins on every guest
     keep: bool = False                   # keep per-run scratch dirs
     cache_max_gb: int = 0                # decompressed-image cache cap; 0 = unbounded
+    #: THE SPEC/TAG FILTER, and the ONE field here that is not a
+    #: ``qemu_tests.QemuRunOptions`` knob. It is the ``-- <extra playwright args>``
+    #: passthrough of ``run-qemu-e2e.sh`` (``specs/01-frontpage.spec.ts``,
+    #: ``--grep @smoke``, ``--repeat-each 3``), carried in the envelope rather than
+    #: read off a widget at spawn time for the reason gui/pages/qemu.py states about
+    #: every other knob: the preview and the spawn build their argv from the SAME
+    #: envelope, so a knob the envelope does not carry is a knob that previews and
+    #: then does not happen.
+    #:
+    #: It reaches ONLY the Playwright lane. ``_envelope_options`` deliberately does
+    #: NOT forward it to ``QemuRunOptions`` — run-qemu-docker.sh has no such flag and
+    #: would ``die`` on it — and ``test_emulation.py`` pins that split so a future
+    #: field cannot be added to this class and then silently reach neither lane.
+    playwright_args: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PlaywrightOptions:
+    """Every knob of ``tests/qemu/run-qemu-e2e.sh``, with THAT script's defaults.
+
+    Deliberately a SECOND options object rather than more fields on
+    :class:`RunEnvelope`: the two lanes share not one flag spelling. The docker
+    runner takes ``--artifacts/--work/--only-exact/--jobs``; this one takes
+    ``--target/--role/--img/--kernel/--ssh-port/--ui-port/--accel`` and a trailing
+    ``-- <playwright args>``. Collapsing them into one bag is how an envelope ends
+    up aimed at the wrong runner.
+
+    THE DEFAULTS ARE THE SCRIPT'S, COPIED — but see :func:`playwright_argv` for why
+    most flags are emitted ANYWAY. run-qemu-e2e.sh spells every default as
+    ``"${MEM:-4096}"``, i.e. an ENVIRONMENT variable with a fallback, so "the
+    default" is whatever the spawning shell happens to export. Omitting a flag
+    because it matches the literal default would hand the guest a different value on
+    a workstation that has ``MEM``/``SSH_PORT``/``TIMEOUT`` in its environment — and
+    the Studio spawns with the environment it inherited.
+    """
+    #: Which VM(s) to boot: ``x86`` | ``pi`` | ``both`` (``-t/--target``).
+    target: str = PLAYWRIGHT_TARGET_X86
+    role: str = "frontend"           # -r/--role: whose UI the specs drive
+    img: str = ""                    # --img      x86 .img (else autodetect in -w)
+    kernel: str = ""                 # --kernel   Pi kernel Image (else autodetect)
+    stage4: str = ""                 # --stage4   Pi stage4 (else autodetect)
+    #: ``-w/--work-dir`` — the ARTIFACT dir the script autodetects images in, NOT a
+    #: scratch dir. Left empty here; :func:`playwright_argv` pins it to the plan's
+    #: session path, for the same reason every other author here pins ``--artifacts``.
+    work_dir: str = ""
+    test_dir: str = ""               # --test-dir scratch (default <work>/qemu-e2e)
+    ssh_port: int = 2222             # --ssh-port host port forwarded to guest :22
+    ui_port: int = 8443              # --ui-port  host port forwarded to the guest UI
+    ssh_user: str = "tester"         # --ssh-user login seeded onto the image
+    mem_mb: int = 4096               # -m/--mem
+    smp: int = 4                     # --smp
+    accel: str = "auto"              # --accel    auto | kvm | tcg
+    timeout_s: int = 1800            # --timeout     max wait for SSH
+    ui_timeout_s: int = 300          # --ui-timeout  max wait for the forwarded UI
+    keep: bool = False               # --keep     don't tear the VM/scratch down
+    dry_run: bool = False            # --dry-run  resolve + print the plan; no boot
+    #: ``--list`` — enumerate the boot plan AND the Playwright specs that run,
+    #: without booting anything. Needs no root, which is what makes it the only verb
+    #: on this lane a GUI can offer unconditionally (see :func:`playwright_root_blocker`).
+    list_only: bool = False
+    #: Everything after ``--``: handed verbatim to ``playwright test``.
+    playwright_args: tuple[str, ...] = ()
 
 
 @dataclass
@@ -232,6 +333,18 @@ def plan(generator_dir: str, session, mode, envelope: RunEnvelope | None = None,
 
 
 # ── argv authors ────────────────────────────────────────────────────────────────────
+
+#: RunEnvelope fields that are deliberately NOT forwarded into QemuRunOptions,
+#: with the reason. ``_envelope_options`` maps every OTHER field one-for-one, and
+#: test_emulation.py asserts this set plus that mapping covers the dataclass exactly
+#: — so a field added to RunEnvelope must be routed somewhere on purpose, instead of
+#: joining the argv of neither lane and looking wired because the widget exists.
+ENVELOPE_FIELDS_NOT_FOR_THE_DOCKER_RUNNER = {
+    "playwright_args": ("the `-- <extra playwright args>` passthrough of "
+                        "run-qemu-e2e.sh; run-qemu-docker.sh has no such flag and "
+                        "treats an unknown arg as a hard error"),
+}
+
 
 def _envelope_options(env: RunEnvelope, **overrides) -> QemuRunOptions:
     return QemuRunOptions(jobs=env.jobs, mem_mb=env.mem_mb, smp=env.smp,
@@ -343,6 +456,134 @@ def avc_argv(plan: EmulationPlan, row_or_label) -> list[str]:
     return [os.path.join(plan.generator_dir, AVC_SCRIPT),
             "--platform", row.platform, "--role", row.role,
             "-w", plan.session_path]
+
+
+# ── the Playwright lane: run-qemu-e2e.sh over a REAL booted image ───────────────────
+# tests/qemu/run-qemu-e2e.sh has existed and worked for months and was reachable from
+# NOWHERE in the Studio (zero references under studio/ before 2026-08-26). These three
+# functions are the door: one argv author, one row->target rule, one honest refusal.
+
+
+def playwright_target_for(platform: str) -> str:
+    """``x86`` -> ``x86``, a Pi board -> ``pi``; "" when no launcher exists.
+
+    run-qemu-e2e.sh wires exactly two launchers (launch-x86.sh, launch-pi.sh) and its
+    own parser rejects any other ``--target``, so a jetson/OrangePi/frite row has no
+    honest answer here. "" is that answer, and the callers turn it into a refusal
+    naming the platform rather than booting some other board's image.
+    """
+    return _PLAYWRIGHT_PLATFORM_TARGETS.get(str(platform or ""), "")
+
+
+def playwright_options_for_row(plan: EmulationPlan, row_or_label,
+                               **overrides) -> PlaywrightOptions:
+    """The options that drive the Playwright suite against ONE planned row.
+
+    ``--target`` and ``--role`` are DERIVED from the row (never typed twice), the
+    Playwright passthrough comes from the plan's envelope, and everything else is
+    the script's own default unless a caller overrides it. A label not in the plan
+    raises, matching :func:`avc_argv` and :func:`start_device_argv`.
+    """
+    label = str(getattr(row_or_label, "label", row_or_label))
+    row = plan.row(label)
+    if row is None:
+        raise ValueError(f"{label!r} is not a row of this plan "
+                         f"(session {plan.session_name}: {', '.join(plan.labels)})")
+    target = playwright_target_for(row.platform)
+    if not target:
+        raise ValueError(
+            f"{label}: platform {row.platform!r} has no launcher in "
+            f"{PLAYWRIGHT_SCRIPT} — it wires launch-x86.sh (x86) and launch-pi.sh "
+            f"(rpi3/rpi4/rpi5) only, and rejects any other --target. Run this row's "
+            "in-guest assertions through the device-test lane instead.")
+    opts = PlaywrightOptions(target=target, role=row.role,
+                             playwright_args=tuple(plan.envelope.playwright_args))
+    return replace(opts, **overrides) if overrides else opts
+
+
+def playwright_argv(plan: EmulationPlan,
+                    options: PlaywrightOptions | None = None) -> list[str]:
+    """argv for ``tests/qemu/run-qemu-e2e.sh`` — boot ONE role VM, seed the e2e
+    identities over SSH, run the UNCHANGED Playwright specs against its forwarded UI.
+
+    ``-w`` is pinned to the plan's session path unless the caller names one, exactly
+    as :func:`avc_argv` pins its own ``-w`` and :func:`run_argv` pins ``--artifacts``:
+    a preview that showed one session while the boot resolved its image out of another
+    is the bug class this facade exists to close.
+
+    EVERY PORT/SIZE/TIMEOUT FLAG IS EMITTED, including ones equal to the script's
+    default — unlike ``qemu_tests.runner_command``, which suppresses defaults to keep
+    the preview short. The reason is in :class:`PlaywrightOptions`: run-qemu-e2e.sh
+    reads each of those defaults from the ENVIRONMENT (``"${MEM:-4096}"``), and the
+    Studio spawns with the environment it inherited, so "omitted" does not mean
+    "default" on this lane. It also makes the printed command reproducible in a
+    terminal that has none of those variables set.
+
+    The passthrough is LAST and behind a bare ``--``, because that is the script's
+    own contract ("Everything after -- is passed through to Playwright"); it is
+    omitted entirely when there is nothing to pass, so the default command carries no
+    dangling separator.
+    """
+    opts = options or PlaywrightOptions()
+    if opts.target not in PLAYWRIGHT_TARGETS:
+        raise ValueError(f"invalid Playwright target {opts.target!r} "
+                         f"({'|'.join(PLAYWRIGHT_TARGETS)})")
+    if not opts.role:
+        raise ValueError("the Playwright lane needs a --role: it boots ONE role's "
+                         "image and drives that node's UI")
+    argv = [os.path.join(plan.generator_dir, PLAYWRIGHT_SCRIPT),
+            "--target", opts.target,
+            "--role", opts.role,
+            "-w", opts.work_dir or plan.session_path]
+    if opts.img:
+        argv += ["--img", opts.img]
+    if opts.kernel:
+        argv += ["--kernel", opts.kernel]
+    if opts.stage4:
+        argv += ["--stage4", opts.stage4]
+    if opts.test_dir:
+        argv += ["--test-dir", opts.test_dir]
+    argv += ["--ssh-port", str(opts.ssh_port),
+             "--ui-port", str(opts.ui_port),
+             "--ssh-user", opts.ssh_user,
+             "--mem", str(opts.mem_mb),
+             "--smp", str(opts.smp),
+             "--accel", opts.accel,
+             "--timeout", str(opts.timeout_s),
+             "--ui-timeout", str(opts.ui_timeout_s)]
+    if opts.keep:
+        argv.append("--keep")
+    if opts.dry_run:
+        argv.append("--dry-run")
+    if opts.list_only:
+        argv.append("--list")
+    if opts.playwright_args:
+        argv.append("--")
+        argv += [str(a) for a in opts.playwright_args]
+    return argv
+
+
+def playwright_root_blocker() -> str:
+    """Why the Playwright lane cannot BOOT from here, or "" when it can.
+
+    run-qemu-e2e.sh refuses unless ``id -u`` is 0, because launch-x86.sh/launch-pi.sh
+    loop-mount the golden image and prep KVM disks. The Studio has no way to answer an
+    interactive sudo prompt and MUST NOT try — so this states the fact, names the
+    containerized route the device-test lane already uses for exactly this constraint,
+    and leaves ``--list``/``--dry-run`` (which need no root) enabled.
+    """
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        return ""
+    return (
+        "Booting a guest on this lane needs root: tests/qemu/run-qemu-e2e.sh drives "
+        "launch-x86.sh / launch-pi.sh, which loop-mount the golden image to lift its "
+        "kernel out of the boot partition. The Studio cannot answer a sudo prompt and "
+        "does not try. Run it from a root shell, or from the privileged container the "
+        "device-test lane already uses for this same constraint (make "
+        "qemu-docker-image, then docker run --privileged hugmesh-qemu-runner) — the "
+        "script's own refusal message spells that command out. "
+        "Its --list and --dry-run verbs (the Studio's “List specs” and “Preview”) "
+        "need no root and work now.")
 
 
 # ── whole-mesh save: thin delegates over core/emulation_save ────────────────────────
@@ -738,9 +979,12 @@ def main(argv: list[str] | None = None) -> int:
                      "the one facade the Studio's pages drive. `plan` and `status` "
                      "are pure; `test` runs the assertion matrix, `up` boots the "
                      "standing (--keep-alive) mesh, `down` stops every device, "
-                     "`save-mesh` saves the planned fleet's disks + KEYS sticks."))
+                     "`save-mesh` saves the planned fleet's disks + KEYS sticks, "
+                     "`playwright` runs the browser suite against ONE booted row "
+                     "(tests/qemu/run-qemu-e2e.sh) — its --list needs no root."))
     p.add_argument("subcommand",
-                   choices=("plan", "test", "up", "status", "down", "save-mesh"))
+                   choices=("plan", "test", "up", "status", "down", "save-mesh",
+                            "playwright"))
     p.add_argument("--generator-dir", default=_REPO_ROOT,
                    help="the hugmesh-generator checkout (default: this one)")
     p.add_argument("--session", default="",
@@ -764,6 +1008,22 @@ def main(argv: list[str] | None = None) -> int:
                    help="cap the decompressed-image cache (GiB); 0 = unbounded")
     p.add_argument("--json", action="store_true",
                    help="plan/status: machine-readable output")
+    # ── the Playwright lane (subcommand `playwright`) ──────────────────────────
+    p.add_argument("--row", default="",
+                   help="playwright: which planned row to boot, as <platform>/<role> "
+                        "(default: the first row with an x86/Pi launcher)")
+    p.add_argument("--ui-port", type=int, default=PlaywrightOptions.ui_port,
+                   help="playwright: host port the guest UI is forwarded to")
+    p.add_argument("--ssh-port", type=int, default=PlaywrightOptions.ssh_port,
+                   help="playwright: host port forwarded to the guest's :22")
+    p.add_argument("--playwright-arg", action="append", default=[], metavar="ARG",
+                   help="playwright: extra argv for `playwright test` (a spec path, "
+                        "--grep, --repeat-each); repeatable, passed after `--`")
+    p.add_argument("--list", dest="list_only", action="store_true",
+                   help="playwright: enumerate the boot plan + the specs that would "
+                        "run; boots nothing and needs no root")
+    p.add_argument("--dry-run", action="store_true",
+                   help="playwright: resolve the artifacts and print the boot plan")
     p.add_argument("--save-session", default="",
                    help="save-mesh: save-set name (default: mesh-<UTC stamp>)")
     p.add_argument("--overwrite", action="store_true",
@@ -796,7 +1056,46 @@ def main(argv: list[str] | None = None) -> int:
     env = RunEnvelope(jobs=args.jobs, mem_mb=args.mem, smp=args.smp,
                       timeout_s=args.timeout, assert_timeout_s=args.assert_timeout,
                       extra_users=tuple(args.extra_user), keep=args.keep,
-                      cache_max_gb=args.cache_max_gb)
+                      cache_max_gb=args.cache_max_gb,
+                      playwright_args=tuple(args.playwright_arg))
+
+    if args.subcommand == "playwright":
+        # epoch="" — this lane grades nothing; it hands the verdict to Playwright.
+        pl = plan(gen, sess, EmulationMode.TEST, env, work_dir=args.work, epoch="")
+        label = args.row
+        if not label:
+            for row in pl.rows:
+                if playwright_target_for(row.platform):
+                    label = row.label
+                    break
+        if not label:
+            print("no planned row has an x86 or Pi launcher in "
+                  f"{PLAYWRIGHT_SCRIPT} (rows: {', '.join(pl.labels) or 'none'})",
+                  file=sys.stderr)
+            return 1
+        try:
+            # --mem/--smp are NOT forwarded from the shared flags above: they default
+            # to the DOCKER lane's 2048/2, and this lane's script defaults to 4096/4
+            # because it boots a full node and drives a browser against it. Silently
+            # halving a Playwright guest's RAM because another lane's default rode
+            # along is the kind of cross-lane bleed this whole unit is about.
+            # PlaywrightOptions carries both knobs for callers that mean them.
+            opts = playwright_options_for_row(
+                pl, label, ssh_port=args.ssh_port, ui_port=args.ui_port,
+                keep=args.keep, list_only=args.list_only, dry_run=args.dry_run)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        argv = playwright_argv(pl, opts)
+        # The refusal is stated BEFORE the spawn, not left to the script's own die:
+        # booting needs root, enumerating and previewing do not.
+        blocker = playwright_root_blocker()
+        if blocker and not (args.list_only or args.dry_run):
+            print(f"REFUSED: {blocker}", file=sys.stderr)
+            print(f"  would run: {' '.join(shlex.quote(a) for a in argv)}",
+                  file=sys.stderr)
+            return 1
+        return spawn(argv, gen, on_line=print)
 
     if args.subcommand == "plan":
         pl = plan(gen, sess, args.mode, env, work_dir=args.work)

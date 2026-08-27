@@ -530,3 +530,290 @@ def test_avc_argv_flags_exist_in_the_workout_script():
     text = open(AVC, encoding="utf-8").read()
     for flag in ("--platform", "--role", "-w"):
         assert flag in text
+
+
+# ── THE PLAYWRIGHT LANE (tests/qemu/run-qemu-e2e.sh) ─────────────────────────────────
+#
+# A DIFFERENT harness from run-qemu-docker.sh, and every assertion below exists
+# because the two were confusable: the config field that drove the docker lane was
+# called `qemu_e2e`, which is the *other* script's name. So these tests pin WHICH
+# script each author emits, not merely that some argv came out.
+
+PW = os.path.join(GENERATOR_DIR, em.PLAYWRIGHT_SCRIPT)
+
+
+def test_playwright_argv_is_the_e2e_script_and_never_the_docker_runner(test_plan):
+    """THE naming guard. run_argv and playwright_argv must not be aimable at each
+    other's script — that swap is exactly what the cfg.qemu_e2e rename was about."""
+    argv = em.playwright_argv(test_plan)
+    assert argv[0] == os.path.join(test_plan.generator_dir, em.PLAYWRIGHT_SCRIPT)
+    assert argv[0].endswith("run-qemu-e2e.sh")
+    assert not argv[0].endswith("run-qemu-docker.sh")
+    # and the docker lane is still the docker lane
+    assert em.run_argv(test_plan)[0].endswith("run-qemu-docker.sh")
+
+
+def test_playwright_argv_emits_every_knob_of_the_scripts_flag_set(test_plan):
+    """Every flag, with a value distinguishable from the script's default.
+
+    Ports/sizes/timeouts are asserted PRESENT even when a caller leaves them alone
+    (next test): run-qemu-e2e.sh reads each default from the environment
+    (``"${MEM:-4096}"``), so omitting one hands the guest whatever the spawning
+    shell exported.
+    """
+    opts = em.PlaywrightOptions(
+        target="both", role="be", img="/a/x.img", kernel="/a/Image",
+        stage4="/a/s4.tar.xz", work_dir="/artifacts", test_dir="/scratch",
+        ssh_port=2299, ui_port=9443, ssh_user="qa", mem_mb=8192, smp=6,
+        accel="tcg", timeout_s=999, ui_timeout_s=77, keep=True,
+        playwright_args=("--grep", "@smoke"))
+    argv = em.playwright_argv(test_plan, opts)
+    for flag, value in (("--target", "both"), ("--role", "be"),
+                        ("--img", "/a/x.img"), ("--kernel", "/a/Image"),
+                        ("--stage4", "/a/s4.tar.xz"), ("-w", "/artifacts"),
+                        ("--test-dir", "/scratch"), ("--ssh-port", "2299"),
+                        ("--ui-port", "9443"), ("--ssh-user", "qa"),
+                        ("--mem", "8192"), ("--smp", "6"), ("--accel", "tcg"),
+                        ("--timeout", "999"), ("--ui-timeout", "77")):
+        assert flag in argv, f"{flag} was not emitted at all"
+        assert argv[argv.index(flag) + 1] == value, f"{flag} carried the wrong value"
+    assert "--keep" in argv
+    assert "--dry-run" not in argv and "--list" not in argv
+
+
+def test_playwright_argv_emits_ports_and_sizes_even_at_their_defaults(test_plan):
+    argv = em.playwright_argv(test_plan)
+    for flag in ("--ssh-port", "--ui-port", "--ssh-user", "--mem", "--smp",
+                 "--accel", "--timeout", "--ui-timeout"):
+        assert flag in argv, (
+            f"{flag} suppressed at its default — run-qemu-e2e.sh reads that default "
+            "from the ENVIRONMENT, so omitting it is not the same as passing it")
+
+
+def test_playwright_argv_pins_w_to_this_plans_session(test_plan):
+    """``-w`` is the artifact dir the script autodetects the image in. Pinned to the
+    plan's session for the same reason run_argv pins --artifacts: previewing one
+    session while the boot resolves an image out of another is the bug this facade
+    exists to close."""
+    argv = em.playwright_argv(test_plan)
+    assert argv[argv.index("-w") + 1] == test_plan.session_path
+
+
+def test_playwright_argv_passthrough_rides_last_behind_a_bare_separator(test_plan):
+    opts = em.PlaywrightOptions(
+        playwright_args=("specs/01-frontpage.spec.ts", "--grep", "@smoke"))
+    argv = em.playwright_argv(test_plan, opts)
+    assert argv[-4:] == ["--", "specs/01-frontpage.spec.ts", "--grep", "@smoke"]
+    # ...and nothing dangles when there is nothing to pass
+    assert "--" not in em.playwright_argv(test_plan)
+
+
+def test_playwright_options_for_row_derives_target_and_role_from_the_row(test_plan):
+    x86 = em.playwright_options_for_row(test_plan, "x86/be")
+    assert (x86.target, x86.role) == ("x86", "be")
+    pi = em.playwright_options_for_row(test_plan, "rpi5/pki")
+    assert (pi.target, pi.role) == ("pi", "pki")
+    # a label that is not a row of THIS plan raises, like every other author here
+    with pytest.raises(ValueError):
+        em.playwright_options_for_row(test_plan, "x86/nope")
+
+
+def test_playwright_refuses_platforms_that_have_no_launcher(session):
+    """run-qemu-e2e.sh wires launch-x86.sh and launch-pi.sh only, and its own parser
+    dies on any other --target — so a jetson row must refuse HERE, by name, rather
+    than boot some other board's image or fail at spawn."""
+    gen, _sess = session
+    jet = os.path.join(gen, "out", "sessions", "20260819-101010-jet000")
+    os.makedirs(jet)
+    open(os.path.join(jet, "hugmesh-jetson-arm64-edge_ai-test-20260819T101010Z.img"),
+         "wb").close()
+    pl = em.plan(gen, jet, "test", epoch=EPOCH)
+    assert pl.labels == ["jetson/edge_ai"]
+    assert em.playwright_target_for("jetson") == ""
+    with pytest.raises(ValueError, match="no launcher"):
+        em.playwright_options_for_row(pl, "jetson/edge_ai")
+
+
+def test_playwright_argv_rejects_a_target_the_script_would_die_on(test_plan):
+    with pytest.raises(ValueError):
+        em.playwright_argv(test_plan, em.PlaywrightOptions(target="jetson"))
+    with pytest.raises(ValueError):
+        em.playwright_argv(test_plan, em.PlaywrightOptions(role=""))
+
+
+def test_playwright_list_and_dry_run_are_distinct_flags(test_plan):
+    assert "--list" in em.playwright_argv(
+        test_plan, em.PlaywrightOptions(list_only=True))
+    assert "--dry-run" in em.playwright_argv(
+        test_plan, em.PlaywrightOptions(dry_run=True))
+    assert "--list" not in em.playwright_argv(
+        test_plan, em.PlaywrightOptions(dry_run=True))
+
+
+# ── the envelope's new field, and the split it must not blur ─────────────────────────
+
+def test_envelope_playwright_args_reach_the_playwright_lane(session):
+    """The passthrough is a RunEnvelope field so the plan carries it — a knob read
+    off a widget at spawn time is a knob that previews and then does not happen."""
+    gen, sess = session
+    env = em.RunEnvelope(playwright_args=("--repeat-each", "3"))
+    pl = em.plan(gen, sess, "test", env, epoch=EPOCH)
+    opts = em.playwright_options_for_row(pl, "x86/be")
+    assert opts.playwright_args == ("--repeat-each", "3")
+    assert em.playwright_argv(pl, opts)[-3:] == ["--", "--repeat-each", "3"]
+
+
+def test_envelope_playwright_args_never_reach_the_docker_runner(session):
+    """run-qemu-docker.sh treats an unknown arg as a hard error, so the new field
+    must be invisible to run_argv/start_device_argv. Asserted on the ARGV, both
+    ways: nothing new appears, and the command is byte-identical to the one an
+    envelope without the field produces."""
+    gen, sess = session
+    plain = em.plan(gen, sess, "test", em.RunEnvelope(), epoch=EPOCH)
+    with_pw = em.plan(gen, sess, "test",
+                      em.RunEnvelope(playwright_args=("--grep", "@smoke")),
+                      epoch=EPOCH)
+    assert em.run_argv(with_pw) == em.run_argv(plain)
+    assert "--grep" not in em.run_argv(with_pw)
+    assert "@smoke" not in em.run_argv(with_pw)
+    assert "--grep" not in em.start_device_argv(with_pw, "x86/be")
+
+
+def test_every_run_envelope_field_is_routed_somewhere_on_purpose(session):
+    """SHAPE GUARD for the frozen envelope.
+
+    ``_envelope_options`` maps RunEnvelope one field at a time, so a field added to
+    the dataclass and forgotten there reaches NEITHER lane while its widget looks
+    wired. Every field must therefore be either a QemuRunOptions knob or an
+    explicitly-recorded playwright-only one.
+    """
+    import dataclasses
+    fields = {f.name for f in dataclasses.fields(em.RunEnvelope)}
+    docker_knobs = {f.name for f in dataclasses.fields(qt.QemuRunOptions)}
+    unrouted = fields - docker_knobs - set(
+        em.ENVELOPE_FIELDS_NOT_FOR_THE_DOCKER_RUNNER)
+    assert not unrouted, (
+        f"RunEnvelope fields that reach no lane: {sorted(unrouted)} — forward them "
+        "in _envelope_options or record them in "
+        "ENVELOPE_FIELDS_NOT_FOR_THE_DOCKER_RUNNER with the reason")
+    # the recorded exceptions must be real fields, with a real reason
+    for name, why in em.ENVELOPE_FIELDS_NOT_FOR_THE_DOCKER_RUNNER.items():
+        assert name in fields
+        assert len(why) > 20, f"{name}: the exemption reason must say WHY"
+
+
+# ── the honest refusal (no sudo, ever) ───────────────────────────────────────────────
+
+def test_root_blocker_names_the_container_and_never_reaches_for_sudo():
+    blocker = em.playwright_root_blocker()
+    if os.geteuid() == 0:
+        assert blocker == ""
+        pytest.skip("running as root: the non-root refusal cannot be exercised here")
+    assert "--privileged" in blocker and "hugmesh-qemu-runner" in blocker
+    assert "root" in blocker
+    # It must never TELL the operator (or a caller) to sudo: the Studio cannot
+    # answer a password prompt, and this box has no admin password at all.
+    assert "sudo" not in blocker.replace("cannot answer a sudo prompt", "")
+
+
+# ── shell/python parity for the second runner ────────────────────────────────────────
+#
+# NOT by grepping the whole file. Every flag this lane emits also appears in
+# run-qemu-e2e.sh's usage() heredoc AND in its header comments, so "the token is
+# somewhere in the text" is satisfied by PROSE — a flag deleted from the parser, or a
+# refusal that stopped naming the container, would still read as green. That is
+# comment-token inversion, and it has shipped in this repo more than once. The two
+# helpers below narrow the haystack to the only two places that can actually affect
+# an operator: the parser's case arms, and the bytes of the refusal message itself.
+
+_PARSER_RE = re.compile(r"while \[\[ \$# -gt 0 \]\]; do\n(.*?)\ndone\n", re.S)
+_REFUSAL_RE = re.compile(
+    r'if \[ "\$\(id -u\)" -ne 0 \]; then\s*\n\s*cat >&2 <<EOF\n(.*?)\nEOF\n', re.S)
+
+
+def _parser_flags(text):
+    """The option tokens run-qemu-e2e.sh's arg parser actually ACCEPTS."""
+    block = _PARSER_RE.search(text)
+    assert block, "the arg-parser loop moved — this guard can no longer see it"
+    flags = set()
+    for arm in re.finditer(r"^\s*([-a-zA-Z0-9|]+)\)", block.group(1), re.M):
+        flags.update(t for t in arm.group(1).split("|") if t.startswith("-"))
+    return flags
+
+
+def _refusal_message(text):
+    """The heredoc a non-root operator actually reads, comments excluded."""
+    m = _REFUSAL_RE.search(text)
+    assert m, "the non-root refusal heredoc moved — this guard can no longer see it"
+    return m.group(1)
+
+
+@pytest.mark.skipif(not os.path.exists(PW), reason="run-qemu-e2e.sh not present")
+def test_every_playwright_flag_is_a_real_parser_arm_not_just_prose():
+    """Drift guard, the twin of the docker runner's. A flag renamed in
+    run-qemu-e2e.sh (or typo'd in the author) fails here rather than at spawn."""
+    text = open(PW, encoding="utf-8").read()
+    opts = em.PlaywrightOptions(
+        img="/a", kernel="/k", stage4="/s", test_dir="/t", keep=True,
+        dry_run=True, list_only=True)
+    plan_stub = em.EmulationPlan(mode=em.EmulationMode.TEST, generator_dir="/gen",
+                                 session_path="/gen/out/sessions/s", session_name="s",
+                                 work_dir="/w")
+    flags = {a for a in em.playwright_argv(plan_stub, opts)
+             if a.startswith("--") and a != "--"}
+    accepted = _parser_flags(text)
+    missing = sorted(f for f in flags if f not in accepted)
+    assert not missing, f"flags no arg-parser arm accepts: {missing}"
+    assert {"-w", "--work-dir"} <= accepted, "the -w spelling this author emits moved"
+    assert {"--list", "--dry-run", "--"} <= accepted   # the two non-root verbs + passthrough
+
+
+@pytest.mark.skipif(not os.path.exists(PW), reason="run-qemu-e2e.sh not present")
+def test_the_flag_guard_is_not_satisfied_by_comments_or_usage_text():
+    """BREAK-IT TWIN for the guard above — the comment-token-inversion control.
+
+    Delete one parser arm and leave every mention of it in usage()/the comments. The
+    naive whole-file grep the first cut used still finds the flag (asserted, so this
+    twin is proven to model the defect); _parser_flags does not.
+    """
+    text = open(PW, encoding="utf-8").read()
+    mutant = re.sub(r"^\s*--ui-port\).*\n", "", text, flags=re.M)
+    assert mutant != text, "the mutation did not change the text — this twin proves nothing"
+    assert "--ui-port" in mutant, "usage()/comments no longer mention it; twin is moot"
+    assert "--ui-port" in _parser_flags(text)
+    assert "--ui-port" not in _parser_flags(mutant), \
+        "COMMENT-TOKEN INVERSION: a deleted parser arm still counted as wired"
+
+
+@pytest.mark.skipif(not os.path.exists(PW), reason="run-qemu-e2e.sh not present")
+def test_the_e2e_script_refusal_names_the_container_and_offers_no_sudo():
+    """The script's own refusal must point at the containerized route, not at sudo:
+    the old message was `run as root ...: sudo $0 ...`, which is the one instruction
+    a Studio-driven harness must never give."""
+    text = open(PW, encoding="utf-8").read()
+    msg = _refusal_message(text)
+    assert "--privileged" in msg and "hugmesh-qemu-runner" in msg
+    assert "make qemu-docker-image" in msg
+    # ...and it offers the two verbs that need no root.
+    assert "--list" in msg and "--dry-run" in msg
+    # The sudo checks stay whole-file on purpose: a commented-out `sudo $0` is still
+    # a regression waiting to be uncommented, so a false RED there is the safe way
+    # round. (Inversion only ever weakens a POSITIVE assertion.)
+    assert "sudo $0" not in text, "the sudo-yourself instruction came back"
+    assert "Usage: sudo $0" not in text
+
+
+@pytest.mark.skipif(not os.path.exists(PW), reason="run-qemu-e2e.sh not present")
+def test_the_refusal_guard_is_not_satisfied_by_the_header_comment():
+    """BREAK-IT TWIN: the header comment block at the top of run-qemu-e2e.sh already
+    says "the privileged hugmesh-qemu-runner container". A refusal that STOPPED
+    naming the container would therefore pass a whole-file grep. It must not pass
+    this one."""
+    text = open(PW, encoding="utf-8").read()
+    msg = _refusal_message(text)
+    gutted = text.replace(msg, "this lane needs root.\n")
+    assert gutted != text, "the mutation did not change the text — this twin proves nothing"
+    assert "hugmesh-qemu-runner" in gutted, "the header comment stopped baiting the naive grep"
+    assert "--privileged" in gutted
+    assert "hugmesh-qemu-runner" not in _refusal_message(gutted), \
+        "COMMENT-TOKEN INVERSION: a header comment stood in for the refusal message"

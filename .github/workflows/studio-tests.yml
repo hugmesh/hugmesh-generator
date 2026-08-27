@@ -42,6 +42,14 @@ on:
       - 'tests/qemu/seed-accounts.sh'
       - 'tests/stack/seed-e2e.sh'
       - 'tests/e2e-extra-personas.sh'
+      # And a fourth time, for the lane this integration created. Two studio tests
+      # assert against the ROOT Makefile rather than against anything in studio/:
+      # test_pages_e2e_tree.py pins that `stack-e2e` still expands $(E2E_SPECS) (the
+      # only leg a stub `make` cannot prove — without it the Studio hands the suite a
+      # selection it silently ignores and runs all 221 tests), and test_cli_args.py
+      # reads the same file. A drift there lands ONLY in the Makefile, so without
+      # this path the gate would not run on the change it exists to catch.
+      - 'Makefile'
   workflow_dispatch: {}
 
 permissions:

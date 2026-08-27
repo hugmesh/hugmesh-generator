@@ -209,6 +209,7 @@ jobs:
             tests/qemu/mesh-cluster_test.sh
             tests/qemu/save_test.sh
             tests/qemu/verdict_test.sh
+            tests/qemu/qemu-e2e-lane_test.sh
             tests/scripts/test-anubis-env-gate.sh
             tests/scripts/test-arm-ro-distdir.sh
             tests/scripts/test-binpkg-pool-fingerprint.sh
