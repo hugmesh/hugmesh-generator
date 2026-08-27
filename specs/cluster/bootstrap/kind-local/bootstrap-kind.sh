@@ -1051,7 +1051,23 @@ if [ "${KIND_PROFILE}" = "sso" ]; then
   # 14-workload-console-rbac exists to install — was indistinguishable from a
   # healthy one in this script's own output. The kyverno CRD wait further down
   # only warns; it is not the status table, and warnings scroll.
-  APP_NAMES+=(cassandra cassandra-init route-access-db hugmesh-gateway-fe admin-bff-db admin-bff-api user-bff-db user-bff-api hugmesh-host-shell hugmesh-social-ui kyverno workload-console-rbac)
+  #
+  # THIRD RECURRENCE, 2026-08-27: hugmesh-user-ui (47-user-ui.yaml), federation-db
+  # (28-federation-db.yaml) and hugmesh-federation-api (29-federation-api.yaml) all
+  # joined SSO_APPS in this integration and none joined this list, so the guard
+  # caught the identical shape a third time. Added below.
+  #
+  # A DERIVATION WAS TRIED AND DELIBERATELY BACKED OUT. Looping over SSO_APPS with
+  # app_object_name would end this rot at the source -- but the closure guard reads
+  # this list STATICALLY (it greps the `APP_NAMES+=(...)` literals out of the script
+  # text), so a runtime loop is invisible to it and EVERY SSO app immediately reported
+  # as unwaited. The guard already special-cases exactly one derived form, matched by
+  # the literal string `APP_NAMES+=("${addon_app_name}")`. Teaching it a second one is
+  # the right fix, but it means editing the guard to accept the very change it would
+  # then be checking, so it belongs in its own change with its own negative controls --
+  # not smuggled into an integration merge. Until then the list stays explicit and the
+  # guard stays fully strict: the list rots, and the gate catches it every time.
+  APP_NAMES+=(cassandra cassandra-init route-access-db hugmesh-gateway-fe admin-bff-db admin-bff-api user-bff-db user-bff-api hugmesh-host-shell hugmesh-social-ui kyverno workload-console-rbac hugmesh-user-ui federation-db hugmesh-federation-api)
   # 05b-casdoor-domains.yaml is deliberately NOT here: it is an ApplicationSet,
   # not an Application, so `kubectl get application casdoor-domains` never
   # resolves — and it generates zero children until a writer supplies an idp=own
