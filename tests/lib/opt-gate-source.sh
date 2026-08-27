@@ -188,3 +188,45 @@ opt_gate_case_body() {
     done < <(opt_gate_sources "${builder}")
     printf '%s' "${found}"
 }
+
+# opt_gate_fn_names <builder> — every optional-service gate function name the
+# builder RESOLVES: `gate_optional_services` plus every `_opt_*` defined anywhere
+# in its chain (the shared library, any builder-local override), de-duplicated.
+#
+# WHY (2026-08-26, integration). Suites that load the gate listed the function
+# names by hand, and that list ROTTED THE MOMENT the gate grew. Measured on this
+# integration: fix/device-syncs-pruned-apps added _opt_appset_cutover_done (called
+# from _opt_render_appset_flag) and feat/federation-modules-from-selection added
+# _opt_render_federation_modules (called from gate_optional_services). Neither was
+# in tests/stack/test-optional-services-parity.sh's hand-written list, so every one
+# of its builder runs died rc=127 "command not found" — 71 passed, 0 failed became
+# 9 passed, 26 failed. That is the loud version; the quiet version is a suite whose
+# list happens to cover the gate's ENTRY point and misses a leaf, which then runs
+# less code than it claims and still reports 0 failed.
+#
+# So DERIVE the set. Same definition regex as opt_gate_extract_fn (all four bash
+# spellings), comment-stripped, over the same resolution chain.
+opt_gate_fn_names() {
+    local builder="$1" f
+    {
+        while IFS= read -r f; do
+            sed -e 's/#.*$//' "${f}" \
+              | grep -oE '^[[:space:]]*((function[[:space:]]+(gate_optional_services|_opt_[a-z_]+)[[:space:]]*([(][[:space:]]*[)])?)|((gate_optional_services|_opt_[a-z_]+)[[:space:]]*[(][[:space:]]*[)]))' \
+              | grep -oE '(gate_optional_services|_opt_[a-z_]+)'
+        done < <(opt_gate_sources "${builder}")
+    } | sort -u
+}
+
+# opt_gate_load_all <builder> — load every function opt_gate_fn_names finds, as
+# that builder resolves them. Use this instead of a hand-written list wherever a
+# suite wants "the whole gate"; a list is only right until the gate grows.
+opt_gate_load_all() {
+    local builder="$1" names
+    names="$(opt_gate_fn_names "${builder}")"
+    [ -n "${names//[[:space:]]/}" ] || {
+        echo "  FAIL opt_gate_load_all: derived ZERO gate function names from $(basename "${builder}")'s source chain" >&2
+        return 1
+    }
+    # shellcheck disable=SC2086
+    opt_gate_load "${builder}" ${names}
+}

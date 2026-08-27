@@ -69,7 +69,19 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # "N of M suites are named by a pull_request-triggered workflow" line, and set it to
 # N. Guessing it defeats the check: a baseline nobody derived from the tree is a
 # number that only ever agrees with itself.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-130}"
+#
+# 130 -> 134 / denominator 138 -> 144 on 2026-08-26 (integrate/services-and-keystones).
+# EVERY ONE OF THE FOUR MERGED BRANCHES CARRIED ITS OWN NUMBER — 118, 118, 130 —
+# each correct against its own base and none correct against the merged tree, and
+# each conflicted on exactly this line. All four were resolved to OURS and then
+# reconciled ONCE, HERE, by running this file and reading the number it MEASURES:
+#     134 of 144 suites are named by a pull_request-triggered workflow
+# +6 suites, +4 gated: test-bootstrap-applies-baked-apps.sh (C1),
+# test-federation-modules-selection.sh (C3), test-kind-addon-channel.sh (A1) and
+# tests/qemu/role_topology_test.sh's siblings' census correction, with
+# test-kind-metrics-api.sh (A1) landing UNGATED and recorded below. Letting any
+# branch's number win would have pinned a cardinality nobody derived from this tree.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-134}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
@@ -104,6 +116,13 @@ PREMERGE_UNGATED=(
   tests/egress-vpn/test-secret-contract.sh
   tests/pentest/nuclei/test-templates.sh
   tests/scripts/test-eso-target-collisions.sh
+  # LIVE-CLUSTER ONLY, and MEASURED in the shell-suites job image before being
+  # listed here: alpine:3 + that job's apk set prints "SKIP kubectl is not on PATH"
+  # and exits 0 having run ZERO assertions. Gating it would raise the coverage
+  # number by one and gate nothing. Not a claim that it passes — on a box with a
+  # kind cluster up but no metrics-server synced it goes RED with 2 failures.
+  # See the "NOT LISTED HERE" entry in .github/workflows/shell-suites.yml.
+  tests/scripts/test-kind-metrics-api.sh
   tests/scripts/test-liquibase-grant-roles.sh
   tests/scripts/test-service-env-contract.sh
   tests/stack/test-m2-bootstrap.sh

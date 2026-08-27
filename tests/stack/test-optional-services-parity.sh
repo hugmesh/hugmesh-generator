@@ -170,12 +170,16 @@ run_builder() {  # $1=builder $2=OPTIONAL_SERVICES $3=EXCLUDE_SERVICES $4=ENV $5
         # Per-case overrides (the --edge-ai-* flags a real invocation would set).
         # Applied AFTER the builder's own defaults, exactly as argv parsing does.
         [ -z "${extra}" ] || eval "${extra}"
-        opt_gate_load "${builder}" \
-            _opt_selected _opt_explicitly_deselected _opt_anubis_installed \
-            _opt_drop_kustomize_line _opt_drop_route _opt_drop_extrahost _opt_drop_rows \
-            _opt_fix_trailing_comma _opt_wire_anubis_ingress _opt_render_appset_flag \
-            _opt_render_installed_services _opt_set_cr_enabled _opt_render_optionalservice_cr \
-            gate_optional_services || exit 3
+        # DERIVED, never listed by hand. This was a hand-written list of 14 names
+        # until 2026-08-26, and it rotted the first time the gate grew: two merged
+        # branches added _opt_appset_cutover_done (called from
+        # _opt_render_appset_flag) and _opt_render_federation_modules (called from
+        # gate_optional_services), neither was in the list, and EVERY builder run
+        # here died rc=127 "command not found" — 71 passed/0 failed became 9/26.
+        # opt_gate_load_all derives the whole set from the builder's own resolution
+        # chain, so a gate that grows a leaf cannot leave this suite running less
+        # code than it claims.
+        opt_gate_load_all "${builder}" || exit 3
         eval "${region}"          # the builder's REAL resolution, in its REAL order
         gate_optional_services
     )
@@ -207,6 +211,37 @@ appset_flag() { # $1=root $2=slug -> true|false|MISSING  (the 13a generator elem
                   | head -1 | grep -oE 'installed:[[:space:]]*"(true|false)"' | grep -oE '(true|false)')"
     echo "${v:-MISSING}"
 }
+# expected_appset_flag <root> <slug> — what installed: SHOULD read for a SELECTED
+# slug, under the pre-cut-over no-double-management rule.
+#
+# 13a-optional-services.yaml's own header says "keep every element
+# installed:false" while the legacy hardcoded apps/30-<slug>.yaml still exists,
+# and docs/OPTIONAL-SERVICES.md forbids two owners of one manifest directory: the
+# generated `optional-<slug>` Application and the hardcoded `<slug>` one would BOTH
+# carry automated{prune,selfHeal} over specs/cluster/manifests/<dir>. That flip was
+# harmless only while bootstrap.sh never applied the baked tree; now that it does,
+# the flip is REACHABLE and the double management is real.
+#
+# DERIVED, not hardcoded — and derived INDEPENDENTLY of production's
+# _opt_appset_cutover_done(), so this stays an oracle rather than a tautology: read
+# the element's own `path:` out of the BAKED 13a file and ask whether any OTHER
+# baked apps/*.yaml still declares it. Comments stripped first (several apps files
+# name a manifests/<dir> in prose). Self-maintaining: delete apps/30-akkoma.yaml in
+# a real cut-over and this starts expecting "true" with no edit here.
+expected_appset_flag() { # $1=root $2=slug -> true|false
+    local appset apps p f
+    appset="$(appset_of "$1")"; apps="$(dirname "${appset}")"
+    p="$(sed -n -E "s#^[[:space:]]*-[[:space:]]*\{[[:space:]]*slug:[[:space:]]*$2[[:space:]]*,.*[[:space:]]path:[[:space:]]*([^,[:space:]]+).*#\1#p" "${appset}" 2>/dev/null | sed -n '1p')"
+    [ -n "${p}" ] || { echo true; return 0; }
+    for f in "${apps}"/*.yaml; do
+        [ -e "${f}" ] || continue
+        case "$(basename "${f}")" in 13a-optional-services.yaml) continue ;; esac
+        if sed -e 's/#.*$//' "${f}" | grep -E "^[[:space:]]*path:[[:space:]]*${p}[[:space:]]*\$" >/dev/null; then
+            echo false; return 0
+        fi
+    done
+    echo true
+}
 ingress_backend() { # $1=root -> anubis|direct
     grep -qE '^[[:space:]]*backendServiceName:[[:space:]]*anubis' "$(fe_of "$1")" 2>/dev/null && echo anubis || echo direct
 }
@@ -225,10 +260,17 @@ for b in ${BUILDERS}; do
     run_builder "${b}" "akkoma tuwunel" "" test "${root}"
     rc=$?
     [ "${rc}" -eq 0 ] || { bad "$(bn "${b}"): selection+gate did not run (rc=${rc})"; continue; }
-    # Selected slug: both artefacts true.
-    [ "$(cm_flag "${root}" akkoma)" = "true" ] && [ "$(appset_flag "${root}" akkoma)" = "true" ] \
-        && ok "$(bn "${b}"): SELECTED akkoma renders true in BOTH ConfigMap and 13a element" \
-        || bad "$(bn "${b}"): SELECTED akkoma — ConfigMap=$(cm_flag "${root}" akkoma) 13a=$(appset_flag "${root}" akkoma)"
+    # Selected slug: the ConfigMap is the INSTALL signal and is unconditionally
+    # true. The 13a element follows the pre-cut-over no-double-management rule —
+    # see expected_appset_flag(). It reads "false" while apps/30-akkoma.yaml still
+    # owns manifests/akkoma, and that is the invariant, not a relaxation.
+    _want13a="$(expected_appset_flag "${root}" akkoma)"
+    [ "$(cm_flag "${root}" akkoma)" = "true" ] \
+        && ok "$(bn "${b}"): SELECTED akkoma renders ConfigMap installed \"true\"" \
+        || bad "$(bn "${b}"): SELECTED akkoma — ConfigMap=$(cm_flag "${root}" akkoma), expected true"
+    [ "$(appset_flag "${root}" akkoma)" = "${_want13a}" ] \
+        && ok "$(bn "${b}"): SELECTED akkoma — 13a element \"${_want13a}\", which is what the no-double-management rule requires here" \
+        || bad "$(bn "${b}"): SELECTED akkoma — 13a element is $(appset_flag "${root}" akkoma), expected \"${_want13a}\" (a hardcoded Application still owning the manifest dir must NOT be joined by the 13a-generated one)"
     # Deselected slugs: the ConfigMap alone was ALREADY right on x86 before the
     # fix, so assert the 13a element SEPARATELY — that is the byte that was wrong.
     for slug in games owncast tube; do
@@ -334,9 +376,18 @@ for b in ${BUILDERS}; do
     root="${WORK}/depkeep-$(bn "${b}")"; seed_tree "${root}"
     run_builder "${b}" "akkoma edge-ai edge-ai-analysis" "" test "${root}"
     t="$(tree_of "${root}")"
-    [ -f "${t}/apps/55-edge-ai-analysis.yaml" ] && [ "$(appset_flag "${root}" edge-ai-analysis)" = "true" ] \
-        && ok "$(bn "${b}"): edge-ai selected — wrapper KEPT and 13a element \"true\"" \
+    # SPLIT into its two halves. The CONTROL is the surviving Application: that is
+    # what proves the dependsOn guard is a guard and not "delete edge-ai-analysis
+    # always". The 13a flag is a SEPARATE invariant and follows the same
+    # no-double-management rule as akkoma above — conflating them into one `&&`
+    # meant C1's guard read as "the wrapper was dropped anyway", which it was not.
+    [ -f "${t}/apps/55-edge-ai-analysis.yaml" ] \
+        && ok "$(bn "${b}"): edge-ai selected — wrapper 55-edge-ai-analysis.yaml KEPT (the guard is a dependency guard, not a blanket prune)" \
         || bad "$(bn "${b}"): edge-ai selected but the wrapper was dropped anyway (blanket prune, not a dependency guard)"
+    _want13a="$(expected_appset_flag "${root}" edge-ai-analysis)"
+    [ "$(appset_flag "${root}" edge-ai-analysis)" = "${_want13a}" ] \
+        && ok "$(bn "${b}"): edge-ai selected — edge-ai-analysis 13a element \"${_want13a}\" per the no-double-management rule" \
+        || bad "$(bn "${b}"): edge-ai selected — edge-ai-analysis 13a element is $(appset_flag "${root}" edge-ai-analysis), expected \"${_want13a}\""
 done
 
 # ═════════════════════════════════════════════════════════════════════════════
