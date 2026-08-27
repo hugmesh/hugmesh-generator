@@ -137,7 +137,43 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # and reading the line it prints:
 #     141 of 163 suites are named by a pull_request-triggered workflow
 # and by nothing else.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-141}"
+#
+# 141 -> 142 when test-e2e-enumeration-without-credentials.sh was gated, and
+# 141 -> 142 again, independently, when test-url-embedded-credentials.sh was gated
+# on a sibling branch. BOTH measured 142, and both were right about the tree they
+# measured and wrong about the merge: each was looking at a tree containing only
+# its OWN addition. This block exists because that keeps happening.
+#
+# The value below is MEASURED on the integrated tree, not carried over from either
+# branch — the merge measured 144, which is neither branch's 142 nor the 143 main
+# carried in. Re-run this file after any merge that adds a suite; do not reason about
+# what the number "should" be.
+#
+# 144 -> 146, denominator 165 -> 167, when fix/argocd-dashboard-honesty landed. This
+# branch wires TWO new suites into shell-suites.yml
+# (tests/platform-capability-rbac/test-probe-rbac-namespaces.sh and
+# test-argocd-route-honesty.sh) and has now been re-measured THREE times against three
+# different mains: it wrote 119 for its own base, then 145 when main was 143/164, and
+# 146 here, because main moved to 144/165 underneath it when test-url-embedded-credentials.sh
+# was gated. Every one of those three was correct about the tree it measured. That is
+# the ninth value a branch has believed on this line, and the eighth time this exact
+# line has conflicted.
+#
+# Resolved as a union, per the rule the blocks above already state: main's record and
+# this branch's are complementary, not competing, so BOTH are kept. Note that the first
+# resolution of this conflict had to take main's side WHOLESALE rather than line-wise --
+# main did not merely hold a bigger number, it added the PREMERGE_UNGATED set-pin below,
+# which this branch's side predates entirely, and a line-wise keep of 119 would have
+# silently dropped that mechanism.
+#
+# MEASURED on the integrated tree by running this file and reading the line it prints:
+#     146 of 167 suites are named by a pull_request-triggered workflow
+# +2 gated, +2 total: both of this branch's suites are named by shell-suites.yml, which
+# is why the gated count and the denominator moved together and the ungated SET pin
+# below was untouched (it stays 21). That this agrees with 144+2 is a CHECK on the
+# measurement, not a substitute for it -- the seven entries above are all cases where
+# the arithmetic and the measurement disagreed.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-146}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
@@ -195,17 +231,16 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-141}"
 #   test-e2e-social-function-matrix.sh   needs node_modules + a chromium
 #   test-e2e-studio-gui-lane.sh          needs node_modules + chromium + Qt6
 #
-# THE NINTH IS DIFFERENT AND IS SAID SO OUT LOUD. tests/scripts/test-e2e-reporter-shape.sh
-# needs NOTHING but node >= 23.6 and python3 — its own header says "OFFLINE, NO
-# STACK, NO ROOT, NO node_modules", and MEASURED here with node_modules moved
-# aside it still exits 0 with 30 passed. The node:24-alpine job already installs
-# python3, so it is gateable as a one-line addition. It is recorded rather than
-# wired because this workflow's own rule is that "every suite below was EXECUTED
-# in the image named by its job before being listed here — not classified by
-# reading it", and the integration session that merged these lanes could not run
-# containers to do that. Run it in node:24-alpine, add it to that job's SUITES
-# list, and raise PREMERGE_BASELINE by one. THAT IS A REAL, NAMED FOLLOW-UP, not
-# an exemption.
+# THE NINTH WAS DIFFERENT, AND IS NOW WIRED. tests/scripts/test-e2e-reporter-shape.sh
+# needs NOTHING but node >= 23.6 and python3 -- its own header says "OFFLINE, NO
+# STACK, NO ROOT, NO node_modules". The session that merged the gherkin lanes
+# recorded it here instead of gating it because it could not run containers to
+# measure it, and named the follow-up out loud rather than dressing it up as an
+# exemption. THAT FOLLOW-UP IS NOW DONE: MEASURED in node:24-alpine under that
+# job's own apk set, with tests/e2e/node_modules absent from the tree entirely
+# rather than merely moved aside -- 30 passed, 0 failed, rc=0 -- and added to that
+# job's SUITES list. Nothing about the other eight changed; they still need a
+# node_modules and a chromium no shell-suites image carries.
 PREMERGE_UNGATED=(
   tests/casdoor/test-jwt-custom-token.sh
   tests/device-registry/test-layer-a-headscale-acl.sh
@@ -217,7 +252,6 @@ PREMERGE_UNGATED=(
   tests/scripts/test-e2e-func-media-games.sh
   tests/scripts/test-e2e-gherkin-harness.sh
   tests/scripts/test-e2e-governance-function-matrix.sh
-  tests/scripts/test-e2e-reporter-shape.sh
   tests/scripts/test-e2e-social-function-matrix.sh
   tests/scripts/test-e2e-studio-gui-lane.sh
   tests/scripts/test-eso-target-collisions.sh

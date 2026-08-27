@@ -266,6 +266,7 @@ jobs:
             tests/scripts/test-container-image-tags.sh
             tests/scripts/test-download-verify.sh
             tests/scripts/test-dracut-cross-lib.sh
+            tests/scripts/test-e2e-enumeration-without-credentials.sh
             tests/scripts/test-e2e-persona-catalogue.sh
             tests/scripts/test-edge-ai-cuda-host-compiler.sh
             tests/scripts/test-fetch-retry-hardening.sh
@@ -389,6 +390,8 @@ jobs:
             tests/managed-services/test-managed-services-gate.sh
             tests/node-storage/test-appset.sh
             tests/node-storage/test-node-agent.sh
+            tests/platform-capability-rbac/test-argocd-route-honesty.sh
+            tests/platform-capability-rbac/test-probe-rbac-namespaces.sh
             tests/phone/test-phone-wizard.sh
             tests/scripts/test-cassandra-cluster-wiring.sh
             tests/scripts/test-client-connect-routes.sh
@@ -405,6 +408,7 @@ jobs:
             tests/scripts/test-pki-role-san-coverage.sh
             tests/scripts/test-provision-keys-escrow-guard.sh
             tests/scripts/test-python-targets-seed.sh
+            tests/scripts/test-url-embedded-credentials.sh
             tests/scripts/test-x86-artifact-integrity.sh
             tests/stack/test-mfa-flip-wiring.sh
             tests/stack/test-patch-stack-src.sh
@@ -496,6 +500,7 @@ jobs:
             tests/domain-registry/test-domain-reconcile-fuzz.sh
             tests/domain-registry/test-templating-rename-pr.sh
             tests/menu/ncurses_charset_test.sh
+            tests/scripts/test-e2e-reporter-shape.sh
           "
           # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
           # suite's status and silently forgives every earlier one — that is defect
