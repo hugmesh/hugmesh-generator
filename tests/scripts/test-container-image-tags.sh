@@ -76,7 +76,7 @@ echo "== container image tags: ${ROOT} =="
 # that slipped back in must keep being recognised as ours — probing Docker Hub for it
 # asks the wrong registry and gets an unusable 401. Catching the stale spelling is
 # lint:image-builder-always-on's job, not this probe's.
-FIRST_PARTY_RE='^(hugmesh|snapdragon-systems|snapdragon)/'
+FIRST_PARTY_RE='^(hugmesh)/'
 images="$(grep -rhoE '^[[:space:]]*image:[[:space:]]*[^[:space:]"]+' "${ROOT}" 2>/dev/null \
           | sed 's/.*image:[[:space:]]*//' \
           | grep -vE '\{\{|REPLACE_WITH_|@sha256:' \
