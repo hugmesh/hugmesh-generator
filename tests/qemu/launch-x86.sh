@@ -20,10 +20,12 @@
 # Same resolution order as launch-pi.sh so one WORK_DIR/role selects one
 # artifact everywhere:
 #   1. --img FILE                                       explicit
-#   2. ${WORK_DIR}/hugmesh-host-*-${ROLE}-*.img       (newest, role match; the
-#      canonical role and every older spelling of it are searched)
-#   3. ${WORK_DIR}/hugmesh-host-*.img / hugmesh-x86-*.img
-#   4. ${WORK_DIR}/*.img (excluding kernel/initramfs/squashfs)
+#   2. ${WORK_DIR}/hugmesh-{host,x86}-*-${ROLE}-*.img (newest, PLATFORM-anchored
+#      role match; the canonical role and every older spelling of it are searched)
+#   3. ${WORK_DIR}/hugmesh-host-*.img / hugmesh-x86-*.img   (platform, any role)
+#   4. ${WORK_DIR}/hugmesh-*-${ROLE}-*.img            (unanchored role match — LAST,
+#      because it can cross platforms and return an arm64 Pi image)
+#   5. ${WORK_DIR}/*.img (excluding kernel/initramfs/squashfs)
 # WORK_DIR defaults to ${REPO}/x86-host-build (build-x86-host-stage4.sh's
 # work dir; see its line `WORK_DIR="$(pwd)/x86-host-build"`); override with -w.
 # No external kernel is needed — the image self-boots.
@@ -187,21 +189,37 @@ autodetect_img() {
     local role="$2"
     local c
     local r
-    # Role-scoped globs FIRST, canonical spelling first within them, then every
-    # declared alias — an image built as hugmesh-x86-amd64-be-… or -host-… is still
-    # the backend / backend-gpu image and must still be found by its role.
+    # THE PLATFORM ANCHOR COMES FIRST, ALWAYS.
+    # A role-scoped glob that is not anchored to x86 returns
+    # hugmesh-rpi5-arm64-<role>-….img whenever both platforms were built into one
+    # WORK_DIR — which is the documented `make` default (Makefile: WORK_DIR ?=
+    # $(CURDIR)/out, written by BOTH `make x86-<role>` and `make rpi-<role>`) — and
+    # hands an aarch64 Raspberry Pi image to qemu-system-x86_64. That is the same
+    # defect scripts/flash-disk.sh's ARCH_GLOBS closes on the flashing side, and it
+    # bites hardest for a role that has no alias at all (pki), so it is a glob-order
+    # bug, not an alias bug. Order is asserted by tests/scripts/test-role-key-spelling.sh.
+    # Within the anchor: canonical spelling first, then every declared alias, so an
+    # image built as hugmesh-x86-amd64-be-… or …-host-… is still found by its role.
     for r in $(hugmesh_role_aliases_of "${role}"); do
         for c in \
             "${d}"/hugmesh-host-*-"${r}"-*.img \
-            "${d}"/hugmesh-*-"${r}"-*.img ; do
+            "${d}"/hugmesh-x86-*-"${r}"-*.img ; do
             c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
             [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
         done
     done
+    # Still platform-anchored: any role, newest first.
     for c in \
         "${d}"/hugmesh-host-*.img \
         "${d}"/hugmesh-x86-*.img ; do
         c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
+        [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
+    done
+    # LAST RESORT, and it must stay last — this is where the pre-rename order had
+    # it. An unanchored role match can cross platforms, so it may only fire once
+    # every x86-anchored candidate has been ruled out.
+    for r in $(hugmesh_role_aliases_of "${role}"); do
+        c="$(ls -1t "${d}"/hugmesh-*-"${r}"-*.img 2>/dev/null | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done
     ls -1t "${d}"/*.img 2>/dev/null \

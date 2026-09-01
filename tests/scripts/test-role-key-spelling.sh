@@ -31,14 +31,27 @@
 #      and is not banned: a ban that fired on prose would be answered with a wall of
 #      allowlist entries, and a false exemption reason is worse than no exemption.
 #
-#   C) NO FIFTH SPELLING. backend_gpu / backendgpu / be_gpu / edgeai / edge_AI and
-#      friends are banned outright — the closed-set discipline that keeps a rename
-#      from growing a new variant six months later.
+#   C) NO FIFTH SPELLING. Separator variants (backend_gpu, edge.ai, edgeai) in ANY
+#      casing, and any MIS-CASED role token in a --role position. Both are DERIVED
+#      from the canonical tokens rather than hand-listed, because a hand-listed set
+#      is arbitrary, not closed: the first version banned `Edge_AI` and let `EDGE_AI`,
+#      `edgeAI`, `edge.ai`, `Backend_GPU` and `back_end` all through.
+#
+#   D) ARTIFACT SELECTION STAYS PLATFORM-ANCHORED. The role token is what the
+#      globbers key on, so widening a glob to cover every alias is how the platform
+#      anchor gets lost — measured: `make qemu-x86 ROLE=pki` handing an aarch64 Pi
+#      image to qemu-system-x86_64, and the flasher offering a Jetson image for an
+#      arm64 request. Asserted against a fixture by RUNNING the real resolution code.
+#
+# The builder set is DISCOVERED (`git ls-files build-*-stage4.sh`) and every builder
+# found must be classified, so a NEW builder inventing a fresh vocabulary is a FAIL
+# rather than an invisible eleventh dialect.
 #
 # WHAT THIS GUARD DELIBERATELY DOES NOT TOUCH — and why each is a role WORD that is
 # NOT a role TOKEN. A mechanical sweep would corrupt all four:
 #   * k8s LABEL KEYS  hugmesh.net/backend, /frontend, /pki, /edge-ai. Uniformly long,
-#     never divergent (there is no hugmesh.net/be anywhere, and check A7 pins that),
+#     never divergent (there is no short-form hugmesh.net/<alias> anywhere, in either
+#     the `key=value` or the YAML `key: "true"` shape, and check A7 pins BOTH),
 #     frozen by scripts/tooling/tokens.json, nodeSelector'd by 73 files under
 #     specs/cluster/, and read by two live selectors that fail OPEN on a stale one.
 #   * gateway TIERS   hugmesh-be-gateway / hugmesh-fe-gateway, apps/20-gateway-*.yaml
@@ -116,12 +129,36 @@ subset_of() {  # subset_of <label> <superset> <candidate set>
 
 # ══ A) CROSS-CHANNEL SET AGREEMENT ═════════════════════════════════════════════
 
+# A0) THE BUILDER SET IS DISCOVERED, NOT DECLARED. A hardcoded list makes a NEW
+#     builder invisible to every check below — it could invent a fresh vocabulary,
+#     source nothing, and stay green, which is the exact route "the fourth spelling
+#     keeps coming back" takes. So the list comes from `git ls-files`, and every
+#     builder found must be CLASSIFIED as role-axis or free-slug. Adding a builder
+#     is then a decision that has to be made here.
+mapfile -t BUILDERS < <(cd "${GEN}" && git ls-files 'build-*-stage4.sh' | sort)
+[ "${#BUILDERS[@]}" -gt 0 ] || guard_require_capability "git ls-files found no build-*-stage4.sh — every builder check below would be vacuous"
+ROLE_AXIS=(build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh)
+FREE_SLUG=(build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh
+           build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh
+           build-orangepi-zero3-stage4.sh build-orangepi3-lts-stage4.sh)
+unclassified=""
+for b in "${BUILDERS[@]}"; do
+    case " ${ROLE_AXIS[*]} ${FREE_SLUG[*]} " in
+        *" ${b} "*) ;;
+        *) unclassified="${unclassified} ${b}" ;;
+    esac
+done
+if [ -z "${unclassified// /}" ]; then
+    ok "every builder on disk is classified (${#ROLE_AXIS[@]} role-axis, ${#FREE_SLUG[@]} free-slug)"
+else
+    bad "UNCLASSIFIED builder(s):${unclassified} — a new builder must be declared here as role-axis or free-slug, or nothing below checks its role vocabulary at all"
+fi
+for b in "${ROLE_AXIS[@]}" "${FREE_SLUG[@]}"; do
+    [ -f "${GEN}/${b}" ] || bad "${b} is classified here but does not exist — the classification is stale"
+done
+
 # A1) every builder SOURCES the lib. A builder that does not cannot fold an alias,
 #     and would be free to grow its own vocabulary again.
-BUILDERS=(build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh
-          build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh
-          build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh
-          build-orangepi-zero3-stage4.sh build-orangepi3-lts-stage4.sh)
 for b in "${BUILDERS[@]}"; do
     if grep -q '_roles-lib\.sh' "${GEN}/${b}"; then ok "${b} sources the role vocabulary"
     else bad "${b} does NOT source scripts/_roles-lib.sh — it can grow its own role spelling again"; fi
@@ -143,9 +180,7 @@ done
 # satisfied by a commented-out line — mutation-proven: deleting the call and leaving
 # the comment above it kept this check green. --print-plan needs no root and writes
 # nothing, so the real builder can be asked directly.
-for b in build-frite-stage4.sh build-orangepi5-stage4.sh build-orangepi4-lts-stage4.sh \
-         build-orangepi-zero2-stage4.sh build-orangepi-zero2w-stage4.sh \
-         build-orangepi-zero3-stage4.sh build-orangepi3-lts-stage4.sh; do
+for b in "${FREE_SLUG[@]}"; do
     if timeout 120 bash "${GEN}/${b}" --print-plan --role backend >/dev/null 2>&1; then
         bad "${b} ACCEPTED '--role backend' — it has no role axis, so that names a cluster node image it cannot build; the token would silently become a hostname"
     else
@@ -247,9 +282,90 @@ for b in build-x86-host-stage4.sh build-rpi5-stage4.sh build-jetson-stage4.sh; d
     fi
 done
 
+# A4c) THE HOSTNAME TABLE ITSELF — a POSITIVE control on the derived rule.
+#      A4b proves the builders no longer hardcode a hostname; that moved the whole
+#      surface INTO scripts/_roles-lib.sh, which is exempt from the bucket-B scan
+#      (it is the file that declares the aliases). So the lib's own table became the
+#      one place a hostname regression could live unseen: two lines in
+#      HUGMESH_ROLE_HOSTNAME_SUFFIX would bake /etc/hostname = hugmesh-be on every
+#      x86 backend node with a fully green gate. Mutation-proven — that is exactly
+#      what happened. Pinned here so changing a hostname is a DECISION made in the
+#      guard, not a table edit nobody reads.
+#      The rule: "${BRAND}-${ROLE}", with these documented exceptions and no others.
+HOSTNAME_EXCEPTIONS="
+x86:backend-gpu=hugmesh-host
+x86:standalone-thick=hugmesh-standalone
+jetson:edge-ai=hugmesh-jetson-edge-ai
+jetson:backend-gpu=hugmesh-jetson-gpu
+jetson:omnibus=hugmesh-jetson-full
+jetson:desktop=hugmesh-jetson
+rpi5:generic=gentoo-rpi5
+"
+hn_bad=0
+for pair in "x86:${HUGMESH_ROLES_X86}" "rpi5:${HUGMESH_ROLES_RPI5}" "jetson:${HUGMESH_ROLES_JETSON}"; do
+    plat="${pair%%:*}"
+    for r in ${pair#*:}; do
+        if want="$(_hm_role_lookup "${HOSTNAME_EXCEPTIONS}" "${plat}:${r}")"; then :; else want="hugmesh-${r}"; fi
+        got="$(hugmesh_role_hostname "${plat}" "${r}" hugmesh)"
+        if [ "${got}" != "${want}" ]; then
+            bad "default hostname for ${plat}/${r} is '${got}', pinned as '${want}'"
+            hn_bad=1
+        fi
+    done
+done
+[ "${hn_bad}" -eq 0 ] && ok "every default hostname matches the pinned table (\${BRAND}-\${ROLE}, 7 documented exceptions)"
+
+# A4d) THE ARTIFACT TAG IS THE IDENTITY FUNCTION. `be+gpu) ROLE_TAG="host"` was the
+#      translation that made the CLI token and the filename disagree by design, and
+#      deleting it is the centrepiece of this change — so it needs a guard, or it
+#      grows back in its natural, canonical-armed form
+#      (`backend-gpu) ROLE_TAG="be+gpu"`), which no alias-as-case-ARM ban can see.
+#      ROLE_TAG may only ever be built out of ${ROLE}.
+# Anywhere on the line, not just line-anchored: the translation grows back INSIDE a
+# case arm (`    backend-gpu)  ROLE_TAG="be+gpu" ;;`), which a `^[[:space:]]*ROLE_TAG=`
+# anchor cannot see — mutation-proven, that exact shape passed green.
+rt="$(grep -nE '(^|[^A-Za-z0-9_])_?(PLAN_)?ROLE_TAG=' "${GEN}/build-x86-host-stage4.sh" || true)"
+rt="$(echo "${rt}" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+rt_bad="$(echo "${rt}" | grep -vE 'ROLE_TAG="\$\{ROLE\}' || true)"
+rt_bad="$(echo "${rt_bad}" | sed '/^$/d')"
+if [ -z "${rt}" ]; then
+    bad "no ROLE_TAG assignment found in build-x86-host-stage4.sh — A4d would be vacuous"
+elif [ -z "${rt_bad}" ]; then
+    ok "artifact ROLE_TAG is derived from \${ROLE} only (the be+gpu->host fold stays deleted)"
+else
+    bad "ROLE_TAG is TRANSLATED again — the artifact filename would stop matching the --role token"
+    echo "${rt_bad}" | sed 's/^/      /' | head -5
+fi
+
+# A4e) THE /etc/hugmesh/role MARKER. It is the first derived output axis and the one
+#      thing a running node carries forever; specs/etc/keys-provision/provision.sh
+#      reads it to pick a node's staging keys. Every builder must write ${ROLE}
+#      verbatim — a literal there would bake a spelling nothing else uses.
+mk_bad=""
+for b in "${BUILDERS[@]}"; do
+    w="$(grep -nE '>[[:space:]]*"\$\{SYSROOT\}/etc/hugmesh/role"' "${GEN}/${b}" || true)"
+    if [ -z "${w}" ]; then
+        mk_bad="${mk_bad} ${b}(no marker write)"
+    elif ! echo "${w}" | grep -E 'echo "\$\{ROLE\}"' >/dev/null; then
+        mk_bad="${mk_bad} ${b}(not \${ROLE})"
+    fi
+done
+if [ -z "${mk_bad// /}" ]; then
+    ok "every builder writes /etc/hugmesh/role as \${ROLE} (the canonical token, verbatim)"
+else
+    bad "the /etc/hugmesh/role marker is not the canonical role in:${mk_bad}"
+fi
+
 # A5) THE STUDIO. ROLE_CHOICES is the Studio's own authority; its per-platform sets
 #     must EQUAL the lib's. This is the check that catches "the Studio offers a role
 #     no builder builds" AND "a builder grew a role the Studio cannot reach".
+#
+#     A5a compares the CANONICALIZED sets, so it is deliberately blind to which
+#     SPELLING the Studio holds — and the Studio inventing `be`/`fe` is the exact
+#     divergence this whole change deletes. A5b therefore checks the RAW ids, and it
+#     is the one that would notice a revert. (Mutation-proven: replacing the Studio's
+#     `backend`/`frontend` ids with `be`/`fe` left A5a fully green, because
+#     builder_role() folds both spellings to the same token before comparing.)
 studio_roles() {  # studio_roles <platform>
     PYTHONPATH="${GEN}/studio" "${PY}" - "$1" <<'EOF'
 import sys
@@ -271,6 +387,46 @@ for pair in "x86:${HUGMESH_ROLES_X86}" "rpi5:${HUGMESH_ROLES_RPI5}" "jetson:${HU
     fi
 done
 
+# A5b) THE RAW STUDIO IDS — every platform, including the seven free-slug boards,
+#      which A5a never looks at. An id may be a canonical token or a declared
+#      COMPOSITE id (rpi5-desktop / jetson-desktop carry a platform and are retired
+#      separately, see the lib). It may NOT be a plain input alias: `be`/`fe` are
+#      accepted from an operator forever, and are exactly what the Studio must stop
+#      OFFERING. It may not be an invented spelling either.
+studio_raw_ids() {
+    PYTHONPATH="${GEN}/studio" "${PY}" - <<'EOF'
+from hugmesh_studio.core.config import ROLE_CHOICES
+print("\n".join(sorted({r for mode in ROLE_CHOICES for r, _p, _l in ROLE_CHOICES[mode]})))
+EOF
+}
+raw="$(studio_raw_ids 2>/dev/null || true)"
+composite_ids="$(printf '%s\n' ${HUGMESH_ROLE_COMPOSITE} | sed 's/=.*//' | sort -u | tr '\n' ' ')"
+if [ -z "${raw}" ]; then
+    bad "Studio ROLE_CHOICES raw ids could not be read — A5b would be vacuous"
+else
+    # The seven free-slug boards have NO role axis: the Studio's "role" id there is
+    # the BOARD itself (frite, orangepi5, …) and its --role is a hostname marker.
+    # DERIVED from the lib's own hostname table rather than restated, so a new board
+    # is declared in one place. x86/rpi5/jetson are the role-axis platforms.
+    board_ids="$(printf '%s\n' ${HUGMESH_ROLE_HOSTNAME_SUFFIX} | sed 's/:.*//' \
+                 | grep -vxE 'x86|rpi5|jetson' | sort -u | tr '\n' ' ')"
+    offending=""
+    for r in ${raw}; do
+        hugmesh_role_is_canonical "${r}" && continue
+        case " ${composite_ids} " in *" ${r} "*) continue ;; esac
+        case " ${board_ids} " in *" ${r} "*) continue ;; esac
+        offending="${offending} ${r}"
+    done
+    if [ -z "${offending// /}" ]; then
+        ok "Studio ROLE_CHOICES raw ids: all canonical (or a declared composite id / free-slug board)"
+    else
+        bad "Studio OFFERS a non-canonical role id:${offending}"
+        echo "      An alias (be, fe, be+gpu, edge_ai, …) is accepted from an operator FOREVER,"
+        echo "      but the Studio is a producer: its ids become argv, session records and"
+        echo "      artifact names. Offering one is the divergence, not the compatibility."
+    fi
+fi
+
 # A6) roles.py must READ the lib, not restate it. A second declaration is the bug.
 ROLES_PY="${GEN}/studio/hugmesh_studio/core/roles.py"
 if grep -q '_roles-lib\.sh' "${ROLES_PY}"; then
@@ -283,9 +439,23 @@ fi
 #     There is no hugmesh.net/be or /fe anywhere and there must never be one; the
 #     freeze in scripts/tooling/tokens.json covers the NAMESPACE by substring and
 #     cannot tell the two apart, so this is the only thing that would notice.
-lab="$(scan 'hugmesh\.net/(be|fe)=' || true)"
+# The `KEY=VALUE` shape alone was not enough: all ~73 nodeSelector files write the
+# YAML `key: "true"` shape, and only `be`/`fe` were listed. Both mutation-proven —
+# `hugmesh.net/be: "true"` in a real gateway manifest passed green. Matched now: any
+# short suffix, terminated by anything that is not a path character, so the LIVE URL
+# PATH `hugmesh.net/be/**` (specs/cluster/apps/20-gateway-fe.yaml) is untouched —
+# that is a user-visible route, not a label key, and renaming it would break URLs.
+# A COMMENT IS NOT EXEMPT HERE, unlike bucket B: `# kubectl get nodes -l
+# hugmesh.net/be=true` is a copy-pasteable command that would silently return
+# nothing, and a selector that returns nothing FAILS OPEN in bootstrap.sh. What
+# keeps prose out is the terminator, not the comment marker — a label KEY is always
+# followed by `=` or `:` (or a bare `-l key` at end of line), never by a backtick,
+# which is how the lib's own "there are ZERO hugmesh.net/be keys" sentence is
+# written. `/` is excluded so the LIVE URL PATH hugmesh.net/be/** is untouched.
+lab="$(scan 'hugmesh\.net/(be|fe|be-gpu|be\+gpu|gpu-host|gpu_host|edge_ai|backend_gpu)([^A-Za-z0-9/_.`-]|$)' || true)"
+lab="$(echo "${lab}" | sed '/^$/d')"
 if [ -z "${lab}" ]; then
-    ok "no short-form hugmesh.net/{be,fe} LABEL KEY (the label side never diverged, and must not start)"
+    ok "no short-form hugmesh.net/<alias> LABEL KEY, in either the = or the YAML : shape"
 else
     bad "a SHORT-FORM hugmesh.net label key appeared — the label suffix is NOT part of this rename"
     echo "${lab}" | sed 's/^/      /' | head -8
@@ -350,7 +520,12 @@ subset_of "docs/catalog/image-catalog.json role ids" \
 #                                 the JOB channel's charset workaround and the probe
 #                                 proves both that the alias is still ACCEPTED and
 #                                 that the output is canonical (BUILD_ROLE=backend-gpu).
-ALLOW_B='tests/build-matrix/check\.sh:[0-9]+:.*x86\.be-gpu'
+#   templates/archetypes/gateway/_identity.env
+#                                 PROFILE="be" is the GATEWAY TIER (the exemplar
+#                                 member is hugmesh-gateway's `be` profile), one of
+#                                 the four non-role axes this guard's header lists.
+#                                 It is a drift ORACLE, never consumed at emit time.
+ALLOW_B='tests/build-matrix/check\.sh:[0-9]+:.*x86\.be-gpu|templates/archetypes/gateway/_identity\.env:[0-9]+:PROFILE='
 ban_output() {  # ban_output <regex> <human name>
     local pat="$1"
     local name="$2"
@@ -372,16 +547,30 @@ ban_output() {  # ban_output <regex> <human name>
         echo "${hits}" | sed 's/^/      /' | head -10
     fi
 }
-A_RE='be|fe|be\+gpu|be-gpu|host|gpu-host|gpu_host|full|edge_ai|standalone-full'
 # NOTE `host` and `full` are excluded from the argv/JSON forms below: `--role host`
 # is also gen-provision-keys.sh's own PROFILE name (a different axis that legitimately
 # means the plain worker manifest), and `--desktop full` / `"desktop":"full"` is the
 # desktop WEIGHT. Both are matched by the narrower forms that follow instead.
-A_STRICT='be|fe|be\+gpu|be-gpu|gpu-host|gpu_host|edge_ai|standalone-full'
-ban_output "--role (${A_STRICT})( |\$|\")"            '`--role <alias>` on a command line'
+# LONGEST ALTERNATIVE FIRST so `be+gpu` is never matched as `be` plus a boundary.
+A_STRICT='be\+gpu|be-gpu|gpu-host|gpu_host|standalone-full|edge_ai|be|fe'
+# The terminator is "anything that is not a role-token character", not " or $ or a
+# double quote. The repo's own doc idiom writes a command in BACKTICKS
+# (docs/ARCHITECTURE.md: `build-rpi5-stage4.sh --role backend`), and a backtick-,
+# comma- or period-terminated command line is every bit as copy-pasteable as a bare
+# one. `--role=<alias>` and the short `-r <alias>` are the same emission spelled
+# differently. All four forms were mutation-proven to slip the narrower pattern.
+A_END='([^A-Za-z0-9._+-]|$)'
+ban_output "--role[= ](${A_STRICT})${A_END}"       '`--role <alias>` on a command line'
+ban_output "(build-[a-z0-9-]+-stage4\.sh|launch-(x86|pi)\.sh|flash-disk\.sh|mesh-cluster\.sh)[^|;&]* -r (${A_STRICT})${A_END}" \
+                                                   'a short `-r <alias>` on a builder/launcher command line'
 ban_output '"role"[[:space:]]*:[[:space:]]*"('"${A_STRICT}"')"'   'a `"role": "<alias>"` JSON value'
-ban_output "^[[:space:]]*ROLE=\"?(${A_STRICT})\"?[[:space:]]*(#|\$)" 'a `ROLE=<alias>` shell default'
-ban_output "^[[:space:]]{4}(${A_STRICT})\)"           'a role `case` arm'
+# Any variable, any indent, `export` or not: `export ROLE=be+gpu` and a WORKER_ROLE
+# default are the same emission as a bare `ROLE=`. Mutation-proven: the `^ROLE=`
+# anchor missed both, and a real one was live in tests/qemu/mesh-cluster.sh.
+ban_output "^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=\"?(${A_STRICT})\"?[[:space:]]*(#|;|\$)" \
+                                                   'an alias assigned to a shell variable'
+# Any indent: an 8-space `be)` arm is a case arm too.
+ban_output "^[[:space:]]+(${A_STRICT})\)"         'a role `case` arm'
 # matrix.tsv is scanned as a FILE, not by a whole-tree regex: `^<word> <alias> `
 # matches ordinary English prose ("would be a no-op", "cannot be end-to-end tested")
 # in every README in the repo, and a ban that fires on prose gets answered with a
@@ -412,40 +601,202 @@ else
 fi
 
 # ══ C) NO FIFTH SPELLING ═══════════════════════════════════════════════════════
-# The canonical set is CLOSED. Each of these is a plausible transliteration someone
-# would reach for; none may exist anywhere, in prose or in code.
-ban_variant() {  # ban_variant <regex> <human name>
-    local hits
-    hits="$(scan "$1")"
-    hits="$(echo "${hits}" | sed '/^$/d')"
-    if [ -z "${hits}" ]; then ok "no '$2' spelling"
-    else bad "banned spelling '$2' — the canonical set is closed (${HUGMESH_ROLES_CANONICAL})"
-         echo "${hits}" | sed 's/^/      /' | head -6; fi
+# The canonical set is CLOSED. The old form of this bucket was a hand-written,
+# case-SENSITIVE list of nine literals, which is arbitrary rather than closed: it
+# banned `Edge_AI` but not `EDGE_AI`, `edgeAI`, `edge.ai`, `Backend_GPU` or
+# `back_end`, all of which walked straight through when an adversarial battery tried
+# them. Both checks below are now DERIVED from the canonical tokens, so a new
+# multi-word role is covered the day it is declared.
+
+# C1) SEPARATOR variants, generated from the vocabulary, matched case-insensitively.
+#     `backend-gpu` may not also be spelled backend_gpu / backend.gpu / backend+gpu /
+#     backendgpu in ANY casing.
+#     TWO carve-outs, both for the same reason — an IDENTIFIER cannot hold a hyphen:
+#       * an ALL-CAPS match is a shell variable / mermaid node id / env name
+#         (WANT_EDGE_AI, EDGE_AI, OMNIBUS, the ARCHITECTURE.md diagram's EDGEAI node).
+#       * a pytest FUNCTION STEM (def test_…_standalone_thin) — the same carve-out,
+#         and the same shape, as tests/scripts/test-platform-key-spelling.sh's
+#         test_emission_orange_pi_3_lts.
+#     A DECLARED ALIAS is never a fifth spelling: `edge_ai` is in the alias table and
+#     in artifact names already on disk.
+sep_variants=""
+for t in ${HUGMESH_ROLES_CANONICAL}; do
+    case "${t}" in *-*) ;; *) continue ;; esac
+    _h="${t%%-*}"; _r="${t#*-}"
+    sep_variants="${sep_variants} ${_h}_${_r} ${_h}\\.${_r} ${_h}\\+${_r} ${_h}${_r}"
+done
+SEP_RE="$(echo ${sep_variants} | tr ' ' '|')"
+[ -n "${SEP_RE}" ] || bad "no separator variants were generated — C1 would be vacuous"
+declared_lc=" $(echo ${HUGMESH_ROLES_CANONICAL} $(printf '%s\n' ${HUGMESH_ROLE_ALIASES} | sed 's/=.*//') | tr 'A-Z' 'a-z') "
+c1_hits="$( (cd "${GEN}" && grep -HoIn -iE -- "(${SEP_RE})" "${TRACKED[@]}" 2>/dev/null) || true)"
+c1_bad=""
+while IFS= read -r h; do
+    [ -n "${h}" ] || continue
+    m="${h##*:}"
+    case "${m}" in *[a-z]*) ;; *) continue ;; esac            # ALL-CAPS identifier: allowed
+    lc="$(echo "${m}" | tr 'A-Z' 'a-z')"
+    case "${declared_lc}" in *" ${lc} "*) continue ;; esac    # a declared alias
+    # grep -o gives file:line:MATCH, so the pytest carve-out has to read the SOURCE
+    # line back — matching it against the token alone silently never fires.
+    _f="${h%%:*}"; _rest="${h#*:}"; _ln="${_rest%%:*}"
+    _src="$(sed -n "${_ln}p" "${GEN}/${_f}" 2>/dev/null || true)"
+    case "${_src}" in *"def test_"*"${m}"*) continue ;; esac
+    c1_bad="${c1_bad}${h}
+"
+done <<< "${c1_hits}"
+c1_bad="$(echo "${c1_bad}" | sed '/^$/d')"
+if [ -z "${c1_bad}" ]; then
+    ok "no separator variant of a canonical role (backend_gpu / edge.ai / edgeai / …), in any casing"
+else
+    bad "a FIFTH spelling of a canonical role — the set is closed (${HUGMESH_ROLES_CANONICAL})"
+    echo "${c1_bad}" | sed 's/^/      /' | head -8
+fi
+
+# C2) CASE variants IN A ROLE POSITION. `--role EDGE_AI` / `--role BACKEND-GPU` /
+#     `--role Be` are not separator variants, so C1's identifier carve-out lets them
+#     past — but in a role position an identifier carve-out makes no sense: the
+#     tokens are lowercase everywhere. This fires ONLY when the token case-folds onto
+#     something the vocabulary already knows, so it can never bite on a placeholder
+#     (`--role <r>`, `--role ${ROLE}`) or on prose ("validates --role through the
+#     shared vocabulary"), which is why it needs no allowlist at all.
+known_lc=" $(echo ${HUGMESH_ROLES_CANONICAL} \
+    $(printf '%s\n' ${HUGMESH_ROLE_ALIASES} | sed 's/=.*//') \
+    $(printf '%s\n' ${HUGMESH_ROLE_COMPOSITE} | sed 's/=.*//') | tr 'A-Z' 'a-z') "
+c2_hits="$( (cd "${GEN}" && grep -HoIn -E -- '--role[= ][A-Za-z0-9_.+-]+' "${TRACKED[@]}" 2>/dev/null) || true)"
+c2_bad=""
+while IFS= read -r h; do
+    [ -n "${h}" ] || continue
+    tok="${h##*--role}"; tok="${tok#[= ]}"
+    lc="$(echo "${tok}" | tr 'A-Z' 'a-z')"
+    [ "${tok}" = "${lc}" ] && continue
+    case "${known_lc}" in *" ${lc} "*) c2_bad="${c2_bad}${h}
+" ;; esac
+done <<< "${c2_hits}"
+c2_bad="$(echo "${c2_bad}" | sed '/^$/d')"
+if [ -z "${c2_bad}" ]; then
+    ok "no MIS-CASED role token in a --role position (role tokens are lowercase, always)"
+else
+    bad "a role token is spelled with the wrong case in a --role position"
+    echo "${c2_bad}" | sed 's/^/      /' | head -8
+fi
+
+# ══ D) ARTIFACT SELECTION STAYS PLATFORM-ANCHORED ══════════════════════════════
+# The role token is what the artifact GLOBBERS key on, and widening a glob to cover
+# every alias is exactly how one loses the platform anchor: an unanchored
+# `hugmesh-*-<role>-*.img` matches the rpi5 image as happily as the x86 one, and both
+# land in the same WORK_DIR under the documented `make` default
+# (Makefile: WORK_DIR ?= $(CURDIR)/out, written by BOTH `make x86-<role>` and
+# `make rpi-<role>`). Measured: `make qemu-x86 ROLE=pki` handed an aarch64 Raspberry
+# Pi image to qemu-system-x86_64 — for `pki`, a role with NO aliases at all, so no
+# spelling check anywhere could have caught it.
+#
+# ASSERTED BY BEHAVIOUR against a fixture, not by reading the glob order: the real
+# autodetect_img body is evaluated out of each launcher with the real
+# scripts/_roles-lib.sh sourced. The launchers themselves die early on a missing
+# qemu-system-*, which a CI container has, so the FUNCTION is exercised rather than
+# the script.
+fixture_dir="$(mktemp -d)"
+trap 'rm -rf "${fixture_dir}"' EXIT
+for n in hugmesh-x86-amd64-pki-test-20260101T000000Z.img \
+         hugmesh-x86-amd64-backend-test-20260101T000000Z.img \
+         hugmesh-x86-amd64-frontend-test-20260101T000000Z.img \
+         hugmesh-rpi5-arm64-pki-test-20260101T000000Z.img \
+         hugmesh-rpi5-arm64-backend-test-20260101T000000Z.img \
+         hugmesh-rpi5-arm64-frontend-test-20260101T000000Z.img \
+         hugmesh-x86-amd64-host-test-20260101T000000Z.img ; do
+    : > "${fixture_dir}/${n}"
+done
+autodetect_of() {  # autodetect_of <launcher> <role> [dir]
+    local _dd
+    _dd="${3:-${fixture_dir}}"
+    bash -c "
+        set -uo pipefail
+        . '${LIB}'
+        $(awk '/^autodetect_img\(\) \{/,/^\}/' "${GEN}/tests/qemu/$1")
+        autodetect_img '${_dd}' '$2'
+    " 2>/dev/null | tail -1
 }
-ban_variant 'backend_gpu'   'backend_gpu'
-ban_variant 'backendgpu'    'backendgpu'
-ban_variant 'backend\+gpu'  'backend+gpu'
-ban_variant 'be_gpu'        'be_gpu'
-ban_variant 'frontend-gpu'  'frontend-gpu'
-ban_variant 'edgeai'        'edgeai'
-ban_variant 'edge\+ai'      'edge+ai'
-ban_variant 'Edge_AI'       'Edge_AI'
-ban_variant 'omni-bus'      'omni-bus'
-# The ONLY sanctioned underscore forms are pytest FUNCTION STEMS: a Python
-# identifier cannot hold a hyphen, so `test_..._standalone_thin` is the role id with
-# '-'->'_'. Same carve-out shape (and same reason) as
-# tests/scripts/test-platform-key-spelling.sh's `test_emission_orange_pi_3_lts`.
-ban_variant_except() {  # ban_variant_except <regex> <allow-regex> <human name>
-    local hits
-    hits="$(scan "$1")"
-    hits="$(echo "${hits}" | grep -vE -- "$2" || true)"
-    hits="$(echo "${hits}" | sed '/^$/d')"
-    if [ -z "${hits}" ]; then ok "no '$3' spelling outside the pytest function stem"
-    else bad "banned spelling '$3' — the canonical set is closed (${HUGMESH_ROLES_CANONICAL})"
-         echo "${hits}" | sed 's/^/      /' | head -6; fi
+# THE FOREIGN PLATFORM IS ALWAYS THE NEWEST, per launcher. newest-mtime-first is
+# what makes a lost anchor bite, so a fixture that leaves the launcher's own platform
+# newest cannot fail — mutation-proven: with rpi5 newest for BOTH probes, breaking
+# launch-pi.sh's anchor stayed green because the unanchored glob still landed on rpi5.
+for pair in "launch-x86.sh:x86-amd64:rpi5" "launch-pi.sh:rpi5-arm64:x86"; do
+    L="${pair%%:*}"; rest="${pair#*:}"; want_plat="${rest%%:*}"; foreign="${rest##*:}"
+    touch -d '2020-01-01 00:00' "${fixture_dir}"/hugmesh-*.img
+    touch -d '2030-01-01 00:00' "${fixture_dir}"/hugmesh-"${foreign}"-*.img
+    for r in pki backend frontend; do
+        got="$(basename "$(autodetect_of "${L}" "${r}")" 2>/dev/null || true)"
+        case "${got}" in
+            hugmesh-"${want_plat}"-*) ok "${L} --role ${r}: stays on ${want_plat} (${got})" ;;
+            "") bad "${L} --role ${r}: autodetect_img returned NOTHING — the probe is vacuous, or the function moved" ;;
+            *)  bad "${L} --role ${r}: crossed platforms and picked ${got} — a ${want_plat} launcher must never boot another board's image" ;;
+        esac
+    done
+done
+
+# D1b) THE ROLE THAT IS ABSENT ON THE LAUNCHER'S OWN PLATFORM. D1 cannot see this:
+#      its fixture holds an own-platform image of every probed role, so the
+#      platform-anchored glob always wins and the unanchored one is never reached —
+#      mutation-proven: reverting launch-pi.sh's fix left every D1 check green,
+#      because the defect only fires when the requested role has NO rpi5 image and
+#      an x86 one exists (an alias-loop `hugmesh-*-<role>-*.img` beats the rpi5
+#      platform fallback). The pre-rename contract, restored here, is "right arch
+#      even at the cost of the role": the launcher must fall back to an own-platform
+#      image of ANOTHER role before it ever crosses to a foreign board's image.
+d1b_dir="$(mktemp -d)"
+: > "${d1b_dir}/hugmesh-rpi5-arm64-backend-test-20260101T000000Z.img"
+: > "${d1b_dir}/hugmesh-x86-amd64-pki-test-20260102T000000Z.img"
+for pair in "launch-pi.sh:pki:rpi5-arm64" "launch-x86.sh:backend:x86-amd64"; do
+    L="${pair%%:*}"; rest="${pair#*:}"; r="${rest%%:*}"; want_plat="${rest##*:}"
+    got="$(basename "$(autodetect_of "${L}" "${r}" "${d1b_dir}")" 2>/dev/null || true)"
+    case "${got}" in
+        hugmesh-"${want_plat}"-*) ok "${L} --role ${r} (no own-platform ${r} image): falls back on ${want_plat} (${got})" ;;
+        "") bad "${L} --role ${r}: autodetect_img returned NOTHING — the probe is vacuous, or the function moved" ;;
+        *)  bad "${L} --role ${r}: with no own-platform ${r} image it crossed to ${got} — the platform fallback must fire before any foreign-board role match" ;;
+    esac
+done
+rm -rf "${d1b_dir}"
+
+# D2) the FLASHER. Same anchor, far higher stakes: it writes a whole physical disk.
+#     `--arch` alone is not enough on arm64, where rpi5, jetson, frite and four Orange
+#     Pi boards ALL emit arm64 images — the arch token cannot separate them.
+#     The fixture carries a STALE `hugmesh-frite-arm64-backend-…` image, which is
+#     exactly what the free-slug boards used to emit (`--role backend` on an Orange Pi
+#     was silently accepted and became a hostname), and makes it the NEWEST. Only the
+#     platform anchor keeps `--role backend --arch arm64` off it.
+: > "${fixture_dir}/hugmesh-jetson-orin-nano-arm64-full-test-20260101T000000Z.img"
+: > "${fixture_dir}/hugmesh-frite-arm64-backend-test-20260101T000000Z.img"
+: > "${fixture_dir}/hugmesh-frite-arm64-pki-test-20260101T000000Z.img"
+touch -d '2020-01-01 00:00' "${fixture_dir}"/hugmesh-*.img
+touch -d '2031-01-01 00:00' "${fixture_dir}"/hugmesh-frite-*.img "${fixture_dir}"/hugmesh-jetson-*.img
+flash_pick() {  # flash_pick <role> <arch>
+    (cd "${GEN}" && ./scripts/flash-disk.sh --role "$1" --arch "$2" \
+        --work-dir "${fixture_dir}" --list 2>/dev/null \
+        | sed -n 's/^Would flash: //p') || true
 }
-ban_variant_except 'standalone_thin'  'def test_[a-z0-9_]*standalone_thin'  'standalone_thin'
-ban_variant_except 'standalone_thick' 'def test_[a-z0-9_]*standalone_thick' 'standalone_thick'
+for probe in "backend:arm64:hugmesh-rpi5-" "pki:arm64:hugmesh-rpi5-" \
+             "omnibus:arm64:hugmesh-jetson-" "backend:x86:hugmesh-x86-" \
+             "be:x86:hugmesh-x86-" "host:x86:hugmesh-x86-"; do
+    r="${probe%%:*}"; rest="${probe#*:}"; a="${rest%%:*}"; want="${rest##*:}"
+    got="$(basename "$(flash_pick "${r}" "${a}")" 2>/dev/null || true)"
+    case "${got}" in
+        "${want}"*) ok "flash-disk.sh --role ${r} --arch ${a}: ${got}" ;;
+        "")         bad "flash-disk.sh --role ${r} --arch ${a}: found NOTHING — the probe is vacuous" ;;
+        *)          bad "flash-disk.sh --role ${r} --arch ${a} resolved to ${got}, expected a ${want}* image — a wrong-board flash writes a whole disk" ;;
+    esac
+done
+
+# D3) the roles that genuinely span boards (desktop, laptop, a free slug) cannot be
+#     narrowed by derivation, so the flasher must REFUSE rather than pick the newest.
+: > "${fixture_dir}/hugmesh-rpi5-arm64-desktop-user-test-20260101T000000Z.img"
+: > "${fixture_dir}/hugmesh-frite-arm64-desktop-user-test-20260101T000000Z.img"
+amb_out="$( (cd "${GEN}" && ./scripts/flash-disk.sh --role desktop --arch arm64 \
+             --work-dir "${fixture_dir}" --list 2>/dev/null) || true)"
+if echo "${amb_out}" | grep -E '^AMBIGUOUS' >/dev/null; then
+    ok "flash-disk.sh --role desktop --arch arm64: reports the cross-board ambiguity"
+else
+    bad "flash-disk.sh --role desktop --arch arm64: picked a board silently — desktop is built by rpi5, jetson, frite and four Orange Pi boards, and newest-mtime is not a board choice"
+fi
 
 echo "== ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

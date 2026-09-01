@@ -194,18 +194,24 @@ autodetect_img() {
     local role="$2"
     local c
     local r
-    # Canonical spelling first, then every declared alias: an image built as
-    # hugmesh-rpi5-arm64-be-… keeps its name and is still the backend image.
+    # THE PLATFORM ANCHOR COMES FIRST, ALWAYS — mirror of launch-x86.sh, and for the
+    # same reason: an unanchored role glob returns hugmesh-x86-amd64-<role>-….img
+    # into qemu-system-aarch64 -M virt when that role has no rpi5 image in the shared
+    # WORK_DIR. Canonical spelling first inside the anchor, then every declared
+    # alias: an image built as hugmesh-rpi5-arm64-be-… keeps its name and is still
+    # the backend image.
     for r in $(hugmesh_role_aliases_of "${role}"); do
-        for c in \
-            "${d}"/hugmesh-rpi5-*-"${r}"-*.img \
-            "${d}"/hugmesh-*-"${r}"-*.img ; do
-            c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
-            [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
-        done
+        c="$(ls -1t "${d}"/hugmesh-rpi5-*-"${r}"-*.img 2>/dev/null | head -1 || true)"
+        [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done
     for c in "${d}"/hugmesh-rpi5-*.img ; do
         c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
+        [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
+    done
+    # LAST RESORT, and it must stay last (the pre-rename order had it here too): an
+    # unanchored role match can cross platforms.
+    for r in $(hugmesh_role_aliases_of "${role}"); do
+        c="$(ls -1t "${d}"/hugmesh-*-"${r}"-*.img 2>/dev/null | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done
     # Last resort: any *.img that is not a kernel/initramfs blob.

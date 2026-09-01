@@ -360,6 +360,30 @@ hugmesh_role_keyprofile() {
     _hm_role_lookup "${HUGMESH_ROLE_KEYPROFILE}" "$1"
 }
 
+# ── CLUSTER NODE ROLES ─────────────────────────────────────────────────────────
+# The subset of the vocabulary that names a k8s cluster member. Declared ONCE
+# because two different rules key off it: the seven free-slug boards refuse them
+# (they cannot build a node image), and scripts/flash-disk.sh anchors its artifact
+# search to the platforms that build them (a node role identifies its platform, so a
+# `--role backend --arch arm64` request can never surface a Jetson image).
+HUGMESH_ROLES_NODE="pki backend frontend backend-gpu omnibus edge-ai"
+
+# hugmesh_role_is_node_role <canonical role>
+hugmesh_role_is_node_role() {
+    case " ${HUGMESH_ROLES_NODE} " in *" $1 "*) return 0 ;; esac
+    return 1
+}
+
+# hugmesh_role_arch <platform> — the artifact ARCH token a platform's images carry.
+# x86 -> x86/amd64; every SBC/Jetson board -> arm64. Used by flash-disk.sh to decide
+# which platforms a given --arch can legitimately mean.
+hugmesh_role_arch() {
+    case "$1" in
+        x86) printf 'x86\n' ;;
+        *)   printf 'arm64\n' ;;
+    esac
+}
+
 # hugmesh_role_reject_node_role <role> — for the seven free-slug boards, whose
 # --role is a hostname/marker with no vocabulary. `--role backend` on an Orange Pi
 # is silently accepted today and becomes a hostname; that names a node image the
@@ -369,13 +393,12 @@ hugmesh_role_reject_node_role() {
     local _r="$1"
     local _c
     _c="$(hugmesh_role_canonicalize "${_r}")" || return 0     # not in the vocabulary: fine
-    case " pki backend frontend backend-gpu omnibus edge-ai " in
-        *" ${_c} "*)
-            printf "ERROR: --role '%s' names the cluster node role '%s', which this board does not build.\\n" \
-                "${_r}" "${_c}" >&2
-            printf '       This platform has no role axis — --role is only a hostname/marker here.\n' >&2
-            printf '       Use --hostname NAME for a custom name.\n' >&2
-            return 1 ;;
-    esac
+    if hugmesh_role_is_node_role "${_c}"; then
+        printf "ERROR: --role '%s' names the cluster node role '%s', which this board does not build.\\n" \
+            "${_r}" "${_c}" >&2
+        printf '       This platform has no role axis — --role is only a hostname/marker here.\n' >&2
+        printf '       Use --hostname NAME for a custom name.\n' >&2
+        return 1
+    fi
     return 0
 }

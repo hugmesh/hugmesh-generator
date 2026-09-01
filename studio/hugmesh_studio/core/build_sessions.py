@@ -678,10 +678,18 @@ def session_detail(s: BuildSession) -> dict[str, Any]:
 
 
 def format_session_line(s: BuildSession) -> str:
-    """One human line per session: id, date, roles, status, artifact count."""
+    """One human line per session: id, date, images, status, artifact count.
+
+    Images are listed as ``<role>.<platform>`` — the same key the worklist and the
+    build tree already use (``wl-backend.x86``, ``image backend.rpi5``). Deduping on
+    the ROLE alone used to be enough only because a role was spelled differently per
+    platform; now that one spelling is shared, ``be/x86`` and ``backend/rpi5`` are
+    both ``backend`` and a role-only summary silently shows fewer entries than the
+    session has images."""
     date = s.started or s.created or "-"
     roles = ",".join(dict.fromkeys(
-        str(img.get("role", "")) or "?" for img in s.images)) or "-"
+        f"{str(img.get('role', '')) or '?'}.{str(img.get('platform', '')) or '?'}"
+        for img in s.images)) or "-"
     status = s.status + (" (process gone)" if is_stale(s) else "")
     n = len(artifact_paths(s))
     return f"{s.id}  {date}  {roles}  {status}  {n} artifact(s)"

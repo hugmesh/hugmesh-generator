@@ -832,7 +832,7 @@ def test_frite_board_flavor_desktop_matrix(board, flavor, desktop):
 ])
 def test_an_old_x86_role_id_still_emits_the_canonical_token(old, canonical):
     """A config restored from an older session (or hand-written by an operator who
-    learned the old `--role be`) must build the SAME image, and must EMIT the canonical
+    learned the old short `be` spelling) must build the SAME image, and must EMIT the canonical
     spelling — the builder never sees two names for one role."""
     cfg = ImageConfig.from_dict({"mode": "mesh", "role": old, "platform": "x86",
                                  "tailscale": True})

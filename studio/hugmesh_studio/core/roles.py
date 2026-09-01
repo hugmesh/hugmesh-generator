@@ -1,7 +1,7 @@
 """THE role vocabulary, read from ``scripts/_roles-lib.sh``.
 
 An image is identified by a device platform and then a ROLE. That role token used
-to be spelled independently in ~14 places — the same logical node was ``--role be``
+to be spelled independently in ~14 places — the same logical node took ``be``
 on x86 and ``--role backend`` on rpi5 — and the Studio bridged the two with a
 hand-written ``RPI5_ROLE_MAP``. There is now ONE declaration, and it lives in the
 SHELL (``scripts/_roles-lib.sh``) because the ten builders must not acquire a Python
