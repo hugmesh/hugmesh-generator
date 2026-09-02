@@ -1780,28 +1780,44 @@ mkdir -p "${WORK}"
 WORK="$(readlink -f "${WORK}")"
 
 # ── Discover runnable rows from the artifacts actually present ──────────────
-# Artifact naming: hugmesh-<platform>-<arch>-<role>-<env>-<stamp>.img[.xz]
+# Artifact naming: <brand>-<platform>-<arch>-<role>-<env>-<stamp>.img[.xz]
 # <role> may itself contain '-' (standalone-thin), so parse from BOTH ends:
-# fields 1..2 are hugmesh+platform, the arch follows, and the last two fields
+# fields 1..2 are brand+platform, the arch follows, and the last two fields
 # before the extension are <env>-<stamp>.
+#
+# THE FIRST FIELD IS THE BRAND AND IT IS NOT ALWAYS "hugmesh". The builders name
+# artifacts ${BRAND}-… (build-rpi5-stage4.sh IMG_PATH, build-x86-host-stage4.sh
+# IMG_PATH) and BRAND is whatever --brand the build ran under: hugmesh only by
+# default, sdhm for the operator's own mesh, gentoo for an unaffiliated build.
+# This loop used to require the literal `hugmesh-` prefix, so a finished branded
+# mesh listed ZERO rows here and the Studio's picker (which mirrors this rule in
+# qemu_tests.parse_artifact_name) showed no session at all.
+#
+# What still rejects a foreign .img is the SHAPE, not the brand: six
+# '-'-separated fields and a trailing YYYYmmddTHHMMSSZ build stamp. Without the
+# field count the both-ends strip below happily "parses" a too-short name (e.g.
+# hugmesh-x86-be.img) into role==env; without the stamp anchor an arbitrary
+# six-word .img sitting in the dir would become a bootable row.
 discover_rows() {
     local f base rest platform arch role env stamp prefer
     local -a _fields
     for f in "${ARTIFACTS}"/*.img "${ARTIFACTS}"/*.img.xz; do
         [ -e "${f}" ] || continue
+        # A ZERO-BYTE .img is the builder's pre-partition placeholder from a run
+        # that was killed; booting it fails, and counting it makes an aborted
+        # build read as complete. Python applies the same rule (qemu_tests
+        # discover_rows, os.path.getsize).
+        [ -s "${f}" ] || continue
         base="$(basename "${f}")"
         base="${base%.xz}"; base="${base%.img}"
         case "${base}" in *kernel*|*initramfs*|*initrd*|*squashfs*) continue ;; esac
-        [[ "${base}" == hugmesh-* ]] || continue
         # Match the Python contract (studio/hugmesh_studio/core/qemu_tests.py
-        # parse_artifact_name): hugmesh+platform+arch+<role...>+env+stamp is at
-        # least 6 '-'-separated fields. Without this guard the both-ends strip
-        # below happily "parses" a too-short name (e.g. hugmesh-x86-be.img)
-        # into role==env, where the Python side refuses it — the divergence
-        # studio/tests/test_qemu_tests.py had to carve out.
+        # parse_artifact_name / _split_artifact_name).
         IFS='-' read -r -a _fields <<< "${base}"
         [ "${#_fields[@]}" -ge 6 ] || continue
-        rest="${base#hugmesh-}"
+        stamp="${base##*-}"
+        [[ "${stamp}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || continue
+        rest="${base#*-}"          # drop <brand>, whatever it is
         platform="${rest%%-*}"; rest="${rest#*-}"
         arch="${rest%%-*}";     rest="${rest#*-}"
         # rest is now "<role>-<env>-<stamp>"; strip the two trailing fields.
@@ -1814,7 +1830,6 @@ discover_rows() {
         # artifact — but the ROW must carry one spelling, the same one the Python
         # twin produces.
         role="$(hugmesh_role_canonicalize "${role}" || printf '%s' "${role}")"
-        stamp="${base##*-}"
         # Emit the sort key first, strip it after collapsing. Field 2 is
         # "1" for a decompressed .img so it outranks its own .img.xz.
         case "${f}" in *.xz) prefer=0 ;; *) prefer=1 ;; esac

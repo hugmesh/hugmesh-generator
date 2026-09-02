@@ -30,6 +30,66 @@ _REAL_NAMES = [
     "hugmesh-x86-amd64-omnibus-test-20260807T213853Z.img.xz",
 ]
 
+#: The REAL artifact names from out/sessions/20260830-185641-8e88a6 — the operator's
+#: 2026-08-30 three-image Pi mesh, built with ``--brand sdhm``. Every one of these
+#: parsed as NOTHING while the parser required a literal ``hugmesh-`` prefix, so the
+#: whole finished session read "0 images" and the Studio's emulation picker was empty
+#: ("mesh emulation screen dropdown can't seem to use the 3 pi images session that
+#: completed successfully"). They are spelled out verbatim rather than generated:
+#: the defect was in the FIRST field of a real filename, and a generated name would
+#: have been generated from the same wrong assumption.
+_BRANDED_PI_NAMES = [
+    "sdhm-rpi5-arm64-pki-test-20260831T015954Z.img.xz",
+    "sdhm-rpi5-arm64-backend-test-20260831T025801Z.img.xz",
+    "sdhm-rpi5-arm64-frontend-test-20260831T033915Z.img.xz",
+]
+
+#: The per-image build logs that session holds (core/build_sessions.image_log_name
+#: over the manifest ids), and its manifest brand. ``expected_image_count`` reads
+#: the logs, so a fixture without them cannot show "3 of 3".
+_BRANDED_PI_LOGS = ["build-pki.rpi5.log", "build-be.rpi5.log", "build-fe.rpi5.log"]
+_BRANDED_PI_MANIFEST = {
+    "format": 2, "brand": "sdhm", "brand_title": "Snapdragon Hugmesh", "org": "sdhm",
+    "cluster_domain": "snapdragon.systems", "superdomain": "snapdragon.local",
+    "domains": [], "users": [],
+    "images": [
+        {"id": "pki.rpi5", "role": "pki", "platform": "rpi5", "board": "rpi5",
+         "flavor": "", "encrypt_root": True},
+        # The file on disk spells these two ids' role field with the ALIASES
+        # ("be" / "fe"). They are written canonically here because
+        # tests/scripts/test-role-key-spelling.sh bans emitting an alias as a
+        # `"role":` JSON value anywhere in the tree, and nothing in qemu_tests
+        # reads this field — expected_image_count counts the `images` list (and
+        # prefers the per-image LOGS over it entirely). The IDS keep their real
+        # spelling, because those ARE what build_sessions.image_log_name joins on.
+        {"id": "be.rpi5", "role": "backend", "platform": "rpi5", "board": "rpi5",
+         "flavor": "", "encrypt_root": True},
+        {"id": "fe.rpi5", "role": "frontend", "platform": "rpi5", "board": "rpi5",
+         "flavor": "", "encrypt_root": True},
+    ],
+}
+
+
+def _branded_pi_session(root, name="20260830-185641-8e88a6"):
+    """A byte-for-name copy of the operator's finished sdhm Pi session.
+
+    Mirrors what is actually in the dir: the three ``.img.xz`` images, their
+    non-image siblings (``.iso`` / ``.stage4.tar.xz`` / ``.fs.tar.xz``, which must
+    NOT become rows), the three per-image build logs, the shared build.log, and the
+    format-2 manifest whose ``brand`` is ``sdhm``.
+    """
+    sess = root / "out" / "sessions" / name
+    sess.mkdir(parents=True)
+    for img in _BRANDED_PI_NAMES:
+        stem = img[: -len(".img.xz")]
+        _write(str(sess), img, stem + ".iso", stem + ".stage4.tar.xz",
+               stem + ".fs.tar.xz")
+    for log in _BRANDED_PI_LOGS:
+        (sess / log).write_text("=== Post-install ===\n")
+    (sess / "build.log").write_text("brand=sdhm\n")
+    (sess / qt.MESH_MANIFEST_NAME).write_text(json.dumps(_BRANDED_PI_MANIFEST))
+    return sess
+
 
 def test_parse_artifact_name_real_names():
     assert qt.parse_artifact_name(
@@ -52,6 +112,48 @@ def test_parse_artifact_name_keeps_hyphenated_roles():
             "x86", "amd64", "standalone-unaffiliated", "test")
 
 
+@pytest.mark.parametrize("name,parsed", [
+    ("sdhm-rpi5-arm64-pki-test-20260831T015954Z.img.xz", ("rpi5", "arm64", "pki", "test")),
+    ("sdhm-rpi5-arm64-backend-test-20260831T025801Z.img.xz",
+     ("rpi5", "arm64", "backend", "test")),
+    ("sdhm-rpi5-arm64-frontend-test-20260831T033915Z.img.xz",
+     ("rpi5", "arm64", "frontend", "test")),
+    # an unaffiliated build forces BRAND=gentoo (build-x86-host-stage4.sh), and its
+    # hyphenated role must still survive the both-ends parse
+    ("gentoo-x86-amd64-standalone-unaffiliated-test-20260901T120000Z.img",
+     ("x86", "amd64", "standalone-unaffiliated", "test")),
+    # any other slug --brand accepts; the ROLE is still canonicalized on the way
+    # out (edge_ai -> edge-ai), which is the one transform this function applies
+    ("acme-jetson-arm64-edge_ai-prod-20260719T000000Z.img",
+     ("jetson", "arm64", "edge-ai", "prod")),
+])
+def test_parse_artifact_name_reads_any_brand(name, parsed):
+    """The FIRST field is ${BRAND}, not the literal "hugmesh".
+
+    The builders name artifacts ``${BRAND}-<platform>-<arch>-<role>-<env>-<stamp>``
+    (build-rpi5-stage4.sh IMG_PATH, build-x86-host-stage4.sh IMG_PATH) and BRAND is
+    whatever ``--brand`` the build ran under — "hugmesh" only by DEFAULT. Requiring
+    the default here meant the operator's finished 3-image sdhm Pi mesh parsed as
+    zero rows and its session vanished from the emulation picker entirely.
+
+    This is the assertion that fails on the unfixed parser; everything else in this
+    file passed throughout, because every other fixture was named for the default
+    brand.
+    """
+    assert qt.parse_artifact_name(name) == parsed
+
+
+@pytest.mark.parametrize("name,brand", [
+    ("sdhm-rpi5-arm64-pki-test-20260831T015954Z.img.xz", "sdhm"),
+    ("hugmesh-x86-amd64-be-test-20260807T172418Z.img", "hugmesh"),
+    ("gentoo-x86-amd64-standalone-test-20260901T120000Z.img", "gentoo"),
+    ("some-third-party.img", ""),
+])
+def test_artifact_brand_reads_the_brand_field(name, brand):
+    """The brand is READ (a row can say where it came from) and never MATCHED on."""
+    assert qt.artifact_brand(name) == brand
+
+
 @pytest.mark.parametrize("name", [
     "hugmesh-rpi5-arm64-pki-test-20260807T153808Z.stage4.tar.xz",  # not a disk
     "hugmesh-rpi5-arm64-pki-test-20260807T153808Z.iso",            # not a disk
@@ -59,9 +161,32 @@ def test_parse_artifact_name_keeps_hyphenated_roles():
     "hugmesh-rpi5-arm64-pki-test-initramfs.img",                   # initramfs blob
     "some-third-party.img",                                        # not ours
     "hugmesh-too-short.img",                                       # missing fields
+    # WHAT REPLACED THE BRAND PREFIX AS THE "not ours" RULE. With the brand opaque,
+    # SHAPE is the only thing left that can refuse a foreign file, so the trailing
+    # BUILD_TS stamp has to do that work: these have six-plus fields and would
+    # otherwise become bootable rows in a session dir.
+    "a-very-long-user-named-backup-file.img",
+    "sdhm-rpi5-arm64-pki-test-notastamp.img",
+    "sdhm-rpi5-arm64-pki-test-20260831T0159Z.img",                 # truncated stamp
 ])
 def test_parse_artifact_name_rejects_non_rows(name):
     assert qt.parse_artifact_name(name) is None
+
+
+def test_discover_rows_skips_zero_byte_images(tmp_path):
+    """A 0-byte .img is a KILLED build, not a device.
+
+    ``IMG_PATH`` is created before the builder partitions it, so a run killed in
+    that window leaves an empty file behind — out/sessions/20260830-173335-d51b24
+    holds exactly that beside a finished .stage4.tar.xz. Counting it would boot a
+    guest off nothing AND make an aborted 1-of-2 build read as complete, which is
+    the same lie ``is_partial`` exists to prevent. tests/qemu/run-qemu-docker.sh
+    applies the identical rule (``[ -s ]``).
+    """
+    (tmp_path / "sdhm-rpi5-arm64-pki-test-20260831T003614Z.img").write_bytes(b"")
+    _write(str(tmp_path), "sdhm-rpi5-arm64-backend-test-20260831T025801Z.img")
+    rows = qt.discover_rows(str(tmp_path))
+    assert [r.label for r in rows] == ["rpi5/backend"]
 
 
 def test_platform_rank_orders_pi_first_then_arm_then_x86():
@@ -279,6 +404,78 @@ def test_default_session_is_the_newest_complete_one(tmp_path):
     assert qt.default_session(str(tmp_path / "nowhere")) is None
 
 
+def test_the_operators_branded_pi_session_lists_complete_and_becomes_the_default(tmp_path):
+    """THE REPORTED DEFECT, at session level: "mesh emulation screen dropdown can't
+    seem to use the 3 pi images session that completed successfully".
+
+    out/sessions/20260830-185641-8e88a6 is a FINISHED three-image Pi mesh — three
+    .img.xz, three per-image build logs that all reach the post-install banner, a
+    format-2 manifest listing pki/be/fe — and the picker showed nothing at all,
+    with "No build session under out/sessions/ holds a bootable image yet".
+
+    Its one distinguishing property is that it was built ``--brand sdhm``, so every
+    artifact is named ``sdhm-…`` instead of ``hugmesh-…``. The parser required the
+    default brand, so ``discover_rows`` returned [], ``has_images`` was False, and
+    ``discover_sessions(only_with_images=True)`` — what the picker is filled from —
+    dropped the session before the UI ever saw it.
+
+    Asserted end to end here because the failure was invisible one layer at a time:
+    the images existed, the logs said the build finished, and the manifest was
+    valid; only the JOIN of "name -> row -> session" was empty.
+    """
+    sess = _branded_pi_session(tmp_path)
+
+    rows = qt.discover_rows(str(sess))
+    assert [r.label for r in rows] == ["rpi5/backend", "rpi5/frontend", "rpi5/pki"]
+    # the .iso / .stage4.tar.xz / .fs.tar.xz siblings are not bootable disks
+    assert [os.path.basename(r.image) for r in rows] == [
+        "sdhm-rpi5-arm64-backend-test-20260831T025801Z.img.xz",
+        "sdhm-rpi5-arm64-frontend-test-20260831T033915Z.img.xz",
+        "sdhm-rpi5-arm64-pki-test-20260831T015954Z.img.xz",
+    ]
+    assert {r.brand for r in rows} == {"sdhm"}
+
+    session, = qt.discover_sessions(str(tmp_path))
+    assert session.name == "20260830-185641-8e88a6"
+    assert session.expected_images == 3 and len(session.rows) == 3
+    # COMPLETE, not "PARTIAL — 0 of 3": the picker used to badge this finished build
+    # as an aborted one whenever it was asked to list image-less sessions at all.
+    assert not session.is_partial
+    assert session.completeness_badge() == ""
+    assert "3 image(s): rpi5 (backend, frontend, pki)" in session.summary()
+    assert qt.default_session(str(tmp_path)).name == session.name
+
+
+def test_a_branded_session_does_not_lose_the_partial_badge(tmp_path):
+    """Reading the brand must not also make every branded session read "complete".
+
+    The aborted sibling on the same box, out/sessions/20260830-173335-d51b24, is
+    two per-image logs, a finished .stage4.tar.xz and a ZERO-BYTE .img from the run
+    that was killed. It has to stay 0-of-2 and stay out of the default selection —
+    the newest session being an abort is the trap ``default_session`` exists for,
+    and it would be reintroduced by counting the empty image as a row.
+    """
+    _branded_pi_session(tmp_path)
+    os.utime(tmp_path / "out" / "sessions" / "20260830-185641-8e88a6",
+             (1_000_000_000, 1_000_000_000))
+
+    abort = tmp_path / "out" / "sessions" / "20260830-173335-d51b24"
+    abort.mkdir(parents=True)
+    (abort / "sdhm-rpi5-arm64-pki-test-20260831T003614Z.img").write_bytes(b"")
+    _write(str(abort), "sdhm-rpi5-arm64-pki-test-20260831T003614Z.stage4.tar.xz")
+    for log in ("build-pki.rpi5.log", "build-be.rpi5.log"):
+        (abort / log).write_text("…")
+    os.utime(abort, (2_000_000_000, 2_000_000_000))
+
+    by_name = {s.name: s for s in
+               qt.discover_sessions(str(tmp_path), only_with_images=False)}
+    assert by_name["20260830-173335-d51b24"].completeness_badge() == \
+        "PARTIAL — 0 of 2 image(s)"
+    # the newest session is the abort; the default must still be the finished one
+    assert qt.newest_session(str(tmp_path)).name == "20260830-185641-8e88a6"
+    assert qt.default_session(str(tmp_path)).name == "20260830-185641-8e88a6"
+
+
 def test_manifest_and_log_spellings_match_their_authors():
     """qemu_tests spells the manifest/log names locally to stay import-light; the
     OWNING modules are worklist_driver (manifest) and build_sessions (logs). Drift
@@ -484,6 +681,52 @@ def test_shell_and_python_agree_on_which_build_wins(tmp_path):
         ("rpi5/pki", "hugmesh-rpi5-arm64-pki-test-20260814T160000Z.img"),
         ("x86/backend", "hugmesh-x86-amd64-be-test-20260814T112817Z.img"),
     }
+    assert _py_rows(tmp_path) == expected
+    assert _shell_rows(tmp_path) == expected
+
+
+@_needs_runner
+def test_shell_and_python_agree_on_branded_artifacts(tmp_path):
+    """Parity across BRANDS — the half of the contract the fix had to keep.
+
+    Both sides carried the same ``hugmesh-`` literal, so both were wrong together
+    and this cross-check stayed green on a defect that hid a whole session. It can
+    only see the drift if the sample names include a brand that is not the default,
+    so the operator's real sdhm names are used, plus a ``gentoo-`` unaffiliated
+    build and an ``acme-`` third slug.
+
+    The two REJECTIONS are in the sample on purpose: the brand check is gone, so
+    the field-count and stamp-shape rules are all that keep a foreign .img out, and
+    bash and Python have to refuse the same ones.
+    """
+    _write(str(tmp_path),
+           *_BRANDED_PI_NAMES,
+           "gentoo-x86-amd64-standalone-unaffiliated-test-20260901T120000Z.img",
+           "acme-jetson-arm64-edge_ai-prod-20260719T000000Z.img",
+           "a-very-long-user-named-backup-file.img",
+           "sdhm-rpi5-arm64-pki-test-notastamp.img")
+
+    expected = {
+        ("rpi5/backend", "sdhm-rpi5-arm64-backend-test-20260831T025801Z.img.xz"),
+        ("rpi5/frontend", "sdhm-rpi5-arm64-frontend-test-20260831T033915Z.img.xz"),
+        ("rpi5/pki", "sdhm-rpi5-arm64-pki-test-20260831T015954Z.img.xz"),
+        ("jetson/edge-ai", "acme-jetson-arm64-edge_ai-prod-20260719T000000Z.img"),
+        ("x86/standalone-unaffiliated",
+         "gentoo-x86-amd64-standalone-unaffiliated-test-20260901T120000Z.img"),
+    }
+    assert _py_rows(tmp_path) == expected
+    assert _shell_rows(tmp_path) == expected
+
+
+@_needs_runner
+def test_shell_and_python_agree_that_a_zero_byte_image_is_not_a_row(tmp_path):
+    """Both twins skip the builder's pre-partition placeholder, or the two
+    enumerations disagree exactly on an aborted session — the one place a wrong
+    answer is most expensive."""
+    (tmp_path / "sdhm-rpi5-arm64-pki-test-20260831T003614Z.img").write_bytes(b"")
+    _write(str(tmp_path), "sdhm-rpi5-arm64-backend-test-20260831T025801Z.img")
+    expected = {("rpi5/backend",
+                 "sdhm-rpi5-arm64-backend-test-20260831T025801Z.img")}
     assert _py_rows(tmp_path) == expected
     assert _shell_rows(tmp_path) == expected
 

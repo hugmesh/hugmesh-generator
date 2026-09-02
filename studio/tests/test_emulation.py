@@ -45,7 +45,7 @@ def session(tmp_path):
     for name in ("hugmesh-rpi5-arm64-pki-test-20260819T095951Z.img.xz",
                  "hugmesh-x86-amd64-be-test-20260819T101010Z.img",
                  "hugmesh-x86-amd64-fe-test-20260819T101011Z.img"):
-        (sess / name).write_bytes(b"")
+        (sess / name).write_bytes(b"\0")  # non-empty: a 0-byte .img is a killed build, not a row
     sessions = qt.discover_sessions(str(gen))
     assert len(sessions) == 1 and len(sessions[0].rows) == 3
     return str(gen), sessions[0]
@@ -625,8 +625,12 @@ def test_playwright_refuses_platforms_that_have_no_launcher(session):
     gen, _sess = session
     jet = os.path.join(gen, "out", "sessions", "20260819-101010-jet000")
     os.makedirs(jet)
-    open(os.path.join(jet, "hugmesh-jetson-arm64-edge_ai-test-20260819T101010Z.img"),
-         "wb").close()
+    # non-empty: a 0-byte .img is a killed build, and neither discover_rows twin
+    # counts one as a row
+    with open(os.path.join(jet,
+                           "hugmesh-jetson-arm64-edge_ai-test-20260819T101010Z.img"),
+              "wb") as fh:
+        fh.write(b"\0")
     pl = em.plan(gen, jet, "test", epoch=EPOCH)
     assert pl.labels == ["jetson/edge-ai"]
     assert em.playwright_target_for("jetson") == ""

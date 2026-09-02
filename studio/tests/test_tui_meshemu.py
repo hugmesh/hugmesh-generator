@@ -40,7 +40,7 @@ def gen(tmp_path):
     for name in ("hugmesh-rpi5-arm64-pki-test-20260807T153808Z.img.xz",
                  "hugmesh-x86-amd64-be-test-20260807T172418Z.img",
                  "hugmesh-x86-amd64-fe-test-20260807T172419Z.img"):
-        (sess / name).write_bytes(b"")
+        (sess / name).write_bytes(b"\0")  # non-empty: a 0-byte .img is a killed build, not a row
     return str(gen)
 
 

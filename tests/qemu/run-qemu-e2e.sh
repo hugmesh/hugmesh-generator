@@ -170,8 +170,9 @@ autodetect_pi() {
     # turned a perfectly bootable work dir into "pi kernel+stage4 not found".
     # The stage4 is only the LAST resort signal that the tree at least built
     # this role, kept for work dirs that hold no golden image yet.
-    if compgen -G "${WORK_DIR}/hugmesh-rpi5-*-${ROLE}-*.img*" >/dev/null 2>&1 \
-       || compgen -G "${WORK_DIR}/hugmesh-rpi5-*.img*" >/dev/null 2>&1; then
+    # The leading `*-` is the ${BRAND} field; `-rpi5-` stays the literal anchor.
+    if compgen -G "${WORK_DIR}/"*"-rpi5-*-${ROLE}-*.img*" >/dev/null 2>&1 \
+       || compgen -G "${WORK_DIR}/"*"-rpi5-*.img*" >/dev/null 2>&1; then
         return 0
     fi
     [ -n "${STAGE4}" ]
