@@ -511,8 +511,12 @@ def test_build_rpi5_artifacts(wiz):
     for w in (build.build_img, build.build_iso, build.sd_only, build.build_tar,
               build.skip_iso):
         assert w.isVisible(), w
-    for w in (build.live_iso, build.installer_iso, build.image_only):
+    for w in (build.live_iso, build.image_only):
         assert not w.isVisible(), w
+    # issue #233: the x86 Installer ISO row is GREYED with a reason on a Pi build,
+    # never hidden — the enable-logic tests live in test_pages_build_iso_gating.py.
+    assert build.installer_iso.isVisible()
+    assert not build.installer_iso.isEnabled()
     build.build_iso.setChecked(True)     # bootable installer ISO for an UNencrypted image
     build.sd_only.setChecked(True)
     build.build_tar.setCheckState(Qt.CheckState.Checked)
