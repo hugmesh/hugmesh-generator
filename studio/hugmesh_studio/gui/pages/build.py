@@ -328,21 +328,37 @@ class BuildPage(QtWidgets.QWizardPage):
         ex = QtWidgets.QVBoxLayout(self.exec_box)
         self.backend = QtWidgets.QComboBox()
         self.backend.addItems(["auto", "native", "docker"])
+        self.backend.setToolTip(
+            "How the builder script runs. Auto picks whichever this host can do "
+            "(native if it can build as root; Docker otherwise). Native runs the "
+            "script directly on this host — fastest, but needs root and Gentoo "
+            "build tools. Docker runs it inside the builder image — works on any "
+            "host with the Docker daemon.")
         ex.addWidget(_row("Backend", self.backend))
         # --env: which stack environment the image bakes (every builder parses it)
         self.env = QtWidgets.QComboBox()
         self.env.addItems(list(ENV_CHOICES))
+        self.env.setToolTip(
+            "Stack environment baked into the image (--env). 'prod' turns on "
+            "production-only defaults — e.g. the anubis anti-scraper gate ships "
+            "on regardless of the Services table. 'test' is the LAN/dev posture.")
         ex.addWidget(_row("Environment (--env)", self.env))
         self.outdir = QtWidgets.QLineEdit()
-        obtn = _file_picker(self, self.outdir, "Output dir", directory=True)
+        self.outdir.setToolTip(
+            "Where this build's images and logs land on disk — passed to the "
+            "builder as its work directory. Empty = <generator>/out.")
+        obtn = _file_picker(self, self.outdir, "Output Directory", directory=True)
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.outdir, 1); h.addWidget(obtn)
-        ex.addWidget(_row("Output dir", w))
+        ex.addWidget(_row("Output Directory", w))
         self.jobs = QtWidgets.QSpinBox(); self.jobs.setRange(1, 256); self.jobs.setValue(8)
-        ex.addWidget(_row("Parallel jobs", self.jobs))
+        self.jobs.setToolTip(
+            "Parallel build jobs passed to the builder (-j). Higher uses more "
+            "CPU and RAM; lower it on a memory-tight host.")
+        ex.addWidget(_row("Parallel Jobs", self.jobs))
         # Expanded and never auto-folded: backend/outdir are the first things preflight
         # problems point at, so they must be on screen when the page loads.
-        self.exec_section = collapsible("Build execution", self.exec_box)
+        self.exec_section = collapsible("Build Execution", self.exec_box)
         lay.addWidget(self.exec_section)
 
         # ── mesh worklist summary (design 3.12) — one row per image with per-entry
@@ -361,8 +377,12 @@ class BuildPage(QtWidgets.QWizardPage):
             "Generate node key-zips after each successful node build (mesh)")
         self.gen_keys.setChecked(True)
         wg.addWidget(self.gen_keys)
-        self.worklist_section = collapsible("Mesh worklist — one image per row",
-                                            self.worklist_group)
+        self.worklist_section = collapsible("Mesh Worklist", self.worklist_group)
+        # The header used to carry "— one image per row" as part of its own text;
+        # that belongs on the toggle's tooltip, not baked into the title itself.
+        self.worklist_section.toggle.setToolTip(
+            "One row per image this build produces, with per-image Packages and "
+            "Preview controls.")
         lay.addWidget(self.worklist_section)
 
         # ── section: Image options — WHAT the image contains / how it is stamped

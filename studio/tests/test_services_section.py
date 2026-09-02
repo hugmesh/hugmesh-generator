@@ -459,12 +459,14 @@ def test_the_privacy_group_carries_every_privacy_service():
     Both are network-level, which is how they came to sit under "Network & access" — but
     this table groups by WHAT A SERVICE IS FOR, and what these two are for is privacy:
     `tor` is a privacy TRANSPORT (SERVICE_DESCRIPTIONS: reachable "without exposing a
-    public IP"), `anubis` is the "Anti-scraper proof-of-work gate" the group title's
-    second half names outright. Pinned because a grouping nobody asserts is a grouping
-    that drifts back on the next edit — the axis is the whole point of the constant.
+    public IP"), `anubis` is the "Anti-scraper proof-of-work gate" — renamed to "Privacy
+    services" (issue #226) rather than naming anubis outright, since it is one of three
+    rows, not the other two's exception. Pinned because a grouping nobody asserts is a
+    grouping that drifts back on the next edit — the axis is the whole point of the
+    constant.
     """
     groups = dict(SERVICE_GROUPS)
-    assert set(groups["Privacy & anti-scraping"]) == {"tor", "anubis", "media-poisoner"}
+    assert set(groups["Privacy services"]) == {"tor", "anubis", "media-poisoner"}
     # The descriptions have to keep BACKING the grouping. If either line stops being
     # about privacy, this group is the wrong home and the test should say so here
     # rather than let a row drift away from its own caption.

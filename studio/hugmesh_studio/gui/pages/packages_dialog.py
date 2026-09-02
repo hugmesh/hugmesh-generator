@@ -93,7 +93,9 @@ class PackagesDialog(QtWidgets.QDialog):
 
         # free-atom entry (tier-3 add) — validated against the same allowlist as every surface.
         self.free_atom_edit = QtWidgets.QLineEdit()
-        self.free_atom_edit.setPlaceholderText("add extra atoms, space-separated (e.g. app-editors/neovim)")
+        self.free_atom_edit.setPlaceholderText(
+            "Gentoo atom format, space-separated (e.g. app-editors/neovim) — "
+            "look up names at packages.gentoo.org")
         self.add_free_btn = QtWidgets.QPushButton("Add")
         self.add_free_btn.clicked.connect(self._add_free)
         self.free_atom_edit.returnPressed.connect(self._add_free)

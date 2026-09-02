@@ -396,10 +396,16 @@ class WorklistScreen:
     the allow-set's role rows are offered — and because collection reads the same
     restricted row list, a disallowed row can never be collected either (the
     GUI enforces this in three places because its search filter is
-    presentation-only; the TUI's single row source needs exactly one)."""
+    presentation-only; the TUI's single row source needs exactly one).
+
+    ``title`` mirrors gui/pages/worklist.py's ``WorklistPage.setTitle`` verbatim —
+    the two are the same step (role x platform picker) on different front ends,
+    and the GUI title moved on ("Mesh worklist" -> "Choose the node images to
+    build" -> "Choose the images to build") without this one following, which is
+    the drift issue #234's TUI-parity item flagged."""
 
     slug = "worklist"
-    title = "Mesh worklist"
+    title = "Choose the images to build"
 
     def __init__(self):
         self._rows: list[tuple[str, str, str]] = []   # (role, platform, label)

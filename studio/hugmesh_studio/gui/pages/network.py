@@ -440,7 +440,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # Title/subtitle are set path-aware in initializePage (a standalone desktop has
         # no mesh/tailnet, so this page IS its network-identity + egress + security step,
         # while cloud/mesh use it for the domain, superdomain and cluster services).
-        self.setTitle("Network, identity & egress")
+        self.setTitle("Network, Identity & Egress")
         lay = scrollable(self)
 
         # There is no tri-state legend any more, and its absence is the fix rather than an
@@ -468,7 +468,12 @@ class NetworkPage(QtWidgets.QWizardPage):
         # presets; sourced by every builder before its CLI flags (CLI wins).
         self.brand_profile = QtWidgets.QLineEdit()
         self.brand_profile.setPlaceholderText("brands/<brand>.conf  (empty = no preset profile)")
-        bbtn = _file_picker(self, self.brand_profile, "Brand profile", "Brand profile (*.conf)")
+        self.brand_profile.setToolTip(
+            "A brand config file (-C/--config), sourced before this page's own "
+            "fields. Supplies preset defaults for the Headscale URL, release "
+            "state, admin emails, mail settings and which services to leave out "
+            "— anything set on this page overrides it.")
+        bbtn = _file_picker(self, self.brand_profile, "Brand Profile", "Brand profile (*.conf)")
         bw = QtWidgets.QWidget(); bh = QtWidgets.QHBoxLayout(bw); bh.setContentsMargins(0, 0, 0, 0)
         bh.addWidget(self.brand_profile, 1); bh.addWidget(bbtn)
         # EVERY row below is captured on the page, the way self.superdomain_row and
@@ -477,35 +482,59 @@ class NetworkPage(QtWidgets.QWizardPage):
         # QLineEdit alone leaves "Public apex domain" floating over nothing. The two gates
         # that consume these are BRAND IDENTITY (defect 3) and CLUSTER IDENTITY
         # (defect 1) — two independent axes, hence two tuples rather than one.
-        self.brand_profile_row = _row("Brand profile (-C)", bw)
+        self.brand_profile_row = _row("Brand Profile (-C)", bw)
         il.addWidget(self.brand_profile_row)
         self.brand = QtWidgets.QLineEdit()
+        self.brand.setToolTip(
+            "Short lowercase brand slug baked into the image (--brand). Feeds "
+            "artifact filenames and the default internal domain (<brand>.internal) "
+            "— keep it a short, DNS-safe token.")
         self.brand_title = QtWidgets.QLineEdit()
+        self.brand_title.setToolTip(
+            "The product name shown to whoever uses the image: installer screens, "
+            "the bootloader menu entry and Calamares branding (--brand-title).")
         self.org = QtWidgets.QLineEdit()          # --org (G7): emitted on every platform
+        self.org.setToolTip(
+            "Kubernetes label-key namespace and CRD API-group token baked into the "
+            "image (--org) — e.g. '<org>.tld/…' labels and 'platform.<org>.tld' API "
+            "groups. Leave at the default unless rebranding the whole platform.")
         self.domain = QtWidgets.QLineEdit()
-        self.brand_row = _row("Brand id", self.brand)
-        self.brand_title_row = _row("Brand title", self.brand_title)
+        self.brand_row = _row("Brand ID", self.brand)
+        self.brand_title_row = _row("Brand Title", self.brand_title)
         self.org_row = _row("Org", self.org)
         il.addWidget(self.brand_row)
         il.addWidget(self.brand_title_row)
         il.addWidget(self.org_row)
         # --cluster-domain is the PUBLIC apex (the go-live target), distinct from the
         # permanently-internal orchestration superdomain in the mesh control plane below.
-        self.domain_row = _row("Public apex domain", self.domain)
+        self.domain.setToolTip(
+            "The public go-live domain this image serves (--cluster-domain) — the "
+            "externally reachable apex. Never the internal, mesh-only Tailscale "
+            "root domain.")
+        self.domain_row = _row("Public Apex Domain", self.domain)
         il.addWidget(self.domain_row)
         # games domain (G6, x86+rpi5): the games.<domain> host + games OIDC issuer.
         self.games_domain = QtWidgets.QLineEdit()
         self.games_domain.setPlaceholderText("games.<cluster domain>  (empty = builder default)")
-        self.games_domain_row = _row("Games domain", self.games_domain)
+        self.games_domain.setToolTip(
+            "Hostname for the Game Studio app store and its OIDC issuer "
+            "(--games-domain). Empty = games.<public apex domain>.")
+        self.games_domain_row = _row("Games Domain", self.games_domain)
         il.addWidget(self.games_domain_row)
         # release state (G4, x86+rpi5): the baked Layer-3 nftables / go-live posture.
         self.release_state = QtWidgets.QComboBox()
         self.release_state.addItems(("default", *RELEASE_STATE_CHOICES))
-        self.release_state_row = _row("Release state (--release-state)", self.release_state)
+        self.release_state.setToolTip(
+            "Cluster ingress + Layer-3 nftables posture baked into the image "
+            "(--release-state). Default leaves the flag unset, which bakes the "
+            "same posture as choosing Internal (LAN/tailnet-only; no public "
+            "ingress) — every builder's own starting point. Choose Public only "
+            "for an image meant to go live on the open internet.")
+        self.release_state_row = _row("Release State (--release-state)", self.release_state)
         il.addWidget(self.release_state_row)
         # Identity carries the REQUIRED fields (brand id, the public apex domain), so it
         # is never collapsed by default — default expansion must not hide a must-set field.
-        self.identity_section = collapsible("Identity & domain", self.identity_box)
+        self.identity_section = collapsible("Identity & Domain", self.identity_box)
         lay.addWidget(self.identity_section)
         # Shown INSTEAD of the rows this page gates away, and deliberately a PAGE-LEVEL
         # SIBLING of the section rather than a child of identity_box — exactly the
@@ -524,7 +553,13 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.tailnet_box = QtWidgets.QGroupBox("")
         tl = QtWidgets.QVBoxLayout(self.tailnet_box)
         self.tailscale = QtWidgets.QCheckBox("Join the tailnet (tailscale/headscale)")
+        self.tailscale.setToolTip(
+            "Enrolls this image in the mesh's tailnet (--with-tailscale), so it "
+            "can reach other mesh nodes over Headscale.")
         self.sso = QtWidgets.QCheckBox("Enable SSO login (Casdoor)")
+        self.sso.setToolTip(
+            "Single sign-on against the mesh's Casdoor instance (--with-sso), "
+            "instead of local accounts only.")
         tl.addWidget(self.tailscale)
         tl.addWidget(self.sso)
         # Two checkboxes and a real join decision — expanded.
@@ -544,8 +579,8 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.mesh_box = QtWidgets.QGroupBox("")
         cp = QtWidgets.QVBoxLayout(self.mesh_box)
         cp.addWidget(_hint(
-            "The internal orchestration superdomain every mesh node joins "
-            "(headscale/tailnet control plane). Permanently internal; never the "
+            "The internal Tailscale root domain every mesh node joins (Headscale's "
+            "tailnet control plane). Permanently internal — never the public "
             "go-live apex above."))
         # Headscale URL (G2) — the brand mesh control-server URL baked to
         # /etc/hugmesh/headscale-url. NOT a builder flag on any platform
@@ -565,8 +600,8 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.tailscale_version = QtWidgets.QLineEdit()
         self.tailscale_version.setPlaceholderText("Pin a Tailscale version (leave blank for the builder default)")
         self.tailscale_version.setToolTip("Pins the Tailscale agent version — the --tailscale-version builder flag.")
-        cp.addWidget(_row("Headscale version", self.headscale_version))
-        cp.addWidget(_row("Tailscale version", self.tailscale_version))
+        cp.addWidget(_row("Headscale Version", self.headscale_version))
+        cp.addWidget(_row("Tailscale Version", self.tailscale_version))
         self.skip_tailscale = QtWidgets.QCheckBox(
             "Skip the tailscale agent (--skip-tailscale: headscale-only posture — "
             "distinct from not joining the mesh)")
@@ -578,10 +613,10 @@ class NetworkPage(QtWidgets.QWizardPage):
         # read-only derived display in cloud (so the Users-page superadmin lock is explicable).
         self.superdomain = QtWidgets.QLineEdit()
         self.superdomain.setToolTip(
-            "The internal orchestration domain all mesh nodes join (empty = derived "
-            "<brand>.internal). Baked into mesh images via --superdomain + the mesh "
-            "manifest + the KEYS channel — never the go-live apex.")
-        self.superdomain_row = _row("Orchestration superdomain", self.superdomain)
+            "The internal Tailscale root domain all mesh nodes join (empty = "
+            "derived <brand>.internal). Baked into mesh images via --superdomain + "
+            "the mesh manifest + the KEYS channel — never the go-live apex.")
+        self.superdomain_row = _row("Tailscale Root Domain", self.superdomain)
         cp.addWidget(self.superdomain_row)
         # ASK 8's "this mesh also hosts other domains" CHECKBOX used to sit here, under
         # the superdomain row. ASK 19 promoted that decision to its own choice-card
@@ -594,7 +629,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # that makes the skip safe moved with it to that page's validatePage.
         # Carries the superdomain, which on a MESH build is a field the operator may
         # genuinely need to set — expanded rather than folded away.
-        self.mesh_section = collapsible("Mesh control plane", self.mesh_box)
+        self.mesh_section = collapsible("Headscale / Mesh Networking", self.mesh_box)
         lay.addWidget(self.mesh_section)
 
         # ---- egress VPN ----------------------------------------------------------
@@ -628,9 +663,13 @@ class NetworkPage(QtWidgets.QWizardPage):
         # visited, so the builder's per-role default could never round-trip.
         self.proxy_stack = QtWidgets.QComboBox()
         self.proxy_stack.addItems(["auto", "on", "off"])
-        sl.addWidget(_row("Proxy stack — Squid (cache) + Privoxy (filter), "
+        self.proxy_stack.setToolTip(
+            "Auto lets the builder decide (on for desktop client roles, off "
+            "otherwise); On/Off force the proxy stack regardless of role.")
+        sl.addWidget(_row("Proxy Stack — Squid (cache) + Privoxy (filter), "
                           "wired into Firefox (desktops)", self.proxy_stack))
         self.snort = QtWidgets.QCheckBox("Snort IDS (network intrusion detection)")
+        self.snort.setToolTip(_OFF_TIP)
         # AIDE was the sixth tri-state on this page. It is two-state now like the rest —
         # and unlike tor/character-*/edge-ai-tts its unchecked arm is REAL subtraction
         # (WANT_AIDE is consumed as a plain bool at build-x86-host-stage4.sh:4548 and
@@ -645,11 +684,16 @@ class NetworkPage(QtWidgets.QWizardPage):
         # is the entry point). Tri-state, matching --permit-root-login / the build-menu.
         self.root_login = QtWidgets.QComboBox()
         self.root_login.addItems(["no", "prohibit-password", "yes"])
-        sl.addWidget(_row("Root SSH login", self.root_login))
+        self.root_login.setToolTip(
+            "Root SSH access policy (--permit-root-login). 'no' is the hardened "
+            "default — root is locked out; the non-root KEYS admin is the entry "
+            "point. 'prohibit-password' allows key-only root login; 'yes' also "
+            "allows a root password.")
+        sl.addWidget(_row("Root SSH Login", self.root_login))
         # Every control here ships a sane hardened default (proxy auto / snort off /
         # aide "leave default" / root-login no), so this folds away when it is all
         # default — initializePage re-expands it if anything is overridden or gated.
-        self.security_section = collapsible("Security stack", sec, expanded=False)
+        self.security_section = collapsible("Security Stack", sec, expanded=False)
         lay.addWidget(self.security_section)
         # ── ASK 23: ONE TABLE FOR SERVICES *AND* APPS ─────────────────────────────────
         # Operator, verbatim: "services as a table ... consolidate services AND apps into a
@@ -707,7 +751,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         sv_outer.addWidget(self.services_scope_note)
         self.services_node_scope_note = _hint(_SERVICES_NODE_SCOPE_CAVEAT)
         sv_outer.addWidget(self.services_node_scope_note)
-        self.services_box = QtWidgets.QGroupBox("Services & apps")
+        self.services_box = QtWidgets.QGroupBox("Services & Apps")
         svl = QtWidgets.QVBoxLayout(self.services_box)
         self.services_override_note = _hint(_SERVICES_OVERRIDE_NOTE)
         svl.addWidget(self.services_override_note)
@@ -877,7 +921,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         sv_outer.addWidget(self.services_box)
         # EXPANDED by default and not folded away: this section is the one every operator
         # report was about, and the mesh-wide scope answer is only useful on screen.
-        self.services_section = collapsible("Services & apps", svc_content)
+        self.services_section = collapsible("Services & Apps", svc_content)
         lay.addWidget(self.services_section)
         lay.addStretch(1)
 
@@ -1017,7 +1061,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # page IS its network-identity / egress / security step; cloud/mesh use it for the
         # domain, the orchestration superdomain and the cluster services.
         if c.mode == "standalone":
-            self.setTitle("Network identity, egress & security")
+            self.setTitle("Network Identity, Egress & Security")
             # …and on an unaffiliated image it is not a BRAND identity step either: the
             # brand rows are gated away below (defect 3), so a subtitle promising "Brand
             # identity" would describe a section this visit does not have — the same
@@ -1029,12 +1073,12 @@ class NetworkPage(QtWidgets.QWizardPage):
                  "Brand identity, the optional egress VPN and the host security "
                  "stack for this standalone desktop. No mesh, no tailnet, no SSO."))
         else:
-            self.setTitle("Domain, mesh & services")
+            self.setTitle("Domain, Mesh & Services")
             self.setSubTitle(
                 "The cluster services this mesh runs, the public apex domain "
                 "it serves, and the internal orchestration superdomain every node joins."
                 if c.mode == "mesh" else
-                "The domain this client joins, its tailnet + SSO login, egress "
+                "The domain this client joins, its tailnet + SSO login, egress, "
                 "and the optional services it can reach.")
         self.proxy_stack.setCurrentText(c.proxy_stack if c.proxy_stack in ("auto", "on", "off")
                                         else "auto")
@@ -1458,7 +1502,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # ── DEFECT 5: the ORPHAN SERVICES HEADER ───────────────────────────────────
         # services_scope_note and services_node_scope_note sit in `svc_content`, OUTSIDE
         # services_box, and it is svc_content that the collapsible wraps. Hiding only the
-        # box therefore left an unaffiliated run with the "Services & apps" header and
+        # box therefore left an unaffiliated run with the "Services & Apps" header and
         # two paragraphs of mesh-wide prose ("Chosen ONCE for the whole mesh…", "tor and
         # egress-vpn are node-scoped…") over nothing. Hide the SECTION — the house rule,
         # and the idiom the tailnet and egress sections already use.

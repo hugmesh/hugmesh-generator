@@ -267,12 +267,12 @@ def test_the_edge_ai_role_auto_check_forces_its_row_open(wiz):
 
 def test_section_titles_are_not_eaten_as_mnemonics(wiz):
     """QToolButton is a QAbstractButton, so '&' in its text becomes a MNEMONIC:
-    "Identity & domain" rendered as "Identity _domain". Caught by looking at the page,
+    "Identity & Domain" rendered as "Identity _Domain". Caught by looking at the page,
     not by any assertion — hence this one."""
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
-    assert page.identity_section.title() == "Identity & domain"
+    assert page.identity_section.title() == "Identity & Domain"
     # the displayed text must carry the escaped form, or Qt swallows the ampersand
-    assert page.identity_section.toggle.text() == "Identity && domain"
+    assert page.identity_section.toggle.text() == "Identity && Domain"
 
 
 def test_out_of_scope_egress_section_leaves_no_orphan_header(wiz):
@@ -515,13 +515,13 @@ def test_the_identity_section_header_goes_with_its_last_row(wiz):
     affiliation (core/config.py::_check_unaffiliated_conflicts raises on them), the
     cluster trio because the x86 builder bakes no cluster plane in standalone mode. Every
     row inside identity_box is then hidden, so the section itself must go: otherwise the
-    page keeps a bold "Identity & domain" header that expands to an empty box."""
+    page keeps a bold "Identity & Domain" header that expands to an empty box."""
     page = _net(wiz, mode="standalone", role="standalone-unaffiliated", platform="x86")
     for name in ("brand_profile_row", "brand_row", "brand_title_row", "org_row",
                  "domain_row", "games_domain_row", "release_state_row"):
         assert not getattr(page, name).isVisibleTo(page), f"{name} still on screen"
     assert not page.identity_box.isVisible()
-    assert not page.identity_section.isVisible(), "orphan Identity & domain header"
+    assert not page.identity_section.isVisible(), "orphan Identity & Domain header"
     # …and the note that replaces it is a PAGE-LEVEL sibling, like tailnet_reason, so it
     # survives the section's own hide. A note inside the box would have vanished with it.
     assert page.identity_reason.isVisible(), (

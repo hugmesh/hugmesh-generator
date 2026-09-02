@@ -546,13 +546,16 @@ SERVICE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     # because they are also network-level, which is the implementation detail, not
     # the purpose: `tor` is a privacy TRANSPORT (reach the mesh without exposing a
     # public IP or a DNS name to whoever is watching), and `anubis` is the
-    # anti-scraper gate on the public routes — the group title's second half names
-    # it outright. The AI cloak sits here rather than under "Characters & avatars"
-    # for the same why-not-what reason: it is a protection applied to what a person
-    # UPLOADS, not a thing they create with. What stays in "Network & access" is the
-    # plumbing that carries no privacy claim — where this node's egress goes, and a
-    # console for its workloads.
-    ("Privacy & anti-scraping", ("tor", "anubis", "media-poisoner")),
+    # anti-scraper gate on the public routes — one a prod (--env prod) build ships
+    # ON by default (_opt_anubis_installed's ENV fallback), so it is a protection
+    # the operator gets whether or not they tick it here. Titled "Privacy
+    # services" rather than naming anubis outright because it is one of three,
+    # not the other two's exception. The AI cloak sits here rather than under
+    # "Characters & avatars" for the same why-not-what reason: it is a protection
+    # applied to what a person UPLOADS, not a thing they create with. What stays
+    # in "Network & access" is the plumbing that carries no privacy claim — where
+    # this node's egress goes, and a console for its workloads.
+    ("Privacy services", ("tor", "anubis", "media-poisoner")),
 )
 
 # --person-role client-identity picker (FD-08). The x86 builder honours --person-role/

@@ -100,7 +100,7 @@ class DomainsPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
-        self.setTitle("Domains & their services")
+        self.setTitle("Domains & Their Services")
         self.setSubTitle(
             "Beyond the superadmin apex, define the OTHER domains this mesh "
             "hosts and pick which optional services each one provides in the table. "
@@ -133,6 +133,12 @@ class DomainsPage(QtWidgets.QWizardPage):
         self.table = QtWidgets.QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
             ["Domain", "Title", "Optional services", "Applies to", "Sign-in"])
+        title_hdr = self.table.horizontalHeaderItem(_COL_TITLE)
+        title_hdr.setToolTip(
+            "This domain's display name. Written to the mesh manifest "
+            "(domains[].title) for cluster provisioning to read when it sets up "
+            "the domain — not emitted anywhere on a cloud build. Empty = the "
+            "domain name itself.")
         hdr = self.table.horizontalHeaderItem(_COL_APPLIES)
         hdr.setToolTip("Which worklist images this domain attaches to (empty = all "
                        "eligible). Node-role images take no --domains — the attachment "
@@ -209,7 +215,7 @@ class DomainsPage(QtWidgets.QWizardPage):
     def initializePage(self):
         c = self.wiz.cfg
         self.header.setText(
-            "Orchestration superdomain: "
+            "Tailscale root domain: "
             f"<b>{c.effective_superdomain()}</b> — joined by all mesh nodes; "
             "not listed below, never attachable.")
         # the applies-to picker is a worklist-of-images concept — meaningful only in
