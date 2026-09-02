@@ -215,7 +215,11 @@ def test_flash_assignment_yields_post_build_plan_not_argv(wiz):
     assert len(plan) == 1
     a = plan[0]
     assert a.target == SDB and a.entry_id == entry_id
-    assert a.role == "host"           # a desktop role maps to the generic host glob
+    # The flasher takes the ROLE ITSELF now. It used to know only five spellings, so
+    # every desktop/standalone role fell back to the generic `host` glob — which,
+    # with no arch anchor, could resolve to the other architecture's image entirely.
+    # `standalone-thick` is exactly the token in this image's artifact name.
+    assert a.role == "standalone-thick"
     assert a.arch == "x86"
     assert wiz.flash_after == (False, None)              # legacy stash stays inert
 
@@ -223,22 +227,22 @@ def test_flash_assignment_yields_post_build_plan_not_argv(wiz):
 def test_two_devices_take_two_different_images_and_flash_sequentially(monkeypatch, wiz):
     pick_mode(wiz, "mesh")
     wl_page = advance_to(wiz, wizard_mod.WorklistPage)
-    for rid in ("omnibus.x86", "be.rpi5"):
+    for rid in ("omnibus.x86", "backend.rpi5"):
         wl_page.row_for_id(rid).setCheckState(0, Qt.CheckState.Checked)
     build = advance_to(wiz, wizard_mod.BuildPage)
     _populate(build.device_table, [SDB, MMC])
     ids = [c[0] for c in build._flash_image_choices()]
-    assert {"omnibus.x86", "be.rpi5"} <= set(ids)
+    assert {"omnibus.x86", "backend.rpi5"} <= set(ids)
     _set_role(build.device_table, 0, dt_mod.ROLE_FLASH)   # sdb -> be.rpi5
     c0 = build.device_table.table.cellWidget(0, 6)
-    c0.setCurrentIndex(c0.findData("be.rpi5"))
+    c0.setCurrentIndex(c0.findData("backend.rpi5"))
     _set_role(build.device_table, 1, dt_mod.ROLE_FLASH)   # mmc -> omnibus.x86
     c1 = build.device_table.table.cellWidget(1, 6)
     c1.setCurrentIndex(c1.findData("omnibus.x86"))
     assert build.validatePage() is True
     plan = wiz.flash_plan
     assert [(a.target.path, a.entry_id, a.role, a.arch) for a in plan] == [
-        ("/dev/sdb", "be.rpi5", "be", "arm64"),
+        ("/dev/sdb", "backend.rpi5", "backend", "arm64"),
         ("/dev/mmcblk0", "omnibus.x86", "omnibus", "x86")]
     # execution: sequential on ProgressPage, each argv a flash-disk.sh call — never dd.
     # Each entry's CONCRETE built image (recorded per entry during the run) rides
@@ -247,7 +251,7 @@ def test_two_devices_take_two_different_images_and_flash_sequentially(monkeypatc
                         lambda: [SDB, MMC])
     page = _progress_page(wiz)
     page._entry_artifacts = {
-        "be.rpi5": "/out/hugmesh-rpi5-arm64-backend-1.img",
+        "backend.rpi5": "/out/hugmesh-rpi5-arm64-backend-1.img",
         "omnibus.x86": "/out/hugmesh-host-amd64-2.img"}
     recorded = []
 
@@ -260,7 +264,7 @@ def test_two_devices_take_two_different_images_and_flash_sequentially(monkeypatc
     for _path, argv in recorded:
         assert any(a.endswith("scripts/flash-disk.sh") for a in argv)
         assert "dd" not in argv
-    assert ("--role", "be") in zip(recorded[0][1], recorded[0][1][1:])
+    assert ("--role", "backend") in zip(recorded[0][1], recorded[0][1][1:])
     assert ("--role", "omnibus") in zip(recorded[1][1], recorded[1][1][1:])
     assert ("--artifact", "/out/hugmesh-rpi5-arm64-backend-1.img") in \
         zip(recorded[0][1], recorded[0][1][1:])
@@ -293,13 +297,13 @@ def test_plan_identity_recheck_is_fresh_per_assignment(monkeypatch, wiz):
     /dev/sdb was being flashed must still be caught when its own turn comes."""
     pick_mode(wiz, "mesh")
     wl_page = advance_to(wiz, wizard_mod.WorklistPage)
-    for rid in ("omnibus.x86", "be.rpi5"):
+    for rid in ("omnibus.x86", "backend.rpi5"):
         wl_page.row_for_id(rid).setCheckState(0, Qt.CheckState.Checked)
     build = advance_to(wiz, wizard_mod.BuildPage)
     _populate(build.device_table, [SDB, MMC])
     _set_role(build.device_table, 0, dt_mod.ROLE_FLASH)
     c0 = build.device_table.table.cellWidget(0, 6)
-    c0.setCurrentIndex(c0.findData("be.rpi5"))
+    c0.setCurrentIndex(c0.findData("backend.rpi5"))
     _set_role(build.device_table, 1, dt_mod.ROLE_FLASH)
     c1 = build.device_table.table.cellWidget(1, 6)
     c1.setCurrentIndex(c1.findData("omnibus.x86"))
@@ -308,7 +312,7 @@ def test_plan_identity_recheck_is_fresh_per_assignment(monkeypatch, wiz):
     monkeypatch.setattr("hugmesh_studio.core.flash_targets.list_targets",
                         lambda: list(attached[0]))
     page = _progress_page(wiz)
-    page._entry_artifacts = {"be.rpi5": "/out/a.img", "omnibus.x86": "/out/b.img"}
+    page._entry_artifacts = {"backend.rpi5": "/out/a.img", "omnibus.x86": "/out/b.img"}
     started = []
 
     def fake_start(target, argv=None):
@@ -461,7 +465,7 @@ def test_slow_scan_never_blocks_the_main_thread(monkeypatch, qapp, wiz):
 
 
 def test_run_records_each_entrys_artifact_by_snapshot_diff(wiz, tmp_path):
-    """Two entries sharing the SAME flash-disk.sh role token (both 'be'/arm64) each
+    """Two entries sharing the SAME flash-disk.sh role token (both 'backend'/arm64) each
     get THEIR OWN artifact recorded — the snapshot diff around each sequential entry
     build is what makes the per-row image pick real (flash-disk.sh's newest-mtime
     role glob would flash the same image to both devices)."""
@@ -469,12 +473,12 @@ def test_run_records_each_entrys_artifact_by_snapshot_diff(wiz, tmp_path):
 
     page = _progress_page(wiz)
     page._reset()
-    page._build_row(0, "be.rpi5", "rpi5")
-    page._build_row(1, "be.jetson", "jetson")
+    page._build_row(0, "backend.rpi5", "rpi5")
+    page._build_row(1, "backend.jetson", "jetson")
 
     def _res(eid):
         return types.SimpleNamespace(entry=types.SimpleNamespace(id=eid), status="ok")
-    page.driver = types.SimpleNamespace(results=[_res("be.rpi5"), _res("be.jetson")])
+    page.driver = types.SimpleNamespace(results=[_res("backend.rpi5"), _res("backend.jetson")])
     wiz.cfg.output_dir = str(tmp_path)
 
     def _write(name):
@@ -487,8 +491,8 @@ def test_run_records_each_entrys_artifact_by_snapshot_diff(wiz, tmp_path):
     _write("hugmesh-jetson-arm64-backend-2.img")
     page._on_entry_done(1, 0)
     assert page._entry_artifacts == {
-        "be.rpi5": os.path.join(str(tmp_path), "hugmesh-rpi5-arm64-backend-1.img"),
-        "be.jetson": os.path.join(str(tmp_path), "hugmesh-jetson-arm64-backend-2.img")}
+        "backend.rpi5": os.path.join(str(tmp_path), "hugmesh-rpi5-arm64-backend-1.img"),
+        "backend.jetson": os.path.join(str(tmp_path), "hugmesh-jetson-arm64-backend-2.img")}
     page.driver = None                          # keep the wiz teardown inert
 
 

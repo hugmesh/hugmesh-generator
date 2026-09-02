@@ -136,12 +136,43 @@ One row per buildable image cell `(platform, role, env, board, flavor,
 desktop)`; `-` marks an axis a platform does not have. **150 cells** today
 (includes 14 JOB-channel-only standalone-posture probe rows — see below):
 
+### The role vocabulary — one spelling, everywhere
+
+A role token means the same thing and is spelled the same way on every platform and
+in every channel. It is declared **once**, in `scripts/_roles-lib.sh`, which every
+builder sources and which `studio/hugmesh_studio/core/roles.py` reads:
+
+| Canonical | What it is | Platforms |
+|---|---|---|
+| `pki` | cluster CA / control plane | x86, rpi5 |
+| `backend` | backend k8s worker | x86, rpi5 |
+| `frontend` | frontend k8s worker | x86, rpi5 |
+| `backend-gpu` | backend worker + GPU, no inference service | x86, jetson |
+| `omnibus` | every cluster role on one node | x86, jetson |
+| `edge-ai` | GPU inference node (OpenAI-compatible model API) | x86, jetson |
+| `generic` | plain unbranded arm64 server | rpi5 |
+| `laptop` `chromebook` `desktop` | person-device desktops | x86 (+ `desktop` on rpi5/jetson) |
+| `standalone-thin` `standalone-thick` `standalone-unaffiliated` | no mesh, no SSO | x86 |
+
+The old spellings are **still accepted, forever**, on every CLI that documented them,
+and are normalized at parse time so nothing downstream ever sees two names for one
+role: `be`=backend, `fe`=frontend, `be+gpu`/`be-gpu`/`host`/`gpu-host`/`gpu_host`=backend-gpu,
+`full`=omnibus, `edge_ai`=edge-ai, `standalone-full`=standalone-thick. They are never
+EMITTED — `tests/scripts/test-role-key-spelling.sh` fails on an alias in an artifact
+name, a role marker, a matrix cell, a catalog id or a documented command.
+
+The k8s label keys (`hugmesh.net/backend`, `/frontend`, `/pki`, `/edge-ai`) are a
+DIFFERENT axis and are **not** part of this vocabulary: they were always long, are
+frozen by `scripts/tooling/tokens.json`, and are `nodeSelector`'d by 73 files under
+`specs/cluster/`. The builders' `ROLE_LABELS` is print-only, so the CLI token and the
+label key are fully decoupled.
+
 | Platform | Builder | Cells | Axes |
 |---|---|---|---|
 | **rpi5** | `build-rpi5-stage4.sh` | board `rpi5`(default): 4 roles × 2 env = 8; board `rpi4`: 4 roles × 2 env = 8 + 2 `standalone-desktop` probe rows; board `rpi3`: 1 role × 2 env = 2 → **20** | roles `pki backend frontend desktop` (rpi5/rpi4 — all 4); `desktop` only on `rpi3` (1 GB RAM has no headroom for the k8s cluster-node stack); board `rpi5\|rpi4\|rpi3`; JOB-channel-only role `standalone-desktop` (resolves the same `--role desktop`, plus `--standalone`) |
-| **x86** | `build-x86-host-stage4.sh` | 12 roles × 2 env = **24** | nodes `pki be fe be+gpu`, `omnibus`, `edge_ai`, clients `laptop chromebook desktop`, `standalone-thin standalone-thick standalone-unaffiliated` |
+| **x86** | `build-x86-host-stage4.sh` | 12 roles × 2 env = **24** | nodes `pki backend frontend backend-gpu`, `omnibus`, `edge-ai`, clients `laptop chromebook desktop`, `standalone-thin standalone-thick standalone-unaffiliated` |
 | **frite** | `build-frite-stage4.sh` | 3 boards × 3 flavors × 2 desktops × 2 env = 36 + 2 `standalone` probe rows → **38** | board `la-frite\|le-potato\|sweet-potato`, flavor `live\|installer\|both`, desktop `light\|none`; JOB-channel-only flavor `standalone` (normalizes to `installer`, plus `--standalone`) |
-| **jetson** *(EXPERIMENTAL)* | `build-jetson-stage4.sh` | 4 roles × 2 env on `orin-nano` + 3 boards × 2 env on `edge_ai` = **14** | roles `edge_ai gpu-host full desktop`; board `orin-nano\|orin-nano-4gb\|orin-nx-8gb\|orin-nx-16gb` (non-default boards carried on the headline `edge_ai` role); deliberately **no** standalone token (see above) |
+| **jetson** *(EXPERIMENTAL)* | `build-jetson-stage4.sh` | 4 roles × 2 env on `orin-nano` + 3 boards × 2 env on `edge-ai` = **14** | roles `edge-ai backend-gpu omnibus desktop`; board `orin-nano\|orin-nano-4gb\|orin-nx-8gb\|orin-nx-16gb` (non-default boards carried on the headline `edge-ai` role); deliberately **no** standalone token (see above) |
 | **orangepi5** *(EXPERIMENTAL)* | `build-orangepi5-stage4.sh` | 2 boards × 3 flavors × 2 env = 12 + 2 `standalone` probe rows → **14** | board `orange-pi-5-plus\|orange-pi-5` (RK3588 vs RK3588S), flavor `live\|installer\|both`; `desktop` is the only role (no cluster-node roles on this platform); JOB-channel-only flavor `standalone` (normalizes to `installer`, plus `--standalone`) |
 | **orangepizero2** *(EXPERIMENTAL)* | `build-orangepi-zero2-stage4.sh` | 1 role (`appliance`) × 3 flavors × 2 env = 6 + 2 `standalone` probe rows → **8** | flavor `live\|installer\|both`; headless only — Allwinner H616 has no mainline display-engine driver, so this platform never gets a `desktop` role; JOB-channel-only flavor `standalone` (normalizes to `installer`, plus `--standalone`) |
 | **orangepizero2w** *(EXPERIMENTAL)* | `build-orangepi-zero2w-stage4.sh` | 1 role (`appliance`) × 3 flavors × 2 env = 6 + 2 `standalone` probe rows → **8** | flavor `live\|installer\|both`; the Zero 2's Allwinner H618 sibling — same headless-only rationale (identical DE33 display engine, no mainline driver) and NO onboard Ethernet (USB-Ethernet-first); JOB-channel-only flavor `standalone` (normalizes to `installer`, plus `--standalone`) |
@@ -262,7 +293,7 @@ reach it on `rpi-%` / `x86-%` / `frite` / `jetson` / `jetson-%` / `orangepi5` /
 — 11 probes), 10
 end-to-end MENU→MAKE probes prove `build_make_cmd`'s composed invocation lands
 both `OPT_IMGFLAGS` and `OPT_EXTRA_FLAGS` in the builder argv on one target per
-platform (`rpi-backend`, `x86-pki`, `frite`, `jetson-edge_ai`, `orangepi5`,
+platform (`rpi-backend`, `x86-pki`, `frite`, `jetson-edge-ai`, `orangepi5`,
 `orangepizero2`, `orangepizero2w`, `orangepizero3`, `orangepi3-lts`,
 `orangepi4-lts`), 2 fleet-option threading probes prove
 `RESUME`/`PENTEST`/`X86_OMNIBUS`/`FRITE`/`JETSON` all gate to both
@@ -377,7 +408,7 @@ This is the contract every channel is verified against.
 
 ```sh
 ./build-x86-host-stage4.sh --role standalone-thick --env test --print-plan
-./build-jetson-stage4.sh   --role edge_ai --print-plan
+./build-jetson-stage4.sh   --role edge-ai --print-plan
 ```
 
 ## Building the whole matrix for real

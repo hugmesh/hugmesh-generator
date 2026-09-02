@@ -39,7 +39,7 @@ def _driver(**kw) -> BuildDriver:
 
 
 def _cfg() -> ImageConfig:
-    return ImageConfig(platform="rpi5", role="be", mode="mesh", env="test")
+    return ImageConfig(platform="rpi5", role="backend", mode="mesh", env="test")
 
 
 def _inner(cmd: list[str]) -> str:
@@ -172,16 +172,16 @@ def test_per_entry_build_tree_stays_isolated():
     """The pool is now shared per BOARD, but each worklist entry must still build in its
     OWN tree (wl-<id>) — that is what keeps two images from clobbering each other's
     sysroot and node keys."""
-    e1 = WorklistEntry(role="be", platform="rpi5")
-    e2 = WorklistEntry(role="fe", platform="rpi5")
+    e1 = WorklistEntry(role="backend", platform="rpi5")
+    e2 = WorklistEntry(role="frontend", platform="rpi5")
     assert e1.build_subdir == f"wl-{e1.id}"
     assert e1.build_subdir != e2.build_subdir
 
 
 def test_worklist_materialize_still_sets_the_isolated_build_subdir():
     wl = WorklistConfig(base=ImageConfig(mode="mesh", env="test"),
-                        entries=[WorklistEntry(role="be", platform="rpi5"),
-                                 WorklistEntry(role="fe", platform="rpi5")])
+                        entries=[WorklistEntry(role="backend", platform="rpi5"),
+                                 WorklistEntry(role="frontend", platform="rpi5")])
     subdirs = [cfg.build_subdir for _entry, cfg in wl.materialize()]
     assert len(set(subdirs)) == 2
     assert all(s.startswith("wl-") for s in subdirs)
@@ -191,8 +191,8 @@ def test_every_materialized_image_of_one_worklist_gets_the_same_shared_root():
     """The reuse claim, end to end: N images in one session must all name ONE root (that
     is what lets image #2 reuse image #1's compiled packages and the seed)."""
     wl = WorklistConfig(base=ImageConfig(mode="mesh", env="test"),
-                        entries=[WorklistEntry(role="be", platform="rpi5"),
-                                 WorklistEntry(role="fe", platform="rpi5")])
+                        entries=[WorklistEntry(role="backend", platform="rpi5"),
+                                 WorklistEntry(role="frontend", platform="rpi5")])
     wd = session_workdir("/data/out", "20260730-101010-abcdef")
     d = _driver(workdir=wd)
     roots = set()

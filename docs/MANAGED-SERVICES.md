@@ -27,7 +27,7 @@ builders — client/standalone images have no cluster tree):
 MANAGED_SERVICES="kafka=msk-broker:9098 postgres-admin-bff=my.rds.amazonaws.com:5432"
 
 # or the repeatable CLI flag (APPENDS to MANAGED_SERVICES):
-build-x86-host-stage4.sh --role be \
+build-x86-host-stage4.sh --role backend \
   --managed-service kafka=msk-broker:9098 \
   --managed-service postgres-admin-bff=my.rds.amazonaws.com:5432
 ```

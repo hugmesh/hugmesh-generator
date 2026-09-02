@@ -39,7 +39,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
-from . import secret_files
+from . import roles, secret_files
 from .config import PLATFORM_FIELD_SUPPORT, SECRET_FIELDS
 from .state_paths import state_dir
 from .worklist import WorklistConfig
@@ -234,6 +234,20 @@ class BuildSession:
             v = vals[k]
             if not isinstance(v, str):
                 vals[k] = "" if v is None else str(v)
+        # CANONICALIZE THE ROLE ON READ, never rewrite the record. `images` rows are
+        # {id, role, platform, status, ...} and the role is persisted with no schema
+        # version and no load-time validation, so a session written before the role
+        # vocabulary converged holds `be`/`fe`/`be+gpu`/`edge_ai`. The row `id` is
+        # left as saved — it names this image's build tree, KEYS folder and log on
+        # disk, all of which are already-emitted artifacts.
+        imgs = vals.get("images")
+        if isinstance(imgs, list):
+            vals["images"] = [
+                ({**row, "role": roles.canonicalize(row["role"])}
+                 if isinstance(row, dict) and isinstance(row.get("role"), str) and row["role"]
+                 else row)
+                for row in imgs
+            ]
         return cls(**vals)
 
     def worklist(self) -> WorklistConfig:
@@ -664,10 +678,18 @@ def session_detail(s: BuildSession) -> dict[str, Any]:
 
 
 def format_session_line(s: BuildSession) -> str:
-    """One human line per session: id, date, roles, status, artifact count."""
+    """One human line per session: id, date, images, status, artifact count.
+
+    Images are listed as ``<role>.<platform>`` — the same key the worklist and the
+    build tree already use (``wl-backend.x86``, ``image backend.rpi5``). Deduping on
+    the ROLE alone used to be enough only because a role was spelled differently per
+    platform; now that one spelling is shared, ``be/x86`` and ``backend/rpi5`` are
+    both ``backend`` and a role-only summary silently shows fewer entries than the
+    session has images."""
     date = s.started or s.created or "-"
     roles = ",".join(dict.fromkeys(
-        str(img.get("role", "")) or "?" for img in s.images)) or "-"
+        f"{str(img.get('role', '')) or '?'}.{str(img.get('platform', '')) or '?'}"
+        for img in s.images)) or "-"
     status = s.status + (" (process gone)" if is_stale(s) else "")
     n = len(artifact_paths(s))
     return f"{s.id}  {date}  {roles}  {status}  {n} artifact(s)"

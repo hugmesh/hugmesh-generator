@@ -153,12 +153,15 @@ reject_case opz2-flavor-both   "$work/opz2_both.json"      client  "--flavor bot
 reject_case opz2w-flavor-both  "$work/opz2w_both.json"     client  "--flavor both"
 reject_case opz3-flavor-both   "$work/opz3_both.json"      client  "--flavor both"
 reject_case opi3lts-flavor-both "$work/opi3lts_both.json"  client  "--flavor both"
-reject_case jetson-bad-role    "$work/jetson_badrole.json" primary "edge_ai | gpu-host | full | desktop"
+# The needle is now the ONE vocabulary's jetson set (scripts/_roles-lib.sh
+# HUGMESH_ROLES_JETSON), which the worker interpolates into its own message —
+# the builder no longer carries a private "--role must be one of" string.
+reject_case jetson-bad-role    "$work/jetson_badrole.json" primary "edge-ai backend-gpu omnibus desktop"
 
 echo "── positive controls: valid specs still assemble (no false reject) ──"
 materialize frite_ok  '{"platform":"frite","role":"frite","flavor":"installer"}'
-materialize jetson_ok '{"platform":"jetson","role":"edge_ai"}'
-materialize x86_ok    '{"platform":"x86","role":"be+gpu"}'
+materialize jetson_ok '{"platform":"jetson","role":"edge-ai"}'
+materialize x86_ok    '{"platform":"x86","role":"backend-gpu"}'
 materialize rpi5_ok   '{"platform":"rpi5","role":"backend","board":"rpi5"}'
 accept_case frite-installer "$work/frite_ok.json"  client
 accept_case jetson-edge_ai  "$work/jetson_ok.json" primary

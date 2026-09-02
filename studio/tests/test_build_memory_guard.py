@@ -213,7 +213,7 @@ def test_worklist_aggregate_warnings_dedupe_like_preflight(tmp_path, monkeypatch
     base.users = [User(username="root-admin", domain="core.acme.internal",
                        role="superadmin")]
     wl = WorklistConfig(base=base, entries=[WorklistEntry(role="pki", platform="x86"),
-                                            WorklistEntry(role="be", platform="rpi5")])
+                                            WorklistEntry(role="backend", platform="rpi5")])
     drv = WorklistDriver(str(tmp_path), wl, host=host(), backend="docker")
     warns = drv.preflight_warnings()
     # the host-level warning is common to every image -> reported ONCE, unlabelled

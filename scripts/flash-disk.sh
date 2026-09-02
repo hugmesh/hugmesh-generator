@@ -29,10 +29,16 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # shellcheck source=scripts/_disk-lib.sh
 source "${SCRIPT_DIR}/_disk-lib.sh"
+# THE role vocabulary (scripts/_roles-lib.sh) — the same declaration the builders
+# read, so this script can never accept a role no builder produces, and can glob for
+# an artifact that was built under an OLDER spelling.
+# shellcheck source=scripts/_roles-lib.sh
+source "${SCRIPT_DIR}/_roles-lib.sh"
 
 # ── Defaults ───────────────────────────────────────────────────────
 ROLE="pki"
-ARCH="arm64"               # arm64 (RPi5) | amd64/x86 (host)
+ARCH="arm64"               # arm64 (RPi5 / Jetson / SBC) | amd64/x86 (host)
+PLATFORM=""                # optional device-platform anchor; derived when omitted
 WORK_DIR=""                # resolved from --arch after parsing if left empty
 ARTIFACT=""                # explicit artifact; otherwise auto-picked
 WITH_KEYS=""               # optional keys dir -> writes/refreshes a KEYS stick
@@ -54,10 +60,25 @@ Usage: sudo $0 [OPTIONS] /dev/sdX
 
 Options:
   --role ROLE        Image role to flash. One of:
-                       pki | backend | frontend | host | be | fe | omnibus
-                     (be=backend, fe=frontend). Default: ${ROLE}
-  --arch ARCH        Target arch: arm64 (RPi5) | x86 (amd64 host). Default: ${ARCH}
-                     Selects the default --work-dir if you don't pass one.
+                       pki | backend | frontend | backend-gpu | omnibus | edge-ai
+                       | generic | desktop
+                     Old spellings still work and are normalized at parse time:
+                       be=backend, fe=frontend, host/be+gpu/be-gpu/gpu-host=backend-gpu,
+                       full=omnibus, edge_ai=edge-ai. Default: ${ROLE}
+  --arch ARCH        Target arch: arm64 (RPi5 / Jetson / Orange Pi / Frite)
+                     | x86 (amd64 host). Default: ${ARCH}
+                     Selects the default --work-dir if you don't pass one, AND
+                     ANCHORS the artifact search — an x86 request can no longer
+                     resolve to an arm64 image.
+  --platform NAME    Device platform to flash (rpi5 | jetson | x86 | frite |
+                     orangepi5 | orangepi4-lts | orangepizero2 | orangepizero2w |
+                     orangepizero3 | orangepi3-lts). Usually unnecessary: a CLUSTER
+                     NODE role names its own platform (backend/frontend/pki/generic
+                     are Pi-or-x86, omnibus/edge-ai/backend-gpu on arm64 are Jetson),
+                     so the anchor is DERIVED. Pass it for the client/desktop roles,
+                     which several arm64 boards all build — when candidates from more
+                     than one platform match, the flasher REFUSES rather than pick a
+                     board for you.
   --work-dir DIR     Dir to search for artifacts.
                        arm64 default: ${RPI_WORK_DIR}
                        x86   default: ${X86_WORK_DIR}
@@ -80,7 +101,7 @@ Examples:
   sudo $0 --role pki /dev/sda
 
   # x86 host image to NVMe, no prompt
-  sudo $0 --arch x86 --role host --no-confirm /dev/nvme0n1
+  sudo $0 --arch x86 --role backend-gpu --no-confirm /dev/nvme0n1
 
   # explicit artifact
   sudo $0 --artifact /path/to/hugmesh-rpi5-arm64-backend-test-20260610T193045Z.img /dev/sdb
@@ -96,6 +117,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --role)       ROLE="$2"; shift 2 ;;
         --arch)       ARCH="$2"; shift 2 ;;
+        --platform)   PLATFORM="$2"; shift 2 ;;
         --work-dir|-w) WORK_DIR="$2"; shift 2 ;;
         --artifact)   ARTIFACT="$2"; shift 2 ;;
         --with-keys)  WITH_KEYS="$2"; shift 2 ;;
@@ -113,18 +135,47 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── Normalize role + arch ──────────────────────────────────────────
-case "${ROLE}" in
-    be) ROLE="backend" ;;
-    fe) ROLE="frontend" ;;
-    pki|backend|frontend|host|omnibus) : ;;
-    *) dl_die "--role must be one of: pki|backend|frontend|host|be|fe|omnibus (got '${ROLE}')" ;;
-esac
+# ONE normalization point. The old table here knew five spellings and rejected the
+# rest — `--role be+gpu`, `--role edge_ai` and `--role generic` all died on a flasher
+# that could not name half the images the builders produce.
+ROLE_RAW="${ROLE}"
+if ! ROLE="$(hugmesh_role_canonicalize "${ROLE_RAW}")"; then
+    dl_die "--role must be a role some builder produces: ${HUGMESH_ROLES_CANONICAL} (got '${ROLE_RAW}')"
+fi
 
 case "${ARCH}" in
     arm64|aarch64) ARCH="arm64" ;;
     x86|x86_64|amd64) ARCH="x86" ;;
     *) dl_die "--arch must be arm64 or x86 (got '${ARCH}')" ;;
 esac
+
+# ── Normalize the device PLATFORM ──────────────────────────────────
+# THE PLATFORM ANCHOR. `--arch` alone is not enough on arm64: rpi5, jetson and the
+# five Orange Pi / Frite boards all emit arm64 images, so an arm64 request could
+# surface a Jetson .img for a Raspberry Pi SD card — a silent wrong-board write.
+# Derivation, in order:
+#   1. --platform given            use it verbatim.
+#   2. the role is a CLUSTER NODE role (pki/backend/frontend/backend-gpu/omnibus/
+#      edge-ai)                    the platforms of this arch that BUILD that role.
+#      A node role identifies its platform: on arm64 `backend` can only be rpi5 and
+#      `omnibus`/`edge-ai`/`backend-gpu` can only be jetson. The free-slug boards are
+#      excluded on purpose — they refuse a node --role (hugmesh_role_reject_node_role),
+#      so they cannot have emitted one.
+#   3. otherwise (desktop/laptop/generic/appliance/a free slug)
+#                                  ANY platform, as before, plus the cross-platform
+#      ambiguity refusal below. Those roles genuinely exist on several boards and
+#      narrowing by guesswork would hide images that are legitimately there.
+PLATFORM_GLOBS=()
+if [ -n "${PLATFORM}" ]; then
+    PLATFORM_GLOBS=("${PLATFORM}")
+elif hugmesh_role_is_node_role "${ROLE}"; then
+    for _p in x86 rpi5 jetson; do
+        [ "$(hugmesh_role_arch "${_p}")" = "${ARCH}" ] || continue
+        hugmesh_role_for "${_p}" "${ROLE}" >/dev/null 2>&1 || continue
+        PLATFORM_GLOBS+=("${_p}")
+    done
+fi
+[ "${#PLATFORM_GLOBS[@]}" -gt 0 ] || PLATFORM_GLOBS=("*")
 
 # Resolve default work dir from arch if not given explicitly.
 if [ -z "${WORK_DIR}" ]; then
@@ -135,34 +186,106 @@ if [ -z "${WORK_DIR}" ]; then
 fi
 
 # ── Artifact auto-pick ─────────────────────────────────────────────
-# Build the glob patterns. The 'host' role on x86 names artifacts
-# 'gentoo-x86-hugmesh-host-*', which still matches '*-host-*'; the generic
-# '*-<role>-*' pattern covers both arches' naming.
+# Two things this must get right, both of which it used to get wrong.
 #
-# Echoes nothing if no match. Prefers .img over .iso, newest mtime first.
+# 1. THE ARCH ANCHOR. --arch only selected the default work dir; it never filtered
+#    the glob. Against a real mixed session dir,
+#      flash-disk.sh --role be --arch x86 --list
+#    printed "Would flash: hugmesh-rpi5-arm64-backend-…iso" — an arm64 Raspberry Pi
+#    image for an x86 backend request, silently, and reachable from the Studio's
+#    post-build "Flash to device" button. Every candidate is now required to carry
+#    the requested arch token in its name.
+# 2. THE OLD SPELLINGS. Images already on disk were named under whatever spelling
+#    was canonical when they were built (hugmesh-x86-amd64-be-…, …-host-…). Those
+#    files are not renamed — they are already-emitted artifacts — so the search
+#    covers the canonical role AND every alias that folds onto it.
+#
+# Naming conventions matched (newest-mtime-first, role-scoped first):
+#   • hugmesh-<platform>-<arch>-<role>-<env>-<stamp>.{img,iso}   builders + QEMU launchers
+#   • gentoo-<platform>-<arch>-<role>-k8s-<stamp>.iso            older ISO naming
+# kernel/initramfs/squashfs blobs are filtered out (they share .img).
+#
+# ARCH_GLOBS: the arch tokens that may appear in an artifact name for --arch.
+case "${ARCH}" in
+    x86)   ARCH_GLOBS=("x86" "amd64") ;;
+    arm64) ARCH_GLOBS=("arm64" "aarch64") ;;
+esac
+# ROLE_GLOBS: canonical first, then every alias of it (hugmesh_role_aliases_of).
+read -r -a ROLE_GLOBS <<< "$(hugmesh_role_aliases_of "${ROLE}")"
+
 list_candidates() {
     local kind="$1"   # img | iso
-    # Match BOTH naming conventions, newest-mtime-first, role-scoped first:
-    #   • hugmesh-* — the persistent .img artifact the QEMU launchers and the
-    #     .img builders agree on (hugmesh-rpi5-arm64-<role>-*.img,
-    #     hugmesh-host-amd64-*.img). This is the autodetect convention shared
-    #     with tests/qemu/launch-pi.sh and launch-x86.sh.
-    #   • gentoo-*    — the existing ISO/installer naming
-    #     (gentoo-rpi5-arm64-<role>-k8s-*.iso, gentoo-x86-hugmesh-host-*.iso).
-    # role-scoped globs come first so a matching role wins over a generic hit;
-    # the trailing generic globs catch host/x86 names that don't carry the role
-    # token. kernel/initramfs/squashfs blobs are filtered out (they share .img).
-    # ls -1t gives newest-mtime-first ordering (find can't sort by mtime
-    # portably); our build artifacts have safe, glob-stable names.
+    local pats=()
+    local r
+    local a
+    local pf
+    for r in "${ROLE_GLOBS[@]}"; do
+        for a in "${ARCH_GLOBS[@]}"; do
+            for pf in "${PLATFORM_GLOBS[@]}"; do
+                # <brand>-<platform>-<arch>-<role>-<env>-<stamp>. The platform token
+                # can be multi-part (jetson-orin-nano), so `${pf}*` covers both
+                # hugmesh-rpi5-arm64-… and hugmesh-jetson-orin-nano-arm64-….
+                # ${pf} is deliberately UNQUOTED: these elements are glob patterns
+                # expanded at array-build time (that is why the `*`s sit outside the
+                # quotes), and the "any platform" anchor IS the literal `*`. Quoting
+                # it would make it a literal asterisk and match nothing. Platform
+                # tokens contain only [a-z0-9-], so word-splitting cannot bite.
+                pats+=("${WORK_DIR}/hugmesh-"${pf}*"-${a}-${r}-"*".${kind}")
+                pats+=("${WORK_DIR}/gentoo-"${pf}*"-${a}-${r}-"*".${kind}")
+                # x86 'host'-era names put the brand between platform and role
+                # (gentoo-x86-hugmesh-host-*.iso), so allow the role right after arch too.
+                pats+=("${WORK_DIR}/hugmesh-"${pf}*"-${a}-"*"-${r}-"*".${kind}")
+                pats+=("${WORK_DIR}/gentoo-"${pf}*"-${a}-"*"-${r}-"*".${kind}")
+            done
+        done
+    done
+    # ls -1t gives newest-mtime-first ordering (find can't sort by mtime portably);
+    # our build artifacts have safe, glob-stable names.
     # shellcheck disable=SC2012
-    ls -1t \
-        "${WORK_DIR}"/hugmesh-*-"${ROLE}"-*."${kind}" \
-        "${WORK_DIR}"/gentoo-*-"${ROLE}"-*."${kind}" \
-        "${WORK_DIR}"/hugmesh-*"${ROLE}"*."${kind}" \
-        "${WORK_DIR}"/gentoo-*"${ROLE}"*."${kind}" \
-        2>/dev/null \
+    ls -1t "${pats[@]}" 2>/dev/null \
         | grep -ivE '/(.*-)?(kernel|initramfs|initrd|squashfs)[^/]*\.'"${kind}"'$' \
         | awk '!seen[$0]++'
+}
+
+# platform_of <path> — the device-platform token out of an artifact NAME:
+# everything between the brand prefix and the arch token.
+#   hugmesh-jetson-orin-nano-arm64-full-test-….img -> jetson-orin-nano
+#   hugmesh-rpi5-arm64-backend-test-….iso          -> rpi5
+platform_of() {
+    local n
+    n="$(basename "$1")"
+    n="${n#hugmesh-}"
+    n="${n#gentoo-}"
+    local a
+    for a in x86 amd64 arm64 aarch64; do
+        case "${n}" in *"-${a}-"*) printf '%s\n' "${n%%-${a}-*}"; return 0 ;; esac
+    done
+    printf '%s\n' "${n%%-*}"
+}
+
+# candidate_platforms — the DISTINCT platforms the auto-pick is choosing between.
+candidate_platforms() {
+    # `|| true` twice over: list_candidates' `ls` fails when nothing matches, and
+    # this script runs under `set -euo pipefail`, where that would abort --list.
+    { list_candidates img || true; list_candidates iso || true; } \
+        | while IFS= read -r c; do platform_of "${c}"; done | sort -u || true
+}
+
+# THE CROSS-PLATFORM REFUSAL. Only reachable for a non-node role with no --platform
+# and no --artifact: `--role desktop --arch arm64` legitimately matches rpi5, jetson,
+# frite and four Orange Pi boards at once, and newest-mtime is not a board choice.
+# This writes a WHOLE DISK, so an ambiguity is an error, not a coin flip.
+assert_one_platform() {
+    local plats
+    plats="$(candidate_platforms || true)"
+    plats="$(printf '%s\n' "${plats}" | sed '/^$/d')"
+    local n
+    n="$(printf '%s\n' "${plats}" | sed '/^$/d' | wc -l)"
+    [ "${n}" -le 1 ] && return 0
+    dl_die "$(printf 'candidates span %s device platforms: %s\n' "${n}" "$(echo ${plats} | tr '\n' ' ')")
+       --role ${ROLE} is built by more than one board on --arch ${ARCH}, and flashing
+       the wrong board's image is a silent, whole-disk mistake. Re-run with
+       --platform <one of the above>, or pass --artifact FILE."
 }
 
 pick_artifact() {
@@ -175,8 +298,19 @@ pick_artifact() {
 }
 
 if ${LIST_ONLY}; then
-    echo "Role     : ${ROLE}"
+    if [ "${ROLE_RAW}" != "${ROLE}" ]; then
+        echo "Role     : ${ROLE}   (normalized from '${ROLE_RAW}')"
+    else
+        echo "Role     : ${ROLE}"
+    fi
     echo "Arch     : ${ARCH}"
+    if [ -n "${PLATFORM}" ]; then
+        echo "Platform : ${PLATFORM}   (--platform)"
+    elif [ "${PLATFORM_GLOBS[0]}" = "*" ]; then
+        echo "Platform : any (${ROLE} is not a cluster node role — pass --platform to anchor)"
+    else
+        echo "Platform : $(echo "${PLATFORM_GLOBS[*]}")   (derived from the role)"
+    fi
     echo "Work dir : ${WORK_DIR}"
     if [ ! -d "${WORK_DIR}" ]; then
         echo "(work dir does not exist yet — nothing built?)"
@@ -191,6 +325,12 @@ if ${LIST_ONLY}; then
     list_candidates iso | sed 's/^/  /' || true
     [ -n "$(list_candidates iso)" ] || echo "  (none)"
     echo
+    amb="$(candidate_platforms || true)"
+    amb="$(printf '%s\n' "${amb}" | sed '/^$/d')"
+    if [ "$(printf '%s\n' "${amb}" | sed '/^$/d' | wc -l)" -gt 1 ]; then
+        echo "AMBIGUOUS: candidates span $(echo ${amb} | tr '\n' ' ') — a flash would REFUSE."
+        echo "           Pass --platform <one of those> or --artifact FILE."
+    fi
     if chosen="$(pick_artifact)"; then
         echo "Would flash: ${chosen}"
     else
@@ -201,6 +341,7 @@ fi
 
 # Resolve the artifact (explicit wins; otherwise auto-pick).
 if [ -z "${ARTIFACT}" ]; then
+    assert_one_platform
     ARTIFACT="$(pick_artifact || true)"
     [ -n "${ARTIFACT}" ] || dl_die "no hugmesh-*/gentoo-* ${ROLE} .img/.iso in ${WORK_DIR}. Build one, pass --artifact, or check --arch/--role (try: $0 --role ${ROLE} --list)."
 fi
@@ -231,7 +372,7 @@ DEV_SIZE="$(blockdev --getsize64 "${DEVICE}" 2>/dev/null || echo 0)"
 ART_H="$(numfmt --to=iec "${ART_SIZE}" 2>/dev/null || echo "${ART_SIZE}B")"
 DEV_H="$(numfmt --to=iec "${DEV_SIZE}" 2>/dev/null || echo "${DEV_SIZE}B")"
 
-dl_info "Role     : ${ROLE} (${ARCH})"
+dl_info "Role     : ${ROLE} (${ARCH}, platform $(platform_of "${ARTIFACT}"))"
 dl_info "Artifact : ${ARTIFACT} [${FLASH_KIND}, ${ART_H}]"
 dl_info "Target   : ${DEVICE} [${DEV_H}]"
 [ -n "${WITH_KEYS}" ] && dl_info "With keys: ${WITH_KEYS}"

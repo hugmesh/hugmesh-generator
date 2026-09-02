@@ -269,10 +269,10 @@ fi
 #     --gpu-driver nvidia resolve. Negative: the same builder over a specs tree
 #     carrying the historical mesa line must REFUSE, at argv time.
 if [ -n "${X86_BUILDER}" ]; then
-  if ( cd "${TMP3}" && bash "${X86_BUILDER}" --role edge_ai --env test -w "${TMP3}/work" --print-plan ) >"${TMP3}/pos.out" 2>&1; then
-    ok "end-to-end: the real builder ACCEPTS --role edge_ai (default --gpu-driver nvidia) against the shipped specs"
+  if ( cd "${TMP3}" && bash "${X86_BUILDER}" --role edge-ai --env test -w "${TMP3}/work" --print-plan ) >"${TMP3}/pos.out" 2>&1; then
+    ok "end-to-end: the real builder ACCEPTS --role edge-ai (default --gpu-driver nvidia) against the shipped specs"
   else
-    bad "end-to-end: the real builder REFUSES --role edge_ai --print-plan against the shipped specs: $(tail -3 "${TMP3}/pos.out" | tr '\n' ' ')"
+    bad "end-to-end: the real builder REFUSES --role edge-ai --print-plan against the shipped specs: $(tail -3 "${TMP3}/pos.out" | tr '\n' ' ')"
   fi
   # Symlink farm: SCRIPT_DIR is dirname($0), so a farm of symlinks with ONE real
   # (mutated) specs-x86 runs the real builder against a doctored spec tree.
@@ -280,7 +280,7 @@ if [ -n "${X86_BUILDER}" ]; then
   ln -s "${REPO}"/* "${FARM}/" 2>/dev/null || true
   rm -f "${FARM}/specs-x86"; cp -r "${REPO}/specs-x86" "${FARM}/specs-x86"
   cp "${CTL}/gpu" "${FARM}/specs-x86/portage/package.use/gpu"
-  if ( cd "${FARM}" && bash "${FARM}/$(basename "${X86_BUILDER}")" --role edge_ai --env test -w "${TMP3}/work" --print-plan ) >"${TMP3}/neg.out" 2>&1; then
+  if ( cd "${FARM}" && bash "${FARM}/$(basename "${X86_BUILDER}")" --role edge-ai --env test -w "${TMP3}/work" --print-plan ) >"${TMP3}/neg.out" 2>&1; then
     bad "end-to-end NEGATIVE control: the builder ACCEPTED a specs tree whose package.use/gpu forces amdgpu/radeonsi/intel/iris while --gpu-driver nvidia selects only 'nouveau nvidia' — that is exactly the 2026-08-22 edge_ai argv, and it must be refused before the merge, not 40 minutes into it"
   elif grep -qF 'spec/argv disagree about VIDEO_CARDS' "${TMP3}/neg.out"; then
     ok "end-to-end NEGATIVE control: the builder refuses the contradicting spec tree at argv time, naming VIDEO_CARDS"

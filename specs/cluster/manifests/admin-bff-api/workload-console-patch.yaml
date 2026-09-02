@@ -8,7 +8,10 @@
 #
 #   OFF 1 (generator gate)  WORKLOAD_CONSOLE_ENABLED=true — the /bff/{admin,superadmin}/
 #                           workloads/** prefix exists (paired with the route-access rows
-#                           this same slug owns; deselected, the gateway 404s it first).
+#                           this same slug owns; deselected, those rows are gone, which
+#                           UNGOVERNS the prefix at the gateway rather than walling it —
+#                           NO_RULE forwards, see docs/ROUTE-ACCESS.md — and the 404 comes
+#                           from this BFF's own WorkloadAuthorizationFilter).
 #   OFF 2 (k8s seam)        WORKLOAD_CONSOLE_K8S_ENABLED=true + BOTH least-privilege SA
 #                           tokens mounted — Fabric8WorkloadClient instead of the
 #                           fail-closed NoopWorkloadClient (503 on every call).

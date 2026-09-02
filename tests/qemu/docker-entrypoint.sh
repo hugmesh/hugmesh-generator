@@ -53,6 +53,16 @@ SRC="${SRC:-/src}"
 ARTIFACTS="${ARTIFACTS:-/artifacts}"
 WORK="${WORK:-/work}"
 QEMU_DIR="${SRC}/tests/qemu"
+# THE role vocabulary (scripts/_roles-lib.sh) — the same declaration the builders
+# read; this harness folds an older marker spelling instead of mis-classifying it.
+# Sourced defensively: SRC is a bind mount, and a missing lib must degrade to "no
+# alias folding", never to a second copy of the vocabulary written out here.
+if [ -r "${SRC}/scripts/_roles-lib.sh" ]; then
+    # shellcheck source=scripts/_roles-lib.sh
+    source "${SRC}/scripts/_roles-lib.sh"
+else
+    hugmesh_role_canonicalize() { printf '%s\n' "$1"; }
+fi
 
 PLATFORM="rpi5"
 ROLE="pki"
@@ -989,6 +999,10 @@ esac
 #     (build-rpi5-stage4.sh:5184) and never joins a cluster (:3896-3897).
 # NOTE generic is a WORKER even though headscale runs on it — that is precisely
 # why this is a second case statement and not another arm of the one above.
+# ROLE is folded through the ONE vocabulary first (scripts/_roles-lib.sh), so an
+# older spelling reaching this harness (`be+gpu`, `full`, `edge_ai`) classifies as
+# the role it MEANS rather than falling into the worker default by accident.
+ROLE="$(hugmesh_role_canonicalize "${ROLE}" 2>/dev/null || printf '%s' "${ROLE}")"
 K8S_ROLE="worker"
 case "${ROLE}" in
     pki)                                    K8S_ROLE="control-plane" ;;
@@ -1254,7 +1268,8 @@ while :; do
     ASSERT_ATTEMPTS=$((ASSERT_ATTEMPTS + 1))
     timeout -k 30 "${ASSERT_TIMEOUT}" \
         ssh -o ConnectTimeout=15 "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'sudo bash -s' \
-        < "${QEMU_DIR}/assertions.sh" 2>&1 | tee "${RUN_DIR}/assertions.log"
+        < <(cat "${QEMU_DIR}/../../scripts/_roles-lib.sh" "${QEMU_DIR}/assertions.sh") \
+        2>&1 | tee "${RUN_DIR}/assertions.log"
     ARC=${PIPESTATUS[0]}
     [ "${ARC}" -eq 255 ] || break
     [ "${ASSERT_ATTEMPTS}" -lt 3 ] || break

@@ -371,8 +371,8 @@ tests/qemu/run-matrix-e2e.sh --dry-run
 make qemu-matrix-enumerate
 
 # real boot (operator supplies golden artifacts under WORK_DIR):
-HUGMESH_QEMU_E2E=1 make qemu-matrix MATRIX_FILTER=x86/be+gpu
-HUGMESH_QEMU_E2E=1 tests/qemu/run-matrix-e2e.sh --only jetson/edge_ai -w /srv/img
+HUGMESH_QEMU_E2E=1 make qemu-matrix MATRIX_FILTER=x86/backend-gpu
+HUGMESH_QEMU_E2E=1 tests/qemu/run-matrix-e2e.sh --only jetson/edge-ai -w /srv/img
 ```
 
 Gated exactly like the Tor onion e2e: without `HUGMESH_QEMU_E2E=1` (and qemu) the

@@ -34,6 +34,7 @@ import subprocess
 import threading
 
 from . import proc_text
+from . import roles
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -167,11 +168,20 @@ def parse_artifact_name(basename: str) -> tuple[str, str, str, str] | None:
 
     Returns None for anything that is not a bootable role image.
 
-    The role may itself contain '-' (``standalone-thin``), so the name is parsed
-    from BOTH ends: the first two fields are the brand and platform, the third is
-    the arch, and the LAST two fields before the extension are env and stamp —
-    whatever remains in the middle is the role, hyphens and all. A naive
+    The role may itself contain '-' (``standalone-thin``, ``backend-gpu``), so the
+    name is parsed from BOTH ends: the first two fields are the brand and platform,
+    the third is the arch, and the LAST two fields before the extension are env and
+    stamp — whatever remains in the middle is the role, hyphens and all. A naive
     ``split('-')[3]`` would truncate every hyphenated role to "standalone".
+
+    The parsed role is CANONICALIZED (scripts/_roles-lib.sh). Artifacts already on
+    disk keep whatever spelling they were built under — ``hugmesh-x86-amd64-be-…``,
+    ``…-host-…`` — and they are NOT renamed; they are already-emitted artifacts. But
+    every consumer that keys on the role (the emulation grid label, the boot order,
+    :data:`mesh_emulation.GATEWAY_ROLES`) must see ONE spelling, or an x86 backend
+    and a Pi backend read as two different roles. That mismatch is why
+    ``GATEWAY_ROLES`` could never match ``be+gpu`` (whose artifact was named ``host``)
+    and never matched a Pi node at all.
     """
     name = basename
     for suffix in _IMAGE_SUFFIXES:
@@ -196,7 +206,7 @@ def parse_artifact_name(basename: str) -> tuple[str, str, str, str] | None:
     role = "-".join(parts[3:-2])
     if not platform or not role:
         return None
-    return platform, arch, role, env
+    return platform, arch, roles.canonicalize(role), env
 
 
 def artifact_stamp(basename: str) -> str:

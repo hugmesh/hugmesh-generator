@@ -1,7 +1,7 @@
 # specs-jetson — NVIDIA Jetson Orin Nano platform (aarch64 + Tegra/L4T)
 
 > **Status: EXPERIMENTAL BUILDABLE (hardware validation pending).** The
-> cross-architecture **edge-AI capability** (the `edge_ai` node role + the
+> cross-architecture **edge-AI capability** (the `edge-ai` node role + the
 > `edge-ai` inference service + the mesh/k8s/tailnet exposure + the model
 > library + all front-ends) is **done and runs on x86 today** — see
 > [docs/EDGE-AI.md](../docs/EDGE-AI.md). This tree now also carries a working
@@ -14,7 +14,7 @@
 ## What the Jetson adds
 
 The **Jetson Orin Nano Super Developer Kit** (Amazon B0BZJTQ5YP): aarch64 + Ampere
-GPU, 8 GB, 67 TOPS, ~$249. It is an **arm64 edge-AI node**: the same `edge_ai` role
+GPU, 8 GB, 67 TOPS, ~$249. It is an **arm64 edge-AI node**: the same `edge-ai` role
 and `edge-ai` service that run on the x86 RTX host run here — Ollama has arm64 +
 Jetson CUDA images, and the kustomize manifests are arch-portable. The hard part is
 the **platform** (kernel + CUDA userspace + board boot), which is L4T (Linux for
@@ -23,19 +23,19 @@ Tegra)-based rather than the mainline amd64/RPi5 path.
 ## Build entry (IMPLEMENTED — `build-jetson-stage4.sh`)
 
 ```sh
-./build-jetson-stage4.sh --role edge_ai            # the headline (DEFAULT)
-./build-jetson-stage4.sh --role full --env prod    # full stack on one Orin
+./build-jetson-stage4.sh --role edge-ai            # the headline (DEFAULT)
+./build-jetson-stage4.sh --role omnibus --env prod # full stack on one Orin
 ./build-jetson-stage4.sh --role desktop            # arm64 client desktop
-./build-jetson-stage4.sh --role gpu-host           # GPU worker, no inference svc
-./build-jetson-stage4.sh --role edge_ai --print-plan   # dry-run plan (no root)
+./build-jetson-stage4.sh --role backend-gpu           # GPU worker, no inference svc
+./build-jetson-stage4.sh --role edge-ai --print-plan   # dry-run plan (no root)
 ```
 
 Roles (× `--env test|prod`, all 8 combos pass `--print-plan` today):
 
 | Role | What it is | k8s | edge-ai service |
 |---|---|---|---|
-| `edge_ai` (default, headline) | GPU inference node | worker | yes |
-| `gpu-host` | GPU worker (be+gpu analogue) | worker | no |
+| `edge-ai` (default, headline) | GPU inference node | worker | yes |
+| `backend-gpu` | GPU worker (backend-gpu analogue) | worker | no |
 | `full` | full stack on one Orin (omnibus analogue) | single-node + headscale | yes |
 | `desktop` | arm64 client desktop (lean LXDE) | none | no |
 
@@ -80,7 +80,7 @@ up through the same builder + `--print-plan` contract.
 
 1. Boot the mainline `.img` on an Orin Nano devkit (UEFI distro-boot, ttyTCU0).
 2. KEYS-USB first-boot provisioning + tailnet join.
-3. `edge_ai` role: kubeadm join + CPU-only Ollama serving `/v1`.
+3. `edge-ai` role: kubeadm join + CPU-only Ollama serving `/v1`.
 4. L4T flavor: out-of-band flash per TEGRAFLASH.md + nvgpu CUDA smoke test.
 
 ## Cross-references

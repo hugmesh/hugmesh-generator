@@ -1174,6 +1174,23 @@ lint:route-access-oracle:
   script:
     - bash tests/scripts/test-route-access-oracle.sh
 
+# The route-access DROP-COVERAGE scanner (tests/scripts/route_access_coverage.py).
+# It was an inline heredoc in tests/stack/test-optional-services-exclude.sh reading
+# the RAW 20-schema.sql with a TWO-column regex: measured on 2026-08-27 it saw 99
+# paths -- including a PHANTOM path named `pattern`, harvested out of the row-shape
+# example in the mfa_required comment at 20-schema.sql:863 -- and counted all four
+# allow=false DENY rows as GRANTS. Stripped and read 4-column: 94 granted + 4 deny.
+# Zero gaps either way today, so this guard exists to keep it that way rather than
+# to fix a live break.
+lint:route-access-coverage-scanner:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends bash >/dev/null
+  script:
+    - bash tests/scripts/test-route-access-coverage-scanner.sh
+
 # The anonymous forgot-password legs must be reachable in EVERY lane that has a
 # front door. Four files have to agree and each fails silently alone: the cluster
 # route, the compose route, the route-access PUBLIC rows, and (OUT OF REPO, so
@@ -3138,6 +3155,7 @@ orphan-guards-verify:
         tests/scripts/test-python-targets-seed.sh
         tests/scripts/test-qt6-keyword-preseeds.sh
         tests/scripts/test-rebrand-frozen-label-keys.sh
+        tests/scripts/test-role-key-spelling.sh
         tests/scripts/test-rpi5-per-board-pkgdir.sh
         tests/scripts/test-shared-build-assets.sh
         tests/scripts/test-spec-use-parity.sh

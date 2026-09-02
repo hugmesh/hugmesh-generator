@@ -35,7 +35,7 @@ _CONFIGS = [
                                       gpu_driver="nvidia", nvidia_cuda=True)),
     ("rpi5 pki node", ImageConfig(mode="mesh", role="pki", platform="rpi5")),
     ("rpi5 desktop", ImageConfig(mode="cloud", role="rpi5-desktop", platform="rpi5")),
-    ("jetson edge_ai", ImageConfig(mode="mesh", role="edge_ai", platform="jetson")),
+    ("jetson edge_ai", ImageConfig(mode="mesh", role="edge-ai", platform="jetson")),
     ("frite standalone", ImageConfig(mode="standalone", role="frite", platform="frite",
                                      flavor="both", desktop="light")),
     ("opz2 appliance", ImageConfig(mode="standalone", role="orangepizero2",
@@ -216,7 +216,7 @@ def test_validator_rejects_essential_removable_boundary_shift():
 def test_node_cell_locks_k8s_payload_desktop_cell_does_not():
     roles = _committed_roles()
     for platform, node_role, desk_role in (("rpi5", "pki", "rpi5-desktop"),
-                                           ("jetson", "edge_ai", "jetson-desktop")):
+                                           ("jetson", "edge-ai", "jetson-desktop")):
         k8s = set(pc.list_atoms(_GEN, platform, "packages-k8s"))
         assert k8s, f"{platform}: packages-k8s parsed empty"
         assert k8s <= set(roles[platform][node_role]["essential"]), \

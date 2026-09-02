@@ -37,7 +37,7 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 
 def _cfg(**kw) -> ImageConfig:
-    cfg = ImageConfig(platform="x86", role="be", mode="mesh", env="test")
+    cfg = ImageConfig(platform="x86", role="backend", mode="mesh", env="test")
     for k, v in kw.items():
         setattr(cfg, k, v)
     return cfg
@@ -96,7 +96,7 @@ def test_rpi5_standalone_on_a_node_blocks_because_the_builder_hard_errors():
     """build-rpi5-stage4.sh:1037 errs and exits 1 — a real post-dispatch dead-end, so this
     is the one shape that earns a BLOCK. Same field, same value, different platform: the
     tier follows builder truth, not the field."""
-    blocking, advisory = scope_violations(_cfg(platform="rpi5", role="be", standalone=True))
+    blocking, advisory = scope_violations(_cfg(platform="rpi5", role="backend", standalone=True))
     assert advisory == []
     assert len(blocking) == 1
     assert "hard-errors" in blocking[0]
@@ -143,7 +143,7 @@ def test_egress_vpn_stays_in_scope_for_desktops_in_every_mode():
 def test_login_factor_is_desktop_only_per_the_builder():
     """Pins the rule _sync_unlock_choices implements to the reason it exists: the builder
     writes the login marker only inside its ROLE_CLIENT branch (:3174-3175)."""
-    assert image_class("mesh", "be") == "node"
+    assert image_class("mesh", "backend") == "node"
     assert image_class("cloud", "desktop") == "desktop"
 
 

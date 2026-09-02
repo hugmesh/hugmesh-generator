@@ -11,6 +11,7 @@ from hugmesh_studio.core.config import Domain, ImageConfig, User
 from hugmesh_studio.core.platform_info import HostInfo
 from hugmesh_studio.core import worklist_driver as wd
 from hugmesh_studio.core import build_driver as bd
+from hugmesh_studio.core.roles import RoleVocabularyError
 from hugmesh_studio.core.worklist_driver import WorklistDriver, key_profile
 from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry, synthesize
 
@@ -25,12 +26,12 @@ def _base(tmp_path):
                     brand_title="Acme", org="Acme-Inc", cluster_domain="acme.example",
                     superdomain="core.acme.internal", output_dir=str(tmp_path / "out"))
     b.domains = [Domain(name="acme.example", title="Acme"),
-                 Domain(name="team.acme.example", title="Team", images=["be.rpi5"])]
+                 Domain(name="team.acme.example", title="Team", images=["backend.rpi5"])]
     b.users = [User(username="root-admin", domain="core.acme.internal", role="superadmin")]
     return b
 
 
-def _worklist(tmp_path, roles=(("pki", "x86"), ("be", "rpi5"), ("rpi5-desktop", "rpi5"))):
+def _worklist(tmp_path, roles=(("pki", "x86"), ("backend", "rpi5"), ("rpi5-desktop", "rpi5"))):
     return WorklistConfig(base=_base(tmp_path),
                           entries=[WorklistEntry(role=r, platform=p) for r, p in roles])
 
@@ -95,14 +96,33 @@ def _install_fake_genkeys(monkeypatch, fail_roles=()):
 
 # ── role -> key profile map (mirrors build-all-roles.sh) ─────────────────────────────
 def test_key_profile_map():
+    """The profile comes from the ONE table (scripts/_roles-lib.sh
+    HUGMESH_ROLE_KEYPROFILE), read through core/roles.py — it is no longer a dict
+    in worklist_driver.py, which was the fourth hand-copy of the same mapping."""
     assert key_profile("pki") == "pki"
-    assert key_profile("be") == "backend"
+    assert key_profile("backend") == "backend"
+    assert key_profile("frontend") == "frontend"
+    assert key_profile("omnibus") == "pki"        # single-node control plane
+    assert key_profile("edge-ai") == "host"
+    # `backend-gpu` IS a backend worker, so it takes the backend profile — on jetson
+    # too. Its jetson spelling (`gpu-host`) used to land on the `*) -> host`
+    # catch-all in build-all-roles.sh while the SAME role got `backend` on x86: one
+    # logical node, two keys profiles, decided by which platform built it.
+    assert key_profile("backend-gpu") == "backend"
+    assert key_profile("gpu-host") == "backend"   # the old jetson spelling, folded
+    assert key_profile("full") == "pki"           # the old jetson spelling of omnibus
+    assert key_profile("be") == "backend"         # the old x86 spellings still resolve
     assert key_profile("fe") == "frontend"
-    assert key_profile("omnibus") == "pki"        # single-node CP analogue
-    assert key_profile("edge_ai") == "host"
-    assert key_profile("full") == "pki"           # jetson single-node CP
-    assert key_profile("gpu-host") == "host"
-    assert key_profile("anything-else") == "host"  # fallback = worker key profile
+    assert key_profile("frite") == "host"         # a Studio platform-pseudo role id
+
+
+def test_key_profile_refuses_to_guess():
+    """NO fallback. The old `.get(role, "host")` answered every unknown id with the
+    worker profile, so a stale table produced a node holding the WRONG credentials
+    and nothing anywhere said so. The caller turns this into a failed KEYS step for
+    that one image instead."""
+    with pytest.raises(RoleVocabularyError):
+        key_profile("anything-else")
 
 
 # ── happy path: all succeed ──────────────────────────────────────────────────────────
@@ -126,7 +146,7 @@ def test_all_succeed_status_and_callbacks(monkeypatch, tmp_path):
 
 # ── failure tolerance ────────────────────────────────────────────────────────────────
 def test_failure_is_tolerated_and_summary_nonzero(monkeypatch, tmp_path):
-    _install_fake_builddriver(monkeypatch, codes={"be": 3})   # middle image fails
+    _install_fake_builddriver(monkeypatch, codes={"backend": 3})   # middle image fails
     _install_fake_genkeys(monkeypatch)
     drv = WorklistDriver(str(tmp_path), _worklist(tmp_path), host=host())
     code = drv.run_all()
@@ -146,7 +166,7 @@ def test_manifest_v2_written_up_front(monkeypatch, tmp_path):
     assert m["format"] == 2
     assert m["superdomain"] == "core.acme.internal"
     assert m["cluster_domain"] == "acme.example"
-    assert [img["id"] for img in m["images"]] == ["pki.x86", "be.rpi5", "rpi5-desktop.rpi5"]
+    assert [img["id"] for img in m["images"]] == ["pki.x86", "backend.rpi5", "rpi5-desktop.rpi5"]
     assert {d["name"] for d in m["domains"]} == {"acme.example", "team.acme.example"}
     assert m["users"][0]["username"] == "root-admin"
 
@@ -175,7 +195,7 @@ def test_keys_generated_for_nodes_only_with_right_profile(monkeypatch, tmp_path)
     assert drv.results[0].keys_ok is True and drv.results[1].keys_ok is True
     assert drv.results[2].keys_ok is None                       # desktop -> no keys attempt
     assert drv.results[2].keys_path is None
-    assert {e[0] for e in keys_events} == {"pki.x86", "be.rpi5"}
+    assert {e[0] for e in keys_events} == {"pki.x86", "backend.rpi5"}
 
 
 def test_keys_not_generated_for_failed_build(monkeypatch, tmp_path):
@@ -246,7 +266,7 @@ def test_preflight_shared_once_and_per_entry_labelled(tmp_path, monkeypatch):
     # made every GUI native build undispatchable), so the shared-problem fixture here
     # hides BOTH helpers to keep exercising the shared-vs-per-entry dedup contract.
     monkeypatch.setattr(bd.shutil, "which", lambda n: None)
-    wl = _worklist(tmp_path, roles=(("pki", "x86"), ("be", "x86"), ("pki", "rpi5")))
+    wl = _worklist(tmp_path, roles=(("pki", "x86"), ("backend", "x86"), ("pki", "rpi5")))
     drv = WorklistDriver(str(tmp_path), wl, host=host(is_root=False), backend="native")
     problems = drv.preflight()
     root_msgs = [p for p in problems if "elevation helper" in p]

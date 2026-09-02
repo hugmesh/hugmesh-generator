@@ -139,7 +139,7 @@ BLD tri secure_boot        PartiallyChecked
 | `character_studio` | `network.py:415` | `--no-character-studio` | off | same partial | emit nothing |
 | `character_forge` | `network.py:423` | `--no-character-forge` | off | same partial | emit nothing |
 | `edge_ai_tts` | `network.py:433` | `--no-edge-ai-tts` | off | same partial | emit nothing |
-| `edge_ai_service` | `network.py:373` | `--no-edge-ai` | off, **but auto-on for `--role edge_ai`** | **YES** (`x86:1089`) | keep a reachable force-off (unchecked ⇒ `--no-edge-ai` is correct here) |
+| `edge_ai_service` | `network.py:373` | `--no-edge-ai` | off, **but auto-on for `--role edge-ai`** | **YES** (`x86:1089`) | keep a reachable force-off (unchecked ⇒ `--no-edge-ai` is correct here) |
 | `aide` | `network.py:355` | `--no-aide` | `WANT_AIDE=false` `x86:461`, brand.conf can flip | **YES** | keep force-off |
 | `build_img` | `build.py:395` | `--no-img` | `BUILD_IMG=true` `x86:238` | **YES** (only way to skip the .img) | keep |
 | `live_iso` | `build.py:397` | `--no-live-iso` | `LIVE_ISO=true` `x86:243` | **YES** | keep; ask 13's "default on" = checked ⇒ emit `--live-iso` (see §9) |

@@ -364,7 +364,7 @@ done < "${MATRIX}"
 # land in the builder argv on every platform. Catches the silent-drop class
 # where the menu emits a make-var (IMG_FLAGS= / STANDALONE_FLAGS=) that the
 # target's recipe never consumes (the jetson/frite re-verify findings).
-for target in rpi-backend x86-pki frite jetson-edge_ai orangepi5 orangepizero2 orangepizero2w orangepizero3 orangepi3-lts orangepi4-lts; do
+for target in rpi-backend x86-pki frite jetson-edge-ai orangepi5 orangepizero2 orangepizero2w orangepizero3 orangepi3-lts orangepi4-lts; do
     reset_opts
     OPT_IMGFLAGS='--menu-imgflags-probe'
     OPT_EXTRA_FLAGS='--menu-extraflags-probe'
@@ -395,7 +395,7 @@ done
 # importing the GUI's flat-default bug into the one channel that never had it.
 # i2 — HONOUR ON DESKTOPS. An explicit value must still thread through, or the fix
 # would have silently broken the knob instead.
-for target in x86-pki x86-be x86-fe x86-omnibus; do
+for target in x86-pki x86-backend x86-frontend x86-omnibus; do
     reset_opts
     build_make_cmd "${target}" "installer-ui default ${target}" 1
     case "${RUN_MAKE[*]}" in
@@ -499,11 +499,11 @@ MENU_EOF
     MENU_FAIL=$(grep -c '^MENU FAIL' "${out}" || true)
     # the child's MENU→MAKE threading probes count toward the THRD bucket;
     # FAIL-CLOSED like everything else: 16 probes expected, shortfall = failures.
-    #  10 IMGFLAGS/EXTRA_FLAGS threading (rpi-backend, x86-pki, frite, jetson-edge_ai,
+    #  10 IMGFLAGS/EXTRA_FLAGS threading (rpi-backend, x86-pki, frite, jetson-edge-ai,
     #     orangepi5, orangepizero2, orangepizero2w, orangepizero3, orangepi3-lts,
     #     orangepi4-lts)
     # + 1 installer-ui menu DEFAULT i0 (build-menu.sh's pristine OPT_INSTALLER_UI)
-    # + 4 installer-ui role-class parity i1 (x86-pki, x86-be, x86-fe, x86-omnibus)
+    # + 4 installer-ui role-class parity i1 (x86-pki, x86-backend, x86-frontend, x86-omnibus)
     # + 1 installer-ui parity i2 (x86-standalone-thick)
     # Keep this count in sync with those probe lists' lengths. It is fail-closed for a
     # reason: a probe that stops EMITTING (renamed target, early `continue`) would
@@ -541,9 +541,13 @@ MENU_EOF
 }
 
 # ── channel 4: GUI — hugmesh_studio --print-command (headless, Qt-free) ──────
-# Studio ids differ from the builder spellings in two places: rpi5 spells the
-# node roles out (be/fe <-> backend/frontend) and the jetson desktop role id is
-# disambiguated (jetson-desktop -> --role desktop). Exercise the Studio ids.
+# The Studio role id and the builder token are THE SAME WORD now. This function used
+# to carry the only REVERSE copy of the be<->backend map in the tree (a third
+# hand-maintained spelling of it, running backwards), which is exactly why the
+# channels could disagree while this gate stayed green: it hard-coded the mapping
+# instead of sharing a vocabulary. What remains below are two genuine COMPOSITE ids —
+# `jetson-desktop` (a platform mangled into the role) and the JOB-grammar
+# `standalone-desktop` (a role PLUS a flag) — neither of which is a spelling.
 gui_config_json() { # platform role env board flavor desktop -> stdout JSON
     local platform="$1" role="$2" env="$3" board="$4" flavor="$5" desktop="$6"
     local mode gui_role="${role}" gui_flavor="${flavor}" standalone=false
@@ -563,8 +567,7 @@ gui_config_json() { # platform role env board flavor desktop -> stdout JSON
         gui_flavor=installer; standalone=true
     fi
     case "${platform}" in
-        rpi5)   mode=mesh
-                case "${role}" in backend) gui_role=be ;; frontend) gui_role=fe ;; esac ;;
+        rpi5)   mode=mesh ;;
         frite)  mode=cloud; gui_role=frite ;;
         jetson) mode=mesh
                 [ "${role}" = desktop ] && gui_role=jetson-desktop ;;
@@ -703,14 +706,22 @@ run_job_channel() {
     # ERROR — never skip silently ("0 rows probed" would otherwise read as
     # "0 failures"; the completeness gate below backstops this too).
     if [ "$(tail -n 1 "${fn}" 2>/dev/null)" != "}" ] \
-       || ! grep -q 'HARDWARE_CLASS' "${fn}" || ! grep -q 'PLATFORM=' "${fn}"; then
+       || ! grep -q 'HARDWARE_CLASS' "${fn}" || ! grep -q 'PLATFORM=' "${fn}" \
+       || ! grep -q 'hugmesh_role_for' "${fn}"; then
         _fail JOB "channel" "cannot extract resolve_build_target() from docker/build-image.sh — the whitelist format drifted; update this probe" "${fn}"
         JOB_FAIL=$((JOB_FAIL+1))
         NEG_FAIL=$((NEG_FAIL+5))   # the 5 JOBNEG probes below never ran
         return
     fi
-    MATRIX="${MATRIX}" FN="${fn}" bash <<'JOB_EOF' >"${out}" 2>"${TMP_DIR}/job.err"
+    MATRIX="${MATRIX}" FN="${fn}" ROLES_LIB="${PWD}/scripts/_roles-lib.sh" \
+        bash <<'JOB_EOF' >"${out}" 2>"${TMP_DIR}/job.err"
 set -u
+# THE ROLE VOCABULARY, sourced exactly as build-image.sh sources it. The extracted
+# resolve_build_target() body CALLS hugmesh_role_for / hugmesh_role_keyprofile; a
+# probe that omitted them would see every row reject and would report a total
+# channel outage as if it were a real regression.
+# shellcheck disable=SC1090
+source "${ROLES_LIB}"
 # the extracted-verbatim resolve_build_target() + every variable it reads or
 # writes (mirrors build-image.sh's own top-level initialisation)
 HARDWARE_CLASS="" IMAGE_TYPE=""
@@ -735,8 +746,12 @@ resolve() {
 # outputs BEFORE the walk is trusted. If build-image.sh renames the function's
 # output variables (PLATFORM/BUILD_ROLE/…), every row assertion below would
 # compare empty strings and pass vacuously — this canary trips first instead.
+# `be-gpu` is now an ALIAS, not a spelling the channel emits: the HARDWARE_CLASS
+# charset bans "+", which is the only reason that hyphen form ever existed, and the
+# canonical `backend-gpu` needs no workaround. The canary keeps using the alias on
+# purpose — it proves the permanent input compatibility AND the canonical output.
 if ! resolve x86.be-gpu primary \
-   || [ "${PLATFORM}" != x86 ] || [ "${BUILD_ROLE}" != "be+gpu" ]; then
+   || [ "${PLATFORM}" != x86 ] || [ "${BUILD_ROLE}" != "backend-gpu" ]; then
     echo "JOBDRIFT FAIL canary x86.be-gpu/primary — got PLATFORM='${PLATFORM}' BUILD_ROLE='${BUILD_ROLE}'; resolve_build_target's outputs drifted — update this probe"
     exit 3
 fi
@@ -930,7 +945,7 @@ JOB_EOF
 # the same guarantee is probed end-to-end inside run_menu_channel's child.)
 run_threading_checks() {
     local t out="${TMP_DIR}/thr.out"
-    for t in x86-pki x86-standalone-thin jetson jetson-edge_ai frite orangepi5 orangepizero2 orangepizero2w orangepizero3 orangepi3-lts orangepi4-lts; do
+    for t in x86-pki x86-standalone-thin jetson jetson-edge-ai frite orangepi5 orangepizero2 orangepizero2w orangepizero3 orangepi3-lts orangepi4-lts; do
         if make -n "${t}" NATIVE=1 STANDALONE_FLAGS='--matrix-sf-probe' >"${out}" 2>&1 \
            && grep -q -- '--matrix-sf-probe' "${out}"; then
             THR_PASS=$((THR_PASS+1))
@@ -939,7 +954,7 @@ run_threading_checks() {
             THR_FAIL=$((THR_FAIL+1))
         fi
     done
-    for t in rpi-backend x86-pki frite jetson jetson-edge_ai orangepi5 orangepizero2 orangepizero2w orangepizero3 orangepi3-lts orangepi4-lts; do
+    for t in rpi-backend x86-pki frite jetson jetson-edge-ai orangepi5 orangepizero2 orangepizero2w orangepizero3 orangepi3-lts orangepi4-lts; do
         if make -n "${t}" NATIVE=1 IMG_FLAGS='--matrix-if-probe' >"${out}" 2>&1 \
            && grep -q -- '--matrix-if-probe' "${out}"; then
             THR_PASS=$((THR_PASS+1))
@@ -1025,19 +1040,19 @@ run_gui_threading_checks() {
 
     # ── x86 ──
     guithr g1-cluster-domain-mesh-node \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","cluster_domain":"acme.example"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","cluster_domain":"acme.example"}' \
         '--cluster-domain acme.example' 'PLAN:^PLAN_CLUSTER_DOMAIN=acme.example$'
     guithr g1-cluster-domain-cloud-client \
         '{"platform":"x86","role":"desktop","mode":"cloud","env":"test","cluster_domain":"acme.example"}' \
         '--cluster-domain acme.example' 'PLAN:^PLAN_CLUSTER_DOMAIN=acme.example$'
     guithr g3-brand-profile-x86 \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","brand_profile":"'"${FIX}"'/brand.conf"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","brand_profile":"'"${FIX}"'/brand.conf"}' \
         "--config ${FIX}/brand.conf"
     guithr g4-release-state-x86 \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","release_state":"public"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","release_state":"public"}' \
         '--release-state public'
     guithr g6-games-domain-x86 \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","games_domain":"games.acme.example"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","games_domain":"games.acme.example"}' \
         '--games-domain games.acme.example'
     guithr g18-person-role-and-domains \
         '{"platform":"x86","role":"desktop","mode":"cloud","env":"test","person_role":"admin","domains":[{"name":"d.acme.example"}]}' \
@@ -1067,7 +1082,7 @@ run_gui_threading_checks() {
         '{"platform":"x86","role":"standalone-thick","mode":"standalone","env":"test","hostname":"myhost","timezone":"America/New_York","user":"bob"}' \
         '--hostname myhost' '--timezone America/New_York' '--user bob' 'PLAN:^PLAN_HOSTNAME=myhost$'
     guithr g27-node-fallback-creds \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","user_password":"pw","root_password":"pw2"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","user_password":"pw","root_password":"pw2"}' \
         '--user-password pw' '--root-password pw2'
     guithr g21-capable-composable \
         '{"platform":"x86","role":"laptop","mode":"cloud","env":"test","capable":true}' \
@@ -1083,39 +1098,39 @@ run_gui_threading_checks() {
         '--role chromebook' '--no-tailscale' '--no-sso' \
         'PLAN:^PLAN_ROLE=chromebook$' 'PLAN:^PLAN_ROLE_CLASS=client$'
     guithr g29-mesh-pins-x86 \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","tailscale":true,"headscale_version":"0.23.0","tailscale_version":"1.60.0","skip_tailscale":true}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","tailscale":true,"headscale_version":"0.23.0","tailscale_version":"1.60.0","skip_tailscale":true}' \
         '--headscale-version 0.23.0' '--tailscale-version 1.60.0' '--skip-tailscale' \
         'PLAN:^PLAN_MESH=headscale=0.23.0,tailscale=skip$'
     guithr g33-nvidia-cuda \
-        '{"platform":"x86","role":"be+gpu","mode":"mesh","env":"test","gpu_driver":"nvidia","nvidia_cuda":true}' \
+        '{"platform":"x86","role":"backend-gpu","mode":"mesh","env":"test","gpu_driver":"nvidia","nvidia_cuda":true}' \
         '--gpu-driver nvidia' '--nvidia-cuda' 'PLAN:^PLAN_CUDA=true$'
     guithr g33-grub-theme \
         '{"platform":"x86","role":"desktop","mode":"cloud","env":"test","grub_theme":"/tmp/gt"}' \
         '--grub-theme /tmp/gt'
     guithr g5-secure-boot-on \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","secure_boot":"on"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","secure_boot":"on"}' \
         '--secure-boot' 'PLAN:secure_boot=true'
     guithr g5-secure-boot-off \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","secure_boot":"off"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","secure_boot":"off"}' \
         '--no-secure-boot' 'PLAN:secure_boot=false'
     guithr g5-keys-usb-chain \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","keys_usb":"'"${FIX}"'/keysusb","secureboot_key":"'"${FIX}"'/keysusb/Keys/kernel_key.pem","secureboot_cert":"'"${FIX}"'/keysusb/Keys/kernel_key.der"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","keys_usb":"'"${FIX}"'/keysusb","secureboot_key":"'"${FIX}"'/keysusb/Keys/kernel_key.pem","secureboot_cert":"'"${FIX}"'/keysusb/Keys/kernel_key.der"}' \
         "--keys-usb ${FIX}/keysusb" '--secureboot-key' '--secureboot-cert'
     guithr g13-explicit-none-services \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","optional_services":["none"]}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","optional_services":["none"]}' \
         "--optional-services ''" 'PLAN:^PLAN_OPTIONAL_SERVICES=none$'
     guithr g14-all-services \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","optional_services":["all"]}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","optional_services":["all"]}' \
         '--all-services' 'PLAN:^PLAN_OPTIONAL_SERVICES=.*akkoma'
     guithr g14-exclude-services \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","optional_services":["all"],"exclude_services":["games","owncast"]}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","optional_services":["all"],"exclude_services":["games","owncast"]}' \
         "--exclude-services 'games owncast'" 'PLAN:!^PLAN_OPTIONAL_SERVICES=.*games'
     guithr g23-x86-artifacts \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","build_img":"off","live_iso":"on","installer_iso":true,"build_tar":"on"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","build_img":"off","live_iso":"on","installer_iso":true,"build_tar":"on"}' \
         '--no-img' '--live-iso' '--installer-iso' '--tar' \
         'PLAN:^PLAN_ARTIFACTS=stage4.tar.xz,live.iso,installer.iso,fs.tar.xz$'
     guithr g25-grow-x86 \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","grow":"16G"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","grow":"16G"}' \
         '--grow 16G' 'PLAN:grow=16g'
     guithr g31-home-extras \
         '{"platform":"x86","role":"standalone-thick","mode":"standalone","env":"test","home_seed_code_from":"'"${FIX}"'/seedcode","include_home_archive":"'"${FIX}"'/home.tar","seed_packages_from":"'"${FIX}"'/seedpkgs.list"}' \
@@ -1124,7 +1139,7 @@ run_gui_threading_checks() {
         '{"platform":"x86","role":"standalone-thick","mode":"standalone","env":"test","media_data":"off","media_label":"DATA","no_vaults":true}' \
         '--no-media-data' '--media-label DATA' '--no-vaults' 'PLAN:media_data=false'
     guithr g34-force-off-tristates \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","aide":"off","tor_onion_service":"off","character_studio":"off","character_forge":"off","edge_ai_service":"off","sunshine":"off"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","aide":"off","tor_onion_service":"off","character_studio":"off","character_forge":"off","edge_ai_service":"off","sunshine":"off"}' \
         '--no-aide' '--no-tor' '--no-character-studio' '--no-character-forge' '--no-edge-ai' '--no-sunshine'
     # sunshine (thin-desktop stream host, §8b): the with-channel on a tailnet
     # CLIENT desktop — the only surface the builder applies it to (elsewhere it
@@ -1136,33 +1151,33 @@ run_gui_threading_checks() {
     # BOTH channels of the tri-state (with/no), plus the slug through the
     # --optional-services checklist path (x86 + rpi5 parity below).
     guithr g34-with-character-forge \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","character_forge":true}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","character_forge":true}' \
         '--with-character-forge' 'PLAN:^PLAN_OPTIONAL_SERVICES=.*character-forge'
     guithr g13-character-forge-slug-in-services \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","optional_services":["akkoma","character-forge"]}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","optional_services":["akkoma","character-forge"]}' \
         "--optional-services 'akkoma character-forge'" 'PLAN:^PLAN_OPTIONAL_SERVICES=.*character-forge'
     guithr g30-image-stamps \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","release_tag":"rc1","version":"1.2.3"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","release_tag":"rc1","version":"1.2.3"}' \
         '--release-tag rc1' '--version 1.2.3'
     guithr g38-plumbing-x86 \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","skip_kernel":true,"skip_clean":true,"distdir":"/tmp","build_subdir":"sub","seed_url":"http://s/x"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","skip_kernel":true,"skip_clean":true,"distdir":"/tmp","build_subdir":"sub","seed_url":"http://s/x"}' \
         '--skip-kernel' '--skip-clean' '--distdir /tmp' '--build-subdir sub' '--seed-url http://s/x'
     guithr g2-headscale-url-env-passthrough \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","headscale_url":"https://hs.acme.example"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","headscale_url":"https://hs.acme.example"}' \
         'env HEADSCALE_URL=https://hs.acme.example' '!--headscale-url'
     # ── package deltas (WS-BUILDER emission flip): --packages-add appends explicit
     # atoms to the resolved set; --packages-drop of a NON-mandatory atom is honored.
     guithr g9-packages-add \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","packages_add":"app-editors/vim app-misc/tmux"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","packages_add":"app-editors/vim app-misc/tmux"}' \
         '--packages-add' 'app-editors/vim' 'PLAN:^PLAN_PACKAGES_ADD=app-editors/vim app-misc/tmux$'
     guithr g9-packages-drop \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","packages_drop":"app-editors/nano"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test","packages_drop":"app-editors/nano"}' \
         '--packages-drop' 'app-editors/nano' 'PLAN:^PLAN_PACKAGES_DROP=app-editors/nano$'
     # ── orchestration superdomain (WS-SUPER-B): emitted (effective <brand>.internal) for
     # a MESH build, threaded to the builder's PLAN_SUPERDOMAIN; ABSENT for standalone
     # (no orchestration plane). Default brand -> hugmesh.internal.
     guithr g-superdomain-mesh-x86 \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test"}' \
+        '{"platform":"x86","role":"backend","mode":"mesh","env":"test"}' \
         '--superdomain hugmesh.internal' 'PLAN:^PLAN_SUPERDOMAIN=hugmesh.internal$'
     guithr g-superdomain-standalone-absent-x86 \
         '{"platform":"x86","role":"standalone-thick","mode":"standalone","env":"test"}' \
@@ -1170,53 +1185,53 @@ run_gui_threading_checks() {
 
     # ── rpi5 ──
     guithr g4-release-state-rpi5 \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","release_state":"public"}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","release_state":"public"}' \
         '--role backend' '--release-state public'
     guithr g6-games-domain-rpi5 \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","games_domain":"games.acme.example"}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","games_domain":"games.acme.example"}' \
         '--games-domain games.acme.example'
     guithr g15-infra-slugs-rpi5 \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","optional_services":["tor","egress-vpn"]}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","optional_services":["tor","egress-vpn"]}' \
         "--optional-services 'tor egress-vpn'" 'PLAN:^PLAN_OPTIONAL_SERVICES=.*tor'
     # character-forge flag parity on the ARM channel (the tri-state is _X86_RPI5).
     guithr g34-with-character-forge-rpi5 \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","character_forge":true}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","character_forge":true}' \
         '--with-character-forge' 'PLAN:^PLAN_OPTIONAL_SERVICES=.*character-forge'
     guithr g34-no-character-forge-rpi5 \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","character_forge":"off"}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","character_forge":"off"}' \
         '--no-character-forge' 'PLAN:!^PLAN_OPTIONAL_SERVICES=.*character-forge'
     guithr g13-explicit-none-rpi5 \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","optional_services":["none"]}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","optional_services":["none"]}' \
         "--optional-services ''" 'PLAN:^PLAN_OPTIONAL_SERVICES=none$'
     guithr g24-rpi5-iso-tar \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","build_iso":true,"build_tar":"on"}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","build_iso":true,"build_tar":"on"}' \
         '--iso' '--tar' 'PLAN:^PLAN_ARTIFACTS=stage4.tar.xz,img,iso,fs.tar.xz$'
     guithr g24-rpi5-sd-only \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","sd_only":true,"skip_iso":true,"build_img":"off"}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","sd_only":true,"skip_iso":true,"build_img":"off"}' \
         '--sd-only' '--skip-iso' '--no-img' 'PLAN:sd_only=true'
     guithr g37-rpi5-kernel-board-overrides \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","dtb_prefix":"bcm2712","kernel_img":"Image","pcie_gen3":true,"cpu":"cortex-a76","defconfig":"foo_defconfig"}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","dtb_prefix":"bcm2712","kernel_img":"Image","pcie_gen3":true,"cpu":"cortex-a76","defconfig":"foo_defconfig"}' \
         '--dtb-prefix bcm2712' '--kernel-img Image' '--pcie-gen3' '--cpu cortex-a76' '--defconfig foo_defconfig' \
         'PLAN:pcie_gen3=true'
     guithr g28-local-user-without-standalone \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","local_user":"alice"}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","local_user":"alice"}' \
         '--local-user alice' '!--standalone' 'PLAN:^PLAN_LOCAL_USER=alice$' 'PLAN:^PLAN_STANDALONE=false$'
     guithr g26-identity-rpi5 \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","hostname":"myhost","timezone":"America/New_York","user":"bob"}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","hostname":"myhost","timezone":"America/New_York","user":"bob"}' \
         '--hostname myhost' '--timezone America/New_York' '--user bob' 'PLAN:^PLAN_HOSTNAME=myhost$'
     guithr g29-mesh-pins-rpi5 \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","tailscale":true,"headscale_version":"0.23.0","tailscale_version":"1.60.0","skip_tailscale":true}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","tailscale":true,"headscale_version":"0.23.0","tailscale_version":"1.60.0","skip_tailscale":true}' \
         '--headscale-version 0.23.0' '--tailscale-version 1.60.0' '--skip-tailscale' \
         'PLAN:^PLAN_MESH=headscale=0.23.0,tailscale=skip$'
     guithr g38-plumbing-rpi5 \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","extra_packages":"app-editors/vim","build_subdir":"sub","seed_url":"http://s/x","version":"1.2.3","skip_kernel":true,"skip_clean":true}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","extra_packages":"app-editors/vim","build_subdir":"sub","seed_url":"http://s/x","version":"1.2.3","skip_kernel":true,"skip_clean":true}' \
         '--extra-packages app-editors/vim' '--build-subdir sub' '--seed-url http://s/x' '--version 1.2.3' '--skip-kernel' '--skip-clean'
     guithr g25-grow-rpi5 \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","grow":"none"}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","grow":"none"}' \
         '--grow none' 'PLAN:grow=none'
     # WS-SUPER-B on ARM: the derived superdomain threads to the rpi5 builder's PLAN too.
     guithr g-superdomain-mesh-rpi5 \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test"}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test"}' \
         '--superdomain hugmesh.internal' 'PLAN:^PLAN_SUPERDOMAIN=hugmesh.internal$'
 
     # ── frite ──
@@ -1238,13 +1253,13 @@ run_gui_threading_checks() {
 
     # ── jetson ──
     guithr g36-jetson-kernel-flavor \
-        '{"platform":"jetson","role":"edge_ai","mode":"mesh","env":"test","kernel_flavor":"l4t"}' \
+        '{"platform":"jetson","role":"edge-ai","mode":"mesh","env":"test","kernel_flavor":"l4t"}' \
         '--kernel-flavor l4t' 'PLAN:^PLAN_KERNEL_FLAVOR=l4t$'
     guithr g24-jetson-no-img \
-        '{"platform":"jetson","role":"edge_ai","mode":"mesh","env":"test","build_img":"off"}' \
+        '{"platform":"jetson","role":"edge-ai","mode":"mesh","env":"test","build_img":"off"}' \
         '--no-img' 'PLAN:^PLAN_ARTIFACTS=stage4.tar.xz$'
     guithr g37-jetson-overrides \
-        '{"platform":"jetson","role":"edge_ai","mode":"mesh","env":"test","dtb":"tegra234.dtb","cpu":"cortex-a78","defconfig":"foo_defconfig"}' \
+        '{"platform":"jetson","role":"edge-ai","mode":"mesh","env":"test","dtb":"tegra234.dtb","cpu":"cortex-a78","defconfig":"foo_defconfig"}' \
         '--dtb tegra234.dtb' '--cpu cortex-a78' '--defconfig foo_defconfig' 'PLAN:^PLAN_DTB=tegra234.dtb$'
 
     # ── orangepi5 ──
@@ -1345,8 +1360,8 @@ run_negative_checks() {
     expect_fail "frite: invalid board"       ./build-frite-stage4.sh --board bogus --print-plan
     expect_fail "frite: invalid desktop"     ./build-frite-stage4.sh --board la-frite --desktop kde --print-plan
     expect_fail "jetson: invalid role"       ./build-jetson-stage4.sh --role bogus --print-plan
-    expect_fail "jetson: invalid board"      ./build-jetson-stage4.sh --role edge_ai --board bogus --print-plan
-    expect_fail "jetson: invalid env"        ./build-jetson-stage4.sh --role edge_ai --env staging --print-plan
+    expect_fail "jetson: invalid board"      ./build-jetson-stage4.sh --role edge-ai --board bogus --print-plan
+    expect_fail "jetson: invalid env"        ./build-jetson-stage4.sh --role edge-ai --env staging --print-plan
     expect_fail "x86: invalid env"           ./build-x86-host-stage4.sh --role pki --env staging --print-plan
     expect_fail "orangepi5: invalid board"   ./build-orangepi5-stage4.sh --board bogus --print-plan
     expect_fail "orangepi5: invalid flavor"  ./build-orangepi5-stage4.sh --flavor bogus --print-plan
@@ -1445,13 +1460,13 @@ run_negative_checks() {
     # of a tier-1 mandatory-payload atom must hard-fail (the image would fail its
     # post-emerge payload assert) — NEVER silently emit a payload-less stage4.
     expect_fail "x86: malformed --packages-add atom rejected" \
-        ./build-x86-host-stage4.sh --role be --packages-add 'app-editors/vim; reboot' --print-plan
+        ./build-x86-host-stage4.sh --role backend --packages-add 'app-editors/vim; reboot' --print-plan
     expect_fail "x86: --packages-drop of a mandatory-payload atom rejected" \
-        ./build-x86-host-stage4.sh --role be --packages-drop sys-cluster/kubelet --print-plan
+        ./build-x86-host-stage4.sh --role backend --packages-drop sys-cluster/kubelet --print-plan
     # orchestration superdomain (WS-SUPER-B): a malformed superdomain must be rejected at
     # the builder boundary (same RFC-1123 DNS allowlist as --cluster-domain).
     expect_fail "x86: malformed --superdomain rejected" \
-        ./build-x86-host-stage4.sh --role be --superdomain 'x;reboot.internal' --print-plan
+        ./build-x86-host-stage4.sh --role backend --superdomain 'x;reboot.internal' --print-plan
     # GUI: an unknown platform must refuse to print a command
     printf '{"platform":"bogus","role":"pki","mode":"mesh","env":"test"}\n' >"${TMP_DIR}/neg.json"
     expect_fail "gui: unknown platform" \
@@ -1487,16 +1502,16 @@ gui_gate() { # NAME CFG-JSON FLAG-THAT-MUST-BE-ABSENT...
 
 run_gui_gating_checks() {
     gui_gate "rpi5: steam is x86-only" \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","steam":"native"}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","steam":"native"}' \
         '--steam'
     gui_gate "rpi5: gpu-driver is x86-only" \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","gpu_driver":"nvidia"}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","gpu_driver":"nvidia"}' \
         '--gpu-driver'
     gui_gate "rpi5: edge-AI set is x86-only" \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","edge_ai_service":"on","edge_ai_runtime":"vllm"}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","edge_ai_service":"on","edge_ai_runtime":"vllm"}' \
         '--with-edge-ai' '--edge-ai-runtime'
     gui_gate "rpi5: u-boot chain is frite/opi5/opz2-only" \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","uboot_url":"https://x/u.bin","skip_uboot":true}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","uboot_url":"https://x/u.bin","skip_uboot":true}' \
         '--uboot-url' '--skip-uboot'
     gui_gate "frite: secure-boot family is x86-only" \
         '{"platform":"frite","role":"frite","mode":"cloud","env":"test","secure_boot":"on","keys_usb":"/tmp/keys"}' \
@@ -1508,7 +1523,7 @@ run_gui_gating_checks() {
         '{"platform":"frite","role":"frite","mode":"cloud","env":"test","release_tag":"rc1","distdir":"/tmp"}' \
         '--release-tag' '--distdir'
     gui_gate "jetson: services/games are x86+rpi5-only" \
-        '{"platform":"jetson","role":"edge_ai","mode":"mesh","env":"test","optional_services":["akkoma"],"enable_games":true}' \
+        '{"platform":"jetson","role":"edge-ai","mode":"mesh","env":"test","optional_services":["akkoma"],"enable_games":true}' \
         '--optional-services' '--enable-games'
     gui_gate "orangepi5: cluster plane is x86+rpi5-only" \
         '{"platform":"orangepi5","role":"orangepi5","mode":"cloud","env":"test","release_state":"public","games_domain":"games.acme.example"}' \
@@ -1521,7 +1536,7 @@ run_gui_gating_checks() {
     # config saved before the four themes landed. That is the crash this whole helper
     # exists to forbid ("gating must DROP, not crash").
     gui_gate "rpi5: a theme name the set no longer has is DROPPED, not a hard error" \
-        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","theme":"a-theme-that-no-longer-ships"}' \
+        '{"platform":"rpi5","role":"backend","mode":"mesh","env":"test","theme":"a-theme-that-no-longer-ships"}' \
         '--theme'
     gui_gate "orangepi5: a path-shaped theme is DROPPED off-x86 (no --theme to traverse)" \
         '{"platform":"orangepi5","role":"orangepi5","mode":"cloud","env":"test","theme":"../.."}' \
@@ -1540,7 +1555,7 @@ run_gui_gating_checks() {
         '--theme' '--wallpaper' '--brand-locked'
     # jetson encrypt-root/standalone: HARD-FAIL, not silent drop — the Orin's
     # single boot+root partition cannot boot LUKS2-encrypted (by design).
-    printf '{"platform":"jetson","role":"edge_ai","mode":"mesh","env":"test","encrypt_root":true}\n' >"${TMP_DIR}/jet-enc.json"
+    printf '{"platform":"jetson","role":"edge-ai","mode":"mesh","env":"test","encrypt_root":true}\n' >"${TMP_DIR}/jet-enc.json"
     expect_fail "gui: jetson encrypt-root hard-blocked" \
         env -C "${REPO_DIR}/studio" "${PYTHON}" -m hugmesh_studio --print-command \
             --config "${TMP_DIR}/jet-enc.json" --backend native --generator-dir "${REPO_DIR}"

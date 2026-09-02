@@ -70,7 +70,7 @@ def gen(tmp_path):
     aborted = root / "out" / "sessions" / PARTIAL
     aborted.mkdir(parents=True)
     (aborted / "hugmesh-x86-amd64-be-test-20260819T125930Z.img").write_bytes(b"")
-    for name in ("build-pki.rpi5.log", "build-be.x86.log", "build-fe.x86.log",
+    for name in ("build-pki.rpi5.log", "build-backend.x86.log", "build-frontend.x86.log",
                  "build-omnibus.x86.log"):
         (aborted / name).write_text("...", encoding="utf-8")
 
@@ -194,10 +194,10 @@ def test_empty_generator_dir_is_an_honest_empty_list(tmp_path):
 # ── the planned rows + the run hint ────────────────────────────────────────────────
 def test_planned_rows_are_the_plans_rows_in_boot_order(gen):
     _headers, rows = tui_qemu.planned_table(_plan(gen))
-    assert [r[1] for r in rows] == ["rpi5/pki", "x86/be", "x86/fe"]   # Pi first
+    assert [r[1] for r in rows] == ["rpi5/pki", "x86/backend", "x86/frontend"]   # Pi first
     assert "(decompressed once)" in rows[0][5]    # the .img.xz row says so
     text = "\n".join(_at_rows(gen).lines())
-    for label in ("rpi5/pki", "x86/be", "x86/fe"):
+    for label in ("rpi5/pki", "x86/backend", "x86/frontend"):
         assert label in text
 
 
@@ -227,47 +227,47 @@ def _verdicts(gen) -> dict[str, str]:
 
 def test_pass_and_fail_are_the_runners_own_verdicts(gen):
     _write_result(gen, "rpi5/pki")
-    _write_result(gen, "x86/be", status="FAIL", assertions_passed=30,
+    _write_result(gen, "x86/backend", status="FAIL", assertions_passed=30,
                   assertions_failed=2, detail="2 assertion(s) failed")
     verdicts = _verdicts(gen)
     assert verdicts["rpi5/pki"] == "PASS"
-    assert verdicts["x86/be"] == "FAIL"
+    assert verdicts["x86/backend"] == "FAIL"
 
 
 def test_a_planned_row_a_finished_run_never_graded_is_no_result(gen):
     _write_result(gen, "rpi5/pki")
-    _write_result(gen, "x86/be")
+    _write_result(gen, "x86/backend")
     # x86/fe has no verdict and nothing is live -> the run is over
     plan = _plan(gen)
     assert tui_qemu.run_completed(plan) is True
-    assert _verdicts(gen)["x86/fe"] == em.VERDICT_NO_RESULT == "NO-RESULT"
+    assert _verdicts(gen)["x86/frontend"] == em.VERDICT_NO_RESULT == "NO-RESULT"
     text = "\n".join(_at_rows(gen).lines())
     assert "NO-RESULT" in text
     assert "the run finished without grading this planned row" in text
 
 
 def test_a_pass_with_zero_assertions_is_suspect_and_never_shown_as_a_pass(gen):
-    _write_result(gen, "x86/be", status="PASS", assertions_passed=0,
+    _write_result(gen, "x86/backend", status="PASS", assertions_passed=0,
                   assertions_failed=0, detail="all assertions passed")
     verdicts = _verdicts(gen)
-    assert verdicts["x86/be"] == em.VERDICT_SUSPECT == "SUSPECT"
+    assert verdicts["x86/backend"] == em.VERDICT_SUSPECT == "SUSPECT"
     text = "\n".join(_at_rows(gen).lines())
     assert "SUSPECT" in text
     assert "graded PASS with 0 assertions recorded — never a pass" in text
     # the raw count that made it suspect is on screen, not hidden behind the word
     _headers, rows = tui_qemu.results_table(
         em.status(_plan(gen), run_completed=True))
-    suspect = next(r for r in rows if r[1] == "x86/be")
+    suspect = next(r for r in rows if r[1] == "x86/backend")
     assert suspect[3] == "SUSPECT" and suspect[4] == "0"
 
 
 def test_no_result_is_not_synthesized_while_a_row_is_still_live(gen):
     """A run in flight must not be accused of a missing verdict."""
     _write_result(gen, "rpi5/pki")
-    _write_record(gen, "x86/be", state="assertions")
+    _write_record(gen, "x86/backend", state="assertions")
     plan = _plan(gen)
     assert tui_qemu.run_completed(plan) is False
-    assert _verdicts(gen)["x86/fe"] == "pending"
+    assert _verdicts(gen)["x86/frontend"] == "pending"
 
 
 def test_a_run_that_never_started_is_never_called_finished(gen):
@@ -276,8 +276,8 @@ def test_a_run_that_never_started_is_never_called_finished(gen):
 
 def test_the_legend_only_names_verdicts_actually_on_screen(gen):
     _write_result(gen, "rpi5/pki")
-    _write_result(gen, "x86/be")
-    _write_result(gen, "x86/fe")
+    _write_result(gen, "x86/backend")
+    _write_result(gen, "x86/frontend")
     text = "\n".join(_at_rows(gen).lines())
     assert "PASS" in text
     for word in (em.VERDICT_SUSPECT, em.VERDICT_STALE, em.VERDICT_NO_RESULT):
@@ -299,11 +299,11 @@ def test_row_detail_carries_the_verdict_reason_and_both_row_argv(gen):
 
 
 def test_row_detail_shows_the_registry_record_when_one_exists(gen):
-    _write_record(gen, "x86/be")
+    _write_record(gen, "x86/backend")
     j = _at_rows(gen)
     j.feed("2")                                   # x86/be
     text = "\n".join(j.lines())
-    assert "hugmesh-qemu-dev-x86_be" in text and "22301" in text
+    assert "hugmesh-qemu-dev-x86_backend" in text and "22301" in text
 
 
 def test_an_unknown_row_number_is_an_inline_message_never_a_crash(gen):

@@ -21,6 +21,7 @@ import re
 import pytest
 
 from hugmesh_studio.core import device_catalog as dc
+from hugmesh_studio.core import roles as roles_lib
 from hugmesh_studio.core.config import (
     BUILDER_SCRIPTS, FRITE_BOARDS, JETSON_BOARDS, JETSON_ROLE_MAP, ORANGEPI5_BOARDS,
     ROLE_CHOICES, RPI5_ROLE_MAP, RPI_BOARDS, RPI_NODE_BOARDS,
@@ -157,14 +158,26 @@ def test_every_config_platform_and_board_is_claimed_by_a_selectable_device():
 
 # ── direction 3: catalog -> the builders' own allowlists ─────────────────────────
 
+# ── the ROLE allowlist moved OUT of the builders ─────────────────────────────────
+# Each builder used to carry its own `--role must be one of: ...` string, and this
+# guard parsed it. Role validation now happens ONCE, in scripts/_roles-lib.sh, which
+# every builder sources — so the reference is that declaration, read through
+# core/roles.py. The role half of these three tests therefore compares the STUDIO's
+# per-platform role set against the SHELL's, which is the drift that actually
+# mattered; the shell-side "does every builder really source and call it" half is
+# tests/scripts/test-role-key-spelling.sh's job (it can see all ten builders, which a
+# Studio-side test cannot).
+
 def test_rpi5_builder_board_and_role_allowlists_match():
     text = _builder_text("rpi5")
     assert _allowlist(text, "board") == set(RPI_BOARDS)
     studio_rpi5_roles = {r for m in ROLE_CHOICES for r, plats, _l in ROLE_CHOICES[m]
                          if "rpi5" in plats}
     mapped = {RPI5_ROLE_MAP.get(r, r) for r in studio_rpi5_roles}
-    assert _allowlist(text, "role") == mapped, \
-        "build-rpi5-stage4.sh role allowlist drifted from the studio role set"
+    assert set(roles_lib.roles_for_platform("rpi5")) >= mapped, \
+        "the Studio offers an rpi5 role scripts/_roles-lib.sh does not declare"
+    assert 'hugmesh_role_validate "${ROLE}" rpi5' in text, \
+        "build-rpi5-stage4.sh no longer validates --role through the shared vocabulary"
 
 
 def test_rpi3_desktop_only_hard_error_guard_is_present_and_mirrored():
@@ -191,23 +204,33 @@ def test_jetson_builder_board_and_role_allowlists_match():
     studio_jetson_roles = {r for m in ROLE_CHOICES for r, plats, _l in ROLE_CHOICES[m]
                            if "jetson" in plats}
     mapped = {JETSON_ROLE_MAP.get(r, r) for r in studio_jetson_roles}
-    assert _allowlist(text, "role") == mapped
+    assert set(roles_lib.roles_for_platform("jetson")) == mapped, \
+        "the Studio jetson role set and HUGMESH_ROLES_JETSON disagree"
+    assert 'hugmesh_role_validate "${ROLE}" jetson' in text, \
+        "build-jetson-stage4.sh no longer validates --role through the shared vocabulary"
 
 
 def test_x86_builder_role_allowlist_matches_modulo_documented_aliases():
     text = _builder_text("x86")
-    builder = _allowlist(text, "role")
     studio_x86_roles = {r for m in ROLE_CHOICES for r, plats, _l in ROLE_CHOICES[m]
                         if "x86" in plats}
-    # host (= be+gpu) and standalone-full (= standalone-thick) are builder-side alias
-    # arms, not separate images — the catalog deliberately does not list them.
-    assert builder == studio_x86_roles, \
-        f"x86 builder/studio role drift: builder-only={builder - studio_x86_roles} " \
-        f"studio-only={studio_x86_roles - builder}"
-    assert "standalone-full|" in text or "standalone-thick|standalone-full" in text, \
-        "expected the standalone-full alias arm in build-x86-host-stage4.sh"
-    assert re.search(r"^\s*host\)\s*ROLE=.be\+gpu.", text, re.M), \
-        "expected the host = be+gpu alias arm in build-x86-host-stage4.sh"
+    assert set(roles_lib.roles_for_platform("x86")) == studio_x86_roles, \
+        "x86 builder/studio role drift: "\
+        f"lib-only={set(roles_lib.roles_for_platform('x86')) - studio_x86_roles} "\
+        f"studio-only={studio_x86_roles - set(roles_lib.roles_for_platform('x86'))}"
+    assert 'hugmesh_role_validate "${ROLE}" x86' in text, \
+        "build-x86-host-stage4.sh no longer validates --role through the shared vocabulary"
+    # The two documented ALIAS arms are no longer arms — `host` and `standalone-full`
+    # fold in scripts/_roles-lib.sh, before the case block ever runs. Assert they are
+    # still ACCEPTED (that is the promise the operator was given), from the one place
+    # that now decides it.
+    al = roles_lib.aliases()
+    assert al.get("host") == "backend-gpu", "the legacy `host` alias was dropped"
+    assert al.get("be+gpu") == "backend-gpu", "the `be+gpu` alias was dropped"
+    assert al.get("be") == "backend" and al.get("fe") == "frontend", \
+        "the short be/fe spellings were dropped — every documented CLI must keep taking them"
+    assert al.get("standalone-full") == "standalone-thick", \
+        "the standalone-full alias was dropped"
 
 
 def test_frite_and_opi5_board_allowlists_match_and_single_role_platforms_have_no_role_allowlist():

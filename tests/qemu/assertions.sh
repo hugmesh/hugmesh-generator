@@ -3,7 +3,20 @@
 # booted, provisioned from the KEYS partition, and brought up its services.
 #
 # Exits non-zero if any assertion fails. Expects to run with sudo rights.
+#
+# THE ROLE VOCABULARY IS PREPENDED, NOT SOURCED. This file is piped into the guest
+# (`ssh ... 'sudo bash -s' < assertions.sh`), so it has no sibling files to source.
+# Both call sites — tests/qemu/run-qemu-test.sh and tests/qemu/docker-entrypoint.sh —
+# `cat scripts/_roles-lib.sh assertions.sh` instead, and the hermetic harness
+# (tests/qemu/role_topology_test.sh) does the same when it builds its extract. The
+# fallback below keeps the file runnable on its own; it degrades to "no alias folding"
+# rather than to a restated second copy of the vocabulary.
 set -u
+
+if ! declare -F hugmesh_role_canonicalize >/dev/null 2>&1; then
+    hugmesh_role_canonicalize() { printf '%s\n' "$1"; }
+    HUGMESH_ROLES_CANONICAL="${HUGMESH_ROLES_CANONICAL:-<role vocabulary not prepended>}"
+fi
 
 PASS=0; FAIL=0
 ok()   { echo "  PASS  $*"; PASS=$((PASS+1)); }
@@ -248,13 +261,26 @@ assert_role_topology() {  # $1 = root prefix ("" on the live guest; a fixture ro
     # var the harness also sets would make this section grade the harness's own opinion
     # of what it built instead of what came back — which is precisely the vacuous pass
     # being fixed. assertions_test.sh mutation (c) pins this.
+    # The marker is read as it was BAKED, then folded through the ONE role vocabulary
+    # (scripts/_roles-lib.sh). Folding matters here more than anywhere else: an image
+    # built before the vocabulary converged carries `be`, `fe`, `be+gpu` or `edge_ai`
+    # in this file, and this case block used to accept only the five rpi5 spellings —
+    # so on an x86 node it hit the `*)` arm, recorded a FAIL and RETURNED, skipping
+    # every one of the ~20 service assertions below. The whole section was x86-hostile
+    # by construction, and its hermetic test only ever built rpi5 fixtures, so CI
+    # could not see it.
+    if [ -n "${_role}" ]; then
+        _role="$(hugmesh_role_canonicalize "${_role}" 2>/dev/null || printf '%s' "${_role}")"
+    fi
     case "${_role}" in
-        pki|generic)       _class=cluster; _hs_expect=required  ;;
-        backend|frontend)  _class=cluster; _hs_expect=forbidden ;;
-        desktop)           _class=client;  _hs_expect=forbidden ;;
+        pki|generic|omnibus)                   _class=cluster; _hs_expect=required  ;;
+        backend|frontend|backend-gpu|edge-ai)  _class=cluster; _hs_expect=forbidden ;;
+        desktop|laptop|chromebook)             _class=client;  _hs_expect=forbidden ;;
+        standalone-thin|standalone-thick|standalone-unaffiliated)
+                                               _class=client;  _hs_expect=forbidden ;;
         "") bad "/etc/hugmesh/role is missing or empty — the image cannot say which role it is, so NO role assertion below can run"
             return ;;
-        *)  bad "/etc/hugmesh/role holds '${_role}', which is not one of the five roles build-rpi5-stage4.sh:1244 accepts (generic pki backend frontend desktop)"
+        *)  bad "/etc/hugmesh/role holds '${_role}', which is not a canonical role in scripts/_roles-lib.sh (${HUGMESH_ROLES_CANONICAL})"
             return ;;
     esac
     ok "role marker names a known role ('${_role}' => ${_class} node)"
