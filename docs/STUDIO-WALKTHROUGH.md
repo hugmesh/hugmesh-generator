@@ -167,10 +167,12 @@ The action bar wraps and holds more than the bring-up: Check readiness (read-onl
 
 Sensible first run: `test`, the default source mode, Check readiness, then Generate & start.
 
+Saved meshes: once a mesh is up, **Save this mesh** records it (configuration, the env it exports, overlay text, per-repo source HEADs, doors, account names and roles, credential *pointers*, and an inventory of its data volumes — never the volumes' contents and never a password) under the Studio state dir. The **Saved meshes** table sits above the action bar; each row says, before you click, whether it would Start (volumes still present after Stop mesh: reattach, no re-mint, no re-seed) or Restore (volumes gone after Stop & clean Docker: bring up empty and re-seed — same usernames; the same passwords only if the record kept credential copies, an opt-in that is off by default). Delete removes only the record. Never restored: the tailnet auth key, passwords of users added with Add user…, exact image bits and the .onion after a clean. The same records drive `python3 -m hugmesh_studio.core.local_mesh_bootstrap mesh-save|mesh-restore`.
+
 Traps:
 
 - Entering the page probes the real compose project. If a mesh is already up, the mesh-state line says so — "Generate & start" would bring it up a second time over the live stack.
-- The "Stop mesh" tooltip claims it runs `make stack-down` and drops the stack's data volumes. The code path runs `make stack-halt`, which the Makefile documents as the non-destructive stop that keeps identity, rooms, accounts and the BFF databases. Treat that tooltip as stale. **Stop & clean Docker…** is the destructive one: volumes and the ~28 built images go, and the next start is a cold build measured in hours. It confirms first and lists exactly what it removes and what it does not.
+- "Stop mesh" runs `make stack-halt`, which the Makefile documents as the non-destructive stop that keeps identity, rooms, accounts and the BFF databases — its tooltip and log line used to claim `make stack-down` + dropped volumes and were corrected with the saved-meshes work, whose warm Start depends on the true behaviour. **Stop & clean Docker…** is the destructive one: volumes and the ~28 built images go, and the next start is a cold build measured in hours. It confirms first and lists exactly what it removes and what it does not.
 - The DevOps lane is a separate Kubernetes cluster. Starting or deleting it changes nothing about the running containers.
 
 Downstream: nothing. This page emits no image-config fields and ends the path.

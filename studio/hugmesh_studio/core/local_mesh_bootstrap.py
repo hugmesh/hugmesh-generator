@@ -41,7 +41,7 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 
 from . import own_casdoor, theme
 from .config import IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
@@ -377,6 +377,54 @@ class LocalMeshBootstrapConfig:
         if self.is_prod():
             return f"https://id.{self.resolved_domain()}"
         return "http://localhost:8000"
+
+    # ── JSON round-trip (the saved-mesh record; core/saved_meshes.py) ──────────
+    # THE TRAP these two exist to hold: ``services`` and ``kind_addons`` are
+    # ``tuple | None``, and None ("no picker was ever used" — profiles come from
+    # the legacy social/with_tor booleans, nothing federation-shaped is exported,
+    # `make kind-up` runs byte-identically) is NOT the same as () ("the operator
+    # explicitly chose none", exported as the literal `none`). None is encoded as
+    # JSON null and () as [], and BOTH directions are pinned by test — collapsing
+    # them silently re-enables metrics-server and flips the profile semantics.
+    _TUPLE_OR_NONE_FIELDS = ("services", "kind_addons")
+    _TUPLE_FIELDS = ("web_locales", "own_idp_domains")
+    _BOOL_FIELDS = ("social", "with_tor")
+
+    def to_dict(self) -> dict:
+        """Every field, JSON-shaped. A pure serialiser: it drops NOTHING — the
+        saved-mesh record is what blanks ``auth_key`` (and says so in its
+        ``blanked_secrets``), so that a round-trip through this pair is exact."""
+        d = asdict(self)
+        for k in self._TUPLE_OR_NONE_FIELDS:
+            d[k] = None if d[k] is None else list(d[k])
+        for k in self._TUPLE_FIELDS:
+            d[k] = list(d[k] or ())
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "LocalMeshBootstrapConfig":
+        """The inverse of :meth:`to_dict`: unknown keys are FILTERED (a record from
+        a newer Studio must still load), every declared-str field is coerced (a
+        record is JSON on a writable disk), lists re-tuple, and null/[] keep
+        their distinct meanings for the two ``tuple | None`` fields."""
+        if not isinstance(d, dict):
+            raise ValueError("bootstrap config must be a JSON object")
+        known = {f.name: f for f in fields(cls)}
+        vals = {k: v for k, v in d.items() if k in known}
+        for k in cls._TUPLE_OR_NONE_FIELDS:
+            if k in vals:
+                v = vals[k]
+                vals[k] = None if v is None else tuple(str(x) for x in v)
+        for k in cls._TUPLE_FIELDS:
+            if k in vals:
+                vals[k] = tuple(str(x) for x in (vals[k] or ()))
+        for k in cls._BOOL_FIELDS:
+            if k in vals:
+                vals[k] = bool(vals[k])
+        for k, f in known.items():
+            if k in vals and f.type == "str" and not isinstance(vals[k], str):
+                vals[k] = "" if vals[k] is None else str(vals[k])
+        return cls(**vals)
 
 
 class LocalMeshBootstrap:
@@ -926,34 +974,20 @@ class LocalMeshBootstrap:
         ok, msg = self._stack_node().m2_bootstrap(on_line=on_line, cancel=cancel)
         return ok, [f"[m2-bootstrap] {'ok' if ok else 'FAILED'}: {_tail(msg)}"]
 
-    def up(self, on_line=None, cancel=None) -> tuple[bool, list[str]]:
-        """The from-scratch bring-up. Returns (ok, log-lines). NO secret VALUE ever
-        appears in the log lines — only the username + the path its password landed
-        in. Order: guard -> generate -> read superadmin -> stack-up -> stack-seed
-        (password bridged via env) -> (prod) attach overlay.
-
-        ``on_line`` streams progress AS IT HAPPENS (creds milestones + the live
-        `make` output) — without it a cold bring-up is an hour of silence ending in
-        one text blob; ``cancel`` terminates the running build's process group."""
-        log: list[str] = []
-
-        def _note(line: str) -> None:
-            log.append(line)
-            if on_line is not None:
-                on_line(line)
-        # NOTE: these refusals MUST stream via _note(). _MeshWorker's stream mode
-        # deliberately discards the returned lines (they normally already streamed),
-        # so a plain `return False, [...]` here is INVISIBLE in the GUI — the operator
-        # sees the "generating credentials…" line and then nothing at all.
+    def _prepare(self, _note, on_line=None, cancel=None) -> bool:
+        """guard -> validate -> host preflight (+ the m2 self-heal). Shared by
+        :meth:`up` and :meth:`restore`, so a restore can never skip a gate an
+        ``up`` runs. Every refusal STREAMS through ``_note`` (see :meth:`up` for
+        why a plain return would be invisible in the GUI)."""
         ok, why = self.guard_host_local()
         if not ok:
             _note(why)
-            return False, log
+            return False
         problems = self.validate()
         if problems:
             for _ln in ["cannot start:", *(f"  - {p}" for p in problems)]:
                 _note(_ln)
-            return False, log
+            return False
 
         # Host preflight BEFORE any side effect (no creds are minted for a host
         # that cannot build/run the stack). On failure the operator gets a SHORT
@@ -975,46 +1009,42 @@ class LocalMeshBootstrap:
                 _note(_ln)
             if not ok_m2:
                 _note("[m2-bootstrap] FAILED — nothing was generated or started.")
-                return False, log
+                return False
             problems = self.preflight()
         if problems:
             for _ln in ["preflight failed — nothing was generated or started. "
                         "Fix, then retry:",
                         *(f"  - {p}" for p in problems)]:
                 _note(_ln)
-            return False, log
+            return False
+        return True
 
-        ok, msg = self.generate_creds()
-        _note(f"[creds] {msg}")
-        if not ok:
-            return False, log
-
-        sa = self.read_superadmin()
-        if not sa.get("password"):
-            _note(f"[creds] could not read the minted superadmin from "
-                  f"{self.secrets_json}")
-            return False, log
-        # NOTE: log the USERNAME + WHERE the password is — never the value.
-        _note(f"[creds] minted superadmin '{sa['username']}' "
-              f"(password in {self.secrets_json})")
-
+    def _start_seed_overlay(self, _note, sa_user: str, sa_password: str,
+                            seed_env: dict[str, str] | None = None,
+                            on_line=None, cancel=None) -> bool:
+        """stack-up -> stack-seed (password bridged via env) -> (prod) overlay ->
+        tor onion -> the [done] line. The tail :meth:`up` and :meth:`restore`
+        share; the ONLY difference between the two is what runs BEFORE it (mint
+        fresh credentials, or reuse the saved ones)."""
         stack = self._stack_node()
         ok, msg = stack.start(on_line=on_line, cancel=cancel)
         _note(f"[stack-up] {'ok' if ok else 'FAILED'}: {_tail(msg)}")
         if not ok:
-            return False, log
+            return False
 
         # Bridge BOTH the minted username and password into `make stack-seed` (env
         # only, never argv): the username so seed-e2e provisions the ROLE_SUPERADMIN
         # persona under the login the plan/log/secrets advertise (not the hardcoded
         # e2e-superadmin default), the password so it is actually usable.
-        ok, msg = stack.seed({
-            SEED_SUPERADMIN_USERNAME_ENV: sa["username"],
-            SEED_SUPERADMIN_PASSWORD_ENV: sa["password"],
-        }, on_line=on_line, cancel=cancel)
+        env = {
+            SEED_SUPERADMIN_USERNAME_ENV: sa_user,
+            SEED_SUPERADMIN_PASSWORD_ENV: sa_password,
+        }
+        env.update(seed_env or {})
+        ok, msg = stack.seed(env, on_line=on_line, cancel=cancel)
         _note(f"[stack-seed] {'ok' if ok else 'FAILED'}: {_tail(msg)}")
         if not ok:
-            return False, log
+            return False
 
         if self.overlay_will_attach():
             mesh = self._mesh_node()
@@ -1025,7 +1055,7 @@ class LocalMeshBootstrap:
             ok, msg = mesh.start()
             _note(f"[mesh-overlay] {'ok' if ok else 'FAILED'}: {_tail(msg)}")
             if not ok:
-                return False, log
+                return False
         else:
             _note("[mesh-overlay] skipped (LAN-only / no auth key)")
 
@@ -1046,7 +1076,152 @@ class LocalMeshBootstrap:
 
         _note(f"[done] platform up. Front door: {self._stack_node().web_url}  "
               f"| Casdoor issuer: {self.cfg.issuer()}")
-        return True, log
+        return True
+
+    def up(self, on_line=None, cancel=None) -> tuple[bool, list[str]]:
+        """The from-scratch bring-up. Returns (ok, log-lines). NO secret VALUE ever
+        appears in the log lines — only the username + the path its password landed
+        in. Order: guard -> generate -> read superadmin -> stack-up -> stack-seed
+        (password bridged via env) -> (prod) attach overlay.
+
+        ``on_line`` streams progress AS IT HAPPENS (creds milestones + the live
+        `make` output) — without it a cold bring-up is an hour of silence ending in
+        one text blob; ``cancel`` terminates the running build's process group."""
+        log: list[str] = []
+
+        def _note(line: str) -> None:
+            log.append(line)
+            if on_line is not None:
+                on_line(line)
+        # NOTE: these refusals MUST stream via _note(). _MeshWorker's stream mode
+        # deliberately discards the returned lines (they normally already streamed),
+        # so a plain `return False, [...]` here is INVISIBLE in the GUI — the operator
+        # sees the "generating credentials…" line and then nothing at all.
+        if not self._prepare(_note, on_line=on_line, cancel=cancel):
+            return False, log
+
+        ok, msg = self.generate_creds()
+        _note(f"[creds] {msg}")
+        if not ok:
+            return False, log
+
+        sa = self.read_superadmin()
+        if not sa.get("password"):
+            _note(f"[creds] could not read the minted superadmin from "
+                  f"{self.secrets_json}")
+            return False, log
+        # NOTE: log the USERNAME + WHERE the password is — never the value.
+        _note(f"[creds] minted superadmin '{sa['username']}' "
+              f"(password in {self.secrets_json})")
+
+        ok = self._start_seed_overlay(_note, sa["username"], sa["password"],
+                                      on_line=on_line, cancel=cancel)
+        return ok, log
+
+    # ── saved meshes (core/saved_meshes.py) ──────────────────────────────────
+    def e2e_credentials_path(self) -> str:
+        """``<generator_dir>/.e2e-credentials`` — the run-state file the seeder
+        writes and every later seed reads (tests/stack/e2e-password.sh)."""
+        from .saved_meshes import E2E_CREDENTIALS_BASENAME
+        return os.path.join(self.generator_dir, E2E_CREDENTIALS_BASENAME)
+
+    def _put_saved_credentials_back(self, rec, _note) -> None:
+        from . import saved_meshes
+        restored = saved_meshes.put_copies_back(
+            rec, e2e_target=self.e2e_credentials_path(),
+            secrets_target=self.secrets_json)
+        if restored:
+            _note("[creds] put the saved credential file(s) back in place: "
+                  + ", ".join(restored) + " (0600; values never logged)")
+
+    def start_saved(self, rec, on_line=None, cancel=None) -> tuple[bool, list[str]]:
+        """The WARM restore (saved-mesh case 1: volumes + images present, after
+        'Stop mesh'): ``stack.start()`` ONLY — no credentials are minted and no
+        seed runs, so identity, rooms and posts come back exactly as they were.
+
+        The one guard: if the on-disk ``.e2e-credentials`` no longer matches the
+        record AND the record kept a copy, the copy is put back first — without
+        that the next seed from this page mints a second password and every persona
+        401s (seed-e2e.sh leg 1c, exit 3). No copy -> the current file is used and
+        the log says so."""
+        log: list[str] = []
+
+        def _note(line: str) -> None:
+            log.append(line)
+            if on_line is not None:
+                on_line(line)
+        ok, why = self.guard_host_local()
+        if not ok:
+            _note(why)
+            return False, log
+        if rec.has_credential_copies():
+            self._put_saved_credentials_back(rec, _note)
+        else:
+            _note("[creds] no credential copy in this record — the current "
+                  f"{os.path.basename(self.e2e_credentials_path())} is used as it is")
+        _note(f"[saved-mesh] starting '{rec.label}' — reattaching its "
+              f"{rec.volume_count()} data volume(s); nothing is re-minted or re-seeded")
+        stack = self._stack_node()
+        ok, msg = stack.start(on_line=on_line, cancel=cancel)
+        _note(f"[stack-up] {'ok' if ok else 'FAILED'}: {_tail(msg)}")
+        if ok:
+            _note(f"[done] platform up. Front door: {stack.web_url}  "
+                  f"| Casdoor issuer: {self.cfg.issuer()}")
+        return ok, log
+
+    def restore(self, rec, on_line=None, cancel=None) -> tuple[bool, list[str]]:
+        """The COLD restore (saved-mesh case 2: volumes gone, after 'Stop && clean
+        Docker'): the :meth:`up` sequence MINUS ``generate_creds``.
+
+        This is the single most important correctness point of the saved-mesh
+        lane: ``up()`` ALWAYS re-mints ``secrets.json``, so a restore routed
+        through it would overwrite the very bundle the record points at. Here the
+        saved copies (when the record kept any) are put back in place, the
+        superadmin is READ (never minted) and the seed runs with
+        :func:`.saved_meshes.restore_env` merged in — env only, never argv, never a
+        log line. Refuses with one sentence when the record declares copies that
+        are no longer on disk."""
+        from . import saved_meshes
+        log: list[str] = []
+
+        def _note(line: str) -> None:
+            log.append(line)
+            if on_line is not None:
+                on_line(line)
+        missing = [p for p in rec.credential_copies() if not os.path.isfile(p)]
+        if missing:
+            _note("[restore] refused — this record declares saved credential files "
+                  "that are no longer on disk: "
+                  + ", ".join(os.path.basename(p) for p in missing)
+                  + ". Restoring anyway would seed different passwords than the "
+                    "record promises; delete the record or put the files back.")
+            return False, log
+        if not self._prepare(_note, on_line=on_line, cancel=cancel):
+            return False, log
+
+        if rec.has_credential_copies():
+            self._put_saved_credentials_back(rec, _note)
+        env = saved_meshes.restore_env(rec)
+        sa = self.read_superadmin()
+        user = (env.get(SEED_SUPERADMIN_USERNAME_ENV) or sa.get("username")
+                or self.cfg.superadmin_username)
+        password = env.get(SEED_SUPERADMIN_PASSWORD_ENV) or sa.get("password") or ""
+        if not password:
+            _note("[creds] no superadmin password is available: the secrets bundle "
+                  f"at {self.secrets_json} is gone and this record kept no copy — "
+                  "use 'Generate && start' to mint a new one.")
+            return False, log
+        # NOTE: log the USERNAME + WHERE the password came from — never the value.
+        _note(f"[creds] reusing superadmin '{user}' "
+              + ("from the record's saved copy"
+                 if SEED_SUPERADMIN_PASSWORD_ENV in env else
+                 f"from {self.secrets_json}")
+              + " — nothing is re-minted")
+        env.pop(SEED_SUPERADMIN_USERNAME_ENV, None)
+        env.pop(SEED_SUPERADMIN_PASSWORD_ENV, None)
+        ok = self._start_seed_overlay(_note, user, password, seed_env=env,
+                                      on_line=on_line, cancel=cancel)
+        return ok, log
 
     def _await_onion(self, stack, note, cancel, timeout_s: int = 45) -> str:
         """Poll the stack for the published .onion URL, up to ``timeout_s`` (tor
@@ -1067,8 +1242,9 @@ class LocalMeshBootstrap:
         return stack.onion_url()
 
     def down(self) -> tuple[bool, list[str]]:
-        """Tear down BOTH composed projects: the stack (make stack-down) + the mesh
-        overlay (LocalMeshNode.stop())."""
+        """Stop BOTH composed projects: the stack (``make stack-halt`` — the
+        volumes are KEPT, see LocalStackNode.stop) + the mesh overlay
+        (LocalMeshNode.stop()). ``clean()`` is the one that drops volumes."""
         log: list[str] = []
         stack = self._stack_node()
         # WHAT the stop did, in words. `make stack-down` echoes its whole STACK_ENV
@@ -1079,7 +1255,7 @@ class LocalMeshBootstrap:
         ok_stack, msg = stack.stop()
         if ok_stack:
             log.append("[stack-down] ok: " + (f"stopped the platform stack ({before.detail}) "
-                                              f"and dropped its volumes"
+                                              f"and kept its volumes (make stack-halt)"
                                               if before.running else
                                               "nothing was running — no containers to stop"))
         else:
@@ -1190,9 +1366,87 @@ def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
         own_idp_domains=_parse_own_casdoor_domains(args.own_casdoor_domain))
 
 
+def _confirm_prod(action: str) -> int:
+    """The prod TTY confirm `up` and `mesh-restore` share: 0 = go, else the exit
+    code. No bypass flag by design (golive's posture)."""
+    if not sys.stdin.isatty():
+        print(f"[refused] prod {action} requires an interactive TTY to confirm "
+              "(there is deliberately no --yes bypass).", file=sys.stderr)
+        return 2
+    try:
+        reply = input(f"Type 'yes' to {action} this prod mesh: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        reply = ""
+    if reply != "yes":
+        print("[aborted] no changes made.")
+        return 1
+    return 0
+
+
+def _saved_mesh_cli(args: argparse.Namespace) -> int:
+    """``mesh-save`` / ``mesh-restore`` over the SAME core the GUI page uses, so
+    the record format is never a GUI-only artifact."""
+    from . import saved_meshes
+    if args.subcommand == "mesh-save":
+        cfg = _cfg_from_args(args)
+        boot = LocalMeshBootstrap(args.generator_dir, cfg)
+        node = boot._stack_node()
+        if not node.status().running:
+            print("[refused] no local mesh is running — there is nothing to save. "
+                  "(mesh-save records the RUNNING mesh; use `up` first.)",
+                  file=sys.stderr)
+            return 1
+        rec = saved_meshes.capture(args.generator_dir, cfg, node, boot,
+                                  label=args.label,
+                                  copy_credentials=args.copy_credentials)
+        path = saved_meshes.save(rec)
+        if not path:
+            print(f"[failed] the record could not be written under "
+                  f"{saved_meshes.meshes_dir()}", file=sys.stderr)
+            return 1
+        print(f"saved {rec.id} -> {path}")
+        print(f"  {rec.volume_count()} data volume(s) inventoried, NOT copied "
+              f"(included=false: {saved_meshes.VOLUMES_NOT_INCLUDED_REASON})")
+        print("  credential files: " + ("copied at 0600 into the record's side dir"
+                                        if args.copy_credentials else
+                                        "pointers only (paths, hashes, mtimes)"))
+        return 0
+
+    # mesh-restore
+    if not args.mesh_id:
+        print("mesh-restore needs a record id "
+              "(`python3 -m hugmesh_studio.core.saved_meshes list`).", file=sys.stderr)
+        return 2
+    rec = saved_meshes.find(args.mesh_id)
+    if rec is None:
+        print(f"no saved mesh with id {args.mesh_id}", file=sys.stderr)
+        return 1
+    cfg = LocalMeshBootstrapConfig.from_dict(rec.config)
+    key = _read_authkey(args)
+    if key:
+        cfg.auth_key = key          # the one field a record never carries
+    boot = LocalMeshBootstrap(args.generator_dir, cfg)
+    plan = saved_meshes.restore_plan(rec, **saved_meshes.probe_state(rec))
+    print(f"{rec.id}  {rec.label}")
+    print(f"  {plan.sentence}")
+    for w in plan.warnings:
+        print(f"  WARNING: {w}")
+    if plan.mode == saved_meshes.MODE_BLOCKED:
+        return 1
+    if cfg.is_prod():
+        rc = _confirm_prod("restore")
+        if rc:
+            return rc
+    if plan.can_start():
+        ok, log = boot.start_saved(rec, on_line=print)
+    else:
+        ok, log = boot.restore(rec, on_line=print)
+    return 0 if ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     """Qt-free entrypoint shared by the ncurses menu + the Makefile mesh-bootstrap
-    targets. Verbs: plan | up | down | status.
+    targets. Verbs: plan | up | down | status | mesh-save | mesh-restore.
 
     Non-destructive by default: ``plan`` only prints the manifest; ``up`` is the sole
     action that mints creds + starts containers, and a prod ``up`` requires an
@@ -1206,11 +1460,28 @@ def main(argv: list[str] | None = None) -> int:
             "start from scratch' path of the wizard's fourth choice. Builds NO image; "
             "composes the gen scripts + `make stack-up` + the docker-compose.mesh.yml "
             "overlay. Host-local only (refuses to run in a cluster pod)."))
-    p.add_argument("subcommand", choices=("plan", "up", "down", "status"),
+    p.add_argument("subcommand", choices=("plan", "up", "down", "status",
+                                          "mesh-save", "mesh-restore"),
                    help="plan = print the confirm-before-run manifest (no side "
                         "effects); up = GENERATE creds + START the stack (explicit "
                         "action; prod TTY-confirms); down = stop both projects; "
-                        "status = are they running?")
+                        "status = are they running?; mesh-save = record the RUNNING "
+                        "mesh as a saved-mesh record (core/saved_meshes.py — "
+                        "config, source HEADs, credential POINTERS, a volume "
+                        "inventory; never volume contents, never a password); "
+                        "mesh-restore <id> = bring a saved mesh back: a warm start "
+                        "when its volumes+images are still here, else bring up + "
+                        "re-seed WITHOUT re-minting credentials.")
+    p.add_argument("mesh_id", nargs="?", default="",
+                   help="mesh-restore: the saved record id "
+                        "(`python3 -m hugmesh_studio.core.saved_meshes list`).")
+    p.add_argument("--label", default="",
+                   help="mesh-save: a human label for the record (default: derived).")
+    p.add_argument("--copy-credentials", action="store_true",
+                   help="mesh-save: ALSO copy .e2e-credentials and keys-out/vault/"
+                        "secrets.json into the record's side dir (0600). OFF by "
+                        "default — the record holds pointers only. Needed to bring "
+                        "the SAME passwords back after `stack-clean`.")
     p.add_argument("--env", choices=("test", "prod"), default="test",
                    help="test (DEFAULT, LAN-only/offline) or prod (real public domain).")
     p.add_argument("--superadmin-username", default="superadmin",
@@ -1312,6 +1583,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="the hugmesh-generator checkout (default: this module's repo).")
     args = p.parse_args(argv)
 
+    if args.subcommand in ("mesh-save", "mesh-restore"):
+        return _saved_mesh_cli(args)
+
     cfg = _cfg_from_args(args)
     boot = LocalMeshBootstrap(args.generator_dir, cfg)
 
@@ -1336,18 +1610,9 @@ def main(argv: list[str] | None = None) -> int:
     print(boot.plan())
     print()
     if cfg.is_prod():
-        if not sys.stdin.isatty():
-            print("[refused] prod bootstrap requires an interactive TTY to confirm "
-                  "(there is deliberately no --yes bypass).", file=sys.stderr)
-            return 2
-        try:
-            reply = input("Type 'yes' to GENERATE credentials and START this prod "
-                          "mesh from scratch: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            reply = ""
-        if reply != "yes":
-            print("[aborted] no changes made.")
-            return 1
+        rc = _confirm_prod("GENERATE credentials and START from scratch")
+        if rc:
+            return rc
     ok, log = boot.up()
     for line in log:
         print(line)
