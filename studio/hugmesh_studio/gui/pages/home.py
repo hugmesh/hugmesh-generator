@@ -97,28 +97,77 @@ _LOCAL_USER_IS_DEFAULT_NOTE = (
 _HOME_MODE_HELP = {
     "create": "create — provision a FRESH empty home for the local user (the default).",
     "adopt": "adopt — reuse an EXISTING home partition/device already on the target "
-             "(set 'Home device' below to a LABEL= / UUID= / /dev path).",
-    "archive": "archive — bake a home TARBALL straight into the image (set 'Home archive "
-               "(bake in)' below). Use this to copy THIS machine's home into the build.",
+             "(set 'Home Device' below to a LABEL= / UUID= / /dev path).",
+    "archive": "archive — bake a home TARBALL straight into the image (set 'Home Archive "
+               "(Bake In)' below). Use this to copy THIS machine's home into the build.",
     "restore": "restore — restore the home from a backup archive at install time "
-               "(set 'Home backup (restore)' below).",
+               "(set 'Home Backup (Restore)' below).",
 }
+
+# ── per-field help for the widgets gate_widgets() itself targets ─────────────────────
+# gate_widgets/gate_widgets_role_class rewrite their target's tooltip on EVERY visit
+# ("" while the field is live), so a tooltip set once in __init__ is wiped on the first
+# initializePage — the reason this page showed "no setting info" at all (issue #230).
+# These constants are re-asserted after the gates run (initializePage's tail): a gate
+# reason always wins; the field's own explanation returns wherever the gates left "".
+# Fields whose help sits on their _row() caption wrapper need none of this — no gate
+# ever writes those wrappers' tooltips.
+_ENCRYPTED_HELP = (
+    "Layers per-user eCryptfs on top of the LUKS2 root (--home-encrypted). The home is "
+    "unwrapped by the login password, so it stays encrypted until that user logs in.")
+_SEED_HELP = (
+    "Seeds the HugMesh source tree into ~/hugmesh-stack (--home-seed-code). none — "
+    "nothing is seeded. repos — the code only. stack — the code plus a docker-compose "
+    "runner for the whole stack. mesh — the stack plus joining an existing tailnet as "
+    "a dockerized mesh node.")
+_KEYFILE_HELP = (
+    "Where the keyfile comes from:\n"
+    "  boot — the BUILD generates a random 4 KiB keyfile (build host\n"
+    "    /dev/urandom) onto the installer ISO; the installer enrolls it as a\n"
+    "    SECOND LUKS keyslot and installs it to the ESP as /boot/cryptroot.key\n"
+    "    for unattended unlock. A recovery copy lands in the work dir\n"
+    "    (<image>.luks-keyfile — stash it on a KEYS USB). The install-time\n"
+    "    passphrase keyslot still works. Note: the ESP is unencrypted, so a\n"
+    "    stolen whole disk auto-unlocks — choose (off) for theft protection.\n"
+    "  login — no keyfile is generated at build; a marker makes it a PAM\n"
+    "    factor enrolled at first login (desktop images only).\n"
+    "  (off) — no keyfile anywhere; boot prompts for the passphrase chosen\n"
+    "    at install time.")
+_YUBIKEY_HELP = (
+    "Extra FIDO2/YubiKey unlock factor (--unlock-yubikey):\n"
+    "  boot — the installer enrolls the key as a LUKS2 FIDO2 unlock\n"
+    "    (systemd-cryptenroll; the key must be plugged in at install time).\n"
+    "  login — a pam_u2f login factor (desktop images only).\n"
+    "  (off) — no YubiKey factor.")
 
 
 class HomePage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
-        self.setTitle("Home folder, encryption & login")
+        self.setTitle("Home Folder, Encryption, and Login")
         self.setSubTitle("Provision the user's home folder, encrypt the target root disk "
                          "(LUKS2), and set the local login for this desktop.")
         lay = scrollable(self)
         # ---- Home provisioning (desktop-class; role-class gated) -----------------
-        self.home_box = QtWidgets.QGroupBox("Home provisioning")
+        #
+        # Per-field help lives on the _row() WRAPPERS (caption + widget as one hover
+        # target), NOT on the inner widgets: gate_widgets() rewrites the inner widget's
+        # tooltip on every visit ("" when the platform supports the field), so a static
+        # tooltip set on the widget itself is wiped on the first initializePage — which
+        # is exactly how this page shipped with no setting info at all (issue #230). Qt
+        # help events propagate to the parent when the child has no tooltip of its own,
+        # so a greyed field still explains its greying (inner tooltip) while the caption
+        # keeps explaining the field.
+        self.home_box = QtWidgets.QGroupBox("Home Provisioning")
         hl = QtWidgets.QVBoxLayout(self.home_box)
         self.mode = QtWidgets.QComboBox()
         self.mode.addItems(["create", "adopt", "archive", "restore"])
-        hl.addWidget(_row("Home mode", self.mode))
+        self.mode_row = _row("Home Mode", self.mode)
+        self.mode_row.setToolTip(
+            "How the local user's home folder is provisioned into the built image "
+            "(--home-mode). The selected mode is explained below.")
+        hl.addWidget(self.mode_row)
         # per-mode plain-language help (updates on selection) — the four modes were opaque
         self.mode_help = QtWidgets.QLabel("")
         self.mode_help.setWordWrap(True)
@@ -129,77 +178,111 @@ class HomePage(QtWidgets.QWizardPage):
         # selects archive mode (bake a home tarball INTO the image) and points at the
         # include-home-archive / seed-packages-from fields below. It only nudges the
         # controls — the user still picks the tarball, so nothing runs or copies here.
-        self.copy_home_btn = QtWidgets.QPushButton("Copy this machine's home folder…")
+        self.copy_home_btn = QtWidgets.QPushButton("Copy This Machine's Home Folder…")
         self.copy_home_btn.setToolTip(
-            "Preset: sets Home mode = archive and points you at 'Home archive (bake in)' "
+            "Preset: sets Home Mode = archive and points you at 'Home Archive (Bake In)' "
             "(a tarball of an existing home, e.g. tar czf home.tgz -C /home you) and, "
-            "optionally, 'Seed packages from' (a package list to reinstall your apps).")
+            "optionally, 'Seed Packages From' (a package list to reinstall your apps).")
         self.copy_home_btn.clicked.connect(self._preset_copy_home)
         hl.addWidget(self.copy_home_btn)
         self.device = QtWidgets.QLineEdit()
         self.device.setPlaceholderText("LABEL=… | UUID=… | /dev/… (adopt)")
-        hl.addWidget(_row("Home device", self.device))
+        self.device_row = _row("Home Device", self.device)
+        self.device_row.setToolTip(
+            "For Home Mode 'adopt': the existing home partition the installer mounts at "
+            "/home without formatting (--home-device). LABEL=…, UUID=…, or a /dev path.")
+        hl.addWidget(self.device_row)
         self.backup = QtWidgets.QLineEdit()
-        bbtn = _file_picker(self, self.backup, "Home backup", "Backup (*.tar* *.gpg *.enc)")
+        bbtn = _file_picker(self, self.backup, "Home Backup", "Backup (*.tar* *.gpg *.enc)")
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.backup, 1); h.addWidget(bbtn)
         self.backup_row = w   # greyed as one unit (line edit + Browse…) per platform
-        hl.addWidget(_row("Home backup (restore)", w))
+        self.backup_labeled_row = _row("Home Backup (Restore)", w)
+        self.backup_labeled_row.setToolTip(
+            "For Home Mode 'restore': an encrypted full-home backup made with "
+            "scripts/archive-home.sh --full --encrypt (--home-backup). Type 'auto' to "
+            "detect the backup on any attached USB device at install time.")
+        hl.addWidget(self.backup_labeled_row)
         self.encrypted = QtWidgets.QCheckBox("Per-user eCryptfs home (on top of LUKS root)")
+        self.encrypted.setToolTip(_ENCRYPTED_HELP)
         hl.addWidget(self.encrypted)
         self.seed = QtWidgets.QComboBox()
         self.seed.addItems(["none", "repos", "stack", "mesh"])
-        # the ROW is a gate target too (the unaffiliated hide below, and the role-class
-        # hide via _home_widgets): hiding the bare combo strands its "Seed stack code"
-        # caption over an empty slot — network.py's orphan-caption rule, stated on the
-        # egress section there ("_row()'s 'Egress VPN' caption … is not a gate member");
-        # named rather than cited by line so it cannot rot on that module's next edit.
-        self.seed_row = _row("Seed stack code", self.seed)
+        # the ROW is a gate target too (the unaffiliated hide below): hiding the bare
+        # combo strands its "Seed Stack Code" caption over an empty slot —
+        # network.py's orphan-caption rule, stated on the egress section there
+        # ("_row()'s 'Egress VPN' caption … is not a gate member"); named rather than
+        # cited by line so it cannot rot on that module's next edit.
+        self.seed_row = _row("Seed Stack Code", self.seed)
+        self.seed_row.setToolTip(_SEED_HELP)
         hl.addWidget(self.seed_row)
         # home extras (G31): bake a home archive into the image (what makes
         # home_mode=archive actually work), seed code from a local checkout instead
         # of cloning, and seed the binpkg set from a package list — x86-only, greyed
         # as line-edit+Browse… row units like the backup row above.
         self.include_archive = QtWidgets.QLineEdit()
-        abtn = _file_picker(self, self.include_archive, "Home archive to bake in",
+        abtn = _file_picker(self, self.include_archive, "Home Archive to Bake In",
                             "Archive (*.tar* *.tgz *.gpg *.enc)")
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.include_archive, 1); h.addWidget(abtn)
         self.include_archive_row = w
-        hl.addWidget(_row("Home archive (bake in)", w))
+        self.include_archive_labeled_row = _row("Home Archive (Bake In)", w)
+        self.include_archive_labeled_row.setToolTip(
+            "For Home Mode 'archive': a tarball of an existing home (e.g. tar czf "
+            "home.tgz -C /home you), bundled into the installer ISO and unpacked into "
+            "the new user's home (--include-home-archive).")
+        hl.addWidget(self.include_archive_labeled_row)
         self.seed_code_from = QtWidgets.QLineEdit()
-        sbtn = _file_picker(self, self.seed_code_from, "Seed home code from a local checkout",
+        sbtn = _file_picker(self, self.seed_code_from, "Seed Home Code From a Local Checkout",
                             directory=True)
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.seed_code_from, 1); h.addWidget(sbtn)
         self.seed_code_from_row = w
-        hl.addWidget(_row("Seed code from (dir)", w))
+        self.seed_code_from_labeled_row = _row("Seed Code From (Dir)", w)
+        self.seed_code_from_labeled_row.setToolTip(
+            "Sources the seeded stack code from this local checkout or tarball instead "
+            "of cloning at first run (--home-seed-code-from). Only used when Seed Stack "
+            "Code is not 'none'.")
+        hl.addWidget(self.seed_code_from_labeled_row)
         self.seed_packages = QtWidgets.QLineEdit()
-        pbtn = _file_picker(self, self.seed_packages, "Seed packages list",
+        pbtn = _file_picker(self, self.seed_packages, "Seed Packages List",
                             "Package list (*.txt *.list);;All files (*)")
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.seed_packages, 1); h.addWidget(pbtn)
         self.seed_packages_row = w
-        hl.addWidget(_row("Seed packages from", w))
+        self.seed_packages_labeled_row = _row("Seed Packages From", w)
+        self.seed_packages_labeled_row.setToolTip(
+            "A package list appended to the build's package sets (--seed-packages-from) "
+            "— reinstalls this machine's apps in the image. Make one with "
+            "scripts/seed-packages-from-running-system.sh.")
+        hl.addWidget(self.seed_packages_labeled_row)
+        # Where the group would be, say WHY it is absent: the role-class gate hides the
+        # whole box below, and a tooltip on a hidden box explains nothing (issue #230 —
+        # the old per-child hide was worse still: it left the box frame and every
+        # _row() caption on screen with no widgets and no tooltips under them).
+        self.home_hidden_note = QtWidgets.QLabel(
+            "Home provisioning is not offered for this build: this flow includes a "
+            "cluster node or headless appliance, and settings made here would apply to "
+            "it too. A node's disk is encrypted as a whole; its home folder is not "
+            "separately provisioned or encrypted.")
+        self.home_hidden_note.setWordWrap(True)
+        self.home_hidden_note.setStyleSheet("color: gray;")
+        self.home_hidden_note.setVisible(False)
         lay.addWidget(self.home_box)
-        # the home-provisioning widgets role-class gating targets (individually, so
-        # each widget's own enabled flag is set — never ancestor-shadowed).
-        self._home_widgets = (self.mode, self.device, self.backup_row, self.encrypted,
-                              self.seed, self.seed_row, self.include_archive_row,
-                              self.seed_code_from_row, self.seed_packages_row)
+        lay.addWidget(self.home_hidden_note)
         # external media-data device (G32): Steam library + gocryptfs Vaults set —
         # x86 standalone surface; only --steam was fielded before.
-        media = QtWidgets.QGroupBox("External media-data device (Steam library + gocryptfs Vaults)")
+        media = QtWidgets.QGroupBox("External Media-Data Device (Steam Library + gocryptfs Vaults)")
         self.media_box = media          # gate target (ask 3): hidden on node-class flows
         ml = QtWidgets.QVBoxLayout(media)
         # tri-state like the proxy stack: leaving the builder default must round-trip,
         # so a plain checkbox (which collapses to explicit on/off) won't do.
         self.media_data = QtWidgets.QComboBox()
         self.media_data.addItems([_MEDIA_DEFAULT, "on", "off"])
-        ml.addWidget(_row("Media-data device", self.media_data))
+        ml.addWidget(_row("Media-Data Device", self.media_data))
         self.media_label = QtWidgets.QLineEdit()
         self.media_label.setPlaceholderText("partition label ('' = builder default)")
-        ml.addWidget(_row("Media label", self.media_label))
+        ml.addWidget(_row("Media Label", self.media_label))
         self.no_vaults = QtWidgets.QCheckBox("No Vaults — drop the gocryptfs Vaults set")
         ml.addWidget(self.no_vaults)
         lay.addWidget(media)
@@ -217,7 +300,7 @@ class HomePage(QtWidgets.QWizardPage):
         # same field, same scope gate, same emission — and the Qt-free clear that used to
         # ride this page's collect moved into config.clear_role_class_fields, so a stale
         # tick still cannot survive a mode/role switch into a node's argv.
-        self.login = QtWidgets.QGroupBox("Your login")
+        self.login = QtWidgets.QGroupBox("Your Login")
         login = self.login
         ll = QtWidgets.QVBoxLayout(login)
         # standalone framing (spec 4): on the standalone path the local user + root-disk
@@ -235,7 +318,7 @@ class HomePage(QtWidgets.QWizardPage):
         self.local_note.setWordWrap(True)
         ll.addWidget(self.local_note)
         self.local_user = QtWidgets.QLineEdit()
-        ll.addWidget(_row("Local user", self.local_user))
+        ll.addWidget(_row("Local User", self.local_user))
         # ...and what happened to SystemPage's "Default user" (see the constant).
         self.local_user_note = QtWidgets.QLabel(_LOCAL_USER_IS_DEFAULT_NOTE)
         self.local_user_note.setWordWrap(True)
@@ -244,12 +327,12 @@ class HomePage(QtWidgets.QWizardPage):
         self.local_pass = QtWidgets.QLineEdit()
         self.local_pass.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
         self.local_pass.setPlaceholderText("hashed at build time; NOT saved to configs")
-        ll.addWidget(_row("Local password", self.local_pass))
+        ll.addWidget(_row("Local Password", self.local_pass))
         lay.addWidget(login)
         # root-disk encryption (installer LUKS2 FDE) + unlock factors — the node-relevant
         # remainder: stays live in ALL modes (in mesh it becomes the worklist
         # encrypt_root default; jetson entries are auto-exempted in materialize()).
-        enc = QtWidgets.QGroupBox("Root-disk encryption (LUKS2 full-disk)")
+        enc = QtWidgets.QGroupBox("Root-Disk Encryption (LUKS2 Full Disk)")
         el = QtWidgets.QVBoxLayout(enc)
         # ASK 21 — "root disk encryption should always be enabled". This is no longer a
         # choice, so it is no longer offered as one: the box is CHECKED and DISABLED, a
@@ -275,12 +358,27 @@ class HomePage(QtWidgets.QWizardPage):
         # prompts at install time, which stalls an unattended install. The mesh-specific
         # note below adds only the fleet-scale framing.
         self.enc_always_note = QtWidgets.QLabel(
-            "Always on. Two consequences on x86: the build ALSO produces an installer "
-            "ISO (the encrypted root is created by the installer), and unless you set a "
-            "passphrase below the installer asks for one at install time.")
+            "Encryption is always on. On x86 the build also produces an installer ISO — "
+            "the installer is what creates the encrypted root. If you set no passphrase "
+            "below, the installer asks for one at install time.")
         self.enc_always_note.setWordWrap(True)
         self.enc_always_note.setStyleSheet("color: gray;")
         el.addWidget(self.enc_always_note)
+        # Issue #230 (3): what happens when NO option below is chosen — stated from the
+        # builders, not guessed. x86: specs-x86/installer/install-x86.sh:146-149 prompts
+        # for the root-unlock passphrase (typed twice) when no luks-passphrase file was
+        # seeded, and with no keyfile no crypttab entry is written (:199-202), so boot
+        # prompts at the initramfs. rpi5: build-rpi5-stage4.sh:4708 "No --luks-pass
+        # given: install.sh will prompt interactively on the target", same shape.
+        self.luks_default_note = QtWidgets.QLabel(
+            "If you choose no option here: the build itself is unchanged, the installer "
+            "asks you to invent a root-unlock passphrase at install time (typed twice, "
+            "separate from the login password), and the system then asks for that "
+            "passphrase at every boot. No passphrase, keyfile, or key material is baked "
+            "into the image or the ISO.")
+        self.luks_default_note.setWordWrap(True)
+        self.luks_default_note.setStyleSheet("color: gray;")
+        el.addWidget(self.luks_default_note)
         # device-cannot-encrypt note (spec 4): shown INSTEAD of the checkbox when the
         # target platform has no full-disk-encryption path (jetson's single boot+root
         # partition — see docs/STANDALONE-DESKTOP.md). Dormant in standalone (jetson is
@@ -296,12 +394,12 @@ class HomePage(QtWidgets.QWizardPage):
         # --encrypt-root also forces INSTALLER_ISO=true (build-x86-host-stage4.sh:1780),
         # and with no passphrase supplied the installer asks for one interactively.
         self.enc_mesh_note = QtWidgets.QLabel(
-            "Mesh: node disks hold the cluster's PKI material, so root encryption is on "
-            "for every node in the worklist (jetson rows are exempt — that builder has "
-            "no FDE path; a single row can still be exempted in the worklist step's "
-            "Encryption column). Two consequences: each x86 node ALSO produces an "
-            "installer ISO, and unless you set a passphrase below the installer prompts "
-            "for one at install time — which stalls an unattended fleet install.")
+            "Mesh: node disks hold the cluster's PKI material, so every node in the "
+            "worklist gets an encrypted root. Jetson rows are exempt (no FDE path), and "
+            "a single row can be exempted in the worklist step's Encryption column. "
+            "Each x86 node also produces an installer ISO, and with no passphrase set "
+            "the installer prompts at install time — which stalls an unattended fleet "
+            "install.")
         self.enc_mesh_note.setWordWrap(True)
         self.enc_mesh_note.setStyleSheet("color: gray;")
         self.enc_mesh_note.setVisible(False)
@@ -321,30 +419,25 @@ class HomePage(QtWidgets.QWizardPage):
         self.luks_pass = QtWidgets.QLineEdit()
         self.luks_pass.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
         self.luks_pass.setPlaceholderText("optional unattended passphrase; NOT saved to configs")
-        el.addWidget(_row("LUKS passphrase", self.luks_pass))
+        self.luks_pass_row = _row("LUKS Passphrase", self.luks_pass)
+        self.luks_pass_row.setToolTip(
+            "Optional (--luks-pass): seeds this passphrase into the installer so the "
+            "install runs unattended. It is written into the installer artifact in "
+            "plain text — anyone holding the ISO can read it — and is never saved to "
+            "Studio configs. Leave it empty to type a passphrase at install time.")
+        el.addWidget(self.luks_pass_row)
         self.unlock_keyfile = QtWidgets.QComboBox()
         self.unlock_keyfile.addItems(["(off)", "boot", "login"])
         # Provenance is otherwise invisible from this page, so spell it out here
         # (build-x86:7212 generates the 4 KiB keyfile onto the installer ISO;
         # specs-x86/installer/install-x86.sh:175 luksAddKey's it as a 2nd keyslot and
         # :201 installs it to the ESP as /boot/cryptroot.key).
-        self.unlock_keyfile.setToolTip(
-            "Where the keyfile comes from:\n"
-            "  boot — the BUILD generates a random 4 KiB keyfile (build host\n"
-            "    /dev/urandom) onto the installer ISO; the installer enrolls it as a\n"
-            "    SECOND LUKS keyslot and installs it to the ESP as /boot/cryptroot.key\n"
-            "    for unattended unlock. A recovery copy lands in the work dir\n"
-            "    (<image>.luks-keyfile — stash it on a KEYS USB). The install-time\n"
-            "    passphrase keyslot still works. Note: the ESP is unencrypted, so a\n"
-            "    stolen whole disk auto-unlocks — choose (off) for theft protection.\n"
-            "  login — no keyfile is generated at build; a marker makes it a PAM\n"
-            "    factor enrolled at first login (desktop images only).\n"
-            "  (off) — no keyfile anywhere; boot prompts for the passphrase chosen\n"
-            "    at install time.")
-        el.addWidget(_row("Keyfile unlock", self.unlock_keyfile))
+        self.unlock_keyfile.setToolTip(_KEYFILE_HELP)
+        el.addWidget(_row("Keyfile Unlock", self.unlock_keyfile))
         self.unlock_yubikey = QtWidgets.QComboBox()
         self.unlock_yubikey.addItems(["(off)", "boot", "login"])
-        el.addWidget(_row("YubiKey unlock", self.unlock_yubikey))
+        self.unlock_yubikey.setToolTip(_YUBIKEY_HELP)
+        el.addWidget(_row("YubiKey Unlock", self.unlock_yubikey))
         self._unlock_combos = (self.unlock_keyfile, self.unlock_yubikey)
         lay.addWidget(enc)
         lay.addStretch(1)
@@ -458,11 +551,16 @@ class HomePage(QtWidgets.QWizardPage):
         })
         # role-class gate (spec 7): home provisioning is desktop-only — on a node/mesh
         # image HIDE the whole group (overriding any platform-enable) rather than
-        # greying it, with the reason as the group tooltip. Emission stays preserved by
-        # the role-class clear in validatePage (HOME_DESKTOP_FIELDS reset to defaults)
-        # plus the every-visit re-gate that restores + collects the group again when a
-        # desktop role is later selected. On desktop images the per-platform greying
-        # above is left untouched.
+        # greying it. THE WHOLE BOX, not its widgets one by one (issue #230): the old
+        # per-child hide left the group frame and every _row() caption standing over
+        # empty slots — a page of setting names that could not be modified and carried
+        # no tooltips, which is exactly what the operator reported. The visible
+        # home_hidden_note says WHY the group is absent (a tooltip on a hidden box is
+        # unreadable). Emission stays preserved by the role-class clear in validatePage
+        # (HOME_DESKTOP_FIELDS reset to defaults) plus the every-visit re-gate that
+        # restores + collects the group again when a desktop role is later selected;
+        # the children's own visible/enabled flags are untouched, so the per-platform
+        # greying above (and the seed row's own gate below) survive the round trip.
         #
         # ASK 3 ("options for standalone desktops shouldnt appear in the mesh wizard"):
         # the predicate is asked of the FLOW, not of the shared mesh base. home_options_
@@ -473,14 +571,9 @@ class HomePage(QtWidgets.QWizardPage):
         # before this landed: base role='pki' -> hidden, base role='rpi5-desktop' -> shown,
         # SAME worklist. capability_allows_flow asks every row.
         home_allowed = capability_allows_flow(home_options_allowed, c, self.wiz)
-        if not home_allowed:
-            gate_widgets_role_class(list(self._home_widgets), False,
-                                    _HOME_ROLE_CLASS_REASON, hide=True)
-        else:
-            # desktop role: the group is live — make sure a prior node-visit's hide is
-            # undone (leave the per-platform greying + its tooltips above untouched).
-            for w in self._home_widgets:
-                w.setVisible(True)
+        gate_widgets_role_class(self.home_box, home_allowed,
+                                _HOME_ROLE_CLASS_REASON, hide=True)
+        self.home_hidden_note.setVisible(not home_allowed)
         # standalone framing (spec 4): show the "this is your login + FDE" helper only on
         # the standalone path (a personal desktop), where the local user + root-disk
         # password ARE the primary action.
@@ -545,6 +638,7 @@ class HomePage(QtWidgets.QWizardPage):
         can_encrypt = platform_supports("encrypt_root", c.platform)
         self.encrypt_root.setVisible(can_encrypt)
         self.enc_always_note.setVisible(can_encrypt)
+        self.luks_default_note.setVisible(can_encrypt)
         self.no_enc_note.setVisible(not can_encrypt)
         # ask 12/21: the mesh consequence note rides WITH the checkbox — shown wherever
         # the box is on a mesh flow. No longer conditioned on cfg.encrypt_root: the
@@ -563,14 +657,14 @@ class HomePage(QtWidgets.QWizardPage):
                 "single boot+root partition has no separate LUKS path yet "
                 "(docs/STANDALONE-DESKTOP.md).")
         # ── the stack seed on an unaffiliated image (see _UNAFFILIATED_SEED_REASON) ──
-        # LAST WRITER on this row, so the predicate has to be the COMPOSED one: the
-        # home_allowed block above re-shows every _home_widgets member (seed_row among
-        # them) on a desktop flow, and a bare `not unaffiliated` here would then un-hide
-        # the row on a mesh NODE — measured, before this composition: node flow showed
-        # "Seed stack code" with an invisible combo under it. The REASON follows the
-        # cause that actually rejected, never a blanket one (the "wrong why" trap
-        # _gating.out_of_scope_note records). Re-gated every visit, so a switch back to
-        # a branded desktop restores the row and its collectable value.
+        # LAST WRITER on this row's own flag. The predicate stays the COMPOSED one so
+        # the row's flag and its reason track the flow even though a node flow already
+        # hides the whole home_box around it: a bare `not unaffiliated` would mark the
+        # row live-with-no-reason on a mesh NODE, and the next desktop switch would
+        # trust that stale state. The REASON follows the cause that actually rejected,
+        # never a blanket one (the "wrong why" trap _gating.out_of_scope_note records).
+        # Re-gated every visit, so a switch back to a branded desktop restores the row
+        # and its collectable value.
         unaffiliated = unaffiliated_image(c)
         seed_ok = home_allowed and not unaffiliated
         gate_widgets_role_class(
@@ -583,6 +677,16 @@ class HomePage(QtWidgets.QWizardPage):
         # the copy-home preset only makes sense where home provisioning is live — track
         # the (now fully gated) home-mode combo so it greys with it on ARM and on nodes.
         self.copy_home_btn.setEnabled(home_allowed and self.mode.isEnabled())
+        # per-field help, LAST: the gates above rewrite their targets' tooltips on every
+        # visit ("" while the field is live), which is what used to wipe every
+        # explanation off this page (issue #230 — see the constants). A gate's reason
+        # always wins; the field's own help returns wherever the gates left "".
+        for w, help_text in ((self.encrypted, _ENCRYPTED_HELP),
+                             (self.seed_row, _SEED_HELP),
+                             (self.unlock_keyfile, _KEYFILE_HELP),
+                             (self.unlock_yubikey, _YUBIKEY_HELP)):
+            if not w.toolTip():
+                w.setToolTip(help_text)
 
     def validatePage(self):
         c = self.wiz.cfg
