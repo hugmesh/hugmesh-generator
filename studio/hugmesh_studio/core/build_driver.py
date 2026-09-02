@@ -24,7 +24,7 @@ import threading
 import uuid
 from collections.abc import Callable, Iterator
 
-from . import host_resources, proc_text, resource_limits, secret_files
+from . import askpass, host_resources, proc_text, resource_limits, secret_files
 from .config import PLATFORM_FIELD_SUPPORT, ImageConfig, scope_violations
 from .platform_info import HostInfo, detect
 
@@ -147,13 +147,34 @@ def docker_memory_args() -> list[str]:
     return ["--memory", v, "--memory-swap", v]
 
 
+def _operator_askpass() -> str | None:
+    """An operator-supplied ``SUDO_ASKPASS`` to honour instead of generating our own
+    (#221), or ``None``. Only an EXISTING executable that is not our own generated
+    helper qualifies — so a stale/empty value never wins, and we never recurse into
+    the helper we wrote. When present, a ``sudo -A`` build defers to the operator's
+    program (a secret manager, a corp askpass, a test stub) untouched."""
+    p = os.environ.get("SUDO_ASKPASS")
+    if not p:
+        return None
+    if _ASKPASS_PATH_CACHE and os.path.abspath(p) == os.path.abspath(_ASKPASS_PATH_CACHE):
+        return None
+    return p if os.access(p, os.X_OK) else None
+
+
 def _askpass_helper_path() -> str | None:
-    """Create (once) a tiny executable that runs ``python -m hugmesh_studio
-    --askpass`` and return its path, or ``None`` if it cannot be written. Pointed at
-    by ``SUDO_ASKPASS`` so a GUI-launched ``sudo -A`` build pops a Qt password DIALOG
-    instead of prompting into an invisible terminal (the hang this fixes). Self-
-    contained: it re-execs THIS interpreter and pins PYTHONPATH to the studio root so
-    the package resolves whether Studio is installed or run from a source checkout."""
+    """The ``SUDO_ASKPASS`` program for a GUI-launched ``sudo -A`` build: an
+    operator-supplied one if present (honoured verbatim — #221), else a tiny
+    executable we generate that runs ``python -m hugmesh_studio --askpass``. Returns
+    its path, or ``None`` if none is available and none can be written.
+
+    Pointed at by ``SUDO_ASKPASS`` so ``sudo -A`` reads the admin password from the
+    helper's stdout instead of prompting into an invisible terminal (the hang this
+    fixes). The generated helper is self-contained: it re-execs THIS interpreter and
+    pins PYTHONPATH to the studio root so the package resolves whether Studio is
+    installed or run from a source checkout."""
+    op = _operator_askpass()
+    if op is not None:
+        return op
     global _ASKPASS_PATH_CACHE
     if _ASKPASS_PATH_CACHE and os.path.exists(_ASKPASS_PATH_CACHE):
         return _ASKPASS_PATH_CACHE
@@ -273,8 +294,9 @@ class BuildDriver:
     def _elevation_env(self) -> dict[str, str] | None:
         """Caller-side environment the elevation prefix needs, or ``None`` to inherit the
         ambient env unchanged. Only ``sudo -A`` needs anything (SUDO_ASKPASS pointing at
-        the Qt helper); every other prefix — [], plain sudo, pkexec — returns None so the
-        root / terminal-sudo / docker Popen and kill stay byte-identical to before."""
+        the helper — an operator-supplied one if present, else our generated Qt helper);
+        every other prefix — [], plain sudo, pkexec — returns None so the root /
+        terminal-sudo / docker Popen and kill stay byte-identical to before."""
         if self._elevation_prefix()[:2] == ["sudo", "-A"]:
             helper = _askpass_helper_path()
             if helper:
@@ -523,10 +545,35 @@ class BuildDriver:
                     + ", ".join(f"--{f.replace('_', '-')}" for f in
                                 secret_files.VAULT_FIELDS
                                 if getattr(run_cfg, f, "") != getattr(cfg, f, "")))
+        # ELEVATION-CANCEL ATTRIBUTION (#222): a GUI native build elevates through
+        # `sudo -A` / pkexec, and when the operator CANCELS the password dialog (or the
+        # askpass otherwise yields nothing) sudo aborts and the build never runs as root.
+        # Without this the operator sees a bare exit 1 and cannot tell a cancelled prompt
+        # from a real build failure — the confusion behind "the build just keeps going and
+        # then fails". Watch the stream (sudo's own stderr + our askpass CANCEL_MARKER are
+        # folded in via stderr=STDOUT) for an auth-failure signature, and annotate. Native
+        # + graphical elevation only; a user Stop is excluded (cancel() sets _cancel first).
+        graphical_native = (backend == "native"
+                            and self._elevation_prefix()[:2] in (["sudo", "-A"], ["pkexec"]))
+        auth_failed = False
+        watched_on_line = on_line
+        if graphical_native and on_line is not None:
+            def watched_on_line(line: str, _sink=on_line) -> None:  # noqa: E306
+                nonlocal auth_failed
+                if askpass.looks_like_auth_failure(line):
+                    auth_failed = True
+                _sink(line)
         try:
-            code = self._stream(self.command(run_cfg, backend), on_line, backend)
+            code = self._stream(self.command(run_cfg, backend), watched_on_line, backend)
         finally:
             cleanup_held()
+        if (graphical_native and code != 0 and on_line is not None
+                and auth_failed and not self._cancel.is_set()):
+            on_line("!! Administrator authentication was cancelled or failed — the build "
+                    "did NOT start (nothing ran as root). Re-run and complete the password "
+                    "prompt, or set HUGMESH_STUDIO_SUDO_PASSWORD / an operator SUDO_ASKPASS "
+                    "for an unattended build.")
+            return code
         # CAP-KILL ATTRIBUTION (the guard's failure UX): a container OOM-kill exits 137
         # with NO docker-side explanation on the stream — the compile log just ends
         # mid-line. Without this line, the one person the cap protects sees a bare
