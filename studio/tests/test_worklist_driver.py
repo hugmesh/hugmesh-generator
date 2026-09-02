@@ -169,6 +169,27 @@ def test_manifest_v2_written_up_front(monkeypatch, tmp_path):
     assert [img["id"] for img in m["images"]] == ["pki.x86", "backend.rpi5", "rpi5-desktop.rpi5"]
     assert {d["name"] for d in m["domains"]} == {"acme.example", "team.acme.example"}
     assert m["users"][0]["username"] == "root-admin"
+    # the additive per-image "hostname" (issue #229): "" = the builder derives it
+    assert [img["hostname"] for img in m["images"]] == ["", "", ""]
+
+
+def test_manifest_v2_carries_each_images_own_hostname(monkeypatch, tmp_path):
+    """A per-entry hostname reaches the manifest's image record AND that entry's own
+    build (the driver is per-entry already: one BuildDriver per materialized cfg), and
+    only that entry's."""
+    _install_fake_builddriver(monkeypatch)
+    _install_fake_genkeys(monkeypatch)
+    wl = _worklist(tmp_path)
+    wl.entries[0].hostname = "ca-1"
+    wl.entries[1].hostname = "be-pi"
+    drv = WorklistDriver(str(tmp_path), wl, host=host())
+    m = drv.manifest_v2()
+    assert [(img["id"], img["hostname"]) for img in m["images"]] == [
+        ("pki.x86", "ca-1"), ("backend.rpi5", "be-pi"), ("rpi5-desktop.rpi5", "")]
+    argvs = {e.id: cfg.to_cli_args() for e, cfg in drv.materialize()}
+    assert argvs["pki.x86"][argvs["pki.x86"].index("--hostname") + 1] == "ca-1"
+    assert argvs["backend.rpi5"][argvs["backend.rpi5"].index("--hostname") + 1] == "be-pi"
+    assert "--hostname" not in argvs["rpi5-desktop.rpi5"]
 
 
 def test_non_mesh_writes_no_manifest(monkeypatch, tmp_path):

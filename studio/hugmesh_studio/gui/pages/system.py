@@ -13,6 +13,16 @@ Three families, in the order an operator meets them:
    image (a node, and a plain ARM desktop, which receives neither flag) keeps the row,
    because there ``-u`` is the only channel for naming the baked account. See
    ``default_user_is_local_user``.
+   ISSUE #229: on a MESH worklist the hostname is PER IMAGE. The base config carries
+   one ``hostname`` and every materialized image used to inherit it, so a name typed
+   once named every node the same thing; the page used to dodge that by refusing to
+   prefill and leaving the field blank, which meant no node could be named at all.
+   Now the names live on the worklist ENTRIES (``WorklistEntry.hostname``): a
+   multi-row worklist replaces the single Hostname row with one editor per image
+   (placeholder = the role-derived name that row bakes when left blank), a one-row
+   worklist keeps the plain field but still writes the entry, and ``validatePage``
+   blanks the base so no single value can ride onto every node again. Timezone and
+   the default account stay mesh-wide — the issue accepts both.
 2. **Who the image is built for** (``--person-role``; G18) — ASK 7. Moved here from the
    bottom of the superadmin Users TABLE, where a per-IMAGE build-time control sat under
    an "Add user / Remove selected" button row and read as "which of the accounts above
@@ -45,6 +55,8 @@ from ...core.config import (
     PERSON_ROLE_CHOICES, derive_default_user, derive_hostname, image_class,
     person_role_applies,
 )
+from ...core.validate import validate_domain_name
+from ...core.worklist import duplicate_hostnames, resolve_hostname
 from ._gating import (
     capability_allows_flow, clear_unsupported, gate_widgets, gate_widgets_role_class,
     platform_supports,
@@ -179,9 +191,22 @@ _IDENTITY_HINT = (
     "board, the timezone from this machine. Edit any of them to override.")
 
 _MESH_HOSTNAME_NOTE = (
-    "Mesh builds bake ONE hostname per image and the worklist builds several, so this "
-    "is left blank on purpose: each node takes its own role-derived name — {names}. "
-    "Typing a hostname here would give EVERY node in the worklist that same name.")
+    "This worklist builds {count} images and each bakes its own hostname, so the name "
+    "is set per image below. Leave a row blank to keep that node's role-derived name "
+    "(shown in grey).")
+
+# Two rows whose DERIVED names coincide (pki.x86 + pki.rpi5 both derive hugmesh-pki):
+# not refused — the builder has always produced that pair — but said out loud, with
+# the fix one keystroke away.
+_MESH_HOSTNAME_DERIVED_DUP = (
+    " Note: {ids} would all derive {name} — name at least one of them.")
+
+# The inline refusals (validatePage runs headless in tests; a modal here would hang
+# them — the module docstring's rule). Names the row, so the fix is obvious.
+_HOSTNAME_BAD = ("{rid}: {value!r} is not a valid hostname — lower-case letters, digits, "
+                 "dots and hyphens, each label starting and ending alphanumeric.")
+_HOSTNAME_DUP = ("Two images cannot share a hostname: {detail}. Give each its own name, "
+                 "or blank one so it takes its role-derived name.")
 
 _MESH_USER_NOTE = (
     "Mesh builds bake ONE default account per image and the boards in this worklist do "
@@ -271,14 +296,35 @@ class SystemPage(QtWidgets.QWizardPage):
         self.hostname = QtWidgets.QLineEdit()
         self.hostname.setPlaceholderText("Leave blank to use the role-derived hostname")
         self.hostname.setToolTip("Sets the baked hostname — the -H/--hostname builder flag.")
-        lay.addWidget(_row("Hostname", self.hostname))
-        # Shown only on a multi-image mesh worklist, where prefilling ONE hostname would
-        # name every node the same thing (ask 9's honest arm — see _seed_hostname).
+        # the ROW is what a multi-image worklist hides (orphan-caption rule, as for
+        # user_row below): the per-image editors replace it, caption and all.
+        self.hostname_row = _row("Hostname", self.hostname)
+        lay.addWidget(self.hostname_row)
+        # Shown only on a multi-image mesh worklist, where ONE hostname would name every
+        # node the same thing: explains the per-image editors below (issue #229).
         self.hostname_note = QtWidgets.QLabel("")
         self.hostname_note.setWordWrap(True)
         self.hostname_note.setStyleSheet("color: #a65d00;")
         self.hostname_note.setVisible(False)
         lay.addWidget(self.hostname_note)
+        # ── per-IMAGE hostnames (issue #229) ──────────────────────────────────────────
+        # One editor per worklist row, rebuilt on every visit (the rows follow the
+        # worklist). Each editor's PLACEHOLDER is the role-derived name that row bakes
+        # when left blank, so the derivation stays visible without being baked; its
+        # text is the row's own WorklistEntry.hostname. validatePage writes each onto
+        # its entry and blanks the base — see _commit_hostname_rows.
+        self.hostname_rows = QtWidgets.QWidget()
+        self._hostname_rows_lay = QtWidgets.QVBoxLayout(self.hostname_rows)
+        self._hostname_rows_lay.setContentsMargins(0, 0, 0, 0)
+        self.hostname_edits: dict[str, QtWidgets.QLineEdit] = {}   # entry id -> editor
+        self.hostname_rows.setVisible(False)
+        lay.addWidget(self.hostname_rows)
+        # the inline refusal — a label, never a modal (validatePage runs headless).
+        self.hostname_error = QtWidgets.QLabel("")
+        self.hostname_error.setWordWrap(True)
+        self.hostname_error.setStyleSheet("color: #c62828;")
+        self.hostname_error.setVisible(False)
+        lay.addWidget(self.hostname_error)
         # ASK 9: a DROPDOWN over the host's real tz database (core/timezones reads
         # /usr/share/zoneinfo through the stdlib at runtime — no network, no bundled
         # list), not a free-text box. Non-editable on purpose: an editable combo is
@@ -412,24 +458,125 @@ class SystemPage(QtWidgets.QWizardPage):
                     unaffiliated=False)))
                 for e in wl.entries]
 
+    def _mesh_rows(self, c) -> list:
+        """The mesh worklist's entries — [] outside mesh (or before a worklist exists,
+        which is how the page is driven in the direct-instantiation unit tests)."""
+        wl = getattr(self.wiz, "worklist", None)
+        if c.mode != "mesh" or wl is None or not wl.entries:
+            return []
+        return list(wl.entries)
+
     def _seed_hostname(self, c) -> None:
-        """Prefill the hostname with what the build would derive — EXCEPT on a mesh
-        worklist that builds more than one distinct hostname, where one baked value
-        would name every node the same thing. There the field stays blank (which is
-        also what keeps the mesh argv byte-identical) and the derivation is shown."""
-        if c.hostname:
-            self.hostname.setText(c.hostname)
-            self.hostname_note.setVisible(False)
-            return
-        names = [n for _id, n in self._worklist_hostnames(c)]
-        if len(set(names)) > 1:
+        """Prefill the hostname with what the build would derive — and on a MESH
+        worklist, ask it PER IMAGE (issue #229).
+
+        * no worklist (standalone/cloud): the single field, seeded from the config's
+          own value else the derived name, exactly as before;
+        * one worklist row: the same single field, but it edits THAT ROW's
+          ``WorklistEntry.hostname`` (seeded from the row, else the base, else the
+          derived name) — the argv is unchanged, the value just lives on the entry;
+        * two or more rows: the single field is hidden and one editor per image takes
+          its place, each seeded with the EXPLICIT name that row would bake today
+          (its entry, else the base) and placeholdered with the name the builder
+          derives when it is left blank. With a blank base nothing is prefilled: the
+          old page refused to prefill precisely because one value would have named
+          every node, and the derived names are visible as placeholders. A NON-blank
+          base (a loaded pre-#229 envelope's one-for-all value) is shown on every
+          row it was going to name, so Next refuses it by name instead of the page
+          dropping it silently."""
+        self.hostname_error.setVisible(False)
+        rows = self._mesh_rows(c)
+        if len(rows) > 1:
+            self._build_hostname_rows(c, rows)
             self.hostname.clear()
-            self.hostname_note.setText(
-                _MESH_HOSTNAME_NOTE.format(names=", ".join(sorted(set(names)))))
+            self.hostname_row.setVisible(False)
+            self.hostname_rows.setVisible(True)
             self.hostname_note.setVisible(True)
             return
+        self.hostname_rows.setVisible(False)
+        self.hostname_row.setVisible(True)
         self.hostname_note.setVisible(False)
-        self.hostname.setText(names[0] if names else derive_hostname(c))
+        if rows:
+            explicit = resolve_hostname(rows[0], c.hostname)
+            self.hostname.setText(explicit or self._worklist_hostnames(c)[0][1])
+            return
+        self.hostname.setText(c.hostname or derive_hostname(c))
+
+    def _build_hostname_rows(self, c, rows) -> None:
+        """(Re)build the per-image editors for ``rows`` (see _seed_hostname). The
+        previous visit's editors are torn down first: the worklist may have changed."""
+        while self._hostname_rows_lay.count():
+            item = self._hostname_rows_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        self.hostname_edits = {}
+        derived = dict(self._worklist_hostnames(c))
+        for e in rows:
+            edit = QtWidgets.QLineEdit()
+            edit.setText(resolve_hostname(e, c.hostname))
+            edit.setPlaceholderText(derived.get(e.id, ""))
+            edit.setToolTip(
+                f"The hostname baked into the {e.id} image — its own -H/--hostname "
+                f"builder flag. Blank = the role-derived {derived.get(e.id, '')!r}.")
+            self._hostname_rows_lay.addWidget(_row(e.id, edit))
+            self.hostname_edits[e.id] = edit
+        note = _MESH_HOSTNAME_NOTE.format(count=len(rows))
+        # the derived-name coincidence, said out loud (never refused: the builder has
+        # always produced that pair, and the explicit-name check below is the guard
+        # that matters)
+        by_name: dict[str, list[str]] = {}
+        for e in rows:
+            if not resolve_hostname(e, c.hostname):
+                by_name.setdefault(derived.get(e.id, ""), []).append(e.id)
+        for name, ids in by_name.items():
+            if name and len(ids) > 1:
+                note += _MESH_HOSTNAME_DERIVED_DUP.format(ids=", ".join(ids), name=name)
+        self.hostname_note.setText(note)
+
+    def _commit_hostname_rows(self, c, rows) -> bool:
+        """Write the per-image editors onto their entries (issue #229) and blank the
+        base hostname so no single value can ride onto every node. False (with the
+        reason on ``hostname_error``, inline) when a name is malformed or two images
+        would bake the same explicit name — the same two checks materialize() applies
+        (validate_identity / _assert_unique_hostnames), caught here where the operator
+        can fix them instead of at Build time."""
+        by_id = {e.id: e for e in rows}
+        derived = dict(self._worklist_hostnames(c))
+        for rid, edit in self.hostname_edits.items():
+            e = by_id.get(rid)
+            if e is None:
+                continue
+            value = edit.text().strip()
+            if value:
+                try:
+                    validate_domain_name(value)
+                except ValueError:
+                    self.hostname_error.setText(_HOSTNAME_BAD.format(rid=rid, value=value))
+                    self.hostname_error.setVisible(True)
+                    return False
+            e.hostname = value
+        c.hostname = ""
+        # explicit-vs-explicit (the model's own check) PLUS explicit-vs-derived: a
+        # typed name equal to what another blank row derives is the same collision
+        # once built, and only this page knows both halves.
+        dups = duplicate_hostnames(rows, "")
+        for e in rows:
+            if e.hostname:
+                continue
+            name = derived.get(e.id, "")
+            typed = [o.id for o in rows if o.hostname == name]
+            if name and typed:
+                dups.setdefault(name, []).extend([*typed, e.id])
+        if dups:
+            detail = "; ".join(f"{name!r} on {', '.join(dict.fromkeys(ids))}"
+                               for name, ids in dups.items())
+            self.hostname_error.setText(_HOSTNAME_DUP.format(detail=detail))
+            self.hostname_error.setVisible(True)
+            return False
+        self.hostname_error.setVisible(False)
+        return True
 
     def _worklist_default_users(self, c) -> list[tuple[str, str]]:
         """``(entry id, derived default account)`` for each worklist row — [] outside
@@ -558,7 +705,18 @@ class SystemPage(QtWidgets.QWizardPage):
 
     def validatePage(self):
         c = self.wiz.cfg
-        c.hostname = self.hostname.text().strip()
+        # hostname: per IMAGE on a mesh worklist (issue #229) — the entries carry it
+        # and the base is blanked; the single field only writes the config outside
+        # mesh. Refusals are inline (hostname_error), never modal.
+        rows = self._mesh_rows(c)
+        if len(rows) > 1:
+            if not self._commit_hostname_rows(c, rows):
+                return False
+        elif rows:
+            rows[0].hostname = self.hostname.text().strip()
+            c.hostname = ""
+        else:
+            c.hostname = self.hostname.text().strip()
         c.timezone = self.timezone.currentText().strip()
         c.user = self.user.text().strip()
         # ...and the emission half of the duplicate-account gate: with the row hidden,

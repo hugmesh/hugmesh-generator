@@ -269,6 +269,106 @@ def test_mesh_walk_reaches_worklist_and_gates_the_tables():
     assert j.slug == "system"
 
 
+def _mesh_to_system(*rows: str) -> journey.Journey:
+    """A mesh walk to the System identity step with the given worklist rows checked
+    (row NUMBERS on the TUI worklist: 1 = pki.x86, 2 = pki.rpi5, 3 = backend.x86 …)."""
+    j = _walk("", "3", "", *rows, "")       # mode, mesh, casdoor, rows, commit
+    for _ in range(len(WIZARD_PAGE_SLUGS)):
+        if j.slug == "system":
+            break
+        j.feed("n" if j.slug.endswith("_choice") else "")
+    assert j.slug == "system"
+    return j
+
+
+def test_system_step_is_hosted_and_names_each_image_of_a_mesh_worklist():
+    """ISSUE #229 on the TUI face: the System step is a real screen (no longer a
+    pending stub), it lists one row per worklist image with the name each derives,
+    and `N NAME` gives row N its OWN hostname — the value lands on that entry, the
+    base stays blank, and each materialized image carries only its own -H."""
+    j = _mesh_to_system("1", "3")           # pki.x86 + backend.x86
+    assert not isinstance(j.screen_for("system"), journey.PendingStep)
+    text = "\n".join(j.lines())
+    assert "not yet ported" not in text.split("Timezone")[0]   # the hostname half is real
+    assert "pki.x86" in text and "backend.x86" in text
+    assert "hugmesh-pki" in text and "hugmesh-backend" in text   # the derived names
+    j.feed("1 ca-1")
+    assert "ca-1" in j.status
+    j.feed("2 be-main")
+    assert {e.id: e.hostname for e in j.worklist.entries} == {
+        "pki.x86": "ca-1", "backend.x86": "be-main"}
+    assert j.cfg.hostname == ""
+    argvs = {e.id: cfg.to_cli_args() for e, cfg in j.worklist.materialize()}
+    assert argvs["pki.x86"][argvs["pki.x86"].index("--hostname") + 1] == "ca-1"
+    assert argvs["backend.x86"][argvs["backend.x86"].index("--hostname") + 1] == "be-main"
+    # `N -` blanks a row back to its derived name; Enter continues the walk
+    j.feed("2 -")
+    assert j.worklist.entries[1].hostname == ""
+    j.feed("")
+    assert j.slug == "home"
+
+
+def test_system_step_refuses_duplicate_and_malformed_hostnames_inline():
+    j = _mesh_to_system("1", "3")
+    j.feed("1 node")
+    j.feed("2 node")
+    assert j.worklist.entries[1].hostname == "" and "already" in j.status
+    j.feed("1 -")                           # row 1 back to its derived hugmesh-pki
+    j.feed("2 hugmesh-pki")                 # equals what that blank pki row derives
+    assert j.worklist.entries[1].hostname == "" and "already" in j.status
+    j.feed("2 Bad_Host!")
+    assert j.worklist.entries[1].hostname == "" and "not a valid hostname" in j.status
+    j.feed("9 x")
+    assert "no such row" in j.status
+    # a base hostname riding onto every (blank) row — the #229 shape, e.g. a loaded
+    # legacy envelope — cannot be committed as-is
+    j.cfg.hostname = "everyone"
+    j.feed("")
+    assert j.slug == "system" and "same hostname" in j.status
+    j.feed("2 -")                           # any edit blanks the base...
+    assert j.cfg.hostname == ""
+    # ...WITHOUT silently renaming the other row: it keeps the name it was going to
+    # bake, explicitly, so what the operator saw is what the build gets
+    assert [e.hostname for e in j.worklist.entries] == ["everyone", ""]
+    j.feed("")
+    assert j.slug == "home"
+
+
+def test_system_step_names_persist_across_a_worklist_recommit_and_into_the_envelope(tmp_path):
+    j = _mesh_to_system("1", "3")
+    j.feed("1 ca-1")
+    j.goto("worklist")                      # back to the worklist, re-commit it
+    j.feed("")
+    assert {e.id: e.hostname for e in j.worklist.entries} == {
+        "pki.x86": "ca-1", "backend.x86": ""}
+    for _ in range(len(WIZARD_PAGE_SLUGS)):
+        if j.slug == "build":
+            break
+        j.feed("n" if j.slug.endswith("_choice") else "")
+    path = tmp_path / "mesh.json"
+    j.feed(f"s {path}")
+    assert "saved to" in j.status
+    _base, wl = load_any(str(path))
+    assert [(e.id, e.hostname) for e in wl.entries] == [("pki.x86", "ca-1"),
+                                                        ("backend.x86", "")]
+
+
+def test_system_step_single_image_sets_the_config_hostname():
+    """Outside mesh there is one image and the plain config field is the channel —
+    existing single-image flows keep their shape."""
+    j = _walk("", "", "")                    # standalone, default role -> ...
+    for _ in range(len(WIZARD_PAGE_SLUGS)):
+        if j.slug == "system":
+            break
+        j.feed("")
+    assert j.slug == "system"
+    assert "standalone-thick.x86" in "\n".join(j.lines())
+    j.feed("1 my-desktop")
+    assert j.cfg.hostname == "my-desktop"
+    j.feed("")
+    assert j.slug == "home"
+
+
 def test_external_idp_is_listed_but_refused_with_the_reason():
     j = _walk("", "3")
     j.feed("2")                          # Azure Entra ID

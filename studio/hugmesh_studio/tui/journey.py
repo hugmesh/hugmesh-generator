@@ -31,11 +31,17 @@ canonical order end to end, finishing with a saveable config.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from ..core.config import (
     IDP_CHOICES, IDP_LABELS, MODE_DEFAULT_ROLE, MODE_SKIPPED_PAGES, ROLE_CHOICES,
-    UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS, ImageConfig, enter_mesh_defaults,
+    UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS, ImageConfig, derive_hostname,
+    enter_mesh_defaults,
 )
-from ..core.worklist import WorklistConfig, WorklistEntry
+from ..core.validate import validate_domain_name
+from ..core.worklist import (
+    WorklistConfig, WorklistEntry, duplicate_hostnames, entry_id, resolve_hostname,
+)
 
 __all__ = [
     "PAGE_ORDER", "SIDE_FLOW_SLUGS", "WELCOME_CHOICES", "WELCOME_TARGET",
@@ -171,7 +177,6 @@ _PENDING_STEPS = {
     "hardware": "Hardware",
     "network": "Network",
     "keyzip": "Admin key-zip",
-    "system": "System",
     "home": "Home",
     "launch": "Launch",
     "progress": "Progress",
@@ -439,9 +444,18 @@ class WorklistScreen:
             if not self._checked:
                 j.status = "pick at least one row first (a NUMBER toggles)"
                 return
-            entries = [WorklistEntry(role=role, platform=platform)
-                       for i, (role, platform, _label) in enumerate(self._rows)
-                       if i in self._checked]
+            # a row staying checked KEEPS the per-image hostname the System step
+            # gave it (issue #229) — the GUI WorklistPage's keep.hostname rule.
+            prior = ({e.id: e for e in j.worklist.entries}
+                     if j.worklist is not None else {})
+            entries = []
+            for i, (role, platform, _label) in enumerate(self._rows):
+                if i not in self._checked:
+                    continue
+                keep = prior.get(entry_id(role, platform))
+                entries.append(WorklistEntry(
+                    role=role, platform=platform,
+                    hostname=keep.hostname if keep else ""))
             j.worklist = WorklistConfig(base=j.cfg, entries=entries)
             j.advance()
             return
@@ -453,6 +467,124 @@ class WorklistScreen:
             self._checked.discard(idx)
         else:
             self._checked.add(idx)
+
+
+class SystemScreen:
+    """The System identity step — its HOSTNAME half, PER IMAGE on a mesh worklist
+    (issue #229): gui/pages/system.py's twin. One row per image the walk builds
+    (the worklist's entries in mesh; the single image otherwise), each showing the
+    explicit name it will bake and the role-derived name it takes when blank.
+    ``N NAME`` names row N, ``N -`` blanks it, Enter continues. Names live on the
+    worklist ENTRIES in mesh (``WorklistEntry.hostname``) and the base hostname is
+    blanked on any edit, so one value can never ride onto every node again.
+
+    Timezone and the default account are NOT ported here yet and the screen says so
+    (the honesty rule) — both are mesh-wide on the base, which the issue accepts."""
+
+    slug = "system"
+    title = "System identity"
+
+    def enter(self, j: "Journey") -> None:  # noqa: ARG002
+        return None
+
+    @staticmethod
+    def _mesh_entries(j: "Journey") -> list:
+        if j.cfg.mode == "mesh" and j.worklist is not None and j.worklist.entries:
+            return list(j.worklist.entries)
+        return []
+
+    def _rows(self, j: "Journey") -> list[tuple[str, str, str]]:
+        """``(image label, explicit hostname or "", role-derived hostname)`` per
+        image. Derived per row with ITS OWN role/platform/board, never off the base
+        (the GUI's _worklist_hostnames rule)."""
+        cfg = j.cfg
+        entries = self._mesh_entries(j)
+        if entries:
+            return [(e.id, resolve_hostname(e, cfg.hostname),
+                     derive_hostname(SimpleNamespace(
+                         brand=cfg.brand, role=e.role, platform=e.platform,
+                         board=e.board, unaffiliated=False)))
+                    for e in entries]
+        return [(f"{cfg.role}.{cfg.platform}", cfg.hostname, derive_hostname(cfg))]
+
+    def lines(self, j: "Journey") -> list[str]:
+        from . import model
+        rows = self._rows(j)
+        if len(rows) > 1:
+            out = [f"Hostname — this worklist builds {len(rows)} images and each "
+                   "bakes its own, so it is set per image:", ""]
+        else:
+            out = ["Hostname baked into the image:", ""]
+        table = [[str(i), label, name or "(blank)", derived]
+                 for i, (label, name, derived) in enumerate(rows, 1)]
+        out += model.format_table(["#", "image", "hostname", "if blank"], table)
+        out.append("")
+        out.append("N NAME sets row N's hostname; N - blanks it (the role-derived "
+                   "name in the last column).")
+        out.append("Timezone and the default account are not yet ported to the TUI "
+                   "— set them in the GUI if you need them. Enter continues.")
+        return out
+
+    def prompt(self, j: "Journey") -> str:  # noqa: ARG002
+        return "system> "
+
+    def _set(self, j: "Journey", idx: int, value: str) -> None:
+        entries = self._mesh_entries(j)
+        if entries:
+            base = (j.cfg.hostname or "").strip()
+            if base:
+                # the base never names every node (issue #229) — but blanking it must
+                # not silently RENAME the other rows, which were inheriting it: pin
+                # the name each one was going to bake onto its entry, so Enter's
+                # duplicate check names the collision instead of the names changing
+                # under the operator (the GUI seeds its editors the same way).
+                for i, e in enumerate(entries):
+                    if i != idx and not e.hostname:
+                        e.hostname = base
+                j.cfg.hostname = ""
+            entries[idx].hostname = value
+        else:
+            j.cfg.hostname = value
+
+    def feed(self, j: "Journey", line: str) -> None:
+        rows = self._rows(j)
+        if line == "":
+            entries = self._mesh_entries(j)
+            dups = duplicate_hostnames(entries, j.cfg.hostname) if entries else {}
+            if dups:
+                # the materialize() refusal, caught here where it can be fixed
+                detail = "; ".join(f"{hn!r} on {', '.join(ids)}"
+                                   for hn, ids in dups.items())
+                j.status = (f"two images would bake the same hostname: {detail} — "
+                            "give each its own (N NAME) or blank them (N -)")
+                return
+            j.advance()
+            return
+        num, _, value = line.partition(" ")
+        idx = _index(num, len(rows))
+        if idx is None:
+            j.status = (f"no such row: {num!r} (N NAME sets a hostname; N - blanks "
+                        "it; Enter continues)")
+            return
+        value = value.strip()
+        if value == "-":
+            value = ""
+        if value:
+            try:
+                validate_domain_name(value)
+            except ValueError:
+                j.status = (f"{value!r} is not a valid hostname — lower-case letters, "
+                            "digits, dots and hyphens, each label starting and "
+                            "ending alphanumeric")
+                return
+            for i, (label, name, derived) in enumerate(rows):
+                if i != idx and value == (name or derived):
+                    j.status = (f"{value!r} is already {label}'s hostname — give "
+                                "each image its own name")
+                    return
+        self._set(j, idx, value)
+        j.status = (f"{rows[idx][0]} hostname: "
+                    f"{value or '(blank — role-derived ' + rows[idx][2] + ')'}")
 
 
 class YesNoStep:
@@ -662,7 +794,7 @@ class Journey:
             YesNoStep("users_choice", "User accounts",
                       "Configure user accounts for this mesh now?",
                       "configure_users"),
-            UsersScreen(), BrandingScreen(), BuildScreen(),
+            UsersScreen(), SystemScreen(), BrandingScreen(), BuildScreen(),
         ]
         self._screens = {s.slug: s for s in screens}
         for slug, title in _SIDE_FLOW_STUB.items():
