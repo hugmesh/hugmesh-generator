@@ -210,7 +210,7 @@ Before(async ({ dimensions, $testInfo }) => {
   // load-bearing for backward compatibility: the 453 pre-existing scenarios
   // declare no environment, and gating them on availability would convert the
   // 130 that currently FAIL against a dead stack into 130 skips — turning a
-  // loud, true "nothing at :8443" into a quiet green-looking run. Opting in is
+  // loud, true "nothing at the docker door" into a quiet green-looking run. Opting in is
   // how a feature author asks for the skip.
   const declaredEnv = dimensions.env;
   if (declaredEnv) {
