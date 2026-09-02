@@ -1463,15 +1463,61 @@ unset _l_all _l_excl _l_call _l_def _nc
 # skipped guard is the defect this suite is about.
 # That also makes the "reached the role check" assertion load-bearing rather than
 # decorative: it is positive proof the script got PAST the slug validator.
-# The abort anchor. Pinned against the builder source FIRST: if it is reworded,
-# every leg below would fail with a confusing message, so name the real cause once
-# and up front rather than letting six legs blame the validator.
+# The abort anchor, resolved over the builder's OWN SOURCE CHAIN. Checked FIRST so
+# that if the string is gone the cause is named once, up front, instead of six legs
+# below blaming the validator.
+#
+# CHAIN-SCOPED, NOT FILE-SCOPED (2026-09-02). This grepped BUILDER_X86 ALONE, and
+# went red on main for a defect that does not exist. cce3cc18 ("role vocabulary: one
+# spelling for the token after the device platform", 2026-08-27) moved role
+# validation out of an inline `case` in build-x86-host-stage4.sh into
+# hugmesh_role_validate() in scripts/_roles-lib.sh, which the builder sources and
+# calls at top level. Nothing the builder PRINTS changed — `--role bogus` still
+# aborts with this exact string — which is why all five legs below that match
+# X86_ROLE_ERR against real builder OUTPUT stayed green while this one static check
+# failed: 298 passed, 1 failed, identically on a GNU host and in the alpine:3 lane.
+#
+# ONE DECLARATION IS THE DESIGN, so a file-scoped question is the wrong question.
+# tests/scripts/test-role-key-spelling.sh asserts every builder sources
+# scripts/_roles-lib.sh precisely so no builder can grow its own role spelling
+# again, and tests/build-image-spec-guards.sh was already updated for this
+# relocation ("the builder no longer carries a private '--role must be one of'
+# string"). This file was the one that was missed.
+#
+# The old failure text ("message reworded — update X86_ROLE_ERR in this file") was
+# then worse than no message: the needle was right and the HAYSTACK was wrong, so it
+# pointed the next reader at the one edit that would have made the guard lie — the
+# five legs below match this same string against live builder output, so weakening
+# X86_ROLE_ERR to something the builder never prints turns all five vacuous.
+#
+# So ask it at the scope the design promises — the string must live in the code this
+# builder RUNS — and DERIVE that scope from the builder rather than naming
+# scripts/_roles-lib.sh here, so the next relocation into another sourced lib cannot
+# break it again. opt_gate_sources() (tests/lib/opt-gate-source.sh, sourced at the
+# top of this file) reproduces bash's own resolution order and is comment-stripped,
+# so prose naming a lib cannot add a phantom source to the haystack.
 X86_ROLE_ERR="--role must be one of"
-if grep -F -- "${X86_ROLE_ERR}" "${BUILDER_X86}" >/dev/null; then
-  ok "x86: the post-validator abort anchor ('${X86_ROLE_ERR}') is still in the builder — the execution legs below can prove they got past validate_optional_services"
+_x86_anchor_in=""; _x86_anchor_n=0
+while IFS= read -r _f; do
+  [ -n "${_f}" ] || continue
+  _x86_anchor_n=$((_x86_anchor_n + 1))
+  if [ -z "${_x86_anchor_in}" ] && grep -F -- "${X86_ROLE_ERR}" "${_f}" >/dev/null 2>&1; then
+    _x86_anchor_in="${_f#"${REPO}/"}"
+  fi
+done < <(opt_gate_sources "${BUILDER_X86}")
+if [ -n "${_x86_anchor_in}" ]; then
+  ok "x86: the post-validator abort anchor ('${X86_ROLE_ERR}') is in ${BUILDER_X86##*/}'s own source chain, carried by ${_x86_anchor_in} — the execution legs below can prove they got past validate_optional_services"
+elif [ "${_x86_anchor_n}" -eq 0 ]; then
+  # Unreachable while opt_gate_sources ends by printing the builder itself, and the
+  # builder's existence is already a hard exit at the top of this file. Kept, and
+  # said plainly rather than folded into the message below, because a zero-length
+  # haystack must never be reported as "the string is missing" — mis-attributing the
+  # haystack is the exact confusion being fixed here.
+  bad "x86: opt_gate_sources resolved ZERO files for ${BUILDER_X86##*/} — the anchor search had no haystack at all; fix the resolver, do not touch X86_ROLE_ERR"
 else
-  bad "x86: role-validation message reworded — update X86_ROLE_ERR in this file; the execution legs below cannot tell 'reached role validation' from 'died earlier' without it"
+  bad "x86: the post-validator abort anchor ('${X86_ROLE_ERR}') is in NONE of the ${_x86_anchor_n} files ${BUILDER_X86##*/} sources. If role validation moved again, follow it — do NOT edit X86_ROLE_ERR unless the builder's real output changed, because the five legs below match this same string against live builder output and would go vacuous. Until it is fixed they cannot tell 'reached role validation' from 'died earlier'."
 fi
+unset _f _x86_anchor_in _x86_anchor_n
 run_x86() {   # run_x86 <args...> -> X86_RC / X86_OUT
   # OPTIONAL_SERVICES/EXCLUDE_SERVICES are cleared from the CHILD's environment:
   # this file sets both as shell variables while exercising the rpi5 gate, and an
