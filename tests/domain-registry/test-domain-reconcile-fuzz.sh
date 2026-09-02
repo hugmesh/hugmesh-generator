@@ -238,6 +238,67 @@ if command -v node >/dev/null && [ -r "${TOKEN_CLASSIFIER}" ]; then
 else
     echo "  SKIP (d) node/token-classifier unavailable (Handlebars-path assertion)"
 fi
+# d3: ANTI-VACUITY — a tokens.json block that VANISHES must not silently disable
+# the gate it feeds. `const RETIRED = spec.retired_protocol_constants || {}` was
+# fail-OPEN by shape: commit a38208e6 ("Update tokens.json", a direct-to-main
+# web-UI edit, 2026-08-28) deleted retired_protocol_constants AND
+# theme_contract_constants in one 14-line change, every consumer kept loading and
+# exiting 0, and render-handlebars.js's emit refusal for the retired snapdragon.*
+# constants and for the whole theme hand-off sat inert on main for four days. Only
+# d2 above — which names the exact dead spellings — went red. So: mutate a COPY of
+# the spec (never the tree's own) and require the classifier to refuse to LOAD.
+if command -v node >/dev/null && command -v jq >/dev/null && [ -r "${TOKEN_CLASSIFIER}" ]; then
+    TCDIR="${WORK}/tc"; mkdir -p "${TCDIR}"
+    cp "${TOKEN_CLASSIFIER}" "${TCDIR}/token-classifier.js"
+    cp "${REPO}/scripts/tooling/tokens.json" "${TCDIR}/tokens.json.orig"
+    # POSITIVE CONTROL first: an unmutated copy must load, so a red below is the
+    # planted mutation and not a broken harness (a copy that never loads would make
+    # all twelve mutation cases pass vacuously).
+    cp "${TCDIR}/tokens.json.orig" "${TCDIR}/tokens.json"
+    if node -e 'require(process.argv[1]);' "${TCDIR}/token-classifier.js" >/dev/null 2>&1; then
+        ok "(d3 control) an UNMUTATED tokens.json copy still loads (mutations below are meaningful)"
+    else
+        bad "(d3 control) the classifier copy does not load unmutated — harness broken, the d3 mutations prove nothing"
+    fi
+    for _blk in denylist frozen_protocol_constants retired_protocol_constants theme_contract_constants; do
+        # THREE distinct shapes, because they fail DIFFERENT halves of the guard and
+        # a two-shape battery hid that: `deleted`/`emptied` both leave every named
+        # array UNDEFINED, so a presence-only check (`Array.isArray(b[k])` with the
+        # length test dropped) still throws and both cases stay green while the
+        # anti-vacuity half is gone. `vacuous` — the block and its arrays present but
+        # every array [] — is the only shape that separates "the key is there" from
+        # "it still bans something", and it is also the likeliest real edit: a sweep
+        # that empties a list rather than removing it.
+        for _shape in deleted emptied vacuous; do
+            case "${_shape}" in
+                deleted) jq "del(.${_blk})" "${TCDIR}/tokens.json.orig" > "${TCDIR}/tokens.json" ;;
+                emptied) jq ".${_blk} = {}"  "${TCDIR}/tokens.json.orig" > "${TCDIR}/tokens.json" ;;
+                vacuous) jq ".${_blk} |= with_entries(if (.value|type) == \"array\" then .value = [] else . end)" \
+                            "${TCDIR}/tokens.json.orig" > "${TCDIR}/tokens.json" ;;
+            esac
+            node -e 'require(process.argv[1]);' "${TCDIR}/token-classifier.js" >"${TCDIR}/err.txt" 2>&1
+            _rc=$?
+            # grep a FILE, never a pipe: `... | grep -q` under `set -o pipefail` can
+            # report failure on a FOUND match when the writer takes SIGPIPE, and
+            # busybox grep -q closes far earlier than GNU's.
+            # BOTH halves: non-zero exit AND the guard's own sentinel naming this
+            # block. Exit status alone would accept a crash for an unrelated reason
+            # (an unparseable JSON, a missing file) as "the guard bit".
+            if [ "${_rc}" -ne 0 ] \
+               && grep -F "REFUSING TO LOAD the token classifier" "${TCDIR}/err.txt" >/dev/null 2>&1 \
+               && grep -F "'${_blk}" "${TCDIR}/err.txt" >/dev/null 2>&1; then
+                ok "(d3) tokens.json ${_blk} ${_shape} -> classifier REFUSES to load (rc=${_rc}, anti-vacuity error names the block)"
+            elif [ "${_rc}" -ne 0 ]; then
+                bad "(d3) tokens.json ${_blk} ${_shape} -> classifier failed for the WRONG reason (rc=${_rc}): $(head -c 300 "${TCDIR}/err.txt")"
+            else
+                bad "(d3) tokens.json ${_blk} ${_shape} -> classifier still LOADED (rc=${_rc}) — the refusal it feeds is silently inert"
+            fi
+        done
+    done
+    rm -rf "${TCDIR}"
+else
+    echo "  SKIP (d3) node/jq/token-classifier unavailable (anti-vacuity assertion)"
+fi
 echo
 
 # ── (e) oversized / entries-loop DoS ───────────────────────────────────────────

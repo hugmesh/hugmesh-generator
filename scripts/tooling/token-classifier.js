@@ -14,6 +14,76 @@ const path = require('path');
 const TOKENS_PATH = path.join(__dirname, 'tokens.json');
 const spec = JSON.parse(fs.readFileSync(TOKENS_PATH, 'utf8'));
 
+// ── ANTI-VACUITY: a spec block that VANISHES must not silently disable its gate ──
+// Every predicate below is built from a tokens.json block, and the natural JS for
+// that (`spec.<block> || {}`, or a spread of `b.<arr> || []`) is fail-OPEN BY SHAPE:
+// delete the block and the predicate stops refusing anything, while every consumer
+// still loads, still exits 0, and every suite that does not name the exact dead
+// spelling still passes. That is not hypothetical. Commit a38208e6 ("Update
+// tokens.json", a direct-to-main web-UI edit, 2026-08-28) deleted BOTH
+// `retired_protocol_constants` and `theme_contract_constants` in one 14-line change,
+// and for four days render-handlebars.js's fail-closed emit refusal for every
+// RETIRED snapdragon.* protocol constant AND for the whole theme-delivery hand-off
+// was inert on main — the JSON is not gated by shell-suites.yml (`on: pull_request`)
+// when it lands as a direct push, and nothing else noticed a data file getting
+// smaller. So the blocks are REQUIRED here, at require time, before a single
+// predicate is built: an absent, malformed or VACUOUS block throws and takes every
+// consumer down loudly instead of quietly classifying nothing.
+//
+// `mustExist` = the array must be present and an array (an empty allowlist is
+// fail-CLOSED — nothing gets substituted — so emptiness there is loud on its own).
+// `mustBeNonEmpty` = emptying it makes a REFUSAL inert, which is the silent shape,
+// so empty is refused too.
+//
+// TO LIFT a whole contract family (its last entry migrated away on both sides):
+// delete its name from this table in the SAME change that empties it in tokens.json
+// — a deliberate, reviewable code edit, which is precisely the act the accidental
+// deletion skipped.
+const REQUIRED_SPEC_BLOCKS = {
+  allowlist:                  { mustExist: ['live', 'dead', 'reserved_pilot'] },
+  denylist:                   { mustBeNonEmpty: ['keys'], mustBeNonEmptyString: ['key_name_regex'] },
+  frozen_protocol_constants:  { mustBeNonEmpty: ['label_key_namespaces', 'api_groups', 'wire_headers', 'subprotocol_prefixes'] },
+  retired_protocol_constants: { mustBeNonEmpty: ['label_key_namespaces', 'wire_headers', 'subprotocol_prefixes'] },
+  theme_contract_constants:   { mustBeNonEmpty: ['rename_denylist', 'env_keys', 'css_variable_prefixes'] },
+};
+
+// Every refusal carries the same sentinel tail, so a caller (and
+// test-domain-reconcile-fuzz.sh case d3) can tell "the guard bit" from "the file
+// happened to be unparseable/absent for some unrelated reason".
+function vacuityError(where, what) {
+  return new Error(
+    `${where}: ${what}. REFUSING TO LOAD the token classifier — a missing or vacuous spec ` +
+    'block silently turns every gate that reads it into a no-op. See REQUIRED_SPEC_BLOCKS in ' +
+    'scripts/tooling/token-classifier.js: to retire a whole contract family, delete its entry ' +
+    'THERE in the same change that empties it here.'
+  );
+}
+
+function assertSpecBlocks(s, table, where) {
+  for (const [block, req] of Object.entries(table)) {
+    const b = s[block];
+    if (!b || typeof b !== 'object' || Array.isArray(b)) {
+      throw vacuityError(where, `required block '${block}' is MISSING or is not an object`);
+    }
+    for (const k of (req.mustExist || [])) {
+      if (!Array.isArray(b[k])) {
+        throw vacuityError(where, `'${block}.${k}' is missing or is not an array`);
+      }
+    }
+    for (const k of (req.mustBeNonEmpty || [])) {
+      if (!Array.isArray(b[k]) || b[k].length === 0) {
+        throw vacuityError(where, `'${block}.${k}' is missing or EMPTY, so the refusal it feeds would be inert`);
+      }
+    }
+    for (const k of (req.mustBeNonEmptyString || [])) {
+      if (typeof b[k] !== 'string' || b[k] === '') {
+        throw vacuityError(where, `'${block}.${k}' is missing or is not a non-empty string`);
+      }
+    }
+  }
+}
+assertSpecBlocks(spec, REQUIRED_SPEC_BLOCKS, TOKENS_PATH);
+
 const ALLOW = new Set([
   ...spec.allowlist.live,
   ...spec.allowlist.dead,
@@ -41,7 +111,10 @@ const FROZEN = spec.frozen_protocol_constants;
 // Kept as its own spec block (and its own isRetired()) so callers that must tell
 // "our live identity" from "a dead spelling" — ingest-foreign-base.sh's
 // impersonation scan reads frozen_protocol_constants ONLY — are not misled.
-const RETIRED = spec.retired_protocol_constants || {};
+// No `|| {}` default here or on THEME below: that is the exact fail-open shape
+// REQUIRED_SPEC_BLOCKS now refuses at load, and leaving it would still READ as if a
+// missing block were survivable.
+const RETIRED = spec.retired_protocol_constants;
 const FROZEN_LABEL_NS = [...(FROZEN.label_key_namespaces || []), ...(RETIRED.label_key_namespaces || [])];
 const FROZEN_HEADERS = [...(FROZEN.wire_headers || []), ...(RETIRED.wire_headers || [])].map((h) => h.toLowerCase());
 const FROZEN_SUBPROTO = [...(FROZEN.subprotocol_prefixes || []), ...(RETIRED.subprotocol_prefixes || [])];
@@ -95,7 +168,7 @@ function isFrozen(token) {
 // by shipping a snap-theme.css. What they DO is rename one end of the chain and
 // silently serve an unthemed page, so the names get their own predicate and their
 // own refusal message rather than being smuggled into the protocol block.
-const THEME = spec.theme_contract_constants || {};
+const THEME = spec.theme_contract_constants;
 const THEME_ENV_KEYS = new Set(THEME.env_keys || []);
 const THEME_CSS_PREFIXES = [...(THEME.css_variable_prefixes || [])];
 
