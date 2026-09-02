@@ -253,8 +253,16 @@ gate_optional_services() {
                 # The WORKLOAD CONSOLE is RBAC + route-access + an admin-bff deployment
                 # overlay (the BFF endpoints live in the always-present admin-bff).
                 # Deselecting it prunes the two-SA RBAC Application + its manifests (so
-                # the SA token Secrets are never minted), the two route-access rows (the
-                # gateway 404s the whole /bff/{admin,superadmin}/workloads/** prefix),
+                # the SA token Secrets are never minted), the two route-access rows
+                # (which UNGOVERN the /bff/{admin,superadmin}/workloads/** prefix at the
+                # gateway — they do NOT wall it. docs/ROUTE-ACCESS.md section
+                # "'No matching row' is NOT a denial. Three verdicts, not two":
+                # a path with no matching url_pattern is NO_RULE and the gateway's
+                # GatewayRouteAccessFilter FORWARDS it,
+                # rejecting only on DENY. The refusal is the admin-bff's own
+                # WorkloadAuthorizationFilter, which 404s the disabled prefix under
+                # WORKLOAD_CONSOLE_ENABLED=false — in-cluster too, so there is no
+                # gateway-only bypass),
                 # AND the deployment overlay workload-console-patch.yaml + its single
                 # kustomization `- path:` line — so the dark admin-bff renders
                 # byte-identical to a tree that never had the feature (no
