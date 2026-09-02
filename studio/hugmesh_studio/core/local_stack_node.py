@@ -20,6 +20,7 @@ import shutil
 import signal
 import subprocess
 import time
+import urllib.parse
 import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -110,10 +111,15 @@ GITOPS_REPO_URL = "https://github.com/hugmesh/hugmesh-generator.git"
 KIND_CLUSTER_DEFAULT = "hugmesh-local"
 # Read-only seeded-stack probe (verified live 2026-08-14): seed-e2e.sh leg 1
 # creates org 'hugmesh' + persona e2e-admin, and Casdoor answers this GET
-# WITHOUT auth — data.name == "e2e-admin" when seeded, data: null when not.
+# WITHOUT auth — data.name == "<user>" when seeded, data: null when not.
 # (CASDOOR_ORG is seed-e2e.sh's default; an operator override would defeat
 # this probe, which then honestly reports 'not seeded' and blocks the run.)
-E2E_SEED_PROBE_URL = "http://localhost:8000/api/get-user?id=hugmesh/e2e-admin"
+# Templated on the persona so the SAME probe can ask about mesh-operator — the
+# account only the SEED_COMPLETE_REGISTRATION=1 path creates — instead of the
+# credentials dialog guessing that it exists. Compose lane only: the kind
+# Casdoor is ClusterIP with no host port.
+_SEED_PROBE_TEMPLATE = "http://localhost:8000/api/get-user?id=hugmesh/{user}"
+E2E_SEED_PROBE_URL = _SEED_PROBE_TEMPLATE.format(user="e2e-admin")
 
 
 def _kind_cluster_name() -> str:
@@ -900,22 +906,35 @@ class LocalStackNode:
             pass
         return ""
 
-    def e2e_seeded(self) -> tuple[bool, str]:
-        """Has `make stack-seed` actually provisioned the e2e personas? A
-        READ-ONLY probe of the running Casdoor (no token minted, nothing
-        written): see E2E_SEED_PROBE_URL. Any error — Casdoor down, port not
-        published — reports why instead of raising."""
+    def seeded_user(self, username: str) -> tuple[bool | None, str]:
+        """Does the running Casdoor hold persona ``username``? A READ-ONLY probe
+        (no token minted, nothing written): see _SEED_PROBE_TEMPLATE.
+
+        TRI-STATE on purpose: ``(True, "")`` when Casdoor answered and holds it,
+        ``(False, why)`` when Casdoor answered and does NOT, ``(None, why)`` when
+        Casdoor did not answer at all (down, port not published). The last is not
+        "not seeded" — a caller that rendered it as absent would be asserting
+        something about the mesh that nothing established."""
+        url = _SEED_PROBE_TEMPLATE.format(
+            user=urllib.parse.quote(username, safe="@.-_"))
         try:
-            with urllib.request.urlopen(E2E_SEED_PROBE_URL, timeout=5) as r:  # noqa: S310 - fixed localhost URL
+            with urllib.request.urlopen(url, timeout=5) as r:  # noqa: S310 - fixed localhost URL
                 data = json.load(r)
         except (OSError, ValueError) as e:
-            return False, f"Casdoor not answering on localhost:8000 ({e})"
+            return None, f"Casdoor not answering on localhost:8000 ({e})"
         user = data.get("data") if isinstance(data, dict) else None
-        if isinstance(user, dict) and user.get("name") == "e2e-admin":
+        if isinstance(user, dict) and user.get("name") == username:
             return True, ""
-        return False, ("persona 'e2e-admin' not in Casdoor — the stack is up "
+        return False, (f"persona '{username}' not in Casdoor — the stack is up "
                        "but unseeded; run `make stack-seed` (the bootstrap's "
                        "bring-up seeds automatically)")
+
+    def e2e_seeded(self) -> tuple[bool, str]:
+        """Has `make stack-seed` actually provisioned the e2e personas? The e2e
+        gate's yes/no view of :meth:`seeded_user` — "Casdoor did not answer" is
+        a blocker for the suite, so it folds to False here (with its reason)."""
+        ok, why = self.seeded_user("e2e-admin")
+        return bool(ok), why
 
     def e2e_ready(self, environment: str = "docker") -> list[str]:
         """Every reason the e2e suite cannot run RIGHT NOW (empty = ready) —

@@ -83,7 +83,8 @@ from ...core.local_services import (
     KIND_ADDONS, UNAVAILABLE_LOCALLY, by_slug as local_service, default_selection,
     describe as local_describe, kind_addon_slugs, local_groups, local_slugs)
 from ...core.progress_parse import ProgressParser
-from ...core.seeded_credentials import load_roster
+from ...core import credentials_truth
+from ...core.seeded_credentials import Roster, annotate, load_roster
 from ...core.instance import state_dir
 from ...core.stage_tracker import StageTracker
 from ...core import e2e_environments
@@ -221,6 +222,44 @@ class _E2ECatalogueProbe(QtCore.QThread):
             cat.problems.append(
                 f"the e2e catalogue could not be built: {type(e).__name__}: {e}")
             self.result.emit(cat)
+
+
+class _CredsProbe(QtCore.QThread):
+    """Gather the sign-in credentials AND whether they are true of the running
+    mesh, off the GUI thread.
+
+    Pressing "Sign-in credentials" used to do three blocking things INLINE before
+    its modal opened: parse three seeder scripts, build the stack env — which
+    WRITES the theme/limits overlay files — and nothing at all about the mesh, so
+    the dialog presented whatever was on disk as the way in. Now the click starts
+    this probe and the dialog is constructed in its result slot, from facts:
+    core/credentials_truth.probe_credentials is docker + Casdoor + stat, blocking
+    by contract (up to ~30s on a wedged daemon), so it runs here.
+
+    Emits ``(Roster, CredentialTruth | None)``. Never raises: a failure lands in
+    ``Roster.error`` so the dialog's existing unreadable-roster branch renders it,
+    and an exception escaping run() would leave the button stuck at "checking…"."""
+    result = Signal(object)                     # (Roster, CredentialTruth | None)
+
+    def __init__(self, boot, generator_dir: str, added=(), parent=None):
+        super().__init__(parent)
+        self._boot = boot
+        self._dir = generator_dir
+        self._added = tuple(added)
+
+    def run(self):
+        try:
+            node = self._boot._stack_node()
+            env = node._build_env()
+            roster = load_roster(self._dir, env=env)
+            truth = credentials_truth.probe_credentials(
+                self._dir, env, node, self._boot, operator_user=roster.operator)
+            roster = annotate(roster, truth, added=self._added)
+        except Exception as e:                  # never kill the page over a probe
+            roster = Roster(error=f"the credentials probe failed: "
+                                  f"{type(e).__name__}: {e}")
+            truth = None
+        self.result.emit((roster, truth))
 
 
 class _MeshWorker(QtCore.QThread):
@@ -482,6 +521,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # (that would grey the teardown buttons on every page entry for as long
         # as `docker compose ps` takes).
         self._mesh_up: bool | None = None
+
+        # What the last credentials probe established about the running mesh
+        # (core/credentials_truth.CredentialTruth), None until the button is
+        # pressed. Users this session's Add user seeded — (name, roles), never the
+        # password — so the dialog can list them as "added this session".
+        self._cred_truth = None
+        self._added_users_ok: list[tuple[str, tuple[str, ...]]] = []
 
         # Run the gate ONCE now that every widget it touches exists, so
         # 'Generate & start' is armed (and carries its tooltip) from first paint.
@@ -984,11 +1030,14 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         brow.addWidget(self.copy_onion_btn)
         self.creds_btn = QtWidgets.QPushButton("Sign-in credentials")
         self.creds_btn.setToolTip(
-            "Show the accounts `make stack-seed` provisions (username, password, "
-            "roles) with one-click copy — the answer to \"the login page is up, "
-            "who do I log in AS?\". Read from the seeder itself, so it matches "
-            "what was actually seeded. Deterministic throwaway TEST credentials "
-            "for this local stack only.")
+            "Show the accounts this mesh ACTUALLY has — usernames, the password "
+            "THIS RUN generated, roles, and which apps each opens — with one-click "
+            "copy: the answer to \"the login page is up, who do I log in AS?\". "
+            "Read from run-state (the running Casdoor, the run-state credentials "
+            "file, the minted secrets bundle), not from an example. When nothing "
+            "has been seeded, or the stored password predates the last completed "
+            "seed, it says so instead of showing a value as fact. Checks off-thread "
+            "first (a few seconds), then opens.")
         self.creds_btn.clicked.connect(self._show_credentials)
         brow.addWidget(self.creds_btn)
         # Runs tests/e2e against the RUNNING stack. Enablement + tooltip are
@@ -2199,17 +2248,48 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             QtCore.QUrl(self.boot._stack_node().web_url))
 
     def _show_credentials(self):
-        """Show the seeded persona roster (username / password / roles), copyable.
+        """Probe first, modal from the SLOT (_on_credentials) — never inline.
 
         Opened from the bring-up row rather than popped automatically after a
         successful `up`: the operator often wants it again later (a second browser,
-        a different role) and a one-shot toast would be gone by then. The roster is
-        parsed fresh on each open so it reflects the CURRENT checkout + the same env
-        the Studio hands `make stack-seed`."""
-        roster = load_roster(self.generator_dir,
-                             env=self.boot._stack_node()._build_env())
-        CredentialsDialog(roster, front_door=self.boot._stack_node().web_url,
-                          parent=self).exec()
+        a different role) and a one-shot toast would be gone by then. Everything
+        is gathered fresh on each press (the CURRENT checkout, the same env the
+        Studio hands `make stack-seed`, and the mesh that is running NOW), on a
+        _CredsProbe thread. A press while one is in flight is a no-op: its answer
+        is coming, and a second probe would only stack a second dialog."""
+        if probe_running(self, "_creds_probe"):
+            return
+        self.creds_btn.setEnabled(False)
+        self.creds_btn.setText("Sign-in credentials (checking…)")
+        probe = own_probe(self, "_creds_probe",
+                          _CredsProbe(self.boot, self.generator_dir,
+                                      added=self._added_users_ok, parent=self))
+        probe.result.connect(self._on_credentials)
+        probe.start()
+
+    def _on_credentials(self, payload):
+        """The _CredsProbe result slot: re-arm the button, publish the one-line
+        truth on the mesh-state line, then open the dialog. A modal opened from a
+        slot that a BUTTON started is still button-driven — nothing here runs from
+        validatePage or itemChanged."""
+        self.creds_btn.setText("Sign-in credentials")
+        self.creds_btn.setEnabled(True)
+        roster, truth = payload
+        if truth is not None:
+            # The mesh-state line gains the seed truth as a second sentence, so
+            # the page states it without the dialog. A previous headline is
+            # replaced, never stacked; _on_mesh_state's next rewrite drops it,
+            # which is right — that probe ran after a verb changed the mesh.
+            base = self._mesh_state_label.text()
+            prev = getattr(self._cred_truth, "headline", "")
+            if prev and base.endswith(prev):
+                base = base[:-len(prev)].rstrip()
+            self._mesh_state_label.setText(f"{base} {truth.headline}".strip())
+        self._cred_truth = truth
+        # Held on self so the wrapper is not collected while the dialog is up.
+        self._creds_dialog = CredentialsDialog(
+            roster, truth, front_door=self.boot._stack_node().web_url, parent=self)
+        self._creds_dialog.exec()
 
     def _add_user(self):
         """Add ONE named user to the RUNNING mesh by re-running the idempotent
@@ -2229,12 +2309,22 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if password:
             env[pw_env] = password          # env-only — never argv, never logged
         stack = self.boot._stack_node()
+        roles = tuple(r for r in spec.split(":")[1].split(",") if r) \
+            if spec.count(":") >= 2 else ()
+
+        def _seed(on_line, cancel):
+            ok, msg = stack.seed(env, on_line=on_line, cancel=cancel)
+            if ok:
+                # Runs on the worker thread; a plain list swap under the GIL, read
+                # on the GUI thread only at the next credentials press. Name and
+                # roles ONLY — the password went to the seeder's env and is gone.
+                self._added_users_ok = [u for u in self._added_users_ok
+                                        if u[0] != uname] + [(uname, roles)]
+            return ok, msg
+
         self._note(f"[add-user] re-seeding with '{uname}' appended (idempotent; "
                    "existing personas re-applied unchanged) …")
-        self._launch(f"Adding user {uname}",
-                     lambda on_line, cancel: stack.seed(env, on_line=on_line,
-                                                        cancel=cancel),
-                     stream=True, cancellable=True)
+        self._launch(f"Adding user {uname}", _seed, stream=True, cancellable=True)
 
     def _copy_onion(self):
         """Copy the published .onion address to the clipboard. A normal browser

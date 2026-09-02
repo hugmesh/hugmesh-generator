@@ -27,12 +27,25 @@ itself resolves; it never generates one and never writes one anywhere: no loggin
 no config file, no argv. When nothing has been seeded yet it says so plainly instead
 of guessing — a wrong password is worse than none. The GUI copies to the clipboard
 on explicit operator action only.
+
+WHAT THIS MODULE DOES NOT KNOW. Parsing the seeder says who a seed WOULD create,
+not who exists in the mesh that is running. That second question — is anything
+seeded, does the password on disk match the identities, does mesh-operator exist
+on this lane, which superadmin was actually minted — is core/credentials_truth.py's
+(docker + Casdoor + run-state facts, folded by a pure state machine). Its answer is
+joined back in by :func:`annotate`, which marks every row live / stale / halted /
+not seeded / not on this lane / unverified / unknown instead of letting a parsed
+roster pose as a live one. The run-state file itself is read through that module
+too, so there is exactly one parser of it.
 """
 from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+
+from . import credentials_truth as _truth
+from .credentials_truth import CredentialTruth
 
 # The roster is assembled from the SAME three places the seeder assembles it from,
 # because a persona missing here is a persona the operator cannot discover:
@@ -118,6 +131,12 @@ class SeededUser:
     #: The ``E2E_<UPPER>_PASSWORD`` variable that would override this user's
     #: password. Kept for display so an operator can see WHICH knob to set.
     password_env: str = ""
+    #: Liveness in the mesh that is running NOW — one of credentials_truth.MARKERS
+    #: ("" = not assessed; a parsed roster nobody has checked against a mesh).
+    #: Set by :func:`annotate`, never by the parser.
+    live: str = ""
+    #: Why ``live`` says what it says, for the cell's tooltip.
+    note: str = ""
 
     @property
     def roles_display(self) -> str:
@@ -149,6 +168,9 @@ class Roster:
     #: one. This is the account the dialog should lead with — every other persona is
     #: deliberately narrow and will hit a 403 somewhere.
     operator: str = ""
+    #: The live-mesh assessment this roster was annotated against (None = a
+    #: parsed roster nobody has checked against a mesh).
+    truth: CredentialTruth | None = None
 
     def __bool__(self) -> bool:
         return bool(self.users)
@@ -230,24 +252,14 @@ def _read_credentials_file(generator_dir: str | None, src: dict[str, str]) -> di
     ``<generator_dir>/.e2e-credentials``. Best-effort like the rest of this module:
     a missing/unreadable/unparseable file yields {} so the caller falls through to
     the not-seeded marker instead of raising.
+
+    A thin wrapper over credentials_truth.read_values — the ONE parser — so the
+    value this resolver shows and the file facts the truth banner states can never
+    come from two readers that disagree. The OSError KIND is kept over there
+    (credentials_truth.credentials_file), which is how a root-owned file gets
+    reported as a permission problem instead of as "(not seeded)".
     """
-    path = src.get(_CREDENTIALS_FILE_ENV) or (
-        os.path.join(generator_dir, _CREDENTIALS_FILE_NAME) if generator_dir else "")
-    if not path:
-        return {}
-    try:
-        with open(path, encoding="utf-8") as fh:
-            lines = fh.readlines()
-    except OSError:
-        return {}
-    out: dict[str, str] = {}
-    for line in lines:
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        out[key.strip()] = val.strip()
-    return out
+    return _truth.read_values(generator_dir, src)
 
 
 def resolve_password(password_env: str, env: dict[str, str] | None = None,
@@ -341,9 +353,12 @@ def _read_extras(generator_dir: str) -> list[tuple[str, tuple[str, ...], str]]:
 def _read_operator(generator_dir: str) -> tuple[str, tuple[str, ...], str] | None:
     """The local-mesh operator account, declared as two knobs in seed-e2e.sh.
 
-    Seeded ONLY on the SEED_COMPLETE_REGISTRATION path — which is exactly the path
-    the Studio's bring-up takes, so from this dialog's point of view it always
-    exists. Its password follows the same shared-E2E_PASSWORD default as the rest."""
+    Seeded ONLY on the SEED_COMPLETE_REGISTRATION path — the Studio's bring-up and
+    Add user take it; a terminal `make stack-seed` and the whole kind lane do not,
+    so this row is a persona the seeder CAN create, not one that exists. Whether it
+    does in the running mesh is credentials_truth's question (``stage2``), and
+    :func:`annotate` marks the row accordingly. Its password follows the same
+    shared-E2E_PASSWORD default as the rest."""
     try:
         with open(os.path.join(generator_dir, OPERATOR_SCRIPT), encoding="utf-8") as fh:
             text = fh.read()
@@ -373,7 +388,14 @@ def suggested_signin(roster: Roster) -> SeededUser | None:
     something to feature."""
     if not roster.users:
         return None
-    by_name = {u.username: u for u in roster.users}
+    # Never lead with a persona the live assessment says is NOT there: a row marked
+    # "not on this lane" / "not seeded" is a fact, and leading with it would send
+    # the operator into a guaranteed 401. Unassessed ("") and unverified rows stay
+    # eligible — unknown is not "no".
+    by_name = {u.username: u for u in roster.users
+               if u.live not in (_truth.NOT_ON_LANE, _truth.NOT_SEEDED)}
+    if not by_name:
+        return roster.users[0]
     # The operator account FIRST. Leading with e2e-admin (the instinctive choice, and
     # what this used to return) sends the operator straight into the trap: it opens
     # the admin panel and API docs, and its Matrix/Mastodon tabs render fully and then
@@ -382,6 +404,103 @@ def suggested_signin(roster: Roster) -> SeededUser | None:
         if preferred and preferred in by_name:
             return by_name[preferred]
     return roster.users[0]
+
+
+def annotate(roster: Roster, truth: CredentialTruth | None,
+             added: tuple[tuple[str, tuple[str, ...]], ...] | list = ()) -> Roster:
+    """Join the live-mesh assessment INTO the parsed roster — per-user liveness,
+    the superadmin the Studio actually minted, and this session's added users.
+
+    Never re-parses and never reads a file: everything it needs is in ``truth``.
+    Returns a NEW Roster (the input is left as parsed).
+
+      * every shared-password persona gets ``truth.marker`` (live / stale / halted /
+        not seeded / unverified / unknown) and, when the truth says the file cannot
+        be read, its password cell becomes the unreadable marker rather than the
+        resolver's "(not seeded)" — which would be false;
+      * the operator account (``roster.operator``) follows ``truth.stage2``: True →
+        the shared marker, False → "not on this lane" (this lane's seeder never
+        ran stage 2), None → "unknown" on kind, "unverified" elsewhere;
+      * the extras' ``${SUPERADMIN_PERSONA}`` row (password env
+        E2E_SUPERADMIN_PASSWORD) is replaced IN PLACE — never duplicated — by the
+        username + password minted into secrets.json when a bundle is readable,
+        noted as such; with no bundle the script-derived row stays, noted "no
+        minted bundle found";
+      * ``added`` — (username, roles) pairs this session's Add user seeded — are
+        appended (or replace a same-named row) with the added marker and NO
+        password: the value went to the seeder's env only and was never stored.
+    """
+    if truth is None:
+        users = list(roster.users)
+        for name, roles in added:
+            users = [u for u in users if u.username != name]
+            users.append(SeededUser(username=name, roles=tuple(roles),
+                                    password=_truth.ADDED_MARKER, live=_truth.ADDED,
+                                    note="Seeded by this session's Add user; the "
+                                         "password was handed to the seeder's env "
+                                         "and never kept."))
+        return replace(roster, users=users)
+
+    marker = truth.marker
+    kind = truth.lane == _truth.LANE_KIND
+    if truth.stage2 is True:
+        op_marker, op_note = marker, ""
+    elif truth.stage2 is False:
+        op_marker = _truth.NOT_ON_LANE
+        op_note = ("Registration stage 2 did not run on this lane: only the "
+                   "Studio's bring-up and Add user (SEED_COMPLETE_REGISTRATION=1) "
+                   "create this account; a terminal `make stack-seed` and the kind "
+                   "lane never do.")
+    else:
+        op_marker = _truth.UNKNOWN if kind else _truth.UNVERIFIED
+        op_note = ("The kind lane never runs seed-e2e.sh, so this account is not "
+                   "created there." if kind else
+                   "Whether registration stage 2 ran could not be established.")
+    if kind:
+        op_marker, op_note = _truth.NOT_ON_LANE, op_note
+
+    sa_user, sa_pw = truth.superadmin
+    if sa_user and sa_pw:
+        if truth.superadmin_seeded is True:
+            sa_marker = marker if marker in (_truth.LIVE, _truth.HALTED) else _truth.UNVERIFIED
+        elif truth.superadmin_seeded is False:
+            sa_marker = _truth.NOT_SEEDED
+        else:
+            sa_marker = _truth.UNKNOWN if kind else _truth.UNVERIFIED
+        sa_note = ("Minted for this bring-up; stored only in keys-out/vault/"
+                   "secrets.json (never in the run-state credentials file)."
+                   + ("" if truth.superadmin_seeded else
+                      " Not proven seeded: no seed has completed since it was minted."))
+    else:
+        sa_marker, sa_note = marker, ("No minted bundle found (keys-out/vault/"
+                                       "secrets.json absent or unreadable) — this is "
+                                       "the seeder's script default, which a "
+                                       "terminal `make stack-seed` creates.")
+
+    users: list[SeededUser] = []
+    for u in roster.users:
+        if u.password_env == "E2E_SUPERADMIN_PASSWORD" and "ROLE_SUPERADMIN" in u.roles:
+            if sa_user and sa_pw:
+                users.append(replace(u, username=sa_user, password=sa_pw,
+                                     live=sa_marker, note=sa_note))
+            else:
+                users.append(replace(u, live=sa_marker, note=sa_note))
+            continue
+        if roster.operator and u.username == roster.operator:
+            users.append(replace(u, live=op_marker, note=op_note or truth.headline))
+            continue
+        row = replace(u, live=marker, note=truth.headline)
+        if truth.password_marker:
+            row = replace(row, password=truth.password_marker)
+        users.append(row)
+    for name, roles in added:
+        users = [x for x in users if x.username != name]
+        users.append(SeededUser(username=name, roles=tuple(roles),
+                                password=_truth.ADDED_MARKER, live=_truth.ADDED,
+                                note="Seeded by this session's Add user; the "
+                                     "password was handed to the seeder's env and "
+                                     "never kept."))
+    return replace(roster, users=users, truth=truth)
 
 
 def as_copyable_text(roster: Roster) -> str:
