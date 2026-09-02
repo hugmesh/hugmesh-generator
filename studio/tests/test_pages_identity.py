@@ -703,23 +703,27 @@ def test_person_role_greys_and_clears_on_arm(wiz):
     assert "--person-role" not in c.to_cli_args()
 
 
-def test_user_role_combo_offers_the_grantable_games_roles(wiz):
-    """G20: the per-user role combo carries the grantable games roles (games /
-    games-services) — the derived Casdoor intersection roles stay excluded."""
+def test_user_role_cell_offers_the_grantable_games_roles(wiz):
+    """G20: the per-user Roles cell carries the grantable games roles (games /
+    games-services) — the derived Casdoor intersection roles stay excluded. Issue
+    #228 made the cell a checkbox row (RoleCell); the vocabulary is unchanged."""
     pick_mode(wiz, "mesh")
     # ask 20: the users TABLE has its own gate now (the users CHOICE screen), separate
     # from the domains one — this test needs only the table.
     enable_configure_users(wiz)
     users = advance_to(wiz, wizard_mod.UsersPage)
     users._add("bob", "acme.example", "games")
-    combo = users.table.cellWidget(0, 2)
-    assert [combo.itemText(i) for i in range(combo.count())] == list(USER_ROLE_CHOICES)
-    assert combo.currentText() == "games"
+    cell = users.table.cellWidget(0, 2)
+    assert cell.choices() == list(USER_ROLE_CHOICES)
+    assert cell.roles() == ["games"]
     assert "games-admin" not in USER_ROLE_CHOICES        # derived, sync-Job-materialized
     advance_to(wiz, wizard_mod.HomePage)
     assert [u.role for u in wiz.cfg.users] == ["games"]
-    # the games role reaches cluster provisioning via the mesh manifest
+    assert [u.roles for u in wiz.cfg.users] == [["games"]]
+    # the games role reaches cluster provisioning via the mesh manifest — and a
+    # one-role row keeps its pre-#228 shape (no `roles` key).
     assert wiz.cfg.mesh_manifest()["users"][0]["role"] == "games"
+    assert "roles" not in wiz.cfg.mesh_manifest()["users"][0]
 
 
 # ---- UsersPage: the domain dropdown + superadmin lock (spec 5/6) ---------------------
@@ -747,13 +751,18 @@ def test_users_superadmin_locks_domain_to_superdomain(wiz):
     users = advance_to(wiz, wizard_mod.UsersPage)
     users._add("alice", "acme.example", "user")
     dom_combo = users.table.cellWidget(0, 1)
-    role_combo = users.table.cellWidget(0, 2)
+    cell = users.table.cellWidget(0, 2)
     assert dom_combo.isEnabled()
-    role_combo.setCurrentText("superadmin")
+    # ticking the box the way a click does (setChecked fires toggled -> the lock)
+    dict(cell.boxes)["superadmin"].setChecked(True)
     assert not dom_combo.isEnabled()
     assert dom_combo.currentText() == wiz.cfg.effective_superdomain()
-    role_combo.setCurrentText("user")
+    # multi-role (#228): superadmin + games is still a superadmin — the lock holds
+    dict(cell.boxes)["games"].setChecked(True)
+    assert not dom_combo.isEnabled()
+    dict(cell.boxes)["superadmin"].setChecked(False)
     assert dom_combo.isEnabled()
+    assert cell.roles() == ["user", "games"]
 
 
 def test_users_loaded_undefined_domain_is_flagged(wiz):

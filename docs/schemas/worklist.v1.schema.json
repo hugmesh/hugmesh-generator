@@ -121,11 +121,18 @@
     },
     "user": {
       "type": "object",
+      "description": "One provisioning account. `role` is the PRIMARY role every consumer reads (the highest tier the account holds: superadmin > admin > mod > user, then games / games-services). `roles` (issue #228) is the FULL set the account holds, in that precedence order; it is OMITTED when the account holds exactly one role, so absent == [role] and a single-role row keeps its pre-#228 bytes. A reader that knows only `role` loses nothing it read before.",
       "additionalProperties": true,
       "properties": {
         "username": { "type": "string" },
         "domain": { "type": "string" },
         "role": { "type": "string" },
+        "roles": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
         "email": { "type": "string" }
       }
     }

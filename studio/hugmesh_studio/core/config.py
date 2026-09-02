@@ -560,6 +560,49 @@ SERVICE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # desktop AND the standalone desktops); on a cluster NODE role it warns + IGNORES them
 # (build-x86:1722-1724), so the Studio must NOT emit them for a node role (G18).
 PERSON_ROLE_CHOICES = ("user", "mod", "admin", "superadmin")
+# The per-ACCOUNT role vocabulary of the superadmin Users table (G20; issue #228): the
+# four platform tiers PLUS the GRANTABLE games roles from the systems Casdoor seed
+# (specs/cluster/manifests/casdoor/init-data-configmap.yaml): 'games' -> ROLE_GAMES
+# (Games Member) and 'games-services' -> ROLE_GAMES_SERVICES (Games App-Store Access).
+# The DERIVED intersection roles (ROLE_GAMES_ADMIN, ROLE_GAMES_SERVICES_ADMIN/_RUNNER)
+# are deliberately NOT offered — the admin-sync Jobs materialize them from role
+# intersections, and seeding them directly would bypass that default-deny.
+#
+# The ORDER is the precedence: a multi-role account (issue #228) is normalized to this
+# order, so ``User.role`` — the primary, the back-compat scalar every pre-#228 consumer
+# reads — is always the highest tier the account holds (superadmin > admin > mod >
+# user), then the grants. PERSON roles, not image roles: scripts/_roles-lib.sh and
+# tests/scripts/test-role-key-spelling.sh carve this vocabulary OUT of their sweep.
+USER_ROLE_CHOICES = ("superadmin", "admin", "mod", "user", "games", "games-services")
+
+
+def normalize_user_roles(roles) -> list[str]:
+    """Canonical multi-role list (issue #228): deduped, USER_ROLE_CHOICES order first
+    (that order is the precedence), any role outside the vocabulary kept AFTER the
+    known ones in input order (a saved config from a newer Studio is never silently
+    stripped), blank entries dropped, and an empty set is the ``user`` floor — an
+    account with no role at all is not a thing the manifest can provision."""
+    seen: list[str] = []
+    for r in roles or ():
+        r = (r or "").strip() if isinstance(r, str) else ""
+        if r and r not in seen:
+            seen.append(r)
+    known = [r for r in USER_ROLE_CHOICES if r in seen]
+    extra = [r for r in seen if r not in USER_ROLE_CHOICES]
+    return (known + extra) or ["user"]
+
+
+def person_tier(roles) -> str:
+    """The single --person-role tier a multi-role account maps to: the highest
+    PERSON_ROLE_CHOICES tier it holds (normalize_user_roles order), ``user`` when it
+    holds only grants (games/games-services) — the builder accepts exactly the four
+    tiers, so a grant can never be emitted as a person role."""
+    for r in normalize_user_roles(roles):
+        if r in PERSON_ROLE_CHOICES:
+            return r
+    return "user"
+
+
 X86_CLIENT_ROLES = ("laptop", "chromebook", "desktop")
 # The cluster NODE roles (ROLE_CLIENT=false) — the roles for which the builder drops
 # --person-role/--domains. Gating on "not a node role" (rather than "is a client role")
@@ -2259,7 +2302,13 @@ class Domain:
 class User:
     username: str = ""
     domain: str = ""
-    role: str = "user"                 # superadmin|admin|mod|user (+games roles)
+    # The PRIMARY role — USER_ROLE_CHOICES; "" (the dataclass default) = derive from
+    # ``roles``, and ``user`` when neither says anything. Kept as a scalar because every
+    # pre-#228 consumer of the mesh manifest and the saved config reads ``role``; it is
+    # DERIVED (__post_init__) as the first of ``roles`` in precedence order, so the two
+    # can never disagree at construction. Build Users through the constructor; do not
+    # assign ``.role`` afterwards — ``roles`` is the truth (issue #228).
+    role: str = ""
     email: str = ""
     # First-login registration METHOD (spec 4/6): "" = derive (builder/provisioning
     # default) | discord | gmail | password. Manifest-only — NEVER reaches to_cli_args
@@ -2268,6 +2317,34 @@ class User:
     # secret is ever stored on the User (so it is safe to serialize/save like the other
     # User fields — nothing to blank).
     registration: str = ""
+    # ALL the roles this account holds (issue #228 — "should a person be assignable to
+    # multiple roles"): the union of ``roles`` and ``role`` as constructed, normalized by
+    # normalize_user_roles (deduped, precedence order, ``user`` floor). Serialized by
+    # to_dict() OMIT-WHEN-SINGLE — a one-role account keeps its pre-#228 bytes in the
+    # saved config and both mesh manifests (absent == [role]), exactly like the
+    # per-domain ``idp`` key — and loaded from either spelling (from_dict), so a config
+    # saved before this field existed, or by a Studio that knows only ``role``, round-trips.
+    roles: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        given = [self.roles] if isinstance(self.roles, str) else list(self.roles or [])
+        self.roles = normalize_user_roles([*given, self.role])
+        self.role = self.roles[0]
+
+    @property
+    def tier(self) -> str:
+        """The --person-role tier this account derives (person_tier)."""
+        return person_tier(self.roles)
+
+    def to_dict(self) -> dict[str, Any]:
+        """The wire shape (saved config + both mesh manifests): ``role`` always — the
+        primary, what every pre-#228 consumer reads — and ``roles`` only when the
+        account holds more than one, so a single-role row is byte-identical to before
+        the field existed. from_dict accepts both spellings."""
+        d = asdict(self)
+        if self.roles == [self.role]:
+            del d["roles"]
+        return d
 
 
 @dataclass
@@ -2577,6 +2654,9 @@ class ImageConfig:
         """Serialize; plaintext secrets (SECRET_FIELDS) are BLANKED unless the caller
         explicitly opts in — a saved JSON config must never carry a password."""
         d = asdict(self)
+        # users: the User wire shape (issue #228 — `roles` OMIT-WHEN-SINGLE), not the
+        # raw asdict, so a one-role account keeps its pre-#228 bytes.
+        d["users"] = [u.to_dict() if isinstance(u, User) else u for u in self.users]
         if not include_secrets:
             for k in SECRET_FIELDS:
                 d[k] = ""
@@ -2605,6 +2685,23 @@ class ImageConfig:
         kw["idp"] = v
         return Domain(**kw)
 
+    @staticmethod
+    def _user_from_dict(x: dict[str, Any], usr_f: set[str]) -> "User":
+        """Build a User from a raw dict, filtering unknown nested keys (forward-compat).
+        Both role spellings load (issue #228): a pre-#228 ``role`` alone, a ``roles``
+        list alone, or both (unioned — User.__post_init__ normalizes). ``roles`` that
+        is null or not a list is treated as absent, never a crash; a bare string is
+        taken as one role, so a hand-edited config still loads."""
+        kw = {k: v for k, v in x.items() if k in usr_f}
+        roles = kw.get("roles")
+        if isinstance(roles, str):
+            kw["roles"] = [roles]
+        elif not isinstance(roles, (list, tuple)):
+            kw.pop("roles", None)
+        if not isinstance(kw.get("role", ""), str):
+            kw.pop("role")
+        return User(**kw)
+
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ImageConfig":
         if not isinstance(d, dict):
@@ -2620,7 +2717,7 @@ class ImageConfig:
         # tolerate "domains": null / "users": null and unknown nested keys
         d["domains"] = [cls._domain_from_dict(x) if isinstance(x, dict) else x
                         for x in (d.get("domains") or [])]
-        d["users"] = [User(**{k: v for k, v in x.items() if k in usr_f}) if isinstance(x, dict) else x
+        d["users"] = [cls._user_from_dict(x, usr_f) if isinstance(x, dict) else x
                       for x in (d.get("users") or [])]
         # The mode-aware tri-states: normalize the 'on'/'off' hand-written
         # spellings to bools AT LOAD (fail-closed on junk), so the in-memory value
@@ -3679,7 +3776,10 @@ class ImageConfig:
                 elif self.mode == "mesh":
                     person = "superadmin"
                 else:
-                    person = self.users[0].role if self.users else "user"
+                    # the first row's TIER (issue #228): a multi-role account maps to the
+                    # highest of the four tiers it holds; a grants-only account (games)
+                    # is a plain user here — the builder accepts exactly the four tiers.
+                    person = self.users[0].tier if self.users else "user"
                 a += ["--person-role", person]
 
         # node FALLBACK credentials (a GUI-built mesh fleet otherwise ships defaults).
@@ -3941,7 +4041,10 @@ class ImageConfig:
             "domains": [{k: v for k, v in asdict(d).items()
                          if not (k == "idp" and v == DOMAIN_IDP_SUPERDOMAIN)}
                         for d in self.domains],
-            "users": [asdict(u) for u in self.users],
+            # per-user ``roles`` (issue #228) is OMIT-WHEN-SINGLE the same way (User.to_dict):
+            # ``role`` stays the primary every consumer reads; a multi-role account adds
+            # the full list beside it. test_user_multi_role.py pins both shapes.
+            "users": [u.to_dict() for u in self.users],
         }
 
     def write_mesh_manifest(self, output_dir: str) -> str:
