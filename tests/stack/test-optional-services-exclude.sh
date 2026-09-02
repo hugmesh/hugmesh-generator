@@ -472,32 +472,25 @@ if command -v python3 >/dev/null; then
     # not the builder file — which no longer contains a single _opt_drop_rows call
     # and would make this sweep report ZERO parsed calls, i.e. vacuous.
     opt_gate_extract_fn "${_b}" gate_optional_services > "${WORK}/gate-$(basename "${_b}").sh"
-    python3 - "${WORK}/gate-$(basename "${_b}").sh" "${REPO}/specs/cluster/manifests/route-access/initdb/20-schema.sql" <<'PY'
-import collections, re, sys
-bld, sql = (open(p, encoding="utf-8").read() for p in sys.argv[1:3])
-rows = collections.defaultdict(set)
-for gw, path in re.findall(r"\(\s*'([^']+)'\s*,\s*'([^']+)'", sql):
-    rows[path].add(gw)
-drops = collections.defaultdict(set)
-for gw, blob in re.findall(
-        r"_opt_drop_rows\s+\"[^\"]+\"\s+(\S+)\s*\\?\s*\n?\s*((?:'[^']*'\s*)+)", bld):
-    for p in re.findall(r"'([^']*)'", blob):
-        drops[p].add(gw)
-if not drops:
-    print("         no _opt_drop_rows call parsed — the sweep would be vacuous")
-    sys.exit(2)
-gaps = {p: sorted(rows.get(p, set()) - g) for p, g in drops.items() if rows.get(p, set()) - g}
-for p, gws in sorted(gaps.items()):
-    print("         '%s' still granted on %s — that case never cleans it there"
-          % (p, ", ".join(gws)))
-print("         swept %d dropped path(s) against %d schema path(s)" % (len(drops), len(rows)))
-sys.exit(1 if gaps else 0)
-PY
+    # The sweep itself lives in tests/scripts/route_access_coverage.py — it was an
+    # inline heredoc here until 2026-08-27, reading the RAW .sql with a TWO-column
+    # regex that parsed COMMENT PROSE as rows (99 paths, one literally named
+    # `pattern`, harvested from the row-shape example at 20-schema.sql:863) and
+    # counted the four allow=false DENY rows as GRANTS. Comment-stripped and read
+    # 4-column, the same scan sees 94 granted + 4 deny. The extracted module also
+    # carries two VACUITY GUARDS (rc 3 / rc 4) so a sweep that strips nothing or
+    # matches nothing can no longer report "clean". Guarded on its own by
+    # tests/scripts/test-route-access-coverage-scanner.sh.
+    python3 "${REPO}/tests/scripts/route_access_coverage.py" \
+        "${WORK}/gate-$(basename "${_b}").sh" \
+        "${REPO}/specs/cluster/manifests/route-access/initdb/20-schema.sql"
     _rc=$?
     _bn="${_b##*/}"
     case "${_rc}" in
       0) ok "${_bn}: every dropped path is cleaned on every gateway that grants it" ;;
       2) bad "${_bn}: the coverage sweep parsed ZERO _opt_drop_rows calls — vacuous, not clean" ;;
+      3) bad "${_bn}: the sweep's SQL comment stripper removed NOTHING — comment prose would be parsed as live rows" ;;
+      4) bad "${_bn}: the sweep's row regex matched ZERO rows — it would report clean after grading nothing" ;;
       *) bad "${_bn}: a route-access row outlives its service on a gateway the case never cleans (see the paths above)" ;;
     esac
   done

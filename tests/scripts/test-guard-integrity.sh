@@ -337,7 +337,26 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # so the baseline is 156. Taken from the run, not computed: if this file conflicts
 # on merge, RE-MEASURE by running it rather than trusting either side's number.
 # PREMERGE_UNGATED is unchanged at 22 — the new suite is gated, not exempted.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-156}"
+#
+# 2026-08-27, fix/route-access-scanner-and-404-claim: +1 gated +1 total for
+# tests/scripts/test-route-access-coverage-scanner.sh (the guard over
+# tests/scripts/route_access_coverage.py, added in the same change). MEASURED by
+# running this file on that tree: "156 of 178 suites are named by a
+# pull_request-triggered workflow". PREMERGE_UNGATED is unchanged -- the new suite
+# is gated, so it does not join the complement.
+#
+# RE-MEASURED 2026-09-01 on the MERGE of fix/one-role-vocabulary with main at
+# 7abab12d (which carried the route-access-coverage-scanner suite above). The
+# two blocks above are BOTH true and both measured 156 — each side added one
+# gated suite to a base that lacked the other's, so this value line was a
+# CONFLICT here (not even the clean-but-wrong auto-merge of the earlier
+# entries) and neither side's 156 covers the union. Running this file on THIS
+# merged tree printed
+#     157 of 179 suites are named by a pull_request-triggered workflow
+# +1 gated +1 total from each side; PREMERGE_UNGATED stays 22. Carried by
+# re-running this file, not by arithmetic on either side's number — but the
+# arithmetic agrees.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-157}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
