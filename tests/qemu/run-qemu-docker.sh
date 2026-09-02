@@ -89,6 +89,15 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# THE role vocabulary (scripts/_roles-lib.sh). This script parses a role out of an
+# ARTIFACT FILENAME, and its Python twin (studio/hugmesh_studio/core/qemu_tests.py
+# parse_artifact_name) does the same thing independently — so both must canonicalize,
+# or an image built before the vocabulary converged reads as `be` here and `backend`
+# there and the runner boots the wrong image for a row. studio/tests/test_qemu_tests.py
+# ::test_shell_and_python_agree_on_row_discovery is what catches that divergence.
+# shellcheck source=scripts/_roles-lib.sh
+source "${REPO_DIR}/scripts/_roles-lib.sh"
+
 IMAGE_TAG="${IMAGE_TAG:-hugmesh-qemu-runner:latest}"
 SESSION=""
 ARTIFACTS=""
@@ -1800,6 +1809,11 @@ discover_rows() {
         env="${rest##*-}"          # <env>
         role="${rest%-*}"          # <role>, '-' and all
         [ -n "${platform}" ] && [ -n "${role}" ] || continue
+        # Fold an older spelling baked into the FILENAME (be / fe / be+gpu / host /
+        # edge_ai). The file itself is never renamed — it is an already-emitted
+        # artifact — but the ROW must carry one spelling, the same one the Python
+        # twin produces.
+        role="$(hugmesh_role_canonicalize "${role}" || printf '%s' "${role}")"
         stamp="${base##*-}"
         # Emit the sort key first, strip it after collapsing. Field 2 is
         # "1" for a decompressed .img so it outranks its own .img.xz.

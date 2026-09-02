@@ -14,7 +14,8 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENGINE="${REPO}/specs/etc/keys-provision/provision.sh"
 BASE_IMAGE="${BOOT_BASE_IMAGE:-cassandra:5}"   # local debian-based image w/ apt
-ROLES=("${@:-pki backend frontend host}")
+# One vocabulary (scripts/_roles-lib.sh): `host` was always the backend-gpu role.
+ROLES=("${@:-pki backend frontend backend-gpu}")
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 

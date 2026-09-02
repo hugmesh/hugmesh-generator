@@ -373,7 +373,7 @@ def test_worklist_family_groups_and_badges(wiz):
     # role rows nest under their family header and keep their stable ids
     assert page.rows["pki.x86"].parent() is page._family_items["x86-pcs"]
     assert page.rows["pki.rpi5"].parent() is page._family_items["raspberry-pi"]
-    assert page.rows["edge_ai.jetson"].parent() is page._family_items["nvidia-jetson"]
+    assert page.rows["edge-ai.jetson"].parent() is page._family_items["nvidia-jetson"]
 
 
 def test_worklist_unsupported_info_rows_visible_never_checkable(wiz):
@@ -395,7 +395,7 @@ def test_worklist_rpi3_never_offered_on_node_rows(wiz):
     row still does (non-vacuity)."""
     pick_mode(wiz, "mesh")
     page = advance_to(wiz, wizard_mod.WorklistPage)
-    for rid in ("pki.rpi5", "be.rpi5", "fe.rpi5"):
+    for rid in ("pki.rpi5", "backend.rpi5", "frontend.rpi5"):
         combo, _f = page._combos[rid]
         assert "rpi3" not in [combo.itemText(i) for i in range(combo.count())], rid
     combo, _f = page._combos["rpi5-desktop.rpi5"]
@@ -407,15 +407,15 @@ def test_worklist_emission_identity_rpi4_pki_and_jetson_edge_ai(wiz):
     yields the identical WorklistEntry axes the flat rows produced."""
     pick_mode(wiz, "mesh")
     page = advance_to(wiz, wizard_mod.WorklistPage)
-    check_worklist_rows(page, "pki.rpi5", "edge_ai.jetson")
+    check_worklist_rows(page, "pki.rpi5", "edge-ai.jetson")
     board, _ = page._combos["pki.rpi5"]
     board.setCurrentText("rpi4")
-    jboard, _ = page._combos["edge_ai.jetson"]
+    jboard, _ = page._combos["edge-ai.jetson"]
     jboard.setCurrentText("orin-nx-16gb")
     assert page.validatePage()
     by_id = {e.id: (e.role, e.platform, e.board) for e in wiz.worklist.entries}
     assert by_id == {"pki.rpi5": ("pki", "rpi5", "rpi4"),
-                     "edge_ai.jetson": ("edge_ai", "jetson", "orin-nx-16gb")}
+                     "edge-ai.jetson": ("edge-ai", "jetson", "orin-nx-16gb")}
 
 
 def test_worklist_services_column_sets_per_node_tor(wiz):
@@ -424,18 +424,18 @@ def test_worklist_services_column_sets_per_node_tor(wiz):
     while a sibling node with no selection stays clean (proves per-node, GUI end)."""
     pick_mode(wiz, "mesh")
     page = advance_to(wiz, wizard_mod.WorklistPage)
-    check_worklist_rows(page, "be.x86", "pki.x86")
-    svc = page._services_combos["be.x86"]
+    check_worklist_rows(page, "backend.x86", "pki.x86")
+    svc = page._services_combos["backend.x86"]
     assert svc is not None                       # x86 expresses the Tor onion
     i = next(j for j in range(svc.count()) if tuple(svc.itemData(j) or ()) == ("tor",))
     svc.setCurrentIndex(i)
     assert page.validatePage()
     by_id = {e.id: e for e in wiz.worklist.entries}
-    assert by_id["be.x86"].infra_services == ("tor",)
+    assert by_id["backend.x86"].infra_services == ("tor",)
     assert by_id["pki.x86"].infra_services == ()
     # and it reaches argv for that node only
     mats = {e.id: cfg for e, cfg in wiz.worklist.materialize()}
-    assert "--with-tor" in mats["be.x86"].to_cli_args()
+    assert "--with-tor" in mats["backend.x86"].to_cli_args()
     assert "--with-tor" not in mats["pki.x86"].to_cli_args()
 
 
@@ -458,7 +458,7 @@ def test_worklist_search_filters_rows(wiz):
     pick_mode(wiz, "mesh")
     page = advance_to(wiz, wizard_mod.WorklistPage)
     page.device_search.setText("edge")
-    assert not page.rows["edge_ai.jetson"].isHidden()
+    assert not page.rows["edge-ai.jetson"].isHidden()
     assert page.rows["pki.rpi5"].isHidden()
     page.device_search.setText("")
     assert not page.rows["pki.rpi5"].isHidden()
@@ -505,8 +505,8 @@ def test_trio_button_with_all_architectures_checks_x86_AND_arm(wiz):
     assert page.arch_filter.currentData() in ("", None)   # "All architectures" default
     page.trio_btn.click()
     got = _checked_ids(page)
-    assert {"pki.x86", "be.x86", "fe.x86"} <= got, got
-    assert {"pki.rpi5", "be.rpi5", "fe.rpi5"} <= got, f"arm trio not selected: {got}"
+    assert {"pki.x86", "backend.x86", "frontend.x86"} <= got, got
+    assert {"pki.rpi5", "backend.rpi5", "frontend.rpi5"} <= got, f"arm trio not selected: {got}"
 
 
 def _trio_delta(page, arch_id):
@@ -526,21 +526,21 @@ def test_trio_button_narrowed_to_arm64_checks_only_arm(wiz):
     pick_mode(wiz, "mesh")
     page = advance_to(wiz, wizard_mod.WorklistPage)
     added = _trio_delta(page, "arm64")
-    assert added == {"pki.rpi5", "be.rpi5", "fe.rpi5"}, added
+    assert added == {"pki.rpi5", "backend.rpi5", "frontend.rpi5"}, added
 
 
 def test_trio_button_narrowed_to_x86_checks_only_x86(wiz):
     pick_mode(wiz, "mesh")
     page = advance_to(wiz, wizard_mod.WorklistPage)
     added = _trio_delta(page, "x86-64")
-    assert added == {"pki.x86", "be.x86", "fe.x86"}, added
+    assert added == {"pki.x86", "backend.x86", "frontend.x86"}, added
 
 
 def test_trio_button_stays_additive_and_does_not_touch_gpu_rows(wiz):
     pick_mode(wiz, "mesh")
     page = advance_to(wiz, wizard_mod.WorklistPage)
-    check_worklist_rows(page, "be+gpu.x86")
+    check_worklist_rows(page, "backend-gpu.x86")
     page.trio_btn.click()
     got = _checked_ids(page)
-    assert "be+gpu.x86" in got, "the trio button must never unpick an existing row"
-    assert {"pki.x86", "be.x86", "fe.x86", "pki.rpi5"} <= got
+    assert "backend-gpu.x86" in got, "the trio button must never unpick an existing row"
+    assert {"pki.x86", "backend.x86", "frontend.x86", "pki.rpi5"} <= got

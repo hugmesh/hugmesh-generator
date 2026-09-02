@@ -904,7 +904,7 @@ def test_one_desktop_row_does_not_unlock_the_surfaces_for_a_whole_node_worklist(
     desktop-class (asserted, so the test cannot pass by accident on a worklist that
     ordered itself the other way), and the surfaces are hidden anyway because the
     quantifier is ALL-images, not the base."""
-    mesh(wiz, "rpi5-desktop.rpi5", "edge_ai.jetson")
+    mesh(wiz, "rpi5-desktop.rpi5", "edge-ai.jetson")
     pages = _pages(wiz)
     entries = [e.id for e in wiz.worklist.entries]
     assert entries[0].startswith("rpi5-desktop"), (
@@ -1118,7 +1118,7 @@ BUILDER_X86 = os.path.join(GENERATOR_DIR, "build-x86-host-stage4.sh")
 # OPTIONAL_SERVICES runs before ROLE_CLIENT is ever true, so the resolution is
 # role-independent — which is the thing under test. (test_..._before_the_role_case below
 # is what keeps that justification honest.)
-_UNMASK_ROLE = "be+gpu"
+_UNMASK_ROLE = "backend-gpu"
 
 
 def _plan_optional_services(argv, cwd):

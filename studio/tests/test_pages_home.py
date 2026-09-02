@@ -329,7 +329,7 @@ def test_home_standalone_framing_shown_only_on_standalone(wiz):
     retitled. On a cloud desktop the helper is hidden."""
     home = advance_to(wiz, wizard_mod.HomePage)          # standalone default flow
     assert home.standalone_helper.isVisible()
-    assert home.login.title().startswith("Your login")
+    assert home.login.title().startswith("Your Login")
     c = wiz.cfg
     c.mode = "cloud"; c.role = "desktop"; c.platform = "x86"
     wiz.restart()
@@ -751,7 +751,7 @@ def test_system_credentials_grey_and_clear_on_arm(qapp):
     """G27 platform gate: rpi5's equivalents are deprecated no-ops — the widgets
     grey off-x86 and stale secrets clear, while the all-platform identity fields
     stay live and keep emitting."""
-    cfg = ImageConfig(mode="mesh", role="be", platform="rpi5",
+    cfg = ImageConfig(mode="mesh", role="backend", platform="rpi5",
                       hostname="node-9", user_password="pw1", root_password="pw2")
     page = _system_page(cfg)
     page.initializePage()
@@ -778,7 +778,7 @@ def test_system_credentials_survive_desktop_first_mesh_worklist(wiz):
     c.mode = "mesh"
     wiz.restart()
     wl = advance_to(wiz, wizard_mod.WorklistPage)
-    check_worklist_rows(wl, "rpi5-desktop.rpi5", "edge_ai.x86")
+    check_worklist_rows(wl, "rpi5-desktop.rpi5", "edge-ai.x86")
     # a checked desktop must name its person (operator ask 2026-08-14)
     wl._desktop_people["rpi5-desktop.rpi5"] = ("gamer", "user")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
@@ -813,7 +813,7 @@ def test_system_credentials_hidden_and_cleared_on_all_arm_worklist(wiz):
     c.user_password = "stale-user"; c.root_password = "stale-root"
     wiz.restart()
     wl = advance_to(wiz, wizard_mod.WorklistPage)
-    check_worklist_rows(wl, "pki.rpi5", "be.rpi5")
+    check_worklist_rows(wl, "pki.rpi5", "backend.rpi5")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     assert not sysp.creds.isVisible()
     assert sysp.hostname.isVisible()               # identity fields stay
@@ -831,7 +831,7 @@ def test_system_credentials_survive_going_back_to_add_a_desktop_row(wiz):
     c.mode = "mesh"
     wiz.restart()
     wl = advance_to(wiz, wizard_mod.WorklistPage)
-    check_worklist_rows(wl, "edge_ai.x86")
+    check_worklist_rows(wl, "edge-ai.x86")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     assert sysp.creds.isVisible()
     sysp.creds_optin.setChecked(True)              # ask 10: opt in before typing
@@ -840,7 +840,7 @@ def test_system_credentials_survive_going_back_to_add_a_desktop_row(wiz):
     advance_to(wiz, wizard_mod.HomePage)           # validates System -> cfg stores creds
     while not isinstance(wiz.currentPage(), wizard_mod.WorklistPage):
         wiz.back()                                 # back to the worklist...
-    check_worklist_rows(wiz.currentPage(), "rpi5-desktop.rpi5", "edge_ai.x86")
+    check_worklist_rows(wiz.currentPage(), "rpi5-desktop.rpi5", "edge-ai.x86")
     # the freshly-added desktop row needs its person (operator ask 2026-08-14)
     wiz.currentPage()._desktop_people["rpi5-desktop.rpi5"] = ("gamer", "user")
     sysp = advance_to(wiz, wizard_mod.SystemPage)  # ...and forward again
@@ -879,7 +879,7 @@ def test_home_no_longer_carries_the_standalone_posture(qapp):
     assert "--standalone" in cfg.to_cli_args()
     # ...and the group it used to head is renamed: it is a LOGIN group now, not an
     # "account posture" group.
-    assert page.login.title() == "Your login"
+    assert page.login.title() == "Your Login"
 
 
 # ── finding 8: the "login" unlock factor on a node image ────────────────────────────
@@ -938,3 +938,92 @@ def test_home_boot_unlock_factor_survives_on_a_node(qapp):
     assert page.validatePage()
     assert cfg.unlock_keyfile == "boot"
     assert "--unlock-keyfile" in cfg.to_cli_args()
+
+
+# ---- issue #230: the Home page's dead-caption bug + per-field help + LUKS copy -----
+
+def test_home_provisioning_hides_as_one_box_on_a_node_flow(qapp):
+    """Issue #230 (bug half): the old role-class gate hid the bare widgets but left the
+    'Home Provisioning' box frame and every _row() caption standing — a page of setting
+    names that could not be modified and showed no info. On a node flow the WHOLE box
+    goes, a visible note says why, and no caption inside the box survives."""
+    cfg = ImageConfig(mode="mesh", role="pki", platform="x86")
+    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    assert not page.home_box.isVisibleTo(page)
+    assert page.home_hidden_note.isVisibleTo(page)
+    assert "node" in page.home_hidden_note.text()
+    orphans = [lab.text() for lab in page.home_box.findChildren(QtWidgets.QLabel)
+               if lab.isVisibleTo(page)]
+    assert orphans == [], f"captions still on screen with no widgets: {orphans}"
+
+
+def test_home_provisioning_editable_with_help_on_a_desktop(qapp):
+    """Issue #230 (fix half): where home provisioning applies, every field is editable
+    and every field explains itself — the caption rows carry per-field tooltips, and the
+    note that excuses the group's absence is gone."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
+    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    assert page.home_box.isVisibleTo(page)
+    assert not page.home_hidden_note.isVisibleTo(page)
+    rows = (page.mode_row, page.device_row, page.backup_labeled_row,
+            page.include_archive_labeled_row, page.seed_code_from_labeled_row,
+            page.seed_packages_labeled_row, page.seed_row)
+    for row in rows:
+        assert row.isVisibleTo(page)
+        assert row.toolTip(), f"no setting info on {row.accessibleName() or row}"
+    for w in (page.mode, page.device, page.backup, page.encrypted, page.seed,
+              page.include_archive, page.seed_code_from, page.seed_packages):
+        assert w.isEnabled(), w
+
+
+def test_home_field_help_survives_the_gate_rewipe(qapp):
+    """The other half of 'no setting info shown': gate_widgets() rewrites its targets'
+    tooltips to "" on EVERY visit, which used to wipe the eCryptfs/keyfile/YubiKey help
+    the moment the page was first shown. The help must survive repeated visits, and a
+    real gate reason must still win over it."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
+    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    page.initializePage()          # a second visit re-runs every gate
+    from hugmesh_studio.gui.pages.home import (
+        _ENCRYPTED_HELP, _KEYFILE_HELP, _SEED_HELP, _YUBIKEY_HELP)
+    assert page.encrypted.toolTip() == _ENCRYPTED_HELP
+    assert page.seed_row.toolTip() == _SEED_HELP
+    assert page.unlock_keyfile.toolTip() == _KEYFILE_HELP
+    assert page.unlock_yubikey.toolTip() == _YUBIKEY_HELP
+    # gate reason still wins: on ARM the platform gate owns the greyed widget's tooltip
+    cfg_arm = ImageConfig(mode="cloud", role="rpi5-desktop", platform="rpi5")
+    page_arm = HomePage(SimpleNamespace(cfg=cfg_arm, generator_dir=GENERATOR_DIR))
+    page_arm.initializePage()
+    assert "no flag" in page_arm.unlock_keyfile.toolTip()
+
+
+def test_home_luks_states_what_happens_with_no_option(qapp):
+    """Issue #230 (3), pinned to builder truth (specs-x86/installer/install-x86.sh:146,
+    build-rpi5-stage4.sh:4708): choosing nothing changes nothing about the build; the
+    installer prompts for a root-unlock passphrase at install time and boot asks for it
+    thereafter; no key material lands in any artifact."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
+    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    assert page.luks_default_note.isVisibleTo(page)
+    text = page.luks_default_note.text()
+    assert "install time" in text
+    assert "every boot" in text
+    assert "baked" in text
+    # jetson has no FDE at all, so the no-option statement goes with the checkbox
+    cfg_j = ImageConfig(mode="cloud", role="jetson-desktop", platform="jetson")
+    page_j = HomePage(SimpleNamespace(cfg=cfg_j, generator_dir=GENERATOR_DIR))
+    page_j.initializePage()
+    assert not page_j.luks_default_note.isVisibleTo(page_j)
+
+
+def test_home_page_title_case_and_oxford_comma(qapp):
+    """Issue #230 (4): Title Case with the Oxford comma, on the page and its groups."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
+    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    assert page.title() == "Home Folder, Encryption, and Login"
+    assert page.home_box.title() == "Home Provisioning"
+    assert page.login.title() == "Your Login"

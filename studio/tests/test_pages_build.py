@@ -511,8 +511,12 @@ def test_build_rpi5_artifacts(wiz):
     for w in (build.build_img, build.build_iso, build.sd_only, build.build_tar,
               build.skip_iso):
         assert w.isVisible(), w
-    for w in (build.live_iso, build.installer_iso, build.image_only):
+    for w in (build.live_iso, build.image_only):
         assert not w.isVisible(), w
+    # issue #233: the x86 Installer ISO row is GREYED with a reason on a Pi build,
+    # never hidden — the enable-logic tests live in test_pages_build_iso_gating.py.
+    assert build.installer_iso.isVisible()
+    assert not build.installer_iso.isEnabled()
     build.build_iso.setChecked(True)     # bootable installer ISO for an UNencrypted image
     build.sd_only.setChecked(True)
     build.build_tar.setCheckState(Qt.CheckState.Checked)
@@ -802,7 +806,7 @@ def test_review_mesh_shows_per_image_summary_and_keeps_worklist(wiz):
     synthesized 1-entry worklist)."""
     pick_mode(wiz, "mesh")
     wl_page = advance_to(wiz, wizard_mod.WorklistPage)
-    for rid in ("omnibus.x86", "be.rpi5"):
+    for rid in ("omnibus.x86", "backend.rpi5"):
         wl_page.row_for_id(rid).setCheckState(0, Qt.CheckState.Checked)
     build = advance_to(wiz, wizard_mod.BuildPage)
     assert build.worklist_group.isVisible()
@@ -810,9 +814,9 @@ def test_review_mesh_shows_per_image_summary_and_keeps_worklist(wiz):
     assert build.gen_keys.isChecked()
     ids = {build.worklist_table.item(r, 0).text()
            for r in range(build.worklist_table.rowCount())}
-    assert {"omnibus.x86", "be.rpi5"} <= ids
+    assert {"omnibus.x86", "backend.rpi5"} <= ids
     assert build.validatePage() is True
-    assert {e.id for e in wiz.worklist.entries} >= {"omnibus.x86", "be.rpi5"}
+    assert {e.id for e in wiz.worklist.entries} >= {"omnibus.x86", "backend.rpi5"}
     assert wiz.build_backend == build._backend()
 
 
@@ -835,13 +839,13 @@ def test_worklist_preview_shows_that_rows_command_and_reveals_the_pane(wiz):
     not just the wiring: the section is expanded, the pane is visible, the pane is
     scrolled ON SCREEN, and the caption names the row it belongs to.
     """
-    build = _mesh_build_page(wiz, "omnibus.x86", "be.rpi5")
+    build = _mesh_build_page(wiz, "omnibus.x86", "backend.rpi5")
     assert not build.cmd_section.is_expanded()      # ask 22's default survives
     assert not build.cmd.isVisible()
     assert not build.cmd_caption.isVisible()
 
     row = next(r for r in range(build.worklist_table.rowCount())
-               if build.worklist_table.item(r, 0).text() == "be.rpi5")
+               if build.worklist_table.item(r, 0).text() == "backend.rpi5")
     whole_config_argv = build.cmd.toPlainText()
     build.worklist_table.cellWidget(row, 3).click()
 
@@ -852,7 +856,7 @@ def test_worklist_preview_shows_that_rows_command_and_reveals_the_pane(wiz):
     # ...and the work is observable
     assert build.cmd_section.is_expanded()
     assert build.cmd.isVisible()
-    assert build.cmd_caption.isVisible() and "be.rpi5" in build.cmd_caption.text()
+    assert build.cmd_caption.isVisible() and "backend.rpi5" in build.cmd_caption.text()
     scroll = build._content_scroll
     vp = scroll.viewport()
     y = build.cmd_section.mapTo(vp, QtCore.QPoint(0, 0)).y()
@@ -863,9 +867,9 @@ def test_worklist_preview_shows_that_rows_command_and_reveals_the_pane(wiz):
 
 def test_worklist_preview_caption_never_outlives_the_entry_it_names(wiz):
     """The caption is the only thing saying which image the argv belongs to, so a
-    whole-config re-render must clear it — a caption still reading "be.rpi5" over the
+    whole-config re-render must clear it — a caption still reading "backend.rpi5" over the
     config-wide command would mislead worse than no caption at all."""
-    build = _mesh_build_page(wiz, "omnibus.x86", "be.rpi5")
+    build = _mesh_build_page(wiz, "omnibus.x86", "backend.rpi5")
     build.worklist_table.cellWidget(0, 3).click()
     assert build.cmd_caption.isVisible()
     build._preview()                                # any option edit lands here

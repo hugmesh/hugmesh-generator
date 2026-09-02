@@ -71,7 +71,7 @@ from ._widgets import _file_picker, _row, collapsible
 from .packages_dialog import PackagesDialog
 
 # mesh roles whose image carries a GPU stack (the summary "GPU" chip).
-_GPU_MESH_ROLES = ("be+gpu", "edge_ai", "gpu-host")
+_GPU_MESH_ROLES = ("backend-gpu", "edge-ai", "be+gpu", "edge_ai", "gpu-host")
 
 # Why the Installer-UI combo is greyed on a headless node image. Two DIFFERENT true
 # statements, because the resolver's rewrite is CONDITIONAL: it only replaces the
@@ -95,6 +95,40 @@ def _installer_ui_reason(shown: str, rewritten: bool) -> str:
             f"decides it. {shown!r} is already a headless front-end (it pulls no "
             f"Calamares), so the image is built with it as-is — choose a client or "
             f"standalone role to pick a different front-end.")
+
+
+# ── Installer-ISO platform honesty (issue #233): greyed, never hidden ─────────────────
+# The operator's ask, verbatim: "grey out installer iso option for unsupported (pi)".
+# The row used to be HIDDEN off-x86 with the rest of the platform-gate map, which answers
+# "why is there no installer ISO on my Pi build?" with silence. It is now always visible
+# and GREYED where unsupported, with the reason on the row.
+#
+# The support matrix is read from the builders, not guessed: build-x86-host-stage4.sh is
+# the ONLY builder that parses --installer-iso (a stage4 + install-x86.sh data ISO).
+# build-rpi5-stage4.sh's installer ISO is a different flag with different semantics
+# (--iso — the "Installer ISO for an UNencrypted image (rpi5)" row on this page), and the
+# frite/jetson/orangepi* builders build no ISO at all (--image-only is their media skip).
+# PLATFORM_FIELD_SUPPORT carries that matrix and is pinned to the real emission surface
+# by tests/test_cli_args.py::test_platform_field_support_matches_emission, so
+# platform_supports("installer_iso", ...) here can never drift from the builders.
+def _installer_iso_note(platform: str) -> str:
+    p = platform or "x86"
+    if p == "rpi5":
+        return ("Not available on the rpi5 builder: --installer-iso is an x86 flag. "
+                "The Pi's installer ISO is the separate \"Installer ISO for an "
+                "UNencrypted image (rpi5)\" row (--iso).")
+    return (f"Not available on the {p} builder: only the x86 builder parses "
+            "--installer-iso. This platform's builder produces no installer ISO.")
+
+
+# Why an ISO row is greyed while "Skip the ISO stage" is ticked (issue #233: skip-iso
+# sits with the ISO rows and greys them).
+_SKIP_ISO_REASON = ('"Skip the ISO stage" is ticked — no ISO artifacts will be built, '
+                    "so this option has no effect. Untick it to choose ISO options.")
+
+# Why a live-ISO sub-option is greyed while Live ISO is unticked (issue #233).
+_LIVE_ISO_OFF_REASON = ("Modifies the Live ISO, which is unticked — no live.iso will "
+                        "be built. Tick Live ISO to enable this option.")
 
 
 # ── DEFINITE DEFAULTS: why the part-checked square is gone from this page too ─────────
@@ -351,13 +385,18 @@ class BuildPage(QtWidgets.QWizardPage):
         self.img_size.setRange(0, 1 << 20)
         self.img_size.setSuffix(" MiB")
         self.img_size.setSpecialValueText("(role default)")
+        # RICH TEXT ON PURPOSE (issue #232): a plain-text tooltip renders as ONE line —
+        # this one ran ~1000px wide and off small screens. Qt word-wraps rich-text
+        # tooltips at a readable width, so the <qt> wrapper + paragraphs ARE the fix.
         self.img_size.setToolTip(
-            "Compact ext4 root size baked into the .img (growroot expands it to "
-            "the disk on first boot). 0 = the builder's role default, sized from "
-            "MEASURED payloads (x86 thin desktop 16384, full 24576, capable "
-            "51200; nodes 14336/20480; ARM installers 2048-9216). An explicit "
-            "size below that floor is refused on Build — it would abort in the "
-            ".img pre-flight only after the full emerge.")
+            "<qt><p>Compact ext4 root size baked into the .img. It is a floor, not "
+            "the final size: growroot expands the root to the disk on first boot.</p>"
+            "<p>0 = “(role default)”: the builder sizes the root from its "
+            "measured role payload — x86 thin desktop 16384, full 24576, capable "
+            "51200; nodes 14336/20480; ARM installers 2048–9216 MiB.</p>"
+            "<p>An explicit size below the role's floor is refused on Build — the "
+            "builder would abort in the .img pre-flight only after the full "
+            "emerge.</p></qt>")
         im.addWidget(_row("Root image size", self.img_size))
         # inline (NEVER a modal QMessageBox: validatePage runs headless in tests and
         # a modal would hang them) — set by validatePage when the size is undersized.
@@ -389,6 +428,19 @@ class BuildPage(QtWidgets.QWizardPage):
         self.release_tag.setPlaceholderText("--release-tag image stamp (empty = deterministic build stamp)")
         im.addWidget(_row("Version stamp", self.version))
         im.addWidget(_row("Release tag", self.release_tag))
+        # issue #232 "explain defaults": what each field does when left alone, in one
+        # visible place — values read from the builders (INSTALLER_UI resolution
+        # build-x86-host-stage4.sh:1903; GROW_POLICY="fill" x86:296 / rpi5:213;
+        # REL_VERSION x86:89), not restated guesses.
+        self.image_defaults_hint = _hint(
+            "Left at their defaults: Installer UI \"all\" bakes every installer "
+            "front-end (CLI, ncurses, Calamares) into an x86 installer ISO; Root "
+            "image size \"(role default)\" lets the builder size the root from its "
+            "measured role payload; an empty growth policy is the builder's "
+            "\"fill\" (the root grows to fill the disk on first boot); an empty "
+            "Version stamp uses the builder's pinned release version; an empty "
+            "Release tag becomes a deterministic build stamp.")
+        im.addWidget(self.image_defaults_hint)
         # Expanded and never auto-folded: it carries the per-mode musts (the Packages…
         # entry point, the installer-UI honesty combo) and the unaffiliated bundle note.
         self.image_section = collapsible("Image options", self.image_box)
@@ -438,8 +490,14 @@ class BuildPage(QtWidgets.QWizardPage):
         art = QtWidgets.QGroupBox("")
         arl = QtWidgets.QVBoxLayout(art)
         self.artifacts_box = art
-        arl.addWidget(_hint(
-            "Each row is an option and the artifact it produces. Ticked = you get it."))
+        # issue #233 "rewrite the explainer text": say concretely what the section is
+        # and how the gating reads, in the page's plain voice.
+        self.artifacts_hint = _hint(
+            "Each row is one build option and the file it produces in the output "
+            "directory — ticked means the build produces that file. Rows this "
+            "platform's builder cannot make are hidden or greyed; a greyed row's "
+            "tooltip names the reason.")
+        arl.addWidget(self.artifacts_hint)
         grid = QtWidgets.QGridLayout()
         grid.setColumnStretch(0, 1)
         grid.setHorizontalSpacing(18)
@@ -471,7 +529,7 @@ class BuildPage(QtWidgets.QWizardPage):
         # in the OTHER section, one scroll away from the ISO they are about.
         self.cached = _art_row(
             QtWidgets.QCheckBox("…with the binpkg cache and distfiles embedded"),
-            "→ a MATERIALLY LARGER live.iso that can rebuild offline (--cached; "
+            "→ a much larger live.iso that can rebuild images offline (--cached; "
             "unticked emits --uncached)", "cached", indent=True)
         self.live_toram = _art_row(
             QtWidgets.QCheckBox('…with a "Copy to RAM (removable)" boot entry'),
@@ -479,15 +537,22 @@ class BuildPage(QtWidgets.QWizardPage):
             indent=True)
         self.installer_iso = _art_row(
             QtWidgets.QCheckBox("Installer ISO"),
-            "→ installer.iso — direct, no longer only an --encrypt-root side effect "
-            "(--installer-iso)", "installer_iso")
+            "→ installer.iso — the stage4 archive plus install-x86.sh, for writing "
+            "the system to a disk (--installer-iso; x86)", "installer_iso")
         self.build_iso = _art_row(
             QtWidgets.QCheckBox("Installer ISO for an UNencrypted image (rpi5)"),
-            "→ installer.iso; with the root image too this is the builder's --both "
-            "(--iso)", "build_iso")
+            "→ a bootable installer ISO (--iso; together with Root image the "
+            "builder runs --both)", "build_iso")
         self.sd_only = _art_row(
             QtWidgets.QCheckBox("SD-card image only (rpi5)"),
             "→ the SD image and nothing else (--sd-only)", "sd_only")
+        # issue #233: skip-iso LIVES WITH the ISO rows it turns off (it sat two rows
+        # from the bottom, a scroll away from the options it negates) and greys them
+        # while ticked — see _sync_iso_options.
+        self.skip_iso = _art_row(
+            QtWidgets.QCheckBox("Skip the ISO stage"),
+            "→ no ISO artifacts at all — greys the ISO rows above (--skip-iso)",
+            "skip_iso")
         self.build_tar = _art_row(
             _flag_check("Rootfs tar"), "→ fs.tar.xz — the mounted-filesystem tarball "
             "(--tar / --no-tar)", "build_tar")
@@ -508,11 +573,8 @@ class BuildPage(QtWidgets.QWizardPage):
             "(--compress)", "compress")
         self.resume = _art_row(
             QtWidgets.QCheckBox("Resume — reuse the existing sysroot instead of wiping it"),
-            "→ the SAME artifacts, built incrementally over whatever tree the last run "
+            "→ the same artifacts, built incrementally over whatever tree the last run "
             "left behind (--resume)", "resume")
-        self.skip_iso = _art_row(
-            QtWidgets.QCheckBox("Skip the ISO stage"),
-            "→ no ISO artifacts at all (--skip-iso)", "skip_iso")
         self.image_only = _art_row(
             QtWidgets.QCheckBox("Image only — skip the live/installer media"),
             "→ the .img alone; frite/jetson/orangepi* (--image-only)", "image_only")
@@ -530,6 +592,13 @@ class BuildPage(QtWidgets.QWizardPage):
         arl.addWidget(self.resume_note)
         self.artifacts_section = collapsible("Artifacts & build options", art)
         lay.addWidget(self.artifacts_section)
+        # Skip-ISO / Live-ISO gating (issue #233): _sync_iso_options is the ONLY writer
+        # of setEnabled on the ISO rows — visibility stays the platform gate's job
+        # (gate_widgets hide=True in initializePage), so the two mechanisms never fight
+        # over one widget (the mixed setEnabled/setVisible trap this page already names).
+        self.skip_iso.toggled.connect(self._sync_iso_options)
+        self.live_iso.toggled.connect(self._sync_iso_options)
+        self._sync_iso_options()
 
         # per-device flash / keys assignment table (replaces the old single-target
         # flash-with-build checkbox+dropdown). Every row defaults to "(none)" so no
@@ -941,7 +1010,9 @@ class BuildPage(QtWidgets.QWizardPage):
             "live_iso": (self.live_iso, _A["live_iso"]),
             "cached": (self.cached, _A["cached"]),
             "live_toram": (self.live_toram, _A["live_toram"]),
-            "installer_iso": (self.installer_iso, _A["installer_iso"]),
+            # installer_iso is DELIBERATELY absent: issue #233 wants it greyed with a
+            # reason off-x86, never hidden — _sync_iso_options (called below) owns its
+            # enabled state; clear_unsupported still resets the field on Next.
             "build_iso": (self.build_iso, _A["build_iso"]),
             "sd_only": (self.sd_only, _A["sd_only"]),
             "build_tar": (self.build_tar, _A["build_tar"]),
@@ -974,6 +1045,9 @@ class BuildPage(QtWidgets.QWizardPage):
                                    ("secure_boot", self.secure_boot)):
             if platform_supports(flag_fld, c.platform):
                 flag_box.setToolTip(_FLAG_TIP)
+        # AFTER the platform gate + the checkbox setters above: the enabled state of
+        # the ISO rows depends on the platform AND the just-restored skip/live values.
+        self._sync_iso_options()
         self.device_table.refresh()          # auto-refresh the device table on entry
         self._apply_default_expansion()
         self._preview()
@@ -1018,6 +1092,43 @@ class BuildPage(QtWidgets.QWizardPage):
             "Only available for --env test: a prod image has the test runner pruned "
             "from its app tree, so the assertions would check for a stack that was "
             "deliberately removed.")
+
+    def _sync_iso_options(self, *_a):
+        """Enabled-state honesty for the ISO artifact rows (issue #233).
+
+        The single writer of setEnabled on this cluster (visibility stays the platform
+        gate's), composing three facts:
+
+        * the platform's builder must parse --installer-iso for the Installer ISO row —
+          it is GREYED (never hidden) off-x86, with the reason on the row, so a Pi
+          operator can see why there is no x86-style installer ISO;
+        * "Skip the ISO stage" greys every ISO row it negates (live/cached/toram/
+          installer/rpi5 --iso) while ticked;
+        * the two live-ISO modifiers only mean anything while Live ISO is ticked.
+
+        PRESENTATION ONLY: greying never rewrites a checkbox — value correctness stays
+        with _preview/clear_unsupported, exactly like the rest of the page's gating."""
+        platform = self.wiz.cfg.platform
+        skip = self.skip_iso.isChecked() and platform_supports("skip_iso", platform)
+
+        def _apply(key, box, enabled, reason, live_tip=""):
+            lab = self.artifact_labels[key]
+            box.setEnabled(enabled)
+            lab.setEnabled(enabled)
+            tip = live_tip if enabled else reason
+            box.setToolTip(tip)
+            lab.setToolTip(tip)
+
+        _apply("live_iso", self.live_iso, not skip, _SKIP_ISO_REASON,
+               live_tip=_FLAG_TIP)
+        inst_ok = platform_supports("installer_iso", platform)
+        _apply("installer_iso", self.installer_iso, inst_ok and not skip,
+               _installer_iso_note(platform) if not inst_ok else _SKIP_ISO_REASON)
+        _apply("build_iso", self.build_iso, not skip, _SKIP_ISO_REASON)
+        sub_on = not skip and self.live_iso.isChecked()
+        sub_reason = _SKIP_ISO_REASON if skip else _LIVE_ISO_OFF_REASON
+        _apply("cached", self.cached, sub_on, sub_reason)
+        _apply("live_toram", self.live_toram, sub_on, sub_reason)
 
     def _backend(self):
         b = self.backend.currentText()

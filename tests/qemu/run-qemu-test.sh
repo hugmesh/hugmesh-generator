@@ -402,7 +402,11 @@ fi
 info "SSH is up; running assertions"
 
 # ── Assertions ─────────────────────────────────────────────────────
-ssh "${SSH_OPTS[@]}" tester@localhost 'sudo bash -s' < "${SCRIPT_DIR}/assertions.sh"
+# The role vocabulary rides IN FRONT of the assertions: assertions.sh is piped into
+# the guest and has nothing to source there, and its role-topology section must fold
+# an older image's `be`/`fe`/`be+gpu` marker rather than reject it.
+cat "${SCRIPT_DIR}/../../scripts/_roles-lib.sh" "${SCRIPT_DIR}/assertions.sh" \
+    | ssh "${SSH_OPTS[@]}" tester@localhost 'sudo bash -s' 
 RESULT=$?
 
 step "Powering down guest"

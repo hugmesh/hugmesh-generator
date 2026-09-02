@@ -35,7 +35,7 @@ def _mesh_wl(tmp_path):
                        output_dir=str(tmp_path / "out"))
     return WorklistConfig(base=base, entries=[
         WorklistEntry(role="pki", platform="x86"),
-        WorklistEntry(role="be", platform="rpi5"),
+        WorklistEntry(role="backend", platform="rpi5"),
     ])
 
 
@@ -169,13 +169,13 @@ def test_save_is_best_effort_never_raises(tmp_path, monkeypatch):
 def test_discover_unmanaged_finds_wl_dirs_only(tmp_path):
     out = tmp_path / "out"
     (out / "wl-pki.x86").mkdir(parents=True)
-    (out / "wl-be.rpi5").mkdir()
+    (out / "wl-backend.rpi5").mkdir()
     (out / "keys-pki.x86").mkdir()                     # not a build tree
     (out / "wl-noplatform").mkdir()                    # no dot — not an entry id
-    (out / "sessions" / "S1" / "wl-fe.x86").mkdir(parents=True)   # managed — skipped
+    (out / "sessions" / "S1" / "wl-frontend.x86").mkdir(parents=True)   # managed — skipped
     (out / "build.log").write_text("legacy shared log\n")
     found = bs.discover_unmanaged(str(out))
-    assert sorted((u.role, u.platform) for u in found) == [("be", "rpi5"), ("pki", "x86")]
+    assert sorted((u.role, u.platform) for u in found) == [("backend", "rpi5"), ("pki", "x86")]
     for u in found:
         assert u.has_log
         assert u.log_path == str(out / "build.log")
@@ -318,7 +318,7 @@ def test_image_log_name_matches_builder_derivation(tmp_path):
     # The shell side derives IMAGE_LOG_FILE="${WORK_DIR}/build-${BUILD_SUBDIR#wl-}.log"
     # from the --build-subdir the driver already passes (wl-<entry-id>); the python
     # side must mint the identical basename for the session record.
-    assert bs.image_log_name("edge_ai.jetson") == "build-edge_ai.jetson.log"
+    assert bs.image_log_name("edge-ai.jetson") == "build-edge-ai.jetson.log"
     assert bs.image_log_name("standalone-thick.x86") == "build-standalone-thick.x86.log"
 
 

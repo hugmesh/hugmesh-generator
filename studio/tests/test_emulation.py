@@ -132,7 +132,7 @@ def _no_probes(monkeypatch, *, runner=None, docker=None):
 
 def test_plan_test_mode_covers_the_session_in_boot_order(test_plan):
     assert test_plan.mode is em.EmulationMode.TEST
-    assert test_plan.labels == ["rpi5/pki", "x86/be", "x86/fe"]
+    assert test_plan.labels == ["rpi5/pki", "x86/backend", "x86/frontend"]
     assert test_plan.mesh is None and test_plan.front_door == ""
     assert test_plan.epoch == EPOCH
 
@@ -143,7 +143,7 @@ def test_plan_deploy_mode_carries_the_mesh_planners_answers(deploy_plan):
     p = deploy_plan
     assert p.mesh is not None
     assert [d.label for d in p.mesh.devices] == p.labels
-    assert p.gateway_label == "x86/fe"
+    assert p.gateway_label == "x86/frontend"
     gw = p.mesh.gateway
     assert p.front_door == f"https://127.0.0.1:{gw.ui_port}/"
     for planned in p.mesh.devices:
@@ -154,7 +154,7 @@ def test_plan_accepts_a_session_path_or_name_but_never_guesses(session):
     gen, sess = session
     by_path = em.plan(gen, sess.path, "test", epoch=EPOCH)
     by_name = em.plan(gen, sess.name, "test", epoch=EPOCH)
-    assert by_path.labels == by_name.labels == ["rpi5/pki", "x86/be", "x86/fe"]
+    assert by_path.labels == by_name.labels == ["rpi5/pki", "x86/backend", "x86/frontend"]
     with pytest.raises(ValueError):
         em.plan(gen, "20990101-000000-nope00", "test")
     with pytest.raises(ValueError):
@@ -190,10 +190,10 @@ def test_run_argv_deploy_lane_keeps_alive_and_still_pins_artifacts(deploy_plan):
 
 
 def test_start_device_argv_from_a_plan_pins_everything(deploy_plan):
-    argv = em.start_device_argv(deploy_plan, "x86/be")
+    argv = em.start_device_argv(deploy_plan, "x86/backend")
     assert argv[argv.index("--artifacts") + 1] == deploy_plan.session_path
     assert argv[argv.index("--work") + 1] == deploy_plan.work_dir
-    assert argv[argv.index("--only-exact") + 1] == "x86/be"
+    assert argv[argv.index("--only-exact") + 1] == "x86/backend"
     assert "--only" not in argv           # exact equality, never substring
     assert "--keep-alive" in argv
     assert argv[argv.index("--jobs") + 1] == "1"
@@ -252,7 +252,7 @@ def test_avc_argv_authors_the_workout_invocation(deploy_plan):
     assert argv == [os.path.join(p.generator_dir, em.AVC_SCRIPT),
                     "--platform", "rpi5", "--role", "pki",
                     "-w", p.session_path]
-    assert em.avc_argv(p, p.row("x86/be")) == em.avc_argv(p, "x86/be")
+    assert em.avc_argv(p, p.row("x86/backend")) == em.avc_argv(p, "x86/backend")
     with pytest.raises(ValueError):
         em.avc_argv(p, "x86/nope")
 
@@ -272,7 +272,7 @@ def test_status_prefers_the_runners_reconciled_devices(deploy_plan, monkeypatch)
     against docker ps itself). Planned rows with no record read PLANNED; a T1
     booting record reads BOOTING; a foreign record lands in unplanned, ungraded."""
     devices = [qd.device_from_record(_record("/w", "rpi5/pki")),
-               qd.device_from_record(_record("/w", "x86/be", state="booting",
+               qd.device_from_record(_record("/w", "x86/backend", state="booting",
                                              ssh_host_port=0)),
                qd.device_from_record(_record("/w", "x86/omnibus"))]
     _no_probes(monkeypatch, runner=devices)
@@ -280,8 +280,8 @@ def test_status_prefers_the_runners_reconciled_devices(deploy_plan, monkeypatch)
     assert st.source == "runner"
     assert [r.label for r in st.rows] == deploy_plan.labels
     assert st.row("rpi5/pki").state == em.STATE_RUNNING
-    assert st.row("x86/be").state == em.STATE_BOOTING
-    assert st.row("x86/fe").state == em.STATE_PLANNED
+    assert st.row("x86/backend").state == em.STATE_BOOTING
+    assert st.row("x86/frontend").state == em.STATE_PLANNED
     assert [d.label for d in st.unplanned] == ["x86/omnibus"]
 
 
@@ -291,14 +291,14 @@ def test_status_fallback_replicates_the_runners_downgrade(deploy_plan, monkeypat
     unanswered daemon says nothing about the containers."""
     work = deploy_plan.work_dir
     _write_record(work, "rpi5/pki")                       # container gone below
-    _write_record(work, "x86/be", container="hugmesh-qemu-dev-x86_be",
+    _write_record(work, "x86/backend", container="hugmesh-qemu-dev-x86_be",
                   started_at="2026-08-19T12:00:01Z")      # still running
 
     _no_probes(monkeypatch, runner=None, docker={"hugmesh-qemu-dev-x86_be"})
     st = em.status(deploy_plan)
     assert st.source == "registry+docker"
     assert st.row("rpi5/pki").state == em.STATE_STOPPED   # downgraded
-    assert st.row("x86/be").state == em.STATE_RUNNING
+    assert st.row("x86/backend").state == em.STATE_RUNNING
 
     _no_probes(monkeypatch, runner=None, docker=None)     # docker never answered
     st = em.status(deploy_plan)
@@ -310,7 +310,7 @@ def test_status_grades_fresh_verdicts_and_scopes_to_the_plan(deploy_plan, monkey
     work = deploy_plan.work_dir
     _write_record(work, "rpi5/pki")
     _write_result(work, "rpi5/pki")                                  # fresh PASS
-    _write_result(work, "x86/be", status="FAIL",
+    _write_result(work, "x86/backend", status="FAIL",
                   detail="assertions failed", assertions_passed=25,
                   assertions_failed=8)
     _write_result(work, "x86/omnibus")           # NOT planned: must not surface
@@ -318,9 +318,9 @@ def test_status_grades_fresh_verdicts_and_scopes_to_the_plan(deploy_plan, monkey
     st = em.status(deploy_plan)
     assert st.row("rpi5/pki").verdict == "PASS"
     assert st.row("rpi5/pki").green
-    assert st.row("x86/be").verdict == "FAIL"
-    assert "25 assertion(s) passed, 8 failed" in st.row("x86/be").detail
-    assert st.row("x86/fe").verdict == em.VERDICT_PENDING
+    assert st.row("x86/backend").verdict == "FAIL"
+    assert "25 assertion(s) passed, 8 failed" in st.row("x86/backend").detail
+    assert st.row("x86/frontend").verdict == em.VERDICT_PENDING
     assert not st.all_green
     assert st.counts() == {"PASS": 1, "FAIL": 1, "PENDING": 1}
 
@@ -351,12 +351,12 @@ def test_status_stales_verdicts_from_an_earlier_boot(deploy_plan, monkeypatch):
     _write_record(work, "rpi5/pki", started_at="2026-08-19T12:00:00Z")
     _write_result(work, "rpi5/pki", started_at="2026-08-19T09:00:00Z")
     # x86/be: no record at all; verdict predates the plan epoch (11:00).
-    _write_result(work, "x86/be", started_at="2026-08-19T10:00:00Z")
+    _write_result(work, "x86/backend", started_at="2026-08-19T10:00:00Z")
     _no_probes(monkeypatch, runner=None, docker=None)
     st = em.status(deploy_plan)
     assert st.row("rpi5/pki").verdict == em.VERDICT_STALE
-    assert st.row("x86/be").verdict == em.VERDICT_STALE
-    assert not st.row("rpi5/pki").green and not st.row("x86/be").green
+    assert st.row("x86/backend").verdict == em.VERDICT_STALE
+    assert not st.row("rpi5/pki").green and not st.row("x86/backend").green
 
     # An epoch-less plan (the status CLI inspecting a run it did not start) keeps
     # the record-based gate but drops the plan-time one.
@@ -364,7 +364,7 @@ def test_status_stales_verdicts_from_an_earlier_boot(deploy_plan, monkeypatch):
     p2 = em.plan(gen, deploy_plan.session_path, "deploy", epoch="")
     st2 = em.status(p2)
     assert st2.row("rpi5/pki").verdict == em.VERDICT_STALE   # record still gates
-    assert st2.row("x86/be").verdict == "PASS"               # no record, no epoch
+    assert st2.row("x86/backend").verdict == "PASS"               # no record, no epoch
 
 
 def test_status_synthesizes_no_result_rows_after_a_completed_test_run(
@@ -380,14 +380,14 @@ def test_status_synthesizes_no_result_rows_after_a_completed_test_run(
 
     done = em.status(test_plan, run_completed=True)
     assert done.row("rpi5/pki").verdict == "PASS"
-    assert done.row("x86/be").verdict == em.VERDICT_NO_RESULT
-    assert done.row("x86/fe").verdict == em.VERDICT_NO_RESULT
+    assert done.row("x86/backend").verdict == em.VERDICT_NO_RESULT
+    assert done.row("x86/frontend").verdict == em.VERDICT_NO_RESULT
     assert not done.all_green
 
     midrun = em.status(test_plan)
-    assert midrun.row("x86/be").verdict == em.VERDICT_PENDING
+    assert midrun.row("x86/backend").verdict == em.VERDICT_PENDING
     deployed = em.status(deploy_plan, run_completed=True)
-    assert deployed.row("x86/be").verdict == em.VERDICT_PENDING
+    assert deployed.row("x86/backend").verdict == em.VERDICT_PENDING
 
 
 # ── save-mesh delegation ────────────────────────────────────────────────────────────
@@ -440,9 +440,9 @@ def test_cli_plan_json_is_machine_readable(session, capsys):
     assert rc == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["mode"] == "deploy"
-    assert [d["label"] for d in plan["devices"]] == ["rpi5/pki", "x86/be", "x86/fe"]
+    assert [d["label"] for d in plan["devices"]] == ["rpi5/pki", "x86/backend", "x86/frontend"]
     assert all("ssh_port" in d and "ui_port" in d for d in plan["devices"])
-    assert plan["gateway"] == "x86/fe"
+    assert plan["gateway"] == "x86/frontend"
     assert plan["argv"][0].endswith("run-qemu-docker.sh")
     assert "--keep-alive" in plan["argv"]
 
@@ -461,7 +461,7 @@ def test_cli_status_json_reports_the_merge(session, capsys, monkeypatch):
     assert rows["rpi5/pki"]["state"] == em.STATE_RUNNING
     assert rows["rpi5/pki"]["verdict"] == "PASS"
     assert rows["rpi5/pki"]["artifacts"]        # the T1 field rides along
-    assert rows["x86/be"]["state"] == em.STATE_PLANNED
+    assert rows["x86/backend"]["state"] == em.STATE_PLANNED
     assert status["source"] == "registry"
 
 
@@ -562,13 +562,13 @@ def test_playwright_argv_emits_every_knob_of_the_scripts_flag_set(test_plan):
     shell exported.
     """
     opts = em.PlaywrightOptions(
-        target="both", role="be", img="/a/x.img", kernel="/a/Image",
+        target="both", role="backend", img="/a/x.img", kernel="/a/Image",
         stage4="/a/s4.tar.xz", work_dir="/artifacts", test_dir="/scratch",
         ssh_port=2299, ui_port=9443, ssh_user="qa", mem_mb=8192, smp=6,
         accel="tcg", timeout_s=999, ui_timeout_s=77, keep=True,
         playwright_args=("--grep", "@smoke"))
     argv = em.playwright_argv(test_plan, opts)
-    for flag, value in (("--target", "both"), ("--role", "be"),
+    for flag, value in (("--target", "both"), ("--role", "backend"),
                         ("--img", "/a/x.img"), ("--kernel", "/a/Image"),
                         ("--stage4", "/a/s4.tar.xz"), ("-w", "/artifacts"),
                         ("--test-dir", "/scratch"), ("--ssh-port", "2299"),
@@ -609,8 +609,8 @@ def test_playwright_argv_passthrough_rides_last_behind_a_bare_separator(test_pla
 
 
 def test_playwright_options_for_row_derives_target_and_role_from_the_row(test_plan):
-    x86 = em.playwright_options_for_row(test_plan, "x86/be")
-    assert (x86.target, x86.role) == ("x86", "be")
+    x86 = em.playwright_options_for_row(test_plan, "x86/backend")
+    assert (x86.target, x86.role) == ("x86", "backend")
     pi = em.playwright_options_for_row(test_plan, "rpi5/pki")
     assert (pi.target, pi.role) == ("pi", "pki")
     # a label that is not a row of THIS plan raises, like every other author here
@@ -628,10 +628,10 @@ def test_playwright_refuses_platforms_that_have_no_launcher(session):
     open(os.path.join(jet, "hugmesh-jetson-arm64-edge_ai-test-20260819T101010Z.img"),
          "wb").close()
     pl = em.plan(gen, jet, "test", epoch=EPOCH)
-    assert pl.labels == ["jetson/edge_ai"]
+    assert pl.labels == ["jetson/edge-ai"]
     assert em.playwright_target_for("jetson") == ""
     with pytest.raises(ValueError, match="no launcher"):
-        em.playwright_options_for_row(pl, "jetson/edge_ai")
+        em.playwright_options_for_row(pl, "jetson/edge-ai")
 
 
 def test_playwright_argv_rejects_a_target_the_script_would_die_on(test_plan):
@@ -658,7 +658,7 @@ def test_envelope_playwright_args_reach_the_playwright_lane(session):
     gen, sess = session
     env = em.RunEnvelope(playwright_args=("--repeat-each", "3"))
     pl = em.plan(gen, sess, "test", env, epoch=EPOCH)
-    opts = em.playwright_options_for_row(pl, "x86/be")
+    opts = em.playwright_options_for_row(pl, "x86/backend")
     assert opts.playwright_args == ("--repeat-each", "3")
     assert em.playwright_argv(pl, opts)[-3:] == ["--", "--repeat-each", "3"]
 
@@ -676,7 +676,7 @@ def test_envelope_playwright_args_never_reach_the_docker_runner(session):
     assert em.run_argv(with_pw) == em.run_argv(plain)
     assert "--grep" not in em.run_argv(with_pw)
     assert "@smoke" not in em.run_argv(with_pw)
-    assert "--grep" not in em.start_device_argv(with_pw, "x86/be")
+    assert "--grep" not in em.start_device_argv(with_pw, "x86/backend")
 
 
 def test_every_run_envelope_field_is_routed_somewhere_on_purpose(session):

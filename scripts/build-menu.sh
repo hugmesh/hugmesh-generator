@@ -89,8 +89,8 @@ OPT_ORANGEPI5_FLEET="no"  # yes => fleet-build Orange Pi 5 too (full-fleet build
 OPT_PENTEST="no"          # yes => run the OWASP pen-test after the build (PENTEST=1)
 OPT_IMGFLAGS=""           # e.g. --no-iso (img only) / --no-img (iso only)
 OPT_DISTDIR=""            # shared READ-ONLY distfiles cache dir (--distdir); arch-independent sources reused fleet-wide (shared-binpkg Lane 3). Empty = private per-build.
-# ── Edge-AI inference service (GPU cluster roles: be+gpu / omnibus / edge_ai) ───
-OPT_X86_EDGE_AI="no"          # yes => add the edge-ai service to be+gpu/omnibus (edge_ai role always has it)
+# ── Edge-AI inference service (GPU cluster roles: backend-gpu / omnibus / edge-ai) ─
+OPT_X86_EDGE_AI="no"          # yes => add the edge-ai service to backend-gpu/omnibus (edge-ai role always has it)
 OPT_EDGE_AI_RUNTIME="ollama"  # edge-ai inference runtime (ollama | vllm)
 OPT_EDGE_AI_MODELS=""         # comma list of models to PRELOAD (empty = builder default)
 OPT_EDGE_AI_MODEL_DEFAULT=""  # default model when an OpenAI request omits one (empty = builder default)
@@ -692,7 +692,7 @@ build_make_cmd() {
     # Makefile jetson/jetson-% targets append verbatim after --kernel-flavor. The
     # x86 knobs composed below (--optional-services / --with-tor / the edge-AI
     # model-library / branding overrides / --installer-ui) are deliberately NOT
-    # emitted here: build-jetson-stage4.sh does not take them yet (its edge_ai/full
+    # emitted here: build-jetson-stage4.sh does not take them yet (its edge-ai/omnibus
     # roles always bake the edge-ai service; gate_optional_services is not
     # replicated there — specs-jetson/README.md) and an unknown flag hard-fails the
     # builder. Any flag the Jetson builder DOES grow is reachable immediately via
@@ -838,15 +838,15 @@ build_make_cmd() {
             # dependency, so it applies to any cluster role, GPU or not.
             [ "${OPT_EDGE_AI_TTS}" = yes ] && bf+=" --with-edge-ai-tts"
         fi
-        # Edge-AI inference service on a GPU cluster role. The x86 edge_ai role
+        # Edge-AI inference service on a GPU cluster role. The x86 edge-ai role
         # ALWAYS bakes it (auto-selected by the builder); the other GPU-capable
-        # roles add it only when OPT_X86_EDGE_AI=yes. (The Jetson edge_ai/full
+        # roles add it only when OPT_X86_EDGE_AI=yes. (The Jetson edge-ai/omnibus
         # roles bake it builder-side too, but the --with-edge-ai/--edge-ai-* knobs
         # are x86-only flags — see the jetson-* block above.)
         case "${target}" in
-            x86-be+gpu|x86-omnibus|x86-edge_ai)
+            x86-backend-gpu|x86-omnibus|x86-edge-ai)
                 local ai_always=no
-                case "${target}" in x86-edge_ai) ai_always=yes ;; esac
+                case "${target}" in x86-edge-ai) ai_always=yes ;; esac
                 [ "${ai_always}" = no ] && [ "${OPT_X86_EDGE_AI}" = yes ] && bf+=" --with-edge-ai"
                 if [ "${ai_always}" = yes ] || [ "${OPT_X86_EDGE_AI}" = yes ]; then
                     [ -n "${OPT_EDGE_AI_RUNTIME}" ] && [ "${OPT_EDGE_AI_RUNTIME}" != ollama ] && bf+=" --edge-ai-runtime ${OPT_EDGE_AI_RUNTIME}"
@@ -854,7 +854,7 @@ build_make_cmd() {
                     [ -n "${OPT_EDGE_AI_MODEL_DEFAULT}" ] && bf+=" --edge-ai-model-default ${OPT_EDGE_AI_MODEL_DEFAULT}"
                 fi
                 # --with-edge-ai-analysis folds edge-ai too (its dependency), so it applies
-                # on any GPU target incl. the edge_ai role.
+                # on any GPU target incl. the edge-ai role.
                 [ "${OPT_X86_EDGE_AI_ANALYSIS}" = yes ] && bf+=" --with-edge-ai-analysis"
                 ;;
         esac
@@ -1142,8 +1142,8 @@ monitor_build() {
 }
 
 # ── Menu screens ────────────────────────────────────────────────────────────────
-# Edge-AI inference service options (GPU cluster roles). The edge_ai ROLE always
-# bakes the service; this screen toggles adding it to be+gpu/omnibus and tunes the
+# Edge-AI inference service options (GPU cluster roles). The edge-ai ROLE always
+# bakes the service; this screen toggles adding it to backend-gpu/omnibus and tunes the
 # model library (runtime + preload list + default model) — the same knobs the
 # Studio wizard + the --edge-ai-* CLI flags expose (all-menus parity). The Voice
 # synthesis (TTS) row rides here for UX grouping only — unlike Analysis API it has
@@ -1154,7 +1154,7 @@ edge_ai_options_screen() {
         local on; on="$([ "${OPT_X86_EDGE_AI}" = yes ] && echo on || echo off)"
         local c
         c="$(ui_menu "Edge-AI inference" "GPU inference service — OpenAI model API to the mesh:" \
-            toggle  "Add to be+gpu/omnibus . ${on}   (the edge_ai role always has it)" \
+            toggle  "Add to backend-gpu/omnibus  ${on}   (the edge-ai role always has it)" \
             runtime "Runtime ............... ${OPT_EDGE_AI_RUNTIME}   (ollama | vllm)" \
             models  "Preload models ........ ${OPT_EDGE_AI_MODELS:-<builder default>}" \
             default "Default model ......... ${OPT_EDGE_AI_MODEL_DEFAULT:-<builder default>}" \
@@ -1451,7 +1451,7 @@ options_screen() {
             jetsonfleet "Jetson in full fleet  ${jetson_fleet_l}   (adds Jetson to full fleet; JETSON=1)" \
             orangepi5fleet "Orange Pi 5 in fleet  ${orangepi5_fleet_l}   (adds Orange Pi 5 to full fleet; ORANGEPI5=1; EXPERIMENTAL)" \
             pentest  "OWASP pen-test ...... ${pen_l}   (full-fleet build only)" \
-            edgeai   "Edge-AI service ..... $([ "${OPT_X86_EDGE_AI}" = yes ] && echo on || echo off)   (be+gpu/omnibus; edge_ai role always on)" \
+            edge-ai  "Edge-AI service ..... $([ "${OPT_X86_EDGE_AI}" = yes ] && echo on || echo off)   (backend-gpu/omnibus; edge-ai role always on)" \
             services "Optional services ... ${OPT_SERVICES:-<default: akkoma,tuwunel,phpbb>}" \
             managed  "Managed backing svcs  ${OPT_MANAGED_SERVICES:-<all self-hosted>}   (point a datastore at a hosted cloud endpoint; default self-hosted)" \
             tor      "Tor v3 onion ........ $([ "${OPT_TOR_ONION}" = yes ] && echo on || echo off)   (node service; exposes fe-gateway as .onion; default off)" \
@@ -1480,7 +1480,7 @@ options_screen() {
             jetsonfleet) OPT_JETSON_FLEET="$([ "${OPT_JETSON_FLEET}" = yes ] && echo no || echo yes)" ;;
             orangepi5fleet) OPT_ORANGEPI5_FLEET="$([ "${OPT_ORANGEPI5_FLEET}" = yes ] && echo no || echo yes)" ;;
             pentest) OPT_PENTEST="$([ "${OPT_PENTEST}" = yes ] && echo no || echo yes)" ;;
-            edgeai)  edge_ai_options_screen ;;
+            edge-ai) edge_ai_options_screen ;;
             services) services_screen ;;
             managed) managed_services_screen ;;
             tor)     OPT_TOR_ONION="$([ "${OPT_TOR_ONION}" = yes ] && echo no || echo yes)" ;;
@@ -1560,12 +1560,12 @@ single_role_screen() {
             launch_build ;;
         x86)
             role="$(ui_menu "x86 role" "Pick an x86 role:" \
-                pki "pki     — cluster PKI / control" \
-                be "be      — backend node" \
-                fe "fe      — frontend / gateway node" \
-                be+gpu "be+gpu  — backend + GPU host (the e2e GPU node)" \
-                omnibus "omnibus — all-in-one single node" \
-                edge_ai "edge_ai — GPU inference node (OpenAI model API to the mesh)" \
+                pki "pki         — cluster PKI / control" \
+                backend "backend     — backend node" \
+                frontend "frontend    — frontend / gateway node" \
+                backend-gpu "backend-gpu — backend + GPU host (the e2e GPU node)" \
+                omnibus "omnibus     — all-in-one single node" \
+                edge-ai "edge-ai     — GPU inference node (OpenAI model API to the mesh)" \
                 laptop "laptop  — amd64 laptop desktop image" \
                 chromebook "chromebook — coreboot/UEFI Chromebook DESKTOP image (ADR-16)" \
                 desktop "desktop — full desktop client image" \
@@ -1588,10 +1588,10 @@ single_role_screen() {
             # flag stays reachable via 'Extra builder flags' (the escape hatch).
             role="$(ui_menu "Jetson role" "Jetson Orin role (arm64 Tegra, EXPERIMENTAL — hardware validation pending).
 x86-only options (cluster services, edge-AI models, branding overrides) do not apply; use Extra builder flags for Jetson flags:" \
-                edge_ai "edge_ai  — GPU inference node (the headline Jetson role)" \
-                full "full     — full-stack node (all namespaces on the board)" \
-                gpu-host "gpu-host — GPU host only" \
-                desktop "desktop  — arm64 desktop client image" \
+                edge-ai "edge-ai     — GPU inference node (the headline Jetson role)" \
+                omnibus "omnibus     — full-stack node (all namespaces on the board)" \
+                backend-gpu "backend-gpu — GPU host only (the same role x86 builds)" \
+                desktop "desktop     — arm64 desktop client image" \
                 back "‹ back")" || return 0
             [ "${role}" = back ] && return 0
             board="$(ui_menu "Jetson board" "Orin module/carrier (--board; current: ${OPT_JETSON_BOARD}):" \

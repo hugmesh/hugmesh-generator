@@ -42,34 +42,40 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 
 from .build_driver import BuildDriver
+from . import roles
 from .config import DOMAIN_IDP_SUPERDOMAIN, ImageConfig, image_class
 from .platform_info import HostInfo, detect
 from .worklist import WorklistConfig, WorklistEntry
 
-# ── role → gen-provision-keys.sh key PROFILE ────────────────────────────────────────
-# gen-provision-keys.sh only knows {pki, backend, frontend, host, ...}. build-all-roles.sh
-# maps the fuller Studio/builder role set onto those profiles; mirror it here so the
-# per-image key folder a node provisions from is generated with the RIGHT profile. Only
-# NODE-class entries get keys (desktops take none); anything unmapped falls back to the
-# 'host' worker profile (the fleet script's default for client/appliance images).
-KEY_PROFILE: dict[str, str] = {
-    "pki": "pki",
-    "be": "backend",
-    "fe": "frontend",
-    "be+gpu": "backend",
-    "omnibus": "pki",        # single-node control plane — the 'full' analogue -> pki
-    "edge_ai": "host",       # GPU worker (build-all-roles: edge_ai/gpu-host -> host)
-    "full": "pki",           # jetson single-node control plane -> pki
-    "gpu-host": "host",      # jetson GPU worker -> host
-    "generic": "host",       # plain arm64 server appliance
-    "orangepizero2": "host",  # headless appliance
-    "orangepizero2w": "host",  # headless appliance (Zero 2's H618 sibling)
-    "orangepizero3": "host",  # headless appliance (Zero 2's H618 sibling)
-    "orangepi3-lts": "host",  # headless appliance (Allwinner H6, pre-H616 gen)
-    "orangepi4-lts": "host",  # light DESKTOP (Rockchip RK3399) — no flash-disk.sh
-                              # desktop role token exists, so it maps to the generic
-                              # host artifact glob like every other client image
+# ── role → gen-provision-keys.sh key PROFILE ────────────────────────────────────
+# THE table lives in scripts/_roles-lib.sh (HUGMESH_ROLE_KEYPROFILE) and is read
+# through core/roles.py. It used to be a hand-written dict here — the FOURTH copy of
+# the same mapping (build-x86's printed hints and docker/build-image.sh's two
+# identical blocks were the others) — and it ended in ``.get(role, "host")``.
+#
+# That silent fallback is the reason this is not a cosmetic change. The old dict knew
+# `be`/`fe` and did NOT know `backend`/`frontend`, so renaming only the Studio id
+# would have quietly downgraded every backend and frontend node to the `host` worker
+# keys profile: a node provisioned with the wrong credentials, reported as success.
+# There is no fallback now.
+#
+# Only NODE-class images reach here (the caller gates on image_class == "node").
+# A handful of Studio role IDS are not role tokens at all — they are PLATFORM names
+# used as role ids by the standalone/cloud mode menus (frite, orangepi5, the Orange
+# Pi appliances). Those are listed here explicitly, with the reason, rather than
+# absorbed by a catch-all: each is a single-role client/appliance image that
+# provisions from the plain `host` worker profile exactly like the Frite client
+# (mirrors scripts/build-all-roles.sh's own per-platform keys blocks).
+_PLATFORM_PSEUDO_ROLE_PROFILE: dict[str, str] = {
+    "frite": "host",
+    "orangepi5": "host",
+    "orangepizero2": "host",
+    "orangepizero2w": "host",
+    "orangepizero3": "host",
+    "orangepi3-lts": "host",
+    "orangepi4-lts": "host",
 }
+
 
 GENKEYS_SCRIPT = os.path.join("scripts", "gen-provision-keys.sh")
 MANIFEST_NAME = "hugmesh-mesh-manifest.json"
@@ -94,8 +100,18 @@ def keys_dir(out_dir: str, entry_id: str) -> str:
 
 
 def key_profile(role: str, platform: str = "") -> str:
-    """The gen-provision-keys.sh ``--role`` profile for a Studio/builder role id."""
-    return KEY_PROFILE.get(role, "host")
+    """The gen-provision-keys.sh ``--role`` profile for a Studio/builder role id.
+
+    Raises :class:`roles.RoleVocabularyError` for an id with no declared profile.
+    Deliberately loud: the previous ``.get(role, "host")`` answered every unknown id
+    with the worker profile, so a stale table produced a node holding the wrong
+    credentials and nothing anywhere said so. The caller turns this into a failed
+    KEYS step for that one image, not a wrong one.
+    """
+    pseudo = _PLATFORM_PSEUDO_ROLE_PROFILE.get(role)
+    if pseudo is not None:
+        return pseudo
+    return roles.key_profile(role)
 
 
 @dataclass
@@ -346,9 +362,13 @@ class WorklistDriver:
         res = self.results[i]
         res.keys_path = keys_dir_
         script = os.path.join(self.generator_dir, GENKEYS_SCRIPT)
-        cmd = [script, "--role", key_profile(entry.role, entry.platform),
-               "--out", keys_dir_, "--random"]
         try:
+            # INSIDE the try on purpose: key_profile() now RAISES for a role with no
+            # declared profile instead of guessing "host". That must fail this one
+            # image's keys step (recorded, partial folder removed) — never abort the
+            # rest of the worklist, and never silently mis-provision.
+            cmd = [script, "--role", key_profile(entry.role, entry.platform),
+                   "--out", keys_dir_, "--random"]
             proc = subprocess.Popen(cmd, cwd=self.generator_dir, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, bufsize=1,
                                     **proc_text.TEXT_IO)
@@ -357,7 +377,7 @@ class WorklistDriver:
                 if on_line:
                     on_line(i, line.rstrip("\n"))
             code = proc.wait()
-        except OSError as e:
+        except (OSError, roles.RoleVocabularyError) as e:
             if on_line:
                 on_line(i, f"!! keys generation could not start: {e}")
             code = 1

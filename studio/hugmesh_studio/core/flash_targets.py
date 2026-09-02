@@ -21,6 +21,8 @@ import re
 import subprocess
 from dataclasses import dataclass
 
+from . import roles
+
 # size sanity: drop the tiny control-endpoint "disks" (the 32M Wacom tablet the host
 # probe surfaces) and the multi-TB host NVMe. SBC install media (SD/eMMC/USB) live
 # comfortably inside this window.
@@ -269,9 +271,12 @@ _ARM64_PLATFORMS = ("rpi5", "orangepi5", "orangepizero2", "orangepizero2w", "ora
                     "orangepi3-lts", "orangepi4-lts",
                     "frite", "jetson")
 
-# flash-disk.sh accepts only these --role tokens; any client/desktop role maps to the
-# generic 'host' artifact glob (same set as ProgressPage._FLASH_ROLES).
-FLASH_ROLE_TOKENS = frozenset({"pki", "backend", "frontend", "host", "be", "fe", "omnibus"})
+# flash-disk.sh now accepts EVERY role in the vocabulary (it used to know five
+# spellings and reject the rest, so `--role be+gpu` / `--role edge_ai` / `--role generic` all died
+# on a flasher that could not name half the images the builders produce). Derived, not
+# restated — canonical tokens plus every permanent input alias, so a role restored
+# from an older saved session is still flashable.
+FLASH_ROLE_TOKENS = frozenset(roles.canonical_roles()) | frozenset(roles.aliases())
 
 
 def arch_for_platform(platform: str) -> str:
@@ -387,10 +392,10 @@ def assignment_argv(a: FlashAssignment, *, generator_dir: str,
     ``artifact`` is the CONCRETE built image resolved for this assignment's entry
     (see :func:`new_artifact`). Passing it emits ``--artifact`` so the per-row image
     pick is honored EXACTLY: flash-disk.sh's newest-mtime ``*-<role>-*`` auto-glob
-    cannot discriminate two worklist entries sharing a role token (be.rpi5 vs
-    be.jetson are both ``--role be --arch arm64``; every client/desktop role folds
-    to ``host``), so relying on the glob would flash the same newest artifact to
-    differently-assigned devices."""
+    cannot discriminate two worklist entries sharing a role token (backend.rpi5 vs
+    backend.jetson are both ``--role backend --arch arm64``; every client/desktop role
+    folds to ``backend-gpu``), so relying on the glob would flash the same newest
+    artifact to differently-assigned devices."""
     return flash_argv(a.target, generator_dir=generator_dir, role=a.role, arch=a.arch,
                       artifact=artifact, work_dir=a.work_dir)
 

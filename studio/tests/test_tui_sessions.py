@@ -35,7 +35,7 @@ def _mesh_wl(tmp_path):
                        output_dir=str(tmp_path / "out"))
     return WorklistConfig(base=base, entries=[
         WorklistEntry(role="pki", platform="x86"),
-        WorklistEntry(role="be", platform="rpi5"),
+        WorklistEntry(role="backend", platform="rpi5"),
     ])
 
 
@@ -107,7 +107,7 @@ def test_plain_list_and_inspect_shows_detail(tmp_path):
     assert "mesh · 2 images (x86, rpi5)" in text
     assert "session   20260106-000001-abc123" in text
     assert "pki.x86: pki · x86" in text
-    assert "be.rpi5: be · rpi5" in text
+    assert "backend.rpi5: backend · rpi5" in text
     assert "  build.log" in text
 
 
@@ -177,7 +177,7 @@ def test_worklist_table_rows_from_a_mesh_session(tmp_path):
     headers, rows = model.worklist_table(s)
     assert headers == ["#", "id", "role", "platform", "board/flavor", "status"]
     assert [r[1:4] for r in rows] == [
-        ["pki.x86", "pki", "x86"], ["be.rpi5", "be", "rpi5"]]
+        ["pki.x86", "pki", "x86"], ["backend.rpi5", "backend", "rpi5"]]
     # statuses come from the per-image outcome records (still queued: no driver ran)
     assert all(r[5].startswith("queued") for r in rows)
 
@@ -186,7 +186,7 @@ def test_plain_worklist_command_prints_the_table(tmp_path):
     _finished(tmp_path, session_id="20260113-000001-abcdef", wl=_mesh_wl(tmp_path))
     text = _run_plain("w 1\nq\n")
     assert "id" in text and "platform" in text
-    assert "pki.x86" in text and "be.rpi5" in text
+    assert "pki.x86" in text and "backend.rpi5" in text
 
 
 def test_main_worklist_flag_prints_headlessly(tmp_path, capsys):
@@ -195,4 +195,4 @@ def test_main_worklist_flag_prints_headlessly(tmp_path, capsys):
     rc = tui_app.main(["--worklist", "20260114-000001-abcdef"],
                       inp=io.StringIO(""), out=out)
     assert rc == 0
-    assert "pki.x86" in out.getvalue() and "be.rpi5" in out.getvalue()
+    assert "pki.x86" in out.getvalue() and "backend.rpi5" in out.getvalue()

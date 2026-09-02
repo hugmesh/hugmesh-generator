@@ -127,8 +127,12 @@
 #                        orangepi5, orangepizero2, orangepizero2w,
 #                        orangepizero3, orangepi3-lts, orangepi4-lts}
 #
-#   x86 node roles      (primary | mesh-extension): pki | be | fe | be-gpu
-#                        (-> --role be+gpu) | omnibus | edge_ai
+#   x86 node roles      (primary | mesh-extension): pki | backend | frontend |
+#                        backend-gpu | omnibus | edge-ai
+#                        Old spellings still accepted, normalized at parse time:
+#                        be, fe, be-gpu, host, gpu-host, edge_ai, full. NOTE the
+#                        charset bans "+", which is the only reason `be-gpu` ever
+#                        existed; `backend-gpu` needs no such workaround.
 #   x86 client roles     (client):                   laptop | chromebook |
 #                        desktop | standalone-thin | standalone-thick |
 #                        standalone-unaffiliated (UNAFFILIATED plain Gentoo
@@ -165,7 +169,7 @@
 #                        run_frite_build() appends --standalone (and
 #                        --local-user TARGET_NAME when set).
 #   jetson (EXPERIMENTAL; primary | mesh-extension): "<role>.<board>"; role =
-#                        edge_ai (default) | gpu-host | full | desktop; board =
+#                        edge-ai (default) | backend-gpu | omnibus | desktop; board =
 #                        orin-nano (default) | orin-nano-4gb | orin-nx-8gb |
 #                        orin-nx-16gb. NO standalone token here, deliberately
 #                        — see the JETSON STANDALONE EXCEPTION note below.
@@ -209,8 +213,9 @@
 #
 #   A bare token with no platform prefix (e.g. HARDWARE_CLASS="pki") is
 #   accepted as a legacy/convenience alias for the matching x86 role.
-#   Empty HARDWARE_CLASS defaults to: primary/mesh-extension -> x86.be+gpu
-#   (the Makefile's own "host" default role); client -> x86.desktop.
+#   Empty HARDWARE_CLASS defaults to: primary/mesh-extension -> x86.backend-gpu
+#   (the Makefile's own default role, formerly spelled be+gpu / host); client ->
+#   x86.desktop.
 #
 #   An unrecognized combination is a clean FAILED ingest report, never a
 #   silent default and never a crash.
@@ -300,6 +305,19 @@ set -eu
 
 # ── fixed locations ──────────────────────────────────────────────────────────
 GENERATOR_DIR="${GENERATOR_DIR:-/opt/hugmesh-generator}"
+# THE role vocabulary (scripts/_roles-lib.sh), baked into the image alongside the
+# builders. It is written to be POSIX sh precisely so this /bin/sh worker can read
+# it: the two KEYS_ROLE tables below used to be the SAME table written twice, each
+# ending in a `*) -> host` catch-all that silently gave omnibus, edge-ai, generic and
+# every client role the plain worker keys profile.
+# shellcheck source=scripts/_roles-lib.sh
+. "${GENERATOR_DIR}/scripts/_roles-lib.sh"
+
+# Role folding and the KEYS profile both come from the lib's own functions
+# (hugmesh_role_for / hugmesh_role_keyprofile). NO private wrappers here: the two
+# harnesses that extract resolve_build_target() verbatim source _roles-lib.sh, and a
+# helper defined only in THIS file would be missing from the extract — which makes
+# every probed row reject and reads exactly like a real regression.
 DIAL_SECRET_DIR="${DIAL_SECRET_DIR:-/secrets/dial}"
 SCRATCH_PARENT="${SCRATCH_PARENT:-/artifacts/.scratch}"
 DIAL_USER_DEFAULT="${DIAL_USER:-bff-dial}"
@@ -343,7 +361,7 @@ its flags/tokens like this — the same four choices, one clarity layer:
 
   1. Mesh node — build server node image(s) for a mesh on dedicated hardware
        IMAGE_TYPE=primary|mesh-extension, HARDWARE_CLASS =
-         x86.pki | x86.be | x86.fe | x86.be-gpu | x86.omnibus | x86.edge_ai
+         x86.pki | x86.backend | x86.frontend | x86.backend-gpu | x86.omnibus | x86.edge-ai
          | rpi5.<role>[.<board>] | jetson.<role>.<board>
        make face: `make x86-<role>` / `make rpi-<role>` / `make jetson-<role>` /
          `make build-all` / `make build-everything` (the fleet + worklist).
@@ -738,7 +756,7 @@ resolve_build_target() {
 
   if [ -z "$HARDWARE_CLASS" ]; then
     case "$IMAGE_TYPE" in
-      primary|mesh-extension) PLATFORM="x86"; BUILD_ROLE="be+gpu" ;;
+      primary|mesh-extension) PLATFORM="x86"; BUILD_ROLE="backend-gpu" ;;
       client)                 PLATFORM="x86"; BUILD_ROLE="desktop" ;;
     esac
   else
@@ -755,10 +773,14 @@ resolve_build_target() {
       x86)
         case "$IMAGE_TYPE" in
           primary|mesh-extension)
-            case "$p2" in
-              pki|be|fe|omnibus|edge_ai) BUILD_ROLE="$p2" ;;
-              be-gpu|"")                 BUILD_ROLE="be+gpu" ;;
-              *) return 1 ;;
+            if [ -z "$p2" ]; then
+              BUILD_ROLE="backend-gpu"
+            elif ! BUILD_ROLE="$(hugmesh_role_for x86 "$p2")"; then
+              return 1
+            fi
+            case " pki backend frontend backend-gpu omnibus edge-ai " in
+              *" ${BUILD_ROLE} "*) ;;
+              *) return 1 ;;                # a client role is not a node role
             esac
             ;;
           client)
@@ -773,17 +795,22 @@ resolve_build_target() {
       rpi5)
         [ "$IMAGE_TYPE" = "client" ] && return 1
         case "$p2" in
-          pki|backend|frontend|desktop) BUILD_ROLE="$p2" ;;
           standalone-desktop)
-            # Composes onto the same --role desktop the plain "desktop" token
-            # resolves to (build-rpi5-stage4.sh's own --standalone hard-errors
-            # on every OTHER role) — this token just also flips RPI5_STANDALONE
-            # so run_rpi5_build appends --standalone/--local-user below.
+            # A COMPOSITE alias: it carries a SECOND axis, so it must never go
+            # through the plain spelling-alias path (that would silently drop the
+            # FDE posture). --role desktop AND --standalone; RPI5_STANDALONE makes
+            # run_rpi5_build append --standalone/--local-user below.
             BUILD_ROLE="desktop"
             RPI5_STANDALONE=true
             ;;
-          "")                           BUILD_ROLE="backend" ;;
-          *) return 1 ;;
+          "") BUILD_ROLE="backend" ;;
+          *)
+            # `be`/`fe` resolve here now: docs/catalog/image-catalog.json publishes
+            # them for platform rpi5, and this channel used to answer `rpi5.be` with
+            # a flat "unsupported" while the spec channel translated it correctly.
+            if ! BUILD_ROLE="$(hugmesh_role_for rpi5 "$p2")"; then
+              return 1
+            fi ;;
         esac
         RPI5_BOARD_OUT="${p3:-rpi5}"
         case "$RPI5_BOARD_OUT" in rpi5|rpi4|rpi3) ;; *) return 1 ;; esac
@@ -822,9 +849,8 @@ resolve_build_target() {
         ;;
       jetson)
         [ "$IMAGE_TYPE" = "client" ] && return 1
-        BUILD_ROLE="${p2:-edge_ai}"
+        if ! BUILD_ROLE="$(hugmesh_role_for jetson "${p2:-edge-ai}")"; then return 1; fi
         JETSON_BOARD_OUT="${p3:-orin-nano}"
-        case "$BUILD_ROLE" in edge_ai|gpu-host|full|desktop) ;; *) return 1 ;; esac
         case "$JETSON_BOARD_OUT" in orin-nano|orin-nano-4gb|orin-nx-8gb|orin-nx-16gb) ;; *) return 1 ;; esac
         PLATFORM="jetson"
         ;;
@@ -931,10 +957,10 @@ resolve_build_target() {
         # Bare legacy token, no platform prefix -> x86 alias.
         case "$IMAGE_TYPE" in
           primary|mesh-extension)
-            case "$p1" in
-              pki|be|fe|omnibus|edge_ai) BUILD_ROLE="$p1" ;;
-              be-gpu)                    BUILD_ROLE="be+gpu" ;;
-              *) return 1 ;;
+            if ! BUILD_ROLE="$(hugmesh_role_for x86 "$p1")"; then return 1; fi
+            case " pki backend frontend backend-gpu omnibus edge-ai " in
+              *" ${BUILD_ROLE} "*) ;;
+              *) return 1 ;;                # a client role is not a node role
             esac
             ;;
           client)
@@ -954,12 +980,26 @@ resolve_build_target() {
   if [ "$IMAGE_TYPE" = "mesh-extension" ]; then
     KEYS_ROLE="mesh-extension"
   else
-    case "$BUILD_ROLE" in
-      pki)          KEYS_ROLE="pki" ;;
-      be|backend)   KEYS_ROLE="backend" ;;
-      fe|frontend)  KEYS_ROLE="frontend" ;;
-      *)            KEYS_ROLE="host" ;;
-    esac
+    # No blanket `*) -> host` catch-all: that silently gave omnibus, edge-ai,
+    # generic and every client role the plain worker keys profile — a node
+    # provisioned with the wrong credentials, reported as success.
+    #
+    # ONE declared exception, and it is a rule rather than a guess: the seven
+    # free-slug boards have NO role axis at all, so BUILD_ROLE is legitimately empty
+    # for them. They provision as client appliances from the plain `host` worker
+    # profile — the same rule scripts/build-all-roles.sh applies in its own
+    # per-platform keys blocks (keys-frite, keys-orangepi5, …).
+    if [ -z "$BUILD_ROLE" ]; then
+      case "$PLATFORM" in
+        frite|orangepi5|orangepi4-lts|orangepizero2|orangepizero2w|orangepizero3|orangepi3-lts)
+          KEYS_ROLE="host" ;;
+        *)
+          die ERROR "platform '${PLATFORM}' resolved with an EMPTY role, but it has a role axis — refusing to pick a KEYS profile for a role nobody named" ;;
+      esac
+    else
+      KEYS_ROLE="$(hugmesh_role_keyprofile "$BUILD_ROLE")" \
+        || die ERROR "no KEYS profile is declared for role '${BUILD_ROLE}' — add it to HUGMESH_ROLE_KEYPROFILE in scripts/_roles-lib.sh (refusing to guess: a wrong keys profile provisions the node with the wrong credentials)"
+    fi
   fi
   return 0
 }
@@ -1048,10 +1088,10 @@ resolve_spec_target() {
     jetson)
       # build-jetson-stage4.sh accepts exactly these (the Studio already maps its
       # jetson-desktop role id down to the builder's `desktop`).
-      case "$BUILD_ROLE" in
-        edge_ai|gpu-host|full|desktop) ;;
-        *) die FAILED "the image-spec resolved to platform=jetson with role='${BUILD_ROLE:-<none>}', which build-jetson-stage4.sh rejects (it accepts only: edge_ai | gpu-host | full | desktop). The Studio does not validate role×platform, so a jetson ImageConfig that leaves role at the base default materializes the x86 client role 'standalone-thick' — set a jetson role explicitly." ;;
-      esac
+      _js="$BUILD_ROLE"
+      if ! BUILD_ROLE="$(hugmesh_role_for jetson "$_js")"; then
+        die FAILED "the image-spec resolved to platform=jetson with role='${_js:-<none>}', which build-jetson-stage4.sh rejects (it accepts only: ${HUGMESH_ROLES_JETSON}, plus the aliases declared in scripts/_roles-lib.sh). The Studio does not validate role×platform, so a jetson ImageConfig that leaves role at the base default materializes the x86 client role 'standalone-thick' — set a jetson role explicitly."
+      fi
       ;;
     frite|orangepi5|orangepizero2|orangepizero2w|orangepizero3|orangepi3-lts|orangepi4-lts)
       # --flavor both emits TWO artifacts (live + installer); the ingest contract
@@ -1078,12 +1118,26 @@ resolve_spec_target() {
   if [ "$IMAGE_TYPE" = "mesh-extension" ]; then
     KEYS_ROLE="mesh-extension"
   else
-    case "$BUILD_ROLE" in
-      pki)          KEYS_ROLE="pki" ;;
-      be|backend)   KEYS_ROLE="backend" ;;
-      fe|frontend)  KEYS_ROLE="frontend" ;;
-      *)            KEYS_ROLE="host" ;;
-    esac
+    # No blanket `*) -> host` catch-all: that silently gave omnibus, edge-ai,
+    # generic and every client role the plain worker keys profile — a node
+    # provisioned with the wrong credentials, reported as success.
+    #
+    # ONE declared exception, and it is a rule rather than a guess: the seven
+    # free-slug boards have NO role axis at all, so BUILD_ROLE is legitimately empty
+    # for them. They provision as client appliances from the plain `host` worker
+    # profile — the same rule scripts/build-all-roles.sh applies in its own
+    # per-platform keys blocks (keys-frite, keys-orangepi5, …).
+    if [ -z "$BUILD_ROLE" ]; then
+      case "$PLATFORM" in
+        frite|orangepi5|orangepi4-lts|orangepizero2|orangepizero2w|orangepizero3|orangepi3-lts)
+          KEYS_ROLE="host" ;;
+        *)
+          die ERROR "platform '${PLATFORM}' resolved with an EMPTY role, but it has a role axis — refusing to pick a KEYS profile for a role nobody named" ;;
+      esac
+    else
+      KEYS_ROLE="$(hugmesh_role_keyprofile "$BUILD_ROLE")" \
+        || die ERROR "no KEYS profile is declared for role '${BUILD_ROLE}' — add it to HUGMESH_ROLE_KEYPROFILE in scripts/_roles-lib.sh (refusing to guess: a wrong keys profile provisions the node with the wrong credentials)"
+    fi
   fi
 }
 

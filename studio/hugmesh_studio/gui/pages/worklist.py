@@ -63,13 +63,13 @@ def _infra_service_options(platform: str) -> list[tuple[str, tuple[str, ...]]]:
 from ._widgets import NoWheelComboBox, status_badge
 
 # The GPU-bearing mesh roles (Notes-column callout); mirrors the builder's GPU roles.
-_GPU_ROLES = ("be+gpu", "edge_ai", "gpu-host")
+_GPU_ROLES = ("backend-gpu", "edge-ai", "be+gpu", "edge_ai", "gpu-host")
 
 # spec 2c: PKI + Backend + Frontend are the minimum a mesh needs and are meant to be
 # built TOGETHER (the "Select the required trio" convenience checks their standard x86
 # rows). GPU / Edge-AI nodes are deferrable — buildable here or later from a provided
 # config — so they are deliberately NOT part of this trio.
-_REQUIRED_TRIO = ("pki", "be", "fe")
+_REQUIRED_TRIO = ("pki", "backend", "frontend")
 
 # Per-platform structural axes surfaced as inline combos (only where the platform HAS
 # the axis — the same tables RolePage drives the single-image board/flavor knobs from).

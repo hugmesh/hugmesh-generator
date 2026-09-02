@@ -47,23 +47,22 @@ Below that is a paragraph about **this machine**, generated from a host probe:
 - If neither exists, it says in red that this machine cannot build images yet, and names the fix. Under WSL that fix is Docker Desktop's per-distro WSL Integration checkbox (Settings → Resources → WSL Integration), not a reinstall — and on WSL1, converting the distro to WSL2 first. You can still configure and save an image here and build it elsewhere.
 - Either way, if the generator directory is on a Windows drive **and** this is WSL, or on a network filesystem, a red **SLOW FILESYSTEM** warning appears. Read it. That build does not fail — it stops appearing to move, and you will read it as a hang. The Windows-drive remedy is to put the repo on the Linux filesystem (`git clone … ~/Github/hugmesh-generator`); the network-filesystem remedy is to copy it onto a local disk. The check is made on the filesystem type from `/proc/mounts`, so a symlink from `~/Github` into `/mnt/c` is caught too; only an unreadable mount table falls back to the shape of the path.
 
-Then three cards. Pick one:
+Then two cards. Pick one:
 
 | Card | Goes to |
 | --- | --- |
 | **Start building** | the build menu (`mode`) |
-| **Start a local mesh** | the local Docker mesh flow, skipping the menu entirely |
 | **Review prior sessions** | the Prior-sessions screen |
 
 **Start building** is pre-selected, so pressing Next or Enter without touching anything takes the ordinary path. **Clicking a card both selects it and advances** — there is no confirm step. Space, Return or Enter on a focused card does the same, and the arrow keys move the selection between cards. Back works normally if you overshoot.
 
-Picking **Start a local mesh** here sets a transient wizard flag and jumps straight to the local-mesh page. That flag is never written into the saved configuration; the config's `mode` stays an image mode regardless.
+(A third card, **Start a local mesh**, was removed on 2026-08-26 — it duplicated the build menu's own **Local Docker mesh** card. That flow is reached through **Start building** now; see `STUDIO-WIZARD-FLOW.md`.)
 
 One exception to all of this: a **Restart** from a prior session sets the wizard's start page to the build-progress page. You never see this screen on that path.
 
 ### Prior sessions — only if you asked for it
 
-Reached only from Welcome's third card — nothing else routes into it. Its own Next continues to the build menu, carrying whatever you loaded, so it is a stop on the way rather than a dead end. If you have nothing to reuse, skip it.
+Reached only from Welcome's second card — nothing else routes into it. Its own Next continues to the build menu, carrying whatever you loaded, so it is a stop on the way rather than a dead end. If you have nothing to reuse, skip it.
 
 **Load config… / Save config…** One loader handles both file shapes: a flat single-image config, and a `hugmesh-worklist/v1` envelope. You do not have to know which you have.
 
@@ -146,7 +145,7 @@ Picking one of the seven tool cards raises a flag on the wizard, not a field in 
 
 ### Local Docker mesh
 
-Runs a dockerized HugMesh mesh on this machine. No image build, no server hardware. You can also reach it straight from Welcome's "Start a local mesh" card.
+Runs a dockerized HugMesh mesh on this machine. No image build, no server hardware.
 
 Two tabs, and they are alternatives.
 
@@ -326,7 +325,7 @@ Then it asks for consent, as an inline checkbox: *"I understand: k8s will stop t
 
 Next stays disabled until three things hold: the box is ticked, no teardown is in flight, and no cluster is still known to be up. After a teardown the page re-probes rather than trusting the exit status, because `kind delete cluster` exits 0 for a cluster that was never there and a failed or cancelled run can leave one half gone. The consent box is cleared again on every entry.
 
-On Next the page commits the mesh chain itself: `cfg.mode = "mesh"`, the mesh default role if the current one does not belong, source bundling off, mesh defaults applied. It then installs the abbreviation — the worklist offers only `laptop` plus every node-class mesh role (`pki`, `be`, `fe`, `be+gpu`, `omnibus`, `edge_ai`, `full`, `gpu-host`). The person-desktop variants are withdrawn, because a local cloud's devices are its nodes plus your laptop. Any other Mode choice made later lifts the restriction.
+On Next the page commits the mesh chain itself: `cfg.mode = "mesh"`, the mesh default role if the current one does not belong, source bundling off, mesh defaults applied. It then installs the abbreviation — the worklist offers only `laptop` plus every node-class mesh role (`pki`, `backend`, `frontend`, `backend-gpu`, `omnibus`, `edge-ai`). The person-desktop variants are withdrawn, because a local cloud's devices are its nodes plus your laptop. Any other Mode choice made later lifts the restriction.
 
 The import is one-shot per entry, so edits you make later — the cluster domain on the Network step, say — are not clobbered when the Build screen re-collects every visited page. Imported superadmins land on the orchestration superdomain and everyone else on the imported apex, and the Users table is made reachable so you can see and edit them.
 
@@ -470,7 +469,7 @@ One trap, and it is destructive. Choosing the default card clears the domains li
 
 ### Domains & their services
 
-Skipped in standalone. In mesh it appears only if you chose "Add more domains" on the previous screen. In cloud it appears unless the role is one of the x86 cluster-node roles (`pki`, `be`, `fe`, `be+gpu`, `omnibus`, `edge_ai`) — which the cloud picker does not offer, so in practice it always appears there unless a loaded config carries one.
+Skipped in standalone. In mesh it appears only if you chose "Add more domains" on the previous screen. In cloud it appears unless the role is one of the x86 cluster-node roles (`pki`, `backend`, `frontend`, `backend-gpu`, `omnibus`, `edge-ai`) — which the cloud picker does not offer, so in practice it always appears there unless a loaded config carries one.
 
 Each row is a domain: **Domain**, **Title**, **Optional services** (per-domain slugs, space or comma separated; empty means the cluster-wide set applies), **Applies to** and **Sign-in**. The last two are mesh-only and hidden in cloud.
 
@@ -506,7 +505,7 @@ Domain is a dropdown of the orchestration superdomain plus every name from the D
 
 A loaded row whose domain is not defined on the Domains page is kept and flagged `(not defined)` with an orange warning. It is never silently rewritten. Rows with a blank username are dropped when you leave.
 
-When you see it: never in standalone. In mesh, only if you chose the second card on the previous screen — that is a separate question from the domains opt-in, and either answer combines with either. In the mesh desktop client the gate is whether the image's role is one of the x86 cluster-node roles (`pki`, `be`, `fe`, `be+gpu`, `omnibus`, `edge_ai`), and that flow offers none of them, so in practice the table always appears there.
+When you see it: never in standalone. In mesh, only if you chose the second card on the previous screen — that is a separate question from the domains opt-in, and either answer combines with either. In the mesh desktop client the gate is whether the image's role is one of the x86 cluster-node roles (`pki`, `backend`, `frontend`, `backend-gpu`, `omnibus`, `edge-ai`), and that flow offers none of them, so in practice the table always appears there.
 
 Downstream, these rows are provisioning data for the mesh manifest and the identity provider. One thing can reach the build, and only on the mesh desktop client: with the account tier left on `derive`, `--person-role` falls back to the first row's role. A mesh build does not take it from here — there the flag comes from the person named on the worklist's own desktop row.
 
