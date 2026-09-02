@@ -95,7 +95,7 @@ def test_statuses_are_honest_off_when_nothing_runs(gen):
 def test_summary_names_the_front_door(gen):
     j = _at_table(gen)
     text = "\n".join(j.lines())
-    assert "gateway x86/fe" in text                  # fe wins the gateway rule
+    assert "gateway x86/frontend" in text            # frontend wins the gateway rule
     assert "front door" in text and "https://127.0.0.1:" in text
 
 
@@ -198,7 +198,7 @@ def test_detail_carries_the_whole_mesh_save_hint_and_its_budget(gen):
     # and folded into ONE line because they share the core's reason verbatim
     unsaveable = [ln for ln in j.lines() if ln.strip().startswith("no device ")]
     assert len(unsaveable) == 1
-    assert "rpi5/pki, x86/be, x86/fe" in unsaveable[0]
+    assert "rpi5/pki, x86/backend, x86/frontend" in unsaveable[0]
     assert "--keep-alive?" in unsaveable[0]      # the core's own wording, kept
 
 
