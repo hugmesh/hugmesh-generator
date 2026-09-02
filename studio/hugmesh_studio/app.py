@@ -105,11 +105,18 @@ def main(argv=None) -> int:
                     help="with --print-commands/--print-specs: print ONLY the image at this "
                          "0-based materialized index (default: every image)")
     ap.add_argument("--askpass", action="store_true",
-                    help="internal: the GUI SUDO_ASKPASS helper for a GUI-launched native "
-                         "build — pop a password dialog and print the entered password to "
-                         "stdout (exit non-zero on cancel so sudo aborts). Set as "
-                         "SUDO_ASKPASS for `sudo -A` by core.build_driver so the prompt is "
-                         "a dialog, never an invisible terminal.")
+                    help="the SUDO_ASKPASS helper: acquire the admin password and print "
+                         "ONLY it to stdout for `sudo -A` to consume (exit non-zero on "
+                         "cancel so sudo aborts elevation — the build never runs "
+                         "un-elevated). Source order: $HUGMESH_STUDIO_SUDO_PASSWORD, then "
+                         "$HUGMESH_STUDIO_ASKPASS_COMMAND, then a Qt dialog when a display "
+                         "is reachable, then a terminal prompt. Set as SUDO_ASKPASS for "
+                         "`sudo -A` by core.build_driver.")
+    ap.add_argument("--askpass-no-gui", action="store_true",
+                    help="like --askpass but NEVER pops the Qt dialog even on a desktop "
+                         "with a live display — for CLI test automation / headless "
+                         "elevation (#221). Uses $HUGMESH_STUDIO_SUDO_PASSWORD, then "
+                         "$HUGMESH_STUDIO_ASKPASS_COMMAND, then a terminal prompt.")
     ap.add_argument("--config", help="config JSON (with --print-command/--print-commands/--print-specs)")
     ap.add_argument("--backend", choices=["auto", "native", "docker"], default="auto",
                     help="build backend for --print-command (auto = host default)")
@@ -456,23 +463,15 @@ def main(argv=None) -> int:
               + (" (artifacts removed)" if args.delete_artifacts else " (record only)"))
         return 0
 
-    if args.askpass:
-        # The GUI SUDO_ASKPASS helper: sudo -A execs this to obtain the password. Pop a
-        # modal Qt password dialog and print the entry to stdout; a cancel returns non-zero
-        # so sudo aborts elevation cleanly instead of hanging. Because it always renders a
-        # DIALOG, a GUI-launched native build never prompts into an invisible terminal even
-        # when sudo's credential cache misses. Minimal QApplication; no wizard/tray.
-        from .gui.qt import QtWidgets
-        _app = QtWidgets.QApplication(sys.argv if argv is None else [sys.argv[0], *argv])
-        prompt = (os.environ.get("SUDO_PROMPT")
-                  or "Administrator password required to build the image:")
-        pw, ok = QtWidgets.QInputDialog.getText(
-            None, "HugMesh Image Studio — Administrator access", prompt,
-            QtWidgets.QLineEdit.EchoMode.Password)
-        if not ok:
-            return 1
-        sys.stdout.write(pw + "\n")
-        return 0
+    if args.askpass or args.askpass_no_gui:
+        # The SUDO_ASKPASS helper: `sudo -A` execs this to obtain the password. Qt-free
+        # core (core/askpass.py) acquires it and writes ONLY the password to stdout for
+        # sudo to consume; a cancel/no-password returns non-zero so sudo ABORTS elevation
+        # instead of the build running un-elevated (the #222 failure). --askpass-no-gui
+        # forces the non-dialog path for CLI/headless automation (#221). Every prompt and
+        # diagnostic goes to stderr, never the password channel.
+        from .core.askpass import run_askpass
+        return run_askpass(argv, allow_gui=not args.askpass_no_gui)
 
     # GUI
     from . import __version__, advanced_mode
