@@ -522,7 +522,7 @@ def test_mesh_worklist_gets_package_rows_and_wired_log_roots(monkeypatch, qapp, 
     _install_fake_genkeys(monkeypatch)
     wl = WorklistConfig(base=_mesh_base(tmp_path),
                         entries=[WorklistEntry(role="pki", platform="x86"),
-                                 WorklistEntry(role="be", platform="rpi5")])
+                                 WorklistEntry(role="backend", platform="rpi5")])
     wiz.worklist = wl
     wiz.build_backend = None
     wiz.generate_node_keys = True
@@ -530,7 +530,7 @@ def test_mesh_worklist_gets_package_rows_and_wired_log_roots(monkeypatch, qapp, 
     page.initializePage()
     _run_to_completion(qapp, page)
     assert page.isComplete()
-    for i, eid in enumerate(("pki.x86", "be.rpi5")):
+    for i, eid in enumerate(("pki.x86", "backend.rpi5")):
         row = page._rows[i]
         assert row.log_root == os.path.join(
             page._session.workdir, f"wl-{eid}", "sysroot", "var", "log",

@@ -126,7 +126,7 @@ say "── the lane scripts parse ──"
 if bash -n "${SCRIPT}" 2>/dev/null; then _ok; else _bad "run-qemu-e2e.sh does not parse"; fi
 
 say "── --list: valid JSON, needs no root, boots nothing ──"
-out="$(bash "${SCRIPT}" -w "${art}" --role be --list 2>/dev/null)"
+out="$(bash "${SCRIPT}" -w "${art}" --role backend --list 2>/dev/null)"
 rc=$?
 ok_eq "${rc}" "0"
 if printf '%s' "${out}" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
@@ -137,7 +137,7 @@ fi
 ok_eq "$(printf '%s' "${out}" | json_get 'd["lane"]')" '"qemu-playwright"'
 ok_eq "$(printf '%s' "${out}" | json_get 'd["needs_root"]')" 'true'
 ok_eq "$(printf '%s' "${out}" | json_get 'd["target"]')" '"x86"'
-ok_eq "$(printf '%s' "${out}" | json_get 'd["role"]')" '"be"'
+ok_eq "$(printf '%s' "${out}" | json_get 'd["role"]')" '"backend"'
 ok_eq "$(printf '%s' "${out}" | json_get 'd["ui_port"]')" '8443'
 ok_eq "$(printf '%s' "${out}" | json_get 'd["base_url"]')" '"https://localhost:8443"'
 ok_eq "$(printf '%s' "${out}" | json_get 'len(d["phases"])')" '5'
@@ -199,7 +199,7 @@ ok_eq "$(printf '%s' "${out5}" | json_get 'd["playwright"]')" 'null'
 ok_eq "$(printf '%s' "${out5}" | json_get 'len(d["phases"])')" '5'
 
 say "── --dry-run needs no root either ──"
-dry="$(bash "${SCRIPT}" -w "${art}" --role be --dry-run 2>&1)"
+dry="$(bash "${SCRIPT}" -w "${art}" --role backend --dry-run 2>&1)"
 ok_eq "$?" "0"
 ok_has "dry-run" "${dry}"
 ok_has "would run" "${dry}"
@@ -210,7 +210,7 @@ say "── the non-root refusal: containerized route, and NEVER sudo ──"
 # below turns that into a RED assertion instead of a real VM.
 if [ -n "${REFUSAL_PATH}" ]; then
     ref="$(PATH="${REFUSAL_PATH}" LAUNCH_X86=/bin/false LAUNCH_PI=/bin/false \
-           bash "${SCRIPT}" -w "${art}" --role be 2>&1)"
+           bash "${SCRIPT}" -w "${art}" --role backend 2>&1)"
     rc=$?
     if [ "${rc}" -ne 0 ]; then _ok; else _bad "a non-root boot attempt exited 0"; fi
     ok_has "--privileged" "${ref}"
@@ -224,7 +224,7 @@ if [ -n "${REFUSAL_PATH}" ]; then
     # It offers the two verbs that DO work, echoing back what was actually typed.
     ok_has "--list" "${ref}"
     ok_has "--dry-run" "${ref}"
-    ok_has "-w ${art} --role be --list" "${ref}"
+    ok_has "-w ${art} --role backend --list" "${ref}"
     # NEGATIVE CONTROL: the refusal must not claim to have booted anything.
     ok_not "[1/5]" "${ref}"
     ok_not "Powering down" "${ref}"
@@ -307,19 +307,19 @@ if command -v make >/dev/null 2>&1; then
     ok_not "Unknown arg" "${mk}"
     ok_eq "$(printf '%s' "${mk}" | json_get 'd["playwright_args"]')" \
           '["--grep", "@smoke", "specs/01-frontpage.spec.ts"]'
-    ok_eq "$(printf '%s' "${mk}" | json_get 'd["role"]')" '"be+gpu"'
+    ok_eq "$(printf '%s' "${mk}" | json_get 'd["role"]')" '"backend-gpu"'
 
     # ...and unset E2E_ARGS must NOT emit a dangling separator (M18's twin, at the
     # Makefile layer this time): the default is still the whole suite.
     plain="$(cd "${REPO}" && make -n e2e 2>/dev/null | grep 'run-qemu-e2e\.sh' || true)"
     ok_not " -- " "${plain}"
-    ok_has "--role be+gpu" "${plain}"
+    ok_has "--role backend-gpu" "${plain}"
 
     # NEGATIVE CONTROL — the bug exactly as it shipped. Both of these are what the
     # reviewer ran, and both must still be hard errors, or the separator is theatre.
-    b1="$(bash "${SCRIPT}" --list -w "${art}" --role be --grep @smoke 2>&1 || true)"
+    b1="$(bash "${SCRIPT}" --list -w "${art}" --role backend --grep @smoke 2>&1 || true)"
     ok_has "Unknown arg: --grep" "${b1}"
-    b2="$(bash "${SCRIPT}" --list -w "${art}" --role be 01-frontpage 2>&1 || true)"
+    b2="$(bash "${SCRIPT}" --list -w "${art}" --role backend 01-frontpage 2>&1 || true)"
     ok_has "Unknown arg: 01-frontpage" "${b2}"
 else
     SKIP=$((SKIP+1))

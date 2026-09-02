@@ -41,19 +41,19 @@ def test_entry_id_derived_from_role_platform():
 def test_entry_id_stable_across_board_edit():
     """board/flavor are ATTRIBUTES — editing them must never re-key the entry (the
     dangling-ref hazard the synthesis fixed)."""
-    a = WorklistEntry(role="be", platform="rpi5", board="rpi5")
-    b = WorklistEntry(role="be", platform="rpi5", board="rpi4")
-    assert a.id == b.id == "be.rpi5"
+    a = WorklistEntry(role="backend", platform="rpi5", board="rpi5")
+    b = WorklistEntry(role="backend", platform="rpi5", board="rpi4")
+    assert a.id == b.id == "backend.rpi5"
 
 
 def test_entry_explicit_id_honored():
-    e = WorklistEntry(role="be", platform="rpi5", id="legacy.id")
+    e = WorklistEntry(role="backend", platform="rpi5", id="legacy.id")
     assert e.id == "legacy.id"
 
 
 def test_entry_build_subdir_derived():
-    e = WorklistEntry(role="edge_ai", platform="jetson")
-    assert e.build_subdir == "wl-edge_ai.jetson"
+    e = WorklistEntry(role="edge-ai", platform="jetson")
+    assert e.build_subdir == "wl-edge-ai.jetson"
 
 
 # ---- wire format: round-trip / legacy-wrap / loud-reject / secrets -------------
@@ -63,12 +63,12 @@ def _envelope():
                        brand_title="Acme", org="Acme-Inc", cluster_domain="acme.example",
                        superdomain="core.acme.internal")
     base.domains = [Domain(name="acme.example", title="Acme"),
-                    Domain(name="team.acme.example", title="Team", images=["be.rpi5"])]
+                    Domain(name="team.acme.example", title="Team", images=["backend.rpi5"])]
     base.users = [User(username="root-admin", domain="core.acme.internal", role="superadmin")]
     entries = [WorklistEntry(role="omnibus", platform="x86"),
-               WorklistEntry(role="be", platform="rpi5", board="rpi5",
+               WorklistEntry(role="backend", platform="rpi5", board="rpi5",
                              packages_add="app-misc/tmux"),
-               WorklistEntry(role="edge_ai", platform="jetson", encrypt_root="on")]
+               WorklistEntry(role="edge-ai", platform="jetson", encrypt_root="on")]
     return WorklistConfig(base=base, entries=entries)
 
 
@@ -78,7 +78,7 @@ def test_envelope_round_trips_exact():
     assert d["schema"] == WORKLIST_SCHEMA
     wl2 = WorklistConfig.from_dict(d)
     assert wl2.to_dict() == d
-    assert [e.id for e in wl2.entries] == ["omnibus.x86", "be.rpi5", "edge_ai.jetson"]
+    assert [e.id for e in wl2.entries] == ["omnibus.x86", "backend.rpi5", "edge-ai.jetson"]
     assert wl2.base.superdomain == "core.acme.internal"
     assert wl2.entries[1].packages_add == "app-misc/tmux"
 
@@ -91,7 +91,7 @@ def test_load_any_envelope(tmp_path):
     assert loaded is not None
     assert loaded.schema == WORKLIST_SCHEMA
     assert base.brand == "acme"
-    assert [e.id for e in loaded.entries] == ["omnibus.x86", "be.rpi5", "edge_ai.jetson"]
+    assert [e.id for e in loaded.entries] == ["omnibus.x86", "backend.rpi5", "edge-ai.jetson"]
 
 
 def test_load_any_flat_config_unchanged(tmp_path):
@@ -136,10 +136,10 @@ def test_materialize_rejects_duplicate_entry_ids():
     driver and clobber a build tree / node-keys dir."""
     base = ImageConfig(mode="mesh", brand="acme")
     wl = WorklistConfig(base=base, entries=[
-        WorklistEntry(role="edge_ai", platform="jetson", board="agx"),
-        WorklistEntry(role="edge_ai", platform="jetson", board="orin"),
+        WorklistEntry(role="edge-ai", platform="jetson", board="agx"),
+        WorklistEntry(role="edge-ai", platform="jetson", board="orin"),
     ])
-    with pytest.raises(ValueError, match=r"share id 'edge_ai\.jetson'"):
+    with pytest.raises(ValueError, match=r"share id 'edge-ai\.jetson'"):
         wl.materialize()
 
 
@@ -171,21 +171,21 @@ def test_save_blanks_base_secrets_and_aggregates_warnings(tmp_path):
 def test_materialize_order_matches_entries():
     wl = _envelope()
     out = wl.materialize()
-    assert [e.id for e, _ in out] == ["omnibus.x86", "be.rpi5", "edge_ai.jetson"]
+    assert [e.id for e, _ in out] == ["omnibus.x86", "backend.rpi5", "edge-ai.jetson"]
 
 
 def test_materialize_sets_structural_axes_and_build_subdir():
     wl = _envelope()
     out = dict((e.id, cfg) for e, cfg in wl.materialize())
-    be = out["be.rpi5"]
-    assert be.role == "be" and be.platform == "rpi5" and be.board == "rpi5"
-    assert be.build_subdir == "wl-be.rpi5"
+    be = out["backend.rpi5"]
+    assert be.role == "backend" and be.platform == "rpi5" and be.board == "rpi5"
+    assert be.build_subdir == "wl-backend.rpi5"
 
 
 def test_materialize_jetson_encrypt_root_forced_off():
     """A jetson entry is forced off even with encrypt_root='on' (builder hard-block)."""
     wl = WorklistConfig(base=ImageConfig(mode="mesh", encrypt_root=True),
-                        entries=[WorklistEntry(role="edge_ai", platform="jetson",
+                        entries=[WorklistEntry(role="edge-ai", platform="jetson",
                                                encrypt_root="on")])
     _e, cfg = wl.materialize()[0]
     assert cfg.encrypt_root is False
@@ -194,13 +194,13 @@ def test_materialize_jetson_encrypt_root_forced_off():
 def test_materialize_encrypt_root_default_inherits_base():
     base = ImageConfig(mode="mesh", encrypt_root=True)
     wl = WorklistConfig(base=base, entries=[
-        WorklistEntry(role="be", platform="rpi5", encrypt_root="default"),
-        WorklistEntry(role="fe", platform="rpi5", encrypt_root="off"),
+        WorklistEntry(role="backend", platform="rpi5", encrypt_root="default"),
+        WorklistEntry(role="frontend", platform="rpi5", encrypt_root="off"),
         WorklistEntry(role="pki", platform="rpi5", encrypt_root="on"),
     ])
     out = dict((e.id, cfg.encrypt_root) for e, cfg in wl.materialize())
-    assert out["be.rpi5"] is True     # inherits base default
-    assert out["fe.rpi5"] is False    # explicit off
+    assert out["backend.rpi5"] is True     # inherits base default
+    assert out["frontend.rpi5"] is False    # explicit off
     assert out["pki.rpi5"] is True    # explicit on
 
 
@@ -229,7 +229,7 @@ def test_materialize_domain_filter_table_order_primary_first():
     base = ImageConfig(mode="mesh", role="omnibus", platform="x86")
     base.domains = [
         Domain(name="primary.example", images=[]),                 # all images
-        Domain(name="only-be.example", images=["be.rpi5"]),        # not this entry
+        Domain(name="only-be.example", images=["backend.rpi5"]),        # not this entry
         Domain(name="second.example", images=["omnibus.x86"]),     # this entry
     ]
     wl = WorklistConfig(base=base, entries=[WorklistEntry(role="omnibus", platform="x86")])
@@ -241,10 +241,10 @@ def test_materialize_domain_stripped_for_arm():
     """--domains is x86-only in emission — strip_platform_unsupported blanks cfg.domains
     on ARM. The table-order filter (step 2) still runs BEFORE the strip (step 5), so the
     ordering concern is honored even though ARM ends up with no domains."""
-    base = ImageConfig(mode="mesh", role="be", platform="rpi5")
+    base = ImageConfig(mode="mesh", role="backend", platform="rpi5")
     base.domains = [Domain(name="a.example", images=[]),
-                    Domain(name="b.example", images=["be.rpi5"])]
-    wl = WorklistConfig(base=base, entries=[WorklistEntry(role="be", platform="rpi5")])
+                    Domain(name="b.example", images=["backend.rpi5"])]
+    wl = WorklistConfig(base=base, entries=[WorklistEntry(role="backend", platform="rpi5")])
     _e, cfg = wl.materialize()[0]
     assert cfg.domains == []
 
@@ -364,7 +364,7 @@ def test_envelope_conforms_to_frozen_schema():
 # builder-valid command; already-valid inputs stay byte-identical.
 
 @pytest.mark.parametrize("platform,expect_role", [
-    ("jetson", "edge_ai"),   # build-jetson-stage4.sh:84 ROLE="edge_ai" (DEFAULT)
+    ("jetson", "edge-ai"),   # build-jetson-stage4.sh:84 ROLE="edge-ai" (DEFAULT)
     ("rpi5", "generic"),     # build-rpi5-stage4.sh:99 ROLE="generic"
     ("frite", "frite"),      # ROLE_CHOICES role-id == platform name (no --role emitted)
     ("orangepi5", "orangepi5"),
@@ -383,7 +383,7 @@ def test_materialize_unset_role_resolves_to_platform_default(platform, expect_ro
 
 
 @pytest.mark.parametrize("platform,expect_role", [
-    ("jetson", "edge_ai"),
+    ("jetson", "edge-ai"),
     ("rpi5", "generic"),
 ])
 def test_materialize_x86_default_role_leak_resolved_for_role_platforms(platform, expect_role):
@@ -460,8 +460,8 @@ def test_materialize_valid_explicit_role_flavor_byte_identical():
 def test_resolve_platform_defaults_is_noop_for_valid_inputs():
     """The resolver mutates nothing for a config that already carries a valid role and
     (for ISO platforms) a flavor."""
-    for cfg in (ImageConfig(role="edge_ai", platform="jetson"),
-                ImageConfig(role="be", platform="rpi5"),
+    for cfg in (ImageConfig(role="edge-ai", platform="jetson"),
+                ImageConfig(role="backend", platform="rpi5"),
                 ImageConfig(role="frite", platform="frite", flavor="live"),
                 ImageConfig(role="standalone-thick", platform="x86")):
         before = (cfg.role, cfg.flavor)
@@ -477,7 +477,7 @@ def test_resolve_platform_defaults_is_noop_for_valid_inputs():
 # for ROLE_CLIENT roles (:3676). That killed 5 x86 node images on boost[python] and 5
 # more on libpwquality[python] (session 20260716-235722-54d2f7), ~16min each.
 
-X86_NODE_ROLES_UNDER_TEST = ("pki", "be", "fe", "be+gpu", "omnibus", "edge_ai")
+X86_NODE_ROLES_UNDER_TEST = ("pki", "backend", "frontend", "backend-gpu", "omnibus", "edge-ai")
 # The two values that flip the builder's WANT_CALAMARES true (:1246).
 CALAMARES_TRIGGERS = ("all", "calamares")
 
@@ -506,7 +506,7 @@ def test_installer_ui_desktop_class_untouched(mode, role):
     assert cfg.installer_ui == "all"
 
 
-@pytest.mark.parametrize("plat,role", [("rpi5", "pki"), ("rpi5", "be"), ("jetson", "edge_ai")])
+@pytest.mark.parametrize("plat,role", [("rpi5", "pki"), ("rpi5", "backend"), ("jetson", "edge-ai")])
 def test_installer_ui_non_x86_untouched(plat, role):
     """installer_ui is _X86-only (PLATFORM_FIELD_SUPPORT), matching the evidence that the
     rpi5/jetson entries of the failed session survived."""
@@ -592,7 +592,7 @@ def test_platform_default_role_map_grounded_in_catalog():
         assert role in roles_for_platform(platform), \
             f"{platform} default role {role!r} not in roles_for_platform({platform})"
     assert PLATFORM_DEFAULT_ROLE["rpi5"] == "generic"     # build-rpi5-stage4.sh:99
-    assert PLATFORM_DEFAULT_ROLE["jetson"] == "edge_ai"   # build-jetson-stage4.sh:84
+    assert PLATFORM_DEFAULT_ROLE["jetson"] == "edge-ai"   # build-jetson-stage4.sh:84
 
 
 def test_roles_for_platform_inversion():
@@ -604,8 +604,8 @@ def test_roles_for_platform_inversion():
     assert roles_for_platform("orangepizero2w") == frozenset({"orangepizero2w"})
     assert roles_for_platform("orangepizero3") == frozenset({"orangepizero3"})
     assert roles_for_platform("orangepi3-lts") == frozenset({"orangepi3-lts"})
-    assert roles_for_platform("rpi5") == frozenset({"generic", "rpi5-desktop", "pki", "be", "fe"})
-    assert roles_for_platform("jetson") == frozenset({"edge_ai", "full", "gpu-host", "jetson-desktop"})
+    assert roles_for_platform("rpi5") == frozenset({"generic", "rpi5-desktop", "pki", "backend", "frontend"})
+    assert roles_for_platform("jetson") == frozenset({"edge-ai", "omnibus", "backend-gpu", "jetson-desktop"})
     assert "standalone-thick" in roles_for_platform("x86")
     assert roles_for_platform("") == roles_for_platform("x86")   # "" defaults to x86
 

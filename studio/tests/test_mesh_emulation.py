@@ -52,7 +52,7 @@ def _device(planned, *, state="running", port=22301, key="/w/keys/id_ed25519"):
 
 def test_plan_covers_every_session_image_in_boot_order(plan):
     _gen, p = plan
-    assert [d.label for d in p.devices] == ["rpi5/pki", "x86/be", "x86/fe"]
+    assert [d.label for d in p.devices] == ["rpi5/pki", "x86/backend", "x86/frontend"]
     assert [d.index for d in p.devices] == [0, 1, 2]
     assert all(os.path.isabs(d.image) for d in p.devices)
 
@@ -102,7 +102,7 @@ def test_plan_refuses_a_session_larger_than_the_port_ranges(session):
 
 def test_gateway_prefers_the_fe_role_and_the_url_names_its_port(plan):
     _gen, p = plan
-    assert p.gateway_label == "x86/fe"
+    assert p.gateway_label == "x86/frontend"
     gw = p.gateway
     assert me.front_door_url(p) == f"https://127.0.0.1:{gw.ui_port}/"
 
@@ -146,10 +146,10 @@ def test_start_device_argv_reenters_the_boot_path_for_one_label(plan):
     """The GUI/TUI-facing spelling (--only, substring) until T3/T4 move those
     surfaces onto core.emulation.start_device_argv, which uses --only-exact."""
     gen, p = plan
-    d = p.device("x86/be")
+    d = p.device("x86/backend")
     argv = me.start_device_argv(gen, p, d)
     assert "--keep-alive" in argv
-    assert argv[argv.index("--only") + 1] == "x86/be"
+    assert argv[argv.index("--only") + 1] == "x86/backend"
 
 
 def test_stop_argvs_are_the_runners_own_verbs(plan):
@@ -182,7 +182,7 @@ def test_stop_argvs_can_carry_the_meshes_work_dir(plan):
 
 def test_sections_are_off_for_a_device_that_never_registered(plan):
     _gen, p = plan
-    d = p.device("x86/be")
+    d = p.device("x86/backend")
     stats = me.section_statuses(d, None, None)
     assert set(stats) == set(me.SECTIONS)
     assert stats["boot"][0] == me.ST_OFF
@@ -206,7 +206,7 @@ def test_sections_read_ok_for_a_running_passing_gateway(plan):
 
 def test_sections_state_failure_and_pending_honestly(plan):
     _gen, p = plan
-    d = p.device("x86/be")
+    d = p.device("x86/backend")
     dev = _device(d)
     failed = me.section_statuses(
         d, dev, {"label": d.label, "status": "FAIL",

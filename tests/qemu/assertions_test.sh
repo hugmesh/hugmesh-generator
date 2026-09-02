@@ -73,14 +73,18 @@ exit 0
 STUB
 chmod +x "${work}/plan-stub.sh" "${work}/launch-stub.sh"
 
-# A resolvable, within-limit artifact for the x86/be+gpu row (1 MiB << 9730 MiB ceiling).
-bdir="${work}/boot-wd"; mkdir -p "${bdir}"; truncate -s 1M "${bdir}/hugmesh-x86-be+gpu-prod-ts.img"
+# A resolvable, within-limit artifact for the x86/backend-gpu row (1 MiB << 9730 MiB
+# ceiling). The row id follows tests/build-matrix/matrix.tsv's role column, which is
+# the ONE role vocabulary (scripts/_roles-lib.sh) — `x86/be+gpu` names no matrix cell
+# any more, and --only on a non-existent cell selects ZERO rows, which reads exactly
+# like a driver that stopped working.
+bdir="${work}/boot-wd"; mkdir -p "${bdir}"; truncate -s 1M "${bdir}/hugmesh-x86-backend-gpu-prod-ts.img"
 
 out="$(HUGMESH_QEMU_E2E=1 \
       SNAP_QEMU_PLAN_CMD="bash ${work}/plan-stub.sh" \
       SNAP_QEMU_LAUNCH_CMD="bash ${work}/launch-stub.sh" \
-      bash "${DRIVER}" --only x86/be+gpu -w "${bdir}" 2>&1)"
-echo "${out}" | grep -qE 'x86/be\+gpu.*PASS|PASS.*x86/be\+gpu' && _ok || { _bad "row did not PASS"; echo "${out}" | sed 's/^/    | /'; }
+      bash "${DRIVER}" --only x86/backend-gpu -w "${bdir}" 2>&1)"
+echo "${out}" | grep -qE 'x86/backend-gpu.*PASS|PASS.*x86/backend-gpu' && _ok || { _bad "row did not PASS"; echo "${out}" | sed 's/^/    | /'; }
 # ran must be >= 2 (the build-load invariant + the booted row) and fail must be 0.
 res="$(echo "${out}" | grep -E '^RESULT:')"
 echo "${res}" | grep -qE 'ran=[2-9]' && _ok || _bad "ran did not increment (${res})"
@@ -88,7 +92,7 @@ echo "${res}" | grep -qE 'fail=0'    && _ok || _bad "unexpected failure (${res})
 echo "${res}" | grep -qE 'pass=[2-9]' && _ok || _bad "pass did not increment (${res})"
 
 echo "── DRIVER WIRING: an OVERSIZE artifact FAILS the row (assertion really runs) ──"
-odir="${work}/over-wd"; mkdir -p "${odir}"; truncate -s $((600*1024*1024)) "${odir}/hugmesh-x86-be+gpu-prod-ts.img"
+odir="${work}/over-wd"; mkdir -p "${odir}"; truncate -s $((600*1024*1024)) "${odir}/hugmesh-x86-backend-gpu-prod-ts.img"
 # plan stub says img_size=1 → ceiling 515 MiB, so the 600 MiB artifact must FAIL.
 cat > "${work}/plan-tiny.sh" <<'STUB'
 #!/usr/bin/env bash
@@ -98,7 +102,7 @@ chmod +x "${work}/plan-tiny.sh"
 out2="$(HUGMESH_QEMU_E2E=1 \
        SNAP_QEMU_PLAN_CMD="bash ${work}/plan-tiny.sh" \
        SNAP_QEMU_LAUNCH_CMD="bash ${work}/launch-stub.sh" \
-       bash "${DRIVER}" --only x86/be+gpu -w "${odir}" 2>&1)"
+       bash "${DRIVER}" --only x86/backend-gpu -w "${odir}" 2>&1)"
 echo "${out2}" | grep -E '^RESULT:' | grep -qE 'fail=[1-9]' && _ok || { _bad "oversize row should FAIL"; echo "${out2}" | grep -E 'RESULT|size'; }
 
 echo

@@ -14,7 +14,7 @@
 #   build-orangepi-zero3-stage4.sh aarch64 (Allwinner H618) HEADLESS APPLIANCE -> live/installer ISO (EXPERIMENTAL)
 #   build-orangepi3-lts-stage4.sh  aarch64 (Allwinner H6) HEADLESS APPLIANCE -> live/installer ISO (EXPERIMENTAL)
 #   build-orangepi4-lts-stage4.sh  aarch64 (Rockchip RK3399) LIGHT DESKTOP -> live/installer ISO (EXPERIMENTAL)
-#   scripts/build-all-roles.sh   the default fleet (3 Pi + x86 pki/be/fe/be+gpu)
+#   scripts/build-all-roles.sh   the default fleet (3 Pi + x86 pki/backend/frontend/backend-gpu)
 #                                (+ FRITE=1 / JETSON=1 / build-everything for the full matrix)
 #   scripts/flash-disk.sh        write a role image (.img preferred, else .iso) to a disk
 #   tests/qemu/launch-pi.sh      boot a Pi   image in QEMU (aarch64 -M virt)
@@ -30,7 +30,7 @@
 #            container, where this is the path taken). Uses sudo ONLY when not
 #            already root — inside the container (root) no sudo is used.
 #
-# Common overrides:  WORK_DIR=$(CURDIR)/out  JOBS=$(nproc)  ROLE=be+gpu  ARCH=x86  DEV=/dev/sdX
+# Common overrides:  WORK_DIR=$(CURDIR)/out  JOBS=$(nproc)  ROLE=backend-gpu  ARCH=x86  DEV=/dev/sdX
 # Image format:      pass IMG_FLAGS='--no-iso' (img only) or '--no-img' (iso only) etc.
 # Branding:          make build-all BRAND=acme DOMAIN=acme.example  (-> brands/acme.conf)
 #
@@ -43,7 +43,10 @@
 SHELL    := /bin/bash
 WORK_DIR ?= $(CURDIR)/out
 JOBS     ?= $(shell nproc)
-ROLE     ?= be+gpu
+# RE-SPELLED, never re-pointed: the same role the old `be+gpu` default named.
+# Every old spelling still works (the builders normalize at parse time — see
+# scripts/_roles-lib.sh), so `make flash-disk ROLE=be+gpu` keeps working.
+ROLE     ?= backend-gpu
 ARCH     ?= x86
 DEV      ?=
 IMG_FLAGS ?=
@@ -283,12 +286,12 @@ RPI_ROLES := pki backend frontend
 # X86_ROLE_LIST: the role list the local `x86` target loops over. Deliberately NOT
 # named X86_ROLES: that is a build-all-roles.sh ENV KNOB (see ROLESET_ENVVARS) and
 # a same-named := make-var would shadow a user's `X86_ROLES=... make build-all`.
-X86_ROLE_LIST := pki be fe be+gpu
-# X86_EVERY_ROLE: the FULL documented x86 matrix (nodes + omnibus + edge_ai +
+X86_ROLE_LIST := pki backend frontend backend-gpu
+# X86_EVERY_ROLE: the FULL documented x86 matrix (nodes + omnibus + edge-ai +
 # the client devices + the standalone desktops, incl. the UNAFFILIATED plain
 # Gentoo one) — what `make build-everything` threads through
 # build-all-roles.sh's X86_ROLES knob.
-X86_EVERY_ROLE := pki be fe be+gpu omnibus edge_ai laptop chromebook desktop standalone-thin standalone-thick standalone-unaffiliated
+X86_EVERY_ROLE := pki backend frontend backend-gpu omnibus edge-ai laptop chromebook desktop standalone-thin standalone-thick standalone-unaffiliated
 
 # Libre Computer Le/La Frite LIGHT-DESKTOP client image (Amlogic arm64).
 #   FRITE_BOARD   = la-frite (DEFAULT) | le-potato | sweet-potato
@@ -301,10 +304,10 @@ FRITE_PASS    := FRITE_BOARD='$(FRITE_BOARD)' FRITE_FLAVOR='$(FRITE_FLAVOR)' FRI
 
 # NVIDIA Jetson Orin (Tegra234 arm64) edge-AI platform — EXPERIMENTAL (hardware
 # validation pending; see specs-jetson/README.md). FRITE-style vars:
-#   JETSON_ROLE          = edge_ai (DEFAULT, headline) | gpu-host | full | desktop
+#   JETSON_ROLE          = edge-ai (DEFAULT, headline) | backend-gpu | omnibus | desktop
 #   JETSON_BOARD         = orin-nano (DEFAULT) | orin-nano-4gb | orin-nx-8gb | orin-nx-16gb
 #   JETSON_KERNEL_FLAVOR = mainline (DEFAULT, buildable — NO CUDA) | l4t (stub)
-JETSON_ROLE          ?= edge_ai
+JETSON_ROLE          ?= edge-ai
 JETSON_BOARD         ?= orin-nano
 JETSON_KERNEL_FLAVOR ?= mainline
 JETSON_PASS := JETSON_ROLE='$(JETSON_ROLE)' JETSON_BOARD='$(JETSON_BOARD)' \
@@ -412,9 +415,9 @@ help: ## list targets
 	@echo "              + ./out/snap-build-orangepi4-lts"
 	@echo "              (never share a sysroot)."
 	@echo "  Platforms:  rpi (3 cluster roles + rpi-desktop client; RPI_BOARD=rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]) |"
-	@echo "              x86 (nodes+omnibus+edge_ai+clients+standalone) |"
+	@echo "              x86 (nodes+omnibus+edge-ai+clients+standalone) |"
 	@echo "              frite (arm64 light desktop) | jetson (arm64 Tegra edge-AI — EXPERIMENTAL,"
-	@echo "              JETSON_ROLE=edge_ai|gpu-host|full|desktop, hardware validation pending) |"
+	@echo "              JETSON_ROLE=edge-ai|backend-gpu|omnibus|desktop, hardware validation pending) |"
 	@echo "              orangepi5 (arm64 Rockchip RK3588/RK3588S light desktop — EXPERIMENTAL,"
 	@echo "              ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5, hardware validation pending) |"
 	@echo "              orangepizero2 (arm64 Allwinner H616 HEADLESS APPLIANCE — EXPERIMENTAL,"
@@ -518,7 +521,7 @@ mesh-bootstrap-status: ## show whether the from-scratch local mesh (stack + over
 clean: ## wipe the work dir (forces a from-scratch rebuild)
 	$(SUDO) rm -rf "$(WORK_DIR)"
 
-build-all: ## build the DEFAULT fleet: 3 Pi + x86 pki/be/fe/be+gpu (--resume reuses sysroots)
+build-all: ## build the DEFAULT fleet: 3 Pi + x86 pki/backend/frontend/backend-gpu (--resume reuses sysroots)
 ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make build-all NATIVE=1 WORK_DIR=/out RESUME='$(RESUME)' IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS) $(PENTEST_ENVVARS) $(ROLESET_ENVVARS)
@@ -900,7 +903,7 @@ else
 	$(chown-artifacts)
 endif
 
-rpi-%: ## build ONE Pi role: make rpi-frontend | rpi-desktop  (add IMG_FLAGS='--no-iso' etc.; RPI_BOARD=rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]; STANDALONE_FLAGS='--standalone --local-user … --local-pass …' for rpi-desktop)
+rpi-%: ## build ONE Pi role: make rpi-frontend | rpi-desktop  (same vocabulary as x86 now; add IMG_FLAGS='--no-iso' etc.; RPI_BOARD=rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]; STANDALONE_FLAGS='--standalone --local-user … --local-pass …' for rpi-desktop)
 ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make rpi-$* NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) RPI_BOARD='$(RPI_BOARD)' $(BRAND_PASS)
@@ -909,7 +912,7 @@ else
 	$(chown-artifacts)
 endif
 
-x86-%: ## build ONE x86 role: make x86-be+gpu | x86-pki | x86-standalone-thin (STANDALONE_FLAGS='--local-user … --nvidia')
+x86-%: ## build ONE x86 role: make x86-backend-gpu | x86-pki | x86-standalone-thin (old spellings still work: x86-be, x86-fe, x86-be+gpu)
 ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make x86-$* NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
@@ -933,7 +936,7 @@ frite-live: ## build the Frite light desktop LIVE image only (boots ephemerally 
 frite-installer: ## build the Frite light desktop INSTALLER image only (writes to eMMC/SD)
 	$(MAKE) frite FRITE_FLAVOR=installer
 
-jetson: ## build the Jetson Orin edge-AI image (JETSON_ROLE=edge_ai|gpu-host|full|desktop; EXPERIMENTAL; STANDALONE_FLAGS='--enable-wifi …')
+jetson: ## build the Jetson Orin edge-AI image (JETSON_ROLE=edge-ai|backend-gpu|omnibus|desktop; EXPERIMENTAL; STANDALONE_FLAGS='--enable-wifi …')
 ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make jetson NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(JETSON_PASS)
@@ -942,7 +945,7 @@ else
 	$(chown-artifacts)
 endif
 
-jetson-%: ## build ONE Jetson role: make jetson-edge_ai | jetson-gpu-host | jetson-full | jetson-desktop (STANDALONE_FLAGS appended verbatim)
+jetson-%: ## build ONE Jetson role: make jetson-edge-ai | jetson-backend-gpu | jetson-omnibus | jetson-desktop (STANDALONE_FLAGS appended verbatim)
 ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make jetson-$* NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(JETSON_PASS)
@@ -1046,12 +1049,12 @@ orangepi4-lts-installer: ## build the Orange Pi 4 LTS light desktop INSTALLER im
 # re-assign the empty defaults AFTER an env prefix and clobber it). Command-line
 # make vars override the `?=` defaults inside the sub-make, so ROLESET_ENVVARS is
 # rebuilt there with the full-matrix values; ENV/BRAND/IMG_FLAGS pass through.
-build-everything: ## build the FULL documented matrix: 3 Pi + all 12 x86 (nodes+omnibus+edge_ai+clients+standalone incl. unaffiliated) + Frite + Jetson + Orange Pi 5 + Orange Pi Zero 2 + Orange Pi Zero 2W + Orange Pi Zero 3 + Orange Pi 3 LTS + Orange Pi 4 LTS (honors ENV=test|prod)
+build-everything: ## build the FULL documented matrix: 3 Pi + all 12 x86 (nodes+omnibus+edge-ai+clients+standalone incl. unaffiliated) + Frite + Jetson + Orange Pi 5 + Orange Pi Zero 2 + Orange Pi Zero 2W + Orange Pi Zero 3 + Orange Pi 3 LTS + Orange Pi 4 LTS (honors ENV=test|prod)
 	$(MAKE) build-all \
 	  X86_ROLES='$(X86_EVERY_ROLE)' \
 	  FRITE=1 FRITE_BOARD='$(FRITE_BOARD)' FRITE_FLAVOR='$(FRITE_FLAVOR)' \
 	  FRITE_DESKTOP='$(FRITE_DESKTOP)' \
-	  JETSON=1 JETSON_ROLES='edge_ai gpu-host full desktop' \
+	  JETSON=1 JETSON_ROLES='edge-ai backend-gpu omnibus desktop' \
 	  JETSON_BOARD='$(JETSON_BOARD)' JETSON_KERNEL_FLAVOR='$(JETSON_KERNEL_FLAVOR)' \
 	  ORANGEPI5=1 ORANGEPI5_BOARD='$(ORANGEPI5_BOARD)' ORANGEPI5_FLAVOR='$(ORANGEPI5_FLAVOR)' \
 	  ORANGEPIZERO2=1 ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)' \
@@ -1127,12 +1130,12 @@ flash: ## write a role image to a disk: make flash DEV=/dev/sdX ROLE=frontend AR
 qemu-rpi: ## boot a Pi role image in QEMU: make qemu-rpi ROLE=frontend
 	$(SUDO) tests/qemu/launch-pi.sh -w "$(WORK_DIR)" -r $(ROLE) --foreground
 
-qemu-x86: ## boot an x86 role image in QEMU: make qemu-x86 ROLE=be+gpu
+qemu-x86: ## boot an x86 role image in QEMU: make qemu-x86 ROLE=backend-gpu
 	$(SUDO) tests/qemu/launch-x86.sh -w "$(WORK_DIR)" -r $(ROLE) --foreground
 
 qemu: qemu-$(if $(filter arm64,$(ARCH)),rpi,x86) ## boot ROLE/ARCH in QEMU (ARCH=x86|arm64)
 
-qemu-matrix: ## boot+assert size/load for matrix rows (opt-in; HUGMESH_QEMU_E2E=1; MATRIX_FILTER=x86/be+gpu)
+qemu-matrix: ## boot+assert size/load for matrix rows (opt-in; HUGMESH_QEMU_E2E=1; MATRIX_FILTER=x86/backend-gpu)
 	HUGMESH_QEMU_E2E=$(if $(HUGMESH_QEMU_E2E),$(HUGMESH_QEMU_E2E),1) \
 	  $(SUDO) tests/qemu/run-matrix-e2e.sh -w "$(WORK_DIR)" $(if $(MATRIX_FILTER),--only $(MATRIX_FILTER),)
 
@@ -1435,7 +1438,7 @@ playwright-deps: ## install the e2e toolchain (npm ci + chromium) unless tests/e
 # from emitting a dangling separator. e2e-list below must stay identical, and
 # tests/qemu/qemu-e2e-lane_test.sh asserts BOTH by rendering `make -n` and feeding
 # the result to the real parser.
-e2e: playwright-deps ## boot ROLE/ARCH in QEMU and run the Playwright e2e (default: x86 be+gpu)
+e2e: playwright-deps ## boot ROLE/ARCH in QEMU and run the Playwright e2e (default: x86 backend-gpu)
 	$(SUDO) tests/qemu/run-qemu-e2e.sh -w "$(WORK_DIR)" --target $(if $(filter arm64,$(ARCH)),pi,x86) --role $(ROLE) $(if $(E2E_ARGS),-- $(E2E_ARGS))
 
 # Enumerate what the QEMU Playwright lane WOULD run — the boot plan plus the spec
@@ -1452,10 +1455,10 @@ ci: ## FULL pipeline: wipe -> build the whole fleet (Docker) -> QEMU-emulate + e
 	$(MAKE) rebuild
 	$(MAKE) e2e
 
-ci-quick: ## fast pipeline: build only x86 be+gpu (Docker) -> emulate + e2e (host KVM)
+ci-quick: ## fast pipeline: build only x86 backend-gpu (Docker) -> emulate + e2e (host KVM)
 	$(MAKE) clean
-	$(MAKE) x86-be+gpu
-	$(MAKE) e2e ARCH=x86 ROLE=be+gpu
+	$(MAKE) x86-backend-gpu
+	$(MAKE) e2e ARCH=x86 ROLE=backend-gpu
 
 ## ── deprecated aliases (kept for muscle memory) ───────────────────────
 docker: docker-image ## alias for docker-image (build the builder image)

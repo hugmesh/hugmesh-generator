@@ -138,7 +138,15 @@ ST_OK, ST_PENDING, ST_FAILED, ST_OFF, ST_UNKNOWN = (
 #: is the all-in-one node, ``fe`` is the ingress the e2e suite drives
 #: (tests/e2e/playwright.config.ts baseURL), then the remaining node roles as
 #: fallbacks so a partial mesh still names SOME front door rather than none.
-GATEWAY_ROLES = ("omnibus", "fe", "be", "be+gpu", "pki")
+# Preference order for "which node fronts this mesh". Matched against the role
+# parsed out of an ARTIFACT FILENAME, which is why the spellings matter: before the
+# vocabulary converged, `be+gpu` could never match (that artifact was named `host`)
+# and `be`/`fe` could never match a Pi node (named `backend`/`frontend`), so a
+# Pi-only mesh silently fell through to "first row in boot order" instead of
+# preferring the frontend. Canonical first, then the older spellings an image
+# already on disk carries.
+GATEWAY_ROLES = ("omnibus", "frontend", "backend", "backend-gpu", "pki",
+                 "fe", "be", "be+gpu", "host")
 
 
 @dataclass(frozen=True)

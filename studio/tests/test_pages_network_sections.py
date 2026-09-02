@@ -119,7 +119,7 @@ def test_no_service_box_is_tristate_and_none_start_half_checked(wiz):
     (`OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"`). Those three arrive
     ticked; everything else arrives unticked; nothing arrives half."""
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
-    for name, box in (("aide", page.aide), ("edge_ai", page.edge_ai),
+    for name, box in (("aide", page.aide), ("edge-ai", page.edge_ai),
                       *page.service_boxes.items()):
         assert not box.isTristate(), f"{name} is still a 3-state box"
         assert box.checkState() != Qt.CheckState.PartiallyChecked, f"{name} half-checked"
@@ -259,7 +259,7 @@ def test_the_edge_ai_role_auto_check_forces_its_row_open(wiz):
     The carrier changed (a table row's expander, not a page section) but the property is
     identical, and it is the reason the rule exists at all: a value the operator did not
     set must never land inside something folded shut."""
-    page = _net(wiz, mode="mesh", role="edge_ai", platform="x86")
+    page = _net(wiz, mode="mesh", role="edge-ai", platform="x86")
     assert page.edge_ai.isChecked()
     assert page.edge_ai_item.isExpanded()
     assert page.group_items[_AI_GROUP].isExpanded()
@@ -416,7 +416,7 @@ def test_an_untouched_section_still_tracks_the_config_on_revisit(wiz):
     """
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
     assert not page.edge_ai_item.isExpanded()
-    page = _net(wiz, mode="mesh", role="edge_ai", platform="x86")   # role changed earlier
+    page = _net(wiz, mode="mesh", role="edge-ai", platform="x86")   # role changed earlier
     assert page.edge_ai_item.isExpanded(), (
         "an untouched fold stopped tracking the config")
 

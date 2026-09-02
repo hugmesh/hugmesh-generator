@@ -402,7 +402,7 @@ def test_reachable_from_main_menu_and_asks_for_a_session(wiz, fake_generator):
     assert page.nextId() == -1                       # terminal side-flow
     assert page.session_combo.count() == 2
     # the plan names the front door and how it is reached
-    assert "x86/fe" in page.plan_label.text()
+    assert "x86/frontend" in page.plan_label.text()
     assert "https://127.0.0.1:" in page.plan_label.text()
     assert page.plan.session_path == str(sess)
 
@@ -426,8 +426,8 @@ def test_table_renders_one_row_per_planned_device(wiz):
     page = _page(wiz)
     assert page.devices.rowCount() == 3
     labels = [page.devices.item(r, 0).text() for r in range(3)]
-    assert labels == ["rpi5/pki", "x86/be", "x86/fe"]   # boot order: Pi first
-    assert page.devices.item(1, 1).text() == "be"       # role column
+    assert labels == ["rpi5/pki", "x86/backend", "x86/frontend"]   # boot order: Pi first
+    assert page.devices.item(1, 1).text() == "backend"       # role column
     assert page.devices.item(0, 2).text() == "arm64"    # arch column
     # planned identity is on the row (tooltip): ssh port, MAC/IP, the KEYS stick
     tip = page.devices.item(0, 0).toolTip()
@@ -440,16 +440,16 @@ def test_table_renders_one_row_per_planned_device(wiz):
 
 def test_sections_dropdown_badges_every_section(wiz, registry, results):
     page = _page(wiz)
-    row = _row(page, "x86/be")
+    row = _row(page, "x86/backend")
     assert [row.sections.itemText(i) for i in range(row.sections.count())] == [
         "boot: off", "ssh: off", "provision: off", "web: off"]
-    registry(_device("x86/be"))
-    results("x86/be", status="PASS")
+    registry(_device("x86/backend"))
+    results("x86/backend", status="PASS")
     page._refresh_reality()
-    row = _row(page, "x86/be")
+    row = _row(page, "x86/backend")
     texts = [row.sections.itemText(i) for i in range(row.sections.count())]
     assert texts == ["boot: ok", "ssh: ok", "provision: ok", "web: off"]
-    assert _cell(page, "x86/be", page_mod._MCOL_STATE).text() \
+    assert _cell(page, "x86/backend", page_mod._MCOL_STATE).text() \
         == emulation.STATE_RUNNING
 
 
@@ -468,10 +468,10 @@ def test_failed_provisioning_reads_failed(wiz, registry, results):
 def test_a_suspect_verdict_is_never_green_here_either(wiz, registry, results):
     """A PASS with zero assertions is graded once, by core.emulation, so the two
     emulation screens cannot disagree about the same row."""
-    registry(_device("x86/be"))
-    results("x86/be", status="PASS", passed=0, failed=0)
+    registry(_device("x86/backend"))
+    results("x86/backend", status="PASS", passed=0, failed=0)
     page = _page(wiz)
-    cell = _cell(page, "x86/be", page_mod._MCOL_VERDICT)
+    cell = _cell(page, "x86/backend", page_mod._MCOL_VERDICT)
     assert cell.text() == emulation.VERDICT_SUSPECT
     assert cell.foreground().color().name() != common.GREEN
 
@@ -480,11 +480,11 @@ def test_a_verdict_older_than_the_boot_is_stale(wiz, registry, results):
     """The plan's epoch is "" here (this page inspects meshes it did not start), so
     the gate is the DEVICE's own boot stamp — which is the right rule for a standing
     mesh, and catches last week's verdict for a device booted five minutes ago."""
-    registry(_device("x86/be", started_at="2026-08-19T12:00:00Z"))
-    results("x86/be", status="PASS", passed=12,
+    registry(_device("x86/backend", started_at="2026-08-19T12:00:00Z"))
+    results("x86/backend", status="PASS", passed=12,
             started_at="2026-08-12T09:00:00Z")
     page = _page(wiz)
-    assert _cell(page, "x86/be", page_mod._MCOL_VERDICT).text() \
+    assert _cell(page, "x86/backend", page_mod._MCOL_VERDICT).text() \
         == emulation.VERDICT_STALE
 
 
@@ -507,7 +507,7 @@ def test_start_mesh_goes_through_the_mocked_spawn(wiz, qapp, mocked_spawn,
 
 def test_stop_all_goes_through_the_mocked_spawn(wiz, qapp, registry, mocked_spawn):
     page = _page(wiz)
-    registry(_device("x86/fe"))
+    registry(_device("x86/frontend"))
     page._refresh_reality()
     assert page.stop_btn.isEnabled()
     page.stop_btn.click()
@@ -527,12 +527,12 @@ def test_row_start_uses_the_only_exact_contract(wiz, qapp, mocked_spawn,
     than the row was planned from, and drag be+gpu/be-ha along with it."""
     _gen, sess, _abort = fake_generator
     page = _page(wiz)
-    row = _row(page, "x86/be")
+    row = _row(page, "x86/backend")
     assert row.start.isEnabled() and not row.stop.isEnabled()
     row.start.click()
     _finish(page, qapp)
     argv = mocked_spawn.last
-    assert argv[argv.index("--only-exact") + 1] == "x86/be"
+    assert argv[argv.index("--only-exact") + 1] == "x86/backend"
     assert "--only" not in argv, "the substring filter must not be emitted"
     assert argv[argv.index("--artifacts") + 1] == str(sess)
     assert "--work" in argv and "--keep-alive" in argv
@@ -541,14 +541,14 @@ def test_row_start_uses_the_only_exact_contract(wiz, qapp, mocked_spawn,
 def test_row_stop_addresses_the_row_and_carries_the_work_dir(wiz, qapp, registry,
                                                              mocked_spawn):
     page = _page(wiz)
-    registry(_device("x86/be"))
+    registry(_device("x86/backend"))
     page._refresh_reality()
-    row = _row(page, "x86/be")
+    row = _row(page, "x86/backend")
     assert row.stop.isEnabled() and not row.start.isEnabled()
     row.stop.click()
     _finish(page, qapp)
     argv = mocked_spawn.last
-    assert argv[-2:] == ["--stop-device", "x86/be"]
+    assert argv[-2:] == ["--stop-device", "x86/backend"]
     assert "--work" in argv
 
 
@@ -581,11 +581,11 @@ def test_no_consent_tick_is_labelled_as_an_architecture(wiz, registry):
     cannot quietly reintroduce the confusion.
     """
     page = _page(wiz)
-    registry(_device("rpi5/pki"), _device("x86/be"))
+    registry(_device("rpi5/pki"), _device("x86/backend"))
     page._refresh_reality()
 
     ticks = {"mesh save": page.mesh_save_arm}
-    for label in ("rpi5/pki", "x86/be"):
+    for label in ("rpi5/pki", "x86/backend"):
         row = _row(page, label)
         ticks[f"{label} reset"] = row.arm_reset
         ticks[f"{label} overwrite"] = row.arm_save
@@ -612,7 +612,7 @@ def test_no_consent_tick_is_labelled_as_an_architecture(wiz, registry):
     # the Arch column is where architecture actually lives, and it follows the image
     assert page_mod._HEADERS[page_mod._MCOL_ARCH] == "Arch"
     arches = {label: _cell(page, label, page_mod._MCOL_ARCH).text()
-              for label in ("rpi5/pki", "x86/be")}
+              for label in ("rpi5/pki", "x86/backend")}
     assert all(arches.values()), f"the Arch column is empty: {arches}"
 
 
@@ -943,7 +943,7 @@ def test_save_mesh_previews_before_it_runs_anything(wiz, registry, mocked_spawn)
     """A mesh save is 9.5-20.5 GB PER DEVICE. The first press must show what would be
     written and what it costs; nothing may be paused or copied until an arm-tick."""
     page = _page(wiz)
-    registry(_device("rpi5/pki"), _device("x86/be"), _device("x86/fe"))
+    registry(_device("rpi5/pki"), _device("x86/backend"), _device("x86/frontend"))
     page._refresh_reality()
     assert not page.mesh_save_arm.isEnabled(), "armed with no preview"
 
@@ -951,7 +951,7 @@ def test_save_mesh_previews_before_it_runs_anything(wiz, registry, mocked_spawn)
     assert not mocked_spawn, "the preview ran a command"
     note = page.mesh_save_note.text()
     assert "Mesh save preview" in note
-    for label in ("rpi5/pki", "x86/be", "x86/fe"):
+    for label in ("rpi5/pki", "x86/backend", "x86/frontend"):
         assert label in note
     assert "16.0 GB" in note and "32.0 GB" in note      # per-device budgets
     assert "Fleet total 80.0 GB" in note                # 16 + 32 + 32
@@ -963,7 +963,7 @@ def test_save_mesh_previews_before_it_runs_anything(wiz, registry, mocked_spawn)
 def test_save_mesh_runs_only_once_armed_and_streams_into_the_log(
         wiz, qapp, registry, mocked_spawn, work_dir):
     page = _page(wiz)
-    registry(_device("rpi5/pki"), _device("x86/be"), _device("x86/fe"))
+    registry(_device("rpi5/pki"), _device("x86/backend"), _device("x86/frontend"))
     page._refresh_reality()
     page.mesh_save_btn.click()                          # preview
     session = page._mesh_save_preview["session"]
@@ -996,7 +996,7 @@ def test_save_mesh_refuses_when_the_filesystem_cannot_hold_it(
                             "Usage", ["total", "used", "free"])(
                                 100 * GIB, 98 * GIB, 2 * GIB))
     page = _page(wiz)
-    registry(_device("rpi5/pki"), _device("x86/be"), _device("x86/fe"))
+    registry(_device("rpi5/pki"), _device("x86/backend"), _device("x86/frontend"))
     page._refresh_reality()
     page.mesh_save_btn.click()
     note = page.mesh_save_note.text()
@@ -1011,12 +1011,12 @@ def test_save_mesh_refuses_when_the_filesystem_cannot_hold_it(
 def test_save_mesh_preview_names_a_device_it_cannot_save(wiz, registry,
                                                          mocked_spawn):
     page = _page(wiz)
-    registry(_device("rpi5/pki"), _device("x86/be", state="stopped"),
-             _device("x86/fe"))
+    registry(_device("rpi5/pki"), _device("x86/backend", state="stopped"),
+             _device("x86/frontend"))
     page._refresh_reality()
     page.mesh_save_btn.click()
     note = page.mesh_save_note.text()
-    assert "will NOT be saved" in note and "x86/be" in note
+    assert "will NOT be saved" in note and "x86/backend" in note
     assert "Fleet total 48.0 GB" in note        # the blocked device is not budgeted
 
 
@@ -1152,7 +1152,7 @@ def test_web_ui_waits_for_the_gateway_then_tunnels_and_opens(
     assert "not up yet" in page.web_note.text()
     assert "No web tunnel is open" in page.tunnel_note.text()
 
-    registry(_device("x86/fe", port=22357))
+    registry(_device("x86/frontend", port=22357))
     page._refresh_reality()
     assert page.web_btn.isEnabled()
     gw_port = page.plan.mesh.gateway.ui_port
@@ -1177,7 +1177,7 @@ def test_a_second_press_reuses_the_tunnel_and_says_so(wiz, registry, spawned,
     monkeypatch.setattr(page_mod.QtGui.QDesktopServices, "openUrl",
                         staticmethod(lambda url: None))
     page = _page(wiz)
-    registry(_device("x86/fe", port=22357))
+    registry(_device("x86/frontend", port=22357))
     page._refresh_reality()
     page.web_btn.click()
     page.web_btn.click()
@@ -1193,15 +1193,15 @@ def test_stopping_the_gateway_takes_its_tunnel_down(wiz, qapp, registry, spawned
     monkeypatch.setattr(page_mod.QtGui.QDesktopServices, "openUrl",
                         staticmethod(lambda url: None))
     page = _page(wiz)
-    registry(_device("x86/fe", port=22357))
+    registry(_device("x86/frontend", port=22357))
     page._refresh_reality()
     page.web_btn.click()
     assert not spawned[0].terminated
 
-    _row(page, "x86/fe").stop.click()
+    _row(page, "x86/frontend").stop.click()
     _finish(page, qapp)
     assert spawned[0].terminated, "the gateway's tunnel outlived the gateway"
-    assert "closed the x86/fe web tunnel" in page.log.toPlainText()
+    assert "closed the x86/frontend web tunnel" in page.log.toPlainText()
     assert "No web tunnel is open" in page.tunnel_note.text()
 
 
@@ -1210,7 +1210,7 @@ def test_stop_all_takes_every_tunnel_down(wiz, qapp, registry, spawned,
     monkeypatch.setattr(page_mod.QtGui.QDesktopServices, "openUrl",
                         staticmethod(lambda url: None))
     page = _page(wiz)
-    registry(_device("x86/fe", port=22357))
+    registry(_device("x86/frontend", port=22357))
     page._refresh_reality()
     page.web_btn.click()
     page.stop_btn.click()
@@ -1224,7 +1224,7 @@ def test_leaving_the_page_takes_the_tunnels_down(wiz, registry, spawned,
     monkeypatch.setattr(page_mod.QtGui.QDesktopServices, "openUrl",
                         staticmethod(lambda url: None))
     page = _page(wiz)
-    registry(_device("x86/fe", port=22357))
+    registry(_device("x86/frontend", port=22357))
     page._refresh_reality()
     page.web_btn.click()
     page.cleanupPage()
@@ -1241,7 +1241,7 @@ def test_closing_the_studio_takes_the_tunnels_down(wiz, registry, spawned,
     monkeypatch.setattr(page_mod.QtGui.QDesktopServices, "openUrl",
                         staticmethod(lambda url: None))
     page = _page(wiz)
-    registry(_device("x86/fe", port=22357))
+    registry(_device("x86/frontend", port=22357))
     page._refresh_reality()
     page.web_btn.click()
     assert not spawned[0].terminated

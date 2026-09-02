@@ -398,7 +398,7 @@ The `package.use/python-targets` header records it:
 > jaraco-context, hatchling, flit-core, urllib3, jinja2, cython, …) come up with
 > `python_targets_python3_12` UNSET and the @world/payload emerge ABORTS behind a
 > wall of "The following USE changes are necessary to proceed:
-> `>=dev-python/… python_targets_python3_12`" (real jetson edge_ai fleet failure
+> `>=dev-python/… python_targets_python3_12`" (real jetson edge-ai fleet failure
 > 2026-07-16 01:31, session 20260715-235432)
 
 The vdb evidence from that era's sysroots agrees with the comment's premise for

@@ -99,9 +99,9 @@ def test_new_artifacts_records_the_whole_changed_set(tmp_path):
 
 
 def test_flash_assignment_flavor_is_a_trailing_default():
-    a = ft.FlashAssignment(SDB, "be.rpi5", "be", "arm64", "/w")   # positional, pre-flavour
+    a = ft.FlashAssignment(SDB, "backend.rpi5", "backend", "arm64", "/w")   # positional, pre-flavour
     assert a.flavor == ft.FLAVOR_AUTO
-    assert ft.FlashAssignment(SDB, "be.rpi5", "be", "arm64", "/w",
+    assert ft.FlashAssignment(SDB, "backend.rpi5", "backend", "arm64", "/w",
                               flavor="installer").flavor == "installer"
 
 
@@ -143,22 +143,22 @@ def _set_role_flash(table, row=0):
 
 
 def test_image_labels_carry_the_entry_domains(qapp):
-    table = _table(qapp, [("be.rpi5", "be", "rpi5", ("beta.example",)),
+    table = _table(qapp, [("backend.rpi5", "backend", "rpi5", ("beta.example",)),
                           ("omnibus.x86", "omnibus", "x86",
                            ("alpha.games", "beta.example"))])
     _set_role_flash(table)
     img = table.table.cellWidget(0, dt_mod._COL_EXTRA)
     labels = [img.itemText(i) for i in range(img.count())]
-    assert any("be.rpi5" in l and "beta.example" in l for l in labels)
+    assert any("backend.rpi5" in l and "beta.example" in l for l in labels)
     assert any("alpha.games, beta.example" in l for l in labels)
     # legacy 3-tuple providers stay accepted (empty domains tail)
-    t3 = _table(qapp, [("be.rpi5", "be", "rpi5")])
+    t3 = _table(qapp, [("backend.rpi5", "backend", "rpi5")])
     _set_role_flash(t3)
-    assert t3.table.cellWidget(0, dt_mod._COL_EXTRA).itemText(0) == "be.rpi5"
+    assert t3.table.cellWidget(0, dt_mod._COL_EXTRA).itemText(0) == "backend.rpi5"
 
 
 def test_flavour_menu_is_bounded_by_the_assigned_images_platform(qapp):
-    table = _table(qapp, [("fe.frite", "fe", "frite", ()),
+    table = _table(qapp, [("fe.frite", "frontend", "frite", ()),
                           ("omnibus.x86", "omnibus", "x86", ())])
     _set_role_flash(table)
     img = table.table.cellWidget(0, dt_mod._COL_EXTRA)
@@ -231,7 +231,7 @@ def test_flash_next_picks_the_assigned_flavour_from_the_recorded_set(qapp, monke
 
 def test_flash_next_skips_with_the_reason_when_the_flavour_was_not_built(qapp,
                                                                          monkeypatch):
-    a = ft.FlashAssignment(SDB, "fe.frite", "fe", "arm64", "/w", flavor="installer")
+    a = ft.FlashAssignment(SDB, "fe.frite", "frontend", "arm64", "/w", flavor="installer")
     page, started = _progress_stub(
         monkeypatch, queue=[a], sets={"fe.frite": ("/w/y.live.iso",)})
     page._flash_next()
@@ -241,9 +241,9 @@ def test_flash_next_skips_with_the_reason_when_the_flavour_was_not_built(qapp,
 
 
 def test_flash_next_legacy_single_record_still_flashes_on_auto(qapp, monkeypatch):
-    a = ft.FlashAssignment(SDB, "be.rpi5", "be", "arm64", "/w")   # pre-flavour shape
+    a = ft.FlashAssignment(SDB, "backend.rpi5", "backend", "arm64", "/w")   # pre-flavour shape
     page, started = _progress_stub(monkeypatch, queue=[a],
-                                   singles={"be.rpi5": "/w/z.img"})
+                                   singles={"backend.rpi5": "/w/z.img"})
     page._flash_next()
     assert len(started) == 1
     assert started[0][1][started[0][1].index("--artifact") + 1] == "/w/z.img"

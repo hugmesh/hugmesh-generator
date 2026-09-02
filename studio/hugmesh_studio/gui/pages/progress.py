@@ -2378,15 +2378,22 @@ class ProgressPage(QtWidgets.QWizardPage):
             self._finalize_session(status="stopped")   # honest: the abort cancelled it
 
     # ---- flash to a device (post-build) -----------------------------------------
-    # flash-disk.sh accepts only these --role tokens; a client/desktop role maps to the
-    # generic 'host' artifact glob (the flasher auto-picks *-host-*.img from the work dir).
-    _FLASH_ROLES = frozenset({"pki", "backend", "frontend", "host", "be", "fe", "omnibus"})
+    # The flasher's accepted set, derived from the ONE vocabulary
+    # (flash_targets.FLASH_ROLE_TOKENS -> scripts/_roles-lib.sh) rather than restated
+    # here. This local copy is what let the GUI hand `be` to a flasher that
+    # normalized it to `backend` and then globbed with no arch anchor — the
+    # "Flash to device" button offering an arm64 Raspberry Pi ISO for an x86 backend.
+    _FLASH_ROLES = flash_targets.FLASH_ROLE_TOKENS
 
     def _flash_argv_for(self, target) -> list[str]:
         c = self.wiz.cfg
         work_dir = (self._session.workdir if self._session is not None else
                     c.output_dir or os.path.join(self.wiz.generator_dir, "out"))
-        role = c.role if c.role in self._FLASH_ROLES else "host"
+        # A desktop/appliance role has no artifact of its own to glob for, so it
+        # still falls back to the generic worker image — but the fallback is now
+        # spelled canonically, and flash-disk.sh anchors the search to --arch, so it
+        # can no longer resolve to the other architecture's image.
+        role = c.role if c.role in self._FLASH_ROLES else "backend-gpu"
         arch = flash_targets.arch_for_platform(c.platform)
         return flash_targets.flash_argv(target, generator_dir=self.wiz.generator_dir,
                                         role=role, arch=arch, work_dir=work_dir)

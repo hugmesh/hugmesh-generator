@@ -26,6 +26,11 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 # the build host's libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
 # shellcheck source=scripts/_passhash-lib.sh
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
+# THE role vocabulary — canonical tokens, the permanent input aliases, the hostname
+# defaults and the keys profiles, declared ONCE for every builder and for the Studio.
+# See scripts/_roles-lib.sh for why the long spelling won and why `+`/`_` are gone.
+# shellcheck source=scripts/_roles-lib.sh
+source "${SCRIPT_DIR}/scripts/_roles-lib.sh"
 # Host-safety guard. Unlike the ARM builders this script seeds NO host
 # /etc/portage and runs no host emerge (its emerge/dracut calls are inside
 # `chroot "${SYSROOT}"` heredocs, so they mutate the sysroot, not /). It is here
@@ -89,7 +94,9 @@ JOBS="$(nproc)"
 REL_VERSION="2026.0"
 HOSTNAME=""
 HOSTNAME_SET=false      # true once -H/--hostname is given (role defaults defer to it)
-ROLE="be+gpu"          # default role (= the legacy 'host'); 'host' is accepted as an alias
+ROLE="backend-gpu"     # default role. RE-SPELLED, never re-pointed: this is the same
+                       # image the old `be+gpu` default built. `be+gpu` and the older
+                       # `host` are still accepted (scripts/_roles-lib.sh aliases).
 GPU=true               # derived from ROLE below; gates Mesa/Vulkan + DRM kernel + VIDEO_CARDS
 # EARLY default (bug fix): the real value is derived from ROLE much further down
 # (the "Validate role" section), but the opt-in guards for --with-tor /
@@ -363,12 +370,12 @@ PACKAGES_DROP=""
 GPU_DRIVER=""           # --gpu-driver VALUE (default resolves to all-free on a GPU role)
 NVIDIA_CUDA=false       # --nvidia-cuda : also bake dev-util/nvidia-cuda-toolkit (nvidia proprietary only)
 # ── Edge-AI inference node (GPU model API served to the mesh) ────────────────
-# The edge_ai role bakes a GPU inference node and AUTO-SELECTS the edge-ai cluster
+# The edge-ai role bakes a GPU inference node and AUTO-SELECTS the edge-ai cluster
 # service (Ollama, OpenAI-compatible /v1 API on :11434, scheduled via the nvidia
-# device plugin). --with-edge-ai folds the service onto any GPU k8s role (be+gpu /
+# device plugin). --with-edge-ai folds the service onto any GPU k8s role (backend-gpu /
 # omnibus); --no-edge-ai strips it. The model LIBRARY (catalog/preload/runtime/
 # serving knobs) is the edge-ai-models ConfigMap, retunable per-domain.
-EDGE_AI=false           # the edge_ai NODE role (GPU + CUDA + inference service auto-on)
+EDGE_AI=false           # the edge-ai NODE role (GPU + CUDA + inference service auto-on)
 WANT_EDGE_AI=""         # tri-state: ""=role-default, true=--with-edge-ai, false=--no-edge-ai
 EDGE_AI_RUNTIME="ollama"   # --edge-ai-runtime : ollama | vllm
 EDGE_AI_MODELS=""          # --edge-ai-models  : comma list of models to PRELOAD (patches the ConfigMap)
@@ -592,8 +599,12 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             build under a shared --work-dir (build-all-roles.sh).
   -j, --jobs N              Parallel jobs. Default: $(nproc)
   -v, --version STR         Version stamp. Default: ${REL_VERSION}
-  -r, --role ROLE           NODE: pki | be | fe | be+gpu | edge_ai | omnibus  (host = be+gpu alias).
-                            edge_ai = GPU inference node serving an OpenAI-compatible
+  -r, --role ROLE           NODE: pki | backend | frontend | backend-gpu | edge-ai | omnibus.
+                            Old spellings are STILL ACCEPTED, forever, and normalized at
+                            parse time: be=backend, fe=frontend, be+gpu/be-gpu/host/
+                            gpu-host=backend-gpu, full=omnibus, edge_ai=edge-ai,
+                            standalone-full=standalone-thick.
+                            edge-ai = GPU inference node serving an OpenAI-compatible
                               model API to the mesh (NVIDIA + CUDA + edge-ai service).
                             CLIENT (person device, see docs/CLIENT-IMAGES.md):
                               laptop | chromebook | desktop  (desktop = full/thick).
@@ -679,8 +690,8 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             (env/brand.conf: EXCLUDE_SERVICES)
       --with-edge-ai        Bake the edge-AI inference service (Ollama OpenAI /v1 API,
                             GPU-scheduled) onto a GPU k8s role; auto-on for --role
-                            edge_ai. Other mesh nodes consume it over k8s + tailnet.
-      --no-edge-ai          Do NOT bake the edge-AI service (overrides the edge_ai default).
+                            edge-ai. Other mesh nodes consume it over k8s + tailnet.
+      --no-edge-ai          Do NOT bake the edge-AI service (overrides the edge-ai default).
       --edge-ai-runtime R   Inference runtime: ollama (default) | vllm.
       --edge-ai-models LIST Comma list of models to PRELOAD (patches the edge-ai-models
                             ConfigMap; e.g. 'llama3.2:3b,nomic-embed-text').
@@ -1201,7 +1212,7 @@ if [ "${ENABLE_GAMES}" = "true" ]; then
     esac
 fi
 
-# Edge-AI service selection: the edge_ai ROLE auto-selects 'edge-ai' (unless
+# Edge-AI service selection: the edge-ai ROLE auto-selects 'edge-ai' (unless
 # --no-edge-ai); --with-edge-ai folds it onto any GPU k8s role. Idempotent. When
 # unselected, gate_optional_services() prunes the edge-ai app/manifests/route/rows.
 EDGE_AI_WANT=false
@@ -1430,9 +1441,10 @@ validate_optional_services
 # the image only bakes: the /etc/hugmesh/role marker, the OpenRC service set,
 # the GPU stack (or not), and headscale-in-runlevel. The label/init hints below
 # are recorded for the build summary + gen-provision-keys.sh guidance.
-case "${ROLE}" in
-    host) ROLE="be+gpu" ;;   # legacy alias
-esac
+# ONE normalization point for the whole script: every accepted spelling folds to its
+# canonical token HERE, so nothing downstream — not the case block below, not the
+# artifact name, not /etc/hugmesh/role — can ever see two spellings of one role.
+ROLE="$(hugmesh_role_validate "${ROLE}" x86)" || exit 1
 ROLE_HEADSCALE=false         # headscale runs in the runlevel (pki/omnibus)
 ROLE_K8S="worker"            # kubeadm join vs init vs single-node
 ROLE_LABELS=""               # informational: node labels the KEYS stick should set
@@ -1441,35 +1453,37 @@ case "${ROLE}" in
     pki)
         GPU=false; ROLE_HEADSCALE=true; ROLE_K8S="control-plane"
         ROLE_LABELS="hugmesh.net/pki=true (+ role=pki via provision.sh)"
-        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-pki" ;;
-    be)
+        [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
+    backend)
         GPU=false; ROLE_K8S="worker"
         ROLE_LABELS="hugmesh.net/backend=true"
-        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-be" ;;
-    fe)
+        [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
+    frontend)
         GPU=false; ROLE_K8S="worker"
         ROLE_LABELS="hugmesh.net/frontend=true"
-        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-fe" ;;
-    be+gpu)
+        [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
+    backend-gpu)
         GPU=true; ROLE_K8S="worker"
         ROLE_LABELS="hugmesh.net/backend=true,hugmesh.net/compute=gpu"
-        # Keep the legacy 'host' hostname for back-compat with flashers/launchers.
-        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-host" ;;
+        # The legacy 'host' hostname is KEPT (back-compat with flashers/launchers) —
+        # one of the three declared exceptions in _roles-lib.sh; a rename must not
+        # re-point a default, only re-spell one.
+        [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
     omnibus)
         GPU=true; ROLE_HEADSCALE=true; ROLE_K8S="single-node"
         ROLE_LABELS="hugmesh.net/pki=true,hugmesh.net/backend=true,hugmesh.net/frontend=true,hugmesh.net/compute=gpu"
-        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-omnibus" ;;
-    # ── EDGE-AI (GPU inference) NODE — a be+gpu worker whose PURPOSE is serving an
+        [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
+    # ── EDGE-AI (GPU inference) NODE — a backend-gpu worker whose PURPOSE is serving an
     # AI model API to the mesh. Defaults the PROPRIETARY NVIDIA driver + CUDA, bakes
     # the nvidia container runtime + nvidia-container-toolkit, and AUTO-SELECTS the
     # edge-ai cluster service (Ollama, OpenAI-compatible /v1). Same machinery on x86
     # (RTX host) and the Jetson Orin Nano (arm64 — see specs-jetson). Other mesh
     # nodes consume the API over k8s (ClusterIP) AND the tailnet (be-gateway route).
-    edge_ai|edge-ai)
+    edge-ai)
         GPU=true; ROLE_K8S="worker"; EDGE_AI=true
         [ -z "${GPU_DRIVER}" ] && GPU_DRIVER="nvidia"   # inference wants the proprietary blob (CUDA)
         ROLE_LABELS="hugmesh.net/backend=true,hugmesh.net/compute=gpu,hugmesh.net/edge-ai=true"
-        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-edge-ai" ;;
+        [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
     # ── CLIENT (person-device) roles — see docs/CLIENT-IMAGES.md (ADR-16/FD-04..08).
     # These are DESKTOPS that join the tailnet + run the UI, NOT k8s nodes: no
     # headscale/containerd/kubelet, GPU on for DRI, ROLE_K8S=none, person-role+domain
@@ -1477,7 +1491,7 @@ case "${ROLE}" in
     # the desktop kernel fragment). 'desktop' is the opt-in full/thick variant.
     laptop|chromebook)
         GPU=true; ROLE_CLIENT=true; ROLE_K8S="none"; ROLE_HEADSCALE=false
-        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-${ROLE}" ;;
+        [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
     desktop)
         GPU=true; ROLE_CLIENT=true; ROLE_K8S="none"; ROLE_HEADSCALE=false
         # 'desktop' role DEFAULTS to the full/thick weight — but only when the operator
@@ -1485,7 +1499,7 @@ case "${ROLE}" in
         # "said nothing" from "explicitly said thin" and silently upgraded an explicit
         # --desktop thin to full — the thin-weight desktop image was unbuildable.
         ${DESKTOP_SET} || DESKTOP="full"
-        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-desktop" ;;
+        [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
     # ── STANDALONE hardened desktop roles — self-contained personal workstations.
     # Reuse the CLIENT desktop machinery (ROLE_CLIENT=true → Xorg/lightdm/desktop
     # stack, kernel desktop fragment, sizing, GPU/DRI) but preset the STANDALONE
@@ -1503,14 +1517,14 @@ case "${ROLE}" in
             err "--desktop ${DESKTOP} contradicts --role standalone-thin (the role name pins the thin weight) — drop --desktop, or pick --role standalone-thick for the full weight"; exit 1
         fi
         STANDALONE=true; DESKTOP="thin"
-        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-standalone-thin" ;;
-    standalone-thick|standalone-full)
+        [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
+    standalone-thick)
         GPU=true; ROLE_CLIENT=true; ROLE_K8S="none"; ROLE_HEADSCALE=false
         if ${DESKTOP_SET} && [ "${DESKTOP}" != "full" ]; then
             err "--desktop ${DESKTOP} contradicts --role ${ROLE} (the role name pins the full weight) — drop --desktop, or pick --role standalone-thin for the thin weight"; exit 1
         fi
         STANDALONE=true; DESKTOP="full"; CAPABLE=true
-        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-standalone" ;;
+        [ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")" ;;
     # ── UNAFFILIATED plain desktop — standalone-thick weight with ZERO HugMesh
     # affiliation (see the UNAFFILIATED declaration + fold below). The hostname
     # default is assigned in the fold, AFTER the brand identity is neutralized.
@@ -1524,7 +1538,10 @@ case "${ROLE}" in
         STANDALONE=true; DESKTOP="full"; CAPABLE=true
         UNAFFILIATED=true ;;
     *)
-        err "--role must be one of: pki | be | fe | be+gpu | edge_ai | omnibus  (host = be+gpu alias)  |  laptop | chromebook | desktop  |  standalone-thin | standalone-thick | standalone-unaffiliated  (client devices)"
+        # UNREACHABLE via the CLI: hugmesh_role_validate already rejected anything
+        # outside HUGMESH_ROLES_X86 (canonical or alias) before this block ran. Kept
+        # as a fail-closed net for an in-script assignment that bypasses the parser.
+        err "internal: role '${ROLE}' passed validation but has no arm here — the case block has drifted from HUGMESH_ROLES_X86 in scripts/_roles-lib.sh"
         exit 1 ;;
 esac
 
@@ -1723,7 +1740,7 @@ if ${NVIDIA_CUDA}; then
         exit 1
     fi
 fi
-# edge_ai inference node: default CUDA on when on the proprietary NVIDIA driver (the
+# edge-ai inference node: default CUDA on when on the proprietary NVIDIA driver (the
 # inference runtime needs it). Skipped for an AMD/Intel edge node (future ROCm path).
 if ${EDGE_AI} && [ "${GPU_DRIVER}" = "nvidia" ]; then NVIDIA_CUDA=true; fi
 case "${STEAM_DELIVERY}" in flatpak|native|none) ;; *) err "--steam must be: flatpak | native | none (got '${STEAM_DELIVERY}')"; exit 1 ;; esac
@@ -1776,7 +1793,7 @@ pu_copied_for_role() { # <basename> -> 0 iff this role/driver gets the file
         capable)         ${CAPABLE} ;;
         nvidia)          ${NVIDIA_PROPRIETARY} ;;
         # nvidia-headless (-tools) ONLY for HEADLESS proprietary-NVIDIA roles
-        # (edge_ai/be+gpu): nvidia-settings' gtk+:3[X] dep walls under the node
+        # (edge-ai/backend-gpu): nvidia-settings' gtk+:3[X] dep walls under the node
         # -X posture (issue #60 item 3). Desktop GPU roles keep 'tools'.
         nvidia-headless) ${NVIDIA_PROPRIETARY} && ! ${ROLE_CLIENT} ;;
         amd-pro)         ${AMD_PRO} ;;
@@ -1793,8 +1810,8 @@ pu_copied_for_role() { # <basename> -> 0 iff this role/driver gets the file
 # inherits the (narrower) make.conf list, so the chain is unsatisfiable and the
 # whole 'image' emerge GROUP aborts with a payload-incomplete error naming grub/
 # dracut/parted/kubelet, i.e. pointing nowhere near the GPU.
-# Measured: 2026-08-22 edge_ai fleet run (out/sessions/20260822-225110-80c83a) —
-# edge_ai defaults --gpu-driver nvidia ⇒ VIDEO_CARDS="nouveau nvidia", while
+# Measured: 2026-08-22 edge-ai fleet run (out/sessions/20260822-225110-80c83a) —
+# edge-ai defaults --gpu-driver nvidia ⇒ VIDEO_CARDS="nouveau nvidia", while
 # package.use/gpu forced mesa's cards to the all-free set, so:
 #   emerge: there are no ebuilds built with USE flags to satisfy
 #           ">=x11-libs/libdrm-2.4.121[video_cards_amdgpu]"
@@ -2124,7 +2141,7 @@ if [ "${IDP}" != "casdoor" ] && [ -z "${IDP_JWKS}" ]; then
     info "IdP: --idp-jwks empty — derived the ${IDP} default: ${IDP_JWKS}"
 fi
 
-# ── Cluster NODE compact-root sizing (pki/be/fe/be+gpu/omnibus) ──────────────────────
+# ── Cluster NODE compact-root sizing (pki/backend/frontend/backend-gpu/omnibus) ──────────────────────
 # The k8s node payload (kubeadm/kubelet/containerd + mesh binaries + base) is ~11.2 GiB
 # and overflows the historical 8 GiB ROOT_MiB default → the .img pre-flight (build_img)
 # aborts with "Payload NNNN MiB exceeds the 8192 MiB root partition". Mirror the client
@@ -2288,10 +2305,9 @@ fi
 KERNEL_CACHE_ROOT="$(kc_root "${SHARED_ROOT}")"
 if ${PRINT_PLAN}; then
     _plan() { printf 'PLAN_%s=%s\n' "$1" "$2"; }
-    # Filename-safe role tag (mirrors the Phase-9 artifact naming): be+gpu keeps
-    # the legacy 'host' tag; client devices carry person-role + primary domain.
+    # Role tag (mirrors the Phase-9 artifact naming): the role verbatim; client
+    # devices carry person-role + primary domain.
     _PLAN_ROLE_TAG="${ROLE}"
-    [ "${ROLE}" = "be+gpu" ] && _PLAN_ROLE_TAG="host"
     # UNAFFILIATED artifacts carry no person-role/domain tie — the bare role name.
     if ${ROLE_CLIENT} && ! ${UNAFFILIATED}; then
         _pd="${DOMAINS%%[ ,]*}"; _dt="${_pd//./_}"
@@ -2353,7 +2369,10 @@ fi
 
 [ "$(id -u)" -eq 0 ] || { err "Run as root (chroot emerge + ISO build need it)."; exit 1; }
 [ -z "${WORK_DIR}" ] && WORK_DIR="$(pwd)/out"
-[ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-host"
+# UNREACHABLE belt-and-braces: every role arm above already assigned one. Derived
+# through the shared table rather than hardcoded, so this line cannot become the
+# place a role-spelled hostname quietly survives a rename.
+[ -z "${HOSTNAME}" ] && HOSTNAME="$(hugmesh_role_hostname x86 "${ROLE}" "${BRAND}")"
 # BUILD_ROOT = the per-arch heavy build tree under WORK_DIR (default
 # WORK_DIR/snap-build-x86). The sysroot, ISO staging, distfiles, pkgdir, seed
 # tarball and downloads all live here so the amd64 build never collides with the
@@ -3616,7 +3635,7 @@ if ${NVIDIA_PROPRIETARY}; then
 fi
 
 # Per-package build env (e.g. env/llvm-lowmem.conf caps MAKEOPTS for the
-# memory-hungry llvm-core/llvm+clang that mesa[llvm] pulls for the be+gpu role —
+# memory-hungry llvm-core/llvm+clang that mesa[llvm] pulls for the backend-gpu role —
 # at the global -j28 they OOM-crashed the host). Copy the env/ snippets + the
 # package.env mapping when present (the headless roles carry them harmlessly).
 # -r: env/ also carries path-based env/<category>/<pkg> BASH files (portage
@@ -3727,7 +3746,7 @@ if ! ${UNAFFILIATED}; then
 cp "${SHARED_SPECS}/etc/sysctl.d/99-kubernetes.conf"  "${SYSROOT}/etc/sysctl.d/"
 cp "${SHARED_SPECS}/etc/modules-load.d/kubernetes.conf" "${SYSROOT}/etc/modules-load.d/"
 cp "${SHARED_SPECS}/etc/containerd/config.toml"       "${SYSROOT}/etc/containerd/"
-# GPU k8s nodes (be+gpu / omnibus / edge_ai with the proprietary NVIDIA driver): add
+# GPU k8s nodes (backend-gpu / omnibus / edge-ai with the proprietary NVIDIA driver): add
 # the containerd `nvidia` runtime so pods with runtimeClassName: nvidia get the GPU.
 # The nvidia-device-plugin DaemonSet, the edge-ai inference service, and the GPU
 # voice/video services (owncast/coturn/tube) all rely on it. The binary comes from
@@ -4530,7 +4549,7 @@ ${UNAFFILIATED} || mkdir -p "${SYSROOT}/opt/cni/bin" "${SYSROOT}/etc/cni/net.d" 
 # Runlevels. growroot expands the ext4 root to fill the medium on first boot and
 # orders itself before keys-provision (so provisioning sees the full disk).
 # headscale (identity/mesh control server) runs only on the pki / omnibus nodes;
-# worker roles (be/fe/be+gpu) reach the mesh as a tailscale client.
+# worker roles (backend/frontend/backend-gpu) reach the mesh as a tailscale client.
 mkdir -p "${SYSROOT}/etc/runlevels/default"
 if ${ROLE_CLIENT}; then
     # CLIENT desktop: NO containerd/kubelet/headscale (not a k8s node). Add the
@@ -4740,7 +4759,7 @@ harden_radios "${SYSROOT}"
 # (then missing crt*.o / libc_nonshared.a) during emerge. Idempotently restore
 # the compiler+glibc statics from the seed tarball before emerge — additive only,
 # a cheap no-op when they're already present. Only GPU roles compile from source;
-# binpkg-only roles (pki/be/fe) never link a toolchain and don't need these.
+# binpkg-only roles (pki/backend/frontend) never link a toolchain and don't need these.
 if ${GPU} && [ -z "$(find "${SYSROOT}/usr/lib/gcc" -name libgcc.a -print -quit 2>/dev/null)" ]; then
     banner "Restoring toolchain static libs from seed (GPU source-compile)"
     _statics_list="$(mktemp)"
@@ -4927,7 +4946,7 @@ trap umount_chroot EXIT
 mount_chroot
 
 # Base package set; the vendor-agnostic GPU stack (Mesa/Vulkan/libva) is appended
-# ONLY for GPU roles (be+gpu / omnibus) so pki/be/fe images stay slim.
+# ONLY for GPU roles (backend-gpu / omnibus) so pki/backend/frontend images stay slim.
 PKG_LISTS=("${SPECS_DIR}/portage/packages.list")
 ${GPU} && PKG_LISTS+=("${SPECS_DIR}/portage/packages-gpu.list")
 # Proprietary NVIDIA driver atoms (x11-drivers/nvidia-drivers [+ CUDA] — see
@@ -6230,7 +6249,7 @@ if ! ${SKIP_CLEAN}; then
     done
 
     # Firmware pruning: headless server nodes don't need WiFi / Bluetooth /
-    # audio firmware; GPU firmware is pruned for the non-GPU roles (pki/be/fe).
+    # audio firmware; GPU firmware is pruned for the non-GPU roles (pki/backend/frontend).
     if ! ${ROLE_CLIENT}; then
         rm -rf \
             "${SYSROOT}"/lib/firmware/ath/ \
@@ -6315,13 +6334,11 @@ pcs_unquiet_sendfile_noise "${SYSROOT}"
 rm -f "${SYSROOT}/tmp/hugmesh-patch-portage-file-copy.py"
 
 banner "Packaging stage4 tarball"
-# Filename-safe role tag. be+gpu keeps the legacy 'host' tag so existing
-# flashers/launchers/gen-provision-keys examples that reference 'host' keep
-# working; the other roles get their own (filesystem-friendly) names.
-case "${ROLE}" in
-    be+gpu) ROLE_TAG="host" ;;
-    *)      ROLE_TAG="${ROLE}" ;;
-esac
+# The role tag IS the role. It only ever translated because `be+gpu` carried a `+`
+# that is illegal in a filename-ish token; `backend-gpu` is filename-safe, so the
+# be+gpu->host fold (and its --print-plan twin) is gone. Consumers that must still
+# find an OLD artifact glob the aliases (hugmesh_role_aliases_of).
+ROLE_TAG="${ROLE}"
 # FD-08: client device artifacts carry the person-role + primary-domain tag so the
 # filename identifies who/what the device is tied to (cosmetic per ADR-12 — the real
 # isolation is per-domain authz, not the name). e.g. laptop-user-acme_example.
@@ -7148,12 +7165,21 @@ echo "  Default artifact = the .img (dd it to a disk/USB; UEFI GPT, GRUB-EFI rem
 if ! ${UNAFFILIATED}; then
     echo ""
     echo "  Provision a KEYS stick for this node with:"
-    case "${ROLE}" in
-        pki)     echo "    ./scripts/gen-provision-keys.sh -r pki -o keys-${ROLE_TAG}        # control-plane (kubeadm init)" ;;
-        be)      echo "    ./scripts/gen-provision-keys.sh -r backend -o keys-${ROLE_TAG}    # worker; label hugmesh.net/backend=true" ;;
-        fe)      echo "    ./scripts/gen-provision-keys.sh -r frontend -o keys-${ROLE_TAG}   # worker; label hugmesh.net/frontend=true" ;;
-        be+gpu)  echo "    ./scripts/gen-provision-keys.sh -r backend -o keys-${ROLE_TAG}    # worker; edit:";
-                 echo "    hugmesh.role=games, node_labels { hugmesh.net/compute: gpu }" ;;
-        omnibus) echo "    ./scripts/gen-provision-keys.sh -r pki -o keys-${ROLE_TAG}        # single-node CP; all labels (pki/backend/frontend/compute=gpu)" ;;
-    esac
+    # The profile comes from HUGMESH_ROLE_KEYPROFILE, not from a fourth hand-copy of
+    # the same table. This hint is the ONLY thing that ever joined the CLI token to a
+    # k8s label: a sentence an operator retypes onto the KEYS stick. ROLE_LABELS is
+    # declared "informational" above and printed once below; it is never written into
+    # the sysroot and never read by provision.sh.
+    _kp="$(hugmesh_role_keyprofile "${ROLE}" || true)"
+    if [ -n "${_kp}" ]; then
+        echo "    ./scripts/gen-provision-keys.sh -r ${_kp} -o keys-${ROLE_TAG}"
+        case "${ROLE}" in
+            pki)         echo "      # control-plane (kubeadm init)" ;;
+            backend)     echo "      # worker; label hugmesh.net/backend=true" ;;
+            frontend)    echo "      # worker; label hugmesh.net/frontend=true" ;;
+            backend-gpu) echo "      # worker; then edit: hugmesh.role=games, node_labels { hugmesh.net/compute: gpu }" ;;
+            omnibus)     echo "      # single-node CP; all labels (pki/backend/frontend/compute=gpu)" ;;
+            edge-ai)     echo "      # GPU inference worker; node_labels { hugmesh.net/compute: gpu, hugmesh.net/edge-ai: \"true\" }" ;;
+        esac
+    fi
 fi

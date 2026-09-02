@@ -213,7 +213,7 @@ A GUI-only reorganisation — **emission is byte-identical** (the build-matrix `
   is meaningless — hidden on the desktop standalone/cloud paths and on ARM. On the mesh
   flow the gate keys on the **worklist entries themselves** — shown iff *any* checked row
   is a node-class role on the x86 builder — never on the base config: the base role is
-  just the *first* checked row (catalog order puts `rpi5-desktop` before `edge_ai`) and
+  just the *first* checked row (catalog order puts `rpi5-desktop` before `edge-ai`) and
   the base platform is forced `x86` for the shared option-superset pages, so a base-keyed
   gate would hide+clear creds an x86 node row still consumes (emission loss) and show
   them on an all-ARM worklist that consumes them nowhere. The creds are blanked only when

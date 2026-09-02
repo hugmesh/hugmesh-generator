@@ -41,7 +41,7 @@ How to select it:
 make local                                  # ENV=test + brands/local.conf (hugmesh.test)
 make prod                                   # ENV=prod, real domain (announced)
 make build-all ENV=test BRAND=acme          # any brand, test
-./build-x86-host-stage4.sh --env test --config brands/local.conf --role be+gpu
+./build-x86-host-stage4.sh --env test --config brands/local.conf --role backend-gpu
 ./scripts/build-all-roles.sh --env test --config brands/local.conf
 ```
 
