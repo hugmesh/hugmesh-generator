@@ -77,6 +77,16 @@ EMERGE_PLAN_PREFIX="==> Emerge plan: "
 emerge_plan_emit() {
     local group="$1"; shift
     local pfx="${EMERGE_PLAN_PREFIX}"
+    # Failed-resolution keep-file: when the pretend pass fails, its output is
+    # KEPT here (not discarded) so a caller may act on it — the x86 payload
+    # fail-fast gate (hugmesh_payload_plan_gate, issue #223) reads it to stop a
+    # build the real merge is guaranteed to fail anyway. Cleared up front on
+    # EVERY invocation (opt-out included) so a stale file from a previous run or
+    # group can never trigger a gate for a plan that resolved — resumed sysroots
+    # persist their /tmp across builds. Still ALWAYS returns 0: the keep-file is
+    # advisory, the never-breaks-a-build contract above is unchanged.
+    local keep="${TMPDIR:-/tmp}/hugmesh-emerge-plan-${group}-pretend-failed.log"
+    rm -f "${keep}" 2>/dev/null || true
     if [ "${EMERGE_PLAN_ENABLED:-true}" != "true" ]; then
         printf '%s%s unavailable reason=opt-out\n' "${pfx}" "${group}"
         return 0
@@ -118,8 +128,12 @@ emerge_plan_emit() {
     wait "${pid}" && rc=0 || rc=$?
     if [ "${rc}" -ne 0 ]; then
         printf '%s%s unavailable reason=pretend-failed\n' "${pfx}" "${group}"
-        printf '[emerge-plan] WARN: --pretend resolution exited %s — %s preview skipped, build continues (the real merge below reports any real failure itself)\n' "${rc}" "${group}" >&2
-        rm -f "${tmp}"
+        if mv -f "${tmp}" "${keep}" 2>/dev/null; then
+            printf '[emerge-plan] WARN: --pretend resolution exited %s — %s preview skipped, build continues (the real merge below reports any real failure itself); resolver output kept at %s\n' "${rc}" "${group}" "${keep}" >&2
+        else
+            printf '[emerge-plan] WARN: --pretend resolution exited %s — %s preview skipped, build continues (the real merge below reports any real failure itself)\n' "${rc}" "${group}" >&2
+            rm -f "${tmp}"
+        fi
         return 0
     fi
     # Parse the pretend rows into the wire format. Merge rows are [ebuild ...]

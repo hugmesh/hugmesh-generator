@@ -3136,6 +3136,7 @@ orphan-guards-verify:
         tests/scripts/test-platform-key-spelling.sh
         tests/scripts/test-portage-config-sync.sh
         tests/scripts/test-python-targets-seed.sh
+        tests/scripts/test-qt6-keyword-preseeds.sh
         tests/scripts/test-rebrand-frozen-label-keys.sh
         tests/scripts/test-rpi5-per-board-pkgdir.sh
         tests/scripts/test-shared-build-assets.sh

@@ -329,7 +329,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     155 of 177 suites are named by a pull_request-triggered workflow
 # +1 gated +1 total from each side; PREMERGE_UNGATED stays 22. Carried by
 # re-running this file, not by arithmetic - but the arithmetic agrees.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-155}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-156}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a

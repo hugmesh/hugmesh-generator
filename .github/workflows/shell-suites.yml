@@ -310,6 +310,7 @@ jobs:
             tests/scripts/test-portage-config-sync.sh
             tests/scripts/test-provision-manifest-injection.sh
             tests/scripts/test-publish-images.sh
+            tests/scripts/test-qt6-keyword-preseeds.sh
             tests/scripts/test-rebrand-frozen-label-keys.sh
             tests/scripts/test-reserved-prefix-copy-gate.sh
             tests/scripts/test-route-access-oracle.sh

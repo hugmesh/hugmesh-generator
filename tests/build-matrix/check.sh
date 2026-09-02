@@ -2332,6 +2332,7 @@ run_nongating_smokes() {
                 "host-accept-keywords:${REPO_DIR}/tests/scripts/test-host-accept-keywords.sh" \
                 "python-targets-seed:${REPO_DIR}/tests/scripts/test-python-targets-seed.sh" \
                 "calamares-boost-seed:${REPO_DIR}/tests/scripts/test-calamares-boost-seed.sh" \
+                "qt6-keyword-preseeds:${REPO_DIR}/tests/scripts/test-qt6-keyword-preseeds.sh" \
                 "installer-ui-node-default:${REPO_DIR}/tests/scripts/test-installer-ui-node-default.sh" \
                 "host-selinux-tools:${REPO_DIR}/tests/scripts/test-host-selinux-tools.sh" \
                 "builder-log-paths:${REPO_DIR}/tests/scripts/test-builder-log-paths.sh" \
