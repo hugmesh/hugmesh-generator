@@ -106,7 +106,7 @@ With `SNAP_PLATFORM` unset (the default) every platform row runs.
 
 | id | what it is | base URL | start it with |
 |---|---|---|---|
-| `docker` | the local compose stack (**the default**) | `SNAP_BASE_URL` or `https://localhost:8443` | `make stack-up ENV=test` then `make stack-seed` |
+| `docker` | the local compose stack (**the default**) | `SNAP_BASE_URL` or `https://localhost:${PUBLIC_HTTPS_PORT:-8488}` (the compose stack's PUBLISHED door — `compose.local.yaml` maps `${PUBLIC_HTTPS_PORT:-8488}:8443`, and 8443 is the port *inside* the tls-front container; on a dev box :8443 is the kind node) | `make stack-up ENV=test` then `make stack-seed` |
 | `kind` | the local devops cluster, context `kind-hugmesh-local` | `https://hugmesh.net:8443` (from the Makefile's `kind-e2e`) | `make kind-images && make kind-up` |
 | `qemu` | an emulated device, over its forwarded host port | `https://localhost:${UI_PORT}` (`tests/qemu/run-qemu-e2e.sh`, default 8443) | `bash tests/qemu/run-qemu-e2e.sh --target x86 --img <image>` |
 
