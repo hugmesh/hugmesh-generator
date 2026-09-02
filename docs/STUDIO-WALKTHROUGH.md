@@ -47,23 +47,22 @@ Below that is a paragraph about **this machine**, generated from a host probe:
 - If neither exists, it says in red that this machine cannot build images yet, and names the fix. Under WSL that fix is Docker Desktop's per-distro WSL Integration checkbox (Settings → Resources → WSL Integration), not a reinstall — and on WSL1, converting the distro to WSL2 first. You can still configure and save an image here and build it elsewhere.
 - Either way, if the generator directory is on a Windows drive **and** this is WSL, or on a network filesystem, a red **SLOW FILESYSTEM** warning appears. Read it. That build does not fail — it stops appearing to move, and you will read it as a hang. The Windows-drive remedy is to put the repo on the Linux filesystem (`git clone … ~/Github/hugmesh-generator`); the network-filesystem remedy is to copy it onto a local disk. The check is made on the filesystem type from `/proc/mounts`, so a symlink from `~/Github` into `/mnt/c` is caught too; only an unreadable mount table falls back to the shape of the path.
 
-Then three cards. Pick one:
+Then two cards. Pick one:
 
 | Card | Goes to |
 | --- | --- |
 | **Start building** | the build menu (`mode`) |
-| **Start a local mesh** | the local Docker mesh flow, skipping the menu entirely |
 | **Review prior sessions** | the Prior-sessions screen |
 
 **Start building** is pre-selected, so pressing Next or Enter without touching anything takes the ordinary path. **Clicking a card both selects it and advances** — there is no confirm step. Space, Return or Enter on a focused card does the same, and the arrow keys move the selection between cards. Back works normally if you overshoot.
 
-Picking **Start a local mesh** here sets a transient wizard flag and jumps straight to the local-mesh page. That flag is never written into the saved configuration; the config's `mode` stays an image mode regardless.
+(A third card, **Start a local mesh**, was removed on 2026-08-26 — it duplicated the build menu's own **Local Docker mesh** card. That flow is reached through **Start building** now; see `STUDIO-WIZARD-FLOW.md`.)
 
 One exception to all of this: a **Restart** from a prior session sets the wizard's start page to the build-progress page. You never see this screen on that path.
 
 ### Prior sessions — only if you asked for it
 
-Reached only from Welcome's third card — nothing else routes into it. Its own Next continues to the build menu, carrying whatever you loaded, so it is a stop on the way rather than a dead end. If you have nothing to reuse, skip it.
+Reached only from Welcome's second card — nothing else routes into it. Its own Next continues to the build menu, carrying whatever you loaded, so it is a stop on the way rather than a dead end. If you have nothing to reuse, skip it.
 
 **Load config… / Save config…** One loader handles both file shapes: a flat single-image config, and a `hugmesh-worklist/v1` envelope. You do not have to know which you have.
 
@@ -146,7 +145,7 @@ Picking one of the seven tool cards raises a flag on the wizard, not a field in 
 
 ### Local Docker mesh
 
-Runs a dockerized HugMesh mesh on this machine. No image build, no server hardware. You can also reach it straight from Welcome's "Start a local mesh" card.
+Runs a dockerized HugMesh mesh on this machine. No image build, no server hardware.
 
 Two tabs, and they are alternatives.
 
