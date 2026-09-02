@@ -111,7 +111,7 @@ def _is_desktop(cfg: ImageConfig) -> bool:
 def _is_gpu(cfg: ImageConfig) -> bool:
     # x86: pki/be/fe -> GPU off; be+gpu/omnibus/edge_ai and every client desktop -> GPU on;
     # an explicit --gpu-driver forces it on for any role (build-x86:1131).
-    if cfg.role in ("be+gpu", "omnibus", "edge_ai", "edge-ai"):
+    if cfg.role in ("backend-gpu", "omnibus", "edge-ai", "be+gpu", "edge_ai", "gpu-host"):
         return True
     if _is_desktop(cfg):
         return True
@@ -187,7 +187,8 @@ PLATFORM_LISTS: dict[str, tuple[ListSpec, ...]] = {
         ListSpec("packages", "base", _ALWAYS),
         ListSpec("packages-desktop", "desktop", _is_desktop),
         ListSpec("packages-edge-ai", "edge-ai",
-                 lambda cfg: cfg.role in ("edge_ai", "edge-ai", "full", "gpu-host")),
+                 lambda cfg: cfg.role in ("edge-ai", "omnibus", "backend-gpu",
+                                          "edge_ai", "full", "gpu-host")),
         ListSpec("packages-k8s", "k8s", _NODE),
     ),
     "frite": (
@@ -263,7 +264,7 @@ ADHOC_ADDS: tuple[AdhocAdd, ...] = (
     AdhocAdd("nvidia-container-toolkit", "NVIDIA container runtime",
              ("app-containers/nvidia-container-toolkit",),
              lambda cfg: cfg.gpu_driver == "nvidia"
-             and cfg.role in ("edge_ai", "edge-ai", "be+gpu", "omnibus")),
+             and cfg.role in ("edge-ai", "backend-gpu", "omnibus", "edge_ai", "be+gpu")),
 )
 
 

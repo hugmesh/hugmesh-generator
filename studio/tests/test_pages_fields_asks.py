@@ -33,6 +33,7 @@ condition in the source makes the named test fail.
 """
 import os
 import re
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -43,6 +44,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
+from hugmesh_studio.core import roles as roles_lib   # noqa: E402
 from hugmesh_studio.core import timezones          # noqa: E402
 from hugmesh_studio.core.config import (           # noqa: E402
     PERSON_ROLE_CHOICES, Domain, ImageConfig, User, clear_role_class_fields,
@@ -101,7 +103,7 @@ def mesh_flow(wiz, *ids):
     """Enter mesh and check the given worklist rows (default: three x86 nodes)."""
     pick_mode(wiz, "mesh")
     wl = advance_to(wiz, wizard_mod.WorklistPage)
-    check_worklist_rows(wl, *(ids or ("pki.x86", "be.x86", "fe.x86")))
+    check_worklist_rows(wl, *(ids or ("pki.x86", "backend.x86", "frontend.x86")))
     return wl
 
 
@@ -582,41 +584,65 @@ def test_ask9_the_local_user_note_never_claims_a_flag_the_argv_lacks(wiz, mode, 
     assert ("--user" in args) or emitted, f"{mode}/{role}: NO account flag in the argv"
 
 
-def test_ask9_derived_hostname_matches_the_builder_role_switch():
-    """DRIFT GUARD: config._HOSTNAME_SUFFIX is a transcription of the shell. Re-read
-    build-x86-host-stage4.sh and assert every `[ -z "${HOSTNAME}" ] && HOSTNAME=...`
-    default it declares is what derive_hostname() returns for that role."""
-    src = os.path.join(GENERATOR_DIR, "build-x86-host-stage4.sh")
-    with open(src, encoding="utf-8") as fh:
-        lines = fh.read().splitlines()
-    arm = re.compile(r"^    ([a-z0-9|+_-]+)\)\s*$")
-    lit = re.compile(r'\[ -z "\$\{HOSTNAME\}" \] && HOSTNAME="\$\{BRAND\}-([a-z0-9+_-]+)"')
-    passthru = re.compile(r'\[ -z "\$\{HOSTNAME\}" \] && HOSTNAME="\$\{BRAND\}-\$\{ROLE\}"')
-    current, checked = None, 0
-    for line in lines:
-        if line == "esac" and checked:
-            break            # end of the ROLE case — later HOSTNAME lines are the
-                             # global fallback, not a per-role default
-        m = arm.match(line)
-        if m:
-            current = m.group(1)
-            continue
-        if current is None:
-            continue
-        m = lit.search(line)
-        if m:
-            for r in current.split("|"):
-                cfg = ImageConfig(mode="mesh", role=r, platform="x86", brand="acme")
-                assert derive_hostname(cfg) == f"acme-{m.group(1)}", r
-                checked += 1
-        elif passthru.search(line):
-            for r in current.split("|"):
-                cfg = ImageConfig(mode="mesh", role=r, platform="x86", brand="acme")
-                assert derive_hostname(cfg) == f"acme-{r}", r
-                checked += 1
-    # the builder really does declare a hostname default per role — a silently empty
-    # scrape would make this test vacuous
-    assert checked >= 10, checked
+def test_ask9_derived_hostname_matches_the_shell_vocabulary():
+    """DRIFT GUARD, cross-LANGUAGE: config.derive_hostname() must agree with the
+    shell for every canonical role on every platform.
+
+    This used to SCRAPE `[ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-<literal>"` out of
+    build-x86-host-stage4.sh, because config._HOSTNAME_SUFFIX was a hand transcription
+    of that switch. There is no transcription any more: the builders and the Studio
+    both derive from scripts/_roles-lib.sh (hugmesh_role_hostname / roles.hostname).
+    So the guard stops parsing one builder's literals and instead RUNS the shell
+    function — the same code the builder runs — and compares its answer. That covers
+    all three role-axis platforms instead of one, and it cannot be fooled by a
+    refactor that moves the literal somewhere the regex does not look.
+    """
+    lib = os.path.join(GENERATOR_DIR, "scripts", "_roles-lib.sh")
+    assert os.path.exists(lib), lib
+    checked = 0
+    for plat in ("x86", "rpi5", "jetson"):
+        for role in roles_lib.roles_for_platform(plat):
+            if role == "standalone-unaffiliated":
+                # The ONE role whose hostname is not assigned by the role switch at
+                # all: build-x86-host-stage4.sh's UNAFFILIATED fold runs LATER and
+                # sets "gentoo-desktop", after the brand identity is neutralised —
+                # a branded "${BRAND}-…" name would contradict the whole posture.
+                # Asserted on its own below rather than compared to the shared table.
+                continue
+            board = "rpi4" if plat == "rpi5" else ""
+            out = subprocess.run(
+                ["bash", "-c",
+                 f'. "{lib}"; hugmesh_role_hostname {plat} "{role}" acme "{board}"'],
+                capture_output=True, text=True, timeout=60)
+            assert out.returncode == 0, out.stderr
+            want = out.stdout.strip()
+            cfg = ImageConfig(mode="mesh", role=role, platform=plat, brand="acme",
+                              board=board)
+            assert derive_hostname(cfg) == want, f"{plat}/{role}: shell={want!r} python={derive_hostname(cfg)!r}"
+            checked += 1
+    # a silently empty scrape would make this test vacuous
+    assert checked >= 20, checked
+
+
+def test_ask9_hostname_exceptions_are_the_three_declared_ones():
+    """POSITIVE control on the exceptions. The derived rule is `{brand}-{role}`; the
+    three literals that survive it are DELIBERATE back-compat, not leftovers, and a
+    rename must not quietly re-point them."""
+    def hn(plat, role, board=""):
+        return derive_hostname(ImageConfig(mode="mesh", role=role, platform=plat,
+                                           brand="acme", board=board))
+    assert hn("x86", "backend-gpu") == "acme-host"          # flashers/launchers
+    assert hn("x86", "standalone-thick") == "acme-standalone"
+    assert hn("rpi5", "generic", "rpi4") == "gentoo-rpi4"   # drops the brand entirely
+    # the UNAFFILIATED desktop: assigned by the later brand-neutralising fold, not by
+    # the role switch, so it is deliberately outside the shared hostname table.
+    assert hn("x86", "standalone-unaffiliated") == "gentoo-desktop"
+    # ...and the roles that used to spell themselves short now bake the long name,
+    # which is what the Pi builder has always baked for the same logical node.
+    assert hn("x86", "backend") == "acme-backend"
+    assert hn("rpi5", "backend") == "acme-backend"
+    assert hn("x86", "frontend") == "acme-frontend"
+    assert hn("rpi5", "frontend") == "acme-frontend"
 
 
 def test_ask9_derived_default_user_matches_the_real_emission():
@@ -626,7 +652,7 @@ def test_ask9_derived_default_user_matches_the_real_emission():
     for cfg in (ImageConfig(mode="mesh", role="pki", platform="x86"),
                 ImageConfig(mode="cloud", role="laptop", platform="x86",
                             local_user="alice"),
-                ImageConfig(mode="mesh", role="be", platform="rpi5"),
+                ImageConfig(mode="mesh", role="backend", platform="rpi5"),
                 ImageConfig(mode="cloud", role="rpi5-desktop", platform="rpi5",
                             local_user="bob")):
         args = cfg.to_cli_args()
@@ -637,13 +663,17 @@ def test_ask9_derived_default_user_matches_the_real_emission():
 
 def test_ask9_mesh_worklist_does_not_bake_one_hostname_onto_every_node(wiz):
     """HONESTY arm of the preselect: a mesh worklist builds several images off ONE base
-    config, which carries ONE hostname. Prefilling it would name pki, be and fe the same
-    thing, so the field stays blank there and the real per-node derivation is SHOWN."""
-    mesh_flow(wiz, "pki.x86", "be.x86", "fe.x86")
+    config, which carries ONE hostname. Prefilling it would name pki, backend and
+    frontend the same thing, so the field stays blank there and the real per-node
+    derivation is SHOWN."""
+    mesh_flow(wiz, "pki.x86", "backend.x86", "frontend.x86")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     assert sysp.hostname.text() == ""
     assert sysp.hostname_note.isVisible()
-    for name in ("hugmesh-pki", "hugmesh-be", "hugmesh-fe"):
+    # ...and the names it shows are the canonical ones an x86 node really bakes now
+    # (they were hugmesh-be / hugmesh-fe, while the SAME logical node on a Pi baked
+    # hugmesh-backend / hugmesh-frontend).
+    for name in ("hugmesh-pki", "hugmesh-backend", "hugmesh-frontend"):
         assert name in sysp.hostname_note.text()
     advance_to(wiz, wizard_mod.HomePage)
     assert "--hostname" not in wiz.cfg.to_cli_args()      # mesh argv stays as it was
@@ -667,7 +697,7 @@ def test_ask9_mesh_worklist_does_not_bake_the_x86_account_onto_every_arm_node(wi
     emitted `-u <x86 account>` on the rpi5 row, which had emitted nothing before and
     whose builder would have used 'pi'. Baking a default account onto a board that
     never asked for one is exactly what the hostname guard exists to stop."""
-    mesh_flow(wiz, "pki.x86", "be.rpi5")
+    mesh_flow(wiz, "pki.x86", "backend.rpi5")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     assert sysp.user.text() == ""
     assert sysp.user_note.isVisible()
@@ -676,14 +706,14 @@ def test_ask9_mesh_worklist_does_not_bake_the_x86_account_onto_every_arm_node(wi
     build = advance_to(wiz, wizard_mod.BuildPage)
     assert "--user" not in wiz.cfg.to_cli_args()
     by_id = {e.id: cfg for e, cfg in build._materialized}
-    assert by_id["be.rpi5"].user == ""
-    assert "--user" not in by_id["be.rpi5"].to_cli_args()
+    assert by_id["backend.rpi5"].user == ""
+    assert "--user" not in by_id["backend.rpi5"].to_cli_args()
 
 
 def test_ask9_a_worklist_whose_rows_agree_still_prefills(wiz):
     """The fix is a per-row AGREEMENT test, not a blanket "blank it in mesh": an
     all-x86 worklist derives one account for every row, so ask 9's preselect stands."""
-    mesh_flow(wiz, "pki.x86", "be.x86", "fe.x86")
+    mesh_flow(wiz, "pki.x86", "backend.x86", "frontend.x86")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     assert sysp.user.text() == derive_default_user(wiz.cfg) != ""
     assert not sysp.user_note.isVisible()
@@ -695,7 +725,7 @@ def test_ask9_the_per_row_account_probe_matches_the_materialized_rows(wiz):
     """DRIFT GUARD for the probe itself: SystemPage derives each row's account from a
     SimpleNamespace rather than materializing (materialize is not free and emits build
     notes), so pin that shortcut against the real thing — every id, every value."""
-    mesh_flow(wiz, "pki.x86", "be.rpi5", "edge_ai.jetson")
+    mesh_flow(wiz, "pki.x86", "backend.rpi5", "edge-ai.jetson")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     probed = dict(sysp._worklist_default_users(wiz.cfg))
     real = {e.id: derive_default_user(cfg) for e, cfg in wiz.worklist.materialize()}
@@ -910,7 +940,7 @@ def test_ask12_every_worklist_row_inherits_the_mesh_default(wiz):
 def test_ask12_jetson_rows_stay_exempt(wiz):
     """The jetson builder hard-blocks --encrypt-root, so the mesh default must not make
     to_cli_args() raise for a jetson row."""
-    mesh_flow(wiz, "edge_ai.jetson", "pki.x86")
+    mesh_flow(wiz, "edge-ai.jetson", "pki.x86")
     build = advance_to(wiz, wizard_mod.BuildPage)
     by_plat = {e.platform: cfg for e, cfg in build._materialized}
     assert by_plat["jetson"].encrypt_root is False
@@ -1000,11 +1030,11 @@ def test_ask12_manifest_v2_reports_the_encrypted_posture(wiz):
     (worklist_driver.manifest_v2), so an operator reading a session record now sees
     encrypt_root true for every node — which the survey found was NOT true before."""
     from hugmesh_studio.core.worklist_driver import WorklistDriver
-    mesh_flow(wiz, "pki.x86", "be.x86")
+    mesh_flow(wiz, "pki.x86", "backend.x86")
     advance_to(wiz, wizard_mod.BuildPage)
     drv = WorklistDriver(wiz.generator_dir, wiz.worklist, host=wiz.host)
     images = drv.manifest_v2()["images"]
-    assert {i["id"] for i in images} == {"pki.x86", "be.x86"}
+    assert {i["id"] for i in images} == {"pki.x86", "backend.x86"}
     assert all(i["encrypt_root"] is True for i in images), images
     # the manifest also carries NO domains/users while the ask-8 opt-in is off
     assert drv.manifest_v2()["domains"] == [] and drv.manifest_v2()["users"] == []
@@ -1055,14 +1085,14 @@ def test_loaded_mesh_config_keeps_both_new_gates_coherent(wiz):
 def test_ask20_generated_card_names_the_account_and_where_to_find_it(wiz):
     """The card names the ACCOUNT, the NODE it lands on, the FILES, and the caveat —
     for the worklist actually selected."""
-    mesh_flow(wiz, "pki.x86", "be.x86")
+    mesh_flow(wiz, "pki.x86", "backend.x86")
     uc = advance_to(wiz, wizard_mod.UsersChoicePage)
     text = uc._buttons["generated"].accessibleDescription()
     assert text == default_accounts_summary(wiz)          # painted == asserted
     assert "admin" in text                                # gen-provision-keys.sh ADMIN
     assert "pki.x86" in text                              # the node that gets accounts
     assert "users.json" in text and "admin_ed25519" in text
-    assert "be.x86" in text and "keys only" in text       # the worker node, named
+    assert "backend.x86" in text and "keys only" in text       # the worker node, named
     # precise about WHICH root: the generated key set locks root; ask 10's baked
     # --root-password is a different channel and the card must not blur them
     assert "root login stays LOCKED" in text
@@ -1076,7 +1106,7 @@ def test_ask20_generated_card_claim_matches_the_real_key_channel(wiz):
     worklist_driver.key_profile — so a KEY_PROFILE edit that moved which roles mint
     accounts fails this test instead of silently making the card a lie."""
     from hugmesh_studio.core.worklist_driver import key_profile
-    mesh_flow(wiz, "pki.x86", "be.x86", "fe.x86")
+    mesh_flow(wiz, "pki.x86", "backend.x86", "frontend.x86")
     uc = advance_to(wiz, wizard_mod.UsersChoicePage)
     text = uc._buttons["generated"].accessibleDescription()
     accounts_half, sep, workers_half = text.partition("The other nodes (")
@@ -1117,7 +1147,7 @@ def test_ask20_generated_card_names_the_folder_the_keys_are_actually_written_to(
     from hugmesh_studio.core.worklist_driver import WorklistDriver, keys_dir
     from hugmesh_studio.gui.pages.users_choice import (
         _SESSION_ID_PLACEHOLDER, default_accounts_keys_dir)
-    mesh_flow(wiz, "pki.x86", "be.x86")
+    mesh_flow(wiz, "pki.x86", "backend.x86")
     uc = advance_to(wiz, wizard_mod.UsersChoicePage)
     text = uc._buttons["generated"].accessibleDescription()
 
@@ -1155,7 +1185,7 @@ def test_ask20_the_session_id_really_is_visible_where_the_card_says(wiz):
 def test_ask20_generated_card_is_honest_when_no_account_node_is_selected(wiz):
     """A worklist of workers only mints NO account at all. The card must say so rather
     than promise credentials that will never be written."""
-    mesh_flow(wiz, "be.x86", "fe.x86")
+    mesh_flow(wiz, "backend.x86", "frontend.x86")
     uc = advance_to(wiz, wizard_mod.UsersChoicePage)
     text = uc._buttons["generated"].accessibleDescription()
     assert "none is selected yet, so no account would be created" in text
@@ -1425,11 +1455,11 @@ def test_ask22_launch_slots_are_exception_guarded(wiz, capsys):
 def test_ask22_launch_summary_says_what_will_run(wiz):
     """The screen states what Continue will do, read off the COMMITTED worklist — so it
     can never describe a different build than the one that is about to start."""
-    mesh_flow(wiz, "pki.x86", "be.x86")
+    mesh_flow(wiz, "pki.x86", "backend.x86")
     launch = advance_to(wiz, wizard_mod.LaunchPage)
     text = launch.summary.text()
     assert text == launch_summary(wiz)
-    assert "pki.x86" in text and "be.x86" in text
+    assert "pki.x86" in text and "backend.x86" in text
     assert "2 image(s)" in text
     assert (wiz.cfg.output_dir or os.path.join(wiz.generator_dir, "out")) in text
     assert "Generate node keys" in text        # mesh-only line

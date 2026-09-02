@@ -93,7 +93,7 @@ def test_config_ids_match_backing_services_yaml():
 
 # ── (3) fail-closed boundary: tier-3 and unknown ids are REFUSED ──
 def _cfg(ms):
-    return ImageConfig(mode="mesh", role="be", platform="x86", managed_services=ms)
+    return ImageConfig(mode="mesh", role="backend", platform="x86", managed_services=ms)
 
 
 @pytest.mark.parametrize("sid", MANAGED_SERVICE_TIER3_IDS)
@@ -131,7 +131,7 @@ def test_malformed_endpoint_refused(ep):
 # ── (5) emission: repeatable `--managed-service id=endpoint`, SORTED, on both builders ──
 @pytest.mark.parametrize("platform", ["x86", "rpi5"])
 def test_emission_sorted_and_repeatable(platform):
-    cfg = ImageConfig(mode="mesh", role="be", platform=platform,
+    cfg = ImageConfig(mode="mesh", role="backend", platform=platform,
                       managed_services={"smtp": "mail:587", "kafka": "msk:9098"})
     args = cfg.to_cli_args()
     pairs = [args[i + 1] for i, a in enumerate(args) if a == "--managed-service"]
@@ -141,7 +141,7 @@ def test_emission_sorted_and_repeatable(platform):
 @pytest.mark.parametrize("platform", ["x86", "rpi5"])
 def test_empty_default_emits_nothing(platform):
     assert "--managed-service" not in ImageConfig(
-        mode="mesh", role="be", platform=platform).to_cli_args()
+        mode="mesh", role="backend", platform=platform).to_cli_args()
 
 
 # ── (6) round-trip: the dict field survives to_dict/from_dict + save/load ──

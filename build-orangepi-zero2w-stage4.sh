@@ -152,6 +152,13 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 # the build host's libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
 # shellcheck source=scripts/_passhash-lib.sh
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
+# THE role vocabulary (scripts/_roles-lib.sh). This board has NO role axis — --role
+# is a hostname/marker validated by a slug regex only — so the lib is sourced for one
+# thing: hugmesh_role_reject_node_role, which refuses a token that NAMES a cluster
+# node role this board cannot build. `--role backend` here was silently accepted and
+# quietly became a hostname.
+# shellcheck source=scripts/_roles-lib.sh
+source "${SCRIPT_DIR}/scripts/_roles-lib.sh"
 
 # Cross-dracut helper: qemu-aarch64 binfmt registration + the availability
 # predicate the --encrypt-root fail-fast preflight and the qemu-chroot initramfs
@@ -639,10 +646,7 @@ case "${OPIZ2W_FLAVOR}" in
 esac
 
 if [ -z "${HOSTNAME}" ]; then
-    case "${ROLE}" in
-        appliance|generic) HOSTNAME="${BRAND}-orangepizero2w" ;;
-        *)                 HOSTNAME="${BRAND}-${ROLE}" ;;
-    esac
+    HOSTNAME="$(hugmesh_role_hostname orangepizero2w "${ROLE}" "${BRAND}")"
 fi
 
 # ── STANDALONE posture (composable — this image already never bakes a k8s/
@@ -735,6 +739,12 @@ _require_match "--target"         "${CROSS_TARGET}"   "${_RE_TRIPLET}"
 # unescaped, unlike every other identity input above — allow-list it the same
 # way, fail-closed like the rest of this block.
 _require_match "--role"           "${ROLE}"           "${_RE_SLUG}"
+# --role on this board is a free-form marker, NOT a vocabulary — but a token that
+# names a cluster NODE role (or an alias of one) is a mistake, not a marker: it asks
+# for an image this board does not build. Custom markers stay available via
+# --hostname. See scripts/_roles-lib.sh.
+hugmesh_role_reject_node_role "${ROLE}" || exit 1
+
 
 BUILD_ROOT="${WORK_DIR}/${BUILD_SUBDIR}"
 

@@ -182,7 +182,7 @@ def test_qemu_session_completeness_words_come_from_the_session_itself():
     """Both pickers describe an aborted build with the SESSION's own badge — the
     GUI combo renders ``BuildSession.summary()`` (which embeds it), the TUI
     renders the badge directly. Neither face spells "partial" for itself."""
-    row = qt.DeviceRow(platform="x86", arch="amd64", role="be", env="test",
+    row = qt.DeviceRow(platform="x86", arch="amd64", role="backend", env="test",
                        image="/s/hugmesh-x86-amd64-be-test-20260819T125930Z.img")
     aborted = qt.BuildSession(path="/s", name="s", rows=[row], expected_images=4)
     whole = qt.BuildSession(path="/s", name="s", rows=[row], expected_images=1)

@@ -213,6 +213,12 @@ PY
     ORANGEPI5_BOARD_OUT=""; ORANGEPI5_FLAVOR_OUT=""; ORANGEPIZERO2_FLAVOR_OUT=""
     ORANGEPIZERO2W_FLAVOR_OUT=""; ORANGEPIZERO3_FLAVOR_OUT=""
     ORANGEPI3LTS_FLAVOR_OUT=""; ORANGEPI4LTS_FLAVOR_OUT=""
+    # THE role vocabulary, sourced exactly as docker/build-image.sh sources it. The
+    # extracted resolve_build_target() body CALLS hugmesh_role_for /
+    # hugmesh_role_keyprofile; a probe that omitted them would see every row reject
+    # and would report a total JOB-channel outage as if it were a real regression.
+    # shellcheck source=scripts/_roles-lib.sh
+    . "${REPO_DIR}/scripts/_roles-lib.sh"
     . "${TMP_DIR}/resolve.sh"
     # "|" IFS (see the probe.tsv emitter): tabs would collapse around empty fields.
     # 12 named vars so the trailing board/flavor/desktop columns can never bleed into
@@ -351,7 +357,22 @@ fi
 # from cli/gui/worklist/job but make/menu have no first-class --desktop thin
 # selection (make: STANDALONE_FLAGS escape hatch; menu: no x86 desktop picker) —
 # an honest, reviewed gap, not a regression.
-BASELINE_GAPS=62
+#
+# GAPS re-baselined 62 -> 68 (2026-08-27, the one-role-vocabulary branch). NOT six
+# new gaps: six gaps that the COMMITTED inventory had gone stale about. This suite's
+# own DRIFT leg was RED on origin/main — docs/catalog/image-inventory.json no longer
+# matched what the emitter produces — so the 62 was describing an older tree.
+# MEASURED, three ways, before touching this number:
+#   * regenerate the inventory on UNMODIFIED origin/main  -> 68 gaps
+#   * regenerate it on this branch                        -> 68 gaps
+#   * diff the two gap ID SETS                            -> identical, 0 either way
+# The six the stale file was hiding are the mesh-mode person-desktop rows
+#   mesh/x86/{laptop,chromebook,desktop}/{thin,full}
+# (a mesh-attached person device has no first-class thin/full desktop selection in
+# make or the menu — the same honest gap (C) above already records for cloud mode).
+# Written down rather than papered over: a wrong baseline reads as reviewed and stops
+# anyone looking, which is exactly how the 62 survived.
+BASELINE_GAPS=68
 BASELINE_PHANTOMS=0
 GOT_GAPS="$("${PYTHON}" -c "import json,sys;print(len(json.load(open(sys.argv[1]))['channel_gaps']))" "${INVENTORY}")"
 GOT_PHANTOMS="$("${PYTHON}" -c "import json,sys;print(len(json.load(open(sys.argv[1]))['phantoms']))" "${INVENTORY}")"

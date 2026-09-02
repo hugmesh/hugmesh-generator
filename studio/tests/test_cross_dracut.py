@@ -166,10 +166,10 @@ def test_qemu_interp_falls_back_to_the_pinned_default(tmp_path):
 
 def test_only_encrypted_cross_built_rows_are_named():
     rows = [("pki.x86", "x86", True),            # native — never affected
-            ("be.rpi5", "rpi5", True),           # the regression
-            ("fe.rpi5", "rpi5", False),          # row exempted in the worklist
-            ("edge_ai.jetson", "jetson", True)]  # no FDE path at all
-    assert cross_dracut.cross_fde_rows(rows) == ["be.rpi5"]
+            ("backend.rpi5", "rpi5", True),           # the regression
+            ("frontend.rpi5", "rpi5", False),          # row exempted in the worklist
+            ("edge-ai.jetson", "jetson", True)]  # no FDE path at all
+    assert cross_dracut.cross_fde_rows(rows) == ["backend.rpi5"]
 
 
 def test_the_note_is_empty_when_nothing_is_affected():
@@ -181,14 +181,14 @@ def test_the_note_says_refuse_only_when_the_host_cannot_do_it():
     """The two arms must differ: on a host that cannot run the cross-dracut the operator
     is told the build will REFUSE and how to fix it; on one that can, it is told the
     preflight should pass. A note that read the same either way would be decoration."""
-    bad = cross_dracut.cross_fde_note(["be.rpi5"], ready=False)
-    good = cross_dracut.cross_fde_note(["be.rpi5"], ready=True)
+    bad = cross_dracut.cross_fde_note(["backend.rpi5"], ready=False)
+    good = cross_dracut.cross_fde_note(["backend.rpi5"], ready=True)
     assert "REFUSE TO START" in bad and "REFUSE TO START" not in good
     assert "--privileged" in bad and "make docker-image" in bad
     assert "'off'" in bad                       # the worklist escape hatch
     assert "should pass" in good
     for note in (bad, good):
-        assert "be.rpi5" in note
+        assert "backend.rpi5" in note
         assert "installer artifact" in note     # the artifact set CHANGES
         assert "qemu-aarch64" in note
 
@@ -199,9 +199,9 @@ def test_resolve_encrypt_root_is_the_one_implementation():
     base = ImageConfig(mode="mesh", platform="x86", encrypt_root=True)
     from hugmesh_studio.core.worklist import WorklistConfig
     wl = WorklistConfig(base=base, entries=[
-        WorklistEntry(role="be", platform="rpi5"),
-        WorklistEntry(role="fe", platform="rpi5", encrypt_root="off"),
-        WorklistEntry(role="edge_ai", platform="jetson"),
+        WorklistEntry(role="backend", platform="rpi5"),
+        WorklistEntry(role="frontend", platform="rpi5", encrypt_root="off"),
+        WorklistEntry(role="edge-ai", platform="jetson"),
     ])
     for e in wl.entries:
         assert wl._resolve_encrypt_root(e) is resolve_encrypt_root(e, base.encrypt_root)
@@ -215,26 +215,26 @@ def test_an_arm_mesh_row_states_the_cost_on_home_review_and_launch(wiz, monkeypa
     """The whole finding: the wizard now says, on every screen before dispatch, that
     these rows gained an installer artifact and a builder precondition."""
     monkeypatch.setattr(cross_dracut, "preflight_ok", lambda *a, **k: False)
-    mesh_flow(wiz, "pki.x86", "be.rpi5")
+    mesh_flow(wiz, "pki.x86", "backend.rpi5")
     home = advance_to(wiz, wizard_mod.HomePage)
     assert home.enc_cross_note.isVisible()
-    assert "be.rpi5" in home.enc_cross_note.text()
+    assert "backend.rpi5" in home.enc_cross_note.text()
     assert "REFUSE TO START" in home.enc_cross_note.text()
     build = advance_to(wiz, wizard_mod.BuildPage)
-    assert "be.rpi5" in build.review_summary()
+    assert "backend.rpi5" in build.review_summary()
     assert "REFUSE TO START" in build.review_summary()
     launch = advance_to(wiz, wizard_mod.LaunchPage)
     assert "REFUSE TO START" in launch.summary.text()
     # and the row really is emitting the flag that costs this
     by_id = {e.id: cfg for e, cfg in build._materialized}
-    assert "--encrypt-root" in by_id["be.rpi5"].to_cli_args()
+    assert "--encrypt-root" in by_id["backend.rpi5"].to_cli_args()
 
 
 def test_an_all_x86_mesh_flow_is_not_warned(wiz, monkeypatch):
     """Not boilerplate: an x86-only worklist builds natively and must see none of it,
     on any of the three surfaces — even on a host with no qemu at all."""
     monkeypatch.setattr(cross_dracut, "preflight_ok", lambda *a, **k: False)
-    mesh_flow(wiz, "pki.x86", "be.x86")
+    mesh_flow(wiz, "pki.x86", "backend.x86")
     home = advance_to(wiz, wizard_mod.HomePage)
     assert not home.enc_cross_note.isVisible()
     assert home.enc_cross_note.text() == ""
@@ -248,12 +248,12 @@ def test_a_row_exempted_in_the_worklist_drops_out_of_the_warning(wiz, monkeypatc
     """The escape hatch the note points at actually works: setting the row's Encryption
     override to "off" removes both the flag and the warning."""
     monkeypatch.setattr(cross_dracut, "preflight_ok", lambda *a, **k: False)
-    wl_page = mesh_flow(wiz, "pki.x86", "be.rpi5")
+    wl_page = mesh_flow(wiz, "pki.x86", "backend.rpi5")
     # the real control the note points at — the worklist row's Encryption column
-    wl_page._enc_combos["be.rpi5"].setCurrentText("off")
+    wl_page._enc_combos["backend.rpi5"].setCurrentText("off")
     build = advance_to(wiz, wizard_mod.BuildPage)
     by_id = {e.id: cfg for e, cfg in build._materialized}
-    assert "--encrypt-root" not in by_id["be.rpi5"].to_cli_args()
+    assert "--encrypt-root" not in by_id["backend.rpi5"].to_cli_args()
     assert "cross-built ARM" not in build.review_summary()
 
 

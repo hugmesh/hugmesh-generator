@@ -416,7 +416,7 @@ if [ ! -f "${FIXTURE_MODELS}" ]; then
     bad "specs/cluster/manifests/edge-ai/models-configmap.yaml missing — the edge-ai knob assertions would be vacuous"
 else
     # (a) x86 WITH flags: every one of the three values must appear, rendered.
-    root="${WORK}/edgeai-knobs-x86"; seed_tree "${root}"
+    root="${WORK}/edge-ai-knobs-x86"; seed_tree "${root}"
     run_builder "${REPO}/build-x86-host-stage4.sh" "akkoma edge-ai" "" prod "${root}" \
         'EDGE_AI_RUNTIME=vllm; EDGE_AI_MODELS="qwen2.5:7b,nomic-embed-text"; EDGE_AI_MODEL_DEFAULT="qwen2.5:7b"'
     rc=$?
@@ -445,7 +445,7 @@ else
     fi
     # (b) rpi5 defines NONE of the three knobs and the gate runs under set -u. It
     #     must complete, and leave the ConfigMap byte-identical to the fixture.
-    root="${WORK}/edgeai-noknobs-rpi5"; seed_tree "${root}"
+    root="${WORK}/edge-ai-noknobs-rpi5"; seed_tree "${root}"
     run_builder "${REPO}/build-rpi5-stage4.sh" "akkoma edge-ai" "" prod "${root}"
     rc=$?
     if [ "${rc}" -ne 0 ]; then
@@ -459,7 +459,7 @@ else
     # (c) x86 with its OWN defaults (runtime=ollama, the other two empty) must ALSO
     #     leave the file byte-identical — that is why the whole-tree sweep below can
     #     still expect the two builders to bake identical trees for edge-ai-full.
-    root="${WORK}/edgeai-defaults-x86"; seed_tree "${root}"
+    root="${WORK}/edge-ai-defaults-x86"; seed_tree "${root}"
     run_builder "${REPO}/build-x86-host-stage4.sh" "akkoma edge-ai" "" prod "${root}"
     rc=$?
     if [ "${rc}" -ne 0 ]; then

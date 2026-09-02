@@ -27,7 +27,7 @@ def _finished(tmp_path, *, session_id, status="complete", mesh=False):
                            output_dir=str(tmp_path / "out"))
         wl = WorklistConfig(base=base, entries=[
             WorklistEntry(role="pki", platform="x86"),
-            WorklistEntry(role="be", platform="rpi5")])
+            WorklistEntry(role="backend", platform="rpi5")])
     else:
         wl = synthesize(ImageConfig(mode="standalone", role="standalone-thick",
                                     platform="x86", brand="acme",
@@ -65,7 +65,7 @@ def test_detail_and_worklist_screens_render(tmp_path):
     assert "pki.x86: pki · x86" in text
     app.show_worklist(app.rows[0])
     text = _screen_text(app.frame)
-    assert "board/flavor" in text and "be.rpi5" in text
+    assert "board/flavor" in text and "backend.rpi5" in text
 
 
 def test_delete_flow_confirms_twice_then_deletes(tmp_path):

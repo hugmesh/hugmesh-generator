@@ -178,8 +178,14 @@ echo "== [launch] DEFAULT-OFF is BYTE-IDENTITY, proved against a mesh-less copy 
 # producing the argv this comparison exists to make. Nothing is written into the
 # checkout itself — sibling sessions are working in it.
 mutrepo="${work}/mutrepo"
-mkdir -p "${mutrepo}/tests/qemu" "${mutrepo}/specs-frite/boot"
+mkdir -p "${mutrepo}/tests/qemu" "${mutrepo}/specs-frite/boot" "${mutrepo}/scripts"
 cp "${REPO}/specs-frite/boot/cmdline.base" "${mutrepo}/specs-frite/boot/" 2>/dev/null || true
+# The x86/pi launchers source the ONE role vocabulary through REPO_DIR (they fold
+# `--role be`/`host` and glob an artifact under every older spelling of its role), so
+# the mirror needs it too. Without it the mesh-less copy dies on a missing source and
+# the byte-identity comparison reports "copy failed to run" — a launcher-mirror
+# omission that reads exactly like a real regression in the mesh block.
+cp "${REPO}/scripts/_roles-lib.sh" "${mutrepo}/scripts/" 2>/dev/null || true
 
 strip_mesh_block() { # <script> -> path to a copy with the whole mesh block gone
     local out="${mutrepo}/tests/qemu/nomesh-$(basename "$1")"

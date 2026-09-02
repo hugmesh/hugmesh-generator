@@ -3,11 +3,15 @@
 #
 # DEFAULT build set:
 #   * RPi 5 (aarch64):  pki, backend, frontend                 (build-rpi5-stage4.sh)
-#   * x86_64 (amd64):   pki, be, fe, be+gpu  (every role EXCEPT omnibus)
+#   * x86_64 (amd64):   pki, backend, frontend, backend-gpu  (every role EXCEPT omnibus)
+#     ONE vocabulary across platforms now (scripts/_roles-lib.sh): the Pi and the
+#     x86 set name the same logical roles with the same tokens. The old spellings
+#     (be, fe, be+gpu, host, be-gpu, gpu-host, gpu_host, full, edge_ai) are still
+#     accepted on every --role, forever, and are normalized at parse time.
 #
 # Only the x86 omnibus (all-in-one single-node) role is OPT-IN:
 #   X86_OMNIBUS=1 ./scripts/build-all-roles.sh  # appends omnibus to the x86 set
-#   X86_ALL=1     ./scripts/build-all-roles.sh  # pki be fe be+gpu omnibus on x86
+#   X86_ALL=1     ./scripts/build-all-roles.sh  # pki backend frontend backend-gpu omnibus on x86
 #   X86_ROLES="pki omnibus" ./scripts/build-all-roles.sh   # an explicit subset
 #   SKIP_X86=1    ./scripts/build-all-roles.sh  # Pi roles only (no x86 at all)
 #   SKIP_RPI=1    ./scripts/build-all-roles.sh  # x86 / frite only (no RPi5 builds)
@@ -39,12 +43,12 @@
 # The NVIDIA Jetson Orin (Tegra234 arm64) edge-AI platform is OPT-IN too —
 # EXPERIMENTAL: hardware validation pending (specs-jetson/README.md). Knobs
 # mirror the FRITE family exactly:
-#   JETSON=1      ./scripts/build-all-roles.sh  # ALSO build the Jetson (edge_ai role)
-#   JETSON_ROLES="edge_ai desktop" JETSON=1 ./scripts/build-all-roles.sh   # role subset
+#   JETSON=1      ./scripts/build-all-roles.sh  # ALSO build the Jetson (edge-ai role)
+#   JETSON_ROLES="edge-ai desktop" JETSON=1 ./scripts/build-all-roles.sh   # role subset
 #   JETSON_ONLY=1 ./scripts/build-all-roles.sh  # ONLY the Jetson (skip Pi + x86 + Frite)
 #   JETSON_BOARD=orin-nx-16gb JETSON=1 ./scripts/build-all-roles.sh        # other module
 #   JETSON_KERNEL_FLAVOR=l4t JETSON=1 ./scripts/build-all-roles.sh  # (stubbed) L4T/CUDA path
-# (build-jetson-stage4.sh — roles: edge_ai (default) | gpu-host | full | desktop.)
+# (build-jetson-stage4.sh — roles: edge-ai (default) | backend-gpu | omnibus | desktop.)
 #
 # The Orange Pi 5 / Orange Pi 5 Plus (Rockchip RK3588/RK3588S) light-desktop
 # client image is OPT-IN too — EXPERIMENTAL: hardware validation pending
@@ -146,6 +150,10 @@ BUILD_ORANGEPIZERO3="${REPO_DIR}/build-orangepi-zero3-stage4.sh"
 BUILD_ORANGEPI3LTS="${REPO_DIR}/build-orangepi3-lts-stage4.sh"
 BUILD_ORANGEPI4LTS="${REPO_DIR}/build-orangepi4-lts-stage4.sh"
 GENKEYS="${SCRIPT_DIR}/gen-provision-keys.sh"
+# THE role vocabulary (scripts/_roles-lib.sh) — the role->KEYS-profile table below
+# comes from here, not from a fourth hand-copy of it.
+# shellcheck source=scripts/_roles-lib.sh
+source "${SCRIPT_DIR}/_roles-lib.sh"
 WORK_DIR="${WORK_DIR:-${REPO_DIR}/out}"
 # Honor a -w/--work-dir passed through to the builders so the keys-<role> folders
 # land beside the images (recommend a dir OUTSIDE an encrypted/$HOME mount).
@@ -196,7 +204,7 @@ fi
 # (see the header note above) — pair it with RPI_ROLES=desktop.
 RPI_BOARD_SEL="${RPI_BOARD:-rpi5}"
 
-# x86 role set. Default = every role EXCEPT omnibus (pki be fe be+gpu). Only the
+# x86 role set. Default = every role EXCEPT omnibus (pki backend frontend backend-gpu). Only the
 # omnibus all-in-one role is opt-in: X86_OMNIBUS=1 appends it; X86_ALL=1 expands
 # to every role (incl. omnibus); X86_ROLES overrides explicitly; SKIP_X86=1
 # disables the x86 build entirely.
@@ -210,11 +218,11 @@ elif [ "${X86_STANDALONE_ONLY:-0}" = "1" ]; then
 elif [ -n "${X86_ROLES:-}" ]; then
     read -r -a X86_BUILD_ROLES <<< "${X86_ROLES}"
 elif [ "${X86_ALL:-0}" = "1" ]; then
-    X86_BUILD_ROLES=(pki be fe be+gpu omnibus)
+    X86_BUILD_ROLES=(pki backend frontend backend-gpu omnibus)
 elif [ "${X86_OMNIBUS:-0}" = "1" ]; then
-    X86_BUILD_ROLES=(pki be fe be+gpu omnibus)
+    X86_BUILD_ROLES=(pki backend frontend backend-gpu omnibus)
 else
-    X86_BUILD_ROLES=(pki be fe be+gpu)
+    X86_BUILD_ROLES=(pki backend frontend backend-gpu)
 fi
 # X86_STANDALONE=1 appends the standalone desktop variants (thin + thick hardened
 # NVIDIA + the UNAFFILIATED plain Gentoo one) to whatever x86 set was selected.
@@ -238,7 +246,7 @@ FRITE_DESKTOP_SEL="${FRITE_DESKTOP:-light}"
 
 # Jetson Orin edge-AI platform is OPT-IN (EXPERIMENTAL — hardware validation
 # pending). Knobs mirror the FRITE family: JETSON=1 adds it, JETSON_ONLY=1
-# builds ONLY it, JETSON_ROLES picks the role subset (default: the edge_ai
+# builds ONLY it, JETSON_ROLES picks the role subset (default: the edge-ai
 # headline), JETSON_BOARD / JETSON_KERNEL_FLAVOR thread to the builder.
 BUILD_JETSON_IMG=false
 if [ "${JETSON_ONLY:-0}" = "1" ]; then
@@ -247,7 +255,7 @@ if [ "${JETSON_ONLY:-0}" = "1" ]; then
 elif [ "${JETSON:-0}" = "1" ]; then
     BUILD_JETSON_IMG=true
 fi
-read -r -a JETSON_BUILD_ROLES <<< "${JETSON_ROLES:-edge_ai}"
+read -r -a JETSON_BUILD_ROLES <<< "${JETSON_ROLES:-edge-ai}"
 JETSON_BOARD_SEL="${JETSON_BOARD:-orin-nano}"
 JETSON_KFLAVOR_SEL="${JETSON_KERNEL_FLAVOR:-mainline}"
 
@@ -452,9 +460,11 @@ fi
 
 # ── Generate provisioning keys ───────────────────────────────────────
 # All images are built first; keys are created LAST, in one pass over every
-# built role. gen-provision-keys.sh only knows the RPi/host role names, so we
-# key off the RPi roles here (the per-role KEYS folder the make-keys-usb.sh
-# stick consumes). Set SKIP_KEYS=1 to skip this entirely.
+# built role. gen-provision-keys.sh takes a KEYS PROFILE, not a role — the two
+# happen to coincide for pki/backend/frontend and diverge for every other role, so
+# the profile is looked up in the ONE HUGMESH_ROLE_KEYPROFILE table
+# (scripts/_roles-lib.sh) rather than assumed. The FOLDER keeps the role name (that
+# is what an operator navigates to). Set SKIP_KEYS=1 to skip this entirely.
 # A keys-generation failure is FATAL for the run (the keys folder IS the
 # deliverable a node provisions from): every role is still attempted, the
 # partial output dir is removed (a half-written keys-<role> must never be
@@ -466,8 +476,9 @@ if [ "${SKIP_KEYS:-0}" != "1" ]; then
     echo "#  Generate provisioning keys (all built roles)"
     echo "############################################################"
     for role in "${RPI_ROLES[@]}"; do
-        echo "==> Generating keys folder: ${WORK_DIR}/keys-${role}"
-        if ! "${GENKEYS}" --role "${role}" --out "${WORK_DIR}/keys-${role}" --random; then
+        _kprof="$(hugmesh_role_keyprofile "$(hugmesh_role_canonicalize "${role}" || echo "${role}")" || echo host)"
+        echo "==> Generating keys folder: ${WORK_DIR}/keys-${role} (profile ${_kprof})"
+        if ! "${GENKEYS}" --role "${_kprof}" --out "${WORK_DIR}/keys-${role}" --random; then
             echo "!! keys generation FAILED for ${role} — removing partial ${WORK_DIR}/keys-${role}" >&2
             rm -rf "${WORK_DIR}/keys-${role}"
             KEYS_FAILED+=("${role}")
@@ -484,15 +495,14 @@ if [ "${SKIP_KEYS:-0}" != "1" ]; then
             KEYS_FAILED+=(frite)
         fi
     fi
-    # Jetson roles provision from the SAME KEYS USB mechanism. gen-provision-keys
-    # only knows the rpi/host role names, so map: 'full' (single-node control
-    # plane, the omnibus analogue) -> pki profile; the worker roles (edge_ai /
-    # gpu-host) and the desktop client -> the 'host' worker-key profile (exactly
-    # like the Frite client).
+    # Jetson roles provision from the SAME KEYS USB mechanism, through the SAME
+    # HUGMESH_ROLE_KEYPROFILE table as every other platform: omnibus (the
+    # single-node control plane, spelled `full` here until this change) -> pki;
+    # backend-gpu / edge-ai -> the 'host' worker-key profile; the desktop client
+    # has no node profile and falls back to 'host' like the Frite client.
     if [ "${BUILD_JETSON_IMG}" = true ]; then
         for role in "${JETSON_BUILD_ROLES[@]}"; do
-            _jk_profile=host
-            [ "${role}" = "full" ] && _jk_profile=pki
+            _jk_profile="$(hugmesh_role_keyprofile "$(hugmesh_role_canonicalize "${role}" || echo "${role}")" || echo host)"
             echo "==> Generating keys folder: ${WORK_DIR}/keys-jetson-${role} (${_jk_profile} profile)"
             if ! "${GENKEYS}" --role "${_jk_profile}" --out "${WORK_DIR}/keys-jetson-${role}" --random; then
                 echo "!! keys generation FAILED for jetson-${role} — removing partial ${WORK_DIR}/keys-jetson-${role}" >&2

@@ -71,7 +71,7 @@ from ._widgets import _file_picker, _row, collapsible
 from .packages_dialog import PackagesDialog
 
 # mesh roles whose image carries a GPU stack (the summary "GPU" chip).
-_GPU_MESH_ROLES = ("be+gpu", "edge_ai", "gpu-host")
+_GPU_MESH_ROLES = ("backend-gpu", "edge-ai", "be+gpu", "edge_ai", "gpu-host")
 
 # Why the Installer-UI combo is greyed on a headless node image. Two DIFFERENT true
 # statements, because the resolver's rewrite is CONDITIONAL: it only replaces the

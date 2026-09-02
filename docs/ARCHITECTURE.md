@@ -13,7 +13,7 @@ those gateways (configured later, out of scope here).
 | `backend` | `build-rpi5-stage4.sh --role backend` | aarch64 (RPi 5) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs, databases, `hugmesh-be-gateway` |
 | `frontend` | `build-rpi5-stage4.sh --role frontend` | aarch64 (RPi 5) | `hugmesh.net` Angular host federating `hugmesh-matrix-ui` + `hugmesh-mastodon-ui` + `hugmesh-wiki-ui` + login/admin/mod/user/forum remotes, `hugmesh-fe-gateway` |
 | `host` | `build-x86-host-stage4.sh` | x86_64 (desktop/server) | GPU worker: ArgoCD, GitLab/Runner/binhost (devops), `hugmesh.games`, owncast + tube (GPU-dependent video), heavy datastores (Kafka/ClickHouse/Uptrace), local-path/node-storage default (Mesa/Vulkan via `/dev/dri`) |
-| `edge_ai` | `build-x86-host-stage4.sh --role edge_ai` (x86_64) **/** `build-jetson-stage4.sh --role edge_ai` (Jetson Orin Nano, arm64 crossdev — the x86 builder is amd64-only and cannot produce a Jetson image) | x86_64 / Jetson Orin Nano (arm64) | GPU **inference** node: Ollama serving an OpenAI-compatible model API (`/v1`) to the mesh over k8s (ClusterIP) + tailnet (`ai.<domain>` gateway route); NVIDIA proprietary + CUDA + `nvidia-device-plugin` (which also makes the GPU schedulable for owncast/coturn/tube voice+video). Model library is the `edge-ai-models` ConfigMap. See [EDGE-AI.md](EDGE-AI.md) |
+| `edge-ai` | `build-x86-host-stage4.sh --role edge-ai` (x86_64) **/** `build-jetson-stage4.sh --role edge-ai` (Jetson Orin Nano, arm64 crossdev — the x86 builder is amd64-only and cannot produce a Jetson image) | x86_64 / Jetson Orin Nano (arm64) | GPU **inference** node: Ollama serving an OpenAI-compatible model API (`/v1`) to the mesh over k8s (ClusterIP) + tailnet (`ai.<domain>` gateway route); NVIDIA proprietary + CUDA + `nvidia-device-plugin` (which also makes the GPU schedulable for owncast/coturn/tube voice+video). Model library is the `edge-ai-models` ConfigMap. See [EDGE-AI.md](EDGE-AI.md) |
 
 All nodes are hardened Gentoo, join one Kubernetes cluster, sit on one headscale
 mesh, and are provisioned at first boot from a USB **KEYS** stick (see
@@ -51,7 +51,7 @@ flowchart TD
         HS["headscale (mesh control)"]
     end
 
-    subgraph INFER["hugmesh-inference (edge_ai GPU node — x86_64 or Jetson)"]
+    subgraph INFER["hugmesh-inference (edge-ai GPU node — x86_64 or Jetson)"]
         EDGEAI["edge-ai (Ollama /v1)"]
         EDGEAIAN["edge-ai-analysis"]
     end

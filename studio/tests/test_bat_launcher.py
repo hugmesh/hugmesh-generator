@@ -103,7 +103,7 @@ def test_simulate_bat_forwards_config_arg_to_a_non_default_platform(tmp_path):
     """Arg forwarding through the .bat contract: a saved rpi5 config rides ``--config``
     (which the .bat's ``%*`` passes straight through) onto the rpi5 builder — proving the
     guest can drive any platform, not just the default."""
-    cfg = ImageConfig(mode="mesh", role="be", platform="rpi5", env="prod")
+    cfg = ImageConfig(mode="mesh", role="backend", platform="rpi5", env="prod")
     p = tmp_path / "rpi5-be.json"
     cfg.save(str(p))
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)

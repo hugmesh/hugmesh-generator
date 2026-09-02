@@ -12,7 +12,7 @@ The platform splits into two tiers:
   hugmesh.games portal + its own games-realm Casdoor), **owncast** (HLS
   live-streaming, GPU-gated x86), **tube** (LocalTube YouTube archive, GPU-gated
   x86), **edge-ai** (GPU inference node serving an OpenAI-compatible model API to
-  the mesh — DEFAULT-OFF, GPU-gated; auto-selected by the `edge_ai` node role; see
+  the mesh — DEFAULT-OFF, GPU-gated; auto-selected by the `edge-ai` node role; see
   [EDGE-AI.md](EDGE-AI.md)), **character-studio** (the VN character-studio frontend
   remote — character creator + chat surface mounted at `/character-studio`, ROLE_USER;
   DEFAULT-OFF, admin gate), **character-forge** (the Character Forge 3D character
@@ -294,7 +294,7 @@ extraHosts) are the bytes that reach the cluster.
 Goal: a Matrix + games appliance (no Mastodon, no forum), on **both** arches.
 
 ```sh
-# x86 host (be+gpu)
+# x86 host (backend-gpu)
 sudo ./build-x86-host-stage4.sh --env prod --optional-services "tuwunel games"
 # Pi5 backend
 sudo ./build-rpi5-stage4.sh     --env prod --optional-services "tuwunel games"

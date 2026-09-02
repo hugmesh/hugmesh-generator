@@ -43,7 +43,7 @@ def _cfg():
                     brand_title="Acme", org="Acme-Inc", cluster_domain="acme.example",
                     superdomain="core.acme.internal")
     c.domains = [Domain(name="acme.example", title="Acme"),
-                 Domain(name="team.acme.example", title="Team", images=["be.rpi5"],
+                 Domain(name="team.acme.example", title="Team", images=["backend.rpi5"],
                         optional_services=["akkoma"])]
     c.users = [User(username="root-admin", domain="core.acme.internal",
                     role="superadmin")]
@@ -68,7 +68,7 @@ def test_pre47_config_without_idp_loads_as_superdomain():
     old = {"mode": "mesh", "brand": "acme",
            "domains": [{"name": "acme.example", "title": "Acme"},
                        {"name": "team.acme.example", "title": "Team",
-                        "images": ["be.rpi5"], "optional_services": ["akkoma"]}]}
+                        "images": ["backend.rpi5"], "optional_services": ["akkoma"]}]}
     c = ImageConfig.from_dict(old)
     assert [d.idp for d in c.domains] == [DOMAIN_IDP_SUPERDOMAIN] * 2
     assert c.own_idp_domains() == ()
@@ -107,7 +107,7 @@ _PRE47_MANIFEST_GOLDEN = """\
       "name": "team.acme.example",
       "title": "Team",
       "images": [
-        "be.rpi5"
+        "backend.rpi5"
       ],
       "optional_services": [
         "akkoma"

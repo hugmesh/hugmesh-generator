@@ -26,7 +26,18 @@
 #                    ONE node at a time in kured's own window).
 #   staging  map     per-target / per-role cadence overrides for staged rollout /
 #                    maintenance waves, keyed by board tag (e.g. "frite:rpi5"),
-#                    node role ("pki","be+gpu","be","fe"), or "client".
+#                    node role ("pki","backend-gpu","backend","frontend","omnibus",
+#                    "edge-ai","generic"), or "client".
+#                    THE KEY IS MATCHED AGAINST /etc/hugmesh/role VERBATIM
+#                    (specs/etc/keys-provision/provision.sh, provision_update), so it
+#                    must be spelled the way the builders bake it — the ONE role
+#                    vocabulary in scripts/_roles-lib.sh. The short x86 spellings this
+#                    line used to document ("be+gpu","be","fe") never matched a Pi
+#                    node at all, whose marker has always said "backend"/"frontend";
+#                    a staging map written from the old text silently staged nothing
+#                    on half the fleet. An image flashed before the vocabulary
+#                    converged still carries its old marker, so keep the old key
+#                    ALONGSIDE the new one while such nodes are in the fleet.
 #
 # This baked manifest is the DEFAULT-OFF baseline (enabled:false, conservative window,
 # safe reboot). Deleting it does NOT turn auto-update on — every node reverts to the

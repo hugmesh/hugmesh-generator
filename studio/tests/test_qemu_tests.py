@@ -79,7 +79,7 @@ def test_discover_rows_orders_pi_first(tmp_path):
     _write(str(tmp_path), *_REAL_NAMES)
     rows = qt.discover_rows(str(tmp_path))
     assert [r.label for r in rows][:3] == ["rpi5/backend", "rpi5/frontend", "rpi5/pki"]
-    assert {r.label for r in rows[3:]} == {"x86/be", "x86/omnibus"}
+    assert {r.label for r in rows[3:]} == {"x86/backend", "x86/omnibus"}
 
 
 def test_discover_rows_prefers_decompressed_over_xz(tmp_path):
@@ -179,7 +179,10 @@ def test_session_summary_names_the_roles_under_each_platform(tmp_path):
     # roles, grouped under their platform — not a bare platform list, and not one
     # flat role list that loses which device each role belongs to
     assert "rpi5 (backend, pki)" in text
-    assert "frite (be)" in text
+    # The frite artifact was BUILT as "-be-" and keeps that filename forever (it is
+    # an already-emitted artifact); the parsed ROLE is canonicalized, so the row and
+    # the summary say `backend` — one spelling everywhere the role is read back.
+    assert "frite (backend)" in text
     assert "x86 (standalone-thin)" in text
     # ...in platform_rank order, which is NOT alphabetical here
     assert text.index("rpi5 (") < text.index("frite (") < text.index("x86 (")
@@ -216,7 +219,7 @@ def test_expected_image_count_prefers_build_logs_over_the_manifest(tmp_path):
         tmp_path, "20260819-125930-89bb8e",
         images=["hugmesh-x86-amd64-pki-test-20260819T195951Z.img.xz"],
         logs=["build.log", "build-pki.x86.log", "build-pki.rpi5.log",
-              "build-be.x86.log", "build-be.rpi5.log"],
+              "build-backend.x86.log", "build-backend.rpi5.log"],
         manifest_images=7)
     assert qt.expected_image_count(str(sess)) == 4
     session, = qt.discover_sessions(str(tmp_path))
@@ -263,7 +266,7 @@ def test_default_session_is_the_newest_complete_one(tmp_path):
         tmp_path, "20260819-125930-89bb8e",
         images=["hugmesh-x86-amd64-pki-test-20260819T195951Z.img.xz"],
         logs=["build-pki.x86.log", "build-pki.rpi5.log",
-              "build-be.x86.log", "build-be.rpi5.log"],
+              "build-backend.x86.log", "build-backend.rpi5.log"],
         mtime=2_000_000_000)
     # newest_session keeps its historical meaning: literally the newest.
     assert qt.newest_session(str(tmp_path)).name == "20260819-125930-89bb8e"
@@ -354,9 +357,9 @@ def test_runner_command_emits_the_t1_knobs_only_when_asked():
         assert flag not in default
 
     cmd = qt.runner_command("/gen", qt.QemuRunOptions(
-        only_exact="x86/be", assert_timeout_s=900, cache_max_gb=120,
+        only_exact="x86/backend", assert_timeout_s=900, cache_max_gb=120,
         extra_users=("alice", "bob")))
-    assert cmd[cmd.index("--only-exact") + 1] == "x86/be"
+    assert cmd[cmd.index("--only-exact") + 1] == "x86/backend"
     assert cmd[cmd.index("--assert-timeout") + 1] == "900"
     assert cmd[cmd.index("--cache-max-gb") + 1] == "120"
     users = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--extra-user"]
@@ -396,7 +399,7 @@ def test_read_results_scopes_to_this_runs_labels(tmp_path):
     results = tmp_path / "results"
     results.mkdir()
     for name, label, status in (("rpi5_pki.json", "rpi5/pki", "PASS"),
-                                ("x86_be.json", "x86/be", "FAIL"),
+                                ("x86_be.json", "x86/backend", "FAIL"),
                                 ("x86_omnibus.json", "x86/omnibus", "PASS")):
         (results / name).write_text(json.dumps({"label": label, "status": status}))
 
@@ -479,7 +482,7 @@ def test_shell_and_python_agree_on_which_build_wins(tmp_path):
 
     expected = {
         ("rpi5/pki", "hugmesh-rpi5-arm64-pki-test-20260814T160000Z.img"),
-        ("x86/be", "hugmesh-x86-amd64-be-test-20260814T112817Z.img"),
+        ("x86/backend", "hugmesh-x86-amd64-be-test-20260814T112817Z.img"),
     }
     assert _py_rows(tmp_path) == expected
     assert _shell_rows(tmp_path) == expected
