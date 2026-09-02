@@ -381,12 +381,15 @@ export function requireDimension<K extends keyof Dimensions>(
 // status line back. ANY status counts as "the door answers" — 401/403/404 all
 // mean something is serving — while refused/reset/timeout/EPIPE mean it is not.
 //
-// PORT COLLISION, DELIBERATELY SURFACED. The compose stack publishes :8443 and
-// kind-local.yaml maps 443 -> 8443 as well. Only one of them can hold the port,
-// so `@env:docker` and `@env:kind` can never both be available on one host, and
-// a probe that merely saw "something answers on 8443" would attribute the KIND
+// PORT COLLISION, DELIBERATELY SURFACED. kind-local.yaml maps 443 -> host 8443,
+// and the compose stack publishes `${PUBLIC_HTTPS_PORT:-8488}:8443` — 8443 is
+// the port INSIDE its tls-front container; its HOST door is PUBLIC_HTTPS_PORT
+// (Makefile default 8488), so by default `@env:docker` and `@env:kind` sit side
+// by side. The doors coincide as soon as an operator sets PUBLIC_HTTPS_PORT=8443
+// (or something else holds the door): then only one of them can hold the port,
+// and a probe that merely saw "something answers" would attribute the KIND
 // ingress to the compose stack. portOwner() below reads `docker ps` (read-only)
-// so the SKIP REASON can name which one actually holds the door.
+// so the SKIP REASON can name which container actually holds the door.
 //
 // *** NO PROBE STARTS ANYTHING. *** Every probe is a read: an HTTP GET, a
 // `docker ps`, a `kubectl config get-contexts`. Bringing an environment up is
@@ -677,14 +680,17 @@ function portOwner(port: string): string | undefined {
  * Is a QEMU system emulator running at all? READ-ONLY (`pgrep`), and any failure
  * degrades to `undefined` = "cannot tell", never to a false negative.
  *
- * WHY THIS IS NEEDED, and it is not paranoia. All three environments default to
- * host port 8443: the compose stack publishes it, kind-local.yaml maps 443->8443
- * onto it, and run-qemu-e2e.sh forwards the guest UI to UI_PORT which defaults
- * to 8443. So an HTTP probe of `https://localhost:8443/` cannot, by itself,
- * distinguish "the emulated device is serving" from "the compose stack is
- * serving". Without this check a `@env:qemu` scenario would report AVAILABLE and
- * then silently drive the DOCKER stack while claiming to have tested a device —
- * the exact silent-pass this axis exists to prevent.
+ * WHY THIS IS NEEDED, and it is not paranoia. Two environments default to host
+ * port 8443 — kind-local.yaml maps 443->8443 onto it, and run-qemu-e2e.sh
+ * forwards the guest UI to UI_PORT which defaults to 8443 — and the compose
+ * stack lands there too whenever an operator sets PUBLIC_HTTPS_PORT=8443 (its
+ * default host door is 8488; 8443 is only the port inside its tls-front
+ * container). So an HTTP probe of `https://localhost:8443/` cannot, by itself,
+ * distinguish "the emulated device is serving" from "the kind node (or a compose
+ * stack published there) is serving". Without this check a `@env:qemu` scenario
+ * would report AVAILABLE and then silently drive whatever else holds the port
+ * while claiming to have tested a device — the exact silent-pass this axis
+ * exists to prevent.
  *
  * The launchers exec qemu-system-x86_64 / qemu-system-aarch64 directly on the
  * host (tests/qemu/launch-x86.sh, launch-pi.sh), so a host pgrep sees them.
