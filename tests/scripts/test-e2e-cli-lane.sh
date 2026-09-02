@@ -20,13 +20,20 @@
 #   4. the bash environment table and steps/dimensions.ts's ENVIRONMENT_DEFS
 #      resolve every mesh to the SAME base URL. Two resolvers for one fact drift
 #      silently: the CLI points chromium at one mesh while the skip reasons name
-#      another.
+#      another. And the docker door is ONE knob (PUBLIC_HTTPS_PORT): both sides
+#      must FOLLOW it, the help text must advertise the same door, and the
+#      bundled-browser docker path must hand the container the same door — a
+#      recording `docker` stub reads the argv, because run.sh carried THREE
+#      copies of that fallback and all three had drifted to 8443 (the port
+#      INSIDE the tls-front container; on a dev box, the kind node) while the
+#      TypeScript said 8488. Sites 2 and 3 were invisible to the --print-command
+#      comparison alone.
 #   5. `--evidence` reads the manifest and summarises it per env / per
 #      interface, counts from the ROWS, and NEVER reports an empty success.
 #   6. the CLI feature lane itself is green offline, and the whole Gherkin suite
 #      still generates and is collected.
 #
-# MUTATION BATTERY. Eight mutations, each breaking production on purpose, each
+# MUTATION BATTERY. Eleven mutations, each breaking production on purpose, each
 # required to turn a NAMED check red. Every mutation is applied to the real tree
 # with a backup, proven to have changed the file, and restored on EXIT via trap;
 # the last check asserts the tree is byte-identical to how it started.
@@ -281,7 +288,19 @@ has_line() {  # has_line <needle> ; stdin is the list
 echo
 STUB_RUN_NEVER_REACHED=""
 echo "-- 1. does --env reach the runner? (stub npx records argv + env) --"
-env_expect_docker="https://localhost:8443"
+# The docker expectation is DERIVED from the Makefile's `PUBLIC_HTTPS_PORT ?= <n>`
+# (the one knob compose.local.yaml publishes as `${PUBLIC_HTTPS_PORT:-8488}:8443`),
+# never written here as a literal. Until 2026-09-01 this line said 8443 — the
+# same drifted value run.sh had — so check 1 stayed green while the CLI pointed
+# chromium at the kind node; a guard that carries its own copy of the fallback
+# agrees with the defect. kind's door is kind-local.yaml's hostPort and qemu's is
+# run-qemu-e2e.sh's forwarded UI_PORT default; both really are 8443.
+MAKEFILE_HTTPS_PORT="$(sed -n 's/^PUBLIC_HTTPS_PORT[[:space:]]*?=[[:space:]]*\([0-9][0-9]*\)[[:space:]]*$/\1/p' "${REPO}/Makefile" | head -1)"
+[ -n "${MAKEFILE_HTTPS_PORT}" ] || {
+  echo "SKIPPED-LOUDLY: the Makefile declares no \`PUBLIC_HTTPS_PORT ?= <n>\` — the docker expectation cannot be derived, and a literal here is how this guard last agreed with the defect. Exiting 2." >&2
+  exit 2
+}
+env_expect_docker="https://localhost:${MAKEFILE_HTTPS_PORT}"
 env_expect_kind="https://hugmesh.net:8443"
 env_expect_qemu="https://localhost:8443"
 
@@ -294,7 +313,7 @@ check_env_forwarding() {  # -> 0 when every environment forwards correctly
       # defaults; an exported SNAP_BASE_URL on the operator's shell would
       # otherwise be mistaken for run.sh's own answer.
       ( unset SNAP_BASE_URL SNAP_ENV SNAP_ENV_DOCKER_BASE_URL SNAP_ENV_KIND_BASE_URL \
-              SNAP_ENV_QEMU_BASE_URL SNAP_HOST_RESOLVER UI_PORT SNAP_QEMU_UI_PORT
+              SNAP_ENV_QEMU_BASE_URL SNAP_HOST_RESOLVER UI_PORT SNAP_QEMU_UI_PORT PUBLIC_HTTPS_PORT
         stub_run "${log}" --bdd --env "${e}" >/dev/null )
       seen_env="$(stub_env "${log}" playwright SNAP_ENV)"
       seen_url="$(stub_env "${log}" playwright SNAP_BASE_URL)"
@@ -454,6 +473,7 @@ TS
 # ${...} below, a trap this repo has already been bitten by.
 cat > "${VOCAB}/agree.spec.ts" <<'TS'
 import { test, expect } from '@playwright/test';
+import { writeFileSync } from 'node:fs';
 import { ENVIRONMENTS, environmentBaseUrl } from '__DIMENSIONS__';
 
 // The bash side resolved these in the SAME cleared environment; if the two
@@ -463,36 +483,171 @@ test('run.sh and ENVIRONMENT_DEFS resolve every mesh to the same base URL', () =
   const fromBash = JSON.parse(process.env.BASH_RESOLVED || '{}') as Record<string, string>;
   expect(Object.keys(fromBash).sort(), 'run.sh knows a different set of meshes')
     .toEqual([...ENVIRONMENTS].sort());
+  const fromTs: Record<string, string> = {};
+  for (const e of ENVIRONMENTS) fromTs[e] = environmentBaseUrl(e);
+  // Recorded for the mutation battery: a mutant run.sh is compared against THIS
+  // answer without a second playwright launch (the TypeScript is not what mutates).
+  if (process.env.TS_RESOLVED_OUT) writeFileSync(process.env.TS_RESOLVED_OUT, JSON.stringify(fromTs));
   for (const e of ENVIRONMENTS) {
     expect(fromBash[e], `tests/e2e/run.sh --env ${e} vs ENVIRONMENT_DEFS.${e}.baseUrl()`)
-      .toBe(environmentBaseUrl(e));
+      .toBe(fromTs[e]);
   }
+});
+
+// The docker door is ONE knob (PUBLIC_HTTPS_PORT), and both resolvers must
+// FOLLOW it. Agreeing on the default alone is also satisfied by two matching
+// literals — precisely the pair that drifted to 8443 — so this is the check that
+// proves the indirection is live. baseUrl() resolves fresh on every call, which
+// is why setting the knob here, inside the test, is honoured.
+test('run.sh and ENVIRONMENT_DEFS both follow PUBLIC_HTTPS_PORT for the docker mesh', () => {
+  const port = process.env.OVERRIDE_PORT || '';
+  expect(port, 'the guard passed no OVERRIDE_PORT — this test would compare nothing').not.toBe('');
+  const fromBash = JSON.parse(process.env.BASH_RESOLVED_OVERRIDE || '{}') as Record<string, string>;
+  process.env.PUBLIC_HTTPS_PORT = port;
+  expect(fromBash.docker, `tests/e2e/run.sh --env docker under PUBLIC_HTTPS_PORT=${port}`)
+    .toBe(environmentBaseUrl('docker'));
+  expect(fromBash.docker, 'neither resolver moved with the knob — the indirection is decorative')
+    .toContain(`:${port}`);
 });
 TS
 sed -i "s#__DIMENSIONS__#${E2E}/steps/dimensions#" "${VOCAB}/agree.spec.ts"
 
+# Every resolution below runs in a CLEARED environment: an exported SNAP_BASE_URL
+# or PUBLIC_HTTPS_PORT on the operator's shell would otherwise be mistaken for
+# run.sh's own answer. [port] is the one knob, exported on purpose.
+CLEAR_ENV='unset SNAP_BASE_URL SNAP_ENV SNAP_ENV_DOCKER_BASE_URL SNAP_ENV_KIND_BASE_URL SNAP_ENV_QEMU_BASE_URL SNAP_HOST_RESOLVER UI_PORT SNAP_QEMU_UI_PORT PUBLIC_HTTPS_PORT'
+OVERRIDE_PORT=9999
+
+# bash_url <env> [port] -> the baseUrl run.sh --print-command resolves
+bash_url() {
+    local e port
+    e="$1"; port="${2-}"
+    ( eval "${CLEAR_ENV}"
+      if [ -n "${port}" ]; then export PUBLIC_HTTPS_PORT="${port}"; fi
+      cd "${REPO}" && bash "${RUN_SH}" --print-command --env "${e}" 2>/dev/null \
+      | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const l=s.trim().split("\n").filter(Boolean).pop()||"{}";process.stdout.write(JSON.parse(l).baseUrl||"")})' )
+}
+# collect_bash_urls [port] -> {"docker":"…","kind":"…","qemu":"…"}
 collect_bash_urls() {
     local e url out
     out="{"
     for e in docker kind qemu; do
-      url="$( unset SNAP_BASE_URL SNAP_ENV SNAP_ENV_DOCKER_BASE_URL SNAP_ENV_KIND_BASE_URL \
-                    SNAP_ENV_QEMU_BASE_URL UI_PORT SNAP_QEMU_UI_PORT
-              cd "${REPO}" && bash "${RUN_SH}" --print-command --env "${e}" 2>/dev/null \
-              | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const l=s.trim().split("\n").filter(Boolean).pop()||"{}";process.stdout.write(JSON.parse(l).baseUrl||"")})' )"
+      url="$(bash_url "${e}" "${1-}")"
       out="${out}\"${e}\":\"${url}\","
     done
     echo "${out%,}}"
 }
+# ts_url <env> -> what ENVIRONMENT_DEFS answered in the agree run (recorded there)
+ts_url() {
+    python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],""))' \
+      "${VOCAB}/ts-resolved.json" "$1" 2>/dev/null
+}
 
-BASH_URLS="$(collect_bash_urls)"
-if ( unset SNAP_BASE_URL SNAP_ENV SNAP_ENV_DOCKER_BASE_URL SNAP_ENV_KIND_BASE_URL \
-           SNAP_ENV_QEMU_BASE_URL UI_PORT SNAP_QEMU_UI_PORT
-     cd "${E2E}" && BASH_RESOLVED="${BASH_URLS}" \
-     npx playwright test -c "${VOCAB}/pw.config.ts" >"${WORK}/agree.out" 2>&1 ); then
-  ok "the bash env table and ENVIRONMENT_DEFS resolve identically: ${BASH_URLS}"
+BASH_URLS=""
+check_tables_agree() {  # -> 0 when both resolvers agree, by default AND under the knob
+    local urls urls9
+    urls="$(collect_bash_urls)"
+    urls9="$(collect_bash_urls "${OVERRIDE_PORT}")"
+    BASH_URLS="${urls}"
+    rm -f "${VOCAB}/ts-resolved.json"
+    # The agree spec launches NO browser; PLAYWRIGHT_BROWSERS_PATH is inherited
+    # from the caller untouched, never defaulted here.
+    ( eval "${CLEAR_ENV}"
+      cd "${E2E}" && BASH_RESOLVED="${urls}" BASH_RESOLVED_OVERRIDE="${urls9}" \
+      OVERRIDE_PORT="${OVERRIDE_PORT}" TS_RESOLVED_OUT="${VOCAB}/ts-resolved.json" \
+      npx playwright test -c "${VOCAB}/pw.config.ts" >"${WORK}/agree.out" 2>&1 )
+}
+if check_tables_agree; then
+  ok "the bash env table and ENVIRONMENT_DEFS resolve identically, and both follow PUBLIC_HTTPS_PORT: ${BASH_URLS}"
 else
   bad "run.sh and steps/dimensions.ts DISAGREE about where a mesh is:"
   grep -viE 'npm notice' "${WORK}/agree.out" | tail -20 >&2
+fi
+
+# 4b. The usage text is the third resolver a human reads. It must advertise the
+# door the table resolves (not a literal that reads right and points at the kind
+# node), and it must move with the knob — which is what proves it is derived.
+check_help_names_the_door() {
+    local want help
+    want="$(bash_url docker)"
+    [ -n "${want}" ] || { echo "    --env docker resolved to nothing; the help check has no reference" >&2; return 1; }
+    help="$( eval "${CLEAR_ENV}"; cd "${REPO}" && bash "${RUN_SH}" --help 2>&1 )"
+    case "${help}" in
+      *"${want}"*) : ;;
+      *) echo "    --help does not advertise ${want} (what --env docker resolves); it says:" >&2
+         printf '%s\n' "${help}" | grep -n 'default' -A1 | sed 's/^/      /' >&2
+         return 1 ;;
+    esac
+    want="https://localhost:${OVERRIDE_PORT}"
+    help="$( eval "${CLEAR_ENV}"; export PUBLIC_HTTPS_PORT="${OVERRIDE_PORT}"; cd "${REPO}" && bash "${RUN_SH}" --help 2>&1 )"
+    case "${help}" in
+      *"${want}"*) return 0 ;;
+      *) echo "    under PUBLIC_HTTPS_PORT=${OVERRIDE_PORT} --help still does not say ${want} — the default it prints is a literal" >&2
+         return 1 ;;
+    esac
+}
+if check_help_names_the_door; then
+  ok "--help advertises the same docker door the table resolves, and follows PUBLIC_HTTPS_PORT"
+else
+  bad "the usage text names a different docker door than the resolver"
+fi
+
+# 4c. The bundled-browser path. When hugmeshgames-e2e:latest exists, a legacy
+# invocation runs INSIDE a container that sees only what -e hands it, so run.sh
+# resolves the docker door on the host and passes it as SNAP_BASE_URL. That
+# argv is the third copy of the fallback and the one no --print-command shows.
+# A recording `docker` stub, on PATH only for THIS check (it would hijack every
+# legacy stub_run above), says the image exists and records `docker run`'s argv.
+DOCKER_STUB_DIR="${WORK}/docker-stub"; mkdir -p "${DOCKER_STUB_DIR}"
+cat > "${DOCKER_STUB_DIR}/docker" <<'STUB'
+#!/usr/bin/env bash
+# Recording stub: `image inspect` says the image EXISTS; `run` records its argv
+# and runs nothing.
+case "${1-}" in
+  image) exit 0 ;;
+  run) { echo "DOCKER-RUN"; for a in "$@"; do printf 'ARG\t%s\n' "${a}"; done; echo "END"; } >> "${DOCKER_STUB_LOG}"
+       exit 0 ;;
+esac
+exit 0
+STUB
+chmod +x "${DOCKER_STUB_DIR}/docker"
+# docker_path_url <log> [port|SNAP_BASE_URL=<url>] -> the SNAP_BASE_URL the container was handed
+docker_path_url() {
+    local log knob
+    log="$1"; knob="${2-}"
+    : > "${log}"
+    ( eval "${CLEAR_ENV}"
+      case "${knob}" in
+        SNAP_BASE_URL=*) export SNAP_BASE_URL="${knob#SNAP_BASE_URL=}" ;;
+        ?*)              export PUBLIC_HTTPS_PORT="${knob}" ;;
+      esac
+      cd "${REPO}" && DOCKER_STUB_LOG="${log}" PATH="${DOCKER_STUB_DIR}:${STUB_DIR}:${PATH}" \
+        E2E_PASSWORD="cli-lane-stub-never-authenticates-anything" SNAP_EVIDENCE_SUMMARY=0 \
+        bash "${RUN_SH}" --reporter=list specs/01-front-page.spec.ts >"${log}.out" 2>&1 )
+    grep -c '^DOCKER-RUN$' "${log}" >/dev/null 2>&1 || {
+      echo "    the bundled-browser path never ran \`docker run\` (see ${log}.out)" >&2; return 1; }
+    awk -F'\t' '/^ARG\t/ && $2 ~ /^SNAP_BASE_URL=/ { sub(/^SNAP_BASE_URL=/, "", $2); print $2; exit }' "${log}"
+}
+check_docker_path_door() {
+    local seen want
+    seen="$(docker_path_url "${WORK}/docker-path.log")" || return 1
+    want="$(bash_url docker)"
+    [ -n "${seen}" ] || { echo "    docker run was handed no SNAP_BASE_URL at all" >&2; return 1; }
+    [ "${seen}" = "${want}" ] || {
+      echo "    docker run was handed SNAP_BASE_URL='${seen}' while --env docker resolves '${want}'" >&2; return 1; }
+    seen="$(docker_path_url "${WORK}/docker-path-knob.log" "${OVERRIDE_PORT}")" || return 1
+    [ "${seen}" = "https://localhost:${OVERRIDE_PORT}" ] || {
+      echo "    under PUBLIC_HTTPS_PORT=${OVERRIDE_PORT} the container was handed '${seen}' — a literal, not the knob" >&2; return 1; }
+    # …and a caller's own SNAP_BASE_URL is forwarded untouched (the legacy contract).
+    seen="$(docker_path_url "${WORK}/docker-path-caller.log" "SNAP_BASE_URL=https://caller.example:1")" || return 1
+    [ "${seen}" = "https://caller.example:1" ] || {
+      echo "    the caller's SNAP_BASE_URL was rewritten to '${seen}'" >&2; return 1; }
+    return 0
+}
+if check_docker_path_door; then
+  ok "the bundled-browser docker path hands the container the same docker door (and a caller's SNAP_BASE_URL untouched)"
+else
+  bad "the docker-image path hands the container a DIFFERENT docker door than --env docker resolves"
 fi
 
 # ── 5. the evidence summary ──────────────────────────────────────────────────
@@ -812,6 +967,68 @@ then
   fi
 else
   mut_result "M8 every run is forced onto the bdd project" 0 "mutation did not apply"
+fi
+restore_all
+
+# M9 — the env table's docker door goes back to the literal that drifted. The
+# TypeScript did not change, so the recorded ENVIRONMENT_DEFS answer is the
+# reference; a second playwright launch would measure the same thing slower.
+if mutate tests/e2e/run.sh <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = 'docker) url="${SNAP_ENV_DOCKER_BASE_URL:-${SNAP_BASE_URL:-${DOCKER_DEFAULT_BASE_URL}}}" ;;'
+assert s.count(old) == 1, "M9 anchor not unique: %d" % s.count(old)
+s = s.replace(old, 'docker) url="${SNAP_ENV_DOCKER_BASE_URL:-${SNAP_BASE_URL:-https://localhost:8443}}" ;;  # M9')
+open(p, 'w').write(s)
+PY
+then
+  if [ -n "$(ts_url docker)" ] && [ "$(bash_url docker)" != "$(ts_url docker)" ]; then
+    mut_result "M9 the env table's docker door is a literal 8443 again" 1
+  else
+    mut_result "M9 the env table's docker door is a literal 8443 again" 0 "check 4 stayed green (bash=$(bash_url docker) ts=$(ts_url docker))"
+  fi
+else
+  mut_result "M9 the env table's docker door is a literal 8443 again" 0 "mutation did not apply"
+fi
+restore_all
+
+# M10 — the usage text advertises the literal while the table resolves the knob.
+if mutate tests/e2e/run.sh <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = '  __DOCKER_DEFAULT_BASE_URL__ '
+assert s.count(old) == 1, "M10 anchor not unique: %d" % s.count(old)
+s = s.replace(old, '  https://localhost:8443 ')
+open(p, 'w').write(s)
+PY
+then
+  if check_help_names_the_door >/dev/null 2>&1; then
+    mut_result "M10 the usage text names a literal docker door" 0 "check 4b stayed green"
+  else
+    mut_result "M10 the usage text names a literal docker door" 1
+  fi
+else
+  mut_result "M10 the usage text names a literal docker door" 0 "mutation did not apply"
+fi
+restore_all
+
+# M11 — the bundled-browser path hands the container the literal.
+if mutate tests/e2e/run.sh <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = '-e SNAP_BASE_URL="${SNAP_BASE_URL:-$(env_base_url docker)}"'
+assert s.count(old) == 1, "M11 anchor not unique: %d" % s.count(old)
+s = s.replace(old, '-e SNAP_BASE_URL="${SNAP_BASE_URL:-https://localhost:8443}"')
+open(p, 'w').write(s)
+PY
+then
+  if check_docker_path_door >/dev/null 2>&1; then
+    mut_result "M11 the docker-image path hands the container a literal 8443" 0 "check 4c stayed green"
+  else
+    mut_result "M11 the docker-image path hands the container a literal 8443" 1
+  fi
+else
+  mut_result "M11 the docker-image path hands the container a literal 8443" 0 "mutation did not apply"
 fi
 restore_all
 

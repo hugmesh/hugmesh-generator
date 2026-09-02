@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
-# test-e2e-docker-base-url-parity.sh — ONE fallback, THREE copies, and they drifted.
+# test-e2e-docker-base-url-parity.sh — ONE fallback, FOUR copies, and they drifted.
 #
 # THE DEFECT. The compose stack publishes `${PUBLIC_HTTPS_PORT:-8488}:8443`, so
-# 8443 is the port INSIDE the container and the host door is 8488. Three separate
-# places carried a bare fallback for the docker lane and all three said 8443:
+# 8443 is the port INSIDE the container and the host door is 8488. Four separate
+# places carried a bare fallback for the docker lane and all four said 8443:
 #
 #   tests/e2e/steps/dimensions.ts            (fixed by PR #203)
 #   tests/e2e/playwright.config.ts           (`baseURL`)
 #   studio/hugmesh_studio/core/e2e_environments.py  (`default_pin`)
+#   tests/e2e/run.sh                         (found 2026-09-01: its env table, its
+#                                             usage text AND its bundled-browser
+#                                             `docker run -e SNAP_BASE_URL=` all
+#                                             still said 8443 after the other
+#                                             three were fixed — the CLI drove one
+#                                             mesh while the harness described
+#                                             another, and only the cli-lane
+#                                             guard's agree spec noticed)
 #
 # Every run THROUGH the Makefile sets SNAP_BASE_URL from $(PUBLIC_HTTPS_PORT) and
 # was always right, so the drift was invisible to the lanes anyone watches. What
@@ -20,11 +28,14 @@
 #
 # WHAT IS ASSERTED. Not "the files contain 8488" — that is a grep, and a grep is
 # satisfied by a commented-out line. The port is DERIVED from the Makefile, the
-# Python site is EXECUTED (its real default_pin, imported from the file), and the
-# TypeScript sites are EVALUATED IN NODE after their comments are stripped, twice:
-# once with a scrubbed environment (must give the Makefile's port) and once with
-# PUBLIC_HTTPS_PORT overridden (must follow it — which proves the indirection is
-# live rather than decorative).
+# Python site is EXECUTED (its real default_pin, imported from the file), the
+# TypeScript sites are EVALUATED IN NODE after their comments are stripped, and
+# the bash site is RUN (`run.sh --print-command --env docker` and `--help`, which
+# execute nothing and need no node_modules) — each twice: once with a scrubbed
+# environment (must give the Makefile's port) and once with PUBLIC_HTTPS_PORT
+# overridden (must follow it — which proves the indirection is live rather than
+# decorative). run.sh is also comment-stripped and scanned for a literal host
+# port, which is the only static check that reaches its `docker run` argv.
 #
 # It also pins that the docker and kind lanes do NOT resolve to the same port:
 # their colliding on 8443 is the precondition that turned a wrong default into a
@@ -39,6 +50,8 @@ REPO="$(cd "${HERE}/../.." && pwd)"
 STUDIO_REL="studio/hugmesh_studio/core/e2e_environments.py"
 TS_SITES="tests/e2e/playwright.config.ts tests/e2e/steps/dimensions.ts"
 KIND_REL="specs/cluster/bootstrap/kind-local/kind-local.yaml"
+RUNSH_REL="tests/e2e/run.sh"
+PRINTPLAN_REL="tests/e2e/print-plan.mjs"   # run.sh --print-command serialises through it
 
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }
@@ -77,6 +90,8 @@ TS_SITES = [("tests/e2e/playwright.config.ts", r"\bbaseURL\s*:"),
 TS = [os.path.join(root, rel) for rel, _a in TS_SITES]
 MAKEFILE = os.path.join(root, "Makefile")
 KIND = os.path.join(root, "specs/cluster/bootstrap/kind-local/kind-local.yaml")
+RUNSH = os.path.join(root, "tests/e2e/run.sh")
+PRINTPLAN = os.path.join(root, "tests/e2e/print-plan.mjs")
 
 results = []
 def check(cid, passed, detail=""):
@@ -86,7 +101,7 @@ def incomplete(msg):
     print("INCOMPLETE %s" % msg, file=sys.stderr)
     sys.exit(3)
 
-for p in [STUDIO, MAKEFILE, KIND] + TS:
+for p in [STUDIO, MAKEFILE, KIND, RUNSH, PRINTPLAN] + TS:
     if not os.path.isfile(p):
         incomplete("%s is missing — nothing to grade" % p)
 
@@ -141,11 +156,17 @@ if not KIND_PORT:
 
 # ── C2: no hardcoded host port survives comment-stripping ────────────────────
 hardcoded = {}
-for p in TS + [STUDIO]:
+for p in TS + [STUDIO, RUNSH]:
     text = open(p).read()
     if p.endswith(".ts"):
         text = strip_ts_comments(text)
     else:
+        # Python and bash both comment with a leading '#'. run.sh's qemu row is
+        # `localhost:${SNAP_QEMU_UI_PORT:-${UI_PORT:-8443}}` — a knob, not a
+        # literal, and `localhost:(\d+)` does not match it; its kind row is on
+        # hugmesh.net. So the only thing this can find in run.sh is exactly the
+        # defect: a bare `localhost:NNNN` in the env table, the usage text or the
+        # `docker run -e SNAP_BASE_URL=` argv.
         text = re.sub(r"(?m)^\s*#.*$", "", text)
         text = re.sub(r'(?s)"""..*?"""', '""', text)
     hits = sorted(set(re.findall(r"localhost:(\d+)", text)))
@@ -228,6 +249,49 @@ bad_env += [(rel, "<no interpolated fallback at the docker site>") for rel in te
 check("C6-ts-honours-env", not bad_env,
       "every TS docker fallback must follow PUBLIC_HTTPS_PORT; wrong: %s" % json.dumps(bad_env))
 
+# ── C8/C9/C10: the bash site, RUN ────────────────────────────────────────────
+# tests/e2e/run.sh resolves the docker door BEFORE playwright starts (it must
+# export SNAP_BASE_URL for the runner), so it cannot ask the TypeScript and keeps
+# its own table. --print-command executes nothing and prints the plan as JSON;
+# --help prints the usage text. Both are run with SNAP_* and PUBLIC_HTTPS_PORT
+# scrubbed, then with the knob overridden.
+def run_sh(args, env_extra):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SNAP_")}
+    env.pop("PUBLIC_HTTPS_PORT", None); env.pop("UI_PORT", None)
+    env.update(env_extra)
+    proc = subprocess.run(["bash", RUNSH] + args, capture_output=True, text=True,
+                          env=env, cwd=root)
+    if proc.returncode != 0:
+        incomplete("`run.sh %s` exited %d: %s" % (" ".join(args), proc.returncode,
+                                                  (proc.stderr or proc.stdout).strip()[:400]))
+    return proc.stdout
+
+def plan_base_url(env_extra):
+    last = [l for l in run_sh(["--print-command", "--env", "docker"], env_extra).splitlines() if l.strip()]
+    try:
+        return json.loads(last[-1]).get("baseUrl") or ""
+    except (IndexError, ValueError) as exc:
+        incomplete("run.sh --print-command did not end with a JSON plan: %r" % (exc,))
+
+runsh_default = plan_base_url({})
+check("C8-runsh-default", port_of(runsh_default) == PORT,
+      "run.sh --env docker must resolve to the Makefile's %s; got %r" % (PORT, runsh_default))
+
+runsh_override = plan_base_url({"PUBLIC_HTTPS_PORT": "9999"})
+check("C9-runsh-honours-env", port_of(runsh_override) == "9999",
+      "run.sh --env docker must follow PUBLIC_HTTPS_PORT; got %r" % (runsh_override,))
+
+# The usage text is what a human reads before typing anything. It must name the
+# door the table resolves and move with the knob — a literal that happens to
+# equal the Makefile today is the exact shape that drifted.
+help_default = run_sh(["--help"], {})
+help_override = run_sh(["--help"], {"PUBLIC_HTTPS_PORT": "9999"})
+check("C10-runsh-help",
+      ("localhost:%s" % PORT) in help_default and "localhost:9999" in help_override,
+      "run.sh --help must advertise localhost:%s and follow PUBLIC_HTTPS_PORT (9999); "
+      "default mentions it: %s, override mentions 9999: %s"
+      % (PORT, ("localhost:%s" % PORT) in help_default, "localhost:9999" in help_override))
+
 # ── C7: the two lanes must not resolve to the same door ──────────────────────
 kind_url = studio_url("kind", {})
 check("C7-lanes-differ",
@@ -243,7 +307,7 @@ print("-- %d check(s), %d failed" % (len(results), failed))
 sys.exit(1 if failed else 0)
 PYEOF
 
-echo "== e2e docker base-URL parity: one fallback, three copies =="
+echo "== e2e docker base-URL parity: one fallback, four copies =="
 
 OUT="$(python3 "${WORK}/model.py" "${REPO}" 2>&1)"; RC=$?
 echo "${OUT}" | sed 's/^/     /'
@@ -252,7 +316,7 @@ if [ "${RC}" -eq 3 ]; then
   echo "   A green run without it would be a lie, so this is a FAIL."
   exit 1
 fi
-[ "${RC}" -eq 0 ] && ok "the repo tree keeps all three docker fallbacks on the Makefile's port" \
+[ "${RC}" -eq 0 ] && ok "the repo tree keeps all four docker fallbacks (studio, playwright.config, dimensions, run.sh) on the Makefile's port" \
                  || bad "the repo tree does NOT (see above)"
 
 # ── the mutant harness ───────────────────────────────────────────────────────
@@ -264,6 +328,8 @@ stage() {
   cp "${REPO}/Makefile"            "${dst}/Makefile"
   cp "${REPO}/${STUDIO_REL}"       "${dst}/${STUDIO_REL}"
   cp "${REPO}/${KIND_REL}"         "${dst}/${KIND_REL}"
+  cp "${REPO}/${RUNSH_REL}"        "${dst}/${RUNSH_REL}"
+  cp "${REPO}/${PRINTPLAN_REL}"    "${dst}/${PRINTPLAN_REL}"
   for f in ${TS_SITES}; do cp "${REPO}/${f}" "${dst}/${f}"; done
 }
 
@@ -362,6 +428,41 @@ p = sys.argv[1] + "/Makefile"; s = open(p).read()
 new = re.sub(r"(?m)^PUBLIC_HTTPS_PORT\s*\?=\s*\d+\s*$", "PUBLIC_HTTPS_PORT ?= 8555", s, count=1)
 assert new != s, "M7 did not land: no PUBLIC_HTTPS_PORT declaration to move"
 open(p, "w").write(new)
+PY
+
+# The bash site, restored to each of its three 2026-09-01 shapes.
+control M9-runsh-table-8443 C2-no-hardcoded-port <<'PY'
+import sys
+p = sys.argv[1] + "/tests/e2e/run.sh"; s = open(p).read()
+old = 'docker) url="${SNAP_ENV_DOCKER_BASE_URL:-${SNAP_BASE_URL:-${DOCKER_DEFAULT_BASE_URL}}}" ;;'
+assert s.count(old) == 1, "M9 anchor not unique: %d" % s.count(old)
+open(p, "w").write(s.replace(old, 'docker) url="${SNAP_ENV_DOCKER_BASE_URL:-${SNAP_BASE_URL:-https://localhost:8443}}" ;;'))
+PY
+
+control M10-runsh-help-8443 C2-no-hardcoded-port <<'PY'
+import sys
+p = sys.argv[1] + "/tests/e2e/run.sh"; s = open(p).read()
+old = "  __DOCKER_DEFAULT_BASE_URL__ "
+assert s.count(old) == 1, "M10 anchor not unique: %d" % s.count(old)
+open(p, "w").write(s.replace(old, "  https://localhost:8443 "))
+PY
+
+control M11-runsh-docker-argv-8443 C2-no-hardcoded-port <<'PY'
+import sys
+p = sys.argv[1] + "/tests/e2e/run.sh"; s = open(p).read()
+old = '-e SNAP_BASE_URL="${SNAP_BASE_URL:-$(env_base_url docker)}"'
+assert s.count(old) == 1, "M11 anchor not unique: %d" % s.count(old)
+open(p, "w").write(s.replace(old, '-e SNAP_BASE_URL="${SNAP_BASE_URL:-https://localhost:8443}"'))
+PY
+
+# Decorative indirection in bash: the knob is named, and ignored. C2 cannot see
+# it (no literal `localhost:NNNN`); C9 must.
+control M12-runsh-decorative-indirection C9-runsh-honours-env <<'PY'
+import sys
+p = sys.argv[1] + "/tests/e2e/run.sh"; s = open(p).read()
+old = 'DOCKER_HOST_PORT="${PUBLIC_HTTPS_PORT:-8488}"'
+assert s.count(old) == 1, "M12 anchor not unique: %d" % s.count(old)
+open(p, "w").write(s.replace(old, 'DOCKER_HOST_PORT="8488"'))
 PY
 
 # ── the sources going missing must be INCOMPLETE, never green ────────────────

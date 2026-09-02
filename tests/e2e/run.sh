@@ -38,13 +38,40 @@ FEATURES=()
 PW_ARGS=()
 IMAGE="${PW_IMAGE:-hugmeshgames-e2e:latest}"
 
+# ── the docker mesh's host door: ONE knob, the same one the TypeScript reads ──
+# tests/stack/compose.local.yaml publishes `${PUBLIC_HTTPS_PORT:-8488}:8443`, so
+# 8443 is the port INSIDE the tls-front container and the door on the HOST is
+# PUBLIC_HTTPS_PORT (Makefile: `PUBLIC_HTTPS_PORT ?= 8488`, threaded into the
+# stack through STACK_ENV and into the suite by `make stack-e2e*`). This is the
+# identical expression steps/dimensions.ts ENVIRONMENT_DEFS.docker.baseUrl() and
+# playwright.config.ts baseURL fall back to, so the resolvers can only drift
+# together. Until 2026-09-01 this script said 8443 in THREE places — the usage
+# text, the env table below, the bundled-browser docker path — and on a box that
+# also runs the kind lane :8443 is the KIND node's nginx, so the bare fallback did
+# not knock on a closed door, it named a DIFFERENT MESH (404 from kind, while the
+# compose stack answered on 8488). Every run through the Makefile sets
+# SNAP_BASE_URL and was always right; only the bare fallbacks were wrong.
+#   tests/scripts/test-e2e-cli-lane.sh resolves this table against ENVIRONMENT_DEFS,
+#   reads the help text, and records the argv the docker path is handed;
+#   tests/scripts/test-e2e-docker-base-url-parity.sh derives the port from the
+#   Makefile and executes this script against it.
+DOCKER_HOST_PORT="${PUBLIC_HTTPS_PORT:-8488}"
+DOCKER_DEFAULT_BASE_URL="https://localhost:${DOCKER_HOST_PORT}"
+
 usage() {
-  cat <<'USAGE'
+  # A QUOTED heredoc, then ONE placeholder substituted by bash itself: an
+  # unquoted heredoc would expand every $ and backtick in the text, a trap this
+  # repo has already been bitten by. `local` first, assignment second — bash 5.3
+  # dies under set -u on `local a=$x b=$a`.
+  local text
+  text="$(cat <<'USAGE'
 Usage: tests/e2e/run.sh [options] [-- ] [playwright args...]
 
   Runs this repo's Playwright e2e. With NO options it behaves exactly as it
   always has: the whole suite against SNAP_BASE_URL (default
-  https://localhost:8443), every argument forwarded to playwright.
+  __DOCKER_DEFAULT_BASE_URL__ — the compose stack's PUBLIC_HTTPS_PORT host door;
+  8443 is the port INSIDE its tls-front container), every argument forwarded
+  to playwright.
 
 Lane
   --bdd                    run the GHERKIN lane only (--project=bdd), compiling
@@ -78,6 +105,8 @@ Evidence
 
   -h, --help               this text
 USAGE
+)"
+  printf '%s\n' "${text//__DOCKER_DEFAULT_BASE_URL__/${DOCKER_DEFAULT_BASE_URL}}"
 }
 
 die() { echo "run.sh: $*" >&2; exit 2; }
@@ -86,12 +115,13 @@ die() { echo "run.sh: $*" >&2; exit 2; }
 # The SAME env vars and the SAME defaults as tests/e2e/steps/dimensions.ts's
 # ENVIRONMENT_DEFS. Two resolvers for one fact is a drift risk, so the guard
 # asserts they agree by RESOLVING BOTH and comparing, rather than by trusting
-# this comment.
+# this comment. The docker door is DOCKER_DEFAULT_BASE_URL (above), never a
+# literal here: the literal is exactly what drifted to 8443.
 env_base_url() {
   local id="$1"
   local url=""
   case "${id}" in
-    docker) url="${SNAP_ENV_DOCKER_BASE_URL:-${SNAP_BASE_URL:-https://localhost:8443}}" ;;
+    docker) url="${SNAP_ENV_DOCKER_BASE_URL:-${SNAP_BASE_URL:-${DOCKER_DEFAULT_BASE_URL}}}" ;;
     kind)   url="${SNAP_ENV_KIND_BASE_URL:-https://hugmesh.net:8443}" ;;
     qemu)   url="${SNAP_ENV_QEMU_BASE_URL:-https://localhost:${SNAP_QEMU_UI_PORT:-${UI_PORT:-8443}}}" ;;
     *)      return 1 ;;
@@ -285,9 +315,13 @@ fi
 
 set +e
 if [ "${USE_DOCKER}" -eq 1 ]; then
+  # The container sees ONLY what -e hands it — PUBLIC_HTTPS_PORT does not cross
+  # in — so the docker door is resolved HERE, through the same table --env uses,
+  # and passed as the one variable playwright.config.ts and dimensions.ts read
+  # first. A caller's own SNAP_BASE_URL is forwarded untouched.
   docker run --rm --network host --ipc=host \
     -v "${HERE}:/work/e2e" -w /work/e2e \
-    -e SNAP_BASE_URL="${SNAP_BASE_URL:-https://localhost:8443}" -e SNAP_SHOTS=/work/e2e/screenshots \
+    -e SNAP_BASE_URL="${SNAP_BASE_URL:-$(env_base_url docker)}" -e SNAP_SHOTS=/work/e2e/screenshots \
     -e E2E_PASSWORD="${E2E_PASSWORD:-}" \
     "${IMAGE}" "${PW_ARGV[@]}"
 else

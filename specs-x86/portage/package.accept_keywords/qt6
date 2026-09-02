@@ -1,0 +1,36 @@
+# ~amd64 keyword unmasks for the dev-qt/* (Qt 6) framework set the graphical
+# payloads pull in. Copied ONLY when CAPABLE (the Plasma set's neochat/
+# kdeconnect/khelpcenter apps hard-depend on it) OR WANT_CALAMARES (calamares ->
+# sys-libs/kpmcore-26.08+ hard-requires >=dev-qt/qtbase-6.11.2) — see the qt6
+# case in build-x86-host-stage4.sh's accept_keywords copy loop. Every other role
+# stays stable-keyworded.
+#
+# Incident (issue #223, session 20260831-183101-a9dc56, standalone-unaffiliated
+# x86): the tree moved the whole dev-qt set to ~amd64-only 6.11.2, nothing
+# pre-seeded it into the target config, and the payload emerge runs with
+# --autounmask-keep-keywords=y (keyword decisions stay explicit for a
+# reproducible hardened build) — so the ENTIRE image resolution bailed and the
+# base payload (grub/dracut/parted/jq/nmcli/Xorg/lightdm/openbox) never merged.
+#
+# The set below is exactly what that build's own AUTOUNMASK-PRETEND dump
+# computed (build.log:19722-19795); if a future tree bump grows the graph, the
+# payload plan fail-fast gate prints the additions up front — extend this file
+# from that output. Unversioned for durability against tree bumps (same call as
+# the calamares/capable files); ~amd64 never accepts the **-keyworded 9999 live
+# ebuilds, so this floats with the newest keyworded release only.
+dev-qt/qtbase ~amd64
+dev-qt/qtdeclarative ~amd64
+dev-qt/qtmultimedia ~amd64
+dev-qt/qtwebengine ~amd64
+dev-qt/qtwebview ~amd64
+dev-qt/qtspeech ~amd64
+dev-qt/qtlocation ~amd64
+dev-qt/qtpositioning ~amd64
+dev-qt/qtwebchannel ~amd64
+dev-qt/qt5compat ~amd64
+dev-qt/qtsvg ~amd64
+dev-qt/qttools ~amd64
+dev-qt/qttranslations ~amd64
+dev-qt/qtshadertools ~amd64
+dev-qt/qtquicktimeline ~amd64
+dev-qt/qtquick3d ~amd64
