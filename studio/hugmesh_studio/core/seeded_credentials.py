@@ -470,7 +470,8 @@ def annotate(roster: Roster, truth: CredentialTruth | None,
         sa_note = ("Minted for this bring-up; stored only in keys-out/vault/"
                    "secrets.json (never in the run-state credentials file)."
                    + ("" if truth.superadmin_seeded else
-                      " Not proven seeded: no seed has completed since it was minted."))
+                      " Not proven seeded: no recorded seed populated the current "
+                      "identity store after it was minted."))
     else:
         sa_marker, sa_note = marker, ("No minted bundle found (keys-out/vault/"
                                        "secrets.json absent or unreadable) — this is "

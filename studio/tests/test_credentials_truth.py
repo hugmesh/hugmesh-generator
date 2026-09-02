@@ -149,6 +149,61 @@ def test_a_seeded_then_cleaned_mesh_is_no_mesh_not_minted_not_seeded(tmp_path):
     assert t.state == ct.STATE_NO_MESH
 
 
+def test_halted_store_created_after_the_recorded_seed_is_unverified_not_still_valid(tmp_path):
+    """The reference host on 2026-09-02: mint 04:40, recorded seed 04:43, stack-clean
+    04:49, then a casdoor-pg created 07:29 by a run the Studio never recorded. Press
+    Stop and the old rule said "still valid" with stage 2 asserted and the minted
+    superadmin "seeded" — into a store that seed never touched."""
+    t = ct.assess(**_facts(tmp_path, volumes_present=True, casdoor_created=T0 + HOUR,
+                           last_seed_ok=T0, secrets_mtime=T0 - HOUR,
+                           creds=_file(tmp_path, mtime=T0 - 2 * HOUR),
+                           superadmin=("superadmin", FIXTURE_PW)))
+    assert t.state == ct.STATE_HALTED
+    assert t.marker == ct.UNVERIFIED
+    assert "unverified" in t.headline and "still valid" not in t.headline
+    assert "created after the last recorded seed" in t.detail
+    assert t.stage2 is None
+    assert t.superadmin_seeded is None
+
+
+def test_halted_with_no_recorded_seed_is_unverified(tmp_path):
+    t = ct.assess(**_facts(tmp_path, volumes_present=True, casdoor_created=T0 - HOUR,
+                           last_seed_ok=None))
+    assert t.state == ct.STATE_HALTED
+    assert t.marker == ct.UNVERIFIED and t.stage2 is None
+    assert "still valid" not in t.headline
+    assert "No completed seed is recorded" in t.detail
+
+
+def test_halted_file_rewritten_after_the_recorded_seed_is_stale(tmp_path):
+    """Leg 1c's shape while stopped: the recorded seed populated THIS store, and the
+    file was regenerated since — the kept identities hold the previous value."""
+    t = ct.assess(**_facts(tmp_path, volumes_present=True, casdoor_created=T0 - 2 * HOUR,
+                           last_seed_ok=T0 - HOUR, creds=_file(tmp_path, mtime=T0)))
+    assert t.state == ct.STATE_HALTED
+    assert t.marker == ct.STALE
+    assert "DIFFERENT password" in t.headline and "401" in t.headline
+    assert "make stack-seed" in t.detail
+    assert t.stage2 is True
+
+
+def test_running_store_created_after_the_recorded_seed_is_unknown_even_with_a_newer_file(tmp_path):
+    """A newer file over a store the record does not cover is NOT stale: the
+    unrecorded seed that populated the store may have run after the rewrite, and
+    the store's CreatedAt is only a lower bound on when it ran."""
+    t = ct.assess(**_facts(tmp_path, mesh_running=True, volumes_present=True,
+                           seeded_admin=True, seeded_operator=True,
+                           casdoor_created=T0 + HOUR, last_seed_ok=T0,
+                           creds=_file(tmp_path, mtime=T0 + 2 * HOUR),
+                           secrets_mtime=T0 - HOUR,
+                           superadmin=("superadmin", FIXTURE_PW)))
+    assert t.state == ct.STATE_UNKNOWN
+    assert t.marker == ct.UNVERIFIED
+    assert "created after the last seed this Studio recorded" in t.headline
+    assert t.stage2 is True                      # Casdoor ANSWERED that; it is a fact
+    assert t.superadmin_seeded is None           # the store the mint was seeded into is gone
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root reads everything")
 def test_unreadable_credentials_file_reports_the_permission_reason_not_not_seeded(tmp_path):
     p = tmp_path / ".e2e-credentials"
@@ -257,6 +312,17 @@ def _every_truth(tmp_path):
     yield ct.assess(**_facts(tmp_path, secrets_mtime=T0, superadmin=sa))
     yield ct.assess(**_facts(tmp_path, lane=ct.LANE_KIND, superadmin=sa))
     yield ct.assess(**_facts(tmp_path, mesh_running=None, superadmin=sa))
+    # halted, store created after the record / no record / file rewritten after it
+    yield ct.assess(**_facts(tmp_path, volumes_present=True, casdoor_created=T0 + HOUR,
+                             last_seed_ok=T0, secrets_mtime=T0 - HOUR, superadmin=sa))
+    yield ct.assess(**_facts(tmp_path, volumes_present=True, superadmin=sa))
+    yield ct.assess(**_facts(tmp_path, volumes_present=True, last_seed_ok=T0 - HOUR,
+                             creds=_file(tmp_path, mtime=T0), superadmin=sa))
+    # running over a store the record does not cover
+    yield ct.assess(**_facts(tmp_path, mesh_running=True, seeded_admin=True,
+                             seeded_operator=True, superadmin=sa,
+                             casdoor_created=T0 + HOUR, last_seed_ok=T0,
+                             secrets_mtime=T0 - HOUR))
 
 
 def test_headline_and_detail_never_contain_a_password(tmp_path):

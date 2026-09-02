@@ -83,6 +83,20 @@ def test_minted_but_unseeded_superadmin_is_marked_not_seeded(tmp_path):
     assert "not proven seeded" in row.note.lower()
 
 
+def test_superadmin_minted_before_a_recreated_store_is_unverified_not_seeded(tmp_path):
+    """Mint 2.0, recorded seed 3.0, but the store that exists was created at 4.0 by a
+    run the Studio never recorded: the minted row is unverified, never live, and its
+    note says the current store is not proven to hold it."""
+    out = annotate(_roster(tmp_path), _truth(tmp_path, casdoor_created=4.0))
+    assert out.truth.state == ct.STATE_UNKNOWN
+    assert out.truth.superadmin_seeded is None
+    row = next(u for u in out.users if u.username == "minted-admin")
+    assert row.live == ct.UNVERIFIED
+    assert "not proven seeded" in row.note.lower()
+    assert "current identity store" in row.note
+    assert suggested_signin(out) is not None          # unverified is not "no"
+
+
 def test_mesh_operator_marked_not_on_this_lane_for_kind(tmp_path):
     out = annotate(_roster(tmp_path), _truth(tmp_path, lane=ct.LANE_KIND))
     op = next(u for u in out.users if u.username == "mesh-operator")

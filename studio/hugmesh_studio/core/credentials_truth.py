@@ -390,14 +390,29 @@ def assess(*, mesh_running: bool | None, volumes_present: bool | None,
     seeded_at = fmt_time(last_seed_ok)
     sa_user, sa_pw = (superadmin or ("", ""))
     sa_ok = bool(sa_user and sa_pw)
-    # The MINTED superadmin is proven seeded only when a seed completed after the mint.
+    # The MINTED superadmin is proven seeded only when a seed completed after the
+    # mint AND the identity store that seed populated is the one that exists now.
+    # A store (re)created after the last recorded seed was populated by a run this
+    # Studio did not record (a terminal seed), so the record proves nothing about
+    # it. Measured on the reference host 2026-09-02: mint 04:40, recorded seed
+    # 04:43, stack-clean 04:49, a new casdoor-pg at 07:29 — "seeded" was a lie.
     minted_after_seed = _newer(secrets_mtime, last_seed_ok)
+    store_after_record = bool(_newer(casdoor_created, last_seed_ok))
     if secrets_mtime is None:
         superadmin_seeded: bool | None = False if not sa_ok else None
-    elif last_seed_ok is None:
+    elif last_seed_ok is None or store_after_record:
         superadmin_seeded = None
     else:
         superadmin_seeded = not minted_after_seed
+    # The stale shape seed-e2e.sh leg 1c names: the run-state file rewritten AFTER
+    # the last recorded seed (moot when the seeder took E2E_PASSWORD from its env).
+    file_after_record = bool(not env_password and creds.mtime is not None
+                             and last_seed_ok is not None
+                             and creds.mtime > last_seed_ok)
+    # Does the recorded seed vouch for the store that exists now, holding the
+    # password on disk now? Only then is a value "still valid" / "live".
+    record_covers = (last_seed_ok is not None and not store_after_record
+                     and not file_after_record)
     minted_unseeded = secrets_mtime is not None and (
         last_seed_ok is None or bool(minted_after_seed))
 
@@ -485,16 +500,48 @@ def assess(*, mesh_running: bool | None, volumes_present: bool | None,
                 marker=NOT_SEEDED, stage2=False, sa_seeded=False)
         if store:
             # (b) `Stop mesh` is `make stack-halt`: volumes kept, identities intact.
+            # Whether they hold the password on disk is exactly as provable as for
+            # a running mesh: a recorded seed that populated THIS store after the
+            # file was last written vouches for it; nothing else does.
+            kept = ("The identity volume (casdoor-pg"
+                    + (f", created {fmt_time(casdoor_created)}" if casdoor_created else "")
+                    + ") survived the stop. ")
+            if record_covers:
+                return truth(
+                    STATE_HALTED,
+                    "Stopped, not destroyed — `Stop mesh` kept the volumes, so these "
+                    "credentials are still valid for the next start.",
+                    kept + "Start the mesh and sign in with the password shown; "
+                    "nothing needs re-seeding. " + file_line + " " + seed_line,
+                    marker=HALTED, stage2=True)
+            if last_seed_ok is not None and not store_after_record:
+                # The recorded seed populated this store; the file was rewritten
+                # since — the kept identities hold a value the file no longer does.
+                return truth(
+                    STATE_HALTED,
+                    "Stopped, not destroyed — but the credentials file was rewritten "
+                    "after the last completed seed, so the kept identities hold a "
+                    "DIFFERENT password; sign-in will 401 after the next start "
+                    "until it is re-seeded.",
+                    kept + f"The credentials file was rewritten {creds.written}, "
+                    f"after the last completed seed ({seeded_at}) — seed-e2e.sh leg "
+                    "1c's stale shape. Fix: start the mesh, then re-run `make "
+                    "stack-seed` (or Add user); the apply hook reconciles every "
+                    "stored password to the file's value.",
+                    marker=STALE, stage2=True)
             return truth(
                 STATE_HALTED,
-                "Stopped, not destroyed — `Stop mesh` kept the volumes, so these "
-                "credentials are still valid for the next start.",
-                "The identity volume (casdoor-pg"
-                + (f", created {fmt_time(casdoor_created)}" if casdoor_created else "")
-                + ") survived the stop. Start the mesh and sign in with the "
-                "password shown; nothing needs re-seeding. " + file_line + " "
-                + seed_line,
-                marker=HALTED, stage2=None if last_seed_ok is None else True)
+                "Stopped, not destroyed — the identity volume survived, but no seed "
+                "this Studio recorded populated it, so whether it holds the "
+                "password on disk is unverified.",
+                kept + (f"It was created after the last recorded seed ({seeded_at}), "
+                        "so a run this Studio did not record populated it. "
+                        if store_after_record else
+                        "No completed seed is recorded by this Studio. ")
+                + "Start the mesh and press this button again (a running Casdoor "
+                "can be asked), or re-run `make stack-seed` to reconcile every "
+                "persona to the file's value. " + file_line + " " + seed_line,
+                marker=UNVERIFIED, stage2=None)
         if store is None:
             return truth(
                 STATE_UNKNOWN,
@@ -555,7 +602,21 @@ def assess(*, mesh_running: bool | None, volumes_present: bool | None,
             "value cannot be vouched for. A Studio bring-up or Add user records "
             "one. " + file_line + " " + seed_line,
             marker=UNVERIFIED, stage2=stage2)
-    if not env_password and creds.mtime is not None and creds.mtime > last_seed_ok:
+    if store_after_record:
+        # The store the recorded seed populated is gone; whatever populated this
+        # one (a terminal seed, or a bring-up still running) left no record, so
+        # neither "live" nor "stale" can be claimed — not even with a newer file,
+        # since the unrecorded seed may have run after that rewrite.
+        return truth(
+            STATE_UNKNOWN,
+            "Seeded into an identity store created after the last seed this "
+            "Studio recorded — the password on disk is unverified.",
+            f"casdoor-pg was created {fmt_time(casdoor_created)}, after the last "
+            f"recorded seed ({seeded_at}). Either a bring-up is still running (its "
+            "record is written when it finishes — press again once it has) or a "
+            "terminal seed populated the store. " + file_line,
+            marker=UNVERIFIED, stage2=stage2)
+    if file_after_record:
         # (e) The exact shape seed-e2e.sh leg 1c names: the identities were
         # reconciled to a value the file no longer holds.
         return truth(
@@ -569,16 +630,6 @@ def assess(*, mesh_running: bool | None, volumes_present: bool | None,
             "Fix: re-run `make stack-seed` (or Add user, which re-runs it); the "
             "apply hook reconciles every stored password to the file's value.",
             marker=STALE, stage2=stage2)
-    if casdoor_created is not None and casdoor_created > last_seed_ok:
-        return truth(
-            STATE_UNKNOWN,
-            "Seeded into an identity store created after the last seed this "
-            "Studio recorded — the password on disk is unverified.",
-            f"casdoor-pg was created {fmt_time(casdoor_created)}, after the last "
-            f"recorded seed ({seeded_at}). Either a bring-up is still running (its "
-            "record is written when it finishes — press again once it has) or a "
-            "terminal seed populated the store. " + file_line,
-            marker=UNVERIFIED, stage2=stage2)
     # (f)
     src = ("the seeder's environment (E2E_PASSWORD)" if env_password
            else f"`{os.path.basename(creds.path) or CREDENTIALS_FILE_NAME}` "
