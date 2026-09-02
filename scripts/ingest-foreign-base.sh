@@ -37,7 +37,7 @@
 #          SIGNED manifest to the actual file bytes — provenance metadata alone does
 #          NOT cover the tree); manifest.base.meshId MUST equal the declared mesh.
 #   [b]    PROVENANCE / SIGNATURE — verify .hugmesh-provenance.json(.sig), or the
-#          LEGACY_COMPAT pre-rebrand .snapdragon-provenance.json(.sig), via
+#          LEGACY_COMPAT pre-rebrand .acme-provenance.json(.sig), via
 #          provenance.sh against the FOREIGN mesh's PINNED pubkey resolved from the
 #          trust store (base64 SPKI DER, pubkeys-only). NO trust-on-first-use: an
 #          unknown mesh with no pinned key fails closed. Verify ONLY against the
@@ -100,21 +100,7 @@ FIB_MAX_DEPTH="${FIB_MAX_DEPTH:-24}"
 FIB_MANIFEST=".hugmesh-provenance.json"
 FIB_SIG=".hugmesh-provenance.json.sig"
 FIB_SBOM=".hugmesh-sbom.json"
-# ── LEGACY_COMPAT — pre-rebrand attestation-envelope names ───────────────────
-# These files are SIGNED and already sitting on other meshes' disks. A foreign
-# base cut before the HugMesh rebrand ships them under the old names, and the
-# signature covers the tree as it is — so this side READS both spellings (new
-# first) while provenance.sh WRITES only the new ones. Dropping the fallback does
-# not migrate those meshes; it just makes their bases unverifiable (rejected as
-# "unsigned/unattested"). Retire only when no fleet mesh can still be on a
-# pre-rebrand base.
-FIB_MANIFEST_LEGACY_COMPAT=".snapdragon-provenance.json"
-FIB_SIG_LEGACY_COMPAT=".snapdragon-provenance.json.sig"
-# Markers dropped into an ADMITTED snapshot (stripped before overlay-copy).
-# WRITE side is new-only; the digest exclusion below also covers the legacy name
-# so a pre-rebrand snapshot's stamp never enters the canonical tree digest.
 FIB_ADMIT_STAMP=".hugmesh-mesh-admitted"
-FIB_ADMIT_STAMP_LEGACY_COMPAT=".snapdragon-mesh-admitted"
 FIB_FOREIGN_MARK=".foreign-mesh-id"
 
 _FIB_DNS_LABEL='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
