@@ -539,7 +539,11 @@ def test_askpass_mode_prints_password_and_exits_zero(monkeypatch, qapp):
     import io
 
     from hugmesh_studio import app
+    from hugmesh_studio.core import askpass
     from hugmesh_studio.gui.qt import QtWidgets
+    # Force the GUI branch of core.askpass deterministically (independent of the CI's
+    # ambient DISPLAY): this test exercises the dialog path specifically.
+    monkeypatch.setattr(askpass, "_display_available", lambda: True)
     monkeypatch.setattr(QtWidgets, "QApplication", lambda *a, **k: qapp)
     monkeypatch.setattr(QtWidgets.QInputDialog, "getText",
                         staticmethod(lambda *a, **k: ("s3cr3t-pw", True)))
@@ -554,7 +558,9 @@ def test_askpass_mode_cancel_returns_nonzero(monkeypatch, qapp):
     """A cancelled dialog exits non-zero so sudo aborts the elevation cleanly instead of
     treating an empty string as the password."""
     from hugmesh_studio import app
+    from hugmesh_studio.core import askpass
     from hugmesh_studio.gui.qt import QtWidgets
+    monkeypatch.setattr(askpass, "_display_available", lambda: True)
     monkeypatch.setattr(QtWidgets, "QApplication", lambda *a, **k: qapp)
     monkeypatch.setattr(QtWidgets.QInputDialog, "getText",
                         staticmethod(lambda *a, **k: ("", False)))
