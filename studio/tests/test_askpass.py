@@ -120,6 +120,21 @@ def test_run_askpass_cancel_returns_nonzero_and_writes_no_stdout(monkeypatch, ca
     assert out.out == ""                  # nothing on the password channel -> sudo aborts
 
 
+def test_cli_flags_plumb_allow_gui_to_the_helper(monkeypatch):
+    """`--askpass-no-gui` reaches core.askpass as allow_gui=False and plain `--askpass`
+    as allow_gui=True — pinned by assertion here so the plumb is checked on a headless
+    box too: the integration test below only notices a lost `allow_gui=False` when a
+    display is reachable (the offscreen dialog then blocks until the 60s timeout)."""
+    from hugmesh_studio import app
+
+    seen: list[bool] = []
+    monkeypatch.setattr(askpass, "run_askpass",
+                        lambda argv=None, *, allow_gui=True: seen.append(allow_gui) or 0)
+    assert app.main(["--askpass-no-gui"]) == 0
+    assert app.main(["--askpass"]) == 0
+    assert seen == [False, True]
+
+
 # ── auth-failure signature scan ──────────────────────────────────────────────────────
 @pytest.mark.parametrize("line", [
     askpass.CANCEL_MARKER,
@@ -162,6 +177,36 @@ def test_operator_askpass_is_honoured_over_generated_helper(monkeypatch, tmp_pat
     assert cmd[:3] == ["sudo", "-A", "bash"]
     env = d._elevation_env()
     assert env is not None and env["SUDO_ASKPASS"] == str(op)
+
+
+def test_operator_askpass_deferral_is_live_in_the_real_helper_path(monkeypatch, tmp_path):
+    """PRODUCTION wiring, not a stand-in: the test above monkeypatches
+    _askpass_helper_path itself, so it exercises _operator_askpass() but can never notice
+    the real _askpass_helper_path dropping its deferral (adversarial finding: deleting
+    `op = _operator_askpass(); if op is not None: return op` left every test green).
+    Here nothing in build_driver is patched except the module cache and `which`; the env
+    is prepared and the REAL function chain (_elevation_prefix -> _askpass_helper_path ->
+    _operator_askpass, then _elevation_env) must hand sudo the operator's program and
+    generate nothing of its own — a generated helper would land in XDG_CACHE_HOME and
+    set the module cache, both of which are pinned empty."""
+    op = tmp_path / "corp-askpass"
+    op.write_text("#!/bin/sh\necho hunter2\n")
+    op.chmod(0o755)
+    cache = tmp_path / "xdg-cache"                    # where OUR helper would be written
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+    monkeypatch.setenv("SUDO_ASKPASS", str(op))
+    monkeypatch.setattr(bd, "_ASKPASS_PATH_CACHE", None)
+    monkeypatch.setattr(bd.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    assert bd._askpass_helper_path() == str(op)      # the real function defers
+    assert bd._ASKPASS_PATH_CACHE is None            # ...and generated nothing
+    assert not (cache / "hugmesh-studio" / "studio-askpass.sh").exists()
+
+    d = BuildDriver(str(tmp_path), _host(), graphical=True)
+    assert d.command(_cfg(tmp_path), "native")[:3] == ["sudo", "-A", "bash"]
+    env = d._elevation_env()
+    assert env is not None and env["SUDO_ASKPASS"] == str(op)
+    assert bd._ASKPASS_PATH_CACHE is None            # still nothing generated end-to-end
 
 
 def test_operator_askpass_ignored_when_not_executable(monkeypatch, tmp_path):
@@ -228,8 +273,25 @@ _STUB_SUDO = textwrap.dedent("""
 """)
 
 
+def _studio_root() -> str:
+    return os.path.dirname(os.path.dirname(os.path.abspath(bd.__file__)))
+
+
+def _run_detached(argv, env, *, input=None):
+    """Run ``argv`` in a NEW SESSION so it (and every child, including the helper sudo
+    execs) has NO controlling terminal — /dev/tty is then unopenable and the helper's
+    terminal fallback deterministically declines. Without this the outcome depends on
+    the harness: under a pty (an interactive run, `script`, some CI runners) the cancel
+    case falls through to getpass on the operator's real terminal and blocks until the
+    timeout. stdin is closed for the same reason — nothing here may read a password
+    from it."""
+    return subprocess.run(argv, capture_output=True, text=True, env=env, timeout=60,
+                          start_new_session=True,
+                          input=input, stdin=None if input is not None else subprocess.DEVNULL)
+
+
 def _write_helper(tmp_path):
-    studio_root = os.path.dirname(os.path.dirname(os.path.abspath(bd.__file__)))
+    studio_root = _studio_root()
     helper = tmp_path / "studio-askpass.sh"
     helper.write_text(
         "#!/bin/sh\n"
@@ -245,9 +307,7 @@ def test_integration_password_reaches_elevation_only_never_the_terminal(tmp_path
     helper, stub = _write_helper(tmp_path)
     env = {**os.environ, "SUDO_ASKPASS": str(helper),
            askpass.PASSWORD_ENV: "corncob", "QT_QPA_PLATFORM": "offscreen"}
-    r = subprocess.run(
-        [sys.executable, str(stub), "-A", "/bin/echo", "INNER-RAN"],
-        capture_output=True, text=True, env=env, timeout=60)
+    r = _run_detached([sys.executable, str(stub), "-A", "/bin/echo", "INNER-RAN"], env)
     assert r.returncode == 0
     assert "INNER-RAN" in r.stdout            # elevation succeeded, inner command ran
     assert "corncob" not in r.stdout          # password NEVER on the parent terminal stdout
@@ -260,9 +320,22 @@ def test_integration_cancel_aborts_the_inner_command(tmp_path):
     env = {**os.environ, "SUDO_ASKPASS": str(helper),
            askpass.COMMAND_ENV: "exit 4", "QT_QPA_PLATFORM": "offscreen"}
     env.pop(askpass.PASSWORD_ENV, None)
-    r = subprocess.run(
-        [sys.executable, str(stub), "-A", "/bin/echo", "INNER-RAN"],
-        capture_output=True, text=True, env=env, timeout=60)
+    r = _run_detached([sys.executable, str(stub), "-A", "/bin/echo", "INNER-RAN"], env)
     assert r.returncode == 1
     assert "INNER-RAN" not in r.stdout        # build did NOT run un-elevated
     assert askpass.CANCEL_MARKER in r.stderr  # the driver's attribution scan can see this
+
+
+def test_from_terminal_never_reads_stdin_without_a_controlling_tty():
+    """The /dev/tty openability probe in _from_terminal is load-bearing: without a
+    controlling terminal, getpass's own fallback reads sys.stdin WITH ECHO — never an
+    acceptable place for a password. Run the real function in a fresh session (no
+    ctty) with a line waiting on stdin and pin that it declines (None) instead of
+    consuming that line. Removing the probe makes this return the stdin line."""
+    code = ("import sys\nfrom hugmesh_studio.core import askpass\n"
+            "print(repr(askpass._from_terminal('pw: ', sys.stderr)))\n")
+    env = {**os.environ, "PYTHONPATH": _studio_root()}
+    r = _run_detached([sys.executable, "-c", code], env, input="typed-on-stdin\n")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "None"
+    assert "typed-on-stdin" not in r.stdout
