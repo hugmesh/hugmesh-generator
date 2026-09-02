@@ -137,6 +137,35 @@ def test_preview_button_writes_the_platform_page_and_opens_it(qapp, tmp_path,
     assert "Fix the theme error" in g.preview_note.text()
 
 
+def test_preview_button_rewrites_the_artifact_with_the_new_font(qapp, tmp_path,
+                                                                monkeypatch):
+    """Issue #225 ("font doesn't appear to be properly shown / the preview button
+    doesn't overwrite the preview file"): change the font, press preview again —
+    the SAME artifact must now carry the new font-family (old stack gone), in both
+    the outer page and the login iframe, with the form-control inherit rule that
+    makes the login form actually render it."""
+    import hugmesh_studio.gui.pages._logintheme as lt
+    from hugmesh_studio.core import platform_preview, theme
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))   # -> preview_out_dir()
+    opened = []
+    monkeypatch.setattr(lt.login_preview, "open_in_browser",
+                        lambda p: (bool(opened.append(p)) or True,
+                                   "verified: test-opener exited 0"))
+    g = LoginThemeGroup()
+    g.font_preset.setCurrentText("Geometric")
+    g._open_preview()
+    assert "--sd-font-sans: Avenir" in open(opened[0], encoding="utf-8").read()
+
+    g.font_preset.setCurrentText("Slab serif")
+    g._open_preview()
+    assert opened[1] == opened[0]                    # same artifact, rewritten
+    text = open(opened[1], encoding="utf-8").read()
+    assert text.count("--sd-font-sans: Rockwell") == 2   # outer page + iframe srcdoc
+    assert "Avenir" not in text                      # old font family is GONE
+    assert text.count(theme.FORM_FONT_RESET.strip()) == 2
+    assert opened[1].endswith(platform_preview.PLATFORM_PREVIEW_BASENAME)
+
+
 def test_preview_feedback_is_never_silent_and_always_names_the_file(qapp, tmp_path,
                                                                     monkeypatch):
     """The operator's actual bug report ("the login page preview isn't working"):

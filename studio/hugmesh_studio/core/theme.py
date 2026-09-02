@@ -495,6 +495,17 @@ def css_root(tokens: dict[str, str], *, font_faces: str = "") -> str:
     return body
 
 
+# Appended by compose_login_css whenever a FONT was chosen. Form controls do NOT
+# inherit font-family — every UA styles input/button/select/textarea with its own
+# default — and neither the login-ui build nor the theme tokens set one on them, so a
+# chosen font changed the headings and labels while the username/password inputs and
+# the "Sign in" button stayed on the UA default (issue #225, measured in chromium:
+# body ui-monospace, inputs "Arial"). One weakest-specificity rule ((0,0,1) +
+# ``inherit``) fixes every consumer of this css without overriding any UI's own,
+# more specific font choice.
+FORM_FONT_RESET = "input, button, select, textarea { font-family: inherit; }\n"
+
+
 def compose_login_css(primary: str = "", secondary: str = "", *, font_preset: str = "",
                       font_family: str = "", font_bytes: bytes = b"") -> str:
     """The complete snap-theme.css text for an operator's choices, or "" when nothing
@@ -530,7 +541,12 @@ def compose_login_css(primary: str = "", secondary: str = "", *, font_preset: st
             _fonts.FONT_PRESETS.get(font_preset, ""), uploaded_family=family))
     elif font_preset:
         tokens.update(_fonts.font_tokens(_fonts.FONT_PRESETS[font_preset]))
-    return css_root(tokens, font_faces=faces)
+    css = css_root(tokens, font_faces=faces)
+    if font_preset or font_bytes:
+        # A colour-only theme appends nothing (no font changed, and the emitted
+        # bytes stay identical for existing colour-only configs).
+        css += FORM_FONT_RESET
+    return css
 
 
 def warnings(primary: str, secondary: str = "") -> list[str]:

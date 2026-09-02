@@ -49,8 +49,11 @@ PLATFORM_PREVIEW_BASENAME = "hugmesh-platform-preview.html"
 # In-pane small print for the three mock surfaces. A module constant so the tests and
 # the GUI tooltip quote the exact honesty text rather than drifting copies of it.
 HONESTY_LABEL = "representative preview — not the live UI"
-LOGIN_PANE_LABEL = ("real captured login-ui page — the same snapshot and :root:root "
-                    "substitution that ships (provenance in assets/login-preview.html)")
+# Short and concrete (operator ask, issue #225: the preview's explainer prose was
+# "clanker text to delete" — the header paragraph is gone, and this in-pane line
+# says only what the pane is). Provenance detail stays in assets/login-preview.html.
+LOGIN_PANE_LABEL = ("captured copy of the real login page — themed with the exact "
+                    "css that ships")
 
 # srcdoc slot: substituted AFTER the theme marker, and chosen so neither the marker
 # text nor any escaped snapshot byte can collide with it.
@@ -340,11 +343,6 @@ def platform_preview_html(theme_css: str) -> str:
         "</head><body>\n"
         '<header class="pp-head">\n'
         "<h1>HugMesh platform preview</h1>\n"
-        "<p>One theme, four surfaces. The LOGIN pane is the real captured login page "
-        "(the exact :root:root token text that ships); the chat / feed / forum panes "
-        "are representative mockups painted from the SAME --sd-* tokens — not the "
-        "live Angular UIs. Demo content only: personas amara / kenji / sol on "
-        "demo.mesh.</p>\n"
         "</header>\n"
         '<main class="pp-grid">\n'
         + _login_pane() + "\n"
