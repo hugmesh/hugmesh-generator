@@ -35,6 +35,10 @@ FIX_DIR="${TEST_DIR}/fixtures"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
+# Sandbox the lib's keep-file side channel (the pretend-failed resolver output
+# it preserves for the x86 payload gate, issue #223) into ${TMP}, so this test
+# neither leaks files into the real /tmp nor collides with a parallel run.
+export TMPDIR="${TMP}"
 
 FAILS=0
 pass() { printf 'EPLT PASS %s\n' "$1"; }
@@ -137,6 +141,25 @@ elif ! grep -q 'WARN' "${TMP}/err.fail"; then
     fail tolerate-failure "no WARN on stderr"
 else
     pass tolerate-failure
+fi
+
+# ── 6b. pretend-failed KEEPS the resolver output for the payload gate (#223) ──
+# The x86 builder's hugmesh_payload_plan_gate reads this file to fail fast on
+# keyword/mask walls the real merge (--autounmask-keep-keywords=y) cannot cross.
+keepf="${TMPDIR:-/tmp}/hugmesh-emerge-plan-world-pretend-failed.log"
+if [ -f "${keepf}" ] && grep -q 'it broke' "${keepf}"; then
+    pass keep-file
+else
+    fail keep-file "pretend-failed did not keep the resolver output at ${keepf}"
+fi
+# ...and a following SUCCESSFUL plan for the same group must CLEAR the stale
+# keep-file (resumed sysroots persist /tmp — a stale file would trip the gate
+# on a plan that resolved).
+emerge_plan_emit world "${TMP}/emerge-real" @world >/dev/null 2>&1
+if [ -f "${keepf}" ]; then
+    fail keep-file-clear "a resolved plan left a stale pretend-failed keep-file behind"
+else
+    pass keep-file-clear
 fi
 
 # ── 7. watchdog timeout => unavailable + return 0 (stub sleeps 30, budget 2s) ─

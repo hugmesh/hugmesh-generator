@@ -3565,6 +3565,10 @@ for akf in "${SPECS_DIR}/portage/package.accept_keywords/"*; do
         home-encrypted) ${HOME_ENCRYPTED} || continue ;;
         seed-code)      ${WANT_DOCKER}    || continue ;;
         calamares)      ${WANT_CALAMARES} || continue ;;
+        # qt6: the dev-qt/* ~amd64 set is needed by BOTH the capable Plasma apps
+        # (neochat/kdeconnect/khelpcenter) AND the calamares installer chain
+        # (kpmcore-26.08+ hard-requires the ~amd64 qtbase) — issue #223.
+        qt6)            ${CAPABLE} || ${WANT_CALAMARES} || continue ;;
     esac
     cp "${akf}" "${PCS_STAGE_AK}/"
 done
@@ -5206,6 +5210,45 @@ else
     emerge_plan_emit() { return 0; }
 fi
 # ── END shared block: emerge-plan preview (in-chroot init) ────────────────────
+# ── PAYLOAD PLAN FAIL-FAST GATE (issue #223) ──────────────────────────────────
+# When the image plan preview resolves, this is a no-op. When it FAILS, the lib
+# keeps the resolver output at the path below, and this gate decides honestly:
+#   * KEYWORD/MASK wall  -> the payload merge runs with
+#     --autounmask-keep-keywords=y --autounmask-keep-masks=y, which NEVER
+#     applies keyword or mask changes, so that merge is GUARANTEED to fail —
+#     print the exact needed pre-seeds and exit 1 NOW instead of building on.
+#     Session 20260831-183101-a9dc56 continued ~15 minutes past
+#     "Emerge plan: image unavailable" to a certain stage4-incomplete error.
+#   * anything else (USE-only failure etc.) -> loud WARN and continue:
+#     --autounmask-continue=y applies USE changes during the real merge, so a
+#     pretend failure alone does not prove the merge will fail.
+# --no-emerge-plan, a preview timeout, or an unstaged lib leave no keep-file, so
+# the old behaviour (merge decides) is untouched in every degraded mode.
+# HEREDOC SAFETY: chroot-side expansions below are backslash-escaped; no
+# backticks and no dollar-parens anywhere in this block, comments included.
+hugmesh_payload_plan_gate() {
+    kept=/tmp/hugmesh-emerge-plan-image-pretend-failed.log
+    [ -f "\${kept}" ] || return 0
+    if grep -Eq 'have been masked|masked by:|keyword changes are necessary|mask changes are necessary' "\${kept}"; then
+        echo "[build-x86] ERROR: payload --pretend resolution failed on a KEYWORD/MASK wall."
+        echo "[build-x86] The payload merge keeps keyword/mask decisions explicit"
+        echo "[build-x86] (--autounmask-keep-keywords=y --autounmask-keep-masks=y), so it cannot"
+        echo "[build-x86] apply the changes below and is guaranteed to fail — failing fast instead"
+        echo "[build-x86] of continuing to a certain stage4-incomplete error."
+        echo "[build-x86] ===== RESOLVER OUTPUT: what the payload needs ====="
+        grep -E 'USE changes|keyword changes|mask changes|^# |^>=|^<|^=|Change USE|necessary|masked by|have been masked|^- ' "\${kept}" || true
+        echo "[build-x86] ===== END RESOLVER OUTPUT ====="
+        echo "[build-x86] Pre-seed keyword lines into specs-x86/portage/package.accept_keywords/"
+        echo "[build-x86] (role-gated; see the qt6 file) and USE lines into"
+        echo "[build-x86] specs-x86/portage/package.use/, then rebuild. (Issue #223.)"
+        exit 1
+    fi
+    echo "[build-x86] WARN: payload --pretend resolution failed with no keyword/mask wall"
+    echo "[build-x86]       detected — continuing: --autounmask-continue=y applies USE changes"
+    echo "[build-x86]       during the merge below. If it still fails, see its AUTOUNMASK-PRETEND dump."
+    return 0
+}
+# ── END payload plan fail-fast gate ───────────────────────────────────────────
 # ── EMERGE-GROUP BANNERS (Studio package sub-listing) ─────────────────────────
 # Each "==> Emerge group: GROUP" line tells the Studio which of image|tools|
 # dependencies|system|world the FOLLOWING ">>> Emerging (N of M) cat/pn-ver"
@@ -5346,6 +5389,9 @@ echo "==> Emerging role payload (stage4, native chroot)"
 # failure. Host-expands the same variables as the real merge, by design.
 emerge_plan_emit image emerge --update --deep --newuse --keep-going --autounmask-continue=y --autounmask-keep-keywords=y --autounmask-keep-masks=y --exclude sys-apps/portage ${EMERGE_EXCLUDE} ${PKGS}
 # ── END shared block: emerge-plan preview (image) ─────────────────────────────
+# Fail fast on a keyword/mask wall the merge below cannot cross (issue #223) —
+# defined next to the plan-lib init above; no-op when the plan resolved.
+hugmesh_payload_plan_gate
 echo "==> Emerge group: image"
 emerge --update --deep --newuse --keep-going \
     --autounmask-continue=y --autounmask-keep-keywords=y --autounmask-keep-masks=y \
