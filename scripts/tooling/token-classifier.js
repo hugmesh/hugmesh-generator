@@ -14,6 +14,73 @@ const path = require('path');
 const TOKENS_PATH = path.join(__dirname, 'tokens.json');
 const spec = JSON.parse(fs.readFileSync(TOKENS_PATH, 'utf8'));
 
+// ── THE SPEC MUST DECLARE WHAT IT CLAIMS TO GUARD ───────────────────────────
+// Every block below is read through `|| {}` / `|| []`, which is precisely what
+// makes a DELETED block indistinguishable from an empty one: the unions collapse,
+// isFrozen()/isThemeContract()/isRenameContractFile() start returning false for
+// everything they used to refuse, and render-recipe.js + render-handlebars.js go
+// on to ACCEPT the rename or the tokenization the block existed to refuse —
+// exit 0, no diagnostic, guard gone. Not hypothetical: a38208e6 ("Update
+// tokens.json", a direct-to-main web-editor push) deleted BOTH
+// `retired_protocol_constants` and `theme_contract_constants` in one 14-line edit
+// and nothing in this engine noticed. The only thing that spoke up was a
+// behavioural suite in CI, and only for the cases it happened to enumerate.
+//
+// So the SHAPE is asserted here, at require time: a missing block is a hard throw
+// in EVERY consumer instead of a silent permission. Fail-closed for the spec DATA
+// the same way isDenied() is fail-closed for a token.
+//
+// This pins STRUCTURE, not entries. Lifting one pinned name is still the
+// deliberate one-line tokens.json edit each block's _comment describes — the array
+// shrinks, the diff shows it, and the behavioural suites under tests/domain-registry/
+// go red if the name was still load-bearing. Retiring a whole contract FAMILY is
+// deliberately not a data-only edit any more: it has to delete its row below too,
+// in a diff a reviewer reads as "this guard is being switched off".
+const REQUIRED_ARRAYS = {
+  allowlist: ['live', 'dead', 'reserved_pilot'],
+  denylist: ['keys'],
+  frozen_protocol_constants: ['label_key_namespaces', 'api_groups', 'wire_headers', 'subprotocol_prefixes'],
+  retired_protocol_constants: ['label_key_namespaces', 'wire_headers', 'subprotocol_prefixes'],
+  theme_contract_constants: ['rename_denylist', 'env_keys', 'css_variable_prefixes'],
+};
+
+/** Fail-closed shape check over tokens.json. Throws (naming every missing path)
+ *  rather than letting a consumer degrade to a permissive empty set. */
+function assertSpecShape(s) {
+  const missing = [];
+  if (!s || typeof s !== 'object' || Array.isArray(s)) {
+    throw new Error(`${TOKENS_PATH}: not a JSON object — token classification cannot fail closed on it`);
+  }
+  for (const block of Object.keys(REQUIRED_ARRAYS)) {
+    const b = s[block];
+    if (!b || typeof b !== 'object' || Array.isArray(b)) {
+      missing.push(`${block} (whole block absent)`);
+      continue;
+    }
+    for (const k of REQUIRED_ARRAYS[block]) {
+      if (!Array.isArray(b[k])) missing.push(`${block}.${k}`);
+    }
+  }
+  // Not an array: the secret-key catch-all. A missing one would make
+  // `new RegExp(undefined)` compile to /(?:)/, which matches every name — denying
+  // everything, including the live allowlist. Loud beats mysteriously-empty output.
+  if (typeof (s.denylist && s.denylist.key_name_regex) !== 'string' || !s.denylist.key_name_regex) {
+    missing.push('denylist.key_name_regex');
+  }
+  if (missing.length) {
+    throw new Error(
+      `${TOKENS_PATH} is missing required spec entries: ${missing.join(', ')}. ` +
+      'Each names a guard that would otherwise silently classify NOTHING (a deleted ' +
+      'block reads exactly like an empty one). Restore it from git history — do not ' +
+      'retype a contract block by hand, its _comment carries the measurements and the ' +
+      'sequencing rationale. Switching a contract family off deliberately means ' +
+      'deleting its row from REQUIRED_ARRAYS in scripts/tooling/token-classifier.js ' +
+      'in the same change.'
+    );
+  }
+}
+assertSpecShape(spec);
+
 const ALLOW = new Set([
   ...spec.allowlist.live,
   ...spec.allowlist.dead,

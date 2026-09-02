@@ -238,6 +238,63 @@ if command -v node >/dev/null && [ -r "${TOKEN_CLASSIFIER}" ]; then
 else
     echo "  SKIP (d) node/token-classifier unavailable (Handlebars-path assertion)"
 fi
+# d3: THE SPEC SHAPE ITSELF — d2's blind spot. Every block in tokens.json is read
+# through `|| {}` / `|| []` at its call site, which is exactly what makes a DELETED
+# top-level block indistinguishable from an empty one: the unions collapse and
+# isFrozen()/isRetired()/isThemeContract()/isRenameContractFile() start returning
+# false for everything they used to refuse — require() succeeds, exit 0, no
+# diagnostic, guard gone. NOT hypothetical: a38208e6 ("Update tokens.json", a
+# direct-to-main web-editor push, 2026-08-28) deleted BOTH
+# retired_protocol_constants and theme_contract_constants in one 14-line edit and
+# the engine said nothing at all. What went red was behavioural — d2 above, and ten
+# A9* cases in test-templating-rename-pr.sh — and only for the spellings those
+# cases happen to ENUMERATE, which is why a whole contract family can be dropped
+# and only the enumerated half of it is noticed. So this case asserts the SHAPE:
+# plant that exact deletion in an ISOLATED copy of the tooling and require the
+# classifier to REFUSE TO LOAD and to NAME the missing block, rather than degrade
+# into a permissive empty set. Isolated copy, never the real tree: the classifier
+# resolves tokens.json from its own __dirname, and a suite that mutated
+# scripts/tooling/ in place would leave a live checkout broken if it were killed
+# between the mutation and the restore.
+if command -v node >/dev/null && [ -r "${TOKEN_CLASSIFIER}" ]; then
+    SPECDIR="${WORK}/specshape"
+    mkdir -p "${SPECDIR}"
+    cp "${TOKEN_CLASSIFIER}" "${SPECDIR}/token-classifier.js"
+    cp "${REPO}/scripts/tooling/tokens.json" "${SPECDIR}/tokens.json"
+    # POSITIVE CONTROL FIRST. Without it, a copy that cannot load for an unrelated
+    # reason (a bad path, a syntax error) would make every mutation below report
+    # "refused" and the whole case would pass while asserting nothing.
+    if node -e 'require(process.argv[1])' "${SPECDIR}/token-classifier.js" >"${WORK}/d3-control.err" 2>&1; then
+        ok "(d3) control: the isolated tooling copy loads against the REAL spec"
+        for _blk in retired_protocol_constants theme_contract_constants frozen_protocol_constants; do
+            node -e '
+              const fs = require("fs");
+              const s = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+              delete s[process.argv[2]];
+              fs.writeFileSync(process.argv[1], JSON.stringify(s, null, 2));
+            ' "${SPECDIR}/tokens.json" "${_blk}"
+            # Prove the mutation actually changed the file before judging the guard.
+            if cmp -s "${REPO}/scripts/tooling/tokens.json" "${SPECDIR}/tokens.json"; then
+                bad "(d3) mutation for ${_blk} did not change tokens.json (block absent upstream?)"
+            else
+                node -e 'require(process.argv[1])' "${SPECDIR}/token-classifier.js" >"${WORK}/d3-${_blk}.err" 2>&1
+                _rc=$?
+                # grep the FILE, never a pipe: `| grep -q` under pipefail turns a
+                # found match into a SIGPIPE failure (certain under busybox).
+                if [ "${_rc}" -ne 0 ] && grep -F "${_blk}" "${WORK}/d3-${_blk}.err" >/dev/null 2>&1; then
+                    ok "(d3) tokens.json ${_blk} deleted -> classifier refuses to load and NAMES the block"
+                else
+                    bad "(d3) tokens.json ${_blk} deleted but the classifier LOADED (rc=${_rc}) — the guard silently degraded to an empty set"
+                fi
+            fi
+            cp "${REPO}/scripts/tooling/tokens.json" "${SPECDIR}/tokens.json"
+        done
+    else
+        bad "(d3) control: the isolated tooling copy does NOT load against the real spec — harness broken, guard unproven"
+    fi
+else
+    echo "  SKIP (d3) node/token-classifier unavailable (spec-shape assertion)"
+fi
 echo
 
 # ── (e) oversized / entries-loop DoS ───────────────────────────────────────────
