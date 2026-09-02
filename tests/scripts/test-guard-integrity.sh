@@ -369,6 +369,12 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # +1 gated +1 total from the branch on top of main's 157/179; PREMERGE_UNGATED
 # stays 22. Carried by re-running this file, not by arithmetic on either
 # side's number — but the arithmetic agrees.
+#
+# RE-MEASURED AGAIN 2026-09-01 on the merge of the same branch with main at
+# 2e24b4d5 (PR #247, docs-only, no suite added or gated): running this file on
+# THAT merged tree printed the same
+#     158 of 180 suites are named by a pull_request-triggered workflow
+# and the ungated set is unchanged at 22 — no conflict this time, re-run anyway.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-158}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
