@@ -48,16 +48,28 @@
 #      FAILURE here, naming the fix. With no install it SKIPS LOUDLY (counted, never
 #      a pass) — the pre-merge images carry no node_modules.
 #   F. The eight Gherkin guards under tests/scripts/test-e2e-*.sh run the probe as
-#      their preflight (not a private `[ -d node_modules/playwright-bdd ]`), the
-#      six that launch a browser through their own pw-browsers default hand it
-#      the SAME PLAYWRIGHT_BROWSERS_PATH they run the lane with (env-interface
-#      resolves ambiently since PR #215 and its probe sees the ambient path),
-#      and a failing probe makes each exit 2 SKIPPED-LOUDLY
-#      before any npx. MEASURED 2026-08-27: stack-e2e-coverage-check got past the
-#      make-level probe (READY on the default cache) and then died 20+ times on
-#      "Executable doesn't exist at /var/tmp/portage/pw-browsers/chromium_headless_
-#      shell-1228" — the guard's own browsers path held dangling r1228 -> r1234
-#      aliases — reported as "the whole coverage lane is not green".
+#      their preflight (not a private `[ -d node_modules/playwright-bdd ]`), NO
+#      guard defaults PLAYWRIGHT_BROWSERS_PATH — every probe sees the ambient
+#      (caller's) resolution, exactly the one the lane runs with, and an explicit
+#      caller value reaches the probe unchanged — and a failing probe makes each
+#      exit 2 SKIPPED-LOUDLY before any npx. The guards used to substitute
+#      /var/tmp/portage/pw-browsers when the variable was unset (a host-local
+#      symlink farm that dangles after any `npx playwright install`
+#      garbage-collects the revision it points at). MEASURED 2026-08-27:
+#      stack-e2e-coverage-check got past the make-level probe (READY on the
+#      default cache) and then died 20+ times on "Executable doesn't exist at
+#      /var/tmp/portage/pw-browsers/chromium_headless_shell-1228" — dangling
+#      r1228 -> r1234 aliases — reported as "the whole coverage lane is not
+#      green". env-interface went ambient in PR #215, coverage-matrix followed,
+#      and fix/pw-browsers-never-default retired the default from the remaining
+#      five; leg F holds every guard to it three ways — the probe sees <unset>
+#      when the caller set nothing, an explicit caller value reaches the probe
+#      unchanged (checked on EVERY browser guard, not a sample), and each
+#      browser guard carries a page.goto('about:blank') preflight — plus a
+#      comment-stripped source scan so the spelling cannot quietly return
+#      anywhere in tests/scripts. Mutation-tested 2026-09-01 (14 shapes, 13
+#      caught); the one known survivor is a NON-farm default laundered through
+#      another variable AFTER the preflight, which no textual or dynamic leg sees.
 #
 # Why revision 9999: the synthetic browsers.json pins a revision no real cache can
 # satisfy, so a probe that ignored PLAYWRIGHT_BROWSERS_PATH and looked in
@@ -555,16 +567,22 @@ else
 fi
 
 echo
-echo "-- F) the Gherkin guards run the probe as THEIR preflight, with THEIR browsers path --"
+echo "-- F) the Gherkin guards run the probe as THEIR preflight, with the CALLER'S browsers path --"
 # Each guard is copied into a scratch repo layout (it locates tests/e2e from its own
 # path), with a stub probe that records the PLAYWRIGHT_BROWSERS_PATH it was handed
 # and exits 1, and a stub npx that must never be reached. python3/git are on the
 # guards' own `command -v` preflights, so they are needed here too.
+#
+# POLICY (fix/pw-browsers-never-default): NO guard defaults
+# PLAYWRIGHT_BROWSERS_PATH. The six browser-launching guards used to substitute
+# /var/tmp/portage/pw-browsers when it was unset — a host-local symlink farm
+# whose target revisions any `npx playwright install` garbage-collects, so the
+# default manufactured red toolchain verdicts on boxes whose REAL store was
+# READY, and the fix line told the operator to reinstall INTO the farm (see
+# reference_hugmesh_pw_browsers_symlink_farm). Every guard's probe must now see
+# the ambient (caller's) resolution — the same one its lane runs with — and an
+# explicit caller value must reach the probe unchanged.
 GUARDS_WITH_BROWSER="test-e2e-cli-lane test-e2e-coverage-matrix test-e2e-func-media-games test-e2e-governance-function-matrix test-e2e-social-function-matrix test-e2e-studio-gui-lane"
-# env-interface-dimensions launches a browser but resolves it AMBIENTLY since
-# PR #215 dropped its forced /var/tmp/portage/pw-browsers override (honour
-# PLAYWRIGHT_BROWSERS_PATH only if the caller set it) — so its probe must see
-# the ambient (unset) path too, or it would vet a path the lane never uses.
 GUARDS_AMBIENT="test-e2e-env-interface-dimensions"
 GUARDS_WITHOUT="test-e2e-gherkin-harness"
 if ! command -v python3 >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1; then
@@ -583,7 +601,7 @@ else
     has "SKIPPED-LOUDLY" "${out}" "F ${g}: says SKIPPED-LOUDLY"
     got="$(cat "${G}/probe.env" 2>/dev/null || echo '<probe never ran>')"
     case " ${GUARDS_WITH_BROWSER} " in
-      *" ${g} "*) eq "${got}" "/var/tmp/portage/pw-browsers" "F ${g}: the probe is handed the guard's own default browsers path (unset -> /var/tmp/portage/pw-browsers)" ;;
+      *" ${g} "*) eq "${got}" "<unset>" "F ${g}: NEVER defaults PLAYWRIGHT_BROWSERS_PATH — the probe sees the ambient (unset) browsers path, the same one the lane runs with" ;;
       *)
         case " ${GUARDS_AMBIENT} " in
           *" ${g} "*) eq "${got}" "<unset>" "F ${g}: resolves browsers ambiently (PR #215), so the probe sees the ambient (unset) browsers path — the same one the lane runs with" ;;
@@ -591,10 +609,56 @@ else
         esac ;;
     esac
   done
-  # ... and the operator's own value wins over the default, as it does for the lane.
-  g=test-e2e-coverage-matrix; G="${TMP}/guard-${g}"
-  ( cd "${G}" && env PLAYWRIGHT_BROWSERS_PATH=/somewhere/else PATH="${G}/bin:${PATH}" bash "tests/scripts/${g}.sh" >/dev/null 2>&1 )
-  eq "$(cat "${G}/probe.env" 2>/dev/null)" "/somewhere/else" "F ${g}: an explicit PLAYWRIGHT_BROWSERS_PATH reaches the probe unchanged"
+  # ... and the operator's own value reaches the probe unchanged, as it does for
+  # the lane — on EVERY browser-launching guard, not a sample: the unset leg
+  # above cannot tell "never touches the variable" from "unsets it before the
+  # probe" (both hand the probe <unset>), and a guard that drops the caller's
+  # value would vet a store the caller never asked for. Cheap: the stub probe
+  # exits 1 at once, so each run ends at the guard's SKIPPED-LOUDLY.
+  for g in ${GUARDS_WITH_BROWSER} ${GUARDS_AMBIENT}; do
+    G="${TMP}/guard-${g}"
+    rm -f "${G}/probe.env"
+    ( cd "${G}" && env PLAYWRIGHT_BROWSERS_PATH=/somewhere/else PATH="${G}/bin:${PATH}" bash "tests/scripts/${g}.sh" >/dev/null 2>&1 )
+    eq "$(cat "${G}/probe.env" 2>/dev/null || echo '<probe never ran>')" "/somewhere/else" "F ${g}: an explicit PLAYWRIGHT_BROWSERS_PATH reaches the probe unchanged"
+  done
+  # ... and every guard that launches a browser proves ONE real launch before
+  # its lane may try — a page.goto('about:blank') through the same resolution
+  # the lane uses. Dropping the default without this would only move the
+  # "Executable doesn't exist" collapse from the farm to whatever the caller's
+  # store lacks; the preflight turns it into an exit-2 that names the install.
+  # A textual presence check — the launch itself is exercised by leg E and by
+  # the guards' own runs, not here (this suite has a stub npx by design).
+  for g in ${GUARDS_WITH_BROWSER} ${GUARDS_AMBIENT}; do
+    src="${REPO}/tests/scripts/${g}.sh"
+    [ -f "${src}" ] || continue
+    if grep -q "page.goto('about:blank')" "${src}"; then
+      _ok "F ${g}: launches ONE real page (page.goto preflight) before its lane may"
+    else
+      _bad "F ${g}: has NO page.goto preflight — a browser that cannot launch would fail every scenario dressed as a product defect"
+    fi
+  done
+fi
+
+# The dynamic legs above only see the PROBE call. A default re-introduced AFTER
+# the preflight (the old `export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-...}"`
+# at the lane site) would get past them, so the SOURCE is scanned too,
+# comment-stripped (a history note may name the spelling; wiring may not — see
+# the premerge-gate lesson about counting wiring with comments left in), for the
+# two violation shapes: the self-defaulting assignment
+# PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-...}" with ANY value,
+# and the literal farm path /var/tmp/portage/pw-browsers anywhere in code.
+# Diagnostic READS (`${PLAYWRIGHT_BROWSERS_PATH:-unset ...}` in an echo) match
+# neither. This probe suite sets the variable deliberately (it is the thing
+# under test) and is exempt by name. NOT closed textually: a default laundered
+# through another variable name and pointed somewhere other than the farm —
+# the dynamic probe.env legs above still catch any default live at probe time.
+SRC_HITS="$(grep -nE 'PLAYWRIGHT_BROWSERS_PATH="?\$\{PLAYWRIGHT_BROWSERS_PATH:-|/var/tmp/portage/pw-browsers' "${REPO}/tests/scripts/"*.sh 2>/dev/null \
+  | grep -v 'test-e2e-toolchain-readiness.sh:' \
+  | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' || true)"
+if [ -z "${SRC_HITS}" ]; then
+  _ok "F source scan: no tests/scripts guard self-defaults PLAYWRIGHT_BROWSERS_PATH or names the pw-browsers farm (comment-stripped)"
+else
+  _bad "F source scan: a guard defaults PLAYWRIGHT_BROWSERS_PATH or pins the pw-browsers farm — the default must not return:"$'\n'"$(printf '%s\n' "${SRC_HITS}" | sed 's/^/         /')"
 fi
 
 echo
