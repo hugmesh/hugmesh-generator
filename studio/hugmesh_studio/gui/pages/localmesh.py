@@ -79,6 +79,8 @@ from ...core.local_mesh_bootstrap import (
     LocalMeshBootstrap, LocalMeshBootstrapConfig, _parse_web_locales,
     discover_brands)
 from ...core.local_mesh_stages import verb_phases
+from ...core.local_stack_node import LocalStackNode
+from ...core import mesh_monitor
 from ...core.local_services import (
     KIND_ADDONS, UNAVAILABLE_LOCALLY, by_slug as local_service, default_selection,
     describe as local_describe, kind_addon_slugs, local_groups, local_slugs)
@@ -88,6 +90,7 @@ from ...core.instance import state_dir
 from ...core.stage_tracker import StageTracker
 from ...core import e2e_environments
 from ._credentials_dialog import CredentialsDialog
+from ._mesh_monitor_widget import MeshMonitorWidget
 from ._add_user_dialog import AddUserDialog
 from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
@@ -221,6 +224,35 @@ class _E2ECatalogueProbe(QtCore.QThread):
             cat.problems.append(
                 f"the e2e catalogue could not be built: {type(e).__name__}: {e}")
             self.result.emit(cat)
+
+
+class _MonitorProbe(QtCore.QThread):
+    """Read BOTH lanes of the running mesh off the GUI thread, for the monitor table.
+
+    core.mesh_monitor.snapshot() is `kind get clusters` + ONE `kubectl get … -A -o json`
+    round trip + `docker inspect` + `docker compose ps` — each bounded, together up to
+    ~25 s on a wedged daemon — so it gets the _StatusProbe treatment: never inline, held
+    with own_probe, guarded with probe_running.
+
+    Emits the MonitorSnapshot. Never raises: snapshot() already folds every failure into
+    LaneState.error / errors, and an exception escaping run() would leave the table
+    frozen on a stale snapshot with no way to say so."""
+    result = Signal(object)                     # mesh_monitor.MonitorSnapshot
+
+    def __init__(self, generator_dir: str, node, parent=None):
+        super().__init__(parent)
+        self._dir = generator_dir
+        self._node = node
+
+    def run(self):
+        try:
+            self.result.emit(mesh_monitor.snapshot(self._dir, self._node))
+        except Exception as e:                  # never kill the page over a probe
+            self.result.emit(mesh_monitor.MonitorSnapshot(
+                taken_at=time.strftime("%H:%M:%S"),
+                compose=mesh_monitor.LaneState(None, error=str(e)),
+                kind=mesh_monitor.LaneState(None, error=str(e)),
+                errors=(f"the monitor read failed: {type(e).__name__}: {e}",)))
 
 
 class _MeshWorker(QtCore.QThread):
@@ -483,9 +515,32 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # as `docker compose ps` takes).
         self._mesh_up: bool | None = None
 
+        # ── the running-mesh monitor's state (the table itself lives on the bootstrap
+        # tab; see _build_bootstrap_tab). None until the first snapshot answers — the
+        # same tri-state rule as _mesh_up, and for the same reason.
+        self._monitor: mesh_monitor.MonitorSnapshot | None = None
+        # Set at every verb's end, cleared when a read STARTS after it: the state
+        # probe's answer (and a read that was already in flight) re-reads the
+        # monitor, so a just-finished bring-up populates the table with no click.
+        self._monitor_stale = False
+        # THIRD timer on this page, justified: _tick is the 1 Hz run clock, _drain the
+        # 50 ms log coalescer — different jobs, different cadences — and this one is
+        # the only one stopped when its section is folded. NOT started here: it runs
+        # only while the section is expanded, the page visible, and no verb running.
+        self._monitor_timer = QtCore.QTimer(self)
+        self._monitor_timer.setInterval(10_000)
+        self._monitor_timer.timeout.connect(self._on_monitor_tick)
+        # completeChanged fires at every verb start AND end (_launch / _verb_done), so
+        # it is the hook that lets the monitor's note say "paused" the moment a verb
+        # begins without this lane touching _launch.
+        self.completeChanged.connect(self._sync_monitor_gate)
+
         # Run the gate ONCE now that every widget it touches exists, so
         # 'Generate & start' is armed (and carries its tooltip) from first paint.
         self._sync_boot_gate()
+        # …and the monitor's, so it is greyed with "checking…" (never empty-but-
+        # enabled) from first paint. No probe: that rides _on_mesh_state.
+        self._sync_monitor_gate()
 
     # ── wizard-flow contract ─────────────────────────────────────────────────────
 
@@ -517,6 +572,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # invited a second bring-up over a live stack (operator report
         # 2026-08-14). Probe the real compose project instead of assuming.
         self._probe_mesh_state()
+        # The monitor adds NO probe here: its first snapshot rides _on_mesh_state's
+        # slot, which keeps "entering the page returns immediately" provable.
+        self._sync_monitor_gate()
 
     # ── JOIN tab (handlers now threaded; widget names unchanged) ─────────────────
     def _build_join_tab(self) -> QtWidgets.QWidget:
@@ -966,13 +1024,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.cancel_btn.setVisible(False)
         brow.addWidget(self.cancel_btn)
         self.open_web_btn = QtWidgets.QPushButton("Open web UI")
+        # The tooltip is DERIVED from the node's own front-door addresses — a
+        # default node here (the form is only half-built at this point), the LIVE
+        # node again in _on_mesh_state. A hardcoded copy used to name
+        # http://localhost:8088 as the door while the button opened
+        # https://localhost:8488.
         self.open_web_btn.setToolTip(
-            "Open the running stack's front door (http://localhost:8088) in your "
-            "browser. The same platform is also served over TLS at "
-            "https://localhost:8488 (self-minted per-machine CA — import "
-            "tests/stack/.tls-front/ca.crt or accept the browser warning). "
-            "Does nothing destructive; if the stack is down the browser "
-            "just shows a connection error.")
+            self._open_web_tooltip(LocalStackNode(self.generator_dir)))
         self.open_web_btn.clicked.connect(self._open_web_ui)
         brow.addWidget(self.open_web_btn)
         self.copy_onion_btn = QtWidgets.QPushButton("Copy .onion address")
@@ -1157,6 +1215,25 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # spacer item would be wrapped as if it were another button.
         lay.addWidget(brow_box)
 
+        # ── RUNNING-MESH MONITOR (operator ask, 2026-09-01): every pod and container
+        # of BOTH lanes, its addresses, and an Open button only where the browser may
+        # safely go. Collapsed by default and it STAYS that way — set_default_expanded
+        # is deliberately not applied on "a mesh is running": the operator asked for
+        # collapsed-by-default, and re-deriving the fold on every visit would fight
+        # that. The section TITLE carries the answer while folded. Greyed (disabled,
+        # empty) when neither lane runs; enabled and populated when either does —
+        # `Collapsible` toggles setVisible only, so fold and grey compose.
+        self.monitor = MeshMonitorWidget(self)
+        self._monitor_title = "Running mesh — pods, addresses and doors"
+        self.monitor_section = collapsible(self._monitor_title, self.monitor,
+                                           expanded=False)
+        self.monitor_section.toggle.toggled.connect(self._on_monitor_toggled)
+        self.monitor.refresh_requested.connect(lambda: self._refresh_monitor("button"))
+        self.monitor.open_requested.connect(self._open_door)
+        self.monitor.view_up_requested.connect(self._view_up)
+        self.monitor.view_down_requested.connect(self._view_down)
+        lay.addWidget(self.monitor_section)
+
         # Live-refresh the plan preview from every control that feeds it.
         self.env_test.toggled.connect(self._refresh_plan)
         self.env_prod.toggled.connect(self._refresh_plan)
@@ -1256,6 +1333,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     def hideEvent(self, event) -> None:                       # noqa: N802 (Qt)
         self._enforce_egress_conf()
+        # A hidden page owns no poll: the monitor's 10 s timer restarts when the
+        # section is next expanded (or via _on_mesh_state when the page re-enters).
+        self._monitor_timer.stop()
         super().hideEvent(event)
 
     def collect_services(self) -> tuple[str, ...]:
@@ -1475,6 +1555,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # clean), so re-read the real state rather than inferring it from the
         # verb's exit code — a partially-failed bring-up leaves containers behind
         # and "failed" would otherwise be recorded as "nothing is running".
+        # …and mark the monitor STALE so that probe's answer re-reads it too,
+        # collapsed or not (the section title must say what a just-finished
+        # bring-up left running). This is what "populates right after generation
+        # completes" without inventing a generation-completed signal: there is
+        # none, and _probe_mesh_state is already the page's ONE "state changed,
+        # re-read" entry point — the seam tests silence (`_probe_mesh_state =
+        # lambda: None`) to keep a page quiet while they drive verbs. A second
+        # background read started directly here ran behind that seam's back:
+        # measured as three REAL `kubectl get` reads and a Qt abort at teardown
+        # in two suites that never asked for a monitor.
+        self._monitor_stale = True
         self._probe_mesh_state()
         self.completeChanged.emit()
 
@@ -1815,6 +1906,23 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # Re-run the gates now that the answer is known.
         if not self._running:
             self._set_verbs_enabled(True)
+        # The front-door tooltip names the LIVE node's addresses, never a copy.
+        try:
+            self.open_web_btn.setToolTip(self._open_web_tooltip(self.boot._stack_node()))
+        except Exception:                       # a stub node in a test has no ports
+            pass
+        # The monitor's snapshot rides this slot rather than initializePage: ONE read
+        # when nothing has been read yet this visit (the kind lane can be up while
+        # compose is down, and only a snapshot can say so), when the section is
+        # open, when compose just flipped up while folded (so the title can say
+        # what is up), or when a verb just ended (_monitor_stale). Re-entrant-safe —
+        # a probe already out is left alone, and the stale flag then survives until
+        # that probe finishes (see _on_monitor_finished).
+        if (self._monitor_stale or self._monitor is None
+                or self.monitor_section.is_expanded() or running):
+            if self._refresh_monitor("mesh state"):
+                self._monitor_stale = False
+        self._sync_monitor_gate()
 
     def _sync_boot_gate(self):
         """Arm 'Generate && start' whenever no verb is already running.
@@ -2197,6 +2305,197 @@ class LocalMeshPage(QtWidgets.QWizardPage):
     def _open_web_ui(self):
         QtGui.QDesktopServices.openUrl(
             QtCore.QUrl(self.boot._stack_node().web_url))
+
+    @staticmethod
+    def _open_web_tooltip(node) -> str:
+        """The Open web UI tooltip, from the node's OWN addresses — so it can never
+        again name a door the button does not open."""
+        return (f"Open the running stack's front door ({node.web_url}) in your "
+                f"browser — TLS, under the per-machine CA in tests/stack/.tls-front/"
+                f"ca.crt (import it once, or accept the warning). The same platform "
+                f"is also served in plaintext at {node.plain_web_url}. Does nothing "
+                f"destructive; if the stack is down the browser just shows a "
+                f"connection error.")
+
+    # ── running-mesh monitor ─────────────────────────────────────────────────────
+    def _sync_monitor_gate(self):
+        """The ONE writer of setEnabled on self.monitor, of its note and of the
+        section title (the build.py:_sync_iso_options rule). Tri-state: unknown is
+        "checking…", never "no mesh"; a failed read clears the rows and says so —
+        showing stale rows as current is the failure this monitor exists to fix."""
+        mon = getattr(self, "monitor", None)
+        if mon is None:
+            return
+        snap = self._monitor
+        title = self._monitor_title
+        if snap is None:
+            mon.setEnabled(False)
+            mon.clear()
+            if probe_running(self, "_monitor_probe") or self._mesh_up is None:
+                note = "Checking what is running…"
+            else:
+                note = ("Not read yet — expand this section or press Refresh "
+                        "(re-checked after every action).")
+            mon.note.setText(note)
+            mon.setToolTip(note)
+            self.monitor_section.toggle.setText(f"{title} — checking…".replace("&", "&&"))
+            return
+        ready, total = snap.ready_counts
+        lanes = (f"compose {self._lane_word(snap.compose)} · "
+                 f"kind {self._lane_word(snap.kind)}")
+        if self._running:
+            mon.setEnabled(snap.any_running)
+            note = (f"Paused while {self._running_label or 'the verb'} runs — "
+                    f"refreshed when it finishes. Last read {snap.taken_at}: "
+                    f"{ready}/{total} ready · {lanes}.")
+            mon.note.setText(note)
+            mon.setToolTip(note)
+            self.monitor_section.toggle.setText(
+                f"{title} — paused ({ready}/{total} ready)".replace("&", "&&"))
+            return
+        if snap.any_running:
+            mon.setEnabled(True)
+            mon.render(snap)
+            note = f"{ready}/{total} ready · {lanes} · read {snap.taken_at}."
+            extra = list(snap.errors) + list(snap.notes)
+            if extra:
+                note += "\n" + " ".join(extra)
+            mon.note.setText(note)
+            mon.setToolTip("Refreshed every 10 s while this section is open, and "
+                           "after every action.")
+            self.monitor_section.toggle.setText(
+                f"{title} — {ready}/{total} ready".replace("&", "&&"))
+        elif snap.any_unknown:
+            # the last read could not ESTABLISH a lane: rows cleared, the exact
+            # sentences shown. Unknown is never rendered as "no mesh" (I5), even
+            # when the read carried no error sentence — the lane's own detail
+            # says what was (not) asked.
+            mon.setEnabled(False)
+            mon.clear()
+            why = " ".join(snap.errors) or " · ".join(
+                f"{name}: {lane.error or lane.detail or 'not established'}"
+                for name, lane in (("kind", snap.kind), ("compose", snap.compose))
+                if lane.running is None)
+            note = "Could not read the running mesh: " + why
+            mon.note.setText(note)
+            mon.setToolTip(note)
+            self.monitor_section.toggle.setText(
+                f"{title} — could not read".replace("&", "&&"))
+        else:
+            mon.setEnabled(False)
+            mon.clear()
+            note = ("No mesh is running. Generate one, or start the DevOps lane, "
+                    "and this fills in.")
+            if snap.errors or snap.notes:
+                note += " " + " ".join(list(snap.errors) + list(snap.notes))
+            mon.note.setText(note)
+            mon.setToolTip(note)
+            self.monitor_section.toggle.setText(
+                f"{title} — nothing running".replace("&", "&&"))
+
+    @staticmethod
+    def _lane_word(lane) -> str:
+        if lane.running is None:
+            return "not established"
+        return "up" if lane.running else "down"
+
+    def _refresh_monitor(self, reason: str = "") -> bool:
+        """Kick off ONE off-thread snapshot (see _MonitorProbe). Re-entrant-safe: a
+        probe already in flight is left alone rather than stacking threads. The 10 s
+        tick is the only caller that stands down while a verb runs — a button press
+        or a mesh-state answer still reads. Returns True when a read was started
+        (or a synthetic one produced), False when one was already in flight."""
+        if probe_running(self, "_monitor_probe"):
+            return False
+        if reason == "tick" and self._running:
+            return False
+        try:
+            node = self.boot._stack_node()
+        except Exception as e:                  # a page mid-teardown, or a bad config
+            self._monitor = mesh_monitor.MonitorSnapshot(
+                taken_at=time.strftime("%H:%M:%S"),
+                compose=mesh_monitor.LaneState(None, error=str(e)),
+                kind=mesh_monitor.LaneState(None, error=str(e)),
+                errors=(f"no stack node to ask: {type(e).__name__}: {e}",))
+            self._sync_monitor_gate()
+            return True
+        probe = own_probe(self, "_monitor_probe",
+                          _MonitorProbe(self.generator_dir, node, parent=self))
+        probe.result.connect(self._on_monitor)
+        # own_probe connected its release FIRST, so by this slot the attribute is
+        # clear and a follow-up read can start.
+        probe.finished.connect(self._on_monitor_finished)
+        probe.start()
+        self._sync_monitor_gate()
+        return True
+
+    def _on_monitor_finished(self):
+        """A verb ended while a read was in flight: that read may predate the verb's
+        effect, so exactly one fresh read follows it."""
+        if self._monitor_stale and self._refresh_monitor("post-verb"):
+            self._monitor_stale = False
+
+    def _on_monitor(self, snap):
+        """The snapshot arrived (GUI thread): render through the one gate, and arm
+        exactly one of the view-door buttons from the LIVE session answer."""
+        self._monitor = snap
+        # the live-doors answer was read off-thread with the snapshot (a session-file
+        # read plus a TCP connect per door is I/O, and this slot is on the GUI thread)
+        self.monitor.set_view_session(bool(getattr(snap, "view_doors", ())))
+        self._sync_monitor_gate()
+
+    def _on_monitor_toggled(self, on: bool):
+        """Expanding refreshes once and starts the poll; collapsing stops it. Fires on
+        programmatic setChecked too, so it must be (and is) re-entrancy-safe."""
+        if on:
+            self._refresh_monitor("expanded")
+            self._monitor_timer.start()
+        else:
+            self._monitor_timer.stop()
+
+    def _on_monitor_tick(self):
+        if not (self.isVisible() and self.monitor_section.is_expanded()):
+            return
+        if self._running:
+            self._sync_monitor_gate()           # the note says "paused"
+            return
+        if probe_running(self, "_monitor_probe"):
+            return
+        self._refresh_monitor("tick")
+
+    def _open_door(self, url: str):
+        """A row's Open button. The URL was gated twice already (core + widget); a
+        third refusal here is belt-and-braces, and the status line says why."""
+        why = mesh_monitor.unsafe_door_reason(url)
+        if why:
+            self.status.setText(f"Not opened: {why}")
+            return
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
+
+    def _view_up(self):
+        """`make view` in the background — the sanctioned browser door. Opt-in, one
+        press, never automatic: it binds loopback ports on this machine. The lane
+        follows what is running (kind's host shell, else the compose front doors)."""
+        snap = self._monitor
+        lane = "compose" if (snap is not None and not bool(snap.kind.running)
+                             and bool(snap.compose.running)) else "kind"
+        node = self.boot._stack_node()
+        self._note(f"[view] serving the {lane} lane's front doors on 127.0.0.1 "
+                   f"(`make view LANE={lane}`; run `make view-trust` once per machine "
+                   f"so the browser trusts the loopback CA) …")
+        self._launch("Opening the browser door",
+                     lambda on_line, cancel: node._make(
+                         "view", timeout=120, on_line=on_line, cancel=cancel,
+                         args=[f"LANE={lane}"]),
+                     stream=True, cancellable=True)
+
+    def _view_down(self):
+        node = self.boot._stack_node()
+        self._note("[view] stopping the background view session (`make view-stop`) …")
+        self._launch("Stopping the browser door",
+                     lambda on_line, cancel: node._make(
+                         "view-stop", timeout=60, on_line=on_line, cancel=cancel),
+                     stream=True)
 
     def _show_credentials(self):
         """Show the seeded persona roster (username / password / roles), copyable.

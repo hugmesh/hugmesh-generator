@@ -624,7 +624,8 @@ def test_the_makefile_target_consumes_the_variable():
 
 
 # ── plumbing ─────────────────────────────────────────────────────────────────────
-_PROBE_ATTRS = ("_probe", "_node_probe", "_e2e_probe", "_e2e_cat_probe")
+_PROBE_ATTRS = ("_probe", "_node_probe", "_e2e_probe", "_e2e_cat_probe",
+                "_monitor_probe")
 
 
 @pytest.fixture
