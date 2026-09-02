@@ -329,7 +329,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     155 of 177 suites are named by a pull_request-triggered workflow
 # +1 gated +1 total from each side; PREMERGE_UNGATED stays 22. Carried by
 # re-running this file, not by arithmetic - but the arithmetic agrees.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-155}"
+# 2026-08-27, fix/route-access-scanner-and-404-claim: +1 gated +1 total for
+# tests/scripts/test-route-access-coverage-scanner.sh (the guard over
+# tests/scripts/route_access_coverage.py, added in the same change). MEASURED by
+# running this file on that tree: "156 of 178 suites are named by a
+# pull_request-triggered workflow". PREMERGE_UNGATED is unchanged -- the new suite
+# is gated, so it does not join the complement.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-156}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
