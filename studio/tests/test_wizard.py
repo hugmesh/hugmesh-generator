@@ -301,7 +301,7 @@ def test_worklist_rpi5_node_rows_exclude_rpi3(wiz):
         combo, _flavor = page._combos[rid]
         return [combo.itemText(i) for i in range(combo.count())]
 
-    for rid in ("pki.rpi5", "be.rpi5", "fe.rpi5"):
+    for rid in ("pki.rpi5", "backend.rpi5", "frontend.rpi5"):
         assert items(rid) == ["rpi5", "rpi4"], rid
         assert "rpi3" not in items(rid)
     assert items("rpi5-desktop.rpi5") == ["rpi5", "rpi4", "rpi3"]
@@ -487,23 +487,23 @@ def test_mesh_worklist_multiselect_builds_entries_and_prunes_domain_refs(wiz):
 
     pick_mode(wiz, "mesh")
     page = advance_to(wiz, wizard_mod.WorklistPage)
-    assert {"omnibus.x86", "be.x86", "be.rpi5", "edge_ai.jetson"} <= set(page.rows)
-    assert page.row_for_id("be.rpi5") is page.rows["be.rpi5"]
+    assert {"omnibus.x86", "backend.x86", "backend.rpi5", "edge-ai.jetson"} <= set(page.rows)
+    assert page.row_for_id("backend.rpi5") is page.rows["backend.rpi5"]
     assert page.isComplete()                       # a default row pre-checked -> navigable
 
-    # a domain attached to two images; one of them (be.rpi5) will be left unchecked
+    # a domain attached to two images; one of them (backend.rpi5) will be left unchecked
     wiz.cfg.domains = [Domain(name="acme.example", title="Acme",
-                              images=["omnibus.x86", "be.rpi5"])]
-    for rid in ("omnibus.x86", "be.x86", "be.rpi5", "edge_ai.jetson"):
+                              images=["omnibus.x86", "backend.rpi5"])]
+    for rid in ("omnibus.x86", "backend.x86", "backend.rpi5", "edge-ai.jetson"):
         page.row_for_id(rid).setCheckState(
-            0, Qt.CheckState.Checked if rid in {"omnibus.x86", "be.x86"}
+            0, Qt.CheckState.Checked if rid in {"omnibus.x86", "backend.x86"}
             else Qt.CheckState.Unchecked)
     assert page.validatePage()
 
-    assert {e.id for e in wiz.worklist.entries} == {"omnibus.x86", "be.x86"}
+    assert {e.id for e in wiz.worklist.entries} == {"omnibus.x86", "backend.x86"}
     assert wiz.cfg.role == wiz.worklist.entries[0].role   # first checked row (table order)
     assert wiz.cfg.platform == "x86"                      # option-superset gating
-    # be.rpi5 is no longer a checked row, so its attachment is pruned; omnibus.x86 stays
+    # backend.rpi5 is no longer a checked row, so its attachment is pruned; omnibus.x86 stays
     assert wiz.cfg.domains[0].images == ["omnibus.x86"]
 
 
@@ -516,12 +516,12 @@ def test_worklist_per_row_encryption_column_and_jetson_disabled(wiz):
     pick_mode(wiz, "mesh")
     page = advance_to(wiz, wizard_mod.WorklistPage)
     # a normal node row has an editable combo defaulting to "default" (inherit Home)
-    combo = page._enc_combos["be.x86"]
+    combo = page._enc_combos["backend.x86"]
     assert combo is not None
     assert [combo.itemText(i) for i in range(combo.count())] == ["default", "on", "off"]
     assert combo.currentText() == "default"
     # jetson cannot encrypt: no combo, a disabled display cell instead
-    assert page._enc_combos["edge_ai.jetson"] is None
+    assert page._enc_combos["edge-ai.jetson"] is None
     assert "applies to EVERY encrypted node" in page.enc_hint.text()
 
 
@@ -530,7 +530,7 @@ def test_worklist_untouched_rows_are_byte_identical(wiz):
     'default' — exactly as before the per-row column existed (additive default)."""
     pick_mode(wiz, "mesh")
     page = advance_to(wiz, wizard_mod.WorklistPage)
-    check_worklist_rows(page, "pki.x86", "be.x86", "fe.x86")
+    check_worklist_rows(page, "pki.x86", "backend.x86", "frontend.x86")
     assert page.validatePage()
     assert {e.encrypt_root for e in wiz.worklist.entries} == {"default"}
 
@@ -540,12 +540,12 @@ def test_worklist_per_row_encryption_override_flows(wiz):
     while untouched rows stay 'default' (inherit the base) — the WHICH-device scoping."""
     pick_mode(wiz, "mesh")
     page = advance_to(wiz, wizard_mod.WorklistPage)
-    check_worklist_rows(page, "pki.x86", "be.x86")
+    check_worklist_rows(page, "pki.x86", "backend.x86")
     page._enc_combos["pki.x86"].setCurrentText("on")
-    page._enc_combos["be.x86"].setCurrentText("off")
+    page._enc_combos["backend.x86"].setCurrentText("off")
     assert page.validatePage()
     by_id = {e.id: e.encrypt_root for e in wiz.worklist.entries}
-    assert by_id == {"pki.x86": "on", "be.x86": "off"}
+    assert by_id == {"pki.x86": "on", "backend.x86": "off"}
 
 
 def test_switching_back_to_standalone_clears_stranded_admin_state(wiz):
@@ -962,8 +962,8 @@ def test_superadmin_plane_predicate():
     # the opt-in is MESH-only — it can never turn a cloud flow's tables off or on
     assert superadmin_plane_applies(ImageConfig(mode="cloud", role="laptop"))
     assert not superadmin_plane_applies(
-        ImageConfig(mode="cloud", role="be", additional_domains=True))
-    assert not superadmin_plane_applies(ImageConfig(mode="cloud", role="be"))
+        ImageConfig(mode="cloud", role="backend", additional_domains=True))
+    assert not superadmin_plane_applies(ImageConfig(mode="cloud", role="backend"))
     assert not superadmin_plane_applies(ImageConfig(mode="standalone", role="standalone-thick"))
 
 
@@ -973,7 +973,7 @@ def test_cloud_node_role_dynamically_skips_domains_and_users(wiz):
     dom_id = wiz._page_ids["domains"]
     usr_id = wiz._page_ids["users"]
     terminal = {wiz._page_ids["build"], wiz._page_ids["progress"]}
-    wiz.cfg = ImageConfig(mode="cloud", role="be", platform="x86", brand="acme",
+    wiz.cfg = ImageConfig(mode="cloud", role="backend", platform="x86", brand="acme",
                           cluster_domain="acme.example")
     assert wiz._dynamically_skipped(dom_id, terminal)
     assert wiz._dynamically_skipped(usr_id, terminal)
@@ -992,7 +992,7 @@ def test_skipping_domains_users_is_emission_neutral_for_cloud_node(wiz):
     """The ALL-OPTIONS guard: skipping Domains/Users (never visiting them) leaves the
     argv byte-identical to force-visiting them, because a cloud NODE role suppresses
     --domains/--person-role and cloud writes no manifest."""
-    base = dict(mode="cloud", role="be", platform="x86", brand="acme",
+    base = dict(mode="cloud", role="backend", platform="x86", brand="acme",
                 cluster_domain="acme.example")
     baseline = ImageConfig(**base).to_cli_args()   # domains/users skipped -> defaults
     visited = ImageConfig(**base)

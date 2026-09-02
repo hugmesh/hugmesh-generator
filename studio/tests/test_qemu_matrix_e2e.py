@@ -80,8 +80,8 @@ def test_pseudo_roles_translate_like_check_sh_cli_leg():
         role, flavor, standalone = r.normalized()
         assert (flavor, standalone) == ("installer", True)
     # a plain row is untouched
-    plain = next(r for r in rows if r.platform == "x86" and r.role == "be")
-    assert plain.normalized() == ("be", "", False)
+    plain = next(r for r in rows if r.platform == "x86" and r.role == "backend")
+    assert plain.normalized() == ("backend", "", False)
 
 
 # ── always-run: SIZE limit maths (read from the builder, never hardcoded) ─────────
@@ -145,7 +145,7 @@ def test_driver_dry_run_enumerates_all_rows():
 
 
 def test_driver_subset_filter():
-    r = subprocess.run(["bash", DRIVER, "--dry-run", "--only", "x86/be+gpu"],
+    r = subprocess.run(["bash", DRIVER, "--dry-run", "--only", "x86/backend-gpu"],
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0
     rows = [ln for ln in r.stdout.splitlines() if ln.startswith("ROW ")]
@@ -155,7 +155,7 @@ def test_driver_subset_filter():
 def test_driver_boot_path_skips_clean_without_opt_in(monkeypatch):
     # no HUGMESH_QEMU_E2E → SKIP clean (exit 0), never a FAIL (windows-studio-e2e shape).
     env = {k: v for k, v in os.environ.items() if k != "HUGMESH_QEMU_E2E"}
-    r = subprocess.run(["bash", DRIVER, "--only", "x86/be+gpu"], env=env,
+    r = subprocess.run(["bash", DRIVER, "--only", "x86/backend-gpu"], env=env,
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0
     assert "SKIP" in (r.stdout + r.stderr)
@@ -169,7 +169,7 @@ def test_driver_boot_path_skips_when_no_artifact_even_opted_in(tmp_path):
     stub.write_text("#!/usr/bin/env bash\nexit 0\n"); stub.chmod(0o755)
     env = {**os.environ, "HUGMESH_QEMU_E2E": "1",
            "SNAP_QEMU_LAUNCH_CMD": f"bash {stub}"}
-    r = subprocess.run(["bash", DRIVER, "--only", "x86/be+gpu", "-w", str(tmp_path)],
+    r = subprocess.run(["bash", DRIVER, "--only", "x86/backend-gpu", "-w", str(tmp_path)],
                        env=env, capture_output=True, text=True, timeout=180)
     assert r.returncode == 0, r.stdout + r.stderr
     out = r.stdout + r.stderr
@@ -192,15 +192,15 @@ def test_driver_really_boots_and_asserts_with_a_present_artifact(tmp_path):
         "exit 0\n")
     launch.chmod(0o755)
     wd = tmp_path / "wd"; wd.mkdir()
-    (wd / "hugmesh-x86-be+gpu-prod-ts.img").write_bytes(b"\0" * (1 << 20))  # 1 MiB << ceiling
+    (wd / "hugmesh-x86-backend-gpu-prod-ts.img").write_bytes(b"\0" * (1 << 20))  # 1 MiB << ceiling
     env = {**os.environ, "HUGMESH_QEMU_E2E": "1",
            "SNAP_QEMU_PLAN_CMD": f"bash {plan}", "SNAP_QEMU_LAUNCH_CMD": f"bash {launch}"}
-    r = subprocess.run(["bash", DRIVER, "--only", "x86/be+gpu", "-w", str(wd)],
+    r = subprocess.run(["bash", DRIVER, "--only", "x86/backend-gpu", "-w", str(wd)],
                        env=env, capture_output=True, text=True, timeout=180)
     assert r.returncode == 0, r.stdout + r.stderr
     out = r.stdout + r.stderr
     assert "size OK" in out                          # assert_size actually ran
-    assert re.search(r"x86/be\+gpu[^:]*: PASS", out)  # the row passed (label carries /env)
+    assert re.search(r"x86/backend-gpu[^:]*: PASS", out)  # the row passed (label carries /env)
     m = re.search(r"ran=(\d+) pass=(\d+) skip=\d+ inconclusive=\d+ fail=(\d+)", out)
     assert m, f"no RESULT census:\n{out}"
     assert int(m.group(1)) >= 2 and int(m.group(2)) >= 2 and int(m.group(3)) == 0
@@ -213,11 +213,11 @@ def test_driver_fails_the_row_when_the_image_is_oversize(tmp_path):
     launch = tmp_path / "launch.sh"
     launch.write_text("#!/usr/bin/env bash\nexit 0\n"); launch.chmod(0o755)
     wd = tmp_path / "wd"; wd.mkdir()
-    with open(wd / "hugmesh-x86-be+gpu-prod-ts.img", "wb") as fh:
+    with open(wd / "hugmesh-x86-backend-gpu-prod-ts.img", "wb") as fh:
         fh.truncate(600 * (1 << 20))             # 600 MiB sparse > 515 MiB ceiling
     env = {**os.environ, "HUGMESH_QEMU_E2E": "1",
            "SNAP_QEMU_PLAN_CMD": f"bash {plan}", "SNAP_QEMU_LAUNCH_CMD": f"bash {launch}"}
-    r = subprocess.run(["bash", DRIVER, "--only", "x86/be+gpu", "-w", str(wd)],
+    r = subprocess.run(["bash", DRIVER, "--only", "x86/backend-gpu", "-w", str(wd)],
                        env=env, capture_output=True, text=True, timeout=180)
     out = r.stdout + r.stderr
     assert re.search(r"fail=[1-9]", out), f"oversize image should fail the row:\n{out}"
@@ -232,7 +232,7 @@ def test_matrix_boot_walk(tmp_path):
     artifact is a per-row SKIP (exit 0), so this asserts only that the driver runs
     green — the per-row PASS/SKIP census is in its stdout."""
     env = {**os.environ, "WORK_DIR": str(tmp_path)}
-    subset = os.environ.get("MATRIX_FILTER", "x86/be+gpu")
+    subset = os.environ.get("MATRIX_FILTER", "x86/backend-gpu")
     r = subprocess.run(["bash", DRIVER, "--only", subset], env=env,
                        capture_output=True, text=True, timeout=int(os.environ.get("QEMU_MATRIX_TIMEOUT", "36000")))
     assert r.returncode == 0, f"matrix boot walk failed:\n{r.stdout}\n{r.stderr}"

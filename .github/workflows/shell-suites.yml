@@ -311,7 +311,9 @@ jobs:
             tests/scripts/test-provision-manifest-injection.sh
             tests/scripts/test-publish-images.sh
             tests/scripts/test-rebrand-frozen-label-keys.sh
+            tests/scripts/test-role-key-spelling.sh
             tests/scripts/test-reserved-prefix-copy-gate.sh
+            tests/scripts/test-route-access-coverage-scanner.sh
             tests/scripts/test-route-access-oracle.sh
             tests/scripts/test-rpi5-builder-input-validation.sh
             tests/scripts/test-rpi5-per-board-pkgdir.sh

@@ -43,7 +43,7 @@ def _page(cfg):
 def test_egress_row_hidden_and_dropped_on_a_mesh_node(qapp):
     """THE defect: live on every mesh node because the platform gate passes via the
     worklist base's forced x86. HIDE it, and drop a stale value on collect."""
-    cfg = ImageConfig(mode="mesh", role="be", platform="x86")
+    cfg = ImageConfig(mode="mesh", role="backend", platform="x86")
     page = _page(cfg)
     page.initializePage()
     assert not page.egress_row.isVisibleTo(page), "egress VPN still offered on a mesh node"
@@ -73,7 +73,7 @@ def test_egress_row_live_on_a_cloud_desktop(qapp):
 
 def test_egress_row_re_gates_per_visit(qapp):
     """Every-visit contract: a node visit must not permanently strand the row."""
-    cfg = ImageConfig(mode="mesh", role="be", platform="x86")
+    cfg = ImageConfig(mode="mesh", role="backend", platform="x86")
     page = _page(cfg)
     page.initializePage()
     assert not page.egress_row.isVisibleTo(page)

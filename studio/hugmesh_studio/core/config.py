@@ -36,6 +36,7 @@ from typing import Any
 
 import sys
 
+from . import roles
 from .branding_themes import PREMADE_THEMES, is_valid_theme
 from .host_resources import default_jobs
 from .validate import (
@@ -258,14 +259,22 @@ ROLE_CHOICES = {
         ("orangepi4-lts", ("orangepi4-lts",), "Orange Pi 4 LTS arm64 LIGHT DESKTOP client — EXPERIMENTAL (live/installer flavor only; single board, no board axis)"),
     ],
     "mesh": [
-        # pki/be/fe are node images buildable on x86 OR a Raspberry Pi 4/5 board (Pi 3
-        # is desktop-only — 1GB RAM can't host the node stack, so the rpi5 board picker
-        # offers only rpi5/rpi4 for these; see rpi_boards_for_role()).
+        # pki/backend/frontend are node images buildable on x86 OR a Raspberry Pi 4/5
+        # board (Pi 3 is desktop-only — 1GB RAM can't host the node stack, so the rpi5
+        # board picker offers only rpi5/rpi4 for these; see rpi_boards_for_role()).
+        # THE IDS ARE THE BUILDER TOKENS. They used to be `be`/`fe`/`be+gpu` here and
+        # `backend`/`frontend` on the Pi builder, bridged by a hand-written
+        # RPI5_ROLE_MAP; there is now one vocabulary (scripts/_roles-lib.sh) and
+        # nothing to translate. Every old id still LOADS from a saved session — see
+        # WorklistEntry.from_dict / BuildSession.from_dict.
         ("pki", ("x86", "rpi5"), "PKI node — cluster certificate authority (x86 or Raspberry Pi 4/5)"),
-        ("be", ("x86", "rpi5"), "Backend node (x86 or Raspberry Pi 4/5)"),
-        ("fe", ("x86", "rpi5"), "Frontend node (x86 or Raspberry Pi 4/5)"),
-        ("be+gpu", ("x86",), "Backend + GPU node"),
-        ("omnibus", ("x86",), "Omnibus — every cluster role on one node"),
+        ("backend", ("x86", "rpi5"), "Backend node (x86 or Raspberry Pi 4/5)"),
+        ("frontend", ("x86", "rpi5"), "Frontend node (x86 or Raspberry Pi 4/5)"),
+        ("backend-gpu", ("x86", "jetson"),
+         "Backend + GPU node — a backend worker with a GPU, no inference service "
+         "(x86, or Jetson Orin — EXPERIMENTAL)"),
+        ("omnibus", ("x86", "jetson"),
+         "Omnibus — every cluster role on one node (x86, or Jetson Orin — EXPERIMENTAL)"),
         # Person-device desktops attachable to the mesh (operator ask 2026-08-14):
         # checking one on the WorklistPage asks for the person's user + role via a
         # popup; the account is provisioned on the internal orchestration
@@ -276,9 +285,12 @@ ROLE_CHOICES = {
         ("desktop", ("x86",), "Desktop client — tailnet + SSO client for a person on this mesh"),
         ("rpi5-desktop", ("rpi5",),
          "Raspberry Pi 5 / 4 / 3 desktop — arm64 client (compose with --standalone for FDE, no mesh)"),
-        ("edge_ai", ("x86", "jetson"), "Edge-AI node — GPU + OpenAI-compatible model API"),
-        ("full", ("jetson",), "Jetson full-stack node — EXPERIMENTAL, hardware validation pending"),
-        ("gpu-host", ("jetson",), "Jetson GPU host — EXPERIMENTAL, hardware validation pending"),
+        ("edge-ai", ("x86", "jetson"), "Edge-AI node — GPU + OpenAI-compatible model API"),
+        # `full` and `gpu-host` were the SAME two roles as omnibus and backend-gpu
+        # above — build-jetson-stage4.sh's own comments called them "the omnibus
+        # analogue" and "the be+gpu analogue". They are merged into those entries
+        # rather than offered twice under two more names; both old spellings remain
+        # accepted on the builder CLI forever.
         ("jetson-desktop", ("jetson",), "Jetson desktop — EXPERIMENTAL, hardware validation pending"),
     ],
 }
@@ -290,11 +302,27 @@ ROLE_CHOICES = {
 # builder), and emits the bare role + generic options only.
 UNAFFILIATED_ROLE = "standalone-unaffiliated"
 
-# build-rpi5-stage4.sh spells the node roles out (pki | backend | frontend).
-# The Studio disambiguates the rpi5 desktop role id; the builder takes --role desktop.
-RPI5_ROLE_MAP = {"be": "backend", "fe": "frontend", "rpi5-desktop": "desktop"}
-# The Studio disambiguates the jetson desktop role id; the builder takes --role desktop.
-JETSON_ROLE_MAP = {"jetson-desktop": "desktop"}
+# ── what is LEFT of the translation, and why ────────────────────────────────────
+# RPI5_ROLE_MAP used to hold {"be": "backend", "fe": "frontend", "rpi5-desktop":
+# "desktop"} and was applied on the way to build-rpi5-stage4.sh. The first two
+# entries are GONE: the Studio id and the builder token are the same word now, on
+# every platform, so there is nothing left to translate.
+#
+# What survives is ONE thing, and it is not a spelling. `rpi5-desktop` and
+# `jetson-desktop` are COMPOSITE ids that mangle a PLATFORM into the role string.
+# They resolve to (role=desktop, platform=<that platform>) — a different kind of
+# fold, where dropping the platform half would silently build the wrong image.
+# Retiring them (keying the menus on the (platform, role) PAIR instead) touches the
+# persisted session schema and is deliberately deferred; until then they are DERIVED
+# from the single source rather than hand-written here:
+#     scripts/_roles-lib.sh                HUGMESH_ROLE_COMPOSITE
+#     studio/hugmesh_studio/core/roles.py  composite_aliases()
+# The two names are kept so existing callers and tests keep working, but they are now
+# VIEWS on that one declaration, not a second copy of it.
+RPI5_ROLE_MAP = {a: c for a, (c, k, v) in roles.composite_aliases().items()
+                 if k == "platform" and v == "rpi5"}
+JETSON_ROLE_MAP = {a: c for a, (c, k, v) in roles.composite_aliases().items()
+                   if k == "platform" and v == "jetson"}
 
 FRITE_BOARDS = ("la-frite", "le-potato", "sweet-potato")
 FRITE_FLAVORS = ("live", "installer", "both")
@@ -536,7 +564,7 @@ X86_CLIENT_ROLES = ("laptop", "chromebook", "desktop")
 # The cluster NODE roles (ROLE_CLIENT=false) — the roles for which the builder drops
 # --person-role/--domains. Gating on "not a node role" (rather than "is a client role")
 # also lets a standalone-desktop role carry them, exactly like the builder does.
-X86_NODE_ROLES = ("pki", "be", "fe", "be+gpu", "omnibus", "edge_ai")
+X86_NODE_ROLES = ("pki", "backend", "frontend", "backend-gpu", "omnibus", "edge-ai")
 
 # --release-state: cluster ingress + Layer-3 nftables posture baked into the image
 # (build-x86:909 parses it, :3174 bakes /etc/hugmesh/release-state inside
@@ -786,7 +814,7 @@ NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile",
 # A SECOND gating axis on top of the platform axis: whether an image is a person DESKTOP
 # (themeable, home-provisionable, tailnet/SSO-optional) or a cluster NODE / headless
 # appliance (root-encrypted infrastructure — no theming, no home provisioning, mesh join
-# implicit). Keyed on the role id (a shared id like pki/edge_ai is a node on EVERY
+# implicit). Keyed on the role id (a shared id like pki/edge-ai is a node on EVERY
 # platform it appears on). These predicates run at ModePage.validatePage and inside
 # materialize() step 5 — never in to_cli_args, so emission stays a faithful field->argv
 # translation (the 51 GUITHR probes thread hand-set fields with no role-class logic).
@@ -798,14 +826,22 @@ _STANDALONE_DESKTOP_ROLES = ("standalone-thin", "standalone-thick", UNAFFILIATED
 # &gpu (Mali-T860/panfrost), an enabled &hdmi and both VOPs in the mainline DTB it
 # boots, so it is a real desktop client like orangepi5 — unlike every OTHER Orange
 # Pi platform here, which are headless appliances.
+# rpi5-desktop / jetson-desktop are the two COMPOSITE ids (a platform mangled into
+# the role string) that survive this change; see RPI5_ROLE_MAP above.
 _ARM_DESKTOP_ROLES = ("rpi5-desktop", "jetson-desktop", "frite", "orangepi5", "orangepi4-lts")
 DESKTOP_ROLES = X86_CLIENT_ROLES + _STANDALONE_DESKTOP_ROLES + _ARM_DESKTOP_ROLES
 # Cluster-node / headless-appliance family (root-encrypted infra). X86_NODE_ROLES already
-# covers pki/be/fe/be+gpu/omnibus/edge_ai (x86 AND rpi5 share pki/be/fe; edge_ai is shared
-# x86/jetson); jetson adds full/gpu-host; the orangepizero2 appliance and the plain-Gentoo
+# covers pki/backend/frontend/backend-gpu/omnibus/edge-ai (x86 AND rpi5 share
+# pki/backend/frontend; backend-gpu, omnibus and edge-ai are shared x86/jetson — the
+# jetson-only `full`/`gpu-host` ids were the same two roles under two more names);
+# the orangepizero2 appliance and the plain-Gentoo
 # rpi5 "generic" server are headless nodes too. Everything not an explicit desktop role
 # is treated as a node (fail-safe: infra never accidentally exposes theming/home surfaces).
-_JETSON_NODE_ROLES = ("full", "gpu-host")
+# Empty by construction now: the jetson node roles ARE backend-gpu / omnibus /
+# edge-ai, every one of which X86_NODE_ROLES already lists. Kept as a named, empty
+# tuple rather than deleted so the merge stays visible — jetson used to add two more
+# names (`full`, `gpu-host`) for two roles that already had names.
+_JETSON_NODE_ROLES = ()
 _APPLIANCE_ROLES = ("orangepizero2", "orangepizero2w", "orangepizero3", "orangepi3-lts",
                     "generic")
 NODE_ROLES = X86_NODE_ROLES + _JETSON_NODE_ROLES + _APPLIANCE_ROLES
@@ -1530,27 +1566,44 @@ def person_role_applies(cfg: "ImageConfig") -> bool:
 # Per-platform hostname default, keyed platform -> {role -> suffix}. The value is the
 # part after "{brand}-"; a role absent from a platform's map falls through to
 # "{brand}-{role}" (every builder's `*)` arm).
-_HOSTNAME_SUFFIX = {
-    # build-x86-host-stage4.sh:1440-1529 (the `case "${ROLE}" in` role switch)
-    "x86": {"pki": "pki", "be": "be", "fe": "fe", "be+gpu": "host", "host": "host",
-            "omnibus": "omnibus", "edge_ai": "edge-ai", "edge-ai": "edge-ai",
-            "desktop": "desktop",
-            "standalone-thin": "standalone-thin",
-            "standalone-thick": "standalone", "standalone-full": "standalone"},
-    # build-rpi5-stage4.sh:1294-1295 — `generic` is the ONE role whose default drops
-    # the brand entirely ("gentoo-${BOARD}"); handled in derive_hostname.
-    "rpi5": {},
-    "frite": {"desktop": "frite", "generic": "frite"},            # :569-570
-    "jetson": {"edge_ai": "jetson-edge-ai", "edge-ai": "jetson-edge-ai",
-               "gpu-host": "jetson-gpu", "gpu_host": "jetson-gpu",
-               "full": "jetson-full", "desktop": "jetson"},       # :523-539
-    "orangepi5": {"desktop": "orangepi5", "generic": "orangepi5"},          # :600-601
-    "orangepizero2": {"appliance": "orangepizero2", "generic": "orangepizero2"},    # build-orangepi-zero2-stage4.sh:632
-    "orangepizero2w": {"appliance": "orangepizero2w", "generic": "orangepizero2w"},  # build-orangepi-zero2w-stage4.sh:643
-    "orangepizero3": {"appliance": "orangepizero3", "generic": "orangepizero3"},    # build-orangepi-zero3-stage4.sh:646
-    "orangepi3-lts": {"appliance": "orangepi3-lts", "generic": "orangepi3-lts"},    # :638
-    "orangepi4-lts": {"desktop": "orangepi4-lts", "generic": "orangepi4-lts"},      # :681
-}
+# DERIVED, not transcribed. This table used to be a 20-entry hand-copy of every
+# builder's role switch — a fourth place the role vocabulary was written down, and
+# the reason a rename had to be applied here too. It now delegates to the ONE shell
+# declaration (scripts/_roles-lib.sh: the derived "${BRAND}-${ROLE}" rule plus its
+# declared exceptions), read through core/roles.py. The name is kept because
+# test_pages_fields_asks.py and derive_hostname() below both reference it.
+class _HostnameSuffixView:
+    """``_HOSTNAME_SUFFIX[platform][role]`` -> suffix, answered from the shell lib.
+
+    Presented as a mapping only so the existing ``.get(plat, {}).get(role)`` call
+    shape keeps working. There is no dict to drift.
+    """
+
+    def get(self, platform: str, default=None):
+        brand = "\x00BRAND\x00"
+        prefix = brand + "-"
+
+        class _Roles:
+            def get(_self, role, _default=None):
+                hn = roles.hostname(platform, role, brand)
+                if not hn.startswith(prefix):
+                    return None                     # e.g. rpi5 generic -> gentoo-*
+                sfx = hn[len(prefix):]
+                return None if sfx == roles.builder_role(role, platform) else sfx
+
+            def __getitem__(_self, role):
+                v = _self.get(role)
+                if v is None:
+                    raise KeyError(role)
+                return v
+
+        return _Roles()
+
+    def __getitem__(self, platform):
+        return self.get(platform)
+
+
+_HOSTNAME_SUFFIX = _HostnameSuffixView()
 
 # Each builder's DEFAULT_USER initialiser — the account created when -u is omitted.
 _BUILDER_DEFAULT_USER = {
@@ -1606,12 +1659,11 @@ def derive_hostname(cfg: "ImageConfig") -> str:
         return "gentoo-desktop"           # build-x86-host-stage4.sh:1604
     if plat == "rpi5" and role == "generic":
         return f"gentoo-{cfg.board or 'rpi5'}"   # build-rpi5-stage4.sh:1294
-    suffix = _HOSTNAME_SUFFIX.get(plat, {}).get(role)
-    if suffix:
-        return f"{brand}-{suffix}"
     if not role:
-        return f"{brand}-host" if plat == "x86" else brand
-    return f"{brand}-{role}"
+        # An UNSET role on x86 still resolves to the builder's own default
+        # (backend-gpu, whose hostname exception is the legacy "-host").
+        return roles.hostname(plat, "backend-gpu", brand) if plat == "x86" else brand
+    return roles.hostname(plat, role, brand, cfg.board or "")
 
 
 def derive_default_user(cfg: "ImageConfig") -> str:
@@ -1656,14 +1708,14 @@ def derive_default_user(cfg: "ImageConfig") -> str:
 #
 # PLATFORM_DEFAULT_ROLE names the canonical default role per platform, grounded in
 # each builder's OWN default: build-rpi5-stage4.sh:99 ROLE="generic",
-# build-jetson-stage4.sh:84 ROLE="edge_ai"; frite/orangepi5/orangepizero2 have ONE
+# build-jetson-stage4.sh ROLE="edge-ai"; frite/orangepi5/orangepizero2 have ONE
 # role (the ROLE_CHOICES role-id == platform name) and emit no --role at all. x86
 # keeps its dataclass default. A unit test pins every value ∈ roles_for_platform().
 PLATFORM_DEFAULT_ROLE = {
     "x86": "standalone-thick",
     "rpi5": "generic",
     "frite": "frite",
-    "jetson": "edge_ai",
+    "jetson": "edge-ai",
     "orangepi5": "orangepi5",
     "orangepizero2": "orangepizero2",
     "orangepizero2w": "orangepizero2w",
@@ -2585,6 +2637,16 @@ class ImageConfig:
         # intent preserved, never silently dropped.
         if "qemu_e2e" in d and "qemu_device_tests" not in d:
             d["qemu_device_tests"] = d.pop("qemu_e2e")
+        # CANONICALIZE THE ROLE ON READ. The role is persisted with no schema version
+        # and nothing anywhere re-validates it, so a config written before the role
+        # vocabulary converged holds `be`, `fe`, `be+gpu`, `edge_ai`, `full` or
+        # `gpu-host` — ids that would now fall through every `.get(role, default)` in
+        # the Studio. Folding here (and NOT rewriting the file) is what lets an old
+        # config replay: the record on disk is an already-emitted artifact.
+        # A composite id (rpi5-desktop / jetson-desktop) is deliberately NOT folded —
+        # it carries a platform, and only the argv emitters may spend that.
+        if isinstance(d.get("role"), str) and d["role"]:
+            d["role"] = roles.canonicalize(d["role"])
         known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         return cls(**{k: v for k, v in d.items() if k in known})
 
@@ -3232,7 +3294,10 @@ class ImageConfig:
         builder hard-errors if role != desktop; this method does not
         pre-validate that combo, same as it doesn't for any other builder
         constraint (the shell script is the single source of truth there)."""
-        a = ["--role", RPI5_ROLE_MAP.get(self.role, self.role)]
+        # roles.builder_role() resolves a COMPOSITE id (rpi5-desktop -> desktop, the
+        # platform half already spent on picking this method) and is otherwise the
+        # identity: the Studio id IS the builder token now.
+        a = ["--role", roles.builder_role(self.role, "rpi5")]
         if self.board:                 # rpi5 | rpi4 | rpi3 ("" = builder default: rpi5)
             a += ["--board", self.board]
         # rpi5-only kernel/board overrides (x86 & the other ARM builders lack these).
@@ -3446,11 +3511,11 @@ class ImageConfig:
 
     def _jetson_args(self) -> list[str]:
         """build-jetson-stage4.sh — arm64 Tegra edge-AI node. EXPERIMENTAL (hardware
-        validation pending): frite flag conventions + --role edge_ai|full|gpu-host|
-        desktop and --board JETSON_BOARDS (specs-jetson/README.md). Anything beyond
+        validation pending): frite flag conventions + --role edge-ai|omnibus|
+        backend-gpu|desktop and --board JETSON_BOARDS (specs-jetson/README.md). Anything beyond
         that goes via extra_flags."""
         self._check_jetson_conflicts()
-        a = ["--role", JETSON_ROLE_MAP.get(self.role, self.role)]
+        a = ["--role", roles.builder_role(self.role, "jetson")]
         if self.board:                 # Orin module/carrier ("" = builder default)
             a += ["--board", self.board]
         if self.kernel_flavor:         # mainline (default) | l4t (G36)
@@ -3557,7 +3622,8 @@ class ImageConfig:
         unaffiliated = unaffiliated_image(self)
         if unaffiliated:
             self._check_unaffiliated_conflicts()
-        a: list[str] = ["--role", self.role, "--env", self.env, "--local-user", self.local_user]
+        a: list[str] = ["--role", roles.builder_role(self.role, "x86"),
+                        "--env", self.env, "--local-user", self.local_user]
         if self.local_pass:
             # plaintext ONLY on the live command line — never persisted (SECRET_FIELDS)
             a += ["--local-pass", self.local_pass]
@@ -3702,12 +3768,12 @@ class ImageConfig:
         # are emitted whenever the service is in play, so the mesh model catalog is
         # image-configurable from the Studio wizard.
         edge = self._tri(self.edge_ai_service)
-        if self.role != "edge_ai":
+        if self.role != "edge-ai":
             if edge == "on":
                 a += ["--with-edge-ai"]
             elif edge == "off":
                 a += ["--no-edge-ai"]
-        if self.role == "edge_ai" or edge == "on":
+        if self.role == "edge-ai" or edge == "on":
             if self.edge_ai_runtime and self.edge_ai_runtime != "ollama":
                 a += ["--edge-ai-runtime", self.edge_ai_runtime]
             if self.edge_ai_models:

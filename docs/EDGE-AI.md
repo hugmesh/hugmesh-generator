@@ -13,7 +13,7 @@ It ships as two cooperating pieces:
 
 | Piece | What it is | Where |
 |---|---|---|
-| `edge_ai` **node role** | a `be+gpu`-class worker whose purpose is inference: NVIDIA proprietary + CUDA + the containerd `nvidia` runtime + `app-containers/nvidia-container-toolkit`, labelled `hugmesh.net/edge-ai=true`, and it **auto-selects** the `edge-ai` service | `build-x86-host-stage4.sh --role edge_ai` |
+| `edge-ai` **node role** | a `backend-gpu`-class worker whose purpose is inference: NVIDIA proprietary + CUDA + the containerd `nvidia` runtime + `app-containers/nvidia-container-toolkit`, labelled `hugmesh.net/edge-ai=true`, and it **auto-selects** the `edge-ai` service | `build-x86-host-stage4.sh --role edge-ai` |
 | `edge-ai` **optional service** | the cluster workload: an Ollama Deployment + Service + the model-library ConfigMap, GPU-scheduled, fronted by the `ai.<domain>` gateway route. DEFAULT-OFF, GPU-gated | `specs/cluster/{apps/54-edge-ai.yaml, manifests/edge-ai/}` |
 
 Both run unchanged on **x86_64** (e.g. the RTX-4060 host) and on the **NVIDIA
@@ -26,30 +26,30 @@ core; the Jetson platform bring-up is additive.
 
 ```bash
 # Dedicated inference node (NVIDIA + CUDA + edge-ai service auto-selected):
-./build-x86-host-stage4.sh --role edge_ai
+./build-x86-host-stage4.sh --role edge-ai
 
 # Tune the model library at build time:
-./build-x86-host-stage4.sh --role edge_ai \
+./build-x86-host-stage4.sh --role edge-ai \
     --edge-ai-runtime ollama \
     --edge-ai-models 'llama3.2:3b,nomic-embed-text,llava:7b' \
     --edge-ai-model-default llama3.2:3b
 
 # OR add the inference service onto an existing GPU cluster role:
-./build-x86-host-stage4.sh --role be+gpu  --with-edge-ai
+./build-x86-host-stage4.sh --role backend-gpu  --with-edge-ai
 ./build-x86-host-stage4.sh --role omnibus --with-edge-ai --edge-ai-models 'llama3.1:8b'
 ```
 
 All three front-ends expose the same knobs (**all-menus parity**):
 
-- **CLI:** `--role edge_ai`, `--with-edge-ai` / `--no-edge-ai`, `--edge-ai-runtime`,
+- **CLI:** `--role edge-ai`, `--with-edge-ai` / `--no-edge-ai`, `--edge-ai-runtime`,
   `--edge-ai-models`, `--edge-ai-model-default`.
-- **`scripts/build-menu.sh`:** the `edge_ai` row in the x86 role menu, and
-  **Options → Edge-AI service** (toggle for be+gpu/omnibus + runtime/preload/default).
+- **`scripts/build-menu.sh`:** the `edge-ai` row in the x86 role menu, and
+  **Options → Edge-AI service** (toggle for backend-gpu/omnibus + runtime/preload/default).
 - **Studio wizard:** *Network, identity & egress → Edge-AI inference* group
   (cloud/mesh modes); `ImageConfig.edge_ai_service / edge_ai_runtime / edge_ai_models
   / edge_ai_model_default` → `to_cli_args()`.
 
-The `edge_ai` role defaults `--gpu-driver nvidia` and turns CUDA on; pass an explicit
+The `edge-ai` role defaults `--gpu-driver nvidia` and turns CUDA on; pass an explicit
 `--gpu-driver` to override (an AMD/Intel ROCm edge node is a future path).
 
 **CUDA host compiler = clang, on purpose.** `dev-util/nvidia-cuda-toolkit` caps its
@@ -111,7 +111,7 @@ Nano wants a lean set (`llama3.2:3b` + an embedder); an x86 RTX host can hold mo
 
 ## 4. GPU for the existing services (voice / video)
 
-The `edge_ai` role and any `--gpu-driver nvidia` k8s node bake
+The `edge-ai` role and any `--gpu-driver nvidia` k8s node bake
 `app-containers/nvidia-container-toolkit` and add the containerd **`nvidia` runtime**;
 the always-on `nvidia-device-plugin` DaemonSet (`apps/01d-nvidia-device-plugin.yaml`,
 nodeSelector `compute=gpu`) advertises `nvidia.com/gpu` and installs the `nvidia`
@@ -161,7 +161,7 @@ Config (task→model map, NSFW/abuse thresholds, `moderate-action`) is the
 
 ```bash
 # add the analysis API onto an edge-AI cluster (needs the edge-ai model server):
-./build-x86-host-stage4.sh --role edge_ai --with-edge-ai-analysis
+./build-x86-host-stage4.sh --role edge-ai --with-edge-ai-analysis
 ```
 
 **This is the Phase-A foundation** ([memory: hugmesh-edge-ai-matrix-vn-characters]):
@@ -206,7 +206,7 @@ matrix-ui's `viseme.ts` mouth-shape map — keep the two in sync (see
 
 ```bash
 # add the TTS API to any cluster role (CPU-only — no --with-edge-ai needed):
-./build-x86-host-stage4.sh --role be --with-edge-ai-tts
+./build-x86-host-stage4.sh --role backend --with-edge-ai-tts
 ./build-rpi5-stage4.sh     --role backend --with-edge-ai-tts
 ```
 
@@ -227,7 +227,7 @@ ImagePull-fails). Everything stays on-prem — synthesis is local CPU work.
 
 ## 5. Jetson Orin Nano (arm64 platform — EXPERIMENTAL, buildable)
 
-The NVIDIA **Jetson Orin Nano** (aarch64 + Ampere, 67 TOPS) runs the same `edge_ai`
+The NVIDIA **Jetson Orin Nano** (aarch64 + Ampere, 67 TOPS) runs the same `edge-ai`
 role + `edge-ai` service; the difference is the **platform**: the `specs-jetson`
 tree (Tegra234 kernel fragments + boot/portage specs) rather than `specs-x86`. The
 kustomize image tags and the GPU request are identical (Ollama has arm64 + Jetson
@@ -236,12 +236,12 @@ CUDA images).
 The platform now has a **buildable EXPERIMENTAL path** — `build-jetson-stage4.sh`:
 
 ```bash
-./build-jetson-stage4.sh --role edge_ai              # the headline (DEFAULT)
-./build-jetson-stage4.sh --role edge_ai --print-plan # dry-run plan (no root)
-make jetson JETSON_ROLE=edge_ai                      # the make front door
+./build-jetson-stage4.sh --role edge-ai              # the headline (DEFAULT)
+./build-jetson-stage4.sh --role edge-ai --print-plan # dry-run plan (no root)
+make jetson JETSON_ROLE=edge-ai                      # the make front door
 ```
 
-Roles: `edge_ai` (default) | `gpu-host` | `full` | `desktop`; boards
+Roles: `edge-ai` (default) | `backend-gpu` | `full` | `desktop`; boards
 `orin-nano` (default) / `orin-nano-4gb` / `orin-nx-8gb` / `orin-nx-16gb`. The
 default `--kernel-flavor mainline` is the buildable route (gentoo-sources arm64
 + the Tegra234 fragments) and carries **NO CUDA** — the GA10B iGPU needs
@@ -299,7 +299,7 @@ specs/cluster/apps/13a-optional-services.yaml         # edge-ai runtime Applicat
 specs/cluster/apps/20-gateway-be.yaml                 # ai.<domain> host route
 specs/cluster/manifests/route-access/initdb/20-schema.sql   # /v1/** ROLE_USER row
 specs/cluster/manifests/policy/installed-services-configmap.yaml  # edge-ai install-state
-build-x86-host-stage4.sh / build-rpi5-stage4.sh       # edge_ai role, flags, gate, PKGS, containerd runtime
+build-x86-host-stage4.sh / build-rpi5-stage4.sh       # edge-ai role, flags, gate, PKGS, containerd runtime
 scripts/build-menu.sh                                 # role row + Edge-AI options
 studio/hugmesh_studio/{core/config.py,gui/wizard.py}   # ImageConfig fields + wizard group
 ```

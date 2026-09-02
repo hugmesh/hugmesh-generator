@@ -92,7 +92,7 @@ assert_has "everything: omnibus"        "X86_OMNIBUS=1"
 assert_has "everything: frite fleet"    "FRITE=1"
 assert_has "everything: jetson fleet"   "JETSON=1"
 assert_has "everything: pentest"        "PENTEST=1"
-build_make_cmd x86-be "one role" 1
+build_make_cmd x86-backend "one role" 1
 assert_not "single role: no RESUME"     "RESUME="
 assert_not "single role: no X86_OMNIBUS" "X86_OMNIBUS="
 assert_not "single role: no FRITE"      "FRITE="
@@ -106,7 +106,7 @@ assert_not "everything default: no PENTEST" "PENTEST="
 
 # ── optional-services catalog on a cluster role ─────────────────────────────────
 reset_opts; OPT_SERVICES="akkoma,games,tube" OPT_TOR_ONION=yes
-build_make_cmd x86-fe "fe" 1
+build_make_cmd x86-frontend "fe" 1
 assert_has "services: list"             '--optional-services "akkoma games tube"'
 assert_has "services: games opt-in"     "--enable-games"
 assert_has "services: tor rides along"  "--with-tor"
@@ -123,12 +123,12 @@ assert_not "services default: no flag"  "--optional-services"
 
 # checklist<->lone-toggle consistency: character-studio in the LIST implies the toggle
 reset_opts; OPT_SERVICES="akkoma,character-studio" OPT_CHARACTER_STUDIO=yes
-build_make_cmd x86-fe "fe" 1
+build_make_cmd x86-frontend "fe" 1
 assert_has "charstudio: in list"        "character-studio"
 assert_one_flags "charstudio"
 # legacy conf (toggle only, checklist never touched) still threads --with-character-studio
 reset_opts; OPT_CHARACTER_STUDIO=yes
-build_make_cmd x86-fe "fe" 1
+build_make_cmd x86-frontend "fe" 1
 assert_has "charstudio legacy: flag"    "--with-character-studio"
 assert_not "charstudio legacy: no list" "--optional-services"
 
@@ -145,12 +145,12 @@ assert_eq  "sync: untouched stays"      "${OPT_SERVICES}" ""
 # checklist<->lone-toggle consistency: character-forge (3D multi-app slug) mirrors
 # character-studio's shape exactly (services_sync_charforge)
 reset_opts; OPT_SERVICES="akkoma,character-forge" OPT_CHARACTER_FORGE=yes
-build_make_cmd x86-fe "fe" 1
+build_make_cmd x86-frontend "fe" 1
 assert_has "charforge: in list"         "character-forge"
 assert_one_flags "charforge"
 # legacy conf (toggle only, checklist never touched) still threads --with-character-forge
 reset_opts; OPT_CHARACTER_FORGE=yes
-build_make_cmd x86-fe "fe" 1
+build_make_cmd x86-frontend "fe" 1
 assert_has "charforge legacy: flag"     "--with-character-forge"
 assert_not "charforge legacy: no list"  "--optional-services"
 
@@ -164,27 +164,27 @@ assert_eq  "cf sync: last slug -> none" "${OPT_SERVICES}" "none"
 OPT_SERVICES=""; OPT_CHARACTER_FORGE=yes; services_sync_charforge
 assert_eq  "cf sync: untouched stays"   "${OPT_SERVICES}" ""
 
-# ── edge-AI knobs: GPU roles opt in; edge_ai role is always-on ──────────────────
+# ── edge-AI knobs: GPU roles opt in; the edge-ai role is always-on ─────────────
 reset_opts; OPT_X86_EDGE_AI=yes OPT_EDGE_AI_RUNTIME=vllm OPT_EDGE_AI_MODELS="llama3.2:3b,nomic-embed-text"
-build_make_cmd x86-be+gpu "gpu" 1
+build_make_cmd x86-backend-gpu "gpu" 1
 assert_has "edge-ai gpu: with"          "--with-edge-ai"
 assert_has "edge-ai gpu: runtime"       "--edge-ai-runtime vllm"
 assert_has "edge-ai gpu: models"        "--edge-ai-models llama3.2:3b,nomic-embed-text"
 assert_one_flags "edge-ai gpu"
 reset_opts; OPT_EDGE_AI_MODEL_DEFAULT="llama3.2:3b"
-build_make_cmd x86-edge_ai "edge" 1
+build_make_cmd x86-edge-ai "edge" 1
 assert_has "edge-ai role: default model" "--edge-ai-model-default llama3.2:3b"
 assert_not "edge-ai role: no --with"    "--with-edge-ai"
 
 # edge-ai-tts: CPU-only, NO edge-ai dependency — must reach argv on a NON-GPU
 # cluster role (unlike edge-ai-analysis, which is scoped to the GPU-target case).
 reset_opts; OPT_EDGE_AI_TTS=yes
-build_make_cmd x86-fe "fe" 1
+build_make_cmd x86-frontend "fe" 1
 assert_has "edge-ai-tts: flag on non-GPU role" "--with-edge-ai-tts"
 assert_not "edge-ai-tts: no edge-ai fold" "--with-edge-ai "
 assert_one_flags "edge-ai-tts"
 reset_opts
-build_make_cmd x86-fe "fe" 1
+build_make_cmd x86-frontend "fe" 1
 assert_not "edge-ai-tts: off by default"  "--with-edge-ai-tts"
 
 # ── standalone desktop: media label, home, branding, installer UI, extra flags ──

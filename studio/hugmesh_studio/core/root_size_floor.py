@@ -29,7 +29,9 @@ from __future__ import annotations
 from .config import image_class
 
 # x86 roles the builder gives the Mesa/Vulkan node bump (build-x86:1734: ${GPU}).
-_X86_GPU_NODE_ROLES = ("be+gpu", "omnibus", "edge_ai", "edge-ai")
+# Canonical tokens plus the permanent input aliases (scripts/_roles-lib.sh): a
+# floor must still bite on a config restored from an older session record.
+_X86_GPU_NODE_ROLES = ("backend-gpu", "omnibus", "edge-ai", "be+gpu", "edge_ai", "gpu-host")
 
 _STATIC_FLOORS = {
     "rpi5": 9216,
@@ -42,8 +44,10 @@ _STATIC_FLOORS = {
     "orangepi3-lts": 2048,
 }
 
-_JETSON_FLOORS = {"full": 20480, "edge_ai": 16384, "edge-ai": 16384,
-                  "desktop": 16384, "gpu-host": 14336}
+_JETSON_FLOORS = {"omnibus": 20480, "edge-ai": 16384, "desktop": 16384,
+                  "backend-gpu": 14336,
+                  # permanent input aliases — an older session record still floors
+                  "full": 20480, "edge_ai": 16384, "gpu-host": 14336, "gpu_host": 14336}
 
 
 def min_root_mib(platform: str, mode: str, role: str,

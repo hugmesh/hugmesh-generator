@@ -12,7 +12,7 @@ The platform splits into two tiers:
   hugmesh.games portal + its own games-realm Casdoor), **owncast** (HLS
   live-streaming, GPU-gated x86), **tube** (LocalTube YouTube archive, GPU-gated
   x86), **edge-ai** (GPU inference node serving an OpenAI-compatible model API to
-  the mesh — DEFAULT-OFF, GPU-gated; auto-selected by the `edge_ai` node role; see
+  the mesh — DEFAULT-OFF, GPU-gated; auto-selected by the `edge-ai` node role; see
   [EDGE-AI.md](EDGE-AI.md)), **character-studio** (the VN character-studio frontend
   remote — character creator + chat surface mounted at `/character-studio`, ROLE_USER;
   DEFAULT-OFF, admin gate), **character-forge** (the Character Forge 3D character
@@ -294,7 +294,7 @@ extraHosts) are the bytes that reach the cluster.
 Goal: a Matrix + games appliance (no Mastodon, no forum), on **both** arches.
 
 ```sh
-# x86 host (be+gpu)
+# x86 host (backend-gpu)
 sudo ./build-x86-host-stage4.sh --env prod --optional-services "tuwunel games"
 # Pi5 backend
 sudo ./build-rpi5-stage4.sh     --env prod --optional-services "tuwunel games"
@@ -537,7 +537,7 @@ alone keeps the console unusable; lighting it is a deliberate, ordered act:
 
 | # | OFF | Owner | Dark behaviour |
 |---|-----|-------|----------------|
-| 1 | **Generator gate** — `WORKLOAD_CONSOLE_ENABLED=false` (the `app.workload-console.enabled` default) *and* the two route-access rows pruned | build-time (`workloadConsole` slug) | the gateway **404s** the whole prefix (no route rows), and even a direct in-cluster call 404s (the BFF's `WorkloadAuthorizationFilter` denies a disabled prefix) |
+| 1 | **Generator gate** — `WORKLOAD_CONSOLE_ENABLED=false` (the `app.workload-console.enabled` default) *and* the two route-access rows pruned | build-time (`workloadConsole` slug) | the BFF's `WorkloadAuthorizationFilter` **404s** the disabled prefix — in-cluster calls included, so there is no gateway-only bypass. Note the pruned rows are **not** what refuses it: a path with no matching `url_pattern` is `NO_RULE` and the gateway filter **forwards** it (see [`ROUTE-ACCESS.md`](ROUTE-ACCESS.md) — *"'No matching row' is NOT a denial. Three verdicts, not two."*). Pruning them **ungoverns** the prefix; the app-side gate is the authority |
 | 2 | **k8s seam** — `WORKLOAD_CONSOLE_K8S_ENABLED=false`, no SA tokens mounted | build-time (same slug) | the fail-closed `NoopWorkloadClient` **503s every call**; no k8s API is ever dialed |
 | 3 | **DB master flag + TTL'd grants** — `workload_console_config.admin_enabled` / `dangerous_tier_enabled` default false; every admin needs an active grant lease (~24 h TTL, expiry-swept) | runtime (SUPERADMIN + step-up) | a fully lit-wired cluster still shows **nobody anything** |
 

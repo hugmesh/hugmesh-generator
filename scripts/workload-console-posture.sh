@@ -436,7 +436,17 @@ else:
     have = route_rows(sql)
     for pat in ("/bff/admin/workloads/**", "/bff/superadmin/workloads/**"):
         if not any(p == pat for _, p in have):
-            g1_why.append("route-access row for %s is not seeded, so the gateway 404s the prefix" % pat)
+            # NOT "so the gateway 404s it": an unmatched url_pattern is NO_RULE
+            # and GatewayRouteAccessFilter FORWARDS (docs/ROUTE-ACCESS.md,
+            # "'No matching row' is NOT a denial"). An unseeded row UNGOVERNS the
+            # prefix; what refuses it is the BFF's own WorkloadAuthorizationFilter
+            # under WORKLOAD_CONSOLE_ENABLED=false. Reported here because the rows
+            # are part of what the slug owns, so their absence is evidence the slug
+            # is deselected — not because their absence is itself a wall.
+            g1_why.append("route-access row for %s is not seeded, so the prefix is "
+                          "UNGOVERNED at the gateway (NO_RULE forwards); the refusal "
+                          "is the BFF's WorkloadAuthorizationFilter on a disabled "
+                          "prefix" % pat)
 
 gate1 = "OPEN" if not g1_why else "SHUT"
 

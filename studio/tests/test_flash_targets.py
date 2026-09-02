@@ -196,14 +196,14 @@ def test_assignment_argv_is_safe_flash_disk_sh_call():
 
 def test_assignment_argv_passes_the_concrete_artifact():
     """The per-row image pick must be REAL: two assignments sharing a role token
-    (be.rpi5 + be.jetson are both --role be --arch arm64) would otherwise emit
+    (be.rpi5 + be.jetson are both --role backend --arch arm64) would otherwise emit
     byte-identical argvs and flash-disk.sh's newest-mtime role glob would write the
     SAME image to both devices. The resolved per-entry artifact rides --artifact."""
     t1 = FlashTarget("/dev/sdb", 16 * GIB, "SanDisk Ultra", "usb", True, "usb")
     t2 = FlashTarget("/dev/sdc", 32 * GIB, "Cruzer", "usb", True, "usb")
-    a1 = ft.FlashAssignment(target=t1, entry_id="be.rpi5", role="be", arch="arm64",
+    a1 = ft.FlashAssignment(target=t1, entry_id="backend.rpi5", role="backend", arch="arm64",
                             work_dir="/gen/out")
-    a2 = ft.FlashAssignment(target=t2, entry_id="be.jetson", role="be", arch="arm64",
+    a2 = ft.FlashAssignment(target=t2, entry_id="backend.jetson", role="backend", arch="arm64",
                             work_dir="/gen/out")
     v1 = ft.assignment_argv(a1, generator_dir="/gen",
                             artifact="/gen/out/hugmesh-rpi5-arm64-backend-x.img")

@@ -37,6 +37,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ASSERTIONS="${HERE}/assertions.sh"
 [ -f "${ASSERTIONS}" ] || { echo "cannot find ${ASSERTIONS}" >&2; exit 2; }
 
+# The harness itself folds spellings too (mkfixture keys the runlevel on the canonical
+# role), so it sources the ONE vocabulary rather than restating it.
+# shellcheck source=scripts/_roles-lib.sh
+. "${HERE}/../../scripts/_roles-lib.sh"
+
 PASS=0; FAIL=0
 _ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 _bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1" >&2; }
@@ -84,6 +89,10 @@ ok()   { echo "  PASS  $*"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL  $*"; FAIL=$((FAIL+1)); }
 skip() { echo "  SKIP  $*"; }
 HDR
+    # THE REAL ROLE VOCABULARY, exactly as the two production call sites prepend it
+    # (cat _roles-lib.sh assertions.sh | ssh ... bash -s). Extracting the section
+    # WITHOUT it would grade a stubbed fold and could not see an alias regression.
+    cat "${HERE}/../../scripts/_roles-lib.sh" >> "${out}"
     extract "${src}" _rl_has              "${out}"
     extract "${src}" _rl_dangling         "${out}"
     extract "${src}" assert_role_topology "${out}"
@@ -130,12 +139,17 @@ mkfixture() { # ROLE DIR [abs|rel] — build a CORRECT rootfs for that role
     mkdir -p "${d}/etc/hugmesh" "${d}/etc/init.d" "${d}/etc/runlevels/default" \
              "${d}/etc/cron.d" "${d}/usr/sbin"
     echo "${role}" > "${d}/etc/hugmesh/role"
-    case "${role}" in
-        desktop) rl="${CLIENT_RL}" ;;
-        *)       rl="${CLUSTER_RL}" ;;
+    # Keyed on the CANONICAL role so a legacy-spelling fixture (be / fe / be+gpu /
+    # edge_ai — what an image flashed before the vocabulary converged actually
+    # carries) gets the runlevel of the role it MEANS.
+    local canon
+    canon="$(hugmesh_role_canonicalize "${role}" 2>/dev/null || printf '%s' "${role}")"
+    case "${canon}" in
+        desktop|laptop|chromebook|standalone-*) rl="${CLIENT_RL}" ;;
+        *)                                      rl="${CLUSTER_RL}" ;;
     esac
-    case "${role}" in
-        pki|generic) rl="${rl} headscale" ;;
+    case "${canon}" in
+        pki|generic|omnibus) rl="${rl} headscale" ;;
     esac
     # /etc/init.d/tailscaled is copied UNCONDITIONALLY by the builder
     # (build-rpi5-stage4.sh:3670-3673) — it is the BINARY that tracks the mesh
@@ -145,13 +159,20 @@ mkfixture() { # ROLE DIR [abs|rel] — build a CORRECT rootfs for that role
     for s in ${rl}; do rl_link "${d}" "${s}" "${shape}"; done
 }
 
+# THE FIXTURE SET USED TO BE rpi5-ONLY (pki backend frontend desktop), which is why
+# nothing ever noticed that assert_role_topology could not grade an x86 node at all:
+# on `be`/`fe`/`be+gpu`/`omnibus`/`edge_ai` it took the `*)` arm, recorded a FAIL and
+# RETURNED, skipping every later service assertion. The set now spans every canonical
+# CLUSTER role plus the two spellings an already-flashed older image can carry.
 echo "══ 1. a CORRECT rootfs of each role passes with zero failures ══"
-for role in pki backend frontend desktop; do
+NODE_FIXTURE_ROLES="pki backend frontend desktop omnibus backend-gpu edge-ai generic"
+LEGACY_FIXTURE_ROLES="be fe be+gpu edge_ai"
+for role in ${NODE_FIXTURE_ROLES} ${LEGACY_FIXTURE_ROLES}; do
     mkfixture "${role}" "${TMP}/${role}"
 done
 LIB="${TMP}/lib.sh"; build_lib "${ASSERTIONS}" "${LIB}"
-for role in pki backend frontend desktop; do
-    case "${role}" in pki) want=true ;; *) want=false ;; esac
+for role in ${NODE_FIXTURE_ROLES} ${LEGACY_FIXTURE_ROLES}; do
+    case "${role}" in pki|generic|omnibus) want=true ;; *) want=false ;; esac
     out="$(run_fixture "${LIB}" "${TMP}/${role}" "${want}" "KEYS manifest")"
     n="$(fails_of "${out}")"
     if [ "${n}" = 0 ]; then _ok "role ${role}: clean rootfs (ABSOLUTE links, real shape) => 0 failures"
@@ -236,7 +257,7 @@ for variant in absent empty bogus; do
     out="$(run_fixture "${LIB}" "${TMP}/marker-${variant}" false "KEYS manifest")"
     case "${variant}" in
         bogus) want_fail "${out}" "role marker ${variant} => the value is quoted back as unknown" \
-                         "holds 'beckend', which is not one of the five roles" ;;
+                         "holds 'beckend', which is not a canonical role" ;;
         *)     want_fail "${out}" "role marker ${variant} => FAIL (not a silent skip)" \
                          "/etc/hugmesh/role is missing or empty" ;;
     esac
@@ -434,7 +455,7 @@ mutant_out() {
 
 # (a) FLATTEN THE ROLE TABLE — every role gets the same headscale expectation, i.e. the
 #     table now lists only what all roles share. This IS the original bug.
-if mutant_out flat-table 's/^        backend|frontend)  _class=cluster; _hs_expect=forbidden ;;$/        backend|frontend)  _class=cluster; _hs_expect=required ;;/' \
+if mutant_out flat-table 's/^        backend|frontend|backend-gpu|edge-ai)  _class=cluster; _hs_expect=forbidden ;;$/        backend|frontend|backend-gpu|edge-ai)  _class=cluster; _hs_expect=required ;;/' \
         "${TMP}/swap-pki-as-frontend" true; then
     [ "$(fails_of "${MUT_OUT}")" = 0 ] \
         && _ok "(a) flattened table: the pki-as-frontend swap goes back to a CLEAN PASS => the role keying is what catches it" \

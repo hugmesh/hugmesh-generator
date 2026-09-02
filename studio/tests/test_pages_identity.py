@@ -402,7 +402,7 @@ def test_hiding_the_standalone_services_picker_emits_an_explicit_none(wiz):
     carries. The hide's answer is `none`, and the page now says so — the explicit-none
     sentinel plus the definitely-offs of every row the builder parses here, which is
     exactly what a visible picker with every box unticked emits. Absent a profile those
-    tokens are measurably inert (`--role be+gpu --no-tor --no-character-studio
+    tokens are measurably inert (`--role backend-gpu --no-tor --no-character-studio
     --no-character-forge --no-edge-ai-tts --print-plan` -> akkoma tuwunel phpbb, identical
     to passing none of them); the leak they close is measured in
     test_services_section.py::test_a_hidden_picker_cannot_inherit_a_brand_profiles_services.
@@ -560,9 +560,9 @@ def test_services_client_note_hidden_on_node_roles(wiz):
     wiz.restart()
     net = advance_to(wiz, wizard_mod.NetworkPage)
     assert not net.services_role_note.isVisible()
-    # rpi5 node role: restart with a loaded-config style rpi5 'be' mesh build
+    # rpi5 node role: restart with a loaded-config style rpi5 'backend' mesh build
     c = wiz.cfg
-    c.mode = "mesh"; c.role = "be"; c.platform = "rpi5"
+    c.mode = "mesh"; c.role = "backend"; c.platform = "rpi5"
     wiz.restart()
     net = advance_to(wiz, wizard_mod.NetworkPage)
     assert not net.services_role_note.isVisible()
@@ -625,7 +625,7 @@ def test_no_part_checked_state_survives_anywhere_on_the_page(wiz):
     them."""
     mesh_worklist(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
-    for name, box in (("aide", net.aide), ("edge_ai", net.edge_ai),
+    for name, box in (("aide", net.aide), ("edge-ai", net.edge_ai),
                       ("edge_ai_analysis", net.edge_ai_analysis),
                       *net.service_boxes.items()):
         assert not box.isTristate(), f"{name} is still a 3-state box"
@@ -817,14 +817,14 @@ def test_domains_applies_to_writes_domain_images(wiz):
     """Spec 4: the mesh 'Applies to' menu writes Domain.images — the worklist entry ids
     a domain attaches to (empty = all eligible); node-role images are offered but
     flagged '(manifest only)' since a node build takes no --domains."""
-    mesh_worklist(wiz, "omnibus.x86", "be.rpi5")
+    mesh_worklist(wiz, "omnibus.x86", "backend.rpi5")
     enable_additional_domains(wiz)            # ask 8/19: the mesh gate for the Domains table
     dom = advance_to(wiz, wizard_mod.DomainsPage)
     dom._add("acme.example", "Acme", "", ["omnibus.x86"])
     r = dom.table.rowCount() - 1
     btn = dom.table.cellWidget(r, 3)                # the 'Applies to' cell widget
     assert btn.selected_ids() == ["omnibus.x86"]
-    assert "manifest only" in btn._actions["be.rpi5"].text()   # node row flagged
+    assert "manifest only" in btn._actions["backend.rpi5"].text()   # node row flagged
     advance_to(wiz, wizard_mod.UsersChoicePage)     # Next past Domains collects the table
     acme = [d for d in wiz.cfg.domains if d.name == "acme.example"][0]
     assert acme.images == ["omnibus.x86"]

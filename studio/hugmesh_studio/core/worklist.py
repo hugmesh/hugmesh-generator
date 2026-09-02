@@ -31,6 +31,8 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import roles
+
 from .config import (
     INFRA_SERVICES_CHOICES,
     OPTIONAL_SERVICES_BY_PLATFORM,
@@ -159,8 +161,22 @@ class WorklistEntry:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "WorklistEntry":
+        """Load one entry, folding a pre-convergence role spelling to its canonical
+        token (scripts/_roles-lib.sh).
+
+        The record is NEVER rewritten and the entry ``id`` is left exactly as saved:
+        the id is what names this entry's build tree (``wl-be.x86``), its per-node
+        KEYS folder (``keys-be.x86`` — which holds that node's actual credentials and
+        which an operator navigates to by name) and its log. Those are
+        already-emitted artifacts. Folding the ROLE makes an old worklist replay
+        correctly; renaming the DIRECTORIES would move an operator's keys out from
+        under them.
+        """
         known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
-        return cls(**{k: v for k, v in d.items() if k in known})
+        vals = {k: v for k, v in d.items() if k in known}
+        if isinstance(vals.get("role"), str) and vals["role"]:
+            vals["role"] = roles.canonicalize(vals["role"])
+        return cls(**vals)
 
 
 @dataclass

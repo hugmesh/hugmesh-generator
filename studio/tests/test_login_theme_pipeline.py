@@ -72,6 +72,24 @@ def test_font_only_theme_still_emits_a_complete_selfcontained_css():
     assert "--sd-font-sans: ui-monospace" in css
 
 
+def test_a_chosen_font_reaches_form_controls():
+    """input/button/select/textarea do NOT inherit font-family (each UA styles them
+    with its own default) and nothing else sets one on them, so a font theme changed
+    the headings while the login form's inputs and Sign-in button stayed on the UA
+    default (issue #225). The composed css must carry the inherit rule whenever a
+    font was chosen — preset or upload — and must NOT grow it for colour-only
+    themes (their delivered bytes stay identical to before the fix)."""
+    rule = theme.FORM_FONT_RESET.strip()
+    assert rule in theme.compose_login_css(font_preset="Monospace")
+    assert rule in theme.compose_login_css("#336699", font_preset="System UI")
+    # uploaded-font path: minimal valid TrueType magic + padding passes sniffing
+    fake_ttf = b"\x00\x01\x00\x00" + b"\x00" * 64
+    assert rule in theme.compose_login_css(
+        font_family="Probe Face", font_bytes=fake_ttf)
+    assert rule not in theme.compose_login_css("#336699")      # colour-only: no rule
+    assert theme.compose_login_css() == ""                     # unthemed stays empty
+
+
 def test_compose_fails_closed_on_unknown_preset_and_bad_hex():
     with pytest.raises(ValueError):
         theme.compose_login_css("#336699", font_preset="Comic Sans")

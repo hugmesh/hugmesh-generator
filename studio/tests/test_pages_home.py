@@ -751,7 +751,7 @@ def test_system_credentials_grey_and_clear_on_arm(qapp):
     """G27 platform gate: rpi5's equivalents are deprecated no-ops — the widgets
     grey off-x86 and stale secrets clear, while the all-platform identity fields
     stay live and keep emitting."""
-    cfg = ImageConfig(mode="mesh", role="be", platform="rpi5",
+    cfg = ImageConfig(mode="mesh", role="backend", platform="rpi5",
                       hostname="node-9", user_password="pw1", root_password="pw2")
     page = _system_page(cfg)
     page.initializePage()
@@ -778,7 +778,7 @@ def test_system_credentials_survive_desktop_first_mesh_worklist(wiz):
     c.mode = "mesh"
     wiz.restart()
     wl = advance_to(wiz, wizard_mod.WorklistPage)
-    check_worklist_rows(wl, "rpi5-desktop.rpi5", "edge_ai.x86")
+    check_worklist_rows(wl, "rpi5-desktop.rpi5", "edge-ai.x86")
     # a checked desktop must name its person (operator ask 2026-08-14)
     wl._desktop_people["rpi5-desktop.rpi5"] = ("gamer", "user")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
@@ -813,7 +813,7 @@ def test_system_credentials_hidden_and_cleared_on_all_arm_worklist(wiz):
     c.user_password = "stale-user"; c.root_password = "stale-root"
     wiz.restart()
     wl = advance_to(wiz, wizard_mod.WorklistPage)
-    check_worklist_rows(wl, "pki.rpi5", "be.rpi5")
+    check_worklist_rows(wl, "pki.rpi5", "backend.rpi5")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     assert not sysp.creds.isVisible()
     assert sysp.hostname.isVisible()               # identity fields stay
@@ -831,7 +831,7 @@ def test_system_credentials_survive_going_back_to_add_a_desktop_row(wiz):
     c.mode = "mesh"
     wiz.restart()
     wl = advance_to(wiz, wizard_mod.WorklistPage)
-    check_worklist_rows(wl, "edge_ai.x86")
+    check_worklist_rows(wl, "edge-ai.x86")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     assert sysp.creds.isVisible()
     sysp.creds_optin.setChecked(True)              # ask 10: opt in before typing
@@ -840,7 +840,7 @@ def test_system_credentials_survive_going_back_to_add_a_desktop_row(wiz):
     advance_to(wiz, wizard_mod.HomePage)           # validates System -> cfg stores creds
     while not isinstance(wiz.currentPage(), wizard_mod.WorklistPage):
         wiz.back()                                 # back to the worklist...
-    check_worklist_rows(wiz.currentPage(), "rpi5-desktop.rpi5", "edge_ai.x86")
+    check_worklist_rows(wiz.currentPage(), "rpi5-desktop.rpi5", "edge-ai.x86")
     # the freshly-added desktop row needs its person (operator ask 2026-08-14)
     wiz.currentPage()._desktop_people["rpi5-desktop.rpi5"] = ("gamer", "user")
     sysp = advance_to(wiz, wizard_mod.SystemPage)  # ...and forward again

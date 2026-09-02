@@ -123,6 +123,40 @@ def test_write_platform_preview_returns_a_real_file(tmp_path):
     assert 'id="pane-forum"' in text
 
 
+def test_preview_artifact_is_rewritten_with_the_new_font_family(tmp_path):
+    """Issue #225: a font change must land in the preview FILE on the next press.
+    Same basename, same dir — the artifact is overwritten, the old stack is gone,
+    and the new stack reaches BOTH documents (top-level page + login iframe)."""
+    first = theme.compose_login_css("", "", font_preset="Geometric")
+    p1 = platform_preview.write_platform_preview(first, str(tmp_path))
+    assert "--sd-font-sans: Avenir" in open(p1, encoding="utf-8").read()
+
+    second = theme.compose_login_css("", "", font_preset="Slab serif")
+    p2 = platform_preview.write_platform_preview(second, str(tmp_path))
+    assert p2 == p1                                  # rewritten, not a second file
+    text = open(p2, encoding="utf-8").read()
+    assert text.count("--sd-font-sans: Rockwell") == 2   # outer page + iframe srcdoc
+    assert "Avenir" not in text                      # the old font family is GONE
+
+
+def test_chosen_font_reaches_the_login_forms_controls(themed_page):
+    """Form controls don't inherit font-family (the UA default wins), so the theme
+    css must carry the inherit rule or the login pane's inputs and Sign-in button
+    silently ignore the chosen font — the observed half of issue #225."""
+    assert theme.FORM_FONT_RESET.strip() in THEMED_CSS
+    # present in both documents: the outer style#snap-theme and the escaped iframe copy
+    assert themed_page.count(theme.FORM_FONT_RESET.strip()) == 2
+
+
+def test_the_header_explainer_paragraph_is_gone():
+    """Issue #225: the preview page's meta-explainer prose ("One theme, four
+    surfaces … :root:root token text …") was operator-flagged placeholder copy.
+    The header keeps only the title; the in-pane honesty labels do the explaining."""
+    page = platform_preview.platform_preview_html("")
+    assert "One theme, four surfaces" not in page
+    assert "<h1>HugMesh platform preview</h1>" in page
+
+
 def test_asset_intact_guard_mirrors_the_login_one(tmp_path, monkeypatch):
     # a snapshot that lost its marker must raise (login_preview's guard), not fall
     # through to a silently unthemed login pane inside an otherwise-themed page.

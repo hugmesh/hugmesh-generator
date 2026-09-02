@@ -23,9 +23,9 @@ MATRIX = [
     ("x86", "cloud", "laptop", "test"),
     ("x86", "mesh", "omnibus", "prod"),
     ("rpi5", "standalone", "generic", "test"),
-    ("rpi5", "mesh", "be", "prod"),
+    ("rpi5", "mesh", "backend", "prod"),
     ("frite", "cloud", "frite", "test"),
-    ("jetson", "mesh", "edge_ai", "prod"),
+    ("jetson", "mesh", "edge-ai", "prod"),
 ]
 
 
@@ -73,7 +73,7 @@ def test_print_command_subprocess_smoke(tmp_path, platform, mode, role, env):
 
 def test_print_command_config_round_trips_cli_args(tmp_path):
     """The printed command must embed exactly to_cli_args() for the loaded config."""
-    cfg, path = _write_cfg(tmp_path, "rpi5", "mesh", "fe", "prod")
+    cfg, path = _write_cfg(tmp_path, "rpi5", "mesh", "frontend", "prod")
     reloaded = ImageConfig.load(path)
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
     r = subprocess.run(
@@ -251,7 +251,7 @@ def test_print_command_headscale_url_env_passthrough(tmp_path):
 def test_print_command_new_option_fields_flow_through(tmp_path):
     """A representative slice of the newly fielded options (G1/G4/G5/G23/G25/G26)
     rides a saved config through the headless path onto the printed command."""
-    cfg = ImageConfig(mode="mesh", role="be", platform="x86",
+    cfg = ImageConfig(mode="mesh", role="backend", platform="x86",
                       cluster_domain="acme.example", release_state="public",
                       secure_boot="off", grow="16G", hostname="myhost",
                       build_img="off", installer_iso=True)
@@ -406,7 +406,7 @@ def test_print_specs_emits_materialized_flat_specs(tmp_path):
     wl = WorklistConfig(
         base=ImageConfig(mode="mesh", brand="acme", local_pass="s3cret"),
         entries=[WorklistEntry(id="omnibus.x86", role="omnibus", platform="x86"),
-                 WorklistEntry(id="be.rpi5", role="be", platform="rpi5")])
+                 WorklistEntry(id="backend.rpi5", role="backend", platform="rpi5")])
     p = tmp_path / "wl.json"
     p.write_text(json.dumps(wl.to_dict()), encoding="utf-8")
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
@@ -418,7 +418,7 @@ def test_print_specs_emits_materialized_flat_specs(tmp_path):
     assert r.returncode == 0, r.stderr
     specs = [json.loads(line) for line in r.stdout.splitlines() if line.strip()]
     assert len(specs) == 2
-    assert [(s["role"], s["platform"]) for s in specs] == [("omnibus", "x86"), ("be", "rpi5")]
+    assert [(s["role"], s["platform"]) for s in specs] == [("omnibus", "x86"), ("backend", "rpi5")]
     # each spec is a real flat ImageConfig that --print-command accepts, with secrets blanked
     for s in specs:
         assert s.get("local_pass", "") == ""
@@ -458,7 +458,7 @@ def _flag_value(command_line, flag):
     return argv[argv.index(flag) + 1] if flag in argv else None
 
 
-@pytest.mark.parametrize("role", ["pki", "be", "fe", "be+gpu", "omnibus", "edge_ai"])
+@pytest.mark.parametrize("role", ["pki", "backend", "frontend", "backend-gpu", "omnibus", "edge-ai"])
 @pytest.mark.parametrize("bad", ["all", "calamares"])
 def test_print_command_node_never_emits_a_calamares_installer_ui(tmp_path, role, bad):
     """Every x86 mesh node, fed each WANT_CALAMARES-triggering value, must print

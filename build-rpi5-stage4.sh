@@ -51,6 +51,12 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 # the build host's libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
 # shellcheck source=scripts/_passhash-lib.sh
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
+# THE role vocabulary (scripts/_roles-lib.sh) — the SAME declaration the x86, jetson
+# and Studio channels read. rpi5 already spelled the node roles long; what it gains
+# here is accepting `be`/`fe` (the Studio persisted `be/rpi5` and `fe/rpi5` entry ids,
+# so an old worklist only replays if this builder tolerates the short spelling).
+# shellcheck source=scripts/_roles-lib.sh
+source "${SCRIPT_DIR}/scripts/_roles-lib.sh"
 
 # Cross-dracut helper: qemu-aarch64 binfmt registration + the availability
 # predicate the --encrypt-root fail-fast preflight and build_disk_initramfs()'s
@@ -218,7 +224,8 @@ PACKAGES_ADD=""          # --packages-add : atoms to add on top of the derived s
 PACKAGES_DROP=""         # --packages-drop: default-set atoms to remove (mandatory floor honored)
 TIMEZONE="UTC"
 HOSTNAME=""
-ROLE="generic"          # generic | pki | backend | frontend | desktop
+ROLE="generic"          # generic | pki | backend | frontend | desktop  (unchanged;
+                        # be/fe are accepted aliases — see scripts/_roles-lib.sh)
 DESKTOP="none"          # derived: 'light' for --role desktop, else none (--print-plan/banner display only)
 CLUSTER_DOMAIN="hugmesh.net"
 # Orchestration superdomain (WS-SUPER-B): the mesh control plane's MagicDNS suffix every
@@ -644,6 +651,13 @@ OPTIONS
         Default: (Gentoo arm64 OpenRC autobuilds)
 
   System
+    -r, --role ROLE
+        Node role. One of: generic | pki | backend | frontend | desktop.
+        The old short x86 spellings are ACCEPTED here too, forever, and are
+        normalized at parse time: be=backend, fe=frontend. (One vocabulary
+        across every platform — scripts/_roles-lib.sh.)
+        Default: generic
+
     -H, --hostname NAME
         Target system hostname.
         Default: gentoo-<board>  (gentoo-rpi5 for --board rpi5 [DEFAULT],
@@ -1257,11 +1271,16 @@ fi
 # prerequisite check (xorrisofs) and the Phase 5 gate keep working unchanged.
 if ${BUILD_ISO}; then SKIP_ISO=false; else SKIP_ISO=true; fi
 
-# Validate role and derive a default hostname from it
+# Validate role and derive a default hostname from it. ONE normalization point:
+# every accepted spelling folds to its canonical token here, so nothing downstream
+# (the case block, the artifact name, /etc/hugmesh/role) sees two spellings.
+ROLE="$(hugmesh_role_validate "${ROLE}" rpi5)" || exit 1
 case "${ROLE}" in
     generic|pki|backend|frontend) ;;
     desktop) ROLE_CLIENT=true; DESKTOP="light" ;;
-    *) echo "ERROR: --role must be one of: generic pki backend frontend desktop" >&2; exit 1 ;;
+    # UNREACHABLE via the CLI (validate ran first); fail-closed net for drift between
+    # this block and HUGMESH_ROLES_RPI5 in scripts/_roles-lib.sh.
+    *) echo "ERROR: internal: role '${ROLE}' passed validation but has no arm here — the case block has drifted from HUGMESH_ROLES_RPI5" >&2; exit 1 ;;
 esac
 
 # ── --board rpi3 is DESKTOP-ONLY (Phase 8) ─────────────────────────────────
@@ -1289,11 +1308,9 @@ else
 fi
 
 if [ -z "${HOSTNAME}" ]; then
-    case "${ROLE}" in
-        # "gentoo-${BOARD}" -> "gentoo-rpi5" unchanged for the DEFAULT board.
-        generic) HOSTNAME="gentoo-${BOARD}" ;;
-        *)       HOSTNAME="${BRAND}-${ROLE}" ;;
-    esac
+    # "gentoo-${BOARD}" for `generic` (the ONE role whose default drops the brand
+    # entirely), "${BRAND}-${ROLE}" otherwise — both declared in _roles-lib.sh.
+    HOSTNAME="$(hugmesh_role_hostname rpi5 "${ROLE}" "${BRAND}" "${BOARD}")"
 fi
 
 # ── STANDALONE posture (composable onto --role desktop only — every OTHER

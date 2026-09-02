@@ -472,7 +472,7 @@ def test_delete_active_session_refused_with_warning(monkeypatch, qapp, wiz, tmp_
 
 def test_delete_all_finished_prunes_but_keeps_running(monkeypatch, qapp, wiz, tmp_path):
     _seed_sessions(tmp_path)                        # 2 terminal records
-    running = bs.new_session(synthesize(_standalone_cfg(tmp_path, role="be")),
+    running = bs.new_session(synthesize(_standalone_cfg(tmp_path, role="backend")),
                              GENERATOR_DIR)
     bs.start(running)                              # active -> must be skipped
     wiz.cfg.output_dir = str(tmp_path / "out")

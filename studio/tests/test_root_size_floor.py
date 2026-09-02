@@ -15,14 +15,14 @@ def test_x86_desktop_floors_mirror_builder():
 def test_x86_node_floors_mirror_builder():
     # build-x86:1734-1736: GPU roles get the Mesa/Vulkan bump
     assert rsf.min_root_mib("x86", "mesh", "pki") == 14336
-    assert rsf.min_root_mib("x86", "mesh", "be+gpu") == 20480
+    assert rsf.min_root_mib("x86", "mesh", "backend-gpu") == 20480
     assert rsf.min_root_mib("x86", "mesh", "omnibus") == 20480
 
 
 def test_arm_floors_mirror_builders():
     assert rsf.min_root_mib("rpi5", "mesh", "pki") == 9216       # build-rpi5:203
     assert rsf.min_root_mib("jetson", "mesh", "full") == 20480   # build-jetson:531
-    assert rsf.min_root_mib("jetson", "mesh", "gpu-host") == 14336
+    assert rsf.min_root_mib("jetson", "mesh", "backend-gpu") == 14336
     assert rsf.min_root_mib("frite", "cloud", "desktop") == 3072
     assert rsf.min_root_mib("orangepizero2", "mesh", "pki") == 2048
 

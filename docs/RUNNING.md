@@ -314,13 +314,13 @@ Qt-free headless faces".
 | Arch | Roles | Builder |
 |---|---|---|
 | **RPi5 (aarch64)** | `pki`, `backend`, `frontend` | `build-rpi5-stage4.sh --role <r>` |
-| **x86_64 (amd64)** | `pki`, `be`, `fe`, `be+gpu`, `omnibus` | `build-x86-host-stage4.sh --role <r>` |
+| **x86_64 (amd64)** | `pki`, `backend`, `frontend`, `backend-gpu`, `omnibus` | `build-x86-host-stage4.sh --role <r>` |
 
 Notes from the code:
-- On x86, `be`=backend, `fe`=frontend; **`host` is an alias for `be+gpu`** (the
+- On x86, `be`=backend, `fe`=frontend; **`host` is an alias for `backend-gpu`** (the
   default x86 role, the GPU worker). `omnibus` is the opt-in all-namespaces-on-one
   node image.
-- `build-all-roles.sh` builds **Pi `pki backend frontend` + x86 `pki be fe be+gpu`**
+- `build-all-roles.sh` builds **Pi `pki backend frontend` + x86 `pki backend frontend backend-gpu`**
   by default; the x86 `omnibus` is opt-in (`X86_OMNIBUS=1`, `X86_ALL=1`, or an
   explicit `X86_ROLES="…"`; `SKIP_X86=1` for Pi only).
 
@@ -330,10 +330,10 @@ Notes from the code:
 make local                 # the LAN .test fleet: ENV=test + brands/local.conf (hugmesh.test)
 make prod                  # the PROD fleet: ENV=prod, real domain (announced)
 
-make build-all             # default fleet (3 Pi + x86 pki/be/fe/be+gpu); ENV defaults to test
+make build-all             # default fleet (3 Pi + x86 pki/backend/frontend/backend-gpu); ENV defaults to test
 make rebuild               # wipe ./out first, then build the whole fleet
 make rpi                   # all 3 Pi roles          make rpi-frontend    # one Pi role
-make x86                   # the 4 x86 roles          make x86-be+gpu      # one x86 role (also x86-pki, x86-omnibus)
+make x86                   # the 4 x86 roles          make x86-backend-gpu      # one x86 role (also x86-pki, x86-omnibus)
 make omnibus               # the opt-in x86 all-in-one node
 ```
 
@@ -342,7 +342,7 @@ Branding + ENV overrides thread through every target:
 ```bash
 make build-all BRAND=acme DOMAIN=acme.example      # → --config brands/acme.conf --cluster-domain acme.example
 make build-all ENV=prod BRAND=acme
-make x86-be+gpu IMG_FLAGS='--no-iso' JOBS=16        # img only, 16 jobs
+make x86-backend-gpu IMG_FLAGS='--no-iso' JOBS=16        # img only, 16 jobs
 make build-all NATIVE=1                              # run the scripts directly (local Gentoo / inside the builder)
 ```
 
@@ -367,7 +367,7 @@ sudo ./scripts/build-all-roles.sh -j "$(nproc)"
 
 # …or one role at a time
 sudo ./build-rpi5-stage4.sh --role pki -j "$(nproc)"           # Pi
-sudo ./build-x86-host-stage4.sh --role be+gpu -j "$(nproc)"    # x86 GPU host (native amd64 Gentoo)
+sudo ./build-x86-host-stage4.sh --role backend-gpu -j "$(nproc)"    # x86 GPU host (native amd64 Gentoo)
 
 # add ENV / brand / knobs (flags override the profile):
 sudo ./build-rpi5-stage4.sh --role backend --env prod \
@@ -383,7 +383,7 @@ Full flag reference: `./build-rpi5-stage4.sh --help` and
 
 | Flag | Default | Notes |
 |---|---|---|
-| `-r, --role` | `generic` (Pi) / `be+gpu` (x86) | sets hostname, services, GitOps payload |
+| `-r, --role` | `generic` (Pi) / `backend-gpu` (x86) | sets hostname, services, GitOps payload |
 | `--env test\|prod` | `test` | baked build ENV (see §2e) |
 | `-C, --config FILE` | auto `./brand.conf` | source a brand profile |
 | `--brand` / `--brand-title` / `--org` / `--cluster-domain` | profile/defaults | per-field rebrand overrides |
@@ -621,7 +621,7 @@ root**; only the destructive write needs root.
 sudo ./scripts/flash-disk.sh --role pki --arch arm64 /dev/sda
 
 # x86 host image to NVMe, no prompt
-sudo ./scripts/flash-disk.sh --role host --arch x86 --no-confirm /dev/nvme0n1
+sudo ./scripts/flash-disk.sh --role backend-gpu --arch x86 --no-confirm /dev/nvme0n1
 
 # also write a separate KEYS stick in the same run (different device!)
 sudo ./scripts/flash-disk.sh --role backend --arch arm64 \
@@ -737,15 +737,15 @@ NVMe Gen 3 (test your drive first).
 ### 9b. x86_64 (amd64) — the GPU host / omnibus
 
 ```bash
-# build the default GPU worker (host = be+gpu)
-make x86-be+gpu                               # or: sudo ./build-x86-host-stage4.sh --role be+gpu
+# build the default GPU worker (host = backend-gpu)
+make x86-backend-gpu                               # or: sudo ./build-x86-host-stage4.sh --role backend-gpu
 # or the all-in-one single node:
 make omnibus                                  # or: sudo ./build-x86-host-stage4.sh --role omnibus
 # keys for an x86 worker use the matching gen-provision-keys role:
-./scripts/gen-provision-keys.sh -r host -o keys-host         # be+gpu worker
+./scripts/gen-provision-keys.sh -r host -o keys-host         # backend-gpu worker
 ./scripts/gen-provision-keys.sh -r pki  -o keys-omnibus      # omnibus = single-node control plane
 # flash + KEYS as above with --arch x86; the x86 .img is a UEFI GPT disk (ESP + ext4 root)
-sudo ./scripts/flash-disk.sh --role host --arch x86 /dev/nvme0n1
+sudo ./scripts/flash-disk.sh --role backend-gpu --arch x86 /dev/nvme0n1
 ```
 
 ---
@@ -755,7 +755,7 @@ sudo ./scripts/flash-disk.sh --role host --arch x86 /dev/nvme0n1
 ```bash
 # QEMU integration test — boots a built image with a synthetic KEYS disk
 sudo ./tests/qemu/run-qemu-test.sh --role pki
-make qemu-rpi ROLE=frontend          # or qemu-x86 ROLE=be+gpu
+make qemu-rpi ROLE=frontend          # or qemu-x86 ROLE=backend-gpu
 
 # first-boot provisioning emulation (no block device, no kernel boot)
 ./tests/boot/emulate-firstboot.sh                 # all four roles

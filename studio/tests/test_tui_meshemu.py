@@ -75,9 +75,9 @@ def test_table_has_one_row_per_planned_device_in_boot_order(gen):
     j = _at_table(gen)
     plan = me.plan_mesh(qemu_tests.discover_sessions(gen)[0], gen)
     _headers, rows = meshemu.device_table(plan, [])
-    assert [r[1] for r in rows] == ["rpi5/pki", "x86/be", "x86/fe"]  # Pi first
+    assert [r[1] for r in rows] == ["rpi5/pki", "x86/backend", "x86/frontend"]  # Pi first
     text = "\n".join(j.lines())
-    for label in ("rpi5/pki", "x86/be", "x86/fe"):
+    for label in ("rpi5/pki", "x86/backend", "x86/frontend"):
         assert label in text
     for section in me.SECTIONS:
         assert section in text                       # the four section columns
@@ -220,7 +220,7 @@ def test_main_meshemu_flag_prints_the_status_list(gen):
                       inp=io.StringIO(""), out=out)
     assert rc == 0
     text = out.getvalue()
-    assert "rpi5/pki" in text and "x86/fe" in text and "front door" in text
+    assert "rpi5/pki" in text and "x86/frontend" in text and "front door" in text
 
 
 def test_main_meshemu_unknown_session_exits_2(gen, capsys):

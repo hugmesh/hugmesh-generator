@@ -6,9 +6,9 @@
 
 `docs/catalog/image-catalog.json` is the image GRAMMAR and `tests/build-matrix/matrix.tsv` is a curated 150-cell SAMPLE of it. This table is the third thing neither of them is: the FULL cross-product of that grammar — every image the platform advertises — with, per image, which of the six build channels can actually express it.
 
-- **125 distinct images** (x 2 hardening envs = 250 builds)
+- **131 distinct images** (x 2 hardening envs = 262 builds)
 - **150 matrix.tsv cells** (67 distinct, env-collapsed) — the sampled subset `tests/build-matrix/check.sh` proves across five channels
-- **62 images with a channel gap**, 0 phantom, 0 undocumented
+- **68 images with a channel gap**, 0 phantom, 0 undocumented
 
 Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder flags) &nbsp; ❌ not expressible
 
@@ -16,12 +16,12 @@ Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder f
 
 | channel | source of truth | ✅ | ⚠️ | ❌ |
 | --- | --- | ---: | ---: | ---: |
-| `cli` | build-*-stage4.sh --print-plan | 125 | 0 | 0 |
-| `make` | Makefile targets (make -n) | 79 | 46 | 0 |
-| `menu` | scripts/build-menu.sh ui_menu pickers | 79 | 40 | 6 |
-| `gui` | studio/hugmesh_studio --print-command | 125 | 0 | 0 |
-| `job` | docker/build-image.sh resolve_build_target() | 81 | 3 | 41 |
-| `worklist` | hugmesh-worklist/v1 envelope -> materialize() | 125 | 0 | 0 |
+| `cli` | build-*-stage4.sh --print-plan | 131 | 0 | 0 |
+| `make` | Makefile targets (make -n) | 82 | 49 | 0 |
+| `menu` | scripts/build-menu.sh ui_menu pickers | 82 | 40 | 9 |
+| `gui` | studio/hugmesh_studio --print-command | 131 | 0 | 0 |
+| `job` | docker/build-image.sh resolve_build_target() | 81 | 9 | 41 |
+| `worklist` | hugmesh-worklist/v1 envelope -> materialize() | 131 | 0 | 0 |
 
 ## The inventory
 
@@ -75,35 +75,41 @@ Legend: ✅ first-class selection &nbsp; ⚠️ escape-hatch only (raw builder f
 | `cloud/x86/desktop/thin` | cloud | x86 | `desktop` | `desktop` | — | — | thin | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ⚠️ | ❌ | ✅ | ✅ | ✅ |
 | `cloud/x86/laptop/full` | cloud | x86 | `laptop` | `laptop` | — | — | full | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ⚠️ | ❌ | ✅ | ✅ | ✅ |
 | `cloud/x86/laptop/thin` | cloud | x86 | `laptop` | `laptop` | — | — | thin | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/jetson/edge_ai/orin-nano` | mesh | jetson | `edge_ai` | `edge_ai` | orin-nano | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/jetson/edge_ai/orin-nano-4gb` | mesh | jetson | `edge_ai` | `edge_ai` | orin-nano-4gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/jetson/edge_ai/orin-nx-16gb` | mesh | jetson | `edge_ai` | `edge_ai` | orin-nx-16gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/jetson/edge_ai/orin-nx-8gb` | mesh | jetson | `edge_ai` | `edge_ai` | orin-nx-8gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/jetson/full/orin-nano` | mesh | jetson | `full` | `full` | orin-nano | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/jetson/full/orin-nano-4gb` | mesh | jetson | `full` | `full` | orin-nano-4gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/jetson/full/orin-nx-16gb` | mesh | jetson | `full` | `full` | orin-nx-16gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/jetson/full/orin-nx-8gb` | mesh | jetson | `full` | `full` | orin-nx-8gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/jetson/gpu-host/orin-nano` | mesh | jetson | `gpu-host` | `gpu-host` | orin-nano | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/jetson/gpu-host/orin-nano-4gb` | mesh | jetson | `gpu-host` | `gpu-host` | orin-nano-4gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/jetson/gpu-host/orin-nx-16gb` | mesh | jetson | `gpu-host` | `gpu-host` | orin-nx-16gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/jetson/gpu-host/orin-nx-8gb` | mesh | jetson | `gpu-host` | `gpu-host` | orin-nx-8gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/jetson/backend-gpu/orin-nano` | mesh | jetson | `backend-gpu` | `backend-gpu` | orin-nano | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/jetson/backend-gpu/orin-nano-4gb` | mesh | jetson | `backend-gpu` | `backend-gpu` | orin-nano-4gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/jetson/backend-gpu/orin-nx-16gb` | mesh | jetson | `backend-gpu` | `backend-gpu` | orin-nx-16gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/jetson/backend-gpu/orin-nx-8gb` | mesh | jetson | `backend-gpu` | `backend-gpu` | orin-nx-8gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/jetson/edge-ai/orin-nano` | mesh | jetson | `edge-ai` | `edge-ai` | orin-nano | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/jetson/edge-ai/orin-nano-4gb` | mesh | jetson | `edge-ai` | `edge-ai` | orin-nano-4gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/jetson/edge-ai/orin-nx-16gb` | mesh | jetson | `edge-ai` | `edge-ai` | orin-nx-16gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/jetson/edge-ai/orin-nx-8gb` | mesh | jetson | `edge-ai` | `edge-ai` | orin-nx-8gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/jetson/jetson-desktop/orin-nano` | mesh | jetson | `jetson-desktop` | `desktop` | orin-nano | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/jetson/jetson-desktop/orin-nano-4gb` | mesh | jetson | `jetson-desktop` | `desktop` | orin-nano-4gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/jetson/jetson-desktop/orin-nx-16gb` | mesh | jetson | `jetson-desktop` | `desktop` | orin-nx-16gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/jetson/jetson-desktop/orin-nx-8gb` | mesh | jetson | `jetson-desktop` | `desktop` | orin-nx-8gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/rpi5/be/rpi4` | mesh | rpi5 | `be` | `backend` | rpi4 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/rpi5/be/rpi5` | mesh | rpi5 | `be` | `backend` | rpi5 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/rpi5/fe/rpi4` | mesh | rpi5 | `fe` | `frontend` | rpi4 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/rpi5/fe/rpi5` | mesh | rpi5 | `fe` | `frontend` | rpi5 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/jetson/omnibus/orin-nano` | mesh | jetson | `omnibus` | `omnibus` | orin-nano | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/jetson/omnibus/orin-nano-4gb` | mesh | jetson | `omnibus` | `omnibus` | orin-nano-4gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/jetson/omnibus/orin-nx-16gb` | mesh | jetson | `omnibus` | `omnibus` | orin-nx-16gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/jetson/omnibus/orin-nx-8gb` | mesh | jetson | `omnibus` | `omnibus` | orin-nx-8gb | — | — | img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/rpi5/backend/rpi4` | mesh | rpi5 | `backend` | `backend` | rpi4 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/rpi5/backend/rpi5` | mesh | rpi5 | `backend` | `backend` | rpi5 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/rpi5/frontend/rpi4` | mesh | rpi5 | `frontend` | `frontend` | rpi4 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/rpi5/frontend/rpi5` | mesh | rpi5 | `frontend` | `frontend` | rpi5 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/pki/rpi4` | mesh | rpi5 | `pki` | `pki` | rpi4 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/pki/rpi5` | mesh | rpi5 | `pki` | `pki` | rpi5 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/rpi5-desktop/rpi3` | mesh | rpi5 | `rpi5-desktop` | `desktop` | rpi3 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/rpi5-desktop/rpi4` | mesh | rpi5 | `rpi5-desktop` | `desktop` | rpi4 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/rpi5/rpi5-desktop/rpi5` | mesh | rpi5 | `rpi5-desktop` | `desktop` | rpi5 | — | — | fs.tar.xz, img, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/x86/be` | mesh | x86 | `be` | `be` | — | — | — | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/x86/be+gpu` | mesh | x86 | `be+gpu` | `be+gpu` | — | — | — | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/x86/edge_ai` | mesh | x86 | `edge_ai` | `edge_ai` | — | — | — | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `mesh/x86/fe` | mesh | x86 | `fe` | `fe` | — | — | — | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/x86/backend` | mesh | x86 | `backend` | `backend` | — | — | — | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/x86/backend-gpu` | mesh | x86 | `backend-gpu` | `backend-gpu` | — | — | — | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/x86/chromebook/full` | mesh | x86 | `chromebook` | `chromebook` | — | — | full | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ⚠️ | ❌ | ✅ | ⚠️ | ✅ |
+| `mesh/x86/chromebook/thin` | mesh | x86 | `chromebook` | `chromebook` | — | — | thin | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ |
+| `mesh/x86/desktop/full` | mesh | x86 | `desktop` | `desktop` | — | — | full | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ |
+| `mesh/x86/desktop/thin` | mesh | x86 | `desktop` | `desktop` | — | — | thin | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ⚠️ | ❌ | ✅ | ⚠️ | ✅ |
+| `mesh/x86/edge-ai` | mesh | x86 | `edge-ai` | `edge-ai` | — | — | — | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/x86/frontend` | mesh | x86 | `frontend` | `frontend` | — | — | — | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `mesh/x86/laptop/full` | mesh | x86 | `laptop` | `laptop` | — | — | full | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ⚠️ | ❌ | ✅ | ⚠️ | ✅ |
+| `mesh/x86/laptop/thin` | mesh | x86 | `laptop` | `laptop` | — | — | thin | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ |
 | `mesh/x86/omnibus` | mesh | x86 | `omnibus` | `omnibus` | — | — | — | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh/x86/pki` | mesh | x86 | `pki` | `pki` | — | — | — | fs.tar.xz, img, live.iso, stage4.tar.xz | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `standalone/frite/frite/la-frite/both/light` | standalone | frite | `frite` | `—` | la-frite | both | light | installer.iso, live.iso, stage4.tar.xz | ✅ | ⚠️ | ⚠️ | ✅ | ❌ | ✅ |
@@ -181,6 +187,18 @@ An image one channel can express and another cannot. This is the defect class th
 | `cloud/x86/desktop/thin` | `menu` | ❌ | no desktop picker at all (cannot select desktop=thin) |
 | `cloud/x86/laptop/full` | `make` | ⚠️ | `make x86-laptop` recipe omits --desktop full (reachable only via STANDALONE_FLAGS) |
 | `cloud/x86/laptop/full` | `menu` | ❌ | no desktop picker at all (cannot select desktop=full) |
+| `mesh/x86/chromebook/full` | `job` | ⚠️ | HARDWARE_CLASS=x86.chromebook is rejected for the mode-natural IMAGE_TYPE=primary; reachable only as IMAGE_TYPE=client (mislabelled request) |
+| `mesh/x86/chromebook/full` | `make` | ⚠️ | `make x86-chromebook` recipe omits --desktop full (reachable only via STANDALONE_FLAGS) |
+| `mesh/x86/chromebook/full` | `menu` | ❌ | no desktop picker at all (cannot select desktop=full) |
+| `mesh/x86/chromebook/thin` | `job` | ⚠️ | HARDWARE_CLASS=x86.chromebook is rejected for the mode-natural IMAGE_TYPE=primary; reachable only as IMAGE_TYPE=client (mislabelled request) |
+| `mesh/x86/desktop/full` | `job` | ⚠️ | HARDWARE_CLASS=x86.desktop is rejected for the mode-natural IMAGE_TYPE=primary; reachable only as IMAGE_TYPE=client (mislabelled request) |
+| `mesh/x86/desktop/thin` | `job` | ⚠️ | HARDWARE_CLASS=x86.desktop is rejected for the mode-natural IMAGE_TYPE=primary; reachable only as IMAGE_TYPE=client (mislabelled request) |
+| `mesh/x86/desktop/thin` | `make` | ⚠️ | `make x86-desktop` recipe omits --desktop thin (reachable only via STANDALONE_FLAGS) |
+| `mesh/x86/desktop/thin` | `menu` | ❌ | no desktop picker at all (cannot select desktop=thin) |
+| `mesh/x86/laptop/full` | `job` | ⚠️ | HARDWARE_CLASS=x86.laptop is rejected for the mode-natural IMAGE_TYPE=primary; reachable only as IMAGE_TYPE=client (mislabelled request) |
+| `mesh/x86/laptop/full` | `make` | ⚠️ | `make x86-laptop` recipe omits --desktop full (reachable only via STANDALONE_FLAGS) |
+| `mesh/x86/laptop/full` | `menu` | ❌ | no desktop picker at all (cannot select desktop=full) |
+| `mesh/x86/laptop/thin` | `job` | ⚠️ | HARDWARE_CLASS=x86.laptop is rejected for the mode-natural IMAGE_TYPE=primary; reachable only as IMAGE_TYPE=client (mislabelled request) |
 | `standalone/frite/frite/la-frite/both/light` | `job` | ❌ | resolve_build_target rejects every IMAGE_TYPE for HARDWARE_CLASS=frite.la-frite.both |
 | `standalone/frite/frite/la-frite/both/light` | `make` | ⚠️ | `make frite` recipe omits --skip-mesh (standalone posture) (reachable only via STANDALONE_FLAGS) |
 | `standalone/frite/frite/la-frite/both/light` | `menu` | ⚠️ | no standalone-posture selection; --skip-mesh/--standalone only via 'Extra builder flags' |

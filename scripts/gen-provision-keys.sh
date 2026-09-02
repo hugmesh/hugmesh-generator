@@ -28,6 +28,12 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # the host libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
 # shellcheck source=scripts/_passhash-lib.sh
 source "${SCRIPT_DIR}/_passhash-lib.sh"
+# THE role vocabulary (scripts/_roles-lib.sh). -r here names a KEYS PROFILE, which is
+# a different (smaller) axis than a node ROLE — but an operator reads a role off a
+# builder banner and types it here, so a role token now folds to its profile through
+# the ONE HUGMESH_ROLE_KEYPROFILE table instead of being rejected.
+# shellcheck source=scripts/_roles-lib.sh
+source "${SCRIPT_DIR}/_roles-lib.sh"
 
 # brand.conf / brands/<BRAND>.conf may set CA_CERT/CA_KEY/CA_KEY_PASS (and BRAND).
 # Source them so the pki-role kubeadm-CA seeding decision below sees a CA set via
@@ -149,8 +155,14 @@ Options:
   -o, --out DIR       Output directory. Default: ${OUT_DIR}
   -t, --template DIR  Template to copy. Default: ${TEMPLATE}
   -u, --admin NAME    Admin username. Default: admin
-  -r, --role ROLE     pki | backend | frontend | host | control-plane-additional |
-                      mesh-extension. Default: pki
+  -r, --role ROLE     A KEYS PROFILE: pki | backend | frontend | host |
+                      control-plane-additional | mesh-extension. Default: pki
+                      A node ROLE token is also accepted and folded to its profile
+                      (backend-gpu->backend, omnibus->pki, edge-ai->host, generic->
+                      host, and every old spelling of those) — one vocabulary, see
+                      scripts/_roles-lib.sh. The six profile names above always mean
+                      the PROFILE: `-r host` is still the plain worker profile, never
+                      the backend-gpu role that spells itself `host` on the CLI.
                       (control-plane-additional = a 2nd/3rd HA control-plane that
                        kubeadm join --control-plane's the existing cluster)
                       (mesh-extension = an ADMIN-owned Layer-B registry-ENFORCED
@@ -303,6 +315,20 @@ if [ -d "${OUT_DIR}/vault-seed/device" ]; then
     fi
 fi
 
+# Fold a node ROLE onto its KEYS PROFILE. The six profile names are matched FIRST
+# and pass through untouched: `host` is a profile here (provision.host.json, the
+# plain worker) and must not be re-pointed at `backend` just because the x86 CLI also
+# accepts `host` as a spelling of the backend-gpu role. Only a token that is NOT a
+# profile is looked up in HUGMESH_ROLE_KEYPROFILE.
+case "${ROLE}" in
+    pki|backend|frontend|host|control-plane-additional|mesh-extension) : ;;
+    *)
+        _kp="$(hugmesh_role_keyprofile "$(hugmesh_role_canonicalize "${ROLE}" || echo "${ROLE}")" || true)"
+        if [ -n "${_kp}" ]; then
+            echo "==> --role '${ROLE}' is a node role; using its KEYS profile '${_kp}'" >&2
+            ROLE="${_kp}"
+        fi ;;
+esac
 echo "==> Building ${OUT_DIR} from ${TEMPLATE} (role=${ROLE})"
 rm -rf "${OUT_DIR}"
 cp -r "${TEMPLATE}" "${OUT_DIR}"
@@ -323,7 +349,7 @@ case "${ROLE}" in
         # device_registry block below so provision_device_registry() selects
         # owner_type=ADMIN. This is the ONLY role that emits KEYS/device-registry/.
         cp "${OUT_DIR}/examples/provision.host.json" "${OUT_DIR}/provision.json" ;;
-    *) echo "ERROR: --role must be pki|backend|frontend|host|control-plane-additional|mesh-extension" >&2; exit 1 ;;
+    *) echo "ERROR: --role must be a KEYS profile (pki|backend|frontend|host|control-plane-additional|mesh-extension) or a node role that maps to one (${HUGMESH_ROLES_CANONICAL}); got '${ROLE}'" >&2; exit 1 ;;
 esac
 rm -rf "${OUT_DIR}/examples"
 

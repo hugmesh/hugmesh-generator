@@ -75,10 +75,14 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 # legacy/spelling aliases that fold onto a canonical arm. Allowlisted explicitly (never
 # skipped by a blanket "unknown token" rule) so a NEW builder role token cannot appear
 # without this guard going RED and forcing a decision about whether Studio should offer it.
+# There are no builder-only role tokens left: every accepted spelling folds in
+# scripts/_roles-lib.sh BEFORE the case block runs, so the arms are exactly the
+# canonical roles. `*` is the fail-closed internal net that used to be the
+# `--role must be one of` catch-all. Kept as a named, one-entry set rather than
+# deleted so a NEW builder-only token still forces a decision here instead of
+# quietly joining the arms.
 BUILDER_ONLY_ROLE_TOKENS = {
-    "edge-ai",          # dash spelling of edge_ai (same arm)
-    "standalone-full",  # legacy spelling of standalone-thick (same arm)
-    "*",                # the `err "--role must be one of..."` catch-all arm
+    "*",                # the fail-closed "validated but no arm" internal net
 }
 
 
@@ -108,9 +112,18 @@ def _role_case_block(text: str) -> str:
     owning block, so the assertion below is unchanged and green — a free tightening."""
     blocks = [m.group(1) for m in re.finditer(
         r'case\s+"\$\{ROLE\}"\s+in\n(.*?)\n\s*esac', text, re.S)]
-    assert len(blocks) >= 4, (
-        "expected at least FOUR `case \"${ROLE}\" in` blocks in build-x86 (alias fold, role "
-        f"block, ROLE_TAG fold, indented keys-hints block); found {len(blocks)} — the parser "
+    # TWO now, not four. The alias fold (`host) ROLE="be+gpu"`) and the ROLE_TAG fold
+    # (`be+gpu) ROLE_TAG="host"`) were both DELETED by the one-vocabulary change:
+    # spellings fold once, in scripts/_roles-lib.sh, and `backend-gpu` is already
+    # filename-safe so the tag is the identity. What remains is the role block itself
+    # plus the INDENTED keys-hints block inside the summary function — and that
+    # indented one is exactly why the `esac` is matched as `\n\s*esac` rather than
+    # `\nesac`: a column-0-only match silently drops it from the parser's universe,
+    # so H1 below would read "exactly ONE block assigns ROLE_CLIENT" while actually
+    # meaning "exactly one of the column-0 blocks does".
+    assert len(blocks) >= 2, (
+        "expected at least TWO `case \"${ROLE}\" in` blocks in build-x86 (the role block "
+        f"and the indented keys-hints block); found {len(blocks)} — the parser "
         "has gone partially blind (an indented `esac` no longer matching would do it).")
     owning = [b for b in blocks if re.search(r"ROLE_CLIENT=", b)]
     assert len(owning) == 1, (
@@ -238,17 +251,51 @@ def test_mutation_flipping_a_node_arm_bites():
     assert builder_clients != studio_desktops, "set-equality guard failed to bite"
 
 
-def test_mutation_first_match_block_selection_would_be_vacuous():
-    """H1 proof: the FIRST `case \"${ROLE}\" in` block is the legacy `host` alias fold and
-    contains no ROLE_CLIENT — a first-match parser sees an empty world and passes."""
+def test_mutation_column_zero_esac_would_narrow_the_parsers_universe():
+    r"""H1 proof, REVISED for the one-vocabulary change.
+
+    H1's original shape was "the FIRST `case \"${ROLE}\" in` block is the legacy `host`
+    alias fold, so a first-match parser sees no ROLE_CLIENT and passes vacuously". That
+    fold is GONE — spellings now fold once in scripts/_roles-lib.sh, and the ROLE_TAG
+    fold went with `be+gpu`'s `+`. Two blocks remain: the role block at column 0 and
+    the keys-hints block INDENTED inside the build-summary function.
+
+    The hazard that survives is the one the `\n\s*esac` spelling exists for. A
+    column-0-only `\nesac` finds strictly FEWER blocks, so `_role_case_block`'s
+    "exactly ONE block assigns ROLE_CLIENT" assertion would be true of a smaller
+    universe than it claims — and a ROLE_CLIENT assignment added to the indented block
+    would be undetected drift in the very invariant that assertion protects. Proven by
+    running both regexes and requiring the strict one to see more.
+    """
     text = _builder_text("x86")
-    blocks = [m.group(1) for m in re.finditer(
-        r'case\s+"\$\{ROLE\}"\s+in\n(.*?)\nesac', text, re.S)]
-    assert len(blocks) >= 3, f"expected >=3 role case blocks, got {len(blocks)}"
-    assert "ROLE_CLIENT=" not in blocks[0], (
-        "the first case block now assigns ROLE_CLIENT — H1's shape changed; re-check that "
-        "_role_case_block still selects the right one")
+    narrow = re.findall(r'case\s+"\$\{ROLE\}"\s+in\n(.*?)\nesac', text, re.S)
+    wide = re.findall(r'case\s+"\$\{ROLE\}"\s+in\n(.*?)\n\s*esac', text, re.S)
+    assert len(wide) > len(narrow), (
+        f"a column-0-only `esac` no longer hides a block (narrow={len(narrow)}, "
+        f"wide={len(wide)}) — H1's shape changed; re-check that _role_case_block's "
+        "`exactly ONE` assertion still covers every block that could assign ROLE_CLIENT")
     assert "ROLE_CLIENT=" in _role_case_block(text), "selector picked a block with no ROLE_CLIENT"
+
+
+def test_the_alias_folds_left_the_builder_for_the_shared_vocabulary():
+    """The two folds this file used to parse are GONE, and that is the point.
+
+    `host) ROLE="be+gpu"` and `be+gpu) ROLE_TAG="host"` were the inverse of each other:
+    the token folded ONE way on the way in and back the OTHER way on the way out, so
+    the artifact name and the CLI token could never agree. Both are deleted — validation
+    and folding happen once, in scripts/_roles-lib.sh, and `backend-gpu` is filename-safe
+    so ROLE_TAG is the identity. Assert BOTH the removal and the replacement: a builder
+    that dropped the fold WITHOUT calling the shared validator would accept nothing.
+    """
+    text = _builder_text("x86")
+    assert not re.search(r'^\s*host\)\s*ROLE=', text, re.M), \
+        "the legacy `host` alias fold is back in build-x86 — aliases belong in scripts/_roles-lib.sh"
+    assert not re.search(r'ROLE_TAG="host"', text), \
+        "the be+gpu->host artifact-tag translation is back; backend-gpu needs no such fold"
+    assert 'hugmesh_role_validate "${ROLE}" x86' in text, \
+        "build-x86-host-stage4.sh no longer validates/normalizes --role through the shared vocabulary"
+    assert 'source "${SCRIPT_DIR}/scripts/_roles-lib.sh"' in text, \
+        "build-x86-host-stage4.sh no longer sources the role vocabulary"
 
 
 def test_mutation_anchored_grep_would_be_vacuous():

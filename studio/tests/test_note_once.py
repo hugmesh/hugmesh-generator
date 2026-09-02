@@ -46,9 +46,9 @@ def test_identical_note_is_suppressed_after_the_first():
 def test_a_genuinely_different_note_still_reports():
     out = _cap()
     emit_note_once("note about role 'pki'", stream=out)
-    emit_note_once("note about role 'be'", stream=out)
+    emit_note_once("note about role 'backend'", stream=out)
     body = out.getvalue()
-    assert "role 'pki'" in body and "role 'be'" in body
+    assert "role 'pki'" in body and "role 'backend'" in body
 
 
 def test_empty_or_none_is_a_noop():
@@ -73,11 +73,11 @@ def test_the_real_resolver_note_repeats_only_once_across_many_materializations()
 def test_the_note_still_fires_once_per_distinct_role():
     """Suppression must not hide a DIFFERENT rewrite — the note text carries the role."""
     out = _cap()
-    for role in ("pki", "be", "fe", "omnibus"):
+    for role in ("pki", "backend", "frontend", "omnibus"):
         cfg = ImageConfig(mode="mesh", role=role, platform="x86", installer_ui="all")
         emit_note_once(resolve_installer_ui_default(cfg), stream=out)
     body = out.getvalue()
-    for role in ("pki", "be", "fe", "omnibus"):
+    for role in ("pki", "backend", "frontend", "omnibus"):
         assert f"{role!r}" in body, f"the {role} rewrite was swallowed"
     assert body.count("installer_ui") == 4
 
