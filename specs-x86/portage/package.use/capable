@@ -74,3 +74,9 @@ media-libs/gegl lcms cairo
 media-libs/mesa wayland
 x11-libs/gtk+ wayland
 media-video/ffmpeg opus x264
+# kdeconnect pulls kde-frameworks/kdnssd, whose avahi backend hard-requires
+# net-dns/avahi[mdnsresponder-compat] (the Bonjour/DNS-SD compat API). The
+# payload's --autounmask-continue=y would apply this DURING the merge, but
+# pre-seeding it keeps the --pretend plan preview resolvable in one pass
+# (issue #223, session 20260831-183101-a9dc56 AUTOUNMASK-PRETEND dump).
+net-dns/avahi mdnsresponder-compat
