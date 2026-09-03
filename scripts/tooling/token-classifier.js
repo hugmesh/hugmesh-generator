@@ -28,7 +28,13 @@ const spec = JSON.parse(fs.readFileSync(TOKENS_PATH, 'utf8'));
 // when it lands as a direct push, and nothing else noticed a data file getting
 // smaller. So the blocks are REQUIRED here, at require time, before a single
 // predicate is built: an absent, malformed or VACUOUS block throws and takes every
-// consumer down loudly instead of quietly classifying nothing.
+// NODE consumer down loudly instead of quietly classifying nothing.
+//
+// This throw cannot reach the one consumer that does not run node:
+// ingest-foreign-base.sh's (f.2) impersonation screen reads the SAME
+// frozen_protocol_constants block through `jq ... // []`, so it needs — and now has —
+// its own fail-closed check on an empty term set. A require-time guard here is not a
+// backstop for a shell reader of the same file; keep the two in step.
 //
 // `mustExist` = the array must be present and an array (an empty allowlist is
 // fail-CLOSED — nothing gets substituted — so emptiness there is loud on its own).
@@ -41,6 +47,10 @@ const spec = JSON.parse(fs.readFileSync(TOKENS_PATH, 'utf8'));
 // deletion skipped.
 const REQUIRED_SPEC_BLOCKS = {
   allowlist:                  { mustExist: ['live', 'dead', 'reserved_pilot'] },
+  // key_name_regex must be a NON-EMPTY string, not merely present: a missing one makes
+  // `new RegExp(undefined)` compile to /(?:)/ and an empty one compiles to /(?:)/ too —
+  // both match every name, so isDenied() would deny EVERYTHING, including the live
+  // allowlist. Loud beats mysteriously-empty output.
   denylist:                   { mustBeNonEmpty: ['keys'], mustBeNonEmptyString: ['key_name_regex'] },
   frozen_protocol_constants:  { mustBeNonEmpty: ['label_key_namespaces', 'api_groups', 'wire_headers', 'subprotocol_prefixes'] },
   retired_protocol_constants: { mustBeNonEmpty: ['label_key_namespaces', 'wire_headers', 'subprotocol_prefixes'] },

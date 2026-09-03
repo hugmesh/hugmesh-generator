@@ -260,7 +260,41 @@ if command -v node >/dev/null && command -v jq >/dev/null && [ -r "${TOKEN_CLASS
     else
         bad "(d3 control) the classifier copy does not load unmutated — harness broken, the d3 mutations prove nothing"
     fi
-    for _blk in denylist frozen_protocol_constants retired_protocol_constants theme_contract_constants; do
+    # ASSERT ONE MUTATED COPY. EXPECT is `throw` (the guard must refuse to load AND
+    # name the offending block/key — exit status alone would accept an unrelated
+    # crash) or `load` (this shape is legitimately survivable, so refusing it would
+    # make the guard over-broad). Having BOTH outcomes in the battery is what keeps
+    # the mustExist/mustBeNonEmpty split honest instead of decorative.
+    _d3_assert() { # _d3_assert EXPECT NAMED-IN-ERROR LABEL
+        local _e="$1" _b="$2" _l="$3"
+        local _rc
+        node -e 'require(process.argv[1]);' "${TCDIR}/token-classifier.js" >"${TCDIR}/err.txt" 2>&1
+        _rc=$?
+        if [ "${_e}" = "load" ]; then
+            if [ "${_rc}" -eq 0 ]; then
+                ok "(d3) ${_l} -> still LOADS (fail-CLOSED on its own; refusing it would be over-broad)"
+            else
+                bad "(d3) ${_l} -> classifier REFUSED a survivable shape (rc=${_rc}): $(head -c 300 "${TCDIR}/err.txt")"
+            fi
+            return
+        fi
+        # grep a FILE, never a pipe: `... | grep -q` under `set -o pipefail` can report
+        # failure on a FOUND match when the writer takes SIGPIPE, and busybox grep -q
+        # closes far earlier than GNU's.
+        if [ "${_rc}" -ne 0 ] \
+           && grep -F "REFUSING TO LOAD the token classifier" "${TCDIR}/err.txt" >/dev/null 2>&1 \
+           && grep -F "'${_b}" "${TCDIR}/err.txt" >/dev/null 2>&1; then
+            ok "(d3) ${_l} -> classifier REFUSES to load (rc=${_rc}, anti-vacuity error names it)"
+        elif [ "${_rc}" -ne 0 ]; then
+            bad "(d3) ${_l} -> classifier failed for the WRONG reason (rc=${_rc}): $(head -c 300 "${TCDIR}/err.txt")"
+        else
+            bad "(d3) ${_l} -> classifier still LOADED (rc=${_rc}) — the refusal it feeds is silently inert"
+        fi
+    }
+    # allowlist IS in this list. It is the only block held to `mustExist` rather than
+    # `mustBeNonEmpty`, so leaving it out shipped that whole branch untested —
+    # measured: deleting the mustExist branch outright left the battery 96/0 GREEN.
+    for _blk in allowlist denylist frozen_protocol_constants retired_protocol_constants theme_contract_constants; do
         # THREE distinct shapes, because they fail DIFFERENT halves of the guard and
         # a two-shape battery hid that: `deleted`/`emptied` both leave every named
         # array UNDEFINED, so a presence-only check (`Array.isArray(b[k])` with the
@@ -276,25 +310,32 @@ if command -v node >/dev/null && command -v jq >/dev/null && [ -r "${TOKEN_CLASS
                 vacuous) jq ".${_blk} |= with_entries(if (.value|type) == \"array\" then .value = [] else . end)" \
                             "${TCDIR}/tokens.json.orig" > "${TCDIR}/tokens.json" ;;
             esac
-            node -e 'require(process.argv[1]);' "${TCDIR}/token-classifier.js" >"${TCDIR}/err.txt" 2>&1
-            _rc=$?
-            # grep a FILE, never a pipe: `... | grep -q` under `set -o pipefail` can
-            # report failure on a FOUND match when the writer takes SIGPIPE, and
-            # busybox grep -q closes far earlier than GNU's.
-            # BOTH halves: non-zero exit AND the guard's own sentinel naming this
-            # block. Exit status alone would accept a crash for an unrelated reason
-            # (an unparseable JSON, a missing file) as "the guard bit".
-            if [ "${_rc}" -ne 0 ] \
-               && grep -F "REFUSING TO LOAD the token classifier" "${TCDIR}/err.txt" >/dev/null 2>&1 \
-               && grep -F "'${_blk}" "${TCDIR}/err.txt" >/dev/null 2>&1; then
-                ok "(d3) tokens.json ${_blk} ${_shape} -> classifier REFUSES to load (rc=${_rc}, anti-vacuity error names the block)"
-            elif [ "${_rc}" -ne 0 ]; then
-                bad "(d3) tokens.json ${_blk} ${_shape} -> classifier failed for the WRONG reason (rc=${_rc}): $(head -c 300 "${TCDIR}/err.txt")"
-            else
-                bad "(d3) tokens.json ${_blk} ${_shape} -> classifier still LOADED (rc=${_rc}) — the refusal it feeds is silently inert"
-            fi
+            # PER-BLOCK EXPECTATION. An emptied ALLOWLIST substitutes nothing, so it
+            # is fail-CLOSED and loud on its own (measured: with live/dead/
+            # reserved_pilot all [], isAllowed("BRAND_TITLE") is false — every token
+            # refused). Refusing that shape would be over-broad, so it must LOAD.
+            # Every other block feeds a REFUSAL, where empty means "bans nothing" —
+            # the silent shape — so it must throw.
+            case "${_blk}:${_shape}" in
+                allowlist:vacuous) _d3_assert load  "${_blk}" "tokens.json ${_blk} ${_shape}" ;;
+                *)                 _d3_assert throw "${_blk}" "tokens.json ${_blk} ${_shape}" ;;
+            esac
         done
     done
+    # TYPED mutations — the two branches NO deleted/emptied/vacuous shape can reach,
+    # so without these they ship untested:
+    #   mustExist            only allowlist uses it, and the `vacuous` jq rewrite only
+    #                        touches values that are ALREADY arrays, so nothing in the
+    #                        shape battery can make one a non-array.
+    #   mustBeNonEmptyString denylist.key_name_regex is a string, so `vacuous` leaves
+    #                        it alone and mustBeNonEmpty('keys') always throws first.
+    # An empty key_name_regex is why this branch matters: `new RegExp("")` compiles to
+    # /(?:)/, which matches every name, so isDenied() would deny EVERYTHING — including
+    # the live allowlist. Loud beats mysteriously-empty output.
+    jq '.allowlist.reserved_pilot = "notanarray"' "${TCDIR}/tokens.json.orig" > "${TCDIR}/tokens.json"
+    _d3_assert throw "allowlist.reserved_pilot" "tokens.json allowlist.reserved_pilot retyped to a string"
+    jq '.denylist.key_name_regex = ""' "${TCDIR}/tokens.json.orig" > "${TCDIR}/tokens.json"
+    _d3_assert throw "denylist.key_name_regex" "tokens.json denylist.key_name_regex emptied to the match-everything regex"
     rm -rf "${TCDIR}"
 else
     echo "  SKIP (d3) node/jq/token-classifier unavailable (anti-vacuity assertion)"
