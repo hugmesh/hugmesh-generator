@@ -430,6 +430,42 @@ ORANGEPI4LTS_FLAVORS = ("live", "installer", "both")
 # --env: what gets baked into the image's stack config (test | prod).
 ENV_CHOICES = ("test", "prod")
 
+# --compress-level N: the xz preset --compress uses, on EVERY builder (issue #233's one
+# unchecked box, "consider allowing the xz compression level to be changed"). 0-9 is xz's
+# own range and the range each builder validates, so the GUI offers exactly that — one
+# range, no second narrower policy to drift from the flag. 9 is the level every builder
+# hardcoded before this flag existed and stays the default, so an existing config's
+# emission is byte-identical (to_cli_args omits --compress-level at the default).
+#
+# SCOPE, stated once: the level applies to the --compress path only — the `xz -T0 -6`
+# invocations that always build the stage4 archive and fs.tar.xz are NOT --compress
+# artifacts and are deliberately untouched (build-x86-host-stage4.sh:6420/6423/6743/6744,
+# build-rpi5-stage4.sh:4638/4639). Changing those would alter what a build with no
+# compression flags at all emits.
+COMPRESS_LEVEL_CHOICES = tuple(range(10))
+COMPRESS_LEVEL_DEFAULT = 9
+
+
+def clamp_compress_level(value) -> int:
+    """The ONE reading of a compress_level that came from an untrusted source.
+
+    The GUI combo can only ever hold COMPRESS_LEVEL_CHOICES, but a hand-edited
+    ``--config`` JSON can carry anything, and the builders hard-error on a level
+    outside 0-9 (they validate the flag). Both readers of that untrusted value —
+    ``ImageConfig._compress_level_args`` on emission and BuildPage.initializePage
+    when it restores the combo — go through HERE, so the level the page shows and
+    the level the builder is handed are the same function of the same file. Two
+    different readings would mean one config.json produced two different artifacts
+    depending on whether the operator happened to open the Build page.
+
+    Out of range clamps to the nearest legal preset; junk that is not a number at
+    all resolves to the builder default (which emits no flag at all)."""
+    try:
+        return max(0, min(9, int(value)))
+    except (TypeError, ValueError):
+        return COMPRESS_LEVEL_DEFAULT
+
+
 # build-x86-host-stage4.sh's full documented --gpu-driver matrix (canonical names).
 # "auto" is a Studio value, not a builder flag: to_cli_args() omits --gpu-driver so
 # the builder resolves its own default (all-free on GPU roles, nvidia on edge_ai).
@@ -764,6 +800,25 @@ _IMAGE_ONLY_PLATFORMS = ("frite", "jetson", "orangepi5", "orangepizero2", "orang
 _X86 = ("x86",)
 _X86_RPI5 = ("x86", "rpi5")
 
+# The builders whose MEDIA is chosen by --flavor (live | installer | both; default
+# "both") instead of by per-artifact ISO flags. Named once here because TWO separate
+# facts hang off exactly this family, and the Review page states both:
+#
+#   * they DO build an installer ISO by default — build-frite-stage4.sh:573 sets
+#     BUILD_INSTALLER=true for --flavor both, :2557 calls build_installer_iso(), :2540
+#     names <prefix>.installer.iso; the six orangepi* builders are byte-parallel. So
+#     "this builder produces no installer ISO" is FALSE for them (it is true only for
+#     jetson, which contains no installer.iso at all), and the greyed --installer-iso
+#     row must point at the Flavor control instead of denying the artifact exists;
+#   * their --compress compresses LIVE_PATH and INSTALLER_PATH and never an .img
+#     (frite:2438 + :2547), the exact INVERSE of x86/rpi5/jetson, whose --compress
+#     compresses IMG_PATH only (x86:6757, rpi5:4654, jetson:2414).
+#
+# Pinned to real emission by tests/test_cli_args.py::test_flavor_media_platforms_are_
+# exactly_the_flavor_emitting_builders, so it cannot drift from to_cli_args().
+FLAVOR_MEDIA_PLATFORMS = ("frite", "orangepi5", "orangepizero2", "orangepizero2w",
+                          "orangepizero3", "orangepi3-lts", "orangepi4-lts")
+
 _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     # brand plane — every builder parses these identically (x86 unaffiliated suppresses).
     "brand": _ALL_PLATFORMS, "brand_title": _ALL_PLATFORMS, "org": _ALL_PLATFORMS,
@@ -835,7 +890,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "sd_only": ("rpi5",), "image_only": _IMAGE_ONLY_PLATFORMS,
     # sizing / finish.
     "grow": _ALL_PLATFORMS, "img_size": _ALL_PLATFORMS, "compress": _ALL_PLATFORMS,
-    "resume": _ALL_PLATFORMS,
+    "compress_level": _ALL_PLATFORMS, "resume": _ALL_PLATFORMS,
     # kernel / board overrides.
     "cpu": _ARM_PLATFORMS, "defconfig": _ARM_PLATFORMS, "dtb": _DTB_PLATFORMS,
     "dtb_prefix": ("rpi5",), "kernel_img": ("rpi5",), "pcie_gen3": ("rpi5",),
@@ -1820,8 +1875,9 @@ _DEFAULT_LEAK_ROLES = ("", PLATFORM_DEFAULT_ROLE["x86"])
 # The ARM ISO platforms whose builders take a live|installer|both --flavor. An unset
 # flavor resolves to the single-artifact "installer" here (the legacy worker-channel
 # default) rather than to_cli_args's "both", so the worker's one-artifact ingest holds.
-_ISO_FLAVOR_PLATFORMS = ("frite", "orangepi5", "orangepizero2", "orangepizero2w", "orangepizero3",
-                         "orangepi3-lts", "orangepi4-lts")
+# Same family, named ONCE up at FLAVOR_MEDIA_PLATFORMS (which a test pins to real
+# --flavor emission) — aliased rather than re-spelled so the two cannot drift apart.
+_ISO_FLAVOR_PLATFORMS = FLAVOR_MEDIA_PLATFORMS
 
 
 def roles_for_platform(platform: str) -> frozenset:
@@ -2654,7 +2710,11 @@ class ImageConfig:
     # to_dict/asdict pins the number into the saved JSON, and from_dict assigns a
     # present "jobs" key verbatim — an existing config's -j emission is byte-identical.
     jobs: int = field(default_factory=default_jobs)
-    compress: bool = True              # --compress: xz -9 the finished image(s)  (ask 13: DEFAULT ON)
+    compress: bool = True              # --compress: xz the finished artifact(s)   (ask 13: DEFAULT ON)
+    # --compress-level N (issue #233): the xz preset --compress uses, 0-9. The
+    # builders' own pre-flag behaviour was 9, so 9 stays the default and emits
+    # NOTHING — an existing config's argv is unchanged byte for byte.
+    compress_level: int = COMPRESS_LEVEL_DEFAULT
     resume: bool = True                # --resume: reuse an existing sysroot      (ask 13: DEFAULT ON)
     # build plumbing / phases (change baked content or phases, not artifacts)
     skip_kernel: bool = False          # --skip-kernel (all)
@@ -3228,6 +3288,27 @@ class ImageConfig:
         Every builder parses --grow/--no-grow; '' = leave the builder default (G25)."""
         return ["--grow", self.grow] if self.grow else []
 
+    def _compress_level_args(self) -> list[str]:
+        """--compress-level N — the xz preset --compress uses (issue #233).
+
+        Emitted ONLY beside --compress (the level means nothing without it: every
+        builder reads COMPRESS_LEVEL exclusively inside its `if ${COMPRESS_IMG}` arm)
+        and ONLY when it differs from COMPRESS_LEVEL_DEFAULT, which is the level all ten
+        builders hardcoded before the flag existed. So a config that never touched the
+        knob emits exactly the argv it emitted before — the property the exact-argv
+        tests in tests/test_cli_args.py hold this to.
+
+        An out-of-range value is CLAMPED rather than raised: the GUI can only offer
+        0-9 (COMPRESS_LEVEL_CHOICES) and the builders hard-error on anything else, so a
+        --config JSON carrying junk must not be able to hand a builder a flag it will
+        refuse mid-run — it gets the nearest legal preset instead. The clamp lives in
+        clamp_compress_level() because BuildPage restores the combo through the SAME
+        reading; a second, different rule there would let the page and the argv
+        disagree about one file (non-numeric junk resolves to the default, i.e. to
+        emitting nothing at all)."""
+        lvl = clamp_compress_level(self.compress_level)
+        return [] if lvl == COMPRESS_LEVEL_DEFAULT else ["--compress-level", str(lvl)]
+
     def _services_args(self) -> list[str]:
         """--optional-services allow-list (with the explicit-none / --all-services
         sentinels, G13/G14) + the subtractive --exclude-services list. Shared by x86 +
@@ -3409,6 +3490,7 @@ class ImageConfig:
         a += self._plumbing_args()
         if self.compress:
             a += ["--compress"]
+            a += self._compress_level_args()
         if self.resume:
             a += ["--resume"]
         return a
@@ -4047,6 +4129,7 @@ class ImageConfig:
         a += self._packages_delta_args()
         if self.compress:
             a += ["--compress"]
+            a += self._compress_level_args()
         if self.resume:
             a += ["--resume"]
 
