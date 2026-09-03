@@ -381,7 +381,7 @@ def test_ask8_opt_in_round_trips_through_a_saved_config(wiz, tmp_path):
 
 def test_ask19_internal_card_names_the_real_domains(wiz):
     """ASK 19's default card must NAME what "internal only" means for THIS config —
-    the cluster domain the Network step set and the derived orchestration superdomain —
+    the cluster domain the Network step set and the derived Tailscale root domain —
     rather than being an abstraction the operator has to take on faith."""
     mesh_flow(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)

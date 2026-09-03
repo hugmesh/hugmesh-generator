@@ -294,10 +294,10 @@ class CloudDeploy:
             "creds:      " + ("pasted (staged to a 0600 tempfile at run, then shredded)"
                               if o.creds.strip()
                               else (o.creds_file.strip() or "<unset — apply refuses without creds>")),
-            f"out dir:    {o.out_dir.strip() or '<driver default>'}",
+            f"output dir: {o.out_dir.strip() or '<driver default>'}",
             f"keys dir:   {o.keys_dir.strip() or '<unset>'}",
             "",
-            "(1) PLAN renders the provider's artifacts OFFLINE into the out dir —",
+            "(1) PLAN renders the provider's artifacts OFFLINE into the output directory —",
             "    readable scripts/policies/checklists; nothing touches a cloud API.",
             "(2) APPLY executes the plan's emitted apply.sh (creds required; the",
             "    driver + apply.sh each re-confirm — real resources, real cost).",

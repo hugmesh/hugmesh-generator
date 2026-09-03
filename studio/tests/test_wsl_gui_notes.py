@@ -161,7 +161,7 @@ def fake_generator(tmp_path):
     gen = tmp_path / "gen"
     sess = gen / "out" / "sessions" / "20260201-000000-full"
     sess.mkdir(parents=True)
-    (sess / "hugmesh-x86-amd64-be-test-20260807T172418Z.img").write_bytes(b"")
+    (sess / "hugmesh-x86-amd64-be-test-20260807T172418Z.img").write_bytes(b"\0")  # non-empty: a 0-byte .img is a killed build, not a row
     qdir = gen / "tests" / "qemu"
     qdir.mkdir(parents=True)
     stub = qdir / "run-qemu-docker.sh"

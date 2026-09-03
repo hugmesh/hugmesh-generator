@@ -7,29 +7,32 @@ the accounts above owns this device", which is not what it means. It now lives o
 System-identity step beside the other things baked into the image (see
 ``gui/pages/system.py``); this page is once again only the superadmin users table.
 The FIELD, the flag and the derivation are unchanged — ``config.to_cli_args`` still
-derives ``--person-role`` from ``users[0].role`` when the tier is left on "derive", so
-this table still feeds it.
+derives ``--person-role`` from the first row when the tier is left on "derive", so
+this table still feeds it (issue #228: from that row's highest TIER — ``User.tier`` —
+since a row can now hold several roles).
+
+Multi-role (issue #228): the Role cell is a row of checkboxes (``RoleCell``), one per
+``USER_ROLE_CHOICES`` entry, so one account can be, say, admin + games. The collected
+``User.roles`` is the full set; ``User.role`` stays the primary (highest tier) for
+every consumer that reads the scalar.
 
 The per-row Domain cell is a DROPDOWN of the previously-defined domains (spec 6): the
-orchestration superdomain plus every name from the shared Domains table (and any rows
+Tailscale root domain plus every name from the shared Domains table (and any rows
 a superadmin added this session). Selecting the ``superadmin`` role forces + locks the
-row to the superdomain (spec 5): superadmins belong to the orchestration domain, not a
+row to the root domain (spec 5): superadmins belong to the Tailscale root domain, not a
 tenant domain. A loaded user whose domain is not (yet) defined is shown suffixed
 '(not defined)' with an orange warning — never silently rewritten.
 """
 from __future__ import annotations
 
 from ..qt import QtWidgets
-from ...core.config import User, users_table_applies
+from ...core.config import (USER_ROLE_CHOICES, User, normalize_user_roles,
+                            users_table_applies)
 
-# Role slugs offerable per user row (G20): the four platform roles PLUS the
-# GRANTABLE games roles from the systems Casdoor seed (specs/cluster/manifests/
-# casdoor/init-data-configmap.yaml): 'games' -> ROLE_GAMES (Games Member) and
-# 'games-services' -> ROLE_GAMES_SERVICES (Games App-Store Access). The DERIVED
-# intersection roles (ROLE_GAMES_ADMIN, ROLE_GAMES_SERVICES_ADMIN/_RUNNER) are
-# deliberately NOT offered — they are materialized by the admin-sync Jobs from
-# role intersections, and seeding them directly would bypass that default-deny.
-USER_ROLE_CHOICES = ("superadmin", "admin", "mod", "user", "games", "games-services")
+# USER_ROLE_CHOICES (G20) moved to core.config with issue #228 so the core's
+# multi-role normalization and this page offer ONE vocabulary; re-exported here for
+# the tests and callers that read it off the page module.
+__all__ = ["UsersPage", "RoleCell", "USER_ROLE_CHOICES", "USER_REGISTRATION_CHOICES"]
 
 # Per-user first-login REGISTRATION method (spec 4/6). "derive" = "" on the User (the
 # provisioning default); discord/gmail = OAuth self-registration at first login; password
@@ -45,6 +48,52 @@ _COL_USER, _COL_DOMAIN, _COL_ROLE, _COL_EMAIL, _COL_REG = range(5)
 _UNDEFINED = " (not defined)"
 
 
+class RoleCell(QtWidgets.QWidget):
+    """The per-row Role cell (issue #228): one checkbox per USER_ROLE_CHOICES entry,
+    so an account can hold several roles (admin + games, say) instead of exactly one.
+    The same checkbox-list shape the local-mesh Add-user dialog uses for Casdoor
+    grants (_add_user_dialog.py). ``roles()`` is the checked set in precedence order
+    (normalize_user_roles), never empty — clearing every box reads as ``user``, the
+    floor, and the page says so under the table. ``on_change`` fires on every toggle
+    (a plain callback, no modal, so validatePage/itemChanged paths stay headless-safe)."""
+
+    def __init__(self, roles=("user",), on_change=None, parent=None):
+        super().__init__(parent)
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(4, 0, 4, 0)
+        lay.setSpacing(6)
+        self.boxes: list[tuple[str, QtWidgets.QCheckBox]] = []
+        for role in USER_ROLE_CHOICES:
+            box = QtWidgets.QCheckBox(role)
+            self.boxes.append((role, box))
+            lay.addWidget(box)
+        lay.addStretch(1)
+        self.set_roles(roles)
+        self._on_change = on_change
+        for _role, box in self.boxes:
+            box.toggled.connect(self._changed)
+
+    def _changed(self, *_):
+        if self._on_change is not None:
+            self._on_change()
+
+    def choices(self) -> list[str]:
+        return [r for r, _box in self.boxes]
+
+    def roles(self) -> list[str]:
+        return normalize_user_roles([r for r, box in self.boxes if box.isChecked()])
+
+    def set_roles(self, roles) -> None:
+        want = set(normalize_user_roles(roles))
+        for role, box in self.boxes:
+            box.blockSignals(True)
+            box.setChecked(role in want)
+            box.blockSignals(False)
+
+    def has(self, role: str) -> bool:
+        return any(r == role and box.isChecked() for r, box in self.boxes)
+
+
 class UsersPage(QtWidgets.QWizardPage):
     """Superadmin: attach users to domains."""
     def __init__(self, wiz):
@@ -52,15 +101,24 @@ class UsersPage(QtWidgets.QWizardPage):
         self.wiz = wiz
         self.setTitle("Superusers & domain users")
         self.setSubTitle(
-            "Name the superusers (locked to the orchestration superdomain) "
+            "Name the superusers (locked to the Tailscale root domain) "
             "and add users to each domain. For every user pick how they first sign in: "
             "Discord or Gmail self-registration, or a password issued at provisioning.")
         lay = QtWidgets.QVBoxLayout(self)
         self.table = QtWidgets.QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
-            ["Username", "Domain", "Role", "Email", "Registration"])
+            ["Username", "Domain", "Roles", "Email", "Registration"])
         self.table.horizontalHeader().setStretchLastSection(True)
         lay.addWidget(self.table)
+        # issue #228: what the Roles checkboxes mean.
+        self.roles_help = QtWidgets.QLabel(
+            "Roles: tick every role the account holds. The highest tier "
+            "(superadmin > admin > mod > user) is the account's primary role; games "
+            "and games-services are grants on top of it. A row with nothing ticked "
+            "is saved as ‘user’.")
+        self.roles_help.setWordWrap(True)
+        self.roles_help.setStyleSheet("color: gray;")
+        lay.addWidget(self.roles_help)
         # STEP 4/6 clarity: what the Registration column means.
         self.reg_help = QtWidgets.QLabel(
             "Registration: ‘discord’/‘gmail’ let the user self-register with that "
@@ -112,10 +170,12 @@ class UsersPage(QtWidgets.QWizardPage):
             combo.setCurrentIndex(i)
         combo.blockSignals(False)
 
-    def _apply_role_lock(self, dom_combo, role_combo):
-        """superadmin belongs to the orchestration superdomain (spec 5): force + lock
-        the domain there; any other role unlocks the dropdown."""
-        if role_combo.currentText() == "superadmin":
+    def _apply_role_lock(self, dom_combo, role_cell):
+        """superadmin belongs to the Tailscale root domain (spec 5): force + lock
+        the domain there; a row without superadmin among its roles unlocks the
+        dropdown. Multi-role (issue #228): superadmin ANYWHERE in the set locks —
+        superadmin + games is still a superadmin."""
+        if role_cell.has("superadmin"):
             sd = self.wiz.cfg.effective_superdomain()
             i = dom_combo.findText(sd)
             if i < 0:
@@ -128,18 +188,19 @@ class UsersPage(QtWidgets.QWizardPage):
         self._update_warning()
 
     def _add(self, username="", domain="", role="user", email="", registration=""):
+        """``role`` is one role name OR an iterable of them (issue #228) — the
+        single-string spelling every caller used before multi-role still works."""
+        roles = [role] if isinstance(role, str) else list(role)
         r = self.table.rowCount()
         self.table.insertRow(r)
         self.table.setItem(r, _COL_USER, QtWidgets.QTableWidgetItem(username))
         dom_combo = QtWidgets.QComboBox()
         self._fill_domain_combo(dom_combo, domain)
         self.table.setCellWidget(r, _COL_DOMAIN, dom_combo)
-        role_combo = QtWidgets.QComboBox()
-        role_combo.addItems(USER_ROLE_CHOICES)
-        role_combo.setCurrentText(role)
-        self.table.setCellWidget(r, _COL_ROLE, role_combo)
-        role_combo.currentTextChanged.connect(
-            lambda _t, d=dom_combo, rc=role_combo: self._apply_role_lock(d, rc))
+        # the callback closes over role_cell (bound by the time a box is toggled)
+        role_cell = RoleCell(
+            roles, on_change=lambda: self._apply_role_lock(dom_combo, role_cell))
+        self.table.setCellWidget(r, _COL_ROLE, role_cell)
         dom_combo.currentTextChanged.connect(lambda _t: self._update_warning())
         self.table.setItem(r, _COL_EMAIL, QtWidgets.QTableWidgetItem(email))
         # per-user first-login registration method ("" -> the 'derive' default)
@@ -147,7 +208,8 @@ class UsersPage(QtWidgets.QWizardPage):
         reg_combo.addItems(USER_REGISTRATION_CHOICES)
         reg_combo.setCurrentText(registration or "derive")
         self.table.setCellWidget(r, _COL_REG, reg_combo)
-        self._apply_role_lock(dom_combo, role_combo)
+        self.table.resizeColumnToContents(_COL_ROLE)
+        self._apply_role_lock(dom_combo, role_cell)
 
     def _remove(self):
         for idx in sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True):
@@ -189,18 +251,18 @@ class UsersPage(QtWidgets.QWizardPage):
         c = self.wiz.cfg
         if self.table.rowCount() == 0:
             for u in c.users:
-                self._add(u.username, u.domain, u.role, u.email,
+                self._add(u.username, u.domain, list(u.roles), u.email,
                           getattr(u, "registration", ""))
         else:
             # back-nav: newly-defined domains must appear in every row's dropdown, and
             # a superadmin lock re-pins to the current superdomain.
             for r in range(self.table.rowCount()):
                 dom = self.table.cellWidget(r, _COL_DOMAIN)
-                role_combo = self.table.cellWidget(r, _COL_ROLE)
+                role_cell = self.table.cellWidget(r, _COL_ROLE)
                 if isinstance(dom, QtWidgets.QComboBox):
                     self._fill_domain_combo(dom, self._raw_domain(dom.currentText()))
-                    if role_combo is not None:
-                        self._apply_role_lock(dom, role_combo)
+                    if isinstance(role_cell, RoleCell):
+                        self._apply_role_lock(dom, role_cell)
         self._update_warning()
 
     def validatePage(self):
@@ -211,13 +273,13 @@ class UsersPage(QtWidgets.QWizardPage):
                 continue
             dom = self.table.cellWidget(r, _COL_DOMAIN)
             domain = self._raw_domain(dom.currentText()) if isinstance(dom, QtWidgets.QComboBox) else ""
-            role_combo = self.table.cellWidget(r, _COL_ROLE)
-            role = role_combo.currentText() if role_combo else "user"
+            role_cell = self.table.cellWidget(r, _COL_ROLE)
+            roles = role_cell.roles() if isinstance(role_cell, RoleCell) else ["user"]
             email = self.table.item(r, _COL_EMAIL).text().strip() if self.table.item(r, _COL_EMAIL) else ""
             reg_combo = self.table.cellWidget(r, _COL_REG)
             reg = reg_combo.currentText() if isinstance(reg_combo, QtWidgets.QComboBox) else "derive"
             registration = "" if reg == "derive" else reg
-            out.append(User(username=username, domain=domain, role=role, email=email,
+            out.append(User(username=username, domain=domain, roles=roles, email=email,
                             registration=registration))
         c = self.wiz.cfg
         c.users = out
