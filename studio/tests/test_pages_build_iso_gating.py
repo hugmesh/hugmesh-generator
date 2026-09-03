@@ -80,8 +80,15 @@ def test_installer_iso_greyed_with_reason_on_rpi5(wiz):
 
 
 def test_installer_iso_greyed_on_frite_names_x86(wiz):
-    """A builder with no ISO stage at all (frite) greys the row too, saying only the
-    x86 builder parses the flag — derived from the support matrix, not hardcoded."""
+    """A builder that does not parse --installer-iso (frite) greys the row too, saying
+    the flag is x86's — derived from the support matrix, not hardcoded.
+
+    The premise this docstring used to state — "a builder with no ISO stage at all
+    (frite)" — was FALSE, and the tooltip it guarded said so to the operator. frite has
+    a full ISO stage; what it lacks is a per-artifact FLAG. The corrected copy is
+    asserted positively in test_installer_iso_note_sends_flavor_builders_to_the_flavor_
+    control below, because an `"x86" in tooltip` check like the one here happily passes
+    over wrong copy — which is how the false sentence shipped."""
     pick_role(wiz, "frite")
     build = advance_to(wiz, wizard_mod.BuildPage)
     assert build.installer_iso.isVisible()
@@ -195,3 +202,132 @@ def test_artifacts_explainer_is_the_rewritten_copy(wiz):
     assert "Ticked = you get it" not in text
     # the changelog-speak is gone from the installer caption
     assert "no longer" not in build.artifact_labels["installer_iso"].text()
+
+
+# ---- #233 second pass: the three copy claims #236 shipped that were not true -----
+#
+# All three were UNGUARDED — which is exactly how they shipped. Each test below asserts
+# the CORRECTED claim positively, not just the absence of the old wording, so a revert
+# to a plausible-but-false string still goes red.
+
+def test_compress_caption_is_platform_aware_not_one_false_sentence(wiz):
+    """--compress does not mean one thing, so one caption cannot be true.
+
+    x86/rpi5/jetson compress IMG_PATH only (build-x86-host-stage4.sh:6756,
+    build-rpi5-stage4.sh:4653, build-jetson-stage4.sh:2409); the seven flavor builders
+    compress LIVE_PATH + INSTALLER_PATH and never an .img (build-frite-stage4.sh:2438,
+    :2547). The caption #236 shipped — "every artifact above gains .xz" — was false on
+    BOTH families and inverted between them."""
+    build = advance_to(wiz, wizard_mod.BuildPage)          # x86
+    x86 = build.artifact_labels["compress"].text()
+    assert ".img" in x86 and "only artifact" in x86
+    assert "every artifact above" not in x86
+
+    # ...and the ISO family gets the INVERSE statement, so no one string can serve both
+    frite = build_mod._compress_note("frite")
+    assert "ISOs" in frite and "never touches the .img" in frite
+    assert frite != x86, "one static caption cannot be true on both families"
+
+
+def test_compress_caption_follows_the_platform_actually_selected(wiz):
+    """The caption is restated on every visit (initializePage), not baked at widget
+    construction — pick frite and the row ON SCREEN says what frite's --compress does."""
+    pick_role(wiz, "frite")
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    text = build.artifact_labels["compress"].text()
+    assert text == build_mod._compress_note("frite")
+    assert "never touches the .img" in text
+
+
+def test_installer_iso_note_sends_flavor_builders_to_the_flavor_control(wiz):
+    """On frite/orangepi the greyed row must NOT claim the builder makes no installer
+    ISO — it makes one by default under --flavor both, which is what Studio emits. It
+    points at the control that really owns the choice, the way the rpi5 branch already
+    points at the --iso row."""
+    pick_role(wiz, "frite")
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    tip = build.installer_iso.toolTip()
+    assert not build.installer_iso.isEnabled()
+    assert "Flavor" in tip and "both" in tip
+    assert "produces no installer ISO" not in tip
+    # the caption carries the same reason (no live caption beside a dead box)
+    assert build.artifact_labels["installer_iso"].toolTip() == tip
+
+
+def test_installer_iso_note_still_says_no_iso_for_jetson():
+    """The sentence is not deleted, it is SCOPED: jetson really does build no installer
+    ISO (build-jetson-stage4.sh contains no installer.iso at all), so jetson keeps it —
+    and must not be redirected to a Flavor control it does not have."""
+    jetson = build_mod._installer_iso_note("jetson")
+    assert "produces no installer ISO" in jetson
+    assert "Flavor" not in jetson
+    for p in ("frite", "orangepi5", "orangepizero2", "orangepizero2w",
+              "orangepizero3", "orangepi3-lts", "orangepi4-lts"):
+        assert "produces no installer ISO" not in build_mod._installer_iso_note(p), p
+
+
+def test_artifacts_explainer_rule_describes_the_gate_that_exists(wiz):
+    """The rewrite's own second sentence promised a CAPABILITY gate ("rows this
+    platform's builder cannot make"). The gate keys on the FLAG, not the capability:
+    frite hides the Live ISO row (live_iso is x86-only in PLATFORM_FIELD_SUPPORT) while
+    building live.iso by default. Prove both halves — the hidden row on frite, and copy
+    that no longer asserts the builder cannot make it."""
+    pick_role(wiz, "frite")
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert not build.live_iso.isVisibleTo(build)          # the row really is hidden
+    text = build.artifacts_hint.text()
+    assert "does not parse" in text                        # flags, not capabilities
+    assert "cannot make" not in text
+    assert "hidden row is not a missing artifact" in text
+
+
+# ---- #233's one unchecked box: the xz compression level --------------------------
+
+def test_compress_level_is_a_dropdown_over_the_builders_whole_range(wiz):
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert isinstance(build.compress_level, QtWidgets.QComboBox)
+    levels = [build.compress_level.itemData(i)
+              for i in range(build.compress_level.count())]
+    assert levels == list(range(10))                       # xz's own 0-9, what the
+    #                                                        builders validate
+    assert build.compress_level.currentData() == 9         # the builders' own level
+
+
+def test_compress_level_greys_with_the_compress_box(wiz):
+    """The sub-option shape reused from cached/live_toram: a preset with nothing to
+    compress is greyed and says why, and Compress itself stays live as the way back."""
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert build.compress.isChecked() and build.compress_level.isEnabled()
+    build.compress.setChecked(False)
+    for w in (build.compress_level, build.compress_level_label,
+              build.artifact_labels["compress_level"]):
+        assert not w.isEnabled(), w
+        assert "Tick Compress" in w.toolTip(), w
+    assert build.compress.isEnabled()
+    build.compress.setChecked(True)
+    assert build.compress_level.isEnabled()
+    assert build.compress_level.toolTip() == ""
+
+
+def test_compress_level_greying_never_rewrites_the_value(wiz):
+    """Presentation only, the page's standing rule — a preset chosen, un-ticked and
+    re-ticked survives (and emits nothing at all while --compress is absent)."""
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    build.compress_level.setCurrentIndex(build.compress_level.findData(3))
+    build.compress.setChecked(False)
+    assert build.compress_level.currentData() == 3
+    build._preview()
+    assert "--compress-level" not in wiz.cfg.to_cli_args()
+    build.compress.setChecked(True)
+    assert build.compress_level.currentData() == 3
+
+
+def test_compress_level_reaches_argv_only_off_its_default(wiz):
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    build._preview()
+    assert "--compress-level" not in wiz.cfg.to_cli_args()   # default 9: silent
+    build.compress_level.setCurrentIndex(build.compress_level.findData(6))
+    build._preview()
+    args = wiz.cfg.to_cli_args()
+    assert ("--compress-level", "6") in list(zip(args, args[1:]))
+    assert "--compress" in args

@@ -60,9 +60,11 @@ from ...core import root_size_floor
 from ...core import secret_files
 from ...core import worklist as worklist_mod
 from ...core.build_driver import BuildDriver
-from ...core.config import (ENV_CHOICES, ImageConfig, UNAFFILIATED_ROLE,
-                            effective_installer_ui, field_default, image_class,
-                            resolve_installer_ui_default, resolve_platform_defaults)
+from ...core.config import (COMPRESS_LEVEL_CHOICES, COMPRESS_LEVEL_DEFAULT,
+                            ENV_CHOICES, FLAVOR_MEDIA_PLATFORMS, ImageConfig,
+                            UNAFFILIATED_ROLE, effective_installer_ui, field_default,
+                            image_class, resolve_installer_ui_default,
+                            resolve_platform_defaults)
 from ...core.worklist_driver import WorklistDriver
 from ._device_table import DeviceTable
 from ._gating import (clear_unsupported, gate_widgets, gate_widgets_role_class,
@@ -106,8 +108,14 @@ def _installer_ui_reason(shown: str, rewritten: bool) -> str:
 # The support matrix is read from the builders, not guessed: build-x86-host-stage4.sh is
 # the ONLY builder that parses --installer-iso (a stage4 + install-x86.sh data ISO).
 # build-rpi5-stage4.sh's installer ISO is a different flag with different semantics
-# (--iso — the "Installer ISO for an UNencrypted image (rpi5)" row on this page), and the
-# frite/jetson/orangepi* builders build no ISO at all (--image-only is their media skip).
+# (--iso — the "Installer ISO for an UNencrypted image (rpi5)" row on this page).
+# CORRECTED (second #233 pass): the note here used to say "the frite/jetson/orangepi*
+# builders build no ISO at all", and repeated it to the operator in the tooltip. That is
+# true of jetson ONLY. The other seven have no per-artifact ISO FLAG — which is all the
+# gate can see — but they build live.iso AND installer.iso by default, chosen by
+# --flavor (default "both"), which Studio itself emits. What the gate keys on is
+# therefore the FLAG, never the capability; _installer_iso_note and the section hint
+# both say that now instead of denying the artifacts exist.
 # PLATFORM_FIELD_SUPPORT carries that matrix and is pinned to the real emission surface
 # by tests/test_cli_args.py::test_platform_field_support_matches_emission, so
 # platform_supports("installer_iso", ...) here can never drift from the builders.
@@ -117,8 +125,55 @@ def _installer_iso_note(platform: str) -> str:
         return ("Not available on the rpi5 builder: --installer-iso is an x86 flag. "
                 "The Pi's installer ISO is the separate \"Installer ISO for an "
                 "UNencrypted image (rpi5)\" row (--iso).")
+    if p in FLAVOR_MEDIA_PLATFORMS:
+        # HONESTY FIX (issue #233, second pass): the sentence this branch replaces —
+        # "This platform's builder produces no installer ISO" — was FALSE on all seven
+        # of these builders. They have no PER-ARTIFACT ISO flag, which is what the gate
+        # keys on, but they build <prefix>.installer.iso by default: --flavor's default
+        # is "both" (build-frite-stage4.sh:196), which sets BUILD_INSTALLER (:573) and
+        # calls build_installer_iso() (:2557) — and Studio itself emits --flavor both
+        # (core/config.py _frite_args &c.), so the old copy contradicted the very
+        # command this wizard dispatches. Redirect to the control that really owns it,
+        # exactly as the rpi5 branch above redirects to the --iso row: a tooltip, not a
+        # second copy of the Flavor combo on this page (one owner per value).
+        return (f"Not available on the {p} builder: --installer-iso is an x86 flag. "
+                "This builder has no per-artifact ISO flags — its media is the "
+                "\"Flavor\" dropdown on the \"Target machine & image type\" step "
+                "(live | installer | both), whose default, both, already builds an "
+                "installer ISO.")
+    # jetson, and only jetson: build-jetson-stage4.sh contains no installer.iso at all.
     return (f"Not available on the {p} builder: only the x86 builder parses "
             "--installer-iso. This platform's builder produces no installer ISO.")
+
+
+def _compress_note(platform: str) -> str:
+    """The "→ artifact" caption for --compress — PER PLATFORM, because --compress does
+    not mean one thing.
+
+    The old caption said "every artifact above gains .xz", which is false on every
+    builder. Enumerated from the scripts, COMPRESS_IMG has exactly two shapes:
+
+      * x86 / rpi5 / jetson compress IMG_PATH and nothing else (build-x86-host-stage4.sh
+        :6757, build-rpi5-stage4.sh:4654, build-jetson-stage4.sh:2414) — so on x86,
+        where Root image, Live ISO, Installer ISO and Rootfs tar are all listed above
+        this row, only the Root image is affected (fs.tar.xz is xz'd unconditionally by
+        its own `xz -T0 -6` at x86:6743, with or without --compress);
+      * the seven FLAVOR_MEDIA_PLATFORMS compress LIVE_PATH and INSTALLER_PATH and never
+        an .img (build-frite-stage4.sh:2438 + :2547, and six byte-parallel siblings).
+
+    The meaning INVERTS between the two families, so one static string cannot be true —
+    hence a platform-aware caption, in the shape of _installer_iso_note above."""
+    p = platform or "x86"
+    if p in FLAVOR_MEDIA_PLATFORMS:
+        return ("→ the live/installer ISOs gain .xz — this builder's --compress never "
+                "touches the .img; smaller files, a long build tail (--compress)")
+    return ("→ the .img gains .xz — the only artifact --compress touches on this "
+            "builder; a smaller file, a long build tail (--compress)")
+
+
+# Why the xz-preset row is greyed while Compress is unticked (issue #233).
+_COMPRESS_OFF_REASON = ("Sets the preset --compress uses, which is unticked — nothing "
+                        "will be xz'd. Tick Compress to choose a preset.")
 
 
 # Why an ISO row is greyed while "Skip the ISO stage" is ticked (issue #233: skip-iso
@@ -181,6 +236,17 @@ def _flag_value(box):
     The config DOMAIN is unchanged, so a --config JSON or headless caller carrying '' is
     still accepted and still emits neither flag."""
     return "on" if box.isChecked() else "off"
+
+
+def _compress_level_text(n: int) -> str:
+    """One xz-preset combo entry. The three presets a reader needs a fact about carry
+    it; the rest are the bare number, so the combo stays a number picker rather than a
+    wall of prose. 9 is called out because it is what every builder hardcoded before
+    --compress-level existed, so leaving it alone changes nothing about any build."""
+    return {0: "0 — fastest, barely compressed",
+            6: "6 — xz's own default",
+            COMPRESS_LEVEL_DEFAULT: f"{COMPRESS_LEVEL_DEFAULT} — smallest, longest "
+                                    "build tail (builder default)"}.get(n, str(n))
 
 
 def _hint(text):
@@ -492,11 +558,21 @@ class BuildPage(QtWidgets.QWizardPage):
         self.artifacts_box = art
         # issue #233 "rewrite the explainer text": say concretely what the section is
         # and how the gating reads, in the page's plain voice.
+        # SECOND-PASS FIX: the first rewrite's second sentence said "Rows this
+        # platform's builder cannot make are hidden or greyed", which the gate does not
+        # deliver — it keys on whether the builder parses that row's FLAG, not on what
+        # the builder can produce. frite/orangepi HIDE the Live ISO row (live_iso is
+        # _X86 in PLATFORM_FIELD_SUPPORT) while building <prefix>.live.iso by default
+        # under --flavor both, so the rule as written asserted something false about
+        # seven platforms. It now says what the gate actually does, and says out loud
+        # that a hidden row is not a missing artifact.
         self.artifacts_hint = _hint(
             "Each row is one build option and the file it produces in the output "
-            "directory — ticked means the build produces that file. Rows this "
-            "platform's builder cannot make are hidden or greyed; a greyed row's "
-            "tooltip names the reason.")
+            "directory — ticked means the build produces that file. Rows whose flag "
+            "this platform's builder does not parse are hidden or greyed; a greyed "
+            "row's tooltip names the reason. A hidden row is not a missing artifact: "
+            "some builders choose their media with one Flavor setting instead of a "
+            "flag per file.")
         arl.addWidget(self.artifacts_hint)
         grid = QtWidgets.QGridLayout()
         grid.setColumnStretch(0, 1)
@@ -567,10 +643,37 @@ class BuildPage(QtWidgets.QWizardPage):
         self.bundle_note.setWordWrap(True)
         self.bundle_note.setStyleSheet("color: #a65d00;")
         self.bundle_note.setVisible(False)
+        # The label no longer hardcodes "xz -9": the preset is a control of its own
+        # now (the row below), so a fixed level in the label would go stale the moment
+        # it is changed. The caption is PLATFORM-AWARE (_compress_note) and is refreshed
+        # per visit in initializePage — --compress compresses the .img on x86/rpi5/
+        # jetson and the ISOs on the seven flavor builders, so no one string is true.
         self.compress = _art_row(
-            QtWidgets.QCheckBox("Compress the finished image(s) — xz -9"),
-            "→ every artifact above gains .xz; smaller files, a long build tail "
-            "(--compress)", "compress")
+            QtWidgets.QCheckBox("Compress the finished artifacts (xz)"),
+            _compress_note("x86"), "compress")
+        # issue #233's one unchecked box, verbatim: "consider allowing the xz
+        # compression level to be changed". A pick-one VALUE enumeration, so a
+        # DROPDOWN (this module's stated idiom), indented under the row it modifies and
+        # greyed while Compress is unticked — the cached/live_toram-under-Live-ISO
+        # shape, reused. The range is xz's own 0-9, which is exactly what every builder
+        # validates, so there is no second narrower GUI policy to drift.
+        lvl_row = QtWidgets.QWidget()
+        lvl_lay = QtWidgets.QHBoxLayout(lvl_row)
+        # The indent comes from the LAYOUT, not from _art_row's indent= stylesheet:
+        # "margin-left" set on a CONTAINER cascades to every child, indenting the label
+        # and the combo separately instead of the row once.
+        lvl_lay.setContentsMargins(18, 0, 0, 0)
+        lvl_lay.setSpacing(8)
+        self.compress_level_label = QtWidgets.QLabel("…at xz preset")
+        lvl_lay.addWidget(self.compress_level_label)
+        self.compress_level = QtWidgets.QComboBox()
+        for _n in COMPRESS_LEVEL_CHOICES:
+            self.compress_level.addItem(_compress_level_text(_n), _n)
+        lvl_lay.addWidget(self.compress_level)
+        lvl_lay.addStretch(1)
+        _art_row(lvl_row, "→ smaller artifacts as the preset rises, and a longer build "
+                 "tail; 9 is what every builder used before the knob existed "
+                 "(--compress-level)", "compress_level")
         self.resume = _art_row(
             QtWidgets.QCheckBox("Resume — reuse the existing sysroot instead of wiping it"),
             "→ the same artifacts, built incrementally over whatever tree the last run "
@@ -598,6 +701,12 @@ class BuildPage(QtWidgets.QWizardPage):
         # over one widget (the mixed setEnabled/setVisible trap this page already names).
         self.skip_iso.toggled.connect(self._sync_iso_options)
         self.live_iso.toggled.connect(self._sync_iso_options)
+        # Its OWN sync, deliberately NOT folded into _sync_iso_options: that function is
+        # the single writer of setEnabled on the ISO cluster, and widening it to a
+        # non-ISO row would put a second concern on the one mechanism this page keeps
+        # single-owner. The xz preset is not an ISO option — it is a modifier of
+        # --compress and follows only that box.
+        self.compress.toggled.connect(self._sync_compress_level)
         self._sync_iso_options()
 
         # per-device flash / keys assignment table (replaces the old single-target
@@ -944,6 +1053,15 @@ class BuildPage(QtWidgets.QWizardPage):
         self.bundle_source.setChecked(False if unaffiliated else c.bundle_source)
         self.bundle_note.setVisible(unaffiliated)
         self.compress.setChecked(c.compress)
+        # findData falls back to the default preset for a --config JSON carrying a level
+        # outside 0-9 (config._compress_level_args clamps the same value on emission, so
+        # what the page shows and what the builder gets never disagree).
+        _lvl = self.compress_level.findData(c.compress_level)
+        self.compress_level.setCurrentIndex(
+            _lvl if _lvl >= 0 else self.compress_level.findData(COMPRESS_LEVEL_DEFAULT))
+        # --compress means DIFFERENT artifacts per builder — restate the caption for the
+        # platform actually selected (see _compress_note).
+        self.artifact_labels["compress"].setText(_compress_note(c.platform))
         self.resume.setChecked(c.resume)
         self.grow.setCurrentText(c.grow)
         self.version.setText(c.version)
@@ -1048,6 +1166,7 @@ class BuildPage(QtWidgets.QWizardPage):
         # AFTER the platform gate + the checkbox setters above: the enabled state of
         # the ISO rows depends on the platform AND the just-restored skip/live values.
         self._sync_iso_options()
+        self._sync_compress_level()          # setChecked above fires no signal on a no-op
         self.device_table.refresh()          # auto-refresh the device table on entry
         self._apply_default_expansion()
         self._preview()
@@ -1130,6 +1249,23 @@ class BuildPage(QtWidgets.QWizardPage):
         _apply("cached", self.cached, sub_on, sub_reason)
         _apply("live_toram", self.live_toram, sub_on, sub_reason)
 
+    def _sync_compress_level(self):
+        """Grey the xz-preset row while Compress is unticked (issue #233's last box).
+
+        Same contract as _sync_iso_options and same reason for existing separately: a
+        preset with nothing to compress is a control that cannot do anything, and the
+        row says so instead of silently accepting a value the build ignores. The
+        Compress box itself stays live — it is the way back. PRESENTATION ONLY: this
+        never rewrites the combo's value, so a preset chosen, then un-ticked, then
+        re-ticked survives (and config._compress_level_args emits nothing at all while
+        --compress is absent, so a stale value cannot leak into argv either)."""
+        on = self.compress.isChecked()
+        reason = "" if on else _COMPRESS_OFF_REASON
+        for w in (self.compress_level, self.compress_level_label,
+                  self.artifact_labels["compress_level"]):
+            w.setEnabled(on)
+            w.setToolTip(reason)
+
     def _backend(self):
         b = self.backend.currentText()
         return None if b == "auto" else b
@@ -1179,6 +1315,10 @@ class BuildPage(QtWidgets.QWizardPage):
         c.bundle_source = (False if (c.role == UNAFFILIATED_ROLE or c.unaffiliated)
                            else self.bundle_source.isChecked())
         c.compress = self.compress.isChecked()
+        # currentData() is an int for all ten entries; the None arm is the empty-combo
+        # guard, so a construction change can never persist None into a saved config.
+        _lvl_now = self.compress_level.currentData()
+        c.compress_level = (COMPRESS_LEVEL_DEFAULT if _lvl_now is None else _lvl_now)
         c.resume = self.resume.isChecked()
         c.grow = self.grow.currentText().strip()
         c.version = self.version.text().strip()

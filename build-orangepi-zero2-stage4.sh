@@ -275,6 +275,7 @@ OPIZ2_FLAVOR="both"                             # live | installer | both
 ROOT_MiB=2048                                   # ext4 root size for the installer's persistent build (lean appliance, no desktop payload)
 GROW_POLICY="fill"
 COMPRESS_IMG=false
+COMPRESS_LEVEL=9        # xz preset --compress uses (0-9); --compress-level N
 EXTRA_PACKAGES=""
 PACKAGES_ADD=""          # --packages-add : atoms to add on top of the derived set
 PACKAGES_DROP=""         # --packages-drop: default-set atoms to remove (mandatory floor honored)
@@ -426,7 +427,10 @@ OPTIONS
   Image
     --img-size MiB      ext4 root size baked into the installer's stage4 (default 2048).
     --grow fill|none|<size>   first-boot grow policy (default fill).
-    --compress          xz -9 the finished image(s).
+    --compress          xz-compress the finished image(s) (preset: --compress-level).
+    --compress-level N  xz preset 0-9 used by --compress (default 9).
+                        Lower is faster and larger; 9 is smallest and has
+                        the longest build tail.
     -p PKGS             extra packages appended to the stage4.
 
   Mesh / radios  (same as the Frite/Pi5/Orange-Pi-5 builders)
@@ -598,6 +602,9 @@ while [[ $# -gt 0 ]]; do
         --grow)               GROW_POLICY="$2";           shift 2 ;;
         --no-grow)            GROW_POLICY="none";         shift   ;;
         --compress)           COMPRESS_IMG=true;          shift   ;;
+        --compress-level)
+            case "${2:-}" in [0-9]) ;; *) err "--compress-level must be a single digit 0-9 (got '${2:-}')"; exit 1 ;; esac
+            COMPRESS_LEVEL="$2"; shift 2 ;;
         --skip-clean)         SKIP_CLEAN=true;            shift   ;;
         --resume)             RESUME=true;                shift   ;;
         --print-plan)         PRINT_PLAN=true;            shift   ;;
@@ -1066,7 +1073,7 @@ if ${PRINT_PLAN}; then
     _plan LOCAL_USER         "${LOCAL_USER:-$DEFAULT_USER}"
     _plan LOCAL_PASS         "$([ -n "${LOCAL_PASSHASH}" ] && echo REDACTED || echo none)"
     _plan KERNEL             "mainline-arm64 (defconfig=${OPIZ2_DEFCONFIG} + hardened-appliance.config)"
-    _plan FLAGS_EFFECTIVE    "env=${ENV} flavor=${_EFF_FLAVOR} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_uboot=${SKIP_UBOOT} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} standalone=${STANDALONE} encrypt_root=${ENCRYPT_ROOT}"
+    _plan FLAGS_EFFECTIVE    "env=${ENV} flavor=${_EFF_FLAVOR} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} compress_level=${COMPRESS_LEVEL} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_uboot=${SKIP_UBOOT} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} standalone=${STANDALONE} encrypt_root=${ENCRYPT_ROOT}"
     exit 0
 fi
 
@@ -2511,7 +2518,7 @@ build_live_iso() {
     # false (the default), which under `set -e` would abort the script right here —
     # killing the INSTALLER phase and the summary. Return 0 explicitly on success.
     if ${COMPRESS_IMG} && [ -f "${LIVE_PATH}" ]; then
-        xz -T0 -9 -f "${LIVE_PATH}"; LIVE_PATH="${LIVE_PATH}.xz"
+        xz -T0 "-${COMPRESS_LEVEL}" -f "${LIVE_PATH}"; LIVE_PATH="${LIVE_PATH}.xz"
     fi
     return 0
 }
@@ -2623,7 +2630,7 @@ build_installer_iso() {
     # if-form (NOT a trailing &&-chain): see build_live_iso — the &&-chain returns 1
     # under the default COMPRESS_IMG=false and would abort the caller under set -e.
     if ${COMPRESS_IMG} && [ -f "${INSTALLER_PATH}" ]; then
-        xz -T0 -9 -f "${INSTALLER_PATH}"; INSTALLER_PATH="${INSTALLER_PATH}.xz"
+        xz -T0 "-${COMPRESS_LEVEL}" -f "${INSTALLER_PATH}"; INSTALLER_PATH="${INSTALLER_PATH}.xz"
     fi
     return 0
 }

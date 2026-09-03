@@ -1542,7 +1542,7 @@ esac
 # reused scratch dir, a generator-script change, etc.) — see BUG 3 in the
 # header's frite convention note.
 matches_file="$(mktemp)"
-# Match both the raw artifact and its `xz -9` compressed form (image.img.xz /
+# Match both the raw artifact and its `xz` compressed form (image.img.xz /
 # image.iso.xz): when the spec carries compress=true, the Studio emits --compress
 # and the builder renames the product to <name>.img.xz (removing the raw .img), so
 # a *.img-only glob would find 0 matches and die ERROR on a fully-successful build,
