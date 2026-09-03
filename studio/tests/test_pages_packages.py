@@ -112,6 +112,37 @@ def test_free_atom_add_is_validated(qapp):
     assert "evil/pkg" not in dlg.items
 
 
+def test_free_atom_entry_states_the_gentoo_atom_format(qapp):
+    """#234: "manual package atom addition should specify 'Gentoo atom format' so users
+    know where to look up the syntax".
+
+    Three places, because each covers a moment the others do not: the placeholder names
+    the format before typing, a persistent label still names it AFTER the placeholder has
+    vanished on the first keystroke, and the rejection message — which otherwise only says
+    the value was refused by the identity allowlist — says what a valid one looks like.
+    """
+    dlg = PackagesDialog(GENERATOR_DIR, _thin_cfg())
+
+    placeholder = dlg.free_atom_edit.placeholderText()
+    assert "Gentoo atom" in placeholder
+    assert "app-editors/neovim" in placeholder
+
+    hint = dlg.atom_hint_label.text()
+    assert "Gentoo atom format" in hint
+    assert "category/package" in hint
+    assert "packages.gentoo.org" in hint            # where to look the name up
+    assert dlg.atom_hint_label.wordWrap()
+    # it must OUTLIVE the placeholder: typing hides one and not the other
+    dlg.free_atom_edit.setText("app-edi")
+    assert dlg.atom_hint_label.text() == hint
+
+    # the rejection tells the user the shape, not only that they were refused
+    dlg.free_atom_edit.setText("evil/pkg; rm -rf /")
+    dlg._add_free()
+    err = dlg.error_label.text()
+    assert "Gentoo atom" in err and "category/package" in err
+
+
 def test_legacy_extra_packages_shown_but_not_migrated(qapp):
     """A retired-field atom is displayed (locked, informational) but is NOT folded into
     packages_add — migrating it would change the emitted argv (I1)."""

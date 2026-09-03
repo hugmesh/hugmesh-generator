@@ -23,7 +23,7 @@ from hugmesh_studio.core.config import (ImageConfig, UNAFFILIATED_ROLE,  # noqa:
 from hugmesh_studio.core.platform_info import HostInfo    # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod       # noqa: E402
 from hugmesh_studio.gui.pages import build as build_mod   # noqa: E402
-from hugmesh_studio.gui.qt import Qt, QtCore, QtWidgets  # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtWidgets  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -821,7 +821,7 @@ def test_review_mesh_shows_per_image_summary_and_keeps_worklist(wiz):
     assert wiz.build_backend == build._backend()
 
 
-# ── the mesh worklist's per-row Preview button (2026-08-21: "it does nothing") ────────
+# ── the mesh worklist's per-row "Show command" button (#234: "it just scrolls") ───────
 def _mesh_build_page(wiz, *ids):
     pick_mode(wiz, "mesh")
     wl_page = advance_to(wiz, wizard_mod.WorklistPage)
@@ -830,62 +830,151 @@ def _mesh_build_page(wiz, *ids):
     return advance_to(wiz, wizard_mod.BuildPage)
 
 
-def test_worklist_preview_shows_that_rows_command_and_reveals_the_pane(wiz):
-    """A worklist row's Preview renders THAT image's argv — and puts it where the
-    operator can see it.
+def test_worklist_show_command_renders_inline_and_never_moves_the_page(wiz):
+    """A worklist row's "Show command" renders THAT image's argv NEXT TO THE ROW.
 
-    The button was reported as inert. It was wired the whole time; its output pane is the
-    ask-22 "Exact builder command (advanced)" section, which is FOLDED by default and sits
-    below the viewport, so nothing observable happened on click. This asserts the effect,
-    not just the wiring: the section is expanded, the pane is visible, the pane is
-    scrolled ON SCREEN, and the caption names the row it belongs to.
+    Two reports, one button. It first shipped writing into the page-wide "Exact builder
+    command (advanced)" pane, folded and ~1100px down, and read as inert; the fix for that
+    was to unfold the pane and scroll to it, and #234's verdict was "it just scrolls the
+    window to the preview tab". So this pins the output's LOCATION, not just its content:
+    the inline pane fills and appears, and the page-wide fold and the viewport are both
+    left exactly as the operator had them.
     """
     build = _mesh_build_page(wiz, "omnibus.x86", "backend.rpi5")
-    assert not build.cmd_section.is_expanded()      # ask 22's default survives
-    assert not build.cmd.isVisible()
-    assert not build.cmd_caption.isVisible()
+    assert not build.cmd_section.is_expanded()      # ask 22's default
+    assert not build.wl_cmd.isVisible()
+    assert not build.wl_cmd_caption.isVisible()
 
     row = next(r for r in range(build.worklist_table.rowCount())
                if build.worklist_table.item(r, 0).text() == "backend.rpi5")
+    # the label the operator actually reads: "Preview" was the word that produced the
+    # "it just scrolls" report, so pin the new one rather than only its behaviour
+    assert build.worklist_table.cellWidget(row, 3).text() == "Show command"
     whole_config_argv = build.cmd.toPlainText()
+    scroll = build._content_scroll
+    y_before = scroll.verticalScrollBar().value()
     build.worklist_table.cellWidget(row, 3).click()
 
-    # ...it did work: the pane now holds be.rpi5's OWN command, not the config-wide one
-    argv = build.cmd.toPlainText()
-    assert argv and argv != whole_config_argv
-    assert "rpi5" in argv
-    # ...and the work is observable
-    assert build.cmd_section.is_expanded()
-    assert build.cmd.isVisible()
-    assert build.cmd_caption.isVisible() and "backend.rpi5" in build.cmd_caption.text()
-    scroll = build._content_scroll
-    vp = scroll.viewport()
-    y = build.cmd_section.mapTo(vp, QtCore.QPoint(0, 0)).y()
-    assert -build.cmd_section.height() < y < vp.height(), \
-        f"argv pane scrolled to y={y}, outside the {vp.height()}px viewport"
+    # the row's OWN command, inline, captioned with the row it belongs to
+    argv = build.wl_cmd.toPlainText()
+    assert argv and "rpi5" in argv
+    assert build.wl_cmd.isVisible()
+    assert build.wl_cmd_caption.isVisible()
+    assert "backend.rpi5" in build.wl_cmd_caption.text()
+    # the pane is INSIDE the worklist section, i.e. on screen with the button
+    assert build.worklist_group.isAncestorOf(build.wl_cmd)
+    # ...and nothing else moved: the page-wide pane still holds the whole-config argv,
+    # its fold is untouched, and the viewport did not jump.
+    assert build.cmd.toPlainText() == whole_config_argv
+    assert not build.cmd_section.is_expanded()
+    assert scroll.verticalScrollBar().value() == y_before
     build._join_preflight_worker()
 
 
-def test_worklist_preview_caption_never_outlives_the_entry_it_names(wiz):
-    """The caption is the only thing saying which image the argv belongs to, so a
-    whole-config re-render must clear it — a caption still reading "backend.rpi5" over the
-    config-wide command would mislead worse than no caption at all."""
+def test_worklist_show_command_never_opens_a_modal(wiz):
+    """The tempting "fix" for an invisible output is a dialog, and this page appears to
+    bless it — Packages… exec()s one from a clicked handler two methods away. A modal
+    raised from a signal handler hangs the headless suite forever, so pin it shut."""
     build = _mesh_build_page(wiz, "omnibus.x86", "backend.rpi5")
     build.worklist_table.cellWidget(0, 3).click()
-    assert build.cmd_caption.isVisible()
-    build._preview()                                # any option edit lands here
-    assert not build.cmd_caption.isVisible()
-    assert build.cmd_caption.text() == ""
+    assert QtWidgets.QApplication.activeModalWidget() is None
+    assert QtWidgets.QApplication.activePopupWidget() is None
     build._join_preflight_worker()
 
 
-def test_worklist_preview_survives_a_missing_driver(wiz):
+def test_worklist_inline_command_never_outlives_the_entry_it_names(wiz):
+    """The caption is the only thing saying which image the argv belongs to, and a
+    re-materialized worklist can renumber or drop that row — so the rebuild clears it. A
+    pane still reading "backend.rpi5" over a row that no longer exists misleads worse than
+    an empty pane."""
+    build = _mesh_build_page(wiz, "omnibus.x86", "backend.rpi5")
+    build.worklist_table.cellWidget(0, 3).click()
+    assert build.wl_cmd_caption.isVisible()
+    build._refresh_worklist_table()                 # any worklist-shaping edit lands here
+    assert not build.wl_cmd_caption.isVisible()
+    assert build.wl_cmd_caption.text() == ""
+    assert build.wl_cmd.toPlainText() == ""
+    assert not build.wl_cmd.isVisible()
+    build._join_preflight_worker()
+
+
+def test_worklist_show_command_survives_a_missing_driver(wiz):
     """The early return is a guard, not a feature: with no materialized worklist the
     click must be a no-op rather than an exception out of a Qt slot."""
     build = _mesh_build_page(wiz, "omnibus.x86")
     build._wl_driver = None
     build._preview_entry(0)                         # must not raise
-    assert not build.cmd_caption.isVisible()
+    assert not build.wl_cmd_caption.isVisible()
+    assert not build.wl_cmd.isVisible()
+    build._join_preflight_worker()
+
+
+def test_worklist_inline_command_is_cleared_when_the_worklist_stops_assembling(wiz,
+                                                                              monkeypatch):
+    """The other way a row can stop existing: the worklist fails to materialize at all and
+    the table empties. The argv must not survive that either — it would be captioned with
+    an image nothing on screen mentions any more."""
+    build = _mesh_build_page(wiz, "omnibus.x86", "backend.rpi5")
+    build.worklist_table.cellWidget(0, 3).click()
+    assert build.wl_cmd.isVisible()
+
+    def _boom(*a, **k):
+        raise RuntimeError("no worklist")
+    monkeypatch.setattr(build_mod, "WorklistDriver", _boom)
+    build._refresh_worklist_table()
+
+    assert build.worklist_table.rowCount() == 0
+    assert not build.wl_cmd.isVisible()
+    assert build.wl_cmd.toPlainText() == ""
+    assert not build.wl_cmd_caption.isVisible()
+    build._join_preflight_worker()
+
+
+def test_worklist_inline_command_does_not_outlive_the_options_it_was_rendered_from(wiz):
+    """The row's argv is assembled from the option values in place when it was clicked.
+
+    A row can stop matching WITHOUT moving: edit any option and the whole-config pane
+    re-renders from values the inline pane's driver never saw. A pane still captioned
+    "backend.rpi5" over a pre-edit argv is copy-pasteable and wrong — and it sits three
+    pixels from the true one, which is worse than showing nothing. The retired
+    ``cmd_caption`` enforced this from ``_preview()``; ``_clear_wl_cmd`` in
+    ``_refresh_worklist_table`` alone does NOT, because ``_preview()`` never calls it.
+    """
+    build = _mesh_build_page(wiz, "omnibus.x86", "backend.rpi5")
+    row = next(r for r in range(build.worklist_table.rowCount())
+               if build.worklist_table.item(r, 0).text() == "backend.rpi5")
+    build.worklist_table.cellWidget(row, 3).click()
+    assert build.wl_cmd.isVisible()
+
+    build.outdir.setText("/tmp/a-different-outdir")
+    build.preview_btn.click()                       # the page's own Refresh preview
+
+    assert "/tmp/a-different-outdir" in build.cmd.toPlainText()   # non-vacuity
+    assert not build.wl_cmd.isVisible()
+    assert build.wl_cmd.toPlainText() == ""
+    assert not build.wl_cmd_caption.isVisible()
+    assert build.wl_cmd_caption.text() == ""
+
+    # ...and the harsher case: a config the page has just declared unassemblable must
+    # not leave a copy-pasteable command on screen either.
+    build.worklist_table.cellWidget(row, 3).click()
+    assert build.wl_cmd.isVisible()
+    build.extra_flags.setText('--foo "unbalanced')
+    build.preview_btn.click()
+    assert build.cmd.toPlainText() == ""            # the ValueError exit was taken
+    assert not build.wl_cmd.isVisible()
+    assert build.wl_cmd.toPlainText() == ""
+    assert not build.wl_cmd_caption.isVisible()
+    build._join_preflight_worker()
+
+
+def test_worklist_section_title_is_a_label_and_the_qualifier_is_a_tooltip(wiz):
+    """#234: "de-clanker the 'Mesh worklist - one image per row' title". The header keeps
+    the NAME; the explanation moves to the header's own hover, where a reader looking for
+    one goes."""
+    build = _mesh_build_page(wiz, "omnibus.x86")
+    assert build.worklist_section.toggle.text() == "Mesh worklist"
+    assert "one row per image" in build.worklist_section.toggle.toolTip().lower()
     build._join_preflight_worker()
 
 

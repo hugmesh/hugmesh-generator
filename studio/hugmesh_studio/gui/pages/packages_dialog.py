@@ -31,6 +31,7 @@ stores deltas regardless of platform; the Review preview only shows ``--packages
 from __future__ import annotations
 
 from ..qt import Qt, QtWidgets
+from .. import styles
 from ...core import package_catalog as pc
 from ...core.config import ImageConfig, image_class
 from ...core.validate import IdentityValidationError, validate_package_atoms
@@ -93,7 +94,10 @@ class PackagesDialog(QtWidgets.QDialog):
 
         # free-atom entry (tier-3 add) — validated against the same allowlist as every surface.
         self.free_atom_edit = QtWidgets.QLineEdit()
-        self.free_atom_edit.setPlaceholderText("add extra atoms, space-separated (e.g. app-editors/neovim)")
+        # Short on purpose: a QLineEdit elides its placeholder, and this one lives in a
+        # dialog column narrow enough that a full sentence would be cut mid-word.
+        self.free_atom_edit.setPlaceholderText(
+            "Gentoo atom, e.g. app-editors/neovim (space-separated)")
         self.add_free_btn = QtWidgets.QPushButton("Add")
         self.add_free_btn.clicked.connect(self._add_free)
         self.free_atom_edit.returnPressed.connect(self._add_free)
@@ -101,6 +105,17 @@ class PackagesDialog(QtWidgets.QDialog):
         frow.addWidget(self.free_atom_edit, 1)
         frow.addWidget(self.add_free_btn)
         lay.addLayout(frow)
+        # The format hint has to OUTLIVE the placeholder. A placeholder disappears on the
+        # first keystroke — precisely the moment the user is mid-atom and wants to know
+        # what shape it takes — so the naming rule and where to look a name up are stated
+        # persistently, in the page, as a label. Not a tooltip (invisible until hovered)
+        # and not a dialog (this file already knows better; see error_label).
+        self.atom_hint_label = QtWidgets.QLabel(
+            "Gentoo atom format: category/package — e.g. app-editors/neovim. "
+            "Look names up at packages.gentoo.org.")
+        self.atom_hint_label.setWordWrap(True)
+        self.atom_hint_label.setStyleSheet(styles.muted())
+        lay.addWidget(self.atom_hint_label)
         self.error_label = QtWidgets.QLabel("")
         self.error_label.setWordWrap(True)
         self.error_label.setStyleSheet("color: #b00020;")
@@ -249,7 +264,15 @@ class PackagesDialog(QtWidgets.QDialog):
         try:
             validate_package_atoms(text)
         except IdentityValidationError as e:
-            self.error_label.setText(str(e))
+            # core.validate's message explains WHY the value was refused (it would be
+            # written into a root-sourced config) and says nothing about what a valid
+            # atom looks like — which is the half the user needs to fix their input. The
+            # format sentence is appended HERE, at the call site, and not inside
+            # validate._require: that helper is shared by validate_brand and every other
+            # identity validator, where "Gentoo atom" would be nonsense.
+            self.error_label.setText(
+                f"{e}. Expected Gentoo atom format: category/package — "
+                "e.g. app-editors/neovim.")
             self.error_label.setVisible(True)
             return
         self.error_label.setVisible(False)

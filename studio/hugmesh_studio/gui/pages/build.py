@@ -32,11 +32,11 @@ applied everywhere:
   compress and resume should all be default on"): the square meant "leave the builder's
   default", and for every one of them that default is ON, so checked already said it —
   see _flag_check;
-* actions (Packages… / Preview / Refresh preview / Build builder image now) are PUSH
-  BUTTONS.
+* actions (Packages… / Show command / Refresh preview / Build builder image now) are
+  PUSH BUTTONS.
 
 Related controls are grouped into the wizard's Collapsible sections (_widgets.collapsible
-— the NetworkPage house pattern): Build execution / mesh worklist / Image options /
+— the NetworkPage house pattern): Build execution / Mesh worklist / Image options /
 Artifacts & build options / Secure Boot / Build plumbing. "Image options" and "Artifacts"
 used to be two of those, which is what ask 13's "should include the artifacts as they're
 the same thing side by side" is about — an option and the artifact it yields are now ONE
@@ -52,7 +52,7 @@ import os
 
 from ..qt import Qt, QtCore, QtWidgets, Signal
 from .. import console
-from ._scroll import reveal, scrollable
+from ._scroll import scrollable
 from ...core import build_sessions
 from ...core import cross_dracut
 from ...core import flash_targets
@@ -536,7 +536,7 @@ class BuildPage(QtWidgets.QWizardPage):
         lay.addWidget(self.exec_section)
 
         # ── mesh worklist summary (design 3.12) — one row per image with per-entry
-        # Packages…/Preview and the node key-zip opt-out. Shown only in mesh: the
+        # Packages…/Show command and the node key-zip opt-out. Shown only in mesh: the
         # SECTION is mode-gated alongside the group in initializePage (the NetworkPage
         # tailnet pattern — hiding only the content would leave an orphan header).
         self.worklist_group = QtWidgets.QGroupBox("")
@@ -547,12 +547,34 @@ class BuildPage(QtWidgets.QWizardPage):
         self.worklist_table.verticalHeader().setVisible(False)
         self.worklist_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         wg.addWidget(self.worklist_table)
+        # A row's argv lands HERE, three pixels under the button that asked for it —
+        # not in the page-wide "Exact builder command" pane a thousand pixels below.
+        # That remote pane is what made the old Preview button read as "it just scrolls
+        # the window": the only way to make a write that far away observable was to
+        # expand a folded section and move the viewport, which is a side effect the
+        # operator never asked for. Adjacency needs no scroll, no fold change and — the
+        # rule this page must not break — no dialog: a QDialog/QMessageBox raised from a
+        # clicked() handler hangs the headless suite.
+        self.wl_cmd_caption = QtWidgets.QLabel("")
+        self.wl_cmd_caption.setWordWrap(True)
+        self.wl_cmd_caption.setVisible(False)
+        wg.addWidget(self.wl_cmd_caption)
+        self.wl_cmd = console.attach(QtWidgets.QPlainTextEdit())
+        self.wl_cmd.setReadOnly(True)
+        self.wl_cmd.setMaximumHeight(120)
+        self.wl_cmd.setVisible(False)
+        wg.addWidget(self.wl_cmd)
         self.gen_keys = QtWidgets.QCheckBox(
             "Generate node key-zips after each successful node build (mesh)")
         self.gen_keys.setChecked(True)
         wg.addWidget(self.gen_keys)
-        self.worklist_section = collapsible("Mesh worklist — one image per row",
-                                            self.worklist_group)
+        self.worklist_section = collapsible("Mesh worklist", self.worklist_group)
+        # The qualifier the title used to carry as an em-dash tail. A section header is a
+        # LABEL, not a sentence; the explanation belongs where a reader goes looking for
+        # one, which is the header's own hover.
+        self.worklist_section.toggle.setToolTip(
+            "One row per image this build produces, with per-image Packages and "
+            "command controls.")
         lay.addWidget(self.worklist_section)
 
         # ── section: Image options — WHAT the image contains / how it is stamped
@@ -978,14 +1000,11 @@ class BuildPage(QtWidgets.QWizardPage):
         self.cmd = console.attach(QtWidgets.QPlainTextEdit()); self.cmd.setReadOnly(True); self.cmd.setMaximumHeight(120)
         cmd_box = QtWidgets.QGroupBox("")
         cb = QtWidgets.QVBoxLayout(cmd_box)
-        # Whose command is in the pane. Hidden while it holds the whole-config argv (the
-        # normal state, which needs no caption); shown when a mesh worklist row's Preview
-        # has replaced it with THAT image's command, because the two are indistinguishable
-        # by eye — both are 500 characters of builder argv.
-        self.cmd_caption = QtWidgets.QLabel("")
-        self.cmd_caption.setWordWrap(True)
-        self.cmd_caption.setVisible(False)
-        cb.addWidget(self.cmd_caption)
+        # This pane holds the WHOLE CONFIG's argv, always. It used to be dual-purpose — a
+        # worklist row's "Preview" overwrote it with that one image's command — which is
+        # why it carried a caption saying whose argv was on screen. A per-row command now
+        # renders next to its own row (see wl_cmd), so there is exactly one answer to
+        # "whose command is this?" and no caption is needed to disambiguate it.
         cb.addWidget(self.cmd)
         self.cmd_section = collapsible("Exact builder command (advanced)", cmd_box,
                                        expanded=False)
@@ -1516,15 +1535,19 @@ class BuildPage(QtWidgets.QWizardPage):
                                   ).command_string(pc, self._backend())
         except ValueError as e:  # e.g. unbalanced quotes in the extra-flags escape hatch
             self.cmd.setPlainText("")
-            self._set_cmd_caption("")
+            self._clear_wl_cmd()    # a build we just called unassemblable owes no argv
             self.summary.setText(f"Cannot assemble this build: {e}")
             self.log.setPlainText(f"Command error: {e}")
             self._set_problems([str(e)])
             return
         self.cmd.setPlainText(cmdline)
-        # This render is the WHOLE config's argv, so any per-entry caption a worklist
-        # Preview left behind is now false and goes with it.
-        self._set_cmd_caption("")
+        # An option edit re-renders the WHOLE config's argv, which invalidates any per-row
+        # argv still on screen: it was assembled from the PREVIOUS values, by a _wl_driver
+        # that never saw this edit. _refresh_worklist_table's _clear_wl_cmd covers the row
+        # VANISHING; this covers the row silently ceasing to match while it sits there.
+        # (This is the trigger the retired _set_cmd_caption("") used to cover here, and
+        # _preview() never calls _refresh_worklist_table.)
+        self._clear_wl_cmd()
         self._refresh_summary()
         # The command pane above updated INSTANTLY (pure argv assembly, no daemon).
         # The AGGREGATE preflight + builder-image probe are the two docker subprocess
@@ -1746,7 +1769,7 @@ class BuildPage(QtWidgets.QWizardPage):
     # ---- mesh worklist summary --------------------------------------------------
     def _refresh_worklist_table(self):
         try:
-            # workdir: the per-entry Preview buttons must show the session -w the real
+            # workdir: the per-row Show command buttons must show the session -w the real
             # dispatch will use (same honesty rule as the main command pane above).
             self._wl_driver = WorklistDriver(self.wiz.generator_dir, self._current_worklist(),
                                              host=self.wiz.host, backend=self._backend(),
@@ -1754,9 +1777,16 @@ class BuildPage(QtWidgets.QWizardPage):
             self._materialized = self._wl_driver.materialize()
         except Exception as e:
             self._materialized = []
+            self._clear_wl_cmd()
             self.worklist_table.setRowCount(0)
             self.log.setPlainText(f"Cannot assemble the worklist: {e}")
             return
+        # Every rebuild re-materializes the rows, so an argv rendered for the PREVIOUS
+        # set can now belong to a row that moved or no longer exists. Clearing here is
+        # the same honesty rule the retired cmd_caption existed to enforce. This covers
+        # the row VANISHING; _preview() covers the other half (the row staying put while
+        # the options under it move) — the pane is invalidated from BOTH.
+        self._clear_wl_cmd()
         self.worklist_table.setRowCount(len(self._materialized))
         for i, (entry, mcfg) in enumerate(self._materialized):
             self.worklist_table.setItem(i, 0, QtWidgets.QTableWidgetItem(entry.id))
@@ -1764,9 +1794,9 @@ class BuildPage(QtWidgets.QWizardPage):
             pkg_btn = QtWidgets.QPushButton("Packages…")
             pkg_btn.clicked.connect(lambda _=False, idx=i: self._open_packages_entry(idx))
             self.worklist_table.setCellWidget(i, 2, pkg_btn)
-            prev_btn = QtWidgets.QPushButton("Preview")
-            prev_btn.setToolTip("Show this image's exact builder command in the "
-                                "'Exact builder command' pane below.")
+            prev_btn = QtWidgets.QPushButton("Show command")
+            prev_btn.setToolTip("Show this image's exact builder command below the "
+                                "table.")
             prev_btn.clicked.connect(lambda _=False, idx=i: self._preview_entry(idx))
             self.worklist_table.setCellWidget(i, 3, prev_btn)
         self.worklist_table.resizeColumnsToContents()
@@ -1781,45 +1811,47 @@ class BuildPage(QtWidgets.QWizardPage):
             chips.append(f"+{addn}/−{dropn} pkgs")
         return " · ".join(chips)
 
-    def _preview_entry(self, idx: int):
-        """Render ONE worklist row's builder command into the command pane — and REVEAL it.
+    def _clear_wl_cmd(self) -> None:
+        """Empty and hide the inline per-row argv pane.
 
-        The button was reported as "doing nothing". It was in fact wired and correct: it
-        has always written that row's real argv into ``self.cmd``. What it never did was
-        make that observable. ``self.cmd`` lives in the "Exact builder command (advanced)"
-        section, which ask 22 folded BY DEFAULT and which sits ~1100px below the worklist
-        on a page whose viewport is ~600px tall — so every click landed in a collapsed,
-        off-screen pane. Wiring is not the same thing as feedback: expand the section,
-        scroll it into view, and caption it with the row's id.
+        Called from BOTH ways a rendered row stops being true: ``_refresh_worklist_table``
+        (the row was re-materialized — it may have moved or gone) and ``_preview`` (the
+        row is still there, but an option edit means its argv was assembled from values
+        that have since changed). A stale copy-pasteable command captioned with a real
+        image name is worse than an empty pane, and it sits next to the true one."""
+        self.wl_cmd.setPlainText("")
+        self.wl_cmd.setVisible(False)
+        self.wl_cmd_caption.setText("")
+        self.wl_cmd_caption.setVisible(False)
+
+    def _preview_entry(self, idx: int):
+        """Render ONE worklist row's builder command DIRECTLY UNDER the worklist table.
+
+        History, because the obvious "fix" here is the wrong one twice over. The button
+        first shipped writing that row's argv into ``self.cmd`` — the page-wide "Exact
+        builder command (advanced)" pane, folded by default and ~1100px down a page whose
+        viewport is ~600px tall — so it was reported as doing nothing. The answer then was
+        to expand that section and scroll to it, and the operator's verdict on that was
+        "the preview button just scrolls the window to the preview tab": moving someone's
+        viewport is a side effect, not an answer, and it silently unfolds a section they
+        had folded. So the output moved to the button instead of the viewport moving to
+        the output — ``wl_cmd`` sits inside ``worklist_group``, already on screen with the
+        row that produced it. No scroll, no fold change, and NOT a dialog: this runs from
+        a ``clicked`` handler, where a ``QDialog``/``QMessageBox`` would hang the headless
+        suite (the page's Packages… button does exec() one, which is exactly the local
+        precedent that makes this worth stating).
         """
         if self._wl_driver is None or idx >= len(self._materialized):
             return
         entry, mcfg = self._materialized[idx]
         try:
-            self.cmd.setPlainText(self._wl_driver.command_string(mcfg))
+            self.wl_cmd.setPlainText(self._wl_driver.command_string(mcfg))
         except ValueError as e:
-            self.cmd.setPlainText(f"Command error: {e}")
-        self._set_cmd_caption(
-            f"Showing the builder command for worklist image {entry.id}. "
-            "Editing any option below re-renders this pane for the whole build.")
-        self._reveal_cmd_pane()
-
-    def _set_cmd_caption(self, text: str) -> None:
-        """Caption the argv pane, or clear it when empty. It names WHOSE command is on
-        screen, so every whole-config render must clear it: a caption still claiming
-        "be.rpi5" over a cfg-wide argv is a worse lie than no caption at all."""
-        self.cmd_caption.setText(text)
-        self.cmd_caption.setVisible(bool(text))
-
-    def _reveal_cmd_pane(self) -> None:
-        """Open the folded argv section and scroll to it.
-
-        ``set_expanded`` and not ``set_default_expanded``: the latter defers to a fold the
-        operator made by hand, which is right for a page re-deriving its own defaults and
-        wrong here — this IS a direct operator action, and the section is the answer to
-        it. They can fold it again, and the next visit re-folds it as ask 22 intends."""
-        self.cmd_section.set_expanded(True)
-        reveal(self, self.cmd_section)
+            self.wl_cmd.setPlainText(f"Command error: {e}")
+        self.wl_cmd_caption.setText(
+            f"Builder command for worklist image {entry.id}:")
+        self.wl_cmd_caption.setVisible(True)
+        self.wl_cmd.setVisible(True)
 
     def _open_packages_entry(self, idx: int):
         if idx >= len(self._materialized):
