@@ -1267,11 +1267,19 @@ class BuildPage(QtWidgets.QWizardPage):
                                   ).command_string(pc, self._backend())
         except ValueError as e:  # e.g. unbalanced quotes in the extra-flags escape hatch
             self.cmd.setPlainText("")
+            self._clear_wl_cmd()    # a build we just called unassemblable owes no argv
             self.summary.setText(f"Cannot assemble this build: {e}")
             self.log.setPlainText(f"Command error: {e}")
             self._set_problems([str(e)])
             return
         self.cmd.setPlainText(cmdline)
+        # An option edit re-renders the WHOLE config's argv, which invalidates any per-row
+        # argv still on screen: it was assembled from the PREVIOUS values, by a _wl_driver
+        # that never saw this edit. _refresh_worklist_table's _clear_wl_cmd covers the row
+        # VANISHING; this covers the row silently ceasing to match while it sits there.
+        # (This is the trigger the retired _set_cmd_caption("") used to cover here, and
+        # _preview() never calls _refresh_worklist_table.)
+        self._clear_wl_cmd()
         self._refresh_summary()
         # The command pane above updated INSTANTLY (pure argv assembly, no daemon).
         # The AGGREGATE preflight + builder-image probe are the two docker subprocess
@@ -1507,8 +1515,9 @@ class BuildPage(QtWidgets.QWizardPage):
             return
         # Every rebuild re-materializes the rows, so an argv rendered for the PREVIOUS
         # set can now belong to a row that moved or no longer exists. Clearing here is
-        # the same honesty rule the retired cmd_caption existed to enforce, moved to the
-        # one place that can actually invalidate the pane.
+        # the same honesty rule the retired cmd_caption existed to enforce. This covers
+        # the row VANISHING; _preview() covers the other half (the row staying put while
+        # the options under it move) — the pane is invalidated from BOTH.
         self._clear_wl_cmd()
         self.worklist_table.setRowCount(len(self._materialized))
         for i, (entry, mcfg) in enumerate(self._materialized):
@@ -1535,7 +1544,13 @@ class BuildPage(QtWidgets.QWizardPage):
         return " · ".join(chips)
 
     def _clear_wl_cmd(self) -> None:
-        """Empty and hide the inline per-row argv pane."""
+        """Empty and hide the inline per-row argv pane.
+
+        Called from BOTH ways a rendered row stops being true: ``_refresh_worklist_table``
+        (the row was re-materialized — it may have moved or gone) and ``_preview`` (the
+        row is still there, but an option edit means its argv was assembled from values
+        that have since changed). A stale copy-pasteable command captioned with a real
+        image name is worse than an empty pane, and it sits next to the true one."""
         self.wl_cmd.setPlainText("")
         self.wl_cmd.setVisible(False)
         self.wl_cmd_caption.setText("")

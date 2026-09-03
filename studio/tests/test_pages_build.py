@@ -23,7 +23,7 @@ from hugmesh_studio.core.config import (ImageConfig, UNAFFILIATED_ROLE,  # noqa:
 from hugmesh_studio.core.platform_info import HostInfo    # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod       # noqa: E402
 from hugmesh_studio.gui.pages import build as build_mod   # noqa: E402
-from hugmesh_studio.gui.qt import Qt, QtCore, QtWidgets  # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtWidgets  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -846,6 +846,9 @@ def test_worklist_show_command_renders_inline_and_never_moves_the_page(wiz):
 
     row = next(r for r in range(build.worklist_table.rowCount())
                if build.worklist_table.item(r, 0).text() == "backend.rpi5")
+    # the label the operator actually reads: "Preview" was the word that produced the
+    # "it just scrolls" report, so pin the new one rather than only its behaviour
+    assert build.worklist_table.cellWidget(row, 3).text() == "Show command"
     whole_config_argv = build.cmd.toPlainText()
     scroll = build._content_scroll
     y_before = scroll.verticalScrollBar().value()
@@ -920,6 +923,44 @@ def test_worklist_inline_command_is_cleared_when_the_worklist_stops_assembling(w
     build._refresh_worklist_table()
 
     assert build.worklist_table.rowCount() == 0
+    assert not build.wl_cmd.isVisible()
+    assert build.wl_cmd.toPlainText() == ""
+    assert not build.wl_cmd_caption.isVisible()
+    build._join_preflight_worker()
+
+
+def test_worklist_inline_command_does_not_outlive_the_options_it_was_rendered_from(wiz):
+    """The row's argv is assembled from the option values in place when it was clicked.
+
+    A row can stop matching WITHOUT moving: edit any option and the whole-config pane
+    re-renders from values the inline pane's driver never saw. A pane still captioned
+    "backend.rpi5" over a pre-edit argv is copy-pasteable and wrong — and it sits three
+    pixels from the true one, which is worse than showing nothing. The retired
+    ``cmd_caption`` enforced this from ``_preview()``; ``_clear_wl_cmd`` in
+    ``_refresh_worklist_table`` alone does NOT, because ``_preview()`` never calls it.
+    """
+    build = _mesh_build_page(wiz, "omnibus.x86", "backend.rpi5")
+    row = next(r for r in range(build.worklist_table.rowCount())
+               if build.worklist_table.item(r, 0).text() == "backend.rpi5")
+    build.worklist_table.cellWidget(row, 3).click()
+    assert build.wl_cmd.isVisible()
+
+    build.outdir.setText("/tmp/a-different-outdir")
+    build.preview_btn.click()                       # the page's own Refresh preview
+
+    assert "/tmp/a-different-outdir" in build.cmd.toPlainText()   # non-vacuity
+    assert not build.wl_cmd.isVisible()
+    assert build.wl_cmd.toPlainText() == ""
+    assert not build.wl_cmd_caption.isVisible()
+    assert build.wl_cmd_caption.text() == ""
+
+    # ...and the harsher case: a config the page has just declared unassemblable must
+    # not leave a copy-pasteable command on screen either.
+    build.worklist_table.cellWidget(row, 3).click()
+    assert build.wl_cmd.isVisible()
+    build.extra_flags.setText('--foo "unbalanced')
+    build.preview_btn.click()
+    assert build.cmd.toPlainText() == ""            # the ValueError exit was taken
     assert not build.wl_cmd.isVisible()
     assert build.wl_cmd.toPlainText() == ""
     assert not build.wl_cmd_caption.isVisible()

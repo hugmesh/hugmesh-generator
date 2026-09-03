@@ -31,6 +31,7 @@ stores deltas regardless of platform; the Review preview only shows ``--packages
 from __future__ import annotations
 
 from ..qt import Qt, QtWidgets
+from .. import styles
 from ...core import package_catalog as pc
 from ...core.config import ImageConfig, image_class
 from ...core.validate import IdentityValidationError, validate_package_atoms
@@ -113,7 +114,7 @@ class PackagesDialog(QtWidgets.QDialog):
             "Gentoo atom format: category/package — e.g. app-editors/neovim. "
             "Look names up at packages.gentoo.org.")
         self.atom_hint_label.setWordWrap(True)
-        self.atom_hint_label.setStyleSheet("color: palette(mid);")
+        self.atom_hint_label.setStyleSheet(styles.muted())
         lay.addWidget(self.atom_hint_label)
         self.error_label = QtWidgets.QLabel("")
         self.error_label.setWordWrap(True)
@@ -270,7 +271,7 @@ class PackagesDialog(QtWidgets.QDialog):
             # validate._require: that helper is shared by validate_brand and every other
             # identity validator, where "Gentoo atom" would be nonsense.
             self.error_label.setText(
-                f"{e} Expected Gentoo atom format: category/package — "
+                f"{e}. Expected Gentoo atom format: category/package — "
                 "e.g. app-editors/neovim.")
             self.error_label.setVisible(True)
             return
