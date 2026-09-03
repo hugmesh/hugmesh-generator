@@ -101,8 +101,8 @@ class DomainsChoicePage(QtWidgets.QWizardPage):
     def initializePage(self):
         c = self.wiz.cfg
         # The internal card NAMES the domains it means, so "internal only" is never an
-        # abstraction: the cluster domain the Network step set, and the orchestration
-        # superdomain every node joins (derived <brand>.internal when left blank).
+        # abstraction: the cluster domain the Network step set, and the Tailscale
+        # root domain every node joins (derived <brand>.internal when left blank).
         self._buttons["internal"].setAccessibleDescription(effective_domain_note(c))
         self._buttons["internal"].set_description(effective_domain_note(c))
         self._buttons["more" if c.additional_domains else "internal"].setChecked(True)

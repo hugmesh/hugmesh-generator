@@ -251,7 +251,7 @@ class WorklistPage(QtWidgets.QWizardPage):
         # ── the mesh's desktop PEOPLE (operator ask 2026-08-14) ──────────────────
         # Checking a desktop-class row pops DesktopUserDialog; the collected pairs
         # live here, visible, and are stamped onto the entries on Next. The user is
-        # provisioned on the internal orchestration superdomain (manifest User —
+        # provisioned on the internal Tailscale root domain (manifest User —
         # core/worklist.desktop_users); the Users step can later add the same
         # account to other domains, e.g. as an admin.
         self._desktop_people: dict[str, tuple[str, str]] = {}   # rid -> (user, role)
@@ -675,7 +675,7 @@ class WorklistPage(QtWidgets.QWizardPage):
     def initializePage(self) -> None:
         cfg = self.wiz.cfg
         self.header.setText(
-            "All nodes join the orchestration superdomain "
+            "All nodes join the Tailscale root domain "
             f"<b>{cfg.effective_superdomain()}</b> (edit on the Network page). "
             "Superadmins belong to it.")
 
@@ -818,7 +818,7 @@ class WorklistPage(QtWidgets.QWizardPage):
             # the desktop person collected by the check-popup (desktop-class rows
             # only; a node rid is never in the map). The pair rides the entry into
             # materialize: --person-role on this image + a manifest User on the
-            # internal orchestration superdomain.
+            # internal Tailscale root domain.
             person_user, person_role = self._desktop_people.get(rid, ("", "user"))
             entries.append(WorklistEntry(
                 role=role, platform=platform, board=board, flavor=flavor,
