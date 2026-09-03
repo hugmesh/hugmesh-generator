@@ -798,5 +798,55 @@ else
     bad "flash-disk.sh --role desktop --arch arm64: picked a board silently — desktop is built by rpi5, jetson, frite and four Orange Pi boards, and newest-mtime is not a board choice"
 fi
 
+# D4) THE BRAND IS NOT AN ANCHOR — and removing it must not cost the platform one.
+#     The artifact's first field is ${BRAND} (build-rpi5-stage4.sh / build-x86-host-
+#     stage4.sh IMG_PATH), which is "hugmesh" only by DEFAULT: `--brand sdhm` for
+#     the operator's own mesh, a forced `gentoo` for an unaffiliated build. Every
+#     globber above used to spell `hugmesh-` literally, so a finished sdhm mesh was
+#     invisible to the launchers, the flasher AND the emulation picker — the
+#     reported defect ("mesh emulation screen dropdown can't seem to use the 3 pi
+#     images session that completed successfully").
+#
+#     Both halves are asserted together on purpose. Widening the brand is one edit
+#     away from widening the PLATFORM too (`*-host-*` would match a Pi image whose
+#     ROLE is host), and this fixture makes the branded FOREIGN image the newest one
+#     so a lost anchor picks it.
+brand_dir="$(mktemp -d)"
+: > "${brand_dir}/sdhm-rpi5-arm64-pki-test-20260831T015954Z.img"
+: > "${brand_dir}/sdhm-rpi5-arm64-backend-test-20260831T025801Z.img"
+: > "${brand_dir}/sdhm-x86-amd64-pki-test-20260831T045801Z.img"
+: > "${brand_dir}/sdhm-x86-amd64-backend-test-20260831T055801Z.img"
+touch -d '2020-01-01 00:00' "${brand_dir}"/sdhm-*.img
+for probe in "launch-pi.sh:pki:sdhm-rpi5-:sdhm-x86-" \
+             "launch-pi.sh:backend:sdhm-rpi5-:sdhm-x86-" \
+             "launch-x86.sh:pki:sdhm-x86-:sdhm-rpi5-" \
+             "launch-x86.sh:backend:sdhm-x86-:sdhm-rpi5-"; do
+    L="${probe%%:*}"; rest="${probe#*:}"
+    r="${rest%%:*}"; rest="${rest#*:}"
+    want="${rest%%:*}"; foreign="${rest##*:}"
+    # the FOREIGN-platform branded image is the newest, so an unanchored glob takes it
+    touch -d '2030-01-01 00:00' "${brand_dir}"/"${foreign}"*.img
+    got="$(basename "$(autodetect_of "${L}" "${r}" "${brand_dir}")" 2>/dev/null || true)"
+    case "${got}" in
+        "${want}"*) ok "${L} --role ${r}: resolves a BRANDED image, still platform-anchored (${got})" ;;
+        "")         bad "${L} --role ${r}: found NOTHING in a dir of sdhm-* images — the brand is still hard-coded" ;;
+        *)          bad "${L} --role ${r}: crossed platforms to ${got} — widening the brand must not widen the platform anchor" ;;
+    esac
+    touch -d '2020-01-01 00:00' "${brand_dir}"/sdhm-*.img
+done
+for probe in "backend:arm64:sdhm-rpi5-" "pki:arm64:sdhm-rpi5-" \
+             "backend:x86:sdhm-x86-" "pki:x86:sdhm-x86-"; do
+    r="${probe%%:*}"; rest="${probe#*:}"; a="${rest%%:*}"; want="${rest##*:}"
+    got="$(basename "$( (cd "${GEN}" && ./scripts/flash-disk.sh --role "${r}" --arch "${a}" \
+        --work-dir "${brand_dir}" --list 2>/dev/null | sed -n 's/^Would flash: //p') || true)" \
+        2>/dev/null || true)"
+    case "${got}" in
+        "${want}"*) ok "flash-disk.sh --role ${r} --arch ${a} (branded): ${got}" ;;
+        "")         bad "flash-disk.sh --role ${r} --arch ${a}: found NOTHING among sdhm-* images — the brand is still hard-coded" ;;
+        *)          bad "flash-disk.sh --role ${r} --arch ${a} resolved to ${got}, expected a ${want}* image" ;;
+    esac
+done
+rm -rf "${brand_dir}"
+
 echo "== ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

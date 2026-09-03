@@ -616,16 +616,22 @@ if ${KEEP_ALIVE} && [ -z "${CONTAINER_NAME}" ]; then
 fi
 
 # ── Resolve the image ───────────────────────────────────────────────────────
-# The builders name artifacts hugmesh-<platform>-<arch>-<role>-<env>-<ts>.img[.xz];
+# The builders name artifacts <brand>-<platform>-<arch>-<role>-<env>-<ts>.img[.xz];
 # a session dir holds several roles, so match the role explicitly before falling
 # back to "any image for this platform".
+#
+# The leading field is ${BRAND} — sdhm / gentoo / hugmesh, whatever the build ran
+# under — so it is globbed, NOT spelled. The PLATFORM stays a literal anchor and
+# stays FIRST in every pattern: an unanchored role glob is how an aarch64 row
+# would be handed an x86 image. (run-qemu-docker.sh passes --img explicitly, so
+# this autodetect is the fallback path; it still has to be right.)
 autodetect_img() {
     local c
     for c in \
-        "${ARTIFACTS}"/hugmesh-"${PLATFORM}"-*-"${ROLE}"-*.img \
-        "${ARTIFACTS}"/hugmesh-"${PLATFORM}"-*-"${ROLE}"-*.img.xz \
-        "${ARTIFACTS}"/hugmesh-"${PLATFORM}"-*.img \
-        "${ARTIFACTS}"/hugmesh-"${PLATFORM}"-*.img.xz ; do
+        "${ARTIFACTS}"/*-"${PLATFORM}"-*-"${ROLE}"-*.img \
+        "${ARTIFACTS}"/*-"${PLATFORM}"-*-"${ROLE}"-*.img.xz \
+        "${ARTIFACTS}"/*-"${PLATFORM}"-*.img \
+        "${ARTIFACTS}"/*-"${PLATFORM}"-*.img.xz ; do
         c="$(ls -1t ${c} 2>/dev/null | grep -ivE '(kernel|initramfs|initrd|squashfs)' | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done
@@ -635,7 +641,7 @@ autodetect_img() {
 autodetect_stage4() {
     local c
     for c in \
-        "${ARTIFACTS}"/hugmesh-"${PLATFORM}"-*-"${ROLE}"-*.stage4.tar.xz \
+        "${ARTIFACTS}"/*-"${PLATFORM}"-*-"${ROLE}"-*.stage4.tar.xz \
         "${ARTIFACTS}"/*-"${ROLE}"-*.stage4.tar.xz ; do
         c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
