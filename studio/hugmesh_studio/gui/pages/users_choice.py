@@ -149,7 +149,7 @@ class UsersChoicePage(QtWidgets.QWizardPage):
              ""),       # per-config: initializePage fills it from the real key channel
             ("table", "Name superusers and domain users myself",
              "Open the users table: add named accounts, pick each one's domain and role "
-             "(superadmins are locked to the orchestration domain), and choose how each "
+             "(superadmins are locked to the Tailscale root domain), and choose how each "
              "first signs in — Discord, Gmail, or a password issued at provisioning. "
              "These are seeded into the mesh's identity provider, alongside the "
              "generated node login above."),

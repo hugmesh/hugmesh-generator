@@ -376,8 +376,8 @@ LOCAL_ONLY_DESCRIPTIONS: dict[str, str] = {
 # A wiki is a shared-authorship community surface, so it joins that group rather than
 # earning a one-row group of its own — which would make the local services surface
 # grouped differently from the node wizard's for no operator gain.
-LOCAL_ONLY_GROUP: dict[str, str] = {"wiki": "Social & community",
-                                    "argocd": "Network & access"}
+LOCAL_ONLY_GROUP: dict[str, str] = {"wiki": "Social & Community",
+                                    "argocd": "Network & Access"}
 
 
 # ── the DevOps lane's OWN selection channel (operator ask 2026-08-26) ───────────

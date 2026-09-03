@@ -6,7 +6,7 @@ Same semantics as ``gui/pages/localcloud_nodes.py``, restated for a prompt loop:
 * IMPORT the local mesh's identity into the shared ImageConfig — the apex domain
   (-> ``cluster_domain``) and the Studio-provisioned accounts (minted superadmin
   + seeder roster; usernames/roles ONLY, never passwords). Superadmins land on
-  the orchestration superdomain, everyone else on the imported apex, and
+  the Tailscale root domain, everyone else on the imported apex, and
   ``configure_users`` flips on so the accounts are visible on the users step.
 * The k8s GATE: nothing proceeds without the operator's explicit "k8s will stop
   to proceed" consent — asked afresh on every entry, inline (a y/N prompt IS the
@@ -112,7 +112,7 @@ def apply_gate(journey, domain: str, users: list[tuple[str, list[str]]]) -> None
         # ``roles`` is one role name or the list of them (issue #228 — the canned
         # fixtures and any older caller still hand in a bare string).
         roles = [roles] if isinstance(roles, str) else list(roles)
-        # superadmins belong to the orchestration superdomain (UsersPage locks
+        # superadmins belong to the Tailscale root domain (UsersPage locks
         # them there); everyone else lands on the imported apex.
         dom = superdomain if "superadmin" in roles else cfg.cluster_domain
         if (username, dom) not in existing:

@@ -325,7 +325,7 @@ def test_imported_domain_and_users_land_in_the_config(wiz):
     assert cfg.cluster_domain == CANNED_DOMAIN         # the imported apex
     by_name = {u.username: u for u in cfg.users}
     assert set(by_name) == {"superadmin", "alice", "bob"}
-    # superadmins belong to the orchestration superdomain (UsersPage locks them
+    # superadmins belong to the Tailscale root domain (UsersPage locks them
     # there); everyone else lands on the imported apex.
     assert by_name["superadmin"].role == "superadmin"
     assert by_name["superadmin"].domain == cfg.effective_superdomain()

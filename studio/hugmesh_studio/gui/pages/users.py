@@ -17,9 +17,9 @@ Multi-role (issue #228): the Role cell is a row of checkboxes (``RoleCell``), on
 every consumer that reads the scalar.
 
 The per-row Domain cell is a DROPDOWN of the previously-defined domains (spec 6): the
-orchestration superdomain plus every name from the shared Domains table (and any rows
+Tailscale root domain plus every name from the shared Domains table (and any rows
 a superadmin added this session). Selecting the ``superadmin`` role forces + locks the
-row to the superdomain (spec 5): superadmins belong to the orchestration domain, not a
+row to the root domain (spec 5): superadmins belong to the Tailscale root domain, not a
 tenant domain. A loaded user whose domain is not (yet) defined is shown suffixed
 '(not defined)' with an orange warning — never silently rewritten.
 """
@@ -101,7 +101,7 @@ class UsersPage(QtWidgets.QWizardPage):
         self.wiz = wiz
         self.setTitle("Superusers & domain users")
         self.setSubTitle(
-            "Name the superusers (locked to the orchestration superdomain) "
+            "Name the superusers (locked to the Tailscale root domain) "
             "and add users to each domain. For every user pick how they first sign in: "
             "Discord or Gmail self-registration, or a password issued at provisioning.")
         lay = QtWidgets.QVBoxLayout(self)
@@ -171,7 +171,7 @@ class UsersPage(QtWidgets.QWizardPage):
         combo.blockSignals(False)
 
     def _apply_role_lock(self, dom_combo, role_cell):
-        """superadmin belongs to the orchestration superdomain (spec 5): force + lock
+        """superadmin belongs to the Tailscale root domain (spec 5): force + lock
         the domain there; a row without superadmin among its roles unlocks the
         dropdown. Multi-role (issue #228): superadmin ANYWHERE in the set locks —
         superadmin + games is still a superadmin."""

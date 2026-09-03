@@ -655,8 +655,8 @@ class Journey:
             LocalCloudScreen(), E2EScreen(), QemuScreen(), MeshEmuScreen(),
             IdpScreen(), RoleScreen(), WorklistScreen(),
             YesNoStep("domains_choice", "Domains",
-                      "Add more domains beyond the internal orchestration "
-                      "superdomain (public go-live domains this mesh serves)?",
+                      "Add more domains beyond the internal Tailscale root "
+                      "domain (public go-live domains this mesh serves)?",
                       "additional_domains"),
             DomainsScreen(),
             YesNoStep("users_choice", "User accounts",

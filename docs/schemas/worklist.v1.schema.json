@@ -63,7 +63,7 @@
         },
         "desktop_user": {
           "type": "string",
-          "description": "The PERSON on a desktop-class entry. materialize() stamps desktop_user_role as --person-role on this entry's own image and derives a manifest User on the internal orchestration superdomain. Node entries always leave this blank.",
+          "description": "The PERSON on a desktop-class entry. materialize() stamps desktop_user_role as --person-role on this entry's own image and derives a manifest User on the internal Tailscale root domain. Node entries always leave this blank.",
           "default": ""
         },
         "desktop_user_role": {
@@ -90,7 +90,7 @@
         "cluster_domain": { "type": "string" },
         "superdomain": {
           "type": "string",
-          "description": "Orchestration superdomain all mesh nodes join; \"\" = derived <brand>.internal. NON_ARGV: manifest + KEYS channel, never a builder flag; permanently internal (I7)."
+          "description": "Tailscale root domain all mesh nodes join; \"\" = derived <brand>.internal. NON_ARGV: manifest + KEYS channel, never a builder flag; permanently internal (I7)."
         },
         "domains": {
           "type": "array",

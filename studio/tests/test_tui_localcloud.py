@@ -87,7 +87,7 @@ def test_import_lands_domain_and_accounts_with_the_superadmin_rule():
     assert cfg.cluster_domain == CANNED_DOMAIN
     by_name = {u.username: u for u in cfg.users}
     assert set(by_name) == {"superadmin", "alice", "bob"}
-    # superadmins belong to the orchestration superdomain; everyone else lands
+    # superadmins belong to the Tailscale root domain; everyone else lands
     # on the imported apex (the GUI page's exact rule).
     assert by_name["superadmin"].domain == cfg.effective_superdomain()
     assert by_name["alice"].domain == CANNED_DOMAIN

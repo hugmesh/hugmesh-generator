@@ -65,11 +65,11 @@ def gen(tmp_path):
     for name in ("hugmesh-rpi5-arm64-pki-test-20260818T085951Z.img.xz",
                  "hugmesh-x86-amd64-be-test-20260818T090010Z.img",
                  "hugmesh-x86-amd64-fe-test-20260818T090011Z.img"):
-        (whole / name).write_bytes(b"")
+        (whole / name).write_bytes(b"\0")  # non-empty: a 0-byte .img is a killed build, not a row
 
     aborted = root / "out" / "sessions" / PARTIAL
     aborted.mkdir(parents=True)
-    (aborted / "hugmesh-x86-amd64-be-test-20260819T125930Z.img").write_bytes(b"")
+    (aborted / "hugmesh-x86-amd64-be-test-20260819T125930Z.img").write_bytes(b"\0")  # non-empty: a 0-byte .img is a killed build, not a row
     for name in ("build-pki.rpi5.log", "build-backend.x86.log", "build-frontend.x86.log",
                  "build-omnibus.x86.log"):
         (aborted / name).write_text("...", encoding="utf-8")

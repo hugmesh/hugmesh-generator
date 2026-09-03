@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -66,6 +67,30 @@ _IMAGE_SUFFIXES = (".img.xz", ".img")
 #: Blobs that live beside the images but are not bootable disks.
 _NON_IMAGE_MARKERS = ("kernel", "initramfs", "initrd", "squashfs")
 
+#: The builders' ``BUILD_TS`` — ``date -u +%Y%m%dT%H%M%SZ`` — which is the LAST
+#: field of every artifact name (build-rpi5-stage4.sh IMG_PATH,
+#: build-x86-host-stage4.sh IMG_PATH). This regex is the structural anchor that
+#: says "this file was minted by our builders", and it replaced a literal
+#: ``hugmesh-`` PREFIX check that could not survive a branded build.
+#:
+#: WHY THE PREFIX HAD TO GO. The builders name artifacts ``${BRAND}-…``, and
+#: BRAND is whatever the operator configured (``--brand sdhm``, or the forced
+#: ``gentoo`` of an unaffiliated build) — only the DEFAULT brand is "hugmesh".
+#: Anchoring on the default meant a mesh built as ``sdhm-rpi5-arm64-pki-test-…``
+#: parsed as nothing, ``discover_rows`` returned [], every session read
+#: "0 images", and the emulation picker was EMPTY with "No build session …
+#: holds a bootable image yet" — for a build that had in fact finished all
+#: three Pi images (out/sessions/20260830-185641-8e88a6, brand=sdhm).
+#:
+#: The rejection this anchor still owes the caller — "that .img is not ours" —
+#: is now carried by SHAPE rather than by brand: six '-'-separated fields and a
+#: trailing UTC stamp. ``some-third-party.img`` and ``backup-of-something.img``
+#: fail it exactly as before; ``sdhm-…`` and ``gentoo-…`` no longer do.
+_STAMP_RE = re.compile(r"^\d{8}T\d{6}Z$")
+
+#: brand + platform + arch + <role…> + env + stamp.
+_MIN_NAME_FIELDS = 6
+
 #: Platforms whose rows are slowest and most load-bearing, in the order the
 #: runner boots them. aarch64 has no KVM on an x86_64 host, so every Pi/ARM row
 #: is pure TCG emulation and wants to start first; x86 gets KVM and is quick.
@@ -97,6 +122,11 @@ class DeviceRow:
     env: str
     image: str          # absolute path to the .img / .img.xz
     stamp: str = ""     # <stamp> from the filename; "" when unparseable
+    #: The ``${BRAND}`` field the artifact was BUILT under ("hugmesh", "sdhm",
+    #: "gentoo" for an unaffiliated build). Carried so a row can SAY which brand
+    #: it came from; never matched against, because matching on it is the bug
+    #: this field exists to keep fixed.
+    brand: str = ""
 
     @property
     def label(self) -> str:
@@ -163,25 +193,12 @@ class BuildSession:
                 + (f" [{badge}]" if badge else ""))
 
 
-def parse_artifact_name(basename: str) -> tuple[str, str, str, str] | None:
-    """``hugmesh-<platform>-<arch>-<role>-<env>-<stamp>.img[.xz]`` -> (platform, arch, role, env).
+def _split_artifact_name(basename: str) -> list[str] | None:
+    """The '-'-separated fields of a bootable role image, or None.
 
-    Returns None for anything that is not a bootable role image.
-
-    The role may itself contain '-' (``standalone-thin``, ``backend-gpu``), so the
-    name is parsed from BOTH ends: the first two fields are the brand and platform,
-    the third is the arch, and the LAST two fields before the extension are env and
-    stamp — whatever remains in the middle is the role, hyphens and all. A naive
-    ``split('-')[3]`` would truncate every hyphenated role to "standalone".
-
-    The parsed role is CANONICALIZED (scripts/_roles-lib.sh). Artifacts already on
-    disk keep whatever spelling they were built under — ``hugmesh-x86-amd64-be-…``,
-    ``…-host-…`` — and they are NOT renamed; they are already-emitted artifacts. But
-    every consumer that keys on the role (the emulation grid label, the boot order,
-    :data:`mesh_emulation.GATEWAY_ROLES`) must see ONE spelling, or an x86 backend
-    and a Pi backend read as two different roles. That mismatch is why
-    ``GATEWAY_ROLES`` could never match ``be+gpu`` (whose artifact was named ``host``)
-    and never matched a Pi node at all.
+    Shared by :func:`parse_artifact_name` and :func:`artifact_stamp` so the two
+    cannot disagree about what counts as one of our artifacts — they used to
+    apply the field-count rule separately, and only one of them the prefix rule.
     """
     name = basename
     for suffix in _IMAGE_SUFFIXES:
@@ -194,12 +211,51 @@ def parse_artifact_name(basename: str) -> tuple[str, str, str, str] | None:
     lowered = name.lower()
     if any(marker in lowered for marker in _NON_IMAGE_MARKERS):
         return None
-    if not name.startswith("hugmesh-"):
-        return None
 
     parts = name.split("-")
-    # hugmesh + platform + arch + <role...> + env + stamp  => at least 6 fields
-    if len(parts) < 6:
+    if len(parts) < _MIN_NAME_FIELDS:
+        return None
+    if not _STAMP_RE.match(parts[-1]):
+        return None
+    return parts
+
+
+def parse_artifact_name(basename: str) -> tuple[str, str, str, str] | None:
+    """``<brand>-<platform>-<arch>-<role>-<env>-<stamp>.img[.xz]`` -> (platform, arch, role, env).
+
+    Returns None for anything that is not a bootable role image.
+
+    The role may itself contain '-' (``standalone-thin``, ``backend-gpu``), so the
+    name is parsed from BOTH ends: the first two fields are the brand and platform,
+    the third is the arch, and the LAST two fields before the extension are env and
+    stamp — whatever remains in the middle is the role, hyphens and all. A naive
+    ``split('-')[3]`` would truncate every hyphenated role to "standalone".
+
+    THE FIRST FIELD IS THE BRAND, AND IT IS NOT "hugmesh". It is whatever
+    ``--brand`` the build ran under: ``hugmesh`` only by default, ``sdhm`` for the
+    operator's own mesh, ``gentoo`` for an unaffiliated build (which forces the
+    neutral identity, build-x86-host-stage4.sh). This function used to require the
+    literal ``hugmesh-`` prefix, which meant a completed branded mesh parsed as
+    zero rows, ``discover_sessions(only_with_images=True)`` dropped the session,
+    and the Studio's emulation picker came up EMPTY on a build that had finished.
+    The brand is READ (see :func:`artifact_brand`), never matched against.
+
+    What still rejects a foreign file is the SHAPE, which is also what the shell
+    runner checks (tests/qemu/run-qemu-docker.sh ``discover_rows``): at least six
+    '-'-separated fields, and a trailing ``YYYYmmddTHHMMSSZ`` build stamp. A brand
+    slug is opaque; a stamp is not, so the stamp is the anchor.
+
+    The parsed role is CANONICALIZED (scripts/_roles-lib.sh). Artifacts already on
+    disk keep whatever spelling they were built under — ``hugmesh-x86-amd64-be-…``,
+    ``…-host-…`` — and they are NOT renamed; they are already-emitted artifacts. But
+    every consumer that keys on the role (the emulation grid label, the boot order,
+    :data:`mesh_emulation.GATEWAY_ROLES`) must see ONE spelling, or an x86 backend
+    and a Pi backend read as two different roles. That mismatch is why
+    ``GATEWAY_ROLES`` could never match ``be+gpu`` (whose artifact was named ``host``)
+    and never matched a Pi node at all.
+    """
+    parts = _split_artifact_name(basename)
+    if parts is None:
         return None
     platform, arch = parts[1], parts[2]
     env = parts[-2]
@@ -209,21 +265,28 @@ def parse_artifact_name(basename: str) -> tuple[str, str, str, str] | None:
     return platform, arch, roles.canonicalize(role), env
 
 
+def artifact_brand(basename: str) -> str:
+    """The ``${BRAND}`` field an artifact was built under, or "" if it has none.
+
+    Diagnostic only: ``discover_rows`` records it on the row so a caller can SAY
+    which brand an image came from (and could one day compare it against the
+    session's own manifest ``brand``). Nothing selects, filters or orders on it —
+    selecting on the brand is the rule that hid three finished Pi images from the
+    picker, and the ``hugmesh-mesh-manifest.json`` beside them is the witness that
+    would have been needed to do it correctly.
+    """
+    parts = _split_artifact_name(basename)
+    return parts[0] if parts else ""
+
+
 def artifact_stamp(basename: str) -> str:
     """The ``<stamp>`` field of an artifact name, or "" if it has none.
 
     Kept separate from ``parse_artifact_name`` so that function's 4-tuple stays
     the parsing contract the shell runner is checked against.
     """
-    name = basename
-    for suffix in _IMAGE_SUFFIXES:
-        if name.endswith(suffix):
-            name = name[: -len(suffix)]
-            break
-    else:
-        return ""
-    parts = name.split("-")
-    return parts[-1] if len(parts) >= 6 else ""
+    parts = _split_artifact_name(basename)
+    return parts[-1] if parts else ""
 
 
 def discover_rows(artifacts_dir: str) -> list[DeviceRow]:
@@ -246,6 +309,14 @@ def discover_rows(artifacts_dir: str) -> list[DeviceRow]:
       spend minutes re-expanding 9-20GB it already has on disk.
 
     Stamps are ``YYYYmmddTHHMMSSZ``, so a plain string compare is chronological.
+
+    A ZERO-BYTE artifact is not a row. The builder creates ``${IMG_PATH}`` before
+    it partitions it, so a run killed in that window leaves a 0-byte ``.img``
+    behind (out/sessions/20260830-173335-d51b24 holds exactly that). Counting it
+    would read an aborted 1-of-2 build as 2-of-2 and hand the operator a device
+    that cannot boot — the same class of lie ``is_partial`` exists to prevent, so
+    the guard lives here rather than in the picker. The shell runner applies the
+    same rule (``[ -s ]`` in tests/qemu/run-qemu-docker.sh discover_rows).
     """
     if not os.path.isdir(artifacts_dir):
         return []
@@ -264,8 +335,13 @@ def discover_rows(artifacts_dir: str) -> list[DeviceRow]:
         path = os.path.join(artifacts_dir, entry)
         if not os.path.isfile(path):
             continue
+        try:
+            if os.path.getsize(path) <= 0:
+                continue
+        except OSError:
+            continue
         row = DeviceRow(platform=platform, arch=arch, role=role, env=env, image=path,
-                        stamp=artifact_stamp(entry))
+                        stamp=artifact_stamp(entry), brand=artifact_brand(entry))
         key = (platform, role)
         prior = best.get(key)
         if prior is None or (row.stamp, not row.compressed) > (prior.stamp, not prior.compressed):

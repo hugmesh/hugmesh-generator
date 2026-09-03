@@ -402,7 +402,7 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
                 # ``roles`` is one role name or the list of them (issue #228 — the
                 # canned fixtures and any older caller still hand in a bare string).
                 roles = [roles] if isinstance(roles, str) else list(roles)
-                # superadmins belong to the orchestration superdomain (spec 5 —
+                # superadmins belong to the Tailscale root domain (spec 5 —
                 # UsersPage locks their row there); everyone else lands on the
                 # imported apex the local mesh served them on.
                 dom = superdomain if "superadmin" in roles else cfg.cluster_domain
