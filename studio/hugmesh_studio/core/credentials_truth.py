@@ -129,8 +129,9 @@ ADDED = "added this session"
 MARKERS = (LIVE, STALE, HALTED, NOT_SEEDED, NOT_ON_LANE, UNVERIFIED, UNKNOWN, ADDED)
 
 # The env knob and default name of the run-state credentials file
-# (tests/stack/e2e-password.sh CONTRACT rule 3). seeded_credentials re-exports
-# these — it delegates its reading here so there is exactly one parser.
+# (tests/stack/e2e-password.sh CONTRACT rule 3). seeded_credentials keeps no copy
+# of these — it delegates both the path rule and the parse here, so there is
+# exactly one parser and exactly one place the default name is written down.
 CREDENTIALS_FILE_ENV = "E2E_CREDENTIALS_FILE"
 CREDENTIALS_FILE_NAME = ".e2e-credentials"
 SHARED_PASSWORD_ENV = "E2E_PASSWORD"
@@ -397,10 +398,15 @@ def assess(*, mesh_running: bool | None, volumes_present: bool | None,
     # it. Measured on the reference host 2026-09-02: mint 04:40, recorded seed
     # 04:43, stack-clean 04:49, a new casdoor-pg at 07:29 — "seeded" was a lie.
     minted_after_seed = _newer(secrets_mtime, last_seed_ok)
-    store_after_record = bool(_newer(casdoor_created, last_seed_ok))
+    # TRI-STATE on purpose: True / False / None. `docker volume inspect` can
+    # fail, or print a layout parse_docker_time does not recognise, and then the
+    # store's age is NOT ESTABLISHED. Coercing that None to False would hand back
+    # the strongest positive claim ("live", "still valid for the next start")
+    # about a store nothing dated — the exact lie this guard exists to stop.
+    store_after_record = _newer(casdoor_created, last_seed_ok)
     if secrets_mtime is None:
         superadmin_seeded: bool | None = False if not sa_ok else None
-    elif last_seed_ok is None or store_after_record:
+    elif last_seed_ok is None or store_after_record is not False:
         superadmin_seeded = None
     else:
         superadmin_seeded = not minted_after_seed
@@ -411,7 +417,7 @@ def assess(*, mesh_running: bool | None, volumes_present: bool | None,
                              and creds.mtime > last_seed_ok)
     # Does the recorded seed vouch for the store that exists now, holding the
     # password on disk now? Only then is a value "still valid" / "live".
-    record_covers = (last_seed_ok is not None and not store_after_record
+    record_covers = (last_seed_ok is not None and store_after_record is False
                      and not file_after_record)
     minted_unseeded = secrets_mtime is not None and (
         last_seed_ok is None or bool(minted_after_seed))
@@ -514,7 +520,7 @@ def assess(*, mesh_running: bool | None, volumes_present: bool | None,
                     kept + "Start the mesh and sign in with the password shown; "
                     "nothing needs re-seeding. " + file_line + " " + seed_line,
                     marker=HALTED, stage2=True)
-            if last_seed_ok is not None and not store_after_record:
+            if last_seed_ok is not None and store_after_record is False:
                 # The recorded seed populated this store; the file was rewritten
                 # since — the kept identities hold a value the file no longer does.
                 return truth(
@@ -537,7 +543,12 @@ def assess(*, mesh_running: bool | None, volumes_present: bool | None,
                 kept + (f"It was created after the last recorded seed ({seeded_at}), "
                         "so a run this Studio did not record populated it. "
                         if store_after_record else
-                        "No completed seed is recorded by this Studio. ")
+                        (f"The last recorded seed ({seeded_at}) cannot be tied to "
+                         "THIS store: `docker volume inspect` did not answer with a "
+                         "time this Studio can read, so the store may have been "
+                         "recreated since. "
+                         if store_after_record is None and last_seed_ok is not None
+                         else "No completed seed is recorded by this Studio. "))
                 + "Start the mesh and press this button again (a running Casdoor "
                 "can be asked), or re-run `make stack-seed` to reconcile every "
                 "persona to the file's value. " + file_line + " " + seed_line,
@@ -601,6 +612,23 @@ def assess(*, mesh_running: bool | None, volumes_present: bool | None,
             "completing after the credentials file was written, so the file's "
             "value cannot be vouched for. A Studio bring-up or Add user records "
             "one. " + file_line + " " + seed_line,
+            marker=UNVERIFIED, stage2=stage2)
+    if store_after_record is None:
+        # The store's age is not established (`docker volume inspect` failed, or
+        # printed a layout parse_docker_time does not recognise), so the recorded
+        # seed cannot be tied to the store that exists NOW. A store recreated since
+        # would hold DIFFERENT passwords, and this is the one fact that would say
+        # so — absent it, "live" is a guess, not a claim.
+        return truth(
+            STATE_UNKNOWN,
+            "Seeded, but the age of the identity store could not be established — "
+            "the password on disk is unverified.",
+            "`docker volume inspect` did not answer with a time this Studio can "
+            f"read, so whether the last recorded seed ({seeded_at}) populated the "
+            "store that exists NOW is unknown; a store recreated since (a "
+            "`stack-clean`, a `down -v`) would hold a different password. Press "
+            "this button again, or re-run `make stack-seed` to reconcile every "
+            "persona to the file's value. " + file_line + " " + seed_line,
             marker=UNVERIFIED, stage2=stage2)
     if store_after_record:
         # The store the recorded seed populated is gone; whatever populated this

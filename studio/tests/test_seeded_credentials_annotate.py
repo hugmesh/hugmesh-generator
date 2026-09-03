@@ -13,7 +13,8 @@ import os
 
 from hugmesh_studio.core import credentials_truth as ct
 from hugmesh_studio.core.seeded_credentials import (
-    _NOT_SEEDED, Roster, SeededUser, annotate, load_roster, suggested_signin)
+    _NOT_SEEDED, Roster, SeededUser, annotate, as_copyable_text, load_roster,
+    suggested_signin)
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -135,15 +136,49 @@ def test_absent_everything_still_shows_the_not_seeded_marker(tmp_path):
     assert next(u for u in roster.users if u.username == "e2e-admin").password == _NOT_SEEDED
 
 
+def _unreadable(tmp_path):
+    return ct.CredentialsFile(path=str(tmp_path / ".e2e-credentials"), exists=True,
+                              readable=False, mtime=1.0,
+                              error="PermissionError: Permission denied", keys=())
+
+
 def test_unreadable_file_replaces_the_password_cell_not_the_not_seeded_marker(tmp_path):
-    creds = ct.CredentialsFile(path=str(tmp_path / ".e2e-credentials"), exists=True,
-                               readable=False, mtime=1.0,
-                               error="PermissionError: Permission denied", keys=())
-    out = annotate(_roster(tmp_path), _truth(tmp_path, creds=creds))
+    out = annotate(_roster(tmp_path), _truth(tmp_path, creds=_unreadable(tmp_path)))
     assert out.truth.state == ct.STATE_UNREADABLE
     admin = next(u for u in out.users if u.username == "e2e-admin")
     assert admin.password == ct.UNREADABLE_MARKER
     assert admin.password != _NOT_SEEDED
+
+
+def test_unreadable_file_reaches_the_operator_row_the_dialog_bolds(tmp_path):
+    """The operator resolves through the SAME shared E2E_PASSWORD chain, so a file
+    that cannot be read cannot supply its password either. It escaped the marker
+    once (its branch `continue`d past the substitution), leaving the one row the
+    dialog BOLDS carrying "(not seeded — run `make stack-seed`)" on a mesh that is
+    seeded — false, and the wrong remedy: e2e-password.sh's e2e_password_ensure
+    reuses the file's value whenever the file exists, so stack-seed dies on the same
+    permission problem. The banner's `sudo chown` is the fix, and the banner says so.
+    """
+    out = annotate(_roster(tmp_path), _truth(tmp_path, creds=_unreadable(tmp_path)))
+    op = next(u for u in out.users if u.username == out.operator)
+    assert op.password == ct.UNREADABLE_MARKER
+    # …and the seeder's script-default superadmin, when no bundle was minted.
+    out2 = annotate(_roster(tmp_path),
+                    _truth(tmp_path, creds=_unreadable(tmp_path), superadmin=("", "")))
+    sa = next(u for u in out2.users if "ROLE_SUPERADMIN" in u.roles)
+    assert sa.password == ct.UNREADABLE_MARKER
+    # The mutation-proof form: NO row anywhere may still carry the false marker,
+    # whichever personas the seeder grows next.
+    for r in (out, out2):
+        assert [u.username for u in r.users if u.password == _NOT_SEEDED] == []
+
+
+def test_the_minted_superadmin_keeps_its_value_when_the_file_is_unreadable(tmp_path):
+    """The one exemption: the minted value comes from keys-out/vault/secrets.json,
+    about which the run-state file's permissions say nothing."""
+    out = annotate(_roster(tmp_path), _truth(tmp_path, creds=_unreadable(tmp_path)))
+    row = next(u for u in out.users if u.username == "minted-admin")
+    assert row.password == FIXTURE_PW + "-sa"
 
 
 def test_added_users_render_without_a_password(tmp_path):
@@ -166,3 +201,45 @@ def test_seeded_user_new_fields_are_keyword_only_additions():
     names = list(SeededUser.__dataclass_fields__)
     assert names[-2:] == ["live", "note"]
     assert Roster().truth is None
+
+
+def test_the_lead_is_never_a_row_the_assessment_says_is_not_there(tmp_path):
+    """suggested_signin filters out NOT_ON_LANE / NOT_SEEDED rows so the dialog never
+    features an account that is guaranteed to 401 — but its last-resort fallback used
+    to return roster.users[0], i.e. reach back OUTSIDE that filter. Reachable whenever
+    none of (operator, e2e-admin, e2e-superadmin, e2e-user) survives it."""
+    r = Roster(users=[SeededUser("e2e-gone", ("ROLE_USER",), "p", live=ct.NOT_SEEDED),
+                      SeededUser("e2e-off-lane", ("ROLE_USER",), "p",
+                                 live=ct.NOT_ON_LANE),
+                      SeededUser("e2e-forum", ("ROLE_FORUM",), "p", live=ct.LIVE)],
+               operator="mesh-operator")
+    lead = suggested_signin(r)
+    assert lead is not None
+    assert lead.username == "e2e-forum"
+    assert lead.live not in (ct.NOT_SEEDED, ct.NOT_ON_LANE)
+    # …and when EVERY row is absent there is nothing better than the first: the
+    # dialog still needs something to feature, and the row carries its own marker.
+    allgone = Roster(users=[SeededUser("a", (), "p", live=ct.NOT_SEEDED)])
+    assert suggested_signin(allgone).username == "a"
+
+
+def test_copy_all_carries_the_liveness_it_is_copying(tmp_path):
+    """The paste OUTLIVES the banner that qualified it. In seeded-suspect the banner
+    says sign-in will 401 for every account until it is re-seeded; a payload that
+    listed those passwords bare would re-assert as fact exactly what the dialog above
+    it denies — the untruth this whole lane exists to delete."""
+    suspect = _truth(tmp_path, creds=_creds(tmp_path), last_seed_ok=2.0)
+    assert suspect.state == ct.STATE_SEEDED_SUSPECT
+    text = as_copyable_text(annotate(_roster(tmp_path), suspect))
+    assert suspect.headline in text
+    header = next(ln for ln in text.splitlines() if ln.startswith("# username"))
+    assert header == "# username\tpassword\tlive\troles"
+    admin = next(ln for ln in text.splitlines() if ln.startswith("e2e-admin\t"))
+    assert f"\t{ct.STALE}\t" in admin
+    # header lines still carry no value (the headline is asserted password-free)
+    for ln in text.splitlines():
+        if ln.startswith("#"):
+            assert FIXTURE_PW not in ln
+    # an UNannotated roster is unchanged — no live column invented out of nothing
+    plain = as_copyable_text(_roster(tmp_path))
+    assert plain.splitlines()[1] == "# username\tpassword\troles"

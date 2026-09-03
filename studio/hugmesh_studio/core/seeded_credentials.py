@@ -67,9 +67,10 @@ _SHARED_PASSWORD_ENV = "E2E_PASSWORD"
 
 # The run-state file tests/stack/e2e-password.sh writes and every consumer reads
 # (CONTRACT rule 3): plain KEY=value lines, no quotes, no export keyword, path
-# overridable via E2E_CREDENTIALS_FILE and defaulting to the checkout root.
-_CREDENTIALS_FILE_ENV = "E2E_CREDENTIALS_FILE"
-_CREDENTIALS_FILE_NAME = ".e2e-credentials"
+# overridable via E2E_CREDENTIALS_FILE and defaulting to the checkout root. The
+# name, the env override and the parser now live in ONE place —
+# credentials_truth.credentials_file / _parse_kv, which _read_credentials_file
+# below wraps. Local copies of those literals are deliberately not kept here.
 
 # Shown in place of a password when NOTHING resolved: no per-user env, no shared
 # env, no credentials file. Deliberately not a plausible-looking password — an
@@ -403,7 +404,9 @@ def suggested_signin(roster: Roster) -> SeededUser | None:
     for preferred in (roster.operator, "e2e-admin", "e2e-superadmin", "e2e-user"):
         if preferred and preferred in by_name:
             return by_name[preferred]
-    return roster.users[0]
+    # Fall back INSIDE the filter, not outside it: roster.users[0] could be a row
+    # the assessment just said is not there, which is the 401 the filter prevents.
+    return next(iter(by_name.values()))
 
 
 def annotate(roster: Roster, truth: CredentialTruth | None,
@@ -478,6 +481,19 @@ def annotate(roster: Roster, truth: CredentialTruth | None,
                                        "the seeder's script default, which a "
                                        "terminal `make stack-seed` creates.")
 
+    def _masked(row: SeededUser) -> SeededUser:
+        """Apply the truth's password marker to EVERY row whose value came out of
+        the run-state credentials file — the operator row (which the dialog bolds)
+        and the seeder's script-default superadmin included, because both resolve
+        through that same file via the shared E2E_PASSWORD chain. Leaving them out
+        let them keep the resolver's "(not seeded)" literal in STATE_UNREADABLE,
+        which is the very untruth this module exists to delete AND the wrong remedy
+        (`make stack-seed` cannot read the file either). The MINTED superadmin is
+        the one exemption: its value comes from keys-out/vault/secrets.json, about
+        which this file's permissions say nothing."""
+        return (replace(row, password=truth.password_marker)
+                if truth.password_marker else row)
+
     users: list[SeededUser] = []
     for u in roster.users:
         if u.password_env == "E2E_SUPERADMIN_PASSWORD" and "ROLE_SUPERADMIN" in u.roles:
@@ -485,15 +501,13 @@ def annotate(roster: Roster, truth: CredentialTruth | None,
                 users.append(replace(u, username=sa_user, password=sa_pw,
                                      live=sa_marker, note=sa_note))
             else:
-                users.append(replace(u, live=sa_marker, note=sa_note))
+                users.append(_masked(replace(u, live=sa_marker, note=sa_note)))
             continue
         if roster.operator and u.username == roster.operator:
-            users.append(replace(u, live=op_marker, note=op_note or truth.headline))
+            users.append(_masked(
+                replace(u, live=op_marker, note=op_note or truth.headline)))
             continue
-        row = replace(u, live=marker, note=truth.headline)
-        if truth.password_marker:
-            row = replace(row, password=truth.password_marker)
-        users.append(row)
+        users.append(_masked(replace(u, live=marker, note=truth.headline)))
     for name, roles in added:
         users = [x for x in users if x.username != name]
         users.append(SeededUser(username=name, roles=tuple(roles),
@@ -505,8 +519,22 @@ def annotate(roster: Roster, truth: CredentialTruth | None,
 
 
 def as_copyable_text(roster: Roster) -> str:
-    """The whole roster as one paste-able block (the dialog's 'Copy all' payload)."""
-    lines = ["# HugMesh local mesh — seeded sign-in credentials",
-             "# username\tpassword\troles"]
-    lines += [f"{u.username}\t{u.password}\t{u.roles_display}" for u in roster.users]
+    """The whole roster as one paste-able block (the dialog's 'Copy all' payload).
+
+    Carries the assessment when there is one. The paste OUTLIVES the banner that
+    qualified it, so a block that listed every password bare would re-tell exactly
+    the untruth the table stopped telling — in STATE_SEEDED_SUSPECT the banner says
+    "sign-in will 401 for every account until it is re-seeded" and the pasted lines
+    would assert those same values as fact. Header lines carry the headline only
+    (never a value); the per-row Live column is what travels with each password.
+    """
+    lines = ["# HugMesh local mesh — seeded sign-in credentials"]
+    if roster.truth is not None:
+        lines.append(f"# {roster.truth.headline}")
+        lines.append(f"# checked {roster.truth.checked_at}")
+    annotated = any(u.live for u in roster.users)
+    lines.append("# username\tpassword\t" + ("live\t" if annotated else "") + "roles")
+    lines += [f"{u.username}\t{u.password}\t"
+              + (f"{u.live or '—'}\t" if annotated else "")
+              + u.roles_display for u in roster.users]
     return "\n".join(lines) + "\n"

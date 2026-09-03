@@ -204,6 +204,52 @@ def test_running_store_created_after_the_recorded_seed_is_unknown_even_with_a_ne
     assert t.superadmin_seeded is None           # the store the mint was seeded into is gone
 
 
+def test_running_store_of_unestablished_age_is_unknown_not_live(tmp_path):
+    """`docker volume inspect --format {{.CreatedAt}}` can exit non-zero, or print a
+    layout parse_docker_time does not recognise; probe_credentials then hands
+    casdoor_created=None. Coercing that "not established" to "not after" made the
+    module hand back its STRONGEST positive claim — live / verified / superadmin
+    seeded — about a store nothing had dated, which is precisely the recreated-store
+    case the guard exists to catch. None must stay unknown."""
+    facts = dict(mesh_running=True, volumes_present=True, seeded_admin=True,
+                 seeded_operator=True, last_seed_ok=T0, secrets_mtime=T0 - HOUR,
+                 creds=_file(tmp_path, mtime=T0 - 2 * HOUR),
+                 superadmin=("superadmin", FIXTURE_PW))
+    t = ct.assess(**_facts(tmp_path, casdoor_created=None, **facts))
+    assert t.state == ct.STATE_UNKNOWN
+    assert t.marker == ct.UNVERIFIED
+    assert t.verified is False
+    assert t.superadmin_seeded is None
+    assert "could not be established" in t.headline
+    assert "docker volume inspect" in t.detail
+    assert t.stage2 is True                      # Casdoor ANSWERED that; it is a fact
+    # CONTROL: the identical facts with a store KNOWN to predate the record are the
+    # positive claim — so this test fails only on the coercion, not on the shape.
+    ok = ct.assess(**_facts(tmp_path, casdoor_created=T0 - HOUR, **facts))
+    assert (ok.state, ok.marker, ok.verified) == (ct.STATE_SEEDED, ct.LIVE, True)
+    assert ok.superadmin_seeded is True
+
+
+def test_halted_store_of_unestablished_age_is_not_still_valid(tmp_path):
+    """Same coercion, the halted shape: it printed "these credentials are still valid
+    for the next start" and asserted stage 2, about a store whose age nothing knew."""
+    facts = dict(volumes_present=True, last_seed_ok=T0, secrets_mtime=T0 - HOUR,
+                 creds=_file(tmp_path, mtime=T0 - 2 * HOUR),
+                 superadmin=("superadmin", FIXTURE_PW))
+    t = ct.assess(**_facts(tmp_path, casdoor_created=None, **facts))
+    assert t.state == ct.STATE_HALTED
+    assert t.marker == ct.UNVERIFIED
+    assert "still valid" not in t.headline
+    assert t.stage2 is None and t.superadmin_seeded is None
+    assert "did not answer with a time this Studio can read" in t.detail
+    # and it must NOT claim the store was created after the seed — that is a
+    # different fact, equally unestablished.
+    assert "created after the last recorded seed" not in t.detail
+    ok = ct.assess(**_facts(tmp_path, casdoor_created=T0 - HOUR, **facts))
+    assert (ok.state, ok.marker, ok.stage2) == (ct.STATE_HALTED, ct.HALTED, True)
+    assert "still valid" in ok.headline
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root reads everything")
 def test_unreadable_credentials_file_reports_the_permission_reason_not_not_seeded(tmp_path):
     p = tmp_path / ".e2e-credentials"
@@ -302,11 +348,16 @@ def _every_truth(tmp_path):
                              last_seed_ok=T0))
     yield ct.assess(**_facts(tmp_path, mesh_running=True, seeded_admin=False,
                              superadmin=sa, secrets_mtime=T0))
+    # Both of these need a store the record demonstrably COVERS — a dated store
+    # older than the recorded seed. Left at casdoor_created=None they are UNKNOWN,
+    # because an undated store may have been recreated since the seed was recorded.
     yield ct.assess(**_facts(tmp_path, mesh_running=True, seeded_admin=True,
                              seeded_operator=True, superadmin=sa,
+                             casdoor_created=T0 - 2 * HOUR,
                              creds=_file(tmp_path, mtime=T0), last_seed_ok=T0 - HOUR))
     yield ct.assess(**_facts(tmp_path, mesh_running=True, seeded_admin=True,
                              seeded_operator=True, superadmin=sa,
+                             casdoor_created=T0 - 2 * HOUR,
                              creds=_file(tmp_path, mtime=T0 - HOUR), last_seed_ok=T0,
                              secrets_mtime=T0 - 2 * HOUR))
     yield ct.assess(**_facts(tmp_path, secrets_mtime=T0, superadmin=sa))
