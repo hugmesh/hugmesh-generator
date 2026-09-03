@@ -471,7 +471,13 @@ One trap, and it is destructive. Choosing the default card clears the domains li
 
 Skipped in standalone. In mesh it appears only if you chose "Add more domains" on the previous screen. In cloud it appears unless the role is one of the x86 cluster-node roles (`pki`, `backend`, `frontend`, `backend-gpu`, `omnibus`, `edge-ai`) — which the cloud picker does not offer, so in practice it always appears there unless a loaded config carries one.
 
-Each row is a domain: **Domain**, **Title**, **Optional services** (per-domain slugs, space or comma separated; empty means the cluster-wide set applies), **Applies to** and **Sign-in**. The last two are mesh-only and hidden in cloud.
+Each row is a domain: **Domain**, **Title**, **Optional services**, **Applies to** and **Sign-in**. The last two are mesh-only and hidden in cloud.
+
+"Title" is the domain's display name, and the column header says where it is actually read: it is written to the mesh manifest as `domains[].title` for cluster provisioning to pick up when it sets up the domain. It is not emitted anywhere on a cloud build. Leave it empty and the domain name itself is used.
+
+"Optional services" is a checkable menu, not a text box — it used to be freeform, which meant a typo went into the mesh manifest verbatim with nothing to catch it. The menu offers the eight user-level cluster services (the same set `--all-services` expands to), grouped, each with a one-line description on hover. The infrastructure slugs (`tor`, `egress-vpn`, `workloadConsole`, `anubis`) are deliberately absent: they are node- or cluster-plane scoped, so a per-domain checkbox for them would claim something the builders do not do. If a config you load carries a slug the menu does not offer, it is added to the menu pre-checked and labelled as carried over, so loading an older worklist never silently drops it. Empty means the cluster-wide set applies, and the button says so — it reads "Cluster default" rather than "None", which is the spelling of the opposite setting (an explicit empty allow-list). The slugs you tick are read back in catalogue order, not in the order the menu happens to group them, so re-grouping the menu can never change what the manifest says.
+
+One thing this column does **not** do: it does not change which services the image bakes. Those slugs are provisioning input carried in the mesh manifest for a cluster to read later; the services baked into an image come from the services step.
 
 "Applies to" is a checkable menu of your worklist image ids. Leaving it empty means every eligible image. Node-role images take no `--domains` at all — the attachment is manifest and provisioning data only, and the menu labels them as such rather than implying a flag it cannot emit. "Sign-in" chooses between the superdomain's central Casdoor, which is the default, and a dedicated Casdoor instance provisioned for that domain alone.
 
