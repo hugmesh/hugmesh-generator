@@ -331,3 +331,32 @@ def test_compress_level_reaches_argv_only_off_its_default(wiz):
     args = wiz.cfg.to_cli_args()
     assert ("--compress-level", "6") in list(zip(args, args[1:]))
     assert "--compress" in args
+
+
+@pytest.mark.parametrize("stored,shown,emitted", [
+    (-1, 0, "0"),          # below the range: the nearest legal preset, not the default
+    (99, 9, None),         # above it: clamps to 9, which is the level that emits nothing
+    ("6", 6, "6"),         # a JSON string: int()-able, so it is a real level
+    ("nine", 9, None),     # not a number at all: the builder default, no flag
+])
+def test_out_of_range_level_shows_exactly_what_it_will_ship(wiz, stored, shown, emitted):
+    """The page and the argv must be the SAME function of the same --config JSON.
+
+    The combo can only ever hold 0-9, but a hand-edited config can carry anything, so
+    initializePage and ImageConfig._compress_level_args are two readings of one
+    untrusted value. They were briefly different functions of it — findData() fell back
+    to 9 where emission clamped to 0 — which made ONE config.json produce two different
+    artifacts depending on whether the operator happened to open this page. Both now go
+    through config.clamp_compress_level; this pins that they agree, which the other
+    twelve level tests cannot, because they all set the level THROUGH the combo.
+    """
+    wiz.cfg.compress_level = stored
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert build.compress_level.currentData() == shown
+    build._preview()
+    args = wiz.cfg.to_cli_args()
+    pairs = list(zip(args, args[1:]))
+    if emitted is None:
+        assert "--compress-level" not in args
+    else:
+        assert ("--compress-level", emitted) in pairs

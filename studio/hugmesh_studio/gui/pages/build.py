@@ -62,7 +62,8 @@ from ...core import worklist as worklist_mod
 from ...core.build_driver import BuildDriver
 from ...core.config import (COMPRESS_LEVEL_CHOICES, COMPRESS_LEVEL_DEFAULT,
                             ENV_CHOICES, FLAVOR_MEDIA_PLATFORMS, ImageConfig,
-                            UNAFFILIATED_ROLE, effective_installer_ui, field_default,
+                            UNAFFILIATED_ROLE, clamp_compress_level,
+                            effective_installer_ui, field_default,
                             image_class, resolve_installer_ui_default,
                             resolve_platform_defaults)
 from ...core.worklist_driver import WorklistDriver
@@ -534,7 +535,10 @@ class BuildPage(QtWidgets.QWizardPage):
         #             build. Embeds the binpkg cache + distfiles in the live ISO: a
         #             materially larger ISO that can rebuild offline.
         #   compress  COMPRESS_IMG=false (x86:242, rpi5:186, jetson:165) -> CHANGES the
-        #             build. xz -9 over every finished artifact; a long build tail.
+        #             build. xz over the artifacts THIS builder compresses (the .img on
+        #             x86/rpi5/jetson, the live + installer ISOs on the seven flavor
+        #             builders — see _compress_note), at preset --compress-level
+        #             (default 9); a long build tail.
         #   resume    RESUME=false       (x86:207, rpi5:174, jetson:156) -> CHANGES the
         #             build. Reuses the previous sysroot instead of wiping it.
         #   live_iso  LIVE_ISO=true      (x86:243)                       -> no change.
@@ -1053,12 +1057,13 @@ class BuildPage(QtWidgets.QWizardPage):
         self.bundle_source.setChecked(False if unaffiliated else c.bundle_source)
         self.bundle_note.setVisible(unaffiliated)
         self.compress.setChecked(c.compress)
-        # findData falls back to the default preset for a --config JSON carrying a level
-        # outside 0-9 (config._compress_level_args clamps the same value on emission, so
-        # what the page shows and what the builder gets never disagree).
-        _lvl = self.compress_level.findData(c.compress_level)
+        # A --config JSON may carry any compress_level at all. clamp_compress_level is
+        # the SAME reading config._compress_level_args uses on emission, so what the page
+        # shows and what the builder is handed can never disagree about one file — a
+        # plain findData(c.compress_level) fallback would NOT be that same function
+        # (it maps -1 to 9 where emission maps it to 0).
         self.compress_level.setCurrentIndex(
-            _lvl if _lvl >= 0 else self.compress_level.findData(COMPRESS_LEVEL_DEFAULT))
+            self.compress_level.findData(clamp_compress_level(c.compress_level)))
         # --compress means DIFFERENT artifacts per builder — restate the caption for the
         # platform actually selected (see _compress_note).
         self.artifact_labels["compress"].setText(_compress_note(c.platform))

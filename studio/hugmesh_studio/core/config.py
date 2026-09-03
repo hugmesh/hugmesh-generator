@@ -445,6 +445,27 @@ ENV_CHOICES = ("test", "prod")
 COMPRESS_LEVEL_CHOICES = tuple(range(10))
 COMPRESS_LEVEL_DEFAULT = 9
 
+
+def clamp_compress_level(value) -> int:
+    """The ONE reading of a compress_level that came from an untrusted source.
+
+    The GUI combo can only ever hold COMPRESS_LEVEL_CHOICES, but a hand-edited
+    ``--config`` JSON can carry anything, and the builders hard-error on a level
+    outside 0-9 (they validate the flag). Both readers of that untrusted value —
+    ``ImageConfig._compress_level_args`` on emission and BuildPage.initializePage
+    when it restores the combo — go through HERE, so the level the page shows and
+    the level the builder is handed are the same function of the same file. Two
+    different readings would mean one config.json produced two different artifacts
+    depending on whether the operator happened to open the Build page.
+
+    Out of range clamps to the nearest legal preset; junk that is not a number at
+    all resolves to the builder default (which emits no flag at all)."""
+    try:
+        return max(0, min(9, int(value)))
+    except (TypeError, ValueError):
+        return COMPRESS_LEVEL_DEFAULT
+
+
 # build-x86-host-stage4.sh's full documented --gpu-driver matrix (canonical names).
 # "auto" is a Studio value, not a builder flag: to_cli_args() omits --gpu-driver so
 # the builder resolves its own default (all-free on GPU roles, nvidia on edge_ai).
@@ -1768,8 +1789,9 @@ _DEFAULT_LEAK_ROLES = ("", PLATFORM_DEFAULT_ROLE["x86"])
 # The ARM ISO platforms whose builders take a live|installer|both --flavor. An unset
 # flavor resolves to the single-artifact "installer" here (the legacy worker-channel
 # default) rather than to_cli_args's "both", so the worker's one-artifact ingest holds.
-_ISO_FLAVOR_PLATFORMS = ("frite", "orangepi5", "orangepizero2", "orangepizero2w", "orangepizero3",
-                         "orangepi3-lts", "orangepi4-lts")
+# Same family, named ONCE up at FLAVOR_MEDIA_PLATFORMS (which a test pins to real
+# --flavor emission) — aliased rather than re-spelled so the two cannot drift apart.
+_ISO_FLAVOR_PLATFORMS = FLAVOR_MEDIA_PLATFORMS
 
 
 def roles_for_platform(platform: str) -> frozenset:
@@ -3139,13 +3161,12 @@ class ImageConfig:
         An out-of-range value is CLAMPED rather than raised: the GUI can only offer
         0-9 (COMPRESS_LEVEL_CHOICES) and the builders hard-error on anything else, so a
         --config JSON carrying junk must not be able to hand a builder a flag it will
-        refuse mid-run — it gets the nearest legal preset instead."""
-        lvl = self.compress_level
-        try:
-            lvl = int(lvl)
-        except (TypeError, ValueError):
-            return []
-        lvl = max(0, min(9, lvl))
+        refuse mid-run — it gets the nearest legal preset instead. The clamp lives in
+        clamp_compress_level() because BuildPage restores the combo through the SAME
+        reading; a second, different rule there would let the page and the argv
+        disagree about one file (non-numeric junk resolves to the default, i.e. to
+        emitting nothing at all)."""
+        lvl = clamp_compress_level(self.compress_level)
         return [] if lvl == COMPRESS_LEVEL_DEFAULT else ["--compress-level", str(lvl)]
 
     def _services_args(self) -> list[str]:
