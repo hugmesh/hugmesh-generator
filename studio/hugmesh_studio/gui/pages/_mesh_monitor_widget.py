@@ -46,6 +46,20 @@ _MON_HEADERS = ("Pod / container", "Lane", "State", "Kubernetes / compose addres
 _DASH = "—"
 _GREY = "#888888"
 
+# The four view-door tooltips, named once so set_view_session can write BOTH buttons
+# in BOTH of its branches (see the note there).
+_VIEW_UP_TIP = (
+    "Run `make view` in the background: serves the kind front doors as HTTPS on "
+    "127.0.0.1:90xx under this machine's loopback-only CA, so the browser never "
+    "meets the ingress's fake certificate or its HSTS pin. Binds loopback ports "
+    "on this machine — one press, never automatic. Run `make view-trust` once "
+    "per machine or the browser still warns.")
+_VIEW_UP_LIVE_TIP = ("A `make view` session is already serving the doors — the Open "
+                     "buttons above use it.")
+_VIEW_DOWN_TIP = ("`make view-stop`: stop the background view session and sweep its "
+                  "port-forwards.")
+_VIEW_DOWN_IDLE_TIP = "No `make view` session is running."
+
 
 def _grey_note(text: str) -> QtWidgets.QLabel:
     lbl = QtWidgets.QLabel(text)
@@ -102,17 +116,11 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         self.refresh_btn.clicked.connect(self.refresh_requested.emit)
         frow.addWidget(self.refresh_btn)
         self.view_up_btn = QtWidgets.QPushButton("Open the browser door (`make view`)")
-        self.view_up_btn.setToolTip(
-            "Run `make view` in the background: serves the kind front doors as HTTPS on "
-            "127.0.0.1:90xx under this machine's loopback-only CA, so the browser never "
-            "meets the ingress's fake certificate or its HSTS pin. Binds loopback ports "
-            "on this machine — one press, never automatic. Run `make view-trust` once "
-            "per machine or the browser still warns.")
+        self.view_up_btn.setToolTip(_VIEW_UP_TIP)
         self.view_up_btn.clicked.connect(self.view_up_requested.emit)
         frow.addWidget(self.view_up_btn)
         self.view_down_btn = QtWidgets.QPushButton("Stop the browser door")
-        self.view_down_btn.setToolTip("`make view-stop`: stop the background view "
-                                      "session and sweep its port-forwards.")
+        self.view_down_btn.setToolTip(_VIEW_DOWN_TIP)
         self.view_down_btn.clicked.connect(self.view_down_requested.emit)
         frow.addWidget(self.view_down_btn)
         self.copy_btn = QtWidgets.QPushButton("Copy all addresses")
@@ -151,11 +159,16 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         answer: 'Open' when no session serves, 'Stop' when one does."""
         self.view_up_btn.setEnabled(not live)
         self.view_down_btn.setEnabled(live)
+        # BOTH tooltips, BOTH branches. Writing only one per branch left the other
+        # holding the previous state's sentence, so after the first flip the ENABLED
+        # button explained why it was disabled ("No `make view` session is running."
+        # on a live Stop button, and vice versa).
         if live:
-            self.view_up_btn.setToolTip("A `make view` session is already serving the "
-                                        "doors — the Open buttons above use it.")
+            self.view_up_btn.setToolTip(_VIEW_UP_LIVE_TIP)
+            self.view_down_btn.setToolTip(_VIEW_DOWN_TIP)
         else:
-            self.view_down_btn.setToolTip("No `make view` session is running.")
+            self.view_up_btn.setToolTip(_VIEW_UP_TIP)
+            self.view_down_btn.setToolTip(_VIEW_DOWN_IDLE_TIP)
 
     # ── rendering ────────────────────────────────────────────────────────────────
     def clear(self) -> None:

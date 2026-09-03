@@ -555,3 +555,113 @@ def test_unknown_without_error_text_is_not_reported_as_no_mesh(qapp, page, fake)
     assert "Could not read" in note and "not asked" in note
     assert not page.monitor.isEnabled() and page.monitor.table.rowCount() == 0
     assert "could not read" in page.monitor_section.toggle.text()
+
+
+def test_a_verb_time_refresh_never_leaves_the_previous_reads_rows(qapp, page, fake,
+                                                                  stack):
+    """The paused branch quotes a snapshot in its note and its title, so the TABLE
+    must come from that same read. The widget's own Refresh stays live while a verb
+    runs (_set_verbs_enabled does not reach it), so this is one click away: rows
+    showing green ticks under a note that says the mesh is down is exactly the
+    stale-as-current failure the monitor exists to fix."""
+    stack.running = True
+    fake.answers = [snap_compose()]
+    page.initializePage()
+    _settle(qapp, page)
+    assert page.monitor.table.rowCount() == 1
+    page._running = True
+    page._running_label = "Stopping the mesh"
+    page._sync_monitor_gate()
+    assert page.monitor.refresh_btn.isEnabled(), "the premise: Refresh is still live"
+    fake.answers = [snap_none()]                    # the mesh went away
+    page._refresh_monitor("button")
+    _settle(qapp, page)
+    assert "compose down" in page.monitor.note.text()
+    assert "paused" in page.monitor_section.toggle.text()
+    assert page.monitor.table.rowCount() == 0, (
+        "the paused note quoted a nothing-running read while the table still showed "
+        "the previous read's rows")
+
+
+def test_a_verb_time_refresh_repaints_rows_that_are_still_there(qapp, page, fake,
+                                                                stack):
+    """The other half of the same branch: pausing must not blank a live mesh."""
+    stack.running = True
+    fake.answers = [snap_compose()]
+    page.initializePage()
+    _settle(qapp, page)
+    page._running = True
+    page._running_label = "Running the e2e suite"
+    fake.answers = [snap_kind()]
+    page._refresh_monitor("button")
+    _settle(qapp, page)
+    assert page.monitor.isEnabled()
+    assert page.monitor.table.rowCount() == 3, "a paused read that still sees a mesh"
+
+
+def test_show_event_restarts_the_poll_when_the_section_was_left_open(qapp, page, fake):
+    """hideEvent stops the 10 s poll, but the FOLD STATE survives the visit — so
+    leaving and re-entering the page (LocalMeshPage is wizard page 4 of 27; Next/Back
+    is ordinary navigation) must not leave an expanded, visible table frozen while
+    its own tooltip still promises a 10 s refresh."""
+    page.monitor_section.set_expanded(True)
+    _settle(qapp, page)
+    assert page._monitor_timer.isActive()
+    page.hideEvent(QtGui.QHideEvent())
+    assert not page._monitor_timer.isActive()
+    page.showEvent(QtGui.QShowEvent())
+    assert page.monitor_section.is_expanded()
+    assert page._monitor_timer.isActive(), (
+        "the section is still open, so the poll the tooltip promises must be back")
+
+
+def test_show_event_leaves_a_folded_section_unpolled(qapp, page, fake):
+    """The restart is conditional: a folded section costs no ticks."""
+    assert not page.monitor_section.is_expanded()
+    page.showEvent(QtGui.QShowEvent())
+    assert not page._monitor_timer.isActive()
+
+
+def test_a_folded_nothing_running_title_is_re_derived_on_re_entry(qapp, page, fake,
+                                                                  stack):
+    """`running` in _on_mesh_state is the COMPOSE-only answer, so it cannot speak for
+    a kind cluster that came up behind a folded section — the two-lane case this
+    feature exists for. A title still saying 'nothing running' must always re-read."""
+    page.initializePage()
+    _settle(qapp, page)
+    assert "nothing running" in page.monitor_section.toggle.text()
+    first = fake.calls
+    fake.answers = [snap_kind()]                    # kind up, compose still down
+    page.initializePage()
+    _settle(qapp, page)
+    assert fake.calls == first + 1, "a folded 'nothing running' title never re-read"
+    assert "nothing running" not in page.monitor_section.toggle.text()
+    assert "1/3 ready" in page.monitor_section.toggle.text()
+
+
+def test_a_folded_title_that_already_names_a_mesh_costs_no_extra_read(qapp, page, fake,
+                                                                      stack):
+    """The re-derive above must not become an unconditional probe on every entry."""
+    fake.answers = [snap_kind()]
+    page.initializePage()
+    _settle(qapp, page)
+    assert "1/3 ready" in page.monitor_section.toggle.text()
+    first = fake.calls
+    page.initializePage()
+    _settle(qapp, page)
+    assert fake.calls == first, "a folded title that already names a mesh re-read"
+
+
+def test_both_view_tooltips_follow_the_session_state(qapp, page, fake):
+    """set_view_session used to write ONE tooltip per branch, so after the first flip
+    the ENABLED button carried the other state's sentence — a live 'Stop the browser
+    door' reading 'No `make view` session is running.'"""
+    w = page.monitor
+    w.set_view_session(True)
+    assert "already serving" in w.view_up_btn.toolTip()
+    assert "No `make view` session is running" not in w.view_down_btn.toolTip()
+    assert "view-stop" in w.view_down_btn.toolTip()
+    w.set_view_session(False)
+    assert "already serving" not in w.view_up_btn.toolTip()
+    assert "make view-trust" in w.view_up_btn.toolTip()
+    assert w.view_down_btn.toolTip() == "No `make view` session is running."

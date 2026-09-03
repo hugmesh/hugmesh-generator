@@ -1333,10 +1333,22 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     def hideEvent(self, event) -> None:                       # noqa: N802 (Qt)
         self._enforce_egress_conf()
-        # A hidden page owns no poll: the monitor's 10 s timer restarts when the
-        # section is next expanded (or via _on_mesh_state when the page re-enters).
+        # A hidden page owns no poll. showEvent below is the other half of the pair:
+        # the FOLD STATE survives the visit, so a section the operator left open
+        # must get its 10 s refresh back or it freezes on the page-entry read while
+        # its own tooltip still promises "refreshed every 10 s".
         self._monitor_timer.stop()
         super().hideEvent(event)
+
+    def showEvent(self, event) -> None:                       # noqa: N802 (Qt)
+        super().showEvent(event)
+        # The twin of hideEvent's stop (mesh_emulation.py:500-513 is the in-repo
+        # precedent). Nothing else restarts the timer — _on_monitor_toggled only
+        # fires on an actual fold change — so without this a revisited page shows a
+        # visible, expanded, permanently frozen table.
+        if getattr(self, "monitor_section", None) is not None \
+                and self.monitor_section.is_expanded():
+            self._monitor_timer.start()
 
     def collect_services(self) -> tuple[str, ...]:
         """The ticked services, in the core catalogue's order (never widget order —
@@ -1918,8 +1930,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # what is up), or when a verb just ended (_monitor_stale). Re-entrant-safe —
         # a probe already out is left alone, and the stale flag then survives until
         # that probe finishes (see _on_monitor_finished).
+        # `running` here is the COMPOSE-only answer, so it cannot speak for a kind
+        # cluster coming up behind a folded section — re-read whenever the title
+        # currently claims nothing runs, or it keeps asserting that after the mesh
+        # is up (the two-lane case this feature was written for).
         if (self._monitor_stale or self._monitor is None
-                or self.monitor_section.is_expanded() or running):
+                or self.monitor_section.is_expanded() or running
+                or not bool(getattr(self._monitor, "any_running", False))):
             if self._refresh_monitor("mesh state"):
                 self._monitor_stale = False
         self._sync_monitor_gate()
@@ -2345,6 +2362,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                  f"kind {self._lane_word(snap.kind)}")
         if self._running:
             mon.setEnabled(snap.any_running)
+            # The note and the title below quote THIS snapshot, so the rows must come
+            # from it too. A verb-time Refresh (the widget's own button stays live
+            # while a verb runs) used to leave the previous read's rows on screen
+            # under a note saying nothing is running — stale rows shown as current,
+            # the exact failure this monitor exists to fix.
+            if snap.any_running:
+                mon.render(snap)
+            else:
+                mon.clear()
             note = (f"Paused while {self._running_label or 'the verb'} runs — "
                     f"refreshed when it finishes. Last read {snap.taken_at}: "
                     f"{ready}/{total} ready · {lanes}.")
