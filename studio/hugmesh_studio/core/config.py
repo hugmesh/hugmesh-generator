@@ -277,8 +277,8 @@ ROLE_CHOICES = {
          "Omnibus — every cluster role on one node (x86, or Jetson Orin — EXPERIMENTAL)"),
         # Person-device desktops attachable to the mesh (operator ask 2026-08-14):
         # checking one on the WorklistPage asks for the person's user + role via a
-        # popup; the account is provisioned on the internal orchestration
-        # superdomain and the role rides the image as --person-role (FD-08).
+        # popup; the account is provisioned on the internal Tailscale root
+        # domain and the role rides the image as --person-role (FD-08).
         ("laptop", ("x86",), "Laptop desktop — tailnet + SSO client for a person on this mesh"),
         ("chromebook", ("x86",),
          "Chromebook desktop — coreboot/UEFI laptop client (ADR-16); tailnet + SSO"),
@@ -527,7 +527,15 @@ SERVICE_DESCRIPTIONS: dict[str, str] = {
     "egress-vpn": "Routes this node's outbound traffic through a provided VPN profile.",
     "workloadConsole": "In-cluster workload console — inspect and restart mesh workloads "
                        "from the browser.",
-    "anubis": "Anti-scraper proof-of-work gate in front of the public web routes.",
+    # ISSUE #226 ASK 7. Worded in the order _opt_anubis_installed actually decides
+    # in (scripts/_optional-services-lib.sh:478-482): it tests _opt_selected FIRST
+    # and only falls through to the ENV split when the operator said nothing, so a
+    # ticked row installs anubis on ANY build — including the default ENV=test one
+    # (ImageConfig().env == "test"). Saying it "stays off on a test build" would be
+    # false for the one action this row exists to perform.
+    "anubis": "Anti-scraper proof-of-work gate in front of the public web routes. "
+              "Ticking it installs it on any build; left alone a prod build turns "
+              "it on by itself anyway and only a test build leaves it off.",
 }
 
 # Presentation grouping for the services surface: (group title, (slug, ...)). Ordered —
@@ -537,22 +545,30 @@ SERVICE_DESCRIPTIONS: dict[str, str] = {
 # reads; the previous surface grouped by "which flag emits it", which is an
 # implementation detail they cannot see.
 SERVICE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Social & community", ("akkoma", "tuwunel", "phpbb")),
-    ("Media & play", ("owncast", "tube", "games")),
-    ("Characters & avatars", ("character-studio", "character-forge", "edge-ai-tts")),
-    ("Network & access", ("egress-vpn", "workloadConsole")),
+    ("Social & Community", ("akkoma", "tuwunel", "phpbb")),
+    ("Media & Play", ("owncast", "tube", "games")),
+    ("Characters & Avatars", ("character-studio", "character-forge", "edge-ai-tts")),
+    ("Network & Access", ("egress-vpn", "workloadConsole")),
     # All three of these are here because PRIVACY is what they are FOR, which is the
-    # axis the operator reads. `tor` and `anubis` sat under "Network & access" only
+    # axis the operator reads. `tor` and `anubis` sat under "Network & Access" only
     # because they are also network-level, which is the implementation detail, not
     # the purpose: `tor` is a privacy TRANSPORT (reach the mesh without exposing a
     # public IP or a DNS name to whoever is watching), and `anubis` is the
-    # anti-scraper gate on the public routes — the group title's second half names
-    # it outright. The AI cloak sits here rather than under "Characters & avatars"
-    # for the same why-not-what reason: it is a protection applied to what a person
-    # UPLOADS, not a thing they create with. What stays in "Network & access" is the
-    # plumbing that carries no privacy claim — where this node's egress goes, and a
-    # console for its workloads.
-    ("Privacy & anti-scraping", ("tor", "anubis", "media-poisoner")),
+    # anti-scraper gate on the public routes. The AI cloak sits here rather than
+    # under "Characters & Avatars" for the same why-not-what reason: it is a
+    # protection applied to what a person UPLOADS, not a thing they create with.
+    # What stays in "Network & Access" is the plumbing that carries no privacy claim
+    # — where this node's egress goes, and a console for its workloads.
+    #
+    # ISSUE #226 ASK 7, verbatim: "where's anubis? if it is forced on, rename
+    # 'Privacy & anti-scraping' to just 'Privacy services' (or similar)". The
+    # condition HOLDS — scripts/_optional-services-lib.sh:478-482
+    # (_opt_anubis_installed) returns "true" for every ENV=prod build unless the
+    # operator passes the explicit "-anubis"/"no-anubis" spelling, and
+    # build-x86-host-stage4.sh REFUSES --exclude-services for it by name. So the
+    # title can no longer promise "anti-scraping" as something you pick here; the
+    # per-row description says what anubis actually does instead.
+    ("Privacy Services", ("tor", "anubis", "media-poisoner")),
 )
 
 # --person-role client-identity picker (FD-08). The x86 builder honours --person-role/
@@ -618,6 +634,33 @@ MANAGED_SERVICE_TIER12_IDS = (
     "postgres-admin-bff", "postgres-user-bff", "postgres-mod-bff",
     "postgres-forum-bff", "postgres-wiki-bff", "postgres-casdoor")
 MANAGED_SERVICE_TIER3_IDS = ("cassandra", "harbor", "vault-kv", "vault-pki")
+# ISSUE #226 ask 2 — "names are not self-explanatory". Every tier-1/2 row used to carry
+# one identical caption ("Runs in-cluster unless pointed at a hosted endpoint"), which
+# told the operator nothing about `federation-bundles` or `velero-objectstore`. One line
+# per id saying WHAT IT IS, taken from specs/cluster/backing-services.yaml's displayName
+# + consumers (the same file the hermetic test_managed_services.py pins this constant
+# against). The shared "in-cluster unless…" sentence is NOT re-appended anywhere: the
+# row's own Hosting dropdown reads "Self-hosted (in-cluster)" / "Managed (hosted
+# endpoint)" and the group row above it carries the scope note, so this column is
+# free to answer only "what is it" (network.py's backing-services loop).
+MANAGED_SERVICE_DESCRIPTIONS: dict[str, str] = {
+    "velero-objectstore": "Object store Velero writes the cluster's backups into "
+                          "(managed = an S3 / Azure Blob bucket).",
+    "smtp": "The relay the mesh submits outbound mail through — account mail and "
+            "alerts. There is no in-mesh SMTP server; this records the choice.",
+    "kafka": "Usage-event bus the BFFs publish to (managed = MSK / Event Hubs).",
+    "clickhouse": "Analytics warehouse behind the admin dashboards and the "
+                  "observability DSN (managed = ClickHouse Cloud).",
+    "federation-bundles": "Object store holding the remote-app bundles the federation "
+                          "API serves to other meshes (managed = an S3 bucket).",
+    "postgres-admin-bff": "PostgreSQL database behind the admin BFF.",
+    "postgres-user-bff": "PostgreSQL database behind the user BFF.",
+    "postgres-mod-bff": "PostgreSQL database behind the moderation BFF.",
+    "postgres-forum-bff": "PostgreSQL database behind the forum BFF.",
+    "postgres-wiki-bff": "PostgreSQL database behind the wiki BFF.",
+    "postgres-casdoor": "PostgreSQL database behind Casdoor, the mesh's identity "
+                        "provider.",
+}
 # Short WHY-refused one-liner per tier-3 id (mirrors the builders' _mgd_tier3_blocker) —
 # surfaced verbatim when validate_identity() refuses a tier-3 --managed-service selection.
 MANAGED_SERVICE_TIER3_BLOCKER = {
@@ -687,7 +730,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     # cluster / mesh identity.
     "cluster_domain": _ALL_PLATFORMS, "games_domain": _X86_RPI5, "release_state": _X86_RPI5,
     "person_role": _X86, "domains": _X86,
-    # orchestration superdomain — every builder parses --superdomain (WS-SUPER-B bake);
+    # Tailscale root domain — every builder parses --superdomain (WS-SUPER-B bake);
     # emitted ONLY in mesh mode (see _superdomain_args), so it is EXCLUDED from the
     # generic _FIELD_PROBE diff-probe (mixed cloud/mesh baselines) and pinned by a
     # dedicated mesh-mode test, exactly like `unaffiliated`.
@@ -1493,10 +1536,10 @@ def superadmin_plane_applies(cfg: "ImageConfig") -> bool:
 def effective_domain_note(cfg: "ImageConfig") -> str:
     """Plain-language description of the domains a mesh serves WITHOUT adding any (ask
     19's default card). Names both real values rather than saying "the internal domain":
-    the cluster domain the Network step set, and the orchestration superdomain every node
+    the cluster domain the Network step set, and the Tailscale root domain every node
     joins (derived ``<brand>.internal`` when left blank — ``effective_superdomain``)."""
     return (f"Serve only {cfg.cluster_domain or 'the cluster domain'} and the internal "
-            f"orchestration domain {cfg.effective_superdomain()} that every node joins. "
+            f"Tailscale root domain {cfg.effective_superdomain()} that every node joins. "
             "No domains table, no per-domain services to pick — this is the default and "
             "what almost every mesh wants.")
 
@@ -2298,7 +2341,7 @@ class ImageConfig:
     # users themselves, so the Users TABLE step becomes reachable (users_table_applies).
     # MESH ONLY, exactly like additional_domains.
     configure_users: bool = False
-    superdomain: str = ""            # orchestration superdomain all mesh nodes join; "" = derived <brand>.internal. Emitted as --superdomain for MESH builds (WS-SUPER-B: baked to <etc>/superdomain + headscale MagicDNS); permanently internal, never go-live-flipped (I7)
+    superdomain: str = ""            # Tailscale root domain all mesh nodes join; "" = derived <brand>.internal. Emitted as --superdomain for MESH builds (WS-SUPER-B: baked to <etc>/superdomain + headscale MagicDNS); permanently internal, never go-live-flipped (I7)
     games_domain: str = ""             # --games-domain (games.<domain> host + OIDC issuer; x86+rpi5)
     release_state: str = ""            # --release-state internal|public (x86+rpi5; "" = builder default)
     release_tag: str = ""              # --release-tag image stamp (x86)
@@ -2671,7 +2714,7 @@ class ImageConfig:
         return cls.from_dict(data)
 
     def effective_superdomain(self) -> str:
-        """The orchestration superdomain every mesh node joins. An explicit superdomain
+        """The Tailscale root domain every mesh node joins. An explicit superdomain
         wins; "" derives f"{brand}.internal" (permanently internal — never the go-live
         apex, which stays cluster_domain, I7)."""
         return self.superdomain or f"{self.brand}.internal"
@@ -2844,7 +2887,7 @@ class ImageConfig:
         validate_domain_name(self.cluster_domain)
         if self.games_domain:
             validate_domain_name(self.games_domain)
-        # orchestration superdomain: "" = derived <brand>.internal (always valid once
+        # Tailscale root domain: "" = derived <brand>.internal (always valid once
         # brand is validated). Validate an explicit value like any other domain name
         # (core.validate accepts .internal). Feeds the manifest + the KEYS channel.
         if self.superdomain:
@@ -3231,7 +3274,7 @@ class ImageConfig:
         a += self._identity_args()
         if self.cluster_domain != "hugmesh.net":
             a += ["--cluster-domain", self.cluster_domain]
-        # Orchestration superdomain — mesh-only, grouped with the cluster/mesh identity
+        # Tailscale root domain — mesh-only, grouped with the cluster/mesh identity
         # plane (see _superdomain_args). Empty for cloud/standalone, so every existing
         # ARM cloud/standalone golden stays byte-identical.
         a += self._superdomain_args()
@@ -3662,7 +3705,7 @@ class ImageConfig:
         if self.mode in ("cloud", "mesh"):
             if self.cluster_domain != "hugmesh.net":
                 a += ["--cluster-domain", self.cluster_domain]
-            # Orchestration superdomain — mesh-only (see _superdomain_args), emitted for
+            # Tailscale root domain — mesh-only (see _superdomain_args), emitted for
             # every mesh role (nodes AND clients), so it sits OUTSIDE the node-role gate
             # below. No-op for cloud, keeping every cloud golden byte-identical.
             a += self._superdomain_args()
@@ -3923,7 +3966,7 @@ class ImageConfig:
     # ---- superadmin mesh manifest -----------------------------------------
     def mesh_manifest(self) -> dict[str, Any]:
         """The domains + users a superadmin defined, as a portable manifest, now carrying
-        the effective orchestration superdomain (§2.6). This is the v1+superdomain shim for
+        the effective Tailscale root domain (§2.6). This is the v1+superdomain shim for
         the SINGLE-image path; the full manifest v2 envelope ({"format":2,...,"images":[…]})
         is written once-per-worklist by the driver (WS-ENGINE). Consumed by cluster
         provisioning (Casdoor seed + per-domain config) — separate from the image

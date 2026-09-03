@@ -28,8 +28,8 @@
 # WORK_DIR/role selects one artifact everywhere:
 #
 #   1. --img FILE                     explicit, wins over everything
-#   2. ${WORK_DIR}/hugmesh-rpi5-arm64-${ROLE}-*.img   (newest, role match)
-#   3. ${WORK_DIR}/hugmesh-rpi5-*.img                 (newest, any role)
+#   2. ${WORK_DIR}/*-rpi5-arm64-${ROLE}-*.img         (newest, role match)
+#   3. ${WORK_DIR}/*-rpi5-*.img                       (newest, any role)
 #   4. ${WORK_DIR}/*.img (excluding *initramfs*/*kernel*) (newest)
 #
 # WORK_DIR defaults to ${REPO}/rpi5-stage4-build (same as the build scripts).
@@ -195,23 +195,30 @@ autodetect_img() {
     local c
     local r
     # THE PLATFORM ANCHOR COMES FIRST, ALWAYS — mirror of launch-x86.sh, and for the
-    # same reason: an unanchored role glob returns hugmesh-x86-amd64-<role>-….img
+    # same reason: an unanchored role glob returns <brand>-x86-amd64-<role>-….img
     # into qemu-system-aarch64 -M virt when that role has no rpi5 image in the shared
     # WORK_DIR. Canonical spelling first inside the anchor, then every declared
-    # alias: an image built as hugmesh-rpi5-arm64-be-… keeps its name and is still
+    # alias: an image built as <brand>-rpi5-arm64-be-… keeps its name and is still
     # the backend image.
+    #
+    # The leading `*-` is the ${BRAND} field, not a wildcard for anything else: the
+    # builders emit ${BRAND}-rpi5-arm64-… and BRAND is sdhm / gentoo / hugmesh
+    # depending on the build, so spelling `hugmesh-` here made every branded Pi
+    # image invisible to the launcher. `-rpi5-` stays a LITERAL, so the anchor —
+    # and the glob ORDER that tests/scripts/test-role-key-spelling.sh asserts —
+    # is exactly as strong as before.
     for r in $(hugmesh_role_aliases_of "${role}"); do
-        c="$(ls -1t "${d}"/hugmesh-rpi5-*-"${r}"-*.img 2>/dev/null | head -1 || true)"
+        c="$(ls -1t "${d}"/*-rpi5-*-"${r}"-*.img 2>/dev/null | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done
-    for c in "${d}"/hugmesh-rpi5-*.img ; do
+    for c in "${d}"/*-rpi5-*.img ; do
         c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done
     # LAST RESORT, and it must stay last (the pre-rename order had it here too): an
     # unanchored role match can cross platforms.
     for r in $(hugmesh_role_aliases_of "${role}"); do
-        c="$(ls -1t "${d}"/hugmesh-*-"${r}"-*.img 2>/dev/null | head -1 || true)"
+        c="$(ls -1t "${d}"/*-"${r}"-*.img 2>/dev/null | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done
     # Last resort: any *.img that is not a kernel/initramfs blob.

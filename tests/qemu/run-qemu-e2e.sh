@@ -170,8 +170,15 @@ autodetect_pi() {
     # turned a perfectly bootable work dir into "pi kernel+stage4 not found".
     # The stage4 is only the LAST resort signal that the tree at least built
     # this role, kept for work dirs that hold no golden image yet.
-    if compgen -G "${WORK_DIR}/hugmesh-rpi5-*-${ROLE}-*.img*" >/dev/null 2>&1 \
-       || compgen -G "${WORK_DIR}/hugmesh-rpi5-*.img*" >/dev/null 2>&1; then
+    # The leading `*-` is the ${BRAND} field; `-rpi5-` stays the literal anchor.
+    # Fully quoted so compgen does ALL the globbing. With the leading `*` left
+    # outside the quotes the shell expands it first, and the word only survives
+    # to compgen because it matches nothing on disk — which stops being true the
+    # moment anyone adds `shopt -s nullglob` to this file, at which point a
+    # bootable work dir silently reports "pi kernel+stage4 not found". Measured:
+    # the two forms agree today, and only this one is still correct under nullglob.
+    if compgen -G "${WORK_DIR}/*-rpi5-*-${ROLE}-*.img*" >/dev/null 2>&1 \
+       || compgen -G "${WORK_DIR}/*-rpi5-*.img*" >/dev/null 2>&1; then
         return 0
     fi
     [ -n "${STAGE4}" ]

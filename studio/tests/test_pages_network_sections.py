@@ -267,12 +267,32 @@ def test_the_edge_ai_role_auto_check_forces_its_row_open(wiz):
 
 def test_section_titles_are_not_eaten_as_mnemonics(wiz):
     """QToolButton is a QAbstractButton, so '&' in its text becomes a MNEMONIC:
-    "Identity & domain" rendered as "Identity _domain". Caught by looking at the page,
-    not by any assertion — hence this one."""
+    "Identity & Domain" rendered as "Identity _Domain". Caught by looking at the page,
+    not by any assertion — hence this one.
+
+    NON-VACUITY (issue #226): the Title Case pass could have spelled every '&' out as
+    "and", which would leave this guard passing while proving nothing. It asserts on
+    the ONE section title that deliberately keeps an ampersand, and this second
+    assertion is what says so — if the last '&' ever leaves the page's section titles,
+    this fails rather than going quietly hollow."""
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
-    assert page.identity_section.title() == "Identity & domain"
+    assert page.identity_section.title() == "Identity & Domain"
     # the displayed text must carry the escaped form, or Qt swallows the ampersand
-    assert page.identity_section.toggle.text() == "Identity && domain"
+    assert page.identity_section.toggle.text() == "Identity && Domain"
+    # …and so is a QGroupBox, which paints its title with Qt.TextShowMnemonic: an
+    # unescaped "Services & Apps" renders "Services  Apps" (measured — painting it with
+    # TextShowMnemonic is pixel-identical to painting "Services  Apps", and
+    # QKeySequence.mnemonic() on it returns Alt+Space). The section header carries the
+    # SAME words twelve lines away and IS escaped, so leaving this one bare showed the
+    # ampersand once correct and once swallowed on a single screen.
+    assert page.services_box.title() == "Services && Apps"
+    assert page.services_section.toggle.text() == "Services && Apps"
+    assert any("&" in s.title() for s in (page.identity_section, page.tailnet_section,
+                                          page.mesh_section, page.egress_section,
+                                          page.security_section,
+                                          page.services_section)), (
+        "no section title carries an ampersand any more — the escaping guard above is "
+        "now vacuous; re-target it or drop it")
 
 
 def test_out_of_scope_egress_section_leaves_no_orphan_header(wiz):
@@ -515,13 +535,13 @@ def test_the_identity_section_header_goes_with_its_last_row(wiz):
     affiliation (core/config.py::_check_unaffiliated_conflicts raises on them), the
     cluster trio because the x86 builder bakes no cluster plane in standalone mode. Every
     row inside identity_box is then hidden, so the section itself must go: otherwise the
-    page keeps a bold "Identity & domain" header that expands to an empty box."""
+    page keeps a bold "Identity & Domain" header that expands to an empty box."""
     page = _net(wiz, mode="standalone", role="standalone-unaffiliated", platform="x86")
     for name in ("brand_profile_row", "brand_row", "brand_title_row", "org_row",
                  "domain_row", "games_domain_row", "release_state_row"):
         assert not getattr(page, name).isVisibleTo(page), f"{name} still on screen"
     assert not page.identity_box.isVisible()
-    assert not page.identity_section.isVisible(), "orphan Identity & domain header"
+    assert not page.identity_section.isVisible(), "orphan Identity & Domain header"
     # …and the note that replaces it is a PAGE-LEVEL sibling, like tailnet_reason, so it
     # survives the section's own hide. A note inside the box would have vanished with it.
     assert page.identity_reason.isVisible(), (
@@ -540,24 +560,28 @@ def test_a_half_rejected_identity_section_keeps_its_header(wiz):
 
 def test_the_identity_help_line_describes_only_what_is_on_screen(wiz):
     """DEFECT 2 — the orphan help text. The fixed sentence ended "...distinct from the
-    internal superdomain below", but the superdomain row lives in mesh_box, which every
+    internal Tailscale root domain below", but that row lives in mesh_box, which every
     standalone flow hides. Same treatment as tailnet_reason: say only what is true of
-    THIS visit."""
-    # cloud/mesh: both halves present AND the superdomain really is below.
+    THIS visit.
+
+    The substring moved with issue #226's rename (ask 5, "orchestration superdomain" ->
+    "tailscale root domain") — the row, the section hint, the page subtitle and this
+    line are four spellings of ONE control, so they are swept together or not at all."""
+    # cloud/mesh: both halves present AND the root domain really is below.
     page = _net(wiz, mode="mesh", role="backend", platform="x86")
     assert page.superdomain_row.isVisibleTo(page), "precondition"
-    assert "superdomain below" in page.identity_help.text()
-    # standalone rpi5: apex domain yes, superdomain no -> the dangling clause must go.
+    assert "Tailscale root domain below" in page.identity_help.text()
+    # standalone rpi5: apex domain yes, root domain no -> the dangling clause must go.
     page = _net(wiz, mode="standalone", role="generic", platform="rpi5")
     assert not page.superdomain_row.isVisibleTo(page), "precondition"
     assert "apex domain" in page.identity_help.text()
-    assert "superdomain" not in page.identity_help.text(), (
+    assert "root domain" not in page.identity_help.text(), (
         "the help line still points at a row that is not on the page")
     # standalone x86: brand only.
     page = _net(wiz, mode="standalone", role="standalone-thick", platform="x86")
     assert "brand identity" in page.identity_help.text().lower()
     assert "apex domain" not in page.identity_help.text()
-    assert "superdomain" not in page.identity_help.text()
+    assert "root domain" not in page.identity_help.text()
     # Nothing left: no sentence at all, and the label carries its OWN hide rather than
     # merely inheriting the section's. Asserted against identity_box, not against the
     # page: isVisibleTo(page) is False here for BOTH labels-that-hid-themselves and
@@ -642,3 +666,300 @@ def test_the_standalone_subtitle_does_not_promise_a_brand_it_hid(wiz):
     assert "Brand identity" not in page.subTitle(), page.subTitle()
     assert "unaffiliated" in page.subTitle().lower()
     assert "no brand" in page.subTitle().lower()
+
+
+# =====================================================================================
+# ISSUE #226 — "'Domain, mesh & svcs' page: wording, tooltips, and renames"
+#
+# Five asks land on this page, and each is pinned by exactly the assertion that would
+# have caught it going back:
+#   1. Oxford comma + Title Case in headings/labels     -> _assert_title_case + exacts
+#   2. an explanatory tooltip for EVERY field           -> the two tooltip tests
+#   3. explain (never delete) the "default" release state
+#   4/5. the two renames, swept so ONE name reaches the screen
+#   6. rewrite the services explainer wall
+# =====================================================================================
+
+# Words a Title-Cased heading may legitimately keep lower case. Deliberately short: the
+# convention #230 set on the Home page ("Home Folder, Encryption, and Login") title-cases
+# everything a reader would read as a NAME and lowercases only the joining words.
+_TITLE_CASE_SMALL_WORDS = {"and", "or", "the", "a", "an", "of", "in", "for", "to",
+                           "on", "with", "at", "by"}
+
+
+def _assert_title_case(text, where):
+    """Every word is capitalised except a joining word that is not the first one.
+
+    Punctuation-only tokens ('&', '+', '/', '—') are skipped, and a token is stripped of
+    surrounding punctuation before it is judged, so 'Brand Profile (-C)' and
+    'Tailnet + SSO' both pass on their real words."""
+    words = [w.strip("(),.:—-/&+—") for w in text.split()]
+    words = [w for w in words if w and any(c.isalpha() for c in w)]
+    assert words, f"{where}: {text!r} has no words to check"
+    for i, w in enumerate(words):
+        if i and w.lower() in _TITLE_CASE_SMALL_WORDS:
+            continue
+        assert w[0].isupper(), f"{where}: {text!r} — {w!r} is not Title Case"
+
+
+def _caption(row):
+    """The LABEL text of a ``_row()`` wrapper (``_widgets._row`` adds the label first)."""
+    return row.layout().itemAt(0).widget().text()
+
+
+_ROW_CAPTIONS = (
+    "brand_profile_row", "brand_row", "brand_title_row", "org_row", "domain_row",
+    "games_domain_row", "release_state_row", "headscale_url_row",
+    "headscale_version_row", "tailscale_version_row", "superdomain_row",
+    "egress_field_row", "proxy_stack_row", "root_login_row", "services_preset_row",
+)
+
+
+def test_page_titles_use_title_case_and_the_oxford_comma(wiz):
+    """ASK 1, and the Oxford comma is the half a Title-Case-only pass would drop.
+
+    Exact equality on both mode titles rather than a convention check, because "Domain,
+    Mesh & Services" would satisfy _assert_title_case and still be the thing the operator
+    asked to change."""
+    page = _net(wiz, mode="mesh", role="backend", platform="x86")
+    assert page.title() == "Domain, Mesh, and Services"
+    page = _net(wiz, mode="standalone", role="standalone-thick", platform="x86")
+    assert page.title() == "Network Identity, Egress, and Security"
+    # …and the third, dead-on-arrival title set in __init__ (always overwritten by
+    # initializePage) is aligned rather than left as a fourth spelling to copy from.
+    fresh = NetworkPage(wiz)
+    assert fresh.title() == "Network, Identity, and Egress"
+
+
+def test_every_heading_and_caption_on_the_page_is_title_case(wiz):
+    """ASK 1 across the whole surface — the sections, the group box, the table's column
+    headers and its group rows, and every one of the fifteen _row() captions.
+
+    Written as a convention guard rather than fifteen literals so it keeps holding when a
+    row is added: the failure mode #230 fixed on the Home page was a page where SOME
+    labels had been title-cased and the rest had not."""
+    page = _net(wiz, mode="mesh", role="backend", platform="x86")
+    for name, sec in _sections(page).items():
+        _assert_title_case(sec.title(), f"section {name}")
+    _assert_title_case(page.services_box.title(), "services group box")
+    for i in range(page.services_table.columnCount()):
+        _assert_title_case(page.services_table.headerItem().text(i), f"column {i}")
+    for title in page.group_items:
+        _assert_title_case(title, "services table group")
+    for attr in _ROW_CAPTIONS:
+        _assert_title_case(_caption(getattr(page, attr)), attr)
+    # NON-VACUITY: the loops above are all over collections, so an attribute rename or a
+    # dropped row would make them quietly examine less. Pin the counts the page has.
+    assert len(_ROW_CAPTIONS) == 15
+    assert len(page.group_items) >= 7
+
+
+def test_the_two_renames_left_no_second_name_behind(wiz):
+    """ASKS 4 + 5. "orchestration superdomain" -> "tailscale root domain", and the
+    section that holds it -> "Headscale / mesh networking".
+
+    The rename is NOT local to one label: the row caption, the section hint, the page
+    subtitle and the identity help line are four spellings of one control, and the
+    #240/#243 lesson is that a rename which sweeps some of them is worse than none. So
+    this asserts the new names AND sweeps every caption, heading and visible paragraph on
+    the page for the old vocabulary."""
+    page = _net(wiz, mode="mesh", role="backend", platform="x86")
+    assert page.mesh_section.title() == "Headscale / Mesh Networking"
+    assert _caption(page.superdomain_row) == "Tailscale Root Domain"
+    assert "Tailscale root domain" in page.subTitle()
+    visible = [page.title(), page.subTitle(), page.services_box.title()]
+    visible += [s.title() for s in _sections(page).values()]
+    visible += [_caption(getattr(page, a)) for a in _ROW_CAPTIONS]
+    visible += [lab.text() for lab in page.findChildren(QtWidgets.QLabel)]
+    visible += [box.text() for box in page.findChildren(QtWidgets.QCheckBox)]
+    blob = " ".join(visible).lower()
+    assert "superdomain" not in blob, "a second name for the root domain is still on screen"
+    assert "orchestration" not in blob, blob
+    # NON-VACUITY: the sweep is only worth anything if it is actually looking at the
+    # renamed control's own words.
+    assert "tailscale root domain" in blob
+
+
+def test_every_field_carries_its_own_explanatory_tooltip(wiz):
+    """ASK 2, "add explanatory tooltips for every field — names are not
+    self-explanatory", on the LIVE controls of a cloud desktop (the flow with the most
+    fields on screen at once).
+
+    Asserted on the tooltip the widget really holds AFTER initializePage, not on the
+    constant, because that is the whole defect: _gating.gate_widgets and
+    gate_widgets_role_class each END with `w.setToolTip("" if ok else reason)`, so help
+    written in __init__ — or written before the gates run — is blanked on the first
+    visit and is invisible in the running app while a unit test that never visits the
+    page still passes (issue #230's "the other half of no setting info")."""
+    page = _net(wiz, mode="cloud", role="laptop", platform="x86")
+    targets = page._field_help_targets()
+    assert len(targets) >= 24, f"only {len(targets)} fields carry help"
+    live = 0
+    for w, help_text in targets:
+        assert len(help_text) > 40, f"{help_text!r} is not an explanation"
+        if w.isEnabled() and w.isVisibleTo(page):
+            assert w.toolTip() == help_text, (
+                f"a live field lost its help: {help_text[:60]!r} -> {w.toolTip()[:60]!r}")
+            live += 1
+    # NON-VACUITY, twice over: the assertion sits behind an `if`, and the whole point is
+    # that the help SURVIVES the gates rather than being written before them.
+    assert live >= 15, f"only {live} live fields were examined"
+    assert len({h for _w, h in targets}) == len(targets), "two fields share one tooltip"
+
+
+def test_the_in_table_edge_ai_cells_have_help_that_survives_their_gate(wiz):
+    """ASK 2, on the class the loop above CANNOT see.
+
+    The loop sweeps `_field_help_targets()` — the production list itself — so a field
+    that was never added to it is invisible to the guard. That is not hypothetical: all
+    five edge-AI cells are members of the "edge_ai_service" gate group, `gate_widgets`
+    ends with `setToolTip("" if supported else reason)`, and on x86 (where the field IS
+    supported) that writes "". The Runtime dropdown was set in __init__ and blanked on
+    every visit, leaving it with no reachable tooltip anywhere in its parent chain — an
+    in-table cell has no _row() wrapper to inherit one from.
+
+    Named by attribute rather than read out of the production list, so adding a sixth
+    cell without help fails here."""
+    page = _net(wiz, mode="mesh", role="backend", platform="x86")
+    # NON-VACUITY: the row itself is on screen and the gate says SUPPORTED here, which is
+    # the branch that writes "" over whatever __init__ had put there.
+    assert page.edge_ai_runtime.isVisibleTo(page) and page.edge_ai_runtime.isEnabled()
+    for name in ("edge_ai", "edge_ai_runtime", "edge_ai_models",
+                 "edge_ai_default", "edge_ai_analysis"):
+        w = getattr(page, name)
+        # `edge_ai_default` / `edge_ai_analysis` sit in the sub-rows the page folds by
+        # default, so visibility is not the property — the gate blanks them either way.
+        assert w.isEnabled(), f"precondition: {name} is not gated off on x86"
+        # what a hover actually finds: the cell's own tooltip, or an ancestor's
+        cur, tip = w, ""
+        while cur is not None and not tip:
+            tip = cur.toolTip()
+            if cur is page:
+                break
+            cur = cur.parentWidget()
+        assert tip, f"{name} has no reachable tooltip after initializePage"
+
+
+def test_a_gate_reason_still_beats_the_field_help(wiz):
+    """The other half of ask 2's mechanism. The help is re-asserted LAST, under
+    `if not w.toolTip()`, precisely so a greyed or hidden control keeps the sentence
+    saying WHY it is unavailable — a field help that overwrote the gate note would trade
+    one missing explanation for another."""
+    from hugmesh_studio.gui.pages import network as net_mod
+    page = _net(wiz, mode="standalone", role="standalone-unaffiliated", platform="x86")
+    assert not page.brand_row.isVisibleTo(page), "precondition: brand identity gated off"
+    assert page.brand_row.toolTip() == net_mod._BRAND_IDENTITY_NOTE
+    assert page.domain_row.toolTip() == net_mod._CLUSTER_IDENTITY_NOTE
+    # …and an ARM mesh node, where the PLATFORM gate (not the role-class one) rejects.
+    page = _net(wiz, mode="mesh", role="generic", platform="rpi5")
+    assert not page.snort.isEnabled(), "precondition: snort is x86-only"
+    assert "rpi5" in page.snort.toolTip(), page.snort.toolTip()
+    # …and the case `if not w.toolTip()` alone does NOT cover, because the gate targets a
+    # CONTAINER: gate_widgets writes the platform reason onto services_box, and the rows
+    # INSIDE it are not gate members, so their own tooltips are empty and the guard lets
+    # help through. Qt walks a ToolTip event up the parent chain only while each widget
+    # IGNORES it, so help on the row STOPS the walk one level below the box — measured on
+    # jetson, where the greyed Selection dropdown showed "A whole-set shortcut…" instead
+    # of "Not available for the jetson builder…". _gate_reason_above() is what restores it.
+    page = _net(wiz, mode="mesh", role="generic", platform="jetson")
+    assert not page.services_box.isEnabled(), (
+        "precondition: jetson has no --optional-services")
+    assert "jetson" in page.services_box.toolTip(), page.services_box.toolTip()
+    assert page.services_preset_row.toolTip() == "", (
+        "help on a row inside the gated box shadows the platform reason")
+    # and on a platform that DOES support it, the same row keeps its help
+    page = _net(wiz, mode="mesh", role="generic", platform="x86")
+    assert page.services_box.isEnabled()
+    assert page.services_preset_row.toolTip() == net_mod._HELP_SERVICES_PRESET
+
+
+def test_the_default_release_state_is_explained_not_deleted(wiz):
+    """ASK 3, "explain or delete the 'default' release state" — EXPLAINED.
+
+    Deleting it is not a copy change: "default" means EMIT NOTHING, and every image
+    would then have to emit an explicit --release-state, which overrides whatever
+    RELEASE_STATE a brand profile set (brands/local.conf:32, brands/example.conf:25 and
+    brand.conf.example:18 all set it, and build-x86-host-stage4.sh sources the profile at
+    :967, BEFORE the arg loop at :973). The item therefore stays, keeps its literal
+    spelling — both network.py's collect (`rs == "default"`) and
+    tests/test_pages_identity.py key on it — and the meaning goes in the tooltip."""
+    page = _net(wiz, mode="mesh", role="backend", platform="x86")
+    assert page.release_state.itemText(0) == "default"
+    tip = page.release_state_row.toolTip()
+    assert "no --release-state" in tip, tip
+    assert "brand profile" in tip.lower(), tip
+    assert "internal" in tip and "public" in tip, tip
+    # ...and the explanation is on a carrier the gates cannot blank: release_state is a
+    # gate_widgets member, its ROW is not.
+    assert page.release_state.toolTip() == "", (
+        "the help was hung on the gated widget — a visit to an ARM flow will wipe it")
+
+
+def test_the_services_explainer_is_no_longer_a_wall(wiz):
+    """ASK 6, "rewrite the placeholder explainer text". Three stacked grey paragraphs
+    ran above the table before the operator reached a single control.
+
+    Two things are pinned. (a) LENGTH: they are shorter, checked in words rather than by
+    eye. (b) The override note is PLAIN TEXT: its `&lt;` entities made Qt's
+    mightBeRichText() treat it as HTML, which re-wrapped it into a tall narrow block
+    (measured sizeHint 301x153 as rich text vs 712x68 plain) — the wall was partly a
+    rendering accident. The substrings the older tests pin (`once`/`mesh`/`not per
+    node`, `tor`/`egress-vpn`/`mesh-wide`) still hold, above."""
+    page = _net(wiz, mode="mesh", role="backend", platform="x86")
+    notes = {"scope": page.services_scope_note, "caveat": page.services_node_scope_note,
+             "override": page.services_override_note}
+    for name, lab in notes.items():
+        text = lab.text()
+        assert "&lt;" not in text and "&gt;" not in text, f"{name} renders as rich text"
+        assert not Qt.mightBeRichText(text), f"{name} is still being parsed as HTML"
+    assert len(notes["scope"].text().split()) <= 45
+    assert len(notes["caveat"].text().split()) <= 25
+    assert len(notes["override"].text().split()) <= 60
+    # The dropdown above the table stopped holding two-line sentences too.
+    for i in range(page.services_preset.count()):
+        assert len(page.services_preset.itemText(i).split()) <= 6, (
+            page.services_preset.itemText(i))
+    # ...and what those items dropped is in the help, not lost.
+    assert "--all-services" in page.services_preset_row.toolTip()
+
+
+def test_the_privacy_group_answers_where_is_anubis(wiz):
+    """ASK 7. The operator asked "where's anubis?" and offered the rename as the answer
+    IF it is forced on. It is: scripts/_optional-services-lib.sh:478-482
+    (_opt_anubis_installed) returns "true" for every ENV=prod build unless the operator
+    passes the explicit "-anubis"/"no-anubis" spelling, and build-x86-host-stage4.sh
+    REFUSES --exclude-services for it by name. So the group can no longer be titled after
+    something you choose here, and the row itself has to say what actually decides it."""
+    from hugmesh_studio.core.config import SERVICE_DESCRIPTIONS, SERVICE_GROUPS
+    assert "Privacy Services" in dict(SERVICE_GROUPS)
+    assert "anti-scraping" not in " ".join(t for t, _ in SERVICE_GROUPS).lower()
+    desc = SERVICE_DESCRIPTIONS["anubis"]
+    assert "prod" in desc and "test" in desc, desc
+    # …and it says the TRUE thing about the row itself. _opt_anubis_installed tests
+    # _opt_selected FIRST and only falls through to the ENV split when nothing was said,
+    # so a ticked row installs anubis on ANY build — including the default ENV=test one
+    # (ImageConfig().env == "test", and to_cli_args emits --optional-services anubis).
+    # "on a test build it stays off" would be false for the one action the row performs.
+    assert "installs it on any build" in desc, desc
+    # the row's own caption in the table carries it, on the platform that offers the row
+    page = _net(wiz, mode="mesh", role="generic", platform="rpi5")
+    item = page._svc_items["anubis"]
+    assert not item.isHidden(), "precondition: rpi5 offers the anubis row"
+    assert "prod" in item.text(4)
+
+
+def test_backing_services_no_longer_share_one_meaningless_caption(wiz):
+    """ASK 2 again, on the rows the operator's complaint fits best: eleven backing-service
+    rows all read "Runs in-cluster unless pointed at a hosted endpoint", which says
+    nothing about what `federation-bundles` or `velero-objectstore` IS."""
+    from hugmesh_studio.core.config import (MANAGED_SERVICE_DESCRIPTIONS,
+                                            MANAGED_SERVICE_TIER12_IDS)
+    assert set(MANAGED_SERVICE_DESCRIPTIONS) == set(MANAGED_SERVICE_TIER12_IDS)
+    page = _net(wiz, mode="mesh", role="backend", platform="x86")
+    seen = set()
+    for i in range(page.group_items[_BACKING_GROUP].childCount()):
+        child = page.group_items[_BACKING_GROUP].child(i)
+        if child.text(0) in MANAGED_SERVICE_TIER12_IDS:
+            seen.add(child.text(4))
+    assert len(seen) == len(MANAGED_SERVICE_TIER12_IDS), (
+        f"{len(MANAGED_SERVICE_TIER12_IDS)} rows share only {len(seen)} captions")

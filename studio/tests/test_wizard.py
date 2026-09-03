@@ -1034,7 +1034,7 @@ def test_tailnet_and_mesh_groups_hidden_in_standalone(wiz):
 def test_superdomain_editable_and_committed_in_mesh(wiz):
     """spec 3/5: mesh HIDES the tailnet/SSO toggles (forced on off-UI in
     enter_mesh_defaults/materialize — this page no longer force-checks them) and makes
-    the orchestration superdomain EDITABLE; an explicit value commits to the config."""
+    the Tailscale root domain EDITABLE; an explicit value commits to the config."""
     c = wiz.cfg
     c.mode = "mesh"; c.role = "omnibus"; c.platform = "x86"
     wiz.restart()

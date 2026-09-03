@@ -742,7 +742,7 @@ def test_users_domain_cell_is_a_dropdown_of_defined_domains(wiz):
 
 def test_users_superadmin_locks_domain_to_superdomain(wiz):
     """Spec 5: choosing the superadmin role forces + locks the row's domain to the
-    orchestration superdomain; any other role unlocks the dropdown."""
+    Tailscale root domain; any other role unlocks the dropdown."""
     pick_mode(wiz, "cloud")
     users = advance_to(wiz, wizard_mod.UsersPage)
     users._add("alice", "acme.example", "user")
@@ -784,7 +784,9 @@ def test_domains_table_round_trips_per_domain_services(wiz):
     c.additional_domains = True               # ask 8/19: a loaded mesh config with domain
     wiz.restart()                             # rows keeps the domains table reachable
     dom = advance_to(wiz, wizard_mod.DomainsPage)
-    assert dom.table.item(0, 2).text() == "akkoma tube"   # services now column 2
+    # #227: the services cell is a checkable menu, so the row reads back through the
+    # widget — QTableWidget.item() returns None once setCellWidget() has been called.
+    assert dom.table.cellWidget(0, 2).selected_slugs() == ["akkoma", "tube"]
     dom._add("beta.example", "Beta", "phpbb, owncast")
     # ask 20: the users TABLE is behind its own choice screen, which is the page that
     # now follows Domains — one Next past Domains still collects the table.
