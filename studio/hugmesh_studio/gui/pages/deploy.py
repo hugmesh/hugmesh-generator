@@ -149,7 +149,9 @@ class DeployPage(QtWidgets.QWizardPage):
         self.out_browse = QtWidgets.QPushButton("Browse…")
         self.out_browse.clicked.connect(self._browse_out)
         od_row.addWidget(self.out_browse)
-        lay.addWidget(_row("Out dir", self._wrap(od_row)))
+        # ISSUE #231 vocabulary: "Out dir" was the last abbreviation of this word
+        # left in the GUI (Review and Fleet both say "Output directory" now).
+        lay.addWidget(_row("Output directory", self._wrap(od_row)))
 
         self.keys_dir = QtWidgets.QLineEdit()
         self.keys_dir.setPlaceholderText("optional keys dir for the provider's KEYS volume notes")
