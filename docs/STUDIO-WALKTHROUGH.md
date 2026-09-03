@@ -327,7 +327,7 @@ Next stays disabled until three things hold: the box is ticked, no teardown is i
 
 On Next the page commits the mesh chain itself: `cfg.mode = "mesh"`, the mesh default role if the current one does not belong, source bundling off, mesh defaults applied. It then installs the abbreviation — the worklist offers only `laptop` plus every node-class mesh role (`pki`, `backend`, `frontend`, `backend-gpu`, `omnibus`, `edge-ai`). The person-desktop variants are withdrawn, because a local cloud's devices are its nodes plus your laptop. Any other Mode choice made later lifts the restriction.
 
-The import is one-shot per entry, so edits you make later — the cluster domain on the Network step, say — are not clobbered when the Build screen re-collects every visited page. Imported superadmins land on the Tailscale root domain and everyone else on the imported apex, and the Users table is made reachable so you can see and edit them.
+The import is one-shot per entry, so edits you make later — the cluster domain on the Network step, say — are not clobbered when the Build screen re-collects every visited page. Imported superadmins land on the Tailscale root domain and everyone else on the imported apex, and the Users table is made reachable so you can see and edit them. Every Casdoor grant the table knows (`ROLE_SUPERADMIN`, `ROLE_ADMIN`, `ROLE_MOD`, `ROLE_USER`, `ROLE_GAMES`, `ROLE_GAMES_SERVICES`) is carried into the row's roles; a persona with none of them imports as `user`.
 
 Trap: this is the only card that both takes something down and changes the mode. If you Back out before pressing Next, nothing is committed to the config — but the cluster you stopped is still stopped.
 
@@ -505,15 +505,17 @@ Trap: choosing the generated accounts clears any rows you already typed into tha
 
 ### Superusers & domain users
 
-The table. Each row is a Username, a Domain, a Role, an Email, and a Registration method.
+The table. Each row is a Username, a Domain, a set of Roles, an Email, and a Registration method.
 
-Domain is a dropdown of the Tailscale root domain plus every name from the Domains table. Picking the `superadmin` role forces the row to the root domain and disables the dropdown — superadmins belong to the Tailscale root domain, not a tenant one. Role offers `superadmin`, `admin`, `mod`, `user`, `games`, `games-services`. Registration offers `derive`, `discord`, `gmail`, `password`: the OAuth options let the user self-register with that account at first login, `password` means one is generated and handed over at provisioning, and `derive` keeps the provisioning default.
+Domain is a dropdown of the Tailscale root domain plus every name from the Domains table. Ticking `superadmin` forces the row to the Tailscale root domain and disables the dropdown — superadmins belong to the Tailscale root domain, not a tenant one; that holds whatever else is ticked beside it. Roles is a row of checkboxes: `superadmin`, `admin`, `mod`, `user`, `games`, `games-services`, and an account may hold several at once (an `admin` who is also a `games` member, say). The highest tier ticked is the account's primary role — that is the `role` the manifest and the `--person-role` derivation read — and `games` / `games-services` are grants on top of it. A row with nothing ticked is saved as `user`. Registration offers `derive`, `discord`, `gmail`, `password`: the OAuth options let the user self-register with that account at first login, `password` means one is generated and handed over at provisioning, and `derive` keeps the provisioning default.
 
 A loaded row whose domain is not defined on the Domains page is kept and flagged `(not defined)` with an orange warning. It is never silently rewritten. Rows with a blank username are dropped when you leave.
 
 When you see it: never in standalone. In mesh, only if you chose the second card on the previous screen — that is a separate question from the domains opt-in, and either answer combines with either. In the mesh desktop client the gate is whether the image's role is one of the x86 cluster-node roles (`pki`, `backend`, `frontend`, `backend-gpu`, `omnibus`, `edge-ai`), and that flow offers none of them, so in practice the table always appears there.
 
-Downstream, these rows are provisioning data for the mesh manifest and the identity provider. One thing can reach the build, and only on the mesh desktop client: with the account tier left on `derive`, `--person-role` falls back to the first row's role. A mesh build does not take it from here — there the flag comes from the person named on the worklist's own desktop row.
+Downstream, these rows are provisioning data for the mesh manifest and the identity provider. In the manifest every row carries `role` (the primary) and, only when it holds more than one, `roles` (the full set) — a single-role row is byte-identical to before multi-role existed. One thing can reach the build, and only on the mesh desktop client: with the account tier left on `derive`, `--person-role` falls back to the first row's highest tier (`user` for a row holding only games grants — the builder accepts exactly the four tiers). A mesh build does not take it from here — there the flag comes from the person named on the worklist's own desktop row.
+
+The terminal Studio shows the same rows, with every role listed, but does not edit them yet.
 
 ### System identity
 

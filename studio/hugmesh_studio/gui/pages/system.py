@@ -321,8 +321,9 @@ class SystemPage(QtWidgets.QWizardPage):
                 Qt.ItemDataRole.ToolTipRole)
         self.person_role.setToolTip(
             "The person-role this CLIENT image is tied to at build time "
-            "(--person-role). 'derive' = users[0]'s role in cloud mode, "
-            "superadmin in mesh mode. Ignored by the builder on cluster NODE roles.")
+            "(--person-role). 'derive' = the highest tier held by users[0] in "
+            "cloud mode, superadmin in mesh mode. Ignored by the builder on "
+            "cluster NODE roles.")
         self.person_role_row = _row(_PERSON_ROLE_LABEL, self.person_role)
         pl.addWidget(self.person_role_row)
         # The chosen option's consequence, ON THE PAGE — the whole point of ask 7.

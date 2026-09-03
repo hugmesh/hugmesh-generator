@@ -58,7 +58,8 @@
 #   * reserved URL HANDLES  specs/cluster/reserved-prefixes.yaml reserves the literal
 #     handle `be`; hugmesh.net/be/** is a live URL PATH, not a label key.
 #   * PERSON roles    user|mod|admin|superadmin (--person-role), persisted under the
-#     same JSON key name `role` as an image role.
+#     same JSON key name `role` as an image role (and, multi-role since issue #228,
+#     as a `roles` list beside it — grants like games/games-services included).
 #   * k8s TOPOLOGY roles  control-plane|master|server|worker|none (.kubernetes.role)
 set -euo pipefail
 

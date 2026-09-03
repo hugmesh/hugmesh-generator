@@ -64,7 +64,9 @@ def _envelope():
                        superdomain="core.acme.internal")
     base.domains = [Domain(name="acme.example", title="Acme"),
                     Domain(name="team.acme.example", title="Team", images=["backend.rpi5"])]
-    base.users = [User(username="root-admin", domain="core.acme.internal", role="superadmin")]
+    # multi-role (#228) so the frozen schema's `roles` clause is actually exercised
+    base.users = [User(username="root-admin", domain="core.acme.internal",
+                       roles=["superadmin", "games"])]
     entries = [WorklistEntry(role="omnibus", platform="x86"),
                WorklistEntry(role="backend", platform="rpi5", board="rpi5",
                              packages_add="app-misc/tmux"),

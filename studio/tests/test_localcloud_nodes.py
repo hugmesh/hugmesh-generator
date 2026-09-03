@@ -39,7 +39,9 @@ HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
 # the canned local mesh every test imports from — pinned so no test depends on the
 # checkout's real roster/secrets (deterministic on any host, keys-out/ or not).
 CANNED_DOMAIN = "mesh.example.org"
-CANNED_USERS = [("superadmin", "superadmin"), ("alice", "admin"), ("bob", "user")]
+CANNED_USERS = [("superadmin", ["superadmin"]),
+                ("alice", ["admin", "games"]),
+                ("bob", "user")]          # a bare string still loads (#228 back-compat)
 
 
 @pytest.fixture(autouse=True)
