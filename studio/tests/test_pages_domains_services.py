@@ -285,8 +285,15 @@ def test_regrouping_a_row_cannot_change_what_this_column_emits(monkeypatch, wiz)
     rewrite the manifest bytes."""
     from hugmesh_studio.core.config import SERVICE_GROUPS as REAL
     from hugmesh_studio.gui.pages import domains as dom_mod
-    swapped = tuple((title, tuple(("games", "owncast", "tube") if title == "Media & play"
-                                  else slugs))
+    # Regroup by CONTENT, never by group TITLE: main renamed "Media & play" to
+    # "Media & Play" while this branch was open, which silently turned a title-matched
+    # mutation into a no-op. The assert below is what caught that, and it stays.
+    def _reordered(slugs):
+        """games first in whichever group holds it — the reverse of today's order."""
+        rest = [s for s in slugs if s != "games"]
+        return ("games", *rest)
+
+    swapped = tuple((title, _reordered(slugs) if "games" in slugs else slugs)
                     for title, slugs in REAL)
     assert swapped != REAL, "the regrouping mutation did not change SERVICE_GROUPS"
 
@@ -295,8 +302,10 @@ def test_regrouping_a_row_cannot_change_what_this_column_emits(monkeypatch, wiz)
     after = _ServicesButton(["owncast", "games"])
 
     # the two menus really do PRESENT the row differently...
-    assert list(before._actions)[3:6] == ["owncast", "tube", "games"]
-    assert list(after._actions)[3:6] == ["games", "owncast", "tube"]
+    assert list(before._actions) != list(after._actions), \
+        "the regrouping did not change the menu's presentation order"
+    assert list(after._actions).index("games") < list(after._actions).index("owncast")
+    assert list(before._actions).index("owncast") < list(before._actions).index("games")
     # ...and still EMIT the identical value. Comparing the two is what makes this
     # discriminating: asserting only the post-regrouping value would also pass if the
     # widget read menu order, because the regrouping happens to put games first.
