@@ -112,12 +112,14 @@ class TestProbeRunning:
 
 
 class TestRealPagesUseIt:
-    """The helper is only worth having if the three known sites actually route through
-    it — this is what stops a fourth probe quietly reintroducing the leak."""
+    """The helper is only worth having if the known sites actually route through it —
+    this is what stops the NEXT probe quietly reintroducing the leak. Every new probe
+    attribute on these pages belongs in the list below."""
 
     @pytest.mark.parametrize("module,attr", [
         ("hugmesh_studio.gui.pages.localmesh", "_node_probe"),
         ("hugmesh_studio.gui.pages.localmesh", "_e2e_probe"),
+        ("hugmesh_studio.gui.pages.localmesh", "_monitor_probe"),
         ("hugmesh_studio.gui.pages.keyzip", "_fetch_worker"),
     ])
     def test_site_is_wired_through_own_probe(self, module, attr):

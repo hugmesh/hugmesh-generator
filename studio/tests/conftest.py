@@ -60,6 +60,40 @@ def _host_independent_build_defaults(monkeypatch):
     monkeypatch.setattr(host_resources, "_meminfo_fresh", lambda: dict(healthy))
 
 
+@pytest.fixture(autouse=True)
+def _inert_mesh_monitor(request, monkeypatch):
+    """Make the local-mesh page's running-mesh monitor INERT by default.
+
+    ``LocalMeshPage`` re-reads BOTH mesh lanes off-thread (``core.mesh_monitor.
+    snapshot``: ``kind get clusters``, one ``kubectl get … -A -o json``, ``docker
+    inspect``, ``docker compose ps``) whenever its mesh-state probe answers or its
+    monitor section is open. Ten test files build that page for unrelated reasons
+    (verb attribution, the egress gate, log coalescing, the e2e tree, theming) and
+    stub only the seams THEY know about; without this fixture each of them would
+    shell the operator's real kind cluster and docker daemon through the monitor,
+    and a QThread still in that read when the page is torn down aborts the process
+    (``QThread: Destroyed while thread is still running``) — measured on two suites
+    before this fixture existed.
+
+    The stub answers instantly with BOTH lanes unestablished (never "no mesh": the
+    page's tri-state rule) and records nothing. A module that wants the real
+    function — the monitor's own core and GUI suites — opts out with
+    ``pytestmark = pytest.mark.real_mesh_monitor``; the GUI suite then seams
+    ``snapshot`` itself and the core suite calls it with scripted nodes.
+    """
+    if request.node.get_closest_marker("real_mesh_monitor"):
+        return
+    from hugmesh_studio.core import mesh_monitor
+    why = "not read under pytest (tests/conftest.py: _inert_mesh_monitor)"
+
+    def _inert(generator_dir, node, **kw):
+        return mesh_monitor.MonitorSnapshot(
+            taken_at="00:00:00",
+            compose=mesh_monitor.LaneState(None, detail=why),
+            kind=mesh_monitor.LaneState(None, detail=why))
+    monkeypatch.setattr(mesh_monitor, "snapshot", _inert)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Suite-wide isolation from the operator's REAL state — and a guard that proves it
 #

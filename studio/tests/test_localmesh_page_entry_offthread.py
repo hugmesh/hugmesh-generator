@@ -108,7 +108,7 @@ def page(qapp, monkeypatch):
     yield p
     # Never let a live QThread outlive its page: destroying one aborts under Qt.
     stack.gate.set()
-    for name in ("_probe", "_node_probe", "_e2e_probe", "_creds_probe"):
+    for name in ("_probe", "_node_probe", "_e2e_probe", "_creds_probe", "_monitor_probe"):
         t = getattr(p, name, None)
         if t is not None:
             t.wait(5000)
@@ -116,7 +116,7 @@ def page(qapp, monkeypatch):
     p.deleteLater()
 
 
-_PROBE_ATTRS = ("_probe", "_node_probe", "_e2e_probe", "_creds_probe")
+_PROBE_ATTRS = ("_probe", "_node_probe", "_e2e_probe", "_creds_probe", "_monitor_probe")
 
 
 def _settle(qapp, page, timeout_s=8.0):
