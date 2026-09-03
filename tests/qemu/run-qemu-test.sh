@@ -114,7 +114,7 @@ fi
 [ -n "${KERNEL}" ] && [ -f "${KERNEL}" ] || die "kernel Image not found (pass --kernel). Did you build without --skip-kernel?"
 if [ -z "${STAGE4}" ]; then
     STAGE4="$(ls -1t "${WORK_DIR}"/stage4-*-"${ROLE}"-k8s-*.tar.xz 2>/dev/null | head -1 || true)"
-    # Current builder naming: hugmesh-rpi5-arm64-<role>-<env>-<ts>.stage4.tar.xz
+    # Current builder naming: <brand>-rpi5-arm64-<role>-<env>-<ts>.stage4.tar.xz
     # (also look one level up: images land in the -w parent, sysroot in <work>).
     for d in "${WORK_DIR}" "${WORK_DIR}/.."; do
         [ -n "${STAGE4}" ] && break

@@ -15,7 +15,7 @@ arrive pre-migrated and this page never sees a games flag again.
 Row order is load-bearing: the first attached domain is the PRIMARY one (the first
 ``--domains`` element, which lands in ROLE_TAG / the filename). The page prefills row 0
 with the cluster domain on a fresh cloud/mesh flow so a superadmin starts from a valid
-primary domain (spec 4). The orchestration superdomain (spec 5) is shown read-only in
+primary domain (spec 4). The Tailscale root domain (spec 5) is shown read-only in
 the header — every mesh node joins it, it is never a table row and never attachable.
 
 The mesh-only 'Sign-in' column (issue #47) is each row's ``Domain.idp``: superdomain
@@ -232,7 +232,7 @@ class DomainsPage(QtWidgets.QWizardPage):
             "Every domain you add here is given its own default admin with a "
             "generated random password (surfaced on the next, Users, step).")
         lay = QtWidgets.QVBoxLayout(self)
-        # read-only header naming the orchestration superdomain (spec 5): all mesh nodes
+        # read-only header naming the Tailscale root domain (spec 5): all mesh nodes
         # join it, it is never a table row and is never attachable.
         self.header = QtWidgets.QLabel("")
         self.header.setWordWrap(True)
@@ -351,7 +351,7 @@ class DomainsPage(QtWidgets.QWizardPage):
     def initializePage(self):
         c = self.wiz.cfg
         self.header.setText(
-            "Orchestration superdomain: "
+            "Tailscale root domain: "
             f"<b>{c.effective_superdomain()}</b> — joined by all mesh nodes; "
             "not listed below, never attachable.")
         # the applies-to picker is a worklist-of-images concept — meaningful only in

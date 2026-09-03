@@ -13,8 +13,8 @@
 #     default OS artifact is the .img).
 #
 # Artifact auto-pick (when --artifact is omitted) globs the work dir for
-#   gentoo-*-<role>-*.img   (PREFERRED)
-#   gentoo-*-<role>-*.iso   (fallback)
+#   <brand>-<platform>-<arch>-<role>-*.img   (PREFERRED)
+#   <brand>-<platform>-<arch>-<role>-*.iso   (fallback)
 # and, if both exist, prefers the .img. --list shows the candidates and exits.
 #
 # Safety (typed-path confirm, child unmount, partition naming, settle) is shared
@@ -186,7 +186,7 @@ if [ -z "${WORK_DIR}" ]; then
 fi
 
 # ── Artifact auto-pick ─────────────────────────────────────────────
-# Two things this must get right, both of which it used to get wrong.
+# Three things this must get right, all of which it used to get wrong.
 #
 # 1. THE ARCH ANCHOR. --arch only selected the default work dir; it never filtered
 #    the glob. Against a real mixed session dir,
@@ -199,10 +199,17 @@ fi
 #    was canonical when they were built (hugmesh-x86-amd64-be-…, …-host-…). Those
 #    files are not renamed — they are already-emitted artifacts — so the search
 #    covers the canonical role AND every alias that folds onto it.
+# 3. THE BRAND, WHICH IS NOT AN ANCHOR. The leading field is ${BRAND}, whatever
+#    --brand the build ran under — hugmesh only by DEFAULT, sdhm for the operator's
+#    own mesh, gentoo forced by an unaffiliated build. The pattern list used to
+#    enumerate `hugmesh-` and `gentoo-` literally, so a mesh built as
+#    sdhm-rpi5-arm64-pki-… was invisible to the flasher — the same shape of bug
+#    that emptied the Studio's emulation picker on a finished 3-image Pi session.
+#    The brand is globbed now; 1 and 2 above are what still narrow a candidate.
 #
 # Naming conventions matched (newest-mtime-first, role-scoped first):
-#   • hugmesh-<platform>-<arch>-<role>-<env>-<stamp>.{img,iso}   builders + QEMU launchers
-#   • gentoo-<platform>-<arch>-<role>-k8s-<stamp>.iso            older ISO naming
+#   • <brand>-<platform>-<arch>-<role>-<env>-<stamp>.{img,iso}   builders + QEMU launchers
+#   • <brand>-<platform>-<arch>-<role>-k8s-<stamp>.iso           older ISO naming
 # kernel/initramfs/squashfs blobs are filtered out (they share .img).
 #
 # ARCH_GLOBS: the arch tokens that may appear in an artifact name for --arch.
@@ -230,12 +237,16 @@ list_candidates() {
                 # quotes), and the "any platform" anchor IS the literal `*`. Quoting
                 # it would make it a literal asterisk and match nothing. Platform
                 # tokens contain only [a-z0-9-], so word-splitting cannot bite.
-                pats+=("${WORK_DIR}/hugmesh-"${pf}*"-${a}-${r}-"*".${kind}")
-                pats+=("${WORK_DIR}/gentoo-"${pf}*"-${a}-${r}-"*".${kind}")
-                # x86 'host'-era names put the brand between platform and role
-                # (gentoo-x86-hugmesh-host-*.iso), so allow the role right after arch too.
-                pats+=("${WORK_DIR}/hugmesh-"${pf}*"-${a}-"*"-${r}-"*".${kind}")
-                pats+=("${WORK_DIR}/gentoo-"${pf}*"-${a}-"*"-${r}-"*".${kind}")
+                # The leading "*-" is the ${BRAND} field (hugmesh / sdhm /
+                # gentoo / anything --brand was given); it is NOT an anchor
+                # loosening — ${a} (arch) and ${pf} (platform) still gate every
+                # candidate, which is what keeps an arm64 Pi image off an
+                # `--arch x86` flash.
+                pats+=("${WORK_DIR}/"*"-"${pf}*"-${a}-${r}-"*".${kind}")
+                # x86 'host'-era names put a second brand token between platform
+                # and role (gentoo-x86-hugmesh-host-*.iso), so allow the role
+                # right after arch too.
+                pats+=("${WORK_DIR}/"*"-"${pf}*"-${a}-"*"-${r}-"*".${kind}")
             done
         done
     done
@@ -248,14 +259,16 @@ list_candidates() {
 }
 
 # platform_of <path> — the device-platform token out of an artifact NAME:
-# everything between the brand prefix and the arch token.
+# everything between the brand prefix and the arch token. The brand is the FIRST
+# field whatever it spells (hugmesh / sdhm / gentoo / …), so it is stripped
+# positionally rather than by name — enumerating two brands here silently
+# mis-parsed every other one into the platform.
 #   hugmesh-jetson-orin-nano-arm64-full-test-….img -> jetson-orin-nano
-#   hugmesh-rpi5-arm64-backend-test-….iso          -> rpi5
+#   sdhm-rpi5-arm64-backend-test-….iso             -> rpi5
 platform_of() {
     local n
     n="$(basename "$1")"
-    n="${n#hugmesh-}"
-    n="${n#gentoo-}"
+    n="${n#*-}"
     local a
     for a in x86 amd64 arm64 aarch64; do
         case "${n}" in *"-${a}-"*) printf '%s\n' "${n%%-${a}-*}"; return 0 ;; esac
@@ -343,7 +356,7 @@ fi
 if [ -z "${ARTIFACT}" ]; then
     assert_one_platform
     ARTIFACT="$(pick_artifact || true)"
-    [ -n "${ARTIFACT}" ] || dl_die "no hugmesh-*/gentoo-* ${ROLE} .img/.iso in ${WORK_DIR}. Build one, pass --artifact, or check --arch/--role (try: $0 --role ${ROLE} --list)."
+    [ -n "${ARTIFACT}" ] || dl_die "no ${ARCH} ${ROLE} .img/.iso in ${WORK_DIR}. Build one, pass --artifact, or check --arch/--role (try: $0 --role ${ROLE} --list)."
 fi
 [ -f "${ARTIFACT}" ] || dl_die "artifact not found: ${ARTIFACT}"
 

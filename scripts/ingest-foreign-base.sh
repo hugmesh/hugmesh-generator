@@ -100,7 +100,21 @@ FIB_MAX_DEPTH="${FIB_MAX_DEPTH:-24}"
 FIB_MANIFEST=".hugmesh-provenance.json"
 FIB_SIG=".hugmesh-provenance.json.sig"
 FIB_SBOM=".hugmesh-sbom.json"
+# ── LEGACY_COMPAT — pre-rebrand attestation-envelope names ───────────────────
+# These files are SIGNED and already sitting on other meshes' disks. A foreign
+# base cut before the HugMesh rebrand ships them under the old names, and the
+# signature covers the tree as it is — so this side READS both spellings (new
+# first) while provenance.sh WRITES only the new ones. Dropping the fallback does
+# not migrate those meshes; it just makes their bases unverifiable (rejected as
+# "unsigned/unattested"). Retire only when no fleet mesh can still be on a
+# pre-rebrand base.
+FIB_MANIFEST_LEGACY_COMPAT=".snapdragon-provenance.json"
+FIB_SIG_LEGACY_COMPAT=".snapdragon-provenance.json.sig"
+# Markers dropped into an ADMITTED snapshot (stripped before overlay-copy).
+# WRITE side is new-only; the digest exclusion below also covers the legacy name
+# so a pre-rebrand snapshot's stamp never enters the canonical tree digest.
 FIB_ADMIT_STAMP=".hugmesh-mesh-admitted"
+FIB_ADMIT_STAMP_LEGACY_COMPAT=".snapdragon-mesh-admitted"
 FIB_FOREIGN_MARK=".foreign-mesh-id"
 
 _FIB_DNS_LABEL='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
@@ -553,8 +567,11 @@ ingest_foreign_base() {
   # (f.1) node token-classifier screens the DECLARED origin identity (mesh-id + the
   #       manifest tenant fields) — reuse of the same isDenied/isFrozen predicates
   #       the render path uses. node-optional: skipped only if node is genuinely
-  #       absent (the tree grep below is the node-free backstop).
-  if _fib_have node && [ -r "$FIB_TOKEN_CLASSIFIER" ]; then
+  #       absent (the tree grep below is the node-free backstop). An unreadable
+  #       CLASSIFIER is NOT the node-optional case — it is a broken install, and
+  #       skipping on it would admit unscreened, so it fails closed like [e] above.
+  [ -r "$FIB_TOKEN_CLASSIFIER" ] || { _fib_reject "token-classifier.js missing at ${FIB_TOKEN_CLASSIFIER} — fail-closed (no unscreened admit)"; return 1; }
+  if _fib_have node; then
     local m_brand m_org
     m_brand="$(_fib_jq_str "$manifest" '.tenant.brand')"
     m_org="$(_fib_jq_str "$manifest" '.tenant.org')"
@@ -580,6 +597,14 @@ ingest_foreign_base() {
   #       "binary" and skip it, so a single embedded NUL would HIDE a frozen constant
   #       from this anti-laundering screen (an admitted impersonation vector). -a scans
   #       every byte; a spurious match on a truly-binary blob only ever fails CLOSED.
+  #       FAIL-CLOSED ON AN EMPTY TERM SET. This screen is DATA-DRIVEN, so it has
+  #       the same fail-open-by-shape defect a38208e6 exploited one file over: an
+  #       absent/moved/unparseable tokens.json, or a deleted frozen_protocol_constants
+  #       block, makes `jq ... // []` yield NOTHING, the old `if [ -n ... ]` skipped the
+  #       whole loop, and control fell straight through to ADMIT — screening zero terms,
+  #       silently, exit 0. token-classifier.js refuses that shape at require time, but
+  #       (f.1) is NOT a backstop for this leg: it is skipped when node is absent, which
+  #       is the exact configuration (f.2) exists to serve. So an empty set REJECTS.
   local frozen_terms
   frozen_terms="$(jq -r '
       ((.frozen_protocol_constants.label_key_namespaces // [])
@@ -587,19 +612,18 @@ ingest_foreign_base() {
        + (.frozen_protocol_constants.subprotocol_prefixes // [])
        + (.frozen_protocol_constants.api_groups // []))[]' \
       "$FIB_TOKENS_JSON" 2>/dev/null)"
-  if [ -n "$frozen_terms" ]; then
-    local term hit
-    while IFS= read -r term; do
-      [ -n "$term" ] || continue
-      hit="$(grep -ralF -- "$term" "$build" 2>/dev/null \
-              | grep -vxF -e "${build}/${FIB_MANIFEST}" -e "${build}/${FIB_SIG}" -e "${build}/${FIB_SBOM}" \
-                           -e "${build}/${FIB_MANIFEST_LEGACY_COMPAT}" -e "${build}/${FIB_SIG_LEGACY_COMPAT}" \
-              | head -n1)"
-      if [ -n "$hit" ]; then
-        _fib_reject "foreign code carries OUR frozen protocol constant '${term}' (${hit#$build/}) — impersonation/laundering"; return 1
-      fi
-    done <<< "$frozen_terms"
-  fi
+  [ -n "$frozen_terms" ] || { _fib_reject "no frozen constants read from ${FIB_TOKENS_JSON} (absent, unreadable, or frozen_protocol_constants missing/EMPTY) — the impersonation screen would be INERT; refusing to admit"; return 1; }
+  local term hit
+  while IFS= read -r term; do
+    [ -n "$term" ] || continue
+    hit="$(grep -ralF -- "$term" "$build" 2>/dev/null \
+            | grep -vxF -e "${build}/${FIB_MANIFEST}" -e "${build}/${FIB_SIG}" -e "${build}/${FIB_SBOM}" \
+                         -e "${build}/${FIB_MANIFEST_LEGACY_COMPAT}" -e "${build}/${FIB_SIG_LEGACY_COMPAT}" \
+            | head -n1)"
+    if [ -n "$hit" ]; then
+      _fib_reject "foreign code carries OUR frozen protocol constant '${term}' (${hit#$build/}) — impersonation/laundering"; return 1
+    fi
+  done <<< "$frozen_terms"
 
   # ── ADMIT — atomic promote of the fully-passed snapshot ──────────────────────
   # Drop gate markers, then atomically mv .building/<tag> -> <tag>. The markers let

@@ -327,7 +327,7 @@ Next stays disabled until three things hold: the box is ticked, no teardown is i
 
 On Next the page commits the mesh chain itself: `cfg.mode = "mesh"`, the mesh default role if the current one does not belong, source bundling off, mesh defaults applied. It then installs the abbreviation — the worklist offers only `laptop` plus every node-class mesh role (`pki`, `backend`, `frontend`, `backend-gpu`, `omnibus`, `edge-ai`). The person-desktop variants are withdrawn, because a local cloud's devices are its nodes plus your laptop. Any other Mode choice made later lifts the restriction.
 
-The import is one-shot per entry, so edits you make later — the cluster domain on the Network step, say — are not clobbered when the Build screen re-collects every visited page. Imported superadmins land on the orchestration superdomain and everyone else on the imported apex, and the Users table is made reachable so you can see and edit them.
+The import is one-shot per entry, so edits you make later — the cluster domain on the Network step, say — are not clobbered when the Build screen re-collects every visited page. Imported superadmins land on the Tailscale root domain and everyone else on the imported apex, and the Users table is made reachable so you can see and edit them.
 
 Trap: this is the only card that both takes something down and changes the mode. If you Back out before pressing Next, nothing is committed to the config — but the cluster you stopped is still stopped.
 
@@ -391,7 +391,7 @@ Encryption is per node. "default" inherits the choice made on the Home step; on/
 
 A fresh mesh flow arrives with one row already checked — the mode default, `omnibus` on x86. Add to it; do not assume it is a placeholder.
 
-Checking a desktop-class row asks who uses it. The dialog opens when you tick the row with the mouse — a programmatic check, such as a loaded worklist re-seeding the tree, never opens it. The named people appear in a **Desktop users** table below the tree, and double-clicking a row there edits one. Cancelling the dialog unchecks the row. Next stays disabled until every checked desktop has a named user, and the placeholder row shows in red until it does. That account is created on the internal orchestration superdomain, and the person's role rides the image.
+Checking a desktop-class row asks who uses it. The dialog opens when you tick the row with the mouse — a programmatic check, such as a loaded worklist re-seeding the tree, never opens it. The named people appear in a **Desktop users** table below the tree, and double-clicking a row there edits one. Cancelling the dialog unchecks the row. Next stays disabled until every checked desktop has a named user, and the placeholder row shows in red until it does. That account is created on the internal Tailscale root domain, and the person's role rides the image.
 
 Two things the survey of this page usually misses. There is a checkbox reading "Also list the 37 devices that cannot be mesh nodes" — off by default, and it brings back read-only rows explaining exactly why each device has nothing to build here. And the combos in this tree ignore the scroll wheel on purpose: a plain combo would silently change a board or an encryption setting under the cursor while you scrolled the table, which is how one node once shipped with the wrong board.
 
@@ -421,21 +421,21 @@ The desktop half greys off-x86 and on node-class images, with the reason shown. 
 
 **Themes (the web pages this mesh serves)** is the second half, and it is never touched by the desktop gating. Pick a primary and a secondary colour, or a preset, plus a dark or light neutral ramp; everything else is derived. No colour is rejected — text tokens are auto-adjusted to WCAG AA, and a live board shows the measured contrast. You can set a font preset or upload a font, in which case licence and source become required. A browser preview writes one self-contained page: the login pane is the real captured page, the chat, feed and forum panes are labelled mockups. A separate modeless editor covers header and footer chrome and the page background effect. These settings apply at container start and need no image rebuild; empty means the shipped brand. This group is collapsed by default and expanded in mesh, where it is the reason the screen is shown at all.
 
-### Network, identity & egress — every mode
+### Domain, Mesh, and Services — every mode
 
-This screen is never skipped. Only its contents are mode-gated. In standalone it is titled "Network identity, egress & security"; in cloud and mesh, "Domain, mesh & services". Sections are collapsible, and the Security stack section folds itself away when everything in it is at its default.
+This screen is never skipped. Only its contents are mode-gated. In standalone it is titled "Network Identity, Egress, and Security"; in cloud and mesh, "Domain, Mesh, and Services". Sections are collapsible, and the Security Stack section folds itself away when everything in it is at its default. Every field carries a tooltip saying what it is and which builder flag it becomes; the tooltip is hung on the row, so hovering the caption works as well as hovering the field, and a greyed or hidden control shows the reason it is unavailable instead.
 
-**Identity & domain** carries the brand profile file, brand id, brand title, org, the public apex domain, the games domain and the release state. Blank fields are not left blank: on Next the brand id commits `hugmesh`, the brand title `HugMesh Systems`, the org `hugmesh` and the public apex `hugmesh.net`. Release state at "default" emits nothing.
+**Identity & Domain** carries the brand profile file, brand id, brand title, org, the public apex domain, the games domain and the release state. Blank fields are not left blank: on Next the brand id commits `hugmesh`, the brand title `HugMesh Systems`, the org `hugmesh` and the public apex `hugmesh.net`. Release state at "default" emits nothing — which is not the same as "internal": with no `--release-state` on the argv the value falls to whatever `RELEASE_STATE` a `-C` brand profile sets, and only then to the builders' own default of `internal`.
 
 **Tailnet + SSO** is editable only for a cloud desktop client, where both boxes arrive checked. Standalone and mesh hide it and show a grey line saying why — mesh forces both on elsewhere, off-screen.
 
-**Mesh control plane** shows for cloud and mesh: the Headscale URL (delivered as an environment variable, not a flag), agent version pins, the headscale-only posture, and the **orchestration superdomain**. That superdomain is editable in mesh and read-only in cloud, where it displays the derived `<brand>.internal`. It is permanently internal and is never the public apex above it.
+**Headscale / Mesh Networking** shows for cloud and mesh: the Headscale URL (delivered as an environment variable, not a flag), agent version pins, the headscale-only posture, and the **Tailscale root domain** (`--superdomain`; called the orchestration superdomain before this section was renamed). It is editable in mesh and read-only in cloud, where it displays the derived `<brand>.internal`. It is baked twice — as headscale's MagicDNS `base_domain` and to `/etc/hugmesh/superdomain`, the domain superadmin accounts are created on — is permanently internal, and is never the public apex above it.
 
 **Egress VPN** is a profile file plus a lock for managed nodes. The whole section is hidden on node-class images, because a node would otherwise pay for VPN packages and a kernel fragment it can never use.
 
-**Security stack** holds the proxy stack (auto by default), Snort — on by default — AIDE, and root SSH login, which defaults to `no`. The section folds away when all four are at their defaults.
+**Security Stack** holds the proxy stack (auto by default), Snort — on by default — AIDE, and root SSH login, which defaults to `no`. The section folds away when all four are at their defaults.
 
-**Services & apps** is one table. Rows are services, columns are the options: On, Hosting/mode, Setting, and a plain sentence saying what enabling that row does. Groups are Social & community (akkoma, tuwunel, phpbb), Media & play (owncast, tube, games), Characters & avatars (character-studio, character-forge, edge-ai-tts), Network & access (egress-vpn, workloadConsole), Privacy & anti-scraping (tor, anubis, media-poisoner), plus AI & inference and Backing services. Which rows appear depends on what the selected platform's builder can actually parse; a row it cannot express is hidden, not greyed. The infra rows `egress-vpn`, `workloadConsole` and `anubis` only appear on rpi5, the one platform whose `--optional-services` catalogue carries them. Tor's x86 row appears only on a cloud or mesh build. AI & inference and Backing services appear only for cloud and mesh. Backing-service rows offer self-hosted, which is the default, or a managed hosted endpoint; tier-3 services are listed read-only with the reason they are refused in v1.
+**Services & Apps** is one table. Rows are services, columns are the options: On, Hosting/Mode, Setting, and a plain sentence saying what enabling that row does. Groups are Social & Community (akkoma, tuwunel, phpbb), Media & Play (owncast, tube, games), Characters & Avatars (character-studio, character-forge, edge-ai-tts), Network & Access (egress-vpn, workloadConsole), Privacy Services (tor, anubis, media-poisoner), plus AI & Inference and Backing Services. The privacy group is not called "anti-scraping" because anubis is not decided here alone: ticking its row installs it on any build, but leaving it alone still turns its proof-of-work gate on for every `prod` build, and the builder refuses `--exclude-services` for it by name. Which rows appear depends on what the selected platform's builder can actually parse; a row it cannot express is hidden, not greyed. The infra rows `egress-vpn`, `workloadConsole` and `anubis` only appear on rpi5, the one platform whose `--optional-services` catalogue carries them. Tor's x86 row appears only on a cloud or mesh build. AI & inference and Backing services appear only for cloud and mesh. Backing-service rows offer self-hosted, which is the default, or a managed hosted endpoint; tier-3 services are listed read-only with the reason they are refused in v1.
 
 Traps here are worth reading twice:
 
@@ -463,7 +463,7 @@ Traps: the import happens when you press the button, not when you press Next. No
 
 Skipped in standalone and cloud. A cloud client's single domain is the tie its image is built around, not an "additional" domain, so that flow keeps its table unconditionally and never sees this screen.
 
-Two cards. **Just this mesh's own domain** is the default and names the real values in its description — the cluster domain you set on the network screen, and the orchestration superdomain every node joins. **Add more domains** opens the table.
+Two cards. **Just this mesh's own domain** is the default and names the real values in its description — the cluster domain you set on the network screen, and the Tailscale root domain every node joins. **Add more domains** opens the table.
 
 One trap, and it is destructive. Choosing the default card clears the domains list. Rows you typed before changing your mind are dropped, not hidden, because a skipped table must leave nothing behind for the mesh manifest to publish.
 
@@ -481,7 +481,7 @@ One thing this column does **not** do: it does not change which services the ima
 
 "Applies to" is a checkable menu of your worklist image ids. Leaving it empty means every eligible image. Node-role images take no `--domains` at all — the attachment is manifest and provisioning data only, and the menu labels them as such rather than implying a flag it cannot emit. "Sign-in" chooses between the superdomain's central Casdoor, which is the default, and a dedicated Casdoor instance provisioned for that domain alone.
 
-A read-only header names the orchestration superdomain. It is never a table row and is never attachable.
+A read-only header names the Tailscale root domain. It is never a table row and is never attachable.
 
 Traps: in mesh the table arrives empty — the prefill of row 0 with the cluster domain happens only in cloud — so press **Add domain**. Row order is load-bearing: the first attached domain is the primary one. And each domain you add automatically gets its own default admin account with a generated random password, which is surfaced at provisioning time. You never type or store it here.
 
@@ -507,7 +507,7 @@ Trap: choosing the generated accounts clears any rows you already typed into tha
 
 The table. Each row is a Username, a Domain, a Role, an Email, and a Registration method.
 
-Domain is a dropdown of the orchestration superdomain plus every name from the Domains table. Picking the `superadmin` role forces the row to the superdomain and disables the dropdown — superadmins belong to the orchestration domain, not a tenant one. Role offers `superadmin`, `admin`, `mod`, `user`, `games`, `games-services`. Registration offers `derive`, `discord`, `gmail`, `password`: the OAuth options let the user self-register with that account at first login, `password` means one is generated and handed over at provisioning, and `derive` keeps the provisioning default.
+Domain is a dropdown of the Tailscale root domain plus every name from the Domains table. Picking the `superadmin` role forces the row to the root domain and disables the dropdown — superadmins belong to the Tailscale root domain, not a tenant one. Role offers `superadmin`, `admin`, `mod`, `user`, `games`, `games-services`. Registration offers `derive`, `discord`, `gmail`, `password`: the OAuth options let the user self-register with that account at first login, `password` means one is generated and handed over at provisioning, and `derive` keeps the provisioning default.
 
 A loaded row whose domain is not defined on the Domains page is kept and flagged `(not defined)` with an orange warning. It is never silently rewritten. Rows with a blank username are dropped when you leave.
 
