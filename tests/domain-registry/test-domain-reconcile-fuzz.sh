@@ -238,6 +238,108 @@ if command -v node >/dev/null && [ -r "${TOKEN_CLASSIFIER}" ]; then
 else
     echo "  SKIP (d) node/token-classifier unavailable (Handlebars-path assertion)"
 fi
+# d3: ANTI-VACUITY — a tokens.json block that VANISHES must not silently disable
+# the gate it feeds. `const RETIRED = spec.retired_protocol_constants || {}` was
+# fail-OPEN by shape: commit a38208e6 ("Update tokens.json", a direct-to-main
+# web-UI edit, 2026-08-28) deleted retired_protocol_constants AND
+# theme_contract_constants in one 14-line change, every consumer kept loading and
+# exiting 0, and render-handlebars.js's emit refusal for the retired snapdragon.*
+# constants and for the whole theme hand-off sat inert on main for four days. Only
+# d2 above — which names the exact dead spellings — went red. So: mutate a COPY of
+# the spec (never the tree's own) and require the classifier to refuse to LOAD.
+if command -v node >/dev/null && command -v jq >/dev/null && [ -r "${TOKEN_CLASSIFIER}" ]; then
+    TCDIR="${WORK}/tc"; mkdir -p "${TCDIR}"
+    cp "${TOKEN_CLASSIFIER}" "${TCDIR}/token-classifier.js"
+    cp "${REPO}/scripts/tooling/tokens.json" "${TCDIR}/tokens.json.orig"
+    # POSITIVE CONTROL first: an unmutated copy must load, so a red below is the
+    # planted mutation and not a broken harness (a copy that never loads would make
+    # all twelve mutation cases pass vacuously).
+    cp "${TCDIR}/tokens.json.orig" "${TCDIR}/tokens.json"
+    if node -e 'require(process.argv[1]);' "${TCDIR}/token-classifier.js" >/dev/null 2>&1; then
+        ok "(d3 control) an UNMUTATED tokens.json copy still loads (mutations below are meaningful)"
+    else
+        bad "(d3 control) the classifier copy does not load unmutated — harness broken, the d3 mutations prove nothing"
+    fi
+    # ASSERT ONE MUTATED COPY. EXPECT is `throw` (the guard must refuse to load AND
+    # name the offending block/key — exit status alone would accept an unrelated
+    # crash) or `load` (this shape is legitimately survivable, so refusing it would
+    # make the guard over-broad). Having BOTH outcomes in the battery is what keeps
+    # the mustExist/mustBeNonEmpty split honest instead of decorative.
+    _d3_assert() { # _d3_assert EXPECT NAMED-IN-ERROR LABEL
+        local _e="$1" _b="$2" _l="$3"
+        local _rc
+        node -e 'require(process.argv[1]);' "${TCDIR}/token-classifier.js" >"${TCDIR}/err.txt" 2>&1
+        _rc=$?
+        if [ "${_e}" = "load" ]; then
+            if [ "${_rc}" -eq 0 ]; then
+                ok "(d3) ${_l} -> still LOADS (fail-CLOSED on its own; refusing it would be over-broad)"
+            else
+                bad "(d3) ${_l} -> classifier REFUSED a survivable shape (rc=${_rc}): $(head -c 300 "${TCDIR}/err.txt")"
+            fi
+            return
+        fi
+        # grep a FILE, never a pipe: `... | grep -q` under `set -o pipefail` can report
+        # failure on a FOUND match when the writer takes SIGPIPE, and busybox grep -q
+        # closes far earlier than GNU's.
+        if [ "${_rc}" -ne 0 ] \
+           && grep -F "REFUSING TO LOAD the token classifier" "${TCDIR}/err.txt" >/dev/null 2>&1 \
+           && grep -F "'${_b}" "${TCDIR}/err.txt" >/dev/null 2>&1; then
+            ok "(d3) ${_l} -> classifier REFUSES to load (rc=${_rc}, anti-vacuity error names it)"
+        elif [ "${_rc}" -ne 0 ]; then
+            bad "(d3) ${_l} -> classifier failed for the WRONG reason (rc=${_rc}): $(head -c 300 "${TCDIR}/err.txt")"
+        else
+            bad "(d3) ${_l} -> classifier still LOADED (rc=${_rc}) — the refusal it feeds is silently inert"
+        fi
+    }
+    # allowlist IS in this list. It is the only block held to `mustExist` rather than
+    # `mustBeNonEmpty`, so leaving it out shipped that whole branch untested —
+    # measured: deleting the mustExist branch outright left the battery 96/0 GREEN.
+    for _blk in allowlist denylist frozen_protocol_constants retired_protocol_constants theme_contract_constants; do
+        # THREE distinct shapes, because they fail DIFFERENT halves of the guard and
+        # a two-shape battery hid that: `deleted`/`emptied` both leave every named
+        # array UNDEFINED, so a presence-only check (`Array.isArray(b[k])` with the
+        # length test dropped) still throws and both cases stay green while the
+        # anti-vacuity half is gone. `vacuous` — the block and its arrays present but
+        # every array [] — is the only shape that separates "the key is there" from
+        # "it still bans something", and it is also the likeliest real edit: a sweep
+        # that empties a list rather than removing it.
+        for _shape in deleted emptied vacuous; do
+            case "${_shape}" in
+                deleted) jq "del(.${_blk})" "${TCDIR}/tokens.json.orig" > "${TCDIR}/tokens.json" ;;
+                emptied) jq ".${_blk} = {}"  "${TCDIR}/tokens.json.orig" > "${TCDIR}/tokens.json" ;;
+                vacuous) jq ".${_blk} |= with_entries(if (.value|type) == \"array\" then .value = [] else . end)" \
+                            "${TCDIR}/tokens.json.orig" > "${TCDIR}/tokens.json" ;;
+            esac
+            # PER-BLOCK EXPECTATION. An emptied ALLOWLIST substitutes nothing, so it
+            # is fail-CLOSED and loud on its own (measured: with live/dead/
+            # reserved_pilot all [], isAllowed("BRAND_TITLE") is false — every token
+            # refused). Refusing that shape would be over-broad, so it must LOAD.
+            # Every other block feeds a REFUSAL, where empty means "bans nothing" —
+            # the silent shape — so it must throw.
+            case "${_blk}:${_shape}" in
+                allowlist:vacuous) _d3_assert load  "${_blk}" "tokens.json ${_blk} ${_shape}" ;;
+                *)                 _d3_assert throw "${_blk}" "tokens.json ${_blk} ${_shape}" ;;
+            esac
+        done
+    done
+    # TYPED mutations — the two branches NO deleted/emptied/vacuous shape can reach,
+    # so without these they ship untested:
+    #   mustExist            only allowlist uses it, and the `vacuous` jq rewrite only
+    #                        touches values that are ALREADY arrays, so nothing in the
+    #                        shape battery can make one a non-array.
+    #   mustBeNonEmptyString denylist.key_name_regex is a string, so `vacuous` leaves
+    #                        it alone and mustBeNonEmpty('keys') always throws first.
+    # An empty key_name_regex is why this branch matters: `new RegExp("")` compiles to
+    # /(?:)/, which matches every name, so isDenied() would deny EVERYTHING — including
+    # the live allowlist. Loud beats mysteriously-empty output.
+    jq '.allowlist.reserved_pilot = "notanarray"' "${TCDIR}/tokens.json.orig" > "${TCDIR}/tokens.json"
+    _d3_assert throw "allowlist.reserved_pilot" "tokens.json allowlist.reserved_pilot retyped to a string"
+    jq '.denylist.key_name_regex = ""' "${TCDIR}/tokens.json.orig" > "${TCDIR}/tokens.json"
+    _d3_assert throw "denylist.key_name_regex" "tokens.json denylist.key_name_regex emptied to the match-everything regex"
+    rm -rf "${TCDIR}"
+else
+    echo "  SKIP (d3) node/jq/token-classifier unavailable (anti-vacuity assertion)"
+fi
 echo
 
 # ── (e) oversized / entries-loop DoS ───────────────────────────────────────────
