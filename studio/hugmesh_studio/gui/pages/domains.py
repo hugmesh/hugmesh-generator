@@ -192,7 +192,8 @@ class _ServicesButton(QtWidgets.QToolButton):
         The order comes from the CATALOGUE and deliberately NOT from ``self._actions``,
         whose insertion order is the SERVICE_GROUPS presentation order. Those are two
         different constants and they already disagree (the catalogue has games before
-        owncast/tube; the "Media & play" group lists owncast, tube, games). Reading the
+        owncast/tube; the media group lists owncast, tube, games — named by content,
+        not by its title, which has already been renamed once). Reading the
         menu order here would let a purely cosmetic regrouping rewrite the bytes of
         domains[].optional_services in the mesh manifest, breaking the repo invariant
         that tests/test_services_section.py's test_regrouping_a_row_cannot_change_what_
