@@ -42,6 +42,7 @@ from ._widgets import own_probe, probe_running
 from .localmesh import _MeshWorker
 from ...core.config import (
     MODE_DEFAULT_ROLE, ROLE_CHOICES, User, enter_mesh_defaults, image_class,
+    normalize_user_roles,
 )
 from ...core.local_mesh_bootstrap import LocalMeshBootstrap
 from ...core.seeded_credentials import load_roster
@@ -54,25 +55,29 @@ LOCALCLOUD_ALLOWED_ROLES = tuple(
     role for role, _platforms, _label in ROLE_CHOICES["mesh"]
     if role == "laptop" or image_class("mesh", role) == "node")
 
-# Casdoor role grants -> the ImageConfig User.role ladder (first match wins;
-# everything else is a plain user). Only ROLES are imported — never passwords:
-# User carries no secret by design, and the mesh's identity tier keeps them.
+# Casdoor role grants -> ImageConfig User.roles (issue #228: EVERY mapped grant is
+# carried, not the top of a ladder — a persona holding ROLE_ADMIN and ROLE_GAMES
+# imports as admin + games; anything unmapped contributes nothing, and a persona
+# with no mapped grant is a plain user). The TUI twin (tui/localcloud.py) keeps the
+# same table. Only ROLES are imported — never passwords: User carries no secret by
+# design, and the mesh's identity tier keeps them.
 _CASDOOR_ROLE_MAP = (
     ("ROLE_SUPERADMIN", "superadmin"),
     ("ROLE_ADMIN", "admin"),
     ("ROLE_MOD", "mod"),
+    ("ROLE_USER", "user"),
+    ("ROLE_GAMES", "games"),
+    ("ROLE_GAMES_SERVICES", "games-services"),
 )
 
 
-def _person_role(roles) -> str:
-    for granted, person in _CASDOOR_ROLE_MAP:
-        if granted in roles:
-            return person
-    return "user"
+def _person_roles(roles) -> list[str]:
+    return normalize_user_roles(
+        [person for granted, person in _CASDOOR_ROLE_MAP if granted in roles])
 
 
-def local_mesh_identity(generator_dir: str) -> tuple[str, list[tuple[str, str]]]:
-    """The local mesh's importable identity: ``(apex domain, [(username, role)...])``.
+def local_mesh_identity(generator_dir: str) -> tuple[str, list[tuple[str, list[str]]]]:
+    """The local mesh's importable identity: ``(apex domain, [(username, roles)...])``.
 
     READ-ONLY and offline (plain file reads, no docker/compose probe — this runs in
     ``initializePage`` and must never stall the GUI): the apex comes from the
@@ -85,16 +90,16 @@ def local_mesh_identity(generator_dir: str) -> tuple[str, list[tuple[str, str]]]
     Passwords are never read into the config (User rows carry no secret)."""
     boot = LocalMeshBootstrap(generator_dir)
     domain = boot.cfg.resolved_domain()
-    users: list[tuple[str, str]] = []
+    users: list[tuple[str, list[str]]] = []
     creds = boot.superadmin_login()
     if creds:
-        users.append((creds[0], "superadmin"))
+        users.append((creds[0], ["superadmin"]))
     roster = load_roster(generator_dir)
-    seen = {name for name, _role in users}
+    seen = {name for name, _roles in users}
     for u in roster.users:
         if u.username not in seen:
             seen.add(u.username)
-            users.append((u.username, _person_role(u.roles)))
+            users.append((u.username, _person_roles(u.roles)))
     return domain, users
 
 
@@ -146,7 +151,7 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         self.wiz = wiz
         self._imported = False       # one-shot import latch (see validatePage)
         self._domain = ""
-        self._users: list[tuple[str, str]] = []
+        self._users: list[tuple[str, list[str]]] = []
         self.worker: _MeshWorker | None = None
         self._k8s_probe: _K8sGateProbe | None = None
         self._running = False        # a `make kind-down` is in flight
@@ -351,7 +356,9 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
             self._k8s_up = None
             self._start_k8s_probe()
         self._sync_gate()
-        listed = ", ".join(f"{name} ({role})" for name, role in self._users)
+        listed = ", ".join(
+            f"{name} ({roles if isinstance(roles, str) else ', '.join(roles)})"
+            for name, roles in self._users)
         self.summary.setText(
             f"<b>Imported from the local mesh:</b><br>"
             f"apex domain <b>{self._domain or '(brand default)'}</b>"
@@ -391,13 +398,16 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
                 cfg.cluster_domain = self._domain
             superdomain = cfg.effective_superdomain()
             existing = {(u.username, u.domain) for u in cfg.users}
-            for username, role in self._users:
-                # superadmins belong to the orchestration superdomain (spec 5 —
+            for username, roles in self._users:
+                # ``roles`` is one role name or the list of them (issue #228 — the
+                # canned fixtures and any older caller still hand in a bare string).
+                roles = [roles] if isinstance(roles, str) else list(roles)
+                # superadmins belong to the Tailscale root domain (spec 5 —
                 # UsersPage locks their row there); everyone else lands on the
                 # imported apex the local mesh served them on.
-                dom = superdomain if role == "superadmin" else cfg.cluster_domain
+                dom = superdomain if "superadmin" in roles else cfg.cluster_domain
                 if (username, dom) not in existing:
-                    cfg.users.append(User(username=username, domain=dom, role=role))
+                    cfg.users.append(User(username=username, domain=dom, roles=roles))
             # make the Users TABLE reachable so the imported accounts are visible
             # and editable (users_choice pre-selects the table card from this).
             cfg.configure_users = bool(cfg.users)

@@ -731,7 +731,7 @@ Placement: `cached` `build.py:342`, `live_toram` `:344`, `bundle_source` `:346`,
 | `cached` | False → **`--uncached`** always (probe: `--uncached` PRESENT) | `--cached` | `ISO_CACHED=true` (`x86:403`) — binpkg cache **and** distfiles get embedded in the ISO. Materially larger artifact. **Real change.** |
 | `live_iso` | tri `""` → nothing | `--live-iso` | `LIVE_ISO=true` is already the builder default (`x86:243`), so the **image is identical**; only the argv changes. Goldens/GUITHR see a new token. |
 | `bundle_source` | already `True` (`config.py:1613`) → `--bundle-source` always (probe PRESENT) | unchanged | **already on.** But see leak L7: scope declares it desktop-class with no enforcement (`config.py:872-873`) — "default on" for a mesh node IS the documented 33MB gap. Asks 13 and 21/L7 collide here; resolve explicitly. |
-| `compress` | False → nothing | `--compress` | `xz -9` every finished image (`COMPRESS_IMG` `x86:242`). Long build tail; artifact names gain `.xz`. **Real change.** |
+| `compress` | False → nothing | `--compress` | `xz` over the artifacts THAT builder compresses — the `.img` on x86/rpi5/jetson, the live + installer ISOs on the seven flavor builders (`COMPRESS_IMG` `x86:242`), at preset `--compress-level` (default 9, issue #233). Long build tail; the compressed artifact names gain `.xz`. **Real change.** |
 | `resume` | False → nothing | `--resume` | `RESUME=true` (`x86:207`) — **reuses an existing sysroot instead of wiping it**; `scripts/build-menu.sh:644-649` documents that a run WITHOUT `--resume` deliberately wipes. Defaulting this on silently makes every build incremental over whatever tree was left behind. **Highest-risk item in the entire ask list** — surface it as an explicit "reuse the previous build tree" choice, not a silent default. |
 
 `live_toram` (`build.py:344-345`, default True) is a **live-ISO boot entry**, not an
@@ -771,7 +771,7 @@ artifact — it belongs with `live_iso` if the sections merge.
    `OPTIONAL_SERVICES_CHOICES` (`:352-353`); `INFRA_SERVICES_CHOICES` (`:360`);
    `OPTIONAL_SERVICES_BY_PLATFORM` (`:365-368`); `PERSON_ROLE_CHOICES` (`:382`);
    `X86_NODE_ROLES` (`:387`); `DESKTOP_ROLES` (`:629`); `USER_ROLE_CHOICES`
-   (`users.py:24`); `USER_REGISTRATION_CHOICES` (`users.py:30`);
+   (`config.py:576`); `USER_REGISTRATION_CHOICES` (`users.py:30`);
    `WORKLIST_INFRA_SERVICES` (`core/worklist.py:58`); `WIZARD_PAGE_SLUGS`
    (`config.py:105-108`) with the 1:1 ctor assert (`wizard.py:156-158`).
 5. **ncurses menu** (`scripts/build-menu.sh`): `OPT_RESUME` `:79`, `OPT_EDGE_AI_TTS`

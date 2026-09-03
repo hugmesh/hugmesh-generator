@@ -11,8 +11,11 @@ import pytest
 
 from hugmesh_studio.core.config import (
     BUILDER_SCRIPTS,
+    COMPRESS_LEVEL_CHOICES,
+    COMPRESS_LEVEL_DEFAULT,
     DESKTOP_ROLES,
     ENV_CHOICES,
+    FLAVOR_MEDIA_PLATFORMS,
     GPU_DRIVER_ALIASES,
     GPU_DRIVER_CHOICES,
     HOME_DESKTOP_FIELDS,
@@ -622,6 +625,81 @@ def test_x86_installer_ui_compress_resume():
     assert "--compress" in args and "--resume" in args
 
 
+# ---- #233: --compress-level, the xz preset --compress uses -----------------------
+
+def test_compress_level_is_silent_at_the_builders_own_default():
+    """9 is what all ten builders hardcoded before --compress-level existed, so a
+    config that never touched the knob must emit the argv it always emitted — byte for
+    byte. This is the property that lets the flag land without rewriting a single
+    exact-argv expectation elsewhere in this file."""
+    for platform, role in (("x86", "desktop"), ("rpi5", "rpi5-desktop"),
+                           ("frite", "frite"), ("jetson", "edge-ai")):
+        base = dict(mode="cloud", role=role, platform=platform)
+        if platform == "jetson":
+            base = dict(mode="mesh", role=role, platform=platform)
+        plain = ImageConfig(**base).to_cli_args()
+        explicit = ImageConfig(**base,
+                               compress_level=COMPRESS_LEVEL_DEFAULT).to_cli_args()
+        assert plain == explicit, platform
+        assert "--compress-level" not in plain, platform
+
+
+@pytest.mark.parametrize("platform,role", [
+    ("x86", "desktop"), ("rpi5", "rpi5-desktop"), ("frite", "frite"),
+    ("orangepi5", "orangepi5"), ("orangepizero2", "orangepizero2"),
+    ("orangepizero2w", "orangepizero2w"), ("orangepizero3", "orangepizero3"),
+    ("orangepi3-lts", "orangepi3-lts"), ("orangepi4-lts", "orangepi4-lts")])
+def test_compress_level_emits_beside_compress_on_every_builder(platform, role):
+    args = ImageConfig(mode="cloud", role=role, platform=platform,
+                       compress=True, compress_level=1).to_cli_args()
+    assert ("--compress-level", "1") in pairs(args)
+    assert "--compress" in args
+
+
+def test_compress_level_is_never_emitted_without_compress():
+    """Every builder reads COMPRESS_LEVEL only inside its `if ${COMPRESS_IMG}` arm, so
+    a level without --compress is a flag that cannot do anything. It is not emitted."""
+    args = ImageConfig(mode="cloud", role="desktop", platform="x86",
+                       compress=False, compress_level=1).to_cli_args()
+    assert "--compress-level" not in args and "--compress" not in args
+
+
+def test_compress_level_out_of_range_is_clamped_not_shipped():
+    """The builders hard-error on anything outside 0-9 (`--compress-level must be a
+    single digit`). A --config JSON carrying junk must not be able to kill a build
+    mid-run, so emission clamps to the nearest legal preset instead."""
+    hi = ImageConfig(mode="cloud", role="desktop", platform="x86",
+                     compress_level=42).to_cli_args()
+    assert "--compress-level" not in hi              # clamps to 9 == the default
+    lo = ImageConfig(mode="cloud", role="desktop", platform="x86",
+                     compress_level=-5).to_cli_args()
+    assert ("--compress-level", "0") in pairs(lo)
+    junk = ImageConfig(mode="cloud", role="desktop", platform="x86",
+                       compress_level="nine").to_cli_args()
+    assert "--compress-level" not in junk
+    assert tuple(COMPRESS_LEVEL_CHOICES) == tuple(range(10))
+
+
+def test_flavor_media_platforms_are_exactly_the_flavor_emitting_builders():
+    """FLAVOR_MEDIA_PLATFORMS drives two GUI copy claims on the Review page — the
+    greyed --installer-iso row's redirect to the Flavor control, and the --compress
+    caption's ISO-vs-.img split. Both are only true for the builders whose media really
+    IS chosen by --flavor, so pin the tuple to real emission rather than to a list
+    somebody kept in their head."""
+    _ROLE = {"x86": "desktop", "rpi5": "rpi5-desktop", "frite": "frite",
+             "jetson": "edge-ai", "orangepi5": "orangepi5",
+             "orangepizero2": "orangepizero2", "orangepizero2w": "orangepizero2w",
+             "orangepizero3": "orangepizero3", "orangepi3-lts": "orangepi3-lts",
+             "orangepi4-lts": "orangepi4-lts"}
+    derived = set()
+    for platform, role in _ROLE.items():
+        mode = "mesh" if platform == "jetson" else "cloud"
+        if "--flavor" in ImageConfig(mode=mode, role=role,
+                                     platform=platform).to_cli_args():
+            derived.add(platform)
+    assert derived == set(FLAVOR_MEDIA_PLATFORMS)
+
+
 def test_x86_proxy_stack_tristate():
     """--proxy-stack is TRI-STATE like the builder (PROXY_STACK=auto is ITS default,
     resolved to on for client desktops): auto emits NOTHING so the builder keeps its
@@ -657,7 +735,7 @@ def test_x86_iso_finish_pairs_flip():
                           ("rpi5-desktop", "desktop")])
 def test_rpi5_roles_golden(role, builder_role):
     args = ImageConfig(mode="mesh", role=role, platform="rpi5", tailscale=True).to_cli_args()
-    # WS-SUPER-B: mesh images record the derived orchestration superdomain.
+    # WS-SUPER-B: mesh images record the derived Tailscale root domain.
     assert args == ["--role", builder_role, "--env", "test",
                     "--superdomain", "hugmesh.internal", *ALL_TAIL]
 
@@ -1797,6 +1875,10 @@ _FIELD_PROBE = {
     # flag move — the probe measures "which platforms change when this field
     # changes", and a sample equal to the default changes nothing anywhere.
     "compress": {"compress": False}, "resume": {"resume": False},
+    # compress_level (issue #233) is the inverse case: it emits NOTHING at its
+    # default (9 — the level every builder hardcoded before --compress-level
+    # existed), so the probe must set a NON-default level to see the flag move.
+    "compress_level": {"compress_level": 6},
     "cpu": {"cpu": "cortex-a53"}, "defconfig": {"defconfig": "foo_defconfig"},
     "dtb": {"dtb": "foo.dtb"}, "dtb_prefix": {"dtb_prefix": "bcm2712"},
     "kernel_img": {"kernel_img": "Image"}, "pcie_gen3": {"pcie_gen3": True},

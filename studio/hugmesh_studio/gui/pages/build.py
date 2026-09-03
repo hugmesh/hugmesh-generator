@@ -60,9 +60,12 @@ from ...core import root_size_floor
 from ...core import secret_files
 from ...core import worklist as worklist_mod
 from ...core.build_driver import BuildDriver
-from ...core.config import (ENV_CHOICES, ImageConfig, UNAFFILIATED_ROLE,
-                            effective_installer_ui, field_default, image_class,
-                            resolve_installer_ui_default, resolve_platform_defaults)
+from ...core.config import (COMPRESS_LEVEL_CHOICES, COMPRESS_LEVEL_DEFAULT,
+                            ENV_CHOICES, FLAVOR_MEDIA_PLATFORMS, ImageConfig,
+                            UNAFFILIATED_ROLE, clamp_compress_level,
+                            effective_installer_ui, field_default,
+                            image_class, resolve_installer_ui_default,
+                            resolve_platform_defaults)
 from ...core.worklist_driver import WorklistDriver
 from ._device_table import DeviceTable
 from ._gating import (clear_unsupported, gate_widgets, gate_widgets_role_class,
@@ -106,8 +109,14 @@ def _installer_ui_reason(shown: str, rewritten: bool) -> str:
 # The support matrix is read from the builders, not guessed: build-x86-host-stage4.sh is
 # the ONLY builder that parses --installer-iso (a stage4 + install-x86.sh data ISO).
 # build-rpi5-stage4.sh's installer ISO is a different flag with different semantics
-# (--iso — the "Installer ISO for an UNencrypted image (rpi5)" row on this page), and the
-# frite/jetson/orangepi* builders build no ISO at all (--image-only is their media skip).
+# (--iso — the "Installer ISO for an UNencrypted image (rpi5)" row on this page).
+# CORRECTED (second #233 pass): the note here used to say "the frite/jetson/orangepi*
+# builders build no ISO at all", and repeated it to the operator in the tooltip. That is
+# true of jetson ONLY. The other seven have no per-artifact ISO FLAG — which is all the
+# gate can see — but they build live.iso AND installer.iso by default, chosen by
+# --flavor (default "both"), which Studio itself emits. What the gate keys on is
+# therefore the FLAG, never the capability; _installer_iso_note and the section hint
+# both say that now instead of denying the artifacts exist.
 # PLATFORM_FIELD_SUPPORT carries that matrix and is pinned to the real emission surface
 # by tests/test_cli_args.py::test_platform_field_support_matches_emission, so
 # platform_supports("installer_iso", ...) here can never drift from the builders.
@@ -117,8 +126,55 @@ def _installer_iso_note(platform: str) -> str:
         return ("Not available on the rpi5 builder: --installer-iso is an x86 flag. "
                 "The Pi's installer ISO is the separate \"Installer ISO for an "
                 "UNencrypted image (rpi5)\" row (--iso).")
+    if p in FLAVOR_MEDIA_PLATFORMS:
+        # HONESTY FIX (issue #233, second pass): the sentence this branch replaces —
+        # "This platform's builder produces no installer ISO" — was FALSE on all seven
+        # of these builders. They have no PER-ARTIFACT ISO flag, which is what the gate
+        # keys on, but they build <prefix>.installer.iso by default: --flavor's default
+        # is "both" (build-frite-stage4.sh:196), which sets BUILD_INSTALLER (:573) and
+        # calls build_installer_iso() (:2557) — and Studio itself emits --flavor both
+        # (core/config.py _frite_args &c.), so the old copy contradicted the very
+        # command this wizard dispatches. Redirect to the control that really owns it,
+        # exactly as the rpi5 branch above redirects to the --iso row: a tooltip, not a
+        # second copy of the Flavor combo on this page (one owner per value).
+        return (f"Not available on the {p} builder: --installer-iso is an x86 flag. "
+                "This builder has no per-artifact ISO flags — its media is the "
+                "\"Flavor\" dropdown on the \"Target machine & image type\" step "
+                "(live | installer | both), whose default, both, already builds an "
+                "installer ISO.")
+    # jetson, and only jetson: build-jetson-stage4.sh contains no installer.iso at all.
     return (f"Not available on the {p} builder: only the x86 builder parses "
             "--installer-iso. This platform's builder produces no installer ISO.")
+
+
+def _compress_note(platform: str) -> str:
+    """The "→ artifact" caption for --compress — PER PLATFORM, because --compress does
+    not mean one thing.
+
+    The old caption said "every artifact above gains .xz", which is false on every
+    builder. Enumerated from the scripts, COMPRESS_IMG has exactly two shapes:
+
+      * x86 / rpi5 / jetson compress IMG_PATH and nothing else (build-x86-host-stage4.sh
+        :6757, build-rpi5-stage4.sh:4654, build-jetson-stage4.sh:2414) — so on x86,
+        where Root image, Live ISO, Installer ISO and Rootfs tar are all listed above
+        this row, only the Root image is affected (fs.tar.xz is xz'd unconditionally by
+        its own `xz -T0 -6` at x86:6743, with or without --compress);
+      * the seven FLAVOR_MEDIA_PLATFORMS compress LIVE_PATH and INSTALLER_PATH and never
+        an .img (build-frite-stage4.sh:2438 + :2547, and six byte-parallel siblings).
+
+    The meaning INVERTS between the two families, so one static string cannot be true —
+    hence a platform-aware caption, in the shape of _installer_iso_note above."""
+    p = platform or "x86"
+    if p in FLAVOR_MEDIA_PLATFORMS:
+        return ("→ the live/installer ISOs gain .xz — this builder's --compress never "
+                "touches the .img; smaller files, a long build tail (--compress)")
+    return ("→ the .img gains .xz — the only artifact --compress touches on this "
+            "builder; a smaller file, a long build tail (--compress)")
+
+
+# Why the xz-preset row is greyed while Compress is unticked (issue #233).
+_COMPRESS_OFF_REASON = ("Sets the preset --compress uses, which is unticked — nothing "
+                        "will be xz'd. Tick Compress to choose a preset.")
 
 
 # Why an ISO row is greyed while "Skip the ISO stage" is ticked (issue #233: skip-iso
@@ -154,6 +210,105 @@ _FLAG_TIP = ("Two-state: checked = --flag, unchecked = --no-flag. There is no "
              "one is ON, which is what checked already means.")
 
 
+# ── Build-execution field help (issue #231) ───────────────────────────────────────────
+# Operator note, verbatim: "Build execution: add tooltips" (and #226's general ask,
+# "names are not self-explanatory"). Four controls that decide HOW and WHERE the build
+# runs, and not one of them said so on screen.
+#
+# HomePage's idiom (PR #237): module-level _*_HELP constants applied to the CONTROL and
+# to its _row() wrapper, so hovering the LABEL answers the question too — the label is
+# the part an operator reads before deciding to hover anything. Unlike HomePage these
+# four need no post-gate re-assert: none of them is in this page's gate_widgets map, so
+# nothing rewrites their tooltips after __init__.
+#
+# Rich text (<qt>) for the same reason self.img_size uses it (issue #232): a plain-text
+# tooltip does not wrap, so a three-sentence one renders as a single ~1000px line that
+# runs off a small screen. Every claim below is cited to the code that makes it true.
+
+# platform_info.HostInfo.default_backend + .can_build_native (os == linux AND is_gentoo
+# AND has_bash -> "native"; else "docker" if has_docker; else "none"). Root is NOT part
+# of the choice — _backend() sends None for "auto" and the driver resolves it — but a
+# native build DOES need root at dispatch: build_driver._elevation_prefix prepends
+# sudo/pkexec, and preflight() blocks only when NEITHER helper exists (build_driver.py
+# :695, the "no elevation helper" problem).
+_BACKEND_HELP = (
+    "<qt><p>How the builder script runs.</p>"
+    "<p><b>auto</b> resolves against this host: <b>native</b> on a Gentoo Linux host "
+    "with bash, <b>docker</b> wherever a Docker daemon is reachable, and nothing at "
+    "all on a host with neither — the Welcome screen says so first.</p>"
+    "<p><b>native</b> runs the script directly on this machine — fastest, but it "
+    "builds a chroot, so it needs root. The Studio prepends sudo or pkexec itself "
+    "(expect an authentication prompt); preflight blocks the build only when neither "
+    "helper is installed.</p>"
+    "<p><b>docker</b> runs the same script inside the builder image — works on any "
+    "host with a reachable Docker daemon, Gentoo or not.</p></qt>")
+
+# --env is BAKED: build-x86-host-stage4.sh:4466 writes it to /etc/hugmesh/env, and
+# gate_env_apps() (:2918) prunes the baked ArgoCD app tree by it — prod drops the LAN
+# wildcard-DNS app and pins release image tags, test drops the cloudflared go-live app.
+# The builder's own prod banner (:2181) is the source for what prod expects from the
+# KEYS USB. The env also decides optional services left at their default
+# (_optional-services-lib.sh:478-482 falls through to ENV for anubis), and it gates the
+# post-build device tests on this very page (_sync_qemu_device_tests_gate).
+_ENV_HELP = (
+    "<qt><p>Which stack environment the image BAKES. The value is written to "
+    "<tt>/etc/hugmesh/env</tt> and decides which ArgoCD apps survive in the baked app "
+    "tree — it is not a build-time-only switch.</p>"
+    "<p><b>test</b> (the builder's default) is LAN-first: cluster wildcard DNS is "
+    "authoritative for the <tt>.test</tt> domain, the cloudflared/ACME go-live app is "
+    "pruned, and TLS stays on the internal cluster CA.</p>"
+    "<p><b>prod</b> bakes the REAL public domain, keeps the go-live app, pins release "
+    "image tags, and expects Cloudflare / OAuth / SMTP credentials from the KEYS USB.</p>"
+    "<p>Two knock-on effects: an optional service left at its default follows the env "
+    "(the Anubis proof-of-work shield ships on in prod, off in test), and the "
+    "post-build QEMU device tests under Build plumbing are offered only with "
+    "<b>test</b> — prod prunes the in-cluster test runner they assert against.</p></qt>")
+
+# The builder's -w work dir: build_driver.py:348 passes the real path natively and :363
+# passes /out for docker (the same dir, bind-mounted). Each DISPATCH overrides it with
+# build_sessions.session_workdir() -> <out>/sessions/<id>/ (build.py
+# _pending_session_workdir), which is the -w the command pane renders; node key-zips are
+# written under it as keys-<entry id>/ (docs/STUDIO-WALKTHROUGH.md). Reachability and
+# writability are BLOCKING preflight problems (worklist_driver.py:237/248).
+_OUTDIR_HELP = (
+    "<qt><p>Where this build's images, logs and key folders land — passed to the "
+    "builder as its <tt>-w</tt> work directory (bind-mounted at <tt>/out</tt> on the "
+    "docker backend).</p>"
+    "<p>Each dispatch gets its own subfolder underneath: "
+    "<tt>&lt;output directory&gt;/sessions/&lt;session id&gt;/</tt>. That is the "
+    "<tt>-w</tt> path shown in the exact builder command further down, and node "
+    "key-zips land inside it as <tt>keys-&lt;entry id&gt;/</tt>.</p>"
+    "<p>The path has to be reachable and writable or Continue refuses — a previous "
+    "native (sudo) build leaving root-owned directories behind is the usual cause.</p>"
+    "</qt>")
+
+# -j, passed on every backend (build_driver.py:348/363). The ARRIVING value comes from
+# host_resources.default_jobs(): HUGMESH_BUILD_JOBS wins outright, else
+# max(2, min(nproc, MemAvailable_GiB // 2)), else min(nproc, 8) when /proc/meminfo is
+# unreadable at all — and that is native Windows/macOS ONLY, NOT WSL2: platform_info.py
+# :15-16 makes WSL2 the supported way to run this Studio on Windows and it is a real
+# Linux kernel, so it reads /proc/meminfo fine and takes the MEMORY branch. host_resources
+# says so itself three times (:19, :52, :133, all "Windows/macOS"). Fresh configs ONLY,
+# a loaded config keeps its saved "jobs".
+# docs/STUDIO-WALKTHROUGH.md already promises the operator that this
+# default "is derived from this host's cores and available memory, not a fixed number",
+# so the tooltip is where that promise is actually kept. The docker memory cap is
+# host_resources.build_memory_flag()/HUGMESH_BUILD_MEMORY (build_driver.py:144).
+_JOBS_HELP = (
+    "<qt><p>How many compile jobs run at once — passed to the builder as "
+    "<tt>-j</tt>.</p>"
+    "<p>The value you arrive on is derived from THIS host, not a fixed number: about "
+    "<tt>max(2, min(cores, available GiB / 2))</tt>, i.e. roughly 2 GiB of headroom per "
+    "job, falling back to <tt>min(cores, 8)</tt> where memory cannot be read at all "
+    "(native Windows or macOS — not WSL2, which has a real <tt>/proc/meminfo</tt> and "
+    "takes the memory rule). <tt>HUGMESH_BUILD_JOBS</tt> overrides it outright, and a "
+    "config you load keeps the number it was saved with.</p>"
+    "<p>Raising it costs CPU and a lot more RAM; lower it on a memory-tight host. A "
+    "docker build additionally runs under a container memory cap "
+    "(<tt>HUGMESH_BUILD_MEMORY</tt>) that protects the host; a native build has no such "
+    "ceiling.</p></qt>")
+
+
 def _flag_check(text):
     """A --flag / --no-flag pair as an ordinary two-state checkbox.
 
@@ -181,6 +336,17 @@ def _flag_value(box):
     The config DOMAIN is unchanged, so a --config JSON or headless caller carrying '' is
     still accepted and still emits neither flag."""
     return "on" if box.isChecked() else "off"
+
+
+def _compress_level_text(n: int) -> str:
+    """One xz-preset combo entry. The three presets a reader needs a fact about carry
+    it; the rest are the bare number, so the combo stays a number picker rather than a
+    wall of prose. 9 is called out because it is what every builder hardcoded before
+    --compress-level existed, so leaving it alone changes nothing about any build."""
+    return {0: "0 — fastest, barely compressed",
+            6: "6 — xz's own default",
+            COMPRESS_LEVEL_DEFAULT: f"{COMPRESS_LEVEL_DEFAULT} — smallest, longest "
+                                    "build tail (builder default)"}.get(n, str(n))
 
 
 def _hint(text):
@@ -326,20 +492,44 @@ class BuildPage(QtWidgets.QWizardPage):
         # line per value on choices that are almost never touched.
         self.exec_box = QtWidgets.QGroupBox("")
         ex = QtWidgets.QVBoxLayout(self.exec_box)
+        # ISSUE #231: every control in this section carries its help on BOTH the widget
+        # and its _row() wrapper, so hovering the LABEL works too (the HomePage idiom).
+        # The row wrappers are kept as attributes only where a later gate touches them;
+        # these four are ungated, so the tooltip set here is the one that survives.
         self.backend = QtWidgets.QComboBox()
         self.backend.addItems(["auto", "native", "docker"])
-        ex.addWidget(_row("Backend", self.backend))
+        self.backend.setToolTip(_BACKEND_HELP)
+        backend_row = _row("Backend", self.backend)
+        backend_row.setToolTip(_BACKEND_HELP)
+        ex.addWidget(backend_row)
         # --env: which stack environment the image bakes (every builder parses it)
         self.env = QtWidgets.QComboBox()
         self.env.addItems(list(ENV_CHOICES))
-        ex.addWidget(_row("Environment (--env)", self.env))
+        self.env.setToolTip(_ENV_HELP)
+        env_row = _row("Environment (--env)", self.env)
+        env_row.setToolTip(_ENV_HELP)
+        ex.addWidget(env_row)
+        # ISSUE #231 rename: "Output dir" -> "Output directory", the spelling the rest of
+        # the Studio already uses in operator-facing text (worklist_driver.py:237/248
+        # "Output directory is unreachable/is not writable", fleet.py's own file-dialog
+        # caption). Display strings ONLY — ImageConfig.output_dir is a persisted JSON key,
+        # self.outdir is read by tests and _preview, and the builder flag stays -w.
+        # Sentence case, not Title Case: #231's first bullet is "Review page text is good
+        # (keep)", and every other label on this page is sentence-cased. A page-wide
+        # recase belongs to #226, all at once — half-cased would be worse than either.
         self.outdir = QtWidgets.QLineEdit()
-        obtn = _file_picker(self, self.outdir, "Output dir", directory=True)
+        obtn = _file_picker(self, self.outdir, "Output directory", directory=True)
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.outdir, 1); h.addWidget(obtn)
-        ex.addWidget(_row("Output dir", w))
+        self.outdir.setToolTip(_OUTDIR_HELP)
+        outdir_row = _row("Output directory", w)
+        outdir_row.setToolTip(_OUTDIR_HELP)
+        ex.addWidget(outdir_row)
         self.jobs = QtWidgets.QSpinBox(); self.jobs.setRange(1, 256); self.jobs.setValue(8)
-        ex.addWidget(_row("Parallel jobs", self.jobs))
+        self.jobs.setToolTip(_JOBS_HELP)
+        jobs_row = _row("Parallel jobs", self.jobs)
+        jobs_row.setToolTip(_JOBS_HELP)
+        ex.addWidget(jobs_row)
         # Expanded and never auto-folded: backend/outdir are the first things preflight
         # problems point at, so they must be on screen when the page loads.
         self.exec_section = collapsible("Build execution", self.exec_box)
@@ -490,7 +680,10 @@ class BuildPage(QtWidgets.QWizardPage):
         #             build. Embeds the binpkg cache + distfiles in the live ISO: a
         #             materially larger ISO that can rebuild offline.
         #   compress  COMPRESS_IMG=false (x86:242, rpi5:186, jetson:165) -> CHANGES the
-        #             build. xz -9 over every finished artifact; a long build tail.
+        #             build. xz over the artifacts THIS builder compresses (the .img on
+        #             x86/rpi5/jetson, the live + installer ISOs on the seven flavor
+        #             builders — see _compress_note), at preset --compress-level
+        #             (default 9); a long build tail.
         #   resume    RESUME=false       (x86:207, rpi5:174, jetson:156) -> CHANGES the
         #             build. Reuses the previous sysroot instead of wiping it.
         #   live_iso  LIVE_ISO=true      (x86:243)                       -> no change.
@@ -514,11 +707,21 @@ class BuildPage(QtWidgets.QWizardPage):
         self.artifacts_box = art
         # issue #233 "rewrite the explainer text": say concretely what the section is
         # and how the gating reads, in the page's plain voice.
+        # SECOND-PASS FIX: the first rewrite's second sentence said "Rows this
+        # platform's builder cannot make are hidden or greyed", which the gate does not
+        # deliver — it keys on whether the builder parses that row's FLAG, not on what
+        # the builder can produce. frite/orangepi HIDE the Live ISO row (live_iso is
+        # _X86 in PLATFORM_FIELD_SUPPORT) while building <prefix>.live.iso by default
+        # under --flavor both, so the rule as written asserted something false about
+        # seven platforms. It now says what the gate actually does, and says out loud
+        # that a hidden row is not a missing artifact.
         self.artifacts_hint = _hint(
             "Each row is one build option and the file it produces in the output "
-            "directory — ticked means the build produces that file. Rows this "
-            "platform's builder cannot make are hidden or greyed; a greyed row's "
-            "tooltip names the reason.")
+            "directory — ticked means the build produces that file. Rows whose flag "
+            "this platform's builder does not parse are hidden or greyed; a greyed "
+            "row's tooltip names the reason. A hidden row is not a missing artifact: "
+            "some builders choose their media with one Flavor setting instead of a "
+            "flag per file.")
         arl.addWidget(self.artifacts_hint)
         grid = QtWidgets.QGridLayout()
         grid.setColumnStretch(0, 1)
@@ -589,10 +792,37 @@ class BuildPage(QtWidgets.QWizardPage):
         self.bundle_note.setWordWrap(True)
         self.bundle_note.setStyleSheet("color: #a65d00;")
         self.bundle_note.setVisible(False)
+        # The label no longer hardcodes "xz -9": the preset is a control of its own
+        # now (the row below), so a fixed level in the label would go stale the moment
+        # it is changed. The caption is PLATFORM-AWARE (_compress_note) and is refreshed
+        # per visit in initializePage — --compress compresses the .img on x86/rpi5/
+        # jetson and the ISOs on the seven flavor builders, so no one string is true.
         self.compress = _art_row(
-            QtWidgets.QCheckBox("Compress the finished image(s) — xz -9"),
-            "→ every artifact above gains .xz; smaller files, a long build tail "
-            "(--compress)", "compress")
+            QtWidgets.QCheckBox("Compress the finished artifacts (xz)"),
+            _compress_note("x86"), "compress")
+        # issue #233's one unchecked box, verbatim: "consider allowing the xz
+        # compression level to be changed". A pick-one VALUE enumeration, so a
+        # DROPDOWN (this module's stated idiom), indented under the row it modifies and
+        # greyed while Compress is unticked — the cached/live_toram-under-Live-ISO
+        # shape, reused. The range is xz's own 0-9, which is exactly what every builder
+        # validates, so there is no second narrower GUI policy to drift.
+        lvl_row = QtWidgets.QWidget()
+        lvl_lay = QtWidgets.QHBoxLayout(lvl_row)
+        # The indent comes from the LAYOUT, not from _art_row's indent= stylesheet:
+        # "margin-left" set on a CONTAINER cascades to every child, indenting the label
+        # and the combo separately instead of the row once.
+        lvl_lay.setContentsMargins(18, 0, 0, 0)
+        lvl_lay.setSpacing(8)
+        self.compress_level_label = QtWidgets.QLabel("…at xz preset")
+        lvl_lay.addWidget(self.compress_level_label)
+        self.compress_level = QtWidgets.QComboBox()
+        for _n in COMPRESS_LEVEL_CHOICES:
+            self.compress_level.addItem(_compress_level_text(_n), _n)
+        lvl_lay.addWidget(self.compress_level)
+        lvl_lay.addStretch(1)
+        _art_row(lvl_row, "→ smaller artifacts as the preset rises, and a longer build "
+                 "tail; 9 is what every builder used before the knob existed "
+                 "(--compress-level)", "compress_level")
         self.resume = _art_row(
             QtWidgets.QCheckBox("Resume — reuse the existing sysroot instead of wiping it"),
             "→ the same artifacts, built incrementally over whatever tree the last run "
@@ -620,6 +850,12 @@ class BuildPage(QtWidgets.QWizardPage):
         # over one widget (the mixed setEnabled/setVisible trap this page already names).
         self.skip_iso.toggled.connect(self._sync_iso_options)
         self.live_iso.toggled.connect(self._sync_iso_options)
+        # Its OWN sync, deliberately NOT folded into _sync_iso_options: that function is
+        # the single writer of setEnabled on the ISO cluster, and widening it to a
+        # non-ISO row would put a second concern on the one mechanism this page keeps
+        # single-owner. The xz preset is not an ISO option — it is a modifier of
+        # --compress and follows only that box.
+        self.compress.toggled.connect(self._sync_compress_level)
         self._sync_iso_options()
 
         # per-device flash / keys assignment table (replaces the old single-target
@@ -963,6 +1199,16 @@ class BuildPage(QtWidgets.QWizardPage):
         self.bundle_source.setChecked(False if unaffiliated else c.bundle_source)
         self.bundle_note.setVisible(unaffiliated)
         self.compress.setChecked(c.compress)
+        # A --config JSON may carry any compress_level at all. clamp_compress_level is
+        # the SAME reading config._compress_level_args uses on emission, so what the page
+        # shows and what the builder is handed can never disagree about one file — a
+        # plain findData(c.compress_level) fallback would NOT be that same function
+        # (it maps -1 to 9 where emission maps it to 0).
+        self.compress_level.setCurrentIndex(
+            self.compress_level.findData(clamp_compress_level(c.compress_level)))
+        # --compress means DIFFERENT artifacts per builder — restate the caption for the
+        # platform actually selected (see _compress_note).
+        self.artifact_labels["compress"].setText(_compress_note(c.platform))
         self.resume.setChecked(c.resume)
         self.grow.setCurrentText(c.grow)
         self.version.setText(c.version)
@@ -1067,6 +1313,7 @@ class BuildPage(QtWidgets.QWizardPage):
         # AFTER the platform gate + the checkbox setters above: the enabled state of
         # the ISO rows depends on the platform AND the just-restored skip/live values.
         self._sync_iso_options()
+        self._sync_compress_level()          # setChecked above fires no signal on a no-op
         self.device_table.refresh()          # auto-refresh the device table on entry
         self._apply_default_expansion()
         self._preview()
@@ -1149,6 +1396,23 @@ class BuildPage(QtWidgets.QWizardPage):
         _apply("cached", self.cached, sub_on, sub_reason)
         _apply("live_toram", self.live_toram, sub_on, sub_reason)
 
+    def _sync_compress_level(self):
+        """Grey the xz-preset row while Compress is unticked (issue #233's last box).
+
+        Same contract as _sync_iso_options and same reason for existing separately: a
+        preset with nothing to compress is a control that cannot do anything, and the
+        row says so instead of silently accepting a value the build ignores. The
+        Compress box itself stays live — it is the way back. PRESENTATION ONLY: this
+        never rewrites the combo's value, so a preset chosen, then un-ticked, then
+        re-ticked survives (and config._compress_level_args emits nothing at all while
+        --compress is absent, so a stale value cannot leak into argv either)."""
+        on = self.compress.isChecked()
+        reason = "" if on else _COMPRESS_OFF_REASON
+        for w in (self.compress_level, self.compress_level_label,
+                  self.artifact_labels["compress_level"]):
+            w.setEnabled(on)
+            w.setToolTip(reason)
+
     def _backend(self):
         b = self.backend.currentText()
         return None if b == "auto" else b
@@ -1198,6 +1462,10 @@ class BuildPage(QtWidgets.QWizardPage):
         c.bundle_source = (False if (c.role == UNAFFILIATED_ROLE or c.unaffiliated)
                            else self.bundle_source.isChecked())
         c.compress = self.compress.isChecked()
+        # currentData() is an int for all ten entries; the None arm is the empty-combo
+        # guard, so a construction change can never persist None into a saved config.
+        _lvl_now = self.compress_level.currentData()
+        c.compress_level = (COMPRESS_LEVEL_DEFAULT if _lvl_now is None else _lvl_now)
         c.resume = self.resume.isChecked()
         c.grow = self.grow.currentText().strip()
         c.version = self.version.text().strip()

@@ -11,7 +11,9 @@ from hugmesh_studio.tui import journey
 from hugmesh_studio.tui import localcloud as lc
 
 CANNED_DOMAIN = "mesh.example.org"
-CANNED_USERS = [("superadmin", "superadmin"), ("alice", "admin"), ("bob", "user")]
+CANNED_USERS = [("superadmin", ["superadmin"]),
+                ("alice", ["admin", "games"]),
+                ("bob", "user")]          # a bare string still loads (#228 back-compat)
 
 
 @pytest.fixture(autouse=True)
@@ -48,6 +50,12 @@ def test_gate_shows_the_imported_identity_before_asking_consent():
     text = "\n".join(j.lines())
     assert CANNED_DOMAIN in text
     assert "superadmin (superadmin)" in text and "bob (user)" in text
+    # #228: EVERY role is listed, joined — never a raw Python list repr. The
+    # reader in this same module returns list-valued roles, so the renderer
+    # must be exercised with that shape or the divergence goes unseen.
+    assert "alice (admin, games)" in text
+    accounts = [ln for ln in text.splitlines() if "accounts:" in ln][0]
+    assert "[" not in accounts and "'" not in accounts
     assert "make kind-down" in text                 # the manual-teardown honesty
     assert "k8s will stop to proceed" in j.prompt()
 
@@ -79,7 +87,7 @@ def test_import_lands_domain_and_accounts_with_the_superadmin_rule():
     assert cfg.cluster_domain == CANNED_DOMAIN
     by_name = {u.username: u for u in cfg.users}
     assert set(by_name) == {"superadmin", "alice", "bob"}
-    # superadmins belong to the orchestration superdomain; everyone else lands
+    # superadmins belong to the Tailscale root domain; everyone else lands
     # on the imported apex (the GUI page's exact rule).
     assert by_name["superadmin"].domain == cfg.effective_superdomain()
     assert by_name["alice"].domain == CANNED_DOMAIN

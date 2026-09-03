@@ -639,7 +639,11 @@ if command -v python3 >/dev/null 2>&1; then
     mkdir -p "${sess}"
     for n in hugmesh-rpi5-arm64-pki-test-20260807T153808Z.img.xz \
              hugmesh-x86-amd64-be-test-20260807T172418Z.img \
-             hugmesh-x86-amd64-fe-test-20260807T172419Z.img; do : > "${sess}/${n}"; done
+             hugmesh-x86-amd64-fe-test-20260807T172419Z.img; do
+        # NON-EMPTY on purpose: a 0-byte .img is the builder's pre-partition
+        # placeholder from a killed run, and both discover_rows twins skip it.
+        printf '\0' > "${sess}/${n}"
+    done
     if PYTHONPATH="${REPO}/studio" python3 -m hugmesh_studio.core.mesh_emulation \
             identities --generator-dir "${gen}" --session 20260810-101010-mesh \
             --out "${work}/planned.json" >/dev/null 2>&1; then

@@ -1753,55 +1753,50 @@ fi
 command -v docker >/dev/null || die "docker not found"
 docker info >/dev/null 2>&1 || die "cannot talk to the docker daemon (is your user in the 'docker' group?)"
 
-# ── Resolve the artifacts dir ───────────────────────────────────────────────
-# A build SESSION is out/sessions/<stamp>/; several are usually empty shells
-# (a session dir is minted at wizard time, before any artifact lands), so
-# "newest" means newest that actually holds an image.
-newest_session_with_images() {
-    local d
-    while IFS= read -r d; do
-        if compgen -G "${d}/*.img" >/dev/null 2>&1 || compgen -G "${d}/*.img.xz" >/dev/null 2>&1; then
-            printf '%s\n' "${d}"; return 0
-        fi
-    done < <(ls -1dt "${REPO_DIR}"/out/sessions/*/ 2>/dev/null)
-    return 1
-}
-
-if [ -z "${ARTIFACTS}" ]; then
-    if [ -z "${SESSION}" ]; then
-        SESSION="$(newest_session_with_images || true)"
-        [ -n "${SESSION}" ] || die "no build session under out/sessions/ holds a .img or .img.xz — build first, or pass --artifacts DIR"
-    fi
-    ARTIFACTS="${SESSION}"
-fi
-ARTIFACTS="$(readlink -f "${ARTIFACTS}")"
-[ -d "${ARTIFACTS}" ] || die "artifacts dir not found: ${ARTIFACTS}"
-mkdir -p "${WORK}"
-WORK="$(readlink -f "${WORK}")"
-
 # ── Discover runnable rows from the artifacts actually present ──────────────
-# Artifact naming: hugmesh-<platform>-<arch>-<role>-<env>-<stamp>.img[.xz]
+# Artifact naming: <brand>-<platform>-<arch>-<role>-<env>-<stamp>.img[.xz]
 # <role> may itself contain '-' (standalone-thin), so parse from BOTH ends:
-# fields 1..2 are hugmesh+platform, the arch follows, and the last two fields
+# fields 1..2 are brand+platform, the arch follows, and the last two fields
 # before the extension are <env>-<stamp>.
+#
+# THE FIRST FIELD IS THE BRAND AND IT IS NOT ALWAYS "hugmesh". The builders name
+# artifacts ${BRAND}-… (build-rpi5-stage4.sh IMG_PATH, build-x86-host-stage4.sh
+# IMG_PATH) and BRAND is whatever --brand the build ran under: hugmesh only by
+# default, sdhm for the operator's own mesh, gentoo for an unaffiliated build.
+# This loop used to require the literal `hugmesh-` prefix, so a finished branded
+# mesh listed ZERO rows here and the Studio's picker (which mirrors this rule in
+# qemu_tests.parse_artifact_name) showed no session at all.
+#
+# What still rejects a foreign .img is the SHAPE, not the brand: six
+# '-'-separated fields and a trailing YYYYmmddTHHMMSSZ build stamp. Without the
+# field count the both-ends strip below happily "parses" a too-short name (e.g.
+# hugmesh-x86-be.img) into role==env; without the stamp anchor an arbitrary
+# six-word .img sitting in the dir would become a bootable row.
 discover_rows() {
+    # Optional DIR argument so the SESSION PICKER can ask the same question
+    # this function answers ("does this dir hold a runnable row?") instead of
+    # keeping a second, looser rule of its own. Defaults to ${ARTIFACTS} for
+    # the main enumeration below.
+    local dir="${1:-${ARTIFACTS}}"
     local f base rest platform arch role env stamp prefer
     local -a _fields
-    for f in "${ARTIFACTS}"/*.img "${ARTIFACTS}"/*.img.xz; do
+    for f in "${dir}"/*.img "${dir}"/*.img.xz; do
         [ -e "${f}" ] || continue
+        # A ZERO-BYTE .img is the builder's pre-partition placeholder from a run
+        # that was killed; booting it fails, and counting it makes an aborted
+        # build read as complete. Python applies the same rule (qemu_tests
+        # discover_rows, os.path.getsize).
+        [ -s "${f}" ] || continue
         base="$(basename "${f}")"
         base="${base%.xz}"; base="${base%.img}"
         case "${base}" in *kernel*|*initramfs*|*initrd*|*squashfs*) continue ;; esac
-        [[ "${base}" == hugmesh-* ]] || continue
         # Match the Python contract (studio/hugmesh_studio/core/qemu_tests.py
-        # parse_artifact_name): hugmesh+platform+arch+<role...>+env+stamp is at
-        # least 6 '-'-separated fields. Without this guard the both-ends strip
-        # below happily "parses" a too-short name (e.g. hugmesh-x86-be.img)
-        # into role==env, where the Python side refuses it — the divergence
-        # studio/tests/test_qemu_tests.py had to carve out.
+        # parse_artifact_name / _split_artifact_name).
         IFS='-' read -r -a _fields <<< "${base}"
         [ "${#_fields[@]}" -ge 6 ] || continue
-        rest="${base#hugmesh-}"
+        stamp="${base##*-}"
+        [[ "${stamp}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || continue
+        rest="${base#*-}"          # drop <brand>, whatever it is
         platform="${rest%%-*}"; rest="${rest#*-}"
         arch="${rest%%-*}";     rest="${rest#*-}"
         # rest is now "<role>-<env>-<stamp>"; strip the two trailing fields.
@@ -1814,7 +1809,6 @@ discover_rows() {
         # artifact — but the ROW must carry one spelling, the same one the Python
         # twin produces.
         role="$(hugmesh_role_canonicalize "${role}" || printf '%s' "${role}")"
-        stamp="${base##*-}"
         # Emit the sort key first, strip it after collapsing. Field 2 is
         # "1" for a decompressed .img so it outranks its own .img.xz.
         case "${f}" in *.xz) prefer=0 ;; *) prefer=1 ;; esac
@@ -1822,6 +1816,42 @@ discover_rows() {
             "${stamp}" "${prefer}" "${platform}" "${role}" "${env}" "${f}"
     done
 }
+
+# ── Resolve the artifacts dir ───────────────────────────────────────────────
+# A build SESSION is out/sessions/<stamp>/; several are usually empty shells
+# (a session dir is minted at wizard time, before any artifact lands), so
+# "newest" means newest that actually holds an image.
+# "Holds an image" must mean exactly what discover_rows means by it, or this
+# picker selects a session the row loop then refuses and the run dies at
+# "no runnable rows found" WITHOUT falling through to the older session that
+# holds a finished build — the very "your completed build is invisible" symptom
+# this resolver exists to prevent. Bare existence is not enough: a killed build
+# leaves a ZERO-BYTE .img placeholder behind, and a name that carries no
+# YYYYmmddTHHMMSSZ stamp is not an artifact we can boot. So ask discover_rows.
+# (Capture into a variable rather than `| grep -q`: pipefail is set, and a
+# SIGPIPE'd producer makes a FOUND match report failure.)
+newest_session_with_images() {
+    local d rows
+    while IFS= read -r d; do
+        rows="$(discover_rows "${d}")"
+        if [ -n "${rows}" ]; then
+            printf '%s\n' "${d}"; return 0
+        fi
+    done < <(ls -1dt "${REPO_DIR}"/out/sessions/*/ 2>/dev/null)
+    return 1
+}
+
+if [ -z "${ARTIFACTS}" ]; then
+    if [ -z "${SESSION}" ]; then
+        SESSION="$(newest_session_with_images || true)"
+        [ -n "${SESSION}" ] || die "no build session under out/sessions/ holds a bootable image — build first, or pass --artifacts DIR. (A zero-byte .img from a killed build, or a name with no YYYYmmddTHHMMSSZ stamp, does not count.)"
+    fi
+    ARTIFACTS="${SESSION}"
+fi
+ARTIFACTS="$(readlink -f "${ARTIFACTS}")"
+[ -d "${ARTIFACTS}" ] || die "artifacts dir not found: ${ARTIFACTS}"
+mkdir -p "${WORK}"
+WORK="$(readlink -f "${WORK}")"
 
 # ONE row per platform/role — newest stamp, then decompressed-over-compressed.
 #

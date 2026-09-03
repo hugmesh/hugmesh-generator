@@ -483,7 +483,8 @@ def test_ask13_defaults_that_change_the_build_are_the_single_flags(wiz):
       (ISO_CACHED x86:403, COMPRESS_IMG x86:242/rpi5:186/jetson:165, RESUME x86:207/
       rpi5:174/jetson:156) and each is a SINGLE positive flag, so flipping the ImageConfig
       default is exactly what puts it on the argv: --cached embeds the binpkg cache into
-      the live ISO, --compress xz -9's every artifact, --resume reuses the previous
+      the live ISO, --compress xz's the artifacts that builder compresses (the .img on
+      x86; --compress-level picks the preset, default 9), --resume reuses the previous
       sysroot instead of wiping it. This test is the record of that, so a later reader
       does not have to take the commit message's word for it."""
     build = advance_to(wiz, wizard_mod.BuildPage)

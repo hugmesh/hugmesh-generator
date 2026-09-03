@@ -63,7 +63,7 @@
         },
         "desktop_user": {
           "type": "string",
-          "description": "The PERSON on a desktop-class entry. materialize() stamps desktop_user_role as --person-role on this entry's own image and derives a manifest User on the internal orchestration superdomain. Node entries always leave this blank.",
+          "description": "The PERSON on a desktop-class entry. materialize() stamps desktop_user_role as --person-role on this entry's own image and derives a manifest User on the internal Tailscale root domain. Node entries always leave this blank.",
           "default": ""
         },
         "desktop_user_role": {
@@ -90,7 +90,7 @@
         "cluster_domain": { "type": "string" },
         "superdomain": {
           "type": "string",
-          "description": "Orchestration superdomain all mesh nodes join; \"\" = derived <brand>.internal. NON_ARGV: manifest + KEYS channel, never a builder flag; permanently internal (I7)."
+          "description": "Tailscale root domain all mesh nodes join; \"\" = derived <brand>.internal. NON_ARGV: manifest + KEYS channel, never a builder flag; permanently internal (I7)."
         },
         "domains": {
           "type": "array",
@@ -121,11 +121,18 @@
     },
     "user": {
       "type": "object",
+      "description": "One provisioning account. `role` is the PRIMARY role every consumer reads (the highest tier the account holds: superadmin > admin > mod > user, then games / games-services). `roles` (issue #228) is the FULL set the account holds, in that precedence order; it is OMITTED when the account holds exactly one role, so absent == [role] and a single-role row keeps its pre-#228 bytes. A reader that knows only `role` loses nothing it read before.",
       "additionalProperties": true,
       "properties": {
         "username": { "type": "string" },
         "domain": { "type": "string" },
         "role": { "type": "string" },
+        "roles": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
         "email": { "type": "string" }
       }
     }
