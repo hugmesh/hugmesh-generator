@@ -70,7 +70,7 @@ Reached only from Welcome's second card — nothing else routes into it. Its own
 - Saving defaults to `hugmesh-image.json`. It writes the envelope when a worklist exists, otherwise flat JSON. Only pages you actually visited are collected, so a page the flow skipped cannot leak stale values into the file.
 - Plaintext secrets are blanked on save — `local-pass`, `luks-pass`, `user-password`, `root-password`. A dialog names the ones that were dropped. Re-enter them before building from that file.
 
-**Previous builds** is a table below the buttons, with a free-text filter and a status dropdown above it. It hides itself completely when there is nothing to list, so a first run shows only the two buttons. It lists persisted build sessions newest-first, plus best-effort discovered `wl-<role>.<platform>` build directories at the top level of the out dir (status honestly `unknown`), plus any record file it could not parse. It refreshes on every visit to the screen — a build you just finished appears without restarting the Studio. Clicking a row opens that build in its own window.
+**Previous builds** is a table below the buttons, with a free-text filter and a status dropdown above it. It hides itself completely when there is nothing to list, so a first run shows only the two buttons. It lists persisted build sessions newest-first, plus best-effort discovered `wl-<role>.<platform>` build directories at the top level of the output directory (status honestly `unknown`), plus any record file it could not parse. It refreshes on every visit to the screen — a build you just finished appears without restarting the Studio. Clicking a row opens that build in its own window.
 
 Six actions:
 
@@ -215,7 +215,7 @@ Downstream: nothing. Terminal.
 
 Publishes an **already-built, already-packaged** x86 artifact. It does not build and it does not package: run `scripts/cloud-package.sh` first and point this page at its output (`.qcow2`, `.vhd`, `.img`).
 
-Asks: provider (read live from `hugmesh-cloud-deploy list`; Refresh re-reads it, and an empty combo means the driver is not present), image path, domain, region, either a path to a `0600` credentials file or pasted credentials, an out dir for rendered artifacts, a keys dir, and an identity-provider passthrough — Casdoor built-in by default, or Entra / Cognito / other OIDC, which enable issuer, client id and JWKS fields and make the plan emit `idp/idp.conf`.
+Asks: provider (read live from `hugmesh-cloud-deploy list`; Refresh re-reads it, and an empty combo means the driver is not present), image path, domain, region, either a path to a `0600` credentials file or pasted credentials, an output directory for rendered artifacts, a keys dir, and an identity-provider passthrough — Casdoor built-in by default, or Entra / Cognito / other OIDC, which enable issuer, client id and JWKS fields and make the plan emit `idp/idp.conf`.
 
 A read-only monospace pane previews the knobs, the exact plan command, and any blockers. It is pure: nothing runs until you pick a verb.
 
@@ -226,7 +226,7 @@ Four verbs:
 - **Apply** streams here, but only behind the "I understand APPLY executes the plan's emitted apply.sh against a REAL cloud account" tick, and only after `validate()` passes.
 - **Destroy** opens a terminal, where the driver's own confirmation runs.
 
-A fifth button, **Open artifacts folder**, just opens the out dir.
+A fifth button, **Open artifacts folder**, just opens the output directory.
 
 Pasted credentials are never persisted and never reach argv; a run stages them into a `0600 --creds-file` tempfile that is shredded afterwards.
 

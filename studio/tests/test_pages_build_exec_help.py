@@ -230,7 +230,9 @@ def test_jobs_help_keeps_the_promise_the_walkthrough_already_made(wiz):
     this host's cores and available memory, not a fixed number" — a claim that was
     nowhere on screen. host_resources.default_jobs: HUGMESH_BUILD_JOBS wins outright,
     else max(2, min(nproc, MemAvailable_GiB // 2)), else min(nproc, 8) when /proc/meminfo
-    is unreadable at all (Windows/WSL2, both supported targets)."""
+    is unreadable at all — native Windows/macOS, NOT WSL2: platform_info.py:15-16 makes
+    WSL2 the supported Windows route and it has a real /proc/meminfo, so it takes the
+    memory branch."""
     build = advance_to(wiz, wizard_mod.BuildPage)
     tip = build.jobs.toolTip()
     assert "HUGMESH_BUILD_JOBS" in tip, "does not name the override env var"
@@ -240,6 +242,11 @@ def test_jobs_help_keeps_the_promise_the_walkthrough_already_made(wiz):
         "does not say the default is derived from cores and memory"
     assert "ram" in low or "memory-tight" in low, \
         "does not warn that raising it costs memory"
+    # A WRONG token, not a missing one: the battery's mutations only delete, so nothing
+    # in it could catch the tooltip blaming the flat-8 fallback on WSL — the one platform
+    # where it CANNOT fire, because WSL2 is a real Linux kernel with /proc/meminfo.
+    assert "wsl" not in low or "not wsl2" in low, \
+        "attributes the flat-8 fallback to WSL, which reads /proc/meminfo fine"
 
 
 # ------------------------------------------------------- the rename, and its sweep
@@ -335,3 +342,59 @@ def test_the_review_page_stayed_sentence_cased():
     assert "Root image size" in labels, "harness stale: sentence-cased anchor is gone"
     assert "Output Directory" not in labels, \
         "Title Case landed piecemeal — sweep the whole page under #226 or none of it"
+
+
+_ABBREV = re.compile(r"(?i)\b(out|output)\s+dir\b")
+
+
+def _visible_strings(module_path):
+    """Every string literal in a page module EXCEPT docstrings, read out of the AST.
+
+    Docstrings are excluded deliberately: launch.py, progress.py and sessions_widget.py
+    discuss "the out dir" in prose that never reaches a widget, and failing on those
+    would push the next author to reword a comment instead of a label."""
+    tree = ast.parse(open(module_path, encoding="utf-8").read())
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)):
+            body = getattr(node, "body", None)
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                docstrings.add(id(body[0].value))
+    return [node.value for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+            and id(node) not in docstrings]
+
+
+def test_no_page_shows_the_abbreviation_anywhere_a_user_can_read_it():
+    """The row-label scan above is not the whole surface, and renaming ONLY row labels is
+    how a page ends up disagreeing with itself — the exact defect this PR cites as its
+    reason for touching FleetPage (row "Output dir" vs its own picker "Output directory").
+
+    DeployPage had it in three more places that _row_labels cannot see, because they are
+    not row captions: a button tooltip, an action tooltip, and a bare QFileDialog caption
+    that is not routed through _file_picker. So scan every non-docstring literal."""
+    offenders = {}
+    for fn in sorted(os.listdir(PAGES_DIR)):
+        if not fn.endswith(".py"):
+            continue
+        bad = [s for s in _visible_strings(os.path.join(PAGES_DIR, fn))
+               if _ABBREV.search(s)]
+        if bad:
+            offenders[fn] = bad
+    assert not offenders, f"abbreviated output-directory text left on a page: {offenders}"
+
+
+def test_the_cloud_plan_preview_agrees_with_the_field_it_describes():
+    """cloud_deploy.preview() is rendered INTO DeployPage (deploy.py, plan_view), so its
+    text is on the same screen as the row this PR renamed. It stays column-aligned — the
+    keys pad to 12 and the sibling key is "keys dir:" — but it must not say "out dir"
+    while the field above it says "Output directory"."""
+    src = open(os.path.join(GENERATOR_DIR, "studio", "hugmesh_studio", "core",
+                            "cloud_deploy.py"), encoding="utf-8").read()
+    assert "out dir:" not in src, \
+        "the plan preview still labels the field 'out dir:' under a renamed row"
+    assert "into the out dir" not in src, \
+        "the plan preview's numbered steps still abbreviate the output directory"

@@ -211,7 +211,7 @@ class DeployPage(QtWidgets.QWizardPage):
         self.plan_btn = QtWidgets.QPushButton("Plan (render artifacts)")
         self.plan_btn.setToolTip(
             "Run the driver's plan verb: render the provider's artifacts OFFLINE "
-            "into the out dir. No cloud API is touched.")
+            "into the output directory. No cloud API is touched.")
         self.plan_btn.clicked.connect(lambda: self._run_stream("plan", "Planning"))
         brow.addWidget(self.plan_btn)
         self.apply_btn = QtWidgets.QPushButton("Apply")
@@ -238,7 +238,8 @@ class DeployPage(QtWidgets.QWizardPage):
         self.cancel_btn.setVisible(False)
         brow.addWidget(self.cancel_btn)
         self.open_btn = QtWidgets.QPushButton("Open artifacts folder")
-        self.open_btn.setToolTip("Open the out dir holding the rendered plan artifacts.")
+        self.open_btn.setToolTip(
+            "Open the output directory holding the rendered plan artifacts.")
         self.open_btn.clicked.connect(self._open_artifacts)
         brow.addWidget(self.open_btn)
         brow.addStretch(1)
@@ -321,7 +322,7 @@ class DeployPage(QtWidgets.QWizardPage):
 
     def _browse_out(self):
         d = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Plan artifacts out dir", self.out_dir.text())
+            self, "Plan artifacts output directory", self.out_dir.text())
         if d:
             self.out_dir.setText(d)
 

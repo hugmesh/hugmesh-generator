@@ -178,7 +178,8 @@ _FLAG_TIP = ("Two-state: checked = --flag, unchecked = --no-flag. There is no "
 _BACKEND_HELP = (
     "<qt><p>How the builder script runs.</p>"
     "<p><b>auto</b> resolves against this host: <b>native</b> on a Gentoo Linux host "
-    "with bash, <b>docker</b> otherwise.</p>"
+    "with bash, <b>docker</b> wherever a Docker daemon is reachable, and nothing at "
+    "all on a host with neither — the Welcome screen says so first.</p>"
     "<p><b>native</b> runs the script directly on this machine — fastest, but it "
     "builds a chroot, so it needs root. The Studio prepends sudo or pkexec itself "
     "(expect an authentication prompt); preflight blocks the build only when neither "
@@ -228,8 +229,12 @@ _OUTDIR_HELP = (
 # -j, passed on every backend (build_driver.py:348/363). The ARRIVING value comes from
 # host_resources.default_jobs(): HUGMESH_BUILD_JOBS wins outright, else
 # max(2, min(nproc, MemAvailable_GiB // 2)), else min(nproc, 8) when /proc/meminfo is
-# unreadable at all (Windows/WSL) — and fresh configs ONLY, a loaded config keeps its
-# saved "jobs". docs/STUDIO-WALKTHROUGH.md already promises the operator that this
+# unreadable at all — and that is native Windows/macOS ONLY, NOT WSL2: platform_info.py
+# :15-16 makes WSL2 the supported way to run this Studio on Windows and it is a real
+# Linux kernel, so it reads /proc/meminfo fine and takes the MEMORY branch. host_resources
+# says so itself three times (:19, :52, :133, all "Windows/macOS"). Fresh configs ONLY,
+# a loaded config keeps its saved "jobs".
+# docs/STUDIO-WALKTHROUGH.md already promises the operator that this
 # default "is derived from this host's cores and available memory, not a fixed number",
 # so the tooltip is where that promise is actually kept. The docker memory cap is
 # host_resources.build_memory_flag()/HUGMESH_BUILD_MEMORY (build_driver.py:144).
@@ -239,8 +244,9 @@ _JOBS_HELP = (
     "<p>The value you arrive on is derived from THIS host, not a fixed number: about "
     "<tt>max(2, min(cores, available GiB / 2))</tt>, i.e. roughly 2 GiB of headroom per "
     "job, falling back to <tt>min(cores, 8)</tt> where memory cannot be read at all "
-    "(Windows/WSL). <tt>HUGMESH_BUILD_JOBS</tt> overrides it outright, and a config you "
-    "load keeps the number it was saved with.</p>"
+    "(native Windows or macOS — not WSL2, which has a real <tt>/proc/meminfo</tt> and "
+    "takes the memory rule). <tt>HUGMESH_BUILD_JOBS</tt> overrides it outright, and a "
+    "config you load keeps the number it was saved with.</p>"
     "<p>Raising it costs CPU and a lot more RAM; lower it on a memory-tight host. A "
     "docker build additionally runs under a container memory cap "
     "(<tt>HUGMESH_BUILD_MEMORY</tt>) that protects the host; a native build has no such "
