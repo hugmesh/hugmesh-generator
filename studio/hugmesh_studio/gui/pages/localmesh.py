@@ -70,7 +70,7 @@ from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from .. import console
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
-from ...core import vaults
+from ...core import saved_meshes, vaults
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
 from ...core.e2e_catalogue import Catalogue, load_catalogue
 from ...core.egress_conf import validate_egress_conf
@@ -93,6 +93,7 @@ from ...core import e2e_environments
 from ._credentials_dialog import CredentialsDialog
 from ._mesh_monitor_widget import MeshMonitorWidget
 from ._add_user_dialog import AddUserDialog
+from ._saved_meshes_widget import SavedMeshProbe, SavedMeshesWidget
 from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
 from ._widgets import _row, collapsible, label_finish_as_exit, own_probe, probe_running
@@ -130,6 +131,27 @@ def _grey_note(text: str) -> "QtWidgets.QLabel":
     lbl.setWordWrap(True)
     lbl.setStyleSheet("color: gray;")
     return lbl
+
+
+#: What LoginThemeGroup.load() reads when a saved-mesh record carries no theme
+#: inputs: the shipped brand. Keys are ImageConfig's login_* names (the group's
+#: own load/commit contract) — ALL seventeen that commit() writes, because
+#: apply_bootstrap filters the record's form against this dict. Listing only
+#: the eight colour/font keys silently threw away the nine web-chrome inputs on
+#: every Load/Restore (header hidden, header/footer colours, background effect),
+#: derived a different login page, and then reported "every field applied".
+#: Chrome falls back inside load() itself, so "" / False are the shipped page.
+_THEME_FORM_DEFAULTS = {
+    "login_theme_preset": "", "login_theme_mode": "dark",
+    "login_primary_color": "", "login_secondary_color": "",
+    "login_font": "", "login_font_file": "",
+    "login_font_licence": "", "login_font_source": "",
+    "login_header_hidden": False, "login_header_size": "",
+    "login_header_bg": "", "login_header_text": "",
+    "login_footer_hidden": False, "login_footer_size": "",
+    "login_footer_bg": "", "login_footer_text": "",
+    "login_bg_effect": "",
+}
 
 
 _IDP_JWKS_HINTS = {
@@ -411,6 +433,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._added_user_specs: list[str] = []
         self._running = False
         self._running_label = ""
+        # apply_bootstrap() in flight: _refresh_plan returns early so the plan
+        # preview re-renders ONCE at the end, not once per setter (ask C).
+        self._applying_bootstrap = False
         # The e2e gate's last ANSWER, kept so an open feature tree can be gated by
         # the same sentences the button's tooltip carries. Starts non-empty on
         # purpose: before any probe reports, "nothing established" must read as a
@@ -581,6 +606,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # Run the gate ONCE now that every widget it touches exists, so
         # 'Generate & start' is armed (and carries its tooltip) from first paint.
         self._sync_boot_gate()
+        # Saved meshes (ask C): the last `_mesh_up` the table was re-probed for —
+        # a verb that changes what is on disk (stop, clean, start) flips it, and
+        # that flip is what re-checks every row's "Restores as" off-thread.
+        self._saved_last_up: bool | None = None
+        self._sync_saved_gate()
         # …and the monitor's, so it is greyed with "checking…" (never empty-but-
         # enabled) from first paint. No probe: that rides _on_mesh_state.
         self._sync_monitor_gate()
@@ -615,6 +645,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # invited a second bring-up over a live stack (operator report
         # 2026-08-14). Probe the real compose project instead of assuming.
         self._probe_mesh_state()
+        # Saved meshes: a directory listing + JSON parses (no subprocess); the
+        # per-row docker/git facts ride the off-thread _saved_probe it kicks off.
+        self.saved_meshes.refresh()
         # The monitor adds NO probe here: its first snapshot rides _on_mesh_state's
         # slot, which keeps "entering the page returns immediately" provable.
         self._sync_monitor_gate()
@@ -1011,6 +1044,23 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "when you enter this page and after every verb finishes.")
         lay.addWidget(self._mesh_state_label)
 
+        # ── SAVED MESHES (ask C) — ABOVE the Actions row on purpose: the operator
+        # asked for the table to be in front of them when they try to generate a
+        # new mesh, so it sits between "what is running" and "Generate && start".
+        # Collapsed when empty (with a VISIBLE grey line, never a hidden widget),
+        # auto-expanded when records exist; a manual fold wins for the session
+        # (Collapsible.set_default_expanded). Every docker/git call the rows need
+        # runs on _saved_probe, off-thread — the widget itself only renders.
+        self.saved_meshes = SavedMeshesWidget(self)
+        self.saved_meshes.generator_dir = self.generator_dir
+        self.saved_section = collapsible("Saved meshes", self.saved_meshes,
+                                         expanded=False)
+        self.saved_meshes.section = self.saved_section
+        self.saved_meshes.start_requested.connect(self._start_saved)
+        self.saved_meshes.load_requested.connect(self._load_saved)
+        self.saved_meshes.probe_needed.connect(self._probe_saved)
+        lay.addWidget(self.saved_section)
+
         # A WRAPPING block, not a row. These fourteen actions in a QHBoxLayout
         # made the page's minimum width the SUM of all fourteen buttons — wider
         # than a laptop screen, so everything past "Generate && start" drifted
@@ -1023,9 +1073,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.boot_start_btn.clicked.connect(self._bootstrap_up)
         self.boot_down_btn.clicked.connect(self._bootstrap_down)
         self.boot_down_btn.setToolTip(
-            "`make stack-down` + stop the mesh overlay: every container goes away "
-            "and the stack's data volumes are dropped. The IMAGES stay, so the next "
-            "start is a warm (fast) bring-up.")
+            "`make stack-halt` + stop the mesh overlay: every container stops and "
+            "the stack's data volumes are KEPT (identity, rooms, accounts, the BFF "
+            "databases), so 'Start' on a saved mesh — or the next 'Generate && "
+            "start' — reattaches them. The IMAGES stay too, so the next start is a "
+            "warm (fast) bring-up. 'Stop && clean Docker…' is the one that drops "
+            "volumes.")
         brow.addWidget(self.boot_start_btn)
         brow.addWidget(self.boot_down_btn)
         # Disk reclamation, separated from Stop on purpose: stopping is routine,
@@ -1194,6 +1247,26 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "you how to start it rather than showing an empty list.")
         self.vaults_btn.clicked.connect(self._open_vaults)
         brow.addWidget(self.vaults_btn)
+        # ── save the RUNNING mesh (ask C) ─────────────────────────────────────
+        # Gated by _sync_saved_gate (this page's own `_mesh_up`, never a monitor
+        # snapshot): a record of a mesh that is not running would describe
+        # nothing. The copy-credentials box is OFF by default — the operator's
+        # own wording was "credential pointers" — and the consequence of leaving
+        # it off is stated in the table's "Restores as" column, not hidden.
+        self.save_mesh_btn = QtWidgets.QPushButton("Save this mesh")
+        self.save_mesh_btn.clicked.connect(self._save_mesh)
+        brow.addWidget(self.save_mesh_btn)
+        self.save_copy_creds = QtWidgets.QCheckBox(
+            "Also copy its credential files into the record")
+        self.save_copy_creds.setChecked(False)
+        self.save_copy_creds.setToolTip(
+            "OFF (default): the record keeps only POINTERS to .e2e-credentials and "
+            "keys-out/vault/secrets.json (paths, hashes, mtimes) — no password ever "
+            "enters the record. ON: both files are ALSO copied into the record's "
+            "own folder under the Studio state dir at 0600, which is what brings "
+            "the SAME accounts and passwords back after 'Stop && clean Docker' "
+            "(the next 'Generate && start' re-mints them otherwise).")
+        brow.addWidget(self.save_copy_creds)
         # ── the DEVOPS lane (Kubernetes) ────────────────────────────────────
         # ArgoCD + the workload console are k8s CONTROLLERS — no compose profile
         # can host them (core/local_services.MECH_KIND). These two buttons drive
@@ -1455,6 +1528,101 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             # uses, and for the same reason.
             kind_addons=self.collect_kind_addons(),
         )
+
+    def theme_form(self) -> dict:
+        """The Themes group's INPUTS (colours, preset, mode, font, chrome) — what a
+        saved-mesh record needs to re-populate widgets whose config field is
+        DERIVED: ``login_theme_css`` is their output and is not invertible."""
+        ns = types.SimpleNamespace()
+        self.login_theme.commit(ns)
+        return dict(vars(ns))
+
+    def apply_bootstrap(self, cfg: LocalMeshBootstrapConfig,
+                        form: dict | None = None) -> list[str]:
+        """The exact inverse of :meth:`collect_bootstrap`: put ``cfg`` into the
+        BOOTSTRAP tab's widgets. Returns the field NAMES it could not apply, for
+        the caller to render inline (never a modal): ``auth_key`` always (never
+        stored — the widget is left exactly as typed), ``services``/``kind_addons``
+        when the record says None (no picker was used — the boxes keep their state,
+        because None is not ()), a ``source_dir`` that no longer exists, an egress
+        conf that moved, a theme with no form inputs, and the fields this page has
+        no control for. Touches the bootstrap tab only, and refreshes the plan
+        preview ONCE at the end — ``_refresh_plan`` returns early while
+        ``_applying_bootstrap`` is set, so ~40 setters do not re-render it."""
+        missing: list[str] = []
+        self._applying_bootstrap = True
+        try:
+            (self.env_prod if cfg.env == "prod" else self.env_test).setChecked(True)
+            self.brand.setCurrentText(cfg.brand)
+            if cfg.source_mode == "existing":
+                self.src_existing.setChecked(True)
+            else:
+                self.src_clone.setChecked(True)
+            self.src_dir.setText(cfg.source_dir)
+            if (cfg.source_mode == "existing" and cfg.source_dir
+                    and not os.path.isdir(cfg.source_dir)):
+                missing.append("source_dir")
+            self.superadmin.setText(cfg.superadmin_username or "superadmin")
+            # The two legacy booleans first (a CLI-made record with no picker),
+            # then the explicit selection — which is authoritative — wins.
+            self.social.setChecked(bool(cfg.social))
+            self.with_tor.setChecked(bool(cfg.with_tor))
+            if cfg.services is None:
+                missing.append("services")
+            else:
+                chosen = set(cfg.services)
+                for slug, box in self.service_boxes.items():
+                    box.setChecked(slug in chosen)
+            # The egress-vpn row only means anything with a valid conf behind
+            # it (the fail-closed rule): re-validate the recorded PATH now.
+            self._egress_vpn_conf = ""
+            self.egress_note.setVisible(False)
+            box = self.service_boxes.get("egress-vpn")
+            if box is not None and box.isChecked():
+                kind, err = validate_egress_conf(cfg.egress_vpn_conf)
+                if err:
+                    box.setChecked(False)
+                    missing.append("egress_vpn_conf")
+                    self.egress_note.setStyleSheet("color: #c62828;")
+                    self.egress_note.setText(f"Egress VPN stays off — {err}")
+                else:
+                    self._egress_vpn_conf = cfg.egress_vpn_conf
+                    self.egress_note.setStyleSheet("color: gray;")
+                    self.egress_note.setText(
+                        f"Egress VPN config: "
+                        f"{os.path.basename(cfg.egress_vpn_conf)} ({kind}).")
+                self.egress_note.setVisible(True)
+            self.web_locales.setText(", ".join(cfg.web_locales))
+            # THEME: the record's `form` carries the group's inputs; without them a
+            # non-empty derived css cannot be reproduced, so the group is reset to
+            # the shipped brand and the field is reported rather than half-applied.
+            theme_ns = dict(_THEME_FORM_DEFAULTS)
+            if form:
+                theme_ns.update({k: v for k, v in form.items() if k in theme_ns})
+            elif cfg.login_theme_css.strip():
+                missing.append("login_theme_css")
+            self.login_theme.load(types.SimpleNamespace(**theme_ns))
+            idx = self.idp.findData(cfg.idp if cfg.idp in IDP_CHOICES else "casdoor")
+            self.idp.setCurrentIndex(max(0, idx))
+            self.idp_issuer.setText(cfg.idp_issuer)
+            self.idp_client_id.setText(cfg.idp_client_id)
+            self.idp_jwks.setText(cfg.idp_jwks)
+            self.boot_domain.setText(cfg.cluster_domain)
+            self.boot_login_server.setText(cfg.login_server)
+            missing.append("auth_key")          # never stored; left as typed
+            if cfg.kind_addons is None:
+                missing.append("kind_addons")
+            else:
+                chosen = set(cfg.kind_addons)
+                for slug, box in self.kind_addon_boxes.items():
+                    box.setChecked(slug in chosen)
+            for name in ("out_dir", "node_name", "own_idp_domains"):
+                if getattr(cfg, name):
+                    missing.append(name)
+        finally:
+            self._applying_bootstrap = False
+        self._refresh_plan()
+        return missing
 
     def collect_kind_addons(self) -> tuple[str, ...]:
         """The ticked DevOps-lane add-ons, in catalogue order (never widget order).
@@ -1852,6 +2020,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # through the one gate rather than the blanket loop above.
         self._sync_boot_gate()
         self._sync_e2e_gate()
+        self._sync_saved_gate()
 
     # ── JOIN handlers ────────────────────────────────────────────────────────────
     def _refresh_status(self):
@@ -1903,6 +2072,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     # ── BOOTSTRAP handlers ───────────────────────────────────────────────────────
     def _refresh_plan(self):
+        if getattr(self, "_applying_bootstrap", False):
+            return                      # apply_bootstrap refreshes once at its end
         prod = self.env_prod.isChecked()
         self.prod_group.setVisible(prod)
         self.src_dir.setEnabled(self.src_existing.isChecked())
@@ -2007,8 +2178,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.boot_start_btn.setToolTip(
             "Mint credentials and bring up the whole local mesh on THIS machine. On "
             "a cold box this also builds the maven prerequisites first, "
-            "automatically. Undone from this page: 'Stop mesh' drops the containers "
-            "and volumes (in prod it also detaches the overlay)."
+            "automatically. Undone from this page: 'Stop mesh' stops the containers "
+            "and KEEPS the volumes (in prod it also detaches the overlay); 'Stop && "
+            "clean Docker…' drops them."
             if idle else
             "Disabled while a verb is running — wait for it to finish, or Cancel.")
 
@@ -2204,6 +2376,193 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                      lambda on_line, cancel: node.devops_down(on_line=on_line,
                                                               cancel=cancel),
                      stream=True, cancellable=True, verb="devops-down")
+
+    # ── saved meshes (ask C): save / probe / start / load ─────────────────────
+    def _sync_saved_gate(self):
+        """The ONE writer for 'Save this mesh' and the saved-meshes table's gate,
+        driven by this page's own tri-state ``_mesh_up`` — deliberately NOT by any
+        monitor snapshot (that would couple two lanes for one boolean). Called
+        from the tail of _set_verbs_enabled, which owns the greyed-with-a-reason
+        idiom, and once at construction."""
+        up = self._mesh_up
+        idle = not self._running
+        on = idle and up is True
+        self.save_mesh_btn.setEnabled(on)
+        self.save_copy_creds.setEnabled(on)
+        if not idle:
+            tip = "Disabled while a verb is running — wait for it to finish, or Cancel."
+        elif up is None:
+            tip = "Checking whether a local mesh is running…"
+        elif up is False:
+            tip = ("Disabled — no local mesh is running; there is nothing to save. "
+                   "(Checked on entry; re-checked after every verb.)")
+        else:
+            tip = ("Record the RUNNING mesh so it can be started or restored from "
+                   "the 'Saved meshes' table instead of generated from scratch: its "
+                   "configuration, the env it exports, the overlay text, the "
+                   "per-repo source HEADs, the doors, the accounts' names and roles, "
+                   "credential POINTERS (paths, hashes — never a password) and an "
+                   "INVENTORY of its data volumes. The volumes' contents are NOT "
+                   "saved: multi-GB, a consistent copy needs the stack halted, "
+                   "'Stop mesh' keeps them anyway, and casdoor-pg is an identity "
+                   "database. Runs off-thread; the mesh is not touched.")
+        self.save_mesh_btn.setToolTip(tip)
+        self.saved_meshes.set_context(mesh_up=up, busy=not idle)
+        if idle and up is not None and up != self._saved_last_up:
+            # a verb changed what is on disk — re-check every row's plan
+            self._saved_last_up = up
+            self._probe_saved(self.saved_meshes.records())
+
+    def _probe_saved(self, records):
+        """Kick off the off-thread per-record probe (docker volumes/images/ps + a
+        git rev-parse per source repo). Re-entrant-safe: an in-flight probe is
+        left alone rather than stacking threads."""
+        recs = list(records or [])
+        if not recs or probe_running(self, "_saved_probe"):
+            return
+        probe = own_probe(self, "_saved_probe", SavedMeshProbe(recs, parent=self))
+        probe.result.connect(self._on_saved_probe)
+        # AFTER own_probe's own `finished` handlers (which clear the attribute),
+        # so the in-flight guard above is already False when this runs.
+        probe.finished.connect(self._saved_probe_finished)
+        probe.start()
+
+    def _on_saved_probe(self, results):
+        self.saved_meshes.apply_probe(results or {})
+
+    def _saved_probe_finished(self):
+        """A record saved (or scanned) WHILE a probe was out was skipped by the
+        in-flight guard and would sit on "Checking…" until the next `_mesh_up`
+        flip; ask again for exactly those."""
+        pending = self.saved_meshes.unprobed()
+        if pending:
+            self._probe_saved(pending)
+
+    def _save_mesh(self):
+        """Record the running mesh — through _launch, so it inherits the busy
+        guard, the staged view, the run log and the buttons' re-arm. The capture
+        is docker + git + two sha256s and runs on the worker; nothing here touches
+        the mesh. No credential VALUE reaches a log line: the worker prints the
+        record id and path, and whether files were copied or only pointed at."""
+        if self._mesh_up is not True:
+            self.status.setText("Nothing to save: no local mesh is running "
+                                "(checked on entry and after every verb).")
+            return
+        boot = self.boot
+        node = boot._stack_node()
+        gen = self.generator_dir
+        copy = self.save_copy_creds.isChecked()
+        users = list(self._added_user_specs)
+        form = self.theme_form()
+
+        def capture(on_line, cancel):
+            rec = saved_meshes.capture(gen, boot.cfg, node, boot,
+                                       copy_credentials=copy, extra_users=users,
+                                       form=form)
+            path = saved_meshes.save(rec)
+            if not path:
+                on_line("[mesh-save] FAILED: the record could not be written under "
+                        f"{saved_meshes.meshes_dir()} (is the Studio state dir "
+                        "writable?). The mesh is untouched.")
+                return False, []
+            on_line(f"[mesh-save] saved '{rec.label}' as {rec.id} -> {path}")
+            on_line(f"[mesh-save] {rec.volume_count()} data volume(s) inventoried, "
+                    "not copied; credential files "
+                    + ("copied into the record's folder at 0600" if copy else
+                       "recorded as pointers only (paths, hashes, mtimes)"))
+            return True, []
+
+        before = self.worker
+        self._note("[mesh-save] recording the running mesh …")
+        self._launch("Saving mesh", capture, stream=True, cancellable=False, verb="")
+        if self.worker is not None and self.worker is not before:
+            # after _verb_done (connected first): the table re-scans the disk
+            self.worker.done.connect(self._on_saved_captured)
+
+    def _on_saved_captured(self, _ok: bool):
+        self.saved_meshes.refresh()
+
+    _NOT_APPLIED_WHY = {
+        "auth_key": "auth key (never stored — re-enter it for a prod mesh)",
+        "services": "services (saved without a picker selection — the boxes keep "
+                    "their current state)",
+        "kind_addons": "DevOps add-ons (saved without a selection — the boxes keep "
+                       "their current state)",
+        "source_dir": "source tree (the recorded directory no longer exists)",
+        "egress_vpn_conf": "egress VPN config (the file moved or is invalid — the "
+                           "egress-vpn row was unticked)",
+        "login_theme_css": "theme (the record carries only the derived CSS — the "
+                           "Themes group was reset to the shipped brand)",
+        "out_dir": "out_dir (this page has no control for it)",
+        "node_name": "node_name (this page has no control for it)",
+        "own_idp_domains": "own-Casdoor domains (this page has no control for them)",
+    }
+
+    def _not_applied_text(self, rec, missing: list[str]) -> str:
+        label = rec.label or rec.id
+        if not missing:
+            return f"Loaded '{label}' into the form; every field applied."
+        why = [self._NOT_APPLIED_WHY.get(m, m) for m in missing]
+        return f"Loaded '{label}' into the form. Not applied: " + "; ".join(why) + "."
+
+    def _load_saved(self, rec):
+        cfg = LocalMeshBootstrapConfig.from_dict(rec.config)
+        missing = self.apply_bootstrap(cfg, form=rec.form)
+        self.saved_meshes.set_note(self._not_applied_text(rec, missing))
+
+    def _start_saved(self, rec, mode: str):
+        """Bring a saved mesh back. Case 1 (volumes + images present) runs
+        ``boot.start_saved`` — ``stack.start()`` only, no re-mint, no re-seed.
+        Case 2 (volumes gone) runs ``boot.restore`` — the up() sequence MINUS
+        generate_creds, seeded from the record's pointers/copies. NEVER
+        ``_bootstrap_up``: that re-mints secrets.json and invalidates the very
+        record being restored. ``verb=""`` deliberately: verb_phases("up") draws a
+        mint-and-seed ladder neither walks, and staging against it would render a
+        ladder that never completes."""
+        if self._running:
+            self.status.setText(f"Still running: {self._running_label or 'a verb'}. "
+                                "Wait for it to finish, or Cancel.")
+            return
+        if self._mesh_up is True:
+            self.status.setText("A local mesh is running — stop it first. Starting "
+                                "a saved mesh over a live one would bring up a "
+                                "second stack on the same compose project.")
+            return
+        cfg = LocalMeshBootstrapConfig.from_dict(rec.config)
+        missing = self.apply_bootstrap(cfg, form=rec.form)
+        self.saved_meshes.set_note(self._not_applied_text(rec, missing))
+        # The RECORD's config is what runs — never the form's re-collection,
+        # which would turn a CLI-made record's services=None (profile defaults)
+        # into whatever the boxes happen to hold, and an egress conf that moved
+        # into a mesh silently started WITHOUT its VPN (validate() below refuses
+        # that instead: fail-closed). The one field a record never carries comes
+        # from the form: a prod restore needs the auth key the operator typed.
+        cfg.auth_key = self.boot_auth_key.text().strip()
+        self.boot = LocalMeshBootstrap(self.generator_dir, cfg)
+        if self.login_theme.error_text():
+            self.status.setText("Cannot start the saved mesh: themes: "
+                                + self.login_theme.error_text())
+            return
+        problems = self.boot.validate()
+        if problems:
+            self.status.setText("Cannot start the saved mesh: " + "; ".join(problems))
+            return
+        boot = self.boot
+        label = rec.label or rec.id
+        if mode == saved_meshes.MODE_START:
+            self._note(f"[saved-mesh] starting '{label}' — reattaching its data "
+                       "volumes; nothing is re-minted or re-seeded …")
+            self._launch(f"Starting saved mesh {label}",
+                         lambda on_line, cancel: boot.start_saved(
+                             rec, on_line=on_line, cancel=cancel),
+                         stream=True, cancellable=True, verb="")
+        else:
+            self._note(f"[saved-mesh] restoring '{label}' — bringing the stack up "
+                       "and seeding it again; credentials are NOT re-minted …")
+            self._launch(f"Restoring saved mesh {label}",
+                         lambda on_line, cancel: boot.restore(
+                             rec, on_line=on_line, cancel=cancel),
+                         stream=True, cancellable=True, verb="")
 
     def _open_vaults(self):
         """Open the Vaults & managed-volumes manager.

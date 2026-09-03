@@ -40,6 +40,7 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 from types import SimpleNamespace                                   # noqa: E402
 
 from hugmesh_studio.core import local_mesh_bootstrap as lmb         # noqa: E402
+from hugmesh_studio.core import saved_meshes                        # noqa: E402
 from hugmesh_studio.core.mesh_node import MeshNode, MeshStatus      # noqa: E402
 from hugmesh_studio.gui.pages import localmesh as localmesh_mod     # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets                         # noqa: E402
@@ -101,6 +102,14 @@ def page(qapp, monkeypatch):
 
     monkeypatch.setattr(MeshNode, "status", slow_node_status)
     monkeypatch.setattr(lmb.LocalMeshBootstrap, "_stack_node", lambda self: stack)
+
+    # The saved-meshes probe (ask C): docker volume/ps/images + git per record.
+    # Parked on the same gate so a record on disk can never make page entry wait.
+    def slow_probe_state(rec, project=""):
+        stack.threads.append(threading.get_ident())
+        stack.gate.wait(10)
+        return {"volumes_present": True, "images_present": True}
+    monkeypatch.setattr(saved_meshes, "probe_state", slow_probe_state)
     p = localmesh_mod.LocalMeshPage(
         SimpleNamespace(generator_dir=GENERATOR_DIR, cfg=SimpleNamespace(),
                         localmesh_selected=True))
@@ -108,7 +117,7 @@ def page(qapp, monkeypatch):
     yield p
     # Never let a live QThread outlive its page: destroying one aborts under Qt.
     stack.gate.set()
-    for name in ("_probe", "_node_probe", "_e2e_probe", "_creds_probe", "_monitor_probe"):
+    for name in _PROBE_ATTRS:
         t = getattr(p, name, None)
         if t is not None:
             t.wait(5000)
@@ -116,7 +125,10 @@ def page(qapp, monkeypatch):
     p.deleteLater()
 
 
-_PROBE_ATTRS = ("_probe", "_node_probe", "_e2e_probe", "_creds_probe", "_monitor_probe")
+# Every probe QThread the page can own. A lane that adds a probe MUST add its
+# attribute here: omitting one leaves a live QThread outliving its page, which
+# aborts Qt at teardown.
+_PROBE_ATTRS = ("_probe", "_node_probe", "_e2e_probe", "_creds_probe", "_saved_probe", "_monitor_probe")
 
 
 def _settle(qapp, page, timeout_s=8.0):
@@ -233,3 +245,40 @@ def test_a_blocked_gate_never_arms_the_e2e_button(qapp, page):
     _settle(qapp, page)
     assert not page.e2e_btn.isEnabled()
     assert "not running" in page.e2e_btn.toolTip()
+
+
+def test_twenty_saved_records_do_not_slow_page_entry(qapp, page):
+    """Ask C: the saved-meshes table is rebuilt on entry (a directory listing +
+    JSON parses), and every docker/git fact it needs rides an off-thread probe.
+    With 20 records on disk initializePage must still return inside the budget,
+    and the probe must run off the GUI thread."""
+    for i in range(20):
+        rec = saved_meshes.SavedMesh(id=f"20260101-0000{i:02d}-abcdef",
+                                     label=f"mesh {i}")
+        rec.volumes = {"included": False, "inventory": [{"name": "v"}]}
+        assert saved_meshes.save(rec)
+
+    t0 = time.monotonic()
+    page.initializePage()
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < _PROBE_S / 2, (
+        f"initializePage blocked for {elapsed:.2f}s with 20 saved records")
+    assert page.saved_meshes.record_count() == 20
+    assert page.saved_section.is_expanded()
+    assert page._saved_probe.isRunning()
+    # "Checking…" while it is out — never "gone"
+    from hugmesh_studio.gui.pages import _saved_meshes_widget as smw
+    assert "Checking" in page.saved_meshes.table.item(0, smw._SM_COL_RESTORE).text()
+
+    page.stack.gate.set()
+    _settle(qapp, page)
+    assert threading.get_ident() not in page.stack.threads
+    # The probe answered, so the row is no longer "Checking…". This fixture's
+    # stack reports running=True, so the honest answer is "Blocked — stop it
+    # first" — a Start is never offered over a live mesh — while the Volumes
+    # column still states what the probe found.
+    text = page.saved_meshes.table.item(0, smw._SM_COL_RESTORE).text()
+    assert "Checking" not in text
+    assert text.startswith("Blocked") and "running" in text
+    assert page.saved_meshes.table.item(0, smw._SM_COL_VOLUMES).text() == "1 present"

@@ -315,7 +315,11 @@ def test_stop_reports_what_it_stopped_when_something_was_running(monkeypatch, tm
     monkeypatch.setattr(MeshNode, "stop", lambda self: (True, "not started"), raising=True)
     ok, log = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(out_dir=str(tmp_path))).down()
     line = next(ln for ln in log if ln.startswith("[stack-down]"))
-    assert "44 container(s)" in line and "dropped its volumes" in line
+    # stop() is `make stack-halt` (LocalStackNode.stop): the volumes are KEPT, and
+    # the line used to claim the opposite — the whole warm-restore case of the
+    # saved-mesh lane depends on the true behaviour being stated.
+    assert "44 container(s)" in line and "kept its volumes" in line
+    assert "dropped" not in line
 
 
 def test_a_failed_stop_still_shows_the_error_tail(monkeypatch, tmp_path):
