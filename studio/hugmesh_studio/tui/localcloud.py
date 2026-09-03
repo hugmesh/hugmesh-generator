@@ -131,7 +131,7 @@ class LocalCloudScreen:
 
     def __init__(self):
         self._domain = ""
-        self._users: list[tuple[str, str]] = []
+        self._users: list[tuple[str, list[str]]] = []
 
     def enter(self, j) -> None:
         # re-read on EVERY forward entry (the mesh may have been re-bootstrapped
@@ -141,7 +141,9 @@ class LocalCloudScreen:
         self._domain, self._users = local_mesh_identity(j.generator_dir)
 
     def lines(self, j) -> list[str]:  # noqa: ARG002 — screen-protocol signature
-        listed = ", ".join(f"{name} ({role})" for name, role in self._users)
+        listed = ", ".join(
+            f"{name} ({roles if isinstance(roles, str) else ', '.join(roles)})"
+            for name, roles in self._users)
         return [
             "Turn the local Docker mesh into real device images. The "
             "abbreviated wizard ahead reuses the domain and accounts already "

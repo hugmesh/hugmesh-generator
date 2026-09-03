@@ -151,7 +151,7 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         self.wiz = wiz
         self._imported = False       # one-shot import latch (see validatePage)
         self._domain = ""
-        self._users: list[tuple[str, str]] = []
+        self._users: list[tuple[str, list[str]]] = []
         self.worker: _MeshWorker | None = None
         self._k8s_probe: _K8sGateProbe | None = None
         self._running = False        # a `make kind-down` is in flight
