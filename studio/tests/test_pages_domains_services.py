@@ -92,7 +92,7 @@ def test_services_cell_is_a_menu_not_a_text_cell(wiz):
     assert isinstance(btn, _ServicesButton)
     assert dom.table.item(0, _COL_SERVICES) is None
     assert btn.selected_slugs() == []
-    assert btn.text() == "None ▾"
+    assert btn.text() == "Cluster default ▾"
 
 
 def test_menu_offers_the_user_level_catalogue_and_not_the_infra_slugs(wiz):
@@ -245,14 +245,19 @@ def test_selection_normalises_to_catalogue_order(wiz):
     c.mode = "mesh"
     c.role = "omnibus"
     c.additional_domains = True
+    # DISCRIMINATING PAIR. games/owncast is the pair where catalogue order
+    # (... games, owncast, tube ...) and SERVICE_GROUPS menu order ("Media & play" =
+    # owncast, tube, games) DISAGREE, so this assertion can tell the two apart. Seeding
+    # e.g. ("tube", "akkoma") cannot: those two sort the same either way, which is how
+    # an earlier version of this test passed against menu order.
     c.domains = [Domain(name="acme.example", title="Acme",
-                        optional_services=["tube", "akkoma"])]   # NOT catalogue order
+                        optional_services=["owncast", "games"])]  # NOT catalogue order
     wiz.restart()
     dom = advance_to(wiz, wizard_mod.DomainsPage)
     btn = dom.table.cellWidget(0, _COL_SERVICES)
-    assert btn.selected_slugs() == ["akkoma", "tube"]
+    assert btn.selected_slugs() == ["games", "owncast"]
     advance_to(wiz, wizard_mod.UsersChoicePage)
-    assert wiz.cfg.domains[0].optional_services == ["akkoma", "tube"]
+    assert wiz.cfg.domains[0].optional_services == ["games", "owncast"]
 
 
 def test_a_catalogue_slug_missing_from_the_grouping_is_still_offered(monkeypatch, wiz):
@@ -266,3 +271,88 @@ def test_a_catalogue_slug_missing_from_the_grouping_is_still_offered(monkeypatch
     dom._add("acme.example", "Acme")
     btn = dom.table.cellWidget(0, _COL_SERVICES)
     assert sorted(btn._actions) == sorted(OPTIONAL_SERVICES_CHOICES)
+
+
+def test_regrouping_a_row_cannot_change_what_this_column_emits(monkeypatch, wiz):
+    """The Domains page is now a SECOND owner of the repo invariant that SERVICE_GROUPS
+    is presentation only (tests/test_services_section.py::
+    test_regrouping_a_row_cannot_change_what_it_emits) — and THAT guard cannot see this
+    page: it inspects network.py's _service_channel signature, nothing else.
+
+    So pin it here directly. selected_slugs() flows into Domain.optional_services and
+    from there into manifest.json's domains[].optional_services, so if the menu order
+    leaked out, moving a slug between two group tuples — a purely cosmetic edit — would
+    rewrite the manifest bytes."""
+    from hugmesh_studio.core.config import SERVICE_GROUPS as REAL
+    from hugmesh_studio.gui.pages import domains as dom_mod
+    swapped = tuple((title, tuple(("games", "owncast", "tube") if title == "Media & play"
+                                  else slugs))
+                    for title, slugs in REAL)
+    assert swapped != REAL, "the regrouping mutation did not change SERVICE_GROUPS"
+
+    before = _ServicesButton(["owncast", "games"])
+    monkeypatch.setattr(dom_mod, "SERVICE_GROUPS", swapped)
+    after = _ServicesButton(["owncast", "games"])
+
+    # the two menus really do PRESENT the row differently...
+    assert list(before._actions)[3:6] == ["owncast", "tube", "games"]
+    assert list(after._actions)[3:6] == ["games", "owncast", "tube"]
+    # ...and still EMIT the identical value. Comparing the two is what makes this
+    # discriminating: asserting only the post-regrouping value would also pass if the
+    # widget read menu order, because the regrouping happens to put games first.
+    assert before.selected_slugs() == after.selected_slugs() == ["games", "owncast"]
+
+    # and through the real page, since that is the path into the manifest
+    dom = _mesh_domains(wiz)
+    dom._add("acme.example", "Acme", ["owncast", "games"])
+    assert dom.table.cellWidget(0, _COL_SERVICES).selected_slugs() == ["games", "owncast"]
+
+
+def test_a_carried_over_extra_sorts_after_the_catalogue_slugs(wiz):
+    """An unknown slug kept from a loaded config has no catalogue position, so it lands
+    last rather than wherever the 'From your config' section happens to sit."""
+    btn = _ServicesButton(["tor", "akkoma", "games"])
+    assert btn.selected_slugs() == ["akkoma", "games", "tor"]
+
+
+def test_the_empty_state_names_the_cluster_default_not_the_none_sentinel(wiz):
+    """Empty means the CLUSTER-WIDE set applies (config.py: optional_services == [] ->
+    emit nothing -> builder default akkoma tuwunel phpbb). Labelling it 'None' would
+    name SERVICES_NONE, which is spelled exactly that word and means the OPPOSITE — an
+    explicit empty allow-list. The sibling control gets this right ('All images ▾')."""
+    dom = _mesh_domains(wiz)
+    dom._add("acme.example", "Acme")
+    btn = dom.table.cellWidget(0, _COL_SERVICES)
+    assert btn.selected_slugs() == []
+    assert btn.text() == "Cluster default ▾"
+    assert "None" not in btn.text()
+    # and the page's own copy must agree with the control
+    assert "cluster-wide set applies" in dom.table_help.text()
+    assert "cluster-wide set applies" in \
+        dom.table.horizontalHeaderItem(_COL_SERVICES).toolTip()
+
+
+def test_services_column_header_says_the_slugs_are_not_baked_into_the_image(wiz):
+    """The Services header tooltip carries this change's central honesty claim; without
+    a test, deleting it is a green edit (the Title header's tooltip was pinned, this
+    one was not)."""
+    tip = _mesh_domains(wiz).table.horizontalHeaderItem(
+        _COL_SERVICES).toolTip()
+    assert "mesh manifest" in tip
+    assert "do NOT change which services the image bakes" in tip
+    assert "Empty = the cluster-wide set applies." in tip
+
+
+def test_the_menu_is_grouped_by_service_groups(wiz):
+    """Grouping is a decision of this change (the eight slugs arrive under their
+    SERVICE_GROUPS headings, not as one flat list); only the ungrouped FALLBACK was
+    pinned, so a revert to a flat loop over the catalogue was previously green."""
+    from hugmesh_studio.core.config import SERVICE_GROUPS
+    dom = _mesh_domains(wiz)
+    dom._add("acme.example", "Acme")
+    btn = dom.table.cellWidget(0, _COL_SERVICES)
+    sections = [a.text() for a in btn.menu().actions() if a.isSeparator() and a.text()]
+    expected = [g for g, slugs in SERVICE_GROUPS
+                if any(s in OPTIONAL_SERVICES_CHOICES for s in slugs)]
+    assert sections == expected
+    assert len(sections) > 1, "a flat menu is not grouped"

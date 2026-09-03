@@ -186,18 +186,37 @@ class _ServicesButton(QtWidgets.QToolButton):
         self._actions[slug] = act
 
     def selected_slugs(self) -> list[str]:
-        """The checked slugs, in menu (catalogue) order; [] = the cluster-wide set.
+        """The checked slugs in CATALOGUE (``OPTIONAL_SERVICES_CHOICES``) order, with
+        any carried-over extra last; ``[]`` = the cluster-wide set applies.
+
+        The order comes from the CATALOGUE and deliberately NOT from ``self._actions``,
+        whose insertion order is the SERVICE_GROUPS presentation order. Those are two
+        different constants and they already disagree (the catalogue has games before
+        owncast/tube; the "Media & play" group lists owncast, tube, games). Reading the
+        menu order here would let a purely cosmetic regrouping rewrite the bytes of
+        domains[].optional_services in the mesh manifest, breaking the repo invariant
+        that tests/test_services_section.py's test_regrouping_a_row_cannot_change_what_
+        it_emits exists to protect — and that guard only inspects the NETWORK page, so
+        it could not see the breakage here.
 
         NOTE this NORMALISES order: a loaded row whose slugs were in some other order
         reads back in catalogue order. optional_services is an allow-list (the
         builders join it into one --optional-services string and the manifest key is a
         set of slugs), so order carries no meaning — and a deterministic order is what
         keeps the manifest byte-stable across a load/save round trip."""
-        return [slug for slug, a in self._actions.items() if a.isChecked()]
+        checked = [slug for slug, a in self._actions.items() if a.isChecked()]
+        known = [s for s in OPTIONAL_SERVICES_CHOICES if s in checked]
+        return known + [s for s in checked if s not in OPTIONAL_SERVICES_CHOICES]
 
     def _refresh(self, *_):
         n = len(self.selected_slugs())
-        self.setText("None ▾" if n == 0
+        # The empty state means the CLUSTER-WIDE set applies (see the column tooltip and
+        # table_help, and config.py's `optional_services == [] -> emit nothing -> builder
+        # default akkoma tuwunel phpbb`). Labelling it "None" would name the OPPOSING
+        # sentinel — SERVICES_NONE is literally spelled "none" and emits an explicit
+        # empty allow-list. Mirrors _AppliesToButton's "All images ▾": the empty state
+        # names what actually happens.
+        self.setText("Cluster default ▾" if n == 0
                      else f"{n} service{'s' if n != 1 else ''} ▾")
 
 
