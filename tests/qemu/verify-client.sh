@@ -66,14 +66,15 @@ command -v ssh-keygen >/dev/null || die "need ssh-keygen"
 
 # ── Resolve the .img (mirror launch-x86.sh autodetect) ─────────────
 if [ -z "${IMG}" ]; then
-    for c in "${WORK_DIR}"/hugmesh-x86-*-"${ROLE}"-*.img "${WORK_DIR}"/hugmesh-x86-*.img; do
+    # Leading `*-` is the ${BRAND} field; `-x86-` stays the literal platform anchor.
+    for c in "${WORK_DIR}"/*-x86-*-"${ROLE}"-*.img "${WORK_DIR}"/*-x86-*.img; do
         c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
         [ -n "${c}" ] && { IMG="${c}"; break; }
     done
 fi
 if [ -z "${IMG}" ] || [ ! -f "${IMG}" ]; then
     ${DRY_RUN} || die "no client .img found in ${WORK_DIR} (build one, or pass --img). role=${ROLE}"
-    IMG="${IMG:-<none-yet:${WORK_DIR}/hugmesh-x86-amd64-${ROLE}-${PERSON_ROLE}-*.img>}"
+    IMG="${IMG:-<none-yet:${WORK_DIR}/*-x86-amd64-${ROLE}-${PERSON_ROLE}-*.img>}"
     warn "dry-run: no .img resolved — using a placeholder (build it before a real run)"
 fi
 

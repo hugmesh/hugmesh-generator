@@ -213,6 +213,41 @@ def test_localcloud_identity_readers_agree(tmp_path):
         gui_lc.local_mesh_identity(str(tmp_path))
 
 
+def test_localcloud_casdoor_grant_tables_agree():
+    """Issue #228: both import faces carry EVERY mapped Casdoor grant into User.roles
+    from ONE table each — the tables must be the same table, and a multi-grant persona
+    must import identically (admin + games, not the top of a ladder)."""
+    assert tui_lc._CASDOOR_ROLE_MAP == gui_lc._CASDOOR_ROLE_MAP
+    granted = ("ROLE_USER", "ROLE_GAMES", "ROLE_ADMIN", "ROLE_MATRIX")
+    assert tui_lc._person_roles(granted) == gui_lc._person_roles(granted) \
+        == ["admin", "user", "games"]
+
+
+# ── users (#228): the Roles vocabulary and the multi-role rendering ──────────────────
+def test_users_roles_vocabulary_is_the_core_tuple_on_both_faces(wiz):
+    """The GUI RoleCell offers exactly core USER_ROLE_CHOICES (one checkbox each) and
+    the TUI users screen renders the SAME full set for a multi-role account — a role
+    the GUI can tick that the TUI would not show is the half-feature this guards."""
+    from hugmesh_studio.core.config import USER_ROLE_CHOICES, User
+    from hugmesh_studio.gui.pages import users as gui_users
+    c = wiz.cfg
+    c.mode = "mesh"
+    c.configure_users = True
+    c.users = [User(username="ada", domain="acme.example",
+                    roles=["games", "admin", "games-services"])]
+    wiz.restart()
+    page = advance_to(wiz, wizard_mod.UsersPage)
+    cell = page.table.cellWidget(0, 2)
+    assert isinstance(cell, gui_users.RoleCell)
+    assert cell.choices() == list(USER_ROLE_CHOICES) == list(gui_users.USER_ROLE_CHOICES)
+    assert cell.roles() == ["admin", "games", "games-services"]
+    j = journey.Journey(GENERATOR_DIR)
+    j.cfg.users = list(c.users)
+    text = "\n".join(j.screen_for("users").lines(j))
+    assert "admin, games, games-services" in text
+    assert "roles" in text.splitlines()[0]
+
+
 # ── domains (#71): the Sign-in vocabulary and labels ────────────────────────────────
 def test_domain_signin_labels_match_the_gui_combo():
     gui_labels = {value: label for value, label, _tip in gui_domains._IDP_ITEMS}

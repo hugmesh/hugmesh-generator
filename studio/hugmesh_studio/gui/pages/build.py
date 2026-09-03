@@ -210,6 +210,105 @@ _FLAG_TIP = ("Two-state: checked = --flag, unchecked = --no-flag. There is no "
              "one is ON, which is what checked already means.")
 
 
+# ── Build-execution field help (issue #231) ───────────────────────────────────────────
+# Operator note, verbatim: "Build execution: add tooltips" (and #226's general ask,
+# "names are not self-explanatory"). Four controls that decide HOW and WHERE the build
+# runs, and not one of them said so on screen.
+#
+# HomePage's idiom (PR #237): module-level _*_HELP constants applied to the CONTROL and
+# to its _row() wrapper, so hovering the LABEL answers the question too — the label is
+# the part an operator reads before deciding to hover anything. Unlike HomePage these
+# four need no post-gate re-assert: none of them is in this page's gate_widgets map, so
+# nothing rewrites their tooltips after __init__.
+#
+# Rich text (<qt>) for the same reason self.img_size uses it (issue #232): a plain-text
+# tooltip does not wrap, so a three-sentence one renders as a single ~1000px line that
+# runs off a small screen. Every claim below is cited to the code that makes it true.
+
+# platform_info.HostInfo.default_backend + .can_build_native (os == linux AND is_gentoo
+# AND has_bash -> "native"; else "docker" if has_docker; else "none"). Root is NOT part
+# of the choice — _backend() sends None for "auto" and the driver resolves it — but a
+# native build DOES need root at dispatch: build_driver._elevation_prefix prepends
+# sudo/pkexec, and preflight() blocks only when NEITHER helper exists (build_driver.py
+# :695, the "no elevation helper" problem).
+_BACKEND_HELP = (
+    "<qt><p>How the builder script runs.</p>"
+    "<p><b>auto</b> resolves against this host: <b>native</b> on a Gentoo Linux host "
+    "with bash, <b>docker</b> wherever a Docker daemon is reachable, and nothing at "
+    "all on a host with neither — the Welcome screen says so first.</p>"
+    "<p><b>native</b> runs the script directly on this machine — fastest, but it "
+    "builds a chroot, so it needs root. The Studio prepends sudo or pkexec itself "
+    "(expect an authentication prompt); preflight blocks the build only when neither "
+    "helper is installed.</p>"
+    "<p><b>docker</b> runs the same script inside the builder image — works on any "
+    "host with a reachable Docker daemon, Gentoo or not.</p></qt>")
+
+# --env is BAKED: build-x86-host-stage4.sh:4466 writes it to /etc/hugmesh/env, and
+# gate_env_apps() (:2918) prunes the baked ArgoCD app tree by it — prod drops the LAN
+# wildcard-DNS app and pins release image tags, test drops the cloudflared go-live app.
+# The builder's own prod banner (:2181) is the source for what prod expects from the
+# KEYS USB. The env also decides optional services left at their default
+# (_optional-services-lib.sh:478-482 falls through to ENV for anubis), and it gates the
+# post-build device tests on this very page (_sync_qemu_device_tests_gate).
+_ENV_HELP = (
+    "<qt><p>Which stack environment the image BAKES. The value is written to "
+    "<tt>/etc/hugmesh/env</tt> and decides which ArgoCD apps survive in the baked app "
+    "tree — it is not a build-time-only switch.</p>"
+    "<p><b>test</b> (the builder's default) is LAN-first: cluster wildcard DNS is "
+    "authoritative for the <tt>.test</tt> domain, the cloudflared/ACME go-live app is "
+    "pruned, and TLS stays on the internal cluster CA.</p>"
+    "<p><b>prod</b> bakes the REAL public domain, keeps the go-live app, pins release "
+    "image tags, and expects Cloudflare / OAuth / SMTP credentials from the KEYS USB.</p>"
+    "<p>Two knock-on effects: an optional service left at its default follows the env "
+    "(the Anubis proof-of-work shield ships on in prod, off in test), and the "
+    "post-build QEMU device tests under Build plumbing are offered only with "
+    "<b>test</b> — prod prunes the in-cluster test runner they assert against.</p></qt>")
+
+# The builder's -w work dir: build_driver.py:348 passes the real path natively and :363
+# passes /out for docker (the same dir, bind-mounted). Each DISPATCH overrides it with
+# build_sessions.session_workdir() -> <out>/sessions/<id>/ (build.py
+# _pending_session_workdir), which is the -w the command pane renders; node key-zips are
+# written under it as keys-<entry id>/ (docs/STUDIO-WALKTHROUGH.md). Reachability and
+# writability are BLOCKING preflight problems (worklist_driver.py:237/248).
+_OUTDIR_HELP = (
+    "<qt><p>Where this build's images, logs and key folders land — passed to the "
+    "builder as its <tt>-w</tt> work directory (bind-mounted at <tt>/out</tt> on the "
+    "docker backend).</p>"
+    "<p>Each dispatch gets its own subfolder underneath: "
+    "<tt>&lt;output directory&gt;/sessions/&lt;session id&gt;/</tt>. That is the "
+    "<tt>-w</tt> path shown in the exact builder command further down, and node "
+    "key-zips land inside it as <tt>keys-&lt;entry id&gt;/</tt>.</p>"
+    "<p>The path has to be reachable and writable or Continue refuses — a previous "
+    "native (sudo) build leaving root-owned directories behind is the usual cause.</p>"
+    "</qt>")
+
+# -j, passed on every backend (build_driver.py:348/363). The ARRIVING value comes from
+# host_resources.default_jobs(): HUGMESH_BUILD_JOBS wins outright, else
+# max(2, min(nproc, MemAvailable_GiB // 2)), else min(nproc, 8) when /proc/meminfo is
+# unreadable at all — and that is native Windows/macOS ONLY, NOT WSL2: platform_info.py
+# :15-16 makes WSL2 the supported way to run this Studio on Windows and it is a real
+# Linux kernel, so it reads /proc/meminfo fine and takes the MEMORY branch. host_resources
+# says so itself three times (:19, :52, :133, all "Windows/macOS"). Fresh configs ONLY,
+# a loaded config keeps its saved "jobs".
+# docs/STUDIO-WALKTHROUGH.md already promises the operator that this
+# default "is derived from this host's cores and available memory, not a fixed number",
+# so the tooltip is where that promise is actually kept. The docker memory cap is
+# host_resources.build_memory_flag()/HUGMESH_BUILD_MEMORY (build_driver.py:144).
+_JOBS_HELP = (
+    "<qt><p>How many compile jobs run at once — passed to the builder as "
+    "<tt>-j</tt>.</p>"
+    "<p>The value you arrive on is derived from THIS host, not a fixed number: about "
+    "<tt>max(2, min(cores, available GiB / 2))</tt>, i.e. roughly 2 GiB of headroom per "
+    "job, falling back to <tt>min(cores, 8)</tt> where memory cannot be read at all "
+    "(native Windows or macOS — not WSL2, which has a real <tt>/proc/meminfo</tt> and "
+    "takes the memory rule). <tt>HUGMESH_BUILD_JOBS</tt> overrides it outright, and a "
+    "config you load keeps the number it was saved with.</p>"
+    "<p>Raising it costs CPU and a lot more RAM; lower it on a memory-tight host. A "
+    "docker build additionally runs under a container memory cap "
+    "(<tt>HUGMESH_BUILD_MEMORY</tt>) that protects the host; a native build has no such "
+    "ceiling.</p></qt>")
+
+
 def _flag_check(text):
     """A --flag / --no-flag pair as an ordinary two-state checkbox.
 
@@ -393,20 +492,44 @@ class BuildPage(QtWidgets.QWizardPage):
         # line per value on choices that are almost never touched.
         self.exec_box = QtWidgets.QGroupBox("")
         ex = QtWidgets.QVBoxLayout(self.exec_box)
+        # ISSUE #231: every control in this section carries its help on BOTH the widget
+        # and its _row() wrapper, so hovering the LABEL works too (the HomePage idiom).
+        # The row wrappers are kept as attributes only where a later gate touches them;
+        # these four are ungated, so the tooltip set here is the one that survives.
         self.backend = QtWidgets.QComboBox()
         self.backend.addItems(["auto", "native", "docker"])
-        ex.addWidget(_row("Backend", self.backend))
+        self.backend.setToolTip(_BACKEND_HELP)
+        backend_row = _row("Backend", self.backend)
+        backend_row.setToolTip(_BACKEND_HELP)
+        ex.addWidget(backend_row)
         # --env: which stack environment the image bakes (every builder parses it)
         self.env = QtWidgets.QComboBox()
         self.env.addItems(list(ENV_CHOICES))
-        ex.addWidget(_row("Environment (--env)", self.env))
+        self.env.setToolTip(_ENV_HELP)
+        env_row = _row("Environment (--env)", self.env)
+        env_row.setToolTip(_ENV_HELP)
+        ex.addWidget(env_row)
+        # ISSUE #231 rename: "Output dir" -> "Output directory", the spelling the rest of
+        # the Studio already uses in operator-facing text (worklist_driver.py:237/248
+        # "Output directory is unreachable/is not writable", fleet.py's own file-dialog
+        # caption). Display strings ONLY — ImageConfig.output_dir is a persisted JSON key,
+        # self.outdir is read by tests and _preview, and the builder flag stays -w.
+        # Sentence case, not Title Case: #231's first bullet is "Review page text is good
+        # (keep)", and every other label on this page is sentence-cased. A page-wide
+        # recase belongs to #226, all at once — half-cased would be worse than either.
         self.outdir = QtWidgets.QLineEdit()
-        obtn = _file_picker(self, self.outdir, "Output dir", directory=True)
+        obtn = _file_picker(self, self.outdir, "Output directory", directory=True)
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.outdir, 1); h.addWidget(obtn)
-        ex.addWidget(_row("Output dir", w))
+        self.outdir.setToolTip(_OUTDIR_HELP)
+        outdir_row = _row("Output directory", w)
+        outdir_row.setToolTip(_OUTDIR_HELP)
+        ex.addWidget(outdir_row)
         self.jobs = QtWidgets.QSpinBox(); self.jobs.setRange(1, 256); self.jobs.setValue(8)
-        ex.addWidget(_row("Parallel jobs", self.jobs))
+        self.jobs.setToolTip(_JOBS_HELP)
+        jobs_row = _row("Parallel jobs", self.jobs)
+        jobs_row.setToolTip(_JOBS_HELP)
+        ex.addWidget(jobs_row)
         # Expanded and never auto-folded: backend/outdir are the first things preflight
         # problems point at, so they must be on screen when the page loads.
         self.exec_section = collapsible("Build execution", self.exec_box)

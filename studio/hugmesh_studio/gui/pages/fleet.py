@@ -331,7 +331,10 @@ class FleetPage(QtWidgets.QWidget):
         od_btn = _file_picker(self, self.output_dir, "Output directory", directory=True)
         od = QtWidgets.QWidget(); oh = QtWidgets.QHBoxLayout(od); oh.setContentsMargins(0, 0, 0, 0)
         oh.addWidget(self.output_dir, 1); oh.addWidget(od_btn)
-        sl.addWidget(_row("Output dir", od))
+        # ISSUE #231 vocabulary: one spelling per role across the GUI. This page
+        # already said "Output directory" in its own file-dialog caption one line
+        # up and "Output dir" on the row — the same field, two names.
+        sl.addWidget(_row("Output directory", od))
         self.jobs = QtWidgets.QSpinBox(); self.jobs.setRange(1, 128); self.jobs.setValue(8)
         sl.addWidget(_row("Jobs", self.jobs))
         self.backend = QtWidgets.QComboBox(); self.backend.addItems(["auto", "native", "docker"])

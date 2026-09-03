@@ -282,7 +282,9 @@ class WorklistDriver:
                          **({"idp": d.idp}
                             if d.idp != DOMAIN_IDP_SUPERDOMAIN else {})}
                         for d in base.domains],
-            "users": [asdict(u) for u in base.users],
+            # per-user `roles` (issue #228) is OMIT-WHEN-SINGLE too (User.to_dict), so
+            # v2 and the v1 shim emit the same user rows byte for byte.
+            "users": [u.to_dict() for u in base.users],
             "images": images,
         }
 

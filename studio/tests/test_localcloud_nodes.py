@@ -39,7 +39,9 @@ HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
 # the canned local mesh every test imports from — pinned so no test depends on the
 # checkout's real roster/secrets (deterministic on any host, keys-out/ or not).
 CANNED_DOMAIN = "mesh.example.org"
-CANNED_USERS = [("superadmin", "superadmin"), ("alice", "admin"), ("bob", "user")]
+CANNED_USERS = [("superadmin", ["superadmin"]),
+                ("alice", ["admin", "games"]),
+                ("bob", "user")]          # a bare string still loads (#228 back-compat)
 
 
 @pytest.fixture(autouse=True)
@@ -323,7 +325,7 @@ def test_imported_domain_and_users_land_in_the_config(wiz):
     assert cfg.cluster_domain == CANNED_DOMAIN         # the imported apex
     by_name = {u.username: u for u in cfg.users}
     assert set(by_name) == {"superadmin", "alice", "bob"}
-    # superadmins belong to the orchestration superdomain (UsersPage locks them
+    # superadmins belong to the Tailscale root domain (UsersPage locks them
     # there); everyone else lands on the imported apex.
     assert by_name["superadmin"].role == "superadmin"
     assert by_name["superadmin"].domain == cfg.effective_superdomain()

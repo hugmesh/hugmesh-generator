@@ -771,7 +771,7 @@ artifact — it belongs with `live_iso` if the sections merge.
    `OPTIONAL_SERVICES_CHOICES` (`:352-353`); `INFRA_SERVICES_CHOICES` (`:360`);
    `OPTIONAL_SERVICES_BY_PLATFORM` (`:365-368`); `PERSON_ROLE_CHOICES` (`:382`);
    `X86_NODE_ROLES` (`:387`); `DESKTOP_ROLES` (`:629`); `USER_ROLE_CHOICES`
-   (`users.py:24`); `USER_REGISTRATION_CHOICES` (`users.py:30`);
+   (`config.py:576`); `USER_REGISTRATION_CHOICES` (`users.py:30`);
    `WORKLIST_INFRA_SERVICES` (`core/worklist.py:58`); `WIZARD_PAGE_SLUGS`
    (`config.py:105-108`) with the 1:1 ctor assert (`wizard.py:156-158`).
 5. **ncurses menu** (`scripts/build-menu.sh`): `OPT_RESUME` `:79`, `OPT_EDGE_AI_TTS`

@@ -735,7 +735,7 @@ def test_x86_iso_finish_pairs_flip():
                           ("rpi5-desktop", "desktop")])
 def test_rpi5_roles_golden(role, builder_role):
     args = ImageConfig(mode="mesh", role=role, platform="rpi5", tailscale=True).to_cli_args()
-    # WS-SUPER-B: mesh images record the derived orchestration superdomain.
+    # WS-SUPER-B: mesh images record the derived Tailscale root domain.
     assert args == ["--role", builder_role, "--env", "test",
                     "--superdomain", "hugmesh.internal", *ALL_TAIL]
 
