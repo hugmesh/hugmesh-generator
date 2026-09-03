@@ -70,7 +70,7 @@ Reached only from Welcome's second card — nothing else routes into it. Its own
 - Saving defaults to `hugmesh-image.json`. It writes the envelope when a worklist exists, otherwise flat JSON. Only pages you actually visited are collected, so a page the flow skipped cannot leak stale values into the file.
 - Plaintext secrets are blanked on save — `local-pass`, `luks-pass`, `user-password`, `root-password`. A dialog names the ones that were dropped. Re-enter them before building from that file.
 
-**Previous builds** is a table below the buttons, with a free-text filter and a status dropdown above it. It hides itself completely when there is nothing to list, so a first run shows only the two buttons. It lists persisted build sessions newest-first, plus best-effort discovered `wl-<role>.<platform>` build directories at the top level of the out dir (status honestly `unknown`), plus any record file it could not parse. It refreshes on every visit to the screen — a build you just finished appears without restarting the Studio. Clicking a row opens that build in its own window.
+**Previous builds** is a table below the buttons, with a free-text filter and a status dropdown above it. It hides itself completely when there is nothing to list, so a first run shows only the two buttons. It lists persisted build sessions newest-first, plus best-effort discovered `wl-<role>.<platform>` build directories at the top level of the output directory (status honestly `unknown`), plus any record file it could not parse. It refreshes on every visit to the screen — a build you just finished appears without restarting the Studio. Clicking a row opens that build in its own window.
 
 Six actions:
 
@@ -215,7 +215,7 @@ Downstream: nothing. Terminal.
 
 Publishes an **already-built, already-packaged** x86 artifact. It does not build and it does not package: run `scripts/cloud-package.sh` first and point this page at its output (`.qcow2`, `.vhd`, `.img`).
 
-Asks: provider (read live from `hugmesh-cloud-deploy list`; Refresh re-reads it, and an empty combo means the driver is not present), image path, domain, region, either a path to a `0600` credentials file or pasted credentials, an out dir for rendered artifacts, a keys dir, and an identity-provider passthrough — Casdoor built-in by default, or Entra / Cognito / other OIDC, which enable issuer, client id and JWKS fields and make the plan emit `idp/idp.conf`.
+Asks: provider (read live from `hugmesh-cloud-deploy list`; Refresh re-reads it, and an empty combo means the driver is not present), image path, domain, region, either a path to a `0600` credentials file or pasted credentials, an output directory for rendered artifacts, a keys dir, and an identity-provider passthrough — Casdoor built-in by default, or Entra / Cognito / other OIDC, which enable issuer, client id and JWKS fields and make the plan emit `idp/idp.conf`.
 
 A read-only monospace pane previews the knobs, the exact plan command, and any blockers. It is pure: nothing runs until you pick a verb.
 
@@ -226,7 +226,7 @@ Four verbs:
 - **Apply** streams here, but only behind the "I understand APPLY executes the plan's emitted apply.sh against a REAL cloud account" tick, and only after `validate()` passes.
 - **Destroy** opens a terminal, where the driver's own confirmation runs.
 
-A fifth button, **Open artifacts folder**, just opens the out dir.
+A fifth button, **Open artifacts folder**, just opens the output directory.
 
 Pasted credentials are never persisted and never reach argv; a run stages them into a `0600 --creds-file` tempfile that is shredded afterwards.
 
@@ -497,7 +497,7 @@ Mesh only. Standalone and the mesh desktop client never see this screen.
 
 Two cards. The default, **Use the accounts generated with the node keys**, is rewritten from your current worklist every time you arrive, so it names the actual rows you checked. It tells you that one login — `admin` — is created on the control-plane node (the `pki` key profile, which `omnibus` and jetson `full` also map onto), that its password is random, stored salted and hashed, and never printed, and that root stays locked in that key set. Every other node gets keys only, no accounts. If you have not checked a control-plane row at all, the card says so, and that no account would be created. What you actually log in with is the private key written beside the hashes: `ssh -i ssh/admin_ed25519 admin@<node>`.
 
-The card also names the folder: `<output dir>/sessions/<session id>/keys-<entry id>/`. The session id is minted when the build starts, and it appears in the `-w` path of the command on the Review screen. This only happens if **Generate node key-zips** is left on at Review, which is the default.
+The card also names the folder: `<output directory>/sessions/<session id>/keys-<entry id>/`. The session id is minted when the build starts, and it appears in the `-w` path of the command on the Review screen. This only happens if **Generate node key-zips** is left on at Review, which is the default.
 
 The second card, **Name superusers and domain users myself**, opens the users table.
 
@@ -553,7 +553,7 @@ Nothing starts here. Leaving this page commits the worklist and advances to the 
 
 A plain-language summary sits at the top: how many images and which, the output directory, the backend, `--env`, parallel jobs, the artifact set, the encryption consequence, and — in mesh — whether node key folders will be generated. Below it are collapsible sections, plus the device table, which is deliberately not one of them: a hardware scan should not hide behind a closed header.
 
-- **Build execution** — backend (`auto`, `native`, `docker`), `--env` (`test` or `prod`), output dir, parallel jobs. The jobs default is derived from this host's cores and available memory, not a fixed number.
+- **Build execution** — backend (`auto`, `native`, `docker`), `--env` (`test` or `prod`), output directory, parallel jobs. All four explain themselves on hover, and it is worth reading them: `auto` resolves to `native` only on a Gentoo host with bash and Docker otherwise; `--env` is *baked* into the image at `/etc/hugmesh/env` and decides which ArgoCD apps survive in it, so it is a decision about the shipped system rather than about this build run; the output directory is the builder's `-w`, under which each dispatch gets its own `sessions/<session id>/`; and the jobs default is derived from this host's cores and available memory, not a fixed number (`HUGMESH_BUILD_JOBS` overrides it).
 - **Mesh worklist** — one row per image with a facts summary, a per-image **Packages…** dialog, and **Preview**, which renders that row's exact builder command into the command pane, opens it and scrolls to it. **Generate node key-zips after each successful node build** is on by default; turning it off means no key folders and no generated accounts.
 - **Image options** — installer front-end, root image size, `--grow`, version stamp, release tag, and (outside mesh) the single-image **Packages…** button. On an x86 node the installer front-end is greyed with the reason: a node cannot build the graphical front-end, and the combo is reporting what the build will actually use rather than offering a choice. Root image size `0` means the role default; an explicit size below the role's measured floor is refused here, on Continue, with an inline error — otherwise it aborts hours later in the image pre-flight.
 - **Artifacts & build options** — each row pairs an option with the artifact it yields. Root image, live ISO with its two modifiers (embedded binpkg cache/distfiles, and a copy-to-RAM boot entry), installer ISO, the two rpi5-only rows (installer ISO for an unencrypted image, SD-card image only), rootfs tar, source bundling, compress, resume, skip the ISO stage, and image-only. Trap: **Resume is on by default**, so a build continues from whatever sysroot the last run left behind. Untick it when you want a guaranteed clean build. Source bundling is disabled with a note on an unaffiliated image — it is a builder hard conflict.
