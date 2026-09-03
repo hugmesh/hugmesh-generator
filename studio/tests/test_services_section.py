@@ -456,15 +456,19 @@ def test_the_privacy_group_carries_every_privacy_service():
     """OPERATOR, 2026-08-21: "anubis belongs in the privacy and scraping section as does
     tor".
 
-    Both are network-level, which is how they came to sit under "Network & access" — but
+    Both are network-level, which is how they came to sit under "Network & Access" — but
     this table groups by WHAT A SERVICE IS FOR, and what these two are for is privacy:
     `tor` is a privacy TRANSPORT (SERVICE_DESCRIPTIONS: reachable "without exposing a
-    public IP"), `anubis` is the "Anti-scraper proof-of-work gate" the group title's
-    second half names outright. Pinned because a grouping nobody asserts is a grouping
-    that drifts back on the next edit — the axis is the whole point of the constant.
+    public IP"), `anubis` is the "Anti-scraper proof-of-work gate". Pinned because a
+    grouping nobody asserts is a grouping that drifts back on the next edit — the axis
+    is the whole point of the constant.
+
+    The KEY moved with issue #226 ask 7 ("if it is forced on, rename 'Privacy &
+    anti-scraping' to just 'Privacy services'"). These are dict keys, so a rename that
+    misses this file is a KeyError, not a soft assertion failure.
     """
     groups = dict(SERVICE_GROUPS)
-    assert set(groups["Privacy & anti-scraping"]) == {"tor", "anubis", "media-poisoner"}
+    assert set(groups["Privacy Services"]) == {"tor", "anubis", "media-poisoner"}
     # The descriptions have to keep BACKING the grouping. If either line stops being
     # about privacy, this group is the wrong home and the test should say so here
     # rather than let a row drift away from its own caption.
@@ -472,8 +476,8 @@ def test_the_privacy_group_carries_every_privacy_service():
     assert "Anti-scraper" in SERVICE_DESCRIPTIONS["anubis"]
     # The group they LEFT keeps the plain plumbing, and keeps ROWS: initializePage hides
     # a group header whose every row is unreachable, so emptying this tuple would delete
-    # "Network & access" from the surface rather than shrink it.
-    assert groups["Network & access"] == ("egress-vpn", "workloadConsole")
+    # "Network & Access" from the surface rather than shrink it.
+    assert groups["Network & Access"] == ("egress-vpn", "workloadConsole")
 
 
 def test_regrouping_a_row_cannot_change_what_it_emits(wiz):

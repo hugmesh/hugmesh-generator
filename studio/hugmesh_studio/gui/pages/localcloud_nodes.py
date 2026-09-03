@@ -392,7 +392,7 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
             superdomain = cfg.effective_superdomain()
             existing = {(u.username, u.domain) for u in cfg.users}
             for username, role in self._users:
-                # superadmins belong to the orchestration superdomain (spec 5 —
+                # superadmins belong to the Tailscale root domain (spec 5 —
                 # UsersPage locks their row there); everyone else lands on the
                 # imported apex the local mesh served them on.
                 dom = superdomain if role == "superadmin" else cfg.cluster_domain

@@ -88,7 +88,7 @@ non-monotonically across a path). The conceptual steps:
 | 2 | Pick the target MACHINE, then the image type / per-node hardware | `role.py` (image paths — **arch-first**: architecture selector → family-grouped searchable device browser (status badges) → the device's derived image-type list → inline board/flavor + the x86 machine-profile preset) · `worklist.py` (mesh: one row per node, with a per-row Encryption column) · `hardware.py` (GPU/Wi-Fi/kernel TUNING + this-machine scan) |
 | 3 | Optional cluster services | the services group on `network.py` (mesh/cloud) |
 | 4 | The domain joined + tailnet/SSO login + first-login registration | `network.py` (cloud) · `users.py` (per-user registration method) |
-| 5 | The orchestration superdomain + the other domains | the mesh-control-plane group on `network.py` · `domains.py` |
+| 5 | The Tailscale root domain + the other domains | the Headscale / mesh-networking group on `network.py` · `domains.py` |
 | 6 | Per-domain admins + named users | `domains.py` (default admin) · `users.py` |
 | 7 | Network identity / egress / security + home / encryption / login / packages | `network.py` (standalone) · `system.py` · `home.py` |
 
@@ -138,7 +138,7 @@ becomes applicable again is both reachable and emitted.
 
 | Duplicate | Kept | Removed from |
 |---|---|---|
-| "Identity & domain" (apex domain / games domain / release state) | cloud + mesh, and every ARM platform | `network.py` on a standalone x86 image — the "in-between menu for configuring domain" (`cluster_identity_applies`) |
+| "Identity & Domain" (apex domain / games domain / release state) | cloud + mesh, and every ARM platform | `network.py` on a standalone x86 image — the "in-between menu for configuring domain" (`cluster_identity_applies`) |
 | Default account | `home.py` "Local user" | `system.py` "Default user" on desktop-class flows (`default_user_is_local_user`) |
 | Machine hardware scan | `hardware.py` | the synthetic `this-machine-scan` profile row on `role.py` |
 | "Themes" (web login) vs "Desktop theme" | both, retitled | the bare "Themes" label — the web group is now "Web login theme", and is mesh-only |
