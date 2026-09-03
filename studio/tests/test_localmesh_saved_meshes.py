@@ -185,6 +185,37 @@ def test_apply_bootstrap_round_trips_collect_bootstrap(qapp, page, tmp_path):
     assert got.services == () and got.kind_addons == ("metrics-server",)
 
 
+def test_apply_bootstrap_restores_the_web_chrome_the_record_carries(qapp, page):
+    """commit() writes seventeen login_* inputs into the record's form; load()
+    reads all seventeen back. apply_bootstrap used to filter the form against an
+    eight-key whitelist, so the nine web-chrome inputs (header hidden, header /
+    footer colours and sizes, background effect) were dropped on every Load /
+    Restore: the group reloaded the shipped page, compose_css() derived a
+    DIFFERENT login page, and _not_applied_text still said "every field applied".
+    This test sets two chrome inputs, scrambles them, and requires the record
+    to bring them — and the identical derived css — back."""
+    g = page.login_theme
+    g.primary.setText("#123456")
+    g.secondary.setText("#654321")
+    g.set_chrome("header_hidden", True)
+    g.set_chrome("footer_bg", "#101010")
+    css = g.compose_css()
+    assert css and not g.error_text()
+    form = page.theme_form()
+    assert form["login_header_hidden"] is True and form["login_footer_bg"] == "#101010"
+    cfg = lmb.LocalMeshBootstrapConfig(login_theme_css=css)
+    # scramble the chrome so the round-trip has to restore it — and prove the
+    # scramble changed the derived css, or the equality below proves nothing
+    g.set_chrome("header_hidden", False)
+    g.set_chrome("footer_bg", "")
+    assert g.compose_css() != css
+    missing = page.apply_bootstrap(cfg, form=form)
+    assert "login_theme_css" not in missing
+    assert g.chrome["header_hidden"] is True
+    assert g.chrome["footer_bg"] == "#101010"
+    assert page.collect_bootstrap().login_theme_css == css
+
+
 def test_apply_bootstrap_leaves_the_auth_key_empty_and_reports_it(qapp, page):
     page.boot_auth_key.setText("typed-by-hand")
     missing = page.apply_bootstrap(lmb.LocalMeshBootstrapConfig(auth_key="tskey-x"))

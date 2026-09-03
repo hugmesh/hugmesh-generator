@@ -134,12 +134,22 @@ def _grey_note(text: str) -> "QtWidgets.QLabel":
 
 #: What LoginThemeGroup.load() reads when a saved-mesh record carries no theme
 #: inputs: the shipped brand. Keys are ImageConfig's login_* names (the group's
-#: own load/commit contract); web chrome falls back inside load() itself.
+#: own load/commit contract) — ALL seventeen that commit() writes, because
+#: apply_bootstrap filters the record's form against this dict. Listing only
+#: the eight colour/font keys silently threw away the nine web-chrome inputs on
+#: every Load/Restore (header hidden, header/footer colours, background effect),
+#: derived a different login page, and then reported "every field applied".
+#: Chrome falls back inside load() itself, so "" / False are the shipped page.
 _THEME_FORM_DEFAULTS = {
     "login_theme_preset": "", "login_theme_mode": "dark",
     "login_primary_color": "", "login_secondary_color": "",
     "login_font": "", "login_font_file": "",
     "login_font_licence": "", "login_font_source": "",
+    "login_header_hidden": False, "login_header_size": "",
+    "login_header_bg": "", "login_header_text": "",
+    "login_footer_hidden": False, "login_footer_size": "",
+    "login_footer_bg": "", "login_footer_text": "",
+    "login_bg_effect": "",
 }
 
 
