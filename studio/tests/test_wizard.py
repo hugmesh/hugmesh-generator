@@ -138,7 +138,8 @@ def test_page_slugs_map_to_the_right_pages(wiz):
               "domains": wizard_mod.DomainsPage,
               "users_choice": wizard_mod.UsersChoicePage,
               "users": wizard_mod.UsersPage,
-              "system": wizard_mod.SystemPage, "home": wizard_mod.HomePage,
+              "system": wizard_mod.SystemPage, "vault": wizard_mod.VaultPage,
+                  "home": wizard_mod.HomePage,
               "build": wizard_mod.BuildPage, "launch": wizard_mod.LaunchPage,
               "progress": wizard_mod.ProgressPage}
     assert set(expect) == set(WIZARD_PAGE_SLUGS)
