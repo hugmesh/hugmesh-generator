@@ -171,8 +171,16 @@ def test_system_and_network_placeholders_humanized(qapp):
     assert "--user" not in sysp.user.placeholderText()
     net = _page(wiz, wizard_mod.NetworkPage)
     assert "--headscale-version" not in net.headscale_version.placeholderText()
-    assert "--headscale-version" in net.headscale_version.toolTip()
     assert "--tailscale-version" not in net.tailscale_version.placeholderText()
+    # P2-B's "still discoverable by power users" half now lives on the field's ROW, not
+    # on the field: issue #226 moved every NetworkPage tooltip onto the _row() wrapper so
+    # a hover over the CAPTION answers too, and so the two gates on that page — each of
+    # which ENDS by rewriting its targets' tooltips — cannot blank it. The row is
+    # populated on the VISIT (initializePage), which is the only state the operator ever
+    # sees the page in, so the visit is part of the assertion rather than a workaround.
+    net.initializePage()
+    assert "--headscale-version" in net.headscale_version_row.toolTip()
+    assert "--tailscale-version" in net.tailscale_version_row.toolTip()
     wiz.deleteLater()
 
 

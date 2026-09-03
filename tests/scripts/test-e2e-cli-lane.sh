@@ -65,18 +65,80 @@ done
   exit 2
 }
 # ONE readiness opinion, not a second one: tests/e2e/check-toolchain.sh verifies
-# node_modules against the COMMITTED lock and the browser revision under THE
-# BROWSERS PATH THIS GUARD RUNS WITH. `[ -d node_modules/playwright-bdd ]` used to
-# stand here and said nothing about either — MEASURED 2026-08-27: with
-# /var/tmp/portage/pw-browsers holding dangling r1228 -> r1234 aliases, this guard
-# got past its preflight and reported its lane as "not green" with every browser
-# scenario dying on "Executable doesn't exist at .../chromium_headless_shell-1228",
-# the toolchain gap wearing the costume of a product failure. The probe names the
-# path and the fix (PLAYWRIGHT_BROWSERS_PATH=... make playwright-deps) instead.
-if ! PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/var/tmp/portage/pw-browsers}" bash "${E2E}/check-toolchain.sh"; then
+# node_modules against the COMMITTED lock and the browser revision under the
+# SAME resolution the lane runs with — the caller's PLAYWRIGHT_BROWSERS_PATH if
+# they set it, otherwise Playwright's own store (~/.cache/ms-playwright).
+# `[ -d node_modules/playwright-bdd ]` used to stand here and said nothing about
+# either — MEASURED 2026-08-27: with /var/tmp/portage/pw-browsers holding
+# dangling r1228 -> r1234 aliases, this guard got past its preflight and
+# reported its lane as "not green" with every browser scenario dying on
+# "Executable doesn't exist", the toolchain gap wearing the costume of a
+# product failure.
+# This guard NEVER defaults PLAYWRIGHT_BROWSERS_PATH. Until
+# fix/pw-browsers-never-default it pinned /var/tmp/portage/pw-browsers when the
+# variable was unset — a host-local farm of symlinks into
+# ~/.cache/ms-playwright that DANGLES after any `npx playwright install`
+# garbage-collects the revision it points at (see
+# reference_hugmesh_pw_browsers_symlink_farm) — so on a box whose real store
+# was READY it manufactured a red toolchain verdict, and its fix line told the
+# operator to reinstall INTO the farm. Probe under caller resolution instead,
+# exactly as test-e2e-coverage-matrix.sh does; the one-launch preflight below
+# proves a browser actually starts before the lane may.
+if ! bash "${E2E}/check-toolchain.sh"; then
   echo "SKIPPED-LOUDLY: the e2e toolchain is not ready (above). This guard checked NOTHING. Exiting 2 rather than 0." >&2
   exit 2
 fi
+
+# ── PREFLIGHT: ONE REAL LAUNCH BEFORE THE LANE MAY TRY ───────────────────────
+# One page.goto('about:blank') through the SAME resolution the lane uses
+# (ported from test-e2e-coverage-matrix.sh). When the browser cannot launch,
+# every scenario fails the same way and the run reads like a product collapse
+# when it is a toolchain gap. Refuse in seconds instead.
+PWPRE="$(mktemp -d "${TMPDIR:-/tmp}/pw-preflight.XXXXXX")"
+# node_modules SYMLINKED beside the config: module resolution walks up from the
+# CONFIG's own directory, so a bare scratch dir cannot even import
+# '@playwright/test'. MEASURED 2026-09-01 on a READY toolchain: without this
+# link the preflight died on "Cannot find module '@playwright/test' ... Require
+# stack: /tmp/pw-preflight.*/pw.config.ts" — a preflight failing for its OWN
+# reasons is exactly the false red it exists to prevent. outputDir lives inside
+# the scratch dir too: Playwright otherwise writes test-results/.last-run.json
+# relative to the invoking cwd. rm -rf below unlinks the symlink, never its target.
+ln -sfn "${E2E}/node_modules" "${PWPRE}/node_modules"
+cat > "${PWPRE}/pw.config.ts" <<'TS'
+import { defineConfig } from '@playwright/test';
+import * as path from 'node:path';
+export default defineConfig({
+  testDir: __dirname, outputDir: path.join(__dirname, 'pw-out'),
+  reporter: [['line']], workers: 1, retries: 0, timeout: 120_000,
+  // The SAME launch flags tests/e2e/playwright.config.ts gives the lane. A bare
+  // config would ask a DIFFERENT question than the lane does: on a box with no
+  // user namespaces (root, or a hardened container) chromium refuses to start
+  // without --no-sandbox, so the preflight would manufacture an exit-2 for a
+  // browser the lane starts fine — the same wrong-question shape this guard
+  // exists to remove. The lane's WebRTC fake-media flags are not copied: this
+  // spec only does page.goto('about:blank') and touches no media device.
+  use: { launchOptions: { args: ['--no-sandbox', '--disable-dev-shm-usage'] } },
+});
+TS
+cat > "${PWPRE}/preflight.spec.ts" <<'TS'
+import { test } from '@playwright/test';
+test('the browser launches', async ({ page }) => { await page.goto('about:blank'); });
+TS
+if ! ( cd "${PWPRE}" && npx --prefix "${E2E}" playwright test -c "${PWPRE}/pw.config.ts" preflight.spec.ts --reporter=line ) \
+     > "${PWPRE}/preflight.out" 2>&1; then
+  echo "SKIPPED-LOUDLY: the browser cannot launch — one page.goto('about:blank') failed:" >&2
+  sed -n '1,25p' "${PWPRE}/preflight.out" >&2
+  echo "" >&2
+  echo "PLAYWRIGHT_BROWSERS_PATH is ${PLAYWRIGHT_BROWSERS_PATH:-unset (playwright resolves its own store)} — if you set" >&2
+  echo "it, unset it or point it at a store that actually holds this playwright's" >&2
+  echo "revision. Install with: make playwright-deps" >&2
+  echo "  [or: (cd tests/e2e && npx playwright install chromium)]" >&2
+  echo "This guard checked NOTHING — the lane would have failed every scenario on" >&2
+  echo "the toolchain, not on the product. Exiting 2 rather than 0 or a false red." >&2
+  rm -rf "${PWPRE}"
+  exit 2
+fi
+rm -rf "${PWPRE}"
 
 WORK="${TMPDIR:-/var/tmp/portage}/cli-lane-guard.$$"
 mkdir -p "${WORK}"
@@ -702,7 +764,7 @@ fi
 # ── 6. the real lane still generates, is collected, and is green offline ─────
 echo
 echo "-- 6. the real thing (no stubs): generate, collect, run the cli lane --"
-( cd "${E2E}" && PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/var/tmp/portage/pw-browsers}" \
+( cd "${E2E}" && \
   npx bddgen >"${WORK}/bddgen.out" 2>&1 )
 if [ $? -eq 0 ]; then
   ok "npx bddgen exits 0 with the cli lane present"
@@ -711,7 +773,7 @@ else
   grep -viE 'npm notice' "${WORK}/bddgen.out" | tail -20 >&2
 fi
 
-( cd "${E2E}" && PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/var/tmp/portage/pw-browsers}" \
+( cd "${E2E}" && \
   npx playwright test --list --project=bdd --reporter=line >"${WORK}/list.out" 2>&1 )
 CLI_COLLECTED="$(grep -c 'features/cli/' "${WORK}/list.out")"
 if [ "${CLI_COLLECTED}" -ge 17 ]; then
@@ -721,7 +783,6 @@ else
 fi
 
 ( cd "${E2E}" && \
-  PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/var/tmp/portage/pw-browsers}" \
   SNAP_REPORT_DIR="${WORK}/lane" SNAP_RUN_ID=cli-lane-guard \
   npx playwright test --project=bdd .features-gen/features/cli/ --reporter=line \
     >"${WORK}/lane.out" 2>&1 )

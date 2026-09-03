@@ -128,7 +128,7 @@ def page(qapp, monkeypatch):
 # Every probe QThread the page can own. A lane that adds a probe MUST add its
 # attribute here: omitting one leaves a live QThread outliving its page, which
 # aborts Qt at teardown.
-_PROBE_ATTRS = ("_probe", "_node_probe", "_e2e_probe", "_saved_probe")
+_PROBE_ATTRS = ("_probe", "_node_probe", "_e2e_probe", "_saved_probe", "_monitor_probe")
 
 
 def _settle(qapp, page, timeout_s=8.0):

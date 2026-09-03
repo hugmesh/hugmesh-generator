@@ -65,8 +65,8 @@ resolve_artifact() {
     #    timeout rather than a clean "artifact not built yet" SKIP. Decompress first
     #    (tests/qemu/run-qemu-docker.sh does this) and re-run.
     for pat in \
-        "${wd}/hugmesh-${plat}-${board:+${board}-}"*"${role}"*".img" \
-        "${wd}/hugmesh-${plat}-"*"-${role}-"*".img" \
+        "${wd}/"*"-${plat}-${board:+${board}-}"*"${role}"*".img" \
+        "${wd}/"*"-${plat}-"*"-${role}-"*".img" \
         "${wd}/"*"-${role}-"*".img" ; do
         # shellcheck disable=SC2086 -- intentional glob expansion of the pattern
         f="$(ls -1t ${pat} 2>/dev/null | grep -viE '(kernel|initramfs|initrd|squashfs|/Image$|rootfs\.img)' | head -1)"

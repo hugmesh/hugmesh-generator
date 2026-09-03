@@ -167,7 +167,7 @@ def qapp():
 def _write_images(session_dir, *names):
     session_dir.mkdir(parents=True, exist_ok=True)
     for n in names:
-        (session_dir / n).write_bytes(b"")
+        (session_dir / n).write_bytes(b"\0")  # non-empty: a 0-byte .img is a killed build, not a row
 
 
 @pytest.fixture
@@ -953,7 +953,7 @@ def test_qemu_playwright_row_picker_offers_only_launchable_rows(wiz, fake_genera
     of this assertion because every fixture row happened to be launchable.
     """
     _gen, full, _abort = fake_generator
-    (full / "hugmesh-jetson-arm64-edge_ai-test-20260807T180000Z.img").write_bytes(b"")
+    (full / "hugmesh-jetson-arm64-edge_ai-test-20260807T180000Z.img").write_bytes(b"\0")  # non-empty: a 0-byte .img is a killed build, not a row
     page = _qemu_page(wiz)
     page._reload_sessions()
     assert "jetson/edge-ai" in page.plan.labels, "the fixture row was not planned"

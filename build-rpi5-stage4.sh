@@ -218,7 +218,8 @@ BUILD_TAR=true          # also emit the mounted-filesystem tarball (.fs.tar.xz)
 ROOT_MiB=9216           # ext4 root partition size in the .img (growroot expands it on first boot)
 GROW_POLICY="fill"      # first-boot grow policy baked into /etc/growfs.conf: fill|none|<size> (see growroot)
 SD_ONLY=false           # use literal /dev/mmcblk0p2 instead of PARTUUID/LABEL identity
-COMPRESS_IMG=false      # xz -9 the finished .img
+COMPRESS_IMG=false      # xz-compress the finished .img (preset: COMPRESS_LEVEL)
+COMPRESS_LEVEL=9        # xz preset --compress uses (0-9); --compress-level N
 EXTRA_PACKAGES=""
 PACKAGES_ADD=""          # --packages-add : atoms to add on top of the derived set
 PACKAGES_DROP=""         # --packages-drop: default-set atoms to remove (mandatory floor honored)
@@ -643,7 +644,12 @@ OPTIONS
         SD-card-only images; the PARTUUID default also boots from USB/NVMe.
 
     --compress
-        xz -9 the finished .img (produces <img>.xz).
+        xz-compress the finished .img (produces <img>.xz); the preset
+        is --compress-level.
+
+    --compress-level N
+        xz preset 0-9 used by --compress (default 9). Lower is faster
+        and larger; 9 is smallest and has the longest build tail.
 
     --seed-url URL
         URL to the latest-stage3 index file used to locate the seed
@@ -1087,6 +1093,9 @@ while [[ $# -gt 0 ]]; do
         --no-grow)            GROW_POLICY="none";      shift   ;;
         --sd-only)            SD_ONLY=true;            shift   ;;
         --compress)           COMPRESS_IMG=true;       shift   ;;
+        --compress-level)
+            case "${2:-}" in [0-9]) ;; *) err "--compress-level must be a single digit 0-9 (got '${2:-}')"; exit 1 ;; esac
+            COMPRESS_LEVEL="$2"; shift 2 ;;
         --tar)                BUILD_TAR=true;          shift   ;;
         --no-tar)             BUILD_TAR=false;         shift   ;;
         # --skip-iso / --no-iso: don't build the installer ISO (now the default).
@@ -2411,7 +2420,7 @@ if ${PRINT_PLAN}; then
     [ "${BOARD}" = "rpi3" ] && _kernel_plan_desc="${_kernel_plan_desc} + bcm2837-pi3.config"
     ${ROLE_CLIENT} && _kernel_plan_desc="${_kernel_plan_desc} + desktop.config"
     _plan KERNEL             "raspberrypi-arm64 (defconfig=${RPI_DEFCONFIG} + ${_kernel_plan_desc})"
-    _plan FLAGS_EFFECTIVE    "env=${ENV} img=${BUILD_IMG} iso=${BUILD_ISO} tar=${BUILD_TAR} img_size=${ROOT_MiB} grow=${GROW_POLICY} sd_only=${SD_ONLY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} pcie_gen3=${PCIE_GEN3} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} enable_games=${ENABLE_GAMES} standalone=${STANDALONE} encrypt_root=${ENCRYPT_ROOT}"
+    _plan FLAGS_EFFECTIVE    "env=${ENV} img=${BUILD_IMG} iso=${BUILD_ISO} tar=${BUILD_TAR} img_size=${ROOT_MiB} grow=${GROW_POLICY} sd_only=${SD_ONLY} compress=${COMPRESS_IMG} compress_level=${COMPRESS_LEVEL} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} pcie_gen3=${PCIE_GEN3} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} enable_games=${ENABLE_GAMES} standalone=${STANDALONE} encrypt_root=${ENCRYPT_ROOT}"
     exit 0
 fi
 
@@ -4641,8 +4650,8 @@ build_img() {
     trap - ERR EXIT
 
     if ${COMPRESS_IMG}; then
-        info "Compressing image (xz -T0 -9)..."
-        xz -T0 -9 -f "${IMG_PATH}"
+        info "Compressing image (xz -T0 -${COMPRESS_LEVEL})..."
+        xz -T0 "-${COMPRESS_LEVEL}" -f "${IMG_PATH}"
         IMG_PATH="${IMG_PATH}.xz"
     fi
 
