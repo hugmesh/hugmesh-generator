@@ -501,8 +501,11 @@ class UsersScreen:
         from . import model
         out: list[str] = []
         if j.cfg.users:
-            headers = ["#", "username", "domain", "role", "registration"]
-            rows = [[str(i), u.username, u.domain, u.role, u.registration or "-"]
+            # roles: the FULL set (issue #228), primary first — the GUI RoleCell's
+            # checked boxes, joined; a one-role account renders exactly as before.
+            headers = ["#", "username", "domain", "roles", "registration"]
+            rows = [[str(i), u.username, u.domain, ", ".join(u.roles),
+                     u.registration or "-"]
                     for i, u in enumerate(j.cfg.users, 1)]
             out += model.format_table(headers, rows)
         else:
@@ -652,8 +655,8 @@ class Journey:
             LocalCloudScreen(), E2EScreen(), QemuScreen(), MeshEmuScreen(),
             IdpScreen(), RoleScreen(), WorklistScreen(),
             YesNoStep("domains_choice", "Domains",
-                      "Add more domains beyond the internal orchestration "
-                      "superdomain (public go-live domains this mesh serves)?",
+                      "Add more domains beyond the internal Tailscale root "
+                      "domain (public go-live domains this mesh serves)?",
                       "additional_domains"),
             DomainsScreen(),
             YesNoStep("users_choice", "User accounts",

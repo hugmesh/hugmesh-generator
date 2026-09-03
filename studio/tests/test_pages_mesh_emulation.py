@@ -155,13 +155,13 @@ def fake_generator(tmp_path):
     for n in ("hugmesh-rpi5-arm64-pki-test-20260807T153808Z.img.xz",
               "hugmesh-x86-amd64-be-test-20260807T172418Z.img",
               "hugmesh-x86-amd64-fe-test-20260807T172419Z.img"):
-        (sess / n).write_bytes(b"")
+        (sess / n).write_bytes(b"\0")  # non-empty: a 0-byte .img is a killed build, not a row
     for i in range(3):
         (sess / f"build-image{i}.log").write_text("ok\n")
 
     abort = gen / "out" / "sessions" / "20260812-000000-abort"
     abort.mkdir(parents=True)
-    (abort / "hugmesh-rpi5-arm64-pki-test-20260812T010101Z.img").write_bytes(b"")
+    (abort / "hugmesh-rpi5-arm64-pki-test-20260812T010101Z.img").write_bytes(b"\0")  # non-empty: a 0-byte .img is a killed build, not a row
     for i in range(4):
         (abort / f"build-image{i}.log").write_text("started\n")
 
@@ -420,6 +420,115 @@ def test_picker_defaults_to_the_newest_COMPLETE_session(wiz, fake_generator):
     page.session_combo.setCurrentIndex(idx)
     assert "PARTIAL — 1 of 4 image(s)" in page.session_note.text()
     assert page.devices.rowCount() == 1               # and the plan shrinks with it
+
+
+# ── the branded (non-default --brand) session ────────────────────────────────────
+# out/sessions/20260830-185641-8e88a6 on the operator's workstation: a FINISHED
+# three-image Pi mesh that this page showed as nothing at all — an empty dropdown
+# under "No build session under out/sessions/ holds a bootable image yet". The one
+# thing separating it from every fixture above is its BRAND: built `--brand sdhm`,
+# so the artifacts are named sdhm-… and the parser (which required the DEFAULT
+# brand's `hugmesh-` prefix) resolved zero rows, zero images, no session.
+#
+# Driven through the real page rather than the core alone because the core failure
+# was invisible from here in exactly the way that mattered: the page did not error,
+# it rendered a tidy, plausible "you have not built anything yet".
+
+_SDHM_PI_IMAGES = (
+    "sdhm-rpi5-arm64-pki-test-20260831T015954Z.img.xz",
+    "sdhm-rpi5-arm64-backend-test-20260831T025801Z.img.xz",
+    "sdhm-rpi5-arm64-frontend-test-20260831T033915Z.img.xz",
+)
+
+
+@pytest.fixture
+def branded_generator(tmp_path):
+    """A generator tree holding ONLY the operator's sdhm Pi session.
+
+    Only that session, on purpose: with a hugmesh-named session beside it the page
+    would still have something to show, and "the dropdown is empty" — the reported
+    symptom — could not be asserted.
+    """
+    gen = tmp_path / "branded-gen"
+    sess = gen / "out" / "sessions" / "20260830-185641-8e88a6"
+    sess.mkdir(parents=True)
+    for name in _SDHM_PI_IMAGES:
+        (sess / name).write_bytes(b"\0")
+        stem = name[: -len(".img.xz")]
+        # the non-bootable siblings that sit beside every image on disk
+        for ext in (".iso", ".stage4.tar.xz", ".fs.tar.xz"):
+            (sess / (stem + ext)).write_bytes(b"\0")
+    for log in ("build-pki.rpi5.log", "build-be.rpi5.log", "build-fe.rpi5.log"):
+        (sess / log).write_text("=== Post-install ===\n")
+    (sess / qemu_tests.MESH_MANIFEST_NAME).write_text(json.dumps({
+        "format": 2, "brand": "sdhm", "brand_title": "Snapdragon Hugmesh",
+        "org": "sdhm", "cluster_domain": "snapdragon.systems",
+        "superdomain": "snapdragon.local", "domains": [], "users": [],
+        "images": [{"id": "pki.rpi5", "role": "pki", "platform": "rpi5",
+                    "board": "rpi5", "flavor": "", "encrypt_root": True},
+                   # ids keep their real on-disk spelling; the `role` values are
+                   # canonical because test-role-key-spelling.sh bans emitting an
+                   # alias as a `"role":` JSON value (and nothing reads it here)
+                   {"id": "be.rpi5", "role": "backend", "platform": "rpi5",
+                    "board": "rpi5", "flavor": "", "encrypt_root": True},
+                   {"id": "fe.rpi5", "role": "frontend", "platform": "rpi5",
+                    "board": "rpi5", "flavor": "", "encrypt_root": True}]}))
+    (gen / "tests" / "qemu").mkdir(parents=True)
+    return gen, sess
+
+
+@pytest.fixture
+def branded_wiz(qapp, branded_generator):
+    gen, _sess = branded_generator
+    w = wizard_mod.StudioWizard(str(gen))
+    w.show()
+    yield w
+    w.close()
+    w.deleteLater()
+
+
+def test_a_branded_session_is_offered_and_planned(branded_wiz, branded_generator):
+    """THE REPORTED DEFECT: the finished 3-image Pi session must be IN the dropdown,
+    selected, badged complete, and planned into three bootable rows."""
+    _gen, sess = branded_generator
+    page = _page(branded_wiz)
+
+    # the picker is not empty, and the session is the one selected
+    assert page.session_combo.count() == 1
+    assert page.session_combo.currentIndex() == 0
+    assert page.session_combo.currentData() == str(sess)
+    # ...and it reads COMPLETE: no PARTIAL badge in the entry, no inline warning
+    assert "PARTIAL" not in page.session_combo.itemText(0)
+    assert page.session_note.text() == ""
+    assert "no bootable image" not in page.plan_label.text().lower()
+
+    # three devices, in boot order, each pinned to its own sdhm artifact
+    assert page.devices.rowCount() == 3
+    labels = [page.devices.item(r, 0).text() for r in range(3)]
+    assert labels == ["rpi5/backend", "rpi5/frontend", "rpi5/pki"]
+    assert page.plan.session_path == str(sess)
+    assert sorted(os.path.basename(r.image) for r in page.plan.rows) == \
+        sorted(_SDHM_PI_IMAGES)
+    # the frontend is a gateway role, so the mesh has a front door to open
+    assert page.plan.gateway_label == "rpi5/frontend"
+    assert page.plan.front_door.startswith("https://127.0.0.1:")
+
+
+def test_a_branded_session_is_launch_resolvable(branded_wiz, branded_generator):
+    """Listing it is only half the ask — every row must also produce a start argv.
+
+    Before the fix this raised ``'rpi5/pki' is not a row of this plan``: the plan
+    had no rows to address. The argv is checked for the ``--only-exact`` pin and
+    the session it was planned from, because a row that starts from the runner's
+    own newest-session guess boots a different build than the operator chose.
+    """
+    _gen, sess = branded_generator
+    page = _page(branded_wiz)
+
+    for label in ("rpi5/pki", "rpi5/backend", "rpi5/frontend"):
+        argv = emulation.start_device_argv(page.plan, label)
+        assert argv[argv.index("--only-exact") + 1] == label
+        assert argv[argv.index("--artifacts") + 1] == str(sess)
 
 
 def test_table_renders_one_row_per_planned_device(wiz):

@@ -45,8 +45,8 @@ All three front-ends expose the same knobs (**all-menus parity**):
   `--edge-ai-models`, `--edge-ai-model-default`.
 - **`scripts/build-menu.sh`:** the `edge-ai` row in the x86 role menu, and
   **Options → Edge-AI service** (toggle for backend-gpu/omnibus + runtime/preload/default).
-- **Studio wizard:** *Network, identity & egress → Edge-AI inference* group
-  (cloud/mesh modes); `ImageConfig.edge_ai_service / edge_ai_runtime / edge_ai_models
+- **Studio wizard:** *Domain, Mesh, and Services → the AI & Inference group of the
+  services table* (cloud/mesh modes); `ImageConfig.edge_ai_service / edge_ai_runtime / edge_ai_models
   / edge_ai_model_default` → `to_cli_args()`.
 
 The `edge-ai` role defaults `--gpu-driver nvidia` and turns CUDA on; pass an explicit
@@ -214,8 +214,9 @@ matrix-ui's `viseme.ts` mouth-shape map — keep the two in sync (see
 `edge-ai-tts` in `--optional-services`. **`scripts/build-menu.sh`:** the *Voice
 synthesis (TTS)* row in **Options → Edge-AI inference** (grouped there for UX only —
 its flag is emitted unconditionally, not gated to a GPU target). **Studio wizard:**
-*Network, identity & egress* — a standalone tri-state checkbox next to Character
-Studio (platform-gated like it, not mode-gated like the GPU Edge-AI group);
+*Domain, Mesh, and Services* — the `edge-ai-tts` row in the services table's
+Characters & Avatars group (platform-gated like Character Studio, not mode-gated like
+the GPU Edge-AI group);
 `ImageConfig.edge_ai_tts` → `to_cli_args()`.
 
 **Slug:** `edge-ai-tts`, **DEFAULT-OFF**, **NO `dependsOn`**. The container is a

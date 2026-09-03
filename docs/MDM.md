@@ -108,7 +108,7 @@ Mesh + identity: `--keys-dir D` (docker-mesh-node layout — see
 [Enrollment](#enrollment--mesh-join)) · `--login-server URL` (headscale control
 URL, overrides keys-dir) · `--authkey-file F` (0600 file holding the one-time
 pre-auth key) · `--device-id ID` (stable id, `[a-z0-9-]`, default
-`phone-<sanitized serial>`) · `--superdomain D` (orchestration superdomain /
+`phone-<sanitized serial>`) · `--superdomain D` (Tailscale root domain /
 MagicDNS base, default `hugmesh.internal`) · `--role
 user|mod|admin|superadmin` (default `user`, or the keys-dir `role` file).
 
@@ -244,13 +244,14 @@ enforced in code, fail-closed — not prose.
   scopes the CGNAT match to `tun*` so a cellular carrier-NAT `100.64/10`
   address on an `rmnet*` interface is not mistaken for a join.)
 
-## The orchestration superdomain (what the phone joins)
+## The Tailscale root domain (what the phone joins)
 
-The handset joins the brand's **orchestration superdomain** — quoted verbatim
+The handset joins the brand's **Tailscale root domain** — quoted verbatim
 from [`GO-LIVE-WIZARD.md`](GO-LIVE-WIZARD.md), which is the canonical
 definition:
 
-> - **Orchestration superdomain** — `<brand>.internal` (default
+> - **Tailscale root domain** (formerly "orchestration superdomain", the name
+>   Studio and this document used before 2026-09) — `<brand>.internal` (default
 >   `hugmesh.internal`), the headscale MagicDNS `base_domain` every mesh node
 >   joins. It is **permanently internal**: it carries the tailnet + `kube-api.<superdomain>`
 >   control-plane endpoint, is never routable, and is **never** go-live-flipped.
