@@ -91,6 +91,14 @@ import * as path from 'node:path';
 export default defineConfig({
   testDir: __dirname, outputDir: path.join(__dirname, 'pw-out'),
   reporter: [['line']], workers: 1, retries: 0, timeout: 120_000,
+  // The SAME launch flags tests/e2e/playwright.config.ts gives the lane. A bare
+  // config would ask a DIFFERENT question than the lane does: on a box with no
+  // user namespaces (root, or a hardened container) chromium refuses to start
+  // without --no-sandbox, so the preflight would manufacture an exit-2 for a
+  // browser the lane starts fine — the same wrong-question shape this guard
+  // exists to remove. The lane's WebRTC fake-media flags are not copied: this
+  // spec only does page.goto('about:blank') and touches no media device.
+  use: { launchOptions: { args: ['--no-sandbox', '--disable-dev-shm-usage'] } },
 });
 TS
 cat > "${PWPRE}/preflight.spec.ts" <<'TS'
