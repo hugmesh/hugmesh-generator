@@ -232,7 +232,13 @@ _HELP_SERVICES_PRESET = (
     "these two say what it cannot. No optional services emits an explicit empty "
     "list, which also suppresses the builders' own default set. Every user-level "
     "service emits --all-services, which expands a fixed USER-level catalogue and "
-    "leaves the infra rows (tor, egress-vpn, anubis, workloadConsole) opt-in.")
+    "leaves the infra rows (tor, egress-vpn, workloadConsole, anubis) to the "
+    "table — and anubis comes on by itself on a prod build besides.")
+_HELP_EDGE_AI_RUNTIME = (
+    "Which inference server actually runs the models on the GPU node "
+    "(--edge-ai-runtime): ollama is the builder's default, vllm the alternative "
+    "engine. It picks the server that is baked, not which models are preloaded — "
+    "that is the field beside it.")
 _HELP_EDGE_AI_MODELS = (
     "Comma-separated models to PRELOAD onto the GPU node while the image is built "
     "(--edge-ai-models), e.g. llama3.2:3b,nomic-embed-text. Empty = the builder's "
@@ -831,7 +837,15 @@ class NetworkPage(QtWidgets.QWizardPage):
         sv_outer.addWidget(self.services_scope_note)
         self.services_node_scope_note = _hint(_SERVICES_NODE_SCOPE_CAVEAT)
         sv_outer.addWidget(self.services_node_scope_note)
-        self.services_box = QtWidgets.QGroupBox("Services & Apps")
+        # Escaped for the same reason Collapsible escapes its QToolButton
+        # (_widgets.py:83): QGroupBox paints its title with Qt.TextShowMnemonic, so a
+        # bare '&' is eaten as an accelerator and the heading renders "Services  Apps".
+        # Measured: painting "Services & Apps" with TextShowMnemonic is pixel-identical
+        # to painting "Services  Apps", and QKeySequence.mnemonic() on it returns
+        # Alt+Space. The section header twelve lines below carries the SAME words and is
+        # escaped, so leaving this one bare showed the ampersand twice on one screen and
+        # swallowed it once. See test_section_titles_are_not_eaten_as_mnemonics.
+        self.services_box = QtWidgets.QGroupBox("Services & Apps".replace("&", "&&"))
         svl = QtWidgets.QVBoxLayout(self.services_box)
         self.services_override_note = _hint(_SERVICES_OVERRIDE_NOTE)
         svl.addWidget(self.services_override_note)
@@ -945,7 +959,13 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.services_table.setItemWidget(self.edge_ai_item, _SVC_COL_ON, self.edge_ai)
         self.edge_ai_runtime = QtWidgets.QComboBox()
         self.edge_ai_runtime.addItems(["ollama", "vllm"])
-        self.edge_ai_runtime.setToolTip("Model runtime the node serves with (--edge-ai-runtime).")
+        # NO setToolTip here: this widget is a member of the "edge_ai_service" gate
+        # group (:1652), and gate_widgets ENDS with setToolTip("" if supported else
+        # reason) — so help written in __init__ is blanked on the first visit to an
+        # x86 build, where the field IS supported. It was, and the Runtime dropdown
+        # had no reachable tooltip at all (measured: every widget in its parent chain
+        # up to the page was empty too, since an in-table cell has no _row() wrapper
+        # to inherit from). Its help is in _field_help_targets(), re-asserted last.
         self.services_table.setItemWidget(self.edge_ai_item, _SVC_COL_MODE, self.edge_ai_runtime)
         self.edge_ai_models = QtWidgets.QLineEdit()
         self.edge_ai_models.setPlaceholderText(
@@ -984,10 +1004,13 @@ class NetworkPage(QtWidgets.QWizardPage):
             # ISSUE #226 ask 2. Eleven rows used to share one caption, "Runs in-cluster
             # unless pointed at a hosted endpoint" — which said nothing about what
             # `federation-bundles` or `velero-objectstore` IS, and was untrue for the
-            # three ids that have no in-mesh workload at all (specs/cluster/
+            # three ids that have no in-mesh workload at all — specs/cluster/
             # backing-services.yaml gives velero-objectstore, smtp and
-            # federation-bundles an empty `inMesh.apps`). The shared half is dropped
-            # rather than reworded: the row's own Hosting dropdown already reads
+            # federation-bundles both an empty `inMesh.apps` AND an empty
+            # `inMesh.manifests` (postgres-casdoor's `apps` is empty too, but it
+            # carries manifests/casdoor/pg.yaml, so it DOES run in-cluster). The
+            # shared half is dropped rather than reworded: the row's own Hosting
+            # dropdown already reads
             # "Self-hosted (in-cluster)" / "Managed (hosted endpoint)", and the group
             # row above carries _MANAGED_SCOPE_NOTE. This column is "What Enabling It
             # Does", so it now says what the service is.
@@ -1713,10 +1736,45 @@ class NetworkPage(QtWidgets.QWizardPage):
         # verbatim (home.py:684-689). The guard is what makes a gate's REASON win: a
         # greyed or hidden control keeps the sentence saying why it is unavailable,
         # and every live control gets its own explanation back.
+        # `if not w.toolTip()` alone is not enough, because a gate can target a
+        # CONTAINER rather than the field: gate_widgets writes the platform reason onto
+        # `services_box` (:1666, field `optional_services`, scoped x86+rpi5), and the
+        # rows INSIDE it are not gate members, so their own tooltips are empty. Qt's
+        # QApplication::notify walks a ToolTip event up the parent chain only while each
+        # widget IGNORES it (QWidget::event ignores when toolTip() is empty), so help
+        # written on a row inside a greyed box STOPS the walk one level below the box
+        # and shadows "not available for this builder" — measured on jetson/orangepi5,
+        # where the Selection dropdown lost exactly that sentence. Skip any target whose
+        # gated ancestor is already answering for it; a gate reason is only ever written
+        # while the surface is off, so an ENABLED ancestor never suppresses help.
         for w, help_text in self._field_help_targets():
+            if self._gate_reason_above(w):
+                # CLEAR, not merely skip: a wrapper is not a gate member, so nothing
+                # else ever rewrites its tooltip — help written on an earlier visit to a
+                # platform that DID support the field would otherwise persist and shadow
+                # the reason on this one. Only ever clears our own sentence, so a reason
+                # written on the widget itself is untouched.
+                if w.toolTip() == help_text:
+                    w.setToolTip("")
+                continue
             if not w.toolTip():
                 w.setToolTip(help_text)
         self._apply_default_expansion()
+
+    def _gate_reason_above(self, w):
+        """True while an ANCESTOR of `w` (up to this page) carries a gate reason that Qt
+        would show for a hover over `w` — i.e. a container the gates greyed or hid.
+
+        Bounded at the page so it can never reach the wizard's own chrome, and keyed on
+        the ancestor being OFF rather than merely having a tooltip: gate_widgets and
+        gate_widgets_role_class both write `"" if ok else reason`, so a reason and a
+        live surface never coexist."""
+        anc = w.parentWidget()
+        while anc is not None and anc is not self:
+            if anc.toolTip() and (not anc.isEnabled() or not anc.isVisibleTo(self)):
+                return True
+            anc = anc.parentWidget()
+        return False
 
     def _field_help_targets(self):
         """(widget, help) for every field on this page — ask 2's "explanatory tooltips
@@ -1745,6 +1803,7 @@ class NetworkPage(QtWidgets.QWizardPage):
             (self.snort, _HELP_SNORT),
             (self.root_login_row, _HELP_ROOT_LOGIN),
             (self.services_preset_row, _HELP_SERVICES_PRESET),
+            (self.edge_ai_runtime, _HELP_EDGE_AI_RUNTIME),
             (self.edge_ai_models, _HELP_EDGE_AI_MODELS),
             (self.edge_ai_default, _HELP_EDGE_AI_DEFAULT),
             (self.edge_ai_analysis, _HELP_EDGE_AI_ANALYSIS),

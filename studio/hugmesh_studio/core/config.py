@@ -527,9 +527,15 @@ SERVICE_DESCRIPTIONS: dict[str, str] = {
     "egress-vpn": "Routes this node's outbound traffic through a provided VPN profile.",
     "workloadConsole": "In-cluster workload console — inspect and restart mesh workloads "
                        "from the browser.",
+    # ISSUE #226 ASK 7. Worded in the order _opt_anubis_installed actually decides
+    # in (scripts/_optional-services-lib.sh:478-482): it tests _opt_selected FIRST
+    # and only falls through to the ENV split when the operator said nothing, so a
+    # ticked row installs anubis on ANY build — including the default ENV=test one
+    # (ImageConfig().env == "test"). Saying it "stays off on a test build" would be
+    # false for the one action this row exists to perform.
     "anubis": "Anti-scraper proof-of-work gate in front of the public web routes. "
-              "On a prod build the platform turns it ON by itself, whatever this row "
-              "says; on a test build it stays off.",
+              "Ticking it installs it on any build; left alone a prod build turns "
+              "it on by itself anyway and only a test build leaves it off.",
 }
 
 # Presentation grouping for the services surface: (group title, (slug, ...)). Ordered —
@@ -633,7 +639,10 @@ MANAGED_SERVICE_TIER3_IDS = ("cassandra", "harbor", "vault-kv", "vault-pki")
 # told the operator nothing about `federation-bundles` or `velero-objectstore`. One line
 # per id saying WHAT IT IS, taken from specs/cluster/backing-services.yaml's displayName
 # + consumers (the same file the hermetic test_managed_services.py pins this constant
-# against); the shared "in-cluster unless…" sentence is appended once at the call site.
+# against). The shared "in-cluster unless…" sentence is NOT re-appended anywhere: the
+# row's own Hosting dropdown reads "Self-hosted (in-cluster)" / "Managed (hosted
+# endpoint)" and the group row above it carries the scope note, so this column is
+# free to answer only "what is it" (network.py's backing-services loop).
 MANAGED_SERVICE_DESCRIPTIONS: dict[str, str] = {
     "velero-objectstore": "Object store Velero writes the cluster's backups into "
                           "(managed = an S3 / Azure Blob bucket).",

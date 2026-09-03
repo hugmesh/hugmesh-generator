@@ -279,6 +279,14 @@ def test_section_titles_are_not_eaten_as_mnemonics(wiz):
     assert page.identity_section.title() == "Identity & Domain"
     # the displayed text must carry the escaped form, or Qt swallows the ampersand
     assert page.identity_section.toggle.text() == "Identity && Domain"
+    # …and so is a QGroupBox, which paints its title with Qt.TextShowMnemonic: an
+    # unescaped "Services & Apps" renders "Services  Apps" (measured — painting it with
+    # TextShowMnemonic is pixel-identical to painting "Services  Apps", and
+    # QKeySequence.mnemonic() on it returns Alt+Space). The section header carries the
+    # SAME words twelve lines away and IS escaped, so leaving this one bare showed the
+    # ampersand once correct and once swallowed on a single screen.
+    assert page.services_box.title() == "Services && Apps"
+    assert page.services_section.toggle.text() == "Services && Apps"
     assert any("&" in s.title() for s in (page.identity_section, page.tailnet_section,
                                           page.mesh_section, page.egress_section,
                                           page.security_section,
@@ -785,7 +793,7 @@ def test_every_field_carries_its_own_explanatory_tooltip(wiz):
     page still passes (issue #230's "the other half of no setting info")."""
     page = _net(wiz, mode="cloud", role="laptop", platform="x86")
     targets = page._field_help_targets()
-    assert len(targets) >= 23, f"only {len(targets)} fields carry help"
+    assert len(targets) >= 24, f"only {len(targets)} fields carry help"
     live = 0
     for w, help_text in targets:
         assert len(help_text) > 40, f"{help_text!r} is not an explanation"
@@ -797,6 +805,39 @@ def test_every_field_carries_its_own_explanatory_tooltip(wiz):
     # that the help SURVIVES the gates rather than being written before them.
     assert live >= 15, f"only {live} live fields were examined"
     assert len({h for _w, h in targets}) == len(targets), "two fields share one tooltip"
+
+
+def test_the_in_table_edge_ai_cells_have_help_that_survives_their_gate(wiz):
+    """ASK 2, on the class the loop above CANNOT see.
+
+    The loop sweeps `_field_help_targets()` — the production list itself — so a field
+    that was never added to it is invisible to the guard. That is not hypothetical: all
+    five edge-AI cells are members of the "edge_ai_service" gate group, `gate_widgets`
+    ends with `setToolTip("" if supported else reason)`, and on x86 (where the field IS
+    supported) that writes "". The Runtime dropdown was set in __init__ and blanked on
+    every visit, leaving it with no reachable tooltip anywhere in its parent chain — an
+    in-table cell has no _row() wrapper to inherit one from.
+
+    Named by attribute rather than read out of the production list, so adding a sixth
+    cell without help fails here."""
+    page = _net(wiz, mode="mesh", role="backend", platform="x86")
+    # NON-VACUITY: the row itself is on screen and the gate says SUPPORTED here, which is
+    # the branch that writes "" over whatever __init__ had put there.
+    assert page.edge_ai_runtime.isVisibleTo(page) and page.edge_ai_runtime.isEnabled()
+    for name in ("edge_ai", "edge_ai_runtime", "edge_ai_models",
+                 "edge_ai_default", "edge_ai_analysis"):
+        w = getattr(page, name)
+        # `edge_ai_default` / `edge_ai_analysis` sit in the sub-rows the page folds by
+        # default, so visibility is not the property — the gate blanks them either way.
+        assert w.isEnabled(), f"precondition: {name} is not gated off on x86"
+        # what a hover actually finds: the cell's own tooltip, or an ancestor's
+        cur, tip = w, ""
+        while cur is not None and not tip:
+            tip = cur.toolTip()
+            if cur is page:
+                break
+            cur = cur.parentWidget()
+        assert tip, f"{name} has no reachable tooltip after initializePage"
 
 
 def test_a_gate_reason_still_beats_the_field_help(wiz):
@@ -813,6 +854,23 @@ def test_a_gate_reason_still_beats_the_field_help(wiz):
     page = _net(wiz, mode="mesh", role="generic", platform="rpi5")
     assert not page.snort.isEnabled(), "precondition: snort is x86-only"
     assert "rpi5" in page.snort.toolTip(), page.snort.toolTip()
+    # …and the case `if not w.toolTip()` alone does NOT cover, because the gate targets a
+    # CONTAINER: gate_widgets writes the platform reason onto services_box, and the rows
+    # INSIDE it are not gate members, so their own tooltips are empty and the guard lets
+    # help through. Qt walks a ToolTip event up the parent chain only while each widget
+    # IGNORES it, so help on the row STOPS the walk one level below the box — measured on
+    # jetson, where the greyed Selection dropdown showed "A whole-set shortcut…" instead
+    # of "Not available for the jetson builder…". _gate_reason_above() is what restores it.
+    page = _net(wiz, mode="mesh", role="generic", platform="jetson")
+    assert not page.services_box.isEnabled(), (
+        "precondition: jetson has no --optional-services")
+    assert "jetson" in page.services_box.toolTip(), page.services_box.toolTip()
+    assert page.services_preset_row.toolTip() == "", (
+        "help on a row inside the gated box shadows the platform reason")
+    # and on a platform that DOES support it, the same row keeps its help
+    page = _net(wiz, mode="mesh", role="generic", platform="x86")
+    assert page.services_box.isEnabled()
+    assert page.services_preset_row.toolTip() == net_mod._HELP_SERVICES_PRESET
 
 
 def test_the_default_release_state_is_explained_not_deleted(wiz):
@@ -877,6 +935,12 @@ def test_the_privacy_group_answers_where_is_anubis(wiz):
     assert "anti-scraping" not in " ".join(t for t, _ in SERVICE_GROUPS).lower()
     desc = SERVICE_DESCRIPTIONS["anubis"]
     assert "prod" in desc and "test" in desc, desc
+    # …and it says the TRUE thing about the row itself. _opt_anubis_installed tests
+    # _opt_selected FIRST and only falls through to the ENV split when nothing was said,
+    # so a ticked row installs anubis on ANY build — including the default ENV=test one
+    # (ImageConfig().env == "test", and to_cli_args emits --optional-services anubis).
+    # "on a test build it stays off" would be false for the one action the row performs.
+    assert "installs it on any build" in desc, desc
     # the row's own caption in the table carries it, on the platform that offers the row
     page = _net(wiz, mode="mesh", role="generic", platform="rpi5")
     item = page._svc_items["anubis"]
