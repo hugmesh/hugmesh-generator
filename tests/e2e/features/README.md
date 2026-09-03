@@ -122,14 +122,17 @@ Tagging `@env:` does three things:
 
 **An untagged scenario is NOT availability-gated.** That is deliberate: the
 pre-existing scenarios declare no `@env:`, and gating them would turn every
-honest "nothing at :8443" failure into a green-looking skip. Opt in by tagging.
+honest "nothing at the docker door" failure into a green-looking skip. Opt in by
+tagging.
 
 A probe issues a real HTTP request, because a TCP-connect probe lies here:
-docker's port proxy binds `:8443` whether or not anything serves it, and the kind
-node container holds that same port as soon as the cluster exists. Only a status
-line proves the door answers. `@env:docker` and `@env:kind` can therefore never
-both be available on one host, and the skip reason names which container actually
-holds the port.
+docker's port proxy binds a published port whether or not anything serves it, and
+the kind node container holds `:8443` as soon as the cluster exists. Only a status
+line proves the door answers. The compose stack's host door is `PUBLIC_HTTPS_PORT`
+(default 8488 — `:8443` is the port inside its tls-front container), so by default
+`@env:docker` and `@env:kind` coexist on one host; publish the stack on `:8443` as
+well and only one of them can hold the port, and the skip reason names which
+container actually holds it.
 
 `@env:kind` + `@interface:browser` additionally needs
 `SNAP_HOST_RESOLVER='MAP hugmesh.net 127.0.0.1, MAP *.hugmesh.net 127.0.0.1'`

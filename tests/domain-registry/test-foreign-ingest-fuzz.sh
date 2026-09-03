@@ -269,6 +269,43 @@ printf 'blob\x00\x00X-Device-Terminal-StepUp: 1\n' > "${B}/src/wire.bin"
 PIN="$(digest_of nulheader)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
 run_gate nulheader "$B" "$MESH" "$PIN"; assert_reject "(NUL-cloaked frozen wire header X-Device-Terminal-StepUp)"
 
+# ── (8e) DATA-DRIVEN SCREENS MUST NOT GO INERT (fail-closed on a dead term source) ─
+#         (f.1)/(f.2) are DATA-DRIVEN, so they carried the same fail-open-by-shape
+#         defect a38208e6 hit in the classifier one file over: gut the block (or move
+#         the file) and `jq ... // []` yields NOTHING, the old `if [ -n "$frozen_terms" ]`
+#         skipped the whole loop, and control fell through to ADMIT — screening zero
+#         terms, exit 0, no diagnostic. Likewise an unreadable token-classifier.js was
+#         treated as the node-OPTIONAL case and silently skipped.
+#         EACH CASE ISOLATES ONE GATE — a case a second gate would also reject proves
+#         nothing about the first (measured: an earlier draft of these cases stayed
+#         green under BOTH fail-open mutations, because whichever gate was left intact
+#         rejected the base anyway).
+#           e1/e2 keep the REAL classifier readable, so (f.1) passes on the clean origin
+#                 fields and only (f.2) can refuse — they drive the term source.
+#           e3    uses a CLEAN base that (f.2) has no reason to touch, so only (f.1) can
+#                 refuse — it drives the classifier preflight.
+B="${WORK}/inertfrozen"; mkclean_base "$B"
+printf 'metadata:\n  labels:\n    hugmesh.net/domain: attacker\n' > "${B}/src/hijack.yaml"
+PIN="$(digest_of inertfrozen)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
+# POSITIVE CONTROL: with the shipped tokens.json this base rejects, so a reject below
+# is the guard biting and not a base that was never admissible.
+run_gate inertctl "$B" "$MESH" "$PIN"; assert_reject "(8e control) impersonating base rejected with an INTACT tokens.json"
+# e1: frozen_protocol_constants deleted -> zero terms. Fail-open ADMITS this
+#     impersonating tree; the guard must refuse it.
+jq 'del(.frozen_protocol_constants)' "${REPO}/scripts/tooling/tokens.json" > "${WORK}/tokens.gutted.json"
+FIB_TOKENS_JSON="${WORK}/tokens.gutted.json" run_gate inertgut "$B" "$MESH" "$PIN"
+assert_reject "(8e) gutted tokens.json (frozen_protocol_constants deleted) — screen must not go inert"
+# e2: the spec file moved away entirely -> jq errors into /dev/null -> zero terms.
+FIB_TOKENS_JSON="${WORK}/no-such-tokens.json" run_gate inertmissing "$B" "$MESH" "$PIN"
+assert_reject "(8e) absent tokens.json — screen must not go inert"
+# e3: an unreadable token-classifier is a BROKEN INSTALL, not the node-optional case.
+#     Clean base: (f.2) screens it and finds nothing, so only (f.1) can refuse, and a
+#     clean base is otherwise ADMITTED (see the (legit) control).
+B="${WORK}/inertnotc"; mkclean_base "$B"; PIN="$(digest_of inertnotc)"
+sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
+FIB_TOKEN_CLASSIFIER="${WORK}/no-such-classifier.js" run_gate inertnotc "$B" "$MESH" "$PIN"
+assert_reject "(8e) unreadable token-classifier.js — fail-closed, not silently skipped"
+
 # ── (9) SBOM ABSENT ──────────────────────────────────────────────────────────────
 B="${WORK}/nosbom"; mkclean_base "$B"; rm -f "${B}/.hugmesh-sbom.json"
 PIN="$(digest_of nosbom)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5

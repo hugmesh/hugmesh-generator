@@ -742,7 +742,7 @@ def test_users_domain_cell_is_a_dropdown_of_defined_domains(wiz):
 
 def test_users_superadmin_locks_domain_to_superdomain(wiz):
     """Spec 5: choosing the superadmin role forces + locks the row's domain to the
-    orchestration superdomain; any other role unlocks the dropdown."""
+    Tailscale root domain; any other role unlocks the dropdown."""
     pick_mode(wiz, "cloud")
     users = advance_to(wiz, wizard_mod.UsersPage)
     users._add("alice", "acme.example", "user")

@@ -4,7 +4,7 @@ Opened by the mesh WorklistPage when a DESKTOP-class row is checked: collects th
 person's username + role for that device. The page keeps the collected pairs in
 its on-screen table and stamps them onto the WorklistEntries on Next; the core
 half (worklist.desktop_users / _materialize_one 3b) turns them into a manifest
-User on the internal orchestration superdomain and the image's --person-role.
+User on the internal Tailscale root domain and the image's --person-role.
 
 Username validation is core.validate.validate_username — the same allowlist every
 other surface uses — so the dialog can never hand the manifest a name cluster
@@ -21,7 +21,7 @@ _ROLE_BLURBS = {
     "user": "regular account on the mesh's apps",
     "mod": "moderation surfaces on top of user",
     "admin": "domain administration on top of mod",
-    "superadmin": "whole-mesh administration (orchestration domain)",
+    "superadmin": "whole-mesh administration (the Tailscale root domain)",
 }
 
 

@@ -18,9 +18,11 @@
 #     kept rather than deferred, so the day an environment comes up they are
 #     already coverage instead of a TODO.
 #
-# THE THREE ENVIRONMENTS ALL DEFAULT TO HOST PORT 8443 AND AN HTTP PROBE CANNOT
-# TELL THEM APART — steps/dimensions.ts pairs each probe with a decisive identity
-# check for exactly this reason. Do not add a fourth environment without one.
+# THE KIND AND QEMU ENVIRONMENTS BOTH DEFAULT TO HOST PORT 8443 (and the compose
+# stack joins them whenever PUBLIC_HTTPS_PORT=8443; its default door is 8488) AND
+# AN HTTP PROBE CANNOT TELL THEM APART — steps/dimensions.ts pairs each probe with
+# a decisive identity check for exactly this reason. Do not add a fourth
+# environment without one.
 @service:admin
 Feature: Governance evidence — three environments, three interfaces
 

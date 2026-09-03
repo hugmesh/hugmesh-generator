@@ -77,9 +77,10 @@ Feature: What the games mounts really offer, and the five functions with no clie
   # itself, so it needs no optional service enabled, no seeded per-service role
   # and no backend — if a mesh serves anything at all it serves this. Each row
   # availability-probes its own door and, when nothing answers, SKIPS naming the
-  # exact command to bring that environment up. All three cannot be available at
-  # once on this host: the compose stack, the kind node and a QEMU launcher all
-  # publish host port :8443 and only one can hold it.
+  # exact command to bring that environment up. kind and qemu cannot be available
+  # at once on this host: the kind node and a QEMU launcher both publish host port
+  # :8443 and only one can hold it (the compose stack's door is PUBLIC_HTTPS_PORT,
+  # default 8488, so it sits beside either — unless it is published on :8443 too).
   @function:entry @role:e2e-gamesadmin
   Scenario Outline: the games entry point renders in the <env> environment @role:e2e-gamesadmin @function:entry @service:games @layer:ui @env:<env>
     Given I am signed in as the persona for this scenario

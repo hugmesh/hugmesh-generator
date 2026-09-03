@@ -129,7 +129,7 @@ class WorklistEntry:
     # The PERSON on a desktop-class entry (operator ask 2026-08-14): checking a
     # desktop row on the mesh WorklistPage collects its user's name + role via a
     # popup. materialize() stamps the role as --person-role on the entry's own
-    # image and derives a manifest User on the internal orchestration superdomain
+    # image and derives a manifest User on the internal Tailscale root domain
     # (the account can later be added to other domains via the Users table).
     # Node entries always leave both blank.
     desktop_user: str = ""
@@ -246,7 +246,7 @@ class WorklistConfig:
     def desktop_users(self, skip: set[tuple[str, str]] = frozenset()) -> list[User]:
         """The manifest Users derived from desktop entries' named people (operator ask
         2026-08-14): one per desktop-class entry with a ``desktop_user``, attached to
-        the internal orchestration superdomain — the same domain the Users table locks
+        the internal Tailscale root domain — the same domain the Users table locks
         superadmins to. ``skip`` drops (username, domain) pairs the caller already
         carries so a Users-table row (richer: email/registration) always wins. The
         account can later be added to other/additional domains via that table."""
@@ -309,8 +309,8 @@ class WorklistConfig:
 
         # 3. Users are manifest-only and never per-image filtered — carry them whole,
         #    PLUS the desktop-entry people (operator ask 2026-08-14): every desktop
-        #    entry's named user becomes a manifest User on the internal orchestration
-        #    superdomain, so cluster provisioning creates the account exactly like a
+        #    entry's named user becomes a manifest User on the internal Tailscale
+        #    root domain, so cluster provisioning creates the account exactly like a
         #    Users-table row. Deduped against the table (a superadmin who already
         #    named the person keeps their richer row — email/registration survive).
         cfg.users = [copy.deepcopy(u) for u in self.base.users]
