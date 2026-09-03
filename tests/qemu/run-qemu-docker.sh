@@ -1753,32 +1753,6 @@ fi
 command -v docker >/dev/null || die "docker not found"
 docker info >/dev/null 2>&1 || die "cannot talk to the docker daemon (is your user in the 'docker' group?)"
 
-# ── Resolve the artifacts dir ───────────────────────────────────────────────
-# A build SESSION is out/sessions/<stamp>/; several are usually empty shells
-# (a session dir is minted at wizard time, before any artifact lands), so
-# "newest" means newest that actually holds an image.
-newest_session_with_images() {
-    local d
-    while IFS= read -r d; do
-        if compgen -G "${d}/*.img" >/dev/null 2>&1 || compgen -G "${d}/*.img.xz" >/dev/null 2>&1; then
-            printf '%s\n' "${d}"; return 0
-        fi
-    done < <(ls -1dt "${REPO_DIR}"/out/sessions/*/ 2>/dev/null)
-    return 1
-}
-
-if [ -z "${ARTIFACTS}" ]; then
-    if [ -z "${SESSION}" ]; then
-        SESSION="$(newest_session_with_images || true)"
-        [ -n "${SESSION}" ] || die "no build session under out/sessions/ holds a .img or .img.xz — build first, or pass --artifacts DIR"
-    fi
-    ARTIFACTS="${SESSION}"
-fi
-ARTIFACTS="$(readlink -f "${ARTIFACTS}")"
-[ -d "${ARTIFACTS}" ] || die "artifacts dir not found: ${ARTIFACTS}"
-mkdir -p "${WORK}"
-WORK="$(readlink -f "${WORK}")"
-
 # ── Discover runnable rows from the artifacts actually present ──────────────
 # Artifact naming: <brand>-<platform>-<arch>-<role>-<env>-<stamp>.img[.xz]
 # <role> may itself contain '-' (standalone-thin), so parse from BOTH ends:
@@ -1799,9 +1773,14 @@ WORK="$(readlink -f "${WORK}")"
 # hugmesh-x86-be.img) into role==env; without the stamp anchor an arbitrary
 # six-word .img sitting in the dir would become a bootable row.
 discover_rows() {
+    # Optional DIR argument so the SESSION PICKER can ask the same question
+    # this function answers ("does this dir hold a runnable row?") instead of
+    # keeping a second, looser rule of its own. Defaults to ${ARTIFACTS} for
+    # the main enumeration below.
+    local dir="${1:-${ARTIFACTS}}"
     local f base rest platform arch role env stamp prefer
     local -a _fields
-    for f in "${ARTIFACTS}"/*.img "${ARTIFACTS}"/*.img.xz; do
+    for f in "${dir}"/*.img "${dir}"/*.img.xz; do
         [ -e "${f}" ] || continue
         # A ZERO-BYTE .img is the builder's pre-partition placeholder from a run
         # that was killed; booting it fails, and counting it makes an aborted
@@ -1837,6 +1816,42 @@ discover_rows() {
             "${stamp}" "${prefer}" "${platform}" "${role}" "${env}" "${f}"
     done
 }
+
+# ── Resolve the artifacts dir ───────────────────────────────────────────────
+# A build SESSION is out/sessions/<stamp>/; several are usually empty shells
+# (a session dir is minted at wizard time, before any artifact lands), so
+# "newest" means newest that actually holds an image.
+# "Holds an image" must mean exactly what discover_rows means by it, or this
+# picker selects a session the row loop then refuses and the run dies at
+# "no runnable rows found" WITHOUT falling through to the older session that
+# holds a finished build — the very "your completed build is invisible" symptom
+# this resolver exists to prevent. Bare existence is not enough: a killed build
+# leaves a ZERO-BYTE .img placeholder behind, and a name that carries no
+# YYYYmmddTHHMMSSZ stamp is not an artifact we can boot. So ask discover_rows.
+# (Capture into a variable rather than `| grep -q`: pipefail is set, and a
+# SIGPIPE'd producer makes a FOUND match report failure.)
+newest_session_with_images() {
+    local d rows
+    while IFS= read -r d; do
+        rows="$(discover_rows "${d}")"
+        if [ -n "${rows}" ]; then
+            printf '%s\n' "${d}"; return 0
+        fi
+    done < <(ls -1dt "${REPO_DIR}"/out/sessions/*/ 2>/dev/null)
+    return 1
+}
+
+if [ -z "${ARTIFACTS}" ]; then
+    if [ -z "${SESSION}" ]; then
+        SESSION="$(newest_session_with_images || true)"
+        [ -n "${SESSION}" ] || die "no build session under out/sessions/ holds a bootable image — build first, or pass --artifacts DIR. (A zero-byte .img from a killed build, or a name with no YYYYmmddTHHMMSSZ stamp, does not count.)"
+    fi
+    ARTIFACTS="${SESSION}"
+fi
+ARTIFACTS="$(readlink -f "${ARTIFACTS}")"
+[ -d "${ARTIFACTS}" ] || die "artifacts dir not found: ${ARTIFACTS}"
+mkdir -p "${WORK}"
+WORK="$(readlink -f "${WORK}")"
 
 # ONE row per platform/role — newest stamp, then decompressed-over-compressed.
 #

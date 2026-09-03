@@ -809,3 +809,87 @@ def test_docker_available_async_probes_off_thread(monkeypatch):
     qt.docker_available_async(_cb).join(10)
     assert delivered and delivered[0][0] is False
     assert "docker exploded" in delivered[0][1]
+
+
+def _mini_repo(tmp_path):
+    """A throwaway generator checkout holding just what ``--list`` reads.
+
+    The session picker keys off ``${REPO_DIR}/out/sessions/*/``, and REPO_DIR is
+    derived from the script's own location, so the only way to exercise the picker
+    is to run a COPY of the runner from a fabricated tree. Passing ``--artifacts``
+    (what every other cross-check here does) skips the picker entirely, which is
+    exactly why the picker went uncovered.
+    """
+    repo = tmp_path / "repo"
+    (repo / "tests" / "qemu").mkdir(parents=True)
+    (repo / "scripts").mkdir(parents=True)
+    shutil.copy2(RUNNER, repo / qt.RUNNER_SCRIPT)
+    # The only two files the runner reads before it prints rows: the roles library
+    # it sources, and the identity reader it die()s on the absence of.
+    shutil.copy2(os.path.join(GENERATOR_DIR, "scripts", "_roles-lib.sh"),
+                 repo / "scripts" / "_roles-lib.sh")
+    shutil.copy2(os.path.join(GENERATOR_DIR, "tests", "qemu", "mesh-identities.sh"),
+                 repo / "tests" / "qemu" / "mesh-identities.sh")
+    return repo
+
+
+def _shell_picked_session(repo):
+    """The artifacts dir the runner resolves ON ITS OWN, with no --artifacts."""
+    proc = subprocess.run(
+        ["bash", str(repo / qt.RUNNER_SCRIPT), "--work", str(repo / "w"), "--list"],
+        capture_output=True, text=True, timeout=120)
+    if proc.returncode != 0:
+        return None, proc.stdout + proc.stderr
+    for line in proc.stdout.splitlines():
+        if line.strip().startswith("artifacts :"):
+            return line.split(":", 1)[1].strip(), proc.stdout
+    return None, proc.stdout
+
+
+@_needs_runner
+def test_shell_and_python_agree_on_which_session_is_the_default(tmp_path):
+    """The runner's SESSION picker must apply the same "holds an image" rule its
+    row discovery does.
+
+    The picker used to select on bare existence (``compgen -G '<dir>/*.img'``) while
+    discover_rows had been tightened to skip a zero-byte placeholder and to require a
+    ``YYYYmmddTHHMMSSZ`` stamp. A killed build leaves exactly such a placeholder in a
+    session NEWER than the last finished one, so the picker chose the aborted session,
+    row discovery then correctly found nothing in it, and the run died at "no runnable
+    rows found" WITHOUT falling through to the finished build sitting right next to it
+    — the CLI half of the very "my completed session is invisible" symptom this
+    resolver exists to prevent, and reachable from a bare ``make qemu-docker-list``.
+
+    Python never had the split (``default_session`` is built FROM the rows), so the
+    Studio offered a session the CLI swore did not exist. This pins the two together.
+    """
+    repo = _mini_repo(tmp_path)
+    good = repo / "out" / "sessions" / "20260901-000000-good"
+    abort = repo / "out" / "sessions" / "20260902-000000-abort"
+    nostamp = repo / "out" / "sessions" / "20260903-000000-nostamp"
+    for d in (good, abort, nostamp):
+        d.mkdir(parents=True)
+    _write(str(good),
+           "sdhm-rpi5-arm64-pki-test-20260901T010000Z.img.xz",
+           "sdhm-rpi5-arm64-backend-test-20260901T020000Z.img.xz")
+    # The two ways a NEWER session can hold a file that is not a bootable artifact:
+    # the builder's pre-partition placeholder, and a name carrying no build stamp.
+    (abort / "sdhm-rpi5-arm64-pki-test-20260902T003614Z.img").write_bytes(b"")
+    _write(str(nostamp), "sdhm-x86-be.img")
+    # ls -1dt orders by mtime, so make the decoys unambiguously newer.
+    for i, d in enumerate((good, abort, nostamp)):
+        os.utime(d, (1_790_000_000 + i * 86400,) * 2)
+
+    picked, out = _shell_picked_session(repo)
+    assert picked == str(good), f"runner picked {picked!r}, wanted {good}\n{out}"
+
+    session = qt.default_session(str(repo))
+    assert session is not None and session.path == str(good)
+    # Same session AND the same rows in it — a picker that agreed by luck while
+    # enumerating different images would still boot the wrong thing.
+    assert {r.basename for r in session.rows} == {
+        "sdhm-rpi5-arm64-pki-test-20260901T010000Z.img.xz",
+        "sdhm-rpi5-arm64-backend-test-20260901T020000Z.img.xz",
+    }
+    assert qt.discover_rows(str(abort)) == []
+    assert qt.discover_rows(str(nostamp)) == []
