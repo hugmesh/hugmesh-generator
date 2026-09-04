@@ -124,11 +124,13 @@ def test_mode_skipped_pages_match_the_page_catalog():
     # ONLY: standalone has no admin plane at all (so it skips choice AND table), and a
     # cloud client's Domains/Users tables are unconditional — its --domains tie is the
     # point of the image — so it skips only the choices, never the tables.
+    # "vault" (the mesh secrets store, #224) is the same shape as "idp": a cluster-
+    # NODE first-boot concern, so both non-node modes skip it statically.
     assert MODE_SKIPPED_PAGES["standalone"] == ("idp", "worklist", "keyzip",
                                                 "domains_choice", "domains",
-                                                "users_choice", "users")
+                                                "users_choice", "users", "vault")
     assert MODE_SKIPPED_PAGES["cloud"] == ("idp", "worklist",
-                                           "domains_choice", "users_choice")
+                                           "domains_choice", "users_choice", "vault")
     for slug in ("domains", "users"):
         assert slug not in MODE_SKIPPED_PAGES["cloud"], (
             f"cloud must keep its {slug} table — the FD-08 --domains/--person-role tie "
@@ -139,6 +141,7 @@ def test_mode_skipped_pages_match_the_page_catalog():
         assert slug not in MODE_SKIPPED_PAGES["mesh"]
     assert "idp" in MODE_SKIPPED_PAGES["cloud"]
     assert "idp" not in MODE_SKIPPED_PAGES["mesh"]
+    assert "vault" not in MODE_SKIPPED_PAGES["mesh"]
     # ASK 22 split the terminal pair in three (review -> launch -> progress). "launch"
     # is the explicit continue-the-build gate: no mode may statically skip it, or the
     # flow would dispatch on arrival again — the thing the page exists to stop.
@@ -1843,6 +1846,13 @@ _FIELD_PROBE = {
     "idp_jwks": {"idp": "oidc", "idp_issuer": "https://idp.example",
                  "idp_client_id": "probe-client",
                  "idp_jwks": "https://idp.example/keys"},
+    # mesh secrets store (#224): the empty address emits NOTHING (byte-identity), so
+    # every probe supplies one — the two path overrides are multi-key entries riding
+    # it, like egress_vpn_locked. Emission on the x86 + rpi5 node builders only.
+    "vault_addr": {"vault_addr": "https://vault.example:8200"},
+    "vault_kv_mount": {"vault_addr": "https://vault.example:8200", "vault_kv_mount": "kv"},
+    "vault_base_path": {"vault_addr": "https://vault.example:8200",
+                        "vault_base_path": "acme/prod"},
     "optional_services": {"optional_services": ["akkoma"]},
     "exclude_services": {"exclude_services": ["games"]},
     "enable_games": {"enable_games": True},
