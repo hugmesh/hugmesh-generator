@@ -269,6 +269,13 @@ def test_mesh_walk_reaches_worklist_and_gates_the_tables():
     assert j.slug == "system"
 
 
+def _after_system() -> str:
+    """The step Enter on the System screen advances a MESH walk to — read off the
+    canonical order, so a step inserted next to it (vault, #273) moves this test's
+    expectation instead of breaking it."""
+    return WIZARD_PAGE_SLUGS[WIZARD_PAGE_SLUGS.index("system") + 1]
+
+
 def _mesh_to_system(*rows: str) -> journey.Journey:
     """A mesh walk to the System identity step with the given worklist rows checked
     (row NUMBERS on the TUI worklist: 1 = pki.x86, 2 = pki.rpi5, 3 = backend.x86 …)."""
@@ -305,7 +312,7 @@ def test_system_step_is_hosted_and_names_each_image_of_a_mesh_worklist():
     j.feed("2 -")
     assert j.worklist.entries[1].hostname == ""
     j.feed("")
-    assert j.slug == "home"
+    assert j.slug == _after_system()
 
 
 def test_system_step_refuses_duplicate_and_malformed_hostnames_inline():
@@ -331,7 +338,7 @@ def test_system_step_refuses_duplicate_and_malformed_hostnames_inline():
     # bake, explicitly, so what the operator saw is what the build gets
     assert [e.hostname for e in j.worklist.entries] == ["everyone", ""]
     j.feed("")
-    assert j.slug == "home"
+    assert j.slug == _after_system()
 
 
 def test_system_step_names_persist_across_a_worklist_recommit_and_into_the_envelope(tmp_path):
