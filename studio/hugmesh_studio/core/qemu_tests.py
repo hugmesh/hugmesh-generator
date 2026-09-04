@@ -193,12 +193,50 @@ class BuildSession:
                 + (f" [{badge}]" if badge else ""))
 
 
-def _split_artifact_name(basename: str) -> list[str] | None:
+def declared_brand(artifacts_dir: str) -> str:
+    """The ``brand`` the session's own mesh manifest declares, or "".
+
+    THE BRAND FIELD CAN CONTAIN THE DELIMITER. ``${BRAND}`` is only ever validated
+    as a DNS label (core/validate.py ``validate_brand``), and a DNS label may hold
+    hyphens — so ``--brand my-mesh`` mints ``my-mesh-rpi5-arm64-pki-test-<stamp>``,
+    where a positional "field 0 is the brand" split reads brand=my, platform=mesh,
+    arch=rpi5 and role=arm64-pki. Every one of those is wrong, and the session
+    would list COMPLETE while planning a device no launcher can dispatch.
+
+    The manifest beside the artifacts is the only witness that can settle it, so
+    when it names a brand the prefix is stripped BY NAME rather than by position
+    (the same ``${brandplat#"${BRAND}"-}`` rule scripts/publish-images.sh:256
+    already applies). It is used ONLY to find the end of the brand — never to
+    accept or reject a file, because rejecting on the brand is the bug that hid
+    three finished Pi images from the picker. A file whose brand is not the
+    declared one (an ``out/`` root holding several brands) simply falls back to
+    the positional split, exactly as before.
+
+    Returns "" for a dir with no manifest, an unreadable one, or one that names no
+    brand — i.e. the positional rule stays the default and this is a refinement.
+    """
+    try:
+        with open(os.path.join(artifacts_dir, MESH_MANIFEST_NAME), encoding="utf-8") as fh:
+            record = json.load(fh)
+    except (OSError, ValueError):
+        return ""
+    brand = record.get("brand") if isinstance(record, dict) else None
+    return brand if isinstance(brand, str) else ""
+
+
+def _split_artifact_name(basename: str, brand: str = "") -> list[str] | None:
     """The '-'-separated fields of a bootable role image, or None.
 
     Shared by :func:`parse_artifact_name` and :func:`artifact_stamp` so the two
     cannot disagree about what counts as one of our artifacts — they used to
     apply the field-count rule separately, and only one of them the prefix rule.
+
+    ``brand``, when given (:func:`declared_brand`), is the session's own declared
+    brand: a leading ``<brand>-`` is then removed as ONE field however many
+    hyphens it spells, so field 1 is the platform for a hyphenated brand too. The
+    trailing "-" matters — brand "snap" must not swallow the head of
+    ``snapdragon-…``. With no declared brand the split is purely positional, which
+    is right for every brand that holds no hyphen (hugmesh, sdhm, gentoo).
     """
     name = basename
     for suffix in _IMAGE_SUFFIXES:
@@ -212,7 +250,10 @@ def _split_artifact_name(basename: str) -> list[str] | None:
     if any(marker in lowered for marker in _NON_IMAGE_MARKERS):
         return None
 
-    parts = name.split("-")
+    if brand and name.startswith(brand + "-"):
+        parts = [brand] + name[len(brand) + 1:].split("-")
+    else:
+        parts = name.split("-")
     if len(parts) < _MIN_NAME_FIELDS:
         return None
     if not _STAMP_RE.match(parts[-1]):
@@ -220,7 +261,7 @@ def _split_artifact_name(basename: str) -> list[str] | None:
     return parts
 
 
-def parse_artifact_name(basename: str) -> tuple[str, str, str, str] | None:
+def parse_artifact_name(basename: str, brand: str = "") -> tuple[str, str, str, str] | None:
     """``<brand>-<platform>-<arch>-<role>-<env>-<stamp>.img[.xz]`` -> (platform, arch, role, env).
 
     Returns None for anything that is not a bootable role image.
@@ -245,6 +286,13 @@ def parse_artifact_name(basename: str) -> tuple[str, str, str, str] | None:
     '-'-separated fields, and a trailing ``YYYYmmddTHHMMSSZ`` build stamp. A brand
     slug is opaque; a stamp is not, so the stamp is the anchor.
 
+    ``brand`` is the session's DECLARED brand (:func:`declared_brand`), and it
+    exists because a brand may itself contain '-': ``validate_brand`` only requires
+    a DNS label, so ``--brand my-mesh`` yields ``my-mesh-rpi5-arm64-pki-test-…``
+    and a positional split would read platform=mesh, arch=rpi5, role=arm64-pki.
+    Passed, it ends the brand by NAME instead. It is never used to accept or
+    reject — an artifact under a different brand still parses positionally.
+
     The parsed role is CANONICALIZED (scripts/_roles-lib.sh). Artifacts already on
     disk keep whatever spelling they were built under — ``hugmesh-x86-amd64-be-…``,
     ``…-host-…`` — and they are NOT renamed; they are already-emitted artifacts. But
@@ -254,7 +302,7 @@ def parse_artifact_name(basename: str) -> tuple[str, str, str, str] | None:
     ``GATEWAY_ROLES`` could never match ``be+gpu`` (whose artifact was named ``host``)
     and never matched a Pi node at all.
     """
-    parts = _split_artifact_name(basename)
+    parts = _split_artifact_name(basename, brand)
     if parts is None:
         return None
     platform, arch = parts[1], parts[2]
@@ -265,7 +313,7 @@ def parse_artifact_name(basename: str) -> tuple[str, str, str, str] | None:
     return platform, arch, roles.canonicalize(role), env
 
 
-def artifact_brand(basename: str) -> str:
+def artifact_brand(basename: str, brand: str = "") -> str:
     """The ``${BRAND}`` field an artifact was built under, or "" if it has none.
 
     Diagnostic only: ``discover_rows`` records it on the row so a caller can SAY
@@ -275,17 +323,17 @@ def artifact_brand(basename: str) -> str:
     picker, and the ``hugmesh-mesh-manifest.json`` beside them is the witness that
     would have been needed to do it correctly.
     """
-    parts = _split_artifact_name(basename)
+    parts = _split_artifact_name(basename, brand)
     return parts[0] if parts else ""
 
 
-def artifact_stamp(basename: str) -> str:
+def artifact_stamp(basename: str, brand: str = "") -> str:
     """The ``<stamp>`` field of an artifact name, or "" if it has none.
 
     Kept separate from ``parse_artifact_name`` so that function's 4-tuple stays
     the parsing contract the shell runner is checked against.
     """
-    parts = _split_artifact_name(basename)
+    parts = _split_artifact_name(basename, brand)
     return parts[-1] if parts else ""
 
 
@@ -327,8 +375,13 @@ def discover_rows(artifacts_dir: str) -> list[DeviceRow]:
     except OSError:
         return []
 
+    # The session's own manifest, when it has one, says where the brand FIELD ends
+    # — which a positional split cannot know for a hyphenated brand. See
+    # declared_brand(); the shell runner reads the same key out of the same file.
+    brand = declared_brand(artifacts_dir)
+
     for entry in entries:
-        parsed = parse_artifact_name(entry)
+        parsed = parse_artifact_name(entry, brand)
         if parsed is None:
             continue
         platform, arch, role, env = parsed
@@ -341,7 +394,7 @@ def discover_rows(artifacts_dir: str) -> list[DeviceRow]:
         except OSError:
             continue
         row = DeviceRow(platform=platform, arch=arch, role=role, env=env, image=path,
-                        stamp=artifact_stamp(entry), brand=artifact_brand(entry))
+                        stamp=artifact_stamp(entry, brand), brand=artifact_brand(entry, brand))
         key = (platform, role)
         prior = best.get(key)
         if prior is None or (row.stamp, not row.compressed) > (prior.stamp, not prior.compressed):
