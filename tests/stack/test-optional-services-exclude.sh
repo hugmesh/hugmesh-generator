@@ -1463,15 +1463,76 @@ unset _l_all _l_excl _l_call _l_def _nc
 # skipped guard is the defect this suite is about.
 # That also makes the "reached the role check" assertion load-bearing rather than
 # decorative: it is positive proof the script got PAST the slug validator.
-# The abort anchor. Pinned against the builder source FIRST: if it is reworded,
-# every leg below would fail with a confusing message, so name the real cause once
-# and up front rather than letting six legs blame the validator.
+# The abort anchor. Pinned FIRST, and against the builder's whole SOURCE CHAIN:
+# if the string is gone, every leg below fails with a confusing message, so name
+# the real cause once and up front rather than letting six legs blame the
+# validator.
+#
+# CHAIN-SCOPED, NOT FILE-SCOPED (2026-09-04). This used to be a plain
+# `grep -F -- "${X86_ROLE_ERR}" "${BUILDER_X86}"`, and it went red on main for a
+# defect that does not exist. cce3cc18 ("role vocabulary: one spelling for the
+# token after the device platform", 2026-08-27) did not reword the message — it
+# RELOCATED it, out of an inline `case` in build-x86-host-stage4.sh and into
+# hugmesh_role_validate() in scripts/_roles-lib.sh, which the builder sources at
+# line 33 and calls at top level. Measured: 1 occurrence in the builder at
+# cce3cc18^, 0 at cce3cc18. Nothing the builder PRINTS changed — `--role bogus`
+# still aborts with this exact string — which is why the five legs below that
+# match X86_ROLE_ERR against real builder OUTPUT all stayed green while only this
+# static presence check failed: 298 passed, 1 failed, identically on a GNU host
+# and in alpine:3. The relocation is the stated design, spelled out in the sibling
+# guard that same commit DID update, tests/build-image-spec-guards.sh — "the
+# builder no longer carries a private '--role must be one of' string". This file
+# was missed.
+#
+# The old failure text ("message reworded — update X86_ROLE_ERR in this file")
+# was then worse than no message at all: the needle was right and the HAYSTACK was
+# wrong, so it pointed the next reader at the one edit that would have made this
+# guard lie. X86_ROLE_ERR is the same variable the five legs below match against
+# live builder output, and one of those legs (leg 1) is NEGATIVE — it asserts the
+# anchor is ABSENT. Retuning the needle to a string the builder never prints would
+# have turned that leg unfalsifiable and left this line green while doing it.
+#
+# So ask the question at the scope the design actually promises — the string must
+# live in code this builder RUNS — and DERIVE that scope from the builder instead
+# of naming scripts/_roles-lib.sh here, so the next relocation into some other
+# sourced lib cannot break it again. opt_gate_sources() (tests/lib/opt-gate-source.sh,
+# already sourced at the top of this file) reproduces bash's own resolution order,
+# every `source "${SCRIPT_DIR}/scripts/*"` first and the builder last, and derives
+# it comment-stripped so prose naming a lib cannot add a phantom file.
+#
+# THE HAYSTACK IS COMMENT-STRIPPED TOO, and that is not decoration. Widening the
+# search without stripping would have re-opened this repo's most-shipped defect
+# shape at a new address: the relocation above is exactly the kind of change that
+# leaves an explanatory comment behind ("role validation moved to _roles-lib.sh —
+# it prints '--role must be one of'"), and a comment like that in ANY of the 13
+# chain files would satisfy a raw grep forever, including after the real printf
+# was deleted. Only FULL-LINE comments are dropped, with the same `grep -v` idiom
+# the four ordering anchors above use: a `#` can legally sit inside a shell string,
+# so `sed 's/#.*$//'` could truncate a real match and turn this pin into a false
+# RED. A trailing comment on a code line is therefore still able to satisfy this
+# pin — that residual is stated rather than papered over, and legs 2/3 below,
+# which require the anchor in live builder OUTPUT, are what close it.
 X86_ROLE_ERR="--role must be one of"
-if grep -F -- "${X86_ROLE_ERR}" "${BUILDER_X86}" >/dev/null; then
-  ok "x86: the post-validator abort anchor ('${X86_ROLE_ERR}') is still in the builder — the execution legs below can prove they got past validate_optional_services"
+X86_ANCHOR_CHAIN=()
+while IFS= read -r _f; do
+  [ -n "${_f}" ] && X86_ANCHOR_CHAIN+=("${_f}")
+done < <(opt_gate_sources "${BUILDER_X86}")
+_x86_anchor_in=""
+for _f in "${X86_ANCHOR_CHAIN[@]+"${X86_ANCHOR_CHAIN[@]}"}"; do
+  # Drained into /dev/null, never `| grep -q`: a -q consumer closes the pipe and
+  # SIGPIPEs the producer, and under this file's `set -o pipefail` that turns a
+  # FOUND match into rc=1 — a coin flip on GNU grep at this file size and a
+  # certainty under busybox, which is the userland the alpine lane runs.
+  if grep -v '^[[:space:]]*#' "${_f}" | grep -F -- "${X86_ROLE_ERR}" >/dev/null; then
+    _x86_anchor_in="${_x86_anchor_in}${_x86_anchor_in:+ }${_f#"${REPO}/"}"
+  fi
+done
+if [ -n "${_x86_anchor_in}" ]; then
+  ok "x86: the post-validator abort anchor ('${X86_ROLE_ERR}') is live code in ${BUILDER_X86##*/}'s own source chain (carried by: ${_x86_anchor_in}; chain = ${#X86_ANCHOR_CHAIN[@]} files) — the execution legs below can prove they got past validate_optional_services"
 else
-  bad "x86: role-validation message reworded — update X86_ROLE_ERR in this file; the execution legs below cannot tell 'reached role validation' from 'died earlier' without it"
+  bad "x86: the post-validator abort anchor ('${X86_ROLE_ERR}') is in NO non-comment line of any of the ${#X86_ANCHOR_CHAIN[@]} files build-x86-host-stage4.sh sources (a chain of 0 or 1 means the SEARCH PATH broke, not the message). If role validation moved again, fix the search path — do NOT retune X86_ROLE_ERR unless the builder's message itself really changed, because the five legs below match this same string against live builder output and leg 1 asserts its ABSENCE, so a needle the builder never prints goes quietly unfalsifiable."
 fi
+unset _f _x86_anchor_in
 run_x86() {   # run_x86 <args...> -> X86_RC / X86_OUT
   # OPTIONAL_SERVICES/EXCLUDE_SERVICES are cleared from the CHILD's environment:
   # this file sets both as shell variables while exercising the rpi5 gate, and an
