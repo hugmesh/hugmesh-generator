@@ -514,3 +514,64 @@ def test_print_command_agrees_with_materialize_for_a_node(tmp_path):
     assert r.returncode == 0, r.stderr
     assert _flag_value(r.stdout, "--installer-ui") == "cli"
     assert materialized.installer_ui == "cli"
+
+
+# ---- per-image hostname on the headless channel (issue #229) ---------------------
+def test_print_commands_emits_each_images_own_hostname(tmp_path):
+    """The CLI is the envelope: entries[].hostname is a per-image -H on --print-commands
+    (one command per image, each with ITS name) and on --print-specs (each flat spec
+    carries its own hostname). A two-row worklist with two identities gets two."""
+    from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry
+    wl = WorklistConfig(
+        base=ImageConfig(mode="mesh", brand="acme"),
+        entries=[WorklistEntry(role="pki", platform="x86", hostname="ca-1"),
+                 WorklistEntry(role="backend", platform="rpi5", board="rpi5",
+                               hostname="be-pi")])
+    p = tmp_path / "wl.json"
+    p.write_text(json.dumps(wl.to_dict()), encoding="utf-8")
+    env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
+
+    r = subprocess.run(
+        # --backend native: on a Docker-capable host the auto backend prints the
+        # `docker run … bash -c '<inner>'` form, whose builder argv is ONE quoted token
+        # — the flag is still in there, but not as its own shlex word. Every other
+        # --print-command test here pins native for the same reason.
+        [sys.executable, "-m", "hugmesh_studio", "--print-commands", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode == 0, r.stderr
+    lines = [line for line in r.stdout.splitlines() if line.strip()]
+    assert len(lines) == 2
+    hosts = []
+    for line in lines:
+        argv = shlex.split(line)
+        hosts.append(argv[argv.index("--hostname") + 1])
+    assert hosts == ["ca-1", "be-pi"]
+
+    r2 = subprocess.run(
+        [sys.executable, "-m", "hugmesh_studio", "--print-specs", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r2.returncode == 0, r2.stderr
+    specs = [json.loads(line) for line in r2.stdout.splitlines() if line.strip()]
+    assert [s["hostname"] for s in specs] == ["ca-1", "be-pi"]
+
+
+def test_print_commands_refuses_one_hostname_on_every_image(tmp_path):
+    """The exact #229 shape on the CLI — one base hostname, several images — is a
+    clean exit 2 naming the fix, not two builds that boot with the same name."""
+    from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry
+    wl = WorklistConfig(
+        base=ImageConfig(mode="mesh", brand="acme", hostname="everyone"),
+        entries=[WorklistEntry(role="pki", platform="x86"),
+                 WorklistEntry(role="backend", platform="x86")])
+    p = tmp_path / "wl.json"
+    p.write_text(json.dumps(wl.to_dict()), encoding="utf-8")
+    r = subprocess.run(
+        [sys.executable, "-m", "hugmesh_studio", "--print-commands", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60,
+        env=dict(os.environ, PYTHONPATH=STUDIO_ROOT), cwd=STUDIO_ROOT)
+    assert r.returncode == 2
+    assert "same hostname" in r.stderr and "entries[].hostname" in r.stderr
+    assert r.stdout == ""

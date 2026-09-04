@@ -231,8 +231,22 @@ A GUI-only reorganisation — **emission is byte-identical** (the build-matrix `
   unattended LUKS passphrase (set once on the Home step) applies to **every** encrypted node.
   The column is additive and defaults to `default` (inherit the base), so an untouched
   worklist is byte-identical to before.
+- **Per-image hostname** (`system.py` / `core/worklist.py`; issue #229). System identity
+  was one image-config setting even when generating several images — fine for the
+  timezone and the default account, which stay mesh-wide, but a hostname shared by every
+  node is a collision, not a setting. `WorklistEntry.hostname` is the per-image
+  `-H/--hostname` (`""` = inherit the base, and a blank base lets the builder derive the
+  role name; `materialize()` fails loudly if two images would bake the same explicit
+  name). On the System step a **multi-row** mesh worklist withdraws the single Hostname
+  row and shows one editor per image, placeholdered with the name that node derives when
+  left blank; a one-row worklist keeps the plain field but writes the entry; both blank
+  the base so one value can never ride onto every node again. Refusals (duplicate name,
+  a name the identity allowlist rejects) are inline, never modal. The TUI's System step
+  (`tui/journey.py::SystemScreen`) hosts the same per-image table (`N NAME` / `N -`);
+  headlessly it is `entries[].hostname` in the envelope, and `--print-commands` emits
+  each image's own `--hostname`. An untouched worklist still emits no `--hostname`.
 
-## Emission note — the one additive manifest field
+## Emission note — the additive manifest fields
 
 `User.registration` (default `""` = derive) is an **additive** field on the mesh
 manifest / `--print-specs` surface (design WS-E7). It is manifest-only: `User` never
@@ -241,6 +255,11 @@ is unchanged. `from_dict` tolerates and round-trips it. The external cluster-pro
 consumer of `mesh_manifest` JSON is expected to ignore unknown keys (forward-compat); if
 a strict byte-identity reading of the manifest is ever required, that is the one field to
 account for.
+
+The second one is the manifest v2 image record's `hostname` (issue #229): the explicit
+per-image name that build bakes (`""` = the builder derives the role name), so a
+provisioning consumer can tell the nodes apart by the name each actually boots with.
+Additive in the same sense — absent before, ignorable by a consumer that does not read it.
 
 ### Honest note — node fallback creds are widget-scoped, not argv-gated
 

@@ -1809,6 +1809,10 @@ class BuildPage(QtWidgets.QWizardPage):
         addn, dropn = len(entry.packages_add.split()), len(entry.packages_drop.split())
         if addn or dropn:
             chips.append(f"+{addn}/−{dropn} pkgs")
+        # the per-image hostname (issue #229) — the materialized value, so the review
+        # shows exactly what -H this row's build receives (blank = role-derived).
+        if mcfg.hostname:
+            chips.append(f"hostname {mcfg.hostname}")
         return " · ".join(chips)
 
     def _clear_wl_cmd(self) -> None:
