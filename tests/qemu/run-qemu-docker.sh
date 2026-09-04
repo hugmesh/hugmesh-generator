@@ -1772,6 +1772,33 @@ docker info >/dev/null 2>&1 || die "cannot talk to the docker daemon (is your us
 # field count the both-ends strip below happily "parses" a too-short name (e.g.
 # hugmesh-x86-be.img) into role==env; without the stamp anchor an arbitrary
 # six-word .img sitting in the dir would become a bootable row.
+#
+# AND THE BRAND FIELD MAY ITSELF CONTAIN '-'. ${BRAND} is only ever validated as
+# a DNS label (studio core/validate.py validate_brand), so `--brand my-mesh` mints
+# my-mesh-rpi5-arm64-pki-test-<stamp> and a positional "cut at the first '-'"
+# reads platform=mesh, arch=rpi5, role=arm64-pki — a row that lists as a complete
+# device and dispatches to a platform no launcher knows. The session's own
+# manifest is the only witness that can say where the brand ends, so when it names
+# one the prefix is stripped BY NAME (the ${brandplat#"${BRAND}"-} rule
+# scripts/publish-images.sh already uses). It is used ONLY to find that boundary:
+# a file under a different brand still parses positionally and is still a row,
+# because matching on the brand is the very bug above. qemu_tests.declared_brand()
+# reads the same key out of the same file, and test_shell_and_python_agree_on_*
+# diffs the two enumerations.
+declared_brand() {
+    local mf
+    mf="$1/hugmesh-mesh-manifest.json"
+    [ -f "${mf}" ] || return 0
+    # No pipe: a `sed | head` would put sed on the wrong side of SIGPIPE under
+    # pipefail. `q` stops at the first match instead.
+    # Not anchored to the line start: worklist_driver writes the manifest with
+    # indent=2, but a compact one must resolve to the SAME brand the Python twin's
+    # json.load() sees or the two enumerations diverge. "brand_title" cannot
+    # collide — the closing quote after `brand` is part of the pattern.
+    sed -n '/"brand"[[:space:]]*:/{s/.*"brand"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p;q;}' \
+        "${mf}" 2>/dev/null || true
+}
+
 discover_rows() {
     # Optional DIR argument so the SESSION PICKER can ask the same question
     # this function answers ("does this dir hold a runnable row?") instead of
@@ -1780,6 +1807,14 @@ discover_rows() {
     local dir="${1:-${ARTIFACTS}}"
     local f base rest platform arch role env stamp prefer
     local -a _fields
+    # Per-DIR, never a script-global: the picker below calls this over every
+    # candidate session, and ${ARTIFACTS} is still empty while it does. A brand
+    # read once from the wrong dir would be the wrong witness for every other
+    # one — and, on the bare `make qemu-docker-list` path, no witness at all.
+    # Two statements, not `local brand="$(…)"`: `local` swallows the exit
+    # status, and bash 5.3 localises every name in a list BEFORE assigning.
+    local brand
+    brand="$(declared_brand "${dir}")"
     for f in "${dir}"/*.img "${dir}"/*.img.xz; do
         [ -e "${f}" ] || continue
         # A ZERO-BYTE .img is the builder's pre-partition placeholder from a run
@@ -1792,11 +1827,19 @@ discover_rows() {
         case "${base}" in *kernel*|*initramfs*|*initrd*|*squashfs*) continue ;; esac
         # Match the Python contract (studio/hugmesh_studio/core/qemu_tests.py
         # parse_artifact_name / _split_artifact_name).
-        IFS='-' read -r -a _fields <<< "${base}"
-        [ "${#_fields[@]}" -ge 6 ] || continue
+        # Drop <brand>, whatever it is: by NAME when the manifest declares one
+        # (the only way to end a brand that contains '-'), else at the first '-'.
+        rest=""
+        if [ -n "${brand}" ]; then
+            case "${base}" in "${brand}"-*) rest="${base#"${brand}"-}" ;; esac
+        fi
+        [ -n "${rest}" ] || rest="${base#*-}"
+        # >= 5 fields AFTER the brand == the Python side's >= 6 with the brand
+        # counted once, hyphens and all.
+        IFS='-' read -r -a _fields <<< "${rest}"
+        [ "${#_fields[@]}" -ge 5 ] || continue
         stamp="${base##*-}"
         [[ "${stamp}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || continue
-        rest="${base#*-}"          # drop <brand>, whatever it is
         platform="${rest%%-*}"; rest="${rest#*-}"
         arch="${rest%%-*}";     rest="${rest#*-}"
         # rest is now "<role>-<env>-<stamp>"; strip the two trailing fields.

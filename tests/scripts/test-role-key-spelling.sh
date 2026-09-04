@@ -849,5 +849,58 @@ for probe in "backend:arm64:sdhm-rpi5-" "pki:arm64:sdhm-rpi5-" \
 done
 rm -rf "${brand_dir}"
 
+# D5) THE ONE BRAND LITERAL THAT IS KEPT ON PURPOSE, GUARDED.
+#     launch-x86.sh's any-role fallback still globs `hugmesh-host-*.img` with the
+#     brand spelled out, because "host" is ALSO a role alias (be+gpu): widening it
+#     to `*-host-*` would match <brand>-rpi5-arm64-host-….img and hand an aarch64
+#     image to qemu-system-x86_64. Nothing asserted that until now — mutating both
+#     kept literals left the whole suite green, because every other probe's fixture
+#     either has an own-platform image of the requested role (so the role-scoped
+#     globs return first) or no ARM image whose role is `host` at all.
+#
+#     This fixture reaches the any-role loop on purpose: the requested role exists
+#     on NEITHER image, so the role-scoped globs all miss, and the Pi image (whose
+#     role field is literally `host`) is the newest.
+host_dir="$(mktemp -d)"
+: > "${host_dir}/sdhm-rpi5-arm64-host-test-20260831T090000Z.img"
+: > "${host_dir}/sdhm-x86-amd64-pki-test-20260831T010000Z.img"
+touch -d '2020-01-01 00:00' "${host_dir}/sdhm-x86-amd64-pki-test-20260831T010000Z.img"
+touch -d '2030-01-01 00:00' "${host_dir}/sdhm-rpi5-arm64-host-test-20260831T090000Z.img"
+got="$(basename "$(autodetect_of launch-x86.sh frontend "${host_dir}")" 2>/dev/null || true)"
+case "${got}" in
+    sdhm-x86-*) ok "launch-x86.sh any-role fallback: stays on x86 (${got}) with a newer ARM image whose ROLE is 'host'" ;;
+    "")         bad "launch-x86.sh any-role fallback: found NOTHING — the probe is vacuous, or autodetect_img moved" ;;
+    *)          bad "launch-x86.sh any-role fallback: picked ${got} — \`hugmesh-host-*\` must keep its literal brand, or a Pi image reaches qemu-system-x86_64" ;;
+esac
+rm -rf "${host_dir}"
+
+# D6) A BRAND MAY CONTAIN '-', AND ONLY THE MANIFEST KNOWS WHERE IT ENDS.
+#     validate_brand accepts any DNS label, so `--brand my-mesh` mints
+#     my-mesh-rpi5-arm64-pki-test-<stamp>.img. A positional "strip up to the first
+#     '-'" reads its platform as "mesh-rpi5", which is not a board — beside a
+#     default-brand image of the SAME board that reads "rpi5", flash-disk.sh then
+#     announces a cross-platform ambiguity that does not exist and a real flash
+#     REFUSES. platform_of ends the brand by NAME when the session manifest
+#     declares one (the same key run-qemu-docker.sh and qemu_tests.py read).
+hyphen_dir="$(mktemp -d)"
+cat > "${hyphen_dir}/hugmesh-mesh-manifest.json" <<'JSON'
+{
+  "format": 2,
+  "brand": "my-mesh",
+  "brand_title": "My Mesh",
+  "images": [{"id": "pki.rpi5", "role": "pki", "platform": "rpi5"}]
+}
+JSON
+: > "${hyphen_dir}/my-mesh-rpi5-arm64-pki-test-20260831T015954Z.img"
+: > "${hyphen_dir}/hugmesh-rpi5-arm64-pki-test-20260830T015954Z.img"
+listing="$( (cd "${GEN}" && ./scripts/flash-disk.sh --role pki --arch arm64 \
+    --work-dir "${hyphen_dir}" --list 2>&1) || true)"
+case "${listing}" in
+    *AMBIGUOUS*) bad "flash-disk.sh: a hyphenated brand reads as its own platform — one rpi5 dir announced a cross-platform ambiguity" ;;
+    *"Would flash: "*) ok "flash-disk.sh: manifest brand 'my-mesh' ends the brand field; both images are one rpi5 platform" ;;
+    *) bad "flash-disk.sh --list produced no verdict for a hyphenated-brand dir: ${listing}" ;;
+esac
+rm -rf "${hyphen_dir}"
+
 echo "== ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]
