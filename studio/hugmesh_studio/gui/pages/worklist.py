@@ -34,7 +34,7 @@ from ...core.config import (
     ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS, ORANGEPIZERO2_FLAVORS, ORANGEPIZERO2W_FLAVORS,
     ORANGEPIZERO3_FLAVORS, ORANGEPI3LTS_FLAVORS, ORANGEPI4LTS_FLAVORS,
     PLATFORM_LABELS,
-    ROLE_CHOICES, RPI_BOARDS, image_class, rpi_boards_for_role,
+    ROLE_CHOICES, RPI_BOARDS, image_class, normalize_user_roles, rpi_boards_for_role,
 )
 from ...core.worklist import (
     WORKLIST_INFRA_SERVICES, WorklistConfig, WorklistEntry, entry_id,
@@ -108,6 +108,12 @@ def _row_notes(role: str, platform: str) -> str:
         parts.append("desktop client — checking asks who uses it; "
                      "theme it on the Branding step")
     return " · ".join(parts)
+
+
+def _person_roles_of(roles) -> list[str]:
+    """The desktop-people map's roles slot as a normalized list (issue #228). A bare
+    string — the pre-#228 shape, which callers and tests still seed — is one role."""
+    return normalize_user_roles([roles] if isinstance(roles, str) else roles)
 
 
 class WorklistPage(QtWidgets.QWizardPage):
@@ -253,14 +259,15 @@ class WorklistPage(QtWidgets.QWizardPage):
         # live here, visible, and are stamped onto the entries on Next. The user is
         # provisioned on the internal Tailscale root domain (manifest User —
         # core/worklist.desktop_users); the Users step can later add the same
-        # account to other domains, e.g. as an admin.
-        self._desktop_people: dict[str, tuple[str, str]] = {}   # rid -> (user, role)
+        # account to other domains, e.g. as an admin. The roles are the FULL set
+        # (issue #228: the tier plus any grants) — the entry derives the tier.
+        self._desktop_people: dict[str, tuple[str, list[str]]] = {}   # rid -> (user, roles)
         self.people_label = QtWidgets.QLabel("<b>Desktop users</b> — one per checked "
                                              "desktop; double-click a row to edit.")
         self.people_label.setVisible(False)
         lay.addWidget(self.people_label)
         self.people_table = QtWidgets.QTableWidget(0, 3)
-        self.people_table.setHorizontalHeaderLabels(["Device", "Username", "Role"])
+        self.people_table.setHorizontalHeaderLabels(["Device", "Username", "Roles"])
         self.people_table.horizontalHeader().setStretchLastSection(True)
         self.people_table.verticalHeader().setVisible(False)
         self.people_table.setSelectionBehavior(
@@ -569,7 +576,7 @@ class WorklistPage(QtWidgets.QWizardPage):
             role, _platform = self._id_axes[rid]
             if image_class("mesh", role) == "desktop":
                 if self._is_checked(item) and rid not in self._desktop_people:
-                    self._desktop_people[rid] = ("", "user")
+                    self._desktop_people[rid] = ("", ["user"])
                     self._refresh_people_table()
                 elif not self._is_checked(item) and rid in self._desktop_people:
                     del self._desktop_people[rid]
@@ -583,7 +590,7 @@ class WorklistPage(QtWidgets.QWizardPage):
         rid = item.data(_COL_CHECK, Qt.ItemDataRole.UserRole)
         if rid not in self._id_axes or not self._is_checked(item):
             return
-        user, _role = self._desktop_people.get(rid, (None, ""))
+        user, _roles = self._desktop_people.get(rid, (None, []))
         if user == "" and not self._ask_person(rid):
             self.tree.blockSignals(True)
             item.setCheckState(_COL_CHECK, Qt.CheckState.Unchecked)
@@ -600,12 +607,13 @@ class WorklistPage(QtWidgets.QWizardPage):
 
     def _ask_person(self, rid: str) -> bool:
         """Open the who-uses-it dialog for rid (prefilled when editing). True iff
-        accepted; the collected pair lands in _desktop_people + the table."""
-        prev = self._desktop_people.get(rid, ("", "user"))
+        accepted; the collected pair lands in _desktop_people + the table. The
+        roles are the dialog's FULL set — tier + grants (issue #228)."""
+        prev = self._desktop_people.get(rid, ("", ["user"]))
         dlg = DesktopUserDialog(self._device_label(rid), prev[0], prev[1], self)
         if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return False
-        self._desktop_people[rid] = (dlg.user(), dlg.person_role())
+        self._desktop_people[rid] = (dlg.user(), dlg.person_roles())
         self._refresh_people_table()
         # Issue #50: naming the person is the moment isComplete() can flip True — the
         # placeholder that disabled Next lives in _desktop_people, and this is the only
@@ -623,7 +631,7 @@ class WorklistPage(QtWidgets.QWizardPage):
 
     def _refresh_people_table(self) -> None:
         self.people_table.setRowCount(len(self._desktop_people))
-        for i, (rid, (user, role)) in enumerate(self._desktop_people.items()):
+        for i, (rid, (user, roles)) in enumerate(self._desktop_people.items()):
             dev = QtWidgets.QTableWidgetItem(self._device_label(rid))
             dev.setData(Qt.ItemDataRole.UserRole, rid)
             self.people_table.setItem(i, 0, dev)
@@ -632,7 +640,9 @@ class WorklistPage(QtWidgets.QWizardPage):
             if not user:
                 name_item.setForeground(QtGui.QBrush(QtGui.QColor("#c62828")))
             self.people_table.setItem(i, 1, name_item)
-            self.people_table.setItem(i, 2, QtWidgets.QTableWidgetItem(role))
+            # precedence order on screen whatever fed the map (issue #228)
+            self.people_table.setItem(
+                i, 2, QtWidgets.QTableWidgetItem(", ".join(_person_roles_of(roles))))
         visible = bool(self._desktop_people)
         self.people_label.setVisible(visible)
         self.people_table.setVisible(visible)
@@ -669,7 +679,7 @@ class WorklistPage(QtWidgets.QWizardPage):
         # who-uses-it dialog — double-click the table row — has been answered).
         if not any(self._is_checked(it) for it in self.rows.values()):
             return False
-        return all(user for user, _role in self._desktop_people.values())
+        return all(user for user, _roles in self._desktop_people.values())
 
     # ---- (de)serialize the check/axes state against the worklist -----------------
     def initializePage(self) -> None:
@@ -684,7 +694,7 @@ class WorklistPage(QtWidgets.QWizardPage):
         # fresh flow starts empty. Rebuilt BEFORE the check-state loop so the
         # blockSignals'd programmatic checks below never pop the dialog.
         self._desktop_people = {
-            e.id: (e.desktop_user, e.desktop_user_role or "user")
+            e.id: (e.desktop_user, list(e.desktop_user_roles))
             for e in (wl.entries if wl is not None else ())
             if e.desktop_user and e.id in self.rows}
         self._refresh_people_table()
@@ -738,7 +748,7 @@ class WorklistPage(QtWidgets.QWizardPage):
             if image_class("mesh", role) != "desktop":
                 continue
             if self._is_checked(item) and rid not in self._desktop_people:
-                self._desktop_people[rid] = ("", "user")
+                self._desktop_people[rid] = ("", ["user"])
             elif not self._is_checked(item) and rid in self._desktop_people:
                 del self._desktop_people[rid]
         self._refresh_people_table()
@@ -817,9 +827,10 @@ class WorklistPage(QtWidgets.QWizardPage):
                 infra_services = keep.infra_services if keep else ()
             # the desktop person collected by the check-popup (desktop-class rows
             # only; a node rid is never in the map). The pair rides the entry into
-            # materialize: --person-role on this image + a manifest User on the
-            # internal Tailscale root domain.
-            person_user, person_role = self._desktop_people.get(rid, ("", "user"))
+            # materialize: the TIER as --person-role on this image + a manifest User
+            # holding the full role set on the internal Tailscale root domain. The
+            # entry derives desktop_user_role (the tier) from the set (issue #228).
+            person_user, person_roles = self._desktop_people.get(rid, ("", ["user"]))
             entries.append(WorklistEntry(
                 role=role, platform=platform, board=board, flavor=flavor,
                 desktop=keep.desktop if keep else "",
@@ -828,7 +839,7 @@ class WorklistPage(QtWidgets.QWizardPage):
                 packages_drop=keep.packages_drop if keep else "",
                 infra_services=infra_services,
                 desktop_user=person_user,
-                desktop_user_role=person_role,
+                desktop_user_roles=_person_roles_of(person_roles),
             ))
         if not entries:
             return False   # isComplete() already blocks Next; guard the collect path too
