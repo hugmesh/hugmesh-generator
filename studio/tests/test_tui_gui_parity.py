@@ -261,3 +261,21 @@ def test_effect_labels_match_the_gui_editor():
 
 def test_vanta_dependency_note_matches_the_gui_editor():
     assert themes.VANTA_DEPENDENCY_NOTE == _theme_editor.VANTA_DEPENDENCY_NOTE
+
+
+# ── worklist (#234): one step, one name on both faces ───────────────────────────────
+def test_worklist_screen_title_matches_the_gui_page(wiz):
+    """The TUI's worklist screen and gui/pages/worklist.py are the SAME step — the
+    role x platform image picker — so they must name it the same way.
+
+    Nothing compared them before, and the two were never equal: f5da52b4 (the commit
+    that added the TUI screen) wrote ``title = "Mesh worklist"`` while the GUI page
+    already read "Choose the images to build". Read off the REAL page object rather
+    than a literal, so a future GUI retitle fails here instead of drifting silently.
+
+    Deliberately NOT the Review page's "Mesh worklist" collapsible header
+    (build.py) — that is a section on a different page and keeps its own name.
+    """
+    page = next(wiz.page(i) for i in wiz.pageIds()
+                if isinstance(wiz.page(i), wizard_mod.WorklistPage))
+    assert journey.WorklistScreen.title == page.title() == "Choose the images to build"

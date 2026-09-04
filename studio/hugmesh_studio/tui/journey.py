@@ -398,11 +398,15 @@ class WorklistScreen:
     GUI enforces this in three places because its search filter is
     presentation-only; the TUI's single row source needs exactly one).
 
-    ``title`` mirrors gui/pages/worklist.py's ``WorklistPage.setTitle`` verbatim —
-    the two are the same step (role x platform picker) on different front ends,
-    and the GUI title moved on ("Mesh worklist" -> "Choose the node images to
-    build" -> "Choose the images to build") without this one following, which is
-    the drift issue #234's TUI-parity item flagged."""
+    ``title`` mirrors gui/pages/worklist.py's ``WorklistPage.setTitle`` verbatim:
+    the two are the same step (the role x platform picker) on two front ends, so
+    the step has one name. It was born misnamed rather than drifting — f5da52b4,
+    the commit that added this screen, wrote "Mesh worklist" here while
+    worklist.py already read "Choose the images to build", and nothing compared
+    the two, so the Studio has named this step two ways for as long as the TUI
+    has existed. test_tui_gui_parity.py compares them now. Note the GUI's own
+    "Mesh worklist" is a DIFFERENT widget — the Review page's section header
+    (build.py) — and stays as it is."""
 
     slug = "worklist"
     title = "Choose the images to build"
