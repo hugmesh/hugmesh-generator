@@ -532,8 +532,12 @@ def test_print_commands_emits_each_images_own_hostname(tmp_path):
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
 
     r = subprocess.run(
+        # --backend native: on a Docker-capable host the auto backend prints the
+        # `docker run … bash -c '<inner>'` form, whose builder argv is ONE quoted token
+        # — the flag is still in there, but not as its own shlex word. Every other
+        # --print-command test here pins native for the same reason.
         [sys.executable, "-m", "hugmesh_studio", "--print-commands", "--config", str(p),
-         "--generator-dir", GENERATOR_DIR],
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
     lines = [line for line in r.stdout.splitlines() if line.strip()]
@@ -565,7 +569,7 @@ def test_print_commands_refuses_one_hostname_on_every_image(tmp_path):
     p.write_text(json.dumps(wl.to_dict()), encoding="utf-8")
     r = subprocess.run(
         [sys.executable, "-m", "hugmesh_studio", "--print-commands", "--config", str(p),
-         "--generator-dir", GENERATOR_DIR],
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60,
         env=dict(os.environ, PYTHONPATH=STUDIO_ROOT), cwd=STUDIO_ROOT)
     assert r.returncode == 2
