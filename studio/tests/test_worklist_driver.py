@@ -350,3 +350,29 @@ def test_preflight_silent_when_output_dir_writable(tmp_path):
     drv = WorklistDriver(str(tmp_path), _worklist(tmp_path), host=host(),
                          workdir=str(workdir))
     assert not [p for p in drv.preflight() if "not writable" in p]
+
+
+def test_run_all_hands_each_entry_its_own_hostname_to_its_own_builddriver(monkeypatch, tmp_path):
+    """The RUN path, not just materialize(): run_all() constructs one BuildDriver per
+    entry and calls run(cfg) with THAT entry's projected config, so the hostname typed
+    for one image is what that image's builder invocation receives — and the sibling
+    invocations receive theirs (or nothing, and derive). The per-row value has to
+    reach the builder for that row; this is the assertion that it does."""
+    seen = []
+    made = _install_fake_builddriver(
+        monkeypatch, on_run=lambda fake, cfg: seen.append((cfg.build_subdir, cfg.hostname)))
+    _install_fake_genkeys(monkeypatch)
+    wl = _worklist(tmp_path)
+    wl.entries[0].hostname = "ca-1"
+    wl.entries[1].hostname = "be-pi"
+    drv = WorklistDriver(str(tmp_path), wl, host=host())
+    assert drv.run_all() == 0
+    # one run per entry, each with its own name; the third derives (no explicit -H)
+    assert seen == [("wl-pki.x86", "ca-1"), ("wl-backend.rpi5", "be-pi"),
+                    ("wl-rpi5-desktop.rpi5", "")]
+    # one BuildDriver per entry and none shared, so no invocation can see another's cfg
+    assert len(made) == 3
+    # and the argv each of those cfgs translates to is the one the builder sees
+    argvs = [cfg.to_cli_args() for _e, cfg in drv.materialize()]
+    assert [(a[a.index("--hostname") + 1] if "--hostname" in a else None) for a in argvs] == [
+        "ca-1", "be-pi", None]
