@@ -110,11 +110,136 @@ def unallowlisted_brand_spans(line: str) -> list[tuple[int, int]]:
         if not any(lo <= m.start() and m.end() <= hi for lo, hi in frozen_spans)
     ]
 
+
+# ── ANTI-VACUITY FIXTURES FOR THE ALLOWLIST, OWNED BY THIS FILE ──────────────
+# A positional allowlist can rot in two OPPOSITE directions, and each rot is a silent
+# false result of a different kind:
+#   * too NARROW (in the limit, a never-matching regex) — the live LEGACY_COMPAT
+#     descriptor filename starts being reported as a rebrand miss, which pushes someone
+#     to "fix" a filename adopter repos still ship on disk and makes them invisible to
+#     the catalog again (#498);
+#   * too WIDE (anchors dropped) — `registry.snapdragon-deploy.yaml/hugmesh/…` inherits
+#     the exemption and entry (c) degenerates into a textual blanket mute for every
+#     functional identifier that merely CONTAINS the token. That is precisely the
+#     failure the positional form replaced (see the block comment above), and the shape
+#     the driver's negative control 9j plants.
+#
+# THIS USED TO BE MEASURED BY COUNTING FROZEN-POSITION OCCURRENCES IN THE SCANNED
+# SURFACE (`frozen_seen >= 1`), AND THE SURFACE WAS THE WRONG PLACE TO READ IT FROM.
+# The surface's one and only frozen-position occurrence was never functional config: it
+# lived in a PROSE COMMENT in .gitlab-ci.yml. Commit 857e84d9 ("Update .gitlab-ci.yml
+# (#220)", 2026-08-28) reflowed that comment and dropped the clause "leaving the
+# pre-rebrand `snapdragon-deploy.yaml` live in the ones that had not moved yet,". The
+# count went 1 -> 0 and this gate went red with nothing whatsoever wrong in the product.
+# The old guard's own escape hatch did not apply either — the filename is still live in
+# functional config fleet-wide (specs/cluster/apps/13-service-catalog.yaml `pathsExist`,
+# templates/apps/13d-brand-repos.yaml.hbs, scripts/publish-tenant-set.sh's
+# DESCRIPTOR_LEGACY_COMPAT, scripts/tooling/render-recipe.js's rename denylist,
+# specs/cluster/catalog/adopters.yaml) — so deleting the allowlist would have been
+# wrong, and dropping the threshold to 0 would have been the exact silent false PASS
+# the guard existed to prevent.
+#
+# So the evidence is no longer scraped from a file a comment edit can empty. The
+# fixtures below belong to this check: they run on EVERY invocation regardless of what
+# the surface happens to contain, they assert BOTH directions (the old count could only
+# ever see the narrow one — a widened allowlist matched MORE and looked healthier), and
+# they can only be defeated by a deliberate edit to this file. The live-surface count is
+# no longer asserted at all: a surface with nothing to exempt is a legitimate state, and
+# it is no longer confusable with a rotted regex.
+#
+# The driver keeps the "is the exemption still EARNED?" half of the old guard's job,
+# asked of functional generator paths instead of prose (control 9m).
+ALLOWLIST_PROBE_EXEMPT = (
+    # The LEGACY_COMPAT descriptor filename in the shapes functional config really
+    # spells it — an ApplicationSet `pathsExist` filter, the publisher's shell
+    # constant, the catalog registry row and the rename-contract denylist entry.
+    '            pathsExist: ["snapdragon-deploy.yaml", "deploy"]',
+    'DESCRIPTOR_LEGACY_COMPAT="snapdragon-deploy.yaml"',
+    "      descriptor: snapdragon-deploy.yaml",
+    "  'snapdragon-deploy.yaml',",
+    # The `.example.` sibling the pattern's optional group exists for. The tree does not
+    # currently carry that legacy spelling anywhere, which is exactly why it needs a
+    # fixture: nothing else on any surface exercises that branch of the regex.
+    "    - name: snapdragon-deploy.example.yaml",
+)
+ALLOWLIST_PROBE_CAUGHT = (
+    # The same filename re-used as a REGISTRY HOST — a `[\w.-]` character precedes it, so
+    # it is an ordinary stale identifier and not the frozen whole-filename token. This is
+    # negative control 9j, asserted in-process too so that a widened allowlist is caught
+    # even on a surface carrying no brand token at all (which is the state main has been
+    # in since 857e84d9, and in which NO tree mutation can reach these regexes).
+    '  DEST_REPO: "registry.snapdragon-deploy.yaml/hugmesh/hugmesh-gateway"',
+    # A name character FOLLOWS it: also not the whole-filename token.
+    "        image: snapdragon-deploy.yamlx/hugmesh/kaniko:latest",
+    # The two RETIRED allowlist entries, in the positions that used to exempt them —
+    # a `snapdragon.systems/` label key (was entry (a)) and the `Snapdragon-Systems` org
+    # segment under the github.com host (was entry (b)). Driver controls 9g/9h plant
+    # these on the tree; pinning them here too means re-adding either exemption fails
+    # this check even on a surface that no longer carries the shape to plant into.
+    '    snapdragon.systems/image-build: "true"',
+    "  repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git",
+    # The retired brand with no allowlisted spelling anywhere near it.
+    '  IMAGE_APP: "snapdragon-gateway"',
+)
+
 findings: list[str] = []
 
 
 def fail(check: str, msg: str) -> None:
     findings.append(f"  FAIL [{check}] {msg}")
+
+
+def allowlist_self_probe() -> None:
+    """Prove ALLOWLIST_RES still means what the block comment above says it means.
+
+    Both directions, on fixtures this file owns. An EXEMPT sample must actually carry a
+    brand token (otherwise exempting it proves nothing — that is how the old surface
+    count died) AND come back with no unallowlisted span; a CAUGHT sample must still be
+    reported. Either rot silently changes what every span this file reports MEANS, so it
+    is a finding here rather than something a future reader has to notice.
+    """
+    if not ALLOWLIST_RES:
+        fail(
+            "pre-rebrand",
+            "ALLOWLIST_RES is empty, so nothing is exempt and the positional matcher is "
+            "inert. If the legacy snapdragon-deploy.yaml descriptor is genuinely gone "
+            "fleet-wide, delete this probe, the fixtures and the allowlist together — do "
+            "not leave an empty tuple behind, which reads as coverage.",
+        )
+        return
+    if not ALLOWLIST_PROBE_EXEMPT or not ALLOWLIST_PROBE_CAUGHT:
+        fail(
+            "pre-rebrand",
+            "the allowlist self-probe fixtures were emptied — this check asserts nothing "
+            "in that state, which is the vacuity it exists to prevent.",
+        )
+        return
+    for sample in ALLOWLIST_PROBE_EXEMPT:
+        if not BRAND_RE.search(sample):
+            fail(
+                "pre-rebrand",
+                f"allowlist self-probe is vacuous: BRAND_RE no longer matches the "
+                f"frozen-position sample {sample!r}, so exempting it proves nothing.",
+            )
+        elif unallowlisted_brand_spans(sample):
+            fail(
+                "pre-rebrand",
+                f"allowlist self-probe: the frozen-position sample {sample!r} is no "
+                f"longer exempt — ALLOWLIST_RES has narrowed, or rotted into a "
+                f"never-matching pattern. The legacy descriptor filename is still live in "
+                f"functional config (13-service-catalog.yaml pathsExist, "
+                f"13d-brand-repos.yaml.hbs, publish-tenant-set.sh, render-recipe.js), so "
+                f"this check would now report a live filename as a rebrand miss.",
+            )
+    for sample in ALLOWLIST_PROBE_CAUGHT:
+        if not unallowlisted_brand_spans(sample):
+            fail(
+                "pre-rebrand",
+                f"allowlist self-probe: {sample!r} is NOT reported — ALLOWLIST_RES has "
+                f"widened past the frozen whole-filename token and now exempts a "
+                f"functional identifier that merely CONTAINS it. That is the textual "
+                f"blanket mute the positional form exists to prevent.",
+            )
 
 
 def load_yaml_docs(path: str):
@@ -530,15 +655,12 @@ def main(root: str) -> int:
             surface.append(f"{MANIFEST_DIR}/{fn}")
     # ANTI-VACUITY: scanning an empty file list always "passes".
     scanned = 0
-    frozen_seen = 0
     for rel in surface:
         full = p(rel)
         if not os.path.isfile(full):
             continue
         scanned += 1
         for lineno, line in enumerate(open(full, encoding="utf-8"), 1):
-            for rx in ALLOWLIST_RES:
-                frozen_seen += len(rx.findall(line))
             for lo, _hi in unallowlisted_brand_spans(line):
                 fail(
                     "pre-rebrand",
@@ -549,25 +671,11 @@ def main(root: str) -> int:
                 )
     if scanned < 4:
         fail("pre-rebrand", f"only {scanned} file(s) of the image-builder surface were scanned — the check is vacuous")
-    # ANTI-VACUITY for the ALLOWLIST: if the frozen forms ever vanish from the surface, the
-    # positional patterns stop being exercised by the positive run and could rot into
-    # never-matching regexes without anyone noticing (at which point a real regression in
-    # them would only ever be visible as a false FAIL, never as this silent false PASS).
-    # Threshold is 1, not 2: the allowlist is down to a SINGLE entry (the legacy
-    # snapdragon-deploy.yaml descriptor filename) now that the label-KEY and GitHub-org
-    # exemptions have been retired. If that last live filename ever lands in the catalog's
-    # new spelling everywhere, this whole allowlist — and this anti-vacuity guard with it —
-    # should be deleted rather than have the threshold dropped to 0, because at 0 the check
-    # can no longer distinguish "correctly nothing to exempt" from "regex rotted to never
-    # match", which is the exact silent false PASS this guard exists to prevent.
-    if frozen_seen < 1:
-        fail(
-            "pre-rebrand",
-            f"only {frozen_seen} frozen-position brand occurrence(s) found in the surface — the "
-            f"allowlist pattern is no longer exercised, so the positional check is unproven. If "
-            f"snapdragon-deploy.yaml is genuinely gone fleet-wide, DELETE the allowlist and this "
-            f"guard instead of lowering the threshold.",
-        )
+    # ANTI-VACUITY for the ALLOWLIST, measured on fixtures this file owns rather than on
+    # whatever the scanned surface happens to contain. See ALLOWLIST_PROBE_* above for why
+    # the old `frozen_seen >= 1` surface count was the wrong anchor, what deleted it, and
+    # why the replacement is strictly stronger (it asserts both rot directions, not one).
+    allowlist_self_probe()
 
     for f in findings:
         print(f)
