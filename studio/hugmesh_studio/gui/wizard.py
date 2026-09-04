@@ -24,7 +24,7 @@ from .pages import (
     HomePage, IdpPage, KeyZipPage, LaunchPage, LocalCloudNodesPage, LocalMeshPage,
     MeshEmulationPage, ModePage, NetworkPage,
     PhonePage, ProgressPage, QemuPage, QuestPage, RolePage, SessionsPage, SystemPage,
-    UsersChoicePage, UsersPage, WelcomePage, WorklistPage,
+    UsersChoicePage, UsersPage, VaultPage, WelcomePage, WorklistPage,
 )
 # re-exported for golive.py (and any other page set) — the helpers moved to
 # gui/pages/_widgets.py with the page split, but this module stays their
@@ -39,7 +39,7 @@ __all__ = [
     "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage",
     "DomainsChoicePage", "DomainsPage", "UsersChoicePage", "UsersPage",
-    "SystemPage", "HomePage", "BuildPage", "LaunchPage", "ProgressPage",
+    "SystemPage", "VaultPage", "HomePage", "BuildPage", "LaunchPage", "ProgressPage",
 ]
 
 # The wizard's ONE size, for every page (the "medium" — pages used to jump between
@@ -187,7 +187,7 @@ class StudioWizard(QtWidgets.QWizard):
             IdpPage,
             RolePage, WorklistPage, HardwarePage, BrandingPage, NetworkPage, KeyZipPage,
             DomainsChoicePage, DomainsPage, UsersChoicePage, UsersPage,
-            SystemPage, HomePage, BuildPage, LaunchPage, ProgressPage,
+            SystemPage, VaultPage, HomePage, BuildPage, LaunchPage, ProgressPage,
         ]
         assert len(page_ctors) == len(WIZARD_PAGE_SLUGS), (
             f"page constructors ({len(page_ctors)}) drifted from "

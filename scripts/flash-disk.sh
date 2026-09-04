@@ -185,6 +185,23 @@ if [ -z "${WORK_DIR}" ]; then
     esac
 fi
 
+# declared_brand <dir> — the brand the session manifest in <dir> declares, or "".
+# A brand may contain '-' (it is only validated as a DNS label, studio
+# core/validate.py validate_brand), and then no positional rule can find where it
+# ends; the manifest is the only witness. Same key, same file, same "" fallback as
+# tests/qemu/run-qemu-docker.sh declared_brand() and
+# studio/hugmesh_studio/core/qemu_tests.py declared_brand().
+declared_brand() {
+    local mf
+    mf="$1/hugmesh-mesh-manifest.json"
+    [ -f "${mf}" ] || return 0
+    # No pipe: `sed | head` under `set -o pipefail` reports the SIGPIPE, not the
+    # match. `q` stops at the first hit instead.
+    sed -n '/"brand"[[:space:]]*:/{s/.*"brand"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p;q;}' \
+        "${mf}" 2>/dev/null || true
+}
+DECLARED_BRAND="$(declared_brand "${WORK_DIR}")"
+
 # ── Artifact auto-pick ─────────────────────────────────────────────
 # Three things this must get right, all of which it used to get wrong.
 #
@@ -262,13 +279,22 @@ list_candidates() {
 # everything between the brand prefix and the arch token. The brand is the FIRST
 # field whatever it spells (hugmesh / sdhm / gentoo / …), so it is stripped
 # positionally rather than by name — enumerating two brands here silently
-# mis-parsed every other one into the platform.
+# mis-parsed every other one into the platform. When the work dir's manifest
+# DECLARES a brand the prefix is stripped by name instead, which is the only way
+# to end a hyphenated brand: `--brand my-mesh` would otherwise leave "mesh-rpi5"
+# as the platform and make assert_one_platform refuse a single-board dir.
 #   hugmesh-jetson-orin-nano-arm64-full-test-….img -> jetson-orin-nano
 #   sdhm-rpi5-arm64-backend-test-….iso             -> rpi5
+#   my-mesh-rpi5-arm64-backend-test-….img          -> rpi5   (manifest brand=my-mesh)
 platform_of() {
     local n
     n="$(basename "$1")"
-    n="${n#*-}"
+    local stripped
+    stripped=""
+    if [ -n "${DECLARED_BRAND}" ]; then
+        case "${n}" in "${DECLARED_BRAND}"-*) stripped="${n#"${DECLARED_BRAND}"-}" ;; esac
+    fi
+    if [ -n "${stripped}" ]; then n="${stripped}"; else n="${n#*-}"; fi
     local a
     for a in x86 amd64 arm64 aarch64; do
         case "${n}" in *"-${a}-"*) printf '%s\n' "${n%%-${a}-*}"; return 0 ;; esac

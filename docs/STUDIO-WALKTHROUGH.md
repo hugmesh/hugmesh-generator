@@ -94,10 +94,10 @@ Only **three** of the ten are image builds. Those three are the only values the 
 | Card | Commits | Then skips (statically) | Default role |
 | --- | --- | --- | --- |
 | **Mesh node** | `mode=mesh` | Target machine & image type, Target hardware | `omnibus` |
-| **Mesh desktop client** | `mode=cloud` | Identity provider, the worklist, and the two "do you want to configure…" choice screens for domains and users | `desktop` |
-| **Standalone Gentoo desktop** | `mode=standalone` | Identity provider, the worklist, the key-zip screen, and both domains and users screens entirely | `standalone-thick` |
+| **Mesh desktop client** | `mode=cloud` | Identity provider, the worklist, the two "do you want to configure…" choice screens for domains and users, and the secrets store | `desktop` |
+| **Standalone Gentoo desktop** | `mode=standalone` | Identity provider, the worklist, the key-zip screen, both domains and users screens entirely, and the secrets store | `standalone-thick` |
 
-So a mesh run reads Identity provider → Choose the images to build → Branding → Network → Load your admin config (key-zip or link) → Domains → *Domains & their services* → Users → *Superusers & domain users* → System identity → Home folder, encryption & login → Review → Build → Building. The two tables in italics are reachable only if the choice screen before each one asked for them (`additional_domains`, `configure_users`). Standalone is the shortest path: Target machine & image type → Target hardware → Branding → Network → System identity → Home folder, encryption & login → Review → Build → Building. Individual pages can still drop themselves beyond the static list when they have nothing to contribute — Branding, Domains and Users are the three that do.
+So a mesh run reads Identity provider → Choose the images to build → Branding → Network → Load your admin config (key-zip or link) → Domains → *Domains & their services* → Users → *Superusers & domain users* → System identity → Secrets store → Home folder, encryption & login → Review → Build → Building. The two tables in italics are reachable only if the choice screen before each one asked for them (`additional_domains`, `configure_users`). Standalone is the shortest path: Target machine & image type → Target hardware → Branding → Network → System identity → Home folder, encryption & login → Review → Build → Building. Individual pages can still drop themselves beyond the static list when they have nothing to contribute — Branding, Domains and Users are the three that do.
 
 Mesh replaces the role and hardware pages with the worklist, which owns role × platform for the whole set of node images. Committing mesh also runs the mesh-entry defaults every time: it zeroes the theming and home-folder fields the committed role class does not permit, forces tailnet and SSO on, and sets encrypted root from the platform-keyed posture — true wherever the builder has a full-disk-encryption path, false on Jetson, which has none.
 
@@ -532,6 +532,16 @@ Trap: on a mesh worklist whose rows derive *different* hostnames or *different* 
 The whole group is hidden wherever the builder would discard the flag — standalone always, unaffiliated images, and cluster-node roles — and the picker itself greys out on the ARM platforms, whose builders take no such flag. In mesh the role tested is the *first checked worklist row*, so a worklist led by a node row hides the picker even if a laptop row follows it.
 
 **Node fallback login** — off by default, and the two password fields do not exist on screen until you tick it. Un-ticking wipes them, and nothing is collected unless the box is ticked. The group only appears when some image in this flow is a node-class role on x86; a desktop image logs in with the account from the next step. These passwords are hashed at build time and never written to a saved config, so a reloaded config always comes back un-opted-in.
+
+### Secrets store — mesh only
+
+Where this mesh's nodes fetch their cluster secrets from at first boot. One group: a HashiCorp Vault address, the KV v2 mount and the base path under it. The address is the whole decision — empty emits no flag, so a config that never saw this page and one that left it blank build the same bytes. What an absent flag means is then the builder's own rule, the same as for every other knob (built-in < env < brand.conf < CLI): a brand profile's `VAULT_ADDR` still applies, and with none set nothing is baked and secrets come off the KEYS stick's `vault/secrets.json` bundle. The two paths are overrides of the builders' own defaults (`secret`, and the brand slug — where `scripts/gen-cluster-secrets.sh` writes) and only mean something once an address is set; typing one without an address is refused inline, and clearing the address clears them with it.
+
+What a set address does: the x86 and rpi5 node builders take `--vault-addr [--vault-kv-mount] [--vault-base-path]` and bake `/etc/hugmesh/vault.conf` (0644, connection facts only) into every cluster-node image in the flow. At first boot `keys-provision` reads that file whenever the KEYS stick's `provision.json` carries no `.vault` block and seeds the External Secrets Operator's `vault-token` / `vault-ca` Secrets from the token on the stick — the same seeding a hand-written `.vault` block always drove, which still wins when present. Desktop rows in a mesh worklist ignore the flag and say so in the build log.
+
+What it never does: take a token. The Vault token and unseal key are custody material and ride the KEYS stick (`vault/token`, `vault/unseal-key` — see `keys-template/vault/README.md`); they are not a wizard field, not a flag and not a byte of any image. The address must be `https://`; anything else greys Next with the reason printed under the fields. The group greys out when no image in the flow can take the flag (a worklist of only jetson or Orange Pi rows), naming the row that cannot.
+
+The TUI has the same step (`a URL`, `m NAME`, `p PATH`, Enter to continue) and refuses the same inputs with the same sentence.
 
 ### Home folder, encryption & login
 

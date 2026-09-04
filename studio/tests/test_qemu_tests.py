@@ -695,16 +695,21 @@ def test_shell_and_python_agree_on_branded_artifacts(tmp_path):
     so the operator's real sdhm names are used, plus a ``gentoo-`` unaffiliated
     build and an ``acme-`` third slug.
 
-    The two REJECTIONS are in the sample on purpose: the brand check is gone, so
-    the field-count and stamp-shape rules are all that keep a foreign .img out, and
-    bash and Python have to refuse the same ones.
+    The REJECTIONS are in the sample on purpose: the brand check is gone, so the
+    field-count and stamp-shape rules are all that keep a foreign .img out, and bash
+    and Python have to refuse the same ones. The last two are short names that DO
+    end in a real stamp, which is the only shape the stamp anchor cannot refuse on
+    its own — without them the field-count rule is unguarded on both twins, and a
+    one-field remainder parses into platform == arch == role == env == the stamp.
     """
     _write(str(tmp_path),
            *_BRANDED_PI_NAMES,
            "gentoo-x86-amd64-standalone-unaffiliated-test-20260901T120000Z.img",
            "acme-jetson-arm64-edge_ai-prod-20260719T000000Z.img",
            "a-very-long-user-named-backup-file.img",
-           "sdhm-rpi5-arm64-pki-test-notastamp.img")
+           "sdhm-rpi5-arm64-pki-test-notastamp.img",
+           "hugmesh-20260831T015954Z.img",
+           "sdhm-rpi5-20260831T015954Z.img")
 
     expected = {
         ("rpi5/backend", "sdhm-rpi5-arm64-backend-test-20260831T025801Z.img.xz"),
@@ -727,6 +732,103 @@ def test_shell_and_python_agree_that_a_zero_byte_image_is_not_a_row(tmp_path):
     _write(str(tmp_path), "sdhm-rpi5-arm64-backend-test-20260831T025801Z.img")
     expected = {("rpi5/backend",
                  "sdhm-rpi5-arm64-backend-test-20260831T025801Z.img")}
+    assert _py_rows(tmp_path) == expected
+    assert _shell_rows(tmp_path) == expected
+
+
+# ── A brand may contain '-', and only the manifest knows where it ends ───────
+# ``validate_brand`` (core/validate.py) accepts any DNS label, and a DNS label may
+# hold hyphens — so ``--brand my-mesh`` is legal and mints
+# ``my-mesh-rpi5-arm64-pki-test-<stamp>.img``. Splitting that positionally reads
+# brand=my, platform=mesh, arch=rpi5, role=arm64-pki: the session would list as
+# COMPLETE while planning a device whose platform no launcher can dispatch, and
+# flash-disk.sh would call one rpi5 dir a cross-platform ambiguity. Before the
+# brand stopped anchoring such a session was merely invisible; the fix has to end
+# the brand correctly, not just stop matching it.
+_HYPHEN_BRAND_MANIFEST = {
+    "format": 2, "brand": "my-mesh", "brand_title": "My Mesh",
+    "images": [{"id": "pki.rpi5", "role": "pki", "platform": "rpi5"}],
+}
+
+
+def test_declared_brand_reads_the_session_manifest(tmp_path):
+    (tmp_path / qt.MESH_MANIFEST_NAME).write_text(json.dumps(_HYPHEN_BRAND_MANIFEST))
+    assert qt.declared_brand(str(tmp_path)) == "my-mesh"
+
+
+def test_declared_brand_is_empty_without_a_usable_manifest(tmp_path):
+    """No manifest, unreadable JSON, and a manifest that names no brand all mean
+    "fall back to the positional split" — never a crash, and never a filter."""
+    assert qt.declared_brand(str(tmp_path)) == ""
+    (tmp_path / qt.MESH_MANIFEST_NAME).write_text("{not json")
+    assert qt.declared_brand(str(tmp_path)) == ""
+    (tmp_path / qt.MESH_MANIFEST_NAME).write_text(json.dumps({"format": 2}))
+    assert qt.declared_brand(str(tmp_path)) == ""
+    (tmp_path / qt.MESH_MANIFEST_NAME).write_text(json.dumps({"brand": 7}))
+    assert qt.declared_brand(str(tmp_path)) == ""
+
+
+def test_a_hyphenated_brand_is_ended_by_name_not_by_position():
+    name = "my-mesh-rpi5-arm64-pki-test-20260831T015954Z.img"
+    # Positional: every field shifts one to the left and all four are wrong.
+    assert qt.parse_artifact_name(name) == ("mesh", "rpi5", "arm64-pki", "test")
+    # Told where the brand ends, the same name parses correctly.
+    assert qt.parse_artifact_name(name, "my-mesh") == ("rpi5", "arm64", "pki", "test")
+    assert qt.artifact_brand(name, "my-mesh") == "my-mesh"
+    assert qt.artifact_stamp(name, "my-mesh") == "20260831T015954Z"
+
+
+def test_a_declared_brand_needs_the_trailing_hyphen_to_match():
+    """Brand "snap" must not swallow the head of ``snapdragon-…`` — the strip is
+    ``<brand>-``, not a bare prefix, or one brand truncates another's platform."""
+    name = "snapdragon-rpi5-arm64-pki-test-20260831T015954Z.img"
+    assert qt.parse_artifact_name(name, "snap") == ("rpi5", "arm64", "pki", "test")
+    assert qt.artifact_brand(name, "snap") == "snapdragon"
+
+
+def test_a_hyphenated_brand_session_plans_the_right_devices(tmp_path):
+    """End to end through discover_rows: the manifest is beside the artifacts, so
+    nothing has to be threaded in by a caller."""
+    (tmp_path / qt.MESH_MANIFEST_NAME).write_text(json.dumps(_HYPHEN_BRAND_MANIFEST))
+    _write(str(tmp_path),
+           "my-mesh-rpi5-arm64-pki-test-20260831T015954Z.img",
+           "my-mesh-rpi5-arm64-backend-test-20260831T025801Z.img")
+    rows = qt.discover_rows(str(tmp_path))
+    assert [r.label for r in rows] == ["rpi5/backend", "rpi5/pki"]
+    assert {r.arch for r in rows} == {"arm64"}
+    assert {r.brand for r in rows} == {"my-mesh"}
+
+
+def test_a_declared_brand_still_never_rejects_a_foreign_one(tmp_path):
+    """The manifest brand ends a field; it does NOT filter. An ``out/`` dir holding
+    another brand's image must still enumerate it — filtering on the brand is the
+    defect this whole change exists to remove, and re-introducing it as
+    "only the declared brand counts" would hide exactly the same sessions."""
+    (tmp_path / qt.MESH_MANIFEST_NAME).write_text(json.dumps(_HYPHEN_BRAND_MANIFEST))
+    _write(str(tmp_path),
+           "my-mesh-rpi5-arm64-pki-test-20260831T015954Z.img",
+           "hugmesh-x86-amd64-be-test-20260814T112817Z.img")
+    assert {r.label for r in qt.discover_rows(str(tmp_path))} == {"rpi5/pki", "x86/backend"}
+
+
+@_needs_runner
+def test_shell_and_python_agree_on_a_hyphenated_brand(tmp_path):
+    """Parity for the manifest lookup itself. The shell twin reads the brand out of
+    the same file with sed rather than a JSON parser, so this is the only check that
+    the two agree about a hyphenated brand — and it is written against a manifest
+    serialized WITHOUT indent, because worklist_driver writes it with indent=2 and a
+    line-anchored sed would pass on the pretty form while diverging on the compact
+    one."""
+    (tmp_path / qt.MESH_MANIFEST_NAME).write_text(json.dumps(_HYPHEN_BRAND_MANIFEST))
+    _write(str(tmp_path),
+           "my-mesh-rpi5-arm64-pki-test-20260831T015954Z.img",
+           "my-mesh-rpi5-arm64-backend-test-20260831T025801Z.img",
+           "hugmesh-x86-amd64-be-test-20260814T112817Z.img")
+    expected = {
+        ("rpi5/pki", "my-mesh-rpi5-arm64-pki-test-20260831T015954Z.img"),
+        ("rpi5/backend", "my-mesh-rpi5-arm64-backend-test-20260831T025801Z.img"),
+        ("x86/backend", "hugmesh-x86-amd64-be-test-20260814T112817Z.img"),
+    }
     assert _py_rows(tmp_path) == expected
     assert _shell_rows(tmp_path) == expected
 
@@ -893,3 +995,37 @@ def test_shell_and_python_agree_on_which_session_is_the_default(tmp_path):
     }
     assert qt.discover_rows(str(abort)) == []
     assert qt.discover_rows(str(nostamp)) == []
+
+
+@_needs_runner
+def test_the_session_picker_reads_each_session_s_own_declared_brand(tmp_path):
+    """The manifest lookup has to happen PER SESSION DIR, inside row discovery.
+
+    The picker walks every ``out/sessions/*/`` before ``--artifacts`` has a value,
+    so a brand read once into a script-global — from ``${ARTIFACTS}``, at parse
+    time — is empty for the whole scan and stale for the listing that follows.
+    A hyphenated brand would then fall back to the positional split on the ONLY
+    path a bare ``make qemu-docker-list`` takes: shell rows ``mesh/arm64-pki``
+    against Python's ``rpi5/pki``, the two twins silently disagreeing about what
+    the same session holds. Passing ``--artifacts`` hides it, which is why this
+    goes through the picker.
+    """
+    repo = _mini_repo(tmp_path)
+    session = repo / "out" / "sessions" / "20260901-000000-hyphen"
+    session.mkdir(parents=True)
+    (session / qt.MESH_MANIFEST_NAME).write_text(json.dumps(_HYPHEN_BRAND_MANIFEST))
+    _write(str(session),
+           "my-mesh-rpi5-arm64-pki-test-20260901T010000Z.img.xz",
+           "my-mesh-rpi5-arm64-backend-test-20260901T020000Z.img.xz")
+
+    picked, out = _shell_picked_session(repo)
+    assert picked == str(session), f"runner picked {picked!r}, wanted {session}\n{out}"
+    shell_rows = {f"{p[1]}/{p[2]}" for p in
+                  (line.split() for line in out.splitlines())
+                  if len(p) >= 5 and p[0].isdigit()}
+    assert shell_rows == {"rpi5/pki", "rpi5/backend"}, out
+
+    py_session = qt.default_session(str(repo))
+    assert py_session is not None and py_session.path == str(session)
+    assert {r.label for r in py_session.rows} == shell_rows
+    assert {r.brand for r in py_session.rows} == {"my-mesh"}

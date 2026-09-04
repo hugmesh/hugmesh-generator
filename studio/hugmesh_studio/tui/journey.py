@@ -33,14 +33,15 @@ from __future__ import annotations
 
 from ..core.config import (
     IDP_CHOICES, IDP_LABELS, MODE_DEFAULT_ROLE, MODE_SKIPPED_PAGES, ROLE_CHOICES,
-    UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS, ImageConfig, enter_mesh_defaults,
+    UNAFFILIATED_ROLE, VAULT_FIELDS, VAULT_KV_MOUNT_DEFAULT, WIZARD_PAGE_SLUGS,
+    ImageConfig, enter_mesh_defaults, vault_field_error,
 )
 from ..core.worklist import WorklistConfig, WorklistEntry
 
 __all__ = [
     "PAGE_ORDER", "SIDE_FLOW_SLUGS", "WELCOME_CHOICES", "WELCOME_TARGET",
     "MODE_CHOICES", "MODE_DEFAULT_CHOICE", "PENDING_NOTE", "Journey",
-    "README_GETTING_STARTED",
+    "README_GETTING_STARTED", "VAULT_COMMANDS",
 ]
 
 #: The canonical page order — the GUI's OWN tuple, consumed rather than copied so
@@ -347,6 +348,94 @@ class IdpScreen:
             return
         j.cfg.idp = "casdoor"
         j.advance()
+
+
+#: TUI edit vocabulary for the secrets-store step: command letter -> cfg field.
+#: One entry per VAULT_FIELDS member, in order — the GUI/TUI parity test pins the
+#: two faces edit exactly the same trio.
+VAULT_COMMANDS = {"a": "vault_addr", "m": "vault_kv_mount", "p": "vault_base_path"}
+assert tuple(VAULT_COMMANDS.values()) == VAULT_FIELDS
+
+
+class VaultScreen:
+    """The mesh SECRETS-STORE step (issue #224) — the TUI twin of gui/pages/vault.py.
+
+    Edits the SAME ``cfg.vault_*`` trio through the SAME fail-closed predicate
+    (``config.vault_field_error``), so what this face accepts is exactly what the
+    argv accepts. Every edit is validated BEFORE it is committed and a refusal is an
+    inline status line (never a dead end, never a silently-inert command); clearing
+    the address clears the two paths with it — the byte-identity rule the GUI's
+    validatePage applies. Enter keeps the current values and continues."""
+
+    slug = "vault"
+    title = "Secrets store (HashiCorp Vault, mesh nodes)"
+
+    def enter(self, j: "Journey") -> None:  # noqa: ARG002
+        return None
+
+    def lines(self, j: "Journey") -> list[str]:
+        cfg = j.cfg
+        out = ["Where this mesh's nodes fetch cluster secrets from at first boot.",
+               "Empty address = no flag; the builder bakes nothing unless brand.conf "
+               "sets VAULT_ADDR (then secrets come off the KEYS stick).",
+               ""]
+        if cfg.vault_addr:
+            out += [f"  address    {cfg.vault_addr}",
+                    f"  KV mount   {cfg.vault_kv_mount or VAULT_KV_MOUNT_DEFAULT + ' (builder default)'}",
+                    f"  base path  {cfg.vault_base_path or '<brand> (builder default)'}",
+                    "",
+                    "  Every x86/rpi5 node in the worklist bakes these into "
+                    "/etc/hugmesh/vault.conf.", ""]
+        else:
+            out += ["  address    (none — no flag emitted; brand.conf VAULT_ADDR or "
+                    "offline KEYS-stick delivery)", ""]
+        out += [
+            "commands:",
+            "  a URL|-     Vault address (https://…; - clears it and the two paths)",
+            "  m NAME|-    KV v2 mount (- = the builder default "
+            f"'{VAULT_KV_MOUNT_DEFAULT}')",
+            "  p PATH|-    base path under the mount (- = the builder default: the "
+            "brand slug)",
+            "  Enter       keep these and continue",
+            "",
+            "The Vault token and unseal key are never entered here: put them on the "
+            "KEYS stick (vault/token, vault/unseal-key). A .vault block in the "
+            "stick's provision.json overrides this step.",
+        ]
+        return out
+
+    def prompt(self, j: "Journey") -> str:  # noqa: ARG002
+        return "vault> "
+
+    def feed(self, j: "Journey", line: str) -> None:
+        if line == "":
+            j.advance()
+            return
+        cmd, _, arg = line.partition(" ")
+        cmd = cmd.strip().lower()
+        arg = arg.strip()
+        field = VAULT_COMMANDS.get(cmd)
+        if field is None:
+            j.status = (f"unrecognised command: {line!r} (a/m/p set a value, "
+                        "Enter continues, q quits)")
+            return
+        if not arg:
+            j.status = f"{cmd} needs a value (or - to clear)"
+            return
+        cfg = j.cfg
+        new = {f: getattr(cfg, f) for f in VAULT_FIELDS}
+        new[field] = "" if arg == "-" else arg
+        if field == "vault_addr" and not new["vault_addr"]:
+            # clearing the address clears the residue with it (byte-identity)
+            new["vault_kv_mount"] = new["vault_base_path"] = ""
+        err = vault_field_error(new["vault_addr"], new["vault_kv_mount"],
+                                new["vault_base_path"])
+        if err:
+            # honest refusal, state unchanged — the same sentence the GUI shows
+            j.status = f"refused: {err}"
+            return
+        for f, v in new.items():
+            setattr(cfg, f, v)
 
 
 class RoleScreen:
@@ -672,7 +761,7 @@ class Journey:
             YesNoStep("users_choice", "User accounts",
                       "Configure user accounts for this mesh now?",
                       "configure_users"),
-            UsersScreen(), BrandingScreen(), BuildScreen(),
+            UsersScreen(), BrandingScreen(), VaultScreen(), BuildScreen(),
         ]
         self._screens = {s.slug: s for s in screens}
         for slug, title in _SIDE_FLOW_STUB.items():
