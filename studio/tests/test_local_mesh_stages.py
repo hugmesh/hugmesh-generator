@@ -329,6 +329,7 @@ def test_streamed_banners_advance_the_tree_and_the_log_follows_the_selection(qap
     page._on_line("  ++ hugmesh-fe-gateway: cloning")
     page._on_line(_banner_for("localmesh-up", "Build images + start containers"))
     page._on_line("#42 [hugmesh-wiki-ui builder] RUN npm ci")
+    page._drain_lines()   # _on_line only BANKS a line; the coalescing tick is what renders it
 
     assert _states(page)[i_fetch] == DONE
     assert _states(page)[i_build] == RUNNING
@@ -346,6 +347,7 @@ def test_streamed_banners_advance_the_tree_and_the_log_follows_the_selection(qap
     assert "npm ci" not in text
     assert "Fetch repo source" in page.log_header.text()
     page._on_line("#43 [hugmesh-wiki-ui builder] RUN npm run build")
+    page._drain_lines()   # _on_line only BANKS a line; the coalescing tick is what renders it
     assert "npm run build" not in page.log.toPlainText()
     assert "npm run build" in "\n".join(page._runs[0].buffer)   # never LOST, just filtered
 
@@ -364,8 +366,10 @@ def test_the_selected_running_stage_keeps_receiving_the_live_stream(qapp):
     i_build = [ph["label"] for ph in lms.verb_phases("up")].index(
         "Build images + start containers")
     page._on_line(_banner_for("localmesh-up", "Build images + start containers"))
+    page._drain_lines()   # _on_line only BANKS a line; the coalescing tick is what renders it
     page._on_stage_clicked(page._runs[0].stage_items[i_build])
     page._on_line("#7 exporting layers")
+    page._drain_lines()   # _on_line only BANKS a line; the coalescing tick is what renders it
     assert "#7 exporting layers" in page.log.toPlainText()
     v.gate.set()
     _drain(qapp, page)
@@ -451,6 +455,7 @@ def test_a_verb_with_no_banners_gets_no_stages_and_still_shows_its_log(qapp):
     v = _start(page, verb="down")
     assert page._runs[0].stage_items == []
     page._on_line("[readiness] READY")
+    page._drain_lines()   # _on_line only BANKS a line; the coalescing tick is what renders it
     assert "[readiness] READY" in page.log.toPlainText()
     v.gate.set()
     _drain(qapp, page)
@@ -506,6 +511,7 @@ def test_control_bytes_never_reach_the_log_widget(qapp):
     v = _start(page)
     page._on_line("\x1b[1;36m==> " + lms.verb_phases("up")[1]["any"][0] + "\x1b[0m")
     page._on_line("\x1b[32mgreen\x1b[0m\r noise")
+    page._drain_lines()   # _on_line only BANKS a line; the coalescing tick is what renders it
     assert "\x1b" not in page.log.toPlainText()
     assert "\r" not in page.log.toPlainText()
     # the ANSI-wrapped banner still advanced the ladder (strip_ansi runs first)

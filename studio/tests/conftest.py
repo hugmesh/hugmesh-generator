@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 
 import pytest
 
@@ -60,6 +61,85 @@ def _host_independent_build_defaults(monkeypatch):
     monkeypatch.setattr(host_resources, "_meminfo_fresh", lambda: dict(healthy))
 
 
+def _drain_probe_threads(deadline_s: float = 60.0) -> None:
+    """Wait out every probe QThread the Studio still has in flight, ONCE, at session end.
+
+    ``gui/pages/_widgets.own_probe`` parents every probe onto the QApplication, so a
+    page dropped mid-probe no longer takes the process down (see that docstring). What
+    it does NOT cover is the very last owner: the QApplication itself is destroyed at
+    interpreter exit, and a probe still running THEN hits the same ``QThread: Destroyed
+    while thread is still running`` qFatal — measured on 2026-09-04 with the re-parent
+    in place and this drain removed, ``test_local_mesh.py`` ran all 34 tests green and
+    then aborted the process at exit.
+
+    So this runs ONCE, from ``pytest_sessionfinish``, and never per test. Per-test it
+    also worked, and cost ~25 s a test on any suite whose probes genuinely shell out
+    (``test_pages_e2e_run.py`` went from 12 s to over 500 s) — for no benefit, because
+    between tests a live probe is now harmless.
+
+    It asserts nothing: it waits on every running probe thread and pumps the event
+    loop until things are QUIESCENT, since a delivered ``result`` can start the next
+    probe (``tests/test_localmesh_page_entry_offthread.py::_settle`` documents the same
+    re-entrancy) and ``isRunning()`` is still False in the instant between ``start()``
+    and the OS thread running. Bounded: past the deadline it returns anyway and the
+    process is no worse off than before.
+
+    Qt is touched ONLY if the run already imported it — the core-only CI lane must
+    stay free of a PyQt import.
+    """
+    qtw = sys.modules.get("PyQt6.QtWidgets")
+    qtc = sys.modules.get("PyQt6.QtCore")
+    if qtw is None or qtc is None:
+        return
+    app = qtw.QApplication.instance()
+    if app is None:
+        return
+    end = time.monotonic() + deadline_s
+    idle = 0
+    # QUIESCENCE, not one clear pass. Two things make a single check lie, and
+    # tests/test_localmesh_page_entry_offthread.py::_settle documents both:
+    # a delivered `result` can START the next probe (_on_mesh_state re-gates), and
+    # isRunning() is still False in the instant between start() and the OS thread
+    # actually running. So idle has to hold across several consecutive passes.
+    while time.monotonic() < end and idle < 20:
+        running = _running_probe_threads(qtw, qtc)
+        for t in running:
+            try:
+                t.wait(200)
+            except RuntimeError:                # wrapper outlived its C++ object
+                continue
+        # processEvents ONLY. An earlier version also flushed DeferredDelete here, to
+        # collect the finished threads' C++ objects — and that turned this drain into a
+        # destroyer: `tests/test_pages_progress.py` deleteLater()s a page whose
+        # _WorklistWorker (a QThread that does NOT go through own_probe) was still
+        # running, and forcing that delete aborted a run that had passed all 50 tests.
+        # The registry entry is cleared by the `finished` signal, which a plain
+        # processEvents delivers, so nothing here needs to delete anything.
+        app.processEvents()
+        idle = 0 if (running or _running_probe_threads(qtw, qtc)) else idle + 1
+
+
+def _running_probe_threads(qtw, qtc) -> list:
+    """Every probe own_probe is still holding that has not finished.
+
+    Asks ``own_probe``'s registry rather than walking the object tree: the threads are
+    parented to nothing at all (that is the whole point of the re-parent), so there is
+    no widget and no application whose ``children()`` would list them.
+    """
+    try:
+        from hugmesh_studio.gui.pages import _widgets
+    except Exception:                           # no toolkit in this run
+        return []
+    out = []
+    for t in _widgets.in_flight_probes():
+        try:
+            if t.isRunning():
+                out.append(t)
+        except RuntimeError:                    # wrapper outlived its C++ object
+            continue
+    return out
+
+
 @pytest.fixture(autouse=True)
 def _inert_mesh_monitor(request, monkeypatch):
     """Make the local-mesh page's running-mesh monitor INERT by default.
@@ -92,6 +172,51 @@ def _inert_mesh_monitor(request, monkeypatch):
             compose=mesh_monitor.LaneState(None, detail=why),
             kind=mesh_monitor.LaneState(None, detail=why))
     monkeypatch.setattr(mesh_monitor, "snapshot", _inert)
+
+
+@pytest.fixture(autouse=True)
+def _inert_entry_probes(request, monkeypatch):
+    """Make the local-mesh page's PAGE-ENTRY probes non-shelling by default.
+
+    The sibling of ``_inert_mesh_monitor`` above, for the two blocking calls that
+    run on entering the page rather than on opening a section:
+
+    * ``_StatusProbe`` -> ``LocalStackNode.status()`` / ``MeshNode.status()`` — a
+      ``docker compose ps`` (``subprocess.run(..., timeout=30)``).
+    * ``_E2EGateProbe`` -> ``LocalStackNode.e2e_ready()`` — up to three of those
+      plus a 5 s urlopen of Casdoor (its own docstring puts the ceiling at ~95 s).
+
+    Two things go wrong without this, and both were measured on 2026-09-04 (and
+    identically on the pre-lane baseline 98bc3ad4, so neither is new work's fault):
+
+    (a) A test that builds the page and drops it goes on to build the NEXT one, and
+        the first page is collected mid-``subprocess.run`` — ``QThread: Destroyed
+        while thread is still running``, a Qt qFatal, which aborts the whole file.
+        ``test_local_mesh.py``, ``test_local_mesh_bringup.py`` and
+        ``test_local_mesh_stages.py`` each died that way, losing every test after
+        the fifth, eleventh and nineteenth respectively.
+    (b) Until then those probes were shelling the OPERATOR'S REAL docker daemon on
+        every page construction in the suite — the same non-hermeticity
+        ``_inert_mesh_monitor`` and ``_isolate_studio_state_dir`` exist to close.
+
+    The stubs answer INSTANTLY and honestly: not running, with a detail that names
+    this fixture, and an e2e gate whose single blocker says the same. A test that
+    wants the real functions opts out with
+    ``pytestmark = pytest.mark.real_stack_probes``; a test that wants a SPECIFIC
+    answer keeps monkeypatching the node itself — a per-instance attribute, and a
+    ``monkeypatch.setattr`` in the test body, both run after this and both win.
+    """
+    if request.node.get_closest_marker("real_stack_probes"):
+        return
+    from hugmesh_studio.core import mesh_node
+    from hugmesh_studio.core.local_stack_node import LocalStackNode, StackStatus
+    why = "not probed under pytest (tests/conftest.py: _inert_entry_probes)"
+    monkeypatch.setattr(LocalStackNode, "status",
+                        lambda self: StackStatus(False, why), raising=True)
+    monkeypatch.setattr(LocalStackNode, "e2e_ready",
+                        lambda self, environment="docker": [why], raising=True)
+    monkeypatch.setattr(mesh_node.MeshNode, "status",
+                        lambda self: mesh_node.MeshStatus(False, why), raising=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -191,8 +316,14 @@ def pytest_configure(config):
 # anything, and it is what catches a state accessor that never goes through the seam.
 
 def pytest_sessionfinish(session, exitstatus):
-    """Fail the RUN (not a test) if anything under the operator's real ~/.hugmesh was
-    created, deleted or modified while the suite ran."""
+    """Drain the Studio's in-flight probe threads, then fail the RUN (not a test) if
+    anything under the operator's real ~/.hugmesh was created, deleted or modified
+    while the suite ran.
+
+    The drain comes FIRST and is not optional: a probe still running when the
+    QApplication is destroyed aborts the interpreter, which would take this hook's
+    own verdict down with it."""
+    _drain_probe_threads()
     home = getattr(session.config, "_hugmesh_fake_home", "")
     try:
         if not _guard_enabled():

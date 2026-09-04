@@ -285,6 +285,8 @@ class _CredsProbe(QtCore.QThread):
                                   f"{type(e).__name__}: {e}")
             truth = None
         self.result.emit((roster, truth))
+
+
 class _MonitorProbe(QtCore.QThread):
     """Read BOTH lanes of the running mesh off the GUI thread, for the monitor table.
 

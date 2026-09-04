@@ -441,7 +441,11 @@ def test_services_selection_shows_up_in_the_plan_preview(qapp):
     assert "[x] tube" in plan
     assert "[ ] wiki" in plan
     assert local_services.FEDERATION_ENABLE_ENV in plan
-    assert "PENDING" in plan          # the seeder hunk is honestly disclosed
+    # The seeder hunk is honestly disclosed. This asserted "PENDING" until commit
+    # 2aafe0ad ("make the federation checkboxes real — they were wholly inert"),
+    # which deleted that disclaimer in the SAME change that made the boxes do
+    # something; the plan now names the seeder leg that applies them instead.
+    assert "applied by `make stack-seed`" in plan
 
 
 def test_bootstrap_up_carries_the_services_selection(qapp, monkeypatch):
