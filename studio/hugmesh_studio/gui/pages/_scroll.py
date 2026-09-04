@@ -7,10 +7,12 @@ Network, Role, Home), so their lower controls were clipped with no way to reach
 them. This is what keeps a tall page SCROLLING rather than growing the window —
 the wizard deliberately does not resize itself to fit its pages.
 
-``reveal(page, widget)`` is the other half: on a page this tall, writing into a
-widget that happens to be a thousand pixels below the viewport is indistinguishable
-from doing nothing at all, so a control whose only effect is remote output scrolls
-its output back into view.
+There is deliberately no scroll-to-widget helper here any more. One existed
+(``reveal``) for exactly one caller: the mesh worklist's per-row command button, whose
+output pane sat a thousand pixels below it. Moving the operator's viewport turned out to
+BE the complaint ("it just scrolls the window"), so that button's output moved next to
+the button instead — see ``pages/build.py:_preview_entry``. A control whose output is
+off screen wants its output relocated, not the viewport hijacked.
 
 ``scrollable(page)`` gives the page a single vertical ``QScrollArea`` whose inner
 widget carries the real content layout, and returns that content layout. Callers
@@ -37,28 +39,9 @@ def scrollable(page: QtWidgets.QWidget) -> QtWidgets.QVBoxLayout:
     outer = QtWidgets.QVBoxLayout(page)
     outer.setContentsMargins(0, 0, 0, 0)
     outer.addWidget(scroll)
-    # Stashed so reveal() finds THIS scroll area by identity. findChild is the fallback
-    # and not the primary: it walks the whole subtree, and a page is free to nest a
-    # QScrollArea of its own inside the content later.
+    # Stashed so anything needing THIS scroll area gets it by identity rather than by
+    # findChild, which walks the whole subtree and would happily return a QScrollArea a
+    # page nested inside its own content. (The one consumer, reveal(), is gone; the
+    # handle stays because identity is the only correct way to name it.)
     page._content_scroll = scroll
     return content_layout
-
-
-def reveal(page: QtWidgets.QWidget, widget: QtWidgets.QWidget) -> bool:
-    """Scroll ``page`` so ``widget`` is on screen. Returns False if it has no scroll area.
-
-    The layout is ``activate()``d first: a caller typically reveals something it has just
-    un-hidden (an expanded ``Collapsible``), and until the layout settles the scroll area
-    still holds the widget's PRE-expand geometry — ``ensureWidgetVisible`` would then
-    scroll to where the widget used to be. Purely a viewport move: no widget value, no
-    enabled-ness and no visibility is touched, so it cannot affect emission."""
-    scroll = getattr(page, "_content_scroll", None)
-    if scroll is None:
-        scroll = page.findChild(QtWidgets.QScrollArea)
-    if scroll is None:
-        return False
-    inner = scroll.widget()
-    if inner is not None and inner.layout() is not None:
-        inner.layout().activate()
-    scroll.ensureWidgetVisible(widget)
-    return True

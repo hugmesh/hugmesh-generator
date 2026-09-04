@@ -301,7 +301,8 @@ BUILD_IMG=true          # produce the flashable raw .img (DEFAULT)
 ROOT_MiB=8192           # ext4 root partition size in the .img (growroot expands it on first boot)
 IMG_SIZE_SET=false      # true once --img-size is given, so the client auto-bump below defers to it
 GROW_POLICY="fill"      # first-boot grow policy baked into /etc/growfs.conf: fill|none|<size>
-COMPRESS_IMG=false      # xz -9 the finished .img
+COMPRESS_IMG=false      # xz-compress the finished .img (preset: COMPRESS_LEVEL)
+COMPRESS_LEVEL=9        # xz preset --compress uses (0-9); --compress-level N
 LIVE_ISO=true           # self-booting live squashfs ISO (DEFAULT; --no-live-iso to skip)
 INSTALLER_ISO=false     # stage4 + install-x86.sh data ISO (opt-in: --installer-iso)
 BUILD_TAR=true          # also emit the mounted-filesystem tarball (.fs.tar.xz)
@@ -744,7 +745,11 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             Override per-device via growfs.conf on the ESP or a
                             growfs=<v> kernel cmdline token (no rebuild).
       --no-grow             Shorthand for --grow none.
-      --compress            xz -9 the finished .img.
+      --compress            xz-compress the finished .img; the preset
+                            is --compress-level.
+      --compress-level N    xz preset 0-9 used by --compress (default 9).
+                            Lower is faster and larger; 9 is smallest and
+                            has the longest build tail.
       --live-iso            Force-build the self-booting live squashfs ISO (DEFAULT).
       --no-live-iso         Skip the live ISO (clean disable; no installer ISO implied).
       --installer-iso       Also build a stage4 + install-x86.sh data ISO.
@@ -1056,6 +1061,9 @@ while [[ $# -gt 0 ]]; do
         --grow)     GROW_POLICY="$2"; shift 2 ;;
         --no-grow)  GROW_POLICY="none"; shift ;;
         --compress) COMPRESS_IMG=true; shift ;;
+        --compress-level)
+            case "${2:-}" in [0-9]) ;; *) err "--compress-level must be a single digit 0-9 (got '${2:-}')"; exit 1 ;; esac
+            COMPRESS_LEVEL="$2"; shift 2 ;;
         --live-iso) LIVE_ISO=true; shift ;;
         --installer-iso) INSTALLER_ISO=true; shift ;;
         --tar) BUILD_TAR=true; shift ;;
@@ -2361,7 +2369,7 @@ if ${PRINT_PLAN}; then
     _plan ENCRYPT_ROOT       "${ENCRYPT_ROOT}"
     _plan LUKS_PASS          "$([ -n "${LUKS_PASS}" ] && echo REDACTED || echo none)"
     _plan LOCAL_PASS         "$([ -n "${LOCAL_PASSHASH}" ] && echo REDACTED || echo none)"
-    _plan FLAGS_EFFECTIVE    "env=${ENV} img=${BUILD_IMG} live_iso=${LIVE_ISO} installer_iso=${INSTALLER_ISO} tar=${BUILD_TAR} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} skip_sso=${SKIP_SSO} standalone=${STANDALONE} desktop=${DESKTOP} capable=${CAPABLE} gpu_driver=${GPU_DRIVER} cuda=${NVIDIA_CUDA} encrypt_root=${ENCRYPT_ROOT} secure_boot=${SECURE_BOOT} media_data=${MEDIA_DATA} installer_ui=${INSTALLER_UI} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} unaffiliated=${UNAFFILIATED}"
+    _plan FLAGS_EFFECTIVE    "env=${ENV} img=${BUILD_IMG} live_iso=${LIVE_ISO} installer_iso=${INSTALLER_ISO} tar=${BUILD_TAR} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} compress_level=${COMPRESS_LEVEL} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} skip_sso=${SKIP_SSO} standalone=${STANDALONE} desktop=${DESKTOP} capable=${CAPABLE} gpu_driver=${GPU_DRIVER} cuda=${NVIDIA_CUDA} encrypt_root=${ENCRYPT_ROOT} secure_boot=${SECURE_BOOT} media_data=${MEDIA_DATA} installer_ui=${INSTALLER_UI} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} unaffiliated=${UNAFFILIATED}"
     _plan PACKAGES_ADD       "${PACKAGES_ADD}"
     _plan PACKAGES_DROP      "${PACKAGES_DROP}"
     exit 0
@@ -3565,6 +3573,10 @@ for akf in "${SPECS_DIR}/portage/package.accept_keywords/"*; do
         home-encrypted) ${HOME_ENCRYPTED} || continue ;;
         seed-code)      ${WANT_DOCKER}    || continue ;;
         calamares)      ${WANT_CALAMARES} || continue ;;
+        # qt6: the dev-qt/* ~amd64 set is needed by BOTH the capable Plasma apps
+        # (neochat/kdeconnect/khelpcenter) AND the calamares installer chain
+        # (kpmcore-26.08+ hard-requires the ~amd64 qtbase) — issue #223.
+        qt6)            ${CAPABLE} || ${WANT_CALAMARES} || continue ;;
     esac
     cp "${akf}" "${PCS_STAGE_AK}/"
 done
@@ -5206,6 +5218,45 @@ else
     emerge_plan_emit() { return 0; }
 fi
 # ── END shared block: emerge-plan preview (in-chroot init) ────────────────────
+# ── PAYLOAD PLAN FAIL-FAST GATE (issue #223) ──────────────────────────────────
+# When the image plan preview resolves, this is a no-op. When it FAILS, the lib
+# keeps the resolver output at the path below, and this gate decides honestly:
+#   * KEYWORD/MASK wall  -> the payload merge runs with
+#     --autounmask-keep-keywords=y --autounmask-keep-masks=y, which NEVER
+#     applies keyword or mask changes, so that merge is GUARANTEED to fail —
+#     print the exact needed pre-seeds and exit 1 NOW instead of building on.
+#     Session 20260831-183101-a9dc56 continued ~15 minutes past
+#     "Emerge plan: image unavailable" to a certain stage4-incomplete error.
+#   * anything else (USE-only failure etc.) -> loud WARN and continue:
+#     --autounmask-continue=y applies USE changes during the real merge, so a
+#     pretend failure alone does not prove the merge will fail.
+# --no-emerge-plan, a preview timeout, or an unstaged lib leave no keep-file, so
+# the old behaviour (merge decides) is untouched in every degraded mode.
+# HEREDOC SAFETY: chroot-side expansions below are backslash-escaped; no
+# backticks and no dollar-parens anywhere in this block, comments included.
+hugmesh_payload_plan_gate() {
+    kept=/tmp/hugmesh-emerge-plan-image-pretend-failed.log
+    [ -f "\${kept}" ] || return 0
+    if grep -Eq 'have been masked|masked by:|keyword changes are necessary|mask changes are necessary' "\${kept}"; then
+        echo "[build-x86] ERROR: payload --pretend resolution failed on a KEYWORD/MASK wall."
+        echo "[build-x86] The payload merge keeps keyword/mask decisions explicit"
+        echo "[build-x86] (--autounmask-keep-keywords=y --autounmask-keep-masks=y), so it cannot"
+        echo "[build-x86] apply the changes below and is guaranteed to fail — failing fast instead"
+        echo "[build-x86] of continuing to a certain stage4-incomplete error."
+        echo "[build-x86] ===== RESOLVER OUTPUT: what the payload needs ====="
+        grep -E 'USE changes|keyword changes|mask changes|^# |^>=|^<|^=|Change USE|necessary|masked by|have been masked|^- ' "\${kept}" || true
+        echo "[build-x86] ===== END RESOLVER OUTPUT ====="
+        echo "[build-x86] Pre-seed keyword lines into specs-x86/portage/package.accept_keywords/"
+        echo "[build-x86] (role-gated; see the qt6 file) and USE lines into"
+        echo "[build-x86] specs-x86/portage/package.use/, then rebuild. (Issue #223.)"
+        exit 1
+    fi
+    echo "[build-x86] WARN: payload --pretend resolution failed with no keyword/mask wall"
+    echo "[build-x86]       detected — continuing: --autounmask-continue=y applies USE changes"
+    echo "[build-x86]       during the merge below. If it still fails, see its AUTOUNMASK-PRETEND dump."
+    return 0
+}
+# ── END payload plan fail-fast gate ───────────────────────────────────────────
 # ── EMERGE-GROUP BANNERS (Studio package sub-listing) ─────────────────────────
 # Each "==> Emerge group: GROUP" line tells the Studio which of image|tools|
 # dependencies|system|world the FOLLOWING ">>> Emerging (N of M) cat/pn-ver"
@@ -5346,6 +5397,9 @@ echo "==> Emerging role payload (stage4, native chroot)"
 # failure. Host-expands the same variables as the real merge, by design.
 emerge_plan_emit image emerge --update --deep --newuse --keep-going --autounmask-continue=y --autounmask-keep-keywords=y --autounmask-keep-masks=y --exclude sys-apps/portage ${EMERGE_EXCLUDE} ${PKGS}
 # ── END shared block: emerge-plan preview (image) ─────────────────────────────
+# Fail fast on a keyword/mask wall the merge below cannot cross (issue #223) —
+# defined next to the plan-lib init above; no-op when the plan resolved.
+hugmesh_payload_plan_gate
 echo "==> Emerge group: image"
 emerge --update --deep --newuse --keep-going \
     --autounmask-continue=y --autounmask-keep-keywords=y --autounmask-keep-masks=y \
@@ -6699,8 +6753,8 @@ build_img() {
     trap - ERR EXIT
 
     if ${COMPRESS_IMG}; then
-        info "Compressing image (xz -T0 -9)..."
-        xz -T0 -9 -f "${IMG_PATH}"
+        info "Compressing image (xz -T0 -${COMPRESS_LEVEL})..."
+        xz -T0 "-${COMPRESS_LEVEL}" -f "${IMG_PATH}"
         IMG_PATH="${IMG_PATH}.xz"
     fi
 

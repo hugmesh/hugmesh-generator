@@ -119,15 +119,22 @@ def _sections(build):
 # ------------------------------------------------ the report: one idiom per kind
 
 def test_artifact_and_sb_toggles_are_all_checkboxes_no_dropdowns_left(wiz):
-    """The reported mixture, pinned shut: every control in the Artifacts box and the
-    Secure Boot toggle is a CHECKBOX — no QComboBox may reappear among same-kind
-    toggle siblings."""
+    """The reported mixture, pinned shut: every control in the Artifacts box answering
+    "do I get this artifact?" is a CHECKBOX — no QComboBox may reappear among same-kind
+    toggle siblings.
+
+    ONE combo is allowed in the box, by identity, and only one: the xz-preset picker
+    (issue #233's last box). It is not the reported mixture inverted — it answers
+    "which VALUE?", which is the split the page's own module docstring states (pick-one
+    value enumerations are dropdowns; on/off build toggles are checkboxes). Asserting
+    the exact object rather than a count keeps the guard sharp: a future artifact
+    TOGGLE cannot slip back in as a dropdown under cover of this exemption."""
     build = advance_to(wiz, wizard_mod.BuildPage)
-    assert build.artifacts_box.findChildren(QtWidgets.QComboBox) == []
+    assert build.artifacts_box.findChildren(QtWidgets.QComboBox) == [build.compress_level]
     assert build.sb_box.findChildren(QtWidgets.QComboBox) == []
     for w in (build.build_img, build.live_iso, build.installer_iso, build.build_iso,
               build.sd_only, build.build_tar, build.skip_iso, build.image_only,
-              build.secure_boot):
+              build.compress, build.resume, build.secure_boot):
         assert isinstance(w, QtWidgets.QCheckBox), w
 
 

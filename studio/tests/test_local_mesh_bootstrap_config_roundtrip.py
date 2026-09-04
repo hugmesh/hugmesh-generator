@@ -1,0 +1,223 @@
+"""LocalMeshBootstrapConfig.to_dict/from_dict + LocalMeshBootstrap.restore /
+start_saved — the core half of the saved-mesh lane (ask C, 2026-09-01).
+
+No Qt, no docker: every subprocess seam is monkeypatched on the bootstrap or the
+stack node, exactly as test_local_mesh_bringup.py's ``_happy_boot`` does.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+
+import pytest
+
+from hugmesh_studio.core import saved_meshes as sm
+from hugmesh_studio.core.local_mesh_bootstrap import (
+    LocalMeshBootstrap, LocalMeshBootstrapConfig, _cfg_from_args)
+from hugmesh_studio.core.local_stack_node import LocalStackNode
+
+STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
+SA_VALUE = "Sa-Pass-77"
+
+
+def _full_cfg(**over) -> LocalMeshBootstrapConfig:
+    base = dict(
+        env="prod", superadmin_username="root", out_dir="/tmp/keys", social=True,
+        with_tor=True, services=("tuwunel", "tor", "wiki"), egress_vpn_conf="/x.conf",
+        auth_key="tskey-1", login_server="https://hs.example.org", node_name="n1",
+        brand="acme", cluster_domain="example.org", source_mode="existing",
+        source_dir="/src", web_locales=("de", "fr"), login_theme_css=":root{}",
+        idp="oidc", idp_issuer="https://id.example.org", idp_client_id="cid",
+        idp_jwks="https://id.example.org/jwks", own_idp_domains=("a.org",),
+        kind_addons=("metrics-server",))
+    base.update(over)
+    return LocalMeshBootstrapConfig(**base)
+
+
+# ── round-trip ─────────────────────────────────────────────────────────────────
+def test_every_field_round_trips():
+    cfg = _full_cfg()
+    d = cfg.to_dict()
+    assert set(d) == {f for f in LocalMeshBootstrapConfig.__dataclass_fields__}
+    assert json.loads(json.dumps(d)) == d          # JSON-shaped: lists, not tuples
+    back = LocalMeshBootstrapConfig.from_dict(json.loads(json.dumps(d)))
+    assert back == cfg
+    assert isinstance(back.services, tuple) and isinstance(back.web_locales, tuple)
+
+
+@pytest.mark.parametrize("field", ["services", "kind_addons"])
+def test_none_and_empty_tuple_are_distinct_in_both_directions(field):
+    for value in (None, ()):
+        cfg = LocalMeshBootstrapConfig(**{field: value})
+        d = json.loads(json.dumps(cfg.to_dict()))
+        assert d[field] == (None if value is None else [])
+        back = LocalMeshBootstrapConfig.from_dict(d)
+        assert getattr(back, field) == value
+        assert (getattr(back, field) is None) == (value is None)
+
+
+def test_from_dict_filters_unknown_keys_and_coerces():
+    cfg = LocalMeshBootstrapConfig.from_dict(
+        {"env": None, "brand": 7, "social": "yes", "web_locales": None,
+         "own_idp_domains": ["a", 2], "future_field": 1})
+    assert cfg.env == "" and cfg.brand == "7" and cfg.social is True
+    assert cfg.web_locales == () and cfg.own_idp_domains == ("a", "2")
+    with pytest.raises(ValueError):
+        LocalMeshBootstrapConfig.from_dict("nope")
+
+
+def test_cli_config_round_trips():
+    args = argparse.Namespace(
+        env="prod", superadmin_username="root", out="/tmp/k", social=True,
+        with_tor=True, services="tuwunel tor", authkey_file="", authkey="tskey-2",
+        login_server="https://hs", node_name="n", brand="acme",
+        cluster_domain="example.org", source_mode="existing", source_dir="/src",
+        web_locales="de, fr", login_primary="#123456", login_secondary="",
+        login_font="", idp="oidc", idp_issuer="https://id", idp_client_id="cid",
+        idp_jwks="", own_casdoor_domain=["a.org"])
+    cfg = _cfg_from_args(args)
+    assert cfg.services == ("tuwunel", "tor") and cfg.login_theme_css
+    back = LocalMeshBootstrapConfig.from_dict(json.loads(json.dumps(cfg.to_dict())))
+    assert back == cfg
+    # the absent flag stays None through the round-trip too
+    args.services = None
+    cfg2 = _cfg_from_args(args)
+    assert LocalMeshBootstrapConfig.from_dict(cfg2.to_dict()).services is None
+
+
+# ── restore / start_saved ──────────────────────────────────────────────────────
+def _boot(monkeypatch, tmp_path):
+    boot = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(
+        out_dir=str(tmp_path / "keys"), superadmin_username="sa"))
+    os.makedirs(boot.vault_dir)
+    with open(boot.secrets_json, "w") as fh:
+        json.dump({"hugmesh-pki": {"casdoor-superadmin": {
+            "username": "sa", "password": SA_VALUE}}}, fh)
+    monkeypatch.setattr(boot, "guard_host_local", lambda: (True, ""))
+    monkeypatch.setattr(boot, "validate", lambda: [])
+    monkeypatch.setattr(boot, "preflight", lambda: [])
+
+    def never(*a, **k):
+        raise AssertionError("generate_creds must never run on a restore")
+    monkeypatch.setattr(boot, "generate_creds", never)
+    calls = {"start": 0, "seed": []}
+    monkeypatch.setattr(LocalStackNode, "start",
+                        lambda self, on_line=None, cancel=None:
+                        (calls.__setitem__("start", calls["start"] + 1)) or (True, "up"))
+    monkeypatch.setattr(LocalStackNode, "seed",
+                        lambda self, extra_env=None, timeout=600, on_line=None,
+                        cancel=None: calls["seed"].append(dict(extra_env or {}))
+                        or (True, "seeded"))
+    return boot, calls
+
+
+def _record(boot, *, copied=False, tmp_path=None):
+    rec = sm.SavedMesh(id=sm.new_id(), label="saved", generator_dir=GENERATOR_DIR)
+    rec.config = boot.cfg.to_dict()
+    rec.credentials = {"superadmin_username": "sa",
+                       "e2e_file": {"copied": False, "copy": ""},
+                       "secrets_json": {"copied": False, "copy": ""}}
+    if copied:
+        d = rec.copy_dir()
+        os.makedirs(d, mode=0o700)
+        with open(os.path.join(d, "e2e-credentials"), "w") as fh:
+            fh.write("E2E_PASSWORD=from-the-copy\n")
+        with open(os.path.join(d, "secrets.json"), "w") as fh:
+            json.dump({"hugmesh-pki": {"casdoor-superadmin": {
+                "username": "sa", "password": "copy-pass-1"}}}, fh)
+        rec.credentials["e2e_file"] = {"copied": True,
+                                       "copy": os.path.join(rec.id, "e2e-credentials")}
+        rec.credentials["secrets_json"] = {"copied": True,
+                                           "copy": os.path.join(rec.id, "secrets.json")}
+    return rec
+
+
+def test_restore_does_not_call_generate_creds(monkeypatch, tmp_path):
+    boot, calls = _boot(monkeypatch, tmp_path)
+    rec = _record(boot)
+    streamed = []
+    ok, log = boot.restore(rec, on_line=streamed.append)
+    assert ok, log
+    assert calls["start"] == 1 and len(calls["seed"]) == 1
+    env = calls["seed"][0]
+    assert env["CASDOOR_SUPERADMIN_USERNAME"] == "sa"
+    assert env["E2E_SUPERADMIN_PASSWORD"] == SA_VALUE     # READ from the bundle, not minted
+    assert any("reusing superadmin 'sa'" in l for l in streamed)
+    assert any(l.startswith("[done] platform up") for l in streamed)
+    assert not any(SA_VALUE in l for l in log + streamed), "a password reached a log line"
+
+
+def test_restore_uses_the_saved_copies_and_puts_them_back(monkeypatch, tmp_path):
+    boot, calls = _boot(monkeypatch, tmp_path)
+    # the run-state file lives under the generator dir — redirect it into tmp
+    e2e = tmp_path / ".e2e-credentials"
+    e2e.write_text("E2E_PASSWORD=minted-later\n")
+    monkeypatch.setattr(boot, "e2e_credentials_path", lambda: str(e2e))
+    rec = _record(boot, copied=True)
+    ok, log = boot.restore(rec, on_line=lambda _l: None)
+    assert ok, log
+    env = calls["seed"][0]
+    assert env["E2E_CREDENTIALS_FILE"] == rec.credential_copies()[0]
+    assert env["E2E_SUPERADMIN_PASSWORD"] == "copy-pass-1"
+    # put back IN PLACE, so every later seed from the page reads the same file
+    assert e2e.read_text() == "E2E_PASSWORD=from-the-copy\n"
+    assert json.load(open(boot.secrets_json))["hugmesh-pki"]["casdoor-superadmin"][
+        "password"] == "copy-pass-1"
+    assert any("put the saved credential file(s) back" in l for l in log)
+    assert not any("copy-pass-1" in l or "from-the-copy" in l for l in log)
+
+
+def test_restore_refuses_when_a_declared_copy_is_missing(monkeypatch, tmp_path):
+    boot, calls = _boot(monkeypatch, tmp_path)
+    rec = _record(boot, copied=True)
+    os.remove(rec.credential_copies()[0])
+    ok, log = boot.restore(rec, on_line=lambda _l: None)
+    assert not ok
+    assert any("refused" in l and "e2e-credentials" in l for l in log)
+    assert calls["start"] == 0 and calls["seed"] == []
+
+
+def test_restore_refuses_with_no_password_anywhere(monkeypatch, tmp_path):
+    boot, calls = _boot(monkeypatch, tmp_path)
+    os.remove(boot.secrets_json)
+    rec = _record(boot)
+    ok, log = boot.restore(rec, on_line=lambda _l: None)
+    assert not ok and any("no superadmin password" in l for l in log)
+    assert calls["start"] == 0
+
+
+def test_start_saved_runs_stack_start_only(monkeypatch, tmp_path):
+    boot, calls = _boot(monkeypatch, tmp_path)
+    monkeypatch.setattr(LocalStackNode, "seed",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("a warm start must not seed")))
+    rec = _record(boot)
+    ok, log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert ok and calls["start"] == 1
+    assert any("nothing is re-minted or re-seeded" in l for l in log)
+
+
+def test_start_saved_puts_a_changed_credentials_file_back_first(monkeypatch, tmp_path):
+    boot, calls = _boot(monkeypatch, tmp_path)
+    e2e = tmp_path / ".e2e-credentials"
+    e2e.write_text("E2E_PASSWORD=minted-later\n")
+    monkeypatch.setattr(boot, "e2e_credentials_path", lambda: str(e2e))
+    rec = _record(boot, copied=True)
+    ok, log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert ok and calls["start"] == 1
+    assert e2e.read_text() == "E2E_PASSWORD=from-the-copy\n"
+
+
+def test_down_log_says_volumes_are_kept(monkeypatch, tmp_path):
+    from hugmesh_studio.core.local_stack_node import StackStatus
+    from hugmesh_studio.core.mesh_node import MeshNode
+    monkeypatch.setattr(LocalStackNode, "status",
+                        lambda self: StackStatus(running=True, detail="9 container(s)"))
+    monkeypatch.setattr(LocalStackNode, "stop", lambda self: (True, "noise"))
+    monkeypatch.setattr(MeshNode, "stop", lambda self: (True, "not started"))
+    _ok, log = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(
+        out_dir=str(tmp_path))).down()
+    line = next(l for l in log if l.startswith("[stack-down]"))
+    assert "kept its volumes" in line and "dropped" not in line

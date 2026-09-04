@@ -20,10 +20,11 @@
 # Same resolution order as launch-pi.sh so one WORK_DIR/role selects one
 # artifact everywhere:
 #   1. --img FILE                                       explicit
-#   2. ${WORK_DIR}/hugmesh-{host,x86}-*-${ROLE}-*.img (newest, PLATFORM-anchored
-#      role match; the canonical role and every older spelling of it are searched)
-#   3. ${WORK_DIR}/hugmesh-host-*.img / hugmesh-x86-*.img   (platform, any role)
-#   4. ${WORK_DIR}/hugmesh-*-${ROLE}-*.img            (unanchored role match — LAST,
+#   2. ${WORK_DIR}/hugmesh-host-*-${ROLE}-*.img, ${WORK_DIR}/*-x86-*-${ROLE}-*.img
+#      (newest, PLATFORM-anchored role match; the canonical role and every older
+#      spelling of it are searched. The leading `*-` is the ${BRAND} field.)
+#   3. ${WORK_DIR}/hugmesh-host-*.img / *-x86-*.img         (platform, any role)
+#   4. ${WORK_DIR}/*-${ROLE}-*.img                    (unanchored role match — LAST,
 #      because it can cross platforms and return an arm64 Pi image)
 #   5. ${WORK_DIR}/*.img (excluding kernel/initramfs/squashfs)
 # WORK_DIR defaults to ${REPO}/x86-host-build (build-x86-host-stage4.sh's
@@ -199,11 +200,21 @@ autodetect_img() {
     # bites hardest for a role that has no alias at all (pki), so it is a glob-order
     # bug, not an alias bug. Order is asserted by tests/scripts/test-role-key-spelling.sh.
     # Within the anchor: canonical spelling first, then every declared alias, so an
-    # image built as hugmesh-x86-amd64-be-… or …-host-… is still found by its role.
+    # image built as <brand>-x86-amd64-be-… or …-host-… is still found by its role.
+    #
+    # `*-x86-` is the ${BRAND} field globbed away — the builders emit
+    # ${BRAND}-x86-amd64-… (sdhm / gentoo / hugmesh), and spelling `hugmesh-` made
+    # every branded x86 image invisible here. `-x86-` stays LITERAL so the anchor
+    # is unchanged. The legacy `hugmesh-host-…` shape, whose PLATFORM field is
+    # literally "host", keeps its literal brand ON PURPOSE: "host" is also a ROLE
+    # alias (be+gpu), so a globbed `*-host-*` would match
+    # <brand>-rpi5-arm64-host-….img and hand an aarch64 image to
+    # qemu-system-x86_64 — the exact cross-platform bug this ordering exists to
+    # prevent. Nothing branded was ever emitted under the host-as-platform name.
     for r in $(hugmesh_role_aliases_of "${role}"); do
         for c in \
             "${d}"/hugmesh-host-*-"${r}"-*.img \
-            "${d}"/hugmesh-x86-*-"${r}"-*.img ; do
+            "${d}"/*-x86-*-"${r}"-*.img ; do
             c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
             [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
         done
@@ -211,7 +222,7 @@ autodetect_img() {
     # Still platform-anchored: any role, newest first.
     for c in \
         "${d}"/hugmesh-host-*.img \
-        "${d}"/hugmesh-x86-*.img ; do
+        "${d}"/*-x86-*.img ; do
         c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done
@@ -219,7 +230,7 @@ autodetect_img() {
     # it. An unanchored role match can cross platforms, so it may only fire once
     # every x86-anchored candidate has been ruled out.
     for r in $(hugmesh_role_aliases_of "${role}"); do
-        c="$(ls -1t "${d}"/hugmesh-*-"${r}"-*.img 2>/dev/null | head -1 || true)"
+        c="$(ls -1t "${d}"/*-"${r}"-*.img 2>/dev/null | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done
     ls -1t "${d}"/*.img 2>/dev/null \

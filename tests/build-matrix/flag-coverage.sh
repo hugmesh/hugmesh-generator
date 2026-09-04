@@ -274,6 +274,10 @@ SAMPLES = {
     "sd_only": [{"sd_only": True}], "image_only": [{"image_only": True}],
     "grow": [{"grow": "fill"}], "img_size": [{"img_size": 4096}],
     "compress": [{"compress": True}], "resume": [{"resume": True}],
+    # compress_level (#233) emits NOTHING at its default 9 (the level every builder
+    # hardcoded before the flag existed), so the sample must be OFF-default to field
+    # the --compress-level arm at all; it rides inside `if self.compress`, so pin that too.
+    "compress_level": [{"compress": True, "compress_level": 6}],
     "cpu": [{"cpu": "cortex-a53"}], "defconfig": [{"defconfig": "foo_defconfig"}],
     "dtb": [{"dtb": "foo.dtb"}], "dtb_prefix": [{"dtb_prefix": "bcm2712"}],
     "kernel_img": [{"kernel_img": "Image"}], "pcie_gen3": [{"pcie_gen3": True}],

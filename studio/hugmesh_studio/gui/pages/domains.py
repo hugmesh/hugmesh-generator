@@ -3,6 +3,11 @@
 Each row is a :class:`~...core.config.Domain`: a name, a title, the per-domain
 ``optional_services`` slugs (G19) consumed by cluster provisioning via the mesh
 manifest, and — in mesh mode — the worklist images it attaches to (``Domain.images``).
+The services cell is a checkable MENU since issue #227 (``_ServicesButton``), offering
+``OPTIONAL_SERVICES_CHOICES``; it replaced a freeform cell whose typos went into the
+manifest verbatim. Those slugs are provisioning INPUT only — nothing in this repo reads
+``domains[].optional_services`` back, and they do not change which services the image
+bakes.
 The Games checkbox is GONE: a truthy legacy ``games`` is migrated to
 ``optional_services += ["games"]`` by ``ImageConfig.from_dict`` on load, so loaded rows
 arrive pre-migrated and this page never sees a games flag again.
@@ -10,7 +15,7 @@ arrive pre-migrated and this page never sees a games flag again.
 Row order is load-bearing: the first attached domain is the PRIMARY one (the first
 ``--domains`` element, which lands in ROLE_TAG / the filename). The page prefills row 0
 with the cluster domain on a fresh cloud/mesh flow so a superadmin starts from a valid
-primary domain (spec 4). The orchestration superdomain (spec 5) is shown read-only in
+primary domain (spec 4). The Tailscale root domain (spec 5) is shown read-only in
 the header — every mesh node joins it, it is never a table row and never attachable.
 
 The mesh-only 'Sign-in' column (issue #47) is each row's ``Domain.idp``: superdomain
@@ -22,8 +27,10 @@ superdomain default, so pre-#47 flows and manifests are byte-identical.
 from __future__ import annotations
 
 from ..qt import Qt, QtWidgets
-from ...core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain,
-                            image_class, superadmin_plane_applies)
+from ...core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN,
+                            OPTIONAL_SERVICES_CHOICES, SERVICE_DESCRIPTIONS,
+                            SERVICE_GROUPS, Domain, image_class,
+                            superadmin_plane_applies)
 
 _COL_NAME, _COL_TITLE, _COL_SERVICES, _COL_APPLIES = range(4)
 # The per-domain sign-in column (issue #47) is APPENDED so the four pre-existing
@@ -95,19 +102,138 @@ class _AppliesToButton(QtWidgets.QToolButton):
                      else f"{n} image{'s' if n != 1 else ''} ▾")
 
 
+def _split_services(services) -> list[str]:
+    """Accept either a list of slugs or the legacy space/comma-separated string that
+    every existing ``_add`` caller (and three test files) still passes."""
+    if services is None:
+        return []
+    if isinstance(services, str):
+        return services.replace(",", " ").split()
+    return [str(x) for x in services]
+
+
+class _ServicesButton(QtWidgets.QToolButton):
+    """Per-row 'Optional services' control (issue #227): a checkable menu of the
+    per-domain service slugs, replacing the freeform cell that accepted any typo
+    verbatim into the mesh manifest.
+
+    The catalogue offered is ``OPTIONAL_SERVICES_CHOICES`` — the user-level cluster
+    slugs, exactly what ``--all-services`` expands to and the only ones whose own
+    descriptions are ``<domain>``-scoped. The INFRA slugs (tor, egress-vpn,
+    workloadConsole, anubis) are deliberately NOT offered here: they are node- or
+    cluster-plane scoped (see NetworkPage's own note), so a per-DOMAIN checkbox for
+    them would be a new lie. A slug already present on a loaded row but absent from
+    the catalogue is still offered, pre-checked and marked, so loading an older
+    worklist never silently drops manifest data.
+
+    Same idiom as :class:`_AppliesToButton` (QToolButton + InstantPopup QMenu +
+    checkable QActions): no ``.exec()`` anywhere, so it is headless-safe. Tests
+    read/write the selection through :meth:`selected_slugs`."""
+
+    _EXTRA_NOTE = "  (not in the catalogue — kept from your config)"
+
+    def __init__(self, selected=None):
+        super().__init__()
+        self.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        menu = QtWidgets.QMenu(self)
+        # QMenu suppresses per-action tooltips unless this is set — without it the
+        # SERVICE_DESCRIPTIONS below would never be visible to anyone.
+        menu.setToolTipsVisible(True)
+        self._actions: dict = {}          # slug -> checkable QAction
+        chosen = _split_services(selected)
+        offered = set(OPTIONAL_SERVICES_CHOICES)
+        for group, slugs in SERVICE_GROUPS:
+            members = [g for g in slugs if g in offered]
+            if not members:
+                continue
+            menu.addSection(group)
+            for slug in members:
+                self._add_action(menu, slug, slug in chosen,
+                                 SERVICE_DESCRIPTIONS.get(slug, ""))
+        # SERVICE_GROUPS is a PRESENTATION table and OPTIONAL_SERVICES_CHOICES is the
+        # catalogue: a slug added to the catalogue but not to a group would otherwise
+        # be silently un-offerable here, which is exactly the kind of quiet drop this
+        # change exists to end. Offer it ungrouped instead. (A test pins that the two
+        # agree today, so this arm is a floor, not a licence to skip the grouping.)
+        ungrouped = [g for g in OPTIONAL_SERVICES_CHOICES if g not in self._actions]
+        if ungrouped:
+            menu.addSection("Other services")
+            for slug in ungrouped:
+                self._add_action(menu, slug, slug in chosen,
+                                 SERVICE_DESCRIPTIONS.get(slug, ""))
+        extras = [g for g in chosen if g not in offered and g not in self._actions]
+        if extras:
+            menu.addSection("From your config")
+            for slug in extras:
+                self._add_action(
+                    menu, slug, True,
+                    "Carried over from the config you loaded. It is not in the "
+                    "per-domain catalogue this build offers, but it is kept "
+                    "checked so the mesh manifest keeps the value you had.",
+                    label=slug + self._EXTRA_NOTE)
+        self.setMenu(menu)
+        self._refresh()
+
+    def _add_action(self, menu, slug, checked, tip, label=None):
+        act = menu.addAction(label or slug)
+        act.setCheckable(True)
+        act.setChecked(checked)
+        act.setData(slug)
+        if tip:
+            act.setToolTip(tip)
+        act.toggled.connect(self._refresh)
+        self._actions[slug] = act
+
+    def selected_slugs(self) -> list[str]:
+        """The checked slugs in CATALOGUE (``OPTIONAL_SERVICES_CHOICES``) order, with
+        any carried-over extra last; ``[]`` = the cluster-wide set applies.
+
+        The order comes from the CATALOGUE and deliberately NOT from ``self._actions``,
+        whose insertion order is the SERVICE_GROUPS presentation order. Those are two
+        different constants and they already disagree (the catalogue has games before
+        owncast/tube; the media group lists owncast, tube, games — named by content,
+        not by its title, which has already been renamed once). Reading the
+        menu order here would let a purely cosmetic regrouping rewrite the bytes of
+        domains[].optional_services in the mesh manifest, breaking the repo invariant
+        that tests/test_services_section.py's test_regrouping_a_row_cannot_change_what_
+        it_emits exists to protect — and that guard only inspects the NETWORK page, so
+        it could not see the breakage here.
+
+        NOTE this NORMALISES order: a loaded row whose slugs were in some other order
+        reads back in catalogue order. optional_services is an allow-list (the
+        builders join it into one --optional-services string and the manifest key is a
+        set of slugs), so order carries no meaning — and a deterministic order is what
+        keeps the manifest byte-stable across a load/save round trip."""
+        checked = [slug for slug, a in self._actions.items() if a.isChecked()]
+        known = [s for s in OPTIONAL_SERVICES_CHOICES if s in checked]
+        return known + [s for s in checked if s not in OPTIONAL_SERVICES_CHOICES]
+
+    def _refresh(self, *_):
+        n = len(self.selected_slugs())
+        # The empty state means the CLUSTER-WIDE set applies (see the column tooltip and
+        # table_help, and config.py's `optional_services == [] -> emit nothing -> builder
+        # default akkoma tuwunel phpbb`). Labelling it "None" would name the OPPOSING
+        # sentinel — SERVICES_NONE is literally spelled "none" and emits an explicit
+        # empty allow-list. Mirrors _AppliesToButton's "All images ▾": the empty state
+        # names what actually happens.
+        self.setText("Cluster default ▾" if n == 0
+                     else f"{n} service{'s' if n != 1 else ''} ▾")
+
+
 class DomainsPage(QtWidgets.QWizardPage):
     """Superadmin: define domains."""
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
-        self.setTitle("Domains & Their Services")
+        self.setTitle("Domains & their services")
         self.setSubTitle(
             "Beyond the superadmin apex, define the OTHER domains this mesh "
             "hosts and pick which optional services each one provides in the table. "
             "Every domain you add here is given its own default admin with a "
             "generated random password (surfaced on the next, Users, step).")
         lay = QtWidgets.QVBoxLayout(self)
-        # read-only header naming the orchestration superdomain (spec 5): all mesh nodes
+        # read-only header naming the Tailscale root domain (spec 5): all mesh nodes
         # join it, it is never a table row and is never attachable.
         self.header = QtWidgets.QLabel("")
         self.header.setWordWrap(True)
@@ -116,20 +242,25 @@ class DomainsPage(QtWidgets.QWizardPage):
         # STEP 5 clarity: what the two editable columns are FOR (the 'Applies to' column
         # is mesh-only and hidden in cloud — see initializePage).
         self.table_help = QtWidgets.QLabel(
-            "‘Optional services’ = the per-domain service slugs this domain provides "
-            "(space/comma-separated; empty = the cluster-wide set applies). ‘Applies to’ "
-            "= which built node images the domain attaches to. ‘Sign-in’ = which "
-            "Casdoor serves this domain's login: Superdomain (its users sign in via "
-            "the mesh's central Casdoor — the default) or Own (this domain runs its "
-            "own Casdoor instance, provisioned just for it).")
+            "‘Title’ = this domain's display name, read by cluster provisioning from "
+            "the mesh manifest — it is not shown anywhere on a cloud build. ‘Optional "
+            "services’ = the per-domain service slugs this domain provides, picked "
+            "from the menu in that column (empty = the cluster-wide set applies); "
+            "these slugs are provisioning input carried in the mesh manifest — they "
+            "are not baked into the image, which ships the services you chose on the "
+            "services step. ‘Applies to’ = which built node images the domain attaches "
+            "to. ‘Sign-in’ = which Casdoor serves this domain's login: Superdomain "
+            "(its users sign in via the mesh's central Casdoor — the default) or Own "
+            "(this domain runs its own Casdoor instance, provisioned just for it).")
         self.table_help.setWordWrap(True)
         self.table_help.setStyleSheet("color: gray;")
         lay.addWidget(self.table_help)
         # 'Optional services' fills Domain.optional_services (G19) — the per-domain
-        # service slugs consumed by cluster provisioning via the mesh manifest
-        # (space/comma-separated; empty = the cluster-wide set applies). 'Applies to'
-        # fills Domain.images (mesh only; hidden in cloud where the single image
-        # attaches implicitly).
+        # service slugs consumed by cluster provisioning via the mesh manifest (empty =
+        # the cluster-wide set applies). Since #227 it is a checkable MENU
+        # (_ServicesButton), not a freeform cell: the old cell wrote whatever was typed
+        # straight into the manifest, typos included. 'Applies to' fills Domain.images
+        # (mesh only; hidden in cloud where the single image attaches implicitly).
         self.table = QtWidgets.QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
             ["Domain", "Title", "Optional services", "Applies to", "Sign-in"])
@@ -139,13 +270,19 @@ class DomainsPage(QtWidgets.QWizardPage):
             "(domains[].title) for cluster provisioning to read when it sets up "
             "the domain — not emitted anywhere on a cloud build. Empty = the "
             "domain name itself.")
+        svc_hdr = self.table.horizontalHeaderItem(_COL_SERVICES)
+        svc_hdr.setToolTip(
+            "The services this domain provides, picked from the menu in each row. "
+            "They ride the mesh manifest as provisioning input (domains[].optional_"
+            "services); they do NOT change which services the image bakes — that is "
+            "the services step. Empty = the cluster-wide set applies.")
         hdr = self.table.horizontalHeaderItem(_COL_APPLIES)
         hdr.setToolTip("Which worklist images this domain attaches to (empty = all "
                        "eligible). Node-role images take no --domains — the attachment "
                        "is manifest/provisioning data only.")
         idp_hdr = self.table.horizontalHeaderItem(_COL_IDP)
         idp_hdr.setToolTip(
-            "Which Casdoor serves this domain's sign-in (issue #47). Superdomain = "
+            "Which Casdoor serves this domain's sign-in. Superdomain = "
             "the mesh's one central Casdoor (default — today's behavior). Own = a "
             "Casdoor instance provisioned for this domain alone; reaches cluster "
             "provisioning via the mesh manifest, and the local compose lane stands "
@@ -180,7 +317,7 @@ class DomainsPage(QtWidgets.QWizardPage):
         self.table.insertRow(r)
         self.table.setItem(r, _COL_NAME, QtWidgets.QTableWidgetItem(name))
         self.table.setItem(r, _COL_TITLE, QtWidgets.QTableWidgetItem(title))
-        self.table.setItem(r, _COL_SERVICES, QtWidgets.QTableWidgetItem(services))
+        self.table.setCellWidget(r, _COL_SERVICES, _ServicesButton(services))
         self.table.setCellWidget(r, _COL_APPLIES,
                                  _AppliesToButton(self._entries(), images or []))
         self.table.setCellWidget(r, _COL_IDP, _IdpCombo(idp))
@@ -228,7 +365,7 @@ class DomainsPage(QtWidgets.QWizardPage):
         self.table.setColumnHidden(_COL_IDP, c.mode != "mesh")
         if self.table.rowCount() == 0:
             for d in c.domains:
-                self._add(d.name, d.title, " ".join(d.optional_services), d.images,
+                self._add(d.name, d.title, list(d.optional_services), d.images,
                           d.idp)
             # default prefill (spec 4): seed row 0 with the cluster domain so a fresh
             # cloud superadmin starts from a valid PRIMARY domain (table position =
@@ -250,8 +387,9 @@ class DomainsPage(QtWidgets.QWizardPage):
             if not name:
                 continue
             title = self.table.item(r, _COL_TITLE).text().strip() if self.table.item(r, _COL_TITLE) else ""
-            svc_item = self.table.item(r, _COL_SERVICES)
-            services = svc_item.text().replace(",", " ").split() if svc_item else []
+            svc_btn = self.table.cellWidget(r, _COL_SERVICES)
+            services = (svc_btn.selected_slugs()
+                        if isinstance(svc_btn, _ServicesButton) else [])
             btn = self.table.cellWidget(r, _COL_APPLIES)
             images = btn.selected_ids() if isinstance(btn, _AppliesToButton) else []
             combo = self.table.cellWidget(r, _COL_IDP)

@@ -356,7 +356,27 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # +1 gated +1 total from each side; PREMERGE_UNGATED stays 22. Carried by
 # re-running this file, not by arithmetic on either side's number — but the
 # arithmetic agrees.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-157}"
+#
+# RE-MEASURED 2026-09-01 on the MERGE of fix/standalone-stage4-keyword-preseeds
+# with main at 0727650b (which carried the one-role-vocabulary and
+# route-access-coverage-scanner suites above: 157 of 179 on main). This branch
+# adds ONE gated suite, tests/scripts/test-qt6-keyword-preseeds.sh (named in
+# shell-suites.yml's ALPINE job and in .gitlab-ci.yml). The branch was cut
+# before main's two newest suites, so its own line said 156 and this value line
+# CONFLICTED on merge — per the doctrine above, the number is taken from
+# running this file on THIS merged tree, which printed
+#     158 of 180 suites are named by a pull_request-triggered workflow
+# +1 gated +1 total from the branch on top of main's 157/179; PREMERGE_UNGATED
+# stays 22. Carried by re-running this file, not by arithmetic on either
+# side's number — but the arithmetic agrees.
+#
+# RE-MEASURED AGAIN 2026-09-01 on the merge of the same branch with main at
+# 2e24b4d5 (PR #247, docs-only), and once more with main at c6b788fe (PRs #239
+# and #248 — no suite added or gated by either): running this file on EACH of
+# those merged trees printed the same
+#     158 of 180 suites are named by a pull_request-triggered workflow
+# and the ungated set is unchanged at 22 — no conflict either time, re-run anyway.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-158}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a

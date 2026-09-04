@@ -1,5 +1,5 @@
 """NetworkPage — the domain/mesh/services step, as COLLAPSIBLE sections (identity &
-domain, tailnet/SSO, the mesh control plane incl. the orchestration superdomain,
+domain, tailnet/SSO, Headscale / mesh networking incl. the Tailscale root domain,
 egress VPN, the security stack, edge-AI, and the cluster SERVICES list).
 
 The services surface was rebuilt for the operator's asks 1-5 and then again for ask 23
@@ -16,7 +16,8 @@ honest rather than theatre. See the ASK 23 block in __init__ for the table's des
 The tailnet/SSO group is user-editable ONLY for cloud branded desktops
 (``tailnet_sso_visible``, spec 3): standalone and mesh hide it (mesh forces
 tailscale=sso on off-UI in enter_mesh_defaults/materialize — never here). The mesh
-control plane (incl. the superdomain, spec 5) shows for cloud AND mesh.
+Headscale / mesh networking (incl. the Tailscale root domain, spec 5) shows for
+cloud AND mesh.
 
 Two things a reader must not conflate, because they look alike and are not:
 
@@ -50,6 +51,7 @@ from ...core import config as _config
 from ...core.config import (
     BUILTIN_DEFAULT_SERVICES,
     ImageConfig,
+    MANAGED_SERVICE_DESCRIPTIONS,
     MANAGED_SERVICE_TIER3_BLOCKER,
     MANAGED_SERVICE_TIER3_IDS,
     MANAGED_SERVICE_TIER12_IDS,
@@ -115,6 +117,140 @@ from ._widgets import _file_picker, _row, collapsible
 _OFF_TIP = ("Two-state: checked = ON for this build (--with-…), unchecked = OFF "
             "(--no-…, which also overrides a brand profile that switched it on).")
 
+# ── PER-FIELD HELP (issue #226 ask 2: "names are not self-explanatory") ───────────
+# WHERE EACH ONE HANGS, and why it is not simply set in __init__ next to the widget:
+# both gates on this page END by rewriting their targets' tooltips —
+# _gating.gate_widgets:165 and gate_widgets_role_class:187 are each
+# `w.setToolTip("" if ok else reason)` — so anything written in __init__ onto a gated
+# widget is BLANKED by the first initializePage and is invisible in the running app
+# while still passing a unit test that never visits the page. That is the defect
+# issue #230 diagnosed on the Home page, and this page's gate dict covers most of the
+# fields below. Two consequences, both copied from home.py:684-689:
+#   * the text is (re)asserted LAST in initializePage under `if not w.toolTip():`, so
+#     a gate's REASON always wins on the visit where the control is unavailable and
+#     the field's own help returns wherever the gate left "";
+#   * it hangs on the _row() WRAPPER wherever one exists. A wrapper is not a gate
+#     member, and Qt propagates an IGNORED ToolTip event up the parent chain, so one
+#     tooltip on the row answers a hover over the CAPTION as well as over the field —
+#     and the caption is the half the operator cannot read.
+_HELP_BRAND_PROFILE = (
+    "A brands/*.conf preset file (-C/--config). The builder SOURCES it before it "
+    "reads any flag, so anything set on this page still wins; it carries the "
+    "defaults for HEADSCALE_URL, RELEASE_STATE, ADMIN_EMAILS, MAIL_* and the "
+    "service selection. Empty = no preset.")
+_HELP_BRAND = (
+    "The short machine-safe brand id (--brand), e.g. hugmesh. Everything else is "
+    "derived from it, including the internal Tailscale root domain "
+    "(<brand>.internal). Left blank it commits the default, hugmesh.")
+_HELP_BRAND_TITLE = (
+    "The brand name shown to people (--brand-title), e.g. HugMesh Systems — the "
+    "login screen, the boot menu and the web surfaces. Left blank it commits the "
+    "default, HugMesh Systems.")
+_HELP_ORG = (
+    "The organisation name baked into the image (--org). Emitted on every platform. "
+    "Left blank it commits the default, hugmesh.")
+_HELP_DOMAIN = (
+    "The PUBLIC apex domain this image serves (--cluster-domain) — the go-live "
+    "target every public host name hangs off, e.g. hugmesh.net. Distinct from the "
+    "internal Tailscale root domain, which is never internet-facing.")
+_HELP_GAMES_DOMAIN = (
+    "The host the Game Studio and its app store are served on, and the issuer of "
+    "their own OIDC realm (--games-domain). Empty = the builder's default of "
+    "games.<apex domain>. Parsed by the x86 and rpi5 builders only.")
+# ASK 3, "explain or delete the default release state" — EXPLAINED, not deleted.
+# Deleting the item would force every image to emit an explicit --release-state, which
+# would OVERRIDE any RELEASE_STATE a brand profile sets (brands/local.conf:32,
+# brands/example.conf:25, brand.conf.example:18 all set it, and the profile is sourced
+# at build-x86-host-stage4.sh:967 BEFORE the arg loop at :973). That is a behaviour
+# change, not wording. What "default" means is grounded in the builders, not guessed.
+_HELP_RELEASE_STATE = (
+    "The go-live posture baked into the image (--release-state).\n"
+    "• default — emit no --release-state at all. The value then comes from the brand "
+    "profile above if one sets RELEASE_STATE, and otherwise from the builders' own "
+    "default, internal. Choose this to let a -C profile decide.\n"
+    "• internal — LAN/tailnet only: the public ingress controller is pruned out of "
+    "the baked cluster tree and the be/fe gateways are repointed at nginx-internal.\n"
+    "• public — internet-facing: the public ingress stays in the tree.")
+_HELP_TAILSCALE = (
+    "Join this desktop to the mesh tailnet at first boot. Unchecked leaves it a "
+    "machine that can still reach the public apex domain but not the mesh.")
+_HELP_SSO = (
+    "Sign in with the mesh's own identity provider (Casdoor) instead of a local "
+    "account only. Parsed by the x86 builder only.")
+_HELP_HEADSCALE_URL = (
+    "The mesh control-server URL this image talks to. Baked to "
+    "/etc/hugmesh/headscale-url and delivered to the builder as the HEADSCALE_URL "
+    "environment variable — not a CLI flag, so it is never platform-greyed. Empty = "
+    "local-first: the control node uses its own LAN IP.")
+_HELP_HEADSCALE_VERSION = (
+    "Pin the version of Headscale, the control server that runs the tailnet "
+    "(--headscale-version). Empty = whatever the builder ships.")
+_HELP_TAILSCALE_VERSION = (
+    "Pin the version of the Tailscale node agent that joins the tailnet "
+    "(--tailscale-version). Empty = whatever the builder ships.")
+_HELP_SKIP_TAILSCALE = (
+    "Emit --skip-tailscale: install Headscale WITHOUT the Tailscale node agent. "
+    "That is a headscale-only posture — a control node that SERVES the tailnet "
+    "rather than joining it as a peer. It is not the same as declining to join the "
+    "mesh, which is the Tailnet + SSO checkbox above.")
+# ASK 5, "rename orchestration superdomain to tailscale root domain". The operator's
+# term is the one on screen everywhere now — but the value does TWO jobs in the
+# builders and the second one has to be said somewhere or the Users page's
+# "superadmins are locked to it" stops making sense:
+#   build-x86-host-stage4.sh:3782  sed base_domain: -> ${SUPERDOMAIN}   (MagicDNS root)
+#   build-x86-host-stage4.sh:4484  echo ${SUPERDOMAIN} > /etc/hugmesh/superdomain
+# Studio then reads that second bake as the Casdoor DOMAIN superadmin accounts are
+# created on (users.py, worklist.py, tui/localcloud.py). One name, both jobs stated.
+_HELP_SUPERDOMAIN = (
+    "The mesh's internal root domain (--superdomain; empty = the derived "
+    "<brand>.internal). It is baked twice: as Headscale's MagicDNS base_domain, "
+    "which is the name every mesh node becomes reachable under, and to "
+    "/etc/hugmesh/superdomain, which is the domain superadmin accounts are created "
+    "on. Permanently internal — never the public apex domain above.")
+_HELP_EGRESS = (
+    "A WireGuard / OpenVPN profile to route this desktop's outbound traffic through "
+    "(--egress-vpn FILE); the file is copied into the image. Empty = no egress VPN. "
+    "Desktop-class roles only — a cluster node is offered no such row.")
+_HELP_EGRESS_LOCKED = (
+    "Emit --egress-vpn-locked: install the profile as a managed connection the "
+    "person using the machine cannot turn off or delete. For fleet-managed devices.")
+_HELP_PROXY_STACK = (
+    "Squid (a caching proxy) plus Privoxy (an ad and tracker filter), wired into "
+    "Firefox on desktop images. Three values rather than a checkbox because the "
+    "builder has its own per-role default: auto emits nothing and lets it decide "
+    "(on for client desktops), on forces --proxy-stack, off forces --no-proxy-stack.")
+_HELP_SNORT = (
+    "Snort intrusion detection on this machine's network traffic (--snort / "
+    "--no-snort). On by default. Parsed by the x86 builder only.")
+_HELP_ROOT_LOGIN = (
+    "Whether sshd accepts a login as root (--permit-root-login). The default, no, "
+    "locks root and leaves the non-root KEYS admin account as the way in; "
+    "prohibit-password accepts a root SSH key but never a password; yes accepts "
+    "both.")
+_HELP_SERVICES_PRESET = (
+    "A whole-set shortcut instead of ticking rows. The table is the fine grain; "
+    "these two say what it cannot. No optional services emits an explicit empty "
+    "list, which also suppresses the builders' own default set. Every user-level "
+    "service emits --all-services, which expands a fixed USER-level catalogue and "
+    "leaves the infra rows (tor, egress-vpn, workloadConsole, anubis) to the "
+    "table — and anubis comes on by itself on a prod build besides.")
+_HELP_EDGE_AI_RUNTIME = (
+    "Which inference server actually runs the models on the GPU node "
+    "(--edge-ai-runtime): ollama is the builder's default, vllm the alternative "
+    "engine. It picks the server that is baked, not which models are preloaded — "
+    "that is the field beside it.")
+_HELP_EDGE_AI_MODELS = (
+    "Comma-separated models to PRELOAD onto the GPU node while the image is built "
+    "(--edge-ai-models), e.g. llama3.2:3b,nomic-embed-text. Empty = the builder's "
+    "own list.")
+_HELP_EDGE_AI_DEFAULT = (
+    "Which preloaded model answers an OpenAI-compatible request that names none "
+    "(--edge-ai-model-default). Empty = the builder's default.")
+_HELP_EDGE_AI_ANALYSIS = (
+    "Also bake the edge-ai-analysis task API: image NSFW/abuse classification, "
+    "perceptual hashing and log triage. A separate image on the same GPU node, so "
+    "it needs edge-AI above.")
+
 # Services are MESH-WIDE, not per-node — stated on the page because the operator
 # reasonably asked whether they were selectable per node (as the worklist's per-node
 # columns are). Grounded in the builders, not in UI convenience:
@@ -129,11 +265,9 @@ _OFF_TIP = ("Two-state: checked = ON for this build (--with-…), unchecked = OF
 #   * Studio's own model already agrees: core/worklist.py WorklistEntry carries no
 #     service field, and _materialize_one deepcopies the shared base into every node.
 _SERVICES_SCOPE_NOTE = (
-    "Chosen ONCE for the whole mesh — not per node. These selections are baked into "
-    "the cluster GitOps tree that every cluster node shares, so a single set of "
-    "services is what makes a coherent cluster (per-node sets would fight each other). "
-    "What IS per node is on the earlier node-images step: the node's ROLE (an edge-AI "
-    "node is chosen there) and its hardware."
+    "Chosen ONCE for the whole mesh, not per node: every cluster node shares one "
+    "GitOps tree, so per-node sets would delete each other's services. What IS per "
+    "node — the node's role and its hardware — is on the node-images step."
 )
 
 # The honest exception, stated rather than papered over: two slugs really are
@@ -142,8 +276,8 @@ _SERVICES_SCOPE_NOTE = (
 # adding one would change the emitted argv — out of scope for a presentation fix.
 # Queued as a real feature rather than silently omitted.
 _SERVICES_NODE_SCOPE_CAVEAT = (
-    "Note: tor and egress-vpn are node-scoped services in the platform registry, but "
-    "Studio applies them mesh-wide today (every cluster node gets the same setting)."
+    "Two exceptions, stated rather than hidden: tor and egress-vpn are node-scoped in "
+    "the platform registry, but Studio applies them mesh-wide today."
 )
 
 # Why "tick anything and the default set is gone" is the honest headline, and why ask 2
@@ -162,11 +296,10 @@ _SERVICES_NODE_SCOPE_CAVEAT = (
 # subtract from a brand.conf-injected OPTIONAL_SERVICES, so removing the FIELD would have
 # left the platform with no subtraction at all.
 _SERVICES_OVERRIDE_NOTE = (
-    "What is ticked is what gets built. {default} arrive ticked because they are the "
-    "builders' own default set — untick one and it is genuinely not built, because this "
-    "list REPLACES the default outright rather than adding to it (built-in &lt; brand "
-    "profile &lt; this list). That is also why there is no separate \"exclude\" field: "
-    "ticking the ones you want IS the subtraction."
+    "What is ticked is what gets built. {default} arrive ticked as the builders' own "
+    "default set. This list REPLACES that default instead of adding to it, so "
+    "unticking one really does leave it unbuilt — and ticking only what you want IS "
+    "the subtraction, which is why there is no separate exclude field."
 ).format(default=", ".join(BUILTIN_DEFAULT_SERVICES))
 
 # Managed backing services (I8/M2). Honest inline note: 'managed' points ONE in-mesh
@@ -263,10 +396,10 @@ _BRAND_IDENTITY_NOTE = (
 
 
 def _identity_help_text(brand: bool, cluster: bool, superdomain_on_screen: bool) -> str:
-    """The "Identity & domain" help line, COMPOSED from what the section still contains.
+    """The "Identity & Domain" help line, COMPOSED from what the section still contains.
 
     Defect (2): the fixed sentence said "...distinct from the internal superdomain below",
-    but the superdomain row lives in ``mesh_box``, which every standalone flow hides — so
+    but the root-domain row lives in ``mesh_box``, which every standalone flow hides — so
     on the operator's image the help pointed at a control that was not on the page, and
     then went on to describe an apex-domain box that (defect 1) should not have been
     either. Same treatment as ``tailnet_reason``: say only what is true of THIS visit.
@@ -281,8 +414,8 @@ def _identity_help_text(brand: bool, cluster: bool, superdomain_on_screen: bool)
         head = "The PUBLIC apex domain this image serves — the go-live target"
     else:
         return ""
-    # The "below" reference is only honest while the superdomain row is actually below.
-    return head + (" (distinct from the internal superdomain below)." if
+    # The "below" reference is only honest while the root-domain row is actually below.
+    return head + (" (distinct from the internal Tailscale root domain below)." if
                    cluster and superdomain_on_screen else ".")
 
 
@@ -403,15 +536,15 @@ def _service_channel(slug: str, platform: str, catalog: tuple) -> str:
 #   SETTING — the row's free field (preload models, default model, hosted endpoint)
 #   DESC    — one line saying what ENABLING this row does (ask 5)
 _SVC_COL_NAME, _SVC_COL_ON, _SVC_COL_MODE, _SVC_COL_SETTING, _SVC_COL_DESC = range(5)
-_SVC_HEADERS = ("Service / app", "On", "Hosting / mode", "Setting",
-                "What enabling it does")
+_SVC_HEADERS = ("Service / App", "On", "Hosting / Mode", "Setting",
+                "What Enabling It Does")
 
 # The two table groups that are NOT --optional-services catalogue slugs, and each of which
 # used to be a whole page section of its own. Named constants because initializePage hides
 # them on their own axes (edge-AI is a cloud/mesh cluster concern; so are the backing
 # services) and the tests address them by name.
-_AI_GROUP = "AI & inference"
-_BACKING_GROUP = "Backing services"
+_AI_GROUP = "AI & Inference"
+_BACKING_GROUP = "Backing Services"
 
 # services_preset indices — the whole-set shortcuts (G13/G14). CUSTOM is the default and
 # means "read the table"; the other two REPLACE the table's slug rows entirely.
@@ -440,7 +573,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # Title/subtitle are set path-aware in initializePage (a standalone desktop has
         # no mesh/tailnet, so this page IS its network-identity + egress + security step,
         # while cloud/mesh use it for the domain, superdomain and cluster services).
-        self.setTitle("Network, Identity & Egress")
+        self.setTitle("Network, Identity, and Egress")
         lay = scrollable(self)
 
         # There is no tri-state legend any more, and its absence is the fix rather than an
@@ -468,12 +601,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # presets; sourced by every builder before its CLI flags (CLI wins).
         self.brand_profile = QtWidgets.QLineEdit()
         self.brand_profile.setPlaceholderText("brands/<brand>.conf  (empty = no preset profile)")
-        self.brand_profile.setToolTip(
-            "A brand config file (-C/--config), sourced before this page's own "
-            "fields. Supplies preset defaults for the Headscale URL, release "
-            "state, admin emails, mail settings and which services to leave out "
-            "— anything set on this page overrides it.")
-        bbtn = _file_picker(self, self.brand_profile, "Brand Profile", "Brand profile (*.conf)")
+        bbtn = _file_picker(self, self.brand_profile, "Brand profile", "Brand profile (*.conf)")
         bw = QtWidgets.QWidget(); bh = QtWidgets.QHBoxLayout(bw); bh.setContentsMargins(0, 0, 0, 0)
         bh.addWidget(self.brand_profile, 1); bh.addWidget(bbtn)
         # EVERY row below is captured on the page, the way self.superdomain_row and
@@ -485,19 +613,8 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.brand_profile_row = _row("Brand Profile (-C)", bw)
         il.addWidget(self.brand_profile_row)
         self.brand = QtWidgets.QLineEdit()
-        self.brand.setToolTip(
-            "Short lowercase brand slug baked into the image (--brand). Feeds "
-            "artifact filenames and the default internal domain (<brand>.internal) "
-            "— keep it a short, DNS-safe token.")
         self.brand_title = QtWidgets.QLineEdit()
-        self.brand_title.setToolTip(
-            "The product name shown to whoever uses the image: installer screens, "
-            "the bootloader menu entry and Calamares branding (--brand-title).")
         self.org = QtWidgets.QLineEdit()          # --org (G7): emitted on every platform
-        self.org.setToolTip(
-            "Kubernetes label-key namespace and CRD API-group token baked into the "
-            "image (--org) — e.g. '<org>.tld/…' labels and 'platform.<org>.tld' API "
-            "groups. Leave at the default unless rebranding the whole platform.")
         self.domain = QtWidgets.QLineEdit()
         self.brand_row = _row("Brand ID", self.brand)
         self.brand_title_row = _row("Brand Title", self.brand_title)
@@ -506,31 +623,18 @@ class NetworkPage(QtWidgets.QWizardPage):
         il.addWidget(self.brand_title_row)
         il.addWidget(self.org_row)
         # --cluster-domain is the PUBLIC apex (the go-live target), distinct from the
-        # permanently-internal orchestration superdomain in the mesh control plane below.
-        self.domain.setToolTip(
-            "The public go-live domain this image serves (--cluster-domain) — the "
-            "externally reachable apex. Never the internal, mesh-only Tailscale "
-            "root domain.")
+        # permanently-internal Tailscale root domain in the mesh-networking section below.
         self.domain_row = _row("Public Apex Domain", self.domain)
         il.addWidget(self.domain_row)
         # games domain (G6, x86+rpi5): the games.<domain> host + games OIDC issuer.
         self.games_domain = QtWidgets.QLineEdit()
         self.games_domain.setPlaceholderText("games.<cluster domain>  (empty = builder default)")
-        self.games_domain.setToolTip(
-            "Hostname for the Game Studio app store and its OIDC issuer "
-            "(--games-domain). Empty = games.<public apex domain>.")
         self.games_domain_row = _row("Games Domain", self.games_domain)
         il.addWidget(self.games_domain_row)
         # release state (G4, x86+rpi5): the baked Layer-3 nftables / go-live posture.
         self.release_state = QtWidgets.QComboBox()
         self.release_state.addItems(("default", *RELEASE_STATE_CHOICES))
-        self.release_state.setToolTip(
-            "Cluster ingress + Layer-3 nftables posture baked into the image "
-            "(--release-state). Default leaves the flag unset, which bakes the "
-            "same posture as choosing Internal (LAN/tailnet-only; no public "
-            "ingress) — every builder's own starting point. Choose Public only "
-            "for an image meant to go live on the open internet.")
-        self.release_state_row = _row("Release State (--release-state)", self.release_state)
+        self.release_state_row = _row("Release State", self.release_state)
         il.addWidget(self.release_state_row)
         # Identity carries the REQUIRED fields (brand id, the public apex domain), so it
         # is never collapsed by default — default expansion must not hide a must-set field.
@@ -553,13 +657,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.tailnet_box = QtWidgets.QGroupBox("")
         tl = QtWidgets.QVBoxLayout(self.tailnet_box)
         self.tailscale = QtWidgets.QCheckBox("Join the tailnet (tailscale/headscale)")
-        self.tailscale.setToolTip(
-            "Enrolls this image in the mesh's tailnet (--with-tailscale), so it "
-            "can reach other mesh nodes over Headscale.")
         self.sso = QtWidgets.QCheckBox("Enable SSO login (Casdoor)")
-        self.sso.setToolTip(
-            "Single sign-on against the mesh's Casdoor instance (--with-sso), "
-            "instead of local accounts only.")
         tl.addWidget(self.tailscale)
         tl.addWidget(self.sso)
         # Two checkboxes and a real join decision — expanded.
@@ -579,9 +677,9 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.mesh_box = QtWidgets.QGroupBox("")
         cp = QtWidgets.QVBoxLayout(self.mesh_box)
         cp.addWidget(_hint(
-            "The internal Tailscale root domain every mesh node joins (Headscale's "
-            "tailnet control plane). Permanently internal — never the public "
-            "go-live apex above."))
+            "The Headscale control plane every mesh node joins, and the internal "
+            "root domain it hands those nodes (MagicDNS). Permanently internal — "
+            "never the public apex domain above."))
         # Headscale URL (G2) — the brand mesh control-server URL baked to
         # /etc/hugmesh/headscale-url. NOT a builder flag on any platform
         # (NON_ARGV_FIELDS): build_driver delivers it as the HEADSCALE_URL env var
@@ -589,33 +687,28 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.headscale_url = QtWidgets.QLineEdit()
         self.headscale_url.setPlaceholderText(
             "https://headscale.example.org  (empty = local-first: control node uses its LAN IP)")
-        self.headscale_url.setToolTip(
-            "Baked to /etc/hugmesh/headscale-url. Delivered to the builder as the "
-            "HEADSCALE_URL environment variable — not a CLI flag.")
-        cp.addWidget(_row("Headscale URL", self.headscale_url))
+        self.headscale_url_row = _row("Headscale URL", self.headscale_url)
+        cp.addWidget(self.headscale_url_row)
         # mesh agent version pins + the headscale-only posture (G29; all builders)
         self.headscale_version = QtWidgets.QLineEdit()
         self.headscale_version.setPlaceholderText("Pin a Headscale version (leave blank for the builder default)")
-        self.headscale_version.setToolTip("Pins the Headscale agent version — the --headscale-version builder flag.")
         self.tailscale_version = QtWidgets.QLineEdit()
         self.tailscale_version.setPlaceholderText("Pin a Tailscale version (leave blank for the builder default)")
-        self.tailscale_version.setToolTip("Pins the Tailscale agent version — the --tailscale-version builder flag.")
-        cp.addWidget(_row("Headscale Version", self.headscale_version))
-        cp.addWidget(_row("Tailscale Version", self.tailscale_version))
+        self.headscale_version_row = _row("Headscale Version", self.headscale_version)
+        self.tailscale_version_row = _row("Tailscale Version", self.tailscale_version)
+        cp.addWidget(self.headscale_version_row)
+        cp.addWidget(self.tailscale_version_row)
+        # A NAME, not a sentence: the "-- distinct from not joining the mesh" half was
+        # the label doing a tooltip's job, and it now IS the tooltip (_HELP_SKIP_TAILSCALE).
         self.skip_tailscale = QtWidgets.QCheckBox(
-            "Skip the tailscale agent (--skip-tailscale: headscale-only posture — "
-            "distinct from not joining the mesh)")
+            "Skip the Tailscale agent (headscale-only posture)")
         cp.addWidget(self.skip_tailscale)
-        # orchestration superdomain (spec 5): the permanently-internal <brand>.internal
+        # Tailscale root domain (spec 5): the permanently-internal <brand>.internal
         # every mesh node joins (manifest + KEYS channel, plus the WS-SUPER-B builder
         # bake: --superdomain on a mesh build writes <etc>/superdomain + the headscale
         # MagicDNS suffix; distinct from the public apex above, I7). Editable in mesh; a
         # read-only derived display in cloud (so the Users-page superadmin lock is explicable).
         self.superdomain = QtWidgets.QLineEdit()
-        self.superdomain.setToolTip(
-            "The internal Tailscale root domain all mesh nodes join (empty = "
-            "derived <brand>.internal). Baked into mesh images via --superdomain + "
-            "the mesh manifest + the KEYS channel — never the go-live apex.")
         self.superdomain_row = _row("Tailscale Root Domain", self.superdomain)
         cp.addWidget(self.superdomain_row)
         # ASK 8's "this mesh also hosts other domains" CHECKBOX used to sit here, under
@@ -648,8 +741,9 @@ class NetworkPage(QtWidgets.QWizardPage):
         eg.addWidget(_hint(
             "Egress VPN — route this image's outbound traffic through a provided VPN "
             "profile (optional). Lock it to stop a managed node's user removing it."))
-        eg.addWidget(_row("Egress VPN", w))
-        self.egress_locked = QtWidgets.QCheckBox("Lock egress VPN (managed node — user cannot remove)")
+        self.egress_field_row = _row("Egress VPN", w)
+        eg.addWidget(self.egress_field_row)
+        self.egress_locked = QtWidgets.QCheckBox("Lock the egress VPN")
         eg.addWidget(self.egress_locked)
         self.egress_section = collapsible("Egress VPN", self.egress_box)
         lay.addWidget(self.egress_section)
@@ -663,13 +757,9 @@ class NetworkPage(QtWidgets.QWizardPage):
         # visited, so the builder's per-role default could never round-trip.
         self.proxy_stack = QtWidgets.QComboBox()
         self.proxy_stack.addItems(["auto", "on", "off"])
-        self.proxy_stack.setToolTip(
-            "Auto lets the builder decide (on for desktop client roles, off "
-            "otherwise); On/Off force the proxy stack regardless of role.")
-        sl.addWidget(_row("Proxy Stack — Squid (cache) + Privoxy (filter), "
-                          "wired into Firefox (desktops)", self.proxy_stack))
+        self.proxy_stack_row = _row("Proxy Stack", self.proxy_stack)
+        sl.addWidget(self.proxy_stack_row)
         self.snort = QtWidgets.QCheckBox("Snort IDS (network intrusion detection)")
-        self.snort.setToolTip(_OFF_TIP)
         # AIDE was the sixth tri-state on this page. It is two-state now like the rest —
         # and unlike tor/character-*/edge-ai-tts its unchecked arm is REAL subtraction
         # (WANT_AIDE is consumed as a plain bool at build-x86-host-stage4.sh:4548 and
@@ -684,12 +774,8 @@ class NetworkPage(QtWidgets.QWizardPage):
         # is the entry point). Tri-state, matching --permit-root-login / the build-menu.
         self.root_login = QtWidgets.QComboBox()
         self.root_login.addItems(["no", "prohibit-password", "yes"])
-        self.root_login.setToolTip(
-            "Root SSH access policy (--permit-root-login). 'no' is the hardened "
-            "default — root is locked out; the non-root KEYS admin is the entry "
-            "point. 'prohibit-password' allows key-only root login; 'yes' also "
-            "allows a root password.")
-        sl.addWidget(_row("Root SSH Login", self.root_login))
+        self.root_login_row = _row("Root SSH Login", self.root_login)
+        sl.addWidget(self.root_login_row)
         # Every control here ships a sane hardened default (proxy auto / snort off /
         # aide "leave default" / root-login no), so this folds away when it is all
         # default — initializePage re-expands it if anything is overridden or gated.
@@ -751,7 +837,15 @@ class NetworkPage(QtWidgets.QWizardPage):
         sv_outer.addWidget(self.services_scope_note)
         self.services_node_scope_note = _hint(_SERVICES_NODE_SCOPE_CAVEAT)
         sv_outer.addWidget(self.services_node_scope_note)
-        self.services_box = QtWidgets.QGroupBox("Services & Apps")
+        # Escaped for the same reason Collapsible escapes its QToolButton
+        # (_widgets.py:83): QGroupBox paints its title with Qt.TextShowMnemonic, so a
+        # bare '&' is eaten as an accelerator and the heading renders "Services  Apps".
+        # Measured: painting "Services & Apps" with TextShowMnemonic is pixel-identical
+        # to painting "Services  Apps", and QKeySequence.mnemonic() on it returns
+        # Alt+Space. The section header twelve lines below carries the SAME words and is
+        # escaped, so leaving this one bare showed the ampersand twice on one screen and
+        # swallowed it once. See test_section_titles_are_not_eaten_as_mnemonics.
+        self.services_box = QtWidgets.QGroupBox("Services & Apps".replace("&", "&&"))
         svl = QtWidgets.QVBoxLayout(self.services_box)
         self.services_override_note = _hint(_SERVICES_OVERRIDE_NOTE)
         svl.addWidget(self.services_override_note)
@@ -784,15 +878,16 @@ class NetworkPage(QtWidgets.QWizardPage):
         # A combo also states the mutual exclusion structurally instead of enforcing it in a
         # slot: three values, one selected, nothing to keep in sync.
         self.services_preset = QtWidgets.QComboBox()
+        # SHORT items (ask 6): a dropdown row is not the place for a two-line
+        # sentence. What each one actually emits is in _HELP_SERVICES_PRESET.
         self.services_preset.addItems([
-            "Pick services individually in the table below",
-            "No optional services at all — suppress even the builders' default set "
-            "(akkoma, tuwunel, phpbb)",
-            "Every user-level service — the full catalogue (its rows tick and lock "
-            "below; infra services such as tor stay opt-in in the table)",
+            "Pick services individually below",
+            "No optional services at all",
+            "Every user-level service",
         ])
         self.services_preset.currentIndexChanged.connect(self._preset_changed)
-        svl.addWidget(_row("Selection", self.services_preset))
+        self.services_preset_row = _row("Selection", self.services_preset)
+        svl.addWidget(self.services_preset_row)
 
         self.services_table = QtWidgets.QTreeWidget()
         self.services_table.setColumnCount(len(_SVC_HEADERS))
@@ -864,7 +959,13 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.services_table.setItemWidget(self.edge_ai_item, _SVC_COL_ON, self.edge_ai)
         self.edge_ai_runtime = QtWidgets.QComboBox()
         self.edge_ai_runtime.addItems(["ollama", "vllm"])
-        self.edge_ai_runtime.setToolTip("Model runtime the node serves with (--edge-ai-runtime).")
+        # NO setToolTip here: this widget is a member of the "edge_ai_service" gate
+        # group (:1652), and gate_widgets ENDS with setToolTip("" if supported else
+        # reason) — so help written in __init__ is blanked on the first visit to an
+        # x86 build, where the field IS supported. It was, and the Runtime dropdown
+        # had no reachable tooltip at all (measured: every widget in its parent chain
+        # up to the page was empty too, since an in-table cell has no _row() wrapper
+        # to inherit from). Its help is in _field_help_targets(), re-asserted last.
         self.services_table.setItemWidget(self.edge_ai_item, _SVC_COL_MODE, self.edge_ai_runtime)
         self.edge_ai_models = QtWidgets.QLineEdit()
         self.edge_ai_models.setPlaceholderText(
@@ -900,9 +1001,21 @@ class NetworkPage(QtWidgets.QWizardPage):
         backing = self._group_row(_BACKING_GROUP, _MANAGED_SCOPE_NOTE)
         self.managed_rows: dict[str, tuple] = {}
         for sid in MANAGED_SERVICE_TIER12_IDS:
-            item = self._svc_row(
-                backing, sid,
-                "Runs in-cluster unless pointed at a hosted endpoint.")
+            # ISSUE #226 ask 2. Eleven rows used to share one caption, "Runs in-cluster
+            # unless pointed at a hosted endpoint" — which said nothing about what
+            # `federation-bundles` or `velero-objectstore` IS, and was untrue for the
+            # three ids that have no in-mesh workload at all — specs/cluster/
+            # backing-services.yaml gives velero-objectstore, smtp and
+            # federation-bundles both an empty `inMesh.apps` AND an empty
+            # `inMesh.manifests` (postgres-casdoor's `apps` is empty too, but it
+            # carries manifests/casdoor/pg.yaml, so it DOES run in-cluster). The
+            # shared half is dropped rather than reworded: the row's own Hosting
+            # dropdown already reads
+            # "Self-hosted (in-cluster)" / "Managed (hosted endpoint)", and the group
+            # row above carries _MANAGED_SCOPE_NOTE. This column is "What Enabling It
+            # Does", so it now says what the service is.
+            item = self._svc_row(backing, sid,
+                                 MANAGED_SERVICE_DESCRIPTIONS.get(sid, ""))
             combo = QtWidgets.QComboBox()
             combo.addItems(list(_HOSTING_CHOICES))
             ep = QtWidgets.QLineEdit()
@@ -1059,9 +1172,9 @@ class NetworkPage(QtWidgets.QWizardPage):
         unaffiliated = (c.role == UNAFFILIATED_ROLE or getattr(c, "unaffiliated", False))
         # Path-aware header (spec 3-7): a standalone desktop has no mesh/tailnet, so this
         # page IS its network-identity / egress / security step; cloud/mesh use it for the
-        # domain, the orchestration superdomain and the cluster services.
+        # domain, the Tailscale root domain and the cluster services.
         if c.mode == "standalone":
-            self.setTitle("Network Identity, Egress & Security")
+            self.setTitle("Network Identity, Egress, and Security")
             # …and on an unaffiliated image it is not a BRAND identity step either: the
             # brand rows are gated away below (defect 3), so a subtitle promising "Brand
             # identity" would describe a section this visit does not have — the same
@@ -1070,13 +1183,13 @@ class NetworkPage(QtWidgets.QWizardPage):
                 ("The optional egress VPN and the host security stack for this "
                  "unaffiliated desktop. No brand, no mesh, no tailnet, no SSO."
                  if unaffiliated else
-                 "Brand identity, the optional egress VPN and the host security "
+                 "Brand identity, the optional egress VPN, and the host security "
                  "stack for this standalone desktop. No mesh, no tailnet, no SSO."))
         else:
-            self.setTitle("Domain, Mesh & Services")
+            self.setTitle("Domain, Mesh, and Services")
             self.setSubTitle(
-                "The cluster services this mesh runs, the public apex domain "
-                "it serves, and the internal orchestration superdomain every node joins."
+                "The cluster services this mesh runs, the public apex domain it "
+                "serves, and the internal Tailscale root domain every node joins."
                 if c.mode == "mesh" else
                 "The domain this client joins, its tailnet + SSO login, egress, "
                 "and the optional services it can reach.")
@@ -1106,7 +1219,7 @@ class NetworkPage(QtWidgets.QWizardPage):
             self.tailnet_reason.setText(
                 "Standalone images have no tailnet — no mesh, no SSO."
                 if c.mode == "standalone" else
-                "Mesh nodes join the superdomain tailnet implicitly (tailscale + SSO on)."
+                "Mesh nodes join the mesh tailnet implicitly (tailscale + SSO on)."
                 if c.mode == "mesh" else
                 "This image class has no user-facing tailnet / SSO toggle.")
         self.tailscale.setChecked(c.tailscale or ss_visible)
@@ -1502,7 +1615,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # ── DEFECT 5: the ORPHAN SERVICES HEADER ───────────────────────────────────
         # services_scope_note and services_node_scope_note sit in `svc_content`, OUTSIDE
         # services_box, and it is svc_content that the collapsible wraps. Hiding only the
-        # box therefore left an unaffiliated run with the "Services & Apps" header and
+        # box therefore left an unaffiliated run with the "Services & apps" header and
         # two paragraphs of mesh-wide prose ("Chosen ONCE for the whole mesh…", "tor and
         # egress-vpn are node-scoped…") over nothing. Hide the SECTION — the house rule,
         # and the idiom the tailnet and egress sections already use.
@@ -1614,7 +1727,87 @@ class NetworkPage(QtWidgets.QWizardPage):
         for w in (self.aide, self.edge_ai, *self.service_boxes.values()):
             if w.isEnabled():
                 w.setToolTip(_OFF_TIP)
+        # ── PER-FIELD HELP, LAST (issue #226 ask 2) ────────────────────────────────
+        # Deliberately the final statement of the visit, and deliberately guarded by
+        # `if not w.toolTip()`. Both gates above END by rewriting their targets'
+        # tooltips (_gating.py:165 and :187 are each `setToolTip("" if ok else
+        # reason)`), so help written anywhere earlier is silently blanked on the first
+        # visit — the defect issue #230 found on the Home page, whose fix this copies
+        # verbatim (home.py:684-689). The guard is what makes a gate's REASON win: a
+        # greyed or hidden control keeps the sentence saying why it is unavailable,
+        # and every live control gets its own explanation back.
+        # `if not w.toolTip()` alone is not enough, because a gate can target a
+        # CONTAINER rather than the field: gate_widgets writes the platform reason onto
+        # `services_box` (:1666, field `optional_services`, scoped x86+rpi5), and the
+        # rows INSIDE it are not gate members, so their own tooltips are empty. Qt's
+        # QApplication::notify walks a ToolTip event up the parent chain only while each
+        # widget IGNORES it (QWidget::event ignores when toolTip() is empty), so help
+        # written on a row inside a greyed box STOPS the walk one level below the box
+        # and shadows "not available for this builder" — measured on jetson/orangepi5,
+        # where the Selection dropdown lost exactly that sentence. Skip any target whose
+        # gated ancestor is already answering for it; a gate reason is only ever written
+        # while the surface is off, so an ENABLED ancestor never suppresses help.
+        for w, help_text in self._field_help_targets():
+            if self._gate_reason_above(w):
+                # CLEAR, not merely skip: a wrapper is not a gate member, so nothing
+                # else ever rewrites its tooltip — help written on an earlier visit to a
+                # platform that DID support the field would otherwise persist and shadow
+                # the reason on this one. Only ever clears our own sentence, so a reason
+                # written on the widget itself is untouched.
+                if w.toolTip() == help_text:
+                    w.setToolTip("")
+                continue
+            if not w.toolTip():
+                w.setToolTip(help_text)
         self._apply_default_expansion()
+
+    def _gate_reason_above(self, w):
+        """True while an ANCESTOR of `w` (up to this page) carries a gate reason that Qt
+        would show for a hover over `w` — i.e. a container the gates greyed or hid.
+
+        Bounded at the page so it can never reach the wizard's own chrome, and keyed on
+        the ancestor being OFF rather than merely having a tooltip: gate_widgets and
+        gate_widgets_role_class both write `"" if ok else reason`, so a reason and a
+        live surface never coexist."""
+        anc = w.parentWidget()
+        while anc is not None and anc is not self:
+            if anc.toolTip() and (not anc.isEnabled() or not anc.isVisibleTo(self)):
+                return True
+            anc = anc.parentWidget()
+        return False
+
+    def _field_help_targets(self):
+        """(widget, help) for every field on this page — ask 2's "explanatory tooltips
+        for every field". Ordered as the page reads. Hangs on the _row() WRAPPER
+        wherever one exists (a wrapper is not a gate member, and Qt walks an ignored
+        ToolTip event up to it from the field AND from the caption); on the widget
+        itself for the loose checkboxes and the in-table cells, which have no row."""
+        return (
+            (self.brand_profile_row, _HELP_BRAND_PROFILE),
+            (self.brand_row, _HELP_BRAND),
+            (self.brand_title_row, _HELP_BRAND_TITLE),
+            (self.org_row, _HELP_ORG),
+            (self.domain_row, _HELP_DOMAIN),
+            (self.games_domain_row, _HELP_GAMES_DOMAIN),
+            (self.release_state_row, _HELP_RELEASE_STATE),
+            (self.tailscale, _HELP_TAILSCALE),
+            (self.sso, _HELP_SSO),
+            (self.headscale_url_row, _HELP_HEADSCALE_URL),
+            (self.headscale_version_row, _HELP_HEADSCALE_VERSION),
+            (self.tailscale_version_row, _HELP_TAILSCALE_VERSION),
+            (self.skip_tailscale, _HELP_SKIP_TAILSCALE),
+            (self.superdomain_row, _HELP_SUPERDOMAIN),
+            (self.egress_field_row, _HELP_EGRESS),
+            (self.egress_locked, _HELP_EGRESS_LOCKED),
+            (self.proxy_stack_row, _HELP_PROXY_STACK),
+            (self.snort, _HELP_SNORT),
+            (self.root_login_row, _HELP_ROOT_LOGIN),
+            (self.services_preset_row, _HELP_SERVICES_PRESET),
+            (self.edge_ai_runtime, _HELP_EDGE_AI_RUNTIME),
+            (self.edge_ai_models, _HELP_EDGE_AI_MODELS),
+            (self.edge_ai_default, _HELP_EDGE_AI_DEFAULT),
+            (self.edge_ai_analysis, _HELP_EDGE_AI_ANALYSIS),
+        )
 
     def _apply_default_expansion(self):
         """Fold away the optional sections that are entirely at their defaults, and only

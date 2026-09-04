@@ -277,8 +277,8 @@ ROLE_CHOICES = {
          "Omnibus — every cluster role on one node (x86, or Jetson Orin — EXPERIMENTAL)"),
         # Person-device desktops attachable to the mesh (operator ask 2026-08-14):
         # checking one on the WorklistPage asks for the person's user + role via a
-        # popup; the account is provisioned on the internal orchestration
-        # superdomain and the role rides the image as --person-role (FD-08).
+        # popup; the account is provisioned on the internal Tailscale root
+        # domain and the role rides the image as --person-role (FD-08).
         ("laptop", ("x86",), "Laptop desktop — tailnet + SSO client for a person on this mesh"),
         ("chromebook", ("x86",),
          "Chromebook desktop — coreboot/UEFI laptop client (ADR-16); tailnet + SSO"),
@@ -430,6 +430,42 @@ ORANGEPI4LTS_FLAVORS = ("live", "installer", "both")
 # --env: what gets baked into the image's stack config (test | prod).
 ENV_CHOICES = ("test", "prod")
 
+# --compress-level N: the xz preset --compress uses, on EVERY builder (issue #233's one
+# unchecked box, "consider allowing the xz compression level to be changed"). 0-9 is xz's
+# own range and the range each builder validates, so the GUI offers exactly that — one
+# range, no second narrower policy to drift from the flag. 9 is the level every builder
+# hardcoded before this flag existed and stays the default, so an existing config's
+# emission is byte-identical (to_cli_args omits --compress-level at the default).
+#
+# SCOPE, stated once: the level applies to the --compress path only — the `xz -T0 -6`
+# invocations that always build the stage4 archive and fs.tar.xz are NOT --compress
+# artifacts and are deliberately untouched (build-x86-host-stage4.sh:6420/6423/6743/6744,
+# build-rpi5-stage4.sh:4638/4639). Changing those would alter what a build with no
+# compression flags at all emits.
+COMPRESS_LEVEL_CHOICES = tuple(range(10))
+COMPRESS_LEVEL_DEFAULT = 9
+
+
+def clamp_compress_level(value) -> int:
+    """The ONE reading of a compress_level that came from an untrusted source.
+
+    The GUI combo can only ever hold COMPRESS_LEVEL_CHOICES, but a hand-edited
+    ``--config`` JSON can carry anything, and the builders hard-error on a level
+    outside 0-9 (they validate the flag). Both readers of that untrusted value —
+    ``ImageConfig._compress_level_args`` on emission and BuildPage.initializePage
+    when it restores the combo — go through HERE, so the level the page shows and
+    the level the builder is handed are the same function of the same file. Two
+    different readings would mean one config.json produced two different artifacts
+    depending on whether the operator happened to open the Build page.
+
+    Out of range clamps to the nearest legal preset; junk that is not a number at
+    all resolves to the builder default (which emits no flag at all)."""
+    try:
+        return max(0, min(9, int(value)))
+    except (TypeError, ValueError):
+        return COMPRESS_LEVEL_DEFAULT
+
+
 # build-x86-host-stage4.sh's full documented --gpu-driver matrix (canonical names).
 # "auto" is a Studio value, not a builder flag: to_cli_args() omits --gpu-driver so
 # the builder resolves its own default (all-free on GPU roles, nvidia on edge_ai).
@@ -527,7 +563,15 @@ SERVICE_DESCRIPTIONS: dict[str, str] = {
     "egress-vpn": "Routes this node's outbound traffic through a provided VPN profile.",
     "workloadConsole": "In-cluster workload console — inspect and restart mesh workloads "
                        "from the browser.",
-    "anubis": "Anti-scraper proof-of-work gate in front of the public web routes.",
+    # ISSUE #226 ASK 7. Worded in the order _opt_anubis_installed actually decides
+    # in (scripts/_optional-services-lib.sh:478-482): it tests _opt_selected FIRST
+    # and only falls through to the ENV split when the operator said nothing, so a
+    # ticked row installs anubis on ANY build — including the default ENV=test one
+    # (ImageConfig().env == "test"). Saying it "stays off on a test build" would be
+    # false for the one action this row exists to perform.
+    "anubis": "Anti-scraper proof-of-work gate in front of the public web routes. "
+              "Ticking it installs it on any build; left alone a prod build turns "
+              "it on by itself anyway and only a test build leaves it off.",
 }
 
 # Presentation grouping for the services surface: (group title, (slug, ...)). Ordered —
@@ -537,25 +581,30 @@ SERVICE_DESCRIPTIONS: dict[str, str] = {
 # reads; the previous surface grouped by "which flag emits it", which is an
 # implementation detail they cannot see.
 SERVICE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Social & community", ("akkoma", "tuwunel", "phpbb")),
-    ("Media & play", ("owncast", "tube", "games")),
-    ("Characters & avatars", ("character-studio", "character-forge", "edge-ai-tts")),
-    ("Network & access", ("egress-vpn", "workloadConsole")),
+    ("Social & Community", ("akkoma", "tuwunel", "phpbb")),
+    ("Media & Play", ("owncast", "tube", "games")),
+    ("Characters & Avatars", ("character-studio", "character-forge", "edge-ai-tts")),
+    ("Network & Access", ("egress-vpn", "workloadConsole")),
     # All three of these are here because PRIVACY is what they are FOR, which is the
-    # axis the operator reads. `tor` and `anubis` sat under "Network & access" only
+    # axis the operator reads. `tor` and `anubis` sat under "Network & Access" only
     # because they are also network-level, which is the implementation detail, not
     # the purpose: `tor` is a privacy TRANSPORT (reach the mesh without exposing a
     # public IP or a DNS name to whoever is watching), and `anubis` is the
-    # anti-scraper gate on the public routes — one a prod (--env prod) build ships
-    # ON by default (_opt_anubis_installed's ENV fallback), so it is a protection
-    # the operator gets whether or not they tick it here. Titled "Privacy
-    # services" rather than naming anubis outright because it is one of three,
-    # not the other two's exception. The AI cloak sits here rather than under
-    # "Characters & avatars" for the same why-not-what reason: it is a protection
-    # applied to what a person UPLOADS, not a thing they create with. What stays
-    # in "Network & access" is the plumbing that carries no privacy claim — where
-    # this node's egress goes, and a console for its workloads.
-    ("Privacy services", ("tor", "anubis", "media-poisoner")),
+    # anti-scraper gate on the public routes. The AI cloak sits here rather than
+    # under "Characters & Avatars" for the same why-not-what reason: it is a
+    # protection applied to what a person UPLOADS, not a thing they create with.
+    # What stays in "Network & Access" is the plumbing that carries no privacy claim
+    # — where this node's egress goes, and a console for its workloads.
+    #
+    # ISSUE #226 ASK 7, verbatim: "where's anubis? if it is forced on, rename
+    # 'Privacy & anti-scraping' to just 'Privacy services' (or similar)". The
+    # condition HOLDS — scripts/_optional-services-lib.sh:478-482
+    # (_opt_anubis_installed) returns "true" for every ENV=prod build unless the
+    # operator passes the explicit "-anubis"/"no-anubis" spelling, and
+    # build-x86-host-stage4.sh REFUSES --exclude-services for it by name. So the
+    # title can no longer promise "anti-scraping" as something you pick here; the
+    # per-row description says what anubis actually does instead.
+    ("Privacy Services", ("tor", "anubis", "media-poisoner")),
 )
 
 # --person-role client-identity picker (FD-08). The x86 builder honours --person-role/
@@ -563,6 +612,49 @@ SERVICE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # desktop AND the standalone desktops); on a cluster NODE role it warns + IGNORES them
 # (build-x86:1722-1724), so the Studio must NOT emit them for a node role (G18).
 PERSON_ROLE_CHOICES = ("user", "mod", "admin", "superadmin")
+# The per-ACCOUNT role vocabulary of the superadmin Users table (G20; issue #228): the
+# four platform tiers PLUS the GRANTABLE games roles from the systems Casdoor seed
+# (specs/cluster/manifests/casdoor/init-data-configmap.yaml): 'games' -> ROLE_GAMES
+# (Games Member) and 'games-services' -> ROLE_GAMES_SERVICES (Games App-Store Access).
+# The DERIVED intersection roles (ROLE_GAMES_ADMIN, ROLE_GAMES_SERVICES_ADMIN/_RUNNER)
+# are deliberately NOT offered — the admin-sync Jobs materialize them from role
+# intersections, and seeding them directly would bypass that default-deny.
+#
+# The ORDER is the precedence: a multi-role account (issue #228) is normalized to this
+# order, so ``User.role`` — the primary, the back-compat scalar every pre-#228 consumer
+# reads — is always the highest tier the account holds (superadmin > admin > mod >
+# user), then the grants. PERSON roles, not image roles: scripts/_roles-lib.sh and
+# tests/scripts/test-role-key-spelling.sh carve this vocabulary OUT of their sweep.
+USER_ROLE_CHOICES = ("superadmin", "admin", "mod", "user", "games", "games-services")
+
+
+def normalize_user_roles(roles) -> list[str]:
+    """Canonical multi-role list (issue #228): deduped, USER_ROLE_CHOICES order first
+    (that order is the precedence), any role outside the vocabulary kept AFTER the
+    known ones in input order (a saved config from a newer Studio is never silently
+    stripped), blank entries dropped, and an empty set is the ``user`` floor — an
+    account with no role at all is not a thing the manifest can provision."""
+    seen: list[str] = []
+    for r in roles or ():
+        r = (r or "").strip() if isinstance(r, str) else ""
+        if r and r not in seen:
+            seen.append(r)
+    known = [r for r in USER_ROLE_CHOICES if r in seen]
+    extra = [r for r in seen if r not in USER_ROLE_CHOICES]
+    return (known + extra) or ["user"]
+
+
+def person_tier(roles) -> str:
+    """The single --person-role tier a multi-role account maps to: the highest
+    PERSON_ROLE_CHOICES tier it holds (normalize_user_roles order), ``user`` when it
+    holds only grants (games/games-services) — the builder accepts exactly the four
+    tiers, so a grant can never be emitted as a person role."""
+    for r in normalize_user_roles(roles):
+        if r in PERSON_ROLE_CHOICES:
+            return r
+    return "user"
+
+
 X86_CLIENT_ROLES = ("laptop", "chromebook", "desktop")
 # The cluster NODE roles (ROLE_CLIENT=false) — the roles for which the builder drops
 # --person-role/--domains. Gating on "not a node role" (rather than "is a client role")
@@ -621,6 +713,33 @@ MANAGED_SERVICE_TIER12_IDS = (
     "postgres-admin-bff", "postgres-user-bff", "postgres-mod-bff",
     "postgres-forum-bff", "postgres-wiki-bff", "postgres-casdoor")
 MANAGED_SERVICE_TIER3_IDS = ("cassandra", "harbor", "vault-kv", "vault-pki")
+# ISSUE #226 ask 2 — "names are not self-explanatory". Every tier-1/2 row used to carry
+# one identical caption ("Runs in-cluster unless pointed at a hosted endpoint"), which
+# told the operator nothing about `federation-bundles` or `velero-objectstore`. One line
+# per id saying WHAT IT IS, taken from specs/cluster/backing-services.yaml's displayName
+# + consumers (the same file the hermetic test_managed_services.py pins this constant
+# against). The shared "in-cluster unless…" sentence is NOT re-appended anywhere: the
+# row's own Hosting dropdown reads "Self-hosted (in-cluster)" / "Managed (hosted
+# endpoint)" and the group row above it carries the scope note, so this column is
+# free to answer only "what is it" (network.py's backing-services loop).
+MANAGED_SERVICE_DESCRIPTIONS: dict[str, str] = {
+    "velero-objectstore": "Object store Velero writes the cluster's backups into "
+                          "(managed = an S3 / Azure Blob bucket).",
+    "smtp": "The relay the mesh submits outbound mail through — account mail and "
+            "alerts. There is no in-mesh SMTP server; this records the choice.",
+    "kafka": "Usage-event bus the BFFs publish to (managed = MSK / Event Hubs).",
+    "clickhouse": "Analytics warehouse behind the admin dashboards and the "
+                  "observability DSN (managed = ClickHouse Cloud).",
+    "federation-bundles": "Object store holding the remote-app bundles the federation "
+                          "API serves to other meshes (managed = an S3 bucket).",
+    "postgres-admin-bff": "PostgreSQL database behind the admin BFF.",
+    "postgres-user-bff": "PostgreSQL database behind the user BFF.",
+    "postgres-mod-bff": "PostgreSQL database behind the moderation BFF.",
+    "postgres-forum-bff": "PostgreSQL database behind the forum BFF.",
+    "postgres-wiki-bff": "PostgreSQL database behind the wiki BFF.",
+    "postgres-casdoor": "PostgreSQL database behind Casdoor, the mesh's identity "
+                        "provider.",
+}
 # Short WHY-refused one-liner per tier-3 id (mirrors the builders' _mgd_tier3_blocker) —
 # surfaced verbatim when validate_identity() refuses a tier-3 --managed-service selection.
 MANAGED_SERVICE_TIER3_BLOCKER = {
@@ -681,6 +800,25 @@ _IMAGE_ONLY_PLATFORMS = ("frite", "jetson", "orangepi5", "orangepizero2", "orang
 _X86 = ("x86",)
 _X86_RPI5 = ("x86", "rpi5")
 
+# The builders whose MEDIA is chosen by --flavor (live | installer | both; default
+# "both") instead of by per-artifact ISO flags. Named once here because TWO separate
+# facts hang off exactly this family, and the Review page states both:
+#
+#   * they DO build an installer ISO by default — build-frite-stage4.sh:573 sets
+#     BUILD_INSTALLER=true for --flavor both, :2557 calls build_installer_iso(), :2540
+#     names <prefix>.installer.iso; the six orangepi* builders are byte-parallel. So
+#     "this builder produces no installer ISO" is FALSE for them (it is true only for
+#     jetson, which contains no installer.iso at all), and the greyed --installer-iso
+#     row must point at the Flavor control instead of denying the artifact exists;
+#   * their --compress compresses LIVE_PATH and INSTALLER_PATH and never an .img
+#     (frite:2438 + :2547), the exact INVERSE of x86/rpi5/jetson, whose --compress
+#     compresses IMG_PATH only (x86:6757, rpi5:4654, jetson:2414).
+#
+# Pinned to real emission by tests/test_cli_args.py::test_flavor_media_platforms_are_
+# exactly_the_flavor_emitting_builders, so it cannot drift from to_cli_args().
+FLAVOR_MEDIA_PLATFORMS = ("frite", "orangepi5", "orangepizero2", "orangepizero2w",
+                          "orangepizero3", "orangepi3-lts", "orangepi4-lts")
+
 _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     # brand plane — every builder parses these identically (x86 unaffiliated suppresses).
     "brand": _ALL_PLATFORMS, "brand_title": _ALL_PLATFORMS, "org": _ALL_PLATFORMS,
@@ -690,7 +828,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     # cluster / mesh identity.
     "cluster_domain": _ALL_PLATFORMS, "games_domain": _X86_RPI5, "release_state": _X86_RPI5,
     "person_role": _X86, "domains": _X86,
-    # orchestration superdomain — every builder parses --superdomain (WS-SUPER-B bake);
+    # Tailscale root domain — every builder parses --superdomain (WS-SUPER-B bake);
     # emitted ONLY in mesh mode (see _superdomain_args), so it is EXCLUDED from the
     # generic _FIELD_PROBE diff-probe (mixed cloud/mesh baselines) and pinned by a
     # dedicated mesh-mode test, exactly like `unaffiliated`.
@@ -752,7 +890,7 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "sd_only": ("rpi5",), "image_only": _IMAGE_ONLY_PLATFORMS,
     # sizing / finish.
     "grow": _ALL_PLATFORMS, "img_size": _ALL_PLATFORMS, "compress": _ALL_PLATFORMS,
-    "resume": _ALL_PLATFORMS,
+    "compress_level": _ALL_PLATFORMS, "resume": _ALL_PLATFORMS,
     # kernel / board overrides.
     "cpu": _ARM_PLATFORMS, "defconfig": _ARM_PLATFORMS, "dtb": _DTB_PLATFORMS,
     "dtb_prefix": ("rpi5",), "kernel_img": ("rpi5",), "pcie_gen3": ("rpi5",),
@@ -1496,10 +1634,10 @@ def superadmin_plane_applies(cfg: "ImageConfig") -> bool:
 def effective_domain_note(cfg: "ImageConfig") -> str:
     """Plain-language description of the domains a mesh serves WITHOUT adding any (ask
     19's default card). Names both real values rather than saying "the internal domain":
-    the cluster domain the Network step set, and the orchestration superdomain every node
+    the cluster domain the Network step set, and the Tailscale root domain every node
     joins (derived ``<brand>.internal`` when left blank — ``effective_superdomain``)."""
     return (f"Serve only {cfg.cluster_domain or 'the cluster domain'} and the internal "
-            f"orchestration domain {cfg.effective_superdomain()} that every node joins. "
+            f"Tailscale root domain {cfg.effective_superdomain()} that every node joins. "
             "No domains table, no per-domain services to pick — this is the default and "
             "what almost every mesh wants.")
 
@@ -1737,8 +1875,9 @@ _DEFAULT_LEAK_ROLES = ("", PLATFORM_DEFAULT_ROLE["x86"])
 # The ARM ISO platforms whose builders take a live|installer|both --flavor. An unset
 # flavor resolves to the single-artifact "installer" here (the legacy worker-channel
 # default) rather than to_cli_args's "both", so the worker's one-artifact ingest holds.
-_ISO_FLAVOR_PLATFORMS = ("frite", "orangepi5", "orangepizero2", "orangepizero2w", "orangepizero3",
-                         "orangepi3-lts", "orangepi4-lts")
+# Same family, named ONCE up at FLAVOR_MEDIA_PLATFORMS (which a test pins to real
+# --flavor emission) — aliased rather than re-spelled so the two cannot drift apart.
+_ISO_FLAVOR_PLATFORMS = FLAVOR_MEDIA_PLATFORMS
 
 
 def roles_for_platform(platform: str) -> frozenset:
@@ -2262,7 +2401,13 @@ class Domain:
 class User:
     username: str = ""
     domain: str = ""
-    role: str = "user"                 # superadmin|admin|mod|user (+games roles)
+    # The PRIMARY role — USER_ROLE_CHOICES; "" (the dataclass default) = derive from
+    # ``roles``, and ``user`` when neither says anything. Kept as a scalar because every
+    # pre-#228 consumer of the mesh manifest and the saved config reads ``role``; it is
+    # DERIVED (__post_init__) as the first of ``roles`` in precedence order, so the two
+    # can never disagree at construction. Build Users through the constructor; do not
+    # assign ``.role`` afterwards — ``roles`` is the truth (issue #228).
+    role: str = ""
     email: str = ""
     # First-login registration METHOD (spec 4/6): "" = derive (builder/provisioning
     # default) | discord | gmail | password. Manifest-only — NEVER reaches to_cli_args
@@ -2271,6 +2416,34 @@ class User:
     # secret is ever stored on the User (so it is safe to serialize/save like the other
     # User fields — nothing to blank).
     registration: str = ""
+    # ALL the roles this account holds (issue #228 — "should a person be assignable to
+    # multiple roles"): the union of ``roles`` and ``role`` as constructed, normalized by
+    # normalize_user_roles (deduped, precedence order, ``user`` floor). Serialized by
+    # to_dict() OMIT-WHEN-SINGLE — a one-role account keeps its pre-#228 bytes in the
+    # saved config and both mesh manifests (absent == [role]), exactly like the
+    # per-domain ``idp`` key — and loaded from either spelling (from_dict), so a config
+    # saved before this field existed, or by a Studio that knows only ``role``, round-trips.
+    roles: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        given = [self.roles] if isinstance(self.roles, str) else list(self.roles or [])
+        self.roles = normalize_user_roles([*given, self.role])
+        self.role = self.roles[0]
+
+    @property
+    def tier(self) -> str:
+        """The --person-role tier this account derives (person_tier)."""
+        return person_tier(self.roles)
+
+    def to_dict(self) -> dict[str, Any]:
+        """The wire shape (saved config + both mesh manifests): ``role`` always — the
+        primary, what every pre-#228 consumer reads — and ``roles`` only when the
+        account holds more than one, so a single-role row is byte-identical to before
+        the field existed. from_dict accepts both spellings."""
+        d = asdict(self)
+        if self.roles == [self.role]:
+            del d["roles"]
+        return d
 
 
 @dataclass
@@ -2301,7 +2474,7 @@ class ImageConfig:
     # users themselves, so the Users TABLE step becomes reachable (users_table_applies).
     # MESH ONLY, exactly like additional_domains.
     configure_users: bool = False
-    superdomain: str = ""            # orchestration superdomain all mesh nodes join; "" = derived <brand>.internal. Emitted as --superdomain for MESH builds (WS-SUPER-B: baked to <etc>/superdomain + headscale MagicDNS); permanently internal, never go-live-flipped (I7)
+    superdomain: str = ""            # Tailscale root domain all mesh nodes join; "" = derived <brand>.internal. Emitted as --superdomain for MESH builds (WS-SUPER-B: baked to <etc>/superdomain + headscale MagicDNS); permanently internal, never go-live-flipped (I7)
     games_domain: str = ""             # --games-domain (games.<domain> host + OIDC issuer; x86+rpi5)
     release_state: str = ""            # --release-state internal|public (x86+rpi5; "" = builder default)
     release_tag: str = ""              # --release-tag image stamp (x86)
@@ -2537,7 +2710,11 @@ class ImageConfig:
     # to_dict/asdict pins the number into the saved JSON, and from_dict assigns a
     # present "jobs" key verbatim — an existing config's -j emission is byte-identical.
     jobs: int = field(default_factory=default_jobs)
-    compress: bool = True              # --compress: xz -9 the finished image(s)  (ask 13: DEFAULT ON)
+    compress: bool = True              # --compress: xz the finished artifact(s)   (ask 13: DEFAULT ON)
+    # --compress-level N (issue #233): the xz preset --compress uses, 0-9. The
+    # builders' own pre-flag behaviour was 9, so 9 stays the default and emits
+    # NOTHING — an existing config's argv is unchanged byte for byte.
+    compress_level: int = COMPRESS_LEVEL_DEFAULT
     resume: bool = True                # --resume: reuse an existing sysroot      (ask 13: DEFAULT ON)
     # build plumbing / phases (change baked content or phases, not artifacts)
     skip_kernel: bool = False          # --skip-kernel (all)
@@ -2580,6 +2757,9 @@ class ImageConfig:
         """Serialize; plaintext secrets (SECRET_FIELDS) are BLANKED unless the caller
         explicitly opts in — a saved JSON config must never carry a password."""
         d = asdict(self)
+        # users: the User wire shape (issue #228 — `roles` OMIT-WHEN-SINGLE), not the
+        # raw asdict, so a one-role account keeps its pre-#228 bytes.
+        d["users"] = [u.to_dict() if isinstance(u, User) else u for u in self.users]
         if not include_secrets:
             for k in SECRET_FIELDS:
                 d[k] = ""
@@ -2608,6 +2788,23 @@ class ImageConfig:
         kw["idp"] = v
         return Domain(**kw)
 
+    @staticmethod
+    def _user_from_dict(x: dict[str, Any], usr_f: set[str]) -> "User":
+        """Build a User from a raw dict, filtering unknown nested keys (forward-compat).
+        Both role spellings load (issue #228): a pre-#228 ``role`` alone, a ``roles``
+        list alone, or both (unioned — User.__post_init__ normalizes). ``roles`` that
+        is null or not a list is treated as absent, never a crash; a bare string is
+        taken as one role, so a hand-edited config still loads."""
+        kw = {k: v for k, v in x.items() if k in usr_f}
+        roles = kw.get("roles")
+        if isinstance(roles, str):
+            kw["roles"] = [roles]
+        elif not isinstance(roles, (list, tuple)):
+            kw.pop("roles", None)
+        if not isinstance(kw.get("role", ""), str):
+            kw.pop("role")
+        return User(**kw)
+
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ImageConfig":
         if not isinstance(d, dict):
@@ -2623,7 +2820,7 @@ class ImageConfig:
         # tolerate "domains": null / "users": null and unknown nested keys
         d["domains"] = [cls._domain_from_dict(x) if isinstance(x, dict) else x
                         for x in (d.get("domains") or [])]
-        d["users"] = [User(**{k: v for k, v in x.items() if k in usr_f}) if isinstance(x, dict) else x
+        d["users"] = [cls._user_from_dict(x, usr_f) if isinstance(x, dict) else x
                       for x in (d.get("users") or [])]
         # The mode-aware tri-states: normalize the 'on'/'off' hand-written
         # spellings to bools AT LOAD (fail-closed on junk), so the in-memory value
@@ -2674,7 +2871,7 @@ class ImageConfig:
         return cls.from_dict(data)
 
     def effective_superdomain(self) -> str:
-        """The orchestration superdomain every mesh node joins. An explicit superdomain
+        """The Tailscale root domain every mesh node joins. An explicit superdomain
         wins; "" derives f"{brand}.internal" (permanently internal — never the go-live
         apex, which stays cluster_domain, I7)."""
         return self.superdomain or f"{self.brand}.internal"
@@ -2847,7 +3044,7 @@ class ImageConfig:
         validate_domain_name(self.cluster_domain)
         if self.games_domain:
             validate_domain_name(self.games_domain)
-        # orchestration superdomain: "" = derived <brand>.internal (always valid once
+        # Tailscale root domain: "" = derived <brand>.internal (always valid once
         # brand is validated). Validate an explicit value like any other domain name
         # (core.validate accepts .internal). Feeds the manifest + the KEYS channel.
         if self.superdomain:
@@ -3091,6 +3288,27 @@ class ImageConfig:
         Every builder parses --grow/--no-grow; '' = leave the builder default (G25)."""
         return ["--grow", self.grow] if self.grow else []
 
+    def _compress_level_args(self) -> list[str]:
+        """--compress-level N — the xz preset --compress uses (issue #233).
+
+        Emitted ONLY beside --compress (the level means nothing without it: every
+        builder reads COMPRESS_LEVEL exclusively inside its `if ${COMPRESS_IMG}` arm)
+        and ONLY when it differs from COMPRESS_LEVEL_DEFAULT, which is the level all ten
+        builders hardcoded before the flag existed. So a config that never touched the
+        knob emits exactly the argv it emitted before — the property the exact-argv
+        tests in tests/test_cli_args.py hold this to.
+
+        An out-of-range value is CLAMPED rather than raised: the GUI can only offer
+        0-9 (COMPRESS_LEVEL_CHOICES) and the builders hard-error on anything else, so a
+        --config JSON carrying junk must not be able to hand a builder a flag it will
+        refuse mid-run — it gets the nearest legal preset instead. The clamp lives in
+        clamp_compress_level() because BuildPage restores the combo through the SAME
+        reading; a second, different rule there would let the page and the argv
+        disagree about one file (non-numeric junk resolves to the default, i.e. to
+        emitting nothing at all)."""
+        lvl = clamp_compress_level(self.compress_level)
+        return [] if lvl == COMPRESS_LEVEL_DEFAULT else ["--compress-level", str(lvl)]
+
     def _services_args(self) -> list[str]:
         """--optional-services allow-list (with the explicit-none / --all-services
         sentinels, G13/G14) + the subtractive --exclude-services list. Shared by x86 +
@@ -3234,7 +3452,7 @@ class ImageConfig:
         a += self._identity_args()
         if self.cluster_domain != "hugmesh.net":
             a += ["--cluster-domain", self.cluster_domain]
-        # Orchestration superdomain — mesh-only, grouped with the cluster/mesh identity
+        # Tailscale root domain — mesh-only, grouped with the cluster/mesh identity
         # plane (see _superdomain_args). Empty for cloud/standalone, so every existing
         # ARM cloud/standalone golden stays byte-identical.
         a += self._superdomain_args()
@@ -3272,6 +3490,7 @@ class ImageConfig:
         a += self._plumbing_args()
         if self.compress:
             a += ["--compress"]
+            a += self._compress_level_args()
         if self.resume:
             a += ["--resume"]
         return a
@@ -3665,7 +3884,7 @@ class ImageConfig:
         if self.mode in ("cloud", "mesh"):
             if self.cluster_domain != "hugmesh.net":
                 a += ["--cluster-domain", self.cluster_domain]
-            # Orchestration superdomain — mesh-only (see _superdomain_args), emitted for
+            # Tailscale root domain — mesh-only (see _superdomain_args), emitted for
             # every mesh role (nodes AND clients), so it sits OUTSIDE the node-role gate
             # below. No-op for cloud, keeping every cloud golden byte-identical.
             a += self._superdomain_args()
@@ -3682,7 +3901,10 @@ class ImageConfig:
                 elif self.mode == "mesh":
                     person = "superadmin"
                 else:
-                    person = self.users[0].role if self.users else "user"
+                    # the first row's TIER (issue #228): a multi-role account maps to the
+                    # highest of the four tiers it holds; a grants-only account (games)
+                    # is a plain user here — the builder accepts exactly the four tiers.
+                    person = self.users[0].tier if self.users else "user"
                 a += ["--person-role", person]
 
         # node FALLBACK credentials (a GUI-built mesh fleet otherwise ships defaults).
@@ -3907,6 +4129,7 @@ class ImageConfig:
         a += self._packages_delta_args()
         if self.compress:
             a += ["--compress"]
+            a += self._compress_level_args()
         if self.resume:
             a += ["--resume"]
 
@@ -3926,7 +4149,7 @@ class ImageConfig:
     # ---- superadmin mesh manifest -----------------------------------------
     def mesh_manifest(self) -> dict[str, Any]:
         """The domains + users a superadmin defined, as a portable manifest, now carrying
-        the effective orchestration superdomain (§2.6). This is the v1+superdomain shim for
+        the effective Tailscale root domain (§2.6). This is the v1+superdomain shim for
         the SINGLE-image path; the full manifest v2 envelope ({"format":2,...,"images":[…]})
         is written once-per-worklist by the driver (WS-ENGINE). Consumed by cluster
         provisioning (Casdoor seed + per-domain config) — separate from the image
@@ -3944,7 +4167,10 @@ class ImageConfig:
             "domains": [{k: v for k, v in asdict(d).items()
                          if not (k == "idp" and v == DOMAIN_IDP_SUPERDOMAIN)}
                         for d in self.domains],
-            "users": [asdict(u) for u in self.users],
+            # per-user ``roles`` (issue #228) is OMIT-WHEN-SINGLE the same way (User.to_dict):
+            # ``role`` stays the primary every consumer reads; a multi-role account adds
+            # the full list beside it. test_user_multi_role.py pins both shapes.
+            "users": [u.to_dict() for u in self.users],
         }
 
     def write_mesh_manifest(self, output_dir: str) -> str:

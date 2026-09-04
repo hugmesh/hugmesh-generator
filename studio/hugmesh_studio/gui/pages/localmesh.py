@@ -70,7 +70,7 @@ from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from .. import console
 from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
-from ...core import vaults
+from ...core import saved_meshes, vaults
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
 from ...core.e2e_catalogue import Catalogue, load_catalogue
 from ...core.egress_conf import validate_egress_conf
@@ -79,16 +79,21 @@ from ...core.local_mesh_bootstrap import (
     LocalMeshBootstrap, LocalMeshBootstrapConfig, _parse_web_locales,
     discover_brands)
 from ...core.local_mesh_stages import verb_phases
+from ...core.local_stack_node import LocalStackNode
+from ...core import mesh_monitor
 from ...core.local_services import (
     KIND_ADDONS, UNAVAILABLE_LOCALLY, by_slug as local_service, default_selection,
     describe as local_describe, kind_addon_slugs, local_groups, local_slugs)
 from ...core.progress_parse import ProgressParser
-from ...core.seeded_credentials import load_roster
+from ...core import credentials_truth
+from ...core.seeded_credentials import Roster, annotate, load_roster
 from ...core.instance import state_dir
 from ...core.stage_tracker import StageTracker
 from ...core import e2e_environments
 from ._credentials_dialog import CredentialsDialog
+from ._mesh_monitor_widget import MeshMonitorWidget
 from ._add_user_dialog import AddUserDialog
+from ._saved_meshes_widget import SavedMeshProbe, SavedMeshesWidget
 from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
 from ._widgets import _row, collapsible, label_finish_as_exit, own_probe, probe_running
@@ -126,6 +131,27 @@ def _grey_note(text: str) -> "QtWidgets.QLabel":
     lbl.setWordWrap(True)
     lbl.setStyleSheet("color: gray;")
     return lbl
+
+
+#: What LoginThemeGroup.load() reads when a saved-mesh record carries no theme
+#: inputs: the shipped brand. Keys are ImageConfig's login_* names (the group's
+#: own load/commit contract) — ALL seventeen that commit() writes, because
+#: apply_bootstrap filters the record's form against this dict. Listing only
+#: the eight colour/font keys silently threw away the nine web-chrome inputs on
+#: every Load/Restore (header hidden, header/footer colours, background effect),
+#: derived a different login page, and then reported "every field applied".
+#: Chrome falls back inside load() itself, so "" / False are the shipped page.
+_THEME_FORM_DEFAULTS = {
+    "login_theme_preset": "", "login_theme_mode": "dark",
+    "login_primary_color": "", "login_secondary_color": "",
+    "login_font": "", "login_font_file": "",
+    "login_font_licence": "", "login_font_source": "",
+    "login_header_hidden": False, "login_header_size": "",
+    "login_header_bg": "", "login_header_text": "",
+    "login_footer_hidden": False, "login_footer_size": "",
+    "login_footer_bg": "", "login_footer_text": "",
+    "login_bg_effect": "",
+}
 
 
 _IDP_JWKS_HINTS = {
@@ -221,6 +247,71 @@ class _E2ECatalogueProbe(QtCore.QThread):
             cat.problems.append(
                 f"the e2e catalogue could not be built: {type(e).__name__}: {e}")
             self.result.emit(cat)
+
+
+class _CredsProbe(QtCore.QThread):
+    """Gather the sign-in credentials AND whether they are true of the running
+    mesh, off the GUI thread.
+
+    Pressing "Sign-in credentials" used to do three blocking things INLINE before
+    its modal opened: parse three seeder scripts, build the stack env — which
+    WRITES the theme/limits overlay files — and nothing at all about the mesh, so
+    the dialog presented whatever was on disk as the way in. Now the click starts
+    this probe and the dialog is constructed in its result slot, from facts:
+    core/credentials_truth.probe_credentials is docker + Casdoor + stat, blocking
+    by contract (up to ~30s on a wedged daemon), so it runs here.
+
+    Emits ``(Roster, CredentialTruth | None)``. Never raises: a failure lands in
+    ``Roster.error`` so the dialog's existing unreadable-roster branch renders it,
+    and an exception escaping run() would leave the button stuck at "checking…"."""
+    result = Signal(object)                     # (Roster, CredentialTruth | None)
+
+    def __init__(self, boot, generator_dir: str, added=(), parent=None):
+        super().__init__(parent)
+        self._boot = boot
+        self._dir = generator_dir
+        self._added = tuple(added)
+
+    def run(self):
+        try:
+            node = self._boot._stack_node()
+            env = node._build_env()
+            roster = load_roster(self._dir, env=env)
+            truth = credentials_truth.probe_credentials(
+                self._dir, env, node, self._boot, operator_user=roster.operator)
+            roster = annotate(roster, truth, added=self._added)
+        except Exception as e:                  # never kill the page over a probe
+            roster = Roster(error=f"the credentials probe failed: "
+                                  f"{type(e).__name__}: {e}")
+            truth = None
+        self.result.emit((roster, truth))
+class _MonitorProbe(QtCore.QThread):
+    """Read BOTH lanes of the running mesh off the GUI thread, for the monitor table.
+
+    core.mesh_monitor.snapshot() is `kind get clusters` + ONE `kubectl get … -A -o json`
+    round trip + `docker inspect` + `docker compose ps` — each bounded, together up to
+    ~25 s on a wedged daemon — so it gets the _StatusProbe treatment: never inline, held
+    with own_probe, guarded with probe_running.
+
+    Emits the MonitorSnapshot. Never raises: snapshot() already folds every failure into
+    LaneState.error / errors, and an exception escaping run() would leave the table
+    frozen on a stale snapshot with no way to say so."""
+    result = Signal(object)                     # mesh_monitor.MonitorSnapshot
+
+    def __init__(self, generator_dir: str, node, parent=None):
+        super().__init__(parent)
+        self._dir = generator_dir
+        self._node = node
+
+    def run(self):
+        try:
+            self.result.emit(mesh_monitor.snapshot(self._dir, self._node))
+        except Exception as e:                  # never kill the page over a probe
+            self.result.emit(mesh_monitor.MonitorSnapshot(
+                taken_at=time.strftime("%H:%M:%S"),
+                compose=mesh_monitor.LaneState(None, error=str(e)),
+                kind=mesh_monitor.LaneState(None, error=str(e)),
+                errors=(f"the monitor read failed: {type(e).__name__}: {e}",)))
 
 
 class _MeshWorker(QtCore.QThread):
@@ -342,6 +433,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._added_user_specs: list[str] = []
         self._running = False
         self._running_label = ""
+        # apply_bootstrap() in flight: _refresh_plan returns early so the plan
+        # preview re-renders ONCE at the end, not once per setter (ask C).
+        self._applying_bootstrap = False
         # The e2e gate's last ANSWER, kept so an open feature tree can be gated by
         # the same sentences the button's tooltip carries. Starts non-empty on
         # purpose: before any probe reports, "nothing established" must read as a
@@ -483,9 +577,43 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # as `docker compose ps` takes).
         self._mesh_up: bool | None = None
 
+        # What the last credentials probe established about the running mesh
+        # (core/credentials_truth.CredentialTruth), None until the button is
+        # pressed. Users this session's Add user seeded — (name, roles), never the
+        # password — so the dialog can list them as "added this session".
+        self._cred_truth = None
+        self._added_users_ok: list[tuple[str, tuple[str, ...]]] = []
+        # ── the running-mesh monitor's state (the table itself lives on the bootstrap
+        # tab; see _build_bootstrap_tab). None until the first snapshot answers — the
+        # same tri-state rule as _mesh_up, and for the same reason.
+        self._monitor: mesh_monitor.MonitorSnapshot | None = None
+        # Set at every verb's end, cleared when a read STARTS after it: the state
+        # probe's answer (and a read that was already in flight) re-reads the
+        # monitor, so a just-finished bring-up populates the table with no click.
+        self._monitor_stale = False
+        # THIRD timer on this page, justified: _tick is the 1 Hz run clock, _drain the
+        # 50 ms log coalescer — different jobs, different cadences — and this one is
+        # the only one stopped when its section is folded. NOT started here: it runs
+        # only while the section is expanded, the page visible, and no verb running.
+        self._monitor_timer = QtCore.QTimer(self)
+        self._monitor_timer.setInterval(10_000)
+        self._monitor_timer.timeout.connect(self._on_monitor_tick)
+        # completeChanged fires at every verb start AND end (_launch / _verb_done), so
+        # it is the hook that lets the monitor's note say "paused" the moment a verb
+        # begins without this lane touching _launch.
+        self.completeChanged.connect(self._sync_monitor_gate)
+
         # Run the gate ONCE now that every widget it touches exists, so
         # 'Generate & start' is armed (and carries its tooltip) from first paint.
         self._sync_boot_gate()
+        # Saved meshes (ask C): the last `_mesh_up` the table was re-probed for —
+        # a verb that changes what is on disk (stop, clean, start) flips it, and
+        # that flip is what re-checks every row's "Restores as" off-thread.
+        self._saved_last_up: bool | None = None
+        self._sync_saved_gate()
+        # …and the monitor's, so it is greyed with "checking…" (never empty-but-
+        # enabled) from first paint. No probe: that rides _on_mesh_state.
+        self._sync_monitor_gate()
 
     # ── wizard-flow contract ─────────────────────────────────────────────────────
 
@@ -517,6 +645,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # invited a second bring-up over a live stack (operator report
         # 2026-08-14). Probe the real compose project instead of assuming.
         self._probe_mesh_state()
+        # Saved meshes: a directory listing + JSON parses (no subprocess); the
+        # per-row docker/git facts ride the off-thread _saved_probe it kicks off.
+        self.saved_meshes.refresh()
+        # The monitor adds NO probe here: its first snapshot rides _on_mesh_state's
+        # slot, which keeps "entering the page returns immediately" provable.
+        self._sync_monitor_gate()
 
     # ── JOIN tab (handlers now threaded; widget names unchanged) ─────────────────
     def _build_join_tab(self) -> QtWidgets.QWidget:
@@ -910,6 +1044,23 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "when you enter this page and after every verb finishes.")
         lay.addWidget(self._mesh_state_label)
 
+        # ── SAVED MESHES (ask C) — ABOVE the Actions row on purpose: the operator
+        # asked for the table to be in front of them when they try to generate a
+        # new mesh, so it sits between "what is running" and "Generate && start".
+        # Collapsed when empty (with a VISIBLE grey line, never a hidden widget),
+        # auto-expanded when records exist; a manual fold wins for the session
+        # (Collapsible.set_default_expanded). Every docker/git call the rows need
+        # runs on _saved_probe, off-thread — the widget itself only renders.
+        self.saved_meshes = SavedMeshesWidget(self)
+        self.saved_meshes.generator_dir = self.generator_dir
+        self.saved_section = collapsible("Saved meshes", self.saved_meshes,
+                                         expanded=False)
+        self.saved_meshes.section = self.saved_section
+        self.saved_meshes.start_requested.connect(self._start_saved)
+        self.saved_meshes.load_requested.connect(self._load_saved)
+        self.saved_meshes.probe_needed.connect(self._probe_saved)
+        lay.addWidget(self.saved_section)
+
         # A WRAPPING block, not a row. These fourteen actions in a QHBoxLayout
         # made the page's minimum width the SUM of all fourteen buttons — wider
         # than a laptop screen, so everything past "Generate && start" drifted
@@ -922,9 +1073,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.boot_start_btn.clicked.connect(self._bootstrap_up)
         self.boot_down_btn.clicked.connect(self._bootstrap_down)
         self.boot_down_btn.setToolTip(
-            "`make stack-down` + stop the mesh overlay: every container goes away "
-            "and the stack's data volumes are dropped. The IMAGES stay, so the next "
-            "start is a warm (fast) bring-up.")
+            "`make stack-halt` + stop the mesh overlay: every container stops and "
+            "the stack's data volumes are KEPT (identity, rooms, accounts, the BFF "
+            "databases), so 'Start' on a saved mesh — or the next 'Generate && "
+            "start' — reattaches them. The IMAGES stay too, so the next start is a "
+            "warm (fast) bring-up. 'Stop && clean Docker…' is the one that drops "
+            "volumes.")
         brow.addWidget(self.boot_start_btn)
         brow.addWidget(self.boot_down_btn)
         # Disk reclamation, separated from Stop on purpose: stopping is routine,
@@ -966,13 +1120,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.cancel_btn.setVisible(False)
         brow.addWidget(self.cancel_btn)
         self.open_web_btn = QtWidgets.QPushButton("Open web UI")
+        # The tooltip is DERIVED from the node's own front-door addresses — a
+        # default node here (the form is only half-built at this point), the LIVE
+        # node again in _on_mesh_state. A hardcoded copy used to name
+        # http://localhost:8088 as the door while the button opened
+        # https://localhost:8488.
         self.open_web_btn.setToolTip(
-            "Open the running stack's front door (http://localhost:8088) in your "
-            "browser. The same platform is also served over TLS at "
-            "https://localhost:8488 (self-minted per-machine CA — import "
-            "tests/stack/.tls-front/ca.crt or accept the browser warning). "
-            "Does nothing destructive; if the stack is down the browser "
-            "just shows a connection error.")
+            self._open_web_tooltip(LocalStackNode(self.generator_dir)))
         self.open_web_btn.clicked.connect(self._open_web_ui)
         brow.addWidget(self.open_web_btn)
         self.copy_onion_btn = QtWidgets.QPushButton("Copy .onion address")
@@ -984,11 +1138,14 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         brow.addWidget(self.copy_onion_btn)
         self.creds_btn = QtWidgets.QPushButton("Sign-in credentials")
         self.creds_btn.setToolTip(
-            "Show the accounts `make stack-seed` provisions (username, password, "
-            "roles) with one-click copy — the answer to \"the login page is up, "
-            "who do I log in AS?\". Read from the seeder itself, so it matches "
-            "what was actually seeded. Deterministic throwaway TEST credentials "
-            "for this local stack only.")
+            "Show the accounts this mesh ACTUALLY has — usernames, the password "
+            "THIS RUN generated, roles, and which apps each opens — with one-click "
+            "copy: the answer to \"the login page is up, who do I log in AS?\". "
+            "Read from run-state (the running Casdoor, the run-state credentials "
+            "file, the minted secrets bundle), not from an example. When nothing "
+            "has been seeded, or the stored password predates the last completed "
+            "seed, it says so instead of showing a value as fact. Checks off-thread "
+            "first (a few seconds), then opens.")
         self.creds_btn.clicked.connect(self._show_credentials)
         brow.addWidget(self.creds_btn)
         # Runs tests/e2e against the RUNNING stack. Enablement + tooltip are
@@ -1090,6 +1247,26 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "you how to start it rather than showing an empty list.")
         self.vaults_btn.clicked.connect(self._open_vaults)
         brow.addWidget(self.vaults_btn)
+        # ── save the RUNNING mesh (ask C) ─────────────────────────────────────
+        # Gated by _sync_saved_gate (this page's own `_mesh_up`, never a monitor
+        # snapshot): a record of a mesh that is not running would describe
+        # nothing. The copy-credentials box is OFF by default — the operator's
+        # own wording was "credential pointers" — and the consequence of leaving
+        # it off is stated in the table's "Restores as" column, not hidden.
+        self.save_mesh_btn = QtWidgets.QPushButton("Save this mesh")
+        self.save_mesh_btn.clicked.connect(self._save_mesh)
+        brow.addWidget(self.save_mesh_btn)
+        self.save_copy_creds = QtWidgets.QCheckBox(
+            "Also copy its credential files into the record")
+        self.save_copy_creds.setChecked(False)
+        self.save_copy_creds.setToolTip(
+            "OFF (default): the record keeps only POINTERS to .e2e-credentials and "
+            "keys-out/vault/secrets.json (paths, hashes, mtimes) — no password ever "
+            "enters the record. ON: both files are ALSO copied into the record's "
+            "own folder under the Studio state dir at 0600, which is what brings "
+            "the SAME accounts and passwords back after 'Stop && clean Docker' "
+            "(the next 'Generate && start' re-mints them otherwise).")
+        brow.addWidget(self.save_copy_creds)
         # ── the DEVOPS lane (Kubernetes) ────────────────────────────────────
         # ArgoCD + the workload console are k8s CONTROLLERS — no compose profile
         # can host them (core/local_services.MECH_KIND). These two buttons drive
@@ -1156,6 +1333,25 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # No trailing addStretch: a FlowLayout has no stretch concept, and a
         # spacer item would be wrapped as if it were another button.
         lay.addWidget(brow_box)
+
+        # ── RUNNING-MESH MONITOR (operator ask, 2026-09-01): every pod and container
+        # of BOTH lanes, its addresses, and an Open button only where the browser may
+        # safely go. Collapsed by default and it STAYS that way — set_default_expanded
+        # is deliberately not applied on "a mesh is running": the operator asked for
+        # collapsed-by-default, and re-deriving the fold on every visit would fight
+        # that. The section TITLE carries the answer while folded. Greyed (disabled,
+        # empty) when neither lane runs; enabled and populated when either does —
+        # `Collapsible` toggles setVisible only, so fold and grey compose.
+        self.monitor = MeshMonitorWidget(self)
+        self._monitor_title = "Running mesh — pods, addresses and doors"
+        self.monitor_section = collapsible(self._monitor_title, self.monitor,
+                                           expanded=False)
+        self.monitor_section.toggle.toggled.connect(self._on_monitor_toggled)
+        self.monitor.refresh_requested.connect(lambda: self._refresh_monitor("button"))
+        self.monitor.open_requested.connect(self._open_door)
+        self.monitor.view_up_requested.connect(self._view_up)
+        self.monitor.view_down_requested.connect(self._view_down)
+        lay.addWidget(self.monitor_section)
 
         # Live-refresh the plan preview from every control that feeds it.
         self.env_test.toggled.connect(self._refresh_plan)
@@ -1256,7 +1452,22 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     def hideEvent(self, event) -> None:                       # noqa: N802 (Qt)
         self._enforce_egress_conf()
+        # A hidden page owns no poll. showEvent below is the other half of the pair:
+        # the FOLD STATE survives the visit, so a section the operator left open
+        # must get its 10 s refresh back or it freezes on the page-entry read while
+        # its own tooltip still promises "refreshed every 10 s".
+        self._monitor_timer.stop()
         super().hideEvent(event)
+
+    def showEvent(self, event) -> None:                       # noqa: N802 (Qt)
+        super().showEvent(event)
+        # The twin of hideEvent's stop (mesh_emulation.py:500-513 is the in-repo
+        # precedent). Nothing else restarts the timer — _on_monitor_toggled only
+        # fires on an actual fold change — so without this a revisited page shows a
+        # visible, expanded, permanently frozen table.
+        if getattr(self, "monitor_section", None) is not None \
+                and self.monitor_section.is_expanded():
+            self._monitor_timer.start()
 
     def collect_services(self) -> tuple[str, ...]:
         """The ticked services, in the core catalogue's order (never widget order —
@@ -1317,6 +1528,101 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             # uses, and for the same reason.
             kind_addons=self.collect_kind_addons(),
         )
+
+    def theme_form(self) -> dict:
+        """The Themes group's INPUTS (colours, preset, mode, font, chrome) — what a
+        saved-mesh record needs to re-populate widgets whose config field is
+        DERIVED: ``login_theme_css`` is their output and is not invertible."""
+        ns = types.SimpleNamespace()
+        self.login_theme.commit(ns)
+        return dict(vars(ns))
+
+    def apply_bootstrap(self, cfg: LocalMeshBootstrapConfig,
+                        form: dict | None = None) -> list[str]:
+        """The exact inverse of :meth:`collect_bootstrap`: put ``cfg`` into the
+        BOOTSTRAP tab's widgets. Returns the field NAMES it could not apply, for
+        the caller to render inline (never a modal): ``auth_key`` always (never
+        stored — the widget is left exactly as typed), ``services``/``kind_addons``
+        when the record says None (no picker was used — the boxes keep their state,
+        because None is not ()), a ``source_dir`` that no longer exists, an egress
+        conf that moved, a theme with no form inputs, and the fields this page has
+        no control for. Touches the bootstrap tab only, and refreshes the plan
+        preview ONCE at the end — ``_refresh_plan`` returns early while
+        ``_applying_bootstrap`` is set, so ~40 setters do not re-render it."""
+        missing: list[str] = []
+        self._applying_bootstrap = True
+        try:
+            (self.env_prod if cfg.env == "prod" else self.env_test).setChecked(True)
+            self.brand.setCurrentText(cfg.brand)
+            if cfg.source_mode == "existing":
+                self.src_existing.setChecked(True)
+            else:
+                self.src_clone.setChecked(True)
+            self.src_dir.setText(cfg.source_dir)
+            if (cfg.source_mode == "existing" and cfg.source_dir
+                    and not os.path.isdir(cfg.source_dir)):
+                missing.append("source_dir")
+            self.superadmin.setText(cfg.superadmin_username or "superadmin")
+            # The two legacy booleans first (a CLI-made record with no picker),
+            # then the explicit selection — which is authoritative — wins.
+            self.social.setChecked(bool(cfg.social))
+            self.with_tor.setChecked(bool(cfg.with_tor))
+            if cfg.services is None:
+                missing.append("services")
+            else:
+                chosen = set(cfg.services)
+                for slug, box in self.service_boxes.items():
+                    box.setChecked(slug in chosen)
+            # The egress-vpn row only means anything with a valid conf behind
+            # it (the fail-closed rule): re-validate the recorded PATH now.
+            self._egress_vpn_conf = ""
+            self.egress_note.setVisible(False)
+            box = self.service_boxes.get("egress-vpn")
+            if box is not None and box.isChecked():
+                kind, err = validate_egress_conf(cfg.egress_vpn_conf)
+                if err:
+                    box.setChecked(False)
+                    missing.append("egress_vpn_conf")
+                    self.egress_note.setStyleSheet("color: #c62828;")
+                    self.egress_note.setText(f"Egress VPN stays off — {err}")
+                else:
+                    self._egress_vpn_conf = cfg.egress_vpn_conf
+                    self.egress_note.setStyleSheet("color: gray;")
+                    self.egress_note.setText(
+                        f"Egress VPN config: "
+                        f"{os.path.basename(cfg.egress_vpn_conf)} ({kind}).")
+                self.egress_note.setVisible(True)
+            self.web_locales.setText(", ".join(cfg.web_locales))
+            # THEME: the record's `form` carries the group's inputs; without them a
+            # non-empty derived css cannot be reproduced, so the group is reset to
+            # the shipped brand and the field is reported rather than half-applied.
+            theme_ns = dict(_THEME_FORM_DEFAULTS)
+            if form:
+                theme_ns.update({k: v for k, v in form.items() if k in theme_ns})
+            elif cfg.login_theme_css.strip():
+                missing.append("login_theme_css")
+            self.login_theme.load(types.SimpleNamespace(**theme_ns))
+            idx = self.idp.findData(cfg.idp if cfg.idp in IDP_CHOICES else "casdoor")
+            self.idp.setCurrentIndex(max(0, idx))
+            self.idp_issuer.setText(cfg.idp_issuer)
+            self.idp_client_id.setText(cfg.idp_client_id)
+            self.idp_jwks.setText(cfg.idp_jwks)
+            self.boot_domain.setText(cfg.cluster_domain)
+            self.boot_login_server.setText(cfg.login_server)
+            missing.append("auth_key")          # never stored; left as typed
+            if cfg.kind_addons is None:
+                missing.append("kind_addons")
+            else:
+                chosen = set(cfg.kind_addons)
+                for slug, box in self.kind_addon_boxes.items():
+                    box.setChecked(slug in chosen)
+            for name in ("out_dir", "node_name", "own_idp_domains"):
+                if getattr(cfg, name):
+                    missing.append(name)
+        finally:
+            self._applying_bootstrap = False
+        self._refresh_plan()
+        return missing
 
     def collect_kind_addons(self) -> tuple[str, ...]:
         """The ticked DevOps-lane add-ons, in catalogue order (never widget order).
@@ -1475,6 +1781,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # clean), so re-read the real state rather than inferring it from the
         # verb's exit code — a partially-failed bring-up leaves containers behind
         # and "failed" would otherwise be recorded as "nothing is running".
+        # …and mark the monitor STALE so that probe's answer re-reads it too,
+        # collapsed or not (the section title must say what a just-finished
+        # bring-up left running). This is what "populates right after generation
+        # completes" without inventing a generation-completed signal: there is
+        # none, and _probe_mesh_state is already the page's ONE "state changed,
+        # re-read" entry point — the seam tests silence (`_probe_mesh_state =
+        # lambda: None`) to keep a page quiet while they drive verbs. A second
+        # background read started directly here ran behind that seam's back:
+        # measured as three REAL `kubectl get` reads and a Qt abort at teardown
+        # in two suites that never asked for a monitor.
+        self._monitor_stale = True
         self._probe_mesh_state()
         self.completeChanged.emit()
 
@@ -1703,6 +2020,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # through the one gate rather than the blanket loop above.
         self._sync_boot_gate()
         self._sync_e2e_gate()
+        self._sync_saved_gate()
 
     # ── JOIN handlers ────────────────────────────────────────────────────────────
     def _refresh_status(self):
@@ -1754,6 +2072,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     # ── BOOTSTRAP handlers ───────────────────────────────────────────────────────
     def _refresh_plan(self):
+        if getattr(self, "_applying_bootstrap", False):
+            return                      # apply_bootstrap refreshes once at its end
         prod = self.env_prod.isChecked()
         self.prod_group.setVisible(prod)
         self.src_dir.setEnabled(self.src_existing.isChecked())
@@ -1815,6 +2135,28 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # Re-run the gates now that the answer is known.
         if not self._running:
             self._set_verbs_enabled(True)
+        # The front-door tooltip names the LIVE node's addresses, never a copy.
+        try:
+            self.open_web_btn.setToolTip(self._open_web_tooltip(self.boot._stack_node()))
+        except Exception:                       # a stub node in a test has no ports
+            pass
+        # The monitor's snapshot rides this slot rather than initializePage: ONE read
+        # when nothing has been read yet this visit (the kind lane can be up while
+        # compose is down, and only a snapshot can say so), when the section is
+        # open, when compose just flipped up while folded (so the title can say
+        # what is up), or when a verb just ended (_monitor_stale). Re-entrant-safe —
+        # a probe already out is left alone, and the stale flag then survives until
+        # that probe finishes (see _on_monitor_finished).
+        # `running` here is the COMPOSE-only answer, so it cannot speak for a kind
+        # cluster coming up behind a folded section — re-read whenever the title
+        # currently claims nothing runs, or it keeps asserting that after the mesh
+        # is up (the two-lane case this feature was written for).
+        if (self._monitor_stale or self._monitor is None
+                or self.monitor_section.is_expanded() or running
+                or not bool(getattr(self._monitor, "any_running", False))):
+            if self._refresh_monitor("mesh state"):
+                self._monitor_stale = False
+        self._sync_monitor_gate()
 
     def _sync_boot_gate(self):
         """Arm 'Generate && start' whenever no verb is already running.
@@ -1836,8 +2178,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.boot_start_btn.setToolTip(
             "Mint credentials and bring up the whole local mesh on THIS machine. On "
             "a cold box this also builds the maven prerequisites first, "
-            "automatically. Undone from this page: 'Stop mesh' drops the containers "
-            "and volumes (in prod it also detaches the overlay)."
+            "automatically. Undone from this page: 'Stop mesh' stops the containers "
+            "and KEEPS the volumes (in prod it also detaches the overlay); 'Stop && "
+            "clean Docker…' drops them."
             if idle else
             "Disabled while a verb is running — wait for it to finish, or Cancel.")
 
@@ -2034,6 +2377,193 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                                                               cancel=cancel),
                      stream=True, cancellable=True, verb="devops-down")
 
+    # ── saved meshes (ask C): save / probe / start / load ─────────────────────
+    def _sync_saved_gate(self):
+        """The ONE writer for 'Save this mesh' and the saved-meshes table's gate,
+        driven by this page's own tri-state ``_mesh_up`` — deliberately NOT by any
+        monitor snapshot (that would couple two lanes for one boolean). Called
+        from the tail of _set_verbs_enabled, which owns the greyed-with-a-reason
+        idiom, and once at construction."""
+        up = self._mesh_up
+        idle = not self._running
+        on = idle and up is True
+        self.save_mesh_btn.setEnabled(on)
+        self.save_copy_creds.setEnabled(on)
+        if not idle:
+            tip = "Disabled while a verb is running — wait for it to finish, or Cancel."
+        elif up is None:
+            tip = "Checking whether a local mesh is running…"
+        elif up is False:
+            tip = ("Disabled — no local mesh is running; there is nothing to save. "
+                   "(Checked on entry; re-checked after every verb.)")
+        else:
+            tip = ("Record the RUNNING mesh so it can be started or restored from "
+                   "the 'Saved meshes' table instead of generated from scratch: its "
+                   "configuration, the env it exports, the overlay text, the "
+                   "per-repo source HEADs, the doors, the accounts' names and roles, "
+                   "credential POINTERS (paths, hashes — never a password) and an "
+                   "INVENTORY of its data volumes. The volumes' contents are NOT "
+                   "saved: multi-GB, a consistent copy needs the stack halted, "
+                   "'Stop mesh' keeps them anyway, and casdoor-pg is an identity "
+                   "database. Runs off-thread; the mesh is not touched.")
+        self.save_mesh_btn.setToolTip(tip)
+        self.saved_meshes.set_context(mesh_up=up, busy=not idle)
+        if idle and up is not None and up != self._saved_last_up:
+            # a verb changed what is on disk — re-check every row's plan
+            self._saved_last_up = up
+            self._probe_saved(self.saved_meshes.records())
+
+    def _probe_saved(self, records):
+        """Kick off the off-thread per-record probe (docker volumes/images/ps + a
+        git rev-parse per source repo). Re-entrant-safe: an in-flight probe is
+        left alone rather than stacking threads."""
+        recs = list(records or [])
+        if not recs or probe_running(self, "_saved_probe"):
+            return
+        probe = own_probe(self, "_saved_probe", SavedMeshProbe(recs, parent=self))
+        probe.result.connect(self._on_saved_probe)
+        # AFTER own_probe's own `finished` handlers (which clear the attribute),
+        # so the in-flight guard above is already False when this runs.
+        probe.finished.connect(self._saved_probe_finished)
+        probe.start()
+
+    def _on_saved_probe(self, results):
+        self.saved_meshes.apply_probe(results or {})
+
+    def _saved_probe_finished(self):
+        """A record saved (or scanned) WHILE a probe was out was skipped by the
+        in-flight guard and would sit on "Checking…" until the next `_mesh_up`
+        flip; ask again for exactly those."""
+        pending = self.saved_meshes.unprobed()
+        if pending:
+            self._probe_saved(pending)
+
+    def _save_mesh(self):
+        """Record the running mesh — through _launch, so it inherits the busy
+        guard, the staged view, the run log and the buttons' re-arm. The capture
+        is docker + git + two sha256s and runs on the worker; nothing here touches
+        the mesh. No credential VALUE reaches a log line: the worker prints the
+        record id and path, and whether files were copied or only pointed at."""
+        if self._mesh_up is not True:
+            self.status.setText("Nothing to save: no local mesh is running "
+                                "(checked on entry and after every verb).")
+            return
+        boot = self.boot
+        node = boot._stack_node()
+        gen = self.generator_dir
+        copy = self.save_copy_creds.isChecked()
+        users = list(self._added_user_specs)
+        form = self.theme_form()
+
+        def capture(on_line, cancel):
+            rec = saved_meshes.capture(gen, boot.cfg, node, boot,
+                                       copy_credentials=copy, extra_users=users,
+                                       form=form)
+            path = saved_meshes.save(rec)
+            if not path:
+                on_line("[mesh-save] FAILED: the record could not be written under "
+                        f"{saved_meshes.meshes_dir()} (is the Studio state dir "
+                        "writable?). The mesh is untouched.")
+                return False, []
+            on_line(f"[mesh-save] saved '{rec.label}' as {rec.id} -> {path}")
+            on_line(f"[mesh-save] {rec.volume_count()} data volume(s) inventoried, "
+                    "not copied; credential files "
+                    + ("copied into the record's folder at 0600" if copy else
+                       "recorded as pointers only (paths, hashes, mtimes)"))
+            return True, []
+
+        before = self.worker
+        self._note("[mesh-save] recording the running mesh …")
+        self._launch("Saving mesh", capture, stream=True, cancellable=False, verb="")
+        if self.worker is not None and self.worker is not before:
+            # after _verb_done (connected first): the table re-scans the disk
+            self.worker.done.connect(self._on_saved_captured)
+
+    def _on_saved_captured(self, _ok: bool):
+        self.saved_meshes.refresh()
+
+    _NOT_APPLIED_WHY = {
+        "auth_key": "auth key (never stored — re-enter it for a prod mesh)",
+        "services": "services (saved without a picker selection — the boxes keep "
+                    "their current state)",
+        "kind_addons": "DevOps add-ons (saved without a selection — the boxes keep "
+                       "their current state)",
+        "source_dir": "source tree (the recorded directory no longer exists)",
+        "egress_vpn_conf": "egress VPN config (the file moved or is invalid — the "
+                           "egress-vpn row was unticked)",
+        "login_theme_css": "theme (the record carries only the derived CSS — the "
+                           "Themes group was reset to the shipped brand)",
+        "out_dir": "out_dir (this page has no control for it)",
+        "node_name": "node_name (this page has no control for it)",
+        "own_idp_domains": "own-Casdoor domains (this page has no control for them)",
+    }
+
+    def _not_applied_text(self, rec, missing: list[str]) -> str:
+        label = rec.label or rec.id
+        if not missing:
+            return f"Loaded '{label}' into the form; every field applied."
+        why = [self._NOT_APPLIED_WHY.get(m, m) for m in missing]
+        return f"Loaded '{label}' into the form. Not applied: " + "; ".join(why) + "."
+
+    def _load_saved(self, rec):
+        cfg = LocalMeshBootstrapConfig.from_dict(rec.config)
+        missing = self.apply_bootstrap(cfg, form=rec.form)
+        self.saved_meshes.set_note(self._not_applied_text(rec, missing))
+
+    def _start_saved(self, rec, mode: str):
+        """Bring a saved mesh back. Case 1 (volumes + images present) runs
+        ``boot.start_saved`` — ``stack.start()`` only, no re-mint, no re-seed.
+        Case 2 (volumes gone) runs ``boot.restore`` — the up() sequence MINUS
+        generate_creds, seeded from the record's pointers/copies. NEVER
+        ``_bootstrap_up``: that re-mints secrets.json and invalidates the very
+        record being restored. ``verb=""`` deliberately: verb_phases("up") draws a
+        mint-and-seed ladder neither walks, and staging against it would render a
+        ladder that never completes."""
+        if self._running:
+            self.status.setText(f"Still running: {self._running_label or 'a verb'}. "
+                                "Wait for it to finish, or Cancel.")
+            return
+        if self._mesh_up is True:
+            self.status.setText("A local mesh is running — stop it first. Starting "
+                                "a saved mesh over a live one would bring up a "
+                                "second stack on the same compose project.")
+            return
+        cfg = LocalMeshBootstrapConfig.from_dict(rec.config)
+        missing = self.apply_bootstrap(cfg, form=rec.form)
+        self.saved_meshes.set_note(self._not_applied_text(rec, missing))
+        # The RECORD's config is what runs — never the form's re-collection,
+        # which would turn a CLI-made record's services=None (profile defaults)
+        # into whatever the boxes happen to hold, and an egress conf that moved
+        # into a mesh silently started WITHOUT its VPN (validate() below refuses
+        # that instead: fail-closed). The one field a record never carries comes
+        # from the form: a prod restore needs the auth key the operator typed.
+        cfg.auth_key = self.boot_auth_key.text().strip()
+        self.boot = LocalMeshBootstrap(self.generator_dir, cfg)
+        if self.login_theme.error_text():
+            self.status.setText("Cannot start the saved mesh: themes: "
+                                + self.login_theme.error_text())
+            return
+        problems = self.boot.validate()
+        if problems:
+            self.status.setText("Cannot start the saved mesh: " + "; ".join(problems))
+            return
+        boot = self.boot
+        label = rec.label or rec.id
+        if mode == saved_meshes.MODE_START:
+            self._note(f"[saved-mesh] starting '{label}' — reattaching its data "
+                       "volumes; nothing is re-minted or re-seeded …")
+            self._launch(f"Starting saved mesh {label}",
+                         lambda on_line, cancel: boot.start_saved(
+                             rec, on_line=on_line, cancel=cancel),
+                         stream=True, cancellable=True, verb="")
+        else:
+            self._note(f"[saved-mesh] restoring '{label}' — bringing the stack up "
+                       "and seeding it again; credentials are NOT re-minted …")
+            self._launch(f"Restoring saved mesh {label}",
+                         lambda on_line, cancel: boot.restore(
+                             rec, on_line=on_line, cancel=cancel),
+                         stream=True, cancellable=True, verb="")
+
     def _open_vaults(self):
         """Open the Vaults & managed-volumes manager.
 
@@ -2198,18 +2728,249 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         QtGui.QDesktopServices.openUrl(
             QtCore.QUrl(self.boot._stack_node().web_url))
 
+    @staticmethod
+    def _open_web_tooltip(node) -> str:
+        """The Open web UI tooltip, from the node's OWN addresses — so it can never
+        again name a door the button does not open."""
+        return (f"Open the running stack's front door ({node.web_url}) in your "
+                f"browser — TLS, under the per-machine CA in tests/stack/.tls-front/"
+                f"ca.crt (import it once, or accept the warning). The same platform "
+                f"is also served in plaintext at {node.plain_web_url}. Does nothing "
+                f"destructive; if the stack is down the browser just shows a "
+                f"connection error.")
+
+    # ── running-mesh monitor ─────────────────────────────────────────────────────
+    def _sync_monitor_gate(self):
+        """The ONE writer of setEnabled on self.monitor, of its note and of the
+        section title (the build.py:_sync_iso_options rule). Tri-state: unknown is
+        "checking…", never "no mesh"; a failed read clears the rows and says so —
+        showing stale rows as current is the failure this monitor exists to fix."""
+        mon = getattr(self, "monitor", None)
+        if mon is None:
+            return
+        snap = self._monitor
+        title = self._monitor_title
+        if snap is None:
+            mon.setEnabled(False)
+            mon.clear()
+            if probe_running(self, "_monitor_probe") or self._mesh_up is None:
+                note = "Checking what is running…"
+            else:
+                note = ("Not read yet — expand this section or press Refresh "
+                        "(re-checked after every action).")
+            mon.note.setText(note)
+            mon.setToolTip(note)
+            self.monitor_section.toggle.setText(f"{title} — checking…".replace("&", "&&"))
+            return
+        ready, total = snap.ready_counts
+        lanes = (f"compose {self._lane_word(snap.compose)} · "
+                 f"kind {self._lane_word(snap.kind)}")
+        if self._running:
+            mon.setEnabled(snap.any_running)
+            # The note and the title below quote THIS snapshot, so the rows must come
+            # from it too. A verb-time Refresh (the widget's own button stays live
+            # while a verb runs) used to leave the previous read's rows on screen
+            # under a note saying nothing is running — stale rows shown as current,
+            # the exact failure this monitor exists to fix.
+            if snap.any_running:
+                mon.render(snap)
+            else:
+                mon.clear()
+            note = (f"Paused while {self._running_label or 'the verb'} runs — "
+                    f"refreshed when it finishes. Last read {snap.taken_at}: "
+                    f"{ready}/{total} ready · {lanes}.")
+            mon.note.setText(note)
+            mon.setToolTip(note)
+            self.monitor_section.toggle.setText(
+                f"{title} — paused ({ready}/{total} ready)".replace("&", "&&"))
+            return
+        if snap.any_running:
+            mon.setEnabled(True)
+            mon.render(snap)
+            note = f"{ready}/{total} ready · {lanes} · read {snap.taken_at}."
+            extra = list(snap.errors) + list(snap.notes)
+            if extra:
+                note += "\n" + " ".join(extra)
+            mon.note.setText(note)
+            mon.setToolTip("Refreshed every 10 s while this section is open, and "
+                           "after every action.")
+            self.monitor_section.toggle.setText(
+                f"{title} — {ready}/{total} ready".replace("&", "&&"))
+        elif snap.any_unknown:
+            # the last read could not ESTABLISH a lane: rows cleared, the exact
+            # sentences shown. Unknown is never rendered as "no mesh" (I5), even
+            # when the read carried no error sentence — the lane's own detail
+            # says what was (not) asked.
+            mon.setEnabled(False)
+            mon.clear()
+            why = " ".join(snap.errors) or " · ".join(
+                f"{name}: {lane.error or lane.detail or 'not established'}"
+                for name, lane in (("kind", snap.kind), ("compose", snap.compose))
+                if lane.running is None)
+            note = "Could not read the running mesh: " + why
+            mon.note.setText(note)
+            mon.setToolTip(note)
+            self.monitor_section.toggle.setText(
+                f"{title} — could not read".replace("&", "&&"))
+        else:
+            mon.setEnabled(False)
+            mon.clear()
+            note = ("No mesh is running. Generate one, or start the DevOps lane, "
+                    "and this fills in.")
+            if snap.errors or snap.notes:
+                note += " " + " ".join(list(snap.errors) + list(snap.notes))
+            mon.note.setText(note)
+            mon.setToolTip(note)
+            self.monitor_section.toggle.setText(
+                f"{title} — nothing running".replace("&", "&&"))
+
+    @staticmethod
+    def _lane_word(lane) -> str:
+        if lane.running is None:
+            return "not established"
+        return "up" if lane.running else "down"
+
+    def _refresh_monitor(self, reason: str = "") -> bool:
+        """Kick off ONE off-thread snapshot (see _MonitorProbe). Re-entrant-safe: a
+        probe already in flight is left alone rather than stacking threads. The 10 s
+        tick is the only caller that stands down while a verb runs — a button press
+        or a mesh-state answer still reads. Returns True when a read was started
+        (or a synthetic one produced), False when one was already in flight."""
+        if probe_running(self, "_monitor_probe"):
+            return False
+        if reason == "tick" and self._running:
+            return False
+        try:
+            node = self.boot._stack_node()
+        except Exception as e:                  # a page mid-teardown, or a bad config
+            self._monitor = mesh_monitor.MonitorSnapshot(
+                taken_at=time.strftime("%H:%M:%S"),
+                compose=mesh_monitor.LaneState(None, error=str(e)),
+                kind=mesh_monitor.LaneState(None, error=str(e)),
+                errors=(f"no stack node to ask: {type(e).__name__}: {e}",))
+            self._sync_monitor_gate()
+            return True
+        probe = own_probe(self, "_monitor_probe",
+                          _MonitorProbe(self.generator_dir, node, parent=self))
+        probe.result.connect(self._on_monitor)
+        # own_probe connected its release FIRST, so by this slot the attribute is
+        # clear and a follow-up read can start.
+        probe.finished.connect(self._on_monitor_finished)
+        probe.start()
+        self._sync_monitor_gate()
+        return True
+
+    def _on_monitor_finished(self):
+        """A verb ended while a read was in flight: that read may predate the verb's
+        effect, so exactly one fresh read follows it."""
+        if self._monitor_stale and self._refresh_monitor("post-verb"):
+            self._monitor_stale = False
+
+    def _on_monitor(self, snap):
+        """The snapshot arrived (GUI thread): render through the one gate, and arm
+        exactly one of the view-door buttons from the LIVE session answer."""
+        self._monitor = snap
+        # the live-doors answer was read off-thread with the snapshot (a session-file
+        # read plus a TCP connect per door is I/O, and this slot is on the GUI thread)
+        self.monitor.set_view_session(bool(getattr(snap, "view_doors", ())))
+        self._sync_monitor_gate()
+
+    def _on_monitor_toggled(self, on: bool):
+        """Expanding refreshes once and starts the poll; collapsing stops it. Fires on
+        programmatic setChecked too, so it must be (and is) re-entrancy-safe."""
+        if on:
+            self._refresh_monitor("expanded")
+            self._monitor_timer.start()
+        else:
+            self._monitor_timer.stop()
+
+    def _on_monitor_tick(self):
+        if not (self.isVisible() and self.monitor_section.is_expanded()):
+            return
+        if self._running:
+            self._sync_monitor_gate()           # the note says "paused"
+            return
+        if probe_running(self, "_monitor_probe"):
+            return
+        self._refresh_monitor("tick")
+
+    def _open_door(self, url: str):
+        """A row's Open button. The URL was gated twice already (core + widget); a
+        third refusal here is belt-and-braces, and the status line says why."""
+        why = mesh_monitor.unsafe_door_reason(url)
+        if why:
+            self.status.setText(f"Not opened: {why}")
+            return
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
+
+    def _view_up(self):
+        """`make view` in the background — the sanctioned browser door. Opt-in, one
+        press, never automatic: it binds loopback ports on this machine. The lane
+        follows what is running (kind's host shell, else the compose front doors)."""
+        snap = self._monitor
+        lane = "compose" if (snap is not None and not bool(snap.kind.running)
+                             and bool(snap.compose.running)) else "kind"
+        node = self.boot._stack_node()
+        self._note(f"[view] serving the {lane} lane's front doors on 127.0.0.1 "
+                   f"(`make view LANE={lane}`; run `make view-trust` once per machine "
+                   f"so the browser trusts the loopback CA) …")
+        self._launch("Opening the browser door",
+                     lambda on_line, cancel: node._make(
+                         "view", timeout=120, on_line=on_line, cancel=cancel,
+                         args=[f"LANE={lane}"]),
+                     stream=True, cancellable=True)
+
+    def _view_down(self):
+        node = self.boot._stack_node()
+        self._note("[view] stopping the background view session (`make view-stop`) …")
+        self._launch("Stopping the browser door",
+                     lambda on_line, cancel: node._make(
+                         "view-stop", timeout=60, on_line=on_line, cancel=cancel),
+                     stream=True)
+
     def _show_credentials(self):
-        """Show the seeded persona roster (username / password / roles), copyable.
+        """Probe first, modal from the SLOT (_on_credentials) — never inline.
 
         Opened from the bring-up row rather than popped automatically after a
         successful `up`: the operator often wants it again later (a second browser,
-        a different role) and a one-shot toast would be gone by then. The roster is
-        parsed fresh on each open so it reflects the CURRENT checkout + the same env
-        the Studio hands `make stack-seed`."""
-        roster = load_roster(self.generator_dir,
-                             env=self.boot._stack_node()._build_env())
-        CredentialsDialog(roster, front_door=self.boot._stack_node().web_url,
-                          parent=self).exec()
+        a different role) and a one-shot toast would be gone by then. Everything
+        is gathered fresh on each press (the CURRENT checkout, the same env the
+        Studio hands `make stack-seed`, and the mesh that is running NOW), on a
+        _CredsProbe thread. A press while one is in flight is a no-op: its answer
+        is coming, and a second probe would only stack a second dialog."""
+        if probe_running(self, "_creds_probe"):
+            return
+        self.creds_btn.setEnabled(False)
+        self.creds_btn.setText("Sign-in credentials (checking…)")
+        probe = own_probe(self, "_creds_probe",
+                          _CredsProbe(self.boot, self.generator_dir,
+                                      added=self._added_users_ok, parent=self))
+        probe.result.connect(self._on_credentials)
+        probe.start()
+
+    def _on_credentials(self, payload):
+        """The _CredsProbe result slot: re-arm the button, publish the one-line
+        truth on the mesh-state line, then open the dialog. A modal opened from a
+        slot that a BUTTON started is still button-driven — nothing here runs from
+        validatePage or itemChanged."""
+        self.creds_btn.setText("Sign-in credentials")
+        self.creds_btn.setEnabled(True)
+        roster, truth = payload
+        if truth is not None:
+            # The mesh-state line gains the seed truth as a second sentence, so
+            # the page states it without the dialog. A previous headline is
+            # replaced, never stacked; _on_mesh_state's next rewrite drops it,
+            # which is right — that probe ran after a verb changed the mesh.
+            base = self._mesh_state_label.text()
+            prev = getattr(self._cred_truth, "headline", "")
+            if prev and base.endswith(prev):
+                base = base[:-len(prev)].rstrip()
+            self._mesh_state_label.setText(f"{base} {truth.headline}".strip())
+        self._cred_truth = truth
+        # Held on self so the wrapper is not collected while the dialog is up.
+        self._creds_dialog = CredentialsDialog(
+            roster, truth, front_door=self.boot._stack_node().web_url, parent=self)
+        self._creds_dialog.exec()
 
     def _add_user(self):
         """Add ONE named user to the RUNNING mesh by re-running the idempotent
@@ -2229,12 +2990,22 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if password:
             env[pw_env] = password          # env-only — never argv, never logged
         stack = self.boot._stack_node()
+        roles = tuple(r for r in spec.split(":")[1].split(",") if r) \
+            if spec.count(":") >= 2 else ()
+
+        def _seed(on_line, cancel):
+            ok, msg = stack.seed(env, on_line=on_line, cancel=cancel)
+            if ok:
+                # Runs on the worker thread; a plain list swap under the GIL, read
+                # on the GUI thread only at the next credentials press. Name and
+                # roles ONLY — the password went to the seeder's env and is gone.
+                self._added_users_ok = [u for u in self._added_users_ok
+                                        if u[0] != uname] + [(uname, roles)]
+            return ok, msg
+
         self._note(f"[add-user] re-seeding with '{uname}' appended (idempotent; "
                    "existing personas re-applied unchanged) …")
-        self._launch(f"Adding user {uname}",
-                     lambda on_line, cancel: stack.seed(env, on_line=on_line,
-                                                        cancel=cancel),
-                     stream=True, cancellable=True)
+        self._launch(f"Adding user {uname}", _seed, stream=True, cancellable=True)
 
     def _copy_onion(self):
         """Copy the published .onion address to the clipboard. A normal browser

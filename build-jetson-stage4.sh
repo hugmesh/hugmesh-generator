@@ -194,6 +194,7 @@ ROOT_MiB=0                               # 0 = role default (set below); --img-s
 IMG_SIZE_SET=false
 GROW_POLICY="fill"
 COMPRESS_IMG=false
+COMPRESS_LEVEL=9        # xz preset --compress uses (0-9); --compress-level N
 EXTRA_PACKAGES=""
 PACKAGES_ADD=""          # --packages-add : atoms to add on top of the derived set
 PACKAGES_DROP=""         # --packages-drop: default-set atoms to remove (mandatory floor honored)
@@ -321,7 +322,10 @@ OPTIONS
     --img-size MiB      ext4 root size in the .img (default per role; growroot
                         expands it to the medium on first boot).
     --grow fill|none|<size>   first-boot grow policy (default fill).
-    --compress          xz -9 the finished image(s).
+    --compress          xz-compress the finished image(s) (preset: --compress-level).
+    --compress-level N  xz preset 0-9 used by --compress (default 9).
+                        Lower is faster and larger; 9 is smallest and has
+                        the longest build tail.
     -p PKGS             extra packages appended to the stage4.
 
   Mesh / radios  (same as the Pi5/Frite builders)
@@ -480,6 +484,9 @@ while [[ $# -gt 0 ]]; do
         --grow)               GROW_POLICY="$2";           shift 2 ;;
         --no-grow)            GROW_POLICY="none";         shift   ;;
         --compress)           COMPRESS_IMG=true;          shift   ;;
+        --compress-level)
+            case "${2:-}" in [0-9]) ;; *) err "--compress-level must be a single digit 0-9 (got '${2:-}')"; exit 1 ;; esac
+            COMPRESS_LEVEL="$2"; shift 2 ;;
         --skip-clean)         SKIP_CLEAN=true;            shift   ;;
         --resume)             RESUME=true;                shift   ;;
         --print-plan)         PRINT_PLAN=true;            shift   ;;
@@ -807,7 +814,7 @@ if ${PRINT_PLAN}; then
     _plan ENCRYPT_ROOT       "${ENCRYPT_ROOT}"
     _plan LUKS_PASS          "$([ -n "${LUKS_PASS}" ] && echo REDACTED || echo none)"
     _plan STATUS             "EXPERIMENTAL (hardware validation pending — specs-jetson/README.md)"
-    _plan FLAGS_EFFECTIVE    "env=${ENV} role=${ROLE} board=${JETSON_BOARD} kernel_flavor=${KERNEL_FLAVOR} desktop=${DESKTOP} img=${BUILD_IMG} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} standalone=${STANDALONE} encrypt_root=${ENCRYPT_ROOT}"
+    _plan FLAGS_EFFECTIVE    "env=${ENV} role=${ROLE} board=${JETSON_BOARD} kernel_flavor=${KERNEL_FLAVOR} desktop=${DESKTOP} img=${BUILD_IMG} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} compress_level=${COMPRESS_LEVEL} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} standalone=${STANDALONE} encrypt_root=${ENCRYPT_ROOT}"
     exit 0
 fi
 
@@ -2404,7 +2411,7 @@ build_img() {
     trap - RETURN ERR
     info "Raw image: ${IMG_PATH} ($(du -sh "${IMG_PATH}" | cut -f1))"
     if ${COMPRESS_IMG}; then
-        xz -T0 -9 -f "${IMG_PATH}"; IMG_PATH="${IMG_PATH}.xz"
+        xz -T0 "-${COMPRESS_LEVEL}" -f "${IMG_PATH}"; IMG_PATH="${IMG_PATH}.xz"
     fi
     return 0
 }
