@@ -68,6 +68,32 @@
 #   Two of them (avc-workout_test.sh, mesh-cluster_test.sh) are alpine-ONLY -- they
 #   are RED in node:24-alpine, which has no make/gawk/util-linux (31/9 and 137/27).
 #
+# A SECOND SUITE MOVED FOR THE SAME REASON (2026-09-04).
+#   * tests/domain-registry/test-foreign-ingest-fuzz.sh -> the NODE job.
+#       It was in the alpine job, where alpine:3 has `nodejs` but no `npm` and the
+#       job never runs `npm ci --prefix scripts/tooling` -- so scripts/tooling/
+#       node_modules is absent and every leg that drives the real handlebars render
+#       tooling printed "SKIP (node/handlebars unavailable)" and the suite exited 0.
+#       MEASURED on this tree, both shapes reproduced in their real images: the
+#       alpine shape (alpine:3, this job's apk line, node_modules absent) runs
+#       65 passed / 0 failed; the node shape runs 92 passed / 0 failed. Those 27
+#       assertions -- the entire render half of a gate whose job is to prove a
+#       REJECTED foreign base never reaches BRAND_OUT -- were invisible to CI, and
+#       they were hiding a real red. On origin/main BEFORE the fixture fix that
+#       lands with this move, the same pair read 63 passed / 0 failed (alpine) vs
+#       84 passed / 3 FAILED (node): the suite's clean-base fixture had drifted off
+#       the angular-mfe recipe's required `tab-title` anchor, so `[render-recipe]
+#       FATAL: required anchor 'tab-title' did not match` failed the positive
+#       control and both launder/cache-purge legs the moment handlebars existed.
+#       The node job is where its two siblings already live
+#       (test-domain-reconcile-fuzz.sh, test-templating-rename-pr.sh), it runs
+#       `npm ci` and asserts handlebars in its preflight, and node:24-alpine plus
+#       that job's apk line (+ openssh-keygen, see the step comment) covers every
+#       tool the suite needs. Nothing is lost by delisting it from alpine: the node
+#       shape runs a strict SUPERSET of the assertions the alpine shape ran.
+#       This is a MOVE, not a new listing, so check 7's census is unchanged --
+#       measured 20 passed / 0 failed on test-guard-integrity.sh before and after.
+#
 # NOT LISTED HERE (deliberate, with reasons). Every suite on disk -- under EITHER
 # naming convention -- is either listed above or listed here: six were in NEITHER
 # place until 2026-08-22 and eight more until 2026-08-26, which made this very
@@ -234,7 +260,6 @@ jobs:
             tests/device-registry/test-registry-allow-deny.sh
             tests/device-registry/test-self-report.sh
             tests/domain-registry/test-domain-reconcile-verify.sh
-            tests/domain-registry/test-foreign-ingest-fuzz.sh
             tests/egress-vpn/test-optional-service-gate.sh
             tests/egress-vpn/test-provision-vpn.sh
             tests/egress-vpn/test-split-tunnel.sh
@@ -478,7 +503,15 @@ jobs:
       # make: test-e2e-toolchain-readiness.sh renders and DRIVES the repo Makefile
       # (legs C/D) — node:24-alpine ships no make, and without it the suite exits 2
       # SKIPPED-LOUDLY, which this job's runner rightly counts as a failure.
-      - run: apk add --no-cache bash coreutils findutils git grep jq make openssl py3-yaml python3 sed tar
+      # openssh-keygen: test-foreign-ingest-fuzz.sh's Phase-7 key-staging leg drives
+      # gen-provision-keys.sh --foreign-mesh-trust, which mints a real Ed25519 keypair.
+      # Without it that leg prints "SKIP key-staging" and the suite still exits 0 — the
+      # silent-skip shape this whole file exists to stop. MEASURED in node:24-alpine
+      # 2026-09-04, this apk set with and without the package: the seven suites already
+      # listed below are byte-identical either way (101/0, 82/0, 20/0, 14/0, 14/0, 30/0,
+      # 176/0+1skip), and the foreign-ingest suite goes 89 passed -> 92 passed. So it
+      # buys three real assertions and costs nothing.
+      - run: apk add --no-cache bash coreutils findutils git grep jq make openssh-keygen openssl py3-yaml python3 sed tar
       - uses: actions/checkout@v4
       - name: trust the workspace
         # Container jobs run as root against a checkout git considers foreign, so
@@ -505,7 +538,7 @@ jobs:
           # If the install step ever silently degrades, the whole job would go green
           # having asserted almost nothing. Fail here instead.
           missing=""
-          for b in bash jq openssl python3 git node make; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+          for b in bash jq openssl python3 git node make ssh-keygen; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
           [ -d scripts/tooling/node_modules/handlebars ] || { echo "::error::handlebars absent — the drift gate would render nothing"; exit 1; }
           # PCRE grep. tests/menu/ncurses_charset_test.sh proves the menu's non-UTF-8
@@ -518,12 +551,13 @@ jobs:
           # lives in THIS job and not the alpine one, and why its dependency is
           # asserted here instead of assumed.
           printf '\303\251\n' | grep -P '[^\x00-\x7F]' >/dev/null || { echo "::error::grep has no working -P — ncurses_charset_test.sh's non-ASCII assertion would pass vacuously"; exit 1; }
-          echo "preflight ok: bash jq openssl python3 git node handlebars grep-P"
+          echo "preflight ok: bash jq openssl python3 git node ssh-keygen handlebars grep-P"
       - name: run suites
         shell: bash
         run: |
           SUITES="
             tests/domain-registry/test-domain-reconcile-fuzz.sh
+            tests/domain-registry/test-foreign-ingest-fuzz.sh
             tests/domain-registry/test-templating-rename-pr.sh
             tests/menu/ncurses_charset_test.sh
             tests/scripts/test-e2e-coverage-matrix-harness.sh
