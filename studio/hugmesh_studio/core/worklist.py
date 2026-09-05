@@ -5,7 +5,9 @@ of :class:`WorklistEntry` rows, one per role x platform combination the mesh nee
 The shared identity plane (domains / users / network / system / disk-encryption
 default) lives IN the base config, exactly as today; each entry only carries the
 axes that make it a distinct image (role, platform, board/flavor/desktop, its
-encrypt-root override, and its per-image package deltas).
+encrypt-root override, its per-image package deltas, and — issue #229 — its own
+hostname: the one system-identity value that cannot be mesh-wide, because a
+hostname shared by every node is a collision, not a setting).
 
 ``materialize()`` projects the envelope back down into a list of plain, fully-valid
 single-image :class:`ImageConfig` objects — so every downstream mechanism
@@ -98,6 +100,29 @@ def resolve_encrypt_root(entry: "WorklistEntry", base_encrypt_root: bool) -> boo
     return bool(base_encrypt_root)
 
 
+def resolve_hostname(entry: "WorklistEntry", base_hostname: str) -> str:
+    """The explicit ``-H/--hostname`` one entry will bake, or "" when the builder is
+    left to derive its role name: the entry's own ``hostname`` wins, a blank one
+    inherits the base. Module-level and pure (like :func:`resolve_encrypt_root`) so
+    both UIs can show what a row WILL bake without re-implementing — and therefore
+    drifting from — what ``_materialize_one`` does."""
+    return (entry.hostname or "").strip() or (base_hostname or "").strip()
+
+
+def duplicate_hostnames(entries: list["WorklistEntry"],
+                        base_hostname: str) -> dict[str, list[str]]:
+    """``{hostname: [entry ids]}`` for every EXPLICIT hostname two or more entries
+    would bake (issue #229's failure mode: several images, one name). Only explicit
+    names are compared — a blank resolves to the builder's role-derived name, which
+    lives in the shell tables and is not second-guessed here. Empty when clean."""
+    seen: dict[str, list[str]] = {}
+    for e in entries:
+        hn = resolve_hostname(e, base_hostname)
+        if hn:
+            seen.setdefault(hn, []).append(e.id)
+    return {hn: ids for hn, ids in seen.items() if len(ids) > 1}
+
+
 def entry_id(role: str, platform: str) -> str:
     """The STABLE worklist entry id — ``f"{role}.{platform}"``. One id per role x
     platform combo; board/flavor are row ATTRIBUTES, so an id never dangles when a
@@ -134,6 +159,13 @@ class WorklistEntry:
     # Node entries always leave both blank.
     desktop_user: str = ""
     desktop_user_role: str = "user"    # PERSON_ROLE_CHOICES: user|mod|admin|superadmin
+    # PER-IMAGE host identity (issue #229). The base ImageConfig carries ONE
+    # ``hostname`` and every materialized image used to inherit it byte-identical, so
+    # a hostname typed once named every node in the mesh the same thing. This is the
+    # per-entry override: "" = inherit (the base value, else the builder's own
+    # role-derived name); non-"" = THIS image's -H/--hostname. Timezone and the
+    # default account stay mesh-wide on the base — the issue accepts that for both.
+    hostname: str = ""
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -157,6 +189,7 @@ class WorklistEntry:
             "infra_services": list(self.infra_services),
             "desktop_user": self.desktop_user,
             "desktop_user_role": self.desktop_user_role,
+            "hostname": self.hostname,
         }
 
     @classmethod
@@ -231,6 +264,22 @@ class WorklistConfig:
                     f"dir.")
             seen[entry.id] = i
 
+    def _assert_unique_hostnames(self) -> None:
+        """Two images in one worklist must not bake the same EXPLICIT hostname (issue
+        #229). Before per-entry hostnames existed the base's single value rode onto
+        every image silently; now that the collision is expressible per row it is also
+        detectable, and a mesh whose nodes share a name is not a mesh that works, so
+        fail loudly at the same chokepoint the id collision uses. The message names
+        the fix: per-entry ``hostname`` (the System step / entries[].hostname), or a
+        blank base so each node derives its own role name."""
+        dups = duplicate_hostnames(self.entries, self.base.hostname)
+        if dups:
+            detail = "; ".join(f"{hn!r} on {', '.join(ids)}" for hn, ids in dups.items())
+            raise ValueError(
+                f"worklist entries would bake the same hostname: {detail}. Set a "
+                "distinct hostname per image (entries[].hostname / the System step), "
+                "or leave them blank so each node takes its role-derived name.")
+
     def save(self, path: str) -> list[str]:
         """Write the envelope JSON (base secrets blanked, matching ImageConfig.save).
         Returns the aggregated per-secret warning list so the UI can surface any secret
@@ -273,6 +322,7 @@ class WorklistConfig:
         # never routes through from_dict) so a duplicate id can never reach the driver
         # and clobber a build tree / node-keys dir.
         self._assert_unique_entry_ids()
+        self._assert_unique_hostnames()
         out: list[tuple[WorklistEntry, ImageConfig]] = []
         for entry in self.entries:
             out.append((entry, self._materialize_one(entry)))
@@ -336,6 +386,13 @@ class WorklistConfig:
         cfg.packages_drop = entry.packages_drop
         cfg.encrypt_root = self._resolve_encrypt_root(entry)
         cfg.build_subdir = entry.build_subdir
+
+        # 4a. Per-image hostname (issue #229): the entry's own name wins; blank inherits
+        #     the base (the single-image shape synthesize() wraps), and a blank base lets
+        #     the builder derive its role name. Step 6's validate_identity runs
+        #     validate_domain_name on whatever lands here, so a bad per-row name fails
+        #     closed exactly like a bad base one.
+        cfg.hostname = resolve_hostname(entry, self.base.hostname)
 
         # 4b. Per-node infra (scope:node) services — the Tor onion + node egress-VPN
         #     (docs/TOR-HIDDEN-SERVICE.md / EGRESS-VPN.md), ADDITIVE to the mesh-wide

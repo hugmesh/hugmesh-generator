@@ -230,6 +230,11 @@ SAMPLES = {
     "idp_client_id": [{"idp": "oidc", "idp_issuer": "https://idp.example", "idp_client_id": "probe-client"}],
     "idp_jwks": [{"idp": "oidc", "idp_issuer": "https://idp.example", "idp_client_id": "probe-client",
                   "idp_jwks": "https://idp.example/keys"}],
+    # mesh secrets store (#224): the empty address emits nothing by design, so every
+    # sample supplies one; the two paths ride it (x86 + rpi5 node builders only).
+    "vault_addr": [{"vault_addr": "https://vault.example:8200"}],
+    "vault_kv_mount": [{"vault_addr": "https://vault.example:8200", "vault_kv_mount": "kv"}],
+    "vault_base_path": [{"vault_addr": "https://vault.example:8200", "vault_base_path": "acme/prod"}],
     "optional_services": [{"optional_services": ["akkoma"]},
                           {"optional_services": ["none"]}, {"optional_services": ["all"]}],
     "exclude_services": [{"exclude_services": ["games"]}],

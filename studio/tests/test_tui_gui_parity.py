@@ -19,12 +19,13 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 from hugmesh_studio.core import e2e_environments as env_mod           # noqa: E402
 from hugmesh_studio.core import emulation as em                       # noqa: E402
 from hugmesh_studio.core import qemu_tests as qt                      # noqa: E402
-from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS               # noqa: E402
+from hugmesh_studio.core.config import VAULT_FIELDS, WIZARD_PAGE_SLUGS  # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo                 # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                    # noqa: E402
 from hugmesh_studio.gui.pages import _theme_editor                     # noqa: E402
 from hugmesh_studio.gui.pages import domains as gui_domains            # noqa: E402
 from hugmesh_studio.gui.pages import localcloud_nodes as gui_lc        # noqa: E402
+from hugmesh_studio.gui.pages import vault as gui_vault                # noqa: E402
 from hugmesh_studio.gui.pages import welcome as gui_welcome            # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets                            # noqa: E402
 from hugmesh_studio.tui import domains_step, journey, themes           # noqa: E402
@@ -261,3 +262,52 @@ def test_effect_labels_match_the_gui_editor():
 
 def test_vanta_dependency_note_matches_the_gui_editor():
     assert themes.VANTA_DEPENDENCY_NOTE == _theme_editor.VANTA_DEPENDENCY_NOTE
+
+
+# ── the secrets store (#224): one trio, one rule, both faces ────────────────────────
+def test_vault_step_edits_the_same_trio_on_both_faces(wiz):
+    """The GUI page's widget map and the TUI screen's command vocabulary are BOTH
+    pinned to config.VAULT_FIELDS, in order — a field added to one face without the
+    other is the half-feature the parity guards exist to catch."""
+    page = wiz.page(wiz._page_ids["vault"])
+    assert isinstance(page, gui_vault.VaultPage)
+    assert tuple(page.field_widgets) == VAULT_FIELDS
+    assert tuple(journey.VAULT_COMMANDS.values()) == VAULT_FIELDS
+    j = journey.Journey(GENERATOR_DIR)
+    screen = j.screen_for("vault")
+    assert isinstance(screen, journey.VaultScreen)
+    assert not isinstance(screen, journey.PendingStep)
+
+
+def test_vault_step_refuses_the_same_input_with_the_same_sentence(wiz):
+    """Neither face restates the rule: both render config.vault_field_error, so an
+    http:// address (or a stray mount) is refused with ONE sentence everywhere."""
+    page = wiz.page(wiz._page_ids["vault"])
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("vault")
+    for widget_text, tui_line in (("http://vault.example", "a http://vault.example"),
+                                  ("", "m kv")):
+        page.addr.setText(widget_text)
+        page.kv_mount.setText("kv" if widget_text == "" else "")
+        gui_err = page.error()
+        assert gui_err
+        j.feed(tui_line)
+        assert j.status == f"refused: {gui_err}"
+
+
+# ── worklist (#234): one step, one name on both faces ───────────────────────────────
+def test_worklist_screen_title_matches_the_gui_page(wiz):
+    """The TUI's worklist screen and gui/pages/worklist.py are the SAME step — the
+    role x platform image picker — so they must name it the same way.
+
+    Nothing compared them before, and the two were never equal: f5da52b4 (the commit
+    that added the TUI screen) wrote ``title = "Mesh worklist"`` while the GUI page
+    already read "Choose the images to build". Read off the REAL page object rather
+    than a literal, so a future GUI retitle fails here instead of drifting silently.
+
+    Deliberately NOT the Review page's "Mesh worklist" collapsible header
+    (build.py) — that is a section on a different page and keeps its own name.
+    """
+    page = next(wiz.page(i) for i in wiz.pageIds()
+                if isinstance(wiz.page(i), wizard_mod.WorklistPage))
+    assert journey.WorklistScreen.title == page.title() == "Choose the images to build"

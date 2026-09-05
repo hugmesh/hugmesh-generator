@@ -25,8 +25,10 @@ from hugmesh_studio.core.worklist import (
     WORKLIST_SCHEMA,
     WorklistConfig,
     WorklistEntry,
+    duplicate_hostnames,
     entry_id,
     load_any,
+    resolve_hostname,
     synthesize,
 )
 
@@ -69,7 +71,7 @@ def _envelope():
                        roles=["superadmin", "games"])]
     entries = [WorklistEntry(role="omnibus", platform="x86"),
                WorklistEntry(role="backend", platform="rpi5", board="rpi5",
-                             packages_add="app-misc/tmux"),
+                             packages_add="app-misc/tmux", hostname="be-pi"),
                WorklistEntry(role="edge-ai", platform="jetson", encrypt_root="on")]
     return WorklistConfig(base=base, entries=entries)
 
@@ -672,3 +674,111 @@ def test_desktop_users_dedup_against_the_users_table():
     rows = [u for u in cfg.users if u.username == "alice"]
     # the richer Users-table row wins; no duplicate derived row
     assert len(rows) == 1 and rows[0].role == "superadmin" and rows[0].email
+
+
+# ---- per-image hostname (issue #229) --------------------------------------------
+# "System identity is a single image-config setting even when generating multiple
+# images — acceptable for timezone and maybe user, but NOT for hostname. Hostname must
+# be settable per image." The base's one `hostname` used to ride onto every
+# materialized image byte-identical; WorklistEntry.hostname is the per-image override.
+
+def _two_row_mesh(base_hostname="", **entry_hostnames):
+    base = ImageConfig(mode="mesh", brand="acme", hostname=base_hostname)
+    entries = [WorklistEntry(role="pki", platform="x86",
+                             hostname=entry_hostnames.get("pki", "")),
+               WorklistEntry(role="backend", platform="rpi5", board="rpi5",
+                             hostname=entry_hostnames.get("backend", ""))]
+    return WorklistConfig(base=base, entries=entries)
+
+
+def _hostname_flag(argv):
+    return argv[argv.index("--hostname") + 1] if "--hostname" in argv else None
+
+
+def test_entry_hostname_roundtrips_the_wire_format():
+    e = WorklistEntry(role="pki", platform="x86", hostname="ca-1")
+    d = e.to_dict()
+    assert d["hostname"] == "ca-1"
+    assert WorklistEntry.from_dict(d).hostname == "ca-1"
+    # absent on an older envelope -> the blank default (inherit), never a KeyError
+    assert WorklistEntry.from_dict({"role": "pki", "platform": "x86"}).hostname == ""
+
+
+def test_two_rows_with_different_hostnames_each_get_their_own():
+    """THE #229 test: a two-row worklist with two identities materializes two images
+    that each carry THEIR OWN -H, and neither carries the other's."""
+    wl = _two_row_mesh(pki="ca-1", backend="be-pi")
+    out = wl.materialize()
+    by_id = {e.id: cfg for e, cfg in out}
+    assert by_id["pki.x86"].hostname == "ca-1"
+    assert by_id["backend.rpi5"].hostname == "be-pi"
+    assert _hostname_flag(by_id["pki.x86"].to_cli_args()) == "ca-1"
+    assert _hostname_flag(by_id["backend.rpi5"].to_cli_args()) == "be-pi"
+    # the shared base is untouched — the names live on the entries
+    assert wl.base.hostname == ""
+
+
+def test_blank_entry_hostname_inherits_the_base_and_a_blank_base_derives():
+    """"" = inherit: a blank entry takes the base's value (the single-image shape),
+    and with a blank base the image emits NO -H so the builder derives its role name
+    — the mesh argv of a worklist that never named anything is byte-identical."""
+    wl = _two_row_mesh(pki="ca-1")
+    by_id = {e.id: cfg for e, cfg in wl.materialize()}
+    assert by_id["pki.x86"].hostname == "ca-1"
+    assert by_id["backend.rpi5"].hostname == ""
+    assert "--hostname" not in by_id["backend.rpi5"].to_cli_args()
+    # a base value is the fallback for a blank row — but only ONE row may use it
+    one = WorklistConfig(base=ImageConfig(mode="mesh", brand="acme", hostname="shared"),
+                         entries=[WorklistEntry(role="pki", platform="x86"),
+                                  WorklistEntry(role="backend", platform="x86",
+                                                hostname="be-1")])
+    by_id = {e.id: cfg for e, cfg in one.materialize()}
+    assert by_id["pki.x86"].hostname == "shared"
+    assert by_id["backend.x86"].hostname == "be-1"
+
+
+def test_materialize_rejects_two_images_baking_the_same_hostname():
+    """The #229 failure mode is now DETECTED instead of silently produced: two
+    explicit names that collide, or one base value riding onto several blank rows,
+    fail loudly at materialize (the same chokepoint as the duplicate-id guard) with
+    the fix named in the message."""
+    with pytest.raises(ValueError, match="same hostname.*'node' on pki.x86, backend.rpi5"):
+        _two_row_mesh(pki="node", backend="node").materialize()
+    with pytest.raises(ValueError, match="same hostname.*entries\\[\\].hostname"):
+        _two_row_mesh(base_hostname="everyone").materialize()
+    # ...and naming the rows apart is exactly what clears it
+    fixed = _two_row_mesh(base_hostname="everyone", pki="ca-1")
+    by_id = {e.id: cfg for e, cfg in fixed.materialize()}
+    assert (by_id["pki.x86"].hostname, by_id["backend.rpi5"].hostname) == ("ca-1", "everyone")
+
+
+def test_bad_per_image_hostname_fails_closed():
+    """validate_identity runs on every materialized cfg, so a malformed per-row
+    name is refused exactly like a malformed base one (no new validator needed)."""
+    with pytest.raises(ValueError):
+        _two_row_mesh(pki="Bad_Host!").materialize()
+
+
+def test_synthesize_keeps_the_single_image_hostname():
+    """Existing single-image flows are UNCHANGED: synthesize() wraps cfg.hostname on
+    the base, the lone entry inherits it, and the argv round-trips byte-identical."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                      hostname="my-desktop")
+    (entry, out), = synthesize(cfg).materialize()
+    assert entry.hostname == ""                     # inherit
+    assert out.hostname == "my-desktop"
+    expect = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                         hostname="my-desktop", build_subdir="wl-standalone-thick.x86")
+    assert out.to_cli_args() == expect.to_cli_args()
+
+
+def test_resolve_and_duplicate_hostnames_are_the_pure_helpers_the_uis_share():
+    a = WorklistEntry(role="pki", platform="x86", hostname="  ca-1 ")
+    b = WorklistEntry(role="backend", platform="x86")
+    assert resolve_hostname(a, "base") == "ca-1"
+    assert resolve_hostname(b, "base") == "base"
+    assert resolve_hostname(b, "") == ""
+    assert duplicate_hostnames([a, b], "") == {}
+    assert duplicate_hostnames([a, b], "ca-1") == {"ca-1": ["pki.x86", "backend.x86"]}
+    # blanks never collide with each other: their names are the builder's to derive
+    assert duplicate_hostnames([b, WorklistEntry(role="frontend", platform="x86")], "") == {}

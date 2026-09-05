@@ -816,7 +816,9 @@ def test_system_credentials_hidden_and_cleared_on_all_arm_worklist(wiz):
     check_worklist_rows(wl, "pki.rpi5", "backend.rpi5")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     assert not sysp.creds.isVisible()
-    assert sysp.hostname.isVisible()               # identity fields stay
+    # identity fields stay — on a multi-image worklist the hostname is asked PER
+    # IMAGE (issue #229), so it is the per-row editors that must be on screen
+    assert sysp.hostname_rows.isVisible() and sysp.timezone.isVisible()
     advance_to(wiz, wizard_mod.HomePage)
     assert c.user_password == "" and c.root_password == ""
 
