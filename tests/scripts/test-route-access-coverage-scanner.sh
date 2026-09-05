@@ -22,6 +22,23 @@
 # deny-wins at the longest matching pattern, and a MISSING row is NO_RULE (forward),
 # not a denial.
 #
+# HOW SECTION A IS ITSELF GUARDED (added after the guard was caught failing OPEN).
+# Section A drives the scanner's internals through importlib, so a signature change
+# in route_access_coverage.py raises INSIDE the heredoc. As first written this file
+# discarded that completely — the command substitution had no stderr redirect, its
+# `$?` was never taken, and the reader loop only counted the rows that ARRIVED.
+# MEASURED at 29e43c18 against a plausible refactor (parse_rows returning a 2-tuple,
+# main() updated to match): all ELEVEN section-A assertions vanished, the file
+# printed "12 passed, 0 failed" and EXITED 0, and the scanner's production path was
+# green as well — so the refactor, together with a genuine `--`-inside-`DO $$`
+# regression that only A4 detects, was mergeable with every suite green. That is
+# the scanner's own docstring rule ("a sweep is only allowed to say 'clean' after
+# proving it looked") broken one level up, in the guard that certifies the sweep,
+# and it is the same class tests/platform-capability-rbac/test-argocd-route-honesty.sh
+# had closed the day before. Now: stderr goes to a FILE, `$?` is captured, and the
+# emitted row count has a FLOOR (A_MIN) — A0a/A0b/A0c — and section D proves each of
+# those three bites by re-running the section against synthetic STAND-IN scanners.
+#
 # WHAT IT ASSERTS, AND HOW. Behaviour, never the scanner's source text: a guard
 # that greps for the line it wants is satisfied by a commented-out one. Section A
 # runs the scanner's own functions against the REAL schema. Section B runs the
@@ -49,6 +66,27 @@
 #   PLANT a real allow=false row in 20-schema.sql .... reported as a note (correct);
 #     with the allow/deny split reverted the SAME plant reads "still granted on gw-z"
 #   PLANT a real allow=true row in 20-schema.sql ..... RED (positive control)
+#
+# SECOND BATTERY, 2026-09-04 — over section A's own fail-closed gates. Each mutation
+# proven APPLIED (file hash changed) and REVERTED (byte-identical):
+#   ON THE SUBJECT (tests/scripts/route_access_coverage.py)
+#     parse_rows -> 2-tuple, main() updated ........... was 12/0 EXIT 0; now 17/3 EXIT 1
+#     dollar-quote branch removed ..................... 28/2 EXIT 1 (A4, unchanged)
+#     BOTH together (the masking case) ................ was 12/0 EXIT 0; now 17/3 EXIT 1
+#     parse_rows(code, strict=True) ................... 30/0 — benign, correctly green
+#     strip_sql_comments(sql, dialect=...) ............ 30/0 — benign, correctly green
+#   ON THIS FILE'S OWN GATES (each caught by exactly one D control)
+#     the `2>"${A_ERRF}"` redirect removed ............ D3 red
+#     the `A_RC=$?` capture removed ................... D2 red
+#     A_MIN lowered to 0 (the floor removed) .......... D4 red
+#
+# ONE MUTATION OF THE FIX DELIBERATELY NOT CLOSED, recorded rather than papered over:
+# deleting the harness's try/except around the importlib load and the parse_rows call
+# is NOT caught on its own (30/0). It is not a gate — it only converts a crash into a
+# readable FAIL ROW. With it deleted AND the parse_rows arity changed the suite is
+# still red, 15/4, on A0a + A0b + A0c, which is the property that matters; what is
+# lost is the message, not the verdict. Closing it would mean asserting on this
+# file's own source text, which a commented-out line satisfies.
 #
 # ONE MUTATION DELIBERATELY NOT CLOSED, and it is recorded rather than papered over:
 # widening ROW_RE's fourth group to also accept the literal text `true|false` is NOT
@@ -82,18 +120,67 @@ run_case(){   # run_case <gate.sh> <schema.sql>   -> stdout in $OUT, status in $
   OUT="$(python3 "${SCAN}" "$1" "$2" 2>&1)"; RC=$?
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# A) THE REAL SUBJECT — the scanner's behaviour on main's own 20-schema.sql
-# ─────────────────────────────────────────────────────────────────────────────
-echo "-- A) against specs/cluster/manifests/route-access/initdb/20-schema.sql --"
+A_MIN=11   # PASS/FAIL rows section A is REQUIRED to emit: A1a A1b A2x4 A3a A3b
+           # A3c A4 A5. A FLOOR, not an equality — adding an assertion must not
+           # force an edit here, but LOSING one must go red.
 
-a_out="$(python3 - "${SCAN}" "${SQL}" <<'PYX'
+run_section_a(){   # run_section_a <route_access_coverage.py> <20-schema.sql>
+  # Sets A_OUT (stdout), A_RC (exit status), A_ERRF (stderr FILE), A_ROWS
+  # (PASS+FAIL rows emitted), A_FAILS (FAIL rows emitted).
+  #
+  # WHY THIS IS A FUNCTION AND NOT A BARE COMMAND SUBSTITUTION. Section A drives
+  # the scanner's INTERNALS through importlib, so ANY signature change in
+  # route_access_coverage.py raises inside this heredoc. The first spelling of
+  # this file threw that away: no redirect of stderr, no `$?` capture, and a
+  # reader loop that only counted the rows that ARRIVED. Measured against a
+  # plausible refactor (parse_rows returning a 2-tuple, main() updated to match):
+  # all ELEVEN section-A assertions vanished, stdout read
+  # "12 passed, 0 failed", the suite EXITED 0, and the scanner's production path
+  # was green too. That is the scanner's own docstring rule — "a sweep is only
+  # allowed to say 'clean' after proving it looked" — broken one level up, in the
+  # guard that certifies the sweep. Section D plants that mutation and three
+  # neighbours and proves each gate below actually bites.
+  #
+  # Shape borrowed deliberately from tests/platform-capability-rbac/
+  # test-argocd-route-honesty.sh (ERRF + RC + a non-vacuity gate), which had
+  # closed this same class the day before this file was written.
+  A_ERRF="${WORK}/section-a.err"
+  : > "${A_ERRF}"
+  A_OUT="$(python3 - "$1" "$2" 2>"${A_ERRF}" <<'PYX'
 import importlib.util, re, sys
-spec = importlib.util.spec_from_file_location("rac", sys.argv[1])
-rac = importlib.util.module_from_spec(spec); spec.loader.exec_module(rac)
-raw  = open(sys.argv[2], encoding="utf-8").read()
-code = rac.strip_sql_comments(raw)
-granted, denied, n_rows = rac.parse_rows(code)
+
+def fail(tag, msg):
+    """Turn a setup failure into a FAIL ROW instead of a traceback.
+
+    A traceback goes to stderr, leaves stdout empty, and used to read as
+    "0 of these assertions failed"."""
+    print("%s FAIL %s" % (tag, msg))
+
+try:
+    spec = importlib.util.spec_from_file_location("rac", sys.argv[1])
+    rac = importlib.util.module_from_spec(spec); spec.loader.exec_module(rac)
+except Exception as exc:                              # noqa: BLE001 - deliberate
+    fail("A0", "the scanner could not be IMPORTED (%s: %s) — the eleven "
+               "assertions below did not run; they are missing, not passing"
+               % (type(exc).__name__, str(exc).splitlines()[0][:160]))
+    sys.exit(0)
+
+try:
+    raw  = open(sys.argv[2], encoding="utf-8").read()
+    code = rac.strip_sql_comments(raw)
+    granted, denied, n_rows = rac.parse_rows(code)
+except Exception as exc:                              # noqa: BLE001 - deliberate
+    fail("A0", "the scanner's own API raised while section A drove it (%s: %s) — "
+               "this is a signature or behaviour change in "
+               "route_access_coverage.py, not a schema problem, and it would "
+               "otherwise DELETE the eleven assertions below in silence"
+               % (type(exc).__name__, str(exc).splitlines()[0][:160]))
+    sys.exit(0)
+
+# NOTE: everything below is deliberately NOT wrapped. If an assertion body
+# raises, the harness must die loudly — non-zero status, traceback on stderr,
+# a short row count — and the three shell gates after this heredoc catch all
+# three of those. Section D's D4 is that exact shape, planted on purpose.
 
 # A1 the phantom. The OLD two-column spelling, verbatim, so the fixture is proven
 # to still CARRY the trap — if the row-shape comment is ever reworded away, this
@@ -140,13 +227,56 @@ print("A5 %s stripper removed %d of %d bytes of 20-schema.sql"
       % ("PASS" if len(code) < len(raw) else "FAIL", len(raw) - len(code), len(raw)))
 PYX
 )"
+  A_RC=$?
+  A_ROWS=0; A_FAILS=0
+  while IFS= read -r line; do
+    case "${line}" in
+      *" PASS "*) A_ROWS=$((A_ROWS+1)) ;;
+      *" FAIL "*) A_ROWS=$((A_ROWS+1)); A_FAILS=$((A_FAILS+1)) ;;
+    esac
+  done <<< "${A_OUT}"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A) THE REAL SUBJECT — the scanner's behaviour on main's own 20-schema.sql
+# ─────────────────────────────────────────────────────────────────────────────
+echo "-- A) against specs/cluster/manifests/route-access/initdb/20-schema.sql --"
+
+run_section_a "${SCAN}" "${SQL}"
 while IFS= read -r line; do
   case "${line}" in
     *" PASS "*) ok "${line#* PASS }" ;;
     *" FAIL "*) bad "${line#* FAIL }" ;;
     *) [ -n "${line}" ] && echo "         ${line}" ;;
   esac
-done <<< "${a_out}"
+done <<< "${A_OUT}"
+
+# A0 — THE THREE FAIL-CLOSED GATES over section A itself. Without them a crash in
+#      the harness deletes every row above and the suite still reports 0 failed.
+if [ "${A_RC}" -eq 0 ]; then
+  ok "A0a section A's harness exited 0 — it delivered a verdict rather than crashing"
+else
+  bad "A0a section A's harness exited ${A_RC} — it CRASHED; the rows above are MISSING, not passing"
+fi
+if [ -s "${A_ERRF}" ]; then
+  bad "A0b section A's harness wrote to stderr — output an exit-code-only gate would discard:"
+  sed 's/^/         | /' "${A_ERRF}"
+else
+  ok "A0b section A's harness wrote nothing to stderr"
+fi
+if [ "${A_ROWS}" -ge "${A_MIN}" ]; then
+  ok "A0c NON-VACUITY: section A emitted ${A_ROWS} assertion row(s) >= ${A_MIN} — the section really ran"
+else
+  bad "A0c NON-VACUITY: section A emitted only ${A_ROWS} assertion row(s), floor is ${A_MIN} — assertions VANISHED instead of failing; NOT skipping"
+fi
+
+# Recorded for section D: D3's stand-in delegates to the REAL scanner, so it can
+# only isolate the stderr gate while the real one is healthy. Without this flag a
+# broken scanner makes D3 accuse itself instead of naming the upstream failure.
+A_REAL_GREEN=1
+if [ "${A_RC}" -eq 0 ] && [ ! -s "${A_ERRF}" ] && [ "${A_FAILS}" -eq 0 ] && [ "${A_ROWS}" -ge "${A_MIN}" ]; then
+  A_REAL_GREEN=0
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # B) NEGATIVE CONTROLS — the scanner is run whole, and its EXIT CODE asserted
@@ -297,6 +427,108 @@ if python3 -c "import py_compile,sys; py_compile.compile(sys.argv[1], doraise=Tr
   ok "C2 the scanner compiles"
 else
   bad "C2 the scanner does not compile"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# D) META-CONTROLS — section A's own fail-closed gates, proven to bite
+# ─────────────────────────────────────────────────────────────────────────────
+# Section B proves the SCANNER's guards bite by running the scanner against
+# synthetic schemas. D does the same one level up: it re-runs SECTION A's harness
+# against synthetic STAND-INS for route_access_coverage.py, so A0a/A0b/A0c are
+# behaviour under test rather than unexercised wiring. Each stand-in is written
+# from scratch rather than sed'd out of the real scanner: a textual mutant stops
+# applying the moment the subject is reworded, and then proves nothing while
+# still printing PASS.
+#
+# WHAT D DOES NOT COVER, stated rather than papered over: A0c's floor also exists
+# to catch assertion ROT — rows DELETED from the heredoc above, all remaining rows
+# green, status 0, stderr empty. No stand-in can plant that, because the rows are
+# printed unconditionally by this file's own text; only editing this file could,
+# and a guard may not assert on its own source. D4 covers the neighbouring shape
+# (a PARTIAL section: some rows arrive, then it dies) and that is the honest
+# statement of the coverage.
+echo "-- D) meta-controls: section A fails CLOSED when the scanner changes shape --"
+
+a_went_red(){   # 0 when section A's gates would have failed the suite
+  [ "${A_RC}" -ne 0 ]              && return 0
+  [ -s "${A_ERRF}" ]               && return 0
+  [ "${A_FAILS}" -gt 0 ]           && return 0
+  [ "${A_ROWS}" -lt "${A_MIN}" ]   && return 0
+  return 1
+}
+export RAC_REAL="${SCAN}"
+
+# D1 — THE REGRESSION ITSELF. parse_rows returns a 2-tuple: exactly the plausible
+#      refactor that used to delete all eleven assertions and still exit 0.
+cat > "${WORK}/rac-arity.py" <<'DEOF'
+"""Stand-in whose parse_rows() returns a 2-tuple instead of (granted, denied, n_rows)."""
+def strip_sql_comments(s):
+    return s.replace("-- ", "")
+def parse_rows(code):
+    return {}, {}
+DEOF
+run_section_a "${WORK}/rac-arity.py" "${SQL}"
+if a_went_red; then
+  ok "D1 a parse_rows() ARITY change turns section A RED (rc=${A_RC} rows=${A_ROWS} fails=${A_FAILS}) — the eleven assertions cannot vanish into a '0 failed'"
+else
+  bad "D1 section A stayed GREEN against a scanner whose parse_rows returns the wrong arity — eleven assertions can still disappear silently"
+fi
+
+# D2 — THE STATUS GATE. SystemExit escapes `except Exception`, so the harness dies
+#      with a status and NOTHING on stdout or stderr: only A0a's `$?` capture can
+#      see it, and `$?` is precisely what the first spelling never took.
+cat > "${WORK}/rac-exit.py" <<'DEOF'
+"""Stand-in that terminates the harness with a status and no output at all."""
+import sys
+sys.exit(3)
+DEOF
+run_section_a "${WORK}/rac-exit.py" "${SQL}"
+if [ "${A_RC}" -eq 3 ] && a_went_red; then
+  ok "D2 the harness's EXIT STATUS is captured and asserted (rc=${A_RC}) — a status-only death is not read as success"
+else
+  bad "D2 a harness that exited with a status was not caught (rc=${A_RC} rows=${A_ROWS} fails=${A_FAILS}) — A0a is not capturing \$?"
+fi
+
+# D3 — THE STDERR GATE, ISOLATED. A stand-in that is FULLY FUNCTIONAL: it
+#      delegates to the real scanner, so all eleven rows PASS and the status is 0.
+#      Nothing but `[ -s "${A_ERRF}" ]` can notice it. Without this control that
+#      redirect is untested wiring.
+cat > "${WORK}/rac-noisy.py" <<'DEOF'
+"""Stand-in that behaves EXACTLY like the real scanner and merely warns on stderr."""
+import importlib.util, os, sys
+_spec = importlib.util.spec_from_file_location("_rac_real", os.environ["RAC_REAL"])
+_real = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_real)
+strip_sql_comments = _real.strip_sql_comments
+parse_rows = _real.parse_rows
+sys.stderr.write("stand-in: a diagnostic that must NOT be discarded\n")
+DEOF
+run_section_a "${WORK}/rac-noisy.py" "${SQL}"
+if [ "${A_RC}" -eq 0 ] && [ "${A_FAILS}" -eq 0 ] && [ "${A_ROWS}" -ge "${A_MIN}" ] && a_went_red; then
+  ok "D3 STDERR alone turns section A red: ${A_ROWS} rows all green, rc 0, and the diagnostic is still not discarded"
+elif [ "${A_REAL_GREEN}" -ne 0 ]; then
+  bad "D3 the stderr gate is UNPROVEN in this run: this control delegates to the REAL scanner, and section A is already failing against it above — fix that failure, not this row"
+elif a_went_red; then
+  bad "D3 the otherwise-green stand-in went red for the WRONG reason (rc=${A_RC} rows=${A_ROWS} fails=${A_FAILS}) — the stderr gate is not isolated by this control any more"
+else
+  bad "D3 a harness that wrote to stderr was accepted — a traceback or warning would be discarded"
+fi
+
+# D4 — THE PARTIAL SECTION. parse_rows returns the right arity but the wrong
+#      TYPES, so the first rows print and then an assertion body raises. No FAIL
+#      row is emitted, so this is caught by the status/stderr/floor gates only —
+#      the shape that most looks like "it ran and passed".
+cat > "${WORK}/rac-partial.py" <<'DEOF'
+"""Stand-in with the right arity and the wrong types: section A dies MID-WAY."""
+def strip_sql_comments(s):
+    return s.replace("-- ", "")
+def parse_rows(code):
+    return [], [], 0
+DEOF
+run_section_a "${WORK}/rac-partial.py" "${SQL}"
+if [ "${A_FAILS}" -eq 0 ] && [ "${A_ROWS}" -lt "${A_MIN}" ] && a_went_red; then
+  ok "D4 a section that dies PART-WAY (${A_ROWS} of ${A_MIN} rows, no FAIL row) is still red — a short section is not a clean one"
+else
+  bad "D4 a truncated section A was accepted (rc=${A_RC} rows=${A_ROWS} fails=${A_FAILS}) — partial output can pass as a full pass"
 fi
 
 echo "== route-access coverage scanner: ${P} passed, ${F} failed =="
