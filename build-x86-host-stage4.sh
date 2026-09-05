@@ -5329,7 +5329,21 @@ fi
 hugmesh_payload_plan_gate() {
     kept=/tmp/hugmesh-emerge-plan-image-pretend-failed.log
     [ -f "\${kept}" ] || return 0
-    if grep -Eq 'have been masked|masked by:|keyword changes are necessary|mask changes are necessary' "\${kept}"; then
+    # DISCRIMINATOR: match only text that is UNIQUE to an autounmask wall.
+    # "masked by:" is NOT — portage renders that same "- cpv (masked by: ...)"
+    # line from show_masked_packages() for the real wall AND for two purely
+    # INFORMATIONAL blocks that display_problems() prints from the very same
+    # dump: "The following installed packages are masked:" and "The following
+    # updates are masked by LICENSE changes:". A sysroot holding any masked
+    # installed package therefore carried that token into every dump — including
+    # the USE-only failures this gate deliberately lets continue — and the merge
+    # that --autounmask-continue=y could have self-healed died here instead.
+    # Routine here, not exotic: this repo masks >=sys-devel/gettext-0.23 into
+    # every role and the pre-image gettext downgrade is a tolerated failure.
+    # "have been masked" comes only from the unsatisfied-dep wall ("All ebuilds
+    # that could satisfy X have been masked."), so it stays. License walls keep
+    # the pre-gate behaviour on purpose: WARN and let the merge decide.
+    if grep -Eq 'have been masked|keyword changes are necessary|mask changes are necessary' "\${kept}"; then
         echo "[build-x86] ERROR: payload --pretend resolution failed on a KEYWORD/MASK wall."
         echo "[build-x86] The payload merge keeps keyword/mask decisions explicit"
         echo "[build-x86] (--autounmask-keep-keywords=y --autounmask-keep-masks=y), so it cannot"

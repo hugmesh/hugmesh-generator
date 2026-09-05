@@ -78,10 +78,18 @@ def test_font_face_css_embeds_the_exact_bytes_as_a_data_uri():
     assert base64.b64decode(b64) == _WOFF2   # byte round-trip, not just presence
 
 
-def test_font_face_css_strips_quote_injection_from_family_names():
+def test_font_face_css_strips_injection_from_family_names():
+    """The family name is NOT operator-typed: it is read out of the font FILE's name
+    table, so it is attacker-controlled text (see test_font_family_injection.py for the
+    full pin). This USED to blacklist backslash and double-quote only, which let the
+    css declaration/block characters straight through — it now allowlists, so the
+    punctuation is gone and only the word characters survive."""
     css = fonts.font_face_css('Evil"; } body { display:none', _TTF)
-    assert '"; }' not in css.split("\n")[1]
-    assert "display:none" in css          # text survives, structure does not
+    line = css.split("\n")[1]
+    assert '"; }' not in line
+    assert "Evil body displaynone" in line   # words survive, structure does not
+    for ch in ('"', ";", "{", "}", ":"):
+        assert ch not in line.split("font-family:", 1)[1].strip(' ";')
     assert css.count('"') % 2 == 0
 
 

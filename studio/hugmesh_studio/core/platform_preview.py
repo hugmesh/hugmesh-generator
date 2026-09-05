@@ -59,6 +59,26 @@ LOGIN_PANE_LABEL = ("captured copy of the real login page — themed with the ex
 # text nor any escaped snapshot byte can collide with it.
 _LOGIN_SLOT = "__LOGIN_SRCDOC__"
 
+# Defence in depth for the TOP-LEVEL style#snap-theme (the iframe copy is already
+# html.escape'd, so this was the one raw substitution in the page). ONE implementation,
+# owned by login_preview next to the marker it protects — see the long note there for
+# why `<style>` raw text is the hazard and why this neutralises instead of raising.
+raw_text_safe = login_preview.raw_text_safe
+
+# Belt and braces on the generated artifact itself: a frozen, self-contained preview
+# needs no script, no network and no plugin, so say so. If a sink bug ever gets markup
+# into the page again, `default-src 'none'` means it cannot execute or phone home.
+# (`style-src 'unsafe-inline'` is required — the whole page IS inline <style>, and the
+# srcdoc login document inherits this policy; `font-src data:` is the embedded
+# @font-face; the snapshot references no images, scripts or external sheets.)
+# (measured in chromium: `base-uri 'none'` is deliberately NOT here — the captured
+# login-ui snapshot carries Angular's `<base href="/">`, and the srcdoc document
+# inherits this policy, so it logged a violation on every load for no gain: nothing
+# can be fetched under `default-src 'none'` regardless of what the base URI is.)
+PREVIEW_CSP = ("default-src 'none'; style-src 'unsafe-inline'; font-src data:; "
+               "img-src data:; form-action 'none'")
+
+
 # persona -> avatar/name colour classes. Fixed mapping (not hashed) so the same
 # persona is the same colour in every pane and every render — determinism is pinned
 # by tests. accent-soft carries dark text from the token contract itself: soft_for_text
@@ -336,6 +356,7 @@ def platform_preview_html(theme_css: str) -> str:
         '<html lang="en"><head>\n'
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f'<meta http-equiv="Content-Security-Policy" content="{PREVIEW_CSP}">\n'
         "<title>HugMesh platform preview</title>\n"
         f'<style id="compiled-default-tokens">{_fallback_root_css()}</style>\n'
         f'<style id="snap-theme">{MARKER}</style>\n'
@@ -354,7 +375,7 @@ def platform_preview_html(theme_css: str) -> str:
     # Marker first, srcdoc second: the substituted login doc no longer contains the
     # marker (and an unthemed one carries an empty style block), so the top-level
     # replace can never eat the iframe's copy.
-    page = shell.replace(MARKER, theme_css, 1)
+    page = shell.replace(MARKER, raw_text_safe(theme_css), 1)
     return page.replace(_LOGIN_SLOT, _html.escape(login_doc, quote=True), 1)
 
 

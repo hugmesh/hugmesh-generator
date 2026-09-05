@@ -62,6 +62,9 @@ if [ -r "${SRC}/scripts/_roles-lib.sh" ]; then
     source "${SRC}/scripts/_roles-lib.sh"
 else
     hugmesh_role_canonicalize() { printf '%s\n' "$1"; }
+    # Degrading to "no alias folding" must also degrade to "no shadow filtering",
+    # not to an undefined command in the middle of the image-autodetect pipeline.
+    hugmesh_role_shadow_filter() { cat; }
 fi
 
 PLATFORM="rpi5"
@@ -625,11 +628,23 @@ fi
 # stays FIRST in every pattern: an unanchored role glob is how an aarch64 row
 # would be handed an x86 image. (run-qemu-docker.sh passes --img explicitly, so
 # this autodetect is the fallback path; it still has to be right.)
+#
+# `-${ROLE}-` is a PREFIX match, so on x86 `--role backend` also matches
+# <brand>-x86-amd64-backend-gpu-<env>-<ts>.img — and `for c in <glob>` expands to
+# individual filenames in ALPHABETICAL order, where backend-gpu sorts first, so the
+# mis-pick does not even need the GPU image to be the newest.
+# hugmesh_role_shadow_filter (scripts/_roles-lib.sh) drops the longer role's names
+# from the role-SCOPED patterns; the any-role platform fallbacks below stay
+# unfiltered on purpose — they have already given up on the role.
 autodetect_img() {
     local c
     for c in \
         "${ARTIFACTS}"/*-"${PLATFORM}"-*-"${ROLE}"-*.img \
-        "${ARTIFACTS}"/*-"${PLATFORM}"-*-"${ROLE}"-*.img.xz \
+        "${ARTIFACTS}"/*-"${PLATFORM}"-*-"${ROLE}"-*.img.xz ; do
+        c="$(ls -1t ${c} 2>/dev/null | grep -ivE '(kernel|initramfs|initrd|squashfs)' | hugmesh_role_shadow_filter "${ROLE}" | head -1 || true)"
+        [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
+    done
+    for c in \
         "${ARTIFACTS}"/*-"${PLATFORM}"-*.img \
         "${ARTIFACTS}"/*-"${PLATFORM}"-*.img.xz ; do
         c="$(ls -1t ${c} 2>/dev/null | grep -ivE '(kernel|initramfs|initrd|squashfs)' | head -1 || true)"
@@ -643,7 +658,7 @@ autodetect_stage4() {
     for c in \
         "${ARTIFACTS}"/*-"${PLATFORM}"-*-"${ROLE}"-*.stage4.tar.xz \
         "${ARTIFACTS}"/*-"${ROLE}"-*.stage4.tar.xz ; do
-        c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
+        c="$(ls -1t ${c} 2>/dev/null | hugmesh_role_shadow_filter "${ROLE}" | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done
     return 1
