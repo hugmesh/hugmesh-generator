@@ -16,6 +16,16 @@ keys-provision's ``provision_vault()`` then seeds the External Secrets Operator 
 that file at first boot whenever the KEYS manifest carries no ``.vault`` block (a
 manifest block still wins — it is the per-stick override).
 
+HOW FAR EACH FIELD REACHES, stated because the copy used to overstate two of them.
+The ADDRESS is live: a set address is what makes ``provision_vault()`` create the
+``vault-token`` / ``vault-ca`` Secrets from the KEYS stick at all. The MOUNT and BASE
+PATH reach ``vault.conf`` and ``provision_vault()`` and stop there: the shipped
+``manifests/external-secrets/secretstore.yaml`` still pins ``path: secret`` at the
+in-cluster ``vault.vault.svc`` server, and its ExternalSecrets pin ``remoteRef`` keys
+at ``hugmesh/<service>``. Nothing rewrites those from this page today, so the two
+paths are RECORDED facts, not yet a re-point of the reader. The page and the tooltips
+say exactly that rather than promising a wiring that does not exist.
+
 What it does NOT do, on purpose: the Vault TOKEN and unseal key are custody material.
 They ride the KEYS stick (``vault/token``, ``vault/unseal-key``) and are never a
 wizard field, never a flag and never a byte of any image.
@@ -55,6 +65,13 @@ _LIMITS_NOTE = (
     "(vault/token, vault/unseal-key; see keys-template/vault/README.md). A .vault "
     "block in provision.json overrides everything on this page. Desktop rows in the "
     "worklist ignore it (the builder says so in the log).\n"
+    "What the two paths do NOT do YET: the mount and base path are RECORDED in "
+    "vault.conf and read by keys-provision, but the shipped cluster manifests still "
+    "pin their own — the ClusterSecretStore reads mount 'secret' at the in-cluster "
+    "Vault service, and the ExternalSecrets pin remoteRef keys at 'hugmesh/<service>'. "
+    "Nothing rewrites either from this page, so a non-default mount or prefix is "
+    "carried to first boot and logged and changes nothing else. The address itself is "
+    "live: it is what enables the vault-token / vault-ca seeding at all.\n"
     "An empty address emits no flag. The builders then fall back to a brand profile's "
     "VAULT_ADDR (brand.conf, or the build environment) exactly as they do for every "
     "other knob; with neither set, nothing is baked and secrets come off the KEYS "
@@ -83,25 +100,35 @@ class VaultPage(QtWidgets.QWizardPage):
         self.addr.setPlaceholderText(
             "https://vault.example.net:8200  (empty = offline / KEYS-stick only)")
         self.addr.setToolTip(
-            "The Vault this mesh's nodes seed their External Secrets Operator from "
-            "(--vault-addr). Must be https:// — it is the secrets channel's trust "
-            "anchor. Empty = offline/USB-only delivery: nothing is baked.")
+            "The Vault address baked into every node in this flow (--vault-addr). "
+            "Must be https:// — it is the secrets channel's trust anchor. Setting it "
+            "is what turns first-boot ESO seeding ON: keys-provision creates the "
+            "vault-token / vault-ca Secrets from the KEYS stick. The shipped "
+            "ClusterSecretStore keeps its own in-cluster server URL; this value is "
+            "not substituted into it. Empty = offline/USB-only: nothing is baked.")
         vb.addWidget(_row("Vault address", self.addr))
         self.kv_mount = QtWidgets.QLineEdit()
         self.kv_mount.setPlaceholderText(
             f"{VAULT_KV_MOUNT_DEFAULT}  (the builder default; leave empty to keep it)")
         self.kv_mount.setToolTip(
-            "The KV v2 mount the ClusterSecretStore reads (--vault-kv-mount). Empty "
-            f"keeps the builder default '{VAULT_KV_MOUNT_DEFAULT}' — the same knob "
-            "brand.conf calls VAULT_KV_MOUNT.")
+            "The KV v2 mount RECORDED in /etc/hugmesh/vault.conf (--vault-kv-mount). "
+            f"Empty keeps the builder default '{VAULT_KV_MOUNT_DEFAULT}' — the same "
+            "knob brand.conf calls VAULT_KV_MOUNT, which is what "
+            "scripts/gen-cluster-secrets.sh WRITES to. Recorded, not yet read: the "
+            "shipped ClusterSecretStore still pins path 'secret', so a different "
+            "mount is carried to first boot and logged, and nothing re-points the "
+            "reader yet.")
         vb.addWidget(_row("KV mount", self.kv_mount))
         self.base_path = QtWidgets.QLineEdit()
         self.base_path.setPlaceholderText(
             "the brand slug  (the builder default; leave empty to keep it)")
         self.base_path.setToolTip(
-            "The path prefix under the mount where this mesh's secrets live "
+            "The path prefix under the mount RECORDED in /etc/hugmesh/vault.conf "
             "(--vault-base-path). Empty keeps the builder default — the brand slug, "
-            "which is where scripts/gen-cluster-secrets.sh writes them.")
+            "which is where scripts/gen-cluster-secrets.sh WRITES the secrets. "
+            "Recorded, not yet read: the shipped ExternalSecrets still pin their "
+            "remoteRef keys at 'hugmesh/<service>', so a different prefix is carried "
+            "to first boot and logged, and nothing re-points the reader yet.")
         vb.addWidget(_row("Base path", self.base_path))
         # the inline verdict — the ONE predicate validate_identity enforces on argv,
         # shown here as text so an operator is told WHY Next is greyed (never a modal)

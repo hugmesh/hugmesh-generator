@@ -388,7 +388,11 @@ class VaultScreen:
                     f"  base path  {cfg.vault_base_path or '<brand> (builder default)'}",
                     "",
                     "  Every x86/rpi5 node in the worklist bakes these into "
-                    "/etc/hugmesh/vault.conf.", ""]
+                    "/etc/hugmesh/vault.conf. The address is what enables first-boot "
+                    "ESO seeding; the mount and base path are recorded there and read "
+                    "by keys-provision, but the shipped cluster manifests still pin "
+                    "their own mount ('secret') and key prefix ('hugmesh/<service>').",
+                    ""]
         else:
             out += ["  address    (none — no flag emitted; brand.conf VAULT_ADDR or "
                     "offline KEYS-stick delivery)", ""]
@@ -403,7 +407,8 @@ class VaultScreen:
             "",
             "The Vault token and unseal key are never entered here: put them on the "
             "KEYS stick (vault/token, vault/unseal-key). A .vault block in the "
-            "stick's provision.json overrides this step.",
+            "stick's provision.json overrides this step. The mount and base path are "
+            "recorded facts today, not a re-point of what the cluster reads.",
         ]
         return out
 
