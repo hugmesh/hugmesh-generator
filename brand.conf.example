@@ -175,7 +175,11 @@ TAILSCALE_VERSION="1.78.1"
 # VAULT_TOKEN in the environment, never committed here) to also push the
 # secrets into Vault for online ESO sync.
 VAULT_ADDR=""                       # e.g. https://vault.hugmesh.net  (empty = offline/USB-only)
-VAULT_KV_MOUNT="secret"             # KV v2 mount the ClusterSecretStore reads
+VAULT_KV_MOUNT="secret"             # KV v2 mount gen-cluster-secrets.sh WRITES to
+# NOTE: VAULT_KV_MOUNT/VAULT_BASE_PATH are the WRITER side plus a recorded fact in
+# the image. The shipped external-secrets manifests still pin their own mount
+# ("secret") and key prefix ("hugmesh/<service>"), so changing these does not yet
+# re-point what the cluster READS.
 # VAULT_BASE_PATH=""                # path prefix under the mount; empty = the BRAND slug
 
 # ── External CA (optional — use an EXISTING CA as the cert issuer) ──

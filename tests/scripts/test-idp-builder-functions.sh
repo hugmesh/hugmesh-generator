@@ -19,6 +19,26 @@
 #     the F4 half-rewrite regression); Casdoor apps/manifests gated out;
 #     README-IDP.md dropped with the honest-limits text.
 #
+#
+# ALSO IN THIS FILE (2026-09-04, issue #224 follow-up). The name says "idp"; the
+# scope is now the mesh-node CONF-BAKE passes in these two builders, IdP and Vault
+# alike, plus the call sites of both. Two additions, and they are here rather than in
+# a new suite because a new suite would move test-guard-integrity.sh's
+# PREMERGE_BASELINE and this file is already gated by shell-suites.yml and
+# .gitlab-ci.yml:
+#   * CALL SITES. Everything above extracts a function and invokes it itself, which
+#     says nothing about whether the builder ever runs it. Deleting the one-line
+#     `bake_vault_conf` / `_validate_vault` calls left every gate in the repo green.
+#     Both vault calls and both idp calls are now pinned, with negative controls on
+#     the matcher.
+#   * VAULT. _validate_vault + bake_vault_conf against a fixture sysroot (empty
+#     address = byte no-op; fail-closed table; 0644 vault.conf with the address,
+#     mount and base path and NO token/unseal field; client role = warn-drop; the
+#     ${BRAND} base-path DEFAULT is validated too) — and the OTHER END of the
+#     contract: keys-provision's real vault_conf_get / resolve_vault_source read the
+#     baked file back, prove it is read and not sourced, and prove the reader trims
+#     the ends rather than stripping the interior.
+#
 # Runs ANYWHERE with bash — NO cross-build, NO root, NO network.
 set -uo pipefail
 
@@ -43,12 +63,19 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   [ -f "${B}" ] || { bad "${BUILDER} missing"; continue; }
 
   # Load the REAL functions into a subshell-free scope for this builder.
+  # unset + a parse check for the same reason the vault block below states: the two
+  # builders share one shell, so a definition that fails to load leaves the PREVIOUS
+  # builder's copy in scope and the iteration silently re-tests it.
+  unset -f _sed_rep_escape _validate_idp _idp_default_jwks \
+           bake_idp_conf rewrite_idp_sysroot gate_casdoor_apps \
+           write_idp_readme apply_idp_external
   for fn in _sed_rep_escape _validate_idp _idp_default_jwks \
             bake_idp_conf rewrite_idp_sysroot gate_casdoor_apps \
             write_idp_readme apply_idp_external; do
     src="$(extract_fn "${fn}" "${B}")"
     [ -n "${src}" ] || { bad "${BUILDER}: could not extract ${fn}"; continue 2; }
-    eval "${src}"
+    eval "${src}" 2>/dev/null \
+      || { bad "${BUILDER}: ${fn} does not PARSE (the extracted body is not a valid function)"; continue 2; }
   done
   type apply_idp_external >/dev/null 2>&1 || { bad "${BUILDER}: apply_idp_external not loaded"; continue; }
 
@@ -150,7 +177,202 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   rm -rf "${SYSROOT}"
 done
 
+# ══ CALL SITES: the builder must actually INVOKE what it defines ═══════════════
+# WHY THIS BLOCK EXISTS. Everything above EXTRACTS a function and then invokes it
+# ITSELF. That proves the function is correct and proves NOTHING about whether the
+# builder ever runs it. MEASURED 2026-09-04 (adversarial review of #224): delete the
+# one-line `bake_vault_conf` call from BOTH builders — and, separately, the
+# `_validate_vault` line — and 578 studio pytest cases stayed green while
+# tests/build-matrix/flag-coverage.sh, tests/scripts/test-eso-provider-refs.sh,
+# tests/scripts/test-guard-integrity.sh and THIS suite all still exited 0. The whole
+# --vault-* feature was inert with every gate in the repo green. flag-coverage.sh
+# cannot close it: it proves a flag is PARSED, never that its value is CONSUMED.
+#
+# The identical hole existed for the idp pair, which is why both are pinned here
+# rather than only the new one.
+#
+# A CALL is a line whose only content is the function name (a trailing comment is
+# allowed). The definition line is `name() {` and cannot match; a comment line starts
+# with `#` and cannot match either — verified by the negative controls below.
+echo "== call sites: defined AND invoked =="
+callsites() { # <name> <file> -> count of top-level call lines
+  grep -cE "^[[:space:]]*$1[[:space:]]*(#.*)?$" "$2" 2>/dev/null || true
+}
+for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
+  B="${REPO}/${BUILDER}"
+  for fn in _validate_idp apply_idp_external _validate_vault bake_vault_conf; do
+    grep -qE "^${fn}\(\) \{" "${B}" || { bad "${BUILDER}: ${fn} is not even DEFINED"; continue; }
+    n="$(callsites "${fn}" "${B}")"
+    if [ "${n}" -ge 1 ]; then ok "${BUILDER}: ${fn} is invoked (${n} call site(s))"
+    else bad "${BUILDER}: ${fn} is DEFINED BUT NEVER CALLED — the pass is inert"; fi
+  done
+done
+# Negative controls for the matcher itself: a name that only ever appears as a
+# definition, a comment or a substring must count ZERO, or the four checks above
+# would pass on any builder at all.
+NEG="$(mktemp)"
+printf 'zzz_never_called() {\n    :\n}\n# zzz_never_called is only mentioned here\necho zzz_never_called_suffix\n' > "${NEG}"
+[ "$(callsites zzz_never_called "${NEG}")" = "0" ] \
+  && ok "call-site matcher: a defined-but-uncalled function counts 0 (def/comment/substring are not calls)" \
+  || bad "call-site matcher: counted a non-call as a call"
+printf 'zzz_never_called\n' >> "${NEG}"
+[ "$(callsites zzz_never_called "${NEG}")" = "1" ] \
+  && ok "call-site matcher: a bare call line counts 1" \
+  || bad "call-site matcher: missed a bare call line"
+printf '    zzz_never_called   # indented, with a trailing comment\n' >> "${NEG}"
+[ "$(callsites zzz_never_called "${NEG}")" = "2" ] \
+  && ok "call-site matcher: an indented call with a trailing comment counts" \
+  || bad "call-site matcher: missed an indented/commented call line"
+rm -f "${NEG}"
+
+# ══ VAULT: the /etc/hugmesh/vault.conf bake, and the first-boot read-back ══════
+# The sibling of the idp bake above, in the SAME two builders (issue #224), plus
+# the other end of the contract: keys-provision reads back what the builder wrote.
+# Both ends are extracted REAL code — no copy, no cross-build, no cluster.
+for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
+  echo "== ${BUILDER}: vault builder functions =="
+  B="${REPO}/${BUILDER}"
+  [ -f "${B}" ] || { bad "${BUILDER} missing"; continue; }
+  # The two validators are regex CONSTANTS at top level, not functions.
+  eval "$(grep -m1 '^_IDP_URL_RE=' "${B}")"
+  eval "$(grep -m1 '^_VAULT_PATH_RE=' "${B}")"
+  # UNSET first, and fail LOUDLY on a body that does not parse. Both matter: the two
+  # builders are walked in one shell, so a definition from the FIRST iteration stays
+  # in scope for the second, and a `eval` that quietly failed would have re-run the
+  # x86 function while claiming to test rpi5. Measured while building this block —
+  # two mutations planted in the rpi5 builder "survived" for exactly that reason.
+  unset -f _validate_vault bake_vault_conf
+  for fn in _validate_vault bake_vault_conf; do
+    src="$(extract_fn "${fn}" "${B}")"
+    [ -n "${src}" ] || { bad "${BUILDER}: could not extract ${fn}"; continue 2; }
+    eval "${src}" 2>/dev/null \
+      || { bad "${BUILDER}: ${fn} does not PARSE (the extracted body is not a valid function)"; continue 2; }
+    type -t "${fn}" >/dev/null 2>&1 \
+      || { bad "${BUILDER}: ${fn} did not load"; continue 2; }
+  done
+
+  ROLE="omnibus"; ROLE_CLIENT=false; BRAND="hugmesh"
+  VAULT_ADDR=""; VAULT_KV_MOUNT=""; VAULT_BASE_PATH=""
+
+  # ── the empty address is the byte no-op default ─────────────────────────────
+  SYSROOT="$(mktemp -d)"
+  bake_vault_conf
+  [ -e "${SYSROOT}/etc/hugmesh/vault.conf" ] \
+    && bad "${BUILDER}: an empty --vault-addr baked a vault.conf" \
+    || ok "${BUILDER}: empty --vault-addr bakes NOTHING (the offline default)"
+  rm -rf "${SYSROOT}"
+
+  # ── _validate_vault fail-closed table ───────────────────────────────────────
+  vvfail() { # label  ADDR MOUNT BASE
+    VAULT_ADDR="$2" VAULT_KV_MOUNT="$3" VAULT_BASE_PATH="$4"
+    if ( _validate_vault ) 2>/dev/null; then bad "${BUILDER}: $1 was ACCEPTED (want reject)"
+    else ok "${BUILDER}: rejects $1"; fi
+  }
+  vvfail "an http:// vault address"    "http://vault.acme.example:8200" "" ""
+  vvfail "a shell-shaped KV mount"     "https://vault.acme.example:8200" 'kv$(id)' ""
+  vvfail "a shell-shaped base path"    "https://vault.acme.example:8200" "" '$(rm -rf /)'
+  vvfail "a base path with a space"    "https://vault.acme.example:8200" "" "acme corp"
+  VAULT_ADDR="https://vault.acme.example:8200" VAULT_KV_MOUNT="kv" VAULT_BASE_PATH="acme/prod"
+  ( set -e; _validate_vault ) && ok "${BUILDER}: _validate_vault accepts a valid trio under set -e" \
+    || bad "${BUILDER}: _validate_vault rejected a valid trio"
+  VAULT_ADDR="" VAULT_KV_MOUNT="" VAULT_BASE_PATH=""
+  ( set -e; _validate_vault ) && ok "${BUILDER}: _validate_vault(empty) returns 0 under set -e" \
+    || bad "${BUILDER}: _validate_vault(empty) failed under set -e"
+
+  # ── a set address bakes CONNECTION FACTS ONLY, 0644 ─────────────────────────
+  SYSROOT="$(mktemp -d)"
+  VAULT_ADDR="https://vault.acme.example:8200"; VAULT_KV_MOUNT="kv"; VAULT_BASE_PATH="acme/prod"
+  bake_vault_conf
+  VC="${SYSROOT}/etc/hugmesh/vault.conf"
+  [ -f "${VC}" ] && ok "${BUILDER}: a set address bakes vault.conf" || bad "${BUILDER}: no vault.conf baked"
+  [ "$(stat -c '%a' "${VC}" 2>/dev/null)" = "644" ] && ok "${BUILDER}: vault.conf is 0644" || bad "${BUILDER}: vault.conf not 0644"
+  grep -q "^VAULT_ADDR=https://vault.acme.example:8200$" "${VC}" \
+    && grep -q "^VAULT_KV_MOUNT=kv$" "${VC}" && grep -q "^VAULT_BASE_PATH=acme/prod$" "${VC}" \
+    && ok "${BUILDER}: vault.conf carries the address + mount + base path" \
+    || { bad "${BUILDER}: vault.conf fields wrong"; cat "${VC}"; }
+  # CONNECTION FACTS ONLY: no token/unseal field may ever appear (the custody rule).
+  grep -qiE '^[[:space:]]*(vault_)?(token|unseal[_-]?key)[[:space:]]*[=:]' "${VC}" \
+    && bad "${BUILDER}: vault.conf carries a token/unseal field" \
+    || ok "${BUILDER}: vault.conf has NO token/unseal field"
+
+  # ── the first-boot READ-BACK, with keys-provision's own reader ──────────────
+  # The other end of the contract: what the builder wrote must come back byte-for-
+  # byte through the REAL vault_conf_get/resolve_vault_source. Extracted from
+  # provision.sh so a change to either end that breaks the pair fails here.
+  PROV="${REPO}/specs/etc/keys-provision/provision.sh"
+  unset -f vault_conf_get resolve_vault_source
+  for fn in vault_conf_get resolve_vault_source; do
+    src="$(extract_fn "${fn}" "${PROV}")"
+    [ -n "${src}" ] || { bad "provision.sh: could not extract ${fn}"; continue 2; }
+    eval "${src}" 2>/dev/null \
+      || { bad "provision.sh: ${fn} does not PARSE"; continue 2; }
+    type -t "${fn}" >/dev/null 2>&1 || { bad "provision.sh: ${fn} did not load"; continue 2; }
+  done
+  jqe() { return 1; }   # no .vault block in the manifest -> the image is the source
+  VAULT_IMAGE_CONF="${VC}"
+  resolve_vault_source
+  [ "${VAULT_SRC}" = "image" ] && ok "${BUILDER}: first boot resolves the baked file as the source" \
+    || bad "${BUILDER}: VAULT_SRC='${VAULT_SRC}' (want 'image')"
+  [ "${vault_address}" = "https://vault.acme.example:8200" ] && [ "${vault_kv_mount}" = "kv" ] \
+    && [ "${vault_base_path}" = "acme/prod" ] && [ "${vault_enabled}" = "true" ] \
+    && ok "${BUILDER}: the baked trio reads back unchanged, enabled=true" \
+    || bad "${BUILDER}: read-back mismatch: '${vault_address}' '${vault_kv_mount}' '${vault_base_path}' enabled=${vault_enabled}"
+  # The reader must READ the file, never SOURCE it.
+  printf 'EVIL=$(touch %s/PWNED)\n' "${SYSROOT}" >> "${VC}"
+  vault_conf_get VAULT_ADDR >/dev/null
+  [ -e "${SYSROOT}/PWNED" ] && bad "${BUILDER}: vault.conf was SOURCED — a stray line executed" \
+    || ok "${BUILDER}: vault.conf is read, not sourced (a stray line executes nothing)"
+  rm -rf "${SYSROOT}"
+
+  # ── the reader TRIMS the ends, it does not STRIP the interior ───────────────
+  # `${v//[[:space:]]/}` deleted every space anywhere, so `acme corp` silently
+  # became `acmecorp` — a wrong value that reads exactly like a working one.
+  TDIR="$(mktemp -d)"
+  printf 'VAULT_ADDR=  "https://v.example:8200"  \nVAULT_BASE_PATH=acme corp\n' > "${TDIR}/vault.conf"
+  VAULT_IMAGE_CONF="${TDIR}/vault.conf"
+  [ "$(vault_conf_get VAULT_ADDR)" = "https://v.example:8200" ] \
+    && ok "${BUILDER}: reader trims padding and quotes off a value" \
+    || bad "${BUILDER}: padded/quoted value read back as '$(vault_conf_get VAULT_ADDR)'"
+  [ "$(vault_conf_get VAULT_BASE_PATH)" = "acme corp" ] \
+    && ok "${BUILDER}: reader keeps an interior space verbatim (no silent join)" \
+    || bad "${BUILDER}: interior space was STRIPPED: '$(vault_conf_get VAULT_BASE_PATH)'"
+  rm -rf "${TDIR}"
+
+  # ── a client role is a loud no-op, not a bake ───────────────────────────────
+  SYSROOT="$(mktemp -d)"
+  ROLE_CLIENT=true; ROLE="desktop"
+  VAULT_ADDR="https://vault.acme.example:8200"; VAULT_KV_MOUNT=""; VAULT_BASE_PATH=""
+  bake_vault_conf
+  [ -e "${SYSROOT}/etc/hugmesh/vault.conf" ] \
+    && bad "${BUILDER}: a client role baked a vault.conf" \
+    || ok "${BUILDER}: a client role bakes NO vault.conf (warn-drop)"
+  ROLE_CLIENT=false; ROLE="omnibus"
+  rm -rf "${SYSROOT}"
+
+  # ── the ${BRAND} default is validated too, not only the flags ───────────────
+  # _validate_vault only ever sees the FLAGS, so the base path's DEFAULT was the
+  # one value that could reach the file unchecked.
+  SYSROOT="$(mktemp -d)"
+  VAULT_ADDR="https://vault.acme.example:8200"; VAULT_KV_MOUNT=""; VAULT_BASE_PATH=""
+  BRAND="acme corp"
+  if ( bake_vault_conf ) 2>/dev/null; then
+    bad "${BUILDER}: a space-bearing \${BRAND} default was baked unchecked"
+  else
+    ok "${BUILDER}: a space-bearing \${BRAND} default is refused (not silently baked)"
+  fi
+  BRAND="acme"
+  bake_vault_conf
+  grep -q "^VAULT_BASE_PATH=acme$" "${SYSROOT}/etc/hugmesh/vault.conf" \
+    && ok "${BUILDER}: an unset --vault-base-path defaults to the brand slug" \
+    || bad "${BUILDER}: the brand-slug default did not land"
+  grep -q "^VAULT_KV_MOUNT=secret$" "${SYSROOT}/etc/hugmesh/vault.conf" \
+    && ok "${BUILDER}: an unset --vault-kv-mount defaults to 'secret'" \
+    || bad "${BUILDER}: the KV-mount default did not land"
+  BRAND="hugmesh"
+  rm -rf "${SYSROOT}"
+done
+
 echo
-if [ "${F}" -eq 0 ]; then echo "idp-builder-functions: ${P} passed, 0 failed"; else echo "idp-builder-functions: ${P} passed, ${F} FAILED"; fi
+if [ "${F}" -eq 0 ]; then echo "idp+vault-builder-functions: ${P} passed, 0 failed"; else echo "idp+vault-builder-functions: ${P} passed, ${F} FAILED"; fi
 [ "${F}" -eq 0 ] || exit 1
 exit 0
