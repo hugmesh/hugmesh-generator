@@ -26,7 +26,11 @@ One module per ask, in the operator's own words:
 * **21** — also: the ``--standalone`` posture LEFT the Home step. The finding-1 guards
   moved with it (RolePage visibility, the ARM appliance pins, the mesh-node clear).
 * **22** — "Simplify the review screen and make the build screen separate with an option
-  to continue the build and go back to the main menu."
+  to continue the build and go back to the main menu." ProgressPage DISPATCHES ON
+  ARRIVAL, so every walk onto it here goes through ``_install_inert_build_driver`` —
+  the walk that did not (2026-09-04) launched a real ``sudo -A bash
+  ./build-x86-host-stage4.sh`` per run and left 60 root-owned launchers wedged on an
+  offscreen askpass dialog. The unstubbed arrival is now pinned to be REFUSED.
 
 Every gate here has a MUTATION proof recorded in the lane report: reverting the gating
 condition in the source makes the named test fail.
@@ -44,8 +48,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
+from hugmesh_studio.core import build_driver as bd   # noqa: E402
 from hugmesh_studio.core import roles as roles_lib   # noqa: E402
 from hugmesh_studio.core import timezones          # noqa: E402
+from hugmesh_studio.core import worklist_driver as wd   # noqa: E402
 from hugmesh_studio.core.config import (           # noqa: E402
     PERSON_ROLE_CHOICES, Domain, ImageConfig, User, clear_role_class_fields,
     default_local_user, derive_default_user, derive_hostname, encrypt_root_always,
@@ -110,6 +116,66 @@ def mesh_flow(wiz, *ids):
 def visited_slugs(wiz):
     """The slugs of the pages this flow has actually VISITED, in wizard order."""
     return [slug for slug, pid in wiz._page_ids.items() if wiz.hasVisitedPage(pid)]
+
+
+def _install_inert_build_driver(monkeypatch):
+    """Arriving at ProgressPage dispatches the committed worklist through the REAL
+    WorklistDriver -> BuildDriver -> `sudo -A bash ./build-x86-host-stage4.sh` (this
+    file's pinned host is non-root, native). Replace the per-image driver with an inert
+    one that records what it was asked to build, and the mesh node-key generator's
+    Popen with a no-op, so a walk onto the page proves DISPATCH without a process.
+    Same shape as tests/test_pages_progress.py::_install_fake_builddriver."""
+    runs = []
+
+    class InertBuildDriver:
+        def __init__(self, gen, host, graphical=False, workdir=None):
+            self.workdir = workdir
+
+        def run(self, cfg, backend, on_line=None):
+            runs.append((cfg.role, cfg.platform, backend))
+            if on_line:
+                on_line(f"==> (inert) {cfg.role}.{cfg.platform}")
+            return 0
+
+        def cancel(self):
+            pass
+
+        def preflight(self, cfg, backend):
+            return []
+
+        def preflight_warnings(self, cfg, backend):
+            return []
+
+        def command_string(self, cfg, backend=None):
+            return f"cmd:{cfg.role}"
+
+    class _KeysProc:
+        stdout = iter(())
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(wd, "BuildDriver", InertBuildDriver)
+    monkeypatch.setattr(wd.subprocess, "Popen", lambda cmd, **kw: _KeysProc())
+    return runs
+
+
+def _point_output_dir(wiz, tmp_path):
+    """Commit a throwaway output dir through the Build page's own field, so the session
+    record and work dir the dispatch mints land under tmp_path — never <generator>/out."""
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    build.outdir.setText(str(tmp_path / "out"))
+    return build
+
+
+def _settle_run(qapp, page, timeout_ms=15000):
+    """Join the dispatched worker, then pump the loop so its queued signals land."""
+    if page.worker is not None:
+        page.worker.wait(timeout_ms)
+    for _ in range(500):
+        qapp.processEvents()
+        if page.isComplete():
+            break
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -1591,13 +1657,51 @@ def test_ask22_launch_is_never_dynamically_skipped(wiz):
         del launch.applies_to
 
 
-def test_ask22_continue_advances_to_the_run(wiz):
+def test_ask22_continue_advances_to_the_run(wiz, qapp, monkeypatch, tmp_path):
     """"an option to continue the build" — the card is what advances to the page that
-    actually runs it."""
+    actually runs it. The page dispatches on arrival, so the driver is INERT here (see
+    _install_inert_build_driver) and the dispatch is asserted through it: before
+    2026-09-04 this test walked onto the page unstubbed and started a real
+    `sudo -A bash ./build-x86-host-stage4.sh` every run."""
+    runs = _install_inert_build_driver(monkeypatch)
     mesh_flow(wiz, "pki.x86")
+    _point_output_dir(wiz, tmp_path)
+    launch = advance_to(wiz, wizard_mod.LaunchPage)
+    assert wiz.worklist.base.output_dir == str(tmp_path / "out")
+    launch._continue()
+    page = wiz.currentPage()
+    assert isinstance(page, wizard_mod.ProgressPage)
+    _settle_run(qapp, page)
+    assert runs == [("pki", "x86", "native")]      # dispatched on arrival — via the stub
+    assert page.isComplete()
+
+
+def test_ask22_an_unstubbed_arrival_is_refused_not_elevated(wiz, qapp, monkeypatch, tmp_path):
+    """The 2026-09-04 wedge, end to end through the REAL page and the REAL driver, with
+    nothing stubbed on the dispatch path: arriving at ProgressPage under pytest must
+    surface core.build_driver.ElevationRefused in the log pane and end the run — never
+    Popen a `sudo -A` (tests/conftest.py's spy would error this test if it did).
+
+    `which` is pinned for sudo/pkexec only, so the prefix is deterministically
+    `sudo -A` on any box (the refusal is what is under test, not the host's PATH)."""
+    real_which = bd.shutil.which
+    monkeypatch.setattr(bd.shutil, "which",
+                        lambda name, *a, **k: (f"/usr/bin/{name}" if name in ("sudo", "pkexec")
+                                               else real_which(name, *a, **k)))
+    mesh_flow(wiz, "pki.x86")
+    _point_output_dir(wiz, tmp_path)
     launch = advance_to(wiz, wizard_mod.LaunchPage)
     launch._continue()
-    assert isinstance(wiz.currentPage(), wizard_mod.ProgressPage)
+    page = wiz.currentPage()
+    assert isinstance(page, wizard_mod.ProgressPage)
+    _settle_run(qapp, page)
+    log = page.log.toPlainText()
+    assert "refusing to spawn sudo" in log and "pytest is running this process" in log, log
+    assert "build run aborted before completion" in log            # the worker's own line
+    assert page.isComplete()                                       # the run ENDED
+    assert not (tmp_path / "out" / "sessions").exists() or not any(
+        p.name.startswith("wl-") for s in (tmp_path / "out" / "sessions").iterdir()
+        for p in s.iterdir()), "a build tree was created — something ran"
 
 
 def test_ask22_main_menu_returns_to_the_first_screen_with_config_intact(wiz):

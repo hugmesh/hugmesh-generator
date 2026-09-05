@@ -6,6 +6,14 @@ without a Qt dialog, and return non-zero on cancel so ``sudo -A`` ABORTS the bui
 instead of running it un-elevated. The integration test drives the REAL
 ``python -m hugmesh_studio --askpass`` under a stub ``sudo -A`` and asserts the
 password reaches the elevation program only, and a cancel stops the inner command.
+
+NEVER A DIALOG BY FALLBACK (2026-09-04): the Qt dialog is reached ONLY through the
+explicit opt-in (``allow_gui=True`` / ``--askpass-gui``, which the driver's generated
+helper passes for a GUI-launched build), and the terminal prompt needs a terminal ON
+STDIN. A helper with no credential source, no TTY and no opt-in fails fast — exit 1,
+nothing on stdout, CANCEL_MARKER on stderr — even with DISPLAY set. Before this the
+same shape (a pytest run, QT_QPA_PLATFORM=offscreen, on a desktop) blocked forever on
+an invisible dialog, and 60 root-owned `sudo -A` launchers were found wedged.
 """
 import io
 import os
@@ -65,14 +73,28 @@ def test_env_command_failure_falls_through_to_none(monkeypatch):
     assert askpass.CANCEL_MARKER in err.getvalue()
 
 
-def test_gui_used_when_display_present(monkeypatch):
+def test_gui_used_when_display_present_and_opted_in(monkeypatch):
     _no_env(monkeypatch)
     monkeypatch.setattr(askpass, "_display_available", lambda: True)
     monkeypatch.setattr(askpass, "_from_gui", lambda *a, **k: "typed-in-dialog")
     # terminal must NOT be consulted when the dialog answered
     monkeypatch.setattr(askpass, "_from_terminal",
                         lambda *a, **k: pytest.fail("terminal used despite a dialog"))
-    assert askpass.acquire_password() == "typed-in-dialog"
+    assert askpass.acquire_password(allow_gui=True) == "typed-in-dialog"
+
+
+def test_gui_is_never_a_fallback_without_the_opt_in(monkeypatch):
+    """The 2026-09-04 shape: a display exists, no credential source, no TTY, and the
+    caller did NOT opt into a dialog. The old helper popped one anyway (invisible under
+    offscreen) and blocked forever. Now: no dialog, decline, marker."""
+    _no_env(monkeypatch)
+    monkeypatch.setattr(askpass, "_display_available", lambda: True)
+    monkeypatch.setattr(askpass, "_from_gui",
+                        lambda *a, **k: pytest.fail("dialog shown without the opt-in"))
+    monkeypatch.setattr(askpass, "_from_terminal", lambda *a, **k: None)   # no tty
+    err = io.StringIO()
+    assert askpass.acquire_password(stderr=err) is None            # default: no opt-in
+    assert askpass.CANCEL_MARKER in err.getvalue()
 
 
 def test_gui_cancel_does_not_fall_through_to_terminal(monkeypatch):
@@ -82,8 +104,44 @@ def test_gui_cancel_does_not_fall_through_to_terminal(monkeypatch):
     monkeypatch.setattr(askpass, "_from_terminal",
                         lambda *a, **k: pytest.fail("terminal used after a dialog cancel"))
     err = io.StringIO()
-    assert askpass.acquire_password(stderr=err) is None
+    assert askpass.acquire_password(allow_gui=True, stderr=err) is None
     assert askpass.CANCEL_MARKER in err.getvalue()
+
+
+def test_no_elevation_env_refuses_before_any_source(monkeypatch):
+    """HUGMESH_STUDIO_NO_ELEVATION: the process tree has been told not to elevate, so
+    the helper answers nothing — not even an env password — and says why on stderr."""
+    _no_env(monkeypatch)
+    monkeypatch.setenv(askpass.PASSWORD_ENV, "s3cret")
+    monkeypatch.setenv(askpass.NO_ELEVATION_ENV, "1")
+    monkeypatch.setattr(askpass, "_from_gui", lambda *a, **k: pytest.fail("dialog"))
+    monkeypatch.setattr(askpass, "_from_terminal", lambda *a, **k: pytest.fail("tty"))
+    err = io.StringIO()
+    assert askpass.acquire_password(allow_gui=True, stderr=err) is None
+    assert askpass.NO_ELEVATION_ENV in err.getvalue()
+    assert askpass.CANCEL_MARKER in err.getvalue()
+    assert "s3cret" not in err.getvalue()
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("1", True), ("yes", True), ("true", True), (" on ", True),
+    ("", False), ("0", False), ("off", False), ("false", False), ("no", False),
+])
+def test_no_elevation_parser(monkeypatch, raw, expected):
+    monkeypatch.setenv(askpass.NO_ELEVATION_ENV, raw)
+    assert askpass.no_elevation() is expected
+    monkeypatch.delenv(askpass.NO_ELEVATION_ENV)
+    assert askpass.no_elevation() is False
+
+
+def test_from_terminal_declines_when_stdin_is_not_a_tty(monkeypatch):
+    """The terminal path needs a terminal ON STDIN — /dev/tty existing somewhere is not
+    enough (a helper exec'd by `sudo -A` inherits sudo's stdin: /dev/null under a
+    .desktop launch, a pipe under a test runner). getpass must never be reached."""
+    import getpass
+    monkeypatch.setattr(askpass.sys, "stdin", io.StringIO())          # isatty() False
+    monkeypatch.setattr(getpass, "getpass", lambda *a, **k: pytest.fail("prompted"))
+    assert askpass._from_terminal("pw: ", io.StringIO()) is None
 
 
 def test_no_gui_flag_skips_dialog_even_with_display(monkeypatch):
@@ -121,10 +179,11 @@ def test_run_askpass_cancel_returns_nonzero_and_writes_no_stdout(monkeypatch, ca
 
 
 def test_cli_flags_plumb_allow_gui_to_the_helper(monkeypatch):
-    """`--askpass-no-gui` reaches core.askpass as allow_gui=False and plain `--askpass`
-    as allow_gui=True — pinned by assertion here so the plumb is checked on a headless
-    box too: the integration test below only notices a lost `allow_gui=False` when a
-    display is reachable (the offscreen dialog then blocks until the 60s timeout)."""
+    """Only `--askpass-gui` reaches core.askpass as allow_gui=True; `--askpass` and
+    `--askpass-no-gui` (#221) are both allow_gui=False, and the no-gui flag wins over an
+    explicit opt-in. Pinned by assertion so the plumb is checked on a headless box too:
+    the integration tests only notice a wrong allow_gui when a display is reachable
+    (the offscreen dialog then blocks until the timeout)."""
     from hugmesh_studio import app
 
     seen: list[bool] = []
@@ -132,7 +191,22 @@ def test_cli_flags_plumb_allow_gui_to_the_helper(monkeypatch):
                         lambda argv=None, *, allow_gui=True: seen.append(allow_gui) or 0)
     assert app.main(["--askpass-no-gui"]) == 0
     assert app.main(["--askpass"]) == 0
-    assert seen == [False, True]
+    assert app.main(["--askpass-gui"]) == 0
+    assert app.main(["--askpass-gui", "--askpass-no-gui"]) == 0
+    assert seen == [False, False, True, False]
+
+
+def test_run_askpass_defaults_to_no_dialog(monkeypatch):
+    """run_askpass's own default is allow_gui=False — a caller that forgets the keyword
+    gets the headless-safe path, never the dialog."""
+    seen = {}
+
+    def fake_acquire(**kw):
+        seen.update(kw)
+        return None
+    monkeypatch.setattr(askpass, "acquire_password", fake_acquire)
+    assert askpass.run_askpass([]) == 1
+    assert seen["allow_gui"] is False
 
 
 # ── auth-failure signature scan ──────────────────────────────────────────────────────
@@ -277,26 +351,38 @@ def _studio_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(bd.__file__)))
 
 
-def _run_detached(argv, env, *, input=None):
+def _run_detached(argv, env, *, input=None, timeout=60):
     """Run ``argv`` in a NEW SESSION so it (and every child, including the helper sudo
     execs) has NO controlling terminal — /dev/tty is then unopenable and the helper's
     terminal fallback deterministically declines. Without this the outcome depends on
     the harness: under a pty (an interactive run, `script`, some CI runners) the cancel
     case falls through to getpass on the operator's real terminal and blocks until the
     timeout. stdin is closed for the same reason — nothing here may read a password
-    from it."""
-    return subprocess.run(argv, capture_output=True, text=True, env=env, timeout=60,
-                          start_new_session=True,
-                          input=input, stdin=None if input is not None else subprocess.DEVNULL)
+    from it.
+
+    On timeout the WHOLE session is killed (killpg), not just the direct child: the
+    regression these tests exist for is a helper blocked on an offscreen dialog, and
+    subprocess.run's own timeout kill would orphan exactly that grandchild."""
+    proc = subprocess.Popen(argv, env=env, text=True, start_new_session=True,
+                            stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        out, err = proc.communicate(input=input, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        import signal
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 
-def _write_helper(tmp_path):
+def _write_helper(tmp_path, flag="--askpass-no-gui"):
     studio_root = _studio_root()
     helper = tmp_path / "studio-askpass.sh"
     helper.write_text(
         "#!/bin/sh\n"
         f'export PYTHONPATH="{studio_root}${{PYTHONPATH:+:$PYTHONPATH}}"\n'
-        f"exec {sys.executable} -m hugmesh_studio --askpass-no-gui\n")
+        f"exec {sys.executable} -m hugmesh_studio {flag}\n")
     helper.chmod(0o755)
     stub = tmp_path / "stub_sudo.py"
     stub.write_text(_STUB_SUDO)
@@ -324,6 +410,104 @@ def test_integration_cancel_aborts_the_inner_command(tmp_path):
     assert r.returncode == 1
     assert "INNER-RAN" not in r.stdout        # build did NOT run un-elevated
     assert askpass.CANCEL_MARKER in r.stderr  # the driver's attribution scan can see this
+
+
+def _headless_env(helper, **extra):
+    """No credential source, no TTY (see _run_detached), and a display that LOOKS
+    reachable (DISPLAY set — _display_available() is True on any box) rendered
+    offscreen: the exact shape of the wedged pytest launchers."""
+    env = {**os.environ, "SUDO_ASKPASS": str(helper), "DISPLAY": ":99",
+           "QT_QPA_PLATFORM": "offscreen", **extra}
+    for k in (askpass.PASSWORD_ENV, askpass.COMMAND_ENV, askpass.NO_ELEVATION_ENV,
+              "WAYLAND_DISPLAY"):
+        env.pop(k, None)
+    return env
+
+
+def test_integration_headless_helper_fails_fast_even_with_a_display(tmp_path):
+    """THE 2026-09-04 defect, end to end: the real `--askpass` helper under a stub
+    `sudo -A`, no credential source, stdin not a TTY, DISPLAY set. It used to pop an
+    offscreen Qt dialog and block until this test's 60 s timeout (and, under real sudo,
+    forever). It must now decline at once: exit 1, nothing on stdout, the marker on
+    stderr, the inner command never run."""
+    import time
+    helper, stub = _write_helper(tmp_path, flag="--askpass")
+    t0 = time.monotonic()
+    r = _run_detached([sys.executable, str(stub), "-A", "/bin/echo", "INNER-RAN"],
+                      _headless_env(helper))
+    elapsed = time.monotonic() - t0
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert "INNER-RAN" not in r.stdout
+    assert r.stdout == ""                          # nothing on the password channel
+    assert askpass.CANCEL_MARKER in r.stderr
+    assert elapsed < 30, f"helper took {elapsed:.1f}s — it blocked on something"
+
+
+def test_integration_no_elevation_env_refuses_even_the_gui_opt_in(tmp_path):
+    """Defence in depth: even the driver's own --askpass-gui helper answers nothing
+    under HUGMESH_STUDIO_NO_ELEVATION (sudo hands the helper the caller's env — measured
+    on the wedged launchers: DISPLAY, HOME, QT_QPA_PLATFORM all reached it)."""
+    helper, stub = _write_helper(tmp_path, flag="--askpass-gui")
+    env = _headless_env(helper)
+    env[askpass.NO_ELEVATION_ENV] = "1"
+    r = _run_detached([sys.executable, str(stub), "-A", "/bin/echo", "INNER-RAN"], env)
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert "INNER-RAN" not in r.stdout and r.stdout == ""
+    assert askpass.NO_ELEVATION_ENV in r.stderr and askpass.CANCEL_MARKER in r.stderr
+
+
+def test_integration_gui_opt_in_still_takes_an_env_credential_first(tmp_path):
+    """PR #239's unattended contract survives the opt-in: a credential source answers
+    before any dialog, so the --askpass-gui helper is fully scriptable too."""
+    helper, stub = _write_helper(tmp_path, flag="--askpass-gui")
+    env = _headless_env(helper)
+    env[askpass.PASSWORD_ENV] = "corncob"
+    r = _run_detached([sys.executable, str(stub), "-A", "/bin/echo", "INNER-RAN"], env)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "INNER-RAN" in r.stdout and "corncob" not in r.stdout
+    assert "got 7-char password via pipe" in r.stderr
+
+
+def test_from_terminal_declines_on_a_non_tty_stdin_even_with_a_controlling_tty():
+    """The stdin-isatty rule, proved where it differs from the /dev/tty probe: a child
+    that HAS a controlling terminal (a pty it acquires with TIOCSCTTY) but whose stdin
+    is /dev/null — a Studio launched from a terminal with `</dev/null`, a CI runner
+    under `script`, `sudo -A cmd </dev/null` from a shell. Without the rule getpass
+    opens /dev/tty and reads the pty (the "typed-on-pty" line waiting there); with it
+    the helper declines at once. Mutation: drop the isatty check and this returns
+    'typed-on-pty'."""
+    import pty
+    master, slave = pty.openpty()
+    code = textwrap.dedent(f"""
+        import fcntl, os, sys, termios
+        from hugmesh_studio.core import askpass
+        fd = os.open({os.ttyname(slave)!r}, os.O_RDWR)
+        fcntl.ioctl(fd, termios.TIOCSCTTY, 0)      # this pty IS the controlling tty
+        os.dup2(os.open(os.devnull, os.O_RDONLY), 0)   # ...but stdin is not a terminal
+        print(repr(askpass._from_terminal('pw: ', sys.stderr)), flush=True)
+    """)
+    import time
+    env = {**os.environ, "PYTHONPATH": _studio_root()}
+    proc = subprocess.Popen([sys.executable, "-c", code], env=env, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            start_new_session=True)      # session leader: may take a ctty
+    os.close(slave)
+    # Keep the line available on the pty until the child exits: getpass flushes pending
+    # input when it switches echo off (TCSAFLUSH), so a single early write is discarded
+    # by the very read it is meant to feed. With the rule intact the child exits at
+    # once and nothing is read; with it mutated, getpass returns this line.
+    deadline = time.monotonic() + 60
+    try:
+        while proc.poll() is None and time.monotonic() < deadline:
+            os.write(master, b"typed-on-pty\n")
+            time.sleep(0.05)
+        if proc.poll() is None:
+            proc.kill()
+        out, err = proc.communicate(timeout=10)
+    finally:
+        os.close(master)
+    assert proc.returncode == 0, err
+    assert out.strip() == "None", (out, err)
 
 
 def test_from_terminal_never_reads_stdin_without_a_controlling_tty():
