@@ -60,6 +60,69 @@ WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}" 2>/dev/null' EXIT
 
 echo "== Phase 7 hostile-foreign-mesh INGEST FUZZ SUITE (build-host: no root, no network) =="
 
+# ── STATIC (a): every FIB_* the gate READS is ASSIGNED, or self-defaults ───────
+# WHY THIS EXISTS, and why the behavioural cases below were not enough. 835b3137
+# ("Update ingest-foreign-base.sh", direct push to main, no PR) deleted the three
+# FIB_*_LEGACY_COMPAT definitions and left all six consumers in place. The gate runs
+# under `set -uo pipefail`, so the FIRST read killed the _fib_tree_digest subshell and
+# every base — clean ones included — came back "REJECT: tree digest computation
+# failed". A blanket fail-closed lockout of the entire foreign-ingest path, and the
+# cases below could only report it as six opaque "a clean base was wrongly REJECTED"
+# lines that read like an over-strict gate, not a missing variable.
+#
+# This says the variable's NAME instead. It also reaches references on paths no case
+# below executes (the `-e` envelope probe near the end of the file was one of the six
+# and nothing here drives it), and it costs no node, no network and no fixture, so it
+# runs identically in every CI lane.
+#
+# A name is SAFE if it is assigned at line start, OR if every one of its references
+# carries a `:-` default (the overridable seams FIB_PROVENANCE, FIB_TOKENS_JSON,
+# FIB_MESH_REGISTRY … are read that way on purpose). Anything else is a `set -u`
+# abort waiting for the right input. Extraction is `grep -oE` + POSIX awk: no grep -P,
+# no `\b`, and nothing piped into `grep -q` — busybox reads this the same as GNU.
+_fib_bare_unassigned() { # _fib_bare_unassigned SRC -> names, one per line
+  local src
+  src="$1"
+  local names
+  names="$(grep -oE '\$\{?FIB_[A-Z0-9_]+(:-)?' "$src" | awk '
+      { s = $0
+        sub(/^\$\{?/, "", s)
+        d = 0
+        if (s ~ /:-$/) { d = 1; sub(/:-$/, "", s) }
+        seen[s] = 1
+        if (d == 0) bare[s] = 1 }
+      END { for (n in seen) if (n in bare) print n }' | sort)"
+  local n
+  for n in $names; do
+    # Direct grep on a FILE — not a pipeline — so pipefail/SIGPIPE cannot turn a
+    # real hit into a false "unassigned".
+    if [ "$(grep -cE "^[[:space:]]*${n}=" "$src")" = "0" ]; then printf '%s\n' "$n"; fi
+  done
+}
+FIB_UNBOUND="$(_fib_bare_unassigned "$GATE")"
+if [ -z "$FIB_UNBOUND" ]; then
+  ok "(static a) every FIB_* read without a :- default is assigned in ${GATE##*/} — no set -u abort can blank the gate"
+else
+  bad "(static a) FIB_* read bare but NEVER assigned in ${GATE##*/}: $(printf '%s' "$FIB_UNBOUND" | tr '\n' ' ')— under set -u the first read aborts the gate and EVERY base, clean ones included, is REJECTED"
+fi
+
+# ── STATIC (b): the header's named legacy envelope IS the constant [b] reads ────
+# ae322866 — the sibling of the same direct-to-main push, 6 minutes earlier — rewrote
+# gate [b]'s header line to say the pre-rebrand envelope is ".acme-provenance.json".
+# No such name exists anywhere in the tree: "acme" is THIS SUITE's fixture mesh, and
+# the real constant is ".snapdragon-provenance.json". Prose is what the next person
+# reads before deciding the dual-read can finally be retired, and a wrong filename
+# there points the decision at a file no mesh has ever shipped. Pin the sentence to
+# the constant so the two cannot drift apart again in silence.
+FIB_LEG_CONST="$(awk -F'"' '/^FIB_MANIFEST_LEGACY_COMPAT=/ { print $2; exit }' "$GATE")"
+if [ -z "$FIB_LEG_CONST" ]; then
+  bad "(static b) FIB_MANIFEST_LEGACY_COMPAT is not assigned at all in ${GATE##*/} — the dual-read has no envelope name"
+elif [ "$(grep -cF "pre-rebrand ${FIB_LEG_CONST}(.sig)" "$GATE")" != "0" ]; then
+  ok "(static b) gate [b]'s header names the real legacy envelope (${FIB_LEG_CONST}) — prose and constant agree"
+else
+  bad "(static b) gate [b]'s header does NOT name ${FIB_LEG_CONST} — the documented pre-rebrand envelope has drifted off the constant the dual-read actually reads"
+fi
+
 # ── Trust store: the RIGHT key for acme-mesh + a WRONG (foreign) key ────────────
 MESH="acme-mesh"
 TRUST="${WORK}/trust"; mkdir -p "${TRUST}/${MESH}"
@@ -80,11 +143,23 @@ KEYFP="$(base64 -d "${TRUST}/${MESH}/foreign-provenance-pub.ed25519" 2>/dev/null
 # A CLEAN foreign angular-mfe base carrying the archetype recipe's required upstream
 # anchors (so the positive control also renders). Not secrets; not our frozen
 # protocol constants (hugmesh/ and @hugmesh/ are NOT hugmesh.net/).
+#
+# THE <title> HAS NO " (remote)" SUFFIX, ON PURPOSE. This fixture's whole job is to
+# be a base the angular-mfe recipe can anchor into, so it must track
+# templates/archetypes/angular-mfe/recipe.yaml#tab-title, which reads
+# `<title>HugMesh {{TITLE_WORD}}</title>`. The suffix was dropped from the anchor in
+# d0a4c637 because the real base dropped it first — hugmesh-login-ui/src/index.html
+# now says `<title>HugMesh Login</title>`, and its own comment explains why (this
+# <title> is what users see on the platform, so a build-topology parenthetical does
+# not belong in it). This fixture kept the old spelling and therefore modelled a base
+# upstream no longer produces: `required: true` made render-repo-tree FATAL on the
+# positive control and on both launder/cache-purge legs. Do not re-add the suffix
+# here without changing the anchor in the same commit.
 mkclean_base() { # mkclean_base DIR
   local d="$1"
   mkdir -p "${d}/src"
   printf '{\n  "name": "@hugmesh/login",\n  "version": "1.0.0"\n}\n' > "${d}/package.json"
-  printf '<html><head><title>HugMesh Login (remote)</title></head><body></body></html>\n' > "${d}/src/index.html"
+  printf '<html><head><title>HugMesh Login</title></head><body></body></html>\n' > "${d}/src/index.html"
   printf 'include:\n  - project: hugmesh/hugmesh-generator\n    file: ci.yml\n' > "${d}/.gitlab-ci.yml"
   printf 'export const remoteEntry = "login";\n' > "${d}/federation-base.js"
   cat > "${d}/.hugmesh-sbom.json" <<'JSON'
@@ -802,7 +877,11 @@ if [ "${HAVE_RENDER}" -eq 1 ]; then
     else bad "(legit) render produced no tree"; fi
     if grep -rqE '\{\{[A-Z_]+\}\}' "$BO" 2>/dev/null; then bad "(legit) residual {{TOKEN}} remains"; else ok "(legit) 0 residual {{TOKEN}}s in the rendered tree"; fi
     if grep -rq '{{BRAND_TITLE}}' "$BO" 2>/dev/null; then bad "(legit) BRAND_TITLE unsubstituted"; fi
-    if grep -rq 'Acme Portal Login (remote)' "$BO" 2>/dev/null; then ok "(legit) brand token substituted (title rebranded)"; else bad "(legit) brand rebrand not applied"; fi
+    # The WHOLE <title> element, not a loose substring: the recipe's tab-title
+    # replacement is `<title>{{BRAND_TITLE}} {{TITLE_WORD}}</title>`, so pinning the
+    # closing tag is what proves the rebrand landed AND that no stale " (remote)"
+    # tail survived (a bare 'Acme Portal Login' would match either shape).
+    if grep -rq '<title>Acme Portal Login</title>' "$BO" 2>/dev/null; then ok "(legit) brand token substituted (title rebranded)"; else bad "(legit) brand rebrand not applied"; fi
     # gate markers + foreign attestation envelope must NOT ride into the emitted tree.
     if [ -e "${BO}/.hugmesh-mesh-admitted" ] || [ -e "${BO}/.foreign-mesh-id" ] || [ -e "${BO}/.hugmesh-provenance.json" ] || [ -e "${BO}/.hugmesh-sbom.json" ]; then
       bad "(legit) gate/foreign-attestation markers leaked into the emitted tree"
