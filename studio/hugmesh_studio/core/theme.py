@@ -540,7 +540,12 @@ def compose_login_css(primary: str = "", secondary: str = "", *, font_preset: st
         raise ValueError(f"unknown font preset: {font_preset!r} — "
                          f"known: {', '.join(_fonts.FONT_PRESETS)}")
     if font_bytes:
-        family = font_family.strip() or "HugMesh Brand Font"
+        # Allowlisted at the composition point too, so `family` IS the name that
+        # gets emitted — both emitters below sanitise again (that is where the
+        # security boundary actually is), this just keeps the fallback spelt once
+        # and stops a future caller from logging/recording a name that differs
+        # from the one in the css.
+        family = _fonts.safe_font_family(font_family)
         faces = _fonts.font_face_css(family, font_bytes)
         tokens.update(_fonts.font_tokens(
             _fonts.FONT_PRESETS.get(font_preset, ""), uploaded_family=family))

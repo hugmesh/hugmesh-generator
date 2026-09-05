@@ -20,6 +20,7 @@ or MFA views (banner in the asset states this in-window).
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -30,6 +31,29 @@ MARKER = "/*__SNAP_THEME_CSS__*/"
 _ASSET = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                       "assets", "login-preview.html")
 PREVIEW_BASENAME = "hugmesh-login-preview.html"
+
+# THE SUBSTITUTED CSS LANDS IN A ``<style id="snap-theme">`` ELEMENT, AND ``<style>`` IS
+# HTML RAW TEXT: entities do not decode inside it, and the ONLY thing that ends it is a
+# literal ``</`` followed by a name start. So a theme css carrying ``</style><script>…``
+# closed the element and the rest of the page parsed as MARKUP — reproduced in chromium
+# from an uploaded font whose own ``name`` table held the payload (window.PWNED = 1).
+#
+# The real fix is upstream (fonts.safe_font_family allowlists the family name); this is
+# the backstop at the sink, so the NEXT way text reaches the css is a broken stylesheet
+# rather than script execution in the operator's browser. Legitimate css never contains
+# ``</``, so it is a no-op for every theme this repo composes.
+#
+# Neutralised, not raised: this runs on the GUI's live-preview path, where an exception
+# aborts a Qt slot. ``<\/`` is the standard raw-text break — the HTML parser no longer
+# sees an end tag, and inside a css string ``\/`` is just an escaped ``/``.
+_RAW_TEXT_BREAK = re.compile(r"</(?=[A-Za-z!/?])")
+
+
+def raw_text_safe(theme_css: str) -> str:
+    """``theme_css`` with every HTML raw-text terminator broken, so it cannot escape
+    the ``<style>`` element it is about to be substituted into. Idempotent."""
+    return _RAW_TEXT_BREAK.sub(r"<\\/", theme_css)
+
 
 # How long to wait for a CLI opener to report its exit status. xdg-open/gio hand the
 # URL to the desktop and exit well under a second; the timeout only triggers when the
@@ -51,7 +75,7 @@ def preview_html(theme_css: str) -> str:
         raise RuntimeError(
             f"preview asset lost its substitution marker ({MARKER}) — regenerate "
             "assets/login-preview.html from a login-ui build")
-    return tpl.replace(MARKER, theme_css, 1)
+    return tpl.replace(MARKER, raw_text_safe(theme_css), 1)
 
 
 def write_preview(theme_css: str, out_dir: str) -> str:

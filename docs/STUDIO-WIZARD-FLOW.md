@@ -236,12 +236,24 @@ A GUI-only reorganisation — **emission is byte-identical** (the build-matrix `
   timezone and the default account, which stay mesh-wide, but a hostname shared by every
   node is a collision, not a setting. `WorklistEntry.hostname` is the per-image
   `-H/--hostname` (`""` = inherit the base, and a blank base lets the builder derive the
-  role name; `materialize()` fails loudly if two images would bake the same explicit
-  name). On the System step a **multi-row** mesh worklist withdraws the single Hostname
+  role name; `materialize()` fails loudly if two images would bake the same name). Two
+  collisions, both refused by `core/worklist.py::duplicate_hostnames` so all three
+  channels are equally strict: two rows carrying the same **typed** name, and a typed
+  name equal to what a **blank** sibling's role switch derives — the second emits one
+  `--hostname` and nothing on the other row, so the argv reads clean and both nodes
+  still boot as that name. Blank-vs-blank is not refused: the builder's own role tables
+  assign those names and always have, so the UIs say it out loud in a note instead.
+  `derived_hostname(entry, brand)` is the single implementation of "what this row bakes
+  when left blank" — the GUI placeholders, the TUI *if blank* column and the model's own
+  refusal all call it, so a shown name cannot disagree with a refused one.
+  On the System step a **multi-row** mesh worklist withdraws the single Hostname
   row and shows one editor per image, placeholdered with the name that node derives when
   left blank; a one-row worklist keeps the plain field but writes the entry; both blank
   the base so one value can never ride onto every node again. Refusals (duplicate name,
-  a name the identity allowlist rejects) are inline, never modal. The TUI's System step
+  a name the identity allowlist rejects) are inline, never modal — and the allowlist
+  check runs on **every** path through the page, the single field included, so a bad
+  name is refused where it was typed instead of one page later as *"Cannot assemble the
+  worklist"*. The TUI's System step
   (`tui/journey.py::SystemScreen`) hosts the same per-image table (`N NAME` / `N -`);
   headlessly it is `entries[].hostname` in the envelope, and `--print-commands` emits
   each image's own `--hostname`. An untouched worklist still emits no `--hostname`.

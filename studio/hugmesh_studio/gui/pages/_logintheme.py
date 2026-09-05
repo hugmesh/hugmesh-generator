@@ -481,10 +481,21 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
                         self._font_family = fams[0] if fams else \
                             os.path.splitext(os.path.basename(path))[0]
                         self._font_bytes = data
-                        note = (f"OK: family “{self._font_family}”, "
+                        # _font_family stays the RAW Qt name (setFamily needs it to
+                        # render the sample); the css name is the allowlisted one the
+                        # composer will emit. Report the css name, and SAY SO when the
+                        # font file's own name table had to be rewritten — the note
+                        # used to echo the raw name back and imply it shipped verbatim.
+                        css_family = core_fonts.safe_font_family(self._font_family)
+                        note = (f"OK: family “{css_family}”, "
                                 f"{len(data) // 1024}KB, "
                                 f"sha256 {core_fonts.font_sha256(data)[:16]}… — "
                                 "licence + source below are REQUIRED (recorded).")
+                        if css_family != self._font_family:
+                            note += ("  NOTE: this font file's embedded name carried "
+                                     "characters that cannot go in a stylesheet; the "
+                                     "name above is what will be written.")
+                            color = "#a65d00"
                         if warns:
                             note += "  " + " ".join(warns)
                             color = "#a65d00"
