@@ -24,6 +24,9 @@
 #      (newest, PLATFORM-anchored role match; the canonical role and every older
 #      spelling of it are searched. The leading `*-` is the ${BRAND} field.)
 #   3. ${WORK_DIR}/hugmesh-host-*.img / *-x86-*.img         (platform, any role)
+#   Every role-scoped step also drops candidates whose role field is a LONGER role
+#   that merely starts with ${ROLE} (backend vs backend-gpu) — see
+#   hugmesh_role_shadow_filter in scripts/_roles-lib.sh.
 #   4. ${WORK_DIR}/*-${ROLE}-*.img                    (unanchored role match — LAST,
 #      because it can cross platforms and return an arm64 Pi image)
 #   5. ${WORK_DIR}/*.img (excluding kernel/initramfs/squashfs)
@@ -211,11 +214,20 @@ autodetect_img() {
     # <brand>-rpi5-arm64-host-….img and hand an aarch64 image to
     # qemu-system-x86_64 — the exact cross-platform bug this ordering exists to
     # prevent. Nothing branded was ever emitted under the host-as-platform name.
+    #
+    # hugmesh_role_shadow_filter is what keeps `-${r}-` from PREFIX-matching a
+    # longer role: `-backend-` also matches …-backend-gpu-…, and here the mis-pick
+    # does not even need a favourable mtime — `for c in <glob>` expands the pattern
+    # to individual filenames in ALPHABETICAL order before `ls -1t` ever sees them
+    # (each iteration `ls`es ONE already-expanded path), and `backend-gpu` sorts
+    # before `backend-<env>`. So `--role backend` booted the GPU image
+    # unconditionally. Only the role-SCOPED loops are filtered; the any-role
+    # platform fallback below has already given up on the role.
     for r in $(hugmesh_role_aliases_of "${role}"); do
         for c in \
             "${d}"/hugmesh-host-*-"${r}"-*.img \
             "${d}"/*-x86-*-"${r}"-*.img ; do
-            c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
+            c="$(ls -1t ${c} 2>/dev/null | hugmesh_role_shadow_filter "${role}" | head -1 || true)"
             [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
         done
     done
@@ -230,7 +242,7 @@ autodetect_img() {
     # it. An unanchored role match can cross platforms, so it may only fire once
     # every x86-anchored candidate has been ruled out.
     for r in $(hugmesh_role_aliases_of "${role}"); do
-        c="$(ls -1t "${d}"/*-"${r}"-*.img 2>/dev/null | head -1 || true)"
+        c="$(ls -1t "${d}"/*-"${r}"-*.img 2>/dev/null | hugmesh_role_shadow_filter "${role}" | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done
     ls -1t "${d}"/*.img 2>/dev/null \

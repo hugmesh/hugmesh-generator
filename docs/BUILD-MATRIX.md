@@ -161,6 +161,18 @@ role: `be`=backend, `fe`=frontend, `be+gpu`/`be-gpu`/`host`/`gpu-host`/`gpu_host
 EMITTED — `tests/scripts/test-role-key-spelling.sh` fails on an alias in an artifact
 name, a role marker, a matrix cell, a catalog id or a documented command.
 
+One canonical role is the **prefix** of another — `backend` of `backend-gpu` (and,
+among the aliases, `be` of `be-gpu` and `full` of `standalone-full`). Artifact names
+put the role between hyphens, so a plain `*-backend-*` glob also matches
+`<brand>-x86-amd64-backend-gpu-<env>-<ts>.img`; with the default x86 fleet built in
+one work dir (`pki backend frontend backend-gpu`) the GPU image is always the newest,
+so the mis-pick is deterministic, not a race. Every artifact consumer — the flasher,
+the three QEMU launchers, the container harness — therefore filters its role-scoped
+candidates through `hugmesh_role_shadow_filter`, and a request for `backend` with
+only a `backend-gpu` image present resolves to NOTHING rather than to the GPU image:
+`scripts/flash-disk.sh` writes a whole physical disk, so a refusal is the safe answer.
+Asserted by `tests/scripts/test-role-key-spelling.sh` section D7.
+
 The k8s label keys (`hugmesh.net/backend`, `/frontend`, `/pki`, `/edge-ai`) are a
 DIFFERENT axis and are **not** part of this vocabulary: they were always long, are
 frozen by `scripts/tooling/tokens.json`, and are `nodeSelector`'d by 73 files under

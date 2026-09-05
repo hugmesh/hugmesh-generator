@@ -223,6 +223,15 @@ DECLARED_BRAND="$(declared_brand "${WORK_DIR}")"
 #    sdhm-rpi5-arm64-pki-… was invisible to the flasher — the same shape of bug
 #    that emptied the Studio's emulation picker on a finished 3-image Pi session.
 #    The brand is globbed now; 1 and 2 above are what still narrow a candidate.
+# 4. THE ROLE TOKEN IS TERMINAL, NOT A PREFIX. `-${r}-` prefix-matches a LONGER
+#    role that starts with it: `backend` also matches
+#    <brand>-x86-amd64-backend-gpu-<env>-<ts>.img, and the default x86 fleet
+#    (scripts/build-all-roles.sh: pki backend frontend backend-gpu, one work dir)
+#    makes the GPU image the NEWEST — so `--role backend --arch x86` resolved the
+#    GPU worker image every time, with no ambiguity refusal possible because both
+#    are platform x86. hugmesh_role_shadow_filter (scripts/_roles-lib.sh) subtracts
+#    the longer role's names; when only the longer role's image exists the auto-pick
+#    finds NOTHING, which is the fail-safe a whole-disk write needs.
 #
 # Naming conventions matched (newest-mtime-first, role-scoped first):
 #   • <brand>-<platform>-<arch>-<role>-<env>-<stamp>.{img,iso}   builders + QEMU launchers
@@ -269,10 +278,20 @@ list_candidates() {
     done
     # ls -1t gives newest-mtime-first ordering (find can't sort by mtime portably);
     # our build artifacts have safe, glob-stable names.
+    #
+    # hugmesh_role_shadow_filter is the LAST stage and is not optional: `-${r}-` is
+    # a PREFIX match, so `--role backend` also matches
+    # <brand>-x86-amd64-backend-gpu-<env>-<ts>.img. scripts/build-all-roles.sh
+    # builds the default x86 fleet `pki backend frontend backend-gpu` into ONE work
+    # dir, which makes the GPU image the NEWEST — so `ls -1t | head -1` handed a
+    # `make flash ROLE=backend ARCH=x86` the GPU worker image, deterministically,
+    # and neither the platform anchor nor assert_one_platform can notice (both
+    # artifacts are platform x86). See hugmesh_role_shadow_tokens in _roles-lib.sh.
     # shellcheck disable=SC2012
     ls -1t "${pats[@]}" 2>/dev/null \
         | grep -ivE '/(.*-)?(kernel|initramfs|initrd|squashfs)[^/]*\.'"${kind}"'$' \
-        | awk '!seen[$0]++'
+        | awk '!seen[$0]++' \
+        | hugmesh_role_shadow_filter "${ROLE}"
 }
 
 # platform_of <path> — the device-platform token out of an artifact NAME:
