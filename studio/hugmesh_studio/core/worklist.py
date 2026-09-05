@@ -31,6 +31,7 @@ import copy
 import json
 import sys
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 from . import roles
@@ -43,6 +44,7 @@ from .config import (
     SECRET_FIELDS,
     User,
     clear_role_class_fields,
+    derive_hostname,
     emit_note_once,
     image_class,
     normalize_user_roles,
@@ -112,18 +114,55 @@ def resolve_hostname(entry: "WorklistEntry", base_hostname: str) -> str:
     return (entry.hostname or "").strip() or (base_hostname or "").strip()
 
 
+def derived_hostname(entry: "WorklistEntry", brand: str = "") -> str:
+    """The role-derived hostname this entry bakes when its own ``hostname`` is blank —
+    what the builder's role switch assigns with no ``-H``.
+
+    Probed with the ENTRY's own role/platform/board, never the base's: the worklist
+    pins the base role to the first checked row and forces the base platform to
+    "x86", so deriving off the base would report one node's name for all of them.
+    Module-level and pure so the model, the GUI editors' placeholders and the TUI
+    table all read ONE implementation and cannot drift apart."""
+    return derive_hostname(SimpleNamespace(
+        brand=brand, role=entry.role, platform=entry.platform,
+        board=entry.board, unaffiliated=False))
+
+
 def duplicate_hostnames(entries: list["WorklistEntry"],
-                        base_hostname: str) -> dict[str, list[str]]:
-    """``{hostname: [entry ids]}`` for every EXPLICIT hostname two or more entries
-    would bake (issue #229's failure mode: several images, one name). Only explicit
-    names are compared — a blank resolves to the builder's role-derived name, which
-    lives in the shell tables and is not second-guessed here. Empty when clean."""
+                        base_hostname: str,
+                        brand: str = "") -> dict[str, list[str]]:
+    """``{hostname: [entry ids]}`` for every hostname two or more entries would bake
+    (issue #229's failure mode: several images, one name). Empty when clean.
+
+    TWO halves, because a built image does not care which half produced its name:
+
+    * explicit vs explicit — two rows carry (or inherit from the base) the same
+      typed name;
+    * explicit vs DERIVED — one row types a name that is exactly what a BLANK
+      sibling's role switch assigns. That row emits ``--hostname X`` and the blank
+      one emits nothing, so the argv looks clean and the two nodes still boot as X.
+      This is the shape the GUI used to catch alone, which meant the guard's strength
+      depended on which of the three channels you drove; it is checked HERE now, so
+      ``--config`` on the CLI refuses it too.
+
+    Blank vs blank is deliberately NOT a collision: two blanks only share a name when
+    the builder's own role tables assign one, which is the builder's business and has
+    always been the shipped behaviour — the UIs say it out loud (a note, not a
+    refusal) rather than blocking a build that was never broken."""
     seen: dict[str, list[str]] = {}
+    blank_derived: dict[str, list[str]] = {}
     for e in entries:
         hn = resolve_hostname(e, base_hostname)
         if hn:
             seen.setdefault(hn, []).append(e.id)
-    return {hn: ids for hn, ids in seen.items() if len(ids) > 1}
+        else:
+            blank_derived.setdefault(derived_hostname(e, brand), []).append(e.id)
+    dups = {hn: list(ids) for hn, ids in seen.items() if len(ids) > 1}
+    for hn, ids in seen.items():
+        blanks = blank_derived.get(hn)
+        if blanks:
+            dups[hn] = list(dict.fromkeys([*ids, *blanks]))
+    return dups
 
 
 def entry_id(role: str, platform: str) -> str:
@@ -304,20 +343,25 @@ class WorklistConfig:
             seen[entry.id] = i
 
     def _assert_unique_hostnames(self) -> None:
-        """Two images in one worklist must not bake the same EXPLICIT hostname (issue
-        #229). Before per-entry hostnames existed the base's single value rode onto
-        every image silently; now that the collision is expressible per row it is also
+        """Two images in one worklist must not bake the same hostname (issue #229).
+        Before per-entry hostnames existed the base's single value rode onto every
+        image silently; now that the collision is expressible per row it is also
         detectable, and a mesh whose nodes share a name is not a mesh that works, so
-        fail loudly at the same chokepoint the id collision uses. The message names
-        the fix: per-entry ``hostname`` (the System step / entries[].hostname), or a
-        blank base so each node derives its own role name."""
-        dups = duplicate_hostnames(self.entries, self.base.hostname)
+        fail loudly at the same chokepoint the id collision uses.
+
+        Both halves are checked (see :func:`duplicate_hostnames`): two typed names
+        that match, AND a typed name that matches what a blank sibling's role switch
+        derives — the second is the one that reads clean in the argv and still boots
+        two nodes as one name, so the CLI's ``--config`` channel must refuse it too
+        and not lean on the GUI having caught it. The message names the fix."""
+        dups = duplicate_hostnames(self.entries, self.base.hostname, self.base.brand)
         if dups:
             detail = "; ".join(f"{hn!r} on {', '.join(ids)}" for hn, ids in dups.items())
             raise ValueError(
                 f"worklist entries would bake the same hostname: {detail}. Set a "
-                "distinct hostname per image (entries[].hostname / the System step), "
-                "or leave them blank so each node takes its role-derived name.")
+                "distinct hostname per image (entries[].hostname / the System step); "
+                "a blank row is not free of this — it bakes its role-derived name, "
+                "which is what a typed name can collide with.")
 
     def save(self, path: str) -> list[str]:
         """Write the envelope JSON (base secrets blanked, matching ImageConfig.save).

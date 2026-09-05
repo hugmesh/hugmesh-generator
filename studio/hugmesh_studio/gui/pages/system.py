@@ -56,7 +56,7 @@ from ...core.config import (
     person_role_applies,
 )
 from ...core.validate import validate_domain_name
-from ...core.worklist import duplicate_hostnames, resolve_hostname
+from ...core.worklist import derived_hostname, duplicate_hostnames, resolve_hostname
 from ._gating import (
     capability_allows_flow, clear_unsupported, gate_widgets, gate_widgets_role_class,
     platform_supports,
@@ -453,10 +453,10 @@ class SystemPage(QtWidgets.QWizardPage):
         wl = getattr(self.wiz, "worklist", None)
         if c.mode != "mesh" or wl is None or not wl.entries:
             return []
-        return [(e.id, derive_hostname(SimpleNamespace(
-                    brand=c.brand, role=e.role, platform=e.platform, board=e.board,
-                    unaffiliated=False)))
-                for e in wl.entries]
+        # core.worklist.derived_hostname is the ONE implementation — the model's own
+        # collision check and the TUI table read it too, so a placeholder shown here
+        # cannot disagree with the name materialize() refuses on.
+        return [(e.id, derived_hostname(e, c.brand)) for e in wl.entries]
 
     def _mesh_rows(self, c) -> list:
         """The mesh worklist's entries — [] outside mesh (or before a worklist exists,
@@ -535,40 +535,43 @@ class SystemPage(QtWidgets.QWizardPage):
                 note += _MESH_HOSTNAME_DERIVED_DUP.format(ids=", ".join(ids), name=name)
         self.hostname_note.setText(note)
 
+    def _hostname_ok(self, rid: str, value: str) -> bool:
+        """True when ``value`` is a legal hostname; otherwise show the SAME inline
+        ``hostname_error`` the per-image editors use and return False.
+
+        Never a modal: a QMessageBox reached from validatePage hangs a headless run,
+        so every refusal on this page is a label plus a Next that does not advance."""
+        try:
+            validate_domain_name(value)
+        except ValueError:
+            self.hostname_error.setText(_HOSTNAME_BAD.format(rid=rid, value=value))
+            self.hostname_error.setVisible(True)
+            return False
+        self.hostname_error.setVisible(False)
+        return True
+
     def _commit_hostname_rows(self, c, rows) -> bool:
         """Write the per-image editors onto their entries (issue #229) and blank the
         base hostname so no single value can ride onto every node. False (with the
         reason on ``hostname_error``, inline) when a name is malformed or two images
-        would bake the same explicit name — the same two checks materialize() applies
+        would bake the same name — the same two checks materialize() applies
         (validate_identity / _assert_unique_hostnames), caught here where the operator
         can fix them instead of at Build time."""
         by_id = {e.id: e for e in rows}
-        derived = dict(self._worklist_hostnames(c))
         for rid, edit in self.hostname_edits.items():
             e = by_id.get(rid)
             if e is None:
                 continue
             value = edit.text().strip()
-            if value:
-                try:
-                    validate_domain_name(value)
-                except ValueError:
-                    self.hostname_error.setText(_HOSTNAME_BAD.format(rid=rid, value=value))
-                    self.hostname_error.setVisible(True)
-                    return False
+            if value and not self._hostname_ok(rid, value):
+                return False
             e.hostname = value
         c.hostname = ""
-        # explicit-vs-explicit (the model's own check) PLUS explicit-vs-derived: a
+        # explicit-vs-explicit AND explicit-vs-derived, both from the model now: a
         # typed name equal to what another blank row derives is the same collision
-        # once built, and only this page knows both halves.
-        dups = duplicate_hostnames(rows, "")
-        for e in rows:
-            if e.hostname:
-                continue
-            name = derived.get(e.id, "")
-            typed = [o.id for o in rows if o.hostname == name]
-            if name and typed:
-                dups.setdefault(name, []).extend([*typed, e.id])
+        # once built, and duplicate_hostnames() knows both halves, so this page and
+        # `--config` on the CLI refuse exactly the same worklists.
+        dups = duplicate_hostnames(rows, "", c.brand)
         if dups:
             detail = "; ".join(f"{name!r} on {', '.join(dict.fromkeys(ids))}"
                                for name, ids in dups.items())
@@ -713,10 +716,21 @@ class SystemPage(QtWidgets.QWizardPage):
             if not self._commit_hostname_rows(c, rows):
                 return False
         elif rows:
-            rows[0].hostname = self.hostname.text().strip()
+            # ONE mesh row: the single field still writes the entry, but it gets the
+            # same inline refusal the multi-row editors get. Without this the page
+            # accepted a malformed name here and only materialize() rejected it, one
+            # page later, as "Cannot assemble the worklist" — the check the operator
+            # needed was on the field they typed into.
+            value = self.hostname.text().strip()
+            if value and not self._hostname_ok(rows[0].id, value):
+                return False
+            rows[0].hostname = value
             c.hostname = ""
         else:
-            c.hostname = self.hostname.text().strip()
+            value = self.hostname.text().strip()
+            if value and not self._hostname_ok(f"{c.role}.{c.platform}", value):
+                return False
+            c.hostname = value
         c.timezone = self.timezone.currentText().strip()
         c.user = self.user.text().strip()
         # ...and the emission half of the duplicate-account gate: with the row hidden,

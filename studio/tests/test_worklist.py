@@ -25,6 +25,7 @@ from hugmesh_studio.core.worklist import (
     WORKLIST_SCHEMA,
     WorklistConfig,
     WorklistEntry,
+    derived_hostname,
     duplicate_hostnames,
     entry_id,
     load_any,
@@ -839,6 +840,52 @@ def test_materialize_rejects_two_images_baking_the_same_hostname():
     fixed = _two_row_mesh(base_hostname="everyone", pki="ca-1")
     by_id = {e.id: cfg for e, cfg in fixed.materialize()}
     assert (by_id["pki.x86"].hostname, by_id["backend.rpi5"].hostname) == ("ca-1", "everyone")
+
+
+def test_materialize_rejects_a_typed_name_equal_to_a_blank_siblings_derived_name():
+    """The other half of #229's collision, and the one that reads CLEAN in the argv:
+    one row types ``acme-backend``, its sibling is left blank and emits no --hostname
+    at all — so nothing in the command looks wrong and both nodes still boot as
+    ``acme-backend``. The model refuses it, which is what makes the guard the same
+    strength on all three channels (the GUI used to catch this alone)."""
+    derived_be = derived_hostname(WorklistEntry(role="backend", platform="rpi5",
+                                                board="rpi5"), "acme")
+    wl = _two_row_mesh(pki=derived_be)
+    with pytest.raises(ValueError,
+                       match=f"same hostname.*{derived_be!r}.*pki.x86, backend.rpi5"):
+        wl.materialize()
+    # ...and the message says WHY a blank row is implicated, since the operator can
+    # see only one name in the envelope
+    with pytest.raises(ValueError, match="blank row is not free of this"):
+        wl.materialize()
+    # a name that is nobody's derived name still builds
+    ok = {e.id: cfg for e, cfg in _two_row_mesh(pki="ca-1").materialize()}
+    assert ok["pki.x86"].hostname == "ca-1" and ok["backend.rpi5"].hostname == ""
+
+
+def test_derived_hostname_is_the_one_shared_role_name_implementation():
+    """Both UIs show a blank row's name (GUI placeholder, TUI "if blank" column) and
+    the model refuses collisions against it — one function, so a shown name can never
+    disagree with a refused one. Derived per ENTRY: the base's role/platform is the
+    first checked row's, not every row's."""
+    pki = WorklistEntry(role="pki", platform="x86")
+    be = WorklistEntry(role="backend", platform="rpi5", board="rpi5")
+    assert derived_hostname(pki, "acme") != derived_hostname(be, "acme")
+    assert derived_hostname(pki, "acme").startswith("acme")
+    # a blank brand is the builder's own default, exactly as derive_hostname treats it
+    assert derived_hostname(pki, "") == derived_hostname(pki, "hugmesh")
+
+
+def test_two_blank_rows_are_never_a_refusal():
+    """Blank vs blank stays the builder's business: two rows that derive the same name
+    have always built that way, so the UIs say it out loud and nothing refuses. Only a
+    TYPED name colliding is an operator mistake this can name."""
+    twin = WorklistConfig(base=ImageConfig(mode="mesh", brand="acme"),
+                          entries=[WorklistEntry(role="pki", platform="x86"),
+                                   WorklistEntry(role="pki", platform="rpi5",
+                                                 board="rpi5")])
+    assert duplicate_hostnames(twin.entries, "", "acme") == {}
+    assert len(twin.materialize()) == 2
 
 
 def test_bad_per_image_hostname_fails_closed():
