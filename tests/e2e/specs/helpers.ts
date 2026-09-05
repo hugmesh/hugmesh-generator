@@ -1,4 +1,5 @@
 import { Page, expect, request } from '@playwright/test';
+import type { Locator } from '@playwright/test';
 import type { APIRequestContext, APIResponse } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -373,11 +374,68 @@ export async function onboard(page: Page, username: string, password = loginPass
   // the race already resolved on nav-user, so this costs nothing.
   await expect(navUser).toBeAttached({ timeout: SHELL_AFTER_PROVISION_MS });
   // Deliberately left on the 15s global: by the line above the shell document is
-  // already loaded and nav-user attached, so nav-matrix is a same-shell render
-  // gated only on the shell's own registrationComplete read — one round trip, not
-  // the provisioning chain. Widening this one would hide a real unlock bug.
-  await expect(page.getByTestId('nav-matrix')).toBeVisible();
+  // already loaded and nav-user attached, so the Matrix entry is a same-shell
+  // render gated only on the shell's own registrationComplete read — one round
+  // trip, not the provisioning chain. Widening this one would hide a real unlock
+  // bug.
+  //
+  // WHICH element (see matrixEntry): the shell lands every signed-in identity on
+  // the member home (roleHomeGuard -> '/user'), and on the signed-in home
+  // host-shell renders the menubar's service entries as service CARDS instead of
+  // a bar, so `nav-matrix` is NOT in the DOM here — the same entry is
+  // `home-card-nav-matrix`. Waiting on `nav-matrix` failed onboard() with
+  // "element(s) not found" (specs 04/05/17 and their Gherkin mirrors, live
+  // 2026-09-04) or, when it caught the bar during the pre-redirect first paint,
+  // handed the next click a detached element (spec 07). UNLOCKED means the enabled <a href> form: the
+  // greyed aria-disabled form shares the testid, so a bare toBeVisible() never
+  // proved the unlock at all.
+  await expectMatrixUnlocked(page);
   return getSession(page, username);
+}
+
+// ── the shell's Matrix entry: menubar link OR signed-in-home service card ─────
+/**
+ * The host shell's Matrix navigation entry, in whichever form the current route
+ * renders it.
+ *
+ * hugmesh-host-shell's MenuComponent renders ONE of two mutually exclusive
+ * branches (`@if (barVisible()) … @else if (homeCardsActive())`, menu.component
+ * .html): on every non-home route the `role="menubar"`, whose entry carries
+ * `data-testid="nav-matrix"`; on the signed-in HOME ('/user' exactly — where
+ * roleHomeGuard lands every authenticated identity, so where EVERY sign-in
+ * lands) a grid of service CARDS instead, where the SAME entry carries
+ * `data-testid="home-card-nav-matrix"` (operator requirement, host-shell issue
+ * #19, commit 00c092e 2026-08-19 — "on home the services ARE the navigation").
+ * Verified against the deployed image, not just source: after POST /bff/login
+ * the document is /user with `home-card-nav-matrix` = `a[href=/social/matrix]`
+ * and NO `nav-matrix`/menubar; on /social/matrix the menubar + `nav-matrix`
+ * are back and the cards are gone.
+ *
+ * Both forms are an `<a href="/social/matrix">` when the entry is ENABLED
+ * (service installed AND registration complete — menu.component.ts navEntries)
+ * and a `<button>`/`<span>` with `aria-disabled="true"` and the SAME testid when
+ * it is not. `.or()` is strict-mode safe because the two branches never render
+ * together.
+ */
+export function matrixEntry(page: Page): Locator {
+  return page.getByTestId('home-card-nav-matrix').or(page.getByTestId('nav-matrix'));
+}
+
+/**
+ * The Matrix entry is rendered AND unlocked: the enabled `<a href>` form, not
+ * the greyed aria-disabled one that shares its testid. `href` is the discriminator
+ * because it is the ONE attribute only the enabled branch sets (both templates).
+ */
+export async function expectMatrixUnlocked(page: Page): Promise<void> {
+  const entry = matrixEntry(page);
+  await expect(entry).toBeVisible();
+  await expect(entry).toHaveAttribute('href', '/social/matrix');
+}
+
+/** Open Matrix through the shell's OWN navigation — the service card on the
+ *  signed-in home, the menubar link everywhere else. */
+export async function openMatrix(page: Page): Promise<void> {
+  await matrixEntry(page).click();
 }
 
 // ── Matrix room setup via the user-bff hsproxy (no browser-held token) ─────────

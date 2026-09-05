@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { registerOnly, onboard, shot } from './helpers';
+import { registerOnly, onboard, shot, expectMatrixUnlocked } from './helpers';
 import { systemsUser } from './rbac-roles';
 import { gatewayDecision, effectiveRoles } from './rbac-route-access';
 
@@ -123,7 +123,7 @@ test.describe('RBAC: pending principal denied until approved (live two-stage gat
     const session = await onboard(page, 'rbac-approved@gmail.com'); // stage 1 + stage 2
     expect(session.registrationComplete).toBe(true);
     expect(session.roles).toContain('user');
-    await expect(page.getByTestId('nav-matrix')).toBeVisible();
+    await expectMatrixUnlocked(page); // the signed-in home renders it as a card (helpers.matrixEntry)
     await shot(page, '17-approved-unlocked');
   });
 });

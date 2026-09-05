@@ -30,7 +30,11 @@ Feature: Five invited users complete both registration stages and reach their su
     Given I am signed in as the persona for this scenario
     Then my session registration is complete
     And my session provider is "password"
-    When I click the element with test id "nav-matrix"
+    # Sign-in lands on the signed-in HOME, where the shell renders the service
+    # entries as CARDS (home-card-nav-matrix), not the menubar (nav-matrix) — the
+    # step opens whichever form is on screen. Once on /social/matrix the menubar
+    # is back, so Mastodon is a plain nav-mastodon click.
+    When I open Matrix from the social nav
     Then the element with test id "matrix-view" is visible
     When I click the element with test id "nav-mastodon"
     Then the element with test id "mastodon-view" is visible
@@ -52,4 +56,4 @@ Feature: Five invited users complete both registration stages and reach their su
     When I sign in through the native login form as the persona for this scenario
     Then the POST to "/bff/login" was accepted
     And the element with test id "nav-user" is attached
-    And the element with test id "nav-matrix" is visible
+    And the shell offers Matrix unlocked

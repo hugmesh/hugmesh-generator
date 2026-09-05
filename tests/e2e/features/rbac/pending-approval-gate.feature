@@ -39,4 +39,4 @@ Feature: The two-stage registration gate
     Given I am signed in as the persona for this scenario
     Then my session registration is complete
     And my session holds the role "user"
-    And the element with test id "nav-matrix" is visible
+    And the shell offers Matrix unlocked

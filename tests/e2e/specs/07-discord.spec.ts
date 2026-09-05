@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { onboard, registerOnly, shot } from './helpers';
+import { onboard, registerOnly, shot, openMatrix } from './helpers';
 
 /**
  * Handles this spec names that must NEVER be provisioned. Read by the Studio's
@@ -28,7 +28,11 @@ test('a provisioned user signs in natively and reaches Matrix + Mastodon', async
   const session = await onboard(page, 'dragoneer');
   expect(session.provider).toBe('password');
   expect(session.registrationComplete).toBe(true);
-  await page.getByTestId('nav-matrix').click();
+  // From the signed-in home the Matrix entry is a service card, not a menubar
+  // link (helpers.matrixEntry); clicking `nav-matrix` here raced the shell's
+  // first paint and, when it won, clicked an element the home-cards swap then
+  // detached (live 2026-09-04: "element was detached from the DOM, retrying").
+  await openMatrix(page);
   await expect(page.getByTestId('matrix-view')).toBeVisible();
   await shot(page, '07-discord-onboarded');
 });

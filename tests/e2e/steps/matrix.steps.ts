@@ -21,6 +21,7 @@ import { persona } from './dimensions';
 import {
   matrixUserId, createRoom, joinRoom, expectUiCallOk, UI_ROOM_SEND,
   platformPersonas, registerOnly, getSession,
+  openMatrix, expectMatrixUnlocked,
 } from '../specs/helpers';
 import { peer, peersOf, signInPeers, platformAccessRole } from './social-peers';
 import type { Peer } from './social-peers';
@@ -406,8 +407,17 @@ Then('my session was minted by the native password provider', async ({ page, dim
   expect(s.provider, 'the only login surface is our native username/password form').toBe('password');
 });
 
+// The shell's Matrix entry is a menubar link (`nav-matrix`) on every route EXCEPT
+// the signed-in home, where host-shell renders the same entries as service cards
+// (`home-card-nav-matrix`) — and the home is where every sign-in lands. Both steps
+// resolve whichever form is on screen (helpers.matrixEntry); the unlock step also
+// insists on the ENABLED <a href> form, since the greyed one shares the testid.
 When('I open Matrix from the social nav', async ({ page }) => {
-  await page.getByTestId('nav-matrix').click();
+  await openMatrix(page);
+});
+
+Then('the shell offers Matrix unlocked', async ({ page }) => {
+  await expectMatrixUnlocked(page);
 });
 
 // ── the per-platform ACCESS wall, live through the hsproxy ───────────────────
