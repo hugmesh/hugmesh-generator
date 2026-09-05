@@ -537,9 +537,10 @@ def test_build_frite_image_only(wiz):
 
 
 def test_askpass_mode_prints_password_and_exits_zero(monkeypatch, qapp):
-    """The GUI SUDO_ASKPASS helper (`--askpass`) pops a password dialog and prints the
-    entry to stdout so `sudo -A` gets the password from a DIALOG, never an invisible
-    terminal — the core of bug B's fix."""
+    """The GUI SUDO_ASKPASS helper (`--askpass-gui`, the explicit dialog opt-in the
+    driver's generated helper passes) pops a password dialog and prints the entry to
+    stdout so `sudo -A` gets the password from a DIALOG, never an invisible terminal —
+    the core of bug B's fix."""
     import contextlib
     import io
 
@@ -554,9 +555,30 @@ def test_askpass_mode_prints_password_and_exits_zero(monkeypatch, qapp):
                         staticmethod(lambda *a, **k: ("s3cr3t-pw", True)))
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        rc = app.main(["--askpass"])
+        rc = app.main(["--askpass-gui"])
     assert rc == 0
     assert buf.getvalue().strip() == "s3cr3t-pw"
+
+
+def test_bare_askpass_never_pops_the_dialog(monkeypatch, qapp):
+    """The dialog is opt-in ONLY: plain `--askpass` with a reachable display, no
+    credential source and no TTY must decline (exit 1, nothing on stdout) instead of
+    showing the dialog that wedged 60 headless `sudo -A` launchers (2026-09-04)."""
+    import contextlib
+    import io
+
+    from hugmesh_studio import app
+    from hugmesh_studio.core import askpass
+    from hugmesh_studio.gui.qt import QtWidgets
+    monkeypatch.setattr(askpass, "_display_available", lambda: True)
+    monkeypatch.setattr(QtWidgets.QInputDialog, "getText",
+                        staticmethod(lambda *a, **k: pytest.fail("dialog shown by fallback")))
+    monkeypatch.setattr(askpass, "_from_terminal", lambda *a, **k: None)   # no tty
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = app.main(["--askpass"])
+    assert rc == 1
+    assert buf.getvalue() == ""
 
 
 def test_askpass_mode_cancel_returns_nonzero(monkeypatch, qapp):
@@ -569,7 +591,7 @@ def test_askpass_mode_cancel_returns_nonzero(monkeypatch, qapp):
     monkeypatch.setattr(QtWidgets, "QApplication", lambda *a, **k: qapp)
     monkeypatch.setattr(QtWidgets.QInputDialog, "getText",
                         staticmethod(lambda *a, **k: ("", False)))
-    assert app.main(["--askpass"]) == 1
+    assert app.main(["--askpass-gui"]) == 1
 
 
 def test_build_preview_resolves_unset_flavor_on_deepcopy(monkeypatch, wiz):
