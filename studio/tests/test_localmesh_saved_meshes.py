@@ -577,3 +577,46 @@ def test_stop_tooltip_says_volumes_are_kept(qapp, page):
     assert "KEPT" in tip and "stack-halt" in tip
     assert "dropped" not in tip
     assert "drops the containers and volumes" not in page.boot_start_btn.toolTip()
+
+
+# ── the cross-lane seam: a verb changes what a record's row is read FROM ──────────
+def test_a_finished_verb_marks_the_saved_table_stale_without_reading_anything(page):
+    """_verb_done must not re-scan directly — that would run behind the seam tests use
+    to keep a page quiet while they drive verbs (`_probe_mesh_state = lambda: None`).
+    It marks, and the state probe's answer is what acts."""
+    page._probe_mesh_state = lambda: None
+    page._save_run_log = lambda run, ok: ""
+    page._runs = []
+    calls = []
+    page.saved_meshes.refresh = lambda: calls.append("refresh")
+
+    page._saved_stale = False
+    page._verb_done(True)
+
+    assert page._saved_stale is True
+    assert calls == [], "the re-scan must ride _on_mesh_state, not _verb_done"
+
+
+def test_the_state_probes_answer_rescans_the_saved_table_exactly_once(page):
+    """…and _on_mesh_state consumes the flag: one refresh, and not a second one on the
+    next answer, or a page whose probe re-fires would re-scan on every tick."""
+    calls = []
+    page.saved_meshes.refresh = lambda: calls.append("refresh")
+
+    page._saved_stale = True
+    page._on_mesh_state(False, "not started")
+    assert calls == ["refresh"]
+    assert page._saved_stale is False
+
+    page._on_mesh_state(False, "not started")
+    assert calls == ["refresh"], "an unstale table must not be re-scanned"
+
+
+def test_the_saved_table_is_not_rescanned_when_no_verb_has_run(page):
+    """The flag starts down: entering the page already refreshed once (initializePage),
+    and _on_mesh_state fires on that same entry."""
+    assert page._saved_stale is False
+    calls = []
+    page.saved_meshes.refresh = lambda: calls.append("refresh")
+    page._on_mesh_state(True, "running")
+    assert calls == []

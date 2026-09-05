@@ -593,6 +593,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # probe's answer (and a read that was already in flight) re-reads the
         # monitor, so a just-finished bring-up populates the table with no click.
         self._monitor_stale = False
+        #: The same flag for the SAVED-MESH table: a verb has changed the things its
+        #: per-row facts are read from (data volumes, the credentials file, the
+        #: source tree), so the rows on screen are stale. Consumed by _on_mesh_state,
+        #: for the reason _verb_done spells out.
+        self._saved_stale = False
         # THIRD timer on this page, justified: _tick is the 1 Hz run clock, _drain the
         # 50 ms log coalescer — different jobs, different cadences — and this one is
         # the only one stopped when its section is folded. NOT started here: it runs
@@ -1794,6 +1799,18 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # measured as three REAL `kubectl get` reads and a Qt abort at teardown
         # in two suites that never asked for a monitor.
         self._monitor_stale = True
+        # …and the SAVED-MESH table with it. _sync_saved_gate (from
+        # _set_verbs_enabled above) re-gates the 'Save this mesh' button, but the
+        # table's own rows are read from things a verb changes and it does not
+        # touch: 'Clean mesh' drops the data volumes a record's Start needs,
+        # 'Restore (reseed)' rewrites the credentials file a record hashed, and a
+        # bring-up creates both. Left unrefreshed, a row goes on offering a Start
+        # whose volumes are gone — with the old blocked-reason tooltip to match —
+        # until the operator leaves the page and comes back. It rides
+        # _on_mesh_state for the same reason the monitor does: a re-scan started
+        # directly here would go behind the `_probe_mesh_state = lambda: None`
+        # seam the tests use to keep a page quiet while they drive verbs.
+        self._saved_stale = True
         self._probe_mesh_state()
         self.completeChanged.emit()
 
@@ -2153,6 +2170,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # cluster coming up behind a folded section — re-read whenever the title
         # currently claims nothing runs, or it keeps asserting that after the mesh
         # is up (the two-lane case this feature was written for).
+        # A verb just ended: re-scan the saved-mesh records and re-probe their
+        # per-row facts. Disk only on this thread (a directory listing and small
+        # JSON parses); the docker/git half rides the off-thread _saved_probe that
+        # refresh() kicks off, exactly as it does on page entry.
+        if self._saved_stale:
+            self._saved_stale = False
+            self.saved_meshes.refresh()
         if (self._monitor_stale or self._monitor is None
                 or self.monitor_section.is_expanded() or running
                 or not bool(getattr(self._monitor, "any_running", False))):

@@ -87,6 +87,14 @@ def test_docker_recompute_off_main_thread_tray_never_freezes(qapp, monkeypatch):
     assert ticks["n"] >= 3, ticks
 
     build._join_preflight_worker()
+    # STOP the poll timer before dropping the tray. It is a 10 ms repeating timer
+    # this test rewired to a lambda, and deleteLater() only queues the delete: any
+    # later ``processEvents()`` in the same process — the session-end probe drain in
+    # tests/conftest.py is one — fires it again against objects this test has
+    # finished with, and PyQt6 segfaults inside QTimer::timerEvent with no Python
+    # frame to name. Measured 2026-09-04: this file passed all 3 tests and then
+    # crashed the interpreter at exit.
+    tray._poll.stop()
     tray.deleteLater()
     wiz.close(); wiz.deleteLater()
     qapp.processEvents()

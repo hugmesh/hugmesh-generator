@@ -38,6 +38,8 @@ def _isolate_studio_state_dir(monkeypatch, tmp_path):
     or bypassed, the suite fails loudly instead of quietly polluting a real home.
     """
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio-state"))
+    # (monkeypatch restores the session-wide default pytest_configure sets, not an
+    # unset variable — see the note there for why that difference is load-bearing.)
 
 
 @pytest.fixture(autouse=True)
@@ -61,16 +63,55 @@ def _host_independent_build_defaults(monkeypatch):
     monkeypatch.setattr(host_resources, "_meminfo_fresh", lambda: dict(healthy))
 
 
+def _live_qapplication():
+    """The process's QApplication, or None — without ever raising, and without
+    importing Qt into a run that has not already imported it.
+
+    Deliberately paranoid about ``QtWidgets.QApplication`` not being the class: tests
+    legitimately ``monkeypatch.setattr(QtWidgets, "QApplication", lambda *a: qapp)``
+    to stop a page building a second one (``tests/test_pages_build.py`` does), and a
+    ``tryfirst`` teardown hook runs BEFORE monkeypatch's undo. A bare
+    ``QApplication.instance()`` there raised ``AttributeError: 'function' object has
+    no attribute 'instance'``, which aborted teardown before the undo, leaving the
+    patch in place for the REST OF THE SESSION — the whole file then failed at
+    ``pytest_sessionfinish``. Measured 2026-09-04 on tests/test_pages_build.py, which
+    is green on origin/main.
+    """
+    qtw = sys.modules.get("PyQt6.QtWidgets")
+    if qtw is None:                              # no toolkit in this run
+        return None
+    try:
+        return qtw.QApplication.instance()
+    except Exception:                            # not the class right now
+        return None
+
+
 def _drain_probe_threads(deadline_s: float = 60.0) -> None:
     """Wait out every probe QThread the Studio still has in flight, ONCE, at session end.
 
-    ``gui/pages/_widgets.own_probe`` parents every probe onto the QApplication, so a
-    page dropped mid-probe no longer takes the process down (see that docstring). What
-    it does NOT cover is the very last owner: the QApplication itself is destroyed at
-    interpreter exit, and a probe still running THEN hits the same ``QThread: Destroyed
-    while thread is still running`` qFatal — measured on 2026-09-04 with the re-parent
-    in place and this drain removed, ``test_local_mesh.py`` ran all 34 tests green and
-    then aborted the process at exit.
+    ``gui/pages/_widgets.own_probe`` un-parents every probe and holds it in a module
+    registry, so a page dropped mid-probe no longer takes the process down (see that
+    docstring). What no registry can cover is the very LAST owner: the QApplication is
+    destroyed at interpreter exit — taking ``BuildSupervisor`` and any worker it has
+    adopted with it — and a thread still running THEN hits the same ``QThread:
+    Destroyed while thread is still running`` qFatal. Measured on 2026-09-04 with the
+    un-parent in place and this drain removed, ``test_local_mesh.py`` ran all 34 tests
+    green and then aborted the process at exit.
+
+    So it drains BOTH registries: ``own_probe``'s in-flight probes and the supervisor's
+    adopted build workers (``_running_supervised_workers``).
+
+    It deliberately does NOT go hunting for threads OUTSIDE those two. A version that
+    also enumerated live QThreads — by ``gc.get_objects()``, by walking the Qt object
+    tree from the QApplication, and by both at once, run per-iteration and run once
+    after the loop with no ``processEvents()`` at all — was written and thrown away.
+    Every variant broke ``tests/test_shell.py``, 3 of 3 runs each: merely enumerating
+    objects at that moment changes when a queued ``BuildActionsWindow.destroyed``
+    reaches its lambda, and the ``TypeError`` that lambda then raises inside a Qt slot
+    aborts PyQt6. It bought one suite (``test_pages_fields_asks.py``, 4 of 4 instead of
+    2 of 3) at the cost of another, deterministically, so it is not here. That suite's
+    residual abort — after all 87 of its tests PASS, and against aborting at test 15 of
+    87 on origin/main — is left standing and written up in the PR.
 
     So this runs ONCE, from ``pytest_sessionfinish``, and never per test. Per-test it
     also worked, and cost ~25 s a test on any suite whose probes genuinely shell out
@@ -91,7 +132,7 @@ def _drain_probe_threads(deadline_s: float = 60.0) -> None:
     qtc = sys.modules.get("PyQt6.QtCore")
     if qtw is None or qtc is None:
         return
-    app = qtw.QApplication.instance()
+    app = _live_qapplication()
     if app is None:
         return
     end = time.monotonic() + deadline_s
@@ -102,7 +143,7 @@ def _drain_probe_threads(deadline_s: float = 60.0) -> None:
     # isRunning() is still False in the instant between start() and the OS thread
     # actually running. So idle has to hold across several consecutive passes.
     while time.monotonic() < end and idle < 20:
-        running = _running_probe_threads(qtw, qtc)
+        running = _running_probe_threads(qtw, qtc) + _running_supervised_workers()
         for t in running:
             try:
                 t.wait(200)
@@ -116,7 +157,8 @@ def _drain_probe_threads(deadline_s: float = 60.0) -> None:
         # The registry entry is cleared by the `finished` signal, which a plain
         # processEvents delivers, so nothing here needs to delete anything.
         app.processEvents()
-        idle = 0 if (running or _running_probe_threads(qtw, qtc)) else idle + 1
+        idle = 0 if (running or _running_probe_threads(qtw, qtc)
+                     or _running_supervised_workers()) else idle + 1
 
 
 def _running_probe_threads(qtw, qtc) -> list:
@@ -138,6 +180,148 @@ def _running_probe_threads(qtw, qtc) -> list:
         except RuntimeError:                    # wrapper outlived its C++ object
             continue
     return out
+
+
+def _running_supervised_workers() -> list:
+    """Every build worker ``gui/build_supervisor`` has adopted and that is still running.
+
+    A second registry, because the supervisor is a second OWNER: ``adopt()`` reparents
+    the worker QThread onto the process-wide ``BuildSupervisor`` deliberately, so that
+    no window's destruction can take a running build with it. Draining
+    ``own_probe``'s registry alone would therefore miss any worker that reached the
+    supervisor by a route other than ``hold_thread``.
+    """
+    try:
+        from hugmesh_studio.gui import build_supervisor
+    except Exception:                           # no toolkit in this run
+        return []
+    if build_supervisor._SUPERVISOR is None:    # never a build in this run
+        return []
+    out = []
+    try:
+        builds = list(build_supervisor._SUPERVISOR.running())
+    except Exception:
+        return []
+    for b in builds:
+        w = getattr(b, "worker", None)
+        try:
+            if w is not None and w.isRunning():
+                out.append(w)
+        except RuntimeError:                    # wrapper outlived its C++ object
+            continue
+    return out
+
+
+#: The QApplication, held for the whole session once some test has made one. A LIST
+#: rather than a single slot so a suite that deliberately builds a second application
+#: cannot silently drop the first (see pytest_runtest_teardown below).
+_PINNED_APPS: list = []
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_teardown(item, nextitem):
+    """Two things a GUI test must not leave behind, done BEFORE any fixture unwinds.
+
+    Both are about the same object graph, which ``gui/build_supervisor`` builds on
+    purpose::
+
+        QApplication  ->  BuildSupervisor  ->  _WorklistWorker (a running QThread)
+
+    ``adopt()`` reparents a build worker off its page and onto the process-wide
+    supervisor precisely so that "no window's destruction can take it". In the real
+    Studio that graph is torn down exactly once, at exit, and ``aboutToQuit`` has run
+    ``cancel_all()`` first. Under pytest neither half holds, and each failing half
+    aborts the interpreter — which loses every test after it while REPORTING nothing,
+    because the process never gets far enough to write a failure.
+
+    (1) PIN THE APPLICATION. Almost every GUI suite here gets its application from a
+        FUNCTION-scoped fixture that returns ``QApplication.instance() or
+        QApplication([...])`` and keeps no reference of its own, so between tests its
+        refcount reaches zero. Qt destroys a QObject's children from inside
+        ``~QObject``, so that collection walks straight down the graph above and meets
+        a running QThread: ``QThread: Destroyed while thread
+        'progress._WorklistWorker' is still running``, a qFatal. Pinning is also the
+        HONEST lifetime — a process has one QApplication, and it lives until the
+        process ends. Qt is touched only through ``sys.modules``, so a session that
+        never builds an application (the core-only CI lane) pins nothing and imports
+        nothing.
+
+    (2) STOP THE BUILDS. With the application pinned the worker is no longer destroyed
+        — it just keeps RUNNING, into the next test and past the fixtures its slots
+        depend on. Measured: ``tests/test_pages_progress.py`` then reached the end and
+        aborted anyway, this time on ``RuntimeError: refusing to use the operator's
+        live state dir`` raised inside a Qt slot, because ``_isolate_studio_state_dir``
+        had already been undone under the still-running build. So a build must not
+        outlive the test that started it, which is the same rule ``aboutToQuit ->
+        cancel_all()`` enforces at a real exit. This hook is ``tryfirst`` for that
+        reason: it runs before ``teardown_exact``, so the state dir, the fake HOME and
+        every monkeypatch are still in place while ``on_cancelled`` writes its record.
+
+    Cost is only what it stops: a session with no supervisor has nothing to do here,
+    and the builds that exist in this suite are driven by a faked ``Popen``.
+
+    Measured 2026-09-04 on ``tests/test_pages_progress.py``: ``origin/main`` aborted
+    3 of 3 runs (at test 20 of 50); with (1) alone, 2 of 3; with both, 5 of 5 green.
+    """
+    try:
+        app = _live_qapplication()
+        if app is not None and not any(a is app for a in _PINNED_APPS):
+            _PINNED_APPS.append(app)
+        _stop_supervised_builds()
+    except Exception:
+        # NEVER raise from here. This hook is `tryfirst`, so it runs before
+        # `teardown_exact` — an exception escaping it skips every fixture finalizer
+        # for this test, monkeypatch's undo included, and the patches then leak into
+        # the rest of the session. Whatever this hook could not do is not worth that.
+        pass
+
+
+def _stop_supervised_builds() -> None:
+    """Cancel and join every build the supervisor still has live, then DELIVER what
+    they already queued. Never raises: this runs during teardown, where an escaping
+    exception would mask the test's own verdict, and the supervisor's own slots are
+    written the same way.
+
+    The pump is not tidiness. A worker emits ``entry_done`` from its own thread, so the
+    signal sits in the main thread's queue until something runs the event loop — and
+    the page's slot for it writes a session record through ``core.build_sessions``.
+    Joining the thread does not deliver that queued call; the next ``processEvents()``
+    does, wherever that happens to be. Measured: with only the cancel, the queued
+    ``entry_done`` was delivered by ``_drain_probe_threads`` at SESSION finish, long
+    after ``_isolate_studio_state_dir`` had been undone, and ``state_paths.state_dir()``
+    then refused the un-redirected path — a ``RuntimeError`` raised inside a Qt slot,
+    which under PyQt6 aborts the interpreter. Pumping here delivers it while the state
+    dir, the fake HOME and every monkeypatch are still in place.
+    """
+    try:
+        from hugmesh_studio.gui import build_supervisor
+    except Exception:                            # no toolkit in this run
+        return
+    sup = build_supervisor._SUPERVISOR
+    if sup is None:                              # no build ever started
+        return
+    try:
+        cancelled = sup.cancel_all(wait_ms=10000)
+    except Exception:
+        return
+    # Pump ONLY when a live build was actually stopped. Running the event loop is not
+    # free of consequences: it delivers every OTHER queued call too, and a suite that
+    # started no build can be holding one that is only safe to never deliver —
+    # ``tests/test_shell.py`` queues ``BuildActionsWindow.destroyed`` onto a lambda
+    # whose keyword-only capture is gone by then, and a ``TypeError`` raised inside a
+    # Qt slot aborts PyQt6 (measured 3 of 3 runs; that file is green when this pump is
+    # skipped). Nothing here needs those: the queued call this exists for is the
+    # ``entry_done`` of a build we just cancelled.
+    if not cancelled:
+        return
+    app = _live_qapplication()
+    if app is None:
+        return
+    for _ in range(50):
+        try:
+            app.processEvents()
+        except Exception:
+            return
 
 
 @pytest.fixture(autouse=True)
@@ -302,6 +486,17 @@ def pytest_configure(config):
     os.environ["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
     os.environ["XDG_CACHE_HOME"] = os.path.join(home, ".cache")
     os.environ["XDG_DATA_HOME"] = os.path.join(home, ".local", "share")
+    # A SESSION-WIDE state dir under the same throwaway home, so the variable is never
+    # unset while pytest runs. `_isolate_studio_state_dir` gives each test its own and
+    # monkeypatch restores THIS value afterwards — which matters, because Qt work can
+    # outlive the test that queued it: a page's `entry_done` slot writes a session
+    # record through core.build_sessions, and delivered from the session-end drain it
+    # found no override, hit `state_paths.state_dir()`'s refusal of the home fallback,
+    # and raised inside a Qt slot — a PyQt6 abort AFTER "87 passed" was printed
+    # (tests/test_pages_fields_asks.py, 2026-09-04). It is NOT the home fallback path,
+    # so the refusal still fires for anything that bypasses the seam entirely.
+    os.makedirs(os.path.join(home, "studio-state-session"), exist_ok=True)
+    os.environ[STATE_DIR_ENV] = os.path.join(home, "studio-state-session")
 
 
 # NOTE. A second autouse fixture (_isolated_state_dir_default) arrived here from the
