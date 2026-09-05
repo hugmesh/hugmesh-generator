@@ -662,29 +662,152 @@ def test_ask9_derived_default_user_matches_the_real_emission():
 
 
 def test_ask9_mesh_worklist_does_not_bake_one_hostname_onto_every_node(wiz):
-    """HONESTY arm of the preselect: a mesh worklist builds several images off ONE base
-    config, which carries ONE hostname. Prefilling it would name pki, backend and
-    frontend the same thing, so the field stays blank there and the real per-node
-    derivation is SHOWN."""
+    """HONESTY arm of the preselect, as REWRITTEN by issue #229: a mesh worklist
+    builds several images off ONE base config, which carries ONE hostname. The page
+    used to refuse to prefill and leave that field blank (so nothing could be named);
+    now the single field is withdrawn and one editor PER IMAGE takes its place, each
+    placeholdered with the canonical name that node bakes when left blank. Nothing is
+    prefilled INTO the editors, so an untouched walk still emits no --hostname and
+    every node keeps its own role-derived name — the mesh argv is as it was."""
     mesh_flow(wiz, "pki.x86", "backend.x86", "frontend.x86")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
-    assert sysp.hostname.text() == ""
-    assert sysp.hostname_note.isVisible()
+    assert not sysp.hostname_row.isVisible()          # the one-for-all field is gone
+    assert sysp.hostname_rows.isVisible() and sysp.hostname_note.isVisible()
     # ...and the names it shows are the canonical ones an x86 node really bakes now
     # (they were hugmesh-be / hugmesh-fe, while the SAME logical node on a Pi baked
     # hugmesh-backend / hugmesh-frontend).
-    for name in ("hugmesh-pki", "hugmesh-backend", "hugmesh-frontend"):
-        assert name in sysp.hostname_note.text()
+    assert {rid: ed.placeholderText() for rid, ed in sysp.hostname_edits.items()} == {
+        "pki.x86": "hugmesh-pki", "backend.x86": "hugmesh-backend",
+        "frontend.x86": "hugmesh-frontend"}
+    assert all(ed.text() == "" for ed in sysp.hostname_edits.values())
     advance_to(wiz, wizard_mod.HomePage)
+    assert wiz.cfg.hostname == ""
     assert "--hostname" not in wiz.cfg.to_cli_args()      # mesh argv stays as it was
+    for _e, cfg in wiz.worklist.materialize():
+        assert "--hostname" not in cfg.to_cli_args()
 
 
 def test_ask9_single_row_mesh_worklist_does_prefill(wiz):
-    """...and with exactly one image there is no ambiguity, so it prefills again."""
+    """...and with exactly one image there is no ambiguity, so it prefills again —
+    into the plain field, which since issue #229 edits THAT ROW's entry: the value
+    lands on the worklist entry (the base stays blank) and the argv is unchanged."""
     mesh_flow(wiz, "pki.x86")
     sysp = advance_to(wiz, wizard_mod.SystemPage)
     assert sysp.hostname.text() == "hugmesh-pki"
+    assert sysp.hostname_row.isVisible() and not sysp.hostname_rows.isVisible()
     assert not sysp.hostname_note.isVisible()
+    advance_to(wiz, wizard_mod.HomePage)
+    assert wiz.cfg.hostname == ""
+    assert wiz.worklist.entries[0].hostname == "hugmesh-pki"
+    (_e, cfg), = wiz.worklist.materialize()
+    assert ("--hostname", "hugmesh-pki") in pairs(cfg.to_cli_args())
+
+
+def test_229_two_rows_two_hostnames_each_reach_their_own_build(wiz):
+    """ISSUE #229, end to end through the real wizard: a two-row worklist, a different
+    hostname typed for each image, and each materialized build receives ITS OWN -H —
+    neither the other's, and the shared base never carries either."""
+    mesh_flow(wiz, "pki.x86", "backend.rpi5")
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    assert set(sysp.hostname_edits) == {"pki.x86", "backend.rpi5"}
+    sysp.hostname_edits["pki.x86"].setText("ca-1")
+    sysp.hostname_edits["backend.rpi5"].setText("be-pi")
+    advance_to(wiz, wizard_mod.HomePage)
+    assert wiz.cfg.hostname == ""
+    assert {e.id: e.hostname for e in wiz.worklist.entries} == {
+        "pki.x86": "ca-1", "backend.rpi5": "be-pi"}
+    argvs = {e.id: cfg.to_cli_args() for e, cfg in wiz.worklist.materialize()}
+    assert ("--hostname", "ca-1") in pairs(argvs["pki.x86"])
+    assert ("--hostname", "be-pi") in pairs(argvs["backend.rpi5"])
+    assert ("--hostname", "be-pi") not in pairs(argvs["pki.x86"])
+    assert ("--hostname", "ca-1") not in pairs(argvs["backend.rpi5"])
+    # the names survive a Back to the worklist and forward again (keep.hostname)
+    back_to(wiz, wizard_mod.WorklistPage)
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    assert sysp.hostname_edits["pki.x86"].text() == "ca-1"
+    assert sysp.hostname_edits["backend.rpi5"].text() == "be-pi"
+
+
+def test_229_naming_one_image_leaves_the_others_derived(wiz):
+    """Per image means per image: naming ONE row emits -H on that build only; the
+    untouched rows still emit nothing and take their role-derived names."""
+    mesh_flow(wiz, "pki.x86", "backend.x86", "frontend.x86")
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    sysp.hostname_edits["backend.x86"].setText("be-main")
+    advance_to(wiz, wizard_mod.HomePage)
+    argvs = {e.id: cfg.to_cli_args() for e, cfg in wiz.worklist.materialize()}
+    assert ("--hostname", "be-main") in pairs(argvs["backend.x86"])
+    assert "--hostname" not in argvs["pki.x86"]
+    assert "--hostname" not in argvs["frontend.x86"]
+
+
+def test_229_duplicate_and_malformed_hostnames_are_refused_inline(wiz):
+    """Two images cannot share a name, and a name the builders' allowlist rejects is
+    refused HERE (inline label, never a modal — validatePage runs headless), where the
+    operator can fix it, instead of at Build time. Fixing it lets Next through."""
+    mesh_flow(wiz, "pki.x86", "backend.x86")
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    sysp.hostname_edits["pki.x86"].setText("node")
+    sysp.hostname_edits["backend.x86"].setText("node")
+    before = wiz.currentId()
+    wiz.next()
+    assert wiz.currentId() == before, "a duplicate hostname must not pass"
+    assert sysp.hostname_error.isVisible()
+    assert "node" in sysp.hostname_error.text()
+    # a typed name equal to what another BLANK row derives is the same collision
+    sysp.hostname_edits["pki.x86"].setText("hugmesh-backend")
+    sysp.hostname_edits["backend.x86"].clear()
+    wiz.next()
+    assert wiz.currentId() == before and sysp.hostname_error.isVisible()
+    # the identity allowlist, per row
+    sysp.hostname_edits["pki.x86"].setText("Bad_Host!")
+    wiz.next()
+    assert wiz.currentId() == before and "pki.x86" in sysp.hostname_error.text()
+    # fixed -> through, error gone
+    sysp.hostname_edits["pki.x86"].setText("ca-1")
+    advance_to(wiz, wizard_mod.HomePage)
+    assert not sysp.hostname_error.isVisible()
+    assert {e.id: e.hostname for e in wiz.worklist.entries} == {
+        "pki.x86": "ca-1", "backend.x86": ""}
+
+
+def test_229_legacy_one_for_all_base_is_shown_per_row_and_refused_by_name(wiz):
+    """A pre-#229 envelope carries ONE base hostname that rode onto every image. The
+    page shows that value on every row it was going to name (nothing is dropped
+    silently), Next refuses the collision by name, and naming the rows apart is what
+    clears it — after which the base is blank and each build gets its own -H."""
+    mesh_flow(wiz, "pki.x86", "backend.x86")
+    wiz.cfg.hostname = "everyone"            # the loaded envelope's one-for-all value
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    assert {rid: ed.text() for rid, ed in sysp.hostname_edits.items()} == {
+        "pki.x86": "everyone", "backend.x86": "everyone"}
+    before = wiz.currentId()
+    wiz.next()
+    assert wiz.currentId() == before and "everyone" in sysp.hostname_error.text()
+    sysp.hostname_edits["backend.x86"].setText("be-1")
+    advance_to(wiz, wizard_mod.HomePage)
+    assert wiz.cfg.hostname == ""
+    argvs = {e.id: cfg.to_cli_args() for e, cfg in wiz.worklist.materialize()}
+    assert ("--hostname", "everyone") in pairs(argvs["pki.x86"])
+    assert ("--hostname", "be-1") in pairs(argvs["backend.x86"])
+
+
+def test_229_rows_that_derive_the_same_name_are_told_not_blocked(wiz):
+    """pki.x86 + pki.rpi5 both derive hugmesh-pki. The builder has always produced
+    that pair, so the page does not refuse it — but it says so in the note, and the
+    fix (naming one) is one keystroke away. This is exactly the case the OLD page
+    handled worst: with one distinct derived name it prefilled that name into the
+    single field and baked it onto both."""
+    mesh_flow(wiz, "pki.x86", "pki.rpi5")
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    assert sysp.hostname_rows.isVisible()
+    assert "hugmesh-pki" in sysp.hostname_note.text()
+    assert "name at least one" in sysp.hostname_note.text()
+    sysp.hostname_edits["pki.rpi5"].setText("ca-pi")
+    advance_to(wiz, wizard_mod.HomePage)
+    argvs = {e.id: cfg.to_cli_args() for e, cfg in wiz.worklist.materialize()}
+    assert "--hostname" not in argvs["pki.x86"]
+    assert ("--hostname", "ca-pi") in pairs(argvs["pki.rpi5"])
 
 
 def test_ask9_mesh_worklist_does_not_bake_the_x86_account_onto_every_arm_node(wiz):
