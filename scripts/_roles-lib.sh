@@ -292,6 +292,95 @@ hugmesh_role_aliases_of() {
     printf '%s\n' "${_out}"
 }
 
+# ── ROLE-TOKEN SHADOWING (one spelling contained in another) ───────────────────
+# Every artifact consumer finds an image with a `*-<role>-*` glob, because the
+# builders name artifacts <brand>-<platform>-<arch>-<role>-<env>-<stamp>. That glob
+# is a PREFIX match, and three spellings in this vocabulary contain another spelling
+# inside exactly that hyphen window:
+#
+#     -backend-gpu-      contains  -backend-        canonical inside canonical
+#     -be-gpu-           contains  -be-             alias     inside alias
+#     -standalone-full-  contains  -full-           alias     inside alias
+#
+# So `--role backend` also matches the backend-gpu image. That is not a tie broken
+# by chance: scripts/build-all-roles.sh builds the DEFAULT x86 fleet in the order
+# `pki backend frontend backend-gpu` into ONE work dir, so backend-gpu is always
+# the newest, and the launchers' `for c in <glob>` lists expand alphabetically,
+# where `backend-gpu` sorts before `backend-<env>`. Both orderings pick the GPU
+# image, every time. On scripts/flash-disk.sh that is a whole-physical-disk write
+# of the NVIDIA/GPU worker image onto a plain backend node, with no ambiguity
+# refusal possible — both artifacts are platform x86, so the platform anchor and
+# assert_one_platform cannot see it.
+#
+# The collision became REACHABLE with this vocabulary: while be+gpu's artifact tag
+# was folded to `host`, no emitted name pair collided (`-be-` cannot prefix-match
+# `-host-`). It is derived from the declarations below rather than hard-coded, so a
+# future canonical role that extends an existing one (`frontend-gpu`) is covered on
+# the day it is declared, and so the two alias collisions are covered too.
+
+# hugmesh_role_shadow_tokens <role> — echo every role spelling, space separated,
+# whose own `-<token>-` window CONTAINS the `-<role>-` window (or that of one of
+# <role>'s aliases) and which belongs to a DIFFERENT canonical role. Empty for all
+# but backend/be and omnibus/full. rc=1 for a token outside the vocabulary.
+hugmesh_role_shadow_tokens() {
+    local _c
+    _c="$(hugmesh_role_canonicalize "$1")" || return 1
+    local _mine
+    _mine="$(hugmesh_role_aliases_of "${_c}")"
+    local _all
+    _all="${HUGMESH_ROLES_CANONICAL}"
+    local _e
+    for _e in ${HUGMESH_ROLE_ALIASES}; do
+        _all="${_all} ${_e%%=*}"
+    done
+    local _out
+    _out=""
+    local _t
+    local _tc
+    local _s
+    for _t in ${_all}; do
+        _tc="$(hugmesh_role_canonicalize "${_t}")" || continue
+        [ "${_tc}" = "${_c}" ] && continue
+        for _s in ${_mine}; do
+            [ "${_t}" = "${_s}" ] && continue
+            case "-${_t}-" in
+                *"-${_s}-"*) _out="${_out}${_out:+ }${_t}"; break ;;
+            esac
+        done
+    done
+    printf '%s\n' "${_out}"
+}
+
+# hugmesh_role_shadow_filter <role> — a stdin -> stdout filter over artifact PATHS.
+# Drops every path whose basename carries one of the shadowing spellings above, i.e.
+# whose `-<role>-` match was only the prefix of a longer role. A pass-through `cat`
+# for the roles that shadow nothing, so it is safe to apply to EVERY role-scoped
+# candidate list — and it must be applied to every one of them, because dropping it
+# from any single consumer restores the wrong-image pick there alone.
+# Deliberately NOT applied to the role-BLIND fallbacks (`any image for this
+# platform`): those have already given up on the role and must keep returning
+# something.
+hugmesh_role_shadow_filter() {
+    local _sh
+    _sh="$(hugmesh_role_shadow_tokens "$1" 2>/dev/null || true)"
+    if [ -z "${_sh}" ]; then cat; return 0; fi
+    local _line
+    local _base
+    local _t
+    local _drop
+    while IFS= read -r _line; do
+        _base="${_line##*/}"
+        _drop=0
+        for _t in ${_sh}; do
+            case "${_base}" in
+                *"-${_t}-"*) _drop=1; break ;;
+            esac
+        done
+        [ "${_drop}" -eq 0 ] && printf '%s\n' "${_line}"
+    done
+    return 0
+}
+
 # hugmesh_role_validate <role> <platform> — THE builder entry point. Echoes the
 # canonical role on success. On failure prints a full, alias-aware message to
 # stderr and returns 1; the caller decides how to die.
