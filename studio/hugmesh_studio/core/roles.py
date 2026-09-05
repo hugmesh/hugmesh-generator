@@ -27,11 +27,63 @@ import os
 import re
 from functools import lru_cache
 
-# scripts/_roles-lib.sh, relative to this file (core/ -> hugmesh_studio/ -> studio/ -> repo)
+# ── WHERE THE VOCABULARY IS READ FROM ───────────────────────────────────────────
+# TWO paths, and the second is not a fallback for a broken checkout — it is the ONLY
+# one that exists in an INSTALLED Studio.
+#
+#   checkout   <repo>/scripts/_roles-lib.sh, four dirnames up from this file
+#              (core/ -> hugmesh_studio/ -> studio/ -> repo). THE declaration.
+#   packaged   _roles-lib.sh beside this module, shipped as package-data — a
+#              byte-identical mirror, never edited by hand.
+#
+# The packaged mirror exists because `pip install ./studio` (how BOTH installers are
+# built: the Flatpak manifest's build context is studio/, which cannot even see the
+# repo root, and the MSI freezes the same install) copies hugmesh_studio/ into
+# site-packages with nothing above it. There the checkout path resolves to
+# `<prefix>/lib/python3.x/scripts/_roles-lib.sh` and is absent — and since config.py
+# builds RPI5_ROLE_MAP/JETSON_ROLE_MAP out of composite_aliases() at MODULE IMPORT
+# time, and _lib_text() raises rather than degrading (deliberately — see
+# RoleVocabularyError), that is not a missing feature but a bundle that cannot start.
+# An installed Studio died on `import hugmesh_studio.core.config` for exactly this.
+#
+# THE CHECKOUT COPY WINS when it exists. So an edit to scripts/_roles-lib.sh takes
+# effect immediately in a checkout, and a stale mirror can never quietly become the
+# thing the Studio obeys; studio/tests/test_roles_lib_packaging.py fails on drift.
+#
+# $HUGMESH_ROLES_LIB overrides both — for a frozen bundle pointed at an operator's
+# own checkout, and so a test can aim the reader at a fixture.
 _LIB_REL = os.path.join("scripts", "_roles-lib.sh")
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
-ROLES_LIB = os.path.join(_REPO_ROOT, _LIB_REL)
+
+#: Env override, highest precedence. Empty/unset means "use the two paths below".
+ROLES_LIB_ENV = "HUGMESH_ROLES_LIB"
+#: The declaration, in a checkout.
+CHECKOUT_ROLES_LIB = os.path.join(_REPO_ROOT, _LIB_REL)
+#: The byte-identical mirror that ships inside the wheel/Flatpak/MSI.
+PACKAGED_ROLES_LIB = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "_roles-lib.sh")
+
+
+def roles_lib_candidates() -> list[str]:
+    """Every path the vocabulary may be read from, in precedence order."""
+    override = os.environ.get(ROLES_LIB_ENV, "").strip()
+    return ([override] if override else []) + [CHECKOUT_ROLES_LIB, PACKAGED_ROLES_LIB]
+
+
+def roles_lib_path() -> str:
+    """The file the reader will actually open.
+
+    Resolved per call, not once at import: the env override has to be settable by a
+    caller (and by a test) after this module is already imported. Falls back to the
+    checkout path when NOTHING exists, so the error names the path a developer
+    expects rather than an internal one.
+    """
+    for path in roles_lib_candidates():
+        if os.path.isfile(path):
+            return path
+    return CHECKOUT_ROLES_LIB
+
 
 
 class RoleVocabularyError(RuntimeError):
@@ -44,12 +96,15 @@ class RoleVocabularyError(RuntimeError):
 
 
 def _lib_text() -> str:
+    path = roles_lib_path()
     try:
-        with open(ROLES_LIB, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             return fh.read()
-    except OSError as e:                                   # pragma: no cover - env fault
+    except OSError as e:
         raise RoleVocabularyError(
-            f"cannot read the role vocabulary at {ROLES_LIB}: {e}") from e
+            f"cannot read the role vocabulary at {path}: {e}"
+            f" (tried: {', '.join(roles_lib_candidates())};"
+            f" set ${ROLES_LIB_ENV} to point at scripts/_roles-lib.sh)") from e
 
 
 def _scalar(text: str, name: str) -> str:
