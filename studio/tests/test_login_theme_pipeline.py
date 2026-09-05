@@ -16,6 +16,9 @@ Pins:
      whole chain is a knob wired to nothing.
   4. Upload provenance is fail-closed in the CLI: font file without licence+source
      exits 2 (the licensing decision must be recorded, never implied).
+  5. The form-font reset's own TEXT (#225), not just its presence: every other
+     assertion about it compares the constant to itself, so the rule could be
+     rewritten back into the bug with the suite green.
 """
 import os
 import subprocess
@@ -88,6 +91,47 @@ def test_a_chosen_font_reaches_form_controls():
         font_family="Probe Face", font_bytes=fake_ttf)
     assert rule not in theme.compose_login_css("#336699")      # colour-only: no rule
     assert theme.compose_login_css() == ""                     # unthemed stays empty
+
+
+def test_the_form_font_reset_rule_text_itself_is_pinned():
+    """The CONTENT of the rule, not just its delivery.
+
+    Everything else that mentions FORM_FONT_RESET compares the constant to itself
+    (``rule in css``, ``count(...) == 2``), so those pins prove the string reaches
+    both documents but hold nothing about what it says — the constant could be
+    rewritten to re-create issue #225 and the suite would stay green. Two mutations
+    that matter, both measured in headless chromium against the real preview
+    artifact:
+
+      * dropping ``button`` from the selector list leaves the "Sign in" button on
+        the UA default (chromium reports ``Arial`` while the inputs follow the
+        chosen font) — verbatim the reported symptom;
+      * ``inherit`` -> ``initial`` pins every control to the UA default instead,
+        which is worse than the original bug: it also defeats a font a consuming UI
+        does set for itself.
+
+    So the exact text is pinned, plus the properties each half of it carries. The
+    browser SEMANTICS behind the rule (that UAs do not inherit font-family on form
+    controls) is what a pytest cannot reach; the string is not, and this repo
+    already pins font literals the same way (test_fonts.py, "Classic (current)").
+    """
+    assert theme.FORM_FONT_RESET == (
+        "input, button, select, textarea { font-family: inherit; }\n")
+
+    # Spelled out so a deliberate future edit fails with the reason, not a diff.
+    selectors, _, declaration = theme.FORM_FONT_RESET.partition("{")
+    for control in ("input", "button", "select", "textarea"):
+        assert control in [s.strip() for s in selectors.split(",")], (
+            f"{control} must be in the reset or that control keeps the UA font "
+            "while the rest of the login page follows the chosen one (#225)")
+    assert "font-family" in declaration and "font-size" not in declaration
+    assert "inherit" in declaration and "initial" not in declaration, (
+        "'initial' would pin controls to the UA default and override a font the "
+        "consuming UI sets — the opposite of the fix")
+    # Weakest specificity ((0,0,1), no !important) is the whole reason this is safe
+    # to append to every consumer's css: any UI's own rule must still win.
+    assert "!important" not in theme.FORM_FONT_RESET
+    assert "#" not in theme.FORM_FONT_RESET and "." not in theme.FORM_FONT_RESET
 
 
 def test_compose_fails_closed_on_unknown_preset_and_bad_hex():
