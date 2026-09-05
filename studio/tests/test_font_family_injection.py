@@ -69,6 +69,19 @@ def test_safe_font_family_falls_back_rather_than_emitting_an_empty_family():
     assert fonts.safe_font_family("</>;{}*\\\"") == fonts.FALLBACK_FAMILY
 
 
+def test_the_fallback_family_is_itself_safe_to_emit():
+    """FALLBACK_FAMILY is what EVERY all-payload name reduces to, so it is the string
+    emitted into ``font-family: "..."`` on precisely the attacker-controlled path — and
+    nothing else re-checks it. Pin the constant against the allowlist it backstops: a
+    mutant that put ``</style><script>`` in FALLBACK_FAMILY otherwise survived this
+    whole suite (found by the refuting mutation battery, MX1)."""
+    assert fonts.safe_font_family(fonts.FALLBACK_FAMILY) == fonts.FALLBACK_FAMILY
+    head = fonts.font_face_css("</>;{}*", _TTF).split("src:", 1)[0]   # all payload
+    assert fonts.FALLBACK_FAMILY in head
+    assert "<" not in head and ">" not in head
+    assert head.count('"') == 2
+
+
 def test_safe_font_family_collapses_the_gaps_a_stripped_payload_leaves():
     assert fonts.safe_font_family("Evil</style>   <b>Face") == "Evilstyle bFace"
 
