@@ -264,9 +264,13 @@ class WorklistDriver:
     # ---- mesh manifest v2 (design 2.6) ------------------------------------
     def manifest_v2(self) -> dict:
         base = self.worklist.base
+        # "hostname" is the EXPLICIT per-image name the build bakes ("" = the builder
+        # derives its role name) — additive since issue #229, so a provisioning
+        # consumer can tell the nodes apart by the name each one actually boots with.
         images = [{"id": entry.id, "role": entry.role, "platform": entry.platform,
                    "board": entry.board, "flavor": entry.flavor,
-                   "encrypt_root": bool(cfg.encrypt_root)}
+                   "encrypt_root": bool(cfg.encrypt_root),
+                   "hostname": cfg.hostname}
                   for entry, cfg in self.materialize()]
         return {
             "format": 2,

@@ -37,7 +37,7 @@
 #          SIGNED manifest to the actual file bytes — provenance metadata alone does
 #          NOT cover the tree); manifest.base.meshId MUST equal the declared mesh.
 #   [b]    PROVENANCE / SIGNATURE — verify .hugmesh-provenance.json(.sig), or the
-#          LEGACY_COMPAT pre-rebrand .acme-provenance.json(.sig), via
+#          LEGACY_COMPAT pre-rebrand .snapdragon-provenance.json(.sig), via
 #          provenance.sh against the FOREIGN mesh's PINNED pubkey resolved from the
 #          trust store (base64 SPKI DER, pubkeys-only). NO trust-on-first-use: an
 #          unknown mesh with no pinned key fails closed. Verify ONLY against the

@@ -150,13 +150,18 @@ MODE_DEFAULT_ROLE = {
 # side-flow slot before "idp", dynamically skipped (applies_to) unless its ModePage
 # card was picked; unlike its terminal siblings it REJOINS the image flow as an
 # abbreviated mesh wizard (it commits cfg.mode="mesh" itself on Next).
+# "vault" (issue #224) is the mesh SECRETS-STORE page: where a node fetches its
+# cluster secrets from (a HashiCorp Vault address + KV mount + base path). A cluster-
+# NODE first-boot concern, so it is skipped statically by the two non-node modes
+# exactly like "idp"; it sits after "system" (host identity) and before the desktop-
+# only "home" page. The empty default emits NOTHING (offline/USB-only delivery).
 WIZARD_PAGE_SLUGS = ("welcome", "sessions",
                      "mode", "localmesh", "phone", "quest", "deploy",
                      "e2e", "qemu", "meshemu", "localcloud",
                      "idp", "role",
                      "worklist", "hardware", "branding", "network", "keyzip",
                      "domains_choice", "domains", "users_choice", "users",
-                     "system", "home", "build", "launch", "progress")
+                     "system", "vault", "home", "build", "launch", "progress")
 MODE_SKIPPED_PAGES = {
     # standalone/cloud build ONE image the old way (role/hardware/branding per image);
     # the mesh worklist is skipped there. mesh builds N images from a role x platform
@@ -172,8 +177,10 @@ MODE_SKIPPED_PAGES = {
     # tie is the point of the image), so offering it a "just the internal domain"
     # choice would be a knob with one legal answer.
     "standalone": ("idp", "worklist", "keyzip",
-                   "domains_choice", "domains", "users_choice", "users"),  # single image, no admin/mesh plane
-    "cloud": ("idp", "worklist", "domains_choice", "users_choice"),  # single image, admin plane via key-zip
+                   "domains_choice", "domains", "users_choice", "users",
+                   "vault"),                                  # single image, no admin/mesh plane
+    "cloud": ("idp", "worklist", "domains_choice", "users_choice",
+              "vault"),                                       # single image, admin plane via key-zip
     # mesh USED to skip "branding" outright; it no longer can: the page now also hosts
     # the WEB login theme (login_* — NON_ARGV_FIELDS), which themes the login-ui the
     # MESH serves to browsers. The DESKTOP-theme half shows in mesh too whenever the
@@ -775,6 +782,49 @@ SECURE_BOOT_CHOICES = ("", "on", "off")
 SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password")
 
 
+# Mesh secrets store (issue #224): the HashiCorp Vault a cluster NODE seeds its
+# External Secrets Operator from at first boot. The EMPTY address (the NATIVE
+# DEFAULT) emits NOTHING — offline/USB-only secret delivery, argv/sysroot byte-
+# identical to before the fields existed. A set address threads --vault-addr
+# [--vault-kv-mount] [--vault-base-path] to the two node builders
+# (build-x86-host-stage4.sh / build-rpi5-stage4.sh), which bake CONNECTION FACTS
+# ONLY into /etc/hugmesh/vault.conf; keys-provision's provision_vault() reads that
+# file whenever the KEYS manifest carries no .vault block (the manifest still wins).
+# The token and unseal key are custody material: they ride the KEYS stick
+# (vault/token, vault/unseal-key), never a flag and never the image.
+VAULT_FIELDS = ("vault_addr", "vault_kv_mount", "vault_base_path")
+VAULT_KV_MOUNT_DEFAULT = "secret"       # the builders' own default (brand.conf VAULT_KV_MOUNT)
+# A KV mount / base path is a Vault path prefix: alnum plus . _ - / (no shell or
+# sed metacharacters — the value lands in a root-read KEY=VALUE file).
+_VAULT_PATH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
+
+
+def vault_field_error(addr: str, kv_mount: str, base_path: str) -> str:
+    """The ONE fail-closed rule for the vault trio, shared by validate_identity()
+    (argv) and both faces' inline notes (GUI VaultPage / TUI VaultScreen): "" when
+    the combination is valid, else a LAY-USER sentence.
+
+    Empty address = the offline default, and it must carry NO residue (a mount or
+    base path with nowhere to point is a half-configured store, never silently
+    ignored — the idp=casdoor precedent). A set address must be https:// (the
+    secrets channel's trust anchor) and the two paths must be plain Vault path
+    prefixes."""
+    if not addr:
+        stray = [n for n, v in (("KV mount", kv_mount), ("base path", base_path)) if v]
+        if stray:
+            return (f"{' and '.join(stray)} set but no Vault address — clear "
+                    "them, or enter the address they belong to")
+        return ""
+    if not _IDP_URL_RE.fullmatch(addr):
+        return ("the Vault address must be an https:// URL (letters, digits and "
+                "._:/%=+- only) — it is the secrets channel's trust anchor")
+    if kv_mount and not _VAULT_PATH_RE.fullmatch(kv_mount):
+        return "the KV mount must be a plain Vault path (letters, digits and ._/- only, max 128)"
+    if base_path and not _VAULT_PATH_RE.fullmatch(base_path):
+        return "the base path must be a plain Vault path (letters, digits and ._/- only, max 128)"
+    return ""
+
+
 # ── capability table (PLATFORM axis): which platforms' arg builders EMIT each field ──
 # This table declares ONE axis — the platform. It is no longer the authority the wizard
 # gates on: FIELD_SCOPE below is, and it DERIVES PLATFORM_FIELD_SUPPORT from this dict
@@ -870,6 +920,9 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     # default emits nothing; the probe uses an external combo (multi-key entry).
     "idp": _X86_RPI5, "idp_issuer": _X86_RPI5, "idp_client_id": _X86_RPI5,
     "idp_jwks": _X86_RPI5,
+    # mesh secrets store (#224) — the two node builders bake /etc/hugmesh/vault.conf;
+    # the empty address emits nothing (byte-identity), so the probe supplies one.
+    "vault_addr": _X86_RPI5, "vault_kv_mount": _X86_RPI5, "vault_base_path": _X86_RPI5,
     # tor / character-studio / character-forge / services.
     "tor_onion_service": _X86, "character_studio": _X86_RPI5,
     "character_forge": _X86_RPI5,
@@ -2521,6 +2574,14 @@ class ImageConfig:
     idp_issuer: str = ""               # external OIDC issuer URL (https://…)
     idp_client_id: str = ""            # external OIDC client id (public identifier, not a secret)
     idp_jwks: str = ""                 # external JWKS URL override ("" = per-provider derivation)
+    # ── mesh secrets store (#224; x86 + rpi5 node builders) ──
+    # "" address (the NATIVE DEFAULT) = offline/USB-only delivery and emits NOTHING.
+    # A set address threads --vault-addr [--vault-kv-mount] [--vault-base-path]; the
+    # builders bake /etc/hugmesh/vault.conf (connection facts only — the token and
+    # unseal key stay on the KEYS stick). vault_field_error() fail-closes the trio.
+    vault_addr: str = ""               # --vault-addr https://… (VAULT_FIELDS)
+    vault_kv_mount: str = ""           # --vault-kv-mount ("" = the builder default "secret")
+    vault_base_path: str = ""          # --vault-base-path ("" = the builder default: the brand slug)
     # ── hardware ──
     gpu_driver: str = "auto"           # auto|nvidia|amd-free|amd-pro|intel|none
     nvidia_cuda: bool = False          # --nvidia-cuda (CUDA bake for GPU/edge-AI images; x86)
@@ -3088,6 +3149,13 @@ class ImageConfig:
                 raise IdentityValidationError(
                     f"idp_jwks must be an https:// URL (got {self.idp_jwks!r}) — "
                     "leave empty to derive the per-provider default")
+        # ── mesh secrets store (#224) — the same earliest-boundary rule: the values
+        # land in the root-read /etc/hugmesh/vault.conf, so charset + combination are
+        # enforced HERE, through the ONE predicate both faces' inline notes use.
+        vault_err = vault_field_error(self.vault_addr, self.vault_kv_mount,
+                                      self.vault_base_path)
+        if vault_err:
+            raise IdentityValidationError(f"vault: {vault_err}")
         # ── managed backing services (I8/M2) — fail-closed at the earliest boundary.
         # Each id/endpoint flows onto --managed-service argv AND the root-baked
         # backing-services.conf, so both the known-set membership and the endpoint charset
@@ -3359,6 +3427,22 @@ class ImageConfig:
             a += ["--idp-jwks", self.idp_jwks]
         return a
 
+    def _vault_args(self) -> list[str]:
+        """--vault-addr [--vault-kv-mount] [--vault-base-path] — the mesh secrets store
+        (#224; parsed by the x86 + rpi5 node builders ONLY). Emitted ONLY when an
+        address is set: the empty default (offline/USB-only delivery) emits NOTHING,
+        so every existing flow's argv stays byte-identical. validate_identity()
+        already fail-closed the combination + charset before emission; the two
+        optional paths ride only when the operator overrode the builder default."""
+        if not self.vault_addr:
+            return []
+        a = ["--vault-addr", self.vault_addr]
+        if self.vault_kv_mount:
+            a += ["--vault-kv-mount", self.vault_kv_mount]
+        if self.vault_base_path:
+            a += ["--vault-base-path", self.vault_base_path]
+        return a
+
     def _character_studio_args(self) -> list[str]:
         """--with-character-studio / --no-character-studio tri-state (x86 + rpi5)."""
         cs = self._tri(self.character_studio)
@@ -3560,6 +3644,9 @@ class ImageConfig:
         # mesh-node identity provider (I6) — rpi5 shares the x86 node-builder
         # surface; the casdoor default emits nothing (byte-identity).
         a += self._idp_args()
+        # mesh secrets store (#224) — same two-node-builder surface, same
+        # empty-default-emits-nothing rule.
+        a += self._vault_args()
         a += self._rpi5_artifact_args()
         return a
 
@@ -4043,6 +4130,10 @@ class ImageConfig:
         # byte-identity invariant); external providers thread the 4 idp flags the
         # builder bakes into idp.conf + the post-rebrand issuer/JWKS rewrite.
         a += self._idp_args()
+
+        # mesh secrets store (#224). Empty address = ZERO emission (byte-identity);
+        # a set one threads the vault trio the builder bakes into vault.conf.
+        a += self._vault_args()
 
         # cluster optional services (+ explicit-none / all sentinels + the subtractive
         # exclude list) and the games stack (--enable-games folds 'games' in).

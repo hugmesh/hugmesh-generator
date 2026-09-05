@@ -31,16 +31,22 @@ canonical order end to end, finishing with a saveable config.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from ..core.config import (
     IDP_CHOICES, IDP_LABELS, MODE_DEFAULT_ROLE, MODE_SKIPPED_PAGES, ROLE_CHOICES,
-    UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS, ImageConfig, enter_mesh_defaults,
+    UNAFFILIATED_ROLE, VAULT_FIELDS, VAULT_KV_MOUNT_DEFAULT, WIZARD_PAGE_SLUGS,
+    ImageConfig, derive_hostname, enter_mesh_defaults, vault_field_error,
 )
-from ..core.worklist import WorklistConfig, WorklistEntry
+from ..core.validate import validate_domain_name
+from ..core.worklist import (
+    WorklistConfig, WorklistEntry, duplicate_hostnames, entry_id, resolve_hostname,
+)
 
 __all__ = [
     "PAGE_ORDER", "SIDE_FLOW_SLUGS", "WELCOME_CHOICES", "WELCOME_TARGET",
     "MODE_CHOICES", "MODE_DEFAULT_CHOICE", "PENDING_NOTE", "Journey",
-    "README_GETTING_STARTED",
+    "README_GETTING_STARTED", "VAULT_COMMANDS",
 ]
 
 #: The canonical page order — the GUI's OWN tuple, consumed rather than copied so
@@ -171,7 +177,6 @@ _PENDING_STEPS = {
     "hardware": "Hardware",
     "network": "Network",
     "keyzip": "Admin key-zip",
-    "system": "System",
     "home": "Home",
     "launch": "Launch",
     "progress": "Progress",
@@ -349,6 +354,94 @@ class IdpScreen:
         j.advance()
 
 
+#: TUI edit vocabulary for the secrets-store step: command letter -> cfg field.
+#: One entry per VAULT_FIELDS member, in order — the GUI/TUI parity test pins the
+#: two faces edit exactly the same trio.
+VAULT_COMMANDS = {"a": "vault_addr", "m": "vault_kv_mount", "p": "vault_base_path"}
+assert tuple(VAULT_COMMANDS.values()) == VAULT_FIELDS
+
+
+class VaultScreen:
+    """The mesh SECRETS-STORE step (issue #224) — the TUI twin of gui/pages/vault.py.
+
+    Edits the SAME ``cfg.vault_*`` trio through the SAME fail-closed predicate
+    (``config.vault_field_error``), so what this face accepts is exactly what the
+    argv accepts. Every edit is validated BEFORE it is committed and a refusal is an
+    inline status line (never a dead end, never a silently-inert command); clearing
+    the address clears the two paths with it — the byte-identity rule the GUI's
+    validatePage applies. Enter keeps the current values and continues."""
+
+    slug = "vault"
+    title = "Secrets store (HashiCorp Vault, mesh nodes)"
+
+    def enter(self, j: "Journey") -> None:  # noqa: ARG002
+        return None
+
+    def lines(self, j: "Journey") -> list[str]:
+        cfg = j.cfg
+        out = ["Where this mesh's nodes fetch cluster secrets from at first boot.",
+               "Empty address = no flag; the builder bakes nothing unless brand.conf "
+               "sets VAULT_ADDR (then secrets come off the KEYS stick).",
+               ""]
+        if cfg.vault_addr:
+            out += [f"  address    {cfg.vault_addr}",
+                    f"  KV mount   {cfg.vault_kv_mount or VAULT_KV_MOUNT_DEFAULT + ' (builder default)'}",
+                    f"  base path  {cfg.vault_base_path or '<brand> (builder default)'}",
+                    "",
+                    "  Every x86/rpi5 node in the worklist bakes these into "
+                    "/etc/hugmesh/vault.conf.", ""]
+        else:
+            out += ["  address    (none — no flag emitted; brand.conf VAULT_ADDR or "
+                    "offline KEYS-stick delivery)", ""]
+        out += [
+            "commands:",
+            "  a URL|-     Vault address (https://…; - clears it and the two paths)",
+            "  m NAME|-    KV v2 mount (- = the builder default "
+            f"'{VAULT_KV_MOUNT_DEFAULT}')",
+            "  p PATH|-    base path under the mount (- = the builder default: the "
+            "brand slug)",
+            "  Enter       keep these and continue",
+            "",
+            "The Vault token and unseal key are never entered here: put them on the "
+            "KEYS stick (vault/token, vault/unseal-key). A .vault block in the "
+            "stick's provision.json overrides this step.",
+        ]
+        return out
+
+    def prompt(self, j: "Journey") -> str:  # noqa: ARG002
+        return "vault> "
+
+    def feed(self, j: "Journey", line: str) -> None:
+        if line == "":
+            j.advance()
+            return
+        cmd, _, arg = line.partition(" ")
+        cmd = cmd.strip().lower()
+        arg = arg.strip()
+        field = VAULT_COMMANDS.get(cmd)
+        if field is None:
+            j.status = (f"unrecognised command: {line!r} (a/m/p set a value, "
+                        "Enter continues, q quits)")
+            return
+        if not arg:
+            j.status = f"{cmd} needs a value (or - to clear)"
+            return
+        cfg = j.cfg
+        new = {f: getattr(cfg, f) for f in VAULT_FIELDS}
+        new[field] = "" if arg == "-" else arg
+        if field == "vault_addr" and not new["vault_addr"]:
+            # clearing the address clears the residue with it (byte-identity)
+            new["vault_kv_mount"] = new["vault_base_path"] = ""
+        err = vault_field_error(new["vault_addr"], new["vault_kv_mount"],
+                                new["vault_base_path"])
+        if err:
+            # honest refusal, state unchanged — the same sentence the GUI shows
+            j.status = f"refused: {err}"
+            return
+        for f, v in new.items():
+            setattr(cfg, f, v)
+
+
 class RoleScreen:
     """The single-image role picker (standalone/cloud; mesh uses the worklist)."""
 
@@ -396,10 +489,20 @@ class WorklistScreen:
     the allow-set's role rows are offered — and because collection reads the same
     restricted row list, a disallowed row can never be collected either (the
     GUI enforces this in three places because its search filter is
-    presentation-only; the TUI's single row source needs exactly one)."""
+    presentation-only; the TUI's single row source needs exactly one).
+
+    ``title`` mirrors gui/pages/worklist.py's ``WorklistPage.setTitle`` verbatim:
+    the two are the same step (the role x platform picker) on two front ends, so
+    the step has one name. It was born misnamed rather than drifting — f5da52b4,
+    the commit that added this screen, wrote "Mesh worklist" here while
+    worklist.py already read "Choose the images to build", and nothing compared
+    the two, so the Studio has named this step two ways for as long as the TUI
+    has existed. test_tui_gui_parity.py compares them now. Note the GUI's own
+    "Mesh worklist" is a DIFFERENT widget — the Review page's section header
+    (build.py) — and stays as it is."""
 
     slug = "worklist"
-    title = "Mesh worklist"
+    title = "Choose the images to build"
 
     def __init__(self):
         self._rows: list[tuple[str, str, str]] = []   # (role, platform, label)
@@ -439,9 +542,18 @@ class WorklistScreen:
             if not self._checked:
                 j.status = "pick at least one row first (a NUMBER toggles)"
                 return
-            entries = [WorklistEntry(role=role, platform=platform)
-                       for i, (role, platform, _label) in enumerate(self._rows)
-                       if i in self._checked]
+            # a row staying checked KEEPS the per-image hostname the System step
+            # gave it (issue #229) — the GUI WorklistPage's keep.hostname rule.
+            prior = ({e.id: e for e in j.worklist.entries}
+                     if j.worklist is not None else {})
+            entries = []
+            for i, (role, platform, _label) in enumerate(self._rows):
+                if i not in self._checked:
+                    continue
+                keep = prior.get(entry_id(role, platform))
+                entries.append(WorklistEntry(
+                    role=role, platform=platform,
+                    hostname=keep.hostname if keep else ""))
             j.worklist = WorklistConfig(base=j.cfg, entries=entries)
             j.advance()
             return
@@ -453,6 +565,124 @@ class WorklistScreen:
             self._checked.discard(idx)
         else:
             self._checked.add(idx)
+
+
+class SystemScreen:
+    """The System identity step — its HOSTNAME half, PER IMAGE on a mesh worklist
+    (issue #229): gui/pages/system.py's twin. One row per image the walk builds
+    (the worklist's entries in mesh; the single image otherwise), each showing the
+    explicit name it will bake and the role-derived name it takes when blank.
+    ``N NAME`` names row N, ``N -`` blanks it, Enter continues. Names live on the
+    worklist ENTRIES in mesh (``WorklistEntry.hostname``) and the base hostname is
+    blanked on any edit, so one value can never ride onto every node again.
+
+    Timezone and the default account are NOT ported here yet and the screen says so
+    (the honesty rule) — both are mesh-wide on the base, which the issue accepts."""
+
+    slug = "system"
+    title = "System identity"
+
+    def enter(self, j: "Journey") -> None:  # noqa: ARG002
+        return None
+
+    @staticmethod
+    def _mesh_entries(j: "Journey") -> list:
+        if j.cfg.mode == "mesh" and j.worklist is not None and j.worklist.entries:
+            return list(j.worklist.entries)
+        return []
+
+    def _rows(self, j: "Journey") -> list[tuple[str, str, str]]:
+        """``(image label, explicit hostname or "", role-derived hostname)`` per
+        image. Derived per row with ITS OWN role/platform/board, never off the base
+        (the GUI's _worklist_hostnames rule)."""
+        cfg = j.cfg
+        entries = self._mesh_entries(j)
+        if entries:
+            return [(e.id, resolve_hostname(e, cfg.hostname),
+                     derive_hostname(SimpleNamespace(
+                         brand=cfg.brand, role=e.role, platform=e.platform,
+                         board=e.board, unaffiliated=False)))
+                    for e in entries]
+        return [(f"{cfg.role}.{cfg.platform}", cfg.hostname, derive_hostname(cfg))]
+
+    def lines(self, j: "Journey") -> list[str]:
+        from . import model
+        rows = self._rows(j)
+        if len(rows) > 1:
+            out = [f"Hostname — this worklist builds {len(rows)} images and each "
+                   "bakes its own, so it is set per image:", ""]
+        else:
+            out = ["Hostname baked into the image:", ""]
+        table = [[str(i), label, name or "(blank)", derived]
+                 for i, (label, name, derived) in enumerate(rows, 1)]
+        out += model.format_table(["#", "image", "hostname", "if blank"], table)
+        out.append("")
+        out.append("N NAME sets row N's hostname; N - blanks it (the role-derived "
+                   "name in the last column).")
+        out.append("Timezone and the default account are not yet ported to the TUI "
+                   "— set them in the GUI if you need them. Enter continues.")
+        return out
+
+    def prompt(self, j: "Journey") -> str:  # noqa: ARG002
+        return "system> "
+
+    def _set(self, j: "Journey", idx: int, value: str) -> None:
+        entries = self._mesh_entries(j)
+        if entries:
+            base = (j.cfg.hostname or "").strip()
+            if base:
+                # the base never names every node (issue #229) — but blanking it must
+                # not silently RENAME the other rows, which were inheriting it: pin
+                # the name each one was going to bake onto its entry, so Enter's
+                # duplicate check names the collision instead of the names changing
+                # under the operator (the GUI seeds its editors the same way).
+                for i, e in enumerate(entries):
+                    if i != idx and not e.hostname:
+                        e.hostname = base
+                j.cfg.hostname = ""
+            entries[idx].hostname = value
+        else:
+            j.cfg.hostname = value
+
+    def feed(self, j: "Journey", line: str) -> None:
+        rows = self._rows(j)
+        if line == "":
+            entries = self._mesh_entries(j)
+            dups = duplicate_hostnames(entries, j.cfg.hostname) if entries else {}
+            if dups:
+                # the materialize() refusal, caught here where it can be fixed
+                detail = "; ".join(f"{hn!r} on {', '.join(ids)}"
+                                   for hn, ids in dups.items())
+                j.status = (f"two images would bake the same hostname: {detail} — "
+                            "give each its own (N NAME) or blank them (N -)")
+                return
+            j.advance()
+            return
+        num, _, value = line.partition(" ")
+        idx = _index(num, len(rows))
+        if idx is None:
+            j.status = (f"no such row: {num!r} (N NAME sets a hostname; N - blanks "
+                        "it; Enter continues)")
+            return
+        value = value.strip()
+        if value == "-":
+            value = ""
+        if value:
+            try:
+                validate_domain_name(value)
+            except ValueError:
+                j.status = (f"{value!r} is not a valid hostname — lower-case letters, "
+                            "digits, dots and hyphens, each label starting and "
+                            "ending alphanumeric")
+                return
+            for i, (label, name, derived) in enumerate(rows):
+                if i != idx and value == (name or derived):
+                    j.status = (f"{value!r} is already {label}'s hostname — give "
+                                "each image its own name")
+                    return
+        self._set(j, idx, value)
+        j.status = (f"{rows[idx][0]} hostname: "
+                    f"{value or '(blank — role-derived ' + rows[idx][2] + ')'}")
 
 
 class YesNoStep:
@@ -662,7 +892,7 @@ class Journey:
             YesNoStep("users_choice", "User accounts",
                       "Configure user accounts for this mesh now?",
                       "configure_users"),
-            UsersScreen(), BrandingScreen(), BuildScreen(),
+            UsersScreen(), SystemScreen(), BrandingScreen(), VaultScreen(), BuildScreen(),
         ]
         self._screens = {s.slug: s for s in screens}
         for slug, title in _SIDE_FLOW_STUB.items():

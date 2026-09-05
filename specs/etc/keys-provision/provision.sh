@@ -2417,28 +2417,92 @@ provision_hugmesh() {
     ARGOCD_REPO_TOKEN="${argocd_repo_token}" KUBECONFIG=/etc/kubernetes/admin.conf bash "${bs}" || warn "GitOps bootstrap returned non-zero"
 }
 
+# ── Image-baked Vault connection facts (--vault-addr at build time; issue #224) ──
+# /etc/hugmesh/vault.conf is written by the x86/rpi5 node builders (bake_vault_conf):
+# KEY=VALUE, root-owned 0644, address + KV mount + base path and nothing else. It is
+# the FALLBACK source for provision_vault() when the KEYS manifest carries no .vault
+# block, so a Studio-built node seeds ESO without a hand-authored manifest; a
+# manifest block still wins (it is the per-stick override). Read with a strict key
+# lookup — never sourced — so a stray line can execute nothing. A plain read loop
+# on purpose: no pipe (no SIGPIPE under pipefail) and no sed `{…}` program, which
+# tests/scripts/test-eso-provider-refs.sh's brace-reachability model would count
+# as shell braces. VAULT_IMAGE_CONF is overridable so tests can point the resolver
+# at a fixture.
+VAULT_IMAGE_CONF="${VAULT_IMAGE_CONF:-/etc/hugmesh/vault.conf}"
+vault_conf_get() {
+    # KEY -> VALUE ("" when absent); surrounding double quotes + whitespace stripped.
+    # The case arm already pinned the KEY= prefix, so a plain first-'=' strip is the
+    # same value without the nested-quote spelling the ESO brace model misreads.
+    local key="$1"
+    local line
+    local v=""
+    local dq='"'
+    while IFS= read -r line || [ -n "${line}" ]; do
+        case "${line}" in
+            "${key}="*) v="${line#*=}"; break ;;
+        esac
+    done < "${VAULT_IMAGE_CONF}"
+    v="${v#"${dq}"}"; v="${v%"${dq}"}"
+    printf '%s' "${v//[[:space:]]/}"
+}
+
+# Resolve WHERE the Vault seeding facts come from. Sets VAULT_SRC to "manifest",
+# "image" or "" (nothing to seed from) and the vault_* globals from that source:
+#   manifest : the .vault block (operator-authored, per stick) — every field, as before;
+#   image    : the baked vault.conf — address/mount/base path; the token file is the
+#              stick's standard vault/token and enabled follows the address.
+resolve_vault_source() {
+    VAULT_SRC=""
+    vault_address=""; vault_kv_mount="secret"; vault_base_path="hugmesh"
+    vault_token_file="vault/token"; vault_install_eso="false"; vault_enabled="false"
+    if jqe '.vault'; then
+        VAULT_SRC="manifest"
+        vault_enabled="$(jqm '.vault.enabled // false')"
+        vault_address="$(jqm '.vault.address // ""')"
+        vault_kv_mount="$(jqm '.vault.kv_mount // "secret"')"
+        vault_base_path="$(jqm '.vault.base_path // "hugmesh"')"
+        vault_token_file="$(jqm '.vault.token_file // "vault/token"')"
+        vault_install_eso="$(jqm '.vault.install_eso // false')"
+        [ "${vault_address}" = "null" ] && vault_address=""
+    elif [ -r "${VAULT_IMAGE_CONF}" ]; then
+        VAULT_SRC="image"
+        vault_address="$(vault_conf_get VAULT_ADDR)"
+        vault_kv_mount="$(vault_conf_get VAULT_KV_MOUNT)"
+        [ -n "${vault_kv_mount}" ] || vault_kv_mount="secret"
+        vault_base_path="$(vault_conf_get VAULT_BASE_PATH)"
+        [ -n "${vault_base_path}" ] || vault_base_path="hugmesh"
+        [ -n "${vault_address}" ] && vault_enabled="true"
+    fi
+    return 0
+}
+
 # ── Vault / External Secrets (k8s Secrets, online + USB fallback) ──
 # Vault is the source of truth; ESO + the ClusterSecretStore/ExternalSecrets
 # are deployed by ArgoCD. Here we only seed the bits a fresh cluster needs:
 #   * online : the "vault-token" Secret so ESO's ClusterSecretStore can auth.
 #   * offline: materialize the workload Secrets directly from KEYS/vault/
 #              secrets.json so they exist even with no reachable Vault.
+# The connection facts come from the manifest's .vault block or, when the stick
+# carries none, from the image-baked vault.conf (resolve_vault_source, #224).
 provision_vault() {
-    jqe '.vault' || { log "No .vault block — skipping Vault/ESO seeding"; return 0; }
-    [ "$(jqm '.vault.enabled // false')" = "true" ] || { log "Vault disabled in manifest"; return 0; }
+    resolve_vault_source
+    case "${VAULT_SRC}" in
+        "")    log "No .vault block and no image-baked ${VAULT_IMAGE_CONF} — skipping Vault/ESO seeding"; return 0 ;;
+        image) log "No .vault block in the manifest — using the image-baked ${VAULT_IMAGE_CONF} (--vault-addr at build time)" ;;
+    esac
+    [ "${vault_enabled}" = "true" ] || { log "Vault disabled (${VAULT_SRC})"; return 0; }
 
     [ -f /etc/kubernetes/admin.conf ] || { warn "No kubeconfig yet — skipping Vault/ESO seeding"; return 0; }
     have kubectl || { warn "kubectl not installed — skipping Vault/ESO seeding"; return 0; }
     local kc=/etc/kubernetes/admin.conf
 
     local address kv_mount base_path token_file install_eso
-    address="$(jqm '.vault.address // ""')"
-    kv_mount="$(jqm '.vault.kv_mount // "secret"')"
-    base_path="$(jqm '.vault.base_path // "hugmesh"')"
-    token_file="$(jqm '.vault.token_file // "vault/token"')"
-    install_eso="$(jqm '.vault.install_eso // false')"
-    [ "${address}" = "null" ] && address=""
-    log "Vault seeding: address='${address}' kv_mount=${kv_mount} base_path=${base_path} install_eso=${install_eso}"
+    address="${vault_address}"
+    kv_mount="${vault_kv_mount}"
+    base_path="${vault_base_path}"
+    token_file="${vault_token_file}"
+    install_eso="${vault_install_eso}"
+    log "Vault seeding (${VAULT_SRC}): address='${address}' kv_mount=${kv_mount} base_path=${base_path} install_eso=${install_eso}"
 
     # ── ONLINE: hand ESO a Vault token so its ClusterSecretStore can auth ──
     local tok_path="${BASE}/${token_file}"

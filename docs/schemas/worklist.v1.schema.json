@@ -74,10 +74,15 @@
         },
         "desktop_user_roles": {
           "type": "array",
-          "description": "ALL the roles the person's account holds (issue #228): the tier plus any grants, in config.py USER_ROLE_CHOICES precedence order (grants are games / games-services). OMITTED when the account holds exactly its tier, so absent == [desktop_user_role] and a one-tier entry keeps its pre-#228 bytes; when present it always contains the tier, hence at least two items. desktop_users() hands the whole set to the manifest User's `roles`; the image itself takes only the tier.",
+          "description": "ALL the roles the person's account holds (issue #228): the tier plus any grants, in config.py USER_ROLE_CHOICES precedence order (grants are games / games-services). OMITTED when the account holds exactly its tier, so absent == [desktop_user_role] and a one-tier entry keeps its pre-#228 bytes; when present it always contains the tier, hence at least two items. desktop_users() hands the whole set to the derived manifest User's `roles`; the image itself takes only the tier.",
           "minItems": 2,
           "uniqueItems": true,
           "items": { "type": "string", "minLength": 1 }
+        },
+        "hostname": {
+          "type": "string",
+          "description": "PER-IMAGE hostname (issue #229) — this image's -H/--hostname. \"\" inherits base.hostname, and a blank base lets the builder derive the role name. materialize() fails loudly when two entries would bake the same explicit name. Timezone and the default account stay mesh-wide on the base.",
+          "default": ""
         }
       }
     },
