@@ -2430,7 +2430,8 @@ provision_hugmesh() {
 # at a fixture.
 VAULT_IMAGE_CONF="${VAULT_IMAGE_CONF:-/etc/hugmesh/vault.conf}"
 vault_conf_get() {
-    # KEY -> VALUE ("" when absent); surrounding double quotes + whitespace stripped.
+    # KEY -> VALUE ("" when absent); surrounding double quotes dropped and the ends
+    # TRIMMED (the interior is left alone — see below).
     # The case arm already pinned the KEY= prefix, so a plain first-'=' strip is the
     # same value without the nested-quote spelling the ESO brace model misreads.
     local key="$1"
@@ -2442,8 +2443,15 @@ vault_conf_get() {
             "${key}="*) v="${line#*=}"; break ;;
         esac
     done < "${VAULT_IMAGE_CONF}"
+    # TRIM the ends; do NOT strip the interior. `${v//[[:space:]]/}` deleted every
+    # space ANYWHERE in the value, so a `VAULT_BASE_PATH=acme corp` line silently
+    # became `acmecorp` — a wrong value that reads as a working one — instead of
+    # being carried through verbatim and refused by the allowlist upstream. Trim,
+    # unquote, trim: a quoted value keeps its own spelling minus the quotes.
+    v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"
     v="${v#"${dq}"}"; v="${v%"${dq}"}"
-    printf '%s' "${v//[[:space:]]/}"
+    v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"
+    printf '%s' "${v}"
 }
 
 # Resolve WHERE the Vault seeding facts come from. Sets VAULT_SRC to "manifest",

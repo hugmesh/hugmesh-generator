@@ -174,6 +174,50 @@ def test_clearing_the_address_clears_the_residue_on_commit(wiz):
     assert all(getattr(wiz.cfg, f) == "" for f in VAULT_FIELDS)
 
 
+def test_a_committed_trio_is_cleared_on_a_SECOND_commit(wiz):
+    """The residue branch is only REACHED once a non-empty trio has already been
+    committed and the operator then clears it. The test above clears the widgets
+    before its only next(), so it never commits the intermediate state the branch
+    exists to fix — deleting the branch survived a 2043-test sweep in the 2026-09-04
+    adversarial review while leaving a real regression: cfg kept mount+base with an
+    empty address, and validate_identity() then refused the build. Walk the
+    operator's actual route: commit, go back, clear all three, commit again."""
+    page = _mesh_vault(wiz)
+    page.addr.setText(ADDR)
+    page.kv_mount.setText("kv")
+    page.base_path.setText("acme")
+    wiz.next()                                     # COMMIT 1: the full trio
+    assert (wiz.cfg.vault_addr, wiz.cfg.vault_kv_mount,
+            wiz.cfg.vault_base_path) == (ADDR, "kv", "acme")
+    wiz.back()
+    assert wiz.currentId() == wiz._page_ids["vault"]
+    page.addr.setText("")
+    page.kv_mount.setText("")
+    page.base_path.setText("")
+    assert page.isComplete()
+    wiz.next()                                     # COMMIT 2: back to the default
+    assert all(getattr(wiz.cfg, f) == "" for f in VAULT_FIELDS)
+    wiz.cfg.validate_identity()                    # stranded residue raises here
+    assert not any(a.startswith("--vault") for a in wiz.cfg.to_cli_args())
+
+
+# ── the copy says how far each field actually reaches ────────────────────────────────
+def test_the_two_path_fields_do_not_claim_to_re_point_the_reader(wiz):
+    """The shipped ClusterSecretStore pins path 'secret' at the in-cluster Vault and
+    its ExternalSecrets pin remoteRef keys at 'hugmesh/<service>'; nothing rewrites
+    either from this page. The tooltips used to say the mount was "the KV v2 mount
+    the ClusterSecretStore reads", which is false as shipped. Pin the honest form so
+    the claim cannot drift back."""
+    page = _mesh_vault(wiz)
+    for tip in (page.kv_mount.toolTip(), page.base_path.toolTip()):
+        assert "not yet read" in tip
+        assert "ClusterSecretStore reads" not in tip
+    # the note names the values that ARE pinned, so the claim is checkable
+    assert "hugmesh/<service>" in vault_mod._LIMITS_NOTE
+    # the ADDRESS, by contrast, IS live — it is what enables the seeding at all
+    assert "seeding ON" in page.addr.toolTip()
+
+
 def test_the_page_never_opens_a_modal():
     """The repo rule: no QMessageBox / exec() in a validatePage or change path."""
     src = open(vault_mod.__file__, encoding="utf-8").read()
