@@ -38,12 +38,15 @@ from . import roles
 from .config import (
     INFRA_SERVICES_CHOICES,
     OPTIONAL_SERVICES_BY_PLATFORM,
+    PERSON_ROLE_CHOICES,
     ImageConfig,
     SECRET_FIELDS,
     User,
     clear_role_class_fields,
     emit_note_once,
     image_class,
+    normalize_user_roles,
+    person_tier,
     resolve_installer_ui_default,
     resolve_platform_defaults,
     strip_platform_unsupported,
@@ -152,13 +155,27 @@ class WorklistEntry:
     # materialize (x86 tor -> --with-tor; rpi5 tor/egress-vpn -> --optional-services).
     infra_services: tuple[str, ...] = ()
     # The PERSON on a desktop-class entry (operator ask 2026-08-14): checking a
-    # desktop row on the mesh WorklistPage collects its user's name + role via a
-    # popup. materialize() stamps the role as --person-role on the entry's own
+    # desktop row on the mesh WorklistPage collects its user's name + roles via a
+    # popup. materialize() stamps the TIER as --person-role on the entry's own
     # image and derives a manifest User on the internal Tailscale root domain
     # (the account can later be added to other domains via the Users table).
-    # Node entries always leave both blank.
+    # Node entries always leave these blank.
     desktop_user: str = ""
-    desktop_user_role: str = "user"    # PERSON_ROLE_CHOICES: user|mod|admin|superadmin
+    # The person's TIER (PERSON_ROLE_CHOICES: user|mod|admin|superadmin) — the one
+    # value --person-role takes. "" (the dataclass default) = derive from
+    # ``desktop_user_roles``; ``user`` when neither says anything. DERIVED in
+    # __post_init__ (person_tier) so it can never disagree with the set; build
+    # entries through the constructor, do not assign it afterwards (issue #228).
+    desktop_user_role: str = ""
+    # ALL the roles the person's ACCOUNT holds (issue #228 — the desktop-person leg
+    # of multi-role): the tier plus any grants (config.USER_GRANT_CHOICES: games /
+    # games-services), normalize_user_roles order. The tier is always IN the set —
+    # the image bakes that identity in, so the account holds it too — which is what
+    # makes to_dict/from_dict a fixed point. Serialized OMIT-WHEN-SINGLE (absent ==
+    # [desktop_user_role]) so a one-tier entry keeps its pre-#228 bytes on the wire;
+    # desktop_users() hands the whole set to the derived manifest User (User.roles),
+    # the image itself takes only the tier.
+    desktop_user_roles: list[str] = field(default_factory=list)
     # PER-IMAGE host identity (issue #229). The base ImageConfig carries ONE
     # ``hostname`` and every materialized image used to inherit it byte-identical, so
     # a hostname typed once named every node in the mesh the same thing. This is the
@@ -173,6 +190,17 @@ class WorklistEntry:
         # Tolerate a list from JSON (from_dict) — the field is a tuple by contract.
         if not isinstance(self.infra_services, tuple):
             self.infra_services = tuple(self.infra_services or ())
+        # The person's roles: union of the set and the tier as constructed (either
+        # spelling alone loads — a pre-#228 record carries only the tier), a bare
+        # string taken as one role, floored to the ``user`` tier when the set names
+        # no tier at all (grants-only), and the tier re-derived from the result.
+        given = ([self.desktop_user_roles] if isinstance(self.desktop_user_roles, str)
+                 else list(self.desktop_user_roles or []))
+        roles = normalize_user_roles([*given, self.desktop_user_role])
+        if not any(r in PERSON_ROLE_CHOICES for r in roles):
+            roles = normalize_user_roles([*roles, "user"])
+        self.desktop_user_roles = roles
+        self.desktop_user_role = person_tier(roles)
 
     @property
     def build_subdir(self) -> str:
@@ -189,6 +217,11 @@ class WorklistEntry:
             "infra_services": list(self.infra_services),
             "desktop_user": self.desktop_user,
             "desktop_user_role": self.desktop_user_role,
+            # issue #228: the full set only when it is more than the tier, so a
+            # one-tier entry is byte-identical to before the key existed (the same
+            # OMIT-WHEN-SINGLE rule as User.to_dict / the per-domain idp key).
+            **({"desktop_user_roles": list(self.desktop_user_roles)}
+               if self.desktop_user_roles != [self.desktop_user_role] else {}),
             "hostname": self.hostname,
         }
 
@@ -209,6 +242,12 @@ class WorklistEntry:
         vals = {k: v for k, v in d.items() if k in known}
         if isinstance(vals.get("role"), str) and vals["role"]:
             vals["role"] = roles.canonicalize(vals["role"])
+        # issue #228: a null / non-list desktop_user_roles is ABSENT, never a crash
+        # (__post_init__ takes a bare string as one role and unions the tier).
+        if not isinstance(vals.get("desktop_user_roles", []), (str, list, tuple)):
+            vals.pop("desktop_user_roles")
+        if not isinstance(vals.get("desktop_user_role", ""), str):
+            vals.pop("desktop_user_role")
         return cls(**vals)
 
 
@@ -298,7 +337,9 @@ class WorklistConfig:
         the internal Tailscale root domain — the same domain the Users table locks
         superadmins to. ``skip`` drops (username, domain) pairs the caller already
         carries so a Users-table row (richer: email/registration) always wins. The
-        account can later be added to other/additional domains via that table."""
+        account can later be added to other/additional domains via that table.
+        The User carries the person's FULL role set (issue #228 — tier + grants);
+        the image itself takes only the tier (_materialize_one 3b)."""
         domain = self.base.effective_superdomain()
         out: list[User] = []
         seen = set(skip)
@@ -310,7 +351,7 @@ class WorklistConfig:
                 continue
             seen.add((name, domain))
             out.append(User(username=name, domain=domain,
-                            role=e.desktop_user_role or "user"))
+                            roles=list(e.desktop_user_roles)))
         return out
 
     def materialize(self) -> list[tuple[WorklistEntry, ImageConfig]]:
@@ -370,10 +411,12 @@ class WorklistConfig:
         # 3b. The FD-08 person identity for THIS image — MESH worklists only (a
         #    cloud/standalone flat config wrapped by from_flat keeps the RolePage's
         #    own person_role byte-identical). A desktop entry with a named person
-        #    carries their role as --person-role (x86 clients emit it; ARM desktops
+        #    carries their TIER as --person-role (x86 clients emit it; ARM desktops
         #    drop it via strip_platform_unsupported below — their builders parse no
-        #    such flag). Every other mesh entry resets it, so a desktop pick can
-        #    never leak onto a node's argv (the builder would warn+ignore it anyway).
+        #    such flag); the grants (issue #228) ride the manifest User only — the
+        #    builder accepts exactly the four tiers. Every other mesh entry resets
+        #    it, so a desktop pick can never leak onto a node's argv (the builder
+        #    would warn+ignore it anyway).
         if cfg.mode == "mesh":
             if image_class(cfg.mode, entry.role) == "desktop" and entry.desktop_user:
                 cfg.person_role = entry.desktop_user_role
