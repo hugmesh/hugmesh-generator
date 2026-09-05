@@ -771,6 +771,57 @@ def test_229_duplicate_and_malformed_hostnames_are_refused_inline(wiz):
         "pki.x86": "ca-1", "backend.x86": ""}
 
 
+def test_229_the_single_hostname_field_is_validated_inline_too(wiz, monkeypatch):
+    """The per-image editors refused a malformed name from the start; the SINGLE field
+    (one mesh row, and every non-mesh flow) did not — it wrote the bad value through
+    and let materialize() fail a page later as "Cannot assemble the worklist", which
+    points at the wrong thing. One validator now serves every path on this page, and
+    the refusal is still the inline label: a modal reached from validatePage hangs a
+    headless run, so nothing here may open one."""
+    modals = []
+    for name in ("exec", "exec_", "information", "warning", "critical", "question"):
+        if hasattr(QtWidgets.QMessageBox, name):
+            monkeypatch.setattr(QtWidgets.QMessageBox, name,
+                                lambda *a, _n=name, **k: modals.append(_n) or 0)
+
+    mesh_flow(wiz, "pki.x86")                      # ONE row: the plain field edits it
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    assert sysp.hostname_row.isVisible() and not sysp.hostname_rows.isVisible()
+    before = wiz.currentId()
+    sysp.hostname.setText("Bad_Host!")
+    wiz.next()
+    assert wiz.currentId() == before, "a malformed hostname must not pass Next"
+    assert sysp.hostname_error.isVisible() and "Bad_Host!" in sysp.hostname_error.text()
+    assert wiz.worklist.entries[0].hostname != "Bad_Host!"   # never written through
+    sysp.hostname.setText("ca-1")
+    advance_to(wiz, wizard_mod.HomePage)
+    assert not sysp.hostname_error.isVisible()
+    assert wiz.worklist.entries[0].hostname == "ca-1"
+    assert modals == []
+
+
+def test_229_the_non_mesh_hostname_field_is_validated_inline_too(wiz, monkeypatch):
+    """...and the same on standalone, where there is no worklist row at all: the value
+    goes to cfg.hostname, so the check belongs on the field it was typed into."""
+    modals = []
+    for name in ("exec", "exec_", "information", "warning", "critical", "question"):
+        if hasattr(QtWidgets.QMessageBox, name):
+            monkeypatch.setattr(QtWidgets.QMessageBox, name,
+                                lambda *a, _n=name, **k: modals.append(_n) or 0)
+
+    pick_mode(wiz, "standalone")
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    before = wiz.currentId()
+    sysp.hostname.setText("no_underscores")
+    wiz.next()
+    assert wiz.currentId() == before and sysp.hostname_error.isVisible()
+    assert wiz.cfg.hostname != "no_underscores"
+    sysp.hostname.setText("my-desktop")
+    wiz.next()
+    assert wiz.currentId() != before and wiz.cfg.hostname == "my-desktop"
+    assert modals == []
+
+
 def test_229_legacy_one_for_all_base_is_shown_per_row_and_refused_by_name(wiz):
     """A pre-#229 envelope carries ONE base hostname that rode onto every image. The
     page shows that value on every row it was going to name (nothing is dropped
