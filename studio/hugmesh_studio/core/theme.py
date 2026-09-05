@@ -502,7 +502,12 @@ def css_root(tokens: dict[str, str], *, font_faces: str = "") -> str:
 # the "Sign in" button stayed on the UA default (issue #225, measured in chromium:
 # body ui-monospace, inputs "Arial"). One weakest-specificity rule ((0,0,1) +
 # ``inherit``) fixes every consumer of this css without overriding any UI's own,
-# more specific font choice.
+# more specific font choice. The TEXT below is pinned exactly in
+# studio/tests/test_login_theme_pipeline.py — dropping a control from the
+# selector list, or ``inherit`` -> ``initial``, each re-creates #225 (or worse)
+# while every "is the rule present" assertion stays green. Only the browser
+# SEMANTICS (that UAs do not inherit font-family on controls) is out of pytest's
+# reach; the string is not.
 FORM_FONT_RESET = "input, button, select, textarea { font-family: inherit; }\n"
 
 
