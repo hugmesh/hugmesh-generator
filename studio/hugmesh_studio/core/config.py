@@ -633,6 +633,12 @@ PERSON_ROLE_CHOICES = ("user", "mod", "admin", "superadmin")
 # user), then the grants. PERSON roles, not image roles: scripts/_roles-lib.sh and
 # tests/scripts/test-role-key-spelling.sh carve this vocabulary OUT of their sweep.
 USER_ROLE_CHOICES = ("superadmin", "admin", "mod", "user", "games", "games-services")
+# The GRANTS: every USER_ROLE_CHOICES entry that is not one of the four tiers. Derived,
+# so the two tuples cannot drift — a role is either an exclusive tier (the thing
+# --person-role bakes into a device) or a grant that rides on top of one. The desktop-
+# person dialog (gui/pages/_desktop_user_dialog.py) offers exactly these as checkboxes
+# beside its tier picker (issue #228).
+USER_GRANT_CHOICES = tuple(r for r in USER_ROLE_CHOICES if r not in PERSON_ROLE_CHOICES)
 
 
 def normalize_user_roles(roles) -> list[str]:

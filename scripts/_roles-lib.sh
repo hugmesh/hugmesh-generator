@@ -19,6 +19,25 @@
 #   guard   — tests/scripts/test-role-key-spelling.sh asserts every channel's set
 #             equals what is declared here, and that no alias spelling is EMITTED.
 #
+# ── THE PACKAGED MIRROR ────────────────────────────────────────────────────────
+#   A BYTE-IDENTICAL copy of this file is committed inside the Studio package at
+#   studio/hugmesh_studio/core/_roles-lib.sh and is shipped as package-data. That
+#   is not a second declaration and must never be edited: it exists because an
+#   INSTALLED Studio has no repo above it. `pip install ./studio` — which is how
+#   both the Flatpak (studio/packaging/flatpak/org.hugmesh.ImageStudio.yml, whose
+#   build context is studio/ and cannot even see this directory) and the Windows
+#   MSI freeze are built — copies hugmesh_studio/ into site-packages alone, so the
+#   reader's checkout-relative path resolves to a `scripts/` dir that does not
+#   exist there. core/config.py derives RPI5_ROLE_MAP/JETSON_ROLE_MAP from the
+#   vocabulary at MODULE IMPORT time, so an installed bundle without the mirror
+#   does not lose a feature, it fails to start.
+#
+#   EDIT THIS FILE, then re-run the mirror:
+#       cp scripts/_roles-lib.sh studio/hugmesh_studio/core/_roles-lib.sh
+#   studio/tests/test_roles_lib_packaging.py fails until you do, and the checkout
+#   copy is the one a checkout reads, so the mirror can never quietly diverge into
+#   being the thing the Studio actually obeys.
+#
 # NO host tool dependency. Pure bash 4+ string handling: no jq (jq is a TARGET
 # package here, never a host prereq), no python, no awk, no external process at
 # all. Declarations are flat so the Python reader and `grep` can both parse them.
