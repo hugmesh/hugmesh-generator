@@ -19,6 +19,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# THE role vocabulary (scripts/_roles-lib.sh) — the same declaration the builders
+# read. It is already concatenated into the GUEST-side assertion bundle below; the
+# HOST side needs it too, because the stage4 auto-pick globs on the role token.
+# shellcheck source=scripts/_roles-lib.sh
+source "${REPO_DIR}/scripts/_roles-lib.sh"
+
 # ── Defaults ───────────────────────────────────────────────────────
 WORK_DIR="${REPO_DIR}/rpi5-stage4-build"
 ROLE="pki"
@@ -112,15 +118,38 @@ if [ -z "${KERNEL}" ]; then
     done
 fi
 [ -n "${KERNEL}" ] && [ -f "${KERNEL}" ] || die "kernel Image not found (pass --kernel). Did you build without --skip-kernel?"
-if [ -z "${STAGE4}" ]; then
-    STAGE4="$(ls -1t "${WORK_DIR}"/stage4-*-"${ROLE}"-k8s-*.tar.xz 2>/dev/null | head -1 || true)"
+# autodetect_stage4 <work-dir> <role> — the stage4 tarball for a role.
+#
+# A function, not an inline block, so tests/scripts/test-role-key-spelling.sh can
+# extract and exercise the real body the way it already does for the launchers'
+# autodetect_img.
+#
+# hugmesh_role_shadow_filter is not optional here either: `-${role}-` is a PREFIX
+# match, so `-backend-` also matches …-backend-gpu-….stage4.tar.xz, and this
+# globber is unanchored (no platform token) and mtime-ordered — a work dir that
+# also holds an x86 GPU build hands the GPU stage4 to a `--role backend` run.
+autodetect_stage4() {
+    local _w
+    _w="$1"
+    local _role
+    _role="$2"
+    local _s
+    _s="$(ls -1t "${_w}"/stage4-*-"${_role}"-k8s-*.tar.xz 2>/dev/null | hugmesh_role_shadow_filter "${_role}" | head -1 || true)"
     # Current builder naming: <brand>-rpi5-arm64-<role>-<env>-<ts>.stage4.tar.xz
     # (also look one level up: images land in the -w parent, sysroot in <work>).
-    for d in "${WORK_DIR}" "${WORK_DIR}/.."; do
-        [ -n "${STAGE4}" ] && break
-        STAGE4="$(ls -1t "${d}"/*-"${ROLE}"-*.stage4.tar.xz 2>/dev/null | head -1 || true)"
+    local _d
+    for _d in "${_w}" "${_w}/.."; do
+        [ -n "${_s}" ] && break
+        _s="$(ls -1t "${_d}"/*-"${_role}"-*.stage4.tar.xz 2>/dev/null | hugmesh_role_shadow_filter "${_role}" | head -1 || true)"
     done
-    [ -n "${STAGE4}" ] || STAGE4="$(ls -1t "${WORK_DIR}"/stage4-*.tar.xz 2>/dev/null | head -1 || true)"
+    # Role-BLIND last resort: it has already given up on the role, so it is not
+    # filtered.
+    [ -n "${_s}" ] || _s="$(ls -1t "${_w}"/stage4-*.tar.xz 2>/dev/null | head -1 || true)"
+    printf '%s\n' "${_s}"
+}
+
+if [ -z "${STAGE4}" ]; then
+    STAGE4="$(autodetect_stage4 "${WORK_DIR}" "${ROLE}")"
 fi
 [ -n "${STAGE4}" ] && [ -f "${STAGE4}" ] || die "stage4 tarball not found (pass --stage4)."
 

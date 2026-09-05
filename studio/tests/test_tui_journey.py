@@ -341,6 +341,27 @@ def test_system_step_refuses_duplicate_and_malformed_hostnames_inline():
     assert j.slug == _after_system()
 
 
+def test_system_step_enter_refuses_a_collision_the_keystroke_check_cannot_see():
+    """The per-keystroke check only fires on the name being TYPED, so it cannot see a
+    collision created by BLANKING the other row: name row 2 explicitly, then type row
+    1's name, then `2 -` — row 2 now derives exactly what row 1 was given, and neither
+    keystroke was wrong on its own. Enter is the backstop, and it is the MODEL's check
+    (duplicate_hostnames with the brand), so the TUI refuses precisely what --config on
+    the CLI refuses. The rows here are pki.x86 + backend.x86."""
+    j = _mesh_to_system("1", "3")
+    j.feed("2 be-1")                        # explicit, no collision yet
+    j.feed("1 hugmesh-backend")             # legal against an EXPLICIT be-1
+    assert j.worklist.entries[0].hostname == "hugmesh-backend"
+    j.feed("2 -")                           # ...and now row 2 derives hugmesh-backend
+    assert j.worklist.entries[1].hostname == ""
+    j.feed("")
+    assert j.slug == "system", "Enter must not advance over the collision"
+    assert "same hostname" in j.status and "hugmesh-backend" in j.status
+    j.feed("1 ca-1")                        # naming it apart clears it
+    j.feed("")
+    assert j.slug == _after_system()
+
+
 def test_system_step_names_persist_across_a_worklist_recommit_and_into_the_envelope(tmp_path):
     j = _mesh_to_system("1", "3")
     j.feed("1 ca-1")

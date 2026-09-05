@@ -178,6 +178,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"derive-theme: WARNING: {w}", file=sys.stderr)
         font_family = font_family.strip() or \
             os.path.splitext(os.path.basename(font_file))[0].replace("-", " ").replace("_", " ")
+        # ALLOWLIST before it reaches the comment below AND the css: an uploaded face's
+        # name comes from the font file itself, and a `*/` (or `</style>`, once the css
+        # reaches a <style> element) would break out of what it is interpolated into.
+        font_family = fonts.safe_font_family(font_family)
         # the artifact carries its own provenance: sha + licence travel with the css.
         header = ("/* embedded font: "
                   f"{font_family} sha256:{fonts.font_sha256(font_bytes)} "

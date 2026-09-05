@@ -67,9 +67,22 @@ version = { attr = "hugmesh_studio.__version__" }
 where = ["."]
 include = ["hugmesh_studio*"]
 
-# THREE non-Python files, and they are not optional extras — progress-tables.json is
-# read at MODULE IMPORT time by core/progress_parse.py, so a bundle that omits it
-# does not degrade, it fails to start.
+# FOUR non-Python files, and they are not optional extras — progress-tables.json is
+# read at MODULE IMPORT time by core/progress_parse.py, and core/_roles-lib.sh by
+# core/roles.py on the way to core/config.py's RPI5_ROLE_MAP, so a bundle that omits
+# either does not degrade, it fails to start.
+#
+# core/_roles-lib.sh is the byte-identical MIRROR of the repo's scripts/_roles-lib.sh
+# (the one declaration). It is packaged rather than reached for because an installed
+# Studio has no repo above it: this list is the whole difference between a Flatpak
+# that launches and one that dies in `import hugmesh_studio.core.config`.
+#
+# tests/test_roles_lib_packaging.py holds this table to BOTH directions, for every
+# row and not just the one that broke: a row matching no file ships nothing (and
+# setuptools does not object), a package file no row matches is not installed. That
+# is asserted against the table directly — the shipped-tree import test next to it
+# only reaches the rows its four modules happen to load, and measured, it did not
+# notice progress-tables.json being dropped from here.
 [tool.setuptools.package-data]
-"hugmesh_studio.core" = ["device-catalog.json", "progress-tables.json"]
+"hugmesh_studio.core" = ["device-catalog.json", "progress-tables.json", "_roles-lib.sh"]
 "hugmesh_studio.assets" = ["*.html"]

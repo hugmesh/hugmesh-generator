@@ -830,6 +830,29 @@ def _mesh_build_page(wiz, *ids):
     return advance_to(wiz, wizard_mod.BuildPage)
 
 
+def test_worklist_review_row_states_the_per_image_hostname(wiz):
+    """Issue #229's review half: the mesh table's facts column names the hostname each
+    row will bake, so the operator can SEE that the images differ before starting a
+    multi-hour build. A blank row says nothing (its name is the builder's to derive),
+    which is what keeps the untouched-mesh review as it was. Untested until now —
+    deleting the two lines in ``BuildPage._facts`` left the whole GUI suite green."""
+    build = _mesh_build_page(wiz, "omnibus.x86", "backend.rpi5")
+
+    def facts(rid):
+        r = next(i for i in range(build.worklist_table.rowCount())
+                 if build.worklist_table.item(i, 0).text() == rid)
+        return build.worklist_table.item(r, 1).text()
+
+    assert "hostname" not in facts("omnibus.x86")     # untouched rows stay silent
+    assert "hostname" not in facts("backend.rpi5")
+
+    by_id = {e.id: e for e in wiz.worklist.entries}
+    by_id["backend.rpi5"].hostname = "be-pi"
+    build._refresh_worklist_table()
+    assert "hostname be-pi" in facts("backend.rpi5")
+    assert "hostname" not in facts("omnibus.x86")     # and only the named row changed
+
+
 def test_worklist_show_command_renders_inline_and_never_moves_the_page(wiz):
     """A worklist row's "Show command" renders THAT image's argv NEXT TO THE ROW.
 

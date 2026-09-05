@@ -65,7 +65,7 @@ class _AcceptedDialog:
     """Exec-free stand-in for DesktopUserDialog: 'accepts' immediately with a fixed
     person, so the mouse-path handlers can run headless (no modal event loop)."""
 
-    def __init__(self, device_label, username="", person_role="user", parent=None):
+    def __init__(self, device_label, username="", roles="user", parent=None):
         self._user = "alice"
         self._role = "user"
 
@@ -77,6 +77,10 @@ class _AcceptedDialog:
 
     def person_role(self):
         return self._role
+
+    def person_roles(self):
+        # multi-role (issue #228): the page reads the full set — tier + grants
+        return [self._role]
 
 
 def _check(page, rid, on=True):
@@ -102,7 +106,7 @@ def test_accepting_the_person_dialog_reenables_next(page, monkeypatch):
 
     # the desktop check: itemChanged adds the unnamed placeholder -> Next disabled
     _check(page, "laptop.x86")
-    assert page._desktop_people["laptop.x86"] == ("", "user")
+    assert page._desktop_people["laptop.x86"] == ("", ["user"])
     assert not page.isComplete()
 
     # a real mouse click then reaches _on_item_clicked, which prompts; accept it
@@ -110,7 +114,7 @@ def test_accepting_the_person_dialog_reenables_next(page, monkeypatch):
     seen = _spy_complete(page)
     page._on_item_clicked(page.rows["laptop.x86"], _COL_CHECK)
 
-    assert page._desktop_people["laptop.x86"] == ("alice", "user")
+    assert page._desktop_people["laptop.x86"] == ("alice", ["user"])
     assert page.isComplete()
     assert True in seen, (
         "naming the desktop person must emit completeChanged: isComplete() flipped "

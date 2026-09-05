@@ -3224,12 +3224,22 @@ bake_vault_conf() {
     fi
     local _mount="${VAULT_KV_MOUNT:-secret}"
     local _base="${VAULT_BASE_PATH:-${BRAND}}"
+    # _validate_vault only ever sees the FLAGS. The ${BRAND} fallback never passes
+    # through it, so the one value that can reach this file unvalidated is the
+    # default. Re-check it here against the same allowlist: a brand slug is already
+    # path-shaped everywhere else, so this is fail-closed belt-and-braces, not a new
+    # constraint, and the operator is told to pass --vault-base-path instead.
+    [[ "${_base}" =~ ${_VAULT_PATH_RE} ]] \
+        || { err "vault base path '${_base}' (defaulted from --brand) is not a plain Vault path (allowlist [A-Za-z0-9._/-], max 128) — pass --vault-base-path explicitly"; exit 1; }
     mkdir -p "${SYSROOT}/etc/hugmesh"
     cat > "${SYSROOT}/etc/hugmesh/vault.conf" <<EOF
 # HashiCorp Vault this node seeds its External Secrets Operator from at first boot
 # (--vault-addr; keys-provision provision_vault). CONNECTION FACTS ONLY — the token
 # and unseal key come off the KEYS stick (vault/token, vault/unseal-key), never the
 # image. A .vault block in the stick's provision.json overrides every value here.
+# VAULT_KV_MOUNT / VAULT_BASE_PATH are RECORDED facts: keys-provision reads them,
+# and the shipped external-secrets manifests still pin their own mount + key prefix,
+# so changing them here does not yet re-point what the cluster reads.
 VAULT_ADDR=${VAULT_ADDR}
 VAULT_KV_MOUNT=${_mount}
 VAULT_BASE_PATH=${_base}
@@ -4571,6 +4581,12 @@ fi
 # Mesh secrets store (#224): the Vault connection facts keys-provision seeds ESO
 # from when the KEYS manifest has no .vault block. "" = byte no-op; client = warn.
 bake_vault_conf
+else
+# UNAFFILIATED builds have no /etc/hugmesh tree at all, so vault.conf is not baked
+# and bake_vault_conf's client-role warn can never fire. Say so out loud: the rest of
+# this change is loud-harmless-no-op, and a silently dropped --vault-addr is the one
+# shape an operator cannot tell from a working one.
+[ -z "${VAULT_ADDR}" ] || warn "--vault-addr given for an --unaffiliated build; that image carries no /etc/hugmesh marker tree and joins no cluster — ignoring."
 fi   # ! UNAFFILIATED (marker tree)
 # Orchestration superdomain (WS-SUPER-B): bake the mesh plane's MagicDNS suffix so the
 # image RECORDS the plane it belongs to. Self-contained brand-etc fold like secureboot
@@ -5329,7 +5345,21 @@ fi
 hugmesh_payload_plan_gate() {
     kept=/tmp/hugmesh-emerge-plan-image-pretend-failed.log
     [ -f "\${kept}" ] || return 0
-    if grep -Eq 'have been masked|masked by:|keyword changes are necessary|mask changes are necessary' "\${kept}"; then
+    # DISCRIMINATOR: match only text that is UNIQUE to an autounmask wall.
+    # "masked by:" is NOT — portage renders that same "- cpv (masked by: ...)"
+    # line from show_masked_packages() for the real wall AND for two purely
+    # INFORMATIONAL blocks that display_problems() prints from the very same
+    # dump: "The following installed packages are masked:" and "The following
+    # updates are masked by LICENSE changes:". A sysroot holding any masked
+    # installed package therefore carried that token into every dump — including
+    # the USE-only failures this gate deliberately lets continue — and the merge
+    # that --autounmask-continue=y could have self-healed died here instead.
+    # Routine here, not exotic: this repo masks >=sys-devel/gettext-0.23 into
+    # every role and the pre-image gettext downgrade is a tolerated failure.
+    # "have been masked" comes only from the unsatisfied-dep wall ("All ebuilds
+    # that could satisfy X have been masked."), so it stays. License walls keep
+    # the pre-gate behaviour on purpose: WARN and let the merge decide.
+    if grep -Eq 'have been masked|keyword changes are necessary|mask changes are necessary' "\${kept}"; then
         echo "[build-x86] ERROR: payload --pretend resolution failed on a KEYWORD/MASK wall."
         echo "[build-x86] The payload merge keeps keyword/mask decisions explicit"
         echo "[build-x86] (--autounmask-keep-keywords=y --autounmask-keep-masks=y), so it cannot"

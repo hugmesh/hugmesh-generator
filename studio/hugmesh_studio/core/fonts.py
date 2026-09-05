@@ -31,6 +31,17 @@ chain, and the recorded SHA-256 + licence provenance is the honest mitigation.
 Accepted bytes land as a base64 ``data:`` URI inside the generated snap-theme.css
 ``@font-face`` — permitted by the shipped CSP, and it keeps fonts on the SAME
 rebrand-without-rebuild path as colour (no extra volume, no image rebuild).
+
+THE FAMILY NAME IS ATTACKER-CONTROLLED TEXT. It is NOT typed by the operator: it is
+read out of the font FILE's own ``name`` table (QFontDatabase.applicationFontFamilies),
+so whoever authored the .ttf/.woff2 chose it. That string is interpolated into css that
+is then written into a ``<style id="snap-theme">`` element in the generated platform
+preview — and ``<style>`` is an HTML RAW-TEXT element, so a family containing
+``</style>`` terminates it and everything after is parsed as MARKUP (reproduced in
+chromium: ``window.PWNED = 1`` from a font file). The same text ships to production as
+HUG_THEME_CSS / the login-theme ConfigMap, where it lands in a real served stylesheet.
+So ``safe_font_family`` ALLOWLISTS — blacklisting backslash and double-quote let
+``<``, ``>``, ``/``, ``;``, ``{``, ``}`` and newlines straight through.
 """
 from __future__ import annotations
 
@@ -89,6 +100,32 @@ def sniff_format(data: bytes) -> str:
     return ""
 
 
+# The name a face falls back to when its own name table yields nothing usable — an
+# empty family would emit `font-family: ""`, which no browser resolves.
+FALLBACK_FAMILY = "HugMesh Brand Font"
+
+# Punctuation a REAL font family may carry, on top of unicode alphanumerics: "Foo Sans",
+# "Noto Sans JP", "PT_Sans-Web", "Bitstream Vera Sans (Roman)", "Gill Sans & Co", "M+ 1p",
+# "Trebuchet MS". Everything else is dropped, including every character that can break
+# out of a css string, a css comment, or an HTML raw-text element.
+_FAMILY_PUNCT = " ._-+&'()"
+
+
+def safe_font_family(family: str) -> str:
+    """The family name reduced to characters that cannot break out of the css string,
+    the ``/* ... */`` provenance comment, or the ``<style>`` raw-text element it is
+    interpolated into. ALLOWLIST, not blacklist: unicode alphanumerics (so "游ゴシック"
+    and "Иван" survive intact) plus ``_FAMILY_PUNCT``. Whitespace runs collapse so a
+    stripped payload cannot leave a ragged name, and an empty result becomes
+    ``FALLBACK_FAMILY`` rather than an unresolvable empty family.
+
+    ``str.isalnum()`` is False for every character that matters here — ``<`` ``>`` ``/``
+    backslash ``"`` ``;`` ``{`` ``}`` ``*`` ``@`` ``:`` ``,``, control characters, NEL/LS/PS
+    and the bidi overrides — so this is one rule rather than a list to keep in sync."""
+    kept = "".join(ch for ch in family if ch.isalnum() or ch in _FAMILY_PUNCT)
+    return " ".join(kept.split()) or FALLBACK_FAMILY
+
+
 def font_sha256(data: bytes) -> str:
     """The digest recorded next to the licence/source in the brand file, so a rebuilt
     mesh can prove it embeds the exact bytes the operator approved."""
@@ -127,7 +164,7 @@ def font_face_css(family: str, data: bytes) -> str:
         raise ValueError("refusing to emit @font-face for unrecognised font bytes")
     mime = next(m for magic, f, m in _MAGIC if f == fmt)
     b64 = base64.b64encode(data).decode("ascii")
-    safe_family = family.replace("\\", "").replace('"', "")
+    safe_family = safe_font_family(family)
     return (
         "@font-face {\n"
         f'  font-family: "{safe_family}";\n'
@@ -143,7 +180,7 @@ def font_tokens(sans_stack: str, *, uploaded_family: str = "") -> dict[str, str]
     preset (or Classic) behind it as fallback while the @font-face loads."""
     sans = sans_stack.strip() or FONT_PRESETS["Classic (current)"]
     if uploaded_family.strip():
-        fam = uploaded_family.replace("\\", "").replace('"', "").strip()
+        fam = safe_font_family(uploaded_family)
         sans = f'"{fam}", {sans}'
     return {
         "--sd-font-sans": sans,

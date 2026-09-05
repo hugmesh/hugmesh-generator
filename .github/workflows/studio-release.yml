@@ -201,6 +201,30 @@ jobs:
           flatpak build-bundle repo "hugmesh-studio-${VERSION}-x86_64.flatpak" org.hugmesh.ImageStudio
           sha256sum "hugmesh-studio-${VERSION}-x86_64.flatpak" | tee "hugmesh-studio-${VERSION}-x86_64.flatpak.sha256"
 
+      - name: Smoke-test the bundle
+        working-directory: studio/packaging/flatpak
+        # THE MSI JOB HAS HAD ONE SINCE IT WAS WRITTEN AND THIS JOB DID NOT, which is
+        # how a bundle that died at `import hugmesh_studio.core.config` could have
+        # been built, checksummed, uploaded and attached to a release with every step
+        # green: core/roles.py read the role vocabulary out of a `scripts/` directory
+        # that only exists in a checkout, and `pip3 install --prefix` above ships the
+        # package alone. Nothing here builds the app a second time — it INSTALLS the
+        # exact artifact that is about to be published and runs it.
+        #
+        # --print-specs is the app's Qt-FREE path (app.py: model only, no
+        # QApplication), so this needs no display and no session bus, and it fails at
+        # IMPORT time on a bundle missing any of the four package-data files.
+        run: |
+          flatpak install --user -y --noninteractive \
+            "hugmesh-studio-${VERSION}-x86_64.flatpak"
+          flatpak run --command=hugmesh-studio org.hugmesh.ImageStudio \
+            --print-specs > specs.json
+          if [ ! -s specs.json ]; then
+            echo "::error::no output from --print-specs — the installed bundle is incomplete"
+            exit 1
+          fi
+          head -c 400 specs.json; echo
+
       - uses: actions/upload-artifact@v4
         with:
           name: flatpak

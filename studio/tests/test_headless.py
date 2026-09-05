@@ -557,6 +557,30 @@ def test_print_commands_emits_each_images_own_hostname(tmp_path):
     assert [s["hostname"] for s in specs] == ["ca-1", "be-pi"]
 
 
+def test_print_commands_refuses_a_typed_name_matching_a_blank_rows_derived_name(tmp_path):
+    """The collision that is INVISIBLE in the argv — one row types the name the other
+    row's role switch would derive, so only one --hostname is emitted and both nodes
+    boot as it. The GUI refused this from the start; the CLI accepted it, which made
+    the guard's strength depend on which channel you drove. It exits 2 here now."""
+    from hugmesh_studio.core.worklist import (WorklistConfig, WorklistEntry,
+                                              derived_hostname)
+    be = WorklistEntry(role="backend", platform="x86")
+    wl = WorklistConfig(
+        base=ImageConfig(mode="mesh", brand="acme"),
+        entries=[WorklistEntry(role="pki", platform="x86",
+                               hostname=derived_hostname(be, "acme")), be])
+    p = tmp_path / "wl.json"
+    p.write_text(json.dumps(wl.to_dict()), encoding="utf-8")
+    r = subprocess.run(
+        [sys.executable, "-m", "hugmesh_studio", "--print-commands", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60,
+        env=dict(os.environ, PYTHONPATH=STUDIO_ROOT), cwd=STUDIO_ROOT)
+    assert r.returncode == 2
+    assert "same hostname" in r.stderr and "blank row is not free of this" in r.stderr
+    assert r.stdout == ""
+
+
 def test_print_commands_refuses_one_hostname_on_every_image(tmp_path):
     """The exact #229 shape on the CLI — one base hostname, several images — is a
     clean exit 2 naming the fix, not two builds that boot with the same name."""

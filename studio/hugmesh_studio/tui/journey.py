@@ -31,8 +31,6 @@ canonical order end to end, finishing with a saveable config.
 """
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from ..core.config import (
     IDP_CHOICES, IDP_LABELS, MODE_DEFAULT_ROLE, MODE_SKIPPED_PAGES, ROLE_CHOICES,
     UNAFFILIATED_ROLE, VAULT_FIELDS, VAULT_KV_MOUNT_DEFAULT, WIZARD_PAGE_SLUGS,
@@ -40,7 +38,8 @@ from ..core.config import (
 )
 from ..core.validate import validate_domain_name
 from ..core.worklist import (
-    WorklistConfig, WorklistEntry, duplicate_hostnames, entry_id, resolve_hostname,
+    WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
+    resolve_hostname,
 )
 
 __all__ = [
@@ -389,7 +388,11 @@ class VaultScreen:
                     f"  base path  {cfg.vault_base_path or '<brand> (builder default)'}",
                     "",
                     "  Every x86/rpi5 node in the worklist bakes these into "
-                    "/etc/hugmesh/vault.conf.", ""]
+                    "/etc/hugmesh/vault.conf. The address is what enables first-boot "
+                    "ESO seeding; the mount and base path are recorded there and read "
+                    "by keys-provision, but the shipped cluster manifests still pin "
+                    "their own mount ('secret') and key prefix ('hugmesh/<service>').",
+                    ""]
         else:
             out += ["  address    (none — no flag emitted; brand.conf VAULT_ADDR or "
                     "offline KEYS-stick delivery)", ""]
@@ -404,7 +407,8 @@ class VaultScreen:
             "",
             "The Vault token and unseal key are never entered here: put them on the "
             "KEYS stick (vault/token, vault/unseal-key). A .vault block in the "
-            "stick's provision.json overrides this step.",
+            "stick's provision.json overrides this step. The mount and base path are "
+            "recorded facts today, not a re-point of what the cluster reads.",
         ]
         return out
 
@@ -593,15 +597,15 @@ class SystemScreen:
 
     def _rows(self, j: "Journey") -> list[tuple[str, str, str]]:
         """``(image label, explicit hostname or "", role-derived hostname)`` per
-        image. Derived per row with ITS OWN role/platform/board, never off the base
-        (the GUI's _worklist_hostnames rule)."""
+        image. Derived per row with ITS OWN role/platform/board, never off the base —
+        core.worklist.derived_hostname, the same call the GUI placeholders and the
+        model's own collision check make, so no channel can show a name the others
+        would not."""
         cfg = j.cfg
         entries = self._mesh_entries(j)
         if entries:
             return [(e.id, resolve_hostname(e, cfg.hostname),
-                     derive_hostname(SimpleNamespace(
-                         brand=cfg.brand, role=e.role, platform=e.platform,
-                         board=e.board, unaffiliated=False)))
+                     derived_hostname(e, cfg.brand))
                     for e in entries]
         return [(f"{cfg.role}.{cfg.platform}", cfg.hostname, derive_hostname(cfg))]
 
@@ -648,7 +652,8 @@ class SystemScreen:
         rows = self._rows(j)
         if line == "":
             entries = self._mesh_entries(j)
-            dups = duplicate_hostnames(entries, j.cfg.hostname) if entries else {}
+            dups = (duplicate_hostnames(entries, j.cfg.hostname, j.cfg.brand)
+                    if entries else {})
             if dups:
                 # the materialize() refusal, caught here where it can be fixed
                 detail = "; ".join(f"{hn!r} on {', '.join(ids)}"

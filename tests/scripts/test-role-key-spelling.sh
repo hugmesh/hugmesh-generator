@@ -902,5 +902,224 @@ case "${listing}" in
 esac
 rm -rf "${hyphen_dir}"
 
+# D7) THE ROLE TOKEN IS TERMINAL, NOT A PREFIX.
+#     `backend` / `backend-gpu` is the ONE pair in the canonical set where one
+#     spelling is the other's prefix at a hyphen boundary (the alias set adds
+#     be/be-gpu and full/standalone-full). Every artifact consumer finds an image
+#     with a `*-<role>-*` glob, and `-backend-` prefix-matches
+#     <brand>-x86-amd64-backend-gpu-<env>-<ts>.img.
+#
+#     This became REACHABLE when the be+gpu -> `host` artifact-tag fold was dropped
+#     (build-x86-host-stage4.sh now emits ROLE_TAG="${ROLE}"): while the GPU image
+#     was named …-host-…, `-be-` could not prefix-match `-host-`, and no emitted
+#     name pair collided on any platform. Measured on the merge commit: with the
+#     DEFAULT x86 fleet (scripts/build-all-roles.sh X86_BUILD_ROLES=
+#     "pki backend frontend backend-gpu", built into ONE work dir),
+#     `flash-disk.sh --role backend --arch x86` resolved the backend-GPU image —
+#     a whole-physical-disk write of the GPU worker onto a plain backend node,
+#     with no AMBIGUOUS line and no assert_one_platform refusal possible, because
+#     both artifacts are platform x86.
+#
+#     BOTH mtime orderings are probed, because the two channels mis-pick for
+#     DIFFERENT reasons and a one-ordering fixture proves only one of them:
+#       * flash-disk.sh is genuinely `ls -1t` mtime-ordered, so it only mis-picks
+#         when backend-gpu is the newer — which the default fleet order guarantees.
+#       * the launchers' `for c in <glob>` lists expand to individual filenames in
+#         ALPHABETICAL order BEFORE `ls -1t` sees them (each iteration `ls`es one
+#         already-expanded path), and `backend-gpu` sorts before `backend-<env>`,
+#         so they mis-pick regardless of mtime.
+#     Asserted on the FULL basename, not a platform prefix: every candidate here is
+#     x86, so a prefix assertion (what D1/D2 use) cannot see this at all.
+term_dir="$(mktemp -d)"
+term_reset() {  # term_reset <newest-role>
+    local _n
+    local _i=1
+    for _n in pki backend frontend backend-gpu; do
+        touch -d "2026-02-0${_i} 00:00" "${term_dir}/hugmesh-x86-amd64-${_n}-test-2026020${_i}T000000Z.img"
+        _i=$((_i+1))
+    done
+    touch -d '2026-03-01 00:00' "${term_dir}"/hugmesh-x86-amd64-"$1"-test-*.img
+}
+# The DEFAULT x86 fleet, in scripts/build-all-roles.sh's own build order, stamped
+# so the filenames record it: pki oldest … backend-gpu newest.
+: > "${term_dir}/hugmesh-x86-amd64-pki-test-20260201T000000Z.img"
+: > "${term_dir}/hugmesh-x86-amd64-backend-test-20260202T000000Z.img"
+: > "${term_dir}/hugmesh-x86-amd64-frontend-test-20260203T000000Z.img"
+: > "${term_dir}/hugmesh-x86-amd64-backend-gpu-test-20260204T000000Z.img"
+term_stage4() {  # extract run-qemu-test.sh's real autodetect_stage4
+    bash -c "
+        set -uo pipefail
+        . '${LIB}'
+        $(awk '/^autodetect_stage4\(\) \{/,/^\}/' "${GEN}/tests/qemu/run-qemu-test.sh")
+        autodetect_stage4 '$1' '$2'
+    " 2>/dev/null | tail -1
+}
+term_entrypoint() {  # extract docker-entrypoint.sh's real autodetect_img
+    bash -c "
+        set -uo pipefail
+        . '${LIB}'
+        ARTIFACTS='$1'; PLATFORM='$2'; ROLE='$3'
+        $(awk '/^autodetect_img\(\) \{/,/^\}/' "${GEN}/tests/qemu/docker-entrypoint.sh")
+        autodetect_img
+    " 2>/dev/null | tail -1
+}
+term_check() {  # term_check <what> <got> <want-basename>
+    case "$2" in
+        "$3") ok "$1: $2" ;;
+        "")   bad "$1: resolved NOTHING — the probe is vacuous, or the function moved" ;;
+        *)    bad "$1: resolved $2, expected $3 — the role glob prefix-matched a LONGER role" ;;
+    esac
+}
+for newest in backend-gpu backend; do
+    term_reset "${newest}"
+    ord="(${newest} newest)"
+    for r in backend be; do
+        got="$(basename "$( (cd "${GEN}" && ./scripts/flash-disk.sh --role "${r}" --arch x86 \
+            --work-dir "${term_dir}" --list 2>/dev/null | sed -n 's/^Would flash: //p') || true)" 2>/dev/null || true)"
+        term_check "flash-disk.sh --role ${r} --arch x86 ${ord}" "${got}" \
+            "hugmesh-x86-amd64-backend-test-20260202T000000Z.img"
+    done
+    got="$(basename "$(autodetect_of launch-x86.sh backend "${term_dir}")" 2>/dev/null || true)"
+    term_check "launch-x86.sh --role backend ${ord}" "${got}" \
+        "hugmesh-x86-amd64-backend-test-20260202T000000Z.img"
+    got="$(basename "$(term_entrypoint "${term_dir}" x86 backend)" 2>/dev/null || true)"
+    term_check "docker-entrypoint.sh autodetect_img ROLE=backend ${ord}" "${got}" \
+        "hugmesh-x86-amd64-backend-test-20260202T000000Z.img"
+    # launch-pi.sh's LAST-RESORT unanchored role loop: no rpi5 image of any role in
+    # this dir, so it is the loop that answers, and it globs `-${r}-*` too.
+    got="$(basename "$(autodetect_of launch-pi.sh backend "${term_dir}")" 2>/dev/null || true)"
+    term_check "launch-pi.sh --role backend, unanchored last resort ${ord}" "${got}" \
+        "hugmesh-x86-amd64-backend-test-20260202T000000Z.img"
+    # THE OTHER DIRECTION: the longer role must still resolve its OWN image. A fix
+    # that filtered too hard would leave `--role backend-gpu` with nothing.
+    got="$(basename "$( (cd "${GEN}" && ./scripts/flash-disk.sh --role backend-gpu --arch x86 \
+        --work-dir "${term_dir}" --list 2>/dev/null | sed -n 's/^Would flash: //p') || true)" 2>/dev/null || true)"
+    term_check "flash-disk.sh --role backend-gpu --arch x86 ${ord}" "${got}" \
+        "hugmesh-x86-amd64-backend-gpu-test-20260204T000000Z.img"
+    got="$(basename "$(autodetect_of launch-x86.sh backend-gpu "${term_dir}")" 2>/dev/null || true)"
+    term_check "launch-x86.sh --role backend-gpu ${ord}" "${got}" \
+        "hugmesh-x86-amd64-backend-gpu-test-20260204T000000Z.img"
+done
+rm -rf "${term_dir}"
+
+# D7a2) EVERY role-scoped loop in each consumer, not just the first one to answer.
+#       The pickers try several patterns in order, and a fixture that lets an EARLY
+#       pattern answer leaves the later ones unprobed — mutation-proven: dropping the
+#       filter from launch-x86.sh's LAST-RESORT unanchored loop, and from
+#       docker-entrypoint.sh's autodetect_stage4, left every other check above green.
+#       One fixture per loop, each shaped so that loop is the one that answers.
+#
+#       launch-x86.sh's last resort: an arm64-ONLY dir, so both x86-anchored loops
+#       miss and the unanchored role loop is what returns. `-backend-` matches the
+#       jetson GPU image, which is the newest.
+lastres_dir="$(mktemp -d)"
+: > "${lastres_dir}/hugmesh-rpi5-arm64-backend-test-20260201T000000Z.img"
+: > "${lastres_dir}/hugmesh-jetson-orin-nano-arm64-backend-gpu-test-20260204T000000Z.img"
+touch -d '2026-02-01 00:00' "${lastres_dir}"/hugmesh-rpi5-*.img
+touch -d '2026-02-04 00:00' "${lastres_dir}"/hugmesh-jetson-*.img
+term_check "launch-x86.sh --role backend, unanchored last resort (arm64-only dir)" \
+    "$(basename "$(autodetect_of launch-x86.sh backend "${lastres_dir}")" 2>/dev/null || true)" \
+    "hugmesh-rpi5-arm64-backend-test-20260201T000000Z.img"
+rm -rf "${lastres_dir}"
+
+#       launch-pi.sh's rpi5-ANCHORED loop (D7's launch-pi probe reaches the last
+#       resort instead, because that fixture holds no rpi5 image at all).
+pianch_dir="$(mktemp -d)"
+: > "${pianch_dir}/hugmesh-rpi5-arm64-backend-test-20260201T000000Z.img"
+: > "${pianch_dir}/hugmesh-rpi5-arm64-backend-gpu-test-20260204T000000Z.img"
+touch -d '2026-02-01 00:00' "${pianch_dir}/hugmesh-rpi5-arm64-backend-test-20260201T000000Z.img"
+touch -d '2026-02-04 00:00' "${pianch_dir}/hugmesh-rpi5-arm64-backend-gpu-test-20260204T000000Z.img"
+term_check "launch-pi.sh --role backend, rpi5-anchored loop" \
+    "$(basename "$(autodetect_of launch-pi.sh backend "${pianch_dir}")" 2>/dev/null || true)" \
+    "hugmesh-rpi5-arm64-backend-test-20260201T000000Z.img"
+rm -rf "${pianch_dir}"
+
+#       docker-entrypoint.sh's autodetect_stage4 — a SECOND globber in the same file,
+#       with the same prefix defect and the same alphabetical `for c in` expansion.
+term_entry_s4() {
+    bash -c "
+        set -uo pipefail
+        . '${LIB}'
+        ARTIFACTS='$1'; PLATFORM='$2'; ROLE='$3'
+        $(awk '/^autodetect_stage4\(\) \{/,/^\}/' "${GEN}/tests/qemu/docker-entrypoint.sh")
+        autodetect_stage4
+    " 2>/dev/null | tail -1
+}
+es4_dir="$(mktemp -d)"
+: > "${es4_dir}/hugmesh-x86-amd64-backend-test-20260202T000000Z.stage4.tar.xz"
+: > "${es4_dir}/hugmesh-x86-amd64-backend-gpu-test-20260204T000000Z.stage4.tar.xz"
+touch -d '2026-02-02 00:00' "${es4_dir}/hugmesh-x86-amd64-backend-test-20260202T000000Z.stage4.tar.xz"
+touch -d '2026-02-04 00:00' "${es4_dir}/hugmesh-x86-amd64-backend-gpu-test-20260204T000000Z.stage4.tar.xz"
+term_check "docker-entrypoint.sh autodetect_stage4 ROLE=backend" \
+    "$(basename "$(term_entry_s4 "${es4_dir}" x86 backend)" 2>/dev/null || true)" \
+    "hugmesh-x86-amd64-backend-test-20260202T000000Z.stage4.tar.xz"
+term_check "docker-entrypoint.sh autodetect_stage4 ROLE=backend-gpu" \
+    "$(basename "$(term_entry_s4 "${es4_dir}" x86 backend-gpu)" 2>/dev/null || true)" \
+    "hugmesh-x86-amd64-backend-gpu-test-20260204T000000Z.stage4.tar.xz"
+rm -rf "${es4_dir}"
+
+# D7b) THE STAGE4 CHANNEL. tests/qemu/run-qemu-test.sh picks the stage4 tarball with
+#      an UNANCHORED `*-<role>-*.stage4.tar.xz` glob (no platform token at all), one
+#      level up as well as in the work dir, newest-mtime-first — so a mixed session
+#      dir hands a `--role backend` boot the backend-GPU rootfs.
+s4_dir="$(mktemp -d)"
+: > "${s4_dir}/hugmesh-rpi5-arm64-backend-test-20260201T000000Z.stage4.tar.xz"
+: > "${s4_dir}/hugmesh-x86-amd64-backend-gpu-test-20260204T000000Z.stage4.tar.xz"
+touch -d '2026-02-01 00:00' "${s4_dir}"/hugmesh-rpi5-*.stage4.tar.xz
+touch -d '2026-02-04 00:00' "${s4_dir}"/hugmesh-x86-*.stage4.tar.xz
+term_check "run-qemu-test.sh autodetect_stage4 --role backend" \
+    "$(basename "$(term_stage4 "${s4_dir}" backend)" 2>/dev/null || true)" \
+    "hugmesh-rpi5-arm64-backend-test-20260201T000000Z.stage4.tar.xz"
+term_check "run-qemu-test.sh autodetect_stage4 --role backend-gpu" \
+    "$(basename "$(term_stage4 "${s4_dir}" backend-gpu)" 2>/dev/null || true)" \
+    "hugmesh-x86-amd64-backend-gpu-test-20260204T000000Z.stage4.tar.xz"
+rm -rf "${s4_dir}"
+
+# D7c) THE SHADOW SET IS DERIVED, NOT HAND-LISTED. Two ALIAS pairs collide the same
+#      way (`-be-` inside `-be-gpu-`, `-full-` inside `-standalone-full-`), and a
+#      future canonical role that extends an existing one would collide too. A
+#      hard-coded "backend vs backend-gpu" special case passes D7 and misses all of
+#      them, so the derivation itself is asserted here — against the same lib every
+#      consumer sources (already sourced at the top of this guard).
+for want in "backend:backend-gpu be-gpu" "be:backend-gpu be-gpu" "omnibus:standalone-full" \
+            "full:standalone-full" "backend-gpu:" "host:" "pki:" "frontend:" \
+            "standalone-thick:" "edge-ai:" "desktop:"; do
+    r="${want%%:*}"; expect="${want#*:}"
+    got="$(hugmesh_role_shadow_tokens "${r}" || true)"
+    if [ "${got}" = "${expect}" ]; then
+        ok "hugmesh_role_shadow_tokens ${r} = [${got}]"
+    else
+        bad "hugmesh_role_shadow_tokens ${r} = [${got}], expected [${expect}] — the shadow set must be DERIVED from the vocabulary, not hand-listed"
+    fi
+done
+# The alias collision, end to end: a legacy `…-amd64-full-…` omnibus artifact beside
+# a legacy `…-amd64-standalone-full-…` one. Only the derivation keeps them apart.
+alias_dir="$(mktemp -d)"
+: > "${alias_dir}/hugmesh-x86-amd64-full-test-20260201T000000Z.img"
+: > "${alias_dir}/hugmesh-x86-amd64-standalone-full-test-20260204T000000Z.img"
+touch -d '2026-02-01 00:00' "${alias_dir}/hugmesh-x86-amd64-full-test-20260201T000000Z.img"
+touch -d '2026-02-04 00:00' "${alias_dir}/hugmesh-x86-amd64-standalone-full-test-20260204T000000Z.img"
+term_check "flash-disk.sh --role omnibus --arch x86 (alias collision)" \
+    "$(basename "$( (cd "${GEN}" && ./scripts/flash-disk.sh --role omnibus --arch x86 \
+        --work-dir "${alias_dir}" --list 2>/dev/null | sed -n 's/^Would flash: //p') || true)" 2>/dev/null || true)" \
+    "hugmesh-x86-amd64-full-test-20260201T000000Z.img"
+rm -rf "${alias_dir}"
+
+# D7d) A LONGER ROLE'S IMAGE IS NOT AN ANSWER AT ALL. With ONLY the GPU image in the
+#      dir, the flasher must REFUSE (that is what it did before the rename, when the
+#      GPU artifact was named …-host-… and `-backend-` matched nothing) rather than
+#      silently offer it. The whole-disk write is the reason a fail-safe refusal is
+#      the required behaviour here.
+only_dir="$(mktemp -d)"
+: > "${only_dir}/hugmesh-x86-amd64-backend-gpu-test-20260204T000000Z.img"
+only_out="$( (cd "${GEN}" && ./scripts/flash-disk.sh --role backend --arch x86 \
+    --work-dir "${only_dir}" --list 2>/dev/null) || true)"
+case "${only_out}" in
+    *"Would flash: (no artifact found"*) ok "flash-disk.sh --role backend --arch x86 with only a backend-gpu image: refuses" ;;
+    *"Would flash: "*) bad "flash-disk.sh --role backend --arch x86 offered $(printf '%s' "${only_out}" | sed -n 's/^Would flash: //p') — a backend-gpu image is not a backend image, and this writes a whole disk" ;;
+    *) bad "flash-disk.sh --list produced no verdict: ${only_out}" ;;
+esac
+rm -rf "${only_dir}"
+
 echo "== ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]
