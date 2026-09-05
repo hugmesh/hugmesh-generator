@@ -320,7 +320,7 @@ export async function registerOnly(page: Page, username: string, password = logi
  * default while still sitting inside the 90s per-test `timeout`, so a genuinely
  * hung shell still fails the test rather than hanging the run.
  */
-const SHELL_AFTER_PROVISION_MS = 60_000;
+export const SHELL_AFTER_PROVISION_MS = 60_000;
 
 /**
  * Full onboarding: native sign-in (stage 1) + complete registration (stage 2).
