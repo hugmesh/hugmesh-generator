@@ -71,6 +71,11 @@
           "description": "That person's role (config.py PERSON_ROLE_CHOICES). Meaningful only alongside a non-blank desktop_user.",
           "enum": ["user", "mod", "admin", "superadmin"],
           "default": "user"
+        },
+        "hostname": {
+          "type": "string",
+          "description": "PER-IMAGE hostname (issue #229) — this image's -H/--hostname. \"\" inherits base.hostname, and a blank base lets the builder derive the role name. materialize() fails loudly when two entries would bake the same explicit name. Timezone and the default account stay mesh-wide on the base.",
+          "default": ""
         }
       }
     },

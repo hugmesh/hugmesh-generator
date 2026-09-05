@@ -829,6 +829,10 @@ class WorklistPage(QtWidgets.QWizardPage):
                 infra_services=infra_services,
                 desktop_user=person_user,
                 desktop_user_role=person_role,
+                # per-image hostname (issue #229) is edited on the System step; a row
+                # staying checked keeps the name it was given there, a new row starts
+                # blank (= the builder's role-derived name).
+                hostname=keep.hostname if keep else "",
             ))
         if not entries:
             return False   # isComplete() already blocks Next; guard the collect path too

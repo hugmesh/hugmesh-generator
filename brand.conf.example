@@ -161,15 +161,22 @@ HEADSCALE_VERSION="0.23.0"
 TAILSCALE_VERSION="1.78.1"
 
 # ── Vault (cluster secrets) ─────────────────────────────────────────
-# Used by scripts/gen-cluster-secrets.sh + the External Secrets Operator.
+# Used by scripts/gen-cluster-secrets.sh + the External Secrets Operator, AND
+# by the x86/rpi5 node image builders (--vault-addr / --vault-kv-mount /
+# --vault-base-path; issue #224): a set address is baked into every cluster-node
+# image as /etc/hugmesh/vault.conf so first-boot provisioning seeds ESO from it
+# when the KEYS manifest carries no .vault block. Connection facts only — the
+# token/unseal key stay on the KEYS stick.
 # Secrets live at  <VAULT_KV_MOUNT>/<BRAND>/{casdoor,clickhouse,uptrace}.
 #
 # An EMPTY VAULT_ADDR means offline / USB-only secret delivery: the generator
-# still writes keys-out/vault/{secrets.json,token} for the KEYS stick, and no
-# Vault server is contacted. Set it (plus VAULT_TOKEN in the environment, never
-# committed here) to also push the secrets into Vault for online ESO sync.
+# still writes keys-out/vault/{secrets.json,token} for the KEYS stick, no
+# Vault server is contacted, and the image builders bake nothing. Set it (plus
+# VAULT_TOKEN in the environment, never committed here) to also push the
+# secrets into Vault for online ESO sync.
 VAULT_ADDR=""                       # e.g. https://vault.hugmesh.net  (empty = offline/USB-only)
 VAULT_KV_MOUNT="secret"             # KV v2 mount the ClusterSecretStore reads
+# VAULT_BASE_PATH=""                # path prefix under the mount; empty = the BRAND slug
 
 # ── External CA (optional — use an EXISTING CA as the cert issuer) ──
 # By default the cert generator mints a fresh self-signed root CA. To instead

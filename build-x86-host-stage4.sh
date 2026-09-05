@@ -296,6 +296,19 @@ IDP="${IDP:-casdoor}"
 IDP_ISSUER="${IDP_ISSUER:-}"
 IDP_CLIENT_ID="${IDP_CLIENT_ID:-}"
 IDP_JWKS="${IDP_JWKS:-}"
+# ── Mesh secrets store (issue #224) ───────────────────────────────────────────
+# "" (the DEFAULT) changes NOTHING — offline/USB-only secret delivery, every
+# sysroot byte identical to before the axis existed. --vault-addr https://… bakes
+# /etc/hugmesh/vault.conf (address + KV mount + base path: PUBLIC connection
+# facts, never a token) on cluster-NODE roles so keys-provision's provision_vault()
+# seeds the External Secrets Operator from it at first boot even when the KEYS
+# manifest carries no .vault block. The same VAULT_ADDR/VAULT_KV_MOUNT a brand.conf
+# hands scripts/gen-cluster-secrets.sh seed these (CLI wins), so one profile
+# drives both the secret push and the image. The token/unseal key ride the KEYS
+# stick (vault/token, vault/unseal-key) — custody material is never baked.
+VAULT_ADDR="${VAULT_ADDR:-}"
+VAULT_KV_MOUNT="${VAULT_KV_MOUNT:-secret}"
+VAULT_BASE_PATH="${VAULT_BASE_PATH:-}"   # "" = the brand slug at bake time (gen-cluster-secrets.sh's layout)
 # ── Artifact selection (mirrors rpi5): .img is now the DEFAULT deliverable ──
 BUILD_IMG=true          # produce the flashable raw .img (DEFAULT)
 ROOT_MiB=8192           # ext4 root partition size in the .img (growroot expands it on first boot)
@@ -731,6 +744,19 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             entra <issuer>/discovery/v2.0/keys, aws
                             <issuer>/.well-known/jwks.json, oidc
                             <issuer>/.well-known/jwks.
+      --vault-addr URL      HashiCorp Vault this mesh's nodes fetch cluster secrets
+                            from (https://). Bakes /etc/hugmesh/vault.conf (address,
+                            KV mount, base path — never a token) into cluster-NODE
+                            images so keys-provision seeds the External Secrets
+                            Operator from it at first boot when the KEYS manifest
+                            has no .vault block. Empty (DEFAULT) = offline/USB-only
+                            delivery, zero change; client roles warn + ignore it.
+                            The token/unseal key ride the KEYS stick, never the
+                            image. (env/brand.conf: VAULT_ADDR)
+      --vault-kv-mount M    KV v2 mount the ClusterSecretStore reads (default:
+                            secret; env/brand.conf: VAULT_KV_MOUNT).
+      --vault-base-path P   Path prefix under the mount (default: the --brand slug,
+                            where scripts/gen-cluster-secrets.sh writes).
       --skip-mesh           Don't install headscale/tailscale.
       --skip-tailscale      headscale only.
       --skip-kernel         Don't build the kernel.
@@ -1046,6 +1072,11 @@ while [[ $# -gt 0 ]]; do
         --idp-issuer)    IDP_ISSUER="$2";    shift 2 ;;
         --idp-client-id) IDP_CLIENT_ID="$2"; shift 2 ;;
         --idp-jwks)      IDP_JWKS="$2";      shift 2 ;;
+        # Mesh secrets store (#224) — "" = offline default, zero change; validated
+        # fail-closed below (_validate_vault), baked by bake_vault_conf on node roles.
+        --vault-addr)      VAULT_ADDR="$2";      shift 2 ;;
+        --vault-kv-mount)  VAULT_KV_MOUNT="$2";  shift 2 ;;
+        --vault-base-path) VAULT_BASE_PATH="$2"; shift 2 ;;
         --skip-mesh) SKIP_MESH=true; MESH_FORCED=off; shift ;;
         --skip-tailscale) SKIP_TAILSCALE=true; shift ;;
         # Composable mesh toggle (wins over a role's default; e.g. force the tailnet
@@ -2149,6 +2180,30 @@ if [ "${IDP}" != "casdoor" ] && [ -z "${IDP_JWKS}" ]; then
     info "IdP: --idp-jwks empty — derived the ${IDP} default: ${IDP_JWKS}"
 fi
 
+# ── Mesh secrets store (#224): fail-closed validation ─────────────────────────
+# Mirrors studio core/config.vault_field_error byte-for-byte: a set address must
+# be https:// (the secrets channel's trust anchor); the KV mount / base path are
+# plain Vault path prefixes (no shell/sed metacharacters — they land in the root-
+# read vault.conf). Empty address = the offline default: the two paths are then
+# unused, so nothing is checked and nothing is baked. Explicit `return 0` at the
+# end for the same set -e reason _validate_idp gives.
+_VAULT_PATH_RE='^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$'
+_validate_vault() {
+    [ -n "${VAULT_ADDR}" ] || return 0
+    [[ "${VAULT_ADDR}" =~ ${_IDP_URL_RE} ]] \
+        || { err "--vault-addr must be an https:// URL (got '${VAULT_ADDR}') — it is the secrets channel's trust anchor and must be TLS"; exit 1; }
+    if [ -n "${VAULT_KV_MOUNT}" ]; then
+        [[ "${VAULT_KV_MOUNT}" =~ ${_VAULT_PATH_RE} ]] \
+            || { err "--vault-kv-mount must be a plain Vault path (allowlist [A-Za-z0-9._/-], max 128; got '${VAULT_KV_MOUNT}')"; exit 1; }
+    fi
+    if [ -n "${VAULT_BASE_PATH}" ]; then
+        [[ "${VAULT_BASE_PATH}" =~ ${_VAULT_PATH_RE} ]] \
+            || { err "--vault-base-path must be a plain Vault path (allowlist [A-Za-z0-9._/-], max 128; got '${VAULT_BASE_PATH}')"; exit 1; }
+    fi
+    return 0
+}
+_validate_vault
+
 # ── Cluster NODE compact-root sizing (pki/backend/frontend/backend-gpu/omnibus) ──────────────────────
 # The k8s node payload (kubeadm/kubelet/containerd + mesh binaries + base) is ~11.2 GiB
 # and overflows the historical 8 GiB ROOT_MiB default → the .img pre-flight (build_img)
@@ -3147,6 +3202,40 @@ jwks_uri=${IDP_JWKS}
 EOF
     chmod 0644 "${SYSROOT}/etc/hugmesh/idp.conf"
     info "IdP: baked /etc/hugmesh/idp.conf (provider=${IDP}, 0644, no secrets)"
+}
+
+# ── Mesh secrets store (issue #224): bake the Vault connection facts ──────────
+# "" (the default) = offline/USB-only delivery: a byte no-op. A set --vault-addr
+# writes /etc/hugmesh/vault.conf (0644; address + KV mount + base path — NEVER a
+# token: the token and unseal key ride the KEYS stick) so keys-provision's
+# provision_vault() has a Vault to seed the External Secrets Operator from even
+# when the stick's provision.json carries no .vault block (a manifest block still
+# wins). Cluster-NODE only: a client desktop runs no ESO, so the flag is warn-
+# dropped there (the loud-harmless-no-op convention). Small + dependency-light on
+# purpose (the bake_idp_conf idiom): studio/tests/test_vault_config.py extracts
+# this function and the --vault-* parser arms verbatim, drives them with the
+# Studio's own emitted argv against a fixture sysroot, and reads the address
+# back out of the baked file — never a real build.
+bake_vault_conf() {
+    [ -n "${VAULT_ADDR}" ] || return 0
+    if ${ROLE_CLIENT}; then
+        warn "--vault-addr given for a client role (${ROLE}); Vault/ESO seeding is a cluster-NODE first-boot step — ignoring."
+        return 0
+    fi
+    local _mount="${VAULT_KV_MOUNT:-secret}"
+    local _base="${VAULT_BASE_PATH:-${BRAND}}"
+    mkdir -p "${SYSROOT}/etc/hugmesh"
+    cat > "${SYSROOT}/etc/hugmesh/vault.conf" <<EOF
+# HashiCorp Vault this node seeds its External Secrets Operator from at first boot
+# (--vault-addr; keys-provision provision_vault). CONNECTION FACTS ONLY — the token
+# and unseal key come off the KEYS stick (vault/token, vault/unseal-key), never the
+# image. A .vault block in the stick's provision.json overrides every value here.
+VAULT_ADDR=${VAULT_ADDR}
+VAULT_KV_MOUNT=${_mount}
+VAULT_BASE_PATH=${_base}
+EOF
+    chmod 0644 "${SYSROOT}/etc/hugmesh/vault.conf"
+    info "Vault: baked /etc/hugmesh/vault.conf (address=${VAULT_ADDR} mount=${_mount} base=${_base}; 0644, no secrets)"
 }
 
 rewrite_idp_sysroot() {
@@ -4479,6 +4568,9 @@ if [ -n "${HEADSCALE_URL:-}" ]; then
     echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/hugmesh/headscale-url"
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/hugmesh/headscale-url"
 fi
+# Mesh secrets store (#224): the Vault connection facts keys-provision seeds ESO
+# from when the KEYS manifest has no .vault block. "" = byte no-op; client = warn.
+bake_vault_conf
 fi   # ! UNAFFILIATED (marker tree)
 # Orchestration superdomain (WS-SUPER-B): bake the mesh plane's MagicDNS suffix so the
 # image RECORDS the plane it belongs to. Self-contained brand-etc fold like secureboot
