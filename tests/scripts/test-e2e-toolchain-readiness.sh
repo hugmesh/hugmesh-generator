@@ -72,23 +72,45 @@
 #      describes it), plus a comment-stripped source scan so the spelling cannot
 #      quietly return anywhere in tests/scripts, and a roster-derivation check
 #      so a NEW probe-running guard cannot be silently exempt from any of it.
-#      Mutation-tested 2026-09-01/02 (17 shapes, 16 caught) — including the
-#      three closed on 09-02: a preflight whose wiring was deleted but whose
-#      comment survived (which the old prose-matching grep scored PASS), a
-#      preflight spec kept with its `playwright test` invocation removed, and
-#      an unrostered new guard. The one known survivor is a NON-farm default
-#      laundered through another variable AFTER the preflight, which no textual
-#      or dynamic leg sees.
+#      Mutation-tested 2026-09-01/02 (17 shapes, 16 caught) and again 2026-09-04
+#      over legs F and G (11 shapes: 10 caught, plus a false-positive control —
+#      a diagnostic READ of the variable — that must and does survive; the tree
+#      is byte-identical before and after the battery). The four shapes closed
+#      since: a preflight whose wiring was deleted but whose comment survived
+#      (which the old prose-matching grep scored PASS), a preflight spec kept
+#      with its `playwright test` invocation removed, an unrostered new guard,
+#      and — 09-04 — the one-line
+#      `: "${PLAYWRIGHT_BROWSERS_PATH:=/opt/browsers}"` at a lane site, which
+#      launders through nothing and which the `:-`-only scan let through. The
+#      one known survivor is a NON-farm default laundered through ANOTHER
+#      VARIABLE NAME strictly AFTER the preflight, which no textual or dynamic
+#      leg sees.
+#   G. Each of the five browser guards' preflight BLOCKS is sliced out verbatim
+#      and graded twice. ALWAYS, install or none: the slice must carry its
+#      node_modules symlink, its spec body, the run that executes that spec, and
+#      the same --no-sandbox/--disable-dev-shm-usage the lane config hands the
+#      lane — which the lane config must still carry, so the two cannot drift
+#      apart silently. And WHEN leg E found a READY install: the slice is RUN,
+#      and must launch one real page (~0.8s each); with no install those five
+#      SKIP loudly and the completeness half still holds. Legs E and F never
+#      execute a preflight — E runs the probe alone, F stubs the probe to exit 1
+#      so every guard exits 2 before reaching one — so until this leg the block
+#      PR #249 added had no test at all, which is how a preflight that could not
+#      import '@playwright/test' reached a pushed branch. Measured 2026-09-04:
+#      deleting the block's node_modules symlink, and separately deleting its
+#      launch flags, each left this suite 177 passed / 0 failed.
 #
 # Why revision 9999: the synthetic browsers.json pins a revision no real cache can
 # satisfy, so a probe that ignored PLAYWRIGHT_BROWSERS_PATH and looked in
 # ~/.cache/ms-playwright would fail leg A on a box that has real browsers installed.
 #
-# HERMETIC. Everything is built under mktemp; the repo's tests/e2e is only READ (leg
-# E). bash + node + make. python3 is not needed.
+# HERMETIC. Everything is built under mktemp; the repo's tests/e2e is only READ
+# (legs E and G). bash + node + make. python3 is not needed. Leg G is the only
+# leg that launches a real browser, and only when leg E found a READY install;
+# it writes nothing outside its own mktemp scratch dir.
 #
 #   bash tests/scripts/test-e2e-toolchain-readiness.sh
-#   E2E_REAL_DIR=<tree> ... to point leg E at another installed tree.
+#   E2E_REAL_DIR=<tree> ... to point legs E and G at another installed tree.
 set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -564,10 +586,12 @@ if [ "${RC}" -ne 0 ] && [ "$(probe_calls)" = "2" ]; then _ok "playwright-deps: i
 
 echo
 echo "-- E) the REAL probe against THIS checkout's install --"
+REAL_PROBE_RC="no-install"
 if [ ! -d "${REAL_DIR}/node_modules" ]; then
   _skip "no ${REAL_DIR}/node_modules — the real-tree leg asserted nothing (the pre-merge images carry no install; run 'make playwright-deps' on a box to exercise it)"
 else
   out="$(E2E_DIR="${REAL_DIR}" bash "${PROBE}" 2>&1)"; rc=$?
+  REAL_PROBE_RC="${rc}"
   if [ "${rc}" -eq 0 ]; then
     _ok "the real probe agrees with the real install: $(printf '%s' "${out}" | head -c 200)"
   else
@@ -715,21 +739,123 @@ fi
 # at the lane site) would get past them, so the SOURCE is scanned too,
 # comment-stripped (a history note may name the spelling; wiring may not — see
 # the premerge-gate lesson about counting wiring with comments left in), for the
-# two violation shapes: the self-defaulting assignment
+# three violation shapes: the self-defaulting assignment
 # PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-...}" with ANY value,
-# and the literal farm path /var/tmp/portage/pw-browsers anywhere in code.
+# ANY `${PLAYWRIGHT_BROWSERS_PATH:=...}` — the assign-if-unset form, which is
+# the same default in one character fewer — and the literal farm path
+# /var/tmp/portage/pw-browsers anywhere in code.
+#
+# The `:=` alternative was ADDED 2026-09-04 on a measurement: the skeptic on
+# fix/pw-browsers-never-default planted `: "${PLAYWRIGHT_BROWSERS_PATH:=/opt/browsers}"`
+# + `export PLAYWRIGHT_BROWSERS_PATH` at the lane site of
+# test-e2e-social-function-matrix.sh — one idiomatic line, laundered through
+# nothing — and this suite still reported 177 passed / 0 failed. It
+# re-introduces exactly the PR #218 failure mode (the lane resolving against a
+# store the probe never vetted), and the two shapes on either side of it were
+# already caught: the same idiom with the FARM literal by this scan, and the
+# same idiom placed BEFORE the probe by the dynamic <unset> leg. Reproduced on
+# origin/main 4d88a68d and closed here; all three are mutation-tested below.
+#
 # Diagnostic READS (`${PLAYWRIGHT_BROWSERS_PATH:-unset ...}` in an echo) match
-# neither. This probe suite sets the variable deliberately (it is the thing
-# under test) and is exempt by name. NOT closed textually: a default laundered
-# through another variable name and pointed somewhere other than the farm —
-# the dynamic probe.env legs above still catch any default live at probe time.
-SRC_HITS="$(grep -nE 'PLAYWRIGHT_BROWSERS_PATH="?\$\{PLAYWRIGHT_BROWSERS_PATH:-|/var/tmp/portage/pw-browsers' "${REPO}/tests/scripts/"*.sh 2>/dev/null \
+# none of the three, and a `:=` inside a bare `${...}` read is meaningless, so
+# the new alternative adds no false-positive surface (mutation-tested: a planted
+# diagnostic echo still passes). This probe suite sets the variable deliberately
+# (it is the thing under test) and is exempt by name. STILL NOT closed
+# textually: a default laundered through ANOTHER VARIABLE NAME and pointed
+# somewhere other than the farm — the dynamic probe.env legs above still catch
+# any such default that is live at probe time, so only one placed strictly after
+# the preflight escapes.
+SRC_HITS="$(grep -nE 'PLAYWRIGHT_BROWSERS_PATH="?\$\{PLAYWRIGHT_BROWSERS_PATH:-|\$\{PLAYWRIGHT_BROWSERS_PATH:=|/var/tmp/portage/pw-browsers' "${REPO}/tests/scripts/"*.sh 2>/dev/null \
   | grep -v 'test-e2e-toolchain-readiness.sh:' \
   | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' || true)"
 if [ -z "${SRC_HITS}" ]; then
-  _ok "F source scan: no tests/scripts guard self-defaults PLAYWRIGHT_BROWSERS_PATH or names the pw-browsers farm (comment-stripped)"
+  _ok "F source scan: no tests/scripts guard self-defaults PLAYWRIGHT_BROWSERS_PATH (neither :- in an assignment nor ANY :=) or names the pw-browsers farm (comment-stripped)"
 else
-  _bad "F source scan: a guard defaults PLAYWRIGHT_BROWSERS_PATH or pins the pw-browsers farm — the default must not return:"$'\n'"$(printf '%s\n' "${SRC_HITS}" | sed 's/^/         /')"
+  _bad "F source scan: a guard defaults PLAYWRIGHT_BROWSERS_PATH (:- in an assignment, or ANY :=) or pins the pw-browsers farm — the default must not return:"$'\n'"$(printf '%s\n' "${SRC_HITS}" | sed 's/^/         /')"
+fi
+
+echo
+echo "-- G) each browser guard's OWN preflight block is complete, and launches --"
+# Legs E and F never EXECUTE a preflight. Leg E runs the probe alone; leg F stubs
+# the probe to exit 1, so every guard exits 2 BEFORE reaching its preflight, and
+# stubs npx besides. So the block PR #249 added — the thing that turns "the
+# browser cannot launch" from a whole-lane red into a named exit 2 — had no test
+# of its own, and that is how a real defect reached a pushed branch: MEASURED
+# 2026-09-01, without the `ln -sfn "${E2E}/node_modules"` beside its config the
+# block dies on "Cannot find module '@playwright/test' ... Require stack:
+# /tmp/pw-preflight.*/pw.config.ts" — a preflight failing for its OWN reasons,
+# which is precisely the false red it exists to prevent. Re-measured 2026-09-04
+# on origin/main 4d88a68d: deleting that one line left this suite 177 passed /
+# 0 failed, and so did deleting the launch flags.
+#
+# So SLICE each guard's block out verbatim — `PWPRE="$(mktemp -d` through
+# `rm -rf "${PWPRE}"` — and grade it twice:
+#
+#   1. COMPLETENESS, always, install or no install. The slice must carry its
+#      node_modules symlink, its spec body, the run that executes that spec, and
+#      the SAME launch args tests/e2e/playwright.config.ts hands the lane — and
+#      the lane config must still carry them, so the two cannot drift apart
+#      silently. A preflight without --no-sandbox asks a DIFFERENT question than
+#      the lane: on a box with no user namespaces (root, a hardened container)
+#      chromium refuses to start without it, so the preflight would manufacture
+#      an exit 2 for a browser the lane starts fine — the same wrong-question
+#      shape the preflight exists to remove. That cannot be falsified on a box
+#      that HAS user namespaces (measured here: stripping --no-sandbox still
+#      launched), which is exactly why it is asserted textually rather than left
+#      to the host's luck. A block that does not slice out at all fails here too:
+#      an empty slice must never score a silent pass (sourcing nothing exits 0),
+#      which is why the assertion is on the CONTENT and not on the exit code.
+#
+#   2. THE LAUNCH ITSELF, when leg E found a READY install on this box: the
+#      slice is RUN verbatim, with the caller's environment — the same
+#      resolution the lane gets. ~0.8s per guard, measured. Gated on leg E
+#      because against an install the probe already calls stale, every slice
+#      would fail for the reason leg E just named and the cascade would say
+#      nothing new; it SKIPS (counted, never a pass) instead. The pre-merge
+#      images carry no node_modules, so there the completeness half still runs
+#      and only the launches skip.
+# The lane config is REPO code, not part of an install, so it is read from the
+# repo even when E2E_REAL_DIR points leg G's RUN at another installed tree.
+LANE_CFG="${REPO}/tests/e2e/playwright.config.ts"
+if [ ! -f "${LANE_CFG}" ]; then
+  _bad "G ${LANE_CFG} is missing — the lane's launch flags, which every preflight must mirror, cannot be read"
+else
+  lane_flags=1
+  for flag in --no-sandbox --disable-dev-shm-usage; do
+    grep -q -- "'${flag}'" "${LANE_CFG}" || lane_flags=0
+  done
+  if [ "${lane_flags}" = "1" ]; then
+    _ok "G the lane config still launches chromium with --no-sandbox and --disable-dev-shm-usage — the flags every preflight below must mirror"
+  else
+    _bad "G ${LANE_CFG} no longer carries both --no-sandbox and --disable-dev-shm-usage in its launchOptions.args. Either the lane changed deliberately (then change every preflight and this leg with it) or a flag was lost — the preflights would be asking a different question than the lane."
+  fi
+  for g in ${GUARDS_WITH_BROWSER}; do
+    src="${REPO}/tests/scripts/${g}.sh"
+    if [ ! -f "${src}" ]; then _bad "G ${g}.sh is missing"; continue; fi
+    slice="${TMP}/preflight-${g}.sh"
+    sed -n '/^PWPRE="\$(mktemp -d /,/^rm -rf "\${PWPRE}"$/p' "${src}" > "${slice}"
+    miss=""
+    grep -q 'ln -sfn "\${E2E}/node_modules"' "${slice}"  || miss="${miss} node_modules-symlink"
+    grep -q "await page\.goto('about:blank')" "${slice}" || miss="${miss} spec-body"
+    grep -qi 'playwright test -c' "${slice}"             || miss="${miss} the-run-that-executes-it"
+    grep -q -- "'--no-sandbox'" "${slice}"               || miss="${miss} --no-sandbox"
+    grep -q -- "'--disable-dev-shm-usage'" "${slice}"    || miss="${miss} --disable-dev-shm-usage"
+    if [ -n "${miss}" ]; then
+      _bad "G ${g}: its preflight block is incomplete or did not slice out (missing:${miss}; $(wc -l < "${slice}" | tr -d ' ') lines sliced between 'PWPRE=\$(mktemp -d' and 'rm -rf \"\${PWPRE}\"'). Nothing was launched for this guard."
+      continue
+    fi
+    _ok "G ${g}: its preflight block slices out whole — node_modules symlink, spec body, the run that executes it, and the lane's own launch flags"
+    if [ "${REAL_PROBE_RC}" != "0" ]; then
+      _skip "G ${g}: leg E has no READY install on this box (${REAL_PROBE_RC}) — the block was checked for completeness but NOT run"
+      continue
+    fi
+    out="$(cd "${TMP}" && E2E="${REAL_DIR}" bash -c 'set -euo pipefail; . "$1"' _ "${slice}" 2>&1)"; rc=$?
+    if [ "${rc}" -eq 0 ]; then
+      _ok "G ${g}: and run verbatim against ${REAL_DIR} it launches one real page"
+    else
+      _bad "G ${g}: its OWN preflight block cannot launch on this checkout (rc=${rc}) — the guard would exit 2 SKIPPED-LOUDLY and its lane would never run. Leg E says the toolchain is READY, so this is the preflight's own defect, not a stale install:"$'\n'"$(printf '%s\n' "${out}" | head -n 12 | sed 's/^/         /')"
+    fi
+  done
 fi
 
 echo
