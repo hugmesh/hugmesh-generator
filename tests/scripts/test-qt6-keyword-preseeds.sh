@@ -19,7 +19,17 @@
 #   * the builder losing the gate definition or its call site,
 #   * the gate's LOGIC regressing — the executed leg extracts the function from
 #     the heredoc and proves: keyword/mask wall => exit 1, USE-only => continue,
-#     no keep-file => continue.
+#     no keep-file => continue,
+#   * and the gate's DISCRIMINATOR widening back onto portage's informational
+#     text. Every token in the wall grep is pinned by its OWN fixture, and two
+#     negative fixtures pin the other side: portage prints "- cpv (masked by:
+#     ...)" for the real wall AND for the routine "installed packages are
+#     masked" / "updates are masked by LICENSE changes" blocks, which
+#     display_problems() emits from the SAME dump as the USE-changes block. So
+#     "masked by:" was never a wall token, and keying on it turned every
+#     USE-only failure on a sysroot with a masked installed package (this repo
+#     masks >=sys-devel/gettext-0.23 into every role) into a hard exit 1 — the
+#     exact case the USE-only assertion below claims to protect.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -149,6 +159,47 @@ else
     bad "banner did not surface the resolver's needed-change lines"
 fi
 
+# 6a-2 / 6a-3. The other two wall tokens, pinned SEPARATELY (one fixture each —
+#       a single fixture carrying both would let either one be deleted silently).
+#       These are portage's autounmask PROPOSAL headers, emitted by
+#       _display_autounmask() only when the resolver was allowed to consider the
+#       change; the payload's own vector passes --autounmask-keep-keywords=y
+#       --autounmask-keep-masks=y, so it never sees them today and they are
+#       defensive: if that option vector is ever relaxed they become the wall
+#       text, and the merge still cannot apply them.
+cat > "${TMP}/kept.log" <<'FIXTURE'
+Calculating dependencies  ... done!
+
+The following keyword changes are necessary to proceed:
+ (see "package.accept_keywords" in the portage(5) man page for more details)
+# required by sys-libs/kpmcore-26.08.0::gentoo
+>=dev-qt/qtbase-6.11.2 ~amd64
+FIXTURE
+out="$(bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" 2>&1)"
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep 'KEYWORD/MASK wall' >/dev/null; then
+    ok "'keyword changes are necessary' => exit 1"
+else
+    bad "'keyword changes are necessary' no longer fails fast (rc=${rc})"
+fi
+
+cat > "${TMP}/kept.log" <<'FIXTURE'
+Calculating dependencies  ... done!
+
+The following mask changes are necessary to proceed:
+ (see "package.unmask" in the portage(5) man page for more details)
+# required by sys-libs/kpmcore-26.08.0::gentoo
+# /usr/portage/profiles/package.mask:
+=sys-kernel/gentoo-sources-6.12.31
+FIXTURE
+out="$(bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" 2>&1)"
+rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep 'KEYWORD/MASK wall' >/dev/null; then
+    ok "'mask changes are necessary' => exit 1"
+else
+    bad "'mask changes are necessary' no longer fails fast (rc=${rc})"
+fi
+
 # 6b. USE-only failure => continue (autounmask-continue applies USE mid-merge).
 cat > "${TMP}/kept.log" <<'FIXTURE'
 The following USE changes are necessary to proceed:
@@ -159,6 +210,64 @@ if bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate
     ok "USE-only failure => gate continues (merge can still self-heal)"
 else
     bad "USE-only failure wrongly failed fast — regressions of the old green path"
+fi
+
+# 6b-2. REAL portage shape: a USE-ONLY failure that ALSO carries portage's
+#       routine informational "installed packages are masked" block. Both are
+#       printed by the SAME depgraph.display_problems() call (the USE block via
+#       _display_autounmask, the mask block from _masked_installed), so they land
+#       in ONE --pretend dump whenever the sysroot holds any masked installed
+#       package. That is routine here, not exotic: this repo ships its own
+#       package.mask for >=sys-devel/gettext-0.23 into every role, and the
+#       pre-image gettext downgrade is a TOLERATED failure ("|| echo WARN"), so
+#       the image plan pass can legitimately see a package-masked installed
+#       gettext-0.23.2. The gate must still CONTINUE — the real merge runs
+#       --autounmask-continue=y and applies the USE change.
+#       This is the invariant 6b claims to protect; 6b's bare-USE fixture cannot
+#       see it, because the regression is triggered by the mask text 6b omits.
+cat > "${TMP}/kept.log" <<'FIXTURE'
+Calculating dependencies  ... done!
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by kde-misc/kdeconnect-26.04.3-r3::gentoo
+# required by @selected
+>=net-dns/avahi-0.9 mdnsresponder-compat
+
+!!! The following installed packages are masked:
+- sys-devel/gettext-0.23.2::gentoo (masked by: package.mask)
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+FIXTURE
+out="$(bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" 2>&1)"
+rc=$?
+if [ "${rc}" -eq 0 ]; then
+    ok "USE-only failure + informational installed-masked block => gate continues"
+else
+    bad "informational 'masked by:' block wrongly triggered the wall abort (rc=${rc})"
+fi
+
+# 6b-3. The discriminator must key on the WALL text, not on any 'masked by:'
+#       line: show_masked_packages() renders that same "- cpv (masked by: ...)"
+#       shape for the real wall AND for both informational blocks
+#       (_masked_installed, _masked_license_updates). A dump carrying ONLY the
+#       informational block is not a wall and must not abort the build.
+cat > "${TMP}/kept.log" <<'FIXTURE'
+Calculating dependencies  ... done!
+
+!!! The following updates are masked by LICENSE changes:
+- sys-kernel/linux-firmware-20260826::gentoo (masked by: linux-fw-redistributable license(s))
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+FIXTURE
+out="$(bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" 2>&1)"
+rc=$?
+if [ "${rc}" -eq 0 ]; then
+    ok "informational-only 'masked by:' dump => gate continues (no wall text)"
+else
+    bad "a 'masked by:'-only dump was misread as a KEYWORD/MASK wall (rc=${rc})"
 fi
 
 # 6c. no keep-file (plan resolved / opt-out / timeout) => no-op.
