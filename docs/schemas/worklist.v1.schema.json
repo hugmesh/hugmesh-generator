@@ -63,14 +63,21 @@
         },
         "desktop_user": {
           "type": "string",
-          "description": "The PERSON on a desktop-class entry. materialize() stamps desktop_user_role as --person-role on this entry's own image and derives a manifest User on the internal Tailscale root domain. Node entries always leave this blank.",
+          "description": "The PERSON on a desktop-class entry. materialize() stamps desktop_user_role as --person-role on this entry's own image and derives a manifest User (carrying desktop_user_roles) on the internal Tailscale root domain. Node entries always leave this blank.",
           "default": ""
         },
         "desktop_user_role": {
           "type": "string",
-          "description": "That person's role (config.py PERSON_ROLE_CHOICES). Meaningful only alongside a non-blank desktop_user.",
+          "description": "That person's TIER (config.py PERSON_ROLE_CHOICES) — the one value --person-role takes. Meaningful only alongside a non-blank desktop_user. Multi-role (issue #228): the highest tier in desktop_user_roles; a reader that knows only this key loses nothing it read before.",
           "enum": ["user", "mod", "admin", "superadmin"],
           "default": "user"
+        },
+        "desktop_user_roles": {
+          "type": "array",
+          "description": "ALL the roles the person's account holds (issue #228): the tier plus any grants, in config.py USER_ROLE_CHOICES precedence order (grants are games / games-services). OMITTED when the account holds exactly its tier, so absent == [desktop_user_role] and a one-tier entry keeps its pre-#228 bytes; when present it always contains the tier, hence at least two items. desktop_users() hands the whole set to the derived manifest User's `roles`; the image itself takes only the tier.",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
         },
         "hostname": {
           "type": "string",

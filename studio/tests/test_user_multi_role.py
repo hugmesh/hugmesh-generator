@@ -151,11 +151,38 @@ def test_worklist_envelope_round_trips_multi_role_users(tmp_path):
     wl.save(str(p))
     _base, back = load_any(str(p))
     assert back.base.users[0].roles == ["superadmin", "games"]
-    # the desktop popup's single tier still becomes a (one-role) manifest User
+    # a desktop person named with a tier alone is still a (one-role) manifest User
     by_id = {e.id: cfg for e, cfg in back.materialize()}
     alice = [u for u in by_id["laptop.x86"].users if u.username == "alice"][0]
     assert alice.roles == ["mod"] and alice.role == "mod"
     assert by_id["laptop.x86"].person_role == "mod"
+
+
+def test_cli_worklist_envelope_expresses_a_multi_role_desktop_person(tmp_path, capsys):
+    """The CLI face of the desktop-person leg: a worklist envelope's
+    ``desktop_user_roles`` (the who-uses-it dialog's tier + grants) reaches
+    --print-specs as the manifest User's full set and --print-commands as the
+    tier alone. FAILS on the single-role entry (unknown field)."""
+    c = _cfg(tmp_path)
+    wl = WorklistConfig(base=c, entries=[
+        WorklistEntry(role="laptop", platform="x86", desktop_user="alice",
+                      desktop_user_roles=["games", "admin"])])
+    p = tmp_path / "wl.json"
+    wl.save(str(p))
+    with open(p, encoding="utf-8") as fh:
+        entry = json.load(fh)["entries"][0]
+    assert entry["desktop_user_role"] == "admin"
+    assert entry["desktop_user_roles"] == ["admin", "games"]
+    assert app.main(["--config", str(p), "--print-specs"]) == 0
+    spec = json.loads(capsys.readouterr().out.strip().splitlines()[0])
+    alice = [u for u in spec["users"] if u["username"] == "alice"][0]
+    assert alice["role"] == "admin" and alice["roles"] == ["admin", "games"]
+    assert alice["domain"] == c.effective_superdomain()
+    assert spec["person_role"] == "admin"
+    assert app.main(["--config", str(p), "--print-commands"]) == 0
+    cmd = capsys.readouterr().out
+    assert "--person-role admin" in cmd
+    assert "--person-role games" not in cmd
 
 
 # ── the sharpest single-role assumption: --person-role from users[0] ────────────────
