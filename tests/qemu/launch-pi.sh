@@ -207,8 +207,13 @@ autodetect_img() {
     # image invisible to the launcher. `-rpi5-` stays a LITERAL, so the anchor —
     # and the glob ORDER that tests/scripts/test-role-key-spelling.sh asserts —
     # is exactly as strong as before.
+    #
+    # hugmesh_role_shadow_filter: `-${r}-` is a PREFIX match, so `-backend-` also
+    # matches …-backend-gpu-… and `-be-` matches …-be-gpu-…. rpi5 builds no GPU
+    # role, but the LAST-RESORT loop below is unanchored by design and reaches a
+    # foreign board's images, so both role-scoped loops are filtered.
     for r in $(hugmesh_role_aliases_of "${role}"); do
-        c="$(ls -1t "${d}"/*-rpi5-*-"${r}"-*.img 2>/dev/null | head -1 || true)"
+        c="$(ls -1t "${d}"/*-rpi5-*-"${r}"-*.img 2>/dev/null | hugmesh_role_shadow_filter "${role}" | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done
     for c in "${d}"/*-rpi5-*.img ; do
@@ -218,7 +223,7 @@ autodetect_img() {
     # LAST RESORT, and it must stay last (the pre-rename order had it here too): an
     # unanchored role match can cross platforms.
     for r in $(hugmesh_role_aliases_of "${role}"); do
-        c="$(ls -1t "${d}"/*-"${r}"-*.img 2>/dev/null | head -1 || true)"
+        c="$(ls -1t "${d}"/*-"${r}"-*.img 2>/dev/null | hugmesh_role_shadow_filter "${role}" | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done
     # Last resort: any *.img that is not a kernel/initramfs blob.
