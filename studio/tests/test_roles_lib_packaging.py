@@ -228,3 +228,72 @@ def test_the_installed_package_serves_the_qt_free_smoke_path(tmp_path):
         cwd=str(tmp_path), env=_env(tmp_path), capture_output=True, text=True)
     assert res.returncode == 0, f"--print-specs died in an installed bundle:\n{res.stderr}"
     assert res.stdout.strip(), "no output from --print-specs"
+
+
+# ── the table itself, in BOTH directions ────────────────────────────────────────
+# Added on review of the fix above. pyproject.toml claimed this file caught a
+# package-data entry with no file, or a file with no entry — and measured, it did
+# not: the entry `_roles-lib.sh` is asserted by name, but dropping
+# `progress-tables.json` from the table (its loader reads it at MODULE IMPORT time
+# too) left all eleven assertions green, and so did adding an entry naming a file
+# that does not exist. Neither shape is caught by importing four modules that happen
+# not to reach progress_parse. These two close it for the WHOLE table rather than
+# for one favoured row, so the claim in pyproject.toml is now true.
+def _shipped_non_python_files() -> list[str]:
+    """Every tracked non-``.py`` file under the package, ``hugmesh_studio/``-relative.
+
+    ``git ls-files`` when there is a checkout — it cannot see a scratch file someone
+    left in a package directory — and a filesystem walk otherwise. Never a skip: an
+    absent enumeration would delete both assertions below in silence.
+    """
+    try:
+        res = subprocess.run(["git", "-C", GENERATOR_DIR, "ls-files", "--", "studio/hugmesh_studio"],
+                             capture_output=True, text=True, timeout=30)
+        if res.returncode == 0 and res.stdout.strip():
+            return sorted(line[len("studio/hugmesh_studio/"):]
+                          for line in res.stdout.split("\n")
+                          if line.strip() and not line.endswith(".py"))
+    except (OSError, subprocess.SubprocessError):        # pragma: no cover - no git
+        pass
+    root = os.path.join(STUDIO_ROOT, "hugmesh_studio")
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+        for name in filenames:
+            if not name.endswith(".py"):
+                out.append(os.path.relpath(os.path.join(dirpath, name), root))
+    return sorted(out)
+
+
+def _declared_globs() -> list[tuple[str, str]]:
+    """``[(package-relative dir, glob), ...]`` for every row of the table."""
+    return [(package.split(".", 1)[1].replace(".", os.sep) if "." in package else "", glob)
+            for package, globs in _package_data().items() for glob in globs]
+
+
+def test_every_declared_package_data_entry_names_a_file_that_exists():
+    """A row naming nothing ships nothing, silently — setuptools does not object to a
+    glob that matches no file, which is the same silence that shipped a Flatpak with
+    no role vocabulary in it."""
+    import fnmatch
+
+    have = _shipped_non_python_files()
+    for pkg_dir, glob in _declared_globs():
+        want = os.path.join(pkg_dir, glob) if pkg_dir else glob
+        assert any(fnmatch.fnmatch(f, want) for f in have), (
+            f"[tool.setuptools.package-data] declares {want!r}, which matches no file "
+            f"in the package (have: {have}) — that row ships nothing")
+
+
+def test_every_non_python_file_in_the_package_is_declared():
+    """The reverse, and the actual bug: core/_roles-lib.sh could sit in the tree,
+    pass review, and still be absent from every wheel. A file the package carries
+    that the table does not name is not shipped."""
+    import fnmatch
+
+    declared = [os.path.join(d, g) if d else g for d, g in _declared_globs()]
+    for path in _shipped_non_python_files():
+        assert any(fnmatch.fnmatch(path, d) for d in declared), (
+            f"hugmesh_studio/{path} is in the package but no "
+            f"[tool.setuptools.package-data] row matches it (rows: {declared}) — it "
+            f"would not be installed. Either declare it or delete it.")
