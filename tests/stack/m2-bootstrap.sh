@@ -221,6 +221,24 @@ build_one() { # repo -> mvn install from ${SRC_DIR}/<repo> into the cached m2
   # the org registry would serve — re-running a dependency's quality gates here is wrong
   # (and auth-core 2.4.0 has 8 latent spotbugs findings that would fail the cold-build).
   #
+  # `clean` is NOT decoration. This builds in the PERSISTENT per-repo directory
+  # ${M2_CACHE}/src/<repo>, and since 2026-09-06 hugmesh-auth-core is pinned TWICE
+  # (2.4.2 and 2.5.0, because admin-bff main and user-bff main are on different
+  # releases). A cold run therefore re-detaches that one directory to the second
+  # SHA and rebuilds it IN PLACE. Without `clean`, a class DELETED or RENAMED
+  # between the two pinned SHAs survives in target/classes from the first build
+  # and is packaged into the SECOND jar — a stale-class artifact that nothing
+  # downstream can see, because the jar exists, has the right coordinate, and
+  # `have_artifact` only checks that it is there. (Measured on today's two SHAs,
+  # 401ca9e..1578565d is 6 added + 6 modified files with zero deletes/renames, so
+  # the hazard is inert RIGHT NOW — inert by accident of that delta, not by
+  # construction, which is exactly the kind of safety that stops being true
+  # without anyone noticing.) The cost is nil in the common path: have_artifact
+  # skips build_one entirely whenever the artifact is already cached, so this
+  # only ever runs on a build that was going to be cold anyway.
+  # tests/stack/test-m2-bootstrap.sh control (xiii) demands `clean` for as long as
+  # any repo carries more than one pin.
+  #
   # KEEP THIS COMMENT BLOCK ABOVE THE COMMAND. It used to sit BETWEEN the image
   # argument and `mvn`, inside the backslash continuation — which silently broke
   # cold bring-up entirely. A `\` continuation joins the next line, and that line
@@ -242,7 +260,7 @@ build_one() { # repo -> mvn install from ${SRC_DIR}/<repo> into the cached m2
     -v "${M2_CACHE}/m2:/usr/share/maven/ref" \
     -v "${dir}:/work" -w /work \
     "${MAVEN_IMAGE}" \
-    mvn -B -ntp -s /usr/share/maven/ref/settings-docker.xml install -DskipTests \
+    mvn -B -ntp -s /usr/share/maven/ref/settings-docker.xml clean install -DskipTests \
         -Dhugmesh.analysis.skip=true
 }
 
