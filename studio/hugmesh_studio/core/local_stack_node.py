@@ -340,12 +340,14 @@ class LocalStackNode:
     # ---- cold-build preflight ----------------------------------------------------
     # Each probe is a tiny method so tests can mock it both ways; every docker call
     # runs in self._build_env() — the SAME env `make stack-up` will use — and NOTHING
-    # here fabricates readiness: a probe that cannot run reports a problem.
+    # here fabricates readiness: a probe that cannot run reports a problem. The env
+    # is built with write_overlays=False: identical dict, no write into the
+    # generator checkout (the monitor probes on a 10s timer).
 
     def _probe(self, cmd: list[str], timeout: int = 15) -> tuple[int, str]:
         try:
-            r = subprocess.run(cmd, env=self._build_env(), capture_output=True,
-                               text=True, timeout=timeout)
+            r = subprocess.run(cmd, env=self._build_env(write_overlays=False),
+                               capture_output=True, text=True, timeout=timeout)
             return r.returncode, (r.stdout or r.stderr).strip()
         except (OSError, subprocess.SubprocessError) as e:
             return 1, str(e)
@@ -505,7 +507,7 @@ class LocalStackNode:
             return [f"docker daemon not reachable: {why or 'docker info failed'} — "
                     f"start docker, then retry."]
         problems: list[str] = []
-        env = self._build_env()
+        env = self._build_env(write_overlays=False)   # a preflight READS
         if env.get("DOCKER_BUILDKIT") == "0":
             problems.append("DOCKER_BUILDKIT=0 is set in this environment — the stack "
                             "Dockerfiles need BuildKit (secret mounts); unset it.")
@@ -542,11 +544,24 @@ class LocalStackNode:
             return f"https://id.{self.domain or 'hugmesh.net'}"
         return "http://localhost:8000"
 
-    def _build_env(self, extra_env: dict[str, str] | None = None) -> dict[str, str]:
+    def _build_env(self, extra_env: dict[str, str] | None = None, *,
+                   write_overlays: bool = True) -> dict[str, str]:
         """The EXACT env every `make stack-*` subprocess runs with. The preflight
         checks run against this same dict — a BuildKit/buildx probe in any other
         env (sudo, systemd, a different HOME) would fabricate readiness, because
-        the buildx CLI plugin is per-user (~/.docker/cli-plugins)."""
+        the buildx CLI plugin is per-user (~/.docker/cli-plugins).
+
+        ``write_overlays=False`` returns the SAME dict without the three
+        generated-overlay writes below (.theme.css, .compose.limits.yaml, the
+        own-domains overlay). None of them feeds the dict — the Makefile picks the
+        files up by `$(wildcard)` at bring-up time — so the env is byte-identical
+        either way; only the side effect on the generator checkout is dropped.
+
+        READ paths must pass it. Before this flag, every ``_probe()`` rewrote the
+        limits overlay: with the mesh monitor open that is a write to the
+        operator's checkout every 10s, and it writes the FORM's current limits
+        under a mesh that may have been started with others. A surface that only
+        reads must not edit the tree it is reading."""
         env = os.environ.copy()
         # User-local CLIs first (out/tools/bin — the DevOps lane's kind/kubectl
         # when the operator installed them from the Studio). PREPENDED so a lane
@@ -639,8 +654,9 @@ class LocalStackNode:
             try:
                 theme_file = os.path.join(
                     self.generator_dir, "tests", "stack", ".theme.css")
-                with open(theme_file, "w", encoding="utf-8") as fh:
-                    fh.write(self.login_theme_css)
+                if write_overlays:
+                    with open(theme_file, "w", encoding="utf-8") as fh:
+                        fh.write(self.login_theme_css)
             except OSError:
                 pass
         # RESOURCE LIMITS (CPU / memory). Delivered as a generated compose overlay
@@ -655,10 +671,11 @@ class LocalStackNode:
         # Best-effort: an unwritable overlay must never block a bring-up. The stack
         # then runs unbounded, which is exactly what it did before this feature.
         try:
-            limits = resource_limits.effective()
-            services = stack_limits.compose_services(
-                os.path.join(self.generator_dir, _COMPOSE_FILE))
-            stack_limits.write_overlay(self.generator_dir, limits, services)
+            if write_overlays:
+                limits = resource_limits.effective()
+                services = stack_limits.compose_services(
+                    os.path.join(self.generator_dir, _COMPOSE_FILE))
+                stack_limits.write_overlay(self.generator_dir, limits, services)
         except OSError:
             pass
 
@@ -692,10 +709,11 @@ class LocalStackNode:
             env.update(own_casdoor.tenancy_env(
                 self.own_idp_domains, self._central_issuer()))
             try:
-                path = own_casdoor.overlay_path(self.generator_dir)
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                with open(path, "w", encoding="utf-8") as fh:
-                    fh.write(own_casdoor.compose_overlay(self.own_idp_domains))
+                if write_overlays:
+                    path = own_casdoor.overlay_path(self.generator_dir)
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path, "w", encoding="utf-8") as fh:
+                        fh.write(own_casdoor.compose_overlay(self.own_idp_domains))
             except OSError:
                 pass
         # FEDERATION services: the enable/disable slug pair `make stack-seed` needs to

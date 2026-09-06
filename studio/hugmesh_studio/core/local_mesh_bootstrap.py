@@ -1134,10 +1134,36 @@ class LocalMeshBootstrap:
             _note("[creds] put the saved credential file(s) back in place: "
                   + ", ".join(restored) + " (0600; values never logged)")
 
+    def _live_plan(self, rec, _note):
+        """Re-decide the saved-mesh plan on the WORKER, from what is on the machine
+        NOW — never from the row's probe-time answer, which is as old as the last
+        page entry or ``_mesh_up`` flip (hours, easily). Two facts a stale plan
+        hides: a mesh brought up from a terminal since the row was read (a start
+        over it stacks a second project on the same compose name; a restore
+        re-seeds the LIVE mesh's passwords), and volumes cleaned since (a warm
+        start would create EMPTY volumes and no seed runs, while the log says
+        "reattaching"). Same gatherer, same pure decision as the row
+        (:func:`.saved_meshes.probe_state` / :func:`.saved_meshes.restore_plan`),
+        so the two can never disagree about what a case IS. None = nothing could
+        be established, and the caller refuses: a claim about the operator's data
+        that nothing established is the page's own rule."""
+        from . import saved_meshes
+        try:
+            facts = saved_meshes.probe_state(rec)
+            return saved_meshes.restore_plan(rec, **facts)
+        except Exception as exc:                      # noqa: BLE001 — refuse, never raise
+            _note("[saved-mesh] refused — what is on this machine could not be "
+                  f"established ({type(exc).__name__}: {exc}); nothing was started.")
+            return None
+
     def start_saved(self, rec, on_line=None, cancel=None) -> tuple[bool, list[str]]:
         """The WARM restore (saved-mesh case 1: volumes + images present, after
         'Stop mesh'): ``stack.start()`` ONLY — no credentials are minted and no
         seed runs, so identity, rooms and posts come back exactly as they were.
+
+        Re-checked HERE, on the worker, that it still IS case 1 (:meth:`_live_plan`):
+        the row's Start was decided when the row was probed, not when it was
+        pressed.
 
         The one guard: if the on-disk ``.e2e-credentials`` no longer matches the
         record AND the record kept a copy, the copy is put back first — without
@@ -1150,9 +1176,22 @@ class LocalMeshBootstrap:
             log.append(line)
             if on_line is not None:
                 on_line(line)
+        from . import saved_meshes
         ok, why = self.guard_host_local()
         if not ok:
             _note(why)
+            return False, log
+        plan = self._live_plan(rec, _note)
+        if plan is None:
+            return False, log
+        if plan.mode == saved_meshes.MODE_RESEED:
+            _note("[saved-mesh] refused — the record's data volumes are not all here "
+                  f"any more ({plan.volumes_text}): a warm start would create EMPTY "
+                  "volumes and no seed runs. Use 'Restore (reseed)' for this record. "
+                  "Nothing was started.")
+            return False, log
+        if plan.mode != saved_meshes.MODE_START:
+            _note(f"[saved-mesh] refused — {plan.sentence} Nothing was started.")
             return False, log
         if rec.has_credential_copies():
             self._put_saved_credentials_back(rec, _note)
@@ -1195,6 +1234,16 @@ class LocalMeshBootstrap:
                   + ", ".join(os.path.basename(p) for p in missing)
                   + ". Restoring anyway would seed different passwords than the "
                     "record promises; delete the record or put the files back.")
+            return False, log
+        # A mesh that came up since the row was probed: a restore over it would
+        # run `make stack-seed` with THIS record's credentials against the live
+        # mesh's identities — every one of its users re-passworded. The page's
+        # gate is probe-time; this one is now.
+        plan = self._live_plan(rec, _note)
+        if plan is None:
+            return False, log
+        if plan.mode == saved_meshes.MODE_BLOCKED:
+            _note(f"[restore] refused — {plan.sentence} Nothing was started or seeded.")
             return False, log
         if not self._prepare(_note, on_line=on_line, cancel=cancel):
             return False, log

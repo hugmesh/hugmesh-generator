@@ -55,7 +55,7 @@ class _Stack:
         self._creds = str(tmp_path / ".e2e-credentials")
         self.env_threads: list[int] = []
 
-    def _build_env(self, extra_env=None):
+    def _build_env(self, extra_env=None, *, write_overlays=True):
         self.env_threads.append(threading.get_ident())
         return {"E2E_CREDENTIALS_FILE": self._creds}
 

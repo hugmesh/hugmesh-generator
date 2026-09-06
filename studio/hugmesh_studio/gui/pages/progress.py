@@ -74,7 +74,7 @@ from ...core.emerge_packages import (
 from ...core.progress_parse import ProgressParser, platform_phases, strip_ansi
 from ...core.stage_tracker import StageTracker
 from ...core.worklist_driver import WorklistDriver
-from ._widgets import label_finish_as_exit
+from ._widgets import hold_thread, label_finish_as_exit
 
 # Residual control bytes AFTER strip_ansi() — a bare ESC that formed no complete
 # SGR/CSI sequence, plus BEL/BS/CR/VT/FF (the x86 emerge stream carries CR from its
@@ -1211,7 +1211,7 @@ class ProgressPage(QtWidgets.QWizardPage):
 
     def _start_worker(self) -> None:
         assert self.driver is not None
-        self.worker = _WorklistWorker(self.driver)
+        self.worker = hold_thread(_WorklistWorker(self.driver))
         self.worker.entry_start.connect(self._on_entry_start)
         self.worker.line.connect(self._on_line)
         self.worker.entry_done.connect(self._on_entry_done)
@@ -2561,8 +2561,9 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.flash_btn.setEnabled(False)
         self.flash_refresh_btn.setEnabled(False)
         self.log.appendPlainText(f"\n=== flashing {target.path} via scripts/flash-disk.sh ===")
-        self.flash_worker = _FlashWorker(argv or self._flash_argv_for(target),
-                                         self.wiz.generator_dir)
+        self.flash_worker = hold_thread(
+            _FlashWorker(argv or self._flash_argv_for(target),
+                         self.wiz.generator_dir))
         self.flash_worker.line.connect(lambda s: self.log.appendPlainText(s))
         self.flash_worker.done.connect(self._flash_done)
         self.flash_worker.start()
@@ -2599,9 +2600,9 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.log.appendPlainText(
             "\n=== QEMU emulated-device tests (opted in with the build) ===\n"
             f"$ {qemu_tests.command_string(self.wiz.generator_dir, opts)}")
-        self.qemu_worker = _FlashWorker(
+        self.qemu_worker = hold_thread(_FlashWorker(
             qemu_tests.runner_command(self.wiz.generator_dir, opts),
-            self.wiz.generator_dir)
+            self.wiz.generator_dir))
         self.qemu_worker.line.connect(lambda s: self.log.appendPlainText(s))
         self.qemu_worker.done.connect(self._qemu_tests_done)
         self.qemu_worker.start()

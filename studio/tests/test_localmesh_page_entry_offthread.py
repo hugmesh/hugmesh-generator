@@ -127,8 +127,12 @@ def page(qapp, monkeypatch):
 
 # Every probe QThread the page can own. A lane that adds a probe MUST add its
 # attribute here: omitting one leaves a live QThread outliving its page, which
-# aborts Qt at teardown.
-_PROBE_ATTRS = ("_probe", "_node_probe", "_e2e_probe", "_creds_probe", "_saved_probe", "_monitor_probe")
+# aborts Qt at teardown. SEVEN, not six — ``_e2e_cat_probe`` (the feature tree's
+# catalogue read, added by a concurrent branch) was missed when the three
+# local-mesh lanes were merged, and it is the only one here a click starts rather
+# than page entry, so nothing here would have caught it.
+_PROBE_ATTRS = ("_probe", "_node_probe", "_e2e_probe", "_e2e_cat_probe",
+                "_creds_probe", "_saved_probe", "_monitor_probe")
 
 
 def _settle(qapp, page, timeout_s=8.0):
