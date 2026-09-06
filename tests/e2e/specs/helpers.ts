@@ -386,10 +386,25 @@ export async function onboard(page: Page, username: string, password = loginPass
   // `home-card-nav-matrix`. Waiting on `nav-matrix` failed onboard() with
   // "element(s) not found" (specs 04/05/17 and their Gherkin mirrors, live
   // 2026-09-04) or, when it caught the bar during the pre-redirect first paint,
-  // handed the next click a detached element (spec 07). UNLOCKED means the enabled <a href> form: the
-  // greyed aria-disabled form shares the testid, so a bare toBeVisible() never
-  // proved the unlock at all.
-  await expectMatrixUnlocked(page);
+  // handed the next click a detached element (spec 07). matrixEntry() resolves
+  // whichever form the route renders, which is the whole of the fix here.
+  //
+  // WHY toBeVisible() AND NOT expectMatrixUnlocked() — deliberate, do not
+  // "strengthen" this line. onboard() is the SHARED sign-in: 23 direct call sites
+  // under specs/ and steps/, PLUS the Gherkin Given "I am signed in as the persona
+  // for this scenario" (steps/common.steps.ts), which 33 hand-written .feature
+  // files use 102 times — wiki, tube, owncast, games, forum and character consoles
+  // among them, none of which touch Matrix. The enabled form is gated on
+  // `capabilities.installed('matrix')` (host-shell menu.component.ts navEntries)
+  // and CapabilitiesService fails CLOSED — an unreachable
+  // /api/federation/capabilities leaves an EMPTY map and installed() returns
+  // false. Asserting the UNLOCKED form here would make "Matrix is installed and
+  // the federation-api answered" a precondition of signing in at all, so a
+  // core-only stack or a federation-api blip would fail a hundred scenarios that
+  // have nothing to do with Matrix. The unlock is asserted where the unlock IS
+  // the claim: expectMatrixUnlocked() in openMatrix(), spec 04's returning-user
+  // test, spec 17, and the Gherkin Then "the shell offers Matrix unlocked".
+  await expect(matrixEntry(page)).toBeVisible();
   return getSession(page, username);
 }
 
@@ -433,8 +448,16 @@ export async function expectMatrixUnlocked(page: Page): Promise<void> {
 }
 
 /** Open Matrix through the shell's OWN navigation — the service card on the
- *  signed-in home, the menubar link everywhere else. */
+ *  signed-in home, the menubar link everywhere else.
+ *
+ *  The unlock is asserted BEFORE the click and not left to the click to discover:
+ *  the LOCKED home-card form is a `<span aria-disabled="true">`, which Playwright
+ *  will happily click (a span has no disabled actionability state), so the click
+ *  would silently no-op and the run would fail several seconds later on the
+ *  unrelated-looking `matrix-view is not visible`. Asserting first reports the
+ *  real cause — the entry is present but greyed — at the nav. */
 export async function openMatrix(page: Page): Promise<void> {
+  await expectMatrixUnlocked(page);
   await matrixEntry(page).click();
 }
 

@@ -12,6 +12,15 @@
 # guess: several suites exit 0 while skipping their most valuable assertions when a
 # tool is absent, and would have looked perfectly gateable from source.
 #
+# MEASURED, 2026-09-06: tests/scripts/test-e2e-shell-nav-entry.sh was executed in
+# python:3.12-slim (the debian job's own image) with the checkout mounted READ-ONLY
+# and --network=none, before being added to that job's list — 3 passed, 0 failed,
+# rc=0, and its nine-mutation negative-control battery 9 caught / 0 survived. It is
+# the one e2e guard that belongs in CI rather than at the Makefile gate with its
+# eight siblings: it is pure static analysis of tests/e2e and needs NO
+# node_modules and NO chromium, so it cannot degrade into the "gates a job that can
+# only ever skip" shape described below.
+#
 # The lists are EXPLICIT, never a glob. A glob quietly changes what is gated when a
 # file is renamed; an explicit list plus the missing-file check below turns that
 # into an error. tests/scripts/test-guard-integrity.sh check 7 counts these names
@@ -442,6 +451,7 @@ jobs:
             tests/scripts/test-cassandra-cluster-wiring.sh
             tests/scripts/test-client-connect-routes.sh
             tests/scripts/test-cluster-manifest-integrity.sh
+            tests/scripts/test-e2e-shell-nav-entry.sh
             tests/scripts/test-eso-provider-refs.sh
             tests/scripts/test-eso-seed-contract.sh
             tests/scripts/test-first-run-lib.sh

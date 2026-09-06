@@ -376,7 +376,20 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # those merged trees printed the same
 #     158 of 180 suites are named by a pull_request-triggered workflow
 # and the ungated set is unchanged at 22 — no conflict either time, re-run anyway.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-158}"
+#
+# RAISED TO 159, 2026-09-06, on the merge of fix/e2e-residue-stack-2-branch with
+# main at 27871641. One suite was ADDED AND GATED in that branch:
+# tests/scripts/test-e2e-shell-nav-entry.sh, the offline drift guard for the host
+# shell's Matrix nav entry. It is the only test-e2e-* suite that is CI-gated rather
+# than sitting in the ungated list below with its eight siblings, and the reason is
+# the same measure-by-execution rule that put them there: those eight need
+# tests/e2e/node_modules and a chromium that no shell-suites image carries, and
+# this one is pure static analysis of tests/e2e — it was RUN in python:3.12-slim,
+# the debian job's own image, with the checkout mounted read-only and
+# --network=none, and printed 3 passed / 0 failed rc=0 with its negative-control
+# battery 9 caught / 0 survived. MEASURED on the merged tree, not computed: this
+# file printed "159 of 181 suites" there, and the ungated SET is unchanged at 22.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-159}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
