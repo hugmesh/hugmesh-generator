@@ -109,13 +109,19 @@ def main(argv=None) -> int:
                          "ONLY it to stdout for `sudo -A` to consume (exit non-zero on "
                          "cancel so sudo aborts elevation — the build never runs "
                          "un-elevated). Source order: $HUGMESH_STUDIO_SUDO_PASSWORD, then "
-                         "$HUGMESH_STUDIO_ASKPASS_COMMAND, then a Qt dialog when a display "
-                         "is reachable, then a terminal prompt. Set as SUDO_ASKPASS for "
-                         "`sudo -A` by core.build_driver.")
+                         "$HUGMESH_STUDIO_ASKPASS_COMMAND, then a terminal prompt when "
+                         "stdin is a TTY. NEVER a dialog: with no source and no TTY it "
+                         "fails fast (exit 1) instead of blocking a headless run on a "
+                         "prompt nobody can answer — the dialog is --askpass-gui's opt-in.")
+    ap.add_argument("--askpass-gui", action="store_true",
+                    help="like --askpass, but ALSO offers the Qt password dialog (after "
+                         "the env sources, before the terminal prompt) when a display is "
+                         "reachable. The explicit dialog opt-in that core.build_driver's "
+                         "generated SUDO_ASKPASS helper passes for a GUI-launched build. "
+                         "Refused outright under $HUGMESH_STUDIO_NO_ELEVATION.")
     ap.add_argument("--askpass-no-gui", action="store_true",
-                    help="like --askpass but NEVER pops the Qt dialog even on a desktop "
-                         "with a live display — for CLI test automation / headless "
-                         "elevation (#221). Uses $HUGMESH_STUDIO_SUDO_PASSWORD, then "
+                    help="kept for #221 scripts: identical to --askpass (which never pops "
+                         "the dialog either). Uses $HUGMESH_STUDIO_SUDO_PASSWORD, then "
                          "$HUGMESH_STUDIO_ASKPASS_COMMAND, then a terminal prompt.")
     ap.add_argument("--config", help="config JSON (with --print-command/--print-commands/--print-specs)")
     ap.add_argument("--backend", choices=["auto", "native", "docker"], default="auto",
@@ -463,15 +469,18 @@ def main(argv=None) -> int:
               + (" (artifacts removed)" if args.delete_artifacts else " (record only)"))
         return 0
 
-    if args.askpass or args.askpass_no_gui:
+    if args.askpass or args.askpass_no_gui or args.askpass_gui:
         # The SUDO_ASKPASS helper: `sudo -A` execs this to obtain the password. Qt-free
         # core (core/askpass.py) acquires it and writes ONLY the password to stdout for
         # sudo to consume; a cancel/no-password returns non-zero so sudo ABORTS elevation
-        # instead of the build running un-elevated (the #222 failure). --askpass-no-gui
-        # forces the non-dialog path for CLI/headless automation (#221). Every prompt and
-        # diagnostic goes to stderr, never the password channel.
+        # instead of the build running un-elevated (the #222 failure). The Qt dialog is
+        # an explicit OPT-IN (--askpass-gui, what the driver's generated helper passes
+        # for a GUI-launched build); --askpass / --askpass-no-gui (#221) never pop it,
+        # and with no credential source and no TTY on stdin they fail fast rather than
+        # wedge a headless run. Every prompt and diagnostic goes to stderr, never the
+        # password channel.
         from .core.askpass import run_askpass
-        return run_askpass(argv, allow_gui=not args.askpass_no_gui)
+        return run_askpass(argv, allow_gui=bool(args.askpass_gui and not args.askpass_no_gui))
 
     # GUI
     from . import __version__, advanced_mode

@@ -7,6 +7,13 @@ else ``pkexec``); a terminal/headless launch (``graphical=False``, the default) 
 plain terminal `sudo` so the printed command stays copy-pasteable and the sudo-prefix
 strippers (test_headless / build-matrix check.sh) keep matching. The kill-tree wrap must
 reuse the SAME prefix (root-owned tree) and keep the negative-pgid session semantics.
+
+NEVER ELEVATE (2026-09-04): under pytest, or with HUGMESH_STUDIO_NO_ELEVATION set, the
+driver must REFUSE to spawn any of those prefixes — ElevationRefused, raised before
+subprocess is touched — instead of launching a `sudo -A` that wedges on a password
+prompt nobody can answer. The tests here that DO want to see a sudo argv fake the
+process layer and say so with HUGMESH_STUDIO_ALLOW_ELEVATION_UNDER_TEST=1
+(_allow_under_test); tests/conftest.py's spy on the real Popen backs that opt-out.
 """
 import os
 import subprocess
@@ -33,6 +40,12 @@ def _force_sudo_a(monkeypatch, askpass="/run/studio-askpass.sh"):
     """sudo present + askpass helper available -> the sudo -A primary path."""
     monkeypatch.setattr(bd.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(bd, "_askpass_helper_path", lambda: askpass)
+
+
+def _allow_under_test(monkeypatch):
+    """This test's SUBJECT is the sudo/pkexec argv or its env plumbing: it fakes
+    subprocess and needs the driver to reach the fake. Declared, never implicit."""
+    monkeypatch.setenv(bd.ALLOW_ELEVATION_UNDER_TEST_ENV, "1")
 
 
 def _force_pkexec(monkeypatch):
@@ -111,6 +124,7 @@ def _capture_run(monkeypatch):
 
 def test_kill_tree_reuses_graphical_prefix_and_negative_pgid(monkeypatch, tmp_path):
     _force_sudo_a(monkeypatch, askpass="/run/ap.sh")
+    _allow_under_test(monkeypatch)
     d = BuildDriver(str(tmp_path), host(is_root=False), graphical=True)
     calls = _capture_run(monkeypatch)
     d._backend, d._pgid, d._proc = "native", 4321, _GracefulProc()
@@ -123,6 +137,7 @@ def test_kill_tree_reuses_graphical_prefix_and_negative_pgid(monkeypatch, tmp_pa
 def test_kill_tree_terminal_launch_still_plain_sudo(monkeypatch, tmp_path):
     """Regression guard: a NON-graphical non-root cancel keeps the plain sudo kill (the
     existing test_build_driver_cancel invariant) with no SUDO_ASKPASS env."""
+    _allow_under_test(monkeypatch)
     d = BuildDriver(str(tmp_path), host(is_root=False), graphical=False)
     calls = _capture_run(monkeypatch)
     d._backend, d._pgid, d._proc = "native", 7777, _GracefulProc()
@@ -156,6 +171,7 @@ def _capture_popen(monkeypatch):
 
 def test_spawn_native_graphical_plumbs_askpass_env(monkeypatch, tmp_path):
     _force_sudo_a(monkeypatch, askpass="/run/ap.sh")
+    _allow_under_test(monkeypatch)
     seen = _capture_popen(monkeypatch)
     d = BuildDriver(str(tmp_path), host(is_root=False), graphical=True)
     d.run(_cfg(tmp_path), "native")
@@ -179,8 +195,152 @@ def test_askpass_helper_is_written_executable_and_self_contained(monkeypatch, tm
     p = bd._askpass_helper_path()
     assert p and os.access(p, os.X_OK)
     body = open(p, encoding="utf-8").read()
-    assert "--askpass" in body and "hugmesh_studio" in body
+    assert "--askpass-gui" in body and "hugmesh_studio" in body
     assert body.startswith("#!")
+
+
+def test_generated_helper_opts_into_the_dialog_explicitly(monkeypatch, tmp_path):
+    """The dialog is an OPT-IN the driver makes on the GUI's behalf — the generated
+    helper passes --askpass-gui, never the bare --askpass (which fails fast without a
+    TTY). A helper that dropped the flag would turn every GUI-launched build into a
+    cancelled elevation; one that used --askpass-no-gui would do the same."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(bd, "_ASKPASS_PATH_CACHE", None)
+    body = open(bd._askpass_helper_path(), encoding="utf-8").read()
+    exec_line = [ln for ln in body.splitlines() if ln.startswith("exec ")]
+    assert len(exec_line) == 1 and exec_line[0].endswith("-m hugmesh_studio --askpass-gui")
+
+
+# ── NEVER ELEVATE: the refusal, before subprocess is touched ─────────────────────────
+# The 2026-09-04 wedge at the driver: a GUI-launched native build dispatched under
+# pytest used to Popen `sudo -A bash ./build-x86-host-stage4.sh` for real, with the Qt
+# askpass as SUDO_ASKPASS; under QT_QPA_PLATFORM=offscreen the dialog was invisible and
+# the root-owned sudo waited forever (60 found, some two days old). The driver now
+# raises ElevationRefused instead — a clear error a test can assert — under pytest or
+# HUGMESH_STUDIO_NO_ELEVATION, for every elevation prefix and for the kill-tree too.
+def _popen_must_not_be_reached(monkeypatch):
+    monkeypatch.setattr(bd.subprocess, "Popen", lambda *a, **k: pytest.fail(
+        "subprocess.Popen was reached — the refusal must come first"))
+
+
+def _run_must_not_be_reached(monkeypatch):
+    monkeypatch.setattr(bd.subprocess, "run", lambda *a, **k: pytest.fail(
+        "subprocess.run was reached — the refusal must come first"))
+
+
+def test_under_pytest_a_graphical_native_build_is_refused_before_any_spawn(monkeypatch, tmp_path):
+    _force_sudo_a(monkeypatch, askpass="/run/ap.sh")
+    _popen_must_not_be_reached(monkeypatch)
+    d = BuildDriver(str(tmp_path), host(is_root=False), graphical=True)
+    with pytest.raises(bd.ElevationRefused, match=r"refusing to spawn sudo \(pytest"):
+        d.run(_cfg(tmp_path), "native")
+
+
+def test_under_pytest_a_terminal_launch_is_refused_too(monkeypatch, tmp_path):
+    """Plain `sudo` (graphical=False) blocks on the controlling tty instead — under a
+    test runner that is just as unanswerable."""
+    _popen_must_not_be_reached(monkeypatch)
+    d = BuildDriver(str(tmp_path), host(is_root=False), graphical=False)
+    with pytest.raises(bd.ElevationRefused, match="refusing to spawn sudo"):
+        d.run(_cfg(tmp_path), "native")
+
+
+def test_under_pytest_pkexec_is_refused_too(monkeypatch, tmp_path):
+    _force_pkexec(monkeypatch)
+    _popen_must_not_be_reached(monkeypatch)
+    d = BuildDriver(str(tmp_path), host(is_root=False), graphical=True)
+    with pytest.raises(bd.ElevationRefused, match="refusing to spawn pkexec"):
+        d.run(_cfg(tmp_path), "native")
+
+
+def test_under_pytest_the_kill_tree_is_refused_too(monkeypatch, tmp_path):
+    """cancel() elevates through the same prefix — a `sudo -A kill` would wedge on the
+    same askpass. Refused the same way."""
+    _force_sudo_a(monkeypatch, askpass="/run/ap.sh")
+    _run_must_not_be_reached(monkeypatch)
+    d = BuildDriver(str(tmp_path), host(is_root=False), graphical=True)
+    d._backend, d._pgid, d._proc = "native", 4321, _GracefulProc()
+    with pytest.raises(bd.ElevationRefused, match="refusing to spawn sudo"):
+        d.cancel()
+
+
+def test_refusal_message_never_carries_the_builder_argv_secrets(monkeypatch, tmp_path):
+    """A builder argv can carry --user-password / --root-password. The error names
+    the leading tokens only."""
+    _force_sudo_a(monkeypatch, askpass="/run/ap.sh")
+    _popen_must_not_be_reached(monkeypatch)
+    d = BuildDriver(str(tmp_path), host(is_root=False), graphical=True)
+    with pytest.raises(bd.ElevationRefused) as ei:
+        d.run(_cfg(tmp_path, "x86", "pki"), "native")
+    msg = str(ei.value)
+    assert "sudo -A bash ./build-x86-host-stage4.sh" in msg
+    assert "--role" not in msg and "--with-tailscale" not in msg   # argv is cut short
+
+
+def test_root_native_is_not_refused(monkeypatch, tmp_path):
+    """No elevation program in the argv -> nothing to refuse: the spawn proceeds."""
+    seen = _capture_popen(monkeypatch)
+    d = BuildDriver(str(tmp_path), host(is_root=True), graphical=True)
+    d.run(_cfg(tmp_path), "native")
+    assert seen["cmd"][0] == "bash"
+
+
+def test_docker_is_not_refused(monkeypatch, tmp_path):
+    _force_sudo_a(monkeypatch)
+    seen = _capture_popen(monkeypatch)
+    d = BuildDriver(str(tmp_path), host(is_root=False), graphical=True)
+    d.run(_cfg(tmp_path, "x86", "omnibus"), "docker")
+    assert seen["cmd"][0] == "docker"
+
+
+def test_the_declared_opt_out_reaches_the_fake(monkeypatch, tmp_path):
+    """HUGMESH_STUDIO_ALLOW_ELEVATION_UNDER_TEST=1 is what the argv-asserting tests
+    above rely on; pinned here so a refusal that ignored it is noticed."""
+    _force_sudo_a(monkeypatch, askpass="/run/ap.sh")
+    _allow_under_test(monkeypatch)
+    seen = _capture_popen(monkeypatch)
+    BuildDriver(str(tmp_path), host(is_root=False), graphical=True).run(_cfg(tmp_path), "native")
+    assert seen["cmd"][:2] == ["sudo", "-A"]
+
+
+def test_no_elevation_env_refuses_outside_pytest(monkeypatch, tmp_path):
+    """The production knob: with pytest out of the picture, HUGMESH_STUDIO_NO_ELEVATION
+    alone refuses — headless automation / CI / a box with no admin password."""
+    monkeypatch.setattr(bd.state_paths, "under_pytest", lambda: False)
+    monkeypatch.setenv(bd.NO_ELEVATION_ENV, "1")
+    _force_sudo_a(monkeypatch, askpass="/run/ap.sh")
+    _popen_must_not_be_reached(monkeypatch)
+    d = BuildDriver(str(tmp_path), host(is_root=False), graphical=True)
+    with pytest.raises(bd.ElevationRefused, match=bd.NO_ELEVATION_ENV):
+        d.run(_cfg(tmp_path), "native")
+
+
+def test_no_elevation_env_wins_over_the_test_opt_out(monkeypatch):
+    monkeypatch.setenv(bd.NO_ELEVATION_ENV, "yes")
+    _allow_under_test(monkeypatch)
+    assert bd.NO_ELEVATION_ENV in (bd.elevation_refusal() or "")
+
+
+@pytest.mark.parametrize("off", ["", "0", "off", "false", "no", " No "])
+def test_no_elevation_env_off_values_do_not_refuse(monkeypatch, off):
+    monkeypatch.setattr(bd.state_paths, "under_pytest", lambda: False)
+    monkeypatch.setenv(bd.NO_ELEVATION_ENV, off)
+    assert bd.elevation_refusal() is None
+
+
+def test_outside_pytest_with_nothing_set_elevation_is_allowed(monkeypatch):
+    """PR #239's contract, kept: a real operator run (no pytest, no env knob) elevates
+    exactly as before — the refusal is silent absence, not a new prompt."""
+    monkeypatch.setattr(bd.state_paths, "under_pytest", lambda: False)
+    monkeypatch.delenv(bd.NO_ELEVATION_ENV, raising=False)
+    monkeypatch.delenv(bd.ALLOW_ELEVATION_UNDER_TEST_ENV, raising=False)
+    assert bd.elevation_refusal() is None
+    bd.guard_elevation(["sudo", "-A", "bash", "./build-x86-host-stage4.sh"])   # no raise
+
+
+def test_guard_ignores_commands_that_do_not_elevate():
+    for cmd in (["bash", "./build.sh"], ["docker", "run"], ["env", "X=1", "bash"], []):
+        bd.guard_elevation(cmd)
 
 
 # ── preflight must NOT block a native build the driver can elevate ───────────────────

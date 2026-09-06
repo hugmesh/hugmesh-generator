@@ -24,7 +24,7 @@ import threading
 import uuid
 from collections.abc import Callable, Iterator
 
-from . import askpass, host_resources, proc_text, resource_limits, secret_files
+from . import askpass, host_resources, proc_text, resource_limits, secret_files, state_paths
 from .config import PLATFORM_FIELD_SUPPORT, ImageConfig, scope_violations
 from .platform_info import HostInfo, detect
 
@@ -147,6 +147,82 @@ def docker_memory_args() -> list[str]:
     return ["--memory", v, "--memory-swap", v]
 
 
+# ── elevation refusal ──────────────────────────────────────────────────────────────
+#: argv[0] basenames that mean "become another user". A build spawned through one of
+#: these blocks on a password prompt the process may be unable to answer — the
+#: 2026-09-04 incident: Studio pytest runs (tests/test_pages_fields_asks.py arriving at
+#: the ProgressPage, which dispatches on arrival) launched the REAL
+#: `sudo -A bash ./build-x86-host-stage4.sh` with the Qt askpass as SUDO_ASKPASS; 60
+#: root-owned launchers were found wedged on an OFFSCREEN password dialog, some two
+#: days old, each pinning a 15-58 MB Qt helper. Nothing ever authenticated.
+ELEVATION_PROGRAMS = frozenset({"sudo", "pkexec", "doas", "su", "run0"})
+
+#: Set (anything but 0/off/false/no) to make this process refuse to spawn ANY elevation
+#: program: headless automation, CI, a box with no admin password. The refusal is a
+#: hard error (ElevationRefused), never a silent un-elevated build. Also honoured by the
+#: askpass helper itself (core/askpass.py), which then answers nothing.
+NO_ELEVATION_ENV = askpass.NO_ELEVATION_ENV
+
+#: Deliberate opt-out for the handful of tests whose SUBJECT is the sudo/pkexec argv or
+#: the SUDO_ASKPASS env plumbing: they fake subprocess.Popen/run and need the driver to
+#: reach that fake. Set to "1" in the test body, next to the fake. NO_ELEVATION_ENV
+#: still wins over it, and tests/conftest.py's spy on the REAL subprocess.Popen has no
+#: opt-out at all — a test that sets this and forgets the fake still cannot start sudo.
+ALLOW_ELEVATION_UNDER_TEST_ENV = "HUGMESH_STUDIO_ALLOW_ELEVATION_UNDER_TEST"
+
+
+class ElevationRefused(RuntimeError):
+    """Raised INSTEAD of spawning sudo/pkexec when this process must not elevate."""
+
+
+def elevation_refusal() -> str | None:
+    """Why this process must not spawn an elevation program, or ``None`` when it may.
+
+    Two triggers, in this order:
+
+    * :data:`NO_ELEVATION_ENV` is set — the operator's / the automation's explicit
+      word, which nothing overrides;
+    * pytest is running this process (:func:`state_paths.under_pytest`) — a test that
+      reaches a real ``sudo`` has a missing stub, never a legitimate need. The one
+      exception is :data:`ALLOW_ELEVATION_UNDER_TEST_ENV`, for tests that fake the
+      process layer and assert the argv it would have received.
+
+    Pinned by tests/test_build_driver_elevation.py; the production GUI (no pytest, no
+    env) is untouched: a real operator run with a TTY, a dialog opt-in or a credential
+    source elevates exactly as before.
+    """
+    if askpass.no_elevation():
+        return f"{NO_ELEVATION_ENV} is set"
+    if state_paths.under_pytest() and os.environ.get(ALLOW_ELEVATION_UNDER_TEST_ENV) != "1":
+        return ("pytest is running this process — a test that reaches a real elevation "
+                "program is missing a BuildDriver stub (see tests/test_pages_progress.py "
+                f"FakeBuildDriver); {ALLOW_ELEVATION_UNDER_TEST_ENV}=1 is only for tests "
+                "that fake subprocess and assert the argv")
+    return None
+
+
+def guard_elevation(cmd: list[str]) -> None:
+    """Refuse (:class:`ElevationRefused`) to run ``cmd`` when its program is an
+    elevation program and :func:`elevation_refusal` says this process may not elevate.
+
+    The single choke point for every sudo/pkexec spawn in the driver — the build itself
+    (:meth:`BuildDriver._spawn`, inherited by FleetDriver) and the kill-tree
+    (:meth:`BuildDriver._kill_native_group`) — called immediately before the
+    ``subprocess`` call so nothing can slip between the decision and the spawn.
+    Commands that do not elevate (root, docker, plain bash) pass untouched. The message
+    names only the leading tokens: a builder argv can carry --user-password."""
+    prog = os.path.basename(cmd[0]) if cmd else ""
+    if prog not in ELEVATION_PROGRAMS:
+        return
+    why = elevation_refusal()
+    if why is None:
+        return
+    raise ElevationRefused(
+        f"refusing to spawn {prog} ({why}): this process must not elevate, and an "
+        f"unanswerable password prompt would wedge a root-owned launcher forever "
+        f"(command starts: {shlex.join(cmd[:4])} ...)")
+
+
 def _operator_askpass() -> str | None:
     """An operator-supplied ``SUDO_ASKPASS`` to honour instead of generating our own
     (#221), or ``None``. Only an EXISTING executable that is not our own generated
@@ -164,8 +240,14 @@ def _operator_askpass() -> str | None:
 def _askpass_helper_path() -> str | None:
     """The ``SUDO_ASKPASS`` program for a GUI-launched ``sudo -A`` build: an
     operator-supplied one if present (honoured verbatim — #221), else a tiny
-    executable we generate that runs ``python -m hugmesh_studio --askpass``. Returns
-    its path, or ``None`` if none is available and none can be written.
+    executable we generate that runs ``python -m hugmesh_studio --askpass-gui``.
+    Returns its path, or ``None`` if none is available and none can be written.
+
+    ``--askpass-gui`` is the EXPLICIT dialog opt-in: this helper is only ever generated
+    for a GUI-launched build (``graphical=True``), which is the one caller entitled to
+    a password dialog. The bare ``--askpass`` never pops one — a headless run (no TTY on
+    stdin, no credential source) fails fast there instead of blocking forever on an
+    offscreen dialog, which is how 60 root-owned launchers came to be wedged.
 
     Pointed at by ``SUDO_ASKPASS`` so ``sudo -A`` reads the admin password from the
     helper's stdout instead of prompting into an invisible terminal (the hang this
@@ -184,8 +266,10 @@ def _askpass_helper_path() -> str | None:
         "# Auto-generated by HugMesh Image Studio: a GUI askpass helper so a native\n"
         "# (sudo) build launched from the GUI prompts for the admin password in a dialog\n"
         "# rather than an invisible terminal. Safe to delete; it is recreated on demand.\n"
+        "# --askpass-gui is the explicit dialog opt-in (a GUI-launched build is the one\n"
+        "# caller entitled to it); the bare --askpass never pops a dialog.\n"
         f'export PYTHONPATH="{studio_root}${{PYTHONPATH:+:$PYTHONPATH}}"\n'
-        f"exec {shlex.quote(sys.executable)} -m hugmesh_studio --askpass\n"
+        f"exec {shlex.quote(sys.executable)} -m hugmesh_studio --askpass-gui\n"
     )
     cache_dir = os.path.join(
         os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
@@ -462,6 +546,10 @@ class BuildDriver:
         # Qt password dialog; every other launch inherits the ambient env (None). Only the
         # native path can elevate, so docker/other never carry it.
         spawn_env = self._elevation_env() if backend == "native" else None
+        # LAST thing before the spawn: under pytest / HUGMESH_STUDIO_NO_ELEVATION a
+        # sudo/pkexec launch is refused outright (ElevationRefused) rather than left to
+        # wedge on a prompt nobody can answer. See guard_elevation.
+        guard_elevation(cmd)
         self._proc = subprocess.Popen(
             cmd, cwd=self.generator_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1, start_new_session=(backend == "native"), env=spawn_env,
@@ -626,6 +714,7 @@ class BuildDriver:
         if self._pgid is None:
             return
         cmd = self._elevation_prefix() + ["kill", f"-{sig}", f"-{self._pgid}"]
+        guard_elevation(cmd)          # the kill elevates through the same prefix
         subprocess.run(cmd, capture_output=True, check=False, env=self._elevation_env())
 
     def cancel(self) -> None:
