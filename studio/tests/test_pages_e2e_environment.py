@@ -113,6 +113,7 @@ def test_the_gate_probe_is_asked_about_the_chosen_environment(localmesh_page):
     assert node.asked == ["qemu"]
 
 
+@pytest.mark.real_stack_probes          # this IS the function under test
 def test_e2e_ready_is_scoped_by_environment():
     """The docker probes below the node_modules check describe ONE mesh. Running
     them for kind or qemu would report blockers about a stack nobody selected."""
@@ -126,6 +127,7 @@ def test_e2e_ready_is_scoped_by_environment():
     assert all("stack is not running" not in p for p in problems)
 
 
+@pytest.mark.real_stack_probes          # this IS the function under test
 def test_e2e_ready_rejects_an_unknown_environment():
     from hugmesh_studio.core.local_stack_node import LocalStackNode
     with pytest.raises(ValueError):

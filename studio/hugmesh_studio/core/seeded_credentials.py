@@ -448,6 +448,14 @@ def annotate(roster: Roster, truth: CredentialTruth | None,
     kind = truth.lane == _truth.LANE_KIND
     if truth.stage2 is True:
         op_marker, op_note = marker, ""
+    elif marker == _truth.NOT_SEEDED:
+        # NO identity store holds ANY persona right now (no mesh; up but unseeded):
+        # the operator row is "not seeded" like every row above it. "not on this
+        # lane" would claim a lane exists and its seeder left this one out.
+        op_marker = _truth.NOT_SEEDED
+        op_note = ("Created with the rows above by the Studio's bring-up and Add "
+                   "user (SEED_COMPLETE_REGISTRATION=1); a terminal `make stack-seed` "
+                   "and the kind lane never create it.")
     elif truth.stage2 is False:
         op_marker = _truth.NOT_ON_LANE
         op_note = ("Registration stage 2 did not run on this lane: only the "

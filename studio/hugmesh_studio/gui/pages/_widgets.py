@@ -265,15 +265,83 @@ def own_probe(owner, attr: str, thread):
     is what keeps the ``isRunning()`` in-flight guards correct — a rebound-but-deleted
     wrapper would raise RuntimeError from inside a Qt slot, which on PyQt6 aborts the
     process rather than raising into Python.
+
+    THIRD, and the reason the parent is dropped below: a QThread that is a CHILD of the
+    page is destroyed BY the page. ``~QWidget`` runs ``deleteChildren()`` inside its own
+    body — before ``~QObject`` gets as far as emitting ``destroyed`` — so there is no
+    hook a page can use to drain its probes first, and a probe still running at that
+    moment hits ``QThread: Destroyed while thread is still running``, a qFatal that
+    takes the whole process down. The window is not just the probe's own work: an
+    already-returned ``run()`` still reports ``isRunning()`` until the OS thread exits,
+    and pages are dropped by garbage collection at moments no code chooses. Measured on
+    2026-09-04: four test files aborted mid-file this way, losing every result after the
+    page they happened to drop, and making the probes non-shelling did NOT close it —
+    the bare start/exit race was enough.
+
+    So the thread is un-parented and held in ``_IN_FLIGHT`` for exactly as long as it
+    runs. That is the only arrangement that satisfies both of the bullets above at once:
+    nothing in Qt's object tree can destroy it early, and the module keeps the strong
+    PYTHON reference the first bullet requires, so it cannot be garbage-collected
+    mid-run either. Re-parenting onto the QApplication was tried first and is NOT
+    equivalent — a suite whose ``qt_app`` fixture holds the only reference to the
+    application lets Qt collect it between tests, which destroys its children and
+    reproduces the same qFatal one level up (measured on
+    ``tests/test_pages_e2e_environment.py``).
+
+    ``finished`` then releases all three holds: the registry entry, the attribute, and
+    the C++ object. A probe that outlives its page finishes into nothing — PyQt
+    auto-disconnects ``result`` when its receiving QObject is destroyed, and
+    ``_release`` is written to survive a dead owner, since a plain closure has no
+    receiver for Qt to disconnect on our behalf.
     """
     setattr(owner, attr, thread)
+    thread.setParent(None)
+    _IN_FLIGHT.add(thread)
 
     def _release():
-        if getattr(owner, attr, None) is thread:
-            setattr(owner, attr, None)
+        _IN_FLIGHT.discard(thread)
+        try:
+            if getattr(owner, attr, None) is thread:
+                setattr(owner, attr, None)
+        except RuntimeError:            # the owner's C++ object went first
+            pass
 
     thread.finished.connect(_release)
     thread.finished.connect(thread.deleteLater)
+    return thread
+
+
+#: Probe threads own_probe is currently holding alive. A strong reference on purpose
+#: (see own_probe's third bullet); entries leave on ``finished``, never on a timer.
+_IN_FLIGHT: set = set()
+
+
+def in_flight_probes() -> tuple:
+    """Every probe own_probe is still holding — the only enumeration of them there is,
+    now that they are parented to nothing. ``tests/conftest.py`` drains these before the
+    interpreter exits, since a thread still running when its wrapper is finally
+    collected is the same qFatal by another route."""
+    return tuple(_IN_FLIGHT)
+
+
+def hold_thread(thread):
+    """Keep a background QThread alive for exactly as long as it RUNS, and nothing else.
+
+    ``own_probe``'s first bullet without its second: a worker whose last Python
+    reference goes away mid-run is garbage-collected and takes its running thread with
+    it — ``QThread: Destroyed while thread is still running``, a qFatal. Use this for a
+    worker the page must keep NAMED after it finishes (``progress.py`` reads
+    ``self.worker`` post-run), where own_probe's attribute-clearing would be wrong.
+
+    Measured 2026-09-04: ``tests/test_pages_progress.py`` aborted on 1 of 3 runs with
+    the page's ``_WorklistWorker`` still inside ``_generate_keys`` when the test that
+    built the page ended — and on 3 of 3 once the page's OTHER probes stopped shelling
+    out under pytest, because finishing the rest of the test sooner only widens the
+    window. The hold is released by ``finished``, so nothing is kept a moment longer
+    than the thread runs.
+    """
+    _IN_FLIGHT.add(thread)
+    thread.finished.connect(lambda: _IN_FLIGHT.discard(thread))
     return thread
 
 

@@ -88,6 +88,11 @@ def test_cli_config_round_trips():
 
 
 # ── restore / start_saved ──────────────────────────────────────────────────────
+_LIVE_OK = {"volumes_present": True, "images_present": True, "creds_match": True,
+            "mesh_running": False, "source_ok": True, "copies_missing": (),
+            "source_drift": (), "volumes_missing": (), "volumes_seen": 3}
+
+
 def _boot(monkeypatch, tmp_path):
     boot = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(
         out_dir=str(tmp_path / "keys"), superadmin_username="sa"))
@@ -102,7 +107,10 @@ def _boot(monkeypatch, tmp_path):
     def never(*a, **k):
         raise AssertionError("generate_creds must never run on a restore")
     monkeypatch.setattr(boot, "generate_creds", never)
-    calls = {"start": 0, "seed": []}
+    # what the machine holds NOW, as start_saved/restore re-decide it on the worker
+    # (sm.probe_state is the gatherer; the default says "case 1, nothing running")
+    calls = {"start": 0, "seed": [], "facts": dict(_LIVE_OK)}
+    monkeypatch.setattr(sm, "probe_state", lambda rec, project="": dict(calls["facts"]))
     monkeypatch.setattr(LocalStackNode, "start",
                         lambda self, on_line=None, cancel=None:
                         (calls.__setitem__("start", calls["start"] + 1)) or (True, "up"))
@@ -208,6 +216,57 @@ def test_start_saved_puts_a_changed_credentials_file_back_first(monkeypatch, tmp
     ok, log = boot.start_saved(rec, on_line=lambda _l: None)
     assert ok and calls["start"] == 1
     assert e2e.read_text() == "E2E_PASSWORD=from-the-copy\n"
+
+
+def test_start_saved_refuses_when_the_volumes_are_gone_at_execution_time(monkeypatch,
+                                                                         tmp_path):
+    """The row's plan is decided at PROBE time (page entry, a _mesh_up flip) and can
+    be hours stale. With the volumes cleaned since, `stack.start()` would create
+    EMPTY volumes and no seed runs — while the log says "reattaching". The plan is
+    re-decided on the worker from what is on the machine now."""
+    boot, calls = _boot(monkeypatch, tmp_path)
+    calls["facts"].update(volumes_present=False, volumes_missing=("v0", "v1", "v2"),
+                          volumes_seen=0)
+    rec = _record(boot)
+    rec.volumes = {"included": False, "inventory": [{"name": f"v{i}"} for i in range(3)]}
+    streamed = []
+    ok, log = boot.start_saved(rec, on_line=streamed.append)
+    assert not ok and calls["start"] == 0
+    assert any("refused" in l and "Restore (reseed)" in l for l in streamed)
+    assert not any("reattaching" in l for l in log)
+
+
+def test_start_saved_and_restore_refuse_over_a_mesh_that_came_up_since_the_probe(
+        monkeypatch, tmp_path):
+    """A terminal `make stack-up` after the row was probed: the page's gate is
+    probe-time, so the button is still armed. A start over it stacks a second
+    project on the same compose name; a restore re-seeds the LIVE mesh's users
+    with this record's passwords. Both refuse on the worker, before any side
+    effect."""
+    boot, calls = _boot(monkeypatch, tmp_path)
+    calls["facts"]["mesh_running"] = True
+    rec = _record(boot)
+    ok, log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert not ok and calls["start"] == 0
+    assert any("refused" in l and "running" in l for l in log)
+    ok, log = boot.restore(rec, on_line=lambda _l: None)
+    assert not ok and calls["start"] == 0 and calls["seed"] == []
+    assert any("refused" in l and "running" in l for l in log)
+    assert not any(SA_VALUE in l for l in log)
+
+
+def test_a_probe_that_cannot_answer_refuses_rather_than_starting(monkeypatch, tmp_path):
+    boot, calls = _boot(monkeypatch, tmp_path)
+
+    def boom(rec, project=""):
+        raise OSError("docker: connection refused")
+    monkeypatch.setattr(sm, "probe_state", boom)
+    rec = _record(boot)
+    ok, log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert not ok and calls["start"] == 0
+    assert any("could not be established" in l for l in log)
+    ok, log = boot.restore(rec, on_line=lambda _l: None)
+    assert not ok and calls["start"] == 0 and calls["seed"] == []
 
 
 def test_down_log_says_volumes_are_kept(monkeypatch, tmp_path):

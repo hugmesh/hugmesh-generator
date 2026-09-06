@@ -567,3 +567,21 @@ def test_module_is_qt_free():
     r = subprocess.run([sys.executable, "-c", probe], env=env,
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_last_seed_ok_counts_a_saved_mesh_restore_but_not_a_warm_start(tmp_path):
+    """`Restore (reseed)` runs `make stack-seed` (LocalMeshBootstrap.restore is start
+    + seed) and the page files it as `<stamp>-Restoring-saved-mesh-<label>-ok.log`.
+    Unmatched, the banner right after a restore this Studio had just run read
+    "Seeded by a run this Studio did not record". A WARM start
+    (`Starting-saved-mesh-…`) seeds nothing and must not count; nor may a restore
+    that failed."""
+    d = tmp_path / "logs"
+    d.mkdir()
+    for name in ("20260901-224411-Bootstrapping-ok.log",
+                 "20260905-143708-Restoring-saved-mesh-test---hugmesh---no-services-ok.log",
+                 "20260905-150000-Starting-saved-mesh-test---hugmesh-ok.log",
+                 "20260905-160000-Restoring-saved-mesh-test---hugmesh-FAILED.log"):
+        (d / name).write_text("")
+    when = ct.last_seed_ok(str(d))
+    assert when == time.mktime(time.strptime("20260905-143708", "%Y%m%d-%H%M%S"))

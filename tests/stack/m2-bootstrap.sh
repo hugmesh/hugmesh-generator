@@ -74,17 +74,33 @@ M2_ENV_FILE="${M2_ENV_FILE:-${HERE}/.m2-registry.env}"
 #                                 hugmesh-build-config, so build-config MUST precede it.
 #   hugmesh-commons   2.1.0  — incl. the -tests classifier jar (admin-bff's test scope
 #                                 compiles against it even with -DskipTests).
-#   hugmesh-auth-core 2.4.2  — user-bff + admin-bff main. 2.4.2 = auth-core #42
+#   hugmesh-auth-core 2.4.2  — user-bff main. 2.4.2 = auth-core #42
 #                                 (release re-pin after the MFA fixes #39-#41; the
 #                                 2.4.2 coordinate exists BECAUSE 2.4.x-old was
-#                                 published mutable — see that PR). This pin has now
-#                                 drifted twice the same way (2.4.0 -> 2.4.1 ->
-#                                 2.4.2): the consumers bump, the cold build dies at
-#                                 user-bff with "Could not find artifact
-#                                 net.hugmesh:hugmesh-auth-core:jar:<new> in
-#                                 gitlab-maven". tests/stack/test-m2-bootstrap.sh's
-#                                 pin-drift guard exists for exactly this — keep it
-#                                 in CI and run it after every auth-core release.
+#                                 published mutable — see that PR).
+#   hugmesh-auth-core 2.5.0  — admin-bff main (auth-core PR #12, tip of auth-core
+#                                 main; its pom.xml declares
+#                                 net.hugmesh:hugmesh-auth-core:2.5.0). 2.5.0 adds the
+#                                 DOMAIN-SCOPED registration gate (auth-core issue #1 /
+#                                 PR #8) that admin-bff's RegistrationDomainResolver
+#                                 call sites now require.
+#
+#   TWO auth-core pins IS THE CORRECT STATE, not a leftover. The consumers are
+#   separate repos on separate release cadences: admin-bff main asks for 2.5.0 and
+#   user-bff main still asks for 2.4.2, so a cold build needs BOTH jars in the local
+#   registry — dropping 2.4.2 would move the breakage from admin-bff to user-bff.
+#   The PINS loop and have_artifact are both per-(artifact,version), so the same repo
+#   appearing twice at two SHAs simply builds twice (ensure_src_at re-detaches).
+#
+#   THIS ARTIFACT HAS NOW DRIFTED FOUR TIMES THE SAME WAY (2.4.0 -> 2.4.1 -> 2.4.2 ->
+#   2.5.0): the consumer bumps, the cold build dies with "Could not find artifact
+#   net.hugmesh:hugmesh-auth-core:jar:<new> in gitlab-maven". The 2.5.0 round is the
+#   one that proved the guard itself was blind — tests/stack/test-m2-bootstrap.sh's
+#   pin-drift walker still filtered on the RETIRED groupId `systems.hugmesh` after the
+#   rebrand moved every consumer pom to `net.hugmesh`, so with a fully populated
+#   .stack-src it resolved ZERO coordinates and printed "every sibling-requested
+#   version matches its pin". Keep that guard in CI and run it after every auth-core
+#   release; the group it filters on is now DERIVED from this table's last field.
 # The org repos have NO git tags, hence SHA pins. Order matters: build-config FIRST
 # (parent's plugin dep), then parent (everything else's <parent>), then commons/auth-core.
 PINS=(
@@ -102,6 +118,7 @@ PINS=(
   # the OLD jar bytes otherwise).
   "hugmesh-commons|156b7687db7cb4287db73708d46404a8cb685b3f|hugmesh-commons|2.1.0|jar+tests|net/hugmesh"
   "hugmesh-auth-core|401ca9e38168791e5642125d96dd1f65487b8ff1|hugmesh-auth-core|2.4.2|jar|net/hugmesh"
+  "hugmesh-auth-core|1578565de8c54f4358ef3f172ff95767223f3746|hugmesh-auth-core|2.5.0|jar|net/hugmesh"
 )
 
 M2_REPO="${M2_CACHE}/m2/repository"

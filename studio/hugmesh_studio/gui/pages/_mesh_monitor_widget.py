@@ -54,8 +54,14 @@ _VIEW_UP_TIP = (
     "meets the ingress's fake certificate or its HSTS pin. Binds loopback ports "
     "on this machine — one press, never automatic. Run `make view-trust` once "
     "per machine or the browser still warns.")
-_VIEW_UP_LIVE_TIP = ("A `make view` session is already serving the doors — the Open "
-                     "buttons above use it.")
+#: `{which}` = "the kind lane's doors" / "its lane's doors" (see set_view_session).
+#: It names the LANE because the session can outlive what it served: a kind-lane
+#: session left running after the cluster was deleted still holds the ports while
+#: the compose mesh runs beside it — and compose rows never go through it.
+_VIEW_UP_LIVE_TIP = ("A `make view` session is already serving {which} on 127.0.0.1. "
+                     "A kind row's Open button goes through it; compose rows open "
+                     "their published ports directly and do not need it. Press "
+                     "'Stop the browser door' first to serve another lane.")
 _VIEW_DOWN_TIP = ("`make view-stop`: stop the background view session and sweep its "
                   "port-forwards.")
 _VIEW_DOWN_IDLE_TIP = "No `make view` session is running."
@@ -154,9 +160,12 @@ class MeshMonitorWidget(QtWidgets.QWidget):
     def button_for(self, key: str) -> QtWidgets.QPushButton | None:
         return self._buttons.get(key)
 
-    def set_view_session(self, live: bool) -> None:
+    def set_view_session(self, live: bool, lane: str = "") -> None:
         """Arm exactly ONE of the view buttons — never both — from the live-doors
-        answer: 'Open' when no session serves, 'Stop' when one does."""
+        answer: 'Open' when no session serves, 'Stop' when one does. ``lane`` is
+        the lane that session serves (the snapshot's ``view_lane``), named in the
+        tooltip so a session serving a lane that is no longer up is not mistaken
+        for the one the rows use."""
         self.view_up_btn.setEnabled(not live)
         self.view_down_btn.setEnabled(live)
         # BOTH tooltips, BOTH branches. Writing only one per branch left the other
@@ -164,7 +173,8 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         # button explained why it was disabled ("No `make view` session is running."
         # on a live Stop button, and vice versa).
         if live:
-            self.view_up_btn.setToolTip(_VIEW_UP_LIVE_TIP)
+            which = f"the {lane} lane's doors" if lane else "its lane's doors"
+            self.view_up_btn.setToolTip(_VIEW_UP_LIVE_TIP.format(which=which))
             self.view_down_btn.setToolTip(_VIEW_DOWN_TIP)
         else:
             self.view_up_btn.setToolTip(_VIEW_UP_TIP)

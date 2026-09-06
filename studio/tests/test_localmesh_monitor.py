@@ -665,3 +665,85 @@ def test_both_view_tooltips_follow_the_session_state(qapp, page, fake):
     assert "already serving" not in w.view_up_btn.toolTip()
     assert "make view-trust" in w.view_up_btn.toolTip()
     assert w.view_down_btn.toolTip() == "No `make view` session is running."
+
+
+def test_a_folded_title_that_names_a_mesh_re_reads_when_compose_goes_down(qapp, page,
+                                                                        fake, stack):
+    """The converse of the two tests above, and the one an operator actually hits:
+    the compose mesh was read UP behind a folded section, then a terminal
+    `make stack-halt` (or a crash) took it down. The next mesh-state answer says
+    "not running" — the folded title, its rows and its Open buttons must not go on
+    saying "1/1 ready" under a page whose own mesh-state line says the opposite.
+    Showing stale rows as current is the failure this monitor exists to fix."""
+    stack.running = True
+    fake.answers = [snap_compose()]
+    page.initializePage()
+    _settle(qapp, page)
+    assert "1/1 ready" in page.monitor_section.toggle.text()
+    assert page.monitor.isEnabled() and page.monitor.table.rowCount() == 1
+    assert len(page.monitor.door_urls()) == 1
+    assert not page.monitor_section.is_expanded()
+    stack.running = False                     # stopped OUTSIDE the Studio
+    fake.answers = [snap_none()]
+    first = fake.calls
+    page.initializePage()                     # the operator comes back to the page
+    _settle(qapp, page)
+    assert "not running" in page._mesh_state_label.text()
+    assert fake.calls == first + 1, \
+        "a folded title naming a mesh never re-read after compose went down"
+    assert "nothing running" in page.monitor_section.toggle.text()
+    assert not page.monitor.isEnabled()
+    assert page.monitor.table.rowCount() == 0 and page.monitor.door_urls() == []
+
+
+def test_the_live_view_tooltip_names_the_lane_the_session_serves(qapp, page, fake):
+    """A kind-lane session left running after the cluster was deleted still holds
+    the ports while the compose mesh runs beside it; "the Open buttons above use
+    it" was then false for every row (compose rows open directly). The sentence
+    names the lane and says which rows go through it."""
+    w = page.monitor
+    w.set_view_session(True, lane="kind")
+    tip = w.view_up_btn.toolTip()
+    assert "already serving the kind lane's doors" in tip
+    assert "compose rows open their published ports directly" in tip
+    assert "Stop the browser door" in tip
+    assert "the Open buttons above use it" not in tip
+    w.set_view_session(True)                  # lane unknown: still no false claim
+    assert "already serving its lane's doors" in w.view_up_btn.toolTip()
+    # isEnabledTo(w), not isEnabled(): with no mesh running the page greys the
+    # WHOLE monitor widget, so every child reports disabled whatever this method
+    # did. The claim under test is which of the two THIS method armed.
+    assert not w.view_up_btn.isEnabledTo(w) and w.view_down_btn.isEnabledTo(w)
+
+
+def test_the_snapshots_view_lane_reaches_the_tooltip(qapp, page, fake):
+    """The lane rides the snapshot (read off-thread with the doors), never a
+    session-file read on the GUI thread."""
+    snap = mm.MonitorSnapshot(taken_at="10:00:04",
+                              compose=mm.LaneState(True, "41 container(s)"),
+                              kind=mm.LaneState(False, "no kind cluster"),
+                              units=snap_compose().units,
+                              view_doors=("app",), view_lane="kind")
+    page._on_monitor(snap)
+    assert "the kind lane's doors" in page.monitor.view_up_btn.toolTip()
+    page._on_monitor(snap_compose())          # no session: the Open side is armed
+    assert page.monitor.view_up_btn.isEnabled()
+    assert "make view-trust" in page.monitor.view_up_btn.toolTip()
+
+
+def test_view_up_with_no_snapshot_follows_the_pages_own_compose_answer(qapp, page, fake,
+                                                                    stack, monkeypatch):
+    """Footer button pressed before the first read answered: with only compose up,
+    `make view LANE=kind` would bind a door to a cluster that does not exist."""
+    launched, noted = [], []
+    monkeypatch.setattr(page, "_launch",
+                        lambda label, fn, **kw: launched.append(label))
+    monkeypatch.setattr(page, "_note", lambda text: noted.append(text))
+    page._monitor = None
+    page._mesh_up = True
+    page._view_up()
+    assert launched == ["Opening the browser door"]
+    assert noted and "LANE=compose" in noted[-1]
+    page._mesh_up = False                     # nothing known to be up: kind, as before
+    page._view_up()
+    assert "LANE=kind" in noted[-1]

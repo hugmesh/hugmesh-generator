@@ -151,6 +151,9 @@ class MonitorSnapshot:
     #: names of the `make view` doors that were LIVE at read time — carried here so
     #: the GUI never has to touch the session file or a socket on its own thread
     view_doors: tuple[str, ...] = ()
+    #: the lane that live session serves (session.json `lane`: "kind" / "compose"),
+    #: "" when no session is live — so the GUI can say WHICH lane's doors are taken
+    view_lane: str = ""
 
     @property
     def any_running(self) -> bool:
@@ -765,7 +768,13 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
     base = _compose_base()
     compose_file = str(getattr(node, "compose_file", "") or "")
     if base and compose_file and budget.remaining() > 1:
-        rc, out = _probe(node, [*base, "-f", compose_file, "ps", "--format", "json"],
+        # --all: EVERY container of the project (ask A), not only the running ones.
+        # Without it the two one-shot `*-init-1` containers (exited 0) were missing
+        # from a 43-container mesh, and — the part that matters — a service that
+        # DIED non-zero vanished from the table while the title kept reading N/N
+        # ready; the exited/dead branch below was unreachable.
+        rc, out = _probe(node, [*base, "-f", compose_file, "ps", "--all",
+                                "--format", "json"],
                          budget.bounded(COMPOSE_PS_TIMEOUT_S))
         if rc == 0:
             rows = _parse_compose_ps(out)
@@ -774,7 +783,7 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
                          "from `docker ps` filtered by the compose project label")
             rows = None
     if rows is None and budget.remaining() > 1:
-        rc, out = _probe(node, ["docker", "ps", "--filter",
+        rc, out = _probe(node, ["docker", "ps", "--all", "--filter",
                                 f"label=com.docker.compose.project={_COMPOSE_PROJECT}",
                                 "--format", "{{json .}}"],
                          budget.bounded(COMPOSE_PS_TIMEOUT_S))
@@ -971,15 +980,21 @@ def snapshot(generator_dir: str, node, *, want_compose: bool = True,
     for lane_name, lane in (("kind", kind), ("compose", compose)):
         if lane.running is None and lane.error:
             errors.append(f"{lane_name}: {lane.error}")
+    view_lane = ""
     if live:
         notes.append("a browser door answering 401 is NOT down — a stale pre-rebuild "
                      "session cookie 401s the page while the door itself is fine; "
                      "sign out and back in")
+        try:
+            view_lane = str(view_doors.live_session(generator_dir, env).get("lane")
+                            or "")
+        except Exception:                             # noqa: BLE001 — a name, not a fact
+            view_lane = ""
     units.sort(key=lambda u: (u.lane, u.namespace, u.name))
     return MonitorSnapshot(
         taken_at=time.strftime("%H:%M:%S"), compose=compose, kind=kind,
         units=tuple(units), errors=tuple(errors), notes=tuple(notes),
-        view_doors=tuple(sorted(live)))
+        view_doors=tuple(sorted(live)), view_lane=view_lane)
 
 
 def addresses_text(snap: MonitorSnapshot) -> str:

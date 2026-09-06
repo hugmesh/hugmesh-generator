@@ -550,9 +550,11 @@ class E2EPage(QtWidgets.QWizardPage):
             "Enumerating the e2e suite (asking Playwright for the spec list; this "
             "works with the mesh down) …")
         probe = own_probe(self, "_cat_probe",
-                          _E2ECatalogueProbe(self.generator_dir,
-                                             env=self.boot._stack_node()._build_env(),
-                                             parent=self))
+                          _E2ECatalogueProbe(
+                              self.generator_dir,
+                              env=self.boot._stack_node()._build_env(
+                                  write_overlays=False),   # a catalogue READS
+                              parent=self))
         probe.result.connect(self._show_tree)
         probe.start()
 

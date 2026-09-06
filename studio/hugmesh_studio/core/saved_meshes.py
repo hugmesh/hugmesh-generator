@@ -552,10 +552,12 @@ def capture(generator_dir: str, cfg, node, boot, *, label: str = "",
     rec.regenerated = list(REGENERATED)
     rec.form = dict(form or {})
 
-    # OVERLAYS FIRST — the on-disk text is what the last bring-up ran with (the
-    # Makefile wildcard-includes these files). _build_env() below REWRITES the
-    # limits overlay (and the theme file when the form carries a theme), so the
-    # read has to happen before it, not after.
+    # OVERLAYS — the on-disk text is what the last bring-up ran with (the Makefile
+    # wildcard-includes these files). Read BEFORE the env below and with
+    # `write_overlays=False` there: a save is a READ of the running mesh and must
+    # not rewrite the checkout's overlays with the form's current values on its
+    # way past. (Order kept anyway — a record whose overlays could be rewritten
+    # mid-capture is a record that describes neither state.)
     rec.overlays = {name: _read_text(os.path.join(rec.generator_dir, rel))
                     for name, rel in _OVERLAY_FILES.items()}
 
@@ -563,7 +565,7 @@ def capture(generator_dir: str, cfg, node, boot, *, label: str = "",
     # knobs. Never re-derived here: a second derivation is how the record and the
     # bring-up come to disagree.
     try:
-        rec.env_snapshot = _env_snapshot(node._build_env())
+        rec.env_snapshot = _env_snapshot(node._build_env(write_overlays=False))
     except Exception:                     # a probe must never sink the save
         rec.env_snapshot = {}
 
@@ -614,11 +616,25 @@ def capture(generator_dir: str, cfg, node, boot, *, label: str = "",
         running_env = ""
     rec.last_seen = {"compose_running": compose_running, "kind_running": None,
                      "running_env": running_env, "at": _now()}
+    # WHAT THE RECORD IS. `config` is the page FORM's configuration, not a read-back
+    # of the running containers: the only knob this module can read off a running
+    # mesh is ENV (`running_env`, from the gateway's CASDOOR_ISSUER_URI — nothing
+    # else is recorded anywhere but the form). So a form that is not the mesh in
+    # front of it — most easily after a Studio restart, when the page opens at its
+    # defaults over a mesh that is still up — produces a record that will restore a
+    # DIFFERENT mesh. That is a real limit of this lane, and the one thing it must
+    # never do is stay quiet about it: `disagrees_with_running` is the structured
+    # form, the note is the rendered one, and the page repeats both at save time
+    # (localmesh._save_mesh) instead of leaving them inside the JSON.
     form_env = str(rec.config.get("env") or "test")
     if running_env and running_env != form_env:
+        rec.last_seen["disagrees_with_running"] = [
+            {"field": "env", "form": form_env, "running": running_env}]
         rec.notes.append(
             f"The form said env={form_env} but the running stack reported "
-            f"env={running_env} at save time — the record follows the form.")
+            f"env={running_env} at save time — the record follows the FORM. Load "
+            "the mesh's own configuration into the page before saving, or this "
+            "record restores the form's mesh, not the one that was running.")
 
     rec.extra_users = _extra_user_rows(extra_users or [])
     rec.credentials = _credential_pointers(rec, boot, copy=copy_credentials)

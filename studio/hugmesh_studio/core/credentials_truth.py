@@ -142,11 +142,16 @@ IDENTITY_VOLUME_SUFFIX = "casdoor-pg"
 #: The persona seed-e2e.sh leg 1 always creates — its presence is "seeded".
 SEED_WITNESS_USER = "e2e-admin"
 
-#: The Studio's run-log names for the two verbs that run `make stack-seed`
-#: (localmesh.py `_launch("Bootstrapping", …)` / `_launch(f"Adding user {u}", …)`,
-#: slugified by `_save_run_log`). A `-ok.log` of either is the only in-Studio
-#: record that a seed COMPLETED.
-_SEED_LOG_RE = re.compile(r"^(?P<stamp>\d{8}-\d{6})-(?:Bootstrapping|Adding-user-.*)-ok\.log$")
+#: The Studio's run-log names for the THREE verbs that run `make stack-seed`
+#: (localmesh.py `_launch("Bootstrapping", …)`, `_launch(f"Adding user {u}", …)`
+#: and the saved-mesh lane's `_launch(f"Restoring saved mesh {label}", …)` — a
+#: cold restore is start + seed; all slugified by `_save_run_log`). A `-ok.log`
+#: of any of them is the only in-Studio record that a seed COMPLETED. "Starting
+#: saved mesh" is deliberately NOT here: a warm start reattaches volumes and
+#: seeds nothing, so it says nothing about the identities' password.
+_SEED_LOG_RE = re.compile(
+    r"^(?P<stamp>\d{8}-\d{6})-(?:Bootstrapping|Adding-user-.*|Restoring-saved-mesh-.*)"
+    r"-ok\.log$")
 
 #: Shown IN the password cell when the file cannot be read: the resolver's
 #: "(not seeded)" marker would be false, and a plausible-looking value worse.

@@ -347,6 +347,8 @@ def test_localmesh_choice_gates_next_without_dead_end(wiz):
 
 
 # ── (4b) LOCAL DOCKER MESH — LAUNCH to a REAL dispatched `docker compose up -d` ─────────
+@pytest.mark.real_stack_probes   # fakes `subprocess.run` and asserts on what the
+                                 # REAL MeshNode.status() parses back out of it
 def test_localmesh_launch_dispatches_compose_up(qapp, tmp_path, monkeypatch):
     """Drives the REAL LocalMeshNode.start() (which test_local_mesh.py masks by
     monkeypatching start()/available() wholesale) to a real compose dispatch. The compose

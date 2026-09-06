@@ -603,3 +603,51 @@ def test_module_is_qt_free():
     r = subprocess.run([sys.executable, "-c", probe], env=env,
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_compose_lists_every_container_including_exited_ones(monkeypatch):
+    """Ask A says ALL pods. Both listings run with --all, so a one-shot init
+    container that exited 0 is a 'stopped' row and a service that DIED non-zero a
+    'failed' one. Without it neither row existed (live: 43 project containers, 41
+    rows, the two `*-init-1` absent) and the title kept reading N/N ready after a
+    service died — the exited/dead branch was unreachable."""
+    rows = COMPOSE_ROWS + [
+        {"Name": "hugmesh-local-cassandra-init-1", "Service": "cassandra-init",
+         "State": "exited", "Status": "Exited (0)", "Health": "", "Image": "init",
+         "ExitCode": 0, "Publishers": []}]
+    node, (lane, units, notes, errors) = _compose_snapshot(monkeypatch, json.dumps(rows))
+    ps = [c for c in node.calls if "ps" in c]
+    assert ps and all("--all" in c for c in ps), node.calls
+    by = {u.owner: u for u in units}
+    init = by["cassandra-init"]
+    assert init.state == "stopped" and init.ready is False and "exit 0" in init.reason
+    assert by["seed"].state == "failed" and "exit 3" in by["seed"].reason
+    # the `docker ps` fallback lists all of them too
+    monkeypatch.setattr(mm.shutil, "which", lambda t: "/usr/bin/docker")
+    monkeypatch.setattr(mm, "_compose_base", lambda: ["docker", "compose"])
+    node2 = _Node(script={"compose -f": (0, "not json"), "docker ps": (0, "")})
+    mm._compose_units(node2, "/g", [], {}, mm._Budget(25))
+    fallback = [c for c in node2.calls if c[:2] == ["docker", "ps"]]
+    assert fallback and "--all" in fallback[0], node2.calls
+
+
+def test_snapshot_carries_the_lane_the_live_view_session_serves(tools, tmp_path,
+                                                               monkeypatch):
+    """The GUI names WHICH lane a live `make view` session serves (a kind-lane
+    session outlives its cluster and holds the ports beside a compose mesh), and it
+    must not read the session file on its own thread — the lane rides the
+    snapshot with the door names."""
+    state = tmp_path / "view-state"
+    state.mkdir()
+    (state / "session.json").write_text(json.dumps(
+        {"pid": 424242, "marker": "hugmesh-view", "lane": "kind",
+         "doors": [{"name": "app", "port": 9080, "url": "https://127.0.0.1:9080/"}]}))
+    monkeypatch.setattr(mm.view_doors, "live_doors",
+                        lambda gd, env=None: {"app": "https://127.0.0.1:9080/"})
+    monkeypatch.setattr(mm.view_doors, "stale_session", lambda gd, env=None: False)
+    snap = mm.snapshot(GENERATOR_DIR, _kind_node(json.dumps(cluster_objects())), env=tools)
+    assert snap.view_doors == ("app",) and snap.view_lane == "kind"
+    # no live session: no lane is claimed, whatever the file says
+    monkeypatch.setattr(mm.view_doors, "live_doors", lambda gd, env=None: {})
+    snap = mm.snapshot(GENERATOR_DIR, _kind_node(json.dumps(cluster_objects())), env=tools)
+    assert snap.view_doors == () and snap.view_lane == ""

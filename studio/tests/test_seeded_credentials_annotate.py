@@ -243,3 +243,26 @@ def test_copy_all_carries_the_liveness_it_is_copying(tmp_path):
     # an UNannotated roster is unchanged — no live column invented out of nothing
     plain = as_copyable_text(_roster(tmp_path))
     assert plain.splitlines()[1] == "# username\tpassword\troles"
+
+
+def test_with_no_mesh_the_operator_row_is_not_seeded_like_every_other_row(tmp_path):
+    """No mesh, no lane: "not on this lane" claimed a lane existed and its seeder
+    left mesh-operator out, beside thirty rows saying "not seeded". The same
+    holds for a stack that is up but unseeded."""
+    roster = load_roster(GENERATOR_DIR, {"E2E_CREDENTIALS_FILE": str(tmp_path / "absent")})
+    no_mesh = _truth(tmp_path, mesh_running=False, volumes_present=False,
+                     seeded_admin=None, seeded_operator=None,
+                     creds=_creds(tmp_path, exists=False),
+                     secrets_mtime=None, superadmin=("", ""))
+    assert no_mesh.state == ct.STATE_NO_MESH and no_mesh.marker == ct.NOT_SEEDED
+    op = next(u for u in annotate(roster, no_mesh).users if u.username == "mesh-operator")
+    assert op.live == ct.NOT_SEEDED
+    assert "SEED_COMPLETE_REGISTRATION" in op.note
+    unseeded = _truth(tmp_path, seeded_admin=False, seeded_operator=False)
+    assert unseeded.state == ct.STATE_UP_UNSEEDED
+    op = next(u for u in annotate(roster, unseeded).users if u.username == "mesh-operator")
+    assert op.live == ct.NOT_SEEDED
+    # the kind lane keeps its own answer: never created there at all
+    kind = _truth(tmp_path, lane=ct.LANE_KIND)
+    op = next(u for u in annotate(roster, kind).users if u.username == "mesh-operator")
+    assert op.live == ct.NOT_ON_LANE
