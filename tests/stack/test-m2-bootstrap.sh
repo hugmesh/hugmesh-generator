@@ -135,18 +135,58 @@ echo "-- 2b) PIN drift: every private version a sibling pom requests must be ser
 #      NOT raw.githubusercontent: these repos are private there (raw answers 404
 #      without a token) and CI is GitLab, whose job token is already wired into
 #      CI_REPOSITORY_URL — the same clone recipe lint:reserved-prefixes uses.
+# ── THE PIN TABLE IS THE SINGLE SOURCE OF TRUTH FOR THIS LEG ────────────────
+# Parsed ONCE, ABOVE the corpus branch, because both halves need it: the walker
+# needs the served (artifact, version) pairs AND the groupId(s) those artifacts
+# publish under, and 2c's controls build their fixtures from the same table so
+# they cannot rot into testing a coordinate nobody ships.
+#
+# THE GROUP IS DERIVED, NOT LITERAL. It used to be hard-coded `systems.hugmesh`
+# inside the walker while the rebrand had moved every consumer pom to
+# `net.hugmesh` — the same move m2-bootstrap.sh's have_artifact() was fixed for
+# and this walker was not. Measured on 2026-09-06 against a fully populated
+# .stack-src, the leg printed:
+#     FAIL the pin-drift walk resolved ZERO systems.hugmesh coordinates … (vacuous green)
+#     PASS every sibling-requested systems.hugmesh version matches its pin
+# while hugmesh-admin-bff-api main was asking for hugmesh-auth-core 2.5.0 against
+# a 2.4.2 pin — i.e. the guard written for exactly this drift was structurally
+# incapable of seeing it, and the only thing that went red was the anti-vacuity
+# counter, whose message pointed at the corpus rather than at the group filter.
+# Deriving the group from PINS' own last field carries the guard along with the
+# next coordinate move.
+PIN_LINES="$(awk '/^PINS=\(/{f=1;next} f&&/^\)/{exit} f' "${BOOT}" \
+             | sed -n 's/^[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p')"
+PINNED="$(printf '%s\n' "${PIN_LINES}" | awk -F'|' 'NF>=4{print $3"="$4}')"
+PIN_GROUPS="$(printf '%s\n' "${PIN_LINES}" | awk -F'|' 'NF>=6{gsub(/\//,".",$6); print $6}' | sort -u | tr '\n' ' ')"
+PIN_GROUPS="${PIN_GROUPS% }"
+if [ -n "${PINNED}" ]; then
+  ok "parsed $(printf '%s\n' "${PINNED}" | wc -l) pins from the PINS array"
+else
+  bad "could not parse the PINS array"
+fi
+if [ -n "${PIN_GROUPS}" ]; then
+  ok "derived the private groupId(s) from the PINS table itself: ${PIN_GROUPS}"
+else
+  bad "could not derive a groupId from the PINS table — the walker would filter on nothing"
+fi
+
 SRC="${STACK_SRC:-${REPO}/.stack-src}"
 have_poms() { [ -d "$1" ] && [ -n "$(find "$1" -mindepth 2 -maxdepth 2 -name pom.xml -print -quit 2>/dev/null)" ]; }
 
+# Derive the Maven consumers from the file the cold stack build itself uses, so a
+# new Java service cannot quietly escape the check: every ${STACK_SRC} build
+# context in compose.local.yaml whose repo is a *-api, the gateway or actions (the
+# repo's own words: "eight BFF/federation siblings" plus hugmesh-gateway and
+# hugmesh-actions, see scripts/patch-stack-src.sh).
+#
+# HOISTED out of the no-corpus branch: this list is the leg's SUBJECT, and both
+# outcomes need it — the no-corpus failure must name who went unchecked, and a
+# corpus that WAS found must be checked for completeness against it.
+CONSUMERS="$(sed -n 's|.*context: \${STACK_SRC:-[^}]*}/\([a-z0-9-]*\).*|\1|p' \
+               "${REPO}/tests/stack/compose.local.yaml" 2>/dev/null \
+             | grep -E '(-api|^hugmesh-gateway$|^hugmesh-actions$)' | sort -u)"
+
 if ! have_poms "${SRC}"; then
-  # Derive the Maven consumers from the file the cold stack build itself uses,
-  # so a new Java service cannot quietly escape the check: every ${STACK_SRC}
-  # build context in compose.local.yaml whose repo is a *-api, the gateway or
-  # actions (the repo's own words: "eight BFF/federation siblings" plus
-  # hugmesh-gateway and hugmesh-actions, see scripts/patch-stack-src.sh).
-  CONSUMERS="$(sed -n 's|.*context: \${STACK_SRC:-[^}]*}/\([a-z0-9-]*\).*|\1|p' \
-                 "${REPO}/tests/stack/compose.local.yaml" 2>/dev/null \
-               | grep -E '(-api|^hugmesh-gateway$|^hugmesh-actions$)' | sort -u)"
   # Where to fetch from, in falling order of explicitness:
   #   M2_PIN_GIT_BASE   this guard's own override (and what its proofs drive),
   #   CI_REPOSITORY_URL the org mirror + read-only job token, in a CI job,
@@ -172,7 +212,11 @@ if ! have_poms "${SRC}"; then
         # Dropping it in silence is how the corpus quietly shrinks to nothing.
         if [ ! -f "${FETCH_DIR}/${c}/pom.xml" ]; then
           NOT_MAVEN="${NOT_MAVEN} ${c}"
-          rm -rf "${FETCH_DIR}/${c}"
+          # The DIRECTORY stays. The walk already skips a directory with no
+          # pom.xml, so deleting it bought nothing — and it destroyed the only
+          # evidence that the consumer was reached at all, which the completeness
+          # leg below reads to tell "fetched, not a Maven project" apart from
+          # "never obtained".
         fi
       else
         FETCH_FAIL="${FETCH_FAIL} ${c}"
@@ -189,17 +233,59 @@ if ! have_poms "${SRC}"; then
 fi
 
 if ! have_poms "${SRC}"; then
+  # NAME THE CONSUMERS THAT WENT UNCHECKED. "no consumer pom.xml available" is a
+  # true sentence that tells the reader nothing actionable, and it is the line
+  # this leg actually printed on 2026-09-06 while hugmesh-admin-bff-api main had
+  # moved to hugmesh-auth-core 2.5.0 and every cold `make stack-up` was dying on
+  # it. A guard that cannot perform its check must say WHICH subject it could not
+  # read, so the reader can go read that one pom by hand in ten seconds.
+  UNCHECKED="$(printf '%s' "${CONSUMERS:-}" | tr '\n' ' ')"
+  UNCHECKED="${UNCHECKED% }"
+  if [ -z "${UNCHECKED}" ]; then
+    # Not "no consumers to check" — the DERIVATION failed. compose.local.yaml is
+    # tracked in this repo and always yields the Maven consumers, so an empty
+    # list means the sed above stopped matching, and every later leg would then
+    # be vacuous for a reason nobody would look for.
+    bad "could not derive ANY Maven consumer from tests/stack/compose.local.yaml — the pin-drift corpus list is empty, which is a defect in this guard, not an absent corpus"
+    UNCHECKED="(derivation failed)"
+  fi
   if [ "${M2_PIN_DRIFT_SKIP:-}" = "1" ]; then
-    echo "  SKIP pin-drift explicitly opted out (M2_PIN_DRIFT_SKIP=1)"
+    echo "  SKIP pin-drift explicitly opted out (M2_PIN_DRIFT_SKIP=1); UNCHECKED consumers: ${UNCHECKED}"
   elif [ -n "${CI:-}" ] || [ "${REQUIRE_STACK_SRC:-}" = "1" ]; then
-    bad "no consumer pom.xml available (no .stack-src, no STACK_SRC, fetch unavailable) and this is an UNATTENDED run — the pin-drift leg must never silently pass here"
+    bad "no consumer pom.xml available (no .stack-src, no STACK_SRC, fetch unavailable) and this is an UNATTENDED run — the pin-drift leg must never silently pass here. UNCHECKED consumers: ${UNCHECKED}"
   else
-    bad "no consumer pom.xml available — run 'make stack-clone', set STACK_SRC, set M2_PIN_GIT_BASE/GIT_BASE to fetch, or opt out with M2_PIN_DRIFT_SKIP=1"
+    bad "no consumer pom.xml available, so the pins were compared against NOTHING. UNCHECKED consumers: ${UNCHECKED} — run 'make stack-clone', set STACK_SRC, set M2_PIN_GIT_BASE/GIT_BASE to fetch, or opt out with M2_PIN_DRIFT_SKIP=1"
   fi
 else
-  PINNED="$(sed -n 's/^  "\([a-z-]*\)|[0-9a-f]*|\([a-z-]*\)|\([0-9.]*\)|.*$/\2=\3/p' "${BOOT}")"
-  [ -n "${PINNED}" ] && ok "parsed $(printf '%s\n' "${PINNED}" | wc -l) pins from the PINS array" \
-                     || bad "could not parse the PINS array"
+  # ── COMPLETENESS: A CORPUS CAN BE PRESENT AND STILL NOT COVER THE SUBJECT ───
+  # have_poms() is satisfied by ONE pom.xml anywhere in the tree, so a corpus
+  # holding eleven of twelve consumers walks happily and says nothing about the
+  # twelfth — the same fail-open as having no corpus at all, just quieter,
+  # because the anti-vacuity counter stays comfortably above zero on the others.
+  # A partial `make stack-clone`, an interrupted fetch, or a consumer added to
+  # compose.local.yaml and not to the clone list all land here. Absent DIRECTORY
+  # is the test: a directory that exists without a pom.xml was reached and simply
+  # is not a Maven project (hugmesh-api-docs), which is reported but not fatal.
+  CORPUS_MISSING=""
+  CORPUS_NOPOM=""
+  for c in ${CONSUMERS}; do
+    if [ ! -d "${SRC}/${c}" ]; then
+      CORPUS_MISSING="${CORPUS_MISSING} ${c}"
+    elif [ ! -f "${SRC}/${c}/pom.xml" ]; then
+      CORPUS_NOPOM="${CORPUS_NOPOM} ${c}"
+    fi
+  done
+  if [ -z "${CONSUMERS}" ]; then
+    bad "could not derive ANY Maven consumer from tests/stack/compose.local.yaml — the corpus has nothing to be complete against, which is a defect in this guard"
+  elif [ -n "${CORPUS_MISSING}" ]; then
+    bad "the consumer corpus in ${SRC} carries NO checkout for:${CORPUS_MISSING} — their pins were compared against nothing (run 'make stack-clone', or point STACK_SRC at a complete tree)"
+  else
+    ok "the corpus covers every Maven consumer compose.local.yaml names ($(printf '%s\n' ${CONSUMERS} | wc -l))"
+  fi
+  if [ -n "${CORPUS_NOPOM}" ]; then
+    echo "  .. present but carry no pom.xml, so NOT part of the drift corpus:${CORPUS_NOPOM}"
+  fi
+
   # ── THE WALKER'S OUTPUT IS A PROTOCOL, NOT PROSE ────────────────────────────
   # Every line it prints is exactly one of
   #     DRIFT <repo>: wants <artifact> <v>, registry serves <v>
@@ -213,11 +299,33 @@ else
   # would have surfaced it. Un-blinding the guard had made it blinder. A protocol
   # plus a catch-all is the structural fix: a signal the filter does not know
   # about can no longer be mistaken for silence.
-  DRIFT_RAW="$(PINNED="${PINNED}" SRC="${SRC}" python3 - <<'PYEOF'
+  DRIFT_RAW="$(PIN_LINES="${PIN_LINES}" SRC="${SRC}" python3 - <<'PYEOF'
 import os, re, sys, xml.etree.ElementTree as ET
 NS = "http://maven.apache.org/POM/4.0.0"
-pins = dict(l.split("=") for l in os.environ["PINNED"].split())
 ns = {"m": NS}
+
+# ── THE SERVED SET, DERIVED FROM THE PINS TABLE ─────────────────────────────
+# pins maps artifactId -> the SET of versions the local registry will serve;
+# groups is the set of groupIds those artifacts publish under. Both are read out
+# of m2-bootstrap.sh's own PINS array, so this walk cannot drift away from what
+# the bootstrap actually builds — neither in version nor in COORDINATE, which is
+# the failure this replaced (a hard-coded retired groupId matched nothing).
+#
+# A SET of versions, not one string: the same artifact legitimately has more than
+# one live version, because the consumers are separate repos on separate release
+# cadences. Today hugmesh-admin-bff-api main wants hugmesh-auth-core 2.5.0 while
+# hugmesh-user-bff-api main still wants 2.4.2, so the registry must serve BOTH.
+# The previous `dict(l.split("=") …)` collapsed duplicate artifactIds to whichever
+# PINS line came last, so adding the second pin would have reported the other
+# consumer as drifting — a false red exactly as damaging as the false green.
+pins = {}
+groups = set()
+for _line in os.environ["PIN_LINES"].splitlines():
+    _f = _line.split("|")
+    if len(_f) < 6:
+        continue
+    pins.setdefault(_f[2].strip(), set()).add(_f[3].strip())
+    groups.add(_f[5].strip().replace("/", "."))
 
 def esc(s):
     """Repo names come from a directory listing — data from outside this script.
@@ -233,6 +341,16 @@ def deps(root):
     p = root.find("m:parent", ns)
     if p is not None:
         yield p
+
+# An empty pin table (or one whose group field vanished) makes every comparison
+# below vacuous: nothing matches the filter, `seen` stays 0 and the walk is
+# silent. Say so in the protocol rather than letting the corpus take the blame.
+if not pins or not groups:
+    print("UNREADABLE %s :: could not derive the served coordinates from the PINS "
+          "table (%d artifact(s), %d group(s)) — the walk would filter on nothing"
+          % (esc("tests/stack/m2-bootstrap.sh PINS"), len(pins), len(groups)))
+    print("SEEN 0")
+    sys.exit(0)
 
 seen = 0        # pinned coordinates actually RESOLVED — the anti-vacuity counter
 src = os.environ["SRC"]
@@ -275,7 +393,7 @@ for repo in entries:
         gid = d.findtext("m:groupId", "", ns).strip()
         aid = d.findtext("m:artifactId", "", ns).strip()
         ver = d.findtext("m:version", "", ns).strip()
-        if gid != "systems.hugmesh" or aid not in pins or not ver:
+        if gid not in groups or aid not in pins or not ver:
             continue
         m = re.fullmatch(r"\$\{([^}]+)\}", ver)
         if m:
@@ -288,9 +406,9 @@ for repo in entries:
                 continue
             ver = props[m.group(1)]
         seen += 1
-        if ver != pins[aid]:
+        if ver not in pins[aid]:
             print("DRIFT %s: wants %s %s, registry serves %s"
-                  % (esc(repo), aid, ver, pins[aid]))
+                  % (esc(repo), aid, ver, "/".join(sorted(pins[aid]))))
 print("SEEN %d" % seen)
 PYEOF
 )"; PYRC=$?
@@ -337,12 +455,12 @@ PYEOF
   # the exact failure mode being repaired. Require the walk to have RESOLVED at
   # least one pinned coordinate before its silence is allowed to mean anything.
   if [ "${SEEN:-0}" -eq 0 ]; then
-    bad "the pin-drift walk resolved ZERO systems.hugmesh coordinates in ${SRC} — nothing was actually checked (vacuous green)"
+    bad "the pin-drift walk resolved ZERO ${PIN_GROUPS} coordinates in ${SRC} — nothing was actually checked (vacuous green)"
   else
-    ok "pin-drift walk resolved ${SEEN} systems.hugmesh coordinate(s) across the consumer poms"
+    ok "pin-drift walk resolved ${SEEN} ${PIN_GROUPS} coordinate(s) across the consumer poms"
   fi
   if [ -z "${DRIFT}" ]; then
-    ok "every sibling-requested systems.hugmesh version matches its pin"
+    ok "every sibling-requested ${PIN_GROUPS} version matches its pin"
   else
     bad "PIN DRIFT — a cold stack build will die resolving these:"
     printf '%s\n' "${DRIFT}" | sed 's/^/         /'
@@ -363,7 +481,7 @@ fi
 # ET.ParseError, one is an OSError the old `except ET.ParseError` could not even
 # catch, two parse perfectly and are simply not the document being queried, and
 # one is a corpus-controlled string forging the walker's own output protocol.
-# The corrupt consumer always sits among ELEVEN healthy ones, because a lone bad
+# The corrupt consumer always sits among a FULL healthy corpus, because a lone bad
 # pom is caught by the anti-vacuity counter (seen == 0) by accident; hidden among
 # working consumers, `seen` stays high and only a real signal finds it.
 if [ -z "${M2_SELFTEST_CHILD:-}" ]; then
@@ -371,22 +489,32 @@ if [ -z "${M2_SELFTEST_CHILD:-}" ]; then
   NC="$(scratch_dir m2-negctl)"
   SELF_M2="${BASH_SOURCE[0]}"
 
-  healthy_pom() { # healthy_pom <dir> <auth-core-version>
+  # EVERY FIXTURE COORDINATE IS DERIVED FROM THE PINS TABLE. The controls used to
+  # hard-code `systems.hugmesh` and the parent version, which meant they kept
+  # passing against a walker filtering on the same retired literal while every
+  # REAL consumer pom had moved to net.hugmesh — the controls agreed with the bug
+  # instead of catching it. Anything a fixture states about a coordinate now comes
+  # from the same table the walker reads.
+  PIN_GROUP_1="$(printf '%s\n' "${PIN_GROUPS}" | awk '{print $1}')"
+  PARENT_PIN="$(printf '%s\n' "${PINNED:-}" | sed -n 's/^hugmesh-parent=//p' | head -1)"
+
+  healthy_pom() { # healthy_pom <dir> <auth-core-version> [groupId]
+    local g="${3:-${PIN_GROUP_1}}"
     mkdir -p "$1"
     cat > "$1/pom.xml" <<POM
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0">
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <groupId>systems.hugmesh</groupId>
+    <groupId>${g}</groupId>
     <artifactId>hugmesh-parent</artifactId>
-    <version>2.8.0</version>
+    <version>${PARENT_PIN}</version>
   </parent>
   <artifactId>consumer</artifactId>
   <properties><hugmesh-auth-core.version>$2</hugmesh-auth-core.version></properties>
   <dependencies>
     <dependency>
-      <groupId>systems.hugmesh</groupId>
+      <groupId>${g}</groupId>
       <artifactId>hugmesh-auth-core</artifactId>
       <version>\${hugmesh-auth-core.version}</version>
     </dependency>
@@ -395,18 +523,27 @@ if [ -z "${M2_SELFTEST_CHILD:-}" ]; then
 POM
   }
 
-  base_corpus() { # base_corpus <dir> -> 11 healthy consumers agreeing with the pins
-    local d="$1" n
-    for n in admin-bff-api user-bff-api mod-bff-api federation-api tube-bff-api \
-             forum-bff-api matrix-bff-api mesh-bff-api gateway actions api; do
-      healthy_pom "${d}/hugmesh-${n}" "${AUTH_CORE_PIN}"
+  # base_corpus builds a healthy consumer for EVERY name the derivation yields,
+  # not a hardcoded eleven: the completeness leg above now fails a corpus that is
+  # missing one, so a fixture list frozen by hand would go red the day a Java
+  # service is added to compose.local.yaml — and the controls would then be
+  # failing for a reason that has nothing to do with what they test.
+  base_corpus() { # base_corpus <dir> [groupId] -> one healthy consumer per derived name
+    local d="$1" g="${2:-${PIN_GROUP_1}}" n
+    for n in ${CONSUMERS}; do
+      healthy_pom "${d}/${n}" "${AUTH_CORE_PIN}" "${g}"
     done
   }
 
-  # Take the auth-core pin from the PINS array itself, so these controls cannot
+  # Take the auth-core pin(s) from the PINS array itself, so these controls cannot
   # rot into failing for the boring reason that someone bumped a version.
-  AUTH_CORE_PIN="$(printf '%s\n' "${PINNED:-}" | sed -n 's/^hugmesh-auth-core=//p' | head -1)"
-  [ -n "${AUTH_CORE_PIN}" ] || AUTH_CORE_PIN="$(sed -n 's/^  "\([a-z-]*\)|[0-9a-f]*|hugmesh-auth-core|\([0-9.]*\)|.*$/\2/p' "${BOOT}" | head -1)"
+  # AUTH_CORE_PIN2 is the SECOND distinct served version when one exists — the
+  # registry legitimately serves more than one (admin-bff main on 2.5.0 while
+  # user-bff main is still on 2.4.2), and control (ix) below pins that both are
+  # accepted rather than one of them being reported as drift.
+  AUTH_CORE_PINS="$(printf '%s\n' "${PINNED:-}" | sed -n 's/^hugmesh-auth-core=//p')"
+  AUTH_CORE_PIN="$(printf '%s\n' "${AUTH_CORE_PINS}" | head -1)"
+  AUTH_CORE_PIN2="$(printf '%s\n' "${AUTH_CORE_PINS}" | sed -n '2p')"
 
   m2_neg() { # m2_neg <label> <corpus-dir> <expected-substring>
     local label="$1" corpus="$2" want="$3" out rc
@@ -427,7 +564,7 @@ POM
     healthy_pom "${NC}/trunc/hugmesh-workload-bff-api" "${AUTH_CORE_PIN}"
     head -c 240 "${NC}/trunc/hugmesh-workload-bff-api/pom.xml" > "${NC}/trunc.pom"
     mv "${NC}/trunc.pom" "${NC}/trunc/hugmesh-workload-bff-api/pom.xml"
-    m2_neg "a truncated consumer pom among 11 healthy ones" "${NC}/trunc" \
+    m2_neg "a truncated consumer pom among a full healthy corpus" "${NC}/trunc" \
            "hugmesh-workload-bff-api/pom.xml :: ParseError"
 
     # (ii) EMPTY pom — a fetch that produced a file and no content.
@@ -453,21 +590,21 @@ POM
     #      kept the anti-vacuity counter comfortably above zero.
     base_corpus "${NC}/nons"
     mkdir -p "${NC}/nons/hugmesh-workload-bff-api"
-    cat > "${NC}/nons/hugmesh-workload-bff-api/pom.xml" <<'POM'
+    cat > "${NC}/nons/hugmesh-workload-bff-api/pom.xml" <<POM
 <?xml version="1.0" encoding="UTF-8"?>
 <project>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>hugmesh-workload-bff-api</artifactId>
   <dependencies>
     <dependency>
-      <groupId>systems.hugmesh</groupId>
+      <groupId>${PIN_GROUP_1}</groupId>
       <artifactId>hugmesh-auth-core</artifactId>
       <version>0.0.0-UNSERVED</version>
     </dependency>
   </dependencies>
 </project>
 POM
-    m2_neg "a namespace-less pom hiding real drift behind 11 healthy consumers" "${NC}/nons" \
+    m2_neg "a namespace-less pom hiding real drift behind a full healthy corpus" "${NC}/nons" \
            "not the POM 4.0.0 <project>"
 
     # (v) OUTPUT-PROTOCOL FORGERY. A consumer DIRECTORY NAME is corpus-controlled
@@ -487,11 +624,116 @@ POM
     base_corpus "${NC}/clean"
     CLEAN_OUT="$(M2_SELFTEST_CHILD=1 STACK_SRC="${NC}/clean" bash "${SELF_M2}" 2>&1)"; CLEAN_RC=$?
     if [ "${CLEAN_RC}" -eq 0 ]; then
-      ok "positive control: an 11-consumer corpus that agrees with the pins PASSES (rc=0)"
+      ok "positive control: a full healthy corpus that agrees with the pins PASSES (rc=0)"
     else
       bad "positive control FAILED (rc=${CLEAN_RC}) — (i)-(v) prove nothing if a clean corpus is also red"
       printf '%s\n' "${CLEAN_OUT}" | sed -n '/2b) PIN drift/,/^-- 3)/p' | sed 's/^/           /'
     fi
+
+    # ── (viii) THE LEG'S ACTUAL JOB, PINNED ─────────────────────────────────
+    # Every control above tests a corpus the walker could not EVALUATE. None of
+    # them tested the thing the leg exists for: a consumer asking for a version
+    # the registry does not serve must be REFUSED, by name, with the version it
+    # wants. That gap is why the guard could ship structurally blind — its
+    # groupId filter still said `systems.hugmesh` after the rebrand moved every
+    # consumer pom to net.hugmesh, so on a real corpus it resolved nothing, and
+    # the only control that could have caught it (a genuine drift, expressed in
+    # the coordinate the org actually publishes) did not exist. Run against the
+    # pre-fix walker this control fails: the output carries the anti-vacuity
+    # complaint and NO DRIFT line at all.
+    base_corpus "${NC}/drift"
+    healthy_pom "${NC}/drift/hugmesh-workload-bff-api" "0.0.0-NOT-IN-PINS"
+    # The expected text has NO "DRIFT " prefix on purpose: the parent shell strips
+    # it (`sed -n 's/^DRIFT //p'`) before printing the record, so matching the raw
+    # protocol line here would fail against a control that is working perfectly.
+    m2_neg "a consumer asking for an auth-core version ABSENT from PINS" "${NC}/drift" \
+           "hugmesh-workload-bff-api: wants hugmesh-auth-core 0.0.0-NOT-IN-PINS"
+
+    # (viii-b) The same refusal must survive the PARENT coordinate too — that is
+    #          the one pin every Java consumer carries, and a <parent> is not a
+    #          <dependency>, so it travels a different branch of the walk.
+    base_corpus "${NC}/driftparent"
+    mkdir -p "${NC}/driftparent/hugmesh-workload-bff-api"
+    cat > "${NC}/driftparent/hugmesh-workload-bff-api/pom.xml" <<POM
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>${PIN_GROUP_1}</groupId>
+    <artifactId>hugmesh-parent</artifactId>
+    <version>0.0.0-NOT-IN-PINS</version>
+  </parent>
+  <artifactId>consumer</artifactId>
+</project>
+POM
+    m2_neg "a consumer whose <parent> version is ABSENT from PINS" "${NC}/driftparent" \
+           "hugmesh-workload-bff-api: wants hugmesh-parent 0.0.0-NOT-IN-PINS"
+
+    # ── (ix) MORE THAN ONE SERVED VERSION IS LEGAL ──────────────────────────
+    # The consumers are separate repos on separate cadences, so the registry
+    # really does serve two versions of one artifact at a time. The old walker
+    # built `pins` with dict(), which keeps only the LAST line for a duplicate
+    # artifactId — adding the second auth-core pin would then have reported the
+    # consumer sitting on the first one as drifting. Skipped, loudly, when the
+    # table happens to carry only one version of auth-core.
+    if [ -n "${AUTH_CORE_PIN2}" ]; then
+      base_corpus "${NC}/multi"
+      healthy_pom "${NC}/multi/hugmesh-workload-bff-api" "${AUTH_CORE_PIN2}"
+      MULTI_OUT="$(M2_SELFTEST_CHILD=1 STACK_SRC="${NC}/multi" bash "${SELF_M2}" 2>&1)"; MULTI_RC=$?
+      if [ "${MULTI_RC}" -eq 0 ]; then
+        ok "consumers split across BOTH pinned auth-core versions (${AUTH_CORE_PIN} + ${AUTH_CORE_PIN2}) pass"
+      else
+        bad "a corpus split across two PINNED auth-core versions was rejected (rc=${MULTI_RC}) — the walker keeps only one version per artifact:"
+        printf '%s\n' "${MULTI_OUT}" | sed -n '/2b) PIN drift/,/^-- 3)/p' | sed 's/^/           /'
+      fi
+    else
+      bad "(ix) the PINS table carries only one hugmesh-auth-core version — the multi-version control could not run"
+    fi
+
+    # ── (x) A COORDINATE THE TABLE DOES NOT NAME IS NEVER A GREEN ───────────
+    # The mirror image of the real defect: a corpus written entirely under a
+    # groupId PINS does not carry must not read as "everything matches". It
+    # resolves nothing, and the anti-vacuity counter is what must say so.
+    # The retired coordinate is the meaningful choice here, but it must be
+    # provably NOT in the table — otherwise a future move back to it would turn
+    # this control into a tautology that always passes.
+    OTHER_GROUP="systems.hugmesh"
+    case " ${PIN_GROUPS} " in *" ${OTHER_GROUP} "*) OTHER_GROUP="example.invalid" ;; esac
+    base_corpus "${NC}/othergroup" "${OTHER_GROUP}"
+    m2_neg "a corpus under a groupId the PINS table does not carry" "${NC}/othergroup" \
+           "resolved ZERO"
+
+    # ── (xii) A PARTIAL CORPUS IS NOT A CORPUS ──────────────────────────────
+    # have_poms() is satisfied by a single pom.xml, so a corpus with one consumer
+    # missing walks clean and reports nothing about the one that is gone. That is
+    # the same fail-open as an absent corpus wearing a green coat, and it is the
+    # shape a half-finished `make stack-clone` leaves behind.
+    base_corpus "${NC}/partial"
+    rm -rf "${NC}/partial/hugmesh-admin-bff-api"
+    m2_neg "a corpus that is missing one consumer entirely" "${NC}/partial" \
+           "carries NO checkout for: hugmesh-admin-bff-api"
+  fi
+
+  # ── (xi) NO CORPUS MUST NAME WHAT WENT UNCHECKED ───────────────────────────
+  # The leg's real-world failure on 2026-09-06 was not a crash, it was a line
+  # that said "no consumer pom.xml available" and nothing else — true, useless,
+  # and printed while a cold `make stack-up` was dying on hugmesh-admin-bff-api's
+  # auth-core bump. Non-zero is necessary but not sufficient: the reader must be
+  # told WHICH consumers the pins were not compared against.
+  NOCORP="${NC}/nocorpus"; mkdir -p "${NOCORP}"
+  NOC_OUT="$(env -u CI -u REQUIRE_STACK_SRC -u M2_PIN_DRIFT_SKIP -u M2_PIN_GIT_BASE \
+                 -u CI_REPOSITORY_URL -u GIT_BASE \
+                 M2_SELFTEST_CHILD=1 STACK_SRC="${NOCORP}" bash "${SELF_M2}" 2>&1)"; NOC_RC=$?
+  if [ "${NOC_RC}" -eq 0 ]; then
+    bad "(xi) a run with NO consumer corpus exited 0 — the pin-drift leg failed open"
+  elif ! printf '%s' "${NOC_OUT}" | grep -F "UNCHECKED consumers:" >/dev/null; then
+    bad "(xi) the no-corpus failure does not name the consumers it could not read:"
+    printf '%s\n' "${NOC_OUT}" | sed -n '/2b) PIN drift/,/^-- 3)/p' | sed 's/^/           /'
+  elif ! printf '%s' "${NOC_OUT}" | grep -F "hugmesh-admin-bff-api" >/dev/null; then
+    bad "(xi) the no-corpus failure names no real consumer (expected hugmesh-admin-bff-api among them):"
+    printf '%s\n' "${NOC_OUT}" | sed -n '/2b) PIN drift/,/^-- 3)/p' | sed 's/^/           /'
+  else
+    ok "(xi) with no corpus the leg fails non-zero AND names the unchecked consumers"
   fi
 
   # (vii) THE OPT-OUT MUST STAY A LOCAL ONE. M2_PIN_DRIFT_SKIP=1 exits 0 with no
