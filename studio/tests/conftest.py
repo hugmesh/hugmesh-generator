@@ -3,8 +3,12 @@
 These tests target the pure-Python core (config / keyzip / validate) and do NOT
 need PySide6, so they run in plain CI without the GUI toolkit installed.
 """
+import contextlib
 import os
+import re
+import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -404,6 +408,165 @@ def _inert_entry_probes(request, monkeypatch):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# NEVER ELEVATE: a spy on the real subprocess.Popen that fails any test which starts
+# sudo / pkexec / doas / su — the anti-vacuity control for the 2026-09-04 wedge.
+#
+# What happened: tests/test_pages_fields_asks.py walked the REAL wizard onto the
+# ProgressPage, which dispatches the committed worklist ON ARRIVAL — through the real
+# WorklistDriver -> BuildDriver -> `sudo -A bash ./build-x86-host-stage4.sh` with the
+# Qt askpass helper as SUDO_ASKPASS. Under QT_QPA_PLATFORM=offscreen on a desktop
+# (DISPLAY set) the helper popped an INVISIBLE dialog and blocked forever; the test
+# itself PASSED (it only checked the page type), its worker thread died with the
+# interpreter, and the root-owned sudo was orphaned. 60 of them were found wedged, some
+# two days old, each pinning a 15-58 MB Qt process. No assertion anywhere could see it,
+# which is why the control sits at the one boundary every spawn crosses.
+#
+# Three pieces, each load-bearing:
+#   (a) pytest_configure replaces subprocess.Popen with a SUBCLASS — isinstance checks
+#       and run/call/check_output keep working (they all construct the module-global
+#       `Popen`) — that raises ElevationAttempted BEFORE anything is spawned;
+#   (b) an autouse fixture ERRORS the test in whose window the attempt fell, at
+#       teardown, so a raise the code under test swallowed (the ProgressPage worker
+#       catches BaseException by design) still fails the test;
+#   (c) pytest_sessionfinish fails the RUN with the list, in case (b) was bypassed
+#       (an attempt from a thread that outlived its test lands here).
+#
+# There is deliberately NO opt-out. A test whose subject is a sudo argv fakes the
+# process layer (monkeypatch.setattr(bd.subprocess, "Popen", ...)) — a fake spawns
+# nothing, so this spy never sees it. The driver's own refusal
+# (core/build_driver.guard_elevation: ElevationRefused under pytest or
+# HUGMESH_STUDIO_NO_ELEVATION) is the first line of defence; this is the independent
+# second, and it is the one that would have caught every wedged launcher.
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: argv[0] basenames that mean "become another user".
+ELEVATION_PROGRAMS = frozenset({"sudo", "pkexec", "doas", "su", "run0"})
+#: Wrappers looked THROUGH when locating the program (`env K=V sudo …`, `nice -n 5
+#: sudo …`, `timeout 30 sudo …`). While inside one, tokens carrying `=`, starting with
+#: `-`, or purely numeric (an optional s/m/h/d suffix) are the wrapper's own arguments.
+_TRANSPARENT_WRAPPERS = frozenset({"env", "nice", "ionice", "stdbuf", "setsid", "nohup",
+                                   "timeout", "chrt", "taskset"})
+_WRAPPER_NUMERIC = re.compile(r"[0-9]+[smhd]?")
+
+#: Every attempt, as (PYTEST_CURRENT_TEST or a placeholder, the leading argv tokens).
+_ELEVATION_ATTEMPTS: list[tuple[str, str]] = []
+
+
+class ElevationAttempted(RuntimeError):
+    """A test tried to start an elevation program. Raised INSTEAD of spawning it."""
+
+
+def _elevation_program(args, shell: bool) -> str | None:
+    """The elevation program ``args`` would execute, or ``None``."""
+    if isinstance(args, (str, bytes, os.PathLike)):
+        text = os.fsdecode(args)
+        if shell:
+            try:
+                tokens = shlex.split(text)
+            except ValueError:
+                tokens = text.split()
+        else:
+            tokens = [text]
+    else:
+        try:
+            tokens = [os.fsdecode(t) for t in args]
+        except TypeError:
+            return None
+    inside_wrapper = False
+    for tok in tokens:
+        name = os.path.basename(tok)
+        if name in ELEVATION_PROGRAMS:
+            return name
+        if name in _TRANSPARENT_WRAPPERS:
+            inside_wrapper = True
+            continue
+        if inside_wrapper and ("=" in tok or tok.startswith("-")
+                               or _WRAPPER_NUMERIC.fullmatch(tok)):
+            continue
+        return None
+    return None
+
+
+def _leading_tokens(args) -> str:
+    """The first few argv tokens for the report — never the whole line: a builder argv
+    can carry --user-password."""
+    try:
+        if isinstance(args, (str, bytes, os.PathLike)):
+            return os.fsdecode(args)[:120]
+        return shlex.join(os.fsdecode(t) for t in list(args)[:5]) + " ..."
+    except Exception:                                    # noqa: BLE001 - report only
+        return repr(args)[:120]
+
+
+def _install_never_elevate_popen() -> None:
+    real = subprocess.Popen
+    if getattr(real, "_hugmesh_never_elevate", False):   # already installed (re-entry)
+        return
+
+    class Popen(real):                                   # noqa: N801 - keeps the name
+        _hugmesh_never_elevate = True
+
+        def __init__(self, args, *a, **kw):
+            prog = _elevation_program(args, bool(kw.get("shell", False)))
+            if prog is not None:
+                where = os.environ.get("PYTEST_CURRENT_TEST", "<outside any test>")
+                shown = _leading_tokens(args)
+                _ELEVATION_ATTEMPTS.append((where, shown))
+                raise ElevationAttempted(
+                    f"the test suite must never start {prog} (it would block on a "
+                    f"password prompt nobody can answer and wedge a root-owned launcher "
+                    f"forever): {shown} — stub the driver instead "
+                    f"(tests/test_pages_progress.py FakeBuildDriver) or fake "
+                    f"subprocess.Popen; tests/conftest.py NEVER ELEVATE")
+            super().__init__(args, *a, **kw)
+
+    Popen.__module__ = real.__module__
+    Popen.__qualname__ = real.__qualname__
+    subprocess.Popen = Popen
+
+
+@pytest.fixture(autouse=True)
+def _never_elevate():
+    """ERROR the test in whose window an elevation program was started (see NEVER
+    ELEVATE above). Checked at teardown, so a raise the code under test swallowed
+    still fails the test that caused it."""
+    before = len(_ELEVATION_ATTEMPTS)
+    yield
+    fresh = _ELEVATION_ATTEMPTS[before:]
+    if fresh:
+        pytest.fail(
+            "this test started (or tried to start) an elevation program — a real "
+            "sudo/pkexec would have blocked on a password prompt forever:\n  "
+            + "\n  ".join(shown for _where, shown in fresh)
+            + "\nStub the build driver (tests/test_pages_progress.py FakeBuildDriver) "
+            "or fake subprocess.Popen; there is no opt-out (tests/conftest.py NEVER "
+            "ELEVATE).", pytrace=False)
+
+
+@contextlib.contextmanager
+def expect_elevation_attempt():
+    """For the guard's OWN tests only (tests/test_never_elevate_guard.py): assert the
+    body attempts exactly one elevation, and consume the record so the autouse
+    fixture does not error the test that proved the guard works."""
+    before = len(_ELEVATION_ATTEMPTS)
+    with pytest.raises(ElevationAttempted):
+        yield
+    assert len(_ELEVATION_ATTEMPTS) == before + 1, "no attempt was recorded"
+    del _ELEVATION_ATTEMPTS[before:]
+
+
+def _report_elevation_attempts(session) -> None:
+    if not _ELEVATION_ATTEMPTS:
+        return
+    session.exitstatus = 1
+    print(f"\nELEVATION ATTEMPTED: the suite tried to start an elevation program "
+          f"{len(_ELEVATION_ATTEMPTS)} time(s) (tests/conftest.py NEVER ELEVATE)",
+          file=sys.stderr)
+    for where, shown in _ELEVATION_ATTEMPTS:
+        print(f"  {where}: {shown}", file=sys.stderr)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Suite-wide isolation from the operator's REAL state — and a guard that proves it
 #
 # The Studio's state accessors (core.instance.state_dir, core.build_sessions.
@@ -474,8 +637,9 @@ def _guard_enabled() -> bool:
 
 
 def pytest_configure(config):
-    """Redirect HOME (and the XDG dirs derived from it) to a throwaway tree, and take
-    the before-picture the leak guard compares against."""
+    """Install the never-elevate spy, redirect HOME (and the XDG dirs derived from it)
+    to a throwaway tree, and take the before-picture the leak guard compares against."""
+    _install_never_elevate_popen()
     if _guard_enabled():
         _BASELINE.update(_inventory(_REAL_HUGMESH))
     home = tempfile.mkdtemp(prefix="hugmesh-studio-tests-home-")
@@ -521,6 +685,7 @@ def pytest_sessionfinish(session, exitstatus):
     _drain_probe_threads()
     home = getattr(session.config, "_hugmesh_fake_home", "")
     try:
+        _report_elevation_attempts(session)
         if not _guard_enabled():
             return
         now = _inventory(_REAL_HUGMESH)

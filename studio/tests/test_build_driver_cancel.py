@@ -127,6 +127,9 @@ def test_cancel_native_root_sends_term_to_group(monkeypatch, tmp_path):
 
 
 def test_cancel_native_nonroot_wraps_kill_in_sudo(monkeypatch, tmp_path):
+    # This test's SUBJECT is the sudo argv: it fakes subprocess.run and must reach the
+    # fake past the driver's under-pytest refusal (build_driver.guard_elevation).
+    monkeypatch.setenv("HUGMESH_STUDIO_ALLOW_ELEVATION_UNDER_TEST", "1")
     d = BuildDriver(str(tmp_path), host(is_root=False))
     calls = _capture_run(monkeypatch)
     d._backend, d._pgid, d._proc = "native", 7777, FakeProc()

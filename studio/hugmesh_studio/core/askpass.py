@@ -19,22 +19,33 @@ Nothing else may touch that stdout. So this module obeys three rules:
 * **It is CLI-usable** (#221): an operator or a test harness can drive elevation
   without the Qt dialog — via an env-supplied password, an operator's own askpass
   program, or a plain terminal prompt.
+* **A headless run fails fast.** The dialog is an explicit OPT-IN, never a
+  fallback, and the terminal prompt needs a terminal ON STDIN. So a helper run
+  with no credential source, no TTY and no opt-in exits 1 at once — even on a box
+  where ``DISPLAY`` is set. Before this rule, that exact shape (a pytest run
+  under ``QT_QPA_PLATFORM=offscreen`` on a desktop) fell through to an invisible
+  offscreen dialog and blocked forever: 60 root-owned ``sudo -A`` launchers were
+  found wedged on 2026-09-04, some two days old.
 
 Acquisition order (first that can answer wins):
 
+0. ``HUGMESH_STUDIO_NO_ELEVATION`` set — answer NOTHING (exit 1, marker on
+   stderr) whatever else exists: the process tree has been told not to elevate.
 1. ``HUGMESH_STUDIO_SUDO_PASSWORD`` — a literal password in the environment
    (unattended CLI automation). Presence, not truthiness, selects it.
 2. ``HUGMESH_STUDIO_ASKPASS_COMMAND`` — a command whose stdout is the password
    (relay an operator-supplied external askpass / secret manager).
-3. The **Qt dialog**, when ``allow_gui`` and a display is reachable — the
-   behaviour a GUI-launched build was designed around.
-4. A **terminal prompt** (``getpass``), when a controlling tty is available —
-   the interactive CLI path.
+3. The **Qt dialog**, ONLY when the caller opted in (``allow_gui=True`` — the
+   ``--askpass-gui`` flag, which the build driver's generated helper passes for
+   a GUI-launched build) AND a display is reachable.
+4. A **terminal prompt** (``getpass``), when stdin IS a terminal and /dev/tty is
+   openable — the interactive CLI path (a ``sudo -A`` run from a shell).
 5. ``None`` — nothing could answer; the caller exits non-zero and elevation
    aborts cleanly.
 
-``--askpass-no-gui`` (``allow_gui=False``) skips step 3 so a CLI/automation run
-never pops a dialog even on a desktop with a live display.
+``--askpass`` and ``--askpass-no-gui`` (``allow_gui=False``, the default) never
+reach step 3, so a CLI/automation run never pops a dialog even on a desktop with
+a live display; only ``--askpass-gui`` does.
 """
 from __future__ import annotations
 
@@ -47,11 +58,22 @@ from typing import TextIO
 PASSWORD_ENV = "HUGMESH_STUDIO_SUDO_PASSWORD"
 #: A command whose stdout is the admin password (operator-supplied askpass relay).
 COMMAND_ENV = "HUGMESH_STUDIO_ASKPASS_COMMAND"
+#: Set (anything but 0/off/false/no) to forbid elevation for this process tree. The
+#: build driver then refuses to spawn sudo/pkexec at all (build_driver.guard_elevation)
+#: and this helper, should anything still exec it, answers nothing.
+NO_ELEVATION_ENV = "HUGMESH_STUDIO_NO_ELEVATION"
 
 #: Stable stderr marker written on cancel/failure. The build driver watches for it
 #: (folded into the build log) to attribute a non-zero build to a cancelled prompt
 #: rather than a real build failure. Keep the text stable — it is a contract.
 CANCEL_MARKER = "hugmesh-studio askpass: no password provided (elevation cancelled)"
+
+
+def no_elevation() -> bool:
+    """True iff :data:`NO_ELEVATION_ENV` is set to anything but an explicit off
+    value. The one parser of that variable — the driver and the helper agree."""
+    raw = os.environ.get(NO_ELEVATION_ENV, "")
+    return raw.strip().lower() not in ("", "0", "off", "false", "no")
 
 
 def _display_available() -> bool:
@@ -98,6 +120,16 @@ def _from_terminal(prompt: str, stderr: TextIO) -> str | None:
     stdout, so it can never contaminate the password channel."""
     import getpass
 
+    # stdin must BE a terminal — not merely "a /dev/tty exists somewhere". A helper
+    # exec'd by `sudo -A` inherits sudo's stdin, so under a Studio launched from a
+    # .desktop file, a cron job, CI or a test runner that is /dev/null or a pipe, and
+    # nobody is at any keyboard to answer. Declining here is what makes a headless run
+    # FAIL FAST (exit 1, elevation aborted) instead of blocking on a prompt forever.
+    try:
+        if sys.stdin is None or not sys.stdin.isatty():
+            return None
+    except (AttributeError, ValueError):            # closed / replaced stdin
+        return None
     # A controlling terminal is REQUIRED — and it must be one getpass can read with
     # echo OFF. Probe /dev/tty by actually opening it: the device node exists even
     # when the process has no controlling terminal (so os.path.exists is not enough),
@@ -134,17 +166,24 @@ def _from_gui(prompt: str, argv: list[str] | None) -> str | None:
     return pw if ok else None
 
 
-def acquire_password(*, allow_gui: bool = True, prompt: str | None = None,
+def acquire_password(*, allow_gui: bool = False, prompt: str | None = None,
                      argv: list[str] | None = None,
                      stderr: TextIO | None = None) -> str | None:
     """Obtain the admin password by the first method that can answer, or ``None``.
 
     ``None`` means the caller MUST exit non-zero so the elevation program aborts
     rather than run the build un-elevated. Never writes to stdout — the caller owns
-    the password channel."""
+    the password channel. ``allow_gui`` defaults to False: the dialog is an explicit
+    opt-in (``--askpass-gui``), never a fallback for a run that has no TTY."""
     err = stderr if stderr is not None else sys.stderr
     prompt = prompt or os.environ.get("SUDO_PROMPT") \
         or "Administrator password required to build the image: "
+
+    if no_elevation():
+        err.write(f"hugmesh-studio askpass: {NO_ELEVATION_ENV} is set — refusing to "
+                  "provide a password (elevation is disabled for this process tree)\n")
+        err.write(CANCEL_MARKER + "\n")
+        return None
 
     pw = _from_env_password()
     if pw is not None:
@@ -192,11 +231,11 @@ def looks_like_auth_failure(text: str) -> bool:
     return any(m in low for m in SUDO_AUTH_FAILURE_MARKERS)
 
 
-def run_askpass(argv: list[str] | None = None, *, allow_gui: bool = True) -> int:
-    """The ``--askpass`` entry point. Acquire the password and write ONLY it to
-    stdout (one line), returning 0; on cancel/failure write nothing to stdout and
-    return 1 so ``sudo -A`` aborts elevation. This is the sole writer of the
-    password channel."""
+def run_askpass(argv: list[str] | None = None, *, allow_gui: bool = False) -> int:
+    """The ``--askpass`` / ``--askpass-gui`` entry point. Acquire the password and
+    write ONLY it to stdout (one line), returning 0; on cancel/failure/refusal write
+    nothing to stdout and return 1 so ``sudo -A`` aborts elevation. This is the sole
+    writer of the password channel. ``allow_gui`` is True only for ``--askpass-gui``."""
     pw = acquire_password(allow_gui=allow_gui, argv=argv)
     if pw is None:
         return 1
