@@ -57,7 +57,7 @@ class _Stack:
     def e2e_ready(self, environment="docker"):
         return ["faked: not ready"]
 
-    def _build_env(self):
+    def _build_env(self, extra_env=None, *, write_overlays=True):
         return dict(os.environ, ENV="test")
 
     def running_env(self):
@@ -620,3 +620,76 @@ def test_the_saved_table_is_not_rescanned_when_no_verb_has_run(page):
     page.saved_meshes.refresh = lambda: calls.append("refresh")
     page._on_mesh_state(True, "running")
     assert calls == []
+
+
+def test_the_state_probes_answer_re_probes_every_rows_facts_even_without_a_flip(qapp,
+                                                                              page):
+    """refresh() KEEPS the probe answers it already holds, so the seam's re-scan alone
+    re-probed NOTHING: a row probed 'Start · 3 present' went on offering that Start
+    after the volumes were gone whenever _mesh_up did not flip (a Clean with the mesh
+    already down, a Restore that failed). The per-row facts must be re-read, not
+    only the directory — and this is the no-flip case, where _sync_saved_gate does
+    not do it."""
+    _record()
+    page.initializePage()
+    _settle(qapp, page)
+    page._mesh_up = False
+    page._set_verbs_enabled(True)
+    _settle(qapp, page)
+    table = page.saved_meshes.table
+    assert table.item(0, smw._SM_COL_VOLUMES).text() == "3 present"
+    assert page._saved_last_up is False
+    page.probe["answer"] = dict(_PROBE_OK, volumes_present=False)   # cleaned meanwhile
+    n = len(page.probe["threads"])
+    page._saved_stale = True
+    page._on_mesh_state(False, "not started")            # False -> False: no flip
+    _settle(qapp, page)
+    assert len(page.probe["threads"]) > n, \
+        "the seam re-scanned the disk but re-probed no row"
+    assert threading.get_ident() not in page.probe["threads"]
+    assert table.item(0, smw._SM_COL_VOLUMES).text() == "gone (cleaned)"
+    assert table.item(0, smw._SM_COL_RESTORE).text().startswith("Restore (reseed)")
+
+
+def test_a_record_that_does_not_describe_the_running_mesh_says_so_on_screen(
+        qapp, page, monkeypatch):
+    """capture() follows the page's configuration; the one knob it can read back
+    off a running mesh is its env. A disagreement means restoring this record
+    brings up a DIFFERENT mesh — so it lands in the log AND under the table, not
+    just inside the JSON nobody opens."""
+    def fake_capture(gen, cfg, node, boot, **kw):
+        rec = sm.SavedMesh(id=sm.new_id(), label="captured", generator_dir=gen)
+        rec.config = cfg.to_dict()
+        rec.last_seen = {"disagrees_with_running": [
+            {"field": "env", "form": "test", "running": "prod"}]}
+        return rec
+    monkeypatch.setattr(sm, "capture", fake_capture)
+    page.initializePage()
+    _settle(qapp, page)
+    page._mesh_up = True
+    page._set_verbs_enabled(True)
+    page.save_mesh_btn.click()
+    _settle(qapp, page)
+    log = page.log.toPlainText()
+    assert "WARNING" in log and "env=test" in log and "env=prod" in log
+    note = page.saved_meshes.note.text()
+    # isHidden(), not isVisible(): the page is never shown in a headless test, so
+    # isVisible() is False for every widget on it whatever set_note() did.
+    assert "env=prod" in note and not page.saved_meshes.note.isHidden()
+    assert "not the one running now" in note
+
+
+def test_an_agreeing_save_leaves_no_warning_note(qapp, page, monkeypatch):
+    def fake_capture(gen, cfg, node, boot, **kw):
+        rec = sm.SavedMesh(id=sm.new_id(), label="captured", generator_dir=gen)
+        rec.config = cfg.to_dict()
+        return rec
+    monkeypatch.setattr(sm, "capture", fake_capture)
+    page.initializePage()
+    _settle(qapp, page)
+    page._mesh_up = True
+    page._set_verbs_enabled(True)
+    page.save_mesh_btn.click()
+    _settle(qapp, page)
+    assert "WARNING" not in page.log.toPlainText()
+    assert page.saved_meshes.note.isHidden() or not page.saved_meshes.note.text()

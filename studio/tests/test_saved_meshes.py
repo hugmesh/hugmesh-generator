@@ -53,10 +53,13 @@ class _Node:
     web_url = "https://localhost:8488"
     plain_web_url = "http://localhost:8088"
 
-    def __init__(self, extra=None):
+    def __init__(self, extra=None, running_env="test"):
         self._extra = dict(extra or {})
+        self._running_env = running_env
+        self.env_writes = []
 
-    def _build_env(self):
+    def _build_env(self, extra_env=None, *, write_overlays=True):
+        self.env_writes.append(write_overlays)
         env = dict(os.environ)
         env.update({"ENV": "test", "SOCIAL": "1", "PUBLIC_HOST_PORT": "8088",
                     "E2E_SUPERADMIN_PASSWORD": "never-me",
@@ -71,7 +74,7 @@ class _Node:
         return SimpleNamespace(running=True, detail="3 container(s)")
 
     def running_env(self):
-        return "test"
+        return self._running_env
 
 
 class _Boot:
@@ -469,3 +472,48 @@ def test_lane_never_calls_remove_volume():
     for rel in ("core/saved_meshes.py", "gui/pages/_saved_meshes_widget.py"):
         text = open(os.path.join(here, rel), encoding="utf-8").read()
         assert "remove_volume(" not in text, rel
+
+
+# ── the record describes the FORM: say so, loudly ──────────────────────────────
+def test_capture_reads_the_env_without_rewriting_the_checkouts_overlays(tmp_path, seams):
+    """A save is a READ of the running mesh. Before this, capture()'s one
+    _build_env() call rewrote .theme.css and the limits overlay with the FORM's
+    current values — the record was then taken beside a checkout the save itself
+    had just changed."""
+    gen = _gen(tmp_path)
+    node = _Node()
+    sm.capture(gen, LocalMeshBootstrapConfig(), node, _Boot(gen))
+    assert node.env_writes == [False]
+
+
+def test_a_form_that_is_not_the_running_mesh_is_named_as_a_disagreement(tmp_path, seams):
+    """The only knob a running mesh can be read back for is its env. When the page
+    says one thing and the mesh reports another — most easily after a Studio
+    restart, with the page at its defaults over a mesh still up — the record
+    follows the FORM, so restoring it brings up a DIFFERENT mesh. Structured, so
+    the page can put it on screen, and spelled out, so the JSON stands alone."""
+    gen = _gen(tmp_path)
+    rec = sm.capture(gen, LocalMeshBootstrapConfig(env="test"),
+                     _Node(running_env="prod"), _Boot(gen))
+    dis = rec.last_seen.get("disagrees_with_running")
+    assert dis == [{"field": "env", "form": "test", "running": "prod"}]
+    note = next(n for n in rec.notes if "env=prod" in n)
+    assert "follows the FORM" in note
+    assert "restores the form's mesh, not the one that was running" in note
+
+
+def test_an_agreeing_form_records_no_disagreement(tmp_path, seams):
+    gen = _gen(tmp_path)
+    rec = sm.capture(gen, LocalMeshBootstrapConfig(env="test"),
+                     _Node(running_env="test"), _Boot(gen))
+    assert "disagrees_with_running" not in rec.last_seen
+    assert not [n for n in rec.notes if "disagree" in n or "follows the FORM" in n]
+
+
+def test_a_mesh_that_cannot_say_its_env_is_not_called_a_disagreement(tmp_path, seams):
+    """running_env() returns "" when the stack is unreadable — silence is not a
+    mismatch, and claiming one would be a fact this module never established."""
+    gen = _gen(tmp_path)
+    rec = sm.capture(gen, LocalMeshBootstrapConfig(env="prod"),
+                     _Node(running_env=""), _Boot(gen))
+    assert "disagrees_with_running" not in rec.last_seen

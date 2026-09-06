@@ -275,7 +275,7 @@ class _CredsProbe(QtCore.QThread):
     def run(self):
         try:
             node = self._boot._stack_node()
-            env = node._build_env()
+            env = node._build_env(write_overlays=False)   # a probe READS
             roster = load_roster(self._dir, env=env)
             truth = credentials_truth.probe_credentials(
                 self._dir, env, node, self._boot, operator_user=roster.operator)
@@ -2162,8 +2162,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # The monitor's snapshot rides this slot rather than initializePage: ONE read
         # when nothing has been read yet this visit (the kind lane can be up while
         # compose is down, and only a snapshot can say so), when the section is
-        # open, when compose just flipped up while folded (so the title can say
-        # what is up), or when a verb just ended (_monitor_stale). Re-entrant-safe —
+        # open, when compose's answer disagrees with the last snapshot — up OR down
+        # — while folded (so the title says what is up NOW), or when a verb just
+        # ended (_monitor_stale). Re-entrant-safe —
         # a probe already out is left alone, and the stale flag then survives until
         # that probe finishes (see _on_monitor_finished).
         # `running` here is the COMPOSE-only answer, so it cannot speak for a kind
@@ -2177,9 +2178,29 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if self._saved_stale:
             self._saved_stale = False
             self.saved_meshes.refresh()
-        if (self._monitor_stale or self._monitor is None
+            # refresh() KEEPS the probe answers it already holds (so the table does
+            # not flash back to "Checking…") and asks only for records it has never
+            # seen — on its own it re-scans the DISK and re-probes nothing. The
+            # per-row facts a verb changes (volumes, the credentials hash, a running
+            # mesh) come from this explicit re-probe. When _mesh_up flipped,
+            # _sync_saved_gate (via _set_verbs_enabled above) already started one
+            # and the in-flight guard makes this a no-op; when it did not flip
+            # (Clean with the mesh already down, a Restore that failed) this is
+            # the only re-probe there is.
+            self._probe_saved(self.saved_meshes.records())
+        # `running` is the compose answer that just arrived. A folded title that
+        # still names a mesh which a terminal `make stack-halt` (or a crash) took
+        # down since the last read would otherwise keep its rows, its Open buttons
+        # and "N/N ready" — with the page's own mesh-state line, two lines up,
+        # saying "not running". Re-entering the page did not fix it either: the
+        # re-entry read only fired for a title that claimed NOTHING runs.
+        last = self._monitor
+        compose_changed = (last is not None and running != bool(
+            getattr(getattr(last, "compose", None), "running", False)))
+        if (self._monitor_stale or last is None
                 or self.monitor_section.is_expanded() or running
-                or not bool(getattr(self._monitor, "any_running", False))):
+                or compose_changed
+                or not bool(getattr(last, "any_running", False))):
             if self._refresh_monitor("mesh state"):
                 self._monitor_stale = False
         self._sync_monitor_gate()
@@ -2424,9 +2445,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                    "(Checked on entry; re-checked after every verb.)")
         else:
             tip = ("Record the RUNNING mesh so it can be started or restored from "
-                   "the 'Saved meshes' table instead of generated from scratch: its "
-                   "configuration, the env it exports, the overlay text, the "
-                   "per-repo source HEADs, the doors, the accounts' names and roles, "
+                   "the 'Saved meshes' table instead of generated from scratch: "
+                   "THIS PAGE'S configuration (the only knob a running mesh can be "
+                   "read back for is its env, which is cross-checked and reported "
+                   "when it disagrees), the env it exports, the overlay text, the "
+                   "per-repo source HEADs, the doors, the superadmin/operator "
+                   "usernames and the accounts this Studio added (names and roles), "
                    "credential POINTERS (paths, hashes — never a password) and an "
                    "INVENTORY of its data volumes. The volumes' contents are NOT "
                    "saved: multi-GB, a consistent copy needs the stack halted, "
@@ -2481,6 +2505,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         users = list(self._added_user_specs)
         form = self.theme_form()
 
+        # filled by the worker, read by _on_saved_captured on the GUI thread (the
+        # done signal is what orders the two) — the disagreement belongs ON SCREEN,
+        # under the table, not only in the run log the operator has to scroll back.
+        outcome: dict = {}
+
         def capture(on_line, cancel):
             rec = saved_meshes.capture(gen, boot.cfg, node, boot,
                                        copy_credentials=copy, extra_users=users,
@@ -2496,6 +2525,19 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                     "not copied; credential files "
                     + ("copied into the record's folder at 0600" if copy else
                        "recorded as pointers only (paths, hashes, mtimes)"))
+            # The record is built from THIS PAGE's configuration; the one knob that
+            # can be read back off a running mesh is its env. When the two disagree
+            # the record does not describe the mesh that is up, and a restore from
+            # it would bring up the form's mesh instead — say so where the press
+            # happened, not only in the JSON.
+            for d in (rec.last_seen.get("disagrees_with_running") or []):
+                line = (f"[mesh-save] WARNING: this page says {d['field']}="
+                        f"{d['form']} but the running mesh reports "
+                        f"{d['field']}={d['running']}. The record follows the page, "
+                        "so restoring it brings up the page's mesh, not the one "
+                        "running now.")
+                on_line(line)
+                outcome["warning"] = line.split("WARNING: ", 1)[1]
             return True, []
 
         before = self.worker
@@ -2503,10 +2545,14 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._launch("Saving mesh", capture, stream=True, cancellable=False, verb="")
         if self.worker is not None and self.worker is not before:
             # after _verb_done (connected first): the table re-scans the disk
-            self.worker.done.connect(self._on_saved_captured)
+            self.worker.done.connect(
+                lambda ok, out=outcome: self._on_saved_captured(ok, out))
 
-    def _on_saved_captured(self, _ok: bool):
+    def _on_saved_captured(self, _ok: bool, outcome: dict | None = None):
         self.saved_meshes.refresh()
+        warning = str((outcome or {}).get("warning") or "")
+        if warning:
+            self.saved_meshes.set_note(warning)
 
     _NOT_APPLIED_WHY = {
         "auth_key": "auth key (never stored — re-enter it for a prod mesh)",
@@ -2625,9 +2671,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "Enumerating the e2e suite (asking Playwright for the spec list; this "
             "works with the stack down) …")
         probe = own_probe(self, "_e2e_cat_probe",
-                          _E2ECatalogueProbe(self.generator_dir,
-                                             env=self.boot._stack_node()._build_env(),
-                                             parent=self))
+                          _E2ECatalogueProbe(
+                              self.generator_dir,
+                              env=self.boot._stack_node()._build_env(
+                                  write_overlays=False),   # a catalogue READS
+                              parent=self))
         probe.result.connect(self._show_e2e_tree)
         probe.start()
 
@@ -2898,7 +2946,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._monitor = snap
         # the live-doors answer was read off-thread with the snapshot (a session-file
         # read plus a TCP connect per door is I/O, and this slot is on the GUI thread)
-        self.monitor.set_view_session(bool(getattr(snap, "view_doors", ())))
+        self.monitor.set_view_session(bool(getattr(snap, "view_doors", ())),
+                                      lane=str(getattr(snap, "view_lane", "") or ""))
         self._sync_monitor_gate()
 
     def _on_monitor_toggled(self, on: bool):
@@ -2934,8 +2983,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         press, never automatic: it binds loopback ports on this machine. The lane
         follows what is running (kind's host shell, else the compose front doors)."""
         snap = self._monitor
-        lane = "compose" if (snap is not None and not bool(snap.kind.running)
-                             and bool(snap.compose.running)) else "kind"
+        if snap is not None:
+            lane = ("compose" if (not bool(snap.kind.running)
+                                  and bool(snap.compose.running)) else "kind")
+        else:
+            # no snapshot yet (the footer button pressed before the first read
+            # answered): the page's own compose-only answer is all there is, and
+            # "kind" for a machine with only compose up would bind a door to a
+            # cluster that does not exist
+            lane = "compose" if self._mesh_up is True else "kind"
         node = self.boot._stack_node()
         self._note(f"[view] serving the {lane} lane's front doors on 127.0.0.1 "
                    f"(`make view LANE={lane}`; run `make view-trust` once per machine "
