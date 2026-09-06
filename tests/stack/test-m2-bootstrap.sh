@@ -170,21 +170,74 @@ else
   bad "could not derive a groupId from the PINS table — the walker would filter on nothing"
 fi
 
+# ── (xiii) A REPO PINNED AT TWO SHAs MUST BE BUILT CLEAN ─────────────────────
+# build_one() builds in the PERSISTENT per-repo directory ${M2_CACHE}/src/<repo>,
+# and ensure_src_at() re-detaches that SAME directory for every pin naming that
+# repo. hugmesh-auth-core now carries two pins (2.4.2 for hugmesh-user-bff-api,
+# 2.5.0 for hugmesh-admin-bff-api), so a cold run rebuilds one working tree at two
+# SHAs back to back. Without `clean`, a class DELETED or RENAMED between them
+# survives in target/classes and is packaged into the SECOND jar: the artifact
+# exists, carries the right coordinate, and have_artifact() is satisfied — the
+# staleness is invisible to every check downstream of it. Today's two SHAs happen
+# to differ by 6 adds + 6 modifies and zero deletes/renames, so the hazard is
+# inert; that is a property of one delta, not of the design, and it is not the
+# sort of thing a future auth-core release will preserve on purpose.
+#
+# The demand is CONDITIONAL on the hazard actually existing: with one pin per repo
+# there is no in-place rebuild and no reason to force a clean, so this asks for
+# `clean` only while some repo carries more than one pin. A guard that demands it
+# unconditionally would be asserting a preference; this one asserts a consequence.
+DUP_PIN_REPOS="$(printf '%s\n' "${PIN_LINES}" | awk -F'|' 'NF>=2{print $1}' | sort | uniq -d | tr '\n' ' ')"
+DUP_PIN_REPOS="${DUP_PIN_REPOS% }"
+if [ -z "${PIN_LINES}" ]; then
+  : # already reported above as an unparsable PINS array
+elif [ -z "${DUP_PIN_REPOS}" ]; then
+  ok "(xiii) no repo carries two pins, so build_one needs no in-place rebuild"
+elif [ -z "${DOCKER_LINE}" ]; then
+  bad "(xiii) ${DUP_PIN_REPOS} is pinned more than once but build_one's docker line could not be read, so 'clean' cannot be verified"
+else
+  case " ${DOCKER_LINE} " in
+    *" clean "*) ok "(xiii) ${DUP_PIN_REPOS} is pinned at two SHAs and build_one runs mvn clean, so the second build cannot package a stale class" ;;
+    *) bad "(xiii) ${DUP_PIN_REPOS} is pinned more than once, so build_one rebuilds one working tree at two SHAs in place — but its mvn goals carry no 'clean', and a class deleted between the SHAs would be packaged into the later jar: ${DOCKER_LINE}" ;;
+  esac
+fi
+
 SRC="${STACK_SRC:-${REPO}/.stack-src}"
 have_poms() { [ -d "$1" ] && [ -n "$(find "$1" -mindepth 2 -maxdepth 2 -name pom.xml -print -quit 2>/dev/null)" ]; }
 
 # Derive the Maven consumers from the file the cold stack build itself uses, so a
 # new Java service cannot quietly escape the check: every ${STACK_SRC} build
-# context in compose.local.yaml whose repo is a *-api, the gateway or actions (the
-# repo's own words: "eight BFF/federation siblings" plus hugmesh-gateway and
-# hugmesh-actions, see scripts/patch-stack-src.sh).
+# context in compose.local.yaml whose repo is a *-api, the gateway, actions, or
+# hugmesh-remote-fragment (the repo's own words: "eight BFF/federation siblings"
+# plus hugmesh-gateway and hugmesh-actions, see scripts/patch-stack-src.sh).
+#
+# hugmesh-remote-fragment IS ON THIS LIST BECAUSE IT IS A MAVEN CONSUMER, and it
+# matched none of the name patterns: it is a first-party Spring Boot service, it is
+# a ${STACK_SRC} build context in compose.local.yaml, and its pom requires
+# net.hugmesh:hugmesh-commons with an EXPLICIT <version>2.1.0</version> — a real
+# pin, not the parent-managed property the walk deliberately skips. The gap was
+# measurable in this leg's own numbers: a full .stack-src resolved 21 coordinates
+# while the CI sparse-fetch corpus resolved 20, and the missing one was
+# remote-fragment's commons pin. The walk over a full local tree caught it anyway
+# (it lists ${SRC}, not this array), so ONLY the CI path and this completeness
+# assertion were blind — which is the worse half, because CI is where drift is
+# supposed to be caught before a cold `make stack-up` dies on it.
+# scripts/clone-all-repos.sh already clones it, so a fresh `make stack-clone` still
+# satisfies the completeness leg below.
 #
 # HOISTED out of the no-corpus branch: this list is the leg's SUBJECT, and both
 # outcomes need it — the no-corpus failure must name who went unchecked, and a
 # corpus that WAS found must be checked for completeness against it.
 CONSUMERS="$(sed -n 's|.*context: \${STACK_SRC:-[^}]*}/\([a-z0-9-]*\).*|\1|p' \
                "${REPO}/tests/stack/compose.local.yaml" 2>/dev/null \
-             | grep -E '(-api|^hugmesh-gateway$|^hugmesh-actions$)' | sort -u)"
+             | grep -E '(-api|^hugmesh-gateway$|^hugmesh-actions$|^hugmesh-remote-fragment$)' | sort -u)"
+# The SAME derivation with no name filter at all. It exists so control (xiv) below
+# can ask the one question the filtered list structurally cannot: "did the pattern
+# miss a Maven consumer?" A name pattern is a guess about which repos are Java, and
+# the corpus on disk is the evidence — so check the guess against the evidence
+# instead of trusting it.
+ALL_CONTEXTS="$(sed -n 's|.*context: \${STACK_SRC:-[^}]*}/\([a-z0-9-]*\).*|\1|p' \
+                  "${REPO}/tests/stack/compose.local.yaml" 2>/dev/null | sort -u)"
 
 if ! have_poms "${SRC}"; then
   # Where to fetch from, in falling order of explicitness:
@@ -280,10 +333,62 @@ else
   elif [ -n "${CORPUS_MISSING}" ]; then
     bad "the consumer corpus in ${SRC} carries NO checkout for:${CORPUS_MISSING} — their pins were compared against nothing (run 'make stack-clone', or point STACK_SRC at a complete tree)"
   else
-    ok "the corpus covers every Maven consumer compose.local.yaml names ($(printf '%s\n' ${CONSUMERS} | wc -l))"
+    # SAY WHAT WAS PROVED, NOT MORE. This count is the number of compose build
+    # contexts matching the Maven-consumer NAME PATTERN, which is not the same set
+    # as "the Maven consumers": hugmesh-api-docs is in it (the unanchored `-api`
+    # matches `hugmesh-api-docs`) and the very next line then reports that it
+    # carries no pom.xml. Keeping it in the corpus is deliberate — a `-api` repo
+    # that is not a Java project must be SEEN and reported, not filtered away
+    # before anyone can notice it started or stopped being one — but a PASS line
+    # claiming "every Maven consumer" is a sentence a future reader would trust
+    # further than the check earns.
+    ok "the corpus covers every compose.local.yaml build context matching the Maven-consumer pattern ($(printf '%s\n' ${CONSUMERS} | wc -l))"
   fi
   if [ -n "${CORPUS_NOPOM}" ]; then
     echo "  .. present but carry no pom.xml, so NOT part of the drift corpus:${CORPUS_NOPOM}"
+  fi
+
+  # ── (xiv) THE NAME PATTERN MUST NOT MISS A MAVEN CONSUMER ──────────────────
+  # CONSUMERS is a GUESS — a regex over repo names — about which compose build
+  # contexts are Java projects, and a guess is exactly the sort of thing that is
+  # right until someone adds a service. hugmesh-remote-fragment was the proof: a
+  # first-party Spring Boot service with an explicit net.hugmesh:hugmesh-commons
+  # 2.1.0 pin, sitting in compose.local.yaml, matching none of `-api`, gateway or
+  # actions — so the CI sparse-fetch path never fetched it and the completeness
+  # leg never named it, while a full local .stack-src walked it and nobody noticed
+  # the two corpora were resolving different numbers of coordinates.
+  #
+  # The corpus on disk is the EVIDENCE, so audit the guess against it: any build
+  # context that carries a pom.xml right here and is not in CONSUMERS is a Maven
+  # consumer the CI path is blind to. This can only run with a corpus present —
+  # say so rather than implying the audit happened in the no-corpus case too.
+  PATTERN_MISSED=""
+  # CONSUMERS is NEWLINE-separated (it ends in `sort -u`), so a `case " ${CONSUMERS} "`
+  # membership test matches only its first and last entries — re-join on spaces
+  # first. Getting this wrong reported every consumer as missed, which at least
+  # failed loudly; the same slip in a NEGATIVE direction is how a guard goes quiet.
+  CONS_LIST=" $(printf '%s ' ${CONSUMERS})"
+  AUDITED=0
+  for c in ${ALL_CONTEXTS}; do
+    [ -f "${SRC}/${c}/pom.xml" ] || continue
+    AUDITED=$((AUDITED+1))
+    case "${CONS_LIST}" in
+      *" ${c} "*) ;;
+      *) PATTERN_MISSED="${PATTERN_MISSED} ${c}" ;;
+    esac
+  done
+  # ANTI-VACUITY, and it is not hypothetical: my own first cut of this control
+  # passed 31/0 with the ALL_CONTEXTS sed deliberately broken to match nothing.
+  # An audit whose SUBJECT list is empty examines no context, finds no miss, and
+  # reports a green — the precise failure shape (a silent filter, a confident
+  # PASS) that this whole leg exists to have caught once already. Count what was
+  # actually examined and refuse to call zero a pass.
+  if [ "${AUDITED}" -eq 0 ]; then
+    bad "(xiv) the pattern audit examined ZERO build contexts — ${SRC} holds $(printf '%s\n' ${CONSUMERS} | wc -l) named consumer(s) and the unfiltered compose derivation yielded $(printf '%s\n' ${ALL_CONTEXTS} | wc -w), so this green means the audit did not run, not that the pattern is complete"
+  elif [ -n "${PATTERN_MISSED}" ]; then
+    bad "(xiv) compose build context(s) carry a pom.xml but the Maven-consumer name pattern excludes them:${PATTERN_MISSED} — their pins are checked from a full local corpus and INVISIBLE to the CI sparse-fetch path; widen the grep -E in this file"
+  else
+    ok "(xiv) every compose build context carrying a pom.xml in ${SRC} is inside the Maven-consumer pattern"
   fi
 
   # ── THE WALKER'S OUTPUT IS A PROTOCOL, NOT PROSE ────────────────────────────
