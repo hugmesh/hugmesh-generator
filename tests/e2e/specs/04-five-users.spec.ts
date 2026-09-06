@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { onboard, loginPassword, shot } from './helpers';
+import { onboard, loginPassword, shot, openMatrix, expectMatrixUnlocked } from './helpers';
 
 const USERS = ['alice@gmail.com', 'bob@gmail.com', 'carol@gmail.com', 'dave@gmail.com', 'eve@gmail.com'];
 
@@ -15,7 +15,11 @@ test('five basic users fully register and reach Matrix + Mastodon via the UI', a
     expect(session.provider).toBe('password');
     // The browser holds NO Matrix/Mastodon token (the user-bff hsproxy injects the
     // server-held token); "unlocked" is proven by the UI reaching BOTH surfaces.
-    await page.getByTestId('nav-matrix').click();
+    // onboard() leaves the page on the signed-in HOME, where the shell renders
+    // the service entries as cards, not a menubar (helpers.matrixEntry) — so
+    // Matrix is opened through whichever form is on screen. Once ON
+    // /social/matrix the menubar is back, so nav-mastodon is a plain bar click.
+    await openMatrix(page);
     await expect(page.getByTestId('matrix-view')).toBeVisible();
     await page.getByTestId('nav-mastodon').click();
     await expect(page.getByTestId('mastodon-view')).toBeVisible();
@@ -33,5 +37,5 @@ test('a returning user signs in through the native login form (records a login e
   await page.getByTestId('login-password').fill(loginPassword());
   await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('nav-user')).toBeAttached();
-  await expect(page.getByTestId('nav-matrix')).toBeVisible(); // already registered → unlocked
+  await expectMatrixUnlocked(page); // already registered → unlocked (home renders it as a card)
 });

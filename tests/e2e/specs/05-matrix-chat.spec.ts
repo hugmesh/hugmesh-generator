@@ -47,7 +47,7 @@ test('two users chat with each other through the Matrix UI', async ({ browser })
 
   // Alice sends; Bob must see it (polled). The send is wrapped so a FAILING
   // CS-API call is reported as itself (status + URL) instead of surfacing 15s
-  // later as an empty log — see the KNOWN BLOCKER note at the bottom of this file.
+  // later as an empty log — see the FORMER BLOCKER note at the bottom of this file.
   await expectUiCallOk(alice, UI_ROOM_SEND, "alice's composer send", async () => {
     await alice.getByTestId('matrix-input').fill('hi Bob — alice here');
     await alice.getByTestId('matrix-send').click();
@@ -68,27 +68,23 @@ test('two users chat with each other through the Matrix UI', async ({ browser })
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// KNOWN BLOCKER (product defect, NOT a spec defect) — hugmesh-matrix-ui encodes
-// the room id, tuwunel does not decode it.
+// FORMER BLOCKER — RESOLVED in the deployed hugmesh-matrix-ui.
 //
-// With the personas fixed above, every hsproxy call this spec makes itself now
-// succeeds and the room really is shared. What still fails is the UI's OWN
-// room-scoped CS-API calls. matrix.service.ts builds them as
-// `rooms/${this.enc(roomId)}/…` with `enc(s) { return encodeURIComponent(s); }`
-// (verified in the DEPLOYED bundle, not just in source:
-// `docker exec hugmesh-local-hugmesh-matrix-ui-1 grep enc(  routes-*.js`), and
-// tuwunel v1.7.0 does not percent-decode the path parameter, so `!id%3Alocalhost`
-// reaches the room-id deserializer literally. Observed live from the running UI:
+// This file used to end with a "KNOWN BLOCKER (product defect)" note: the UI's
+// matrix.service.ts built room-scoped CS-API paths with a bare
+// `encodeURIComponent(roomId)`, tuwunel v1.7.0 does not percent-decode the path
+// parameter, so `!id%3Alocalhost` reached the room-id deserializer literally and
+// the UI's own send/messages calls came back 500/403 while helpers.ts's calls
+// (moved to pathParam for exactly that reason) succeeded. The UI now restores
+// the sub-delims tuwunel expects — the deployed bundle reads
+// `enc(e){return encodeURIComponent(e).replace(/%(24|26|2B|2C|3A|3B|3D|40)/gi,
+// t=>decodeURIComponent(t))}` — and this spec passed end to end against the
+// live compose stack + tuwunel on 2026-09-05 (both composer sends 200, both
+// logs showing the peer's line). expectUiCallOk stays: it is what turns a
+// regression of that encoding back into a status+URL instead of an empty log.
 //
-//   PUT  …/rooms/!m4iwDAcfCDEQ1ZM75w%3Alocalhost/send/m.room.message/…  -> 500
-//   GET  …/rooms/!m4iwDAcfCDEQ1ZM75w%3Alocalhost/messages?dir=b&limit=50 -> 403
-//   PUT  …/rooms/!LmrBEFNwdPsY0FfToB%3Alocalhost/send/…  (curl)  -> 400 M_BAD_JSON
-//        "deserialization failed: leading sigil is incorrect or missing"
-//   PUT  …/rooms/!LmrBEFNwdPsY0FfToB:localhost/send/…    (curl)  -> 200
-//
-// helpers.ts's own calls were moved off encodeURIComponent for exactly this
-// reason (see pathParam there). The UI needs the same change — a source edit in
-// hugmesh-matrix-ui plus an image rebuild — so it is NOT fixable from the test
-// tree. The assertions above are deliberately left intact: they describe the
-// contract this spec exists to prove, and they will pass once the UI is fixed.
+// What this spec DOES need from the stack: the `social` compose profile
+// (`make stack-up SOCIAL=1`). On a core-only stack user-bff's hsproxy has no
+// tuwunel to reach and the very first room-setup call (matrixUserId -> whoami)
+// fails as `HTTP 502 Bad Gateway` — an environment gap, not a product defect.
 // ────────────────────────────────────────────────────────────────────────────
