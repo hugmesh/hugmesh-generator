@@ -1,4 +1,4 @@
-# ~amd64 keyword unmasks for the dev-qt/* (Qt 6) framework set the graphical
+# ~amd64 keyword unmask for the dev-qt/* (Qt 6) framework set the graphical
 # payloads pull in. Copied ONLY when CAPABLE (the Plasma set's neochat/
 # kdeconnect/khelpcenter apps hard-depend on it) OR WANT_CALAMARES (calamares ->
 # sys-libs/kpmcore-26.08+ hard-requires >=dev-qt/qtbase-6.11.2) — see the qt6
@@ -12,25 +12,36 @@
 # reproducible hardened build) — so the ENTIRE image resolution bailed and the
 # base payload (grub/dracut/parted/jq/nmcli/Xorg/lightdm/openbox) never merged.
 #
-# The set below is exactly what that build's own AUTOUNMASK-PRETEND dump
-# computed (build.log:19722-19795); if a future tree bump grows the graph, the
-# payload plan fail-fast gate prints the additions up front — extend this file
-# from that output. Unversioned for durability against tree bumps (same call as
-# the calamares/capable files); ~amd64 never accepts the **-keyworded 9999 live
-# ebuilds, so this floats with the newest keyworded release only.
-dev-qt/qtbase ~amd64
-dev-qt/qtdeclarative ~amd64
-dev-qt/qtmultimedia ~amd64
-dev-qt/qtwebengine ~amd64
-dev-qt/qtwebview ~amd64
-dev-qt/qtspeech ~amd64
-dev-qt/qtlocation ~amd64
-dev-qt/qtpositioning ~amd64
-dev-qt/qtwebchannel ~amd64
-dev-qt/qt5compat ~amd64
-dev-qt/qtsvg ~amd64
-dev-qt/qttools ~amd64
-dev-qt/qttranslations ~amd64
-dev-qt/qtshadertools ~amd64
-dev-qt/qtquicktimeline ~amd64
-dev-qt/qtquick3d ~amd64
+# WHY ONE WILDCARD AND NOT A LIST (session 20260907-190340-70b501, role
+# standalone-thick): this file used to ENUMERATE the 16 dev-qt packages that
+# the #223 build's AUTOUNMASK-PRETEND dump happened to name. That enumeration
+# is not a smaller version of the right answer — it is a DIFFERENT, broken one.
+# The dev-qt set releases in lockstep and its members depend on each other with
+# EXACT-VERSION atoms (~dev-qt/qtbase-${PV}:6, ~dev-qt/qtlanguageserver-${PV}:6,
+# =dev-qt/qttools-${PV}[linguist] ...). Unmasking a SUBSET therefore splits the
+# set in two: the listed packages float to the newest keyworded release while
+# the unlisted ones stay pinned at the stable one, and their exact-version deps
+# collide. The 20260907 build died exactly there — qtsensors and qtimageformats
+# were absent from the list, resolved to stable 6.11.1, and dragged
+# ~dev-qt/qtbase-6.11.1:6 into a graph the other 16 had already pulled to
+# 6.11.2:
+#     dev-qt/qtbase:6 ... resulting in a slot conflict
+#     ~dev-qt/qtbase-6.11.1:6[dbus] required by (dev-qt/qtsensors-6.11.1 ...)
+#     ~dev-qt/qtbase-6.11.2:6[...]  required by (dev-qt/qttools-6.11.2 ...)
+# and that build's own AUTOUNMASK-PRETEND dump asked for precisely the two
+# missing members (=dev-qt/qtsensors-6.11.2 ~amd64,
+# =dev-qt/qtimageformats-6.11.2 ~amd64). Re-adding those two by hand would only
+# move the fault to the next member the graph grows into — measured on the
+# 2026-09-03 tree, the 16-atom list ALSO walls on
+# "~dev-qt/qtlanguageserver-6.11.2:6 have been masked", a third member nobody
+# had noticed yet.
+#
+# So the atom below covers the CATEGORY, which is the unit the tree actually
+# versions. package.accept_keywords supports the cat/* extended atom (verified
+# against this portage: with a stable-only ACCEPT_KEYWORDS, "=dev-qt/
+# qtserialport-6.11.2" is "masked by: ~amd64 keyword" without this line and
+# merges "[ebuild N ~]" with it). ~amd64 never accepts the **-keyworded 9999
+# live ebuilds, so this floats with the newest keyworded release only and does
+# NOT pull qt from git. Unversioned for the same reason as the calamares/capable
+# files: a =...-6.11.2 pin rots on the next tree bump.
+dev-qt/* ~amd64

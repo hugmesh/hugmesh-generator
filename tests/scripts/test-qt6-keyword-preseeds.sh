@@ -48,21 +48,46 @@ LIB="${GEN}/scripts/_emerge-plan-lib.sh"
 
 echo "== qt6 keyword pre-seed + payload plan gate guard =="
 
-# 1. the qt6 file: every atom of the incident's AUTOUNMASK-PRETEND set, ~amd64,
-#    UNVERSIONED (a =...-6.11.2 pin silently rots on the next tree bump).
-QT6_ATOMS="qtbase qtdeclarative qtmultimedia qtwebengine qtwebview qtspeech
-qtlocation qtpositioning qtwebchannel qt5compat qtsvg qttools qttranslations
-qtshadertools qtquicktimeline qtquick3d"
+# 1. the qt6 file: WHOLE-CATEGORY ~amd64 coverage, UNVERSIONED (a =...-6.11.2 pin
+#    silently rots on the next tree bump).
+#    This assertion used to demand a 16-atom ENUMERATION — the set the #223
+#    build's AUTOUNMASK-PRETEND dump happened to name. That was the wrong
+#    contract and it cost a second incident (session 20260907-190340-70b501,
+#    standalone-thick): dev-qt members depend on each other with EXACT-VERSION
+#    atoms, so unmasking a SUBSET splits the set — the listed packages float to
+#    the newest keyworded release, the unlisted ones stay stable, and their
+#    exact-version deps collide. That build died on
+#    "dev-qt/qtbase:6 ... resulting in a slot conflict" because qtsensors and
+#    qtimageformats were not on the list. The contract is now CATEGORY coverage.
 if [ -f "${QT6}" ]; then
     ok "package.accept_keywords/qt6 present"
-    missing=""
-    for a in ${QT6_ATOMS}; do
-        grep -qE "^dev-qt/${a} ~amd64\$" "${QT6}" || missing="${missing} ${a}"
-    done
-    if [ -z "${missing}" ]; then
-        ok "qt6 carries all 16 dev-qt atoms, unversioned, ~amd64"
+    if grep -qE '^dev-qt/\* ~amd64$' "${QT6}"; then
+        ok "qt6 grants ~amd64 to the whole dev-qt category (dev-qt/* ~amd64)"
     else
-        bad "qt6 missing/mis-shaped atoms (unversioned 'dev-qt/<pn> ~amd64' required):${missing}"
+        bad "qt6 lost the whole-category 'dev-qt/* ~amd64' rule"
+    fi
+    # The regression shape is an ENUMERATION creeping back: any per-package
+    # dev-qt line means somebody re-listed members, and a list is a subset the
+    # moment the tree grows a new one.
+    enum="$(grep -E '^dev-qt/[a-z0-9]' "${QT6}" | grep -vE '^dev-qt/\* ' || true)"
+    if [ -z "${enum}" ]; then
+        ok "qt6 enumerates no individual dev-qt packages (a list is always a subset)"
+    else
+        bad "qt6 re-grew per-package dev-qt lines — widen to dev-qt/*: ${enum}"
+    fi
+    # Executed coverage check, keyed on the three members the two incidents
+    # actually named: qtsensors + qtimageformats (the 20260907 slot conflict)
+    # and qtlanguageserver (the wall the 16-atom list ALSO hits on the
+    # 2026-09-03 tree). None of them were in the old list, so this control
+    # fails against the pre-fix file and passes against the fixed one.
+    uncovered=""
+    for a in qtsensors qtimageformats qtlanguageserver qtwayland; do
+        grep -qE "^dev-qt/(\*|${a}) ~amd64$" "${QT6}" || uncovered="${uncovered} ${a}"
+    done
+    if [ -z "${uncovered}" ]; then
+        ok "qt6 covers the members both incidents named (qtsensors/qtimageformats/qtlanguageserver/qtwayland)"
+    else
+        bad "qt6 does not cover:${uncovered} — these are the atoms the slot conflict came from"
     fi
     if grep -qE '^\s*[=<>]' "${QT6}"; then
         bad "qt6 grew a version-pinned line — pins rot on tree bumps, keep atoms unversioned"
@@ -125,15 +150,39 @@ else
 fi
 
 # 6. EXECUTED: extract the gate function from the unquoted heredoc (unescape \$),
-#    point it at a sandbox keep-file, and prove the discrimination logic.
+#    point it at a sandbox keep-file AND a sandbox probe file, and prove the
+#    discrimination logic.
 sed -n '/^hugmesh_payload_plan_gate() {/,/^}/p' "${X86}" \
     | sed -e 's/\\\$/$/g' \
           -e "s|/tmp/hugmesh-emerge-plan-image-pretend-failed.log|${TMP}/kept.log|" \
+          -e "s|/tmp/hugmesh-payload-autounmask-probe.log|${TMP}/probe.log|" \
     > "${TMP}/gate.sh"
 if [ -s "${TMP}/gate.sh" ] && grep -q '^}' "${TMP}/gate.sh"; then
     ok "gate function extracted from the heredoc"
 else
     bad "could not extract the gate function body (anchors moved?)"
+fi
+# The gate now ASKS the resolver (one --pretend --autounmask pass) whenever the
+# kept dump carries no wall text, so the executed legs need a stubbed emerge.
+# This is not optional politeness: the test host IS Gentoo, so an unstubbed
+# 'emerge' would run a real resolution against the developer's own world file.
+# The stub prints whatever fixture the leg points HUGMESH_TEST_EMERGE_OUT at.
+mkdir -p "${TMP}/bin"
+cat > "${TMP}/bin/emerge" <<'STUB'
+#!/usr/bin/env bash
+cat "${HUGMESH_TEST_EMERGE_OUT:-/dev/null}"
+exit "${HUGMESH_TEST_EMERGE_RC:-1}"
+STUB
+chmod +x "${TMP}/bin/emerge"
+export PATH="${TMP}/bin:${PATH}"
+# The extracted body keeps the two HOST-expanded words (they are literal package
+# text by the time the real chroot sees them); give them defined values here.
+export EMERGE_EXCLUDE="" PKGS="virtual/test-payload"
+export HUGMESH_TEST_EMERGE_OUT=/dev/null
+if command -v emerge >/dev/null && [ "$(command -v emerge)" = "${TMP}/bin/emerge" ]; then
+    ok "stubbed emerge shadows the host resolver for the executed legs"
+else
+    bad "emerge is NOT stubbed — an executed leg would run a real host resolution"
 fi
 
 # 6a. keyword wall (verbatim shape from build.log:19708-19713) => exit 1, loud.
@@ -268,6 +317,131 @@ if [ "${rc}" -eq 0 ]; then
     ok "informational-only 'masked by:' dump => gate continues (no wall text)"
 else
     bad "a 'masked by:'-only dump was misread as a KEYWORD/MASK wall (rc=${rc})"
+fi
+
+# ── 6d/6e/6f: the SLOT-CONFLICT path (session 20260907-190340-70b501) ─────────
+# The 20260907 standalone-thick build proved the text discriminator alone is a
+# fail-OPEN. Its kept dump carried a slot conflict and NONE of the three wall
+# tokens — "have been masked" appears exactly 0 times in that 3696-line log — so
+# the gate waved it through and ~11 minutes later the real merge died on the
+# same conflict, followed by an AUTOUNMASK-PRETEND dump naming the two keyword
+# lines that would have fixed it. The gate now ASKS the resolver instead of
+# pattern-matching portage's error prose, and these legs pin that behaviour.
+# The fixture below is the VERBATIM head of that build's conflict
+# (build-standalone-thick.x86.log:3611-3625), trimmed to the two colliding
+# parents; keep it wall-token-free — that is the whole point of the fixture.
+cat > "${TMP}/kept.log" <<'FIXTURE'
+Calculating dependencies  ..... done!
+
+[blocks B      ] <dev-qt/qtimageformats-6.11.2:6 ("<dev-qt/qtimageformats-6.11.2:6" is soft blocking dev-qt/qtbase-6.11.2)
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-qt/qtbase:6
+
+  (dev-qt/qtbase-6.11.2:6/6.11.2::gentoo, ebuild scheduled for merge) pulled in by
+    ~dev-qt/qtbase-6.11.2:6[concurrent,network,sql,sqlite] required by (dev-qt/qttools-6.11.2:6/6.11.2::gentoo, ebuild scheduled for merge)
+
+  (dev-qt/qtbase-6.11.1:6/6.11.1::gentoo, ebuild scheduled for merge) pulled in by
+    ~dev-qt/qtbase-6.11.1:6[dbus] required by (dev-qt/qtsensors-6.11.1:6/6.11.1::gentoo, ebuild scheduled for merge)
+
+ * Error: The above package list contains packages which cannot be
+ * installed at the same time on the same system.
+FIXTURE
+# Anti-vacuity: if this fixture ever grows a wall token the OLD discriminator
+# would fire and 6d/6e would stop testing the new code path at all.
+if grep -Eq 'have been masked|keyword changes are necessary|mask changes are necessary' "${TMP}/kept.log"; then
+    bad "the slot-conflict fixture carries a wall token — 6d/6e would exit on the OLD path"
+else
+    ok "slot-conflict fixture is wall-token-free (it must reach the resolver probe)"
+fi
+
+# 6d. slot conflict + resolver says KEYWORD changes => exit 1 before the merge.
+#     This is the 20260907 build, replayed: the two keyword lines below are
+#     verbatim from its own post-mortem AUTOUNMASK-PRETEND dump.
+cat > "${TMP}/probe-keyword.txt" <<'PROBE'
+Calculating dependencies  ... done!
+The following keyword changes are necessary to proceed:
+ (see "package.accept_keywords" in the portage(5) man page for more details)
+# required by kde-plasma/kwin-x11-6.6.6::gentoo
+=dev-qt/qtsensors-6.11.2 ~amd64
+# required by kde-apps/gwenview-26.04.3::gentoo
+=dev-qt/qtimageformats-6.11.2 ~amd64
+PROBE
+out="$(HUGMESH_TEST_EMERGE_OUT="${TMP}/probe-keyword.txt" \
+       bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" 2>&1)"
+rc=$?
+if [ "${rc}" -eq 1 ]; then
+    ok "slot conflict + keyword-needing resolution => exit 1 (no 11-minute dead end)"
+else
+    bad "slot conflict + keyword-needing resolution did NOT fail fast (rc=${rc}) — the 20260907 fail-open is back"
+fi
+if printf '%s' "${out}" | grep '=dev-qt/qtsensors-6.11.2 ~amd64' >/dev/null; then
+    ok "the abort surfaces the resolver's actual keyword lines (pre-seed them and rebuild)"
+else
+    bad "the abort did not print the keyword lines the operator has to pre-seed"
+fi
+# A keyword line naming ONE member of a lockstep set is the tell that the whole
+# set is split; the banner must say so, or the operator adds that one atom and
+# the next member breaks the next build (exactly how #223 became this incident).
+if printf '%s' "${out}" | grep 'lockstep' >/dev/null; then
+    ok "the abort warns that a single-member keyword line means a split set"
+else
+    bad "the abort lost the lockstep-set guidance — the fix becomes whack-a-mole"
+fi
+
+# 6e. slot conflict + resolver needs only USE changes => continue. A slot
+#     conflict is NOT automatically fatal: --autounmask-continue=y applies USE
+#     changes mid-merge, so a USE-driven conflict can still self-heal. Making
+#     "slot conflict" itself the trigger would have been a fail-CLOSED bug of
+#     the same family, so it is pinned here.
+cat > "${TMP}/probe-use.txt" <<'PROBE'
+Calculating dependencies  ... done!
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by kde-misc/kdeconnect-26.04.3-r3::gentoo
+>=net-dns/avahi-0.9 mdnsresponder-compat
+PROBE
+if HUGMESH_TEST_EMERGE_OUT="${TMP}/probe-use.txt" \
+   bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" >/dev/null 2>&1; then
+    ok "slot conflict + USE-only resolution => gate continues (merge can self-heal)"
+else
+    bad "a USE-healable slot conflict was wrongly aborted — fail-closed regression"
+fi
+
+# 6f. a STALE probe file from an earlier build must not decide this one. The
+#     x86 builder resumes sysroots, so /tmp survives across runs. Seed a
+#     keyword-flavoured probe, then have the resolver report USE-only: the gate
+#     must CONTINUE, which it can only do if it read back just what THIS
+#     resolution wrote. Mutating the gate's truncating ">" to ">>" flips this
+#     leg red, which is what makes it a control and not decoration.
+cp "${TMP}/probe-keyword.txt" "${TMP}/probe.log"
+if HUGMESH_TEST_EMERGE_OUT="${TMP}/probe-use.txt" \
+   bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" >/dev/null 2>&1; then
+    ok "a stale probe file from an earlier build does not abort this one"
+else
+    bad "the gate read a STALE probe file — a resumed sysroot would fail a healthy build"
+fi
+rm -f "${TMP}/probe.log"
+
+# 6g. a probe that could NOT answer (resolver timed out, chroot without
+#     coreutils, resolver died early) leaves no keyword text and must CONTINUE.
+#     The gate is allowed to hard-stop a build only on a verdict it actually
+#     got — "I could not tell" is not a verdict. The stub prints nothing and
+#     exits non-zero, which is what all three of those look like on disk.
+if HUGMESH_TEST_EMERGE_OUT=/dev/null HUGMESH_TEST_EMERGE_RC=124 \
+   bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" >/dev/null 2>&1; then
+    ok "an unanswerable probe (timeout/rc!=0/empty) => gate continues"
+else
+    bad "the gate aborted on a probe that returned no verdict"
+fi
+# The watchdog itself: an unbounded probe would hang the build it is meant to
+# save. Pinned as text because the executed leg above runs a stub, not timeout(1).
+if grep -q 'probe_timeout="timeout ' "${X86}"; then
+    ok "the resolver probe is bounded by a timeout"
+else
+    bad "the resolver probe lost its watchdog — a hung resolution would hang the build"
 fi
 
 # 6c. no keep-file (plan resolved / opt-out / timeout) => no-op.

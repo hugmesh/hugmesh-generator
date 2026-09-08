@@ -5373,9 +5373,68 @@ hugmesh_payload_plan_gate() {
         echo "[build-x86] specs-x86/portage/package.use/, then rebuild. (Issue #223.)"
         exit 1
     fi
-    echo "[build-x86] WARN: payload --pretend resolution failed with no keyword/mask wall"
-    echo "[build-x86]       detected — continuing: --autounmask-continue=y applies USE changes"
-    echo "[build-x86]       during the merge below. If it still fails, see its AUTOUNMASK-PRETEND dump."
+    # The text above is the FAST path, not the whole story. It only fires on
+    # error text portage prints when the resolver was ALLOWED to consider a
+    # keyword/mask change. The payload preview mirrors the merge's own option
+    # vector, which includes --autounmask-keep-keywords=y --autounmask-keep-masks=y,
+    # so for a keyword problem that portage can route around by picking an OLDER
+    # stable version it prints no wall at all — it prints a SLOT CONFLICT
+    # between the version the unmaskable packages want and the version everything
+    # else wants. Session 20260907-190340-70b501 (standalone-thick) died exactly
+    # that way: the preview failed with "Multiple package instances within a
+    # single package slot ... dev-qt/qtbase:6", this gate saw no wall token and
+    # waved it through, and ~11 minutes later the real merge printed the SAME
+    # conflict and then an AUTOUNMASK-PRETEND dump naming the two keyword lines
+    # that would have fixed it. Matching more error SHAPES would just move the
+    # blind spot, so do not guess from the text: ASK THE RESOLVER what the fix
+    # costs. One --pretend --autounmask pass computes the complete change set;
+    # if any of it is a keyword or mask change, the merge below is configured to
+    # never apply it and is therefore guaranteed to fail, exactly like the
+    # textual wall above. Only USE changes are self-healing (--autounmask-continue=y).
+    # This runs ONLY on the already-failed path, so it costs one extra resolution
+    # in a build that was otherwise heading for a certain 10+ minute dead end;
+    # --no-emerge-plan leaves no keep-file and skips the gate entirely.
+    probe=/tmp/hugmesh-payload-autounmask-probe.log
+    # The redirection below is a TRUNCATING ">" on purpose, and the gate reads
+    # back only what THIS resolution wrote. A resumed sysroot persists /tmp, so
+    # an appending ">>" would let a probe kept from an EARLIER build abort a run
+    # whose resolution is fine — the same trap the plan lib clears its own
+    # keep-file for.
+    echo "[build-x86] payload --pretend failed with no keyword/mask wall in its text."
+    echo "[build-x86] Asking the resolver whether the fix needs keyword/mask changes"
+    echo "[build-x86] (one --autounmask --pretend pass; the merge below cannot apply those)..."
+    # Watchdog: every other resolution in this builder is bounded, and this one
+    # must be too — a probe that hangs would hang the whole build, which is worse
+    # than the dead end it exists to prevent. Reuses the plan preview knob so
+    # there is one number to tune. A probe that times out (or that a coreutils-
+    # less chroot could not bound) leaves no keyword text and therefore CONTINUES:
+    # a probe that could not answer must never be read as a verdict.
+    probe_timeout=""
+    command -v timeout >/dev/null 2>&1 && probe_timeout="timeout \${EMERGE_PLAN_TIMEOUT:-1800}"
+    \${probe_timeout} emerge --pretend --update --deep --newuse --keep-going \
+        --autounmask=y --autounmask-write=n --autounmask-backtrack=y \
+        --exclude sys-apps/portage ${EMERGE_EXCLUDE} ${PKGS} > "\${probe}" 2>&1 || true
+    if grep -Eq 'keyword changes are necessary|mask changes are necessary' "\${probe}"; then
+        echo "[build-x86] ERROR: the payload needs KEYWORD/MASK changes to resolve."
+        echo "[build-x86] The payload merge keeps keyword/mask decisions explicit"
+        echo "[build-x86] (--autounmask-keep-keywords=y --autounmask-keep-masks=y), so it cannot"
+        echo "[build-x86] apply the changes below and is guaranteed to fail — failing fast instead"
+        echo "[build-x86] of continuing to a certain stage4-incomplete error."
+        echo "[build-x86] ===== RESOLVER OUTPUT: what the payload needs ====="
+        grep -E 'USE changes|keyword changes|mask changes|^# |^>=|^<|^=|Change USE|necessary' "\${probe}" || true
+        echo "[build-x86] ===== END RESOLVER OUTPUT ====="
+        echo "[build-x86] Pre-seed keyword lines into specs-x86/portage/package.accept_keywords/"
+        echo "[build-x86] (role-gated; see the qt6 file) and USE lines into"
+        echo "[build-x86] specs-x86/portage/package.use/, then rebuild. (Issues #223, #317.)"
+        echo "[build-x86] A keyword change naming ONE member of a lockstep-versioned set"
+        echo "[build-x86] (dev-qt, kde-frameworks, kde-plasma) means the whole set is split —"
+        echo "[build-x86] widen the spec to the CATEGORY rather than adding that one atom."
+        exit 1
+    fi
+    echo "[build-x86] WARN: payload --pretend resolution failed, and the resolver needs no"
+    echo "[build-x86]       keyword/mask change — continuing: --autounmask-continue=y applies"
+    echo "[build-x86]       USE changes during the merge below. If it still fails, see its"
+    echo "[build-x86]       AUTOUNMASK-PRETEND dump."
     return 0
 }
 # ── END payload plan fail-fast gate ───────────────────────────────────────────
