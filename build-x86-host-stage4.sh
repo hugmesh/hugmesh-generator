@@ -5403,7 +5403,15 @@ hugmesh_payload_plan_gate() {
     echo "[build-x86] payload --pretend failed with no keyword/mask wall in its text."
     echo "[build-x86] Asking the resolver whether the fix needs keyword/mask changes"
     echo "[build-x86] (one --autounmask --pretend pass; the merge below cannot apply those)..."
-    emerge --pretend --update --deep --newuse --keep-going \
+    # Watchdog: every other resolution in this builder is bounded, and this one
+    # must be too — a probe that hangs would hang the whole build, which is worse
+    # than the dead end it exists to prevent. Reuses the plan preview knob so
+    # there is one number to tune. A probe that times out (or that a coreutils-
+    # less chroot could not bound) leaves no keyword text and therefore CONTINUES:
+    # a probe that could not answer must never be read as a verdict.
+    probe_timeout=""
+    command -v timeout >/dev/null 2>&1 && probe_timeout="timeout \${EMERGE_PLAN_TIMEOUT:-1800}"
+    \${probe_timeout} emerge --pretend --update --deep --newuse --keep-going \
         --autounmask=y --autounmask-write=n --autounmask-backtrack=y \
         --exclude sys-apps/portage ${EMERGE_EXCLUDE} ${PKGS} > "\${probe}" 2>&1 || true
     if grep -Eq 'keyword changes are necessary|mask changes are necessary' "\${probe}"; then

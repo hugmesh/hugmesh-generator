@@ -425,6 +425,25 @@ else
 fi
 rm -f "${TMP}/probe.log"
 
+# 6g. a probe that could NOT answer (resolver timed out, chroot without
+#     coreutils, resolver died early) leaves no keyword text and must CONTINUE.
+#     The gate is allowed to hard-stop a build only on a verdict it actually
+#     got — "I could not tell" is not a verdict. The stub prints nothing and
+#     exits non-zero, which is what all three of those look like on disk.
+if HUGMESH_TEST_EMERGE_OUT=/dev/null HUGMESH_TEST_EMERGE_RC=124 \
+   bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" >/dev/null 2>&1; then
+    ok "an unanswerable probe (timeout/rc!=0/empty) => gate continues"
+else
+    bad "the gate aborted on a probe that returned no verdict"
+fi
+# The watchdog itself: an unbounded probe would hang the build it is meant to
+# save. Pinned as text because the executed leg above runs a stub, not timeout(1).
+if grep -q 'probe_timeout="timeout ' "${X86}"; then
+    ok "the resolver probe is bounded by a timeout"
+else
+    bad "the resolver probe lost its watchdog — a hung resolution would hang the build"
+fi
+
 # 6c. no keep-file (plan resolved / opt-out / timeout) => no-op.
 rm -f "${TMP}/kept.log"
 if bash -c "set -eo pipefail; source '${TMP}/gate.sh'; hugmesh_payload_plan_gate" >/dev/null 2>&1; then
