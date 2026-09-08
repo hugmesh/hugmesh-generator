@@ -3148,6 +3148,7 @@ orphan-guards-verify:
         tests/scripts/test-host-selinux-tools.sh
         tests/scripts/test-idp-builder-functions.sh
         tests/scripts/test-installer-ui-node-default.sh
+        tests/scripts/test-intltool-preseed.sh
         tests/scripts/test-kernel-artifact-cache.sh
         tests/scripts/test-passhash-lib.sh
         tests/scripts/test-platform-key-spelling.sh

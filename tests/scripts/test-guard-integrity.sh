@@ -389,7 +389,19 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # --network=none, and printed 3 passed / 0 failed rc=0 with its negative-control
 # battery 9 caught / 0 survived. MEASURED on the merged tree, not computed: this
 # file printed "159 of 181 suites" there, and the ungated SET is unchanged at 22.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-159}"
+#
+# RAISED TO 160, 2026-09-08, on fix/lxde-intltool-preseed cut from main at
+# 81a7c125. One suite was ADDED AND GATED: tests/scripts/test-intltool-preseed.sh,
+# the build-order guard for the dev-util/intltool pre-seed that lxde-base/
+# lxde-common needs and does not declare. It is named in shell-suites.yml's
+# ALPINE job and in .gitlab-ci.yml. MEASURED, not computed: this file printed
+#     160 of 182 suites are named by a pull_request-triggered workflow
+# on this tree, and the ungated SET is unchanged at 22. The suite was also RUN
+# in alpine:3 — the alpine job's own image, checkout mounted read-only, busybox
+# grep and busybox sed — and printed 8 passed / 0 failed rc=0, with its negative
+# controls re-verified there rather than only on the GNU host, because busybox
+# is exactly where a negative guard fails open.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-160}"
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a
