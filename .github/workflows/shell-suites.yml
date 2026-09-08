@@ -330,6 +330,7 @@ jobs:
             tests/scripts/test-idp-builder-functions.sh
             tests/scripts/test-image-builder-always-on.sh
             tests/scripts/test-installer-ui-node-default.sh
+            tests/scripts/test-intltool-preseed.sh
             tests/scripts/test-kernel-artifact-cache.sh
             tests/scripts/test-kind-addon-channel.sh
             tests/scripts/test-kind-bootstrap-honesty.sh

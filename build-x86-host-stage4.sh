@@ -5231,6 +5231,39 @@ if ${ROLE_CLIENT}; then SNAP_ROLE_BINS="Xorg lightdm openbox"; else SNAP_ROLE_BI
 # progress_parse.py:39 _BANNER_RE), so an echo is fully equivalent. Heredoc-safe:
 # this string is single-quoted here (no host expansion) and a parameter expansion's
 # RESULT is not re-scanned when it lands in the unquoted <<CHROOT heredoc below.
+# ── intltool BUILD-ORDER PRE-SEED (lxde-base/lxde-common) ────────────────────
+# lxde-base/lxde-common-0.99.2-r1's configure requires intltool >= 0.40.0, but
+# its ebuild's BDEPEND names only sys-devel/gettext and virtual/pkgconfig. So
+# portage has NO REASON to order dev-util/intltool before it, and in the
+# standalone-thick payload it did not: the resolver put lxde-common at 101/896
+# and intltool at 290/896 — 189 places later, pulled in as lxappearance's and
+# lxsession's OWN BDEPEND. lxde-common then died at configure with
+#     ./configure: line 5215: intltool-update: command not found
+#     configure: error: Your intltool is too old.  You need intltool 0.40.0 or later.
+# and --keep-going took lxde-base/lxsession down with it ("dropped because it
+# requires"), because lxsession RDEPENDs on >=lxde-common-0.99.2-r1. lxsession
+# IS a requested atom (packages-desktop.list), so the requested-atom
+# completeness gate then fails the whole build — several HOURS after the actual
+# failure. Session 20260908T070203Z lost a full run that way.
+#
+# Declaring dev-util/intltool as a top-level atom does NOT fix this: portage may
+# schedule an unrelated top-level atom anywhere in the merge order. Merging it
+# HERE, in the system group, is what makes the ordering deterministic.
+#
+# Gated on the payload ACTUALLY carrying an lxde-base atom, so no non-desktop
+# role merges a build tool it never needs. Non-fatal by design: a failed
+# pre-seed leaves exactly the behaviour that existed before this block.
+# Heredoc-safe: single-quoted here (no host expansion) and a parameter
+# expansion's RESULT is not re-scanned in the unquoted <<CHROOT heredoc below.
+INTLTOOL_PRESEED=""
+case " ${PKGS} " in
+    *" lxde-base/"*)
+        INTLTOOL_PRESEED='
+echo "[build-x86] Pre-seeding dev-util/intltool: lxde-base/lxde-common under-declares it (configure needs intltool-update; BDEPEND does not)."
+emerge --oneshot --update --newuse dev-util/intltool \
+    || echo "[build-x86] WARN: intltool pre-seed failed — lxde-base/lxde-common may die at configure and strand lxde-base/lxsession"'
+        ;;
+esac
 STEAM_OVERLAY_SETUP=""
 if ${STEAM_NATIVE}; then
     STEAM_OVERLAY_SETUP='
@@ -5523,6 +5556,7 @@ emerge --oneshot --update --newuse sys-apps/baselayout || true
 # + the INSTALL_MASK dodge still prevent the literal '.mo' from shipping.
 emerge --oneshot --update "<sys-devel/gettext-0.23" \
     || echo "[build-x86] WARN: gettext downgrade to <0.23 unavailable; relying on INSTALL_MASK"
+${INTLTOOL_PRESEED}
 ${STEAM_OVERLAY_SETUP}
 # Stream-mirror emerge output while extracting the three failure-notice shapes
 # portage emits under --keep-going (consumed by the EMERGE FAILURE-NOTICE GATE
