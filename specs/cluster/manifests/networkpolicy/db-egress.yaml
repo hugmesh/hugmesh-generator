@@ -1,23 +1,41 @@
 # Per-DB-pod EGRESS locks — DNS only (closes the ADR-32 companion gap).
 #
 # THE GAP THIS CLOSES. db-ingress.yaml is Ingress-ONLY, and tier-egress.yaml
-# deliberately EXCLUDES the five BFF/federation Postgres pods from its
-# namespace-wide egress cutover (`app NotIn [admin-bff-db, mod-bff-db,
-# user-bff-db, federation-db, forum-bff-db, egress-proxy]`). Between the two,
-# NOTHING selected these pods on the Egress axis, so their egress was
-# DEFAULT-ALLOW: a compromised Postgres pod could open a socket to anywhere,
-# in-cluster or on the internet. tier-egress.yaml carried that as a written
-# TODO; this file is the follow-up it named.
+# deliberately EXCLUDES six Postgres pods from its namespace-wide egress cutover
+# on the identical "a server pod initiates nothing outbound" rationale:
+#   hugmesh-backend  `app NotIn [admin-bff-db, mod-bff-db, user-bff-db,
+#                    federation-db, forum-bff-db, egress-proxy]`
+#   hugmesh-pki      `app NotIn [route-access-db]`
+# Between the two files, NOTHING selected those pods on the Egress axis, so their
+# egress was DEFAULT-ALLOW: a compromised Postgres pod could open a socket to
+# anywhere, in-cluster or on the internet. tier-egress.yaml carried that as a
+# written TODO; this file is the follow-up it named, and it covers ALL SIX.
 #
-# WHY DNS-ONLY IS THE COMPLETE ALLOW-SET, measured not assumed. Each of the five
-# Deployments is a SINGLE `postgres:16-alpine` container — no initContainers, no
-# sidecars, no exporters (verified in manifests/{admin-bff-db,mod-bff-db,
-# user-bff-db,federation-db,forum-bff-db}/deployment.yaml). A Postgres pod is a
-# SERVER: it accepts connections and initiates none. Its initdb/ scripts and the
-# pg-tls entrypoint run locally in the container; Liquibase and every schema
-# migration run in the consuming *-api pod and arrive as INGRESS. Citus (the one
-# thing here that would talk pod-to-pod) is opt-in and off by default in
-# federation-db — `SHARDING_CITUS=on` plus the citusdata image; TURNING IT ON
+# ⚠ ONE POD IN THAT EXCLUSION SET IS STILL NOT COVERED HERE, AND DELIBERATELY SO:
+# CASSANDRA (hugmesh-pki, `app.kubernetes.io/name NotIn [cassandra]` in
+# tier-egress.yaml). It is excluded on a DIFFERENT rationale — it gossips, so it
+# is the one workload here that genuinely does initiate outbound traffic — and its
+# pod spec is NOT IN THIS TREE: it is rendered by the pinned bitnami/cassandra
+# 12.3.11 Helm chart (apps/00-cassandra.yaml). Its real allow-set (7000/7001
+# gossip + internode TLS, 7199 JMX, the ESO/metrics sidecars the chart may add at
+# a version bump) cannot be derived from anything committed here, and a guessed
+# allow-set on a gossip database is exactly the "missed allow black-holes the
+# workload" failure the egress overlay's own warning is about. So: Cassandra's
+# egress REMAINS DEFAULT-ALLOW, it is a NAMED open gap and not an oversight, and
+# closing it needs the rendered StatefulSet read off a live cluster first. Do not
+# claim "the DB tier is egress-locked" without this sentence attached.
+#
+# WHY DNS-ONLY IS THE COMPLETE ALLOW-SET FOR THE SIX, measured not assumed. Each
+# of the six Deployments is a SINGLE `postgres:16-alpine` container — no
+# initContainers, no sidecars, no exporters (verified in manifests/{admin-bff-db,
+# mod-bff-db,user-bff-db,federation-db,forum-bff-db}/deployment.yaml and
+# manifests/route-access/deployment.yaml). A Postgres pod is a SERVER: it accepts
+# connections and initiates none. Its initdb/ scripts and the pg-tls entrypoint
+# run locally in the container; Liquibase and every schema migration run in the
+# consuming *-api pod and arrive as INGRESS. Its credentials arrive as MOUNTED
+# ESO Secrets, so it never dials Vault itself. Citus (the one thing here that
+# would talk pod-to-pod) is opt-in and off by default in BOTH federation-db and
+# route-access-db — `SHARDING_CITUS=on` plus the citusdata image; TURNING IT ON
 # MEANS ADDING A WORKER RULE HERE, because a coordinator does dial its workers.
 #
 # PRECEDENT, same shape, already live: homeserver-egress.yaml's
@@ -37,8 +55,11 @@
 # NOT the same set as tier-ingress.yaml's NotIn list, and that is CORRECT:
 # wiki-bff-db / mesh-bff-db / character-forge-bff-db are NOT in tier-egress's
 # NotIn, so tier-egress already selects them and locks their egress to the
-# backend tier allow-set once that cutover happens. The five here are the ones
-# tier-egress excludes and therefore the only ones left uncovered.
+# backend tier allow-set once that cutover happens. casdoor-pg (hugmesh-pki) and
+# casdoor-games-pg (hugmesh-games) are likewise selected by their own tier-egress
+# policies and need no per-pod lock here. The six below are the ones tier-egress
+# excludes on the server-pod rationale and therefore the only ones it leaves
+# uncovered — plus Cassandra, called out above.
 ---
 # ── admin-bff-db (Postgres, hugmesh-backend) ────────────────────────────────
 apiVersion: networking.k8s.io/v1
@@ -135,6 +156,51 @@ spec:
     matchLabels: { app: forum-bff-db }
   policyTypes: [Egress]
   egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# ── route-access-db (Postgres, hugmesh-pki) ─────────────────────────────────
+# The SIXTH pod tier-egress.yaml excludes on the server-pod rationale, and the
+# one whose default-allow egress mattered most: this is the source of truth for
+# the gateway `route_access` table — the rows every gateway reads to decide
+# whether a role may reach a URL. Losing or tampering with that store is the
+# failure mode where RBAC silently stops enforcing, so it is the last pod in the
+# mesh that should have been able to dial arbitrary destinations.
+#
+# Same shape and same evidence as the five backend DBs above: manifests/
+# route-access/deployment.yaml is a single `postgres:16-alpine` container with no
+# initContainers and no sidecars; its five role passwords arrive as MOUNTED ESO
+# Secret keys (route-access-db-roles), not by dialling Vault; its initdb/ scripts
+# (00-hardening.sql, 10-roles.sh, 20-schema.sql, 90-citus.sh) and the
+# pg-tls-entrypoint.sh wrapper run entirely in-container — grepped for
+# curl|wget|nc|psql -h|pg_dump|http and they make no outbound call.
+#
+# ⚠ CITUS, same caveat as federation-db: SHARDING_CITUS is "off" and the image is
+# stock postgres:16-alpine. Flipping it on (citusdata/citus:12-pg16) makes the
+# coordinator DIAL its workers on 5432 — add the worker rule in the same change
+# that flips the flag.
+#
+# ⚠ PG_TLS_ENABLED is "false" today and flipping it to "true" changes NOTHING
+# here: TLS is served on the INGRESS side (Postgres accepts a TLS handshake), and
+# the cert arrives as a mounted Secret. No egress rule is implied by that flip.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-egress-route-access-db
+  namespace: hugmesh-pki
+  labels: { app: route-access-db, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  podSelector:
+    matchLabels: { app: route-access-db }
+  policyTypes: [Egress]
+  egress:
+    # DNS (CoreDNS/kube-dns in kube-system). The ONLY thing a Postgres server
+    # pod resolves; without it even in-pod name lookups (and pg_isready by
+    # hostname) fail.
     - to:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: kube-system }

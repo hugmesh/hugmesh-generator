@@ -8,7 +8,7 @@ resources:
   - homeserver-isolation.yaml
   - gateway-crossns-ingress.yaml   # cross-namespace gateway hops the tier/per-pod policies miss: superadmin-gateway (hugmesh-pki) -> admin-bff-api + federation-api, and fe-gateway -> the homeserver mTLS proxies :4443 (found by [gateway-netpol])
   - homeserver-egress.yaml   # default-deny egress on akkoma/tuwunel: DNS + akkoma-db + egress-proxy only (domain-lock/no-federation backstop)
-  - db-egress.yaml   # per-DB-pod DNS-only EGRESS lock for the five *-bff-db/federation-db pods tier-egress.yaml excludes; same shape + same app as homeserver-egress's akkoma-db lock
+  - db-egress.yaml   # per-DB-pod DNS-only EGRESS lock for the SIX Postgres pods tier-egress.yaml excludes on the server-pod rationale (the five backend *-bff-db/federation-db + route-access-db in hugmesh-pki); same shape + same app as homeserver-egress's akkoma-db lock. Cassandra is NOT covered — see the ⚠ note at the top of db-egress.yaml.
   - egress-vpn-interaction.yaml   # per-service opt-in (hugmesh.net/vpn-egress=true) direct egress for the node split-tunnel; PRUNED when egress-vpn is not selected (default-off)
   - tor-onion-marked.yaml   # per-service opt-in (hugmesh.net/tor-onion=true) egress to the node Tor SOCKS proxy; forward-hook for pod-egress-via-tor; PRUNED when tor is not selected (default-off)
   # SHIPS DARK — tier-egress.yaml (tier-wide default-deny EGRESS, CLUSTER-HARDENING-PLAN §B)
