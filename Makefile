@@ -290,8 +290,11 @@ X86_ROLE_LIST := pki backend frontend backend-gpu
 # X86_EVERY_ROLE: the FULL documented x86 matrix (nodes + omnibus + edge-ai +
 # the client devices + the standalone desktops, incl. the UNAFFILIATED plain
 # Gentoo one) — what `make build-everything` threads through
-# build-all-roles.sh's X86_ROLES knob.
-X86_EVERY_ROLE := pki backend frontend backend-gpu omnibus edge-ai laptop chromebook desktop standalone-thin standalone-thick standalone-unaffiliated
+# build-all-roles.sh's X86_ROLES knob. omnibus is listed FIRST on purpose
+# (issue #46): X86_ROLES is consumed in order, every x86 role shares the
+# snap-build-x86 binpkg pool, and the most package-complete image must fill
+# that pool before the roles that reuse it are queued.
+X86_EVERY_ROLE := omnibus pki backend frontend backend-gpu edge-ai laptop chromebook desktop standalone-thin standalone-thick standalone-unaffiliated
 
 # Libre Computer Le/La Frite LIGHT-DESKTOP client image (Amlogic arm64).
 #   FRITE_BOARD   = la-frite (DEFAULT) | le-potato | sweet-potato

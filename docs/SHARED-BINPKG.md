@@ -551,7 +551,10 @@ reports `PLAN_KERNEL_CACHE=<root>|off`.
   (the PR #44 deferral); pre-profile stamps are migrated once, loudly, by
   `pool_fingerprint_preflight` — a real CHOST/CFLAGS change still refuses reuse.
   Like every claim in this section, the reuse RATE on a real queue is owed proof
-  from the next full mesh build's plan-preview `[binary]` counts.
+  from the next full mesh build's plan-preview `[binary]` counts — which the plan
+  wire now carries per group (`total=<M> binary=<B> ebuild=<E>` + `via=` per row,
+  and a `[emerge-plan] <group> binpkg reuse: …` line in every build log; see
+  `docs/EMERGE-PLAN-PREVIEW.md`). The instrument exists; the number is still owed.
 - **The arm host-side bdep pool (#72 §4) is wired on rpi5 + jetson only, and its
   reuse RATE is owed proof.** The leg's decisions (host-keyed stamp, flush-on-identity
   -change, make.conf wiring, target isolation) are proven hermetically in

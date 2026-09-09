@@ -105,6 +105,26 @@ else
         <(grep '^==> Emerge plan: ' "${TMP}/out.edge") 2>&1 | head -2 | tr '\n' ' ')"
 fi
 
+# ── 3b. binpkg reuse line (issue #46): one human line per planned group, read
+#        back off the wire's own total line, so it can never disagree with it ──
+want_edge='[emerge-plan] image binpkg reuse: 1 of 5 package(s) from the pool (20%), 4 to compile'
+want_real='[emerge-plan] image binpkg reuse: 0 of 30 package(s) from the pool (0%), 30 to compile'
+if [ "$(grep -F 'binpkg reuse:' "${TMP}/out.edge")" = "${want_edge}" ] \
+   && [ "$(grep -F 'binpkg reuse:' "${TMP}/out.real")" = "${want_real}" ]; then
+    pass reuse-line
+else
+    fail reuse-line "expected '${want_edge}' / '${want_real}', got: $(grep -hF 'binpkg reuse:' "${TMP}/out.edge" "${TMP}/out.real" | tr '\n' '|')"
+fi
+# ...and a group with nothing to merge says so rather than claiming a 0% rate.
+mk_stub emerge-empty "printf 'Calculating dependencies  ... done!\n\nTotal: 0 packages, Size of downloads: 0 KiB\n'"
+emerge_plan_emit image "${TMP}/emerge-empty" @world >"${TMP}/out.empty" 2>/dev/null
+if [ "$(grep '^==> Emerge plan: ' "${TMP}/out.empty")" = "==> Emerge plan: image total=0 binary=0 ebuild=0" ] \
+   && [ "$(grep -F 'binpkg reuse:' "${TMP}/out.empty")" = "[emerge-plan] image binpkg reuse: nothing to merge" ]; then
+    pass reuse-line-empty
+else
+    fail reuse-line-empty "unexpected output: $(cat "${TMP}/out.empty" | tr '\n' '|')"
+fi
+
 # ── 4. CMD may be a shell FUNCTION (the cross_emerge shape) ───────────────────
 fake_cross_emerge() { "${TMP}/emerge-real" --jobs=1 --with-bdeps=n "$@"; }
 emerge_plan_emit system fake_cross_emerge --update @system >"${TMP}/out.fn" 2>/dev/null
