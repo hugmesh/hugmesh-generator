@@ -21,3 +21,4 @@ kind: Kustomization
 #      policies removed -> egress fully open again).
 resources: []
   # - ../networkpolicy/tier-egress.yaml   # default-deny EGRESS per tier — ENABLE per-namespace, live-validate-only
+  # - ../networkpolicy/db-egress.yaml     # DNS-only EGRESS lock on the six Postgres pods tier-egress excludes (five backend *-bff-db/federation-db + route-access-db). Same gate as tier-egress: ENABLE per-namespace, live-validate-only. It shipped through the AUTO-SYNC app for one commit (PR #325) — a six-pod, self-healing default-deny with no live validation; moved here 2026-09-09.
