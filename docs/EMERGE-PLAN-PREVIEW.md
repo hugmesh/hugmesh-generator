@@ -26,9 +26,9 @@ before each multi-package emerge section and emits the resolved plan itself.
 One prefix, four line shapes, ANSI-free (`--color=n`), greppable:
 
 ```
-==> Emerge plan: <group> total=<M>
-==> Emerge plan: <group> <idx>/<M> <atom> USE="<flags>"
-==> Emerge plan: <group> <idx>/<M> <atom>
+==> Emerge plan: <group> total=<M> binary=<B> ebuild=<E>
+==> Emerge plan: <group> <idx>/<M> <atom> via=<binary|ebuild> USE="<flags>"
+==> Emerge plan: <group> <idx>/<M> <atom> via=<binary|ebuild>
 ==> Emerge plan: <group> unavailable reason=<slug>
 ```
 
@@ -45,6 +45,17 @@ One prefix, four line shapes, ANSI-free (`--color=n`), greppable:
   `parse-mismatch`. Each means *no plan is coming for that group* — the GUI
   falls back to start-time rows, it never waits.
 * `total=0` is a real reading (a merge with nothing to do), not "plan missing".
+* `via=<binary|ebuild>` is portage's own row kind (`[binary …]` merged from the
+  binpkg pool, `[ebuild …]` compiled) and `binary=<B> ebuild=<E>` on the header
+  are the two counts (B + E == M) — the per-group **binpkg reuse** reading
+  issue #46 asked for. Until this field existed the parser stripped the bracket
+  block and the distinction never left the builder. The lib also prints one
+  human line per planned group next to the wire —
+  `[emerge-plan] <group> binpkg reuse: B of M package(s) from the pool (P%), E to compile`
+  — so a build log answers "how much did the pool save this image?" on its own.
+  Parser-side both fields are optional (`PlanLine.via/binary/ebuild` are `None`
+  on a pre-#46 line), so old logs still replay; `PlanLine.reuse_percent()` is the
+  whole-percent rate for a header, `None` when unknown or when nothing is planned.
 
 The prefix is pinned **once on each side** — builder-side
 `EMERGE_PLAN_PREFIX` in `scripts/_emerge-plan-lib.sh`, parser-side

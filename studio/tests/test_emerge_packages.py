@@ -1008,6 +1008,46 @@ def test_parse_plan_line_all_four_shapes():
     assert unav == ep.PlanLine(kind="unavailable", group="world", reason="opt-out")
 
 
+def test_parse_plan_line_carries_binpkg_provenance():
+    """Issue #46: the row kind portage prints ([binary vs [ebuild) reaches the parser as
+    ``via=``, and the header carries the two counts, so a per-image reuse rate can be
+    read off the plan instead of being discarded at parse time."""
+    hdr = ep.parse_plan_line("==> Emerge plan: image total=5 binary=1 ebuild=4")
+    assert hdr == ep.PlanLine(kind="total", group="image", total=5, binary=1, ebuild=4)
+    assert hdr.reuse_percent() == 20
+    binrow = ep.parse_plan_line(
+        '==> Emerge plan: image 2/5 sys-apps/gawk-5.3.1-r1 via=binary USE="readline -mpfr"')
+    assert (binrow.kind, binrow.via, binrow.atom, binrow.use) == (
+        "pkg", "binary", "sys-apps/gawk-5.3.1-r1", "readline -mpfr")
+    bare = ep.parse_plan_line("==> Emerge plan: image 5/5 sys-apps/portage-3.0.81.2 via=ebuild")
+    assert (bare.via, bare.use) == ("ebuild", None)
+    # a via= token that is neither kind is not a plan row — never guessed into one
+    assert ep.parse_plan_line("==> Emerge plan: image 1/5 dev-libs/foo-1 via=magic") is None
+    # whole-percent, floor: 2 of 3 is 66, not 67; a zero-total header has no rate
+    assert ep.parse_plan_line("==> Emerge plan: world total=3 binary=2 ebuild=1").reuse_percent() == 66
+    assert ep.parse_plan_line("==> Emerge plan: world total=0 binary=0 ebuild=0").reuse_percent() is None
+
+
+def test_parse_plan_line_pre_46_shapes_still_parse_with_unknown_provenance():
+    """A log written by a lib that predates ``via=``/``binary=`` must replay: the
+    fields come back None (unknown), never a fabricated ``ebuild``/0%."""
+    hdr = ep.parse_plan_line("==> Emerge plan: image total=149")
+    assert (hdr.total, hdr.binary, hdr.ebuild, hdr.reuse_percent()) == (149, None, None, None)
+    row = ep.parse_plan_line('==> Emerge plan: image 3/149 dev-libs/xxhash-0.8.3-r2 USE="-static-libs"')
+    assert (row.via, row.use) == (None, "-static-libs")
+
+
+def test_plan_provenance_fields_match_the_builder_lib():
+    """Both-sides pin for the #46 fields, same discipline as the prefix: the lib must
+    emit exactly the ``via=<kind>`` row token and the ``binary=<B> ebuild=<E>`` header
+    tail this parser accepts, so a reword on either side fails HERE."""
+    src = _plan_lib_src()
+    assert 'total=%d binary=%d ebuild=%d' in src, "lib header tail drifted from binary=/ebuild="
+    assert '%s via=%s' in src, "lib row token drifted from via=<kind>"
+    for kind in ("binary", "ebuild"):
+        assert f'"{kind}"' in src, f"lib no longer names the {kind} row kind"
+
+
 def test_parse_plan_line_rejects_everything_else():
     for line in (
         _banner("Emerge group: world"),                       # group banner, not a plan
