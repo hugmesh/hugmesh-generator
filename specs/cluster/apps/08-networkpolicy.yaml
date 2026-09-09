@@ -9,8 +9,11 @@
 # NetworkPolicy bugs only surface live. Smoke-test login + each gateway hop + the
 # BFF/DB/casdoor/cassandra paths. ROLLBACK if anything is cut off: revert this
 # `automated:` block (back to manual) or `kubectl delete -k manifests/networkpolicy`
-# — the policies are ingress-only (egress stays open), so removing them fully
-# restores connectivity.
+# — the policies are ingress plus one narrow per-pod egress backstop
+# (homeserver-egress.yaml: akkoma, tuwunel, akkoma-db), so removing them restores
+# connectivity everywhere except that those three pods regain open egress too.
+# Tier-wide and per-DB egress (tier-egress.yaml, db-egress.yaml) are NOT here —
+# they ship dark behind the MANUAL-sync 08a-networkpolicy-egress app on purpose.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
