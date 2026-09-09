@@ -6,7 +6,7 @@
   "scripts": {
     "test": "playwright test -c playwright.config.ts --reporter=list",
     "test:rbac": "playwright test -c playwright.config.ts --reporter=list specs/1[2-8]-rbac-*.spec.ts",
-    "test:rbac:contract": "playwright test -c playwright.config.ts --reporter=list 12-rbac-gateway-route-access 16-rbac-mod-sibling-scope 18-rbac-phase8-10-pending"
+    "test:rbac:contract": "playwright test -c playwright.config.ts --reporter=list --grep-invert @layer:ui 12-rbac-gateway-route-access 16-rbac-mod-sibling-scope 18-rbac-phase8-10-pending"
   },
   "devDependencies": {
     "@playwright/test": "~1.61.1",

@@ -1312,11 +1312,27 @@ if ${KEEP_ALIVE}; then write_device_record running; fi
 # the exact error was never pinned. Pull the provisioning + headscale logs out
 # over the SSH channel we already hold, into the row's run dir, before the
 # guest is powered off.
-# TODO(pki/headscale): suspected OpenRC inception — keys-provision's start()
-# inline-starts headscale while the declared init ordering also runs
-# keys-provision BEFORE headscale. Fixing that is an IMAGE-side change (only
-# matters after a rebuild) and is deliberately deferred until these captured
-# logs pin the exact startup error.
+# The suspected "OpenRC inception" this capture was deferred on is ANSWERED, and it
+# was not the ordering. These logs ran, and the rpi5/pki headscale failure they
+# pinned had two real causes, both since fixed (2026-08-13, rpi5/pki 31/2 -> 33/0):
+#   1. keys-provision runs as ROOT and its inline `rc-service headscale start`
+#      created a root-owned /var/log/headscale.{log,err}. The service itself runs
+#      unprivileged (command_user=headscale:headscale), so the LATER ordered restart
+#      died on "start-stop-daemon: unable to open the logfile for stdout ...
+#      Permission denied". Fixed at both ends: a checkpath -f -m 0640 -o
+#      headscale:headscale in specs/etc/init.d/headscale's start_pre(), plus a chown
+#      right after the inline start in specs/etc/keys-provision/provision.sh.
+#   2. That restart is the ONLY reload path for the ACL, because config.yaml ships
+#      policy.mode=file (read at startup; `headscale policy set` answers "update is
+#      disabled for modes other than 'database'"), so the @@TS_SSH_USER@@
+#      substitution never reached the running server. provision.sh now captures that
+#      stderr instead of discarding it and restarts on failure.
+# The inline start itself is BY DESIGN and stays: provision_headscale() has to create
+# users and preauth keys, which needs a running control server, while depend()'s
+# `before headscale` is what puts the config in place ahead of the ordered start. An
+# inline start OpenRC then finds already-started is a no-op, not a race. This capture
+# block is kept because it is what pinned those two defects and is the only way to
+# read guest logs off a root-owned ext4 inside the golden image.
 #
 # Every ssh below is timeout-wrapped for the same reason as the assertion ssh:
 # ConnectTimeout=5 does not bound an established session, and these run in

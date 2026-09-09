@@ -104,16 +104,22 @@ spec:
 # EXCLUDES the per-pod-egress-locked pods (akkoma/tuwunel/akkoma-db via
 # homeserver-egress.yaml) + the egress-proxy (its own policy, above) + the five
 # BFF/federation DB pods. Keep this NotIn set in sync with tier-ingress.yaml +
-# db-ingress.yaml + homeserver-egress.yaml + egress-vpn-interaction.yaml.
+# db-ingress.yaml + db-egress.yaml + homeserver-egress.yaml +
+# egress-vpn-interaction.yaml. db-egress.yaml is the one that DEPENDS on this
+# list: every pod named here is a pod nothing else selects on the Egress axis.
 #
-# ⚠ DOCUMENTED GAP / TODO (out of scope for this PR — note only): the five *-bff-db /
-#   federation-db pods are EXCLUDED here but have NO Egress policy anywhere
-#   (db-ingress.yaml is Ingress-ONLY; nothing selects them on the Egress axis), so
-#   their egress is DEFAULT-ALLOW. They initiate nothing outbound in normal operation
-#   (a Postgres pod is a server), so the residual risk is low, but this is a real
-#   default-allow gap. FOLLOW-UP: add a DNS-only egress policy per *-bff-db pod (mirror
-#   homeserver-egress.yaml's DNS+DB shape) so the DB tier is egress-locked too. NOT done
-#   here to keep this PR's blast radius to the tier-wide egress cutover.
+# The five excluded DB pods are NOT default-allow any more: db-egress.yaml gives each
+# one its own DNS-only Egress lock (the follow-up this comment used to defer). That
+# file ships through the AUTO-sync app (apps/08-networkpolicy.yaml) alongside
+# homeserver-egress.yaml's identical akkoma-db lock, so THESE FIVE stay egress-locked
+# whether or not this tier-wide cutover is ever enabled. Excluding them HERE remains
+# correct: their allow-set is one DNS rule, not this file's backend-tier allow-set.
+#
+# ⚠ SCOPE OF THAT CLAIM — it is about these five pods, NOT about "the DB tier".
+# The exclusion lists in this file span two namespaces, and db-egress.yaml covers
+# the hugmesh-pki half too (route-access-db) but deliberately does NOT cover
+# CASSANDRA, whose egress is still DEFAULT-ALLOW. See the hugmesh-pki block below
+# and the ⚠ paragraph at the top of db-egress.yaml.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -172,7 +178,23 @@ spec:
 # EXCLUDES route-access-db (initiates nothing outbound) + Cassandra (gossips
 # WITHIN the pki tier — covered by the self rule below, but it carries its own
 # isolation; a broad egress would widen it). Keep the NotIn list in sync with
-# tier-ingress.yaml + db-ingress.yaml.
+# tier-ingress.yaml + db-ingress.yaml + db-egress.yaml.
+#
+# WHAT ACTUALLY COVERS THE TWO EXCLUSIONS — they are NOT the same story:
+#   * route-access-db — COVERED. db-egress.yaml's `db-egress-route-access-db`
+#     gives it the same DNS-only per-pod Egress lock as the five backend DB pods,
+#     through the AUTO-sync app (apps/08-networkpolicy.yaml), so it is locked
+#     whether or not this tier-wide cutover is ever enabled. It is the store the
+#     gateways read `route_access` from; leaving it default-allow was the widest
+#     hole this exclusion list created.
+#   * cassandra — NOT COVERED, and knowingly so. Its egress is still
+#     DEFAULT-ALLOW: nothing in manifests/networkpolicy selects it on the Egress
+#     axis, and this policy excludes it. It is the one workload in these lists
+#     that genuinely initiates outbound (gossip), and its pod spec is rendered by
+#     the pinned bitnami/cassandra 12.3.11 chart (apps/00-cassandra.yaml), NOT
+#     committed here — so the real allow-set (7000/7001 internode, 7199 JMX, any
+#     chart-added sidecar) cannot be derived from this tree. Closing it needs the
+#     rendered StatefulSet read off a live cluster. Named gap, not an oversight.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
