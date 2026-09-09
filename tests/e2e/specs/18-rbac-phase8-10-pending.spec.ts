@@ -42,9 +42,17 @@ test.describe('PENDING (Phase 8/10): systems host shell role-conditional nav', (
   // at the bottom of this file — the surface it waited on shipped.
 
   test.skip('host shell shows a ROLE_MOD moderation entry-point only for moderators', async () => {
-    // TODO(Phase10): SessionService has no isMod() today. When it does, assert
-    // e2e-mod sees the moderation nav and e2e-user/e2e-admin-only-by-itself follow
-    // the sibling rule (admin is NOT auto a mod in the nav unless also ROLE_MOD).
+    // TODO(Phase10): STILL PENDING, but NOT for the reason this stub used to give.
+    // The old premise ("SessionService has no isMod() today") is FALSE:
+    // hugmesh-host-shell/src/app/session.service.ts defines isMod, menu.component.ts
+    // hides the Moderation entry unless isMod(), and the home launcher carries a
+    // `mod` card. What blocks un-skipping is the ASSERTION this stub names, not the
+    // surface: isMod() is DELIBERATELY WIDENED to `mod || admin || superadmin`
+    // (session.service.ts documents why — an admin without a literal mod role was
+    // locked out of the Matrix/Mastodon moderation console). So "admin is NOT auto a
+    // mod in the nav unless also ROLE_MOD" is the OPPOSITE of what this shell ships.
+    // Writing the test needs someone to decide which behaviour is the contract —
+    // that is a product decision, not a test detail, so it is not settled here.
     expect(true).toBe(true);
   });
 });
@@ -62,8 +70,13 @@ test.describe('PENDING (Phase 8/10): app-level ROLE_MOD moderation UI', () => {
 
 test.describe('PENDING (Phase 8/10): games-admin gate at the real UI', () => {
   test.skip('e2e-gamesadmin reaches /games/admin/** UI; e2e-gamesonly + e2e-adminonly are DENIED', async () => {
-    // TODO(Phase8): no systems-host /games/admin mount exists. When the fe-gateway
-    // + the games-admin UI land, log in (real Casdoor) as:
+    // TODO(Phase8): the old premise ("no systems-host /games/admin mount exists")
+    // is FALSE — hugmesh-host-shell/src/app/app.routes.ts mounts `games/admin`
+    // behind gamesAdminGuard. What it mounts is a GUARDED LOCAL PLACEHOLDER
+    // (GamesAdminPlaceholderComponent), not a console, so there is still no
+    // games-admin UI to assert ALLOW/DENY against beyond the guard itself; the
+    // CARD-level half of this contract is now LIVE at the bottom of this file.
+    // When the real games-admin UI lands, log in (real Casdoor) as:
     //   e2e-gamesadmin  -> /games/admin/** renders (derived ROLE_GAMES_ADMIN)
     //   e2e-gamesonly   -> 403 / redirect (ROLE_GAMES alone)
     //   e2e-adminonly   -> 403 / redirect (ROLE_ADMIN alone)
@@ -115,12 +128,45 @@ test.describe('PENDING (Phase 8/10): svc-* service identities', () => {
 // non-member would fail against a correct shell. That is precisely why the stub
 // had to be re-derived from the shipped UI rather than un-skipped as written.
 //
-// ABSENT IS A SKIP, NOT A FAILURE: `games` is an OPTIONAL service slug, and the
-// absent state DOMINATES the role gate (HomeServicesService.resolve orders it
-// first), so on a mesh built without the games service every principal sees the
-// same greyed card and the role contract is untestable here. A games member's
-// own card is the control: if theirs reads `absent`, the deployment has no games
-// service and the test skips saying so.
+// ⚠ ON EVERY LANE THIS REPO BRINGS UP BY DEFAULT, THESE FOUR TESTS SKIP. Read
+// that before reading the assertions: the role half of this contract does NOT
+// execute on `make stack-up && make stack-seed && make stack-e2e`, and calling
+// this TODO "fixed" without that sentence overstates it.
+//
+// WHY. `games` is an OPTIONAL service and it is DEFAULT-OFF everywhere:
+//   * specs/cluster/optional-services.yaml — "DEFAULT-OFF (must be specifically
+//     added): games, owncast, tube, character-studio, character-forge ... games
+//     moved from default-on to DEFAULT-OFF here".
+//   * specs/cluster/manifests/federation-modules-gate/sql/gate.sql — the
+//     committed baseline is `UPDATE federation_modules SET enabled = false WHERE
+//     slug = 'games';`, and the host shell resolves install-state from THAT table.
+//   * specs/cluster/bootstrap/kind-local/bootstrap-kind.sh — "Explicitly NOT
+//     applied ...: games (50-games, 06-casdoor-games)".
+//   * Makefile — `STACK_GAMES_PROFILE := $(if $(strip $(GAMES)),--profile games,)`,
+//     i.e. the compose games tier is opt-in.
+// CapabilitiesService fails CLOSED (an unknown slug, or a failed fetch, reports
+// NOT installed), so installed('games') is false and HomeServicesService.resolve
+// returns 'absent' — which DOMINATES the role gate (it is ordered first). Every
+// principal then sees the same absent card and the role contract is untestable.
+//
+// TO ACTUALLY RUN THE ROLE HALF, on the compose lane, both knobs are needed:
+//   GAMES=1 make stack-up                      # bring the games tier up
+//   HUGMESH_FEDERATION_ENABLE='games' make stack-seed
+//                                              # seed-e2e.sh leg 4 flips the
+//                                              # federation_modules row to true
+// then `make stack-e2e E2E_SPECS=specs/18-rbac-phase8-10-pending.spec.ts`. On
+// kind, additionally apply apps/50-games.yaml + apps/06-casdoor-games.yaml, which
+// bootstrap-kind.sh deliberately does not.
+//
+// WHAT STILL RUNS ON THE DEFAULT LANE, so this is not a decorative test:
+//   * cardState() asserts the card is ATTACHED before any skip can fire, so the
+//     shell's greys-it-never-hides contract is exercised for all four principals.
+//   * onboard() is a real Casdoor sign-in — a broken login fails here, it does
+//     not skip.
+//   * the absent branch below asserts absence is COHERENT (both cards absent
+//     together, since `games` and `games-admin` share one install-state slug) and
+//     EXPLAINED (aria-disabled + a helptext) before skipping. A shell that hid an
+//     absent card, or greyed only one of the pair, fails on the default lane.
 //
 // NOT ASSERTED, deliberately: e2e-adminonly. The CARD gate is isGames() alone,
 // while hugmesh-host-shell's gamesGuard admits isGames() || isAdmin() ||
@@ -186,15 +232,35 @@ test.describe('LIVE (Phase 8): host shell ROLE_GAMES games entry-point', () => {
       // cards read the live session.
       await page.goto('/home');
 
+      // Both cards up front: `games` and `games-admin` share ONE install-state
+      // slug ('games'), so the absent branch below can check they agree instead
+      // of skipping on an unexamined single reading.
       const entry = await cardState(page, 'card-games');
-      test.skip(
-        entry === 'absent',
-        'the OPTIONAL `games` service is not installed on this deployment, so every '
-        + 'principal sees the same absent card and the ROLE_GAMES gate is not exercised here',
-      );
+      const adminEntry = await cardState(page, 'card-games-admin');
+
+      if (entry === 'absent') {
+        // NOT a bare skip. Absence is the DEFAULT outcome here (see the header),
+        // so it is the branch that actually runs in CI — assert what absence is
+        // still required to look like before standing down.
+        expect(adminEntry,
+          `${c.username}: card-games and card-games-admin share the SAME 'games' `
+          + 'install-state slug, so absent must dominate BOTH or neither — one absent '
+          + 'and one not means the install-state gate is not being applied uniformly')
+          .toBe('absent');
+        await expect(page.getByTestId('card-games')).toHaveAttribute('aria-disabled', 'true');
+        await expect(page.getByTestId('card-games-help'))
+          .toHaveText(/not available on this deployment/i);
+        test.skip(
+          true,
+          'the OPTIONAL `games` service is not installed on this deployment — the DEFAULT '
+          + 'state on every lane this repo brings up (games is DEFAULT-OFF; see the header '
+          + 'for the two knobs that turn it on). The greys-not-hides + coherent-absence '
+          + 'contract above DID run; the ROLE_GAMES gate below did not.',
+        );
+      }
 
       expect(entry, `${c.username}: ${c.why}`).toBe(c.entry);
-      expect(await cardState(page, 'card-games-admin'),
+      expect(adminEntry,
         `${c.username}: games-admin is DERIVED, never granted directly`).toBe(c.adminEntry);
 
       if (c.entry === 'enabled') {
