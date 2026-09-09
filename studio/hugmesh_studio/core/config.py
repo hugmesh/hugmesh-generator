@@ -2295,9 +2295,11 @@ def scope_violations(cfg: "ImageConfig") -> tuple[list[str], list[str]]:
 # finding 4/5 proper (step (c)), not here. BUILDER_DEFAULTS declares the gap as `override`
 # and GUARD A pins it, so it cannot be forgotten.
 #
-# TODO(finding 4/5, bundle_source): step (c) attempted this and found a SECOND blocker the
-# audit did not have, which is why it is still not fixed here. Recorded rather than worked
-# around, because the workaround would be a silent-wrong-image bug of its own:
+# TODO(finding 4/5, bundle_source): DEFERRED — the fix is a tri-state, the shape is now
+# settled (see SEQUENCING below), and what remains is a UX + product decision, not mechanics.
+# Step (c) attempted the to_cli_args fix and found a SECOND blocker the audit did not have.
+# Recorded rather than worked around, because the workaround would be a silent-wrong-image
+# bug of its own:
 #
 #   THE LEAK/EXPLICIT DISCRIMINATOR DOES NOT EXIST FOR THIS FIELD. The whole tier design
 #   rests on "at the dataclass default => leak => resolve; explicitly set => honour + WARN".
@@ -2316,17 +2318,42 @@ def scope_violations(cfg: "ImageConfig") -> tuple[list[str], list[str]]:
 #   means "nobody said" and the flag is simply not emitted. bundle_source wants the same
 #   shape, so the builder's :1248 fork owns the value whenever the operator stayed quiet.
 #
-#   SEQUENCING, and the reason this waits rather than races: --installer-ui :1619 is the
-#   IDENTICAL sentinel four lines above :1248, with the identical `override` gap, and its fix
-#   is owned by fix/studio-installer-ui-node-default. That PR is the reference exemplar. It
-#   also decides the shape of the shared surface (a to_cli_args role-gate splits
-#   test_cli_args.py's X86_TAIL into DESKTOP/NODE variants; a materialize-time resolve does
-#   not). Landing a DIFFERENT mechanism for the sibling flag first would both collide with
-#   that PR's exact surface and leave two neighbouring flags resolving their identical
-#   builder sentinel two different ways — worse than the gap. So: land the exemplar, then
-#   mirror it here. GUARD A's test_guard_a_policy_override_pins_the_known_gap goes RED the
-#   moment either flag stops emitting unconditionally, which is what forces this to be
-#   revisited rather than quietly inherited.
+#   SEQUENCING — RE-CHECKED, and the answer changed. This used to say "wait for
+#   fix/studio-installer-ui-node-default, then mirror it". That exemplar LANDED (#384,
+#   merged 2026-07-17) and it did NOT pick the tri-state: it picked a materialize-time
+#   RESOLVE + a NOTE (resolve_installer_ui_default, called from worklist._materialize_one
+#   AND app.py --print-command, so both channels resolve and the parity test above is
+#   satisfied). So the FIRST blocker recorded here — "correcting it in only one channel
+#   makes the same cell build two different images" — is dissolved: call it from both, as
+#   #384 does.
+#
+#   The SECOND blocker survives the exemplar, and #384's own justification is what proves
+#   it does not transfer. #384 overrides an EXPLICIT installer_ui on a node because on a
+#   node that value is UNSATISFIABLE: the calamares USE closure is copied only for
+#   ROLE_CLIENT (build-x86:3676), so honouring it buys a guaranteed ~16min failure (it
+#   killed 10 node images). `--bundle-source` on a node is the opposite — perfectly
+#   BUILDABLE, just 33MB of generator tree plus /usr/sbin/hugmesh-regenerate. Overriding it
+#   would be overriding a preference the builder CAN satisfy, which is exactly the
+#   "silently corrected an explicit value" anti-pattern #384 was careful not to commit. So
+#   the tri-state above is now the SETTLED shape for this field, not a candidate.
+#
+#   WHY IT IS STILL NOT DONE HERE (deferred with a reason, not forgotten). The tri-state is
+#   not a config.py-local change; it crosses surfaces that need a decision this file cannot
+#   make on its own:
+#     * gui/pages/build.py:784/:1199/:1462 drives bundle_source through a two-state
+#       QCheckBox. '' | True | False needs an affordance for "nobody said" — a
+#       partially-checked tristate box, or a different control. That is a UX decision.
+#     * SIX call sites ASSIGN the field outright on a mode/role change (gui/pages/mode.py:270,
+#       gui/pages/role.py:1317, gui/pages/localcloud_nodes.py:382, tui/journey.py:486,
+#       tui/journey.py:1023, tui/localcloud.py:100). While they all assign, the field is
+#       almost never LEFT unset, so the tri-state buys nothing until someone decides which
+#       of the six should instead stay quiet — a product decision about what a node image
+#       is allowed to contain, and specifically whether a node keeps hugmesh-regenerate.
+#     * BUILDER_DEFAULTS['bundle_source'].policy flips override -> defer, which turns
+#       GUARD A's test_guard_a_policy_override_pins_the_known_gap RED by design, and
+#       test_cli_args.py's X86 tails plus test_field_scope.py:190 move with it.
+#   GUARD A is doing its job in the meantime: it goes RED the moment either flag stops
+#   emitting unconditionally, so this cannot be quietly inherited.
 
 
 def _reset_field(cfg: "ImageConfig", name: str) -> bool:

@@ -282,3 +282,72 @@ spec:
             matchLabels: { app.kubernetes.io/instance: hugmesh-superadmin-gateway }
       ports:
         - { protocol: TCP, port: 9042 }
+---
+# ── casdoor-pg (Postgres, hugmesh-pki) ──────────────────────────────────────
+# The IdP's own store. It predates ADR-32 and sat on cluster_manifest_integrity's
+# DB_ISOLATION_KNOWN_GAPS list — which is an ALLOWLIST OF UNCLOSED HOLES, not an
+# approval. Until now every pod in hugmesh-pki (plus tier-ingress' cross-namespace
+# from-set: hugmesh-backend, devops, ingress-nginx-internal) could open a Postgres
+# socket straight to the identity database, behind Casdoor's own authz.
+#
+# Consumer: the `casdoor` pod ONLY. Verified rather than assumed — the DSN
+# `host=casdoor-pg port=5432` lives in exactly one place, manifests/casdoor/
+# app-conf-configmap.yaml, which only the casdoor Deployment mounts. The init Job
+# and the three role-sync Jobs (games-admin / games-services-admin /
+# games-services-runner) drive the Casdoor REST API on :8000 and never touch
+# Postgres — grepped for 5432/psql/postgres across all four and none of them
+# mention it. Backups do not need a rule either: no pg_dump workload exists
+# anywhere in specs/cluster, and Velero snapshots the PV, not the socket.
+#
+# PAIRED with the `app NotIn [..., casdoor-pg]` term in tier-ingress.yaml's
+# hugmesh-pki policy — NetworkPolicy is additive with no deny, so this file alone
+# would isolate nothing while the broad policy still selected the pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-casdoor-pg
+  namespace: hugmesh-pki
+  labels: { app: casdoor-pg, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  podSelector:
+    matchLabels: { app: casdoor-pg }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # casdoor (hugmesh-pki, self) — the only Postgres consumer.
+        - podSelector:
+            matchLabels: { app: casdoor }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# ── casdoor-games-pg (Postgres, hugmesh-games) ──────────────────────────────
+# The GAMES-realm IdP's store (db "threewizards"), same story as casdoor-pg above
+# and the second of the two entries this change takes off DB_ISOLATION_KNOWN_GAPS.
+#
+# Consumer: the `casdoor-games` pod ONLY — the DSN `host=casdoor-games-pg` lives
+# solely in manifests/casdoor-games/app-conf-configmap.yaml, which only that
+# Deployment mounts. The games init Job seeds through the Casdoor API, and the
+# cross-realm ROLE_GAMES_ADMIN mirror is a hugmesh-actions job that likewise talks
+# to casdoor-games over HTTP, not to its database.
+#
+# PAIRED with the `app NotIn [casdoor-games-pg]` term this change adds to
+# tier-ingress.yaml's hugmesh-games policy, which until now was a bare
+# `podSelector: {}` admitting the whole namespace + hugmesh-backend +
+# hugmesh-frontend + devops to every pod in the tier, this store included.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-casdoor-games-pg
+  namespace: hugmesh-games
+  labels: { app: casdoor-games-pg, app.kubernetes.io/part-of: hugmesh.games }
+spec:
+  podSelector:
+    matchLabels: { app: casdoor-games-pg }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # casdoor-games (hugmesh-games, self) — the only Postgres consumer.
+        - podSelector:
+            matchLabels: { app: casdoor-games }
+      ports:
+        - { protocol: TCP, port: 5432 }

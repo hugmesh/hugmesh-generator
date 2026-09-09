@@ -2143,13 +2143,35 @@ lint:studio-identity-validation:
 # falls through to a nonexistent PyQt6), and squashfs-tools so the build
 # preflight's mksquashfs probe reports a healthy host (its absence fails the two
 # memory-guard wording tests on an otherwise-green tree).
-# Deselected, with reasons — NOT expected failures, environments this job
-# does not have:
-#   * test_e2e_builds_start::test_mesh_node_worklist_starts_all_images — the
-#     end-to-end dispatch drives the real key-zip generation step, which needs
-#     host keystore tooling the slim image lacks; passes on a dev host. TODO:
-#     make the keys step probeable/skippable so this can rejoin.
-# (test_mesh_node's docker-gated tests self-skip via their own skipif guards.)
+# NOTHING IS DESELECTED, and that is a measured claim rather than a hope. This
+# job used to deselect test_e2e_builds_start::test_mesh_node_worklist_starts_all_images
+# with the reason "the end-to-end dispatch drives the real key-zip generation
+# step, which needs host keystore tooling the slim image lacks". That reason was
+# FALSE. The test installs _install_fake_genkeys, which monkeypatches
+# subprocess.Popen on the module object itself, and WorklistDriver._generate_keys
+# (core/worklist_driver.py:378) is the only thing that shells out to
+# gen-provision-keys.sh — so the keys step never leaves the process. No probe and
+# no skip flag were needed; the deselect was simply stale, and it had been there
+# since the test landed (studio PR #345, which added the fake in the same commit).
+#
+# Measured in a reproduction of THIS EXACT image and recipe (python:3-slim + the
+# apt list below + pip install pytest PySide6 jsonschema), running the whole
+# suite twice back to back on one tree:
+#     with the deselect:     19 failed, 6259 passed, 43 skipped, 1 deselected
+#     without the deselect:  19 failed, 6260 passed, 43 skipped
+# Identical failures either way; the entire delta is one more PASSING test. (The
+# 19 are pre-existing in that reproduction and unrelated — all of the ones the
+# capture showed are studio/tests/test_qemu_tests.py, which passes 63/63 on a
+# dev host, so they are something the container lacks, not this change.)
+#
+# BEFORE ADDING A --deselect HERE, read the sibling rule in
+# studio/tests/known-failures.txt: a missing optional dependency is an
+# importorskip in the test, a stale pin is a fix to the pin, a live drift is a
+# fix to the artifact. Only a real defect this pipeline did not cause belongs in
+# a deselect, and it belongs with the issue that tracks it — otherwise you get
+# exactly what happened here, a mute whose stated reason nobody re-checked for
+# months. (test_mesh_node's docker-gated tests self-skip via their own skipif
+# guards, which is the right shape.)
 test:studio-suite:
   stage: lint
   image: python:3-slim
@@ -2170,11 +2192,13 @@ test:studio-suite:
     # the GitHub job (which does install jsonschema) had the node deselected.
     - pip install --quiet pytest PySide6 jsonschema
   script:
-    # NB the deselect node id is ROOTDIR-relative: studio/pytest.ini makes rootdir
-    # studio/, so ids are tests/…, NOT studio/tests/… — the studio-prefixed form
-    # is silently ignored (proven: --co counts 8 with it, 7 with this one).
+    # KEEP, for whoever ever needs --deselect/--deselect-style node ids here: they are
+    # ROOTDIR-relative. studio/pytest.ini makes rootdir studio/, so an id reads
+    # tests/… and NOT studio/tests/… — and the studio-prefixed form is SILENTLY
+    # IGNORED rather than erroring (proven when the old deselect was live: --co
+    # counted 8 with it and 7 with the correct one). A mute that silently does
+    # nothing is the worst of both, so check the count if you add one.
     - QT_QPA_PLATFORM=offscreen python -m pytest -q studio/tests -p no:cacheprovider
-        --deselect tests/test_e2e_builds_start.py::test_mesh_node_worklist_starts_all_images
 
 # Production-hygiene gate. Bakes a PROD copy of the GitOps tree (the same
 # transforms gate_env_apps applies: prune 09-lan-dns + the test wave, pin :dev
