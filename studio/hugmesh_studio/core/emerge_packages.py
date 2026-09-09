@@ -200,13 +200,17 @@ GROUP_UNKNOWN = ""
 # the same both-sides pattern as :data:`GROUP_BANNER_PREFIX`). Four line shapes, all
 # starting with this one prefix, all ANSI-free on the wire (--color=n):
 #
-#     ==> Emerge plan: <group> total=<M>
-#     ==> Emerge plan: <group> <idx>/<M> <atom> USE="<flags>"
-#     ==> Emerge plan: <group> <idx>/<M> <atom>
+#     ==> Emerge plan: <group> total=<M> binary=<B> ebuild=<E>
+#     ==> Emerge plan: <group> <idx>/<M> <atom> via=<binary|ebuild> USE="<flags>"
+#     ==> Emerge plan: <group> <idx>/<M> <atom> via=<binary|ebuild>
 #     ==> Emerge plan: <group> unavailable reason=<slug>
 #
 # * ``<group>`` is the same taxonomy word as the group banners; the plan for a group is
 #   emitted immediately BEFORE that group's banner.
+# * ``via=`` is portage's own row kind — ``binary`` rows merge from the binpkg pool,
+#   ``ebuild`` rows compile — and ``binary=``/``ebuild=`` on the total line are the two
+#   counts (B + E == M): the per-group BINPKG REUSE reading of issue #46. Both are
+#   OPTIONAL on the parser side so a log written by a pre-#46 lib still replays.
 # * ``USE="..."`` is portage's own flag column, copied verbatim when the pretend row
 #   carries one (the flags data the GUI's badge columns want, free from the same pass).
 # * ``unavailable`` slugs (:data:`PLAN_UNAVAILABLE_REASONS`) mean NO plan is coming for
@@ -266,9 +270,11 @@ _GROUP_BANNER_RE = re.compile(r"^==>\s*Emerge group:\s*(\S+)\s*$")
 # and whitespace-tolerant the same way _GROUP_BANNER_RE is; the USE clause is optional
 # and captured WITHOUT its quotes (the builder copies portage's own USE="..." verbatim,
 # so flags may carry portage's %/* markers — passed through untouched, never parsed).
-_PLAN_TOTAL_RE = re.compile(r'^==>\s*Emerge plan:\s*(\S+)\s+total=(\d+)\s*$')
+_PLAN_TOTAL_RE = re.compile(
+    r'^==>\s*Emerge plan:\s*(\S+)\s+total=(\d+)(?:\s+binary=(\d+)\s+ebuild=(\d+))?\s*$')
 _PLAN_PKG_RE = re.compile(
-    r'^==>\s*Emerge plan:\s*(\S+)\s+(\d+)/(\d+)\s+(\S+)(?:\s+USE="([^"]*)")?\s*$')
+    r'^==>\s*Emerge plan:\s*(\S+)\s+(\d+)/(\d+)\s+(\S+)(?:\s+via=(binary|ebuild))?'
+    r'(?:\s+USE="([^"]*)")?\s*$')
 _PLAN_UNAVAILABLE_RE = re.compile(
     r'^==>\s*Emerge plan:\s*(\S+)\s+unavailable\s+reason=(\S+)\s*$')
 
@@ -279,7 +285,12 @@ class PlanLine:
     on the header carry M/None), ``"pkg"`` (``index``/``total``/``atom``/``use``), or
     ``"unavailable"`` (``reason`` set, meaning no plan is coming for ``group``).
     ``use`` is ``None`` when the row carried no USE clause — distinct from ``""``
-    (an explicitly empty ``USE=""``)."""
+    (an explicitly empty ``USE=""``).
+
+    Binpkg reuse (issue #46): a ``pkg`` row's ``via`` is ``"binary"`` (merged from the
+    pool) or ``"ebuild"`` (compiled); a ``total`` header's ``binary``/``ebuild`` are the
+    two counts. All three are ``None`` when the line predates the field (a pre-#46
+    lib, or a replayed old log) — never guessed."""
     kind: str
     group: str
     total: int | None = None
@@ -287,6 +298,17 @@ class PlanLine:
     atom: str = ""
     use: str | None = None
     reason: str = ""
+    via: str | None = None
+    binary: int | None = None
+    ebuild: int | None = None
+
+    def reuse_percent(self) -> int | None:
+        """Whole-percent binpkg reuse for a ``total`` header (``binary * 100 // total``),
+        or ``None`` when this line is not a header, carries no counts, or plans nothing —
+        a group with nothing to merge has no reuse rate, not a 0% one."""
+        if self.kind != "total" or self.binary is None or not self.total:
+            return None
+        return self.binary * 100 // self.total
 
 
 def parse_plan_line(raw_line: str) -> PlanLine | None:
@@ -297,10 +319,13 @@ def parse_plan_line(raw_line: str) -> PlanLine | None:
     m = _PLAN_PKG_RE.match(line)
     if m:
         return PlanLine(kind="pkg", group=m.group(1), index=int(m.group(2)),
-                        total=int(m.group(3)), atom=m.group(4), use=m.group(5))
+                        total=int(m.group(3)), atom=m.group(4), via=m.group(5),
+                        use=m.group(6))
     m = _PLAN_TOTAL_RE.match(line)
     if m:
-        return PlanLine(kind="total", group=m.group(1), total=int(m.group(2)))
+        return PlanLine(kind="total", group=m.group(1), total=int(m.group(2)),
+                        binary=int(m.group(3)) if m.group(3) is not None else None,
+                        ebuild=int(m.group(4)) if m.group(4) is not None else None)
     m = _PLAN_UNAVAILABLE_RE.match(line)
     if m:
         return PlanLine(kind="unavailable", group=m.group(1), reason=m.group(2))

@@ -17,9 +17,9 @@
 # by tests/build-matrix/check.sh's EPL bucket). Every line starts with the ONE
 # prefix below; four shapes, all ANSI-free (--color=n) and greppable:
 #
-#   ==> Emerge plan: <group> total=<M>
-#   ==> Emerge plan: <group> <idx>/<M> <atom> USE="<flags>"
-#   ==> Emerge plan: <group> <idx>/<M> <atom>
+#   ==> Emerge plan: <group> total=<M> binary=<B> ebuild=<E>
+#   ==> Emerge plan: <group> <idx>/<M> <atom> via=<binary|ebuild> USE="<flags>"
+#   ==> Emerge plan: <group> <idx>/<M> <atom> via=<binary|ebuild>
 #   ==> Emerge plan: <group> unavailable reason=<slug>
 #
 #   * <group> is the emerge-group taxonomy word the following merge belongs to
@@ -27,6 +27,14 @@
 #     banners, emitted immediately BEFORE the corresponding group banner.
 #   * <atom> is the resolved cat/pn-ver with any ::repo suffix stripped; a
 #     cross-merge " to /sysroot/" tail never reaches the atom (field split).
+#   * via=<binary|ebuild> is portage's own row kind — [binary ...] rows are
+#     merged from the binpkg pool, [ebuild ...] rows are compiled — and the
+#     total line carries the two counts (B + E == M). This is the per-group
+#     BINPKG REUSE reading issue #46 asked for: the parser used to discard the
+#     bracket block, so the distinction never reached the Studio. The lib also
+#     prints one human line per group, "[emerge-plan] <group> binpkg reuse: B of
+#     M package(s) from the pool (P%), E to compile", so a build log answers
+#     "how much did the pool save this image?" without the Studio.
 #   * USE="..." is copied verbatim from portage's own --pretend row when the row
 #     carries one (the flags column the operator asked for — free from the same
 #     output); omitted when portage printed none for that row.
@@ -152,6 +160,9 @@ emerge_plan_emit() {
         { gsub(/\033\[[0-9;]*[A-Za-z]/, "") }   # ANSI belt-and-braces (--color=n already passed)
         /^\[(ebuild|binary)/ {
             line = $0
+            # Row kind BEFORE the bracket block is stripped: [binary = merged
+            # from the binpkg pool, [ebuild = compiled (issue #46 reuse reading).
+            via = (line ~ /^\[binary/) ? "binary" : "ebuild"
             sub(/^\[[^]]*\][[:space:]]*/, "", line)
             split(line, f, /[[:space:]]+/)
             atom = f[1]
@@ -161,6 +172,8 @@ emerge_plan_emit() {
             cnt++
             atoms[cnt] = atom
             uses[cnt] = use
+            vias[cnt] = via
+            if (via == "binary") nbin++; else nebd++
             next
         }
         /^\[(uninstall|blocks)/ { extra++; next }
@@ -175,12 +188,12 @@ emerge_plan_emit() {
             if (cnt == 0 && total_seen && total > 0) { print "__EMERGE_PLAN_PARSE_MISMATCH__"; exit }
             if (cnt == 0 && !total_seen)             { print "__EMERGE_PLAN_PARSE_MISMATCH__"; exit }
             if (cnt > 0 && total_seen && extra == 0 && cnt != total) { print "__EMERGE_PLAN_PARSE_MISMATCH__"; exit }
-            printf "%s%s total=%d\n", pfx, grp, cnt
+            printf "%s%s total=%d binary=%d ebuild=%d\n", pfx, grp, cnt, nbin + 0, nebd + 0
             for (i = 1; i <= cnt; i++) {
                 if (uses[i] != "")
-                    printf "%s%s %d/%d %s %s\n", pfx, grp, i, cnt, atoms[i], uses[i]
+                    printf "%s%s %d/%d %s via=%s %s\n", pfx, grp, i, cnt, atoms[i], vias[i], uses[i]
                 else
-                    printf "%s%s %d/%d %s\n", pfx, grp, i, cnt, atoms[i]
+                    printf "%s%s %d/%d %s via=%s\n", pfx, grp, i, cnt, atoms[i], vias[i]
             }
         }' "${tmp}" >"${wire}" 2>/dev/null || {
         printf '%s%s unavailable reason=parse-mismatch\n' "${pfx}" "${group}"
@@ -193,6 +206,19 @@ emerge_plan_emit() {
         printf '[emerge-plan] WARN: pretend output did not parse as a plan (row/Total drift) — %s preview skipped, build continues\n' "${group}" >&2
     else
         cat "${wire}"
+        # Per-group binpkg reuse, human-readable, on stdout next to the wire
+        # (issue #46 box 1). Read back off the total line just emitted so the
+        # number can never disagree with the wire. Guarded like everything else
+        # here: a shape miss prints nothing and the build continues.
+        local _tot _bin
+        _tot="$(sed -nE 's/^.* total=([0-9]+) binary=([0-9]+) ebuild=[0-9]+$/\1/p' "${wire}" 2>/dev/null | head -n 1)"
+        _bin="$(sed -nE 's/^.* total=([0-9]+) binary=([0-9]+) ebuild=[0-9]+$/\2/p' "${wire}" 2>/dev/null | head -n 1)"
+        if [ -n "${_tot}" ] && [ -n "${_bin}" ] && [ "${_tot}" -gt 0 ] 2>/dev/null; then
+            printf '[emerge-plan] %s binpkg reuse: %s of %s package(s) from the pool (%s%%), %s to compile\n' \
+                "${group}" "${_bin}" "${_tot}" "$(( _bin * 100 / _tot ))" "$(( _tot - _bin ))"
+        elif [ "${_tot}" = "0" ]; then
+            printf '[emerge-plan] %s binpkg reuse: nothing to merge\n' "${group}"
+        fi
     fi
     rm -f "${tmp}" "${wire}"
     return 0

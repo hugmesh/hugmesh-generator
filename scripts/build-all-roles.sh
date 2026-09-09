@@ -10,9 +10,14 @@
 #     accepted on every --role, forever, and are normalized at parse time.
 #
 # Only the x86 omnibus (all-in-one single-node) role is OPT-IN:
-#   X86_OMNIBUS=1 ./scripts/build-all-roles.sh  # appends omnibus to the x86 set
-#   X86_ALL=1     ./scripts/build-all-roles.sh  # pki backend frontend backend-gpu omnibus on x86
-#   X86_ROLES="pki omnibus" ./scripts/build-all-roles.sh   # an explicit subset
+#   X86_OMNIBUS=1 ./scripts/build-all-roles.sh  # adds omnibus to the x86 set — built FIRST
+#   X86_ALL=1     ./scripts/build-all-roles.sh  # omnibus pki backend frontend backend-gpu on x86
+#   X86_ROLES="omnibus pki" ./scripts/build-all-roles.sh   # an explicit subset, YOUR order
+#   When omnibus is selected it is queued FIRST (issue #46): it is the most
+#   package-complete x86 image, and the per-board binpkg pool it fills
+#   (out/shared/pkgdir/snap-build-x86, --usepkg) is what every later role in the
+#   same run reuses. Queued last it seeds nothing. X86_ROLES is honoured as
+#   written — put omnibus first yourself if you list it.
 #   SKIP_X86=1    ./scripts/build-all-roles.sh  # Pi roles only (no x86 at all)
 #   SKIP_RPI=1    ./scripts/build-all-roles.sh  # x86 / frite only (no RPi5 builds)
 #
@@ -205,9 +210,14 @@ fi
 RPI_BOARD_SEL="${RPI_BOARD:-rpi5}"
 
 # x86 role set. Default = every role EXCEPT omnibus (pki backend frontend backend-gpu). Only the
-# omnibus all-in-one role is opt-in: X86_OMNIBUS=1 appends it; X86_ALL=1 expands
+# omnibus all-in-one role is opt-in: X86_OMNIBUS=1 adds it; X86_ALL=1 expands
 # to every role (incl. omnibus); X86_ROLES overrides explicitly; SKIP_X86=1
 # disables the x86 build entirely.
+# ORDER MATTERS (issue #46): the loop below consumes this array in order, and
+# every x86 role in one run shares the snap-build-x86 binpkg pool. omnibus is
+# the most package-complete image, so it goes FIRST whenever it is selected —
+# its compiles become the pool every later role merges as [binary]. Before this
+# it was appended LAST, after every role that could have reused its binaries.
 if [ "${SKIP_X86:-0}" = "1" ]; then
     X86_BUILD_ROLES=()
 elif [ "${X86_STANDALONE_ONLY:-0}" = "1" ]; then
@@ -218,9 +228,9 @@ elif [ "${X86_STANDALONE_ONLY:-0}" = "1" ]; then
 elif [ -n "${X86_ROLES:-}" ]; then
     read -r -a X86_BUILD_ROLES <<< "${X86_ROLES}"
 elif [ "${X86_ALL:-0}" = "1" ]; then
-    X86_BUILD_ROLES=(pki backend frontend backend-gpu omnibus)
+    X86_BUILD_ROLES=(omnibus pki backend frontend backend-gpu)
 elif [ "${X86_OMNIBUS:-0}" = "1" ]; then
-    X86_BUILD_ROLES=(pki backend frontend backend-gpu omnibus)
+    X86_BUILD_ROLES=(omnibus pki backend frontend backend-gpu)
 else
     X86_BUILD_ROLES=(pki backend frontend backend-gpu)
 fi
