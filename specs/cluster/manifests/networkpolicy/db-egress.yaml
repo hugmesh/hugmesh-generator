@@ -1,0 +1,143 @@
+# Per-DB-pod EGRESS locks — DNS only (closes the ADR-32 companion gap).
+#
+# THE GAP THIS CLOSES. db-ingress.yaml is Ingress-ONLY, and tier-egress.yaml
+# deliberately EXCLUDES the five BFF/federation Postgres pods from its
+# namespace-wide egress cutover (`app NotIn [admin-bff-db, mod-bff-db,
+# user-bff-db, federation-db, forum-bff-db, egress-proxy]`). Between the two,
+# NOTHING selected these pods on the Egress axis, so their egress was
+# DEFAULT-ALLOW: a compromised Postgres pod could open a socket to anywhere,
+# in-cluster or on the internet. tier-egress.yaml carried that as a written
+# TODO; this file is the follow-up it named.
+#
+# WHY DNS-ONLY IS THE COMPLETE ALLOW-SET, measured not assumed. Each of the five
+# Deployments is a SINGLE `postgres:16-alpine` container — no initContainers, no
+# sidecars, no exporters (verified in manifests/{admin-bff-db,mod-bff-db,
+# user-bff-db,federation-db,forum-bff-db}/deployment.yaml). A Postgres pod is a
+# SERVER: it accepts connections and initiates none. Its initdb/ scripts and the
+# pg-tls entrypoint run locally in the container; Liquibase and every schema
+# migration run in the consuming *-api pod and arrive as INGRESS. Citus (the one
+# thing here that would talk pod-to-pod) is opt-in and off by default in
+# federation-db — `SHARDING_CITUS=on` plus the citusdata image; TURNING IT ON
+# MEANS ADDING A WORKER RULE HERE, because a coordinator does dial its workers.
+#
+# PRECEDENT, same shape, already live: homeserver-egress.yaml's
+# `homeserver-egress-akkoma-db` is exactly this policy for akkoma-db, and it
+# ships through the SAME auto-sync app (apps/08-networkpolicy.yaml) this file is
+# listed in. That is the reason this does NOT go into the dark, manual-sync
+# networkpolicy-egress overlay with tier-egress.yaml: the overlay's warning is
+# about TIER-WIDE egress ("a missed allow black-holes a whole namespace"), and a
+# per-pod lock on a server pod with a one-line allow-set is a different risk
+# class — the same one already accepted for akkoma-db.
+#
+# ROLLBACK, if a DB pod ever does turn out to need outbound: delete this file
+# from the kustomization (the pods return to default-allow egress) or add the
+# missing allow rule. Ingress isolation is untouched either way — Ingress and
+# Egress are independent axes and db-ingress.yaml owns the other one.
+#
+# NOT the same set as tier-ingress.yaml's NotIn list, and that is CORRECT:
+# wiki-bff-db / mesh-bff-db / character-forge-bff-db are NOT in tier-egress's
+# NotIn, so tier-egress already selects them and locks their egress to the
+# backend tier allow-set once that cutover happens. The five here are the ones
+# tier-egress excludes and therefore the only ones left uncovered.
+---
+# ── admin-bff-db (Postgres, hugmesh-backend) ────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-egress-admin-bff-db
+  namespace: hugmesh-backend
+  labels: { app: admin-bff-db, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  podSelector:
+    matchLabels: { app: admin-bff-db }
+  policyTypes: [Egress]
+  egress:
+    # DNS (CoreDNS/kube-dns in kube-system). The ONLY thing a Postgres server
+    # pod resolves; without it even in-pod name lookups (and pg_isready by
+    # hostname) fail.
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# ── mod-bff-db (Postgres, hugmesh-backend) ──────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-egress-mod-bff-db
+  namespace: hugmesh-backend
+  labels: { app: mod-bff-db, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  podSelector:
+    matchLabels: { app: mod-bff-db }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# ── user-bff-db (Postgres, hugmesh-backend) ─────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-egress-user-bff-db
+  namespace: hugmesh-backend
+  labels: { app: user-bff-db, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  podSelector:
+    matchLabels: { app: user-bff-db }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# ── federation-db (Postgres, hugmesh-backend) ───────────────────────────────
+# ⚠ CITUS: if SHARDING_CITUS is ever flipped on (manifests/federation-db/
+# deployment.yaml + the citusdata image), the coordinator DIALS its workers on
+# 5432 and this allow-set becomes incomplete. Add the worker rule in the same
+# change that flips the flag.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-egress-federation-db
+  namespace: hugmesh-backend
+  labels: { app: federation-db, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  podSelector:
+    matchLabels: { app: federation-db }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# ── forum-bff-db (Postgres, hugmesh-backend) ────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-egress-forum-bff-db
+  namespace: hugmesh-backend
+  labels: { app: forum-bff-db, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  podSelector:
+    matchLabels: { app: forum-bff-db }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }

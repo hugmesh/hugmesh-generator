@@ -106,14 +106,12 @@ spec:
 # BFF/federation DB pods. Keep this NotIn set in sync with tier-ingress.yaml +
 # db-ingress.yaml + homeserver-egress.yaml + egress-vpn-interaction.yaml.
 #
-# ⚠ DOCUMENTED GAP / TODO (out of scope for this PR — note only): the five *-bff-db /
-#   federation-db pods are EXCLUDED here but have NO Egress policy anywhere
-#   (db-ingress.yaml is Ingress-ONLY; nothing selects them on the Egress axis), so
-#   their egress is DEFAULT-ALLOW. They initiate nothing outbound in normal operation
-#   (a Postgres pod is a server), so the residual risk is low, but this is a real
-#   default-allow gap. FOLLOW-UP: add a DNS-only egress policy per *-bff-db pod (mirror
-#   homeserver-egress.yaml's DNS+DB shape) so the DB tier is egress-locked too. NOT done
-#   here to keep this PR's blast radius to the tier-wide egress cutover.
+# The five excluded DB pods are NOT default-allow any more: db-egress.yaml gives each
+# one its own DNS-only Egress lock (the follow-up this comment used to defer). That
+# file ships through the AUTO-sync app (apps/08-networkpolicy.yaml) alongside
+# homeserver-egress.yaml's identical akkoma-db lock, so the DB tier stays egress-locked
+# whether or not this tier-wide cutover is ever enabled. Excluding them HERE remains
+# correct: their allow-set is one DNS rule, not this file's backend-tier allow-set.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
