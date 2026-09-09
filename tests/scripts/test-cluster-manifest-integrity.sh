@@ -323,6 +323,29 @@ PY
 expect_catch "Postgres pod left out of the tier-ingress NotIn exclusion" "[db-isolation]" '
   sed -i "s/, mesh-bff-db,/,/" "$T/manifests/networkpolicy/tier-ingress.yaml"
 '
+# (7c) a per-pod policy that selects the DB pod on the EGRESS axis only. Ingress and
+#      Egress are independent axes, so such a policy proves NOTHING about who may dial
+#      5432 — but a checker that reads podSelector without reading policyTypes counts it
+#      as the isolation and passes. Real risk, not hypothetical: networkpolicy/
+#      db-egress.yaml selects all five backend DB pods on exactly that axis.
+expect_catch "per-pod policy on the EGRESS axis only counted as ingress isolation" "[db-isolation]" '
+  python3 - "$T" <<PY
+import sys
+p=sys.argv[1]+"/manifests/networkpolicy/db-ingress.yaml"
+s=open(p,encoding="utf-8").read()
+old="""
+  name: db-ingress-mesh-bff-db
+  namespace: hugmesh-backend
+  labels: { app: mesh-bff-db, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  podSelector:
+    matchLabels: { app: mesh-bff-db }
+  policyTypes: [Ingress]"""
+assert old in s, "anchor drifted"
+s=s.replace(old, old.replace("policyTypes: [Ingress]", "policyTypes: [Egress]"), 1)
+open(p,"w",encoding="utf-8").write(s)
+PY
+'
 # (8a) a SERVICE-only internal receiver left governed only by its tier floor: the
 #      deciding longest-match rule becomes an ALLOW, so every holder of that tier
 #      role reaches the internal ingest from outside.

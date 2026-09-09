@@ -37,8 +37,9 @@ metadata:
   name: tier-ingress
   namespace: hugmesh-pki
 spec:
-  # EXCLUDES route-access-db + Cassandra + Harbor from this BROAD namespace
-  # admittance — they are isolated per-pod by db-ingress.yaml / harbor-ingress.yaml
+  # EXCLUDES route-access-db + Cassandra + Harbor + casdoor-pg from this BROAD
+  # namespace admittance — they are isolated per-pod by db-ingress.yaml /
+  # harbor-ingress.yaml
   # (reachable only from the gateways + admin-bff-api/federation-api, and
   # be-gateway + hugmesh-image-builds, respectively). k8s NetworkPolicy is
   # additive with no exclude, so the broad from-set below MUST NOT select these
@@ -49,11 +50,14 @@ spec:
   # `app: harbor` — different label keys/values, so each needs its own NotIn
   # term; Harbor happens to share the `app` key with route-access-db so it is
   # added to that SAME values list rather than a new matchExpressions entry.)
+  # casdoor-pg (the IdP's own Postgres) joined that list when ADR-32 was finally
+  # extended to the identity stores: it carries `app: casdoor-pg` and is admitted
+  # only from the casdoor pod by db-ingress.yaml's db-ingress-casdoor-pg.
   podSelector:
     matchExpressions:
       - key: app
         operator: NotIn
-        values: [route-access-db, harbor]
+        values: [route-access-db, harbor, casdoor-pg]
       - key: app.kubernetes.io/name
         operator: NotIn
         values: [cassandra]
@@ -131,7 +135,19 @@ metadata:
   name: tier-ingress
   namespace: hugmesh-games
 spec:
-  podSelector: {}
+  # EXCLUDES casdoor-games-pg from this BROAD namespace+backend+frontend admittance
+  # — it is isolated per-pod by db-ingress.yaml (db-ingress-casdoor-games-pg,
+  # reachable only from the casdoor-games pod). k8s NetworkPolicy is additive with
+  # no exclude, so leaving the bare `podSelector: {}` here would re-admit the whole
+  # from-set to the games identity database and the per-pod policy would bite
+  # nothing. Keep this NotIn in sync with db-ingress.yaml. (`NotIn` also matches
+  # pods that carry no `app` label at all, so every other workload in the tier
+  # stays selected exactly as before.)
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: NotIn
+        values: [casdoor-games-pg]
   policyTypes: [Ingress]
   ingress:
     # hugmesh-games also hosts the GAMES-realm Casdoor (casdoor-games) + its

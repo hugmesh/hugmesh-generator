@@ -96,13 +96,16 @@ DB_ISOLATION_KNOWN_GAPS = {
     # test-runner-only Akkoma federation peer; manifests/test-runner is deleted
     # from every prod tree (see the lint:prod-hygiene bake), so it never ships.
     "akkoma-peer-db.hugmesh-backend",
-    # Casdoor's own Postgres pair. ADR-32 scoped itself to "the seven backend
-    # BFF/federation Postgres pods" + route-access-db + Cassandra; the identity
-    # provider's stores were never brought in. They remain reachable from every
-    # pod in their namespace plus tier-ingress' cross-namespace from-set.
-    # TODO(ADR-32 follow-up): give both a per-pod policy + a NotIn exclusion.
-    "casdoor-pg.hugmesh-pki",
-    "casdoor-games-pg.hugmesh-games",
+    # casdoor-pg / casdoor-games-pg USED TO SIT HERE. ADR-32 had scoped itself to
+    # the backend BFF/federation Postgres pods + route-access-db + Cassandra, so
+    # the identity provider's own stores stayed reachable from every pod in their
+    # namespace plus tier-ingress' cross-namespace from-set — carried as a TODO on
+    # this list rather than fixed. Both now get the standard treatment (a per-pod
+    # policy in networkpolicy/db-ingress.yaml + the paired `app NotIn` exclusion in
+    # tier-ingress.yaml), so the check enforces them like every other database and
+    # nothing needs exempting. Do not re-add an entry here to make a red go green:
+    # this set exists so NEW drift is caught, and every entry left in it is a hole
+    # that is still open.
 }
 
 # Distinct workload names that intentionally SHARE one MCS category, with the
@@ -628,7 +631,22 @@ def check_db_isolation(root):
                     if 5432 in ports and labels.get("app"):
                         dbs[(labels["app"], ns)] = os.path.relpath(path, root)
                 elif kind == "NetworkPolicy":
-                    sel = (d.get("spec") or {}).get("podSelector") or {}
+                    spec = d.get("spec") or {}
+                    # INGRESS-AXIS ONLY. Ingress and Egress are independent axes, so an
+                    # Egress-only policy naming a DB pod proves NOTHING about who may
+                    # dial its 5432 — counting one as "the per-pod policy" would report
+                    # isolation that does not exist. Real files this bites:
+                    # networkpolicy/db-egress.yaml selects all five backend DB pods on
+                    # the Egress axis, and tier-egress.yaml carries its own `app NotIn`
+                    # exclusion list which is deliberately NOT the ingress one.
+                    # k8s defaulting when policyTypes is omitted: Ingress is always set,
+                    # Egress only when egress rules are present.
+                    ptypes = spec.get("policyTypes")
+                    if ptypes is None:
+                        ptypes = ["Ingress", "Egress"] if spec.get("egress") else ["Ingress"]
+                    if "Ingress" not in ptypes:
+                        continue
+                    sel = spec.get("podSelector") or {}
                     ml = sel.get("matchLabels") or {}
                     me = sel.get("matchExpressions") or []
                     if ml.get("app"):
@@ -655,9 +673,10 @@ def check_db_isolation(root):
                  "Postgres workload %s (ns %s, %s) is not isolated: %s"
                  % (app, ns, rel, "; ".join(problems)))
     if not bad:
-        ok("[db-isolation]", "all %d in-scope Postgres workloads have a per-pod policy AND are "
-                             "excluded from the broad tier policy"
-                             % (len(dbs) - len(DB_ISOLATION_KNOWN_GAPS)))
+        ok("[db-isolation]", "all %d in-scope Postgres workloads have a per-pod INGRESS policy "
+                             "AND are excluded from the broad tier policy (%d known gap(s) skipped)"
+                             % (len(dbs) - len(DB_ISOLATION_KNOWN_GAPS),
+                                len(DB_ISOLATION_KNOWN_GAPS)))
 
 
 # ── 10) SERVICE-only internal ingest surfaces are not externally reachable ───
