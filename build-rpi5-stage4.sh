@@ -359,6 +359,12 @@ IDP_JWKS="${IDP_JWKS:-}"
 # drives both the secret push and the image. The token/unseal key ride the KEYS
 # stick (vault/token, vault/unseal-key) — custody material is never baked.
 VAULT_ADDR="${VAULT_ADDR:-}"
+# The EXTERNAL address (issue #335): the SAME Vault reached from outside the mesh.
+# "" (the DEFAULT) writes no line at all, so a pre-#335 vault.conf is byte-identical.
+# RECORDED, NOT YET READ: keys-provision seeds from VAULT_ADDR and has no reader for
+# this key — it is baked for operators and out-of-cluster tooling, and the Studio's
+# tooltip says exactly that rather than implying it changes what the node does.
+VAULT_EXTERNAL_ADDR="${VAULT_EXTERNAL_ADDR:-}"
 VAULT_KV_MOUNT="${VAULT_KV_MOUNT:-secret}"
 VAULT_BASE_PATH="${VAULT_BASE_PATH:-}"   # "" = the brand slug at bake time (gen-cluster-secrets.sh's layout)
 SEED_STAGE3_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds/latest-stage3-arm64-openrc.txt"
@@ -839,6 +845,14 @@ OPTIONS
         the desktop role warns + ignores it. The token/unseal key ride the KEYS
         stick, never the image. (env/brand.conf: VAULT_ADDR)
 
+    --vault-external-addr URL
+        The SAME Vault reached from OUTSIDE the mesh (an operator laptop, a CI
+        runner, a second site). Appends VAULT_EXTERNAL_ADDR to
+        /etc/hugmesh/vault.conf beside the internal one. Needs --vault-addr and
+        must differ from it. RECORDED ONLY: keys-provision seeds from
+        --vault-addr and reads no such key. Empty (DEFAULT) writes no line.
+        (env/brand.conf: VAULT_EXTERNAL_ADDR)
+
     --vault-kv-mount M
         KV v2 mount the ClusterSecretStore reads (default: secret;
         env/brand.conf: VAULT_KV_MOUNT).
@@ -1114,6 +1128,7 @@ while [[ $# -gt 0 ]]; do
         # Mesh secrets store (#224) — "" = offline default, zero change; validated
         # fail-closed below (_validate_vault), baked by bake_vault_conf on node roles.
         --vault-addr)         VAULT_ADDR="$2";        shift 2 ;;
+        --vault-external-addr) VAULT_EXTERNAL_ADDR="$2"; shift 2 ;;
         --vault-kv-mount)     VAULT_KV_MOUNT="$2";    shift 2 ;;
         --vault-base-path)    VAULT_BASE_PATH="$2";   shift 2 ;;
         --skip-mesh)          SKIP_MESH=true;          shift   ;;
@@ -1514,6 +1529,21 @@ _validate_vault() {
     [ -n "${VAULT_ADDR}" ] || return 0
     [[ "${VAULT_ADDR}" =~ ${_IDP_URL_RE} ]] \
         || { err "--vault-addr must be an https:// URL (got '${VAULT_ADDR}') — it is the secrets channel's trust anchor and must be TLS"; exit 1; }
+    # ${VAULT_EXTERNAL_ADDR:-} rather than a bare expansion: this function is
+    # EXTRACTED VERBATIM and re-run by two harnesses (studio test_vault_config.py and
+    # tests/scripts/test-idp-builder-functions.sh), and one written before #335 sets
+    # only the pre-#335 three under `set -u`. Defaulting here makes an older harness
+    # degrade to "no external address" — the native default — instead of dying with
+    # an unbound-variable error that looks like a builder bug.
+    if [ -n "${VAULT_EXTERNAL_ADDR:-}" ]; then
+        # mirrors config.vault_field_error's external arm: same trust anchor, and it
+        # must DIFFER from the internal one (identical addresses are a copy/paste —
+        # one address reached from everywhere needs no split).
+        [[ "${VAULT_EXTERNAL_ADDR}" =~ ${_IDP_URL_RE} ]] \
+            || { err "--vault-external-addr must be an https:// URL (got '${VAULT_EXTERNAL_ADDR}') — it is the same secrets channel"; exit 1; }
+        [ "${VAULT_EXTERNAL_ADDR}" != "${VAULT_ADDR}" ] \
+            || { err "--vault-external-addr is the same as --vault-addr ('${VAULT_ADDR}') — drop it; one address reached from everywhere needs no split"; exit 1; }
+    fi
     if [ -n "${VAULT_KV_MOUNT}" ]; then
         [[ "${VAULT_KV_MOUNT}" =~ ${_VAULT_PATH_RE} ]] \
             || { err "--vault-kv-mount must be a plain Vault path (allowlist [A-Za-z0-9._/-], max 128; got '${VAULT_KV_MOUNT}')"; exit 1; }
@@ -2323,6 +2353,15 @@ bake_vault_conf() {
 VAULT_ADDR=${VAULT_ADDR}
 VAULT_KV_MOUNT=${_mount}
 VAULT_BASE_PATH=${_base}
+EOF
+    # OMIT-WHEN-EMPTY (issue #335): the external address appends a line only when the
+    # operator set one, so a build that never named it produces the pre-#335 file byte
+    # for byte — the same rule the flag itself follows on the argv.
+    [ -z "${VAULT_EXTERNAL_ADDR:-}" ] || cat >> "${SYSROOT}/etc/hugmesh/vault.conf" <<EOF
+# The SAME Vault reached from OUTSIDE the mesh (--vault-external-addr). RECORDED for
+# operators and out-of-cluster tooling: keys-provision seeds from VAULT_ADDR and does
+# not read this key.
+VAULT_EXTERNAL_ADDR=${VAULT_EXTERNAL_ADDR}
 EOF
     chmod 0644 "${SYSROOT}/etc/hugmesh/vault.conf"
     info "Vault: baked /etc/hugmesh/vault.conf (address=${VAULT_ADDR} mount=${_mount} base=${_base}; 0644, no secrets)"
