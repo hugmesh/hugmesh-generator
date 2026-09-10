@@ -37,7 +37,24 @@
 > make kind-images   # build from ./.stack-src + kind load  (before/after kind-up both work)
 > make kind-e2e      # spec 27 (native login) against https://hugmesh.net:8443
 > make kind-down
+>
+> make kind-doctor   # CAN this cluster run the mesh? egress, images, pods, ArgoCD
 > ```
+>
+> `make kind-doctor` is the standing "is this thing actually alive" check, and
+> the reason it exists is worth a sentence. On 2026-09-10 this lane sat dead for
+> two days while every surface a person would look at reported health: `kind get
+> clusters` listed the cluster, `kubectl get nodes` said Ready, and nineteen pods
+> were in `ImagePullBackOff` past thirteen thousand attempts. Two independent
+> causes — the host had lost every docker netfilter table (so nothing could leave
+> the bridge, while docker's embedded resolver kept answering and made every
+> error read like DNS), and `make kind-images` had never run, so not one
+> first-party image existed in the node. `kind-doctor` tests raw TCP rather than
+> resolution, and compares every image a pod references against what the node
+> actually holds. It reports and exits non-zero; it never repairs. `make kind-up`
+> runs the same check at the end of bring-up in report-only mode — a fresh
+> cluster legitimately has no first-party image yet, because the documented order
+> above is `kind-up` THEN `kind-images`.
 >
 > `make kind-e2e` maps `hugmesh.net -> 127.0.0.1` with a Chromium
 > host-resolver rule (no `/etc/hosts`, no sudo) and rides the
@@ -282,6 +299,7 @@ Env overrides (all optional):
 | `VAULT_BRANCH` | `main` | The same per-file branch pin for `02-vault.yaml` (and, live, `manifests/vault`). It carried the `vault-tls-init` openssl fix (bug #2 above) until that merged; inert at the default. |
 | `KIND_ADDONS` | `metrics-server` | Infra add-on **selection** — comma- or space-separated slugs from the table in "The curation is deliberate" above, or the literal `none`. ⚠ An **empty** value — or one that is nothing but separators (`"   "`, a tab, a bare `,`) — means UNSET and falls back to the default; `none` is the only spelling for "no add-ons" (empty is what `make` and an empty picker produce by accident, and turning metrics-server off must not be reachable by accident). An unknown slug is refused loudly, like `MFA`. |
 | `KIND_ADDONS_PRINT` | *(unset)* | Read-only: `1` resolves the add-on selection, prints it, and exits **without doing any bring-up work** (it says so). Exists so `tests/scripts/test-kind-addon-channel.sh` measures the real parse instead of a copy of it. |
+| `SKIP_EGRESS_PREFLIGHT` | `0` | set `1` to skip the raw-TCP egress preflight that runs right after the cluster is created. That preflight aborts bring-up when the node cannot open a TCP connection to any of the registries this lane pulls from (resolved on the HOST) or to a public anycast address — the 2026-09-10 failure, where a host that had lost docker's netfilter rules ran this lane for two days with no outbound connectivity at all. **Legitimate reasons to set it:** an air-gapped host with every image already side-loaded, or a network that blocks the probe destinations while registry pulls succeed. The failure text names this variable, so you do not have to find it here first. |
 | `SKIP_VAULT_BOOTSTRAP` | `0` | set `1` to stop after applying the curated Applications, before the Vault init/unseal/PKI step |
 | `KIND_KV_RESEED` | `0` | `KIND_PROFILE=sso` only. Set `1` to re-mint **every** cluster secret even though Vault KV is already seeded. **DESTRUCTIVE**: existing Postgres/Cassandra volumes keep the old passwords and will reject the new ones — correct only against a fresh cluster or wiped PVCs. |
 | `MFA` | *(unset — off)* | `KIND_PROFILE=sso` only (`make kind-up MFA=1`); refuses `core` loudly. The MFA operational flip (issue #47): appends a `mfa.enabled=true` **helm parameter** to every gateway Application this bootstrap applies, so the kind cluster runs live route-level MFA enforcement while the committed chart/apps stay default-OFF. Flips **only** `app.mfa.enabled` — the privileged floor is not reachable from here. Accepts `1/true/on`; anything else but `0/false/off/empty` fails closed. See `docs/MFA-ROLLOUT.md` §8; wiring gated by `tests/stack/test-mfa-flip-wiring.sh`. |

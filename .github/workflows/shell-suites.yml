@@ -334,6 +334,7 @@ jobs:
             tests/scripts/test-kernel-artifact-cache.sh
             tests/scripts/test-kind-addon-channel.sh
             tests/scripts/test-kind-bootstrap-honesty.sh
+            tests/scripts/test-kind-doctor.sh
             tests/scripts/test-kind-profile-app-closure.sh
             tests/scripts/test-kind-profile-route-closure.sh
             tests/scripts/test-lsm-posture-honesty.sh

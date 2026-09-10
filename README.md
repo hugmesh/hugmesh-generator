@@ -327,7 +327,7 @@ _As of 2026-08-05. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   guardrails) and [`docs/FEDERATION-EXAMPLES.md`](docs/FEDERATION-EXAMPLES.md)
   (the runtime host↔remote walkthrough).
 - **🚧 Kind SSO e2e harness** — `KIND_PROFILE=sso` plus `make kind-images` /
-  `kind-up` / `kind-e2e` / `kind-down` stand up a real kind cluster and drive the
+  `kind-up` / `kind-doctor` / `kind-e2e` / `kind-down` stand up a real kind cluster and drive the
   native-login path against it. **The e2e is NOT green** — see
   [Roadmap](#roadmap) and
   [`docs/KIND-SSO-E2E-FINDINGS.md`](docs/KIND-SSO-E2E-FINDINGS.md).
@@ -360,7 +360,7 @@ workstation has the compose mesh up but no kind cluster (`kind get clusters` →
 none), and compose green is not evidence for the cluster._
 
 - **🚧 SSO kind-cluster e2e — harness shipped, proof NOT achieved.** The
-  `KIND_PROFILE=sso` harness + `make kind-images|kind-up|kind-e2e|kind-down` are
+  `KIND_PROFILE=sso` harness + `make kind-images|kind-up|kind-doctor|kind-e2e|kind-down` are
   on `main`, and the first real run reached Casdoor and minted a session against
   a real IdP. **The e2e is not green.** It fails downstream on **16 enumerated
   fresh-cluster blockers** — the GitOps cluster payload had never been run end to
