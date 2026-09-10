@@ -142,8 +142,11 @@ def test_the_local_mesh_door_is_the_mode_menu_not_welcome(wiz):
     assert wiz.currentId() == wiz._page_ids["mode"]
     _pick_localmesh(_mode(wiz))
     wiz.next()
-    assert wiz.currentId() == wiz._page_ids["localmesh"]
-    assert isinstance(wiz.currentPage(), wizard_mod.LocalMeshPage)
+    # issue #334: the branch now OPENS on its two-card choice screen (join an existing
+    # mesh with a key / generate a new one) instead of the old tabbed page. Same door,
+    # same transient flag; the first screen behind it is the choice, not the form.
+    assert wiz.currentId() == wiz._page_ids["localmesh_choice"]
+    assert isinstance(wiz.currentPage(), wizard_mod.LocalMeshChoicePage)
     # the SAME transient flag the welcome card used to raise (LocalMeshPage.applies_to
     # reads it) — and never persisted into cfg (cfg.mode stays an image mode)
     assert wiz.localmesh_selected is True
@@ -167,13 +170,17 @@ def test_mode_choice_after_a_localmesh_detour_clears_the_flag(wiz):
     mp = _mode(wiz)
     _pick_localmesh(mp)
     wiz.next()
-    assert wiz.currentId() == wiz._page_ids["localmesh"]
+    assert wiz.currentId() == wiz._page_ids["localmesh_choice"]
     wiz.back()
     assert wiz.currentId() == wiz._page_ids["mode"]
     mp._buttons["standalone"].setChecked(True)
     wiz.next()
     assert wiz.localmesh_selected is False
-    assert wiz.currentId() != wiz._page_ids["localmesh"]
+    # not the choice screen and not ANY of the branch's steps (issue #334 turned one
+    # stranded page into nine, so the stranding hazard is checked across all of them)
+    for slug in [s for s in wiz._page_ids
+                 if s == "localmesh" or s.startswith("localmesh_")]:
+        assert wiz.currentId() != wiz._page_ids[slug], slug
 
 
 def test_welcome_still_lowers_a_stranded_localmesh_flag(wiz):

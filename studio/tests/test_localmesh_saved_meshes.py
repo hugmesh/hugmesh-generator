@@ -252,10 +252,18 @@ def test_saved_section_is_collapsed_when_there_are_no_records(qapp, page):
     page.initializePage()
     assert page.saved_meshes.record_count() == 0
     assert not page.saved_section.is_expanded()
-    # it sits ABOVE the Actions row: the section is laid out before the flow box
-    lay = page.saved_section.parentWidget().layout()
-    idx = [lay.indexOf(page.saved_section), lay.indexOf(page.boot_start_btn.parentWidget())]
+    # It sits BEFORE the Actions row — the operator asked for the saved-mesh table to
+    # be in front of them when they go to generate a new mesh. Issue #334 split the two
+    # into separate sections (and separate wizard steps), so the ordering is now
+    # asserted between those sections rather than between two widgets of one layout:
+    # "review" (which hosts saved_section) precedes "bringup" (which hosts the Actions
+    # flow box) in the page body, and the review STEP precedes the bring-up step.
+    body = page._body
+    idx = [body.indexOf(page.sections["review"]), body.indexOf(page.sections["bringup"])]
     assert idx[0] >= 0 and idx[1] >= 0 and idx[0] < idx[1]
+    assert page.sections["review"].layout().indexOf(page.saved_section) >= 0
+    assert page.sections["bringup"].layout().indexOf(
+        page.boot_start_btn.parentWidget()) >= 0
     _settle(qapp, page)
 
 
