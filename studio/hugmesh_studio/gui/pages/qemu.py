@@ -120,7 +120,9 @@ from ..qt import Qt, QtWidgets
 from .. import console
 from ..styles import MUTED, WARN
 from ...core import emulation, qemu_tests
+from ...core.local_stack_node import LocalStackNode
 from . import _emulation_common as common
+from ._mesh_monitor_widget import MeshMonitorSection
 from ._scroll import scrollable
 from ._widgets import label_finish_as_exit
 from .localmesh import _MeshWorker
@@ -493,6 +495,27 @@ class QemuPage(QtWidgets.QWizardPage):
             "PASS is the only green verdict there is.")
         lay.addWidget(self.results)
 
+        # ── the running mesh's pods and containers (#336) ────────────────────────
+        # The operator asked for the pod table on this screen too. It is a DIFFERENT
+        # mesh from the results above — those rows are emulated guests this page boots
+        # and powers off, this section is the docker compose project and the kind
+        # cluster running on THIS workstation — and the note says so rather than
+        # letting two tables on one screen imply they are two views of one thing.
+        #
+        # Collapsed and greyed until something is up (PR #291's contract), with the
+        # gate, the 10 s poll and the off-thread read owned by MeshMonitorSection, so
+        # this page holds no monitor logic of its own.
+        self.monitor = MeshMonitorSection(
+            self, self.wiz.generator_dir, self._monitor_node,
+            title="Running mesh — pods, containers and their addresses",
+            scaling=True,
+            what=("This reads the docker compose project and the kind cluster on THIS "
+                  "workstation — not the emulated guests in the table above."))
+        self.monitor.monitor.hide_view_controls(
+            "Open the browser door from the local-mesh page — it owns the `make view` "
+            "session, and two launchers would fight over one session lock.")
+        self.monitor.mount(lay)
+
         self.note = QtWidgets.QLabel()
         self.note.setWordWrap(True)
         self.note.setTextFormat(Qt.TextFormat.RichText)
@@ -542,6 +565,35 @@ class QemuPage(QtWidgets.QWizardPage):
         self._refresh_kvm_note()
         self._reload_sessions()
         self._source_changed()
+
+    def cleanupPage(self):
+        """Leaving the page: stop the monitor's clock and let its threads land."""
+        self.monitor.shutdown()
+        super().cleanupPage()
+
+    def hideEvent(self, event):
+        """Off screen, off the clock — the monitor is two shell round trips per tick
+        and nobody is looking at them."""
+        self.monitor.stop()
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.monitor.start()
+
+    # ── the running-mesh monitor's node ─────────────────────────────────────────
+    def _monitor_node(self):
+        """The stack node the monitor reads both lanes through, built once.
+
+        Deliberately a DEFAULT LocalStackNode: the monitor only reads, and this page
+        has no local-mesh configuration to thread in — the compose file and the ports
+        are the Makefile's, which is what the running mesh was started with.
+        """
+        node = getattr(self, "_monitor_stack_node", None)
+        if node is None:
+            node = LocalStackNode(self.wiz.generator_dir)
+            self._monitor_stack_node = node
+        return node
 
     def validatePage(self) -> bool:
         """SEED the chaining flag — BuildPage owns it from the moment it is reached.
