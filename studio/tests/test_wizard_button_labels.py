@@ -12,7 +12,8 @@ arms are pinned here:
   step and its bring-up step, phone, quest, deploy, qemu-on-its-terminal-arm, meshemu,
   progress) and the go-live wizard's flip page. The local mesh contributes two since
   issue #334 split its tabs into a card choice: joining an existing mesh with a key and
-  generating a new one are separate branches, and BOTH end in the wizard. Every verb they own is an in-page button that has already run by the time the
+  generating a new one are separate branches, and BOTH end in the wizard. Every
+  verb they own is an in-page button that has already run by the time the
   operator reaches for the wizard button, and the work outlives the window on purpose
   — the docker mesh keeps running, the emulated devices keep running, the build has
   already finished — so the button is a plain "leave the Studio" and now says so. Six

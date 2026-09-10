@@ -192,18 +192,31 @@ def test_dialog_hosts_both_paths_with_no_tab_bar(qapp):
     section stacked in one scroll, in order — and the thing that must be gone is the
     tab bar itself: while it existed, this surface was the one pick-one control in the
     Studio that was not the card entry every other major path uses.
+
+    SHOWN, not merely constructed: the page reclaims its sections from showEvent (so a
+    Back in the wizard cannot leave the run view on the page behind), and that hook
+    fires here too. It must be a no-op on a host that has no steps — a SimpleNamespace
+    shim with no page list — rather than hiding half this window.
     """
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    dlg.show()
     assert not hasattr(dlg.page, "tabs")
     assert dlg.page.findChild(QtWidgets.QTabWidget) is None
     # both paths' widgets are present and hosted on the ONE page (one implementation)
     assert dlg.auth_key is not None and dlg.boot_start_btn is not None
     assert list(dlg.page.sections) == ["join", "env", "source", "services", "idp",
                                        "overlay", "review", "bringup"]
+    assert dlg.page._stepped_sections() == set()      # no wizard, so nothing is claimed
     # nothing is claimed away here: with no step pages, every section stays on the page
     for key, sec in dlg.page.sections.items():
         assert sec.parentWidget() is dlg.page._body.parentWidget(), key
         assert not sec.isHidden(), key
+        assert sec.isVisible(), key
+    # …and the run surface — status line, stage tree, log — is on screen with them
+    assert dlg.page.run_view.parentWidget() is dlg.page._body.parentWidget()
+    for name in ("status", "stage_tree", "log"):
+        assert getattr(dlg.page, name).isVisible() is True, name
+    dlg.close()
 
 
 def test_bootstrap_plan_preview_populates_and_hides_prod_group(qapp):

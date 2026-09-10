@@ -270,3 +270,205 @@ def test_the_choice_screen_commits_nothing_to_cfg(wiz):
     assert page.validatePage() is True
     after = wiz.cfg.to_dict() if hasattr(wiz.cfg, "to_dict") else dict(vars(wiz.cfg))
     assert after == before
+
+
+# ── a step that can START a verb must SHOW that verb (refute round, blocker) ────────
+def _to_review(wiz):
+    """Walk the generate branch as far as the saved-meshes / review step."""
+    page = _to_choice(wiz)
+    page._buttons["generate"].setChecked(True)
+    wiz.next()
+    for _ in range(12):
+        if isinstance(wiz.currentPage(), localmesh_mod.LocalMeshReviewPage):
+            return wiz.currentPage()
+        before = wiz.currentId()
+        wiz.next()
+        if wiz.currentId() == before:
+            break
+    raise AssertionError("never reached LocalMeshReviewPage: "
+                         + type(wiz.currentPage()).__name__)
+
+
+def _verb_pages(wiz):
+    """Every local-mesh page from which a REAL verb can be started.
+
+    Read off the code, not a hand-kept list: a page hosts a verb if it claims a
+    section carrying a control wired to something that calls ``_launch``. Today that
+    is the join form (Start/Stop), the saved-mesh table on the review step
+    (start_requested -> _start_saved) and the bring-up Actions row.
+    """
+    return {"localmesh_join", "localmesh_review", "localmesh"}
+
+
+@pytest.mark.parametrize("slug", sorted(_verb_pages(None)))
+def test_every_page_a_verb_can_start_from_hosts_the_run_view(wiz, slug):
+    """THE REGRESSION THIS PINS. The split moved the saved-mesh table — whose Start
+    and Restore run ``boot.start_saved`` / ``boot.restore`` on a QThread, minutes of
+    docker output — onto the review step, and left the run surface behind on the
+    controller. The operator pressed Start and got nothing: no status line, no stage
+    tree, no log, no Cancel, no failure notice. Everything that verb says lives in
+    ``run_view``, so any page it can be launched from must be showing it.
+    """
+    ctl = wiz.page(wiz._page_ids["localmesh"])
+    if slug == "localmesh_join":
+        page = _to_choice(wiz)
+        page._buttons["join"].setChecked(True)
+        wiz.next()
+    elif slug == "localmesh_review":
+        _to_review(wiz)
+    else:
+        page = _to_choice(wiz)
+        page._buttons["generate"].setChecked(True)
+        wiz.next()
+        _walk(wiz)
+    cur = wiz.currentPage()
+    assert type(cur).__name__ != "LocalMeshChoicePage"
+    for name in ("status", "stage_tree", "log"):
+        assert getattr(ctl, name).isVisible() is True, f"{slug}: {name} not visible"
+    host = (ctl._body if cur is ctl else cur._lay).parentWidget()
+    assert ctl.run_view.parentWidget() is host, slug
+
+
+def test_a_refused_saved_mesh_start_says_so_where_the_operator_can_see_it(wiz):
+    """``_start_saved``'s refusal paths write into ``ctl.status`` and leave the row
+    button ENABLED, so an invisible status line makes a refused click indistinguishable
+    from a broken one — this repo's named failure mode."""
+    ctl = wiz.page(wiz._page_ids["localmesh"])
+    review = _to_review(wiz)
+    assert ctl.status.isVisible() is True
+
+    class _Rec:
+        config, form, label, id = {}, {}, "demo", "demo"
+
+    ctl._running, ctl._running_label = True, "Generate && start"
+    ctl._start_saved(_Rec(), "start")
+    assert "Still running" in ctl.status.text()
+    assert ctl.status.isVisible() is True         # …and the operator can READ it
+    ctl._running, ctl._running_label = False, ""
+
+    ctl._mesh_up = True
+    ctl._start_saved(_Rec(), "start")
+    assert "stop it first" in ctl.status.text()
+    assert ctl.status.isVisible() is True
+    ctl._mesh_up = None
+    assert isinstance(review, localmesh_mod.LocalMeshReviewPage)
+
+
+def test_the_run_view_hands_back_to_the_bring_up_step(wiz):
+    """The review step claims the run view; Next must not strand it there."""
+    ctl = wiz.page(wiz._page_ids["localmesh"])
+    review = _to_review(wiz)
+    assert ctl.run_view.parentWidget() is review._lay.parentWidget()
+    wiz.next()
+    assert isinstance(wiz.currentPage(), localmesh_mod.LocalMeshPage)
+    assert ctl.run_view.parentWidget() is ctl._body.parentWidget()
+    assert ctl.run_view.isVisible() is True
+    wiz.back()                                    # …and claims it again on the way in
+    assert isinstance(wiz.currentPage(), localmesh_mod.LocalMeshReviewPage)
+    assert ctl.run_view.parentWidget() is review._lay.parentWidget()
+    assert ctl.status.isVisible() is True
+
+
+# ── the busy guard, on EVERY step (refute round, major) ────────────────────────────
+@pytest.mark.parametrize("slug", ["localmesh_env", "localmesh_source",
+                                  "localmesh_services", "localmesh_idp",
+                                  "localmesh_review", "localmesh_join"])
+def test_a_running_verb_greys_next_on_every_step(wiz, slug):
+    """``_LocalMeshStep.initializePage`` connects the controller's completeChanged to
+    each step's own, under a comment promising the step's Next greys mid-verb. Without
+    an ``isComplete`` override that signal re-evaluated a gate that never said no, and
+    the operator could walk forward out of a running docker verb — something the
+    single-page flow forbade."""
+    step = wiz.page(wiz._page_ids[slug])
+    ctl = wiz.page(wiz._page_ids["localmesh"])
+    assert step.isComplete() is True
+    ctl._running = True
+    assert step.isComplete() is False, slug
+    ctl._running = False
+    assert step.isComplete() is True
+
+
+def test_the_running_gate_actually_disables_the_wizards_next_button(wiz):
+    """isComplete is only half of it — the signal has to reach the wizard."""
+    ctl = wiz.page(wiz._page_ids["localmesh"])
+    _to_review(wiz)
+    nxt = wiz.button(QtWidgets.QWizard.WizardButton.NextButton)
+    assert nxt.isEnabled() is True
+    ctl._running, ctl._running_label = True, "Generate && start"
+    ctl.completeChanged.emit()                    # exactly what _launch does
+    assert nxt.isEnabled() is False
+    ctl._running, ctl._running_label = False, ""
+    ctl.completeChanged.emit()                    # …and what _verb_done does
+    assert nxt.isEnabled() is True
+
+
+# ── native-default invariant across the WHOLE step branch ──────────────────────────
+def test_walking_every_new_step_untouched_commits_nothing_to_cfg(wiz):
+    """The Studio's named failure mode is a knob that silently does nothing; the
+    mirror of it is a screen that silently does something. Seven new steps were added
+    to the flow, and an operator who walks all of them without touching a field must
+    leave cfg — and therefore ``to_cli_args()`` — byte-identical. (The local-mesh
+    branch drives LocalMeshBootstrapConfig, which never reaches builder argv, so the
+    correct answer here is ZERO delta, not "a delta we understand".)"""
+    before, before_argv = wiz.cfg.to_dict(), list(wiz.cfg.to_cli_args())
+    ctl = wiz.page(wiz._page_ids["localmesh"])
+    page = _to_choice(wiz)
+    page._buttons["generate"].setChecked(True)
+    wiz.next()
+    ctl.env_prod.setChecked(True)                 # the widest walk: all seven steps
+    seen = _walk(wiz)
+    ctl.env_test.setChecked(True)                 # leave the default as we found it
+    assert seen == BOOTSTRAP_STEPS, seen
+    assert wiz.cfg.to_dict() == before
+    assert list(wiz.cfg.to_cli_args()) == before_argv
+
+
+def test_walking_the_join_step_untouched_commits_nothing_to_cfg(wiz):
+    before, before_argv = wiz.cfg.to_dict(), list(wiz.cfg.to_cli_args())
+    page = _to_choice(wiz)
+    page._buttons["join"].setChecked(True)
+    wiz.next()
+    assert isinstance(wiz.currentPage(), localmesh_mod.LocalMeshJoinPage)
+    assert wiz.cfg.to_dict() == before
+    assert list(wiz.cfg.to_cli_args()) == before_argv
+
+
+def test_the_controller_reclaims_the_run_view_on_any_show_not_only_a_forward_one(wiz):
+    """The custody rule is ONE rule: whichever local-mesh page is on screen holds the
+    run view, claimed from showEvent so it holds on a Back too.
+
+    The controller is the last step today, so the wizard only ever enters it forward
+    and initializePage would be enough — which is exactly why this drives the hook
+    directly. Without it the rule would be "showEvent, except the controller, which
+    relies on being last", and inserting any step after bring-up would silently strand
+    the log on the page behind it.
+    """
+    ctl = wiz.page(wiz._page_ids["localmesh"])
+    review = _to_review(wiz)
+    assert ctl.run_view.parentWidget() is review._lay.parentWidget()
+    ctl.hide()
+    ctl.show()                       # what QWizard does when it switches to a page
+    assert ctl.run_view.parentWidget() is ctl._body.parentWidget()
+    assert ctl.sections["bringup"].parentWidget() is ctl._body.parentWidget()
+    ctl.hide()
+
+
+def test_a_step_relays_the_controllers_complete_changed_as_its_own(wiz):
+    """``initializePage`` connects ctl.completeChanged -> this step's own signal.
+
+    The wizard's Next button does not prove this: QWizard::setPage connects
+    completeChanged for EVERY page it holds, so the controller's emission already
+    re-polls the current page's isComplete whether or not this relay exists. What the
+    relay buys is that the STEP's own signal is truthful — anything that watches a
+    QWizardPage the documented way sees the change — so it is pinned here directly
+    rather than through a button that would stay green with the wire cut.
+    """
+    ctl = wiz.page(wiz._page_ids["localmesh"])
+    step = _to_review(wiz)
+    seen = []
+    step.completeChanged.connect(lambda: seen.append(step.isComplete()))
+    ctl._running = True
+    ctl.completeChanged.emit()
+    ctl._running = False
+    ctl.completeChanged.emit()
+    assert seen == [False, True], seen

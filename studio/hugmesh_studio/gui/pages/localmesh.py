@@ -646,9 +646,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # password — so the dialog can list them as "added this session".
         self._cred_truth = None
         self._added_users_ok: list[tuple[str, tuple[str, ...]]] = []
-        # ── the running-mesh monitor's state (the table itself lives on the bootstrap
-        # tab; see _build_bootstrap_tab). None until the first snapshot answers — the
-        # same tri-state rule as _mesh_up, and for the same reason.
+        # ── the running-mesh monitor's state (the table itself lives in the bring-up
+        # section; see _build_bringup_section). None until the first snapshot answers —
+        # the same tri-state rule as _mesh_up, and for the same reason.
         self._monitor: mesh_monitor.MonitorSnapshot | None = None
         # Set at every verb's end, cleared when a read STARTS after it: the state
         # probe's answer (and a read that was already in flight) re-reads the
@@ -710,10 +710,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         return not self._running
 
     def initializePage(self):
-        # Reclaim what THIS page shows. In the wizard the earlier steps have taken
-        # their own sections; the bring-up block and the run view belong here, and the
-        # join step may hold the run view, so both are claimed back on every entry.
-        # Standalone (LocalMeshDialog) nothing ever moved, so both calls are no-ops.
+        # Custody first (_reclaim_sections runs on every show, and take_section is
+        # idempotent), then the things that must happen only on a real forward entry:
+        # the probes.
         self.take_section("bringup", self._body)
         self.take_section("run", self._body)
         self._hide_stepped_sections()
@@ -1650,8 +1649,26 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._monitor_timer.stop()
         super().hideEvent(event)
 
+    def _reclaim_sections(self) -> None:
+        """Take back what THIS page shows: the bring-up block and the run view.
+
+        Widget custody only; NO probe runs here, so it is safe on every show. Qt calls
+        initializePage only on a FORWARD visit, and the run view is CONTENDED — the
+        join step and the review step claim it too — so the reclaim has to hang off a
+        hook that fires both ways or a Back would leave the log on the page behind.
+        Standalone (LocalMeshDialog) nothing ever moved and there are no steps, so
+        every call below is a no-op.
+        """
+        self.take_section("bringup", self._body)
+        self.take_section("run", self._body)
+        self._hide_stepped_sections()
+
     def showEvent(self, event) -> None:                       # noqa: N802 (Qt)
         super().showEvent(event)
+        # ONE showEvent on this class, deliberately: a second def further up the class
+        # body would silently lose to this one (later def wins, no error anywhere), so
+        # the section reclaim is a call from here rather than its own override.
+        self._reclaim_sections()
         # The twin of hideEvent's stop (mesh_emulation.py:500-513 is the in-repo
         # precedent). Nothing else restarts the timer — _on_monitor_toggled only
         # fires on an actual fold change — so without this a revisited page shows a
@@ -3354,15 +3371,51 @@ class _LocalMeshStep(QtWidgets.QWizardPage):
         return bool(getattr(self.wiz, "localmesh_selected", False)
                     and not getattr(self.wiz, "localmesh_join_selected", True))
 
-    def initializePage(self):
+    def isComplete(self) -> bool:
+        """False while a verb runs on the controller — the controller's own rule.
+
+        Every step inherits it, not just the join step. LocalMeshPage.isComplete has
+        always refused to advance mid-verb ("leaving mid-up would orphan the worker's
+        signals into a destroyed page"), and a step that can START a verb — the review
+        step hosts the saved-mesh table's Start/Restore buttons — needs exactly the
+        same refusal. Without it the wiring below emitted completeChanged into a gate
+        that never said no, so the operator could walk forward out of a running
+        bring-up: a straight regression from the single-page flow.
+        """
+        ctl = self.ctl
+        return True if ctl is None else not ctl._running
+
+    def _claim(self) -> None:
+        """Re-parent onto this step every section it is responsible for.
+
+        Called from BOTH initializePage and showEvent, because Qt calls initializePage
+        only on a FORWARD visit ("as a result of the user clicking Next"): pressing
+        Back re-SHOWS a page without re-initialising it. For a section only one page
+        ever wants that is harmless — nobody took it away. The RUN VIEW is the
+        exception: the join step, the review step and the controller all claim it, so
+        whichever page took it last keeps it across a Back, and the step the operator
+        is actually looking at is left with a verb it cannot show. take_section is
+        idempotent by parent, so the duplicate call on a forward visit costs nothing.
+        """
         ctl = self.ctl
         if ctl is None:
             return
         ctl.take_section(self.SECTION, self._lay)
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        self._claim()
+
+    def initializePage(self):
+        ctl = self.ctl
+        if ctl is None:
+            return
+        self._claim()
         if not self._wired:
             # A verb running on the controller must grey THIS page's Next/Exit too —
             # the controller emits completeChanged at every verb start and end
-            # (_launch / _verb_done) and a step has no other way to hear it.
+            # (_launch / _verb_done) and a step has no other way to hear it. isComplete
+            # above is the gate it re-evaluates.
             ctl.completeChanged.connect(self.completeChanged)
             self._wired = True
 
@@ -3395,18 +3448,17 @@ class LocalMeshJoinPage(_LocalMeshStep):
     def nextId(self) -> int:
         return -1
 
-    def isComplete(self) -> bool:
-        # The controller's own rule: Exit stays disabled while a verb runs, so leaving
-        # mid-start cannot orphan the worker's signals into a destroyed page.
+    def _claim(self) -> None:
+        super()._claim()
         ctl = self.ctl
-        return True if ctl is None else not ctl._running
+        if ctl is not None:
+            ctl.take_section("run", self._lay)
 
     def initializePage(self):
         super().initializePage()
         ctl = self.ctl
         if ctl is None:
             return
-        ctl.take_section("run", self._lay)
         ctl._refresh_status()
 
 
@@ -3471,7 +3523,25 @@ class LocalMeshReviewPage(_LocalMeshStep):
     SECTION = "review"
     TITLE = "Saved meshes and the plan"
     SUBTITLE = ("What a bring-up will generate and start, and the meshes already "
-                "saved on this machine. Nothing here runs anything.")
+                "saved on this machine. The plan itself is read-only; a saved row's "
+                "Start or Restore does run docker, and its output appears below.")
+
+    def _claim(self) -> None:
+        # THE RUN SURFACE COMES WITH THE TABLE. The saved-mesh rows are not a preview:
+        # start_requested -> _start_saved launches boot.start_saved / boot.restore on a
+        # _MeshWorker QThread — minutes of docker output — and every word that verb
+        # says to the operator lives in run_view (status line, stage tree, log, Cancel).
+        # It also carries the REFUSALS: _start_saved's "Still running: …", "A local
+        # mesh is running — stop it first", the theme error and boot.validate()'s
+        # problems all land in ctl.status, and the row buttons stay enabled through
+        # each of them. Claimed here, a refused click says why and a started verb can
+        # be watched and cancelled; unclaimed, both are silent. LocalMeshPage
+        # .showEvent reclaims it on entry, so the hand-back to the bring-up step
+        # needs no code here.
+        super()._claim()
+        ctl = self.ctl
+        if ctl is not None:
+            ctl.take_section("run", self._lay)
 
     def initializePage(self):
         super().initializePage()
@@ -3484,6 +3554,12 @@ class LocalMeshReviewPage(_LocalMeshStep):
         ctl._refresh_plan()
         ctl._probe_mesh_state()
         ctl.saved_meshes.refresh()
+        # Deliberately NOT _refresh_status(): that probes the JOIN node
+        # (`docker compose ps` on the join stack) and writes "Status: running/stopped"
+        # into this same label. On the generate branch that is a sentence about a mesh
+        # the operator is not running, so the label is left empty until this step's own
+        # verb — or its refusal — has something true to put in it.
+
 
 class LocalMeshDialog(QtWidgets.QDialog):
     """Thin standalone-host shim: ``LocalMeshDialog(generator_dir).exec()`` still
