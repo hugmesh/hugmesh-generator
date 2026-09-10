@@ -337,6 +337,7 @@ jobs:
             tests/scripts/test-kind-doctor.sh
             tests/scripts/test-kind-profile-app-closure.sh
             tests/scripts/test-kind-profile-route-closure.sh
+            tests/scripts/test-kind-secret-closure.sh
             tests/scripts/test-lsm-posture-honesty.sh
             tests/scripts/test-no-duplicate-env.sh
             tests/scripts/test-nullmailer-cross-postinst.sh
