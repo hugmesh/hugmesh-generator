@@ -2164,6 +2164,36 @@ lint:studio-identity-validation:
 # capture showed are studio/tests/test_qemu_tests.py, which passes 63/63 on a
 # dev host, so they are something the container lacks, not this change.)
 #
+# ── #326 item 2, measured 2026-09-09. The "19 ... attributed to
+# test_qemu_tests.py" reading was too broad: that file contributes SEVEN of them,
+# not nineteen. Re-run of THIS image (python:3-slim + pip install pytest), that
+# file alone, before any change:
+#       dev host, docker present:  63 passed in 0.68s
+#       python:3-slim, no docker:  7 failed, 54 passed, 2 skipped
+# Every one of the 7 died on run-qemu-docker.sh's own preflight — "[qemu-docker]
+# ERROR: docker not found" (that script :1753-1754 checks `command -v docker` AND
+# `docker info`, both above row discovery and both reached even for --list) — so
+# they never reached the shell-vs-python contract they exist to pin. That is a
+# missing optional dependency, which known-failures.txt's rule says is an
+# in-test skip, not a deselect. The seven now carry `@_needs_docker`
+# (studio/tests/test_qemu_tests.py) and the same image reports
+#       54 passed, 9 skipped, 0 failed
+# while the dev host still runs all 63. NO deselect was added here.
+#
+# STILL RED, AND NOT MEASURED: the other ~12 failures are NOT in that file, and
+# nothing here has identified them. This job remains a hard gate with no
+# allow_failure, so it is still expected to fail until they are. Do not read the
+# fix above as "the suite is green" — reproducing the remaining 12 needs a FULL
+# suite run in this image (with PySide6, which the capture had and the run above
+# did not), which the RAM budget of the #326 lane forbade.
+#
+# known-failures.txt IS wired, just not here: .github/workflows/studio-tests.yml
+# :99-115 deselects it and :140-164 re-runs those nodes in a separate
+# non-blocking step that reports to the job summary. It is NOT consulted by this
+# GitLab job — but the list is EMPTY (audited 2026-08-20), so wiring it in would
+# quarantine nothing today and would add a second mute path. Left unwired
+# deliberately; fix the 12, do not build a mute for them.
+#
 # BEFORE ADDING A --deselect HERE, read the sibling rule in
 # studio/tests/known-failures.txt: a missing optional dependency is an
 # importorskip in the test, a stale pin is a fix to the pin, a live drift is a
