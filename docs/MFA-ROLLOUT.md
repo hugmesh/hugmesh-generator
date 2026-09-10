@@ -125,23 +125,25 @@ The final `OR` is the **per-domain arm** (issue #47 × the casdoor-choice
 schema): list a `url_pattern` in its `IN (…)` and every **domain-scoped** row
 carrying it gets the same re-apply convergence the two blanket prefixes get.
 It is **empty today** — the empty-string element matches no pattern, so the
-flip set is exactly the 9 rows below — and §1.2a explains when (and when not)
+flip set is exactly the 10 rows below — and §1.2a explains when (and when not)
 to widen it.
 
-That flips **9 rows** (as of this writing) across three gateways:
+That flips **10 rows** (as of this writing) across three gateways:
 
 | gateway | url_pattern | role |
 |---|---|---|
 | `hugmesh-fe-gateway` | `/bff/admin/**` | `ROLE_ADMIN` |
 | `hugmesh-fe-gateway` | `/bff/admin/phone-fleet/**` | `ROLE_FLEET_ADMIN`, `ROLE_ADMIN`, `ROLE_SUPERADMIN` |
+| `hugmesh-fe-gateway` | `/bff/superadmin/**` | `ROLE_SUPERADMIN` |
 | `hugmesh-be-gateway` | `/bff/admin/workloads/**` | `ROLE_ADMIN` |
 | `hugmesh-be-gateway` | `/bff/superadmin/**` | `ROLE_SUPERADMIN` |
 | `hugmesh-be-gateway` | `/bff/superadmin/games-services/**` | `ROLE_SUPERADMIN` |
 | `hugmesh-be-gateway` | `/bff/superadmin/workloads/**` | `ROLE_SUPERADMIN` |
 | `hugmesh-superadmin-gateway` | `/bff/superadmin/**` | `ROLE_SUPERADMIN` |
 
-Read that table twice. `/bff/superadmin/**` is governed on **two** gateways and
-`/bff/admin/…` on **two** gateways; the write is prefix-based and gateway-blind on
+Read that table twice. `/bff/superadmin/**` is governed on **three** gateways —
+`hugmesh-fe-gateway` joined the be and superadmin gateways when #244 was answered
+ACCEPT — and `/bff/admin/…` on **two**; the write is prefix-based and gateway-blind on
 purpose, because scoping it to one gateway name would leave the other as an
 un-MFA'd second door to the same paths. Matching is **longest-pattern-wins**, so
 flipping only the two `/**` floors would leave every longer sub-path row as the
@@ -568,7 +570,7 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
     ORDER BY 1, 2, 3;
    ```
 
-   Expect the 9 rows in §1.2 at `true`, and nothing else.
+   Expect the 10 rows in §1.2 at `true`, and nothing else.
 
    To see the **scope boundary** instead — the 9 gated rows *and* the six §1.2a
    rows that are `false` by design — use this, which is the same admin-ish

@@ -170,19 +170,31 @@ Feature: Governance tier boundaries — what each tier is refused
       | login-front-door              | /bff/login                    |
 
   # ═════════════════════════════════════════════════════════════════════════
-  # THE BROWSER DOOR FOR THE SUPERADMIN CONSOLE.
+  # THE BROWSER DOOR FOR THE SUPERADMIN CONSOLE. #244, ANSWERED ACCEPT.
   #
-  # A browser only ever reaches the admin-bff through hugmesh-fe-gateway. On THIS
-  # tree every superadmin row lives on hugmesh-be-gateway (which routes no /bff
-  # prefix) or on the tailnet-only hugmesh-superadmin-gateway, so there is no
-  # browser path to any /bff/superadmin/** endpoint. The sibling branch
-  # fix/superadmin-route-access-row adds the fe floor.
+  # ⚠ THE SECOND SCENARIO USED TO SKIP. It no longer does, and the comment it
+  # skipped under was wrong, so both are corrected here.
   #
-  # This tree must not assert either side of that merge as a fact, so the two
-  # halves are split: the INVARIANT is unconditional and true before and after,
-  # and the POSTURE is gated on the row existing and SKIPS LOUDLY naming the
-  # branch that lands it. It is gated rather than deleted so the integrator sees
-  # it turn into real coverage.
+  # The old text said "there is no browser path to any /bff/superadmin/**
+  # endpoint". There always was one: apps/20-gateway-fe.yaml routes Path=/bff/**
+  # to admin-bff, and a path no url_pattern matches is Decision.NO_RULE, which
+  # the gateway filter FORWARDS — it rejects only on DENY. A browser reached the
+  # superadmin BFF and was refused THERE, app-side, by
+  # pathMatchers("/bff/superadmin/**").hasRole("SUPERADMIN"): a bare 403 with no
+  # X-Route-Denied header. Ungoverned-and-forwarded, never default-denied.
+  #
+  # #244 ACCEPT added ('hugmesh-fe-gateway','/bff/superadmin/**',
+  # 'ROLE_SUPERADMIN',true). For a non-privileged caller the refusal moved to the
+  # door: 403 WITH X-Route-Denied, logged, admin-bff never reached. For an admin
+  # or a superadmin it changed nothing — both short-circuit in the filter before
+  # decide() is consulted. The gain is that the D6/D8 privileged step-up floor
+  # now has a governed surface to attach to; it could not fire on an ungoverned
+  # path at all.
+  #
+  # The two halves remain split, but neither is conditional now: the INVARIANT is
+  # true on every gateway before and after, and the POSTURE is asserted, with the
+  # row's ABSENCE a FAILURE rather than a skip — a decided row that can be
+  # deleted while quietly switching off its own coverage is not guarded.
   # ═════════════════════════════════════════════════════════════════════════
 
   Scenario: nothing but the superadmin tier is admitted under the superadmin bff prefix, on any gateway @layer:gateway

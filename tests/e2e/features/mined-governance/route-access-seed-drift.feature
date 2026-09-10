@@ -35,8 +35,18 @@ Feature: The route-access mirror is measured against the seed the cluster loads
 
   # The seed's own shape first: if the INSERT form changes under us, every
   # comparison below would silently compare against an empty list.
+  #
+  # ⚠ THE COUNT IS A LIVE NUMBER, NOT A CONSTANT. It read 152 and was RED on
+  # main before this change: #329's /bff/wiki/superadmin/** row landed without
+  # touching it (152 -> 153, a pre-existing failure I did not cause), and #244's
+  # ACCEPT row takes it to 154. Re-measure rather than guess when it fails again:
+  #     python3 scripts/gen-route-access-oracle.py && head -16 \
+  #       tests/e2e/specs/rbac-route-access.seed.ts
+  # The generated header prints the total and the per-gateway split. This
+  # scenario exists to make a row landing VISIBLE here rather than absorbed, so a
+  # bump is the correct fix; deleting the number is not.
   Scenario: the cluster seed parses to the rows a gateway loads @layer:gateway
-    Then the cluster seed carries 152 route-access rows across 4 gateways
+    Then the cluster seed carries 154 route-access rows across 4 gateways
     And the cluster seed carries exactly 4 explicit deny rows
 
   # THE DIRECTION THAT MATTERS. A mirror row with no seed row behind it is a

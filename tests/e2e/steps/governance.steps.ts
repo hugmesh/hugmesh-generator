@@ -416,32 +416,51 @@ Then('the {string} governance function is decided by the route pattern {string}'
 // D. THE BROWSER DOOR FOR THE SUPERADMIN CONSOLE
 // ═══════════════════════════════════════════════════════════════════════════
 //
-// A browser only ever reaches the admin-bff through hugmesh-fe-gateway. Every
-// superadmin row in the seed on THIS tree lives on hugmesh-be-gateway (which
-// routes no /bff path) or on the tailnet-only hugmesh-superadmin-gateway, so
-// there is no browser path to any /bff/superadmin/** endpoint. A sibling branch
-// (fix/superadmin-route-access-row) adds the fe floor.
+// ⚠ THIS BLOCK WAS A SKIP-GATE AND IS NOW AN ASSERTION. #244 has been answered
+// ACCEPT, so the fe row exists and the POSTURE is a decided fact rather than a
+// pending merge. What the old comment here said is also corrected below, because
+// it was wrong in a way that made the decision look like an exposure question.
 //
-// This tree must not assert either side of that merge as a fact. So:
+// WHAT WAS WRONG. The old text said "there is no browser path to any
+// /bff/superadmin/** endpoint". There always was one: apps/20-gateway-fe.yaml
+// routes Path=/bff/** to admin-bff, and a path with NO matching url_pattern is
+// Decision.NO_RULE, which GatewayRouteAccessFilter FORWARDS (it rejects only on
+// DENY). So a browser reached the superadmin BFF and was refused there, app-side,
+// by pathMatchers("/bff/superadmin/**").hasRole("SUPERADMIN") — a bare 403 with
+// NO X-Route-Denied header, which is the documented signature of an app-side
+// refusal. The surface was ungoverned-and-forwarded, never default-denied.
+//
+// WHAT THE ROW CHANGED. For a non-privileged caller the refusal moved to the
+// gateway: governed-but-ungranted at the longest match => DENY at the door, 403
+// WITH X-Route-Denied, logged, and admin-bff never reached. For ROLE_ADMIN and
+// ROLE_SUPERADMIN it changed nothing at all — both short-circuit in
+// GatewayRouteAccessFilter BEFORE decide() runs, so no row on this gateway can
+// alter what they reach. The real gain is that a governed row is something the
+// D6/D8 privileged step-up floor can attach to; an ungoverned path returns false
+// from isMfaRequiredSurface() and could not be MFA-gated at all.
+//
+// So:
 //   * the INVARIANT — nothing but ROLE_SUPERADMIN is ever admitted at the
-//     superadmin prefix, on ANY gateway — is asserted unconditionally, is true
-//     before and after the merge, and goes RED on the wrong fix (an
-//     ROLE_ADMIN down-cascade row);
-//   * the POSTURE — that a browser can reach it at all — is gated on the row
-//     existing and SKIPS LOUDLY naming the branch that lands it.
+//     superadmin prefix, on ANY gateway — stays asserted unconditionally and
+//     goes RED on the wrong fix (a ROLE_ADMIN down-cascade row);
+//   * the POSTURE is no longer gated. The row's ABSENCE is now a FAILURE, not a
+//     skip: a skip would let the decided row be deleted and take its own
+//     coverage quietly with it.
 
-/** Skip-gate: the fe-gateway browser row for the superadmin console. */
-Given('the fe-gateway carries a browser row for the superadmin console', async ({ $testInfo }) => {
-  const present = sqlRouteRows().some(
+/** The fe-gateway browser row for the superadmin console — #244 ACCEPT.
+ *  ASSERTED, not skip-gated: this row is a decided posture, so losing it must
+ *  turn the lane RED rather than turn this scenario off. */
+Given('the fe-gateway carries a browser row for the superadmin console', async () => {
+  const rows = sqlRouteRows().filter(
     (r) => r.gateway === 'hugmesh-fe-gateway' && r.pattern.startsWith('/bff/superadmin') && r.allow);
-  $testInfo.skip(!present,
-    'this tree carries NO hugmesh-fe-gateway allow row under /bff/superadmin, so there is no '
-    + 'BROWSER path to any superadmin BFF endpoint: the rows that exist are on '
-    + 'hugmesh-be-gateway (which routes no /bff prefix) and on the tailnet-only '
-    + 'hugmesh-superadmin-gateway. The fe floor lands with the sibling branch '
-    + 'fix/superadmin-route-access-row (specs/cluster/manifests/route-access/initdb/'
-    + '20-schema.sql + specs/rbac-route-access.ts). This scenario becomes REAL coverage the '
-    + 'moment that merges — it is gated, not deleted, so the integrator sees it turn on.');
+  expect(
+    rows.map((r) => `${r.pattern} ${r.role}`).sort(),
+    'the hugmesh-fe-gateway allow row(s) under /bff/superadmin. #244 was answered ACCEPT and '
+    + 'the row lives in specs/cluster/manifests/route-access/initdb/20-schema.sql (and, '
+    + 'generated from it, specs/rbac-route-access.seed.ts). With no row the prefix goes back '
+    + 'to Decision.NO_RULE at this gateway — FORWARDED to admin-bff, refused app-side with no '
+    + 'X-Route-Denied header, and with no surface for the privileged MFA floor to attach to.',
+  ).toEqual(['/bff/superadmin/** ROLE_SUPERADMIN']);
 });
 
 /** The posture, once the row exists: superadmin in, everyone else out. */

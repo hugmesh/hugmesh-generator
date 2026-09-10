@@ -721,6 +721,63 @@ emit("PREFIX_UNFLIPPED", len(missed))
 for g, p, r in missed:
     emit("PREFIX_UNFLIPPED_ROW", "%s %s %s" % (g, p, r))
 
+# ── #244: the SUPERADMIN PLATFORM CONSOLE at the PUBLIC BROWSER DOOR ──────────
+# A row with no test is a row that silently disappears. These three readings are
+# BEHAVIOURAL — they replay decide() over the FINAL row state (after every
+# statement in the file, including the flip UPDATE) rather than grepping the
+# INSERT for a line — so deleting the row, lowering its floor, or re-porting
+# 63c8952f's games-services DENY refinement each move a value here.
+#
+# Ranking mirrors GatewayRouteAccessService: longest MATCHING pattern wins (by
+# pattern LENGTH, not specificity), deny-wins at that length, and no matching
+# pattern at all is NO_RULE — which is FORWARD at the filter, not a refusal.
+def _ant(pat, path):
+    if pat == path:
+        return True
+    if pat == "/**":
+        return True
+    if pat.endswith("/**"):
+        pre = pat[:-3]
+        return path == pre or path.startswith(pre + "/")
+    if "*" in pat:                      # single-segment glob, e.g. /*.js
+        import fnmatch
+        return fnmatch.fnmatch(path, pat) and path.count("/") == pat.count("/")
+    return False
+
+def _decide(gateway, path, roles):
+    """(verdict, mfa) as the gateway would answer, from the replayed final rows."""
+    best, allow, deny, mfa = -1, False, False, False
+    for (g, p, r, a, m) in rows:
+        if g != gateway or not _ant(p, path):
+            continue
+        if len(p) > best:
+            best, allow, deny, mfa = len(p), False, False, False
+        if len(p) == best:
+            held = (r in roles) or (r == "PUBLIC")
+            if a and held:
+                allow = True
+            if (not a) and held:
+                deny = True
+            if a and m:
+                mfa = True
+    if best < 0:
+        return "NO_RULE", "no"          # ungoverned: forwarded, and no MFA floor
+    if deny or not allow:
+        return "DENY", ("yes" if mfa else "no")
+    return "ALLOW", ("yes" if mfa else "no")
+
+_v, _m = _decide("hugmesh-fe-gateway", "/bff/superadmin/workloads/exec", ["ROLE_USER"])
+emit("FE_SUPERADMIN_VERDICT", _v)       # DENY = governed at the door => X-Route-Denied
+emit("FE_SUPERADMIN_MFA", _m)           # yes  = the D6/D8 floor has a surface to hang on
+_v2, _m2 = _decide("hugmesh-fe-gateway", "/bff/superadmin/workloads/exec",
+                   ["ROLE_SUPERADMIN"])
+emit("FE_SUPERADMIN_TIER_VERDICT", _v2)  # ALLOW = the tier the row admits (rows only;
+                                         # the filter's admin bypass is not modelled)
+# The subtree 63c8952f wanted an extra DENY row on. Its MFA floor must survive.
+_v3, _m3 = _decide("hugmesh-fe-gateway", "/bff/superadmin/games-services/catalog",
+                   ["ROLE_SUPERADMIN"])
+emit("FE_GAMES_SUBTREE_MFA", _m3)
+
 # ── INDEPENDENT admin-ish enumeration — deliberately does NOT reuse PREFIXES ───
 def segs(p):
     return [s for s in p.split("/") if s and s != "**"]
@@ -1375,9 +1432,34 @@ fi
   || bad "$(g ALTER_SHAPE_MISMATCH) column(s) end up shaped differently on a fresh initdb vs an in-place upgrade: $(sed -n 's/^ALTER_SHAPE_MISMATCH_ROW //p' "${W}/real.out" | tr '\n' ';') $(sed -n 's/^ALTER_UNKNOWN_ACTION //p' "${W}/real.out" | tr '\n' ';')"
 
 if [ "${HAVE_UPDATE}" = "1" ]; then
-[ "$(g FLIPPED)" -ge 9 ] \
+[ "$(g FLIPPED)" -ge 10 ] \
   && ok "AFTER the whole file runs, $(g FLIPPED) rows carry mfa_required=true: $(sed -n 's/^FLIP //p' "${W}/real.out" | tr '\n' ';' )" \
-  || bad "after the whole file runs only $(g FLIPPED) rows carry mfa_required=true — expected at least the 9 rows under /bff/admin/** + /bff/superadmin/**"
+  || bad "after the whole file runs only $(g FLIPPED) rows carry mfa_required=true — expected at least the 10 rows under /bff/admin/** + /bff/superadmin/**"
+
+# ── #244 ACCEPT: the superadmin platform console at the PUBLIC browser door ────
+# Behavioural, replayed over the FINAL rows, not a grep of the INSERT. The row is
+# what moves a non-privileged caller's refusal from admin-bff (a bare 403, no
+# X-Route-Denied, request already across the namespace boundary) to the gateway
+# (403 WITH X-Route-Denied, logged, admin-bff never reached) — and it is what
+# gives the D6/D8 step-up floor a governed surface to attach to at that door.
+# NOTE what these do NOT claim: ROLE_ADMIN and ROLE_SUPERADMIN short-circuit in
+# GatewayRouteAccessFilter BEFORE decide() runs, so no row here changes what a
+# privileged principal reaches. This is the TABLE's verdict, not the filter's.
+[ "$(g FE_SUPERADMIN_VERDICT)" = "DENY" ] \
+  && ok "a plain ROLE_USER at hugmesh-fe-gateway /bff/superadmin/workloads/exec is DENY — governed-but-ungranted AT THE DOOR, so the 403 carries X-Route-Denied and admin-bff is never reached (before #244's row this read NO_RULE: forwarded, refused app-side, no header)" \
+  || bad "the fe-gateway browser door for /bff/superadmin/** reads $(g FE_SUPERADMIN_VERDICT) for a plain ROLE_USER, not DENY — NO_RULE means the prefix is UNGOVERNED at the public door again and the refusal has fallen back to admin-bff with no X-Route-Denied header (#244)"
+
+[ "$(g FE_SUPERADMIN_TIER_VERDICT)" = "ALLOW" ] \
+  && ok "…and the tier the row admits at that door is ROLE_SUPERADMIN (rows alone; the filter's admin bypass is deliberately not modelled)" \
+  || bad "the fe-gateway /bff/superadmin/** row does not admit ROLE_SUPERADMIN ($(g FE_SUPERADMIN_TIER_VERDICT)) — the floor has been raised past its own tier, so the console is unreachable at the public door by rows"
+
+[ "$(g FE_SUPERADMIN_MFA)" = "yes" ] \
+  && ok "…and the DECIDING row at that door carries mfa_required=true, so the privileged step-up floor can fire there once APP_MFA_ENFORCE_PRIVILEGED_FLOOR goes true — the gain #244 was answered ACCEPT for (isMfaRequiredSurface() returns false for an ungoverned path, which is what it was before)" \
+  || bad "the deciding row at hugmesh-fe-gateway /bff/superadmin/workloads/exec is mfa_required=false — the step-up floor cannot fire on the superadmin surface at the public door, which is the one thing #244's ACCEPT buys"
+
+[ "$(g FE_GAMES_SUBTREE_MFA)" = "yes" ] \
+  && ok "…and the games-services SUBTREE under it keeps that floor: 63c8952f's paired DENY refinement is deliberately NOT ported, because as the longest matching pattern with mfa_required=false (the flip is allow-only) it would STRIP the floor from exactly that subtree while denying nobody the parent row does not already deny" \
+  || bad "the deciding row at hugmesh-fe-gateway /bff/superadmin/games-services/catalog is mfa_required=false — a longer row under /bff/superadmin/ has taken over the match and stripped the step-up floor from that subtree (#244: this is why the games-services DENY row was left out)"
 
 [ "$(g PREFIX_UNFLIPPED)" = "0" ] \
   && ok "EVERY allow row under /bff/admin/** and /bff/superadmin/** ends up true — no longer sub-path row is left as a false deciding rule (longest-pattern-wins bypass), and nothing later in the file un-flips one" \
@@ -1868,6 +1950,31 @@ nc "an appended DELETE of flipped rows" SIM_ROWS "${HEALTHY_ROWS}" \
 
 nc "an appended SCHEMA-QUALIFIED DELETE that wipes every superadmin row" SIM_ROWS "${HEALTHY_ROWS}" \
    's += "\nDELETE FROM public.gateway_route_access WHERE url_pattern LIKE %s;\n" % repr("/bff/superadmin%")'
+
+# ── #244 ACCEPT: the three ways the browser-door row can be undone ─────────────
+# The row this battery defends is one line in a 150-row INSERT. Each control below
+# removes or subverts it a DIFFERENT way and must move a DIFFERENT reading, so
+# "the row is still there" is never inferred from the row's text.
+FE_SA_ROW="('hugmesh-fe-gateway',  '/bff/superadmin/**',    'ROLE_SUPERADMIN', true),"
+
+nc "the fe browser-door row DELETED (the surface goes back to ungoverned-and-forwarded)" \
+   FE_SUPERADMIN_VERDICT DENY \
+   'anchor("'"${FE_SA_ROW}"'")
+s = s.replace("'"${FE_SA_ROW}"'", "")'
+
+nc "the fe browser-door row's FLOOR LOWERED to ROLE_USER (governed, but admitting everyone)" \
+   FE_SUPERADMIN_VERDICT DENY \
+   'anchor("'"${FE_SA_ROW}"'")
+s = s.replace("'"${FE_SA_ROW}"'", "'"${FE_SA_ROW}"'".replace("ROLE_SUPERADMIN", "ROLE_USER"))'
+
+nc "the flip UPDATE narrowed so the fe browser-door row stays mfa_required=false" \
+   FE_SUPERADMIN_MFA yes \
+   's += "\nUPDATE gateway_route_access SET mfa_required = false WHERE url_pattern = %s AND role = %s;\n" % (repr("/bff/superadmin/**"), repr("ROLE_SUPERADMIN"))'
+
+nc "63c8952f's games-services DENY refinement re-ported (strips the step-up floor from that subtree)" \
+   FE_GAMES_SUBTREE_MFA yes \
+   'anchor("'"${FE_SA_ROW}"'")
+s = s.replace("'"${FE_SA_ROW}"'", "'"${FE_SA_ROW}"'" + "\n  (\x27hugmesh-fe-gateway\x27,  \x27/bff/superadmin/games-services/**\x27, \x27ROLE_SUPERADMIN\x27, false),")'
 
 nc "'IS DISTINCT FROM true' dropped (re-apply stops being a no-op)" SIM_MFA_CHANGES_2 0 \
    'anchor("\n   AND mfa_required IS DISTINCT FROM true;")
