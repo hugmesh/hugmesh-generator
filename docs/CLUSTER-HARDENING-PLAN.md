@@ -461,7 +461,8 @@ tailscaled (it reads the KEYS manifest only for `.headscale.enabled` and the
 SELinux mode). That is exactly the state `provision_tailscale()` produces on any
 image built *with* the mesh client whose manifest sets `enabled: false` — i.e.
 every harness payload. Confirming whether it actually fires needs a live QEMU
-boot, which the RAM budget of this run forbade. Two stale builder abort messages
+boot, which this run's brief forbade outright — a standing rule, not a RAM
+verdict (13-17 GiB stayed available throughout). Two stale builder abort messages
 point the same way and should be corrected with it:
 `build-x86-host-stage4.sh:5868` and `build-frite-stage4.sh:1919` both say
 "tailscaled is enabled in the runlevel", which no builder does.

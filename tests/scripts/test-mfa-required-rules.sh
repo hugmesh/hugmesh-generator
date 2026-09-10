@@ -845,6 +845,53 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
                 doc_bad.append("%s: unknown expect=%s" % (name, expect))
         except Exception as e:                                  # noqa: BLE001
             doc_bad.append("%s: %s" % (name, e))
+# ── (FIX 4b) the §1.2a EXCLUSION TABLE, cross-checked against the real list ────
+# Hazard (f) again, one level up: the SQL blocks below are executed, but the §1.2a
+# prose TABLE that enumerates the deliberately un-MFA'd admin surface was pure
+# prose. #329 added a seventh exclusion to DOCUMENTED_EXCLUSIONS and to the SQL
+# header, and the table -- the thing an operator actually reads to learn what a
+# stolen session still reaches -- kept saying "Six" and omitted the most
+# privileged row. The gate's own FAIL text promises the prose is checked; this is
+# that promise made real. Both directions, so a stale row fails too.
+doc_tbl_missing, doc_tbl_extra, doc_count_bad = [], [], []
+if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
+    m = re.search(r'^###\s+1\.2a\b.*?(?=^###\s|\Z)', doctext, re.S | re.M)
+    sect = m.group(0) if m else ""
+    listed = set(re.findall(r'^\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|',
+                            sect, re.M))
+    if not sect:
+        doc_count_bad.append("the runbook has no '### 1.2a' section any more — the "
+                             "exclusion table this gate cross-checks is gone")
+    else:
+        doc_tbl_missing = sorted(DOCUMENTED_EXCLUSIONS - listed)
+        doc_tbl_extra   = sorted(listed - DOCUMENTED_EXCLUSIONS)
+        # the prose's own count word must equal the table it introduces
+        WORDS = {"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,
+                 "eight":8,"nine":9,"ten":10,"eleven":11,"twelve":12}
+        cm = re.search(r'\b([A-Za-z]+)\s+other admin-ish `/bff/` rows are', sect)
+        if not cm:
+            doc_count_bad.append("the '<N> other admin-ish /bff/ rows are' sentence is "
+                                 "gone from §1.2a — the table's count is unverifiable")
+        else:
+            said = WORDS.get(cm.group(1).lower())
+            if said is None:
+                doc_count_bad.append("§1.2a count word %r is not a number word" % cm.group(1))
+            elif said != len(DOCUMENTED_EXCLUSIONS):
+                doc_count_bad.append(
+                    "§1.2a prose says %s (%d) un-MFA'd admin-ish rows but "
+                    "DOCUMENTED_EXCLUSIONS holds %d — the runbook is UNDER-reporting "
+                    "the surface a stolen session still reaches"
+                    % (cm.group(1), said, len(DOCUMENTED_EXCLUSIONS)))
+emit("DOC_TBL_MISSING", len(doc_tbl_missing))
+for g_, p_, r_ in doc_tbl_missing:
+    emit("DOC_TBL_MISSING_ROW", "%s %s %s" % (g_, p_, r_))
+emit("DOC_TBL_EXTRA", len(doc_tbl_extra))
+for g_, p_, r_ in doc_tbl_extra:
+    emit("DOC_TBL_EXTRA_ROW", "%s %s %s" % (g_, p_, r_))
+emit("DOC_TBL_COUNT_BAD", len(doc_count_bad))
+for b in doc_count_bad:
+    emit("DOC_TBL_COUNT_BAD_ROW", b)
+
 emit("DOC_SQL_BLOCKS", len(doc_names))
 emit("DOC_SQL_NAMES", ",".join(doc_names) if doc_names else "-")
 emit("DOC_SQL_BAD", len(doc_bad))
@@ -1520,6 +1567,11 @@ fi
   && ok "$(g ADMINISH) admin-ish /bff/ allow rows exist (enumerated independently: a path segment 'admin'/'superadmin', OR a ROLE_SUPERADMIN/*_ADMIN role); each is either flipped or one of the $(g EXCLUSIONS_DOCUMENTED) exclusions named in the SQL header + runbook §1.2a" \
   || bad "$(g ADMINISH_UNCOVERED) admin-ish /bff/ surface(s) are neither flipped nor a DOCUMENTED exclusion: $(sed -n 's/^ADMINISH_UNCOVERED_ROW //p' "${W}/real.out" | tr '\n' ';') — either widen the predicate or add them to DOCUMENTED_EXCLUSIONS *and* to the prose, so the docs never claim more coverage than exists"
 
+# ── (FIX 4b) the runbook table must name exactly the documented exclusions ─────
+[ "$(g DOC_TBL_MISSING)" = "0" ] && [ "$(g DOC_TBL_EXTRA)" = "0" ] && [ "$(g DOC_TBL_COUNT_BAD)" = "0" ] \
+  && ok "runbook §1.2a lists exactly the $(g EXCLUSIONS_DOCUMENTED) documented exclusions, and its count word agrees — the operator-facing table cannot under-report the un-MFA'd admin surface" \
+  || bad "runbook §1.2a has DRIFTED from DOCUMENTED_EXCLUSIONS: missing=$(sed -n 's/^DOC_TBL_MISSING_ROW //p' "${W}/real.out" | tr '\n' ';') extra=$(sed -n 's/^DOC_TBL_EXTRA_ROW //p' "${W}/real.out" | tr '\n' ';') count=$(sed -n 's/^DOC_TBL_COUNT_BAD_ROW //p' "${W}/real.out" | tr '\n' ';') — docs/MFA-ROLLOUT.md is the operator runbook; a row missing from that table is a privileged surface an operator believes is covered and is not"
+
 [ "$(g STALE_EXCLUSIONS)" = "0" ] \
   && ok "no stale entry in the documented-exclusion list — every listed surface still exists and is still un-flipped" \
   || bad "$(g STALE_EXCLUSIONS) documented exclusion(s) no longer match a real un-flipped row: $(sed -n 's/^STALE_EXCLUSION //p' "${W}/real.out" | tr '\n' ';') — the list has rotted into a rubber stamp; re-derive it"
@@ -1801,11 +1853,12 @@ nc "an appended PARTIAL un-flip of ONE row" PREFIX_UNFLIPPED 0 \
       % (repr("/bff/superadmin/workloads/**"), repr("ROLE_SUPERADMIN")))'
 
 # The healthy SIM_ROWS, read from the REAL run above rather than hardcoded. It was
-# literally `129` here while the true count was 158, so the "(was N)" these controls
-# print had been wrong for many row-additions -- still non-vacuous by luck (the
-# mutated readings never happened to land on 129), but one unlucky DELETE size away
-# from scoring a silent PASS on a control that never bit. Deriving it means adding a
-# route row can no longer rot these two, which is exactly what #329 did to them.
+# literally `129` here while the true count was 152 (measured on this branch's merge
+# base; 153 once #329's row lands), so the "(was N)" these controls print had been
+# wrong for many row-additions -- still non-vacuous by luck (the mutated readings
+# never happened to land on 129), but one unlucky DELETE size away from scoring a
+# silent PASS on a control that never bit. Deriving it means adding a route row can
+# no longer rot these two, which is exactly what #329 did to them.
 HEALTHY_ROWS="$(g SIM_ROWS)"
 [ -n "${HEALTHY_ROWS}" ] && [ "${HEALTHY_ROWS}" != "0" ] \
   || bad "cannot read a healthy SIM_ROWS from the real run, so the two row-count negative controls below would compare against nothing and score a vacuous PASS"
