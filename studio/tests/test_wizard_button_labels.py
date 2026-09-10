@@ -8,9 +8,12 @@ per page: does pressing the final button do anything beyond closing the window �
 build, an apply, a write, a state commit? The answer split three ways, and all three
 arms are pinned here:
 
-* **Pure close -> "Exit".** Seven pages of ``StudioWizard`` (localmesh, phone, quest,
-  deploy, qemu-on-its-terminal-arm, meshemu, progress) and the go-live wizard's flip
-  page. Every verb they own is an in-page button that has already run by the time the
+* **Pure close -> "Exit".** Eight pages of ``StudioWizard`` (the local mesh's join
+  step and its bring-up step, phone, quest, deploy, qemu-on-its-terminal-arm, meshemu,
+  progress) and the go-live wizard's flip page. The local mesh contributes two since
+  issue #334 split its tabs into a card choice: joining an existing mesh with a key and
+  generating a new one are separate branches, and BOTH end in the wizard. Every
+  verb they own is an in-page button that has already run by the time the
   operator reaches for the wizard button, and the work outlives the window on purpose
   — the docker mesh keeps running, the emulated devices keep running, the build has
   already finished — so the button is a plain "leave the Studio" and now says so. Six
@@ -128,7 +131,10 @@ def _finish_button(wiz):
 #: terminal (``nextId() == -1``), and pressing the final button runs nothing — pinned
 #: by ``test_no_exit_labelled_page_commits_anything_on_the_way_out``.
 TERMINAL_SIDE_FLOWS = [
-    ("localmesh", "LocalMeshPage"),
+    # the local mesh's DEFAULT card is "join an existing mesh with a key" (issue #334),
+    # so a plain Next-Next walk from the mode menu ends on the join step. The other
+    # branch's terminal page gets its own walk below, the way QemuPage does.
+    ("localmesh", "LocalMeshJoinPage"),
     ("phone", "PhonePage"),
     ("quest", "QuestPage"),
     ("deploy", "DeployPage"),
@@ -158,6 +164,24 @@ def test_terminal_side_flow_pages_render_exit_not_finish(wiz, mode, page_name):
     assert btn.isVisible(), f"{page_name} is final but renders no Finish button"
     assert btn.text() == EXIT_BUTTON_TEXT == "Exit", (
         f"{page_name} still renders {btn.text()!r}")
+
+
+def test_the_local_mesh_bring_up_step_renders_exit_behind_the_generate_card(wiz):
+    """The OTHER local-mesh branch's terminal page.
+
+    ``TERMINAL_SIDE_FLOWS`` walks with no clicks, which takes the choice screen's
+    default (join). Generating a new mesh is the second card, and its last step —
+    bring-up and monitor — is terminal for exactly the same reason: the mesh keeps
+    running in Docker after the window closes, so the button only leaves the Studio."""
+    pick_mode(wiz, "localmesh")
+    choice = advance_to(wiz, wizard_mod.LocalMeshChoicePage)
+    choice._buttons["generate"].setChecked(True)
+    page = advance_to(wiz, wizard_mod.LocalMeshPage)
+
+    assert page.nextId() == -1, "LocalMeshPage stopped being terminal"
+    btn = _finish_button(wiz)
+    assert btn.isVisible(), "LocalMeshPage is final but renders no Finish button"
+    assert btn.text() == EXIT_BUTTON_TEXT == "Exit"
 
 
 def test_the_qemu_page_still_renders_exit_behind_the_e2e_card(wiz):
@@ -217,7 +241,8 @@ def test_every_terminal_page_is_labelled_exit_and_no_other_page_is(wiz):
         if page.buttonText(FINISH) == EXIT_BUTTON_TEXT:
             labelled.add(name)
 
-    assert terminal == {"LocalMeshPage", "PhonePage", "QuestPage", "DeployPage",
+    assert terminal == {"LocalMeshPage", "LocalMeshJoinPage",
+                        "PhonePage", "QuestPage", "DeployPage",
                         "E2EPage", "QemuPage", "MeshEmulationPage", "ProgressPage"}
     assert labelled == terminal
 

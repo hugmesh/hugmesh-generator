@@ -12,9 +12,18 @@
 #   • an .iso     -> dd'd to the disk as installer/live media (opt-in path; the
 #     default OS artifact is the .img).
 #
+#   • an .img.xz / .iso.xz -> the SAME whole-disk write, streamed through `xz -dc`
+#     into dd. This is not an extra artifact kind, it is the DEFAULT one: the Studio
+#     builds with --compress ON (studio core/config.py ImageConfig.compress = True),
+#     which leaves x86/rpi5/jetson with only <name>.img.xz and frite/orangepi* with
+#     only <name>.live.iso.xz / <name>.installer.iso.xz. Refusing those made the
+#     flasher unable to name ANY artifact a default build produces — a Pi or Jetson
+#     node image was unflashable outright, and a standalone x86 build fell back to
+#     its ISO (#337).
+#
 # Artifact auto-pick (when --artifact is omitted) globs the work dir for
-#   <brand>-<platform>-<arch>-<role>-*.img   (PREFERRED)
-#   <brand>-<platform>-<arch>-<role>-*.iso   (fallback)
+#   <brand>-<platform>-<arch>-<role>-*.img[.xz]   (PREFERRED)
+#   <brand>-<platform>-<arch>-<role>-*.iso[.xz]   (fallback)
 # and, if both exist, prefers the .img. --list shows the candidates and exits.
 #
 # Safety (typed-path confirm, child unmount, partition naming, settle) is shared
@@ -82,7 +91,8 @@ Options:
   --work-dir DIR     Dir to search for artifacts.
                        arm64 default: ${RPI_WORK_DIR}
                        x86   default: ${X86_WORK_DIR}
-  --artifact FILE    Flash THIS file (.img or .iso); skips auto-pick.
+  --artifact FILE    Flash THIS file (.img/.iso, or the xz-compressed .img.xz/
+                     .iso.xz a --compress build leaves); skips auto-pick.
   --with-keys DIR    After flashing, also write a separate FAT32 KEYS stick from
                      DIR (delegates to make-keys-usb.sh). Requires --keys-dev.
   --keys-dev DEV     Device for the --with-keys stick. MUST differ from the OS
@@ -273,6 +283,10 @@ list_candidates() {
                 # and role (gentoo-x86-hugmesh-host-*.iso), so allow the role
                 # right after arch too.
                 pats+=("${WORK_DIR}/"*"-"${pf}*"-${a}-"*"-${r}-"*".${kind}")
+                # ...and the xz-compressed twin of both, which is what a
+                # --compress build (the Studio default) actually leaves on disk.
+                pats+=("${WORK_DIR}/"*"-"${pf}*"-${a}-${r}-"*".${kind}.xz")
+                pats+=("${WORK_DIR}/"*"-"${pf}*"-${a}-"*"-${r}-"*".${kind}.xz")
             done
         done
     done
@@ -289,7 +303,7 @@ list_candidates() {
     # artifacts are platform x86). See hugmesh_role_shadow_tokens in _roles-lib.sh.
     # shellcheck disable=SC2012
     ls -1t "${pats[@]}" 2>/dev/null \
-        | grep -ivE '/(.*-)?(kernel|initramfs|initrd|squashfs)[^/]*\.'"${kind}"'$' \
+        | grep -ivE '/(.*-)?(kernel|initramfs|initrd|squashfs)[^/]*\.'"${kind}"'(\.xz)?$' \
         | awk '!seen[$0]++' \
         | hugmesh_role_shadow_filter "${ROLE}"
 }
@@ -405,11 +419,17 @@ if [ -z "${ARTIFACT}" ]; then
 fi
 [ -f "${ARTIFACT}" ] || dl_die "artifact not found: ${ARTIFACT}"
 
-# Determine flash mode from the extension.
+# Determine flash mode from the extension. COMPRESSED is the xz-compressed twin of
+# the same whole-disk image: identical bytes on the disk, piped through `xz -dc` on the
+# way there. The two .xz arms are what a --compress build (the Studio default) actually
+# produces, and refusing them here is what made a finished node image unflashable.
+COMPRESSED=false
 case "${ARTIFACT}" in
-    *.img) FLASH_KIND="img" ;;
-    *.iso) FLASH_KIND="iso" ;;
-    *)     dl_die "artifact must be .img or .iso (got: ${ARTIFACT})" ;;
+    *.img)    FLASH_KIND="img" ;;
+    *.iso)    FLASH_KIND="iso" ;;
+    *.img.xz) FLASH_KIND="img"; COMPRESSED=true ;;
+    *.iso.xz) FLASH_KIND="iso"; COMPRESSED=true ;;
+    *)        dl_die "artifact must be .img/.iso or .img.xz/.iso.xz (got: ${ARTIFACT})" ;;
 esac
 
 # ── Device required from here on ───────────────────────────────────
@@ -418,6 +438,7 @@ esac
 # ── Root + tools (destructive path) ────────────────────────────────
 dl_require_root
 dl_require_tools dd sync lsblk partprobe blkid
+${COMPRESSED} && dl_require_tools xz
 dl_is_block "${DEVICE}" || dl_die "${DEVICE} is not a block device."
 
 # Refuse to flash onto an obvious partition (e.g. /dev/sda1) — we want the disk.
@@ -425,13 +446,36 @@ if [[ "${DEVICE}" =~ [0-9]$ ]] && [[ ! "${DEVICE}" =~ (nvme[0-9]+n[0-9]+|mmcblk[
     dl_die "${DEVICE} looks like a PARTITION. Pass the WHOLE disk (e.g. /dev/sda, /dev/nvme0n1)."
 fi
 
+# The size that must fit on the disk is the size that gets WRITTEN. For a compressed
+# artifact that is the uncompressed size, not the file size — comparing the 3 GB .xz
+# against the device would have passed an image that expands to more than the disk
+# holds, and dd would only find out mid-write. `xz --robot --list` reports it exactly
+# (field 5 of the `totals` row); a 0 from a failed read simply skips the fit check, as
+# it always did.
+#
+# The regex guard is NOT belt-and-braces. `xz --robot --list` prints a ZEROED `totals`
+# row on stdout even when it FAILS on a truncated or non-xz file, and exits 1 — so
+# under `set -o pipefail` an `|| echo 0` fallback appends a SECOND zero and leaves
+# ART_SIZE as the two-line string "0\n0". That is not merely ugly: the integer fit
+# check below then dies with "[: integer expected", skipping the size comparison
+# entirely, seconds before dd starts writing. Take the first totals row and require
+# digits.
 ART_SIZE="$(stat -c '%s' "${ARTIFACT}" 2>/dev/null || echo 0)"
+if ${COMPRESSED}; then
+    ART_SIZE="$(xz --robot --list "${ARTIFACT}" 2>/dev/null \
+                | awk '$1=="totals"{print $5; exit}' || true)"
+    [[ "${ART_SIZE}" =~ ^[0-9]+$ ]] || ART_SIZE=0
+fi
 DEV_SIZE="$(blockdev --getsize64 "${DEVICE}" 2>/dev/null || echo 0)"
 ART_H="$(numfmt --to=iec "${ART_SIZE}" 2>/dev/null || echo "${ART_SIZE}B")"
 DEV_H="$(numfmt --to=iec "${DEV_SIZE}" 2>/dev/null || echo "${DEV_SIZE}B")"
 
 dl_info "Role     : ${ROLE} (${ARCH}, platform $(platform_of "${ARTIFACT}"))"
-dl_info "Artifact : ${ARTIFACT} [${FLASH_KIND}, ${ART_H}]"
+if ${COMPRESSED}; then
+    dl_info "Artifact : ${ARTIFACT} [${FLASH_KIND}.xz, ${ART_H} uncompressed]"
+else
+    dl_info "Artifact : ${ARTIFACT} [${FLASH_KIND}, ${ART_H}]"
+fi
 dl_info "Target   : ${DEVICE} [${DEV_H}]"
 [ -n "${WITH_KEYS}" ] && dl_info "With keys: ${WITH_KEYS}"
 
@@ -450,7 +494,22 @@ dl_unmount_children "${DEVICE}"
 # Both .img and .iso are whole-device raw writes; dd with a large block size and
 # progress, then sync + settle so the new partition table is visible.
 dl_step "Writing ${FLASH_KIND} to ${DEVICE} (this can take a while)"
-if dd if="${ARTIFACT}" of="${DEVICE}" bs=4M conv=fsync oflag=direct status=progress 2>&1; then
+if ${COMPRESSED}; then
+    # Decompress STRAIGHT to the disk — never to a 3-30 GB temp file, which would
+    # need scratch space the operator did not ask for and may not have.
+    #
+    # `iflag=fullblock` is load-bearing: dd reading a PIPE takes short reads, and a
+    # short read becomes a short (unaligned) write. `oflag=direct` is deliberately
+    # NOT used on this path for the same reason — direct I/O rejects unaligned
+    # writes with EINVAL, so pairing it with a pipe source fails at a random block
+    # rather than never. Buffered + conv=fsync writes the same bytes; the sync
+    # below still settles them.
+    #
+    # pipefail is already on (set -euo pipefail at the top), so a dd failure fails
+    # the whole pipeline instead of being masked by xz's exit status.
+    xz -dc "${ARTIFACT}" \
+        | dd of="${DEVICE}" bs=4M iflag=fullblock conv=fsync status=progress
+elif dd if="${ARTIFACT}" of="${DEVICE}" bs=4M conv=fsync oflag=direct status=progress 2>&1; then
     :
 else
     # oflag=direct can be unsupported on some targets (e.g. loop); retry without.

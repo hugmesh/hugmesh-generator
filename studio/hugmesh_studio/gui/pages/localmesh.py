@@ -14,13 +14,29 @@ a new window"), so the surface is now a real registered QWizardPage:
     running a docker mesh there is no image to build. Back returns to ModePage; the
     stack lives in docker, not in the page, so navigation never disturbs it.
 
-TWO mutually-exclusive paths, surfaced as tabs (unchanged from the dialog):
-  - JOIN an existing mesh with a key — collect a tailnet/headscale auth key + node
-    knobs into a LocalMeshConfig and drive LocalMeshNode start/stop/logs.
-  - GENERATE & START a NEW local mesh FROM SCRATCH — mint ALL credentials + bring
-    up the full platform stack seeded with a fresh superadmin, via LocalMeshBootstrap.
-    Nothing runs on mere selection: the read-only plan preview says what an ``up``
-    will do, and the button is what runs it.
+TWO mutually-exclusive paths. They used to be TABS; issue #334 replaced that with
+the two-card entry every other major path in the Studio uses, and broke the second
+path into wizard steps:
+
+  - ``LocalMeshChoicePage`` (pages/localmesh_choice.py) is the entry — card one JOIN
+    an existing mesh with a key, card two GENERATE a new mesh.
+  - JOIN is one terminal step (``LocalMeshJoinPage``): a tailnet/headscale auth key +
+    node knobs into a LocalMeshConfig, driving LocalMeshNode start/stop/logs.
+  - GENERATE & START a NEW local mesh FROM SCRATCH is seven steps, in the order this
+    surface has always had its sections — Environment & brand -> Repo source ->
+    Services -> Identity provider -> Mesh overlay (prod only) -> Saved meshes &
+    review -> Bring-up & monitor. It mints ALL credentials and brings up the full
+    platform stack seeded with a fresh superadmin, via LocalMeshBootstrap. Nothing
+    runs on mere selection: the read-only plan preview on the review step says what
+    an ``up`` will do, and the button on the last step is what runs it.
+
+ONE PAGE STILL OWNS EVERYTHING. ``LocalMeshPage`` builds the whole surface in
+``__init__`` exactly as it always did and keeps each block in ``self.sections``;
+a step page holds no widgets and no state, and merely CLAIMS its block on first
+visit (``take_section``, which re-parents it). That is what keeps the split from
+forking the implementation: every verb, every gate, every probe and every widget
+attribute the tests read stays on this one object, and ``LocalMeshDialog`` — which
+claims nothing — still hosts the entire surface on it.
 
 NEW on the bootstrap tab (the operator's other two asks):
   - BRAND — the GUI was strictly less capable than its own CLI: collect_bootstrap()
@@ -57,6 +73,8 @@ marks the running stage 'stopped' (neutral), never failed.
 
 ``LocalMeshDialog`` survives as a thin standalone-host shim wrapping the page
 (``LocalMeshDialog(generator_dir).exec()`` still works, per its original promise).
+It has no wizard to walk, so it shows every section stacked in one scroll — the same
+widgets in the same order, with no tab bar in front of them.
 """
 from __future__ import annotations
 
@@ -428,6 +446,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.node = LocalMeshNode(self.generator_dir, LocalMeshConfig())
         self.boot = LocalMeshBootstrap(self.generator_dir, LocalMeshBootstrapConfig())
         self.worker: _MeshWorker | None = None
+        # THE CONTROLLER HANDLE. Every local-mesh step page (LocalMeshChoicePage and
+        # the _LocalMeshStep subclasses at the bottom of this module) finds this page
+        # here, and only at initializePage time — so the wizard may construct the steps
+        # in display order with this page LAST and no construction-order dance is
+        # needed. A standalone host (LocalMeshDialog's SimpleNamespace shim) accepts
+        # the attribute too and simply never reads it; a host that refuses it is not an
+        # error, because nothing but a step page ever looks it up.
+        try:
+            wiz.localmesh_page = self
+        except Exception:                    # noqa: BLE001 — read-only host shim
+            pass
         # Users added via the Add-user verb THIS session, as seeder specs
         # ("name:ROLES:PW_ENV"). The FULL list rides every Add-user re-seed:
         # apply-systems-roles.sh writes EXACT role member sets, so a spec that
@@ -445,32 +474,62 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._e2e_blockers: list[str] = [
             "the running stack has not been checked yet — the readiness probe has "
             "not reported."]
-        self.setTitle("Local Docker mesh")
-        self.setSubTitle("Run a HugMesh mesh on THIS machine in Docker — no image "
-                         "build, no server hardware. This is the end of this path: "
-                         "Exit closes the Studio; the mesh keeps running in Docker.")
+        self.setTitle("Bring-up and monitor")
+        self.setSubTitle("Everything is chosen. Press 'Generate && start' to mint the "
+                         "credentials and bring the mesh up on THIS machine; the "
+                         "stages and the running-mesh table below report what happens. "
+                         "This is the end of this path: Exit closes the Studio; the "
+                         "mesh keeps running in Docker.")
         self.setFinalPage(True)
         # Pressing the final button here does nothing but close the Studio — no
         # build, no apply, no write, no state commit — so it says so (_widgets:
         # label_finish_as_exit).
         label_finish_as_exit(self)
 
-        # the bootstrap tab stacks ~15 rows + a plan preview — by far the tallest
-        # page in the wizard (minimum ~670px). Wrap in the shared scroll area so a
-        # tall page SCROLLS instead of growing the window (the _scroll.py contract;
-        # Role/Network/Build/Home do the same) — without this, showing the page
-        # grew the wizard ~50px and the jitter guard (#400) rightly failed.
+        # SECTIONS, NOT TABS (issue #334). The two paths used to be a QTabWidget —
+        # "Join an existing mesh with a key" and the bootstrap tab — the one pick-one
+        # control left in the Studio that was not the two-card entry every other major
+        # path uses. The tabs are gone: LocalMeshChoicePage
+        # (pages/localmesh_choice.py) is the entry, and the bootstrap surface is a
+        # sequence of wizard STEPS (the classes at the bottom of this module).
+        #
+        # This page still BUILDS the whole surface, in the order it always had, and
+        # keeps each block in `self.sections`. That is what makes the split cheap and
+        # keeps ONE implementation: every widget, handler, gate and test contract stays
+        # on this one page object, and a step page merely CLAIMS the block it is
+        # responsible for (take_section, which re-parents it). The standalone
+        # LocalMeshDialog claims nothing, so it hosts the entire surface on this page
+        # exactly as before — one implementation, two frames.
+        #
+        # The scroll area stays: a claimed step is still tall (the services table alone
+        # floors at 300px), and a tall page must SCROLL rather than grow the window
+        # (the _scroll.py contract; Role/Network/Build/Home do the same).
         lay = scrollable(self)
-        self.tabs = QtWidgets.QTabWidget()
-        self.tabs.addTab(self._build_join_tab(), "Join an existing mesh with a key")
-        self.tabs.addTab(self._build_bootstrap_tab(),
-                         "Generate && start a NEW local mesh from scratch")
-        lay.addWidget(self.tabs)
+        self._body = lay
+        self.sections: dict[str, QtWidgets.QWidget] = {
+            "join": self._build_join_section(),
+            "env": self._build_env_section(),
+            "source": self._build_source_section(),
+            "services": self._build_services_section(),
+            "idp": self._build_idp_section(),
+            "overlay": self._build_overlay_section(),
+            "review": self._build_review_section(),
+            "bringup": self._build_bringup_section(),
+        }
+        for _sec in self.sections.values():
+            lay.addWidget(_sec)
 
-        # Shared status line + staged view (used by BOTH tabs).
+        # Shared status line + staged view, used by BOTH paths — held in ONE widget so
+        # a step page can claim the whole run surface with take_section("run"). Join
+        # and bring-up are the two pages a verb can run from, and only one of them is
+        # reachable in a given flow (the choice card decides), so the run view FOLLOWS
+        # whichever is on screen instead of being duplicated.
+        self.run_view = QtWidgets.QWidget()
+        run_lay = QtWidgets.QVBoxLayout(self.run_view)
+        run_lay.setContentsMargins(0, 0, 0, 0)
         self.status = QtWidgets.QLabel("")
         self.status.setWordWrap(True)
-        lay.addWidget(self.status)
+        run_lay.addWidget(self.status)
 
         # ── STAGED VIEW: stage tree above, the SAME single log below ─────────────────
         # The flat scrolling log this replaces was the operator's complaint: an hour-long
@@ -494,8 +553,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.stage_tree.setColumnWidth(_ST_COL_STATE, 90)
         self.stage_tree.itemClicked.connect(self._on_stage_clicked)
         self.stage_hint = QtWidgets.QLabel(
-            "No verb has run yet. Start one from the tab above and its stages appear "
-            "here; click a stage to see only that stage's output in the log below.")
+            "No verb has run yet. Start one from the buttons above and its stages "
+            "appear here; click a stage to see only that stage's output in the log "
+            "below.")
         self.stage_hint.setWordWrap(True)
         self.stage_hint.setStyleSheet("color: gray;")
 
@@ -530,7 +590,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.stage_splitter.setStretchFactor(1, 1)
         self.stage_splitter.setCollapsible(0, False)
         self.stage_splitter.setCollapsible(1, True)
-        lay.addWidget(self.stage_splitter, 1)
+        run_lay.addWidget(self.stage_splitter, 1)
+        lay.addWidget(self.run_view, 1)
 
         # Run history + the drill-down selection. _selected_stage None = the run's raw
         # log; an int = that stage's slice (the ONLY thing that filters the live stream).
@@ -585,9 +646,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # password — so the dialog can list them as "added this session".
         self._cred_truth = None
         self._added_users_ok: list[tuple[str, tuple[str, ...]]] = []
-        # ── the running-mesh monitor's state (the table itself lives on the bootstrap
-        # tab; see _build_bootstrap_tab). None until the first snapshot answers — the
-        # same tri-state rule as _mesh_up, and for the same reason.
+        # ── the running-mesh monitor's state (the table itself lives in the bring-up
+        # section; see _build_bringup_section). None until the first snapshot answers —
+        # the same tri-state rule as _mesh_up, and for the same reason.
         self._monitor: mesh_monitor.MonitorSnapshot | None = None
         # Set at every verb's end, cleared when a read STARTS after it: the state
         # probe's answer (and a read that was already in flight) re-reads the
@@ -608,6 +669,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # completeChanged fires at every verb start AND end (_launch / _verb_done), so
         # it is the hook that lets the monitor's note say "paused" the moment a verb
         # begins without this lane touching _launch.
+        # The plan preview follows every control that feeds it, and renders ONCE now
+        # that every section exists. This used to be the tail of the bootstrap-tab
+        # builder; with the surface built in eight pieces it belongs here, after all
+        # eight, so nothing is wired before the widget it reads exists.
+        self._wire_plan_signals()
+        self._refresh_plan()
         self.completeChanged.connect(self._sync_monitor_gate)
 
         # Run the gate ONCE now that every widget it touches exists, so
@@ -643,6 +710,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         return not self._running
 
     def initializePage(self):
+        # Custody first (_reclaim_sections runs on every show, and take_section is
+        # idempotent), then the things that must happen only on a real forward entry:
+        # the probes.
+        self.take_section("bringup", self._body)
+        self.take_section("run", self._body)
+        self._hide_stepped_sections()
         self._refresh_status()
         self._refresh_plan()
         # ENTERING THE PAGE MUST TELL YOU WHAT IS ALREADY RUNNING. The stage tree
@@ -659,9 +732,71 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # slot, which keeps "entering the page returns immediately" provable.
         self._sync_monitor_gate()
 
-    # ── JOIN tab (handlers now threaded; widget names unchanged) ─────────────────
-    def _build_join_tab(self) -> QtWidgets.QWidget:
-        w = QtWidgets.QWidget()
+    # ── section plumbing ────────────────────────────────────────────────────────
+    def _stepped_sections(self) -> set:
+        """Section keys some OTHER page of this wizard is responsible for.
+
+        Read off the wizard's own page list (each ``_LocalMeshStep`` declares its
+        ``SECTION``) rather than hardcoded here, so adding or removing a step is one
+        edit in the wizard's slot expansion and this stays true. A standalone host —
+        LocalMeshDialog's SimpleNamespace shim — has no page list at all, which is
+        exactly right: with no steps to claim anything, this page keeps everything.
+        """
+        pages = getattr(getattr(self, "wiz", None), "_pages", None) or ()
+        return {getattr(p, "SECTION", "") for p in pages if p is not self} - {""}
+
+    def _hide_stepped_sections(self) -> None:
+        """Hide any section a step owns that is still sitting on this page.
+
+        A step claims its section the first time it is VISITED, so a step that was
+        skipped (the prod-only overlay on a test mesh) or never reached (the join
+        branch, when the choice card sent the flow the other way) would otherwise
+        leave its block rendered here — the bring-up step showing a join form is
+        exactly the muddle the two cards exist to remove. take_section() shows a
+        section again when it is claimed, so this cannot strand one.
+        """
+        host = self._body.parentWidget()
+        for key in self._stepped_sections():
+            sec = self.sections.get(key)
+            if sec is not None and sec.parentWidget() is host:
+                sec.setVisible(False)
+
+    def take_section(self, key: str, layout) -> "QtWidgets.QWidget | None":
+        """Move section ``key`` into ``layout`` and return it (None for an unknown key).
+
+        Adding a widget to a layout re-parents it, so this IS the move — there is no
+        copy anywhere and no second instance of anything. Idempotent by parent: a
+        section already living in ``layout`` is left exactly where it is, which is what
+        makes it safe to call from every ``initializePage`` (Qt calls that on every
+        forward visit, and re-inserting on each one would reorder the page).
+
+        Insertion lands BEFORE the layout's trailing stretch when it has one (a step
+        page adds one so its content sits at the top), and at the end otherwise (this
+        page's own body, where the run view must stay last).
+        """
+        w = self.run_view if key == "run" else self.sections.get(key)
+        if w is None:
+            return None
+        host = layout.parentWidget()
+        if host is not None and w.parentWidget() is host:
+            return w
+        idx = layout.count()
+        for i in range(layout.count()):
+            if layout.itemAt(i).spacerItem() is not None:
+                idx = i
+                break
+        # stretch 1 for the run view only: the staged tree + log is the one block that
+        # should absorb a step page's spare height.
+        layout.insertWidget(idx, w, 1 if key == "run" else 0)
+        # setParent() hides a widget; a section that has been moved must be shown
+        # again. The blocks INSIDE it keep their own visibility (prod_group's
+        # test/prod toggle, every Collapsible's fold) — those are children, untouched.
+        w.setVisible(True)
+        return w
+
+    # ── JOIN section (handlers now threaded; widget names unchanged) ─────────────
+    def _build_join_section(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QGroupBox("Join an existing mesh with a key")
         lay = QtWidgets.QVBoxLayout(w)
         intro = QtWidgets.QLabel(
             "Join an EXISTING mesh: run a HugMesh mesh node on THIS machine in "
@@ -707,16 +842,18 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         lay.addStretch(1)
         return w
 
-    # ── BOOTSTRAP tab ────────────────────────────────────────────────────────────
-    def _build_bootstrap_tab(self) -> QtWidgets.QWidget:
+    # ── BOOTSTRAP sections, in the order the surface has always had ──────────────
+    def _build_env_section(self) -> QtWidgets.QWidget:
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
         intro = QtWidgets.QLabel(
             "Generate ALL credentials from scratch and start a NEW superadmin-"
             "controlled mesh on THIS machine: mint the Casdoor/DB/observability "
             "secrets + a fresh superadmin, bring up the full platform stack, and (in "
             "prod) attach the tailscale overlay. Nothing runs until you press "
-            "'Generate && start' — the read-only plan below is what it will do.")
+            "'Generate && start' on the last step — the read-only plan on the review "
+            "step before it is exactly what that button will do.")
         intro.setWordWrap(True)
         lay.addWidget(intro)
 
@@ -759,6 +896,23 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.brand_note.setStyleSheet("color: gray;")
         lay.addWidget(self.brand_note)
 
+        # SUPERADMIN moved up one block, from between "Repo source" and "Services" to
+        # the end of this one. It is the account this bring-up MINTS, so it belongs
+        # with the environment and brand that decide where it is minted — and as its
+        # own wizard step, "Repo source" is about the source tree and nothing else.
+        # Presentation only: collect_bootstrap reads the same widget either way.
+        self.superadmin = QtWidgets.QLineEdit("superadmin")
+        self.superadmin.setToolTip(
+            "The platform superadmin login to mint. Its password is generated fresh "
+            "and written ONLY to the offline secrets bundle — never shown here.")
+        lay.addWidget(_row("Superadmin", self.superadmin))
+        lay.addStretch(1)
+        return w
+
+    def _build_source_section(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
         # SOURCE — where the buildable repo files come from. Radio labels derive
         # their count from the compose file compose actually reads — never a
         # hardcoded "all repos" claim.
@@ -821,13 +975,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         why.setStyleSheet("color: gray;")
         sl.addWidget(why)
         lay.addWidget(src_box)
+        lay.addStretch(1)
+        return w
 
-        self.superadmin = QtWidgets.QLineEdit("superadmin")
-        self.superadmin.setToolTip(
-            "The platform superadmin login to mint. Its password is generated fresh "
-            "and written ONLY to the offline secrets bundle — never shown here.")
-        lay.addWidget(_row("Superadmin", self.superadmin))
-
+    def _build_services_section(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
         # ── SERVICES: which individual services this local mesh runs ─────────────
         # This page used to expose exactly two coarse toggles (social, tor), so every
         # service that ships DEFAULT-OFF in the federation registry — wiki, owncast,
@@ -848,7 +1002,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "from) the mesh menu. DEVOPS LANE rows are greyed and carry no checkbox: "
             "they are Kubernetes controllers this docker mesh cannot run at all, so "
             "they are listed for what they are and started by the DevOps buttons "
-            "below. Anything the local docker stack has no mechanism for is greyed "
+            "on the bring-up step. Anything the local docker stack has no mechanism "
+            "for is greyed "
             "with the reason instead of offered as a toggle that would change "
             "nothing."))
         self.services_table = QtWidgets.QTreeWidget()
@@ -975,7 +1130,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # persisted login_* config keys keep their names so old sessions load.
         lay.addWidget(collapsible("Themes (colours, fonts + web chrome)",
                                   self.login_theme, expanded=False))
+        return w
 
+    def _build_idp_section(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
         # IDENTITY PROVIDER (I6.6) — the SAME picker the node wizard's IdP page
         # carries. Casdoor (built-in) is the default and threads NOTHING; an
         # external provider threads OIDC_ISSUER/OIDC_CLIENT_ID/OIDC_JWKS_URI into
@@ -1012,7 +1172,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         ib.addWidget(self.idp_note)
         lay.addWidget(collapsible("Identity provider (Casdoor built-in / external OIDC)",
                                   self.idp_box, expanded=False))
+        lay.addStretch(1)
+        return w
 
+    def _build_overlay_section(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
         # prod-only overlay group.
         self.prod_group = QtWidgets.QGroupBox("Mesh overlay (prod only)")
         pg = QtWidgets.QVBoxLayout(self.prod_group)
@@ -1027,7 +1193,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.boot_login_server.setPlaceholderText("optional self-hosted headscale URL")
         pg.addWidget(_row("Login server", self.boot_login_server))
         lay.addWidget(self.prod_group)
+        lay.addStretch(1)
+        return w
 
+    def _build_review_section(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
         # Plan preview (read-only) — the confirm-before-run surface.
         lay.addWidget(QtWidgets.QLabel("Plan preview (what will be generated + started):"))
         self.plan_view = console.attach(QtWidgets.QPlainTextEdit())
@@ -1067,6 +1239,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.saved_meshes.load_requested.connect(self._load_saved)
         self.saved_meshes.probe_needed.connect(self._probe_saved)
         lay.addWidget(self.saved_section)
+        return w
+
+    def _build_bringup_section(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
 
         # A WRAPPING block, not a row. These fourteen actions in a QHBoxLayout
         # made the page's minimum width the SUM of all fourteen buttons — wider
@@ -1359,8 +1537,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.monitor.view_up_requested.connect(self._view_up)
         self.monitor.view_down_requested.connect(self._view_down)
         lay.addWidget(self.monitor_section)
+        return w
 
-        # Live-refresh the plan preview from every control that feeds it.
+    def _wire_plan_signals(self) -> None:
+        """Live-refresh the plan preview from every control that feeds it.
+
+        Called ONCE from __init__ after all eight sections are built. It has to be a
+        method rather than a tail of one builder: the controls it connects are spread
+        across six of them, and a builder that wired its own would be connecting a slot
+        that reads widgets a later builder has not created yet."""
         self.env_test.toggled.connect(self._refresh_plan)
         self.env_prod.toggled.connect(self._refresh_plan)
         self.brand.currentTextChanged.connect(self._refresh_plan)
@@ -1387,8 +1572,6 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.boot_domain.textChanged.connect(self._refresh_plan)
         self.boot_auth_key.textChanged.connect(self._refresh_plan)
         self.boot_login_server.textChanged.connect(self._refresh_plan)
-        self._refresh_plan()
-        return w
 
     @staticmethod
     def _wrap(inner_layout) -> QtWidgets.QWidget:
@@ -1466,8 +1649,26 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._monitor_timer.stop()
         super().hideEvent(event)
 
+    def _reclaim_sections(self) -> None:
+        """Take back what THIS page shows: the bring-up block and the run view.
+
+        Widget custody only; NO probe runs here, so it is safe on every show. Qt calls
+        initializePage only on a FORWARD visit, and the run view is CONTENDED — the
+        join step and the review step claim it too — so the reclaim has to hang off a
+        hook that fires both ways or a Back would leave the log on the page behind.
+        Standalone (LocalMeshDialog) nothing ever moved and there are no steps, so
+        every call below is a no-op.
+        """
+        self.take_section("bringup", self._body)
+        self.take_section("run", self._body)
+        self._hide_stepped_sections()
+
     def showEvent(self, event) -> None:                       # noqa: N802 (Qt)
         super().showEvent(event)
+        # ONE showEvent on this class, deliberately: a second def further up the class
+        # body would silently lose to this one (later def wins, no error anywhere), so
+        # the section reclaim is a call from here rather than its own override.
+        self._reclaim_sections()
         # The twin of hideEvent's stop (mesh_emulation.py:500-513 is the in-repo
         # precedent). Nothing else restarts the timer — _on_monitor_toggled only
         # fires on an actual fold change — so without this a revisited page shows a
@@ -3106,6 +3307,258 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self, "Onion address copied",
             f"Copied to the clipboard:\n\n{url}\n\nOpen it in Tor Browser (a normal "
             "browser cannot reach a .onion).")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# THE WIZARD STEPS (issue #334)
+# ══════════════════════════════════════════════════════════════════════════════════
+# Each class below is ONE step of the local-mesh flow and holds NO widgets and NO
+# state: it claims a section of LocalMeshPage on entry and that is all it does. The
+# alternative — moving widgets onto per-step pages — would have split this page's
+# handlers, gates, probes and worker across eight objects, and every cross-section
+# invariant it enforces (the plan preview reads six sections; _refresh_plan gates the
+# start button; the egress-conf exit guard) would have had to be re-plumbed through
+# the wizard. Nothing here can drift from the page, because there is nothing here.
+#
+# MODE_SKIPPED_PAGES is UNTOUCHED and stays correct for every mode, exactly as it is
+# for LocalMeshPage itself: "localmesh" is not a mode and appears in no mode's skip
+# tuple — every page on this branch is DYNAMICALLY skipped instead, by applies_to()
+# reading wiz.localmesh_selected. The ALL-OPTIONS guard nextId() documents holds
+# trivially for all of them: this branch emits ZERO ImageConfig fields (it drives
+# LocalMeshBootstrapConfig, which never reaches builder argv), so a skipped step
+# changes no argv byte.
+
+
+class _LocalMeshStep(QtWidgets.QWizardPage):
+    """Base for a GENERATE-A-NEW-MESH step: title, subtitle, and one claimed section.
+
+    ``initializePage`` is where the claim happens rather than ``__init__`` because the
+    controller page is constructed LAST of the group (it is the final step), and Qt
+    calls initializePage only after the whole wizard exists. So the steps need no
+    construction-order dance and a missing controller is simply an empty page rather
+    than an import-time crash.
+    """
+
+    SECTION = ""
+    TITLE = ""
+    SUBTITLE = ""
+
+    def __init__(self, wiz):
+        super().__init__()
+        self.wiz = wiz
+        self.setTitle(self.TITLE)
+        self.setSubTitle(self.SUBTITLE)
+        # Same scroll contract as the controller page: a claimed section can be tall
+        # (services floors at 300px) and a tall page must scroll, never grow the window.
+        self._lay = scrollable(self)
+        self._lay.addStretch(1)
+        self._wired = False
+
+    # ── the controller ──────────────────────────────────────────────────────────
+    @property
+    def ctl(self) -> "LocalMeshPage | None":
+        """The one LocalMeshPage that owns every widget (it sets the handle in its
+        constructor). None only if this step is built without one — a bare test
+        harness — in which case the step renders empty instead of raising."""
+        return getattr(self.wiz, "localmesh_page", None)
+
+    # ── flow ────────────────────────────────────────────────────────────────────
+    def applies_to(self, cfg) -> bool:      # noqa: ARG002 — the hook's fixed signature
+        """On the flow only when the mode menu picked the local mesh AND the choice
+        screen picked GENERATE. Reads the wizard, not cfg, for the reason
+        LocalMeshPage.applies_to gives: localmesh is a wizard-transient choice that is
+        deliberately absent from ImageConfig."""
+        return bool(getattr(self.wiz, "localmesh_selected", False)
+                    and not getattr(self.wiz, "localmesh_join_selected", True))
+
+    def isComplete(self) -> bool:
+        """False while a verb runs on the controller — the controller's own rule.
+
+        Every step inherits it, not just the join step. LocalMeshPage.isComplete has
+        always refused to advance mid-verb ("leaving mid-up would orphan the worker's
+        signals into a destroyed page"), and a step that can START a verb — the review
+        step hosts the saved-mesh table's Start/Restore buttons — needs exactly the
+        same refusal. Without it the wiring below emitted completeChanged into a gate
+        that never said no, so the operator could walk forward out of a running
+        bring-up: a straight regression from the single-page flow.
+        """
+        ctl = self.ctl
+        return True if ctl is None else not ctl._running
+
+    def _claim(self) -> None:
+        """Re-parent onto this step every section it is responsible for.
+
+        Called from BOTH initializePage and showEvent, because Qt calls initializePage
+        only on a FORWARD visit ("as a result of the user clicking Next"): pressing
+        Back re-SHOWS a page without re-initialising it. For a section only one page
+        ever wants that is harmless — nobody took it away. The RUN VIEW is the
+        exception: the join step, the review step and the controller all claim it, so
+        whichever page took it last keeps it across a Back, and the step the operator
+        is actually looking at is left with a verb it cannot show. take_section is
+        idempotent by parent, so the duplicate call on a forward visit costs nothing.
+        """
+        ctl = self.ctl
+        if ctl is None:
+            return
+        ctl.take_section(self.SECTION, self._lay)
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        self._claim()
+
+    def initializePage(self):
+        ctl = self.ctl
+        if ctl is None:
+            return
+        self._claim()
+        if not self._wired:
+            # A verb running on the controller must grey THIS page's Next/Exit too —
+            # the controller emits completeChanged at every verb start and end
+            # (_launch / _verb_done) and a step has no other way to hear it. isComplete
+            # above is the gate it re-evaluates.
+            ctl.completeChanged.connect(self.completeChanged)
+            self._wired = True
+
+
+class LocalMeshJoinPage(_LocalMeshStep):
+    """Card one: run a node that JOINS an existing mesh, using an auth key.
+
+    Terminal, like the bring-up step: a joined node is the end of this path, there is
+    no image to build after it, and the final button only closes the Studio
+    (label_finish_as_exit). It claims the RUN VIEW as well as its own section, because
+    start/stop/logs stream into the same staged tree + log the bootstrap verbs use.
+    """
+
+    SECTION = "join"
+    TITLE = "Join an existing mesh with a key"
+    SUBTITLE = ("Run a HugMesh mesh node on THIS machine in Docker with a "
+                "tailnet/headscale auth key — no server hardware, no image build. "
+                "This is the end of this path: Exit closes the Studio; the node keeps "
+                "running in Docker.")
+
+    def __init__(self, wiz):
+        super().__init__(wiz)
+        self.setFinalPage(True)
+        label_finish_as_exit(self)
+
+    def applies_to(self, cfg) -> bool:      # noqa: ARG002 — the hook's fixed signature
+        return bool(getattr(self.wiz, "localmesh_selected", False)
+                    and getattr(self.wiz, "localmesh_join_selected", False))
+
+    def nextId(self) -> int:
+        return -1
+
+    def _claim(self) -> None:
+        super()._claim()
+        ctl = self.ctl
+        if ctl is not None:
+            ctl.take_section("run", self._lay)
+
+    def initializePage(self):
+        super().initializePage()
+        ctl = self.ctl
+        if ctl is None:
+            return
+        ctl._refresh_status()
+
+
+class LocalMeshEnvPage(_LocalMeshStep):
+    SECTION = "env"
+    TITLE = "Environment and brand"
+    SUBTITLE = ("Where this mesh lives and whose name it carries: a LAN-only test "
+                "mesh or a public prod one, the brand whose Vault path and profile it "
+                "uses, and the superadmin account the bring-up mints.")
+
+
+class LocalMeshSourcePage(_LocalMeshStep):
+    SECTION = "source"
+    TITLE = "Repo source"
+    SUBTITLE = ("Where the buildable repo files come from — cloned into ./.stack-src, "
+                "or checkouts you already have. Compose builds every service from "
+                "whatever this points at.")
+
+
+class LocalMeshServicesPage(_LocalMeshStep):
+    SECTION = "services"
+    TITLE = "Services"
+    SUBTITLE = ("Which services this mesh runs, and how its web login looks. A row "
+                "the local docker stack has no mechanism for is greyed with the "
+                "reason instead of offered as a toggle that would change nothing.")
+
+
+class LocalMeshIdpPage(_LocalMeshStep):
+    SECTION = "idp"
+    TITLE = "Identity provider"
+    SUBTITLE = ("Who signs users in. Casdoor is built in and needs nothing; an "
+                "external OIDC provider is threaded into the stack env, and the note "
+                "on this step says exactly how far that goes on a local stack.")
+
+
+class LocalMeshOverlayPage(_LocalMeshStep):
+    SECTION = "overlay"
+    TITLE = "Mesh overlay"
+    SUBTITLE = ("The public domain and the tailnet key that attach this mesh to the "
+                "overlay. Prod only — a test mesh never sees this step.")
+
+    def applies_to(self, cfg) -> bool:
+        """Prod only. A test mesh publishes nothing and attaches no overlay, so the
+        group was already hidden on the old single page; as a STEP the honest form of
+        "hidden" is "not visited". Emission-neutral: every field here is a
+        LocalMeshBootstrapConfig field, and collect_bootstrap reads the widgets
+        directly, so an unvisited step leaves them exactly as apply_bootstrap or the
+        constructor set them."""
+        if not super().applies_to(cfg):
+            return False
+        ctl = self.ctl
+        return True if ctl is None else bool(ctl.env_prod.isChecked())
+
+
+class LocalMeshReviewPage(_LocalMeshStep):
+    """Saved meshes + the read-only plan: the confirm-before-run step.
+
+    The operator asked for the saved-mesh table to be in front of them BEFORE they
+    generate a new one, and this is now literally the step before the button.
+    """
+
+    SECTION = "review"
+    TITLE = "Saved meshes and the plan"
+    SUBTITLE = ("What a bring-up will generate and start, and the meshes already "
+                "saved on this machine. The plan itself is read-only; a saved row's "
+                "Start or Restore does run docker, and its output appears below.")
+
+    def _claim(self) -> None:
+        # THE RUN SURFACE COMES WITH THE TABLE. The saved-mesh rows are not a preview:
+        # start_requested -> _start_saved launches boot.start_saved / boot.restore on a
+        # _MeshWorker QThread — minutes of docker output — and every word that verb
+        # says to the operator lives in run_view (status line, stage tree, log, Cancel).
+        # It also carries the REFUSALS: _start_saved's "Still running: …", "A local
+        # mesh is running — stop it first", the theme error and boot.validate()'s
+        # problems all land in ctl.status, and the row buttons stay enabled through
+        # each of them. Claimed here, a refused click says why and a started verb can
+        # be watched and cancelled; unclaimed, both are silent. LocalMeshPage
+        # .showEvent reclaims it on entry, so the hand-back to the bring-up step
+        # needs no code here.
+        super()._claim()
+        ctl = self.ctl
+        if ctl is not None:
+            ctl.take_section("run", self._lay)
+
+    def initializePage(self):
+        super().initializePage()
+        ctl = self.ctl
+        if ctl is None:
+            return
+        # Re-render the plan from the four steps behind this one, then answer "what is
+        # already running?" and re-read the saved rows. Both probes are off-thread and
+        # re-entrant-safe (probe_running), so arriving here twice starts no second one.
+        ctl._refresh_plan()
+        ctl._probe_mesh_state()
+        ctl.saved_meshes.refresh()
+        # Deliberately NOT _refresh_status(): that probes the JOIN node
+        # (`docker compose ps` on the join stack) and writes "Status: running/stopped"
+        # into this same label. On the generate branch that is a sentence about a mesh
+        # the operator is not running, so the label is left empty until this step's own
+        # verb — or its refusal — has something true to put in it.
 
 
 class LocalMeshDialog(QtWidgets.QDialog):

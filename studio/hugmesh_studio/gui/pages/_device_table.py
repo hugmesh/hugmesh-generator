@@ -7,8 +7,10 @@ USB / SD / eMMC devices. Each row can be assigned a ROLE:
   that device via ``scripts/flash-disk.sh`` (multi-image worklists pick WHICH image per
   row; several devices may take the same or different images). Flash assignments never
   touch the build argv — they are a POST-BUILD plan, summarized read-only below the
-  table and executed by the ProgressPage behind its TOCTOU identity re-check. Every
-  row defaults to "(none)": no flashing is ever the commit default.
+  table and executed by the ProgressPage behind its TOCTOU identity re-check and ONE
+  OK/Cancel warning naming the device and the resolved image file (#337). Every
+  row defaults to "(none)": no flashing is ever the commit default. This table plans;
+  it never writes.
 * **Keys USB** — marks the device's mounted directory as the fleet Secure Boot signing
   key source, written THROUGH the existing ``keys_usb`` line edit so the pre-existing
   ``--keys-usb`` axis (config.py) emits it; exclusive across rows (one axis). The role
@@ -251,7 +253,9 @@ class DeviceTable(QtWidgets.QGroupBox):
         if role == ROLE_FLASH:
             combo = QtWidgets.QComboBox()
             combo.setToolTip("Which built image is flashed to this device after a "
-                             "successful build (via scripts/flash-disk.sh).")
+                             "successful build (via scripts/flash-disk.sh). The "
+                             "flash asks for confirmation once, naming this device "
+                             "and the exact image file, before anything is written.")
             for entry_id, _role, _platform, domains in self._image_choices():
                 label = entry_id + (f"  ({', '.join(domains)})" if domains else "")
                 combo.addItem(label, entry_id)
@@ -313,8 +317,11 @@ class DeviceTable(QtWidgets.QGroupBox):
             "WHICH built artifact is written: the OS .img, the live USB "
             "(.live.iso) or the install USB (.installer.iso). Only what this "
             "image's platform actually builds is offered; 'auto' takes the newest "
-            "built (.img preferred). A flavour the finished build did not produce "
-            "is skipped at flash time with the reason — never guessed.")
+            "built (.img preferred). The xz-compressed form a --compress build "
+            "leaves (.img.xz / .iso.xz) counts as the same flavour — flash-disk.sh "
+            "decompresses it straight onto the disk. A flavour the finished build "
+            "did not produce is skipped at flash time with the reason — never "
+            "guessed.")
         for fl in flash_targets.flavors_for_platform(platform):
             combo.addItem(flash_targets.FLAVOR_LABELS.get(fl, fl), fl)
         prev = a.get("flavor", flash_targets.FLAVOR_AUTO)
