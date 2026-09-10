@@ -686,6 +686,9 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('hugmesh-fe-gateway',  '/bff/forum/**',             'ROLE_FORUM',     true),  -- forum BFF (forum-access floor)
   -- Wiki BFF (/bff/wiki/** -> hugmesh-wiki-bff-api), the SINGLE browser->wiki
   -- path. SIBLING of /bff/forum/** + /bff/mod/** above. Most-specific match wins:
+  --   /bff/wiki/superadmin/** = ROLE_SUPERADMIN (superadmin-only seam; the wiki-bff
+  --                         pins it hasRole('SUPERADMIN') in SecurityConfig.java,
+  --                         declared BEFORE its admin + floor prefixes)
   --   /bff/wiki/admin/**  = ROLE_ADMIN  (admin-only seam: wiki-config, content-admin
   --                         ops; gated ROLE_ADMIN end-to-end — admins reach this
   --                         WITHOUT ROLE_WIKI, so DO NOT pair ROLE_WIKI here)
@@ -693,6 +696,24 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- Do NOT pair ROLE_ADMIN on the ROLE_WIKI floor row: the gateway admin-bypass
   -- already passes admins through; pairing ROLE_ADMIN would incorrectly expose
   -- every wiki-floor endpoint to admins who have not been granted wiki access.
+  -- ⚠ #329 PREMISE CORRECTED (measured 2026-09-09, this tree). The issue reports
+  -- the missing superadmin row as leaving /bff/wiki/superadmin/** on NO_RULE --
+  -- "ungoverned and forwarded", the #244 shape. It did NOT. Spring's AntPathMatcher
+  -- '**' crosses '/', so the /bff/wiki/** row below ALREADY matched
+  -- /bff/wiki/superadmin/... and GatewayRouteAccessService.decide() governed the
+  -- path at the ROLE_WIKI floor -- the same mechanic the SERVICE-ONLY INTERNAL
+  -- INGEST block relies on when it says /bff/mesh/** matches /bff/mesh/internal/**.
+  -- The real defect was a floor set too LOW: ANY ROLE_WIKI holder passed the front
+  -- door onto the superadmin surface and the only refusal was app-side, so the 403
+  -- carried no X-Route-Denied header and the door logged nothing.
+  -- The row below raises the DECIDING pattern (longer => wins the longest-match) to
+  -- ROLE_SUPERADMIN: a ROLE_WIKI-only principal now finds no granting row at that
+  -- length => governed-but-ungranted => DENY at the door.
+  -- RESIDUAL, unchanged and NOT closable by any row here: ROLE_ADMIN (own-domain)
+  -- and ROLE_SUPERADMIN (cross-domain) short-circuit in GatewayRouteAccessFilter
+  -- BEFORE decide() is consulted, so a plain ROLE_ADMIN still reaches wiki-bff and
+  -- is refused there by hasRole('SUPERADMIN'). That is the #244 finding verbatim.
+  ('hugmesh-fe-gateway',  '/bff/wiki/superadmin/**', 'ROLE_SUPERADMIN', true),  -- wiki superadmin seam (superadmin-only, end-to-end)
   ('hugmesh-fe-gateway',  '/bff/wiki/admin/**',  'ROLE_ADMIN', true),  -- wiki admin-console seam (admin-only, end-to-end)
   ('hugmesh-fe-gateway',  '/bff/wiki/**',        'ROLE_WIKI',  true),  -- wiki BFF (wiki-access floor)
   -- Mesh BFF (/bff/mesh/** -> hugmesh-mesh-bff-api): LoRa mesh node
@@ -830,9 +851,16 @@ ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(NU
 --   hugmesh-fe-gateway  /bff/forum/admin/**    ROLE_ADMIN
 --   hugmesh-fe-gateway  /bff/wiki/admin/**     ROLE_ADMIN
 --   hugmesh-fe-gateway  /bff/owncast/admin/**  ROLE_ADMIN
+--   hugmesh-fe-gateway  /bff/wiki/superadmin/**  ROLE_SUPERADMIN
 --       Per-service admin CONSOLE seams that live behind their OWN service-BFF
---       prefix, not under /bff/admin. Covering them needs a different predicate
---       SHAPE (e.g. LIKE '/bff/%/admin/%'), which is a NEW scope decision.
+--       prefix, not under /bff/admin or /bff/superadmin. Covering them needs a
+--       different predicate SHAPE (e.g. LIKE '/bff/%/admin/%' plus
+--       LIKE '/bff/%/superadmin/%'), which is a NEW scope decision. The wiki
+--       superadmin row (added for #329) is the FIRST per-service *superadmin*
+--       seam, so it widens that same gap rather than opening a new one: it is
+--       excluded here for the identical reason, NOT because superadmin surfaces
+--       are exempt. Flipping these to mfa_required=true is the open operator
+--       decision #244 identified as the real gain.
 --   hugmesh-fe-gateway  /bff/mod/**            ROLE_ADMIN
 --       A MODERATION surface. ROLE_ADMIN is paired on it only as a superset of
 --       ROLE_MOD, so gating it would gate moderation, not administration.

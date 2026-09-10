@@ -177,6 +177,13 @@ DOCUMENTED_EXCLUSIONS = {
     ("hugmesh-fe-gateway", "/bff/mod/**",                      "ROLE_ADMIN"),
     ("hugmesh-fe-gateway", "/bff/owncast/admin/**",            "ROLE_ADMIN"),
     ("hugmesh-fe-gateway", "/bff/wiki/admin/**",               "ROLE_ADMIN"),
+    # FIRST per-service *superadmin* seam (#329). Same reason as its
+    # /bff/wiki/admin/** sibling directly above: it lives behind the wiki-bff's
+    # own service prefix, not under the two authorised blanket prefixes, so the
+    # UPDATE cannot reach it without a new predicate SHAPE. Listed -- not
+    # flipped -- deliberately: flipping the per-service seams is the open
+    # operator decision, and this gate must keep saying so out loud.
+    ("hugmesh-fe-gateway", "/bff/wiki/superadmin/**",           "ROLE_SUPERADMIN"),
 }
 
 # PER-DOMAIN MFA SCOPE (issue #47 × casdoor-choice). url_patterns an operator has
@@ -1793,10 +1800,20 @@ nc "an appended PARTIAL un-flip of ONE row" PREFIX_UNFLIPPED 0 \
       " WHERE url_pattern = %s AND role = %s;\n"
       % (repr("/bff/superadmin/workloads/**"), repr("ROLE_SUPERADMIN")))'
 
-nc "an appended DELETE of flipped rows" SIM_ROWS 129 \
+# The healthy SIM_ROWS, read from the REAL run above rather than hardcoded. It was
+# literally `129` here while the true count was 158, so the "(was N)" these controls
+# print had been wrong for many row-additions -- still non-vacuous by luck (the
+# mutated readings never happened to land on 129), but one unlucky DELETE size away
+# from scoring a silent PASS on a control that never bit. Deriving it means adding a
+# route row can no longer rot these two, which is exactly what #329 did to them.
+HEALTHY_ROWS="$(g SIM_ROWS)"
+[ -n "${HEALTHY_ROWS}" ] && [ "${HEALTHY_ROWS}" != "0" ] \
+  || bad "cannot read a healthy SIM_ROWS from the real run, so the two row-count negative controls below would compare against nothing and score a vacuous PASS"
+
+nc "an appended DELETE of flipped rows" SIM_ROWS "${HEALTHY_ROWS}" \
    's += "\nDELETE FROM gateway_route_access WHERE url_pattern LIKE %s;\n" % repr("/bff/admin/phone-fleet/%")'
 
-nc "an appended SCHEMA-QUALIFIED DELETE that wipes every superadmin row" SIM_ROWS 129 \
+nc "an appended SCHEMA-QUALIFIED DELETE that wipes every superadmin row" SIM_ROWS "${HEALTHY_ROWS}" \
    's += "\nDELETE FROM public.gateway_route_access WHERE url_pattern LIKE %s;\n" % repr("/bff/superadmin%")'
 
 nc "'IS DISTINCT FROM true' dropped (re-apply stops being a no-op)" SIM_MFA_CHANGES_2 0 \
