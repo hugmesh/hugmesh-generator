@@ -421,7 +421,8 @@ class VaultScreen:
             picked = {d: c for d, c in (cfg.domain_ca or {}).items() if c}
             out.append(f"    chosen by {len(picked)} domain(s) on the Domains step"
                        if picked else
-                       "    no domain has picked one yet (Domains step, 'c' command)")
+                       "    no domain has picked one yet (Domains step, "
+                       "'b NUMBER CERT' command)")
         else:
             out.append("    (none)")
         out += [

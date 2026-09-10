@@ -39,7 +39,11 @@ HOW FAR EACH FIELD REACHES, stated because the copy used to overstate two of the
   with and without it — rather than leaving the claim to a tooltip.
 * BASE CA CERTIFICATES (#335) — RECORDED ONLY, the weakest of the four and labelled
   as such everywhere it appears. The operator adds PEM files; each is parsed here and
-  its subject and expiry shown. NO builder script parses a CA flag, so nothing copies
+  its subject and expiry shown. Because the value reaches no argv and no image, an
+  unreadable path is never allowed to BLOCK anything: ``validate_identity`` checks
+  only the structural rules (duplicates, a domain naming a certificate the config
+  does not carry), and this page keeps and marks a row it cannot read rather than
+  deleting it out from under the domains that point at it. NO builder script parses a CA flag, so nothing copies
   a PEM into an image, into a trust store or onto a KEYS stick, and no manifest
   emitter carries the per-domain choice yet. The list is saved with the config and
   offered as the per-domain "Base CA" column on the Domains step, and that is the
@@ -120,9 +124,15 @@ _LIMITS_NOTE = (
 
 _CA_NOTE = (
     "Add the PEM certificates of the certificate authorities this mesh's domains "
-    "chain to. Each file is parsed as you add it: it must contain a real "
-    "-----BEGIN CERTIFICATE----- block, and the subject and expiry shown beside the "
-    "file name are read out of the certificate itself, not out of the file name.\n"
+    "chain to. Each file is checked as you add it: -----BEGIN CERTIFICATE----- "
+    "framing and a decodable body always, plus a real X.509 parse where the optional "
+    "python-cryptography package is installed on this machine — that same package is "
+    "what reads the subject and expiry shown beside the file name, and without it "
+    "the row says so rather than guessing.\n"
+    "A path that is no longer readable when you come back (the file moved, or its "
+    "volume is not mounted) is KEPT and marked, never dropped — opening this page "
+    "must not be able to destroy your list, and nothing here blocks a build either "
+    "way. Remove the row yourself if you mean to.\n"
     "RECORDED, NOT YET CONSUMED — the honest limit of this section. The list is "
     "saved with your config and offered as the per-domain ‘Base CA’ choice on the "
     "Domains step. No builder script parses a CA flag, so nothing here copies a PEM "
@@ -229,9 +239,12 @@ class VaultPage(QtWidgets.QWizardPage):
         ca_btns = QtWidgets.QHBoxLayout()
         self.ca_add = QtWidgets.QPushButton("Add certificate…")
         self.ca_add.setToolTip(
-            "Pick one or more PEM files (.pem/.crt/.cer). Each is parsed for a real "
-            "-----BEGIN CERTIFICATE----- block before it is added; anything that is "
-            "not one is refused with the reason shown below, never added silently.")
+            "Pick one or more PEM files (.pem/.crt/.cer). Each is checked before it "
+            "is added — BEGIN/END CERTIFICATE framing, a decodable body, and (when "
+            "python-cryptography is installed on this machine) a real X.509 parse. "
+            "Anything that fails is refused with the reason shown below, never added "
+            "silently. Nothing is copied anywhere: the path is recorded with the "
+            "config, and no builder reads it yet.")
         self.ca_remove = QtWidgets.QPushButton("Remove selected")
         self.ca_remove.setToolTip(
             "Drop the selected certificates from the list. Any domain that had "
@@ -310,14 +323,25 @@ class VaultPage(QtWidgets.QWizardPage):
         return self.error() == ""
 
     # ── base CA certificates ────────────────────────────────────────────────────
-    def _append_certificate(self, path: str) -> None:
-        """Add ONE already-validated path as a row. describe_ca_cert is read-only and
-        dependency-light (stdlib PEM framing; python-cryptography only if installed),
-        so it runs inline — nothing here touches docker, kubectl or the runner."""
-        desc = describe_ca_cert(path)
-        item = QtWidgets.QListWidgetItem(f"{os.path.basename(path)} — {desc}")
+    def _append_certificate(self, path: str, problem: str = "") -> None:
+        """Add ONE path as a row. describe_ca_cert is read-only and dependency-light
+        (stdlib PEM framing; python-cryptography only if installed), so it runs inline
+        — nothing here touches docker, kubectl or the runner.
+
+        ``problem`` is the ca_cert_error sentence for a path that is NOT readable
+        right now (initializePage's case: a moved file, an unmounted volume). Such a
+        row is still added, marked, and still committed by validatePage — see the
+        comment there for why losing it would be worse than carrying it."""
+        if problem:
+            item = QtWidgets.QListWidgetItem(
+                f"{os.path.basename(path)} — NOT READABLE RIGHT NOW: {problem}")
+            item.setToolTip(f"{path}\n\nKept in the list. Re-mount or restore the "
+                            "file, or select it and press Remove selected.")
+        else:
+            item = QtWidgets.QListWidgetItem(
+                f"{os.path.basename(path)} — {describe_ca_cert(path)}")
+            item.setToolTip(path)
         item.setData(Qt.ItemDataRole.UserRole, path)
-        item.setToolTip(path)
         self.ca_list.addItem(item)
 
     def _add_certificates(self):
@@ -374,21 +398,24 @@ class VaultPage(QtWidgets.QWizardPage):
         self.external_addr.setText(c.vault_external_addr)
         self.kv_mount.setText(c.vault_kv_mount)
         self.base_path.setText(c.vault_base_path)
-        # Rebuild the certificate list from cfg. A path that has since been MOVED is
-        # dropped rather than carried as a row pointing at nothing — validate_identity
-        # would refuse the config at emission time, and this page is where the
-        # operator can still see it happen and re-add the file.
+        # Rebuild the certificate list from cfg. A path that is not readable RIGHT NOW
+        # (moved, or on a volume that is not mounted this morning) is KEPT as a marked
+        # row, not dropped: merely opening this page must never be able to destroy a
+        # recorded list — and with it every domain choice pointing into it — over a
+        # condition that may be temporary and that blocks no build (validate_identity
+        # does not check readability; base_ca_certs reaches no argv and no image).
         self.ca_list.clear()
         missing = []
         for path in c.base_ca_certs:
-            if ca_cert_error(path):
+            problem = ca_cert_error(path)
+            if problem:
                 missing.append(os.path.basename(path))
-                continue
-            self._append_certificate(path)
+            self._append_certificate(path, problem)
         if missing:
             self.ca_note.setText(
-                "No longer readable, dropped from the list: " + ", ".join(missing)
-                + ". Re-add the file if these domains still need it.")
+                "Not readable right now, kept in the list: " + ", ".join(missing)
+                + ". Restore or re-mount the file, or remove the row yourself — "
+                "nothing here changes an image either way.")
         else:
             self.ca_note.setText("")
         # Grey the surface when NO image in this flow can take the flag (a worklist of

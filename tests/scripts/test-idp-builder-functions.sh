@@ -293,9 +293,27 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   ( set -e; _validate_vault ) \
     && ok "${BUILDER}: _validate_vault accepts a distinct https EXTERNAL address" \
     || bad "${BUILDER}: _validate_vault rejected a valid external address"
+  # An EXTERNAL address with NO internal one must be REFUSED, not accepted and
+  # dropped: bake_vault_conf writes nothing without VAULT_ADDR, so accepting it would
+  # be a silent no-op, and both builders' usage text promises "Needs --vault-addr".
+  VAULT_ADDR="" VAULT_KV_MOUNT="" VAULT_BASE_PATH="" \
+    VAULT_EXTERNAL_ADDR="https://ext.acme.example:8200"
+  if ( _validate_vault ) 2>/dev/null; then
+    bad "${BUILDER}: an EXTERNAL address with no internal one was ACCEPTED (want reject)"
+  else
+    ok "${BUILDER}: rejects an EXTERNAL address with no --vault-addr"
+  fi
   VAULT_ADDR="" VAULT_KV_MOUNT="" VAULT_BASE_PATH="" VAULT_EXTERNAL_ADDR=""
   ( set -e; _validate_vault ) && ok "${BUILDER}: _validate_vault(empty) returns 0 under set -e" \
     || bad "${BUILDER}: _validate_vault(empty) failed under set -e"
+  # And the pre-#335 shape still passes: an OLDER caller that never heard of the
+  # field leaves it unbound, and the ${VAULT_EXTERNAL_ADDR:-} default must make that
+  # degrade to "no external address" rather than die under set -u.
+  unset VAULT_EXTERNAL_ADDR
+  ( set -eu; _validate_vault ) \
+    && ok "${BUILDER}: _validate_vault survives an UNBOUND external address under set -u" \
+    || bad "${BUILDER}: _validate_vault died on an unbound VAULT_EXTERNAL_ADDR under set -u"
+  VAULT_EXTERNAL_ADDR=""
 
   # ── a set address bakes CONNECTION FACTS ONLY, 0644 ─────────────────────────
   SYSROOT="$(mktemp -d)"

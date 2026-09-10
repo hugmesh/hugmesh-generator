@@ -884,14 +884,43 @@ def _pem_der_blocks(text: str) -> list[bytes]:
     return out
 
 
+def _der_parse_error(der: bytes) -> str:
+    """"" when ``der`` really is an X.509 certificate — AND "" when python-cryptography
+    is not installed, because then nobody here can tell. Otherwise the failing
+    exception's type name.
+
+    This is the DEPTH knob on :func:`ca_cert_error`. PEM framing plus a decodable
+    base64 body is NOT proof of a certificate: a file holding BEGIN CERTIFICATE over
+    ``aGVsbG8gd29ybGQ=`` ("hello world") passes both and is not one. With the optional
+    wheel present we parse for real and refuse that; without it the stdlib framing
+    check stands alone and we accept — the urwid precedent (degrade, never hard-fail,
+    and never refuse what this host cannot actually disprove)."""
+    try:
+        from cryptography import x509                      # optional, see docstring
+    except ImportError:
+        return ""
+    try:
+        x509.load_der_x509_certificate(der)
+    except Exception as exc:                               # noqa: BLE001 - any parse failure
+        return type(exc).__name__
+    return ""
+
+
 def ca_cert_error(path: str) -> str:
-    """The ONE fail-closed rule for ONE base CA certificate file: "" when the file
-    really is a PEM certificate, else a LAY-USER sentence naming what is wrong.
+    """The ONE fail-closed rule for ONE base CA certificate file: "" when the file is
+    a PEM certificate, else a LAY-USER sentence naming what is wrong.
 
     Shared by the GUI picker, the TUI ``ca`` command and validate_identity, so what
     one face refuses every face refuses. Reads at most CA_CERT_MAX_BYTES; a directory,
     an unreadable file, a DER-only .crt and a PEM PRIVATE KEY are all named for what
-    they are rather than lumped into one 'invalid file'."""
+    they are rather than lumped into one 'invalid file'.
+
+    HOW MUCH "" ACTUALLY PROMISES depends on the host: BEGIN/END framing and a
+    decodable base64 body always, plus a real X.509 parse when python-cryptography is
+    importable (see :func:`_der_parse_error`). Without that optional wheel a
+    well-framed non-certificate is accepted, and the row then reads "could not read
+    its fields" instead — honest, but weaker. It is never a TRUST decision either
+    way: nothing here copies the PEM into an image."""
     if not path:
         return "no certificate file given"
     if not os.path.isfile(path):
@@ -907,7 +936,13 @@ def ca_cert_error(path: str) -> str:
     except OSError as exc:
         return f"{os.path.basename(path)}: cannot read it ({exc.strerror or exc})"
     text = raw.decode("utf-8", "replace")
-    if _pem_der_blocks(text):
+    blocks = _pem_der_blocks(text)
+    if blocks:
+        why = _der_parse_error(blocks[0])
+        if why:
+            return (f"{os.path.basename(path)}: its BEGIN CERTIFICATE block decodes, "
+                    f"but what comes out is not an X.509 certificate ({why}) — the "
+                    "file is corrupted, or is some other PEM renamed .pem/.crt")
         return ""
     if "-----BEGIN CERTIFICATE-----" in text:
         return (f"{os.path.basename(path)}: has a BEGIN CERTIFICATE line but its "
@@ -953,10 +988,20 @@ def describe_ca_cert(path: str) -> str:
     return f"{subject} · expires {expiry}{extra}"
 
 
-def base_ca_certs_error(paths: Sequence[str]) -> str:
+def base_ca_certs_error(paths: Sequence[str], *, check_readable: bool = True) -> str:
     """"" when every listed base CA certificate is a readable PEM and the list has no
     duplicates, else the FIRST problem as a lay sentence. The empty list (the native
-    default) is valid and emits nothing anywhere."""
+    default) is valid and emits nothing anywhere.
+
+    ``check_readable=False`` keeps the STRUCTURAL rules (a non-string entry, a
+    duplicate) and drops the on-disk ones. That is the split validate_identity needs:
+    a duplicate is wrong on every machine and at every hour, while "this PEM is not
+    readable right now" is a fact about THIS host at THIS moment. base_ca_certs
+    reaches no argv, no image and no manifest, so an unreadable path must never be
+    able to block a build that does not depend on it — a config carrying CA paths has
+    to stay portable between machines, and a headless / --print-command operator has
+    no repair UI. The two faces call this WITH the readability check and say so
+    inline, which is where an operator can actually act on it."""
     seen: set[str] = set()
     for p in paths:
         if not isinstance(p, str):
@@ -964,9 +1009,10 @@ def base_ca_certs_error(paths: Sequence[str]) -> str:
         if p in seen:
             return f"{os.path.basename(p)} is listed twice — remove the duplicate"
         seen.add(p)
-        err = ca_cert_error(p)
-        if err:
-            return err
+        if check_readable:
+            err = ca_cert_error(p)
+            if err:
+                return err
     return ""
 
 
@@ -3369,20 +3415,21 @@ class ImageConfig:
                                       self.vault_base_path, self.vault_external_addr)
         if vault_err:
             raise IdentityValidationError(f"vault: {vault_err}")
-        # ── base CA certificates (#335). They reach NO argv, so this is not an
-        # emission guard — it is the same earliest-boundary rule applied to a
-        # RECORDED fact: a list that names a file which is not a PEM certificate, or
-        # a domain pointing at a certificate the config no longer carries, is a
-        # half-configured trust story and must not survive a save/--print-command.
-        # The message names the remedy on purpose: these fields change NO image, so an
-        # operator hitting this on a moved file needs to be told they can simply clear
-        # them rather than left wondering what a "base CA" is blocking their build for.
-        _CA_REMEDY = ("the base CA list is recorded with the config and changes no "
-                      "image, so re-add the file or remove it from the list on the "
-                      "Secrets store step")
-        ca_err = base_ca_certs_error(self.base_ca_certs)
+        # ── base CA certificates (#335). They reach NO argv, NO image and no
+        # manifest, so this is not an emission guard. Only the STRUCTURAL rules are
+        # enforced here — a non-string entry, a duplicate, a domain naming a
+        # certificate the config does not carry — because those are wrong on every
+        # machine and would make a saved config self-contradictory.
+        #
+        # READABILITY IS DELIBERATELY NOT ENFORCED (check_readable=False). A recorded
+        # fact that changes no image must never be able to block a build: a config
+        # written on one laptop and opened on another, or one whose PEM sits on a
+        # volume that is not mounted this morning, would otherwise raise here and stop
+        # a build that never depended on the file. The two faces DO check readability
+        # and say so inline, which is the one place an operator can act on it.
+        ca_err = base_ca_certs_error(self.base_ca_certs, check_readable=False)
         if ca_err:
-            raise IdentityValidationError(f"base CA: {ca_err} — {_CA_REMEDY}")
+            raise IdentityValidationError(f"base CA: {ca_err}")
         ca_err = domain_ca_error(self.domain_ca, self.base_ca_certs)
         if ca_err:
             raise IdentityValidationError(f"base CA: {ca_err}")

@@ -87,7 +87,29 @@ def _write(name: str, text: str) -> str:
     return path
 
 
+#: BEGIN/END CERTIFICATE framing wrapped around a body that IS valid base64 and is
+#: NOT DER — it decodes to the ASCII "hello world". This is the file that separates
+#: "looks like a PEM" from "is a certificate": framing plus base64-decodability
+#: accepts it, and only a real X.509 parse refuses it.
+CA_FRAMED_NOT_DER_PEM = """\
+-----BEGIN CERTIFICATE-----
+aGVsbG8gd29ybGQ=
+-----END CERTIFICATE-----
+"""
+
 #: A file that really parses as an X.509 certificate.
 CA_ROOT = _write("ca-root.pem", CA_ROOT_PEM)
 #: A second one, so "which of them did this domain pick" is a real question.
 CA_ALT = _write("ca-alt.pem", CA_ALT_PEM)
+#: Well-framed, decodable, not a certificate. See CA_FRAMED_NOT_DER_PEM.
+CA_FRAMED_NOT_DER = _write("framed-not-der.pem", CA_FRAMED_NOT_DER_PEM)
+
+#: Whether THIS host can tell CA_FRAMED_NOT_DER apart from a real certificate.
+#: python-cryptography is optional (it is not in studio/requirements.txt), and
+#: config.ca_cert_error deliberately degrades to the framing-only check without it —
+#: so the tests that turn on the deeper check must skip rather than fail there.
+try:
+    import cryptography                                        # noqa: F401
+    HAVE_CRYPTOGRAPHY = True
+except ImportError:                                            # pragma: no cover
+    HAVE_CRYPTOGRAPHY = False

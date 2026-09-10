@@ -20,10 +20,12 @@ import subprocess
 
 import pytest
 
-from ca_fixtures import CA_ROOT
+from ca_fixtures import (CA_ALT, CA_FRAMED_NOT_DER, CA_ROOT,
+                         HAVE_CRYPTOGRAPHY)
 from hugmesh_studio import app
 from hugmesh_studio.core.config import (
-    PLATFORM_FIELD_SUPPORT, VAULT_FIELDS, ImageConfig, vault_field_error)
+    PLATFORM_FIELD_SUPPORT, VAULT_FIELDS, ImageConfig, base_ca_certs_error,
+    ca_cert_error, vault_field_error)
 from hugmesh_studio.core.validate import IdentityValidationError
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -215,13 +217,68 @@ def test_a_domain_naming_a_dropped_certificate_fails_closed():
     _mesh(domain_ca={"acme.example": ""}).to_cli_args()
 
 
-def test_a_certificate_that_is_not_one_fails_closed(tmp_path):
+def test_a_certificate_that_is_not_one_is_refused_by_the_faces_predicate(tmp_path):
+    """ca_cert_error is what the GUI picker and the TUI 'c' command call before a file
+    can enter the list, so THAT is where a non-certificate is stopped."""
     bogus = tmp_path / "notacert.pem"
     bogus.write_text("hello, this is not a certificate\n", encoding="utf-8")
-    with pytest.raises(IdentityValidationError, match="base CA"):
-        _mesh(base_ca_certs=[str(bogus)]).to_cli_args()
-    with pytest.raises(IdentityValidationError, match="base CA"):
-        _mesh(base_ca_certs=[str(tmp_path / "gone.pem")]).to_cli_args()
+    assert "BEGIN CERTIFICATE" in ca_cert_error(str(bogus))
+    assert "not a readable file" in ca_cert_error(str(tmp_path / "gone.pem"))
+    assert ca_cert_error(CA_ROOT) == ""
+
+
+@pytest.mark.skipif(not HAVE_CRYPTOGRAPHY,
+                    reason="python-cryptography is optional; without it ca_cert_error "
+                           "degrades to the framing-only check on purpose")
+def test_pem_framing_alone_is_not_enough_to_be_a_certificate():
+    """The gap the skeptic found: BEGIN CERTIFICATE over a body that is valid base64
+    but is NOT DER ("hello world") used to be ACCEPTED, and the row then read "could
+    not read its fields". With python-cryptography importable we parse for real and
+    refuse it at the door, naming what actually went wrong."""
+    err = ca_cert_error(CA_FRAMED_NOT_DER)
+    assert err, "a framed non-certificate must be refused when we can tell"
+    assert "not an X.509 certificate" in err
+    assert "framed-not-der.pem" in err
+
+
+def test_a_recorded_only_ca_path_can_never_block_a_build(tmp_path):
+    """base_ca_certs reaches NO argv, no image and no manifest. So an unreadable path
+    — a config written on another laptop, a volume not mounted this morning — must NOT
+    raise at emission: it would stop a build that never depended on the file, and a
+    headless/--print-command operator has no repair UI. Readability is checked by the
+    two FACES, which can actually say something about it."""
+    gone = str(tmp_path / "moved-away.pem")
+    cfg = _mesh(base_ca_certs=[CA_ROOT, gone],
+                domain_ca={"acme.example": gone})
+    before = _mesh().to_cli_args()
+    assert cfg.to_cli_args() == before          # validates, and emits nothing new
+    cfg.validate_identity()
+    # the face still refuses it, which is where the operator can act
+    assert ca_cert_error(gone)
+
+
+def test_the_structural_ca_rules_are_still_fail_closed():
+    """What DOES still raise: facts that are wrong on every machine at every hour —
+    a duplicate entry, a non-string entry, and a domain naming a certificate the
+    config does not carry (that last one is its own test above)."""
+    with pytest.raises(IdentityValidationError, match="listed twice"):
+        _mesh(base_ca_certs=[CA_ROOT, CA_ROOT]).to_cli_args()
+    with pytest.raises(IdentityValidationError, match="not a path"):
+        _mesh(base_ca_certs=[CA_ROOT, 7]).to_cli_args()
+    _mesh(base_ca_certs=[CA_ROOT, CA_ALT]).to_cli_args()      # the valid shape
+
+
+def test_check_readable_is_the_only_difference_between_the_two_callers(tmp_path):
+    """ONE predicate, one knob — never two rules that can drift. The faces get the
+    readability check; validate_identity does not."""
+    gone = str(tmp_path / "moved-away.pem")
+    assert base_ca_certs_error([gone])                       # the faces refuse it
+    assert base_ca_certs_error([gone], check_readable=False) == ""
+    # the structural rules are on BOTH sides of the knob
+    for kw in ({}, {"check_readable": False}):
+        assert "listed twice" in base_ca_certs_error([CA_ROOT, CA_ROOT], **kw)
+        assert "not a path" in base_ca_certs_error([None], **kw)
+    assert base_ca_certs_error([]) == ""                      # the native default
 
 
 def test_print_command_carries_the_vault_flags(tmp_path, capsys):

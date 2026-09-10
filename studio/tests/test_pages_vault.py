@@ -30,7 +30,8 @@ from hugmesh_studio.gui.pages import vault as vault_mod  # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets  # noqa: E402
 
 from _helpers import advance_to, check_worklist_rows, pick_mode  # noqa: E402
-from ca_fixtures import CA_ALT, CA_ROOT  # noqa: E402
+from ca_fixtures import (CA_ALT, CA_FRAMED_NOT_DER, CA_ROOT,  # noqa: E402
+                         HAVE_CRYPTOGRAPHY)
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -379,6 +380,23 @@ def test_adding_a_file_that_is_not_a_certificate_is_refused_inline(wiz, monkeypa
     assert "BEGIN CERTIFICATE" in page.ca_note.text()
 
 
+@pytest.mark.skipif(not HAVE_CRYPTOGRAPHY,
+                    reason="python-cryptography is optional; without it the picker "
+                           "degrades to the framing-only check on purpose")
+def test_the_picker_refuses_pem_framing_that_is_not_a_certificate(wiz, monkeypatch):
+    """The skeptic's gap, at the GUI door: a file with real BEGIN/END CERTIFICATE
+    framing over a decodable body that is NOT DER used to be ADDED, and its row then
+    read "could not read its fields" — the list saying a thing is a CA when it is not.
+    It is now refused where every other refusal happens, inline and named."""
+    page = _mesh_vault(wiz)
+    monkeypatch.setattr(vault_mod, "pick_ca_certificates", _picks(CA_FRAMED_NOT_DER))
+    page.ca_add.click()
+    assert page.ca_list.count() == 0
+    assert "Not added" in page.ca_note.text()
+    assert "framed-not-der.pem" in page.ca_note.text()
+    assert "not an X.509 certificate" in page.ca_note.text()
+
+
 def test_a_private_key_is_named_for_what_it_is(wiz, monkeypatch, tmp_path):
     key = tmp_path / "ca.key"
     key.write_text("-----BEGIN PRIVATE KEY-----\nQUJD\n-----END PRIVATE KEY-----\n",
@@ -443,19 +461,56 @@ def test_remove_with_nothing_selected_says_so(wiz):
     assert "Select a certificate" in page.ca_note.text()
 
 
-def test_a_loaded_certificate_that_has_since_moved_is_dropped_visibly(wiz, tmp_path):
-    """A saved config names an absolute path; the file can be gone by the time it is
-    re-opened. Carrying it as a row would strand a config validate_identity refuses,
-    so the page drops it and SAYS it dropped it — this page is where the operator can
-    still re-add the file."""
+def test_a_loaded_certificate_that_has_since_moved_is_KEPT_and_marked(wiz, tmp_path):
+    """A saved config names an absolute path; the file can be unreadable by the time
+    it is re-opened — moved, or on a volume that is not mounted this morning. Merely
+    OPENING this page must not destroy the recorded list over that: the row is kept,
+    marked, and still committed. Nothing about it blocks a build (validate_identity
+    does not check readability), so the operator decides, not initializePage."""
     gone = str(tmp_path / "moved-away.pem")
     wiz.cfg.base_ca_certs = [CA_ROOT, gone]
     page = _mesh_vault(wiz)
-    assert page.certificates() == [CA_ROOT]
+    assert page.certificates() == [CA_ROOT, gone]           # KEPT, in order
     assert "moved-away.pem" in page.ca_note.text()
-    assert "No longer readable" in page.ca_note.text()
+    assert "kept in the list" in page.ca_note.text()
+    row = page.ca_list.item(1)
+    assert "NOT READABLE RIGHT NOW" in row.text()
+    assert "not a readable file" in row.text()
+    wiz.next()
+    assert wiz.cfg.base_ca_certs == [CA_ROOT, gone]         # and still committed
+    wiz.cfg.validate_identity()
+
+
+def test_a_domain_choice_survives_a_temporarily_unreadable_certificate(wiz, tmp_path):
+    """The consequence that makes the KEEP matter: dropping the row would also strip
+    every domain pointing at it (validatePage prunes domain_ca to the listed set), so
+    one page visit with a volume unmounted would silently lose the operator's per-domain
+    trust choices for good."""
+    moved = tmp_path / "later-gone.pem"
+    moved.write_text(open(CA_ROOT, encoding="utf-8").read(), encoding="utf-8")
+    wiz.cfg.base_ca_certs = [str(moved)]
+    wiz.cfg.domain_ca = {"acme.example": str(moved)}
+    moved.unlink()                                          # the volume goes away
+    page = _mesh_vault(wiz)
+    assert page.certificates() == [str(moved)]
+    wiz.next()
+    assert wiz.cfg.domain_ca == {"acme.example": str(moved)}
+    wiz.cfg.validate_identity()
+
+
+def test_removing_a_kept_unreadable_row_is_still_the_operators_call(wiz, tmp_path):
+    """Keeping it is not trapping it: the row selects and removes like any other, and
+    the domain choice pointing at it is repaired on the way out as always."""
+    gone = str(tmp_path / "moved-away.pem")
+    wiz.cfg.base_ca_certs = [CA_ROOT, gone]
+    wiz.cfg.domain_ca = {"acme.example": gone}
+    page = _mesh_vault(wiz)
+    page.ca_list.item(1).setSelected(True)
+    page.ca_remove.click()
+    assert page.certificates() == [CA_ROOT]
     wiz.next()
     assert wiz.cfg.base_ca_certs == [CA_ROOT]
+    assert wiz.cfg.domain_ca == {}
     wiz.cfg.validate_identity()
 
 

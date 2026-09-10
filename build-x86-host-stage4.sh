@@ -2204,7 +2204,19 @@ fi
 # end for the same set -e reason _validate_idp gives.
 _VAULT_PATH_RE='^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$'
 _validate_vault() {
-    [ -n "${VAULT_ADDR}" ] || return 0
+    if [ -z "${VAULT_ADDR}" ]; then
+        # The external address is the SAME Vault reached from OUTSIDE the mesh, so it
+        # is meaningless alone — and bake_vault_conf writes nothing without an internal
+        # address, so accepting it here would ACCEPT-AND-DROP: exactly the silent
+        # no-op this repo names as its failure mode, and exactly what the usage text
+        # ("Needs --vault-addr and must differ from it") promises will not happen.
+        # Mirrors config.vault_field_error's stray-residue arm. Only THIS field is
+        # checked: VAULT_KV_MOUNT carries a non-empty builder default, so the same
+        # test on it would refuse every ordinary build.
+        [ -z "${VAULT_EXTERNAL_ADDR:-}" ] \
+            || { err "--vault-external-addr was given without --vault-addr — it is the same Vault reached from outside the mesh, so it needs the internal address; add --vault-addr, or drop the external one"; exit 1; }
+        return 0
+    fi
     [[ "${VAULT_ADDR}" =~ ${_IDP_URL_RE} ]] \
         || { err "--vault-addr must be an https:// URL (got '${VAULT_ADDR}') — it is the secrets channel's trust anchor and must be TLS"; exit 1; }
     # ${VAULT_EXTERNAL_ADDR:-} rather than a bare expansion: this function is

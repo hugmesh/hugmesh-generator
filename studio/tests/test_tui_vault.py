@@ -250,6 +250,24 @@ def test_removing_a_certificate_clears_the_domains_that_picked_it():
     assert "no such certificate row" in j.status
 
 
+def test_the_pointer_to_the_domains_step_names_a_command_that_exists():
+    """The Vault screen tells the operator where to PICK a certificate. It used to
+    name a 'c' command on the Domains step; 'c' there is unrecognised — the per-domain
+    picker is 'b NUMBER CERT'. A cross-reference to a command that does not exist is
+    the same defect class as a knob that does nothing, so it is pinned against the
+    Domains step's OWN command list rather than against a copy of the string."""
+    from hugmesh_studio.tui import domains_step               # noqa: PLC0415
+    j = _to_vault()
+    j.feed(f"c {CA_ROOT}")
+    line = [ln for ln in j.lines() if "no domain has picked one yet" in ln]
+    assert line, "the unpicked hint should be on the screen"
+    assert "'c' command" not in line[0]
+    assert "b NUMBER CERT" in line[0]
+    # and that verb really is the Domains step's, read from its own source
+    src = open(domains_step.__file__, encoding="utf-8").read()
+    assert "b NUMBER CERT|-=set its base CA" in src
+
+
 def test_the_ca_list_emits_nothing():
     j = _to_vault()
     before = j.cfg.to_cli_args()
