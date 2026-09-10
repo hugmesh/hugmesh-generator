@@ -21,11 +21,34 @@ That pattern — *fixed in compose, never fixed in the cluster manifests* — is
 theme. `tests/stack/compose.local.yaml` even documents several of these in
 comments, right next to the local fix.
 
-Status of the e2e itself: **not green.** The chain now reaches Casdoor, mints a
-real session against a real IdP, and fails downstream on cluster state. Each
-blocker below was fixed live (imperatively) to reach the next one, which is how
-the list was produced. The fixes belong in the repo; several already have
-branches (see the bottom).
+> ### Status of the e2e — read this line, not the narrative below
+>
+> **GREEN as of the 2026-08-06 run against a live kind cluster on merged
+> `main`**, for the two specs this profile can actually drive: `01-frontpage`
+> PASS and `27-native-login` PASS, plus `29-mfa-privileged-floor`'s stack-free
+> RFC 6238 vectors. That run is tabulated in
+> [Where the SSO profile stands, 2026-08-06](#where-the-sso-profile-stands-2026-08-06)
+> at the end of this document, which is the single measured statement of record.
+>
+> Scope, stated so "green" cannot be over-read: `29-mfa-privileged-floor`'s API
+> cases are blocked by harness item 20, not by the platform, and the rest of the
+> suite (matrix, mastodon, forum, discord, RBAC realms) drives services this
+> profile does not deploy — those specs are out of scope here and this result
+> says nothing about them. Items 5-15, 17, 20 and 24-26 remain open as listed
+> below; **"the e2e is green" is not "the platform is finished"**.
+
+Status of the e2e **during the 2026-08-05 run this section narrates: not
+green.** The chain reached Casdoor, minted a real session against a real IdP,
+and failed downstream on cluster state. Each blocker below was fixed live
+(imperatively) to reach the next one, which is how the list was produced. The
+fixes belong in the repo; several already have branches (see the bottom).
+
+> **Do not quote the previous paragraph as the current status.** It is the
+> 2026-08-05 first-run narrative, and it was left unqualified for a month. On
+> 2026-09-09 two Iteration 1 lanes read this same file and posted opposite
+> headlines from it: `hugmesh-admin-bff-api#2` cited the 08-06 table and said
+> green, `hugmesh-generator#47` cited this paragraph (as ":24") and said not
+> green. The 08-06 table is the newer measurement and wins. See #332.
 
 ## Blockers, in the order a fresh cluster hits them
 

@@ -626,6 +626,62 @@ _needs_runner = pytest.mark.skipif(not os.path.exists(RUNNER),
                                    reason="runner script not present")
 
 
+def _docker_usable() -> str:
+    """Empty string when run-qemu-docker.sh can get far enough to --list.
+
+    Returns the REASON it cannot, otherwise "". The script's preflight is two
+    checks, both ABOVE row discovery and both reached even for --list (--list
+    only sets LIST_ONLY at parse time, run-qemu-docker.sh:329):
+
+        run-qemu-docker.sh:1753  command -v docker >/dev/null || die "docker not found"
+        run-qemu-docker.sh:1754  docker info >/dev/null 2>&1  || die "cannot talk to the docker daemon ..."
+
+    so the CLI merely being on PATH is not enough — a host with docker installed
+    but the user outside the `docker` group dies on the second line. Both are
+    checked here for that reason.
+    """
+    if shutil.which("docker") is None:
+        return "docker CLI absent"
+    try:
+        probe = subprocess.run(["docker", "info"], capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:   # pragma: no cover
+        return f"docker info failed to run: {exc}"
+    if probe.returncode != 0:                              # pragma: no cover
+        return "docker daemon unreachable (user not in the 'docker' group?)"
+    return ""
+
+
+_DOCKER_WHY = _docker_usable()
+
+#: #326 item 2. The seven cross-checks below execute the REAL run-qemu-docker.sh
+#: --list, so they inherit its docker preflight. In an image without docker they
+#: did not fail because the contract they pin is broken — they failed before the
+#: script parsed a single artifact name, on "[qemu-docker] ERROR: docker not found".
+#:
+#: MEASURED 2026-09-09, this file only, on one tree:
+#:   dev host (docker present):        63 passed in 0.68s
+#:   python:3-slim, the test:studio-suite image, no docker:
+#:                                     7 failed, 54 passed, 2 skipped
+#: All 7 failures were this preflight; the 7 are exactly the tests marked here.
+#:
+#: A skip is what this suite's own rule prescribes for this shape —
+#: studio/tests/known-failures.txt: "a missing optional dependency is an
+#: importorskip in the test, a stale pin is a fix to the pin, a live drift is a
+#: fix to the artifact. Only a real defect this pipeline did not cause belongs in
+#: a deselect." That header records eight tests already converted from deselects
+#: to importorskip for the identical reason (the workflow installs no Qt binding).
+#: So these SKIP where docker is absent and still RUN, unchanged, everywhere it is
+#: present — which is where the shell-vs-python contract can actually be checked.
+#:
+#: DELIBERATELY NOT DONE: relaxing the runner's own preflight so --list works
+#: without docker. Enumerating artifact rows arguably needs no daemon, but that is
+#: a change to production behaviour to suit a test environment, and it is not what
+#: #326 asked for. If it is ever made, delete this mark rather than leaving a guard
+#: that skips something now runnable.
+_needs_docker = pytest.mark.skipif(bool(_DOCKER_WHY),
+                                   reason=f"run-qemu-docker.sh preflight: {_DOCKER_WHY}")
+
+
 def _shell_rows(tmp_path) -> set[tuple[str, str]]:
     """(label, image basename) pairs from the real runner's --list."""
     proc = subprocess.run(
@@ -646,6 +702,7 @@ def _py_rows(tmp_path) -> set[tuple[str, str]]:
 
 
 @_needs_runner
+@_needs_docker
 def test_shell_and_python_agree_on_row_discovery(tmp_path):
     """The shell runner and this module must select the SAME rows.
 
@@ -663,6 +720,7 @@ def test_shell_and_python_agree_on_row_discovery(tmp_path):
 
 
 @_needs_runner
+@_needs_docker
 def test_shell_and_python_agree_on_which_build_wins(tmp_path):
     """Parity under ambiguity: same role rebuilt, and one artifact in both forms.
 
@@ -686,6 +744,7 @@ def test_shell_and_python_agree_on_which_build_wins(tmp_path):
 
 
 @_needs_runner
+@_needs_docker
 def test_shell_and_python_agree_on_branded_artifacts(tmp_path):
     """Parity across BRANDS — the half of the contract the fix had to keep.
 
@@ -724,6 +783,7 @@ def test_shell_and_python_agree_on_branded_artifacts(tmp_path):
 
 
 @_needs_runner
+@_needs_docker
 def test_shell_and_python_agree_that_a_zero_byte_image_is_not_a_row(tmp_path):
     """Both twins skip the builder's pre-partition placeholder, or the two
     enumerations disagree exactly on an aborted session — the one place a wrong
@@ -812,6 +872,7 @@ def test_a_declared_brand_still_never_rejects_a_foreign_one(tmp_path):
 
 
 @_needs_runner
+@_needs_docker
 def test_shell_and_python_agree_on_a_hyphenated_brand(tmp_path):
     """Parity for the manifest lookup itself. The shell twin reads the brand out of
     the same file with sed rather than a JSON parser, so this is the only check that
@@ -949,6 +1010,7 @@ def _shell_picked_session(repo):
 
 
 @_needs_runner
+@_needs_docker
 def test_shell_and_python_agree_on_which_session_is_the_default(tmp_path):
     """The runner's SESSION picker must apply the same "holds an image" rule its
     row discovery does.
@@ -998,6 +1060,7 @@ def test_shell_and_python_agree_on_which_session_is_the_default(tmp_path):
 
 
 @_needs_runner
+@_needs_docker
 def test_the_session_picker_reads_each_session_s_own_declared_brand(tmp_path):
     """The manifest lookup has to happen PER SESSION DIR, inside row discovery.
 

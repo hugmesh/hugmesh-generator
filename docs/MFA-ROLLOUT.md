@@ -162,13 +162,14 @@ on Postgres**; the gate says so on every run.
 The authorised scope is the **two path prefixes** `/bff/admin…` and
 `/bff/superadmin…`, blanket *within* them. It is **not** "every admin surface", and
 the difference matters if you are reasoning about what an attacker can still reach
-with a stolen session and no second factor. Six other admin-ish `/bff/` rows are
+with a stolen session and no second factor. Seven other admin-ish `/bff/` rows are
 deliberately left `mfa_required=false`:
 
 | gateway | url_pattern | role | why it is out of scope |
 |---|---|---|---|
 | `hugmesh-fe-gateway` | `/bff/forum/admin/**` | `ROLE_ADMIN` | per-service admin console seam behind its **own** service-BFF prefix, not under `/bff/admin`. Covering it needs a different predicate *shape* (`LIKE '/bff/%/admin/%'`) |
 | `hugmesh-fe-gateway` | `/bff/wiki/admin/**` | `ROLE_ADMIN` | ditto |
+| `hugmesh-fe-gateway` | `/bff/wiki/superadmin/**` | `ROLE_SUPERADMIN` | ditto — and the **most privileged** of the seven. Governed at the SUPERADMIN floor by #329 (so a plain `ROLE_WIKI` is now refused at the front door), but **not** MFA-gated: it is behind the wiki-bff's own service prefix, so the `UPDATE` cannot reach it without a new predicate *shape*. Flipping the per-service seams is the open operator decision |
 | `hugmesh-fe-gateway` | `/bff/owncast/admin/**` | `ROLE_ADMIN` | ditto |
 | `hugmesh-fe-gateway` | `/bff/mod/**` | `ROLE_ADMIN` | a **moderation** surface; `ROLE_ADMIN` is paired on it only as a superset of `ROLE_MOD`, so gating it would gate moderation, not administration |
 | `hugmesh-be-gateway` | `/bff/image-builds/arch/**` | `ROLE_SUPERADMIN` | privileged by **role**, not by path — a prefix predicate cannot express it |
@@ -178,7 +179,7 @@ Each of the three shapes above would be a **new scope decision**, not a bug fix:
 widening enlarges the §3 step-7 lockout blast radius, so it is the operator's call.
 If you do widen, widen the prose in the same commit — and note that the gate
 enumerates admin-ish surfaces *independently* of the `UPDATE`'s own prefixes and
-cross-checks them against exactly this list, so a **seventh** admin-ish `/bff/` row
+cross-checks them against exactly this list, so an **eighth** admin-ish `/bff/` row
 appearing later fails the build until someone decides consciously (and a stale entry
 in the list fails it too).
 

@@ -64,6 +64,11 @@ GOV_PREFIXES = (
     '/api/v1/pleroma/admin', '/api/pleroma/admin', '/pleroma/admin',
     '/bff/forum/admin', '/bff/forum/moderation', '/api/forum/admin',
     '/bff/wiki/admin', '/bff/owncast/admin', '/bff/image-builds',
+    # Per-service SUPERADMIN seam (#329). Not covered by '/bff/superadmin'
+    # above -- that prefix only matches the platform console, and the
+    # startswith test is anchored, so the wiki seam needs its own entry
+    # or it silently drops out of the governance report.
+    '/bff/wiki/superadmin',
 )
 
 rows = [m.groups() for m in ROW.finditer(text)]
