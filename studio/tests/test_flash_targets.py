@@ -4,9 +4,18 @@ argv builder that delegates the destructive write to scripts/flash-disk.sh.
 No device is ever written; lsblk is stubbed. Pins the filter (removable/USB/eMMC/SD +
 size sanity), the system-disk exclusion (the disk backing '/'), the sysfs fallback, and
 that flash_argv produces a SAFE flash-disk.sh invocation (never a raw dd).
+
+Also (#337) the flash path AFTER a real build: the compressed artifacts a --compress
+build actually leaves, the session workdir the build actually writes into, and the ONE
+OK/Cancel warning that now gates every write.
 """
 import json
 import os
+import subprocess
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from hugmesh_studio.core import flash_targets as ft
 from hugmesh_studio.core.flash_targets import FlashTarget
@@ -254,3 +263,457 @@ def test_new_artifact_empty_when_nothing_new_is_the_fail_safe(tmp_path):
     base = ft.snapshot_artifacts(str(tmp_path))
     assert ft.new_artifact(str(tmp_path), base) == ""          # skip, never glob-guess
     assert ft.new_artifact(str(tmp_path / "missing"), {}) == ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════
+# #337 — the flash path after a real build: compressed artifacts, the session workdir,
+# and the ONE OK/Cancel warning. Every assertion below is grounded in the artifact set
+# the operator's 2026-09-08 standalone run actually left on disk:
+#
+#   out/sessions/20260907-190340-70b501/
+#     gentoo-x86-amd64-standalone-thick-prod-20260908T095149Z.img.xz        <- the OS image
+#     gentoo-x86-amd64-standalone-thick-prod-20260908T095149Z.installer.iso
+#     gentoo-x86-amd64-standalone-thick-prod-20260908T095149Z.live.iso
+#
+# The .img is COMPRESSED because --compress defaults ON (core/config.py ImageConfig.
+# compress = True) and the x86/rpi5/jetson builders compress IMG_PATH. Nothing here
+# writes a device: the flasher worker is replaced and every target is a fake /dev path.
+# ═══════════════════════════════════════════════════════════════════════════════════
+_REAL = "gentoo-x86-amd64-standalone-thick-prod-20260908T095149Z"
+
+
+def test_the_default_builds_compressed_image_is_a_flashable_artifact():
+    """`--compress` is ON by default, so <name>.img.xz IS the image a finished build
+    leaves. Scoring it "not an artifact" is what emptied the flash plan (#337)."""
+    assert ft._is_flashable_artifact(f"{_REAL}.img.xz") is True
+    assert ft._is_flashable_artifact(f"{_REAL}.installer.iso.xz") is True
+    assert ft._is_flashable_artifact(f"{_REAL}.live.iso.xz") is True
+    # and the blob filter is untouched: a compressed kernel blob is still not an image
+    assert ft._is_flashable_artifact("hugmesh-rpi5-kernel.img.xz") is False
+    assert ft._is_flashable_artifact("hugmesh-rpi5-initramfs.img.xz") is False
+
+
+def test_compressed_artifacts_keep_their_flavour():
+    """.img.xz is an "img", not an unflavoured blob — otherwise the per-device flavour
+    pick skips 100% of the time on a default build."""
+    assert ft.classify_artifact_flavor(f"{_REAL}.img.xz") == "img"
+    assert ft.classify_artifact_flavor(f"{_REAL}.installer.iso.xz") == "installer"
+    assert ft.classify_artifact_flavor(f"{_REAL}.live.iso.xz") == "live"
+    assert ft.classify_artifact_flavor(f"{_REAL}.live-sb.iso.xz") == "live"
+    # uncompressed classification is unchanged
+    assert ft.classify_artifact_flavor(f"{_REAL}.img") == "img"
+    assert ft.classify_artifact_flavor("acme-rpi5-arm64-be-x.iso") == ""
+
+
+def test_is_compressed_artifact_names_only_the_xz_shapes():
+    assert ft.is_compressed_artifact(f"/w/{_REAL}.img.xz") is True
+    assert ft.is_compressed_artifact(f"/w/{_REAL}.live.iso.xz") is True
+    assert ft.is_compressed_artifact(f"/w/{_REAL}.img") is False
+    assert ft.is_compressed_artifact(f"/w/{_REAL}.installer.iso") is False
+    # the stage4/fs tarballs a build also drops are NOT images
+    assert ft.is_compressed_artifact(f"/w/{_REAL}.stage4.tar.xz") is False
+
+
+def test_auto_pick_prefers_the_compressed_img_over_an_iso(tmp_path):
+    """THE standalone shape: one .img.xz + two .iso. "auto" means "newest .img else
+    newest anything", and the compressed .img IS the img — the old endswith('.img')
+    test scored it as not-an-image and handed back the installer ISO instead."""
+    _touch(tmp_path / f"{_REAL}.img.xz", 1000)          # oldest on purpose
+    _touch(tmp_path / f"{_REAL}.installer.iso", 2000)
+    _touch(tmp_path / f"{_REAL}.live.iso", 3000)        # newest overall
+    arts = ft.new_artifacts(str(tmp_path), {})
+    assert ft.pick_artifact(arts, ft.FLAVOR_AUTO) == str(tmp_path / f"{_REAL}.img.xz")
+    assert ft.pick_artifact(arts, "img") == str(tmp_path / f"{_REAL}.img.xz")
+    assert ft.pick_artifact(arts, "live") == str(tmp_path / f"{_REAL}.live.iso")
+
+
+# ── the NODE image shape (never exercised by the operator — #337 predicted it) ────────
+@pytest.mark.parametrize("platform,arch,role,stem", [
+    # arm64 node roles: rpi5 builds pki/backend/frontend, jetson omnibus/edge-ai.
+    ("rpi5", "arm64", "pki", "hugmesh-rpi5-arm64-pki-prod-20260908T101500Z"),
+    ("rpi5", "arm64", "backend", "hugmesh-rpi5-arm64-backend-prod-20260908T101500Z"),
+    ("jetson", "arm64", "omnibus", "hugmesh-jetson-arm64-omnibus-prod-20260908T101500Z"),
+    # x86 node roles land in the same shape (an x86 node's --compress also hits IMG_PATH).
+    ("x86", "x86", "pki", "hugmesh-x86-amd64-pki-prod-20260908T101500Z"),
+    ("x86", "x86", "backend-gpu", "hugmesh-x86-amd64-backend-gpu-prod-20260908T101500Z"),
+])
+def test_node_image_only_produces_a_compressed_img_and_is_still_flashable(
+        tmp_path, platform, arch, role, stem):
+    """A NODE build emits exactly ONE artifact, the .img — and with --compress on
+    (the default) that file is <stem>.img.xz. Before the fix the per-entry snapshot
+    saw an EMPTY work dir, so `new_artifacts` returned () and the flash plan refused
+    "no artifact was recorded" for every Pi/Jetson/x86 node image ever built."""
+    _touch(tmp_path / f"{stem}.img.xz", 2000)
+    snap = ft.snapshot_artifacts(str(tmp_path))
+    assert set(snap) == {f"{stem}.img.xz"}              # the ONE artifact is seen
+    arts = ft.new_artifacts(str(tmp_path), {})
+    assert arts == (str(tmp_path / f"{stem}.img.xz"),)
+    # both the "auto" default and an explicit img pick resolve it
+    assert ft.pick_artifact(arts, ft.FLAVOR_AUTO) == str(tmp_path / f"{stem}.img.xz")
+    assert ft.pick_artifact(arts, "img") == str(tmp_path / f"{stem}.img.xz")
+    assert ft.arch_for_platform(platform) == arch
+    # and the fallback resolver finds it by the same two anchors flash-disk.sh uses
+    assert ft.find_artifacts(str(tmp_path), role=role, arch=arch) == \
+        (str(tmp_path / f"{stem}.img.xz"),)
+
+
+def test_node_image_flavour_menu_offers_only_what_the_builder_emits():
+    """Hide-inapplicable still holds for the node platforms: rpi5/jetson build an
+    .img and nothing else, so a live/installer pick is never offered for them."""
+    assert ft.flavors_for_platform("rpi5") == (ft.FLAVOR_AUTO, "img")
+    assert ft.flavors_for_platform("jetson") == (ft.FLAVOR_AUTO, "img")
+    assert ft.flavors_for_platform("x86") == (ft.FLAVOR_AUTO, "img", "live", "installer")
+
+
+# ── find_artifacts: the fallback resolver (read-only, anchored, never a silent write) ─
+def test_find_artifacts_anchors_on_arch_and_role(tmp_path):
+    _touch(tmp_path / "hugmesh-rpi5-arm64-pki-prod-1.img.xz", 1000)
+    _touch(tmp_path / "hugmesh-x86-amd64-pki-prod-2.img", 2000)        # wrong arch
+    _touch(tmp_path / "hugmesh-rpi5-arm64-backend-prod-3.img", 3000)   # wrong role
+    got = ft.find_artifacts(str(tmp_path), role="pki", arch="arm64")
+    assert got == (str(tmp_path / "hugmesh-rpi5-arm64-pki-prod-1.img.xz"),)
+    # amd64 is the same arch token as x86, exactly as flash-disk.sh's ARCH_GLOBS has it
+    assert ft.find_artifacts(str(tmp_path), role="pki", arch="x86") == \
+        (str(tmp_path / "hugmesh-x86-amd64-pki-prod-2.img"),)
+
+
+def test_find_artifacts_matches_an_older_role_spelling(tmp_path):
+    """Images already on disk keep the spelling they were built under; the resolver
+    covers every alias of the canonical role, like flash-disk.sh's ROLE_GLOBS."""
+    _touch(tmp_path / "hugmesh-x86-amd64-be-test-1.img", 1000)         # 'be' = backend
+    assert ft.find_artifacts(str(tmp_path), role="backend", arch="x86") == \
+        (str(tmp_path / "hugmesh-x86-amd64-be-test-1.img"),)
+
+
+def test_find_artifacts_is_newest_first_and_drops_blobs(tmp_path):
+    _touch(tmp_path / "hugmesh-rpi5-arm64-pki-old-1.img", 1000)
+    _touch(tmp_path / "hugmesh-rpi5-arm64-pki-new-2.img.xz", 5000)
+    _touch(tmp_path / "hugmesh-rpi5-arm64-pki-kernel.img", 9000)       # blob, filtered
+    got = ft.find_artifacts(str(tmp_path), role="pki", arch="arm64")
+    assert [os.path.basename(g) for g in got] == [
+        "hugmesh-rpi5-arm64-pki-new-2.img.xz", "hugmesh-rpi5-arm64-pki-old-1.img"]
+
+
+def test_find_artifacts_empty_on_a_miss_and_on_a_missing_dir(tmp_path):
+    _touch(tmp_path / "hugmesh-rpi5-arm64-pki-1.img", 1000)
+    assert ft.find_artifacts(str(tmp_path), role="omnibus", arch="arm64") == ()
+    assert ft.find_artifacts(str(tmp_path / "nope"), role="pki", arch="arm64") == ()
+
+
+# ── scripts/flash-disk.sh: the same two shapes, at the script boundary ────────────────
+# --list is the script's no-root dry run: it resolves the artifact and prints what it
+# WOULD flash without touching a device. No /dev path is ever passed here.
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_FLASH_SH = os.path.join(_REPO, "scripts", "flash-disk.sh")
+
+
+def _flash_list(work_dir, role, arch):
+    r = subprocess.run(["bash", _FLASH_SH, "--role", role, "--arch", arch,
+                        "--work-dir", str(work_dir), "--list"],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    return r.stdout
+
+
+@pytest.mark.skipif(not os.path.exists(_FLASH_SH), reason="flash-disk.sh not present")
+def test_flash_disk_sh_resolves_a_compressed_node_image(tmp_path):
+    """The node prediction in #337, at the script: a Pi build with --compress on leaves
+    ONLY <name>.img.xz, and the flasher used to answer "no arm64 pki .img/.iso"."""
+    _touch(tmp_path / "hugmesh-rpi5-arm64-pki-prod-20260908T101500Z.img.xz", 2000)
+    out = _flash_list(tmp_path, "pki", "arm64")
+    assert "Would flash:" in out
+    assert out.strip().endswith("hugmesh-rpi5-arm64-pki-prod-20260908T101500Z.img.xz")
+
+
+@pytest.mark.skipif(not os.path.exists(_FLASH_SH), reason="flash-disk.sh not present")
+def test_flash_disk_sh_prefers_the_compressed_img_over_an_iso(tmp_path):
+    """The standalone shape end to end: .img.xz + .installer.iso + .live.iso in one
+    session dir must resolve to the IMAGE, not to an ISO that happens to be newer."""
+    _touch(tmp_path / f"{_REAL}.img.xz", 1000)
+    _touch(tmp_path / f"{_REAL}.installer.iso", 2000)
+    _touch(tmp_path / f"{_REAL}.live.iso", 3000)
+    out = _flash_list(tmp_path, "standalone-thick", "x86")
+    assert out.strip().endswith(f"{_REAL}.img.xz")
+
+
+@pytest.mark.skipif(not os.path.exists(_FLASH_SH), reason="flash-disk.sh not present")
+def test_flash_disk_sh_still_drops_compressed_kernel_blobs(tmp_path):
+    """A compressed kernel/initramfs blob shares the .img.xz extension and must not
+    become a flash candidate — the same filter the uncompressed names get."""
+    _touch(tmp_path / "hugmesh-rpi5-arm64-pki-kernel.img.xz", 9000)
+    out = _flash_list(tmp_path, "pki", "arm64")
+    assert "no artifact found" in out
+
+
+@pytest.mark.skipif(not os.path.exists(_FLASH_SH), reason="flash-disk.sh not present")
+def test_flash_disk_sh_no_longer_refuses_an_explicit_compressed_artifact(tmp_path):
+    """`--artifact <name>.img.xz` used to die on "artifact must be .img or .iso"
+    BEFORE any device work. It must now get past the extension check — here it stops
+    at the root requirement, which is the next gate and proves the refusal is gone."""
+    art = tmp_path / "hugmesh-rpi5-arm64-pki-prod-1.img.xz"
+    _touch(art, 1000)
+    r = subprocess.run(["bash", _FLASH_SH, "--role", "pki", "--arch", "arm64",
+                        "--artifact", str(art), "/dev/does-not-exist-337"],
+                       capture_output=True, text=True, timeout=60)
+    combined = r.stdout + r.stderr
+    assert "artifact must be" not in combined
+    assert "run as root" in combined            # reached the destructive-path gate
+
+
+# ── the ProgressPage flash hook: session workdir + the ONE OK/Cancel warning ──────────
+pytest.importorskip("hugmesh_studio.gui.qt",
+                    reason="no Qt binding (PySide6/PyQt6) installed")
+
+from types import SimpleNamespace                                       # noqa: E402
+from hugmesh_studio.gui.pages import progress as pg                     # noqa: E402
+from hugmesh_studio.gui.qt import QtWidgets                             # noqa: E402
+
+
+@pytest.fixture
+def qapp():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    yield app
+
+
+class _Lines:
+    def __init__(self):
+        self.lines = []
+
+    def appendPlainText(self, s):
+        self.lines.append(s)
+
+    def toPlainText(self):
+        return "\n".join(self.lines)
+
+
+FAKE = FlashTarget("/dev/sdz-test-337", 32 * GIB, "FAKE Test Stick", "usb", True, "usb")
+
+
+def _page(monkeypatch, *, session_workdir="", output_dir="", sets=None, queue=(),
+          answer=None, launched=None):
+    """A ProgressPage minus Qt construction, driven through the REAL unbound methods.
+
+    The flasher WORKER is replaced, so an accepted confirmation records an argv and
+    launches nothing — no subprocess, no sudo, no device."""
+    page = pg.ProgressPage.__new__(pg.ProgressPage)
+    page.log = _Lines()
+    page.flash_worker = None
+    page._flash_queue = list(queue)
+    page._entry_artifact_sets = dict(sets or {})
+    page._entry_artifacts = {}
+    page._flash_caveats = []
+    page._flash_cancelled = False
+    page._session = (SimpleNamespace(workdir=session_workdir)
+                     if session_workdir else None)
+    page.wiz = SimpleNamespace(generator_dir=_REPO,
+                               cfg=SimpleNamespace(output_dir=output_dir))
+    page.flash_btn = SimpleNamespace(setEnabled=lambda *_: None)
+    page.flash_refresh_btn = SimpleNamespace(setEnabled=lambda *_: None)
+    monkeypatch.setattr(ft, "list_targets", lambda: [FAKE])
+
+    class _NoWorker:
+        line = SimpleNamespace(connect=lambda *_: None)
+        done = SimpleNamespace(connect=lambda *_: None)
+
+        def __init__(self, argv, gen):
+            if launched is not None:
+                launched.append(list(argv))
+
+        def start(self):
+            pass
+
+        def isRunning(self):
+            return False
+    monkeypatch.setattr(pg, "_FlashWorker", _NoWorker)
+    monkeypatch.setattr(pg, "hold_thread", lambda w: w)
+    if answer is not None:
+        monkeypatch.setattr(pg, "confirm_flash",
+                            lambda *a, **k: answer)
+    return page
+
+
+def test_work_dir_is_the_session_dir_the_build_actually_writes_into(monkeypatch,
+                                                                    tmp_path):
+    """THE #337 root cause. The page hands the driver workdir=<out>/sessions/<id>/ at
+    dispatch, so that is where every artifact lands — but _work_dir() returned the
+    shared <out>. The per-entry snapshot therefore diffed a directory the build never
+    touched, new_artifacts() returned (), and every plan assignment refused with "no
+    artifact was recorded"."""
+    session = tmp_path / "out" / "sessions" / "20260907-190340-70b501"
+    session.mkdir(parents=True)
+    page = _page(monkeypatch, session_workdir=str(session),
+                 output_dir=str(tmp_path / "out"))
+    assert pg.ProgressPage._work_dir(page) == str(session)
+    # no session (direct-slot tests / a record that could not be written): unchanged
+    page._session = None
+    assert pg.ProgressPage._work_dir(page) == str(tmp_path / "out")
+
+
+def test_the_snapshot_diff_sees_the_build_output_once_work_dir_is_right(monkeypatch,
+                                                                        tmp_path):
+    """Non-vacuous pin of the same fix: with the session dir in play, the entry-start
+    baseline and the entry-done diff both see the file the build wrote."""
+    session = tmp_path / "out" / "sessions" / "s1"
+    session.mkdir(parents=True)
+    (tmp_path / "out" / "hugmesh-x86-amd64-pki-stale-1.img").write_text("old")
+    page = _page(monkeypatch, session_workdir=str(session),
+                 output_dir=str(tmp_path / "out"))
+    baseline = ft.snapshot_artifacts(pg.ProgressPage._work_dir(page))
+    assert baseline == {}                       # the session dir starts empty
+    _touch(session / f"{_REAL}.img.xz", 5000)   # the build writes its image
+    assert ft.new_artifacts(pg.ProgressPage._work_dir(page), baseline) == \
+        (str(session / f"{_REAL}.img.xz"),)
+
+
+def test_the_flash_warning_is_a_module_level_seam(qapp):
+    """The gate must be monkeypatchable by name, or the suite can only test it by
+    stubbing _start_flash — which tests nothing. It is also the ONE call site: the
+    dialog lives in _start_flash and nowhere near validatePage/initializePage/
+    isComplete/itemChanged, where a modal deadlocks an offscreen run."""
+    assert callable(pg.confirm_flash)
+    src = open(pg.__file__, encoding="utf-8").read()
+    assert src.count("confirm_flash(") == 1          # exactly one call site
+    body = src[src.index("def _start_flash"):]
+    assert "confirm_flash(" in body[:body.index("\n    def _flash_done")]
+    for hook in ("def validatePage", "def initializePage", "def isComplete"):
+        if hook in src:
+            seg = src[src.index(hook):]
+            seg = seg[:seg.index("\n    def ", 1)] if "\n    def " in seg[1:] else seg
+            assert "confirm_flash" not in seg and "QMessageBox" not in seg
+
+
+def test_ok_flashes_and_the_warning_names_the_device_and_the_image(monkeypatch, qapp,
+                                                                   tmp_path):
+    session = tmp_path / "sessions" / "s1"
+    session.mkdir(parents=True)
+    art = session / f"{_REAL}.img.xz"
+    _touch(art, 5000)
+    seen = {}
+
+    def _confirm(parent, title, text, buttons, default):
+        seen.update(title=title, text=text, buttons=buttons, default=default)
+        return pg.FLASH_OK
+    monkeypatch.setattr(pg, "confirm_flash", _confirm)
+    launched = []
+    a = ft.FlashAssignment(FAKE, "standalone.x86", "standalone-thick", "x86",
+                           str(session))
+    page = _page(monkeypatch, session_workdir=str(session), queue=[a],
+                 sets={"standalone.x86": (str(art),)}, launched=launched)
+    pg.ProgressPage._flash_next(page)
+    assert len(launched) == 1                                  # the flash was launched
+    assert str(art) in launched[0] and "--artifact" in launched[0]
+    assert "dd" not in launched[0]                             # still delegated whole
+    # the dialog says what is destroyed, what is written, and that it is compressed
+    assert FAKE.path in seen["text"] and "ERASES" in seen["text"]
+    assert os.path.basename(str(art)) in seen["text"]
+    assert "compressed" in seen["text"]
+    assert seen["default"] == pg.FLASH_CANCEL                  # Cancel is the default
+    assert seen["buttons"] == pg.FLASH_OK | pg.FLASH_CANCEL    # exactly OK / Cancel
+
+
+def test_cancel_writes_nothing(monkeypatch, qapp, tmp_path):
+    session = tmp_path / "sessions" / "s1"
+    session.mkdir(parents=True)
+    art = session / f"{_REAL}.img.xz"
+    _touch(art, 5000)
+    launched = []
+    a = ft.FlashAssignment(FAKE, "standalone.x86", "standalone-thick", "x86",
+                           str(session))
+    page = _page(monkeypatch, session_workdir=str(session), queue=[a],
+                 sets={"standalone.x86": (str(art),)}, answer=pg.FLASH_CANCEL,
+                 launched=launched)
+    pg.ProgressPage._flash_next(page)
+    assert launched == []                                      # nothing started
+    assert "Flash cancelled" in page.log.toPlainText()
+    assert FAKE.path in page.log.toPlainText()
+
+
+def test_cancelling_one_device_still_offers_the_next(monkeypatch, qapp, tmp_path):
+    """Cancel means "not THIS device", not "abandon the plan": a two-device plan whose
+    first row is declined must still reach the second."""
+    session = tmp_path / "sessions" / "s1"
+    session.mkdir(parents=True)
+    art = session / f"{_REAL}.img.xz"
+    _touch(art, 5000)
+    other = FlashTarget("/dev/sdy-test-337", 16 * GIB, "Second Stick", "usb", True, "usb")
+    asked = []
+
+    def _confirm(parent, title, text, buttons, default):
+        asked.append(text)
+        return pg.FLASH_CANCEL if len(asked) == 1 else pg.FLASH_OK
+    monkeypatch.setattr(pg, "confirm_flash", _confirm)
+    launched = []
+    queue = [ft.FlashAssignment(FAKE, "e1", "standalone-thick", "x86", str(session)),
+             ft.FlashAssignment(other, "e1", "standalone-thick", "x86", str(session))]
+    page = _page(monkeypatch, session_workdir=str(session), queue=queue,
+                 sets={"e1": (str(art),)}, launched=launched)
+    monkeypatch.setattr(ft, "list_targets", lambda: [FAKE, other])
+    pg.ProgressPage._flash_next(page)
+    assert len(asked) == 2                                     # both were offered
+    assert len(launched) == 1                                  # only the accepted one
+    assert other.path in launched[0]
+
+
+def test_nothing_recorded_falls_back_to_the_work_dir_and_says_so(monkeypatch, qapp,
+                                                                 tmp_path):
+    """The #337 dead end, replaced. A run that recorded no artifact for the entry used
+    to refuse outright; now the image sitting in the work dir is resolved, and the
+    warning states EXACTLY how it was matched so the operator can decline."""
+    session = tmp_path / "sessions" / "s1"
+    session.mkdir(parents=True)
+    art = session / f"{_REAL}.img.xz"
+    _touch(art, 5000)
+    seen = {}
+
+    def _confirm(parent, title, text, buttons, default):
+        seen["text"] = text
+        return pg.FLASH_OK
+    monkeypatch.setattr(pg, "confirm_flash", _confirm)
+    launched = []
+    a = ft.FlashAssignment(FAKE, "standalone.x86", "standalone-thick", "x86",
+                           str(tmp_path / "out"))     # the stale BuildPage work_dir
+    page = _page(monkeypatch, session_workdir=str(session), queue=[a], sets={},
+                 launched=launched)
+    pg.ProgressPage._flash_next(page)
+    assert len(launched) == 1
+    assert str(art) in launched[0]
+    # the argv's --work-dir was corrected to the session dir too
+    assert launched[0][launched[0].index("--work-dir") + 1] == str(session)
+    assert "recorded no image" in seen["text"]
+    assert "arch (x86)" in seen["text"] and "role (standalone-thick)" in seen["text"]
+
+
+def test_the_fallback_never_overrides_a_recorded_set_missing_the_flavour(monkeypatch,
+                                                                         qapp,
+                                                                         tmp_path):
+    """A run that DID record artifacts, none of them the requested flavour, still
+    skips with the reason — the fallback is only for an EMPTY record, never a way to
+    write an image the build is known not to have produced."""
+    session = tmp_path / "sessions" / "s1"
+    session.mkdir(parents=True)
+    _touch(session / f"{_REAL}.img.xz", 5000)         # an img IS on disk
+    live = session / f"{_REAL}.live.iso"
+    _touch(live, 4000)
+    launched = []
+    a = ft.FlashAssignment(FAKE, "e1", "standalone-thick", "x86", str(session),
+                           flavor="installer")
+    page = _page(monkeypatch, session_workdir=str(session), queue=[a],
+                 sets={"e1": (str(live),)}, answer=pg.FLASH_OK, launched=launched)
+    pg.ProgressPage._flash_next(page)
+    assert launched == []
+    assert "no 'installer' artifact" in page.log.toPlainText()
+
+
+def test_a_truly_empty_work_dir_still_skips_with_the_reason(monkeypatch, qapp,
+                                                            tmp_path):
+    """Fail-safe kept: nothing recorded AND nothing findable is still a skip, never a
+    guess and never an empty confirmation."""
+    session = tmp_path / "sessions" / "s1"
+    session.mkdir(parents=True)
+    launched = []
+    a = ft.FlashAssignment(FAKE, "e1", "pki", "arm64", str(session))
+    page = _page(monkeypatch, session_workdir=str(session), queue=[a], sets={},
+                 answer=pg.FLASH_OK, launched=launched)
+    pg.ProgressPage._flash_next(page)
+    assert launched == []
+    assert "no artifact was recorded" in page.log.toPlainText()
