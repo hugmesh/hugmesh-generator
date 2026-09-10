@@ -1850,6 +1850,10 @@ _FIELD_PROBE = {
     # every probe supplies one — the two path overrides are multi-key entries riding
     # it, like egress_vpn_locked. Emission on the x86 + rpi5 node builders only.
     "vault_addr": {"vault_addr": "https://vault.example:8200"},
+    # the EXTERNAL address (#335) is the same multi-key shape: it needs the internal
+    # one (nothing is emitted without it) and must DIFFER from it (vault_field_error).
+    "vault_external_addr": {"vault_addr": "https://vault.example:8200",
+                            "vault_external_addr": "https://vault.example.net:8200"},
     "vault_kv_mount": {"vault_addr": "https://vault.example:8200", "vault_kv_mount": "kv"},
     "vault_base_path": {"vault_addr": "https://vault.example:8200",
                         "vault_base_path": "acme/prod"},

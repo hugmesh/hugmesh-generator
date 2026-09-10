@@ -23,8 +23,31 @@ The mesh-only 'Sign-in' column (issue #47) is each row's ``Domain.idp``: superdo
 its OWN Casdoor instance). It reaches provisioning via the mesh manifest and the local
 compose lane via core/own_casdoor.py; an untouched/hidden combo always collects the
 superdomain default, so pre-#47 flows and manifests are byte-identical.
+
+The mesh-only 'Base CA' column (issue #335) is the per-domain half of the Vault
+step's certificate list: it offers ``cfg.base_ca_certs`` and writes the choice to
+``cfg.domain_ca[<domain name>]``. Two things about it are stated plainly rather than
+implied:
+
+* RECORDED, NOT YET CONSUMED. No builder parses a CA flag and no manifest emitter
+  carries the choice, so picking a CA here changes no image and no provisioning
+  input today — it records which authority a domain is meant to chain to. That is
+  the same honest label the Vault page's KV mount and base path already wear.
+* THE LIST IS FILLED ONE STEP LATER. ``WIZARD_PAGE_SLUGS`` puts "domains" before
+  "vault", so on a first forward pass the certificate list is still empty and every
+  row's picker offers only "None"; the cell says so instead of looking broken. The
+  column repopulates from cfg on every entry, so Back from the Secrets store (or
+  re-opening a saved config, where the certificates are already there) fills it. The
+  page order was left alone on purpose — moving it is a wizard-wide change, not a
+  column-wide one.
+
+Removing a certificate on the Vault step clears every domain that pointed at it
+(VaultPage.validatePage), and this page rebuilds ``cfg.domain_ca`` from the table
+alone, so a renamed or deleted domain cannot leave a stranded entry behind.
 """
 from __future__ import annotations
+
+import os
 
 from ..qt import Qt, QtWidgets
 from ...core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN,
@@ -36,6 +59,13 @@ _COL_NAME, _COL_TITLE, _COL_SERVICES, _COL_APPLIES = range(4)
 # The per-domain sign-in column (issue #47) is APPENDED so the four pre-existing
 # indices stay stable for every test/caller that pins them.
 _COL_IDP = 4
+# The per-domain base-CA column (issue #335) is APPENDED for the same reason — every
+# earlier index, _COL_IDP included, keeps the position its tests already pin.
+_COL_CA = 5
+#: The combo's "this domain names no base CA" row. Its DATA is the empty string, which
+#: is what ``cfg.domain_ca`` stores for "absent" — so the default row and a missing
+#: key are the same fact, and an untouched table writes an empty dict.
+_CA_NONE_LABEL = "None (mesh default)"
 # node-role images take no --domains — the attachment is manifest/provisioning data
 # only, so the menu never implies argv it cannot emit.
 _NODE_NOTE = "  (manifest only — nodes take no --domains)"
@@ -66,6 +96,38 @@ class _IdpCombo(QtWidgets.QComboBox):
 
     def selected_idp(self) -> str:
         return self.currentData() or DOMAIN_IDP_SUPERDOMAIN
+
+
+class _BaseCaCombo(QtWidgets.QComboBox):
+    """Per-row base-CA picker (issue #335): which of the Vault step's certificates
+    this domain chains to. Row 0 is always "None" with EMPTY data, so an untouched
+    picker collects "" — the same fact as an absent ``cfg.domain_ca`` key.
+
+    ``certs`` is ``cfg.base_ca_certs`` (absolute paths); the label is the file's base
+    name and the DATA is the full path, so tests and the config read the path while
+    the label stays free to change. A ``selected`` path no longer in ``certs`` falls
+    back to None rather than being kept as a phantom row — the certificate really is
+    gone, and VaultPage.validatePage has already cleared it from cfg."""
+
+    def __init__(self, certs=(), selected=""):
+        super().__init__()
+        certs = list(certs)
+        self.addItem(_CA_NONE_LABEL if certs else
+                     "None — add certificates on the Secrets store step", "")
+        self.setItemData(
+            0,
+            "This domain names no base CA: it chains to whatever the mesh already "
+            "trusts. The default, and what every config written before this column "
+            "existed carries.", Qt.ItemDataRole.ToolTipRole)
+        for i, path in enumerate(certs, start=1):
+            self.addItem(os.path.basename(path), path)
+            self.setItemData(i, path, Qt.ItemDataRole.ToolTipRole)
+        idx = self.findData(selected) if selected else 0
+        self.setCurrentIndex(idx if idx >= 0 else 0)
+
+    def selected_ca(self) -> str:
+        """The chosen certificate PATH, or "" for None."""
+        return self.currentData() or ""
 
 
 class _AppliesToButton(QtWidgets.QToolButton):
@@ -251,7 +313,10 @@ class DomainsPage(QtWidgets.QWizardPage):
             "services step. ‘Applies to’ = which built node images the domain attaches "
             "to. ‘Sign-in’ = which Casdoor serves this domain's login: Superdomain "
             "(its users sign in via the mesh's central Casdoor — the default) or Own "
-            "(this domain runs its own Casdoor instance, provisioned just for it).")
+            "(this domain runs its own Casdoor instance, provisioned just for it). "
+            "‘Base CA’ = which certificate authority from the Secrets store step this "
+            "domain chains to; it is recorded with your config and consumed by nothing "
+            "yet, and the list it offers is the one you fill in on that later step.")
         self.table_help.setWordWrap(True)
         self.table_help.setStyleSheet("color: gray;")
         lay.addWidget(self.table_help)
@@ -261,9 +326,10 @@ class DomainsPage(QtWidgets.QWizardPage):
         # (_ServicesButton), not a freeform cell: the old cell wrote whatever was typed
         # straight into the manifest, typos included. 'Applies to' fills Domain.images
         # (mesh only; hidden in cloud where the single image attaches implicitly).
-        self.table = QtWidgets.QTableWidget(0, 5)
+        self.table = QtWidgets.QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
-            ["Domain", "Title", "Optional services", "Applies to", "Sign-in"])
+            ["Domain", "Title", "Optional services", "Applies to", "Sign-in",
+             "Base CA"])
         title_hdr = self.table.horizontalHeaderItem(_COL_TITLE)
         title_hdr.setToolTip(
             "This domain's display name. Written to the mesh manifest "
@@ -287,6 +353,14 @@ class DomainsPage(QtWidgets.QWizardPage):
             "Casdoor instance provisioned for this domain alone; reaches cluster "
             "provisioning via the mesh manifest, and the local compose lane stands "
             "it up next to the central one.")
+        ca_hdr = self.table.horizontalHeaderItem(_COL_CA)
+        ca_hdr.setToolTip(
+            "Which of the certificate authorities from the Secrets store step this "
+            "domain's certificates chain to. RECORDED ONLY: no builder parses a CA "
+            "flag and no manifest carries the choice, so it changes no image and no "
+            "provisioning input today — it records the intent with the domain. Add "
+            "the PEM files on the Secrets store step (later in this wizard); until "
+            "you have, every row here offers only ‘None’.")
         self.table.horizontalHeader().setStretchLastSection(True)
         lay.addWidget(self.table)
         btns = QtWidgets.QHBoxLayout()
@@ -305,14 +379,32 @@ class DomainsPage(QtWidgets.QWizardPage):
         self.admin_note.setWordWrap(True)
         self.admin_note.setStyleSheet("color: gray;")
         lay.addWidget(self.admin_note)
+        # Re-offer the base-CA list whenever this page becomes current (#335).
+        # initializePage is NOT enough: Qt calls it when a page is entered going
+        # FORWARD, and the operator's route here is the other one — Domains, on to
+        # the Secrets store, add a PEM, BACK. Qt fires no initializePage on that, so
+        # without this the picker would still offer only "None" and the column would
+        # look broken for exactly the operator who had just filled the list.
+        # currentIdChanged fires on every transition in both directions; the guard
+        # keeps the work to the one that lands here. Rebuilding combos only — no
+        # dialog, no cfg write, nothing page validation can reach.
+        wiz.currentIdChanged.connect(self._on_page_changed)
+
+    def _on_page_changed(self, _page_id=None):
+        if self.wiz.currentPage() is self:
+            self._refresh_base_ca()
 
     def _entries(self):
         """The current worklist entries (mesh); empty when no worklist is set."""
         wl = getattr(self.wiz, "worklist", None)
         return list(wl.entries) if wl is not None else []
 
+    def _certs(self):
+        """The certificate paths the Vault step has collected ([] before it runs)."""
+        return list(getattr(self.wiz.cfg, "base_ca_certs", None) or [])
+
     def _add(self, name="", title="", services="", images=None,
-             idp=DOMAIN_IDP_SUPERDOMAIN):
+             idp=DOMAIN_IDP_SUPERDOMAIN, base_ca=""):
         r = self.table.rowCount()
         self.table.insertRow(r)
         self.table.setItem(r, _COL_NAME, QtWidgets.QTableWidgetItem(name))
@@ -321,6 +413,7 @@ class DomainsPage(QtWidgets.QWizardPage):
         self.table.setCellWidget(r, _COL_APPLIES,
                                  _AppliesToButton(self._entries(), images or []))
         self.table.setCellWidget(r, _COL_IDP, _IdpCombo(idp))
+        self.table.setCellWidget(r, _COL_CA, _BaseCaCombo(self._certs(), base_ca))
 
     def _remove(self):
         for idx in sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True):
@@ -335,6 +428,19 @@ class DomainsPage(QtWidgets.QWizardPage):
                 self.table.setCellWidget(
                     r, _COL_APPLIES,
                     _AppliesToButton(self._entries(), btn.selected_ids()))
+
+    def _refresh_base_ca(self):
+        """Rebuild every row's base-CA picker against the CURRENT certificate list,
+        preserving each row's choice. Needed because "domains" runs BEFORE "vault":
+        the list is empty on the first forward pass and only fills when the operator
+        reaches the Secrets store, so a Back into this page must re-offer it. A
+        selection whose certificate has since been removed drops to None (the combo's
+        own fallback) rather than surviving as a path cfg no longer carries."""
+        for r in range(self.table.rowCount()):
+            combo = self.table.cellWidget(r, _COL_CA)
+            if isinstance(combo, _BaseCaCombo):
+                self.table.setCellWidget(
+                    r, _COL_CA, _BaseCaCombo(self._certs(), combo.selected_ca()))
 
     def applies_to(self, cfg) -> bool:
         """Dynamic-skip predicate (wizard.nextId): a cloud NODE image emits no
@@ -363,10 +469,15 @@ class DomainsPage(QtWidgets.QWizardPage):
         # no Casdoor), so it hides in cloud the same way; a hidden combo still
         # collects its untouched superdomain default, never anything else.
         self.table.setColumnHidden(_COL_IDP, c.mode != "mesh")
+        # the base CA is a MESH provisioning intent for domains this operator runs, so
+        # it hides in cloud for exactly the reason Sign-in does (a cloud client image
+        # provisions no domains). A hidden combo still collects its untouched "None",
+        # which is the absent-key default — emission-neutral either way.
+        self.table.setColumnHidden(_COL_CA, c.mode != "mesh")
         if self.table.rowCount() == 0:
             for d in c.domains:
                 self._add(d.name, d.title, list(d.optional_services), d.images,
-                          d.idp)
+                          d.idp, (c.domain_ca or {}).get(d.name, ""))
             # default prefill (spec 4): seed row 0 with the cluster domain so a fresh
             # cloud superadmin starts from a valid PRIMARY domain (table position =
             # first --domains element). Scoped to CLOUD: mesh prefill is spec-4 too, but
@@ -379,9 +490,11 @@ class DomainsPage(QtWidgets.QWizardPage):
                 self._add(c.cluster_domain, c.brand_title, "", [])
         else:
             self._refresh_applies_to()
+            self._refresh_base_ca()
 
     def validatePage(self):
         out = []
+        base_ca: dict[str, str] = {}
         for r in range(self.table.rowCount()):
             name = self.table.item(r, _COL_NAME).text().strip() if self.table.item(r, _COL_NAME) else ""
             if not name:
@@ -395,7 +508,16 @@ class DomainsPage(QtWidgets.QWizardPage):
             combo = self.table.cellWidget(r, _COL_IDP)
             idp = (combo.selected_idp() if isinstance(combo, _IdpCombo)
                    else DOMAIN_IDP_SUPERDOMAIN)
+            ca_combo = self.table.cellWidget(r, _COL_CA)
+            ca = ca_combo.selected_ca() if isinstance(ca_combo, _BaseCaCombo) else ""
+            if ca:
+                base_ca[name] = ca
             out.append(Domain(name=name, title=title or name,
                               optional_services=services, images=images, idp=idp))
         self.wiz.cfg.domains = out
+        # REBUILT from the table, never merged into what was there: a renamed or
+        # deleted domain must not leave a stranded entry, and an untouched table
+        # (every picker on None) leaves the empty dict the native default already is —
+        # so a config that never met this column is byte-identical after a round trip.
+        self.wiz.cfg.domain_ca = base_ca
         return True

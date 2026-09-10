@@ -253,6 +253,10 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
 
   ROLE="omnibus"; ROLE_CLIENT=false; BRAND="hugmesh"
   VAULT_ADDR=""; VAULT_KV_MOUNT=""; VAULT_BASE_PATH=""
+  # The EXTERNAL address (issue #335). Set explicitly rather than left unbound: the
+  # function bodies default it so an OLDER harness degrades instead of dying, and a
+  # harness that relied on that default would silently stop testing the flag.
+  VAULT_EXTERNAL_ADDR=""
 
   # ── the empty address is the byte no-op default ─────────────────────────────
   SYSROOT="$(mktemp -d)"
@@ -275,9 +279,41 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   VAULT_ADDR="https://vault.acme.example:8200" VAULT_KV_MOUNT="kv" VAULT_BASE_PATH="acme/prod"
   ( set -e; _validate_vault ) && ok "${BUILDER}: _validate_vault accepts a valid trio under set -e" \
     || bad "${BUILDER}: _validate_vault rejected a valid trio"
-  VAULT_ADDR="" VAULT_KV_MOUNT="" VAULT_BASE_PATH=""
+  # ── the EXTERNAL address arm (#335), mirroring config.vault_field_error ──────
+  vxfail() { # label  EXTERNAL
+    VAULT_ADDR="https://vault.acme.example:8200" VAULT_KV_MOUNT="" VAULT_BASE_PATH="" \
+      VAULT_EXTERNAL_ADDR="$2"
+    if ( _validate_vault ) 2>/dev/null; then bad "${BUILDER}: $1 was ACCEPTED (want reject)"
+    else ok "${BUILDER}: rejects $1"; fi
+  }
+  vxfail "an http:// EXTERNAL address"          "http://ext.acme.example:8200"
+  vxfail "an EXTERNAL address equal to the internal one" "https://vault.acme.example:8200"
+  VAULT_ADDR="https://vault.acme.example:8200" VAULT_KV_MOUNT="" VAULT_BASE_PATH="" \
+    VAULT_EXTERNAL_ADDR="https://ext.acme.example:8200"
+  ( set -e; _validate_vault ) \
+    && ok "${BUILDER}: _validate_vault accepts a distinct https EXTERNAL address" \
+    || bad "${BUILDER}: _validate_vault rejected a valid external address"
+  # An EXTERNAL address with NO internal one must be REFUSED, not accepted and
+  # dropped: bake_vault_conf writes nothing without VAULT_ADDR, so accepting it would
+  # be a silent no-op, and both builders' usage text promises "Needs --vault-addr".
+  VAULT_ADDR="" VAULT_KV_MOUNT="" VAULT_BASE_PATH="" \
+    VAULT_EXTERNAL_ADDR="https://ext.acme.example:8200"
+  if ( _validate_vault ) 2>/dev/null; then
+    bad "${BUILDER}: an EXTERNAL address with no internal one was ACCEPTED (want reject)"
+  else
+    ok "${BUILDER}: rejects an EXTERNAL address with no --vault-addr"
+  fi
+  VAULT_ADDR="" VAULT_KV_MOUNT="" VAULT_BASE_PATH="" VAULT_EXTERNAL_ADDR=""
   ( set -e; _validate_vault ) && ok "${BUILDER}: _validate_vault(empty) returns 0 under set -e" \
     || bad "${BUILDER}: _validate_vault(empty) failed under set -e"
+  # And the pre-#335 shape still passes: an OLDER caller that never heard of the
+  # field leaves it unbound, and the ${VAULT_EXTERNAL_ADDR:-} default must make that
+  # degrade to "no external address" rather than die under set -u.
+  unset VAULT_EXTERNAL_ADDR
+  ( set -eu; _validate_vault ) \
+    && ok "${BUILDER}: _validate_vault survives an UNBOUND external address under set -u" \
+    || bad "${BUILDER}: _validate_vault died on an unbound VAULT_EXTERNAL_ADDR under set -u"
+  VAULT_EXTERNAL_ADDR=""
 
   # ── a set address bakes CONNECTION FACTS ONLY, 0644 ─────────────────────────
   SYSROOT="$(mktemp -d)"
@@ -294,6 +330,27 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   grep -qiE '^[[:space:]]*(vault_)?(token|unseal[_-]?key)[[:space:]]*[=:]' "${VC}" \
     && bad "${BUILDER}: vault.conf carries a token/unseal field" \
     || ok "${BUILDER}: vault.conf has NO token/unseal field"
+  # OMIT-WHEN-EMPTY (#335): no external address => no such line AT ALL, so a build
+  # that never named one writes the pre-#335 file byte for byte. An empty-valued
+  # VAULT_EXTERNAL_ADDR= line is precisely the regression this rules out.
+  grep -q '^VAULT_EXTERNAL_ADDR' "${VC}" \
+    && bad "${BUILDER}: an unset external address still wrote a VAULT_EXTERNAL_ADDR line" \
+    || ok "${BUILDER}: an unset external address writes NO line (byte-identical to pre-#335)"
+  rm -rf "${SYSROOT}"
+
+  # ── the EXTERNAL address, when set, is baked BESIDE the internal one ─────────
+  SYSROOT="$(mktemp -d)"
+  VAULT_EXTERNAL_ADDR="https://ext.acme.example:8200"
+  bake_vault_conf
+  VC="${SYSROOT}/etc/hugmesh/vault.conf"
+  grep -q "^VAULT_ADDR=https://vault.acme.example:8200$" "${VC}" \
+    && grep -q "^VAULT_EXTERNAL_ADDR=https://ext.acme.example:8200$" "${VC}" \
+    && ok "${BUILDER}: vault.conf carries the external address beside the internal one" \
+    || { bad "${BUILDER}: external address missing from vault.conf"; cat "${VC}"; }
+  [ "$(stat -c '%a' "${VC}" 2>/dev/null)" = "644" ] \
+    && ok "${BUILDER}: vault.conf is still 0644 with the external address" \
+    || bad "${BUILDER}: vault.conf not 0644 after the external append"
+  VAULT_EXTERNAL_ADDR=""
 
   # ── the first-boot READ-BACK, with keys-provision's own reader ──────────────
   # The other end of the contract: what the builder wrote must come back byte-for-

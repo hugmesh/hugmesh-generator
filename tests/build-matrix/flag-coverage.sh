@@ -233,6 +233,10 @@ SAMPLES = {
     # mesh secrets store (#224): the empty address emits nothing by design, so every
     # sample supplies one; the two paths ride it (x86 + rpi5 node builders only).
     "vault_addr": [{"vault_addr": "https://vault.example:8200"}],
+    # the EXTERNAL address (#335) is a multi-key entry riding the internal one, which
+    # it needs (nothing is emitted without it) and must DIFFER from (vault_field_error).
+    "vault_external_addr": [{"vault_addr": "https://vault.example:8200",
+                             "vault_external_addr": "https://vault.example.net:8200"}],
     "vault_kv_mount": [{"vault_addr": "https://vault.example:8200", "vault_kv_mount": "kv"}],
     "vault_base_path": [{"vault_addr": "https://vault.example:8200", "vault_base_path": "acme/prod"}],
     "optional_services": [{"optional_services": ["akkoma"]},

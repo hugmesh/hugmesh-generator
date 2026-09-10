@@ -39,8 +39,11 @@ def test_mesh_table_carries_the_sign_in_column():
     j = _at_mesh_domains()
     j.feed("a chat.example.org")
     headers, rows = domains_step.domain_table(j.cfg)
-    assert headers[-1] == "sign-in"
-    assert rows[0][-1] == "Superdomain Casdoor (default)"
+    # Index the column BY NAME, not by [-1]: this table gained a 'base CA' column
+    # after 'sign-in' (#335) and will gain more, and a positional pin would have to
+    # be re-found and re-argued every time one is appended.
+    assert "sign-in" in headers
+    assert rows[0][headers.index("sign-in")] == "Superdomain Casdoor (default)"
     text = "\n".join(j.lines())
     assert "toggle its sign-in" in text
 
@@ -99,8 +102,8 @@ def test_a_loaded_own_row_renders_own_in_the_table():
     j = journey.Journey(".")
     j.cfg.mode = "mesh"
     j.cfg.domains = [Domain(name="chat.example.org", idp=DOMAIN_IDP_OWN)]
-    _headers, rows = domains_step.domain_table(j.cfg)
-    assert rows[0][-1] == "Own Casdoor"
+    headers, rows = domains_step.domain_table(j.cfg)
+    assert rows[0][headers.index("sign-in")] == "Own Casdoor"
 
 
 # ── row management basics ───────────────────────────────────────────────────────────

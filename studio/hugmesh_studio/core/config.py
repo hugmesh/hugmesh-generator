@@ -25,12 +25,15 @@ see specs-orangepi3-lts/README.md).
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import copy
 import getpass
 import json
 import os
 import re
 import shlex
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, asdict, MISSING
 from typing import Any
 
@@ -792,25 +795,40 @@ SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password")
 # file whenever the KEYS manifest carries no .vault block (the manifest still wins).
 # The token and unseal key are custody material: they ride the KEYS stick
 # (vault/token, vault/unseal-key), never a flag and never the image.
-VAULT_FIELDS = ("vault_addr", "vault_kv_mount", "vault_base_path")
+# The INTERNAL/EXTERNAL split (issue #335): ``vault_addr`` is the address a node
+# reaches Vault at from INSIDE the mesh (the one that was always here, same key and
+# same --vault-addr flag), ``vault_external_addr`` the same Vault as reached from
+# OUTSIDE it (an operator laptop, a CI runner, a second site). The external one is
+# OPTIONAL and OMIT-WHEN-EMPTY at every layer — argv, and the baked vault.conf line —
+# so every pre-#335 flow keeps its bytes.
+VAULT_FIELDS = ("vault_addr", "vault_external_addr", "vault_kv_mount",
+                "vault_base_path")
 VAULT_KV_MOUNT_DEFAULT = "secret"       # the builders' own default (brand.conf VAULT_KV_MOUNT)
 # A KV mount / base path is a Vault path prefix: alnum plus . _ - / (no shell or
 # sed metacharacters — the value lands in a root-read KEY=VALUE file).
 _VAULT_PATH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 
 
-def vault_field_error(addr: str, kv_mount: str, base_path: str) -> str:
-    """The ONE fail-closed rule for the vault trio, shared by validate_identity()
+def vault_field_error(addr: str, kv_mount: str, base_path: str,
+                      external_addr: str = "") -> str:
+    """The ONE fail-closed rule for the vault fields, shared by validate_identity()
     (argv) and both faces' inline notes (GUI VaultPage / TUI VaultScreen): "" when
     the combination is valid, else a LAY-USER sentence.
 
-    Empty address = the offline default, and it must carry NO residue (a mount or
-    base path with nowhere to point is a half-configured store, never silently
-    ignored — the idp=casdoor precedent). A set address must be https:// (the
-    secrets channel's trust anchor) and the two paths must be plain Vault path
-    prefixes."""
+    Empty INTERNAL address = the offline default, and it must carry NO residue (a
+    mount, base path or external address with nowhere to point is a half-configured
+    store, never silently ignored — the idp=casdoor precedent). A set address must be
+    https:// (the secrets channel's trust anchor) and the two paths must be plain
+    Vault path prefixes.
+
+    ``external_addr`` is keyword-last and defaults to "" on purpose: every pre-#335
+    3-argument caller (and the builders' mirrored _validate_vault) keeps working
+    unchanged. It must be https:// for the same trust-anchor reason, and it must
+    DIFFER from the internal one — one Vault reached at one address needs only the
+    internal field, and two identical addresses are a copy/paste, not a split."""
     if not addr:
-        stray = [n for n, v in (("KV mount", kv_mount), ("base path", base_path)) if v]
+        stray = [n for n, v in (("external address", external_addr),
+                                ("KV mount", kv_mount), ("base path", base_path)) if v]
         if stray:
             return (f"{' and '.join(stray)} set but no Vault address — clear "
                     "them, or enter the address they belong to")
@@ -818,10 +836,200 @@ def vault_field_error(addr: str, kv_mount: str, base_path: str) -> str:
     if not _IDP_URL_RE.fullmatch(addr):
         return ("the Vault address must be an https:// URL (letters, digits and "
                 "._:/%=+- only) — it is the secrets channel's trust anchor")
+    if external_addr:
+        if not _IDP_URL_RE.fullmatch(external_addr):
+            return ("the external Vault address must be an https:// URL (letters, "
+                    "digits and ._:/%=+- only) — it is the same secrets channel")
+        if external_addr == addr:
+            return ("the external Vault address is the same as the internal one — "
+                    "clear it; one address reached from everywhere needs no split")
     if kv_mount and not _VAULT_PATH_RE.fullmatch(kv_mount):
         return "the KV mount must be a plain Vault path (letters, digits and ._/- only, max 128)"
     if base_path and not _VAULT_PATH_RE.fullmatch(base_path):
         return "the base path must be a plain Vault path (letters, digits and ._/- only, max 128)"
+    return ""
+
+
+# ── base CA certificates (issue #335) ────────────────────────────────────────────
+# The operator's own certificate authorities, added as PEM FILES on the Vault step
+# and offered per domain on the Domains step (``ImageConfig.domain_ca``). These are
+# RECORDED ONLY: no builder script parses a CA flag, nothing copies a PEM into an
+# image, a trust store or a KEYS stick, and no manifest emitter carries the per-domain
+# choice yet. Both faces say exactly that (the "recorded, not yet consumed" label the
+# KV mount / base path already wear) rather than implying a wiring that does not
+# exist — a GUI knob that silently does nothing is this repo's named failure mode.
+#
+# What IS real here is the CHECK: a file added to the list is parsed as a PEM
+# certificate before it can be added, so the list cannot fill with files that are not
+# certificates at all. Parsing is deliberately dependency-light: the BEGIN/END
+# CERTIFICATE framing and the base64 body are decoded with the standard library, and
+# the SUBJECT + EXPIRY are read only when python-cryptography happens to be installed
+# (it is NOT a studio requirement — the urwid/TUI precedent: degrade, never hard-fail).
+CA_CERT_MAX_BYTES = 1 << 20             # 1 MiB: a CA bundle is kilobytes; refuse a blob
+_PEM_CERT_RE = re.compile(
+    r"-----BEGIN CERTIFICATE-----\s*(?P<body>[A-Za-z0-9+/=\s]+?)\s*"
+    r"-----END CERTIFICATE-----")
+
+
+def _pem_der_blocks(text: str) -> list[bytes]:
+    """Every decodable DER body in a PEM text, in file order ([] = none)."""
+    out: list[bytes] = []
+    for m in _PEM_CERT_RE.finditer(text):
+        try:
+            der = base64.b64decode("".join(m.group("body").split()), validate=True)
+        except (binascii.Error, ValueError):
+            continue
+        if der:
+            out.append(der)
+    return out
+
+
+def _der_parse_error(der: bytes) -> str:
+    """"" when ``der`` really is an X.509 certificate — AND "" when python-cryptography
+    is not installed, because then nobody here can tell. Otherwise the failing
+    exception's type name.
+
+    This is the DEPTH knob on :func:`ca_cert_error`. PEM framing plus a decodable
+    base64 body is NOT proof of a certificate: a file holding BEGIN CERTIFICATE over
+    ``aGVsbG8gd29ybGQ=`` ("hello world") passes both and is not one. With the optional
+    wheel present we parse for real and refuse that; without it the stdlib framing
+    check stands alone and we accept — the urwid precedent (degrade, never hard-fail,
+    and never refuse what this host cannot actually disprove)."""
+    try:
+        from cryptography import x509                      # optional, see docstring
+    except ImportError:
+        return ""
+    try:
+        x509.load_der_x509_certificate(der)
+    except Exception as exc:                               # noqa: BLE001 - any parse failure
+        return type(exc).__name__
+    return ""
+
+
+def ca_cert_error(path: str) -> str:
+    """The ONE fail-closed rule for ONE base CA certificate file: "" when the file is
+    a PEM certificate, else a LAY-USER sentence naming what is wrong.
+
+    Shared by the GUI picker, the TUI ``ca`` command and validate_identity, so what
+    one face refuses every face refuses. Reads at most CA_CERT_MAX_BYTES; a directory,
+    an unreadable file, a DER-only .crt and a PEM PRIVATE KEY are all named for what
+    they are rather than lumped into one 'invalid file'.
+
+    HOW MUCH "" ACTUALLY PROMISES depends on the host: BEGIN/END framing and a
+    decodable base64 body always, plus a real X.509 parse when python-cryptography is
+    importable (see :func:`_der_parse_error`). Without that optional wheel a
+    well-framed non-certificate is accepted, and the row then reads "could not read
+    its fields" instead — honest, but weaker. It is never a TRUST decision either
+    way: nothing here copies the PEM into an image."""
+    if not path:
+        return "no certificate file given"
+    if not os.path.isfile(path):
+        return (f"{os.path.basename(path) or path}: not a readable file "
+                "(moved, or a directory)")
+    try:
+        size = os.path.getsize(path)
+        if size > CA_CERT_MAX_BYTES:
+            return (f"{os.path.basename(path)}: {size} bytes is too large for a CA "
+                    f"certificate (limit {CA_CERT_MAX_BYTES})")
+        with open(path, "rb") as fh:
+            raw = fh.read(CA_CERT_MAX_BYTES + 1)
+    except OSError as exc:
+        return f"{os.path.basename(path)}: cannot read it ({exc.strerror or exc})"
+    text = raw.decode("utf-8", "replace")
+    blocks = _pem_der_blocks(text)
+    if blocks:
+        why = _der_parse_error(blocks[0])
+        if why:
+            return (f"{os.path.basename(path)}: its BEGIN CERTIFICATE block decodes, "
+                    f"but what comes out is not an X.509 certificate ({why}) — the "
+                    "file is corrupted, or is some other PEM renamed .pem/.crt")
+        return ""
+    if "-----BEGIN CERTIFICATE-----" in text:
+        return (f"{os.path.basename(path)}: has a BEGIN CERTIFICATE line but its "
+                "body is not valid base64 — the file looks truncated or edited")
+    if "-----BEGIN" in text and "PRIVATE KEY" in text:
+        return (f"{os.path.basename(path)}: this is a PRIVATE KEY, not a certificate "
+                "— never add a key here; pick the CA's public .pem/.crt")
+    return (f"{os.path.basename(path)}: no -----BEGIN CERTIFICATE----- block "
+            "(a DER/.der or PKCS#12 file needs converting to PEM first)")
+
+
+def describe_ca_cert(path: str) -> str:
+    """A one-line 'subject · expires YYYY-MM-DD' for a PEM the caller already checked
+    with :func:`ca_cert_error`, or a short honest stand-in when it cannot be read.
+
+    python-cryptography is OPTIONAL (not in studio/requirements.txt): without it the
+    PEM is still structurally verified and the line says so instead of guessing."""
+    try:
+        with open(path, "rb") as fh:
+            blocks = _pem_der_blocks(fh.read(CA_CERT_MAX_BYTES + 1)
+                                     .decode("utf-8", "replace"))
+    except OSError:
+        return "unreadable"
+    if not blocks:
+        return "not a PEM certificate"
+    extra = f" (+{len(blocks) - 1} more in file)" if len(blocks) > 1 else ""
+    try:
+        from cryptography import x509                      # optional, see docstring
+    except ImportError:
+        return f"PEM certificate, {len(blocks[0])} bytes DER{extra} " \
+               "(install python-cryptography to show subject and expiry)"
+    try:
+        cert = x509.load_der_x509_certificate(blocks[0])
+        subject = cert.subject.rfc4514_string()
+        # not_valid_after_utc is cryptography >= 42; the naive not_valid_after is the
+        # spelling before that and is deprecated after it. Try the current one first
+        # and fall back, so a host with an older wheel shows the date rather than the
+        # "could not read its fields" line (which would be true but unhelpful).
+        after = getattr(cert, "not_valid_after_utc", None) or cert.not_valid_after
+        expiry = after.date().isoformat()
+    except Exception as exc:                               # noqa: BLE001 - any parse failure
+        return f"PEM certificate; could not read its fields ({type(exc).__name__}){extra}"
+    return f"{subject} · expires {expiry}{extra}"
+
+
+def base_ca_certs_error(paths: Sequence[str], *, check_readable: bool = True) -> str:
+    """"" when every listed base CA certificate is a readable PEM and the list has no
+    duplicates, else the FIRST problem as a lay sentence. The empty list (the native
+    default) is valid and emits nothing anywhere.
+
+    ``check_readable=False`` keeps the STRUCTURAL rules (a non-string entry, a
+    duplicate) and drops the on-disk ones. That is the split validate_identity needs:
+    a duplicate is wrong on every machine and at every hour, while "this PEM is not
+    readable right now" is a fact about THIS host at THIS moment. base_ca_certs
+    reaches no argv, no image and no manifest, so an unreadable path must never be
+    able to block a build that does not depend on it — a config carrying CA paths has
+    to stay portable between machines, and a headless / --print-command operator has
+    no repair UI. The two faces call this WITH the readability check and say so
+    inline, which is where an operator can actually act on it."""
+    seen: set[str] = set()
+    for p in paths:
+        if not isinstance(p, str):
+            return f"base CA certificate list holds a {type(p).__name__}, not a path"
+        if p in seen:
+            return f"{os.path.basename(p)} is listed twice — remove the duplicate"
+        seen.add(p)
+        if check_readable:
+            err = ca_cert_error(p)
+            if err:
+                return err
+    return ""
+
+
+def domain_ca_error(domain_ca: Mapping[str, str], base_ca_certs: Sequence[str]) -> str:
+    """"" when every per-domain base-CA choice names a certificate the config actually
+    carries, else a lay sentence. A domain with NO entry (the default, and every
+    pre-#335 config) is valid: absent == "whatever the mesh already trusts"."""
+    listed = set(base_ca_certs)
+    for dom, cert in domain_ca.items():
+        if not isinstance(dom, str) or not isinstance(cert, str):
+            return "the per-domain base CA table must map a domain name to a path"
+        if not cert:
+            continue                    # explicit "none" is the same as absent
+        if cert not in listed:
+            return (f"domain {dom} names base CA {os.path.basename(cert)}, which is "
+                    "not in the certificate list — add the PEM back, or clear the "
+                    "domain's choice")
     return ""
 
 
@@ -922,7 +1130,11 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     "idp_jwks": _X86_RPI5,
     # mesh secrets store (#224) — the two node builders bake /etc/hugmesh/vault.conf;
     # the empty address emits nothing (byte-identity), so the probe supplies one.
-    "vault_addr": _X86_RPI5, "vault_kv_mount": _X86_RPI5, "vault_base_path": _X86_RPI5,
+    # vault_external_addr (#335) rides the same two builders and the same rule.
+    # base_ca_certs / domain_ca are ABSENT on purpose: they emit no flag anywhere, so
+    # a capability-table entry would claim a builder surface that does not exist.
+    "vault_addr": _X86_RPI5, "vault_external_addr": _X86_RPI5,
+    "vault_kv_mount": _X86_RPI5, "vault_base_path": _X86_RPI5,
     # tor / character-studio / character-forge / services.
     "tor_onion_service": _X86, "character_studio": _X86_RPI5,
     "character_forge": _X86_RPI5,
@@ -2606,9 +2818,19 @@ class ImageConfig:
     # A set address threads --vault-addr [--vault-kv-mount] [--vault-base-path]; the
     # builders bake /etc/hugmesh/vault.conf (connection facts only — the token and
     # unseal key stay on the KEYS stick). vault_field_error() fail-closes the trio.
-    vault_addr: str = ""               # --vault-addr https://… (VAULT_FIELDS)
+    vault_addr: str = ""               # --vault-addr https://… INTERNAL (VAULT_FIELDS)
+    vault_external_addr: str = ""      # --vault-external-addr https://… (#335; "" = no such line in vault.conf)
     vault_kv_mount: str = ""           # --vault-kv-mount ("" = the builder default "secret")
     vault_base_path: str = ""          # --vault-base-path ("" = the builder default: the brand slug)
+    # ── base CA certificates (#335) — RECORDED ONLY, and labelled so on both faces.
+    # ``base_ca_certs`` is the operator's list of PEM files (absolute paths, checked
+    # by ca_cert_error before anything can add one); ``domain_ca`` maps a domain NAME
+    # to one of those paths ("" / absent = whatever the mesh already trusts). Neither
+    # reaches to_cli_args, any builder or any manifest: NO builder script parses a CA
+    # flag, so emitting one would be a knob that silently does nothing. Empty
+    # list + empty dict are the native defaults and keep argv byte-identical.
+    base_ca_certs: list[str] = field(default_factory=list)
+    domain_ca: dict[str, str] = field(default_factory=dict)
     # ── hardware ──
     gpu_driver: str = "auto"           # auto|nvidia|amd-free|amd-pro|intel|none
     nvidia_cuda: bool = False          # --nvidia-cuda (CUDA bake for GPU/edge-AI images; x86)
@@ -2925,6 +3147,16 @@ class ImageConfig:
             if k in d:
                 v = cls._tri_explicit(d[k], k)
                 d[k] = "" if v is None else v
+        # base CA certificates (#335): tolerate `null` / a hand-edited scalar the same
+        # way "domains": null is tolerated above — treat it as ABSENT (the native
+        # empty default) rather than constructing a config whose list field holds a
+        # string. Real content is still fail-closed at validate_identity, which is
+        # where a path that is not a PEM (or a domain naming a dropped one) is named.
+        for _k in ("base_ca_certs",):
+            if _k in d and not isinstance(d[_k], (list, tuple)):
+                d.pop(_k)
+        if "domain_ca" in d and not isinstance(d["domain_ca"], dict):
+            d.pop("domain_ca")
         # MIGRATE the pre-2026-08-26 spelling of the post-build device-test opt-in.
         # from_dict filters unknown keys, so without this a config saved under the old
         # name would load with the opt-in silently OFF — the `games` precedent above:
@@ -3180,9 +3412,27 @@ class ImageConfig:
         # land in the root-read /etc/hugmesh/vault.conf, so charset + combination are
         # enforced HERE, through the ONE predicate both faces' inline notes use.
         vault_err = vault_field_error(self.vault_addr, self.vault_kv_mount,
-                                      self.vault_base_path)
+                                      self.vault_base_path, self.vault_external_addr)
         if vault_err:
             raise IdentityValidationError(f"vault: {vault_err}")
+        # ── base CA certificates (#335). They reach NO argv, NO image and no
+        # manifest, so this is not an emission guard. Only the STRUCTURAL rules are
+        # enforced here — a non-string entry, a duplicate, a domain naming a
+        # certificate the config does not carry — because those are wrong on every
+        # machine and would make a saved config self-contradictory.
+        #
+        # READABILITY IS DELIBERATELY NOT ENFORCED (check_readable=False). A recorded
+        # fact that changes no image must never be able to block a build: a config
+        # written on one laptop and opened on another, or one whose PEM sits on a
+        # volume that is not mounted this morning, would otherwise raise here and stop
+        # a build that never depended on the file. The two faces DO check readability
+        # and say so inline, which is the one place an operator can act on it.
+        ca_err = base_ca_certs_error(self.base_ca_certs, check_readable=False)
+        if ca_err:
+            raise IdentityValidationError(f"base CA: {ca_err}")
+        ca_err = domain_ca_error(self.domain_ca, self.base_ca_certs)
+        if ca_err:
+            raise IdentityValidationError(f"base CA: {ca_err}")
         # ── managed backing services (I8/M2) — fail-closed at the earliest boundary.
         # Each id/endpoint flows onto --managed-service argv AND the root-baked
         # backing-services.conf, so both the known-set membership and the endpoint charset
@@ -3455,15 +3705,22 @@ class ImageConfig:
         return a
 
     def _vault_args(self) -> list[str]:
-        """--vault-addr [--vault-kv-mount] [--vault-base-path] — the mesh secrets store
-        (#224; parsed by the x86 + rpi5 node builders ONLY). Emitted ONLY when an
-        address is set: the empty default (offline/USB-only delivery) emits NOTHING,
-        so every existing flow's argv stays byte-identical. validate_identity()
-        already fail-closed the combination + charset before emission; the two
-        optional paths ride only when the operator overrode the builder default."""
+        """--vault-addr [--vault-external-addr] [--vault-kv-mount] [--vault-base-path]
+        — the mesh secrets store (#224, split internal/external in #335; parsed by the
+        x86 + rpi5 node builders ONLY). Emitted ONLY when the INTERNAL address is set:
+        the empty default (offline/USB-only delivery) emits NOTHING, so every existing
+        flow's argv stays byte-identical. validate_identity() already fail-closed the
+        combination + charset before emission; the three optional values ride only
+        when the operator set them.
+
+        NOTHING is emitted for base_ca_certs / domain_ca: no builder parses a CA flag.
+        They are recorded in the saved config and read by the two GUI/TUI faces, and
+        the copy on both says so."""
         if not self.vault_addr:
             return []
         a = ["--vault-addr", self.vault_addr]
+        if self.vault_external_addr:
+            a += ["--vault-external-addr", self.vault_external_addr]
         if self.vault_kv_mount:
             a += ["--vault-kv-mount", self.vault_kv_mount]
         if self.vault_base_path:
