@@ -386,6 +386,65 @@ kubectl config use-context "kind-${CLUSTER_NAME}" >/dev/null
 kubectl version >/dev/null 2>&1 || { echo "cluster not reachable after kind create/export" >&2; exit 1; }
 
 # ─────────────────────────────────────────────────────────────────────────
+# 1b) EGRESS PREFLIGHT — can anything inside this node reach the outside?
+#
+# hugmesh-generator#349. On 2026-09-10 this lane ran for two days with no
+# outbound connectivity at all: the host had lost every docker netfilter table
+# (`nft list tables` returned only `inet firewalld`, whose filter_FORWARD ends
+# `reject with icmpx admin-prohibited`, and the docker bridges belong to no
+# firewalld zone). Nineteen pods sat in ImagePullBackOff past thirteen thousand
+# attempts while `kubectl get nodes` reported Ready.
+#
+# The check is RAW TCP and deliberately not a name lookup. Docker's embedded
+# resolver runs in the HOST network namespace, so it keeps answering through
+# this outage — which is why every error in the logs read
+#   dial tcp: lookup quay.io on 172.18.0.1:53: read udp ...: i/o timeout
+# and looked exactly like DNS. A resolution-based preflight reports GREEN
+# through the precise failure it exists to catch.
+# ─────────────────────────────────────────────────────────────────────────
+if [ "${SKIP_EGRESS_PREFLIGHT:-0}" != "1" ]; then
+  _egress_node="${CLUSTER_NAME}-control-plane"
+  _egress_ok=0
+  for _hp in 1.1.1.1:443 8.8.8.8:53 9.9.9.9:443; do
+    _h="${_hp%%:*}"; _p="${_hp##*:}"
+    if docker exec "${_egress_node}" timeout 4 bash -c "exec 3<>/dev/tcp/${_h}/${_p}" >/dev/null 2>&1; then
+      _egress_ok=1; break
+    fi
+  done
+  if [ "${_egress_ok}" -eq 0 ]; then
+    cat >&2 <<'EGRESSFAIL'
+
+  ✗ The kind node cannot open a TCP connection to ANY public address.
+
+    This is almost certainly NOT DNS, whatever the error text later says.
+    Docker's embedded resolver answers from the host's namespace, so names keep
+    resolving while nothing can actually connect.
+
+    Check whether docker still owns any netfilter rules:
+
+      docker run --rm --net=host --privileged alpine:3.20 \
+        sh -c 'apk add -q nftables; nft list tables'
+
+    If that prints only `table inet firewalld`, docker's rules are gone. They
+    are installed once, at daemon start — `docker network create` does NOT
+    reinstall them. Restart the daemon:
+
+      sudo rc-service docker restart      # OpenRC / Gentoo
+      sudo systemctl restart docker       # systemd
+
+    Expect the kind node NOT to survive that restart; re-run this script
+    afterwards to rebuild.
+
+    To proceed anyway (an air-gapped host with every image already loaded):
+      SKIP_EGRESS_PREFLIGHT=1 make kind-up
+
+EGRESSFAIL
+    exit 1
+  fi
+  log "Egress preflight: the node can reach the internet over raw TCP"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────
 # 2) Label the single node with every capability the curated app subset
 #    needs. Discovered by grepping the actual manifests (not guessed):
 #      - hugmesh.net/pki=true         (vault, vault-pki-init, casdoor +
@@ -1779,6 +1838,19 @@ verify_mtls_issuance || {
 
 # Reached only after verify_mtls_issuance() proved a real, chaining certificate
 # exists — so, like the SSO line above, this is a claim with evidence behind it.
+# hugmesh-generator#349: say plainly, here, whether this cluster can actually
+# run anything. A bring-up that exits 0 while every app image is absent is how
+# this lane stayed dead for two days. Report-only — the documented order is
+# `make kind-up` THEN `make kind-images`, so a missing first-party image at
+# this exact moment is expected, not an error. `make kind-doctor` is the same
+# check with teeth.
+if [ -x "${REPO_ROOT}/scripts/kind-doctor.sh" ]; then
+  echo
+  KIND_DOCTOR_WARN_ONLY=1 KIND_CLUSTER_NAME="${CLUSTER_NAME}" \
+    bash "${REPO_ROOT}/scripts/kind-doctor.sh" || true
+  echo
+fi
+
 log "Done. Cluster '${CLUSTER_NAME}' is left running for the next validation step."
 echo "    kubeconfig context: kind-${CLUSTER_NAME}"
 echo "    ArgoCD admin password: kubectl -n ${ARGOCD_NS} get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"

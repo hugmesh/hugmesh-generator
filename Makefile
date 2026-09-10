@@ -1328,6 +1328,19 @@ kind-addon-check: ## offline: prove a KIND_ADDONS selection reaches bootstrap-ki
 kind-down: ## delete the kind cluster
 	kind delete cluster --name $${KIND_CLUSTER_NAME:-hugmesh-local}
 
+# kind-doctor — the standing "can this cluster actually run the mesh?" check.
+#
+# hugmesh-generator#349: on 2026-09-10 this lane had been dead for two days
+# while `kind get clusters` listed the cluster and `kubectl get nodes` said
+# Ready. Nineteen pods were in ImagePullBackOff and the failed-pull counter had
+# passed thirteen thousand. Two causes, neither detected anywhere: the host had
+# lost docker's netfilter rules (so nothing could leave the bridge, while the
+# error text said "lookup ... i/o timeout" and read like DNS), and `make
+# kind-images` had never run so no first-party image existed in the node at all.
+# This target reports; it never repairs.
+kind-doctor: ## is the kind cluster capable of running the mesh? (egress, images, pods, ArgoCD)
+	bash scripts/kind-doctor.sh
+
 # Offline honesty gate for the two ways kind-up used to report work it had not
 # done: an identity seed that exits 0 through Casdoor's HTTP-200 denials, and a
 # "idempotent" KV seed that re-minted every password onto Postgres volumes that
@@ -1335,6 +1348,13 @@ kind-down: ## delete the kind cluster
 # cluster, no kind, no docker, no network. Also runs in CI (lint:kind-bootstrap-honesty).
 kind-honesty: ## offline: prove the kind SSO harness cannot report an unperformed seed
 	bash tests/scripts/test-kind-bootstrap-honesty.sh
+
+# The doctor's own guard. Offline: stubs docker and kubectl and replays both
+# halves of the 2026-09-10 outage (no egress; no first-party image) to prove the
+# check actually goes red on each. Seven mutations of scripts/kind-doctor.sh
+# were run against it and all seven were killed.
+kind-doctor-test: ## offline: prove kind-doctor detects the outage it was written for
+	bash tests/scripts/test-kind-doctor.sh
 
 # ── local browsing — put ANY front door in THIS machine's browser
 # Sits here because the kind lane is its first consumer, but it covers all
