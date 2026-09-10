@@ -1419,3 +1419,201 @@ def test_no_sessions_says_so_instead_of_offering_nothing(qapp, tmp_path,
     finally:
         w.close()
         w.deleteLater()
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# THE REPLICAS COLUMN AND THE RUNNING-MESH MONITOR (#336)
+#
+# Written after a refutation ran a 13-mutation battery against the original branch and
+# every mutation survived. Two of those mutations live on this page — raising the
+# emulated-device ceiling from 1 to 5, and dropping the QEMU page's hide_view_controls
+# — and both are covered here and in test_pages_qemu.py.
+#
+# THE COLUMN IS DELIBERATELY A SECOND SPELLING OF Start/Stop, and these tests pin that
+# rather than paper over it: Apply(1) must produce the byte-identical argv the Start
+# button produces, because a replica control that grew its own process lane is exactly
+# the divergence T3 removed from this page. See _REPLICAS_TIP.
+# ══════════════════════════════════════════════════════════════════════════════════
+
+def test_the_device_replica_ceiling_is_one_and_the_header_says_so(wiz):
+    """M10. An emulated device is ONE guest per built image: its MAC, mesh IP, ssh
+    port and container name are allocated per PLAN ROW, so a second instance collides
+    on all four and the runner has no verb to ask for one. Raising the ceiling offers
+    a number the runner would refuse. The ceiling is also in the HEADER text, because
+    a tooltip on the cell widget is unreachable until a session is picked."""
+    page = _page(wiz)
+    assert page_mod._HEADERS[page_mod._MCOL_REPLICAS] == "Replicas (0/1)"
+    head = page.devices.horizontalHeaderItem(page_mod._MCOL_REPLICAS)
+    assert head is not None and "no verb to ask for one" in head.toolTip()
+    assert "ADDS NO NEW CAPABILITY" in head.toolTip()
+    for row in page._rows:
+        assert row.replicas is not None
+        assert row.replicas.ceiling == 1
+        for _ in range(6):
+            row.replicas.bump(+1)
+        assert row.replicas.target == 1, "a device row offered more than one guest"
+
+
+def test_apply_one_runs_the_byte_identical_argv_the_start_button_runs(wiz, qapp,
+                                                                      mocked_spawn):
+    """The column's whole honesty claim, measured. If these two argvs ever differ,
+    the page has grown a second per-device start — the divergence T3 deleted."""
+    page = _page(wiz)
+    row = _row(page, "x86/backend")
+    row.start.click()
+    _finish(page, qapp)
+    via_button = list(mocked_spawn.last)
+
+    page2 = _page(wiz) if False else page          # same page, second press
+    idx = _index(page2, "x86/backend")
+    row.replicas.bump(+1)
+    assert row.replicas.target == 1
+    page2._apply_replicas(idx)
+    _finish(page2, qapp)
+    via_apply = list(mocked_spawn.last)
+    assert via_apply == via_button, (
+        "Apply(1) is supposed to BE the Start button, not a second spelling of it\n"
+        f"  button: {via_button}\n  apply : {via_apply}")
+
+
+def test_apply_zero_runs_the_stop_button_and_nothing_else(wiz, qapp, registry,
+                                                          mocked_spawn):
+    page = _page(wiz)
+    registry(_device("x86/backend"))
+    page._refresh_reality()
+    row = _row(page, "x86/backend")
+    assert row.up and row.replicas.target == 1
+    row.stop.click()
+    _finish(page, qapp)
+    via_button = list(mocked_spawn.last)
+
+    page._refresh_reality()
+    row = _row(page, "x86/backend")
+    row.replicas.target = 1                 # reality still says up in the registry
+    row.replicas.bump(-1)
+    page._apply_replicas(_index(page, "x86/backend"))
+    _finish(page, qapp)
+    assert list(mocked_spawn.last) == via_button
+    assert mocked_spawn.last[-2:] == ["--stop-device", "x86/backend"]
+
+
+def test_apply_with_nothing_to_change_runs_nothing(wiz, qapp, mocked_spawn):
+    """A press whose target already matches reality must not re-run a verb: on a
+    running device that would be a second `--only-exact` boot of a container that is
+    already up."""
+    page = _page(wiz)
+    row = _row(page, "x86/backend")
+    assert row.replicas.target == 0 and not row.up
+    page._apply_replicas(_index(page, "x86/backend"))
+    qapp.processEvents()
+    assert list(mocked_spawn) == [], "Apply ran a verb with nothing to change"
+
+
+def test_the_replica_target_follows_reality_until_the_operator_moves_it(wiz, registry):
+    """The observed count is the row's OWN liveness — the same answer Start and Stop
+    are armed from — so the two controls can never disagree about whether the device
+    is up."""
+    page = _page(wiz)
+    row = _row(page, "x86/backend")
+    assert row.replicas.observed == 0 and row.replicas.target == 0
+    registry(_device("x86/backend"))
+    page._refresh_reality()
+    row = _row(page, "x86/backend")
+    assert row.up and row.replicas.observed == 1 and row.replicas.target == 1
+    assert not row.replicas.apply.isEnabled()
+    row.replicas.bump(-1)                          # operator is mid-decision
+    page._refresh_reality()                        # a poll tick lands
+    row = _row(page, "x86/backend")
+    assert row.replicas.target == 0, "the poll took the operator's target away"
+    assert row.replicas.count.text() == "1 → 0"
+
+
+def test_a_finished_verb_clears_the_replica_target(wiz, qapp, registry, mocked_spawn):
+    """One press, one ask. Cleared rather than snapped to a count, because the count
+    is re-read AFTER this and a target set from the pre-verb truth would re-arm Apply
+    against the post-verb one."""
+    page = _page(wiz)
+    row = _row(page, "x86/backend")
+    row.replicas.bump(+1)
+    assert row.replicas.pending
+    page._apply_replicas(_index(page, "x86/backend"))
+    _finish(page, qapp)
+    assert not _row(page, "x86/backend").replicas.pending
+
+
+def test_no_replica_control_is_live_while_a_verb_owns_the_page(wiz, registry):
+    page = _page(wiz)
+    registry(_device("x86/backend"))
+    page._refresh_reality()
+    page._set_running(True)
+    page._sync_controls()
+    for row in page._rows:
+        assert not row.replicas.apply.isEnabled()
+        assert not row.replicas.plus.isEnabled()
+        assert not row.replicas.minus.isEnabled()
+
+
+# ---- the running-mesh monitor mounted on this page --------------------------------
+
+def test_the_monitor_is_mounted_collapsed_greyed_and_starts_no_shell(wiz):
+    """PR #291's contract, on a second page: collapsed by default, greyed until
+    something is up, and MOUNTING IT STARTS NOTHING — no probe, no timer, no shell."""
+    page = _page(wiz)
+    sec = page.monitor
+    assert sec.monitor.scaling is True
+    assert sec.monitor.table.columnCount() == 7
+    assert not sec.section.is_expanded()
+    assert not sec.monitor.isEnabled()
+    assert not sec.timer.isActive()
+    assert getattr(sec, "_probe", None) is None, "mounting the monitor started a probe"
+    assert getattr(sec, "_scale_worker", None) is None
+
+
+def test_the_monitor_says_it_is_not_the_table_above_it(wiz):
+    """Two tables on one screen that both mean "the mesh": the rows above are emulated
+    QEMU guests this page boots, the section is the compose project and the kind
+    cluster on THIS workstation. Neither is a view of the other."""
+    page = _page(wiz)
+    note = page.monitor.monitor.note.text()
+    assert "not the emulated guests in the table above" in note
+    assert "THIS" in note
+
+
+def test_this_page_offers_no_second_make_view_launcher(wiz):
+    """M9's twin. `make view` binds loopback ports behind ONE session-owner guard;
+    a second launcher on a second page fights it for one session lock."""
+    page = _page(wiz)
+    w = page.monitor.monitor
+    assert not w.view_up_btn.isVisibleTo(w)
+    assert not w.view_down_btn.isVisibleTo(w)
+    assert "local-mesh page" in w.view_up_btn.toolTip()
+
+
+def test_leaving_and_hiding_the_page_stop_the_monitors_clock(wiz, qapp, registry):
+    page = _page(wiz)
+    page.monitor.section.toggle.setChecked(True)
+    qapp.processEvents()
+    assert page.monitor.timer.isActive()
+    page.hide()
+    qapp.processEvents()
+    assert not page.monitor.timer.isActive()
+    page.show()
+    qapp.processEvents()
+    page.monitor.timer.start()
+    page.cleanupPage()
+    assert not page.monitor.timer.isActive()
+
+
+def test_nothing_on_this_page_can_reach_a_modal(wiz):
+    """The repo's standing rule, re-checked over the code #336 added: a QMessageBox
+    reachable from validatePage / isComplete / initializePage / itemChanged hangs the
+    headless suite."""
+    import re
+    src = inspect.getsource(page_mod)
+    for name in ("validatePage", "isComplete", "initializePage", "itemChanged",
+                 "_arm_replicas", "_bump_replicas", "_apply_replicas"):
+        m = re.search(rf"\n    def {name}\b.*?(?=\n    def |\nclass |\Z)", src,
+                      re.S)
+        if m:
+            assert "QMessageBox" not in m.group(0)
+            assert ".exec(" not in m.group(0)
