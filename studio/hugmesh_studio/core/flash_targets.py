@@ -323,11 +323,19 @@ def flash_argv(target: FlashTarget, *, generator_dir: str, role: str, arch: str,
 # (unflavoured): it is only reachable through the "auto" pick, never mis-sold as
 # live/installer.
 FLAVOR_AUTO = "auto"
+# ``(\.xz)?`` on every arm, because --compress DEFAULTS ON (config.py ImageConfig.
+# compress = True) and x86/rpi5/jetson compress IMG_PATH while frite/orangepi*
+# compress LIVE_PATH+INSTALLER_PATH (config.py FLAVOR_MEDIA_PLATFORMS). Without it a
+# default build's ONLY image classified as "" (unflavoured) and every flavour pick
+# skipped — #337: a Pi/Jetson node build emits nothing BUT <name>.img.xz, so the whole
+# flash path went dark on the default settings.
 _FLAVOR_RES: tuple[tuple[str, re.Pattern], ...] = (
-    ("installer", re.compile(r"\.installer(-sb)?\.iso$", re.IGNORECASE)),
-    ("live", re.compile(r"\.live(-sb)?\.iso$", re.IGNORECASE)),
-    ("img", re.compile(r"\.img$", re.IGNORECASE)),
+    ("installer", re.compile(r"\.installer(-sb)?\.iso(\.xz)?$", re.IGNORECASE)),
+    ("live", re.compile(r"\.live(-sb)?\.iso(\.xz)?$", re.IGNORECASE)),
+    ("img", re.compile(r"\.img(\.xz)?$", re.IGNORECASE)),
 )
+# an artifact scripts/flash-disk.sh must stream through `xz -dc` instead of dd'ing raw.
+_COMPRESSED_RE = re.compile(r"\.(img|iso)\.xz$", re.IGNORECASE)
 # what each platform's BUILDER can emit (same evidence) — the GUI offers only these,
 # per the hide-inapplicable rule: a flavour the builder cannot produce would make the
 # flash plan skip 100% of the time.
@@ -403,13 +411,27 @@ def assignment_argv(a: FlashAssignment, *, generator_dir: str,
 # ── per-entry artifact tracking (the flash plan's entry_id → built-image map) ─────────
 # flashable extensions flash-disk.sh accepts, and the same kernel/initramfs/initrd/
 # squashfs blob filter its list_candidates() applies (they share the .img extension).
-_ARTIFACT_EXTS = (".img", ".iso")
+# ``.img.xz``/``.iso.xz`` are in the set because --compress defaults ON: the artifact a
+# default build leaves on disk IS the compressed one (out/sessions/<id>/
+# <brand>-x86-amd64-standalone-thick-<env>-<ts>.img.xz is what the 2026-09-08 standalone
+# run produced). flash-disk.sh streams those through `xz -dc` into dd — see its
+# COMPRESSED branch — so recognising them here does not invent a second write path.
+_ARTIFACT_EXTS = (".img", ".iso", ".img.xz", ".iso.xz")
 _ARTIFACT_BLOB_RE = re.compile(r"(^|-)(kernel|initramfs|initrd|squashfs)", re.IGNORECASE)
 
 
 def _is_flashable_artifact(name: str) -> bool:
     return (name.lower().endswith(_ARTIFACT_EXTS)
             and not _ARTIFACT_BLOB_RE.search(name))
+
+
+def is_compressed_artifact(name: str) -> bool:
+    """True for the ``.img.xz`` / ``.iso.xz`` shapes --compress leaves behind.
+
+    Read by the GUI's flash confirmation so the operator is told the image is
+    decompressed on the way to the disk (flash-disk.sh pipes `xz -dc` into dd), and
+    that the WRITTEN size is the uncompressed size, not the file size on disk."""
+    return bool(_COMPRESSED_RE.search(os.path.basename(name)))
 
 
 def snapshot_artifacts(work_dir: str) -> dict[str, float]:
@@ -462,12 +484,64 @@ def pick_artifact(artifacts: tuple[str, ...] | list[str], flavor: str) -> str:
     if not arts:
         return ""
     if flavor in (FLAVOR_AUTO, "", None):
-        imgs = [a for a in arts if a.lower().endswith(".img")]
+        # "newest .img else newest anything" — now flavour-classified rather than
+        # extension-matched, so the compressed twin of an .img still wins the
+        # preference. A default (--compress on) x86/rpi5/jetson build has ONLY the
+        # .img.xz, and the old endswith(".img") test scored it as "not an image" and
+        # handed back a live/installer ISO instead (#337).
+        imgs = [a for a in arts if classify_artifact_flavor(a) == "img"]
         return (imgs or arts)[0]
     for a in arts:
         if classify_artifact_flavor(a) == flavor:
             return a
     return ""
+
+
+# role/arch tokens as they appear IN AN ARTIFACT NAME. The same two anchors
+# scripts/flash-disk.sh uses (ARCH_GLOBS + ROLE_GLOBS): brand and platform are NOT
+# anchors (the brand is whatever --brand ran, `gentoo` on an unaffiliated build).
+_ARCH_TOKENS = {"x86": ("x86", "amd64"), "arm64": ("arm64", "aarch64")}
+
+
+def find_artifacts(work_dir: str, *, role: str, arch: str) -> tuple[str, ...]:
+    """Every flashable artifact in ``work_dir`` whose NAME carries this arch token and
+    this role token, absolute paths, newest first.
+
+    The FALLBACK resolution for a flash assignment whose per-entry snapshot diff
+    recorded nothing (a resumed build that rewrote no image, a restarted wizard, a
+    baseline taken over the wrong directory — #337 was the last of those). It is a
+    read-only ``os.listdir`` + name match; it never writes and never runs a builder.
+
+    Deliberately WEAKER than the recorded set and never silent: the role glob cannot
+    tell two same-role worklist entries apart, so what this returns is offered to the
+    operator in the flash confirmation BY FILENAME, with the candidate count, and is
+    written only if they accept. Returns () when nothing matches — the honest empty."""
+    arch_tokens = _ARCH_TOKENS.get((arch or "").lower(), ((arch or "").lower(),))
+    role_tokens = {(role or "").lower()}
+    try:
+        role_tokens |= {a.lower() for a in roles.aliases_of(role)}
+    except Exception:
+        pass
+    role_tokens.discard("")
+    out: list[tuple[str, float]] = []
+    try:
+        names = os.listdir(work_dir)
+    except OSError:
+        return ()
+    for name in names:
+        if not _is_flashable_artifact(name):
+            continue
+        low = name.lower()
+        if not any(f"-{a}-" in low for a in arch_tokens if a):
+            continue
+        if not any(f"-{r}-" in low for r in role_tokens):
+            continue
+        try:
+            out.append((name, os.stat(os.path.join(work_dir, name)).st_mtime))
+        except OSError:
+            continue
+    out.sort(key=lambda c: c[1], reverse=True)
+    return tuple(os.path.join(os.path.abspath(work_dir), n) for n, _ in out)
 
 
 def new_artifact(work_dir: str, baseline: dict[str, float]) -> str:
