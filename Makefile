@@ -1373,14 +1373,6 @@ kind-honesty: ## offline: prove the kind SSO harness cannot report an unperforme
 kind-doctor-test: ## offline: prove kind-doctor detects the outage it was written for
 	bash tests/scripts/test-kind-doctor.sh
 
-# The secrets half of the same question kind_route_closure.py asks about routes:
-# every ExternalSecret this tree APPLIES must read a Vault path the seed WRITES,
-# or be written down with a reason. hugmesh-generator#352 — external-secrets-config
-# sits permanently Degraded with four unexplained SecretSyncedError rows, which
-# makes a REAL secret failure indistinguishable from the background noise.
-kind-secret-closure: ## offline: every applied ExternalSecret reads a seeded Vault path, or is explained
-	bash tests/scripts/test-kind-secret-closure.sh
-
 # ── local browsing — put ANY front door in THIS machine's browser
 # Sits here because the kind lane is its first consumer, but it covers all
 # local lanes (LANE=kind|kind-svc|compose|device). The problem it solves is that

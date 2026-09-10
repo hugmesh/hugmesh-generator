@@ -20,6 +20,17 @@ delivery paths (or is explicitly classified out of scope, with evidence).
 Exit 1 = at least one unsatisfiable reference, a classification that no longer
 matches reality, or a conditional claim the manifests/seeder do not support.
 
+WHY THIS IS ALSO THE ANSWER TO #352. `external-secrets-config` sits permanently
+Degraded on the kind lane with six ExternalSecrets in SecretSyncedError, so a
+REAL secret-sync failure is indistinguishable from the expected noise. All six
+are accounted for here, by name, and the report prints each one: four
+(akkoma-admin, tuwunel-admin, coturn-shared-secret, mesh-bff-casdoor-client) in
+OPERATOR_SEEDED_PATHS with a reason quoted from the manifest that declares them;
+the velero pair under CONDITIONAL_FEATURES['managed-velero'], which is
+evidence-based rather than an auto-pass. The three remaining paths #352 names
+(azure-intune, device/, meshbridge-appservice) are printed under [not-rendered]:
+their own kustomization does not apply them.
+
 Driven by tests/scripts/test-eso-seed-contract.sh, which produces the run
 artifacts by executing the REAL scripts/gen-cluster-secrets.sh under a `vault`
 stub that records its argv instead of talking to a server, and which also runs
@@ -83,6 +94,7 @@ Deliberately dependency-light: PyYAML + python3 only. No cluster, no kubectl, no
 vault binary, no network. Secret VALUES are read (to prove non-emptiness and
 literal equality) and are NEVER printed.
 """
+import ast
 import json
 import os
 import re
@@ -95,8 +107,15 @@ VAR = re.compile(r"\{\{-?\s*\.([A-Za-z0-9_]+)")
 # ── classification: references this gate deliberately does NOT require ───────
 #
 # Nothing here is a silent whitelist. Every entry is PRINTED in the report with
-# its reason, and the anti-rot check fails if an entry no longer matches a live
-# reference — so an exemption cannot outlive the thing it excuses.
+# its reason, and an exemption cannot outlive the thing it excuses: it dies both
+# when nothing references it any more (the tier was removed) AND when the seeder
+# starts writing the path anyway (the gap was closed). The second half matters
+# because check (2) SKIPS every path listed here — an entry whose gap has been
+# closed is not merely untidy, it is a live reference nothing is guarding.
+#
+# The prose is load-bearing, so it is checked too: an entry with an EMPTY reason
+# and a key bound TWICE (legal Python — the last binding silently wins and the
+# first reason becomes dead text) both fail [classification-hygiene].
 
 # Vault KV paths gen-cluster-secrets.sh deliberately does not mint, because the
 # value is not the generator's to mint — either an operator supplies it out of
@@ -473,6 +492,41 @@ class ES:
         return out, "data"
 
 
+def duplicate_literal_keys(module_path):
+    """[(dict-name, key), ...] for keys bound TWICE in this module's own dict
+    literals.
+
+    A duplicate key in a dict literal is silently accepted by Python — the last
+    binding wins and the earlier value is discarded with no diagnostic — so the
+    built dict can never reveal it. Only the source can, hence the AST walk.
+    Returns [] (rather than raising) if the source cannot be read or parsed:
+    this is a hygiene check on the gate's own text, and it must not be able to
+    take the real checks down with it.
+    """
+    watched = ("OPERATOR_SEEDED_PATHS", "OFFLINE_UNDELIVERABLE",
+               "CONDITIONAL_FEATURES")
+    try:
+        tree = ast.parse(open(module_path, encoding="utf-8").read())
+    except (OSError, SyntaxError):
+        return []
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Dict):
+            continue
+        names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        name = next((n for n in names if n in watched), None)
+        if name is None:
+            continue
+        seen = set()
+        for k in node.value.keys:
+            if not isinstance(k, ast.Constant) or not isinstance(k.value, str):
+                continue
+            if k.value in seen:
+                found.append((name, k.value))
+            seen.add(k.value)
+    return found
+
+
 def main():
     if len(sys.argv) != 4:
         print(__doc__)
@@ -489,6 +543,38 @@ def main():
 
     def ok(check, msg):
         print(f"  PASS {check} {msg}")
+
+    # ── (0) the classification lists themselves must be reviewable ──────────
+    #
+    # Every excused entry is load-bearing: a path in OPERATOR_SEEDED_PATHS is
+    # SKIPPED by [online-seed] entirely, so the only thing standing between it
+    # and an unguarded reference is the prose beside it. Two ways that prose
+    # silently stops existing, neither of which any later check can see:
+    #
+    #   * an EMPTY reason still exempts, and the report prints a blank line
+    #     where a justification should be;
+    #   * a DUPLICATE key in the dict literal is legal Python — the last binding
+    #     silently wins and the earlier reason becomes dead text that a reviewer
+    #     reading the file will still count as live. The dict cannot show this
+    #     after the fact, so the module's own source is parsed to catch it.
+    for label, table in (("OPERATOR_SEEDED_PATHS", OPERATOR_SEEDED_PATHS),
+                         ("OFFLINE_UNDELIVERABLE", OFFLINE_UNDELIVERABLE)):
+        for key, why in sorted(table.items()):
+            if not str(why).strip():
+                bad("[classification-hygiene]",
+                    f"{label}['{key}'] has an EMPTY reason. An entry with no "
+                    f"justification still exempts the path and prints a blank "
+                    f"line in the report — write the reason or delete the entry.")
+    dupes = duplicate_literal_keys(__file__)
+    for label, key in dupes:
+        bad("[classification-hygiene]",
+            f"{label} binds '{key}' TWICE. Python keeps only the LAST reason "
+            f"and discards the first silently, so one of the two justifications "
+            f"is dead text that still reads as live — merge them into one entry.")
+    if not fails:
+        ok("[classification-hygiene]",
+           f"all {len(OPERATOR_SEEDED_PATHS) + len(OFFLINE_UNDELIVERABLE)} "
+           f"classification entries carry a non-empty, unshadowed reason")
 
     if missing_runs:
         # Never treat an absent artifact as a pass: without the isolated runs the
@@ -986,8 +1072,30 @@ def main():
            f"feature enabled")
 
     # ── (7) anti-rot: no classification entry may outlive its reference ──────
+    #
+    # An exemption dies TWO ways, and a list that only checks the first can
+    # still rot. (a) nothing references it any more — the tier was removed;
+    # (b) the seeder now WRITES it — the gap the entry excused has been closed,
+    # so the entry is documenting a limitation that no longer exists and the
+    # path is silently no longer gated by [online-seed] (which skips every key
+    # in OPERATOR_SEEDED_PATHS at check (2)).
+    #
+    # (b) is decided on OBSERVED `vault` argv from the recorded runs, not by
+    # pattern-matching the seeder's source. That matters: a write spelled
+    # through a variable or a loop (`p="${VAULT_KV_MOUNT}/${BASE}/x"; vault kv
+    # put "$p" ...`) is invisible to any regex over the script but shows up
+    # verbatim in vault.log, and a loop-written path does not read as unseeded
+    # the way a source-scraper would report it.
     live_paths = {r["key"] for _es, r in kv_refs if r["key"]}
     live_secrets = {f"{es.ns}/{es.tname}" for es in checked}
+    # {classified path -> every fully-qualified "<mount>/<key>" it resolves to}
+    full_for_path = {}
+    for es, r in kv_refs:
+        if not r["key"]:
+            continue
+        mount = stores[es.store]
+        full_for_path.setdefault(r["key"], set()).add(
+            f"{mount}/{r['key']}" if mount else r["key"])
     stale = 0
     for path in sorted(OPERATOR_SEEDED_PATHS):
         if path not in live_paths:
@@ -996,6 +1104,22 @@ def main():
                 f"OPERATOR_SEEDED_PATHS still excuses '{path}', but no checked "
                 f"ExternalSecret references it any more — delete the entry (or "
                 f"the reference moved and is now unguarded).")
+            continue
+        wrote = sorted(
+            f"{lbl}:{full}"
+            for full in full_for_path.get(path, ())
+            for lbl in sorted(runs)
+            if full in online[lbl]
+        )
+        if wrote:
+            stale += 1
+            bad("[stale-exemption]",
+                f"OPERATOR_SEEDED_PATHS still excuses '{path}' as something "
+                f"gen-cluster-secrets.sh cannot mint, but a recorded run shows "
+                f"it DOES `vault kv put` that path ({', '.join(wrote)}). The "
+                f"gap this entry documents is closed — delete the entry so the "
+                f"path goes back under [online-seed], which skips every "
+                f"classified path and is therefore NOT guarding it today.")
     for sec in sorted(OFFLINE_UNDELIVERABLE):
         if sec not in live_secrets:
             stale += 1

@@ -635,6 +635,93 @@ open(sys.argv[1] + "/cluster-domain", "w").write(dom + "\n")
 PY
 '
 
+# (n20) ANTI-ROT, the OTHER direction. (n6) kills an exemption whose reference
+# went away; this kills one whose REASON went away. The entry says the generator
+# cannot mint the path, but the seeder now writes it anyway. That is not merely
+# untidy: check (2) SKIPS every path in OPERATOR_SEEDED_PATHS, so a gap that has
+# been closed leaves the path permanently UNGUARDED while the list still claims
+# the hole is deliberate. Injected into the recorded argv rather than into the
+# seeder source on purpose - the rule is decided on what the seeder DID, so a
+# write spelled through a variable or a loop cannot hide from it.
+expect_catch "a classification entry the seeder has started writing anyway" \
+    "[stale-exemption]" "hugmesh/akkoma-admin" '
+python3 - '"${ALL_RUN_DIRS}"' <<PY
+import json, sys
+for d in sys.argv[1:]:
+    with open(d + "/vault.log", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(["kv", "put", "secret/hugmesh/akkoma-admin",
+                             "token=minted-after-all"]) + "\n")
+PY
+'
+
+# -- CLASSIFICATION HYGIENE: the exemption list is only worth its prose -------
+#
+# Both controls below mutate the CHECKER, not the tree, so they need their own
+# runner: expect_catch stages a cluster/seeder/runs triple and always invokes
+# ${CHECKER} itself. The COPY is what parses its own source, so a duplicate key
+# injected into the copy is what the copy reports.
+expect_catch_checker() { # <label> <want_check> <want_name> <python edit of $C>
+    local label="$1" want_check="$2" want_name="$3" inject="$4"
+    local C="${WORK}/neg-checker.py"
+    cp "${CHECKER}" "${C}"
+    if ! ( C="${C}" eval "${inject}" ); then
+        bad "negative control: ${label} (the injection itself failed)"
+        return
+    fi
+    if cmp -s "${CHECKER}" "${C}"; then
+        bad "negative control: ${label} (the injection did not change the checker)"
+        return
+    fi
+    local out rc
+    out="$(python3 "${C}" "${CLUSTER}" "${GCS}" "${RUNS}" 2>&1)"; rc=$?
+    if [ "${rc}" -eq 1 ] \
+        && grep -qF "FAIL ${want_check}" <<<"${out}" \
+        && grep -qF "${want_name}" <<<"${out}"; then
+        ok "negative control: ${label} -> caught by ${want_check}, naming '${want_name}'"
+    else
+        bad "negative control: ${label} NOT caught (rc=${rc}); wanted ${want_check} naming '${want_name}'. Output:"
+        sed 's/^/        /' <<<"${out}" | tail -25
+    fi
+}
+
+# (n21) An entry with an EMPTY reason still exempts the path from check (2) and
+# prints a blank line where the justification belongs - the list looks complete
+# and explains nothing.
+expect_catch_checker "a classification entry with an empty reason" \
+    "[classification-hygiene]" "hugmesh/cloudflared" '
+python3 - "$C" <<PY
+import sys
+q = chr(34)
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").read().splitlines(True)
+head = "    " + q + "hugmesh/cloudflared" + q + ":"
+i = next(n for n, l in enumerate(lines) if l.startswith(head))
+j = i + 1
+while lines[j].startswith("        " + q):
+    j += 1
+assert j > i + 1, "no reason body found to blank"
+lines[i + 1:j] = ["        " + q + q + ",\n"]
+open(p, "w", encoding="utf-8").write("".join(lines))
+PY
+'
+
+# (n22) A DUPLICATE key in the dict literal. Legal Python: the last binding wins
+# and the first reason is discarded with no diagnostic, so the BUILT dict cannot
+# reveal it and only the source can. A reviewer reading the file counts a reason
+# that is not in force.
+expect_catch_checker "a classification key bound twice, shadowing its first reason" \
+    "[classification-hygiene]" "TWICE. Python keeps only the LAST reason" '
+python3 - "$C" <<PY
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+s = s.replace("OPERATOR_SEEDED_PATHS = {",
+              "OPERATOR_SEEDED_PATHS = {\n    \"hugmesh/akkoma-admin\":\n"
+              "        \"a stale first reason that is silently discarded\",", 1)
+open(p, "w", encoding="utf-8").write(s)
+PY
+'
+
 # ── TOOLING PREFLIGHT: a missing tool must FAIL, and CI must not be able to opt out ──
 echo
 echo "-- tooling preflight: absent tooling is a hard failure, not a silent skip --"
