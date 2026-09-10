@@ -4,9 +4,14 @@ builder that flashes a built artifact to one through ``scripts/flash-disk.sh``.
 This module NEVER writes to a device and NEVER calls ``dd`` — detection is a pure
 ``lsblk``/sysfs read (no root, mirroring flash-disk.sh's "arg parse + --list work
 without root" contract), and the actual flash is delegated whole to
-``scripts/flash-disk.sh`` (typed-path confirm, child unmount, whole-disk refusal,
-size-fit check, the real ``dd``). The GUI adds its OWN typed-path confirm before ever
-passing ``--no-confirm`` (which only tells the script we already gated the destroy).
+``scripts/flash-disk.sh`` (child unmount, whole-disk refusal, size-fit check, the
+real ``dd``). The GUI gates the destroy with ONE OK/Cancel warning at the moment the
+flash starts (``gui.pages.progress.confirm_flash``, called from ``_start_flash``)
+before ever passing ``--no-confirm`` — which tells the script that gate already ran, so
+its own ``dl_confirm_destroy`` typed-path prompt is skipped. That single dialog is
+therefore the ONLY thing between the button and a whole-disk write on the GUI path
+(#337 asked for exactly one warning; the GUI's older typed-exact-device-path prompt was
+removed rather than stacked on top of it).
 
 Detection (``list_targets``) filters ``lsblk`` output to whole disks that look like a
 removable/USB/eMMC/SD installable target and are size-sane (1 GiB … ~256 GiB), and
@@ -294,12 +299,18 @@ def flash_argv(target: FlashTarget, *, generator_dir: str, role: str, arch: str,
                use_askpass: bool = True) -> list[str]:
     """Build the ``scripts/flash-disk.sh`` invocation that flashes ``target``.
 
-    ``--no-confirm`` is passed ONLY because the GUI performs its own typed-path confirm
-    before calling this (re-implementing dl_confirm_destroy's gate where the script has
-    no tty). The script still does dl_require_root, unmount, whole-disk refusal and the
-    size-fit check — we only ever invoke it, never re-implement dd. Root is obtained by
-    the caller's launcher (pkexec/sudo -A/sudo); ``use_askpass`` adds ``sudo -A`` here
-    for the copy-pasteable/no-tty case."""
+    ``--no-confirm`` is passed ONLY because the CALLER is expected to have gated the
+    destroy already — on the GUI path that is the single OK/Cancel warning in
+    ``ProgressPage._start_flash`` (#337), which replaced an earlier typed-exact-device-
+    path prompt and is now the only confirmation on that path. It suppresses the
+    script's own ``dl_confirm_destroy``, which cannot prompt anyway where there is no
+    tty. Everything else the script does still runs: dl_require_root, child unmount,
+    whole-disk refusal and the size-fit check — we only ever invoke it, never
+    re-implement dd. Root is obtained by the caller's launcher (pkexec/sudo -A/sudo);
+    ``use_askpass`` adds ``sudo -A`` here for the copy-pasteable/no-tty case.
+
+    Anything else that builds this argv INHERITS that contract: pass ``--no-confirm``
+    only from a path that has already asked a human."""
     argv: list[str] = []
     argv += ["sudo", "-A"] if use_askpass else []
     argv += [flash_script_path(generator_dir), "--role", role, "--arch", arch]

@@ -11,6 +11,7 @@ OK/Cancel warning that now gates every write.
 """
 import json
 import os
+import shutil
 import subprocess
 
 import pytest
@@ -688,10 +689,42 @@ def test_the_fallback_never_overrides_a_recorded_set_missing_the_flavour(monkeyp
                                                                          tmp_path):
     """A run that DID record artifacts, none of them the requested flavour, still
     skips with the reason — the fallback is only for an EMPTY record, never a way to
-    write an image the build is known not to have produced."""
+    write an image the build is known not to have produced.
+
+    This pins the GATE, not just the outcome: the requested flavour is 'img' and a
+    MATCHING .img.xz is sitting in the work dir, so find_artifacts()+pick_artifact()
+    WOULD return it. The only thing standing between that file and a whole-disk dd is
+    `and not self._entry_artifact_sets.get(a.entry_id)`. Drop that clause and this
+    test fails with an argv naming an image the run never recorded.
+
+    (An earlier form of this test asked for 'installer' with no installer on disk, so
+    the fallback returned "" either way and the test passed with the gate removed —
+    it named the gate without pinning it.)"""
     session = tmp_path / "sessions" / "s1"
     session.mkdir(parents=True)
-    _touch(session / f"{_REAL}.img.xz", 5000)         # an img IS on disk
+    stray = session / f"{_REAL}.img.xz"
+    _touch(stray, 5000)          # a MATCHING img is on disk, findable by arch+role
+    live = session / f"{_REAL}.live.iso"
+    _touch(live, 4000)           # ...but the run recorded only the live ISO
+    launched = []
+    a = ft.FlashAssignment(FAKE, "e1", "standalone-thick", "x86", str(session),
+                           flavor="img")
+    page = _page(monkeypatch, session_workdir=str(session), queue=[a],
+                 sets={"e1": (str(live),)}, answer=pg.FLASH_OK, launched=launched)
+    pg.ProgressPage._flash_next(page)
+    assert launched == [], f"the fallback wrote an UNRECORDED image: {launched}"
+    assert str(stray) not in "\n".join(" ".join(x) for x in launched)
+    assert "no 'img' artifact" in page.log.toPlainText()
+    assert os.path.basename(str(live)) in page.log.toPlainText()   # says what it DID build
+
+
+def test_the_fallback_is_skipped_when_the_recorded_set_lacks_an_installer(monkeypatch,
+                                                                          qapp,
+                                                                          tmp_path):
+    """The same gate for the flavour the operator actually picks on the node path —
+    kept from the original test so both flavours stay covered."""
+    session = tmp_path / "sessions" / "s1"
+    session.mkdir(parents=True)
     live = session / f"{_REAL}.live.iso"
     _touch(live, 4000)
     launched = []
@@ -717,3 +750,112 @@ def test_a_truly_empty_work_dir_still_skips_with_the_reason(monkeypatch, qapp,
     pg.ProgressPage._flash_next(page)
     assert launched == []
     assert "no artifact was recorded" in page.log.toPlainText()
+
+
+# ── the three gaps a skeptic's mutation battery found on this branch ──────────────────
+# Each of these was written against a MUTANT first: the production change was reverted /
+# broken, the test was confirmed FAILING, and only then was production restored.
+
+def _uncompressed_size_expr():
+    """The real ART_SIZE-for-a-compressed-artifact block, lifted OUT of flash-disk.sh.
+
+    Extracted rather than retyped so the test cannot drift from the script: delete the
+    block (or change the awk field index) and this returns the wrong number or raises."""
+    with open(_FLASH_SH, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+    start = next(i for i, l in enumerate(lines)
+                 if "xz --robot --list" in l and "ART_SIZE=" in l)
+    end = next(i for i, l in enumerate(lines[start:], start)
+               if "ART_SIZE" in l and "|| ART_SIZE=0" in l)
+    snippet = "\n".join(lines[start:end + 1])
+    assert "totals" in snippet, "the uncompressed-size block lost its awk selector"
+    return snippet
+
+
+@pytest.mark.skipif(not os.path.exists(_FLASH_SH), reason="flash-disk.sh not present")
+def test_the_fit_check_measures_the_UNCOMPRESSED_size_of_an_xz_artifact(tmp_path):
+    """The size that must fit on the stick is the size that gets WRITTEN.
+
+    The operator's real artifact is 3.0 G as a file and 51 GiB decompressed. Comparing
+    the FILE size against the device passes a 32 GiB stick and dd discovers the truth
+    mid-write, after the operator has already authenticated. `xz --robot --list` reports
+    the true size; field 5 of the `totals` row is the fragile part and is exactly what
+    this pins. Root-free: only the size arithmetic is exercised, never a device."""
+    if not shutil.which("xz"):
+        pytest.skip("xz not installed")
+    raw = tmp_path / "img"
+    payload = b"\0" * 1_000_003            # incompressible-size, highly compressible
+    raw.write_bytes(payload)
+    subprocess.run(["xz", "-1", str(raw)], check=True, timeout=120)
+    art = tmp_path / "img.xz"
+    assert art.exists()
+    assert art.stat().st_size < len(payload) / 10      # the file really is much smaller
+
+    r = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c",
+         f'ARTIFACT="{art}"\n{_uncompressed_size_expr()}\nprintf %s "${{ART_SIZE}}"'],
+        capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == str(len(payload)), (
+        f"the fit check would compare {r.stdout} bytes, not the {len(payload)} that "
+        f"actually get written")
+
+
+@pytest.mark.skipif(not os.path.exists(_FLASH_SH), reason="flash-disk.sh not present")
+def test_an_unreadable_xz_skips_the_fit_check_instead_of_dying(tmp_path):
+    """Fail-OPEN is the pre-existing contract for the fit check (a stat failure has
+    always yielded 0, which skips the comparison). Keep it: a truncated or non-xz file
+    must not abort the run before the script's own real gates get to speak."""
+    if not shutil.which("xz"):
+        pytest.skip("xz not installed")
+    art = tmp_path / "not-really.img.xz"
+    art.write_bytes(b"this is not an xz stream")
+    r = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c",
+         f'ARTIFACT="{art}"\n{_uncompressed_size_expr()}\nprintf %s "${{ART_SIZE}}"'],
+        capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "0"
+
+
+def test_the_post_build_auto_flash_is_gated_by_the_same_one_warning(monkeypatch, qapp,
+                                                                    tmp_path):
+    """MAJOR from the refutation: _maybe_auto_flash reaches a modal from a NON-click
+    path (the BuildPage checkbox, ticked hours earlier). #337 asks for the warning "at
+    the moment the flash is started", so it stays — but it must be THE seam, so a
+    headless run can never block. Cancel here must write nothing."""
+    session = tmp_path / "sessions" / "s1"
+    session.mkdir(parents=True)
+    art = session / f"{_REAL}.img.xz"
+    _touch(art, 5000)
+    launched = []
+    page = _page(monkeypatch, session_workdir=str(session), sets={},
+                 answer=pg.FLASH_CANCEL, launched=launched)
+    page.wiz.cfg.role = "standalone-thick"
+    page.wiz.cfg.platform = "x86"
+    page.wiz.flash_plan = None
+    page.wiz.flash_after = (True, FAKE)
+    asked = []
+    monkeypatch.setattr(pg, "confirm_flash",
+                        lambda *a, **k: (asked.append(a), pg.FLASH_CANCEL)[1])
+    pg.ProgressPage._maybe_auto_flash(page)
+    assert asked, "the opted-in auto flash wrote without asking"
+    assert launched == [], "Cancel on the auto path still launched a flasher"
+    assert "cancelled" in page.log.toPlainText().lower()
+
+
+def test_a_declined_flash_leaves_no_caveat_on_the_next_devices_warning(monkeypatch,
+                                                                      qapp, tmp_path):
+    """A caveat ("matched by arch+role only") belongs to ONE assignment. _start_flash
+    early-returns while a worker is still running, and it used to do so BEFORE clearing
+    the caveats — so a 3s wait timeout carried one device's warning text onto the next
+    device's dialog, which is the one place in this lane where wrong text is dangerous."""
+    page = _page(monkeypatch, session_workdir=str(tmp_path), sets={})
+    page._flash_caveats = ["matched by arch and role only — check the name"]
+
+    class _Busy:
+        def isRunning(self):
+            return True
+    page.flash_worker = _Busy()
+    pg.ProgressPage._start_flash(page, FAKE)
+    assert page._flash_caveats == []

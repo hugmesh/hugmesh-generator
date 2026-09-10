@@ -449,13 +449,22 @@ fi
 # The size that must fit on the disk is the size that gets WRITTEN. For a compressed
 # artifact that is the uncompressed size, not the file size — comparing the 3 GB .xz
 # against the device would have passed an image that expands to more than the disk
-# holds, and dd would only find out mid-write. `xz --robot --list` reports it exactly;
-# a 0 from a failed read simply skips the fit check, as it always did.
+# holds, and dd would only find out mid-write. `xz --robot --list` reports it exactly
+# (field 5 of the `totals` row); a 0 from a failed read simply skips the fit check, as
+# it always did.
+#
+# The regex guard is NOT belt-and-braces. `xz --robot --list` prints a ZEROED `totals`
+# row on stdout even when it FAILS on a truncated or non-xz file, and exits 1 — so
+# under `set -o pipefail` an `|| echo 0` fallback appends a SECOND zero and leaves
+# ART_SIZE as the two-line string "0\n0". That is not merely ugly: the integer fit
+# check below then dies with "[: integer expected", skipping the size comparison
+# entirely, seconds before dd starts writing. Take the first totals row and require
+# digits.
 ART_SIZE="$(stat -c '%s' "${ARTIFACT}" 2>/dev/null || echo 0)"
 if ${COMPRESSED}; then
     ART_SIZE="$(xz --robot --list "${ARTIFACT}" 2>/dev/null \
-                | awk '$1=="totals"{print $5}' || echo 0)"
-    [ -n "${ART_SIZE}" ] || ART_SIZE=0
+                | awk '$1=="totals"{print $5; exit}' || true)"
+    [[ "${ART_SIZE}" =~ ^[0-9]+$ ]] || ART_SIZE=0
 fi
 DEV_SIZE="$(blockdev --getsize64 "${DEVICE}" 2>/dev/null || echo 0)"
 ART_H="$(numfmt --to=iec "${ART_SIZE}" 2>/dev/null || echo "${ART_SIZE}B")"

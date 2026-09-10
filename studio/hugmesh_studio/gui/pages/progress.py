@@ -286,8 +286,10 @@ class _FlashWorker(QtCore.QThread):
     """Runs scripts/flash-disk.sh (via flash_targets.flash_argv) off the GUI thread,
     streaming its stdout into the log pane — the same QThread pattern as _WorklistWorker
     / build.py's _BuilderImageWorker. It NEVER re-implements dd: the script does the real
-    write plus dl_require_root / unmount / whole-disk refusal / size-fit. The GUI does its
-    OWN typed-path confirm before this ever launches (see ProgressPage._flash_clicked)."""
+    write plus dl_require_root / unmount / whole-disk refusal / size-fit. Every launch of
+    this worker goes through ProgressPage._start_flash, which shows the ONE OK/Cancel
+    warning first (#337) — that dialog, not a typed device path, is the gate, because the
+    argv carries --no-confirm and so skips the script's own dl_confirm_destroy."""
     line = Signal(str)
     done = Signal(int)
 
@@ -2482,7 +2484,17 @@ class ProgressPage(QtWidgets.QWizardPage):
         """The ONLY auto path: the BuildPage flash-with-build opt-in (default OFF). It
         fires only when opted-in, the run was all-ok, and the SAME device (matched on a
         stable identity, not just the /dev path) is STILL attached per a fresh read-only
-        scan — no typed confirm (the checkbox WAS the explicit opt-in).
+        scan.
+
+        SINCE #337 this path also raises the ONE OK/Cancel warning, because it funnels
+        through _start_flash like every other route to a write. That is a DELIBERATE
+        deviation from "a modal only in an explicit click handler": the checkbox was
+        ticked minutes-to-hours earlier on the BuildPage, and the issue asks for the
+        warning "at the moment the flash is started", which is here. It is safe
+        headlessly only because ``confirm_flash`` is a module-level seam every test
+        monkeypatches — do NOT inline a QMessageBox call here. Operator consequence,
+        stated plainly: ticking flash-with-build and walking away now leaves a waiting
+        dialog rather than a flashed stick.
 
         The identity check defends a TOCTOU device-swap: a build can run for hours, and
         on Linux /dev/sdX is enumeration-order dependent, so a bare path match could
@@ -2671,6 +2683,12 @@ class ProgressPage(QtWidgets.QWizardPage):
         — never from validatePage, initializePage, isComplete or itemChanged, where a
         modal deadlocks an offscreen test."""
         if self.flash_worker is not None and self.flash_worker.isRunning():
+            # Busy: this assignment never starts, so its caveats must not survive to be
+            # printed in the NEXT device's confirmation. (_flash_next sets _flash_caveats
+            # BEFORE calling us, and the clear below is only reached once we get past
+            # this guard — so without this line a 3s worker-wait timeout leaks one
+            # device's "matched by arch+role only" note onto a different device.)
+            self._flash_caveats = []
             return
         argv = argv or self._flash_argv_for(target)
         answer = confirm_flash(self, "Flash — this erases the device",
@@ -2707,8 +2725,10 @@ class ProgressPage(QtWidgets.QWizardPage):
         and "test what exists" are one code path — streaming its output into the
         shared log. Called only from an all-ok _on_finished_all: booting the
         artifacts of a failed run would assert against images that were never fully
-        produced. The checkbox WAS the explicit opt-in, so there is no second
-        confirm (the _maybe_auto_flash precedent)."""
+        produced. The checkbox WAS the explicit opt-in, and there is no second confirm
+        here — unlike _maybe_auto_flash, which since #337 DOES warn. The difference is
+        the blast radius, not the opt-in: this boots images in a container and writes no
+        block device, so there is nothing to destroy."""
         if not getattr(self.wiz.cfg, "qemu_device_tests", False):
             return
         workdir = self._session.workdir if self._session is not None else ""
