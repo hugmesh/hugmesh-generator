@@ -26,6 +26,14 @@ from .pages import (
     PhonePage, ProgressPage, QemuPage, QuestPage, RolePage, SessionsPage, SystemPage,
     UsersChoicePage, UsersPage, VaultPage, WelcomePage, WorklistPage,
 )
+# The local-mesh STEP pages (issue #334). Imported from their modules rather than
+# re-exported through gui/pages/__init__ on purpose: they are not WIZARD_PAGE_SLUGS
+# entries — that registry is one module per slug — they are the expansion of ONE slug,
+# and _LOCALMESH_STEPS below is the only place their order is declared.
+from .pages.localmesh import (
+    LocalMeshEnvPage, LocalMeshIdpPage, LocalMeshJoinPage, LocalMeshOverlayPage,
+    LocalMeshReviewPage, LocalMeshServicesPage, LocalMeshSourcePage)
+from .pages.localmesh_choice import LocalMeshChoicePage
 # re-exported for golive.py (and any other page set) — the helpers moved to
 # gui/pages/_widgets.py with the page split, but this module stays their
 # established import path.
@@ -40,7 +48,45 @@ __all__ = [
     "BrandingPage", "NetworkPage", "KeyZipPage",
     "DomainsChoicePage", "DomainsPage", "UsersChoicePage", "UsersPage",
     "SystemPage", "VaultPage", "HomePage", "BuildPage", "LaunchPage", "ProgressPage",
+    "LocalMeshChoicePage", "LocalMeshJoinPage", "LocalMeshEnvPage",
+    "LocalMeshSourcePage", "LocalMeshServicesPage", "LocalMeshIdpPage",
+    "LocalMeshOverlayPage", "LocalMeshReviewPage",
 ]
+
+# ── the "localmesh" slot's expansion (issue #334) ────────────────────────────────
+# WIZARD_PAGE_SLUGS is one slug per PAGE MODULE and is the contract MODE_SKIPPED_PAGES
+# is keyed against (core/config.py). The local-mesh branch is now nine pages built from
+# two modules, so its slot expands HERE, in display order, instead of growing the core
+# registry with eight slugs no mode's skip tuple would ever name.
+#
+# That is not a shortcut around MODE_SKIPPED_PAGES — it is the same contract
+# "localmesh" itself has always had. Running a docker mesh is not an image mode, so no
+# mode's tuple lists it; the whole branch is skipped DYNAMICALLY by applies_to() reading
+# wiz.localmesh_selected, and it emits ZERO ImageConfig fields, so nextId()'s
+# ALL-OPTIONS guard holds trivially for every page in it. Adding these slugs to
+# MODE_SKIPPED_PAGES would be redundant at best and a second, disagreeing statement of
+# the same rule at worst.
+#
+# ORDER IS THE FLOW. nextId()'s skip walk is positional, so this tuple IS the journey:
+# the choice screen, then the join branch (terminal), then the seven bring-up steps in
+# the order the surface has always had its sections. LocalMeshPage sits LAST — it is the
+# bring-up-and-monitor step AND the controller that owns every widget on the branch
+# (see pages/localmesh.py), which is why the steps look it up lazily rather than being
+# handed it at construction.
+_LOCALMESH_STEPS = (
+    ("localmesh_choice", LocalMeshChoicePage),
+    ("localmesh_join", LocalMeshJoinPage),
+    ("localmesh_env", LocalMeshEnvPage),
+    ("localmesh_source", LocalMeshSourcePage),
+    ("localmesh_services", LocalMeshServicesPage),
+    ("localmesh_idp", LocalMeshIdpPage),
+    ("localmesh_overlay", LocalMeshOverlayPage),
+    ("localmesh_review", LocalMeshReviewPage),
+    ("localmesh", LocalMeshPage),
+)
+
+#: slug -> the pages it expands into. A slug with no entry registers itself, 1:1.
+_SLOT_EXPANSIONS = {"localmesh": _LOCALMESH_STEPS}
 
 # The wizard's ONE size, for every page (the "medium" — pages used to jump between
 # 1040x780 and 1431x780 as you walked them). 1040x780 is deliberately the size the
@@ -116,6 +162,16 @@ class StudioWizard(QtWidgets.QWizard):
         # LocalMeshPage.applies_to(), NEVER persisted into cfg (cfg.mode stays an
         # image mode; ModePage.initializePage documents why).
         self.localmesh_selected = False
+        # transient: LocalMeshChoicePage's card — True = JOIN an existing mesh with a
+        # key, False = GENERATE a new one. Read by LocalMeshJoinPage.applies_to() and
+        # by every bring-up step's, and NEVER persisted into cfg for the same reason
+        # localmesh_selected is not: neither is an image mode. Defaults to the join
+        # card, which is the tab the QTabWidget this replaced opened on.
+        self.localmesh_join_selected = True
+        # The local-mesh CONTROLLER page (pages/localmesh.py) — it owns every widget on
+        # that branch and installs itself here in its own constructor. None until then;
+        # the step pages only look it up at initializePage time.
+        self.localmesh_page = None
         # transient: ModePage's MDM PHONE choice — read by PhonePage.applies_to(),
         # likewise NEVER persisted into cfg (the phone is not an image mode).
         self.phone_selected = False
@@ -192,8 +248,15 @@ class StudioWizard(QtWidgets.QWizard):
         assert len(page_ctors) == len(WIZARD_PAGE_SLUGS), (
             f"page constructors ({len(page_ctors)}) drifted from "
             f"WIZARD_PAGE_SLUGS ({len(WIZARD_PAGE_SLUGS)})")
-        present = [(slug, ctor) for slug, ctor in zip(WIZARD_PAGE_SLUGS, page_ctors)
-                   if ctor is not None]
+        # One entry per REGISTERED page, in display order: a slug with an expansion
+        # (see _SLOT_EXPANSIONS) contributes its whole step flow in place, everything
+        # else contributes itself. The slug->id map below is built from this same list,
+        # so MODE_SKIPPED_PAGES' lookups and the expanded slugs stay in one alignment.
+        present = []
+        for slug, ctor in zip(WIZARD_PAGE_SLUGS, page_ctors):
+            if ctor is None:
+                continue
+            present.extend(_SLOT_EXPANSIONS.get(slug, ((slug, ctor),)))
         self._pages = [ctor(self) for _slug, ctor in present]
         for p in self._pages:
             self.addPage(p)
