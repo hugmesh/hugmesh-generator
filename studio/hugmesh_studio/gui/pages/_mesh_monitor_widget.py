@@ -28,10 +28,30 @@ TWO RENDERING RULES that a timed repaint makes load-bearing:
 
 SCALING IS OPT-IN, AND THAT IS THE COMPATIBILITY CONTRACT (2026-09-09, issue #336).
 ``scaling=False`` is the default and produces the SAME six-column table the local-mesh
-page has always mounted — same header tuple, same column indices, same signals, no extra
-widgets, no extra row. The Replicas column is appended LAST rather than inserted, so
-``_MON_COL_OPEN`` and its neighbours keep their values for every caller and every test.
-``localmesh.py`` needed no change for any of this.
+page has always mounted — same header tuple, same column indices, same signals, no
+Replicas column and no per-row scale widget. The Replicas column is appended LAST rather
+than inserted, so ``_MON_COL_OPEN`` and its neighbours keep their values for every caller
+and every test. ``localmesh.py`` needed no change for any of this, and
+``test_localmesh_monitor`` PINS that: flip the default and it goes red.
+
+The one thing a non-scaling mount did gain is ``scale_status`` — an empty, hidden
+QLabel that carries INLINE refusals (the no-modals rule). It exists on both mounts
+because the refusal it carries is not only about scaling: a door this widget declines
+to open had nowhere to say so on a non-scaling mount, and a refusal that goes nowhere
+is the same failure as a control that does nothing. Hidden with empty text it occupies
+no layout, which is what keeps the local-mesh page's rendering unchanged.
+
+WHAT THE OPERATOR'S OWN SCREEN STILL DOES NOT HAVE (read this before wiring it).
+Umbrella #333 item 4 asks for scaling on the generate-mesh/docker-config screen too.
+That screen is ``localmesh.py``, which #336 explicitly forbade this lane from editing,
+so it still mounts ``MeshMonitorWidget(self)`` — six columns, no Replicas. Turning it on
+is NOT a one-kwarg change: ``scale_requested`` is a signal, and the only thing that runs
+it off-thread is :class:`MeshMonitorSection` below. Passing ``scaling=True`` alone would
+ship a Replicas column whose Apply emits into no receiver. So ``_apply`` REFUSES, inline
+and by name, when nothing is connected — a control that cannot work says so instead of
+looking like it worked. Whoever wires localmesh must connect ``scale_requested`` to an
+off-thread worker with a busy guard (copy ``MeshMonitorSection._scale``), or mount the
+Section instead of the bare widget.
 
 THE ROW IS NOT THE THING THAT SCALES. A row is one pod or one container — an instance.
 The control drives the pod's Deployment/StatefulSet or the container's compose service
@@ -174,13 +194,14 @@ class MeshMonitorWidget(QtWidgets.QWidget):
             if head_item is not None:
                 head_item.setToolTip(_SCALE_HEADER_TIP)
         lay.addWidget(self.table, 1)
-        # INLINE status for a scale (the no-modals rule). Present only on a scaling
-        # mount, so a non-scaling one keeps exactly the widget tree it had.
-        self.scale_status: QtWidgets.QLabel | None = None
-        if self.scaling:
-            self.scale_status = _grey_note("")
-            self.scale_status.setVisible(False)
-            lay.addWidget(self.scale_status)
+        # INLINE status (the no-modals rule): scale progress, scale refusals AND door
+        # refusals. Present on BOTH mounts — hidden and empty, so it costs a non-scaling
+        # mount no layout, but a refusal on one is no longer swallowed (a non-scaling
+        # Section's declined door had nowhere to land before, which is the same bug as
+        # a control that does nothing).
+        self.scale_status: QtWidgets.QLabel = _grey_note("")
+        self.scale_status.setVisible(False)
+        lay.addWidget(self.scale_status)
         footer, frow = flow_box("")
         self.refresh_btn = QtWidgets.QPushButton("Refresh")
         self.refresh_btn.setToolTip(
@@ -288,13 +309,13 @@ class MeshMonitorWidget(QtWidgets.QWidget):
             cell.paint(cell.observed, busy=self._scale_busy)
 
     def set_scale_status(self, text: str) -> None:
-        if self.scale_status is None:
-            return
+        """The ONE inline line. Empty text hides it again, so a stale refusal never
+        outlives the thing it refused."""
         self.scale_status.setText(text or "")
         self.scale_status.setVisible(bool(text))
 
     def scale_status_text(self) -> str:
-        return self.scale_status.text() if self.scale_status is not None else ""
+        return self.scale_status.text()
 
     # ── rendering ────────────────────────────────────────────────────────────────
     def clear(self) -> None:
@@ -448,9 +469,30 @@ class MeshMonitorWidget(QtWidgets.QWidget):
             self._scale_targets[key] = want
         cell.paint(cell.observed, busy=self._scale_busy)
 
+    #: What a scaling mount says when its Apply would emit into nothing. Named here
+    #: because a test pins it and because the sentence has to name the fix, not just
+    #: the fault — the operator cannot connect a signal, but whoever reads the bug
+    #: report can.
+    NO_SINK = ("This table is not wired to run a scale: the page that mounted it "
+               "connected nothing to scale_requested. Nothing was run. Mount "
+               "MeshMonitorSection, or connect scale_requested to an off-thread "
+               "worker (see #336).")
+
     def _apply(self, key: str) -> None:
         cell = self._scale_cells.get(key)
         if cell is None or self._scale_busy:
+            return
+        # A GUI knob that silently does nothing is this repo's named failure mode, and
+        # a bare MeshMonitorWidget(parent, scaling=True) is exactly how one would get
+        # built — the column paints, the buttons arm, Apply emits into no receiver.
+        # Refuse out loud instead. Fail-OPEN if the binding will not answer: a guard
+        # that blocks a real scale would be worse than the bug it guards.
+        try:
+            wired = self.receivers(self.scale_requested) > 0
+        except Exception:                      # noqa: BLE001 — binding difference only
+            wired = True
+        if not wired:
+            self.set_scale_status(self.NO_SINK)
             return
         self.scale_requested.emit(key, int(cell.target))
 
@@ -481,12 +523,23 @@ class MeshMonitorWidget(QtWidgets.QWidget):
 class MeshMonitorProbe(QtCore.QThread):
     """Read BOTH lanes of the running mesh off the GUI thread, for the monitor table.
 
-    Deliberately a COPY of ``localmesh._MonitorProbe`` rather than an import of it:
-    that name is private to a page this lane may not edit, and the monitor's own
-    contract is that the widget and its probe stay usable by any page. The shape is
-    identical on purpose — ``mesh_monitor.snapshot()`` is `kind get clusters` + ONE
-    `kubectl get … -A -o json` + `docker inspect` + `docker compose ps`, each bounded
-    and together up to ~25 s on a wedged daemon, so it is never called inline.
+    A second copy of ``localmesh._MonitorProbe``, and the reason is MECHANICAL, not
+    taste: ``localmesh.py`` imports THIS module (``from ._mesh_monitor_widget import
+    MeshMonitorWidget``), so importing back from it here is a circular import that
+    fails at interpreter start. The dedup therefore has to run the other way — this
+    class is the canonical one, and ``localmesh._MonitorProbe`` becomes an alias of it
+    — and ``localmesh.py`` is the file #336 forbade this lane from touching. Filed as
+    a follow-up.
+
+    Until then the drift the duplication invites is PINNED rather than hoped about:
+    ``test_localmesh_monitor.test_the_two_monitor_probes_have_not_drifted`` compares
+    the two classes' constructor signature, signal and both run() paths, so a change to
+    one that the other does not get goes red.
+
+    The shape is identical on purpose — ``mesh_monitor.snapshot()`` is `kind get
+    clusters` + ONE `kubectl get … -A -o json` + `docker inspect` + `docker compose
+    ps`, each bounded and together up to ~25 s on a wedged daemon, so it is never
+    called inline.
 
     Never raises: snapshot() already folds every failure into LaneState.error, and an
     exception escaping run() would leave the table frozen on a stale snapshot with no
@@ -582,6 +635,8 @@ class MeshMonitorSection(QtCore.QObject):
         self.timer.setInterval(self.POLL_MS)
         self.timer.timeout.connect(self._tick)
         self._scaling_key = ""
+        #: Threads shutdown() gave up waiting for. See shutdown().
+        self.abandoned: tuple[str, ...] = ()
         self._sync_gate()
 
     # ── mounting and lifecycle ───────────────────────────────────────────────────
@@ -599,21 +654,52 @@ class MeshMonitorSection(QtCore.QObject):
         """Off screen, off the clock (the emulation pages' own hideEvent rule)."""
         self.timer.stop()
 
-    def shutdown(self) -> None:
-        """Page teardown: stop the clock and let anything in flight land.
+    #: What ``shutdown`` will wait, per thread, before it gives up — NOT the verb's
+    #: own ceiling. A snapshot is bounded near 25 s so it is given 30; a scale's
+    #: ceiling is ``SCALE_TIMEOUT_S`` (180 s, and a compose scale that has to BUILD
+    #: can want all of it), and freezing the window for three minutes because the
+    #: operator pressed Back is not a trade this page gets to make. See the docstring.
+    SHUTDOWN_WAIT_MS = {"_probe": 30_000, "_scale_worker": 5_000}
 
-        A QThread still running when its page is destroyed is a qFatal that takes the
-        Studio with it (see ``_widgets.own_probe``), and both of these are threads the
-        page started.
+    def shutdown(self) -> tuple[str, ...]:
+        """Page teardown: stop the clock, wait a BOUNDED moment per thread, and answer
+        which threads were still running when that moment ran out.
+
+        IT DOES NOT DRAIN, and the earlier docstring here said it did. ``_probe`` gets
+        30 s, which is longer than a snapshot's own ~25 s ceiling, so in practice it
+        does land. ``_scale_worker`` gets 5 s against a 180 s ceiling, so a
+        ``docker compose up --scale`` in flight when the operator leaves the page is
+        ABANDONED here: it keeps running to completion in the background, unobserved,
+        and its result reaches no status line because the page that would show it is
+        gone. That is deliberate — the alternative is a three-minute frozen window on a
+        Back press — but it is a fact about this method, not a drain.
+
+        Nothing is killed and nothing leaks: ``own_probe`` un-parents both threads and
+        holds them in ``_IN_FLIGHT`` for as long as they run, so ``~QWidget``'s
+        ``deleteChildren`` cannot reach them and the qFatal that motivated all of this
+        cannot fire. The wait is therefore politeness plus an ANSWER, not safety.
+
+        Returns the attribute names still running, so a caller (and a test) can see the
+        abandonment rather than infer it. A ``RuntimeError`` from ``wait`` means the
+        C++ wrapper is already gone — that thread is finished, not stranded.
         """
         self.timer.stop()
-        for attr in ("_probe", "_scale_worker"):
+        still: list[str] = []
+        for attr, ms in self.SHUTDOWN_WAIT_MS.items():
             t = getattr(self, attr, None)
-            if t is not None:
-                try:
-                    t.wait(5000)
-                except RuntimeError:
-                    pass
+            if t is None:
+                continue
+            try:
+                if not t.wait(ms):
+                    still.append(attr)
+            except RuntimeError:
+                continue
+        if still:
+            # The page is going away, so this cannot be shown to the operator; it is
+            # for the log the Studio keeps, which is where an orphaned compose scale
+            # would otherwise be invisible.
+            self.abandoned = tuple(still)
+        return tuple(still)
 
     # ── reading ──────────────────────────────────────────────────────────────────
     def refresh(self, reason: str = "") -> bool:
@@ -641,6 +727,10 @@ class MeshMonitorSection(QtCore.QObject):
 
     def _tick(self) -> None:
         if not (self.page.isVisible() and self.section.is_expanded()):
+            # STOP, do not just skip: a section collapsed between _on_toggled and the
+            # next tick otherwise keeps a 10 s no-op timer alive for the life of the
+            # page. start() and _on_toggled(True) are the only things that start it.
+            self.timer.stop()
             return
         if probe_running(self, "_probe"):
             return
@@ -678,10 +768,15 @@ class MeshMonitorSection(QtCore.QObject):
             return
         ready, total = snap.ready_counts
         lanes = (f"compose {_lane_word(snap.compose)} · kind {_lane_word(snap.kind)}")
+        # Once a first snapshot exists, every later refresh re-renders THAT one until
+        # the new read lands, and "read 10:00:01" beside rows that are being re-read
+        # reads as fresh. Say which it is; the "Checking what is running…" branch above
+        # only ever fires while there is no snapshot at all.
+        rereading = " Re-reading…" if probe_running(self, "_probe") else ""
         if snap.any_running:
             mon.setEnabled(True)
             mon.render(snap)
-            note = f"{ready}/{total} ready · {lanes} · read {snap.taken_at}."
+            note = f"{ready}/{total} ready · {lanes} · read {snap.taken_at}.{rereading}"
             extra = list(snap.errors) + list(snap.notes)
             if extra:
                 note += "\n" + " ".join(extra)
@@ -695,13 +790,13 @@ class MeshMonitorSection(QtCore.QObject):
                 f"{name}: {lane.error or lane.detail or 'not established'}"
                 for name, lane in (("kind", snap.kind), ("compose", snap.compose))
                 if lane.running is None)
-            mon.note.setText("Could not read the running mesh: " + why + tail)
+            mon.note.setText("Could not read the running mesh: " + why + tail + rereading)
             self.section.toggle.setText(
                 f"{title} — could not read".replace("&", "&&"))
         else:
             mon.setEnabled(False)
             mon.clear()
-            note = "No mesh is running." + tail
+            note = "No mesh is running." + tail + rereading
             if snap.errors or snap.notes:
                 note += " " + " ".join(list(snap.errors) + list(snap.notes))
             mon.note.setText(note)

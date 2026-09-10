@@ -1226,7 +1226,20 @@ def scale(generator_dir: str, node, unit: MeshUnit, replicas: int, *,
     what = unit.scale.describe()
     text = (out or "").strip()
     if rc != 0:
-        return False, f"scaling {what} to {replicas} failed: {text[:400] or 'no output'}"
+        why = f"scaling {what} to {replicas} failed: {text[:400] or 'no output'}"
+        # A TIMEOUT ON THE COMPOSE LANE IS USUALLY A BUILD, NOT A HANG. Every
+        # first-party service in tests/stack/compose.local.yaml is `build:`-ed from
+        # ${STACK_SRC}, so `up --scale` on a service whose image is not present
+        # BUILDS it first, which can far exceed SCALE_TIMEOUT_S. Left as the bare
+        # TimeoutExpired string, that reads as a broken daemon. Say the likelier thing
+        # — and say that the build is still going, because it is: the timeout killed
+        # this wait, not that work.
+        if unit.scale.kind == "compose-service" and "Timeout" in text:
+            why += (f" — this waited {int(timeout_s)}s. If this service's image is not "
+                    f"built yet, `up` is BUILDING it and is still running in the "
+                    f"background; watch `docker compose -p {_COMPOSE_PROJECT} logs` "
+                    f"or bring the stack up first, then scale.")
+        return False, why
     if unit.scale.kind == "compose-service":
         return True, (f"compose scaled {what} to {replicas}"
                       + (f" — {text.splitlines()[-1][:200]}" if text else ""))

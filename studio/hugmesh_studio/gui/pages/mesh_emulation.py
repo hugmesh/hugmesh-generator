@@ -79,7 +79,7 @@ from .localmesh import _MeshWorker
  _MCOL_SSH, _MCOL_USER, _MCOL_ACTIONS, _MCOL_QMP, _MCOL_SAVE,
  _MCOL_REPLICAS) = range(12)
 _HEADERS = ("Device", "Role", "Arch", "State", "Verdict", "Sections", "SSH",
-            "Login", "Actions", "QEMU", "Save disk", "Replicas")
+            "Login", "Actions", "QEMU", "Save disk", "Replicas (0/1)")
 
 #: The Replicas column's tooltip, and the whole reason its ceiling is 1.
 #:
@@ -97,9 +97,12 @@ _REPLICAS_TIP = (
     "0 or 1 — an emulated device is one guest per built image. Its MAC, mesh IP, ssh "
     "port and container name are allocated per plan row, so a second copy of a row "
     "would collide with the first on all four, and the runner has no verb to ask for "
-    "one. Apply runs the same start (1) and stop (0) the buttons in Actions run. To "
-    "scale the SERVICES the mesh runs, use the Replicas column in the running-mesh "
-    "table below.")
+    "one. THIS COLUMN ADDS NO NEW CAPABILITY: Apply(1) runs the byte-identical runner "
+    "command the Start button in Actions runs, and Apply(0) the Stop button's. It is "
+    "here because the scale control was asked for on this table too (#336), and it "
+    "shows the count rather than hiding it behind two buttons. To scale the SERVICES "
+    "the mesh runs — the thing that genuinely has a replica count — use the Replicas "
+    "column in the running-mesh table below.")
 _REPLICAS_APPLY_TIP = ("Start this device (1) or stop it (0) through the runner. "
                        "Enabled when the target differs from what is running and no "
                        "other verb owns the page.")
@@ -434,6 +437,13 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
 
         # ── the device table ─────────────────────────────────────────────────────
         self.devices = common.make_table(_HEADERS, min_height=200)
+        # The ceiling is in the header text and the whole disclosure is on the header
+        # item: a tooltip only on the cell widget is unreachable until a session is
+        # picked and rows exist, which is exactly when an operator wonders what the
+        # column is for.
+        _rep_head = self.devices.horizontalHeaderItem(_MCOL_REPLICAS)
+        if _rep_head is not None:
+            _rep_head.setToolTip(_REPLICAS_TIP)
         lay.addWidget(self.devices)
 
         # ── the running mesh's pods and containers (#336) ────────────────────────

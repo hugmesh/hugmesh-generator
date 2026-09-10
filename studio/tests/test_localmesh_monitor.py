@@ -34,6 +34,7 @@ from hugmesh_studio.core import mesh_monitor as mm                       # noqa:
 from hugmesh_studio.core.mesh_node import MeshNode, MeshStatus           # noqa: E402
 from hugmesh_studio.gui.pages import localmesh as localmesh_mod          # noqa: E402
 from hugmesh_studio.gui.pages import _mesh_monitor_widget as mw          # noqa: E402
+from hugmesh_studio.gui.pages import _emulation_common as common_mod     # noqa: E402
 from hugmesh_studio.gui.qt import QtGui, QtWidgets                       # noqa: E402
 
 #: This module exercises the REAL snapshot (tests/conftest.py makes it inert for
@@ -747,3 +748,654 @@ def test_view_up_with_no_snapshot_follows_the_pages_own_compose_answer(qapp, pag
     page._mesh_up = False                     # nothing known to be up: kind, as before
     page._view_up()
     assert "LANE=kind" in noted[-1]
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# SCALING (#336). The monitor stopped being read-only, and everything below is a
+# guard for one of the rules that makes that safe. Written after a refutation ran a
+# 13-mutation battery against the original branch and every mutation SURVIVED: the
+# code was careful and nothing in the repo held it in place. Each test names the
+# mutation it kills, so a future change that "simplifies" one of these knows what it
+# is spending.
+#
+# WHY THE CORE-ONLY TESTS ARE IN THIS FILE. Their natural home is
+# tests/test_mesh_monitor.py, which the #336 fan-out gave to no lane; this lane owns
+# this file. They are pure-core (no Qt) and should move there once the fan-out closes.
+# ══════════════════════════════════════════════════════════════════════════════════
+
+def _scalable(ns, name, *, lane="kind", kind="deployment", ctrl="gw", state="ok",
+              namespace_of_target=None):
+    """A row whose Replicas control is armed, and the controller behind it."""
+    return mm.MeshUnit(
+        lane=lane, namespace=ns, name=name, owner="rs", phase="Running 1/1",
+        ready=True, reason="", state=state, cluster_path="", external="",
+        door=mm.Door(blocked="no door"), detail="d",
+        scale=mm.ScaleTarget(kind, ctrl, namespace_of_target or ns, refused=""))
+
+
+def _unscalable(ns, name, why, *, lane="kind"):
+    return mm.MeshUnit(
+        lane=lane, namespace=ns, name=name, owner="", phase="Running 1/1", ready=True,
+        reason="", state="ok", cluster_path="", external="",
+        door=mm.Door(blocked="no door"), detail="d",
+        scale=mm.ScaleTarget(refused=why))
+
+
+def _snap(*units, taken_at="11:00:00"):
+    return mm.MonitorSnapshot(taken_at=taken_at,
+                              compose=mm.LaneState(True, "1 container(s)"),
+                              kind=mm.LaneState(True, "cluster hugmesh-local"),
+                              units=tuple(units))
+
+
+class _ScaleNode:
+    """A stack node that records the argv a scale would run, and answers it."""
+    compose_file = "/gen/tests/stack/compose.local.yaml"
+
+    def __init__(self, rc=0, out="ok"):
+        self.calls: list[tuple[list[str], int]] = []
+        self.rc, self.out = rc, out
+
+    def _probe(self, cmd, timeout=None):
+        self.calls.append((list(cmd), timeout))
+        return self.rc, self.out
+
+
+# ── the compatibility contract with localmesh.py ───────────────────────────────────
+
+def test_the_default_monitor_widget_is_still_the_six_column_table(qapp):
+    """M1. ``localmesh.py:1352`` builds ``MeshMonitorWidget(self)`` and this lane was
+    forbidden from editing that file, so the DEFAULT is the whole contract. Flipping
+    it to ``scaling=True`` — which is what a lane wiring the operator's own screen
+    would reach for first — would ship a seventh column into a page that connects
+    nothing to ``scale_requested``. This is the test that goes red for it."""
+    w = mw.MeshMonitorWidget()
+    try:
+        assert w.scaling is False
+        assert w.table.columnCount() == 6
+        got = tuple(w.table.horizontalHeaderItem(c).text() for c in range(6))
+        assert got == mw._MON_HEADERS
+        assert "Replicas" not in got
+        w.render(_snap(_scalable("hugmesh", "gw-1")))
+        assert w.table.rowCount() == 1
+        assert w.scale_cell("kind/hugmesh/gw-1") is None
+        assert w.table.cellWidget(0, mw._MON_COL_SCALE) is None
+    finally:
+        w.deleteLater()
+        qapp.processEvents()
+
+
+def test_the_replicas_column_is_appended_so_no_existing_index_moved(qapp):
+    """M1's other half: the seventh column may only ever be seventh."""
+    assert (mw._MON_COL_NAME, mw._MON_COL_LANE, mw._MON_COL_STATE, mw._MON_COL_K8S,
+            mw._MON_COL_EXT, mw._MON_COL_OPEN, mw._MON_COL_SCALE) == (0, 1, 2, 3, 4, 5, 6)
+    assert mw._MON_HEADERS_SCALING == mw._MON_HEADERS + ("Replicas",)
+    w = mw.MeshMonitorWidget(scaling=True)
+    try:
+        assert w.table.columnCount() == 7
+        assert w.table.horizontalHeaderItem(mw._MON_COL_OPEN).text() == "Open"
+        assert w.table.horizontalHeaderItem(mw._MON_COL_SCALE).text() == "Replicas"
+        assert "kubectl" in w.table.horizontalHeaderItem(mw._MON_COL_SCALE).toolTip()
+    finally:
+        w.deleteLater()
+        qapp.processEvents()
+
+
+def test_a_scaling_table_with_nothing_connected_refuses_instead_of_doing_nothing(qapp):
+    """The hazard behind M1, head-on. A bare ``MeshMonitorWidget(scaling=True)`` paints
+    the column and arms the buttons, and its Apply emits into no receiver — this repo's
+    named failure mode, a GUI knob that silently does nothing. It must say so."""
+    w = mw.MeshMonitorWidget(scaling=True)
+    try:
+        w.render(_snap(_scalable("hugmesh", "gw-1")))
+        cell = w.scale_cell("kind/hugmesh/gw-1")
+        assert cell is not None
+        cell.plus.click()
+        assert cell.target == 2 and cell.apply.isEnabled()
+        cell.apply.click()
+        assert "not wired" in w.scale_status_text()
+        assert "Nothing was run." in w.scale_status_text()
+        # isVisibleTo(w), not isVisible(): the widget is never shown in this
+        # test, so every child reports hidden whatever the method did.
+        assert w.scale_status.isVisibleTo(w)
+        # and once it IS wired, the same press emits
+        seen = []
+        w.scale_requested.connect(lambda k, n: seen.append((k, n)))
+        cell.apply.click()
+        assert seen == [("kind/hugmesh/gw-1", 2)]
+    finally:
+        w.deleteLater()
+        qapp.processEvents()
+
+
+# ── which object a press actually touches ──────────────────────────────────────────
+
+def test_the_scale_target_is_the_deployment_never_the_replicaset():
+    """M4. Scaling a ReplicaSet a Deployment owns is undone by the Deployment
+    controller within seconds — a control that appears to work and silently reverts.
+    The Deployment's name is the ReplicaSet's minus the pod-template-hash, and that
+    hash is read off the POD rather than guessed at as "some trailing characters"."""
+    pod = {"metadata": {"name": "gateway-6d4b7f9c8-abcde",
+                        "labels": {"pod-template-hash": "6d4b7f9c8"},
+                        "ownerReferences": [{"kind": "ReplicaSet",
+                                             "name": "gateway-6d4b7f9c8"}]}}
+    t = mm._pod_scale_target(pod, "hugmesh")
+    assert (t.kind, t.name, t.namespace) == ("deployment", "gateway", "hugmesh")
+    assert t.scalable and t.key == "deployment/hugmesh/gateway"
+
+    # no hash to strip: refuse and SAY why, never scale the ReplicaSet directly
+    nohash = {"metadata": {"name": "gateway-x",
+                           "ownerReferences": [{"kind": "ReplicaSet",
+                                                "name": "gateway-x"}]}}
+    r = mm._pod_scale_target(nohash, "hugmesh")
+    assert not r.scalable
+    assert "undone by its controller" in r.refused
+
+
+@pytest.mark.parametrize("kind,expect_kind,expect_in_refusal", [
+    ("StatefulSet", "statefulset", ""),
+    ("ReplicationController", "replicationcontroller", ""),
+    ("DaemonSet", "", "one pod per node"),
+    ("Job", "", "fixed when it is created"),
+    ("CronJob", "", "no standing"),
+    ("Node", "", "kubelet"),
+    ("Frobnicator", "", "does not drive"),
+])
+def test_every_other_owner_is_answered_with_a_fact(kind, expect_kind,
+                                                   expect_in_refusal):
+    """M4's neighbours. A refusal here is a FACT about that controller, so a row that
+    cannot be scaled explains itself rather than offering a control that reverts."""
+    pod = {"metadata": {"name": "p-1",
+                        "ownerReferences": [{"kind": kind, "name": "owner"}]}}
+    t = mm._pod_scale_target(pod, "kube-system")
+    if expect_kind:
+        assert t.scalable and t.kind == expect_kind and t.name == "owner"
+    else:
+        assert not t.scalable and expect_in_refusal in t.refused
+
+
+def test_a_bare_pod_is_refused():
+    t = mm._pod_scale_target({"metadata": {"name": "p"}}, "default")
+    assert not t.scalable and "bare pod" in t.refused
+
+
+def test_replicas_now_does_not_count_finished_rows():
+    """M5. A Succeeded pod and an exited compose one-shot are finished work, not
+    running replicas. Counting them makes a "+1" from this table hand the lane a
+    number it immediately undoes."""
+    target = mm.ScaleTarget("deployment", "gw", "hugmesh", refused="")
+    snap = _snap(_scalable("hugmesh", "gw-1"),
+                 _scalable("hugmesh", "gw-2"),
+                 _scalable("hugmesh", "gw-3", state="stopped"),
+                 _scalable("hugmesh", "other-1", ctrl="other"),
+                 _unscalable("kube-system", "etcd-1", "static pod"))
+    assert mm.replicas_now(snap, target) == 2
+    assert mm.replicas_now(snap.units, target) == 2      # bare sequence too
+    assert mm.replicas_now(snap, mm.ScaleTarget()) == 0  # never-scalable counts nothing
+
+
+# ── what the two lanes actually run ────────────────────────────────────────────────
+
+def test_the_compose_scale_pins_the_project_and_does_not_recreate():
+    """M7 and M11. Without ``-p hugmesh-local`` a scale can land in a second project
+    that happens to share the compose file; without ``--no-recreate`` a plain ``up``
+    RE-CREATES every listed container, i.e. restarts a healthy 54-service mesh to
+    change one service's count. ``--no-deps`` keeps the blast radius to the service."""
+    unit = _scalable("hugmesh-local", "hugmesh-local-fe-1", lane="compose",
+                     kind="compose-service", ctrl="fe-gateway")
+    argv, refused = mm.scale_argv(unit, 3, generator_dir="/gen", node=_ScaleNode())
+    assert refused == ""
+    assert argv[argv.index("-p") + 1] == "hugmesh-local"
+    assert "--no-recreate" in argv and "--no-deps" in argv
+    assert "up" in argv and "-d" in argv
+    assert argv[argv.index("--scale") + 1] == "fe-gateway=3"
+    assert argv[-1] == "fe-gateway"          # the ONE service `up` is allowed to touch
+    assert "down" not in argv and "restart" not in argv
+
+
+def test_a_compose_scale_with_no_compose_file_refuses_rather_than_guessing():
+    unit = _scalable("hugmesh-local", "c-1", lane="compose", kind="compose-service",
+                     ctrl="fe")
+
+    class _NoFile:
+        compose_file = ""
+    argv, refused = mm.scale_argv(unit, 1, generator_dir="/gen", node=_NoFile())
+    assert argv == [] and "guess which project" in refused
+
+
+def test_the_kubectl_scale_names_the_kind_context_the_kind_and_the_namespace(monkeypatch):
+    monkeypatch.setattr(mm.devops_tools, "which", lambda tool, d: "/usr/bin/" + tool)
+    unit = _scalable("hugmesh", "gw-1", kind="deployment", ctrl="gateway")
+    argv, refused = mm.scale_argv(unit, 3, generator_dir="/gen", node=_ScaleNode())
+    assert refused == ""
+    assert argv[:2] == ["/usr/bin/kubectl", "--context"]
+    assert argv[2].startswith("kind-")
+    assert "scale" in argv and "deployment/gateway" in argv
+    assert argv[argv.index("-n") + 1] == "hugmesh"
+    assert argv[-1] == "--replicas=3"
+    # never the pod, never delete
+    assert "gw-1" not in argv and "delete" not in argv
+
+
+def test_the_ceiling_refuses_rather_than_asking_for_it():
+    """M8. Raising MAX_REPLICAS to 100000 must not stay silent: the number is a
+    fat-finger guard on a "+" one pixel from "Apply", so it stays small AND the
+    refusal is what a press past it produces."""
+    assert 1 < mm.MAX_REPLICAS <= 20, "this is a mis-click guard, not a lane's limit"
+    unit = _scalable("hugmesh", "gw-1", ctrl="gateway")
+    argv, refused = mm.scale_argv(unit, mm.MAX_REPLICAS + 1, generator_dir="/gen",
+                                  node=_ScaleNode())
+    assert argv == [] and str(mm.MAX_REPLICAS) in refused and "ceiling" in refused
+
+
+def test_a_negative_or_nonsense_replica_count_is_refused():
+    """M12. -1 through to `kubectl scale --replicas=-1` is an API error the operator
+    reads as a broken button; on compose it is worse, because `up --scale svc=-1`
+    fails after the flag has already been parsed."""
+    unit = _scalable("hugmesh", "gw-1", ctrl="gateway")
+    for bad in (-1, -100):
+        argv, refused = mm.scale_argv(unit, bad, generator_dir="/gen",
+                                      node=_ScaleNode())
+        assert argv == [] and "cannot be negative" in refused
+    argv, refused = mm.scale_argv(unit, "three", generator_dir="/gen",
+                                  node=_ScaleNode())
+    assert argv == [] and "not a replica count" in refused
+
+
+def test_an_unscalable_row_is_refused_with_its_own_sentence():
+    unit = _unscalable("kube-system", "etcd-1",
+                       "a static pod, run directly by this node's kubelet")
+    argv, refused = mm.scale_argv(unit, 2, generator_dir="/gen", node=_ScaleNode())
+    assert argv == [] and "kubelet" in refused
+
+
+def test_scale_never_raises_and_says_which_verb_ran(monkeypatch):
+    monkeypatch.setattr(mm.devops_tools, "which", lambda tool, d: "/usr/bin/" + tool)
+    unit = _scalable("hugmesh", "gw-1", ctrl="gateway")
+    node = _ScaleNode(rc=0, out="deployment.apps/gateway scaled")
+    ok, text = mm.scale("/gen", node, unit, 3)
+    assert ok and "asked for 3 replica(s)" in text and "next refresh" in text
+    assert node.calls and node.calls[0][1] == mm.SCALE_TIMEOUT_S
+
+    class _Boom:
+        compose_file = "/c.yaml"
+
+        def _probe(self, cmd, timeout=None):
+            raise OSError("docker daemon is not running")
+    ok, text = mm.scale("/gen", _Boom(), unit, 3)          # folded, not raised
+    assert ok is False and "failed" in text
+
+
+def test_a_compose_scale_timeout_says_the_build_is_probably_still_running():
+    """Every first-party service in the local compose file is `build:`-ed from
+    ${STACK_SRC}, so `up --scale` on a service whose image is absent BUILDS it, which
+    can far exceed SCALE_TIMEOUT_S. Left as a bare TimeoutExpired string that reads as
+    a broken daemon."""
+    unit = _scalable("hugmesh-local", "c-1", lane="compose", kind="compose-service",
+                     ctrl="fe-gateway")
+    node = _ScaleNode(rc=1, out="TimeoutExpired: timed out after 180s")
+    ok, text = mm.scale("/gen", node, unit, 2)
+    assert ok is False
+    assert "BUILDING it" in text and "still running in the background" in text
+    # the kind lane must NOT claim a build
+    node2 = _ScaleNode(rc=1, out="TimeoutExpired: timed out")
+    ok2, text2 = mm.scale("/gen", node2, _scalable("hugmesh", "gw-1", ctrl="gw"), 2)
+    assert ok2 is False and "BUILDING" not in text2
+
+
+# ── the ReplicaStrip's own arithmetic ──────────────────────────────────────────────
+
+def test_the_replica_strip_clamps_to_the_floor_and_the_ceiling(qapp):
+    """M13. Without the clamp, holding "−" walks the target negative (which every
+    lane then refuses) and holding "+" walks it past a ceiling the tooltip promised."""
+    strip = common_mod.ReplicaStrip("k", ceiling=3, what="deployment/gw")
+    strip.paint(1)
+    for _ in range(20):
+        strip.bump(+1)
+    assert strip.target == 3
+    for _ in range(20):
+        strip.bump(-1)
+    assert strip.target == 0
+    strip.paint(1)
+    assert strip.count.text() == "1 → 0"
+    assert not strip.minus.isEnabled()          # already at the floor
+    assert strip.plus.isEnabled() and strip.apply.isEnabled()
+    strip.bump(+1)
+    strip.paint(1)
+    assert strip.count.text() == "1"            # reality reached: a plain count
+    assert not strip.apply.isEnabled()          # nothing to ask for
+
+
+def test_a_busy_strip_arms_nothing(qapp):
+    strip = common_mod.ReplicaStrip("k", ceiling=5)
+    strip.bump(+2)
+    strip.paint(0, busy=True)
+    assert not any(b.isEnabled() for b in (strip.minus, strip.plus, strip.apply))
+    strip.paint(0, busy=False)
+    assert all(b.isEnabled() for b in (strip.minus, strip.plus, strip.apply))
+
+
+def test_the_pending_target_survives_a_repaint_but_not_the_verb(qapp):
+    strip = common_mod.ReplicaStrip("k", ceiling=5)
+    # the MOUNT syncs target to reality (MeshMonitorWidget._paint_scale /
+    # MeshEmulationPage._arm_replicas); paint() deliberately does not, so a target the
+    # operator moved cannot be taken away by a repaint the strip does not control.
+    strip.target = 1
+    strip.paint(1)
+    strip.bump(+2)
+    assert strip.pending and strip.target == 3
+    strip.paint(1)                              # a 10 s repaint mid-decision
+    assert strip.target == 3 and strip.count.text() == "1 → 3"
+    strip.clear_pending()
+    assert not strip.pending
+
+
+# ── the widget/item mutual exclusion, both directions ─────────────────────────────
+
+def test_the_replicas_cell_never_holds_a_widget_and_a_dash_at_once(qapp):
+    """M6. A row that GAINS a scalable controller across refreshes must lose its dash
+    before the strip goes in, and one that LOSES it must lose the strip before the
+    dash is written — otherwise a live −/+/Apply sits beside a stale "—"."""
+    w = mw.MeshMonitorWidget(scaling=True)
+    try:
+        key = "kind/hugmesh/gw-1"
+        w.render(_snap(_unscalable("hugmesh", "gw-1", "owned by DaemonSet/x")))
+        assert w.table.cellWidget(0, mw._MON_COL_SCALE) is None
+        item = w.table.item(0, mw._MON_COL_SCALE)
+        assert item is not None and item.text() == "—"
+        assert "DaemonSet" in item.toolTip()
+
+        w.render(_snap(_scalable("hugmesh", "gw-1")))       # same key, now scalable
+        assert w.table.cellWidget(0, mw._MON_COL_SCALE) is not None
+        assert w.table.item(0, mw._MON_COL_SCALE) is None
+        assert w.scale_cell(key) is not None
+
+        w.render(_snap(_unscalable("hugmesh", "gw-1", "a bare pod")))  # and back
+        assert w.table.cellWidget(0, mw._MON_COL_SCALE) is None
+        assert w.table.item(0, mw._MON_COL_SCALE).text() == "—"
+        assert w.scale_cell(key) is None
+    finally:
+        w.deleteLater()
+        qapp.processEvents()
+
+
+def test_a_repaint_does_not_eat_a_target_the_operator_is_still_choosing(qapp):
+    w = mw.MeshMonitorWidget(scaling=True)
+    try:
+        key = "kind/hugmesh/gw-1"
+        w.render(_snap(_scalable("hugmesh", "gw-1")))
+        w.scale_cell(key).plus.click()
+        w.scale_cell(key).plus.click()
+        assert w.scale_target(key) == 3
+        # a pod appears ABOVE it: rows are rebuilt and re-sorted
+        w.render(_snap(_scalable("hugmesh", "gw-1"),
+                       _unscalable("aaa", "other-1", "a bare pod")))
+        assert w.row_of(key) == 1
+        assert w.scale_target(key) == 3, "the repaint took the operator's target away"
+    finally:
+        w.deleteLater()
+        qapp.processEvents()
+
+
+# ── the section: off-thread, one at a time, honest teardown ───────────────────────
+
+@pytest.fixture
+def host(qapp):
+    """A shown host widget for a MeshMonitorSection — the Section reads
+    ``page.isVisible()`` on every tick."""
+    h = QtWidgets.QWidget()
+    h.setLayout(QtWidgets.QVBoxLayout())
+    h.show()
+    qapp.processEvents()
+    yield h
+    h.hide()
+    h.deleteLater()
+    qapp.processEvents()
+
+
+@pytest.fixture
+def section(qapp, host, monkeypatch):
+    """A real MeshMonitorSection whose snapshot read is instant and inert."""
+    monkeypatch.setattr(mm, "snapshot",
+                        lambda gen, node, **kw: _snap(_scalable("hugmesh", "gw-1")))
+    sec = mw.MeshMonitorSection(host, GENERATOR_DIR, lambda: _ScaleNode(),
+                                scaling=True, what="the host's own mesh.")
+    sec.mount(host.layout())
+    yield sec
+    sec.timer.stop()
+    sec.shutdown()
+    qapp.processEvents()
+
+
+def _drain(qapp, sec, timeout_s=10.0):
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        busy = False
+        for n in ("_probe", "_scale_worker"):
+            t = getattr(sec, n, None)
+            if t is not None:
+                try:
+                    busy = busy or t.isRunning()
+                    t.wait(100)
+                except RuntimeError:
+                    pass
+        qapp.processEvents()
+        if not busy:
+            return
+    raise AssertionError("a section thread never finished")
+
+
+def test_apply_runs_the_scale_off_the_gui_thread_one_at_a_time(qapp, section,
+                                                               monkeypatch):
+    """M2 and M3 together.
+
+    M3: ``mesh_monitor.scale`` inline on the GUI thread freezes the window for the
+    whole SCALE_TIMEOUT_S ceiling on a wedged daemon — 180 s of an unrepainting table
+    that is showing the thing being scaled.
+    M2: two `docker compose up --scale` invocations against one project race each
+    other's container set, and the second's ``--no-recreate`` does not protect the
+    first's work. One at a time, and the inline line says which one.
+    """
+    gui = threading.get_ident()
+    ran: list[int] = []
+    gate = threading.Event()
+
+    def fake_scale(gen, node, unit, n, **kw):
+        ran.append(threading.get_ident())
+        gate.wait(10)
+        return True, f"scaled to {n}"
+    monkeypatch.setattr(mm, "scale", fake_scale)
+
+    section.refresh("test")
+    _drain(qapp, section)
+    key = "kind/hugmesh/gw-1"
+    cell = section.monitor.scale_cell(key)
+    assert cell is not None, "the section did not paint a scalable row"
+    cell.plus.click()
+    cell.plus.click()
+    assert section.monitor.scale_target(key) == 3
+
+    cell.apply.click()
+    qapp.processEvents()
+    assert section.monitor._scale_busy, "the busy guard never latched"
+    assert "Scaling deployment/gw in hugmesh to 3" in section.monitor.scale_status_text()
+    for b in (cell.minus, cell.plus, cell.apply):
+        assert not b.isEnabled(), "a control stayed live while a scale was running"
+
+    # a SECOND press, and a second emit straight into the slot, must not stack
+    cell.apply.click()
+    section.monitor.scale_requested.emit(key, 5)
+    qapp.processEvents()
+    gate.set()
+    _drain(qapp, section)
+    assert len(ran) == 1, f"{len(ran)} scales ran concurrently against one project"
+    assert ran[0] != gui, "the scale ran ON the GUI thread"
+    assert not section.monitor._scale_busy
+    assert "scaled to 3" in section.monitor.scale_status_text()
+
+
+def test_a_row_that_left_the_last_read_is_refused_not_guessed_at(qapp, section):
+    section.refresh("test")
+    _drain(qapp, section)
+    section._scale("kind/hugmesh/vanished", 2)
+    assert "no longer in the last read" in section.monitor.scale_status_text()
+
+
+def test_shutdown_says_which_thread_it_abandoned(qapp, host, monkeypatch):
+    """The refutation's third major: the docstring promised a drain it does not do.
+    A compose scale has a 180 s ceiling and shutdown waits 5 s for it, so one in
+    flight when the operator leaves the page is ABANDONED — it keeps running,
+    unobserved. That is the trade; it must be visible rather than implied."""
+    assert (mw.MeshMonitorSection.SHUTDOWN_WAIT_MS["_scale_worker"]
+            < mm.SCALE_TIMEOUT_S * 1000), "ms vs s — the wait is the shorter one"
+    monkeypatch.setattr(mm, "snapshot",
+                        lambda gen, node, **kw: _snap(_scalable("hugmesh", "gw-1")))
+    gate = threading.Event()
+    monkeypatch.setattr(mm, "scale",
+                        lambda *a, **k: (gate.wait(20), (True, "done"))[1])
+    sec = mw.MeshMonitorSection(host, GENERATOR_DIR, lambda: _ScaleNode(), scaling=True)
+    sec.mount(host.layout())
+    try:
+        sec.refresh("test")
+        _drain(qapp, sec)
+        monkeypatch.setitem(mw.MeshMonitorSection.SHUTDOWN_WAIT_MS, "_scale_worker", 50)
+        sec.monitor.scale_requested.emit("kind/hugmesh/gw-1", 3)
+        qapp.processEvents()
+        still = sec.shutdown()
+        assert still == ("_scale_worker",), f"shutdown claimed a drain it did not do: {still}"
+        assert sec.abandoned == ("_scale_worker",)
+        assert not sec.timer.isActive()
+    finally:
+        gate.set()
+        _drain(qapp, sec, timeout_s=25)
+        sec.shutdown()
+        qapp.processEvents()
+
+
+def test_a_collapsed_section_stops_the_clock_rather_than_ticking_into_nothing(qapp,
+                                                                              section):
+    """A section collapsed between _on_toggled and the next tick otherwise keeps a
+    10 s no-op timer alive for the life of the page."""
+    section.section.toggle.setChecked(True)
+    qapp.processEvents()
+    assert section.timer.isActive()
+    _drain(qapp, section)
+    section.section.setVisible(False)
+    section.monitor.setVisible(False)
+    section.section.toggle.setChecked(False)     # collapsed: _on_toggled stops it
+    assert not section.timer.isActive()
+    section.timer.start()                        # pretend the window was missed
+    section._tick()
+    assert not section.timer.isActive(), "a collapsed section kept a no-op timer alive"
+
+
+def test_a_refresh_over_an_existing_snapshot_says_it_is_re_reading(qapp, section,
+                                                                   monkeypatch):
+    """Nit: once a first snapshot exists, _sync_gate re-renders THAT one until the
+    new read lands, and "read 11:00:00" beside rows being re-read reads as fresh."""
+    section.refresh("first")
+    _drain(qapp, section)
+    assert "read 11:00:00" in section.monitor.note.text()
+    assert "Re-reading" not in section.monitor.note.text()
+    gate = threading.Event()
+
+    def slow(gen, node, **kw):
+        gate.wait(10)
+        return _snap(_scalable("hugmesh", "gw-1"), taken_at="11:00:09")
+    monkeypatch.setattr(mm, "snapshot", slow)
+    section.refresh("second")
+    qapp.processEvents()
+    assert "Re-reading…" in section.monitor.note.text()
+    gate.set()
+    _drain(qapp, section)
+    assert "read 11:00:09" in section.monitor.note.text()
+    assert "Re-reading" not in section.monitor.note.text()
+
+
+def test_a_declined_door_is_said_out_loud_even_on_a_non_scaling_mount(qapp, host,
+                                                                      monkeypatch):
+    """Nit: the door refusal routed into set_scale_status, which used to return early
+    when the label did not exist — i.e. exactly on a non-scaling mount. A refusal that
+    goes nowhere is the same bug as a control that does nothing."""
+    monkeypatch.setattr(mm, "snapshot", lambda gen, node, **kw: snap_none())
+    opened = []
+    monkeypatch.setattr(QtGui.QDesktopServices, "openUrl", lambda u: opened.append(u))
+    sec = mw.MeshMonitorSection(host, GENERATOR_DIR, lambda: _ScaleNode(), scaling=False)
+    try:
+        assert sec.monitor.scaling is False
+        assert sec.monitor.table.columnCount() == 6
+        sec._open_door("https://localhost:8443/")        # the HSTS ban
+        assert opened == []
+        assert "Not opened:" in sec.monitor.scale_status_text()
+        assert sec.monitor.scale_status.isVisibleTo(sec.monitor)
+    finally:
+        sec.shutdown()
+        qapp.processEvents()
+
+
+def test_the_two_monitor_probes_have_not_drifted():
+    """The refutation's second major. ``MeshMonitorProbe`` is a hand copy of
+    ``localmesh._MonitorProbe`` and cannot simply import it: localmesh.py imports THIS
+    module, so the import would be circular. The dedup has to run the other way and
+    localmesh.py is the file #336 forbade this lane from touching — so until that
+    follow-up lands, drift is PINNED here instead of hoped about."""
+    a, b = mw.MeshMonitorProbe, localmesh_mod._MonitorProbe
+    import inspect as _i
+    assert (list(_i.signature(a.__init__).parameters)
+            == list(_i.signature(b.__init__).parameters))
+    assert hasattr(a, "result") and hasattr(b, "result")
+
+    class _Node:
+        pass
+    for cls in (a, b):
+        seen = []
+        p = cls(GENERATOR_DIR, _Node())
+        p.result.connect(seen.append)
+        p.run()                                  # inline: this is a shape check
+        assert len(seen) == 1
+        assert isinstance(seen[0], mm.MonitorSnapshot)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("the daemon went away")
+    import unittest.mock as _m
+    for cls in (a, b):
+        seen = []
+        with _m.patch.object(mm, "snapshot", _boom):
+            p = cls(GENERATOR_DIR, _Node())
+            p.result.connect(seen.append)
+            p.run()                              # never raises, folds into the snapshot
+        assert len(seen) == 1
+        assert "the monitor read failed" in " ".join(seen[0].errors)
+        assert seen[0].kind.running is None and seen[0].compose.running is None
+
+
+def test_the_widget_busy_guard_holds_for_a_click_that_was_already_in_the_queue(qapp):
+    """M2, on the path the disabled buttons do NOT cover.
+
+    ``set_scale_busy`` disables the whole strip, so a press made after a scale starts
+    emits nothing whatever ``_apply`` does — which is why deleting the guard leaves
+    every button-driven test green. The press it is actually for is the one ALREADY IN
+    QT'S EVENT QUEUE when the guard latched: the operator double-pressed Apply, both
+    clicks were posted, and the second is delivered into an enabled-when-posted button
+    a moment later. Two `docker compose up --scale` runs against one project race each
+    other's container set, and the second's --no-recreate does not protect the first's
+    work.
+    """
+    w = mw.MeshMonitorWidget(scaling=True)
+    try:
+        seen = []
+        w.scale_requested.connect(lambda k, n: seen.append((k, n)))
+        key = "kind/hugmesh/gw-1"
+        w.render(_snap(_scalable("hugmesh", "gw-1")))
+        w.scale_cell(key).plus.click()
+        w._apply(key)                        # the first press
+        assert seen == [(key, 2)]
+        w.set_scale_busy(True, "Scaling deployment/gw in hugmesh to 2…")
+        w._apply(key)                        # the queued second press, delivered late
+        assert seen == [(key, 2)], "a second scale was emitted while one was running"
+        w.set_scale_busy(False, "done")
+        w._apply(key)
+        assert len(seen) == 2                # and the guard lifts
+    finally:
+        w.deleteLater()
+        qapp.processEvents()

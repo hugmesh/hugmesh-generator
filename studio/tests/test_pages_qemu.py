@@ -1099,3 +1099,93 @@ def test_build_checkbox_names_the_assertion_lane_not_the_browser_one(real_wiz):
     assert "playwright" not in label.lower(), label
     assert "playwright" not in build.qemu_device_tests.toolTip().lower() or (
         "not the Playwright" in build.qemu_device_tests.toolTip())
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# THE RUNNING-MESH MONITOR ON THIS PAGE (#336, umbrella #333 item 4)
+#
+# The operator asked for the pod table on the emulation screen too. It reads a
+# DIFFERENT mesh from the results table above it — the docker compose project and the
+# kind cluster on THIS workstation, not the emulated guests this page boots — and the
+# tests below pin the three things that made that safe on the local-mesh page (PR
+# #291) plus the one thing that is specific to a second mount: it must not offer a
+# second `make view` launcher.
+#
+# Written after a refutation found ~1000 new lines with no test at all, and a
+# 13-mutation battery in which every mutation survived. M9 — deleting
+# hide_view_controls — is killed by test_this_page_offers_no_second_make_view_launcher.
+# ══════════════════════════════════════════════════════════════════════════════════
+
+def test_the_monitor_is_mounted_collapsed_greyed_and_starts_no_shell(wiz):
+    """Mounting it must start NOTHING: no probe, no timer, no shell. The section is
+    two shell round trips per tick and this page is reached by operators who only
+    want the test results above it."""
+    page = _qemu_page(wiz)
+    sec = page.monitor
+    assert sec.monitor.scaling is True
+    assert sec.monitor.table.columnCount() == 7
+    assert sec.monitor.table.horizontalHeaderItem(6).text() == "Replicas"
+    assert not sec.section.is_expanded()
+    assert not sec.monitor.isEnabled()
+    assert not sec.timer.isActive()
+    assert getattr(sec, "_probe", None) is None, "mounting the monitor started a probe"
+    assert getattr(sec, "_scale_worker", None) is None
+
+
+def test_this_page_offers_no_second_make_view_launcher(wiz):
+    """M9. `make view` binds loopback ports behind ONE session-owner guard and the
+    local-mesh page owns that session. A second launcher here fights it for one
+    session lock — and a disabled button with an explanation is still a button an
+    operator presses, so it is hidden and the reason is on it."""
+    page = _qemu_page(wiz)
+    w = page.monitor.monitor
+    assert not w.view_up_btn.isVisibleTo(w)
+    assert not w.view_down_btn.isVisibleTo(w)
+    assert "local-mesh page" in w.view_up_btn.toolTip()
+    assert "session lock" in w.view_down_btn.toolTip()
+    # the controls that DO belong to a read-only second mount are still there
+    assert w.refresh_btn.isVisibleTo(w) and w.copy_btn.isVisibleTo(w)
+
+
+def test_the_monitor_says_it_is_not_the_results_table_above_it(wiz):
+    page = _qemu_page(wiz)
+    note = page.monitor.monitor.note.text()
+    assert "not the emulated guests in the table above" in note
+    assert "docker compose project and the kind cluster" in note
+
+
+def test_the_monitor_node_is_built_once_and_is_a_plain_local_stack_node(wiz):
+    """The monitor only READS both lanes, and this page has no local-mesh
+    configuration to thread in — the compose file and the ports are the Makefile's,
+    which is what the running mesh was started with."""
+    page = _qemu_page(wiz)
+    first = page._monitor_node()
+    assert isinstance(first, qemu_page.LocalStackNode)
+    assert page._monitor_node() is first, "a node per tick is a node per 10 seconds"
+
+
+def test_hiding_and_leaving_the_page_stop_the_monitors_clock(wiz, qapp):
+    page = _qemu_page(wiz)
+    page.monitor.section.toggle.setChecked(True)
+    qapp.processEvents()
+    assert page.monitor.timer.isActive()
+    page.hide()
+    qapp.processEvents()
+    assert not page.monitor.timer.isActive()
+    page.show()
+    qapp.processEvents()
+    page.monitor.timer.start()
+    page.cleanupPage()
+    assert not page.monitor.timer.isActive()
+
+
+def test_the_monitor_reaches_no_modal_from_page_logic(wiz):
+    """The standing rule, over the code #336 added to this page."""
+    import re
+    src = inspect.getsource(qemu_page)
+    for name in ("validatePage", "isComplete", "initializePage", "cleanupPage",
+                 "hideEvent", "showEvent", "_monitor_node"):
+        m = re.search(rf"\n    def {name}\b.*?(?=\n    def |\nclass |\Z)", src, re.S)
+        if m:
+            assert "QMessageBox" not in m.group(0), name
+            assert ".exec(" not in m.group(0), name

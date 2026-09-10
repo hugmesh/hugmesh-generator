@@ -285,3 +285,45 @@ def test_spawn_cancel_terminates_the_process_group(tmp_path):
     t.join(15)
     assert not t.is_alive(), "spawn() did not return after cancel"
     assert done["rc"] != 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# WHY THE EMULATION PAGE'S REPLICAS COLUMN HAS A CEILING OF 1 (#336)
+#
+# The GUI tooltip (`gui/pages/mesh_emulation._REPLICAS_TIP`) makes a claim about THIS
+# module — that a device's MAC, mesh IP, ssh port and container name are allocated PER
+# PLAN ROW, so a second instance of a row would collide with the first on all four and
+# the runner has no verb to ask for one. This repo's rule is that a tooltip describes
+# what the code actually does, so the claim is pinned here rather than trusted.
+#
+# If this ever stops being true — a per-instance identity lands in the planner — then
+# raising that ceiling becomes a real feature rather than an offer the runner would
+# refuse, and this test is where that shows up.
+# ══════════════════════════════════════════════════════════════════════════════════
+
+def test_every_planned_identity_is_per_row_so_a_second_instance_would_collide(plan):
+    _gen, p = plan
+    assert len(p.devices) == 3
+    for field in ("mac", "ip", "ssh_port", "ui_port"):
+        values = [getattr(d, field) for d in p.devices]
+        assert len(set(values)) == len(values), \
+            f"{field} is not unique per plan row: {values}"
+    # and each is a function of the ROW's index, not of any instance counter: the
+    # planner has no way to be asked for a second copy of one row.
+    for i, dev in enumerate(p.devices):
+        assert dev.ssh_port == me.SSH_PORT_MIN + i
+        assert dev.ui_port == me.UI_PORT_MIN + i
+        assert dev.ip.endswith("." + str(me._IP_FIRST + i))
+        assert dev.mac == me._mesh_mac(p.session_name, i)
+
+
+def test_the_planner_takes_no_replica_count(plan):
+    """The other half of the ceiling's justification: there is no verb to ask with."""
+    import inspect
+    params = set(inspect.signature(me.plan_mesh).parameters)
+    assert not (params & {"replicas", "count", "instances", "scale"}), \
+        "the planner grew a replica knob — the GUI ceiling of 1 is now a lie"
+    import dataclasses as _dc
+    dev_fields = {f.name for f in _dc.fields(me.PlannedDevice)}
+    assert dev_fields, "PlannedDevice stopped being a dataclass"
+    assert not (dev_fields & {"replicas", "instance", "replica_index", "count"})
