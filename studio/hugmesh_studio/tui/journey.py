@@ -31,10 +31,13 @@ canonical order end to end, finishing with a saveable config.
 """
 from __future__ import annotations
 
+import os
+
 from ..core.config import (
     IDP_CHOICES, IDP_LABELS, MODE_DEFAULT_ROLE, MODE_SKIPPED_PAGES, ROLE_CHOICES,
     UNAFFILIATED_ROLE, VAULT_FIELDS, VAULT_KV_MOUNT_DEFAULT, WIZARD_PAGE_SLUGS,
-    ImageConfig, derive_hostname, enter_mesh_defaults, vault_field_error,
+    ImageConfig, ca_cert_error, derive_hostname, describe_ca_cert,
+    enter_mesh_defaults, vault_field_error,
 )
 from ..core.validate import validate_domain_name
 from ..core.worklist import (
@@ -355,20 +358,30 @@ class IdpScreen:
 
 #: TUI edit vocabulary for the secrets-store step: command letter -> cfg field.
 #: One entry per VAULT_FIELDS member, in order — the GUI/TUI parity test pins the
-#: two faces edit exactly the same trio.
-VAULT_COMMANDS = {"a": "vault_addr", "m": "vault_kv_mount", "p": "vault_base_path"}
+#: two faces edit exactly the same fields. 'x' is the EXTERNAL address (#335); the
+#: base CA list is edited by 'c'/'r', which are NOT here because they are not
+#: cfg scalar fields and this dict's whole job is to stay == VAULT_FIELDS.
+VAULT_COMMANDS = {"a": "vault_addr", "x": "vault_external_addr",
+                  "m": "vault_kv_mount", "p": "vault_base_path"}
 assert tuple(VAULT_COMMANDS.values()) == VAULT_FIELDS
 
 
 class VaultScreen:
-    """The mesh SECRETS-STORE step (issue #224) — the TUI twin of gui/pages/vault.py.
+    """The mesh SECRETS-STORE step (issue #224, extended by #335) — the TUI twin of
+    gui/pages/vault.py.
 
-    Edits the SAME ``cfg.vault_*`` trio through the SAME fail-closed predicate
+    Edits the SAME ``cfg.vault_*`` fields through the SAME fail-closed predicate
     (``config.vault_field_error``), so what this face accepts is exactly what the
-    argv accepts. Every edit is validated BEFORE it is committed and a refusal is an
-    inline status line (never a dead end, never a silently-inert command); clearing
-    the address clears the two paths with it — the byte-identity rule the GUI's
-    validatePage applies. Enter keeps the current values and continues."""
+    argv accepts, and the SAME base CA list (``cfg.base_ca_certs``) through the same
+    ``config.ca_cert_error``. Every edit is validated BEFORE it is committed and a
+    refusal is an inline status line (never a dead end, never a silently-inert
+    command); clearing the internal address clears the external address and the two
+    paths with it — the byte-identity rule the GUI's validatePage applies. Dropping a
+    certificate clears every domain that pointed at it, exactly as the GUI does.
+    Enter keeps the current values and continues.
+
+    The GUI picks certificates through a file dialog; here the operator types a path,
+    which is the only difference between the two faces on this step."""
 
     slug = "vault"
     title = "Secrets store (HashiCorp Vault, mesh nodes)"
@@ -383,32 +396,59 @@ class VaultScreen:
                "sets VAULT_ADDR (then secrets come off the KEYS stick).",
                ""]
         if cfg.vault_addr:
-            out += [f"  address    {cfg.vault_addr}",
+            out += [f"  internal   {cfg.vault_addr}",
+                    f"  external   {cfg.vault_external_addr or '(none — no such line in vault.conf)'}",
                     f"  KV mount   {cfg.vault_kv_mount or VAULT_KV_MOUNT_DEFAULT + ' (builder default)'}",
                     f"  base path  {cfg.vault_base_path or '<brand> (builder default)'}",
                     "",
                     "  Every x86/rpi5 node in the worklist bakes these into "
-                    "/etc/hugmesh/vault.conf. The address is what enables first-boot "
-                    "ESO seeding; the mount and base path are recorded there and read "
-                    "by keys-provision, but the shipped cluster manifests still pin "
-                    "their own mount ('secret') and key prefix ('hugmesh/<service>').",
+                    "/etc/hugmesh/vault.conf. The INTERNAL address is what enables "
+                    "first-boot ESO seeding; the mount and base path are recorded "
+                    "there and read by keys-provision, but the shipped cluster "
+                    "manifests still pin their own mount ('secret') and key prefix "
+                    "('hugmesh/<service>'), and the EXTERNAL address is baked with no "
+                    "reader at all — it is for operators and out-of-cluster tooling, "
+                    "and a node boots identically without it.",
                     ""]
         else:
-            out += ["  address    (none — no flag emitted; brand.conf VAULT_ADDR or "
+            out += ["  internal   (none — no flag emitted; brand.conf VAULT_ADDR or "
                     "offline KEYS-stick delivery)", ""]
+        out += ["  base CA certificates:"]
+        if cfg.base_ca_certs:
+            for i, path in enumerate(cfg.base_ca_certs, 1):
+                out.append(f"    {i}. {os.path.basename(path)} — "
+                           f"{describe_ca_cert(path)}")
+            picked = {d: c for d, c in (cfg.domain_ca or {}).items() if c}
+            out.append(f"    chosen by {len(picked)} domain(s) on the Domains step"
+                       if picked else
+                       "    no domain has picked one yet (Domains step, 'c' command)")
+        else:
+            out.append("    (none)")
         out += [
+            "",
             "commands:",
-            "  a URL|-     Vault address (https://…; - clears it and the two paths)",
+            "  a URL|-     INTERNAL Vault address, as reached from inside the mesh "
+            "(https://…; - clears it and everything below it)",
+            "  x URL|-     EXTERNAL address for the same Vault (https://…; must "
+            "differ from the internal one)",
             "  m NAME|-    KV v2 mount (- = the builder default "
             f"'{VAULT_KV_MOUNT_DEFAULT}')",
             "  p PATH|-    base path under the mount (- = the builder default: the "
             "brand slug)",
+            "  c PATH      add a base CA certificate (a PEM file; it is parsed "
+            "before it is added)",
+            "  r NUMBER    remove that certificate (and clear every domain that "
+            "picked it)",
             "  Enter       keep these and continue",
             "",
             "The Vault token and unseal key are never entered here: put them on the "
             "KEYS stick (vault/token, vault/unseal-key). A .vault block in the "
             "stick's provision.json overrides this step. The mount and base path are "
             "recorded facts today, not a re-point of what the cluster reads.",
+            "The base CA list is RECORDED ONLY: no builder parses a CA flag and no "
+            "manifest carries the per-domain choice, so nothing here copies a PEM "
+            "into an image or a trust store. It records which authority each domain "
+            "is meant to chain to.",
         ]
         return out
 
@@ -422,28 +462,70 @@ class VaultScreen:
         cmd, _, arg = line.partition(" ")
         cmd = cmd.strip().lower()
         arg = arg.strip()
+        cfg = j.cfg
+        if cmd in ("c", "r"):
+            self._feed_certificate(j, cmd, arg)
+            return
         field = VAULT_COMMANDS.get(cmd)
         if field is None:
-            j.status = (f"unrecognised command: {line!r} (a/m/p set a value, "
-                        "Enter continues, q quits)")
+            j.status = (f"unrecognised command: {line!r} (a/x/m/p set a value, "
+                        "c/r edit the base CA list, Enter continues, q quits)")
             return
         if not arg:
             j.status = f"{cmd} needs a value (or - to clear)"
             return
-        cfg = j.cfg
         new = {f: getattr(cfg, f) for f in VAULT_FIELDS}
         new[field] = "" if arg == "-" else arg
         if field == "vault_addr" and not new["vault_addr"]:
-            # clearing the address clears the residue with it (byte-identity)
+            # clearing the internal address clears the residue with it (byte-identity)
+            new["vault_external_addr"] = ""
             new["vault_kv_mount"] = new["vault_base_path"] = ""
         err = vault_field_error(new["vault_addr"], new["vault_kv_mount"],
-                                new["vault_base_path"])
+                                new["vault_base_path"], new["vault_external_addr"])
         if err:
             # honest refusal, state unchanged — the same sentence the GUI shows
             j.status = f"refused: {err}"
             return
         for f, v in new.items():
             setattr(cfg, f, v)
+
+    @staticmethod
+    def _feed_certificate(j: "Journey", cmd: str, arg: str) -> None:
+        """The base CA list half of feed(): 'c PATH' adds, 'r NUMBER' removes. Same
+        predicate as the GUI picker (``config.ca_cert_error``), same refusal
+        sentence, and the same repair on removal — every domain that had picked the
+        dropped certificate is cleared, so ``domain_ca_error``'s rule stays
+        unreachable through this face too rather than merely enforced at emission."""
+        cfg = j.cfg
+        if cmd == "c":
+            if not arg:
+                j.status = "c needs the path of a PEM certificate file"
+                return
+            path = os.path.abspath(os.path.expanduser(arg))
+            if path in cfg.base_ca_certs:
+                j.status = f"already listed: {os.path.basename(path)}"
+                return
+            err = ca_cert_error(path)
+            if err:
+                j.status = f"refused: {err}"
+                return
+            cfg.base_ca_certs = [*cfg.base_ca_certs, path]
+            j.status = f"added {os.path.basename(path)} — {describe_ca_cert(path)}"
+            return
+        try:
+            n = int(arg)
+        except ValueError:
+            n = 0
+        if not 1 <= n <= len(cfg.base_ca_certs):
+            j.status = f"no such certificate row: {arg!r}"
+            return
+        gone = cfg.base_ca_certs[n - 1]
+        cfg.base_ca_certs = [p for i, p in enumerate(cfg.base_ca_certs) if i != n - 1]
+        orphaned = sorted(d for d, c in (cfg.domain_ca or {}).items() if c == gone)
+        if orphaned:
+            cfg.domain_ca = {d: c for d, c in cfg.domain_ca.items() if c != gone}
+        j.status = (f"removed {os.path.basename(gone)}"
+                    + (f"; cleared it from {', '.join(orphaned)}" if orphaned else ""))
 
 
 class RoleScreen:
