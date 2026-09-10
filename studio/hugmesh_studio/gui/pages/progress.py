@@ -51,6 +51,7 @@ stream, so `tail -F` on it shows exactly what this page shows.
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import shlex
@@ -90,6 +91,18 @@ def _display_safe(line: str) -> str:
     paints a BOX (the operator's 2026-07-17 report). Idempotent and lossless for real
     text — it only removes bytes that could never render."""
     return _C0_RE.sub("", strip_ansi(line))
+
+
+# THE flash confirmation (#337). A module-level seam on purpose: headless tests
+# monkeypatch this name, so the one destructive gate the GUI owns is exercised by the
+# suite instead of being stubbed away with _start_flash. It is called from
+# _start_flash — an explicit click / an explicitly opted-in post-build action — and
+# NEVER from validatePage / initializePage / isComplete / itemChanged, where a modal
+# deadlocks the offscreen tests.
+confirm_flash = QtWidgets.QMessageBox.warning
+# what a confirmed flash must return; anything else cancels.
+FLASH_OK = QtWidgets.QMessageBox.StandardButton.Ok
+FLASH_CANCEL = QtWidgets.QMessageBox.StandardButton.Cancel
 
 
 # status id -> (symbol, colour) for the per-JOB status glyph (col0).
@@ -697,6 +710,11 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.qemu_worker: _FlashWorker | None = None
         self._flash_targets: list = []
         self._flash_queue: list = []       # Review-page plan assignments, run sequentially
+        # confirmation state (#337): the extra notes the ONE flash warning shows, and
+        # whether the operator declined the last one. Both are consumed inside
+        # _start_flash / _flash_next and never outlive a single dialog.
+        self._flash_caveats: list[str] = []
+        self._flash_cancelled = False
         # entry_id -> the CONCRETE artifact that entry's build produced (snapshot diff
         # around each sequential entry build) — what the flash plan passes as
         # --artifact so flash-disk.sh never has to guess between same-role images.
@@ -1151,6 +1169,8 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._refresh_log_help()        # back to "no build session yet"
         self._last_status = None
         self._flash_queue = []
+        self._flash_caveats = []
+        self._flash_cancelled = False
         self._entry_artifacts = {}
         self._entry_artifact_sets = {}
         self._entry_baseline = {}
@@ -1257,8 +1277,23 @@ class ProgressPage(QtWidgets.QWizardPage):
 
     # ---- slots (GUI thread) -----------------------------------------------------
     def _work_dir(self) -> str:
-        """The build output dir — the same resolution the flash plan's work_dir and
-        WorklistDriver._output_dir use."""
+        """The dir the running build actually WRITES ITS ARTIFACTS INTO.
+
+        The session workdir first (``<out>/sessions/<id>/``), because that is what
+        this page hands the driver as ``workdir=`` at dispatch and therefore what
+        ``WorklistDriver._output_dir()`` resolves to for every image. Falling back to
+        the shared ``<out>`` — which is what this returned unconditionally — pointed
+        the per-entry artifact snapshot at a directory the build never touches, so
+        ``new_artifacts()`` diffed two identical listings, returned (), and EVERY
+        flash-plan assignment refused with "no artifact was recorded for <entry> in
+        this run". That is the #337 refusal, and on this host it was worse than empty:
+        ``out/`` still holds an August pki image, so the baseline was a stale
+        unrelated artifact set.
+
+        The ``<out>`` fallback stays for the no-session callers (direct-slot tests,
+        a record that could not be written)."""
+        if self._session is not None and self._session.workdir:
+            return self._session.workdir
         return (self.wiz.cfg.output_dir
                 or os.path.join(self.wiz.generator_dir, "out"))
 
@@ -2352,6 +2387,8 @@ class ProgressPage(QtWidgets.QWizardPage):
         # window's C++ objects alive, so the appends still have somewhere to land, and at
         # ~20 Hz an unwatched page costs a batch append per tick.
         self._flash_queue = []
+        self._flash_caveats = []
+        self._flash_cancelled = False
         if self.flash_worker is not None and self.flash_worker.isRunning():
             self.flash_worker.wait(3000)
         # A still-running QEMU device-test run is NOT joined: it can run for hours,
@@ -2429,20 +2466,16 @@ class ProgressPage(QtWidgets.QWizardPage):
         return None
 
     def _flash_clicked(self) -> None:
-        """GUI-side safety gate: require the operator to TYPE the exact device path
-        (re-implementing flash-disk.sh's dl_confirm_destroy typed-path prompt in-GUI,
-        since the script has no tty here) before launching the flasher worker."""
+        """The Flash… button. The destroy gate lives in _start_flash, which is the ONE
+        funnel both this button and the post-build plan go through — so there is
+        exactly one confirmation per flash, never two on this path (#337)."""
         target = self._selected_target()
         if target is None:
             return
-        typed, ok = QtWidgets.QInputDialog.getText(
-            self, "Confirm device to ERASE",
-            f"This will ERASE {target.path} ({target.label()}).\n"
-            f"Type the exact device path to confirm:")
-        if not ok or typed.strip() != target.path:
-            self.log.appendPlainText(
-                f"Flash cancelled — typed path did not match {target.path}.")
-            return
+        self._flash_caveats = [
+            "No image was named for this flash, so scripts/flash-disk.sh will "
+            "auto-pick the newest matching one in the work dir. Watch the "
+            "\"Artifact :\" line it prints before it writes."]
         self._start_flash(target)
 
     def _maybe_auto_flash(self) -> None:
@@ -2512,6 +2545,21 @@ class ProgressPage(QtWidgets.QWizardPage):
                 self.flash_worker.wait(3000)  # the previous worker already emitted done
             a = self._flash_queue.pop(0)
             flavor = getattr(a, "flavor", flash_targets.FLAVOR_AUTO)
+            # The assignment's work_dir was resolved on the BuildPage, before this
+            # run's session existed, so it names the shared <out>. The build wrote
+            # into <out>/sessions/<id>/ — prefer that when it is really there.
+            work_dir = a.work_dir
+            try:
+                live_dir = self._work_dir()
+            except Exception:
+                # A partially-constructed page (direct-slot tests build one with
+                # __new__, and PyQt raises RuntimeError — not AttributeError — for
+                # ANY attribute read on it, so a getattr default cannot cover this).
+                # The recorded work_dir is the honest fallback; nothing else changes.
+                live_dir = ""
+            if live_dir and os.path.isdir(live_dir) and live_dir != work_dir:
+                work_dir = live_dir
+                a = dataclasses.replace(a, work_dir=live_dir)
             artifact = flash_targets.pick_artifact(
                 self._entry_artifact_sets.get(a.entry_id, ()), flavor)
             if not artifact:
@@ -2521,6 +2569,30 @@ class ProgressPage(QtWidgets.QWizardPage):
                 if single and (flavor == flash_targets.FLAVOR_AUTO or
                                flash_targets.classify_artifact_flavor(single) == flavor):
                     artifact = single
+            caveats: list[str] = []
+            if not artifact and not self._entry_artifact_sets.get(a.entry_id):
+                # NOTHING was recorded for this entry. Before refusing, LOOK: the
+                # finished image is usually sitting in the work dir, and a dead end
+                # here is what #337 reported ("the flash-path validation rejects a
+                # valid target"). The fallback is a read-only name match on the same
+                # two anchors flash-disk.sh uses (arch + role), and what it finds is
+                # named IN THE CONFIRMATION rather than written silently — the role
+                # glob genuinely cannot tell two same-role entries apart, so a human
+                # reads the filename before anything is destroyed.
+                #
+                # Gated on an EMPTY recorded set on purpose: an entry that recorded a
+                # set WITHOUT the requested flavour still skips below, because there
+                # the build is known not to have produced that flavour.
+                found = flash_targets.find_artifacts(work_dir, role=a.role,
+                                                     arch=a.arch)
+                artifact = flash_targets.pick_artifact(found, flavor)
+                if artifact:
+                    caveats.append(
+                        f"This run recorded no image for {a.entry_id}. The file above "
+                        f"was matched in {work_dir} by arch ({a.arch}) and role "
+                        f"({a.role}) only" +
+                        (f", out of {len(found)} candidates there" if len(found) > 1
+                         else "") + " — check the name is the image you meant.")
             if not artifact:
                 built = self._entry_artifact_sets.get(a.entry_id, ())
                 if built and flavor != flash_targets.FLAVOR_AUTO:
@@ -2533,7 +2605,8 @@ class ProgressPage(QtWidgets.QWizardPage):
                 else:
                     self.log.appendPlainText(
                         f"Flash plan: no artifact was recorded for {a.entry_id} in this run "
-                        f"— skipped for safety (flash manually: scripts/flash-disk.sh "
+                        f"and no {a.arch} {a.role} image was found in {work_dir} "
+                        f"— skipped (flash manually: scripts/flash-disk.sh "
                         f"--artifact <image> {a.target.path}).")
                 continue
             live = next((t for t in flash_targets.list_targets()
@@ -2551,19 +2624,68 @@ class ProgressPage(QtWidgets.QWizardPage):
             self.log.appendPlainText(
                 f"Flash plan: {a.entry_id}{flav} ({os.path.basename(artifact)}) → "
                 f"{a.target.path} (opted in)…")
+            # Read by _start_flash's confirmation only; cleared there so a caveat can
+            # never leak onto the NEXT device's dialog.
+            self._flash_caveats = caveats
+            self._flash_cancelled = False       # set by _start_flash on a decline
             self._start_flash(a.target, argv=flash_targets.assignment_argv(
                 a, generator_dir=self.wiz.generator_dir, artifact=artifact))
+            if getattr(self, "_flash_cancelled", False):
+                # the operator declined THIS device — offer the next assignment
+                # rather than stranding the rest of the plan.
+                self._flash_cancelled = False
+                continue
             return
 
+    def _flash_confirm_text(self, target, argv: list[str]) -> str:
+        """The body of the one flash warning: what is destroyed, what is written, and
+        every condition that used to be a silent refusal."""
+        gib = target.size / (1 << 30)
+        name = (target.model or target.fs_label or "").strip() or "(unknown)"
+        lines = [f"This ERASES {target.path} — {name}, {gib:.1f} GiB, {target.kind}.",
+                 "Everything on that device is overwritten. It cannot be undone.",
+                 ""]
+        artifact = ""
+        if argv and "--artifact" in argv:
+            i = argv.index("--artifact")
+            if i + 1 < len(argv):
+                artifact = argv[i + 1]
+        if artifact:
+            lines.append(f"Image:  {os.path.basename(artifact)}")
+            if flash_targets.is_compressed_artifact(artifact):
+                lines.append("        (compressed — decompressed straight onto the "
+                             "disk, so the written size is larger than the file)")
+        else:
+            lines.append("Image:  auto-picked by scripts/flash-disk.sh")
+        for note in getattr(self, "_flash_caveats", ()) or ():
+            lines += ["", note]
+        return "\n".join(lines)
+
     def _start_flash(self, target, argv: list[str] | None = None) -> None:
+        """Launch the flasher — behind THE confirmation (#337).
+
+        One OK/Cancel warning, here, at the moment the flash starts, for every path
+        into it (the Flash… button and each post-build plan assignment). It is a
+        module-level seam (``confirm_flash``) so the headless suite exercises the real
+        gate, and it is called from a click / an explicitly opted-in post-build action
+        — never from validatePage, initializePage, isComplete or itemChanged, where a
+        modal deadlocks an offscreen test."""
         if self.flash_worker is not None and self.flash_worker.isRunning():
+            return
+        argv = argv or self._flash_argv_for(target)
+        answer = confirm_flash(self, "Flash — this erases the device",
+                              self._flash_confirm_text(target, argv),
+                              FLASH_OK | FLASH_CANCEL, FLASH_CANCEL)
+        self._flash_caveats = []
+        if answer != FLASH_OK:
+            self._flash_cancelled = True
+            self.log.appendPlainText(
+                f"Flash cancelled — {target.path} was not written.")
             return
         self.flash_btn.setEnabled(False)
         self.flash_refresh_btn.setEnabled(False)
         self.log.appendPlainText(f"\n=== flashing {target.path} via scripts/flash-disk.sh ===")
-        self.flash_worker = hold_thread(
-            _FlashWorker(argv or self._flash_argv_for(target),
-                         self.wiz.generator_dir))
+        self.flash_worker = hold_thread(_FlashWorker(argv, self.wiz.generator_dir))
         self.flash_worker.line.connect(lambda s: self.log.appendPlainText(s))
         self.flash_worker.done.connect(self._flash_done)
         self.flash_worker.start()
