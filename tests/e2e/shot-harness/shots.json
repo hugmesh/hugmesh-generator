@@ -1,0 +1,118 @@
+{
+  "//": "THE SHOT TABLE. Adding a screenshot to a manual test plan is a DATA edit: append a row to shots[] below and run `node shot-harness/shot-table.mjs validate`. No TypeScript, no code. See shot-harness/README.md.",
+
+  "personas": [
+    { "slug": "anonymous",             "issue": 290, "title": "the anonymous visitor" },
+    { "slug": "games-namespace-admin", "issue": 292, "title": "the games-namespace admin" },
+    { "slug": "moderator",             "issue": 294, "title": "the network moderator" },
+    { "slug": "pending",               "issue": 295, "title": "the pending registrant" },
+    { "slug": "mesh-operator",         "issue": 296, "title": "the local-mesh operator" },
+    { "slug": "device-owner",          "issue": 297, "title": "the standalone device owner" },
+    { "slug": "superadmin",            "issue": 298, "title": "the superadmin" },
+    { "slug": "member",                "issue": 299, "title": "the plain member" },
+    { "slug": "games-operator",        "issue": 300, "title": "the games app-store operator" },
+    { "slug": "image-builder",         "issue": 301, "title": "the image builder" },
+    { "slug": "games-store-member",    "issue": 302, "title": "the games app-store member" },
+    { "slug": "studio-operator",       "issue": 303, "title": "the Studio operator" },
+    { "slug": "admin",                 "issue": 307, "title": "the platform administrator" },
+    { "slug": "games-member",          "issue": 310, "title": "the games member" },
+    { "slug": "curtailed-member",      "issue": 311, "title": "the curtailed member" },
+    { "slug": "own-client",            "issue": 313, "title": "the own-client user" },
+    { "slug": "fleet-owner",           "issue": 314, "title": "the fleet owner" }
+  ],
+
+  "shots": [
+    {
+      "persona": "anonymous",
+      "step": "01",
+      "slug": "front-door",
+      "auth": "anon",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "login-view" }
+      ],
+      "note": "An unauthenticated GET / lands on /login (specs/01-frontpage.spec.ts)."
+    },
+    {
+      "persona": "anonymous",
+      "step": "02",
+      "slug": "login-form",
+      "auth": "anon",
+      "route": "/login",
+      "do": [
+        { "action": "expect", "testid": "login-username" },
+        { "action": "expect", "testid": "login-password" },
+        { "action": "expect", "testid": "login-submit" }
+      ]
+    },
+    {
+      "persona": "member",
+      "step": "01",
+      "slug": "login-filled",
+      "auth": "anon",
+      "route": "/login",
+      "do": [
+        { "action": "fill",   "testid": "login-username", "value": "e2e-user" },
+        { "action": "fill",   "testid": "login-password", "value": "@password" },
+        { "action": "expect", "testid": "login-submit" }
+      ],
+      "note": "The form as the tester leaves it BEFORE clicking Sign in. @password is the seeded shared credential, resolved at run time and never written into this file."
+    },
+    {
+      "persona": "member",
+      "step": "02",
+      "slug": "signed-in-home",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/user",
+      "do": [
+        { "action": "expect", "testid": "home-services-nav" }
+      ]
+    },
+    {
+      "persona": "member",
+      "step": "03",
+      "slug": "profile",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/user/profile",
+      "do": [
+        { "action": "expect", "testid": "profile-view" }
+      ]
+    },
+    {
+      "persona": "admin",
+      "step": "01",
+      "slug": "admin-console",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin",
+      "do": [
+        { "action": "expect", "testid": "admin-view" }
+      ]
+    },
+    {
+      "persona": "moderator",
+      "step": "01",
+      "slug": "mod-console",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/mod",
+      "do": [
+        { "action": "expect", "testid": "mod-home-view" }
+      ]
+    },
+    {
+      "persona": "superadmin",
+      "step": "01",
+      "slug": "signed-in-home",
+      "auth": "onboard",
+      "login": "@superadmin",
+      "route": "/user",
+      "do": [
+        { "action": "expect", "testid": "home-services-nav" }
+      ],
+      "note": "@superadmin resolves to SUPERADMIN_USERNAME (specs/rbac-roles.ts) — env-driven on a Studio-bootstrapped mesh, 'e2e-superadmin' otherwise."
+    }
+  ]
+}

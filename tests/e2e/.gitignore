@@ -24,3 +24,11 @@ playwright-report/
 # looks green. tests/scripts/test-e2e-gherkin-harness.sh fails if any file under
 # this directory is git-tracked.
 .features-gen/
+
+# Screenshot-capture harness output (shot-harness/shots.sh). One PNG per row of
+# shot-harness/shots.json, named <persona>-<NN>-<slug>.png — the exact paths the
+# 17 manual test plans (issues #290-#314) cite. NEVER COMMITTED: these are
+# regenerated against a live mesh on demand, and a committed copy would show a
+# build nobody is testing while reading as current evidence. The harness itself
+# (shots.json + capture.spec.ts + shots.sh + shot-table.mjs) IS tracked.
+shots/
