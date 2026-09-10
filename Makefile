@@ -1361,17 +1361,15 @@ kind-honesty: ## offline: prove the kind SSO harness cannot report an unperforme
 # It also extracts and EXECUTES bootstrap-kind.sh's egress preflight, the half
 # of #350 that can hard-abort a bring-up.
 #
-# Mutation-tested: 11 mutations of scripts/kind-doctor.sh and
-# bootstrap-kind.sh's preflight, all 11 killed, each verified to have actually
+# Mutation-tested: 13 mutations of scripts/kind-doctor.sh and
+# bootstrap-kind.sh's preflight, all 13 killed, each verified to have actually
 # changed the file and each restored to its exact sha256 afterwards. The number
 # here is what was measured, not a round claim — an earlier round asserted
 # "seven mutations, all seven killed" while three trivial ones survived, every
-# one of them in a code path no scenario exercised. Three of the eleven only
-# started dying once the assertions stopped being rc-only: dropping python3
-# from the preflight, restoring `except: sys.exit(0)`, and downgrading section
-# 4's zero-pods verdict all still produce a non-zero run through a DIFFERENT
-# fail-closed path, so an rc-only test cannot see them. The battery is listed
-# in the header of tests/scripts/test-kind-doctor.sh.
+# one of them in a code path no scenario exercised. Five of these thirteen
+# survived here too, until the tests they answer to stopped asking the easy
+# question. The battery, and what each survivor taught, is in the header of
+# tests/scripts/test-kind-doctor.sh.
 kind-doctor-test: ## offline: prove kind-doctor detects the outage it was written for
 	bash tests/scripts/test-kind-doctor.sh
 

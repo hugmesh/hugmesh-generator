@@ -95,7 +95,14 @@ fi
 head_ "2. Node egress (raw TCP — resolution is not tested, on purpose)"
 egress_targets() {
   for _name in registry.k8s.io ghcr.io quay.io; do
-    getent ahostsv4 "${_name}" 2>/dev/null | awk '$2 == "STREAM" { print $1 ":443"; exit }'
+    # `|| true` is not decoration. bootstrap-kind.sh runs under `set -euo
+    # pipefail`, and a getent that cannot resolve exits 2, which pipefail
+    # promotes to the pipeline's status. Without this the function dies at
+    # the FIRST unresolvable name and never emits the anycast fallback, so a
+    # host that merely has no DNS aborts its bring-up with no message at
+    # all. It survives today only because the call site is a `for` word
+    # list, where bash suppresses errexit — an accident, not a design.
+    getent ahostsv4 "${_name}" 2>/dev/null | awk '$2 == "STREAM" { print $1 ":443"; exit }' || true
   done
   printf '%s\n' 1.1.1.1:443 8.8.8.8:53 9.9.9.9:443
 }

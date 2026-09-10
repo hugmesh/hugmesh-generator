@@ -27,7 +27,7 @@
 # the half of this change that can hard-abort a bring-up and it had no test at
 # all.
 #
-# THE MUTATION BATTERY this suite is measured against — 11 applied, 11 killed,
+# THE MUTATION BATTERY this suite is measured against — 13 applied, 13 killed,
 # each verified to have changed the file and each restored to its exact sha256:
 #
 #   M1  drop `index($0, want) > 0 &&` from the suffix compare   (the blocker)
@@ -41,11 +41,22 @@
 #   M9  a failed `get pods -o json` -> the old "no pods found" shrug
 #   M10 bootstrap's preflight condition inverted (default OFF)
 #   M11 bootstrap's probe resolves a name INSIDE the node
+#   M12 drop `|| true` from the doctor's host-side resolution
+#   M13 drop `|| true` from the bootstrap's host-side resolution
 #
-# M3, M5 and M6 survived until the assertions stopped being rc-only. All three
-# still produce a non-zero run — through a DIFFERENT fail-closed path — so `rc
-# != 0` cannot distinguish "the guard caught it" from "something else fell over
-# first". Where a mutation is masked that way, assert on the MESSAGE.
+# FIVE of these survived at first, and the two reasons are worth keeping.
+#
+#   M3, M5, M6 survived while the assertions were rc-only. All three still
+#   produce a non-zero run — through a DIFFERENT fail-closed path — so `rc != 0`
+#   cannot distinguish "the guard caught it" from "something else fell over
+#   first". Where a mutation is masked that way, assert on the MESSAGE.
+#
+#   M12, M13 survived while scenario 27 called the target function inside a
+#   command substitution. At the real call site the function IS a `for` word
+#   list, and bash suppresses errexit for a command substitution in that
+#   position, so the guard is invisible there. Testing the shape the code
+#   happens to use today proved nothing about the code; testing the BARE call
+#   pins the property the guard actually claims.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -529,6 +540,63 @@ case "${out}" in *SKIP_EGRESS_PREFLIGHT=1*) ok "names the escape hatch at the mo
 out="$(PATH="${EGBIN}:${PATH}" STUB_EGRESS=0 SKIP_EGRESS_PREFLIGHT=1 bash "${EGRESS_BLOCK}" 2>&1)"; rc=$?
 [ "${rc}" -eq 0 ] && ok "SKIP_EGRESS_PREFLIGHT=1 bypasses a failing probe" || bad "the escape hatch does not work (rc=${rc}): ${out}"
 case "${out}" in *REACHED_END*) ok "the bypass continues the bring-up";; *) bad "the bypass did not continue";; esac
+
+echo "== 27. the probe target list survives total resolution failure =="
+# Tier 1 of the probe list resolves registry names ON THE HOST. bootstrap-kind.sh
+# runs under `set -euo pipefail`, and a getent that cannot resolve exits 2 —
+# which pipefail promotes to the pipeline's status. Without an explicit guard the
+# target function dies at the FIRST unresolvable name and never reaches the
+# anycast fallback, so a host that merely has no DNS aborts its bring-up with no
+# message at all. Measured: the same function called outside a `for` word list
+# exits 2 and prints nothing.
+#
+# This is exactly the class this PR exists to kill — a preflight that fails on a
+# host whose actual problem is not the one being probed.
+for tgt_src in "${DOCTOR}" "${BOOTSTRAP}"; do
+  tgt_label="$(basename "${tgt_src}")"
+  TGT_BLOCK="${WORK}/targets-${tgt_label}.sh"
+  # The two files spell the function differently (the bootstrap prefixes its
+  # locals with _ to avoid colliding with the 1800 lines around it), and the
+  # bootstrap's copy is indented, so find the name and its indentation rather
+  # than assuming either.
+  tgt_fn="$(grep -aoE '_?egress_targets\(\) \{' "${tgt_src}" | head -1 | sed 's/() {//')"
+  if [ -z "${tgt_fn}" ]; then
+    bad "${tgt_label}: no egress target function found at all"
+    continue
+  fi
+  # Call it BARE, with its output redirected to a file. That is the sensitive
+  # form and the whole reason this scenario exists: at the real call site the
+  # function is a `for` word list, `for _hp in $(_egress_targets)`, and bash
+  # suppresses errexit for a command substitution in that position — so both
+  # files survive a getent failure there whether or not the pipeline is
+  # guarded, and a test written against `$(...)` cannot see the guard at all.
+  # Measured: a BARE call to the unguarded function exits 2 and emits nothing.
+  # Pinning the bare form pins the property the code claims, which is that this
+  # function is safe to call from anywhere, not merely from where it happens to
+  # be called today.
+  TGT_OUT="${WORK}/targets-${tgt_label}.out"
+  {
+    echo 'set -euo pipefail'
+    sed -n "/^ *${tgt_fn}() {\$/,/^ *}\$/p" "${tgt_src}"
+    echo "${tgt_fn} > \"\$1\""
+  } > "${TGT_BLOCK}"
+  NORES="${WORK}/nores-${tgt_label}"; mkdir -p "${NORES}"
+  printf '#!/usr/bin/env bash\nexit 2\n' > "${NORES}/getent"; chmod +x "${NORES}/getent"
+  : > "${TGT_OUT}"
+  out="$(PATH="${NORES}:${PATH}" bash "${TGT_BLOCK}" "${TGT_OUT}" 2>&1)"; rc=$?
+  tgt_n="$(grep -ac . "${TGT_OUT}" 2>/dev/null || true)"
+  [ -n "${tgt_n}" ] || tgt_n=0
+  if [ "${rc}" -eq 0 ]; then
+    ok "${tgt_label}: the target function survives a getent that resolves nothing"
+  else
+    bad "${tgt_label}: the target function died (rc=${rc}) when resolution failed — a host with no DNS would abort its bring-up with no message: ${out}"
+  fi
+  if [ "${tgt_n}" -gt 0 ]; then
+    ok "${tgt_label}: falls back to ${tgt_n} literal target(s)"
+  else
+    bad "${tgt_label}: no probe targets at all when resolution fails"
+  fi
+done
 
 echo
 echo "kind-doctor: ${PASS} passed, ${FAIL} failed"
