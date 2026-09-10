@@ -400,3 +400,68 @@ read is refused) — the per-cluster roll itself is what remains live-gated.
 **Rollback:** revert the values merge on `apps/00-cassandra.yaml` (back to no
 authenticator / plaintext) and re-point `apps/00a-cassandra-hardening.yaml` at the
 empty overlay; the overlay objects are passive (Secrets/Jobs) and harmless if left.
+
+---
+
+## I. Node SELinux AVC workout — `tailscaled` is deliberately OUT of scope (#330)
+
+**Status: no change needed. The workout and the runlevel already agree.** This
+section exists so the question is not re-opened from the same wrong premise.
+
+Issue #330 reported that "`tailscaled` is in no default runlevel for any image,
+yet the QEMU AVC workout exercises it — the SELinux policy is being tuned
+against a service a real boot never starts", and asked for one of: add
+`rc-update add tailscaled default` for the roles that want it, or drop it from
+the workout and record that here. Measured against this tree on 2026-09-09,
+**both halves of the premise are false**, so neither branch applies:
+
+1. **The AVC workout does not exercise `tailscaled`.** The in-guest probe list
+   is `tests/qemu/avc-workload.sh`, and it contains *zero* tailscale
+   references. It covers every one of the nine `.te` modules that exist:
+   `hugmesh_authkeys` (ssh logins + a direct
+   `hugmesh-authorized-keys-lookup`, plus `sshd -T`), then `svc_probe` for
+   `hugmesh-device-registry-sync`, `hugmesh-domain-reconcile`,
+   `hugmesh-node-storage-reconcile`, `hugmesh-policy-sync`,
+   `hugmesh-tor-reconcile` and `hugmesh-egress-vpn` /
+   `hugmesh-vpn-reconcile`, and finally `containerd` / `kubelet` /
+   `kubeadm init --dry-run` for the `localpath_provisioner.te` +
+   `otel_collector.te` lane.
+   `tests/qemu/avc-workout.sh` mentions tailscale on exactly one line (:208)
+   and that line *disables* it — `"tailscale": { "enabled": false }` in the
+   KEYS manifest it builds, matching `run-qemu-test.sh:224`,
+   `mesh-cluster.sh:473` and `docker-entrypoint.sh:1040`. Phase 2 is a LAN
+   cluster with headscale/tailscale off by design.
+
+2. **No SELinux policy is being tuned against it.** `specs/selinux/` holds
+   nine `.te` modules — `hugmesh_authkeys`, `hugmesh_device_registry_sync`,
+   `hugmesh_domain_reconcile`, `hugmesh_node_storage`, `hugmesh_policy_sync`,
+   `hugmesh_tor`, `hugmesh_vpn`, `localpath_provisioner`, `otel_collector`.
+   **None mentions tailscale**
+   (`grep -rli tailscal specs/selinux/` returns nothing). There is no
+   tailscaled module to narrow, so no `INFERRED-WIDE` rule anywhere depends on
+   a tailscaled AVC.
+
+3. **`rc-update add tailscaled default` does exist** — at
+   `specs/etc/keys-provision/provision.sh:879`, inside `provision_tailscale()`.
+   It is *manifest-driven, at first boot*, not baked at build time: the
+   function reads `.tailscale.enabled` and adds the service to the default
+   runlevel when true, or runs `rc-update del tailscaled default` (:873) when
+   false. No builder links it — the grep that reads as "no image ever enables
+   it" was run against the build scripts, which is why the premise looked true.
+
+**Consequence for the runlevel question:** which roles "want" tailscaled is a
+per-deployment manifest choice, not a spec constant, so there is nothing to add
+to a role spec. Every harness payload sets `enabled: false`, provision therefore
+unschedules it, and the workout never probes it — consistent end to end.
+
+**One genuine loose end, filed as #343 (NOT fixed here).**
+`tests/qemu/assertions.sh:344-347` grades "`/usr/sbin/tailscaled` installed but
+not in the default runlevel" as a defect, and is deliberately manifest-blind for
+tailscaled (it reads the KEYS manifest only for `.headscale.enabled` and the
+SELinux mode). That is exactly the state `provision_tailscale()` produces on any
+image built *with* the mesh client whose manifest sets `enabled: false` — i.e.
+every harness payload. Confirming whether it actually fires needs a live QEMU
+boot, which the RAM budget of this run forbade. Two stale builder abort messages
+point the same way and should be corrected with it:
+`build-x86-host-stage4.sh:5868` and `build-frite-stage4.sh:1919` both say
+"tailscaled is enabled in the runlevel", which no builder does.
