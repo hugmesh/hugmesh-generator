@@ -2231,3 +2231,65 @@ stack-e2e-coverage-gen: ## re-emit tests/e2e/features/coverage/ from the persona
 stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is complete, pinned and drift-guarded (measured ~9 min)
 	bash tests/scripts/test-e2e-coverage-matrix-harness.sh
 	bash tests/scripts/test-e2e-coverage-matrix.sh
+
+# ── THE UNGATED LANE ─────────────────────────────────────────────────────────
+# hugmesh-generator#246: the PREMERGE_UNGATED suites had no routinely-executed
+# home. They are exempt from the pre-merge gate for a real reason — they need
+# node_modules + chromium + Qt6, or a live cluster, that no shell-suites CI image
+# carries, so gating them would gate a job that always skips — and the price of
+# that exemption was that they ran only when somebody remembered.
+#
+# Operator decision, 2026-09-10 on #246: "yes, make it a make target."
+# NO cron entry. NO systemd timer. NO CI job. This target runs when a human asks
+# and at no other time, and it is deliberately reachable ONLY by typing its name:
+#   * it is not a prerequisite of any other target;
+#   * .DEFAULT_GOAL is `help`, so a bare `make` never reaches it;
+#   * `ci` and `ci-quick` do not call it, and no .github/workflows or
+#     .gitlab-ci.yml job invokes `make e2e-ungated`.
+# If you are about to wire it into a pipeline, read the paragraph above first:
+# on a runner without the toolchain every suite in it exits 2 (SKIPPED-LOUDLY),
+# and a job that can only skip is the decorative artefact this repo keeps
+# re-learning about.
+#
+# Its own target and its own .PHONY line, for the same reason the BDD lane has
+# them: the recipes above are edited by other work in flight.
+#
+#   make e2e-ungated                          the 8 tests/scripts/test-e2e-*.sh
+#                                             suites #246 was written about
+#   E2E_UNGATED_SET=all make e2e-ungated      all 22 PREMERGE_UNGATED suites —
+#                                             additionally the stack, kind,
+#                                             casdoor, pentest, eso and liquibase
+#                                             ones, which are ungated for their
+#                                             own reasons
+#   E2E_UNGATED_STRICT=1 make e2e-ungated     treat a SKIPPED-LOUDLY exit 2 as red
+#                                             (use on a box you believe is fully
+#                                             equipped: it turns "the toolchain
+#                                             vanished" from silence into a red)
+#   E2E_UNGATED_LOG_DIR=... make e2e-ungated  put the dated evidence dir elsewhere
+#   E2E_UNGATED_DRY_RUN=1 make e2e-ungated    print WHICH suites the selection
+#                                             resolves to and whether a real run
+#                                             would be allowed beside whatever is
+#                                             currently up, then stop having
+#                                             executed nothing. Verified here on
+#                                             2026-09-10: 8 of 22 by default, 22
+#                                             of 22 with E2E_UNGATED_SET=all.
+#
+# Neither set is hardcoded here. tests/scripts/run-ungated-lane.sh DERIVES both
+# from the PREMERGE_UNGATED array in tests/scripts/test-guard-integrity.sh, so a
+# suite that is exempted or gated tomorrow changes this lane the same day. A
+# second copy of the list in this file would drift, and would drift silently.
+#
+# THE LIVE STACK. #246's third bullet says the lane must never disturb the
+# operator's live hugmesh-local stack. The runner REFUSES TO START (exit 3) when
+# it sees a hugmesh-local container or kind cluster, tears nothing down in any
+# mode, and under the explicit E2E_UNGATED_ALLOW_LIVE_STACK=1 override censuses
+# that footprint before and after and exits 4 if it moved.
+#
+# EXIT: 0 all green (skips tolerated unless STRICT), 1 a suite was red or
+# errored, 3 refused beside a live stack, 4 the live footprint changed.
+# Evidence: one dated dir per run under tests/.ungated-lane/ (gitignored),
+# never under out/.
+.PHONY: e2e-ungated
+
+e2e-ungated: ## MANUAL ONLY: run the PREMERGE_UNGATED suites (8 e2e by default; E2E_UNGATED_SET=all for 22)
+	bash tests/scripts/run-ungated-lane.sh

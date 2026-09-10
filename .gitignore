@@ -167,3 +167,9 @@ tests/stack/.uidist/_remotes/wasm-fragment/
 # is a number that means nothing anywhere else and stops matching here the moment the
 # process exits.
 tests/stack/.run/
+
+# Ungated-lane evidence: one dated dir per `make e2e-ungated` run, holding that
+# run's verdict table and one .log per suite. Runtime state of one machine and of
+# one moment, never shared — the tests/stack/.run/ precedent. Deliberately NOT
+# under out/, which is the generator's product tree.
+tests/.ungated-lane/
