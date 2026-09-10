@@ -135,6 +135,10 @@ for p in d.get("items", []):
 for i in sorted(seen):
     print(i)
 ')"
+  # repoDigests as well as repoTags. A pod may reference a DIGEST-PINNED ref
+  # (name@sha256:... or name:tag@sha256:...), and those never appear in
+  # repoTags — measured live 2026-09-10, where three running pods' images were
+  # reported missing by a tags-only comparison while the pods were Running.
   held="$(docker exec "${NODE}" crictl images -o json 2>/dev/null | python3 -c '
 import json, sys
 try:
@@ -142,7 +146,7 @@ try:
 except Exception:
     sys.exit(0)
 for img in d.get("images", []):
-    for t in img.get("repoTags") or []:
+    for t in (img.get("repoTags") or []) + (img.get("repoDigests") or []):
         print(t)
 ')"
   if [ -z "${wanted}" ]; then
@@ -151,19 +155,56 @@ for img in d.get("images", []):
     missing=""
     while IFS= read -r ref; do
       [ -n "${ref}" ] || continue
-      # containerd normalises docker.io/library refs; compare on the tail too.
-      short="${ref##*/}"
+      # A ref can be `name:tag`, `name@sha256:...`, or `name:tag@sha256:...`,
+      # and the node reports repoTags (name:tag) and repoDigests (name@digest)
+      # as separate lists — a digest-pinned ref appears in NEITHER as written.
+      #
+      # Every comparison below is EXACT. Two mutations on 2026-09-10 survived
+      # an earlier version of this block, and each was a substring match: an
+      # unanchored digest compare accepted `other@sha256:aaaabbbb` for
+      # `login-ui@sha256:aaaa`, and an unanchored tail compare accepted
+      # `:v10` for `:v1`. A guard that matches the wrong image is a guard that
+      # reports green on a cluster that cannot run.
+      ref_name="${ref%%@*}"
+      ref_digest=""
+      case "${ref}" in *@*) ref_digest="${ref##*@}" ;; esac
+      # Strip a tag only when the colon is AFTER the last slash — `localhost:5001/x`
+      # is a registry port, not a tag.
+      ref_repo="${ref_name}"
+      case "${ref_name##*/}" in *:*) ref_repo="${ref_name%:*}" ;; esac
+
+      matched=0
       if printf '%s\n' "${held}" | grep -aFx -- "${ref}" >/dev/null 2>&1; then
-        continue
+        matched=1
+      elif [ -n "${ref_digest}" ] && printf '%s\n' "${held}" | grep -aFx -- "${ref_repo}@${ref_digest}" >/dev/null 2>&1; then
+        matched=1
+      elif printf '%s\n' "${held}" | grep -aFx -- "${ref_name}" >/dev/null 2>&1; then
+        matched=1
+      else
+        # Last resort, and only for registry normalisation: a pod that says
+        # `alpine:3.20` is satisfied by a held `docker.io/library/alpine:3.20`.
+        # An exact SUFFIX on a slash boundary — never a substring.
+        for candidate in "${ref}" "${ref_name}"; do
+          [ -n "${candidate}" ] || continue
+          if printf '%s\n' "${held}" | awk -v want="/${candidate}" \
+               'index($0, want) == length($0) - length(want) + 1 { found = 1 } END { exit !found }'; then
+            matched=1; break
+          fi
+        done
       fi
-      if printf '%s\n' "${held}" | grep -aF -- "/${short}" >/dev/null 2>&1; then
-        continue
-      fi
+      [ "${matched}" -eq 1 ] && continue
       missing="${missing}${ref}"$'\n'
     done <<< "${wanted}"
     if [ -z "${missing}" ]; then
       ok "every referenced image is present in the node ($(printf '%s\n' "${wanted}" | grep -ac . ) refs)"
     else
+      # "First-party" is the registry.hugmesh.net/ prefix, because that is what
+      # this repo's kustomize images: blocks render and what kind-load-images.sh
+      # side-loads. A miss there is FATAL (those refs never pull). A miss on
+      # anything else is a WARN (it can still be pulled). A cluster wired to a
+      # different local registry would have its side-loaded images classified as
+      # third-party and so only warned about — worth revisiting if that ever
+      # ships; today no profile in this repo does it.
       first_party="$(printf '%s' "${missing}" | grep -a 'registry.hugmesh.net/' || true)"
       other="$(printf '%s' "${missing}" | grep -av 'registry.hugmesh.net/' || true)"
       if [ -n "${first_party}" ]; then

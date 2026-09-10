@@ -124,6 +124,107 @@ else
   ok "probe resolves no names"
 fi
 
+echo "== 7. digest-pinned refs are not reported missing =="
+# Found LIVE on 2026-09-10: three Running pods' images were reported missing by
+# a repoTags-only comparison. A pod ref can be name@sha256:..., or
+# name:tag@sha256:..., and neither ever appears in repoTags — only repoDigests.
+# A guard that cries wolf on a healthy cluster gets ignored, which is the same
+# outcome as no guard.
+PODS_DIGEST='{"items":[{"spec":{"containers":[
+  {"image":"alpine/openssl@sha256:aaaa"},
+  {"image":"registry.k8s.io/ingress-nginx/controller:v1.11.8@sha256:bbbb"}],
+  "initContainers":[{"image":"alpine/git:v2.45.2@sha256:cccc"}]}}]}'
+HELD_DIGEST='{"images":[
+  {"repoTags":[],"repoDigests":["alpine/openssl@sha256:aaaa"]},
+  {"repoTags":["registry.k8s.io/ingress-nginx/controller:v1.11.8"],"repoDigests":["registry.k8s.io/ingress-nginx/controller@sha256:bbbb"]},
+  {"repoTags":[],"repoDigests":["alpine/git@sha256:cccc"]}]}'
+make_stubs; scenario digest 1 running 1 "${PODS_DIGEST}" "${HELD_DIGEST}"
+out="$(run_doctor)"; rc=$?
+[ "${rc}" -eq 0 ] && ok "no false alarm on digest-pinned refs" || bad "false alarm on digest-pinned refs: ${out}"
+case "${out}" in *"not yet pulled"*|*"are NOT in the node"*) bad "still reports digest-pinned images as missing";; *) ok "reports none of them missing";; esac
+
+echo "== 8. a digest-pinned ref whose digest is ABSENT is still caught =="
+# The inverse of 7, because the fix for a false positive is exactly how a false
+# NEGATIVE gets introduced.
+HELD_WRONG_DIGEST='{"images":[{"repoTags":[],"repoDigests":["alpine/openssl@sha256:zzzz"]}]}'
+PODS_ONE_DIGEST='{"items":[{"spec":{"containers":[{"image":"registry.hugmesh.net/hugmesh/hugmesh-login-ui@sha256:aaaa"}]}}]}'
+make_stubs; scenario digestmiss 1 running 1 "${PODS_ONE_DIGEST}" "${HELD_WRONG_DIGEST}"
+out="$(run_doctor)"; rc=$?
+[ "${rc}" -ne 0 ] && ok "a missing digest-pinned first-party image is still a FAIL" || bad "went green on a missing digest-pinned image"
+
+echo "== 9. a digest that is only a PREFIX of a held digest does not count =="
+# Both of these survived a mutation round on 2026-09-10: dropping the "@" anchor
+# on the digest compare, and dropping -x from the name:tag compare. Each turns
+# an exact-match into a substring match, and a substring match is how a guard
+# quietly starts passing on the wrong image.
+PODS_PFX='{"items":[{"spec":{"containers":[{"image":"registry.hugmesh.net/hugmesh/hugmesh-login-ui@sha256:aaaa"}]}}]}'
+HELD_PFX='{"images":[{"repoTags":[],"repoDigests":["registry.hugmesh.net/hugmesh/hugmesh-other@sha256:aaaabbbb"]}]}'
+make_stubs; scenario digestpfx 1 running 1 "${PODS_PFX}" "${HELD_PFX}"
+out="$(run_doctor)"; rc=$?
+[ "${rc}" -ne 0 ] && ok "a prefix-only digest match is still reported missing" || bad "accepted a digest that is merely a prefix of a held one"
+
+echo "== 10. a tag that is a PREFIX of a held tag does not count =="
+PODS_TAGPFX='{"items":[{"spec":{"containers":[{"image":"registry.hugmesh.net/hugmesh/hugmesh-login-ui:v1"}]}}]}'
+HELD_TAGPFX='{"images":[{"repoTags":["registry.hugmesh.net/hugmesh/hugmesh-login-ui:v10"],"repoDigests":[]}]}'
+make_stubs; scenario tagpfx 1 running 1 "${PODS_TAGPFX}" "${HELD_TAGPFX}"
+out="$(run_doctor)"; rc=$?
+[ "${rc}" -ne 0 ] && ok ":v1 is not satisfied by a held :v10" || bad "accepted :v10 as a match for :v1"
+
+echo "== 11. same repo, digest is only a prefix of the held digest =="
+# Test 9 used a DIFFERENT repo, so it could not tell an exact compare from a
+# substring one. This one shares the repo and differs only in the digest tail,
+# which is what actually distinguishes the two.
+PODS_SAMEREPO='{"items":[{"spec":{"containers":[{"image":"registry.hugmesh.net/hugmesh/hugmesh-login-ui@sha256:aaaa"}]}}]}'
+HELD_SAMEREPO='{"images":[{"repoTags":[],"repoDigests":["registry.hugmesh.net/hugmesh/hugmesh-login-ui@sha256:aaaabbbb"]}]}'
+make_stubs; scenario samerepo 1 running 1 "${PODS_SAMEREPO}" "${HELD_SAMEREPO}"
+out="$(run_doctor)"; rc=$?
+[ "${rc}" -ne 0 ] && ok "same-repo prefix digest is still missing" || bad "accepted @sha256:aaaabbbb as @sha256:aaaa on the same repo"
+
+echo "== 12. the registry-normalisation fallback is a SUFFIX, not a substring =="
+# The fallback exists so a pod saying `alpine:3.20` is satisfied by a held
+# `docker.io/library/alpine:3.20`. It must not also accept a held
+# `docker.io/library/alpine:3.20-alternate`.
+PODS_SUFFIX='{"items":[{"spec":{"containers":[{"image":"alpine:3.20"}]}}]}'
+HELD_SUFFIX_OK='{"images":[{"repoTags":["docker.io/library/alpine:3.20"],"repoDigests":[]}]}'
+HELD_SUFFIX_BAD='{"images":[{"repoTags":["docker.io/library/alpine:3.20-alternate"],"repoDigests":[]}]}'
+make_stubs; scenario sfxok 1 running 1 "${PODS_SUFFIX}" "${HELD_SUFFIX_OK}"
+out="$(run_doctor)"; rc=$?
+[ "${rc}" -eq 0 ] && ok "docker.io/library/alpine:3.20 satisfies alpine:3.20" || bad "registry normalisation broke: ${out}"
+make_stubs; scenario sfxbad 1 running 1 "${PODS_SUFFIX}" "${HELD_SUFFIX_BAD}"
+out="$(run_doctor)"; rc=$?
+case "${out}" in *"not yet pulled"*|*"NOT in the node"*) ok ":3.20-alternate does not satisfy :3.20";; *) bad "substring fallback accepted :3.20-alternate for :3.20";; esac
+
+echo "== 13. a registry PORT is not mistaken for a tag =="
+# `localhost:5001/foo:v1@sha256:...` — the colon after the last slash is the
+# tag; the one before it is a port. Splitting on the first colon yields
+# `localhost`, and every digest-pinned image on a ported registry is then
+# reported missing on a perfectly healthy cluster.
+PODS_PORT='{"items":[{"spec":{"containers":[{"image":"localhost:5001/hugmesh/login-ui:v1@sha256:aaaa"}]}}]}'
+HELD_PORT='{"images":[{"repoTags":["localhost:5001/hugmesh/login-ui:v1"],"repoDigests":["localhost:5001/hugmesh/login-ui@sha256:aaaa"]}]}'
+make_stubs; scenario port 1 running 1 "${PODS_PORT}" "${HELD_PORT}"
+out="$(run_doctor)"; rc=$?
+[ "${rc}" -eq 0 ] && ok "a ported registry with a digest pin resolves" || bad "registry port treated as a tag: ${out}"
+
+echo "== 14. ported registry, digest-only: the port is not the tag =="
+# Test 13 could not tell a correct tag-strip from a broken one, because the
+# name:tag branch rescued the broken version. This one removes that rescue:
+# repoTags is EMPTY, which is exactly what containerd reports for an image
+# pulled by digest. Now the only route to a match is `repo@digest`, and getting
+# `repo` wrong (splitting on the first colon, i.e. treating the registry PORT as
+# a tag) reports a healthy cluster as broken.
+PODS_PORT_D='{"items":[{"spec":{"containers":[{"image":"localhost:5001/hugmesh/login-ui:v1@sha256:aaaa"}]}}]}'
+HELD_PORT_D='{"images":[{"repoTags":[],"repoDigests":["localhost:5001/hugmesh/login-ui@sha256:aaaa"]}]}'
+make_stubs; scenario portdigest 1 running 1 "${PODS_PORT_D}" "${HELD_PORT_D}"
+out="$(run_doctor)"; rc=$?
+# Assert on the OUTPUT, not the exit code: a localhost:5001 ref is not
+# first-party by the registry.hugmesh.net test, so a miss there is only a WARN
+# and rc stays 0. An rc-only assertion cannot see this failure at all — which is
+# how the first version of this test passed against a broken tag-strip.
+case "${out}" in
+  *"localhost:5001/hugmesh/login-ui"*) bad "registry port treated as a tag: the image was reported missing";;
+  *) ok "digest-only match on a ported registry resolves";;
+esac
+
 echo
 echo "kind-doctor: ${PASS} passed, ${FAIL} failed"
 [ "${FAIL}" -eq 0 ] || exit 1
