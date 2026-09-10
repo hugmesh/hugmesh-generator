@@ -66,7 +66,9 @@ from ..qt import Qt, QtCore, QtGui, QtWidgets
 from .. import console
 from ..styles import MUTED, WARN
 from ...core import emulation, emulation_save, mesh_emulation, qemu_devices, qemu_tests
+from ...core.local_stack_node import LocalStackNode
 from . import _emulation_common as common
+from ._mesh_monitor_widget import MeshMonitorSection
 from ._scroll import scrollable
 from ._widgets import label_finish_as_exit
 from .localmesh import _MeshWorker
@@ -74,9 +76,33 @@ from .localmesh import _MeshWorker
 #: Device-table columns — symbolic, never hardcoded at a call site (progress.py's
 #: rule), headers beside them so a column can never be labelled as its neighbour.
 (_MCOL_LABEL, _MCOL_ROLE, _MCOL_ARCH, _MCOL_STATE, _MCOL_VERDICT, _MCOL_SECTIONS,
- _MCOL_SSH, _MCOL_USER, _MCOL_ACTIONS, _MCOL_QMP, _MCOL_SAVE) = range(11)
+ _MCOL_SSH, _MCOL_USER, _MCOL_ACTIONS, _MCOL_QMP, _MCOL_SAVE,
+ _MCOL_REPLICAS) = range(12)
 _HEADERS = ("Device", "Role", "Arch", "State", "Verdict", "Sections", "SSH",
-            "Login", "Actions", "QEMU", "Save disk")
+            "Login", "Actions", "QEMU", "Save disk", "Replicas")
+
+#: The Replicas column's tooltip, and the whole reason its ceiling is 1.
+#:
+#: The operator asked for the monitor's -/+/Apply on this table too, "so devices and
+#: services scale here as well" (#336). It is wired to the runner and it is honest
+#: about how far it can go: an emulated device is ONE guest per built image, and its
+#: identity is allocated per PLAN ROW -- MAC and mesh IP from the row's index
+#: (core/mesh_emulation._mesh_mac), the ssh port from the same place, the container
+#: named after the label. A second instance of a row would collide with the first on
+#: every one of those, and the runner has no replica verb to ask for one with. So the
+#: counts that exist here are 0 and 1, Apply drives the SAME runner start/stop verbs
+#: the buttons beside it drive, and the ceiling says so instead of offering a number
+#: the runner would refuse. The SERVICES inside the mesh scale in the pod table below.
+_REPLICAS_TIP = (
+    "0 or 1 — an emulated device is one guest per built image. Its MAC, mesh IP, ssh "
+    "port and container name are allocated per plan row, so a second copy of a row "
+    "would collide with the first on all four, and the runner has no verb to ask for "
+    "one. Apply runs the same start (1) and stop (0) the buttons in Actions run. To "
+    "scale the SERVICES the mesh runs, use the Replicas column in the running-mesh "
+    "table below.")
+_REPLICAS_APPLY_TIP = ("Start this device (1) or stop it (0) through the runner. "
+                       "Enabled when the target differs from what is running and no "
+                       "other verb owns the page.")
 
 #: Section badge colours (the #50 per-section dropdown). Distinct from the verdict
 #: colours in _emulation_common: these grade a SECTION (boot/ssh/provision/web),
@@ -179,7 +205,7 @@ class _Row:
     """
 
     def __init__(self, planned, user, sections, ssh_btn, start, stop, qmp, arm_reset,
-                 save, overwrite, arm_save):
+                 save, overwrite, arm_save, replicas=None):
         self.planned = planned          # mesh_emulation.PlannedDevice
         self.status = None              # emulation.DeviceStatus | None
         self.user = user                # QComboBox
@@ -192,6 +218,9 @@ class _Row:
         self.save = save
         self.overwrite = overwrite
         self.arm_save = arm_save        # QCheckBox guarding the overwrite
+        #: The -/+/Apply strip (_emulation_common.ReplicaStrip), 0..1. Defaulted so a
+        #: caller that predates the column still builds a row.
+        self.replicas = replicas
         #: This device's existing saves, newest first, as of the last refresh.
         #: Cached rather than re-scanned inside the arming pass, which runs on every
         #: poll tick, while the set of files can only change when a save finishes.
@@ -407,6 +436,29 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self.devices = common.make_table(_HEADERS, min_height=200)
         lay.addWidget(self.devices)
 
+        # ── the running mesh's pods and containers (#336) ────────────────────────
+        # A DIFFERENT mesh from the table above, and the note says so: the rows above
+        # are emulated QEMU guests booted from this session's images, and this section
+        # is the docker compose project and the kind cluster running on THIS
+        # workstation. Both are "the mesh" to an operator standing in front of them,
+        # and having only one of them on screen is what the request was about.
+        #
+        # Collapsed and greyed until something is up, exactly as on the local-mesh page
+        # (PR #291's contract) — MeshMonitorSection owns that gate, the 10 s poll and
+        # the off-thread read, so this page holds no monitor logic of its own.
+        self.monitor = MeshMonitorSection(
+            self, self.wiz.generator_dir, self._monitor_node,
+            title="Running mesh — pods, containers and their addresses",
+            scaling=True,
+            what=("This reads the docker compose project and the kind cluster on THIS "
+                  "workstation — not the emulated guests in the table above."))
+        # `make view` is the local-mesh page's session to own; this mount would be a
+        # second launcher for one process-owner guard.
+        self.monitor.monitor.hide_view_controls(
+            "Open the browser door from the local-mesh page — it owns the `make view` "
+            "session, and two launchers would fight over one session lock.")
+        self.monitor.mount(lay)
+
         # ── the whole-mesh save: preview FIRST, always ───────────────────────────
         self.save_box = QtWidgets.QGroupBox("Save the whole mesh")
         sv = QtWidgets.QVBoxLayout(self.save_box)
@@ -493,6 +545,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         page exists to leave a mesh RUNNING.
         """
         self.poll.stop()
+        self.monitor.shutdown()
         self._close_tunnels("left the mesh emulation page")
         super().cleanupPage()
 
@@ -506,11 +559,28 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         costs nothing but the ticks that were never worth taking.
         """
         self.poll.stop()
+        self.monitor.stop()
         super().hideEvent(event)
 
     def showEvent(self, event):
         super().showEvent(event)
         self._sync_poll()
+        self.monitor.start()
+
+    # ── the running-mesh monitor's node ─────────────────────────────────────────
+    def _monitor_node(self):
+        """The stack node the monitor reads both lanes through, built once.
+
+        Deliberately a DEFAULT LocalStackNode: the monitor only reads (compose ps,
+        kubectl get, docker inspect), and this page has no local-mesh configuration to
+        thread in — the ports and the compose file are the ones the Makefile uses,
+        which is what the running mesh was started with.
+        """
+        node = getattr(self, "_monitor_stack_node", None)
+        if node is None:
+            node = LocalStackNode(self.wiz.generator_dir)
+            self._monitor_stack_node = node
+        return node
 
     # ── docker ──────────────────────────────────────────────────────────────────
     def _refresh_docker_note(self):
@@ -664,8 +734,25 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
             self.devices.setCellWidget(
                 r, _MCOL_SAVE, common.button_strip(save, overwrite, arm_save))
 
+            # ── replicas: 0 or 1, through the runner (see _REPLICAS_TIP) ────────
+            replicas = common.ReplicaStrip(
+                planned.label, ceiling=1,
+                what=f"the emulated device {planned.label}",
+                minus_tip="Target 0 — stop this device through the runner.",
+                plus_tip="Target 1 — boot this device through the runner.",
+                apply_tip=_REPLICAS_APPLY_TIP)
+            replicas.widget.setToolTip(_REPLICAS_TIP)
+            replicas.minus.clicked.connect(
+                lambda _=False, i=r: self._bump_replicas(i, -1))
+            replicas.plus.clicked.connect(
+                lambda _=False, i=r: self._bump_replicas(i, +1))
+            replicas.apply.clicked.connect(
+                lambda _=False, i=r: self._apply_replicas(i))
+            self.devices.setCellWidget(r, _MCOL_REPLICAS, replicas.widget)
+
             self._rows.append(_Row(planned, user, sections, ssh_btn, start, stop,
-                                   qmp, arm_reset, save, overwrite, arm_save))
+                                   qmp, arm_reset, save, overwrite, arm_save,
+                                   replicas))
         self.devices.resizeColumnsToContents()
 
     # ── plan vs reality ─────────────────────────────────────────────────────────
@@ -873,6 +960,55 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
             "after every verb: consent for one click, not a mode the row stays in.")
         self._arm_pause(row, live)
         self._arm_save(row, idle)
+        self._arm_replicas(row, idle, up)
+
+    def _arm_replicas(self, row: _Row, idle: bool, up: bool):
+        """The row's 0/1 replica control, against what is ACTUALLY running.
+
+        The observed count is the row's own liveness — the same answer Start and Stop
+        are armed from — so the two controls can never disagree about whether this
+        device is up. A target the operator moved is left alone until the verb that
+        spends it finishes (``_disarm_all``); one nobody moved simply follows reality.
+        """
+        strip = row.replicas
+        if strip is None:
+            return
+        observed = 1 if up else 0
+        if not strip.pending:
+            strip.target = observed
+        strip.paint(observed, busy=not idle)
+        if not self._docker_ok:
+            # Stopping never needs docker to be healthy; starting always does, and
+            # the note above the table already says why it is not.
+            strip.plus.setEnabled(False)
+            if strip.target > observed:
+                strip.apply.setEnabled(False)
+
+    def _bump_replicas(self, index: int, delta: int):
+        row = self._rows[index]
+        if row.replicas is None:
+            return
+        row.replicas.bump(delta)
+        self._sync_controls()
+
+    def _apply_replicas(self, index: int):
+        """Apply on a device row: the SAME runner verbs Start and Stop press.
+
+        No second process lane and no second spelling of the per-device start — that
+        divergence is exactly what T3 removed from this page (see the module
+        docstring), and a replica control that grew its own would put it straight back.
+        """
+        row = self._rows[index]
+        strip = row.replicas
+        if strip is None or self._running:
+            return
+        observed = 1 if row.up else 0
+        if strip.target == observed:
+            return
+        if strip.target >= 1:
+            self._start_device(index)
+        else:
+            self._stop_device(index)
 
     def _shell_tooltip(self, row: _Row) -> str:
         dev = row.dev
@@ -1129,6 +1265,12 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         for row in self._rows:
             row.arm_save.setChecked(False)
             row.arm_reset.setChecked(False)
+            # The same rule for the replica target: one press, one ask. Cleared here
+            # rather than snapped to a count, because the count is re-read AFTER this
+            # (_verb_done -> _refresh_reality) and a target set from the pre-verb
+            # truth would re-arm Apply against the post-verb one.
+            if row.replicas is not None:
+                row.replicas.clear_pending()
 
     def _set_running(self, running: bool):
         self._running = running

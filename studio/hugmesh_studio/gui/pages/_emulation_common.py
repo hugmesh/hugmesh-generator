@@ -288,6 +288,12 @@ class ReplicaStrip:
         self.what = what or key
         self.target = 0
         self.observed = 0
+        #: True once the operator has MOVED the target away from what is running, and
+        #: false again when the action that spends it finishes. A table that repaints
+        #: on a timer needs the difference between "the operator is mid-decision" and
+        #: "this is just what is running": without it, a target left behind by a
+        #: finished verb re-arms Apply forever against the new count.
+        self.pending = False
         self.minus = QtWidgets.QPushButton("−")
         self.minus.setToolTip(minus_tip or "One fewer.")
         self.count = QtWidgets.QLabel("0")
@@ -304,7 +310,12 @@ class ReplicaStrip:
     def bump(self, delta: int) -> int:
         """Move the target within [0, ceiling] and answer where it landed."""
         self.target = max(0, min(self.ceiling, self.target + int(delta)))
+        self.pending = self.target != self.observed
         return self.target
+
+    def clear_pending(self) -> None:
+        """The action this target asked for has finished — one press, one ask."""
+        self.pending = False
 
     def paint(self, observed: int, *, busy: bool = False) -> None:
         self.observed = int(observed)
