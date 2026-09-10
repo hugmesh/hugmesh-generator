@@ -401,11 +401,33 @@ kubectl version >/dev/null 2>&1 || { echo "cluster not reachable after kind crea
 #   dial tcp: lookup quay.io on 172.18.0.1:53: read udp ...: i/o timeout
 # and looked exactly like DNS. A resolution-based preflight reports GREEN
 # through the precise failure it exists to catch.
+#
+# TARGETS, in two tiers. Tier 1 is the registries this lane actually pulls
+# from, RESOLVED ON THE HOST — the node is only ever handed a literal address,
+# so nothing is resolved inside the netns whose resolver lies. Tier 2 is public
+# anycast literals, a floor for a host that cannot resolve. Tier 1 exists
+# because 1.1.1.1:443 / 8.8.8.8:53 / 9.9.9.9:443 are three PUBLIC DNS
+# RESOLVERS, two of them on their DoH port, and none of them a registry: they
+# are the single most commonly blocked destination class on a managed network,
+# and probing only those turns "this lab forces its own resolver" into a hard
+# abort of a bring-up that would have worked.
+#
+# NOTE ON PLACEMENT: this can only run once the node container exists, so on a
+# COLD host `kind create cluster` above already had to pull the node image and
+# will have died with its own opaque error first. This preflight covers the far
+# commoner case — a host whose docker rules were lost while the node image was
+# already cached.
 # ─────────────────────────────────────────────────────────────────────────
 if [ "${SKIP_EGRESS_PREFLIGHT:-0}" != "1" ]; then
   _egress_node="${CLUSTER_NAME}-control-plane"
   _egress_ok=0
-  for _hp in 1.1.1.1:443 8.8.8.8:53 9.9.9.9:443; do
+  _egress_targets() {
+    for _n in registry.k8s.io ghcr.io quay.io; do
+      getent ahostsv4 "${_n}" 2>/dev/null | awk '$2 == "STREAM" { print $1 ":443"; exit }'
+    done
+    printf '%s\n' 1.1.1.1:443 8.8.8.8:53 9.9.9.9:443
+  }
+  for _hp in $(_egress_targets); do
     _h="${_hp%%:*}"; _p="${_hp##*:}"
     if docker exec "${_egress_node}" timeout 4 bash -c "exec 3<>/dev/tcp/${_h}/${_p}" >/dev/null 2>&1; then
       _egress_ok=1; break
@@ -432,8 +454,14 @@ if [ "${SKIP_EGRESS_PREFLIGHT:-0}" != "1" ]; then
       sudo rc-service docker restart      # OpenRC / Gentoo
       sudo systemctl restart docker       # systemd
 
-    Expect the kind node NOT to survive that restart; re-run this script
-    afterwards to rebuild.
+    Expect the kind node NOT to survive that restart, and REBUILD, do not
+    merely re-run:
+
+      make kind-down && make kind-up
+
+    `make kind-up` alone is not enough. `kind get clusters` still NAMES a
+    stopped cluster, so this script takes its "already exists - reusing it"
+    branch and then hangs on an API server that is never coming back.
 
     To proceed anyway (an air-gapped host with every image already loaded):
       SKIP_EGRESS_PREFLIGHT=1 make kind-up
@@ -1844,7 +1872,7 @@ verify_mtls_issuance || {
 # `make kind-up` THEN `make kind-images`, so a missing first-party image at
 # this exact moment is expected, not an error. `make kind-doctor` is the same
 # check with teeth.
-if [ -x "${REPO_ROOT}/scripts/kind-doctor.sh" ]; then
+if [ -r "${REPO_ROOT}/scripts/kind-doctor.sh" ]; then
   echo
   KIND_DOCTOR_WARN_ONLY=1 KIND_CLUSTER_NAME="${CLUSTER_NAME}" \
     bash "${REPO_ROOT}/scripts/kind-doctor.sh" || true
