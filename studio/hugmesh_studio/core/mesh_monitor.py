@@ -46,6 +46,14 @@ owns a session-owner guard and one ``up`` per state dir, and a second forwarder 
 fight it. A ClusterIP-only service with no live door gets its address, the exact
 ``port-forward`` command that would make one, and no button.
 
+SCALING (2026-09-09). The table is no longer read-only: every row carries the
+CONTROLLER behind it (``ScaleTarget``) and ``scale()`` runs one ``kubectl scale`` or
+one ``docker compose up --scale``. The row is never the target — a pod and a container
+are instances, and asking for more of an instance is meaningless — so the target is
+derived once, from the pod's own ``pod-template-hash`` label (see ``ScaleTarget``) or
+from the compose service label, and a row whose controller cannot be scaled says which
+kind it is and why instead of offering a control that reverts.
+
 Qt-free by construction (``test_module_is_qt_free``).
 """
 from __future__ import annotations
@@ -113,6 +121,56 @@ class Door:
         return bool(self.url) and not self.blocked
 
 
+#: What ONE scale press may ask for. Not a Kubernetes limit and not a compose limit
+#: — a fat-finger guard on a control whose "+" is one pixel from "Apply". A mesh that
+#: genuinely wants 40 replicas of something is not asking for it from this table.
+MAX_REPLICAS = 20
+
+#: A scale verb's ceiling. `docker compose up --scale` PULLS and STARTS containers and
+#: `kubectl scale` returns as soon as the spec is written, so the two ends of this are
+#: far apart; the long one is what the budget has to cover.
+SCALE_TIMEOUT_S = 180
+
+
+@dataclass(frozen=True)
+class ScaleTarget:
+    """The WORKLOAD behind a row, which is what scales — never the row itself.
+
+    A monitor row is one POD or one CONTAINER, and neither of those is a thing you can
+    ask for more of: you ask its controller. So every row carries the controller it
+    belongs to, or the sentence saying why it has none. ``refused`` is what the dash's
+    tooltip shows, and it is deliberately the DEFAULT: a row that was never given a
+    target must read as "not scalable", never as "scalable to nothing".
+
+    THE DEPLOYMENT IS DERIVED FROM THE POD'S OWN LABEL, not from a name pattern.
+    A pod's ``ownerReferences`` names its ReplicaSet, and scaling a ReplicaSet that a
+    Deployment owns is undone by the Deployment controller within seconds — a control
+    that appears to work and silently reverts. The Deployment's name is the ReplicaSet
+    name minus its ``pod-template-hash``, and that hash is on the POD as a label, so the
+    strip is exact rather than a guess at how many trailing characters are a hash. A
+    ReplicaSet with no such label is refused rather than scaled directly.
+    """
+    kind: str = ""                # "deployment" | "statefulset" | "compose-service"
+    name: str = ""
+    namespace: str = ""
+    refused: str = "this row carries no scalable workload"
+
+    @property
+    def scalable(self) -> bool:
+        return bool(self.kind and self.name) and not self.refused
+
+    @property
+    def key(self) -> str:
+        """Rows sharing this key are replicas OF EACH OTHER — how "how many are there
+        now?" is counted without asking the API a second question."""
+        return f"{self.kind}/{self.namespace}/{self.name}"
+
+    def describe(self) -> str:
+        if self.kind == "compose-service":
+            return f"compose service {self.name}"
+        return f"{self.kind}/{self.name} in {self.namespace}"
+
+
 @dataclass(frozen=True)
 class MeshUnit:
     lane: str                     # "compose" | "kind"
@@ -127,6 +185,10 @@ class MeshUnit:
     external: str = ""            # "hugmesh.net/ (ingress)" | "0.0.0.0:8088->8080" | ""
     door: Door = field(default_factory=Door)
     detail: str = ""              # tooltip long form: image, restarts, node, ingress rule
+    #: The controller the row's Replicas control drives, or a refusal. Defaulted, so a
+    #: MeshUnit built anywhere that predates scaling reads as "not scalable" rather
+    #: than raising.
+    scale: ScaleTarget = field(default_factory=ScaleTarget)
 
     @property
     def key(self) -> str:
@@ -391,6 +453,51 @@ def _pod_phase(pod: dict) -> tuple[str, str, bool]:
     return phase, "", False
 
 
+#: Controller kinds `kubectl scale` drives, and what a row owned by one of the others
+#: says instead. Each refusal is a FACT about that controller, not a shrug: a DaemonSet
+#: has exactly one pod per node by definition, a Job's parallelism is fixed when it is
+#: created, and a static pod has no controller in the API at all.
+_UNSCALABLE_OWNERS = {
+    "DaemonSet": ("a DaemonSet runs exactly one pod per node — add or remove nodes, "
+                  "there is no replica count to set"),
+    "Job": ("a Job's parallelism is fixed when it is created — scaling it in place is "
+            "not a thing kubectl can do"),
+    "CronJob": ("a CronJob creates a Job per schedule tick — there is no standing "
+                "replica count"),
+    "Node": ("a static pod, run directly by this node's kubelet from a manifest on "
+             "disk — the API server has no workload object to scale"),
+}
+
+
+def _pod_scale_target(pod: dict, ns: str) -> ScaleTarget:
+    """Which controller a pod's Replicas control would drive. See ScaleTarget."""
+    meta = pod.get("metadata") or {}
+    refs = [r for r in (meta.get("ownerReferences") or []) if (r or {}).get("name")]
+    if not refs:
+        return ScaleTarget(refused="a bare pod — nothing created it, so nothing can "
+                                   "be asked for more of it")
+    ref = refs[0]
+    kind = str(ref.get("kind") or "")
+    name = str(ref.get("name") or "")
+    if kind == "StatefulSet":
+        return ScaleTarget("statefulset", name, ns, refused="")
+    if kind == "ReplicaSet":
+        h = str(((meta.get("labels") or {}).get("pod-template-hash") or ""))
+        if h and name.endswith("-" + h) and len(name) > len(h) + 1:
+            return ScaleTarget("deployment", name[: -(len(h) + 1)], ns, refused="")
+        return ScaleTarget(refused=(
+            f"owned by ReplicaSet/{name}, which carries no pod-template-hash — the "
+            f"Deployment behind it cannot be named, and scaling the ReplicaSet "
+            f"directly is undone by its controller within seconds"))
+    if kind == "ReplicationController":
+        return ScaleTarget("replicationcontroller", name, ns, refused="")
+    why = _UNSCALABLE_OWNERS.get(kind)
+    if why:
+        return ScaleTarget(refused=why)
+    return ScaleTarget(refused=f"owned by {kind}/{name}, which `kubectl scale` does "
+                               f"not drive")
+
+
 def _join(objects: dict, host_ports: dict[int, tuple[str, int]], catalog, live: dict,
           cluster: str, *, stale_view: bool = False, kind_ports=(KIND_HTTPS_PORT_DEFAULT,)
           ) -> tuple[list[MeshUnit], list[str]]:
@@ -589,7 +696,7 @@ def _join(objects: dict, host_ports: dict[int, tuple[str, int]], catalog, live: 
             lane="kind", namespace=ns, name=name, owner=owner, phase=phase_text,
             ready=ready, reason=reason, state=state, cluster_path=cluster_path,
             external="; ".join(external_bits), door=door,
-            detail="\n".join(detail_bits)))
+            detail="\n".join(detail_bits), scale=_pod_scale_target(pod, ns)))
     return units, notes
 
 
@@ -892,7 +999,14 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
             lane="compose", namespace=_COMPOSE_PROJECT, name=name or service,
             owner=service, phase=phase, ready=ready, reason=reason, state=state,
             cluster_path=cluster_path, external="; ".join(external_bits), door=door,
-            detail=udetail))
+            detail=udetail,
+            # The compose SERVICE is the scalable thing; a container is one instance
+            # of it. A row with no service label came from `docker ps` on the project
+            # label alone and there is nothing to name in `--scale`.
+            scale=(ScaleTarget("compose-service", service, _COMPOSE_PROJECT, refused="")
+                   if service else
+                   ScaleTarget(refused="this container carries no compose service "
+                                       "label, so there is no service to scale"))))
     if not units:
         notes.append("the compose project reports running but listed zero containers")
     bits = [f"project {_COMPOSE_PROJECT}", f"{len(units)} container(s)"]
@@ -1010,3 +1124,112 @@ def addresses_text(snap: MonitorSnapshot) -> str:
             bits.append(u.door.url)
         lines.append("\t".join(bits))
     return "\n".join(lines)
+
+
+# ── scaling ────────────────────────────────────────────────────────────────────────
+# The monitor stopped being read-only here, and the rules that keeps are the ones the
+# rest of this module already lives by:
+#
+#   * NOTHING is derived twice. The workload a press drives is the ScaleTarget the
+#     snapshot already carries (``_pod_scale_target`` / the compose service label), so
+#     the row an operator is looking at and the object the verb touches cannot drift
+#     apart between the paint and the press.
+#   * A REFUSAL IS A SENTENCE, never a silent no-op. Every path that cannot run returns
+#     the reason, and the GUI shows it on the row.
+#   * NOTHING HERE RAISES. This is called from a worker thread whose only contract is
+#     to emit (ok, text); an exception escaping it would leave the busy guard latched.
+#
+# The two lanes differ in a way worth stating: ``kubectl scale`` writes a spec and
+# returns, so its "ok" means the ASK landed, not that the pods are up. ``docker compose
+# up --scale`` actually starts (or stops) containers before it returns. Both answers go
+# to the same status line, so the line says which verb ran.
+
+def replicas_now(units, target: ScaleTarget) -> int:
+    """How many rows in this snapshot are instances of ``target``.
+
+    Counted from the rows themselves rather than by asking the API a second question.
+    That answers a subtly different question than "what does the spec say", and the
+    difference is the honest one to show beside a live table: a Deployment scaled to 3
+    whose third pod is still Pending reads 3 here, and one scaled to 3 whose pod was
+    just deleted reads 2 for the seconds in between — which is what the table is
+    showing anyway.
+
+    Rows in the terminal ``stopped`` state are NOT counted: a Succeeded pod and an
+    exited compose one-shot are finished work, not running replicas, and counting them
+    would make a "+1" from the GUI hand compose a number it would immediately undo.
+    """
+    if not target.scalable:
+        return 0
+    rows = getattr(units, "units", units) or ()
+    return sum(1 for u in rows
+               if u.scale.key == target.key and u.state != "stopped")
+
+
+def scale_argv(unit: MeshUnit, replicas: int, *, generator_dir: str,
+               node=None) -> tuple[list[str], str]:
+    """``(argv, refusal)`` for scaling ``unit`` to ``replicas``. One of the two is
+    always empty. Pure — builds a command, runs nothing."""
+    try:
+        n = int(replicas)
+    except (TypeError, ValueError):
+        return [], f"{replicas!r} is not a replica count"
+    if n < 0:
+        return [], "a replica count cannot be negative"
+    if n > MAX_REPLICAS:
+        return [], (f"{n} is past this table's ceiling of {MAX_REPLICAS} — the "
+                    f"control guards against a mis-click, not against your judgement; "
+                    f"use kubectl or compose directly for more")
+    target = unit.scale
+    if not target.scalable:
+        return [], (target.refused or "this row carries no scalable workload")
+    if target.kind == "compose-service":
+        base = _compose_base()
+        if not base:
+            return [], ("neither `docker compose` nor `docker-compose` is available — "
+                        "the compose lane cannot be scaled from here")
+        compose_file = str(getattr(node, "compose_file", "") or "")
+        if not compose_file:
+            return [], ("the stack node does not name a compose file, so a scale would "
+                        "have to guess which project it is talking to")
+        # -p PINS the project: the same name the rows were listed under
+        # (com.docker.compose.project), so a scale can never land in a second project
+        # that happens to share a compose file. --no-recreate leaves the containers
+        # that are already up alone — without it, `up` re-creates every listed
+        # container, which restarts a healthy mesh to change one service's count.
+        # --no-deps keeps the blast radius to the named service.
+        return ([*base, "-p", _COMPOSE_PROJECT, "-f", compose_file, "up", "-d",
+                 "--no-deps", "--no-recreate", "--scale", f"{target.name}={n}",
+                 target.name], "")
+    kubectl = devops_tools.which("kubectl", generator_dir)
+    if not kubectl:
+        return [], ("kubectl is not installed — press 'Install DevOps prerequisites' "
+                    "on the local-mesh page")
+    cluster = _kind_cluster_name()
+    return ([kubectl, "--context", f"kind-{cluster}", "scale",
+             f"{target.kind}/{target.name}", "-n", target.namespace,
+             f"--replicas={n}"], "")
+
+
+def scale(generator_dir: str, node, unit: MeshUnit, replicas: int, *,
+          timeout_s: int = SCALE_TIMEOUT_S) -> tuple[bool, str]:
+    """Run one scale. ``(ok, one line of text)`` — NEVER raises, never blocks the
+    caller's thread for longer than ``timeout_s``.
+
+    ``ok`` is the verb's exit status and nothing more. On the kind lane that means the
+    Deployment's spec now says ``replicas: n``; whether n pods reach Ready is the
+    monitor's next refresh to answer, and the text says so rather than claiming it.
+    """
+    argv, refused = scale_argv(unit, replicas, generator_dir=generator_dir, node=node)
+    if refused:
+        return False, refused
+    rc, out = _probe(node, argv, max(1, int(timeout_s)))
+    what = unit.scale.describe()
+    text = (out or "").strip()
+    if rc != 0:
+        return False, f"scaling {what} to {replicas} failed: {text[:400] or 'no output'}"
+    if unit.scale.kind == "compose-service":
+        return True, (f"compose scaled {what} to {replicas}"
+                      + (f" — {text.splitlines()[-1][:200]}" if text else ""))
+    return True, (f"asked for {replicas} replica(s) of {what}; the table shows how "
+                  f"many are actually up on the next refresh"
+                  + (f" ({text.splitlines()[-1][:200]})" if text else ""))

@@ -31,6 +31,9 @@ Only things BOTH faces need, in the SAME shape:
 * :func:`button_strip` / :func:`make_table` / :func:`set_cell` — the table
   delegates. QTableWidget takes ONE widget per cell, so several controls in a cell
   need a container; doing that twice produced two different row heights.
+* :class:`ReplicaStrip` — the −/count/+/Apply row control, mounted by the mesh
+  monitor's pod table AND by the emulation device table (#336). One shape, one rule
+  about what a repaint may do to a target the operator is still choosing.
 * :func:`open_terminal` — opening the desktop terminal, with the copy-ready INLINE
   fallback for a desktop that has no terminal emulator. Inline, never a dialog: a
   modal in page logic hangs the headless tests, and "no terminal here" is a fact to
@@ -252,6 +255,70 @@ def button_strip(*widgets: QtWidgets.QWidget) -> QtWidgets.QWidget:
     for w in widgets:
         lay.addWidget(w)
     return holder
+
+
+class ReplicaStrip:
+    """The −/count/+/Apply control for ONE table row, and the pending target it holds.
+
+    THREE tables mount this now — the mesh monitor's pods and containers, and the
+    emulation page's devices — so it lives here for the reason everything else in this
+    module does: two hand-rolled copies of a row control is how the two screens came to
+    disagree about the same thing. It is a plain object, not a QWidget subclass: the
+    cell takes ``strip.widget`` and the caller keeps the strip.
+
+    THE PENDING TARGET IS THE OPERATOR'S, AND A REPAINT MUST NOT TAKE IT AWAY. Both
+    tables repaint on a timer, and an operator pressing + three times would otherwise
+    watch the number snap back mid-decision. So ``target`` survives every repaint until
+    either Apply runs it or reality catches up with it (``observed == target``), at
+    which point the cell goes back to showing a plain count.
+
+    ``ceiling`` is a mis-click guard, not a claim about the lane. The emulation device
+    table passes 1, because an emulated device is one guest per built image with its own
+    MAC, IP and ssh port allocated by the plan — 0 and 1 are the only counts that exist
+    there, and its tooltip says so rather than offering a number the runner would refuse.
+    """
+
+    def __init__(self, key: str, *, ceiling: int, what: str = "",
+                 apply_text: str = "Apply", minus_tip: str = "", plus_tip: str = "",
+                 apply_tip: str = ""):
+        self.key = key
+        self.ceiling = int(ceiling)
+        #: How the workload reads in the count tooltip. Held here so a busy repaint of
+        #: every row never has to re-derive it, and can never fall back to a raw key.
+        self.what = what or key
+        self.target = 0
+        self.observed = 0
+        self.minus = QtWidgets.QPushButton("−")
+        self.minus.setToolTip(minus_tip or "One fewer.")
+        self.count = QtWidgets.QLabel("0")
+        self.count.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.count.setMinimumWidth(48)
+        self.plus = QtWidgets.QPushButton("+")
+        self.plus.setToolTip(plus_tip or f"One more, up to {self.ceiling}.")
+        self.apply = QtWidgets.QPushButton(apply_text)
+        self.apply.setToolTip(apply_tip or "Run it.")
+        for b in (self.minus, self.plus):
+            b.setMaximumWidth(28)
+        self.widget = button_strip(self.minus, self.count, self.plus, self.apply)
+
+    def bump(self, delta: int) -> int:
+        """Move the target within [0, ceiling] and answer where it landed."""
+        self.target = max(0, min(self.ceiling, self.target + int(delta)))
+        return self.target
+
+    def paint(self, observed: int, *, busy: bool = False) -> None:
+        self.observed = int(observed)
+        if self.target == self.observed:
+            self.count.setText(str(self.observed))
+        else:
+            self.count.setText(f"{self.observed} → {self.target}")
+        self.count.setToolTip(
+            f"{self.what}: {self.observed} running"
+            + ("" if self.target == self.observed
+               else f"; Apply would ask for {self.target}"))
+        self.minus.setEnabled(not busy and self.target > 0)
+        self.plus.setEnabled(not busy and self.target < self.ceiling)
+        self.apply.setEnabled(not busy and self.target != self.observed)
 
 
 def make_table(headers: tuple[str, ...], *, min_height: int = 140
