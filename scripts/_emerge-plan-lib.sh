@@ -25,8 +25,10 @@
 #   * <group> is the emerge-group taxonomy word the following merge belongs to
 #     (image|tools|dependencies|system|world) — same vocabulary as the group
 #     banners, emitted immediately BEFORE the corresponding group banner.
-#   * <atom> is the resolved cat/pn-ver with any ::repo suffix stripped; a
-#     cross-merge " to /sysroot/" tail never reaches the atom (field split).
+#   * <atom> is the resolved cat/pn-ver with its slot/subslot and ::repo tails
+#     stripped (--verbose renders `cat/pn-ver:SLOT/SUB::repo`; cat/pn-ver itself
+#     never contains ':', so everything from the first ':' goes); a cross-merge
+#     " to /sysroot/" tail never reaches the atom (field split).
 #   * via=<binary|ebuild> is portage's own row kind — [binary ...] rows are
 #     merged from the binpkg pool, [ebuild ...] rows are compiled — and the
 #     total line carries the two counts (B + E == M). This is the per-group
@@ -45,10 +47,25 @@
 #
 # READ-ONLY BY CONSTRUCTION. The pass runs the SAME argument vector as the merge
 # it precedes (the caller passes the real command + args verbatim; check.sh's EPL
-# bucket pins the textual parity) with --pretend --color=n --nospinner
+# bucket pins the textual parity) with --pretend --verbose --color=n --nospinner
 # --autounmask-write=n appended: nothing merges, nothing is written to portage
 # config, and the plan therefore describes exactly the merge that follows —
 # including [binary vs [ebuild rows under --usepkg.
+#
+# WHY --verbose (issue #319, measured on portage 3.0.82.2). Portage prints its
+# "Total: N packages" line ONLY under --verbose. Without it, a group with nothing
+# to merge and a pretend output whose row shape drifted out from under the parser
+# are byte-identical (header + "Calculating dependencies" and no rows), so the
+# only honesty guard that could fire in production was the one that mislabels an
+# empty group "parse-mismatch" — every `--resume` with @world already satisfied
+# hit it, and the message that is supposed to mean "the parser broke" fired on
+# healthy builds. With --verbose:
+#     empty     -> "Total: 0 packages, Size of downloads: 0 KiB"      -> total=0
+#     non-empty -> [ebuild ...] rows + "Total: N package(s) ..."      -> cross-checked
+#     drift     -> no rows parsed but "Total: N>0"                    -> parse-mismatch
+# The cost is one more column in the atom (the slot tail, stripped above); the
+# wire format the Studio consumes is unchanged. Real captures of both verbose
+# shapes live in tests/build-matrix/fixtures/emerge-pretend-plan.verbose*.txt.
 #
 # NEVER BREAKS A BUILD. A cosmetic preview must not cost an image: every failure
 # path (mktemp failure, resolution error, timeout, parse drift) emits the
@@ -111,7 +128,7 @@ emerge_plan_emit() {
     # pkill -P sweeps the subshell's direct child (the real emerge process) on
     # timeout — best-effort (guarded: procps may be absent in a minimal chroot).
     local pid rc=0 waited=0 tmo="${EMERGE_PLAN_TIMEOUT:-1800}"
-    ( "$@" --pretend --color=n --nospinner --autounmask-write=n ) >"${tmp}" 2>&1 &
+    ( "$@" --pretend --verbose --color=n --nospinner --autounmask-write=n ) >"${tmp}" 2>&1 &
     pid=$!
     while kill -0 "${pid}" 2>/dev/null; do
         if [ "${waited}" -ge "${tmo}" ]; then
@@ -146,11 +163,16 @@ emerge_plan_emit() {
     fi
     # Parse the pretend rows into the wire format. Merge rows are [ebuild ...]
     # and [binary ...]; the atom is the first field after the bracket block with
-    # any ::repo suffix stripped; USE="..." is copied verbatim when present.
-    # HONESTY GUARDS (parse-mismatch, all emit-nothing-rather-than-lie):
+    # its slot/subslot and ::repo tails stripped; USE="..." is copied verbatim
+    # when present.
+    # HONESTY GUARDS (parse-mismatch, all emit-nothing-rather-than-lie). All
+    # three are LIVE because the pass runs --verbose, which is the only mode in
+    # which portage prints the Total line they key on (issue #319):
     #   * zero rows parsed while portage's own "Total: N packages" says N>0
     #     (the row shape drifted out from under this parser);
-    #   * zero rows AND no Total line at all (the output shape drifted);
+    #   * zero rows AND no Total line at all (the output shape drifted — under
+    #     --verbose portage always prints Total, even "Total: 0 packages", so a
+    #     missing line means -v was lost or the framing changed);
     #   * N rows parsed but Total disagrees AND the stream carried no
     #     [uninstall]/[blocks] complication rows that could account for it.
     # A genuine empty merge set ("Total: 0 packages") emits total=0 — a real,
@@ -166,7 +188,10 @@ emerge_plan_emit() {
             sub(/^\[[^]]*\][[:space:]]*/, "", line)
             split(line, f, /[[:space:]]+/)
             atom = f[1]
-            sub(/::[^[:space:]]*$/, "", atom)
+            # cat/pn-ver carries no ":" — so the first ":" starts the slot tail
+            # (--verbose: "cat/pn-ver:6/6.11.2::gentoo") or the ::repo suffix
+            # (non-verbose captures: "cat/pn-ver::gentoo"); drop from there.
+            sub(/:.*$/, "", atom)
             use = ""
             if (match(line, /USE="[^"]*"/)) use = substr(line, RSTART, RLENGTH)
             cnt++

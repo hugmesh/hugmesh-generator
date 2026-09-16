@@ -35,8 +35,10 @@ One prefix, four line shapes, ANSI-free (`--color=n`), greppable:
 * `<group>` is the emerge-group taxonomy word (`image|tools|dependencies|
   system|world`) of the merge the plan precedes; the plan is emitted
   immediately **before** that section's `==> Emerge group:` banner.
-* `<atom>` is the resolved `cat/pn-ver`, `::repo` suffix stripped; cross-merge
-  `" to /sysroot/"` tails never reach it.
+* `<atom>` is the resolved `cat/pn-ver` with its slot/subslot and `::repo`
+  tails stripped (the pass runs `--verbose`, which renders
+  `cat/pn-ver:SLOT/SUB::repo`; `cat/pn-ver` never contains `:`, so everything
+  from the first `:` goes); cross-merge `" to /sysroot/"` tails never reach it.
 * `USE="..."` is portage's own flag column copied **verbatim** when the pretend
   row carries one (including portage's `%`/`*` markers) — the flags data the
   GUI's badge columns want, free from the same output. Absent when portage
@@ -45,6 +47,12 @@ One prefix, four line shapes, ANSI-free (`--color=n`), greppable:
   `parse-mismatch`. Each means *no plan is coming for that group* — the GUI
   falls back to start-time rows, it never waits.
 * `total=0` is a real reading (a merge with nothing to do), not "plan missing".
+  It is only reachable because the pass runs `--verbose`: portage prints its
+  `Total: N packages` line under `-v` alone, and without it an empty group and
+  a drifted row shape are byte-identical — which is how every `--resume` with
+  `@world` already satisfied used to be reported as `parse-mismatch`
+  (issue #319). Real captures of both verbose shapes are the test fixtures
+  `tests/build-matrix/fixtures/emerge-pretend-plan.verbose*.txt`.
 * `via=<binary|ebuild>` is portage's own row kind (`[binary …]` merged from the
   binpkg pool, `[ebuild …]` compiled) and `binary=<B> ebuild=<E>` on the header
   are the two counts (B + E == M) — the per-group **binpkg reuse** reading
@@ -80,8 +88,9 @@ side (check.sh EPL) and the Python side (`test_progress_uniformity.py`).
 
 The pass runs the **same argument vector** as the merge it precedes — the EPL
 bucket mechanically asserts that an identical merge invocation follows each
-`emerge_plan_emit` call — with `--pretend --color=n --nospinner
---autounmask-write=n` appended. Nothing merges, nothing is written to portage
+`emerge_plan_emit` call — with `--pretend --verbose --color=n --nospinner
+--autounmask-write=n` appended (`--verbose` is what makes portage print the
+`Total:` line the honesty guards key on — see `total=0` above). Nothing merges, nothing is written to portage
 config, and the plan therefore describes exactly the merge that follows,
 including `[binary]` vs `[ebuild]` rows under `--usepkg`. The executed test
 (`tests/build-matrix/emerge-plan-emit.sh`) proves the stub emerge is never

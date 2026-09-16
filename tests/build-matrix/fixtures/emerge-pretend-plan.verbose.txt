@@ -1,0 +1,14 @@
+
+These are the packages that would be merged, in order:
+
+[ebuild  N     ] dev-qt/qtserialport-6.11.2:6/6.11.2::gentoo  USE="-custom-cflags -test" 258 KiB
+[ebuild   R    ] sys-apps/portage-3.0.82.2::gentoo  USE="(ipc) native-extensions rsync-verify xattr -apidoc -build -doc -gentoo-dev (-selinux) -test" PYTHON_TARGETS="python3_12 python3_13 python3_14 (-python3_15)" 0 KiB
+[ebuild  N     ] app-misc/hello-2.12.3::gentoo  USE="nls" 1162 KiB
+[ebuild   R    ] net-misc/wget-1.25.0-r2::gentoo  USE="nls pcre (ssl) zlib -cookie-check -debug -gnutls -idn -libproxy -metalink -ntlm -static -test -uuid -verify-sig" 0 KiB
+
+Total: 4 packages (2 new, 2 reinstalls), Size of downloads: 1420 KiB
+
+ * IMPORTANT: 1 news items need reading for repository 'sage-on-gentoo'.
+ * IMPORTANT: 27 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
