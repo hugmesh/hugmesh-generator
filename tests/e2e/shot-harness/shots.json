@@ -1,6 +1,7 @@
 {
   "//": "THE SHOT TABLE. Adding a screenshot to a manual test plan is a DATA edit: append a row to shots[] below and run `node shot-harness/shot-table.mjs validate`. No TypeScript, no code. See shot-harness/README.md.",
   "//routing": "HOW A ROW NAVIGATES. capture.spec.ts does page.goto(route): a HARD document GET. The fe-gateway routes /login/**, /admin/**, /mod/** and /user/** to the remote's own container (tests/stack/gateway-routes/fe/application-routes.yml:154-179, StripPrefix=1), so a hard GET to those prefixes renders the BARE remote — no host-shell header, no menubar, no home cards. Only host-shell-served URLs (/, /home, /about, /games, and the remote-deeplink-to-host-shell prefixes at :88-92) boot the shell. A row that needs shell chrome (home-services-nav, home-card-*, profile-trigger, nav-user, menu-*, nav-*, subnav-*, denied-notice) must therefore start at '/' (roleHomeGuard lands on /user client-side) or '/home', and reach a console by CLICKING home-card-nav-admin / home-card-nav-mod. Rows that hard-GET /admin/... or /mod/... and wait only on the remote's own testids DO capture, but they photograph the standalone remote — see the reconcile notes in the commit that added this comment.",
+  "//state": "WHAT A ROW MAY WRITE, AND IN WHAT ORDER. Every row is an independent Playwright test that signs in afresh; capture.spec.ts runs rows in personas[] order then step order (--all: every persona in that order), and a row that fails costs exactly its own PNG - no later row is skipped for it. Most rows read, or fill and stop BEFORE the write. The rows that DO write, each a step its plan names: games-operator-14/15/17 (suspend/resume/terminate the FIRST Instances row - 'first': true - #300 line 44), image-builder-14 (grant THEN revoke ROLE_IMAGE_BUILDER: net zero; both 503 while casdoor.admin.enabled=false), curtailed-member-10 (files an appeal as e2e-user; idempotent, #311 step 10), fleet-owner-10 (mfa-choose-totp POSTs a TOTP enrolment start; #314 step 21 reverses it), anonymous-10 (forgot-request-submit), moderator-30 (mc-block; the 403 is the expected result), superadmin-13 (fe-grant; step-up refuses), games-operator-11 (gs-create; client-side validation refuses, no request). ORDERING HAZARD: curtailed-member-10 leaves a PENDING appeal, after which admin-20 (expects aa-empty, #307 step 20) fails until an admin decides it - run admin before curtailed-member (what --all does). Running a persona twice, or after another persona's writes, changes what later shots show (RECONCILE-20260916.md H8).",
   "personas": [
     { "slug": "anonymous", "issue": 290, "title": "the anonymous visitor" },
     { "slug": "games-namespace-admin", "issue": 292, "title": "the games-namespace admin" },
@@ -1373,10 +1374,10 @@
       "route": "/admin/games-services",
       "do": [
         { "action": "expect", "testid": "gs-instances" },
-        { "action": "click", "testid": "gs-suspend" },
+        { "action": "click", "testid": "gs-suspend", "first": true },
         { "action": "expect", "testid": "gs-instances" }
       ],
-      "note": "Plan step 14. Clicks Pause on the FIRST instance row. With more than one instance listed the harness may not pick the row the tester means - the plan names world1; check the image."
+      "note": "Plan step 14. Clicks Pause on the FIRST instance row (#300 line 44 consents: it need not be the instance the plan names - read the image). 'first' is required: admin-ui renders gs-suspend once per <li *ngFor> instance (games-services.component.html:110/:119), and a bare getByTestId is strict - with world1+world2 present it would throw instead of clicking. [skeptic pass 2026-09-16, #388 item 1]"
     },
     {
       "persona": "games-operator",
@@ -1387,10 +1388,10 @@
       "route": "/admin/games-services",
       "do": [
         { "action": "expect", "testid": "gs-instances" },
-        { "action": "click", "testid": "gs-resume" },
+        { "action": "click", "testid": "gs-resume", "first": true },
         { "action": "expect", "testid": "gs-instances" }
       ],
-      "note": "Plan step 15. Runs after row 14 left the first instance suspended. The chip must read pending, never active - that is the desired-state semantics the step exists to prove."
+      "note": "Plan step 15. Runs after row 14 left the FIRST instance suspended and resumes that same row ('first': true, see row 14). The chip must read pending, never active - that is the desired-state semantics the step exists to prove. If row 14 did not run, Resume is disabled and this click waits out the test timeout."
     },
     {
       "persona": "games-operator",
@@ -1401,10 +1402,10 @@
       "route": "/admin/games-services",
       "do": [
         { "action": "expect", "testid": "gs-instances" },
-        { "action": "click", "testid": "gs-terminate" },
+        { "action": "click", "testid": "gs-terminate", "first": true },
         { "action": "expect", "testid": "gs-instances" }
       ],
-      "note": "Plan step 17. Stop is one-way and never deletes: the row must still be listed after the click, with all three buttons disabled."
+      "note": "Plan step 17. Stops the FIRST Instances row ('first': true) - the plan's Do names world2, but #300 line 44 accepts whichever row the list orders first; a one-way write. Stop never deletes: the row must still be listed after the click, with all three buttons disabled."
     },
     {
       "persona": "games-operator",
@@ -1496,9 +1497,11 @@
       "do": [
         { "action": "fill", "testid": "roles-user", "value": "e2e-user" },
         { "action": "click", "testid": "grant-ROLE_IMAGE_BUILDER" },
+        { "action": "expect", "testid": "roles-result" },
+        { "action": "click", "testid": "revoke-ROLE_IMAGE_BUILDER" },
         { "action": "expect", "testid": "roles-result" }
       ],
-      "note": "Captures the EXPECTED 503: casdoor.admin.enabled is false on compose, so roles-result takes the failed class. Nothing is written."
+      "note": "Plan step 14 Do items 3-4: Grant THEN Revoke, so the shared e2e-user fixture is left as found on a stack where casdoor.admin.enabled=true. On compose both answer the EXPECTED 503 and roles-result takes the failed class. The second expect is a real wait: run() clears result (roles.component.ts:125) and .result:empty is display:none (roles.component.scss:17), so roles-result is hidden until the revoke answers. [skeptic pass 2026-09-16, #388 item 2]"
     },
     {
       "persona": "image-builder",
@@ -1692,7 +1695,7 @@
         { "action": "click", "testid": "login-submit" },
         { "action": "expect", "testid": "login-error" }
       ],
-      "note": "NC7 — a desktop account name is not a mesh identity. The table cannot know YOUR desktop login, so it types 'root'; repeat it with $(id -un) by hand."
+      "note": "NC7 — a desktop account name is not a mesh identity. The table cannot know YOUR desktop login, so it types 'root'; repeat it with $(id -un) by hand. NOTE: plan #303 NC7 types password 'x'; the validator forbids any literal in a password field, so this row sends the REAL seeded password under the username 'root' - same login-error, same BFF, but the live credential travels with a foreign handle. 'root' is no seeded account, so no seeded account's Casdoor failed-signin counter moves."
     },
     {
       "persona": "admin",
@@ -1850,7 +1853,8 @@
       "do": [
         { "action": "expect", "testid": "account-appeals-view" },
         { "action": "expect", "testid": "aa-empty" }
-      ]
+      ],
+      "note": "Plan #307 step 20 expects the EMPTY inbox (aa-empty is *ngIf loaded() && pending().length === 0). ORDER MATTERS: curtailed-member-10 files a PENDING appeal as e2e-user (#311 step 10), after which this row fails until an admin decides that appeal. --all runs admin before curtailed-member; a per-persona re-run of admin after curtailed-member does not. See the //state comment at the top of this file. [skeptic pass 2026-09-16, #388 item 3]"
     },
     {
       "persona": "admin",
@@ -2190,7 +2194,8 @@
         { "action": "fill", "testid": "appeal-reason-input", "value": "MANUAL-TEST appeal from e2e-user" },
         { "action": "click", "testid": "appeal-submit" },
         { "action": "expect", "testid": "appeal-submitted" }
-      ]
+      ],
+      "note": "Plan #311 step 10 - a WRITE the plan names: files an appeal as e2e-user (idempotent: a second press returns the same row). It leaves a PENDING appeal behind, which makes admin-20-account-appeals (expects aa-empty, #307 step 20) fail until an admin decides it. Run the admin persona first, as --all does. [skeptic pass 2026-09-16, #388 item 3]"
     },
     {
       "persona": "curtailed-member",

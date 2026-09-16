@@ -258,12 +258,21 @@ games-namespace-admin-18/22, games-store-member-15-games-bounced, member-28 expe
 `login-view` after a client guard `parseUrl('/login')` with a live session; what login-ui
 renders for an already-authenticated visitor is asserted by no spec found. Unverified.
 
-**H8 — mutating rows.** image-builder-13/14 (grant/revoke ROLE_IMAGE_BUILDER),
-own-client-20/24 (grant/revoke ROLE_MATRIX_EXTERNAL_CLIENT), games-member-18
-(revoke ROLE_GAMES), games-operator-14/15/17 (suspend/resume/terminate), admin-11
-(suspension), admin-15 (announcement), mesh-operator-15/16 (wiki page / forum topic),
-curtailed-member-10 (appeal). Running a persona twice, or out of step order, changes what
-later shots show.
+**H8 — mutating rows** (corrected 2026-09-16 by the skeptic pass; the first list here
+over-counted). Rows that actually click a writing control, each a step its plan names:
+games-operator-14/15/17 (suspend/resume/terminate the FIRST Instances row),
+image-builder-14 (grant THEN revoke ROLE_IMAGE_BUILDER — net zero; both 503 while
+`casdoor.admin.enabled=false`), curtailed-member-10 (files an appeal as e2e-user;
+idempotent), fleet-owner-10 (`mfa-choose-totp` POSTs `enrollTotp()` — #314 step 21
+reverses it), anonymous-10 (`forgot-request-submit`), moderator-30 (`mc-block`, expects
+the 403), superadmin-13 (`fe-grant`, step-up refuses), games-operator-11 (`gs-create`,
+client-side validation refuses). NOT mutating, despite the earlier list: own-client-20/24,
+mesh-operator-15/16, admin-11/15, games-member-18 and image-builder-13 fill or read and
+stop BEFORE the write. Cross-persona: curtailed-member-10 leaves a PENDING appeal, after
+which admin-20 (expects `aa-empty`) fails until an admin decides it — `--all` runs admin
+first; a per-persona re-run of admin afterwards does not. The `//state` comment at the top
+of `shots.json` carries this contract. Running a persona twice, or after another persona's
+writes, changes what later shots show.
 
 **H9 — `evidence.mjs` accepts a blank PNG when pngjs is absent** (measured above).
 
@@ -282,12 +291,71 @@ later shots show.
 11. #301 step 20 cites a harness PNG of `/admin` as e2e-user — an empty-body 403 (H2b, re-based).
 12. `application-routes.yml:68-70`: "/user, /admin and /mod … have NO gateway route" — they do (:160-179).
 
+## Skeptic pass — 2026-09-16 — findings and closures
+
+Two skeptics reviewed `bbf7674f` (bijection & testids lens; harness-safety lens). Both
+returned **holds**, no blockers. The harness-safety lens raised four majors, each verified
+again from source on this pass before anything was changed:
+
+1. **`games-operator-14/15/17` strict-mode clash** (#388 item 1). admin-ui
+   `games-services.component.html:110` renders `gs-suspend`/`gs-resume`/`gs-terminate`
+   inside `<li *ngFor="let i of instances()">`; `page.getByTestId(id).click()` is strict, so
+   with `world1`+`world2` (after #300 step 16) row 14 threw and the persona lost four PNGs.
+   Plan #300 line 44 says the rows act on the *first* Instances row — an intent the harness
+   never implemented. **Closed by `"first": true`**: a new optional action field (only
+   `true` is legal; validated; `locator.first()` in the driver), set on those three clicks.
+   Line 44 is now true. Which instance is "first" is the BFF's list order (`instances()` is
+   loaded as returned; a create prepends, `:109`) — the plan already says to read the image.
+2. **`image-builder-14` granted without the plan's revoke** (#388 item 2). **Closed**: the row
+   now clicks `revoke-ROLE_IMAGE_BUILDER` and waits on `roles-result` again, exactly #301
+   step 14 Do items 3–4. The second wait is real: `run()` clears `result`
+   (`roles.component.ts:125`) and `.result:empty { display: none }`
+   (`roles.component.scss:17`), so the `<p>` is hidden until the revoke answers.
+3. **`curtailed-member-10` empties `admin-20`** (#388 item 3). Both rows are what their plans
+   say; the defect is ordering. **Documented, not rewritten**: notes on both rows, a
+   `//state` contract at the top of `shots.json`, a README section, and H8 above. Whether
+   #307/#311 should name each other is the plan authors' call.
+4. **Serial mode amplified every first failure** — `games-member-12` (H2a) also skipped
+   15–19, H4/H5 logins skipped whole personas, and `shots.sh` printed nothing on `rc≠0`.
+   **Closed in the driver**: rows are independent tests, so `capture.spec.ts` now runs in
+   Playwright's `default` mode — one red row costs one PNG. The one thing serial bought
+   (stop early when the door is gone) is kept by a `doorLost` breaker: a row whose page is
+   the browser's own error page marks the door lost and every later row skips with that
+   reason. `shots.sh` now prints `N of M cited PNG(s) present` plus a `MISSING` line per
+   absent cited file, whichever way Playwright exited, counting this run's cited files only
+   (never every `*.png` in the directory — stale files inflated the old count). `paths` with
+   no persona lists every row so `--all` gets the same epilogue. The H2a decision on #310
+   step 12 therefore stands as first posted: the red costs one PNG, not six.
+
+Nits taken: the validator now refuses `@password` typed into any non-password testid (the
+shot would photograph the seeded credential — the M4 gap the skeptic measured);
+`studio-operator-26` carries a note that it sends the real seeded password under the
+username `root` (plan #303 NC7 types `x`; a literal is forbidden); H8 corrected. Nits
+declined: the 13 `(persona, step)` pairs with two or more slugs are plan-designed (each
+cited at that step) and the validator's filename rule already guards the real hazard;
+`member-01` is numbered as its plan numbers it; the doubled `shots/shots/` path is in five
+plan bodies, not the harness (#387).
+
+Offline proof of this pass (no stack): `node shot-table.mjs validate` → `shots.json OK — 17
+personas, 193 shots`; `bash -n shots.sh`, `node --check` on both `.mjs`; `npx playwright test
+-c shot-harness/shots.config.ts --list` (temporary symlink to the shared checkout's
+`node_modules`, removed) → `Total: 193 tests in 1 file`; validator mutation battery 12/12
+(`first` false/1/"true"/on-goto refused, on `expect` accepted, `@password` into
+`login-username` refused, the five earlier refusals intact); the epilogue exercised against
+a fake output directory for `rc=0`, `rc=1` and `--all` (3 of 6 present, zero-byte file
+MISSING, stale file ignored). Only the seven intended rows changed (games-operator-14/15/17,
+image-builder-14, admin-20, curtailed-member-10, studio-operator-26); row set and order are
+byte-identical otherwise.
+
 ## What a human must still verify
 
 Nothing here ran against a mesh. Verified offline only: table validity, testid existence
 on origin/main, route serving by reading the gateway table, the remotes' nginx and the
-shell's router/menu code, the gateway's route-access decision per row, and the evidence
-guard's behaviour on an empty-403 document. A live `npm run shots -- --persona <p> --door …`
+shell's router/menu code, the gateway's route-access decision per row, the evidence
+guard's behaviour on an empty-403 document, and (skeptic pass) that the edited driver
+loads. Unproven live: that `first()` picks the row a tester expects, that the `doorLost`
+breaker fires on a real dead door and stays quiet on a row's own failure, and that
+`image-builder-14`'s second `roles-result` wait lands on the revoke's message. A live `npm run shots -- --persona <p> --door …`
 per persona, on a `SEED_COMPLETE_REGISTRATION=1` stack, after each plan's manufacturing
 steps, is the only proof the 193 rows capture what their plans say; H1/H3/H7 can only be
 settled there.

@@ -188,9 +188,31 @@ SHOTS_PERSONA="${PERSONA}" \
   npx playwright test -c shot-harness/shots.config.ts --reporter=list
 rc=$?
 
+# ── epilogue: WHICH cited files exist — printed whichever way playwright exited ──
+# The list reporter has scrolled past by now; this is the one durable record of
+# which files a plan cites that this run left absent. It counts THIS run's
+# cited files only — never every *.png in OUT, which stale files from an
+# earlier persona or run would inflate. (Under --all PERSONA is empty and
+# `paths ""` lists every row.)
+present=0
+missing=0
+missing_list=""
+while IFS= read -r rel; do
+  f="${OUT}/${rel#shots/}"
+  if [ -s "${f}" ]; then
+    present=$((present + 1))
+  else
+    missing=$((missing + 1))
+    missing_list="${missing_list}      MISSING ${rel}"$'\n'
+  fi
+done < <(node "${HERE}/shot-table.mjs" paths "${PERSONA}")
+printf '\n==> %s of %s cited PNG(s) present in %s\n' "${present}" "${ROWS}" "${OUT}"
+if [ "${missing}" -gt 0 ]; then
+  printf '%s' "${missing_list}"
+  printf '    (a MISSING file is a row that failed or was skipped — read the list reporter output above)\n'
+fi
 if [ "${rc}" -eq 0 ]; then
-  printf '\n==> wrote %s PNG(s) to %s\n' "$(ls -1 "${OUT}"/*.png 2>/dev/null | wc -l)" "${OUT}"
   printf '    A plan cites these as:\n'
-  node "${HERE}/shot-table.mjs" paths "${PERSONA}" 2>/dev/null | sed 's/^/      /'
+  node "${HERE}/shot-table.mjs" paths "${PERSONA}" | sed 's/^/      /'
 fi
 exit "${rc}"

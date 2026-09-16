@@ -11,7 +11,7 @@
 //
 //   node shot-harness/shot-table.mjs validate            # gate: exits 1 on any problem
 //   node shot-harness/shot-table.mjs list                # personas + shot counts
-//   node shot-harness/shot-table.mjs paths <persona>     # the shots/… lines a plan quotes
+//   node shot-harness/shot-table.mjs paths [persona]     # the shots/… lines a plan quotes (no persona: every row)
 //   node shot-harness/shot-table.mjs needs-auth <persona>  # 'yes'|'no' (used by shots.sh)
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -30,6 +30,15 @@ const AUTH = new Set(['anon', 'signin-only', 'onboard']);
 const NEEDS_TESTID = new Set(['click', 'fill', 'press', 'expect', 'expectAttached', 'expectHidden']);
 /** Actions that WAIT for the screen. Every row needs at least one — see below. */
 const SETTLING = new Set(['expect', 'expectAttached', 'expectHidden']);
+/**
+ * `"first": true` on a testid action makes capture.spec.ts act on the FIRST match
+ * (`locator.first()`) instead of failing Playwright's strict mode when a testid is
+ * rendered once per list row — admin-ui's gs-suspend/gs-resume/gs-terminate live
+ * inside `<li *ngFor="let i of instances()">`, one set per instance. Only `true`
+ * is legal: the field is a declaration that the plan accepts "whichever row is
+ * first" (#300 line 44), not a general index. Any other value is a validation error.
+ */
+const FIRST_OK = new Set([undefined, true]);
 
 export function loadTable(file = TABLE_PATH) {
   const raw = fs.readFileSync(file, 'utf8');
@@ -100,6 +109,15 @@ export function validate(table) {
       if (a.action === 'fill' && typeof a.value !== 'string') problems.push(`${aat}: 'fill' needs a string 'value' (use '@password' for the seeded credential)`);
       if (a.action === 'press' && !a.key) problems.push(`${aat}: 'press' needs a 'key'`);
       if (a.action === 'goto' && !String(a.route ?? '').startsWith('/')) problems.push(`${aat}: 'goto' needs a door-relative 'route'`);
+      if (!FIRST_OK.has(a.first)) {
+        problems.push(`${aat}: 'first' must be exactly true when present (act on the FIRST match of a testid rendered once per list row); omit it otherwise`);
+      }
+      if (a.first === true && !NEEDS_TESTID.has(a.action)) problems.push(`${aat}: 'first' only applies to actions that address a data-testid`);
+      // '@password' resolves to the SEEDED CREDENTIAL. Typed into anything but a
+      // password field it is rendered in clear and the shot PHOTOGRAPHS it.
+      if (a.action === 'fill' && a.value === '@password' && !/password/i.test(a.testid ?? '')) {
+        problems.push(`${aat}: fills '@password' into '${a.testid}', which is not a password field — the shot would photograph the seeded credential.`);
+      }
       // A literal password in the table would be committed to git forever.
       if (a.action === 'fill' && typeof a.value === 'string' && a.value !== '@password'
           && /password/i.test(a.testid ?? '')) {
@@ -134,9 +152,10 @@ if (isMain) {
       process.stdout.write(`${p.slug.padEnd(24)} #${p.issue}  ${String(n).padStart(2)} shot(s)  ${p.title}\n`);
     }
   } else if (cmd === 'paths') {
-    if (!arg) { process.stderr.write('usage: shot-table.mjs paths <persona>\n'); process.exit(2); }
+    // No persona → every row, in table order. shots.sh needs that for the --all
+    // epilogue, which reports WHICH cited files a run left absent.
     const rows = rowsFor(table, arg);
-    if (!rows.length) { process.stderr.write(`no shots for persona '${arg}'\n`); process.exit(1); }
+    if (arg && !rows.length) { process.stderr.write(`no shots for persona '${arg}'\n`); process.exit(1); }
     for (const r of rows) process.stdout.write(`shots/${shotName(r)}.png\n`);
   } else if (cmd === 'needs-auth') {
     const rows = rowsFor(table, arg);
@@ -144,7 +163,7 @@ if (isMain) {
   } else if (cmd === 'count') {
     process.stdout.write(`${rowsFor(table, arg).length}\n`);
   } else {
-    process.stderr.write('usage: shot-table.mjs validate|list|paths <persona>|needs-auth <persona>|count [persona]\n');
+    process.stderr.write('usage: shot-table.mjs validate|list|paths [persona]|needs-auth <persona>|count [persona]\n');
     process.exit(2);
   }
 }
