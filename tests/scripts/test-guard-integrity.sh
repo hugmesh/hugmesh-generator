@@ -401,7 +401,12 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # grep and busybox sed — and printed 8 passed / 0 failed rc=0, with its negative
 # controls re-verified there rather than only on the GNU host, because busybox
 # is exactly where a negative guard fails open.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-160}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-161}"
+
+# 160 -> 161 on 2026-09-10: tests/scripts/test-kind-doctor.sh joined the gate
+# with scripts/kind-doctor.sh (hugmesh-generator#349). MEASURED, not assumed:
+# the analyser printed '161 of 183 suites' with the new suite wired and '160 of
+# 182' without it, and the ungated SET pin is unchanged at 22.
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a

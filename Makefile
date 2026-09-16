@@ -376,7 +376,7 @@ ORANGEPI4LTS_FLAVOR ?= both
 ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
 
 .DEFAULT_GOAL := help
-.PHONY: help menu mesh-node-up mesh-node-down mesh-node-status mesh-node-logs go-live go-live-menu clean build-all build-everything matrix-check inventory-check template-drift-check image-inventory pentest pentest-seed rebuild \
+.PHONY: help menu kind-doctor kind-doctor-test mesh-node-up mesh-node-down mesh-node-status mesh-node-logs go-live go-live-menu clean build-all build-everything matrix-check inventory-check template-drift-check image-inventory pentest pentest-seed rebuild \
         rpi x86 omnibus prebuild-binaries frite frite-live frite-installer jetson orangepi5 orangepi5-live orangepi5-installer \
         orangepizero2 orangepizero2-live orangepizero2-installer \
         orangepizero2w orangepizero2w-live orangepizero2w-installer \
@@ -1273,7 +1273,7 @@ kind-images: stack-clone stack-m2-bootstrap ## build + `kind load` the SSO-slice
 # "no selection" means. `none` is the spelling for "none of them".
 _KIND_ADDONS_ENV := $(if $(strip $(KIND_ADDONS)),KIND_ADDONS='$(strip $(KIND_ADDONS))',)
 
-kind-up: ## bring up the kind SSO slice (KIND_PROFILE=sso bootstrap: apps + Vault KV + e2e seeds; MFA=1 flips gateway mfa.enabled; KIND_ADDONS=<slug,...>|none selects infra add-ons)
+kind-up: ## bring up the kind SSO slice (KIND_PROFILE=sso bootstrap: apps + Vault KV + e2e seeds; MFA=1 flips gateway mfa.enabled; KIND_ADDONS=<slug,...>|none selects infra add-ons; SKIP_EGRESS_PREFLIGHT=1 for an air-gapped host)
 	KIND_PROFILE=sso MFA='$(MFA)' $(_KIND_ADDONS_ENV) bash specs/cluster/bootstrap/kind-local/bootstrap-kind.sh
 
 kind-e2e: playwright-deps ## run the native-login e2e (spec 27) against the kind cluster
@@ -1328,6 +1328,24 @@ kind-addon-check: ## offline: prove a KIND_ADDONS selection reaches bootstrap-ki
 kind-down: ## delete the kind cluster
 	kind delete cluster --name $${KIND_CLUSTER_NAME:-hugmesh-local}
 
+# kind-doctor — the standing "can this cluster actually run the mesh?" check.
+#
+# hugmesh-generator#349: on 2026-09-10 this lane had been dead for two days
+# while `kind get clusters` listed the cluster and `kubectl get nodes` said
+# Ready. Nineteen pods were in ImagePullBackOff and the failed-pull counter had
+# passed thirteen thousand. Two causes, neither detected anywhere: the host had
+# lost docker's netfilter rules (so nothing could leave the bridge, while the
+# error text said "lookup ... i/o timeout" and read like DNS), and `make
+# kind-images` had never run so no first-party image existed in the node at all.
+# This target reports; it never repairs.
+# KIND_DOCTOR_WARN_ONLY is pinned to 0 here on purpose. The script reads it
+# from the AMBIENT environment (bootstrap-kind.sh's closing summary sets it per
+# command, which is legitimate), so without this pin an exported value in the
+# operator's shell would silently disarm the standing check and make this target
+# exit 0 through a cluster that cannot run.
+kind-doctor: ## is the kind cluster capable of running the mesh? (egress, images, pods, ArgoCD)
+	KIND_DOCTOR_WARN_ONLY=0 bash scripts/kind-doctor.sh
+
 # Offline honesty gate for the two ways kind-up used to report work it had not
 # done: an identity seed that exits 0 through Casdoor's HTTP-200 denials, and a
 # "idempotent" KV seed that re-minted every password onto Postgres volumes that
@@ -1335,6 +1353,25 @@ kind-down: ## delete the kind cluster
 # cluster, no kind, no docker, no network. Also runs in CI (lint:kind-bootstrap-honesty).
 kind-honesty: ## offline: prove the kind SSO harness cannot report an unperformed seed
 	bash tests/scripts/test-kind-bootstrap-honesty.sh
+
+# The doctor's own guard. Offline: stubs docker and kubectl and replays both
+# halves of the 2026-09-10 outage (no egress; no first-party image) to prove the
+# check actually goes red on each — plus the negative-tooling cases, because a
+# guard that goes green when its OWN tooling breaks is worse than no guard.
+# It also extracts and EXECUTES bootstrap-kind.sh's egress preflight, the half
+# of #350 that can hard-abort a bring-up.
+#
+# Mutation-tested: 13 mutations of scripts/kind-doctor.sh and
+# bootstrap-kind.sh's preflight, all 13 killed, each verified to have actually
+# changed the file and each restored to its exact sha256 afterwards. The number
+# here is what was measured, not a round claim — an earlier round asserted
+# "seven mutations, all seven killed" while three trivial ones survived, every
+# one of them in a code path no scenario exercised. Five of these thirteen
+# survived here too, until the tests they answer to stopped asking the easy
+# question. The battery, and what each survivor taught, is in the header of
+# tests/scripts/test-kind-doctor.sh.
+kind-doctor-test: ## offline: prove kind-doctor detects the outage it was written for
+	bash tests/scripts/test-kind-doctor.sh
 
 # ── local browsing — put ANY front door in THIS machine's browser
 # Sits here because the kind lane is its first consumer, but it covers all
