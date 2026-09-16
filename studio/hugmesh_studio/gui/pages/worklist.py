@@ -45,9 +45,10 @@ from ._desktop_user_dialog import DesktopUserDialog
 def _infra_service_options(platform: str) -> list[tuple[str, tuple[str, ...]]]:
     """(label, infra_services-tuple) options for a node's per-node Services combo,
     by what THIS platform's builder can actually express (mirrors worklist.py's
-    materialize emission): x86 expresses the Tor onion (--with-tor); rpi5 expresses
-    tor + egress-vpn (--optional-services); every other platform expresses neither,
-    so it gets NO combo. Keeps the GUI honest with the argv (no dead per-node flag)."""
+    materialize emission): x86 expresses the Tor onion (--with-tor) and, since issue
+    #265, egress-vpn as a --optional-services slug (build-x86-host-stage4.sh:179);
+    rpi5 expresses both as slugs; every other platform expresses neither, so it gets
+    NO combo. Keeps the GUI honest with the argv (no dead per-node flag)."""
     plat_opt = OPTIONAL_SERVICES_BY_PLATFORM.get(platform, ())
     expr = [s for s in WORKLIST_INFRA_SERVICES
             if (s == "tor" and platform == "x86") or s in plat_opt]

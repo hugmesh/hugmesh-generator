@@ -8,8 +8,9 @@ platform (the dead-default class this repo keeps hitting: a flag that emits noth
   - x86 tor        -> --with-tor
   - rpi5 tor       -> --optional-services "... tor"
   - rpi5 egress-vpn-> --optional-services "... egress-vpn"
-  - x86 egress-vpn -> DROPPED (x86 has no --optional-services infra slug; the
-                      egress_vpn-on-node scope is a declared gap, NOT a silent flag)
+  - x86 egress-vpn -> --optional-services "... egress-vpn" (since issue #265: x86's
+                      builder accepts the infra slugs too — build-x86-host-stage4.sh:179;
+                      before that the x86 catalogue lacked them and this was DROPPED)
   - frite/jetson   -> DROPPED (parse neither) — never a bogus flag
 Plus the JSON round-trip and that it is ADDITIVE to the mesh-wide default.
 """
@@ -61,13 +62,17 @@ def test_rpi5_node_egress_vpn_emits_optional_services_egress():
 
 
 # ── the DEAD-FLAG guards: nothing the platform can't express is emitted ───────────
-def test_x86_egress_vpn_on_node_is_dropped_not_a_bogus_flag():
-    """x86 has no --optional-services infra slug and --egress-vpn needs a FILE, so a
-    per-node egress-vpn on x86 is the DECLARED GAP — it must emit NOTHING, never a
-    flag the builder ignores or an empty --egress-vpn."""
+def test_x86_egress_vpn_on_node_emits_optional_services_egress_never_a_file_flag():
+    """Issue #265: x86's builder accepts `egress-vpn` as a --optional-services slug
+    (build-x86-host-stage4.sh:179 SELECTABLE_OPTIONAL_SERVICES; registry buildGate
+    [rpi5, x86] at optional-services.yaml:721), so a per-node egress-vpn on an x86
+    node rides the SAME slug channel rpi5 does. What it must NEVER do is touch
+    --egress-vpn: that flag wants a FILE (a desktop node's own VPN profile), and an
+    empty one would be a bogus flag. Until 2026-09-16 the x86 catalogue lacked the
+    infra slugs and this selection was silently dropped."""
     argv = _argv_for(WorklistEntry(role="backend", platform="x86",
                                    infra_services=("egress-vpn",)))
-    assert "egress-vpn" not in " ".join(argv)
+    assert "egress-vpn" in _optional_services_value(argv).split()
     assert "--egress-vpn" not in argv
 
 
