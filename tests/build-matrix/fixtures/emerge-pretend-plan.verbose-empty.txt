@@ -1,0 +1,10 @@
+
+These are the packages that would be merged, in order:
+
+
+Total: 0 packages, Size of downloads: 0 KiB
+
+ * IMPORTANT: 1 news items need reading for repository 'sage-on-gentoo'.
+ * IMPORTANT: 27 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+

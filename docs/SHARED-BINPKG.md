@@ -259,6 +259,22 @@ it **reads** that same directory through the existing read-only bind +
 own private `DISTDIR`. An explicit `--distdir` naming the shared dir is dropped rather
 than listed twice.
 
+**The x86 fetch is bounded** (issue #322). Portage's default fetcher is `wget -t 3 -T 60`,
+and `-T` is a *read* timeout: it fires only when no byte at all arrives, so a transfer
+that stalls but still trickles is never abandoned — on 2026-09-08 a 1.02 GB GitHub
+archive (`media-fonts/noto`) stopped at 10.3 %, moved 0 bytes in 22 minutes, and blocked
+the whole standalone-thick payload for over an hour with no gate and no WARN. wget has no
+minimum-rate option; curl does. `specs-x86/portage/make.conf.tmpl` therefore sets
+`FETCHCOMMAND`/`RESUMECOMMAND` to curl with `--speed-limit 10240 --speed-time 60`
+(abort under 10 KiB/s over any 60 s window) plus curl's own bounded retries, so the worst
+case per URI is minutes, after which portage moves to the next mirror. `RESUMECOMMAND` is
+a small `bash -c` wrapper: it resumes (`-C -`) where the server honours `Range`, and where
+it does not — GitHub's archive endpoint answers a `Range` request with `200`, on which curl
+exits 33 without downloading — it falls back to a fresh bounded fetch of the whole file.
+`tests/scripts/test-x86-fetchcommand-bound.sh` executes both against local trickling,
+silent, 404, Range-ignoring and Range-capable servers. The ARM cross specs still use the
+default wget fetcher; the bound has only been applied where the stall was measured.
+
 ### Concurrency
 
 Mutation of the shared root is serialised with `flock` (`sa_lock_run`), re-entrant so a

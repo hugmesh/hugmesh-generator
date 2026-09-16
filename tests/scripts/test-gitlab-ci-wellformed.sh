@@ -16,6 +16,27 @@
 # it — plus the neighbouring shapes that are just as dead (a job with no
 # script/trigger/extends, a job referencing a script file that does not exist).
 # Offline: python3 + PyYAML only, no runner, no network.
+#
+# ── `!reference` IS PART OF THE GRAMMAR (issue #252) ─────────────────────────
+# PyYAML's SafeLoader has no constructor for GitLab's `!reference [.job, key]`
+# tag, so a pipeline that uses it — the DOCUMENTED way to splice an included
+# template's before_script instead of replacing it (`extends:` REPLACES arrays,
+# which is how hugmesh-admin-ui's DAST job came to run with no nuclei binary) —
+# used to be reported here as "yaml parse error: could not determine a
+# constructor for the tag '!reference'", and the trigger check then died with a
+# traceback instead of a finding. Nothing in THIS repo's .gitlab-ci.yml uses the
+# tag, so the gate looked green while it could not read the first onboarded repo
+# that follows the template correctly (hugmesh/hugmesh-api-docs, merged PR #7:
+# `- !reference [.pentest-dast-base, before_script]`).
+#
+# The loader below (${TMP}/ciyaml.py, shared by both checks) registers the tag
+# as a marker and RESOLVES it against the loaded document before any job rule
+# runs: a list-valued reference splices in place, a scalar/mapping one replaces
+# the marker, nesting is bounded at GitLab's own limit of 10 hops, and a
+# reference that points at nothing is a FINDING (GitLab rejects that at pipeline
+# creation too), never a traceback. Resolution feeds the trigger check as well,
+# so a `bash tests/...` line that arrives through `!reference` is still held to
+# the rules:changes invariant — the negative controls (n7–n10) prove each half.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,13 +60,93 @@ fi
 
 echo "== .gitlab-ci.yml well-formedness: ${CI_FILE} =="
 
+TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+# Shared loader: SafeLoader + GitLab's `!reference`, resolved before the checks.
+# One module, imported by both python programs below, so the two checks can never
+# disagree about what the tag means.
+cat > "${TMP}/ciyaml.py" <<'PY'
+"""SafeLoader + GitLab `!reference` (issue #252). load(path) -> (doc, problems)."""
+import yaml
+
+MAX_HOPS = 10          # GitLab's documented nesting limit for !reference
+_MARK = "__reference__"
+
+
+class CiLoader(yaml.SafeLoader):
+    """yaml.safe_load semantics plus the one GitLab tag a pipeline may carry."""
+
+
+def _reference(loader, node):
+    return {_MARK: loader.construct_sequence(node, deep=True)}
+
+
+CiLoader.add_constructor("!reference", _reference)
+
+
+def _is_ref(x):
+    return isinstance(x, dict) and set(x) == {_MARK}
+
+
+def _lookup(root, path):
+    cur = root
+    for seg in path:
+        if not isinstance(cur, dict) or seg not in cur:
+            return None, False
+        cur = cur[seg]
+    return cur, True
+
+
+def _resolve(node, root, problems, hops):
+    """Resolve markers in-place semantics: list-valued refs splice, others replace."""
+    if _is_ref(node):
+        path = node[_MARK]
+        if hops >= MAX_HOPS:
+            problems.append("!reference %s nests deeper than GitLab's limit of %d"
+                            % (path, MAX_HOPS))
+            return None
+        target, found = _lookup(root, path)
+        if not found:
+            problems.append("!reference %s points at nothing — GitLab rejects this at "
+                            "pipeline creation, so NO pipeline runs at all" % (path,))
+            return None
+        return _resolve(target, root, problems, hops + 1)
+    if isinstance(node, list):
+        out = []
+        for item in node:
+            if _is_ref(item):
+                r = _resolve(item, root, problems, hops)
+                if isinstance(r, list):
+                    out.extend(r)          # a list-valued reference splices in place
+                elif r is not None:
+                    out.append(r)
+            else:
+                out.append(_resolve(item, root, problems, hops))
+        return out
+    if isinstance(node, dict):
+        return {k: _resolve(v, root, problems, hops) for k, v in node.items()}
+    return node
+
+
+def load(path):
+    """Parse with the CI loader and resolve every !reference. Never raises on a
+    dangling reference — that is a finding in `problems`; parse errors still raise."""
+    with open(path) as fh:
+        doc = yaml.load(fh, Loader=CiLoader)
+    problems = []
+    if isinstance(doc, dict):
+        doc = _resolve(doc, doc, problems, 0)
+    return doc, problems
+PY
+
 check_file() { # <path> -> prints findings, returns 1 if any
-  CI_PATH="$1" python3 - <<'PY'
-import os, sys, yaml
+  CI_PATH="$1" CI_HELPER_DIR="${TMP}" python3 - <<'PY'
+import os, sys
+sys.path.insert(0, os.environ["CI_HELPER_DIR"])
+import ciyaml
 
 path = os.environ["CI_PATH"]
 try:
-    doc = yaml.safe_load(open(path))
+    doc, problems = ciyaml.load(path)      # !reference-aware; dangling refs -> problems
 except Exception as e:
     print(f"    yaml parse error: {e}")
     sys.exit(1)
@@ -58,7 +159,6 @@ RESERVED = {
     "stages", "variables", "default", "include", "workflow",
     "image", "services", "before_script", "after_script", "cache",
 }
-problems = []
 for name, body in doc.items():
     if name in RESERVED or str(name).startswith("."):
         continue                      # .hidden keys are templates/anchors
@@ -118,10 +218,16 @@ fi
 #   * and it must carry a `$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH` rule — so a
 #     merged change is re-validated on main.
 check_triggers() { # <path> -> prints findings, returns 1 if any
-  CI_PATH="$1" python3 - <<'PY'
-import os, re, sys, yaml
+  CI_PATH="$1" CI_HELPER_DIR="${TMP}" python3 - <<'PY'
+import os, re, sys
+sys.path.insert(0, os.environ["CI_HELPER_DIR"])
+import ciyaml
 
-doc = yaml.safe_load(open(os.environ["CI_PATH"]))
+try:
+    doc, _ = ciyaml.load(os.environ["CI_PATH"])   # spliced !reference lines are checked too
+except Exception as e:
+    print(f"    yaml parse error: {e}")           # check_file already reported it as a finding
+    sys.exit(1)
 RESERVED = {"stages", "variables", "default", "include", "workflow",
             "image", "services", "before_script", "after_script", "cache"}
 
@@ -180,7 +286,6 @@ fi
 
 # ── negative controls: the gate must actually bite ────────────────────────────
 echo "-- negative controls --"
-TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
 
 # (n1) the exact defect that shipped: a job whose body was eaten by a comment.
 { printf 'stages: [lint]\nlint:eaten:\n# a comment block that swallowed the body\nlint:next:\n  stage: lint\n  script:\n    - true\n'; } > "${TMP}/null-job.yml"
@@ -231,6 +336,54 @@ if check_triggers "${TMP}/wired.yml" >/dev/null 2>&1; then
   ok "vacuity control: correctly-wired and unconditional jobs pass"
 else
   bad "vacuity control: a correctly-wired job was rejected — the trigger check is over-eager"
+fi
+
+# (n7) issue #252, the exact shape that broke the checker: hugmesh-api-docs PR #7
+# PREPENDS a harness clone to the base template's before_script via !reference.
+# A well-formed pipeline — it must PASS, and it used to die on the tag.
+{ printf 'stages: [pentest]\n.pentest-dast-base:\n  stage: pentest\n  before_script:\n    - apk add nuclei\n    - test -x harness/run.sh || exit 1\n  script:\n    - bash harness/run.sh\ndast:\n  extends: .pentest-dast-base\n  before_script:\n    - git clone --depth 1 harness\n    - !reference [.pentest-dast-base, before_script]\n  rules:\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n'; } > "${TMP}/reference.yml"
+if check_file "${TMP}/reference.yml" >"${TMP}/reference.out" 2>&1; then
+  ok "vacuity control: a pipeline using !reference (api-docs#7 shape) is read and passes"
+else
+  bad "a pipeline using !reference was rejected — the #252 defect is back: $(head -2 "${TMP}/reference.out" | tr '\n' ' ')"
+fi
+if check_triggers "${TMP}/reference.yml" >"${TMP}/reference.trig" 2>&1; then
+  ok "vacuity control: the trigger check reads a !reference pipeline without a traceback"
+else
+  bad "the trigger check failed on a !reference pipeline: $(head -2 "${TMP}/reference.trig" | tr '\n' ' ')"
+fi
+
+# (n8) a !reference that points at nothing is what GitLab rejects at pipeline
+# creation — so it must be a FINDING here (named, greppable), never a traceback.
+{ printf 'stages: [lint]\nlint:dangling:\n  stage: lint\n  script:\n    - !reference [.does-not-exist, script]\n'; } > "${TMP}/dangling.yml"
+if check_file "${TMP}/dangling.yml" >"${TMP}/dangling.out" 2>&1; then
+  bad "negative control: a !reference to a missing anchor was NOT caught"
+elif grep -q 'points at nothing' "${TMP}/dangling.out" && ! grep -q 'Traceback' "${TMP}/dangling.out"; then
+  ok "negative control: a dangling !reference is a named finding, not a traceback"
+else
+  bad "negative control: dangling !reference failed for the wrong reason: $(head -2 "${TMP}/dangling.out" | tr '\n' ' ')"
+fi
+
+# (n9) resolution must FEED the trigger check: a suite that arrives through a
+# whole-key reference (`script: !reference [...]`) is still held to rules:changes.
+{ printf 'stages: [verify]\n.suite-tpl:\n  script:\n    - bash tests/foo/test-foo.sh\nverify:via-ref:\n  stage: verify\n  script: !reference [.suite-tpl, script]\n  rules:\n    - if: $CI_PIPELINE_SOURCE == "merge_request_event"\n      changes:\n        - src/foo.c\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n'; } > "${TMP}/ref-untriggered.yml"
+if check_triggers "${TMP}/ref-untriggered.yml" >"${TMP}/ref-untriggered.out" 2>&1; then
+  bad "negative control: a suite reached only through !reference escaped the rules:changes check"
+elif grep -q 'tests/foo/test-foo.sh' "${TMP}/ref-untriggered.out"; then
+  ok "negative control: a suite spliced in by a whole-key !reference is still checked against rules:changes"
+else
+  bad "negative control: ref-untriggered failed for the wrong reason: $(head -2 "${TMP}/ref-untriggered.out" | tr '\n' ' ')"
+fi
+
+# (n10) …and through a LIST-ITEM splice (the api-docs shape), which is the case
+# where the marker sits inside the array and must be expanded, not str()'d.
+{ printf 'stages: [verify]\n.suite-tpl:\n  script:\n    - bash tests/foo/test-foo.sh\nverify:via-splice:\n  stage: verify\n  script:\n    - echo hi\n    - !reference [.suite-tpl, script]\n  rules:\n    - if: $CI_PIPELINE_SOURCE == "merge_request_event"\n      changes:\n        - src/foo.c\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n'; } > "${TMP}/ref-splice.yml"
+if check_triggers "${TMP}/ref-splice.yml" >"${TMP}/ref-splice.out" 2>&1; then
+  bad "negative control: a suite spliced in as a !reference list item escaped the rules:changes check"
+elif grep -q 'tests/foo/test-foo.sh' "${TMP}/ref-splice.out"; then
+  ok "negative control: a suite spliced in as a !reference list item is still checked against rules:changes"
+else
+  bad "negative control: ref-splice failed for the wrong reason: $(head -2 "${TMP}/ref-splice.out" | tr '\n' ' ')"
 fi
 
 echo

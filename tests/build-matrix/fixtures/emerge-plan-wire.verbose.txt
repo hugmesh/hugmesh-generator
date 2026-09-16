@@ -1,0 +1,5 @@
+==> Emerge plan: image total=4 binary=0 ebuild=4
+==> Emerge plan: image 1/4 dev-qt/qtserialport-6.11.2 via=ebuild USE="-custom-cflags -test"
+==> Emerge plan: image 2/4 sys-apps/portage-3.0.82.2 via=ebuild USE="(ipc) native-extensions rsync-verify xattr -apidoc -build -doc -gentoo-dev (-selinux) -test"
+==> Emerge plan: image 3/4 app-misc/hello-2.12.3 via=ebuild USE="nls"
+==> Emerge plan: image 4/4 net-misc/wget-1.25.0-r2 via=ebuild USE="nls pcre (ssl) zlib -cookie-check -debug -gnutls -idn -libproxy -metalink -ntlm -static -test -uuid -verify-sig"
