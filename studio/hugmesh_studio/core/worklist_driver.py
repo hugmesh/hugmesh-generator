@@ -43,7 +43,7 @@ from dataclasses import asdict, dataclass, field
 
 from .build_driver import BuildDriver
 from . import roles
-from .config import DOMAIN_IDP_SUPERDOMAIN, ImageConfig, image_class
+from .config import DOMAIN_IDP_SUPERDOMAIN, ImageConfig, User, image_class
 from .platform_info import HostInfo, detect
 from .worklist import WorklistConfig, WorklistEntry
 
@@ -288,9 +288,25 @@ class WorklistDriver:
                         for d in base.domains],
             # per-user `roles` (issue #228) is OMIT-WHEN-SINGLE too (User.to_dict), so
             # v2 and the v1 shim emit the same user rows byte for byte.
-            "users": [u.to_dict() for u in base.users],
+            "users": [u.to_dict() for u in self.manifest_users()],
             "images": images,
         }
+
+    def manifest_users(self) -> list[User]:
+        """The Users the mesh manifest carries: the Users-table rows PLUS the people
+        named on desktop entries (issue #279). Before this, manifest_v2 emitted
+        ``base.users`` alone, so a desktop-derived person reached every per-image
+        ``ImageConfig.users`` (and the v1 shim's ``mesh_manifest()``) but never the
+        one artifact cluster provisioning actually reads — the account the
+        2026-08-14 ask was for was never created. Same source and same dedup as
+        ``WorklistConfig._materialize_one`` step 3, so the v2 envelope and every
+        image's v1 shim agree row for row: a Users-table row (richer: email /
+        registration) always wins over the derived one."""
+        base = self.worklist.base
+        users = list(base.users)
+        users += self.worklist.desktop_users(
+            skip={(u.username, u.domain) for u in users})
+        return users
 
     def write_manifest_v2(self) -> str:
         out = self._output_dir()

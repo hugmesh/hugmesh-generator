@@ -1315,8 +1315,13 @@ def test_g13_empty_list_leaves_builder_default():
 
 def test_g15_rpi5_infra_slugs_in_catalog():
     assert set(INFRA_SERVICES_CHOICES) <= set(OPTIONAL_SERVICES_BY_PLATFORM["rpi5"])
-    # x86 keeps the dedicated flags; its catalog is the user-level set only
-    assert "tor" not in OPTIONAL_SERVICES_BY_PLATFORM["x86"]
+    # x86 accepts the same four infra slugs (issue #265: build-x86-host-stage4.sh:179
+    # SELECTABLE_OPTIONAL_SERVICES; buildGate [rpi5, x86] on every infra row). This
+    # clause used to pin `"tor" not in x86` — the premise "x86 keeps dedicated flags
+    # INSTEAD" was stale: tor's flag still wins on x86 (_service_channel), but the
+    # catalogue is what makes anubis / workloadConsole / egress-vpn reachable there.
+    assert set(INFRA_SERVICES_CHOICES) <= set(OPTIONAL_SERVICES_BY_PLATFORM["x86"])
+    assert OPTIONAL_SERVICES_BY_PLATFORM["x86"] == OPTIONAL_SERVICES_BY_PLATFORM["rpi5"]
 
 
 def test_g15_rpi5_tor_via_optional_services():

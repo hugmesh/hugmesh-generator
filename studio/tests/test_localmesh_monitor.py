@@ -44,7 +44,10 @@ pytestmark = pytest.mark.real_mesh_monitor
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
-_PROBE_ATTRS = ("_probe", "_node_probe", "_e2e_probe", "_monitor_probe")
+# ``_scale_worker`` is the page's Replicas worker (issue #341) — a QThread the page owns
+# only after an Apply, so a fixture that waited on the probes alone would drop a page
+# mid-scale and take the interpreter with it.
+_PROBE_ATTRS = ("_probe", "_node_probe", "_e2e_probe", "_monitor_probe", "_scale_worker")
 
 
 @pytest.fixture(scope="module")
@@ -804,11 +807,12 @@ class _ScaleNode:
 # ── the compatibility contract with localmesh.py ───────────────────────────────────
 
 def test_the_default_monitor_widget_is_still_the_six_column_table(qapp):
-    """M1. ``localmesh.py:1352`` builds ``MeshMonitorWidget(self)`` and this lane was
-    forbidden from editing that file, so the DEFAULT is the whole contract. Flipping
-    it to ``scaling=True`` — which is what a lane wiring the operator's own screen
-    would reach for first — would ship a seventh column into a page that connects
-    nothing to ``scale_requested``. This is the test that goes red for it."""
+    """M1. The DEFAULT is the compatibility contract: any mount that says nothing gets
+    the six-column table and no Replicas knob. ``localmesh.py`` now opts IN with an
+    explicit ``scaling=True`` (issue #341) and wires ``scale_requested`` — pinned by
+    ``test_the_pages_own_monitor_mounts_the_replicas_column_and_wires_it`` — so a
+    default that flipped to True would hand every OTHER bare mount a seventh column
+    whose Apply emits into nothing. This is the test that goes red for it."""
     w = mw.MeshMonitorWidget()
     try:
         assert w.scaling is False
@@ -1241,6 +1245,31 @@ def test_a_row_that_left_the_last_read_is_refused_not_guessed_at(qapp, section):
     assert "no longer in the last read" in section.monitor.scale_status_text()
 
 
+def test_a_failed_scale_on_the_section_drops_the_pending_arrow(qapp, section,
+                                                               monkeypatch):
+    """The Section twin of the page pin (issue #341 landing review): ``_scale_done``
+    is where a REFUSED target is forgotten; the re-read cannot do it because the
+    count it observes still differs from the target the operator asked for."""
+    monkeypatch.setattr(mm, "scale", lambda *a, **k: (False, "scale failed: refused"))
+    section.refresh("test")
+    _drain(qapp, section)
+    key = "kind/hugmesh/gw-1"
+    cell = section.monitor.scale_cell(key)
+    observed = cell.observed
+    cell.plus.click()
+    cell.plus.click()
+    assert section.monitor.scale_target(key) == observed + 2
+    cell.apply.click()
+    qapp.processEvents()
+    _drain(qapp, section)
+    assert not section.monitor._scale_busy
+    assert "scale failed: refused" in section.monitor.scale_status_text()
+    cell = section.monitor.scale_cell(key)
+    assert cell.observed == observed
+    assert section.monitor.scale_target(key) == observed, "the refused target lingered"
+    assert key not in section.monitor._scale_targets
+
+
 def test_shutdown_says_which_thread_it_abandoned(qapp, host, monkeypatch):
     """The refutation's third major: the docstring promised a drain it does not do.
     A compose scale has a 180 s ceiling and shutdown waits 5 s for it, so one in
@@ -1334,12 +1363,16 @@ def test_a_declined_door_is_said_out_loud_even_on_a_non_scaling_mount(qapp, host
 
 
 def test_the_two_monitor_probes_have_not_drifted():
-    """The refutation's second major. ``MeshMonitorProbe`` is a hand copy of
-    ``localmesh._MonitorProbe`` and cannot simply import it: localmesh.py imports THIS
-    module, so the import would be circular. The dedup has to run the other way and
-    localmesh.py is the file #336 forbade this lane from touching — so until that
-    follow-up lands, drift is PINNED here instead of hoped about."""
+    """The refutation's second major, closed by issue #341's second item.
+    ``MeshMonitorProbe`` was a hand copy of ``localmesh._MonitorProbe`` that could not
+    import it (localmesh.py imports THIS module, so the import would be circular), and
+    this test pinned the two against each other by shape. The dedup ran the only way
+    it could — ``localmesh._MonitorProbe`` is now an ALIAS of the canonical class —
+    so the pin is IDENTITY, and the shape checks below are kept as the contract the
+    page's ``_refresh_monitor`` relies on (constructor, ``result`` signal, both run()
+    paths). A second class reappearing in localmesh.py goes red on the first line."""
     a, b = mw.MeshMonitorProbe, localmesh_mod._MonitorProbe
+    assert a is b, "localmesh._MonitorProbe must be an alias of MeshMonitorProbe, not a copy"
     import inspect as _i
     assert (list(_i.signature(a.__init__).parameters)
             == list(_i.signature(b.__init__).parameters))
@@ -1435,16 +1468,172 @@ def test_join_puts_the_target_on_the_unit():
     assert (units[0].scale.kind, units[0].scale.name) == ("deployment", "casdoor")
 
 
-def test_the_pages_own_monitor_has_no_scaling_column(page):
-    """X2. ``test_the_default_monitor_widget_is_still_the_six_column_table`` pins the
-    DEFAULT; this pins the MOUNT. ``localmesh.py`` builds ``MeshMonitorWidget(self)``
-    and connects nothing to ``scale_requested``, so an explicit ``scaling=True`` there
-    — the one-kwarg change #341 warns against — ships a Replicas column whose Apply
-    has no receiver. The default test stays green for that; this one goes red. When
-    #341 lands the wiring, update this to pin the new mount rather than deleting it."""
-    assert page.monitor.scaling is False
-    assert page.monitor.table.columnCount() == len(mw._MON_HEADERS)
-    assert page.monitor.scale_cell("kind/hugmesh/gw-1") is None
+def test_the_pages_own_monitor_mounts_the_replicas_column_and_wires_it(qapp, page,
+                                                                      fake):
+    """X2, re-pointed when #341 landed. ``test_the_default_monitor_widget_is_still_
+    the_six_column_table`` pins the DEFAULT; this pins the MOUNT: ``localmesh.py``
+    builds ``MeshMonitorWidget(self, scaling=True)`` AND connects ``scale_requested``
+    to ``_scale_monitor``. Until 2026-09-16 this test pinned the bare six-column
+    mount, because the kwarg alone would have shipped a knob whose Apply emitted
+    into nothing. Both halves are asserted: the column, and a receiver behind it —
+    the widget's own NO_SINK refusal must never be what the operator's screen says."""
+    assert page.monitor.scaling is True
+    assert page.monitor.table.columnCount() == len(mw._MON_HEADERS_SCALING)
+    assert page.monitor.table.horizontalHeaderItem(mw._MON_COL_SCALE).text() == "Replicas"
+    fake.answers = [_snap(_scalable("hugmesh", "gw-1"))]
+    page.initializePage()
+    _settle(qapp, page)
+    cell = page.monitor.scale_cell("kind/hugmesh/gw-1")
+    assert cell is not None, "the page did not paint a Replicas strip for a scalable row"
+    # a receiver exists (the same protected-method probe the widget's _apply uses)
+    assert page.monitor.receivers(page.monitor.scale_requested) >= 1
+    # …and pressing Apply with a target that differs never lands on the NO_SINK line
+    cell.plus.click()
+    cell.apply.click()
+    qapp.processEvents()
+    assert "not wired" not in page.monitor.scale_status_text()
+    assert mw.MeshMonitorWidget.NO_SINK not in page.monitor.scale_status_text()
+    _settle(qapp, page)
+
+
+def _scale_snapshot_page(qapp, page, fake):
+    """Enter the page with one scalable kind row on screen, settled."""
+    fake.answers = [_snap(_scalable("hugmesh", "gw-1"))]
+    page.initializePage()
+    _settle(qapp, page)
+    cell = page.monitor.scale_cell("kind/hugmesh/gw-1")
+    assert cell is not None, "the page did not paint a scalable row"
+    return cell
+
+
+def test_the_pages_apply_runs_the_scale_off_the_gui_thread_one_at_a_time(
+        qapp, page, fake, monkeypatch):
+    """Issue #341: the page's receiver is ``MeshMonitorSection._scale`` copied, so it
+    carries the same two guarantees — M3 (never on the GUI thread) and M2 (one scale
+    per project at a time, including an Apply already in Qt's queue when the first one
+    latched) — and the same finish: the busy guard released with the verb's answer on
+    the inline line, the pending target forgotten, and ONE re-read of the lanes."""
+    gui = threading.get_ident()
+    ran: list[int] = []
+    gate = threading.Event()
+
+    def fake_scale(gen, node, unit, n, **kw):
+        ran.append(threading.get_ident())
+        gate.wait(10)
+        return True, f"scaled to {n}"
+    monkeypatch.setattr(mm, "scale", fake_scale)
+    cell = _scale_snapshot_page(qapp, page, fake)
+    reads_before = fake.calls
+    key = "kind/hugmesh/gw-1"
+    cell.plus.click()
+    cell.plus.click()
+    assert page.monitor.scale_target(key) == 3
+
+    cell.apply.click()
+    qapp.processEvents()
+    assert page.monitor._scale_busy, "the busy guard never latched"
+    assert localmesh_mod.probe_running(page, "_scale_worker")
+    assert "Scaling deployment/gw in hugmesh to 3" in page.monitor.scale_status_text()
+    for b in (cell.minus, cell.plus, cell.apply):
+        assert not b.isEnabled(), "a control stayed live while a scale was running"
+
+    # a SECOND press, and a second emit straight into the slot, must not stack
+    cell.apply.click()
+    page.monitor.scale_requested.emit(key, 5)
+    qapp.processEvents()
+    gate.set()
+    _settle(qapp, page)
+    assert len(ran) == 1, f"{len(ran)} scales ran concurrently against one project"
+    assert ran[0] != gui, "the scale ran ON the GUI thread"
+    assert not page.monitor._scale_busy
+    assert "scaled to 3" in page.monitor.scale_status_text()
+    assert page._scaling_key == ""
+    assert fake.calls > reads_before, "a finished scale must re-read the lanes"
+
+
+def test_the_pages_scale_is_refused_out_loud_while_a_verb_runs(qapp, page, fake,
+                                                              monkeypatch):
+    """Issue #341: this page runs mesh VERBS, which the Section never does. A
+    `docker compose up --scale` racing `make stack-up` against the same project is
+    the container-set race the busy guard exists for — so Apply during a verb is
+    refused on the table's inline line (never silently), and no worker starts."""
+    ran = []
+    monkeypatch.setattr(mm, "scale", lambda *a, **k: ran.append(1) or (True, "x"))
+    cell = _scale_snapshot_page(qapp, page, fake)
+    page._running, page._running_label = True, "Start mesh"
+    try:
+        cell.plus.click()
+        cell.apply.click()
+        qapp.processEvents()
+        assert not localmesh_mod.probe_running(page, "_scale_worker")
+        assert getattr(page, "_scale_worker", None) is None
+        text = page.monitor.scale_status_text()
+        assert "Not scaled" in text and "Start mesh" in text, text
+        assert page.monitor.scale_status.isVisibleTo(page.monitor)
+        assert ran == []
+    finally:
+        page._running, page._running_label = False, ""
+
+
+def test_a_verb_is_refused_out_loud_while_the_pages_scale_runs(qapp, page, fake,
+                                                              monkeypatch):
+    """The mirror guard (issue #341): ``_launch`` refuses a verb while a scale worker
+    is in flight, says so on the page's status line, and leaves ``_running`` False —
+    so the buttons it would have disarmed stay live for when the scale lands."""
+    gate = threading.Event()
+    monkeypatch.setattr(mm, "scale", lambda *a, **k: (gate.wait(10), (True, "done"))[1])
+    cell = _scale_snapshot_page(qapp, page, fake)
+    cell.plus.click()
+    cell.apply.click()
+    qapp.processEvents()
+    assert localmesh_mod.probe_running(page, "_scale_worker")
+    launched = []
+    page._launch("Start mesh", lambda: launched.append(1) or (True, []))
+    qapp.processEvents()
+    assert page._running is False
+    assert launched == []
+    assert "Replicas change" in page.status.text(), page.status.text()
+    gate.set()
+    _settle(qapp, page)
+    assert not localmesh_mod.probe_running(page, "_scale_worker")
+
+
+def test_the_pages_scale_refuses_a_row_that_left_the_last_read(qapp, page, fake):
+    _scale_snapshot_page(qapp, page, fake)
+    page._scale_monitor("kind/hugmesh/vanished", 2)
+    assert "no longer in the last read" in page.monitor.scale_status_text()
+    assert not localmesh_mod.probe_running(page, "_scale_worker")
+
+
+def test_a_failed_scale_on_the_page_drops_the_pending_arrow(qapp, page, fake,
+                                                            monkeypatch):
+    """Issue #341 (the landing review's one surviving mutation): ``_on_scale_done``
+    must ``forget_scale_target`` — the widget keeps a pending target across repaints
+    ON PURPOSE (so a tick between + and Apply does not snap the number back), and
+    the only thing that clears a target the daemon REFUSED is the page saying the
+    scale is over. Without it the strip keeps showing "1 → 3" after "scaled to 3"
+    failed, until the operator presses − twice. Pinned on the failure path because
+    the success path hides it: a re-read that observes 3 pops the target itself."""
+    monkeypatch.setattr(mm, "scale", lambda *a, **k: (False, "scale failed: refused"))
+    cell = _scale_snapshot_page(qapp, page, fake)
+    key = "kind/hugmesh/gw-1"
+    observed = cell.observed
+    cell.plus.click()
+    cell.plus.click()
+    assert page.monitor.scale_target(key) == observed + 2
+    reads_before = fake.calls
+    cell.apply.click()
+    qapp.processEvents()
+    _settle(qapp, page)
+    assert not page.monitor._scale_busy
+    assert "scale failed: refused" in page.monitor.scale_status_text()
+    assert fake.calls > reads_before, "a finished scale must re-read the lanes"
+    cell = page.monitor.scale_cell(key)
+    assert cell.observed == observed, "the fake never scaled anything"
+    assert page.monitor.scale_target(key) == observed, "the refused target lingered"
+    assert key not in page.monitor._scale_targets
+    for b in (cell.minus, cell.plus):
+        assert b.isEnabled(), "a strip stayed dead after the scale finished"
 
 
 def test_the_widgets_strip_stops_at_zero_and_at_MAX_REPLICAS(qapp):
