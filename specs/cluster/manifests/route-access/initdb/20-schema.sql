@@ -628,6 +628,103 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('hugmesh-fe-gateway',  '/bff/admin/phone-fleet/**', 'ROLE_ADMIN',       true),  -- (admins superset — longer pattern wins, so pair explicitly)
   ('hugmesh-fe-gateway',  '/bff/admin/phone-fleet/**', 'ROLE_SUPERADMIN',  true),  -- (superadmins superset — longer pattern wins, so pair explicitly)
   ('hugmesh-fe-gateway',  '/bff/admin/**',         'ROLE_ADMIN',     true),
+  -- ── SUPERADMIN PLATFORM CONSOLE at the PUBLIC BROWSER DOOR (#244, ACCEPT) ──
+  -- ⚠ #244 PREMISE CORRECTED — and unlike #329's, this correction HOLDS, which is
+  -- why the two rows read so differently. The issue BODY says the shipped
+  -- admin-ui superadmin pages "ride the public fe /bff/** catch-all and are
+  -- DEFAULT-DENIED at the browser door today". They were not. Measured on this
+  -- tree immediately before the row below: the fe gateway carried 80 rows and
+  -- NONE of their patterns matched /bff/superadmin/… — there is no /bff/** row
+  -- and no /** row on this gateway (that is exactly what /bff/wiki/** DID have,
+  -- and why #329 was the opposite shape). With no matching pattern
+  -- GatewayRouteAccessService.decide() returns NO_RULE (:185 `if (bestLen < 0)
+  -- return Decision.NO_RULE;   // ungoverned path`), GatewayRouteAccessFilter
+  -- rejects ONLY on Decision.DENY (:445), and the request was FORWARDED down the
+  -- Path=/bff/** route to admin-bff. What refused it was admin-bff itself,
+  -- app-side: SecurityConfig.java:293
+  --     ex.pathMatchers("/bff/superadmin/**").hasRole("SUPERADMIN");
+  -- Measured at the compose front door as a plain member, BEFORE this row:
+  --     /bff/superadmin/workloads/             -> 403, and NO X-Route-Denied
+  --     /bff/superadmin/games-services/catalog -> 403, and NO X-Route-Denied
+  -- The ABSENT header is the whole tell. A gateway denial always carries it
+  -- (GatewayRouteAccessFilter javadoc :64, emitted at :589), so a BARE 403 is the
+  -- documented signature of an app-side refusal one layer further in.
+  -- LINE NUMBERS in this block are hugmesh-gateway main @ debcebc8 (merged
+  -- 2026-09-09, re-read 2026-09-16); the service refs (:185/:219/:380) are
+  -- unchanged since 2026-09-04, the filter refs moved when the D8 privileged MFA
+  -- floor was placed BEFORE the bypasses (:278-284 JWT, :349-355 non-JWT) —
+  -- which is exactly what lets this row bind a superadmin once the flag flips.
+  --
+  -- WHAT THIS ROW CHANGES, as before/after for ONE request. A ROLE_USER — or any
+  -- authenticated principal that is not admin/superadmin — at /bff/superadmin/…:
+  --   BEFORE  gateway NO_RULE -> FORWARD -> admin-bff answers 403. No
+  --           X-Route-Denied, nothing in the gateway's denial log, and the
+  --           request crossed the namespace boundary to reach the BFF at all.
+  --   AFTER   this row is the longest matching pattern, the caller holds no
+  --           granting row at that length => governed-but-ungranted => DENY at
+  --           the door (:219). 403 WITH `X-Route-Denied: hugmesh-fe-gateway:<path>`,
+  --           logged by the gateway, and admin-bff never sees the request.
+  -- The STATUS CODE does not move. The layer, the header and the log do — which
+  -- is why every member test plan had to carve this surface out by hand as a
+  -- named exception so a tester would not misfile a bare 403 (#299 N6).
+  --
+  -- ⚠ WHAT IT DOES *NOT* CHANGE. ROLE_ADMIN (own-domain) and ROLE_SUPERADMIN
+  -- (cross-domain) SHORT-CIRCUIT in GatewayRouteAccessFilter BEFORE decide() is
+  -- consulted — :291 and :323 on the JWT branch, mirrored at :361 and
+  -- :385 on the non-JWT branch, which is the opaque `bff_` session an actual
+  -- browser presents. So NO row on this gateway alters what a privileged
+  -- principal reaches: a plain ROLE_ADMIN still arrives at admin-bff and is still
+  -- refused there by hasRole("SUPERADMIN"). ACCEPT is defence-in-depth and a
+  -- clearer failure mode, NOT the closing of an open door. Identical residual to
+  -- the /bff/wiki/superadmin/** row below.
+  --
+  -- THE REAL GAIN IS THE MFA FLOOR, and it is prospective rather than immediate.
+  -- isMfaRequiredSurface() returns false for an UNGOVERNED path (:380 `if
+  -- (bestLen < 0) return false;             // ungoverned path — no floor`), so
+  -- before this row the D6/D8 privileged step-up floor COULD NOT fire on the
+  -- superadmin surface at the public door no matter what
+  -- APP_MFA_ENFORCE_PRIVILEGED_FLOOR was set to — there was nothing for it to
+  -- hang on. This row sits under /bff/superadmin/, so the flip UPDATE at the foot
+  -- of this file picks it up and the gate finally has a surface. That is the
+  -- argument the operator accepted; the flag itself is NOT flipped here.
+  --
+  -- NO games-services DENY REFINEMENT — deliberately. The carrier commit
+  -- 63c8952f paired its allow row with a DENY row on this gateway for the pattern
+  -- /bff/superadmin/games-services/** (role ROLE_SUPERADMIN, allow=false) —
+  -- spelled out rather than as a tuple so that no comment-naive reader parses it
+  -- as a seeded row (hugmesh-generator#379). Under the
+  -- current filter that row denies NOBODY: a privileged principal bypasses
+  -- decide() before it runs, and a non-privileged one is already DENY'd by the
+  -- row below (governed-but-ungranted — same verdict with or without it). Its one
+  -- measurable effect runs the WRONG way: as the longest matching pattern with
+  -- mfa_required left false (the flip is `allow = true` only) it would STRIP the
+  -- MFA floor from exactly the games-services subtree. It buys nothing and costs
+  -- the one thing this row exists for, so #244's decision question states ACCEPT
+  -- as "without the games-services deny row".
+  --
+  -- ⚠ DUAL-WRITE PARTNER in the OTHER repo, NOT done here: hugmesh-gateway's
+  -- CanonicalSeed.fe() baked floor, which carries no /bff/superadmin rule (its
+  -- only superadmin rules are be() :215 and the pki /** catch-all). On the
+  -- datastore-unreachable fallback the fe floor therefore still resolves
+  -- /bff/superadmin/… to NO_RULE and forwards, so both the header and the MFA
+  -- floor drop back to the pre-row behaviour until that lands. That divergence is
+  -- ASSERTED, not merely noted, in
+  -- tests/e2e/features/mined-governance/fallback-floor-parity.feature.
+  --
+  -- ⚠ REACHING A DATABASE THAT ALREADY EXISTS. This file is initdb-only on BOTH
+  -- lanes: the cluster mounts it into /docker-entrypoint-initdb.d over a PVC
+  -- (route-access/deployment.yaml, pvc.yaml; apps/06-route-access-db.yaml
+  -- self-heals the ConfigMap in place and restarts nothing) and compose mounts
+  -- the same file the same way over the route-access-pg named volume
+  -- (tests/stack/compose.local.yaml). Postgres runs initdb ONCE, on an empty
+  -- volume, so on a lane that existed before this row landed a re-probe of
+  -- /bff/superadmin/… returns the BEFORE state above and looks like the row did
+  -- nothing. Converge FIRST: re-apply this file against route-access-db
+  -- (docs/MFA-ROLLOUT.md, "Seed the rules" — safe to re-run, the INSERT is ON
+  -- CONFLICT DO NOTHING and the flip UPDATE is IS DISTINCT FROM true) or
+  -- recreate the volume, and record which. A pre-existing property of every
+  -- seed edit, stated here because the AFTER table above reads as immediate.
+  ('hugmesh-fe-gateway',  '/bff/superadmin/**',    'ROLE_SUPERADMIN', true),  -- superadmin platform console, PUBLIC browser door (#244 ACCEPT; admin/superadmin still bypass decide())
   -- Same-origin role BFFs (fe-gateway proxies /bff/** subpaths to the dedicated
   -- BFFs in the backend ns). The /bff/mod/** + /bff/user/** prefixes are SIBLINGS
   -- of /bff/admin/** above (non-overlapping prefixes), each gated to its own role
@@ -838,9 +935,13 @@ ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(NU
 --
 -- Operator decision — the AUTHORISED SCOPE IS TWO PATH PREFIXES, blanket WITHIN
 -- them: every allow row at or under `/bff/admin` and `/bff/superadmin`, on EVERY
--- gateway that governs those prefixes, requires a FRESH second factor. That is 9
+-- gateway that governs those prefixes, requires a FRESH second factor. That is 10
 -- rows today, across hugmesh-fe-gateway, hugmesh-be-gateway and
--- hugmesh-superadmin-gateway.
+-- hugmesh-superadmin-gateway. It became 10 with #244's ACCEPT: the fe-gateway
+-- `/bff/superadmin/**` browser-door row above is under the second prefix, so this
+-- UPDATE picks it up — and that pickup IS the gain #244 was decided for, because
+-- an UNGOVERNED path returns false from isMfaRequiredSurface() and the floor had
+-- nothing at the public door to attach to before.
 --
 -- ⚠ NOT IN SCOPE — stated out loud, because "the whole admin surface" would be a
 -- FALSE claim. SIX other admin-ish `/bff/` allow rows are deliberately left
@@ -859,8 +960,11 @@ ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(NU
 --       superadmin row (added for #329) is the FIRST per-service *superadmin*
 --       seam, so it widens that same gap rather than opening a new one: it is
 --       excluded here for the identical reason, NOT because superadmin surfaces
---       are exempt. Flipping these to mfa_required=true is the open operator
---       decision #244 identified as the real gain.
+--       are exempt. ⚠ #244 IS NOW DECIDED (ACCEPT) — but only for the PLATFORM
+--       prefix /bff/superadmin/**, which this UPDATE already reaches. Flipping
+--       the PER-SERVICE seams listed here still needs the different predicate
+--       SHAPE and is still an open operator decision; #244's answer must not be
+--       read as covering them.
 --   hugmesh-fe-gateway  /bff/mod/**            ROLE_ADMIN
 --       A MODERATION surface. ROLE_ADMIN is paired on it only as a superset of
 --       ROLE_MOD, so gating it would gate moderation, not administration.

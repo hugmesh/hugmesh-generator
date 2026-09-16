@@ -15,6 +15,11 @@
 #    is a FILTER BYPASS, not a grant — and no row-level oracle, this one included,
 #    can model it. features/rbac/superadmin-tier.feature asserts only the reverse
 #    property (an admin does not reach superadmin routes) and never this one.
+#    ⚠ THE BYPASS IS WHY #244's ACCEPT IS DEFENCE-IN-DEPTH AND NOT A FIX FOR AN
+#    EXPOSURE. #244 added an fe row for /bff/superadmin/**, which changes what
+#    the ROWS say for a non-privileged caller (NO_RULE-and-forwarded becomes DENY
+#    at the door, so the 403 finally carries X-Route-Denied). It changes NOTHING
+#    for ROLE_ADMIN or ROLE_SUPERADMIN, who never reach decide() at all.
 #
 # The value of writing the DENY down is that it is the true statement about the
 # layer being modelled: anyone reading superadmin-tier.feature and concluding
@@ -57,10 +62,17 @@ Feature: The fleet owner is admitted by a row; the superadmin is admitted by a b
     Then no cluster seed row grants "ROLE_SUPERADMIN" on the exact pattern "/bff/admin/**" at gateway "hugmesh-fe-gateway"
     And no cluster seed row grants "ROLE_SUPERADMIN" on the exact pattern "/admin/**" at gateway "hugmesh-fe-gateway"
 
-  # The ONE fe pattern that does name SUPERADMIN is the fleet subpath — pinned so
-  # a future "superadmin needs a row" edit is visible here rather than inferred.
-  Scenario: the fleet subpath is the only fe pattern naming SUPERADMIN @service:admin @layer:gateway
-    Then the only patterns at gateway "hugmesh-fe-gateway" naming "ROLE_SUPERADMIN" are "/bff/admin/phone-fleet/**"
+  # THE FE PATTERNS THAT NAME SUPERADMIN — pinned as a CLOSED SET so a future
+  # "superadmin needs a row" edit is visible here rather than inferred. This
+  # assertion has caught two real landings already and its history is the reason
+  # to keep it exhaustive:
+  #   * it said "/bff/admin/phone-fleet/** only" and went RED when #329 added
+  #     /bff/wiki/superadmin/**, and stayed red on main until now;
+  #   * #244 ACCEPT then added /bff/superadmin/** — the platform console at the
+  #     public browser door.
+  # Deleting any of the three turns this scenario RED naming the missing pattern.
+  Scenario: exactly three fe patterns name SUPERADMIN @service:admin @layer:gateway
+    Then the only patterns at gateway "hugmesh-fe-gateway" naming "ROLE_SUPERADMIN" are "/bff/admin/phone-fleet/**, /bff/superadmin/**, /bff/wiki/superadmin/**"
 
   Scenario Outline: the rows alone would refuse a superadmin at <path> @service:admin @layer:gateway
     Given a principal holding only the role "ROLE_SUPERADMIN"

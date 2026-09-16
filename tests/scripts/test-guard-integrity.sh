@@ -401,8 +401,23 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # grep and busybox sed — and printed 8 passed / 0 failed rc=0, with its negative
 # controls re-verified there rather than only on the GNU host, because busybox
 # is exactly where a negative guard fails open.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-163}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-164}"
 
+# 163 -> 164 on 2026-09-16, on the MERGE of decisions/20260910/generator with
+# main at 8f355e41 (hugmesh-generator#246). One suite was ADDED AND GATED:
+# tests/scripts/test-run-ungated-lane.sh, the stub-and-mutation pin for the
+# `make e2e-ungated` runner (tests/scripts/run-ungated-lane.sh, which is a
+# run-*.sh and so is NOT counted here). Named in shell-suites.yml's DEBIAN job
+# (the runner uses `grep -a`, which busybox grep in the alpine job lacks). It
+# was RUN in python:3.12-slim — that job's own image, checkout mounted
+# read-only, --network=none — and printed 75 passed / 0 failed rc=0 with its
+# seven runner mutations 7 caught / 0 survived. This value line CONFLICTED on
+# merge (the branch had measured 161 -> 162 against main at ad06fce0; main had
+# since gained #322's and #268's suites, 161 -> 163); per the doctrine above the
+# number was taken by RUNNING this file on THIS merged tree, which printed
+#     164 of 186 suites are named by a pull_request-triggered workflow
+# and the ungated SET is unchanged at 22.
+#
 # 162 -> 163 on 2026-09-16: tests/scripts/test-docs-command-coverage.sh joined the
 # gate -- every user-facing scripts/ command must be reachable from docs/ or a
 # README (hugmesh-generator#268). MEASURED: '163 of 185 suites are named by a
@@ -420,6 +435,7 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-163}"
 # with scripts/kind-doctor.sh (hugmesh-generator#349). MEASURED, not assumed:
 # the analyser printed '161 of 183 suites' with the new suite wired and '160 of
 # 182' without it, and the ungated SET pin is unchanged at 22.
+#
 
 # ── WHICH suites are ungated, not merely HOW MANY ────────────────────────────
 # PREMERGE_BASELINE alone pins a CARDINALITY, and a cardinality is blind to a

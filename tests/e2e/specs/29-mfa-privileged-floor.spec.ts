@@ -248,7 +248,9 @@ test.describe('TOTP generator: RFC 6238 Appendix B (stack-free)', () => {
 // `MFA_ENFORCEMENT` here, on `!MFA_ENFORCEMENT` there. Exactly one of the two runs on
 // any stack, whichever posture it holds, and neither can be silently skipped by a
 // forgotten export. Everything asserted here was verified by hand against the live
-// kind lane first (fe-gateway APP_MFA_ENABLED=false, 9 mfa_required rows seeded).
+// kind lane first (fe-gateway APP_MFA_ENABLED=false, 9 mfa_required rows seeded; 10
+// since #244 ACCEPT added the fe-gateway /bff/superadmin/** browser-door row, which
+// the seed's flip UPDATE picks up — see the note on the count below).
 
 test.describe('MFA OFF posture: the mfa_required rows are inert and the role wall is not', () => {
   test.skip(
@@ -264,9 +266,14 @@ test.describe('MFA OFF posture: the mfa_required rows are inert and the role wal
     await loginAs(fleet, 'e2e-fleet');
 
     // Same anti-fake-green preconditions as the ON leg: this persona is the ONE
-    // principal among the 9 seeded rows that `decide()` can MFA-gate at all, so if it
-    // is mis-seeded (no fleet role, or an accidental ROLE_ADMIN that short-circuits
-    // before decide()) the assertion below is vacuous in the passing direction.
+    // principal among the seeded mfa_required rows that `decide()` can MFA-gate at
+    // all, so if it is mis-seeded (no fleet role, or an accidental ROLE_ADMIN that
+    // short-circuits before decide()) the assertion below is vacuous in the passing
+    // direction. THE COUNT MOVED AND THE "ONE" DID NOT: #244's ACCEPT took the flip
+    // set from 9 rows to 10 by adding hugmesh-fe-gateway /bff/superadmin/**, but that
+    // row names ROLE_SUPERADMIN, and superadmin short-circuits in
+    // GatewayRouteAccessFilter BEFORE decide() runs — so it adds a governed surface,
+    // not a second MFA-gateable principal. e2e-fleet is still the only one.
     const { roles } = await sessionOf(fleet, 'e2e-fleet');
     expect(
       roles.some((r) => /fleet/i.test(r)),

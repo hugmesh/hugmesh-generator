@@ -467,6 +467,7 @@ jobs:
             tests/scripts/test-pki-role-san-coverage.sh
             tests/scripts/test-provision-keys-escrow-guard.sh
             tests/scripts/test-python-targets-seed.sh
+            tests/scripts/test-run-ungated-lane.sh
             tests/scripts/test-url-embedded-credentials.sh
             tests/scripts/test-docs-command-coverage.sh
             tests/scripts/test-x86-artifact-integrity.sh
