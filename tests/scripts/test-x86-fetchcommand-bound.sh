@@ -31,6 +31,9 @@
 #   static   s1-s7   both commands exist once, are curl, carry a rate floor within a
 #                    sane range, name portage's ${DISTDIR}/${FILE} and ${URI}, agree
 #                    on their knobs, and RESUMECOMMAND carries the exit-33 fallback
+#   wall     w1      run_fetch's outer `timeout` really fires (unbounded curl vs the
+#                    silent server -> rc=124 at the wall), so a regressed bound goes
+#                    RED in ~1 min instead of parking the CI job for hours
 #   dynamic  d1      healthy server: bytes land, identical
 #            d2      trickling server (1 byte / 2 s): aborted AND retried, bounded
 #            d3      silent server (connects, never answers): bounded
@@ -168,12 +171,21 @@ build_argv() { # <cmdstring>; DISTDIR FILE URI exported -> ARGV[]
     ARGV=()
     eval "ARGV=( $1 )"
 }
+# OUTER WALL. Every executed fetch runs under `timeout ${FETCH_WALL}` (busybox and
+# coreutils both have it; it is a required tool above). Without it a REGRESSION of
+# the bound does not fail this suite, it parks it: the static legs go red at once
+# but d2 then sits on the trickle until someone kills curl and d3 sits on the
+# silent server for an hour, so a broken rate floor would surface as a 6 h CI
+# runner timeout instead of a red row (skeptic finding, 2026-09-16). With the wall,
+# a hung fetch returns rc=124 at FETCH_WALL seconds and the d2/d3 ELAPSED checks
+# fail in about a minute. Leg w1 below proves the wall fires.
+FETCH_WALL=60
 run_fetch() { # <cmdstring> <DISTDIR> <FILE> <URI> -> rc; sets ELAPSED
     local start
     export DISTDIR="$2" FILE="$3" URI="$4"
     build_argv "$1"
     start=$(date +%s)
-    "${ARGV[@]}" >"${TMP}/run.out" 2>&1
+    timeout "${FETCH_WALL}" "${ARGV[@]}" >"${TMP}/run.out" 2>&1
     local rc=$?
     ELAPSED=$(( $(date +%s) - start ))
     return "${rc}"
@@ -245,6 +257,24 @@ P_NORANGE="$(start_server norange)"; P_RANGE="$(start_server range)"; P_404="$(s
 
 echo "-- dynamic --"
 DD="${TMP}/distdir"; mkdir -p "${DD}"
+
+# (w1) the outer wall itself, proven live: an UNBOUNDED curl (no rate floor, no
+# --connect-timeout, no --max-time) against the silent server must be cut off by
+# run_fetch's timeout with rc=124 at FETCH_WALL. Run with a 4 s wall so the proof
+# costs seconds; restored to 60 s for the real legs. If this leg fails, d2/d3 can
+# hang the job on a regressed bound and their ELAPSED checks mean nothing.
+FETCH_WALL=4
+if run_fetch 'curl -s -o "${DISTDIR}/${FILE}" "${URI}"' "${DD}" "wall.tar" "http://127.0.0.1:${P_SILENT}/wall.tar"; then
+    bad "w1: an unbounded curl against the silent server returned 0"
+else
+    rc=$?
+    if [ "${rc}" -eq 124 ] && [ "${ELAPSED}" -ge 3 ] && [ "${ELAPSED}" -le 10 ]; then
+        ok "w1: run_fetch's outer wall fires — unbounded curl vs the silent server cut off with rc=124 after ${ELAPSED}s (wall ${FETCH_WALL}s); a regressed bound goes red instead of parking the job"
+    else
+        bad "w1: outer wall did not fire: rc=${rc} after ${ELAPSED}s (expected rc=124 at ~${FETCH_WALL}s)"
+    fi
+fi
+FETCH_WALL=60
 
 # (d1) healthy
 if run_fetch "${FETCH_FAST}" "${DD}" "ok.tar" "http://127.0.0.1:${P_OK}/ok.tar" && cmp -s "${DD}/ok.tar" "${TMP}/body.bin"; then
