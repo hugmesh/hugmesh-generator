@@ -21,6 +21,17 @@
 # node_modules and NO chromium, so it cannot degrade into the "gates a job that can
 # only ever skip" shape described below.
 #
+# MEASURED, 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh was executed
+# in python:3.12-slim (the debian job's own image) with the checkout mounted
+# READ-ONLY and --network=none before being added to that job's list — 17 passed,
+# 0 failed, rc=0, and its seven-mutation battery against the real manifests, run
+# in that same image, was 7 caught / 0 survived. It is in the debian job and not
+# the alpine one on purpose: it is a NEGATIVE guard (twelve of its seventeen
+# assertions are controls that must FAIL on a planted defect), and busybox is
+# exactly where a negative guard fails open. It needs only bash + python3 stdlib
+# — no PyYAML, because the brand half is a .hbs template and `name:
+# {{BRAND}}-harbor` is not valid YAML.
+#
 # The lists are EXPLICIT, never a glob. A glob quietly changes what is gated when a
 # file is renamed; an explicit list plus the missing-file check below turns that
 # into an error. tests/scripts/test-guard-integrity.sh check 7 counts these names
@@ -451,6 +462,7 @@ jobs:
             tests/platform-capability-rbac/test-probe-rbac-namespaces.sh
             tests/phone/test-phone-wizard.sh
             tests/scripts/test-appstore-effector-flags.sh
+            tests/scripts/test-argocd-serverside-diff.sh
             tests/scripts/test-cassandra-cluster-wiring.sh
             tests/scripts/test-client-connect-routes.sh
             tests/scripts/test-cluster-manifest-integrity.sh

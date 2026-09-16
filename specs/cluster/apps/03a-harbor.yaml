@@ -79,6 +79,16 @@ kind: Application
 metadata:
   name: harbor
   namespace: devops
+  annotations:
+    # ServerSideDiff: k8s 1.34's StatefulSet conversion stamps apiVersion/kind
+    # onto every spec.volumeClaimTemplates[] entry, and ArgoCD's discontinued
+    # Structured-Merge Diff — which ServerSideApply=true below selects — cannot
+    # reproduce that, so harbor sat permanently OutOfSync on harbor-database +
+    # harbor-redis (#354; argo-cd #16707). Predicting from a dry-run SSA response
+    # instead makes predicted == live. Becomes a no-op once argo-cd PR #29103
+    # (SSD as the default under SSA, merged to master 2026-09-09, not in v3.5.3)
+    # reaches the `stable` tag bootstrap-kind.sh installs — see #394.
+    argocd.argoproj.io/compare-options: ServerSideDiff=true
 spec:
   project: default
   source:
