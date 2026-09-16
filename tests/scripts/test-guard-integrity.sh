@@ -401,7 +401,13 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # grep and busybox sed — and printed 8 passed / 0 failed rc=0, with its negative
 # controls re-verified there rather than only on the GNU host, because busybox
 # is exactly where a negative guard fails open.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-162}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-163}"
+
+# 162 -> 163 on 2026-09-16: tests/scripts/test-docs-command-coverage.sh joined the
+# gate -- every user-facing scripts/ command must be reachable from docs/ or a
+# README (hugmesh-generator#268). MEASURED: '163 of 185 suites are named by a
+# pull_request-triggered workflow' with it named in shell-suites.yml's debian job,
+# '162 of 184' without; the ungated SET pin is unchanged at 22.
 
 # 161 -> 162 on 2026-09-16: tests/scripts/test-x86-fetchcommand-bound.sh joined the
 # gate with the curl FETCHCOMMAND/RESUMECOMMAND rate floor in

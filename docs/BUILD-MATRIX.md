@@ -379,6 +379,20 @@ make inventory-check              # or: bash tests/build-matrix/inventory-check.
 make image-inventory              # regenerate after a deliberate channel/grammar change
 ```
 
+One level deeper than the inventory's *verdicts* sits `scripts/render-all-images.py`:
+for every inventory record it makes each claimed channel actually **render** a
+coherent build plan — the builder's `--print-plan` for both envs, `make -n` of the
+dispatch (re-proving escape-hatch claims through `STANDALONE_FLAGS`), the real Studio
+via `--print-command` and a one-entry worklist through `WorklistDriver`, and
+`docker/build-image.sh` in its `BUILD_IMAGE_SH_PRINT_ONLY=1` preview mode — and checks
+that every rendered argv names the record's own platform/role/board/flavor/desktop.
+It writes [`docs/catalog/image-render-report.json`](catalog/image-render-report.json).
+It is a plan-level prover (no root, no writes, no network), run by hand:
+
+```sh
+python3 scripts/render-all-images.py        # re-render every image on every claimed channel
+```
+
 ### Shared-binpkg prebuild flags (host/CI build-phase, not GUI options)
 
 The shared-binpkg track (**✅ shipped**, see

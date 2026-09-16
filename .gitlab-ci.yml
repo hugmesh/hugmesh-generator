@@ -1864,6 +1864,31 @@ lint:x86-fetch-bound:
         - specs-x86/portage/make.conf.tmpl
         - tests/scripts/test-x86-fetchcommand-bound.sh
 
+# Documentation coverage for every user-facing scripts/ command (issue #268, the
+# #49 box a scoped `Closes` left unsatisfied): every tracked scripts/ command
+# (100755 or .sh/.py/.ps1/.js, minus _*-lib.sh) must be named in docs/**/*.md or a
+# README*.md, or reached through a documented `make` front, or sit on the suite's
+# checked allowlist of internal helpers. scripts/publish-images.sh merged 1h27m
+# after #49 closed and was undocumented for three weeks because nothing ran this.
+# git + GNU grep/awk/sed; the suite also runs its rule over synthetic repos.
+lint:docs-command-coverage:
+  stage: lint
+  image: debian:stable-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends git >/dev/null
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+  script:
+    - bash tests/scripts/test-docs-command-coverage.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - changes:
+        - scripts/**/*
+        - docs/**/*
+        - README.md
+        - Makefile
+        - tests/scripts/test-docs-command-coverage.sh
+
 # ARM cross-dracut helper (scripts/_dracut-cross-lib.sh): the --encrypt-root
 # qemu-aarch64 binfmt registration + the availability predicate the fail-fast
 # preflight evaluates. Proves preflight_ok is FALSE when qemu-aarch64 is
