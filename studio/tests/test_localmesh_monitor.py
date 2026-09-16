@@ -1399,3 +1399,163 @@ def test_the_widget_busy_guard_holds_for_a_click_that_was_already_in_the_queue(q
     finally:
         w.deleteLater()
         qapp.processEvents()
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# RESIDUE FROM THE ADJUDICATION OF WORKTREE studio/c-336 (#336, #341).
+#
+# A parallel draft of the #342 tests was left uncommitted in that worktree. Every test
+# in it was matched against this file by what it ASSERTS, not by name; the eight below
+# are the residue that pins something nothing above pinned. Each is proven by a
+# production mutation that SURVIVED this whole file and is killed by the test:
+#
+#   X1   _join attaches ScaleTarget() instead of the derived target
+#   X2   localmesh.py mounts MeshMonitorWidget(self, scaling=True)
+#   X3   the widget hands its strips ceiling=100000, not MAX_REPLICAS
+#   X5   set_scale_busy paints only the FIRST strip busy
+#   X6   clear() keeps _scale_cells
+#   X7   the compose argv gains --remove-orphans
+#   X8   the kubectl --context drifts to kind-<cluster>-ctl
+#   X15  _probe folds an exception WITHOUT its message
+# ══════════════════════════════════════════════════════════════════════════════════
+
+def test_join_puts_the_target_on_the_unit():
+    """X1. ``_pod_scale_target`` is pinned above; this pins that ``_join`` actually
+    CALLS it for every pod row. A join that attached ``ScaleTarget()`` paints a dash on
+    every row of a healthy cluster, and nothing above notices."""
+    pod = {"kind": "Pod",
+           "metadata": {"namespace": "hugmesh-pki", "name": "casdoor-6d4f8b9c7-abcde",
+                        "labels": {"pod-template-hash": "6d4f8b9c7"},
+                        "ownerReferences": [{"kind": "ReplicaSet",
+                                             "name": "casdoor-6d4f8b9c7"}]},
+           "spec": {}, "status": {"phase": "Running", "containerStatuses": []}}
+    units, _notes = mm._join({"items": [pod]}, {}, [], {}, "hugmesh-local")
+    assert len(units) == 1
+    assert units[0].scale.scalable, units[0].scale.refused
+    assert (units[0].scale.kind, units[0].scale.name) == ("deployment", "casdoor")
+
+
+def test_the_pages_own_monitor_has_no_scaling_column(page):
+    """X2. ``test_the_default_monitor_widget_is_still_the_six_column_table`` pins the
+    DEFAULT; this pins the MOUNT. ``localmesh.py`` builds ``MeshMonitorWidget(self)``
+    and connects nothing to ``scale_requested``, so an explicit ``scaling=True`` there
+    — the one-kwarg change #341 warns against — ships a Replicas column whose Apply
+    has no receiver. The default test stays green for that; this one goes red. When
+    #341 lands the wiring, update this to pin the new mount rather than deleting it."""
+    assert page.monitor.scaling is False
+    assert page.monitor.table.columnCount() == len(mw._MON_HEADERS)
+    assert page.monitor.scale_cell("kind/hugmesh/gw-1") is None
+
+
+def test_the_widgets_strip_stops_at_zero_and_at_MAX_REPLICAS(qapp):
+    """X3. ``test_the_ceiling_refuses_rather_than_asking_for_it`` pins MAX_REPLICAS and
+    scale_argv's refusal; ``test_the_replica_strip_clamps…`` pins the strip's clamp for
+    a ceiling IT is handed. Neither pins that the WIDGET hands its strips MAX_REPLICAS:
+    a widget built with ``ceiling=100000`` keeps both green, and every press past the
+    ceiling becomes a refusal the operator only meets after Apply."""
+    w = mw.MeshMonitorWidget(scaling=True)
+    try:
+        key = "kind/hugmesh/gw-1"
+        w.render(_snap(_scalable("hugmesh", "gw-1")))
+        cell = w.scale_cell(key)
+        for _ in range(5):
+            cell.minus.click()
+        assert cell.target == 0 and not cell.minus.isEnabled()
+        for _ in range(mm.MAX_REPLICAS + 5):
+            cell.plus.click()
+        assert cell.target == mm.MAX_REPLICAS and not cell.plus.isEnabled()
+        assert w.scale_target(key) == mm.MAX_REPLICAS
+    finally:
+        w.deleteLater()
+        qapp.processEvents()
+
+
+def test_the_busy_guard_disables_every_apply_not_just_the_one_being_scaled(qapp):
+    """X5. ``test_apply_runs_the_scale_off_the_gui_thread_one_at_a_time`` checks the
+    controls of the ONE row it scaled. The guard is on the widget because two compose
+    ``up`` runs against one project race each other — so it is the OTHER rows' Apply
+    that must be dead while one runs, and that is what this pins."""
+    w = mw.MeshMonitorWidget(scaling=True)
+    try:
+        a = _scalable("hugmesh", "gw-1", ctrl="gw")
+        b = _scalable("hugmesh-wiki", "wiki-1", ctrl="wiki")
+        w.render(_snap(a, b))
+        for u in (a, b):
+            w.scale_cell(u.key).plus.click()
+        w.set_scale_busy(True, "Scaling deployment/gw in hugmesh to 2…")
+        for u in (a, b):
+            cell = w.scale_cell(u.key)
+            assert not cell.apply.isEnabled(), f"{u.key}'s Apply stayed live"
+            assert not cell.plus.isEnabled() and not cell.minus.isEnabled()
+        assert "Scaling deployment/gw" in w.scale_status_text()
+        w.set_scale_busy(False, "done")
+        for u in (a, b):
+            assert w.scale_cell(u.key).apply.isEnabled(), "the guard did not lift"
+    finally:
+        w.deleteLater()
+        qapp.processEvents()
+
+
+def test_clear_drops_the_scale_strips_with_the_rows(qapp):
+    """X6. A failed read CLEARS the rows (the tri-state gate). A strip cache that
+    survives ``clear()`` hands ``scale_cell()`` a widget Qt has already deleted, and
+    the next render seats a fresh strip beside a stale entry."""
+    w = mw.MeshMonitorWidget(scaling=True)
+    try:
+        key = "kind/hugmesh/gw-1"
+        w.render(_snap(_scalable("hugmesh", "gw-1")))
+        assert w.scale_cell(key) is not None
+        w.clear()
+        assert w.table.rowCount() == 0
+        assert w.scale_cell(key) is None, "clear() kept a strip for a row it dropped"
+    finally:
+        w.deleteLater()
+        qapp.processEvents()
+
+
+def test_the_compose_scale_argv_is_exact(monkeypatch):
+    """X7. The flag test above asserts what must be PRESENT; a flag that must be ABSENT
+    slips past it — ``--remove-orphans`` (removes every container the compose file does
+    not name), ``--build``, ``--force-recreate`` — each a real ``up`` flag one edit
+    away. So: the whole argv, byte for byte, ``-p hugmesh-local`` included."""
+    monkeypatch.setattr(mm, "_compose_base", lambda: ["docker", "compose"])
+    unit = _scalable("hugmesh-local", "hugmesh-local-fe-1", lane="compose",
+                     kind="compose-service", ctrl="fe-gateway")
+    node = _ScaleNode()
+    argv, refused = mm.scale_argv(unit, 3, generator_dir="/gen", node=node)
+    assert refused == ""
+    assert argv == ["docker", "compose", "-p", "hugmesh-local", "-f", node.compose_file,
+                    "up", "-d", "--no-deps", "--no-recreate",
+                    "--scale", "fe-gateway=3", "fe-gateway"]
+
+
+def test_the_kubectl_scale_argv_is_exact(monkeypatch):
+    """X8. ``startswith("kind-")`` above lets the context name drift, and a wrong
+    context is ``kubectl scale`` against a DIFFERENT cluster with a clean exit code.
+    The default cluster name is the Makefile's (bootstrap-kind.sh reads the same
+    KIND_CLUSTER_NAME override), so it is pinned literally with the override cleared."""
+    monkeypatch.delenv("KIND_CLUSTER_NAME", raising=False)
+    monkeypatch.setattr(mm.devops_tools, "which", lambda tool, d: "/usr/bin/" + tool)
+    unit = _scalable("hugmesh", "gw-1", kind="deployment", ctrl="gateway")
+    argv, refused = mm.scale_argv(unit, 3, generator_dir="/gen", node=_ScaleNode())
+    assert refused == ""
+    assert argv == ["/usr/bin/kubectl", "--context", "kind-hugmesh-local", "scale",
+                    "deployment/gateway", "-n", "hugmesh", "--replicas=3"]
+
+
+def test_a_scale_whose_probe_explodes_says_what_exploded(monkeypatch):
+    """X15. ``test_scale_never_raises…`` pins that it folds and says "failed"; this
+    pins that the fold keeps the EXCEPTION'S OWN WORDS. "scaling … failed: probe
+    failed" for a dead daemon is a refusal with the reason cut off — this repo's named
+    anti-pattern — and it is exactly what a ``_probe`` folding to a constant produces."""
+    monkeypatch.setattr(mm.devops_tools, "which", lambda tool, d: "/usr/bin/" + tool)
+
+    class _Boom:
+        compose_file = "/c.yaml"
+
+        def _probe(self, cmd, timeout=None):
+            raise RuntimeError("the daemon went away")
+
+    ok, text = mm.scale("/gen", _Boom(), _scalable("hugmesh", "gw-1", ctrl="gw"), 2)
+    assert ok is False
+    assert "RuntimeError" in text and "the daemon went away" in text
