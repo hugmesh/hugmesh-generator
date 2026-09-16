@@ -1,41 +1,41 @@
 {
   "//": "THE SHOT TABLE. Adding a screenshot to a manual test plan is a DATA edit: append a row to shots[] below and run `node shot-harness/shot-table.mjs validate`. No TypeScript, no code. See shot-harness/README.md.",
-
+  "//routing": "HOW A ROW NAVIGATES. capture.spec.ts does page.goto(route): a HARD document GET. The fe-gateway routes /login/**, /admin/**, /mod/** and /user/** to the remote's own container (tests/stack/gateway-routes/fe/application-routes.yml:154-179, StripPrefix=1), so a hard GET to those prefixes renders the BARE remote — no host-shell header, no menubar, no home cards. Only host-shell-served URLs (/, /home, /about, /games, and the remote-deeplink-to-host-shell prefixes at :88-92) boot the shell. A row that needs shell chrome (home-services-nav, home-card-*, profile-trigger, nav-user, menu-*, nav-*, subnav-*, denied-notice) must therefore start at '/' (roleHomeGuard lands on /user client-side) or '/home', and reach a console by CLICKING home-card-nav-admin / home-card-nav-mod. Rows that hard-GET /admin/... or /mod/... and wait only on the remote's own testids DO capture, but they photograph the standalone remote — see the reconcile notes in the commit that added this comment.",
   "personas": [
-    { "slug": "anonymous",             "issue": 290, "title": "the anonymous visitor" },
+    { "slug": "anonymous", "issue": 290, "title": "the anonymous visitor" },
     { "slug": "games-namespace-admin", "issue": 292, "title": "the games-namespace admin" },
-    { "slug": "moderator",             "issue": 294, "title": "the network moderator" },
-    { "slug": "pending",               "issue": 295, "title": "the pending registrant" },
-    { "slug": "mesh-operator",         "issue": 296, "title": "the local-mesh operator" },
-    { "slug": "device-owner",          "issue": 297, "title": "the standalone device owner" },
-    { "slug": "superadmin",            "issue": 298, "title": "the superadmin" },
-    { "slug": "member",                "issue": 299, "title": "the plain member" },
-    { "slug": "games-operator",        "issue": 300, "title": "the games app-store operator" },
-    { "slug": "image-builder",         "issue": 301, "title": "the image builder" },
-    { "slug": "games-store-member",    "issue": 302, "title": "the games app-store member" },
-    { "slug": "studio-operator",       "issue": 303, "title": "the Studio operator" },
-    { "slug": "admin",                 "issue": 307, "title": "the platform administrator" },
-    { "slug": "games-member",          "issue": 310, "title": "the games member" },
-    { "slug": "curtailed-member",      "issue": 311, "title": "the curtailed member" },
-    { "slug": "own-client",            "issue": 313, "title": "the own-client user" },
-    { "slug": "fleet-owner",           "issue": 314, "title": "the fleet owner" }
+    { "slug": "moderator", "issue": 294, "title": "the network moderator" },
+    { "slug": "pending", "issue": 295, "title": "the pending registrant" },
+    { "slug": "mesh-operator", "issue": 296, "title": "the local-mesh operator" },
+    { "slug": "device-owner", "issue": 297, "title": "the standalone device owner" },
+    { "slug": "superadmin", "issue": 298, "title": "the superadmin" },
+    { "slug": "member", "issue": 299, "title": "the plain member" },
+    { "slug": "games-operator", "issue": 300, "title": "the games app-store operator" },
+    { "slug": "image-builder", "issue": 301, "title": "the image builder" },
+    { "slug": "games-store-member", "issue": 302, "title": "the games app-store member" },
+    { "slug": "studio-operator", "issue": 303, "title": "the Studio operator" },
+    { "slug": "admin", "issue": 307, "title": "the platform administrator" },
+    { "slug": "games-member", "issue": 310, "title": "the games member" },
+    { "slug": "curtailed-member", "issue": 311, "title": "the curtailed member" },
+    { "slug": "own-client", "issue": 313, "title": "the own-client user" },
+    { "slug": "fleet-owner", "issue": 314, "title": "the fleet owner" }
   ],
-
   "shots": [
     {
       "persona": "anonymous",
-      "step": "01",
-      "slug": "front-door",
+      "step": "03",
+      "slug": "shell-boots",
       "auth": "anon",
       "route": "/",
       "do": [
-        { "action": "expect", "testid": "login-view" }
+        { "action": "expect", "testid": "login-view" },
+        { "action": "expect", "testid": "login-username" }
       ],
-      "note": "An unauthenticated GET / lands on /login (specs/01-frontpage.spec.ts)."
+      "note": "Plan step 3. An unauthenticated GET / lands on /login client-side (specs/01-frontpage.spec.ts:23-26); the shot is the proof the shell booted rather than blanking."
     },
     {
       "persona": "anonymous",
-      "step": "02",
+      "step": "05",
       "slug": "login-form",
       "auth": "anon",
       "route": "/login",
@@ -43,7 +43,998 @@
         { "action": "expect", "testid": "login-username" },
         { "action": "expect", "testid": "login-password" },
         { "action": "expect", "testid": "login-submit" }
+      ],
+      "note": "Plan step 5. The federated login-ui form under <base href=\"/login/\">."
+    },
+    {
+      "persona": "anonymous",
+      "step": "07",
+      "slug": "appeal",
+      "auth": "anon",
+      "route": "/login/appeal?reason=test",
+      "do": [
+        { "action": "expect", "testid": "appeal-reason" },
+        { "action": "expect", "testid": "appeal-mailto" },
+        { "action": "expect", "testid": "appeal-mailto-help" }
+      ],
+      "note": "Plan step 7. reason=test is carried into the role=alert strip; appeal-mailto is appeal.component.html:30."
+    },
+    {
+      "persona": "anonymous",
+      "step": "10",
+      "slug": "forgot-dark",
+      "auth": "anon",
+      "route": "/login/forgot-password",
+      "do": [
+        { "action": "expect", "testid": "forgot-view" },
+        { "action": "fill", "testid": "forgot-username", "value": "nobody-such-user" },
+        { "action": "click", "testid": "forgot-request-submit" },
+        { "action": "expect", "testid": "forgot-dark" }
+      ],
+      "note": "Plan step 10. nobody-such-user is deliberate: the mesh is dark (503) and no account exists, so no lockout counter moves."
+    },
+    {
+      "persona": "anonymous",
+      "step": "15",
+      "slug": "signed-in",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-services-nav" },
+        { "action": "expect", "testid": "profile-trigger" }
+      ],
+      "note": "Plan step 15, the positive control. The only authenticated row this persona has. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "anonymous",
+      "step": "16",
+      "slug": "no-session",
+      "auth": "anon",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "login-view" },
+        { "action": "expectHidden", "testid": "nav-login" },
+        { "action": "expectHidden", "testid": "profile-trigger" }
+      ],
+      "note": "Plan step 16. A fresh anonymous context: the whole menubar unmounts on /login while signed out (menu.component.ts:162-164 -> barVisible() false at :188-193; the bar's markup, nav-login included, is under that gate at menu.component.html:5). So BOTH header assertions are absence assertions - an earlier revision of this row expected nav-login VISIBLE and would have failed every run, exactly as the old assertion in specs/01-frontpage.spec.ts:47 did. [reconciled 2026-09-16] route /login -> /: a hard GET /login is the standalone login-ui remote, where the absence checks are vacuous; GET / boots the shell and the authgate lands on /login in the loginChromeHidden state the step describes."
+    },
+    {
+      "persona": "games-namespace-admin",
+      "step": "02",
+      "slug": "anon-login-form",
+      "auth": "anon",
+      "route": "/login",
+      "do": [
+        { "action": "expect", "testid": "login-view" },
+        { "action": "expect", "testid": "login-username" },
+        { "action": "expect", "testid": "login-password" },
+        { "action": "expect", "testid": "login-submit" }
+      ],
+      "note": "Step 2. Anonymous front door; nothing typed."
+    },
+    {
+      "persona": "games-namespace-admin",
+      "step": "05",
+      "slug": "user-home",
+      "auth": "onboard",
+      "login": "e2e-gamesadmin",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-services-nav" },
+        { "action": "expect", "testid": "home-card-nav-admin" }
+      ],
+      "note": "Step 5. role-home resolves to /user for every role. [reconciled 2026-09-16] card-games-admin -> home-card-nav-admin: /user carries no games card (the card-* grid is /home); plan Expect names Admin one click away, which on /user is the home card."
+    },
+    {
+      "persona": "games-namespace-admin",
+      "step": "06",
+      "slug": "route-access-console-empty",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/route-access",
+      "do": [
+        { "action": "expect", "testid": "ra-gateway" },
+        { "action": "expect", "testid": "ra-add" }
+      ],
+      "note": "Step 6. Console is EMPTY by design here (gap 5). Never click ra-add."
+    },
+    {
+      "persona": "games-namespace-admin",
+      "step": "08",
+      "slug": "games-admin-placeholder",
+      "auth": "onboard",
+      "login": "e2e-gamesadmin",
+      "route": "/games/admin",
+      "do": [
+        { "action": "expect", "testid": "games-admin-todo-badge" },
+        { "action": "expect", "testid": "games-admin-placeholder-message" },
+        { "action": "expect", "testid": "games-admin-future-remote" }
+      ],
+      "note": "Step 8. Honest TODO placeholder, not a console (gap 3)."
+    },
+    {
+      "persona": "games-namespace-admin",
+      "step": "09",
+      "slug": "games-placeholder",
+      "auth": "onboard",
+      "login": "e2e-gamesadmin",
+      "route": "/games",
+      "do": [
+        { "action": "expect", "testid": "games-todo-badge" },
+        { "action": "expect", "testid": "games-future-remote" }
+      ],
+      "note": "Step 9. Must differ from step 08: games/admin precedes games in the router."
+    },
+    {
+      "persona": "games-namespace-admin",
+      "step": "10",
+      "slug": "account-menu-games-admin",
+      "auth": "onboard",
+      "login": "e2e-gamesadmin",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "expect", "testid": "menu-games-admin" }
+      ],
+      "note": "Step 10 positive: canAccessGamesAdmin()."
+    },
+    {
+      "persona": "games-namespace-admin",
+      "step": "10",
+      "slug": "home-launcher-cards",
+      "auth": "onboard",
+      "login": "e2e-gamesadmin",
+      "route": "/home",
+      "do": [
+        { "action": "expect", "testid": "card-games" },
+        { "action": "expect", "testid": "card-games-admin" }
+      ],
+      "note": "Step 10 positive: both cards enabled. [reconciled 2026-09-16] route -> /home: the card-<id> launcher grid (HomeServicesComponent) renders only on the public /home page (spec 18:225-231); /user renders the menubar entries as home-card-nav-* and carries no games card. The plan text says /user or / for this step."
+    },
+    {
+      "persona": "games-namespace-admin",
+      "step": "10",
+      "slug": "gamesonly-card-greyed",
+      "auth": "onboard",
+      "login": "e2e-gamesonly",
+      "route": "/home",
+      "do": [
+        { "action": "expect", "testid": "card-games-admin" },
+        { "action": "expect", "testid": "card-games-admin-help" }
+      ],
+      "note": "Step 10 negative: greyed 'role' state, 'Sign in as a games admin to open this.' [reconciled 2026-09-16] route -> /home: the card-<id> launcher grid (HomeServicesComponent) renders only on the public /home page (spec 18:225-231); /user renders the menubar entries as home-card-nav-* and carries no games card. The plan text says /user or / for this step."
+    },
+    {
+      "persona": "games-namespace-admin",
+      "step": "12",
+      "slug": "signed-out-login",
+      "auth": "onboard",
+      "login": "e2e-gamesadmin",
+      "route": "/games/admin",
+      "do": [
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "click", "testid": "menu-logout" },
+        { "action": "expect", "testid": "login-view" }
+      ],
+      "note": "Step 12. Sign-out landing; the RESIDUAL timing is measured by hand, not by this shot."
+    },
+    {
+      "persona": "games-namespace-admin",
+      "step": "13",
+      "slug": "operator-games-admin",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/games/admin",
+      "do": [
+        { "action": "expect", "testid": "games-admin-todo-badge" },
+        { "action": "expect", "testid": "games-admin-placeholder-message" }
+      ],
+      "note": "Step 13. superadmin branch of gamesAdminGuard."
+    },
+    {
+      "persona": "games-namespace-admin",
+      "step": "15",
+      "slug": "n1-gamesonly-denied",
+      "auth": "onboard",
+      "login": "e2e-gamesonly",
+      "route": "/games",
+      "do": [
+        { "action": "expect", "testid": "games-todo-badge" }
+      ],
+      "note": "N1 positive control. The /games/admin half is a 403 with a 0-byte body: nothing renders, so it is captured by curl headers, not a PNG."
+    },
+    {
+      "persona": "games-namespace-admin",
+      "step": "18",
+      "slug": "n4-adminonly-bounced",
+      "auth": "onboard",
+      "login": "e2e-adminonly",
+      "route": "/games/admin",
+      "do": [
+        { "action": "expect", "testid": "login-view" }
+      ],
+      "note": "N4. Gateway 200, client guard bounces to /login: the divergence itself."
+    },
+    {
+      "persona": "games-namespace-admin",
+      "step": "22",
+      "slug": "n8-games-services-bounced",
+      "auth": "onboard",
+      "login": "e2e-gamesadmin",
+      "route": "/admin/games-services",
+      "do": [
+        { "action": "expectHidden", "testid": "games-services-view" },
+        { "action": "expect", "testid": "login-view" }
+      ],
+      "note": "N8. gamesServicesGuard has no isSuperadmin branch; console must not render."
+    },
+    {
+      "persona": "moderator",
+      "step": "06",
+      "slug": "login-door",
+      "auth": "anon",
+      "route": "/login",
+      "do": [
+        { "action": "expect", "testid": "login-username" },
+        { "action": "expect", "testid": "login-password" },
+        { "action": "expect", "testid": "login-submit" }
+      ],
+      "note": "Step 6. The compose lane's browser door before sign-in."
+    },
+    {
+      "persona": "moderator",
+      "step": "07",
+      "slug": "signed-in-home",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-services-nav" }
+      ],
+      "note": "Step 7. roleHomeGuard lands every signed-in, non-curtailed role on /user. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "moderator",
+      "step": "08",
+      "slug": "home-cards",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-card-nav-mod" },
+        { "action": "expectHidden", "testid": "home-card-nav-admin" }
+      ],
+      "note": "Step 8. Moderation card present, Admin card absent — the entry is dropped, not greyed. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "moderator",
+      "step": "09",
+      "slug": "profile-dropdown",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "expect", "testid": "menu-mod" },
+        { "action": "expect", "testid": "menu-logout" }
+      ],
+      "note": "Step 9. Role-gated account menu; menu-admin/-apidocs/-wiki must not be in it. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "moderator",
+      "step": "10",
+      "slug": "mod-home",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/mod",
+      "do": [
+        { "action": "expect", "testid": "mod-home-view" },
+        { "action": "expect", "testid": "mod-home-console" },
+        { "action": "expect", "testid": "mod-home-findings" }
+      ],
+      "note": "Step 10. Supersedes the committed moderator-01-mod-console row: this plan's /mod step is 10, and step 01 is a docker ps with no UI."
+    },
+    {
+      "persona": "moderator",
+      "step": "11",
+      "slug": "console-sections",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/mod/console",
+      "do": [
+        { "action": "expect", "testid": "moderation-console-view" },
+        { "action": "expect", "testid": "mc-queue" },
+        { "action": "expect", "testid": "mc-audit" }
+      ],
+      "note": "Step 11. All seven sections with their honest empty state."
+    },
+    {
+      "persona": "moderator",
+      "step": "12",
+      "slug": "recommend-form",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/mod/console",
+      "do": [
+        { "action": "fill", "testid": "mc-rec-target", "value": "spam.example.net" },
+        { "action": "press", "testid": "mc-rec-target", "key": "Escape" },
+        { "action": "fill", "testid": "mc-rec-reason", "value": "spam" },
+        { "action": "expect", "testid": "mc-rec-submit" }
+      ],
+      "note": "Step 12. FILLED, NOT SUBMITTED: recommend appends to the shared federation queue (P10), so the harness stops at the button. The write's evidence is step 18's audit curl."
+    },
+    {
+      "persona": "moderator",
+      "step": "14",
+      "slug": "decide-disabled",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/mod/console",
+      "do": [
+        { "action": "expect", "testid": "mc-role-grant-disabled" },
+        { "action": "expect", "testid": "mc-external-client-disabled" }
+      ],
+      "note": "Step 14. Read-only: the admin-only controls are aria-disabled, so capturing them writes nothing."
+    },
+    {
+      "persona": "moderator",
+      "step": "15",
+      "slug": "ban-form",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/mod/console",
+      "do": [
+        { "action": "fill", "testid": "mc-ban-target", "value": "e2e-mastodon" },
+        { "action": "press", "testid": "mc-ban-target", "key": "Escape" },
+        { "action": "fill", "testid": "mc-ban-reason", "value": "abuse" },
+        { "action": "expect", "testid": "mc-ban-submit" },
+        { "action": "expect", "testid": "mc-ban-lift" }
+      ],
+      "note": "Step 15. FILLED, NOT SUBMITTED. A run dying between Ban and Lift leaves e2e-mastodon suspended for the mastodon plan; never click mc-ban-submit here."
+    },
+    {
+      "persona": "moderator",
+      "step": "17",
+      "slug": "domain-lock-form",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/mod/console",
+      "do": [
+        { "action": "fill", "testid": "mc-dl-user", "value": "e2e-mastodon" },
+        { "action": "press", "testid": "mc-dl-user", "key": "Escape" },
+        { "action": "fill", "testid": "mc-dl-reason", "value": "evasion" },
+        { "action": "expect", "testid": "mc-dl-lock" },
+        { "action": "expect", "testid": "mc-dl-unlock" }
+      ],
+      "note": "Step 17. FILLED, NOT SUBMITTED, same reason as step 15: domain.lock/unlock are audited writes on shared state."
+    },
+    {
+      "persona": "moderator",
+      "step": "18",
+      "slug": "audit-mine",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/mod/console",
+      "do": [
+        { "action": "click", "testid": "mc-audit-mine" },
+        { "action": "expect", "testid": "mc-audit" }
+      ],
+      "note": "Step 18. The mine filter is a read; it mutates nothing."
+    },
+    {
+      "persona": "moderator",
+      "step": "19",
+      "slug": "findings-queue",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/mod/findings",
+      "do": [
+        { "action": "expect", "testid": "findings-panel-view" },
+        { "action": "expect", "testid": "fp-queue" },
+        { "action": "expect", "testid": "fp-status" }
+      ],
+      "note": "Step 19. Read-only: never Confirm or Dismiss ids 1-3, which belong to another test (P10)."
+    },
+    {
+      "persona": "moderator",
+      "step": "22",
+      "slug": "status-filter",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/mod/console",
+      "do": [
+        { "action": "click", "testid": "mc-status-apply" },
+        { "action": "expect", "testid": "mc-queue" }
+      ],
+      "note": "Step 22. Applies the default status filter — a read of the queue, no write."
+    },
+    {
+      "persona": "moderator",
+      "step": "24",
+      "slug": "signed-out",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "click", "testid": "menu-logout" },
+        { "action": "expect", "testid": "login-view" }
+      ],
+      "note": "Step 24. Sign-out landing only. The ~5 s gateway route-cache window is measured by curl, not by this shot. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "moderator",
+      "step": "30",
+      "slug": "block-refused",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/mod/console",
+      "do": [
+        { "action": "fill", "testid": "mc-target", "value": "@spammer:example.net" },
+        { "action": "fill", "testid": "mc-reason", "value": "abuse" },
+        { "action": "click", "testid": "mc-block" },
+        { "action": "expect", "testid": "mc-block-error" }
+      ],
+      "note": "NC6, shot NN = 24 + 6. Safe to click: assertPlatformRole refuses a bare ROLE_MOD server-side, so nothing is written; the refusal is the evidence."
+    },
+    {
+      "persona": "moderator",
+      "step": "38",
+      "slug": "member-no-mod",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-services-nav" },
+        { "action": "expectHidden", "testid": "home-card-nav-mod" }
+      ],
+      "note": "NC14, shot NN = 24 + 14. A plain member is offered no Moderation card. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "moderator",
+      "step": "40",
+      "slug": "owncast-denied",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "click", "testid": "menu-owncast" },
+        { "action": "expect", "testid": "denied-notice" }
+      ],
+      "note": "NC16, shot NN = 24 + 16. The dropdown offers Owncast, owncastGuard refuses, the shell shows denied-notice. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "pending",
+      "step": "03",
+      "slug": "login-card",
+      "auth": "anon",
+      "route": "/login",
+      "do": [
+        { "action": "expect", "testid": "login-view" },
+        { "action": "expect", "testid": "login-submit" },
+        { "action": "expectAttached", "testid": "login-forgot-link" }
       ]
+    },
+    {
+      "persona": "pending",
+      "step": "05",
+      "slug": "complete-view-held",
+      "auth": "signin-only",
+      "login": "e2e-pending",
+      "do": [
+        { "action": "expect", "testid": "complete-view" },
+        { "action": "expect", "testid": "register-display-name" },
+        { "action": "expect", "testid": "login-complete" }
+      ]
+    },
+    {
+      "persona": "pending",
+      "step": "11",
+      "slug": "home-cards-gated",
+      "auth": "signin-only",
+      "login": "e2e-pending",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-services-nav" },
+        { "action": "expectAttached", "testid": "home-card-nav-matrix" },
+        { "action": "expectAttached", "testid": "home-card-nav-matrix-help" }
+      ]
+    },
+    {
+      "persona": "pending",
+      "step": "12",
+      "slug": "profile-menu",
+      "auth": "signin-only",
+      "login": "e2e-pending",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-services-nav" },
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "expect", "testid": "menu-logout" },
+        { "action": "expectHidden", "testid": "menu-character-studio" }
+      ]
+    },
+    {
+      "persona": "pending",
+      "step": "13",
+      "slug": "denied-notice",
+      "auth": "signin-only",
+      "login": "e2e-pending",
+      "route": "/social/matrix",
+      "do": [
+        { "action": "expect", "testid": "denied-notice" },
+        { "action": "expect", "testid": "denied-no-role" }
+      ]
+    },
+    {
+      "persona": "pending",
+      "step": "14",
+      "slug": "forum-card",
+      "auth": "signin-only",
+      "login": "e2e-pending",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-services-nav" },
+        { "action": "expectAttached", "testid": "home-card-nav-forum" }
+      ]
+    },
+    {
+      "persona": "pending",
+      "step": "15",
+      "slug": "admin-card-live",
+      "auth": "signin-only",
+      "login": "admin@hugmesh.net",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-services-nav" },
+        { "action": "expect", "testid": "home-card-nav-admin" }
+      ]
+    },
+    {
+      "persona": "pending",
+      "step": "17",
+      "slug": "signed-out",
+      "auth": "signin-only",
+      "login": "e2e-pending",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "click", "testid": "menu-logout" },
+        { "action": "expect", "testid": "login-view" }
+      ]
+    },
+    {
+      "persona": "pending",
+      "step": "18",
+      "slug": "screen-reader-field",
+      "auth": "signin-only",
+      "login": "admin@hugmesh.net",
+      "do": [
+        { "action": "expect", "testid": "complete-view" },
+        { "action": "fill", "testid": "register-display-name", "value": "山田太郎" },
+        { "action": "expect", "testid": "register-screen-reader-name" },
+        { "action": "expect", "testid": "login-complete" }
+      ]
+    },
+    {
+      "persona": "pending",
+      "step": "21",
+      "slug": "second-pending-card",
+      "auth": "signin-only",
+      "login": "rbac-pending@gmail.com",
+      "do": [
+        { "action": "expect", "testid": "complete-view" },
+        { "action": "expect", "testid": "register-display-name" },
+        { "action": "expect", "testid": "login-complete" }
+      ]
+    },
+    {
+      "persona": "mesh-operator",
+      "step": "07",
+      "slug": "anonymous-front-door",
+      "auth": "anon",
+      "route": "/login",
+      "do": [
+        { "action": "expect", "testid": "login-submit" }
+      ],
+      "note": "The anonymous control for every step that follows: native sign-in form, and NO menubar while the login remote is on screen."
+    },
+    {
+      "persona": "mesh-operator",
+      "step": "08",
+      "slug": "member-home",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-services-nav" }
+      ],
+      "note": "Sign-in lands on the MEMBER home, not /admin. The role-home mapping was removed on purpose. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "mesh-operator",
+      "step": "09",
+      "slug": "service-cards",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-card-nav-admin" }
+      ],
+      "note": "The five ENABLED cards: one account holding every tier. Admin and Moderation are present only for isAdmin()/isMod(). [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "mesh-operator",
+      "step": "10",
+      "slug": "admin-usage",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/usage",
+      "do": [
+        { "action": "expect", "testid": "usage-view" }
+      ],
+      "note": "ROLE_ADMIN console. Captured by route so the shot is reproducible; the TESTER must reach it by clicking the card, not by typing /admin."
+    },
+    {
+      "persona": "mesh-operator",
+      "step": "11",
+      "slug": "route-access",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/route-access",
+      "do": [
+        { "action": "expect", "testid": "route-access-view" }
+      ],
+      "note": "Empty by construction: admin-bff lists its own domain-scoped table, not the rows the gateway enforces. Read-only - never click ra-add."
+    },
+    {
+      "persona": "mesh-operator",
+      "step": "12",
+      "slug": "superadmin-domains",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/superadmin/domains",
+      "do": [
+        { "action": "expect", "testid": "superadmin-domains-view" }
+      ],
+      "note": "ROLE_SUPERADMIN-gated section, offered and openable. Empty list is correct on the compose lane."
+    },
+    {
+      "persona": "mesh-operator",
+      "step": "13",
+      "slug": "mod-console",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/mod/console",
+      "do": [
+        { "action": "expect", "testid": "mc-status" }
+      ],
+      "note": "ROLE_MOD console. mc-status shows domain default on a fresh stack."
+    },
+    {
+      "persona": "mesh-operator",
+      "step": "13",
+      "slug": "mod-findings",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/mod/findings",
+      "do": [
+        { "action": "expect", "testid": "findings-panel-view" }
+      ],
+      "note": "System findings panel; fp-queue or fp-queue-empty, both acceptable."
+    },
+    {
+      "persona": "mesh-operator",
+      "step": "15",
+      "slug": "wiki-pages",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/wiki/pages",
+      "do": [
+        { "action": "expect", "testid": "wiki-new-page" }
+      ],
+      "note": "BEFORE the write. wiki-pages-empty on a fresh stack."
+    },
+    {
+      "persona": "mesh-operator",
+      "step": "15",
+      "slug": "wiki-editor",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/wiki/new",
+      "do": [
+        { "action": "fill", "testid": "wiki-editor-title-input", "value": "operator-smoke-harness" },
+        { "action": "expect", "testid": "wiki-editor-save" }
+      ],
+      "note": "The editor with the title typed and NOT saved. The harness deliberately stops short of the write; the tester performs the save and the cleanup by hand."
+    },
+    {
+      "persona": "mesh-operator",
+      "step": "16",
+      "slug": "forum-new-topic",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/social/forum/create-topic",
+      "do": [
+        { "action": "expect", "testid": "create-submit" }
+      ],
+      "note": "The create form, NOT the create-gated text. Without PHPBB=1 the create-category dropdown is empty - that is the documented degradation, not a defect."
+    },
+    {
+      "persona": "mesh-operator",
+      "step": "19",
+      "slug": "character-studio",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/character-studio",
+      "do": [
+        { "action": "expect", "testid": "cs-studio" }
+      ],
+      "note": "ROLE_USER capability floor. A JSON.parse error banner here is an HTML auth page arriving where JSON was expected - the under-seeded operator."
+    },
+    {
+      "persona": "device-owner",
+      "step": "20",
+      "slug": "anon-login-form",
+      "auth": "anon",
+      "route": "/login/",
+      "do": [
+        { "action": "expect", "testid": "login-view" },
+        { "action": "expect", "testid": "login-username" },
+        { "action": "expect", "testid": "login-password" },
+        { "action": "expect", "testid": "login-submit" }
+      ],
+      "note": "Issue #297 N15, the anonymous-visitor probe. The persona never signs in; this row only proves the login door renders to a jar-less request. The sibling /admin/ 401 is deliberately NOT a row: its body is empty, so the PNG is a flat frame and evidence.mjs deletes it."
+    },
+    {
+      "persona": "superadmin",
+      "step": "07",
+      "slug": "operator-signed-in",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-card-nav-admin" },
+        { "action": "expect", "testid": "home-card-nav-mod" }
+      ],
+      "note": "Step 7. role-home lands every role on /user; the console entries are present in the menubar. [reconciled 2026-09-16] nav-admin/nav-mod -> home-card-nav-admin/home-card-nav-mod: on /user the shell hides the menubar and renders the same entries as cards (menu.component.ts homeCardsActive). Plan step 7 text says menubar."
+    },
+    {
+      "persona": "superadmin",
+      "step": "08",
+      "slug": "admin-console",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "home-card-nav-admin" },
+        { "action": "expect", "testid": "nav-admin" },
+        { "action": "expect", "testid": "admin-view" },
+        { "action": "expect", "testid": "admin-menu" }
+      ],
+      "note": "Step 8. admin-ui mounts as a federated remote. [reconciled 2026-09-16] the Admin entry is a home CARD on /user (home-card-nav-admin), not a bar link; after the click the console is active inside the shell and the bar (nav-admin) is back."
+    },
+    {
+      "persona": "superadmin",
+      "step": "09",
+      "slug": "superadmin-submenu",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "home-card-nav-admin" },
+        { "action": "expect", "testid": "nav-submenu" },
+        { "action": "expect", "testid": "subnav-admin-domains" },
+        { "action": "expect", "testid": "subnav-admin-device-licenses" },
+        { "action": "expect", "testid": "subnav-admin-egress-vpn" }
+      ],
+      "note": "Step 9 positive: the six show:isSuperadmin() entries. [reconciled 2026-09-16] route /admin -> / + click home-card-nav-admin: the menubar submenu exists only inside the host shell; a hard GET /admin is served by the admin-ui gateway route (bare remote)."
+    },
+    {
+      "persona": "superadmin",
+      "step": "09",
+      "slug": "admin-submenu-no-six",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "home-card-nav-admin" },
+        { "action": "expect", "testid": "nav-submenu" },
+        { "action": "expectHidden", "testid": "subnav-admin-domains" },
+        { "action": "expectHidden", "testid": "subnav-admin-device-licenses" },
+        { "action": "expectHidden", "testid": "subnav-admin-egress-vpn" }
+      ],
+      "note": "Step 9 negative: none of the six render for ROLE_ADMIN. [reconciled 2026-09-16] route /admin -> / + click home-card-nav-admin: the menubar submenu exists only inside the host shell; a hard GET /admin is served by the admin-ui gateway route (bare remote)."
+    },
+    {
+      "persona": "superadmin",
+      "step": "10",
+      "slug": "domains-console",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/superadmin/domains",
+      "do": [
+        { "action": "expect", "testid": "superadmin-domains-view" },
+        { "action": "expect", "testid": "sd-empty" }
+      ],
+      "note": "Step 10. Empty registry on a single-tenant mesh. Never click sd-register."
+    },
+    {
+      "persona": "superadmin",
+      "step": "11",
+      "slug": "device-licenses",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/device-licenses",
+      "do": [
+        { "action": "expect", "testid": "device-licenses-view" },
+        { "action": "expect", "testid": "dl-devices" }
+      ],
+      "note": "Step 11. Never click dl-grant."
+    },
+    {
+      "persona": "superadmin",
+      "step": "11",
+      "slug": "device-pending",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/device-pending",
+      "do": [
+        { "action": "expect", "testid": "device-pending-view" },
+        { "action": "expect", "testid": "dp-nodes" }
+      ],
+      "note": "Step 11. No headscale on compose, so dp-nodes is empty. Never click dp-register."
+    },
+    {
+      "persona": "superadmin",
+      "step": "12",
+      "slug": "phone-fleet-empty",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/phone-fleet",
+      "do": [
+        { "action": "click", "testid": "pf-refresh" },
+        { "action": "expect", "testid": "phone-fleet-view" },
+        { "action": "expect", "testid": "pf-empty" }
+      ],
+      "note": "Step 12. Zero rows, so the owner-assign inputs never render; the step-up gate is curl-only here."
+    },
+    {
+      "persona": "superadmin",
+      "step": "13",
+      "slug": "fleet-entitlements",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/fleet-entitlements",
+      "do": [
+        { "action": "click", "testid": "fe-refresh" },
+        { "action": "expect", "testid": "fleet-entitlements-view" },
+        { "action": "expect", "testid": "fe-empty" }
+      ],
+      "note": "Step 13. Empty console; the grant form is standalone and still renders."
+    },
+    {
+      "persona": "superadmin",
+      "step": "13",
+      "slug": "step-up-refused",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/fleet-entitlements",
+      "do": [
+        { "action": "fill", "testid": "fe-subject", "value": "e2e-fleet" },
+        { "action": "click", "testid": "fe-grant" },
+        { "action": "expect", "testid": "fe-action-note" }
+      ],
+      "note": "Step 13. Guarded call refused before any write: 403 + X-Step-Up-Required. Nothing is granted."
+    },
+    {
+      "persona": "superadmin",
+      "step": "14",
+      "slug": "domain-capabilities-superadmin",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/domain-capabilities",
+      "do": [
+        { "action": "expect", "testid": "domain-capabilities-view" },
+        { "action": "expect", "testid": "dc-global-panel" }
+      ],
+      "note": "Step 14. Superadmin sees the platform-wide kill switch. Never tick dc-global-kill."
+    },
+    {
+      "persona": "superadmin",
+      "step": "14",
+      "slug": "domain-capabilities-admin",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/domain-capabilities",
+      "do": [
+        { "action": "expect", "testid": "domain-capabilities-view" },
+        { "action": "expect", "testid": "dc-own-domain" },
+        { "action": "expectHidden", "testid": "dc-global-panel" }
+      ],
+      "note": "Step 14. Admin gets the own-domain panel instead; the in-page tier split."
+    },
+    {
+      "persona": "superadmin",
+      "step": "15",
+      "slug": "egress-vpn",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/egress-vpn",
+      "do": [
+        { "action": "expect", "testid": "egress-vpn-view" },
+        { "action": "expect", "testid": "ev-configs" },
+        { "action": "expect", "testid": "ev-assignments" }
+      ],
+      "note": "Step 15. Never click ev-import or ev-assign."
+    },
+    {
+      "persona": "superadmin",
+      "step": "17",
+      "slug": "admin-menu-no-workloads",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin",
+      "do": [
+        { "action": "expect", "testid": "admin-menu" },
+        { "action": "expect", "testid": "admin-view" }
+      ],
+      "note": "Step 17. Workload console must be ABSENT from admin-menu: the capability probe is 404 on compose."
+    },
+    {
+      "persona": "superadmin",
+      "step": "18",
+      "slug": "pure-superadmin-home",
+      "auth": "onboard",
+      "login": "@superadmin",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-services-nav" },
+        { "action": "expectHidden", "testid": "home-card-nav-admin" },
+        { "action": "expect", "testid": "home-card-nav-mod" }
+      ],
+      "note": "Step 18. @superadmin resolves to SUPERADMIN_USERNAME (specs/rbac-roles.ts) - env-driven on a Studio-bootstrapped mesh, 'e2e-superadmin' otherwise. nav-admin is absent for a pure superadmin. [reconciled 2026-09-16] plan step 18 Expect: Admin ABSENT (visible: isAdmin()), Moderation offered (isMod() counts superadmin); on /user both render as cards, so the Admin assertion is an absence and the row had it inverted (expected nav-admin visible)."
+    },
+    {
+      "persona": "superadmin",
+      "step": "18",
+      "slug": "denied-notice",
+      "auth": "onboard",
+      "login": "@superadmin",
+      "route": "/home?denied=%2Fadmin",
+      "do": [
+        { "action": "expect", "testid": "denied-notice" },
+        { "action": "expect", "testid": "denied-no-role" }
+      ],
+      "note": "Step 18. Host-shell roleGuard bounces to /home?denied=%2Fadmin. The UI-tier gap this persona surfaces. [reconciled 2026-09-16] route /admin -> /home?denied=%2Fadmin: the landing URL the shell roleGuard produces (role-guard.factory.ts:44-46); hard-GET /admin is the bare admin-ui remote. denied-no-role is computed from the session (denied-notice.component.ts:99-101)."
+    },
+    {
+      "persona": "superadmin",
+      "step": "19",
+      "slug": "route-access-empty",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/route-access",
+      "do": [
+        { "action": "expect", "testid": "route-access-view" },
+        { "action": "expect", "testid": "route-access-rules" }
+      ],
+      "note": "Step 19. Empty by design: admin-bff's liquibase table ships DDL only. Never click ra-add."
+    },
+    {
+      "persona": "superadmin",
+      "step": "22",
+      "slug": "n12-admin-bounced",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/superadmin/domains",
+      "do": [
+        { "action": "expectHidden", "testid": "superadmin-domains-view" },
+        { "action": "expect", "testid": "login-view" }
+      ],
+      "note": "Negative check N12. admin-ui superadminGuard parseUrl('/login') bounces a signed-in admin."
     },
     {
       "persona": "member",
@@ -52,11 +1043,22 @@
       "auth": "anon",
       "route": "/login",
       "do": [
-        { "action": "fill",   "testid": "login-username", "value": "e2e-user" },
-        { "action": "fill",   "testid": "login-password", "value": "@password" },
+        { "action": "fill", "testid": "login-username", "value": "e2e-user" },
+        { "action": "fill", "testid": "login-password", "value": "@password" },
         { "action": "expect", "testid": "login-submit" }
       ],
       "note": "The form as the tester leaves it BEFORE clicking Sign in. @password is the seeded shared credential, resolved at run time and never written into this file."
+    },
+    {
+      "persona": "member",
+      "step": "01",
+      "slug": "anonymous-login",
+      "auth": "anon",
+      "route": "/login",
+      "do": [
+        { "action": "expect", "testid": "login-submit" }
+      ],
+      "note": "The EMPTY form, before anything is typed: plan step 1 forbids signing in. The 01-login-filled row is the same screen after step 2 fills it."
     },
     {
       "persona": "member",
@@ -64,10 +1066,11 @@
       "slug": "signed-in-home",
       "auth": "onboard",
       "login": "e2e-user",
-      "route": "/user",
+      "route": "/",
       "do": [
         { "action": "expect", "testid": "home-services-nav" }
-      ]
+      ],
+      "note": "[reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
     },
     {
       "persona": "member",
@@ -81,38 +1084,1440 @@
       ]
     },
     {
-      "persona": "admin",
-      "step": "01",
+      "persona": "member",
+      "step": "04",
+      "slug": "menubar-member",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/about",
+      "do": [
+        { "action": "expect", "testid": "nav-home" }
+      ],
+      "note": "The member-shaped menubar. nav-admin/nav-mod are absent from the DOM for this persona, which is the point of the step. [reconciled 2026-09-16] route /user/profile -> /about: a hard GET /user/profile is the bare user-ui remote (no menubar) and the shell hides the bar on /user itself; /about is a host-shell page where the signed-in bar renders. Plan step 4 text says /user/profile."
+    },
+    {
+      "persona": "member",
+      "step": "05",
+      "slug": "profile-dropdown",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "expect", "testid": "menu-logout" }
+      ],
+      "note": "The dropdown open, showing exactly four entries. [reconciled 2026-09-16] route /user/profile -> /: a hard GET /user/profile is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "member",
+      "step": "06",
+      "slug": "launcher-cards",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/home",
+      "do": [
+        { "action": "expect", "testid": "card-forum" }
+      ],
+      "note": "[reconciled 2026-09-16] route -> /home: the card-<id> launcher grid (HomeServicesComponent) renders only on the public /home page (spec 18:225-231); /user renders the menubar entries as home-card-nav-* and carries no games card. The plan text says /user or / for this step."
+    },
+    {
+      "persona": "member",
+      "step": "08",
+      "slug": "home-guide",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/user",
+      "do": [
+        { "action": "expect", "testid": "home-guide" }
+      ],
+      "note": "Captured SHOWN, not dismissed: dismissal is a per-user write and this stack is shared."
+    },
+    {
+      "persona": "member",
+      "step": "09",
+      "slug": "profile-filled",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/user/profile",
+      "do": [
+        { "action": "fill", "testid": "profile-displayName", "value": "Member Test One" },
+        { "action": "fill", "testid": "profile-pronouns", "value": "they/them" },
+        { "action": "expect", "testid": "profile-save" }
+      ],
+      "note": "The form as the tester leaves it BEFORE clicking Save profile — the harness does not write to a shared account."
+    },
+    {
+      "persona": "member",
+      "step": "10",
+      "slug": "avatar-control",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/user/profile",
+      "do": [
+        { "action": "expect", "testid": "profile-avatar-upload" }
+      ]
+    },
+    {
+      "persona": "member",
+      "step": "11",
+      "slug": "preferences",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/user/preferences",
+      "do": [
+        { "action": "expect", "testid": "prefs-poison-select" }
+      ]
+    },
+    {
+      "persona": "member",
+      "step": "12",
+      "slug": "notification-prefs",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/user/notification-preferences",
+      "do": [
+        { "action": "expect", "testid": "notif-prefs-fieldset" }
+      ]
+    },
+    {
+      "persona": "member",
+      "step": "13",
+      "slug": "sessions",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/user/sessions",
+      "do": [
+        { "action": "expect", "testid": "sessions-rows" }
+      ]
+    },
+    {
+      "persona": "member",
+      "step": "14",
+      "slug": "blocks-filled",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/user/blocks",
+      "do": [
+        { "action": "fill", "testid": "self-block-target", "value": "someone-to-block" },
+        { "action": "expect", "testid": "self-block-add" }
+      ],
+      "note": "Filled, not submitted."
+    },
+    {
+      "persona": "member",
+      "step": "15",
+      "slug": "cards-filled",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/user/cards",
+      "do": [
+        { "action": "fill", "testid": "cards-slug", "value": "member-test-card" },
+        { "action": "expect", "testid": "cards-publish" }
+      ],
+      "note": "Filled, not published."
+    },
+    {
+      "persona": "member",
+      "step": "17",
+      "slug": "character-studio",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/character-studio",
+      "do": [
+        { "action": "expect", "testid": "cs-validity" }
+      ]
+    },
+    {
+      "persona": "member",
+      "step": "19",
+      "slug": "forum-card-granted",
+      "auth": "onboard",
+      "login": "e2e-forum",
+      "route": "/home",
+      "do": [
+        { "action": "expect", "testid": "card-forum" }
+      ],
+      "note": "The same card as step 6, seen by the grant holder; contrast N7. [reconciled 2026-09-16] route -> /home: the card-<id> launcher grid (HomeServicesComponent) renders only on the public /home page (spec 18:225-231); /user renders the menubar entries as home-card-nav-* and carries no games card. The plan text says /user or / for this step."
+    },
+    {
+      "persona": "member",
+      "step": "20",
+      "slug": "matrix-card",
+      "auth": "onboard",
+      "login": "e2e-matrix",
+      "route": "/home",
+      "do": [
+        { "action": "expect", "testid": "card-matrix" }
+      ],
+      "note": "[reconciled 2026-09-16] route -> /home: the card-<id> launcher grid (HomeServicesComponent) renders only on the public /home page (spec 18:225-231); /user renders the menubar entries as home-card-nav-* and carries no games card. The plan text says /user or / for this step."
+    },
+    {
+      "persona": "member",
+      "step": "21",
+      "slug": "mastodon-card",
+      "auth": "onboard",
+      "login": "e2e-mastodon",
+      "route": "/home",
+      "do": [
+        { "action": "expect", "testid": "card-mastodon" }
+      ],
+      "note": "[reconciled 2026-09-16] route -> /home: the card-<id> launcher grid (HomeServicesComponent) renders only on the public /home page (spec 18:225-231); /user renders the menubar entries as home-card-nav-* and carries no games card. The plan text says /user or / for this step."
+    },
+    {
+      "persona": "member",
+      "step": "22",
+      "slug": "signed-out",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "click", "testid": "menu-logout" },
+        { "action": "expect", "testid": "login-submit" }
+      ],
+      "note": "Sign-out ends only the harness browser session. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "member",
+      "step": "28",
+      "slug": "games-denied",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/games",
+      "do": [
+        { "action": "expect", "testid": "login-view" }
+      ],
+      "note": "N15: /games is not gateway-governed, so the SPA loads and gamesGuard bounces to /home?denied=%2Fgames. The only negative check in this plan with a DOM to capture. [reconciled 2026-09-16] denied-notice -> login-view: host-shell gamesGuard returns parseUrl('/login') for a signed-in principal without the role (games.guard.ts:25); it is NOT a roleGuard-factory guard, so no /home?denied. Plan N15 text says /home?denied."
+    },
+    {
+      "persona": "member",
+      "step": "29",
+      "slug": "connected-apps-gate",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/user/connected-apps",
+      "do": [
+        { "action": "expect", "testid": "connected-apps-disabled" }
+      ],
+      "note": "N19: the app-side gate, rendered honestly and with no fetch attempted."
+    },
+    {
+      "persona": "games-operator",
+      "step": "03",
+      "slug": "door-login-form",
+      "auth": "anon",
+      "route": "/login/",
+      "do": [
+        { "action": "expect", "testid": "login-view" }
+      ],
+      "note": "Plan step 3. Proves the compose-tls door paints the login form with no certificate interstitial. Anonymous on purpose: no lockout counter moves."
+    },
+    {
+      "persona": "games-operator",
+      "step": "09",
+      "slug": "console-admin",
+      "auth": "onboard",
+      "login": "e2e-gamesadmin",
+      "route": "/admin/games-services",
+      "do": [
+        { "action": "expect", "testid": "games-services-view" },
+        { "action": "expectAttached", "testid": "gs-create" }
+      ],
+      "note": "Plan step 9. ADMIN variant: the create half must be present and enabled. Needs steps 4+5 provisioning first, or gamesServicesGuard bounces to /login and the row fails loudly."
+    },
+    {
+      "persona": "games-operator",
+      "step": "10",
+      "slug": "offers-empty",
+      "auth": "onboard",
+      "login": "e2e-gamesadmin",
+      "route": "/admin/games-services",
+      "do": [
+        { "action": "expect", "testid": "gs-offers-empty" }
+      ],
+      "note": "Plan step 10, a KNOWN DEFECT captured as evidence: GET /bff/games-services/catalog maps to no controller, so Offered servers is permanently empty. If this row starts failing the endpoint has landed - rewrite step 10."
+    },
+    {
+      "persona": "games-operator",
+      "step": "11",
+      "slug": "form-error",
+      "auth": "onboard",
+      "login": "e2e-gamesadmin",
+      "route": "/admin/games-services",
+      "do": [
+        { "action": "expect", "testid": "games-services-view" },
+        { "action": "fill", "testid": "gs-name", "value": "world1" },
+        { "action": "click", "testid": "gs-create" },
+        { "action": "expect", "testid": "gs-form-error" }
+      ],
+      "note": "Plan step 11. Submits with an empty Game server select; the inline role=alert must appear and no request is sent."
+    },
+    {
+      "persona": "games-operator",
+      "step": "13",
+      "slug": "instance-row",
+      "auth": "onboard",
+      "login": "e2e-gamesadmin",
+      "route": "/admin/games-services",
+      "do": [
+        { "action": "expect", "testid": "gs-instances" }
+      ],
+      "note": "Plan step 13. Captures the Instances list after step 12 created world1 through the BFF. On a stack where step 12 has not run this lands on gs-instances-empty - the list testid is present either way, so read the image, not the exit code."
+    },
+    {
+      "persona": "games-operator",
+      "step": "14",
+      "slug": "suspended",
+      "auth": "onboard",
+      "login": "e2e-gamesadmin",
+      "route": "/admin/games-services",
+      "do": [
+        { "action": "expect", "testid": "gs-instances" },
+        { "action": "click", "testid": "gs-suspend" },
+        { "action": "expect", "testid": "gs-instances" }
+      ],
+      "note": "Plan step 14. Clicks Pause on the FIRST instance row. With more than one instance listed the harness may not pick the row the tester means - the plan names world1; check the image."
+    },
+    {
+      "persona": "games-operator",
+      "step": "15",
+      "slug": "resumed-pending",
+      "auth": "onboard",
+      "login": "e2e-gamesadmin",
+      "route": "/admin/games-services",
+      "do": [
+        { "action": "expect", "testid": "gs-instances" },
+        { "action": "click", "testid": "gs-resume" },
+        { "action": "expect", "testid": "gs-instances" }
+      ],
+      "note": "Plan step 15. Runs after row 14 left the first instance suspended. The chip must read pending, never active - that is the desired-state semantics the step exists to prove."
+    },
+    {
+      "persona": "games-operator",
+      "step": "17",
+      "slug": "terminated",
+      "auth": "onboard",
+      "login": "e2e-gamesadmin",
+      "route": "/admin/games-services",
+      "do": [
+        { "action": "expect", "testid": "gs-instances" },
+        { "action": "click", "testid": "gs-terminate" },
+        { "action": "expect", "testid": "gs-instances" }
+      ],
+      "note": "Plan step 17. Stop is one-way and never deletes: the row must still be listed after the click, with all three buttons disabled."
+    },
+    {
+      "persona": "games-operator",
+      "step": "19",
+      "slug": "runner-console",
+      "auth": "onboard",
+      "login": "e2e-mod",
+      "route": "/admin/games-services",
+      "do": [
+        { "action": "expect", "testid": "games-services-view" },
+        { "action": "expect", "testid": "gs-runner-help" }
+      ],
+      "note": "Plan step 19. RUNNER variant reached by direct URL - there is no click path (step 18). gs-runner-help renders only when canCreate() is false, so its presence IS the greyed-out create half."
+    },
+    {
+      "persona": "image-builder",
+      "step": "04",
+      "slug": "login-form",
+      "auth": "anon",
+      "route": "/login",
+      "do": [
+        { "action": "fill", "testid": "login-username", "value": "e2e-user" },
+        { "action": "fill", "testid": "login-password", "value": "@password" },
+        { "action": "expect", "testid": "login-submit" }
+      ],
+      "note": "The sign-in form as the tester leaves it BEFORE clicking Sign in. @password is resolved at run time."
+    },
+    {
+      "persona": "image-builder",
+      "step": "04",
+      "slug": "signed-in",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "profile-trigger" },
+        { "action": "expect", "testid": "nav-user" }
+      ],
+      "note": "Plain e2e-user BEFORE the grant: the header identity, nothing privileged."
+    },
+    {
+      "persona": "image-builder",
+      "step": "05",
+      "slug": "admin-signed-in",
+      "auth": "onboard",
+      "login": "e2e-adminonly",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "expect", "testid": "menu-admin" }
+      ],
+      "note": "The profile menu OPEN, showing the Admin item that renders only for session.isAdmin() (host-shell header-controls.component.ts:117)."
+    },
+    {
+      "persona": "image-builder",
+      "step": "12",
+      "slug": "admin-nav",
+      "auth": "onboard",
+      "login": "e2e-adminonly",
+      "route": "/admin",
+      "do": [
+        { "action": "expect", "testid": "admin-view" },
+        { "action": "expect", "testid": "admin-menu" }
+      ],
+      "note": "The console shell and its left-hand nav; the Image generation link is matched by visible text, the nav links carrying no data-testid."
+    },
+    {
+      "persona": "image-builder",
+      "step": "13",
+      "slug": "roles-image-builder",
+      "auth": "onboard",
+      "login": "e2e-adminonly",
+      "route": "/admin/roles",
+      "do": [
+        { "action": "expect", "testid": "roles-caveat" },
+        { "action": "expect", "testid": "roles-user" },
+        { "action": "expect", "testid": "grant-ROLE_IMAGE_BUILDER" },
+        { "action": "expect", "testid": "revoke-ROLE_IMAGE_BUILDER" }
+      ],
+      "note": "grant-/revoke- ids are composed at runtime from the role constant (roles.component.html:44/:52, roles.component.ts:86)."
+    },
+    {
+      "persona": "image-builder",
+      "step": "14",
+      "slug": "roles-result-503",
+      "auth": "onboard",
+      "login": "e2e-adminonly",
+      "route": "/admin/roles",
+      "do": [
+        { "action": "fill", "testid": "roles-user", "value": "e2e-user" },
+        { "action": "click", "testid": "grant-ROLE_IMAGE_BUILDER" },
+        { "action": "expect", "testid": "roles-result" }
+      ],
+      "note": "Captures the EXPECTED 503: casdoor.admin.enabled is false on compose, so roles-result takes the failed class. Nothing is written."
+    },
+    {
+      "persona": "image-builder",
+      "step": "16",
+      "slug": "fresh-session",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "profile-trigger" },
+        { "action": "expect", "testid": "nav-user" }
+      ],
+      "note": "The fresh sign-in AFTER the grant. Deliberately identical on screen to 04-signed-in: a capability is not a page, and the difference is only visible at the protocol layer."
+    },
+    {
+      "persona": "image-builder",
+      "step": "20",
+      "slug": "admin-denied",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "expect", "testid": "menu-logout" },
+        { "action": "expectHidden", "testid": "menu-admin" }
+      ],
+      "note": "The granted, non-admin builder at /admin: the fe-gateway /admin/** row is ROLE_ADMIN alone (20-schema.sql:515), so no admin nav renders. [reconciled 2026-09-16] route /admin -> / + click profile-trigger, expectHidden menu-admin: plan #301 step 20 Do item 1. A hard GET /admin as e2e-user is refused at the front door (fe row /admin/** -> ROLE_ADMIN, 20-schema.sql:515) with an EMPTY 403 body; measured offline 2026-09-16 (headless chromium 1.61.1, 1280x900): that document is a flat frame and evidence.mjs deletes the PNG, so the row as written could never keep its shot. menu-logout (show: () => true, header-controls.component.ts:161) is the present control the row waits on."
+    },
+    {
+      "persona": "image-builder",
+      "step": "24",
+      "slug": "capability-gate",
+      "auth": "onboard",
+      "login": "e2e-adminonly",
+      "route": "/admin/image-gen",
+      "do": [
+        { "action": "expect", "testid": "capability-gate" },
+        { "action": "expectHidden", "testid": "ig-wizard" }
+      ],
+      "note": "CORRECT degraded state on compose: the Noop probe leaves data-state=undetectable and the wizard is suppressed."
+    },
+    {
+      "persona": "games-store-member",
+      "step": "08",
+      "slug": "signin-form",
+      "auth": "anon",
+      "route": "/login",
+      "do": [
+        { "action": "fill", "testid": "login-username", "value": "e2e-gamesservices" },
+        { "action": "fill", "testid": "login-password", "value": "@password" },
+        { "action": "expect", "testid": "login-submit" }
+      ],
+      "note": "Plan step 8. The sign-in form FILLED, before submit. Anonymous on purpose: it captures the two fields and the enabled Sign in button, which is what the plan tells a tester to type into."
+    },
+    {
+      "persona": "games-store-member",
+      "step": "08",
+      "slug": "user-home",
+      "auth": "onboard",
+      "login": "e2e-gamesservices",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-view" },
+        { "action": "expectAttached", "testid": "nav-user" }
+      ],
+      "note": "Plan step 8. Where roleHomeGuard lands every signed-in non-curtailed principal. nav-user is expectAttached, not expect: its label span is empty by design in the opaque-cookie model. Needs plan steps 5-7 run first - no seeder renders e2e-gamesservices. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "games-store-member",
+      "step": "15",
+      "slug": "games-bounced",
+      "auth": "onboard",
+      "login": "e2e-gamesservices",
+      "route": "/games",
+      "do": [
+        { "action": "expect", "testid": "login-view" }
+      ],
+      "note": "Plan step 15(b) and N9. gamesGuard admits isGames()||isAdmin()||isSuperadmin(); games_services is not the literal games, so a SIGNED-IN principal is parked on the login card. If games-todo-badge renders instead, the guard was widened."
+    },
+    {
+      "persona": "games-store-member",
+      "step": "15",
+      "slug": "wildcard-user-home",
+      "auth": "onboard",
+      "login": "e2e-gamesservices",
+      "route": "/games/servers/demo",
+      "do": [
+        { "action": "expect", "testid": "home-view" }
+      ],
+      "note": "Plan step 15(c). No host-shell route matches, the ** wildcard redirects to / and roleHomeGuard lands on /user."
+    },
+    {
+      "persona": "games-store-member",
+      "step": "15",
+      "slug": "services-nav",
+      "auth": "onboard",
+      "login": "e2e-gamesservices",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-services-nav" }
+      ],
+      "note": "Plan step 15(d). The whole service-card grid, so the ABSENCE of any games or app-store card is visible evidence rather than a claim. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "games-store-member",
+      "step": "15",
+      "slug": "profile-menu-no-consoles",
+      "auth": "onboard",
+      "login": "e2e-gamesservices",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "expect", "testid": "menu-logout" },
+        { "action": "expectHidden", "testid": "menu-admin" },
+        { "action": "expectHidden", "testid": "menu-mod" },
+        { "action": "expectHidden", "testid": "menu-games-admin" }
+      ],
+      "note": "Plan step 15(d), N6 and N7. The open account menu: Profile, Character Studio, Character Forge, Sign out and nothing else. menu-games-admin is gated on isGamesAdmin()||isSuperadmin(). [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "games-store-member",
+      "step": "17",
+      "slug": "role-restored",
+      "auth": "onboard",
+      "login": "e2e-gamesservices",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-view" },
+        { "action": "expectAttached", "testid": "nav-user" }
+      ],
+      "note": "Plan step 17, the RE-VERIFY GATE. A FRESH sign-in after step 16's re-grant. Same screen as step 8 by design: the point is that it still renders after a revoke and re-grant. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "studio-operator",
+      "step": "16",
+      "slug": "login-page",
+      "auth": "anon",
+      "route": "/login/",
+      "do": [
+        { "action": "expect", "testid": "login-view" },
+        { "action": "expectAttached", "testid": "login-username" },
+        { "action": "expectAttached", "testid": "login-submit" }
+      ],
+      "note": "Step 16 — the front door renders before any credential is typed."
+    },
+    {
+      "persona": "studio-operator",
+      "step": "17",
+      "slug": "home-tiles",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/home",
+      "do": [
+        { "action": "expectAttached", "testid": "nav-user" },
+        { "action": "expect", "testid": "card-admin" }
+      ],
+      "note": "Step 17 — every service tile enabled for the seeded superadmin. [reconciled 2026-09-16] route -> /home: the card-<id> launcher grid (HomeServicesComponent) renders only on the public /home page (spec 18:225-231); /user renders the menubar entries as home-card-nav-* and carries no games card. The plan text says /user or / for this step."
+    },
+    {
+      "persona": "studio-operator",
+      "step": "17",
       "slug": "admin-console",
       "auth": "onboard",
-      "login": "e2e-admin",
-      "route": "/admin",
+      "login": "mesh-operator",
+      "route": "/admin/",
       "do": [
         { "action": "expect", "testid": "admin-view" }
       ]
     },
     {
-      "persona": "moderator",
-      "step": "01",
-      "slug": "mod-console",
+      "persona": "studio-operator",
+      "step": "18",
+      "slug": "qa-tester-denied",
       "auth": "onboard",
-      "login": "e2e-mod",
-      "route": "/mod",
+      "login": "qa-tester",
+      "route": "/home",
       "do": [
-        { "action": "expect", "testid": "mod-home-view" }
+        { "action": "expect", "testid": "card-admin-help" }
+      ],
+      "note": "Step 18 — the Studio-added account sees Admin disabled with its reason. Needs step 18 to have run on this mesh. [reconciled 2026-09-16] route -> /home: the card-<id> launcher grid (HomeServicesComponent) renders only on the public /home page (spec 18:225-231); /user renders the menubar entries as home-card-nav-* and carries no games card. The plan text says /user or / for this step."
+    },
+    {
+      "persona": "studio-operator",
+      "step": "26",
+      "slug": "nc7-desktop-name-refused",
+      "auth": "anon",
+      "route": "/login/",
+      "do": [
+        { "action": "fill", "testid": "login-username", "value": "root" },
+        { "action": "fill", "testid": "login-password", "value": "@password" },
+        { "action": "click", "testid": "login-submit" },
+        { "action": "expect", "testid": "login-error" }
+      ],
+      "note": "NC7 — a desktop account name is not a mesh identity. The table cannot know YOUR desktop login, so it types 'root'; repeat it with $(id -un) by hand."
+    },
+    {
+      "persona": "admin",
+      "step": "02",
+      "slug": "login-door",
+      "auth": "anon",
+      "route": "/login",
+      "do": [
+        { "action": "expect", "testid": "login-username" },
+        { "action": "expect", "testid": "login-password" },
+        { "action": "expect", "testid": "login-submit" }
+      ],
+      "note": "The compose lane browser door before sign-in. Plan step 2."
+    },
+    {
+      "persona": "admin",
+      "step": "03",
+      "slug": "signed-in-home",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-card-nav-admin" },
+        { "action": "expect", "testid": "home-card-nav-mod" }
+      ],
+      "note": "Both cards present for an admin: isMod() includes admin. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "admin",
+      "step": "05",
+      "slug": "admin-console",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin",
+      "do": [
+        { "action": "expect", "testid": "admin-view" },
+        { "action": "expect", "testid": "admin-menu" }
       ]
     },
     {
-      "persona": "superadmin",
-      "step": "01",
+      "persona": "admin",
+      "step": "06",
+      "slug": "console-nav",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "home-card-nav-admin" },
+        { "action": "expect", "testid": "nav-submenu" },
+        { "action": "expectHidden", "testid": "subnav-admin-domains" }
+      ],
+      "note": "The submenu, with the superadmin-only Domains entry absent from the DOM. [reconciled 2026-09-16] route /admin -> / + click home-card-nav-admin: the menubar submenu exists only inside the host shell; a hard GET /admin is served by the admin-ui gateway route (bare remote)."
+    },
+    {
+      "persona": "admin",
+      "step": "07",
+      "slug": "route-access-form",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/route-access",
+      "do": [
+        { "action": "fill", "testid": "ra-pattern", "value": "/manual-test-probe/**" },
+        { "action": "fill", "testid": "ra-role", "value": "ROLE_MOD" },
+        { "action": "expect", "testid": "ra-add" }
+      ],
+      "note": "The form as filled, before Add. Filling writes nothing; the gateway select is left at its default."
+    },
+    {
+      "persona": "admin",
+      "step": "09",
+      "slug": "roles-panel",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/roles",
+      "do": [
+        { "action": "expect", "testid": "roles-panel" },
+        { "action": "expect", "testid": "roles-caveat" },
+        { "action": "expect", "testid": "grant-ROLE_MATRIX" }
+      ]
+    },
+    {
+      "persona": "admin",
+      "step": "11",
+      "slug": "delegation-suspend",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/delegation",
+      "do": [
+        { "action": "fill", "testid": "dg-suspend-user", "value": "e2e-user" },
+        { "action": "fill", "testid": "dg-suspend-ttl", "value": "300" },
+        { "action": "expect", "testid": "dg-panel-suspensions" },
+        { "action": "expect", "testid": "dg-suspend" }
+      ],
+      "note": "Suspensions is the default tab. Form as filled, before the write."
+    },
+    {
+      "persona": "admin",
+      "step": "15",
+      "slug": "announcement-editor",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/announcements",
+      "do": [
+        { "action": "click", "testid": "ann-new" },
+        { "action": "fill", "testid": "ann-title", "value": "Manual test announcement" },
+        { "action": "expect", "testid": "ann-save" }
+      ],
+      "note": "Editor as filled, before save. New-announcement opens a local form and posts nothing."
+    },
+    {
+      "persona": "admin",
+      "step": "16",
+      "slug": "login-banner",
+      "auth": "anon",
+      "route": "/login",
+      "do": [
+        { "action": "expect", "testid": "login-banner" },
+        { "action": "expect", "testid": "login-announcement" }
+      ],
+      "note": "Only captures after plan step 15 has published the login-targeted announcement; otherwise the row fails and the image is discarded."
+    },
+    {
+      "persona": "admin",
+      "step": "17",
+      "slug": "usage",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/usage",
+      "do": [
+        { "action": "expect", "testid": "usage-view" },
+        { "action": "expect", "testid": "usage-total" }
+      ]
+    },
+    {
+      "persona": "admin",
+      "step": "19",
+      "slug": "appeals",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/appeals",
+      "do": [
+        { "action": "fill", "testid": "ap-id", "value": "999999" },
+        { "action": "expect", "testid": "appeals-view" },
+        { "action": "expect", "testid": "ap-approve" }
+      ],
+      "note": "Id filled, before the decide."
+    },
+    {
+      "persona": "admin",
+      "step": "20",
+      "slug": "account-appeals",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/account-appeals",
+      "do": [
+        { "action": "expect", "testid": "account-appeals-view" },
+        { "action": "expect", "testid": "aa-empty" }
+      ]
+    },
+    {
+      "persona": "admin",
+      "step": "21",
+      "slug": "backup-gate",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/backup",
+      "do": [
+        { "action": "expect", "testid": "capability-gate" }
+      ],
+      "note": "veleroPresent:false, so the gate renders instead of the backup form."
+    },
+    {
+      "persona": "admin",
+      "step": "22",
+      "slug": "themes-empty",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/themes",
+      "do": [
+        { "action": "expect", "testid": "themes-table" }
+      ]
+    },
+    {
+      "persona": "admin",
+      "step": "23",
+      "slug": "task-wizard",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/tasks",
+      "do": [
+        { "action": "expect", "testid": "task-wizard-view" }
+      ]
+    },
+    {
+      "persona": "admin",
+      "step": "24",
+      "slug": "argocd-gate",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/argocd",
+      "do": [
+        { "action": "expect", "testid": "argocd-view" },
+        { "action": "expect", "testid": "capability-gate" },
+        { "action": "expectHidden", "testid": "argocd-unavailable" }
+      ]
+    },
+    {
+      "persona": "admin",
+      "step": "26",
+      "slug": "domain-capabilities",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/domain-capabilities",
+      "do": [
+        { "action": "expect", "testid": "domain-capabilities-view" },
+        { "action": "expect", "testid": "dc-capability" },
+        { "action": "expectHidden", "testid": "dc-global-panel" },
+        { "action": "expectHidden", "testid": "dc-global-kill" }
+      ],
+      "note": "The superadmin-only cross-domain panel and platform-kill toggle must be absent for an admin."
+    },
+    {
+      "persona": "admin",
+      "step": "28",
+      "slug": "oidc-providers",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/oidc-providers",
+      "do": [
+        { "action": "expect", "testid": "oidc-provider-roles-view" }
+      ],
+      "note": "No submenu entry; reached by URL only."
+    },
+    {
+      "persona": "admin",
+      "step": "29",
+      "slug": "mfa-security",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/security",
+      "do": [
+        { "action": "expect", "testid": "mfa-security-view" }
+      ],
+      "note": "Read-only: nothing is enrolled or challenged."
+    },
+    {
+      "persona": "admin",
+      "step": "31",
+      "slug": "invite-form",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin",
+      "do": [
+        { "action": "fill", "testid": "admin-email", "value": "manual-test@example.com" },
+        { "action": "expect", "testid": "admin-invite" }
+      ],
+      "note": "Form as filled, before the invite."
+    },
+    {
+      "persona": "admin",
+      "step": "32",
+      "slug": "my-fleet",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/my-fleet",
+      "do": [
+        { "action": "expect", "testid": "my-fleet-view" }
+      ]
+    },
+    {
+      "persona": "admin",
+      "step": "38",
+      "slug": "superadmin-denied",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/device-licenses",
+      "do": [
+        { "action": "expect", "testid": "login-view" }
+      ],
+      "note": "NC4: superadminGuard redirects an admin to /login. Shot NN is 34 + the N number."
+    },
+    {
+      "persona": "admin",
+      "step": "45",
+      "slug": "games-denied",
+      "auth": "onboard",
+      "login": "e2e-admin",
+      "route": "/admin/games-services",
+      "do": [
+        { "action": "expect", "testid": "login-view" }
+      ],
+      "note": "NC11: gamesServicesGuard bounces a bare admin to /login."
+    },
+    {
+      "persona": "games-member",
+      "step": "03",
+      "slug": "sign-in",
+      "auth": "anon",
+      "route": "/login",
+      "do": [
+        { "action": "expect", "testid": "login-view" },
+        { "action": "fill", "testid": "login-username", "value": "e2e-gamesonly" },
+        { "action": "fill", "testid": "login-password", "value": "@password" },
+        { "action": "expect", "testid": "login-submit" }
+      ],
+      "note": "Plan step 3. The filled form before submit; login-mfa-code must not be present."
+    },
+    {
+      "persona": "games-member",
+      "step": "06",
+      "slug": "user-home-menubar",
+      "auth": "onboard",
+      "login": "e2e-gamesonly",
+      "route": "/",
+      "do": [
+        { "action": "expect", "testid": "home-services-nav" },
+        { "action": "expect", "testid": "profile-trigger" }
+      ],
+      "note": "Plan step 6. The menubar a games member gets; there is no Games entry (menu.component.ts:259-292). [reconciled 2026-09-16] nav-home -> home-services-nav: the bar is not rendered on /user (cards instead). Plan step 6 text says menubar."
+    },
+    {
+      "persona": "games-member",
+      "step": "07",
+      "slug": "services-cards",
+      "auth": "onboard",
+      "login": "e2e-gamesonly",
+      "route": "/home",
+      "do": [
+        { "action": "expect", "testid": "card-games" },
+        { "action": "expect", "testid": "card-games-admin" },
+        { "action": "expect", "testid": "card-games-admin-help" }
+      ],
+      "note": "Plan step 7. card-games enabled beside card-games-admin at data-state=role."
+    },
+    {
+      "persona": "games-member",
+      "step": "08",
+      "slug": "games-placeholder",
+      "auth": "onboard",
+      "login": "e2e-gamesonly",
+      "route": "/home",
+      "do": [
+        { "action": "click", "testid": "card-games" },
+        { "action": "expect", "testid": "games-todo-badge" },
+        { "action": "expect", "testid": "games-back" }
+      ],
+      "note": "Plan step 8. Reached by clicking the card, the only in-UI route to /games."
+    },
+    {
+      "persona": "games-member",
+      "step": "09",
+      "slug": "games-deep-link",
+      "auth": "onboard",
+      "login": "e2e-gamesonly",
+      "route": "/games",
+      "do": [
+        { "action": "expect", "testid": "games-todo-badge" },
+        { "action": "expect", "testid": "games-placeholder-message" }
+      ],
+      "note": "Plan step 9. A cold document load of /games; gamesGuard admits."
+    },
+    {
+      "persona": "games-member",
+      "step": "12",
+      "slug": "games-admin-403",
+      "auth": "onboard",
+      "login": "e2e-gamesonly",
+      "route": "/games/admin",
+      "do": [
+        { "action": "expectHidden", "testid": "games-admin-todo-badge" }
+      ],
+      "note": "Plan step 12. The gateway 403s the document, so the placeholder must never render. expectHidden is the settle AND the assertion."
+    },
+    {
+      "persona": "games-member",
+      "step": "15",
+      "slug": "character-forge",
+      "auth": "onboard",
+      "login": "e2e-gamesonly",
+      "route": "/character-forge/",
+      "do": [
+        { "action": "expect", "testid": "header-controls" }
+      ],
+      "note": "Plan step 15. Settles on the host shell, so the shot lands whatever the Forge prints — today 'Engine failed to start'."
+    },
+    {
+      "persona": "games-member",
+      "step": "16",
+      "slug": "user-profile",
+      "auth": "onboard",
+      "login": "e2e-gamesonly",
+      "route": "/user/profile",
+      "do": [
+        { "action": "expect", "testid": "profile-view" },
+        { "action": "expect", "testid": "profile-displayName" }
+      ],
+      "note": "Plan step 16. Read-only: nothing is typed and profile-save is never pressed."
+    },
+    {
+      "persona": "games-member",
+      "step": "17",
+      "slug": "matrix-mastodon-cards",
+      "auth": "onboard",
+      "login": "e2e-gamesonly",
+      "route": "/home",
+      "do": [
+        { "action": "expect", "testid": "card-matrix" },
+        { "action": "expect", "testid": "card-mastodon" }
+      ],
+      "note": "Plan step 17. The enabled-but-refused pair; the refusal itself is the curl half."
+    },
+    {
+      "persona": "games-member",
+      "step": "18",
+      "slug": "roles-console",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/roles",
+      "do": [
+        { "action": "expect", "testid": "roles-panel" },
+        { "action": "fill", "testid": "roles-user", "value": "e2e-gamesonly" },
+        { "action": "expect", "testid": "revoke-ROLE_GAMES" }
+      ],
+      "note": "Plan step 18a, read-only. Never clicks Revoke: on a flag-enabled stack that would mutate the shared fixture."
+    },
+    {
+      "persona": "games-member",
+      "step": "19",
+      "slug": "signed-out",
+      "auth": "onboard",
+      "login": "e2e-gamesonly",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "click", "testid": "menu-logout" },
+        { "action": "expect", "testid": "login-view" }
+      ],
+      "note": "Plan step 19. Sign-out returns to the login form. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "curtailed-member",
+      "step": "04",
+      "slug": "anon-login",
+      "auth": "anon",
+      "route": "/login",
+      "do": [
+        { "action": "expect", "testid": "login-username" },
+        { "action": "expect", "testid": "login-appeal-link" }
+      ]
+    },
+    {
+      "persona": "curtailed-member",
+      "step": "05",
+      "slug": "appeal-anon",
+      "auth": "anon",
+      "route": "/login/appeal",
+      "do": [
+        { "action": "expect", "testid": "appeal-view" },
+        { "action": "expect", "testid": "appeal-mailto" },
+        { "action": "expectHidden", "testid": "appeal-form-section" }
+      ]
+    },
+    {
+      "persona": "curtailed-member",
+      "step": "06",
+      "slug": "appeal-reason",
+      "auth": "anon",
+      "route": "/login/appeal?reason=Repeated%20spam%20reports",
+      "do": [
+        { "action": "expect", "testid": "appeal-reason" }
+      ]
+    },
+    {
+      "persona": "curtailed-member",
+      "step": "09",
+      "slug": "operator-consoles",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/delegation",
+      "do": [
+        { "action": "expect", "testid": "delegation-view" },
+        { "action": "expect", "testid": "dg-tabs" },
+        { "action": "expect", "testid": "dg-panel-suspensions" }
+      ]
+    },
+    {
+      "persona": "curtailed-member",
+      "step": "10",
+      "slug": "appeal-filed",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/login/appeal",
+      "do": [
+        { "action": "expect", "testid": "appeal-form-section" },
+        { "action": "fill", "testid": "appeal-reason-input", "value": "MANUAL-TEST appeal from e2e-user" },
+        { "action": "click", "testid": "appeal-submit" },
+        { "action": "expect", "testid": "appeal-submitted" }
+      ]
+    },
+    {
+      "persona": "curtailed-member",
+      "step": "20",
+      "slug": "appeal-inbox",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/account-appeals",
+      "do": [
+        { "action": "expect", "testid": "account-appeals-view" }
+      ]
+    },
+    {
+      "persona": "own-client",
+      "step": "07",
       "slug": "signed-in-home",
       "auth": "onboard",
-      "login": "@superadmin",
-      "route": "/user",
+      "login": "e2e-matrix-external-client",
+      "route": "/home",
+      "do": [
+        { "action": "expect", "testid": "nav-user" },
+        { "action": "expect", "testid": "card-matrix" },
+        { "action": "expect", "testid": "card-mastodon" }
+      ],
+      "note": "S7. Signed in as the Matrix external-client persona; the service tiles are ENABLED, not greyed."
+    },
+    {
+      "persona": "own-client",
+      "step": "09",
+      "slug": "connected-apps-granted",
+      "auth": "onboard",
+      "login": "e2e-matrix-external-client",
+      "route": "/user/connected-apps",
+      "do": [
+        { "action": "expect", "testid": "connected-apps-granted" },
+        { "action": "expect", "testid": "connected-apps-empty" }
+      ],
+      "note": "S9. The GRANTED branch: granted intro present, list empty, and the gated button absent."
+    },
+    {
+      "persona": "own-client",
+      "step": "10",
+      "slug": "matrix-connect-banner",
+      "auth": "onboard",
+      "login": "e2e-matrix-external-client",
+      "route": "/social/matrix",
+      "do": [
+        { "action": "expect", "testid": "client-connect-banner" },
+        { "action": "expect", "testid": "client-connect-reason" }
+      ],
+      "note": "S10. On a core stack the banner is BLOCKED and names the HTTP 500 from /_matrix/client/versions."
+    },
+    {
+      "persona": "own-client",
+      "step": "11",
+      "slug": "wellknown-note",
+      "auth": "onboard",
+      "login": "e2e-matrix-external-client",
+      "route": "/social/matrix",
+      "do": [
+        { "action": "expect", "testid": "client-connect-banner" },
+        { "action": "expect", "testid": "client-connect-needed" }
+      ],
+      "note": "S11. client-connect-wellknown-note renders only in the AVAILABLE form, so on a core stack this shot records its absence."
+    },
+    {
+      "persona": "own-client",
+      "step": "16",
+      "slug": "mastodon-connect-banner",
+      "auth": "onboard",
+      "login": "e2e-mastodon-external-client",
+      "route": "/social/mastodon",
+      "do": [
+        { "action": "expect", "testid": "client-connect-banner" },
+        { "action": "expect", "testid": "client-connect-reason" }
+      ],
+      "note": "S16. The Mastodon half, signed in as the Mastodon external-client persona."
+    },
+    {
+      "persona": "own-client",
+      "step": "20",
+      "slug": "roles-grant",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/roles",
+      "do": [
+        { "action": "expect", "testid": "roles-panel" },
+        { "action": "fill", "testid": "roles-user", "value": "e2e-user" },
+        { "action": "expect", "testid": "grant-ROLE_MATRIX_EXTERNAL_CLIENT" }
+      ],
+      "note": "S20. The only assignment path. Fills the username and stops BEFORE clicking Grant - the shot must not perform the write."
+    },
+    {
+      "persona": "own-client",
+      "step": "21",
+      "slug": "grantee-banner",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/user/connected-apps",
+      "do": [
+        { "action": "expect", "testid": "connected-apps-view" }
+      ],
+      "note": "S21. The grantee's own surface. Before S20 this shows the disabled branch; after S20, the granted branch."
+    },
+    {
+      "persona": "own-client",
+      "step": "22",
+      "slug": "capability-empty-state",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/domain-capabilities",
+      "do": [
+        { "action": "expect", "testid": "domain-capabilities-view" },
+        { "action": "expect", "testid": "dc-capability" },
+        { "action": "expect", "testid": "dc-global-panel" }
+      ],
+      "note": "S22. READ-ONLY. The picker is captured as loaded; changing it is the tester's step, not the harness's."
+    },
+    {
+      "persona": "own-client",
+      "step": "23",
+      "slug": "gate-enabled",
+      "auth": "onboard",
+      "login": "e2e-adminonly",
+      "route": "/admin/domain-capabilities",
+      "do": [
+        { "action": "expect", "testid": "domain-capabilities-view" },
+        { "action": "expect", "testid": "dc-own-domain" }
+      ],
+      "note": "S23. The domain admin's half of the gate. Captures the panel only; every flip in S23 is a WRITE the tester performs."
+    },
+    {
+      "persona": "own-client",
+      "step": "24",
+      "slug": "banner-gone-after-revoke",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/roles",
+      "do": [
+        { "action": "expect", "testid": "roles-panel" },
+        { "action": "fill", "testid": "roles-user", "value": "e2e-user" },
+        { "action": "expect", "testid": "revoke-ROLE_MATRIX_EXTERNAL_CLIENT" }
+      ],
+      "note": "S24. Stops BEFORE clicking Revoke; the revoke itself is the tester's write."
+    },
+    {
+      "persona": "own-client",
+      "step": "25",
+      "slug": "no-banner-access-role-only",
+      "auth": "onboard",
+      "login": "e2e-matrix",
+      "route": "/social/matrix",
+      "do": [
+        { "action": "expect", "testid": "matrix-view" },
+        { "action": "expectHidden", "testid": "client-connect-banner" }
+      ],
+      "note": "N1. ROLE_MATRIX without the external-client role: NO banner may render. [reconciled 2026-09-16] expect matrix-view prepended: the row's only wait was an expectHidden, which resolves on a blank page before the shell has booted, so the shot could land on nothing. matrix-view is the root section of the chat view (matrix-ui matrix-chat.component.html:1) that hosts the banner slot (:6); the plan's Do says to look for the banner in the chat view."
+    },
+    {
+      "persona": "own-client",
+      "step": "26",
+      "slug": "no-banner-superadmin",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/social/matrix",
+      "do": [
+        { "action": "expect", "testid": "matrix-view" },
+        { "action": "expectHidden", "testid": "client-connect-banner" }
+      ],
+      "note": "N2. SUPERADMIN is not a superset of this role: still no banner. [reconciled 2026-09-16] expect matrix-view prepended: the row's only wait was an expectHidden, which resolves on a blank page before the shell has booted, so the shot could land on nothing. matrix-view is the root section of the chat view (matrix-ui matrix-chat.component.html:1) that hosts the banner slot (:6); the plan's Do says to look for the banner in the chat view."
+    },
+    {
+      "persona": "own-client",
+      "step": "27",
+      "slug": "connected-apps-disabled",
+      "auth": "onboard",
+      "login": "e2e-user",
+      "route": "/user/connected-apps",
+      "do": [
+        { "action": "expect", "testid": "connected-apps-disabled" },
+        { "action": "expect", "testid": "connected-apps-gate-help" }
+      ],
+      "note": "N3. A bare ROLE_USER sees the disabled branch and its gate help. Run before S20 or after S24."
+    },
+    {
+      "persona": "own-client",
+      "step": "30",
+      "slug": "admin-console-refused",
+      "auth": "onboard",
+      "login": "e2e-matrix-external-client",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "expect", "testid": "menu-logout" },
+        { "action": "expectHidden", "testid": "menu-admin" },
+        { "action": "expectHidden", "testid": "menu-mod" }
+      ],
+      "note": "N6. The profile menu of an own-client user offers no Admin and no Moderation entry. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side. expect menu-logout added after the click so the row waits on the OPEN menu (menu-logout is show: () => true, header-controls.component.ts:161) instead of on two absences alone."
+    },
+    {
+      "persona": "own-client",
+      "step": "39",
+      "slug": "mastodon-banner-leak",
+      "auth": "onboard",
+      "login": "e2e-matrix-external-client",
+      "route": "/social/mastodon",
+      "do": [
+        { "action": "expect", "testid": "client-connect-banner" },
+        { "action": "expect", "testid": "client-connect-reason" }
+      ],
+      "note": "N15. EXPECTED FINDING: the Mastodon banner renders BLOCKED for a holder of only the Matrix role - the advertisement is not per-platform."
+    },
+    {
+      "persona": "fleet-owner",
+      "step": "04",
+      "slug": "anon-login",
+      "auth": "anon",
+      "route": "/login",
+      "do": [
+        { "action": "expect", "testid": "login-username" },
+        { "action": "expect", "testid": "login-password" },
+        { "action": "expect", "testid": "login-submit" }
+      ],
+      "note": "Anonymous front door before any sign-in. Step 4's four curl probes all answer 401 at the same moment."
+    },
+    {
+      "persona": "fleet-owner",
+      "step": "05",
+      "slug": "signed-in-home",
+      "auth": "onboard",
+      "login": "e2e-fleet",
+      "route": "/",
       "do": [
         { "action": "expect", "testid": "home-services-nav" }
       ],
-      "note": "@superadmin resolves to SUPERADMIN_USERNAME (specs/rbac-roles.ts) — env-driven on a Studio-bootstrapped mesh, 'e2e-superadmin' otherwise."
+      "note": "[reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "fleet-owner",
+      "step": "06",
+      "slug": "account-menu",
+      "auth": "onboard",
+      "login": "e2e-fleet",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "expect", "testid": "menu-profile" },
+        { "action": "expectHidden", "testid": "menu-admin" }
+      ],
+      "note": "The entry-point gap: Profile is present, Admin is absent, so no 'My fleet' child exists for this persona. [reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "fleet-owner",
+      "step": "10",
+      "slug": "mfa-enroll",
+      "auth": "onboard",
+      "login": "e2e-fleet",
+      "route": "/login/mfa/enroll",
+      "do": [
+        { "action": "click", "testid": "mfa-choose-totp" },
+        { "action": "expect", "testid": "mfa-secret" }
+      ],
+      "note": "Stops at the display-once secret. Capture BEFORE Verify and enable; the tester types the code by hand."
+    },
+    {
+      "persona": "fleet-owner",
+      "step": "11",
+      "slug": "mfa-challenge",
+      "auth": "onboard",
+      "login": "e2e-fleet",
+      "route": "/login/mfa/challenge",
+      "do": [
+        { "action": "expect", "testid": "mfa-challenge-view" },
+        { "action": "expect", "testid": "mfa-method-totp" }
+      ]
+    },
+    {
+      "persona": "fleet-owner",
+      "step": "14",
+      "slug": "entitlements-console",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/fleet-entitlements",
+      "do": [
+        { "action": "expect", "testid": "fleet-entitlements-view" },
+        { "action": "expect", "testid": "fe-subject" }
+      ],
+      "note": "Superadmin leg. e2e-fleet gets 403 on this same route (step 8), which is the point."
+    },
+    {
+      "persona": "fleet-owner",
+      "step": "17",
+      "slug": "phone-fleet",
+      "auth": "onboard",
+      "login": "mesh-operator",
+      "route": "/admin/phone-fleet",
+      "do": [
+        { "action": "expect", "testid": "phone-fleet-view" },
+        { "action": "expect", "testid": "pf-empty" }
+      ],
+      "note": "Fixture status: pf-empty is the measured stock-stack state (P7)."
+    },
+    {
+      "persona": "fleet-owner",
+      "step": "20",
+      "slug": "signed-out",
+      "auth": "onboard",
+      "login": "e2e-fleet",
+      "route": "/",
+      "do": [
+        { "action": "click", "testid": "profile-trigger" },
+        { "action": "click", "testid": "menu-logout" },
+        { "action": "expect", "testid": "login-view" }
+      ],
+      "note": "[reconciled 2026-09-16] route /user -> /: a hard GET /user is served by the user-ui gateway route (StripPrefix=1), i.e. the bare remote with no shell chrome; GET / boots the shell, whose roleHomeGuard lands on /user client-side."
+    },
+    {
+      "persona": "fleet-owner",
+      "step": "21",
+      "slug": "security",
+      "auth": "onboard",
+      "login": "e2e-fleet",
+      "route": "/login/security",
+      "do": [
+        { "action": "expect", "testid": "mfa-security-view" }
+      ],
+      "note": "Teardown evidence: mfa-security-empty is the restored stock shape."
     }
   ]
 }
