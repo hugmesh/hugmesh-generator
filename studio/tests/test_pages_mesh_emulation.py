@@ -68,6 +68,8 @@ import dataclasses
 import inspect
 import json
 import os
+import threading
+import time
 
 import pytest
 
@@ -79,6 +81,7 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 
 from hugmesh_studio.core import emulation, emulation_save              # noqa: E402
 from hugmesh_studio.core import mesh_emulation as me                   # noqa: E402
+from hugmesh_studio.core import mesh_monitor as mm                     # noqa: E402
 from hugmesh_studio.core import qemu_devices, qemu_tests               # noqa: E402
 from hugmesh_studio.core.platform_info import HostInfo                 # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                    # noqa: E402
@@ -1617,3 +1620,120 @@ def test_nothing_on_this_page_can_reach_a_modal(wiz):
         if m:
             assert "QMessageBox" not in m.group(0)
             assert ".exec(" not in m.group(0)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# RESIDUE FROM THE ADJUDICATION OF WORKTREE studio/c-336 (#336, #341). Matched against
+# this file by what each test asserts; the three below pin what nothing above pinned,
+# each proven by a production mutation that survived this whole file and is killed
+# here:
+#
+#   X9   _arm_replicas drops the docker gate on + / Apply
+#   X12  this page's _monitor_node raises (a broken node factory)
+#
+# The QEMU page's twin of X12 is already caught there by
+# test_the_monitor_node_is_built_once_and_is_a_plain_local_stack_node; this page had no
+# test that ever called its factory, and MeshMonitorSection's own tests cannot — they
+# build their own.
+# ══════════════════════════════════════════════════════════════════════════════════
+
+def _mon_unit(name="casdoor-1", ns="hugmesh-pki", workload="casdoor"):
+    return mm.MeshUnit(
+        lane="kind", namespace=ns, name=name, owner="rs", phase="Running 1/1",
+        ready=True, reason="", state="ok", door=mm.Door(blocked="no door"),
+        scale=mm.ScaleTarget("deployment", workload, ns, refused=""))
+
+
+def _mon_snapshot(*units):
+    return mm.MonitorSnapshot(
+        taken_at="11:00:00", compose=mm.LaneState(False, "not started"),
+        kind=mm.LaneState(True, "cluster hugmesh-local · 1 pod(s)"),
+        units=tuple(units))
+
+
+def _mon_wait(qapp, pred, seconds=10):
+    deadline = time.time() + seconds
+    while not pred() and time.time() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+    qapp.processEvents()
+    return pred()
+
+
+def test_without_docker_a_start_is_refused_but_a_stop_is_not(wiz, registry):
+    """X9. Stopping never needs a healthy daemon; starting always does — the same gate
+    the Start button is armed from. Asserted on a STOPPED device, deliberately: on a
+    running one the ceiling of 1 already disables +, so the same assertion there
+    passes with the docker gate deleted (measured — that version survived)."""
+    page = _page(wiz)
+    page._docker_paint((False, "docker was not found on PATH."))
+    stopped = _row(page, "x86/backend")
+    assert stopped.replicas.observed == 0
+    assert stopped.replicas.plus.isEnabled() is False, "a start offered with no daemon"
+    stopped.replicas.bump(+1)          # as if the target predated the daemon dying
+    page._sync_controls()
+    assert stopped.replicas.apply.isEnabled() is False
+
+    registry(_device("rpi5/pki"))
+    page._refresh_reality()
+    running = _row(page, "rpi5/pki")
+    running.replicas.minus.click()
+    assert running.replicas.apply.isEnabled() is True, "a stop must stay reachable"
+
+
+def test_expanding_the_monitor_reads_once_off_the_gui_thread_through_this_pages_node(
+        qapp, wiz, monkeypatch):
+    """X12. MeshMonitorSection's own tests pin the off-thread read; what they cannot
+    pin is THIS page's node factory. A factory that raises is folded by ``refresh()``
+    into a "could not read" snapshot — collapsed and greyed forever, with every
+    section-level test green — so the read has to be driven from the page's own
+    toggle, through the page's own factory."""
+    threads = []
+
+    def fake(gen, node, **kw):
+        threads.append(threading.get_ident())
+        return _mon_snapshot(_mon_unit())
+
+    monkeypatch.setattr(mm, "snapshot", fake)
+    page = _page(wiz)
+    assert page.monitor.snapshot is None and threads == [], "mounting read the mesh"
+    page.monitor.section.toggle.setChecked(True)
+    try:
+        assert _mon_wait(qapp, lambda: page.monitor.snapshot is not None)
+    finally:
+        page.monitor.shutdown()
+    assert len(threads) == 1, f"{len(threads)} reads for one expand"
+    assert threads[0] != threading.get_ident(), "the read ran ON the GUI thread"
+    assert page.monitor.monitor.isEnabled() is True
+
+
+def test_a_scale_from_this_page_runs_off_the_gui_thread_behind_the_busy_guard(
+        qapp, wiz, monkeypatch):
+    """X12's other half: the whole path an operator presses on THIS screen — expand,
+    +, Apply — through the page's mount and the page's node, with
+    ``mesh_monitor.scale`` stubbed so nothing shells out."""
+    unit = _mon_unit()
+    monkeypatch.setattr(mm, "snapshot", lambda gen, node, **kw: _mon_snapshot(unit))
+    seen = {}
+
+    def fake_scale(gen, node, u, n, **kw):
+        seen["thread"] = threading.get_ident()
+        seen["ask"] = (u.key, n)
+        return True, f"asked for {n} replica(s)"
+
+    monkeypatch.setattr(mm, "scale", fake_scale)
+    page = _page(wiz)
+    page.monitor.section.toggle.setChecked(True)
+    try:
+        assert _mon_wait(qapp, lambda: page.monitor.snapshot is not None)
+        cell = page.monitor.monitor.scale_cell(unit.key)
+        assert cell is not None, "the running row offered no Replicas control"
+        cell.plus.click()
+        cell.apply.click()
+        assert _mon_wait(qapp, lambda: "ask" in seen
+                         and not page.monitor.monitor._scale_busy)
+    finally:
+        page.monitor.shutdown()
+    assert seen["ask"] == (unit.key, 2)
+    assert seen["thread"] != threading.get_ident(), "the scale ran ON the GUI thread"
+    assert "asked for 2 replica(s)" in page.monitor.monitor.scale_status_text()
