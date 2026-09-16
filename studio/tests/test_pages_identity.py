@@ -281,8 +281,8 @@ def test_untouched_services_build_the_builder_default_set_explicitly(wiz):
 
 def test_rpi5_services_catalog_offers_infra_slugs(wiz):
     """G15: the rpi5 catalog adds the infra slugs (tor/egress-vpn/workloadConsole/
-    anubis) — the ONLY way to bake a Tor-onion rpi5 node; x86 keeps its user-level
-    catalog (it has dedicated --with-tor/--egress-vpn flags instead)."""
+    anubis) — the ONLY way to bake a Tor-onion rpi5 node. x86 offers the same four
+    (issue #265); its dedicated --with-tor still wins for tor on the flag channel."""
     pick_role(wiz, "generic")                 # standalone rpi5
     net = advance_to(wiz, wizard_mod.NetworkPage)
     slugs = _svc_rows(net)
@@ -304,12 +304,16 @@ def test_rpi5_services_catalog_offers_infra_slugs(wiz):
     value = dict(pairs(wiz.cfg.to_cli_args()))["--optional-services"]
     assert "tor" in value.split(), value
     assert set(value.split()) == set(BUILTIN_DEFAULT_SERVICES) | {"tor"}, value
-    # switching back to an x86 role re-derives the offered rows without the infra slugs
+    # switching back to an x86 role re-derives the offered rows. The infra slugs with
+    # no dedicated flag STAY offered (issue #265): x86's builder accepts them as
+    # catalogue slugs too (build-x86-host-stage4.sh:179), so hiding them was the stale
+    # catalogue, not the builder. Until 2026-09-16 this arm pinned their absence.
     back_to(wiz, wizard_mod.RolePage)
     pick_role(wiz, "standalone-thick")
     net = advance_to(wiz, wizard_mod.NetworkPage)
     slugs = _svc_rows(net)
-    assert "anubis" not in slugs and "workloadConsole" not in slugs
+    assert "anubis" in slugs and "workloadConsole" in slugs
+    assert net._channel("anubis") == "slug" and net._channel("workloadConsole") == "slug"
     # x86 standalone hides tor as well — its channel there is the dedicated flag, which is
     # a cloud/mesh cluster service (see initializePage's mode gate on the FLAG channel)
     assert "tor" not in slugs

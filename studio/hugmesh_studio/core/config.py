@@ -491,17 +491,29 @@ OPTIONAL_SERVICES_CHOICES = ("akkoma", "tuwunel", "phpbb", "games", "owncast", "
                              "character-studio", "character-forge")
 
 # INFRA-level slugs the builders honour in --optional-services but which --all-services
-# does NOT include (build-rpi5-stage4.sh usage 573-581). x86 has dedicated flags for
-# tor/egress (--with-tor / --egress-vpn), but rpi5 has none — the ONLY way to bake a
-# Tor-onion / egress-VPN rpi5 node is to list the slug here, so the rpi5 catalog offers
-# them explicitly (G15). frite/jetson/opi5/opz2 do not parse --optional-services at all.
+# does NOT include (build-rpi5-stage4.sh usage :791, build-x86-host-stage4.sh :697).
+# BOTH builders accept all four as catalogue slugs (issue #265, measured 2026-09-16):
+# build-x86-host-stage4.sh:179 SELECTABLE_OPTIONAL_SERVICES lists egress-vpn, tor,
+# workloadConsole and anubis, and every one of their registry rows says
+# `buildGate: [rpi5, x86]` (specs/cluster/optional-services.yaml:721/:800/:845/:964).
+# The gate itself is shared (scripts/_optional-services-lib.sh, sourced by both), so
+# a slug resolves identically from either builder. x86 ALSO has a dedicated --with-tor;
+# the Network page's _service_channel lets the flag win wherever it is parsed, so
+# listing tor here changes nothing tor emits on x86. (x86's --egress-vpn FILE is a
+# DIFFERENT thing — a desktop node's own VPN profile — not the cluster egress-vpn
+# service this slug selects.) frite/jetson/opi5/opz2 parse no --optional-services.
 INFRA_SERVICES_CHOICES = ("tor", "egress-vpn", "workloadConsole", "anubis")
 
 # Which optional-service slugs each builder's --optional-services accepts. Only x86 and
 # rpi5 parse --optional-services/--exclude-services/--enable-games at all — the other
 # four builders bake no cluster tree, so the widgets must be greyed there (G12/G15).
+# The two catalogues are IDENTICAL on purpose: the builders' selectable sets are (see
+# INFRA_SERVICES_CHOICES). Folding the infra slugs into rpi5 alone was correct only
+# while anubis's buildGate was [rpi5]; it has said [rpi5, x86] since 2026-08-26, and
+# the stale x86 catalogue HID the anubis and workloadConsole rows on the platform every
+# mesh flow forces on its shared worklist base (issue #265 / #226 "where's anubis?").
 OPTIONAL_SERVICES_BY_PLATFORM = {
-    "x86": OPTIONAL_SERVICES_CHOICES,
+    "x86": OPTIONAL_SERVICES_CHOICES + INFRA_SERVICES_CHOICES,
     "rpi5": OPTIONAL_SERVICES_CHOICES + INFRA_SERVICES_CHOICES,
 }
 
