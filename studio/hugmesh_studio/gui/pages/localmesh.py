@@ -109,7 +109,7 @@ from ...core.instance import state_dir
 from ...core.stage_tracker import StageTracker
 from ...core import e2e_environments
 from ._credentials_dialog import CredentialsDialog
-from ._mesh_monitor_widget import MeshMonitorWidget
+from ._mesh_monitor_widget import MeshMonitorProbe, MeshMonitorWidget, MeshScaleWorker
 from ._add_user_dialog import AddUserDialog
 from ._saved_meshes_widget import SavedMeshProbe, SavedMeshesWidget
 from ._logintheme import LoginThemeGroup
@@ -305,33 +305,15 @@ class _CredsProbe(QtCore.QThread):
         self.result.emit((roster, truth))
 
 
-class _MonitorProbe(QtCore.QThread):
-    """Read BOTH lanes of the running mesh off the GUI thread, for the monitor table.
-
-    core.mesh_monitor.snapshot() is `kind get clusters` + ONE `kubectl get … -A -o json`
-    round trip + `docker inspect` + `docker compose ps` — each bounded, together up to
-    ~25 s on a wedged daemon — so it gets the _StatusProbe treatment: never inline, held
-    with own_probe, guarded with probe_running.
-
-    Emits the MonitorSnapshot. Never raises: snapshot() already folds every failure into
-    LaneState.error / errors, and an exception escaping run() would leave the table
-    frozen on a stale snapshot with no way to say so."""
-    result = Signal(object)                     # mesh_monitor.MonitorSnapshot
-
-    def __init__(self, generator_dir: str, node, parent=None):
-        super().__init__(parent)
-        self._dir = generator_dir
-        self._node = node
-
-    def run(self):
-        try:
-            self.result.emit(mesh_monitor.snapshot(self._dir, self._node))
-        except Exception as e:                  # never kill the page over a probe
-            self.result.emit(mesh_monitor.MonitorSnapshot(
-                taken_at=time.strftime("%H:%M:%S"),
-                compose=mesh_monitor.LaneState(None, error=str(e)),
-                kind=mesh_monitor.LaneState(None, error=str(e)),
-                errors=(f"the monitor read failed: {type(e).__name__}: {e}",)))
+#: The monitor's off-thread reader. ONE class, defined in ``_mesh_monitor_widget``
+#: (issue #341, second item): this used to be a hand copy of ``MeshMonitorProbe``,
+#: kept because the dedup could only run THIS way — ``_mesh_monitor_widget`` cannot
+#: import from here (this module imports it at load, so that would be circular) — and
+#: #336 forbade its lane from touching this file. ``test_localmesh_monitor.
+#: test_the_two_monitor_probes_have_not_drifted`` pinned the drift until the alias
+#: landed; it now pins the identity. Same treatment as before: never inline, held
+#: with own_probe, guarded with probe_running (see _refresh_monitor).
+_MonitorProbe = MeshMonitorProbe
 
 
 class _MeshWorker(QtCore.QThread):
@@ -1527,7 +1509,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # that. The section TITLE carries the answer while folded. Greyed (disabled,
         # empty) when neither lane runs; enabled and populated when either does —
         # `Collapsible` toggles setVisible only, so fold and grey compose.
-        self.monitor = MeshMonitorWidget(self)
+        # scaling=True is the Replicas column (#333 item 4 / #341): −/+/Apply per pod
+        # or container row, driving `docker compose up -d --scale` or `kubectl scale`
+        # on the CONTROLLER behind the row. The kwarg alone would ship a knob whose
+        # Apply emits into nothing (the widget refuses out loud in that case); the
+        # receiver is _scale_monitor below, off-thread and one at a time, the same
+        # shape MeshMonitorSection gives the two emulation screens.
+        self.monitor = MeshMonitorWidget(self, scaling=True)
         self._monitor_title = "Running mesh — pods, addresses and doors"
         self.monitor_section = collapsible(self._monitor_title, self.monitor,
                                            expanded=False)
@@ -1536,6 +1524,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.monitor.open_requested.connect(self._open_door)
         self.monitor.view_up_requested.connect(self._view_up)
         self.monitor.view_down_requested.connect(self._view_down)
+        self.monitor.scale_requested.connect(self._scale_monitor)
+        #: Which row's scale is in flight ("" when none) — what _on_scale_done forgets.
+        self._scaling_key = ""
         lay.addWidget(self.monitor_section)
         return w
 
@@ -1874,6 +1865,16 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 + (", or press Cancel to stop it."
                    if self.cancel_btn.isVisible() else ".")
             )
+            return
+        if probe_running(self, "_scale_worker"):
+            # The mirror of _scale_monitor's verb guard (issue #341): a verb that
+            # rewrites the compose project or the cluster while a `--scale` / `kubectl
+            # scale` is still running races it for the same container set. Said out
+            # loud for the same reason the guard above is.
+            self.status.setText(
+                "Still running: a Replicas change in the running-mesh table. One "
+                "action at a time on this mesh — wait for its result on that table's "
+                "status line, then press again.")
             return
         self._running = True
         self._running_label = label
@@ -3169,6 +3170,64 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if probe_running(self, "_monitor_probe"):
             return
         self._refresh_monitor("tick")
+
+    def _scale_monitor(self, key: str, replicas: int) -> None:
+        """Apply on a Replicas row: run ONE ``mesh_monitor.scale`` off the GUI thread.
+
+        ``MeshMonitorSection._scale`` for this page (issue #341 — copied, not
+        re-derived, per the issue's own instruction), plus the one rule the Section
+        has no notion of: this page runs mesh VERBS (start / stop / clean / seed),
+        and a ``docker compose up --scale`` racing a ``make stack-up`` against the
+        same project is the same container-set race the widget's busy guard exists
+        to stop. So a scale is refused, out loud, while a verb runs — and
+        ``_launch`` refuses a verb while a scale runs. Neither guard is silent: a
+        pressed button that does nothing is this repo's named failure mode.
+
+        Two guards, two different signals: ``probe_running(self, "_scale_worker")``
+        is the one-at-a-time hold (a second Apply already in Qt's queue when the
+        first latched lands here, so the disabled buttons alone are not enough);
+        ``self._running`` is the verb hold.
+        """
+        if probe_running(self, "_scale_worker"):
+            return
+        if self._running:
+            busy = self._running_label or "a previous step"
+            self.monitor.set_scale_status(
+                f"Not scaled: {busy} is still running. One action at a time on this "
+                f"mesh — wait for it to finish, then press Apply again.")
+            return
+        snap = self._monitor
+        unit = None
+        for u in (snap.units if snap is not None else ()):
+            if u.key == key:
+                unit = u
+                break
+        if unit is None:
+            self.monitor.set_scale_status(
+                "That row is no longer in the last read — press Refresh and try again.")
+            return
+        try:
+            node = self.boot._stack_node()
+        except Exception as e:                  # a bad config, not a crash
+            self.monitor.set_scale_status(f"Cannot scale: {type(e).__name__}: {e}")
+            return
+        self._scaling_key = key
+        self.monitor.set_scale_busy(
+            True, f"Scaling {unit.scale.describe()} to {replicas}…")
+        worker = own_probe(self, "_scale_worker",
+                           MeshScaleWorker(self.generator_dir, node, unit, replicas))
+        worker.done.connect(self._on_scale_done)
+        worker.start()
+
+    def _on_scale_done(self, ok: bool, text: str) -> None:
+        """The scale finished (GUI thread): release the busy guard with its answer on
+        the inline line, and re-read — the count the table shows comes from the ROWS,
+        so it only moves once the lanes are read again."""
+        key, self._scaling_key = self._scaling_key, ""
+        if key:
+            self.monitor.forget_scale_target(key)
+        self.monitor.set_scale_busy(False, text)
+        self._refresh_monitor("post-scale")
 
     def _open_door(self, url: str):
         """A row's Open button. The URL was gated twice already (core + widget); a
