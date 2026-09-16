@@ -2254,9 +2254,11 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 # Its own target and its own .PHONY line, for the same reason the BDD lane has
 # them: the recipes above are edited by other work in flight.
 #
-#   make e2e-ungated                          the 8 tests/scripts/test-e2e-*.sh
-#                                             suites #246 was written about
-#   E2E_UNGATED_SET=all make e2e-ungated      all 22 PREMERGE_UNGATED suites —
+#   make e2e-ungated                          the tests/scripts/test-e2e-*.sh
+#                                             suites #246 was written about (8 of
+#                                             22 when this was written; the runner
+#                                             prints the live count every run)
+#   E2E_UNGATED_SET=all make e2e-ungated      every PREMERGE_UNGATED suite —
 #                                             additionally the stack, kind,
 #                                             casdoor, pentest, eso and liquibase
 #                                             ones, which are ungated for their
@@ -2265,7 +2267,21 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 #                                             (use on a box you believe is fully
 #                                             equipped: it turns "the toolchain
 #                                             vanished" from silence into a red)
+#   E2E_UNGATED_SUITE_TIMEOUT=<sec> ...       kill a suite that outlives this many
+#                                             seconds (exit 124 -> ERROR); unset
+#                                             or 0 = no limit
 #   E2E_UNGATED_LOG_DIR=... make e2e-ungated  put the dated evidence dir elsewhere
+#   SNAP_STUDIO_PYTHON=studio/.venv/bin/python make e2e-ungated
+#                                             NOT the runner's variable, but the
+#                                             one that decides whether the default
+#                                             set can be green on this box: the
+#                                             Studio GUI lane drives its unit tests
+#                                             with SNAP_STUDIO_PYTHON (default
+#                                             python3) and goes RED, not SKIP, when
+#                                             that interpreter lacks pytest.
+#                                             MEASURED 2026-09-16 on the operator's
+#                                             box: 7 of 8 without it, 8 of 8 with
+#                                             it. The default set takes ~21 min.
 #   E2E_UNGATED_DRY_RUN=1 make e2e-ungated    print WHICH suites the selection
 #                                             resolves to and whether a real run
 #                                             would be allowed beside whatever is
@@ -2281,15 +2297,26 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 #
 # THE LIVE STACK. #246's third bullet says the lane must never disturb the
 # operator's live hugmesh-local stack. The runner REFUSES TO START (exit 3) when
-# it sees a hugmesh-local container or kind cluster, tears nothing down in any
-# mode, and under the explicit E2E_UNGATED_ALLOW_LIVE_STACK=1 override censuses
-# that footprint before and after and exits 4 if it moved.
+# it sees a hugmesh-local container or kind cluster, REFUSES (exit 5) when docker
+# or kind is installed but its census command fails (an erroring census is not
+# an empty one, and the override cannot police itself without a before/after),
+# tears nothing down in any mode, and under the explicit
+# E2E_UNGATED_ALLOW_LIVE_STACK=1 override censuses that footprint before and
+# after and exits 4 if it moved. What the suites THEMSELVES start, measured
+# 2026-09-16 (correcting a 2026-09-10 claim that none did): ONE suite in the
+# default set, test-e2e-env-interface-dimensions.sh, runs a throwaway
+# python:3.12-slim http.server container named e2eguard-m7-* and removes only
+# that name; every other verb in the 22 is a read. The runner header carries
+# the inventory, and tests/scripts/test-run-ungated-lane.sh (pre-merge gated)
+# pins every refusal above against mutated copies of the runner.
 #
 # EXIT: 0 all green (skips tolerated unless STRICT), 1 a suite was red or
-# errored, 3 refused beside a live stack, 4 the live footprint changed.
+# errored, 3 refused beside a live stack, 4 the live footprint changed, 5 the
+# footprint could not be censused, 6 VACUOUS — suites were selected and not one
+# passed (every one skipped; a lane that asserted nothing is not green).
 # Evidence: one dated dir per run under tests/.ungated-lane/ (gitignored),
 # never under out/.
 .PHONY: e2e-ungated
 
-e2e-ungated: ## MANUAL ONLY: run the PREMERGE_UNGATED suites (8 e2e by default; E2E_UNGATED_SET=all for 22)
+e2e-ungated: ## MANUAL ONLY: run the PREMERGE_UNGATED suites (test-e2e-* by default, ~21 min; E2E_UNGATED_SET=all for every entry)
 	bash tests/scripts/run-ungated-lane.sh

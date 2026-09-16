@@ -20,17 +20,41 @@
 # re-learning about. If the array cannot be parsed, this script FAILS (exit 1)
 # rather than running a guessed subset.
 #
-#   E2E_UNGATED_SET=e2e   (default)  the 8 tests/scripts/test-e2e-*.sh entries —
+#   E2E_UNGATED_SET=e2e   (default)  the tests/scripts/test-e2e-*.sh entries —
 #                                    the browser/Qt family #246 was written about
+#                                    (8 of 22 when this was written; the runner
+#                                    prints the live count every run)
 #   E2E_UNGATED_DRY_RUN=1            print the selection and whether a real run
 #                                    would be allowed beside whatever is up, then
 #                                    stop. Executes no suite. This is how you
-#                                    verify the wiring without a ten-minute lane.
-#   E2E_UNGATED_SET=all              every PREMERGE_UNGATED entry (22 today),
-#                                    which additionally sweeps in the stack,
-#                                    kind, casdoor, pentest, eso and liquibase
-#                                    suites that are ungated for their OWN
-#                                    reasons and are NOT what #246 asked for
+#                                    verify the wiring without a twenty-minute lane.
+#   E2E_UNGATED_SET=all              every PREMERGE_UNGATED entry, which
+#                                    additionally sweeps in the stack, kind,
+#                                    casdoor, pentest, eso and liquibase suites
+#                                    that are ungated for their OWN reasons and
+#                                    are NOT what #246 asked for
+#   E2E_UNGATED_STRICT=1             a SKIPPED-LOUDLY exit 2 counts as red
+#   E2E_UNGATED_SUITE_TIMEOUT=<sec>  kill a suite that runs longer than this
+#                                    (exit 124 -> ERROR). Unset/0 = no limit.
+#                                    None of the suites carries a timeout of its
+#                                    own, so a hung one otherwise hangs the lane.
+#   E2E_UNGATED_LOG_DIR=<dir>        relocate the dated evidence directory
+#   SNAP_STUDIO_PYTHON=<python>      NOT this runner's variable, but the one that
+#                                    decides whether the default set can be green
+#                                    on this box: test-e2e-studio-gui-lane.sh
+#                                    (:127) drives the Studio unit lane with
+#                                    `${SNAP_STUDIO_PYTHON:-python3}`, and when
+#                                    that interpreter lacks pytest the suite goes
+#                                    RED ("the Studio unit lane could not run") —
+#                                    not SKIP. On a box whose system python3 has
+#                                    no pytest, run
+#                                        SNAP_STUDIO_PYTHON=studio/.venv/bin/python make e2e-ungated
+#                                    The runner passes the environment through
+#                                    untouched and prints the value it ran with.
+#
+# DURATION, measured 2026-09-16 on the operator's box with the toolchain present:
+# the default set takes ~21 minutes (coverage-matrix alone ~9 min). It is not a
+# two-minute smoke.
 #
 # THE LIVE STACK IS NOT TOUCHED. #246's third bullet: the lane must never disturb
 # the operator's live hugmesh-local stack. This script therefore:
@@ -38,23 +62,42 @@
 #     a kind cluster named hugmesh-local, or any docker container whose name
 #     begins with hugmesh-local (the compose project and the kind node both use
 #     that prefix). It says what it found and stops.
+#   * REFUSES TO START (exit 5) when the footprint CANNOT BE DETERMINED — docker
+#     or kind is installed but the census command fails (dead daemon, socket
+#     permission denied, broken kubeconfig). A census that errors is NOT an
+#     empty census: before 2026-09-16 the two were indistinguishable and the lane
+#     proceeded on a dead daemon. A box with neither tool installed has no
+#     footprint, which IS an empty census and proceeds.
 #   * never runs `stack-down`, `stack-halt`, `kind delete`, `docker stop/rm` or
 #     any other teardown, in any mode, for any reason. It only ever invokes the
 #     suites named in the array.
 #   * when a human overrides the refusal with E2E_UNGATED_ALLOW_LIVE_STACK=1,
-#     takes a census of that footprint BEFORE and AFTER the run and goes red if
-#     it changed. The override is trusted to be deliberate; it is not trusted to
-#     be harmless.
+#     takes a census of that footprint BEFORE and AFTER the run and goes red
+#     (exit 4) if it changed, or (exit 5) if the after-census cannot be taken.
+#     The override is trusted to be deliberate; it is not trusted to be
+#     harmless. It cannot override exit 5: with no census it cannot police
+#     itself.
 #
-# MEASURED 2026-09-10 on this tree, and it is why the override exists: none of
-# the 22 brings a stack up. Comment-stripped, the only docker/kubectl verbs in
-# the whole set are reads — `docker ps` (test-e2e-env-interface-dimensions.sh),
-# `docker compose config` (tests/stack/test-web-locales-wiring.sh), `kubectl`
-# against whatever cluster is current (test-kind-metrics-api.sh,
-# test-selected-services-only.sh) — plus one throwaway node fixture on its own
-# port (tests/pentest/nuclei/test-templates.sh). The refusal is a floor, not a
-# diagnosis: it is here so that a future suite which DOES start something cannot
-# arrive quietly.
+# WHAT THE SUITES THEMSELVES START — MEASURED 2026-09-16, comment-stripped, over
+# all 22 PREMERGE_UNGATED entries (this paragraph replaces one written on
+# 2026-09-10 that said "none of the 22 brings a stack up", which was FALSE on the
+# tree it was written against; a skeptic pass caught it):
+#   * ONE suite in the DEFAULT set starts a container:
+#     tests/scripts/test-e2e-env-interface-dimensions.sh's M7 control
+#     (m7_standin_start, :1006) runs
+#         docker run -d --name e2eguard-m7-<pid>-control-plane -p 127.0.0.1::80 python:3.12-slim
+#     as a loopback http.server stand-in and removes ONLY that naming shape
+#     (`^e2eguard-m7-[0-9]+-control-plane$`, :999/:1003-1005). It is
+#     self-contained, cannot reach a hugmesh-local container, and the census
+#     above does not count it (wrong prefix) — a real run on 2026-09-16 saw it
+#     start and remove itself with the footprint unchanged.
+#   * everything else is a READ: `docker ps` (the same suite), `docker compose
+#     config` (tests/stack/test-web-locales-wiring.sh), `kubectl` against
+#     whatever context is current (test-kind-metrics-api.sh,
+#     test-selected-services-only.sh — SET=all only), plus one throwaway node
+#     fixture on its own loopback port (tests/pentest/nuclei/test-templates.sh).
+# The refusal is a floor, not a diagnosis: it is here so that a future suite
+# which DOES start something with the live prefix cannot arrive quietly.
 #
 # EXIT CODES, per suite and overall. The suites already distinguish these and
 # the distinction is the whole point of a routine run — a lane that cannot tell
@@ -63,14 +106,29 @@
 #   1  FAIL   the suite ran and was red            -> lane exits 1
 #   2  SKIP   SKIPPED-LOUDLY, prerequisite missing -> lane exits 0 unless
 #             E2E_UNGATED_STRICT=1, which makes any SKIP red
-#   *  ERROR  anything else (crash, 126/127)       -> lane exits 1
-# The lane's own refusals: 3 = live hugmesh-local footprint detected,
-# 4 = the footprint changed under an override.
+#   *  ERROR  anything else (crash, 124 timeout, 126/127) -> lane exits 1
+# The lane's own verdicts:
+#   3  refused: live hugmesh-local footprint detected
+#   4  the footprint changed under an override
+#   5  refused: the footprint could not be determined (census tool failed)
+#   6  VACUOUS: suites were selected and NOT ONE passed (every one skipped). A
+#      lane that asserted nothing is not green, STRICT or not — on a checkout
+#      without tests/e2e/node_modules this is what `make e2e-ungated` prints,
+#      and before 2026-09-16 it exited 0.
 #
 # EVIDENCE. One dated directory per run under tests/.ungated-lane/ (gitignored
 # run-state of one machine, never shared — the tests/stack/.run/ precedent), NOT
 # under out/, which is the generator's product tree. Each suite gets its own
-# .log; run.log carries the verdict table. E2E_UNGATED_LOG_DIR relocates it.
+# .log named after its full path (tests_scripts_test-e2e-cli-lane.log), so two
+# suites with the same basename in different directories cannot share one;
+# run.log carries the verdict table. E2E_UNGATED_LOG_DIR relocates it.
+#
+# PINNED BY tests/scripts/test-run-ungated-lane.sh (pre-merge gated): a stub
+# battery that runs THIS file against a synthetic tree and PATH-shadowed
+# docker/kind, and re-runs it against mutated copies of this file (refusal
+# deleted, census fail-open restored, vacuity floor removed, paren anchor
+# loosened) to prove each protection is load-bearing. Change a behaviour here
+# and that suite is where it goes red.
 #
 # This file is a RUNNER, not a suite: it is named run-*.sh so the test-*.sh /
 # *_test.sh census in test-guard-integrity.sh does not count it as a suite and
@@ -86,6 +144,7 @@ SET_NAME="${E2E_UNGATED_SET:-e2e}"
 STRICT="${E2E_UNGATED_STRICT:-0}"
 ALLOW_LIVE="${E2E_UNGATED_ALLOW_LIVE_STACK:-0}"
 LIVE_PREFIX="${E2E_UNGATED_LIVE_PREFIX:-hugmesh-local}"
+SUITE_TIMEOUT="${E2E_UNGATED_SUITE_TIMEOUT:-0}"
 
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 LOG_ROOT="${E2E_UNGATED_LOG_DIR:-${REPO}/tests/.ungated-lane}"
@@ -112,31 +171,54 @@ die() {
 
 # ── the live hugmesh-local footprint ─────────────────────────────────────────
 # READ ONLY. `docker ps` and `kind get clusters` observe; neither changes
-# anything. Both are optional: a box without docker or without kind simply has no
-# footprint, which is not an error.
+# anything. Both tools are optional: a box WITHOUT docker or WITHOUT kind simply
+# has no footprint, which is not an error. A box WITH the tool whose census
+# command FAILS is a different thing: the footprint is then unknown, and unknown
+# is not "none". Such a failure is reported as a line beginning CENSUS-ERROR so
+# the caller can refuse (exit 5) instead of reading it as an empty census.
 live_footprint() {
   local names
+  local errs
+  local out
+  local errf
   names=""
+  errs=""
+  errf="$(mktemp -t ungated-census.XXXXXX)"
   if command -v docker >/dev/null 2>&1; then
-    names="$(docker ps --format '{{.Names}}' 2>/dev/null \
-             | grep -a "^${LIVE_PREFIX}" || true)"
+    if out="$(docker ps --format '{{.Names}}' 2>"${errf}")"; then
+      names="$(printf '%s\n' "${out}" | grep -a "^${LIVE_PREFIX}" || true)"
+    else
+      errs="${errs}CENSUS-ERROR docker ps failed: $(head -n 1 "${errf}" | cut -c1-160)"$'\n'
+    fi
   fi
   if command -v kind >/dev/null 2>&1; then
-    local clusters
-    clusters="$(kind get clusters 2>/dev/null | grep -ax "${LIVE_PREFIX}" || true)"
-    [ -n "${clusters}" ] && names="${names}"$'\n'"kind-cluster:${LIVE_PREFIX}"
+    if out="$(kind get clusters 2>"${errf}")"; then
+      if printf '%s\n' "${out}" | grep -ax "${LIVE_PREFIX}" >/dev/null; then
+        names="${names}"$'\n'"kind-cluster:${LIVE_PREFIX}"
+      fi
+    else
+      errs="${errs}CENSUS-ERROR kind get clusters failed: $(head -n 1 "${errf}" | cut -c1-160)"$'\n'
+    fi
   fi
+  rm -f "${errf}"
   printf '%s\n' "${names}" | grep -a . | sort || true
+  printf '%s' "${errs}"
 }
+
+# Split a live_footprint() result into its two halves.
+census_errors() { printf '%s\n' "$1" | grep -a  '^CENSUS-ERROR ' || true; }
+census_names()  { printf '%s\n' "$1" | grep -av '^CENSUS-ERROR ' | grep -a . || true; }
 
 # ── the suite list, derived from PREMERGE_UNGATED ────────────────────────────
 # Comments inside the array carry the per-suite exemption reasons, so they are
 # stripped here; blank lines go with them. `grep -a` throughout: a single NUL
 # byte makes GNU grep skip a whole file and exit 1, which is indistinguishable
-# from an honest miss, and this list is load-bearing.
+# from an honest miss, and this list is load-bearing. The closing paren is
+# matched with optional leading whitespace: anchored on column 0 only, an
+# indented `)` let the parser run on into the NEXT array (measured 2026-09-16).
 [ -r "${GUARD}" ] || die 1 "cannot read ${GUARD} — the PREMERGE_UNGATED list has no source"
 
-ALL_UNGATED="$(awk '/^PREMERGE_UNGATED=\(/{f=1;next} /^\)/{f=0} f' "${GUARD}" \
+ALL_UNGATED="$(awk '/^PREMERGE_UNGATED=\(/{f=1;next} /^[[:space:]]*\)[[:space:]]*$/{f=0} f' "${GUARD}" \
                | sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
                | grep -a . || true)"
 
@@ -147,7 +229,7 @@ fi
 case "${SET_NAME}" in
   e2e) SUITES="$(printf '%s\n' "${ALL_UNGATED}" | grep -a '/test-e2e-' || true)" ;;
   all) SUITES="${ALL_UNGATED}" ;;
-  *)   die 1 "E2E_UNGATED_SET must be 'e2e' (default, the 8 browser/Qt suites) or 'all'; got '${SET_NAME}'" ;;
+  *)   die 1 "E2E_UNGATED_SET must be 'e2e' (default, the test-e2e-* browser/Qt suites) or 'all'; got '${SET_NAME}'" ;;
 esac
 
 if [ -z "${SUITES}" ]; then
@@ -157,8 +239,17 @@ fi
 TOTAL="$(printf '%s\n' "${SUITES}" | grep -ac . || true)"
 UNGATED_TOTAL="$(printf '%s\n' "${ALL_UNGATED}" | grep -ac . || true)"
 
+case "${SUITE_TIMEOUT}" in
+  ''|*[!0-9]*) die 1 "E2E_UNGATED_SUITE_TIMEOUT must be a whole number of seconds; got '${SUITE_TIMEOUT}'" ;;
+esac
+if [ "${SUITE_TIMEOUT}" != "0" ] && ! command -v timeout >/dev/null 2>&1; then
+  die 1 "E2E_UNGATED_SUITE_TIMEOUT=${SUITE_TIMEOUT} but no 'timeout' binary is on PATH"
+fi
+
 # ── refuse before doing anything ─────────────────────────────────────────────
-FOOTPRINT_BEFORE="$(live_footprint)"
+CENSUS_BEFORE="$(live_footprint)"
+CENSUS_ERR="$(census_errors "${CENSUS_BEFORE}")"
+FOOTPRINT_BEFORE="$(census_names "${CENSUS_BEFORE}")"
 
 # E2E_UNGATED_DRY_RUN=1 answers "what would this run, and would it be allowed to?"
 # and then stops. It executes NO suite, starts nothing and touches nothing, which
@@ -171,7 +262,10 @@ if [ "${E2E_UNGATED_DRY_RUN:-0}" = "1" ]; then
   printf '%s\n' "   source: ${GUARD} (PREMERGE_UNGATED)"
   printf '%s\n' "   suites:"
   printf '%s\n' "${SUITES}" | sed 's/^/     /'
-  if [ -z "${FOOTPRINT_BEFORE}" ]; then
+  if [ -n "${CENSUS_ERR}" ]; then
+    printf '%s\n' "   live '${LIVE_PREFIX}' footprint: UNDETERMINABLE — a real run would REFUSE (exit 5)"
+    printf '%s\n' "${CENSUS_ERR}" | sed 's/^/     /'
+  elif [ -z "${FOOTPRINT_BEFORE}" ]; then
     printf '%s\n' "   live '${LIVE_PREFIX}' footprint: none — a real run would proceed"
   elif [ "${ALLOW_LIVE}" = "1" ]; then
     printf '%s\n' "   live '${LIVE_PREFIX}' footprint: PRESENT, override set — a real run would proceed and census it"
@@ -183,26 +277,41 @@ if [ "${E2E_UNGATED_DRY_RUN:-0}" = "1" ]; then
   exit 0
 fi
 
+if [ -n "${CENSUS_ERR}" ]; then
+  printf '%s\n' "REFUSED: the live '${LIVE_PREFIX}' footprint on this box could not be determined:"
+  printf '%s\n' "${CENSUS_ERR}" | sed 's/^/  /'
+  printf '%s\n' "  A census that errors is not an empty census. Nothing was started and nothing"
+  printf '%s\n' "  was stopped. E2E_UNGATED_ALLOW_LIVE_STACK=1 does not apply here: the override"
+  printf '%s\n' "  polices itself by comparing a before and an after census, and there is none."
+  printf '%s\n' "  Fix the tool (or uninstall it, if this box really has no docker/kind) and re-run."
+  exit 5
+fi
+
 if [ -n "${FOOTPRINT_BEFORE}" ] && [ "${ALLOW_LIVE}" != "1" ]; then
   printf '%s\n' "REFUSED: a live '${LIVE_PREFIX}' footprint is up on this box:"
   printf '  %s\n' ${FOOTPRINT_BEFORE}
   printf '%s\n' "  This lane will not run beside it. Nothing was started and nothing was stopped."
-  printf '%s\n' "  Bring it down yourself if you want the lane, or — having read the header's"
-  printf '%s\n' "  measurement that no ungated suite starts a stack — re-run with:"
+  printf '%s\n' "  Bring it down yourself if you want the lane. If you would rather run beside it,"
+  printf '%s\n' "  read the header of tests/scripts/run-ungated-lane.sh first: one suite in the"
+  printf '%s\n' "  default set starts its own throwaway container (a python:3.12-slim http.server"
+  printf '%s\n' "  named e2eguard-m7-*, which it removes), the rest only read, and the lane"
+  printf '%s\n' "  itself never tears anything down. Then, if that is acceptable to you:"
   printf '%s\n' "      E2E_UNGATED_ALLOW_LIVE_STACK=1 make e2e-ungated"
-  printf '%s\n' "  which keeps every other protection and additionally fails the run if the"
-  printf '%s\n' "  footprint above changes while the lane is running."
+  printf '%s\n' "  which keeps every other protection and additionally fails the run (exit 4) if"
+  printf '%s\n' "  the footprint above changes while the lane is running."
   exit 3
 fi
 
-mkdir -p "${RUN_DIR}"
-: >"${RUN_LOG}"
+mkdir -p "${RUN_DIR}" || die 1 "cannot create the evidence directory ${RUN_DIR} — nothing was run"
+: >"${RUN_LOG}" || die 1 "cannot write ${RUN_LOG} — nothing was run"
 
 say "== ungated lane ${RUN_ID} =="
 say "   set          : ${SET_NAME} (${TOTAL} of ${UNGATED_TOTAL} PREMERGE_UNGATED suites)"
 say "   repo         : ${REPO}"
 say "   evidence     : ${RUN_DIR}"
 say "   strict-skips : ${STRICT}"
+say "   suite-timeout: ${SUITE_TIMEOUT}s (0 = none)"
+say "   studio python: ${SNAP_STUDIO_PYTHON:-python3 (SNAP_STUDIO_PYTHON unset; the Studio GUI lane goes RED, not SKIP, if it lacks pytest)}"
 if [ -n "${FOOTPRINT_BEFORE}" ]; then
   say "   live stack   : OVERRIDDEN — proceeding beside $(printf '%s' "${FOOTPRINT_BEFORE}" | tr '\n' ' ')"
 else
@@ -218,7 +327,9 @@ VERDICTS=""
 
 for rel in ${SUITES}; do
   abs="${REPO}/${rel}"
-  base="$(basename "${rel}" .sh)"
+  # log name from the FULL path, so tests/a/test-x.sh and tests/b/test-x.sh
+  # cannot share one file
+  base="$(printf '%s' "${rel%.sh}" | tr '/' '_')"
   slog="${RUN_DIR}/${base}.log"
   if [ ! -f "${abs}" ]; then
     say "ERROR  ${rel}  (no such file — PREMERGE_UNGATED names a suite that is gone)"
@@ -232,12 +343,18 @@ for rel in ${SUITES}; do
   # — the whole point of a routine run is to learn about all of them at once.
   # (This script sets -u only, never -e, precisely so a red suite is data.)
   rc=0
-  ( cd "${REPO}" && bash "${abs}" ) >"${slog}" 2>&1 || rc=$?
+  if [ "${SUITE_TIMEOUT}" != "0" ]; then
+    ( cd "${REPO}" && timeout --foreground "${SUITE_TIMEOUT}" bash "${abs}" ) >"${slog}" 2>&1 </dev/null || rc=$?
+  else
+    ( cd "${REPO}" && bash "${abs}" ) >"${slog}" 2>&1 </dev/null || rc=$?
+  fi
   case "${rc}" in
     0) say "PASS   ${rel}"                    ; VERDICTS="${VERDICTS}PASS   ${rel}"$'\n'   ; PASS=$((PASS + 1)) ;;
     1) say "FAIL   ${rel}   -> ${slog}"       ; VERDICTS="${VERDICTS}FAIL   ${rel}"$'\n'   ; FAIL=$((FAIL + 1)) ;;
     2) say "SKIP   ${rel}   (SKIPPED-LOUDLY; prerequisite missing) -> ${slog}"
        VERDICTS="${VERDICTS}SKIP   ${rel}"$'\n'                                            ; SKIP=$((SKIP + 1)) ;;
+    124) say "ERROR  ${rel}   (exit 124: killed at the ${SUITE_TIMEOUT}s suite timeout) -> ${slog}"
+       VERDICTS="${VERDICTS}ERROR  ${rel} (timeout)"$'\n'                                  ; ERR=$((ERR + 1)) ;;
     *) say "ERROR  ${rel}   (exit ${rc}) -> ${slog}"
        VERDICTS="${VERDICTS}ERROR  ${rel} (exit ${rc})"$'\n'                               ; ERR=$((ERR + 1)) ;;
   esac
@@ -248,7 +365,9 @@ for rel in ${SUITES}; do
   fi
 done
 
-FOOTPRINT_AFTER="$(live_footprint)"
+CENSUS_AFTER="$(live_footprint)"
+CENSUS_ERR_AFTER="$(census_errors "${CENSUS_AFTER}")"
+FOOTPRINT_AFTER="$(census_names "${CENSUS_AFTER}")"
 
 say ""
 say "== verdicts =="
@@ -256,6 +375,16 @@ printf '%s' "${VERDICTS}" | sed 's/^/  /' | tee -a "${RUN_LOG}"
 say ""
 say "== RESULT: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped, ${ERR} errored (of ${TOTAL}) =="
 say "   evidence: ${RUN_DIR}"
+
+if [ -n "${CENSUS_ERR_AFTER}" ]; then
+  say ""
+  say "LANE UNVERIFIABLE: the '${LIVE_PREFIX}' footprint could not be re-censused after the run:"
+  printf '%s\n' "${CENSUS_ERR_AFTER}" | sed 's/^/   /' | tee -a "${RUN_LOG}"
+  say "   The before-census was: $(printf '%s' "${FOOTPRINT_BEFORE:-<empty>}" | tr '\n' ' ')"
+  say "   Whether the lane touched the live stack cannot be shown either way; treat the"
+  say "   run as unproven and fix the census tool before the next one."
+  exit 5
+fi
 
 if [ "${FOOTPRINT_BEFORE}" != "${FOOTPRINT_AFTER}" ]; then
   say ""
@@ -272,5 +401,13 @@ fi
 if [ "${SKIP}" -gt 0 ] && [ "${STRICT}" = "1" ]; then
   say "E2E_UNGATED_STRICT=1 and ${SKIP} suite(s) skipped — reporting red."
   exit 1
+fi
+if [ "${PASS}" -eq 0 ]; then
+  say ""
+  say "VACUOUS: ${TOTAL} suite(s) were selected and NOT ONE passed — every one skipped."
+  say "   This lane asserted nothing, so it is not green. The usual cause is a checkout"
+  say "   without tests/e2e/node_modules, chromium or Qt6; each skipped log above names"
+  say "   the missing prerequisite."
+  exit 6
 fi
 exit 0
