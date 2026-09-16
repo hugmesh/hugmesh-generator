@@ -401,7 +401,14 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # grep and busybox sed — and printed 8 passed / 0 failed rc=0, with its negative
 # controls re-verified there rather than only on the GNU host, because busybox
 # is exactly where a negative guard fails open.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-161}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-162}"
+
+# 161 -> 162 on 2026-09-16: tests/scripts/test-x86-fetchcommand-bound.sh joined the
+# gate with the curl FETCHCOMMAND/RESUMECOMMAND rate floor in
+# specs-x86/portage/make.conf.tmpl (hugmesh-generator#322). MEASURED, not assumed:
+# with the suite named in shell-suites.yml's alpine job this file printed
+#     162 of 184 suites are named by a pull_request-triggered workflow
+# and '161 of 183' without it; the ungated SET pin is unchanged at 22.
 
 # 160 -> 161 on 2026-09-10: tests/scripts/test-kind-doctor.sh joined the gate
 # with scripts/kind-doctor.sh (hugmesh-generator#349). MEASURED, not assumed:

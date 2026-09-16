@@ -1842,6 +1842,28 @@ lint:publish-images:
   script:
     - bash tests/scripts/test-publish-images.sh
 
+# x86 distfile fetch BOUND (issue #322): specs-x86/portage/make.conf.tmpl's
+# FETCHCOMMAND/RESUMECOMMAND are curl with a --speed-limit/--speed-time rate floor,
+# because portage's default `wget -T 60` is a READ timeout that a trickling
+# transfer never trips (a 1.02 GB GitHub archive blocked the standalone-thick
+# payload for over an hour at 0 bytes/22 min). EXECUTED: the suite renders the
+# template as the builder does, parses it as portage does, and runs both commands
+# against local trickling / silent / 404 / Range-ignoring / Range-capable servers.
+# curl + python3 (fixture servers) + GNU coreutils/diffutils (timeout, cmp).
+lint:x86-fetch-bound:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache coreutils diffutils curl python3
+  script:
+    - bash tests/scripts/test-x86-fetchcommand-bound.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - changes:
+        - specs-x86/portage/make.conf.tmpl
+        - tests/scripts/test-x86-fetchcommand-bound.sh
+
 # ARM cross-dracut helper (scripts/_dracut-cross-lib.sh): the --encrypt-root
 # qemu-aarch64 binfmt registration + the availability predicate the fail-fast
 # preflight evaluates. Proves preflight_ok is FALSE when qemu-aarch64 is

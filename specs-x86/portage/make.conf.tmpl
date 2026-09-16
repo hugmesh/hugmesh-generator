@@ -38,6 +38,38 @@ FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandb
 # roles in one shared sysroot so role 2-4 reuse role 1's binpkgs (--usepkg).
 PKGDIR="/var/cache/binpkgs"
 DISTDIR="/var/cache/distfiles"
+# ── Distfile fetch BOUND (issue #322) ────────────────────────────────────────
+# Portage's default fetcher is `wget -t 3 -T 60`. -T is a READ timeout: it fires
+# only when NO byte arrives for 60 s. A transfer that stalls but still trickles
+# never trips it. Measured 2026-09-08 on the standalone-thick payload:
+# media-fonts/noto's 1.02 GB GitHub archive stopped at 10.3 % and moved 0 bytes in
+# 22 minutes while the fetcher sat at 0.5 % CPU, and the whole payload blocked for
+# over an hour behind it — no gate, no WARN, a log that stopped mid-line. wget has
+# no minimum-rate option at all (re-measured on the build host on 2026-09-16:
+# `wget -T 10 --read-timeout=10` against a 1-byte-per-2-s trickle ran until it was
+# killed from outside). curl has one: --speed-limit B --speed-time S aborts when
+# the transfer averages under B bytes/s for S seconds, measured to fire in exactly
+# S seconds against the same trickle. So the x86 fetch is curl, bounded to
+# >= 10 KiB/s over any 60 s window, with curl's own retries (every attempt bounded
+# the same way) before portage moves to the next mirror: worst case ~5 minutes per
+# URI, not an hour. curl ships in the stage3 seed (verified in the 20260830
+# hardened tarball), so this holds from the first chroot emerge, and the build
+# never depcleans it out, so it holds on the device too.
+#
+# RESUMECOMMAND cannot be a plain `curl -C -`: GitHub's archive endpoint answers a
+# Range request with 200 (no Content-Range), and curl then exits 33 "server does
+# not seem to support byte ranges" WITHOUT downloading — the partial would never
+# complete. The wrapper resumes when the server can, and on exit 33 falls back to a
+# fresh bounded fetch of the whole file (the only thing that works against such a
+# host; wget -c did the same, silently). Escaping follows make.globals'
+# FETCHCOMMAND_SSH: \" and \$ survive portage's make.conf parse as " and $ for the
+# outer command; \\\" and \\\$ survive BOTH the parse and the fetch-time expansion
+# as literal quotes and dollars inside the bash -c script. EXECUTED, not read:
+# tests/scripts/test-x86-fetchcommand-bound.sh renders this file the way the
+# builder does and runs both commands against local healthy / trickling / silent /
+# 404 / Range-ignoring / Range-capable servers.
+FETCHCOMMAND="curl -f -L -g -sS --connect-timeout 30 --speed-limit 10240 --speed-time 60 --retry 3 --retry-delay 15 --max-redirs 5 -A \"Portage (Gentoo, https://www.gentoo.org) distfile-fetch\" -o \"\${DISTDIR}/\${FILE}\" \"\${URI}\""
+RESUMECOMMAND="bash -c \"curl -f -L -g -sS --connect-timeout 30 --speed-limit 10240 --speed-time 60 --retry 3 --retry-delay 15 --max-redirs 5 -A \\\"Portage (Gentoo, https://www.gentoo.org) distfile-fetch\\\" -C - -o \\\"\\\$1\\\" \\\"\\\$2\\\"; rc=\\\$?; [ \\\"\\\$rc\\\" -eq 33 ] || exit \\\"\\\$rc\\\"; exec curl -f -L -g -sS --connect-timeout 30 --speed-limit 10240 --speed-time 60 --retry 3 --retry-delay 15 --max-redirs 5 -A \\\"Portage (Gentoo, https://www.gentoo.org) distfile-fetch\\\" -o \\\"\\\$1\\\" \\\"\\\$2\\\"\" hugmesh-resume \"\${DISTDIR}/\${FILE}\" \"\${URI}\""
 # Persist per-package build logs (default temp build.log is wiped on clean, so a
 # compile failure's cause is lost). Keeps every package's log under this dir for
 # post-mortem of OOM/compile failures. Excluded from artifacts (it's under /var/log
