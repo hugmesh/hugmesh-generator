@@ -498,10 +498,17 @@ def test_regrouping_a_row_cannot_change_what_it_emits(wiz):
     # builder, so a group-sensitive break would surface here first.
     assert network_mod._service_channel("tor", "x86", x86_cat) == "flag"
     assert network_mod._service_channel("tor", "rpi5", rpi5_cat) == "slug"
-    # anubis has no dedicated flag on either builder: rpi5 reaches it as a catalogue
-    # slug, x86 not at all (INFRA_SERVICES_CHOICES is folded into rpi5's catalog only).
+    # anubis has no dedicated flag on either builder: BOTH reach it as a catalogue slug
+    # (issue #265 — build-x86-host-stage4.sh:179 lists it in SELECTABLE_OPTIONAL_SERVICES
+    # and optional-services.yaml:964 says buildGate: [rpi5, x86]). This line pinned the
+    # x86 ABSENCE until 2026-09-16, which is exactly how a stale catalogue hid the row.
     assert network_mod._service_channel("anubis", "rpi5", rpi5_cat) == "slug"
-    assert network_mod._service_channel("anubis", "x86", x86_cat) == ""
+    assert network_mod._service_channel("anubis", "x86", x86_cat) == "slug"
+    # ...and the other two infra slugs with no dedicated flag ride the same channel on
+    # x86 (SELECTABLE_OPTIONAL_SERVICES :179; buildGate :721 egress-vpn, :845
+    # workloadConsole). tor keeps its x86 flag above: the catalogue never outranks it.
+    assert network_mod._service_channel("workloadConsole", "x86", x86_cat) == "slug"
+    assert network_mod._service_channel("egress-vpn", "x86", x86_cat) == "slug"
     # ...and end to end: the moved row still drives its x86 dedicated flag onto the argv.
     mesh(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
@@ -665,29 +672,46 @@ def test_the_whole_set_preset_locks_the_rows_it_decides_and_leaves_the_rest_live
     mesh(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
     net.services_preset.setCurrentIndex(_PRESET_ALL)
-    decided, left_alone = [], []
+    decided, discarded, left_alone = [], [], []
     for slug, box in net.service_boxes.items():
         if net._svc_items[slug].isHidden():
             continue
-        (decided if slug in USER_LEVEL_SERVICES else left_alone).append(slug)
         if slug in USER_LEVEL_SERVICES:
+            decided.append(slug)
             assert box.isChecked() and not box.isEnabled(), (
                 f"{slug} is expanded into OPTIONAL_SERVICES by --all-services but its row "
                 f"is checked={box.isChecked()} enabled={box.isEnabled()}")
+        elif net._channel(slug) == "slug":
+            # An infra row on the SLUG channel (issue #265 put anubis / workloadConsole /
+            # egress-vpn on x86's screen; rpi5 always had them): --all-services REPLACES
+            # the slug list wholesale with USER_LEVEL_SERVICES, so a tick here would be
+            # discarded by the sentinel and the service NOT built — _preset_takes_over's
+            # own rpi5-anubis example. Honest widget state is therefore unticked AND
+            # locked, never "live" (live would promise a build the argv cannot carry).
+            discarded.append(slug)
+            assert not box.isChecked() and not box.isEnabled(), (
+                f"{slug} rides the slug channel, which --all-services replaces, but its "
+                f"row is checked={box.isChecked()} enabled={box.isEnabled()}")
         else:
+            left_alone.append(slug)
             assert box.isEnabled(), (
                 f"{slug} is NOT in the 'all' expansion — the preset must leave it live")
-    assert len(decided) >= 6 and left_alone, (
-        f"decided={decided} left_alone={left_alone} — this test needs both kinds of row "
-        "on screen to be about anything")
+    assert len(decided) >= 6 and left_alone and discarded, (
+        f"decided={decided} discarded={discarded} left_alone={left_alone} — this test "
+        "needs all three kinds of row on screen to be about anything")
+    assert "tor" in left_alone                       # x86's --with-tor: a real choice
+    assert set(discarded) == {"egress-vpn", "workloadConsole", "anubis"}, discarded
     # …and no --no-<x> for a service the preset bakes: the builder has no false arm for
-    # those flags, so emitting one would be a claim the build cannot honour.
+    # those flags, so emitting one would be a claim the build cannot honour. Nor any
+    # infra slug: the sentinel is the whole list, so one beside it would be dead argv.
     advance_to(wiz, wizard_mod.KeyZipPage)
     args = wiz.cfg.to_cli_args()
-    assert "--all-services" in args
+    assert "--all-services" in args and "--optional-services" not in args
     for slug in decided:
         assert f"--no-{slug}" not in args, (
             f"--no-{slug} emitted beside --all-services, which bakes {slug} anyway")
+    for slug in discarded:
+        assert slug not in args, f"{slug} emitted beside --all-services, which discards it"
 
 
 def test_the_preset_gives_the_operators_own_ticks_back(wiz):
