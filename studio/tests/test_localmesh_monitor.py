@@ -1245,6 +1245,31 @@ def test_a_row_that_left_the_last_read_is_refused_not_guessed_at(qapp, section):
     assert "no longer in the last read" in section.monitor.scale_status_text()
 
 
+def test_a_failed_scale_on_the_section_drops_the_pending_arrow(qapp, section,
+                                                               monkeypatch):
+    """The Section twin of the page pin (issue #341 landing review): ``_scale_done``
+    is where a REFUSED target is forgotten; the re-read cannot do it because the
+    count it observes still differs from the target the operator asked for."""
+    monkeypatch.setattr(mm, "scale", lambda *a, **k: (False, "scale failed: refused"))
+    section.refresh("test")
+    _drain(qapp, section)
+    key = "kind/hugmesh/gw-1"
+    cell = section.monitor.scale_cell(key)
+    observed = cell.observed
+    cell.plus.click()
+    cell.plus.click()
+    assert section.monitor.scale_target(key) == observed + 2
+    cell.apply.click()
+    qapp.processEvents()
+    _drain(qapp, section)
+    assert not section.monitor._scale_busy
+    assert "scale failed: refused" in section.monitor.scale_status_text()
+    cell = section.monitor.scale_cell(key)
+    assert cell.observed == observed
+    assert section.monitor.scale_target(key) == observed, "the refused target lingered"
+    assert key not in section.monitor._scale_targets
+
+
 def test_shutdown_says_which_thread_it_abandoned(qapp, host, monkeypatch):
     """The refutation's third major: the docstring promised a drain it does not do.
     A compose scale has a 180 s ceiling and shutdown waits 5 s for it, so one in
@@ -1578,6 +1603,37 @@ def test_the_pages_scale_refuses_a_row_that_left_the_last_read(qapp, page, fake)
     page._scale_monitor("kind/hugmesh/vanished", 2)
     assert "no longer in the last read" in page.monitor.scale_status_text()
     assert not localmesh_mod.probe_running(page, "_scale_worker")
+
+
+def test_a_failed_scale_on_the_page_drops_the_pending_arrow(qapp, page, fake,
+                                                            monkeypatch):
+    """Issue #341 (the landing review's one surviving mutation): ``_on_scale_done``
+    must ``forget_scale_target`` — the widget keeps a pending target across repaints
+    ON PURPOSE (so a tick between + and Apply does not snap the number back), and
+    the only thing that clears a target the daemon REFUSED is the page saying the
+    scale is over. Without it the strip keeps showing "1 → 3" after "scaled to 3"
+    failed, until the operator presses − twice. Pinned on the failure path because
+    the success path hides it: a re-read that observes 3 pops the target itself."""
+    monkeypatch.setattr(mm, "scale", lambda *a, **k: (False, "scale failed: refused"))
+    cell = _scale_snapshot_page(qapp, page, fake)
+    key = "kind/hugmesh/gw-1"
+    observed = cell.observed
+    cell.plus.click()
+    cell.plus.click()
+    assert page.monitor.scale_target(key) == observed + 2
+    reads_before = fake.calls
+    cell.apply.click()
+    qapp.processEvents()
+    _settle(qapp, page)
+    assert not page.monitor._scale_busy
+    assert "scale failed: refused" in page.monitor.scale_status_text()
+    assert fake.calls > reads_before, "a finished scale must re-read the lanes"
+    cell = page.monitor.scale_cell(key)
+    assert cell.observed == observed, "the fake never scaled anything"
+    assert page.monitor.scale_target(key) == observed, "the refused target lingered"
+    assert key not in page.monitor._scale_targets
+    for b in (cell.minus, cell.plus):
+        assert b.isEnabled(), "a strip stayed dead after the scale finished"
 
 
 def test_the_widgets_strip_stops_at_zero_and_at_MAX_REPLICAS(qapp):

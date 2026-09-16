@@ -3180,13 +3180,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         and a ``docker compose up --scale`` racing a ``make stack-up`` against the
         same project is the same container-set race the widget's busy guard exists
         to stop. So a scale is refused, out loud, while a verb runs — and
-        ``_launch`` refuses a verb while a scale runs. Neither guard is silent: a
-        pressed button that does nothing is this repo's named failure mode.
+        ``_launch`` refuses a verb while a scale runs. A pressed button that does
+        nothing is this repo's named failure mode, so each refusal names itself
+        somewhere the operator is already looking.
 
         Two guards, two different signals: ``probe_running(self, "_scale_worker")``
         is the one-at-a-time hold (a second Apply already in Qt's queue when the
-        first latched lands here, so the disabled buttons alone are not enough);
-        ``self._running`` is the verb hold.
+        first latched lands here, so the disabled buttons alone are not enough) —
+        it returns quietly because the widget is ALREADY saying "Scaling … to N…"
+        on the inline line with every strip disabled, same as ``Section._scale``;
+        ``self._running`` is the verb hold, and it writes its own sentence because
+        nothing on the table says a verb is running.
         """
         if probe_running(self, "_scale_worker"):
             return

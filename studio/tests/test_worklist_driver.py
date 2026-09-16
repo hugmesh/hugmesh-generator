@@ -216,6 +216,12 @@ def test_manifest_v2_carries_the_desktop_derived_person(monkeypatch, tmp_path):
     # the written artifact carries her too, not just the in-memory dict
     written = json.loads(open(drv.write_manifest_v2()).read())
     assert [u["username"] for u in written["users"]] == ["root-admin", "alice"]
+    # manifest_users() builds a NEW list: base.users is not the list it appended to
+    # (an aliasing `users = base.users` would push alice into the envelope on every
+    # call, and the second manifest would carry her twice). The sibling test below
+    # cannot see this — there alice is already a table row, so nothing is appended.
+    assert [u.username for u in wl.base.users] == ["root-admin"]
+    assert drv.manifest_v2()["users"] == m["users"]
 
 
 def test_manifest_v2_lets_a_users_table_row_win_over_the_derived_person(monkeypatch, tmp_path):
