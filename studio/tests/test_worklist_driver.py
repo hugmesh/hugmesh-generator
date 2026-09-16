@@ -192,6 +192,52 @@ def test_manifest_v2_carries_each_images_own_hostname(monkeypatch, tmp_path):
     assert "--hostname" not in argvs["rpi5-desktop.rpi5"]
 
 
+def test_manifest_v2_carries_the_desktop_derived_person(monkeypatch, tmp_path):
+    """Issue #279: a desktop entry's named person is a manifest User (operator ask
+    2026-08-14, ``WorklistConfig.desktop_users``). Before the fix manifest_v2 emitted
+    ``base.users`` alone, so the person reached every per-image ``ImageConfig.users``
+    and the v1 shim but never the v2 envelope cluster provisioning reads. Pin: the
+    v2 user rows equal the per-image v1 shim's rows, byte for byte, and the derived
+    row carries the FULL role set (tier + grants, issue #228)."""
+    _install_fake_builddriver(monkeypatch)
+    _install_fake_genkeys(monkeypatch)
+    wl = _worklist(tmp_path, roles=(("pki", "x86"), ("laptop", "x86")))
+    wl.entries[1].desktop_user = "alice"
+    wl.entries[1].desktop_user_roles = ["games", "admin"]
+    drv = WorklistDriver(str(tmp_path), wl, host=host())
+    m = drv.manifest_v2()
+    assert [u["username"] for u in m["users"]] == ["root-admin", "alice"]
+    alice = m["users"][1]
+    assert alice["domain"] == "core.acme.internal"            # the Tailscale root domain
+    assert alice["role"] == "admin" and alice["roles"] == ["admin", "games"]
+    # v2 and every image's v1 shim agree row for row (the shim already carried her)
+    for _entry, cfg in drv.materialize():
+        assert cfg.mesh_manifest()["users"] == m["users"]
+    # the written artifact carries her too, not just the in-memory dict
+    written = json.loads(open(drv.write_manifest_v2()).read())
+    assert [u["username"] for u in written["users"]] == ["root-admin", "alice"]
+
+
+def test_manifest_v2_lets_a_users_table_row_win_over_the_derived_person(monkeypatch, tmp_path):
+    """Same dedup as _materialize_one step 3: a superadmin who already named the person
+    in the Users table keeps their richer row (email survives) and the desktop entry
+    adds no second row; a desktop entry with no named person adds nothing."""
+    _install_fake_builddriver(monkeypatch)
+    _install_fake_genkeys(monkeypatch)
+    wl = _worklist(tmp_path, roles=(("pki", "x86"), ("laptop", "x86"), ("rpi5-desktop", "rpi5")))
+    wl.base.users.append(User(username="alice", domain="core.acme.internal", role="mod",
+                              email="alice@acme.example"))
+    wl.entries[1].desktop_user = "alice"
+    wl.entries[1].desktop_user_roles = ["admin"]
+    drv = WorklistDriver(str(tmp_path), wl, host=host())
+    m = drv.manifest_v2()
+    assert [u["username"] for u in m["users"]] == ["root-admin", "alice"]
+    assert m["users"][1]["email"] == "alice@acme.example"
+    assert m["users"][1]["role"] == "mod"                     # the table row, not the entry's tier
+    # the base envelope itself is untouched (manifest_users() must not mutate base.users)
+    assert [u.username for u in wl.base.users] == ["root-admin", "alice"]
+
+
 def test_non_mesh_writes_no_manifest(monkeypatch, tmp_path):
     _install_fake_builddriver(monkeypatch)
     cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
