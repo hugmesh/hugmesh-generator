@@ -401,8 +401,19 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # grep and busybox sed — and printed 8 passed / 0 failed rc=0, with its negative
 # controls re-verified there rather than only on the GNU host, because busybox
 # is exactly where a negative guard fails open.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-164}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-165}"
 
+# 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
+# gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED
+# by RUNNING this file both ways on the same tree, not assumed:
+#     165 of 187 suites are named by a pull_request-triggered workflow   (with it)
+#     164 of 186 suites are named by a pull_request-triggered workflow   (without)
+# — "without" meaning the suite file deleted AND both its wirings removed, so the
+# denominator moves too. It is named in shell-suites.yml's DEBIAN job (python:3.12-
+# slim): it is a negative guard whose controls must fail on a planted defect, and
+# busybox grep/sed is where a negative guard fails open. The ungated SET pin is
+# unchanged at 22 in both measurements.
+#
 # 163 -> 164 on 2026-09-16, on the MERGE of decisions/20260910/generator with
 # main at 8f355e41 (hugmesh-generator#246). One suite was ADDED AND GATED:
 # tests/scripts/test-run-ungated-lane.sh, the stub-and-mutation pin for the
