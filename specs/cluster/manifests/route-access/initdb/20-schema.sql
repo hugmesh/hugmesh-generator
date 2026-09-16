@@ -639,7 +639,7 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- and why #329 was the opposite shape). With no matching pattern
   -- GatewayRouteAccessService.decide() returns NO_RULE (:185 `if (bestLen < 0)
   -- return Decision.NO_RULE;   // ungoverned path`), GatewayRouteAccessFilter
-  -- rejects ONLY on Decision.DENY (:345), and the request was FORWARDED down the
+  -- rejects ONLY on Decision.DENY (:445), and the request was FORWARDED down the
   -- Path=/bff/** route to admin-bff. What refused it was admin-bff itself,
   -- app-side: SecurityConfig.java:293
   --     ex.pathMatchers("/bff/superadmin/**").hasRole("SUPERADMIN");
@@ -647,8 +647,13 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   --     /bff/superadmin/workloads/             -> 403, and NO X-Route-Denied
   --     /bff/superadmin/games-services/catalog -> 403, and NO X-Route-Denied
   -- The ABSENT header is the whole tell. A gateway denial always carries it
-  -- (GatewayRouteAccessFilter javadoc :64, emitted at :450), so a BARE 403 is the
+  -- (GatewayRouteAccessFilter javadoc :64, emitted at :589), so a BARE 403 is the
   -- documented signature of an app-side refusal one layer further in.
+  -- LINE NUMBERS in this block are hugmesh-gateway main @ debcebc8 (merged
+  -- 2026-09-09, re-read 2026-09-16); the service refs (:185/:219/:380) are
+  -- unchanged since 2026-09-04, the filter refs moved when the D8 privileged MFA
+  -- floor was placed BEFORE the bypasses (:278-284 JWT, :349-355 non-JWT) —
+  -- which is exactly what lets this row bind a superadmin once the flag flips.
   --
   -- WHAT THIS ROW CHANGES, as before/after for ONE request. A ROLE_USER — or any
   -- authenticated principal that is not admin/superadmin — at /bff/superadmin/…:
@@ -665,8 +670,8 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   --
   -- ⚠ WHAT IT DOES *NOT* CHANGE. ROLE_ADMIN (own-domain) and ROLE_SUPERADMIN
   -- (cross-domain) SHORT-CIRCUIT in GatewayRouteAccessFilter BEFORE decide() is
-  -- consulted — :192 and :223-224 on the JWT branch, mirrored at :262 and
-  -- :285-286 on the non-JWT branch, which is the opaque `bff_` session an actual
+  -- consulted — :291 and :323 on the JWT branch, mirrored at :361 and
+  -- :385 on the non-JWT branch, which is the opaque `bff_` session an actual
   -- browser presents. So NO row on this gateway alters what a privileged
   -- principal reaches: a plain ROLE_ADMIN still arrives at admin-bff and is still
   -- refused there by hasRole("SUPERADMIN"). ACCEPT is defence-in-depth and a
@@ -684,8 +689,10 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- argument the operator accepted; the flag itself is NOT flipped here.
   --
   -- NO games-services DENY REFINEMENT — deliberately. The carrier commit
-  -- 63c8952f paired its allow row with ('hugmesh-fe-gateway',
-  -- '/bff/superadmin/games-services/**','ROLE_SUPERADMIN',false). Under the
+  -- 63c8952f paired its allow row with a DENY row on this gateway for the pattern
+  -- /bff/superadmin/games-services/** (role ROLE_SUPERADMIN, allow=false) —
+  -- spelled out rather than as a tuple so that no comment-naive reader parses it
+  -- as a seeded row (hugmesh-generator#379). Under the
   -- current filter that row denies NOBODY: a privileged principal bypasses
   -- decide() before it runs, and a non-privileged one is already DENY'd by the
   -- row below (governed-but-ungranted — same verdict with or without it). Its one
@@ -703,6 +710,20 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- floor drop back to the pre-row behaviour until that lands. That divergence is
   -- ASSERTED, not merely noted, in
   -- tests/e2e/features/mined-governance/fallback-floor-parity.feature.
+  --
+  -- ⚠ REACHING A DATABASE THAT ALREADY EXISTS. This file is initdb-only on BOTH
+  -- lanes: the cluster mounts it into /docker-entrypoint-initdb.d over a PVC
+  -- (route-access/deployment.yaml, pvc.yaml; apps/06-route-access-db.yaml
+  -- self-heals the ConfigMap in place and restarts nothing) and compose mounts
+  -- the same file the same way over the route-access-pg named volume
+  -- (tests/stack/compose.local.yaml). Postgres runs initdb ONCE, on an empty
+  -- volume, so on a lane that existed before this row landed a re-probe of
+  -- /bff/superadmin/… returns the BEFORE state above and looks like the row did
+  -- nothing. Converge FIRST: re-apply this file against route-access-db
+  -- (docs/MFA-ROLLOUT.md, "Seed the rules" — safe to re-run, the INSERT is ON
+  -- CONFLICT DO NOTHING and the flip UPDATE is IS DISTINCT FROM true) or
+  -- recreate the volume, and record which. A pre-existing property of every
+  -- seed edit, stated here because the AFTER table above reads as immediate.
   ('hugmesh-fe-gateway',  '/bff/superadmin/**',    'ROLE_SUPERADMIN', true),  -- superadmin platform console, PUBLIC browser door (#244 ACCEPT; admin/superadmin still bypass decide())
   -- Same-origin role BFFs (fe-gateway proxies /bff/** subpaths to the dedicated
   -- BFFs in the backend ns). The /bff/mod/** + /bff/user/** prefixes are SIBLINGS

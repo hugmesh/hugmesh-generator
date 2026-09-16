@@ -572,7 +572,7 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
 
    Expect the 10 rows in §1.2 at `true`, and nothing else.
 
-   To see the **scope boundary** instead — the 9 gated rows *and* the six §1.2a
+   To see the **scope boundary** instead — the 10 gated rows *and* the seven §1.2a
    rows that are `false` by design — use this, which is the same admin-ish
    enumeration the gate itself performs (path segment `admin`/`superadmin` **or**
    an `*_ADMIN`/`SUPERADMIN` role, which is how the three role-privileged
@@ -589,10 +589,10 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
     ORDER BY mfa_required, 1, 2, 3;
    ```
 
-   Expect **15** rows: the 9 at `true`, then the 6 §1.2a exclusions at `false`.
+   Expect **17** rows: the 10 at `true`, then the 7 §1.2a exclusions at `false`.
    ⚠ Do **not** use `LIKE '/bff/%admin%'` for this — an earlier revision of this
    runbook said that form "also returns the six §1.2a rows". It does not: it
-   returns **three** of them, because `/bff/mod/**`,
+   returns **four** of the seven, because `/bff/mod/**`,
    `/bff/image-builds/arch/**` and `/bff/games-services/instances/**` have no
    `admin` substring in `url_pattern` at all and are excluded by **role**. An
    operator reading that output would conclude those three privileged surfaces
