@@ -791,6 +791,13 @@ so CI builds from a complete in-VPN copy. See [`docs/DEVOPS.md`](DEVOPS.md).
 
 ## Troubleshooting quick hits
 
+- **x86 build sits at ~0.5 % CPU, the package counter is frozen, the log stopped
+  mid-line** → a distfile fetch is stalled (`ls -l <sysroot>/var/cache/distfiles/*.__download__`
+  twice, 30 s apart: same size = wedged). The x86 spec bounds fetches to >= 10 KiB/s over
+  60 s with curl's own retries, so this now resolves itself in minutes ([`SHARED-BINPKG.md`
+  § Distfiles](SHARED-BINPKG.md#distfiles)); if it recurs, **never `rm` the `.__download__`**
+  — portage has already respawned a fetcher onto that name and the deleted inode swallows
+  the download. Kill the fetcher, or place a digest-verified file under the FINAL name.
 - **`make` can't find the builder image** → `make docker-image` (LONG first run).
 - **`build-rpi5-stage4.sh` fails early** → it must run as **root** with a built
   `crossdev aarch64-unknown-linux-gnu` toolchain (§0b). Use `--resume` to reuse a

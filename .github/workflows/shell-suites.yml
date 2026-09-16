@@ -362,6 +362,7 @@ jobs:
             tests/scripts/test-studio-launch.sh
             tests/scripts/test-sunshine-fence.sh
             tests/scripts/test-tools-path-lib.sh
+            tests/scripts/test-x86-fetchcommand-bound.sh
             tests/scripts/test-x86-identity-injection.sh
             tests/scripts/test-x86-kernel-net-symbols.sh
             tests/stack/test-attestation-dockerfile-patches.sh
@@ -468,6 +469,7 @@ jobs:
             tests/scripts/test-python-targets-seed.sh
             tests/scripts/test-run-ungated-lane.sh
             tests/scripts/test-url-embedded-credentials.sh
+            tests/scripts/test-docs-command-coverage.sh
             tests/scripts/test-x86-artifact-integrity.sh
             tests/stack/test-anubis-flip-wiring.sh
             tests/stack/test-mfa-flip-wiring.sh

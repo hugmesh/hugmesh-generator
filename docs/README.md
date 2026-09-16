@@ -35,6 +35,7 @@ The doc set for the image/infra layer. State key used throughout:
 - [`HEAVY-TIER.md`](HEAVY-TIER.md) — heavy datastores (Kafka/ClickHouse/Uptrace) on the x86 worker.
 - [`MESH-TEMPLATING.md`](MESH-TEMPLATING.md) — multi-tenant mesh repo-templating: Handlebars render engine, guardrails, archetype rendering, and cross-mesh foreign-base ingestion (Phases 1–7, ✅ merged).
 - [`BRANDING.md`](BRANDING.md) — what a tenant's rendered generator copy rebrands (and never touches); also the render engine's `renames[]` pilot, since this file itself gets re-filed as `docs/BRANDING-<org-slug>.md` per tenant.
+- [`LOGIN-THEME.md`](LOGIN-THEME.md) — `scripts/tooling/derive-theme.py`: render the login-ui `snap-theme.css` (or its `login-theme` ConfigMap) from brand colours / fonts / presets at render time, through the same `compose_login_css()` the Studio and the mesh-bootstrap CLI use.
 - [`FEDERATION-EXAMPLES.md`](FEDERATION-EXAMPLES.md) — the runtime side of native-federation: how a host shell discovers and mounts remotes, walked through via the four runnable archetype example codebases (companion to `MESH-TEMPLATING.md`, which covers the render side).
 - [`PHASE5-DECISIONS.md`](PHASE5-DECISIONS.md) — Phase 5 detail: the first tailnet-internal publish of rendered tenant repos to Forgejo, signed provenance, domain-reconcile writeback.
 
@@ -70,6 +71,7 @@ The doc set for the image/infra layer. State key used throughout:
 
 - [`CLOUD-DEPLOY.md`](CLOUD-DEPLOY.md) — publish an already-built, cloud-packaged x86 image to AWS/Azure/OpenShift/any qcow2 host via offline-rendered plans, fronted by the Studio DeployPage / ncurses `deploy_screen` / `make deploy-*` (🚧 in-flight — every face reports "driver not found" honestly until the driver lane merges).
 - [`CLOUD-IMAGE-PACKAGING.md`](CLOUD-IMAGE-PACKAGING.md) — `scripts/cloud-package.sh`: re-packages a built x86 raw `.img` as qcow2 / fixed VHD / checksummed raw for KubeVirt, Azure and AWS import. A standalone post-build operator step, not a build-matrix axis.
+- [`PUBLISH-IMAGES.md`](PUBLISH-IMAGES.md) — `scripts/publish-images.sh`: exports one build session's shareable artifacts into a flat publish tree (`SHA256SUMS`, versioned `publish-manifest.json`, optional Ed25519 signature); structurally incapable of shipping key material, and refuses the whole export on the first poisoned candidate.
 - [`IDENTITY-PROVIDERS.md`](IDENTITY-PROVIDERS.md) — point a node at the built-in Casdoor IdP (default) or an external OIDC provider (Azure Entra ID, AWS Cognito, generic OIDC) for token validation; offered from the Studio wizard, local-mesh bootstrap, ncurses, and the cloud-deploy flow.
 - [`MANAGED-SERVICES.md`](MANAGED-SERVICES.md) — point an in-mesh backing service (a datastore/infra the mesh normally self-hosts) at a hosted cloud equivalent (AWS/Azure) instead, on a generated node image; strictly additive and opt-in, self-hosted stays byte-identical the default.
 
