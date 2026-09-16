@@ -33,6 +33,16 @@
  *     image sitting in shots/ under the right filename reads as evidence to
  *     everyone who did not run the harness. It is a separate .mjs so it can
  *     be mutation-tested offline, with no mesh.
+ *
+ *  5. ONE RED ROW COSTS ONE PNG. Rows are independent tests (each signs in
+ *     afresh), so they run in 'default' mode, not 'serial'. Under serial mode
+ *     (the shape until 2026-09-16) the first failing row SKIPPED every later
+ *     row of the persona: a single plan-designed 403 document that the
+ *     evidence check deletes (#310 step 12) silently withheld five more cited
+ *     PNGs. The one thing serial mode bought — stopping early when the DOOR is
+ *     gone — is kept by `doorLost` below: a row that finds the browser on its
+ *     own error page marks the door lost, and every later row skips with that
+ *     reason instead of burning its 120 s timeout.
  */
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import * as fs from 'node:fs';
@@ -47,6 +57,8 @@ interface DoAction {
   value?: string;
   key?: string;
   route?: string;
+  /** Act on the FIRST match when the testid is rendered once per list row (see shot-table.mjs). */
+  first?: true;
 }
 interface ShotRow {
   persona: string;
@@ -95,7 +107,12 @@ async function assertNotAnErrorPage(page: Page): Promise<void> {
 
 async function runAction(page: Page, a: DoAction): Promise<void> {
   if (a.action === 'goto') { await page.goto(a.route!); return; }
-  const target: Locator = page.getByTestId(a.testid!);
+  // getByTestId is STRICT: two matches throw instead of acting on one. A row
+  // whose plan accepts "the first row" (e.g. #300 line 44) says so with
+  // `"first": true`, validated by shot-table.mjs; everything else stays strict,
+  // because a silently-picked element is a screenshot of the wrong control.
+  const all: Locator = page.getByTestId(a.testid!);
+  const target: Locator = a.first === true ? all.first() : all;
   switch (a.action) {
     case 'click': await target.click(); return;
     case 'fill': await target.fill(resolveValue(a.value!)); return;
@@ -111,7 +128,15 @@ async function runAction(page: Page, a: DoAction): Promise<void> {
   }
 }
 
-test.describe.configure({ mode: 'serial' });
+test.describe.configure({ mode: 'default' });   // see design note 5 — one red row costs one PNG
+
+/**
+ * Set by the first row that finds the browser on its own error page (door gone
+ * mid-run). Every later row then skips, naming this reason, rather than each
+ * paying a full timeout to rediscover it. A row failing for its OWN reason (a
+ * missing testid, a 403 document, a login no seeder creates) does not set it.
+ */
+let doorLost: string | null = null;
 
 test.beforeAll(async () => {
   if (!DOOR) throw new Error('SNAP_BASE_URL is unset. Run this through: npm run shots -- --persona <p> --door <url>');
@@ -152,20 +177,29 @@ if (ROWS.length === 0) {
 for (const row of ROWS) {
   const name = `${row.persona}-${row.step}-${row.slug}`;
   test(name, async ({ page }) => {
-    if (row.auth === 'onboard') await onboard(page, resolveLogin(row.login!));
-    else if (row.auth === 'signin-only') await registerOnly(page, resolveLogin(row.login!));
+    test.skip(doorLost !== null, `door unreachable since an earlier row: ${doorLost}`);
+    try {
+      if (row.auth === 'onboard') await onboard(page, resolveLogin(row.login!));
+      else if (row.auth === 'signin-only') await registerOnly(page, resolveLogin(row.login!));
 
-    if (row.route) await page.goto(row.route);
-    await assertNotAnErrorPage(page);
+      if (row.route) await page.goto(row.route);
+      await assertNotAnErrorPage(page);
 
-    for (const a of row.do ?? []) await runAction(page, a);
+      for (const a of row.do ?? []) await runAction(page, a);
 
-    await shot(page, name);                       // specs/helpers.ts shot(): fullPage, into SNAP_SHOTS
+      await shot(page, name);                       // specs/helpers.ts shot(): fullPage, into SNAP_SHOTS
 
-    // The evidence guard lives in evidence.mjs so it can be exercised OFFLINE
-    // (`node shot-harness/evidence.mjs <file.png>`) — a guard nobody can run
-    // without a mesh is a guard nobody re-checks. It DELETES a failing image.
-    const { assertRealEvidence } = await import(pathToFileURL(path.join(__dirname, 'evidence.mjs')).href);
-    assertRealEvidence(path.join(SHOTS, `${name}.png`));
+      // The evidence guard lives in evidence.mjs so it can be exercised OFFLINE
+      // (`node shot-harness/evidence.mjs <file.png>`) — a guard nobody can run
+      // without a mesh is a guard nobody re-checks. It DELETES a failing image.
+      const { assertRealEvidence } = await import(pathToFileURL(path.join(__dirname, 'evidence.mjs')).href);
+      assertRealEvidence(path.join(SHOTS, `${name}.png`));
+    } catch (e) {
+      // Was it the DOOR, not the row? onboard() on a dead stack fails as a
+      // locator timeout, so ask the page itself; a live page passes this and
+      // the row's own error is what gets reported.
+      await assertNotAnErrorPage(page).catch((doorErr: Error) => { doorLost = doorErr.message; });
+      throw e;
+    }
   });
 }

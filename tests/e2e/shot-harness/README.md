@@ -63,6 +63,7 @@ cd tests/e2e && npm run shots:validate
 | `login` | the seeded handle, e.g. `e2e-user`; `@superadmin` follows `SUPERADMIN_USERNAME` |
 | `route` | door-relative, e.g. `/user/profile` — the door comes from `--door`, never from this file |
 | `do[]` | `goto` · `click` · `fill` · `press` · `expect` · `expectAttached` · `expectHidden` |
+| `first` | optional, on a testid action, **only `true`**: act on the *first* match when the UI renders that testid once per list row (admin-ui's `gs-suspend` inside `*ngFor`). Without it a second match is a strict-mode failure, on purpose — the plan must say it accepts "whichever row is first" |
 
 **Every row must end up waiting for something** — at least one
 `expect`/`expectAttached`/`expectHidden` naming a `data-testid` on the screen you
@@ -71,10 +72,27 @@ returns the instant it clicks submit. Without a wait, the shot lands on the
 previous screen and gets filed under a name that says otherwise. The validator
 rejects a row that has no wait.
 
-**Every `testid` must exist.** Verify against the UI source (`data-testid="…"` in
+**Every `testid` must exist — and be unique on that screen**, or the action carries
+`"first": true` and the plan says which row that is. `page.getByTestId()` is strict:
+two matches fail the row rather than act on one. Verify against the UI source (`data-testid="…"` in
 `hugmesh-login-ui`, `-host-shell`, `-user-ui`, `-admin-ui`, `-mod-ui`, `-wiki-ui`,
 `-superadmin-service-catalog-ui`) or against `tests/e2e/specs`. A testid nobody
 shipped sends a tester hunting for a control that does not exist.
+
+## Rows that write, and the order they run in
+
+Every row is an independent test that signs in afresh; rows run in `personas[]`
+order, then `step` order, and **one red row costs exactly its own PNG** — no later
+row is skipped for it (the driver runs in Playwright's `default` mode, not `serial`,
+since 2026-09-16; the only early stop is a door that stops answering mid-run). The
+epilogue prints `N of M cited PNG(s) present` and a `MISSING` line per absent file,
+whichever way the run exited — read that, not the count of files in the directory.
+
+Most rows read, or fill a form and stop *before* the write. The rows that do write
+are listed in the `//state` comment at the top of `shots.json`, each a step its plan
+names. Two of them interact across personas: `curtailed-member-10` files an appeal
+that makes `admin-20` (expects the empty inbox) fail until an admin decides it —
+`--all` runs admin first; a per-persona re-run of admin afterwards does not.
 
 ## Credentials
 
