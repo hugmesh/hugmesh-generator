@@ -1859,9 +1859,6 @@ _FIELD_PROBE = {
     # one (nothing is emitted without it) and must DIFFER from it (vault_field_error).
     "vault_external_addr": {"vault_addr": "https://vault.example:8200",
                             "vault_external_addr": "https://vault.example.net:8200"},
-    "vault_kv_mount": {"vault_addr": "https://vault.example:8200", "vault_kv_mount": "kv"},
-    "vault_base_path": {"vault_addr": "https://vault.example:8200",
-                        "vault_base_path": "acme/prod"},
     "optional_services": {"optional_services": ["akkoma"]},
     "exclude_services": {"exclude_services": ["games"]},
     "enable_games": {"enable_games": True},

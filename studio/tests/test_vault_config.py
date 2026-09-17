@@ -47,12 +47,18 @@ def pairs(args):
     return list(zip(args, args[1:]))
 
 
-# ── the trio + the rule ──────────────────────────────────────────────────────────────
-def test_the_quartet_is_the_capability_table_entry_on_the_two_node_builders():
-    assert VAULT_FIELDS == ("vault_addr", "vault_external_addr", "vault_kv_mount",
-                            "vault_base_path")
+# ── the pair + the rule ──────────────────────────────────────────────────────────────
+def test_the_pair_is_the_capability_table_entry_on_the_two_node_builders():
+    assert VAULT_FIELDS == ("vault_addr", "vault_external_addr")
     for f in VAULT_FIELDS:
         assert set(PLATFORM_FIELD_SUPPORT[f]) == {"x86", "rpi5"}, f
+    # the two REMOVED fields (#285, decision 22 on #347) must not come back as a
+    # capability-table entry either: an entry with no dataclass field and no builder
+    # arm would make flag-coverage's REVERSE check demand a parser arm for a flag
+    # that cannot be emitted.
+    for gone in ("vault_kv_mount", "vault_base_path"):
+        assert gone not in PLATFORM_FIELD_SUPPORT, gone
+        assert gone not in ImageConfig.__dataclass_fields__, gone
 
 
 def test_the_ca_fields_declare_no_builder_surface():
@@ -78,17 +84,9 @@ def test_empty_address_is_the_byte_identical_default():
      "https://"),
     (dict(vault_addr="http://vault.acme.example"), "https://"),
     (dict(vault_addr="https://vault.acme.example;rm -rf /"), "https://"),
-    (dict(vault_kv_mount="kv"), "no Vault address"),
-    (dict(vault_base_path="acme"), "no Vault address"),
-    (dict(vault_addr=ADDR, vault_kv_mount="a b"), "KV mount"),
-    (dict(vault_addr=ADDR, vault_kv_mount="$(x)"), "KV mount"),
-    (dict(vault_addr=ADDR, vault_base_path="/leading"), "base path"),
-    (dict(vault_addr=ADDR, vault_base_path="x" * 129), "base path"),
 ])
 def test_fail_closed_before_emission(bad, fragment):
     assert fragment in vault_field_error(bad.get("vault_addr", ""),
-                                         bad.get("vault_kv_mount", ""),
-                                         bad.get("vault_base_path", ""),
                                          bad.get("vault_external_addr", ""))
     with pytest.raises(IdentityValidationError, match="vault:"):
         _mesh(**bad).to_cli_args()
@@ -96,24 +94,24 @@ def test_fail_closed_before_emission(bad, fragment):
 
 def test_valid_shapes_pass():
     for kw in (dict(vault_addr=ADDR),
-               dict(vault_addr=ADDR, vault_kv_mount="kv-v2", vault_base_path="acme/prod"),
                dict(vault_addr=ADDR, vault_external_addr=EXT),
                dict(vault_addr="https://vault.vault.svc.cluster.local:8200",
-                    vault_external_addr=EXT, vault_kv_mount="kv"),
+                    vault_external_addr=EXT),
                dict(vault_addr="https://vault.vault.svc.cluster.local:8200")):
-        assert vault_field_error(kw["vault_addr"], kw.get("vault_kv_mount", ""),
-                                 kw.get("vault_base_path", ""),
+        assert vault_field_error(kw["vault_addr"],
                                  kw.get("vault_external_addr", "")) == ""
         _mesh(**kw).to_cli_args()
 
 
-def test_the_external_address_keeps_the_pre_335_three_argument_signature():
-    """Every caller written before #335 passes three positionals — the builders'
-    mirrored _validate_vault included. The fourth is keyword-last with an empty
-    default, so the pre-#335 rule is exactly the post-#335 rule with no external
-    address, and no caller had to be found and changed."""
-    assert vault_field_error(ADDR, "kv", "acme/prod") == ""
-    assert vault_field_error("", "kv", "") == vault_field_error("", "kv", "", "")
+def test_the_external_address_is_the_keyword_last_second_argument():
+    """#335 made the external address keyword-last with an empty default so every
+    caller that knows only the internal address keeps working. #285 (decision 22)
+    then removed the KV-mount and base-path positionals that sat between them, so
+    the rule is now exactly two arguments — and a one-argument call is still the
+    "no external address" rule, unchanged."""
+    assert vault_field_error(ADDR) == ""
+    assert vault_field_error(ADDR, "") == vault_field_error(ADDR)
+    assert "no Vault address" in vault_field_error("", EXT)
 
 
 # ── emission: the two node builders, nothing else ────────────────────────────────────
@@ -122,10 +120,11 @@ def test_emission_shape_on_x86_and_rpi5():
         args = _mesh(platform, vault_addr=ADDR).to_cli_args()
         assert ("--vault-addr", ADDR) in pairs(args), platform
         assert "--vault-kv-mount" not in args and "--vault-base-path" not in args
-        full = _mesh(platform, vault_addr=ADDR, vault_kv_mount="kv",
-                     vault_base_path="acme/prod").to_cli_args()
-        assert ("--vault-kv-mount", "kv") in pairs(full), platform
-        assert ("--vault-base-path", "acme/prod") in pairs(full), platform
+        full = _mesh(platform, vault_addr=ADDR, vault_external_addr=EXT).to_cli_args()
+        assert ("--vault-external-addr", EXT) in pairs(full), platform
+        # the two removed flags cannot be produced from ANY field combination — the
+        # dataclass has no such field, so there is nothing left to emit them from
+        assert not any(a in ("--vault-kv-mount", "--vault-base-path") for a in full)
 
 
 def test_the_external_address_is_omit_when_empty_on_the_argv():
@@ -163,23 +162,52 @@ def test_a_builder_that_parses_no_vault_flag_gets_none():
 
 # ── persistence + the headless CLI round-trip ────────────────────────────────────────
 def test_save_load_round_trip(tmp_path):
-    c = _mesh(vault_addr=ADDR, vault_external_addr=EXT, vault_kv_mount="kv",
-              vault_base_path="acme/prod", base_ca_certs=[CA_ROOT],
+    c = _mesh(vault_addr=ADDR, vault_external_addr=EXT, base_ca_certs=[CA_ROOT],
               domain_ca={"acme.example": CA_ROOT})
     path = str(tmp_path / "cfg.json")
     c.save(path)
     d = json.load(open(path, encoding="utf-8"))
     assert {f: d[f] for f in VAULT_FIELDS} == {
-        "vault_addr": ADDR, "vault_external_addr": EXT, "vault_kv_mount": "kv",
-        "vault_base_path": "acme/prod"}
+        "vault_addr": ADDR, "vault_external_addr": EXT}
+    # the two removed keys are not written any more — a saved config stops carrying
+    # a setting that nothing can honour
+    assert "vault_kv_mount" not in d and "vault_base_path" not in d
     # the CA surface is RECORDED — it must survive the save even though it emits nothing
     assert d["base_ca_certs"] == [CA_ROOT]
     assert d["domain_ca"] == {"acme.example": CA_ROOT}
     back = ImageConfig.load(path)
-    assert (back.vault_addr, back.vault_external_addr, back.vault_kv_mount,
-            back.vault_base_path) == (ADDR, EXT, "kv", "acme/prod")
+    assert (back.vault_addr, back.vault_external_addr) == (ADDR, EXT)
     assert back.base_ca_certs == [CA_ROOT] and back.domain_ca == {"acme.example": CA_ROOT}
     assert back.to_cli_args() == c.to_cli_args()
+
+
+def test_a_pre_285_config_carrying_the_removed_keys_loads_with_no_residue(tmp_path):
+    """The migration half of decision 22. A config saved while the two fields existed
+    carries `vault_kv_mount` / `vault_base_path` on disk. `from_dict` drops unknown
+    keys, so it loads clean — and, crucially, it emits an argv the CURRENT builders
+    still accept. The alternative (carrying the keys forward) would emit two flags
+    that now abort the build with "Unknown option", which is a worse failure than the
+    dead knob they were.
+
+    Nothing is migrated INTO another field on purpose: the values were read by
+    nothing, so there is no intent to preserve — unlike the `qemu_e2e` rename, whose
+    opt-in had to survive."""
+    path = str(tmp_path / "old.json")
+    d = _mesh(vault_addr=ADDR).to_dict()
+    d["vault_kv_mount"] = "kv"
+    d["vault_base_path"] = "acme/prod"
+    json.dump(d, open(path, "w", encoding="utf-8"))
+    c = ImageConfig.load(path)
+    assert not hasattr(c, "vault_kv_mount") and not hasattr(c, "vault_base_path")
+    assert c.vault_addr == ADDR
+    args = c.to_cli_args()
+    assert ("--vault-addr", ADDR) in pairs(args)
+    assert "--vault-kv-mount" not in args and "--vault-base-path" not in args
+    assert args == _mesh(vault_addr=ADDR).to_cli_args()
+    # and re-saving drops the stale keys rather than round-tripping them forever
+    c.save(path)
+    again = json.load(open(path, encoding="utf-8"))
+    assert "vault_kv_mount" not in again and "vault_base_path" not in again
 
 
 def test_a_pre_224_config_loads_with_the_offline_default(tmp_path):
@@ -187,8 +215,7 @@ def test_a_pre_224_config_loads_with_the_offline_default(tmp_path):
     for f in (*VAULT_FIELDS, "base_ca_certs", "domain_ca"):
         d.pop(f)
     c = ImageConfig.from_dict(d)
-    assert (c.vault_addr, c.vault_external_addr, c.vault_kv_mount,
-            c.vault_base_path) == ("", "", "", "")
+    assert (c.vault_addr, c.vault_external_addr) == ("", "")
     assert c.base_ca_certs == [] and c.domain_ca == {}
     assert c.to_cli_args() == _mesh().to_cli_args()
 
@@ -207,8 +234,8 @@ def test_a_hand_edited_ca_list_loads_as_absent_not_as_a_string(junk):
 
 
 def test_a_domain_naming_a_dropped_certificate_fails_closed():
-    """The half-configured-trust rule, the vault_kv_mount-without-an-address twin: a
-    domain may not point at a CA the config no longer carries."""
+    """The half-configured-trust rule, the external-address-without-an-internal-one
+    twin: a domain may not point at a CA the config no longer carries."""
     with pytest.raises(IdentityValidationError, match="base CA"):
         _mesh(domain_ca={"acme.example": CA_ROOT}).to_cli_args()
     # ...and with the certificate present it validates
@@ -282,26 +309,39 @@ def test_check_readable_is_the_only_difference_between_the_two_callers(tmp_path)
 
 
 def test_print_command_carries_the_vault_flags(tmp_path, capsys):
-    """The CLI face: a config JSON with the trio set prints a builder command line
+    """The CLI face: a config JSON with the pair set prints a builder command line
     carrying exactly the flags the GUI would emit — one emitter, three faces."""
     path = str(tmp_path / "cfg.json")
-    _mesh(vault_addr=ADDR, vault_kv_mount="kv").save(path)
+    _mesh(vault_addr=ADDR, vault_external_addr=EXT).save(path)
     assert app.main(["--print-command", "--config", path, "--backend", "native"]) == 0
     out = capsys.readouterr().out
     assert f"--vault-addr {ADDR}" in out
-    assert "--vault-kv-mount kv" in out
-    assert "--vault-base-path" not in out
-    assert "--vault-external-addr" not in out
+    assert f"--vault-external-addr {EXT}" in out
+    assert "--vault-kv-mount" not in out and "--vault-base-path" not in out
 
 
 def test_print_command_refuses_a_half_configured_store(tmp_path, capsys):
     path = str(tmp_path / "cfg.json")
     d = _mesh().to_dict()
-    d["vault_kv_mount"] = "kv"                     # a mount with nowhere to point
+    d["vault_external_addr"] = EXT                 # an address with nowhere to point
     json.dump(d, open(path, "w", encoding="utf-8"))
     rc = app.main(["--print-command", "--config", path, "--backend", "native"])
     assert rc != 0
     assert "no Vault address" in capsys.readouterr().err
+
+
+def test_print_command_ignores_the_removed_keys_in_a_stale_config(tmp_path, capsys):
+    """A hand-edited or pre-#285 config file that still names the two removed keys
+    must print a command line the builders accept, not one they abort on."""
+    path = str(tmp_path / "cfg.json")
+    d = _mesh(vault_addr=ADDR).to_dict()
+    d["vault_kv_mount"] = "kv"
+    d["vault_base_path"] = "acme/prod"
+    json.dump(d, open(path, "w", encoding="utf-8"))
+    assert app.main(["--print-command", "--config", path, "--backend", "native"]) == 0
+    out = capsys.readouterr().out
+    assert f"--vault-addr {ADDR}" in out
+    assert "--vault-kv-mount" not in out and "--vault-base-path" not in out
 
 
 # ── the BUILDER HAND-OFF: Studio argv -> real parser arms -> real bake -> artefact ───
@@ -314,8 +354,12 @@ warn() { echo "WARN: $*"; }
 err()  { echo "ERR: $*" >&2; }
 # the builder's OWN defaults + regexes, the two functions, verbatim
 # (the DEFINITION lines only — `VAULT_*="${VAULT_*:-…}"` — never the column-0
-# `VAULT_*=${_mount}` lines inside bake_vault_conf's own heredoc)
-eval "$(grep -E '^(VAULT_ADDR|VAULT_EXTERNAL_ADDR|VAULT_KV_MOUNT|VAULT_BASE_PATH)="\$\{VAULT_|^(_IDP_URL_RE|_VAULT_PATH_RE)=' "${BUILDER}")"
+# `VAULT_*=${_mount}` lines inside bake_vault_conf's own heredoc).
+# VAULT_KV_MOUNT_FIXED is the design-fixed mount constant (#285, decision 22): it
+# has no `${VAULT_...:-}` env arm on purpose, which is exactly what makes it not a
+# knob, so it is matched by its own literal spelling.
+eval "$(grep -E '^(VAULT_ADDR|VAULT_EXTERNAL_ADDR)="\$\{VAULT_|^VAULT_KV_MOUNT_FIXED=|^(_IDP_URL_RE|_VAULT_PATH_RE)=' "${BUILDER}")"
+[ -n "${VAULT_KV_MOUNT_FIXED:-}" ] || { echo "ERR: no VAULT_KV_MOUNT_FIXED in ${BUILDER}" >&2; exit 4; }
 eval "$(extract_fn _validate_vault "${BUILDER}")"
 eval "$(extract_fn bake_vault_conf "${BUILDER}")"
 # the builder's OWN --vault-* parser arms, wrapped in a loop of our own
@@ -338,7 +382,22 @@ fi
 '''
 
 
-def _bake(builder, sysroot, argv, *, role="pki", client=False, brand="acme", env_extra=None):
+#: The same harness with the builder's OWN fallthrough arm (`err "Unknown option:
+#: $1"; exit 1` — the `*)` arms at build-x86-host-stage4.sh:1256
+#: (`err ...; usage 1`) and build-rpi5-stage4.sh:1185 (`err ...; exit 1`) — both
+#: abort, which is the property this harness mirrors) instead
+#: of the permissive `*) shift ;;`. Used to prove a REMOVED flag is REFUSED rather
+#: than absorbed: with `*) shift ;;` a deleted arm looks identical to a working one.
+#: `\$1` (not `$1`): the arm is built inside an `eval "parse_vault_args() {…}"`, so an
+#: unescaped $1 would expand AT EVAL TIME to the harness's own first argument and the
+#: message would name the wrong flag — measured, it printed "--vault-addr" every time.
+_HARNESS_STRICT = _HARNESS.replace(
+    '*) shift ;;',
+    r'*) echo "ERR: Unknown option: \$1" >&2; exit 1 ;;')
+
+
+def _bake(builder, sysroot, argv, *, role="pki", client=False, brand="acme",
+          env_extra=None, harness=None):
     env = dict(os.environ, ROLE=role, ROLE_CLIENT="true" if client else "false",
                BRAND=brand)
     # the Studio's own build env can carry the vault CLI's VAULT_* (the Vaults dialog
@@ -347,8 +406,8 @@ def _bake(builder, sysroot, argv, *, role="pki", client=False, brand="acme", env
         env.pop(k, None)
     env.update(env_extra or {})
     return subprocess.run(
-        ["bash", "-c", _HARNESS, "harness", os.path.join(GENERATOR_DIR, builder),
-         str(sysroot), *argv],
+        ["bash", "-c", harness or _HARNESS, "harness",
+         os.path.join(GENERATOR_DIR, builder), str(sysroot), *argv],
         capture_output=True, text=True, env=env, timeout=60)
 
 
@@ -365,14 +424,16 @@ def test_builder_bakes_the_studio_configured_address(builder, tmp_path):
     parser arms, the builder's own bake — and the configured value comes back out
     of the artefact's /etc/hugmesh/vault.conf."""
     platform = "x86" if builder.startswith("build-x86") else "rpi5"
-    cfg = _mesh(platform, vault_addr=ADDR, vault_kv_mount="kv", vault_base_path="acme/prod")
+    cfg = _mesh(platform, vault_addr=ADDR, vault_external_addr=EXT)
     argv = [a for a in cfg.to_cli_args()]
     r = _bake(builder, tmp_path, argv, role="pki")
     assert r.returncode == 0, r.stderr + r.stdout
     conf = _conf(r.stdout)
     assert conf["VAULT_ADDR"] == cfg.vault_addr
-    assert conf["VAULT_KV_MOUNT"] == "kv"
-    assert conf["VAULT_BASE_PATH"] == "acme/prod"
+    assert conf["VAULT_EXTERNAL_ADDR"] == cfg.vault_external_addr
+    # DERIVED, not emitted: brand 'acme' -> secret/acme/… (#285, decision 22)
+    assert conf["VAULT_KV_MOUNT"] == "secret"
+    assert conf["VAULT_BASE_PATH"] == "acme"
     assert "MODE: 644" in r.stdout
     assert "token" not in "\n".join(ln for ln in r.stdout.splitlines()
                                     if ln[0:1].isupper() and "=" in ln)
@@ -380,15 +441,72 @@ def test_builder_bakes_the_studio_configured_address(builder, tmp_path):
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
 @pytest.mark.parametrize("builder", BUILDERS)
-def test_builder_fills_its_own_defaults_for_the_two_paths(builder, tmp_path):
-    """Address only (the common case): the builder supplies mount 'secret' and the
-    brand slug as base path — the layout scripts/gen-cluster-secrets.sh writes."""
+def test_builder_derives_the_two_paths_from_the_design(builder, tmp_path):
+    """#285, decision 22: the mount and base path are NOT input any more. The builder
+    writes the mount literal the shipped ClusterSecretStore pins and the --brand slug
+    scripts/gen-cluster-secrets.sh writes under — and DERIVED means derived: the
+    brand is what moves the base path, and nothing moves the mount."""
     platform = "x86" if builder.startswith("build-x86") else "rpi5"
-    r = _bake(builder, tmp_path, _mesh(platform, vault_addr=ADDR).to_cli_args(),
+    r = _bake(builder, tmp_path / "acme", _mesh(platform, vault_addr=ADDR).to_cli_args(),
               role="backend", brand="acme")
     assert r.returncode == 0, r.stderr + r.stdout
-    conf = _conf(r.stdout)
-    assert conf == {"VAULT_ADDR": ADDR, "VAULT_KV_MOUNT": "secret", "VAULT_BASE_PATH": "acme"}
+    assert _conf(r.stdout) == {"VAULT_ADDR": ADDR, "VAULT_KV_MOUNT": "secret",
+                               "VAULT_BASE_PATH": "acme"}
+    # a different brand moves ONLY the base path
+    r = _bake(builder, tmp_path / "other", _mesh(platform, vault_addr=ADDR).to_cli_args(),
+              role="backend", brand="otherco")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert _conf(r.stdout) == {"VAULT_ADDR": ADDR, "VAULT_KV_MOUNT": "secret",
+                               "VAULT_BASE_PATH": "otherco"}
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+@pytest.mark.parametrize("builder", BUILDERS)
+@pytest.mark.parametrize("flag", ["--vault-kv-mount", "--vault-base-path"])
+def test_the_removed_flags_are_refused_not_absorbed(builder, flag, tmp_path):
+    """The other half of a flag removal, and the half that is easy to skip: a deleted
+    parser arm must make the builder ABORT on that flag, not swallow it. Run through
+    the builder's OWN fallthrough arm (`err "Unknown option: $1"`), because the
+    permissive harness used everywhere else in this file would shift past a removed
+    arm and report success — indistinguishable from the flag still working.
+
+    Loud is the point: an operator's stale script or brand build wrapper that still
+    passes --vault-kv-mount now dies at argv parse with the flag named, instead of
+    building an image whose secrets layout silently disagrees with the cluster's."""
+    r = _bake(builder, tmp_path, ["--vault-addr", ADDR, flag, "kv"], role="pki",
+              harness=_HARNESS_STRICT)
+    assert r.returncode != 0, r.stdout
+    assert "Unknown option" in r.stderr and flag in r.stderr
+    assert not (tmp_path / "etc" / "hugmesh" / "vault.conf").exists()
+    # control: the SAME strict harness accepts the flags that DO still exist, so the
+    # refusal above is about these two flags and not about the harness being strict
+    ok = _bake(builder, tmp_path / "ok",
+               ["--vault-addr", ADDR, "--vault-external-addr", EXT], role="pki",
+               harness=_HARNESS_STRICT)
+    assert ok.returncode == 0, ok.stderr + ok.stdout
+    assert _conf(ok.stdout)["VAULT_EXTERNAL_ADDR"] == EXT
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+@pytest.mark.parametrize("builder", BUILDERS)
+def test_no_env_or_brand_profile_can_move_the_derived_paths(builder, tmp_path):
+    """The env/brand.conf half of the removal. Before #285 the builder seeded
+    VAULT_KV_MOUNT / VAULT_BASE_PATH from the environment, so a brand profile could
+    move them; that was the same dead knob one layer down. Setting both in the build
+    environment must now change NOTHING in the baked file.
+
+    Measured deliberately as a pair against the same run without the environment:
+    equality of the whole file, not just of one key."""
+    platform = "x86" if builder.startswith("build-x86") else "rpi5"
+    argv = _mesh(platform, vault_addr=ADDR).to_cli_args()
+    plain = _bake(builder, tmp_path / "plain", argv, role="pki", brand="acme")
+    loud = _bake(builder, tmp_path / "loud", argv, role="pki", brand="acme",
+                 env_extra={"VAULT_KV_MOUNT": "brandkv",
+                            "VAULT_BASE_PATH": "brandbase"})
+    assert plain.returncode == 0 and loud.returncode == 0, loud.stderr
+    assert _conf(loud.stdout) == _conf(plain.stdout)
+    assert _conf(loud.stdout)["VAULT_KV_MOUNT"] == "secret"
+    assert _conf(loud.stdout)["VAULT_BASE_PATH"] == "acme"
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
@@ -407,6 +525,7 @@ def test_builder_bakes_the_external_address_beside_the_internal_one(builder, tmp
     assert conf["VAULT_EXTERNAL_ADDR"] == EXT
     assert conf["VAULT_KV_MOUNT"] == "secret" and conf["VAULT_BASE_PATH"] == "acme"
     assert "MODE: 644" in r.stdout
+
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
@@ -458,17 +577,16 @@ def test_builder_falls_back_to_the_profile_when_no_flag_is_emitted(builder, tmp_
     profile's VAULT_ADDR still bakes, the CLI still wins over it, and the wizard copy
     says exactly that instead of promising "nothing is baked" unconditionally."""
     platform = "x86" if builder.startswith("build-x86") else "rpi5"
-    profile = {"VAULT_ADDR": "https://profile.example:8200", "VAULT_KV_MOUNT": "brandkv"}
+    profile = {"VAULT_ADDR": "https://profile.example:8200"}
     r = _bake(builder, tmp_path / "a", _mesh(platform).to_cli_args(), role="pki",
               env_extra=profile)
     assert r.returncode == 0, r.stderr
     assert _conf(r.stdout) == {"VAULT_ADDR": "https://profile.example:8200",
-                               "VAULT_KV_MOUNT": "brandkv", "VAULT_BASE_PATH": "acme"}
+                               "VAULT_KV_MOUNT": "secret", "VAULT_BASE_PATH": "acme"}
     r = _bake(builder, tmp_path / "b", _mesh(platform, vault_addr=ADDR).to_cli_args(),
               role="pki", env_extra=profile)
     assert r.returncode == 0, r.stderr
     assert _conf(r.stdout)["VAULT_ADDR"] == ADDR                  # CLI wins
-    assert _conf(r.stdout)["VAULT_KV_MOUNT"] == "brandkv"         # untouched knob keeps the profile
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
@@ -488,8 +606,8 @@ def test_builder_refuses_what_the_studio_refuses(builder, tmp_path):
     """The builder's _validate_vault is the same rule as vault_field_error — a value
     the Studio would never emit dies at the builder too (defence in depth)."""
     for argv in (["--vault-addr", "http://vault.acme.example"],
-                 ["--vault-addr", ADDR, "--vault-kv-mount", "a b"],
-                 ["--vault-addr", ADDR, "--vault-base-path", "$(x)"]):
+                 ["--vault-addr", ADDR, "--vault-external-addr", "http://x.example"],
+                 ["--vault-addr", ADDR, "--vault-external-addr", "https://a b"]):
         r = _bake(builder, tmp_path, argv, role="pki")
         assert r.returncode != 0, argv
         assert "ERR:" in r.stderr, argv
@@ -538,13 +656,17 @@ def test_first_boot_reads_the_baked_file_when_the_manifest_has_no_vault_block(
     about Vault (the shape of all three shipped per-role example manifests)."""
     platform = "x86" if builder.startswith("build-x86") else "rpi5"
     sysroot = tmp_path / "sysroot"
-    r = _bake(builder, sysroot, _mesh(platform, vault_addr=ADDR, vault_kv_mount="kv").to_cli_args(),
+    r = _bake(builder, sysroot, _mesh(platform, vault_addr=ADDR).to_cli_args(),
               role="pki", brand="acme")
     assert r.returncode == 0, r.stderr
     manifest = tmp_path / "provision.json"
     manifest.write_text(json.dumps({"hostname": "pki-1"}), encoding="utf-8")
     got = _resolve(manifest, sysroot / "etc" / "hugmesh" / "vault.conf")
-    assert got == {"SRC": "image", "ADDR": ADDR, "MOUNT": "kv", "BASE": "acme",
+    # MOUNT/BASE are the DERIVED values the builder baked (#285, decision 22) — the
+    # provisioner still READS them, which is why the builder keeps writing them:
+    # its first-boot log then names the real paths for a non-hugmesh brand instead
+    # of falling back to the hard-coded "hugmesh".
+    assert got == {"SRC": "image", "ADDR": ADDR, "MOUNT": "secret", "BASE": "acme",
                    "TOKEN": "vault/token", "ENABLED": "true"}
 
 
@@ -560,9 +682,7 @@ def test_first_boot_is_unchanged_by_the_external_address(builder, tmp_path):
     for kw in ({}, {"vault_external_addr": EXT}):
         sysroot = tmp_path / ("ext" if kw else "plain")
         r = _bake(builder, sysroot,
-                  _mesh(platform, vault_addr=ADDR, vault_kv_mount="kv").to_cli_args()
-                  if not kw else
-                  _mesh(platform, vault_addr=ADDR, vault_kv_mount="kv", **kw).to_cli_args(),
+                  _mesh(platform, vault_addr=ADDR, **kw).to_cli_args(),
                   role="pki", brand="acme")
         assert r.returncode == 0, r.stderr + r.stdout
         manifest = tmp_path / "provision.json"

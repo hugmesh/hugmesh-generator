@@ -173,7 +173,7 @@ cp brands/example.conf brands/acme.conf
 | `MAIL_PROVIDER` | `protonmail` | SMTP preset; `none` disables mail (see §2d) |
 | `TIMEZONE` | `UTC` | image timezone |
 | `HEADSCALE_VERSION` / `TAILSCALE_VERSION` | pinned | mesh binary versions |
-| `VAULT_ADDR` / `VAULT_KV_MOUNT` | empty / `secret` | online secret push (empty = offline/USB-only) |
+| `VAULT_ADDR` / `VAULT_KV_MOUNT` | empty / `secret` | online secret push (empty = offline/USB-only). `VAULT_KV_MOUNT` is the writer side only: the reader is pinned at mount `secret` with the literal `hugmesh/<service>` key prefix, so a non-`hugmesh` brand writes where the cluster does not read (pre-existing; #285) |
 | `CA_CERT` / `CA_KEY` / `CA_KEY_PASS` | unset | use an **existing** CA as the issuer instead of a self-signed root |
 
 > **Secrets never go in a committed `brands/*.conf`.** Real SMTP/OAuth/Vault/CA
@@ -798,6 +798,23 @@ so CI builds from a complete in-VPN copy. See [`docs/DEVOPS.md`](DEVOPS.md).
   § Distfiles](SHARED-BINPKG.md#distfiles)); if it recurs, **never `rm` the `.__download__`**
   — portage has already respawned a fetcher onto that name and the deleted inode swallows
   the download. Kill the fetcher, or place a digest-verified file under the FINAL name.
+- **x86 build stops in its first minutes with `[build-x86] ERROR: pre-fetch FAILED`** →
+  that is the payload pre-fetch working. Every distfile the payload needs is downloaded
+  before any payload package is compiled (the pass runs after the `system` group and the
+  steam-overlay sync, before the `world` and `image` groups), so a file that cannot be
+  fetched ends the run *now* instead of dropping its package silently and losing the build
+  hours later at the completeness gate.
+  The error names each file. Fix the file (mirrors rarely carry large GitHub archives;
+  download it by hand and place it in `DISTDIR` under its FINAL name after verifying size +
+  BLAKE2B + SHA512 against the ebuild Manifest), or re-run with `--allow-missing-packages`
+  to build without those packages. **Never `rm` a `.__download__`** — see above.
+- **x86 build prints `[build-x86] WARN: PRE-FETCH SKIPPED`** → portage could not *resolve*
+  the payload at that point (a keyword/mask/USE/slot wall), so nothing was downloaded and
+  the build continues without the pre-fetch floor. Not a network problem, and retrying does
+  not help: read the named wall, and expect the payload-plan gate (#223) to judge it.
+- **The x86 build spends 30-55 minutes downloading before compiling anything** → expected
+  on a cold `DISTDIR`; it is the pre-fetch, and it is about free on a warm one. A
+  `PORTAGE_RO_DISTDIRS` fleet cache removes almost all of it.
 - **`make` can't find the builder image** → `make docker-image` (LONG first run).
 - **`build-rpi5-stage4.sh` fails early** → it must run as **root** with a built
   `crossdev aarch64-unknown-linux-gnu` toolchain (§0b). Use `--resume` to reuse a

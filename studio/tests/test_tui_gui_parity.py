@@ -281,14 +281,17 @@ def test_vault_step_edits_the_same_trio_on_both_faces(wiz):
 
 def test_vault_step_refuses_the_same_input_with_the_same_sentence(wiz):
     """Neither face restates the rule: both render config.vault_field_error, so an
-    http:// address (or a stray mount) is refused with ONE sentence everywhere."""
+    http:// address (or a stray external address) is refused with ONE sentence
+    everywhere. The second row used to be a stray KV mount; #285 decision 22 removed
+    that field from both faces, and the EXTERNAL address is the residue case now."""
     page = wiz.page(wiz._page_ids["vault"])
     j = journey.Journey(GENERATOR_DIR)
     j.goto("vault")
+    ext = "https://vault.outside.example:8200"
     for widget_text, tui_line in (("http://vault.example", "a http://vault.example"),
-                                  ("", "m kv")):
+                                  ("", f"x {ext}")):
         page.addr.setText(widget_text)
-        page.kv_mount.setText("kv" if widget_text == "" else "")
+        page.external_addr.setText(ext if widget_text == "" else "")
         gui_err = page.error()
         assert gui_err
         j.feed(tui_line)

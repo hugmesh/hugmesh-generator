@@ -162,12 +162,13 @@ TAILSCALE_VERSION="1.78.1"
 
 # ── Vault (cluster secrets) ─────────────────────────────────────────
 # Used by scripts/gen-cluster-secrets.sh + the External Secrets Operator, AND
-# by the x86/rpi5 node image builders (--vault-addr / --vault-kv-mount /
-# --vault-base-path; issue #224): a set address is baked into every cluster-node
-# image as /etc/hugmesh/vault.conf so first-boot provisioning seeds ESO from it
-# when the KEYS manifest carries no .vault block. Connection facts only — the
-# token/unseal key stay on the KEYS stick.
-# Secrets live at  <VAULT_KV_MOUNT>/<BRAND>/{casdoor,clickhouse,uptrace}.
+# by the x86/rpi5 node image builders (--vault-addr; issue #224): a set address is
+# baked into every cluster-node image as /etc/hugmesh/vault.conf so first-boot
+# provisioning seeds ESO from it when the KEYS manifest carries no .vault block.
+# Connection facts only — the token/unseal key stay on the KEYS stick.
+# The WRITER puts secrets at  secret/<BRAND>/{casdoor,clickhouse,uptrace}.
+# The cluster's ExternalSecrets READ the literal  hugmesh/<service>  prefix — see
+# the note under VAULT_KV_MOUNT below.
 #
 # An EMPTY VAULT_ADDR means offline / USB-only secret delivery: the generator
 # still writes keys-out/vault/{secrets.json,token} for the KEYS stick, no
@@ -176,11 +177,25 @@ TAILSCALE_VERSION="1.78.1"
 # secrets into Vault for online ESO sync.
 VAULT_ADDR=""                       # e.g. https://vault.hugmesh.net  (empty = offline/USB-only)
 VAULT_KV_MOUNT="secret"             # KV v2 mount gen-cluster-secrets.sh WRITES to
-# NOTE: VAULT_KV_MOUNT/VAULT_BASE_PATH are the WRITER side plus a recorded fact in
-# the image. The shipped external-secrets manifests still pin their own mount
-# ("secret") and key prefix ("hugmesh/<service>"), so changing these does not yet
-# re-point what the cluster READS.
-# VAULT_BASE_PATH=""                # path prefix under the mount; empty = the BRAND slug
+# NOTE: this is the WRITER side ONLY. The READER is pinned twice over, and NEITHER
+# half is brand-derived:
+#   * the MOUNT — the shipped ClusterSecretStore pins path "secret" at the in-cluster
+#     vault.vault.svc server (specs/cluster/manifests/external-secrets/
+#     secretstore.yaml), and apps/04-external-secrets-config.yaml serves it with
+#     automated {prune, selfHeal}, so ArgoCD re-applies it from git on every
+#     reconcile and nothing image-side or kubectl-side can re-point it. A NON-DEFAULT
+#     mount here makes the generator write where the cluster does not read.
+#   * the KEY PREFIX — the ExternalSecrets read the LITERAL "hugmesh/<service>". All
+#     143 remoteRef keys under specs/cluster spell it out and none templates the
+#     brand (measured 2026-09-16). The WRITER, by contrast, writes under the brand
+#     slug: BASE="${BRAND:-hugmesh}" in gen-cluster-secrets.sh. So for any BRAND
+#     other than "hugmesh" the writer and the reader DISAGREE today. That gap is
+#     pre-existing and is NOT what #285 changed; closing it (re-point the remoteRefs,
+#     or template the brand into them) needs its own call.
+# The matching image-builder flags --vault-kv-mount / --vault-base-path were REMOVED
+# in issue #285 (decision 22 on #347, operator 2026-09-16 "A: drop both controls"):
+# they were validated, baked and logged, and read by nothing. VAULT_BASE_PATH is gone
+# with them and is read by no script in this repo.
 
 # ── External CA (optional — use an EXISTING CA as the cert issuer) ──
 # By default the cert generator mints a fresh self-signed root CA. To instead

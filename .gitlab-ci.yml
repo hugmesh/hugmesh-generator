@@ -1882,6 +1882,32 @@ lint:x86-fetch-bound:
         - specs-x86/portage/make.conf.tmpl
         - tests/scripts/test-x86-fetchcommand-bound.sh
 
+# The PAYLOAD PRE-FETCH (issue #322 slice 2; decision 24 on #347 "A: fetch
+# everything first"): one foreground `emerge --fetchonly` of the whole payload
+# before the first merge, so an unfetchable distfile is a loud failure in the
+# build's first minutes instead of a package silently dropped by --keep-going and
+# discovered hours later at the requested-atom completeness gate. EXECUTED: the
+# suite sources scripts/_emerge-prefetch-lib.sh and drives it against a stub
+# `emerge` reproducing portage's own output shapes (clean fetch, unfetchable
+# distfile, resolver wall, transient failure, unexplained non-zero exit), then
+# pins the builder call sites — staged, sourced, called, positioned before the
+# first merge, argv parity with both real merges, and the --allow-missing-packages
+# branch. bash + GNU coreutils (timeout, mktemp); no portage, no network, no root.
+lint:x86-prefetch-gate:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache coreutils grep sed
+  script:
+    - bash tests/scripts/test-x86-prefetch-gate.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - changes:
+        - scripts/_emerge-prefetch-lib.sh
+        - build-x86-host-stage4.sh
+        - tests/scripts/test-x86-prefetch-gate.sh
+
 # Documentation coverage for every user-facing scripts/ command (issue #268, the
 # #49 box a scoped `Closes` left unsatisfied): every tracked scripts/ command
 # (100755 or .sh/.py/.ps1/.js, minus _*-lib.sh) must be named in docs/**/*.md or a

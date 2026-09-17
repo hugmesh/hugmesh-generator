@@ -237,8 +237,11 @@ SAMPLES = {
     # it needs (nothing is emitted without it) and must DIFFER from (vault_field_error).
     "vault_external_addr": [{"vault_addr": "https://vault.example:8200",
                              "vault_external_addr": "https://vault.example.net:8200"}],
-    "vault_kv_mount": [{"vault_addr": "https://vault.example:8200", "vault_kv_mount": "kv"}],
-    "vault_base_path": [{"vault_addr": "https://vault.example:8200", "vault_base_path": "acme/prod"}],
+    # vault_kv_mount / vault_base_path had entries here until 2026-09-16. Both fields
+    # were removed from ImageConfig by #285 (decision 22 on #347), so the rows were
+    # dead: SAMPLES is only consulted for keys present in PLATFORM_FIELD_SUPPORT, and
+    # had one ever been reached, ImageConfig(**kwargs) would raise TypeError, which
+    # the driver catches only for ValueError — a crash, not a skip.
     "optional_services": [{"optional_services": ["akkoma"]},
                           {"optional_services": ["none"]}, {"optional_services": ["all"]}],
     "exclude_services": [{"exclude_services": ["games"]}],
