@@ -104,6 +104,12 @@ confirm_flash = QtWidgets.QMessageBox.warning
 FLASH_OK = QtWidgets.QMessageBox.StandardButton.Ok
 FLASH_CANCEL = QtWidgets.QMessageBox.StandardButton.Cancel
 
+# the flash-plan table's status colours (#415) — the same red/green/grey the job tree
+# uses, named once so a refusal is never rendered in a colour that reads like "fine".
+_FLASH_RED = "#c5221f"
+_FLASH_GREEN = "#188038"
+_FLASH_GREY = "#888888"
+
 
 # status id -> (symbol, colour) for the per-JOB status glyph (col0).
 _STATUS_GLYPH = {
@@ -651,6 +657,31 @@ class ProgressPage(QtWidgets.QWizardPage):
         fg.addLayout(r2)
         self.flash_group.setVisible(False)
         lay.addWidget(self.flash_group)          # below the splitter, beside the action bar
+
+        # ── post-build FLASH PLAN table (#415, mesh / multi-entry) ────────────────
+        # The Review page plans entry -> device. Until #415 the IMAGE half of that was
+        # a 3-value flavour AXIS chosen before anything was built, and at flash time
+        # the resolved filename appeared only inside one OK/Cancel dialog, one device
+        # at a time. This table states the whole plan at once — entry, the exact file,
+        # the device — and lets the image be changed per row before that row is
+        # written. A row whose planned flavour was NOT built keeps its LOUD refusal:
+        # its combo defaults to an explicit "none — will be SKIPPED", never to some
+        # other file, so a silent skip can never become a silent default.
+        self.flash_plan_box = QtWidgets.QGroupBox(
+            "Flash plan — which image goes to which device")
+        fpl = QtWidgets.QVBoxLayout(self.flash_plan_box)
+        self.flash_plan_table = QtWidgets.QTableWidget(0, 4)
+        self.flash_plan_table.setHorizontalHeaderLabels(
+            ["Build entry", "Image", "Device", "Status"])
+        self.flash_plan_table.verticalHeader().setVisible(False)
+        self.flash_plan_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.flash_plan_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
+        self.flash_plan_table.setMaximumHeight(160)
+        fpl.addWidget(self.flash_plan_table)
+        self.flash_plan_box.setVisible(False)
+        lay.addWidget(self.flash_plan_box)
 
         btns = QtWidgets.QHBoxLayout()
         self.stop_all_btn = QtWidgets.QPushButton("Stop all")
@@ -1211,6 +1242,9 @@ class ProgressPage(QtWidgets.QWizardPage):
         # to, a file the new run never produced.
         self._flash_image_cands = None
         self.flash_image_combo.clear()
+        self._flash_plan_pos = 0
+        self.flash_plan_table.setRowCount(0)
+        self.flash_plan_box.setVisible(False)
         self.flash_group.setVisible(False)        # only an all-ok finish reveals it
         self.total_bar.setRange(0, 100)
         self.total_bar.setValue(0)
@@ -2560,6 +2594,95 @@ class ProgressPage(QtWidgets.QWizardPage):
         except Exception:
             return ""
 
+    # ---- WHICH IMAGE, PER PLAN ROW (#415, mesh / multi-entry) ---------------------
+    def _render_flash_plan(self, plan) -> None:
+        """Fill the plan table: one row per assignment, each naming its ENTRY, the
+        exact IMAGE FILE it will write, and its DEVICE.
+
+        The image combo lists that entry's whole recorded artifact set, so a row can
+        be retargeted by FILENAME — the flavour axis alone cannot name an unflavoured
+        artifact (rpi5's plain .iso) and cannot tell two same-flavour files apart.
+        Its DEFAULT is pick_artifact(set, planned flavour): identical to what
+        _flash_next resolves on its own, so rendering this table changes nothing about
+        what gets written.
+
+        When that default is EMPTY — the run built no artifact of the planned flavour —
+        the row is marked and its combo defaults to an explicit "(none …)" entry, so
+        _flash_next still falls through to its existing loud refusal. Other files stay
+        offered BELOW that entry: overriding is possible, but only as a deliberate act.
+        """
+        t = self.flash_plan_table
+        t.setRowCount(0)
+        for a in plan:
+            row = t.rowCount()
+            t.insertRow(row)
+            flavor = getattr(a, "flavor", flash_targets.FLAVOR_AUTO)
+            built = tuple(self._entry_artifact_sets.get(a.entry_id, ()))
+            default = flash_targets.pick_artifact(built, flavor)
+            flav = "" if flavor == flash_targets.FLAVOR_AUTO else f"  [{flavor}]"
+            t.setItem(row, 0, QtWidgets.QTableWidgetItem(f"{a.entry_id}{flav}"))
+            combo = QtWidgets.QComboBox()
+            combo.setToolTip(
+                "The exact file written to this device. Defaults to the artifact this "
+                "row's planned flavour resolves to; every other image this entry built "
+                "is listed too, so a row can be retargeted by NAME. Changing it here "
+                "changes what is written — the confirmation for this device names the "
+                "file before anything is destroyed.")
+            if not default:
+                combo.addItem(
+                    f"(none — this run built no '{flavor}' image: row will be SKIPPED)"
+                    if flavor != flash_targets.FLAVOR_AUTO else
+                    "(none — this run recorded no image for this entry)", "")
+            for p in built:
+                combo.addItem(flash_targets.artifact_label(p), p)
+            i = combo.findData(default) if default else 0
+            combo.setCurrentIndex(max(0, i))
+            combo.currentIndexChanged.connect(
+                lambda _=0, r=row: self._plan_image_changed(r))
+            t.setCellWidget(row, 1, combo)
+            dev = QtWidgets.QTableWidgetItem(a.target.label())
+            t.setItem(row, 2, dev)
+            t.setItem(row, 3, QtWidgets.QTableWidgetItem(""))
+            if not default:
+                self._set_plan_status(
+                    row, f"no '{flavor}' image this run — will be SKIPPED"
+                    if flavor != flash_targets.FLAVOR_AUTO else
+                    "nothing recorded — resolved at flash time", _FLASH_RED)
+            else:
+                self._set_plan_status(row, "queued", "")
+        t.resizeColumnsToContents()
+        self.flash_plan_box.setVisible(t.rowCount() > 0)
+
+    def _plan_image_changed(self, row: int) -> None:
+        """Re-label a row the operator retargeted, so the table never shows 'will be
+        SKIPPED' next to a file that is now going to be written."""
+        chosen = self._plan_image_for(row)
+        self._set_plan_status(row, "queued" if chosen else "no image — will be SKIPPED",
+                              "" if chosen else _FLASH_RED)
+
+    def _plan_image_for(self, row: int) -> str:
+        """The plan table's per-row image override, or "" — "" means "resolve exactly
+        as before", which is what keeps the existing refusal path alive."""
+        try:
+            combo = self.flash_plan_table.cellWidget(row, 1)
+            return (combo.currentData() or "") if combo is not None else ""
+        except Exception:
+            return ""
+
+    def _set_plan_status(self, row: int, text: str, color: str) -> None:
+        try:
+            if row < 0 or row >= self.flash_plan_table.rowCount():
+                return          # the standalone Flash… path has no plan table rows
+            item = self.flash_plan_table.item(row, 3)
+            if item is None:
+                item = QtWidgets.QTableWidgetItem("")
+                self.flash_plan_table.setItem(row, 3, item)
+            item.setText(text)
+            if color:
+                item.setForeground(QtGui.QColor(color))
+        except Exception:
+            pass
+
     def _refresh_flash_targets(self) -> None:
         """Re-scan (read-only) and repopulate the combo, preserving the selection by
         device path; show the group only after an all-ok build with ≥1 target. Live
@@ -2638,6 +2761,16 @@ class ProgressPage(QtWidgets.QWizardPage):
         plan = getattr(self.wiz, "flash_plan", None)
         if plan:
             self._flash_queue = list(plan)
+            # #415: state the WHOLE plan — entry, exact image FILE, device — before the
+            # first write, and keep the per-row image combos live. Assignments 2..N run
+            # minutes later (each dd takes minutes), so a row really can be retargeted
+            # while an earlier one writes; _flash_next reads each row at the moment it
+            # resolves that row, never once up front.
+            self._flash_plan_pos = 0
+            try:
+                self._render_flash_plan(plan)
+            except Exception:
+                pass            # a partially-constructed page (direct-slot tests)
             self._flash_next()
             return
         # legacy single-target tuple stash (pre-table configs / older callers)
@@ -2684,6 +2817,20 @@ class ProgressPage(QtWidgets.QWizardPage):
             if self.flash_worker is not None and self.flash_worker.isRunning():
                 self.flash_worker.wait(3000)  # the previous worker already emitted done
             a = self._flash_queue.pop(0)
+            # #415: this assignment's row in the flash-plan table. Read HERE, at the
+            # moment this row resolves — never captured up front — so an image changed
+            # while an earlier device was being written is honoured.
+            #
+            # try/except, not getattr(..., 0): on a page built with __new__ (the
+            # direct-slot tests) PyQt raises RuntimeError — not AttributeError — for a
+            # read of an unset attribute, so a getattr DEFAULT does not cover it. pos
+            # = -1 then means "no plan table here": no override, no status writes, and
+            # the resolution below is byte-for-byte the pre-#415 chain.
+            try:
+                pos = self._flash_plan_pos
+                self._flash_plan_pos = pos + 1
+            except (AttributeError, RuntimeError):
+                pos = -1
             flavor = getattr(a, "flavor", flash_targets.FLAVOR_AUTO)
             # The assignment's work_dir was resolved on the BuildPage, before this
             # run's session existed, so it names the shared <out>. The build wrote
@@ -2700,8 +2847,20 @@ class ProgressPage(QtWidgets.QWizardPage):
             if live_dir and os.path.isdir(live_dir) and live_dir != work_dir:
                 work_dir = live_dir
                 a = dataclasses.replace(a, work_dir=live_dir)
-            artifact = flash_targets.pick_artifact(
+            caveats: list[str] = []
+            # #415: the plan table's per-row image. Its DEFAULT is exactly the
+            # pick_artifact() below, so this is a no-op unless the operator changed it;
+            # and it is "" for a row whose flavour was not built, which is what keeps
+            # the refusal below reachable instead of silently substituting a file.
+            chosen = self._plan_image_for(pos)
+            artifact = chosen or flash_targets.pick_artifact(
                 self._entry_artifact_sets.get(a.entry_id, ()), flavor)
+            if chosen and flavor != flash_targets.FLAVOR_AUTO and \
+                    flash_targets.classify_artifact_flavor(chosen) != flavor:
+                caveats.append(
+                    f"You picked {os.path.basename(chosen)} in the flash plan; this "
+                    f"row was planned for the '{flavor}' artifact. The file above is "
+                    f"what will be written.")
             if not artifact:
                 # legacy single-record store (pre-flavour callers/tests seed only
                 # this): honour it when it satisfies the requested flavour.
@@ -2709,7 +2868,6 @@ class ProgressPage(QtWidgets.QWizardPage):
                 if single and (flavor == flash_targets.FLAVOR_AUTO or
                                flash_targets.classify_artifact_flavor(single) == flavor):
                     artifact = single
-            caveats: list[str] = []
             if not artifact and not self._entry_artifact_sets.get(a.entry_id):
                 # NOTHING was recorded for this entry. Before refusing, LOOK: the
                 # finished image is usually sitting in the work dir, and a dead end
@@ -2748,17 +2906,21 @@ class ProgressPage(QtWidgets.QWizardPage):
                         f"and no {a.arch} {a.role} image was found in {work_dir} "
                         f"— skipped (flash manually: scripts/flash-disk.sh "
                         f"--artifact <image> {a.target.path}).")
+                self._set_plan_status(pos, "SKIPPED — no image resolved", _FLASH_RED)
                 continue
             live = next((t for t in flash_targets.list_targets()
                          if t.path == a.target.path), None)
             if live is None:
                 self.log.appendPlainText(
                     f"Flash plan: device {a.target.path} is no longer attached — skipped.")
+                self._set_plan_status(pos, "SKIPPED — device gone", _FLASH_RED)
                 continue
             if live.size != a.target.size or live.model != a.target.model:
                 self.log.appendPlainText(
                     f"Flash plan: the device now at {a.target.path} is not the one "
                     f"assigned at build time (identity changed) — skipped for safety.")
+                self._set_plan_status(pos, "SKIPPED — device identity changed",
+                                      _FLASH_RED)
                 continue
             flav = "" if flavor == flash_targets.FLAVOR_AUTO else f" [{flavor}]"
             self.log.appendPlainText(
@@ -2768,12 +2930,14 @@ class ProgressPage(QtWidgets.QWizardPage):
             # never leak onto the NEXT device's dialog.
             self._flash_caveats = caveats
             self._flash_cancelled = False       # set by _start_flash on a decline
+            self._set_plan_status(pos, "writing…", "")
             self._start_flash(a.target, argv=flash_targets.assignment_argv(
                 a, generator_dir=self.wiz.generator_dir, artifact=artifact))
             if getattr(self, "_flash_cancelled", False):
                 # the operator declined THIS device — offer the next assignment
                 # rather than stranding the rest of the plan.
                 self._flash_cancelled = False
+                self._set_plan_status(pos, "cancelled — not written", _FLASH_GREY)
                 continue
             return
 
@@ -2839,6 +3003,11 @@ class ProgressPage(QtWidgets.QWizardPage):
     def _flash_done(self, code: int) -> None:
         self.log.appendPlainText(f"=== flash exited {code} ===")
         self.flash_refresh_btn.setEnabled(True)
+        # #415: record the OUTCOME on the row that just finished, BEFORE _flash_next
+        # advances _flash_plan_pos to the next one.
+        self._set_plan_status(getattr(self, "_flash_plan_pos", 0) - 1,
+                              "written" if code == 0 else f"FAILED (rc={code})",
+                              _FLASH_GREEN if code == 0 else _FLASH_RED)
         self._refresh_flash_targets()
         self._flash_next()                    # chain the next plan assignment (if any)
 
