@@ -632,11 +632,22 @@ fi
 # than print a reassuring line about a property nobody checked.
 PROP="${REPO}/tests/workload-console/exec_argv_property.py"
 if [ -f "${PROP}" ] && command -v python3 >/dev/null; then
-  python3 "${PROP}" "${PATCH}"
-  if [ $? -eq 0 ]; then
+  # Captured rather than streamed so the script's VERDICT line can be read back. A
+  # non-zero exit ALONE cannot tell "an entry violates P" from "the check could not
+  # judge an entry": #405 was the second, and this line reported the first, which
+  # reads as a security finding about the allowlist and was in fact a blind guard.
+  # Both still fail the suite; only one of them is a claim about the allowlist.
+  prop_out="$(python3 "${PROP}" "${PATCH}" 2>&1)"; prop_rc=$?
+  printf '%s\n' "${prop_out}"
+  prop_verdict="$(printf '%s\n' "${prop_out}" | sed -n 's/^__VERDICT //p' | tail -1)"
+  if [ "${prop_rc}" -eq 0 ] && [ "${prop_verdict}" = "ok" ]; then
     ok "exec allowlist holds property P (no entry can be argued into reading a file, dumping an environment, executing, or writing)"
-  else
+  elif [ "${prop_verdict}" = "unproven" ]; then
+    bad "exec allowlist property P is UNPROVEN on this host — at least one entry could not be JUDGED (see the FAILs above). An unproven property is not a passing one, and it is not a finding against the allowlist either: fix the runner, do not read this as a hazardous entry."
+  elif [ "${prop_verdict}" = "violated" ]; then
     bad "exec allowlist VIOLATES property P — see the FAILs above"
+  else
+    bad "exec_argv_property.py exited ${prop_rc} without printing a verdict — the exec allowlist property is UNPROVEN"
   fi
 else
   bad "exec_argv_property.py or python3 missing — the exec allowlist property is UNPROVEN"
@@ -686,6 +697,24 @@ if [ -f "${PROP}" ] && command -v python3 >/dev/null; then
       'EXECUTED another program' fail
   # NEGATIVE 3 — fail-closed on an entry that cannot be probed at all.
   ctl "an entry whose binary is absent" "hugmesh-no-such-command" "unprobed entry is an unproven entry" fail
+  # NEGATIVE 3b — UNPROVEN and VIOLATED must stay DISTINCT verdicts. Both fail the
+  # run, but only one of them says anything about the allowlist, and #405 is what it
+  # costs to conflate them: an inert guard was printed as "exec allowlist VIOLATES
+  # property P" for weeks. Asserted in BOTH directions so neither verdict can quietly
+  # decay into the other's synonym. `cut` is the violated side because it trips the
+  # documentation leg without a behavioural battery, so this control stays cheap.
+  vtl() {  # $1 = label ; $2 = entries ; $3 = expected __VERDICT
+    local out v
+    out="$(python3 "${PROP}" --entries "$2" 2>&1)"
+    v="$(printf '%s\n' "${out}" | sed -n 's/^__VERDICT //p' | tail -1)"
+    if [ "${v}" = "$3" ]; then
+      ok "control: $1 — reported __VERDICT $3"
+    else
+      bad "control: $1 — expected __VERDICT $3, got '${v}'"
+    fi
+  }
+  vtl "an unprobeable entry is UNPROVEN, not a finding against the list" "hugmesh-no-such-command" unproven
+  vtl "an entry that really can read a file is VIOLATED, not unproven" "cut" violated
   # NEGATIVE 4a/4b — the OPERAND sub-class: a reader that needs NO FLAG AT ALL.
   # `base64 /var/run/secrets/workload-console-read/token` is the whole exploit, and
   # both legs used to wave it through — the doc leg because it only ever read the
@@ -709,6 +738,56 @@ if [ -f "${PROP}" ] && command -v python3 >/dev/null; then
   # the leak, and every metadata tool on the list would have to be exempted by name.
   ctl "a command that really does hold P (uname)" "uname" "" pass
   ctl "a FILE-operand command that leaks no bytes (stat)" "stat" "" pass
+
+  # NEGATIVE 5 — a help text this parser CANNOT READ is UNPROVEN and non-zero, never
+  # a quiet green. #405 was exactly this shape: GNU coreutils 9.11 wraps every option
+  # token in an OSC 8 hyperlink and SGR bold even into a pipe, the parser saw ESC
+  # where it expected `-`, and the option surface came back EMPTY for ls/df/id/stat/
+  # uname/du/base64. The parser now strips the decoration it knows AND fails closed on
+  # decoration it does not, and on a help whose option surface simply will not parse.
+  #
+  # Both of those branches are UNREACHABLE by any real command on a host where the
+  # real commands parse, which is precisely why they need driving by hand. MEASURED
+  # 2026-09-17: with only the first control present, replacing the FAIL in the
+  # unparseable-option-surface branch with a bare `continue` — a silent skip, the one
+  # outcome this check must never have — left this suite at 62 passed / 0 failed.
+  # Adding the second control turned that same mutation red. Neither control can be
+  # satisfied by a non-zero exit alone: each names the MECHANISM and requires the
+  # UNPROVEN verdict, so "the entry is hazardous" cannot stand in for "I could not
+  # read this".
+  fake_help_ctl() {  # $1 = label ; $2 = command name ; $3 = help bytes ; $4 = mechanism
+    local label name helpbytes mech
+    local dir out rc v
+    label="$1"; name="$2"; helpbytes="$3"; mech="$4"
+    dir="${WORK}/fake-help-${name}"
+    mkdir -p "${dir}"
+    # The help is materialised by THIS suite's bash and the throwaway command only
+    # cats it, so the control does not depend on what /bin/sh's printf makes of an
+    # octal escape.
+    printf '%b' "${helpbytes}" > "${dir}/help.txt"
+    printf '#!/bin/sh\nexec cat %s\n' "${dir}/help.txt" > "${dir}/${name}"
+    chmod +x "${dir}/${name}"
+    out="$(PATH="${dir}:${PATH}" python3 "${PROP}" --entries "${name}" 2>&1)"; rc=$?
+    v="$(printf '%s\n' "${out}" | sed -n 's/^__VERDICT //p' | tail -1)"
+    if [ "${rc}" -ne 0 ] && [ "${v}" = "unproven" ] \
+       && printf '%s' "${out}" | grep -F "${mech}" >/dev/null; then
+      ok "control: ${label} — UNPROVEN and non-zero, via ${mech}"
+    else
+      bad "control: ${label} — expected rc!=0 + __VERDICT unproven + '${mech}', got rc=${rc} verdict='${v}': ${out}"
+    fi
+  }
+  # 5a — decoration the sanitiser does not understand. ESC DEL is the payload: not a
+  # valid sequence in any terminal grammar, so no sanitiser should claim to know it.
+  fake_help_ctl "help decorated in a form the parser cannot strip" \
+    "hugmesh-opaque-help" \
+    'Usage: hugmesh-opaque-help [OPTION]... [FILE]...\nReport usage for each FILE.\n\n  \033\177-a, --all       do everything\n  \033\177-o, --output=F  write output to F\n' \
+    'survive sanitisation'
+  # 5b — no decoration at all, and still no option line the parser can read. This is
+  # the branch that a silent `continue` used to be able to occupy for free.
+  fake_help_ctl "help whose option surface will not parse at all" \
+    "hugmesh-optionless-help" \
+    'Usage: hugmesh-optionless-help [FILE]...\nReport something about each FILE.\nThis build of it documents no options whatsoever.\n' \
+    'could not parse a single option'
 fi
 
 # RENDER-level proof when kubectl is available: the dark render carries ZERO
