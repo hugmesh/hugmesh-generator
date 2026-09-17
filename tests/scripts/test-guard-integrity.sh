@@ -493,7 +493,27 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # ungated SET pin is unchanged at 22. This file conflicts on nearly every merge;
 # if it conflicts here, RE-MEASURE on the merged tree per the doctrine above
 # rather than taking 169 or the other side's number.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-169}"
+#
+# 169 -> 170 on 2026-09-17: tests/scripts/test-fe-bff-route-lane-parity.sh joined
+# the gate with operator decision 40 (hugmesh-generator#347 answers comment;
+# tracked on hugmesh-generator#366). It reads BOTH fe route tables — the compose
+# one (tests/stack/gateway-routes/fe/application-routes.yml) and the cluster one
+# (specs/cluster/apps/20-gateway-fe.yaml) — simulates Spring Cloud Gateway's
+# first-match-wins ordering over each, and asserts the five #366 paths resolve to
+# the SAME BFF on both. Two of the five have no handler anywhere and 404 by
+# ACCEPTED decision, so the guard also has to stop a well-meaning revert.
+# MEASURED by RUNNING this file both ways on the same tree, not assumed:
+#     170 of 192 suites are named by a pull_request-triggered workflow   (with it)
+#     169 of 191 suites are named by a pull_request-triggered workflow   (without)
+# — "without" meaning the suite file deleted AND both its wirings removed, so the
+# denominator moves too, exactly like the 164 -> 165 entry above. Named in
+# shell-suites.yml's DEBIAN job (python:3.12-slim) because it needs PyYAML, which
+# only the debian and extras jobs install; the alpine job has no yaml module and
+# the suite would die on the import rather than skip. The ungated SET pin is
+# unchanged at 22 in both measurements. RUN on this host: 10 passed / 0 failed
+# rc=0 with six negative controls 6 caught / 0 survived, and against the
+# PRE-CHANGE compose table it prints 5 failures (one per #366 path) rc=1.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-170}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED
