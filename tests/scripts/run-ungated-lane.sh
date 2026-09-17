@@ -20,19 +20,24 @@
 # re-learning about. If the array cannot be parsed, this script FAILS (exit 1)
 # rather than running a guessed subset.
 #
-#   E2E_UNGATED_SET=e2e   (default)  the tests/scripts/test-e2e-*.sh entries —
-#                                    the browser/Qt family #246 was written about
-#                                    (8 of 22 when this was written; the runner
-#                                    prints the live count every run)
+#   E2E_UNGATED_SET=all   (DEFAULT)  every PREMERGE_UNGATED entry — 22 of 22
+#                                    today; the runner prints the live count
+#                                    every run and hardcodes no number. Operator
+#                                    decision 32c on #347, 2026-09-17: the
+#                                    default is 22, NOT the 8 that shipped. It
+#                                    therefore sweeps in the stack, kind,
+#                                    casdoor, pentest, eso and liquibase suites
+#                                    that are ungated for their OWN reasons and
+#                                    were NOT what #246 asked for. See WHAT THIS
+#                                    DEFAULT COSTS, below.
+#   E2E_UNGATED_SET=e2e              only the tests/scripts/test-e2e-*.sh
+#                                    entries — the browser/Qt family #246 was
+#                                    written about, 8 of 22 today. This is the
+#                                    old default and is now an explicit opt-in.
 #   E2E_UNGATED_DRY_RUN=1            print the selection and whether a real run
 #                                    would be allowed beside whatever is up, then
 #                                    stop. Executes no suite. This is how you
 #                                    verify the wiring without a twenty-minute lane.
-#   E2E_UNGATED_SET=all              every PREMERGE_UNGATED entry, which
-#                                    additionally sweeps in the stack, kind,
-#                                    casdoor, pentest, eso and liquibase suites
-#                                    that are ungated for their OWN reasons and
-#                                    are NOT what #246 asked for
 #   E2E_UNGATED_STRICT=1             a SKIPPED-LOUDLY exit 2 counts as red
 #   E2E_UNGATED_SUITE_TIMEOUT=<sec>  kill a suite that runs longer than this
 #                                    (exit 124 -> ERROR). Unset/0 = no limit.
@@ -59,9 +64,12 @@
 #                                    The runner passes the environment through
 #                                    untouched and prints the value it ran with.
 #
-# DURATION, measured 2026-09-16 on the operator's box with the toolchain present:
-# the default set takes ~21 minutes (coverage-matrix alone ~9 min). It is not a
-# two-minute smoke.
+# DURATION. The E2E_UNGATED_SET=e2e subset was measured 2026-09-16 on the
+# operator's box with the toolchain present: ~21 minutes, coverage-matrix alone
+# ~9 min. THE 22-SUITE DEFAULT HAS NOT BEEN TIMED END TO END — it is that ~21
+# minutes plus fourteen more suites, so treat it as "longer than twenty minutes,
+# upper bound unmeasured" until somebody runs it and replaces this sentence with
+# a number. It is not a two-minute smoke either way.
 #
 # THE LIVE STACK IS NOT TOUCHED. #246's third bullet: the lane must never disturb
 # the operator's live hugmesh-local stack. This script therefore:
@@ -106,8 +114,7 @@
 # all 22 PREMERGE_UNGATED entries (this paragraph replaces one written on
 # 2026-09-10 that said "none of the 22 brings a stack up", which was FALSE on the
 # tree it was written against; a skeptic pass caught it):
-#   * ONE suite in the DEFAULT set starts a container:
-#     tests/scripts/test-e2e-env-interface-dimensions.sh's M7 control
+#   * tests/scripts/test-e2e-env-interface-dimensions.sh's M7 control
 #     (m7_standin_start, :1006) runs
 #         docker run -d --name e2eguard-m7-<pid>-control-plane -p 127.0.0.1::80 python:3.12-slim
 #     as a loopback http.server stand-in and removes ONLY that naming shape
@@ -115,13 +122,43 @@
 #     self-contained, cannot reach a hugmesh-local container, and the census
 #     above does not count it (wrong prefix) — a real run on 2026-09-16 saw it
 #     start and remove itself with the footprint unchanged.
-#   * everything else is a READ: `docker ps` (the same suite), `docker compose
+#   * tests/casdoor/test-jwt-custom-token.sh starts TWO containers on a private
+#     network — `casdoor-pg` (postgres) and `casdoor-jwtcustom-test`
+#     (casbin/casdoor) — and removes both plus the network in an EXIT trap. Its
+#     names are FIXED, not pid-suffixed, so two concurrent runs of this lane
+#     collide and a run killed before its trap leaves them behind for the next
+#     one to trip over. This suite was NOT in the default set before decision
+#     32c; it is now.
+#   * everything else is a READ: `docker ps` (the M7 suite), `docker compose
 #     config` (tests/stack/test-web-locales-wiring.sh), `kubectl` against
-#     whatever context is current (test-kind-metrics-api.sh,
-#     test-selected-services-only.sh — SET=all only), plus one throwaway node
+#     whatever context is current (test-kind-metrics-api.sh, which SKIPS unless
+#     a kind cluster named hugmesh-local is up — and the refusal above means it
+#     can therefore only ever SKIP in this lane), plus one throwaway node
 #     fixture on its own loopback port (tests/pentest/nuclei/test-templates.sh).
+#     tests/scripts/test-selected-services-only.sh is static analysis of the
+#     boot scripts; the `kubectl apply` strings in it are the text it inspects,
+#     not commands it runs.
 # The refusal is a floor, not a diagnosis: it is here so that a future suite
 # which DOES start something with the live prefix cannot arrive quietly.
+#
+# WHAT THE 32c DEFAULT COSTS — MEASURED 2026-09-17, recorded rather than worked
+# around. Widening the default from the 8 browser/Qt suites to all 22 pulls in
+# suites that were ungated for reasons of their OWN, not for a missing
+# toolchain. Three of the fourteen newcomers are RED on this tree, each run
+# directly on this branch:
+#     tests/scripts/test-selected-services-only.sh          rc=1
+#     tests/scripts/test-optional-service-slug-closure.sh   rc=1
+#     tests/stack/test-gateway-auth-flag-parity.sh          rc=1
+# They are EXPECTED REDS naming real platform defects, not suite bugs
+# (.gitlab-ci.yml documents the selected-services job as "RED on today's main …
+# five checks, each naming a live defect"; the other two say so in their own
+# headers). A suite that exits 1 makes the LANE exit 1, so `make e2e-ungated` is
+# RED BY DEFAULT until those defects are fixed, and its red no longer
+# distinguishes "something broke" from "the known three". That is the cost of
+# the operator's answer to decision 32c and it is theirs to carry; do NOT narrow
+# the default back to make the lane green. If it needs to be actionable before
+# those defects land, the honest shapes are an explicit expected-red allowlist
+# in this runner or fixing the three — both are decisions nobody has made.
 #
 # EXIT CODES, per suite and overall. The suites already distinguish these and
 # the distinction is the whole point of a routine run — a lane that cannot tell
@@ -164,7 +201,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${HERE}/../.." && pwd)"
 GUARD="${HERE}/test-guard-integrity.sh"
 
-SET_NAME="${E2E_UNGATED_SET:-e2e}"
+# DECISION 32c (#347, 2026-09-17): the DEFAULT SPEC COUNT is 22, not the 8
+# that shipped — i.e. the default selection is every PREMERGE_UNGATED entry.
+# This is the one place the default lives; everything else derives or prints it.
+UNGATED_DEFAULT_SET="all"
+SET_NAME="${E2E_UNGATED_SET:-${UNGATED_DEFAULT_SET}}"
 STRICT="${E2E_UNGATED_STRICT:-0}"
 # DECISION 32a (#347, 2026-09-17): BOTH live shapes by default, not just the
 # one #246 named. A space-separated LIST; see the header.
@@ -267,7 +308,7 @@ fi
 case "${SET_NAME}" in
   e2e) SUITES="$(printf '%s\n' "${ALL_UNGATED}" | grep -a '/test-e2e-' || true)" ;;
   all) SUITES="${ALL_UNGATED}" ;;
-  *)   die 1 "E2E_UNGATED_SET must be 'e2e' (default, the test-e2e-* browser/Qt suites) or 'all'; got '${SET_NAME}'" ;;
+  *)   die 1 "E2E_UNGATED_SET must be 'all' (the default since decision 32c: every PREMERGE_UNGATED entry) or 'e2e' (only the test-e2e-* browser/Qt suites); got '${SET_NAME}'" ;;
 esac
 
 if [ -z "${SUITES}" ]; then

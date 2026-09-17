@@ -17,15 +17,18 @@
 # tools the runner needs plus, per case, stub `docker` / `kind` binaries whose
 # behaviour is set by a state directory. No real suite, no real docker, no real
 # kind, no network, no cluster, nothing under tests/e2e.
-#   1. selection is DERIVED from the array: e2e = the /test-e2e-/ entries, all =
-#      every entry, comments stripped, and the array's close paren is honoured
-#      even when indented (an unanchored parser ran on into the NEXT array and
-#      selected a suite from it — measured 2026-09-16)
+#   1. selection is DERIVED from the array: all = every entry, e2e = only the
+#      /test-e2e-/ entries, comments stripped, and the array's close paren is
+#      honoured even when indented (an unanchored parser ran on into the NEXT
+#      array and selected a suite from it — measured 2026-09-16). THE DEFAULT IS
+#      `all` (decision 32c on #347, 2026-09-17: 22, not the 8 that shipped), so
+#      the default selection includes the non-e2e entry and `e2e` is the opt-in.
 #   2. a bogus E2E_UNGATED_SET and a guard without the array both refuse (exit 1)
 #      rather than running a guessed subset
 #   3. exit 0/1/2/other classify as PASS/FAIL/SKIP/ERROR, a missing file is an
 #      ERROR, the lane exits 1 on any FAIL/ERROR, evidence lands as run.log plus
-#      one path-named .log per suite, and the non-e2e entry is not run
+#      one path-named .log per suite, the non-e2e entry IS run by default (32c)
+#      and is NOT run under the explicit E2E_UNGATED_SET=e2e
 #   4. green+skip exits 0; E2E_UNGATED_STRICT=1 makes it 1
 #   5. VACUITY FLOOR: every suite skipped exits 6, STRICT or not
 #   6. a live footprint (prefix-matched container, or the kind cluster) REFUSES
@@ -57,7 +60,8 @@
 #
 # NEGATIVE CONTROLS. The battery is re-run against MUTATED copies of the runner
 # — the exit-3 refusal deleted, the exit-4 census deleted, the fail-open census
-# restored, the vacuity floor removed, the paren anchor loosened, the removed
+# restored, the vacuity floor removed, the default set narrowed back to e2e, the
+# paren anchor loosened, the removed
 # ALLOW_LIVE_STACK override reinstated, the watch list narrowed back to
 # hugmesh-local alone, the empty-watch-list guard dropped, the mkdir check
 # dropped, the timeout branch dropped — and each mutation must make at
@@ -216,22 +220,32 @@ battery() {
     write_tree "${T}" full; new_state; O="${STATE}/dry.out"
     run_lane "${T}" none "${O}" E2E_UNGATED_DRY_RUN=1
     [ "${RC}" = "0" ] && ok "dry run exits 0" || bad "dry run exited ${RC}, expected 0"
-    has "${O}" "set   : e2e (5 of 6 PREMERGE_UNGATED suites)" \
-      && ok "e2e selection is 5 of 6 (the /test-e2e-/ entries, comments stripped)" \
-      || bad "e2e selection count wrong: $(grep -a 'set   :' "${O}")"
+    # DECISION 32c: with NO E2E_UNGATED_SET in the environment the selection is
+    # every entry. Flip the default back to e2e and these two go red.
+    has "${O}" "set   : all (6 of 6 PREMERGE_UNGATED suites)" \
+      && ok "the DEFAULT selection is every entry, 6 of 6 (32c: 22, not 8)" \
+      || bad "default selection wrong: $(grep -a 'set   :' "${O}")"
+    has "${O}" "     tests/stack/test-not-e2e.sh" \
+      && ok "the default selection includes the non-e2e entry (32c)" \
+      || bad "the default selection excluded the non-e2e entry"
     for s in green red skip crash missing; do
       has "${O}" "     tests/scripts/test-e2e-${s}.sh" && ok "dry run lists test-e2e-${s}.sh" || bad "dry run does not list test-e2e-${s}.sh"
     done
-    has "${O}" "test-not-e2e.sh" && bad "e2e selection swept in the non-e2e entry" || ok "e2e selection excludes tests/stack/test-not-e2e.sh"
     has "${O}" "test-e2e-trailing.sh" && bad "parser ran past the INDENTED close paren into TRAILING_ARRAY" || ok "the indented close paren ends the array (TRAILING_ARRAY not read)"
     has "${O}" "should-not-be-selected" && bad "parser picked up an entry from the array BEFORE PREMERGE_UNGATED" || ok "the preceding array is not read"
     has "${O}" "live footprint [hugmesh-local, hugmesh-real]: none — a real run would proceed" && ok "dry run with no docker/kind on PATH reports no footprint, naming BOTH watched prefixes" || bad "dry run footprint line wrong: $(grep -a footprint "${O}")"
     [ -e "${RAN}" ] && bad "dry run EXECUTED a suite" || ok "dry run executed nothing"
     [ -e "${LOGS}" ] && bad "dry run created the evidence dir" || ok "dry run created no evidence dir"
+    new_state; O="${STATE}/dry-e2e.out"
+    run_lane "${T}" none "${O}" E2E_UNGATED_DRY_RUN=1 E2E_UNGATED_SET=e2e
+    has "${O}" "set   : e2e (5 of 6 PREMERGE_UNGATED suites)" \
+      && ok "the explicit e2e opt-in is 5 of 6 (the /test-e2e-/ entries, comments stripped)" \
+      || bad "e2e selection count wrong: $(grep -a 'set   :' "${O}")"
+    has "${O}" "test-not-e2e.sh" && bad "the e2e opt-in swept in the non-e2e entry" || ok "the e2e opt-in excludes tests/stack/test-not-e2e.sh"
     new_state; O="${STATE}/dryall.out"
     run_lane "${T}" none "${O}" E2E_UNGATED_DRY_RUN=1 E2E_UNGATED_SET=all
     has "${O}" "set   : all (6 of 6 PREMERGE_UNGATED suites)" && has "${O}" "tests/stack/test-not-e2e.sh" \
-      && ok "SET=all selects every entry including the non-e2e one" || bad "SET=all selection wrong: $(grep -a 'set   :' "${O}")"
+      && ok "an explicit SET=all selects every entry including the non-e2e one" || bad "SET=all selection wrong: $(grep -a 'set   :' "${O}")"
     new_state; O="${STATE}/bogus.out"
     run_lane "${T}" none "${O}" E2E_UNGATED_SET=bogus
     [ "${RC}" = "1" ] && has "${O}" "REFUSED" && ok "a bogus E2E_UNGATED_SET refuses with exit 1" || bad "bogus set: rc ${RC}"
@@ -252,11 +266,12 @@ battery() {
     has "${O}" "SKIP   tests/scripts/test-e2e-skip.sh"   && ok "exit 2 -> SKIP"  || bad "skip not SKIP"
     has "${O}" "ERROR  tests/scripts/test-e2e-crash.sh   (exit 7)" && ok "exit 7 -> ERROR (exit 7)" || bad "crash not ERROR"
     has "${O}" "ERROR  tests/scripts/test-e2e-missing.sh  (no such file" && ok "a missing suite -> ERROR (no such file)" || bad "missing not ERROR"
-    has "${O}" "== RESULT: 1 passed, 1 failed, 1 skipped, 2 errored (of 5) ==" && ok "RESULT line counts 1/1/1/2 of 5" || bad "RESULT line wrong: $(grep -a 'RESULT' "${O}")"
+    has "${O}" "PASS   tests/stack/test-not-e2e.sh" && ok "the non-e2e entry RUNS in the default set (32c)" || bad "the non-e2e entry did not run by default"
+    has "${O}" "== RESULT: 2 passed, 1 failed, 1 skipped, 2 errored (of 6) ==" && ok "RESULT line counts 2/1/1/2 of 6" || bad "RESULT line wrong: $(grep -a 'RESULT' "${O}")"
     grep -a -E '^ *\| +FAIL something' "${O}" >/dev/null && ok "a red suite's tail is inlined" || bad "red tail not inlined"
     [ -e "${RAN}" ] && grep -a -x 'test-e2e-green.sh' "${RAN}" >/dev/null && grep -a -x 'test-e2e-crash.sh' "${RAN}" >/dev/null \
       && ok "the stub suites really ran (ran.log)" || bad "ran.log missing green/crash"
-    grep -a 'test-not-e2e' "${RAN}" >/dev/null && bad "the non-e2e entry was RUN in the e2e set" || ok "the non-e2e entry was not run"
+    grep -a 'test-not-e2e' "${RAN}" >/dev/null && ok "ran.log confirms the non-e2e entry really ran by default (32c)" || bad "the non-e2e entry did not run by default"
     local d
     d="$(ls -d "${LOGS}"/*/ 2>/dev/null | head -n1)"
     [ -n "${d}" ] && [ -f "${d}/run.log" ] && ok "evidence dir exists with run.log" || bad "no evidence dir / run.log under ${LOGS}"
@@ -264,6 +279,10 @@ battery() {
       && ok "per-suite logs are named from the full path (tests_scripts_test-e2e-green.log)" || bad "per-suite logs missing or misnamed: $(ls "${d}" 2>/dev/null | tr '\n' ' ')"
     [ -n "${d}" ] && grep -a 'FAIL   tests/scripts/test-e2e-red.sh' "${d}/run.log" >/dev/null && ok "run.log carries the verdicts" || bad "run.log lacks the verdicts"
     has "${O}" "studio python: python3 (SNAP_STUDIO_PYTHON unset" && ok "the header names the Studio interpreter it ran with (unset)" || bad "no studio python line"
+    new_state; O="${STATE}/e2eonly.out"
+    run_lane "${T}" none "${O}" E2E_UNGATED_SET=e2e
+    has "${O}" "== RESULT: 1 passed, 1 failed, 1 skipped, 2 errored (of 5) ==" && ok "the explicit e2e opt-in still runs only 5" || bad "e2e opt-in RESULT wrong: $(grep -a 'RESULT' "${O}")"
+    grep -a 'test-not-e2e' "${RAN}" >/dev/null && bad "the non-e2e entry was RUN under E2E_UNGATED_SET=e2e" || ok "the non-e2e entry is not run under the e2e opt-in"
     new_state; O="${STATE}/snap.out"
     run_lane "${T}" none "${O}" SNAP_STUDIO_PYTHON=/opt/venv/bin/python
     has "${O}" "studio python: /opt/venv/bin/python" && ok "SNAP_STUDIO_PYTHON is printed when set" || bad "SNAP_STUDIO_PYTHON not echoed"
@@ -491,6 +510,9 @@ s=re.sub(r"\nif \[ \"\$\{PASS\}\" -eq 0 \]; then\n.*?\n  exit 6\nfi\n", "\n", s,
 
 mutate "the array close-paren anchor is loosened to column 0" "selection" "${PYHDR}"'
 s=s.replace("/^[[:space:]]*\\)[[:space:]]*$/{f=0}", "/^\\)/{f=0}", 1)'"${PYFTR}"
+
+mutate "the default set narrows back to e2e (32c reverted)" "selection classify" "${PYHDR}"'
+s=s.replace("UNGATED_DEFAULT_SET=\"all\"", "UNGATED_DEFAULT_SET=\"e2e\"", 1)'"${PYFTR}"
 
 mutate "the E2E_UNGATED_ALLOW_LIVE_STACK override is reinstated (32b reverted)" "aftercensus" "${PYHDR}"'
 s=s.replace("LIVE_PREFIX=\"${E2E_UNGATED_LIVE_PREFIX:-${UNGATED_DEFAULT_LIVE_PREFIXES}}\"",

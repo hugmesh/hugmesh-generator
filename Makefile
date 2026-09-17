@@ -2291,15 +2291,21 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 # Its own target and its own .PHONY line, for the same reason the BDD lane has
 # them: the recipes above are edited by other work in flight.
 #
-#   make e2e-ungated                          the tests/scripts/test-e2e-*.sh
-#                                             suites #246 was written about (8 of
-#                                             22 when this was written; the runner
-#                                             prints the live count every run)
-#   E2E_UNGATED_SET=all make e2e-ungated      every PREMERGE_UNGATED suite —
-#                                             additionally the stack, kind,
+#   make e2e-ungated                          EVERY PREMERGE_UNGATED suite — 22
+#                                             of 22 today; the runner prints the
+#                                             live count every run and hardcodes
+#                                             no number. Operator decision 32c on
+#                                             #347 (2026-09-17): the default is
+#                                             22, NOT the 8 that shipped. It
+#                                             therefore includes the stack, kind,
 #                                             casdoor, pentest, eso and liquibase
-#                                             ones, which are ungated for their
-#                                             own reasons
+#                                             suites that are ungated for their
+#                                             OWN reasons — see WHAT THIS DEFAULT
+#                                             COSTS below.
+#   E2E_UNGATED_SET=e2e make e2e-ungated      only the tests/scripts/test-e2e-*.sh
+#                                             suites #246 was written about, 8 of
+#                                             22 today. The old default, now an
+#                                             explicit opt-in.
 #   E2E_UNGATED_STRICT=1 make e2e-ungated     treat a SKIPPED-LOUDLY exit 2 as red
 #                                             (use on a box you believe is fully
 #                                             equipped: it turns "the toolchain
@@ -2317,15 +2323,22 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 #                                             python3) and goes RED, not SKIP, when
 #                                             that interpreter lacks pytest.
 #                                             MEASURED 2026-09-16 on the operator's
-#                                             box: 7 of 8 without it, 8 of 8 with
-#                                             it. The default set takes ~21 min.
+#                                             box, against the then-default 8-suite
+#                                             e2e subset: 7 of 8 green without it,
+#                                             8 of 8 with it. That subset takes
+#                                             ~21 min; the 22-suite default has
+#                                             never been timed end to end.
 #   E2E_UNGATED_DRY_RUN=1 make e2e-ungated    print WHICH suites the selection
 #                                             resolves to and whether a real run
 #                                             would be allowed beside whatever is
 #                                             currently up, then stop having
 #                                             executed nothing. Verified here on
-#                                             2026-09-10: 8 of 22 by default, 22
-#                                             of 22 with E2E_UNGATED_SET=all.
+#                                             2026-09-10, when the default was
+#                                             still 8: 8 of 22 by default, 22 of
+#                                             22 with E2E_UNGATED_SET=all. Since
+#                                             decision 32c the default IS 22 of
+#                                             22 and E2E_UNGATED_SET=e2e is the
+#                                             8.
 #
 # Neither set is hardcoded here. tests/scripts/run-ungated-lane.sh DERIVES both
 # from the PREMERGE_UNGATED array in tests/scripts/test-guard-integrity.sh, so a
@@ -2349,12 +2362,36 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 # outlived it and exits 4 if the footprint moved, which now means a suite BROUGHT
 # one up (the before-census is always empty when the lane proceeds). What the
 # suites THEMSELVES start, measured
-# 2026-09-16 (correcting a 2026-09-10 claim that none did): ONE suite in the
-# default set, test-e2e-env-interface-dimensions.sh, runs a throwaway
-# python:3.12-slim http.server container named e2eguard-m7-* and removes only
-# that name; every other verb in the 22 is a read. The runner header carries
-# the inventory, and tests/scripts/test-run-ungated-lane.sh (pre-merge gated)
-# pins every refusal above against mutated copies of the runner.
+# 2026-09-16 (correcting a 2026-09-10 claim that none did):
+# test-e2e-env-interface-dimensions.sh runs a throwaway python:3.12-slim
+# http.server container named e2eguard-m7-* and removes only that name, and
+# tests/casdoor/test-jwt-custom-token.sh starts casdoor-pg and
+# casdoor-jwtcustom-test on a private network and removes both in an EXIT trap
+# (FIXED names, so concurrent runs collide and a killed run leaves them behind).
+# Every other verb in the 22 is a read. The runner header carries the inventory,
+# and tests/scripts/test-run-ungated-lane.sh (pre-merge gated) pins every
+# refusal above against mutated copies of the runner.
+#
+# WHAT THIS DEFAULT COSTS (decision 32c, recorded rather than worked around).
+# Widening the default from the 8 browser/Qt suites to all 22 pulls in suites
+# that were ungated for reasons of their OWN, not for missing toolchain:
+#   * THE LANE IS NOW RED BY DEFAULT ON A HEALTHY TREE. Three of the fourteen
+#     newly-defaulted suites exit 1 here — MEASURED 2026-09-17 on this branch,
+#     each run directly, `rc=` its real exit code:
+#         tests/scripts/test-selected-services-only.sh          rc=1
+#         tests/scripts/test-optional-service-slug-closure.sh   rc=1
+#         tests/stack/test-gateway-auth-flag-parity.sh          rc=1
+#     These are EXPECTED REDS naming real platform defects, not suite bugs —
+#     .gitlab-ci.yml says so of the selected-services job ("RED on today's main
+#     … five checks, each naming a live defect") and the other two say so in
+#     their own headers. A suite that exits 1 makes the LANE exit 1, so
+#     `make e2e-ungated` cannot be green until those defects are fixed, and its
+#     red no longer distinguishes "something broke" from "the known three".
+#   * one more container-starting suite (casdoor, above), with fixed names.
+#   * an untimed runtime: ~21 min plus fourteen more suites.
+# None of that is a reason to narrow the default back — it is the cost the
+# operator accepted. It is written here so the next person does not read the
+# red as a broken lane.
 #
 # EXIT: 0 all green (skips tolerated unless STRICT), 1 a suite was red or
 # errored, 3 refused beside a live stack, 4 a suite brought a watched footprint
@@ -2365,5 +2402,5 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 # never under out/.
 .PHONY: e2e-ungated
 
-e2e-ungated: ## MANUAL ONLY: run the PREMERGE_UNGATED suites (test-e2e-* by default, ~21 min; E2E_UNGATED_SET=all for every entry)
+e2e-ungated: ## MANUAL ONLY: run ALL the PREMERGE_UNGATED suites (22 of 22 by default since #347 decision 32c; E2E_UNGATED_SET=e2e for just the 8 test-e2e-* ones, ~21 min)
 	bash tests/scripts/run-ungated-lane.sh
