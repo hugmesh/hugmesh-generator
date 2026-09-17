@@ -30,7 +30,12 @@
 #   5. VACUITY FLOOR: every suite skipped exits 6, STRICT or not
 #   6. a live footprint (prefix-matched container, or the kind cluster) REFUSES
 #      with exit 3 BEFORE creating the evidence dir or running anything;
-#      `x-hugmesh-local-y` is not a match, `hugmesh-localfoo` is
+#      `x-hugmesh-local-y` is not a match, `hugmesh-localfoo` is. BOTH watched
+#      prefixes count (decision 32a on #347): a hugmesh-real container ALONE
+#      refuses, which is the case that shipped broken — a standalone
+#      `hugmesh-real` compose project was invisible and a real run started the
+#      suites beside it (hugmesh-generator#397). An EMPTY watch list refuses
+#      (exit 1) rather than censusing nothing.
 #   7. E2E_UNGATED_ALLOW_LIVE_STACK=1 proceeds beside a stable footprint (exit
 #      0) and exits 4 when a suite moves it mid-run, printing both censuses
 #   8. FAIL-CLOSED CENSUS: docker or kind present but FAILING refuses with exit
@@ -47,8 +52,9 @@
 #
 # NEGATIVE CONTROLS. The battery is re-run against MUTATED copies of the runner
 # — the exit-3 refusal deleted, the exit-4 census deleted, the fail-open census
-# restored, the vacuity floor removed, the paren anchor loosened, the mkdir
-# check dropped, the timeout branch dropped — and each mutation must make at
+# restored, the vacuity floor removed, the paren anchor loosened, the watch list
+# narrowed back to hugmesh-local alone, the empty-watch-list guard dropped, the
+# mkdir check dropped, the timeout branch dropped — and each mutation must make at
 # least one assertion go red. A mutation that does not change the file is
 # itself a failure. The real runner is never written to.
 #
@@ -213,7 +219,7 @@ battery() {
     has "${O}" "test-not-e2e.sh" && bad "e2e selection swept in the non-e2e entry" || ok "e2e selection excludes tests/stack/test-not-e2e.sh"
     has "${O}" "test-e2e-trailing.sh" && bad "parser ran past the INDENTED close paren into TRAILING_ARRAY" || ok "the indented close paren ends the array (TRAILING_ARRAY not read)"
     has "${O}" "should-not-be-selected" && bad "parser picked up an entry from the array BEFORE PREMERGE_UNGATED" || ok "the preceding array is not read"
-    has "${O}" "footprint: none — a real run would proceed" && ok "dry run with no docker/kind on PATH reports no footprint" || bad "dry run footprint line wrong"
+    has "${O}" "live footprint [hugmesh-local, hugmesh-real]: none — a real run would proceed" && ok "dry run with no docker/kind on PATH reports no footprint, naming BOTH watched prefixes" || bad "dry run footprint line wrong: $(grep -a footprint "${O}")"
     [ -e "${RAN}" ] && bad "dry run EXECUTED a suite" || ok "dry run executed nothing"
     [ -e "${LOGS}" ] && bad "dry run created the evidence dir" || ok "dry run created no evidence dir"
     new_state; O="${STATE}/dryall.out"
@@ -279,12 +285,13 @@ battery() {
   # 6. refusal on a live footprint ────────────────────────────────────────
   if case_selected refuse; then
     write_tree "${T}" full; new_state
-    printf '%s\n' hugmesh-local-control-plane other-thing x-hugmesh-local-y hugmesh-localfoo >"${STATE}/docker.names"
+    printf '%s\n' hugmesh-local-control-plane other-thing x-hugmesh-local-y hugmesh-localfoo hugmesh-real-casdoor-1 >"${STATE}/docker.names"
     printf '%s\n' hugmesh-local >"${STATE}/kind.clusters"
     O="${STATE}/refuse.out"
     run_lane "${T}" stubs "${O}"
     [ "${RC}" = "3" ] && ok "a live hugmesh-local footprint refuses with exit 3" || bad "footprint present: rc ${RC}, expected 3"
-    has "${O}" "REFUSED: a live 'hugmesh-local' footprint is up on this box" && ok "refusal names itself" || bad "no refusal banner"
+    has "${O}" "REFUSED: a live footprint [hugmesh-local, hugmesh-real] is up on this box" && ok "refusal names itself and BOTH watched prefixes" || bad "no refusal banner: $(head -n 1 "${O}")"
+    has "${O}" "  hugmesh-real-casdoor-1" && ok "a hugmesh-real container is listed alongside the hugmesh-local ones" || bad "hugmesh-real container not listed"
     has "${O}" "  hugmesh-local-control-plane" && has "${O}" "  kind-cluster:hugmesh-local" && ok "refusal lists the container AND the kind cluster" || bad "refusal listing incomplete"
     has "${O}" "  hugmesh-localfoo" && ok "prefix match: hugmesh-localfoo counts" || bad "hugmesh-localfoo not counted"
     has "${O}" "x-hugmesh-local-y" && bad "x-hugmesh-local-y counted (not a prefix match)" || ok "x-hugmesh-local-y is not a prefix match"
@@ -296,6 +303,28 @@ battery() {
     O="${STATE}/refuse-dry.out"
     run_lane "${T}" stubs "${O}" E2E_UNGATED_DRY_RUN=1
     [ "${RC}" = "0" ] && has "${O}" "PRESENT — a real run would REFUSE (exit 3)" && ok "dry run reports the footprint and the refusal it would make" || bad "dry run with footprint: rc ${RC}"
+    # DECISION 32a REGRESSION CASE. A standalone hugmesh-real compose project
+    # and NOTHING hugmesh-local. This is the exact state that shipped broken:
+    # the dry run said "none — a real run would proceed" and a real invocation
+    # started the suites. Narrow the watch list back to hugmesh-local and these
+    # four assertions go red.
+    new_state
+    printf '%s\n' hugmesh-real-casdoor-1 hugmesh-real-tuwunel-1 other-thing >"${STATE}/docker.names"
+    : >"${STATE}/kind.clusters"
+    O="${STATE}/realonly.out"
+    run_lane "${T}" stubs "${O}"
+    [ "${RC}" = "3" ] && ok "a hugmesh-real footprint ALONE refuses with exit 3 (32a)" || bad "hugmesh-real alone: rc ${RC}, expected 3"
+    has "${O}" "  hugmesh-real-casdoor-1" && has "${O}" "  hugmesh-real-tuwunel-1" && ok "the refusal lists the hugmesh-real containers" || bad "hugmesh-real containers not listed"
+    [ -e "${RAN}" ] && bad "a suite RAN beside a standalone hugmesh-real project" || ok "nothing ran beside a standalone hugmesh-real project"
+    O="${STATE}/realonly-dry.out"
+    run_lane "${T}" stubs "${O}" E2E_UNGATED_DRY_RUN=1
+    has "${O}" "PRESENT — a real run would REFUSE (exit 3)" && ok "the dry run sees the hugmesh-real project (it said 'none' before 32a)" || bad "dry run blind to hugmesh-real: $(grep -a footprint "${O}")"
+    # an EMPTY watch list must refuse, not census nothing
+    new_state; printf '%s\n' hugmesh-local-control-plane >"${STATE}/docker.names"; : >"${STATE}/kind.clusters"
+    O="${STATE}/emptyprefix.out"
+    run_lane "${T}" stubs "${O}" E2E_UNGATED_LIVE_PREFIX=" "
+    [ "${RC}" = "1" ] && has "${O}" "E2E_UNGATED_LIVE_PREFIX is empty" && ok "an empty watch list refuses (exit 1) instead of censusing nothing" || bad "empty prefix: rc ${RC}, expected 1"
+    [ -e "${RAN}" ] && bad "a suite ran under an empty watch list" || ok "nothing ran under an empty watch list"
     # kind cluster alone
     new_state; : >"${STATE}/docker.names"; printf '%s\n' hugmesh-local >"${STATE}/kind.clusters"; O="${STATE}/kindonly.out"
     run_lane "${T}" stubs "${O}"
@@ -445,6 +474,12 @@ s=re.sub(r"\nif \[ \"\$\{PASS\}\" -eq 0 \]; then\n.*?\n  exit 6\nfi\n", "\n", s,
 
 mutate "the array close-paren anchor is loosened to column 0" "selection" "${PYHDR}"'
 s=s.replace("/^[[:space:]]*\\)[[:space:]]*$/{f=0}", "/^\\)/{f=0}", 1)'"${PYFTR}"
+
+mutate "the watch list narrows back to hugmesh-local alone (32a reverted)" "refuse" "${PYHDR}"'
+s=s.replace("UNGATED_DEFAULT_LIVE_PREFIXES=\"hugmesh-local hugmesh-real\"", "UNGATED_DEFAULT_LIVE_PREFIXES=\"hugmesh-local\"", 1)'"${PYFTR}"
+
+mutate "the empty-watch-list guard is dropped (census fails open)" "refuse" "${PYHDR}"'
+s=re.sub(r"\nif \[ -z \"\$\(printf .%s. \"\$\{LIVE_PREFIX\}\" \| tr -d .\[:space:\].\)\" \]; then\n.*?\nfi\n", "\n", s, count=1, flags=re.S)'"${PYFTR}"
 
 mutate "the evidence-dir mkdir check is dropped" "mkdir" "${PYHDR}"'
 s=s.replace("mkdir -p \"${RUN_DIR}\" || die 1 \"cannot create the evidence directory ${RUN_DIR} — nothing was run\"", "mkdir -p \"${RUN_DIR}\" 2>/dev/null", 1)

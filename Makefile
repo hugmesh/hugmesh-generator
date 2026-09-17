@@ -2333,8 +2333,14 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 # second copy of the list in this file would drift, and would drift silently.
 #
 # THE LIVE STACK. #246's third bullet says the lane must never disturb the
-# operator's live hugmesh-local stack. The runner REFUSES TO START (exit 3) when
-# it sees a hugmesh-local container or kind cluster, REFUSES (exit 5) when docker
+# operator's live hugmesh-local stack. Operator decision 32a on #347 (2026-09-17)
+# widened that to BOTH live shapes: the watch list is `hugmesh-local
+# hugmesh-real`, because tests/stack/compose.real.yaml is its own compose project
+# (`name: hugmesh-real`) with a standalone bring-up path, so its containers are
+# hugmesh-real-* and a hugmesh-local-only census could not see them
+# (hugmesh-generator#397). E2E_UNGATED_LIVE_PREFIX replaces the list and is
+# refused when empty. The runner REFUSES TO START (exit 3) when
+# it sees a container or kind cluster under either prefix, REFUSES (exit 5) when docker
 # or kind is installed but its census command fails (an erroring census is not
 # an empty one, and the override cannot police itself without a before/after),
 # tears nothing down in any mode, and under the explicit

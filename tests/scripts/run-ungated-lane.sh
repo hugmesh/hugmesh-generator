@@ -39,6 +39,13 @@
 #                                    None of the suites carries a timeout of its
 #                                    own, so a hung one otherwise hangs the lane.
 #   E2E_UNGATED_LOG_DIR=<dir>        relocate the dated evidence directory
+#   E2E_UNGATED_LIVE_PREFIX="a b"    replace the watched project prefixes. A
+#                                    SPACE-SEPARATED LIST; the default is
+#                                    "hugmesh-local hugmesh-real". An EMPTY
+#                                    value is refused (exit 1) rather than
+#                                    silently watching nothing — with a list,
+#                                    an empty one iterates zero times and the
+#                                    census would fail OPEN.
 #   SNAP_STUDIO_PYTHON=<python>      NOT this runner's variable, but the one that
 #                                    decides whether the default set can be green
 #                                    on this box: test-e2e-studio-gui-lane.sh
@@ -58,10 +65,21 @@
 #
 # THE LIVE STACK IS NOT TOUCHED. #246's third bullet: the lane must never disturb
 # the operator's live hugmesh-local stack. This script therefore:
-#   * REFUSES TO START (exit 3) when a live hugmesh-local footprint is present —
-#     a kind cluster named hugmesh-local, or any docker container whose name
-#     begins with hugmesh-local (the compose project and the kind node both use
+#   * REFUSES TO START (exit 3) when a live footprint is present under ANY of
+#     the watched prefixes — by default BOTH hugmesh-local AND hugmesh-real
+#     (operator decision 32a on #347, 2026-09-17). A footprint is a kind cluster
+#     whose name IS a watched prefix, or any docker container whose name BEGINS
+#     with one (a compose project and a kind node both use the project name as
 #     that prefix). It says what it found and stops.
+#
+#     WHY BOTH. tests/stack/compose.real.yaml is `name: hugmesh-real` and has a
+#     standalone bring-up path (tests/stack/up-real.sh); it is only an `include:`
+#     of compose.local.yaml when you come in through `make stack-up`. Taken
+#     alone it is its own project, so its containers are hugmesh-real-* and a
+#     hugmesh-local-only census could not see them. Measured on main @ c00ddf78
+#     with a PATH-shadowed docker reporting hugmesh-real-casdoor-1 and
+#     hugmesh-real-tuwunel-1: the dry run said "none — a real run would proceed"
+#     and a real invocation started the suites (hugmesh-generator#397).
 #   * REFUSES TO START (exit 5) when the footprint CANNOT BE DETERMINED — docker
 #     or kind is installed but the census command fails (dead daemon, socket
 #     permission denied, broken kubeconfig). A census that errors is NOT an
@@ -143,7 +161,13 @@ GUARD="${HERE}/test-guard-integrity.sh"
 SET_NAME="${E2E_UNGATED_SET:-e2e}"
 STRICT="${E2E_UNGATED_STRICT:-0}"
 ALLOW_LIVE="${E2E_UNGATED_ALLOW_LIVE_STACK:-0}"
-LIVE_PREFIX="${E2E_UNGATED_LIVE_PREFIX:-hugmesh-local}"
+# DECISION 32a (#347, 2026-09-17): BOTH live shapes by default, not just the
+# one #246 named. A space-separated LIST; see the header.
+UNGATED_DEFAULT_LIVE_PREFIXES="hugmesh-local hugmesh-real"
+LIVE_PREFIX="${E2E_UNGATED_LIVE_PREFIX:-${UNGATED_DEFAULT_LIVE_PREFIXES}}"
+# Rendered for the messages below: "hugmesh-local, hugmesh-real".
+LIVE_PREFIX_SHOWN="$(printf '%s' "${LIVE_PREFIX}" | tr -s '[:space:]' ' ' \
+                    | sed -e 's/^ //' -e 's/ $//' -e 's/ /, /g')"
 SUITE_TIMEOUT="${E2E_UNGATED_SUITE_TIMEOUT:-0}"
 
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -181,27 +205,36 @@ live_footprint() {
   local errs
   local out
   local errf
+  local pfx
+  local hits
   names=""
   errs=""
   errf="$(mktemp -t ungated-census.XXXXXX)"
   if command -v docker >/dev/null 2>&1; then
     if out="$(docker ps --format '{{.Names}}' 2>"${errf}")"; then
-      names="$(printf '%s\n' "${out}" | grep -a "^${LIVE_PREFIX}" || true)"
+      for pfx in ${LIVE_PREFIX}; do
+        hits="$(printf '%s\n' "${out}" | grep -a "^${pfx}" || true)"
+        [ -n "${hits}" ] && names="${names}${hits}"$'\n'
+      done
     else
       errs="${errs}CENSUS-ERROR docker ps failed: $(head -n 1 "${errf}" | cut -c1-160)"$'\n'
     fi
   fi
   if command -v kind >/dev/null 2>&1; then
     if out="$(kind get clusters 2>"${errf}")"; then
-      if printf '%s\n' "${out}" | grep -ax "${LIVE_PREFIX}" >/dev/null; then
-        names="${names}"$'\n'"kind-cluster:${LIVE_PREFIX}"
-      fi
+      for pfx in ${LIVE_PREFIX}; do
+        if printf '%s\n' "${out}" | grep -ax "${pfx}" >/dev/null; then
+          names="${names}kind-cluster:${pfx}"$'\n'
+        fi
+      done
     else
       errs="${errs}CENSUS-ERROR kind get clusters failed: $(head -n 1 "${errf}" | cut -c1-160)"$'\n'
     fi
   fi
   rm -f "${errf}"
-  printf '%s\n' "${names}" | grep -a . | sort || true
+  # sort -u, not sort: one container can match two prefixes when one is a prefix
+  # of the other, and a duplicate would make the before/after comparison lie.
+  printf '%s\n' "${names}" | grep -a . | sort -u || true
   printf '%s' "${errs}"
 }
 
@@ -239,6 +272,13 @@ fi
 TOTAL="$(printf '%s\n' "${SUITES}" | grep -ac . || true)"
 UNGATED_TOTAL="$(printf '%s\n' "${ALL_UNGATED}" | grep -ac . || true)"
 
+# An empty watch list is not "watch nothing" — the census loop would iterate zero
+# times and report an empty footprint on a box with the stack up. That is the
+# fail-open shape this runner exists to refuse, so it is refused here.
+if [ -z "$(printf '%s' "${LIVE_PREFIX}" | tr -d '[:space:]')" ]; then
+  die 1 "E2E_UNGATED_LIVE_PREFIX is empty — there would be nothing to census, and an empty census is not an empty footprint. Name at least one project prefix, or unset it for the default (${UNGATED_DEFAULT_LIVE_PREFIXES})."
+fi
+
 case "${SUITE_TIMEOUT}" in
   ''|*[!0-9]*) die 1 "E2E_UNGATED_SUITE_TIMEOUT must be a whole number of seconds; got '${SUITE_TIMEOUT}'" ;;
 esac
@@ -263,22 +303,22 @@ if [ "${E2E_UNGATED_DRY_RUN:-0}" = "1" ]; then
   printf '%s\n' "   suites:"
   printf '%s\n' "${SUITES}" | sed 's/^/     /'
   if [ -n "${CENSUS_ERR}" ]; then
-    printf '%s\n' "   live '${LIVE_PREFIX}' footprint: UNDETERMINABLE — a real run would REFUSE (exit 5)"
+    printf '%s\n' "   live footprint [${LIVE_PREFIX_SHOWN}]: UNDETERMINABLE — a real run would REFUSE (exit 5)"
     printf '%s\n' "${CENSUS_ERR}" | sed 's/^/     /'
   elif [ -z "${FOOTPRINT_BEFORE}" ]; then
-    printf '%s\n' "   live '${LIVE_PREFIX}' footprint: none — a real run would proceed"
+    printf '%s\n' "   live footprint [${LIVE_PREFIX_SHOWN}]: none — a real run would proceed"
   elif [ "${ALLOW_LIVE}" = "1" ]; then
-    printf '%s\n' "   live '${LIVE_PREFIX}' footprint: PRESENT, override set — a real run would proceed and census it"
+    printf '%s\n' "   live footprint [${LIVE_PREFIX_SHOWN}]: PRESENT, override set — a real run would proceed and census it"
     printf '     %s\n' ${FOOTPRINT_BEFORE}
   else
-    printf '%s\n' "   live '${LIVE_PREFIX}' footprint: PRESENT — a real run would REFUSE (exit 3)"
+    printf '%s\n' "   live footprint [${LIVE_PREFIX_SHOWN}]: PRESENT — a real run would REFUSE (exit 3)"
     printf '     %s\n' ${FOOTPRINT_BEFORE}
   fi
   exit 0
 fi
 
 if [ -n "${CENSUS_ERR}" ]; then
-  printf '%s\n' "REFUSED: the live '${LIVE_PREFIX}' footprint on this box could not be determined:"
+  printf '%s\n' "REFUSED: the live footprint [${LIVE_PREFIX_SHOWN}] on this box could not be determined:"
   printf '%s\n' "${CENSUS_ERR}" | sed 's/^/  /'
   printf '%s\n' "  A census that errors is not an empty census. Nothing was started and nothing"
   printf '%s\n' "  was stopped. E2E_UNGATED_ALLOW_LIVE_STACK=1 does not apply here: the override"
@@ -288,7 +328,7 @@ if [ -n "${CENSUS_ERR}" ]; then
 fi
 
 if [ -n "${FOOTPRINT_BEFORE}" ] && [ "${ALLOW_LIVE}" != "1" ]; then
-  printf '%s\n' "REFUSED: a live '${LIVE_PREFIX}' footprint is up on this box:"
+  printf '%s\n' "REFUSED: a live footprint [${LIVE_PREFIX_SHOWN}] is up on this box:"
   printf '  %s\n' ${FOOTPRINT_BEFORE}
   printf '%s\n' "  This lane will not run beside it. Nothing was started and nothing was stopped."
   printf '%s\n' "  Bring it down yourself if you want the lane. If you would rather run beside it,"
@@ -315,7 +355,7 @@ say "   studio python: ${SNAP_STUDIO_PYTHON:-python3 (SNAP_STUDIO_PYTHON unset; 
 if [ -n "${FOOTPRINT_BEFORE}" ]; then
   say "   live stack   : OVERRIDDEN — proceeding beside $(printf '%s' "${FOOTPRINT_BEFORE}" | tr '\n' ' ')"
 else
-  say "   live stack   : none detected (no '${LIVE_PREFIX}' container or kind cluster)"
+  say "   live stack   : none detected (no ${LIVE_PREFIX_SHOWN} container or kind cluster)"
 fi
 say ""
 
@@ -378,7 +418,7 @@ say "   evidence: ${RUN_DIR}"
 
 if [ -n "${CENSUS_ERR_AFTER}" ]; then
   say ""
-  say "LANE UNVERIFIABLE: the '${LIVE_PREFIX}' footprint could not be re-censused after the run:"
+  say "LANE UNVERIFIABLE: the footprint [${LIVE_PREFIX_SHOWN}] could not be re-censused after the run:"
   printf '%s\n' "${CENSUS_ERR_AFTER}" | sed 's/^/   /' | tee -a "${RUN_LOG}"
   say "   The before-census was: $(printf '%s' "${FOOTPRINT_BEFORE:-<empty>}" | tr '\n' ' ')"
   say "   Whether the lane touched the live stack cannot be shown either way; treat the"
@@ -388,7 +428,7 @@ fi
 
 if [ "${FOOTPRINT_BEFORE}" != "${FOOTPRINT_AFTER}" ]; then
   say ""
-  say "LANE VIOLATION: the '${LIVE_PREFIX}' footprint CHANGED while the lane ran."
+  say "LANE VIOLATION: the footprint [${LIVE_PREFIX_SHOWN}] CHANGED while the lane ran."
   say "   before: $(printf '%s' "${FOOTPRINT_BEFORE}" | tr '\n' ' ')"
   say "   after : $(printf '%s' "${FOOTPRINT_AFTER}"  | tr '\n' ' ')"
   say "   Some suite in the '${SET_NAME}' set touched the live stack. That is the"
