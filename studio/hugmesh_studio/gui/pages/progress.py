@@ -849,6 +849,17 @@ class ProgressPage(QtWidgets.QWizardPage):
         # flash-disk.sh's `Write-bytes:` line (0 = unknown -> indeterminate bar, never
         # a made-up percentage); _flash_write_done is dd's own byte counter.
         self._flash_plan_pos = 0
+        # #415: WHICH plan-table row the in-flight flash belongs to, or -1 when the
+        # flash came from anywhere else (the Flash… button, the legacy single-target
+        # stash). _flash_done paints the outcome onto THIS row. Deriving the row from
+        # _flash_plan_pos instead let an unrelated later standalone flash repaint the
+        # LAST plan row, so a device that failed — or was never written at all — could
+        # end up reading "written".
+        self._flash_active_row = -1
+        # Set by _start_flash when it refuses to start because the previous flasher is
+        # still running; read by _flash_next, which must then say that row was NOT
+        # started rather than leave it claiming "writing…" forever.
+        self._flash_busy_skipped = False
         self._flash_image_index = 0        # 1-based "image N of M"
         self._flash_image_total = 0
         self._flash_image_name = ""
@@ -1326,6 +1337,8 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._flash_image_cands = None
         self.flash_image_combo.clear()
         self._flash_plan_pos = 0
+        self._flash_active_row = -1
+        self._flash_busy_skipped = False
         self._flash_image_index = 0
         self._flash_image_total = 0
         self._flash_image_name = ""
@@ -2552,9 +2565,24 @@ class ProgressPage(QtWidgets.QWizardPage):
         # ASK 16 says a closed window must not stop the run. The supervisor pins the
         # window's C++ objects alive, so the appends still have somewhere to land, and at
         # ~20 Hz an unwatched page costs a batch append per tick.
+        dropped = len(self._flash_queue)
         self._flash_queue = []
         self._flash_caveats = []
         self._flash_cancelled = False
+        # #415: the rows that were still QUEUED will now never be written, and a table
+        # that keeps saying "queued" about them asserts a pending write that nothing
+        # will ever perform. Say so on the rows themselves. The row currently being
+        # written (if any) is NOT touched: its worker is joined just below and its
+        # _flash_done still delivers the real outcome.
+        if dropped:
+            try:
+                start = self._flash_plan_pos
+            except (AttributeError, RuntimeError):
+                start = 0
+            for r in range(start, start + dropped):
+                self._set_plan_status(
+                    r, "not written — flashing was stopped", _FLASH_GREY)
+                self._lock_plan_row(r)
         if self.flash_worker is not None and self.flash_worker.isRunning():
             self.flash_worker.wait(3000)
         # A still-running QEMU device-test run is NOT joined: it can run for hours,
@@ -2597,9 +2625,12 @@ class ProgressPage(QtWidgets.QWizardPage):
         return role, flash_targets.arch_for_platform(c.platform)
 
     def _flash_work_dir(self) -> str:
-        c = self.wiz.cfg
-        return (self._session.workdir if self._session is not None else
-                c.output_dir or os.path.join(self.wiz.generator_dir, "out"))
+        """ONE spelling of "where this run's artifacts are". Was a verbatim copy of the
+        pre-#415 inline expression, which differed from _work_dir() for a session whose
+        workdir is falsy (it yielded "" where _work_dir falls back to <out>); the #415
+        Image combo searched one and the argv named the other. _work_dir() is the one
+        carrying the #337 session-workdir reasoning, so it is the one that stays."""
+        return self._work_dir()
 
     def _flash_argv_for(self, target) -> list[str]:
         role, arch = self._flash_role_arch()
@@ -2651,12 +2682,49 @@ class ProgressPage(QtWidgets.QWizardPage):
         order.sort(key=lambda c: (-c[1], c[2]))
         return tuple(p for p, _m, _i in order)
 
+    def _flash_default_image(self, cands: tuple[str, ...]) -> str:
+        """The image this group PRESELECTS, which must never disagree with the arch
+        this same group is about to put in the argv.
+
+        ``_flash_image_candidates`` unions EVERY entry's recorded artifacts, because
+        the standalone group has no entry selector — so on a multi-entry run the
+        newest recorded image can belong to the other architecture. Preselecting it
+        emitted ``--arch x86`` together with an arm64 ``--artifact``, and flash-disk.sh
+        takes an explicit artifact VERBATIM (it never re-globs), so the arch anchor
+        that exists to stop exactly that would have been bypassed by a DEFAULT nobody
+        chose.
+
+        So the default is drawn only from files whose name carries this page's arch,
+        preferring those that also carry its role — the same two anchors
+        ``find_artifacts`` filters on. When nothing matches, the default is "" and the
+        caller offers an explicit "(none)" row: no ``--artifact`` is emitted and
+        flash-disk.sh picks exactly as it did before #415. The other entries' images
+        stay LISTED, so writing one is still possible — just never by default."""
+        role, arch = "", ""
+        try:
+            role, arch = self._flash_role_arch()
+        except Exception:
+            pass
+        if not arch:
+            return flash_targets.pick_artifact(cands, flash_targets.FLAVOR_AUTO)
+        same_role = tuple(p for p in cands
+                          if flash_targets.artifact_matches(p, role=role, arch=arch))
+        # arch alone, for a run whose role token the artifact name spells differently
+        # (a desktop/appliance role falls back to the generic worker image); the arch
+        # half is the one the argv asserts, so it is never relaxed.
+        same_arch = tuple(p for p in cands
+                          if flash_targets.artifact_arch_matches(p, arch))
+        return (flash_targets.pick_artifact(same_role, flash_targets.FLAVOR_AUTO)
+                or flash_targets.pick_artifact(same_arch, flash_targets.FLAVOR_AUTO))
+
     def _refresh_flash_images(self) -> None:
         """Repopulate the Image combo, preserving the operator's pick by PATH.
 
-        Default selection == ``pick_artifact(candidates, "auto")``: byte-identical to
-        what flash-disk.sh's own glob would have taken, so this control changes WHAT
-        is written only when somebody actually changes it."""
+        Default selection == ``_flash_default_image(...)``: the same "newest .img else
+        newest" pick flash-disk.sh's own glob would have taken, restricted to this
+        page's own architecture so the preselection can never contradict the ``--arch``
+        the very same argv carries. This control changes WHAT is written only when
+        somebody actually changes it."""
         cands = self._flash_image_candidates()
         if cands == getattr(self, "_flash_image_cands", None):
             return                      # the 2.5 s timer must not fight the operator
@@ -2672,14 +2740,22 @@ class ProgressPage(QtWidgets.QWizardPage):
             self.flash_image_combo.setEnabled(False)
             return
         self.flash_image_combo.setEnabled(True)
-        default = flash_targets.pick_artifact(cands, flash_targets.FLAVOR_AUTO)
+        default = self._flash_default_image(cands)
+        if not default:
+            # Images exist, but none of them belongs to THIS page's architecture. The
+            # honest default is none at all — the same pre-#415 auto-pick path — with
+            # the cross-arch files still listed below so a deliberate choice is
+            # possible and an accidental one is not.
+            self.flash_image_combo.addItem(
+                "(none of this run's images match this build's architecture — "
+                "scripts/flash-disk.sh will auto-pick)", "")
         for p in cands:
             label = flash_targets.artifact_label(p)
             self.flash_image_combo.addItem(
                 label + ("   ← default (auto-pick)" if p == default else ""), p)
         i = self.flash_image_combo.findData(prev) if prev else -1
         if i < 0:
-            i = self.flash_image_combo.findData(default)
+            i = self.flash_image_combo.findData(default) if default else 0
         self.flash_image_combo.setCurrentIndex(max(0, i))
 
     def _selected_image(self) -> str:
@@ -2748,9 +2824,38 @@ class ProgressPage(QtWidgets.QWizardPage):
         t.resizeColumnsToContents()
         self.flash_plan_box.setVisible(t.rowCount() > 0)
 
+    def _plan_row_resolved(self, row: int) -> bool:
+        """True once _flash_next has CONSUMED this row — it has been written, failed,
+        skipped, cancelled or refused, and its Status is a finished verdict."""
+        try:
+            return 0 <= row < self._flash_plan_pos
+        except (AttributeError, RuntimeError):
+            return False
+
+    def _lock_plan_row(self, row: int) -> None:
+        """Freeze a row's image combo the moment _flash_next consumes it. Retargeting
+        it can no longer change anything — the queue has already moved past it — so
+        the control must stop inviting a change that would silently do nothing."""
+        try:
+            combo = self.flash_plan_table.cellWidget(row, 1)
+            if combo is not None:
+                combo.setEnabled(False)
+                combo.setToolTip("This row has already been resolved — changing it "
+                                 "now would not change what was written.")
+        except (AttributeError, RuntimeError):
+            pass
+
     def _plan_image_changed(self, row: int) -> None:
         """Re-label a row the operator retargeted, so the table never shows 'will be
-        SKIPPED' next to a file that is now going to be written."""
+        SKIPPED' next to a file that is now going to be written.
+
+        A row _flash_next has already consumed is left ALONE. Re-labelling it "queued"
+        claimed a write was still pending for a device whose flash had already
+        finished (or been skipped) and which nothing would ever revisit — the table's
+        one job is to say what happened to each device, so a finished verdict must not
+        be overwritten by a control that can no longer affect it."""
+        if self._plan_row_resolved(row):
+            return
         chosen = self._plan_image_for(row)
         self._set_plan_status(row, "queued" if chosen else "no image — will be SKIPPED",
                               "" if chosen else _FLASH_RED)
@@ -2779,12 +2884,24 @@ class ProgressPage(QtWidgets.QWizardPage):
             rows = self.flash_plan_table.rowCount()
         except (AttributeError, RuntimeError):
             rows = 0
+        try:
+            live_targets = list(self._flash_targets)
+        except (AttributeError, RuntimeError):
+            live_targets = []
         if rows:
             for i, a in enumerate(getattr(self.wiz, "flash_plan", None) or []):
                 if i >= rows:
                     break
+                # Prefer the size the device reports RIGHT NOW over the one recorded
+                # when the plan was made: a stick swapped since then makes a plan-time
+                # "it fits" verdict optimistic. (The write itself is still refused by
+                # _flash_next's identity check and by flash-disk.sh's own size-fit;
+                # this only keeps the ADVISORY honest.)
+                live = next((t for t in live_targets
+                             if t.path == a.target.path), None)
                 jobs.append({"path": self._plan_image_for(i),
-                             "device_size": a.target.size,
+                             "device_size": (live.size if live is not None
+                                             else a.target.size),
                              "device_path": a.target.path,
                              "role": a.role, "arch": a.arch,
                              "flavor": getattr(a, "flavor",
@@ -2953,6 +3070,10 @@ class ProgressPage(QtWidgets.QWizardPage):
         # a previous plan run's N, which would label it "Image 3 of 3".
         self._flash_image_total = 1
         self._flash_image_index = 1
+        # #415: this flash is NOT a plan row. Without disowning the row here, its
+        # result would be painted onto whatever row _flash_plan_pos last pointed at —
+        # i.e. a hand flash after the plan drained would rewrite the last row's Status.
+        self._flash_active_row = -1
         self._start_flash(target)
 
     def _maybe_auto_flash(self) -> None:
@@ -3023,6 +3144,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.log.appendPlainText(f"Flash-after-build: flashing {want_path} (opted in)…")
         self._flash_image_total = 1          # #415: one image on the legacy path
         self._flash_image_index = 1
+        self._flash_active_row = -1          # #415: not a plan row either
         self._start_flash(target)
 
     def _flash_next(self) -> None:
@@ -3062,6 +3184,11 @@ class ProgressPage(QtWidgets.QWizardPage):
                 self._flash_image_index = pos + 1
             except (AttributeError, RuntimeError):
                 pos = -1
+            if pos >= 0:
+                # This row is now CONSUMED: whatever happens below is its final
+                # verdict, so its image control stops accepting changes that could no
+                # longer reach the write.
+                self._lock_plan_row(pos)
             flavor = getattr(a, "flavor", flash_targets.FLAVOR_AUTO)
             # The assignment's work_dir was resolved on the BuildPage, before this
             # run's session existed, so it names the shared <out>. The build wrote
@@ -3161,9 +3288,27 @@ class ProgressPage(QtWidgets.QWizardPage):
             # never leak onto the NEXT device's dialog.
             self._flash_caveats = caveats
             self._flash_cancelled = False       # set by _start_flash on a decline
+            self._flash_busy_skipped = False    # set by _start_flash when it refuses
+            # #415: claim the row BEFORE the write starts, so _flash_done paints the
+            # outcome onto THIS row no matter how many flashes follow. _start_flash
+            # un-claims it on every path that does not actually start a worker.
+            self._flash_active_row = pos
             self._set_plan_status(pos, "writing…", "")
             self._start_flash(a.target, argv=flash_targets.assignment_argv(
                 a, generator_dir=self.wiz.generator_dir, artifact=artifact))
+            if getattr(self, "_flash_busy_skipped", False):
+                # The previous flasher is STILL running after the 3 s join, so this
+                # assignment never started — and the row is currently claiming
+                # "writing…", which is a lie about a device nothing has touched. Say
+                # so loudly and move on; every following row hits the same guard and
+                # is marked the same way, so the table never shows a phantom write.
+                self._flash_busy_skipped = False
+                self.log.appendPlainText(
+                    f"Flash plan: {a.entry_id} → {a.target.path} was NOT started — the "
+                    f"previous flash is still running. Nothing was written to "
+                    f"{a.target.path}.")
+                self._set_plan_status(pos, "NOT started — flasher busy", _FLASH_RED)
+                continue
             if getattr(self, "_flash_cancelled", False):
                 # the operator declined THIS device — offer the next assignment
                 # rather than stranding the rest of the plan.
@@ -3212,6 +3357,11 @@ class ProgressPage(QtWidgets.QWizardPage):
             # this guard — so without this line a 3s worker-wait timeout leaks one
             # device's "matched by arch+role only" note onto a different device.)
             self._flash_caveats = []
+            # #415: nothing was started, so this row owns no worker — say so to
+            # _flash_next (which has already painted it "writing…") and make sure the
+            # NEXT done signal cannot be attributed to it.
+            self._flash_busy_skipped = True
+            self._flash_active_row = -1
             return
         argv = argv or self._flash_argv_for(target)
         answer = confirm_flash(self, "Flash — this erases the device",
@@ -3220,6 +3370,8 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._flash_caveats = []
         if answer != FLASH_OK:
             self._flash_cancelled = True
+            # #415: no worker starts, so no done signal belongs to this row.
+            self._flash_active_row = -1
             self.log.appendPlainText(
                 f"Flash cancelled — {target.path} was not written.")
             return
@@ -3245,15 +3397,23 @@ class ProgressPage(QtWidgets.QWizardPage):
     def _flash_done(self, code: int) -> None:
         self.log.appendPlainText(f"=== flash exited {code} ===")
         self.flash_refresh_btn.setEnabled(True)
-        # #415: record the OUTCOME on the row that just finished, BEFORE _flash_next
-        # advances _flash_plan_pos to the next one.
+        # #415: record the OUTCOME on the row the FINISHED flash actually belonged to.
+        #
+        # It must be _flash_active_row, not `_flash_plan_pos - 1`: every _FlashWorker
+        # lands here, the Flash… button's included, and after a plan has drained
+        # _flash_plan_pos == len(plan) — so the derived index would repaint the LAST
+        # plan row with an unrelated standalone flash's result. That is a table saying
+        # "written" about a device this flash never touched (and, in the dangerous
+        # direction, overwriting a real FAILED with a green "written"). -1 means "this
+        # flash was not a plan row": _set_plan_status ignores it.
         try:
-            pos = self._flash_plan_pos
+            row = self._flash_active_row
         except (AttributeError, RuntimeError):
-            pos = 0
-        self._set_plan_status(pos - 1,
+            row = -1
+        self._set_plan_status(row,
                               "written" if code == 0 else f"FAILED (rc={code})",
                               _FLASH_GREEN if code == 0 else _FLASH_RED)
+        self._flash_active_row = -1       # consumed: never repainted by a later flash
         try:
             self._finish_flash_progress(code)
         except (AttributeError, RuntimeError):

@@ -521,6 +521,19 @@ def pick_artifact(artifacts: tuple[str, ...] | list[str], flavor: str) -> str:
 _ARCH_TOKENS = {"x86": ("x86", "amd64"), "arm64": ("arm64", "aarch64")}
 
 
+def artifact_arch_matches(name: str, arch: str) -> bool:
+    """True when an artifact FILENAME carries this ARCH token.
+
+    The arch half of ``artifact_matches``, on its own, because it is the half the GUI
+    asserts in every argv: flash-disk.sh takes an explicit ``--artifact`` VERBATIM, so
+    a preselected image of the wrong architecture is never caught downstream (#415).
+    ``artifact_matches`` is expressed in terms of this function, so the anchor the
+    flasher globs on and the anchor the GUI defaults on cannot drift apart."""
+    arch_tokens = _ARCH_TOKENS.get((arch or "").lower(), ((arch or "").lower(),))
+    low = os.path.basename(name).lower()
+    return any(f"-{a}-" in low for a in arch_tokens if a)
+
+
 def artifact_matches(name: str, *, role: str, arch: str) -> bool:
     """True when an artifact FILENAME carries this arch token AND this role token.
 
@@ -529,7 +542,6 @@ def artifact_matches(name: str, *, role: str, arch: str) -> bool:
     older spelling still matches. find_artifacts() filters with it, and the #415
     validator reports with it — so "would flash-disk.sh find this?" and "does this file
     belong on that device?" can never drift apart."""
-    arch_tokens = _ARCH_TOKENS.get((arch or "").lower(), ((arch or "").lower(),))
     role_tokens = {(role or "").lower()}
     try:
         role_tokens |= {a.lower() for a in roles.aliases_of(role)}
@@ -537,7 +549,7 @@ def artifact_matches(name: str, *, role: str, arch: str) -> bool:
         pass
     role_tokens.discard("")
     low = os.path.basename(name).lower()
-    if not any(f"-{a}-" in low for a in arch_tokens if a):
+    if not artifact_arch_matches(name, arch):
         return False
     return any(f"-{r}-" in low for r in role_tokens)
 
