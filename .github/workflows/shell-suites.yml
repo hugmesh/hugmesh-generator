@@ -463,6 +463,7 @@ jobs:
             tests/phone/test-phone-wizard.sh
             tests/scripts/test-appstore-effector-flags.sh
             tests/scripts/test-argocd-serverside-diff.sh
+            tests/scripts/test-casdoor-login-budget.sh
             tests/scripts/test-cassandra-cluster-wiring.sh
             tests/scripts/test-client-connect-routes.sh
             tests/scripts/test-cluster-manifest-integrity.sh

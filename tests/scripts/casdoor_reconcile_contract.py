@@ -592,6 +592,209 @@ def check_source(label, src, init):
 
 
 # ── the wiring contract ──────────────────────────────────────────────────────
+# ── (5) THE HOOK-ORDERING / LOGIN-BUDGET CONTRACT ────────────────────────────
+# Every check above reads ONE script at a time. This one reads the DEPLOYMENT,
+# because the property it defends cannot be seen from inside a single file.
+#
+# WHAT WENT WRONG (hugmesh-generator#396, measured on kind 2026-09-16).
+# manifests/casdoor ships four ArgoCD PostSync hook Jobs. All four log in as the
+# SAME built-in/admin account. Exactly one of them — casdoor-init — knows
+# casdoor's bootstrap default and is the only thing that can take the account
+# over from it; the other three know ONLY the Vault-provisioned password, so on a
+# fresh cluster their login is guaranteed wrong until casdoor-init has run. There
+# was no sync-wave on any of them, so ArgoCD started all four at once: the three
+# wrong logins spent the account's wrong-password budget, casdoor's sign-in
+# throttle banned the admin for fifteen minutes, and casdoor-init's CORRECT login
+# was refused inside the ban. `make kind-up` exited 1 at 17:21:55Z on a cluster
+# that converged by itself at 17:29:32Z, and the Job's failure text blamed a Vault
+# secret that was byte-for-byte correct.
+#
+# reconcile_admin_password()'s own docstring asserted the invariant this broke —
+# "at most two wrong-password attempts are ever made, well under casdoor's
+# 5-attempt sign-in lockout". That was true of the FILE and false of the
+# DEPLOYMENT: the budget is spent against one shared account by every Job here
+# and by the pod backoff. The measured spend on that run was 104 attempts.
+#
+# So the contract is about the set, not the file:
+#   * the Jobs that share an admin Secret are ORDERED by argocd.argoproj.io/
+#     sync-wave, with the one that owns the takeover strictly first — ArgoCD runs
+#     a phase's hooks wave by wave and waits for each wave, so this is what makes
+#     "casdoor-init goes first" true of the deployment;
+#   * and the owner's own pod backoff cannot replay a lockout: it exits with a
+#     DISTINCT status for "casdoor's throttle is refusing every login", and the
+#     Job turns that status into FailJob instead of six more attempts.
+# Directories with a single admin-login Job have nothing to order; they are
+# reported as such (with the count MEASURED, not assumed) so the rule arms itself
+# the day a sibling lands rather than silently exempting one.
+
+
+def _admin_secret(job, secrets_dir="/secrets"):
+    """The Secret this Job opens its admin session with, or None.
+
+    Identified by the MOUNT PATH the reconcile scripts actually read
+    (f"{SECRETS}/admin/username"), not by the secret's name: every one of these
+    Jobs mounts several Secrets and only one of them is the credential.
+    """
+    pod = (job.get("spec") or {}).get("template", {}).get("spec", {}) or {}
+    want = f"{secrets_dir.rstrip('/')}/admin"
+    vol = None
+    for c in pod.get("containers") or []:
+        for m in c.get("volumeMounts") or []:
+            if (m.get("mountPath") or "").rstrip("/") == want:
+                vol = m.get("name")
+    if not vol:
+        return None
+    for v in pod.get("volumes") or []:
+        if v.get("name") == vol:
+            return (v.get("secret") or {}).get("secretName")
+    return None
+
+
+def _script_cms(job):
+    """ConfigMap names this Job mounts — how a Job is tied to its reconcile script."""
+    pod = (job.get("spec") or {}).get("template", {}).get("spec", {}) or {}
+    return {(v.get("configMap") or {}).get("name")
+            for v in pod.get("volumes") or [] if v.get("configMap")}
+
+
+def _const(src, name):
+    """A module-level literal out of the script itself, or None. Read from the AST
+    so the guard cannot pin a number the script no longer uses."""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return None
+    found = None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", None) == name for t in node.targets):
+            try:
+                found = ast.literal_eval(node.value)
+            except ValueError:
+                return None
+    return found
+
+
+def check_hooks(cluster):
+    scripts = {cm: src for cm, key, src, _ in discover(cluster)}
+    inits = {cm for cm in scripts if is_init(cm)}
+    seen_scripts = set()
+    groups = {}
+    for d in sorted(pathlib.Path(cluster, "manifests").glob("casdoor*")):
+        for manifest in sorted(d.glob("*.yaml")):
+            for job in _load(manifest):
+                if job.get("kind") != "Job":
+                    continue
+                cms = _script_cms(job) & set(scripts)
+                if not cms:
+                    continue          # not an admin-session Job
+                seen_scripts |= cms
+                secret = _admin_secret(job)
+                if not secret:
+                    bad(f"{d.name}/{manifest.name}: Job "
+                        f"{(job.get('metadata') or {}).get('name')} runs a Casdoor "
+                        f"login script but mounts no admin credential at /secrets/admin "
+                        f"— the guard cannot tell which account it spends")
+                    continue
+                groups.setdefault((d.name, secret), []).append((manifest, job, cms))
+
+    missing = set(scripts) - seen_scripts
+    if missing:
+        bad(f"hooks: {sorted(missing)} is a Casdoor login script that no Job in "
+            f"specs/cluster mounts — refusing to report an ordering pass off a "
+            f"sweep that did not find every consumer")
+        return
+    if not groups:
+        bad("hooks: found no admin-session Job at all — the ordering contract "
+            "would pass vacuously")
+        return
+
+    for (dirname, secret), members in sorted(groups.items()):
+        owners = [m for m in members if m[2] & inits]
+        label = f"{dirname}: Secret {secret}"
+        if len(owners) != 1:
+            bad(f"{label}: {len(owners)} of the {len(members)} Job(s) that share this "
+                f"admin credential own the takeover from casdoor's bootstrap default "
+                f"— exactly one must, or nothing defines which goes first")
+            continue
+        owner_manifest, owner_job, owner_cms = owners[0]
+        owner_name = (owner_job.get("metadata") or {}).get("name")
+
+        # ── ordering ─────────────────────────────────────────────────────────
+        if len(members) == 1:
+            ok(f"{label}: {owner_name} is the only Job that logs in with it "
+               f"(nothing to order; this rule arms itself if a sibling lands)")
+        else:
+            waves = {}
+            broken = False
+            for manifest, job, _cms in members:
+                name = (job.get("metadata") or {}).get("name")
+                ann = (job.get("metadata") or {}).get("annotations") or {}
+                raw = ann.get("argocd.argoproj.io/sync-wave")
+                if raw is None:
+                    bad(f"{label}: hook Job {name} ({manifest.name}) carries no "
+                        f"argocd.argoproj.io/sync-wave — {len(members)} Jobs share this "
+                        f"admin account and ArgoCD starts un-waved hooks of a phase "
+                        f"together, which is what banned the account (#396)")
+                    broken = True
+                    continue
+                try:
+                    waves[name] = int(str(raw))
+                except ValueError:
+                    bad(f"{label}: hook Job {name} has a non-numeric sync-wave {raw!r}")
+                    broken = True
+            if not broken:
+                others = {n: w for n, w in waves.items() if n != owner_name}
+                late = {n: w for n, w in others.items() if w <= waves[owner_name]}
+                if late:
+                    bad(f"{label}: {owner_name} is wave {waves[owner_name]} but "
+                        f"{sorted(late)} are at {sorted(set(late.values()))} — a Job "
+                        f"that only knows the provisioned password must not run in or "
+                        f"before the wave that installs it")
+                else:
+                    ok(f"{label}: {owner_name} is wave {waves[owner_name]}, the "
+                       f"{len(others)} Job(s) that only know the provisioned password "
+                       f"are at {sorted(set(others.values()))}")
+
+        # ── the owner's own retry budget ─────────────────────────────────────
+        # Only demanded where a takeover actually races a sibling: that is the
+        # measured defect, and the count above is what decides it.
+        if len(members) == 1:
+            continue
+        src = scripts[sorted(owner_cms)[0]]
+        exit_code = _const(src, "LOCKOUT_EXIT")
+        marker = _const(src, "LOCKOUT_MARKER")
+        if not isinstance(exit_code, int) or not isinstance(marker, str) or not marker:
+            bad(f"{label}: {owner_name}'s script defines no LOCKOUT_EXIT/"
+                f"LOCKOUT_MARKER — it cannot tell casdoor's sign-in throttle "
+                f"(which refuses the CORRECT password too) from a wrong one, and "
+                f"reports 'reconcile the secret' for an account that is merely banned")
+            continue
+        spec = owner_job.get("spec") or {}
+        pod = (spec.get("template") or {}).get("spec") or {}
+        restart = pod.get("restartPolicy")
+        containers = [c.get("name") for c in pod.get("containers") or []]
+        rules = ((spec.get("podFailurePolicy") or {}).get("rules")) or []
+        matched = [r for r in rules
+                   if r.get("action") == "FailJob"
+                   and exit_code in ((r.get("onExitCodes") or {}).get("values") or [])
+                   and ((r.get("onExitCodes") or {}).get("containerName") in containers
+                        or (r.get("onExitCodes") or {}).get("containerName") is None)]
+        if not matched:
+            bad(f"{label}: {owner_name} has no podFailurePolicy FailJob rule for exit "
+                f"{exit_code} on a container it actually runs {containers} — "
+                f"backoffLimit {spec.get('backoffLimit')} would replay the login "
+                f"{(spec.get('backoffLimit') or 0) + 1} times into a ban only time clears")
+        elif restart != "Never":
+            bad(f"{label}: {owner_name} sets restartPolicy {restart!r}; a "
+                f"podFailurePolicy is only valid with 'Never', so the FailJob rule "
+                f"above would be rejected by the apiserver and silently buy nothing")
+        else:
+            ok(f"{label}: {owner_name} exits {exit_code} for 'casdoor's throttle is "
+               f"refusing every login' and a podFailurePolicy FailJob rule ends the "
+               f"Job there instead of replaying it")
+
+
 def _load(path):
     return [d for d in yaml.safe_load_all(pathlib.Path(path).read_text())
             if isinstance(d, dict)]
@@ -1214,6 +1417,8 @@ def main():
         check_conf(cluster)
     elif cmd == "seed":
         check_seed(cluster)
+    elif cmd == "hooks":
+        check_hooks(cluster)
     else:
         sys.exit(f"unknown subcommand {cmd!r}")
     print(f"  ({P} passed, {F} failed)")

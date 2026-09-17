@@ -186,6 +186,17 @@ metadata:
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    # WAVE 1 — AFTER casdoor-init (wave 0). This Job opens its session with the
+    # PROVISIONED admin password and nothing else; on a fresh cluster the built-in
+    # admin still holds casdoor's bootstrap default until casdoor-init takes it
+    # over, so an unordered run here is a GUARANTEED wrong password against the
+    # one account every Job in this directory shares. Three of these starting at
+    # once is what tripped casdoor's sign-in throttle on 2026-09-16 and made
+    # casdoor-init's CORRECT login fail inside the ban (hugmesh-generator#396).
+    # ArgoCD runs a phase's hooks in wave order and waits for each wave, so this
+    # annotation is what keeps that from happening again — and if casdoor-init
+    # fails, the phase aborts and this Job never attempts a login at all.
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   backoffLimit: 6
   ttlSecondsAfterFinished: 600

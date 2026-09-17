@@ -401,7 +401,39 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # grep and busybox sed — and printed 8 passed / 0 failed rc=0, with its negative
 # controls re-verified there rather than only on the GNU host, because busybox
 # is exactly where a negative guard fails open.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-165}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-166}"
+
+# 165 -> 166 on 2026-09-16, RESOLVING THIS LINE'S CONFLICT on the merge of
+# fix/kind-casdoor-init-converges with main at 8ae7b727. Both sides had measured
+# 165 of 187 and both were right about the tree they measured — main had gated
+# test-argocd-serverside-diff.sh, this branch had gated
+# tests/scripts/test-casdoor-login-budget.sh, and neither number survives having
+# BOTH. Per the doctrine above the value was taken by RUNNING this file on THIS
+# merged tree, which printed
+#     166 of 188 suites are named by a pull_request-triggered workflow
+# and the ungated SET is unchanged at 22. The two notes below are kept as a union:
+# they are complementary records, not competing ones.
+#
+# test-casdoor-login-budget.sh is the ordering + login-budget pin for the four
+# Casdoor bootstrap hook Jobs that share one built-in/admin account
+# (hugmesh-generator#396 — un-waved ArgoCD PostSync hooks raced, tripped casdoor's
+# sign-in throttle, and killed a bring-up on a cluster that then converged by
+# itself 7m37s later). Named in shell-suites.yml's DEBIAN job, not the alpine one:
+# it uses `grep -a`, which busybox grep does not have. RUN on this host: 31 passed
+# / 0 failed rc=0, thirteen negative controls 13 caught / 0 survived, and on the
+# PRE-FIX tree the same suite prints 22 failures and reproduces the live cluster's
+# failure message byte-for-byte.
+#
+# 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
+# gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED
+# by RUNNING this file both ways on the same tree, not assumed:
+#     165 of 187 suites are named by a pull_request-triggered workflow   (with it)
+#     164 of 186 suites are named by a pull_request-triggered workflow   (without)
+# — "without" meaning the suite file deleted AND both its wirings removed, so the
+# denominator moves too. It is named in shell-suites.yml's DEBIAN job (python:3.12-
+# slim): it is a negative guard whose controls must fail on a planted defect, and
+# busybox grep/sed is where a negative guard fails open. The ungated SET pin is
+# unchanged at 22 in both measurements.
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED
