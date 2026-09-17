@@ -50,16 +50,31 @@ T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
 echo "== route-access oracle: generated from the seed =="
 
 # ── 1. the committed oracle matches a fresh generation ──────────────────────
-if python3 "${GEN}" --sql "${SQL}" --out "${T}/fresh.ts" >"${T}/gen.log" 2>&1; then
-  if diff -u "${OUT}" "${T}/fresh.ts" >"${T}/diff.txt" 2>&1; then
-    ok "committed rbac-route-access.seed.ts == generated from 20-schema.sql"
-  else
-    sed -n '1,40p' "${T}/diff.txt"
-    bad "the committed oracle has DRIFTED from the seed — run: python3 scripts/gen-route-access-oracle.py"
-  fi
-else
+# THREE outcomes, named apart. Before hugmesh-generator#404 this reported only
+# "the committed oracle differs from a fresh run", which reads as "regenerate and
+# commit" — the one thing you must not do when the fresh run is the SMALLER file.
+python3 "${GEN}" --sql "${SQL}" --out "${T}/fresh.ts" >"${T}/gen.log" 2>&1
+gen_rc=$?
+if [ "${gen_rc}" -ne 0 ]; then
   cat "${T}/gen.log"
-  bad "the generator could not run against the real seed"
+  case "${gen_rc}" in
+    2) why="the seed is not the SHAPE the generator models (column list, terminator, pattern)" ;;
+    3) why="a VACUITY floor was not cleared — almost nothing parsed" ;;
+    4) why="COMPLETENESS: rows exist in the seed that the parse did not emit (hugmesh-generator#404's mode)" ;;
+    *) why="the generator crashed" ;;
+  esac
+  bad "the generator REFUSED to emit (exit ${gen_rc}): ${why}. Fail-closed working as intended — fix the cause named above. There is nothing to commit."
+elif diff -u "${OUT}" "${T}/fresh.ts" >"${T}/diff.txt" 2>&1; then
+  ok "committed rbac-route-access.seed.ts == generated from 20-schema.sql"
+else
+  sed -n '1,40p' "${T}/diff.txt"
+  have="$(grep -ac "gateway: 'hugmesh-" "${OUT}" || true)"
+  fresh="$(grep -ac "gateway: 'hugmesh-" "${T}/fresh.ts" || true)"
+  if [ "${fresh}" -lt "${have}" ]; then
+    bad "the fresh generation carries FEWER rows than the committed oracle (${have} -> ${fresh}). That is a LOSS, not drift — find out what stopped parsing BEFORE you commit the smaller file."
+  else
+    bad "the committed oracle has DRIFTED from the seed (${have} -> ${fresh} rows) — if the seed change is intended, run: python3 scripts/gen-route-access-oracle.py"
+  fi
 fi
 
 # ── 2. vacuity: the committed oracle really carries the whole seed ──────────
@@ -156,6 +171,114 @@ if ! python3 "${GEN}" --sql "${T}/two.sql" --stdout >/dev/null 2>&1; then
   ok "control 'second INSERT': more than one row-seeding INSERT ABORTS instead of ignoring one"
 else
   bad "control 'second INSERT': a second seed INSERT was silently ignored"
+fi
+
+# 4f. hugmesh-generator#404, THE SHIPPED DEFECT: a `--` comment inside the INSERT
+#     body that merely NAMED the ON CONFLICT clause used to truncate the row scan
+#     at that comment, because the terminator was located BEFORE comments were
+#     stripped. Measured 2026-09-16: 154 rows -> 119, every hugmesh-superadmin-
+#     gateway row and 25 fe rows gone, exit 0, both floors still satisfied. PROSE
+#     MUST NOT BE ABLE TO CHANGE THE ORACLE — the output has to be byte-identical.
+awk '/^INSERT INTO gateway_route_access/ && !d { print; print "  -- NOTE: the tail of this INSERT is ON CONFLICT DO NOTHING."; d=1; next } { print }' \
+  "${SQL}" > "${T}/cmt.sql"
+committed_rows="$(grep -ac "gateway: 'hugmesh-" "${OUT}" || true)"
+if diff -q "${SQL}" "${T}/cmt.sql" >/dev/null; then
+  bad "control '#404 line-comment truncation': the awk did not change the seed copy — the control proves nothing"
+elif python3 "${GEN}" --sql "${T}/cmt.sql" --stdout >"${T}/cmt.ts" 2>"${T}/cmt.err" && cmp -s "${OUT}" "${T}/cmt.ts"; then
+  ok "control '#404 line-comment truncation': a '-- … ON CONFLICT …' comment in the INSERT body leaves the oracle byte-identical (${committed_rows} rows)"
+else
+  bad "control '#404 line-comment truncation': naming ON CONFLICT in a comment changed the oracle ($(grep -ac "gateway: 'hugmesh-" "${T}/cmt.ts" 2>/dev/null || echo 0) rows vs ${committed_rows}) — comments are being read as SQL again"
+fi
+
+# 4g. Same defect via a BLOCK comment. The old stripper was `re.sub(r"--[^\n]*")`,
+#     which could not see `/* … */` at all, so this variant would have survived a
+#     fix that only reordered the line-comment strip.
+awk '/^INSERT INTO gateway_route_access/ && !d { print; print "  /* tail of this INSERT: ON CONFLICT DO NOTHING */"; d=1; next } { print }' \
+  "${SQL}" > "${T}/blk.sql"
+if diff -q "${SQL}" "${T}/blk.sql" >/dev/null; then
+  bad "control '#404 block-comment truncation': the awk did not change the seed copy"
+elif python3 "${GEN}" --sql "${T}/blk.sql" --stdout >"${T}/blk.ts" 2>/dev/null && cmp -s "${OUT}" "${T}/blk.ts"; then
+  ok "control '#404 block-comment truncation': a '/* … ON CONFLICT … */' comment in the INSERT body leaves the oracle byte-identical"
+else
+  bad "control '#404 block-comment truncation': a block comment naming ON CONFLICT changed the oracle — the stripper is not character-wise"
+fi
+
+# 4h. ACCOUNTABILITY: a row the tuple scan cannot READ must abort, not be skipped.
+#     `true` -> `1` is one character and used to cost exactly one row silently,
+#     absorbed by the floors. Exit 4 is the generator's "completeness" code, which
+#     check 1 above relies on to name the failure mode.
+awk -v pat="  ('hugmesh-" 'index($0,pat)==1 && !d && sub(/, *true\)/, ", 1)") { d=1 } { print }' \
+  "${SQL}" > "${T}/badrow.sql"
+python3 "${GEN}" --sql "${T}/badrow.sql" --stdout >/dev/null 2>"${T}/badrow.err"; badrow_rc=$?
+if diff -q "${SQL}" "${T}/badrow.sql" >/dev/null; then
+  bad "control 'unreadable row': the awk did not change the seed copy"
+elif [ "${badrow_rc}" = "4" ]; then
+  ok "control 'unreadable row': a tuple the row scan cannot parse ABORTS (exit 4), never silently costs a row"
+else
+  bad "control 'unreadable row': exit ${badrow_rc} (wanted 4) — a row the scan cannot read was absorbed instead of reported"
+fi
+
+# 4i. A whole GATEWAY reaching zero rows must abort. This is #404's visible
+#     symptom: hugmesh-superadmin-gateway went 9 -> 0 and nothing said so, because
+#     the only completeness argument was a total-row floor the loss still cleared.
+grep -av "^  ('hugmesh-superadmin-gateway'" "${SQL}" > "${T}/nogw.sql"
+python3 "${GEN}" --sql "${T}/nogw.sql" --stdout >/dev/null 2>"${T}/nogw.err"; nogw_rc=$?
+if diff -q "${SQL}" "${T}/nogw.sql" >/dev/null; then
+  bad "control 'gateway to zero': the grep did not change the seed copy"
+elif [ "${nogw_rc}" = "4" ]; then
+  ok "control 'gateway to zero': losing every hugmesh-superadmin-gateway row ABORTS (exit 4) — the row floors alone did not catch this"
+else
+  bad "control 'gateway to zero': exit ${nogw_rc} (wanted 4) — a gateway silently reached zero rows, which is exactly #404"
+fi
+
+# 4j. THE TERMINATOR MUST BE THE REAL STATEMENT END. A stray `;` mid-body ends the
+#     statement early and strands the rows below it. The generator must notice that
+#     rows exist in the file which it did not emit, rather than emit the short set.
+awk -v pat="  ('hugmesh-superadmin-gateway'" 'index($0,pat)==1 && !d { print; print ";"; d=1; next } { print }' \
+  "${SQL}" > "${T}/semi.sql"
+python3 "${GEN}" --sql "${T}/semi.sql" --stdout >/dev/null 2>"${T}/semi.err"; semi_rc=$?
+if diff -q "${SQL}" "${T}/semi.sql" >/dev/null; then
+  bad "control 'early terminator': the awk did not change the seed copy"
+elif [ "${semi_rc}" = "4" ]; then
+  ok "control 'early terminator': a statement that ends early leaves rows unaccounted for and ABORTS (exit 4)"
+else
+  bad "control 'early terminator': exit ${semi_rc} (wanted 4) — rows below an early terminator were dropped quietly"
+fi
+
+# 4k. A SECOND `ON CONFLICT` inside the one statement is ambiguous, not a hint:
+#     the scan must refuse rather than pick the first and stop there.
+awk '/^INSERT INTO gateway_route_access/ && !d { print; print "  ON CONFLICT DO NOTHING"; d=1; next } { print }' \
+  "${SQL}" > "${T}/twooc.sql"
+if diff -q "${SQL}" "${T}/twooc.sql" >/dev/null; then
+  bad "control 'two ON CONFLICT clauses': the awk did not change the seed copy"
+else
+  python3 "${GEN}" --sql "${T}/twooc.sql" --stdout >/dev/null 2>"${T}/twooc.err"; twooc_rc=$?
+  # Exit 2 specifically: the ambiguity must be diagnosed AS ambiguity. Exit 4 here
+  # would mean only the downstream completeness cross-check noticed, which aborts
+  # for the right reason with the wrong explanation.
+  if [ "${twooc_rc}" = "2" ]; then
+    ok "control 'two ON CONFLICT clauses': an ambiguous terminator ABORTS as a shape error (exit 2), not cut-at-the-first"
+  else
+    bad "control 'two ON CONFLICT clauses': exit ${twooc_rc} (wanted 2) — the ambiguity was not diagnosed as one"
+  fi
+fi
+
+# 4l. THE TERMINATOR MUST BE LITERAL-AWARE. A `;` inside a row literal is not the
+#     end of the statement. A naive `find(";")` stops inside that value and
+#     strands every row below it; the seed is one `/`-path away from this at all
+#     times, so the property is checked rather than assumed.
+awk -v row="  ('hugmesh-fe-gateway', '/semi;colon/**', 'ROLE_USER', true)," \
+  '/^INSERT INTO gateway_route_access/ && !d { print; print row; d=1; next } { print }' \
+  "${SQL}" > "${T}/semilit.sql"
+python3 "${GEN}" --sql "${T}/semilit.sql" --stdout >"${T}/semilit.ts" 2>"${T}/semilit.err"; semilit_rc=$?
+semilit_rows="$(grep -ac "gateway: 'hugmesh-" "${T}/semilit.ts" || true)"
+want_rows=$(( committed_rows + 1 ))
+if diff -q "${SQL}" "${T}/semilit.sql" >/dev/null; then
+  bad "control 'semicolon inside a literal': the awk did not change the seed copy"
+elif [ "${semilit_rc}" = "0" ] && [ "${semilit_rows}" = "${want_rows}" ]; then
+  ok "control 'semicolon inside a literal': a ';' in a url_pattern does not end the statement (${semilit_rows} rows, all accounted for)"
+else
+  bad "control 'semicolon inside a literal': exit ${semilit_rc}, ${semilit_rows} rows (wanted 0 / ${want_rows}) — the terminator is not literal-aware"
 fi
 
 # ── 5. anti-rot: the source path the generator names must exist ─────────────
