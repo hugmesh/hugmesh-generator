@@ -801,10 +801,10 @@ SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password")
 # External Secrets Operator from at first boot. The EMPTY address (the NATIVE
 # DEFAULT) emits NOTHING — offline/USB-only secret delivery, argv/sysroot byte-
 # identical to before the fields existed. A set address threads --vault-addr
-# [--vault-kv-mount] [--vault-base-path] to the two node builders
-# (build-x86-host-stage4.sh / build-rpi5-stage4.sh), which bake CONNECTION FACTS
-# ONLY into /etc/hugmesh/vault.conf; keys-provision's provision_vault() reads that
-# file whenever the KEYS manifest carries no .vault block (the manifest still wins).
+# [--vault-external-addr] to the two node builders (build-x86-host-stage4.sh /
+# build-rpi5-stage4.sh), which bake CONNECTION FACTS ONLY into
+# /etc/hugmesh/vault.conf; keys-provision's provision_vault() reads that file
+# whenever the KEYS manifest carries no .vault block (the manifest still wins).
 # The token and unseal key are custody material: they ride the KEYS stick
 # (vault/token, vault/unseal-key), never a flag and never the image.
 # The INTERNAL/EXTERNAL split (issue #335): ``vault_addr`` is the address a node
@@ -813,37 +813,49 @@ SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password")
 # OUTSIDE it (an operator laptop, a CI runner, a second site). The external one is
 # OPTIONAL and OMIT-WHEN-EMPTY at every layer — argv, and the baked vault.conf line —
 # so every pre-#335 flow keeps its bytes.
-VAULT_FIELDS = ("vault_addr", "vault_external_addr", "vault_kv_mount",
-                "vault_base_path")
-VAULT_KV_MOUNT_DEFAULT = "secret"       # the builders' own default (brand.conf VAULT_KV_MOUNT)
-# A KV mount / base path is a Vault path prefix: alnum plus . _ - / (no shell or
-# sed metacharacters — the value lands in a root-read KEY=VALUE file).
-_VAULT_PATH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
+#
+# WHERE the cluster reads is NOT a field here and there is no flag for it: it is
+# ``secret/<brand>/…`` BY DESIGN (issue #285; decision 22 on #347, operator
+# 2026-09-16 "A: drop both controls"). ``vault_kv_mount`` / ``vault_base_path`` and
+# the builders' --vault-kv-mount / --vault-base-path are REMOVED. They were
+# validated, baked into vault.conf and logged at first boot, and read by nothing:
+# the mount is pinned in the shipped ClusterSecretStore (specs/cluster/manifests/
+# external-secrets/secretstore.yaml ``path: "secret"``), which ArgoCD serves with
+# prune+selfHeal and re-applies from git on every reconcile, so no image-side value
+# could ever re-point it; and the base path IS the brand slug
+# (scripts/gen-cluster-secrets.sh:118 ``BASE="${BRAND:-hugmesh}"``) — the writer's
+# own layout. The builders still WRITE both lines into vault.conf, now derived, so
+# keys-provision's first-boot log names the real paths for any brand.
+# A config saved before this carries the two keys; ``from_dict`` drops unknown keys,
+# so it loads with no residue and emits the same argv as one that never had them.
+VAULT_FIELDS = ("vault_addr", "vault_external_addr")
 
 
-def vault_field_error(addr: str, kv_mount: str, base_path: str,
-                      external_addr: str = "") -> str:
+def vault_field_error(addr: str, external_addr: str = "") -> str:
     """The ONE fail-closed rule for the vault fields, shared by validate_identity()
     (argv) and both faces' inline notes (GUI VaultPage / TUI VaultScreen): "" when
     the combination is valid, else a LAY-USER sentence.
 
-    Empty INTERNAL address = the offline default, and it must carry NO residue (a
-    mount, base path or external address with nowhere to point is a half-configured
-    store, never silently ignored — the idp=casdoor precedent). A set address must be
-    https:// (the secrets channel's trust anchor) and the two paths must be plain
-    Vault path prefixes.
+    Empty INTERNAL address = the offline default, and it must carry NO residue (an
+    external address with nowhere to point is a half-configured store, never
+    silently ignored — the idp=casdoor precedent). A set address must be https://
+    (the secrets channel's trust anchor).
 
-    ``external_addr`` is keyword-last and defaults to "" on purpose: every pre-#335
-    3-argument caller (and the builders' mirrored _validate_vault) keeps working
-    unchanged. It must be https:// for the same trust-anchor reason, and it must
-    DIFFER from the internal one — one Vault reached at one address needs only the
-    internal field, and two identical addresses are a copy/paste, not a split."""
+    ``external_addr`` is keyword-last and defaults to "" on purpose, so a caller
+    that knows only the internal address keeps working. It must be https:// for the
+    same trust-anchor reason, and it must DIFFER from the internal one — one Vault
+    reached at one address needs only the internal field, and two identical
+    addresses are a copy/paste, not a split.
+
+    The KV-mount / base-path arms this predicate used to carry are GONE with the
+    fields themselves (#285, decision 22): the cluster reads secret/<brand>/… by
+    design, so there is no operator input left to check. The builders' mirrored
+    ``_validate_vault`` was cut in the same shape, which is what keeps the two
+    sides one rule rather than two."""
     if not addr:
-        stray = [n for n, v in (("external address", external_addr),
-                                ("KV mount", kv_mount), ("base path", base_path)) if v]
-        if stray:
-            return (f"{' and '.join(stray)} set but no Vault address — clear "
-                    "them, or enter the address they belong to")
+        if external_addr:
+            return ("external address set but no Vault address — clear "
+                    "it, or enter the address it belongs to")
         return ""
     if not _IDP_URL_RE.fullmatch(addr):
         return ("the Vault address must be an https:// URL (letters, digits and "
@@ -855,10 +867,6 @@ def vault_field_error(addr: str, kv_mount: str, base_path: str,
         if external_addr == addr:
             return ("the external Vault address is the same as the internal one — "
                     "clear it; one address reached from everywhere needs no split")
-    if kv_mount and not _VAULT_PATH_RE.fullmatch(kv_mount):
-        return "the KV mount must be a plain Vault path (letters, digits and ._/- only, max 128)"
-    if base_path and not _VAULT_PATH_RE.fullmatch(base_path):
-        return "the base path must be a plain Vault path (letters, digits and ._/- only, max 128)"
     return ""
 
 
@@ -1146,7 +1154,6 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     # base_ca_certs / domain_ca are ABSENT on purpose: they emit no flag anywhere, so
     # a capability-table entry would claim a builder surface that does not exist.
     "vault_addr": _X86_RPI5, "vault_external_addr": _X86_RPI5,
-    "vault_kv_mount": _X86_RPI5, "vault_base_path": _X86_RPI5,
     # tor / character-studio / character-forge / services.
     "tor_onion_service": _X86, "character_studio": _X86_RPI5,
     "character_forge": _X86_RPI5,
@@ -2827,13 +2834,13 @@ class ImageConfig:
     idp_jwks: str = ""                 # external JWKS URL override ("" = per-provider derivation)
     # ── mesh secrets store (#224; x86 + rpi5 node builders) ──
     # "" address (the NATIVE DEFAULT) = offline/USB-only delivery and emits NOTHING.
-    # A set address threads --vault-addr [--vault-kv-mount] [--vault-base-path]; the
-    # builders bake /etc/hugmesh/vault.conf (connection facts only — the token and
-    # unseal key stay on the KEYS stick). vault_field_error() fail-closes the trio.
+    # A set address threads --vault-addr [--vault-external-addr]; the builders bake
+    # /etc/hugmesh/vault.conf (connection facts only — the token and unseal key stay
+    # on the KEYS stick). vault_field_error() fail-closes the pair. The KV mount and
+    # base path are NOT fields: the cluster reads secret/<brand>/… by design (#285,
+    # decision 22) and the two flags that used to carry them are gone.
     vault_addr: str = ""               # --vault-addr https://… INTERNAL (VAULT_FIELDS)
     vault_external_addr: str = ""      # --vault-external-addr https://… (#335; "" = no such line in vault.conf)
-    vault_kv_mount: str = ""           # --vault-kv-mount ("" = the builder default "secret")
-    vault_base_path: str = ""          # --vault-base-path ("" = the builder default: the brand slug)
     # ── base CA certificates (#335) — RECORDED ONLY, and labelled so on both faces.
     # ``base_ca_certs`` is the operator's list of PEM files (absolute paths, checked
     # by ca_cert_error before anything can add one); ``domain_ca`` maps a domain NAME
@@ -3423,8 +3430,7 @@ class ImageConfig:
         # ── mesh secrets store (#224) — the same earliest-boundary rule: the values
         # land in the root-read /etc/hugmesh/vault.conf, so charset + combination are
         # enforced HERE, through the ONE predicate both faces' inline notes use.
-        vault_err = vault_field_error(self.vault_addr, self.vault_kv_mount,
-                                      self.vault_base_path, self.vault_external_addr)
+        vault_err = vault_field_error(self.vault_addr, self.vault_external_addr)
         if vault_err:
             raise IdentityValidationError(f"vault: {vault_err}")
         # ── base CA certificates (#335). They reach NO argv, NO image and no
@@ -3717,13 +3723,17 @@ class ImageConfig:
         return a
 
     def _vault_args(self) -> list[str]:
-        """--vault-addr [--vault-external-addr] [--vault-kv-mount] [--vault-base-path]
-        — the mesh secrets store (#224, split internal/external in #335; parsed by the
-        x86 + rpi5 node builders ONLY). Emitted ONLY when the INTERNAL address is set:
-        the empty default (offline/USB-only delivery) emits NOTHING, so every existing
-        flow's argv stays byte-identical. validate_identity() already fail-closed the
-        combination + charset before emission; the three optional values ride only
-        when the operator set them.
+        """--vault-addr [--vault-external-addr] — the mesh secrets store (#224, split
+        internal/external in #335; parsed by the x86 + rpi5 node builders ONLY).
+        Emitted ONLY when the INTERNAL address is set: the empty default
+        (offline/USB-only delivery) emits NOTHING, so every existing flow's argv stays
+        byte-identical. validate_identity() already fail-closed the combination +
+        charset before emission; the external address rides only when it is set.
+
+        NOTHING is emitted for the KV mount or the base path: those two flags are gone
+        (#285, decision 22 — the cluster reads secret/<brand>/… by design), and the
+        builders no longer parse them, so emitting either would be an "Unknown option"
+        abort rather than a dead knob.
 
         NOTHING is emitted for base_ca_certs / domain_ca: no builder parses a CA flag.
         They are recorded in the saved config and read by the two GUI/TUI faces, and
@@ -3733,10 +3743,6 @@ class ImageConfig:
         a = ["--vault-addr", self.vault_addr]
         if self.vault_external_addr:
             a += ["--vault-external-addr", self.vault_external_addr]
-        if self.vault_kv_mount:
-            a += ["--vault-kv-mount", self.vault_kv_mount]
-        if self.vault_base_path:
-            a += ["--vault-base-path", self.vault_base_path]
         return a
 
     def _character_studio_args(self) -> list[str]:

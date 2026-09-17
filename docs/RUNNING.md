@@ -173,7 +173,7 @@ cp brands/example.conf brands/acme.conf
 | `MAIL_PROVIDER` | `protonmail` | SMTP preset; `none` disables mail (see §2d) |
 | `TIMEZONE` | `UTC` | image timezone |
 | `HEADSCALE_VERSION` / `TAILSCALE_VERSION` | pinned | mesh binary versions |
-| `VAULT_ADDR` / `VAULT_KV_MOUNT` | empty / `secret` | online secret push (empty = offline/USB-only) |
+| `VAULT_ADDR` / `VAULT_KV_MOUNT` | empty / `secret` | online secret push (empty = offline/USB-only). `VAULT_KV_MOUNT` is the writer side only: the cluster reads `secret/<brand>/…` by design (#285) |
 | `CA_CERT` / `CA_KEY` / `CA_KEY_PASS` | unset | use an **existing** CA as the issuer instead of a self-signed root |
 
 > **Secrets never go in a committed `brands/*.conf`.** Real SMTP/OAuth/Vault/CA

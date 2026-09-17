@@ -10,26 +10,31 @@ example manifests omit it, so first-boot Vault/ESO seeding silently skipped.
 
 What this page does: collects the HashiCorp Vault addresses (an INTERNAL one — the
 address a node reaches Vault at from inside the mesh, which is the field that was
-always here — plus an optional EXTERNAL one, and the KV mount and base path, both
-optional overrides of the builders' defaults) into ``cfg.vault_*``, and a list of
+always here — plus an optional EXTERNAL one) into ``cfg.vault_*``, and a list of
 base CA certificate PEMs into ``cfg.base_ca_certs``. The x86 and rpi5 node builders
-take the four as ``--vault-addr [--vault-external-addr] [--vault-kv-mount]
-[--vault-base-path]`` and bake CONNECTION FACTS ONLY into ``/etc/hugmesh/vault.conf``;
-keys-provision's ``provision_vault()`` then seeds the External Secrets Operator from
-that file at first boot whenever the KEYS manifest carries no ``.vault`` block (a
-manifest block still wins — it is the per-stick override).
+take the two as ``--vault-addr [--vault-external-addr]`` and bake CONNECTION FACTS
+ONLY into ``/etc/hugmesh/vault.conf``; keys-provision's ``provision_vault()`` then
+seeds the External Secrets Operator from that file at first boot whenever the KEYS
+manifest carries no ``.vault`` block (a manifest block still wins — it is the
+per-stick override).
 
-HOW FAR EACH FIELD REACHES, stated because the copy used to overstate two of them and
-#335 adds two more that reach even less far.
+WHAT THIS PAGE DELIBERATELY DOES NOT ASK (#285; decision 22 on #347, operator
+2026-09-16 "A: drop both controls"). It used to carry a KV MOUNT and a BASE PATH
+field, threaded as ``--vault-kv-mount`` / ``--vault-base-path``. Both are GONE, with
+the flags. The cluster reads ``secret/<brand>/…`` BY DESIGN: the mount is pinned in
+the shipped ``manifests/external-secrets/secretstore.yaml`` (``path: "secret"`` at
+the in-cluster ``vault.vault.svc`` server), which ``apps/04-external-secrets-config``
+serves with ``automated {prune, selfHeal}`` — so ArgoCD re-applies it from git on
+every reconcile and no image-side value could ever re-point it — and the base path
+IS the brand slug, which is where ``scripts/gen-cluster-secrets.sh`` writes. The two
+fields were validated, baked and logged and read by nothing; asking for them was the
+dead-knob failure this repo is named for. The builders still write both values into
+``vault.conf``, derived, so the first-boot log names the real paths.
+
+HOW FAR EACH FIELD REACHES, stated because the copy used to overstate them.
 
 * INTERNAL ADDRESS — live. A set address is what makes ``provision_vault()`` create
   the ``vault-token`` / ``vault-ca`` Secrets from the KEYS stick at all.
-* MOUNT and BASE PATH — reach ``vault.conf`` and ``provision_vault()`` and stop
-  there: the shipped ``manifests/external-secrets/secretstore.yaml`` still pins
-  ``path: secret`` at the in-cluster ``vault.vault.svc`` server, and its
-  ExternalSecrets pin ``remoteRef`` keys at ``hugmesh/<service>``. Nothing rewrites
-  those from this page today, so the two paths are RECORDED facts, not yet a re-point
-  of the reader.
 * EXTERNAL ADDRESS (#335) — reaches the ARTEFACT and no reader. It is a real flag
   parsed by both node builders and appended to ``vault.conf`` as
   ``VAULT_EXTERNAL_ADDR``, so the value genuinely lands in the image; keys-provision
@@ -82,8 +87,8 @@ import os
 from ..qt import Qt, QtWidgets
 from ..styles import muted
 from ...core.config import (
-    VAULT_FIELDS, VAULT_KV_MOUNT_DEFAULT, ImageConfig, ca_cert_error,
-    describe_ca_cert, vault_field_error)
+    VAULT_FIELDS, ImageConfig, ca_cert_error, describe_ca_cert,
+    vault_field_error)
 from ._gating import gate_widgets_role_class, out_of_scope_note_flow, scope_allows_flow
 from ._scroll import scrollable
 from ._widgets import _row
@@ -97,26 +102,29 @@ pick_ca_certificates = QtWidgets.QFileDialog.getOpenFileNames
 _CERT_FILTER = "Certificates (*.pem *.crt *.cer *.ca-bundle);;All files (*)"
 
 _LIMITS_NOTE = (
-    "What a set internal address DOES: bakes /etc/hugmesh/vault.conf (address, KV "
-    "mount, base path — public connection facts, 0644) into every cluster-node image "
-    "in this flow. At first boot keys-provision reads it when the KEYS stick's "
-    "provision.json has no .vault block, and seeds the External Secrets Operator's "
-    "vault-token / vault-ca Secrets from the token on the stick.\n"
+    "What a set internal address DOES: bakes /etc/hugmesh/vault.conf (the address, "
+    "plus the KV mount and base path the cluster reads — public connection facts, "
+    "0644) into every cluster-node image in this flow. At first boot keys-provision "
+    "reads it when the KEYS stick's provision.json has no .vault block, and seeds "
+    "the External Secrets Operator's vault-token / vault-ca Secrets from the token "
+    "on the stick.\n"
     "What it does NOT do: the Vault token and unseal key are never entered here, "
     "never a build flag and never in an image — put them on the KEYS stick "
     "(vault/token, vault/unseal-key; see keys-template/vault/README.md). A .vault "
     "block in provision.json overrides everything on this page. Desktop rows in the "
     "worklist ignore it (the builder says so in the log).\n"
-    "What the external address and the two paths do NOT do YET: the mount and base "
-    "path are RECORDED in vault.conf and read by keys-provision, but the shipped "
-    "cluster manifests still pin their own — the ClusterSecretStore reads mount "
-    "'secret' at the in-cluster Vault service, and the ExternalSecrets pin remoteRef "
-    "keys at 'hugmesh/<service>'. The external address is baked into the same file "
-    "and has no reader at all: it is there for operators and out-of-cluster tooling, "
-    "and a node boots identically with and without it. Nothing rewrites any of the "
-    "three from this page, so all three are carried to first boot and logged and "
-    "change nothing else. The internal address itself is live: it is what enables "
-    "the vault-token / vault-ca seeding at all.\n"
+    "WHERE the cluster reads is not asked here, because it is not a choice: it is "
+    "secret/<brand>/… by design. The mount is pinned in the shipped "
+    "ClusterSecretStore and ArgoCD re-applies that from git on every reconcile, so "
+    "nothing on a node can re-point it; the base path is the brand slug, which is "
+    "where the secret generator writes. Both values are baked into vault.conf as "
+    "derived facts so the first-boot log names the real paths. The KV-mount and "
+    "base-path fields this page used to show were removed for that reason — they "
+    "were recorded, logged, and read by nothing.\n"
+    "What the external address does NOT do: it is baked into the same file and has "
+    "no reader at all — it is there for operators and out-of-cluster tooling, and a "
+    "node boots identically with and without it. The internal address itself is "
+    "live: it is what enables the vault-token / vault-ca seeding at all.\n"
     "An empty internal address emits no flag. The builders then fall back to a brand "
     "profile's VAULT_ADDR (brand.conf, or the build environment) exactly as they do "
     "for every other knob; with neither set, nothing is baked and secrets come off "
@@ -185,29 +193,9 @@ class VaultPage(QtWidgets.QWizardPage):
             "out-of-cluster tooling. Needs the internal address, must differ from it, "
             "and empty writes no line at all.")
         vb.addWidget(_row("External address", self.external_addr))
-        self.kv_mount = QtWidgets.QLineEdit()
-        self.kv_mount.setPlaceholderText(
-            f"{VAULT_KV_MOUNT_DEFAULT}  (the builder default; leave empty to keep it)")
-        self.kv_mount.setToolTip(
-            "The KV v2 mount RECORDED in /etc/hugmesh/vault.conf (--vault-kv-mount). "
-            f"Empty keeps the builder default '{VAULT_KV_MOUNT_DEFAULT}' — the same "
-            "knob brand.conf calls VAULT_KV_MOUNT, which is what "
-            "scripts/gen-cluster-secrets.sh WRITES to. Recorded, not yet read: the "
-            "shipped ClusterSecretStore still pins path 'secret', so a different "
-            "mount is carried to first boot and logged, and nothing re-points the "
-            "reader yet.")
-        vb.addWidget(_row("KV mount", self.kv_mount))
-        self.base_path = QtWidgets.QLineEdit()
-        self.base_path.setPlaceholderText(
-            "the brand slug  (the builder default; leave empty to keep it)")
-        self.base_path.setToolTip(
-            "The path prefix under the mount RECORDED in /etc/hugmesh/vault.conf "
-            "(--vault-base-path). Empty keeps the builder default — the brand slug, "
-            "which is where scripts/gen-cluster-secrets.sh WRITES the secrets. "
-            "Recorded, not yet read: the shipped ExternalSecrets still pin their "
-            "remoteRef keys at 'hugmesh/<service>', so a different prefix is carried "
-            "to first boot and logged, and nothing re-points the reader yet.")
-        vb.addWidget(_row("Base path", self.base_path))
+        # NO KV-mount / base-path fields (#285, decision 22). The cluster reads
+        # secret/<brand>/… by design; _LIMITS_NOTE says so on screen and the two
+        # builders bake the derived values themselves.
         # the inline verdict — the ONE predicate validate_identity enforces on argv,
         # shown here as text so an operator is told WHY Next is greyed (never a modal)
         self.note = QtWidgets.QLabel("")
@@ -271,23 +259,21 @@ class VaultPage(QtWidgets.QWizardPage):
 
         #: field name -> widget, in VAULT_FIELDS order — the TUI parity pin reads it.
         self.field_widgets = {"vault_addr": self.addr,
-                              "vault_external_addr": self.external_addr,
-                              "vault_kv_mount": self.kv_mount,
-                              "vault_base_path": self.base_path}
+                              "vault_external_addr": self.external_addr}
         assert tuple(self.field_widgets) == VAULT_FIELDS
         for w in self.field_widgets.values():
             w.textChanged.connect(self._sync)
         self._sync()
 
     # ── helpers ─────────────────────────────────────────────────────────────────
-    def values(self) -> tuple[str, str, str, str]:
+    def values(self) -> tuple[str, str]:
         """The widgets' current text, stripped, in VAULT_FIELDS order."""
         return tuple(w.text().strip() for w in self.field_widgets.values())
 
     def error(self) -> str:
         """The inline verdict for the widgets' CURRENT text ("" = valid)."""
-        addr, external, kv_mount, base_path = self.values()
-        return vault_field_error(addr, kv_mount, base_path, external)
+        addr, external = self.values()
+        return vault_field_error(addr, external)
 
     def certificates(self) -> list[str]:
         """The certificate paths currently listed, in row order. The PATH is the
@@ -297,17 +283,16 @@ class VaultPage(QtWidgets.QWizardPage):
                 for i in range(self.ca_list.count())]
 
     def _sync(self, *_):
-        addr, external, kv_mount, base_path = self.values()
+        addr, external = self.values()
         err = self.error()
         if err:
             self.note.setText(f"Cannot continue: {err}.")
         elif addr:
             self.note.setText(
-                f"Every node in this flow will bake {addr} · mount "
-                f"{kv_mount or VAULT_KV_MOUNT_DEFAULT} · base path "
-                f"{base_path or '<brand>'}"
+                f"Every node in this flow will bake {addr}"
                 + (f" · external {external}" if external else "")
-                + " into /etc/hugmesh/vault.conf.")
+                + " into /etc/hugmesh/vault.conf, and read its secrets from "
+                  "secret/<brand>/… (fixed by design — not a setting here).")
         else:
             self.note.setText(
                 "No address from this page: no --vault-addr is emitted. The builder "
@@ -396,8 +381,6 @@ class VaultPage(QtWidgets.QWizardPage):
         c = self.wiz.cfg
         self.addr.setText(c.vault_addr)
         self.external_addr.setText(c.vault_external_addr)
-        self.kv_mount.setText(c.vault_kv_mount)
-        self.base_path.setText(c.vault_base_path)
         # Rebuild the certificate list from cfg. A path that is not readable RIGHT NOW
         # (moved, or on a volume that is not mounted this morning) is KEPT as a marked
         # row, not dropped: merely opening this page must never be able to destroy a
@@ -431,23 +414,20 @@ class VaultPage(QtWidgets.QWizardPage):
 
     def validatePage(self):
         c = self.wiz.cfg
-        addr, external, kv_mount, base_path = self.values()
+        addr, external = self.values()
         c.vault_addr = addr
         if addr:
             c.vault_external_addr = external
-            c.vault_kv_mount = kv_mount
-            c.vault_base_path = base_path
         else:
             # the byte-identity invariant: the offline default carries ZERO residue,
-            # even if a mount/path/external address was typed and the address then
-            # cleared. (vault_field_error refuses that combination anyway — this is
-            # what makes the refusal unreachable rather than merely enforced.)
-            c.vault_external_addr = c.vault_kv_mount = c.vault_base_path = ""
+            # even if an external address was typed and the address then cleared.
+            # (vault_field_error refuses that combination anyway — this is what makes
+            # the refusal unreachable rather than merely enforced.)
+            c.vault_external_addr = ""
         if not self.box.isEnabled():
             # greyed = no consumer in this flow: clear rather than strand a value
             # the per-entry strip would drop anyway (emission-neutral)
             c.vault_addr = c.vault_external_addr = ""
-            c.vault_kv_mount = c.vault_base_path = ""
         # ── the certificate list, and the per-domain choices that point into it.
         # The list is NOT scope-gated (no flag on any platform), so it is committed
         # unconditionally; every per-domain choice naming a certificate that is no

@@ -35,7 +35,7 @@ import os
 
 from ..core.config import (
     IDP_CHOICES, IDP_LABELS, MODE_DEFAULT_ROLE, MODE_SKIPPED_PAGES, ROLE_CHOICES,
-    UNAFFILIATED_ROLE, VAULT_FIELDS, VAULT_KV_MOUNT_DEFAULT, WIZARD_PAGE_SLUGS,
+    UNAFFILIATED_ROLE, VAULT_FIELDS, WIZARD_PAGE_SLUGS,
     ImageConfig, ca_cert_error, derive_hostname, describe_ca_cert,
     enter_mesh_defaults, vault_field_error,
 )
@@ -361,8 +361,9 @@ class IdpScreen:
 #: two faces edit exactly the same fields. 'x' is the EXTERNAL address (#335); the
 #: base CA list is edited by 'c'/'r', which are NOT here because they are not
 #: cfg scalar fields and this dict's whole job is to stay == VAULT_FIELDS.
-VAULT_COMMANDS = {"a": "vault_addr", "x": "vault_external_addr",
-                  "m": "vault_kv_mount", "p": "vault_base_path"}
+#: 'm' (KV mount) and 'p' (base path) were REMOVED with their fields and flags
+#: (#285, decision 22 on #347): the cluster reads secret/<brand>/… by design.
+VAULT_COMMANDS = {"a": "vault_addr", "x": "vault_external_addr"}
 assert tuple(VAULT_COMMANDS.values()) == VAULT_FIELDS
 
 
@@ -375,10 +376,11 @@ class VaultScreen:
     argv accepts, and the SAME base CA list (``cfg.base_ca_certs``) through the same
     ``config.ca_cert_error``. Every edit is validated BEFORE it is committed and a
     refusal is an inline status line (never a dead end, never a silently-inert
-    command); clearing the internal address clears the external address and the two
-    paths with it — the byte-identity rule the GUI's validatePage applies. Dropping a
-    certificate clears every domain that pointed at it, exactly as the GUI does.
-    Enter keeps the current values and continues.
+    command); clearing the internal address clears the external address with it — the
+    byte-identity rule the GUI's validatePage applies. Dropping a certificate clears
+    every domain that pointed at it, exactly as the GUI does. Enter keeps the current
+    values and continues. The KV-mount / base-path commands are gone with their fields
+    (#285, decision 22): the cluster reads secret/<brand>/… by design.
 
     The GUI picks certificates through a file dialog; here the operator types a path,
     which is the only difference between the two faces on this step."""
@@ -398,17 +400,17 @@ class VaultScreen:
         if cfg.vault_addr:
             out += [f"  internal   {cfg.vault_addr}",
                     f"  external   {cfg.vault_external_addr or '(none — no such line in vault.conf)'}",
-                    f"  KV mount   {cfg.vault_kv_mount or VAULT_KV_MOUNT_DEFAULT + ' (builder default)'}",
-                    f"  base path  {cfg.vault_base_path or '<brand> (builder default)'}",
+                    "  reads      secret/<brand>/… (fixed by design — not a setting)",
                     "",
                     "  Every x86/rpi5 node in the worklist bakes these into "
                     "/etc/hugmesh/vault.conf. The INTERNAL address is what enables "
-                    "first-boot ESO seeding; the mount and base path are recorded "
-                    "there and read by keys-provision, but the shipped cluster "
-                    "manifests still pin their own mount ('secret') and key prefix "
-                    "('hugmesh/<service>'), and the EXTERNAL address is baked with no "
+                    "first-boot ESO seeding; the EXTERNAL address is baked with no "
                     "reader at all — it is for operators and out-of-cluster tooling, "
-                    "and a node boots identically without it.",
+                    "and a node boots identically without it. WHERE the cluster reads "
+                    "is not a choice: the mount is pinned in the shipped "
+                    "ClusterSecretStore, which ArgoCD re-applies from git on every "
+                    "reconcile, and the base path is the brand slug the secret "
+                    "generator writes under. Both are baked as derived facts.",
                     ""]
         else:
             out += ["  internal   (none — no flag emitted; brand.conf VAULT_ADDR or "
@@ -432,10 +434,6 @@ class VaultScreen:
             "(https://…; - clears it and everything below it)",
             "  x URL|-     EXTERNAL address for the same Vault (https://…; must "
             "differ from the internal one)",
-            "  m NAME|-    KV v2 mount (- = the builder default "
-            f"'{VAULT_KV_MOUNT_DEFAULT}')",
-            "  p PATH|-    base path under the mount (- = the builder default: the "
-            "brand slug)",
             "  c PATH      add a base CA certificate (a PEM file; it is parsed "
             "before it is added)",
             "  r NUMBER    remove that certificate (and clear every domain that "
@@ -444,8 +442,9 @@ class VaultScreen:
             "",
             "The Vault token and unseal key are never entered here: put them on the "
             "KEYS stick (vault/token, vault/unseal-key). A .vault block in the "
-            "stick's provision.json overrides this step. The mount and base path are "
-            "recorded facts today, not a re-point of what the cluster reads.",
+            "stick's provision.json overrides this step. There are no KV-mount or "
+            "base-path commands: the cluster reads secret/<brand>/… by design, so "
+            "those two fields and their build flags were removed (#285).",
             "The base CA list is RECORDED ONLY: no builder parses a CA flag and no "
             "manifest carries the per-domain choice, so nothing here copies a PEM "
             "into an image or a trust store. It records which authority each domain "
@@ -469,7 +468,7 @@ class VaultScreen:
             return
         field = VAULT_COMMANDS.get(cmd)
         if field is None:
-            j.status = (f"unrecognised command: {line!r} (a/x/m/p set a value, "
+            j.status = (f"unrecognised command: {line!r} (a/x set a value, "
                         "c/r edit the base CA list, Enter continues, q quits)")
             return
         if not arg:
@@ -480,9 +479,7 @@ class VaultScreen:
         if field == "vault_addr" and not new["vault_addr"]:
             # clearing the internal address clears the residue with it (byte-identity)
             new["vault_external_addr"] = ""
-            new["vault_kv_mount"] = new["vault_base_path"] = ""
-        err = vault_field_error(new["vault_addr"], new["vault_kv_mount"],
-                                new["vault_base_path"], new["vault_external_addr"])
+        err = vault_field_error(new["vault_addr"], new["vault_external_addr"])
         if err:
             # honest refusal, state unchanged — the same sentence the GUI shows
             j.status = f"refused: {err}"

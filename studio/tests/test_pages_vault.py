@@ -117,26 +117,30 @@ def test_untouched_page_commits_nothing_and_emits_nothing(wiz):
 def test_a_set_address_reaches_cfg_and_the_emitted_argv(wiz):
     page = _mesh_vault(wiz)
     page.addr.setText(ADDR)
-    page.kv_mount.setText("kv")
-    page.base_path.setText("acme/prod")
+    page.external_addr.setText(EXT)
     assert page.isComplete()
     assert ADDR in page.note.text() and "vault.conf" in page.note.text()
     wiz.next()
     c = wiz.cfg
-    assert (c.vault_addr, c.vault_kv_mount, c.vault_base_path) == (ADDR, "kv", "acme/prod")
+    assert (c.vault_addr, c.vault_external_addr) == (ADDR, EXT)
     args = c.to_cli_args()
     assert ("--vault-addr", ADDR) in list(zip(args, args[1:]))
-    assert ("--vault-kv-mount", "kv") in list(zip(args, args[1:]))
-    assert ("--vault-base-path", "acme/prod") in list(zip(args, args[1:]))
+    assert ("--vault-external-addr", EXT) in list(zip(args, args[1:]))
 
 
-def test_address_only_leaves_the_builder_defaults_unemitted(wiz):
+def test_the_removed_path_flags_are_never_emitted_from_this_page(wiz):
+    """#285, decision 22: --vault-kv-mount / --vault-base-path are GONE from both
+    node builders, so emitting either would abort a real build with "Unknown
+    option" — a harder failure than the dead knob they used to be. Nothing on this
+    page can produce them, and the page carries no widget for them either."""
     page = _mesh_vault(wiz)
     page.addr.setText(ADDR)
+    page.external_addr.setText(EXT)
     wiz.next()
     args = wiz.cfg.to_cli_args()
     assert "--vault-addr" in args
     assert "--vault-kv-mount" not in args and "--vault-base-path" not in args
+    assert not hasattr(page, "kv_mount") and not hasattr(page, "base_path")
 
 
 # ── the fail-closed rule, rendered inline (never a modal) ────────────────────────────
@@ -158,57 +162,60 @@ def test_an_http_address_greys_next_with_the_reason_inline(wiz, qapp):
     assert wiz.button(_NEXT).isEnabled()
 
 
-def test_a_mount_without_an_address_is_refused_until_one_is_entered(wiz):
+def test_an_external_address_without_an_internal_one_is_refused(wiz):
     page = _mesh_vault(wiz)
-    page.kv_mount.setText("kv")
+    page.external_addr.setText(EXT)
     assert not page.isComplete()
     assert "no Vault address" in page.note.text()
     page.addr.setText(ADDR)
     assert page.isComplete()
 
 
-def test_a_shell_shaped_path_is_refused(wiz):
+def test_a_shell_shaped_external_address_is_refused(wiz):
     page = _mesh_vault(wiz)
     page.addr.setText(ADDR)
-    page.base_path.setText("$(rm -rf /)")
+    page.external_addr.setText("$(rm -rf /)")
     assert not page.isComplete()
-    assert "base path" in page.note.text()
+    assert "external Vault address" in page.note.text()
 
 
 def test_clearing_the_address_clears_the_residue_on_commit(wiz):
     page = _mesh_vault(wiz)
     page.addr.setText(ADDR)
-    page.kv_mount.setText("kv")
-    page.base_path.setText("acme")
+    page.external_addr.setText(EXT)
     page.addr.setText("")                         # typed, then thought better of it
-    assert not page.isComplete()                  # a stray mount is refused...
-    page.kv_mount.setText("")
-    page.base_path.setText("")
+    assert not page.isComplete()                  # a stray external address is refused
+    page.external_addr.setText("")
     assert page.isComplete()
     wiz.next()
     assert all(getattr(wiz.cfg, f) == "" for f in VAULT_FIELDS)
 
 
-def test_a_committed_trio_is_cleared_on_a_SECOND_commit(wiz):
-    """The residue branch is only REACHED once a non-empty trio has already been
+def test_a_committed_pair_is_cleared_on_a_SECOND_commit(wiz):
+    """The residue branch is only REACHED once a non-empty pair has already been
     committed and the operator then clears it. The test above clears the widgets
     before its only next(), so it never commits the intermediate state the branch
     exists to fix — deleting the branch survived a 2043-test sweep in the 2026-09-04
-    adversarial review while leaving a real regression: cfg kept mount+base with an
+    adversarial review while leaving a real regression: cfg kept the residue with an
     empty address, and validate_identity() then refused the build. Walk the
-    operator's actual route: commit, go back, clear all three, commit again."""
+    operator's actual route: commit, go back, clear both, commit again.
+
+    (Written over the mount/base-path trio; #285 decision 22 removed those two
+    fields, and the EXTERNAL address is now the residue this branch must clear. The
+    separate `test_clearing_the_address_clears_the_external_one_too` that used to sit
+    below walked this exact route once the two path widgets were gone — its rationale
+    is folded in here rather than kept as a duplicate: the external address is residue
+    exactly as the mount and base path were, and a SECOND commit after clearing must
+    leave cfg at the native default.)"""
     page = _mesh_vault(wiz)
     page.addr.setText(ADDR)
-    page.kv_mount.setText("kv")
-    page.base_path.setText("acme")
-    wiz.next()                                     # COMMIT 1: the full trio
-    assert (wiz.cfg.vault_addr, wiz.cfg.vault_kv_mount,
-            wiz.cfg.vault_base_path) == (ADDR, "kv", "acme")
+    page.external_addr.setText(EXT)
+    wiz.next()                                     # COMMIT 1: the full pair
+    assert (wiz.cfg.vault_addr, wiz.cfg.vault_external_addr) == (ADDR, EXT)
     wiz.back()
     assert wiz.currentId() == wiz._page_ids["vault"]
     page.addr.setText("")
-    page.kv_mount.setText("")
-    page.base_path.setText("")
+    page.external_addr.setText("")
     assert page.isComplete()
     wiz.next()                                     # COMMIT 2: back to the default
     assert all(getattr(wiz.cfg, f) == "" for f in VAULT_FIELDS)
@@ -217,18 +224,32 @@ def test_a_committed_trio_is_cleared_on_a_SECOND_commit(wiz):
 
 
 # ── the copy says how far each field actually reaches ────────────────────────────────
-def test_the_two_path_fields_do_not_claim_to_re_point_the_reader(wiz):
-    """The shipped ClusterSecretStore pins path 'secret' at the in-cluster Vault and
-    its ExternalSecrets pin remoteRef keys at 'hugmesh/<service>'; nothing rewrites
-    either from this page. The tooltips used to say the mount was "the KV v2 mount
-    the ClusterSecretStore reads", which is false as shipped. Pin the honest form so
-    the claim cannot drift back."""
+def test_the_page_offers_no_mount_or_base_path_control_and_says_why(wiz):
+    """#285, decision 22 on #347 ("A: drop both controls"). The KV-mount and
+    base-path fields were validated, threaded as flags, baked into vault.conf and
+    logged at first boot — and read by NOTHING. They are gone. What replaces them is
+    a statement, not a knob: the cluster reads secret/<brand>/... by design.
+
+    Pinned as a NEGATIVE (no widget, no flag anywhere in the module source) plus the
+    positive claim in the copy, so re-adding either field fails here rather than
+    shipping a second dead knob."""
     page = _mesh_vault(wiz)
-    for tip in (page.kv_mount.toolTip(), page.base_path.toolTip()):
-        assert "not yet read" in tip
-        assert "ClusterSecretStore reads" not in tip
-    # the note names the values that ARE pinned, so the claim is checkable
-    assert "hugmesh/<service>" in vault_mod._LIMITS_NOTE
+    assert not hasattr(page, "kv_mount") and not hasattr(page, "base_path")
+    src = open(vault_mod.__file__, encoding="utf-8").read()
+    # the flags may be NAMED in the prose that explains their removal, but never
+    # emitted: no argv list on this page may contain them (the page emits none at
+    # all — cfg._vault_args does — so assert on the config's own emission).
+    page.addr.setText(ADDR)
+    wiz.next()
+    assert not any("--vault-kv-mount" == a or "--vault-base-path" == a
+                   for a in wiz.cfg.to_cli_args())
+    # the copy states the design and names both pinning sites, so the claim is
+    # checkable rather than a bare assertion
+    assert "secret/<brand>/" in vault_mod._LIMITS_NOTE
+    assert "ClusterSecretStore" in vault_mod._LIMITS_NOTE
+    assert "brand slug" in vault_mod._LIMITS_NOTE
+    assert "removed" in vault_mod._LIMITS_NOTE
+    assert "secret/<brand>/" in src
     # the ADDRESS, by contrast, IS live — it is what enables the seeding at all
     assert "seeding ON" in page.addr.toolTip()
 
@@ -242,11 +263,10 @@ def test_the_page_never_opens_a_modal():
 # ── reload + the no-consumer flow ────────────────────────────────────────────────────
 def test_a_loaded_config_seeds_the_widgets_back(wiz):
     wiz.cfg.vault_addr = ADDR
-    wiz.cfg.vault_kv_mount = "kv"
-    wiz.cfg.vault_base_path = "acme"
+    wiz.cfg.vault_external_addr = EXT
     page = _mesh_vault(wiz)
     assert page.addr.text() == ADDR
-    assert page.kv_mount.text() == "kv" and page.base_path.text() == "acme"
+    assert page.external_addr.text() == EXT
     assert page.isComplete()
 
 
@@ -305,28 +325,6 @@ def test_a_bad_external_address_greys_next_with_the_reason_inline(wiz, qapp, bad
     assert not page.isComplete()
     assert fragment in page.note.text()
     assert not wiz.button(_NEXT).isEnabled()      # the gate held; no modal anywhere
-
-
-def test_clearing_the_address_clears_the_external_one_too(wiz):
-    """The residue branch, extended: the external address is residue exactly as the
-    mount and base path are, and a SECOND commit after clearing must leave cfg at the
-    native default — the regression the mount/base-path twin of this test was written
-    for, one field wider."""
-    page = _mesh_vault(wiz)
-    page.addr.setText(ADDR)
-    page.external_addr.setText(EXT)
-    page.kv_mount.setText("kv")
-    wiz.next()                                     # COMMIT 1
-    assert wiz.cfg.vault_external_addr == EXT
-    wiz.back()
-    page.addr.setText("")
-    page.external_addr.setText("")
-    page.kv_mount.setText("")
-    assert page.isComplete()
-    wiz.next()                                     # COMMIT 2: back to the default
-    assert all(getattr(wiz.cfg, f) == "" for f in VAULT_FIELDS)
-    wiz.cfg.validate_identity()
-    assert not any(a.startswith("--vault") for a in wiz.cfg.to_cli_args())
 
 
 def test_the_external_tooltip_says_it_has_no_reader(wiz):

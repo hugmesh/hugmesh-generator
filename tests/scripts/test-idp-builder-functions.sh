@@ -236,6 +236,14 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   # The two validators are regex CONSTANTS at top level, not functions.
   eval "$(grep -m1 '^_IDP_URL_RE=' "${B}")"
   eval "$(grep -m1 '^_VAULT_PATH_RE=' "${B}")"
+  # The design-fixed KV mount (#285, decision 22 on #347). It is a bare constant with
+  # NO ${VAULT_KV_MOUNT:-} env arm — that absence is what makes it not a knob — so it
+  # is eval'd by its own name, and its absence is a FAILURE rather than an unbound
+  # variable inside the extracted bake_vault_conf.
+  eval "$(grep -m1 '^VAULT_KV_MOUNT_FIXED=' "${B}")"
+  [ -n "${VAULT_KV_MOUNT_FIXED:-}" ] \
+    && ok "${BUILDER}: VAULT_KV_MOUNT_FIXED is a top-level constant" \
+    || bad "${BUILDER}: no VAULT_KV_MOUNT_FIXED constant (bake_vault_conf cannot derive the mount)"
   # UNSET first, and fail LOUDLY on a body that does not parse. Both matter: the two
   # builders are walked in one shell, so a definition from the FIRST iteration stays
   # in scope for the second, and a `eval` that quietly failed would have re-run the
@@ -252,7 +260,7 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   done
 
   ROLE="omnibus"; ROLE_CLIENT=false; BRAND="hugmesh"
-  VAULT_ADDR=""; VAULT_KV_MOUNT=""; VAULT_BASE_PATH=""
+  VAULT_ADDR=""
   # The EXTERNAL address (issue #335). Set explicitly rather than left unbound: the
   # function bodies default it so an OLDER harness degrades instead of dying, and a
   # harness that relied on that default would silently stop testing the flag.
@@ -267,28 +275,28 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   rm -rf "${SYSROOT}"
 
   # ── _validate_vault fail-closed table ───────────────────────────────────────
-  vvfail() { # label  ADDR MOUNT BASE
-    VAULT_ADDR="$2" VAULT_KV_MOUNT="$3" VAULT_BASE_PATH="$4"
+  # The MOUNT / BASE-PATH rows this table used to carry are gone with their flags
+  # (#285, decision 22): there is no operator input to refuse any more, and the
+  # brand-derived base path is re-checked inside bake_vault_conf instead (below).
+  vvfail() { # label  ADDR
+    VAULT_ADDR="$2"
     if ( _validate_vault ) 2>/dev/null; then bad "${BUILDER}: $1 was ACCEPTED (want reject)"
     else ok "${BUILDER}: rejects $1"; fi
   }
-  vvfail "an http:// vault address"    "http://vault.acme.example:8200" "" ""
-  vvfail "a shell-shaped KV mount"     "https://vault.acme.example:8200" 'kv$(id)' ""
-  vvfail "a shell-shaped base path"    "https://vault.acme.example:8200" "" '$(rm -rf /)'
-  vvfail "a base path with a space"    "https://vault.acme.example:8200" "" "acme corp"
-  VAULT_ADDR="https://vault.acme.example:8200" VAULT_KV_MOUNT="kv" VAULT_BASE_PATH="acme/prod"
-  ( set -e; _validate_vault ) && ok "${BUILDER}: _validate_vault accepts a valid trio under set -e" \
-    || bad "${BUILDER}: _validate_vault rejected a valid trio"
+  vvfail "an http:// vault address"    "http://vault.acme.example:8200"
+  vvfail "a shell-shaped vault address" 'https://v.example:8200$(id)'
+  VAULT_ADDR="https://vault.acme.example:8200"
+  ( set -e; _validate_vault ) && ok "${BUILDER}: _validate_vault accepts a valid address under set -e" \
+    || bad "${BUILDER}: _validate_vault rejected a valid address"
   # ── the EXTERNAL address arm (#335), mirroring config.vault_field_error ──────
   vxfail() { # label  EXTERNAL
-    VAULT_ADDR="https://vault.acme.example:8200" VAULT_KV_MOUNT="" VAULT_BASE_PATH="" \
-      VAULT_EXTERNAL_ADDR="$2"
+    VAULT_ADDR="https://vault.acme.example:8200" VAULT_EXTERNAL_ADDR="$2"
     if ( _validate_vault ) 2>/dev/null; then bad "${BUILDER}: $1 was ACCEPTED (want reject)"
     else ok "${BUILDER}: rejects $1"; fi
   }
   vxfail "an http:// EXTERNAL address"          "http://ext.acme.example:8200"
   vxfail "an EXTERNAL address equal to the internal one" "https://vault.acme.example:8200"
-  VAULT_ADDR="https://vault.acme.example:8200" VAULT_KV_MOUNT="" VAULT_BASE_PATH="" \
+  VAULT_ADDR="https://vault.acme.example:8200" \
     VAULT_EXTERNAL_ADDR="https://ext.acme.example:8200"
   ( set -e; _validate_vault ) \
     && ok "${BUILDER}: _validate_vault accepts a distinct https EXTERNAL address" \
@@ -296,14 +304,13 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   # An EXTERNAL address with NO internal one must be REFUSED, not accepted and
   # dropped: bake_vault_conf writes nothing without VAULT_ADDR, so accepting it would
   # be a silent no-op, and both builders' usage text promises "Needs --vault-addr".
-  VAULT_ADDR="" VAULT_KV_MOUNT="" VAULT_BASE_PATH="" \
-    VAULT_EXTERNAL_ADDR="https://ext.acme.example:8200"
+  VAULT_ADDR="" VAULT_EXTERNAL_ADDR="https://ext.acme.example:8200"
   if ( _validate_vault ) 2>/dev/null; then
     bad "${BUILDER}: an EXTERNAL address with no internal one was ACCEPTED (want reject)"
   else
     ok "${BUILDER}: rejects an EXTERNAL address with no --vault-addr"
   fi
-  VAULT_ADDR="" VAULT_KV_MOUNT="" VAULT_BASE_PATH="" VAULT_EXTERNAL_ADDR=""
+  VAULT_ADDR="" VAULT_EXTERNAL_ADDR=""
   ( set -e; _validate_vault ) && ok "${BUILDER}: _validate_vault(empty) returns 0 under set -e" \
     || bad "${BUILDER}: _validate_vault(empty) failed under set -e"
   # And the pre-#335 shape still passes: an OLDER caller that never heard of the
@@ -317,14 +324,14 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
 
   # ── a set address bakes CONNECTION FACTS ONLY, 0644 ─────────────────────────
   SYSROOT="$(mktemp -d)"
-  VAULT_ADDR="https://vault.acme.example:8200"; VAULT_KV_MOUNT="kv"; VAULT_BASE_PATH="acme/prod"
+  VAULT_ADDR="https://vault.acme.example:8200"; BRAND="acme"
   bake_vault_conf
   VC="${SYSROOT}/etc/hugmesh/vault.conf"
   [ -f "${VC}" ] && ok "${BUILDER}: a set address bakes vault.conf" || bad "${BUILDER}: no vault.conf baked"
   [ "$(stat -c '%a' "${VC}" 2>/dev/null)" = "644" ] && ok "${BUILDER}: vault.conf is 0644" || bad "${BUILDER}: vault.conf not 0644"
   grep -q "^VAULT_ADDR=https://vault.acme.example:8200$" "${VC}" \
-    && grep -q "^VAULT_KV_MOUNT=kv$" "${VC}" && grep -q "^VAULT_BASE_PATH=acme/prod$" "${VC}" \
-    && ok "${BUILDER}: vault.conf carries the address + mount + base path" \
+    && grep -q "^VAULT_KV_MOUNT=secret$" "${VC}" && grep -q "^VAULT_BASE_PATH=acme$" "${VC}" \
+    && ok "${BUILDER}: vault.conf carries the address + the DERIVED mount + base path" \
     || { bad "${BUILDER}: vault.conf fields wrong"; cat "${VC}"; }
   # CONNECTION FACTS ONLY: no token/unseal field may ever appear (the custody rule).
   grep -qiE '^[[:space:]]*(vault_)?(token|unseal[_-]?key)[[:space:]]*[=:]' "${VC}" \
@@ -370,8 +377,8 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   resolve_vault_source
   [ "${VAULT_SRC}" = "image" ] && ok "${BUILDER}: first boot resolves the baked file as the source" \
     || bad "${BUILDER}: VAULT_SRC='${VAULT_SRC}' (want 'image')"
-  [ "${vault_address}" = "https://vault.acme.example:8200" ] && [ "${vault_kv_mount}" = "kv" ] \
-    && [ "${vault_base_path}" = "acme/prod" ] && [ "${vault_enabled}" = "true" ] \
+  [ "${vault_address}" = "https://vault.acme.example:8200" ] && [ "${vault_kv_mount}" = "secret" ] \
+    && [ "${vault_base_path}" = "acme" ] && [ "${vault_enabled}" = "true" ] \
     && ok "${BUILDER}: the baked trio reads back unchanged, enabled=true" \
     || bad "${BUILDER}: read-back mismatch: '${vault_address}' '${vault_kv_mount}' '${vault_base_path}' enabled=${vault_enabled}"
   # The reader must READ the file, never SOURCE it.
@@ -398,7 +405,7 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   # ── a client role is a loud no-op, not a bake ───────────────────────────────
   SYSROOT="$(mktemp -d)"
   ROLE_CLIENT=true; ROLE="desktop"
-  VAULT_ADDR="https://vault.acme.example:8200"; VAULT_KV_MOUNT=""; VAULT_BASE_PATH=""
+  VAULT_ADDR="https://vault.acme.example:8200"
   bake_vault_conf
   [ -e "${SYSROOT}/etc/hugmesh/vault.conf" ] \
     && bad "${BUILDER}: a client role baked a vault.conf" \
@@ -406,11 +413,12 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   ROLE_CLIENT=false; ROLE="omnibus"
   rm -rf "${SYSROOT}"
 
-  # ── the ${BRAND} default is validated too, not only the flags ───────────────
-  # _validate_vault only ever sees the FLAGS, so the base path's DEFAULT was the
-  # one value that could reach the file unchecked.
+  # ── the ${BRAND}-derived base path is validated too ─────────────────────────
+  # _validate_vault only ever sees --vault-addr / --vault-external-addr, so since
+  # #285 (decision 22) the brand-derived base path is the ONLY value that reaches
+  # the file without passing through a flag check.
   SYSROOT="$(mktemp -d)"
-  VAULT_ADDR="https://vault.acme.example:8200"; VAULT_KV_MOUNT=""; VAULT_BASE_PATH=""
+  VAULT_ADDR="https://vault.acme.example:8200"
   BRAND="acme corp"
   if ( bake_vault_conf ) 2>/dev/null; then
     bad "${BUILDER}: a space-bearing \${BRAND} default was baked unchecked"
@@ -420,13 +428,60 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   BRAND="acme"
   bake_vault_conf
   grep -q "^VAULT_BASE_PATH=acme$" "${SYSROOT}/etc/hugmesh/vault.conf" \
-    && ok "${BUILDER}: an unset --vault-base-path defaults to the brand slug" \
-    || bad "${BUILDER}: the brand-slug default did not land"
+    && ok "${BUILDER}: the base path is DERIVED from the brand slug" \
+    || bad "${BUILDER}: the brand-slug derivation did not land"
   grep -q "^VAULT_KV_MOUNT=secret$" "${SYSROOT}/etc/hugmesh/vault.conf" \
-    && ok "${BUILDER}: an unset --vault-kv-mount defaults to 'secret'" \
-    || bad "${BUILDER}: the KV-mount default did not land"
+    && ok "${BUILDER}: the KV mount is DERIVED as 'secret' (what the ClusterSecretStore pins)" \
+    || bad "${BUILDER}: the derived KV mount did not land"
+  # ...and the environment cannot move either of them any more. Before #285 both
+  # came from ${VAULT_KV_MOUNT:-}/${VAULT_BASE_PATH:-}, so a brand.conf could set a
+  # mount the cluster never reads. Prove the env is INERT rather than assuming it.
+  rm -f "${SYSROOT}/etc/hugmesh/vault.conf"
+  VAULT_KV_MOUNT="brandkv" VAULT_BASE_PATH="brandbase" bake_vault_conf
+  grep -q "^VAULT_KV_MOUNT=secret$" "${SYSROOT}/etc/hugmesh/vault.conf" \
+    && grep -q "^VAULT_BASE_PATH=acme$" "${SYSROOT}/etc/hugmesh/vault.conf" \
+    && ok "${BUILDER}: env VAULT_KV_MOUNT/VAULT_BASE_PATH move NOTHING (the knob is gone)" \
+    || { bad "${BUILDER}: the environment still moved a derived vault path"; cat "${SYSROOT}/etc/hugmesh/vault.conf"; }
   BRAND="hugmesh"
   rm -rf "${SYSROOT}"
+
+  # ── the flags themselves are GONE from the parser AND the usage text ────────
+  # Removing a flag has two halves. The parser half is what makes a stale command
+  # line die loudly at "Unknown option" instead of being absorbed; the usage half is
+  # what stops the next operator typing it. A flag documented but unparsed, or
+  # parsed but undocumented, is the drift flag-coverage.sh exists to catch one layer
+  # up — here it is checked on the builder's own text.
+  for GONE in --vault-kv-mount --vault-base-path; do
+    grep -aqE "^[[:space:]]*${GONE}\)" "${B}" \
+      && bad "${BUILDER}: ${GONE} still has a parser arm (removed by #285, decision 22)" \
+      || ok "${BUILDER}: ${GONE} has no parser arm"
+    # COMMENT-BLIND on purpose. The builders carry a comment block explaining WHY
+    # the two flags were removed, and that block names them — a bare `grep -- "$GONE"`
+    # matched it and reported the flag as still offered. Strip comment lines first,
+    # so what is checked is the code and the usage heredoc only. No `| grep -q`: this
+    # file runs under `set -o pipefail`, where a -q match can close the pipe early and
+    # report FAILURE on a hit (see the pipefail/SIGPIPE trap); drain to /dev/null and
+    # branch on the exit status instead.
+    if grep -av '^[[:space:]]*#' "${B}" | grep -a -- "${GONE}" >/dev/null; then
+      bad "${BUILDER}: ${GONE} still appears outside a comment (usage text or code)"
+    else
+      ok "${BUILDER}: ${GONE} is offered nowhere but a comment explaining its removal"
+    fi
+  done
+  # control: the flag that STAYS is still both parsed and documented, so the checks
+  # above are about these two flags and not about a broken matcher.
+  grep -aqE "^[[:space:]]*--vault-addr\)" "${B}" \
+    && ok "${BUILDER}: --vault-addr is still parsed (the control)" \
+    || bad "${BUILDER}: --vault-addr lost its parser arm"
+  if grep -av '^[[:space:]]*#' "${B}" | grep -a -- "--vault-addr URL" >/dev/null; then
+    ok "${BUILDER}: --vault-addr is still documented (the control)"
+  else
+    bad "${BUILDER}: --vault-addr lost its usage entry"
+  fi
+  # and the usage text states the DESIGN that replaced the two flags
+  grep -aq "secret/<brand>/" "${B}" \
+    && ok "${BUILDER}: the usage text says the cluster reads secret/<brand>/..." \
+    || bad "${BUILDER}: nothing tells the operator where the cluster reads"
 done
 
 echo
