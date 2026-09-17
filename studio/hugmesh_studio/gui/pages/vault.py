@@ -113,14 +113,18 @@ _LIMITS_NOTE = (
     "(vault/token, vault/unseal-key; see keys-template/vault/README.md). A .vault "
     "block in provision.json overrides everything on this page. Desktop rows in the "
     "worklist ignore it (the builder says so in the log).\n"
-    "WHERE the cluster reads is not asked here, because it is not a choice: it is "
-    "secret/<brand>/… by design. The mount is pinned in the shipped "
-    "ClusterSecretStore and ArgoCD re-applies that from git on every reconcile, so "
-    "nothing on a node can re-point it; the base path is the brand slug, which is "
-    "where the secret generator writes. Both values are baked into vault.conf as "
-    "derived facts so the first-boot log names the real paths. The KV-mount and "
-    "base-path fields this page used to show were removed for that reason — they "
-    "were recorded, logged, and read by nothing.\n"
+    "WHERE the cluster reads is not asked here, because it is not a choice. The "
+    "mount is pinned in the shipped ClusterSecretStore and ArgoCD re-applies that "
+    "from git on every reconcile, so nothing on a node can re-point it; and the key "
+    "prefix the ExternalSecrets read is the literal 'hugmesh/<service>' — all 143 "
+    "remoteRef keys under specs/cluster spell it out and none templates the brand. "
+    "vault.conf still carries both values as derived facts so the first-boot log "
+    "names the paths the image was built for, with the base path set to the brand "
+    "slug because that is the WRITER side (the secret generator writes "
+    "secret/<brand>/…). For a brand other than 'hugmesh' writer and reader therefore "
+    "disagree — a pre-existing gap, not something this change made. The KV-mount and "
+    "base-path fields this page used to show were removed because they were "
+    "recorded, logged, and read by nothing.\n"
     "What the external address does NOT do: it is baked into the same file and has "
     "no reader at all — it is there for operators and out-of-cluster tooling, and a "
     "node boots identically with and without it. The internal address itself is "
@@ -292,7 +296,8 @@ class VaultPage(QtWidgets.QWizardPage):
                 f"Every node in this flow will bake {addr}"
                 + (f" · external {external}" if external else "")
                 + " into /etc/hugmesh/vault.conf, and read its secrets from "
-                  "secret/<brand>/… (fixed by design — not a setting here).")
+                  "the mount and key prefix the shipped ClusterSecretStore pins "
+                  "(fixed by design — not a setting here).")
         else:
             self.note.setText(
                 "No address from this page: no --vault-addr is emitted. The builder "

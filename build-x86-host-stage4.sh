@@ -314,15 +314,25 @@ VAULT_ADDR="${VAULT_ADDR:-}"
 # tooltip says exactly that rather than implying it changes what the node does.
 VAULT_EXTERNAL_ADDR="${VAULT_EXTERNAL_ADDR:-}"
 # The KV mount and the base path are DESIGN-FIXED, not knobs (issue #285; decision 22
-# on #347, operator 2026-09-16 "A: drop both controls"). The cluster reads
-# secret/<brand>/… :
+# on #347, operator 2026-09-16 "A: drop both controls"). NEITHER IS BRAND-DERIVED ON
+# THE READER SIDE, which is why there is nothing to configure:
 #   * the MOUNT is pinned by the shipped ClusterSecretStore — specs/cluster/manifests/
 #     external-secrets/secretstore.yaml `path: "secret"` at the in-cluster
 #     vault.vault.svc server — which apps/04-external-secrets-config.yaml serves with
 #     automated { prune: true, selfHeal: true }, so it is re-applied FROM GIT on every
 #     reconcile and no sysroot edit or kubectl patch survives;
-#   * the BASE PATH *is* the brand slug — scripts/gen-cluster-secrets.sh:118
-#     BASE="${BRAND:-hugmesh}" is what the writer actually writes under.
+#   * the KEY PREFIX the cluster reads is the LITERAL "hugmesh/<service>". All 143
+#     remoteRef keys under specs/cluster spell it out and NOTHING templates the brand
+#     into them (measured 2026-09-16:
+#     grep -rhao "key: *[A-Za-z0-9_.-]*/" specs/cluster --include="*.yaml" | sort -u
+#     -> "key: hugmesh/" only). So the read prefix is fixed too.
+#   * the base path we BAKE is the brand slug, because that is the WRITER side —
+#     BASE="${BRAND:-hugmesh}" in scripts/gen-cluster-secrets.sh is what the writer
+#     writes under. For a brand other than "hugmesh" the writer and the reader
+#     therefore DISAGREE: the generator writes secret/<brand>/... and ESO still reads
+#     secret/hugmesh/... . That gap PRE-DATES #285, which only removed two controls
+#     that changed nothing; closing it (re-point the ~143 remoteRefs, or template the
+#     brand into them) is its own call and is not made here.
 # --vault-kv-mount / --vault-base-path used to exist here: validated, baked into
 # /etc/hugmesh/vault.conf and logged at first boot, and read by NOTHING. They are
 # gone. The two lines are still WRITTEN to vault.conf so keys-provision's
@@ -775,13 +785,18 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             The token/unseal key ride the KEYS stick, never the
                             image. (env/brand.conf: VAULT_ADDR)
                             WHERE the cluster reads is NOT configurable and there is
-                            no flag for it: it is secret/<brand>/... BY DESIGN. The
-                            mount is pinned in the shipped ClusterSecretStore
-                            (manifests/external-secrets/secretstore.yaml path
-                            "secret"), which ArgoCD self-heals from git, and the base
-                            path IS the --brand slug, which is where
-                            scripts/gen-cluster-secrets.sh writes. Those two values
-                            are baked into vault.conf as DERIVED facts.
+                            no flag for it. The MOUNT is pinned in the shipped
+                            ClusterSecretStore (manifests/external-secrets/
+                            secretstore.yaml path "secret"), which ArgoCD self-heals
+                            from git; the KEY PREFIX the ExternalSecrets read is the
+                            LITERAL hugmesh/<service> (all 143 remoteRef keys under
+                            specs/cluster, none brand-templated). vault.conf still
+                            carries both lines as DERIVED facts for the first-boot
+                            log, with VAULT_BASE_PATH set to the --brand slug because
+                            that is the WRITER side (gen-cluster-secrets.sh writes
+                            secret/<brand>/...). For a non-hugmesh brand writer and
+                            reader therefore DISAGREE — a pre-existing gap #285 did
+                            not create and does not close.
       --vault-external-addr URL
                             The SAME Vault reached from OUTSIDE the mesh (an operator
                             laptop, a CI runner, a second site). Appends
@@ -3278,8 +3293,10 @@ bake_vault_conf() {
         return 0
     fi
     # DERIVED, never operator input (#285, decision 22 on #347). The mount is the
-    # literal the shipped ClusterSecretStore pins; the base path IS the brand slug,
-    # which is what scripts/gen-cluster-secrets.sh:118 writes under.
+    # literal the shipped ClusterSecretStore pins; the base path is the brand slug,
+    # which is what the WRITER (BASE="${BRAND:-hugmesh}" in
+    # scripts/gen-cluster-secrets.sh) writes under. The cluster's ExternalSecrets
+    # read the literal hugmesh/<service> regardless — see the header note.
     local _mount="${VAULT_KV_MOUNT_FIXED}"
     local _base="${BRAND}"
     # _validate_vault now only ever sees --vault-addr / --vault-external-addr, so the
@@ -3296,12 +3313,14 @@ bake_vault_conf() {
 # (--vault-addr; keys-provision provision_vault). CONNECTION FACTS ONLY — the token
 # and unseal key come off the KEYS stick (vault/token, vault/unseal-key), never the
 # image. A .vault block in the stick's provision.json overrides every value here.
-# VAULT_KV_MOUNT / VAULT_BASE_PATH are DERIVED facts, not settings: the cluster reads
-# secret/<brand>/... BY DESIGN. The mount is pinned in the shipped ClusterSecretStore
-# (manifests/external-secrets/secretstore.yaml), which ArgoCD re-applies from git on
-# every reconcile, and the base path IS the brand slug that scripts/gen-cluster-
-# secrets.sh writes under. Editing these lines on the node re-points NOTHING; they are
-# written so the first-boot log names the real paths.
+# VAULT_KV_MOUNT / VAULT_BASE_PATH are DERIVED facts, not settings. The MOUNT is
+# pinned in the shipped ClusterSecretStore (manifests/external-secrets/
+# secretstore.yaml), which ArgoCD re-applies from git on every reconcile. The BASE
+# PATH is the brand slug, i.e. the WRITER side that scripts/gen-cluster-secrets.sh
+# writes under; the cluster's ExternalSecrets read the LITERAL hugmesh/<service>, so
+# for a brand other than "hugmesh" these two sides DISAGREE (a gap that pre-dates
+# #285). Editing these lines on the node re-points NOTHING; they are written so the
+# first-boot log names the paths this image was built for.
 VAULT_ADDR=${VAULT_ADDR}
 VAULT_KV_MOUNT=${_mount}
 VAULT_BASE_PATH=${_base}
@@ -5581,34 +5600,6 @@ hugmesh_payload_plan_gate() {
 # unescaped dollar signs, backticks and dollar-parens, so the HOST shell expands
 # nothing of it. tests/build-matrix/check.sh's emerge-group-banners probe
 # re-verifies that mechanically on every run.
-# ── PAYLOAD PRE-FETCH, BEFORE THE FIRST MERGE (issue #322 slice 2) ───────────
-# Decision 24 on #347, operator 2026-09-16: "A: fetch everything first" — one
-# foreground pass that downloads every distfile the whole payload needs, up
-# front, accepting that fetching no longer overlaps compiling (measured ~+30-55
-# min on a cold DISTDIR at this box's 3 MB/s; about zero on a warm one, which is
-# what the shared-binpkg fleet cache gives).
-#
-# The argument vector deliberately mirrors the two real merges below so the
-# graph resolved here is the graph they merge: the same --update --deep --newuse,
-# the same portage exclusion, the same EMERGE_EXCLUDE, and both sets (the literal
-# world set and the role payload) in ONE resolution. --keep-going is what makes a
-# single run report EVERY unfetchable file instead of stopping at the first.
-# --autounmask-continue is deliberately NOT here; the lib says why at length.
-#
-# Non-fatal ONLY under --allow-missing-packages, which is the same opt-out the
-# requested-atom completeness gate honours. Otherwise a distfile that cannot be
-# downloaded ends the build HERE, in its first minutes, rather than at that gate
-# hours later with the package silently dropped by --keep-going.
-if hugmesh_prefetch_payload --update --deep --newuse --keep-going \
-     --exclude sys-apps/portage ${EMERGE_EXCLUDE} @world ${PKGS}; then
-    :
-elif [ "${HUGMESH_ALLOW_MISSING_PACKAGES}" = "true" ]; then
-    echo "[build-x86] WARN: pre-fetch failed, but --allow-missing-packages is set — continuing. Expect the named packages to be dropped by --keep-going and reported by the completeness gate."
-else
-    echo "[build-x86] ERROR: aborting before the first merge — see the pre-fetch errors above. Re-run with --allow-missing-packages to build without those packages." >&2
-    exit 1
-fi
-# ── END payload PRE-FETCH ────────────────────────────────────────────────────
 # system: sys-apps/portage + sys-apps/baselayout + the gettext downgrade are
 # profile/base-layer packages (the package manager itself, the filesystem
 # layout and the .mo-collision pin), not payload.
@@ -5678,6 +5669,63 @@ emerge --oneshot --update "<sys-devel/gettext-0.23" \
     || echo "[build-x86] WARN: gettext downgrade to <0.23 unavailable; relying on INSTALL_MASK"
 ${INTLTOOL_PRESEED}
 ${STEAM_OVERLAY_SETUP}
+# ── PAYLOAD PRE-FETCH, BEFORE EVERY PAYLOAD MERGE (issue #322 slice 2) ───────
+# Decision 24 on #347, operator 2026-09-16: "A: fetch everything first" — one
+# foreground pass that downloads every distfile the whole payload needs, up
+# front, accepting that fetching no longer overlaps compiling (measured ~+30-55
+# min on a cold DISTDIR at this box's 3 MB/s; about zero on a warm one, which is
+# what the shared-binpkg fleet cache gives).
+#
+# WHY IT SITS HERE AND NOT ABOVE THE SYSTEM GROUP. It was written directly above
+# "Emerge group: system" and that placement made the pass a GUARANTEED no-op on
+# the build class #322 was filed about. --steam native is the DEFAULT and
+# --role standalone-thick sets ROLE_CLIENT, so specs-x86/portage/
+# packages-steam-native.list (games-util/steam-launcher) is inside \${PKGS} — and
+# steam-launcher lives in the steam-overlay, which nothing enables until
+# \${STEAM_OVERLAY_SETUP} runs a few lines above. specs-x86/ pre-seeds no
+# repos.conf entry for it. Resolving there therefore ends in "there are no
+# ebuilds to satisfy", which the lib classifies as a resolver wall and reports as
+# "PRE-FETCH SKIPPED ... the build continues UNPROTECTED" — i.e. it would have
+# skipped on exactly the standalone-thick run (20260908T095149Z) that lost
+# media-fonts/noto and took kde-plasma/plasma-meta with it.
+#
+# So the pass runs AFTER the base layer and the overlay sync, and BEFORE every
+# merge that is payload: the world group and the image group are both below this
+# line. The only merges above it are the system group — sys-apps/portage,
+# sys-apps/baselayout and the gettext downgrade, which the builder's own comment
+# calls "profile/base-layer packages ..., not payload" — a few minutes of
+# heavily-mirrored base packages, not the hours #322 is about. Resolving here is
+# also strictly BETTER than resolving above: portage and baselayout are current,
+# so the graph this fetches is closer to the graph the merges below actually
+# resolve. (The repo's own payload-plan gate for #223 makes the same trade and
+# runs later still, just above the image group.)
+#
+# The argument vector deliberately mirrors the two real merges below so the
+# graph resolved here is the graph they merge: the same --update --deep --newuse,
+# the same portage exclusion, the same EMERGE_EXCLUDE, and both sets (the literal
+# world set and the role payload) in ONE resolution. --keep-going is what makes a
+# single run report EVERY unfetchable file instead of stopping at the first.
+# --autounmask-continue is deliberately NOT here; the lib says why at length.
+#
+# Non-fatal ONLY under --allow-missing-packages, which is the same opt-out the
+# requested-atom completeness gate honours. Otherwise a distfile that cannot be
+# downloaded ends the build HERE, before a single payload package is compiled,
+# rather than at that gate hours later with the package silently dropped by
+# --keep-going.
+# HEREDOC SAFETY: this sits in the UNQUOTED CHROOT heredoc. \${HUGMESH_ALLOW_MISSING_PACKAGES}
+# below is ESCAPED on purpose — it is a CHROOT-side name (set from the host value
+# a few lines into the heredoc), and an unescaped spelling made the HOST expand it
+# under set -u, killing every x86 build at the chroot with "unbound variable".
+if hugmesh_prefetch_payload --update --deep --newuse --keep-going \
+     --exclude sys-apps/portage ${EMERGE_EXCLUDE} @world ${PKGS}; then
+    :
+elif [ "\${HUGMESH_ALLOW_MISSING_PACKAGES}" = "true" ]; then
+    echo "[build-x86] WARN: pre-fetch failed, but --allow-missing-packages is set — continuing. Expect the named packages to be dropped by --keep-going and reported by the completeness gate."
+else
+    echo "[build-x86] ERROR: aborting before the first merge — see the pre-fetch errors above. Re-run with --allow-missing-packages to build without those packages." >&2
+    exit 1
+fi
+# ── END payload PRE-FETCH ────────────────────────────────────────────────────
 # Stream-mirror emerge output while extracting the three failure-notice shapes
 # portage emits under --keep-going (consumed by the EMERGE FAILURE-NOTICE GATE
 # below). awk, not tee with a process substitution: the pipeline only completes

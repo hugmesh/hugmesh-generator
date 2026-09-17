@@ -173,7 +173,7 @@ cp brands/example.conf brands/acme.conf
 | `MAIL_PROVIDER` | `protonmail` | SMTP preset; `none` disables mail (see §2d) |
 | `TIMEZONE` | `UTC` | image timezone |
 | `HEADSCALE_VERSION` / `TAILSCALE_VERSION` | pinned | mesh binary versions |
-| `VAULT_ADDR` / `VAULT_KV_MOUNT` | empty / `secret` | online secret push (empty = offline/USB-only). `VAULT_KV_MOUNT` is the writer side only: the cluster reads `secret/<brand>/…` by design (#285) |
+| `VAULT_ADDR` / `VAULT_KV_MOUNT` | empty / `secret` | online secret push (empty = offline/USB-only). `VAULT_KV_MOUNT` is the writer side only: the reader is pinned at mount `secret` with the literal `hugmesh/<service>` key prefix, so a non-`hugmesh` brand writes where the cluster does not read (pre-existing; #285) |
 | `CA_CERT` / `CA_KEY` / `CA_KEY_PASS` | unset | use an **existing** CA as the issuer instead of a self-signed root |
 
 > **Secrets never go in a committed `brands/*.conf`.** Real SMTP/OAuth/Vault/CA
@@ -800,8 +800,10 @@ so CI builds from a complete in-VPN copy. See [`docs/DEVOPS.md`](DEVOPS.md).
   the download. Kill the fetcher, or place a digest-verified file under the FINAL name.
 - **x86 build stops in its first minutes with `[build-x86] ERROR: pre-fetch FAILED`** →
   that is the payload pre-fetch working. Every distfile the payload needs is downloaded
-  before the first merge, so a file that cannot be fetched ends the run *now* instead of
-  dropping its package silently and losing the build hours later at the completeness gate.
+  before any payload package is compiled (the pass runs after the `system` group and the
+  steam-overlay sync, before the `world` and `image` groups), so a file that cannot be
+  fetched ends the run *now* instead of dropping its package silently and losing the build
+  hours later at the completeness gate.
   The error names each file. Fix the file (mirrors rarely carry large GitHub archives;
   download it by hand and place it in `DISTDIR` under its FINAL name after verifying size +
   BLAKE2B + SHA512 against the ebuild Manifest), or re-run with `--allow-missing-packages`

@@ -478,10 +478,31 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   else
     bad "${BUILDER}: --vault-addr lost its usage entry"
   fi
-  # and the usage text states the DESIGN that replaced the two flags
-  grep -aq "secret/<brand>/" "${B}" \
-    && ok "${BUILDER}: the usage text says the cluster reads secret/<brand>/..." \
-    || bad "${BUILDER}: nothing tells the operator where the cluster reads"
+  # and the USAGE TEXT states the design that replaced the two flags.
+  # COMMENT-BLIND, like the two checks above, and for the same measured reason: the
+  # phrase also appears in the comment blocks that explain the removal (x86 :318 and
+  # :3300, rpi5 :370 and :2375), so a file-wide grep stayed green with the entire
+  # operator-facing usage block DELETED. Strip comments first, exactly as the GONE
+  # checks do. No `grep -q` (a found match can report failure under pipefail).
+  ubody="$(grep -av '^[[:space:]]*#' "${B}")"
+  if printf '%s\n' "${ubody}" | grep -a 'hugmesh/<service>' >/dev/null; then
+    ok "${BUILDER}: the usage text names the LITERAL read prefix hugmesh/<service>"
+  else
+    bad "${BUILDER}: the usage text does not tell the operator where the cluster reads (outside a comment)"
+  fi
+  if printf '%s\n' "${ubody}" | grep -a 'ClusterSecretStore' >/dev/null; then
+    ok "${BUILDER}: the usage text names the pinning site (ClusterSecretStore)"
+  else
+    bad "${BUILDER}: the usage text does not name what pins the mount"
+  fi
+  # the WRITER/READER split must stay visible: saying only "secret/<brand>/..." is
+  # what the landing review measured as FALSE for every non-hugmesh brand (all 143
+  # remoteRef keys under specs/cluster are the literal hugmesh/<service>).
+  if printf '%s\n' "${ubody}" | grep -a 'WRITER' >/dev/null; then
+    ok "${BUILDER}: the usage text distinguishes the WRITER side from the reader"
+  else
+    bad "${BUILDER}: the usage text does not distinguish writer from reader — a non-hugmesh brand writes where the cluster does not read"
+  fi
 done
 
 echo

@@ -383,7 +383,9 @@ fi
 
 
 #: The same harness with the builder's OWN fallthrough arm (`err "Unknown option:
-#: $1"; exit 1` — build-x86-host-stage4.sh:1241 / build-rpi5-stage4.sh:1171) instead
+#: $1"; exit 1` — the `*)` arms at build-x86-host-stage4.sh:1256
+#: (`err ...; usage 1`) and build-rpi5-stage4.sh:1185 (`err ...; exit 1`) — both
+#: abort, which is the property this harness mirrors) instead
 #: of the permissive `*) shift ;;`. Used to prove a REMOVED flag is REFUSED rather
 #: than absorbed: with `*) shift ;;` a deleted arm looks identical to a working one.
 #: `\$1` (not `$1`): the arm is built inside an `eval "parse_vault_args() {…}"`, so an

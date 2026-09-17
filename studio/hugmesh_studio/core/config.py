@@ -814,18 +814,22 @@ SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password")
 # OPTIONAL and OMIT-WHEN-EMPTY at every layer — argv, and the baked vault.conf line —
 # so every pre-#335 flow keeps its bytes.
 #
-# WHERE the cluster reads is NOT a field here and there is no flag for it: it is
-# ``secret/<brand>/…`` BY DESIGN (issue #285; decision 22 on #347, operator
-# 2026-09-16 "A: drop both controls"). ``vault_kv_mount`` / ``vault_base_path`` and
-# the builders' --vault-kv-mount / --vault-base-path are REMOVED. They were
-# validated, baked into vault.conf and logged at first boot, and read by nothing:
-# the mount is pinned in the shipped ClusterSecretStore (specs/cluster/manifests/
-# external-secrets/secretstore.yaml ``path: "secret"``), which ArgoCD serves with
-# prune+selfHeal and re-applies from git on every reconcile, so no image-side value
-# could ever re-point it; and the base path IS the brand slug
-# (scripts/gen-cluster-secrets.sh:118 ``BASE="${BRAND:-hugmesh}"``) — the writer's
-# own layout. The builders still WRITE both lines into vault.conf, now derived, so
-# keys-provision's first-boot log names the real paths for any brand.
+# WHERE the cluster reads is NOT a field here and there is no flag for it, because
+# NEITHER HALF IS BRAND-DERIVED ON THE READER SIDE (issue #285; decision 22 on #347,
+# operator 2026-09-16 "A: drop both controls"). ``vault_kv_mount`` /
+# ``vault_base_path`` and the builders' --vault-kv-mount / --vault-base-path are
+# REMOVED. They were validated, baked into vault.conf and logged at first boot, and
+# read by nothing: the mount is pinned in the shipped ClusterSecretStore
+# (specs/cluster/manifests/external-secrets/secretstore.yaml ``path: "secret"``),
+# which ArgoCD serves with prune+selfHeal and re-applies from git on every reconcile,
+# so no image-side value could ever re-point it; and the key prefix the
+# ExternalSecrets read is the LITERAL ``hugmesh/<service>`` — all 143 remoteRef keys
+# under specs/cluster spell it out, none templates the brand (measured 2026-09-16).
+# The builders still WRITE both lines into vault.conf, now derived, with the base
+# path set to the brand slug because that is the WRITER side
+# (``BASE="${BRAND:-hugmesh}"`` in scripts/gen-cluster-secrets.sh). For a brand other
+# than "hugmesh" writer and reader therefore DISAGREE; that gap pre-dates #285, which
+# only removed two controls that changed nothing, and closing it is its own call.
 # A config saved before this carries the two keys; ``from_dict`` drops unknown keys,
 # so it loads with no residue and emits the same argv as one that never had them.
 VAULT_FIELDS = ("vault_addr", "vault_external_addr")
@@ -848,8 +852,9 @@ def vault_field_error(addr: str, external_addr: str = "") -> str:
     addresses are a copy/paste, not a split.
 
     The KV-mount / base-path arms this predicate used to carry are GONE with the
-    fields themselves (#285, decision 22): the cluster reads secret/<brand>/… by
-    design, so there is no operator input left to check. The builders' mirrored
+    fields themselves (#285, decision 22): the mount and the read prefix are both
+    pinned by the shipped ClusterSecretStore and its ExternalSecrets, so there is no
+    operator input left to check. The builders' mirrored
     ``_validate_vault`` was cut in the same shape, which is what keeps the two
     sides one rule rather than two."""
     if not addr:
@@ -2837,8 +2842,9 @@ class ImageConfig:
     # A set address threads --vault-addr [--vault-external-addr]; the builders bake
     # /etc/hugmesh/vault.conf (connection facts only — the token and unseal key stay
     # on the KEYS stick). vault_field_error() fail-closes the pair. The KV mount and
-    # base path are NOT fields: the cluster reads secret/<brand>/… by design (#285,
-    # decision 22) and the two flags that used to carry them are gone.
+    # base path are NOT fields: the mount and the literal hugmesh/<service> read
+    # prefix are pinned by the shipped ClusterSecretStore and its ExternalSecrets
+    # (#285, decision 22), and the two flags that used to carry them are gone.
     vault_addr: str = ""               # --vault-addr https://… INTERNAL (VAULT_FIELDS)
     vault_external_addr: str = ""      # --vault-external-addr https://… (#335; "" = no such line in vault.conf)
     # ── base CA certificates (#335) — RECORDED ONLY, and labelled so on both faces.
@@ -3731,7 +3737,8 @@ class ImageConfig:
         charset before emission; the external address rides only when it is set.
 
         NOTHING is emitted for the KV mount or the base path: those two flags are gone
-        (#285, decision 22 — the cluster reads secret/<brand>/… by design), and the
+        (#285, decision 22 — the mount and the read prefix are both pinned by the
+        shipped ClusterSecretStore), and the
         builders no longer parse them, so emitting either would be an "Unknown option"
         abort rather than a dead knob.
 

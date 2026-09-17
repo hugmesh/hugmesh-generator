@@ -264,19 +264,45 @@ grep -a -A2 'cp "\${SCRIPT_DIR}/scripts/_emerge-prefetch-lib.sh"' "${BUILDER}" \
   && ok "a8: a failed staging cp aborts the build (never a silent skip)" \
   || bad "a8: staging failure degrades silently"
 
-# ── A9: it runs BEFORE the first merge ───────────────────────────────────────
+# ── A9: it runs BEFORE every PAYLOAD merge, and AFTER the overlay sync ───────
+# Placement is not cosmetic, and the ORIGINAL placement (directly above the
+# system group) made the pass a guaranteed no-op on the default build: --steam
+# native is the default and --role standalone-thick sets ROLE_CLIENT, so
+# games-util/steam-launcher is inside ${PKGS} — and it lives in the steam-overlay,
+# which nothing enables until ${STEAM_OVERLAY_SETUP} runs. Resolving above that
+# ends in "there are no ebuilds to satisfy", the lib classifies it as a resolver
+# wall, and the pass prints "PRE-FETCH SKIPPED" and returns 0. Both bounds, so
+# neither direction can drift.
 call_ln="$(grep -an '^if hugmesh_prefetch_payload ' "${BUILDER}" | head -n1 | cut -d: -f1)"
-sys_ln="$(grep -an '^echo "==> Emerge group: system"' "${BUILDER}" | head -n1 | cut -d: -f1)"
+ovl_ln="$(grep -an '^\${STEAM_OVERLAY_SETUP}$' "${BUILDER}" | head -n1 | cut -d: -f1)"
 world_ln="$(grep -an '^emerge --update --deep --newuse --keep-going --exclude sys-apps/portage' "${BUILDER}" | head -n1 | cut -d: -f1)"
-if [ -n "${call_ln}" ] && [ -n "${sys_ln}" ] && [ "${call_ln}" -lt "${sys_ln}" ]; then
-    ok "a9: the pre-fetch call (line ${call_ln}) precedes the system group (line ${sys_ln})"
+image_ln="$(grep -an '^echo "==> Emerge group: image"' "${BUILDER}" | head -n1 | cut -d: -f1)"
+if [ -n "${call_ln}" ] && [ -n "${ovl_ln}" ] && [ "${call_ln}" -gt "${ovl_ln}" ]; then
+    ok "a9: the pre-fetch call (line ${call_ln}) runs AFTER the steam-overlay sync (line ${ovl_ln}), so an overlay atom in \${PKGS} can resolve"
 else
-    bad "a9: call=${call_ln:-<none>} system=${sys_ln:-<none>} — the pre-fetch does not run first"
+    bad "a9: call=${call_ln:-<none>} overlay=${ovl_ln:-<none>} — resolving before the overlay sync makes the pass a guaranteed PRE-FETCH SKIPPED on every default --steam native build"
 fi
 if [ -n "${call_ln}" ] && [ -n "${world_ln}" ] && [ "${call_ln}" -lt "${world_ln}" ]; then
-    ok "a9: it also precedes the @world merge (line ${world_ln})"
+    ok "a9: it precedes the @world merge (line ${world_ln})"
 else
-    bad "a9: call=${call_ln:-<none>} world=${world_ln:-<none>}"
+    bad "a9: call=${call_ln:-<none>} world=${world_ln:-<none>} — the pre-fetch does not precede the world payload"
+fi
+if [ -n "${call_ln}" ] && [ -n "${image_ln}" ] && [ "${call_ln}" -lt "${image_ln}" ]; then
+    ok "a9: it precedes the image group (line ${image_ln})"
+else
+    bad "a9: call=${call_ln:-<none>} image=${image_ln:-<none>} — the pre-fetch does not precede the role payload"
+fi
+# and the fact the placement rests on: steam-launcher really is in the payload
+# and really is overlay-only, so this leg fails loudly if either ever changes.
+if grep -a 'packages-steam-native.list' "${BUILDER}" >/dev/null \
+   && grep -a 'games-util/steam-launcher' "${REPO}/specs-x86/portage/packages-steam-native.list" >/dev/null; then
+    if grep -ra 'steam-overlay' "${REPO}/specs-x86/portage/repos.conf" >/dev/null 2>&1; then
+        ok "a9: steam-overlay is pre-seeded in specs-x86 — the ordering bound above is belt-and-braces"
+    else
+        ok "a9: games-util/steam-launcher is in \${PKGS} and the overlay is NOT pre-seeded in specs-x86 — the ordering bound above is load-bearing"
+    fi
+else
+    bad "a9: the steam-native payload premise no longer holds — re-derive the pre-fetch placement"
 fi
 
 # ── A10: argument parity with the two real merges ────────────────────────────
@@ -307,6 +333,104 @@ grep -a 'HUGMESH_ALLOW_MISSING_PACKAGES.*= *"true"' "${BUILDER}" >/dev/null \
 grep -a -A9 '^if hugmesh_prefetch_payload ' "${BUILDER}" | grep -a 'exit 1' >/dev/null \
   && ok "a11: without it, a pre-fetch failure ABORTS before the first merge" \
   || bad "a11: a pre-fetch failure does not abort the build"
+
+# ── A12: the lib's OWN emerge argv — the pass must FETCH, not merge ─────────
+# Nothing above reads the lib's own command line: A10 reads the BUILDER's call
+# line. Deleting "--fetchonly " from the lib turns this pass into a real merge of
+# @world + ${PKGS} executed before the portage self-update, the baselayout
+# update, the gettext downgrade and the steam-overlay sync — and every other leg
+# in this file stays green, because the stub emerge does not care what it is
+# asked to do. Read the real emerge invocation out of the lib and pin it.
+lib_emerge="$(grep -a '"\${HUGMESH_PREFETCH_EMERGE}"' "${LIB}" | head -n1)"
+case "${lib_emerge}" in
+    *--fetchonly*) ok "a12: the lib invokes emerge with --fetchonly (it downloads; it never merges)" ;;
+    *) bad "a12: the lib's emerge argv has NO --fetchonly — this pass would MERGE the whole payload before the system group: ${lib_emerge}" ;;
+esac
+case "${lib_emerge}" in
+    *--pretend*|*-p\ *) bad "a12: the lib passes --pretend — it would resolve and download NOTHING while reporting success" ;;
+    *) ok "a12: it does not degrade to --pretend" ;;
+esac
+# 2>&1 is what puts portage's ERROR text (which goes to stderr) in front of the
+# classifier. Without it a resolver wall classifies as "unknown", which means 3
+# attempts with sleeps and then a FALSE abort of the build.
+case "${lib_emerge}" in
+    *2\>\&1*) ok "a12: stderr is folded into the captured log, so the classifier can see portage's error text" ;;
+    *) bad "a12: the lib does not redirect stderr into the log — a resolver wall would classify as 'unknown' and FALSELY abort the build" ;;
+esac
+# the production default for the retry count, which every dynamic leg overrides
+# and therefore never pins.
+if grep -a 'HUGMESH_PREFETCH_ATTEMPTS="\${HUGMESH_PREFETCH_ATTEMPTS:-3}"' "${LIB}" >/dev/null; then
+    ok "a12: the production retry default is 3 attempts"
+else
+    bad "a12: the production HUGMESH_PREFETCH_ATTEMPTS default is not 3 — every dynamic leg sets it explicitly, so nothing else would notice"
+fi
+
+# ── A13: the CHROOT heredoc expands nothing the HOST does not have ──────────
+# This is the leg that would have caught the landing blocker. The payload chroot
+# is opened with an UNQUOTED delimiter, so the HOST shell expands every
+# unescaped ${NAME} in its 500+ lines before the chroot ever starts, and the
+# builder runs under `set -euo pipefail`. A chroot-LOCAL name spelled without a
+# backslash is therefore not a chroot bug: it is an immediate
+# "NAME: unbound variable" that kills the build at the chroot command, before a
+# single package is merged. tests/build-matrix/check.sh's EGB probe does NOT
+# cover this — it only inspects comment runs that mention an emerge group plus
+# the banner lines themselves, so a plain code line like the pre-fetch call is
+# flushed unselected. Sweep the WHOLE heredoc instead.
+hd_out="${TDIR}/heredoc-sweep.txt"
+"${PYTHON:-python3}" - "${BUILDER}" > "${hd_out}" 2>&1 <<'PYSWEEP'
+import re, sys
+src = open(sys.argv[1], encoding='utf-8', errors='replace').read().split('\n')
+start = end = None
+for i, l in enumerate(src, 1):
+    if start is None and re.match(r'^chroot "\$\{SYSROOT\}" /bin/bash -eo pipefail <<CHROOT\s*$', l):
+        start = i
+    elif start is not None and end is None and l.rstrip() == 'CHROOT':
+        end = i
+        break
+if start is None or end is None:
+    print("SWEEP-ERROR: could not find the chroot heredoc bounds")
+    sys.exit(2)
+# every name the HOST assigns anywhere above the heredoc, in any spelling
+host = set()
+for l in src[:start - 1]:
+    for m in re.finditer(r'\b([A-Za-z_][A-Za-z0-9_]*)=', l):
+        host.add(m.group(1))
+    for m in re.finditer(r'\b(?:for|read)\s+(?:-r\s+)?([A-Za-z_][A-Za-z0-9_]*)', l):
+        host.add(m.group(1))
+host |= {'PWD', 'HOME', 'PATH', 'IFS', 'UID', 'USER', 'HOSTNAME', 'SHELL', 'LANG',
+         'TMPDIR', 'RANDOM', 'SECONDS', 'PIPESTATUS', 'BASH_SOURCE', 'FUNCNAME',
+         'LINENO', 'OPTARG', 'OPTIND', 'BASHPID', 'PPID'}
+bad = []
+for off, l in enumerate(src[start:end - 1]):
+    ln = start + 1 + off
+    for m in re.finditer(r'(?<!\\)\$\{([A-Za-z_][A-Za-z0-9_]*)([^}]*)\}', l):
+        name, rest = m.group(1), m.group(2)
+        if name in host:
+            continue
+        if rest[:2] in (':-', ':=', ':?', ':+') or rest[:1] in ('-', '=', '?', '+'):
+            continue
+        bad.append("%d: ${%s} -- %s" % (ln, name, l.strip()[:90]))
+print("heredoc %d..%d" % (start, end))
+for b in bad:
+    print("UNBOUND " + b)
+print("COUNT %d" % len(bad))
+PYSWEEP
+hd_rc=$?
+hd_n="$(grep -a '^COUNT ' "${hd_out}" | awk '{print $2}')"
+if [ "${hd_rc}" -eq 0 ] && [ "${hd_n:-x}" = "0" ]; then
+    ok "a13: every unescaped \${NAME} in the chroot heredoc is a name the HOST sets ($(grep -a '^heredoc ' "${hd_out}"))"
+else
+    bad "a13: the chroot heredoc expands host-unset names on the HOST side — under set -euo pipefail this kills the build at the chroot command, before anything is merged:"
+    grep -a '^UNBOUND \|^SWEEP-ERROR' "${hd_out}" | sed 's/^/        /'
+fi
+# and the specific name this pass introduced, positively: it must be ESCAPED at
+# its read site (chroot-side) and UNESCAPED at its assignment RHS (host value in).
+if grep -a 'elif \[ "\\\${HUGMESH_ALLOW_MISSING_PACKAGES}" = "true" \]' "${BUILDER}" >/dev/null; then
+    ok "a13: the opt-out is read with an ESCAPED \${HUGMESH_ALLOW_MISSING_PACKAGES} (chroot-side)"
+else
+    bad "a13: the opt-out read site is not escaped — the HOST would expand a name only the chroot has"
+fi
+
 
 echo
 if [ "${F}" -eq 0 ]; then

@@ -228,7 +228,9 @@ def test_the_page_offers_no_mount_or_base_path_control_and_says_why(wiz):
     """#285, decision 22 on #347 ("A: drop both controls"). The KV-mount and
     base-path fields were validated, threaded as flags, baked into vault.conf and
     logged at first boot — and read by NOTHING. They are gone. What replaces them is
-    a statement, not a knob: the cluster reads secret/<brand>/... by design.
+    a statement, not a knob: the mount is pinned by the shipped ClusterSecretStore
+    and the ExternalSecrets read the LITERAL 'hugmesh/<service>' prefix — neither
+    half is brand-derived, so there was never anything to choose.
 
     Pinned as a NEGATIVE (no widget, no flag anywhere in the module source) plus the
     positive claim in the copy, so re-adding either field fails here rather than
@@ -245,9 +247,18 @@ def test_the_page_offers_no_mount_or_base_path_control_and_says_why(wiz):
                    for a in wiz.cfg.to_cli_args())
     # the copy states the design and names both pinning sites, so the claim is
     # checkable rather than a bare assertion
-    assert "secret/<brand>/" in vault_mod._LIMITS_NOTE
     assert "ClusterSecretStore" in vault_mod._LIMITS_NOTE
-    assert "brand slug" in vault_mod._LIMITS_NOTE
+    # the READER prefix, stated as the literal it actually is. The copy described the
+    # reader as "secret/<brand>/..." until the landing review measured the tree: all
+    # 143 remoteRef keys under specs/cluster are the literal "hugmesh/<service>", so
+    # the brand-derived spelling was FALSE for every non-default brand.
+    assert "hugmesh/<service>" in vault_mod._LIMITS_NOTE
+    # the writer side is still named (it really does write under the brand slug), and
+    # is LABELLED as the writer, so the two sides cannot be read as one claim. This
+    # pair is the regression pin: naming the brand path WITHOUT the writer label is
+    # exactly the false statement that was here.
+    assert "WRITER" in vault_mod._LIMITS_NOTE
+    assert "secret/<brand>/" in vault_mod._LIMITS_NOTE
     assert "removed" in vault_mod._LIMITS_NOTE
     assert "secret/<brand>/" in src
     # the ADDRESS, by contrast, IS live — it is what enables the seeding at all

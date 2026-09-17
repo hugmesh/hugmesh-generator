@@ -53,13 +53,16 @@ OUT_DIR="${REPO_DIR}/keys-out/vault"
 # ── brand.conf (built-in defaults < brand.conf < env) ───────────────
 BRAND="${BRAND:-hugmesh}"
 CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-hugmesh.net}"
-# WRITER SIDE ONLY. The cluster READS secret/<BRAND>/... BY DESIGN (issue #285;
-# decision 22 on #347, operator 2026-09-16 "A: drop both controls"):
+# WRITER SIDE ONLY. The reader is pinned on BOTH halves, and NEITHER is brand-derived
+# (issue #285; decision 22 on #347, operator 2026-09-16 "A: drop both controls"):
 #   * the mount is pinned in specs/cluster/manifests/external-secrets/secretstore.yaml
 #     (`path: "secret"`, server vault.vault.svc), which apps/04-external-secrets-config
 #     .yaml serves with automated { prune: true, selfHeal: true } — ArgoCD re-applies
 #     it from git on every reconcile, so nothing image-side or kubectl-side re-points it;
-#   * the base path is not a knob at all — it IS ${BRAND}, derived at BASE= below.
+#   * the key prefix the ExternalSecrets read is the LITERAL hugmesh/<service> — see
+#     the measured count below. THIS script, by contrast, writes under ${BRAND}
+#     (BASE= below), so for a brand other than "hugmesh" writer and reader DISAGREE.
+#     That gap pre-dates #285 and closing it is a separate, unmade call.
 # So a NON-DEFAULT VAULT_KV_MOUNT makes this script write where the cluster does not
 # read: 143 remoteRef keys across specs/cluster all live under hugmesh/... at mount
 # "secret". Changing it is option B of #285 (an Application-level kustomize patch on

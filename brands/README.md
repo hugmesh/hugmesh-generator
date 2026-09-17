@@ -36,7 +36,7 @@ time, and points the node at the brand's own headscale control plane.
 | `ADMIN_EMAILS` | seeded Casdoor admin / BFF allowlist |
 | `TIMEZONE`, `HOSTNAME` | system settings (HOSTNAME empty ⇒ `<BRAND>-<role>`) |
 | `HEADSCALE_VERSION`, `TAILSCALE_VERSION` | mesh binary versions |
-| `VAULT_ADDR`, `VAULT_KV_MOUNT` | cluster-secret delivery (empty ADDR = offline/USB). `VAULT_KV_MOUNT` is the WRITER side only — the cluster reads `secret/<brand>/…` by design (#285) |
+| `VAULT_ADDR`, `VAULT_KV_MOUNT` | cluster-secret delivery (empty ADDR = offline/USB). `VAULT_KV_MOUNT` is the WRITER side only — the reader is pinned at mount `secret` with the literal `hugmesh/<service>` key prefix, so a non-`hugmesh` brand writes where the cluster does not read (pre-existing; see `brand.conf.example`, #285) |
 | `CA_CERT` | path to an EXISTING CA cert (PEM) to use as the cert issuer (optional) |
 | `CA_KEY` | **(secret — do not commit)** the CA's private key (PEM) |
 | `CA_KEY_PASS` | **(secret — do not commit)** passphrase for `CA_KEY`, if encrypted |

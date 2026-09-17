@@ -366,15 +366,25 @@ VAULT_ADDR="${VAULT_ADDR:-}"
 # tooltip says exactly that rather than implying it changes what the node does.
 VAULT_EXTERNAL_ADDR="${VAULT_EXTERNAL_ADDR:-}"
 # The KV mount and the base path are DESIGN-FIXED, not knobs (issue #285; decision 22
-# on #347, operator 2026-09-16 "A: drop both controls"). The cluster reads
-# secret/<brand>/… :
+# on #347, operator 2026-09-16 "A: drop both controls"). NEITHER IS BRAND-DERIVED ON
+# THE READER SIDE, which is why there is nothing to configure:
 #   * the MOUNT is pinned by the shipped ClusterSecretStore — specs/cluster/manifests/
 #     external-secrets/secretstore.yaml `path: "secret"` at the in-cluster
 #     vault.vault.svc server — which apps/04-external-secrets-config.yaml serves with
 #     automated { prune: true, selfHeal: true }, so it is re-applied FROM GIT on every
 #     reconcile and no sysroot edit or kubectl patch survives;
-#   * the BASE PATH *is* the brand slug — scripts/gen-cluster-secrets.sh:118
-#     BASE="${BRAND:-hugmesh}" is what the writer actually writes under.
+#   * the KEY PREFIX the cluster reads is the LITERAL "hugmesh/<service>". All 143
+#     remoteRef keys under specs/cluster spell it out and NOTHING templates the brand
+#     into them (measured 2026-09-16:
+#     grep -rhao "key: *[A-Za-z0-9_.-]*/" specs/cluster --include="*.yaml" | sort -u
+#     -> "key: hugmesh/" only). So the read prefix is fixed too.
+#   * the base path we BAKE is the brand slug, because that is the WRITER side —
+#     BASE="${BRAND:-hugmesh}" in scripts/gen-cluster-secrets.sh is what the writer
+#     writes under. For a brand other than "hugmesh" the writer and the reader
+#     therefore DISAGREE: the generator writes secret/<brand>/... and ESO still reads
+#     secret/hugmesh/... . That gap PRE-DATES #285, which only removed two controls
+#     that changed nothing; closing it (re-point the ~143 remoteRefs, or template the
+#     brand into them) is its own call and is not made here.
 # --vault-kv-mount / --vault-base-path used to exist here: validated, baked into
 # /etc/hugmesh/vault.conf and logged at first boot, and read by NOTHING. They are
 # gone. The two lines are still WRITTEN to vault.conf so keys-provision's
@@ -859,12 +869,16 @@ OPTIONS
         .vault block. Empty (DEFAULT) = offline/USB-only delivery, zero change;
         the desktop role warns + ignores it. The token/unseal key ride the KEYS
         stick, never the image. (env/brand.conf: VAULT_ADDR)
-        WHERE the cluster reads is NOT configurable and there is no flag for it:
-        it is secret/<brand>/... BY DESIGN. The mount is pinned in the shipped
-        ClusterSecretStore (manifests/external-secrets/secretstore.yaml path
-        "secret"), which ArgoCD self-heals from git, and the base path IS the
-        --brand slug, which is where scripts/gen-cluster-secrets.sh writes. Those
-        two values are baked into vault.conf as DERIVED facts.
+        WHERE the cluster reads is NOT configurable and there is no flag for it.
+        The MOUNT is pinned in the shipped ClusterSecretStore (manifests/
+        external-secrets/secretstore.yaml path "secret"), which ArgoCD self-heals
+        from git; the KEY PREFIX the ExternalSecrets read is the LITERAL
+        hugmesh/<service> (all 143 remoteRef keys under specs/cluster, none
+        brand-templated). vault.conf still carries both lines as DERIVED facts for
+        the first-boot log, with VAULT_BASE_PATH set to the --brand slug because
+        that is the WRITER side (gen-cluster-secrets.sh writes secret/<brand>/...).
+        For a non-hugmesh brand writer and reader therefore DISAGREE — a
+        pre-existing gap #285 did not create and does not close.
 
     --vault-external-addr URL
         The SAME Vault reached from OUTSIDE the mesh (an operator laptop, a CI
@@ -2353,8 +2367,10 @@ bake_vault_conf() {
         return 0
     fi
     # DERIVED, never operator input (#285, decision 22 on #347). The mount is the
-    # literal the shipped ClusterSecretStore pins; the base path IS the brand slug,
-    # which is what scripts/gen-cluster-secrets.sh:118 writes under.
+    # literal the shipped ClusterSecretStore pins; the base path is the brand slug,
+    # which is what the WRITER (BASE="${BRAND:-hugmesh}" in
+    # scripts/gen-cluster-secrets.sh) writes under. The cluster's ExternalSecrets
+    # read the literal hugmesh/<service> regardless — see the header note.
     local _mount="${VAULT_KV_MOUNT_FIXED}"
     local _base="${BRAND}"
     # _validate_vault now only ever sees --vault-addr / --vault-external-addr, so the
@@ -2371,12 +2387,14 @@ bake_vault_conf() {
 # (--vault-addr; keys-provision provision_vault). CONNECTION FACTS ONLY — the token
 # and unseal key come off the KEYS stick (vault/token, vault/unseal-key), never the
 # image. A .vault block in the stick's provision.json overrides every value here.
-# VAULT_KV_MOUNT / VAULT_BASE_PATH are DERIVED facts, not settings: the cluster reads
-# secret/<brand>/... BY DESIGN. The mount is pinned in the shipped ClusterSecretStore
-# (manifests/external-secrets/secretstore.yaml), which ArgoCD re-applies from git on
-# every reconcile, and the base path IS the brand slug that scripts/gen-cluster-
-# secrets.sh writes under. Editing these lines on the node re-points NOTHING; they are
-# written so the first-boot log names the real paths.
+# VAULT_KV_MOUNT / VAULT_BASE_PATH are DERIVED facts, not settings. The MOUNT is
+# pinned in the shipped ClusterSecretStore (manifests/external-secrets/
+# secretstore.yaml), which ArgoCD re-applies from git on every reconcile. The BASE
+# PATH is the brand slug, i.e. the WRITER side that scripts/gen-cluster-secrets.sh
+# writes under; the cluster's ExternalSecrets read the LITERAL hugmesh/<service>, so
+# for a brand other than "hugmesh" these two sides DISAGREE (a gap that pre-dates
+# #285). Editing these lines on the node re-points NOTHING; they are written so the
+# first-boot log names the paths this image was built for.
 VAULT_ADDR=${VAULT_ADDR}
 VAULT_KV_MOUNT=${_mount}
 VAULT_BASE_PATH=${_base}

@@ -278,9 +278,22 @@ default wget fetcher; the bound has only been applied where the stall was measur
 A rate floor bounds each URI, but a *bounded failure* of a single-source file still drops
 its package under `--keep-going`, and that drop only surfaces hours later at the
 requested-atom completeness gate. So the x86 build also **pre-fetches the whole payload
-before the first merge** (`scripts/_emerge-prefetch-lib.sh`, called from
-`build-x86-host-stage4.sh` immediately before the `system` group; hugmesh-generator#322
-slice 2, decision 24). One foreground `emerge --fetchonly` resolves `@world` plus the role
+before any of it is merged** (`scripts/_emerge-prefetch-lib.sh`, called from
+`build-x86-host-stage4.sh`; hugmesh-generator#322 slice 2, decision 24).
+
+**Where it runs, and why not earlier.** The call sits directly after the `system` group
+and the steam-overlay sync, and before the `world` and `image` groups — i.e. before every
+merge that is *payload*. It was written immediately above the `system` group, and that
+placement made the pass a guaranteed no-op on the exact build class #322 was filed about:
+`--steam native` is the default and `--role standalone-thick` sets `ROLE_CLIENT`, so
+`games-util/steam-launcher` is inside `${PKGS}` — and it lives in the steam-overlay, which
+nothing enables until the overlay sync runs. Resolving above that ends in *"there are no
+ebuilds to satisfy"*, which the lib correctly classifies as a resolver wall and reports as
+`PRE-FETCH SKIPPED`. The only merges now above the pre-fetch are `sys-apps/portage`,
+`sys-apps/baselayout` and the gettext downgrade — base-layer packages, heavily mirrored,
+minutes not hours — and resolving after them is strictly better, because the graph the
+pass fetches is closer to the graph the merges below it actually resolve. Both bounds are
+pinned by `tests/scripts/test-x86-prefetch-gate.sh` (leg `a9`), in both directions. One foreground `emerge --fetchonly` resolves `@world` plus the role
 payload with the same `--update --deep --newuse --keep-going` and the same exclusions as
 the two real merges, so the graph fetched is the graph merged, and `--keep-going` makes one
 run report **every** unfetchable file rather than stopping at the first. Three attempts,

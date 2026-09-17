@@ -83,8 +83,10 @@ def test_sets_the_pair_through_the_shared_rule():
 
 
 def test_the_removed_path_commands_are_gone_from_the_vocabulary_and_the_screen():
-    """#285, decision 22 on #347: the KV mount and base path are secret/<brand>/... BY
-    DESIGN, so 'm' and 'p' were removed with the fields and the two builder flags.
+    """#285, decision 22 on #347: neither the KV mount nor the read prefix is a
+    choice -- the mount is pinned by the shipped ClusterSecretStore and the
+    ExternalSecrets read the literal hugmesh/<service> -- so 'm' and 'p' were
+    removed with the fields and the two builder flags.
     A dropped command must be UNRECOGNISED, never silently inert — the TUI's own
     rule — and the screen must say why rather than going quiet about it."""
     j = _to_vault()
@@ -97,7 +99,7 @@ def test_the_removed_path_commands_are_gone_from_the_vocabulary_and_the_screen()
     assert not hasattr(j.cfg, "vault_kv_mount")
     assert not hasattr(j.cfg, "vault_base_path")
     text = "\n".join(j.lines())
-    assert "secret/<brand>/" in text                   # the design, stated
+    assert "hugmesh/<service>" in text                 # the design, stated
     assert "m NAME" not in text and "p PATH" not in text
 
 
@@ -160,8 +162,10 @@ def test_a_loaded_config_renders_its_values():
     j.goto("vault")
     text = "\n".join(j.lines())
     assert ADDR in text and EXT in text
-    # where the cluster reads is STATED, not offered as a value to edit (#285)
-    assert "secret/<brand>/" in text
+    # where the cluster reads is STATED, not offered as a value to edit (#285), and
+    # it is stated as the LITERAL prefix the ExternalSecrets carry — not as a
+    # brand-derived path, which is what the landing review measured as false.
+    assert "hugmesh/<service>" in text
 
 
 # ── the external address (#335), through the same shared rule ───────────────────────

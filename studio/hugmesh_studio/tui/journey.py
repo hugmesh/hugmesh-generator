@@ -362,7 +362,8 @@ class IdpScreen:
 #: base CA list is edited by 'c'/'r', which are NOT here because they are not
 #: cfg scalar fields and this dict's whole job is to stay == VAULT_FIELDS.
 #: 'm' (KV mount) and 'p' (base path) were REMOVED with their fields and flags
-#: (#285, decision 22 on #347): the cluster reads secret/<brand>/… by design.
+#: (#285, decision 22 on #347): the mount and the literal hugmesh/<service> read
+#: prefix are both pinned by the shipped ClusterSecretStore and its ExternalSecrets.
 VAULT_COMMANDS = {"a": "vault_addr", "x": "vault_external_addr"}
 assert tuple(VAULT_COMMANDS.values()) == VAULT_FIELDS
 
@@ -380,7 +381,7 @@ class VaultScreen:
     byte-identity rule the GUI's validatePage applies. Dropping a certificate clears
     every domain that pointed at it, exactly as the GUI does. Enter keeps the current
     values and continues. The KV-mount / base-path commands are gone with their fields
-    (#285, decision 22): the cluster reads secret/<brand>/… by design.
+    (#285, decision 22): the mount and the read prefix are both pinned cluster-side.
 
     The GUI picks certificates through a file dialog; here the operator types a path,
     which is the only difference between the two faces on this step."""
@@ -400,7 +401,8 @@ class VaultScreen:
         if cfg.vault_addr:
             out += [f"  internal   {cfg.vault_addr}",
                     f"  external   {cfg.vault_external_addr or '(none — no such line in vault.conf)'}",
-                    "  reads      secret/<brand>/… (fixed by design — not a setting)",
+                    "  reads      secret/ + the literal hugmesh/<service> prefix "
+                    "(fixed by design — not a setting)",
                     "",
                     "  Every x86/rpi5 node in the worklist bakes these into "
                     "/etc/hugmesh/vault.conf. The INTERNAL address is what enables "
@@ -409,8 +411,11 @@ class VaultScreen:
                     "and a node boots identically without it. WHERE the cluster reads "
                     "is not a choice: the mount is pinned in the shipped "
                     "ClusterSecretStore, which ArgoCD re-applies from git on every "
-                    "reconcile, and the base path is the brand slug the secret "
-                    "generator writes under. Both are baked as derived facts.",
+                    "reconcile, and the ExternalSecrets read the literal "
+                    "hugmesh/<service> prefix. Both are baked into vault.conf as "
+                    "derived facts, with the base path set to the brand slug because "
+                    "that is the WRITER side — for a non-hugmesh brand the two sides "
+                    "disagree, which pre-dates this change.",
                     ""]
         else:
             out += ["  internal   (none — no flag emitted; brand.conf VAULT_ADDR or "
@@ -443,8 +448,9 @@ class VaultScreen:
             "The Vault token and unseal key are never entered here: put them on the "
             "KEYS stick (vault/token, vault/unseal-key). A .vault block in the "
             "stick's provision.json overrides this step. There are no KV-mount or "
-            "base-path commands: the cluster reads secret/<brand>/… by design, so "
-            "those two fields and their build flags were removed (#285).",
+            "base-path commands: the mount and the literal hugmesh/<service> read "
+            "prefix are both pinned by the shipped ClusterSecretStore, so those two "
+            "fields and their build flags were removed (#285).",
             "The base CA list is RECORDED ONLY: no builder parses a CA flag and no "
             "manifest carries the per-domain choice, so nothing here copies a PEM "
             "into an image or a trust store. It records which authority each domain "
