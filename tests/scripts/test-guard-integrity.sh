@@ -401,7 +401,30 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # grep and busybox sed — and printed 8 passed / 0 failed rc=0, with its negative
 # controls re-verified there rather than only on the GNU host, because busybox
 # is exactly where a negative guard fails open.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-166}"
+# ── 2026-09-16, THIRD reconciliation of this line in one day ──────────────────
+# Both sides of this conflict said 166 and both were RIGHT about the tree they
+# measured, and both are WRONG about this one — the failure mode this whole comment
+# stack exists to document. main reached 166/188 by gating
+# tests/scripts/test-casdoor-login-budget.sh (#396); this branch reached 166/188 by
+# gating tests/scripts/test-superadmin-bff-reachability.sh (#351). The merged tree
+# has BOTH, so it is neither number. Taken, as always, by RUNNING this file here:
+#     167 of 189 suites are named by a pull_request-triggered workflow
+# Taking either side verbatim would have pinned a cardinality nobody derived from
+# this tree, and the "both sides agree" shape is the one most likely to be waved
+# through. The three notes below are kept as a union: complementary records.
+#
+#
+# 165 -> 166 / denominator 187 -> 188 on 2026-09-16, merging `integrate/superadmin`
+# (#351, operator decision 20 "land the whole branch"). That branch carried
+# `PREMERGE_BASELINE=135`, correct against its own 2026-08-26 base and 540 commits
+# stale; main carried 165. NEITHER number is true of the merged tree, so, as every
+# reconciliation above did, this one was MEASURED by running this file and reading
+# the line it prints:
+#     166 of 188 suites are named by a pull_request-triggered workflow
+# The +1/+1 is tests/scripts/test-superadmin-bff-reachability.sh, the ONE file the
+# branch contributes that main did not already have, wired into
+# .github/workflows/shell-suites.yml by the same merge. Resolving this hunk to
+# EITHER side would have pinned a cardinality nobody derived from this tree.
 
 # 165 -> 166 on 2026-09-16, RESOLVING THIS LINE'S CONFLICT on the merge of
 # fix/kind-casdoor-init-converges with main at 8ae7b727. Both sides had measured
@@ -434,6 +457,7 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-166}"
 # slim): it is a negative guard whose controls must fail on a planted defect, and
 # busybox grep/sed is where a negative guard fails open. The ungated SET pin is
 # unchanged at 22 in both measurements.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-167}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED

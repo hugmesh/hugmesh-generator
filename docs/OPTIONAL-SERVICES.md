@@ -537,9 +537,51 @@ alone keeps the console unusable; lighting it is a deliberate, ordered act:
 
 | # | OFF | Owner | Dark behaviour |
 |---|-----|-------|----------------|
-| 1 | **Generator gate** — `WORKLOAD_CONSOLE_ENABLED=false` (the `app.workload-console.enabled` default) *and* the two route-access rows pruned | build-time (`workloadConsole` slug) | the BFF's `WorkloadAuthorizationFilter` **404s** the disabled prefix — in-cluster calls included, so there is no gateway-only bypass. Note the pruned rows are **not** what refuses it: a path with no matching `url_pattern` is `NO_RULE` and the gateway filter **forwards** it (see [`ROUTE-ACCESS.md`](ROUTE-ACCESS.md) — *"'No matching row' is NOT a denial. Three verdicts, not two."*). Pruning them **ungoverns** the prefix; the app-side gate is the authority |
+| 1 | **Generator gate** — `WORKLOAD_CONSOLE_ENABLED=false` (the `app.workload-console.enabled` default) *and* the two `hugmesh-be-gateway` route-access rows pruned | build-time (`workloadConsole` slug) | the BFF's `WorkloadAuthorizationFilter` **404s** the disabled prefix — in-cluster calls included, so there is no gateway-only bypass. Note the pruned rows are **not** what refuses it: a path with no matching `url_pattern` is `NO_RULE` and the gateway filter **forwards** it (see [`ROUTE-ACCESS.md`](ROUTE-ACCESS.md) — *"'No matching row' is NOT a denial. Three verdicts, not two."*). Pruning them **ungoverns** the prefix; the app-side gate is the authority. Which gateway's rows those are matters — see the blockquote below |
 | 2 | **k8s seam** — `WORKLOAD_CONSOLE_K8S_ENABLED=false`, no SA tokens mounted | build-time (same slug) | the fail-closed `NoopWorkloadClient` **503s every call**; no k8s API is ever dialed |
 | 3 | **DB master flag + TTL'd grants** — `workload_console_config.admin_enabled` / `dangerous_tier_enabled` default false; every admin needs an active grant lease (~24 h TTL, expiry-swept) | runtime (SUPERADMIN + step-up) | a fully lit-wired cluster still shows **nobody anything** |
+
+> **Why OFF #1's cell no longer says "the gateway 404s the whole prefix".**
+> The two route-access rows the slug prunes are on **`hugmesh-be-gateway`**, and that
+> gateway declares **no `/bff` route at all** (`apps/20-gateway-be.yaml`) — so pruning
+> them never changed a gateway decision for a browser. What a browser actually hits is
+> `hugmesh-fe-gateway`, and there:
+>
+> * `/bff/admin/workloads/**` has **always** been matched by the pre-existing
+>   `'/bff/admin/**' -> ROLE_ADMIN` floor, deselected or not. The old wording was
+>   already false for the ADMIN half.
+> * `/bff/superadmin/workloads/**` is matched by the `'/bff/superadmin/**' ->
+>   ROLE_SUPERADMIN` floor (without which every shipped superadmin admin-ui page
+>   was a dead end). ⚠ Attribution corrected on the 2026-09-16 merge of
+>   `integrate/superadmin`: that branch dated the floor 2026-08-26 because it added
+>   the row itself, on `fix/superadmin-route-access-row`. The row actually in the
+>   tree is `main`'s, landed 2026-09-16 under operator decision 8's ACCEPT
+>   (hugmesh-generator#244); the branch's duplicate was dropped in the merge. The
+>   claim above is unchanged — only which commit it came from. That floor is
+>   deliberately **not** pruned with the
+>   slug, because it also carries backing-services / fleet-entitlements /
+>   phone-devices / desktop-dials / cloud-backups.
+>
+> So on a `workloadConsole`-deselected build the console prefix is **matched and
+> forwarded** at the front door; what stops it is the **BFF**, not the gateway —
+> `WorkloadAuthorizationFilter` denies a disabled prefix, the k8s seam is `Noop`, and
+> OFF #3's DB flags are false. Defence-in-depth at deselect is therefore **one layer,
+> not two**. An operator who wants the gateway layer back adds the single deny row
+> spelled out in `manifests/route-access/initdb/20-schema.sql` beside the floor; note
+> that it also darks the shipped `/admin/workloads` page, which is why it is not the
+> default. ⚠ The sibling case — the `games` app-store control plane — was written
+> here as "denied at the fe door unconditionally"; **it is not**.
+> `integrate/superadmin` proposed that deny row and operator decision 8 (#244
+> ACCEPT) declined it, so `/bff/superadmin/games-services/**` is governed by the
+> same `/bff/superadmin/**` floor, with the walls named in
+> `test-superadmin-bff-reachability.sh`'s `DESELECT_SURVIVORS` entry (admin-bff's
+> own SUPERADMIN gate; the filter short-circuits privileged principals before
+> `decide()` either way; every other tier is governed-but-ungranted DENY; and the
+> games workloads are pruned). Corrected on the 2026-09-16 merge; whether to
+> reinstate the row is parked on hugmesh-generator#351.
+> `tests/scripts/test-superadmin-bff-reachability.sh` §13 executes both real builders'
+> gate for every slug and fails if a surface appears that is neither walled nor
+> ledgered.
 
 **What the slug owns (all pruned together on deselect, `gate_optional_services`):**
 the two-SA RBAC Application (`apps/14-workload-console-rbac.yaml` +

@@ -547,6 +547,18 @@ services:
       # The default (http://admin-bff:8080) is the CLUSTER service name, which
       # does not resolve on compose.
       HUGMESH_GATEWAY_BFF_EXCHANGE_ADMIN_BFF_URI: "http://hugmesh-admin-bff-api:8080"
+      # Positive-swap cache TTL = the suspension-bypass window (a cache hit skips
+      # admin-bff's exchange suspension gate). 0 = cache OFF, every bff_ request
+      # round-trips to admin-bff and a suspension is enforced on the very next
+      # request (operator decision 2026-09-16, hugmesh-gateway#2 "B: zero window
+      # now"; the image default is 0 from that date, an older image defaults to
+      # 5000 = a 5 s window). Stated here rather than inherited so the posture
+      # holds whichever gateway commit .stack-src happens to be at. The per-request
+      # latency cost is DELIBERATE and UNMEASURED — nobody has timed this suite at 0
+      # against 5000; that is on hugmesh-gateway#2's human-verify list. Kept in
+      # parity with specs/cluster/apps/20-gateway-fe.yaml by
+      # tests/stack/test-gateway-auth-flag-parity.sh.
+      HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS: "0"
       PORT: "8080"
       SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
       # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
