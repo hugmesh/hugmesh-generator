@@ -45,6 +45,17 @@ Modes (STUB_MODE), each a shape observed or reasoned about on the live cluster:
                 write still work, so the script gets all the way to its write.
   setpw-noop    like `ok`, except /api/set-password reports success without
                 changing the password.
+  lockout       casdoor's SIGN-IN THROTTLE. After STUB_LOCKOUT_AFTER wrong
+                passwords (default 1) EVERY /api/login is refused — the CORRECT
+                password included — with casdoor's own throttle text. This is
+                the shape that killed a kind bring-up on 2026-09-16
+                (hugmesh-generator#396): the refusal is HTTP 200 +
+                {"status":"error"}, byte-identical in SHAPE to a wrong password,
+                so a caller that only reads True/False announces "your password
+                is wrong" about an account whose password is perfectly right and
+                sends the operator to rotate a Vault secret that was correct.
+                STUB_LOCKOUT_AFTER=0 models arriving at an account a SIBLING Job
+                has already banned, which is what actually happened.
   adduser-droppw
                 like `ok`, except /api/add-user answers "Affected" while the
                 body's password field never lands in the credential store — a
@@ -92,7 +103,7 @@ JOURNAL = os.environ.get("STUB_JOURNAL", "")
 SEED_FILE = os.environ.get("STUB_SEED", "")
 
 VALID_MODES = {"ok", "deny-login", "deny-writes", "writes-vanish",
-               "readback-denied", "setpw-noop", "adduser-droppw"}
+               "readback-denied", "setpw-noop", "adduser-droppw", "lockout"}
 if MODE not in VALID_MODES:
     sys.exit(f"casdoor_stub: unknown STUB_MODE {MODE!r} (want one of {sorted(VALID_MODES)})")
 
@@ -129,6 +140,21 @@ _store = {}          # "<noun>:<owner>/<name>" -> object
 _user_passwords = {}
 _counter = [0]
 _wrote = [False]     # has any write been attempted yet (readback-denied mode)
+_wrong = [0]         # wrong admin passwords so far (lockout mode)
+
+# casdoor's OWN throttle text, i18n/locales/en/data.json key
+#   check."You have entered the wrong password or code too many times, please
+#          wait for %d minutes and try again"
+# reproduced verbatim with the %d filled in, so a reconciler is matched against
+# the string casdoor actually sends and not against one invented here to match.
+# The ban state itself lives in the user columns signin_wrong_times /
+# last_signin_wrong_time.
+LOCKOUT_MSG = ("You have entered the wrong password or code too many times, "
+               "please wait for 15 minutes and try again")
+# How many wrong passwords trip the ban. 1 by default so a single scenario shows
+# the whole failure; 0 models an account a sibling Job banned before this script
+# ever got a turn.
+LOCKOUT_AFTER = int(os.environ.get("STUB_LOCKOUT_AFTER", "1"))
 
 # object/check_password_complexity.go:104-124 + controllers/user.go:629-633 —
 # casdoor REFUSES a set-password whose new value already hashes to the stored one.
@@ -211,10 +237,16 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.loads(raw) if raw else None
             except ValueError:
                 body = None
-        # Field NAMES only — a value could be a password.
-        _journal({"method": method, "path": path,
-                  "fields": sorted((form or body or {}).keys())
-                            if isinstance(form or body, dict) else []})
+        # Field NAMES only — a value could be a password. /api/login is journalled
+        # by _login() instead, in ONE entry that also carries the OUTCOME: the
+        # login budget a reconciler may spend is a count of WRONG attempts, and a
+        # journal that records only "a login happened" cannot measure it. Two
+        # entries per login would make every count ambiguous, so there is exactly
+        # one, written there.
+        if path != "/api/login":
+            _journal({"method": method, "path": path,
+                      "fields": sorted((form or body or {}).keys())
+                                if isinstance(form or body, dict) else []})
 
         if path == "/api/health":
             return self._ok("ok")
@@ -241,15 +273,49 @@ class Handler(BaseHTTPRequestHandler):
     # ── endpoints ───────────────────────────────────────────────────────────
     def _login(self, body):
         if MODE == "deny-login":
+            self._journal_login("wrong", body)
             return self._error("password is incorrect")
+        token = None
+        result = "wrong"
+        # Decide under the lock, journal OUTSIDE it: _journal takes the same lock
+        # and threading.Lock is not reentrant, so writing the entry in here wedges
+        # the request thread until the client's socket times out — which looks
+        # exactly like a hung Casdoor and nothing like a bug in the stub.
         with _lock:
-            if body.get("username") != ADMIN_USER or body.get("password") != _password:
-                return self._error("password is incorrect")
-            _counter[0] += 1
-            token = f"stub-session-{_counter[0]}"
-            _sessions.add(token)
+            correct = (body.get("username") == ADMIN_USER
+                       and body.get("password") == _password)
+            if MODE == "lockout" and _wrong[0] >= LOCKOUT_AFTER:
+                # The counter is consulted BEFORE the credential, exactly like a
+                # ban: once it is tripped the right password is refused too, and
+                # that is the whole point of this mode.
+                result = "locked"
+            elif correct:
+                _counter[0] += 1
+                token = f"stub-session-{_counter[0]}"
+                _sessions.add(token)
+                result = "ok"
+            elif MODE == "lockout":
+                _wrong[0] += 1
+        self._journal_login(result, body)
+        if result == "locked":
+            return self._error(LOCKOUT_MSG)
+        if result == "wrong":
+            return self._error("password is incorrect")
         self._cookies = [f"casdoor_session_id={token}; Path=/"]
         return self._ok(f"built-in/{ADMIN_USER}")
+
+    def _journal_login(self, result, body):
+        """Record one login attempt and its OUTCOME — never the credential.
+
+        The budget a reconciler is allowed to spend is a count of WRONG attempts
+        against one shared account, so a harness that can only see "a login
+        happened" cannot assert it. "ok"/"wrong"/"locked" is the least that makes
+        the budget measurable, and like every other entry this carries field
+        NAMES only.
+        """
+        _journal({"method": "POST", "path": "/api/login",
+                  "fields": sorted(body.keys()) if isinstance(body, dict) else [],
+                  "result": result})
 
     def _oauth(self, form):
         # The token endpoint answers HTTP 200 for errors too (RFC-shaped JSON

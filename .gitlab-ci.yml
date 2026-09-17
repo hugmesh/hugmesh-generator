@@ -3111,6 +3111,28 @@ lint:casdoor-init-honesty:
   script:
     - bash tests/scripts/test-casdoor-init-honesty.sh
 
+# The four Casdoor bootstrap Jobs in manifests/casdoor all sign in as the SAME
+# built-in/admin account, and casdoor throttles sign-ins: past a handful of wrong
+# passwords it refuses the CORRECT one too, with the same HTTP 200 +
+# {"status":"error"} a wrong password gets. With no sync-wave between the hooks,
+# ArgoCD started all four together on 2026-09-16, the three that only know the
+# provisioned password banned the account before casdoor-init could take it over
+# from casdoor's bootstrap default, and the bring-up died reporting a Vault secret
+# that was byte-for-byte correct — on a cluster that converged by itself 7m37s
+# later (hugmesh-generator#396). This gate pins the ordering, the non-retryable
+# exit that stops the pod backoff replaying a ban, the bring-up's single-Job
+# restart and its wait being longer than casdoor's own lockout window, and REPLAYS
+# the failure against a stub that answers with casdoor's throttle text verbatim.
+# python:3-slim + PyYAML; no cluster, no docker, no network egress.
+lint:casdoor-login-budget:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-casdoor-login-budget.sh
+
 # The seed password contract on a RECREATED stack (2026-08-27): a compose
 # recreate keeps the casdoor-pg volume, so Casdoor kept 32 identities seeded
 # under an EARLIER run's .e2e-credentials while the new seed resolved a fresh

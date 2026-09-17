@@ -401,7 +401,19 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # grep and busybox sed — and printed 8 passed / 0 failed rc=0, with its negative
 # controls re-verified there rather than only on the GNU host, because busybox
 # is exactly where a negative guard fails open.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-164}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-165}"
+
+# 164 -> 165 on 2026-09-16, on fix/kind-casdoor-init-converges cut from main at
+# c00ddf78. One suite was ADDED AND GATED: tests/scripts/test-casdoor-login-budget.sh,
+# the ordering + login-budget pin for the four Casdoor bootstrap hook Jobs that
+# share one built-in/admin account (hugmesh-generator#396 — un-waved PostSync hooks
+# raced, tripped casdoor's sign-in throttle, and killed a bring-up on a cluster that
+# converged by itself 7m37s later). Named in shell-suites.yml's DEBIAN job, not the
+# alpine one: it uses `grep -a`, which busybox grep does not have. It was RUN on this
+# host and printed 31 passed / 0 failed rc=0, with its thirteen negative controls
+# 13 caught / 0 survived. MEASURED, not computed: this file printed
+#     165 of 187 suites are named by a pull_request-triggered workflow
+# on this tree, and the ungated SET is unchanged at 22.
 
 # 163 -> 164 on 2026-09-16, on the MERGE of decisions/20260910/generator with
 # main at 8f355e41 (hugmesh-generator#246). One suite was ADDED AND GATED:
