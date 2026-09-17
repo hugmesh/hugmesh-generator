@@ -401,7 +401,19 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # grep and busybox sed — and printed 8 passed / 0 failed rc=0, with its negative
 # controls re-verified there rather than only on the GNU host, because busybox
 # is exactly where a negative guard fails open.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-165}"
+#
+# 165 -> 166 / denominator 187 -> 188 on 2026-09-16, merging `integrate/superadmin`
+# (#351, operator decision 20 "land the whole branch"). That branch carried
+# `PREMERGE_BASELINE=135`, correct against its own 2026-08-26 base and 540 commits
+# stale; main carried 165. NEITHER number is true of the merged tree, so, as every
+# reconciliation above did, this one was MEASURED by running this file and reading
+# the line it prints:
+#     166 of 188 suites are named by a pull_request-triggered workflow
+# The +1/+1 is tests/scripts/test-superadmin-bff-reachability.sh, the ONE file the
+# branch contributes that main did not already have, wired into
+# .github/workflows/shell-suites.yml by the same merge. Resolving this hunk to
+# EITHER side would have pinned a cardinality nobody derived from this tree.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-166}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED

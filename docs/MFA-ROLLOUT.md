@@ -565,12 +565,32 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
    ```sql
    SELECT gateway, url_pattern, role, mfa_required
      FROM gateway_route_access
-    WHERE url_pattern LIKE '/bff/admin%'
-       OR url_pattern LIKE '/bff/superadmin%'
+    WHERE allow = true
+      AND (url_pattern LIKE '/bff/admin%'
+        OR url_pattern LIKE '/bff/superadmin%')
     ORDER BY 1, 2, 3;
    ```
 
-   Expect the 10 rows in §1.2 at `true`, and nothing else.
+   Expect the 10 rows in §1.2 at `true`, and nothing else. The `allow = true`
+   clause is not cosmetic — it is the **same predicate the flip `UPDATE` uses**, so
+   this query and that `UPDATE` agree on scope by construction rather than by
+   coincidence. It makes no difference to the result **today**: the seed carries no
+   `allow = false` row under either prefix. It starts mattering the day one is
+   added — a deny row denies at the longest match regardless of MFA, so the flip
+   correctly leaves it at `mfa_required = false`, and an operator reading an
+   un-filtered result would see a `false` under a "fully flipped" prefix and think
+   the rollout had failed.
+
+   > Merge note, 2026-09-16 (hugmesh-generator#351). `integrate/superadmin` added
+   > this clause **and** the deny row that motivated it
+   > (`hugmesh-fe-gateway` `/bff/superadmin/games-services/**`). The clause landed;
+   > the row did not — operator decision 8 (#244 ACCEPT) is later and more specific
+   > and was answered "without the games-services deny row", because as the longest
+   > matching pattern with `allow = false` it is skipped by the flip and would strip
+   > the MFA floor from exactly that subtree. The reasoning is in
+   > `manifests/route-access/initdb/20-schema.sql`; whether to reinstate it is
+   > parked on #351. That branch also wrote "every row" in place of "the 10 rows"
+   > here, predating the count becoming 10 under the same ACCEPT.
 
    To see the **scope boundary** instead — the 10 gated rows *and* the seven §1.2a
    rows that are `false` by design — use this, which is the same admin-ish
