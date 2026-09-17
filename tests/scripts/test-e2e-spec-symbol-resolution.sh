@@ -79,17 +79,45 @@ $(echo "${out}" | sed 's/^/      /')"
 fi
 
 # ── 2. mutation battery ──────────────────────────────────────────────────────
-# Five mutations: three MUST be caught, two MUST NOT be reported. Each one is
+# Five mutations: three MUST add a finding, two MUST add none. Each one is
 # applied to a throwaway copy, and each is verified to have actually changed the
 # file before its verdict is believed — a no-op sed that "passes" is the classic
 # way a battery reports strength it does not have.
+#
+# EVERY verdict below is taken against a BASELINE measured on the un-mutated copy,
+# never against an absolute exit code. That matters: if the tree already carries
+# an offender — a half-finished edit, a sibling lane's in-flight change, or
+# someone reverting the #305 import to see this suite work — an absolute `rc == 0`
+# turns the two SILENT legs into "FALSE POSITIVE: a guard that cries wolf gets
+# switched off", which accuses the checker of a fault that is really the reader's
+# own tree, and sends them after the wrong thing. Judged on what each mutation
+# ADDS, the same dirty tree reports the truth: the pre-existing finding is
+# section 1's business, and these five legs still answer their own question.
+# Symmetrically, a "catch" leg must produce a NEW finding matching its needle —
+# an offender that was already there must not be able to certify a mutation.
 echo "-- 2. mutation battery: break it on purpose and watch it go red --"
 TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
 WORK="${TMP}/e2e"
 mkdir -p "${WORK}"
 cp -r "${E2E}/specs" "${E2E}/steps" "${WORK}/" 2>/dev/null
 
-run_checker() { python3 "${CHECKER}" "${WORK}" 2>&1; }
+# Offenders go to stdout one per line; the `clean:` summary goes to stderr. So
+# stdout alone IS the finding set, and an empty one means "no offenders".
+BASE="${TMP}/baseline.txt"
+BASE_ERR="${TMP}/baseline.err"
+python3 "${CHECKER}" "${WORK}" >"${BASE}" 2>"${BASE_ERR}"
+BASE_RC=$?
+LC_ALL=C sort -o "${BASE}" "${BASE}"
+BASE_N="$(wc -l <"${BASE}" | tr -d ' ')"
+if [ "${BASE_RC}" -eq 2 ]; then
+  # Without a baseline every leg below would silently compare against an empty
+  # set and the three catch legs would read as "NOT caught". Say so once, here.
+  bad "the battery's OWN baseline scan failed (exit 2) — no verdict below can mean anything:
+$(sed 's/^/      /' "${BASE_ERR}")"
+elif [ "${BASE_RC}" -eq 1 ]; then
+  echo "  note the throwaway copy already carries ${BASE_N} finding(s); section 1 owns"
+  echo "       those. Every leg below is judged on what it ADDS to that set."
+fi
 
 # $1 label  $2 file (relative to ${WORK})  $3 python mutator  $4 expect: catch|silent  $5 needle
 mutate() {
@@ -108,26 +136,41 @@ mutate() {
   python3 -c "${mutator}" "${f}"
   if cmp -s "${f}" "${f}.orig"; then
     mv "${f}.orig" "${f}"
-    bad "M:${label} — the mutation changed NOTHING (source drifted?); this leg proved nothing"
+    bad "M:${label} — the mutation changed NOTHING, so this leg proved nothing.
+       Either ${rel} drifted away from the shape this mutator edits, or the tree
+       ALREADY carries the mutated state (e.g. the #305 import reverted by hand).
+       Re-read the mutator against the file before trusting any other leg."
     return
   fi
-  local mout
-  mout="$(run_checker)"
+  local mfile="${TMP}/mutant.txt"
+  local added="${TMP}/added.txt"
+  python3 "${CHECKER}" "${WORK}" >"${mfile}" 2>/dev/null
   local mrc=$?
+  LC_ALL=C sort -o "${mfile}" "${mfile}"
+  # comm -13 = lines in the MUTANT set that are not in the BASELINE set, i.e.
+  # exactly the findings this mutation is responsible for.
+  comm -13 "${BASE}" "${mfile}" >"${added}"
+  local nadd
+  nadd="$(wc -l <"${added}" | tr -d ' ')"
   mv "${f}.orig" "${f}"
   if [ "${expect}" = "catch" ]; then
-    if [ "${mrc}" -eq 1 ] && echo "${mout}" | grep -a -- "${needle}" >/dev/null; then
-      ok "M:${label} — caught ($(echo "${mout}" | grep -a -- "${needle}" | head -n1))"
+    local hit
+    hit="$(grep -a -- "${needle}" "${added}" | head -n1 || true)"
+    if [ -n "${hit}" ]; then
+      ok "M:${label} — caught (NEW finding: ${hit})"
     else
-      bad "M:${label} — NOT caught (rc=${mrc}). The guard is blind to this shape. Output:
-$(echo "${mout}" | sed 's/^/      /')"
+      bad "M:${label} — NOT caught: the mutation added ${nadd} finding(s) (rc=${mrc}),
+       none of them matching '${needle}'. The guard is blind to this shape. Added:
+$(sed 's/^/      /' "${added}")"
     fi
   else
-    if [ "${mrc}" -eq 0 ]; then
-      ok "M:${label} — correctly silent (a mention that is not a use)"
+    if [ "${nadd}" -eq 0 ]; then
+      ok "M:${label} — correctly silent (a mention that is not a use; it added 0 findings)"
     else
-      bad "M:${label} — FALSE POSITIVE (rc=${mrc}); a guard that cries wolf gets switched off. Output:
-$(echo "${mout}" | sed 's/^/      /')"
+      bad "M:${label} — FALSE POSITIVE: this mention is not a use, yet the checker
+       ADDED ${nadd} finding(s) that the un-mutated copy did not have. A guard
+       that cries wolf gets switched off. Added:
+$(sed 's/^/      /' "${added}")"
     fi
   fi
 }

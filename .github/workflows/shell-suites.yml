@@ -37,12 +37,24 @@
 # mounted READ-ONLY and --network=none before being added to that job's list —
 # 7 passed, 0 failed, rc=0, its five-mutation battery 3 caught / 2 correctly
 # silent, and its vacuity floor exercised. It is the SECOND test-e2e-* suite in
-# CI (the note above about shell-nav-entry being "the one" is now the note about
-# the first of two, and the reason is identical): it is pure static analysis of
-# tests/e2e and needs no node_modules and no chromium. DEBIAN and not ALPINE on
-# purpose, MEASURED not assumed — run in an alpine image WITHOUT python3 it
-# prints 0 passed / 7 failed rc=1, i.e. it fails CLOSED rather than skipping,
-# but a job that can only ever go red is not a gate. It exists because
+# the DEBIAN job (joining test-e2e-shell-nav-entry.sh there) and the EIGHTH in
+# this file — COUNTED 2026-09-17, by JOB and never by line number, because a line
+# number inside this very header shifts the moment anyone edits this very header:
+#     alpine  enumeration-without-credentials, persona-catalogue
+#     debian  shell-nav-entry, spec-symbol-resolution   <- this one
+#     node    coverage-matrix-harness, docker-base-url-parity, reporter-shape,
+#             toolchain-readiness
+# all eight in pull_request-triggered jobs. Recount with
+# `grep -c '^ *tests/scripts/test-e2e-' .github/workflows/shell-suites.yml`
+# (anchored: an unanchored grep also matches these prose lines and answers 11).
+# The 2026-09-06 note above calling shell-nav-entry "the one e2e guard that
+# belongs in CI" was already imprecise when it was written; this corrects it
+# rather than repeating it. Like that one, this suite is pure static analysis of
+# tests/e2e and needs no node_modules and no chromium — only python3. It fails
+# CLOSED, MEASURED not assumed: run in an image WITHOUT python3 it prints
+# 0 passed / 7 failed rc=1 rather than skipping. (The alpine job installs python3
+# as well, so debian here is a choice of ONE job to run it in, not a toolchain
+# constraint.) It exists because
 # hugmesh-generator#305 sat on main for three weeks: spec 15 called
 # loginPassword() without importing it, `playwright test --list` never evaluates
 # a default parameter so the enumeration guard stayed green, and there is no
