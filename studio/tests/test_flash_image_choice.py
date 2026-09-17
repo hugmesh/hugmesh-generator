@@ -169,7 +169,11 @@ def test_image_combo_falls_back_to_the_arch_role_name_match(page, tmp_path,
 
 def test_refresh_preserves_the_operators_pick(page, tmp_path):
     """The 2.5 s device timer re-enters the refresh; it must not snap the selection
-    back to the default under the operator's cursor."""
+    back to the default under the operator's cursor.
+
+    This pins the PATH RESTORE (`prev`), which is what survives a rebuild — a new
+    artifact appearing mid-session invalidates the skip-if-unchanged guard below, and
+    the pick still has to come back."""
     img, live = _artifacts(tmp_path, "b-x86-amd64-omnibus-prod-1.img",
                            "b-x86-amd64-omnibus-prod-1.live.iso")
     page._entry_artifact_sets = {"e1": (live, img)}
@@ -178,6 +182,28 @@ def test_refresh_preserves_the_operators_pick(page, tmp_path):
     for _ in range(5):
         page._refresh_flash_images()
     assert page._selected_image() == live
+    # a genuinely NEW artifact forces the rebuild; the pick must still survive it
+    later, = _artifacts(tmp_path, "b-x86-amd64-omnibus-prod-2.installer.iso")
+    os.utime(later, (1_800_000_000, 1_800_000_000))
+    page._entry_artifact_sets = {"e1": (later, live, img)}
+    page._refresh_flash_images()
+    assert page.flash_image_combo.count() == 3
+    assert page._selected_image() == live
+
+
+def test_refresh_skips_the_rebuild_when_nothing_changed(page, tmp_path):
+    """The skip-if-unchanged guard itself: with the same candidates the combo is not
+    torn down and rebuilt. Observed through a sentinel the rebuild would erase — a
+    rebuild 24x a minute also shuts an open dropdown under the operator's hand, which
+    an offscreen test cannot see."""
+    img, = _artifacts(tmp_path, "b-x86-amd64-omnibus-prod-1.img")
+    page._entry_artifact_sets = {"e1": (img,)}
+    page._refresh_flash_images()
+    page.flash_image_combo.setItemText(0, "SENTINEL")
+    for _ in range(5):
+        page._refresh_flash_images()
+    assert page.flash_image_combo.itemText(0) == "SENTINEL"
+    assert page.flash_image_combo.count() == 1
 
 
 def test_a_second_run_drops_the_previous_runs_images(page, tmp_path, monkeypatch):
