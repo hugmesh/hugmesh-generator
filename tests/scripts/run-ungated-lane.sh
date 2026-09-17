@@ -89,12 +89,18 @@
 #   * never runs `stack-down`, `stack-halt`, `kind delete`, `docker stop/rm` or
 #     any other teardown, in any mode, for any reason. It only ever invokes the
 #     suites named in the array.
-#   * when a human overrides the refusal with E2E_UNGATED_ALLOW_LIVE_STACK=1,
-#     takes a census of that footprint BEFORE and AFTER the run and goes red
-#     (exit 4) if it changed, or (exit 5) if the after-census cannot be taken.
-#     The override is trusted to be deliberate; it is not trusted to be
-#     harmless. It cannot override exit 5: with no census it cannot police
-#     itself.
+#   * HAS NO OVERRIDE. Operator decision 32b on #347, 2026-09-17: the
+#     E2E_UNGATED_ALLOW_LIVE_STACK=1 escape hatch is REMOVED. #246 asked for a
+#     Make target, not an escape hatch; the override was the implementer's own
+#     design call. There is now no value of any variable that lets this lane run
+#     beside a watched footprint — bring the stack down yourself, or narrow
+#     E2E_UNGATED_LIVE_PREFIX deliberately to a list that does not name it.
+#   * still censuses the footprint BEFORE and AFTER the run and goes red (exit 4)
+#     if it changed, or (exit 5) if the after-census cannot be taken. Without the
+#     override the before-census is always EMPTY when the lane proceeds, so this
+#     check now means something narrower and sharper: a suite in the set BROUGHT
+#     a watched footprint UP while the lane ran. That is exactly the arrival
+#     #246's third bullet forbids, and it is why the check outlived the override.
 #
 # WHAT THE SUITES THEMSELVES START — MEASURED 2026-09-16, comment-stripped, over
 # all 22 PREMERGE_UNGATED entries (this paragraph replaces one written on
@@ -126,8 +132,8 @@
 #             E2E_UNGATED_STRICT=1, which makes any SKIP red
 #   *  ERROR  anything else (crash, 124 timeout, 126/127) -> lane exits 1
 # The lane's own verdicts:
-#   3  refused: live hugmesh-local footprint detected
-#   4  the footprint changed under an override
+#   3  refused: a live footprint under a watched prefix was detected
+#   4  the footprint changed while the lane ran (a suite brought one up)
 #   5  refused: the footprint could not be determined (census tool failed)
 #   6  VACUOUS: suites were selected and NOT ONE passed (every one skipped). A
 #      lane that asserted nothing is not green, STRICT or not — on a checkout
@@ -160,7 +166,6 @@ GUARD="${HERE}/test-guard-integrity.sh"
 
 SET_NAME="${E2E_UNGATED_SET:-e2e}"
 STRICT="${E2E_UNGATED_STRICT:-0}"
-ALLOW_LIVE="${E2E_UNGATED_ALLOW_LIVE_STACK:-0}"
 # DECISION 32a (#347, 2026-09-17): BOTH live shapes by default, not just the
 # one #246 named. A space-separated LIST; see the header.
 UNGATED_DEFAULT_LIVE_PREFIXES="hugmesh-local hugmesh-real"
@@ -307,9 +312,6 @@ if [ "${E2E_UNGATED_DRY_RUN:-0}" = "1" ]; then
     printf '%s\n' "${CENSUS_ERR}" | sed 's/^/     /'
   elif [ -z "${FOOTPRINT_BEFORE}" ]; then
     printf '%s\n' "   live footprint [${LIVE_PREFIX_SHOWN}]: none — a real run would proceed"
-  elif [ "${ALLOW_LIVE}" = "1" ]; then
-    printf '%s\n' "   live footprint [${LIVE_PREFIX_SHOWN}]: PRESENT, override set — a real run would proceed and census it"
-    printf '     %s\n' ${FOOTPRINT_BEFORE}
   else
     printf '%s\n' "   live footprint [${LIVE_PREFIX_SHOWN}]: PRESENT — a real run would REFUSE (exit 3)"
     printf '     %s\n' ${FOOTPRINT_BEFORE}
@@ -321,24 +323,26 @@ if [ -n "${CENSUS_ERR}" ]; then
   printf '%s\n' "REFUSED: the live footprint [${LIVE_PREFIX_SHOWN}] on this box could not be determined:"
   printf '%s\n' "${CENSUS_ERR}" | sed 's/^/  /'
   printf '%s\n' "  A census that errors is not an empty census. Nothing was started and nothing"
-  printf '%s\n' "  was stopped. E2E_UNGATED_ALLOW_LIVE_STACK=1 does not apply here: the override"
-  printf '%s\n' "  polices itself by comparing a before and an after census, and there is none."
+  printf '%s\n' "  was stopped, and there is no override to wave this through — see decision 32b."
   printf '%s\n' "  Fix the tool (or uninstall it, if this box really has no docker/kind) and re-run."
   exit 5
 fi
 
-if [ -n "${FOOTPRINT_BEFORE}" ] && [ "${ALLOW_LIVE}" != "1" ]; then
+if [ -n "${FOOTPRINT_BEFORE}" ]; then
   printf '%s\n' "REFUSED: a live footprint [${LIVE_PREFIX_SHOWN}] is up on this box:"
   printf '  %s\n' ${FOOTPRINT_BEFORE}
   printf '%s\n' "  This lane will not run beside it. Nothing was started and nothing was stopped."
-  printf '%s\n' "  Bring it down yourself if you want the lane. If you would rather run beside it,"
-  printf '%s\n' "  read the header of tests/scripts/run-ungated-lane.sh first: one suite in the"
-  printf '%s\n' "  default set starts its own throwaway container (a python:3.12-slim http.server"
-  printf '%s\n' "  named e2eguard-m7-*, which it removes), the rest only read, and the lane"
-  printf '%s\n' "  itself never tears anything down. Then, if that is acceptable to you:"
-  printf '%s\n' "      E2E_UNGATED_ALLOW_LIVE_STACK=1 make e2e-ungated"
-  printf '%s\n' "  which keeps every other protection and additionally fails the run (exit 4) if"
-  printf '%s\n' "  the footprint above changes while the lane is running."
+  printf '%s\n' "  THERE IS NO OVERRIDE (operator decision 32b on #347, 2026-09-17: #246 asked"
+  printf '%s\n' "  for a Make target, not an escape hatch). Bring the stack down yourself and"
+  printf '%s\n' "  re-run, or — if you have read the header and decided a particular project is"
+  printf '%s\n' "  not worth protecting — name a narrower watch list deliberately:"
+  printf '%s\n' "      E2E_UNGATED_LIVE_PREFIX=\"<the prefixes you still want refused>\" make e2e-ungated"
+  printf '%s\n' "  For what the suites themselves start, read the header of"
+  printf '%s\n' "  tests/scripts/run-ungated-lane.sh: one suite in the default set runs a"
+  printf '%s\n' "  throwaway python:3.12-slim http.server named e2eguard-m7-* and removes it,"
+  printf '%s\n' "  tests/casdoor/test-jwt-custom-token.sh starts casdoor-pg and"
+  printf '%s\n' "  casdoor-jwtcustom-test and removes them, the rest only read, and the lane"
+  printf '%s\n' "  itself never tears anything down."
   exit 3
 fi
 
@@ -352,11 +356,9 @@ say "   evidence     : ${RUN_DIR}"
 say "   strict-skips : ${STRICT}"
 say "   suite-timeout: ${SUITE_TIMEOUT}s (0 = none)"
 say "   studio python: ${SNAP_STUDIO_PYTHON:-python3 (SNAP_STUDIO_PYTHON unset; the Studio GUI lane goes RED, not SKIP, if it lacks pytest)}"
-if [ -n "${FOOTPRINT_BEFORE}" ]; then
-  say "   live stack   : OVERRIDDEN — proceeding beside $(printf '%s' "${FOOTPRINT_BEFORE}" | tr '\n' ' ')"
-else
-  say "   live stack   : none detected (no ${LIVE_PREFIX_SHOWN} container or kind cluster)"
-fi
+# With the override gone (32b) the lane only ever gets here on an EMPTY census,
+# so this is a statement of fact, not a branch.
+say "   live stack   : none detected (no ${LIVE_PREFIX_SHOWN} container or kind cluster)"
 say ""
 
 PASS=0
@@ -431,8 +433,10 @@ if [ "${FOOTPRINT_BEFORE}" != "${FOOTPRINT_AFTER}" ]; then
   say "LANE VIOLATION: the footprint [${LIVE_PREFIX_SHOWN}] CHANGED while the lane ran."
   say "   before: $(printf '%s' "${FOOTPRINT_BEFORE}" | tr '\n' ' ')"
   say "   after : $(printf '%s' "${FOOTPRINT_AFTER}"  | tr '\n' ' ')"
-  say "   Some suite in the '${SET_NAME}' set touched the live stack. That is the"
-  say "   thing #246 said must never happen; fix the suite, do not relax this check."
+  say "   The before-census was EMPTY (the lane cannot start otherwise — there is no"
+  say "   override since decision 32b), so a suite in the '${SET_NAME}' set BROUGHT a"
+  say "   watched footprint UP. That is the thing #246 said must never happen; fix the"
+  say "   suite, do not relax this check."
   exit 4
 fi
 

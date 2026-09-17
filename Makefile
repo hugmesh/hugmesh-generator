@@ -2343,9 +2343,12 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 # it sees a container or kind cluster under either prefix, REFUSES (exit 5) when docker
 # or kind is installed but its census command fails (an erroring census is not
 # an empty one, and the override cannot police itself without a before/after),
-# tears nothing down in any mode, and under the explicit
-# E2E_UNGATED_ALLOW_LIVE_STACK=1 override censuses that footprint before and
-# after and exits 4 if it moved. What the suites THEMSELVES start, measured
+# tears nothing down in any mode, and HAS NO OVERRIDE — operator decision 32b on
+# #347 (2026-09-17) removed E2E_UNGATED_ALLOW_LIVE_STACK entirely, because #246
+# asked for a Make target and not an escape hatch. The before/after census
+# outlived it and exits 4 if the footprint moved, which now means a suite BROUGHT
+# one up (the before-census is always empty when the lane proceeds). What the
+# suites THEMSELVES start, measured
 # 2026-09-16 (correcting a 2026-09-10 claim that none did): ONE suite in the
 # default set, test-e2e-env-interface-dimensions.sh, runs a throwaway
 # python:3.12-slim http.server container named e2eguard-m7-* and removes only
@@ -2354,7 +2357,8 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 # pins every refusal above against mutated copies of the runner.
 #
 # EXIT: 0 all green (skips tolerated unless STRICT), 1 a suite was red or
-# errored, 3 refused beside a live stack, 4 the live footprint changed, 5 the
+# errored, 3 refused beside a live stack, 4 a suite brought a watched footprint
+# up while the lane ran, 5 the
 # footprint could not be censused, 6 VACUOUS — suites were selected and not one
 # passed (every one skipped; a lane that asserted nothing is not green).
 # Evidence: one dated dir per run under tests/.ungated-lane/ (gitignored),

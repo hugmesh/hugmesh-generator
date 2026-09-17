@@ -36,8 +36,13 @@
 #      `hugmesh-real` compose project was invisible and a real run started the
 #      suites beside it (hugmesh-generator#397). An EMPTY watch list refuses
 #      (exit 1) rather than censusing nothing.
-#   7. E2E_UNGATED_ALLOW_LIVE_STACK=1 proceeds beside a stable footprint (exit
-#      0) and exits 4 when a suite moves it mid-run, printing both censuses
+#   7. THERE IS NO OVERRIDE (decision 32b on #347): E2E_UNGATED_ALLOW_LIVE_STACK
+#      is not read at all, so setting it beside a live footprint still refuses
+#      with exit 3 and the runner's source (comment-stripped) never names it.
+#      The before/after census OUTLIVED the override and now means something
+#      sharper: the before-census is always empty when the lane proceeds, so a
+#      non-empty after-census is a suite that BROUGHT a watched footprint up.
+#      Exit 4, both censuses printed, under either watched prefix.
 #   8. FAIL-CLOSED CENSUS: docker or kind present but FAILING refuses with exit
 #      5, override or not, and the dry run says so; a failing after-census also
 #      exits 5 (LANE UNVERIFIABLE); a box with neither tool installed proceeds
@@ -52,9 +57,10 @@
 #
 # NEGATIVE CONTROLS. The battery is re-run against MUTATED copies of the runner
 # — the exit-3 refusal deleted, the exit-4 census deleted, the fail-open census
-# restored, the vacuity floor removed, the paren anchor loosened, the watch list
-# narrowed back to hugmesh-local alone, the empty-watch-list guard dropped, the
-# mkdir check dropped, the timeout branch dropped — and each mutation must make at
+# restored, the vacuity floor removed, the paren anchor loosened, the removed
+# ALLOW_LIVE_STACK override reinstated, the watch list narrowed back to
+# hugmesh-local alone, the empty-watch-list guard dropped, the mkdir check
+# dropped, the timeout branch dropped — and each mutation must make at
 # least one assertion go red. A mutation that does not change the file is
 # itself a failure. The real runner is never written to.
 #
@@ -97,7 +103,7 @@ for b in bash awk sed grep sort tr head cut tail tee date mkdir rm mktemp timeou
 done
 
 # ── the synthetic tree ───────────────────────────────────────────────────────
-# write_tree <dir> <profile>   profiles: full | greenskip | allskip | override | mutator | censusdrop | sleeper
+# write_tree <dir> <profile>   profiles: full | greenskip | allskip | single | mutator | censusdrop | sleeper
 write_tree() {
   local tree
   local profile
@@ -111,7 +117,7 @@ write_tree() {
     full)       entries="tests/scripts/test-e2e-green.sh tests/scripts/test-e2e-red.sh tests/scripts/test-e2e-skip.sh tests/scripts/test-e2e-crash.sh tests/scripts/test-e2e-missing.sh tests/stack/test-not-e2e.sh" ;;
     greenskip)  entries="tests/scripts/test-e2e-green.sh tests/scripts/test-e2e-skip.sh" ;;
     allskip)    entries="tests/scripts/test-e2e-skip.sh tests/scripts/test-e2e-skip2.sh" ;;
-    override)   entries="tests/scripts/test-e2e-green.sh" ;;
+    single)     entries="tests/scripts/test-e2e-green.sh" ;;
     mutator)    entries="tests/scripts/test-e2e-green.sh tests/scripts/test-e2e-mutator.sh" ;;
     censusdrop) entries="tests/scripts/test-e2e-green.sh tests/scripts/test-e2e-censusdrop.sh" ;;
     sleeper)    entries="tests/scripts/test-e2e-sleeper.sh" ;;
@@ -136,7 +142,7 @@ write_tree() {
   stub tests/scripts/test-e2e-crash.sh      'echo crash; exit 7'
   stub tests/stack/test-not-e2e.sh          'echo not-e2e; exit 0'
   stub tests/other/test-e2e-trailing.sh     'echo trailing; exit 0'
-  stub tests/scripts/test-e2e-mutator.sh    'echo hugmesh-local-evil-new >>"${STUB_STATE}/docker.names"; exit 0'
+  stub tests/scripts/test-e2e-mutator.sh    'printf "%s\\n" hugmesh-local-evil-new hugmesh-real-evil-new >>"${STUB_STATE}/docker.names"; exit 0'
   stub tests/scripts/test-e2e-censusdrop.sh 'echo error >"${STUB_STATE}/docker.mode"; exit 0'
   stub tests/scripts/test-e2e-sleeper.sh    'sleep 5; exit 0'
   # (test-e2e-missing.sh is deliberately NOT written)
@@ -335,25 +341,33 @@ battery() {
     [ "${RC}" = "1" ] && has "${O}" "live stack   : none detected" && ok "docker+kind present and EMPTY -> proceeds (rc from the suites)" || bad "clear footprint: rc ${RC}"
   fi
 
-  # 7. override ────────────────────────────────────────────────────────────
-  if case_selected override; then
-    write_tree "${T}" override; new_state
+  # 7. NO override, and the after-census that outlived it ──────────────────
+  if case_selected aftercensus; then
+    # DECISION 32b. The variable is gone. Setting it beside a live footprint
+    # must still refuse — reinstate the override and these two go red.
+    write_tree "${T}" single; new_state
     printf '%s\n' hugmesh-local-control-plane >"${STATE}/docker.names"; : >"${STATE}/kind.clusters"
     O="${STATE}/ov.out"
     run_lane "${T}" stubs "${O}" E2E_UNGATED_ALLOW_LIVE_STACK=1
-    [ "${RC}" = "0" ] && has "${O}" "OVERRIDDEN — proceeding beside hugmesh-local-control-plane" && ok "override + stable footprint -> proceeds, exit 0" || bad "override stable: rc ${RC}"
+    [ "${RC}" = "3" ] && ok "E2E_UNGATED_ALLOW_LIVE_STACK=1 does NOT let the lane run beside a footprint (32b: the override is gone)" || bad "ALLOW_LIVE_STACK=1 beside a footprint: rc ${RC}, expected 3"
+    has "${O}" "THERE IS NO OVERRIDE" && ok "the refusal says plainly that there is no override" || bad "the refusal still offers an escape hatch"
+    has "${O}" "E2E_UNGATED_ALLOW_LIVE_STACK=1 make e2e-ungated" && bad "the refusal still advertises the removed override" || ok "the refusal no longer advertises the removed override"
+    [ -e "${RAN}" ] && bad "a suite RAN with ALLOW_LIVE_STACK=1 beside a footprint" || ok "nothing ran with ALLOW_LIVE_STACK=1 beside a footprint"
+    # the before/after census, on an EMPTY before — a suite brings a watched
+    # footprint UP mid-run, under either prefix
     write_tree "${T}" mutator; new_state
-    printf '%s\n' hugmesh-local-control-plane >"${STATE}/docker.names"; : >"${STATE}/kind.clusters"
-    O="${STATE}/ov-moved.out"
-    run_lane "${T}" stubs "${O}" E2E_UNGATED_ALLOW_LIVE_STACK=1
-    [ "${RC}" = "4" ] && ok "override + footprint moved mid-run -> exit 4" || bad "override moved: rc ${RC}, expected 4"
-    has "${O}" "LANE VIOLATION" && has "${O}" "before: hugmesh-local-control-plane" && has "${O}" "after : hugmesh-local-control-plane hugmesh-local-evil-new" \
-      && ok "the violation prints both censuses" || bad "violation censuses missing: $(grep -a 'before:\|after :' "${O}" | tr '\n' ' ')"
+    : >"${STATE}/docker.names"; : >"${STATE}/kind.clusters"
+    O="${STATE}/moved.out"
+    run_lane "${T}" stubs "${O}"
+    [ "${RC}" = "4" ] && ok "a suite that BRINGS a watched footprint up mid-run -> exit 4" || bad "footprint arrived mid-run: rc ${RC}, expected 4"
+    has "${O}" "LANE VIOLATION" && has "${O}" "after : hugmesh-local-evil-new hugmesh-real-evil-new" \
+      && ok "the violation prints both censuses, and the AFTER census watches both prefixes" || bad "violation censuses missing: $(grep -a 'before:\|after :' "${O}" | tr '\n' ' ')"
+    has "${O}" "before-census was EMPTY" && ok "the violation says the before-census was empty (no override to blame)" || bad "the violation still blames an override"
   fi
 
   # 8. fail-closed census ─────────────────────────────────────────────────
   if case_selected census; then
-    write_tree "${T}" override; new_state
+    write_tree "${T}" single; new_state
     echo error >"${STATE}/docker.mode"; : >"${STATE}/kind.clusters"
     O="${STATE}/derr.out"
     run_lane "${T}" stubs "${O}"
@@ -363,7 +377,7 @@ battery() {
     [ -e "${RAN}" ] && bad "a suite RAN on an undeterminable footprint" || ok "nothing ran on an undeterminable footprint"
     O="${STATE}/derr-ov.out"
     run_lane "${T}" stubs "${O}" E2E_UNGATED_ALLOW_LIVE_STACK=1
-    [ "${RC}" = "5" ] && ok "the override does NOT bypass exit 5" || bad "override bypassed the census error: rc ${RC}"
+    [ "${RC}" = "5" ] && ok "a stray E2E_UNGATED_ALLOW_LIVE_STACK=1 does not bypass exit 5 (32b: it is not read at all)" || bad "ALLOW_LIVE_STACK=1 bypassed the census error: rc ${RC}"
     O="${STATE}/derr-dry.out"
     run_lane "${T}" stubs "${O}" E2E_UNGATED_DRY_RUN=1
     has "${O}" "UNDETERMINABLE — a real run would REFUSE (exit 5)" && ok "dry run reports UNDETERMINABLE" || bad "dry run on a failing census: $(grep -a footprint "${O}")"
@@ -377,7 +391,7 @@ battery() {
 
   # 9. unwritable evidence dir ─────────────────────────────────────────────
   if case_selected mkdir; then
-    write_tree "${T}" override; new_state
+    write_tree "${T}" single; new_state
     : >"${STATE}/afile"; LOGS="${STATE}/afile/sub"; O="${STATE}/mkdir.out"
     run_lane "${T}" none "${O}"
     [ "${RC}" = "1" ] && has "${O}" "cannot create the evidence directory" && ok "an unwritable evidence dir refuses (exit 1) before running anything" || bad "mkdir failure: rc ${RC}: $(tail -n 3 "${O}" | tr '\n' ' ')"
@@ -404,6 +418,9 @@ battery() {
     printf '%s\n' "${src}" | grep -aE '\| *grep +-[a-zA-Z]*q' >/dev/null && bad "the runner pipes into grep -q" || ok "no '| grep -q' in the runner"
     printf '%s\n' "${src}" | grep -aE '^[[:space:]]*local [a-zA-Z_]+=[^ ]* +[a-zA-Z_]+=' >/dev/null && bad "a two-assignment 'local' (bash 5.3 set -u trap)" || ok "every 'local' declares one name (bash 5.3 trap absent)"
     printf '%s\n' "${src}" | grep -a 'CENSUS-ERROR' >/dev/null && ok "the census emits CENSUS-ERROR lines (fail-closed path present)" || bad "no CENSUS-ERROR path in the runner"
+    printf '%s\n' "${src}" | grep -a 'E2E_UNGATED_ALLOW_LIVE_STACK' >/dev/null \
+      && bad "the runner still READS E2E_UNGATED_ALLOW_LIVE_STACK (32b: it was removed)" \
+      || ok "the runner never reads E2E_UNGATED_ALLOW_LIVE_STACK (comment-stripped; 32b)"
   fi
 }
 
@@ -461,9 +478,9 @@ PYFTR='
 open(p,"w",encoding="utf-8").write(s)'
 
 mutate "the exit-3 live-footprint refusal is deleted" "refuse" "${PYHDR}"'
-s=re.sub(r"\nif \[ -n \"\$\{FOOTPRINT_BEFORE\}\" \] && \[ \"\$\{ALLOW_LIVE\}\" != \"1\" \]; then\n.*?\n  exit 3\nfi\n", "\n", s, count=1, flags=re.S)'"${PYFTR}"
+s=re.sub(r"\nif \[ -n \"\$\{FOOTPRINT_BEFORE\}\" \]; then\n.*?\n  exit 3\nfi\n", "\n", s, count=1, flags=re.S)'"${PYFTR}"
 
-mutate "the exit-4 before/after census is deleted" "override" "${PYHDR}"'
+mutate "the exit-4 before/after census is deleted" "aftercensus" "${PYHDR}"'
 s=re.sub(r"\nif \[ \"\$\{FOOTPRINT_BEFORE\}\" != \"\$\{FOOTPRINT_AFTER\}\" \]; then\n.*?\n  exit 4\nfi\n", "\n", s, count=1, flags=re.S)'"${PYFTR}"
 
 mutate "the census fails OPEN again (docker error read as empty)" "census" "${PYHDR}"'
@@ -474,6 +491,12 @@ s=re.sub(r"\nif \[ \"\$\{PASS\}\" -eq 0 \]; then\n.*?\n  exit 6\nfi\n", "\n", s,
 
 mutate "the array close-paren anchor is loosened to column 0" "selection" "${PYHDR}"'
 s=s.replace("/^[[:space:]]*\\)[[:space:]]*$/{f=0}", "/^\\)/{f=0}", 1)'"${PYFTR}"
+
+mutate "the E2E_UNGATED_ALLOW_LIVE_STACK override is reinstated (32b reverted)" "aftercensus" "${PYHDR}"'
+s=s.replace("LIVE_PREFIX=\"${E2E_UNGATED_LIVE_PREFIX:-${UNGATED_DEFAULT_LIVE_PREFIXES}}\"",
+            "LIVE_PREFIX=\"${E2E_UNGATED_LIVE_PREFIX:-${UNGATED_DEFAULT_LIVE_PREFIXES}}\"\nALLOW_LIVE=\"${E2E_UNGATED_ALLOW_LIVE_STACK:-0}\"", 1)
+s=s.replace("if [ -n \"${FOOTPRINT_BEFORE}\" ]; then\n  printf",
+            "if [ -n \"${FOOTPRINT_BEFORE}\" ] && [ \"${ALLOW_LIVE}\" != \"1\" ]; then\n  printf", 1)'"${PYFTR}"
 
 mutate "the watch list narrows back to hugmesh-local alone (32a reverted)" "refuse" "${PYHDR}"'
 s=s.replace("UNGATED_DEFAULT_LIVE_PREFIXES=\"hugmesh-local hugmesh-real\"", "UNGATED_DEFAULT_LIVE_PREFIXES=\"hugmesh-local\"", 1)'"${PYFTR}"
