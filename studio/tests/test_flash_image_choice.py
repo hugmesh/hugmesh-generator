@@ -369,3 +369,191 @@ def test_plan_table_is_cleared_by_a_second_run(page, tmp_path, monkeypatch):
     page._reset()
     assert page.flash_plan_table.rowCount() == 0
     assert page.flash_plan_box.isHidden()
+
+
+# ══ C. per-image write progress, driven by BYTES ════════════════════════════════════
+# NOTHING here opens a device. The one test that runs real `dd`/`xz` writes to an
+# ordinary file under tmp_path: it exercises the REPORTING contract (dd's byte count
+# vs the denominator flash-disk.sh computes), which is the same wherever the bytes go.
+import subprocess                                                   # noqa: E402
+
+REPO_DIR = GENERATOR_DIR
+FLASH_SH = os.path.join(REPO_DIR, "scripts", "flash-disk.sh")
+
+
+def test_parsers_read_dds_real_output_and_ignore_everything_else():
+    assert ft.parse_write_total("[disk] Write-bytes: 54226059264") == 54226059264
+    assert ft.parse_write_total("[disk] Write-bytes: 0") == 0
+    assert ft.parse_write_total("[disk] Artifact : /x.img.xz [img.xz, 50.5G "
+                                "uncompressed]") == 0
+    assert ft.parse_dd_progress(
+        "77245448192 bytes (77 GB, 72 GiB) copied, 1 s, 77.2 GB/s") == (
+            77245448192, "77.2 GB/s")
+    assert ft.parse_dd_progress(
+        "3145728 bytes (3.1 MB, 3.0 MiB) copied, 2 s") == (3145728, "")
+    for noise in ("400000+0 records in", "", ">>> Emerging (12 of 400) dev-libs/foo",
+                  "==> Writing img to /dev/sdz (this can take a while)",
+                  "[disk] Target   : /dev/sdz [64GiB]"):
+        assert ft.parse_dd_progress(noise) == (0, "")
+        assert ft.parse_write_total(noise) == 0
+
+
+def test_flash_disk_sh_emits_the_denominator_on_the_write_path():
+    """The `Write-bytes:` line must sit on the WRITE path — after the confirm and the
+    unmount, before the first dd — so it is never printed for a run that aborted."""
+    src = open(FLASH_SH, encoding="utf-8").read().splitlines()
+    idx = {"confirm": -1, "writing": -1, "bytes": -1, "dd": -1}
+    for i, ln in enumerate(src):
+        if idx["confirm"] < 0 and "dl_confirm_destroy" in ln and "()" not in ln:
+            idx["confirm"] = i
+        if idx["writing"] < 0 and 'dl_step "Writing ' in ln:
+            idx["writing"] = i
+        if idx["bytes"] < 0 and 'dl_info "Write-bytes:' in ln:
+            idx["bytes"] = i
+        if idx["dd"] < 0 and idx["writing"] >= 0 and ln.lstrip().startswith(("dd ", "| dd ")):
+            idx["dd"] = i
+    assert all(v >= 0 for v in idx.values()), idx
+    assert idx["confirm"] < idx["writing"] < idx["bytes"] < idx["dd"], idx
+    assert 'dl_info "Write-bytes: ${ART_SIZE}"' in "\n".join(src)
+
+
+def test_real_dd_bytes_match_the_denominator_the_script_computes(tmp_path):
+    """END TO END, no device: build a small .img.xz, compute the denominator the way
+    flash-disk.sh does (xz --robot --list totals field 5), then run the script's OWN
+    compressed write stanza against a REGULAR FILE in tmp_path and check dd's reported
+    bytes equal it.
+
+    of= is an ordinary file, never a block device: the point is the REPORTING contract
+    (does dd's byte count land on the number the denominator promises), and that is
+    identical wherever the bytes go. `conv=fsync` is kept from the real arm — measured:
+    it is what rules /dev/null out as the sink, since fsync() there returns EINVAL.
+
+    This is what makes the bar honest: numerator and denominator are the same number
+    at 100%, measured, not assumed."""
+    raw = tmp_path / "t.img"
+    raw.write_bytes(os.urandom(1 << 20) * 8)          # 8 MiB, poorly compressible
+    subprocess.run(["xz", "-0", "-T1", str(raw)], check=True)
+    xz = str(raw) + ".xz"
+    listing = subprocess.run(["xz", "--robot", "--list", xz], check=True,
+                             capture_output=True, text=True).stdout
+    total = int([l.split("\t")[4] for l in listing.splitlines()
+                 if l.startswith("totals")][0])
+    assert total == 8 << 20
+    # the script's compressed arm, verbatim, with of= an ordinary file
+    out = subprocess.run(
+        ["bash", "-o", "pipefail", "-c",
+         f'xz -dc "{xz}" | dd of="{tmp_path / "sink.raw"}" bs=4M iflag=fullblock '
+         f'conv=fsync status=progress'],
+        capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    seen = [ft.parse_dd_progress(l)[0]
+            for l in (out.stdout + out.stderr).replace("\r", "\n").splitlines()]
+    assert max(seen) == total, (max(seen), total)
+
+
+def test_bar_advances_on_bytes_from_a_real_stream(page):
+    """Feed the page the exact lines flash-disk.sh + dd produce. The bar must track
+    bytes, and must be 0 before any byte count arrives."""
+    page.log = _Lines()
+    page._begin_flash_progress("/w/b-x86-amd64-omnibus-prod-1.img.xz")
+    assert page.flash_progress_bar.maximum() == 0        # indeterminate: no total yet
+    page._on_flash_line("[disk] Write-bytes: 1000")
+    assert page.flash_progress_bar.maximum() == 100
+    assert page.flash_progress_bar.value() == 0
+    page._on_flash_line("250 bytes (250 B, 250 B) copied, 1 s, 250 B/s")
+    assert page.flash_progress_bar.value() == 25
+    page._on_flash_line("750 bytes (750 B, 750 B) copied, 3 s, 250 B/s")
+    assert page.flash_progress_bar.value() == 75
+    page._on_flash_line("1000 bytes (1.0 kB, 1000 B) copied, 4 s, 250 B/s")
+    assert page.flash_progress_bar.value() == 100
+    assert "250 B/s" in page.flash_progress_label.text()
+    # every line still reaches the log pane
+    assert any("Write-bytes" in l for l in page.log.lines)
+
+
+def test_bar_never_moves_on_noise(page):
+    """A line that is not a dd byte count must not move the bar — the anti-lie check."""
+    page.log = _Lines()
+    page._begin_flash_progress("/w/x.img")
+    page._on_flash_line("[disk] Write-bytes: 1000")
+    page._on_flash_line("500 bytes (500 B, 500 B) copied, 1 s")
+    assert page.flash_progress_bar.value() == 50
+    for noise in ("==> Writing img to /dev/sdz (this can take a while)",
+                  "400000+0 records in", "[disk] Target   : /dev/sdz [64GiB]",
+                  ">>> Emerging (12 of 400) dev-libs/foo-1.2", ""):
+        page._on_flash_line(noise)
+        assert page.flash_progress_bar.value() == 50
+
+
+def test_no_denominator_shows_activity_and_says_so(page):
+    """flash-disk.sh could not size the artifact (ART_SIZE=0, or DL_QUIET). The bar
+    must go indeterminate and the label must refuse to call it progress."""
+    page.log = _Lines()
+    page._begin_flash_progress("/w/x.img")
+    page._on_flash_line("[disk] Write-bytes: 0")
+    page._on_flash_line("4194304 bytes (4.2 MB, 4.0 MiB) copied, 1 s, 4.2 MB/s")
+    assert page.flash_progress_bar.minimum() == 0
+    assert page.flash_progress_bar.maximum() == 0        # Qt's busy indicator
+    label = page.flash_progress_label.text()
+    assert "activity, not progress" in label
+    assert "4.0 MiB written" in label
+
+
+def test_image_n_of_m_counts_the_plan(page, tmp_path, monkeypatch):
+    a, = _artifacts(tmp_path, "b-x86-amd64-omnibus-prod-1.img")
+    b, = _artifacts(tmp_path, "b-rpi5-arm64-backend-prod-2.img")
+    plan = [ft.FlashAssignment(SDB, "omnibus.x86", "omnibus", "x86", str(tmp_path)),
+            ft.FlashAssignment(SDC, "backend.rpi5", "backend", "arm64", str(tmp_path))]
+    page._entry_artifact_sets = {"omnibus.x86": (a,), "backend.rpi5": (b,)}
+    page._entry_artifacts = {}
+    page.wiz.flash_plan = list(plan)
+    page.log = _Lines()
+    monkeypatch.setattr(ft, "list_targets", lambda: [SDB, SDC])
+    monkeypatch.setattr(pg, "confirm_flash", lambda *a, **k: pg.FLASH_OK)
+    monkeypatch.setattr(pg, "hold_thread", lambda w: w)
+
+    class _NoWorker:
+        def __init__(self, argv, gen):
+            pass
+
+        line = SimpleNamespace(connect=lambda *_: None)
+        done = SimpleNamespace(connect=lambda *_: None)
+
+        def start(self):
+            pass
+
+        def isRunning(self):
+            return False
+    monkeypatch.setattr(pg, "_FlashWorker", _NoWorker)
+    page._maybe_auto_flash()
+    assert "Image 1 of 2" in page.flash_progress_label.text()
+    assert os.path.basename(a) in page.flash_progress_label.text()
+    page._flash_done(0)                       # chains to assignment 2
+    assert "Image 2 of 2" in page.flash_progress_label.text()
+    assert os.path.basename(b) in page.flash_progress_label.text()
+
+
+def test_the_flash_button_is_always_image_1_of_1(page, tmp_path, monkeypatch):
+    """A Flash… after a 3-device plan must not inherit 'Image 3 of 3'."""
+    img, = _artifacts(tmp_path, "b-x86-amd64-omnibus-prod-1.img")
+    page._entry_artifact_sets = {"e1": (img,)}
+    page.log = _Lines()
+    page._flash_image_total, page._flash_image_index = 3, 3   # a previous plan run
+    monkeypatch.setattr(ft, "list_targets", lambda: [SDB])
+    page._refresh_flash_targets()
+    monkeypatch.setattr(page, "_start_flash", lambda t, argv=None: None)
+    page._flash_clicked()
+    assert (page._flash_image_total, page._flash_image_index) == (1, 1)
+
+
+def test_a_failed_write_does_not_snap_the_bar_to_100(page):
+    page.log = _Lines()
+    page._begin_flash_progress("/w/x.img")
+    page._on_flash_line("[disk] Write-bytes: 1000")
+    page._on_flash_line("300 bytes (300 B, 300 B) copied, 1 s")
+    page._finish_flash_progress(1)
+    assert page.flash_progress_bar.value() == 30
+    assert "FAILED (rc=1)" in page.flash_progress_label.text()
+    page._finish_flash_progress(0)
+    assert page.flash_progress_bar.value() == 100
+    assert page.flash_progress_label.text().endswith("written")

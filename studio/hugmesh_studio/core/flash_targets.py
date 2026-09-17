@@ -599,3 +599,47 @@ def artifact_label(path: str) -> str:
     if is_compressed_artifact(base):
         bits.append("compressed")
     return " · ".join(bits)
+
+
+# ── what flash-disk.sh reports WHILE it writes (#415, the progress source) ────────────
+# The GUI's write progress is driven by BYTES, never by a timer. Two lines carry it,
+# and both come out of the real write:
+#
+#   * the DENOMINATOR — ``[disk] Write-bytes: <n>``, emitted by scripts/flash-disk.sh
+#     immediately before dd starts. It is the script's own ART_SIZE: the file size for a
+#     raw .img/.iso, and the UNCOMPRESSED size (``xz --robot --list`` totals field 5) for
+#     a .img.xz/.iso.xz — exactly what ``xz -dc | dd`` puts on the disk. 0 when the size
+#     could not be read, and absent entirely under DL_QUIET.
+#
+#   * the NUMERATOR — GNU dd's own ``status=progress`` updates, which all three write
+#     arms already pass. dd writes them to STDERR as \r-terminated chunks; both routes
+#     reach the GUI (the uncompressed arm redirects 2>&1 inside the script, the others
+#     inherit the script's stderr, which _FlashWorker merges with stderr=STDOUT).
+#     _FlashWorker's Popen is text=True with the default newline=None — universal
+#     newlines — so each \r update arrives as ITS OWN line. Measured, not assumed:
+#     a real `dd if=/dev/zero of=/dev/null bs=1M count=400000 status=progress` through
+#     that exact Popen shape delivered one line per one-second tick.
+#
+# Neither parser matches anything a builder emits, and both are fed only the FLASH
+# worker's output, so no build log line can move the flash bar.
+_WRITE_BYTES_RE = re.compile(r"Write-bytes:\s*(\d+)\s*$")
+_DD_PROGRESS_RE = re.compile(
+    r"(?<![\d.])(\d+)\s+bytes\s+\([^)]*\)\s+copied,\s*[0-9.]+\s*s"
+    r"(?:\s*,\s*(.+?))?\s*$")
+
+
+def parse_write_total(line: str) -> int:
+    """Total bytes flash-disk.sh says it is about to write, or 0 when this is not
+    its ``Write-bytes:`` line (or the size was unreadable, which it reports as 0)."""
+    m = _WRITE_BYTES_RE.search(line)
+    return int(m.group(1)) if m else 0
+
+
+def parse_dd_progress(line: str) -> tuple[int, str]:
+    """``(bytes_written, rate)`` from one GNU dd ``status=progress`` update, else
+    ``(0, "")``. The final ``<n> bytes (…) copied, <t> s, <r> MB/s`` summary matches
+    too, which is what lands the bar on 100% at the end of a write."""
+    m = _DD_PROGRESS_RE.search(line.strip())
+    if not m:
+        return (0, "")
+    return (int(m.group(1)), (m.group(2) or "").strip())

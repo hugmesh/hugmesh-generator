@@ -683,6 +683,32 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.flash_plan_box.setVisible(False)
         lay.addWidget(self.flash_plan_box)
 
+        # ── per-image WRITE PROGRESS (#415) ───────────────────────────────────────
+        # Before #415 a flash was log lines only: `==> Writing img to /dev/sdz (this
+        # can take a while)` and then dd's byte counters scrolling past — no bar, and
+        # on a multi-image plan no way to tell image 2 of 3 from image 3 of 3.
+        #
+        # This bar is driven by BYTES, never by a timer. Numerator: GNU dd's own
+        # status=progress updates, which all three of flash-disk.sh's write arms
+        # already emit. Denominator: the `Write-bytes:` line flash-disk.sh now prints
+        # immediately before dd starts (its ART_SIZE — the UNCOMPRESSED size for a
+        # .img.xz, i.e. what actually lands on the disk). When no denominator arrives
+        # the bar goes INDETERMINATE and the label says so, rather than inventing a
+        # percentage out of elapsed time.
+        self.flash_progress_box = QtWidgets.QWidget()
+        fpb = QtWidgets.QVBoxLayout(self.flash_progress_box)
+        fpb.setContentsMargins(0, 0, 0, 0)
+        self.flash_progress_label = QtWidgets.QLabel("")
+        self.flash_progress_label.setWordWrap(True)
+        fpb.addWidget(self.flash_progress_label)
+        self.flash_progress_bar = QtWidgets.QProgressBar()
+        self.flash_progress_bar.setRange(0, 100)
+        self.flash_progress_bar.setValue(0)
+        self.flash_progress_bar.setTextVisible(False)
+        fpb.addWidget(self.flash_progress_bar)
+        self.flash_progress_box.setVisible(False)
+        lay.addWidget(self.flash_progress_box)
+
         btns = QtWidgets.QHBoxLayout()
         self.stop_all_btn = QtWidgets.QPushButton("Stop all")
         self.stop_all_btn.clicked.connect(self._stop_all)
@@ -772,6 +798,16 @@ class ProgressPage(QtWidgets.QWizardPage):
         # device timer re-enters _refresh_flash_images, and repopulating an unchanged
         # combo would reset the operator's pick under their cursor every 2.5 s.
         self._flash_image_cands: tuple[str, ...] | None = None
+        # #415 write-progress state. _flash_write_total is the denominator from
+        # flash-disk.sh's `Write-bytes:` line (0 = unknown -> indeterminate bar, never
+        # a made-up percentage); _flash_write_done is dd's own byte counter.
+        self._flash_plan_pos = 0
+        self._flash_image_index = 0        # 1-based "image N of M"
+        self._flash_image_total = 0
+        self._flash_image_name = ""
+        self._flash_write_total = 0
+        self._flash_write_done = 0
+        self._flash_rate = ""
         self._flash_queue: list = []       # Review-page plan assignments, run sequentially
         # confirmation state (#337): the extra notes the ONE flash warning shows, and
         # whether the operator declined the last one. Both are consumed inside
@@ -1243,6 +1279,16 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._flash_image_cands = None
         self.flash_image_combo.clear()
         self._flash_plan_pos = 0
+        self._flash_image_index = 0
+        self._flash_image_total = 0
+        self._flash_image_name = ""
+        self._flash_write_total = 0
+        self._flash_write_done = 0
+        self._flash_rate = ""
+        self.flash_progress_bar.setRange(0, 100)
+        self.flash_progress_bar.setValue(0)
+        self.flash_progress_label.setText("")
+        self.flash_progress_box.setVisible(False)
         self.flash_plan_table.setRowCount(0)
         self.flash_plan_box.setVisible(False)
         self.flash_group.setVisible(False)        # only an all-ok finish reveals it
@@ -2669,6 +2715,76 @@ class ProgressPage(QtWidgets.QWizardPage):
         except Exception:
             return ""
 
+    # ---- per-image WRITE PROGRESS (#415) -----------------------------------------
+    def _on_flash_line(self, s: str) -> None:
+        """The flasher worker's line slot: log it, then move the bar on BYTES.
+
+        Fed only by _FlashWorker, so no builder log line can reach these parsers."""
+        self.log.appendPlainText(s)
+        total = flash_targets.parse_write_total(s)
+        if total > 0:
+            self._flash_write_total = total
+            self._render_flash_progress()
+            return
+        done, rate = flash_targets.parse_dd_progress(s)
+        if done > 0:
+            self._flash_write_done = done
+            self._flash_rate = rate
+            self._render_flash_progress()
+
+    def _begin_flash_progress(self, artifact: str) -> None:
+        """Arm the indicator for ONE image; called from _start_flash, after the
+        confirmation was accepted and before the worker starts."""
+        self._flash_image_name = artifact
+        self._flash_write_total = 0
+        self._flash_write_done = 0
+        self._flash_rate = ""
+        if self._flash_image_total <= 0:      # the Flash… button: a plan of one
+            self._flash_image_total = 1
+            self._flash_image_index = 1
+        self._render_flash_progress()
+
+    def _render_flash_progress(self) -> None:
+        name = os.path.basename(self._flash_image_name) or "(auto-picked by the script)"
+        head = (f"Image {self._flash_image_index} of {self._flash_image_total} — "
+                f"{name}")
+        total, done = self._flash_write_total, self._flash_write_done
+        if total > 0:
+            pct = min(100, int(done * 100 // total))
+            self.flash_progress_bar.setRange(0, 100)
+            self.flash_progress_bar.setValue(pct)
+            tail = (f"{pct}% — {flash_targets.human_size(done)} of "
+                    f"{flash_targets.human_size(total)} written")
+        else:
+            # NO denominator: an indeterminate bar shows ACTIVITY. It must never be
+            # read as progress, so the label says exactly that.
+            self.flash_progress_bar.setRange(0, 0)
+            tail = (f"{flash_targets.human_size(done)} written — total size not "
+                    f"reported, so this bar shows activity, not progress"
+                    if done else "starting — waiting for the first byte count")
+        if self._flash_rate:
+            tail += f" · {self._flash_rate}"
+        self.flash_progress_label.setText(head + " — " + tail)
+        self.flash_progress_box.setVisible(True)
+
+    def _finish_flash_progress(self, code: int) -> None:
+        """Land the bar honestly: 100% only on rc=0 WITH a denominator, otherwise say
+        what happened rather than snapping a partial write to full."""
+        self.flash_progress_bar.setRange(0, 100)
+        name = os.path.basename(self._flash_image_name) or "(auto-picked)"
+        head = f"Image {self._flash_image_index} of {self._flash_image_total} — {name}"
+        if code == 0:
+            self.flash_progress_bar.setValue(100)
+            self.flash_progress_label.setText(f"{head} — written")
+        else:
+            written = flash_targets.human_size(self._flash_write_done)
+            self.flash_progress_bar.setValue(
+                min(100, int(self._flash_write_done * 100 // self._flash_write_total))
+                if self._flash_write_total > 0 else 0)
+            self.flash_progress_label.setText(
+                f"{head} — FAILED (rc={code})" +
+                (f" after {written}" if written else ""))
+
     def _set_plan_status(self, row: int, text: str, color: str) -> None:
         try:
             if row < 0 or row >= self.flash_plan_table.rowCount():
@@ -2729,6 +2845,10 @@ class ProgressPage(QtWidgets.QWizardPage):
             "No image was named for this flash, so scripts/flash-disk.sh will "
             "auto-pick the newest matching one in the work dir. Watch the "
             "\"Artifact :\" line it prints before it writes."]
+        # #415: this button writes ONE image. Set it explicitly rather than inheriting
+        # a previous plan run's N, which would label it "Image 3 of 3".
+        self._flash_image_total = 1
+        self._flash_image_index = 1
         self._start_flash(target)
 
     def _maybe_auto_flash(self) -> None:
@@ -2767,6 +2887,10 @@ class ProgressPage(QtWidgets.QWizardPage):
             # while an earlier one writes; _flash_next reads each row at the moment it
             # resolves that row, never once up front.
             self._flash_plan_pos = 0
+            # "image N of M": M is the number of ASSIGNMENTS queued, so a skipped row
+            # still advances N — the operator's count matches the table's rows.
+            self._flash_image_total = len(self._flash_queue)
+            self._flash_image_index = 0
             try:
                 self._render_flash_plan(plan)
             except Exception:
@@ -2793,6 +2917,8 @@ class ProgressPage(QtWidgets.QWizardPage):
                 f"Use the Flash… button to confirm the new device.")
             return
         self.log.appendPlainText(f"Flash-after-build: flashing {want_path} (opted in)…")
+        self._flash_image_total = 1          # #415: one image on the legacy path
+        self._flash_image_index = 1
         self._start_flash(target)
 
     def _flash_next(self) -> None:
@@ -2829,6 +2955,7 @@ class ProgressPage(QtWidgets.QWizardPage):
             try:
                 pos = self._flash_plan_pos
                 self._flash_plan_pos = pos + 1
+                self._flash_image_index = pos + 1
             except (AttributeError, RuntimeError):
                 pos = -1
             flavor = getattr(a, "flavor", flash_targets.FLAVOR_AUTO)
@@ -2995,8 +3122,19 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.flash_btn.setEnabled(False)
         self.flash_refresh_btn.setEnabled(False)
         self.log.appendPlainText(f"\n=== flashing {target.path} via scripts/flash-disk.sh ===")
+        # #415: arm the per-image indicator for THIS write. After the confirmation, so
+        # a declined flash never paints a bar; the artifact name comes off the argv, so
+        # the label can never disagree with what is actually being written.
+        try:
+            art = ""
+            if "--artifact" in argv:
+                i = argv.index("--artifact")
+                art = argv[i + 1] if i + 1 < len(argv) else ""
+            self._begin_flash_progress(art)
+        except (AttributeError, RuntimeError):
+            pass                # a page built with __new__ (direct-slot tests)
         self.flash_worker = hold_thread(_FlashWorker(argv, self.wiz.generator_dir))
-        self.flash_worker.line.connect(lambda s: self.log.appendPlainText(s))
+        self.flash_worker.line.connect(self._on_flash_line)
         self.flash_worker.done.connect(self._flash_done)
         self.flash_worker.start()
 
@@ -3005,9 +3143,17 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.flash_refresh_btn.setEnabled(True)
         # #415: record the OUTCOME on the row that just finished, BEFORE _flash_next
         # advances _flash_plan_pos to the next one.
-        self._set_plan_status(getattr(self, "_flash_plan_pos", 0) - 1,
+        try:
+            pos = self._flash_plan_pos
+        except (AttributeError, RuntimeError):
+            pos = 0
+        self._set_plan_status(pos - 1,
                               "written" if code == 0 else f"FAILED (rc={code})",
                               _FLASH_GREEN if code == 0 else _FLASH_RED)
+        try:
+            self._finish_flash_progress(code)
+        except (AttributeError, RuntimeError):
+            pass
         self._refresh_flash_targets()
         self._flash_next()                    # chain the next plan assignment (if any)
 
