@@ -3233,7 +3233,24 @@ rebrand_sysroot() {
         # still rewritten by that catch-all: unsupported. The sentinels contain neither
         # `hugmesh` nor `hugmesh-`, so the middle rules skip them; the last -e rules
         # restore them verbatim.
+        # VAULT KV BASE — issue #285, decision 38 = B (hugmesh-generator#347).
+        # An ExternalSecret's remoteRef is `key: <base>/<doc>` and <base> must equal
+        # the segment the WRITER uses: scripts/gen-cluster-secrets.sh writes under
+        # BASE="${BRAND:-hugmesh}". Before the sentinel pair below, the catch-all
+        # `hugmesh -> ORG` rule rewrote every one of those keys to the ORG knob, so
+        # the READER tracked ORG while the WRITER tracked BRAND and the two agreed
+        # only when ORG == BRAND. Measured 2026-09-17 by driving this function over
+        # the real specs/cluster tree: 143 remoteRef keys, and three of the four
+        # BRAND/ORG corners wrong — (acme,widgetco) and (hugmesh,widgetco) read
+        # `widgetco/...`, (acme,hugmesh) read `hugmesh/...`, in every case a path
+        # gen-cluster-secrets.sh never wrote, so ESO resolves nothing and the
+        # workload Secrets are never materialized. Captured FIRST and restored to
+        # BRAND LAST so the title/games/domain/registry/brand/org rules in between
+        # cannot touch it. The default brand is unaffected: the whole function
+        # early-returns on default branding, and with BRAND=hugmesh the restore is
+        # a byte no-op. Pinned by tests/scripts/test-eso-remoteref-brand.sh.
         sed -i \
+            -e "s|\(key: *['\"]\?\)hugmesh/|\1@@SDSYSVAULTBASE@@/|g" \
             -e "s|^hugmesh\.net/|@@SDSYSKEY@@/|g" \
             -e "s|\([ {(,=\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
             -e "s|hugmesh\\\\\.net/|@@SDSYSKEYESC@@/|g" \
@@ -3248,6 +3265,7 @@ rebrand_sysroot() {
             -e "s|@@SDSYSAPIGRP@@|platform.hugmesh.net|g" \
             -e "s|@@SDSYSKEYESC@@/|hugmesh\\\\.net/|g" \
             -e "s|@@SDSYSKEY@@/|hugmesh.net/|g" \
+            -e "s|@@SDSYSVAULTBASE@@/|${_brand}/|g" \
             "${f}"
     done < <(find "${SYSROOT}/var/lib/hugmesh/cluster" "${SYSROOT}/etc/hugmesh" -type f -print0 2>/dev/null)
 }
