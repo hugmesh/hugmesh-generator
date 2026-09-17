@@ -631,6 +631,45 @@ fi
 # acceptance bar for the exec seam. If it cannot run, the suite must go red rather
 # than print a reassuring line about a property nobody checked.
 PROP="${REPO}/tests/workload-console/exec_argv_property.py"
+
+# The verdict, re-derived from the raw counters in a DIFFERENT language from the one
+# that printed it. Not belt and braces: the precedence rule is exactly what was got
+# wrong once already (a run with both a real violation and a blind leg came back as
+# plain `unproven`), and a rule stated in only one place is a rule nothing can
+# contradict. It also keeps __COUNTS load-bearing, so the counters cannot quietly
+# stop being emitted. Empty/absent counters deliberately derive to a value that
+# matches no verdict, so they fail rather than pass silently.
+verdict_from_counts() {  # $1 = the payload of the __COUNTS line, marker stripped
+  printf '%s\n' "$1" | awk 'NF==3 {seen=1;
+    f=$2+0; u=$3+0;
+    print (f==0) ? "ok" : (u==0) ? "violated" : (u>=f) ? "unproven" : "violated+unproven" }
+    END { if (!seen) print "(no counters)" }'
+}
+
+# Every NON-ok wording lives in this one function so the control below drives the
+# exact sentences a reader is handed. The reassurance clause — "not a finding
+# against the allowlist … do not read this as a hazardous entry" — is the half that
+# can lie: it is true of a run whose only failures are blind legs, and FALSE the
+# moment the same run also condemned a real entry. It therefore sits on the
+# `unproven` arm and NOWHERE else, and pmsg_ctl() asserts that in both directions.
+prop_bad_message() {  # $1 = __VERDICT as printed ; $2 = the script's exit status
+  local v
+  local rc
+  v="$1"; rc="$2"
+  case "${v}" in
+    unproven)
+      printf '%s' "exec allowlist property P is UNPROVEN on this host — at least one entry could not be JUDGED and NONE of the failures above is a claim about the allowlist (see the FAILs above). An unproven property is not a passing one, and it is not a finding against the allowlist either: fix the runner, do not read this as a hazardous entry." ;;
+    violated)
+      printf '%s' "exec allowlist VIOLATES property P — see the FAILs above" ;;
+    violated+unproven)
+      printf '%s' "exec allowlist VIOLATES property P **and** part of this run is UNPROVEN — BOTH, and neither cancels the other. At least one entry was argued into breaking P and must be pinned to a whole-argv form or dropped; at least one OTHER entry could not be judged on this runner at all. Read every FAIL above individually: fixing the runner will NOT make the violation go away." ;;
+    ok)
+      printf '%s' "exec_argv_property.py printed __VERDICT ok but exited ${rc} — its verdict and its exit status disagree, so the exec allowlist property is UNPROVEN" ;;
+    *)
+      printf '%s' "exec_argv_property.py exited ${rc} without printing a verdict this wrapper understands (got '${v}') — the exec allowlist property is UNPROVEN" ;;
+  esac
+}
+
 if [ -f "${PROP}" ] && command -v python3 >/dev/null; then
   # Captured rather than streamed so the script's VERDICT line can be read back. A
   # non-zero exit ALONE cannot tell "an entry violates P" from "the check could not
@@ -640,14 +679,17 @@ if [ -f "${PROP}" ] && command -v python3 >/dev/null; then
   prop_out="$(python3 "${PROP}" "${PATCH}" 2>&1)"; prop_rc=$?
   printf '%s\n' "${prop_out}"
   prop_verdict="$(printf '%s\n' "${prop_out}" | sed -n 's/^__VERDICT //p' | tail -1)"
+  prop_counts="$(printf '%s\n' "${prop_out}" | sed -n 's/^__COUNTS //p' | tail -1)"
+  prop_derived="$(verdict_from_counts "${prop_counts}")"
+  if [ "${prop_derived}" = "${prop_verdict}" ]; then
+    ok "the property script's __VERDICT (${prop_verdict}) is what its own __COUNTS (P F U = ${prop_counts:-none}) imply, re-derived here independently"
+  else
+    bad "exec_argv_property.py printed __VERDICT '${prop_verdict}' but its own __COUNTS '${prop_counts}' imply '${prop_derived}' — the verdict and the numbers it was computed from disagree, so the exec allowlist property is UNPROVEN"
+  fi
   if [ "${prop_rc}" -eq 0 ] && [ "${prop_verdict}" = "ok" ]; then
     ok "exec allowlist holds property P (no entry can be argued into reading a file, dumping an environment, executing, or writing)"
-  elif [ "${prop_verdict}" = "unproven" ]; then
-    bad "exec allowlist property P is UNPROVEN on this host — at least one entry could not be JUDGED (see the FAILs above). An unproven property is not a passing one, and it is not a finding against the allowlist either: fix the runner, do not read this as a hazardous entry."
-  elif [ "${prop_verdict}" = "violated" ]; then
-    bad "exec allowlist VIOLATES property P — see the FAILs above"
   else
-    bad "exec_argv_property.py exited ${prop_rc} without printing a verdict — the exec allowlist property is UNPROVEN"
+    bad "$(prop_bad_message "${prop_verdict}" "${prop_rc}")"
   fi
 else
   bad "exec_argv_property.py or python3 missing — the exec allowlist property is UNPROVEN"
@@ -704,17 +746,77 @@ if [ -f "${PROP}" ] && command -v python3 >/dev/null; then
   # decay into the other's synonym. `cut` is the violated side because it trips the
   # documentation leg without a behavioural battery, so this control stays cheap.
   vtl() {  # $1 = label ; $2 = entries ; $3 = expected __VERDICT
-    local out v
+    local out
+    local v
+    local c
+    local d
     out="$(python3 "${PROP}" --entries "$2" 2>&1)"
     v="$(printf '%s\n' "${out}" | sed -n 's/^__VERDICT //p' | tail -1)"
-    if [ "${v}" = "$3" ]; then
-      ok "control: $1 — reported __VERDICT $3"
+    c="$(printf '%s\n' "${out}" | sed -n 's/^__COUNTS //p' | tail -1)"
+    d="$(verdict_from_counts "${c}")"
+    if [ "${v}" = "$3" ] && [ "${d}" = "$3" ]; then
+      ok "control: $1 — reported __VERDICT $3, and its own counters (${c}) independently imply $3"
     else
-      bad "control: $1 — expected __VERDICT $3, got '${v}'"
+      bad "control: $1 — expected __VERDICT $3 from counters implying $3, got '${v}' from counters '${c}' implying '${d}'"
     fi
   }
   vtl "an unprobeable entry is UNPROVEN, not a finding against the list" "hugmesh-no-such-command" unproven
   vtl "an entry that really can read a file is VIOLATED, not unproven" "cut" violated
+  # NEGATIVE 3c — the MIXED state, which is the one that used to be misreported. With
+  # `unproven` winning outright, a run carrying BOTH a real violation and a blind leg
+  # came back as plain `unproven`, and the wrapper then told the reader in so many
+  # words not to read it as a hazardous entry — while `cut` sat right there in the
+  # FAILs, argued into reading an arbitrary file. Nothing was skipped and rc stayed 1,
+  # so only the SUMMARY lied; on a suite whose whole history is people trusting the
+  # summary, that is the failure mode, not a cosmetic one. Both pure controls above
+  # stayed green through it because neither run mixes the two.
+  vtl "a run with BOTH a real violation and a blind entry is neither of them alone" \
+      "cut,hugmesh-no-such-command" "violated+unproven"
+  # Order must not decide the verdict either: the blind entry first would restore the
+  # old precedence by accident if the rule were ever written as "first one wins".
+  vtl "the mixed verdict does not depend on which entry comes first" \
+      "hugmesh-no-such-command,cut" "violated+unproven"
+  # NEGATIVE 3d — the verdict is only worth having if the SENTENCE it produces is true
+  # for it. These drive prop_bad_message() directly, because the real call site can
+  # only ever exercise whichever verdict this host happens to produce (ok), leaving
+  # every other arm — including the one that was wrong — unexecuted by the suite.
+  pmsg_ctl() {  # $1 = label ; $2 = verdict ; $3 = rc ; $4,$5 = must contain ; $6 = must NOT contain
+    local label
+    local verdict
+    local rc
+    local want_a
+    local want_b
+    local nope
+    local msg
+    label="$1"; verdict="$2"; rc="$3"; want_a="$4"; want_b="$5"; nope="$6"
+    msg="$(prop_bad_message "${verdict}" "${rc}")"
+    if [ -n "${want_a}" ] && ! printf '%s' "${msg}" | grep -F "${want_a}" >/dev/null; then
+      bad "control: ${label} — the message for __VERDICT '${verdict}' does not say '${want_a}': ${msg}"
+      return
+    fi
+    if [ -n "${want_b}" ] && ! printf '%s' "${msg}" | grep -F "${want_b}" >/dev/null; then
+      bad "control: ${label} — the message for __VERDICT '${verdict}' does not say '${want_b}': ${msg}"
+      return
+    fi
+    if [ -n "${nope}" ] && printf '%s' "${msg}" | grep -F "${nope}" >/dev/null; then
+      bad "control: ${label} — the message for __VERDICT '${verdict}' still says '${nope}', which is FALSE for it: ${msg}"
+      return
+    fi
+    ok "control: ${label} — the summary a reader gets for __VERDICT '${verdict}' is true for it"
+  }
+  REASSURE="do not read this as a hazardous entry"
+  pmsg_ctl "a purely blind run is the ONLY one allowed to reassure" \
+    unproven 1 "UNPROVEN on this host" "${REASSURE}" ""
+  pmsg_ctl "a violation is never softened by the blind-run wording" \
+    violated 1 "VIOLATES property P" "" "${REASSURE}"
+  pmsg_ctl "the mixed verdict states BOTH and reassures about neither" \
+    violated+unproven 1 "VIOLATES property P" "UNPROVEN" "${REASSURE}"
+  pmsg_ctl "a verdict this wrapper does not understand fails closed" \
+    hugmesh-not-a-verdict 1 "UNPROVEN" "" "${REASSURE}"
+  pmsg_ctl "an empty verdict line fails closed rather than silently" \
+    "" 1 "UNPROVEN" "" "${REASSURE}"
+  pmsg_ctl "__VERDICT ok with a non-zero exit is a contradiction, not a pass" \
+    ok 1 "UNPROVEN" "verdict and its exit status disagree" "${REASSURE}"
   # NEGATIVE 4a/4b — the OPERAND sub-class: a reader that needs NO FLAG AT ALL.
   # `base64 /var/run/secrets/workload-console-read/token` is the whole exploit, and
   # both legs used to wave it through — the doc leg because it only ever read the

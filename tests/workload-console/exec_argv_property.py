@@ -211,11 +211,19 @@ _ESC_SEQ = re.compile(r"\x1b[ -/]*[0-~]")                        # remaining 2-c
 
 
 def strip_terminal_escapes(text):
-    """The help text with terminal control sequences removed, and nothing else."""
+    """The help text with terminal control SEQUENCES removed, and nothing else.
+
+    "Nothing else" is load-bearing, and parser_self_test() pins it: a BEL that
+    TERMINATES an OSC leaves with the sequence it closes, and a bare BEL anywhere
+    else STAYS. This used to end in a blanket ``text.replace("\x07", "")``, which
+    deleted every BEL in the document -- the #405 shape one byte smaller, the
+    parser quietly tidying away something it cannot explain and still reporting
+    green. Decoration this module does not understand must reach the residual
+    guard and be called UNPROVEN, not be scrubbed on the way past.
+    """
     text = _OSC_SEQ.sub("", text)
     text = _CSI_SEQ.sub("", text)
-    text = _ESC_SEQ.sub("", text)
-    return text.replace("\x07", "")
+    return _ESC_SEQ.sub("", text)
 
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -873,6 +881,23 @@ def parser_self_test(ok, bad):
             % (len(blocks), ", ".join(absent), "is" if len(absent) == 1 else "are"))
         return False
 
+    # The other half of strip_terminal_escapes()'s contract. The fixtures prove it
+    # removes the decoration coreutils 9.11 emits; they cannot prove it removes
+    # NOTHING ELSE, because that capture happens to carry no BEL at all (measured:
+    # 0 BEL bytes in 6417). So the boundary case is driven by hand -- two OSCs
+    # terminated by BEL must go WITH their BELs, and the bare BEL after them must
+    # survive untouched.
+    bel_in = "  \x1b]8;;http://example/x\x07-a, --all\x1b]8;;\x07  do it\x07\n"
+    bel_want = "  -a, --all  do it\x07\n"
+    bel_got = strip_terminal_escapes(bel_in)
+    if bel_got != bel_want:
+        bad("parser self-test: strip_terminal_escapes() breaks its own contract -- an "
+            "OSC terminated by BEL must leave WITH that BEL and a bare BEL must stay "
+            "where it is. Wanted %r, got %r. A sanitiser that deletes bytes it cannot "
+            "explain can hide the very decoration the residual guard exists to catch."
+            % (bel_want, bel_got))
+        return False
+
     want = "takes a PATH-valued argument"
     if not [t for t, w in doc_hazards("du", stripped, blocks)
             if t == "--files0-from" and want in w]:
@@ -1054,11 +1079,28 @@ def main(argv):
         return 2
     P, F, U = check_entries(entries, print)
     print("__SUB %d %d" % (P, F))
-    # The caller needs to tell a FINDING from a BLIND SPOT. Both fail the run; only
-    # one of them is a claim about the allowlist. "unproven" wins over "violated"
-    # when both happened, because a run with a blind leg cannot honestly call any
-    # entry clean either.
-    print("__VERDICT %s" % ("unproven" if U else "violated" if F else "ok"))
+    print("__COUNTS %d %d %d" % (P, F, U))
+    # The caller needs to tell a FINDING from a BLIND SPOT -- and when a run has
+    # BOTH, it must not be handed either one alone. "unproven" used to win outright,
+    # so a run that condemned a genuinely hazardous entry ALONGSIDE an unprobeable
+    # one was summarised by the wrapper as "not a finding against the allowlist":
+    # true of the blind entry, FALSE of the hazardous one. This suite's entire
+    # history (#405) is readers trusting the summary line instead of the whole
+    # output, so the mixed state gets its own name rather than borrowing one.
+    #   F == 0      -> ok
+    #   U == 0      -> violated           every failure is a claim about the list
+    #   U >= F      -> unproven           every failure is a blind leg
+    #   0 < U < F   -> violated+unproven  both, and neither may be dropped
+    # Every non-ok verdict still fails the run; none of this softens an exit status.
+    if not F:
+        verdict = "ok"
+    elif not U:
+        verdict = "violated"
+    elif U >= F:
+        verdict = "unproven"
+    else:
+        verdict = "violated+unproven"
+    print("__VERDICT %s" % verdict)
     return 1 if F else 0
 
 
