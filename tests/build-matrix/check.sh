@@ -2269,7 +2269,37 @@ PY
 # retry that isolates a failing module, the machine-readable selinux-modules.status
 # derived from `semodule -l`, the selinux-load-failed marker on any non-loaded
 # module, and the provision.sh <-> tests/qemu/assertions.sh status matched pair.
-SLX_EXPECTED=147
+# 161 = 147 + the 14 assertions the 2026-08-22 "SELinux is inert at boot" round added
+# across five commits (hugmesh/hugmesh-generator#408). DELIBERATE, and accounted for by
+# NAME rather than by delta: the delegate was run standalone at 23660a5d (147 emitted,
+# 0 failed) and at this commit (161 emitted, 0 failed), and the two assertion-name lists
+# were sorted and diffed with embedded line numbers normalised — 14 added, 0 removed,
+# 0 duplicated (`sort | uniq -d` empty). Each addition, with the commit that made it:
+#   29272055 "gate node-policy modules on the policy STORE, not on headers" — 4 C3b legs:
+#     headers-without-modules still succeeds; a module whose upstream .pp is ABSENT is
+#     skipped even though its headers are present; the manifest never names an unloadable
+#     module (so check_modules() can pass); the skip message names the package that would
+#     fix it.
+#   8fe62699 "/usr/sbin .fc rules can never match — usrmerge broke every transition" —
+#     1 C3c leg: every /usr/sbin exec rule also labels the /usr/bin path it resolves to.
+#   89a131cd "a relabel that changed nothing must not count as a relabel" — 2 C3d legs:
+#     a relabel that left work pending is treated as FAILED (so /.autorelabel is
+#     re-raised); a genuinely clean relabel still passes (the check is not always-red).
+#   6521e7b8 "setfiles labels EVERY path 'kernel' — use restorecon, which works" — 2 C3e
+#     legs: restorecon runs first; setfiles is not run when restorecon exists.
+#   2398e71c "refuse to ship policy that nothing will load" — 5 C3f legs: USE=selinux on
+#     openrc => the init will load policy; openrc merged WITHOUT USE=selinux is positively
+#     rejected; an image with no openrc USE record is UNKNOWN, not a silent pass or a
+#     false failure; marking selinux-aware FAILS when nothing will load the policy; a
+#     capable image is still marked (the check is not always-red).
+# All fourteen are distinct assertions over production behaviour, each one half of a
+# positive/negative pair — none is a duplicate or a loop artefact, so the EMITTER is
+# right and the PIN is what went stale. (Twelve further names differ between the two
+# runs purely because a builder line number is embedded in their text, and two more read
+# "all 6 mandatory .pp" where they read "all 7" — the store gate now skips the module
+# whose upstream .pp is absent. Neither kind changes the count; the nine per-module
+# "compiles against real refpolicy headers" legs are 9 in both runs.)
+SLX_EXPECTED=161
 SLX_PASS=0; SLX_FAIL=0
 run_selinux_policy_checks() {
     local out="${TMP_DIR}/selinux-policy.out"
