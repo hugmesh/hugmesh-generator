@@ -279,7 +279,18 @@ recreate_job() { # <namespace> <job> <kustomize-dir>
   # from the wait — which reads as "the job failed" rather than "the job was
   # never created". So: wait for the object to be genuinely GONE (not merely
   # unreadable), then apply with its exit status CHECKED and retried.
+  #
+  # THE 4th ARGUMENT IS A CONCURRENCY FIX, not a convenience. `kubectl apply -k`
+  # applies the WHOLE kustomization, and kubectl honours no ArgoCD sync-wave: for
+  # manifests/casdoor that means re-creating casdoor-init AND the three
+  # derived-role sync Jobs at once, the precise race that banned the built-in
+  # admin on 2026-09-16 (hugmesh-generator#396). It is only latent because those
+  # three usually still exist here — until ttlSecondsAfterFinished: 600 has
+  # reaped them, and then this apply recreates them alongside the Job it was
+  # asked to restart. Name a single manifest file and only that file is applied;
+  # ArgoCD re-creates the rest, in wave order, on its next sync.
   local ns="$1" job="$2" dir="$3" i rc
+  local only="${4:-}"
   kubectl -n "${ns}" delete job "${job}" --ignore-not-found --force --grace-period=0 --wait=false >/dev/null 2>&1 || true
   kubectl -n "${ns}" delete pods -l "job-name=${job}" --ignore-not-found --force --grace-period=0 --wait=false >/dev/null 2>&1 || true
   # `get job` can transiently succeed while the object carries a
@@ -293,13 +304,68 @@ recreate_job() { # <namespace> <job> <kustomize-dir>
   # briefly refuse the recreate. Three attempts, then fail LOUDLY — a silent
   # miss here takes out every step that depends on this Job.
   for i in 1 2 3; do
-    if kubectl apply -k "${dir}" >/dev/null 2>&1; then
+    if [ -n "${only}" ]; then
+      if kubectl apply -f "${dir}/${only}" >/dev/null 2>&1; then
+        return 0
+      fi
+    elif kubectl apply -k "${dir}" >/dev/null 2>&1; then
       return 0
     fi
     rc=$?
     sleep 5
   done
-  echo "FATAL: could not (re)create job ${ns}/${job} from ${dir} after 3 attempts (last kubectl apply rc=${rc:-?}). Everything downstream of this Job would fail with a misleading NotFound." >&2
+  echo "FATAL: could not (re)create job ${ns}/${job} from ${dir}${only:+/${only}} after 3 attempts (last kubectl apply rc=${rc:-?}). Everything downstream of this Job would fail with a misleading NotFound." >&2
+  return 1
+}
+
+
+# Wait for a Job to reach a TERMINAL state and, when it is not success, PRINT THE
+# EVIDENCE while the evidence still exists.
+#
+# `kubectl wait --for=condition=complete --timeout=Ns` cannot see a FAILED Job. It
+# blocks for the entire timeout and then says
+#     error: timed out waiting for the condition on jobs/<job>
+# which reads as "slow" and can mean "dead ten minutes ago". And every Job in
+# manifests/casdoor sets ttlSecondsAfterFinished: 600, so the command the old
+# warning told the operator to run — `kubectl -n <ns> logs job/<job>` — returns
+# "No resources found" a few minutes later. Both bit on 2026-09-16
+# (hugmesh-generator#396): the bring-up died at the 600s mark on a casdoor-init
+# that was still running and would succeed 7m37s afterwards, and by the time
+# anyone looked, the Job it named was gone.
+wait_job() { # <namespace> <job> <timeout-seconds>
+  local ns="$1"
+  local job="$2"
+  local deadline="$3"
+  local waited=0
+  local succeeded=""
+  local failed=""
+  local reason=""
+  local pod=""
+  while [ "${waited}" -lt "${deadline}" ]; do
+    succeeded="$(kubectl -n "${ns}" get job "${job}" -o jsonpath='{.status.succeeded}' 2>/dev/null)" || succeeded=""
+    case "${succeeded}" in
+      ''|0) ;;
+      *) return 0 ;;
+    esac
+    failed="$(kubectl -n "${ns}" get job "${job}" -o jsonpath='{range .status.conditions[?(@.type=="Failed")]}{.status}{end}' 2>/dev/null)" || failed=""
+    if [ "${failed}" = "True" ]; then
+      reason="$(kubectl -n "${ns}" get job "${job}" -o jsonpath='{range .status.conditions[?(@.type=="Failed")]}{.reason}{" "}{.message}{end}' 2>/dev/null)" || reason=""
+      warn "${ns}/${job} FAILED after ${waited}s: ${reason:-no reason reported}"
+      break
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+  if [ "${failed}" != "True" ]; then
+    warn "${ns}/${job} did not reach a terminal state within ${deadline}s"
+  fi
+  warn "dumping ${ns}/${job} now — ttlSecondsAfterFinished reaps it (and its logs) shortly:"
+  kubectl -n "${ns}" get job "${job}" -o wide >&2 2>/dev/null || true
+  kubectl -n "${ns}" describe job "${job}" 2>/dev/null | sed -n '/^Events:/,$p' >&2 || true
+  for pod in $(kubectl -n "${ns}" get pods -l "job-name=${job}" -o name 2>/dev/null); do
+    echo "    ---- ${pod} ----" >&2
+    kubectl -n "${ns}" logs "${pod}" --all-containers --tail=80 >&2 2>/dev/null || true
+  done
   return 1
 }
 
@@ -1563,10 +1629,23 @@ SHIM
   #     landed its Secrets — retrigger it once, same recreate idiom as
   #     vault-pki-init.
   # ───────────────────────────────────────────────────────────────────────
+  #     ONE MANIFEST, NOT THE DIRECTORY. manifests/casdoor holds four PostSync
+  #     hook Jobs that all log in as the same built-in/admin account, ordered by
+  #     argocd.argoproj.io/sync-wave — and `kubectl apply -k` honours no wave. Re-
+  #     applying the whole directory therefore re-creates the three wave-1 sync
+  #     Jobs alongside casdoor-init whenever ttlSecondsAfterFinished has already
+  #     reaped them, which is the exact four-way race that tripped casdoor's
+  #     sign-in throttle and killed a bring-up on 2026-09-16
+  #     (hugmesh-generator#396). ArgoCD re-creates the other three itself, in
+  #     wave order, on its next sync.
+  #     THE TIMEOUT IS 20 MINUTES, and that is not padding: casdoor's sign-in
+  #     lockout is 15 minutes, so any wait shorter than that can — and did —
+  #     expire while the cluster is merely serving out a ban it will recover from
+  #     on its own. The old 600s expired 7m37s before the Job succeeded.
   log "Re-running casdoor-init now that Vault KV + ESO secrets exist"
-  recreate_job hugmesh-pki casdoor-init "${CLUSTER_DIR}/manifests/casdoor"
-  kubectl -n hugmesh-pki wait --for=condition=complete job/casdoor-init --timeout=600s \
-    || { warn "casdoor-init did not complete — 'kubectl -n hugmesh-pki logs job/casdoor-init'"; exit 1; }
+  recreate_job hugmesh-pki casdoor-init "${CLUSTER_DIR}/manifests/casdoor" init-job.yaml
+  wait_job hugmesh-pki casdoor-init 1200 \
+    || { warn "casdoor-init did not complete (evidence dumped above)"; exit 1; }
 
   # Resolve/generate the shared e2e password BEFORE seed-accounts.sh runs (below)
   # and BEFORE the test-seed-passwords Secret is created (further down): this
