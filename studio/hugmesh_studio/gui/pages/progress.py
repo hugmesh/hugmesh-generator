@@ -66,7 +66,7 @@ from .. import console
 from .. import flag_badges
 from ..tray import write_build_status
 from ...core import build_sessions
-from ...core import flash_targets
+from ...core import flash_targets, flash_validate
 from ...core import qemu_tests
 from ...core import secret_files
 from ...core.emerge_packages import (
@@ -316,6 +316,32 @@ class _FlashWorker(QtCore.QThread):
         for ln in proc.stdout:
             self.line.emit(ln.rstrip("\n"))
         self.done.emit(proc.wait())
+
+
+class _ImageCheckWorker(QtCore.QThread):
+    """Runs the #415 image validator off the GUI thread (flash_validate.check_image).
+
+    It NEVER opens a device and NEVER flashes: every check is a read of the ARTIFACT
+    (stat, the first 32 KiB, `xz --robot --list`, and hashlib when the build left a
+    checksum). It is a thread because hashing a multi-GiB image, and the xz index read
+    on a slow disk, would otherwise freeze the window."""
+    done = Signal(object)          # list[flash_validate.ImageReport]
+
+    def __init__(self, jobs: list[dict]):
+        super().__init__()
+        self._jobs = jobs
+
+    def run(self) -> None:
+        out = []
+        for j in self._jobs:
+            try:
+                out.append(flash_validate.check_image(**j))
+            except Exception as e:      # a check must never take the window with it
+                out.append(flash_validate.ImageReport(
+                    j.get("path", ""), j.get("device_path", ""),
+                    (flash_validate.Check("check", flash_validate.BAD,
+                                          f"the check itself failed: {e}"),)))
+        self.done.emit(out)
 
 
 class _DetachedLogWindow(QtWidgets.QWidget):
@@ -642,6 +668,16 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.flash_image_combo.setSizeAdjustPolicy(
             QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         r1.addWidget(self.flash_image_combo, 1)
+        self.flash_check_btn = QtWidgets.QPushButton("Check image(s)")
+        self.flash_check_btn.setToolTip(
+            "Validate the selected image(s) WITHOUT flashing: the file exists and is "
+            "readable, its format magic is right (xz container / ISO9660 / MBR or "
+            "GPT), the size that will actually be WRITTEN fits the target (an .img.xz "
+            "expands — the size on disk is not the size written), the name carries the "
+            "target's arch and role and the planned flavour, and the sha256 matches "
+            "when the build left one. Nothing is written.")
+        self.flash_check_btn.clicked.connect(self._check_images_clicked)
+        r1.addWidget(self.flash_check_btn)
         fg.addLayout(r1)
         # ── row 2: WHICH DEVICE (unchanged) ───────────────────────────────────────
         r2 = QtWidgets.QHBoxLayout()
@@ -655,6 +691,14 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.flash_btn.clicked.connect(self._flash_clicked)
         r2.addWidget(self.flash_btn)
         fg.addLayout(r2)
+        # ── row 3: the validator's INLINE report (#415 D) ─────────────────────────
+        # Read-only text, never a dialog: a modal here would deadlock the offscreen
+        # suite, and the house rule keeps confirm_flash as the ONE dialog on this page.
+        self.flash_check_out = QtWidgets.QPlainTextEdit()
+        self.flash_check_out.setReadOnly(True)
+        self.flash_check_out.setMaximumHeight(150)
+        self.flash_check_out.setVisible(False)
+        fg.addWidget(self.flash_check_out)
         self.flash_group.setVisible(False)
         lay.addWidget(self.flash_group)          # below the splitter, beside the action bar
 
@@ -793,6 +837,9 @@ class ProgressPage(QtWidgets.QWizardPage):
         # worker slot, never flash_worker's: a flash plan and a device-test run are
         # independent opt-ins and must not steal each other's done signal.
         self.qemu_worker: _FlashWorker | None = None
+        # #415: the read-only image validator's thread — its OWN slot, never
+        # flash_worker's, so a check can never be mistaken for a write in progress.
+        self.check_worker: _ImageCheckWorker | None = None
         self._flash_targets: list = []
         # #415: the last candidate tuple the Image combo was built from. The 2.5 s
         # device timer re-enters _refresh_flash_images, and repopulating an unchanged
@@ -1289,6 +1336,8 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.flash_progress_bar.setValue(0)
         self.flash_progress_label.setText("")
         self.flash_progress_box.setVisible(False)
+        self.flash_check_out.setPlainText("")
+        self.flash_check_out.setVisible(False)
         self.flash_plan_table.setRowCount(0)
         self.flash_plan_box.setVisible(False)
         self.flash_group.setVisible(False)        # only an all-ok finish reveals it
@@ -2714,6 +2763,61 @@ class ProgressPage(QtWidgets.QWizardPage):
             return (combo.currentData() or "") if combo is not None else ""
         except Exception:
             return ""
+
+    # ---- VALIDATE the image(s), WITHOUT flashing (#415 D) -------------------------
+    def _check_jobs(self) -> list[dict]:
+        """One check job per image that a Flash would write, with the target it would
+        be written to.
+
+        A queued PLAN is checked row by row (each row's chosen image against THAT
+        row's device, role, arch and planned flavour); otherwise the standalone pair —
+        the Image combo's pick against the Device combo's target — is checked. A plan
+        row with no image resolved still produces a job, so the report says so instead
+        of quietly listing one image fewer than the table shows."""
+        jobs: list[dict] = []
+        try:
+            rows = self.flash_plan_table.rowCount()
+        except (AttributeError, RuntimeError):
+            rows = 0
+        if rows:
+            for i, a in enumerate(getattr(self.wiz, "flash_plan", None) or []):
+                if i >= rows:
+                    break
+                jobs.append({"path": self._plan_image_for(i),
+                             "device_size": a.target.size,
+                             "device_path": a.target.path,
+                             "role": a.role, "arch": a.arch,
+                             "flavor": getattr(a, "flavor",
+                                               flash_targets.FLAVOR_AUTO)})
+            if jobs:
+                return jobs
+        target = self._selected_target()
+        role, arch = self._flash_role_arch()
+        return [{"path": self._selected_image(),
+                 "device_size": target.size if target is not None else 0,
+                 "device_path": target.path if target is not None else "",
+                 "role": role, "arch": arch,
+                 "flavor": flash_targets.FLAVOR_AUTO}]
+
+    def _check_images_clicked(self) -> None:
+        """The Check image(s) button. READ-ONLY: it can never write, and it is not a
+        route into _start_flash — there is no confirmation here because there is
+        nothing to confirm."""
+        if self.check_worker is not None and self.check_worker.isRunning():
+            return
+        jobs = self._check_jobs()
+        self.flash_check_out.setVisible(True)
+        self.flash_check_out.setPlainText(
+            f"Checking {len(jobs)} image(s)… (read-only — nothing is written)")
+        self.flash_check_btn.setEnabled(False)
+        self.check_worker = hold_thread(_ImageCheckWorker(jobs))
+        self.check_worker.done.connect(self._on_check_done)
+        self.check_worker.start()
+
+    def _on_check_done(self, reports) -> None:
+        self.flash_check_btn.setEnabled(True)
+        self.flash_check_out.setVisible(True)
+        self.flash_check_out.setPlainText(flash_validate.report_text(reports))
 
     # ---- per-image WRITE PROGRESS (#415) -----------------------------------------
     def _on_flash_line(self, s: str) -> None:

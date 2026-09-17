@@ -557,3 +557,206 @@ def test_a_failed_write_does_not_snap_the_bar_to_100(page):
     page._finish_flash_progress(0)
     assert page.flash_progress_bar.value() == 100
     assert page.flash_progress_label.text().endswith("written")
+
+
+# ══ D. the validator: check the image(s) WITHOUT flashing ═══════════════════════════
+from hugmesh_studio.core import flash_validate as fv                # noqa: E402
+
+GIB = 1 << 30
+
+
+def _img(tmp_path, name, *, size=64 << 20, gpt=True):
+    """A minimally-plausible whole-disk .img: a partition-table signature plus bulk."""
+    p = tmp_path / name
+    head = bytearray(0x8010)
+    if gpt:
+        head[510:512] = b"\x55\xaa"
+        head[512:520] = b"EFI PART"
+    p.write_bytes(bytes(head) + b"\0" * max(0, size - len(head)))
+    return str(p)
+
+
+def _iso(tmp_path, name, *, size=64 << 20):
+    p = tmp_path / name
+    head = bytearray(0x8010)
+    head[0x8001:0x8006] = b"CD001"
+    p.write_bytes(bytes(head) + b"\0" * max(0, size - len(head)))
+    return str(p)
+
+
+def test_validator_passes_a_sane_image_and_says_what_it_did_not_check(tmp_path):
+    p = _img(tmp_path, "b-x86-amd64-omnibus-prod-1.img")
+    r = fv.check_image(p, device_size=64 * GIB, device_path="/dev/sdb",
+                       role="omnibus", arch="x86")
+    assert r.ok
+    names = {c.name: c for c in r.checks}
+    assert names["exists"].state == fv.OK
+    assert names["format"].state == fv.OK and "GPT" in names["format"].detail
+    assert names["size"].state == fv.OK
+    assert names["naming"].state == fv.OK
+    # the build wrote no checksum -> NOT VERIFIED, never a silent pass
+    assert names["checksum"].state == fv.SKIP
+    assert "checksum" in r.unverified
+    assert "not verified" in r.text()
+
+
+def test_validator_catches_an_image_too_big_for_the_device(tmp_path):
+    p = _img(tmp_path, "b-x86-amd64-omnibus-prod-1.img", size=64 << 20)
+    r = fv.check_image(p, device_size=32 << 20, device_path="/dev/sdb",
+                       role="omnibus", arch="x86")
+    assert not r.ok
+    bad = [c for c in r.checks if c.state == fv.BAD]
+    assert len(bad) == 1 and bad[0].name == "size"
+    assert "will not fit" in bad[0].detail
+
+
+def test_validator_catches_a_missing_a_truncated_and_a_headless_image(tmp_path):
+    missing = fv.check_image(str(tmp_path / "gone.img"), role="omnibus", arch="x86")
+    assert not missing.ok and missing.checks[0].name == "exists"
+
+    tiny = _img(tmp_path, "b-x86-amd64-omnibus-prod-2.img", size=4096)
+    r = fv.check_image(tiny, device_size=64 * GIB, role="omnibus", arch="x86")
+    assert not r.ok
+    assert any(c.name == "size" and "too small" in c.detail for c in r.checks)
+
+    headless = tmp_path / "b-x86-amd64-omnibus-prod-3.img"
+    headless.write_bytes(b"\0" * (64 << 20))       # no MBR sig, no GPT header
+    r2 = fv.check_image(str(headless), device_size=64 * GIB, role="omnibus",
+                        arch="x86")
+    assert not r2.ok
+    assert any(c.name == "format" and "no partition table" in c.detail
+               for c in r2.checks)
+
+
+def test_validator_catches_the_wrong_arch_role_and_flavour(tmp_path):
+    p = _iso(tmp_path, "b-rpi5-arm64-backend-prod-1.live.iso")
+    r = fv.check_image(p, device_size=64 * GIB, device_path="/dev/sdb",
+                       role="omnibus", arch="x86", flavor="installer")
+    assert not r.ok
+    naming = [c for c in r.checks if c.name == "naming"][0]
+    assert naming.state == fv.BAD
+    assert "does NOT carry" in naming.detail and "not the planned 'installer'" \
+        in naming.detail
+
+
+def test_validator_verifies_a_checksum_when_the_build_left_one(tmp_path):
+    import hashlib
+    p = _img(tmp_path, "b-x86-amd64-omnibus-prod-1.img")
+    digest = hashlib.sha256(open(p, "rb").read()).hexdigest()
+    (tmp_path / "SHA256SUMS").write_text(
+        f"{digest}  {os.path.basename(p)}\n", encoding="utf-8")
+    r = fv.check_image(p, device_size=64 * GIB, role="omnibus", arch="x86")
+    assert r.ok
+    ck = [c for c in r.checks if c.name == "checksum"][0]
+    assert ck.state == fv.OK and "SHA256SUMS" in ck.detail
+    # and a WRONG sum is caught
+    (tmp_path / "SHA256SUMS").write_text(
+        f"{'0' * 64}  {os.path.basename(p)}\n", encoding="utf-8")
+    r2 = fv.check_image(p, device_size=64 * GIB, role="omnibus", arch="x86")
+    assert not r2.ok
+    assert any(c.name == "checksum" and "MISMATCH" in c.detail for c in r2.checks)
+
+
+def test_validator_handles_a_real_xz_artifact(tmp_path):
+    """The default-build shape: a .img.xz whose WRITE size is the uncompressed size,
+    not the file size. Built with real xz so the index is real."""
+    raw = tmp_path / "b-x86-amd64-omnibus-prod-1.img"
+    raw.write_bytes(b"\0" * (64 << 20))
+    subprocess.run(["xz", "-0", "-T1", str(raw)], check=True)
+    p = str(raw) + ".xz"
+    assert os.path.getsize(p) < (1 << 20)          # tiny on disk…
+    assert fv.uncompressed_size(p) == 64 << 20     # …64 MiB written
+    r = fv.check_image(p, device_size=32 << 20, device_path="/dev/sdb",
+                       role="omnibus", arch="x86", flavor="img")
+    assert not r.ok, "a 64 MiB write onto a 32 MiB device must be refused"
+    assert any(c.name == "size" and "will not fit" in c.detail for c in r.checks)
+    r2 = fv.check_image(p, device_size=64 * GIB, role="omnibus", arch="x86",
+                        flavor="img")
+    assert r2.ok
+    assert any(c.name == "format" and "valid xz" in c.detail for c in r2.checks)
+    # a corrupted xz is caught by the magic, not by writing it
+    bad = tmp_path / "b-x86-amd64-omnibus-prod-9.img.xz"
+    bad.write_bytes(b"not an xz stream at all" + b"\0" * (32 << 20))
+    r3 = fv.check_image(str(bad), device_size=64 * GIB, role="omnibus", arch="x86")
+    assert not r3.ok
+    assert any(c.name == "format" and "no xz magic" in c.detail for c in r3.checks)
+
+
+def test_validator_refuses_a_non_flashable_file(tmp_path):
+    p = tmp_path / "b-x86-amd64-omnibus-prod-1.fs.tar.xz"
+    p.write_bytes(b"\0" * (64 << 20))
+    r = fv.check_image(str(p), device_size=64 * GIB, role="omnibus", arch="x86")
+    assert not r.ok and r.checks[0].name == "kind"
+
+
+def test_check_button_reports_inline_and_writes_nothing(page, qapp, tmp_path,
+                                                        monkeypatch):
+    """The GUI seam: the button runs the checks off-thread, prints them into the
+    inline pane, and never reaches _start_flash."""
+    p = _img(tmp_path, "b-x86-amd64-omnibus-prod-1.img")
+    page._entry_artifact_sets = {"e1": (p,)}
+    monkeypatch.setattr(ft, "list_targets", lambda: [SDB])
+    monkeypatch.setattr(page, "_flash_role_arch", lambda: ("omnibus", "x86"))
+    started = []
+    monkeypatch.setattr(page, "_start_flash",
+                        lambda *a, **k: started.append(a))
+    page._refresh_flash_targets()
+    assert page.flash_check_out.isHidden()
+    page._check_images_clicked()
+    page.check_worker.wait(20000)
+    for _ in range(200):
+        qapp.processEvents()
+        if "checked" in page.flash_check_out.toPlainText() or \
+                "PROBLEM" in page.flash_check_out.toPlainText():
+            break
+    out = page.flash_check_out.toPlainText()
+    assert not page.flash_check_out.isHidden()
+    assert "Nothing has been written." in out
+    assert os.path.basename(p) in out and "/dev/sdb" in out
+    assert started == []                      # never a route into a write
+
+
+def test_check_button_checks_every_plan_row(page, qapp, tmp_path, monkeypatch):
+    a = _img(tmp_path, "b-x86-amd64-omnibus-prod-1.img")
+    b = _iso(tmp_path, "b-rpi5-arm64-backend-prod-2.live.iso")
+    plan = [ft.FlashAssignment(SDB, "omnibus.x86", "omnibus", "x86", str(tmp_path)),
+            ft.FlashAssignment(SDC, "backend.rpi5", "backend", "arm64", str(tmp_path))]
+    page._entry_artifact_sets = {"omnibus.x86": (a,), "backend.rpi5": (b,)}
+    page._entry_artifacts = {}
+    page.wiz.flash_plan = list(plan)
+    page.log = _Lines()
+    monkeypatch.setattr(ft, "list_targets", lambda: [SDB, SDC])
+    monkeypatch.setattr(page, "_start_flash", lambda *a, **k: None)
+    page._maybe_auto_flash()
+    jobs = page._check_jobs()
+    assert [j["path"] for j in jobs] == [a, b]
+    assert [j["device_path"] for j in jobs] == ["/dev/sdb", "/dev/sdc"]
+    assert [j["arch"] for j in jobs] == ["x86", "arm64"]
+    page._check_images_clicked()
+    page.check_worker.wait(20000)
+    for _ in range(200):
+        qapp.processEvents()
+        if "image(s)" in page.flash_check_out.toPlainText() and \
+                "Nothing has been written." in page.flash_check_out.toPlainText():
+            break
+    out = page.flash_check_out.toPlainText()
+    assert os.path.basename(a) in out and os.path.basename(b) in out
+    assert "/dev/sdb" in out and "/dev/sdc" in out
+
+
+def test_check_names_a_plan_row_with_no_image(page, qapp, tmp_path, monkeypatch):
+    """An unresolved row must appear in the report, not be quietly dropped."""
+    a = _img(tmp_path, "b-x86-amd64-omnibus-prod-1.img")
+    plan = [ft.FlashAssignment(SDB, "omnibus.x86", "omnibus", "x86", str(tmp_path),
+                               flavor="installer")]
+    page._entry_artifact_sets = {"omnibus.x86": (a,)}
+    page._entry_artifacts = {}
+    page.wiz.flash_plan = list(plan)
+    page.log = _Lines()
+    monkeypatch.setattr(ft, "list_targets", lambda: [SDB])
+    monkeypatch.setattr(page, "_start_flash", lambda *a, **k: None)
+    page._maybe_auto_flash()
+    jobs = page._check_jobs()
+    assert jobs and jobs[0]["path"] == ""
+    r = fv.check_image("", device_path="/dev/sdb")
+    assert not r.ok and "no image is selected" in r.text()

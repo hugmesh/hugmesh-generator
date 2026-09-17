@@ -436,6 +436,13 @@ def _is_flashable_artifact(name: str) -> bool:
             and not _ARTIFACT_BLOB_RE.search(name))
 
 
+def is_flashable_artifact(name: str) -> bool:
+    """Public spelling of the flashable-extension + kernel/initramfs/squashfs blob
+    filter — the same predicate snapshot_artifacts() and find_artifacts() use, so the
+    #415 validator can refuse a file the flasher would never have accepted."""
+    return _is_flashable_artifact(name)
+
+
 def is_compressed_artifact(name: str) -> bool:
     """True for the ``.img.xz`` / ``.iso.xz`` shapes --compress leaves behind.
 
@@ -514,6 +521,27 @@ def pick_artifact(artifacts: tuple[str, ...] | list[str], flavor: str) -> str:
 _ARCH_TOKENS = {"x86": ("x86", "amd64"), "arm64": ("arm64", "aarch64")}
 
 
+def artifact_matches(name: str, *, role: str, arch: str) -> bool:
+    """True when an artifact FILENAME carries this arch token AND this role token.
+
+    THE name-anchor vocabulary, in one place: the two anchors scripts/flash-disk.sh
+    globs on, with the role spelled through roles.aliases_of so an image built under an
+    older spelling still matches. find_artifacts() filters with it, and the #415
+    validator reports with it — so "would flash-disk.sh find this?" and "does this file
+    belong on that device?" can never drift apart."""
+    arch_tokens = _ARCH_TOKENS.get((arch or "").lower(), ((arch or "").lower(),))
+    role_tokens = {(role or "").lower()}
+    try:
+        role_tokens |= {a.lower() for a in roles.aliases_of(role)}
+    except Exception:
+        pass
+    role_tokens.discard("")
+    low = os.path.basename(name).lower()
+    if not any(f"-{a}-" in low for a in arch_tokens if a):
+        return False
+    return any(f"-{r}-" in low for r in role_tokens)
+
+
 def find_artifacts(work_dir: str, *, role: str, arch: str) -> tuple[str, ...]:
     """Every flashable artifact in ``work_dir`` whose NAME carries this arch token and
     this role token, absolute paths, newest first.
@@ -527,13 +555,6 @@ def find_artifacts(work_dir: str, *, role: str, arch: str) -> tuple[str, ...]:
     tell two same-role worklist entries apart, so what this returns is offered to the
     operator in the flash confirmation BY FILENAME, with the candidate count, and is
     written only if they accept. Returns () when nothing matches — the honest empty."""
-    arch_tokens = _ARCH_TOKENS.get((arch or "").lower(), ((arch or "").lower(),))
-    role_tokens = {(role or "").lower()}
-    try:
-        role_tokens |= {a.lower() for a in roles.aliases_of(role)}
-    except Exception:
-        pass
-    role_tokens.discard("")
     out: list[tuple[str, float]] = []
     try:
         names = os.listdir(work_dir)
@@ -542,10 +563,7 @@ def find_artifacts(work_dir: str, *, role: str, arch: str) -> tuple[str, ...]:
     for name in names:
         if not _is_flashable_artifact(name):
             continue
-        low = name.lower()
-        if not any(f"-{a}-" in low for a in arch_tokens if a):
-            continue
-        if not any(f"-{r}-" in low for r in role_tokens):
+        if not artifact_matches(name, role=role, arch=arch):
             continue
         try:
             out.append((name, os.stat(os.path.join(work_dir, name)).st_mtime))
