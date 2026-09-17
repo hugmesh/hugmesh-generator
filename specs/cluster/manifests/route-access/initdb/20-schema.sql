@@ -784,21 +784,33 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- (#351, decision 20 "land the whole branch"). `integrate/superadmin` carried
   --     ('hugmesh-fe-gateway','/bff/superadmin/games-services/**','ROLE_SUPERADMIN',false)
   -- here (spelled out, not as a tuple, so no comment-naive reader parses it as a
-  -- seeded row — hugmesh-generator#379). It is NOT added, because operator
-  -- decision 8 (#244 ACCEPT, 2026-09-16) is LATER and MORE SPECIFIC than decision
-  -- 20 and was answered on a question framed, in main's own words, as ACCEPT
-  -- "without the games-services deny row". See the #244 block further down for
+  -- seeded row — hugmesh-generator#379). It is NOT added. ⚠ THE ORDER OF THE TWO
+  -- OPERATOR ANSWERS IS THE OPPOSITE of what the first draft of this note claimed
+  -- (CORRECTED 2026-09-16 on the land pass, from #347 itself): decision 20 ("land
+  -- the whole branch") is the LATER answer — ANSWERED 2026-09-16 — and it is
+  -- GENERAL; decision 8 (#244 ACCEPT) is SIX DAYS EARLIER — ANSWERED 2026-09-10,
+  -- 2026-09-16 being merely its LANDING date (PR #395) — and it is SPECIFIC to
+  -- this row, answered on a question framed, in main's own words, as ACCEPT
+  -- "without the games-services deny row". So recency argues FOR the row and
+  -- specificity argues AGAINST it; the two answers genuinely point opposite ways.
+  -- The specific one is applied and the line left OUT, but that is a merge-time
+  -- reading of two operator answers, NOT an operator ruling — it is parked as
+  -- decision 28 on #351/#347 and the operator settles it. See the #244 block for
   -- the full argument; in short the row denies NOBODY (a privileged principal
   -- short-circuits before decide() runs, and a non-privileged one is already
   -- governed-but-ungranted DENY under the floor), while as the LONGEST matching
   -- pattern with allow=false it is skipped by the `WHERE allow = true` flip and
   -- so STRIPS the MFA step-up floor from exactly this subtree.
-  -- MEASURED on the merge, not argued: with the row in,
-  -- tests/scripts/test-mfa-required-rules.sh goes 125 passed/1 failed —
+  -- MEASURED (RE-measured 2026-09-16 on the land pass; the first draft of this
+  -- note said 125/1 and 126/0, and BOTH were wrong — the suite runs 125
+  -- assertions either way, so the one that flips takes the PASS count DOWN):
+  -- with the row in, tests/scripts/test-mfa-required-rules.sh goes
+  -- 124 passed/1 failed —
   --   "the deciding row at hugmesh-fe-gateway /bff/superadmin/games-services/
   --    catalog is mfa_required=false — a longer row under /bff/superadmin/ has
   --    taken over the match and stripped the step-up floor from that subtree"
-  -- and 126/0 with it out. Reinstating it is an operator call, not a merge call,
+  -- and 125 passed/0 failed with it out. Reinstating it is an operator call,
+  -- not a merge call,
   -- and it is parked on #351 rather than taken here.
   -- ── FLEET-OWNER phone console (fleet-admin entitlement tier) ────────────────
   -- The admin-bff /bff/admin/phone-fleet/** surface lets a NON-superadmin fleet

@@ -584,8 +584,13 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
    > Merge note, 2026-09-16 (hugmesh-generator#351). `integrate/superadmin` added
    > this clause **and** the deny row that motivated it
    > (`hugmesh-fe-gateway` `/bff/superadmin/games-services/**`). The clause landed;
-   > the row did not — operator decision 8 (#244 ACCEPT) is later and more specific
-   > and was answered "without the games-services deny row", because as the longest
+   > the row did not — operator decision 8 (#244 ACCEPT) is SPECIFIC to that row
+   > and was answered "without the games-services deny row". Note the order, which
+   > an earlier draft of this note had backwards: decision 8 is the EARLIER answer
+   > (2026-09-10); decision 20 ("land the whole branch") is the LATER, GENERAL one
+   > (2026-09-16). Recency argues for the row, specificity against it; the specific
+   > answer is applied and the choice is parked for the operator as decision 28.
+   > The row strips the floor because as the longest
    > matching pattern with `allow = false` it is skipped by the flip and would strip
    > the MFA floor from exactly that subtree. The reasoning is in
    > `manifests/route-access/initdb/20-schema.sql`; whether to reinstate it is

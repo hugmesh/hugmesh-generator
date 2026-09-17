@@ -628,9 +628,14 @@ DESELECT_SURVIVORS = {
     ("games", "/bff/superadmin/games-services/**"):
         "OPERATOR POSTURE, recorded 2026-09-16 (#351) rather than asserted away. "
         "`integrate/superadmin` seeded an explicit fe DENY row at this pattern so "
-        "the app-store control plane would be tailnet-only; operator decision 8 "
-        "(#244 ACCEPT) is LATER and more specific and was answered \"without the "
-        "games-services deny row\". Walls left on a games-deselected build: the "
+        "the app-store control plane would be tailnet-only. The row is left out "
+        "because operator decision 8 (#244 ACCEPT) is SPECIFIC to it — answered "
+        "\"without the games-services deny row\" — even though it is the EARLIER "
+        "answer (2026-09-10) and decision 20 (\"land the whole branch\", "
+        "2026-09-16) is the LATER, GENERAL one. Recency and specificity point "
+        "opposite ways here, so this is a merge-time reading parked for the "
+        "operator as decision 28, not a ruling. Walls left on a games-deselected "
+        "build: the "
         "admin-bff's own hasRole(\"SUPERADMIN\") on every games-services handler; "
         "the gateway filter short-circuits ROLE_ADMIN/ROLE_SUPERADMIN BEFORE "
         "decide() runs, so the row could not have changed what a privileged "
@@ -640,7 +645,9 @@ DESELECT_SURVIVORS = {
         "nothing to curate. The cost of the row, measured on this merge, is that as "
         "the LONGEST matching pattern with allow=false it is skipped by the "
         "`WHERE allow = true` flip and strips the MFA step-up floor from this "
-        "subtree (test-mfa-required-rules.sh: 125/1 with the row, 125/0 without). "
+        "subtree (test-mfa-required-rules.sh: 124 passed/1 failed with the row, "
+        "125 passed/0 failed without — re-measured on the land pass; an earlier "
+        "note here said 125/1). "
         "Reinstating it is an operator call parked on #351, not a merge call.",
 }
 
@@ -1376,6 +1383,19 @@ def prepend_row(new):
     return f
 
 
+def move_row_to_end(target):
+    """Move `target` to the end of the VALUES list, WITHOUT raising when it is
+    absent. The old form was `rows.remove(t), rows.append(t)`, and list.remove
+    raises ValueError on a missing row — which is exactly the state every §14
+    mutation of the fe '/bff/superadmin/**' row produces. The suite then died
+    mid-run with a traceback that BURIED the eight correct FAIL lines above it and
+    never printed a tally. Presence is asserted at the call site instead, so a
+    missing row is reported as a vacuous control rather than a crash."""
+    def f(rows):
+        rows[:] = [r for r in rows if r != target] + [target]
+    return f
+
+
 expect_caught("the fe /bff/superadmin/** row is DELETED (the original defect)",
               drop_row(NEW_ROW))
 expect_caught("the fe row's allow is flipped to FALSE",
@@ -1466,11 +1486,20 @@ else:
 # decide() ranks by pattern specificity, so file position carries no meaning. Both
 # controls below are therefore EQUIVALENT MUTANTS by construction, and saying so
 # is the finding — not a gap.
-expect_unchanged("the fe /bff/superadmin/** row is moved to the END of the INSERT",
-                 lambda rows: (rows.remove(NEW_ROW), rows.append(NEW_ROW)),
-                 note="Row order is not the precedence mechanism: decide() ranks "
-                      "by url_pattern specificity, so the row is correct anywhere "
-                      "in the VALUES list.")
+if NEW_ROW in ROWS:
+    expect_unchanged("the fe /bff/superadmin/** row is moved to the END of the INSERT",
+                     move_row_to_end(NEW_ROW),
+                     note="Row order is not the precedence mechanism: decide() ranks "
+                          "by url_pattern specificity, so the row is correct anywhere "
+                          "in the VALUES list.")
+else:
+    # Reached only when something upstream has already broken the floor row — in
+    # which case §2 has ALREADY failed loudly and this control has nothing to move.
+    # Say so and keep going; do not crash and bury the findings above.
+    bad("the row-ordering control could not run: the fe '/bff/superadmin/**' "
+        "ROLE_SUPERADMIN allow row is not in the seed, so there is nothing to move "
+        "and the equivalent-mutant claim is unproven. The failures printed above "
+        "are the real finding.")
 expect_unchanged("a BROADER fe '/bff/**' ROLE_USER row is inserted BEFORE it",
                  prepend_row((FE, "/bff/**", "ROLE_USER", True)),
                  note="specificity('/bff/superadmin/**')="

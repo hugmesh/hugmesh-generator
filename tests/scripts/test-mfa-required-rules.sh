@@ -2107,9 +2107,13 @@ s = s.replace(a, "      AND url_pattern LIKE %s" % repr("/bff/%admin%"), 1)'
 # added it because that branch also seeded an explicit DENY row under
 # /bff/superadmin% (the games app-store wall) which the flip correctly leaves at
 # mfa_required=false, and an unfiltered query returned it and read as a failed
-# rollout. THAT ROW IS NOT IN THE TREE: operator decision 8 (#244 ACCEPT) is later
-# and more specific and was answered "without the games-services deny row" — see
-# the merge note in 20-schema.sql. The clause is kept anyway because it makes the
+# rollout. THAT ROW IS NOT IN THE TREE: operator decision 8 (#244 ACCEPT) was
+# answered "without the games-services deny row" and is SPECIFIC to it. Note the
+# order, which an earlier draft of this comment had backwards: decision 8 is the
+# EARLIER answer (2026-09-10) and decision 20 ("land the whole branch",
+# 2026-09-16) is the LATER, GENERAL one, so recency argues FOR the row. The
+# specific answer is what is applied, and the choice is parked for the operator as
+# decision 28 — see the merge note in 20-schema.sql. The clause is kept anyway because it makes the
 # doc's query agree with the UPDATE by construction rather than by coincidence, and
 # because the first DENY row anyone adds under either prefix would otherwise make
 # the runbook lie. The anchor tracks the live text; if it stops matching, this
@@ -2128,7 +2132,10 @@ s = s.replace(a, "    WHERE 1 = 1", 1)'
 # (see above) there is none, so the control ran vacuous and said so —
 #   "…was applied to the runbook and DOC_SQL_BAD did NOT move (still 0) — the
 #    runbook checks are vacuous"
-# MEASURED on the merge: 125 passed / 1 failed with it, 125 / 0 without. It is
+# MEASURED (re-measured 2026-09-16 on the land pass — this line said 125 / 1,
+# which was wrong: this suite runs 125 assertions either way, so the assertion
+# that flips takes the PASS count DOWN to 124):
+#   124 passed / 1 failed with it, 125 passed / 0 failed without. It is
 # removed rather than weakened; reinstate it in the same commit as the first DENY
 # row under either prefix, when it becomes falsifiable again.
 
