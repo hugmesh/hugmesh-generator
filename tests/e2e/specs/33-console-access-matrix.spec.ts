@@ -71,14 +71,36 @@ const PERSONAS: Persona[] = [
   { username: 'e2e-user', expects: [], denies: [ADMIN_CONSOLE, MOD_CONSOLE] },
 ];
 
-/** Sign in and land on the shell. Returns false when the account does not exist
- *  on this seed (only tolerated for `optional` personas). */
-async function signIn(page: Page, username: string): Promise<boolean> {
+/**
+ * Sign in and land on the shell. Returns `null` on success, else the reason it
+ * failed — never a bare boolean.
+ *
+ * WHY IT RETURNS A REASON (hugmesh-generator#306). This was
+ * `catch { return false }`, so every failure mode collapsed into one value and
+ * the only thing the assertion could ever print was `Received: false`. Two of
+ * the eight failures that issue calls "unexplained" are exactly that:
+ * `33:87 e2e-user` and `33:110 e2e-admin` on the 2026-09-04 22:06 run. The
+ * cause had to be recovered afterwards from a page snapshot buried in the HTML
+ * report — `Sign-in failed: invalid_credentials`, with the password field
+ * holding the same string the seed banner printed — which is a bisect's worth
+ * of work to learn something the failure message could have said outright.
+ *
+ * It also made the `optional` escape hatch SILENT: any failure for
+ * mesh-operator — a 401, a missing nav entry, a 90s timeout — read as "absent
+ * from this seed" and skipped. That fired in the same run (test 246 skipped,
+ * test 247 then passed on retry), so the skip was not even true. The skip is
+ * kept, because a Studio-bootstrapped-only account really can be absent, but it
+ * now carries the reason it is skipping on.
+ */
+async function signInFailure(page: Page, username: string): Promise<string | null> {
   try {
     await onboard(page, username, loginPassword());
-    return true;
-  } catch {
-    return false;
+    return null;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // First line only: onboard() failures carry a full Playwright call log, and
+    // the whole thing in a skip annotation makes the run summary unreadable.
+    return msg.split('\n')[0].trim() || String(e);
   }
 }
 
@@ -86,10 +108,11 @@ test.describe('33 — console access matrix (discovery + reach, per identity)', 
   for (const persona of PERSONAS) {
     test(`${persona.username}: sees exactly its own consoles in the menubar `
       + tags({ layer: 'ui' }), async ({ page }) => {
-      const ok = await signIn(page, persona.username);
-      test.skip(!ok && !!persona.optional,
-        `${persona.username} is not present in this seed (Studio-bootstrapped only)`);
-      expect(ok, `${persona.username} must be able to sign in`).toBeTruthy();
+      const why = await signInFailure(page, persona.username);
+      test.skip(!!why && !!persona.optional,
+        `${persona.username} could not sign in and is optional `
+        + `(Studio-bootstrapped only) — ${why}`);
+      expect(why, `${persona.username} must be able to sign in`).toBeNull();
 
       for (const c of persona.expects) {
         await expect(
@@ -109,9 +132,10 @@ test.describe('33 — console access matrix (discovery + reach, per identity)', 
     for (const c of persona.expects) {
       test(`${persona.username}: opening ${c.route} renders the real console `
         + tags({ layer: 'ui' }), async ({ page }) => {
-        const ok = await signIn(page, persona.username);
-        test.skip(!ok && !!persona.optional, `${persona.username} absent from this seed`);
-        expect(ok).toBeTruthy();
+        const why = await signInFailure(page, persona.username);
+        test.skip(!!why && !!persona.optional,
+          `${persona.username} could not sign in and is optional — ${why}`);
+        expect(why, `${persona.username} must be able to sign in`).toBeNull();
 
         // NOT waitForLoadState('networkidle'): this shell holds a live SSE channel
         // open, so the network is NEVER idle and that wait simply burns the whole
@@ -135,7 +159,7 @@ test.describe('33 — console access matrix (discovery + reach, per identity)', 
     // domain-lock, recommend, audit. Asserting they render for a mod is what
     // makes "the controls exist for this user" a checked claim rather than a
     // screenshot someone remembers.
-    expect(await signIn(page, 'e2e-mod')).toBeTruthy();
+    expect(await signInFailure(page, 'e2e-mod'), 'e2e-mod must be able to sign in').toBeNull();
     await page.goto('/mod/console');
     const body = page.locator('body');
     for (const control of [/queue/i, /ban/i, /domain.?lock/i, /audit/i]) {
@@ -148,7 +172,7 @@ test.describe('33 — console access matrix (discovery + reach, per identity)', 
     + tags({ role: 'ROLE_USER', layer: 'ui' }), async ({ page }) => {
     // Discovery-gating is presentation; this is the one that matters for safety.
     // The guard must hold when the URL is typed, not merely when the link is hidden.
-    expect(await signIn(page, 'e2e-user')).toBeTruthy();
+    expect(await signInFailure(page, 'e2e-user'), 'e2e-user must be able to sign in').toBeNull();
     await page.goto('/mod/console');
     // Same reason as above — never networkidle on this shell.
     await page.waitForTimeout(3_000);

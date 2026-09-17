@@ -1353,6 +1353,24 @@ lint:e2e-persona-catalogue:
   script:
     - bash tests/scripts/test-e2e-persona-catalogue.sh
 
+# EVERY LOCAL HELPER A SPEC CALLS MUST BE IMPORTED BY THAT SPEC (#305).
+# specs/15-rbac-per-realm-login.spec.ts called loginPassword() in a default
+# parameter while importing sharedPassword, and TypeScript is never compiled in
+# this lane — so all four of its tests died at CALL time with
+# "ReferenceError: loginPassword is not defined" from 2026-08-27. Neither
+# `playwright test --list` (a default parameter is not evaluated by an import)
+# nor any grep could see it. Pure static analysis: bash + python3 stdlib, no
+# node_modules, no chromium, no network. Section 2 is a mutation battery, so a
+# checker that has quietly stopped checking goes red here.
+lint:e2e-spec-symbol-resolution:
+  stage: lint
+  image: bash:5
+  tags: [hugmesh-x86]
+  before_script:
+    - apk add --no-cache python3 coreutils
+  script:
+    - bash tests/scripts/test-e2e-spec-symbol-resolution.sh
+
 # Optional-services BUILD-TIME EXCLUSION gate. Loads the REAL gate + helper
 # functions as build-rpi5-stage4.sh RESOLVES them (they live in the shared
 # scripts/_optional-services-lib.sh since 2026-08-26; tests/lib/opt-gate-source.sh
