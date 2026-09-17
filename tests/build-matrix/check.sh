@@ -474,17 +474,50 @@ if [ -n "${rolesetthr_recipe:-}" ]; then
 fi
 
 # ── UNAFFILIATED MENU→MAKE threading probe ───────────────────────────────────
-# The unaffiliated desktop must thread --role standalone-unaffiliated into the
-# recipe and must NOT emit --theme even with the menu's persisted 'dark'
-# theme default in place (any branding flag is a builder HARD conflict there —
-# the role presets the neutral identity itself).
+# REVISED 2026-09-17 (hugmesh/hugmesh-generator#408). This probe was the ONE site the
+# 2026-08-26 "split identity from look" operator decision missed. It asserted that
+# --theme must NOT reach the builder, which was correct under the OLD rule (all ten
+# branding flags were a single hard conflict) and has been WRONG since the split
+# landed. All three enforcement sites now say a theme is legal here:
+#   build-x86-host-stage4.sh:1682  "The LOOK flags --theme/--branding-dir/--wallpaper/
+#       --grub-background/--grub-theme/--login-background/--accent-color/--color-scheme
+#       ARE allowed on an unaffiliated build."
+#   build-x86-host-stage4.sh:1687-1692  the fold deliberately no longer tests them.
+#   scripts/build-menu.sh:783-792  "--theme APPLIES TO THE UNAFFILIATED DESKTOP TOO
+#       since 2026-08-26" — the emit this probe called a leak is intentional.
+#   studio/hugmesh_studio/core/config.py:4160+  "ALLOWED (look): theme / branding_dir /
+#       wallpaper / grub_background / grub_theme / login_background / accent_color /
+#       color_scheme."
+# check.sh already contradicted ITSELF: run_negative_checks pins the builder side as
+# expect_ok "x86: unaffiliated role + --theme is ALLOWED" (line ~1433). f6b6dd20
+# (2026-08-27) rewrote that NEG block for the split and never touched this one, so the
+# suite has asserted both directions of the same rule — and exited 1 on main — ever since.
+# WHAT IT PINS NOW, one leg per side of the line the operator drew:
+#   LOOK must THREAD. The menu's persisted theme has to reach the builder; that is the
+#     operator's actual report against session 20260826-151356-64070a ("There should be
+#     the menu for adding the themes as in the branded images"). A silent drop here is
+#     exactly the regression the split was made to end.
+#   IDENTITY must NOT. build_make_cmd's `unaff` gate still suppresses the BRAND= profile
+#     make-var (which the Makefile expands to --config brands/<name>.conf), --brand-logo
+#     and --home-seed-code for this one target. Each is SET below so the three negative
+#     legs cannot pass vacuously — with the gate removed, brands/example.conf exists, so
+#     `make -n` still succeeds and the leak is observed as a leak rather than as an error.
 reset_opts
-OPT_SA_THEME=dark   # the default a branded standalone run leaves persisted
+OPT_SA_THEME=dark            # the default a branded standalone run leaves persisted
+OPT_BRAND=example            # -> BRAND=example -> --config brands/example.conf (IDENTITY)
+OPT_BR_LOGO=/tmp/probe-logo.png   # the brand MARK (IDENTITY)
+OPT_HOME_SEED=PROBESEED      # seeds the HugMesh stack into the home (platform machinery)
 build_make_cmd x86-standalone-unaffiliated "unaff-thread-probe" 1
 if recipe="$(make -n "${RUN_MAKE[@]}" NATIVE=1 2>&1)"; then
     miss=""
     case "${recipe}" in *"--role standalone-unaffiliated"*) ;; *) miss+=" '--role standalone-unaffiliated'" ;; esac
-    case "${recipe}" in *"--theme"*) miss+=" '--theme LEAKED'" ;; esac
+    # LOOK: must be threaded (2026-08-26 split).
+    case "${recipe}" in *"--theme dark"*) ;; *) miss+=" '--theme dark' DROPPED (a LOOK flag is legal on an unaffiliated build since 2026-08-26)" ;; esac
+    # IDENTITY: must never be threaded.
+    if has_elem "BRAND=example"; then miss+=" 'BRAND= make-var LEAKED'"; fi
+    case "${recipe}" in *"brands/example.conf"*) miss+=" '--config brand profile LEAKED'" ;; esac
+    case "${recipe}" in *--brand-logo*)     miss+=" '--brand-logo LEAKED'" ;; esac
+    case "${recipe}" in *--home-seed-code*) miss+=" '--home-seed-code LEAKED'" ;; esac
     if [ -n "${miss}" ]; then
         echo "UNAFFTHR FAIL x86-standalone-unaffiliated —${miss} (argv: ${RUN_MAKE[*]})"
     else
