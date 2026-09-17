@@ -560,3 +560,42 @@ def new_artifact(work_dir: str, baseline: dict[str, float]) -> str:
     contract, kept for existing callers/tests; == pick_artifact(new_artifacts(...),
     "auto")."""
     return pick_artifact(new_artifacts(work_dir, baseline), FLAVOR_AUTO)
+
+
+# ── naming an artifact IN THE GUI (#415) ─────────────────────────────────────────────
+# The operator's question is "which FILE goes to this disk", and until #415 the GUI
+# could only answer with an AXIS (auto/img/live/installer) — never a filename. These
+# two helpers are what the image dropdowns and the flash confirmation print, so the
+# name, the flavour and the on-disk size are one string written in ONE place.
+def human_size(n: int) -> str:
+    """``n`` bytes as a short IEC string (``2.7 GiB``); ``""`` for a non-positive n."""
+    if n <= 0:
+        return ""
+    step = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if step < 1024.0 or unit == "TiB":
+            return f"{step:.0f} {unit}" if unit == "B" else f"{step:.1f} {unit}"
+        step /= 1024.0
+    return f"{step:.1f} TiB"        # unreachable; kept so every path returns a str
+
+
+def artifact_label(path: str) -> str:
+    """One dropdown line for a built artifact: ``<basename> · <flavour> · <size>``.
+
+    The flavour is :func:`classify_artifact_flavor`, with ``other`` standing in for the
+    unflavoured shapes (rpi5 emits a plain ``.iso``) — those are REACHABLE here because
+    this dropdown names FILES, which is the whole point of #415: the flavour axis alone
+    cannot name a plain ``.iso``, and could not tell two same-flavour files apart.
+    Size is the on-disk file size; a compressed artifact is marked, because what gets
+    WRITTEN is its uncompressed size (flash-disk.sh streams `xz -dc` into dd)."""
+    base = os.path.basename(path)
+    bits = [base, classify_artifact_flavor(base) or "other"]
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        size = 0
+    if size:
+        bits.append(human_size(size))
+    if is_compressed_artifact(base):
+        bits.append("compressed")
+    return " · ".join(bits)

@@ -614,15 +614,41 @@ class ProgressPage(QtWidgets.QWizardPage):
 
         # ── post-build "Flash to a device" group (hidden until an all-ok run finishes) ──
         self.flash_group = QtWidgets.QGroupBox("Flash to a device")
-        fg = QtWidgets.QHBoxLayout(self.flash_group)
+        fg = QtWidgets.QVBoxLayout(self.flash_group)
+        # ── row 1: WHICH IMAGE (#415) ─────────────────────────────────────────────
+        # Before #415 this group held a device dropdown and nothing else: the image was
+        # chosen FOR the operator by flash-disk.sh's newest-.img-else-newest-.iso glob,
+        # so an x86 run emitting .img.xz + .live.iso + .installer.iso could only ever
+        # flash the .img.xz — the other two were unreachable from this page, and the
+        # confirmation said "auto-picked by scripts/flash-disk.sh" rather than a name.
+        # This combo lists the artifacts THIS run actually produced (newest first) and
+        # defaults to the same pick_artifact("auto") file the glob would have taken, so
+        # an operator who never touches it writes exactly what they wrote before.
+        r1 = QtWidgets.QHBoxLayout()
+        r1.addWidget(QtWidgets.QLabel("Image:"))
+        self.flash_image_combo = QtWidgets.QComboBox()
+        self.flash_image_combo.setToolTip(
+            "WHICH built image is written. Lists every flashable artifact this run "
+            "produced, newest first; the default is the one scripts/flash-disk.sh "
+            "would have auto-picked (newest .img, else newest). The choice is passed "
+            "as --artifact and is named in the confirmation before anything is "
+            "written.")
+        self.flash_image_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        r1.addWidget(self.flash_image_combo, 1)
+        fg.addLayout(r1)
+        # ── row 2: WHICH DEVICE (unchanged) ───────────────────────────────────────
+        r2 = QtWidgets.QHBoxLayout()
+        r2.addWidget(QtWidgets.QLabel("Device:"))
         self.flash_combo = QtWidgets.QComboBox()
-        fg.addWidget(self.flash_combo, 1)
+        r2.addWidget(self.flash_combo, 1)
         self.flash_refresh_btn = QtWidgets.QPushButton("Refresh")
         self.flash_refresh_btn.clicked.connect(self._refresh_flash_targets)
-        fg.addWidget(self.flash_refresh_btn)
+        r2.addWidget(self.flash_refresh_btn)
         self.flash_btn = QtWidgets.QPushButton("Flash…")
         self.flash_btn.clicked.connect(self._flash_clicked)
-        fg.addWidget(self.flash_btn)
+        r2.addWidget(self.flash_btn)
+        fg.addLayout(r2)
         self.flash_group.setVisible(False)
         lay.addWidget(self.flash_group)          # below the splitter, beside the action bar
 
@@ -711,6 +737,10 @@ class ProgressPage(QtWidgets.QWizardPage):
         # independent opt-ins and must not steal each other's done signal.
         self.qemu_worker: _FlashWorker | None = None
         self._flash_targets: list = []
+        # #415: the last candidate tuple the Image combo was built from. The 2.5 s
+        # device timer re-enters _refresh_flash_images, and repopulating an unchanged
+        # combo would reset the operator's pick under their cursor every 2.5 s.
+        self._flash_image_cands: tuple[str, ...] | None = None
         self._flash_queue: list = []       # Review-page plan assignments, run sequentially
         # confirmation state (#337): the extra notes the ONE flash warning shows, and
         # whether the operator declined the last one. Both are consumed inside
@@ -1176,6 +1206,11 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._entry_artifacts = {}
         self._entry_artifact_sets = {}
         self._entry_baseline = {}
+        # #415: the PREVIOUS run's images must not linger in the Image combo — a
+        # second build on the same page instance would otherwise offer, and default
+        # to, a file the new run never produced.
+        self._flash_image_cands = None
+        self.flash_image_combo.clear()
         self.flash_group.setVisible(False)        # only an all-ok finish reveals it
         self.total_bar.setRange(0, 100)
         self.total_bar.setValue(0)
@@ -2424,18 +2459,106 @@ class ProgressPage(QtWidgets.QWizardPage):
     # "Flash to device" button offering an arm64 Raspberry Pi ISO for an x86 backend.
     _FLASH_ROLES = flash_targets.FLASH_ROLE_TOKENS
 
-    def _flash_argv_for(self, target) -> list[str]:
+    def _flash_role_arch(self) -> tuple[str, str]:
+        """(role token, arch) for the standalone flash path — the two anchors
+        flash-disk.sh globs on. A desktop/appliance role has no artifact of its own to
+        glob for, so it falls back to the generic worker image, spelled canonically."""
         c = self.wiz.cfg
-        work_dir = (self._session.workdir if self._session is not None else
-                    c.output_dir or os.path.join(self.wiz.generator_dir, "out"))
-        # A desktop/appliance role has no artifact of its own to glob for, so it
-        # still falls back to the generic worker image — but the fallback is now
-        # spelled canonically, and flash-disk.sh anchors the search to --arch, so it
-        # can no longer resolve to the other architecture's image.
         role = c.role if c.role in self._FLASH_ROLES else "backend-gpu"
-        arch = flash_targets.arch_for_platform(c.platform)
+        return role, flash_targets.arch_for_platform(c.platform)
+
+    def _flash_work_dir(self) -> str:
+        c = self.wiz.cfg
+        return (self._session.workdir if self._session is not None else
+                c.output_dir or os.path.join(self.wiz.generator_dir, "out"))
+
+    def _flash_argv_for(self, target) -> list[str]:
+        role, arch = self._flash_role_arch()
+        # #415: the operator's image pick from the group's Image combo, or "" when
+        # nothing was recorded — in which case NO --artifact is emitted and
+        # flash-disk.sh auto-picks exactly as it always did.
         return flash_targets.flash_argv(target, generator_dir=self.wiz.generator_dir,
-                                        role=role, arch=arch, work_dir=work_dir)
+                                        role=role, arch=arch,
+                                        artifact=self._selected_image() or None,
+                                        work_dir=self._flash_work_dir())
+
+    # ---- WHICH IMAGE (#415) ------------------------------------------------------
+    def _flash_image_candidates(self) -> tuple[str, ...]:
+        """Every flashable artifact this run can offer, newest first, deduped.
+
+        Primary source is what the per-entry snapshot diff RECORDED (the same
+        ``_entry_artifact_sets`` the plan path resolves against), unioned across
+        entries because the standalone group has no entry selector. When a run
+        recorded nothing (a resumed build that rewrote no image, a restarted wizard)
+        we fall back to the SAME read-only arch+role name match flash-disk.sh itself
+        uses — never a guess of our own, and never a write."""
+        order: list[tuple[str, float, int]] = []
+        seen: set[str] = set()
+
+        def _add(path: str) -> None:
+            if path in seen:
+                return
+            seen.add(path)
+            try:
+                mtime = os.stat(path).st_mtime
+            except OSError:
+                mtime = 0.0
+            order.append((path, mtime, len(order)))
+
+        for arts in self._entry_artifact_sets.values():
+            for a in arts:
+                _add(a)
+        if not order:
+            try:
+                role, arch = self._flash_role_arch()
+                work_dir = self._work_dir()
+            except Exception:
+                role, arch, work_dir = "", "", ""
+            if work_dir:
+                for a in flash_targets.find_artifacts(work_dir, role=role, arch=arch):
+                    _add(a)
+        # newest first; the per-entry recording order breaks ties (it is already
+        # newest-first), so a tmp_path fixture whose files share an mtime stays stable.
+        order.sort(key=lambda c: (-c[1], c[2]))
+        return tuple(p for p, _m, _i in order)
+
+    def _refresh_flash_images(self) -> None:
+        """Repopulate the Image combo, preserving the operator's pick by PATH.
+
+        Default selection == ``pick_artifact(candidates, "auto")``: byte-identical to
+        what flash-disk.sh's own glob would have taken, so this control changes WHAT
+        is written only when somebody actually changes it."""
+        cands = self._flash_image_candidates()
+        if cands == getattr(self, "_flash_image_cands", None):
+            return                      # the 2.5 s timer must not fight the operator
+        self._flash_image_cands = cands
+        prev = self.flash_image_combo.currentData()
+        self.flash_image_combo.clear()
+        if not cands:
+            # Honest empty: no --artifact is emitted and flash-disk.sh picks, exactly
+            # as it did before #415. Never a silent default that LOOKS chosen.
+            self.flash_image_combo.addItem(
+                "(this run recorded no image — scripts/flash-disk.sh will auto-pick)",
+                "")
+            self.flash_image_combo.setEnabled(False)
+            return
+        self.flash_image_combo.setEnabled(True)
+        default = flash_targets.pick_artifact(cands, flash_targets.FLAVOR_AUTO)
+        for p in cands:
+            label = flash_targets.artifact_label(p)
+            self.flash_image_combo.addItem(
+                label + ("   ← default (auto-pick)" if p == default else ""), p)
+        i = self.flash_image_combo.findData(prev) if prev else -1
+        if i < 0:
+            i = self.flash_image_combo.findData(default)
+        self.flash_image_combo.setCurrentIndex(max(0, i))
+
+    def _selected_image(self) -> str:
+        """The Image combo's path, or "" (nothing recorded / no Qt on a stub page)."""
+        try:
+            return self.flash_image_combo.currentData() or ""
+        except Exception:
+            return ""
 
     def _refresh_flash_targets(self) -> None:
         """Re-scan (read-only) and repopulate the combo, preserving the selection by
@@ -2446,6 +2569,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         except Exception:
             targets = []
         self._flash_targets = targets
+        self._refresh_flash_images()          # #415: keep the Image combo in step
         prev = self.flash_combo.currentData()
         self.flash_combo.clear()
         for t in targets:
@@ -2474,7 +2598,11 @@ class ProgressPage(QtWidgets.QWizardPage):
         target = self._selected_target()
         if target is None:
             return
-        self._flash_caveats = [
+        # #415: the caveat is now only for the case it was always TRUE for — no image
+        # could be named. When the Image combo has a pick, that exact file is passed as
+        # --artifact and the confirmation prints its name, so the "watch the Artifact :
+        # line" instruction would be a lie.
+        self._flash_caveats = [] if self._selected_image() else [
             "No image was named for this flash, so scripts/flash-disk.sh will "
             "auto-pick the newest matching one in the work dir. Watch the "
             "\"Artifact :\" line it prints before it writes."]
