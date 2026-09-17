@@ -275,6 +275,29 @@ exits 33 without downloading — it falls back to a fresh bounded fetch of the w
 silent, 404, Range-ignoring and Range-capable servers. The ARM cross specs still use the
 default wget fetcher; the bound has only been applied where the stall was measured.
 
+A rate floor bounds each URI, but a *bounded failure* of a single-source file still drops
+its package under `--keep-going`, and that drop only surfaces hours later at the
+requested-atom completeness gate. So the x86 build also **pre-fetches the whole payload
+before the first merge** (`scripts/_emerge-prefetch-lib.sh`, called from
+`build-x86-host-stage4.sh` immediately before the `system` group; hugmesh-generator#322
+slice 2, decision 24). One foreground `emerge --fetchonly` resolves `@world` plus the role
+payload with the same `--update --deep --newuse --keep-going` and the same exclusions as
+the two real merges, so the graph fetched is the graph merged, and `--keep-going` makes one
+run report **every** unfetchable file rather than stopping at the first. Three attempts,
+then the build **aborts before anything has been compiled**, naming each distfile portage
+could not download. `--allow-missing-packages` — the same opt-out the completeness gate
+honours — downgrades that abort to a warning, and nothing else does.
+
+The accepted cost is that fetching no longer overlaps compiling: roughly **+30-55 minutes
+on a cold `DISTDIR`** at ~3 MB/s, and about **zero on a warm one**, which is what a
+`PORTAGE_RO_DISTDIRS` fleet cache gives you. A *resolver* wall (keyword, mask, USE, slot
+conflict) is not a fetch failure: the pass prints a loud `PRE-FETCH SKIPPED` line, says the
+build continues unprotected, and returns success — the payload merge crosses those with
+`--autounmask-continue=y`, and the payload-plan gate (#223) is what judges them. The pass
+deliberately passes no autounmask flag itself, so it can never write `package.use` against
+the pre-update portage. `tests/scripts/test-x86-prefetch-gate.sh` executes the lib against a
+stub `emerge` reproducing each of those outcomes and pins every call site in the builder.
+
 ### Concurrency
 
 Mutation of the shared root is serialised with `flock` (`sa_lock_run`), re-entrant so a

@@ -457,7 +457,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # slim): it is a negative guard whose controls must fail on a planted defect, and
 # busybox grep/sed is where a negative guard fails open. The ungated SET pin is
 # unchanged at 22 in both measurements.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-167}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-168}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED
@@ -485,6 +485,15 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-167}"
 #     164 of 186 suites are named by a pull_request-triggered workflow
 # and the ungated SET is unchanged at 22.
 #
+# 167 -> 168 on 2026-09-16: tests/scripts/test-x86-prefetch-gate.sh joined the gate
+# with the payload PRE-FETCH pass (scripts/_emerge-prefetch-lib.sh + its call in
+# build-x86-host-stage4.sh) -- hugmesh-generator#322 slice 2, decision 24 on #347.
+# MEASURED on THIS tree, not assumed: with the suite named in shell-suites.yml's
+# alpine job this file printed
+#     168 of 190 suites are named by a pull_request-triggered workflow
+# and '167 of 190' with that one line deleted from the workflow and nothing else
+# changed; the ungated SET pin is unchanged at 22.
+
 # 162 -> 163 on 2026-09-16: tests/scripts/test-docs-command-coverage.sh joined the
 # gate -- every user-facing scripts/ command must be reachable from docs/ or a
 # README (hugmesh-generator#268). MEASURED: '163 of 185 suites are named by a

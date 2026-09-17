@@ -377,6 +377,7 @@ jobs:
             tests/scripts/test-x86-fetchcommand-bound.sh
             tests/scripts/test-x86-identity-injection.sh
             tests/scripts/test-x86-kernel-net-symbols.sh
+            tests/scripts/test-x86-prefetch-gate.sh
             tests/stack/test-attestation-dockerfile-patches.sh
             tests/stack/test-coturn-optional-service.sh
             tests/stack/test-front-door-client-surface.sh

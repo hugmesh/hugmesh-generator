@@ -5354,6 +5354,15 @@ fi
 cp "${SCRIPT_DIR}/scripts/_emerge-plan-lib.sh" "${SYSROOT}/tmp/hugmesh-emerge-plan-lib.sh" \
     || info "WARN: emerge-plan lib staging failed — plan preview will be skipped"
 # ── END shared block: emerge-plan preview (lib staging) ───────────────────────
+# ── payload PRE-FETCH lib staging (issue #322 slice 2; decision 24 on #347) ───
+# Same staging pattern as the plan lib directly above: the pass runs INSIDE the
+# payload chroot, so the lib is copied into the sysroot first. NOT degradable the
+# way the plan preview is — a missing pre-fetch lib means the build would merge
+# for hours with no download floor and could still lose the run at the
+# completeness gate, which is the exact failure decision 24 exists to close. Fail
+# here, where the message is one line and nothing has been compiled yet.
+cp "${SCRIPT_DIR}/scripts/_emerge-prefetch-lib.sh" "${SYSROOT}/tmp/hugmesh-emerge-prefetch-lib.sh" \
+    || { err "emerge-prefetch lib staging failed (scripts/_emerge-prefetch-lib.sh -> ${SYSROOT}/tmp) — the payload pre-fetch could not be installed"; exit 1; }
 # ── sendfile-noise re-patch (lib staging) ────────────────────────────────────
 # pcs_quiet_sendfile_noise patched THIS sysroot's portage long before the chroot
 # (see the call next to the /etc/portage sync). That patch does not survive the
@@ -5430,6 +5439,18 @@ else
     emerge_plan_emit() { return 0; }
 fi
 # ── END shared block: emerge-plan preview (in-chroot init) ────────────────────
+# ── payload PRE-FETCH (in-chroot init; issue #322 slice 2, decision 24) ───────
+# The host-side ALLOW_MISSING_PACKAGES is carried across the same way
+# EMERGE_PLAN_ENABLED is: nothing from the host environment survives into this
+# chroot, so the value is interpolated by the host into the unquoted heredoc.
+# It is the ONE policy this pass honours, and it is not a new one: it is the same
+# opt-out the requested-atom completeness gate already reads, so an operator who
+# has accepted missing packages is not blocked by a fetch failure either.
+# Unlike the plan lib there is NO no-op fallback: a missing lib is fatal at the
+# staging cp above, so reaching this line without the file is impossible.
+HUGMESH_ALLOW_MISSING_PACKAGES=${ALLOW_MISSING_PACKAGES}
+. /tmp/hugmesh-emerge-prefetch-lib.sh
+# ── END payload PRE-FETCH (in-chroot init) ───────────────────────────────────
 # ── PAYLOAD PLAN FAIL-FAST GATE (issue #223) ──────────────────────────────────
 # When the image plan preview resolves, this is a no-op. When it FAILS, the lib
 # keeps the resolver output at the path below, and this gate decides honestly:
@@ -5560,6 +5581,34 @@ hugmesh_payload_plan_gate() {
 # unescaped dollar signs, backticks and dollar-parens, so the HOST shell expands
 # nothing of it. tests/build-matrix/check.sh's emerge-group-banners probe
 # re-verifies that mechanically on every run.
+# ── PAYLOAD PRE-FETCH, BEFORE THE FIRST MERGE (issue #322 slice 2) ───────────
+# Decision 24 on #347, operator 2026-09-16: "A: fetch everything first" — one
+# foreground pass that downloads every distfile the whole payload needs, up
+# front, accepting that fetching no longer overlaps compiling (measured ~+30-55
+# min on a cold DISTDIR at this box's 3 MB/s; about zero on a warm one, which is
+# what the shared-binpkg fleet cache gives).
+#
+# The argument vector deliberately mirrors the two real merges below so the
+# graph resolved here is the graph they merge: the same --update --deep --newuse,
+# the same portage exclusion, the same EMERGE_EXCLUDE, and both sets (the literal
+# world set and the role payload) in ONE resolution. --keep-going is what makes a
+# single run report EVERY unfetchable file instead of stopping at the first.
+# --autounmask-continue is deliberately NOT here; the lib says why at length.
+#
+# Non-fatal ONLY under --allow-missing-packages, which is the same opt-out the
+# requested-atom completeness gate honours. Otherwise a distfile that cannot be
+# downloaded ends the build HERE, in its first minutes, rather than at that gate
+# hours later with the package silently dropped by --keep-going.
+if hugmesh_prefetch_payload --update --deep --newuse --keep-going \
+     --exclude sys-apps/portage ${EMERGE_EXCLUDE} @world ${PKGS}; then
+    :
+elif [ "${HUGMESH_ALLOW_MISSING_PACKAGES}" = "true" ]; then
+    echo "[build-x86] WARN: pre-fetch failed, but --allow-missing-packages is set — continuing. Expect the named packages to be dropped by --keep-going and reported by the completeness gate."
+else
+    echo "[build-x86] ERROR: aborting before the first merge — see the pre-fetch errors above. Re-run with --allow-missing-packages to build without those packages." >&2
+    exit 1
+fi
+# ── END payload PRE-FETCH ────────────────────────────────────────────────────
 # system: sys-apps/portage + sys-apps/baselayout + the gettext downgrade are
 # profile/base-layer packages (the package manager itself, the filesystem
 # layout and the .mo-collision pin), not payload.
