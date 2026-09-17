@@ -53,21 +53,34 @@ OUT_DIR="${REPO_DIR}/keys-out/vault"
 # ── brand.conf (built-in defaults < brand.conf < env) ───────────────
 BRAND="${BRAND:-hugmesh}"
 CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-hugmesh.net}"
-# WRITER SIDE ONLY. The reader is pinned on BOTH halves, and NEITHER is brand-derived
-# (issue #285; decision 22 on #347, operator 2026-09-16 "A: drop both controls"):
+# THE MOUNT IS STILL WRITER-SIDE ONLY; THE BASE PATH IS NOT ANY MORE.
+# (issue #285; decision 22 on #347, operator 2026-09-16 "A: drop both controls";
+#  decision 38 = B on #347, operator 2026-09-17 "the reader follows the writer"):
 #   * the mount is pinned in specs/cluster/manifests/external-secrets/secretstore.yaml
 #     (`path: "secret"`, server vault.vault.svc), which apps/04-external-secrets-config
 #     .yaml serves with automated { prune: true, selfHeal: true } — ArgoCD re-applies
 #     it from git on every reconcile, so nothing image-side or kubectl-side re-points it;
-#   * the key prefix the ExternalSecrets read is the LITERAL hugmesh/<service> — see
-#     the measured count below. THIS script, by contrast, writes under ${BRAND}
-#     (BASE= below), so for a brand other than "hugmesh" writer and reader DISAGREE.
-#     That gap pre-dates #285 and closing it is a separate, unmade call.
-# So a NON-DEFAULT VAULT_KV_MOUNT makes this script write where the cluster does not
-# read: 143 remoteRef keys across specs/cluster all live under hugmesh/... at mount
-# "secret". Changing it is option B of #285 (an Application-level kustomize patch on
-# the ClusterSecretStore) and has not been built. The matching image-builder flags
-# --vault-kv-mount / --vault-base-path were removed by decision 22.
+#   * the BASE PATH is no longer pinned — decision 38 = B on #347 (operator,
+#     2026-09-17) made the READER FOLLOW THIS WRITER. The 143 remoteRef keys under
+#     specs/cluster still read the literal `hugmesh/<service>` IN GIT (that is the
+#     DEFAULT render and must stay byte-identical), and rebrand_sysroot() in every
+#     build-*-stage4.sh now rewrites that first path segment to <BRAND> in the baked
+#     tree at ${SYSROOT}/var/lib/hugmesh/cluster — the same segment BASE= below
+#     writes. Pinned by tests/scripts/test-eso-remoteref-brand.sh.
+#     WHAT THAT REPLACED, measured 2026-09-17 by driving the real rebrand_sysroot
+#     over the real specs/cluster tree: the chain's catch-all `hugmesh -> ORG` rule
+#     ALREADY rewrote all 143 keys — to ORG, not BRAND. So the claim this comment
+#     used to make ("the reader is the LITERAL hugmesh/<service>") was true of the
+#     git tree and FALSE of what a device runs, and reader and writer agreed only
+#     when ORG == BRAND. Three of the four corners were broken: (BRAND=acme,
+#     ORG=widgetco) and (BRAND=hugmesh, ORG=widgetco) read `widgetco/...`, and
+#     (BRAND=acme, ORG=hugmesh) — i.e. `--brand acme` with no `--org` — read
+#     `hugmesh/...`, which is the exact symptom issue #285 describes.
+# So a NON-DEFAULT VAULT_KV_MOUNT still makes this script write where the cluster
+# does not read: the MOUNT half is unchanged and remains pinned at "secret" by
+# secretstore.yaml under a prune+selfHeal Application. Decision 38 moved the BASE
+# PATH half only. The matching image-builder flags --vault-kv-mount /
+# --vault-base-path were removed by decision 22.
 VAULT_KV_MOUNT="${VAULT_KV_MOUNT:-secret}"
 if [ -f "${REPO_DIR}/brand.conf" ]; then
     # shellcheck disable=SC1091
