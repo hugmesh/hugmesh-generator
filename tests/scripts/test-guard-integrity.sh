@@ -492,8 +492,16 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # too, so the debian placement is a choice of ONE job, not a constraint. The
 # ungated SET pin is unchanged at 22. This file conflicts on nearly every merge;
 # if it conflicts here, RE-MEASURE on the merged tree per the doctrine above
-# rather than taking 169 or the other side's number.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-169}"
+# rather than taking 170 or the other side's number.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-170}"
+
+# 169 -> 170 on 2026-09-17: tests/scripts/test-eso-remoteref-brand.sh joined the
+# gate with the ExternalSecret remoteRef brand rule (hugmesh-generator#285,
+# decision 38 = B on #347). MEASURED by RUNNING this file on the tree with the
+# suite wired and unwired, not assumed: unwired it printed "all 192 suites are
+# invoked ... (0 allowlisted)" and the gated count 169; wired it printed
+# "pre-merge suite coverage rose to 170, baseline still says 169". The ungated
+# SET pin is unchanged at 22.
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED

@@ -500,6 +500,7 @@ jobs:
             tests/scripts/test-e2e-shell-nav-entry.sh
             tests/scripts/test-e2e-spec-symbol-resolution.sh
             tests/scripts/test-eso-provider-refs.sh
+            tests/scripts/test-eso-remoteref-brand.sh
             tests/scripts/test-eso-seed-contract.sh
             tests/scripts/test-first-run-lib.sh
             tests/scripts/test-fragment-route-target.sh

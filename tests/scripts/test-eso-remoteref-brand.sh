@@ -68,6 +68,10 @@
 # the restore, restoring to ORG instead of BRAND, moving the capture below the
 # catch-all, dropping one builder from the list, and hollowing the fixture are
 # each caught. See the battery in the PR body.
+# NOTE on `grep` inside pipelines here: never `| grep -q`. Under pipefail a -q
+# grep exits the moment it matches, SIGPIPEs the writer, and the pipeline then
+# reports FAILURE for a match it actually found. Every pipeline below drains with
+# `>/dev/null` instead (tests/scripts/test-guard-integrity.sh check 8 enforces it).
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -197,7 +201,7 @@ for f in parse_fail_with_es:
     print("UNPARSEABLE %s" % f)
 PY
 )"
-if printf '%s' "${CENSUS}" | grep -qa '^SKIP no-pyyaml'; then
+if printf '%s' "${CENSUS}" | grep -a '^SKIP no-pyyaml' >/dev/null; then
   bad "(2) PyYAML is missing — the spelling-closure half of this guard CANNOT run; install python3-yaml"
   SED_SEEN=0
 else
@@ -212,7 +216,7 @@ else
     bad "(2) spelling closure: YAML census ${YAML_SEEN} != sed-visible ${SED_SEEN} — a remoteRef is written in a spelling rebrand_sysroot cannot see, or a non-ExternalSecret field now matches the rule"
     printf '%s\n' "${CENSUS}" | grep -a '^MISMATCH' | sed 's/^/       /'
   fi
-  if printf '%s' "${CENSUS}" | grep -qa '^UNPARSEABLE'; then
+  if printf '%s' "${CENSUS}" | grep -a '^UNPARSEABLE' >/dev/null; then
     bad "(2) a file declaring kind: ExternalSecret does not parse as YAML — the census cannot see it"
     printf '%s\n' "${CENSUS}" | grep -a '^UNPARSEABLE' | sed 's/^/       /'
   else
@@ -265,7 +269,7 @@ render() { # <outdir> <builder-basename> <BRAND-or-UNSET> <ORG-or-UNSET> <domain
 CLUSTER_BUILDERS=()
 for bn in "${BUILDERS[@]}"; do
   if extract_fn rebrand_sysroot "${REPO}/${bn}" \
-       | grep -av '^[[:space:]]*#' | grep -qa 'var/lib/hugmesh/cluster'; then
+       | grep -av '^[[:space:]]*#' | grep -a 'var/lib/hugmesh/cluster' >/dev/null; then
     CLUSTER_BUILDERS+=("${bn}")
   fi
 done
