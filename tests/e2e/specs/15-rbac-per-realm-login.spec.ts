@@ -1,7 +1,7 @@
 import { test, expect, request } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
 import {
-  SYSTEMS_SEED_USERS, GAMES_SEED_USERS, passwordFor, systemsUser, sharedPassword,
+  SYSTEMS_SEED_USERS, GAMES_SEED_USERS, passwordFor, systemsUser, loginPassword,
 } from './rbac-roles';
 
 // 15 — Per-realm login.
@@ -28,7 +28,15 @@ import {
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@hugmesh.net';
 // Deterministic native password every seeded/invited persona signs in with —
-// resolved/generated, never a literal (see rbac-roles.ts sharedPassword()).
+// resolved/generated, never a literal: loginPassword() is the LAZY, memoised
+// wrapper around sharedPassword() (see rbac-roles.ts). It must be IMPORTED, not
+// assumed ambient — it was not, and from 2026-08-27 until #305 every test here
+// died with `ReferenceError: loginPassword is not defined` at CALL time, NOT at
+// parse time. The distinction is the whole point: the module imported and
+// transpiled fine, `playwright test --list` enumerated all of its tests, and the
+// enumeration guard stayed green — a default parameter is only evaluated when
+// the function is actually called. That is why a new guard had to be written
+// (tests/scripts/test-e2e-spec-symbol-resolution.sh); --list could never see it.
 
 // Native sign-in through OUR /bff/login: the opaque httpOnly bff_session cookie is
 // stored in THIS context's cookie jar and rides subsequent /bff/** calls (no bearer
