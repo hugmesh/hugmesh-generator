@@ -32,6 +32,22 @@
 # — no PyYAML, because the brand half is a .hbs template and `name:
 # {{BRAND}}-harbor` is not valid YAML.
 #
+# MEASURED, 2026-09-17: tests/scripts/test-e2e-spec-symbol-resolution.sh was
+# executed in python:3-slim (the debian job's image family) with the checkout
+# mounted READ-ONLY and --network=none before being added to that job's list —
+# 7 passed, 0 failed, rc=0, its five-mutation battery 3 caught / 2 correctly
+# silent, and its vacuity floor exercised. It is the SECOND test-e2e-* suite in
+# CI (the note above about shell-nav-entry being "the one" is now the note about
+# the first of two, and the reason is identical): it is pure static analysis of
+# tests/e2e and needs no node_modules and no chromium. DEBIAN and not ALPINE on
+# purpose, MEASURED not assumed — run in an alpine image WITHOUT python3 it
+# prints 0 passed / 7 failed rc=1, i.e. it fails CLOSED rather than skipping,
+# but a job that can only ever go red is not a gate. It exists because
+# hugmesh-generator#305 sat on main for three weeks: spec 15 called
+# loginPassword() without importing it, `playwright test --list` never evaluates
+# a default parameter so the enumeration guard stayed green, and there is no
+# tsconfig.json in the lane so tsc never ran.
+#
 # The lists are EXPLICIT, never a glob. A glob quietly changes what is gated when a
 # file is renamed; an explicit list plus the missing-file check below turns that
 # into an error. tests/scripts/test-guard-integrity.sh check 7 counts these names
@@ -470,6 +486,7 @@ jobs:
             tests/scripts/test-client-connect-routes.sh
             tests/scripts/test-cluster-manifest-integrity.sh
             tests/scripts/test-e2e-shell-nav-entry.sh
+            tests/scripts/test-e2e-spec-symbol-resolution.sh
             tests/scripts/test-eso-provider-refs.sh
             tests/scripts/test-eso-seed-contract.sh
             tests/scripts/test-first-run-lib.sh

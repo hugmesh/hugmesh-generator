@@ -457,7 +457,25 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # slim): it is a negative guard whose controls must fail on a planted defect, and
 # busybox grep/sed is where a negative guard fails open. The ungated SET pin is
 # unchanged at 22 in both measurements.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-168}"
+#
+# 168 -> 169 on 2026-09-17: tests/scripts/test-e2e-spec-symbol-resolution.sh joined
+# the gate with the #305 fix (spec 15 called loginPassword() without importing it,
+# and nothing in the lane could see it). MEASURED by RUNNING this file on the same
+# tree before and after the two wirings, not computed:
+#     168 of 191 suites are named by a pull_request-triggered workflow   (suite on
+#                                                                         disk, not
+#                                                                         yet wired)
+#     169 of 191 suites are named by a pull_request-triggered workflow   (wired)
+# The DENOMINATOR does not move here, unlike the entries above, and that is the
+# check on the measurement: the suite file was already on disk and already counted
+# when the first number was taken, so only the gated half could move. It is named
+# in shell-suites.yml's DEBIAN job (python:3-slim) and in .gitlab-ci.yml; it is the
+# SECOND test-e2e-* suite in the gate, joining test-e2e-shell-nav-entry.sh, for the
+# same stated reason — pure static analysis of tests/e2e, no node_modules, no
+# chromium. The ungated SET pin is unchanged at 22. This file conflicts on nearly
+# every merge; if it conflicts here, RE-MEASURE on the merged tree per the doctrine
+# above rather than taking 169 or the other side's number.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-169}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED

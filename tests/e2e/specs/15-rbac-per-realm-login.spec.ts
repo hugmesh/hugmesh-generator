@@ -1,7 +1,7 @@
 import { test, expect, request } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
 import {
-  SYSTEMS_SEED_USERS, GAMES_SEED_USERS, passwordFor, systemsUser, sharedPassword,
+  SYSTEMS_SEED_USERS, GAMES_SEED_USERS, passwordFor, systemsUser, loginPassword,
 } from './rbac-roles';
 
 // 15 — Per-realm login.
@@ -28,7 +28,10 @@ import {
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@hugmesh.net';
 // Deterministic native password every seeded/invited persona signs in with —
-// resolved/generated, never a literal (see rbac-roles.ts sharedPassword()).
+// resolved/generated, never a literal: loginPassword() is the LAZY, memoised
+// wrapper around sharedPassword() (see rbac-roles.ts). It must be IMPORTED, not
+// assumed ambient — it was not, and this spec died at parse time with
+// `ReferenceError: loginPassword is not defined` from 2026-08-27 (#305).
 
 // Native sign-in through OUR /bff/login: the opaque httpOnly bff_session cookie is
 // stored in THIS context's cookie jar and rides subsequent /bff/** calls (no bearer
