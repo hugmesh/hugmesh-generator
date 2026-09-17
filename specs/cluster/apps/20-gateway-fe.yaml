@@ -134,6 +134,22 @@ spec:
           # Fail-safe by design: if the exchange errors the request 401s (the raw
           # bff_ is never forwarded), so turning it ON cannot widen access.
           - { name: HUGMESH_GATEWAY_BFF_EXCHANGE_ENABLED, value: "true" }
+          # Positive-swap cache TTL = the suspension-bypass window (a cache hit skips
+          # admin-bff's exchange suspension gate). 0 = cache OFF: every bff_ request
+          # round-trips to admin-bff and a suspension is enforced on the very next
+          # request. Operator decision 2026-09-16 (hugmesh-gateway#2, "B: zero window
+          # now"). The gateway image default is ALSO 0 from that date; this line makes
+          # the posture explicit in the manifest regardless of which image tag is
+          # pinned (an older image defaults to 5000 = a 5 s window). Cost: one
+          # in-cluster swap call per bff_-bearing request on THIS tier only. That
+          # latency tax is DELIBERATE and UNMEASURED — the operator accepted it
+          # sight-unseen in preference to any suspension-bypass window at all; no
+          # e2e run on either lane has yet been timed at 0 against 5000, and doing
+          # so is on hugmesh-gateway#2's human-verify list. Do NOT raise this value
+          # to "fix" a latency report without taking that decision back to #347.
+          # Kept in parity with tests/stack/compose.local.yaml by
+          # tests/stack/test-gateway-auth-flag-parity.sh.
+          - { name: HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS, value: "0" }
           # The image default for the swap target is `http://admin-bff:8080` — a
           # Service name that exists in NO namespace of this cluster (the Service
           # is `hugmesh-admin-bff-api` in `hugmesh-backend`), and plain http into

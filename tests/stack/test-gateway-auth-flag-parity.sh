@@ -74,7 +74,16 @@ GWY="${GW}/src/main/resources/application.yml"
 # ── the keys under parity, and the gateway roles that exist on BOTH lanes ──────
 # pki-gateway is deliberately absent: it fronts headscale with its own auth model
 # and carries no bff_ session surface on either lane.
-KEYS=(HUGMESH_GATEWAY_BFF_EXCHANGE_ENABLED APP_BFF_SESSION_ENABLED)
+# HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS is the suspension-bypass window of the
+# exchange (0 = cache OFF, every bff_ request round-trips to admin-bff — operator
+# decision 2026-09-16, hugmesh-gateway#2). Two lanes with different windows enforce a
+# suspension at different times, which is the same class of drift as a different
+# carrier, so it is under parity too; the image default is read like the others.
+# PARITY IS NOT ENOUGH FOR THIS ONE. Measured while adding it: with the TTL under
+# KEYS alone, a fixture that moves BOTH lanes back to 5000 passes 12/0 — perfect
+# parity and a 5-second window, i.e. decision 7 silently undone. So the VALUE is
+# asserted separately further down; control 5 is that mutation.
+KEYS=(HUGMESH_GATEWAY_BFF_EXCHANGE_ENABLED APP_BFF_SESSION_ENABLED HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS)
 ROLES=("fe:hugmesh-fe-gateway:20-gateway-fe.yaml" "be:hugmesh-be-gateway:20-gateway-be.yaml")
 
 echo "== gateway auth-flag parity (compose vs specs/cluster) =="
@@ -136,6 +145,59 @@ for role in "${ROLES[@]}"; do
     bad "${short}-gateway: ${URI_KEY}='${got}' is not an https in-cluster Service address (admin-bff serves TLS with client-auth=need)"
   fi
 done
+
+# ── decision 7: the window must be ZERO, not merely EQUAL ─────────────────────
+# The drift that actually undoes the operator's 2026-09-16 answer on
+# hugmesh-gateway#2 ("B: zero window now") is both lanes moving back to 5000
+# TOGETHER — which the parity loop above reads as agreement and passes. So the
+# effective value is asserted here as well, resolved through the image default like
+# everything else, so "the line was deleted and the image already defaults to 0" is
+# correctly green while "the line was deleted and the pinned image defaults to 5000"
+# is correctly red.
+#
+# SCOPED TO LANES WHERE THE EXCHANGE IS ON. The positive-swap cache only exists when
+# BffJwtExchangeWebFilter is loaded, which is @ConditionalOnProperty on
+# bff-exchange.enabled. be-gateway runs the exchange OFF on both lanes today, so a
+# TTL there is inert and demanding 0 of it would be a dead knob — exactly the class
+# this repo's tests exist to stop. If someone turns the exchange on for be-gateway,
+# this assertion starts applying to it on its own.
+TTL_KEY=HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS
+ON_KEY=HUGMESH_GATEWAY_BFF_EXCHANGE_ENABLED
+ttl_default="$(default_of "${TTL_KEY}")"
+on_default="$(default_of "${ON_KEY}")"
+eff() { # <lane-tsv> <key> <image-default> -> the value the container really runs
+  local f
+  local k
+  local d
+  f="$1"; k="$2"; d="$3"
+  local s
+  local v
+  s="$(awk -F'\t' -v k="${k}" '$2==k{print $3}' "${f}")"
+  v="$(awk -F'\t' -v k="${k}" '$2==k{print $4}' "${f}")"
+  [ "${s}" = "PRESENT" ] || v="${d}"
+  printf '%s' "${v}"
+}
+zchecked=0
+for role in "${ROLES[@]}"; do
+  short="${role%%:*}"
+  for lane in compose cluster; do
+    [ -r "${T}/${short}.${lane}" ] || continue
+    on="$(eff "${T}/${short}.${lane}" "${ON_KEY}" "${on_default}")"
+    [ "${on}" = "true" ] || continue
+    ttl="$(eff "${T}/${short}.${lane}" "${TTL_KEY}" "${ttl_default}")"
+    zchecked=$((zchecked+1))
+    if [ "${ttl}" = "0" ]; then
+      ok "${short}-gateway ${lane}: exchange ON and ${TTL_KEY} effectively 0 — no suspension-bypass window (decision 7)"
+    else
+      bad "${short}-gateway ${lane}: exchange ON but ${TTL_KEY} effectively '${ttl}' — a ${ttl} ms window in which a suspended session still gets through; the operator's 2026-09-16 answer (hugmesh-gateway#2) is ZERO"
+    fi
+  done
+done
+if [ "${zchecked}" -ge 2 ]; then
+  ok "vacuity: ${zchecked} exchange-ON gateway lane(s) had the window asserted"
+else
+  bad "vacuity: only ${zchecked} exchange-ON lane(s) checked — the fe front door is two (compose + cluster), so the assertion has gone blind"
+fi
 
 # ── vacuity: a run that compared nothing must not pass ────────────────────────
 if [ "${compared}" -ge 4 ]; then
@@ -213,6 +275,21 @@ if diff -q "${T}/apps/20-gateway-fe.yaml" "${T}/b4/20-gateway-fe.yaml" >/dev/nul
   bad "control 'explicit opposite values': the fixture edit changed nothing"
 else
   pair "explicit opposite values on the two lanes" "${T}/b4" "${T}/pristine.yaml"
+fi
+
+# 5. BOTH LANES DRIFT BACK TO 5000 TOGETHER. Perfect parity, and the 5-second
+#    suspension-bypass window is back. The parity loop alone passes this; the
+#    zero-window assertion is what catches it.
+mkdir -p "${T}/b5"; cp "${T}/apps"/*.yaml "${T}/b5/"
+sed 's/{ name: HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS, value: "0" }/{ name: HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS, value: "5000" }/' \
+  "${T}/apps/20-gateway-fe.yaml" > "${T}/b5/20-gateway-fe.yaml"
+sed 's/^      HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS: "0"$/      HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS: "5000"/' \
+  "${T}/pristine.yaml" > "${T}/b5.yaml"
+if diff -q "${T}/apps/20-gateway-fe.yaml" "${T}/b5/20-gateway-fe.yaml" >/dev/null \
+   || diff -q "${T}/pristine.yaml" "${T}/b5.yaml" >/dev/null; then
+  bad "control 'both lanes drift back to 5000': the fixture edit changed nothing"
+else
+  pair "both lanes drift back to 5000 together (parity holds, the window returns)" "${T}/b5" "${T}/b5.yaml"
 fi
 
 echo

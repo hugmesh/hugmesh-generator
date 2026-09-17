@@ -112,6 +112,31 @@ TRIO='no-cache, no-store, max-age=0, must-revalidate'
 # from the compose file and fails if these are not contained in what it finds).
 KNOWN_GW=(hugmesh-pki-gateway hugmesh-be-gateway hugmesh-fe-gateway)
 KNOWN_UBFF=(hugmesh-user-bff-api)
+# Cache knobs that are DELIBERATELY pinned, "service:ENV=required-value" — the
+# escape hatch assertion (2)'s own failure message names ("extend this gate with
+# the knob's required value"), not a mute list. A knob here is tolerated at
+# EXACTLY this value; a different value, or any knob not listed, still trips (2),
+# and a pin that matches nothing fails too (a stale pin is how a tripwire goes
+# quietly vacuous).
+#
+# HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS is the gateway's positive-swap cache
+# for the bff_ cookie -> custody-JWT exchange. It caches an AUTHORISATION answer,
+# not a RESPONSE BODY, so it is a different object from the no-store posture this
+# file exists for — but it matches the CACHE|NO_?STORE name pattern, and the
+# pattern is deliberately blunt. 0 = the cache is OFF, which is both the operator's
+# 2026-09-16 answer on hugmesh-gateway#2 ("B: zero window now") and the strongest
+# posture available, so pinning it here cannot weaken anything. Any NON-zero value
+# reopens a window in which a suspended session still gets through, and this gate
+# will refuse it. Parity of the same key across the compose and cluster lanes is
+# hugmesh-generator#398 / tests/stack/test-gateway-auth-flag-parity.sh.
+PINNED_KNOBS=("hugmesh-fe-gateway:HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS=0")
+knob_is_pinned() { # <service> <ENV> <value> -> 0 when pinned at exactly this value
+  local want
+  local p
+  want="$1:$2=$3"
+  for p in "${PINNED_KNOBS[@]}"; do [ "${p}" = "${want}" ] && return 0; done
+  return 1
+}
 
 P=0; F=0
 ok(){ echo "  PASS $*"; P=$((P+1)); }
@@ -181,10 +206,16 @@ for name, s in sorted(svcs.items()):
 pat = re.compile(r"CACHE|NO_?STORE", re.I)
 for name in sorted(gw | ubff):
     env = (svcs.get(name) or {}).get("environment") or {}
-    keys = [str(e).split("=", 1)[0] for e in env] if isinstance(env, list) else list(env)
-    for k in sorted(keys):
+    # `- KEY=value` list form and the mapping form both reduce to (name, value):
+    # a pinned knob is only pinned AT A VALUE, so the value is part of the row.
+    if isinstance(env, list):
+        items = [(str(e).split("=", 1)[0], str(e).split("=", 1)[1] if "=" in str(e) else "")
+                 for e in env]
+    else:
+        items = [(str(k), "" if v is None else str(v)) for k, v in env.items()]
+    for k, v in sorted(items):
         if pat.search(k):
-            print("HIT\t%s\t%s" % (name, k))
+            print("HIT\t%s\t%s\t%s" % (name, k, v))
 for name in sorted(gw):
     print("GW\t%s" % name)
 for name in sorted(ubff):
@@ -260,9 +291,27 @@ contains_all "${ubff_got}" "${KNOWN_UBFF[@]}" \
   && ok "(2) user-bff consumer re-derived: ${ubff_got}" \
   || bad "(2) user-bff discovery lost '${KNOWN_UBFF[*]}' (got '${ubff_got}') — the tripwire would not be watching the identity-media owner"
 hits="$(audit_hits "${WORK}/audit.tsv")"
-[ -z "${hits}" ] \
-  && ok "(2) no CACHE/NO_STORE-named env var on any gateway or user-bff service (the wave-5 fixes are knob-less; nothing here can dark them)" \
-  || bad "(2) CACHE KNOB APPEARED: $(printf '%s' "${hits}" | tr '\n\t' ' :' | cut -c1-200) — a cache knob on a posture-owning service must be pinned DELIBERATELY: extend this gate with the knob's required value (the way test-gateway-mfa-env.sh pins the MFA trio), do not just delete this assertion"
+# Partition, do not just count: a knob in PINNED_KNOBS at exactly its required
+# value is a deliberate posture; anything else is the tripwire firing.
+unpinned=""
+pin_matched=0
+while IFS="$(printf '\t')" read -r _tag svc envname envval; do
+  [ -n "${svc:-}" ] || continue
+  if knob_is_pinned "${svc}" "${envname}" "${envval}"; then
+    pin_matched=$((pin_matched+1))
+    ok "(2) pinned cache knob ${svc}:${envname}=${envval} — deliberate, at its required value"
+  else
+    unpinned="${unpinned}${svc}:${envname}=${envval} "
+  fi
+done <<EOF
+${hits}
+EOF
+[ -z "${unpinned}" ] \
+  && ok "(2) no UNPINNED CACHE/NO_STORE-named env var on any gateway or user-bff service (the wave-5 fixes are knob-less; nothing here can dark them)" \
+  || bad "(2) CACHE KNOB APPEARED: $(printf '%s' "${unpinned}" | cut -c1-200) — a cache knob on a posture-owning service must be pinned DELIBERATELY: extend this gate with the knob's required value (the way test-gateway-mfa-env.sh pins the MFA trio), do not just delete this assertion"
+[ "${pin_matched}" -eq "${#PINNED_KNOBS[@]}" ] \
+  && ok "(2) all ${#PINNED_KNOBS[@]} deliberately-pinned cache knob(s) present at their required value" \
+  || bad "(2) only ${pin_matched} of ${#PINNED_KNOBS[@]} pinned cache knob(s) matched (${PINNED_KNOBS[*]}) — either the knob moved/changed value or the pin is stale; a pin that matches nothing is how this tripwire goes vacuous"
 
 # ── 3) the build-time patcher keeps its hands off the posture ─────────────────
 echo "-- 3) scripts/patch-stack-src.sh: no posture rewrite at build time --"
@@ -428,6 +477,69 @@ grep -q 'maxAge(300' "${BAD_UB}/${UBFF_SRC_REL}/profile/ProfileController.java" 
   && ok "(5g) user-bff source pin bites: an avatar serve back on maxAge FAILS it" \
   || bad "(5g) USER-BFF SOURCE PIN VACUOUS: it passed a ProfileController serving max-age again"
 
+# 5h) a PINNED knob at the WRONG value must still trip (2). The pin is a value
+#     pin, not a name allowlist: if it tolerated any value, adding the knob would
+#     have DISARMED this tripwire for that name forever.
+python3 - "${COMPOSE}" "${WORK}/compose-wrongval.yaml" <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+old = '      HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS: "0"\n'
+new = '      HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS: "5000"\n'
+if old not in s:
+    raise SystemExit("compose mutator: the pinned TTL knob is not present at 0")
+open(dst, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PY
+MRC=$?
+if mut_ok "${MRC}" 5h; then
+  if compose_cache_audit "${WORK}/compose-wrongval.yaml" > "${WORK}/audit-wrongval.tsv" 2>/dev/null; then
+    wv_unpinned=""
+    while IFS="$(printf '\t')" read -r _tag svc envname envval; do
+      [ -n "${svc:-}" ] || continue
+      knob_is_pinned "${svc}" "${envname}" "${envval}" || wv_unpinned="${wv_unpinned}${svc}:${envname}=${envval} "
+    done <<EOF
+$(audit_hits "${WORK}/audit-wrongval.tsv")
+EOF
+    case "${wv_unpinned}" in
+      *HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS=5000*)
+        ok "(5h) value pin bites: the pinned knob at 5000 is flagged as UNPINNED" ;;
+      *)
+        bad "(5h) VALUE PIN VACUOUS: the pinned knob at 5000 was tolerated (unpinned set: '${wv_unpinned:-none}') — the pin is behaving as a name allowlist" ;;
+    esac
+  else
+    bad "(5h) staged compose failed to parse (control not exercised)"
+  fi
+fi
+
+# 5i) a PINNED knob that DISAPPEARS must trip the stale-pin assertion, or a pin
+#     could outlive its knob and this tripwire would be quietly watching nothing.
+python3 - "${COMPOSE}" "${WORK}/compose-nopin.yaml" <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding="utf-8").read()
+old = '      HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS: "0"\n'
+if old not in s:
+    raise SystemExit("compose mutator: the pinned TTL knob is not present at 0")
+open(dst, "w", encoding="utf-8").write(s.replace(old, "", 1))
+PY
+MRC=$?
+if mut_ok "${MRC}" 5i; then
+  if compose_cache_audit "${WORK}/compose-nopin.yaml" > "${WORK}/audit-nopin.tsv" 2>/dev/null; then
+    np_matched=0
+    while IFS="$(printf '\t')" read -r _tag svc envname envval; do
+      [ -n "${svc:-}" ] || continue
+      knob_is_pinned "${svc}" "${envname}" "${envval}" && np_matched=$((np_matched+1))
+    done <<EOF
+$(audit_hits "${WORK}/audit-nopin.tsv")
+EOF
+    [ "${np_matched}" -lt "${#PINNED_KNOBS[@]}" ] \
+      && ok "(5i) stale-pin assertion bites: with the knob removed only ${np_matched}/${#PINNED_KNOBS[@]} pins match" \
+      || bad "(5i) STALE-PIN ASSERTION VACUOUS: ${np_matched}/${#PINNED_KNOBS[@]} pins still matched after the knob was deleted"
+  else
+    bad "(5i) staged compose failed to parse (control not exercised)"
+  fi
+fi
+
 # ── the tally itself has to be trustworthy ────────────────────────────────────
 # `set -uo pipefail` WITHOUT `-e` is deliberate (one red assertion must not hide
 # the rest), so a section that stops RUNNING stops being COUNTED. State the floor
@@ -435,7 +547,11 @@ grep -q 'maxAge(300' "${BAD_UB}/${UBFF_SRC_REL}/profile/ProfileController.java" 
 # (the CI lint image); each present tree adds one assertion in (4), hence a floor
 # and not an equality. Adding assertions? Raise it. Removing one? Lower it ON
 # PURPOSE, in the same commit.
-MIN_CHECKS=23
+# 23 -> 27 on 2026-09-16 (hugmesh-generator#398): the deliberate cache-knob pin
+# added four assertions with no clone tree — one per matched PINNED_KNOBS entry,
+# the stale-pin check, and controls (5h) and (5i). Measured, not estimated: this
+# file on the parent commit reported "23 passed, 0 failed" and reports 27 here.
+MIN_CHECKS=27
 total=$(( P + F ))
 if [ "${total}" -lt "${MIN_CHECKS}" ]; then
   bad "only ${total} assertions ran, but this file declares a floor of ${MIN_CHECKS} — checks stopped running rather than failing, so the count above means nothing. Find what exited early (or lower MIN_CHECKS deliberately if the removal was intended)."
