@@ -178,6 +178,51 @@ def _run_plain(argv, cwd, timeout=5.0):
         return 127, f"<probe error: {exc}>"
 
 
+# --- terminal decoration in --help output -------------------------------------
+# MEASURED 2026-09-17 on this host, GNU coreutils 9.11 (Gentoo 9.11-r1 p0): `--help`
+# wraps every option token in an OSC 8 HYPERLINK to the online manual and in SGR
+# bold, and does so EVEN WHEN STDOUT IS A PIPE. Only TERM=dumb suppresses it;
+# NO_COLOR=1 does not. So an option line arrives as
+#
+#   b"  \x1b]8;;https://.../coreutils.html#du-0\x1b\\\x1b[1m-0, --null\x1b[0m\x1b]8;;\x1b\\"
+#
+# whose first whitespace-delimited token starts with ESC, not with `-`. Every option
+# line therefore failed the "does this look like an option?" test in
+# parse_option_blocks(), and the whole option surface parsed as EMPTY: ls, df, id,
+# stat, uname, du and base64 all yielded ZERO blocks here. That took the guard from
+# "no entry is hazardous" to "no entry could be judged at all", and -- because the
+# negative controls in test-workload-console.sh name the MECHANISM they expect and
+# not merely a non-zero exit -- surfaced as controls that could no longer fail.
+# See hugmesh/hugmesh-generator#405.
+#
+# These sequences are DECORATION, not text, so removing them is not a relaxation of
+# the property: it is reading the same sentence the command wrote. That claim is
+# PINNED rather than asserted -- fixtures/coreutils-9.11-du-help.decorated.txt and
+# .plain.txt are the SAME `du --help` captured with and without decoration, and
+# parser_self_test() below requires that stripping the first reproduces the second
+# BYTE FOR BYTE. If it ever does not, the parser is judged UNPROVEN, never green.
+#
+# Order matters: OSC is removed first because its String Terminator is itself
+# `ESC \`, which the generic two-character escape rule would otherwise eat on its
+# own, leaving the hyperlink's URL behind as prose for the option parser to read.
+_OSC_SEQ = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\|$)")   # OSC ... BEL | ST
+_CSI_SEQ = re.compile(r"\x1b\[[0-9;:<=>?]*[ -/]*[@-~]")           # CSI: SGR, cursor, ...
+_ESC_SEQ = re.compile(r"\x1b[ -/]*[0-~]")                        # remaining 2-char escapes
+
+
+def strip_terminal_escapes(text):
+    """The help text with terminal control sequences removed, and nothing else."""
+    text = _OSC_SEQ.sub("", text)
+    text = _CSI_SEQ.sub("", text)
+    text = _ESC_SEQ.sub("", text)
+    return text.replace("\x07", "")
+
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+DECORATED_FIXTURE = os.path.join(_HERE, "fixtures", "coreutils-9.11-du-help.decorated.txt")
+PLAIN_FIXTURE = os.path.join(_HERE, "fixtures", "coreutils-9.11-du-help.plain.txt")
+
+
 # `-h` is NOT tried: on du/df/ls it is --human-readable, and `du -h` run in a repo
 # checkout emits megabytes of directory sizes that would beat the real help on
 # length and leave the option surface unparsed — the guard would then fail for
@@ -187,13 +232,21 @@ HELP_FORMS = (("--help",), ("--help", "all"), ("help",))
 
 
 def harvest_help(head, cwd):
-    """The command's own help text. Longest of the forms it answers to."""
+    """The command's own help text, terminal decoration removed.
+
+    Longest of the forms it answers to. The longest is chosen on the DECORATED text
+    on purpose: a command decorates every form it answers to identically, so the
+    decoration cannot change which form wins, while choosing on the stripped text
+    would let a form that is mostly escape bytes look shorter than it is.
+    """
     texts = []
     for form in HELP_FORMS:
         _, out = _run_plain([head, *form], cwd)
         if out and "<probe error" not in out:
             texts.append(out)
-    return max(texts, key=len) if texts else ""
+    if not texts:
+        return ""
+    return strip_terminal_escapes(max(texts, key=len))
 
 
 _OPTLINE = re.compile(r"^(\s+)(\S.*?)(?:\s{2,}(.*))?$")
@@ -744,10 +797,110 @@ def battery_for_bare(head, tokens):
     return argvs
 
 
+# --- the parser is itself under test ------------------------------------------
+# Every judgement Oracle A makes rests on parse_option_blocks() being able to read a
+# help text at all, and #405 is what happens when it silently cannot: the option
+# surface came back EMPTY for seven coreutils commands, so no entry could be judged
+# and the negative controls stopped being able to fail. A parser that quietly reads
+# nothing is indistinguishable, in every line it prints, from an allowlist that is
+# clean.
+#
+# So the parser is pinned against a CAPTURED help text rather than against whatever
+# the host happens to ship. The two fixtures are the SAME `du --help`, taken on
+# coreutils 9.11 with and without terminal decoration, and the assertions are chosen
+# so that not one of them can be satisfied by a parser that reads nothing:
+#
+#   1. the decorated fixture still CARRIES decoration -- otherwise a later tidy-up
+#      that de-fanged the fixture would leave this self-test vacuously green;
+#   2. stripping the decorated fixture reproduces the plain one BYTE FOR BYTE, which
+#      is the evidence that what was removed is decoration and nothing else;
+#   3. the parse of that text is NON-TRIVIAL: named options of du's documented
+#      interface must come back as option blocks, so "zero blocks" cannot pass;
+#   4. Oracle A still names `--files0-from` with the exact mechanism string
+#      test-workload-console.sh's du DOCUMENTATION control greps for, so the leg and
+#      its control cannot drift apart in silence.
+#
+# A failure here is UNPROVEN, not "clean". The entries are still probed afterwards,
+# because the two oracles are independent evidence, but the run exits non-zero and
+# names which leg went blind.
+def _first_diff(a, b):
+    for i, (x, y) in enumerate(zip(a, b)):
+        if x != y:
+            return i
+    return min(len(a), len(b))
+
+
+def parser_self_test(ok, bad):
+    """Pin the option-surface parser against captured help text. True when sound."""
+    try:
+        decorated = open(DECORATED_FIXTURE, encoding="utf-8").read()
+        plain = open(PLAIN_FIXTURE, encoding="utf-8").read()
+    except OSError as exc:
+        bad("parser self-test: cannot read the pinned help fixtures (%s), so the "
+            "option parser is UNJUDGED and every Oracle A verdict below is UNPROVEN"
+            % exc)
+        return False
+
+    missing = [n for n, probe in (("an OSC 8 hyperlink", "\x1b]8;;"), ("an SGR sequence", "\x1b["))
+               if probe not in decorated]
+    if missing or decorated == plain:
+        bad("parser self-test: the DECORATED fixture no longer carries %s, so this "
+            "self-test would pass without ever proving the parser can read a decorated "
+            "help text. Re-capture it from a coreutils that decorates."
+            % (" or ".join(missing) or "any decoration at all"))
+        return False
+
+    stripped = strip_terminal_escapes(decorated)
+    if stripped != plain:
+        bad("parser self-test: stripping the decorated fixture does NOT reproduce the "
+            "plain capture byte for byte (%d chars vs %d, first difference at offset "
+            "%d). The sanitiser is dropping or keeping something that is not "
+            "decoration, so the text Oracle A reads is UNPROVEN."
+            % (len(stripped), len(plain), _first_diff(stripped, plain)))
+        return False
+
+    blocks = parse_option_blocks(stripped)
+    heads = " | ".join(b[0] for b in blocks)
+    # Facts about the interface du documents in the PINNED bytes. They cannot drift
+    # under us: the fixture never changes. If a re-capture ever makes one of these
+    # untrue, that is a human decision to re-pin, not something to widen.
+    absent = [o for o in ("--files0-from", "--exclude-from", "--all", "--max-depth")
+              if o not in heads]
+    if absent:
+        bad("parser self-test: the pinned `du --help` parses to %d option blocks but "
+            "%s %s missing from them -- the option surface handed to Oracle A is "
+            "incomplete, so a hazardous flag can sit in a help text unjudged"
+            % (len(blocks), ", ".join(absent), "is" if len(absent) == 1 else "are"))
+        return False
+
+    want = "takes a PATH-valued argument"
+    if not [t for t, w in doc_hazards("du", stripped, blocks)
+            if t == "--files0-from" and want in w]:
+        bad("parser self-test: Oracle A no longer reports `du --files0-from` as %r on "
+            "the pinned help. test-workload-console.sh's du DOCUMENTATION control "
+            "greps for exactly that string, so the leg and its control have drifted "
+            "apart and the control is no longer testing the leg it names." % want)
+        return False
+
+    ok("parser self-test: the pinned coreutils 9.11 `du --help` strips to its "
+       "undecorated capture BYTE FOR BYTE, parses to %d option blocks, and Oracle A "
+       "still names `--files0-from` path-valued -- the option parser is sound here and "
+       "terminal decoration does not change what it reads" % len(blocks))
+    return True
+
+
 # ── the check ─────────────────────────────────────────────────────────────────
 def check_entries(entries, emit):
-    """Assert P over a parsed allowlist. Returns (passes, failures)."""
-    P = F = 0
+    """Assert P over a parsed allowlist. Returns (passes, failures, unprovens).
+
+    The third counter exists because "this entry violates P" and "this entry could
+    not be judged" are different findings that used to arrive as the same non-zero
+    exit, and the caller then printed the first as the verdict for the second. On
+    #405 that turned an inert check into the sentence "exec allowlist VIOLATES
+    property P", which reads as a security finding and was in fact a blind guard.
+    Both still fail the run; only one of them is a statement about the allowlist.
+    """
+    P = F = U = 0
 
     def ok(m):
         nonlocal P
@@ -759,9 +912,17 @@ def check_entries(entries, emit):
         F += 1
         emit("  FAIL " + m)
 
+    def unproven(m):
+        """A failure that says the CHECK could not judge, not that the entry is bad."""
+        nonlocal U
+        U += 1
+        bad(m)
+
+    parser_self_test(ok, unproven)
+
     if not entries:
         bad("exec allowlist is empty")
-        return P, F
+        return P, F, U
     ok("exec allowlist non-empty (%d entries)" % len(entries))
 
     can = Canaries()
@@ -791,7 +952,7 @@ def check_entries(entries, emit):
 
             binary = shutil.which(head)
             if not binary:
-                bad("entry %r: %r is not present on this runner, so the property CANNOT "
+                unproven("entry %r: %r is not present on this runner, so the property CANNOT "
                     "be proven for it. An unprobed entry is an unproven entry — install "
                     "the package that ships it in the job image, or drop the entry."
                     % (entry, head))
@@ -799,14 +960,27 @@ def check_entries(entries, emit):
 
             help_text = harvest_help(head, can.root)
             if len(help_text.strip()) < 40:
-                bad("entry %r: %r produced no usable --help/-h text, so neither oracle "
-                    "can judge its arguments" % (entry, head))
+                unproven("entry %r: %r produced no usable --help/-h text, so neither "
+                         "oracle can judge its arguments" % (entry, head))
+                continue
+            # harvest_help() has already removed every terminal control sequence this
+            # module knows. An ESC that SURVIVES that is decoration in a form nobody
+            # here has seen, and the option line it sits on will not parse -- which is
+            # exactly how #405 presented. Say so with the byte count rather than
+            # letting it come back as the softer "could not parse a single option",
+            # because the two have different fixes.
+            if "\x1b" in help_text:
+                unproven("entry %r: %d ESC byte(s) survive sanitisation of %r's help, "
+                         "so its help is decorated in a form this parser does not "
+                         "recognise and its option surface cannot be read. The property "
+                         "is UNPROVEN for this entry, not proven absent."
+                         % (entry, help_text.count("\x1b"), head))
                 continue
             blocks = parse_option_blocks(help_text)
             if not blocks:
-                bad("entry %r: could not parse a single option out of %r's help; the "
-                    "argument surface is unknown, so the property is unproven"
-                    % (entry, head))
+                unproven("entry %r: could not parse a single option out of %r's help; "
+                         "the argument surface is unknown, so the property is unproven"
+                         % (entry, head))
                 continue
             tokens = harvest_option_tokens(help_text, blocks)
 
@@ -856,7 +1030,7 @@ def check_entries(entries, emit):
                    "file's BYTES" % (entry, len(blocks), len(argvs)))
     finally:
         can.cleanup()
-    return P, F
+    return P, F, U
 
 
 def entries_from_patch(path):
@@ -878,8 +1052,13 @@ def main(argv):
     else:
         print("usage: exec_argv_property.py <patch.yaml> | --entries 'a,b -c'")
         return 2
-    P, F = check_entries(entries, print)
+    P, F, U = check_entries(entries, print)
     print("__SUB %d %d" % (P, F))
+    # The caller needs to tell a FINDING from a BLIND SPOT. Both fail the run; only
+    # one of them is a claim about the allowlist. "unproven" wins over "violated"
+    # when both happened, because a run with a blind leg cannot honestly call any
+    # entry clean either.
+    print("__VERDICT %s" % ("unproven" if U else "violated" if F else "ok"))
     return 1 if F else 0
 
 
