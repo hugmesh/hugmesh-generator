@@ -515,6 +515,32 @@ spec:
             - { name: APPSTORE_EFFECTOR_ENABLED,   value: "true" }
             - { name: APPSTORE_FEDERATION_ENABLED, value: "true" }
             - { name: APPSTORE_BUILDER_ENABLED,    value: "false" }
+            # app.appstore.argocd.base-url — the ArgoCD API server the effector in (1)
+            # above actually dials. The packaged default is
+            # `https://argocd-server.argocd.svc.cluster.local` (application.yml:759),
+            # i.e. UPSTREAM ArgoCD's own convention — and this platform has no `argocd`
+            # namespace at all. Both bootstraps install ArgoCD into ${ARGOCD_NS:-devops}
+            # and re-namespace the upstream install.yaml, which hardcodes `argocd`
+            # (bootstrap/bootstrap.sh:11,33; bootstrap/kind-local/bootstrap-kind.sh:53,657),
+            # and every Application in this tree is authored `namespace: devops`.
+            # `argocd` appears in neither namespaces/namespaces.yaml nor either
+            # bootstrap's ensure-namespaces list, so the unset default is NXDOMAIN in
+            # the pod. Measured on the live kind cluster: no `argocd` namespace exists,
+            # and Service argocd-server IS in devops exposing https=443 — so the scheme
+            # and the absent port stay exactly as packaged; ONLY the namespace was wrong.
+            # NOT a dark leg, unlike the two headscale keys above: APPSTORE_EFFECTOR_ENABLED
+            # is "true" here, so RestArgoCdClient is the wired bean and the first
+            # provisioning call dials this address for real.
+            # Same defect and same remedy as APPSTORE_SCAFFOLD_HEADSCALE_URL and
+            # APP_REGISTRY_HEADSCALE_ACL_BASE_URL: a platform-specific address belongs in
+            # the platform's manifest, not baked into a service's packaged default, which
+            # must stay usable against a stock upstream ArgoCD.
+            # THE PROBE'S LEG IS A SEPARATE INSTANCE OF THE SAME MISTAKE AND IS NOT
+            # FIXABLE FROM HERE: Fabric8PlatformCapabilityProbe.ARGOCD_NAMESPACE
+            # (hugmesh-admin-bff-api) is a Java constant still reading "argocd" with no
+            # placeholder, so no env var in this file can reach it — see the DUAL-WRITE
+            # note in manifests/admin-bff-platform-capability-rbac/rbac.yaml.
+            - { name: APPSTORE_ARGOCD_BASE_URL, value: "https://argocd-server.devops.svc.cluster.local" }
             # Where the optional-services reconciler writes its policy objects: the
             # deployed namespace is hugmesh-policy (namespaces/namespaces.yaml).
             - { name: APP_OPTIONAL_SERVICES_RECONCILE_POLICY_NAMESPACE, value: "hugmesh-policy" }
