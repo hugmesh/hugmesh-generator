@@ -197,7 +197,7 @@ awk '/^INSERT INTO gateway_route_access/ && !d { print; print "  /* tail of this
   "${SQL}" > "${T}/blk.sql"
 if diff -q "${SQL}" "${T}/blk.sql" >/dev/null; then
   bad "control '#404 block-comment truncation': the awk did not change the seed copy"
-elif python3 "${GEN}" --sql "${T}/blk.sql" --stdout >"${T}/blk.ts" 2>/dev/null && cmp -s "${OUT}" "${T}/blk.ts"; then
+elif python3 "${GEN}" --sql "${T}/blk.sql" --stdout >"${T}/blk.ts" 2>"${T}/blk.err" && cmp -s "${OUT}" "${T}/blk.ts"; then
   ok "control '#404 block-comment truncation': a '/* … ON CONFLICT … */' comment in the INSERT body leaves the oracle byte-identical"
 else
   bad "control '#404 block-comment truncation': a block comment naming ON CONFLICT changed the oracle — the stripper is not character-wise"
@@ -279,6 +279,40 @@ elif [ "${semilit_rc}" = "0" ] && [ "${semilit_rows}" = "${want_rows}" ]; then
   ok "control 'semicolon inside a literal': a ';' in a url_pattern does not end the statement (${semilit_rows} rows, all accounted for)"
 else
   bad "control 'semicolon inside a literal': exit ${semilit_rc}, ${semilit_rows} rows (wanted 0 / ${want_rows}) — the terminator is not literal-aware"
+fi
+
+# 4m. THE NEW GUARD MUST ITSELF BE GUARDED. assert_no_double_dash_in_values was
+#     added by hugmesh-generator#404 precisely because the module docstring had
+#     CITED a function of that name since the file was written and it did not
+#     exist — an assumption documented as checked and never checked. Shipping the
+#     real function is worth nothing unless something goes red when it stops
+#     working, so this control exists; without it, neutering the guard leaves the
+#     whole suite at 17/17 green (measured 2026-09-17).
+#     Each token it rejects is exercised SEPARATELY, so dropping one of them from
+#     the tuple is caught rather than masked by the other two. These are not parse
+#     hazards any more — strip_sql_comments is literal-aware — they corrupt the
+#     GATE'S OWN counters in checks 2 and 3 above (`sed 's/--.*//'` over the SQL,
+#     `sed 's|//.*||'` over the TS) and the emitter writes literals into
+#     TypeScript unescaped, so a `\` changes what the oracle MEANS.
+tok_fail=0
+tok_why=""
+for tok in '--' '//' '\'; do
+  printf "%s\n" "  ('hugmesh-fe-gateway', '/tok${tok}tok/**', 'ROLE_USER', true)," > "${T}/tokrow.txt"
+  sed "/^INSERT INTO gateway_route_access/r ${T}/tokrow.txt" "${SQL}" > "${T}/tok.sql"
+  if diff -q "${SQL}" "${T}/tok.sql" >/dev/null; then
+    tok_fail=$((tok_fail+1)); tok_why="${tok_why} [${tok}: not injected, the control proves nothing]"; continue
+  fi
+  python3 "${GEN}" --sql "${T}/tok.sql" --stdout >"${T}/tok.ts" 2>"${T}/tok.err"; tok_rc=$?
+  # Exit 2 specifically: this is a SHAPE refusal. Exit 0 means the guard is gone
+  # and a corrupting literal was emitted (measured: 155 rows, happily written).
+  if [ "${tok_rc}" != "2" ]; then
+    tok_fail=$((tok_fail+1)); tok_why="${tok_why} [${tok}: exit ${tok_rc}, wanted 2]"
+  fi
+done
+if [ "${tok_fail}" -eq 0 ] && ctl_pristine "${SQL}" && diff -q "${OUT}" "${T}/p.ts" >/dev/null; then
+  ok "control 'comment token in a row literal': '--', '//' and a backslash inside a url_pattern EACH abort (exit 2), and the pristine seed still reproduces the oracle"
+else
+  bad "control 'comment token in a row literal': assert_no_double_dash_in_values did not bite —${tok_why:- the pristine seed stopped reproducing the oracle}"
 fi
 
 # ── 5. anti-rot: the source path the generator names must exist ─────────────
