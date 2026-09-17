@@ -1,0 +1,24 @@
+# backing-service-endpoints — the managed-backing-service ENDPOINT INDIRECTION
+# bundle, applied by apps/17-backing-service-endpoints.yaml.
+#
+# Operator DECISION 34a (2026-09-17): ONE ConfigMap PER NAMESPACE, same name and key
+# scheme in each — NOT the single hugmesh-backend object that was recommended and
+# declined. The three namespaces below are the ones on the axis that EXIST on every
+# mesh. The other three (hugmesh-owncast, hugmesh-tube, hugmesh-forum) are created by
+# their own OPTIONAL-service Applications (manifests/<svc>/namespace.yaml, 13a
+# `installed:"false"` by default), so a ConfigMap for them applied from HERE would
+# leave this Application permanently unable to sync on a default mesh. Their objects
+# belong in their own service's manifests dir, which this lane does not own — it is a
+# numbered remaining box on hugmesh-admin-bff-api#9, not an omission.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  # The only namespace with keys today: the five v1 tier-2 BFF Postgres ids, seeded
+  # byte-identically with the literals already in the consumer Deployments.
+  - endpoints-hugmesh-backend.yaml
+  # Object + grant present, `data` deliberately empty — each file's header records
+  # exactly which address it would carry and what is missing.
+  - endpoints-hugmesh-pki.yaml
+  - endpoints-hugmesh-games.yaml
+  # One Role + RoleBinding per namespace, resourceNames-closed.
+  - rbac.yaml
