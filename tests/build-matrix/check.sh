@@ -59,8 +59,16 @@ THR_PASS=0;  THR_FAIL=0
 NEG_PASS=0;  NEG_FAIL=0
 CAT_PASS=0;  CAT_FAIL=0
 
+# Every FAIL headline is ALSO accumulated here and re-printed on stdout by the
+# verdict block at the very end of the run. WHY (hugmesh/hugmesh-generator#408):
+# these lines only ever went to stderr, so a combined `2>&1` capture put them ABOVE
+# ~1300 lines of PASS and a tailed run showed an unbroken wall of green. Three
+# separate reports called this suite green while it was exiting 1.
+FAIL_LINES=""
 _fail() { # _fail CHANNEL ROW REASON [OUTPUT-FILE]
     printf 'FAIL [%s] %s — %s\n' "$1" "$2" "$3" >&2
+    FAIL_LINES="${FAIL_LINES}$(printf 'FAIL [%s] %s — %s' "$1" "$2" "$3")
+"
     [ -n "${4:-}" ] && [ -s "${4:-}" ] && sed 's/^/    | /' "$4" | tail -n 6 >&2
     return 0
 }
@@ -570,7 +578,13 @@ MENU_EOF
         _fail MENU "channel" "menu child exited ${rc}" "${TMP_DIR}/menu.err"
         MENU_FAIL=$((MENU_FAIL+1))
     fi
-    grep -E '^(MENU|MENUTHR|FLEETTHR|UNAFFTHR|ROLESETTHR) FAIL' "${out}" >&2 || true
+    local child_fails
+    child_fails="$(grep -E '^(MENU|MENUTHR|FLEETTHR|UNAFFTHR|ROLESETTHR) FAIL' "${out}" || true)"
+    if [ -n "${child_fails}" ]; then
+        printf '%s\n' "${child_fails}" >&2
+        FAIL_LINES="${FAIL_LINES}${child_fails}
+"
+    fi
 }
 
 # ── channel 4: GUI — hugmesh_studio --print-command (headless, Qt-free) ──────
@@ -2861,4 +2875,22 @@ if [ -n "${SMOKE_REPORT}" ]; then
     echo "   sharedbinpkg-* family, which is scored fail-closed into SBP) ──"
     printf '%s' "${SMOKE_REPORT}"
 fi
-[ "${TOTAL_FAIL}" -eq 0 ] && [ "${ROWS}" -gt 0 ] && [ "${CH_SHORT}" -eq 0 ]
+# ── VERDICT (stdout, LAST line of the run) ──────────────────────────────────────
+# The TOTAL line above is followed by ~40 lines of informational smokes, so on a
+# tailed run it scrolls out of view while every visible line reads PASS. This block
+# is the last thing printed and states the rc in words, and it repeats the FAIL
+# headlines that otherwise exist only on stderr. #408 is the cost of not having it.
+_rc=0
+{ [ "${TOTAL_FAIL}" -eq 0 ] && [ "${ROWS}" -gt 0 ] && [ "${CH_SHORT}" -eq 0 ]; } || _rc=1
+if [ "${_rc}" -ne 0 ]; then
+    echo "── FAILURES (also on stderr, where a 2>&1 capture buries them above the PASS wall) ──"
+    [ -n "${FAIL_LINES}" ] && printf '%s' "${FAIL_LINES}"
+    [ "${CH_SHORT}" -ne 0 ] && echo "FAIL [channel] a channel did not pass every matrix row (see the INCOMPLETE lines above)"
+    [ "${ROWS}" -le 0 ] && echo "FAIL [matrix] no matrix rows were read"
+fi
+if [ "${_rc}" -eq 0 ]; then
+    printf 'RESULT: PASS — %d passed, %d failed (rc=0)\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"
+else
+    printf 'RESULT: FAIL — %d passed, %d failed (rc=1)\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"
+fi
+exit "${_rc}"
