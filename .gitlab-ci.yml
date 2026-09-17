@@ -1105,6 +1105,24 @@ lint:container-image-tags:
   script:
     - bash tests/scripts/test-container-image-tags.sh
 
+# An ArgoCD Application that syncs with ServerSideApply=true and renders a
+# StatefulSet with volumeClaimTemplates must ALSO opt into Server-Side Diff, or
+# it is permanently OutOfSync and nothing says why. kube-apiserver v1.34 stamps
+# apiVersion/kind onto every nested PVC template at conversion time; ArgoCD
+# v3.5.3 hands any SSA app the discontinued Structured-Merge Diff, which rebuilds
+# predictedLive with CLIENT-side defaults only and therefore can never reproduce
+# that. harbor sat OutOfSync on StatefulSet/harbor-database and harbor-redis with
+# generation == observedGeneration == 1, self-healing every five minutes forever
+# against a field the apiserver puts back (hugmesh-generator#354). This guard
+# pins the annotation, its written reason, and spec/template parity, so neither
+# deleting it nor fixing only half of it can be silent.
+lint:argocd-serverside-diff:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-argocd-serverside-diff.sh
+
 # A curated kind profile must apply the companion Applications its own
 # Applications name. KIND_PROFILE=sso listed apps/00-cassandra.yaml (the Bitnami
 # Helm chart) but not apps/00b-cassandra-init.yaml, which creates the keyspaces
