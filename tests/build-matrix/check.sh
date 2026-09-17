@@ -73,6 +73,23 @@ _fail() { # _fail CHANNEL ROW REASON [OUTPUT-FILE]
     return 0
 }
 
+# _fail_line is the same accounting for a headline SOMEONE ELSE already worded — a
+# delegate script's own "  FAIL …" lines, a child channel's "JOB FAIL …", a bucket
+# that echoes its own text. Those used to be written straight to stderr, so they were
+# counted into a bucket's FAIL total but never reached FAIL_LINES, and the verdict
+# block printed a FAILURES header with NOTHING under it (measured: breaking a TAXO
+# golden label emitted 3 stderr FAIL lines and an empty stdout FAILURES section).
+# That is the SAME defect #408 is about, one layer in, so every such site now routes
+# through here. Accepts one argument that may hold several newline-separated lines;
+# an empty argument is a no-op so `_fail_line "$(grep … || true)"` is safe.
+_fail_line() { # _fail_line HEADLINE[\nHEADLINE…]
+    [ -n "${1:-}" ] || return 0
+    printf '%s\n' "$1" >&2
+    FAIL_LINES="${FAIL_LINES}$1
+"
+    return 0
+}
+
 # builder script per platform
 builder_for() {
     case "$1" in
@@ -980,7 +997,7 @@ JOB_EOF
         _fail JOB "channel" "job child exited ${rc}" "${TMP_DIR}/job.err"
         JOB_FAIL=$((JOB_FAIL+1))
     fi
-    grep -E '^(JOB|JOBNEG|JOBDRIFT) FAIL' "${out}" >&2 || true
+    _fail_line "$(grep -E '^(JOB|JOBNEG|JOBDRIFT) FAIL' "${out}" || true)"
 }
 
 # ── threading checks: STANDALONE_FLAGS + IMG_FLAGS must reach the builder argv ──
@@ -1634,7 +1651,7 @@ run_flag_coverage() {
         _fail FLAGCOV "script" "flag-coverage.sh exited ${rc}" "${out}"
         COV_FAIL=$((COV_FAIL+1))
     fi
-    grep '^FLAGCOV FAIL' "${out}" >&2 || true
+    _fail_line "$(grep '^FLAGCOV FAIL' "${out}" || true)"
 }
 
 # ── emerge-group banner probe (EGB) ─────────────────────────────────────────────
@@ -2098,7 +2115,7 @@ run_parity_taxonomy_checks() {
     # 1) GOLDEN source: the 4 labels live in the Studio reference (mode.py).
     for label in "${golden[@]}"; do
         if grep -qF -- "${label}" "${mode_py}"; then TAXO_PASS=$((TAXO_PASS+1))
-        else echo "TAXO FAIL golden/mode.py missing '${label}'" >&2; TAXO_FAIL=$((TAXO_FAIL+1)); fi
+        else _fail_line "TAXO FAIL golden/mode.py missing '${label}'"; TAXO_FAIL=$((TAXO_FAIL+1)); fi
     done
     # 2) menu channel — each choice must appear as a REAL ui_menu ITEM line
     #    (choice-tag + quoted label), NOT merely as prose. A whole-file substring grep
@@ -2115,7 +2132,7 @@ run_parity_taxonomy_checks() {
         if grep -qE -- "^[[:space:]]*${menu_tags[$i]}[[:space:]]+\"${label} " "${menu}"; then
             TAXO_PASS=$((TAXO_PASS+1))
         else
-            echo "TAXO FAIL menu channel missing opening choice item '${menu_tags[$i]}  \"${label} …\"' (${menu})" >&2
+            _fail_line "TAXO FAIL menu channel missing opening choice item '${menu_tags[$i]}  \"${label} …\"' (${menu})"
             TAXO_FAIL=$((TAXO_FAIL+1))
         fi
     done
@@ -2127,7 +2144,7 @@ run_parity_taxonomy_checks() {
         if grep -qE -- "^[[:space:]]*[0-9]+\.[[:space:]]+${label} " "${cli}"; then
             TAXO_PASS=$((TAXO_PASS+1))
         else
-            echo "TAXO FAIL cli channel missing numbered intent '${label}' (${cli})" >&2
+            _fail_line "TAXO FAIL cli channel missing numbered intent '${label}' (${cli})"
             TAXO_FAIL=$((TAXO_FAIL+1))
         fi
     done
@@ -2136,7 +2153,7 @@ run_parity_taxonomy_checks() {
     local bogus="Bare-metal cloud image" f
     for f in "${mode_py}" "${menu}" "${cli}"; do
         if grep -qF -- "${bogus}" "${f}"; then
-            echo "TAXO FAIL non-vacuity: bogus label '${bogus}' unexpectedly present in ${f} — grep is matching too broadly" >&2
+            _fail_line "TAXO FAIL non-vacuity: bogus label '${bogus}' unexpectedly present in ${f} — grep is matching too broadly"
             TAXO_FAIL=$((TAXO_FAIL+1))
         fi
     done
@@ -2144,7 +2161,7 @@ run_parity_taxonomy_checks() {
     local n
     n="$(grep -cE 'Mesh node|Local Docker mesh|Mesh desktop client|Standalone Gentoo desktop' "${mode_py}")"
     if [ "${n}" -ne 4 ]; then
-        echo "TAXO FAIL non-vacuity: mode.py golden taxonomy is ${n} lines, expected exactly 4 — the reference changed; update the golden set + every channel together" >&2
+        _fail_line "TAXO FAIL non-vacuity: mode.py golden taxonomy is ${n} lines, expected exactly 4 — the reference changed; update the golden set + every channel together"
         TAXO_FAIL=$((TAXO_FAIL+1))
     fi
 
@@ -2153,14 +2170,14 @@ run_parity_taxonomy_checks() {
     local tok
     for tok in derive discord gmail password; do
         if grep -qF -- "\"${tok}\"" "${users_py}"; then TAXO_PASS=$((TAXO_PASS+1))
-        else echo "TAXO FAIL registration token '${tok}' missing from ${users_py}" >&2; TAXO_FAIL=$((TAXO_FAIL+1)); fi
+        else _fail_line "TAXO FAIL registration token '${tok}' missing from ${users_py}"; TAXO_FAIL=$((TAXO_FAIL+1)); fi
     done
 
     # FAIL-CLOSED completeness gate (mirror COVG's COV_EXPECTED): every expected pass
     # must be present — a silent-skip (a file renamed away, a probe that never ran) is a
     # shortfall, not a vacuous green.
     if [ "${TAXO_PASS}" -lt "${TAXO_EXPECTED}" ]; then
-        echo "TAXO FAIL completeness: ${TAXO_PASS}/${TAXO_EXPECTED} parity assertions passed" >&2
+        _fail_line "TAXO FAIL completeness: ${TAXO_PASS}/${TAXO_EXPECTED} parity assertions passed"
         TAXO_FAIL=$((TAXO_FAIL + TAXO_EXPECTED - TAXO_PASS))
     fi
 }
@@ -2247,7 +2264,7 @@ PY
     then :; fi
     local passed
     passed=$(( CAT_EXPECTED - $(grep -c '^CAT FAIL' "${out}" || true) ))
-    grep '^CAT FAIL' "${out}" >&2 || true
+    _fail_line "$(grep '^CAT FAIL' "${out}" || true)"
     if [ "${passed}" -lt 0 ]; then passed=0; fi
     CAT_PASS=$((CAT_PASS + passed))
     CAT_FAIL=$((CAT_FAIL + CAT_EXPECTED - passed))
@@ -2261,9 +2278,20 @@ PY
 # that state, so this bucket is in TOTAL rather than in the informational smokes.
 # The delegate script does the work (static wiring + executing the real lib against a
 # fake sysroot); this bucket only runs it and folds its own PASS/FAIL tally in.
-# FAIL-CLOSED: the delegate emits a FIXED number of assertions (its host-dependent
-# branches emit a SKIP-pass so the count never moves), and a short tally is charged
-# as failures — a delegate that dies half-way cannot come back green.
+# FAIL-CLOSED: a short tally is charged as failures — a delegate that dies half-way
+# cannot come back green.
+# CORRECTION (measured 2026-09-17, #408): this comment used to add "its host-dependent
+# branches emit a SKIP-pass so the count never moves". That is FALSE, and it is exactly
+# the premise that makes a stale pin look like drift-that-does-not-matter. Three of the
+# delegate's fallbacks emit FEWER assertions than the path they replace:
+# tests/scripts/test-selinux-policy-install.sh:471 (C3d provision.sh missing) emits 1
+# where the success path emits 2; :518 (C3e provision.sh missing) emits 1 where the
+# success path emits 2; :531 (C3e relabel block not extractable) emits 1 where it
+# emits 2. So a tree without specs/etc/keys-provision/provision.sh emits 159, not 161,
+# and a tree whose relabel block moved emits 160. It stays HONEST — the shortfall is
+# charged as failures, so none of these can go green — but the count DOES move, and
+# the pin below is host- and tree-dependent for that reason. Do not read the accounting
+# that follows as "161 everywhere"; read it as "161 on a complete tree".
 # 136 = 126 (#518) + the 10 assertions #550 added when it fixed the D-real leg that had
 # skipped on every CI pipeline: 1 fixture-digest check + 9 "<module>: compiles against real
 # refpolicy headers" legs, one per node-policy module. #550 added the coverage and did NOT
@@ -2325,7 +2353,7 @@ run_selinux_policy_checks() {
     bash "${script}" >"${out}" 2>&1 || true
     SLX_PASS="$(grep -c '^  PASS ' "${out}" || true)"
     SLX_FAIL="$(grep -c '^  FAIL ' "${out}" || true)"
-    grep '^  FAIL ' "${out}" >&2 || true
+    _fail_line "$(grep '^  FAIL ' "${out}" | sed 's/^  FAIL /FAIL [SLX] /' || true)"
     local seen=$((SLX_PASS + SLX_FAIL))
     if [ "${seen}" -ne "${SLX_EXPECTED}" ]; then
         _fail SLX "assertion count" "emitted ${seen} assertions, expected ${SLX_EXPECTED} (update SLX_EXPECTED deliberately)" "${out}"
@@ -2353,7 +2381,7 @@ run_portage_config_sync_checks() {
     bash "${script}" >"${out}" 2>&1 || true
     PCS_PASS="$(grep -c '^  PASS ' "${out}" || true)"
     PCS_FAIL="$(grep -c '^  FAIL ' "${out}" || true)"
-    grep '^  FAIL ' "${out}" >&2 || true
+    _fail_line "$(grep '^  FAIL ' "${out}" | sed 's/^  FAIL /FAIL [PCS] /' || true)"
     local seen=$((PCS_PASS + PCS_FAIL))
     if [ "${seen}" -ne "${PCS_EXPECTED}" ]; then
         _fail PCS "assertion count" "emitted ${seen} assertions, expected ${PCS_EXPECTED} (update PCS_EXPECTED deliberately)" "${out}"
@@ -2389,7 +2417,7 @@ run_requested_atoms_checks() {
     bash "${script}" >"${out}" 2>&1 || true
     RAR_PASS="$(grep -c '^  PASS ' "${out}" || true)"
     RAR_FAIL="$(grep -c '^  FAIL ' "${out}" || true)"
-    grep '^  FAIL ' "${out}" >&2 || true
+    _fail_line "$(grep '^  FAIL ' "${out}" | sed 's/^  FAIL /FAIL [RAR] /' || true)"
     local seen=$((RAR_PASS + RAR_FAIL))
     if [ "${seen}" -ne "${RAR_EXPECTED}" ]; then
         _fail RAR "assertion count" "emitted ${seen} assertions, expected ${RAR_EXPECTED} (update RAR_EXPECTED deliberately)" "${out}"
@@ -2489,13 +2517,13 @@ score_sharedbinpkg_smokes() {
             SBP_PASS=$((SBP_PASS + 1))
         else
             SBP_FAIL=$((SBP_FAIL + 1))
-            printf 'FAIL [SBP] %s did not PASS (shared-binpkg family is FAIL-CLOSED)\n' "${n}" >&2
+            _fail_line "$(printf 'FAIL [SBP] %s did not PASS (shared-binpkg family is FAIL-CLOSED)' "${n}")"
         fi
     done
     # completeness: the name list and SBP_EXPECTED must not drift apart
     if [ "${#SBP_NAMES[@]}" -ne "${SBP_EXPECTED}" ]; then
-        printf 'FAIL [SBP] completeness: %d names vs SBP_EXPECTED=%d — update both\n' \
-            "${#SBP_NAMES[@]}" "${SBP_EXPECTED}" >&2
+        _fail_line "$(printf 'FAIL [SBP] completeness: %d names vs SBP_EXPECTED=%d — update both' \
+            "${#SBP_NAMES[@]}" "${SBP_EXPECTED}")"
         SBP_FAIL=$((SBP_FAIL + 1))
     fi
 }
@@ -2843,8 +2871,8 @@ CH_SHORT=0
 for _ch in CLI MAKE MENU GUI JOB; do
     _pv="${_ch}_PASS"
     if [ "${!_pv}" -ne "${ROWS}" ]; then
-        printf 'FAIL [%s] channel INCOMPLETE: %d/%d matrix rows passed\n' \
-            "${_ch}" "${!_pv}" "${ROWS}" >&2
+        _fail_line "$(printf 'FAIL [%s] channel INCOMPLETE: %d/%d matrix rows passed' \
+            "${_ch}" "${!_pv}" "${ROWS}")"
         CH_SHORT=1
     fi
 done
@@ -2882,11 +2910,63 @@ fi
 # headlines that otherwise exist only on stderr. #408 is the cost of not having it.
 _rc=0
 { [ "${TOTAL_FAIL}" -eq 0 ] && [ "${ROWS}" -gt 0 ] && [ "${CH_SHORT}" -eq 0 ]; } || _rc=1
+# FAIL-CLOSED BACKSTOP over the verdict itself. A bucket can only be SEEN on stdout if
+# it worded its failure through _fail/_fail_line; a bucket that raises its counter and
+# writes nothing (or writes straight to stderr, as eight sites did before this commit)
+# produces a FAILURES section that under-reports — and, when it is the ONLY failure, a
+# section with nothing at all under the header. So: every counter that is non-zero must
+# have contributed at least one matching headline, or we say so here, by name. This is
+# the check that makes the next bypass loud instead of silent.
+# Left of ':' is the counter; right of ':' is an ERE matching the headline shapes that
+# bucket emits (_fail writes "FAIL [TAG] …"; some children word their own prefix).
+_VERDICT_TAGS=(
+    'CLI_FAIL:\[CLI\]'
+    'MAKE_FAIL:\[MAKE\]'
+    'MENU_FAIL:\[MENU\]|^MENU FAIL'
+    'GUI_FAIL:\[GUI\]'
+    'JOB_FAIL:\[JOB\]|^JOB FAIL|^JOBDRIFT FAIL'
+    'THR_FAIL:\[THREAD\]|\[GUITHR\]|^MENUTHR FAIL|^FLEETTHR FAIL|^UNAFFTHR FAIL|^ROLESETTHR FAIL'
+    'NEG_FAIL:\[NEG\]|^JOBNEG FAIL'
+    'COV_FAIL:\[FLAGCOV\]|^FLAGCOV FAIL'
+    'EGB_FAIL:\[EGB\]'
+    'EPL_FAIL:\[EPL\]'
+    'TAXO_FAIL:^TAXO FAIL'
+    'CAT_FAIL:^CAT FAIL'
+    'SLX_FAIL:\[SLX\]'
+    'PCS_FAIL:\[PCS\]'
+    'RAR_FAIL:\[RAR\]'
+    'SBP_FAIL:\[SBP\]'
+    'SFO_FAIL:\[SFO\]'
+    'BCF_FAIL:\[BCF\]'
+)
+_verdict_backstop() {
+    local spec counter tags n
+    for spec in "${_VERDICT_TAGS[@]}"; do
+        counter="${spec%%:*}"
+        tags="${spec#*:}"
+        n="${!counter:-0}"
+        [ "${n}" -gt 0 ] || continue
+        # grep -a: a NUL anywhere makes GNU grep skip the input and exit 1 (fails OPEN).
+        # No -q: under an inherited pipefail a matching grep -q can still report failure.
+        if ! printf '%s' "${FAIL_LINES}" | grep -aE -- "${tags}" >/dev/null; then
+            FAIL_LINES="${FAIL_LINES}$(printf 'FAIL [%s] %d failure(s) counted with NO headline — this bucket did not route through _fail/_fail_line; look on stderr and fix the bucket' \
+                "${counter%_FAIL}" "${n}")
+"
+        fi
+    done
+}
 if [ "${_rc}" -ne 0 ]; then
-    echo "── FAILURES (also on stderr, where a 2>&1 capture buries them above the PASS wall) ──"
-    [ -n "${FAIL_LINES}" ] && printf '%s' "${FAIL_LINES}"
-    [ "${CH_SHORT}" -ne 0 ] && echo "FAIL [channel] a channel did not pass every matrix row (see the INCOMPLETE lines above)"
-    [ "${ROWS}" -le 0 ] && echo "FAIL [matrix] no matrix rows were read"
+    [ "${CH_SHORT}" -ne 0 ] && _fail_line "FAIL [channel] a channel did not pass every matrix row (see the INCOMPLETE lines above)"
+    [ "${ROWS}" -le 0 ] && _fail_line "FAIL [matrix] no matrix rows were read"
+    _verdict_backstop
+    # The header is printed ONLY when something follows it. An empty FAILURES section
+    # reads as "no specific failures" and is worse than no section at all.
+    if [ -n "${FAIL_LINES}" ]; then
+        echo "── FAILURES (also on stderr, where a 2>&1 capture buries them above the PASS wall) ──"
+        printf '%s' "${FAIL_LINES}"
+    else
+        echo "── FAILURES: rc=1 but NO bucket worded a failure — the verdict backstop found nothing to attribute; this is itself a defect in this harness ──"
+    fi
 fi
 if [ "${_rc}" -eq 0 ]; then
     printf 'RESULT: PASS — %d passed, %d failed (rc=0)\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"
