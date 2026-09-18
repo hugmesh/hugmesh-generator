@@ -1,31 +1,15 @@
-"""The per-domain Services page NAMES each choice's scope (#497).
+"""The per-domain Services page's SCOPE surfaces, as GUI (#497).
 
-Service choices in this platform live at three scopes and the split is deliberate:
+The scope MODEL — the three scopes, the per-slug where-text, and the two state reads
+that are easy to get wrong (`--all-services` vs the infra slugs, the dedicated
+`--with-tor` flag) — is tested Qt-free in tests/test_domain_services.py, because the
+pre-merge CI job installs no Qt binding and the `importorskip` below skips this whole
+module there.
 
-| scope | chosen | e.g. |
-|---|---|---|
-| **Domain** | the per-domain Services page (#495) | the `--all-services` catalogue |
-| **Image / mesh-wide** | the ‘Network & services’ step | dedicated-flag services, edge-AI, managed backing services |
-| **Node / cluster plane** | that step, and (for two of them) the worklist's per-node Services column | tor, egress-vpn, workloadConsole, anubis |
-
-What this file pins:
-
-* the page names the scope of **every** row it shows, on the row and not in a tooltip —
-  "the operator can see, WITHOUT READING SOURCE, which of their choices binds the
-  domain, which binds the image, and which binds a node", and a hover is not seeing;
-* the not-domain-scoped choices are **reachable from the same flow** — printed with
-  where each is set and what it is doing right now — so nobody has to hunt for where
-  anubis is configured;
-* **nothing infra-scoped is a control**: the read-only table has no checkbox anywhere,
-  because a per-DOMAIN tick-box for a node- or cluster-plane slug would be a new lie;
-* the two *questions* — where a choice is made, and what it binds — stay apart.
-  Conflating them is how the scopes got flattened before;
-* the per-slug "where" is honest per slug: `workloadConsole` and `anubis` have NO
-  per-node control, so telling the operator to look in the worklist would send them
-  hunting for something that does not exist.
-
-Both faces read the SAME core data (`core/domain_services.other_scope_rows`), so the
-GUI page and the TUI step cannot disagree about which plane a slug binds.
+What is pinned here is what only a real page can answer: the Scope column is on every
+row, the not-domain-scoped table exists and carries each infra slug's real scope and
+where-text, nothing in it is a control, the state column is live, and the legend is the
+core-built string rather than a retyped copy.
 """
 import os
 
@@ -33,120 +17,23 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from hugmesh_studio.core import domain_services as ds            # noqa: E402
-from hugmesh_studio.core.config import (                         # noqa: E402
-    INFRA_SERVICES_CHOICES, OPTIONAL_SERVICES_CHOICES, Domain, ImageConfig)
-from hugmesh_studio.core.worklist import (                       # noqa: E402
-    WORKLIST_INFRA_SERVICES, WorklistEntry)
+pytest.importorskip("hugmesh_studio.gui.qt",
+                    reason="no Qt binding (PySide6/PyQt6) installed")
+
+from hugmesh_studio.core import domain_services as ds                 # noqa: E402
+from hugmesh_studio.core.config import (                              # noqa: E402
+    INFRA_SERVICES_CHOICES, Domain, ImageConfig)
+from hugmesh_studio.core.platform_info import HostInfo                # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod                   # noqa: E402
+from hugmesh_studio.gui.pages import domain_services as page_mod      # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtWidgets                       # noqa: E402
+
+from _helpers import (  # noqa: E402
+    advance_to, check_worklist_rows, enable_additional_domains, pick_mode)
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
-
-# ── the scope model, Qt-free ────────────────────────────────────────────────────
-def test_the_three_scopes_each_say_where_they_are_set_and_what_they_bind():
-    """Two DIFFERENT questions, kept apart. "Where is this set" and "what does this
-    bind" are not the same fact, and answering only the first is how a surface ends up
-    implying a node-plane toggle is a domain property."""
-    for scope in (ds.SCOPE_DOMAIN, ds.SCOPE_IMAGE, ds.SCOPE_NODE):
-        assert ds.SCOPE_LABELS[scope]
-        assert ds.SCOPE_WHERE[scope]
-        assert ds.SCOPE_BINDS[scope]
-        assert ds.SCOPE_WHERE[scope] != ds.SCOPE_BINDS[scope]
-    assert "domain" in ds.SCOPE_BINDS[ds.SCOPE_DOMAIN]
-    assert "not one domain" in ds.SCOPE_BINDS[ds.SCOPE_IMAGE]
-    assert "never one domain" in ds.SCOPE_BINDS[ds.SCOPE_NODE]
-
-
-def test_every_infra_slug_has_its_own_where_and_none_of_them_is_domain_scoped():
-    assert set(ds.INFRA_WHERE) == set(INFRA_SERVICES_CHOICES)
-    for slug in INFRA_SERVICES_CHOICES:
-        assert ds.scope_of(slug) == ds.SCOPE_NODE
-        assert slug not in ds.DOMAIN_CATALOGUE
-
-
-def test_a_slug_with_no_per_node_control_does_not_claim_to_have_one():
-    """`workloadConsole` and `anubis` are cluster-plane: `WORKLIST_INFRA_SERVICES` is
-    tor + egress-vpn only. Sending the operator to the worklist to find them would be
-    a hunt for a control that does not exist — a different failure from hiding them,
-    and just as bad."""
-    for slug in WORKLIST_INFRA_SERVICES:
-        assert "worklist" in ds.INFRA_WHERE[slug]
-    for slug in set(INFRA_SERVICES_CHOICES) - set(WORKLIST_INFRA_SERVICES):
-        assert "worklist" not in ds.INFRA_WHERE[slug]
-        assert "no per-node control" in ds.INFRA_WHERE[slug]
-
-
-# ── the live state column ──────────────────────────────────────────────────────
-def test_the_state_column_reads_the_image_wide_selection():
-    cfg = ImageConfig(optional_services=["anubis"])
-    assert ds.image_service_state(cfg, "anubis") == "on (mesh-wide)"
-    assert ds.image_service_state(cfg, "tor") == "off"
-
-
-def test_all_services_does_not_claim_to_turn_the_infra_slugs_on():
-    """`--all-services` expands to the USER-LEVEL set, which by construction excludes
-    every infra slug. A membership test would report "off" for the right reason by
-    accident and "on" for the user-level ones not at all — so both arms are pinned."""
-    cfg = ImageConfig(optional_services=["all"])
-    for slug in INFRA_SERVICES_CHOICES:
-        state = ds.image_service_state(cfg, slug)
-        assert state.startswith("off")
-        assert "does not include the infra slugs" in state
-    assert ds.image_service_state(cfg, "akkoma") == "on (mesh-wide)"
-
-
-def test_the_explicit_none_sentinel_is_reported_as_the_explicit_none_it_is():
-    cfg = ImageConfig(optional_services=["none"])
-    assert "no optional services at all" in ds.image_service_state(cfg, "anubis")
-
-
-def test_the_dedicated_tor_flag_counts_as_on():
-    """x86 bakes the onion through `--with-tor`, not through the slug list. Reading only
-    optional_services would report "off" for a node that really does publish one."""
-    cfg = ImageConfig(tor_onion_service=True)
-    assert ds.image_service_state(cfg, "tor") == "on (mesh-wide)"
-
-
-def test_the_state_column_names_the_nodes_that_opted_in():
-    entries = [WorklistEntry(role="omnibus", platform="x86",
-                             infra_services=("tor",)),
-               WorklistEntry(role="pki", platform="rpi5")]
-    assert ds.node_service_state(entries, "tor") == "omnibus.x86"
-    assert ds.node_service_state(entries, "egress-vpn") == ""
-    rows = {r[0]: r for r in ds.other_scope_rows(ImageConfig(), entries)}
-    assert "omnibus.x86" in rows["tor"][3]
-
-
-def test_other_scope_rows_cover_every_infra_slug_plus_the_image_surface():
-    rows = ds.other_scope_rows(ImageConfig())
-    names = [r[0] for r in rows]
-    assert names[:len(INFRA_SERVICES_CHOICES)] == list(INFRA_SERVICES_CHOICES)
-    assert names[-1] == ds.IMAGE_SCOPE_ROW_LABEL
-    assert rows[-1][1] == ds.SCOPE_IMAGE
-    # the image-wide surface is named as a SURFACE, not re-listed slug by slug: a
-    # second catalogue here would be one more thing to drift against the first.
-    assert "edge-AI" in rows[-1][3]
-    assert "managed backing services" in rows[-1][3]
-
-
-def test_no_domain_catalogue_slug_leaks_into_the_not_domain_scoped_table():
-    listed = {r[0] for r in ds.other_scope_rows(ImageConfig())}
-    for slug in OPTIONAL_SERVICES_CHOICES:
-        assert slug not in listed
-
-
-# ── the GUI page ───────────────────────────────────────────────────────────────
-pytest.importorskip("hugmesh_studio.gui.qt",
-                    reason="no Qt binding (PySide6/PyQt6) installed")
-
-from hugmesh_studio.core.platform_info import HostInfo            # noqa: E402
-from hugmesh_studio.gui import wizard as wizard_mod               # noqa: E402
-from hugmesh_studio.gui.pages import domain_services as page_mod  # noqa: E402
-from hugmesh_studio.gui.qt import Qt, QtWidgets                   # noqa: E402
-
-from _helpers import (  # noqa: E402
-    advance_to, check_worklist_rows, enable_additional_domains, pick_mode)
 
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
                 has_kvm=False, is_root=False, builder_image="hugmesh-builder")

@@ -28,6 +28,7 @@ from hugmesh_studio.core import domain_services as ds
 from hugmesh_studio.core.config import (
     INFRA_SERVICES_CHOICES, OPTIONAL_SERVICES_CHOICES, SERVICE_GROUPS, Domain,
     ImageConfig)
+from hugmesh_studio.core.worklist import WORKLIST_INFRA_SERVICES, WorklistEntry
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -181,3 +182,96 @@ def test_regrouping_cannot_change_what_a_domain_emits(monkeypatch):
     after_groups = ds.grouped_domain_catalogue()
     assert before_groups != after_groups, "the regrouping changed no presentation"
     assert ds.normalise_slugs(["owncast", "games"]) == before == ["games", "owncast"]
+
+
+# ── #497: the scope model, and the two state reads that are easy to get wrong ────────────────────────────────────────────────────
+def test_the_three_scopes_each_say_where_they_are_set_and_what_they_bind():
+    """Two DIFFERENT questions, kept apart. "Where is this set" and "what does this
+    bind" are not the same fact, and answering only the first is how a surface ends up
+    implying a node-plane toggle is a domain property."""
+    for scope in (ds.SCOPE_DOMAIN, ds.SCOPE_IMAGE, ds.SCOPE_NODE):
+        assert ds.SCOPE_LABELS[scope]
+        assert ds.SCOPE_WHERE[scope]
+        assert ds.SCOPE_BINDS[scope]
+        assert ds.SCOPE_WHERE[scope] != ds.SCOPE_BINDS[scope]
+    assert "domain" in ds.SCOPE_BINDS[ds.SCOPE_DOMAIN]
+    assert "not one domain" in ds.SCOPE_BINDS[ds.SCOPE_IMAGE]
+    assert "never one domain" in ds.SCOPE_BINDS[ds.SCOPE_NODE]
+
+
+def test_every_infra_slug_has_its_own_where_and_none_of_them_is_domain_scoped():
+    assert set(ds.INFRA_WHERE) == set(INFRA_SERVICES_CHOICES)
+    for slug in INFRA_SERVICES_CHOICES:
+        assert ds.scope_of(slug) == ds.SCOPE_NODE
+        assert slug not in ds.DOMAIN_CATALOGUE
+
+
+def test_a_slug_with_no_per_node_control_does_not_claim_to_have_one():
+    """`workloadConsole` and `anubis` are cluster-plane: `WORKLIST_INFRA_SERVICES` is
+    tor + egress-vpn only. Sending the operator to the worklist to find them would be
+    a hunt for a control that does not exist — a different failure from hiding them,
+    and just as bad."""
+    for slug in WORKLIST_INFRA_SERVICES:
+        assert "worklist" in ds.INFRA_WHERE[slug]
+    for slug in set(INFRA_SERVICES_CHOICES) - set(WORKLIST_INFRA_SERVICES):
+        assert "worklist" not in ds.INFRA_WHERE[slug]
+        assert "no per-node control" in ds.INFRA_WHERE[slug]
+
+
+# ── the live state column ──────────────────────────────────────────────────────
+def test_the_state_column_reads_the_image_wide_selection():
+    cfg = ImageConfig(optional_services=["anubis"])
+    assert ds.image_service_state(cfg, "anubis") == "on (mesh-wide)"
+    assert ds.image_service_state(cfg, "tor") == "off"
+
+
+def test_all_services_does_not_claim_to_turn_the_infra_slugs_on():
+    """`--all-services` expands to the USER-LEVEL set, which by construction excludes
+    every infra slug. A membership test would report "off" for the right reason by
+    accident and "on" for the user-level ones not at all — so both arms are pinned."""
+    cfg = ImageConfig(optional_services=["all"])
+    for slug in INFRA_SERVICES_CHOICES:
+        state = ds.image_service_state(cfg, slug)
+        assert state.startswith("off")
+        assert "does not include the infra slugs" in state
+    assert ds.image_service_state(cfg, "akkoma") == "on (mesh-wide)"
+
+
+def test_the_explicit_none_sentinel_is_reported_as_the_explicit_none_it_is():
+    cfg = ImageConfig(optional_services=["none"])
+    assert "no optional services at all" in ds.image_service_state(cfg, "anubis")
+
+
+def test_the_dedicated_tor_flag_counts_as_on():
+    """x86 bakes the onion through `--with-tor`, not through the slug list. Reading only
+    optional_services would report "off" for a node that really does publish one."""
+    cfg = ImageConfig(tor_onion_service=True)
+    assert ds.image_service_state(cfg, "tor") == "on (mesh-wide)"
+
+
+def test_the_state_column_names_the_nodes_that_opted_in():
+    entries = [WorklistEntry(role="omnibus", platform="x86",
+                             infra_services=("tor",)),
+               WorklistEntry(role="pki", platform="rpi5")]
+    assert ds.node_service_state(entries, "tor") == "omnibus.x86"
+    assert ds.node_service_state(entries, "egress-vpn") == ""
+    rows = {r[0]: r for r in ds.other_scope_rows(ImageConfig(), entries)}
+    assert "omnibus.x86" in rows["tor"][3]
+
+
+def test_other_scope_rows_cover_every_infra_slug_plus_the_image_surface():
+    rows = ds.other_scope_rows(ImageConfig())
+    names = [r[0] for r in rows]
+    assert names[:len(INFRA_SERVICES_CHOICES)] == list(INFRA_SERVICES_CHOICES)
+    assert names[-1] == ds.IMAGE_SCOPE_ROW_LABEL
+    assert rows[-1][1] == ds.SCOPE_IMAGE
+    # the image-wide surface is named as a SURFACE, not re-listed slug by slug: a
+    # second catalogue here would be one more thing to drift against the first.
+    assert "edge-AI" in rows[-1][3]
+    assert "managed backing services" in rows[-1][3]
+
+
+def test_no_domain_catalogue_slug_leaks_into_the_not_domain_scoped_table():
+    listed = {r[0] for r in ds.other_scope_rows(ImageConfig())}
+    for slug in OPTIONAL_SERVICES_CHOICES:
+        assert slug not in listed
