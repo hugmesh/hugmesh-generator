@@ -727,9 +727,12 @@ Then(
 // Generalised twin of the step above — takes WHICH table ('compose' or
 // 'cluster') as an explicit quoted argument instead of hard-coding 'cluster',
 // so a single scenario outline can pin the SAME upstream on both lanes at
-// once (hugmesh-generator#549). Kept alongside the cluster-only step rather
-// than replacing it: the unquoted literal "the cluster fe gateway routes …"
-// in the mesh-BFF scenario above still matches that step, not this one.
+// once. Added for hugmesh-generator#549; reused as-is by hugmesh-generator#480
+// (see the land-lane note below the declares-before step) rather than
+// duplicated, to avoid a duplicate step-pattern registration. Kept alongside
+// the cluster-only step rather than replacing it: the unquoted literal
+// "the cluster fe gateway routes …" in the mesh-BFF scenario above still
+// matches that step, not this one.
 Then(
   'the {string} fe gateway routes {string} to the {string} upstream',
   async ({}, which: string, pattern: string, upstream: string) => {
@@ -765,7 +768,14 @@ Then(
   },
 );
 
-// Generalised twin, same reason as the routes-to-upstream step above.
+// Generalised twin of the declares-before step below (same reasoning as the
+// routes-to-upstream generalisation above). NOTE: this step and the
+// routes-to-upstream generalisation above were added independently by TWO
+// sibling PRs (hugmesh-generator#549 and hugmesh-generator#480) with
+// byte-identical bodies. #549 landed first; this branch's own duplicate copy
+// of BOTH generalized steps was removed here (land-lane merge, #480) rather
+// than kept, to avoid a duplicate Cucumber step-pattern registration error.
+// Both issues' scenarios use the ONE copy of each step that #549 added above.
 Then(
   'the {string} fe gateway declares {string} before {string}',
   async ({}, which: string, earlier: string, later: string) => {
