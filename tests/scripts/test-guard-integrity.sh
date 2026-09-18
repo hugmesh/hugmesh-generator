@@ -590,7 +590,19 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # THE MEASUREMENT on the merged tree, taken by running this file:
 #     173 of 195 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 22.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-173}"
+#
+# 173 -> 174 on 2026-09-18: tests/scripts/test-stack-clone-credential.sh (#535)
+# landed on disk in the same commit that wires it into shell-suites.yml's alpine
+# job, so the denominator moves too (195 -> 196, tracking check 1's new-file
+# count) and the gated count moves with it, not independently — MEASURED by
+# running this file on the merged tree before and after the wiring line landed,
+# not computed:
+#     173 of 196 suites are named by a pull_request-triggered workflow   (suite on
+#                                                                         disk, not
+#                                                                         yet wired)
+#     174 of 196 suites are named by a pull_request-triggered workflow   (wired)
+# The ungated SET pin is unchanged at 22 — the new suite was never in it.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-174}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED

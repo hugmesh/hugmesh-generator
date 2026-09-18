@@ -162,13 +162,56 @@ spec:
             # path and timestamps, which differ between all four, cannot be mistaken for
             # one. An entry whose binary is absent is a FAILURE, not a skip.
             #
+            #
+            # `df` IS PINNED TO `df -h` (#545, split from #492). It is on this list for
+            # "how full is the disk", and `df -h` with no operand answers exactly that.
+            # Bare `df` licenses three things that question does not need, MEASURED on
+            # coreutils 9.11:
+            #   * `df --output=source,target <path>` is a MOUNT-TOPOLOGY and
+            #     PATH-EXISTENCE oracle over the whole container filesystem —
+            #     `df --output=source,target /var/run/secrets/workload-console-read/token`
+            #     prints the backing device and mount point; the same argv on a path that
+            #     does not exist prints `df: <path>: No such file or directory`.
+            #   * `df --sync` forces a NODE-WIDE `sync(2)` — a side effect, from a console
+            #     whose whole contract is read-only.
+            #   * the remaining `--output` fields turn one command into a per-path
+            #     filesystem report the console never asked for.
+            # None of that is a property-P violation and the guard does not claim it is:
+            # bare `df` PASSES exec_argv_property.py (it leaks no file bytes, no
+            # environment, executes nothing and writes nothing). This is a CAPABILITY
+            # decision — how much a read-only console should be able to ask — decided the
+            # same way `ps -e` and `date -u` were, and it narrows nothing the property
+            # already covers.
+            # The cost is stated plainly: against the shipped first-token matcher a pinned
+            # entry is fail-closed, so until the whole-argv matcher lands (the CROSS-REPO
+            # TODO below) `df` is refused OUTRIGHT rather than narrowed. That is the same
+            # interim cost already accepted for `ps` and `date`, and it errs closed.
+            #
+            # `stat` IS DELIBERATELY LEFT BARE AND IS NOT DECIDED HERE (#545). Every
+            # USEFUL form of `stat` takes a CALLER-CHOSEN PATH (`stat <path>`), and an
+            # exact whole-argv entry cannot express "any path" — so under this list's own
+            # rules the only available moves are "keep bare" or "drop", not "pin". Dropping
+            # it is a capability removal, and it would NOT close the class it appears to:
+            # `stat --file-system <path>` prints the same free-block counters `df` does,
+            # but bare `ls` — also unpinnable for the same operand reason — already gives
+            # the path-existence and metadata oracle (`ls -l <path>`: size, mode, mtime,
+            # owner). So dropping `stat` costs a capability and buys redundancy removal,
+            # not a narrowed surface. That is a product call nobody has made; it is
+            # recorded on #545 rather than guessed at here.
+            #
+            # `uptime` — noted, no action (#545). `uptime -r` was measured to move between
+            # two identical probes (`260061.540000` -> `260061.550000`), like every other
+            # command that reports global state. It counts only UP, so it cannot produce
+            # the residual false-positive shape #493 repaired, and it reads no path.
+            # Listed here for completeness of the capability review only.
+            #
             # ⚠ CROSS-REPO TODO (admin-bff wave): WorkloadConsoleProperties must match
             # the WHOLE argv — `String.join(" ", command)` against this set — not
             # command.get(0). Until it does, only the bare (argument-safe) names are
             # reachable. Entries must never contain a comma: this env binds as a
             # comma-delimited List<String>.
             - name: WORKLOAD_CONSOLE_EXEC_READONLY
-              value: "ls,df,free,uptime,id,uname,stat,ps -e,date -u"
+              value: "ls,df -h,free,uptime,id,uname,stat,ps -e,date -u"
             # Grant lease TTL + expiry-sweep cadence — the application.yml defaults,
             # emitted explicitly so the operator knobs are visible in the pod spec.
             - { name: WORKLOAD_CONSOLE_GRANT_TTL_HOURS,        value: "24" }
