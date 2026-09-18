@@ -212,6 +212,32 @@ def test_a_denied_seed_that_exits_0_is_reported_as_a_failure(tmp_path):
     assert "NOT in the cluster's identity store" in out.message
 
 
+def test_the_denied_envelope_check_only_changes_wording_never_the_verdict(tmp_path):
+    """Pins the ``applied_ok`` computation itself (#539/#540 follow-up, found during
+    landing-time mutation testing): the verdict was already, and remains, decided
+    entirely by the read-back — a denied HTTP-200 envelope and a plain exit-0
+    success both land on ``ok=False`` here because the read-back does not see the
+    account either way. What the envelope check controls is ONLY whether the
+    message claims the seeder "exited 0" on a call this Studio knows was denied.
+    Without this test nothing pinned that distinction; a mutation that deletes the
+    ``'"status":"error"' not in out`` check passed every other test in this file
+    unchanged."""
+    denied = _Fake(apply_rc=0, apply_out='{"status":"error","msg":"the user is not '
+                                         'authenticated"}')
+    out_denied = _add(tmp_path, denied, identities=_identities(users=("e2e-admin",)))
+    assert out_denied.ok is False
+    assert "although apply-systems-roles.sh exited 0" not in out_denied.message
+
+    # A TRUE exit-0 success whose read-back has not caught up yet (eventual
+    # consistency, or a spec that renders a different username): still a failed
+    # add — the read-back is still the verdict — but now the message may honestly
+    # say the seeder itself reported success.
+    slow_readback = _Fake(apply_rc=0, apply_out="ok: applied 31 role grant(s)")
+    out_slow = _add(tmp_path, slow_readback, identities=_identities(users=("e2e-admin",)))
+    assert out_slow.ok is False
+    assert "although apply-systems-roles.sh exited 0" in out_slow.message
+
+
 def test_a_seeder_that_exits_0_without_creating_the_account_is_a_failure(tmp_path):
     f = _Fake(apply_rc=0, apply_out="ok")
     out = _add(tmp_path, f, identities=_identities(users=("e2e-admin",)))
