@@ -7,9 +7,20 @@
 # something. This one proves the FUNCTION census and the derived access matrix
 # are load-bearing rather than decorative:
 #
-#   1. the whole media/games function lane is GREEN with nothing started — it is
-#      offline by construction, so a red here is a real regression and never
-#      "the stack is down";
+#   1. the whole media/games function lane is GREEN whether or not a compose
+#      stack is reachable — the TRUE precondition (decision 64, generator#562;
+#      corrected 2026-09-18 from the earlier, FALSE "offline by construction"
+#      claim this line made). This suite STARTS nothing itself, but it is not
+#      airtight-offline: `tests/e2e/steps/dimensions.ts`'s environment probe is
+#      a real HTTP GET against the compose door, so on a box where the
+#      operator's own `hugmesh-local` stack (or any other reachable one)
+#      happens to be up, `@env:docker`-tagged scenarios correctly switch from
+#      SKIPPING to RUNNING FOR REAL. Those scenarios need a password, and this
+#      suite now self-seeds a RUN-LOCAL one (below) exactly the way
+#      `tests/stack/seed-e2e.sh` resolves its own — env override, else a
+#      run-state file, else generate — rather than the pre-#562 behaviour of
+#      throwing identically on all 60 affected scenarios the moment a real
+#      door answered. A red here is a real regression EITHER way;
 #   2. every catalogued function is named by a scenario (the census), and the
 #      census can actually FAIL;
 #   3. the access matrix is DERIVED from the two seeded rosters, so seeding one
@@ -26,7 +37,11 @@
 # by proving the guard notices a change that was never made). The final check
 # asserts the tree is byte-identical to how it started.
 #
-# OFFLINE. Starts NOTHING: no stack, no cluster, no emulator, no image build.
+# OFFLINE-SAFE, NOT OFFLINE-ONLY. Starts NOTHING itself: no stack, no cluster,
+# no emulator, no image build. It DOES, however, notice and use a stack that is
+# ALREADY running for an unrelated reason (see point 1 above) — that is a
+# property of the scenarios it runs, not of this wrapper, and is why the
+# self-seed below exists rather than a probe-and-skip.
 #
 # NOT IN .github/workflows/shell-suites.yml, deliberately. That job runs on the
 # `bash:5` image and this script needs node + the Playwright install + a Qt6
@@ -157,6 +172,60 @@ info() { printf '       %s\n' "$*"; }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fmg-guard.XXXXXX")"
 BACKUP="${WORK}/backup"
 mkdir -p "${BACKUP}"
+
+# ── self-seeded, RUN-LOCAL credential (decision 64, generator#562) ──────────
+# Resolved unconditionally and cheaply (no network) rather than probed first:
+# generator#562's own scope list put it as "such suites call make stack-seed
+# (or resolve credentials the same way) themselves before asserting anything".
+# `make stack-seed` itself is never invoked here — running it would seed real
+# identities and print a banner meant for a human — so this resolves credentials
+# the SAME WAY it does, via the one shared generator (tests/stack/e2e-password.sh,
+# SOURCED per its own contract, never executed): env override, else a run-state
+# file, else GENERATE a fresh CSPRNG value and persist it.
+#
+# E2E_CREDENTIALS_FILE is pointed at THIS run's scratch dir, not the default
+# ${REPO}/.e2e-credentials — which, when this suite runs from the operator's own
+# checkout, IS the operator's real file, and a guard must never write it (see
+# tests/stack/e2e-password.sh's own docs: "NEVER commit a real value", and the
+# ambient rule this repo runs under: never execute e2e-password.sh directly,
+# never touch the operator's .e2e-credentials). ${WORK} is removed by the EXIT
+# trap above, so this credential never outlives the run it was generated for.
+#
+# What this buys: when `tests/e2e/steps/dimensions.ts`'s real HTTP probe finds a
+# reachable compose door and promotes an `@env:docker` scenario from skip to
+# run, `sharedPassword()` now resolves to a value instead of throwing — the
+# pre-#562 failure, identical across 60 scenarios and indistinguishable from a
+# real product regression. This credential is NOT registered against any real
+# account (that is full persona seeding, `tests/stack/seed-e2e.sh`, deliberately
+# NOT invoked by a guard that must stay safe to run against a live mesh); a
+# scenario that requires a genuinely authenticated session still fails on its
+# own merits, as a normal test failure rather than an uncaught throw — which is
+# the whole of what "self-seed a credential" (not "self-seed an account") was
+# asked to fix.
+E2E_CREDENTIALS_FILE="${WORK}/.e2e-credentials"
+export E2E_CREDENTIALS_FILE
+# Sourced and CALLED inside a command-substitution subshell, deliberately, not
+# at this script's top level: e2e-password.sh's own preamble sets
+# `set -uo pipefail`, and sourcing it directly here would leak `pipefail` into
+# the REST of this script's shell options for every command after this point —
+# a behaviour change to code this change has nothing to do with. A `$( … )`
+# subshell forks, so any `set` change inside it dies with the subshell; only
+# the printed password crosses back, via stdout, into E2E_PASSWORD below.
+E2E_PASSWORD="$(
+  # shellcheck source=../stack/e2e-password.sh
+  . "${REPO}/tests/stack/e2e-password.sh"
+  e2e_password_ensure >&2 || exit 1
+  printf '%s' "${E2E_PASSWORD}"
+)"
+if [ $? -eq 0 ] && [ -n "${E2E_PASSWORD}" ]; then
+  export E2E_PASSWORD
+  info "self-seeded a run-local E2E_PASSWORD at ${E2E_CREDENTIALS_FILE} (mode 600, removed with \${WORK} on exit) — never the operator's ${REPO}/.e2e-credentials"
+else
+  echo "test-e2e-func-media-games.sh: could not self-seed a run-local E2E_PASSWORD (see the message above from tests/stack/e2e-password.sh)." >&2
+  echo "This guard checked NOTHING. Exiting 2 rather than letting every scenario fail identically on a missing credential." >&2
+  rm -rf "${WORK}"
+  exit 2
+fi
 
 # Every file the battery is allowed to touch, backed up BEFORE anything runs so
 # the trap can restore from a known-good copy rather than from git (which would
