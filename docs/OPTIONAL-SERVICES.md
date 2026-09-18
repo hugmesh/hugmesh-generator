@@ -569,19 +569,48 @@ alone keeps the console unusable; lighting it is a deliberate, ordered act:
 > not two**. An operator who wants the gateway layer back adds the single deny row
 > spelled out in `manifests/route-access/initdb/20-schema.sql` beside the floor; note
 > that it also darks the shipped `/admin/workloads` page, which is why it is not the
-> default. ⚠ The sibling case — the `games` app-store control plane — was written
-> here as "denied at the fe door unconditionally"; **it is not**.
-> `integrate/superadmin` proposed that deny row and operator decision 8 (#244
-> ACCEPT) declined it, so `/bff/superadmin/games-services/**` is governed by the
-> same `/bff/superadmin/**` floor, with the walls named in
-> `test-superadmin-bff-reachability.sh`'s `DESELECT_SURVIVORS` entry (admin-bff's
-> own SUPERADMIN gate; the filter short-circuits privileged principals before
-> `decide()` either way; every other tier is governed-but-ungranted DENY; and the
-> games workloads are pruned). Corrected on the 2026-09-16 merge; whether to
-> reinstate the row is parked on hugmesh-generator#351.
-> `tests/scripts/test-superadmin-bff-reachability.sh` §13 executes both real builders'
-> gate for every slug and fails if a surface appears that is neither walled nor
-> ledgered.
+> default. ⚠ The sibling case — the `games` app-store control plane — **is**
+> denied at the fe door unconditionally, as of operator decision 28 = **D**
+> (hugmesh-generator#347, 2026-09-17). This passage has now said both things, so
+> here is the history: `integrate/superadmin` proposed that deny row, operator
+> decision 8 (#244 ACCEPT) declined it, and between 2026-09-16 and 2026-09-17 the
+> family was governed by the same `/bff/superadmin/**` floor and recorded as a
+> `DESELECT_SURVIVORS` entry. Decision 28 reinstated the row and **that ledger entry
+> was deleted in the same commit** — do not go looking for it. Today
+> `('hugmesh-fe-gateway', '/bff/superadmin/games-services/**', 'ROLE_SUPERADMIN',
+> false)` is in the canonical seed and wins the longest match for the whole subtree
+> on **every** build: the `games` slug's gate prunes the fe `/admin/games-services/**`
+> page row but not this one, so a games-**deselected** build is walled at the front
+> door and not only at the BFF. The row also carries `mfa_required = true`, seeded
+> by a row-scoped `UPDATE` in `manifests/route-access/initdb/20-schema.sql`, so
+> walling the subtree does **not** lower the privileged step-up floor over it —
+> `isMfaRequiredSurface()` is allow-blind and role-blind, and
+> [`MFA-ROLLOUT.md`](MFA-ROLLOUT.md) §5 plus `tests/scripts/test-mfa-required-rules.sh`
+> pin both halves. `tests/scripts/test-superadmin-bff-reachability.sh` §5b asserts
+> the wall itself, §13 executes both real builders' gate for every slug and fails if
+> a surface appears that is neither walled nor ledgered, and §15 fails if this
+> document and that ledger disagree.
+
+**The deselect-survivor ledger, mirrored.** These are the surfaces an optional slug
+prunes that the **fe front door still admits** — each one has a `DESELECT_SURVIVORS`
+entry in `tests/scripts/test-superadmin-bff-reachability.sh` naming the walls that are
+left. §15 of that gate compares this table with that ledger in **both** directions, so
+a row here is a live cross-reference and not prose: a surface that stops surviving must
+leave both, and one that starts surviving must appear in both.
+
+<!-- gate:deselect-survivors -->
+
+| slug | url_pattern |
+|---|---|
+| `workloadConsole` | `/bff/admin/workloads/**` |
+| `workloadConsole` | `/bff/superadmin/workloads/**` |
+
+<!-- gate:games-fe-posture value=walled -->
+
+The `games` app-store control plane's posture above is `walled` (an explicit fe DENY
+row), the other legal value being `ledgered` (governed by the `/bff/superadmin/**`
+floor and recorded in `DESELECT_SURVIVORS`). §15 reads that marker and fails if it
+disagrees with the seed, in either direction.
 
 **What the slug owns (all pruned together on deselect, `gate_optional_services`):**
 the two-SA RBAC Application (`apps/14-workload-console-rbac.yaml` +
