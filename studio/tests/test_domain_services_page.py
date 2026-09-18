@@ -59,6 +59,40 @@ def test_gate_names_the_action_it_refused():
     assert "start this mesh" in ds.gate_reason(cfg, ds.ACTION_MESH_START)
 
 
+def test_each_refusal_names_a_route_that_exists_from_where_it_is_shown():
+    """A remedy that does not work is a dead end with extra words, and ONE shared
+    sentence would be wrong at BOTH call sites in different ways:
+
+    * the build screen has Qt's Back DISABLED — the review screen before it is a
+      commit page (``pages/build.py`` setCommitPage(True)), which is why that screen
+      has a "back to the main menu" card at all — so "go back a step" is false there;
+    * the local-mesh branch is TERMINAL and hosts no Domains table; its domains come
+      from the configuration the session is carrying, so "go back a step" names a
+      step that is not in that flow.
+    """
+    cfg = ImageConfig(domains=[Domain(name="a.example")])
+    build = ds.gate_reason(cfg, ds.ACTION_IMAGE_BUILD)
+    mesh = ds.gate_reason(cfg, ds.ACTION_MESH_START)
+    assert ds.ACTION_REMEDY[ds.ACTION_IMAGE_BUILD] in build
+    assert ds.ACTION_REMEDY[ds.ACTION_MESH_START] in mesh
+    assert build != mesh
+    # the build remedy names the card that IS reachable, and says why Back is not
+    assert "Back to the main menu" in build
+    assert "Back button is disabled" in build
+    # ...and the mesh remedy does not send anyone to a Back that leads elsewhere
+    assert "Back to the main menu" not in mesh
+    assert "the configuration this session is carrying" in mesh
+
+
+def test_an_unknown_action_still_gets_a_usable_sentence():
+    """gate_reason must not fall off a dict lookup into a bare domain list if a third
+    call site ever passes its own action string."""
+    cfg = ImageConfig(domains=[Domain(name="a.example")])
+    msg = ds.gate_reason(cfg, "do the thing")
+    assert "Cannot do the thing" in msg
+    assert "Domain services" in msg
+
+
 def test_an_empty_selection_is_a_real_answer_once_the_domain_is_configured():
     """``optional_services == []`` means "the cluster-wide set applies" — a real
     answer, and the reason emptiness could not double as "never configured"."""

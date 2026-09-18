@@ -47,7 +47,7 @@ __all__ = [
     "carried_over_slugs", "describe", "describe_carried_over",
     "CARRIED_OVER_NOTE", "reviewed_names", "unconfigured_domains",
     "gate_reason", "record_reviewed", "domain_summary",
-    "ACTION_IMAGE_BUILD", "ACTION_MESH_START",
+    "ACTION_IMAGE_BUILD", "ACTION_MESH_START", "ACTION_REMEDY",
 ]
 
 #: The three scopes a service choice can have in this platform (#497). They are NOT
@@ -84,6 +84,28 @@ ENFORCEMENT_NOTE = (
 #: refusal names the thing that was refused rather than a generic "cannot continue".
 ACTION_IMAGE_BUILD = "build these images"
 ACTION_MESH_START = "start this mesh"
+
+#: action -> HOW TO FIX IT FROM WHERE YOU ARE STANDING. Not one shared sentence,
+#: because "go back to the Domain services step" is FALSE at both call sites in
+#: different ways, and a refusal whose remedy does not work is a dead end with extra
+#: words:
+#:
+#: * on the build screen Qt has already DISABLED Back — the review screen before it is
+#:   a commit page (``gui/pages/build.py`` setCommitPage(True)), which is the whole
+#:   reason that screen has a "back to the main menu" card at all;
+#: * the local-mesh branch is terminal and has no Domains table in it — domains reach
+#:   it from the configuration the session is carrying, not from anything on that page.
+ACTION_REMEDY = {
+    ACTION_IMAGE_BUILD:
+        "Use ‘Back to the main menu’ on this screen — nothing has started and your "
+        "settings are kept — then walk to the ‘Domain services’ step, where every "
+        "domain has its own page. (The Back button is disabled here because the "
+        "review screen before it is a commit page.)",
+    ACTION_MESH_START:
+        "These domains come from the configuration this session is carrying, not from "
+        "this screen. Configure them on the ‘Domain services’ step of the image flow "
+        "— every domain has its own page there — or drop them from the Domains table.",
+}
 
 
 def scope_of(slug: str) -> str:
@@ -216,11 +238,12 @@ def gate_reason(cfg, action: str = ACTION_IMAGE_BUILD) -> str:
     if not missing:
         return ""
     plural = "s" if len(missing) > 1 else ""
+    remedy = ACTION_REMEDY.get(action)
     return (
         f"Cannot {action}: {len(missing)} domain{plural} ha{'ve' if plural else 's'} "
         f"no recorded service configuration — " + ", ".join(missing) + ". "
-        "Go back to the ‘Domain services’ step and go through each one "
-        "(every domain has its own page there)."
+        + (remedy or "Go through each one on the ‘Domain services’ step — every "
+                     "domain has its own page there.")
     )
 
 
