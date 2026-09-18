@@ -99,3 +99,87 @@ resources:
   # NOT optional: the cluster Cassandra runs PasswordAuthenticator by image
   # default, so without these nothing can open a CqlSession at all.
   - cassandra-externalsecrets.yaml
+
+# ── THE VAULT BASE SEGMENT (issue #285, decision 38 = B on #347) ──────────────
+# Every remoteRef key here is `<base>/<doc>`, and <base> must equal the segment the
+# WRITER uses — scripts/gen-cluster-secrets.sh writes under BASE="${BRAND:-hugmesh}".
+# ArgoCD serves this directory from GIT (apps/04-external-secrets-config.yaml), never
+# from the device's baked tree, so the base cannot be moved by a builder sed over
+# /var/lib/hugmesh/cluster/manifests — nothing reads that copy. It moves HERE, at
+# render time: the ClusterSecretStore's platform.hugmesh.net/vault-base annotation is
+# the single value surface, apps/04 patches it, and rebrand_sysroot() rewrites that
+# patch to <BRAND>. With the default annotation ("hugmesh") this block is a byte
+# no-op — measured, and pinned by tests/scripts/test-eso-remoteref-brand.sh.
+#
+# WHY THE `reject` LIST: kustomize ERRORS ("unable to find field") when a selected
+# resource has no spec.data at all, so the 28 ExternalSecrets that use `dataFrom`
+# must be named out. That is FAIL-CLOSED on purpose — a new dataFrom-only
+# ExternalSecret breaks the render loudly in CI instead of silently keeping the
+# literal `hugmesh/` base while the writer moves. Add it to this list (and, if it
+# carries a `dataFrom[].extract.key`, to a target below like casdoor-app-secrets).
+replacements:
+  - source:
+      group: external-secrets.io
+      kind: ClusterSecretStore
+      name: hugmesh-vault
+      fieldPath: metadata.annotations.[platform.hugmesh.net/vault-base]
+    targets:
+      # (a) every ExternalSecret that carries spec.data[].remoteRef.key — 118 of the
+      #     121 base-bearing fields in the default render.
+      - select:
+          group: external-secrets.io
+          kind: ExternalSecret
+        reject:
+          - name: admin-bff-db-mtls
+          - name: akkoma-proxy-mtls
+          - name: casdoor-app-secrets
+          - name: character-forge-bff-db-mtls
+          - name: federation-db-mtls
+          - name: forum-bff-db-mtls
+          - name: harbor-mtls
+          - name: hugmesh-admin-bff-api-mtls
+          - name: hugmesh-api-mtls
+          - name: hugmesh-be-gateway-mtls
+          - name: hugmesh-character-forge-bff-api-mtls
+          - name: hugmesh-fe-gateway-mtls
+          - name: hugmesh-federation-api-mtls
+          - name: hugmesh-forum-bff-api-mtls
+          - name: hugmesh-mesh-bff-api-mtls
+          - name: hugmesh-mod-bff-api-mtls
+          - name: hugmesh-pki-gateway-mtls
+          - name: hugmesh-superadmin-gateway-mtls
+          - name: hugmesh-user-bff-api-mtls
+          - name: hugmesh-wiki-bff-api-mtls
+          - name: media-poisoner-mtls
+          - name: mesh-bff-db-mtls
+          - name: mod-bff-db-mtls
+          - name: phpbb-secrets
+          - name: route-access-db-mtls
+          - name: tuwunel-proxy-mtls
+          - name: user-bff-db-mtls
+          - name: wiki-bff-db-mtls
+        fieldPaths:
+          - spec.data.*.remoteRef.key
+        options:
+          delimiter: "/"
+          index: 0
+      # (b) the two `dataFrom[].extract.key` shapes (3 fields). The other 26
+      #     dataFrom users are VaultDynamicSecret generatorRefs and carry no KV path.
+      - select:
+          group: external-secrets.io
+          kind: ExternalSecret
+          name: casdoor-app-secrets
+        fieldPaths:
+          - spec.dataFrom.*.extract.key
+        options:
+          delimiter: "/"
+          index: 0
+      - select:
+          group: external-secrets.io
+          kind: ExternalSecret
+          name: phpbb-secrets
+        fieldPaths:
+          - spec.dataFrom.*.extract.key
+        options:
+          delimiter: "/"
+          index: 0
