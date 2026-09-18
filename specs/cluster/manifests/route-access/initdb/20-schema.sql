@@ -956,14 +956,15 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- one is governed-but-ungranted either way). Its value is the posture — an
   -- OPTIONAL slug's control plane is not offered at the public browser door.
   --
-  -- ⚠ DUAL-WRITE PARTNER in the OTHER repo, NOT done here: hugmesh-gateway's
-  -- CanonicalSeed.fe() baked floor, which carries no /bff/superadmin rule (its
-  -- only superadmin rules are be() :215 and the pki /** catch-all). On the
-  -- datastore-unreachable fallback the fe floor therefore still resolves
-  -- /bff/superadmin/… to NO_RULE and forwards, so both the header and the MFA
-  -- floor drop back to the pre-row behaviour until that lands. That divergence is
-  -- ASSERTED, not merely noted, in
-  -- tests/e2e/features/mined-governance/fallback-floor-parity.feature.
+  -- ✅ DUAL-WRITE PARTNER in the OTHER repo — LANDS WITH decision 41 (#33) and
+  -- decision 56 (#347, 2026-09-18) TOGETHER, not separately. hugmesh-gateway's
+  -- CanonicalSeed.fe() baked floor gains r(FE, "/bff/superadmin/**",
+  -- "ROLE_SUPERADMIN") (decision 41), and decision 56 puts that SAME row in
+  -- MFA_REQUIRED_FALLBACK_ROWS — so on the datastore-unreachable fallback the
+  -- fe floor now agrees with this file on BOTH the DENY/header AND the MFA
+  -- floor, not the DENY/header alone. Parity is ASSERTED, not merely noted, in
+  -- tests/e2e/features/mined-governance/fallback-floor-parity.feature (both the
+  -- pre-existing ALLOW/DENY parity scenario and the new MFA-parity one).
   --
   -- ⚠ REACHING A DATABASE THAT ALREADY EXISTS. This file is initdb-only on BOTH
   -- lanes: the cluster mounts it into /docker-entrypoint-initdb.d over a PVC
@@ -1361,16 +1362,30 @@ ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(NU
 -- domain-scoped row whose url_pattern is listed in the per-domain arm. Exempt a
 -- surface by changing this predicate, not by hand-editing a row.
 --
--- DUAL-WRITE PARTNERS (checked 2026-07-30, no companion change needed):
---   * hugmesh-gateway cache/CanonicalSeed.java — its `r()` helper hard-codes
---     mfaRequired=false for EVERY baked row ON PURPOSE ("a datastore-unreachable
---     fallback can never accidentally lock out a privileged surface on the bare
---     floor"). These rules deliberately do NOT go there. Consequence to know: in a
---     dual-DB outage the gateway falls back to that floor and MFA enforcement
---     DROPS for these prefixes (role gating still applies).
+-- DUAL-WRITE PARTNERS (checked 2026-07-30; UPDATED 2026-09-18 for decision 56):
+--   * hugmesh-gateway cache/CanonicalSeed.java — its `r()` helper used to
+--     hard-code mfaRequired=false for EVERY baked row unconditionally. Decision
+--     56 (hugmesh-generator#347, operator answer 2026-09-18: "a declared set of
+--     privileged rows") NARROWED that: `r()` now looks each row up in the named
+--     constant `MFA_REQUIRED_FALLBACK_ROWS`, which is DERIVED from the blanket
+--     flip below (the intersection of "every ALLOW row this UPDATE touches" and
+--     "the rows CanonicalSeed actually bakes") — see that constant's own doc
+--     comment for the derivation and the full list. Every row OUTSIDE that
+--     declared set still gets mfaRequired=false (D8's original reasoning still
+--     applies to them: "a datastore-unreachable fallback can never accidentally
+--     lock out a privileged surface nobody declared"). Consequence to know: in
+--     a dual-DB outage the gateway falls back to that floor, and MFA
+--     enforcement now SURVIVES for the declared rows (the fe/be
+--     /bff/superadmin/** platform rows and the fe /bff/admin/** + phone-fleet
+--     rows) but still DROPS for everything else under these two prefixes that
+--     is NOT in the declared set — most notably the fe
+--     /bff/superadmin/games-services/** DENY row below (decision 28), which
+--     decision 56 was explicitly NOT authorised to mirror into the floor
+--     (`deny()` still hard-codes mfaRequired=false unconditionally; the
+--     declared-set mechanism only reaches rows built by `r()`).
 --   * hugmesh-admin-bff-api db/changelog/001-gateway-route-access.xml — table DDL
 --     ONLY (createTable + addColumn mfa_required); it contains ZERO <insert>
---     elements, so it is NOT a row-seed partner.
+--     elements, so it is NOT a row-seed partner. Unaffected by decision 56.
 -- ─────────────────────────────────────────────────────────────────────────────
 -- ────────────────────────────────────────────────────────────────────────────
 -- ROW-SCOPED mfa_required SEED — the ONE deny row that must carry the floor.
