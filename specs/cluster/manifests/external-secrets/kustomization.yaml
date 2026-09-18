@@ -41,12 +41,12 @@ resources:
   # AttestationServer (GrapheneOS Hardware Trust Root) — DEFAULT-OFF optional-
   # service (slug attestation-server, optional-services.yaml). ONE ExternalSecret
   # (attestation-server-smtp) reusing the EXISTING shared outbound-mail Vault doc
-  # (secret/hugmesh/mail) — same document casdoor-smtp/akkoma-smtp already
+  # (secret/<brand>/mail) — same document casdoor-smtp/akkoma-smtp already
   # read; no new Vault path. Deselecting attestation-server prunes THIS line +
   # the file via gate_optional_services(), same mechanism as headwind above.
   - attestation-server-externalsecrets.yaml   # attestation-server-smtp
   # coturn TURN/STUN long-term-credential SHARED SECRET (key `secret`), ESO/Vault
-  # only (secret/hugmesh/coturn-shared-secret) — NEVER inline. Materializes only
+  # only (secret/<brand>/coturn-shared-secret) — NEVER inline. Materializes only
   # once that Vault path is populated; coturn is DEFAULT-OFF so a default build never
   # mounts it. The SAME Secret is consumed by both coturn (validates client creds)
   # and tuwunel (mints them) so there is one source of truth and no drift.
@@ -63,7 +63,7 @@ resources:
   # now sourced from the Harbor PUSH-scoped robot account (distinct from the
   # harbor-registry pull-scoped robot secret above) that
   # manifests/harbor/harbor-provision-job.yaml mints and writes to
-  # secret/hugmesh/harbor-robots (push_name/push_secret). ESO/Vault only;
+  # secret/<brand>/harbor-robots (push_name/push_secret). ESO/Vault only;
   # materializes once the always-on apps/60-image-builder.yaml Application
   # has created the namespace.
   - image-builder-externalsecrets.yaml   # image-builder-registry
@@ -88,14 +88,14 @@ resources:
   # hugmesh-backend) + token custody key (user-bff-custody-key, ns
   # hugmesh-backend) + shared BFF back-channel token (bff-internal-token,
   # in BOTH hugmesh-backend AND hugmesh-frontend for gateway→admin-bff
-  # BffSessionAuthFilter). Vault paths: secret/hugmesh/user-bff-oidc,
-  # secret/hugmesh/user-bff-custody-key, secret/hugmesh/bff-internal-token.
+  # BffSessionAuthFilter). Vault paths: secret/<brand>/user-bff-oidc,
+  # secret/<brand>/user-bff-custody-key, secret/<brand>/bff-internal-token.
   - sso-externalsecrets.yaml
   # Cassandra superuser (cassandra-admin, ns hugmesh-pki — also consumed by the
   # chart's dbUser.existingSecret) + the per-app least-privilege role passwords
   # (cassandra-app-creds, materialized separately into hugmesh-pki /
   # hugmesh-backend / hugmesh-frontend with only that namespace's keys). Vault
-  # paths: secret/hugmesh/cassandra-admin, secret/hugmesh/cassandra-app-creds.
+  # paths: secret/<brand>/cassandra-admin, secret/<brand>/cassandra-app-creds.
   # NOT optional: the cluster Cassandra runs PasswordAuthenticator by image
   # default, so without these nothing can open a CqlSession at all.
   - cassandra-externalsecrets.yaml

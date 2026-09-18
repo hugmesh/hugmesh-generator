@@ -590,7 +590,14 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # THE MEASUREMENT on the merged tree, taken by running this file:
 #     173 of 195 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 22.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-173}"
+#
+# 173 -> 174 on 2026-09-18: tests/scripts/test-no-literal-vault-brand-prose.sh
+# joined the gate (wired into shell-suites.yml's alpine job), guarding
+# specs/cluster prose against re-drifting to the literal default-brand Vault
+# path `secret/hugmesh/...` (hugmesh-generator#490). MEASURED by RUNNING this
+# file on the tree with the new suite wired, not assumed:
+#     174 of 196 suites are named by a pull_request-triggered workflow
+PREMERGE_BASELINE="${GUARD_PREMERGE:-174}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED

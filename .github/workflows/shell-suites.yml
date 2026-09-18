@@ -379,6 +379,7 @@ jobs:
             tests/scripts/test-kind-profile-route-closure.sh
             tests/scripts/test-lsm-posture-honesty.sh
             tests/scripts/test-no-duplicate-env.sh
+            tests/scripts/test-no-literal-vault-brand-prose.sh
             tests/scripts/test-nullmailer-cross-postinst.sh
             tests/scripts/test-outbound-mtls-client.sh
             tests/scripts/test-password-reset-front-door.sh
