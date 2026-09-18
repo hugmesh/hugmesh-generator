@@ -389,14 +389,20 @@ def suggested_signin(roster: Roster) -> SeededUser | None:
     something to feature."""
     if not roster.users:
         return None
-    # Never lead with a persona the live assessment says is NOT there: a row marked
-    # "not on this lane" / "not seeded" is a fact, and leading with it would send
-    # the operator into a guaranteed 401. Unassessed ("") and unverified rows stay
+    # Never lead with a persona the live assessment says is NOT there, or is there
+    # and cannot do anything: "not on this lane" / "not seeded" / "no roles" are all
+    # facts, and leading with one sends the operator into a guaranteed 401 or a
+    # sign-in that 403s on every page. Unassessed ("") and unverified rows stay
     # eligible — unknown is not "no".
-    by_name = {u.username: u for u in roster.users
-               if u.live not in (_truth.NOT_ON_LANE, _truth.NOT_SEEDED)}
+    dead = (_truth.NOT_ON_LANE, _truth.NOT_SEEDED, _truth.NO_ROLES)
+    by_name = {u.username: u for u in roster.users if u.live not in dead}
     if not by_name:
-        return roster.users[0]
+        # NOTHING is eligible. Falling back to roster.users[0] here would hand back
+        # exactly the row just ruled out — on a kind mesh whose seed never ran, that
+        # is every row, and the lead would be a persona that does not exist (#539).
+        # An assessed roster with no live row has no lead; an UNASSESSED one still
+        # leads with its first entry, which vouches for nothing and never did.
+        return None if any(u.live for u in roster.users) else roster.users[0]
     # The operator account FIRST. Leading with e2e-admin (the instinctive choice, and
     # what this used to return) sends the operator straight into the trap: it opens
     # the admin panel and API docs, and its Matrix/Mastodon tabs render fully and then
@@ -421,6 +427,12 @@ def annotate(roster: Roster, truth: CredentialTruth | None,
         not seeded / unverified / unknown) and, when the truth says the file cannot
         be read, its password cell becomes the unreadable marker rather than the
         resolver's "(not seeded)" — which would be false;
+      * on a lane whose identity store was actually READ (#539 —
+        ``truth.present_users``), that lane-wide marker is only the DEFAULT: a row
+        the store does not hold becomes ``not seeded``, and a row it holds that is
+        in none of its own roles becomes ``no roles``. Both come from a read that
+        landed; ``present_users is None`` (nothing established) changes nothing,
+        because unknown is not "no";
       * the operator account (``roster.operator``) follows ``truth.stage2``: True →
         the shared marker, False → "not on this lane" (this lane's seeder never
         ran stage 2), None → "unknown" on kind, "unverified" elsewhere;
@@ -467,7 +479,13 @@ def annotate(roster: Roster, truth: CredentialTruth | None,
         op_note = ("The kind lane never runs seed-e2e.sh, so this account is not "
                    "created there." if kind else
                    "Whether registration stage 2 ran could not be established.")
-    if kind:
+    if kind and (truth.present_users is None
+                 or roster.operator not in truth.present_users):
+        # The kind lane's seeder (bootstrap-kind.sh step 10) runs seed-accounts.sh
+        # only, so the operator account is not created there. Stated as a fact
+        # ONLY while the running store does not contradict it: #539 made that store
+        # readable, and a cluster that really does hold the account must not be told
+        # it does not.
         op_marker, op_note = _truth.NOT_ON_LANE, op_note
 
     sa_user, sa_pw = truth.superadmin
@@ -502,27 +520,66 @@ def annotate(roster: Roster, truth: CredentialTruth | None,
         return (replace(row, password=truth.password_marker)
                 if truth.password_marker else row)
 
+    def _live(row: SeededUser, fallback: str, note: str) -> SeededUser:
+        """Per-row liveness, deferring to what the RUNNING store actually holds.
+
+        #539: on a lane whose identity store was READ (``truth.present_users`` is
+        not None), the lane-wide marker is only a default. A persona the store does
+        not hold is ``not seeded`` — a fact about THAT row, and the one the old
+        surface could not state: it showed the checkout's whole roster with a real
+        password against a cluster that held none of it. A persona the store DOES
+        hold but that is in none of its own roles is ``no roles``: it authenticates
+        on the gateway floor and then 403s everywhere, which an operator reads as a
+        broken password. Both are claimed ONLY from a read that landed —
+        ``present_users is None`` changes nothing, and ``holds_any_role`` returning
+        None (no role table) never downgrades a row."""
+        if truth.present_users is None:
+            return replace(row, live=fallback, note=note)
+        if row.username not in truth.present_users:
+            if fallback == _truth.NOT_ON_LANE:
+                # Absent AND this lane's seeder never creates it: the more precise
+                # of the two true statements, and it carries its own remedy.
+                return replace(row, live=fallback, note=note)
+            return replace(
+                row, live=_truth.NOT_SEEDED,
+                note=("This account does not exist in the identity store of the "
+                      "mesh that is running — it is what the seeder WOULD create. "
+                      + truth.headline))
+        if truth.holds_any_role(row.username, row.roles) is False:
+            return replace(
+                row, live=_truth.NO_ROLES,
+                note=("This account exists but holds none of the roles above in "
+                      "the running mesh, so it can sign in and then 403 on every "
+                      "page. Re-run the identity seed. " + truth.headline))
+        return replace(row, live=fallback, note=note)
+
     users: list[SeededUser] = []
     for u in roster.users:
         if u.password_env == "E2E_SUPERADMIN_PASSWORD" and "ROLE_SUPERADMIN" in u.roles:
             if sa_user and sa_pw:
-                users.append(replace(u, username=sa_user, password=sa_pw,
-                                     live=sa_marker, note=sa_note))
+                users.append(_live(replace(u, username=sa_user, password=sa_pw),
+                                   sa_marker, sa_note))
             else:
-                users.append(_masked(replace(u, live=sa_marker, note=sa_note)))
+                users.append(_masked(_live(u, sa_marker, sa_note)))
             continue
         if roster.operator and u.username == roster.operator:
             users.append(_masked(
-                replace(u, live=op_marker, note=op_note or truth.headline)))
+                _live(u, op_marker, op_note or truth.headline)))
             continue
-        users.append(_masked(replace(u, live=marker, note=truth.headline)))
+        users.append(_masked(_live(u, marker, truth.headline)))
     for name, roles in added:
         users = [x for x in users if x.username != name]
-        users.append(SeededUser(username=name, roles=tuple(roles),
-                                password=_truth.ADDED_MARKER, live=_truth.ADDED,
-                                note="Seeded by this session's Add user; the "
-                                     "password was handed to the seeder's env and "
-                                     "never kept."))
+        row = SeededUser(username=name, roles=tuple(roles),
+                         password=_truth.ADDED_MARKER, live=_truth.ADDED,
+                         note="Seeded by this session's Add user; the password was "
+                              "handed to the seeder's env and never kept.")
+        # #540: a row is shown because it EXISTS, not because it was requested. On a
+        # lane whose store was read, "added this session" is a claim like any other
+        # and the same per-row join settles it — an add that did not land reads as
+        # not seeded here, not as a success that happens to be invisible everywhere
+        # else. The verb already refuses on its own read-back; this is the surface
+        # telling the same truth a minute later, from a fresh read.
+        users.append(_live(row, _truth.ADDED, row.note))
     return replace(roster, users=users, truth=truth)
 
 

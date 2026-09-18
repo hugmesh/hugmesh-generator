@@ -397,6 +397,7 @@ jobs:
             tests/scripts/test-seed-password-reconcile.sh
             tests/scripts/test-shared-build-assets.sh
             tests/scripts/test-spec-use-parity.sh
+            tests/scripts/test-stack-clone-credential.sh
             tests/scripts/test-stack-e2e-argv.sh
             tests/scripts/test-stack-fetch-repos.sh
             tests/scripts/test-studio-launch.sh
