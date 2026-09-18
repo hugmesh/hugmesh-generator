@@ -99,6 +99,14 @@ class UsersPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
+        #: The CONFIGURATION OBJECT this table was last filled from (#542) — the same
+        #: identity check DomainsPage and pages/domain_services.py carry, for the same
+        #: reason. ``load_config`` / ``load_session`` / ``start_build_from_session``
+        #: replace ``wiz.cfg`` and call ``restart()``; without this, a Users table that
+        #: was already populated keeps the PREVIOUS flow's accounts and validatePage
+        #: then rebuilds ``cfg.users`` from them, erasing every user the operator just
+        #: loaded. A restart() on the same object still preserves in-progress edits.
+        self._cfg_seen = None
         self.setTitle("Superusers & domain users")
         self.setSubTitle(
             "Name the superusers (locked to the Tailscale root domain) "
@@ -249,6 +257,13 @@ class UsersPage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         c = self.wiz.cfg
+        if c is not self._cfg_seen:
+            # A DIFFERENT configuration object (#542): Load config / Load session /
+            # restart-from-session. Drop the previous flow's rows so the fill below
+            # re-reads THIS configuration's users — otherwise validatePage writes the
+            # old table back over cfg.users and the loaded accounts are gone.
+            self.table.setRowCount(0)
+            self._cfg_seen = c
         if self.table.rowCount() == 0:
             for u in c.users:
                 self._add(u.username, u.domain, list(u.roles), u.email,
