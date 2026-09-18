@@ -247,6 +247,19 @@ class DomainsPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
+        #: The CONFIGURATION OBJECT this table was last filled from (#542). Identity,
+        #: not equality: ``load_config`` / ``load_session`` / ``start_build_from_session``
+        #: replace ``wiz.cfg`` wholesale and then call ``restart()``, which re-runs
+        #: ``initializePage`` — and a table that is already populated must be refilled
+        #: from the NEW configuration, not left holding the previous flow's rows.
+        #: Leaving them is not a display bug: ``validatePage`` rebuilds ``cfg.domains``
+        #: from the table, so the loaded domains are ERASED from the configuration, and
+        #: the #495 per-domain services gate can never refuse a domain that is no longer
+        #: in ``cfg.domains``. A ``restart()`` on the SAME object keeps today's
+        #: behaviour (in-progress edits survive), which is what this identity check
+        #: buys over an unconditional refill. Same idiom as
+        #: ``pages/domain_services.py``, for the same reason.
+        self._cfg_seen = None
         self.setTitle("Domains & their services")
         self.setSubTitle(
             "Beyond the superadmin apex, define the OTHER domains this mesh "
@@ -447,6 +460,18 @@ class DomainsPage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         c = self.wiz.cfg
+        if c is not self._cfg_seen:
+            # A DIFFERENT configuration object (#542) — Load config, Load session, or a
+            # restart from the previous-builds manager. The rows below belong to the
+            # configuration they were filled from; keeping them would DROP every domain
+            # the operator just loaded, and not only from the display: validatePage
+            # rebuilds cfg.domains from this table, so the loaded domains are erased
+            # from the configuration, after which the per-domain services gate has
+            # nothing left to refuse. Clear, then fall into the fill below. A restart()
+            # that does NOT replace the object takes neither branch, so in-progress
+            # edits are still preserved.
+            self.table.setRowCount(0)
+            self._cfg_seen = c
         self.header.setText(
             "Tailscale root domain: "
             f"<b>{c.effective_superdomain()}</b> — joined by all mesh nodes; "
