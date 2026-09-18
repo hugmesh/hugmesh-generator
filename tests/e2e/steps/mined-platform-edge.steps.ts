@@ -724,6 +724,29 @@ Then(
   },
 );
 
+// Generalised twin of the step above — takes WHICH table ('compose' or
+// 'cluster') as an explicit quoted argument instead of hard-coding 'cluster',
+// so a single scenario outline can pin the SAME upstream on both lanes at
+// once (hugmesh-generator#549). Kept alongside the cluster-only step rather
+// than replacing it: the unquoted literal "the cluster fe gateway routes …"
+// in the mesh-BFF scenario above still matches that step, not this one.
+Then(
+  'the {string} fe gateway routes {string} to the {string} upstream',
+  async ({}, which: string, pattern: string, upstream: string) => {
+    const { rel, routes } = tableOf(which);
+    const matching = routes.filter((r) => r.paths.includes(pattern));
+    expect(
+      matching.map((r) => r.id),
+      `no route in ${rel} declares the path '${pattern}'.`,
+    ).not.toHaveLength(0);
+    expect(
+      matching.find((r) => r.uri.includes(upstream)),
+      `'${pattern}' is routed by [${matching.map((r) => `${r.id} -> ${r.uri}`).join(', ')}] in `
+      + `${rel}, none of which forwards to '${upstream}'.`,
+    ).toBeDefined();
+  },
+);
+
 Then(
   'the cluster fe gateway declares {string} before {string}',
   async ({}, earlier: string, later: string) => {
@@ -738,6 +761,24 @@ Then(
       + `Gateway matches FIRST-IN-DECLARED-ORDER, not most-specific, so '${later}' would `
       + `swallow '${earlier}' and the request would reach the wrong service — which answers `
       + `403 for an identity it has never heard of. A routing bug wearing a permission bug's face.`,
+    ).toBeLessThan(b!.order);
+  },
+);
+
+// Generalised twin, same reason as the routes-to-upstream step above.
+Then(
+  'the {string} fe gateway declares {string} before {string}',
+  async ({}, which: string, earlier: string, later: string) => {
+    const { rel, routes } = tableOf(which);
+    const a = routes.find((r) => r.paths.includes(earlier));
+    const b = routes.find((r) => r.paths.includes(later));
+    expect(a, `${rel} declares no route for '${earlier}'`).toBeDefined();
+    expect(b, `${rel} declares no route for '${later}'`).toBeDefined();
+    expect(
+      a!.order,
+      `route '${a!.id}' ('${earlier}') is declared AFTER '${b!.id}' ('${later}') in ${rel}. `
+      + `Spring Cloud Gateway / the chart matches FIRST-IN-DECLARED-ORDER, not most-specific, `
+      + `so '${later}' would swallow '${earlier}' and the request would reach the wrong service.`,
     ).toBeLessThan(b!.order);
   },
 );

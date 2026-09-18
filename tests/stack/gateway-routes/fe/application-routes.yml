@@ -312,7 +312,15 @@ spring:
                 # belongs in specs/cluster, not here.) The same guard file pins
                 # that /bff/me/appeal and /bff/register/complete keep reaching
                 # admin-bff on this lane.
-                - Path=/bff/login,/bff/register,/bff/session,/bff/session/**,/bff/me,/bff/user/**,/bff/password-reset/request,/bff/password-reset/confirm,/bff/me/namespaces,/bff/provision/matrix,/bff/provision/mastodon,/bff/register/google,/bff/register/discord
+                #
+                # /bff/sessionOut (hugmesh-generator#549) — the POST alias
+                # clients (host-shell, login-ui) actually call for sign-out.
+                # SsoAuthController serves it as an alias of DELETE /bff/session
+                # (same cookie-read, same expiry). Before this line it fell
+                # through to the /bff/** admin-bff catch-all below, whose own
+                # sessionOut read the token from a header a browser never sends
+                # (bffTokenFrom(null, header)) — a complete no-op sign-out.
+                - Path=/bff/login,/bff/register,/bff/session,/bff/session/**,/bff/sessionOut,/bff/me,/bff/user/**,/bff/password-reset/request,/bff/password-reset/confirm,/bff/me/namespaces,/bff/provision/matrix,/bff/provision/mastodon,/bff/register/google,/bff/register/discord
             # Moderator BFF surface -> mod-bff (also precedes the admin catch-all).
             - id: hugmesh-mod-bff-api
               uri: http://hugmesh-mod-bff-api:8080
