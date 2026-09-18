@@ -3295,8 +3295,12 @@ orphan-guards-verify:
   image: eclipse-temurin:21-jdk-alpine
   tags: [hugmesh-x86]
   before_script:
-    - apk add --no-cache bash jq openssl python3 py3-yaml coreutils grep sed gawk findutils diffutils git tar util-linux openssh-keygen make
-    - for t in bash jq openssl python3 git tar keytool ssh-keygen make; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t — this job's image cannot run its guards"; exit 1; }; done
+    # kubectl is here for `kubectl kustomize` — tests/scripts/test-eso-remoteref-brand.sh
+    # renders the baked ArgoCD Application against the GIT manifests and EXITS 2 rather
+    # than reporting a pass when no kustomize is on PATH (the same reason the GitHub
+    # `extras` job carries it). Same apk idiom as the two kustomize-render jobs above.
+    - apk add --no-cache bash jq openssl python3 py3-yaml coreutils grep sed gawk findutils diffutils git tar util-linux openssh-keygen make kubectl
+    - for t in bash jq openssl python3 git tar keytool ssh-keygen make kubectl; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t — this job's image cannot run its guards"; exit 1; }; done
   script:
     - |
       set -u
@@ -3325,6 +3329,7 @@ orphan-guards-verify:
         tests/scripts/test-calamares-boost-seed.sh
         tests/scripts/test-casdoor-jwt-no-preferred-username.sh
         tests/scripts/test-edge-ai-cuda-host-compiler.sh
+        tests/scripts/test-eso-remoteref-brand.sh
         tests/scripts/test-first-run-lib.sh
         tests/scripts/test-headscale-oidc-secret-staging.sh
         tests/scripts/test-host-accept-keywords.sh

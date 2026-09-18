@@ -492,8 +492,24 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # too, so the debian placement is a choice of ONE job, not a constraint. The
 # ungated SET pin is unchanged at 22. This file conflicts on nearly every merge;
 # if it conflicts here, RE-MEASURE on the merged tree per the doctrine above
-# rather than taking 169 or the other side's number.
+# rather than taking 170, 171 or either side's number.
 #
+# 170 -> RE-MEASURED on 2026-09-17 while merging origin/main into
+# iss/285-vault-brand-remoteref. BOTH sides of this merge said 170 and NEITHER is
+# true of the merged tree: main reached 170 by gating tests/scripts/test-kind-halt.sh
+# (#356), this branch reached 170 by gating tests/scripts/test-eso-remoteref-brand.sh
+# (#285, decision 38 = B on #347). The merged tree has BOTH suites, so, as every
+# reconciliation above did, the number below was taken by RUNNING this file on the
+# merged tree and reading the line it prints. The two notes either side of this one
+# are kept as a union: complementary records, neither one superseding the other.
+# NOTE on placement: test-eso-remoteref-brand.sh is gated in the GitHub `extras` job
+# rather than `guards`, because it renders what ArgoCD renders and needs kubectl +
+# PyYAML, which only that job installs and preflights. It is NOT in
+# PREMERGE_UNGATED: it is offline, touches no cluster, and runs in ~12s.
+# THE MEASUREMENT on the merged tree, taken by running this file:
+#     171 of 193 suites are named by a pull_request-triggered workflow
+# so the baseline below is 171, not either side's 170. The ungated SET pin is
+# unchanged at 22.
 # 169 -> 170 / denominator 192 (unchanged -> 192) on iss/356-kind-lane-halt, which
 # adds ONE suite and gates it: tests/scripts/test-kind-halt.sh, the offline guard
 # over `make kind-halt` / `make kind-resume` (the kind lane's non-destructive stop).
@@ -504,7 +520,16 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # docker and kubectl on PATH, touches no cluster and runs in a few seconds, so it
 # has no reason to sit outside the gate. Recording a false exemption here is how
 # rot has stayed hidden for weeks before.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-170}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-171}"
+
+
+# 169 -> 170 on 2026-09-17: tests/scripts/test-eso-remoteref-brand.sh joined the
+# gate with the ExternalSecret remoteRef brand rule (hugmesh-generator#285,
+# decision 38 = B on #347). MEASURED by RUNNING this file on the tree with the
+# suite wired and unwired, not assumed: unwired it printed "all 192 suites are
+# invoked ... (0 allowlisted)" and the gated count 169; wired it printed
+# "pre-merge suite coverage rose to 170, baseline still says 169". The ungated
+# SET pin is unchanged at 22.
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED
