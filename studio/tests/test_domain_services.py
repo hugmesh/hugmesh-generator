@@ -1,0 +1,334 @@
+"""The per-domain service model and the build/mesh-start gate — Qt-free (#494/#495).
+
+    "make sure that the service configuration is integrated into the domain setup
+     instead of its own separate thing. make sure that for each domain, the service
+     page needs to be config, so there's basically a service page per domain you make
+     you have to go through before building or starting a mesh in docker or nodes"
+                                                        — the operator, 2026-09-17
+
+THIS FILE HAS NO QT IMPORT, and that is the point rather than a convenience. The
+pre-merge CI job (`.github/workflows/studio-tests.yml`) installs **no Qt binding** on
+purpose, and a `pytest.importorskip("hugmesh_studio.gui.qt")` anywhere in a module
+skips the WHOLE module — so a gate tested only inside a GUI file is a gate the
+pre-merge job never runs. `core/domain_services.py` exists as a Qt-free seam precisely
+so the refusal can be driven with a bare `ImageConfig`; these tests are what cash that
+in. The GUI surfaces live in tests/test_domain_services_page.py (the step) and
+tests/test_domain_services_scope.py (the scope column), both of which DO skip without
+a binding.
+
+What is pinned here: the gate itself, the remedy each call site shows, the marker's
+fail-closed loading and its absence from both manifests, the domain catalogue and its
+scopes, and the catalogue-order normalisation that keeps the manifest byte-stable.
+"""
+import os
+
+import pytest
+
+from hugmesh_studio.core import domain_services as ds
+from hugmesh_studio.core.config import (
+    INFRA_SERVICES_CHOICES, OPTIONAL_SERVICES_CHOICES, SERVICE_GROUPS, Domain,
+    ImageConfig)
+
+STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
+
+
+def _mesh(**kw):
+    """An ImageConfig whose domains can actually REACH something.
+
+    ``ImageConfig.mode`` defaults to ``standalone``, and there a domain emits no
+    ``--domains`` and no mesh manifest is written at all
+    (``worklist_driver.run_all`` writes it only when ``base.mode == "mesh"``), so
+    ``gate_applies`` deliberately does not bite — see
+    ``test_the_gate_bites_exactly_where_domains_reach_something``. Every gate test
+    below is about the case where the domains DO reach a cluster."""
+    kw.setdefault("mode", "mesh")
+    return ImageConfig(**kw)
+
+
+# ── the seam ──────────────────────────────────────────────
+def test_gate_passes_when_there_are_no_domains():
+    assert ds.gate_reason(_mesh()) == ""
+
+
+def test_gate_names_every_unconfigured_domain():
+    cfg = _mesh(domains=[Domain(name="a.example"), Domain(name="b.example")])
+    msg = ds.gate_reason(cfg)
+    assert "a.example" in msg and "b.example" in msg
+    assert "2 domains" in msg
+
+
+def test_gate_names_the_action_it_refused():
+    cfg = _mesh(domains=[Domain(name="a.example")])
+    assert "build these images" in ds.gate_reason(cfg, ds.ACTION_IMAGE_BUILD)
+    assert "start this mesh" in ds.gate_reason(cfg, ds.ACTION_MESH_START)
+
+
+def test_each_refusal_names_a_route_that_exists_from_where_it_is_shown():
+    """A remedy that does not work is a dead end with extra words, and ONE shared
+    sentence would be wrong at BOTH call sites in different ways:
+
+    * the build screen has Qt's Back DISABLED — the review screen before it is a
+      commit page (``pages/build.py`` setCommitPage(True)), which is why that screen
+      has a "back to the main menu" card at all — so "go back a step" is false there;
+    * the local-mesh branch is TERMINAL and hosts no Domains table; its domains come
+      from the configuration the session is carrying, so "go back a step" names a
+      step that is not in that flow.
+    """
+    cfg = _mesh(domains=[Domain(name="a.example")])
+    build = ds.gate_reason(cfg, ds.ACTION_IMAGE_BUILD)
+    mesh = ds.gate_reason(cfg, ds.ACTION_MESH_START)
+    assert ds.ACTION_REMEDY[ds.ACTION_IMAGE_BUILD] in build
+    assert ds.ACTION_REMEDY[ds.ACTION_MESH_START] in mesh
+    assert build != mesh
+    # the build remedy names the card that IS reachable, and says why Back is not
+    assert "Back to the main menu" in build
+    assert "Back button is disabled" in build
+    # ...and the mesh remedy does not send anyone to a Back that leads elsewhere
+    assert "Back to the main menu" not in mesh
+    assert "the configuration this session is carrying" in mesh
+
+
+def test_an_unknown_action_still_gets_a_usable_sentence():
+    """gate_reason must not fall off a dict lookup into a bare domain list if a third
+    call site ever passes its own action string."""
+    cfg = _mesh(domains=[Domain(name="a.example")])
+    msg = ds.gate_reason(cfg, "do the thing")
+    assert "Cannot do the thing" in msg
+    assert "Domain services" in msg
+
+
+def test_an_empty_selection_is_a_real_answer_once_the_domain_is_configured():
+    """``optional_services == []`` means "the cluster-wide set applies" — a real
+    answer, and the reason emptiness could not double as "never configured"."""
+    cfg = _mesh(domains=[Domain(name="a.example", optional_services=[])])
+    assert ds.gate_reason(cfg) != ""
+    ds.record_reviewed(cfg, ["a.example"])
+    assert ds.gate_reason(cfg) == ""
+    assert cfg.domains[0].optional_services == []
+
+
+def test_a_marker_for_a_domain_that_no_longer_exists_is_dropped():
+    """REBUILT, never merged: a renamed or deleted domain must not leave a marker that
+    would let the gate pass for a domain nobody configured."""
+    cfg = _mesh(domains=[Domain(name="a.example")])
+    ds.record_reviewed(cfg, ["a.example", "ghost.example"])
+    assert cfg.domain_services_reviewed == ["a.example"]
+    cfg.domains = [Domain(name="renamed.example")]
+    ds.record_reviewed(cfg, cfg.domain_services_reviewed)
+    assert cfg.domain_services_reviewed == []
+    assert "renamed.example" in ds.gate_reason(cfg)
+
+
+def test_the_marker_never_reaches_either_mesh_manifest():
+    """It is the GATE's bookkeeping, not provisioning data — a manifest must be
+    byte-identical whether or not the page was walked."""
+    cfg = _mesh(domains=[Domain(name="a.example")])
+    before = cfg.mesh_manifest()
+    ds.record_reviewed(cfg, ["a.example"])
+    assert cfg.mesh_manifest() == before
+    assert "domain_services_reviewed" not in cfg.mesh_manifest()
+    assert all("domain_services_reviewed" not in d
+               for d in cfg.mesh_manifest()["domains"])
+
+
+def test_the_marker_round_trips_through_a_saved_config():
+    cfg = _mesh(domains=[Domain(name="a.example")])
+    ds.record_reviewed(cfg, ["a.example"])
+    again = ImageConfig.from_dict(cfg.to_dict())
+    assert again.domain_services_reviewed == ["a.example"]
+    assert ds.gate_reason(again) == ""
+
+
+def test_a_junk_marker_fails_closed_not_open():
+    """A hand-edited config whose marker is not a list must NOT stand in for "all
+    reviewed" — absent is the fail-closed reading and the gate then says so."""
+    cfg = ImageConfig.from_dict({"mode": "mesh",
+                                 "domains": [{"name": "a.example"}],
+                                 "domain_services_reviewed": "everything"})
+    assert cfg.domain_services_reviewed == []
+    assert "a.example" in ds.gate_reason(cfg)
+
+
+def test_the_domain_catalogue_is_the_user_level_set_and_excludes_infra():
+    assert tuple(ds.DOMAIN_CATALOGUE) == tuple(OPTIONAL_SERVICES_CHOICES)
+    for slug in INFRA_SERVICES_CHOICES:
+        assert slug not in ds.DOMAIN_CATALOGUE
+        assert ds.scope_of(slug) == ds.SCOPE_NODE
+    for slug in ds.DOMAIN_CATALOGUE:
+        assert ds.scope_of(slug) == ds.SCOPE_DOMAIN
+
+
+def test_normalisation_is_catalogue_order_with_extras_last():
+    """DISCRIMINATING PAIR: games/owncast is where catalogue order (… games, owncast,
+    tube …) and SERVICE_GROUPS presentation order ("Media & Play" = owncast, tube,
+    games) DISAGREE, so this can tell the two apart."""
+    assert ds.normalise_slugs(["owncast", "games"]) == ["games", "owncast"]
+    assert ds.normalise_slugs(["tor", "akkoma"]) == ["akkoma", "tor"]
+    assert ds.carried_over_slugs(["tor", "akkoma"]) == ["tor"]
+
+
+def test_a_catalogue_slug_missing_from_the_grouping_is_still_offered(monkeypatch):
+    """SERVICE_GROUPS is presentation; DOMAIN_CATALOGUE is the catalogue. If the two
+    drift, the slug must still be offered rather than silently vanish — the exact
+    quiet-drop failure this surface has had before."""
+    monkeypatch.setattr(ds, "SERVICE_GROUPS",
+                        (("Social & Community", ("akkoma",)),))   # drops 7 slugs
+    offered = [s for _g, slugs in ds.grouped_domain_catalogue() for s in slugs]
+    assert sorted(offered) == sorted(OPTIONAL_SERVICES_CHOICES)
+    assert "Other services" in [g for g, _s in ds.grouped_domain_catalogue()]
+
+
+def test_regrouping_cannot_change_what_a_domain_emits(monkeypatch):
+    """SERVICE_GROUPS is presentation ONLY. If a presentation order leaked into the
+    recorded value, moving a slug between two group tuples — a purely cosmetic edit —
+    would rewrite the bytes of domains[].optional_services in the mesh manifest."""
+    def _reordered(slugs):
+        rest = [s for s in slugs if s != "games"]
+        return ("games", *rest)
+    swapped = tuple((title, _reordered(slugs) if "games" in slugs else slugs)
+                    for title, slugs in SERVICE_GROUPS)
+    assert swapped != SERVICE_GROUPS, "the regrouping mutation did not change anything"
+    before = ds.normalise_slugs(["owncast", "games"])
+    before_groups = ds.grouped_domain_catalogue()
+    monkeypatch.setattr(ds, "SERVICE_GROUPS", swapped)
+    after_groups = ds.grouped_domain_catalogue()
+    assert before_groups != after_groups, "the regrouping changed no presentation"
+    assert ds.normalise_slugs(["owncast", "games"]) == before == ["games", "owncast"]
+
+
+# ── the gate's predicate agrees with what the domains can actually reach ──────────
+# Added while landing #495 after the skeptic pass. gate_reason used to refuse for
+# EVERY config carrying a named domain, including flows whose Domain services step
+# does not exist (standalone skips it statically; a cloud NODE role skips the whole
+# superadmin plane). That refusal named a screen those flows have no route to — a dead
+# end. `gate_applies` is the fix, and these pin it against the EMISSION rather than
+# against prose, so a future change to where domains go re-opens the question here.
+def _reaches_anything(cfg) -> bool:
+    """Whether this config's domains reach ANY artifact: the argv the builder gets, or
+    the mesh manifest. Measured, not asserted."""
+    bare = ImageConfig(mode=cfg.mode, role=cfg.role)
+    argv_delta = [a for a in cfg.to_cli_args() if a not in bare.to_cli_args()]
+    # worklist_driver.run_all writes the manifest ONLY when base.mode == "mesh"
+    writes_manifest = cfg.mode == "mesh"
+    return bool(argv_delta) or writes_manifest
+
+
+def test_the_gate_bites_exactly_where_domains_reach_something():
+    cases = [
+        ImageConfig(mode="standalone", domains=[Domain(name="a.example")]),
+        ImageConfig(mode="cloud", role="omnibus", domains=[Domain(name="a.example")]),
+        ImageConfig(mode="cloud", role="desktop", domains=[Domain(name="a.example")]),
+        ImageConfig(mode="mesh", domains=[Domain(name="a.example")]),
+    ]
+    for cfg in cases:
+        reaches = _reaches_anything(cfg)
+        refused = bool(ds.gate_reason(cfg))
+        assert refused == reaches, (
+            f"{cfg.mode}/{cfg.role or '-'}: domains reach={reaches} but "
+            f"gate refuses={refused} — a gate that refuses a config whose domains "
+            f"go nowhere is a dead end, and one that passes a config whose domains "
+            f"DO go somewhere is the hole this feature exists to close")
+        assert ds.gate_applies(cfg) == reaches
+
+
+def test_the_gate_still_bites_a_mesh_whose_domains_opt_in_is_off():
+    """superadmin_plane_applies' MESH arm also asks cfg.additional_domains, and
+    gate_applies deliberately does NOT mirror that. A config carrying domains with the
+    opt-in off is one NetworkPage.validatePage has not cleared YET — and on the docker
+    mesh-start path that page may never run at all, so deferring would make those
+    domains unrefusable."""
+    from hugmesh_studio.core.config import superadmin_plane_applies
+    cfg = ImageConfig(mode="mesh", additional_domains=False,
+                      domains=[Domain(name="a.example")])
+    assert superadmin_plane_applies(cfg) is False
+    assert ds.gate_applies(cfg) is True
+    assert "a.example" in ds.gate_reason(cfg)
+
+
+def test_the_standalone_default_mode_is_the_one_that_turns_the_gate_off():
+    """Stated out loud because ImageConfig.mode DEFAULTS to standalone: anyone reading
+    gate_applies must see that the off case is the default value, and that it is safe
+    only because a standalone config's domains emit nothing at all."""
+    assert ImageConfig().mode == "standalone"
+    off = ImageConfig(domains=[Domain(name="a.example")])
+    assert ds.gate_reason(off) == ""
+    assert not _reaches_anything(off)
+
+
+# ── the RESTART gate (previous builds -> Restart) ────────────────────────────────
+def test_restart_gate_exempts_a_session_recorded_before_the_field_existed():
+    """A session saved before domain_services_reviewed existed carries no marker.
+    Refusing it would refuse every historical restart over a question nobody asked."""
+    old = ImageConfig.from_dict({"mode": "mesh",
+                                 "domains": [{"name": "a.example"}]})
+    assert old.domain_services_reviewed == []
+    assert ds.restart_gate_reason(old) == ""
+    # ...while the BUILD gate still refuses the same config, which is the point:
+    # the exemption is for the restart door alone.
+    assert "a.example" in ds.gate_reason(old)
+
+
+def test_restart_gate_bites_a_config_produced_under_this_feature():
+    cfg = _mesh(domains=[Domain(name="a.example"), Domain(name="b.example")])
+    ds.record_reviewed(cfg, ["a.example"])
+    msg = ds.restart_gate_reason(cfg)
+    assert "b.example" in msg
+    assert "a.example" not in msg.split("—")[-1]
+    assert ds.ACTION_BUILD_RESTART in msg
+
+
+def test_restart_gate_passes_a_fully_configured_session():
+    cfg = _mesh(domains=[Domain(name="a.example")])
+    ds.record_reviewed(cfg, ["a.example"])
+    assert ds.restart_gate_reason(cfg) == ""
+
+
+def test_the_restart_remedy_names_redo_not_a_step_that_flow_lacks():
+    """start_build_from_session jumps straight to the terminal progress page; there is
+    no wizard step to walk back to from there. Redo is the route that exists — and the
+    caller (sessions_widget._restart) branches on the word, offering to do it."""
+    cfg = _mesh(domains=[Domain(name="a.example"), Domain(name="b.example")])
+    ds.record_reviewed(cfg, ["a.example"])
+    msg = ds.restart_gate_reason(cfg)
+    assert "Redo" in msg
+    assert "Back to the main menu" not in msg
+
+
+# ── one wording, one source of truth ─────────────────────────────────────────────
+def test_services_summary_tells_the_three_states_apart():
+    assert ds.services_summary([], False) == "not configured yet"
+    assert ds.services_summary(["akkoma"], False) == "not confirmed — akkoma"
+    assert ds.services_summary([], True) == "cluster default"
+    assert ds.services_summary(["owncast", "games"], True) == "games, owncast"
+
+
+def test_domain_summary_is_services_summary_for_a_domain():
+    """domain_summary used to carry its own copy of the three branches while the cell
+    the operator actually reads carried another — two sources of truth for the wording
+    the whole honesty argument rests on, and the tested one was not the rendered one."""
+    cfg = _mesh(domains=[Domain(name="a.example", optional_services=["akkoma"])])
+    d = cfg.domains[0]
+    assert ds.domain_summary(d, cfg) == ds.services_summary(["akkoma"], False)
+    ds.record_reviewed(cfg, ["a.example"])
+    assert ds.domain_summary(d, cfg) == ds.services_summary(["akkoma"], True)
+    assert ds.domain_summary(Domain(name="a.example"), cfg) == "cluster default"
+
+
+# ── whitespace cannot wedge the gate ─────────────────────────────────────────────
+def test_a_padded_name_can_still_satisfy_the_gate():
+    """record_reviewed stored d.name RAW while unconfigured_domains compared the
+    STRIPPED name, so a hand-edited config carrying ' a.example ' could never satisfy
+    the gate — a permanently unbuildable configuration with no way out."""
+    cfg = _mesh(domains=[Domain(name=" a.example ")])
+    ds.record_reviewed(cfg, [" a.example "])
+    assert cfg.domain_services_reviewed == ["a.example"]
+    assert ds.gate_reason(cfg) == ""
+
+
+def test_a_padded_marker_loaded_from_disk_is_honoured():
+    cfg = ImageConfig.from_dict({"mode": "mesh",
+                                 "domains": [{"name": "a.example"}],
+                                 "domain_services_reviewed": [" a.example "]})
+    assert ds.reviewed_names(cfg) == {"a.example"}
+    assert ds.gate_reason(cfg) == ""
