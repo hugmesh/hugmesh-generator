@@ -374,6 +374,7 @@ jobs:
             tests/scripts/test-kind-addon-channel.sh
             tests/scripts/test-kind-bootstrap-honesty.sh
             tests/scripts/test-kind-doctor.sh
+            tests/scripts/test-kind-halt.sh
             tests/scripts/test-kind-profile-app-closure.sh
             tests/scripts/test-kind-profile-route-closure.sh
             tests/scripts/test-lsm-posture-honesty.sh
@@ -501,6 +502,7 @@ jobs:
             tests/scripts/test-e2e-spec-symbol-resolution.sh
             tests/scripts/test-eso-provider-refs.sh
             tests/scripts/test-eso-seed-contract.sh
+            tests/scripts/test-fe-bff-route-lane-parity.sh
             tests/scripts/test-first-run-lib.sh
             tests/scripts/test-fragment-route-target.sh
             tests/scripts/test-gitlab-ci-wellformed.sh
@@ -683,6 +685,10 @@ jobs:
           # tests/stack/test-mdm-manifests-render.sh exits 0 having rendered and
           # asserted nothing. If the download above ever silently fails, this job
           # would pass while covering a third less than it claims.
+          # test-eso-remoteref-brand.sh lives in THIS job, not in `guards`, for the
+          # same reason: it renders the baked ArgoCD Application against the git
+          # manifests through real kustomize, and it exits 2 rather than reporting a
+          # pass when kubectl/kustomize or PyYAML is absent.
           missing=""
           for b in bash jq openssl python3 git helm kubectl checkpolicy make; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
@@ -696,6 +702,7 @@ jobs:
             tests/scripts/test-selinux-auditallow-generator.sh
             tests/stack/test-gateway-mfa-env.sh
             tests/stack/test-mdm-manifests-render.sh
+            tests/scripts/test-eso-remoteref-brand.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do
