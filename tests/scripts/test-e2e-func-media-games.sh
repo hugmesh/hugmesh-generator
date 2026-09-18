@@ -208,10 +208,34 @@ run_lane() {
   return "${rc}"
 }
 
+# EVERY `node -e` this suite captures goes through here, and never through a bare
+# `node`. #316: with FORCE_COLOR inherited from whatever launched the suite, node
+# runs a NON-STRING argument to console.log through util.inspect WITH COLOURS, so a
+# captured count comes back wrapped in ANSI:
+#
+#   $ FORCE_COLOR=3 node -e 'console.log(0)'         | cat -v   ->  ^[[33m0^[[39m
+#   $ FORCE_COLOR=3 node -e 'console.log(String(0))' | cat -v   ->  0
+#   $ env -u FORCE_COLOR node -e 'console.log(0)'    | cat -v   ->  0
+#
+# and `[ "${X}" = "0" ]` then takes the wrong arm. Measured on this tree: the whole
+# suite was 6 passed / 1 failed / rc=1 under FORCE_COLOR=3 and 7 passed / 0 failed
+# / rc=0 without it — the same tree, the same commit, a verdict decided by an
+# ambient variable.
+#
+# It errs LOUD at the one site that has it today, but the shape errs SILENT
+# wherever an `= "0"` gates a PASS arm, so this is fixed as a class and not as a
+# line. Two independent belts, because either alone is one refactor from gone:
+#   * the call sites below print STRINGS (a string argument is never inspected);
+#   * this helper pins the colour environment, so a future `console.log(<Number>)`
+#     added here cannot reintroduce it.
+# NO_COLOR as well as FORCE_COLOR=0: they are separate switches in node, and a
+# future node could honour one without the other.
+node_quiet() { FORCE_COLOR=0 NO_COLOR=1 node "$@"; }
+
 # Read the counts out of a JSON report without a JSON dependency in the shell.
 lane_counts() {
   local outfile="$1"
-  node -e '
+  node_quiet -e '
     const fs = require("fs");
     let r;
     try { r = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); }
@@ -311,7 +335,7 @@ else
 fi
 
 # ── 2. every skip carries a named reason ────────────────────────────────────
-SILENT="$(node -e '
+SILENT="$(node_quiet -e '
   const fs = require("fs");
   const r = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   let silent = 0;
@@ -324,12 +348,52 @@ SILENT="$(node -e '
     })));
   };
   (r.suites || []).forEach(walk);
-  console.log(silent);
+  // String(), not the bare Number: console.log of a non-string is util.inspect-ed,
+  // and inspect COLOURS under an inherited FORCE_COLOR. See node_quiet above (#316).
+  console.log(String(silent));
 ' "${WORK}/base.json")"
-if [ "${SILENT}" = "0" ]; then
-  pass "no silent skip: every skipped scenario in this lane names its reason"
+# The captured value must be a plain integer BEFORE it is compared. A count that
+# arrived wrapped in ANSI (or empty, because node died) equals neither "0" nor any
+# number, so a bare `= "0"` would silently take the fail arm for a reason that has
+# nothing to do with skips — and the mirror-image shape, `= "0"` gating a PASS,
+# would take the pass arm. Assert the SHAPE, then the VALUE. `cat -v` so a reader
+# sees the escapes instead of a message that has already eaten them.
+case "${SILENT}" in
+  ''|*[!0-9]*)
+    fail "the silent-skip count came back as '$(printf '%s' "${SILENT}" | cat -v)', which is not a plain integer — the capture itself is broken (an inherited FORCE_COLOR/NO_COLOR, or node failing), so the comparison below would be meaningless. See #316."
+    ;;
+  *)
+    if [ "${SILENT}" -eq 0 ]; then
+      pass "no silent skip: every skipped scenario in this lane names its reason"
+    else
+      fail "${SILENT} scenario(s) skipped with NO reason — a silent skip is worse than a failure"
+    fi
+    ;;
+esac
+
+# ── 2b. this suite's own capture is immune to a hostile FORCE_COLOR ─────────
+# The check above decides a verdict from a value captured out of node. #316 was
+# that verdict being decided by an environment variable nobody in this repo sets:
+# FORCE_COLOR arrives from whatever launched the suite (several agent and CI
+# harnesses export it), and under it node colours a console.log of a NON-string.
+# So the immunity is asserted here directly, with the hostile value forced ON,
+# rather than left to whoever happens to run the suite.
+#
+# CONTROL FIRST, so this can never be vacuously green: if a bare `node -e
+# 'console.log(0)'` does NOT colour under FORCE_COLOR=3 on this host, the probe
+# below proves nothing and says so. That is reported as INFO, not as a failure —
+# a node build that stopped colouring is not this suite's regression.
+RAW_PROBE="$(FORCE_COLOR=3 node -e 'console.log(0)' 2>/dev/null | cat -v)"
+if [ "${RAW_PROBE}" = "0" ]; then
+  info "control: this host's node does not colour console.log(<Number>) under FORCE_COLOR=3 (got '${RAW_PROBE}'), so the immunity check below is VACUOUS here — it cannot fail on this host."
 else
-  fail "${SILENT} scenario(s) skipped with NO reason — a silent skip is worse than a failure"
+  info "control: a bare node -e 'console.log(0)' under FORCE_COLOR=3 prints '${RAW_PROBE}' — the hazard is live on this host, so the check below is load-bearing."
+fi
+QUIET_PROBE="$(FORCE_COLOR=3 NO_COLOR= node_quiet -e 'console.log(String(0))' 2>/dev/null | cat -v)"
+if [ "${QUIET_PROBE}" = "0" ]; then
+  pass "captures are colour-immune: with FORCE_COLOR=3 forced ON, this suite's own node capture still yields a bare '0' (#316)"
+else
+  fail "this suite's node capture is NOT colour-immune — with FORCE_COLOR=3 it yielded '${QUIET_PROBE}', not '0'. Every count this suite compares is decided by an inherited environment variable (#316)."
 fi
 
 # ── 3. the lane's own evidence really lands ─────────────────────────────────
