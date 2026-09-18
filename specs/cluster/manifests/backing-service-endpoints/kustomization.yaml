@@ -3,13 +3,21 @@
 #
 # Operator DECISION 34a (2026-09-17): ONE ConfigMap PER NAMESPACE, same name and key
 # scheme in each — NOT the single hugmesh-backend object that was recommended and
-# declined. The three namespaces below are the ones on the axis that EXIST on every
-# mesh. The other three (hugmesh-owncast, hugmesh-tube, hugmesh-forum) are created by
-# their own OPTIONAL-service Applications (manifests/<svc>/namespace.yaml, 13a
+# declined. The axis is SIX namespaces and all six ship. The three listed below are
+# the ones that EXIST on every mesh, so they ship from HERE. The other three
+# (hugmesh-owncast, hugmesh-tube, hugmesh-forum) are created by their own
+# OPTIONAL-service Applications (manifests/<svc>/namespace.yaml, 13a
 # `installed:"false"` by default), so a ConfigMap for them applied from HERE would
-# leave this Application permanently unable to sync on a default mesh. Their objects
-# belong in their own service's manifests dir, which this lane does not own — it is a
-# numbered remaining box on hugmesh-admin-bff-api#9, not an omission.
+# leave this Application permanently unable to sync on a default mesh — a red nobody
+# can explain. Their identical object + grant therefore ship from their own service's
+# directory instead, and appear exactly when their namespace does:
+#     specs/cluster/manifests/owncast/backing-service-endpoints.yaml
+#     specs/cluster/manifests/tube/backing-service-endpoints.yaml
+#     specs/cluster/manifests/forum/backing-service-endpoints.yaml
+# DO NOT move them here and DO NOT delete them. All six placements are pinned by
+# tests/scripts/test-backing-service-endpoints-closure.sh, which fails on the
+# deletion of any one of them and on any of them going unreferenced by its own
+# kustomization.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

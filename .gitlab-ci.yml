@@ -1123,6 +1123,24 @@ lint:argocd-serverside-diff:
   script:
     - bash tests/scripts/test-argocd-serverside-diff.sh
 
+# Operator DECISION 34a (2026-09-17) went AGAINST the recommendation: instead of one
+# shared backing-service-endpoints ConfigMap in hugmesh-backend, the SAME object name
+# and key scheme ship in EVERY namespace on the managed-Postgres axis, and the
+# fan-out writer gets one resourceNames-closed RBAC grant per namespace. The
+# generator manifests ARE that answer's artefact, and an adversarial review measured
+# on the branch that shipped it that FIVE manifest mutations survived every guard the
+# PR cited — including a literal revert to the single object the operator declined.
+# This suite is the one that goes RED on that revert: it re-derives the axis from the
+# tree, recomputes the ignoreDifferences keystone against the ConfigMap's own keys
+# (the hand-maintained-list rot apps/16 records), and re-checks every seeded value
+# byte-for-byte against the consumer Deployment literal it must not move.
+lint:backing-service-endpoints-closure:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-backing-service-endpoints-closure.sh
+
 # A curated kind profile must apply the companion Applications its own
 # Applications name. KIND_PROFILE=sso listed apps/00-cassandra.yaml (the Bitnami
 # Helm chart) but not apps/00b-cassandra-init.yaml, which creates the keyspaces

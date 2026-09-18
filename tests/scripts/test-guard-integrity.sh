@@ -493,7 +493,20 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # ungated SET pin is unchanged at 22. This file conflicts on nearly every merge;
 # if it conflicts here, RE-MEASURE on the merged tree per the doctrine above
 # rather than taking 169 or the other side's number.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-169}"
+# 169 -> 170 on 2026-09-17: tests/scripts/test-backing-service-endpoints-closure.sh
+# joined the gate. It is the manifest-side guard for operator DECISION 34a/34b — the
+# one that goes RED when the per-namespace backing-service-endpoints fan-out is
+# reverted to the single hugmesh-backend object the operator DECLINED. It was added
+# because an adversarial review measured five manifest mutations surviving every
+# suite the shipping PR cited as verification. MEASURED, not assumed: with the suite
+# named in shell-suites.yml's DEBIAN job this file printed
+# "170 of 192 suites are named by a pull_request-triggered workflow" and with the
+# name removed it printed 169, so the raise is this one suite and nothing else. The
+# ungated SET pin is unchanged — the suite landed INSIDE the gate, so PREMERGE_UNGATED
+# gains no entry. This file conflicts on nearly every merge; if it conflicts here,
+# RE-MEASURE on the merged tree per the doctrine above rather than taking 170 or the
+# other side's number.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-170}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED
