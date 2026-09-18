@@ -136,6 +136,7 @@ def test_page_slugs_map_to_the_right_pages(wiz):
               "network": wizard_mod.NetworkPage, "keyzip": wizard_mod.KeyZipPage,
               "domains_choice": wizard_mod.DomainsChoicePage,
               "domains": wizard_mod.DomainsPage,
+              "domain_services": wizard_mod.DomainServicesPage,
               "users_choice": wizard_mod.UsersChoicePage,
               "users": wizard_mod.UsersPage,
               "system": wizard_mod.SystemPage, "vault": wizard_mod.VaultPage,

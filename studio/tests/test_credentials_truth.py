@@ -273,14 +273,26 @@ def test_unreadable_credentials_file_reports_the_permission_reason_not_not_seede
         p.chmod(0o600)
 
 
-def test_kind_lane_reports_stage2_unknown_not_false(tmp_path):
+def test_kind_lane_with_nothing_read_is_unknown_and_says_so_is_not_absence(tmp_path):
+    """assess() with NO KindIdentities (nothing was read) is unknown — and the
+    headline must say "could not read", never anything an operator could take for
+    "this mesh has nobody in it". #539 retired the old wording ("its Casdoor has no
+    host port, so nothing here can verify who is seeded"): the premise was false,
+    and this path now means only that the read did not happen."""
     t = ct.assess(**_facts(tmp_path, lane=ct.LANE_KIND, mesh_running=False))
     assert t.state == ct.STATE_UNKNOWN
     assert t.lane == ct.LANE_KIND
     assert t.stage2 is None
     assert t.operator_user == ""
-    assert "no host port" in t.headline
     assert t.marker == ct.UNKNOWN
+    assert t.present_users is None            # nothing read => nothing claimed
+    assert "could not read" in t.headline
+    # It says what it could not do, and then says outright what it is NOT claiming.
+    # A word scan is the wrong check here: the headline deliberately CONTAINS
+    # "nobody is seeded" — negated — because the operator's own reading of the old
+    # surface was the unnegated one.
+    assert "is NOT 'nobody is seeded'" in t.headline
+    assert t.password_marker == ""                 # the values stay on screen
 
 
 def test_unknown_is_never_rendered_as_absent(tmp_path):

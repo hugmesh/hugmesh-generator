@@ -4,6 +4,11 @@ namespace: hugmesh-owncast
 resources:
   - namespace.yaml
   - deployment.yaml
+  # Operator DECISION 34a (2026-09-17): one backing-service-endpoints ConfigMap
+  # PER NAMESPACE + the fan-out writer's resourceNames-closed grant. It ships from
+  # HERE, not from the always-on manifests/backing-service-endpoints/, because
+  # hugmesh-owncast only exists when this optional service is installed.
+  - backing-service-endpoints.yaml
 
 images:
   - { name: owncast/owncast, newName: owncast/owncast, newTag: latest }

@@ -3,3 +3,25 @@ kind: Kustomization
 namespace: hugmesh-pki
 resources:
   - harbor-provision-job.yaml
+
+# THE MESH VAULT BASE SEGMENT (issue #285, decision 38 = B on #347) — the WRITER
+# half. Copies the Job's platform.hugmesh.net/vault-base annotation onto the
+# VAULT_KV_BASE env var the reconcile script writes Vault with, so this writer and
+# the ESO readers in manifests/external-secrets move together. apps/03b-harbor-
+# provision.yaml patches the annotation; rebrand_sysroot() rewrites that patch to
+# <BRAND>. Byte no-op at the default brand.
+replacements:
+  - source:
+      group: batch
+      version: v1
+      kind: Job
+      name: harbor-provision
+      fieldPath: metadata.annotations.[platform.hugmesh.net/vault-base]
+    targets:
+      - select:
+          group: batch
+          version: v1
+          kind: Job
+          name: harbor-provision
+        fieldPaths:
+          - spec.template.spec.containers.[name=reconcile].env.[name=VAULT_KV_BASE].value
