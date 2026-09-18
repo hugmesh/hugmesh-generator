@@ -32,6 +32,7 @@ Feature: The fe route tables put every protocol and asset prefix ahead of the SP
       | akkoma  | /oauth/authorize           |
       | gateway | /_fragments/index.json     |
       | gateway | /bff/session               |
+      | gateway | /bff/sessionOut            |
 
   Scenario: the SPA catch-all is declared last in both tables @layer:gateway @service:gateway
     Then "frontend-host" is the final route in the "compose" fe gateway table
@@ -86,6 +87,44 @@ Feature: The fe route tables put every protocol and asset prefix ahead of the SP
       | wiki            | /bff/wiki/**            |
       | phpbb           | /bff/forum/**           |
       | character-forge | /bff/character-forge/** |
+
+  # ── SIGN-OUT (hugmesh-generator#549) ──────────────────────────────────────
+  # POST /bff/sessionOut is the alias host-shell and login-ui actually call.
+  # Before this fix it fell through to the /bff/** admin-bff catch-all, whose
+  # own sessionOut read the token from a header a browser never sends
+  # (bffTokenFrom(null, header)) and could not expire the cookie — a complete
+  # no-op sign-out. The real implementation is user-bff's DELETE /bff/session
+  # (SsoAuthController), which /bff/sessionOut must alias.
+  Scenario Outline: /bff/sessionOut routes to user-bff on <table>, not the admin-bff catch-all @layer:bff
+    Then the "<table>" fe gateway routes "/bff/sessionOut" to the "hugmesh-user-bff-api" upstream
+
+    Examples:
+      | table   |
+      | compose |
+      | cluster |
+
+  Scenario: the cluster fe gateway declares /bff/sessionOut before the admin-bff catch-all @layer:bff
+    Then the "cluster" fe gateway declares "/bff/sessionOut" before "/bff/**"
+
+  # ── BAN-APPEAL CARVE-OUT (hugmesh-generator#480) ──────────────────────────
+  # The cluster table's /bff/me/** -> user-bff entry swallows admin-bff's
+  # POST+GET /bff/me/appeal (AccountAppealUserController), the surface a
+  # curtailed principal reaches to contest their own suspension — a 404 for
+  # exactly the caller least able to route around a front-door failure.
+  # Compose already gets this right (EXACT paths never widen to a subtree);
+  # this carve-out brings the cluster table in line, in the same shape the
+  # existing hugmesh-admin-bff-api-register-complete row already uses for the
+  # sibling /bff/register/** swallow.
+  Scenario Outline: /bff/me/appeal reaches admin-bff on <table>, not the /bff/me/** catch-all @layer:bff
+    Then the "<table>" fe gateway routes "/bff/me/appeal" to the "hugmesh-admin-bff-api" upstream
+
+    Examples:
+      | table   |
+      | compose |
+      | cluster |
+
+  Scenario: the cluster fe gateway declares /bff/me/appeal before the /bff/me/** catch-all @layer:bff
+    Then the "cluster" fe gateway declares "/bff/me/appeal" before "/bff/me/**"
 
   # ── THE FRAGMENT FLEET ─────────────────────────────────────────────────────
   # A route to a live host on a dead port is not a 404. The gateway 5xxes or
