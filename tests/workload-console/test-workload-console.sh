@@ -854,13 +854,39 @@ if [ -f "${PROP}" ] && command -v python3 >/dev/null; then
   # rotating round 2 to the same content phase, and turning the two rounds'
   # intersection into a union ALL left the du/base64/cut/nice controls above green --
   # they stay red for their own reasons, so they cannot see a weakened oracle. The
-  # differential self-test was the only line that moved in any of those four. Its
-  # own missing-call mutation is what this control exists for.
+  # differential self-test was the only line that moved in any of those four.
+  #
+  # There are TWO ways to escape it from outside the module, not one, and each gets
+  # its own assertion below:
+  #   (a) delete the differential_self_test() CALL -- caught by the PASS line check;
+  #   (b) delete a STUB from the module's _DIFF_STUBS table, after which the self-test
+  #       still prints PASS while no longer asking the question. `flip` is the stub
+  #       that pins the round-2 confirmation and `leak` is the one that pins detection
+  #       at all, so the self-test names the stubs it actually exercised and this
+  #       control reads the names back. That turns (b) from a silent one-line escape
+  #       into a red line. It is not airtight -- a second edit here would still
+  #       defeat it -- but no self-test can be, and the point is to make the cheap
+  #       path cost something.
   diff_st_out="$(python3 "${PROP}" --entries 'uname' 2>&1)"
   if printf '%s' "${diff_st_out}" | grep -F "PASS differential self-test:" >/dev/null; then
     ok "control: the differential leg's self-test RAN in this invocation — Oracle B' was shown, in this very process, to fire on a token derived from the probed file's bytes and to stay silent on one that merely moves with the clock"
   else
     bad "control: the property script ran WITHOUT its differential self-test (#492) — nothing in this suite then separates an Oracle B' that catches a leak from one a busy filesystem can talk into a false positive, and the entry that flaked is on the shipped allowlist"
+  fi
+
+  diff_st_missing=""
+  for _stub in flip hold2 leak; do
+    # "[flip]", not "flip": the PASS line's own prose says "flipping", "holding" and
+    # "leak", so a bare-name grep here matches its own sentence and passes with the
+    # stub table gutted. MEASURED: with the bare form, deleting the `flip` tuple left
+    # this suite 74 passed / 0 failed.
+    printf '%s' "${diff_st_out}" | grep -F "stubs exercised:" | grep -F "[${_stub}]" >/dev/null \
+      || diff_st_missing="${diff_st_missing} ${_stub}"
+  done
+  if [ -z "${diff_st_missing}" ]; then
+    ok "control: the differential self-test exercised every stub it claims to — flip (pins the round-2 confirmation), hold2 (documents the rejected pairing schedule) and leak (pins that the leg still detects anything at all); dropping one from _DIFF_STUBS would keep the PASS line and silently stop asking"
+  else
+    bad "control: the differential self-test did not report exercising stub(s)${diff_st_missing} — either the tuple was dropped from _DIFF_STUBS (the self-test then still prints PASS while no longer asking that question) or the self-test did not run at all (#492); without 'flip' nothing here catches a reverted round-2 confirmation and without 'leak' nothing catches detection being switched off"
   fi
 
   # NEGATIVE 5 — a help text this parser CANNOT READ is UNPROVEN and non-zero, never

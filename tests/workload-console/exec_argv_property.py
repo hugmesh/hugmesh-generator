@@ -75,10 +75,20 @@ command names.  Either one firing fails the entry.
   by this one.  So a candidate is RE-PROBED over the same four
   variants with the content phase INVERTED in time (v1, v0, v3, v2), which makes
   the eight probes carry the labels X Y X Y  Y X Y X, and only a token both rounds
-  flag is a leak.  A leak is a function of the bytes and survives any ordering; a
-  value that merely moves with the clock is attributed to X by one round and to Y
-  by the other, and the two verdicts do not intersect.  The second round runs only
-  once the first has flagged something, so an honest entry still costs four probes.
+  flag is a leak.  A leak is a function of the bytes and survives any ordering, so
+  it is flagged twice.  A value that merely moves with the clock has to line up with
+  BOTH labelings at once, which no square wave, no p-cycle and no monotone staircase
+  does.  It is NOT impossible: of the 256 two-valued eight-probe streams, exactly
+  two — ABABBABA and BABAABAB — still satisfy both rounds, and a stub emitting
+  ABABBABA that never opens its argument is reported as a leak 8 times out of 8
+  (MEASURED).  Every one of the 24 possible round-2 orderings has exactly two such
+  streams; what distinguishes this one is WHICH two, and these two are aperiodic
+  shapes a filesystem counter does not produce, where the two that defeat "repeat
+  round 1 unchanged" are the pure period-2 alternation `df` actually emits.  Writing
+  that residue down is the point: a comment claiming the FIRST interleaving made
+  confusion impossible is what #492 was, and the same sentence one level deeper
+  would be the same bug.  The second round runs only once the first has flagged
+  something, so an honest entry still costs four probes.
 
   § Why Oracle A needs a SEPARATE positional rule.  An option surface says nothing
   about operands: `Usage: base64 [OPTION]... [FILE]` needs no flag at all.  But a
@@ -745,12 +755,14 @@ def _tokens(out):
 # the shipped X, Y, X, Y. Round 2 re-probes THE SAME FOUR with the content phase
 # inverted in TIME; the eight probes therefore carry the labels X Y X Y  Y X Y X.
 #
-# That sequence is not a taste: it was chosen by exhausting all 24 round-2 orderings
-# against every square wave (value held for h probes then flipped, h = 1..5, every
-# phase), every periodic stream (p = 1..8, every phase) and every monotone staircase.
-# Four orderings score zero false positives, and (1, 0, 3, 2) is among them with the
-# lowest residual rate under random run-length noise. Two orderings a reader might
-# reach for first are NOT sound and the numbers say why:
+# That sequence is not a taste, and it is not a claim of immunity either. Read both
+# halves of this comment before changing the tuple.
+#
+# WHAT IT BUYS. All 24 round-2 orderings were exhausted against every square wave
+# (value held for h probes then flipped, h = 1..5, every phase), every periodic
+# stream (p = 1..8, every phase) and every monotone staircase. (1, 0, 3, 2) has ZERO
+# false positives across all of those. Two orderings a reader might reach for first
+# do not, and the numbers say why:
 #
 #   * repeating round 1 unchanged  (X Y X Y X Y X Y) is defeated outright by the
 #     period-2 flip — the very shape that produced #492 — because the second round
@@ -758,11 +770,54 @@ def _tokens(out):
 #   * repeating each variant back-to-back (X X Y Y X X Y Y), the "require the token
 #     to be stable across two identical probes" shape, is defeated by a value that
 #     holds for TWO probes and then flips: the repeat pair sits inside one run of the
-#     wave, so pure noise looks perfectly stable. Its false-positive rate under random
-#     noise RISES (0.080% -> 0.173%) as the noise timescale grows to match its own
-#     pairing, which is the signature of a guard tuned to the wrong invariant.
+#     wave, so pure noise looks perfectly stable, which is the signature of a guard
+#     tuned to the wrong invariant.
 #
-# differential_self_test() drives both of those failure shapes as live controls.
+# WHAT IT DOES NOT BUY, stated because the omission of exactly this sentence one
+# level up IS #492. The residue is not empty. Over all 256 two-valued eight-probe
+# streams EVERY one of the 24 orderings scores exactly 2/256 — so this ordering is
+# not quantitatively better on that measure, and any claim of a "lowest residual
+# rate" would be unsupported. What differs is WHICH two streams survive:
+#
+#     (1, 0, 3, 2)  shipped   defeated by ABABBABA and BABAABAB  (aperiodic)
+#     (0, 1, 2, 3)  repeat    defeated by ABABABAB and BABABABA  (period 2 = #492)
+#
+# The choice is qualitative: a filesystem counter under load emits runs and flips,
+# not ABABBABA. MEASURED on this tree: a /bin/sh stub emitting ABABBABA that never
+# opens the file it is handed is reported as a content leak by the rule below in
+# 8 runs out of 8. Anyone tempted to write "impossible" here should run that stub
+# first. (3, 2, 1, 0) is an equally sound alternative — the tests pin the PROPERTY,
+# not this literal tuple, so a sound substitution is deliberately allowed to pass.
+#
+# TWO THINGS BOUND THE RESIDUE, and they are why 2/256 overstates it badly.
+#
+#   1. A false positive needs one value at probe times {0,2,5,7} and a DIFFERENT one
+#      at {1,3,4,6}: the first value has to RECUR after the second has intervened. A
+#      non-decreasing stream cannot do that — s0 <= s1 <= s2 with s0 == s2 forces
+#      s0 == s1, which round 1 already rejects. Brute-forced over every
+#      non-decreasing 8-probe stream on 2..8 levels: zero false positives, for ALL
+#      24 orderings (it is a property of round 1, not of the schedule). So a
+#      monotone clock is immune by construction. That matters concretely: measured
+#      under two dd/fsync writers on `/`, `uptime -r <file>` moves between two
+#      identical probes (1 of its 21 templates, '260061.540000' -> '260061.550000')
+#      — exposed, but it only ever counts UP, so it cannot reach the residue.
+#   2. The residue is a two-VALUE shape. Over all 8-probe streams drawn from k
+#      distinct values it is 2/256 = 0.78% at k=2, 6/6561 = 0.091% at k=3 and
+#      12/65536 = 0.018% at k=4. A real free-block counter under load visits many
+#      values, so the honest figure is far below the k=2 headline.
+#
+# WHAT IS ACTUALLY EXPOSED on the shipped allowlist, measured the way the oracle
+# probes (reset once, then probe the SAME variant twice with NO reset between —
+# resetting between the pair moves ctime via reset_variants' own chmod/utime and
+# makes `stat` look exposed for a reason the oracle never sees). Under two
+# dd/fsync writers on `/`: df 9/50, stat 1/26 (`stat --file-system <file>`, the
+# same block counters), uptime 1/21 (monotone, see above); ls 0/145, free 0/62,
+# id 0/30, uname 0/36. Idle: df 2/50, everything else 0. `df` is therefore not the
+# only entry whose output moves under load, which is why pinning `df` would not
+# have closed this class and is not a substitute for the two-round rule.
+#
+# differential_self_test() drives the two rejected failure shapes as live controls;
+# it does not, and cannot, drive the residue, which is why it is written down here.
 DIFF_ROUND_1 = (0, 1, 2, 3)
 DIFF_ROUND_2 = (1, 0, 3, 2)
 
@@ -819,9 +874,19 @@ def content_leaks(tmpls, can, limit=6):
         leaked_X = [(t0 & t2) - t1 - t3]  &  [(t5 & t7) - t4 - t6]
 
     A leak is a deterministic function of the bytes, so it is flagged by both rounds
-    whatever order the probes run in. A value that moves with the clock is assigned
-    to X by one round and to Y by the other, and the intersection is empty. The
-    second round is only ever paid for by an entry that already looks guilty.
+    whatever order the probes run in. A value that moves with the clock has to line
+    up with both labelings at once, which no square wave, no p-cycle and no monotone
+    staircase manages.
+
+    The intersection is NOT guaranteed empty, and saying it was would be #492 again:
+    exactly two of the 256 two-valued eight-probe streams — ABABBABA and BABAABAB —
+    survive both rounds, and a stub emitting ABABBABA that never opens its argument
+    is reported here as a content leak 8 times out of 8 (measured). Those two are
+    aperiodic; what this schedule actually buys is that the streams it cannot tell
+    from a leak are shapes a filesystem counter does not emit, whereas the ones that
+    defeat a repeated round 1 are the period-2 alternation `df` does emit. See the
+    DIFF_ROUND_2 comment for the full enumeration. The second round is only ever paid
+    for by an entry that already looks guilty.
     """
     env = probe_env(can)
     bad = []
@@ -1000,15 +1065,23 @@ def parser_self_test(ok, bad):
 #   flip  — its output alternates on EVERY run and it never opens the file it is
 #           handed, so calling it a leak is a false positive BY CONSTRUCTION. Measured
 #           against the pre-#492 single-round rule on this tree: flagged 12 times out
-#           of 12, with no load and no luck; 0 out of 12 against the rule below. It is the live control for the round-2
-#           confirmation — delete that round, or let round 2 repeat round 1's
-#           ordering, and this goes red.
-#   hold2 — its output holds for TWO runs and then flips. It must stay clean here,
-#           and it is the shape that defeats the "probe each variant twice in a row,
-#           require the token to be stable across the pair" alternative: the repeat
-#           pair sits inside one run of the wave, so pure noise looks perfectly
-#           stable. The schedule therefore cannot be re-derived into that form on the
-#           strength of a comment alone.
+#           of 12, with no load and no luck; 0 out of 12 against the rule below. It
+#           is the live control for the round-2 confirmation — delete that round, or
+#           let round 2 repeat round 1's ordering, and this goes red.
+#   hold2 — its output holds for TWO runs and then flips. It is DOCUMENTATION OF A
+#           REJECTED ALTERNATIVE, not live coverage, and it is labelled that way so
+#           nobody counts it as a third guard. Under the schedule actually shipped it
+#           is DORMANT: round 1 requires t0 == t2, a hold-two-then-flip value emits
+#           A A B B and never satisfies that, so hold2 never reaches round 2 at all.
+#           Measured against the pre-#492 single-round rule at all four starting
+#           phases: 0/8, 0/8, 0/8, 0/8 — it carries no mutation coverage, and every
+#           red line in the battery names `flip` or `leak`. What it is for is the
+#           "probe each variant twice in a row, require the token to be stable across
+#           the pair" alternative, which it defeats: the repeat pair sits inside one
+#           run of the wave, so pure noise looks perfectly stable. It stands here so
+#           that re-deriving the schedule into that form costs a red line rather than
+#           a comment argument. If the schedule ever changes, re-measure it before
+#           trusting it.
 #   leak  — its output really IS a function of the probed file's bytes (the tail of
 #           its first line, which is one of the encodings the leg's own docstring
 #           names). It MUST fire. Making a flake go away by weakening detection is
@@ -1093,7 +1166,12 @@ def differential_self_test(ok, unproven):
        "of the probed file's bytes, and stays silent on stubs whose output merely "
        "moves with the clock (alternating every run, and holding for two runs then "
        "flipping) — the leg can still catch a leak and is no longer confounded by "
-       "global state changing underneath the probe")
+       "global state changing underneath the probe. stubs exercised: %s"
+       # BRACKETED deliberately: the prose above this line contains the substrings
+       # "flip"(ping), "hold"(ing) and "leak", so a bare-name grep in the shell
+       # control passes even with the stub table gutted. MEASURED: deleting the
+       # `flip` tuple left the suite 74 passed / 0 failed until this was bracketed.
+       % " ".join("[%s]" % n for n, _, _ in _DIFF_STUBS))
     return True
 
 
