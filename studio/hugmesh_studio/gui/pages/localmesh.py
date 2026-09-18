@@ -2700,12 +2700,25 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         auto-sync. NOT destructive: the cluster, its volumes, its Vault KV and its
         Casdoor identities all stay, so this deliberately does NOT confirm. The
         streamed output is the point — it names every Application it suspended and
-        the state each was in when it froze."""
+        the state each was in when it froze.
+
+        CANCELLABLE, and safe to cancel — but only because of how kind-halt.sh is
+        built. ``cancellable=True`` arms a Cancel that terminates the verb's whole
+        process GROUP (local_stack_node.py:749-751), so the halt can stop between any
+        two API calls. The script therefore writes its record BEFORE the first
+        mutation: a cancelled halt leaves a cluster that Resume can fully undo and
+        that a second Halt will finish, with the pre-halt replica counts intact.
+        (Before that, cancelling was MORE destructive than letting it finish — the
+        cluster ended up halted with no record of how to put it back.) The note below
+        says so, because an operator deciding whether to press Cancel should not have
+        to infer it."""
         node = self.boot._stack_node()
         self._note("[devops] halting the DevOps lane: suspending ArgoCD auto-sync "
                    "and scaling the mesh workloads to 0. NOTHING is deleted — the "
                    "cluster and its data stay, and Resume puts back exactly what "
-                   "this suspends …")
+                   "this suspends. Cancel is safe here: the record of what to undo "
+                   "is written before the first change, so a cancelled halt can be "
+                   "resumed or finished …")
         self._launch("Halting the DevOps lane",
                      lambda on_line, cancel: node.devops_halt(on_line=on_line,
                                                               cancel=cancel),
@@ -3252,9 +3265,14 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # running is None means the census could not be taken, and that must grey the
         # controls with a reason rather than offering them (I5).
         _kind = getattr(snap, "kind", None)
+        # halted is the SECOND tri-state and is read off the same snapshot: a halted
+        # lane still reports running=True, so without it Halt is offered on a lane
+        # that is already halted (#356). None means the record could not be read,
+        # which is not 'not halted' — the widget leaves both offered and says so.
         self.monitor.set_kind_lane(getattr(_kind, "running", None),
                                    str(getattr(_kind, "error", "") or
-                                       getattr(_kind, "detail", "") or ""))
+                                       getattr(_kind, "detail", "") or ""),
+                                   halted=getattr(_kind, "halted", None))
         self._sync_monitor_gate()
 
     def _on_monitor_toggled(self, on: bool):

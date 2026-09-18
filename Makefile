@@ -1347,6 +1347,15 @@ kind-down: ## delete the kind cluster
 # The record lives in a ConfigMap INSIDE the cluster, which is what makes these
 # three targets work with no Studio running: a halted cluster whose only resume
 # path was a GUI would be a trap.
+#
+# AND IT IS WRITTEN BEFORE THE FIRST MUTATION, which is the line the whole pair
+# hangs on. The Studio runs `kind-halt` with a Cancel button that terminates the
+# process group, so the halt can stop between any two API calls; written last, a
+# cancelled halt left the cluster halted with NO record of how to undo it, and the
+# only way out was `kind-down && kind-up` — destroying the cluster, the one outcome
+# #356 exists to prevent. Written first, a cancelled halt is fully undoable by
+# `kind-resume` and can be finished by running `kind-halt` again. If the record
+# cannot be written, NOTHING is halted (exit 5).
 kind-halt: ## stop the DevOps lane WITHOUT deleting it (scale mesh workloads to 0 + suspend ArgoCD auto-sync; `kind-down` is the destructive one)
 	bash scripts/kind-halt.sh halt
 

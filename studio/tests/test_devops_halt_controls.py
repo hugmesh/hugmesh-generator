@@ -394,3 +394,166 @@ def test_neither_halt_nor_resume_raises_a_modal():
         body = inspect.getsource(meth)
         assert "QMessageBox" not in body
         assert "confirm_devops_down" not in body
+
+
+# ── the SECOND tri-state: is the lane already halted? ───────────────────────────
+# A halted lane still reports running=True — the halt KEEPS the cluster. Before this
+# the Studio offered Halt on an already-halted lane with nothing on screen saying it
+# was halted, so pressing it twice was a normal operator action. That mattered a
+# great deal more when a second halt could destroy the first one's record; it is
+# still wrong now that kind-halt.sh refuses, because a refusal after the fact is not
+# the same as a control that shows you the state.
+def test_a_halted_lane_greys_halt_and_points_at_resume(qapp):
+    w = mw.MeshMonitorWidget()
+    w.set_kind_lane(True, halted=True)
+    assert not w.halt_btn.isEnabled(), "Halt was offered on an already-halted lane"
+    assert w.resume_btn.isEnabled()
+    tip = w.halt_btn.toolTip()
+    assert "already HALTED" in tip
+    assert "Resume DevOps lane" in tip, "the greyed control does not say what to do instead"
+
+
+def test_a_running_unhalted_lane_greys_resume(qapp):
+    w = mw.MeshMonitorWidget()
+    w.set_kind_lane(True, halted=False)
+    assert w.halt_btn.isEnabled()
+    assert not w.resume_btn.isEnabled(), "Resume was offered with nothing to resume"
+    assert "not halted" in w.resume_btn.toolTip()
+
+
+def test_an_unreadable_halt_state_offers_both_and_says_so(qapp):
+    """Unknown is not 'not halted', exactly as unknown is not 'not running'. The
+    shell half refuses (exit 5) when it cannot read its own record; the GUI cannot
+    refuse on the operator's behalf, so it offers both and names the uncertainty."""
+    w = mw.MeshMonitorWidget()
+    w.set_kind_lane(True, halted=None)
+    assert w.halt_btn.isEnabled()
+    assert w.resume_btn.isEnabled()
+    for tip in (w.halt_btn.toolTip(), w.resume_btn.toolTip()):
+        assert "could not be determined" in tip
+        assert "not the same as 'there is none'" in tip
+        # …and it must NOT read like the lane-unknown branch, which is a different
+        # uncertainty with a different answer (that one greys both controls).
+        assert "could not be read" not in tip
+
+
+def test_the_halted_state_never_overrides_a_down_or_unknown_lane(qapp):
+    """halted is a REFINEMENT of running, never a promotion of it. A lane that is
+    down or unestablished must stay fully greyed whatever the halt record says."""
+    w = mw.MeshMonitorWidget()
+    for running in (False, None):
+        for halted in (True, False, None):
+            w.set_kind_lane(running, "why", halted=halted)
+            assert not w.halt_btn.isEnabled(), (running, halted)
+            assert not w.resume_btn.isEnabled(), (running, halted)
+
+
+def test_the_halted_branch_rewrites_both_tooltips_too(qapp):
+    """Same trap as the unknown branch: a stale sentence on the button that is now
+    enabled. Walk every transition, not just into the new state."""
+    w = mw.MeshMonitorWidget()
+    w.set_kind_lane(True, halted=True)
+    assert "already HALTED" in w.halt_btn.toolTip()
+    w.set_kind_lane(True, halted=False)
+    assert "already HALTED" not in w.halt_btn.toolTip()
+    assert "not halted" in w.resume_btn.toolTip()
+    w.set_kind_lane(True, halted=None)
+    assert "not halted" not in w.resume_btn.toolTip()
+    assert "could not be determined" in w.resume_btn.toolTip()
+
+
+def test_the_page_passes_the_halted_state_through(qapp):
+    """The wiring, not the widget. _on_monitor must forward LaneState.halted, or the
+    gate above is dead code fed a permanent None."""
+    seen = {}
+
+    class _Mon:
+        def set_view_session(self, *a, **k):
+            pass
+
+        def set_kind_lane(self, running, reason="", halted=None):
+            seen.update(running=running, reason=reason, halted=halted)
+
+    class _Kind:
+        running = True
+        halted = True
+        detail = "cluster hugmesh-local · HALTED"
+        error = ""
+
+    class _Snap:
+        kind = _Kind()
+        view_doors = ()
+        view_lane = ""
+
+    page = localmesh.LocalMeshPage.__new__(localmesh.LocalMeshPage)
+    page.monitor = _Mon()
+    page._sync_monitor_gate = lambda: None
+    localmesh.LocalMeshPage._on_monitor(page, _Snap())
+    assert seen["running"] is True
+    assert seen["halted"] is True, "LaneState.halted never reached the gate"
+
+
+# ── the probe behind it ─────────────────────────────────────────────────────────
+def test_lane_state_halted_defaults_to_unknown():
+    from hugmesh_studio.core import mesh_monitor as mm
+    assert mm.LaneState(True).halted is None, (
+        "a lane nobody asked about must not default to 'not halted'")
+
+
+@pytest.mark.parametrize("rc,out,want", [
+    (0, '{"version": 2}', True),
+    (0, "", False),
+    (1, 'Error from server (NotFound): configmaps "hugmesh-kind-halt" not found', False),
+    (1, "Unable to connect to the server: net/http: TLS handshake timeout", None),
+    (1, "error: You must be logged in to the server (Unauthorized)", None),
+])
+def test_the_halt_record_probe_is_a_tri_state(rc, out, want, monkeypatch):
+    """The same distinction kind-halt.sh makes in shell, and for the same reason: a
+    read that FAILED is not a record that is ABSENT. Conflating them is what let a
+    second halt overwrite a good record with an all-zero one."""
+    from hugmesh_studio.core import mesh_monitor as mm
+
+    monkeypatch.setattr(mm, "_probe", lambda node, cmd, timeout: (rc, out))
+    budget = mm._Budget(30)
+    assert mm._halt_record_present(None, "kubectl", "kind-hugmesh-local", budget) is want
+
+
+def test_the_halt_record_probe_is_pinned_to_the_context_and_namespace(monkeypatch):
+    from hugmesh_studio.core import mesh_monitor as mm
+
+    calls = []
+    monkeypatch.setattr(mm, "_probe",
+                        lambda node, cmd, timeout: (calls.append(cmd), (1, "NotFound"))[1])
+    mm._halt_record_present(None, "kubectl", "kind-hugmesh-local", mm._Budget(30))
+    cmd = calls[0]
+    assert "--context" in cmd and cmd[cmd.index("--context") + 1] == "kind-hugmesh-local"
+    assert "-n" in cmd and cmd[cmd.index("-n") + 1] == mm.ARGOCD_NS
+    assert mm.KIND_HALT_STATE_CM in cmd
+    # READ ONLY. This runs on every monitor poll against the operator's live cluster.
+    assert not ({"patch", "scale", "delete", "create", "apply", "edit"} & set(cmd)), cmd
+
+
+def test_the_halt_record_probe_is_skipped_rather_than_guessed_when_out_of_budget(monkeypatch):
+    """An exhausted deadline must answer None, not False. Reporting 'not halted'
+    because there was no time to ask is the census mistake in miniature."""
+    from hugmesh_studio.core import mesh_monitor as mm
+
+    monkeypatch.setattr(mm, "_probe",
+                        lambda *a, **k: pytest.fail("the probe ran with no budget"))
+    assert mm._halt_record_present(None, "kubectl", "kind-x", mm._Budget(0)) is None
+
+
+# ── the other destructive door ──────────────────────────────────────────────────
+def test_the_kind_delete_button_is_not_called_stop(qapp):
+    """Since #356 the Studio ships a real non-destructive stop. This button runs
+    `kind delete cluster` and used to be labelled "Stop Kubernetes now" — with both
+    verbs in one application that label points the operator at the wrong one."""
+    from hugmesh_studio.gui.pages import localcloud_nodes as ln
+
+    # The BUTTON's text, not the module source: the comment explaining the rename
+    # quotes the old label, and a source-wide search cannot tell a label from a note
+    # about a label.
+    src = inspect.getsource(ln)
+    assert 'QPushButton("Stop Kubernetes now")' not in src
+    assert 'QPushButton("Delete the Kubernetes cluster now")' in src
+    assert "Halt DevOps lane" in src, "the destructive button does not name the stop"

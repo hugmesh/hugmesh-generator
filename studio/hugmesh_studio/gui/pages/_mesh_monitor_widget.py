@@ -168,6 +168,30 @@ _RESUME_TIP_UNKNOWN = (
 _RESUME_TIP_DOWN = ("The Kubernetes lane is not running, so there is nothing to "
                     "resume into. A halted lane still reads as running — the halt "
                     "keeps the cluster.")
+#: The lane IS halted. A halted lane still reads running=True, so without this the
+#: Studio offered Halt on an already-halted lane with no way to see that it was
+#: halted, and pressing it a second time was a normal operator action.
+_HALT_TIP_ALREADY = (
+    "This lane is already HALTED — `make kind-halt` left its record on the cluster. "
+    "Its workloads are at 0 and ArgoCD auto-sync is suspended on the Applications "
+    "the halt recorded.\n\nResume DevOps lane is the one you want. "
+    "`make kind-halt-status` prints exactly what was frozen and the state each "
+    "Application was in when it froze.")
+_RESUME_TIP_NOT_HALTED = (
+    "This lane is not halted — there is no `make kind-halt` record on the cluster, "
+    "so this control has nothing to put back. It deliberately will NOT re-arm "
+    "'everything': an Application suspended for some other reason is not this "
+    "control's to touch.")
+#: The halt record could not be READ, which is not the same as 'there is none'. Both
+#: controls stay offered and say so — kind-halt.sh itself refuses (exit 5) on this
+#: state, so the refusal happens where it can be explained properly.
+#: Deliberately worded so it shares no phrase with the lane-unknown tooltips above:
+#: two different uncertainties on the same button must not read as the same sentence,
+#: and a test that cannot tell them apart cannot pin either.
+_HALT_STATE_UNKNOWN = (
+    "\n\nNOTE: whether a halt record already exists on this cluster could not be "
+    "determined. Unknown is not the same as 'there is none' — run "
+    "`make kind-halt-status` before pressing this.")
 
 
 def _grey_note(text: str) -> QtWidgets.QLabel:
@@ -289,7 +313,7 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         self.set_view_session(False)
         # No snapshot yet is UNKNOWN, not 'down'. The halt must not be offered
         # before anything has been read (I5).
-        self.set_kind_lane(None, "no snapshot has been taken yet")
+        self.set_kind_lane(None, "no snapshot has been taken yet", halted=None)
 
     # ── what the page reads ──────────────────────────────────────────────────────
     @property
@@ -349,8 +373,8 @@ class MeshMonitorWidget(QtWidgets.QWidget):
             self.view_down_btn.setToolTip(_VIEW_DOWN_IDLE_TIP)
 
     # ── the kind lane's halt/resume gate ─────────────────────────────────────────
-    def set_kind_lane(self, running, reason: str = "") -> None:
-        """Arm Halt and Resume from the kind lane's TRI-STATE, never from a boolean.
+    def set_kind_lane(self, running, reason: str = "", halted=None) -> None:
+        """Arm Halt and Resume from the kind lane's TWO tri-states, never a boolean.
 
         ``running`` is ``mesh_monitor.LaneState.running``: True, False, or **None**
         for "could not be established". Invariant I5 is that unknown is never "no",
@@ -359,15 +383,26 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         BOTH, and says why in the tooltip rather than leaving a dead control with a
         stale sentence on it.
 
+        ``halted`` is ``LaneState.halted``, the SECOND tri-state, and it exists
+        because a halted lane still reports running=True — the halt keeps the
+        cluster. Without it the Studio offered Halt on an already-halted lane and
+        Resume on one that was never halted, with nothing on screen saying which it
+        was. True greys Halt and points at Resume; False greys Resume; **None** (the
+        record could not be read) leaves both offered and says so, because unknown
+        is not 'not halted' here either.
+
         Both tooltips are rewritten on EVERY branch. Writing only the disabled one
         left the enabled button explaining why it was disabled, which is the bug
         set_view_session above already had to fix once."""
         live = running is True
-        self.halt_btn.setEnabled(live)
-        self.resume_btn.setEnabled(live)
+        self.halt_btn.setEnabled(live and halted is not True)
+        self.resume_btn.setEnabled(live and halted is not False)
         if live:
-            self.halt_btn.setToolTip(_HALT_TIP)
-            self.resume_btn.setToolTip(_RESUME_TIP)
+            unknown = _HALT_STATE_UNKNOWN if halted is None else ""
+            self.halt_btn.setToolTip(
+                _HALT_TIP_ALREADY if halted is True else _HALT_TIP + unknown)
+            self.resume_btn.setToolTip(
+                _RESUME_TIP_NOT_HALTED if halted is False else _RESUME_TIP + unknown)
         elif running is None:
             why = (" (" + reason + ")") if reason else ""
             self.halt_btn.setToolTip(_HALT_TIP_UNKNOWN + why)
