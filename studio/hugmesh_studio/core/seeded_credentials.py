@@ -569,11 +569,17 @@ def annotate(roster: Roster, truth: CredentialTruth | None,
         users.append(_masked(_live(u, marker, truth.headline)))
     for name, roles in added:
         users = [x for x in users if x.username != name]
-        users.append(SeededUser(username=name, roles=tuple(roles),
-                                password=_truth.ADDED_MARKER, live=_truth.ADDED,
-                                note="Seeded by this session's Add user; the "
-                                     "password was handed to the seeder's env and "
-                                     "never kept."))
+        row = SeededUser(username=name, roles=tuple(roles),
+                         password=_truth.ADDED_MARKER, live=_truth.ADDED,
+                         note="Seeded by this session's Add user; the password was "
+                              "handed to the seeder's env and never kept.")
+        # #540: a row is shown because it EXISTS, not because it was requested. On a
+        # lane whose store was read, "added this session" is a claim like any other
+        # and the same per-row join settles it — an add that did not land reads as
+        # not seeded here, not as a success that happens to be invisible everywhere
+        # else. The verb already refuses on its own read-back; this is the surface
+        # telling the same truth a minute later, from a fresh read.
+        users.append(_live(row, _truth.ADDED, row.note))
     return replace(roster, users=users, truth=truth)
 
 
