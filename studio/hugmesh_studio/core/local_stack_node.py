@@ -1380,6 +1380,34 @@ class LocalStackNode:
         return self._make("kind-down", timeout=600,
                           on_line=on_line, cancel=cancel)
 
+    def devops_halt(self, on_line=None, cancel=None) -> tuple[bool, str]:
+        """`make kind-halt` — STOP the DevOps lane without destroying it.
+
+        Deliberately NOT `kind-down`, exactly as ``stop()`` below is deliberately not
+        ``clean()``: "stop my lane" must not mean "destroy my lane". The kind lane had
+        only the destructive half until #356, and `kind` itself has no pause verb — so
+        the halt scales the mesh's Deployments and StatefulSets to 0 AND suspends
+        ArgoCD auto-sync. Both, because either alone is dishonest: 98 of 98 files in
+        specs/cluster/apps carry ``syncPolicy.automated {prune, selfHeal}``, so a
+        scale-only halt is undone by selfHeal within a reconcile, and a suspend with no
+        resume leaves the cluster silently no longer tracking git.
+
+        The cluster, its PVCs, its Vault KV and its Casdoor identities are all KEPT.
+        Streams, because it names every Application it suspends and the sync/health
+        state each was in when it froze — that list is the output's whole point."""
+        return self._make("kind-halt", timeout=900,
+                          on_line=on_line, cancel=cancel)
+
+    def devops_resume(self, on_line=None, cancel=None) -> tuple[bool, str]:
+        """`make kind-resume` — undo ``devops_halt``, restoring EXACTLY what it
+        recorded: the replica counts it zeroed and the auto-sync it suspended. Never
+        "everything" — an Application suspended before the halt (someone debugging it)
+        was never the halt's to touch and stays suspended. The record lives in a
+        ConfigMap inside the cluster, so this works whether or not the Studio that
+        pressed Halt is still running."""
+        return self._make("kind-resume", timeout=900,
+                          on_line=on_line, cancel=cancel)
+
     def stop(self) -> tuple[bool, str]:
         """`make stack-halt` — stop the mesh and KEEP its data.
 

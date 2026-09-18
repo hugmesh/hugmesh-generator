@@ -71,6 +71,13 @@ from .local_stack_node import _COMPOSE_PROJECT, _compose_base, _kind_cluster_nam
 #: Per-call ceilings. ONE ``kubectl get`` round trip for the whole cluster rather than a
 #: per-namespace loop: N calls is N timeouts on a wedged API server.
 KIND_CLUSTERS_TIMEOUT_S = 10
+#: Where scripts/kind-halt.sh keeps its record, and how long to wait for it. Kept
+#: in step with that script's own defaults (ARGOCD_NS / STATE_CM / STATE_KEY); it is
+#: one small read, so it gets a short ceiling and never eats the snapshot deadline.
+ARGOCD_NS = "devops"
+KIND_HALT_STATE_CM = "hugmesh-kind-halt"
+KIND_HALT_STATE_KEY = "halt.json"
+KIND_HALT_READ_TIMEOUT_S = 10
 KUBECTL_GET_TIMEOUT_S = 20
 DOCKER_INSPECT_TIMEOUT_S = 10
 COMPOSE_PS_TIMEOUT_S = 20
@@ -200,6 +207,12 @@ class LaneState:
     running: bool | None          # None = COULD NOT ESTABLISH (I5), never rendered as False
     detail: str = ""
     error: str = ""
+    #: kind lane only (#356): has `make kind-halt` halted this lane? TRI-STATE for
+    #: the same reason ``running`` is — True halted, False not halted, **None** the
+    #: question could not be answered. A halted lane still reads running=True (the
+    #: halt KEEPS the cluster), so without this the GUI offers Halt on an already
+    #: halted lane and Resume on one that was never halted, with no way to tell.
+    halted: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -774,7 +787,41 @@ def _kind_units(node, generator_dir: str, catalog, live: dict, budget: _Budget, 
         detail += f" · API https://{api[0]}:{api[1]}"
     if pods == 0:
         notes.append(f"the kind cluster {cluster} answered with zero pods")
-    return LaneState(True, detail=detail), units, notes, errors
+    halted = _halt_record_present(node, kubectl, ctx, budget)
+    if halted is True:
+        detail += " · HALTED"
+        notes.append(f"the kind lane is HALTED: {KIND_HALT_STATE_CM} exists in "
+                     f"{ARGOCD_NS}. Its workloads are at 0 and ArgoCD auto-sync is "
+                     f"suspended on the Applications the halt recorded. "
+                     f"`make kind-resume` (or Resume DevOps lane) puts them back.")
+    elif halted is None:
+        notes.append("whether the kind lane is HALTED could not be read, so Halt "
+                     "and Resume are both offered; `make kind-halt-status` is the "
+                     "authority. Unknown is not 'not halted'.")
+    return LaneState(True, detail=detail, halted=halted), units, notes, errors
+
+
+def _halt_record_present(node, kubectl: str, ctx: str, budget: _Budget) -> bool | None:
+    """Is `make kind-halt`'s record on the cluster? True / False / **None**.
+
+    None is not a formality. kind-halt.sh refuses (exit 5) when it cannot READ its
+    own record, precisely because "the ConfigMap is absent" and "the API would not
+    answer" are different answers and conflating them let a second halt overwrite a
+    good record with an all-zero one. The GUI makes the same distinction: a read it
+    could not take greys nothing and says so, rather than reporting 'not halted'.
+    """
+    if budget.remaining() <= 1:
+        return None
+    rc, out = _probe(node, [kubectl, "--context", ctx, "-n", ARGOCD_NS, "get",
+                            "configmap", KIND_HALT_STATE_CM, "-o",
+                            f"jsonpath={{.data.{KIND_HALT_STATE_KEY}}}"],
+                     budget.bounded(KIND_HALT_READ_TIMEOUT_S))
+    if rc == 0:
+        return bool((out or "").strip())
+    # NotFound is the ONE failure that means "there is no halt record".
+    if "notfound" in (out or "").lower() or "not found" in (out or "").lower():
+        return False
+    return None
 
 
 # ── compose lane ───────────────────────────────────────────────────────────────────

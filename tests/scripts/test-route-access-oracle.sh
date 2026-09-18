@@ -176,8 +176,9 @@ fi
 # 4f. hugmesh-generator#404, THE SHIPPED DEFECT: a `--` comment inside the INSERT
 #     body that merely NAMED the ON CONFLICT clause used to truncate the row scan
 #     at that comment, because the terminator was located BEFORE comments were
-#     stripped. Measured 2026-09-16: 154 rows -> 119, every hugmesh-superadmin-
-#     gateway row and 25 fe rows gone, exit 0, both floors still satisfied. PROSE
+#     stripped. Measured 2026-09-16 on the 154-row seed of that day (155 since
+#     #347 decision 28): 154 rows -> 119, every hugmesh-superadmin-gateway row
+#     and 25 fe rows gone, exit 0, both floors still satisfied. PROSE
 #     MUST NOT BE ABLE TO CHANGE THE ORACLE — the output has to be byte-identical.
 awk '/^INSERT INTO gateway_route_access/ && !d { print; print "  -- NOTE: the tail of this INSERT is ON CONFLICT DO NOTHING."; d=1; next } { print }' \
   "${SQL}" > "${T}/cmt.sql"
