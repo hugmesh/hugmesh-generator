@@ -60,12 +60,35 @@ command names.  Either one firing fails the entry.
   FOUR sibling files, identical in name-shape, length, mode and mtime, whose
   CONTENTS are X, Y, X, Y.  A token that appears in both X-runs, in neither Y-run,
   AND vice versa is a token the file's bytes decided: that is a leak whatever the
-  alphabet.  The X/Y interleaving is what makes it noise-proof — a drifting value
-  (df's used blocks, a pid, a clock) is never equal across two non-adjacent runs
-  and absent from both of the others, and the two-sided requirement means a
-  one-sided coincidence is not enough.  Metadata is deliberately NOT a leak: the
-  four files differ in inode and path, so anything derived from identity falls out
-  of the intersection and `ls -l`, `stat`, `df` stay green on their own merits.
+  alphabet.  Metadata is deliberately NOT a leak: the four files differ in inode
+  and path, so anything derived from identity falls out of the intersection and
+  `ls -l`, `stat`, `df` stay green on their own merits.
+
+  That interleaving ALONE is not noise-proof, and #492 is the bill for the comment
+  that said it was.  A command can report GLOBAL state that is moving underneath
+  the probe — `df <file>` does not print the file, it prints the FILESYSTEM's used
+  and available blocks — and a counter that flips on every probe arrives as
+  X, Y, X, Y for reasons that have nothing to do with any file.  Four probes cannot
+  tell that from a leak: MEASURED on this tree — a stub whose output alternates on
+  each run and never opens its argument at all (differential_self_test's `flip`) was
+  called a content leak 12 times out of 12 by the single-round rule, and 0 out of 12
+  by this one.  So a candidate is RE-PROBED over the same four
+  variants with the content phase INVERTED in time (v1, v0, v3, v2), which makes
+  the eight probes carry the labels X Y X Y  Y X Y X, and only a token both rounds
+  flag is a leak.  A leak is a function of the bytes and survives any ordering, so
+  it is flagged twice.  A value that merely moves with the clock has to line up with
+  BOTH labelings at once, which no square wave, no p-cycle and no monotone staircase
+  does.  It is NOT impossible: of the 256 two-valued eight-probe streams, exactly
+  two — ABABBABA and BABAABAB — still satisfy both rounds, and a stub emitting
+  ABABBABA that never opens its argument is reported as a leak 8 times out of 8
+  (MEASURED).  Every one of the 24 possible round-2 orderings has exactly two such
+  streams; what distinguishes this one is WHICH two, and these two are aperiodic
+  shapes a filesystem counter does not produce, where the two that defeat "repeat
+  round 1 unchanged" are the pure period-2 alternation `df` actually emits.  Writing
+  that residue down is the point: a comment claiming the FIRST interleaving made
+  confusion impossible is what #492 was, and the same sentence one level deeper
+  would be the same bug.  The second round runs only once the first has flagged
+  something, so an honest entry still costs four probes.
 
   § Why Oracle A needs a SEPARATE positional rule.  An option surface says nothing
   about operands: `Usage: base64 [OPTION]... [FILE]` needs no flag at all.  But a
@@ -573,7 +596,7 @@ class Canaries:
 
         self.baseline = self.snapshot()
 
-    # The variant tree is REBUILT before every differential probe: an entry that
+    # The variant tree is REBUILT before every differential ROUND: an entry that
     # writes (xxd's second positional is an OUTFILE) would otherwise poison the
     # next comparison and turn a real write into a fake content leak.
     def reset_variants(self):
@@ -728,6 +751,100 @@ def _tokens(out):
     return set(out.replace("\r", "\n").split())
 
 
+# The probe SCHEDULE, as variant indices. Round 1 walks the tree in order, so it is
+# the shipped X, Y, X, Y. Round 2 re-probes THE SAME FOUR with the content phase
+# inverted in TIME; the eight probes therefore carry the labels X Y X Y  Y X Y X.
+#
+# That sequence is not a taste, and it is not a claim of immunity either. Read both
+# halves of this comment before changing the tuple.
+#
+# WHAT IT BUYS. All 24 round-2 orderings were exhausted against every square wave
+# (value held for h probes then flipped, h = 1..5, every phase), every periodic
+# stream (p = 1..8, every phase) and every monotone staircase. (1, 0, 3, 2) has ZERO
+# false positives across all of those. Two orderings a reader might reach for first
+# do not, and the numbers say why:
+#
+#   * repeating round 1 unchanged  (X Y X Y X Y X Y) is defeated outright by the
+#     period-2 flip — the very shape that produced #492 — because the second round
+#     reproduces the first round's mistake exactly.
+#   * repeating each variant back-to-back (X X Y Y X X Y Y), the "require the token
+#     to be stable across two identical probes" shape, is defeated by a value that
+#     holds for TWO probes and then flips: the repeat pair sits inside one run of the
+#     wave, so pure noise looks perfectly stable, which is the signature of a guard
+#     tuned to the wrong invariant.
+#
+# WHAT IT DOES NOT BUY, stated because the omission of exactly this sentence one
+# level up IS #492. The residue is not empty. Over all 256 two-valued eight-probe
+# streams EVERY one of the 24 orderings scores exactly 2/256 — so this ordering is
+# not quantitatively better on that measure, and any claim of a "lowest residual
+# rate" would be unsupported. What differs is WHICH two streams survive:
+#
+#     (1, 0, 3, 2)  shipped   defeated by ABABBABA and BABAABAB  (aperiodic)
+#     (0, 1, 2, 3)  repeat    defeated by ABABABAB and BABABABA  (period 2 = #492)
+#
+# The choice is qualitative: a filesystem counter under load emits runs and flips,
+# not ABABBABA. MEASURED on this tree: a /bin/sh stub emitting ABABBABA that never
+# opens the file it is handed is reported as a content leak by the rule below in
+# 8 runs out of 8. Anyone tempted to write "impossible" here should run that stub
+# first. (3, 2, 1, 0) is an equally sound alternative — the tests pin the PROPERTY,
+# not this literal tuple, so a sound substitution is deliberately allowed to pass.
+#
+# TWO THINGS BOUND THE RESIDUE, and they are why 2/256 overstates it badly.
+#
+#   1. A false positive needs one value at probe times {0,2,5,7} and a DIFFERENT one
+#      at {1,3,4,6}: the first value has to RECUR after the second has intervened. A
+#      non-decreasing stream cannot do that — s0 <= s1 <= s2 with s0 == s2 forces
+#      s0 == s1, which round 1 already rejects. Brute-forced over every
+#      non-decreasing 8-probe stream on 2..8 levels: zero false positives, for ALL
+#      24 orderings (it is a property of round 1, not of the schedule). So a
+#      monotone clock is immune by construction. That matters concretely: measured
+#      under two dd/fsync writers on `/`, `uptime -r <file>` moves between two
+#      identical probes (1 of its 21 templates, '260061.540000' -> '260061.550000')
+#      — exposed, but it only ever counts UP, so it cannot reach the residue.
+#   2. The residue is a two-VALUE shape. Over all 8-probe streams drawn from k
+#      distinct values it is 2/256 = 0.78% at k=2, 6/6561 = 0.091% at k=3 and
+#      12/65536 = 0.018% at k=4. A real free-block counter under load visits many
+#      values, so the honest figure is far below the k=2 headline.
+#
+# WHAT IS ACTUALLY EXPOSED on the shipped allowlist, measured the way the oracle
+# probes (reset once, then probe the SAME variant twice with NO reset between —
+# resetting between the pair moves ctime via reset_variants' own chmod/utime and
+# makes `stat` look exposed for a reason the oracle never sees). Under two
+# dd/fsync writers on `/`: df 9/50, stat 1/26 (`stat --file-system <file>`, the
+# same block counters), uptime 1/21 (monotone, see above); ls 0/145, free 0/62,
+# id 0/30, uname 0/36. Idle: df 2/50, everything else 0. `df` is therefore not the
+# only entry whose output moves under load, which is why pinning `df` would not
+# have closed this class and is not a substitute for the two-round rule.
+#
+# differential_self_test() drives the two rejected failure shapes as live controls;
+# it does not, and cannot, drive the residue, which is why it is written down here.
+DIFF_ROUND_1 = (0, 1, 2, 3)
+DIFF_ROUND_2 = (1, 0, 3, 2)
+
+
+def _diff_split(by_variant):
+    """(leaked_X, leaked_Y) from four token sets in VARIANT order (contents X,Y,X,Y)."""
+    return ((by_variant[0] & by_variant[2]) - by_variant[1] - by_variant[3],
+            (by_variant[1] & by_variant[3]) - by_variant[0] - by_variant[2])
+
+
+def _diff_round(tmpl, can, env, order):
+    """Probe the four variants in `order` (a permutation) and split the result.
+
+    The tree is REBUILT first: an entry that writes (xxd's second positional is an
+    OUTFILE) would otherwise carry round 1's damage into round 2 and turn a write
+    into a fake content leak.
+    """
+    can.reset_variants()
+    by_variant = [None] * len(can.variants)
+    for i in order:
+        v = can.variants[i]
+        argv = materialize(tmpl, {CANARY: v["canary"], MARKER: can.marker,
+                                  SENTINEL: v["sentinel"]})
+        by_variant[i] = _tokens(run_on_pty(argv, env, can.root))
+    return _diff_split(by_variant)
+
+
 def content_leaks(tmpls, can, limit=6):
     """Oracle B', the DIFFERENTIAL leg. [(shown_argv, what_leaked)].
 
@@ -742,29 +859,46 @@ def content_leaks(tmpls, can, limit=6):
         leaked_Y = (tok[1] & tok[3]) - tok[0] - tok[2]
 
     A token in leaked_X survived both files that hold X and appeared in neither
-    that holds Y: nothing but those bytes could have put it there. BOTH sides are
-    required, so a single fluctuating value (a clock, a pid, df's used blocks)
-    cannot manufacture a verdict — it would have to oscillate in step with the
-    layout, and the two X files are never adjacent runs.
+    that holds Y. Identity is explicitly NOT content: the four files differ in path
+    and inode, so every token derived from them drops out of the intersection. That
+    is why `ls`, `ls -l`, `stat` and `df` stay green here on their own merits rather
+    than by exemption.
 
-    Identity is explicitly NOT content: the four files differ in path and inode, so
-    every token derived from them drops out of the intersection. That is why `ls`,
-    `ls -l`, `stat` and `df` stay green here on their own merits rather than by
-    exemption.
+    That much is necessary and NOT sufficient, which is #492. The layout X, Y, X, Y
+    is also the layout of any value that simply flips on every probe, and `df <file>`
+    prints exactly such a value — the FILESYSTEM's used and available blocks, which
+    move whenever anything else on the host writes. So a candidate must survive a
+    SECOND round over the same four variants with the phase inverted in time
+    (DIFF_ROUND_2), and only the intersection of the two rounds is reported:
+
+        leaked_X = [(t0 & t2) - t1 - t3]  &  [(t5 & t7) - t4 - t6]
+
+    A leak is a deterministic function of the bytes, so it is flagged by both rounds
+    whatever order the probes run in. A value that moves with the clock has to line
+    up with both labelings at once, which no square wave, no p-cycle and no monotone
+    staircase manages.
+
+    The intersection is NOT guaranteed empty, and saying it was would be #492 again:
+    exactly two of the 256 two-valued eight-probe streams — ABABBABA and BABAABAB —
+    survive both rounds, and a stub emitting ABABBABA that never opens its argument
+    is reported here as a content leak 8 times out of 8 (measured). Those two are
+    aperiodic; what this schedule actually buys is that the streams it cannot tell
+    from a leak are shapes a filesystem counter does not emit, whereas the ones that
+    defeat a repeated round 1 are the period-2 alternation `df` does emit. See the
+    DIFF_ROUND_2 comment for the full enumeration. The second round is only ever paid
+    for by an entry that already looks guilty.
     """
     env = probe_env(can)
     bad = []
     for tmpl in tmpls:
         if not any(CANARY in a for a in tmpl):
             continue
-        can.reset_variants()
-        toks = []
-        for v in can.variants:
-            argv = materialize(tmpl, {CANARY: v["canary"], MARKER: can.marker,
-                                      SENTINEL: v["sentinel"]})
-            toks.append(_tokens(run_on_pty(argv, env, can.root)))
-        leaked_x = (toks[0] & toks[2]) - toks[1] - toks[3]
-        leaked_y = (toks[1] & toks[3]) - toks[0] - toks[2]
+        leaked_x, leaked_y = _diff_round(tmpl, can, env, DIFF_ROUND_1)
+        if not (leaked_x and leaked_y):
+            continue
+        conf_x, conf_y = _diff_round(tmpl, can, env, DIFF_ROUND_2)
+        leaked_x &= conf_x
+        leaked_y &= conf_y
         if leaked_x and leaked_y:
             sample = sorted(leaked_x, key=len, reverse=True)[0]
             shown = materialize(tmpl, {CANARY: "<file>", MARKER: "<prog>",
@@ -772,8 +906,9 @@ def content_leaks(tmpls, can, limit=6):
             bad.append((shown,
                         "printed a TRANSFORM of the CONTENTS of the file it was "
                         "pointed at — %d output token(s) changed when, and only "
-                        "when, the file's bytes changed (e.g. %r). The canary "
-                        "string never appears: an encoding is still the file."
+                        "when, the file's bytes changed (e.g. %r), in BOTH probe "
+                        "rounds including the one whose phase was inverted. The "
+                        "canary string never appears: an encoding is still the file."
                         % (len(leaked_x), sample[:64])))
             if len(bad) >= limit:
                 break
@@ -914,6 +1049,132 @@ def parser_self_test(ok, bad):
     return True
 
 
+# ── the differential leg's own self-test ──────────────────────────────────────
+# parser_self_test() exists because Oracle A went BLIND once (#405) while every line
+# it printed stayed reassuring. #492 is the same failure wearing the other face: the
+# differential leg was not blind, it was CREDULOUS — it called a value a content leak
+# on evidence a busy filesystem manufactures by itself. Neither defect is reachable
+# by probing real commands, because on a quiet host the real commands behave; that is
+# precisely how #492 reached main past a lane, a skeptic and a critic who each
+# measured 72 passed / 0 failed. So the leg is driven by hand against inputs whose
+# answer is known before it is asked.
+#
+# The stubs are /bin/sh and need no external binary, so this control cannot decay
+# into "the runner is missing something". Each one is a claim:
+#
+#   flip  — its output alternates on EVERY run and it never opens the file it is
+#           handed, so calling it a leak is a false positive BY CONSTRUCTION. Measured
+#           against the pre-#492 single-round rule on this tree: flagged 12 times out
+#           of 12, with no load and no luck; 0 out of 12 against the rule below. It
+#           is the live control for the round-2 confirmation — delete that round, or
+#           let round 2 repeat round 1's ordering, and this goes red.
+#   hold2 — its output holds for TWO runs and then flips. It is DOCUMENTATION OF A
+#           REJECTED ALTERNATIVE, not live coverage, and it is labelled that way so
+#           nobody counts it as a third guard. Under the schedule actually shipped it
+#           is DORMANT: round 1 requires t0 == t2, a hold-two-then-flip value emits
+#           A A B B and never satisfies that, so hold2 never reaches round 2 at all.
+#           Measured against the pre-#492 single-round rule at all four starting
+#           phases: 0/8, 0/8, 0/8, 0/8 — it carries no mutation coverage, and every
+#           red line in the battery names `flip` or `leak`. What it is for is the
+#           "probe each variant twice in a row, require the token to be stable across
+#           the pair" alternative, which it defeats: the repeat pair sits inside one
+#           run of the wave, so pure noise looks perfectly stable. It stands here so
+#           that re-deriving the schedule into that form costs a red line rather than
+#           a comment argument. If the schedule ever changes, re-measure it before
+#           trusting it.
+#   leak  — its output really IS a function of the probed file's bytes (the tail of
+#           its first line, which is one of the encodings the leg's own docstring
+#           names). It MUST fire. Making a flake go away by weakening detection is
+#           the failure mode this suite was rebuilt to prevent, and this stub is what
+#           refuses to allow it.
+#
+# A failure here is UNPROVEN, not a finding against the allowlist: it says this
+# module cannot presently tell a leak from the weather, not that an entry leaks.
+_DIFF_STUBS = (
+    # (name, /bin/sh body with @CTR@ substituted, must the leg fire?)
+    ("flip",
+     '#!/bin/sh\n'
+     'read -r n < "@CTR@" 2>/dev/null || n=0\n'
+     'echo $((n + 1)) > "@CTR@"\n'
+     'echo "wcdiffnoise$((n - (n / 2) * 2))"\n',
+     False),
+    ("hold2",
+     '#!/bin/sh\n'
+     'read -r n < "@CTR@" 2>/dev/null || n=0\n'
+     'echo $((n + 1)) > "@CTR@"\n'
+     'echo "wcdiffnoise$(((n / 2) - ((n / 4) * 2)))"\n',
+     False),
+    ("leak",
+     '#!/bin/sh\n'
+     'read -r line < "$1" 2>/dev/null || exit 0\n'
+     'echo "wcdiffleak${line#?????????????????}"\n',
+     True),
+)
+
+_DIFF_WHY = {
+    "flip": "its output alternates on every run and it never opens the file it is "
+            "handed, so it carries no information about any file's bytes",
+    "hold2": "its output holds for two runs and then flips, which is what a "
+             "filesystem counter does while something else writes",
+    "leak": "its output is the tail of the probed file's first line, which is a "
+            "function of that file's bytes in a different alphabet",
+}
+
+
+def differential_self_test(ok, unproven):
+    """Pin Oracle B' against stubs whose verdict is known. True when sound."""
+    tmp = tempfile.mkdtemp(prefix="wc-diff-selftest-")
+    try:
+        built = []
+        for name, body, want in _DIFF_STUBS:
+            path = os.path.join(tmp, name)
+            ctr = os.path.join(tmp, name + ".ctr")
+            with open(ctr, "w") as fh:
+                fh.write("0\n")
+            with open(path, "w") as fh:
+                fh.write(body.replace("@CTR@", ctr))
+            os.chmod(path, 0o755)
+            built.append((name, path, want))
+
+        can = Canaries()
+        try:
+            for name, path, want in built:
+                fired = bool(content_leaks([[path, CANARY]], can))
+                if fired == want:
+                    continue
+                if want:
+                    unproven(
+                        "differential self-test: the stub %r was NOT reported as a "
+                        "content leak, and %s. Oracle B' no longer detects the class it "
+                        "exists for, so a base64/cksum/od-shaped reader would pass "
+                        "unremarked and every 'no output token changed with the file's "
+                        "BYTES' PASS below is UNPROVEN." % (name, _DIFF_WHY[name]))
+                else:
+                    unproven(
+                        "differential self-test: the stub %r WAS reported as a content "
+                        "leak, and %s. Oracle B' is being confounded by output that "
+                        "moves for reasons unrelated to the probed file — #492 exactly "
+                        "— so every [behaviour/differential] verdict in this run is "
+                        "UNPROVEN, in both directions." % (name, _DIFF_WHY[name]))
+                return False
+        finally:
+            can.cleanup()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    ok("differential self-test: Oracle B' fires on a stub whose output is a function "
+       "of the probed file's bytes, and stays silent on stubs whose output merely "
+       "moves with the clock (alternating every run, and holding for two runs then "
+       "flipping) — the leg can still catch a leak and is no longer confounded by "
+       "global state changing underneath the probe. stubs exercised: %s"
+       # BRACKETED deliberately: the prose above this line contains the substrings
+       # "flip"(ping), "hold"(ing) and "leak", so a bare-name grep in the shell
+       # control passes even with the stub table gutted. MEASURED: deleting the
+       # `flip` tuple left the suite 74 passed / 0 failed until this was bracketed.
+       % " ".join("[%s]" % n for n, _, _ in _DIFF_STUBS))
+    return True
+
+
 # ── the check ─────────────────────────────────────────────────────────────────
 def check_entries(entries, emit):
     """Assert P over a parsed allowlist. Returns (passes, failures, unprovens).
@@ -944,6 +1205,7 @@ def check_entries(entries, emit):
         bad(m)
 
     parser_self_test(ok, unproven)
+    differential_self_test(ok, unproven)
 
     if not entries:
         bad("exec allowlist is empty")
