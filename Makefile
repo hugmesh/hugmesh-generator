@@ -2334,15 +2334,21 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 # Its own target and its own .PHONY line, for the same reason the BDD lane has
 # them: the recipes above are edited by other work in flight.
 #
-#   make e2e-ungated                          the tests/scripts/test-e2e-*.sh
-#                                             suites #246 was written about (8 of
-#                                             22 when this was written; the runner
-#                                             prints the live count every run)
-#   E2E_UNGATED_SET=all make e2e-ungated      every PREMERGE_UNGATED suite —
-#                                             additionally the stack, kind,
+#   make e2e-ungated                          EVERY PREMERGE_UNGATED suite — 22
+#                                             of 22 today; the runner prints the
+#                                             live count every run and hardcodes
+#                                             no number. Operator decision 32c on
+#                                             #347 (2026-09-17): the default is
+#                                             22, NOT the 8 that shipped. It
+#                                             therefore includes the stack, kind,
 #                                             casdoor, pentest, eso and liquibase
-#                                             ones, which are ungated for their
-#                                             own reasons
+#                                             suites that are ungated for their
+#                                             OWN reasons — see WHAT THIS DEFAULT
+#                                             COSTS below.
+#   E2E_UNGATED_SET=e2e make e2e-ungated      only the tests/scripts/test-e2e-*.sh
+#                                             suites #246 was written about, 8 of
+#                                             22 today. The old default, now an
+#                                             explicit opt-in.
 #   E2E_UNGATED_STRICT=1 make e2e-ungated     treat a SKIPPED-LOUDLY exit 2 as red
 #                                             (use on a box you believe is fully
 #                                             equipped: it turns "the toolchain
@@ -2360,15 +2366,22 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 #                                             python3) and goes RED, not SKIP, when
 #                                             that interpreter lacks pytest.
 #                                             MEASURED 2026-09-16 on the operator's
-#                                             box: 7 of 8 without it, 8 of 8 with
-#                                             it. The default set takes ~21 min.
+#                                             box, against the then-default 8-suite
+#                                             e2e subset: 7 of 8 green without it,
+#                                             8 of 8 with it. That subset takes
+#                                             ~21 min; the 22-suite default has
+#                                             never been timed end to end.
 #   E2E_UNGATED_DRY_RUN=1 make e2e-ungated    print WHICH suites the selection
 #                                             resolves to and whether a real run
 #                                             would be allowed beside whatever is
 #                                             currently up, then stop having
 #                                             executed nothing. Verified here on
-#                                             2026-09-10: 8 of 22 by default, 22
-#                                             of 22 with E2E_UNGATED_SET=all.
+#                                             2026-09-10, when the default was
+#                                             still 8: 8 of 22 by default, 22 of
+#                                             22 with E2E_UNGATED_SET=all. Since
+#                                             decision 32c the default IS 22 of
+#                                             22 and E2E_UNGATED_SET=e2e is the
+#                                             8.
 #
 # Neither set is hardcoded here. tests/scripts/run-ungated-lane.sh DERIVES both
 # from the PREMERGE_UNGATED array in tests/scripts/test-guard-integrity.sh, so a
@@ -2376,27 +2389,88 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 # second copy of the list in this file would drift, and would drift silently.
 #
 # THE LIVE STACK. #246's third bullet says the lane must never disturb the
-# operator's live hugmesh-local stack. The runner REFUSES TO START (exit 3) when
-# it sees a hugmesh-local container or kind cluster, REFUSES (exit 5) when docker
+# operator's live hugmesh-local stack. Operator decision 32a on #347 (2026-09-17)
+# widened that to BOTH live shapes: the watch list is `hugmesh-local
+# hugmesh-real`, because tests/stack/compose.real.yaml is its own compose project
+# (`name: hugmesh-real`) with a standalone bring-up path, so its containers are
+# hugmesh-real-* and a hugmesh-local-only census could not see them
+# (hugmesh-generator#397). E2E_UNGATED_LIVE_PREFIX replaces the list and is
+# refused when empty. The runner REFUSES TO START (exit 3) when
+# it sees a container or kind cluster under either prefix, REFUSES (exit 5) when docker
 # or kind is installed but its census command fails (an erroring census is not
 # an empty one, and the override cannot police itself without a before/after),
-# tears nothing down in any mode, and under the explicit
-# E2E_UNGATED_ALLOW_LIVE_STACK=1 override censuses that footprint before and
-# after and exits 4 if it moved. What the suites THEMSELVES start, measured
-# 2026-09-16 (correcting a 2026-09-10 claim that none did): ONE suite in the
-# default set, test-e2e-env-interface-dimensions.sh, runs a throwaway
-# python:3.12-slim http.server container named e2eguard-m7-* and removes only
-# that name; every other verb in the 22 is a read. The runner header carries
-# the inventory, and tests/scripts/test-run-ungated-lane.sh (pre-merge gated)
-# pins every refusal above against mutated copies of the runner.
+# tears nothing down in any mode, and HAS NO OVERRIDE — operator decision 32b on
+# #347 (2026-09-17) removed E2E_UNGATED_ALLOW_LIVE_STACK entirely, because #246
+# asked for a Make target and not an escape hatch. The before/after census
+# outlived it and exits 4 if the footprint moved, which now means a suite BROUGHT
+# one up (the before-census is always empty when the lane proceeds). What the
+# suites THEMSELVES start, measured
+# 2026-09-16 (correcting a 2026-09-10 claim that none did):
+# test-e2e-env-interface-dimensions.sh runs a throwaway python:3.12-slim
+# http.server container named e2eguard-m7-* and removes only that name, and
+# tests/casdoor/test-jwt-custom-token.sh starts casdoor-pg and
+# casdoor-jwtcustom-test on a private network and removes both in an EXIT trap
+# (FIXED names, so concurrent runs collide and a killed run leaves them behind).
+# Every other verb in the 22 is a read. The runner header carries the inventory,
+# and tests/scripts/test-run-ungated-lane.sh (pre-merge gated) pins every
+# refusal above against mutated copies of the runner.
 #
-# EXIT: 0 all green (skips tolerated unless STRICT), 1 a suite was red or
-# errored, 3 refused beside a live stack, 4 the live footprint changed, 5 the
+# WHAT THIS DEFAULT COSTS (decision 32c, recorded rather than worked around).
+# Widening the default from the 8 browser/Qt suites to all 22 pulls in suites
+# that were ungated for reasons of their OWN, not for a missing toolchain.
+#   * THE LANE IS NOW RED BY DEFAULT ON A HEALTHY TREE. RE-MEASURED 2026-09-17:
+#     of the fourteen newly-defaulted suites, FIVE exit 1 and ONE exits 3
+#     (INCOMPLETE, which is also red) — not the "three" an earlier draft of this
+#     paragraph claimed. That first number came from three suites run inside a
+#     git worktree, and half of these suites change verdict with their
+#     checkout's POSITION: they look for a sibling checkout at ../ or for
+#     .stack-src, neither of which a worktree has.
+#     tests/stack/test-gateway-auth-flag-parity.sh was named as one of the three
+#     and is GREEN in the real tree. DO NOT RE-MEASURE THIS LIST FROM A WORKTREE.
+#         tests/scripts/test-selected-services-only.sh         rc=1
+#         tests/scripts/test-optional-service-slug-closure.sh  rc=1
+#         tests/scripts/test-liquibase-grant-roles.sh          rc=1
+#         tests/egress-vpn/test-secret-contract.sh             rc=1
+#         tests/scripts/test-eso-target-collisions.sh          rc=1
+#         tests/device-registry/test-layer-a-headscale-acl.sh  rc=3 INCOMPLETE
+#     Green in the real tree: test-federation-module-slugs, test-service-env-contract,
+#     test-gateway-auth-flag-parity, test-m2-bootstrap, test-web-locales-wiring.
+#     tests/pentest/nuclei/test-templates.sh SKIPs (no nuclei v3.9.0 here).
+#     tests/scripts/test-kind-metrics-api.sh is rc=0 only when run DIRECTLY
+#     beside a live kind cluster; inside this lane that state is refused, so it
+#     can only ever SKIP. tests/casdoor/test-jwt-custom-token.sh was NOT run by
+#     anybody measuring this (it starts two containers) — its lane verdict is
+#     still unknown. The runner header carries the full table with one-line
+#     reasons.
+#     These are EXPECTED REDS naming real platform defects, not suite bugs —
+#     .gitlab-ci.yml says so of the selected-services job ("RED on today's main
+#     … five checks, each naming a live defect") and the others say so in their
+#     own headers. A suite that exits non-zero makes the LANE exit 1, so
+#     `make e2e-ungated` cannot be green until those defects are fixed, and its
+#     red no longer distinguishes "something broke" from "the known six".
+#   * a verdict the runner could not previously express. At least three of the
+#     newcomers use exit 3 as a documented INCOMPLETE; the runner used to print
+#     "ERROR … (exit 3)" for it, which reads as a crash and collides with the
+#     lane's OWN exit 3 (refused beside a live stack). It now has an INCOMPLETE
+#     bucket, still red.
+#   * one more container-starting suite (casdoor, above), with fixed names.
+#   * an untimed runtime: ~21 min plus fourteen more suites.
+# None of that is a reason to narrow the default back — it is the cost the
+# operator accepted. It is written here so the next person does not read the
+# red as a broken lane. If the lane must be actionable before those six defects
+# land, the honest shapes are an expected-red allowlist in the runner or fixing
+# them; both are decisions nobody has made.
+#
+# EXIT: 0 all green (skips tolerated unless STRICT), 1 a suite was red, errored
+# or INCOMPLETE, 3 refused beside a live stack, 4 a suite brought a watched
+# footprint up while the lane ran, 5 the
 # footprint could not be censused, 6 VACUOUS — suites were selected and not one
-# passed (every one skipped; a lane that asserted nothing is not green).
+# passed (every one skipped; a lane that asserted nothing is not green),
+# 7 INTERRUPTED — SIGINT/SIGTERM/SIGHUP reached the lane, which prints the
+# verdicts it had reached and marks the evidence dir PARTIAL (#397 item 2).
 # Evidence: one dated dir per run under tests/.ungated-lane/ (gitignored),
 # never under out/.
 .PHONY: e2e-ungated
 
-e2e-ungated: ## MANUAL ONLY: run the PREMERGE_UNGATED suites (test-e2e-* by default, ~21 min; E2E_UNGATED_SET=all for every entry)
+e2e-ungated: ## MANUAL ONLY: run ALL the PREMERGE_UNGATED suites (22 of 22 by default since #347 decision 32c; E2E_UNGATED_SET=e2e for just the 8 test-e2e-* ones, ~21 min)
 	bash tests/scripts/run-ungated-lane.sh
