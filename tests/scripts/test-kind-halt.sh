@@ -530,6 +530,23 @@ JSON
   export SCEN
 }
 
+# Add a workload to the CURRENT scenario's cluster. Used by the #544 scenarios so
+# the shared fixture — which every other scenario asserts against by count and by
+# name — is not disturbed by a case only two of them need.
+add_workload() { # <ns> <kind> <name> <replicas>
+  SCEN="${SCEN}" python3 - "$@" <<'PY'
+import json, os, sys
+ns, kind, name, reps = sys.argv[1:5]
+path = os.path.join(os.environ["SCEN"], "wl.json")
+with open(path) as fh:
+    d = json.load(fh)
+d["items"].append({"kind": kind, "metadata": {"name": name, "namespace": ns},
+                   "spec": {"replicas": int(reps)}})
+with open(path, "w") as fh:
+    json.dump(d, fh)
+PY
+}
+
 # Every verb runs in its OWN process group (setsid), so the fake's kill knob can
 # terminate the halt exactly the way the Studio's Cancel button does — process
 # group and all — without taking this suite with it.
@@ -603,6 +620,14 @@ if q.startswith("app:"):
     for x in rec.get("applications", []):
         if x["name"] == name:
             print(json.dumps([x.get("was_automated"), x.get("automated")], sort_keys=True)); sys.exit(0)
+    print("MISSING"); sys.exit(0)
+if q.startswith("counts:"):
+    print(json.dumps((rec.get("counts") or {}).get(q.split(":", 1)[1]), sort_keys=True)); sys.exit(0)
+if q.startswith("unbacked:"):
+    _, ns, name = q.split(":")
+    for w in rec.get("workloads", []):
+        if w["namespace"] == ns and w["name"] == name:
+            print(json.dumps(bool(w.get("floor_unbacked")))); sys.exit(0)
     print("MISSING"); sys.exit(0)
 print(json.dumps(rec.get(q), sort_keys=True))'
 }
@@ -1047,6 +1072,84 @@ if [ -z "$(grep -a -E ' (patch|scale|delete|create|apply) ' "${SCEN}/kubectl.log
   ok "S46 and mutated nothing: every kubectl call was a read"
 else
   bad "S46 status mutated something: $(grep -a -E ' (patch|scale|delete|create|apply) ' "${SCEN}/kubectl.log" | head -1)"
+fi
+
+head_ "M. #544: the floor's CLAIM must be true, and the counts must not be misreadable"
+
+# #544 reported that kind-halt "computes an admission floor and then scales it
+# anyway", from a live record whose `workloads` array had 39 entries against a
+# design that said 24. MEASURED on the operator's cluster on 2026-09-18 against the
+# record written at 06:03:30Z: the floor IS honoured — `skipped_namespaces` carries
+# external-secrets and ingress-nginx-internal, and 24 of the 39 censused workloads
+# have `skipped: null`. The 39 is the length of the CENSUS, not the scale list, and
+# S13 above plus mutation M8 already pin the floor itself.
+#
+# What the issue found that IS real is narrower and worse: all three
+# external-secrets Deployments were at 0 when that halt ran, and the record
+# described them as "Left RUNNING on purpose … backs failurePolicy=Fail webhook
+# (and 16 more)". The floor cannot hold what is already down, and calling that
+# "held" is exactly the "makes the standing reds harder to diagnose" outcome the
+# design forbade. These scenarios pin the difference.
+
+scenario floor-counts-are-stated
+run_halt; rc=$?
+expect_rc 0 "${rc}" "S47 halt"
+expect_eq "$(record_field counts:workloads_scaled)" "3" "S47 the record STATES how many workloads it scaled (api, ui, vault)"
+expect_eq "$(record_field counts:workloads_censused)" "9" "S47 …and separately how many it censused, so len(workloads) cannot be read as the scale count"
+expect_eq "$(record_field counts:workloads_left_running)" "6" "S47 …and how many were left running"
+if saw "censused, 3 scaled to 0 by this halt, 6 left running"; then
+  ok "S47 the rendered record says all three numbers in one sentence"
+else
+  bad "S47 the render still leaves the reader to count the list themselves"
+fi
+# The census count and the scale count must be DIFFERENT here, or the assertion
+# above could pass on a record that conflated them.
+if [ "$(record_field counts:workloads_censused)" != "$(record_field counts:workloads_scaled)" ]; then
+  ok "S47 control: censused != scaled in this fixture, so the two numbers are really distinguishable"
+else
+  bad "S47 control: the fixture cannot tell the two counts apart — S47 proves nothing"
+fi
+
+scenario floor-unbacked-is-not-held
+# The live shape: a second Deployment in the floor namespace that is ALREADY at 0.
+add_workload external-secrets Deployment es-cert-controller 0
+run_halt; rc=$?
+expect_rc 0 "${rc}" "S48 halt with a floor workload already at 0"
+expect_eq "$(replicas_of external-secrets es-cert-controller)" "0" "S48 the halt did not scale it (it was already 0)"
+expect_eq "$(replicas_of external-secrets es-webhook)" "1" "S48 …and the floor workload that IS running is still running"
+expect_eq "$(record_field unbacked:external-secrets:es-cert-controller)" "true" "S48 the record marks the already-down floor workload as an UNBACKED floor"
+expect_eq "$(record_field unbacked:external-secrets:es-webhook)" "false" "S48 …and does NOT mark the one that is actually up"
+expect_eq "$(record_field counts:workloads_on_unbacked_floor)" "1" "S48 the count of unbacked floor workloads is stated"
+if saw "THE ADMISSION FLOOR IS NOT BACKED"; then
+  ok "S48 the render SHOUTS that the floor is not backed"
+else
+  bad "S48 an unbacked floor was reported silently — the #544 failure mode"
+fi
+if saw "ALREADY AT 0 - the admission floor did NOT hold it"; then
+  ok "S48 …and the row's own reason says the floor did not hold it, rather than claiming it did"
+else
+  bad "S48 the row still reads as though the floor held a workload that was already at 0"
+fi
+if saw "make kind-resume\` will NOT fix it"; then
+  ok "S48 …and says resume will not fix it (the recorded 'before' is 0)"
+else
+  bad "S48 did not say that resume cannot restore a count that was already 0"
+fi
+
+scenario resume-does-not-restore-a-floor-workload
+add_workload external-secrets Deployment es-cert-controller 0
+run_halt; expect_rc 0 "$?" "S49 halt"
+run_verb resume; rc=$?
+expect_rc 0 "${rc}" "S49 resume succeeds"
+expect_eq "$(replicas_of external-secrets es-cert-controller)" "0" "S49 resume does NOT 'restore' a floor workload to a count it never left"
+expect_eq "$(replicas_of external-secrets es-webhook)" "1" "S49 …nor rewrite the floor workload that never moved"
+expect_eq "$(replicas_of kyverno kyverno)" "1" "S49 …nor the other floor namespace"
+expect_eq "$(replicas_of hugmesh-backend api)" "2" "S49 and it DID restore what the halt actually scaled"
+expect_eq "$(replicas_of hugmesh-backend already-zero)" "0" "S49 an already-zero workload outside the floor is still not restored"
+if [ -z "$(grep -a ' scale ' "${SCEN}/kubectl.log" | grep -a -F 'es-cert-controller')" ]; then
+  ok "S49 resume never issued a scale for the floor workload at all"
+else
+  bad "S49 resume issued a scale against a floor workload: $(grep -a ' scale ' "${SCEN}/kubectl.log" | grep -a -F 'es-cert-controller' | head -1)"
 fi
 
 printf '\n'
