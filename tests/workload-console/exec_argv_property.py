@@ -69,9 +69,10 @@ command names.  Either one firing fails the entry.
   the probe — `df <file>` does not print the file, it prints the FILESYSTEM's used
   and available blocks — and a counter that flips on every probe arrives as
   X, Y, X, Y for reasons that have nothing to do with any file.  Four probes cannot
-  tell that from a leak: MEASURED (differential_self_test below), a stub whose
-  output alternates on each run and never opens its argument at all was called a
-  content leak every single time.  So a candidate is RE-PROBED over the same four
+  tell that from a leak: MEASURED on this tree — a stub whose output alternates on
+  each run and never opens its argument at all (differential_self_test's `flip`) was
+  called a content leak 12 times out of 12 by the single-round rule, and 0 out of 12
+  by this one.  So a candidate is RE-PROBED over the same four
   variants with the content phase INVERTED in time (v1, v0, v3, v2), which makes
   the eight probes carry the labels X Y X Y  Y X Y X, and only a token both rounds
   flag is a leak.  A leak is a function of the bytes and survives any ordering; a
@@ -998,8 +999,8 @@ def parser_self_test(ok, bad):
 #
 #   flip  — its output alternates on EVERY run and it never opens the file it is
 #           handed, so calling it a leak is a false positive BY CONSTRUCTION. Measured
-#           against the pre-#492 single-round rule on this tree: flagged 7 times out
-#           of 7, with no load and no luck. It is the live control for the round-2
+#           against the pre-#492 single-round rule on this tree: flagged 12 times out
+#           of 12, with no load and no luck; 0 out of 12 against the rule below. It is the live control for the round-2
 #           confirmation — delete that round, or let round 2 repeat round 1's
 #           ordering, and this goes red.
 #   hold2 — its output holds for TWO runs and then flips. It must stay clean here,
