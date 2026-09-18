@@ -26,10 +26,14 @@ walked stays UNCONFIGURED, keeps whatever slugs its manifest already carried, an
 named by the gate:
 
 * ``gui/pages/launch.py`` refuses the image build,
-* ``gui/pages/localmesh.py`` refuses the docker mesh start,
+* ``gui/pages/localmesh.py`` refuses BOTH docker mesh-start doors — the bring-up
+  (``_bootstrap_up``) and Saved meshes -> Start/Restore (``_start_saved``), which come
+  up on the same compose project from the same ``wiz.cfg``,
+* ``gui/pages/sessions_widget.py`` refuses a previous-builds RESTART, narrowly — see
+  ``core.domain_services.restart_gate_reason`` for why that one door is not blanket.
 
-both through the single seam ``core.domain_services.gate_reason`` so a test can drive
-the refusal with a bare ``ImageConfig``.
+All four through the single seam ``core.domain_services.gate_reason`` so a test can
+drive the refusal with a bare ``ImageConfig``.
 
 SCOPE IS NOT FLATTENED. The catalogue offered here is ``DOMAIN_CATALOGUE``
 (= ``OPTIONAL_SERVICES_CHOICES``, what ``--all-services`` expands to): the only slugs
@@ -91,6 +95,14 @@ class DomainServicesPage(QtWidgets.QWizardPage):
         #: the domain names actually walked in this wizard run, plus whatever a loaded
         #: config already recorded.
         self._reviewed: set[str] = set()
+        #: the ImageConfig object the working state above belongs to. Load/Save replaces
+        #: wiz.cfg wholesale (``load_config`` / ``load_session`` / ``start_build_from_
+        #: session``), and the page's state is per-CONFIG, not per-page: without this,
+        #: walking acme.example in one config and then LOADING a different file that
+        #: also names acme.example would land on the new file with acme.example already
+        #: marked reviewed — a domain nobody configured passing the gate. Identity, not
+        #: equality: two configs can be equal and still be different sessions.
+        self._cfg_seen = None
         self._names: list[str] = []
         self._index = 0
         self._rows: dict[str, QtWidgets.QTreeWidgetItem] = {}
@@ -168,18 +180,32 @@ class DomainServicesPage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         cfg = self.wiz.cfg
-        self._names = [d.name for d in (cfg.domains or [])
+        if cfg is not self._cfg_seen:
+            # A DIFFERENT configuration object — Load config / Load session / a restart
+            # from the previous-builds manager. Drop every working answer: they belong
+            # to the config they were given for, and carrying a reviewed marker across
+            # would let a domain nobody looked at satisfy the gate. cfg's OWN
+            # domain_services_reviewed is still honoured below, which is the only
+            # record that travels with a configuration.
+            self._selection = {}
+            self._reviewed = set()
+            self._index = 0
+            self._cfg_seen = cfg
+        self._names = [(d.name or "").strip() for d in (cfg.domains or [])
                        if (d.name or "").strip()]
         # Seed from cfg every entry: the Domains table may have added, renamed or
         # dropped rows since the last visit. A name that survived keeps its working
         # selection; a new one starts from whatever the manifest already carried.
         fresh: dict[str, list[str]] = {}
         for d in (cfg.domains or []):
-            if not (d.name or "").strip():
+            name = (d.name or "").strip()
+            if not name:
                 continue
-            fresh[d.name] = (self._selection.get(d.name)
-                             if d.name in self._selection
-                             else normalise_slugs(d.optional_services))
+            fresh[name] = (self._selection.get(name)
+                           if name in self._selection
+                           else normalise_slugs(d.optional_services))
+        # ASSIGNED, never merged into what was there: a domain dropped from the table
+        # must not keep a working selection that a later re-add would silently restore.
         self._selection = fresh
         # A config loaded from disk brings its own record of what was configured —
         # re-walking it must not be demanded twice. Names that no longer exist drop.
@@ -323,17 +349,42 @@ class DomainServicesPage(QtWidgets.QWizardPage):
         ``core.domain_services.gate_reason``.
 
         Writes by NAME, never by index: the Domains table may have renamed, added or
-        dropped rows between this page's last visit and this call."""
-        self._capture()
+        dropped rows between this page's last visit and this call.
+
+        WRITES ONLY TO THE CONFIG IT WAS GIVEN. ``initializePage`` records which
+        ImageConfig object this page's working state belongs to; if wiz.cfg has been
+        replaced since (Load config / Load session / a restart from the previous-builds
+        manager), this is a no-op rather than a write of one configuration's answers
+        onto another's domains. ``QWizard::restart()`` calls ``cleanupPage`` on every
+        visited page, and ``load_config`` calls ``restart()``, so that is not a
+        hypothetical ordering."""
         cfg = self.wiz.cfg
+        if cfg is not self._cfg_seen:
+            return True
+        self._capture()
         for d in (cfg.domains or []):
-            if d.name in self._selection:
-                d.optional_services = list(self._selection[d.name])
+            name = (d.name or "").strip()
+            if name in self._selection:
+                d.optional_services = list(self._selection[name])
         # REBUILT from the domains that still exist (record_reviewed does the
         # restriction), so a renamed or deleted domain cannot leave a stranded marker
         # that would let the gate pass for a domain nobody configured.
         record_reviewed(cfg, self._reviewed)
         return True
+
+    def cleanupPage(self):
+        """Qt calls this on the page the operator is leaving by clicking BACK.
+
+        Record there too. ``QWizard`` calls ``validatePage`` only going FORWARD, so
+        without this a Back out of this step left the Domains table's read-only cell
+        reading "not configured yet" for a domain the operator had just walked, and
+        the reviewed marker unwritten until something else happened to call
+        ``collect_all()``. Recording is this page's whole job and it never refuses, so
+        doing it in both directions is the same operation, not a new one.
+
+        The base implementation resets registered fields; this page registers none.
+        """
+        self.validatePage()
 
     # ── introspection for the gate's own callers/tests ───────────────────────────
     def unconfigured(self) -> list[str]:

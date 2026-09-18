@@ -8,9 +8,12 @@ cell whose typos went into the manifest verbatim, then a checkable MENU (#227,
 ``_ServicesButton``) — but nothing obliged the operator to OPEN that menu, so most
 builds never answered "what does this domain provide". The choice now has its own step,
 ``pages/domain_services.py``, which gives every domain its own service page and is what
-the build/mesh-start gate requires; this cell reports what that step recorded and
-carries the slugs back into ``cfg`` (this table stays the sole writer of
-``cfg.domains``). Those slugs are provisioning INPUT only — nothing in this repo reads
+the build/mesh-start gate requires; this cell REPORTS what that step recorded. It is a
+MIRROR, not a store — ``validatePage`` takes each row's slugs from ``cfg`` by name and
+falls back to the cell only for a row ``cfg`` does not know yet, because
+``collect_all()`` re-enters itself through ``BuildPage._preview`` and would otherwise
+make this page the last writer and discard the step's whole recording. This table
+remains the sole writer of WHICH domains exist and of every other column. Those slugs are provisioning INPUT only — nothing in this repo reads
 ``domains[].optional_services`` back, they do not change which services the image bakes,
 and #496 is why they do not yet decide what the cluster runs either.
 The Games checkbox is GONE: a truthy legacy ``games`` is migrated to
@@ -59,7 +62,7 @@ from ..styles import WARN, muted
 from ...core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain,
                             image_class, superadmin_plane_applies)
 from ...core.domain_services import (normalise_slugs, reviewed_names,
-                                     split_services)
+                                     services_summary, split_services)
 
 _COL_NAME, _COL_TITLE, _COL_SERVICES, _COL_APPLIES = range(4)
 # The per-domain sign-in column (issue #47) is APPENDED so the four pre-existing
@@ -190,10 +193,12 @@ class _ServicesCell(QtWidgets.QLabel):
     go through before building or starting a mesh in docker or nodes".
 
     So the choice moved to its own step (``pages/domain_services.py``) and this cell
-    REPORTS it. It still carries the row's slugs — ``DomainsPage.validatePage`` reads
-    them straight back out, so the table remains the sole writer of
-    ``cfg.domains[].optional_services`` and a row added, renamed or removed here still
-    decides what exists. It also distinguishes the state ``optional_services`` alone
+    REPORTS it. It still carries the row's slugs, and ``DomainsPage.validatePage`` falls
+    back to them for a row ``cfg`` does not know yet — a row just added, or renamed —
+    but ``cfg`` is what it reads first, because this cell is refreshed only when the
+    page becomes current and the step writes to ``cfg`` after that. A row added,
+    renamed or removed here still decides which domains exist. It also distinguishes
+    the state ``optional_services`` alone
     cannot express: ``[]`` means "the cluster-wide set applies", which is a real
     answer, and is NOT the same fact as "nobody has been through this domain's
     services yet" (the gate's, recorded in ``cfg.domain_services_reviewed``).
@@ -214,21 +219,19 @@ class _ServicesCell(QtWidgets.QLabel):
         self.set_slugs(selected, reviewed)
 
     def set_slugs(self, selected=None, reviewed: bool = False) -> None:
+        """Render the row. The WORDS come from ``core.domain_services.services_summary``
+        and are not restated here: this cell used to carry its own copy of the same
+        three branches, so the wording the whole honesty argument rests on had two
+        sources of truth and the tested one was not the one on screen."""
         self._slugs = normalise_slugs(selected)
         self._reviewed = bool(reviewed)
-        if not self._reviewed:
-            # Never "None" and never a bare count: an unconfigured row must not read
-            # like a configured empty one. Any slugs it already carries are shown, so
-            # loading an older worklist visibly keeps its manifest data.
-            self.setText("not configured yet" if not self._slugs
-                         else "not confirmed — " + ", ".join(self._slugs))
-            self.setStyleSheet(f"color: {WARN};")
-            return
-        # The empty state names the CLUSTER-WIDE default, not the "none" sentinel:
-        # SERVICES_NONE is literally spelled "none" and emits an explicit EMPTY
-        # allow-list, which is the opposing fact (config.py's emission table).
-        self.setText("cluster default" if not self._slugs else ", ".join(self._slugs))
-        self.setStyleSheet(muted() if not self._slugs else "")
+        self.setText(services_summary(self._slugs, self._reviewed))
+        # Never "None" and never a bare count: an unconfigured row must not read like a
+        # configured empty one, so it is WARN-coloured as well as differently worded.
+        # The reviewed-and-empty state is muted because "cluster default" is a real
+        # answer, not an omission.
+        self.setStyleSheet(f"color: {WARN};" if not self._reviewed
+                           else (muted() if not self._slugs else ""))
 
     def selected_slugs(self) -> list[str]:
         """The row's slugs in CATALOGUE order, carried-over extras last.
@@ -247,7 +250,9 @@ class DomainsPage(QtWidgets.QWizardPage):
         self.setTitle("Domains & their services")
         self.setSubTitle(
             "Beyond the superadmin apex, define the OTHER domains this mesh "
-            "hosts and pick which optional services each one provides in the table. "
+            "hosts. Which optional services each one provides is picked on the next "
+            "step, which gives every domain its own page; this table SHOWS what is "
+            "recorded. "
             "Every domain you add here is given its own default admin with a "
             "generated random password (surfaced on the next, Users, step).")
         lay = QtWidgets.QVBoxLayout(self)
@@ -478,16 +483,41 @@ class DomainsPage(QtWidgets.QWizardPage):
             self._refresh_base_ca()
 
     def validatePage(self):
+        """Rebuild ``cfg.domains`` from the table.
+
+        THE SERVICES COLUMN IS A MIRROR, NOT A STORE (#495). The Domain services step
+        runs AFTER this page and writes ``cfg.domains[].optional_services``; this
+        page's cells are only re-read from cfg when it becomes current
+        (``_refresh_services_cells``), so on a forward walk they still hold the
+        pre-step slugs. And this validatePage does NOT run only when the operator
+        leaves this page: ``collect_all()`` re-runs every visited page's validatePage,
+        ``BuildPage._preview`` calls ``collect_all()``, and ``BuildPage.validatePage``
+        calls ``_preview`` — so collect_all re-enters itself and the LAST writer in
+        one Build->Launch transition is this method, hundreds of times over. Reading
+        the cached cell back would therefore discard the operator's whole selection
+        somewhere they never look, while the gate still passed because the reviewed
+        marker survives: the required page satisfied, its answer thrown away.
+
+        So the slugs come from ``cfg`` BY NAME whenever that domain is still there,
+        and from the cell only for a row cfg does not know yet — a row just added, or
+        renamed, where the cell is the only carrier. The table stays the sole writer of
+        WHICH domains exist, their titles, images, sign-in and base CA."""
         out = []
         base_ca: dict[str, str] = {}
+        # snapshot BEFORE the rebuild: cfg.domains is replaced at the end of this method
+        recorded = {(getattr(d, "name", "") or "").strip(): list(d.optional_services)
+                    for d in (self.wiz.cfg.domains or [])
+                    if (getattr(d, "name", "") or "").strip()}
         for r in range(self.table.rowCount()):
             name = self.table.item(r, _COL_NAME).text().strip() if self.table.item(r, _COL_NAME) else ""
             if not name:
                 continue
             title = self.table.item(r, _COL_TITLE).text().strip() if self.table.item(r, _COL_TITLE) else ""
             svc_cell = self.table.cellWidget(r, _COL_SERVICES)
-            services = (svc_cell.selected_slugs()
-                        if isinstance(svc_cell, _ServicesCell) else [])
+            services = recorded.get(name)
+            if services is None:
+                services = (svc_cell.selected_slugs()
+                            if isinstance(svc_cell, _ServicesCell) else [])
             btn = self.table.cellWidget(r, _COL_APPLIES)
             images = btn.selected_ids() if isinstance(btn, _AppliesToButton) else []
             combo = self.table.cellWidget(r, _COL_IDP)
@@ -505,4 +535,8 @@ class DomainsPage(QtWidgets.QWizardPage):
         # (every picker on None) leaves the empty dict the native default already is —
         # so a config that never met this column is byte-identical after a round trip.
         self.wiz.cfg.domain_ca = base_ca
+        # Keep the mirror honest: a row whose slugs came from cfg above must not still
+        # be displaying the pre-step text if the operator navigates back here without
+        # a page change firing.
+        self._refresh_services_cells()
         return True
