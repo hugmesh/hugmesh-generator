@@ -36,7 +36,20 @@ const CONTENT_HEIGHT_PX = 3000;
 
 const FIXTURE_HTML = `<!doctype html>
 <html><head><meta charset="utf-8"><style>
-  html, body { margin: 0; background: rgb(${BODY_RGB.join(',')}); }
+  /* Background lives on <html> ONLY, not <body>. When BOTH have an explicit
+     background, the canvas paint uses html's, but body's own background then
+     paints as its own normal in-flow box — a stacking layer ABOVE any
+     negative-z-index descendant (CSS2.1 §E: negative z-index paints in step
+     2, non-positioned in-flow boxes paint in step 3). That unconditionally
+     hid #bg below body's own background, in every configuration, resized or
+     not — a fixture bug, found by instrumenting pixels across the whole
+     capture (not just the bottom) and by a variant sweep (removing body's
+     background, or giving #bg z-index:0/none, both made it visible; the
+     resize/settle timing was never the cause). Un-set here so #bg's own
+     negative z-index has nothing opaque above it to hide behind, matching
+     what "fixed background behind everything" actually requires. */
+  html { margin: 0; background: rgb(${BODY_RGB.join(',')}); }
+  body { margin: 0; }
   /* Stands in for the host shell's app-background: fixed, sized to the
      viewport, behind everything. */
   #bg {
