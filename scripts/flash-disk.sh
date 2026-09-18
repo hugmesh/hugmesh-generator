@@ -494,6 +494,17 @@ dl_unmount_children "${DEVICE}"
 # Both .img and .iso are whole-device raw writes; dd with a large block size and
 # progress, then sync + settle so the new partition table is visible.
 dl_step "Writing ${FLASH_KIND} to ${DEVICE} (this can take a while)"
+# MACHINE-READABLE DENOMINATOR (#415). dd's own `status=progress` reports bytes
+# COPIED but never a total, so a GUI reading only dd can show a rate but not a
+# percentage — and a bar that advances on a timer instead of on bytes is a lie.
+# ART_SIZE above is exactly the byte count dd is about to write: the file size for a
+# raw .img/.iso, and the UNCOMPRESSED size (xz --robot --list totals field 5) for a
+# .img.xz/.iso.xz, which is what `xz -dc | dd` actually puts on the disk. Emitted
+# HERE, immediately before the write, so it is never printed for a run that aborted
+# at the confirm or the unmount. 0 when the size could not be read — the GUI then
+# shows activity, not a fabricated percentage. Parsed by
+# studio/hugmesh_studio/core/flash_targets.parse_write_total().
+dl_info "Write-bytes: ${ART_SIZE}"
 if ${COMPRESSED}; then
     # Decompress STRAIGHT to the disk — never to a 3-30 GB temp file, which would
     # need scratch space the operator did not ask for and may not have.
