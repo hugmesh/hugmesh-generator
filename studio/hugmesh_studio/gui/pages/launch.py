@@ -37,6 +37,17 @@ is a refusal and not a warning that scrolls past: both ``_continue`` and
 ``validatePage`` stop, and the Continue card is disabled while it holds, with the
 reason on screen beside the ‘back to the main menu’ card that is how you act on it.
 
+ONE BUILD DOOR IS DELIBERATELY NOT GATED, and it is stated here rather than left to
+be discovered: ``StudioWizard.start_build_from_session`` (the previous-builds
+manager's RESTART) sets the start id to "progress" and jumps there, so it never
+touches this page. That is on purpose. A restart re-dispatches a session's EXACT
+recorded config — an already-emitted artifact, built once already — and every
+session recorded before this field existed carries no
+``domain_services_reviewed`` at all, so gating that door would refuse every
+historical restart on the strength of a question nobody was asked at the time.
+Restarting is not configuring; the gate belongs on the path where a configuration
+is being made.
+
 Qt duality: the venv is PySide6, the operator runs PyQt6 where an exception escaping a
 slot calls qFatal and kills the Studio — both slots here are exception-guarded.
 """

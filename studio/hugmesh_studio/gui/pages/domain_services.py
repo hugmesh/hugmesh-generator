@@ -60,7 +60,7 @@ yet reach the cluster (``ENFORCEMENT_NOTE`` / issue #496).
 WHERE #499 (per-service source forge + credentials) GOES: each service row is a
 QTreeWidgetItem in ``self._rows`` keyed by slug, and the table already carries a
 per-row settings column that is empty today. A forge/repo/branch control per row hangs
-off ``_SVC_COL_SETTING`` with no restructure; a per-DOMAIN credential belongs in the
+off ``_COL_SETTING`` with no restructure; a per-DOMAIN credential belongs in the
 header block beside ``self.head``, which is already per-domain state.
 """
 from __future__ import annotations
@@ -90,7 +90,6 @@ _HEADERS = ("On", "Service", "Scope", "", "What it does for this domain")
 #: The row's DESCRIPTION says the rest (core.domain_services.describe_carried_over),
 #: which keeps whatever the slug's own catalogue line says instead of replacing it.
 _EXTRA_NOTE = "  (kept from your config)"
-
 
 
 def _scope_legend() -> str:
