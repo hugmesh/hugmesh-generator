@@ -325,6 +325,18 @@ On every forward entry it reads the local mesh's identity **offline** — plain 
 
 Then it asks for consent, as an inline checkbox: *"I understand: k8s will stop to proceed — the local Kubernetes (DevOps) stack must come down before these node images are configured and built."* With a cluster actually up, ticking it arms **Stop Kubernetes now**, which runs `make kind-down` on a worker thread with streamed output and Cancel. That deletes the DevOps lane only — the docker mesh and every one of its volumes are untouched. With nothing running, the button stays greyed and the line under it says there is nothing to stop.
 
+### Stopping the DevOps lane without deleting it
+
+`make kind-down` is the **destructive** control: it deletes the kind cluster and everything in it, and the next bring-up is a full one that comes back empty. When the intent is only to stop the lane, use the halt instead:
+
+| command | what it does |
+|---|---|
+| `make kind-halt` | Suspends ArgoCD auto-sync on the Applications it records, then scales the mesh workloads to 0. Writes what it changed to the `hugmesh-kind-halt` ConfigMap in the ArgoCD namespace, so the undo does not depend on the Studio still running. Auto-sync must be suspended as well as the workloads scaled — `prune + selfHeal` would otherwise scale everything straight back and the button would be a lie. |
+| `make kind-halt-status` | Read-only. Says whether the lane is halted, what it suspended, and the sync/health each Application was in at the moment it froze. Refuses rather than guessing if the record cannot be read. |
+| `make kind-resume` | Restores exactly the replica counts and the auto-sync the halt recorded — not "everything", so an Application suspended for some other reason stays suspended. |
+
+**Some pods keep running after a halt, by design.** DaemonSets are never halted (`kindnet`, `kube-proxy`, `local-path-provisioner`, the internal ingress controller), and neither are the static control-plane pods owned by the node — `etcd`, `kube-apiserver`, `kube-controller-manager`, `kube-scheduler`. Stopping those would not be halting the cluster, it would be deleting it. A halted lane therefore shows a handful of Running pods and no mesh workloads.
+
 Next stays disabled until three things hold: the box is ticked, no teardown is in flight, and no cluster is still known to be up. After a teardown the page re-probes rather than trusting the exit status, because `kind delete cluster` exits 0 for a cluster that was never there and a failed or cancelled run can leave one half gone. The consent box is cleared again on every entry.
 
 On Next the page commits the mesh chain itself: `cfg.mode = "mesh"`, the mesh default role if the current one does not belong, source bundling off, mesh defaults applied. It then installs the abbreviation — the worklist offers only `laptop` plus every node-class mesh role (`pki`, `backend`, `frontend`, `backend-gpu`, `omnibus`, `edge-ai`). The person-desktop variants are withdrawn, because a local cloud's devices are its nodes plus your laptop. Any other Mode choice made later lifts the restriction.

@@ -27,6 +27,30 @@ The wizard's own Next button still works — this page adds a deliberate,
 self-describing action pair, it does not take the standard navigation away. (There
 is no Finish button here: the page is not final, ProgressPage follows it.)
 
+THE PER-DOMAIN SERVICES GATE (#494/#495) lives here, and here specifically because
+this is the LAST door before dispatch: ProgressPage dispatches on arrival, and
+"build"/"launch"/"progress" are the terminal set nextId() never dynamically skips, so
+every wizard build path passes through this page. A domain whose Services step was
+never gone through refuses the build BY NAME — inline, through the one seam
+``core.domain_services.gate_reason``, which a test drives with a bare ImageConfig. It
+is a refusal and not a warning that scrolls past: all three of ``_continue``, the
+Continue card's enabled state and ``validatePage`` stop, and the reason is laid out
+ABOVE the cards — this page scrolls, the build summary grows one line per worklist
+entry, and a reason under two cards is a reason scrolled past while staring at a
+Continue card that went grey for no visible cause.
+
+THE OTHER BUILD DOOR IS ``StudioWizard.start_build_from_session`` (the previous-builds
+manager's RESTART), which sets the start id to "progress" and jumps there, so it never
+touches this page. It is gated separately and NARROWLY, in
+``PreviousBuildsWidget.can_restart`` through ``core.domain_services.restart_gate_reason``
+— stated here rather than left to be discovered. A restart re-dispatches a session's
+EXACT recorded config, and every session recorded before ``domain_services_reviewed``
+existed carries no marker at all, so a blanket gate there would refuse every historical
+restart on the strength of a question nobody was asked at the time. The narrow gate
+bites only for a configuration that already carries at least one reviewed name — one
+produced under this feature — and has since gained an unconfigured domain, and its
+remedy is Redo, the route that exists from the previous-builds manager.
+
 Qt duality: the venv is PySide6, the operator runs PyQt6 where an exception escaping a
 slot calls qFatal and kills the Studio — both slots here are exception-guarded.
 """
@@ -39,8 +63,9 @@ import traceback
 from ..choice_cards import ChoiceCard
 from ..qt import Qt, QtWidgets
 from ._scroll import scrollable
-from ..styles import muted
+from ..styles import ERROR, muted
 from ...core import cross_dracut
+from ...core.domain_services import ACTION_IMAGE_BUILD, gate_reason
 from ...core.worklist import resolve_encrypt_root
 
 
@@ -98,6 +123,20 @@ class LaunchPage(QtWidgets.QWizardPage):
         self.summary.setTextFormat(Qt.TextFormat.PlainText)
         lay.addWidget(self.summary)
         lay.addWidget(self._muted_note())
+        # The gate's refusal (#495). An inline label, never a modal: this is page
+        # logic, and a QMessageBox here would hang the headless suite (the repo's
+        # no-modals-in-page-logic rule). Empty and hidden until something refuses.
+        #
+        # ABOVE the cards, not below them: this whole page is inside scrollable(), the
+        # build summary grows one line per worklist entry, and a reason under two
+        # ChoiceCards is a reason the operator scrolls past while staring at a
+        # Continue card that has gone grey for no visible cause.
+        self.gate_err = QtWidgets.QLabel("")
+        self.gate_err.setWordWrap(True)
+        self.gate_err.setTextFormat(Qt.TextFormat.PlainText)
+        self.gate_err.setStyleSheet(f"color: {ERROR};")
+        self.gate_err.hide()
+        lay.addWidget(self.gate_err)
         # ACTION cards, not a pick-one group: each one DOES its thing on click, so they
         # are deliberately not checkable (the tile look of ask 14 without pretending a
         # button is a selection).
@@ -130,9 +169,37 @@ class LaunchPage(QtWidgets.QWizardPage):
     # ---- slots (guarded: PyQt6 qFatals on an exception escaping a slot) -----------
     def _continue(self) -> None:
         try:
+            if self._refuse():
+                return
             self.wiz.next()
         except Exception:                     # noqa: BLE001 — see module docstring
             _log_swallowed("_continue")
+
+    # ---- the per-domain services gate (#494/#495) --------------------------------
+    def gate_refusal(self) -> str:
+        """"" when this build may start; otherwise the refusal naming every domain
+        with no recorded service configuration. Pure read of cfg through the one seam,
+        so a test can assert the exact sentence without painting anything."""
+        return gate_reason(self.wiz.cfg, ACTION_IMAGE_BUILD)
+
+    def _refuse(self) -> bool:
+        """Show the refusal and report whether it holds. Called from BOTH doors — the
+        Continue card and validatePage — because the wizard's own Next button is still
+        live on this page and must not be a way around the gate."""
+        reason = self.gate_refusal()
+        self.gate_err.setText(reason)
+        self.gate_err.setVisible(bool(reason))
+        self.continue_card.setEnabled(not reason)
+        return bool(reason)
+
+    def validatePage(self):
+        """Refuse to leave for the progress page while a domain is unconfigured.
+
+        The Continue card is already disabled by ``_refuse``, but QWizard's own Next
+        button is not the card — without this, the gate would be a disabled button the
+        operator walks around, which is the "warning that scrolls past" this change
+        exists to stop."""
+        return not self._refuse()
 
     def _main_menu(self) -> None:
         """Back to the first screen. restart() re-runs each page's initializePage from
@@ -146,3 +213,4 @@ class LaunchPage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         self.summary.setText(launch_summary(self.wiz))
+        self._refuse()

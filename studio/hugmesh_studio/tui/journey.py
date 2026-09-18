@@ -7,7 +7,8 @@ wizard (#65, :mod:`.localcloud`), the whole-mesh emulation screen (#69,
 :mod:`.meshemu`), the QEMU device-test screen (:mod:`.qemu` — the TEST lane of
 the same emulation plan the mesh screen deploys), the Themes screen (#63,
 :mod:`.themes`) and the per-domain Sign-in choice on the domains step (#71,
-:mod:`.domains_step`).
+:mod:`.domains_step`) and the per-domain Services step (#495,
+:mod:`.domain_services_step`).
 
 PARITY RULES (what the tests pin):
 
@@ -954,6 +955,7 @@ class Journey:
     """The face-independent journey state machine (see the module docstring)."""
 
     def __init__(self, generator_dir: str = ".", cfg: ImageConfig | None = None):
+        from .domain_services_step import DomainServicesScreen
         from .domains_step import DomainsScreen
         from .e2e import E2EScreen
         from .localcloud import LocalCloudScreen
@@ -979,7 +981,7 @@ class Journey:
                       "Add more domains beyond the internal Tailscale root "
                       "domain (public go-live domains this mesh serves)?",
                       "additional_domains"),
-            DomainsScreen(),
+            DomainsScreen(), DomainServicesScreen(),
             YesNoStep("users_choice", "User accounts",
                       "Configure user accounts for this mesh now?",
                       "configure_users"),
@@ -1063,8 +1065,15 @@ class Journey:
                 continue
             if slug in MODE_SKIPPED_PAGES.get(cfg.mode, ()):
                 continue
-            if slug == "domains" and cfg.mode == "mesh" \
+            if slug in ("domains", "domain_services") and cfg.mode == "mesh" \
                     and not cfg.additional_domains:
+                continue
+            # #495: nothing to ask when no domain is named, and skipping is safe
+            # because the gate has nothing to refuse either (the GUI page's
+            # applies_to says the same thing in the same words).
+            if slug == "domain_services" and not [
+                    d for d in (cfg.domains or [])
+                    if (getattr(d, "name", "") or "").strip()]:
                 continue
             if slug == "users" and cfg.mode == "mesh" \
                     and not cfg.configure_users:
