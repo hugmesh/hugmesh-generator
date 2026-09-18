@@ -84,16 +84,19 @@ _As of 2026-08-05. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
 - **✅ Unified Spring baseline** — the baked GitOps payload now targets **Spring
   Boot 4.0.7 / Spring Cloud 2025.1.2** on Java 25, with the shared Maven artifacts
   **`hugmesh-parent`** (metapom, **2.8.0**), **`hugmesh-commons`** (shared
-  security/tenancy, `systems.hugmesh.commons.*`, **2.1.0**),
-  **`hugmesh-auth-core`** (**2.4.2** — shared account/session/MFA/Casdoor-admin
-  infra; depends on commons; consumed by **user-bff + admin-bff only**) and
+  security/tenancy, `net.hugmesh.commons.*`, **2.1.0**),
+  **`hugmesh-auth-core`** (shared account/session/MFA/Casdoor-admin infra;
+  depends on commons; consumed by **user-bff + admin-bff only** — **two pins,
+  by design**: **2.4.2** for user-bff main, **2.5.0** for admin-bff main, since
+  the two consumers are on separate release cadences) and
   **`hugmesh-build-config`** (**0.5.0** — the shared PMD/Checkstyle/SpotBugs
-  rulesets the parent references). The groupId is `systems.hugmesh:*` after the
+  rulesets the parent references). The groupId is `net.hugmesh:*` after the
   rebrand. `federation-api` was migrated onto this baseline. The authoritative
   pins live in [`tests/stack/m2-bootstrap.sh`](tests/stack/m2-bootstrap.sh)
-  (SHA-pinned — the org repos carry no git tags); ⚠️ auth-core has drifted three
-  times (2.4.0 → 2.4.1 → 2.4.2) because a released coordinate was re-cut, which is
-  why the pin-drift guard exists and must run after every auth-core release.
+  (SHA-pinned — the org repos carry no git tags); ⚠️ auth-core has drifted four
+  times (2.4.0 → 2.4.1 → 2.4.2 → 2.5.0) because a released coordinate was
+  re-cut, which is why the pin-drift guard exists and must run after every
+  auth-core release.
 - **✅ SSO auth model wired into the cluster payload (data plane)** — Casdoor is
   the SSO IdP, reached **only from inside the cluster**. Login is a **native,
   first-party form**: `login-ui` POSTs username/password (and any MFA passcode) to
@@ -531,12 +534,6 @@ none), and compose green is not evidence for the cluster._
   that protected edit lands, no x86 host and no x86 client image (laptop /
   chromebook / desktop) can auto-update even if a superadmin flips `enabled: true`
   — the per-node update schedule itself is shipped and ArgoCD-synced.
-- **🚧 `make matrix-check` is red over one stale counter.** It exits 1 on
-  `FAIL [SLX] assertion count - emitted 137 assertions, expected 136`;
-  `SLX_EXPECTED` is pinned at 136 in `tests/build-matrix/check.sh` while the
-  delegate now emits 137. Bump it deliberately (diff the emitted assertion NAMES
-  first, per the file's own rule) and re-run. Worth noting alongside it: the repo
-  gates on GitLab CI but merges on GitHub, so a red matrix never blocks a merge.
 - **🔭 Real cross-build proof for the shared binpkg pools** — the mechanism and
   the fingerprint guard are shipped; the compile-once speedup is unmeasured.
 
@@ -1287,7 +1284,7 @@ see the full table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
 The Spring services share a unified Maven baseline — **Spring Boot 4.0.7 /
 Spring Cloud 2025.1.2** on Java 25 — built on three shared artifacts: **`hugmesh-parent`**
 (metapom), **`hugmesh-commons`** (shared security/tenancy,
-`systems.hugmesh.commons.*`) and **`hugmesh-auth-core`** (shared
+`net.hugmesh.commons.*`) and **`hugmesh-auth-core`** (shared
 account/session/MFA/Casdoor-admin infra, consumed by **user-bff + admin-bff**).
 SSO login/session/account ownership is being **relocated from admin-bff →
 user-bff** (`login-ui` native form → `POST /bff/login` → user-bff PKCE + internal
