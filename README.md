@@ -534,12 +534,6 @@ none), and compose green is not evidence for the cluster._
   that protected edit lands, no x86 host and no x86 client image (laptop /
   chromebook / desktop) can auto-update even if a superadmin flips `enabled: true`
   — the per-node update schedule itself is shipped and ArgoCD-synced.
-- **🚧 `make matrix-check` is red over one stale counter.** It exits 1 on
-  `FAIL [SLX] assertion count - emitted 137 assertions, expected 136`;
-  `SLX_EXPECTED` is pinned at 136 in `tests/build-matrix/check.sh` while the
-  delegate now emits 137. Bump it deliberately (diff the emitted assertion NAMES
-  first, per the file's own rule) and re-run. Worth noting alongside it: the repo
-  gates on GitLab CI but merges on GitHub, so a red matrix never blocks a merge.
 - **🔭 Real cross-build proof for the shared binpkg pools** — the mechanism and
   the fingerprint guard are shipped; the compile-once speedup is unmeasured.
 
