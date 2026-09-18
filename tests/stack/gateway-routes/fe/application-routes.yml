@@ -271,7 +271,48 @@ spring:
                 # (user-bff PasswordResetController). They are listed as EXACT
                 # paths, like every other entry here, so a future sibling under
                 # that prefix does not route (or become public) by accident.
-                - Path=/bff/login,/bff/register,/bff/session,/bff/session/**,/bff/me,/bff/user/**,/bff/password-reset/request,/bff/password-reset/confirm
+                #
+                # ── LANE PARITY: the five paths of hugmesh-generator#366 ──────
+                # The last five entries below (/bff/me/namespaces,
+                # /bff/provision/matrix, /bff/provision/mastodon,
+                # /bff/register/google, /bff/register/discord) exist so this
+                # compose table and the CLUSTER table
+                # (specs/cluster/apps/20-gateway-fe.yaml, which routes
+                # `/bff/me/**`, `/bff/provision/**` and `/bff/register/**` to
+                # user-bff ABOVE its /bff/** admin catch-all) send the SAME five
+                # paths to the SAME BFF. Until this change they did not: compose
+                # let all five fall through to the /bff/** admin-bff catch-all,
+                # so the compose e2e lane could not see the cluster's 404s.
+                # Operator decision 40 (hugmesh-generator#347, answers comment of
+                # 2026-09-17) chose FULL alignment now over the cheaper option of
+                # carving the two /bff/register/* paths back to admin-bff.
+                #
+                # THIS IS A DELIBERATE, ACCEPTED REGRESSION FOR TWO OF THEM.
+                # user-bff serves only three of the five (LegacyPathParityController,
+                # hugmesh/hugmesh-user-bff-api#15 @ c3d24c4: GET /me/namespaces,
+                # POST /provision/matrix, POST /provision/mastodon). It has NO
+                # handler for /bff/register/google or /bff/register/discord —
+                # SsoAuthController maps the EXACT path /bff/register only — so
+                # from this commit those two 404 on the compose lane exactly as
+                # they already 404 on a cluster. Restoring them means adding the
+                # handlers to user-bff (hugmesh/hugmesh-user-bff-api#13), NOT
+                # re-pointing these two entries at admin-bff. Anyone tempted to
+                # "fix" the 404 by moving them back: that is the split this
+                # change removed, and tests/scripts/test-fe-bff-route-lane-parity.sh
+                # goes RED on it.
+                #
+                # EXACT paths, never the cluster's `/bff/me/**` /
+                # `/bff/register/**` / `/bff/provision/**` subtrees. admin-bff
+                # owns POST+GET /bff/me/appeal (AccountAppealUserController) and
+                # POST /bff/register/complete (AuthController:397) under those
+                # same prefixes; a subtree here would move THEM to user-bff too,
+                # which is a SIXTH and SEVENTH 404 nobody decided on. (The
+                # cluster's `/bff/me/**` already does exactly that to
+                # /bff/me/appeal — recorded on hugmesh-generator#366; the fix
+                # belongs in specs/cluster, not here.) The same guard file pins
+                # that /bff/me/appeal and /bff/register/complete keep reaching
+                # admin-bff on this lane.
+                - Path=/bff/login,/bff/register,/bff/session,/bff/session/**,/bff/me,/bff/user/**,/bff/password-reset/request,/bff/password-reset/confirm,/bff/me/namespaces,/bff/provision/matrix,/bff/provision/mastodon,/bff/register/google,/bff/register/discord
             # Moderator BFF surface -> mod-bff (also precedes the admin catch-all).
             - id: hugmesh-mod-bff-api
               uri: http://hugmesh-mod-bff-api:8080

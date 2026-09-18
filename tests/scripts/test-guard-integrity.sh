@@ -492,7 +492,43 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # too, so the debian placement is a choice of ONE job, not a constraint. The
 # ungated SET pin is unchanged at 22. This file conflicts on nearly every merge;
 # if it conflicts here, RE-MEASURE on the merged tree per the doctrine above
-# rather than taking 170, 171 or either side's number.
+# rather than taking 169, 170, 171 or any one side's number.
+#
+# 170 (this branch) and 171 (main) -> RE-MEASURED on 2026-09-17 while merging
+# origin/main into iss/366-fe-gateway-cluster-route-table-404s-five-bff-pat. Both
+# sides moved the baseline for DIFFERENT suites and neither number is true of the
+# merged tree: main reached 171 by gating tests/scripts/test-kind-halt.sh (#356)
+# AND tests/scripts/test-eso-remoteref-brand.sh (#285), this branch reached 170 by
+# gating tests/scripts/test-fe-bff-route-lane-parity.sh (#366, decision 40 = B on
+# #347). The merged tree has all three, so — as every reconciliation below did —
+# the number was taken by RUNNING this file on the MERGED tree and reading the
+# line it prints, not by adding 1 to either side. Every note either side of this
+# one is kept: they are complementary records, none supersedes another.
+# THE MEASUREMENT on the merged tree, taken by running this file:
+#     172 of 194 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22.
+#
+# 169 -> 170 on 2026-09-17: tests/scripts/test-fe-bff-route-lane-parity.sh joined
+# the gate with operator decision 40 (hugmesh-generator#347 answers comment;
+# tracked on hugmesh-generator#366). It reads BOTH fe route tables — the compose
+# one (tests/stack/gateway-routes/fe/application-routes.yml) and the cluster one
+# (specs/cluster/apps/20-gateway-fe.yaml) — simulates Spring Cloud Gateway's
+# first-match-wins ordering over each, and asserts the five #366 paths resolve to
+# the SAME BFF on both. Two of the five have no handler anywhere and 404 by
+# ACCEPTED decision, so the guard also has to stop a well-meaning revert.
+# MEASURED by RUNNING this file both ways on the same tree, not assumed:
+#     170 of 192 suites are named by a pull_request-triggered workflow   (with it)
+#     169 of 191 suites are named by a pull_request-triggered workflow   (without)
+# — "without" meaning the suite file deleted AND both its wirings removed, so the
+# denominator moves too, exactly like the 164 -> 165 entry above. Named in
+# shell-suites.yml's DEBIAN job (python:3.12-slim) because it needs PyYAML, which
+# only the debian and extras jobs install; the alpine job has no yaml module and
+# the suite would die on the import rather than skip. The ungated SET pin is
+# unchanged at 22 in both measurements. RUN on this host after the landing pass
+# added nine asserted matcher cases: 19 passed / 0 failed rc=0 with six negative
+# controls 6 caught / 0 survived, and against the PRE-CHANGE compose table
+# (origin/main's copy dropped in on disk) it prints 14 passed / 5 failed rc=1,
+# one failure per #366 path.
 #
 # 170 -> RE-MEASURED on 2026-09-17 while merging origin/main into
 # iss/285-vault-brand-remoteref. BOTH sides of this merge said 170 and NEITHER is
@@ -520,7 +556,6 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # docker and kubectl on PATH, touches no cluster and runs in a few seconds, so it
 # has no reason to sit outside the gate. Recording a false exemption here is how
 # rot has stayed hidden for weeks before.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-171}"
 
 
 # 169 -> 170 on 2026-09-17: tests/scripts/test-eso-remoteref-brand.sh joined the
@@ -530,6 +565,7 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-171}"
 # invoked ... (0 allowlisted)" and the gated count 169; wired it printed
 # "pre-merge suite coverage rose to 170, baseline still says 169". The ungated
 # SET pin is unchanged at 22.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-172}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED

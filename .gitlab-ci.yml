@@ -165,6 +165,26 @@ lint:client-connect-routes:
   script:
     - bash tests/scripts/test-client-connect-routes.sh
 
+# The COMPOSE fe route table and the CLUSTER fe route table must send the same
+# /bff path to the same BFF. hugmesh-generator#366: five paths went to admin-bff
+# on compose and user-bff on the cluster, so the compose e2e lane could not see
+# the cluster's 404s. Operator decision 40 (#347) aligned all five onto user-bff,
+# ACCEPTING that /bff/register/google and /bff/register/discord 404 on both lanes
+# until hugmesh/hugmesh-user-bff-api#13 lands. This job simulates Spring Cloud
+# Gateway's first-match-wins ordering over both tables and asserts the alignment,
+# that compose keeps EXACT paths rather than the cluster's subtrees (which would
+# also move /bff/me/appeal and /bff/register/complete off admin-bff), and that
+# those two still reach admin-bff. Six negative controls must each trip it.
+# Offline, no cluster, no network.
+lint:fe-bff-route-lane-parity:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-fe-bff-route-lane-parity.sh
+
 # /_fragments/** must be routed at something that can SERVE bundles. The compose
 # lane pointed it at the remote-fragment SYNC app on its ACTUATOR port, and ran
 # no fragment web server at all — so SYNC_TARGET_DIR was a docroot nothing
