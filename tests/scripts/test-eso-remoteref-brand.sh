@@ -289,8 +289,14 @@ for b in "${BUILDERS[@]}"; do
     eval "${s}"
   done
   # Only builders whose rebrand walks the baked cluster tree can carry the brand.
+  # NOT `grep -q` here: this file runs under `set -o pipefail`, where a -q that exits
+  # the moment it matches can SIGPIPE its upstream and report FAILURE on a match it
+  # actually found. This is a NEGATIVE guard, so that coin flip would fail OPEN and
+  # skip every behavioural check below. Drain with >/dev/null instead.
+  walks=0
   printf '%s\n' "$(extract_fn rebrand_sysroot "${REPO}/${b}")" | grep -av '^[[:space:]]*#' \
-    | grep -aq 'var/lib/hugmesh/cluster' || { ok "${b}: does not walk the baked cluster tree (rule present for parity)"; continue; }
+    | grep -a 'var/lib/hugmesh/cluster' >/dev/null && walks=1
+  [ "${walks}" -eq 1 ] || { ok "${b}: does not walk the baked cluster tree (rule present for parity)"; continue; }
   for corner in "${CORNERS[@]}"; do
     read -r brand org <<<"${corner}"
     SYSROOT="${TMPROOT}/sr"; rm -rf "${SYSROOT}"
