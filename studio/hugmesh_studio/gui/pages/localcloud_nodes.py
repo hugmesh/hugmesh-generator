@@ -203,13 +203,22 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         row = QtWidgets.QWidget()
         brow = QtWidgets.QHBoxLayout(row)
         brow.setContentsMargins(0, 0, 0, 0)
-        self.down_btn = QtWidgets.QPushButton("Stop Kubernetes now")
+        # LABELLED "Delete", not "Stop". Since #356 the Studio also ships a real
+        # non-destructive stop (Halt DevOps lane, on the mesh monitor), and this
+        # button used to be called "Stop Kubernetes now" while doing `kind delete
+        # cluster`. With both verbs in one application that old label was actively
+        # misleading: "stop" now means the halt, and this one destroys.
+        self.down_btn = QtWidgets.QPushButton("Delete the Kubernetes cluster now")
         self.down_btn.setEnabled(False)
         self.down_btn.setToolTip(
-            "Delete the local Kubernetes cluster (`make kind-down`). Destroys the "
-            "DevOps lane ONLY — the docker mesh and every one of its volumes are "
-            "untouched. Armed by the confirmation above; output streams below and "
-            "Cancel stays available.")
+            "DESTRUCTIVE: deletes the local Kubernetes cluster (`make kind-down` -> "
+            "`kind delete cluster`). Destroys the DevOps lane ONLY — the docker mesh "
+            "and every one of its volumes are untouched.\n\nThis is NOT the stop "
+            "control. To stop the lane and KEEP it — cluster, PVCs, Vault KV and all "
+            "— use `Halt DevOps lane` on the mesh monitor, or `make kind-halt`. This "
+            "page needs the cluster gone, which is why the destructive one is here.\n\n"
+            "Armed by the confirmation above; output streams below and Cancel stays "
+            "available.")
         self.down_btn.clicked.connect(self._stop_k8s)
         brow.addWidget(self.down_btn)
         self.cancel_btn = QtWidgets.QPushButton("Cancel")
