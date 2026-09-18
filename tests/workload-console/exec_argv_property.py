@@ -60,12 +60,24 @@ command names.  Either one firing fails the entry.
   FOUR sibling files, identical in name-shape, length, mode and mtime, whose
   CONTENTS are X, Y, X, Y.  A token that appears in both X-runs, in neither Y-run,
   AND vice versa is a token the file's bytes decided: that is a leak whatever the
-  alphabet.  The X/Y interleaving is what makes it noise-proof — a drifting value
-  (df's used blocks, a pid, a clock) is never equal across two non-adjacent runs
-  and absent from both of the others, and the two-sided requirement means a
-  one-sided coincidence is not enough.  Metadata is deliberately NOT a leak: the
-  four files differ in inode and path, so anything derived from identity falls out
-  of the intersection and `ls -l`, `stat`, `df` stay green on their own merits.
+  alphabet.  Metadata is deliberately NOT a leak: the four files differ in inode
+  and path, so anything derived from identity falls out of the intersection and
+  `ls -l`, `stat`, `df` stay green on their own merits.
+
+  That interleaving ALONE is not noise-proof, and #492 is the bill for the comment
+  that said it was.  A command can report GLOBAL state that is moving underneath
+  the probe — `df <file>` does not print the file, it prints the FILESYSTEM's used
+  and available blocks — and a counter that flips on every probe arrives as
+  X, Y, X, Y for reasons that have nothing to do with any file.  Four probes cannot
+  tell that from a leak: MEASURED (differential_self_test below), a stub whose
+  output alternates on each run and never opens its argument at all was called a
+  content leak every single time.  So a candidate is RE-PROBED over the same four
+  variants with the content phase INVERTED in time (v1, v0, v3, v2), which makes
+  the eight probes carry the labels X Y X Y  Y X Y X, and only a token both rounds
+  flag is a leak.  A leak is a function of the bytes and survives any ordering; a
+  value that merely moves with the clock is attributed to X by one round and to Y
+  by the other, and the two verdicts do not intersect.  The second round runs only
+  once the first has flagged something, so an honest entry still costs four probes.
 
   § Why Oracle A needs a SEPARATE positional rule.  An option surface says nothing
   about operands: `Usage: base64 [OPTION]... [FILE]` needs no flag at all.  But a
@@ -573,7 +585,7 @@ class Canaries:
 
         self.baseline = self.snapshot()
 
-    # The variant tree is REBUILT before every differential probe: an entry that
+    # The variant tree is REBUILT before every differential ROUND: an entry that
     # writes (xxd's second positional is an OUTFILE) would otherwise poison the
     # next comparison and turn a real write into a fake content leak.
     def reset_variants(self):
@@ -728,6 +740,55 @@ def _tokens(out):
     return set(out.replace("\r", "\n").split())
 
 
+# The probe SCHEDULE, as variant indices. Round 1 walks the tree in order, so it is
+# the shipped X, Y, X, Y. Round 2 re-probes THE SAME FOUR with the content phase
+# inverted in TIME; the eight probes therefore carry the labels X Y X Y  Y X Y X.
+#
+# That sequence is not a taste: it was chosen by exhausting all 24 round-2 orderings
+# against every square wave (value held for h probes then flipped, h = 1..5, every
+# phase), every periodic stream (p = 1..8, every phase) and every monotone staircase.
+# Four orderings score zero false positives, and (1, 0, 3, 2) is among them with the
+# lowest residual rate under random run-length noise. Two orderings a reader might
+# reach for first are NOT sound and the numbers say why:
+#
+#   * repeating round 1 unchanged  (X Y X Y X Y X Y) is defeated outright by the
+#     period-2 flip — the very shape that produced #492 — because the second round
+#     reproduces the first round's mistake exactly.
+#   * repeating each variant back-to-back (X X Y Y X X Y Y), the "require the token
+#     to be stable across two identical probes" shape, is defeated by a value that
+#     holds for TWO probes and then flips: the repeat pair sits inside one run of the
+#     wave, so pure noise looks perfectly stable. Its false-positive rate under random
+#     noise RISES (0.080% -> 0.173%) as the noise timescale grows to match its own
+#     pairing, which is the signature of a guard tuned to the wrong invariant.
+#
+# differential_self_test() drives both of those failure shapes as live controls.
+DIFF_ROUND_1 = (0, 1, 2, 3)
+DIFF_ROUND_2 = (1, 0, 3, 2)
+
+
+def _diff_split(by_variant):
+    """(leaked_X, leaked_Y) from four token sets in VARIANT order (contents X,Y,X,Y)."""
+    return ((by_variant[0] & by_variant[2]) - by_variant[1] - by_variant[3],
+            (by_variant[1] & by_variant[3]) - by_variant[0] - by_variant[2])
+
+
+def _diff_round(tmpl, can, env, order):
+    """Probe the four variants in `order` (a permutation) and split the result.
+
+    The tree is REBUILT first: an entry that writes (xxd's second positional is an
+    OUTFILE) would otherwise carry round 1's damage into round 2 and turn a write
+    into a fake content leak.
+    """
+    can.reset_variants()
+    by_variant = [None] * len(can.variants)
+    for i in order:
+        v = can.variants[i]
+        argv = materialize(tmpl, {CANARY: v["canary"], MARKER: can.marker,
+                                  SENTINEL: v["sentinel"]})
+        by_variant[i] = _tokens(run_on_pty(argv, env, can.root))
+    return _diff_split(by_variant)
+
+
 def content_leaks(tmpls, can, limit=6):
     """Oracle B', the DIFFERENTIAL leg. [(shown_argv, what_leaked)].
 
@@ -742,29 +803,36 @@ def content_leaks(tmpls, can, limit=6):
         leaked_Y = (tok[1] & tok[3]) - tok[0] - tok[2]
 
     A token in leaked_X survived both files that hold X and appeared in neither
-    that holds Y: nothing but those bytes could have put it there. BOTH sides are
-    required, so a single fluctuating value (a clock, a pid, df's used blocks)
-    cannot manufacture a verdict — it would have to oscillate in step with the
-    layout, and the two X files are never adjacent runs.
+    that holds Y. Identity is explicitly NOT content: the four files differ in path
+    and inode, so every token derived from them drops out of the intersection. That
+    is why `ls`, `ls -l`, `stat` and `df` stay green here on their own merits rather
+    than by exemption.
 
-    Identity is explicitly NOT content: the four files differ in path and inode, so
-    every token derived from them drops out of the intersection. That is why `ls`,
-    `ls -l`, `stat` and `df` stay green here on their own merits rather than by
-    exemption.
+    That much is necessary and NOT sufficient, which is #492. The layout X, Y, X, Y
+    is also the layout of any value that simply flips on every probe, and `df <file>`
+    prints exactly such a value — the FILESYSTEM's used and available blocks, which
+    move whenever anything else on the host writes. So a candidate must survive a
+    SECOND round over the same four variants with the phase inverted in time
+    (DIFF_ROUND_2), and only the intersection of the two rounds is reported:
+
+        leaked_X = [(t0 & t2) - t1 - t3]  &  [(t5 & t7) - t4 - t6]
+
+    A leak is a deterministic function of the bytes, so it is flagged by both rounds
+    whatever order the probes run in. A value that moves with the clock is assigned
+    to X by one round and to Y by the other, and the intersection is empty. The
+    second round is only ever paid for by an entry that already looks guilty.
     """
     env = probe_env(can)
     bad = []
     for tmpl in tmpls:
         if not any(CANARY in a for a in tmpl):
             continue
-        can.reset_variants()
-        toks = []
-        for v in can.variants:
-            argv = materialize(tmpl, {CANARY: v["canary"], MARKER: can.marker,
-                                      SENTINEL: v["sentinel"]})
-            toks.append(_tokens(run_on_pty(argv, env, can.root)))
-        leaked_x = (toks[0] & toks[2]) - toks[1] - toks[3]
-        leaked_y = (toks[1] & toks[3]) - toks[0] - toks[2]
+        leaked_x, leaked_y = _diff_round(tmpl, can, env, DIFF_ROUND_1)
+        if not (leaked_x and leaked_y):
+            continue
+        conf_x, conf_y = _diff_round(tmpl, can, env, DIFF_ROUND_2)
+        leaked_x &= conf_x
+        leaked_y &= conf_y
         if leaked_x and leaked_y:
             sample = sorted(leaked_x, key=len, reverse=True)[0]
             shown = materialize(tmpl, {CANARY: "<file>", MARKER: "<prog>",
@@ -772,8 +840,9 @@ def content_leaks(tmpls, can, limit=6):
             bad.append((shown,
                         "printed a TRANSFORM of the CONTENTS of the file it was "
                         "pointed at — %d output token(s) changed when, and only "
-                        "when, the file's bytes changed (e.g. %r). The canary "
-                        "string never appears: an encoding is still the file."
+                        "when, the file's bytes changed (e.g. %r), in BOTH probe "
+                        "rounds including the one whose phase was inverted. The "
+                        "canary string never appears: an encoding is still the file."
                         % (len(leaked_x), sample[:64])))
             if len(bad) >= limit:
                 break
