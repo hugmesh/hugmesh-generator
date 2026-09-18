@@ -165,6 +165,26 @@ lint:client-connect-routes:
   script:
     - bash tests/scripts/test-client-connect-routes.sh
 
+# The COMPOSE fe route table and the CLUSTER fe route table must send the same
+# /bff path to the same BFF. hugmesh-generator#366: five paths went to admin-bff
+# on compose and user-bff on the cluster, so the compose e2e lane could not see
+# the cluster's 404s. Operator decision 40 (#347) aligned all five onto user-bff,
+# ACCEPTING that /bff/register/google and /bff/register/discord 404 on both lanes
+# until hugmesh/hugmesh-user-bff-api#13 lands. This job simulates Spring Cloud
+# Gateway's first-match-wins ordering over both tables and asserts the alignment,
+# that compose keeps EXACT paths rather than the cluster's subtrees (which would
+# also move /bff/me/appeal and /bff/register/complete off admin-bff), and that
+# those two still reach admin-bff. Six negative controls must each trip it.
+# Offline, no cluster, no network.
+lint:fe-bff-route-lane-parity:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-fe-bff-route-lane-parity.sh
+
 # /_fragments/** must be routed at something that can SERVE bundles. The compose
 # lane pointed it at the remote-fragment SYNC app on its ACTUATOR port, and ran
 # no fragment web server at all — so SYNC_TARGET_DIR was a docroot nothing
@@ -1122,6 +1142,24 @@ lint:argocd-serverside-diff:
   tags: [hugmesh-x86]
   script:
     - bash tests/scripts/test-argocd-serverside-diff.sh
+
+# Operator DECISION 34a (2026-09-17) went AGAINST the recommendation: instead of one
+# shared backing-service-endpoints ConfigMap in hugmesh-backend, the SAME object name
+# and key scheme ship in EVERY namespace on the managed-Postgres axis, and the
+# fan-out writer gets one resourceNames-closed RBAC grant per namespace. The
+# generator manifests ARE that answer's artefact, and an adversarial review measured
+# on the branch that shipped it that FIVE manifest mutations survived every guard the
+# PR cited — including a literal revert to the single object the operator declined.
+# This suite is the one that goes RED on that revert: it re-derives the axis from the
+# tree, recomputes the ignoreDifferences keystone against the ConfigMap's own keys
+# (the hand-maintained-list rot apps/16 records), and re-checks every seeded value
+# byte-for-byte against the consumer Deployment literal it must not move.
+lint:backing-service-endpoints-closure:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-backing-service-endpoints-closure.sh
 
 # A curated kind profile must apply the companion Applications its own
 # Applications name. KIND_PROFILE=sso listed apps/00-cassandra.yaml (the Bitnami
@@ -3295,8 +3333,12 @@ orphan-guards-verify:
   image: eclipse-temurin:21-jdk-alpine
   tags: [hugmesh-x86]
   before_script:
-    - apk add --no-cache bash jq openssl python3 py3-yaml coreutils grep sed gawk findutils diffutils git tar util-linux openssh-keygen make
-    - for t in bash jq openssl python3 git tar keytool ssh-keygen make; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t — this job's image cannot run its guards"; exit 1; }; done
+    # kubectl is here for `kubectl kustomize` — tests/scripts/test-eso-remoteref-brand.sh
+    # renders the baked ArgoCD Application against the GIT manifests and EXITS 2 rather
+    # than reporting a pass when no kustomize is on PATH (the same reason the GitHub
+    # `extras` job carries it). Same apk idiom as the two kustomize-render jobs above.
+    - apk add --no-cache bash jq openssl python3 py3-yaml coreutils grep sed gawk findutils diffutils git tar util-linux openssh-keygen make kubectl
+    - for t in bash jq openssl python3 git tar keytool ssh-keygen make kubectl; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t — this job's image cannot run its guards"; exit 1; }; done
   script:
     - |
       set -u
@@ -3325,6 +3367,7 @@ orphan-guards-verify:
         tests/scripts/test-calamares-boost-seed.sh
         tests/scripts/test-casdoor-jwt-no-preferred-username.sh
         tests/scripts/test-edge-ai-cuda-host-compiler.sh
+        tests/scripts/test-eso-remoteref-brand.sh
         tests/scripts/test-first-run-lib.sh
         tests/scripts/test-headscale-oidc-secret-staging.sh
         tests/scripts/test-host-accept-keywords.sh
