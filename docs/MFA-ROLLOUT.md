@@ -141,6 +141,13 @@ That flips **10 rows** (as of this writing) across three gateways:
 | `hugmesh-be-gateway` | `/bff/superadmin/workloads/**` | `ROLE_SUPERADMIN` |
 | `hugmesh-superadmin-gateway` | `/bff/superadmin/**` | `ROLE_SUPERADMIN` |
 
+An **eleventh** row ends up at `mfa_required = true` without being flipped by this
+`UPDATE`: the `hugmesh-fe-gateway` `/bff/superadmin/games-services/**` **DENY** row,
+which the blanket flip cannot reach (`WHERE allow = true`) and which is seeded by its
+own row-scoped `UPDATE` immediately before it. It is not in the table above because
+this table is the flip's scope, not the floor's — see §5's deny-floor table for the
+floor's full membership, and why a deny row carries one at all.
+
 Read that table twice. `/bff/superadmin/**` is governed on **three** gateways —
 `hugmesh-fe-gateway` joined the be and superadmin gateways when #244 was answered
 ACCEPT — and `/bff/admin/…` on **two**; the write is prefix-based and gateway-blind on
@@ -571,30 +578,68 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
     ORDER BY 1, 2, 3;
    ```
 
-   Expect the 10 rows in §1.2 at `true`, and nothing else. The `allow = true`
-   clause is not cosmetic — it is the **same predicate the flip `UPDATE` uses**, so
-   this query and that `UPDATE` agree on scope by construction rather than by
-   coincidence. It makes no difference to the result **today**: the seed carries no
-   `allow = false` row under either prefix. It starts mattering the day one is
-   added — a deny row denies at the longest match regardless of MFA, so the flip
-   correctly leaves it at `mfa_required = false`, and an operator reading an
+   Expect the 10 rows in §1.2 at `true` — and read what this query does **not**
+   show you before you act on it. The `allow = true` clause is not cosmetic: it is
+   the **same predicate the flip `UPDATE` uses**, so this query and that `UPDATE`
+   agree on scope by construction rather than by coincidence. Since 2026-09-17 that
+   scoping also **hides one row**. The seed now carries an `allow = false` row under
+   the superadmin prefix — `hugmesh-fe-gateway` `/bff/superadmin/games-services/**`,
+   reinstated by operator decision 28 = **D** (hugmesh-generator#347) — and that row
+   carries the floor **too**. **Eleven** rows end up at `mfa_required = true`; this
+   query returns ten of them. A deny row denies at the longest match regardless of
+   MFA, which is why the flip leaves it alone, and why an operator reading an
    un-filtered result would see a `false` under a "fully flipped" prefix and think
-   the rollout had failed.
+   the rollout had failed. Do not now make the opposite mistake: the eleventh row is
+   **not** missing from the rollout, and the step-up floor is **not** off for the
+   games app-store subtree. To audit the **floor** rather than the flip, use:
 
-   > Merge note, 2026-09-16 (hugmesh-generator#351). `integrate/superadmin` added
-   > this clause **and** the deny row that motivated it
-   > (`hugmesh-fe-gateway` `/bff/superadmin/games-services/**`). The clause landed;
-   > the row did not — operator decision 8 (#244 ACCEPT) is SPECIFIC to that row
-   > and was answered "without the games-services deny row". Note the order, which
-   > an earlier draft of this note had backwards: decision 8 is the EARLIER answer
-   > (2026-09-10); decision 20 ("land the whole branch") is the LATER, GENERAL one
-   > (2026-09-16). Recency argues for the row, specificity against it; the specific
-   > answer is applied and the choice is parked for the operator as decision 28.
-   > The row strips the floor because as the longest
-   > matching pattern with `allow = false` it is skipped by the flip and would strip
-   > the MFA floor from exactly that subtree. The reasoning is in
-   > `manifests/route-access/initdb/20-schema.sql`; whether to reinstate it is
-   > parked on #351. That branch also wrote "every row" in place of "the 10 rows"
+   <!-- gate:doc-sql name=floor expect=every-floor-row -->
+
+   ```sql
+   SELECT gateway, url_pattern, role, allow, mfa_required
+     FROM gateway_route_access
+    WHERE mfa_required = true
+    ORDER BY allow, 1, 2, 3;
+   ```
+
+   Expect **11** rows: the 10 above at `allow = true`, plus the one `allow = false`
+   row in the table below. That row **keeps** the floor over its whole subtree
+   rather than removing it, because the gateway computes the privileged step-up
+   floor with `GatewayRouteAccessService.isMfaRequiredSurface()` — longest matching
+   `url_pattern`, then `if (r.mfaRequired()) return true;`, with **no** `allow` test
+   and **no** role test — and not with `decide()`, whose MFA leg is raised only on
+   the arms that GRANT the principal. The blanket flip (`WHERE allow = true`) can
+   never reach a deny row, so this one is seeded by its own row-scoped `UPDATE` in
+   `20-schema.sql`, placed immediately before the flip.
+
+   <!-- gate:deny-floor -->
+
+   | gateway | url_pattern | role | why it carries the floor while denying |
+   |---|---|---|---|
+   | `hugmesh-fe-gateway` | `/bff/superadmin/games-services/**` | `ROLE_SUPERADMIN` | #347 decision 28 = D — the games app-store control plane is walled at the public browser door **and** stays inside the privileged step-up floor. |
+
+   Any other `allow = false` row at `mfa_required = true` is a defect, and the
+   reverse is a lie: `tests/scripts/test-mfa-required-rules.sh` fails on a deny row
+   at `true` that is not in this table (`DENY_TRUE_UNDECLARED`), on a table row the
+   seed does not carry (`DOC_DENY_MISSING` / `DENY_DECLARED_MISSING`), and on this
+   table disappearing.
+
+   > Settled, 2026-09-17 — operator decision 28 = **D** (hugmesh-generator#347),
+   > landed by hugmesh-generator#484. History, because this note has now said both
+   > things. `integrate/superadmin` added the `allow = true` clause **and** the deny
+   > row that motivated it (`hugmesh-fe-gateway`
+   > `/bff/superadmin/games-services/**`). On the 2026-09-16 merge the clause landed
+   > and the row did not: operator decision 8 (#244 ACCEPT) is SPECIFIC to that row
+   > and was answered "without the games-services deny row", while decision 20
+   > ("land the whole branch") is the LATER, GENERAL one — recency argued for the
+   > row, specificity against it, the specific answer was applied and the choice was
+   > parked for the operator as decision 28. Decision 28 answers it: the row goes
+   > back in, with `mfa_required` seeded true on the row itself. That 2026-09-16 note
+   > also said the row "strips the floor". **That was read off the wrong function** —
+   > `decide()`, whose MFA leg is grant-scoped, rather than
+   > `isMfaRequiredSurface()`, which the privileged floor actually calls — and it is
+   > why leaving the row out looked forced. See the paragraph above the table. The
+   > `integrate/superadmin` branch also wrote "every row" in place of "the 10 rows"
    > here, predating the count becoming 10 under the same ACCEPT.
 
    To see the **scope boundary** instead — the 10 gated rows *and* the seven §1.2a
