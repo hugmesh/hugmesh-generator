@@ -110,6 +110,7 @@ from ...core.local_services import (
     describe as local_describe, kind_addon_slugs, local_groups, local_slugs)
 from ...core.progress_parse import ProgressParser
 from ...core import credentials_truth
+from ...core import kind_seed
 from ...core.seeded_credentials import Roster, annotate, load_roster
 from ...core.instance import state_dir
 from ...core.stage_tracker import StageTracker
@@ -1538,10 +1539,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.add_user_btn = QtWidgets.QPushButton("Add user…")
         self.add_user_btn.setToolTip(
             "Create a NEW named account on the RUNNING mesh (username, password, "
-            "roles) by re-running the idempotent seeder with EXTRA_ROLE_USERS — "
-            "the same machinery that seeds mesh-operator, including registration "
-            "stage 2 and Matrix/Mastodon provisioning for the roles it holds. "
-            "The stack must be up (the seeder says so plainly if it is not).")
+            "roles) through that lane's OWN seeder — never a bespoke Casdoor call, "
+            "so the account is created by the machinery that created every other "
+            "persona. On the docker mesh that is the idempotent `make stack-seed` "
+            "with EXTRA_ROLE_USERS (registration stage 2 included); on the kind "
+            "lane it is seed-accounts.sh --roles + apply-systems-roles.sh against "
+            "the live Casdoor, exactly as bootstrap-kind.sh step 10 does, applied "
+            "through the `make view LANE=kind-svc` casdoor door. Either way the "
+            "identity is READ BACK from the mesh afterwards: the seeder's own exit "
+            "code is not evidence. A mesh must be up (it says plainly if not).")
         self.add_user_btn.clicked.connect(self._add_user)
         brow.addWidget(self.add_user_btn)
         # No trailing addStretch: a FlowLayout has no stretch concept, and a
@@ -3487,11 +3493,26 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._creds_dialog.exec()
 
     def _add_user(self):
-        """Add ONE named user to the RUNNING mesh by re-running the idempotent
-        seeder with EXTRA_ROLE_USERS appended (seed-accounts.sh's additive door).
-        The FULL re-seed is the only correct lane: apply-systems-roles.sh sets
-        each role's members to EXACTLY the rendered list, so a single-user
-        render would wipe every other persona's memberships."""
+        """Add ONE named user to the RUNNING mesh — on EITHER lane (#540).
+
+        The dialog is the same on both: username, roles, password. What differs is
+        the APPLY, because the two lanes seed differently and neither may be driven
+        with the other's seeder:
+
+          * COMPOSE — re-run the idempotent seeder with EXTRA_ROLE_USERS appended
+            (``make stack-seed``, seed-accounts.sh's additive door);
+          * KIND — render with ``seed-accounts.sh --roles`` and apply
+            ``roles/apply-systems-roles.sh`` against the live Casdoor, which is what
+            bootstrap-kind.sh step 10 does (``core/kind_seed``).
+
+        Neither is a bespoke Casdoor call: the account is created by exactly the
+        machinery that created every other persona on its lane. The FULL spec list
+        is re-rendered in both cases, because apply-systems-roles.sh sets each
+        role's members to EXACTLY the rendered list — a single-user render would
+        wipe every other persona's memberships.
+
+        The lane is decided in the WORKER (``stack.status()`` is blocking), never
+        here."""
         dlg = AddUserDialog(self.generator_dir, parent=self)
         if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
@@ -3508,7 +3529,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             if spec.count(":") >= 2 else ()
 
         def _seed(on_line, cancel):
-            ok, msg = stack.seed(env, on_line=on_line, cancel=cancel)
+            try:
+                compose_up = bool(stack.status().running)
+            except Exception:               # docker absent: not a compose mesh
+                compose_up = False
+            if compose_up:
+                ok, msg = stack.seed(env, on_line=on_line, cancel=cancel)
+            else:
+                ok, msg = self._add_user_kind(uname, roles, pw_env, password,
+                                              stack, on_line)
             if ok:
                 # Runs on the worker thread; a plain list swap under the GIL, read
                 # on the GUI thread only at the next credentials press. Name and
@@ -3520,6 +3549,29 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._note(f"[add-user] re-seeding with '{uname}' appended (idempotent; "
                    "existing personas re-applied unchanged) …")
         self._launch(f"Adding user {uname}", _seed, stream=True, cancellable=True)
+
+    def _add_user_kind(self, uname, roles, pw_env, password, stack, on_line):
+        """The kind-lane apply. Runs on the WORKER thread (blocking by contract).
+
+        Refuses rather than guessing when no kind cluster is there either: "the
+        casdoor door is not up" would be a true sentence about the wrong problem."""
+        cluster = kind_cluster_name()
+        up = kind_seed.kind_lane_up(cluster=cluster)
+        if up is not True:
+            return False, (
+                "No mesh is running to add a user to: the compose stack is down and "
+                + (f"there is no kind cluster named {cluster}." if up is False else
+                   "docker did not answer about the kind cluster.")
+                + " Start one first.")
+        try:
+            env = stack._build_env(write_overlays=False)      # an add READS the env
+        except Exception:
+            env = None
+        outcome = kind_seed.add_user_kind(
+            generator_dir=self.generator_dir, cluster=cluster,
+            specs=self._added_user_specs, username=uname, roles=roles,
+            password=password, password_env=pw_env, env=env, on_line=on_line)
+        return outcome.ok, outcome.message
 
     def _copy_onion(self):
         """Copy the published .onion address to the clipboard. A normal browser
