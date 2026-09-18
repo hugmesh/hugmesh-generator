@@ -98,7 +98,7 @@ make stack-up ENV=prod CASDOOR_ISSUER=https://id.hugmesh.net     # prod mode
 ## Cold builds — `make stack-m2-bootstrap` (private maven artifacts)
 
 Four Java services (**admin/user/mod-bff, federation-api**) resolve org-PRIVATE
-maven artifacts (`systems.hugmesh:hugmesh-parent/-commons/-auth-core/
+maven artifacts (`net.hugmesh:hugmesh-parent/-commons/-auth-core/
 -build-config`) at **image-build** time via their committed `settings.xml`
 (`${env.CI_API_V4_URL}/groups/${env.GITLAB_GROUP_ID}/-/packages/maven` — the
 GitLab group registry, unreachable off the VPN). While the built
@@ -116,9 +116,11 @@ vendored):
 1. Clones the four library repos at **pinned commits** (the repos carry no git
    tags; each SHA's `pom.xml` is exactly the version the services require — today
    `hugmesh-build-config` **0.5.0**, `hugmesh-parent` **2.8.0**,
-   `hugmesh-commons` **2.1.0** and a single `hugmesh-auth-core` **2.4.2** for both
-   user-bff and admin-bff; ⚠️ auth-core has been re-cut twice under a released
-   coordinate — 2.4.0 → 2.4.1 → 2.4.2 — so re-check
+   `hugmesh-commons` **2.1.0**, and **two** `hugmesh-auth-core` pins — **2.4.2**
+   for user-bff main and **2.5.0** for admin-bff main, by design: the two
+   consumers are on separate release cadences, so a cold build needs both jars
+   in the local registry; ⚠️ auth-core has been re-cut four times under a
+   released coordinate — 2.4.0 → 2.4.1 → 2.4.2 → 2.5.0 — so re-check
    [`tests/stack/m2-bootstrap.sh`](../tests/stack/m2-bootstrap.sh), which is the
    authoritative pin, rather than this sentence)
    into `~/.cache/hugmesh-stack-maven/src` and `mvn install`s them into
@@ -425,6 +427,68 @@ not verify.
 
 The gateway route tables in `tests/stack/gateway-routes/{pki,be,fe}/` are the
 compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
+`tests/scripts/test-fe-bff-route-lane-parity.sh` is the offline guard that keeps
+the fe pair honest for the `/bff/**` surface: it simulates Spring Cloud Gateway's
+first-match-wins ordering over BOTH tables and fails if the same path resolves to
+a different BFF on each.
+
+### Two `/bff/register/*` paths 404 on compose ON PURPOSE (read before filing a bug)
+
+Until 2026-09-17 the two fe route tables disagreed about five `/bff` paths: the
+cluster sent them to **user-bff** (via `/bff/register/**`, `/bff/me/**`,
+`/bff/provision/**`, all declared above its `/bff/**` admin catch-all), while
+compose had no entry for any of them and let all five fall through to its own
+`/bff/**` **admin-bff** catch-all. That split is why the compose e2e lane never
+saw the cluster's 404s (hugmesh-generator#366).
+
+Operator decision 40 (hugmesh-generator#347) aligned compose onto the cluster —
+**all five, both lanes identical** — and accepted the cost explicitly:
+
+| path | before (compose) | after (compose + cluster) | served? |
+|---|---|---|---|
+| `GET /bff/me/namespaces` | admin-bff | **user-bff** | yes |
+| `POST /bff/provision/matrix` | admin-bff | **user-bff** | yes |
+| `POST /bff/provision/mastodon` | admin-bff | **user-bff** | yes |
+| `POST /bff/register/google` | admin-bff | **user-bff** | **NO — 404** |
+| `POST /bff/register/discord` | admin-bff | **user-bff** | **NO — 404** |
+
+user-bff serves the first three (`LegacyPathParityController`,
+hugmesh/hugmesh-user-bff-api#15 @ `c3d24c4`). It has **no handler** for the last
+two — `SsoAuthController` maps the exact path `/bff/register` only — so from that
+commit they **404 on the compose lane too**, exactly as they already did on a
+cluster. The fix is the user-bff handlers
+(**hugmesh/hugmesh-user-bff-api#13**), *not* re-pointing the two routes back at
+admin-bff; the guard above goes red on that revert.
+
+What you will actually notice on a local stack:
+
+- **Nothing, for an anonymous caller.** `/bff/register/**` is seeded `ROLE_USER`
+  in the gateway's `CanonicalSeed`, so an unauthenticated `POST` through the
+  front door was already refused before it reached any BFF.
+- **404 instead of a real answer for a signed-in caller** hitting
+  `/bff/register/google` or `/bff/register/discord` through the front door.
+  Nothing in this repo does: `tests/qemu/seed-accounts.sh` calls
+  `POST ${BFF}/bff/register/google` **directly at admin-bff on `127.0.0.1:8403`,
+  with no gateway in the path**, so it is unaffected and keeps working.
+  `/bff/register/discord` has no hand-written caller at all.
+- **A stale `./.stack-src` breaks the other three.** Compose builds user-bff from
+  `${STACK_SRC:-./.stack-src}/hugmesh-user-bff-api`, so a checkout pinned before
+  `c3d24c4` has no `LegacyPathParityController` and `/bff/me/namespaces` and both
+  `/bff/provision/*` will 404 as well — admin-bff no longer catches them. Symptom:
+  empty namespace grants in admin-ui and a silent provision failure on every
+  sign-in (login-ui swallows it). Re-run `scripts/clone-all-repos.sh`
+  (`make stack-up` does) so `.stack-src` fast-forwards to `main`, then rebuild the
+  `hugmesh-user-bff-api` image.
+- **The mock lane is untouched, because it runs no gateway at all.**
+  `tests/stack/up.sh` starts `mock-bff.mjs` plus the mock Matrix/Mastodon/UI
+  servers as bare node processes ("this never runs a real Spring BFF/gateway"),
+  and the fe route table is mounted only by the compose stack
+  (`compose.local.yaml`: `./gateway-routes/fe:/config:ro`), so no route table is
+  consulted on that lane. Do **not** read the mock lane as evidence that the two
+  register paths still work somewhere: `mock-bff.mjs` answers three of the five
+  itself (`/bff/me/namespaces`, `/bff/provision/matrix`,
+  `/bff/provision/mastodon`) plus `/bff/register/complete`, and has never had a
+  `/bff/register/google` or `/bff/register/discord` handler.
 
 ---
 
