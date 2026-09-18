@@ -310,18 +310,26 @@ write_record() {
 # Build the plan (TSV) and the record (JSON) from two `kubectl get -o json` dumps.
 #   APP <TAB> namespace <TAB> name
 #   WL  <TAB> namespace <TAB> kind <TAB> name <TAB> replicas
+#
+# THE DUMPS TRAVEL AS FILE PATHS, NEVER AS ENVIRONMENT VALUES. Measured against the
+# operator's live cluster on 2026-09-17: `kubectl get deployments,statefulsets -A -o
+# json` there is far past what the environment can carry, and passing it inline died
+# with "/usr/bin/python3: Argument list too long" (E2BIG) — which this script then
+# correctly refused on, but it could never have halted anything. A 4-Application
+# fixture never comes close to that ceiling, so only real data showed it.
 plan_from_json() {
   python3 - <<'PY'
 import json, os, sys, datetime
 
 def load(name):
-    raw = os.environ.get(name, "")
+    with open(os.environ[name]) as fh:
+        raw = fh.read()
     if not raw.strip():
         sys.exit(1)
     return json.loads(raw)
 
-apps = load("HALT_APPS_JSON")
-wls = load("HALT_WL_JSON")
+apps = load("HALT_APPS_FILE")
+wls = load("HALT_WL_FILE")
 skip = set(os.environ["HALT_SKIP_NS"].split())
 
 app_rows, wl_rows = [], []
@@ -400,7 +408,8 @@ with open(os.environ["HALT_PLAN"]) as fh:
         if parts and parts[0] == "APP":
             want.add((parts[1], parts[2]))
 
-raw = os.environ.get("HALT_APPS_JSON", "")
+with open(os.environ["HALT_APPS_FILE"]) as fh:
+    raw = fh.read()
 if not raw.strip():
     sys.exit(1)
 for a in json.loads(raw).get("items", []):
@@ -527,17 +536,22 @@ verb_halt() {
     Halting twice would record a zeroed cluster as its own 'before', and the original replica counts would be lost."
   fi
 
-  apps_json="$(kc get applications -A -o json 2>/dev/null)" || \
+  # Straight to a FILE. On a real cluster these dumps are far too big to travel in
+  # the environment (see plan_from_json's note), and a command substitution would
+  # also swallow a partial read as if it were a whole one.
+  apps_json="${TMPDIR_HALT}/apps.json"
+  wl_json="${TMPDIR_HALT}/wl.json"
+  kc get applications -A -o json >"${apps_json}" 2>/dev/null || \
     die 5 "could not list ArgoCD Applications - refusing rather than halting blind"
-  [ -n "${apps_json}" ] || die 5 "empty answer listing ArgoCD Applications - refusing rather than halting blind"
-  wl_json="$(kc get deployments,statefulsets -A -o json 2>/dev/null)" || \
+  [ -s "${apps_json}" ] || die 5 "empty answer listing ArgoCD Applications - refusing rather than halting blind"
+  kc get deployments,statefulsets -A -o json >"${wl_json}" 2>/dev/null || \
     die 5 "could not list Deployments/StatefulSets - refusing rather than halting blind"
-  [ -n "${wl_json}" ] || die 5 "empty answer listing Deployments/StatefulSets - refusing rather than halting blind"
+  [ -s "${wl_json}" ] || die 5 "empty answer listing Deployments/StatefulSets - refusing rather than halting blind"
 
   plan="${TMPDIR_HALT}/plan.tsv"
   record="${TMPDIR_HALT}/record.json"
 
-  if ! HALT_APPS_JSON="${apps_json}" HALT_WL_JSON="${wl_json}" \
+  if ! HALT_APPS_FILE="${apps_json}" HALT_WL_FILE="${wl_json}" \
        HALT_CLUSTER="${CLUSTER_NAME}" HALT_CTX="${KCTX}" HALT_ARGOCD_NS="${ARGOCD_NS}" \
        HALT_SKIP_NS="${SKIP_NS}" HALT_PLAN="${plan}" HALT_RECORD="${record}" \
        plan_from_json; then
@@ -571,22 +585,27 @@ verb_halt() {
   # HUGMESH_GITOPS_ROOT_RECURSE=1 restores a repo-recursing root, so VERIFY instead
   # of assuming. One settle pass, then re-suspend and SAY it happened.
   if [ "${SETTLE_S}" != "0" ]; then sleep "${SETTLE_S}"; fi
-  apps_json="$(kc get applications -A -o json 2>/dev/null)"
+  kc get applications -A -o json >"${apps_json}" 2>/dev/null
   leftover=""
-  if [ -n "${apps_json}" ]; then
-    leftover="$(HALT_PLAN="${plan}" HALT_APPS_JSON="${apps_json}" reasserted_apps)"
+  if [ -s "${apps_json}" ]; then
+    leftover="$(HALT_PLAN="${plan}" HALT_APPS_FILE="${apps_json}" reasserted_apps)"
   else
     info "could not re-read Applications to verify the suspend held - it is NOT confirmed"
     failures=$((failures + 1))
   fi
   if [ -n "${leftover}" ]; then
-    info "re-asserted by a controller after the first suspend; suspending again:"
+    # Stated as what was OBSERVED, not as a diagnosis. "Still automated" has two
+    # causes — the patch was refused, or a parent re-asserted it — and this pass
+    # cannot tell them apart. Naming one of them here would send the reader to the
+    # wrong layer, which is the cost this repo has already paid for a confident
+    # wrong message (kind-doctor's whole preamble is about that).
+    info "still auto-syncing after the first suspend; suspending again:"
     while IFS=$'\t' read -r ns name; do
       [ -n "${ns}" ] || continue
       info "  ${ns}/${name}"
       if ! kc -n "${ns}" patch application "${name}" --type=merge \
              -p '{"spec":{"syncPolicy":{"automated":null}}}' >/dev/null 2>&1; then
-        info "  FAILED again: ${ns}/${name} - a parent is re-asserting it"
+        info "  the second patch of ${ns}/${name} was REFUSED by the API"
         failures=$((failures + 1))
       fi
     done <<< "${leftover}"
@@ -598,20 +617,22 @@ verb_halt() {
     # 44 rejected. So the second attempt is verified too, and anything still
     # automated is a FAILURE, named, not a retry we shrug at.
     if [ "${SETTLE_S}" != "0" ]; then sleep "${SETTLE_S}"; fi
-    apps_json="$(kc get applications -A -o json 2>/dev/null)"
-    if [ -z "${apps_json}" ]; then
+    kc get applications -A -o json >"${apps_json}" 2>/dev/null
+    if [ ! -s "${apps_json}" ]; then
       info "could not re-read Applications a second time - the suspend is NOT confirmed"
       failures=$((failures + 1))
     else
-      leftover="$(HALT_PLAN="${plan}" HALT_APPS_JSON="${apps_json}" reasserted_apps)"
+      leftover="$(HALT_PLAN="${plan}" HALT_APPS_FILE="${apps_json}" reasserted_apps)"
       if [ -n "${leftover}" ]; then
-        info "STILL auto-syncing after two suspends - a parent keeps re-asserting:"
+        info "STILL auto-syncing after two suspends:"
         while IFS=$'\t' read -r ns name; do
           [ -n "${ns}" ] || continue
           info "  ${ns}/${name}"
           failures=$((failures + 1))
         done <<< "${leftover}"
-        info "These Applications will scale their workloads back up. This halt is NOT complete."
+        info "Either the patches were refused (the lines above say so) or a parent keeps"
+        info "re-asserting them. Whichever it is: these Applications will scale their"
+        info "workloads back up, so this halt is NOT complete."
       fi
     fi
   fi

@@ -45,9 +45,9 @@
 #   fake REFUSES any call without it (exit 90). Without the pin, a halt run with a
 #   work kubeconfig loaded would scale down someone else's cluster. Scenario 17.
 #
-# THE MUTATION BATTERY this suite is measured against — 15 applied to a COPY of
+# THE MUTATION BATTERY this suite is measured against — 16 applied to a COPY of
 # scripts/kind-halt.sh (never the file itself, and never a file bash is running),
-# each verified by sha256 to have CHANGED the copy. 15 applied, 15 killed,
+# each verified by sha256 to have CHANGED the copy. 16 applied, 16 killed,
 # 2026-09-17:
 #
 #   M1  census: a FAILING `kind get clusters` is swallowed -> reads as "not listed"
@@ -65,6 +65,7 @@
 #   M13 render: stop reporting the health each Application froze in
 #   M14 halt: report a failed record write as success
 #   M15 census: swallow a failed `docker inspect` (a dead socket reads as fine)
+#   M16 plan: send the cluster dumps through the ENVIRONMENT again (the E2BIG bug)
 #
 # M11 SURVIVED the first time this battery ran, and the reason is worth keeping.
 # The halt verifies its suspend and re-suspends anything a parent re-asserted — and
@@ -447,7 +448,7 @@ if [ "$(automated_of mesh-a)" = "null" ]; then ok "S8  auto-sync suspended on an
 # The verify-and-retry pass is a NET, not the mechanism. On a healthy cluster the
 # first suspend must be the one that works; if the retry is silently doing the job
 # the primary path could be dead and nothing would say so.
-if notsaw "re-asserted by a controller"; then ok "S8  the first suspend pass is what suspends — the retry net is not doing the work"; else bad "S8  the retry pass had to re-suspend on a cluster with nothing re-asserting"; fi
+if notsaw "still auto-syncing after the first suspend"; then ok "S8  the first suspend pass is what suspends — the retry net is not doing the work"; else bad "S8  the retry pass had to re-suspend on a cluster with nothing re-asserting"; fi
 
 # THE SHARED NAME. The only docker verb this control may ever use is `inspect`.
 if [ -z "$(grep -a -v '^docker inspect ' "${SCEN}/docker.log" 2>/dev/null)" ]; then
@@ -566,8 +567,37 @@ scenario persistent-reassert
 printf 'mesh-a\n' > "${SCEN}/reassert"
 run_halt; expect_rc 6 "$?" "S25 a parent that keeps re-asserting -> exit 6, never a green halt"
 if saw "STILL auto-syncing after two suspends"; then ok "S25 says the suspend did not hold"; else bad "S25 claimed a halt that did not hold"; fi
-if saw "This halt is NOT complete"; then ok "S25 says plainly the halt is incomplete"; else bad "S25 did not say the halt was incomplete"; fi
+if saw "halt is NOT complete"; then ok "S25 says plainly the halt is incomplete"; else bad "S25 did not say the halt was incomplete"; fi
 if saw "mesh-a"; then ok "S25 names the Application that would not stay suspended"; else bad "S25 did not name the straggler"; fi
+
+# THE E2BIG REGRESSION, and the reason a fixture suite needs one big fixture.
+#
+# The first version of kind-halt.sh passed both `kubectl get -o json` dumps to its
+# python helpers through the ENVIRONMENT. Against the four-Application fixture above
+# that works forever. Against the operator's real cluster it died on
+#     /usr/bin/python3: Argument list too long
+# and the control refused every time — it could never have halted anything. It was
+# found only by running the real thing against real cluster data with writes blocked,
+# never by this suite. The dumps now travel as FILE PATHS; this scenario is what
+# stops that from coming back, by making the fixture itself exceed what the
+# environment can carry.
+scenario oversized-cluster-json
+SCEN="${SCEN}" python3 -c '
+import json, os
+p = os.path.join(os.environ["SCEN"], "wl.json")
+d = json.load(open(p))
+# ~4 MB of annotations on a workload that is on the mandatory floor, so the bulk
+# costs one parse and no extra writes. ARG_MAX on this class of host is ~2 MB for
+# the whole environment plus argv, so this is comfortably past it.
+for i in d["items"]:
+    if i["metadata"]["name"] == "coredns":
+        i["metadata"]["annotations"] = {"kubectl.kubernetes.io/last-applied": "x" * 4_000_000}
+json.dump(d, open(p, "w"))
+print("wl.json is now %.1f MB" % (os.path.getsize(p) / 1e6))'
+run_halt; rc=$?
+expect_rc 0 "${rc}" "S26 a cluster whose JSON exceeds ARG_MAX still halts (the E2BIG regression)"
+if [ "$(replicas_of hugmesh-backend api)" = "0" ]; then ok "S26 the plan was still built and applied from the oversized dump"; else bad "S26 the oversized dump broke the plan: api is $(replicas_of hugmesh-backend api)"; fi
+if notsaw "Argument list too long"; then ok "S26 no E2BIG"; else bad "S26 E2BIG: the dumps are travelling through the environment again"; fi
 
 scenario record-write-fails
 echo 1 > "${SCEN}/cm_write_rc"
