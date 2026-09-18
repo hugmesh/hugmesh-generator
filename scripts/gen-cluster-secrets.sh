@@ -56,31 +56,37 @@ CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-hugmesh.net}"
 # THE MOUNT IS STILL WRITER-SIDE ONLY; THE BASE PATH IS NOT ANY MORE.
 # (issue #285; decision 22 on #347, operator 2026-09-16 "A: drop both controls";
 #  decision 38 = B on #347, operator 2026-09-17 "the reader follows the writer"):
-#   * the mount is pinned in specs/cluster/manifests/external-secrets/secretstore.yaml
+#   * the MOUNT is pinned in specs/cluster/manifests/external-secrets/secretstore.yaml
 #     (`path: "secret"`, server vault.vault.svc), which apps/04-external-secrets-config
 #     .yaml serves with automated { prune: true, selfHeal: true } — ArgoCD re-applies
 #     it from git on every reconcile, so nothing image-side or kubectl-side re-points it;
-#   * the BASE PATH is no longer pinned — decision 38 = B on #347 (operator,
-#     2026-09-17) made the READER FOLLOW THIS WRITER. The 143 remoteRef keys under
-#     specs/cluster still read the literal `hugmesh/<service>` IN GIT (that is the
-#     DEFAULT render and must stay byte-identical), and rebrand_sysroot() in every
-#     build-*-stage4.sh now rewrites that first path segment to <BRAND> in the baked
-#     tree at ${SYSROOT}/var/lib/hugmesh/cluster — the same segment BASE= below
-#     writes. Pinned by tests/scripts/test-eso-remoteref-brand.sh.
-#     WHAT THAT REPLACED, measured 2026-09-17 by driving the real rebrand_sysroot
-#     over the real specs/cluster tree: the chain's catch-all `hugmesh -> ORG` rule
-#     ALREADY rewrote all 143 keys — to ORG, not BRAND. So the claim this comment
-#     used to make ("the reader is the LITERAL hugmesh/<service>") was true of the
-#     git tree and FALSE of what a device runs, and reader and writer agreed only
-#     when ORG == BRAND. Three of the four corners were broken: (BRAND=acme,
-#     ORG=widgetco) and (BRAND=hugmesh, ORG=widgetco) read `widgetco/...`, and
-#     (BRAND=acme, ORG=hugmesh) — i.e. `--brand acme` with no `--org` — read
-#     `hugmesh/...`, which is the exact symptom issue #285 describes.
-# So a NON-DEFAULT VAULT_KV_MOUNT still makes this script write where the cluster
-# does not read: the MOUNT half is unchanged and remains pinned at "secret" by
-# secretstore.yaml under a prune+selfHeal Application. Decision 38 moved the BASE
-# PATH half only. The matching image-builder flags --vault-kv-mount /
-# --vault-base-path were removed by decision 22.
+#   * the BASE PATH now FOLLOWS THIS WRITER. The 143 `key: hugmesh/…` literals under
+#     specs/cluster are the DEFAULT RENDER and must stay byte-identical in git, because
+#     ArgoCD fetches those manifests FROM GIT and every mesh gets the same bytes. What
+#     moves is the render: the ClusterSecretStore carries the annotation
+#     platform.hugmesh.net/vault-base, a `replacements` block in that directory's
+#     kustomization.yaml copies it into the first segment of all 121 served remoteRef
+#     keys, apps/04-external-secrets-config.yaml carries a one-line kustomize op that
+#     SETS the annotation, and rebrand_sysroot() in every build-*-stage4.sh rewrites
+#     that one value to <BRAND> — the Application object is applied from the image's
+#     BAKED tree, so it is the only brand-aware thing on ArgoCD's serving path.
+#     apps/12-cloudflared.yaml does the same for its one key, and
+#     apps/03b-harbor-provision.yaml moves the SECOND writer (the in-cluster
+#     harbor-provision Job's VAULT_KV_BASE) with it. Pinned end to end by
+#     tests/scripts/test-eso-remoteref-brand.sh, which renders the baked Application
+#     against the git manifests through real kustomize.
+#     WHAT THIS REPLACED — and the trap to avoid if you re-derive it: a sed over the
+#     baked manifests copy at ${SYSROOT}/var/lib/hugmesh/cluster/manifests is INERT.
+#     bootstrap.sh applies from the baked tree only namespaces/, manifests/local-path
+#     and apps/*.yaml; the manifests those Applications point at come from the git
+#     repoURL. Measured against the live cluster on the build host, 2026-09-17:
+#     external-secrets-config -> repoURL github.com/hugmesh/hugmesh-generator.git @ main,
+#     path specs/cluster/manifests/external-secrets.
+# So a NON-DEFAULT VAULT_KV_MOUNT still makes this script write where the cluster does
+# not read: the MOUNT half is unchanged and remains pinned at "secret" by
+# secretstore.yaml under a prune+selfHeal Application. Decision 38 moved the BASE PATH
+# half only. The matching image-builder flags --vault-kv-mount / --vault-base-path were
+# removed by decision 22.
 VAULT_KV_MOUNT="${VAULT_KV_MOUNT:-secret}"
 if [ -f "${REPO_DIR}/brand.conf" ]; then
     # shellcheck disable=SC1091

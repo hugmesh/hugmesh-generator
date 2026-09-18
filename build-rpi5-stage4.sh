@@ -2273,9 +2273,9 @@ rebrand_sysroot() {
     # Harbor image-project segment (registry.<host>/<project>/<svc>). Defaults to the
     # brand; the HARBOR_PROJECT env is a first-class seam for a differently-named project.
     local _hproj; _hproj="$(_sed_rep_escape "${HARBOR_PROJECT:-${BRAND}}")"
-    # Vault KV base segment (issue #285 / decision 38 = B): the ExternalSecret
-    # remoteRef prefix must equal gen-cluster-secrets.sh's BASE, i.e. BRAND.
-    # Escaped because it lands on the REPLACEMENT side of a `sed s|..|VALUE|`.
+    # Escaped brand for the vault-base sentinel restore below (every other builder
+    # already had one). The five PRE-EXISTING raw interpolations in this function are
+    # issue #491 and are deliberately left alone here.
     local _brand; _brand="$(_sed_rep_escape "${BRAND}")"
     local roots=("${SYSROOT}/var/lib/hugmesh/cluster" "${SYSROOT}/etc/hugmesh")
     local f
@@ -2310,24 +2310,33 @@ rebrand_sysroot() {
         # still rewritten by that catch-all: unsupported. The sentinels contain neither
         # `hugmesh` nor `hugmesh-`, so the middle rules skip them; the last -e rules
         # restore them verbatim.
-        # VAULT KV BASE — issue #285, decision 38 = B (hugmesh-generator#347).
-        # An ExternalSecret's remoteRef is `key: <base>/<doc>` and <base> must equal
-        # the segment the WRITER uses: scripts/gen-cluster-secrets.sh writes under
-        # BASE="${BRAND:-hugmesh}". Before the sentinel pair below, the catch-all
-        # `hugmesh -> ORG` rule rewrote every one of those keys to the ORG knob, so
-        # the READER tracked ORG while the WRITER tracked BRAND and the two agreed
-        # only when ORG == BRAND. Measured 2026-09-17 by driving this function over
-        # the real specs/cluster tree: 143 remoteRef keys, and three of the four
-        # BRAND/ORG corners wrong — (acme,widgetco) and (hugmesh,widgetco) read
-        # `widgetco/...`, (acme,hugmesh) read `hugmesh/...`, in every case a path
-        # gen-cluster-secrets.sh never wrote, so ESO resolves nothing and the
-        # workload Secrets are never materialized. Captured FIRST and restored to
-        # BRAND LAST so the title/games/domain/registry/brand/org rules in between
-        # cannot touch it. The default brand is unaffected: the whole function
-        # early-returns on default branding, and with BRAND=hugmesh the restore is
-        # a byte no-op. Pinned by tests/scripts/test-eso-remoteref-brand.sh.
+        # VAULT KV BASE — issue #285, decision 38 = B on #347 ("the reader follows
+        # the writer"). An ExternalSecret's remoteRef is `key: <base>/<doc>` and <base>
+        # must equal the segment the WRITER uses (scripts/gen-cluster-secrets.sh writes
+        # under BASE="${BRAND:-hugmesh}"; the in-cluster harbor-provision Job writes
+        # <base>/harbor-robots). MEASURED 2026-09-17, and it is the whole reason this
+        # rule is shaped the way it is: ArgoCD does NOT read the manifests under
+        # ${SYSROOT}/var/lib/hugmesh/cluster/manifests. specs/cluster/apps/04-external-
+        # secrets-config.yaml (and 03b, and 12) are Applications whose source is a git
+        # repoURL + path, and specs/cluster/bootstrap/bootstrap.sh applies from the baked
+        # tree ONLY namespaces/, manifests/local-path and apps/*.yaml. So a sed over the
+        # baked manifests/ subtree is INERT — the live cluster on this build host was read
+        # to confirm it (external-secrets-config: repoURL github.com/hugmesh/hugmesh-
+        # generator.git @ main, path specs/cluster/manifests/external-secrets).
+        # What IS live is apps/*.yaml, so that is where the brand is carried: each of
+        # those three Applications holds a one-line kustomize JSON-6902 op setting the
+        # platform.hugmesh.net/vault-base annotation, a `replacements` block in the
+        # git-served kustomization.yaml copies that annotation into every remoteRef base
+        # (and onto harbor's VAULT_KV_BASE env), and the two rules below are what make
+        # that one value follow BRAND instead of being eaten by the catch-all
+        # `hugmesh -> ORG`. Captured FIRST, restored LAST, so the middle knobs cannot
+        # touch it. The second rule keeps the baked (unserved) annotation defaults in
+        # agreement with what the served render produces. Default brand: the whole
+        # function early-returns, so this is a byte no-op.
+        # Pinned by tests/scripts/test-eso-remoteref-brand.sh.
         sed -i \
-            -e "s|\(key: *['\"]\?\)hugmesh/|\1@@SDSYSVAULTBASE@@/|g" \
+            -e "s|\(~1vault-base, value: \"\)hugmesh\(\"\)|\1@@SDSYSVAULTBASE@@\2|g" \
+            -e "s|\(vault-base: \"\)hugmesh\(\"\)|\1@@SDSYSVAULTBASE@@\2|g" \
             -e "s|^hugmesh\.net/|@@SDSYSKEY@@/|g" \
             -e "s|\([ {(,=\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
             -e "s|hugmesh\\\\\.net/|@@SDSYSKEYESC@@/|g" \
@@ -2342,7 +2351,7 @@ rebrand_sysroot() {
             -e "s|@@SDSYSAPIGRP@@|platform.hugmesh.net|g" \
             -e "s|@@SDSYSKEYESC@@/|hugmesh\\\\.net/|g" \
             -e "s|@@SDSYSKEY@@/|hugmesh.net/|g" \
-            -e "s|@@SDSYSVAULTBASE@@/|${_brand}/|g" \
+            -e "s|@@SDSYSVAULTBASE@@|${_brand}|g" \
             "${f}"
     done < <(find "${roots[@]}" -type f -print0 2>/dev/null)
     info "Rebrand complete (compound names like '${BRAND}-host-shell' may want review)."
