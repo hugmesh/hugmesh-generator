@@ -87,10 +87,25 @@ def bad(msg):
 
 # ---------------------------------------------------------------- matching ---
 def ant_to_re(pattern):
-    """Spring's Ant path matching: ** crosses /, * does not."""
+    """Spring's path matching: ** crosses /, * does not.
+
+    TRAILING `/**` MATCHES ZERO SEGMENTS. Both AntPathMatcher and the
+    PathPattern parser webflux actually uses treat `/bff/me/**` as matching the
+    bare `/bff/me` as well as `/bff/me/x`. Rendering it as `^/bff/me/.*$` — the
+    naive translation — would make a bare-prefix probe (`/bff/me`,
+    `/bff/register`, `/bff/provision`) report a CROSS-LANE DISAGREEMENT that the
+    real gateways do not have: the cluster's subtree route would be skipped and
+    the probe would fall through to `/bff/**`. No probe in FIVE or HOLDBACK is a
+    bare prefix today, so this is a correctness fix for the NEXT probe someone
+    adds, not a change to any current verdict. The MATCHER_CASES block below
+    pins the semantics so it cannot silently regress.
+    """
     out, i = [], 0
     while i < len(pattern):
-        if pattern.startswith("**", i):
+        if pattern.startswith("/**", i) and i + 3 == len(pattern):
+            out.append("(?:/.*)?")
+            i += 3
+        elif pattern.startswith("**", i):
             out.append(".*")
             i += 2
         elif pattern[i] == "*":
@@ -104,8 +119,14 @@ def ant_to_re(pattern):
 
 def first_match(routes, path):
     """SCG semantics: first route in DECLARED ORDER whose Path predicate holds.
-    Host/Header predicates are ignored on purpose — no /bff route in either table
-    carries one, and the check below fails loudly if that ever stops being true."""
+
+    A route carrying a Host or Header predicate is SKIPPED rather than modelled:
+    this simulator has no request to evaluate them against. That is safe only
+    while no /bff route in either table gates on one, which is exactly what
+    check 0 below asserts — and check 0 is scoped to /bff paths, because those
+    are the only paths this guard reasons about. A Host-scoped /bff route added
+    to one lane only would therefore be caught by check 0 (loudly), not silently
+    mis-simulated here."""
     for r in routes:
         if r["host"] or r["header"]:
             continue
@@ -194,6 +215,22 @@ HOLDBACK = [
 # Compose must never carry these. They are the cluster's spelling.
 FORBIDDEN_ON_COMPOSE = ["/bff/me/**", "/bff/register/**", "/bff/provision/**"]
 
+# The two matching rules every verdict above rests on. Pinned here because a
+# wrong matcher does not fail loudly — it silently answers the WRONG service and
+# every assertion below inherits the error. Case 1 is the zero-segment rule the
+# naive Ant translation gets wrong (see ant_to_re).
+MATCHER_CASES = [
+    ("/bff/me/**",   "/bff/me",                True),
+    ("/bff/me/**",   "/bff/me/namespaces",     True),
+    ("/bff/me/**",   "/bff/me/appeal/attach",  True),
+    ("/bff/me/**",   "/bff/mex",               False),
+    ("/bff/me/**",   "/bff/meow/x",            False),
+    ("/bff/**",      "/bff/register/google",   True),
+    ("/bff/register", "/bff/register/google",  False),
+    ("/bff/*",       "/bff/register/google",   False),
+    ("/bff/*",       "/bff/register",          True),
+]
+
 
 def check(compose, cluster, report=False):
     """Every assertion, over PARSED tables. Returns a list of failure strings so
@@ -269,6 +306,16 @@ compose = load_compose_routes(COMPOSE_FE)
 cluster = load_cluster_routes(CLUSTER_FE)
 print(f"parsed {len(compose)} compose routes, {len(cluster)} cluster routes")
 
+print("\n== path-matcher semantics ==")
+for pat, probe, want in MATCHER_CASES:
+    got = bool(ant_to_re(pat).search(probe))
+    if got == want:
+        ok(f"'{pat}' {'matches' if want else 'does not match'} '{probe}'")
+    else:
+        bad(f"matcher: '{pat}' vs '{probe}' -> {got}, expected {want}. Every "
+            f"lane verdict in this file is computed with this matcher, so a "
+            f"wrong answer here is a wrong answer everywhere.")
+
 if not compose or not cluster:
     print("FATAL: parsed ZERO routes out of a table — the shape changed.",
           file=sys.stderr)
@@ -291,6 +338,25 @@ for path, owner, why in HOLDBACK:
               f"compose table.")
     else:
         print(f"  NOTE [cluster] {path} -> {ks} (agrees with compose)")
+
+# BARE PREFIXES — reported, not asserted. Only visible at all because ant_to_re
+# gives trailing `/**` its real zero-segment semantics (see its docstring): the
+# cluster's `/bff/provision/**` claims the bare `/bff/provision`, while compose,
+# which carries exact paths, lets it fall to `/bff/**`. HARMLESS TODAY, measured:
+# no BFF maps a bare prefix — user-bff origin/main c3d24c4 maps /bff/me,
+# /bff/register (SsoAuthController) and /me/namespaces + /provision/{matrix,
+# mastodon} (LegacyPathParityController), admin-bff origin/main maps
+# /provision/matrix + /provision/mastodon (AuthController) — so a bare
+# /bff/provision 404s whichever service answers it. Printed so that a future
+# handler at a bare prefix is a decision somebody makes on purpose rather than a
+# route-table accident.
+for bare in ("/bff/me", "/bff/register", "/bff/provision"):
+    c = first_match(compose, bare)
+    k = first_match(cluster, bare)
+    cs = service_of(c["uri"]) if c else None
+    ks = service_of(k["uri"]) if k else None
+    verdict = "agree" if cs == ks else "DIVERGE (no handler either side today)"
+    print(f"  NOTE bare {bare}: compose -> {cs}, cluster -> {ks} — {verdict}")
 
 # ------------------------------------------------------- negative controls ---
 # Each mutation must produce at least one failure. A control that SURVIVES means

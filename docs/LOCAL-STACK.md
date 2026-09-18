@@ -477,6 +477,16 @@ What you will actually notice on a local stack:
   sign-in (login-ui swallows it). Re-run `scripts/clone-all-repos.sh`
   (`make stack-up` does) so `.stack-src` fast-forwards to `main`, then rebuild the
   `hugmesh-user-bff-api` image.
+- **The mock lane is untouched, because it runs no gateway at all.**
+  `tests/stack/up.sh` starts `mock-bff.mjs` plus the mock Matrix/Mastodon/UI
+  servers as bare node processes ("this never runs a real Spring BFF/gateway"),
+  and the fe route table is mounted only by the compose stack
+  (`compose.local.yaml`: `./gateway-routes/fe:/config:ro`), so no route table is
+  consulted on that lane. Do **not** read the mock lane as evidence that the two
+  register paths still work somewhere: `mock-bff.mjs` answers three of the five
+  itself (`/bff/me/namespaces`, `/bff/provision/matrix`,
+  `/bff/provision/mastodon`) plus `/bff/register/complete`, and has never had a
+  `/bff/register/google` or `/bff/register/discord` handler.
 
 ---
 
