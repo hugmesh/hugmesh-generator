@@ -86,11 +86,16 @@ def test_it_offers_the_domain_catalogue_and_not_the_infra_slugs():
 
 
 def test_it_says_where_the_infra_slugs_live_instead_of_dropping_them_silently():
+    """#497: reachable from the same flow AND visibly not domain-scoped. Each infra
+    slug is printed with the scope it really has and where it IS set."""
     j = _at_services("chat.example.org")
     text = "\n".join(j.lines())
     for infra in INFRA_SERVICES_CHOICES:
         assert infra in text
-    assert "node- or cluster-plane scoped" in text
+    assert "NOT domain-scoped" in text
+    assert ds.SCOPE_LABELS[ds.SCOPE_NODE] in text
+    for slug, where in ds.INFRA_WHERE.items():
+        assert where in text, slug
 
 
 def test_it_prints_the_not_yet_enforced_note():
