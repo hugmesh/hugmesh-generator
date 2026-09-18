@@ -766,6 +766,18 @@ emit("DOMAIN_TIGHTENING_KEPT", "yes" if pd["tighten_kept"] else "no")
 emit("DOMAIN_TIGHTENING_SCOPED_ONLY", "yes" if pd["tighten_scoped_only"] else "no")
 
 rows = [(g, p, r, bool(a), bool(m)) for (g, p, r, a, m) in final]
+# The two behavioural models below (_mfa_surface / _decide) are DOMAIN-BLIND: they
+# rank on (gateway, url_pattern) and never transcribe
+# GatewayRouteAccessService.domainApplies(). That is inert only while the seed's
+# FINAL state carries no domain-scoped row — the per-domain rows this file inserts
+# are inside a SAVEPOINT that is rolled back, so this must read 0. If it ever does
+# not, the models silently start answering for a row the gateway would skip on
+# another domain, so the gate fails instead of pretending (raised 2026-09-17 with
+# the skeptic's note on the _mfa_surface transcription).
+emit("DOMAIN_SCOPED_SEED_ROWS", con.execute(
+    "SELECT count(*) FROM gateway_route_access "
+    "WHERE COALESCE(NULLIF(lower(trim(COALESCE(domain, ''))), 'default'), '') <> ''"
+).fetchone()[0])
 flipped = sorted((g, p, r) for (g, p, r, a, m) in rows if m)
 emit("FLIPPED", len(flipped))
 for g, p, r in flipped:
@@ -857,6 +869,11 @@ def _mfa_surface(gateway, path):
         authority test. It is what GatewayRouteAccessFilter's PRIVILEGED floor
         calls, on both the JWT and the opaque-session branch.
     So a deny row that wins the longest match DECIDES the floor for its subtree.
+
+    NOT transcribed: the real function's domainApplies(r, targetDomain) guard. This
+    model is domain-blind, which is faithful only while the seed's final state has
+    no domain-scoped row — asserted separately as DOMAIN_SCOPED_SEED_ROWS = 0, so
+    the omission cannot go quiet. _decide() below has the same limitation.
     """
     best = -1
     for (g, p, r, a, m) in rows:
@@ -972,14 +989,19 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
     # Since #347 decision 28 those two sets differ by the deliberately seeded fe
     # games-services DENY row, so comparing the doc's result against ALL flipped
     # rows would fail on a doc that is correct for what it claims. The deny row is
-    # not let off: DENY_TRUE_UNDECLARED above is what keeps it from hiding.
-    # ⚠ WHAT THIS LEAVES OPEN, deliberately and not silently: the runbook's prose
-    # around that block still says "Expect the 10 rows in §1.2 at true, and nothing
-    # else", and there are now ELEVEN rows carrying the floor. docs/MFA-ROLLOUT.md
-    # is outside this lane's file ownership and is NOT edited here — the gap is
-    # recorded on hugmesh-generator#351.
+    # not let off, THREE ways: DENY_TRUE_UNDECLARED above keeps it from hiding in
+    # the seed; the runbook's own `floor` block (expect=every-floor-row, added
+    # 2026-09-17) is scoped to the FLOOR rather than to the flip and must return
+    # every row carrying it, deny rows included; and DOC_DENY_* below cross-checks
+    # the runbook's `gate:deny-floor` table against DELIBERATE_DENY_MFA in both
+    # directions. That closes what the 2026-09-17 lane left open and recorded on
+    # hugmesh-generator#485: the prose said "the 10 rows ... and nothing else" while
+    # ELEVEN rows carried the floor, and no gate could see the sentence.
     want_flipped = {(g, p, r) for (g, p, r, a, m) in rows if m and a}
     want_adminish = {(g, p, r) for (g, p, r, m) in adm}
+    # every row that ends up carrying the privileged step-up floor, allow-blind —
+    # the set isMfaRequiredSurface() actually reads (see the D8 note above).
+    want_floor = {(g, p, r) for (g, p, r, a, m) in rows if m}
     for name, expect, block in DOC_RE.findall(doctext):
         doc_names.append(name)
         body = dedent(block).strip()
@@ -1002,10 +1024,11 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
                 if left:
                     doc_bad.append("%s: after the documented rollback %d row(s) are STILL "
                                    "mfa_required=true" % (name, left))
-            elif expect in ("flipped", "adminish"):
+            elif expect in ("flipped", "adminish", "every-floor-row"):
                 got = {(r[0], r[1], r[2]) for r in
                        con.execute(normalize(body.rstrip().rstrip(";"))).fetchall()}
-                want = want_flipped if expect == "flipped" else want_adminish
+                want = {"flipped": want_flipped, "adminish": want_adminish,
+                        "every-floor-row": want_floor}[expect]
                 if got != want:
                     doc_bad.append(
                         "%s: returns %d row(s) but the prose promises the %d '%s' row(s); "
@@ -1086,6 +1109,41 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
                     "DOCUMENTED_EXCLUSIONS holds %d — the runbook is UNDER-reporting "
                     "the surface a stolen session still reaches"
                     % (cm.group(1), said, len(DOCUMENTED_EXCLUSIONS)))
+# ── the runbook's DENY-FLOOR table, cross-checked against DELIBERATE_DENY_MFA ────
+# A deny row at mfa_required=true is the one shape the runbook's `verify` query
+# CANNOT show (that query is scoped to the flip's own `allow = true` predicate),
+# and it is also the shape that decides the privileged floor for a whole subtree.
+# So the runbook carries a `<!-- gate:deny-floor -->` table naming each one, and
+# this is that table read back against the seed IN BOTH DIRECTIONS. Added
+# 2026-09-17 (hugmesh-generator#485) after the doc was left saying "the 10 rows
+# ... and nothing else" with eleven rows carrying the floor and no gate able to see
+# the sentence. Prose that contradicts the seed is exactly the failure this file
+# exists to make impossible.
+doc_deny_missing, doc_deny_extra = [], []
+doc_deny_absent = []
+if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
+    dm = re.search(r'<!--\s*gate:deny-floor\s*-->\s*((?:[ \t]*\|.*\n)+)', doctext)
+    if not dm:
+        doc_deny_absent.append(
+            "the runbook has no '<!-- gate:deny-floor -->' table any more — the deny "
+            "rows that carry the privileged step-up floor are undocumented, and §5's "
+            "`verify` query cannot show them")
+    else:
+        listed_deny = set(re.findall(
+            r'^\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|',
+            dm.group(1), re.M))
+        doc_deny_missing = sorted(DELIBERATE_DENY_MFA - listed_deny)
+        doc_deny_extra = sorted(listed_deny - DELIBERATE_DENY_MFA)
+emit("DOC_DENY_ABSENT", len(doc_deny_absent))
+for b in doc_deny_absent:
+    emit("DOC_DENY_ABSENT_ROW", b)
+emit("DOC_DENY_MISSING", len(doc_deny_missing))
+for g_, p_, r_ in doc_deny_missing:
+    emit("DOC_DENY_MISSING_ROW", "%s %s %s" % (g_, p_, r_))
+emit("DOC_DENY_EXTRA", len(doc_deny_extra))
+for g_, p_, r_ in doc_deny_extra:
+    emit("DOC_DENY_EXTRA_ROW", "%s %s %s" % (g_, p_, r_))
+
 emit("DOC_TBL_MISSING", len(doc_tbl_missing))
 for g_, p_, r_ in doc_tbl_missing:
     emit("DOC_TBL_MISSING_ROW", "%s %s %s" % (g_, p_, r_))
@@ -1815,6 +1873,10 @@ fi
   && ok "a per-domain TIGHTENING row outside the prefixes keeps mfa_required=true across a full re-apply while its UNSCOPED twin stays false — per-domain MFA scope tightens ONLY its own domain" \
   || bad "per-domain tightening broke (kept=$(g DOMAIN_TIGHTENING_KEPT), scoped_only=$(g DOMAIN_TIGHTENING_SCOPED_ONLY)) — either the seed reverts a provisioned tightening row, or the tightening leaks onto every domain via the unscoped twin"
 
+[ "$(g DOMAIN_SCOPED_SEED_ROWS)" = "0" ] \
+  && ok "the seed's final state carries no domain-scoped row, so this gate's two behavioural models (isMfaRequiredSurface and decide, both domain-BLIND) answer for every row they rank — the omitted domainApplies() guard cannot change a reading" \
+  || bad "$(g DOMAIN_SCOPED_SEED_ROWS) domain-scoped row(s) are in the seed's FINAL state, and this gate's behavioural models do not transcribe GatewayRouteAccessService.domainApplies() — every FE_*_MFA / *_VERDICT reading below is now answering for a row the real gateway would skip on another domain. Transcribe the domain guard into _mfa_surface()/_decide() before trusting them"
+
 # ── (FIX 4) coverage of the admin surface, enumerated INDEPENDENTLY ────────────
 [ "$(g ADMINISH_UNCOVERED)" = "0" ] \
   && ok "$(g ADMINISH) admin-ish /bff/ allow rows exist (enumerated independently: a path segment 'admin'/'superadmin', OR a ROLE_SUPERADMIN/*_ADMIN role); each is either flipped or one of the $(g EXCLUSIONS_DOCUMENTED) exclusions named in the SQL header + runbook §1.2a" \
@@ -1824,6 +1886,16 @@ fi
 [ "$(g DOC_TBL_MISSING)" = "0" ] && [ "$(g DOC_TBL_EXTRA)" = "0" ] && [ "$(g DOC_TBL_COUNT_BAD)" = "0" ] \
   && ok "runbook §1.2a lists exactly the $(g EXCLUSIONS_DOCUMENTED) documented exclusions, and its count word agrees — the operator-facing table cannot under-report the un-MFA'd admin surface" \
   || bad "runbook §1.2a has DRIFTED from DOCUMENTED_EXCLUSIONS: missing=$(sed -n 's/^DOC_TBL_MISSING_ROW //p' "${W}/real.out" | tr '\n' ';') extra=$(sed -n 's/^DOC_TBL_EXTRA_ROW //p' "${W}/real.out" | tr '\n' ';') count=$(sed -n 's/^DOC_TBL_COUNT_BAD_ROW //p' "${W}/real.out" | tr '\n' ';') — docs/MFA-ROLLOUT.md is the operator runbook; a row missing from that table is a privileged surface an operator believes is covered and is not"
+
+# ── the runbook's DENY-FLOOR table must name exactly the declared deny rows ────
+# §5's `verify` query is scoped to `allow = true` (the flip's own predicate), so a
+# deny row carrying the floor is INVISIBLE to it by construction. That is legitimate
+# — and it is why the row must be written down somewhere an operator reads. This
+# pins the runbook's `gate:deny-floor` table to DELIBERATE_DENY_MFA in both
+# directions, so neither the table nor the seed can move without the other.
+[ "$(g DOC_DENY_ABSENT)" = "0" ] && [ "$(g DOC_DENY_MISSING)" = "0" ] && [ "$(g DOC_DENY_EXTRA)" = "0" ] \
+  && ok "runbook §5's deny-floor table names exactly the $(g DENY_TRUE) deny row(s) that carry the privileged step-up floor — the rows the §5 'verify' query cannot show, because it is scoped to the flip's own allow = true predicate" \
+  || bad "the runbook's deny-floor record has DRIFTED from DELIBERATE_DENY_MFA: absent=$(sed -n 's/^DOC_DENY_ABSENT_ROW //p' "${W}/real.out" | tr '\n' ';') missing=$(sed -n 's/^DOC_DENY_MISSING_ROW //p' "${W}/real.out" | tr '\n' ';') extra=$(sed -n 's/^DOC_DENY_EXTRA_ROW //p' "${W}/real.out" | tr '\n' ';') — a deny row at mfa_required=true decides the floor for a whole subtree and §5's verify query cannot show it, so an operator who cannot read it in the table cannot audit it at all"
 
 [ "$(g STALE_EXCLUSIONS)" = "0" ] \
   && ok "no stale entry in the documented-exclusion list — every listed surface still exists and is still un-flipped" \
@@ -1966,9 +2038,18 @@ COMPOSE_HARDCODED="$(printf '%s' "${ENABLED_COMPOSE_AT}" | grep -v 'shell defaul
   || bad "docs/MFA-ROLLOUT.md missing — these rules are inert until an operator flips a flag, and the order of operations is not obvious"
 
 # ── the runbook's own SQL, EXECUTED (see check.py's DOC section) ──────────────
-[ "$(g DOC_SQL_BLOCKS)" -ge 4 ] \
+[ "$(g DOC_SQL_BLOCKS)" -ge 5 ] \
   && ok "the runbook marks $(g DOC_SQL_BLOCKS) SQL blocks for execution ($(g DOC_SQL_NAMES)); each is RUN against the replayed database rather than eyeballed" \
   || bad "only $(g DOC_SQL_BLOCKS) '<!-- gate:doc-sql -->' block(s) found in ${DOC} — the runbook's operator queries are back to being unverified prose"
+
+# The `floor` block is the one an operator uses to audit the step-up floor itself
+# rather than the flip, and it is the ONLY marked query that can show a deny row
+# carrying the floor. Losing it silently would take the runbook back to 2026-09-17,
+# when §5 said "the 10 rows ... and nothing else" and eleven rows carried the floor.
+case ",$(g DOC_SQL_NAMES)," in
+  *,floor,*) ok "the runbook still carries the 'floor' query (expect=every-floor-row) — the only marked query scoped to the floor rather than to the flip, and the only one that can show a DENY row carrying it" ;;
+  *) bad "the runbook's 'floor' query is GONE (names: $(g DOC_SQL_NAMES)) — §5's remaining queries are all scoped to 'allow = true', so an operator auditing the step-up floor would see 10 of the $(g DENY_TRUE)+10 rows that carry it and conclude the floor is off for the missing subtree" ;;
+esac
 
 [ "$(g DOC_SQL_BAD)" = "0" ] \
   && ok "every marked runbook query returns exactly what the prose around it promises (a previous revision told operators that LIKE '/bff/%admin%' 'also returns the six rows that are false by design' — run for real it returns THREE of the six, because the other three have no 'admin' substring in url_pattern)" \
@@ -2184,6 +2265,11 @@ new = up.replace("\n   AND mfa_required IS DISTINCT FROM true;", ";", 1)
 assert new != up, "the idempotence arm was not found inside the row-scoped seed"
 s = s.replace(up, new, 1)'
 
+nc "a DOMAIN-SCOPED row appended to the seed (the two behavioural models are domain-blind and would answer for a row the gateway skips)" \
+   DOMAIN_SCOPED_SEED_ROWS 0 \
+   's += "\nINSERT INTO gateway_route_access (gateway, url_pattern, role, allow, domain) VALUES (%s, %s, %s, true, %s);\n" % (
+    repr("hugmesh-fe-gateway"), repr("/bff/superadmin/games-services/**"), repr("ROLE_SUPERADMIN"), repr("brand-x.example"))'
+
 nc "a statement the simulator cannot run is NOT silently skipped" SIM_ERRORS 0 \
    's += "\nUPDATE gateway_route_access SET mfa_required = false\n WHERE url_pattern ~ %s;\n" % repr("^/bff/admin")'
 
@@ -2329,19 +2415,58 @@ nd "the runbook's verification query silently widened to every row" DOC_SQL_BAD 
 anchor(a)
 s = s.replace(a, "    WHERE 1 = 1", 1)'
 
-# NOT A CONTROL HERE, and deliberately so. `integrate/superadmin` also added a
-# mutation that DROPS the `allow = true` clause and required DOC_SQL_BAD to move.
-# It cannot: that mutation only changes the result set when a DENY row exists under
-# /bff/admin% or /bff/superadmin%, and with the games-services row correctly absent
-# (see above) there is none, so the control ran vacuous and said so —
-#   "…was applied to the runbook and DOC_SQL_BAD did NOT move (still 0) — the
-#    runbook checks are vacuous"
-# MEASURED (re-measured 2026-09-16 on the land pass — this line said 125 / 1,
-# which was wrong: this suite runs 125 assertions either way, so the assertion
-# that flips takes the PASS count DOWN to 124):
-#   124 passed / 1 failed with it, 125 passed / 0 failed without. It is
-# removed rather than weakened; reinstate it in the same commit as the first DENY
-# row under either prefix, when it becomes falsifiable again.
+# REINSTATED 2026-09-17, exactly as the comment that stood here asked. That comment
+# recorded a control `integrate/superadmin` had added — DROP the `allow = true`
+# clause from the verify query and require DOC_SQL_BAD to move — explained that it
+# could not bite while no DENY row existed under /bff/admin% or /bff/superadmin%
+# (it ran vacuous and SAID so), and said: "reinstate it in the same commit as the
+# first DENY row under either prefix, when it becomes falsifiable again". Operator
+# decision 28 = D (#347) seeded that row, so it is falsifiable again and it is back.
+# It is not a duplicate of the "silently widened to every row" control above: that
+# one widens to WHERE 1 = 1 (every row in the table), this one keeps the prefix
+# scoping and drops ONLY the allow filter — the smallest edit that makes the
+# runbook's own query disagree with its own prose, and the one a future editor
+# "tidying" the clause away would actually make.
+nd "the runbook's verification query drops ONLY its allow = true clause (the deny row surfaces as an un-flipped row and reads as a failed rollout)" DOC_SQL_BAD 0 \
+   'a = "    WHERE allow = true\n      AND (url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
+    repr("/bff/admin%"), repr("/bff/superadmin%"))
+anchor(a)
+s = s.replace(a, "    WHERE (url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
+    repr("/bff/admin%"), repr("/bff/superadmin%")), 1)'
+
+# ── the FLOOR query and the deny-floor table (hugmesh-generator#485) ────────────
+# §5 now carries a second marked query, scoped to the FLOOR rather than to the flip,
+# plus a table naming every deny row that carries it. Both exist because the prose
+# around the `verify` query said "the 10 rows … and nothing else" while ELEVEN rows
+# carried the floor, and nothing could see the sentence. Each control below breaks a
+# DIFFERENT half of that record.
+nd "the runbook's FLOOR query is narrowed back to the flip's own predicate (the deny row vanishes from the floor audit and the runbook is back to under-reporting it)" DOC_SQL_BAD 0 \
+   'a = "    WHERE mfa_required = true\n    ORDER BY allow, 1, 2, 3;"
+anchor(a)
+s = s.replace(a, "    WHERE mfa_required = true\n      AND allow = true\n    ORDER BY allow, 1, 2, 3;", 1)'
+
+nd "the runbook's deny-floor TABLE loses the games-services row (the seed keeps a floor the operator cannot read anywhere)" DOC_DENY_MISSING 0 \
+   'B = chr(96)
+needle = "%shugmesh-fe-gateway%s | %s/bff/superadmin/games-services/**%s | %sROLE_SUPERADMIN%s |" % ((B,) * 6)
+lines = s.split(chr(10))
+hit = [i for i, l in enumerate(lines) if needle in l and l.lstrip().startswith("|")]
+assert len(hit) == 1, "expected exactly 1 deny-floor table row for the games row, found %d" % len(hit)
+del lines[hit[0]]
+s = chr(10).join(lines)'
+
+nd "the runbook's deny-floor TABLE grows a row the seed does not carry (a floor the operator believes is raised and is not)" DOC_DENY_EXTRA 0 \
+   'B = chr(96)
+needle = "%shugmesh-fe-gateway%s | %s/bff/superadmin/games-services/**%s | %sROLE_SUPERADMIN%s |" % ((B,) * 6)
+lines = s.split(chr(10))
+hit = [i for i, l in enumerate(lines) if needle in l and l.lstrip().startswith("|")]
+assert len(hit) == 1, "expected exactly 1 deny-floor table row for the games row, found %d" % len(hit)
+lines.insert(hit[0] + 1, "   | %shugmesh-fe-gateway%s | %s/bff/admin/phone-fleet/**%s | %sROLE_ADMIN%s | invented |" % ((B,) * 6))
+s = chr(10).join(lines)'
+
+nd "the runbook's deny-floor TABLE marker is deleted (the table stops being read at all)" DOC_DENY_ABSENT 0 \
+   'a = "<!-- gate:deny-floor -->"
+anchor(a)
+s = s.replace(a, "", 1)'
 
 nd "the runbook's quoted UPDATE drifts from the seed's real one (per-domain arm dropped from the doc)" DOC_SQL_BAD 0 \
    'a = "\n     OR (COALESCE(NULLIF(lower(trim(domain)), %s), %s) <> %s\n         AND url_pattern IN (%s)))\n   AND mfa_required IS DISTINCT FROM true;" % (repr("default"), repr(""), repr(""), repr(""))

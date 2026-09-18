@@ -1586,6 +1586,124 @@ else:
     bad("negative control: a NEW un-routed /bff row would NOT be reported — the "
         "orphan ledger is vacuous")
 
+# ── §15 docs/OPTIONAL-SERVICES.md may not describe a world that stopped existing ─
+# THE DEFECT, found by the skeptic on the 2026-09-17 land pass of decision 28 = D
+# (#347). §5b and §13 above enforce the CODE's posture, and the same commit that
+# seeded the games-services deny row deleted that family's DESELECT_SURVIVORS entry
+# — correctly. But docs/OPTIONAL-SERVICES.md still told an operator the opposite
+# ("it is NOT denied at the fe door … decision 8 declined it") and cross-referenced
+# the very ledger entry the commit had removed. NOTHING could see it: no gate read
+# that file, so the contradiction would have rotted indefinitely while every suite
+# stayed green. The runbook's own posture is now a MARKED, MACHINE-READ claim:
+#
+#   * `<!-- gate:deselect-survivors -->` — a table mirroring DESELECT_SURVIVORS,
+#     compared in BOTH directions, so an entry cannot leave the ledger while the doc
+#     still points at it, and cannot enter the ledger unread by an operator.
+#   * `<!-- gate:games-fe-posture value=walled|ledgered -->` — the two legal
+#     postures of §5b, checked against the SEED rather than against prose.
+#
+# Both are read from the doc as data. Prose around them is still prose; these are
+# the load-bearing claims, and they are the ones that were wrong.
+print()
+print("== §15 docs/OPTIONAL-SERVICES.md agrees with the ledger and the seed ==")
+
+OPT_DOC = f"{root}/docs/OPTIONAL-SERVICES.md"
+
+
+def _doc_survivors(text):
+    """The (slug, url_pattern) pairs the doc's marked table claims, or None when the
+    marker is absent (which is itself a finding, not a pass)."""
+    m = re.search(r"<!--\s*gate:deselect-survivors\s*-->\s*((?:[ \t]*\|.*\n)+)", text)
+    if not m:
+        return None
+    return set(re.findall(r"^\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|", m.group(1), re.M))
+
+
+def _doc_posture(text):
+    m = re.search(r"<!--\s*gate:games-fe-posture\s+value=(\S+?)\s*-->", text)
+    return m.group(1) if m else None
+
+
+def _survivor_findings(text):
+    """Every disagreement between the doc's marked claims and this suite's state.
+    Returned as a list so the same function can be re-run on a MUTATED copy of the
+    document below and required to produce findings."""
+    out = []
+    listed = _doc_survivors(text)
+    if listed is None:
+        out.append("the gate:deselect-survivors table is GONE from "
+                   "docs/OPTIONAL-SERVICES.md — the ledger is undocumented again")
+    else:
+        want = set(DESELECT_SURVIVORS)
+        for k in sorted(want - listed):
+            out.append(f"DESELECT_SURVIVORS holds {k[0]} {k[1]} and the doc's table "
+                       f"does not — an operator cannot read which surfaces survive "
+                       f"a deselection")
+        for k in sorted(listed - want):
+            out.append(f"the doc's table claims {k[0]} {k[1]} survives, but "
+                       f"DESELECT_SURVIVORS has no such entry — a DANGLING "
+                       f"cross-reference (this is the 2026-09-17 defect)")
+    posture = _doc_posture(text)
+    real = "walled" if DENY_ROW_KEY in BY_GW_PAT else "ledgered"
+    if posture is None:
+        out.append("the gate:games-fe-posture marker is GONE from "
+                   "docs/OPTIONAL-SERVICES.md — the games app-store door posture is "
+                   "back to unchecked prose")
+    elif posture not in ("walled", "ledgered"):
+        out.append(f"the doc declares games-fe-posture={posture!r}, which is neither "
+                   f"'walled' nor 'ledgered'")
+    elif posture != real:
+        out.append(f"the doc declares the games app-store control plane "
+                   f"{posture!r} at the fe door; the seed says {real!r} — "
+                   f"docs/OPTIONAL-SERVICES.md is telling an operator the opposite of "
+                   f"what the front door does")
+    return out
+
+
+if not os.path.isfile(OPT_DOC):
+    bad("docs/OPTIONAL-SERVICES.md is missing — the deselect-survivor ledger and the "
+        "games app-store door posture have no operator-facing record at all")
+else:
+    _optdoc = open(OPT_DOC, encoding="utf-8").read()
+    _f = _survivor_findings(_optdoc)
+    if _f:
+        for _line in _f:
+            bad("docs/OPTIONAL-SERVICES.md: " + _line)
+    else:
+        ok(f"docs/OPTIONAL-SERVICES.md mirrors DESELECT_SURVIVORS exactly "
+           f"({len(DESELECT_SURVIVORS)} entr(ies)) and declares the games app-store "
+           f"door posture the seed actually implements")
+
+    # Negative controls, on COPIES of the document text — each breaks a different
+    # half of the record and must produce a finding.
+    _m1 = _optdoc.replace("<!-- gate:games-fe-posture value=walled -->",
+                          "<!-- gate:games-fe-posture value=ledgered -->", 1)
+    if _m1 != _optdoc and any("opposite of" in f for f in _survivor_findings(_m1)):
+        ok("negative control: the doc reverting to the pre-decision-28 claim "
+           "(posture=ledgered while the deny row is seeded) -> CAUGHT")
+    else:
+        bad("negative control: flipping the documented games posture to 'ledgered' "
+            "was NOT caught — §15's posture check is vacuous")
+
+    _fake = "| `brand-new-slug` | `/bff/superadmin/brand-new-surface/**` |\n"
+    _m2 = re.sub(r"(<!--\s*gate:deselect-survivors\s*-->\s*(?:[ \t]*\|.*\n)+)",
+                 lambda mm: mm.group(1) + _fake, _optdoc, count=1)
+    if _m2 != _optdoc and any("DANGLING" in f for f in _survivor_findings(_m2)):
+        ok("negative control: a doc table row pointing at a ledger entry that does "
+           "not exist (the 2026-09-17 defect shape) -> CAUGHT")
+    else:
+        bad("negative control: a DANGLING doc cross-reference was NOT caught — "
+            "§15's table check is vacuous")
+
+    _m3 = _optdoc.replace("<!-- gate:deselect-survivors -->", "", 1)
+    if _m3 != _optdoc and any("GONE" in f for f in _survivor_findings(_m3)):
+        ok("negative control: deleting the doc's ledger mirror entirely -> CAUGHT "
+           "(an absent table is a finding, not a pass)")
+    else:
+        bad("negative control: deleting the doc's ledger mirror was NOT caught — "
+            "§15 fails open on a missing table")
+
+
 print()
 print(f"== RESULT: {passed} passed, {failed} failed ==")
 sys.exit(1 if failed else 0)
