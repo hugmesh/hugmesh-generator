@@ -447,6 +447,18 @@ spec:
           - id: hugmesh-user-bff-api-session
             uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/session
+          # /bff/sessionOut (hugmesh-generator#549) — the POST alias clients
+          # (host-shell, login-ui) actually call for sign-out. SsoAuthController
+          # serves it as an alias of DELETE /bff/session (same cookie-read, same
+          # expiry). Before this route existed the path fell through to the
+          # /bff/** admin-bff catch-all below, whose own sessionOut read the
+          # token from a header a browser never sends (bffTokenFrom(null,
+          # header)) and could not expire the cookie (admin-bff cookie mode
+          # defaults off) — a complete no-op sign-out. MORE SPECIFIC FIRST, same
+          # reason every other exact-path entry on this table sits above /bff/**.
+          - id: hugmesh-user-bff-api-sessionout
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/sessionOut
           - id: hugmesh-user-bff-api-provision
             uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/provision/**
