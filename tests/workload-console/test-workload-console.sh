@@ -474,19 +474,24 @@ raw = env.get("WORKLOAD_CONSOLE_EXEC_READONLY") or ""
 entries = [e.strip() for e in raw.split(",") if e.strip()]
 (ok if entries else bad)("exec allowlist non-empty" if entries else "exec allowlist empty")
 
-# 3a. DECISION PIN (#545). This is NOT a second security oracle and must not be read
-#     as one — the property above is the oracle, and it PASSES bare `df` (bare `df`
-#     leaks no bytes, no environment, executes nothing, writes nothing). What this
-#     pins is a CAPABILITY DECISION that the property cannot express and therefore
-#     cannot defend: `df` is on the list to answer "how full is the disk", and it is
-#     pinned to `df -h` so it cannot also be asked
-#     `df --output=source,target <path>` (a mount-topology and path-existence oracle
-#     over the whole container filesystem) or `df --sync` (a node-wide sync — a side
-#     effect from a read-only console). Reverting it to a bare name would leave every
-#     other check in this file green, which is exactly why the decision needs a pin of
-#     its own. The reasoning, and the deliberate NON-decision on `stat`, are recorded
-#     against the value in workload-console-patch.yaml and on #545.
-DECIDED_PINNED = {"df": "df -h", "ps": "ps -e", "date": "date -u"}
+# 3a. DECISION PIN (#545, #63/2026-09-18). This is NOT a second security oracle and
+#     must not be read as one — the property above is the oracle, and it PASSES bare
+#     `df` and bare `stat --file-system`/`stat -f` alike (none of them leaks bytes, an
+#     environment, executes anything or writes). What this pins is a CAPABILITY
+#     DECISION the property cannot express and therefore cannot defend: `df` is on the
+#     list to answer "how full is the disk", and it is pinned to `df -h` so it cannot
+#     also be asked `df --output=source,target <path>` (a mount-topology and
+#     path-existence oracle over the whole container filesystem) or `df --sync` (a
+#     node-wide sync — a side effect from a read-only console). `stat` is pinned to
+#     `stat -t` (decision 63) for the identical reason: `stat --file-system` prints the
+#     SAME moving free-block counters `df` does, and pinning `-t` instead of `-f` is
+#     what keeps `stat` from becoming a second mount-topology oracle the day the
+#     whole-argv matcher lands and a caller-chosen path becomes reachable again.
+#     Reverting either to a bare name, or to `stat --file-system`/`stat -f`, would leave
+#     every other check in this file green, which is exactly why the decision needs a
+#     pin of its own. The reasoning is recorded against the value in
+#     workload-console-patch.yaml and on #545.
+DECIDED_PINNED = {"df": "df -h", "ps": "ps -e", "date": "date -u", "stat": "stat -t"}
 for head, want in sorted(DECIDED_PINNED.items()):
     present = [e for e in entries if e == head or e.startswith(head + " ")]
     if not present:
@@ -500,6 +505,69 @@ for head, want in sorted(DECIDED_PINNED.items()):
             f"form {want!r} (#545). A bare name is licensed for EVERY argv by the "
             f"shipped first-token matcher; re-open the decision on #545 before widening "
             f"it here.")
+
+# 3a-i. NEGATIVE CONTROL for 3a's `stat` leg: prove the check above actually tells
+# `stat -t` apart from the two shapes decision 63 rejected, rather than accepting
+# anything spelled `stat <one flag>`. Runs the IDENTICAL rule (present == [want]) that
+# 3a runs, against two MUTATED copies of the real, live `entries` list — nothing on
+# disk is touched, and the mutation is verified to have actually changed the list
+# before it is judged (an unchanged "mutation" would make the control vacuous).
+_stat_pin_live = [e for e in entries if e == "stat" or e.startswith("stat ")]
+if _stat_pin_live != ["stat -t"]:
+    bad("control: live entries do not carry the decided 'stat -t' pin (got "
+        f"{_stat_pin_live!r}) — cannot exercise the decision-63 negative control "
+        "against a pin that is not actually shipped")
+else:
+    for _rejected in ("stat --file-system", "stat -f"):
+        _mutated = [_rejected if e == "stat -t" else e for e in entries]
+        if _mutated == entries:
+            bad(f"control: substituting 'stat -t' -> {_rejected!r} did not change the "
+                f"entries list — the mutation itself is broken")
+            continue
+        _present = [e for e in _mutated if e == "stat" or e.startswith("stat ")]
+        if _present == ["stat -t"]:
+            bad(f"control: entries mutated to carry {_rejected!r} instead of 'stat -t' "
+                f"STILL satisfy the decision-63 pin check — it cannot tell the rejected "
+                f"shape from the decided one, which is the whole point of pinning")
+        else:
+            ok(f"control: entries mutated to carry {_rejected!r} instead of 'stat -t' "
+               f"are correctly REJECTED by the decision-63 pin check ({_present!r} != "
+               f"['stat -t'])")
+
+# 3a-ii. RUNTIME MATCHER SIMULATION — prove the pinned form REFUSES `stat --file-system`
+# and `stat -f`, not merely that this file's OWN pin check does. This re-derives
+# WorkloadConsoleProperties#execReadOnlyAllowed (hugmesh-admin-bff-api,
+# `execReadOnlyCommands.contains(command.get(0))` — a FIRST-TOKEN, exact-membership
+# match against the comma-split entries, unchanged since #545) against the REAL,
+# live entries parsed from workload-console-patch.yaml above. It is not a second
+# implementation trusted on its own say-so: exec_argv_property.py's own module
+# docstring states the same rule in prose ("a PINNED form … licenses nothing today —
+# its head is not an element of the list, so the matcher refuses it outright"), so
+# this is the prose turned into an assertion against the shipped entries, not a new
+# claim.
+def _exec_read_only_allowed(command, allowlist):
+    if not command:
+        return False
+    return command[0] in allowlist
+
+for _argv in (["stat", "--file-system", "/"], ["stat", "-f", "/"]):
+    if _exec_read_only_allowed(_argv, entries):
+        bad(f"runtime matcher simulation: {_argv!r} is ALLOWED by the shipped "
+            f"first-token matcher against the live entries {entries!r} — the pin "
+            f"to 'stat -t' does not refuse it")
+    else:
+        ok(f"runtime matcher simulation: {_argv!r} is REFUSED by the shipped "
+           f"first-token matcher (head {_argv[0]!r} is not itself an element of the "
+           f"live entries — only the compound string 'stat -t' is, and a first-token "
+           f"match never equals a multi-word entry)")
+# Positive control for the simulation itself: a REAL bare entry must be ALLOWED, so
+# the function above is not simply returning False for everything.
+if _exec_read_only_allowed(["ls", "-la", "/"], entries):
+    ok("runtime matcher simulation: control — ['ls','-la','/'] IS allowed (bare "
+       "'ls' is a real entry), so the simulator is not vacuously refusing everything")
+else:
+    bad("runtime matcher simulation: control — ['ls','-la','/'] was refused even "
+        "though bare 'ls' is on the live list; the simulator itself is broken")
 
 # 4. port-forward triples: the documented curation rule is "app-tier BFFs ONLY", so it
 #    is checked as an ALLOWLIST. A denylist of datastore-ish substrings ("db","postgres",
@@ -867,6 +935,24 @@ if [ -f "${PROP}" ] && command -v python3 >/dev/null; then
   # the leak, and every metadata tool on the list would have to be exempted by name.
   ctl "a command that really does hold P (uname)" "uname" "" pass
   ctl "a FILE-operand command that leaks no bytes (stat)" "stat" "" pass
+  # The SHIPPED pin (decision 63, #545): the property script holds P for it on its
+  # own merits too — pinned, not because it is bare. A pinned entry admits no operand
+  # at all (property.py's own argv rule), so this also incidentally proves the
+  # pinned form cannot be starved into behaving like `stat --file-system` by any
+  # operand: there is none to give it.
+  ctl "the SHIPPED pin holds P (stat -t)" "stat -t" "" pass
+  # The two shapes decision 63 rejected must ALSO independently hold P under this
+  # oracle — this is deliberate and expected, not a bug: with no operand, even
+  # `stat --file-system`/`stat -f` cannot reach a canary (GNU coreutils errors
+  # "missing operand" and touches nothing). Asserted here so a reader does not
+  # mistake "the oracle accepts them too" for "the pin does nothing" — the reason
+  # `-t` was chosen over `-f` is the CAPABILITY decision in 3a/#545, which this
+  # property oracle is explicitly not equipped to make (see its own module header:
+  # "a CAPABILITY decision … the property cannot express and therefore cannot
+  # defend"), not a property-P finding against the other two.
+  ctl "a REJECTED pinned shape also (unsurprisingly) holds P (stat --file-system)" \
+      "stat --file-system" "" pass
+  ctl "the other REJECTED pinned shape also holds P (stat -f)" "stat -f" "" pass
 
   # NEGATIVE 5b — the differential leg's OWN self-test must actually RUN. The module
   # can prove that Oracle B' still tells a leak from the weather (#492: `df <file>`
