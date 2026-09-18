@@ -501,6 +501,7 @@ jobs:
             tests/scripts/test-cassandra-cluster-wiring.sh
             tests/scripts/test-client-connect-routes.sh
             tests/scripts/test-cluster-manifest-integrity.sh
+            tests/scripts/test-deeplink-remote-coverage.sh
             tests/scripts/test-e2e-shell-nav-entry.sh
             tests/scripts/test-e2e-spec-symbol-resolution.sh
             tests/scripts/test-eso-provider-refs.sh

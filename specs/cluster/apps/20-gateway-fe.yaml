@@ -219,11 +219,20 @@ spec:
           # Matches POSITIVELY on Accept: text/html so every asset/XHR/
           # remoteEntry.json request — including any with no Accept header —
           # falls through to the remote routes below, unchanged.
-          # Excludes /social/phpbb (server-rendered, must serve its own HTML) and
-          # /api-docs (mounted in the shell at /admin/docs, so it never collides).
+          # Excludes /social/phpbb (server-rendered, must serve its own HTML),
+          # /api-docs (mounted in the shell at /admin/docs, so it never
+          # collides) and /login (deliberately — the standalone login-ui is
+          # the designed door). hugmesh-generator#381: /user, /admin and /mod
+          # ARE in-shell remotes with their own routes below (like the ones
+          # already listed) and were missing here too — a compose-lane probe
+          # of /user/profile was measured serving user-ui's own standalone
+          # index.html instead of the shell. tests/scripts/
+          # test-deeplink-remote-coverage.sh asserts every in-shell `*-ui`
+          # remote route's Path is present here (and on the compose twin) and
+          # that /login/** never is.
           - id: remote-deeplink-to-host-shell
             uri: http://hugmesh-host-shell.hugmesh-frontend.svc.cluster.local:80
-            path: /social/matrix/**,/social/mastodon/**,/social/forum/**,/wiki/**,/tube/**,/owncast/**,/character-studio/**,/character-forge/**
+            path: /social/matrix/**,/social/mastodon/**,/social/forum/**,/wiki/**,/tube/**,/owncast/**,/character-studio/**,/character-forge/**,/admin/**,/mod/**,/user/**
             header: "Accept, .*text/html.*"
           - id: matrix-ui
             uri: http://hugmesh-matrix-ui.hugmesh-frontend.svc.cluster.local:80
