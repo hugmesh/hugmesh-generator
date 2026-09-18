@@ -474,6 +474,33 @@ raw = env.get("WORKLOAD_CONSOLE_EXEC_READONLY") or ""
 entries = [e.strip() for e in raw.split(",") if e.strip()]
 (ok if entries else bad)("exec allowlist non-empty" if entries else "exec allowlist empty")
 
+# 3a. DECISION PIN (#545). This is NOT a second security oracle and must not be read
+#     as one — the property above is the oracle, and it PASSES bare `df` (bare `df`
+#     leaks no bytes, no environment, executes nothing, writes nothing). What this
+#     pins is a CAPABILITY DECISION that the property cannot express and therefore
+#     cannot defend: `df` is on the list to answer "how full is the disk", and it is
+#     pinned to `df -h` so it cannot also be asked
+#     `df --output=source,target <path>` (a mount-topology and path-existence oracle
+#     over the whole container filesystem) or `df --sync` (a node-wide sync — a side
+#     effect from a read-only console). Reverting it to a bare name would leave every
+#     other check in this file green, which is exactly why the decision needs a pin of
+#     its own. The reasoning, and the deliberate NON-decision on `stat`, are recorded
+#     against the value in workload-console-patch.yaml and on #545.
+DECIDED_PINNED = {"df": "df -h", "ps": "ps -e", "date": "date -u"}
+for head, want in sorted(DECIDED_PINNED.items()):
+    present = [e for e in entries if e == head or e.startswith(head + " ")]
+    if not present:
+        ok(f"exec allowlist: {head!r} is absent entirely — a dropped entry is narrower "
+           f"than the decided pin {want!r}, so the #545 decision still holds")
+    elif present == [want]:
+        ok(f"exec allowlist: {head!r} is pinned to {want!r} exactly, as decided (#545) — "
+           f"a bare name would license every argv starting with {head!r}")
+    else:
+        bad(f"exec allowlist: {head!r} appears as {present!r}, not the decided pinned "
+            f"form {want!r} (#545). A bare name is licensed for EVERY argv by the "
+            f"shipped first-token matcher; re-open the decision on #545 before widening "
+            f"it here.")
+
 # 4. port-forward triples: the documented curation rule is "app-tier BFFs ONLY", so it
 #    is checked as an ALLOWLIST. A denylist of datastore-ish substrings ("db","postgres",
 #    "cassandra","clickhouse","kafka","redis","vault","casdoor","pki") is NOT that rule
