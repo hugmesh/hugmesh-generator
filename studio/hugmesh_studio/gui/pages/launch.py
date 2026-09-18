@@ -33,20 +33,23 @@ this is the LAST door before dispatch: ProgressPage dispatches on arrival, and
 every wizard build path passes through this page. A domain whose Services step was
 never gone through refuses the build BY NAME — inline, through the one seam
 ``core.domain_services.gate_reason``, which a test drives with a bare ImageConfig. It
-is a refusal and not a warning that scrolls past: both ``_continue`` and
-``validatePage`` stop, and the Continue card is disabled while it holds, with the
-reason on screen beside the ‘back to the main menu’ card that is how you act on it.
+is a refusal and not a warning that scrolls past: all three of ``_continue``, the
+Continue card's enabled state and ``validatePage`` stop, and the reason is laid out
+ABOVE the cards — this page scrolls, the build summary grows one line per worklist
+entry, and a reason under two cards is a reason scrolled past while staring at a
+Continue card that went grey for no visible cause.
 
-ONE BUILD DOOR IS DELIBERATELY NOT GATED, and it is stated here rather than left to
-be discovered: ``StudioWizard.start_build_from_session`` (the previous-builds
-manager's RESTART) sets the start id to "progress" and jumps there, so it never
-touches this page. That is on purpose. A restart re-dispatches a session's EXACT
-recorded config — an already-emitted artifact, built once already — and every
-session recorded before this field existed carries no
-``domain_services_reviewed`` at all, so gating that door would refuse every
-historical restart on the strength of a question nobody was asked at the time.
-Restarting is not configuring; the gate belongs on the path where a configuration
-is being made.
+THE OTHER BUILD DOOR IS ``StudioWizard.start_build_from_session`` (the previous-builds
+manager's RESTART), which sets the start id to "progress" and jumps there, so it never
+touches this page. It is gated separately and NARROWLY, in
+``PreviousBuildsWidget.can_restart`` through ``core.domain_services.restart_gate_reason``
+— stated here rather than left to be discovered. A restart re-dispatches a session's
+EXACT recorded config, and every session recorded before ``domain_services_reviewed``
+existed carries no marker at all, so a blanket gate there would refuse every historical
+restart on the strength of a question nobody was asked at the time. The narrow gate
+bites only for a configuration that already carries at least one reviewed name — one
+produced under this feature — and has since gained an unconfigured domain, and its
+remedy is Redo, the route that exists from the previous-builds manager.
 
 Qt duality: the venv is PySide6, the operator runs PyQt6 where an exception escaping a
 slot calls qFatal and kills the Studio — both slots here are exception-guarded.
@@ -120,6 +123,20 @@ class LaunchPage(QtWidgets.QWizardPage):
         self.summary.setTextFormat(Qt.TextFormat.PlainText)
         lay.addWidget(self.summary)
         lay.addWidget(self._muted_note())
+        # The gate's refusal (#495). An inline label, never a modal: this is page
+        # logic, and a QMessageBox here would hang the headless suite (the repo's
+        # no-modals-in-page-logic rule). Empty and hidden until something refuses.
+        #
+        # ABOVE the cards, not below them: this whole page is inside scrollable(), the
+        # build summary grows one line per worklist entry, and a reason under two
+        # ChoiceCards is a reason the operator scrolls past while staring at a
+        # Continue card that has gone grey for no visible cause.
+        self.gate_err = QtWidgets.QLabel("")
+        self.gate_err.setWordWrap(True)
+        self.gate_err.setTextFormat(Qt.TextFormat.PlainText)
+        self.gate_err.setStyleSheet(f"color: {ERROR};")
+        self.gate_err.hide()
+        lay.addWidget(self.gate_err)
         # ACTION cards, not a pick-one group: each one DOES its thing on click, so they
         # are deliberately not checkable (the tile look of ask 14 without pretending a
         # button is a selection).
@@ -139,15 +156,6 @@ class LaunchPage(QtWidgets.QWizardPage):
         self.menu_card.setCheckable(False)
         self.menu_card.clicked.connect(self._main_menu)
         lay.addWidget(self.menu_card)
-        # The gate's refusal (#495). An inline label, never a modal: this is page
-        # logic, and a QMessageBox here would hang the headless suite (the repo's
-        # no-modals-in-page-logic rule). Empty and hidden until something refuses.
-        self.gate_err = QtWidgets.QLabel("")
-        self.gate_err.setWordWrap(True)
-        self.gate_err.setTextFormat(Qt.TextFormat.PlainText)
-        self.gate_err.setStyleSheet(f"color: {ERROR};")
-        self.gate_err.hide()
-        lay.addWidget(self.gate_err)
         lay.addStretch(1)
 
     def _muted_note(self) -> QtWidgets.QLabel:

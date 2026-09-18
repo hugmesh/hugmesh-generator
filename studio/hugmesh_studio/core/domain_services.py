@@ -39,7 +39,7 @@ from typing import Iterable
 
 from .config import (INFRA_SERVICES_CHOICES, OPTIONAL_SERVICES_CHOICES,
                      SERVICE_DESCRIPTIONS, SERVICE_GROUPS, SERVICES_ALL,
-                     SERVICES_NONE)
+                     SERVICES_NONE, superadmin_plane_applies)
 
 __all__ = [
     "SCOPE_DOMAIN", "SCOPE_IMAGE", "SCOPE_NODE", "SCOPE_LABELS", "SCOPE_WHERE",
@@ -50,8 +50,11 @@ __all__ = [
     "scope_of", "grouped_domain_catalogue", "split_services", "normalise_slugs",
     "carried_over_slugs", "describe", "describe_carried_over",
     "CARRIED_OVER_NOTE", "reviewed_names", "unconfigured_domains",
-    "gate_reason", "record_reviewed", "domain_summary",
-    "ACTION_IMAGE_BUILD", "ACTION_MESH_START", "ACTION_REMEDY",
+    "gate_applies", "gate_reason", "record_reviewed",
+    "services_summary", "domain_summary",
+    "restart_gate_reason",
+    "ACTION_IMAGE_BUILD", "ACTION_MESH_START", "ACTION_BUILD_RESTART",
+    "ACTION_REMEDY",
 ]
 
 #: The three scopes a service choice can have in this platform (#497). They are NOT
@@ -130,6 +133,9 @@ ENFORCEMENT_NOTE = (
 #: refusal names the thing that was refused rather than a generic "cannot continue".
 ACTION_IMAGE_BUILD = "build these images"
 ACTION_MESH_START = "start this mesh"
+#: The previous-builds manager's RESTART. Narrower than the other two on purpose —
+#: see :func:`restart_gate_reason`.
+ACTION_BUILD_RESTART = "restart this build"
 
 #: action -> HOW TO FIX IT FROM WHERE YOU ARE STANDING. Not one shared sentence,
 #: because "go back to the Domain services step" is FALSE at both call sites in
@@ -151,6 +157,10 @@ ACTION_REMEDY = {
         "These domains come from the configuration this session is carrying, not from "
         "this screen. Configure them on the ‘Domain services’ step of the image flow "
         "— every domain has its own page there — or drop them from the Domains table.",
+    ACTION_BUILD_RESTART:
+        "This session's saved configuration names domains it never recorded services "
+        "for. Use Redo instead — it loads the same configuration into the wizard, "
+        "where the ‘Domain services’ step gives every domain its own page.",
 }
 
 
@@ -255,14 +265,61 @@ def describe_carried_over(slug: str) -> str:
 
 # ── the gate ────────────────────────────────────────────────────────────────────────
 def reviewed_names(cfg) -> set[str]:
-    """The domain NAMES whose services page has actually been gone through."""
-    return {str(n) for n in (getattr(cfg, "domain_services_reviewed", None) or [])}
+    """The domain NAMES whose services page has actually been gone through.
+
+    STRIPPED here, at the one read seam, so a hand-edited config carrying
+    ``" acme.example "`` still satisfies the gate for ``acme.example`` instead of
+    wedging it for ever (``unconfigured_domains`` compares the stripped name)."""
+    return {str(n).strip()
+            for n in (getattr(cfg, "domain_services_reviewed", None) or [])}
+
+
+def gate_applies(cfg) -> bool:
+    """Whether the per-domain gate can bite for this config at all.
+
+    It exists so the gate's predicate and the page's ``applies_to`` cannot disagree in
+    the one direction that matters: **the gate must never refuse a flow that does not
+    CONTAIN the step**, because that is a dead end — a refusal naming a screen the
+    operator has no route to. Two flows are exactly that, and in both the domains reach
+    nothing at all:
+
+    * ``standalone`` — ``MODE_SKIPPED_PAGES`` skips the step outright,
+      ``ModePage.validatePage`` clears ``cfg.domains`` on the transition into it, and
+      ``to_cli_args`` emits no ``--domains``;
+    * a cloud **node** role — ``to_cli_args`` emits ``--domains`` only when
+      ``role not in X86_NODE_ROLES`` and cloud writes no mesh manifest, which is the
+      same reason ``superadmin_plane_applies`` skips the tables there.
+
+    The MESH arm of ``superadmin_plane_applies`` is deliberately NOT mirrored. That arm
+    also asks ``cfg.additional_domains``, and a config that carries domains with the
+    opt-in off is one whose domains ``NetworkPage.validatePage`` has not cleared *yet* —
+    on the docker mesh-start path that page may never run at all, so deferring to it
+    there would turn a loaded config's domains into a set nothing can refuse. It is not
+    a dead end either: walking the image flow reaches the step (tick the opt-in) or
+    clears the rows, and both outcomes satisfy the gate.
+    """
+    mode = getattr(cfg, "mode", "") or ""
+    if mode == "standalone":
+        return False
+    if mode == "cloud":
+        # exactly the cloud arm: False for a node role, True for a client image.
+        return superadmin_plane_applies(cfg)
+    return True
 
 
 def unconfigured_domains(cfg) -> list[str]:
     """The named domains on ``cfg`` with no recorded service configuration, in table
     order. A row with an empty name is not a domain yet (the Domains table drops those
-    at validatePage) and is never reported."""
+    at validatePage) and is never reported. Empty whenever :func:`gate_applies` is
+    False.
+
+    STRICTER THAN THE WORKLIST, on purpose: a mesh worklist filters ``base.domains``
+    per entry by ``Domain.images`` (``worklist.entry_config``), and this does not — a
+    domain attached to NO selected image still has to be configured before the build
+    runs. Fail-closed: the alternative is a domain that is in the config, rides the
+    mesh manifest on the next entry that does claim it, and was never asked about."""
+    if not gate_applies(cfg):
+        return []
     done = reviewed_names(cfg)
     out: list[str] = []
     for d in getattr(cfg, "domains", None) or []:
@@ -275,9 +332,12 @@ def unconfigured_domains(cfg) -> list[str]:
 def gate_reason(cfg, action: str = ACTION_IMAGE_BUILD) -> str:
     """"" when ``action`` may proceed; otherwise the refusal, naming every domain.
 
-    THE SEAM. Both gates (the image build at ``gui/pages/launch.py`` and the docker
-    mesh start at ``gui/pages/localmesh.py``) call exactly this, and a test can drive it
-    with a bare ImageConfig — no Qt, no wizard, no build. Naming the domains is the
+    THE SEAM. Every gate calls exactly this — the image build at
+    ``gui/pages/launch.py``, BOTH docker mesh-start doors at ``gui/pages/localmesh.py``
+    (``_bootstrap_up`` and ``_start_saved``), and, through
+    :func:`restart_gate_reason`, the previous-builds RESTART at
+    ``gui/pages/sessions_widget.py`` — and a test can drive it with a bare ImageConfig,
+    no Qt, no wizard, no build, no docker. Naming the domains is the
     point: "configure your domains" is a message that scrolls past, "acme.example has
     no recorded service configuration" is one the operator can act on."""
     missing = unconfigured_domains(cfg)
@@ -298,28 +358,76 @@ def record_reviewed(cfg, names: Iterable[str]) -> list[str]:
     still exist and in table order. REBUILT, never merged: a renamed or deleted domain
     must not leave a stranded marker behind that would let the gate pass for a domain
     nobody configured (the same rule ``cfg.domain_ca`` follows)."""
-    keep = {str(n) for n in names or ()}
-    out = [d.name for d in (getattr(cfg, "domains", None) or [])
-           if (getattr(d, "name", "") or "").strip() and d.name in keep]
+    # STRIP on both sides. unconfigured_domains() compares the STRIPPED name, so a
+    # config carrying " acme.example " would otherwise record a marker the gate can
+    # never match and refuse for ever. The Domains table strips at validatePage, so
+    # only a hand-edited or externally produced config reaches this — which is exactly
+    # the config that must not be able to wedge the gate.
+    keep = {str(n).strip() for n in names or ()}
+    out = [(getattr(d, "name", "") or "").strip()
+           for d in (getattr(cfg, "domains", None) or [])
+           if (getattr(d, "name", "") or "").strip()
+           and (getattr(d, "name", "") or "").strip() in keep]
     seen: set[str] = set()
     cfg.domain_services_reviewed = [n for n in out
                                     if not (n in seen or seen.add(n))]
     return cfg.domain_services_reviewed
 
 
-def domain_summary(domain, cfg=None) -> str:
-    """One line for a domain's recorded services — what the Domains table's read-only
-    cell and the TUI table both show. Distinguishes the three states that
-    ``optional_services`` alone cannot: never configured, configured as "the
-    cluster-wide set applies", and an explicit allow-list."""
-    slugs = normalise_slugs(getattr(domain, "optional_services", None))
-    name = (getattr(domain, "name", "") or "").strip()
-    if cfg is not None and name and name not in reviewed_names(cfg):
+def services_summary(selected, reviewed: bool) -> str:
+    """ONE line for a domain's recorded services, and the ONLY place its wording lives.
+
+    Three states ``optional_services`` alone cannot tell apart:
+
+    * ``reviewed=False``  → "not configured yet" (nobody has been through this
+      domain's page) or "not confirmed — <slugs>" (a loaded config already carried
+      slugs, which are shown so an older worklist visibly keeps its manifest data);
+    * ``reviewed=True`` with no slugs → "cluster default", i.e. the cluster-wide set
+      applies. That is a real answer and NOT the same fact as "unset" — and it is not
+      the ``SERVICES_NONE`` sentinel either, which is spelled "none" and emits an
+      explicit EMPTY allow-list (config.py's emission table);
+    * ``reviewed=True`` with slugs → the allow-list itself.
+
+    ``gui/pages/domains.py``'s read-only cell renders exactly this string. It used to
+    carry its own copy of the three branches, which meant the wording the whole
+    honesty argument rests on had two sources of truth and the tested one was not the
+    one on screen."""
+    slugs = normalise_slugs(selected)
+    if not reviewed:
         return ("not configured yet" if not slugs
                 else "not confirmed — " + ", ".join(slugs))
-    if not slugs:
-        return "cluster default"
-    return ", ".join(slugs)
+    return "cluster default" if not slugs else ", ".join(slugs)
+
+
+def domain_summary(domain, cfg=None) -> str:
+    """:func:`services_summary` for a ``Domain`` object, reading the reviewed marker
+    off ``cfg``. With ``cfg=None`` the domain is treated as reviewed (there is nothing
+    to read the marker from, and inventing "unconfigured" from an absent config would
+    make every caller that only has a domain say the alarming thing)."""
+    name = (getattr(domain, "name", "") or "").strip()
+    reviewed = True
+    if cfg is not None and name:
+        reviewed = name in reviewed_names(cfg)
+    return services_summary(getattr(domain, "optional_services", None), reviewed)
+
+
+def restart_gate_reason(cfg) -> str:
+    """The RESTART gate — narrower than :func:`gate_reason`, and deliberately so.
+
+    ``StudioWizard.start_build_from_session`` re-dispatches a configuration that was
+    already recorded and already built once. Every session recorded BEFORE
+    ``domain_services_reviewed`` existed carries no marker at all, so refusing on an
+    empty marker list would refuse every historical restart over a question nobody was
+    ever asked — a gate that only punishes the operator for having used the tool
+    earlier.
+
+    So this bites only for a configuration that ALREADY carries at least one reviewed
+    name, i.e. one produced under this feature, and has since gained a domain with no
+    recorded configuration. A session recorded under this feature cannot have an empty
+    marker list and a domain, because the build gate refused exactly that."""
+    if not reviewed_names(cfg):
+        return ""
+    return gate_reason(cfg, ACTION_BUILD_RESTART)
 
 
 # ── #497: the choices this page SHOWS but does not own ──────────────────────────────
