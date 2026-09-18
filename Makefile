@@ -1328,6 +1328,49 @@ kind-addon-check: ## offline: prove a KIND_ADDONS selection reaches bootstrap-ki
 kind-down: ## delete the kind cluster
 	kind delete cluster --name $${KIND_CLUSTER_NAME:-hugmesh-local}
 
+# The NON-destructive stop, and its resume (hugmesh-generator#356, decision 44 = a).
+#
+# `kind-down` above is the destructive one and stays that way: it deletes the
+# cluster, its Vault KV, its Casdoor identities and every seeded account, and the
+# next `kind-up` is a full cold bring-up that comes back EMPTY until reseeded.
+# `kind-halt` is the other half the lane never had — stop WITHOUT destroying.
+#
+# It is a matched PAIR and both halves must exist for either to be honest:
+#   * halt alone would be a lie if it only scaled, because every live Application
+#     here carries syncPolicy.automated {prune, selfHeal} and would scale the
+#     workloads straight back up. So halt suspends auto-sync too.
+#   * a suspend that is never undone is WORSE than no halt, because the cluster
+#     then silently stops tracking git. So resume exists, and it restores exactly
+#     what halt recorded — never "everything", which would undo a deliberate
+#     suspend someone else made.
+#
+# The record lives in a ConfigMap INSIDE the cluster, which is what makes these
+# three targets work with no Studio running: a halted cluster whose only resume
+# path was a GUI would be a trap.
+#
+# AND IT IS WRITTEN BEFORE THE FIRST MUTATION, which is the line the whole pair
+# hangs on. The Studio runs `kind-halt` with a Cancel button that terminates the
+# process group, so the halt can stop between any two API calls; written last, a
+# cancelled halt left the cluster halted with NO record of how to undo it, and the
+# only way out was `kind-down && kind-up` — destroying the cluster, the one outcome
+# #356 exists to prevent. Written first, a cancelled halt is fully undoable by
+# `kind-resume` and can be finished by running `kind-halt` again. If the record
+# cannot be written, NOTHING is halted (exit 5).
+kind-halt: ## stop the DevOps lane WITHOUT deleting it (scale mesh workloads to 0 + suspend ArgoCD auto-sync; `kind-down` is the destructive one)
+	bash scripts/kind-halt.sh halt
+
+kind-resume: ## undo `kind-halt`: restore exactly the replica counts and the auto-sync it recorded
+	bash scripts/kind-halt.sh resume
+
+kind-halt-status: ## read-only: is the DevOps lane halted, and what did the halt suspend?
+	bash scripts/kind-halt.sh status
+
+# Offline guard for the pair above. Stubs kind/docker/kubectl on PATH and proves
+# every refusal actually bites — above all that a census which ERRORS is never
+# read as "no cluster".
+kind-halt-check: ## offline: prove kind-halt's refusals bite (stubbed kind/docker/kubectl; touches no cluster)
+	bash tests/scripts/test-kind-halt.sh
+
 # kind-doctor — the standing "can this cluster actually run the mesh?" check.
 #
 # hugmesh-generator#349: on 2026-09-10 this lane had been dead for two days

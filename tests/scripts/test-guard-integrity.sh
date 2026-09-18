@@ -493,7 +493,18 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # ungated SET pin is unchanged at 22. This file conflicts on nearly every merge;
 # if it conflicts here, RE-MEASURE on the merged tree per the doctrine above
 # rather than taking 169 or the other side's number.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-169}"
+#
+# 169 -> 170 / denominator 192 (unchanged -> 192) on iss/356-kind-lane-halt, which
+# adds ONE suite and gates it: tests/scripts/test-kind-halt.sh, the offline guard
+# over `make kind-halt` / `make kind-resume` (the kind lane's non-destructive stop).
+# MEASURED, not incremented — this is the number this file printed when run against
+# that tree:
+#     170 of 192 suites are named by a pull_request-triggered workflow
+# It is deliberately NOT in PREMERGE_UNGATED: the suite is offline, stubs kind,
+# docker and kubectl on PATH, touches no cluster and runs in a few seconds, so it
+# has no reason to sit outside the gate. Recording a false exemption here is how
+# rot has stayed hidden for weeks before.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-170}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED
