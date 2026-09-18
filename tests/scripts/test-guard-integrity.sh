@@ -622,7 +622,17 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # value):
 #     175 of 197 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 22 — neither new suite was ever in it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-175}"
+#
+# 175 -> 176 on 2026-09-18: tests/scripts/test-deeplink-remote-coverage.sh
+# joined the gate (wired into shell-suites.yml's debian job and .gitlab-ci.yml's
+# lint:deeplink-remote-coverage), guarding the SPA deep-link fallback route's
+# coverage of every in-shell `*-ui` remote — derived from each fe route table's
+# own routes, never hardcoded — against hugmesh-generator#381 (the /admin, /mod,
+# /user gap) regressing, or the next remote repeating it. MEASURED by RUNNING
+# this file on the tree with the new suite wired, not assumed (GUARD_PREMERGE=0):
+#     176 of 198 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22 — the new suite was never in it.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-176}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED

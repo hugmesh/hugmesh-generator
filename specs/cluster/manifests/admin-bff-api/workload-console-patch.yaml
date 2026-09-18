@@ -187,17 +187,29 @@ spec:
             # TODO below) `df` is refused OUTRIGHT rather than narrowed. That is the same
             # interim cost already accepted for `ps` and `date`, and it errs closed.
             #
-            # `stat` IS DELIBERATELY LEFT BARE AND IS NOT DECIDED HERE (#545). Every
+            # `stat` IS PINNED TO `stat -t` (decision 63, #545, operator 2026-09-18).
+            # #545 itself could not defend a pinned form and left the box unticked: EVERY
             # USEFUL form of `stat` takes a CALLER-CHOSEN PATH (`stat <path>`), and an
-            # exact whole-argv entry cannot express "any path" — so under this list's own
-            # rules the only available moves are "keep bare" or "drop", not "pin". Dropping
-            # it is a capability removal, and it would NOT close the class it appears to:
-            # `stat --file-system <path>` prints the same free-block counters `df` does,
-            # but bare `ls` — also unpinnable for the same operand reason — already gives
-            # the path-existence and metadata oracle (`ls -l <path>`: size, mode, mtime,
-            # owner). So dropping `stat` costs a capability and buys redundancy removal,
-            # not a narrowed surface. That is a product call nobody has made; it is
-            # recorded on #545 rather than guessed at here.
+            # exact whole-argv entry cannot express "any path" — so bare `stat -t` (no
+            # operand) is, today, exactly as inert as `ps -e`/`date -u` already are: it is
+            # FAIL-CLOSED against the shipped first-token matcher (see the CROSS-REPO TODO
+            # below), so no live invocation of `stat` in any shape is reachable until that
+            # matcher lands. What the pin buys NOW is the CAPABILITY DECISION itself,
+            # recorded in the shape the future whole-argv matcher will honour: `-t`
+            # (terse, FILE-status form) rather than `-f`/`--file-system`, which prints the
+            # same moving free-block counters `df` does (the reason `df` itself was pinned
+            # to `-h` in #545/#551) — so the pinned form can never become a second
+            # mount-topology oracle once paths are reachable again. `stat --file-system`
+            # and `stat -f` are the two rejected shapes; tests/workload-console proves
+            # that the value below carries exactly `stat -t` and NEITHER rejected shape
+            # (a mutated-copy negative control), and separately proves the shipped
+            # first-token matcher REFUSES `stat --file-system` and `stat -f` against this
+            # exact config (the property test additionally confirms `-t` carries no
+            # path-valued, environment-dumping or program-running documentation, same as
+            # every other pinned entry). None of this is a property-P violation on EITHER
+            # rejected shape — bare `stat --file-system` with no operand leaks nothing
+            # either — so, like `df`, this is a CAPABILITY decision, not a property
+            # finding.
             #
             # `uptime` — noted, no action (#545). `uptime -r` was measured to move between
             # two identical probes (`260061.540000` -> `260061.550000`), like every other
@@ -211,7 +223,7 @@ spec:
             # reachable. Entries must never contain a comma: this env binds as a
             # comma-delimited List<String>.
             - name: WORKLOAD_CONSOLE_EXEC_READONLY
-              value: "ls,df -h,free,uptime,id,uname,stat,ps -e,date -u"
+              value: "ls,df -h,free,uptime,id,uname,stat -t,ps -e,date -u"
             # Grant lease TTL + expiry-sweep cadence — the application.yml defaults,
             # emitted explicitly so the operator knobs are visible in the pod spec.
             - { name: WORKLOAD_CONSOLE_GRANT_TTL_HOURS,        value: "24" }
