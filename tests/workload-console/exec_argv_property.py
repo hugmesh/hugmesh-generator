@@ -983,6 +983,119 @@ def parser_self_test(ok, bad):
     return True
 
 
+# ── the differential leg's own self-test ──────────────────────────────────────
+# parser_self_test() exists because Oracle A went BLIND once (#405) while every line
+# it printed stayed reassuring. #492 is the same failure wearing the other face: the
+# differential leg was not blind, it was CREDULOUS — it called a value a content leak
+# on evidence a busy filesystem manufactures by itself. Neither defect is reachable
+# by probing real commands, because on a quiet host the real commands behave; that is
+# precisely how #492 reached main past a lane, a skeptic and a critic who each
+# measured 72 passed / 0 failed. So the leg is driven by hand against inputs whose
+# answer is known before it is asked.
+#
+# The stubs are /bin/sh and need no external binary, so this control cannot decay
+# into "the runner is missing something". Each one is a claim:
+#
+#   flip  — its output alternates on EVERY run and it never opens the file it is
+#           handed, so calling it a leak is a false positive BY CONSTRUCTION. Measured
+#           against the pre-#492 single-round rule on this tree: flagged 7 times out
+#           of 7, with no load and no luck. It is the live control for the round-2
+#           confirmation — delete that round, or let round 2 repeat round 1's
+#           ordering, and this goes red.
+#   hold2 — its output holds for TWO runs and then flips. It must stay clean here,
+#           and it is the shape that defeats the "probe each variant twice in a row,
+#           require the token to be stable across the pair" alternative: the repeat
+#           pair sits inside one run of the wave, so pure noise looks perfectly
+#           stable. The schedule therefore cannot be re-derived into that form on the
+#           strength of a comment alone.
+#   leak  — its output really IS a function of the probed file's bytes (the tail of
+#           its first line, which is one of the encodings the leg's own docstring
+#           names). It MUST fire. Making a flake go away by weakening detection is
+#           the failure mode this suite was rebuilt to prevent, and this stub is what
+#           refuses to allow it.
+#
+# A failure here is UNPROVEN, not a finding against the allowlist: it says this
+# module cannot presently tell a leak from the weather, not that an entry leaks.
+_DIFF_STUBS = (
+    # (name, /bin/sh body with @CTR@ substituted, must the leg fire?)
+    ("flip",
+     '#!/bin/sh\n'
+     'read -r n < "@CTR@" 2>/dev/null || n=0\n'
+     'echo $((n + 1)) > "@CTR@"\n'
+     'echo "wcdiffnoise$((n - (n / 2) * 2))"\n',
+     False),
+    ("hold2",
+     '#!/bin/sh\n'
+     'read -r n < "@CTR@" 2>/dev/null || n=0\n'
+     'echo $((n + 1)) > "@CTR@"\n'
+     'echo "wcdiffnoise$(((n / 2) - ((n / 4) * 2)))"\n',
+     False),
+    ("leak",
+     '#!/bin/sh\n'
+     'read -r line < "$1" 2>/dev/null || exit 0\n'
+     'echo "wcdiffleak${line#?????????????????}"\n',
+     True),
+)
+
+_DIFF_WHY = {
+    "flip": "its output alternates on every run and it never opens the file it is "
+            "handed, so it carries no information about any file's bytes",
+    "hold2": "its output holds for two runs and then flips, which is what a "
+             "filesystem counter does while something else writes",
+    "leak": "its output is the tail of the probed file's first line, which is a "
+            "function of that file's bytes in a different alphabet",
+}
+
+
+def differential_self_test(ok, unproven):
+    """Pin Oracle B' against stubs whose verdict is known. True when sound."""
+    tmp = tempfile.mkdtemp(prefix="wc-diff-selftest-")
+    try:
+        built = []
+        for name, body, want in _DIFF_STUBS:
+            path = os.path.join(tmp, name)
+            ctr = os.path.join(tmp, name + ".ctr")
+            with open(ctr, "w") as fh:
+                fh.write("0\n")
+            with open(path, "w") as fh:
+                fh.write(body.replace("@CTR@", ctr))
+            os.chmod(path, 0o755)
+            built.append((name, path, want))
+
+        can = Canaries()
+        try:
+            for name, path, want in built:
+                fired = bool(content_leaks([[path, CANARY]], can))
+                if fired == want:
+                    continue
+                if want:
+                    unproven(
+                        "differential self-test: the stub %r was NOT reported as a "
+                        "content leak, and %s. Oracle B' no longer detects the class it "
+                        "exists for, so a base64/cksum/od-shaped reader would pass "
+                        "unremarked and every 'no output token changed with the file's "
+                        "BYTES' PASS below is UNPROVEN." % (name, _DIFF_WHY[name]))
+                else:
+                    unproven(
+                        "differential self-test: the stub %r WAS reported as a content "
+                        "leak, and %s. Oracle B' is being confounded by output that "
+                        "moves for reasons unrelated to the probed file — #492 exactly "
+                        "— so every [behaviour/differential] verdict in this run is "
+                        "UNPROVEN, in both directions." % (name, _DIFF_WHY[name]))
+                return False
+        finally:
+            can.cleanup()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    ok("differential self-test: Oracle B' fires on a stub whose output is a function "
+       "of the probed file's bytes, and stays silent on stubs whose output merely "
+       "moves with the clock (alternating every run, and holding for two runs then "
+       "flipping) — the leg can still catch a leak and is no longer confounded by "
+       "global state changing underneath the probe")
+    return True
+
+
 # ── the check ─────────────────────────────────────────────────────────────────
 def check_entries(entries, emit):
     """Assert P over a parsed allowlist. Returns (passes, failures, unprovens).
@@ -1013,6 +1126,7 @@ def check_entries(entries, emit):
         bad(m)
 
     parser_self_test(ok, unproven)
+    differential_self_test(ok, unproven)
 
     if not entries:
         bad("exec allowlist is empty")

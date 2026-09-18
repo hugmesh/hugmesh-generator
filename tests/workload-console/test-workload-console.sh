@@ -841,6 +841,28 @@ if [ -f "${PROP}" ] && command -v python3 >/dev/null; then
   ctl "a command that really does hold P (uname)" "uname" "" pass
   ctl "a FILE-operand command that leaks no bytes (stat)" "stat" "" pass
 
+  # NEGATIVE 5b — the differential leg's OWN self-test must actually RUN. The module
+  # can prove that Oracle B' still tells a leak from the weather (#492: `df <file>`
+  # prints the FILESYSTEM's used and available blocks, and on a busy host those move
+  # in step with the probe sequence well enough to read as a content leak). What the
+  # module cannot prove is that the proof is still being asked for, and deleting one
+  # call is the cheapest way to make the repair disappear with every line above still
+  # green.
+  #
+  # MEASURED 2026-09-17 on this tree, as a mutation battery over the repaired module:
+  # reverting the round-2 confirmation, making round 2 repeat round 1's ordering,
+  # rotating round 2 to the same content phase, and turning the two rounds'
+  # intersection into a union ALL left the du/base64/cut/nice controls above green --
+  # they stay red for their own reasons, so they cannot see a weakened oracle. The
+  # differential self-test was the only line that moved in any of those four. Its
+  # own missing-call mutation is what this control exists for.
+  diff_st_out="$(python3 "${PROP}" --entries 'uname' 2>&1)"
+  if printf '%s' "${diff_st_out}" | grep -F "PASS differential self-test:" >/dev/null; then
+    ok "control: the differential leg's self-test RAN in this invocation — Oracle B' was shown, in this very process, to fire on a token derived from the probed file's bytes and to stay silent on one that merely moves with the clock"
+  else
+    bad "control: the property script ran WITHOUT its differential self-test (#492) — nothing in this suite then separates an Oracle B' that catches a leak from one a busy filesystem can talk into a false positive, and the entry that flaked is on the shipped allowlist"
+  fi
+
   # NEGATIVE 5 — a help text this parser CANNOT READ is UNPROVEN and non-zero, never
   # a quiet green. #405 was exactly this shape: GNU coreutils 9.11 wraps every option
   # token in an OSC 8 hyperlink and SGR bold even into a pipe, the parser saw ESC
