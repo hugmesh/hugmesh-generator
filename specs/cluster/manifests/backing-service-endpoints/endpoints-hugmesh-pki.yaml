@@ -1,0 +1,55 @@
+# backing-service-endpoints (hugmesh-pki) — the same object, the same name, the same
+# key scheme, in the second always-present namespace that holds Postgres addresses.
+# Operator DECISION 34a (one ConfigMap PER NAMESPACE). See
+# endpoints-hugmesh-backend.yaml for the full contract; this header records only why
+# `data` is empty here, so nobody reads the emptiness as an oversight or fills it in
+# from a diff.
+#
+# WHAT LIVES IN hugmesh-pki AND WHY NONE OF IT CAN BE A KEY YET — measured
+# 2026-09-17 against specs/cluster on origin/main:
+#
+#   1. casdoor  (manifests/casdoor/app-conf-configmap.yaml:30)
+#      Registry id: `postgres-casdoor` EXISTS (backing-services.yaml:392, tier 2).
+#      But the address is not env: it is `host=casdoor-pg` inside a libpq
+#      dataSourceName string held in a ConfigMap TEMPLATE, whose
+#      `__CASDOOR_DB_USER__` / `__CASDOOR_DB_PASSWORD__` placeholders are
+#      substituted by the init container at start. There is no `configMapKeyRef`
+#      seam to point at a key here, and copying the whole DSN into this object
+#      would put a credential-shaped string into a world-readable, git-committed,
+#      ArgoCD-diffed object. `postgres-casdoor` therefore gets NO key until its
+#      consumer grows an indirection of its own — a separate slice.
+#
+#   2. headwind (manifests/headwind/headwind.yaml:64, SQL_HOST)
+#      Consumed via `envFrom: configMapRef` on headwind's OWN ConfigMap, as a bare
+#      host (not a URL), and it has NO backing-services.yaml id at all.
+#
+#   3. route-access-db — read by pki-gateway (apps/20-gateway-pki.yaml:84) and
+#      superadmin-gateway (apps/22-gateway-superadmin.yaml:109), and from other
+#      namespaces by be-gateway, fe-gateway and admin-bff.
+#      Excluded for TWO independent reasons, and both must stay written down:
+#        (a) the password is interpolated INTO the address
+#            (`…://pki_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@…`). Kubernetes expands
+#            `$(VAR)` in a container's `env[].value` — it does NOT expand it inside
+#            ConfigMap *data*, so the string would arrive at the app literally. A
+#            ConfigMap is also not a Secret.
+#        (b) federation-db and route-access-db ship initdb/90-citus.sh and vanilla
+#            RDS has no Citus (backing-services.yaml:262-263) — documented, not coded.
+#      Each of the five gateway consumers uses its OWN least-privilege role, so a
+#      single shared `route-access.*` key could not serve them even if (a) were
+#      solved: the credential-free-address + per-consumer username/password split
+#      would have to be done five times.
+#
+# The object and its RBAC grant (rbac.yaml) ship anyway, deliberately: DECISION 34a
+# is that the CONTRACT is per-namespace, so the object and the writer's grant exist
+# in every namespace on the axis and the fan-out writer needs no special case the day
+# a key appears here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backing-service-endpoints
+  namespace: hugmesh-pki
+  labels:
+    app.kubernetes.io/name: backing-service-endpoints
+    app.kubernetes.io/component: backing-services
+    app.kubernetes.io/part-of: hugmesh.net
+data: {}

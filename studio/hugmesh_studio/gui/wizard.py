@@ -19,7 +19,8 @@ from ..core.platform_info import detect
 from ..core import platform_info
 from ..core import worklist as worklist_mod
 from .pages import (
-    BrandingPage, BuildPage, DeployPage, DomainsChoicePage, DomainsPage, E2EPage,
+    BrandingPage, BuildPage, DeployPage, DomainServicesPage, DomainsChoicePage,
+    DomainsPage, E2EPage,
     HardwarePage,
     HomePage, IdpPage, KeyZipPage, LaunchPage, LocalCloudNodesPage, LocalMeshPage,
     MeshEmulationPage, ModePage, NetworkPage,
@@ -46,7 +47,8 @@ __all__ = [
     "LocalCloudNodesPage", "IdpPage",
     "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage",
-    "DomainsChoicePage", "DomainsPage", "UsersChoicePage", "UsersPage",
+    "DomainsChoicePage", "DomainsPage", "DomainServicesPage",
+    "UsersChoicePage", "UsersPage",
     "SystemPage", "VaultPage", "HomePage", "BuildPage", "LaunchPage", "ProgressPage",
     "LocalMeshChoicePage", "LocalMeshJoinPage", "LocalMeshEnvPage",
     "LocalMeshSourcePage", "LocalMeshServicesPage", "LocalMeshIdpPage",
@@ -242,7 +244,8 @@ class StudioWizard(QtWidgets.QWizard):
             E2EPage, QemuPage, MeshEmulationPage, LocalCloudNodesPage,
             IdpPage,
             RolePage, WorklistPage, HardwarePage, BrandingPage, NetworkPage, KeyZipPage,
-            DomainsChoicePage, DomainsPage, UsersChoicePage, UsersPage,
+            DomainsChoicePage, DomainsPage, DomainServicesPage,
+            UsersChoicePage, UsersPage,
             SystemPage, VaultPage, HomePage, BuildPage, LaunchPage, ProgressPage,
         ]
         assert len(page_ctors) == len(WIZARD_PAGE_SLUGS), (

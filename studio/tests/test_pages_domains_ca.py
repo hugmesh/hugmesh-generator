@@ -38,7 +38,8 @@ from hugmesh_studio.gui.pages import vault as vault_mod  # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets  # noqa: E402
 
 from _helpers import (  # noqa: E402
-    advance_to, check_worklist_rows, enable_additional_domains, pick_mode)
+    advance_to, back_to, check_worklist_rows, enable_additional_domains,
+    pick_mode)
 from ca_fixtures import CA_ALT, CA_ROOT  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -188,7 +189,9 @@ def test_deleting_a_domain_takes_its_choice_with_it(wiz):
         combo.setCurrentIndex(combo.findData(CA_ROOT))
     advance_to(wiz, wizard_mod.UsersChoicePage)
     assert set(wiz.cfg.domain_ca) == {"acme.example", "team.acme.example"}
-    wiz.back()
+    # back_to, not a single back(): the per-domain Services step (#495) now sits
+    # between Domains and the Users choice, so one back() lands there instead.
+    back_to(wiz, wizard_mod.DomainsPage)
     dom.table.removeRow(1)
     advance_to(wiz, wizard_mod.UsersChoicePage)
     assert wiz.cfg.domain_ca == {"acme.example": CA_ROOT}
@@ -202,7 +205,7 @@ def test_renaming_a_domain_does_not_leave_the_old_name_behind(wiz):
     combo.setCurrentIndex(combo.findData(CA_ROOT))
     advance_to(wiz, wizard_mod.UsersChoicePage)
     assert wiz.cfg.domain_ca == {"acme.example": CA_ROOT}
-    wiz.back()
+    back_to(wiz, wizard_mod.DomainsPage)          # see the note above
     dom.table.item(0, 0).setText("renamed.example")
     advance_to(wiz, wizard_mod.UsersChoicePage)
     assert wiz.cfg.domain_ca == {"renamed.example": CA_ROOT}

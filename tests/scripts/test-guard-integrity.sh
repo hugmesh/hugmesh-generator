@@ -492,8 +492,105 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # too, so the debian placement is a choice of ONE job, not a constraint. The
 # ungated SET pin is unchanged at 22. This file conflicts on nearly every merge;
 # if it conflicts here, RE-MEASURE on the merged tree per the doctrine above
-# rather than taking 169 or the other side's number.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-169}"
+# rather than taking 169, 170, 171 or any one side's number.
+#
+# 170 (this branch) and 171 (main) -> RE-MEASURED on 2026-09-17 while merging
+# origin/main into iss/366-fe-gateway-cluster-route-table-404s-five-bff-pat. Both
+# sides moved the baseline for DIFFERENT suites and neither number is true of the
+# merged tree: main reached 171 by gating tests/scripts/test-kind-halt.sh (#356)
+# AND tests/scripts/test-eso-remoteref-brand.sh (#285), this branch reached 170 by
+# gating tests/scripts/test-fe-bff-route-lane-parity.sh (#366, decision 40 = B on
+# #347). The merged tree has all three, so — as every reconciliation below did —
+# the number was taken by RUNNING this file on the MERGED tree and reading the
+# line it prints, not by adding 1 to either side. Every note either side of this
+# one is kept: they are complementary records, none supersedes another.
+# THE MEASUREMENT on the merged tree, taken by running this file:
+#     172 of 194 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22.
+#
+# 169 -> 170 on 2026-09-17: tests/scripts/test-fe-bff-route-lane-parity.sh joined
+# the gate with operator decision 40 (hugmesh-generator#347 answers comment;
+# tracked on hugmesh-generator#366). It reads BOTH fe route tables — the compose
+# one (tests/stack/gateway-routes/fe/application-routes.yml) and the cluster one
+# (specs/cluster/apps/20-gateway-fe.yaml) — simulates Spring Cloud Gateway's
+# first-match-wins ordering over each, and asserts the five #366 paths resolve to
+# the SAME BFF on both. Two of the five have no handler anywhere and 404 by
+# ACCEPTED decision, so the guard also has to stop a well-meaning revert.
+# MEASURED by RUNNING this file both ways on the same tree, not assumed:
+#     170 of 192 suites are named by a pull_request-triggered workflow   (with it)
+#     169 of 191 suites are named by a pull_request-triggered workflow   (without)
+# — "without" meaning the suite file deleted AND both its wirings removed, so the
+# denominator moves too, exactly like the 164 -> 165 entry above. Named in
+# shell-suites.yml's DEBIAN job (python:3.12-slim) because it needs PyYAML, which
+# only the debian and extras jobs install; the alpine job has no yaml module and
+# the suite would die on the import rather than skip. The ungated SET pin is
+# unchanged at 22 in both measurements. RUN on this host after the landing pass
+# added nine asserted matcher cases: 19 passed / 0 failed rc=0 with six negative
+# controls 6 caught / 0 survived, and against the PRE-CHANGE compose table
+# (origin/main's copy dropped in on disk) it prints 14 passed / 5 failed rc=1,
+# one failure per #366 path.
+#
+# 170 -> RE-MEASURED on 2026-09-17 while merging origin/main into
+# iss/285-vault-brand-remoteref. BOTH sides of this merge said 170 and NEITHER is
+# true of the merged tree: main reached 170 by gating tests/scripts/test-kind-halt.sh
+# (#356), this branch reached 170 by gating tests/scripts/test-eso-remoteref-brand.sh
+# (#285, decision 38 = B on #347). The merged tree has BOTH suites, so, as every
+# reconciliation above did, the number below was taken by RUNNING this file on the
+# merged tree and reading the line it prints. The two notes either side of this one
+# are kept as a union: complementary records, neither one superseding the other.
+# NOTE on placement: test-eso-remoteref-brand.sh is gated in the GitHub `extras` job
+# rather than `guards`, because it renders what ArgoCD renders and needs kubectl +
+# PyYAML, which only that job installs and preflights. It is NOT in
+# PREMERGE_UNGATED: it is offline, touches no cluster, and runs in ~12s.
+# THE MEASUREMENT on the merged tree, taken by running this file:
+#     171 of 193 suites are named by a pull_request-triggered workflow
+# so the baseline below is 171, not either side's 170. The ungated SET pin is
+# unchanged at 22.
+# 169 -> 170 / denominator 192 (unchanged -> 192) on iss/356-kind-lane-halt, which
+# adds ONE suite and gates it: tests/scripts/test-kind-halt.sh, the offline guard
+# over `make kind-halt` / `make kind-resume` (the kind lane's non-destructive stop).
+# MEASURED, not incremented — this is the number this file printed when run against
+# that tree:
+#     170 of 192 suites are named by a pull_request-triggered workflow
+# It is deliberately NOT in PREMERGE_UNGATED: the suite is offline, stubs kind,
+# docker and kubectl on PATH, touches no cluster and runs in a few seconds, so it
+# has no reason to sit outside the gate. Recording a false exemption here is how
+# rot has stayed hidden for weeks before.
+
+
+# 169 -> 170 on 2026-09-17: tests/scripts/test-eso-remoteref-brand.sh joined the
+# gate with the ExternalSecret remoteRef brand rule (hugmesh-generator#285,
+# decision 38 = B on #347). MEASURED by RUNNING this file on the tree with the
+# suite wired and unwired, not assumed: unwired it printed "all 192 suites are
+# invoked ... (0 allowlisted)" and the gated count 169; wired it printed
+# "pre-merge suite coverage rose to 170, baseline still says 169". The ungated
+# SET pin is unchanged at 22.
+# 169 -> 170 on 2026-09-17: tests/scripts/test-backing-service-endpoints-closure.sh
+# joined the gate. It is the manifest-side guard for operator DECISION 34a/34b — the
+# one that goes RED when the per-namespace backing-service-endpoints fan-out is
+# reverted to the single hugmesh-backend object the operator DECLINED. It was added
+# because an adversarial review measured five manifest mutations surviving every
+# suite the shipping PR cited as verification. MEASURED, not assumed: with the suite
+# named in shell-suites.yml's DEBIAN job this file printed
+# "170 of 192 suites are named by a pull_request-triggered workflow" and with the
+# name removed it printed 169, so the raise is this one suite and nothing else. The
+# ungated SET pin is unchanged — the suite landed INSIDE the gate, so PREMERGE_UNGATED
+# gains no entry.
+#
+# 172 (main) and 170 (this branch) -> RE-MEASURED on 2026-09-17 while merging
+# origin/main into iss/decision34-backing-service-endpoints. This file conflicts on
+# nearly every merge and BOTH sides' numbers were true only of their own tree: main
+# reached 172 by gating test-kind-halt.sh (#356), test-eso-remoteref-brand.sh (#285)
+# and test-fe-bff-route-lane-parity.sh (#366); this branch reached 170 by gating
+# test-backing-service-endpoints-closure.sh (#486). The merged tree has all four, so
+# — as every reconciliation above did — the number below was taken by RUNNING this
+# file on the MERGED tree and reading the line it prints, never by adding 1 to either
+# side. Every note either side of this one is kept: they are complementary records,
+# none supersedes another.
+# THE MEASUREMENT on the merged tree, taken by running this file:
+#     173 of 195 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-173}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED

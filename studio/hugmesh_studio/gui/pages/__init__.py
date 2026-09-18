@@ -24,6 +24,7 @@ from .network import NetworkPage
 from .keyzip import KeyZipPage
 from .domains_choice import DomainsChoicePage
 from .domains import DomainsPage
+from .domain_services import DomainServicesPage
 from .users_choice import UsersChoicePage
 from .users import UsersPage
 from .system import SystemPage
@@ -48,6 +49,7 @@ __all__ = [
     "LocalCloudNodesPage", "IdpPage",
     "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage",
-    "DomainsChoicePage", "DomainsPage", "UsersChoicePage", "UsersPage",
+    "DomainsChoicePage", "DomainsPage", "DomainServicesPage",
+    "UsersChoicePage", "UsersPage",
     "SystemPage", "VaultPage", "HomePage", "BuildPage", "LaunchPage", "ProgressPage",
 ]
