@@ -107,17 +107,30 @@ Feature: The in-image fail-closed floor is measured against the cluster seed
   # revert the gateway row and the second leg goes back to NO_RULE and this goes
   # RED, naming the file that moved.
   #
-  # WHAT IS STILL TRUE AFTER IT. The MFA floor does NOT come with the baked row.
-  # mfa_required=true is written only by the cluster seed's flip UPDATE onto the
-  # POSTGRES copy (the baked floor is mfa_required=false by design, D8, so a
-  # fallback can never lock out a privileged surface on the bare floor). So on a
-  # dual-datastore outage the superadmin door is role-gated and header-emitting
-  # again, but NOT step-up gated. That residual is stated here, asserted in
-  # hugmesh-gateway's own suite, and is not something this file can measure.
-  # The same is now true of decision 28's mfa_required=true on the cluster seed's
-  # games-services DENY row: it lives in Postgres only, so a dual-datastore
-  # outage drops that floor too. D8 is the reason in both cases — no baked row
-  # may carry mfa_required=true — and neither decision changed D8.
+  # ⚠ UPDATED AGAIN — decision 56 (hugmesh-generator#347, operator answer
+  # 2026-09-18: "a declared set of privileged rows") closed HALF of the residual
+  # the paragraph below used to describe as permanent. What follows is the
+  # CURRENT truth, not the original; the struck reasoning is gone rather than
+  # marked, because it is no longer merely superseded — it is factually wrong
+  # about what the baked floor can carry.
+  #
+  # CanonicalSeed.r() (hugmesh-gateway) no longer hard-codes mfaRequired=false
+  # for EVERY baked row. It stays false by default (D8), EXCEPT for a small,
+  # named constant (MFA_REQUIRED_FALLBACK_ROWS) derived from this very file's
+  # blanket flip UPDATE — and this fe /bff/superadmin/** row is IN that set (it
+  # is the row decision 41 added, and decision 56's own item names it as the
+  # "at minimum" entry). So mfa_required=true on this row's fallback copy is no
+  # longer Postgres-only: the scenario two below pins it TRUE on BOTH sources.
+  #
+  # WHAT IS STILL TRUE. Decision 28's mfa_required=true on the cluster seed's
+  # games-services DENY row is UNCHANGED — that row is a deny row, and D8's
+  # narrowing (decision 56) reaches only rows built by `r()` (ALLOW rows);
+  # `deny()` still hard-codes mfaRequired=false, unconditionally, and decision 56
+  # was explicitly NOT authorised to mirror the games-services row into the
+  # floor at all (recorded on hugmesh-generator#347, decision 56's own text: "do
+  # not do it"). So THAT floor still drops on a dual-datastore outage — see the
+  # games-services scenarios below, now pinning the MFA half of that residual
+  # too, explicitly rather than leaving it to be inferred from an absence.
   Scenario: the superadmin browser door is governed by the cluster seed AND by the fallback floor @layer:gateway
     Given a principal holding only the role "ROLE_USER"
     When the "hugmesh-fe-gateway" gateway decides "/bff/superadmin/service-store/catalog" from the cluster seed
@@ -126,6 +139,39 @@ Feature: The in-image fail-closed floor is measured against the cluster seed
     When the "hugmesh-fe-gateway" gateway decides "/bff/superadmin/service-store/catalog" from the in-image floor
     Then the seed decision is "DENY"
     And the deciding url pattern is "/bff/superadmin/**"
+
+  # DECISION 56's closed half, stated positively. Before this decision the
+  # second leg here would have read "does not require MFA" — that was the
+  # divergence #244/#35 left open. Now both sources agree.
+  Scenario: the superadmin browser door requires MFA on both sources @layer:gateway
+    Given a principal holding only the role "ROLE_USER"
+    When the "hugmesh-fe-gateway" gateway decides "/bff/superadmin/service-store/catalog" from the cluster seed
+    Then the deciding rule requires MFA
+    When the "hugmesh-fe-gateway" gateway decides "/bff/superadmin/service-store/catalog" from the in-image floor
+    Then the deciding rule requires MFA
+
+  # THE be-gateway TWIN of the same declared row (be() carries its OWN
+  # /bff/superadmin/** -> ROLE_SUPERADMIN row, pre-dating decision 41; decision
+  # 56 declares it too — see MFA_REQUIRED_FALLBACK_ROWS's derivation comment).
+  Scenario: the be-gateway superadmin infra console requires MFA on both sources @layer:gateway
+    Given a principal holding only the role "ROLE_USER"
+    When the "hugmesh-be-gateway" gateway decides "/bff/superadmin/workloads" from the cluster seed
+    Then the deciding rule requires MFA
+    When the "hugmesh-be-gateway" gateway decides "/bff/superadmin/workloads" from the in-image floor
+    Then the deciding rule requires MFA
+
+  # DECISION 56's boundary, stated as a NEGATIVE control. Not every SUPERADMIN
+  # surface joined the declared set — pki()'s headscale catch-all did not (its
+  # cluster-seed counterpart is mfa_required=false too: the blanket flip only
+  # touches /bff/admin and /bff/superadmin patterns, and pki's row is a bare
+  # /**). Without this, a future "every privileged row should have it" change
+  # could widen the declared set unnoticed.
+  Scenario: the pki headscale catch-all does NOT require MFA on either source @layer:gateway
+    Given a principal holding only the role "ROLE_USER"
+    When the "hugmesh-pki-gateway" gateway decides "/key" from the cluster seed
+    Then the deciding rule does not require MFA
+    When the "hugmesh-pki-gateway" gateway decides "/key" from the in-image floor
+    Then the deciding rule does not require MFA
 
   # The role that DOES hold a granting row reaches the console from both sources.
   # Without this a future "fix" could satisfy the scenario above by denying
@@ -185,6 +231,30 @@ Feature: The in-image fail-closed floor is measured against the cluster seed
     When the "hugmesh-fe-gateway" gateway decides "/bff/superadmin/games-services/catalog" from the in-image floor
     Then the seed decision is "ALLOW"
     And the deciding url pattern is "/bff/superadmin/**"
+
+  # ⚠ MFA CONVERGES WHERE THE VERDICT DIVERGES — decision 56, added on top of
+  # the ALLOW/DENY split two scenarios above (which is UNCHANGED by decision
+  # 56: `deny()` still hard-codes mfaRequired=false unconditionally, and
+  # decision 56 was explicitly not authorised to bake a games-services row into
+  # the floor). Both sides answer "requires MFA" anyway, for TWO UNRELATED
+  # reasons pinned separately so nobody mistakes this for one mechanism:
+  #   * cluster seed: decision 28's ROW-SCOPED flip on the deny row ITSELF
+  #     (isMfaRequiredSurface() is allow-blind — the deny row's own
+  #     mfa_required=true carries the floor for this subtree);
+  #   * in-image floor: decision 56's declared-set flip on the PLATFORM row
+  #     (/bff/superadmin/**) that decides this path in the ABSENCE of any
+  #     games-services-specific floor row — the same row the two scenarios
+  #     above already pin ALLOW from.
+  # A change that only touches one of the two mechanisms (the row-scoped SQL
+  # flip, or MFA_REQUIRED_FALLBACK_ROWS) goes red here without touching the
+  # ALLOW/DENY scenario above — the two properties are independent and this is
+  # where that independence is proven, not assumed.
+  Scenario: the games-services subtree requires MFA on both sources, for different reasons @layer:gateway
+    Given a principal holding only the role "ROLE_USER"
+    When the "hugmesh-fe-gateway" gateway decides "/bff/superadmin/games-services/catalog" from the cluster seed
+    Then the deciding rule requires MFA
+    When the "hugmesh-fe-gateway" gateway decides "/bff/superadmin/games-services/catalog" from the in-image floor
+    Then the deciding rule requires MFA
 
   # KNOWN-OPEN. The property CanonicalSeed's javadoc claims for itself.
   Scenario: the fallback floor governs every surface the cluster seed governs @layer:gateway
