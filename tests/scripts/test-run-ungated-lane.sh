@@ -25,10 +25,16 @@
 #      the default selection includes the non-e2e entry and `e2e` is the opt-in.
 #   2. a bogus E2E_UNGATED_SET and a guard without the array both refuse (exit 1)
 #      rather than running a guessed subset
-#   3. exit 0/1/2/other classify as PASS/FAIL/SKIP/ERROR, a missing file is an
-#      ERROR, the lane exits 1 on any FAIL/ERROR, evidence lands as run.log plus
-#      one path-named .log per suite, the non-e2e entry IS run by default (32c)
-#      and is NOT run under the explicit E2E_UNGATED_SET=e2e
+#   3. exit 0/1/2/3/other classify as PASS/FAIL/SKIP/INCOMPLETE/ERROR, a missing
+#      file is an ERROR, the lane exits 1 on any FAIL/INCOMPLETE/ERROR, evidence
+#      lands as run.log plus one path-named .log per suite, the non-e2e entry IS
+#      run by default (32c) and is NOT run under the explicit E2E_UNGATED_SET=e2e.
+#      THE INCOMPLETE BUCKET (exit 3) exists because decision 32c pulled suites
+#      into the default set that use exit 3 as a documented third verdict
+#      ("the suite ran and could not reach part of what it asserts"); the runner
+#      used to print "ERROR … (exit 3)" for them, which reads as a crash and
+#      collides with the LANE's own exit 3. It is red, and a lane whose only
+#      non-green suite is INCOMPLETE still exits 1.
 #   4. green+skip exits 0; E2E_UNGATED_STRICT=1 makes it 1
 #   5. VACUITY FLOOR: every suite skipped exits 6, STRICT or not
 #   6. a live footprint (prefix-matched container, or the kind cluster) REFUSES
@@ -38,7 +44,10 @@
 #      refuses, which is the case that shipped broken — a standalone
 #      `hugmesh-real` compose project was invisible and a real run started the
 #      suites beside it (hugmesh-generator#397). An EMPTY watch list refuses
-#      (exit 1) rather than censusing nothing.
+#      (exit 1) rather than censusing nothing. The watch list is matched
+#      LITERALLY: it is neither glob-expanded against the caller's working
+#      directory nor used as a regex, so the rendered `[…]` label always names
+#      exactly what was censused.
 #   7. THERE IS NO OVERRIDE (decision 32b on #347): E2E_UNGATED_ALLOW_LIVE_STACK
 #      is not read at all, so setting it beside a live footprint still refuses
 #      with exit 3 and the runner's source (comment-stripped) never names it.
@@ -53,6 +62,9 @@
 #      suite FAIL without running it
 #  10. E2E_UNGATED_SUITE_TIMEOUT kills a hung suite (exit 124 -> ERROR, lane 1)
 #      and rejects a non-numeric value
+#  12. SIGNAL TRAP (hugmesh-generator#397 item 2): a TERM delivered mid-run
+#      makes the lane print "INTERRUPTED (SIGTERM)", mark its evidence directory
+#      PARTIAL and exit 7, instead of dying silently with no verdict table.
 #  11. the runner's source, comment-stripped, carries no teardown verb, no
 #      `| grep -q`, and no two-assignment `local` (the bash 5.3 trap); the
 #      Makefile target is the runner alone with no prerequisite, and no CI file
@@ -64,7 +76,9 @@
 # paren anchor loosened, the removed
 # ALLOW_LIVE_STACK override reinstated, the watch list narrowed back to
 # hugmesh-local alone, the empty-watch-list guard dropped, the mkdir check
-# dropped, the timeout branch dropped — and each mutation must make at
+# dropped, the timeout branch dropped, the INCOMPLETE bucket folded back into
+# ERROR, the literal prefix match turned back into an unquoted glob + a grep
+# regex, the signal trap deleted — and each mutation must make at
 # least one assertion go red. A mutation that does not change the file is
 # itself a failure. The real runner is never written to.
 #
@@ -118,10 +132,11 @@ write_tree() {
   mkdir -p "${tree}/tests/scripts" "${tree}/tests/stack" "${tree}/tests/other"
   cp "${RUNNER}" "${tree}/tests/scripts/run-ungated-lane.sh"
   case "${profile}" in
-    full)       entries="tests/scripts/test-e2e-green.sh tests/scripts/test-e2e-red.sh tests/scripts/test-e2e-skip.sh tests/scripts/test-e2e-crash.sh tests/scripts/test-e2e-missing.sh tests/stack/test-not-e2e.sh" ;;
+    full)       entries="tests/scripts/test-e2e-green.sh tests/scripts/test-e2e-red.sh tests/scripts/test-e2e-skip.sh tests/scripts/test-e2e-crash.sh tests/scripts/test-e2e-missing.sh tests/scripts/test-e2e-incomplete.sh tests/stack/test-not-e2e.sh" ;;
     greenskip)  entries="tests/scripts/test-e2e-green.sh tests/scripts/test-e2e-skip.sh" ;;
     allskip)    entries="tests/scripts/test-e2e-skip.sh tests/scripts/test-e2e-skip2.sh" ;;
     single)     entries="tests/scripts/test-e2e-green.sh" ;;
+    incomplete) entries="tests/scripts/test-e2e-green.sh tests/scripts/test-e2e-incomplete.sh" ;;
     mutator)    entries="tests/scripts/test-e2e-green.sh tests/scripts/test-e2e-mutator.sh" ;;
     censusdrop) entries="tests/scripts/test-e2e-green.sh tests/scripts/test-e2e-censusdrop.sh" ;;
     sleeper)    entries="tests/scripts/test-e2e-sleeper.sh" ;;
@@ -144,6 +159,9 @@ write_tree() {
   stub tests/scripts/test-e2e-skip.sh       'echo "SKIPPED-LOUDLY no toolchain"; exit 2'
   stub tests/scripts/test-e2e-skip2.sh      'echo "SKIPPED-LOUDLY no toolchain either"; exit 2'
   stub tests/scripts/test-e2e-crash.sh      'echo crash; exit 7'
+  # exit 3 = the third documented verdict several PREMERGE_UNGATED suites use:
+  # the suite RAN and could not reach part of what it asserts.
+  stub tests/scripts/test-e2e-incomplete.sh 'echo "  RESULT: 30 passed, 0 failed, COMPILE SIDE NOT CHECKED (exit 3)"; exit 3'
   stub tests/stack/test-not-e2e.sh          'echo not-e2e; exit 0'
   stub tests/other/test-e2e-trailing.sh     'echo trailing; exit 0'
   stub tests/scripts/test-e2e-mutator.sh    'printf "%s\\n" hugmesh-local-evil-new hugmesh-real-evil-new >>"${STUB_STATE}/docker.names"; exit 0'
@@ -191,7 +209,28 @@ new_state() {
   RAN="${STATE}/ran.log"
 }
 RC=0
+# LANE_CWD: the directory the runner is invoked FROM. It matters for exactly one
+# case — a watch-list entry carrying a glob metacharacter must not be expanded
+# against whatever happens to be lying in the caller's cwd — so it defaults to
+# the scratch root and is set deliberately where that is the point.
+LANE_CWD=""
 run_lane() {
+  local tree
+  local tools
+  local out
+  local path
+  local cwd
+  tree="$1"; tools="$2"; out="$3"; shift 3
+  if [ "${tools}" = "stubs" ]; then path="${STUBBIN}:${MINBIN}"; else path="${MINBIN}"; fi
+  cwd="${LANE_CWD:-${SCRATCH}}"
+  RC=0
+  ( cd "${cwd}" && env -i PATH="${path}" HOME="${SCRATCH}" TMPDIR="${SCRATCH}/tmp" \
+      STUB_STATE="${STATE}" RAN_LOG="${RAN}" E2E_UNGATED_LOG_DIR="${LOGS}" "$@" \
+      bash "${tree}/tests/scripts/run-ungated-lane.sh" ) >"${out}" 2>&1 </dev/null || RC=$?
+}
+# Same, in the BACKGROUND, so a case can signal the lane mid-run. Sets LANE_PID.
+LANE_PID=0
+run_lane_bg() {
   local tree
   local tools
   local out
@@ -201,7 +240,22 @@ run_lane() {
   RC=0
   env -i PATH="${path}" HOME="${SCRATCH}" TMPDIR="${SCRATCH}/tmp" \
       STUB_STATE="${STATE}" RAN_LOG="${RAN}" E2E_UNGATED_LOG_DIR="${LOGS}" "$@" \
-      bash "${tree}/tests/scripts/run-ungated-lane.sh" >"${out}" 2>&1 </dev/null || RC=$?
+      bash "${tree}/tests/scripts/run-ungated-lane.sh" >"${out}" 2>&1 </dev/null &
+  LANE_PID=$!
+}
+# wait_for <file> <text> <tenths> — poll until the runner has reached a point
+wait_for() {
+  local f
+  local txt
+  local n
+  local i
+  f="$1"; txt="$2"; n="$3"; i=0
+  while [ "${i}" -lt "${n}" ]; do
+    grep -a -F -- "${txt}" "${f}" >/dev/null 2>&1 && return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
 }
 has()   { grep -a -F -- "$2" "$1" >/dev/null; }
 count() { grep -a -c -F -- "$2" "$1" 2>/dev/null || true; }
@@ -222,13 +276,13 @@ battery() {
     [ "${RC}" = "0" ] && ok "dry run exits 0" || bad "dry run exited ${RC}, expected 0"
     # DECISION 32c: with NO E2E_UNGATED_SET in the environment the selection is
     # every entry. Flip the default back to e2e and these two go red.
-    has "${O}" "set   : all (6 of 6 PREMERGE_UNGATED suites)" \
-      && ok "the DEFAULT selection is every entry, 6 of 6 (32c: 22, not 8)" \
+    has "${O}" "set   : all (7 of 7 PREMERGE_UNGATED suites)" \
+      && ok "the DEFAULT selection is every entry, 7 of 7 (32c: 22, not 8)" \
       || bad "default selection wrong: $(grep -a 'set   :' "${O}")"
     has "${O}" "     tests/stack/test-not-e2e.sh" \
       && ok "the default selection includes the non-e2e entry (32c)" \
       || bad "the default selection excluded the non-e2e entry"
-    for s in green red skip crash missing; do
+    for s in green red skip crash missing incomplete; do
       has "${O}" "     tests/scripts/test-e2e-${s}.sh" && ok "dry run lists test-e2e-${s}.sh" || bad "dry run does not list test-e2e-${s}.sh"
     done
     has "${O}" "test-e2e-trailing.sh" && bad "parser ran past the INDENTED close paren into TRAILING_ARRAY" || ok "the indented close paren ends the array (TRAILING_ARRAY not read)"
@@ -238,13 +292,13 @@ battery() {
     [ -e "${LOGS}" ] && bad "dry run created the evidence dir" || ok "dry run created no evidence dir"
     new_state; O="${STATE}/dry-e2e.out"
     run_lane "${T}" none "${O}" E2E_UNGATED_DRY_RUN=1 E2E_UNGATED_SET=e2e
-    has "${O}" "set   : e2e (5 of 6 PREMERGE_UNGATED suites)" \
-      && ok "the explicit e2e opt-in is 5 of 6 (the /test-e2e-/ entries, comments stripped)" \
+    has "${O}" "set   : e2e (6 of 7 PREMERGE_UNGATED suites)" \
+      && ok "the explicit e2e opt-in is 6 of 7 (the /test-e2e-/ entries, comments stripped)" \
       || bad "e2e selection count wrong: $(grep -a 'set   :' "${O}")"
     has "${O}" "test-not-e2e.sh" && bad "the e2e opt-in swept in the non-e2e entry" || ok "the e2e opt-in excludes tests/stack/test-not-e2e.sh"
     new_state; O="${STATE}/dryall.out"
     run_lane "${T}" none "${O}" E2E_UNGATED_DRY_RUN=1 E2E_UNGATED_SET=all
-    has "${O}" "set   : all (6 of 6 PREMERGE_UNGATED suites)" && has "${O}" "tests/stack/test-not-e2e.sh" \
+    has "${O}" "set   : all (7 of 7 PREMERGE_UNGATED suites)" && has "${O}" "tests/stack/test-not-e2e.sh" \
       && ok "an explicit SET=all selects every entry including the non-e2e one" || bad "SET=all selection wrong: $(grep -a 'set   :' "${O}")"
     new_state; O="${STATE}/bogus.out"
     run_lane "${T}" none "${O}" E2E_UNGATED_SET=bogus
@@ -265,9 +319,15 @@ battery() {
     has "${O}" "FAIL   tests/scripts/test-e2e-red.sh"    && ok "exit 1 -> FAIL"  || bad "red not FAIL"
     has "${O}" "SKIP   tests/scripts/test-e2e-skip.sh"   && ok "exit 2 -> SKIP"  || bad "skip not SKIP"
     has "${O}" "ERROR  tests/scripts/test-e2e-crash.sh   (exit 7)" && ok "exit 7 -> ERROR (exit 7)" || bad "crash not ERROR"
+    # exit 3 is INCOMPLETE, not ERROR: the suite ran and reported a documented
+    # partial verdict. Fold the bucket back into ERROR and these two go red.
+    has "${O}" "INCOMPLETE tests/scripts/test-e2e-incomplete.sh   (exit 3:" \
+      && ok "exit 3 -> INCOMPLETE (not ERROR, and not the lane's own exit-3 refusal)" \
+      || bad "exit 3 not INCOMPLETE: $(grep -a 'test-e2e-incomplete' "${O}" | head -n 1)"
+    has "${O}" "ERROR  tests/scripts/test-e2e-incomplete.sh" && bad "an exit-3 suite is still classified ERROR" || ok "an exit-3 suite is not classified ERROR"
     has "${O}" "ERROR  tests/scripts/test-e2e-missing.sh  (no such file" && ok "a missing suite -> ERROR (no such file)" || bad "missing not ERROR"
     has "${O}" "PASS   tests/stack/test-not-e2e.sh" && ok "the non-e2e entry RUNS in the default set (32c)" || bad "the non-e2e entry did not run by default"
-    has "${O}" "== RESULT: 2 passed, 1 failed, 1 skipped, 2 errored (of 6) ==" && ok "RESULT line counts 2/1/1/2 of 6" || bad "RESULT line wrong: $(grep -a 'RESULT' "${O}")"
+    has "${O}" "== RESULT: 2 passed, 1 failed, 1 skipped, 1 incomplete, 2 errored (of 7) ==" && ok "RESULT line counts 2/1/1/1/2 of 7, incomplete counted separately" || bad "RESULT line wrong: $(grep -a 'RESULT' "${O}")"
     grep -a -E '^ *\| +FAIL something' "${O}" >/dev/null && ok "a red suite's tail is inlined" || bad "red tail not inlined"
     [ -e "${RAN}" ] && grep -a -x 'test-e2e-green.sh' "${RAN}" >/dev/null && grep -a -x 'test-e2e-crash.sh' "${RAN}" >/dev/null \
       && ok "the stub suites really ran (ran.log)" || bad "ran.log missing green/crash"
@@ -281,11 +341,29 @@ battery() {
     has "${O}" "studio python: python3 (SNAP_STUDIO_PYTHON unset" && ok "the header names the Studio interpreter it ran with (unset)" || bad "no studio python line"
     new_state; O="${STATE}/e2eonly.out"
     run_lane "${T}" none "${O}" E2E_UNGATED_SET=e2e
-    has "${O}" "== RESULT: 1 passed, 1 failed, 1 skipped, 2 errored (of 5) ==" && ok "the explicit e2e opt-in still runs only 5" || bad "e2e opt-in RESULT wrong: $(grep -a 'RESULT' "${O}")"
+    has "${O}" "== RESULT: 1 passed, 1 failed, 1 skipped, 1 incomplete, 2 errored (of 6) ==" && ok "the explicit e2e opt-in still runs only its 6" || bad "e2e opt-in RESULT wrong: $(grep -a 'RESULT' "${O}")"
     grep -a 'test-not-e2e' "${RAN}" >/dev/null && bad "the non-e2e entry was RUN under E2E_UNGATED_SET=e2e" || ok "the non-e2e entry is not run under the e2e opt-in"
     new_state; O="${STATE}/snap.out"
     run_lane "${T}" none "${O}" SNAP_STUDIO_PYTHON=/opt/venv/bin/python
     has "${O}" "studio python: /opt/venv/bin/python" && ok "SNAP_STUDIO_PYTHON is printed when set" || bad "SNAP_STUDIO_PYTHON not echoed"
+  fi
+
+  # 3b. an INCOMPLETE suite is red ON ITS OWN ──────────────────────────────
+  # The point of the bucket is that it is NOT a SKIP: a lane whose only
+  # non-green suite ran and could not finish what it asserts is red, and STRICT
+  # has nothing to do with it.
+  if case_selected incomplete; then
+    write_tree "${T}" incomplete; new_state; O="${STATE}/inc.out"
+    run_lane "${T}" none "${O}"
+    [ "${RC}" = "1" ] && ok "green + INCOMPLETE exits 1 (an exit-3 suite is red, not tolerated like a skip)" \
+      || bad "green+incomplete rc ${RC}, expected 1"
+    has "${O}" "INCOMPLETE tests/scripts/test-e2e-incomplete.sh" \
+      && ok "the verdict table names it INCOMPLETE" || bad "no INCOMPLETE verdict line: $(grep -a 'incomplete' "${O}" | head -n 1)"
+    has "${O}" "1 incomplete" && ok "the RESULT line counts it as incomplete, not as errored" || bad "RESULT line does not count incomplete: $(grep -a 'RESULT' "${O}")"
+    grep -a -E '^ *\| +RESULT: 30 passed' "${O}" >/dev/null && ok "an INCOMPLETE suite's tail is inlined like a red one" || bad "incomplete tail not inlined"
+    new_state; O="${STATE}/inc-strict0.out"
+    run_lane "${T}" none "${O}" E2E_UNGATED_STRICT=0
+    [ "${RC}" = "1" ] && ok "STRICT=0 does not make an INCOMPLETE tolerable" || bad "incomplete under STRICT=0: rc ${RC}, expected 1"
   fi
 
   # 4/5. skips, strict, vacuity ────────────────────────────────────────────
@@ -348,7 +426,13 @@ battery() {
     new_state; printf '%s\n' hugmesh-local-control-plane >"${STATE}/docker.names"; : >"${STATE}/kind.clusters"
     O="${STATE}/emptyprefix.out"
     run_lane "${T}" stubs "${O}" E2E_UNGATED_LIVE_PREFIX=" "
-    [ "${RC}" = "1" ] && has "${O}" "E2E_UNGATED_LIVE_PREFIX is empty" && ok "an empty watch list refuses (exit 1) instead of censusing nothing" || bad "empty prefix: rc ${RC}, expected 1"
+    if [ "${RC}" = "1" ] && has "${O}" "E2E_UNGATED_LIVE_PREFIX is empty"; then
+      ok "an empty watch list refuses (exit 1) instead of censusing nothing"
+    else
+      # BOTH halves are reported: "rc 1, expected 1" alone reads as
+      # self-contradictory when it is the refusal TEXT that went missing.
+      bad "empty prefix: rc ${RC} (expected 1), refusal text $(has "${O}" "E2E_UNGATED_LIVE_PREFIX is empty" && echo present || echo MISSING)"
+    fi
     [ -e "${RAN}" ] && bad "a suite ran under an empty watch list" || ok "nothing ran under an empty watch list"
     # kind cluster alone
     new_state; : >"${STATE}/docker.names"; printf '%s\n' hugmesh-local >"${STATE}/kind.clusters"; O="${STATE}/kindonly.out"
@@ -358,6 +442,56 @@ battery() {
     new_state; : >"${STATE}/docker.names"; : >"${STATE}/kind.clusters"; O="${STATE}/clear.out"
     run_lane "${T}" stubs "${O}"
     [ "${RC}" = "1" ] && has "${O}" "live stack   : none detected" && ok "docker+kind present and EMPTY -> proceeds (rc from the suites)" || bad "clear footprint: rc ${RC}"
+  fi
+
+  # 6b. the watch list is matched LITERALLY ────────────────────────────────
+  # Two shapes, both measured on the real runner before the fix:
+  #   (a) an unquoted `for pfx in ${LIVE_PREFIX}` glob-expands the watch list
+  #       against the CALLER's working directory, so the rendered [..] label
+  #       stops describing what was censused;
+  #   (b) `grep "^${pfx}"` treats the prefix as a REGEX, so a `.` matches any
+  #       character.
+  # Neither is reachable with the default prefixes, which is exactly why a
+  # control is needed: nothing else in this battery would notice.
+  if case_selected literal; then
+    write_tree "${T}" single; new_state
+    # (a) a cwd carrying a file whose name is a PREFIX of a live container
+    local GD
+    GD="${STATE}/globdir"
+    mkdir -p "${GD}"
+    : >"${GD}/zz-victim"
+    printf '%s\n' zz-victim-1 >"${STATE}/docker.names"; : >"${STATE}/kind.clusters"
+    O="${STATE}/glob.out"
+    LANE_CWD="${GD}"
+    run_lane "${T}" stubs "${O}" E2E_UNGATED_LIVE_PREFIX="zz*"
+    LANE_CWD=""
+    [ "${RC}" != "3" ] \
+      && ok "the watch list is not glob-expanded against the caller's cwd (a 'zz*' entry did not become the file 'zz-victim')" \
+      || bad "the watch list was glob-expanded: rc 3 on a container the literal prefix 'zz*' does not match"
+    has "${O}" "live stack   : none detected (no zz* container or kind cluster)" \
+      && ok "the banner names the watch list exactly as given" || bad "banner label wrong: $(grep -a 'live stack' "${O}" | head -n 1)"
+    O="${STATE}/glob-dry.out"
+    LANE_CWD="${GD}"
+    run_lane "${T}" stubs "${O}" E2E_UNGATED_LIVE_PREFIX="zz*" E2E_UNGATED_DRY_RUN=1
+    LANE_CWD=""
+    has "${O}" "live footprint [zz*]: none" \
+      && ok "the dry run renders the watch list as given and censuses the same thing" \
+      || bad "dry-run label wrong: $(grep -a footprint "${O}" | head -n 1)"
+    # (b) a '.' in a prefix must be a dot, not 'any character'
+    new_state
+    printf '%s\n' hugmeshXlocal-1 >"${STATE}/docker.names"; : >"${STATE}/kind.clusters"
+    O="${STATE}/regex.out"
+    run_lane "${T}" stubs "${O}" E2E_UNGATED_LIVE_PREFIX="hugmesh.local"
+    [ "${RC}" != "3" ] \
+      && ok "a '.' in a watch-list entry is a literal dot, not a regex wildcard" \
+      || bad "the watch list was used as a REGEX: 'hugmesh.local' matched hugmeshXlocal-1"
+    # and the literal form still matches what it should
+    new_state
+    printf '%s\n' hugmesh.local-1 other >"${STATE}/docker.names"; : >"${STATE}/kind.clusters"
+    O="${STATE}/regex2.out"
+    run_lane "${T}" stubs "${O}" E2E_UNGATED_LIVE_PREFIX="hugmesh.local"
+    [ "${RC}" = "3" ] && has "${O}" "  hugmesh.local-1" \
+      && ok "the literal prefix still matches the container it names" || bad "literal prefix missed its own container: rc ${RC}"
   fi
 
   # 7. NO override, and the after-census that outlived it ──────────────────
@@ -428,6 +562,34 @@ battery() {
     [ "${RC}" = "1" ] && has "${O}" "must be a whole number" && ok "a non-numeric timeout refuses" || bad "bad timeout value: rc ${RC}"
   fi
 
+  # 12. the signal trap (hugmesh-generator#397, item 2) ────────────────────
+  # Before this the lane died where it stood: no verdict table, an evidence
+  # directory that looked complete. The suite is given a 1s timeout so the
+  # pending trap is acted on quickly — bash runs a trap only when the FOREGROUND
+  # command returns, which is itself part of what is documented.
+  if case_selected signal; then
+    write_tree "${T}" sleeper; new_state; O="${STATE}/sig.out"
+    run_lane_bg "${T}" none "${O}" E2E_UNGATED_SUITE_TIMEOUT=1
+    if wait_for "${O}" "---- tests/scripts/test-e2e-sleeper.sh ----" 100; then
+      kill -TERM "${LANE_PID}" 2>/dev/null
+      RC=0; wait "${LANE_PID}" || RC=$?
+      [ "${RC}" = "7" ] && ok "a TERM mid-run exits 7 (not a silent death)" || bad "TERM mid-run: rc ${RC}, expected 7"
+      has "${O}" "== INTERRUPTED (SIGTERM) ==" && ok "the interrupt names itself and the signal" || bad "no INTERRUPTED banner: $(tail -n 3 "${O}" | tr '\n' ' ')"
+      has "${O}" "(PARTIAL — the lane did not finish)" && ok "the evidence directory is marked PARTIAL" || bad "the evidence dir is not marked PARTIAL"
+      has "${O}" "Nothing was torn down" && ok "the interrupt says plainly that it tore nothing down" || bad "the interrupt does not say it tore nothing down"
+      has "${O}" "casdoor-jwtcustom-test" && ok "the interrupt warns about the fixed-name containers a signalled run can strand" || bad "the interrupt does not warn about the casdoor containers"
+      local sd
+      sd="$(ls -d "${LOGS}"/*/ 2>/dev/null | head -n1)"
+      [ -n "${sd}" ] && grep -a -F "INTERRUPTED" "${sd}/run.log" >/dev/null \
+        && ok "run.log carries the interruption (the evidence dir is not silently partial)" \
+        || bad "run.log does not record the interruption"
+    else
+      bad "the lane never reached the sleeper suite — the signal case asserted NOTHING"
+      kill -TERM "${LANE_PID}" 2>/dev/null || true
+      wait "${LANE_PID}" 2>/dev/null || true
+    fi
+  fi
+
   # 11. source sweeps ─────────────────────────────────────────────────────
   if case_selected source; then
     local src
@@ -437,6 +599,11 @@ battery() {
     printf '%s\n' "${src}" | grep -aE '\| *grep +-[a-zA-Z]*q' >/dev/null && bad "the runner pipes into grep -q" || ok "no '| grep -q' in the runner"
     printf '%s\n' "${src}" | grep -aE '^[[:space:]]*local [a-zA-Z_]+=[^ ]* +[a-zA-Z_]+=' >/dev/null && bad "a two-assignment 'local' (bash 5.3 set -u trap)" || ok "every 'local' declares one name (bash 5.3 trap absent)"
     printf '%s\n' "${src}" | grep -a 'CENSUS-ERROR' >/dev/null && ok "the census emits CENSUS-ERROR lines (fail-closed path present)" || bad "no CENSUS-ERROR path in the runner"
+    printf '%s\n' "${src}" | grep -aE 'for pfx in \$\{LIVE_PREFIX\}' >/dev/null \
+      && bad "the runner still iterates an UNQUOTED \${LIVE_PREFIX} (pathname expansion)" \
+      || ok "no unquoted \${LIVE_PREFIX} iteration in the runner (the watch list cannot glob)"
+    printf '%s\n' "${src}" | grep -a "trap 'on_signal" >/dev/null \
+      && ok "the runner installs a signal trap (#397 item 2)" || bad "the runner installs no signal trap"
     printf '%s\n' "${src}" | grep -a 'E2E_UNGATED_ALLOW_LIVE_STACK' >/dev/null \
       && bad "the runner still READS E2E_UNGATED_ALLOW_LIVE_STACK (32b: it was removed)" \
       || ok "the runner never reads E2E_UNGATED_ALLOW_LIVE_STACK (comment-stripped; 32b)"
@@ -529,6 +696,24 @@ s=re.sub(r"\nif \[ -z \"\$\(printf .%s. \"\$\{LIVE_PREFIX\}\" \| tr -d .\[:space
 mutate "the evidence-dir mkdir check is dropped" "mkdir" "${PYHDR}"'
 s=s.replace("mkdir -p \"${RUN_DIR}\" || die 1 \"cannot create the evidence directory ${RUN_DIR} — nothing was run\"", "mkdir -p \"${RUN_DIR}\" 2>/dev/null", 1)
 s=s.replace(": >\"${RUN_LOG}\" || die 1 \"cannot write ${RUN_LOG} — nothing was run\"", ": >\"${RUN_LOG}\" 2>/dev/null", 1)'"${PYFTR}"
+
+mutate "the INCOMPLETE (exit 3) bucket is folded back into ERROR" "classify incomplete" "${PYHDR}"'
+s=re.sub(r"\n    # exit 3 is a THIRD documented verdict.*?INC=\$\(\(INC \+ 1\)\) ;;\n", "\n", s, count=1, flags=re.S)
+s=s.replace("[ \"${INC}\"  -gt 0 ] && exit 1\n", "", 1)'"${PYFTR}"
+
+mutate "the watch list is iterated UNQUOTED again (pathname expansion)" "literal" "${PYHDR}"'
+s=s.replace("${LIVE_PREFIXES[@]+\"${LIVE_PREFIXES[@]}\"}", "${LIVE_PREFIX}")'"${PYFTR}"
+
+mutate "the prefix is matched as a grep REGEX again, not literally" "literal" "${PYHDR}"'
+NEW = ("      for pfx in ${LIVE_PREFIX}; do\n"
+       "        hits=\"$(printf \"%s\\n\" \"${out}\" | grep -a \"^${pfx}\" || true)\"\n"
+       "        [ -n \"${hits}\" ] && names=\"${names}${hits}\n\"\n"
+       "      done\n")
+s=re.sub(r"      while IFS= read -r nm; do.*?      done <<<\"\$\{out\}\"\n", lambda m: NEW, s, count=1, flags=re.S)
+s=s.replace("  local nm", "  local nm\n  local hits", 1)'"${PYFTR}"
+
+mutate "the signal trap is deleted (#397 item 2 reverted)" "signal" "${PYHDR}"'
+s=re.sub(r"\ntrap .on_signal INT.  INT\ntrap .on_signal TERM. TERM\ntrap .on_signal HUP.  HUP\n", "\n", s, count=1)'"${PYFTR}"
 
 mutate "the per-suite timeout branch is dropped" "timeout" "${PYHDR}"'
 s=s.replace("timeout --foreground \"${SUITE_TIMEOUT}\" bash \"${abs}\"", "bash \"${abs}\"", 1)'"${PYFTR}"

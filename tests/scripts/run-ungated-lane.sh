@@ -69,7 +69,13 @@
 # ~9 min. THE 22-SUITE DEFAULT HAS NOT BEEN TIMED END TO END — it is that ~21
 # minutes plus fourteen more suites, so treat it as "longer than twenty minutes,
 # upper bound unmeasured" until somebody runs it and replaces this sentence with
-# a number. It is not a two-minute smoke either way.
+# a number. It is not a two-minute smoke either way. Even the suite-by-suite
+# SHAPE of a real 22-suite run is unknown: nobody has run the lane to completion
+# since the default moved (the refusal fires while the operator's hugmesh-local
+# cluster is up, which is correct and is also why it cannot be exercised here),
+# tests/pentest/nuclei/test-templates.sh SKIPs on this box for want of nuclei
+# v3.9.0, and tests/casdoor/test-jwt-custom-token.sh has never been run by
+# anyone measuring this default.
 #
 # THE LIVE STACK IS NOT TOUCHED. #246's third bullet: the lane must never disturb
 # the operator's live hugmesh-local stack. This script therefore:
@@ -141,33 +147,85 @@
 # The refusal is a floor, not a diagnosis: it is here so that a future suite
 # which DOES start something with the live prefix cannot arrive quietly.
 #
-# WHAT THE 32c DEFAULT COSTS — MEASURED 2026-09-17, recorded rather than worked
-# around. Widening the default from the 8 browser/Qt suites to all 22 pulls in
-# suites that were ungated for reasons of their OWN, not for a missing
-# toolchain. Three of the fourteen newcomers are RED on this tree, each run
-# directly on this branch:
-#     tests/scripts/test-selected-services-only.sh          rc=1
-#     tests/scripts/test-optional-service-slug-closure.sh   rc=1
-#     tests/stack/test-gateway-auth-flag-parity.sh          rc=1
-# They are EXPECTED REDS naming real platform defects, not suite bugs
-# (.gitlab-ci.yml documents the selected-services job as "RED on today's main …
-# five checks, each naming a live defect"; the other two say so in their own
-# headers). A suite that exits 1 makes the LANE exit 1, so `make e2e-ungated` is
-# RED BY DEFAULT until those defects are fixed, and its red no longer
-# distinguishes "something broke" from "the known three". That is the cost of
-# the operator's answer to decision 32c and it is theirs to carry; do NOT narrow
-# the default back to make the lane green. If it needs to be actionable before
-# those defects land, the honest shapes are an explicit expected-red allowlist
-# in this runner or fixing the three — both are decisions nobody has made.
+# WHAT THE 32c DEFAULT COSTS — RE-MEASURED 2026-09-17, recorded rather than
+# worked around. Widening the default from the 8 browser/Qt suites to all 22
+# pulls in suites that were ungated for reasons of their OWN, not for a missing
+# toolchain.
+#
+# THE FIRST DRAFT OF THIS PARAGRAPH SAID "three of the fourteen", from three
+# suites run inside a git worktree. That number was WRONG and a skeptic pass
+# caught it. Half of these suites change verdict with their checkout's POSITION:
+# they look for a sibling checkout at ${REPO}/.., or for ${REPO}/.stack-src, and
+# a worktree under /home/magus/.hugmesh-wt-* has neither, so they report
+# INCOMPLETE there and pass in the real tree. tests/stack/test-gateway-auth-flag-parity.sh
+# was named as one of the three reds and is GREEN in the real position — it was
+# a measurement artefact, not a defect. Do not re-measure this list from a
+# worktree.
+#
+# ALL FOURTEEN, one at a time, from a checkout whose siblings and .stack-src
+# resolve exactly as they do in the operator's own tree:
+#     tests/scripts/test-selected-services-only.sh         rc=1  58 passed, 5 failed
+#     tests/scripts/test-optional-service-slug-closure.sh  rc=1  the admin-bff registry parsed ZERO entries
+#     tests/scripts/test-liquibase-grant-roles.sh          rc=1  2 of its own negative controls got rc=0 where they demand 3
+#     tests/egress-vpn/test-secret-contract.sh             rc=1  52 passed, 1 failed (UN-ASSERTED contract copy)
+#     tests/scripts/test-eso-target-collisions.sh          rc=1  cassandra 12.3.11 will not render, so the inventory is empty
+#     tests/device-registry/test-layer-a-headscale-acl.sh  rc=3  INCOMPLETE: HeadscaleAclCompiler.java is not in the sibling checkout
+#     tests/pentest/nuclei/test-templates.sh               rc=2  SKIP, nuclei v3.9.0 is not installed here
+#     tests/scripts/test-kind-metrics-api.sh               rc=0  ONLY because a kind cluster is up; see below
+#     tests/scripts/test-federation-module-slugs.sh        rc=0
+#     tests/scripts/test-service-env-contract.sh           rc=0
+#     tests/stack/test-gateway-auth-flag-parity.sh         rc=0
+#     tests/stack/test-m2-bootstrap.sh                     rc=0
+#     tests/stack/test-web-locales-wiring.sh               rc=0
+#     tests/casdoor/test-jwt-custom-token.sh               NOT RUN — it starts two containers (see the inventory above), so its
+#                                                          verdict in this lane is still unknown to everybody
+#
+# SO: FIVE red and ONE incomplete out of the thirteen that were measured, with
+# the fourteenth unmeasured — not three. Each of the six is a REAL platform or
+# checkout defect naming itself, not a suite bug (.gitlab-ci.yml documents the
+# selected-services job as "RED on today's main … five checks, each naming a
+# live defect"; the others say so in their own headers). A suite that exits
+# non-zero makes the LANE exit 1, so `make e2e-ungated` is RED BY DEFAULT until
+# those defects are fixed, and its red cannot distinguish "something broke" from
+# "the known six". That is the cost of the operator's answer to decision 32c and
+# it is theirs to carry; do NOT narrow the default back to make the lane green.
+# If it needs to be actionable before those defects land, the honest shapes are
+# an explicit expected-red allowlist in this runner or fixing the six — both are
+# decisions nobody has made.
+#
+# TWO ENTRIES ABOVE ARE NOT WHAT THEY LOOK LIKE INSIDE A REAL LANE RUN:
+#   * test-kind-metrics-api.sh is rc=0 only because the operator's hugmesh-local
+#     kind cluster is up while it is run DIRECTLY. Inside this lane that state
+#     is exactly the state the exit-3 refusal forbids, so in a lane run this
+#     suite can only ever SKIP. Its rc=0 above is not a lane verdict.
+#   * test-layer-a-headscale-acl.sh exits 3, which this runner classifies as
+#     INCOMPLETE — see the EXIT CODES block below for why that verdict had to be
+#     added, and why it is still red.
 #
 # EXIT CODES, per suite and overall. The suites already distinguish these and
 # the distinction is the whole point of a routine run — a lane that cannot tell
 # "red" from "the toolchain is missing" trains everyone to ignore it.
-#   0  PASS   the suite ran and was green
-#   1  FAIL   the suite ran and was red            -> lane exits 1
-#   2  SKIP   SKIPPED-LOUDLY, prerequisite missing -> lane exits 0 unless
-#             E2E_UNGATED_STRICT=1, which makes any SKIP red
-#   *  ERROR  anything else (crash, 124 timeout, 126/127) -> lane exits 1
+#   0  PASS        the suite ran and was green
+#   1  FAIL        the suite ran and was red            -> lane exits 1
+#   2  SKIP        SKIPPED-LOUDLY, prerequisite missing -> lane exits 0 unless
+#                  E2E_UNGATED_STRICT=1, which makes any SKIP red
+#   3  INCOMPLETE  the suite RAN, asserted some of what it claims to and could
+#                  not reach the rest, and says so rather than passing on the
+#                  part it did check -> lane exits 1. THIS VERDICT WAS ADDED
+#                  BECAUSE OF DECISION 32c. Before it the runner had no third
+#                  red-ish bucket and printed "ERROR … (exit 3)", which reads as
+#                  a crash, for a suite that ran perfectly; and it collided in
+#                  the reader's eye with the LANE's own exit 3 ("refused beside a
+#                  live stack") two lines below. At least three suites the 22
+#                  default pulls in document exit 3 this way in their own
+#                  headers: tests/device-registry/test-layer-a-headscale-acl.sh
+#                  (:365 "INCOMPLETE (exit 3), never a silent skip"),
+#                  tests/egress-vpn/test-secret-contract.sh (:542/:572/:593
+#                  "INCOMPLETE … This is a FAILURE, not a skip") and
+#                  tests/scripts/test-federation-module-slugs.sh (:250). It is
+#                  RED, never tolerated the way a SKIP is, and STRICT does not
+#                  enter into it.
+#   *  ERROR       anything else (crash, 124 timeout, 126/127) -> lane exits 1
 # The lane's own verdicts:
 #   3  refused: a live footprint under a watched prefix was detected
 #   4  the footprint changed while the lane ran (a suite brought one up)
@@ -176,6 +234,19 @@
 #      lane that asserted nothing is not green, STRICT or not — on a checkout
 #      without tests/e2e/node_modules this is what `make e2e-ungated` prints,
 #      and before 2026-09-16 it exited 0.
+#   7  INTERRUPTED: SIGINT/SIGTERM/SIGHUP reached the lane. It prints the
+#      verdicts it had reached, marks the evidence directory PARTIAL, and tears
+#      NOTHING down — same as every other path. (hugmesh-generator#397 item 2:
+#      before this the lane died silently mid-suite, leaving a dated directory
+#      with no run.log verdict table and no statement of where it stopped.)
+#      NOTE, measured not assumed: bash runs a trap only when the FOREGROUND
+#      command returns, so a `kill -TERM` aimed at this PID alone is acted on
+#      when the suite that is running finishes or is killed by
+#      E2E_UNGATED_SUITE_TIMEOUT, not instantly. A ctrl-C at a terminal reaches
+#      the whole foreground process group, so the suite dies at once and its own
+#      EXIT trap runs; a signal aimed at this PID alone does NOT reach the
+#      suite, and tests/casdoor/test-jwt-custom-token.sh leaves casdoor-pg and
+#      casdoor-jwtcustom-test behind in exactly that case. The handler says so.
 #
 # EVIDENCE. One dated directory per run under tests/.ungated-lane/ (gitignored
 # run-state of one machine, never shared — the tests/stack/.run/ precedent), NOT
@@ -188,8 +259,11 @@
 # battery that runs THIS file against a synthetic tree and PATH-shadowed
 # docker/kind, and re-runs it against mutated copies of this file (refusal
 # deleted, census fail-open restored, vacuity floor removed, paren anchor
-# loosened) to prove each protection is load-bearing. Change a behaviour here
-# and that suite is where it goes red.
+# loosened, the 32a watch list narrowed back, the 32b override reinstated, the
+# 32c default narrowed back, the empty-watch-list guard dropped, the INCOMPLETE
+# bucket folded back into ERROR, the literal prefix match turned back into a
+# glob, the signal trap deleted) to prove each protection is load-bearing.
+# Change a behaviour here and that suite is where it goes red.
 #
 # This file is a RUNNER, not a suite: it is named run-*.sh so the test-*.sh /
 # *_test.sh census in test-guard-integrity.sh does not count it as a suite and
@@ -211,6 +285,15 @@ STRICT="${E2E_UNGATED_STRICT:-0}"
 # one #246 named. A space-separated LIST; see the header.
 UNGATED_DEFAULT_LIVE_PREFIXES="hugmesh-local hugmesh-real"
 LIVE_PREFIX="${E2E_UNGATED_LIVE_PREFIX:-${UNGATED_DEFAULT_LIVE_PREFIXES}}"
+# Split ONCE, here, with `read -a`: it splits on IFS and does NOT glob, whereas
+# an unquoted `for pfx in ${LIVE_PREFIX}` is subject to pathname expansion. That
+# is not theoretical — measured 2026-09-17 from the repo root,
+# E2E_UNGATED_LIVE_PREFIX='M*' censused the glob-expanded `Makefile` while the
+# rendered label still said `[M*]`, i.e. the message did not describe what was
+# censused. The prefixes are also matched LITERALLY below (a `case` pattern from
+# a quoted expansion, and `=` for kind), never as a regex: `grep "^${pfx}"` made
+# a `.` or a `[` in a custom prefix match more than the caller asked for.
+read -r -a LIVE_PREFIXES <<<"${LIVE_PREFIX}"
 # Rendered for the messages below: "hugmesh-local, hugmesh-real".
 LIVE_PREFIX_SHOWN="$(printf '%s' "${LIVE_PREFIX}" | tr -s '[:space:]' ' ' \
                     | sed -e 's/^ //' -e 's/ $//' -e 's/ /, /g')"
@@ -252,27 +335,34 @@ live_footprint() {
   local out
   local errf
   local pfx
-  local hits
+  local nm
   names=""
   errs=""
   errf="$(mktemp -t ungated-census.XXXXXX)"
   if command -v docker >/dev/null 2>&1; then
     if out="$(docker ps --format '{{.Names}}' 2>"${errf}")"; then
-      for pfx in ${LIVE_PREFIX}; do
-        hits="$(printf '%s\n' "${out}" | grep -a "^${pfx}" || true)"
-        [ -n "${hits}" ] && names="${names}${hits}"$'\n'
-      done
+      while IFS= read -r nm; do
+        [ -n "${nm}" ] || continue
+        for pfx in ${LIVE_PREFIXES[@]+"${LIVE_PREFIXES[@]}"}; do
+          # quoted expansion inside a case pattern = a LITERAL string; the
+          # trailing * is the only wildcard, so this is an exact prefix match
+          case "${nm}" in "${pfx}"*) names="${names}${nm}"$'\n'; break ;; esac
+        done
+      done <<<"${out}"
     else
       errs="${errs}CENSUS-ERROR docker ps failed: $(head -n 1 "${errf}" | cut -c1-160)"$'\n'
     fi
   fi
   if command -v kind >/dev/null 2>&1; then
     if out="$(kind get clusters 2>"${errf}")"; then
-      for pfx in ${LIVE_PREFIX}; do
-        if printf '%s\n' "${out}" | grep -ax "${pfx}" >/dev/null; then
-          names="${names}kind-cluster:${pfx}"$'\n'
-        fi
-      done
+      while IFS= read -r nm; do
+        [ -n "${nm}" ] || continue
+        for pfx in ${LIVE_PREFIXES[@]+"${LIVE_PREFIXES[@]}"}; do
+          # a kind cluster is matched EXACTLY, and by string equality rather
+          # than by grep, for the same literal-vs-regex reason
+          [ "${nm}" = "${pfx}" ] && { names="${names}kind-cluster:${pfx}"$'\n'; break; }
+        done
+      done <<<"${out}"
     else
       errs="${errs}CENSUS-ERROR kind get clusters failed: $(head -n 1 "${errf}" | cut -c1-160)"$'\n'
     fi
@@ -390,6 +480,52 @@ fi
 mkdir -p "${RUN_DIR}" || die 1 "cannot create the evidence directory ${RUN_DIR} — nothing was run"
 : >"${RUN_LOG}" || die 1 "cannot write ${RUN_LOG} — nothing was run"
 
+PASS=0
+FAIL=0
+SKIP=0
+INC=0
+ERR=0
+VERDICTS=""
+
+# ── the signal trap (hugmesh-generator#397, item 2) ──────────────────────────
+# Before this the lane died where it stood on INT/TERM/HUP: no verdict table in
+# run.log, a dated evidence directory that looked complete, and no statement of
+# where it stopped. It now prints what it had reached and marks the directory
+# PARTIAL. It tears NOTHING down here either — that is true of every path in
+# this file, and an interrupt is the last moment to start making exceptions.
+# Installed AFTER the counters exist so the handler can read them, and after the
+# evidence directory exists so say() can write to run.log.
+LANE_SIGNALLED=0
+on_signal() {
+  local sig
+  sig="$1"
+  # a second signal while the handler runs must not re-enter it
+  [ "${LANE_SIGNALLED}" = "1" ] && exit 7
+  LANE_SIGNALLED=1
+  trap - INT TERM HUP
+  say ""
+  say "== INTERRUPTED (SIG${sig}) =="
+  say "   reached: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped, ${INC} incomplete, ${ERR} errored (of ${TOTAL})"
+  if [ -n "${VERDICTS}" ]; then
+    say "== verdicts so far =="
+    printf '%s' "${VERDICTS}" | sed 's/^/  /' | tee -a "${RUN_LOG}"
+  else
+    say "   no suite had finished."
+  fi
+  say "   evidence: ${RUN_DIR}   (PARTIAL — the lane did not finish)"
+  say "   Nothing was torn down: this lane stops no container and no cluster on"
+  say "   any path, including this one."
+  say "   If you signalled this PID alone rather than the foreground process"
+  say "   group, the suite that was running did NOT get the signal and its own"
+  say "   EXIT trap has not fired — tests/casdoor/test-jwt-custom-token.sh"
+  say "   leaves casdoor-pg and casdoor-jwtcustom-test behind in exactly that"
+  say "   case, and their names are fixed."
+  exit 7
+}
+trap 'on_signal INT'  INT
+trap 'on_signal TERM' TERM
+trap 'on_signal HUP'  HUP
+
 say "== ungated lane ${RUN_ID} =="
 say "   set          : ${SET_NAME} (${TOTAL} of ${UNGATED_TOTAL} PREMERGE_UNGATED suites)"
 say "   repo         : ${REPO}"
@@ -402,11 +538,6 @@ say "   studio python: ${SNAP_STUDIO_PYTHON:-python3 (SNAP_STUDIO_PYTHON unset; 
 say "   live stack   : none detected (no ${LIVE_PREFIX_SHOWN} container or kind cluster)"
 say ""
 
-PASS=0
-FAIL=0
-SKIP=0
-ERR=0
-VERDICTS=""
 
 for rel in ${SUITES}; do
   abs="${REPO}/${rel}"
@@ -436,6 +567,13 @@ for rel in ${SUITES}; do
     1) say "FAIL   ${rel}   -> ${slog}"       ; VERDICTS="${VERDICTS}FAIL   ${rel}"$'\n'   ; FAIL=$((FAIL + 1)) ;;
     2) say "SKIP   ${rel}   (SKIPPED-LOUDLY; prerequisite missing) -> ${slog}"
        VERDICTS="${VERDICTS}SKIP   ${rel}"$'\n'                                            ; SKIP=$((SKIP + 1)) ;;
+    # exit 3 is a THIRD documented verdict in several of the suites decision 32c
+    # pulled into the default set: the suite RAN, asserted part of what it
+    # claims to, and refuses to report the rest as checked. "ERROR (exit 3)"
+    # described that as a crash and collided with this lane's own exit 3. It is
+    # still RED — a lane exit of 1 — and STRICT has nothing to do with it.
+    3) say "INCOMPLETE ${rel}   (exit 3: the suite ran and could not reach part of what it asserts) -> ${slog}"
+       VERDICTS="${VERDICTS}INCOMPLETE ${rel}"$'\n'                                        ; INC=$((INC + 1)) ;;
     124) say "ERROR  ${rel}   (exit 124: killed at the ${SUITE_TIMEOUT}s suite timeout) -> ${slog}"
        VERDICTS="${VERDICTS}ERROR  ${rel} (timeout)"$'\n'                                  ; ERR=$((ERR + 1)) ;;
     *) say "ERROR  ${rel}   (exit ${rc}) -> ${slog}"
@@ -456,7 +594,7 @@ say ""
 say "== verdicts =="
 printf '%s' "${VERDICTS}" | sed 's/^/  /' | tee -a "${RUN_LOG}"
 say ""
-say "== RESULT: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped, ${ERR} errored (of ${TOTAL}) =="
+say "== RESULT: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped, ${INC} incomplete, ${ERR} errored (of ${TOTAL}) =="
 say "   evidence: ${RUN_DIR}"
 
 if [ -n "${CENSUS_ERR_AFTER}" ]; then
@@ -482,6 +620,7 @@ if [ "${FOOTPRINT_BEFORE}" != "${FOOTPRINT_AFTER}" ]; then
 fi
 
 [ "${FAIL}" -gt 0 ] && exit 1
+[ "${INC}"  -gt 0 ] && exit 1
 [ "${ERR}"  -gt 0 ] && exit 1
 if [ "${SKIP}" -gt 0 ] && [ "${STRICT}" = "1" ]; then
   say "E2E_UNGATED_STRICT=1 and ${SKIP} suite(s) skipped — reporting red."

@@ -2374,30 +2374,57 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 #
 # WHAT THIS DEFAULT COSTS (decision 32c, recorded rather than worked around).
 # Widening the default from the 8 browser/Qt suites to all 22 pulls in suites
-# that were ungated for reasons of their OWN, not for missing toolchain:
-#   * THE LANE IS NOW RED BY DEFAULT ON A HEALTHY TREE. Three of the fourteen
-#     newly-defaulted suites exit 1 here — MEASURED 2026-09-17 on this branch,
-#     each run directly, `rc=` its real exit code:
-#         tests/scripts/test-selected-services-only.sh          rc=1
-#         tests/scripts/test-optional-service-slug-closure.sh   rc=1
-#         tests/stack/test-gateway-auth-flag-parity.sh          rc=1
+# that were ungated for reasons of their OWN, not for a missing toolchain.
+#   * THE LANE IS NOW RED BY DEFAULT ON A HEALTHY TREE. RE-MEASURED 2026-09-17:
+#     of the fourteen newly-defaulted suites, FIVE exit 1 and ONE exits 3
+#     (INCOMPLETE, which is also red) — not the "three" an earlier draft of this
+#     paragraph claimed. That first number came from three suites run inside a
+#     git worktree, and half of these suites change verdict with their
+#     checkout's POSITION: they look for a sibling checkout at ../ or for
+#     .stack-src, neither of which a worktree has.
+#     tests/stack/test-gateway-auth-flag-parity.sh was named as one of the three
+#     and is GREEN in the real tree. DO NOT RE-MEASURE THIS LIST FROM A WORKTREE.
+#         tests/scripts/test-selected-services-only.sh         rc=1
+#         tests/scripts/test-optional-service-slug-closure.sh  rc=1
+#         tests/scripts/test-liquibase-grant-roles.sh          rc=1
+#         tests/egress-vpn/test-secret-contract.sh             rc=1
+#         tests/scripts/test-eso-target-collisions.sh          rc=1
+#         tests/device-registry/test-layer-a-headscale-acl.sh  rc=3 INCOMPLETE
+#     Green in the real tree: test-federation-module-slugs, test-service-env-contract,
+#     test-gateway-auth-flag-parity, test-m2-bootstrap, test-web-locales-wiring.
+#     tests/pentest/nuclei/test-templates.sh SKIPs (no nuclei v3.9.0 here).
+#     tests/scripts/test-kind-metrics-api.sh is rc=0 only when run DIRECTLY
+#     beside a live kind cluster; inside this lane that state is refused, so it
+#     can only ever SKIP. tests/casdoor/test-jwt-custom-token.sh was NOT run by
+#     anybody measuring this (it starts two containers) — its lane verdict is
+#     still unknown. The runner header carries the full table with one-line
+#     reasons.
 #     These are EXPECTED REDS naming real platform defects, not suite bugs —
 #     .gitlab-ci.yml says so of the selected-services job ("RED on today's main
-#     … five checks, each naming a live defect") and the other two say so in
-#     their own headers. A suite that exits 1 makes the LANE exit 1, so
+#     … five checks, each naming a live defect") and the others say so in their
+#     own headers. A suite that exits non-zero makes the LANE exit 1, so
 #     `make e2e-ungated` cannot be green until those defects are fixed, and its
-#     red no longer distinguishes "something broke" from "the known three".
+#     red no longer distinguishes "something broke" from "the known six".
+#   * a verdict the runner could not previously express. At least three of the
+#     newcomers use exit 3 as a documented INCOMPLETE; the runner used to print
+#     "ERROR … (exit 3)" for it, which reads as a crash and collides with the
+#     lane's OWN exit 3 (refused beside a live stack). It now has an INCOMPLETE
+#     bucket, still red.
 #   * one more container-starting suite (casdoor, above), with fixed names.
 #   * an untimed runtime: ~21 min plus fourteen more suites.
 # None of that is a reason to narrow the default back — it is the cost the
 # operator accepted. It is written here so the next person does not read the
-# red as a broken lane.
+# red as a broken lane. If the lane must be actionable before those six defects
+# land, the honest shapes are an expected-red allowlist in the runner or fixing
+# them; both are decisions nobody has made.
 #
-# EXIT: 0 all green (skips tolerated unless STRICT), 1 a suite was red or
-# errored, 3 refused beside a live stack, 4 a suite brought a watched footprint
-# up while the lane ran, 5 the
+# EXIT: 0 all green (skips tolerated unless STRICT), 1 a suite was red, errored
+# or INCOMPLETE, 3 refused beside a live stack, 4 a suite brought a watched
+# footprint up while the lane ran, 5 the
 # footprint could not be censused, 6 VACUOUS — suites were selected and not one
-# passed (every one skipped; a lane that asserted nothing is not green).
+# passed (every one skipped; a lane that asserted nothing is not green),
+# 7 INTERRUPTED — SIGINT/SIGTERM/SIGHUP reached the lane, which prints the
+# verdicts it had reached and marks the evidence dir PARTIAL (#397 item 2).
 # Evidence: one dated dir per run under tests/.ungated-lane/ (gitignored),
 # never under out/.
 .PHONY: e2e-ungated
