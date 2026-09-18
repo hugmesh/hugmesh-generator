@@ -90,6 +90,7 @@ from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
 from ...core import saved_meshes, vaults
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
+from ...core.domain_services import ACTION_MESH_START, gate_reason
 from ...core.e2e_catalogue import Catalogue, load_catalogue
 from ...core.egress_conf import validate_egress_conf
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
@@ -2486,7 +2487,37 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             if idle else
             "Disabled while a verb is running — wait for it to finish, or Cancel.")
 
+    def _domain_services_refusal(self) -> str:
+        """"" when a mesh may start; otherwise the refusal naming every domain with no
+        recorded service configuration (#495).
+
+        A pure read through ``core.domain_services.gate_reason`` — the SAME seam the
+        image-build gate calls — so the two paths cannot drift and a test can drive
+        the refusal with a bare ImageConfig and no docker."""
+        cfg = getattr(getattr(self, "wiz", None), "cfg", None)
+        if cfg is None:
+            return ""
+        return gate_reason(cfg, ACTION_MESH_START)
+
     def _bootstrap_up(self):
+        # THE PER-DOMAIN SERVICES GATE (#494/#495), on the docker/local-mesh half of
+        # the operator's ask ("before building or starting a mesh in docker or nodes").
+        # Same seam as the image-build gate on gui/pages/launch.py, same refusal
+        # wording, and it lands in the same status line every other refusal on this
+        # page uses — no modal, and the button stays enabled so the reason is readable
+        # and actionable rather than a disabled control that explains nothing.
+        #
+        # SCOPE, PLAINLY: this reads ``wiz.cfg.domains`` — the superadmin Domains
+        # table. The local-mesh bootstrap's own surface has ONE ``cluster_domain`` and
+        # no domains table, so on a flow that never filled that table there is nothing
+        # to refuse and this is a no-op. It bites where domains DO exist: a saved
+        # config loaded on the Sessions screen, or a mesh flow the operator stepped
+        # into the local-docker lane from. ``LocalMeshDialog`` has no wizard at all,
+        # hence the getattr.
+        refusal = self._domain_services_refusal()
+        if refusal:
+            self.status.setText(refusal)
+            return
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
         if self.login_theme.error_text():
             self.status.setText(
