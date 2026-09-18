@@ -590,7 +590,39 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # THE MEASUREMENT on the merged tree, taken by running this file:
 #     173 of 195 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 22.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-173}"
+#
+# 173 -> 174 on 2026-09-18: tests/scripts/test-no-literal-vault-brand-prose.sh
+# joined the gate (wired into shell-suites.yml's alpine job), guarding
+# specs/cluster prose against re-drifting to the literal default-brand Vault
+# path `secret/hugmesh/...` (hugmesh-generator#490). MEASURED by RUNNING this
+# file on the tree with the new suite wired, not assumed:
+#     174 of 196 suites are named by a pull_request-triggered workflow
+#
+# 173 -> 174 on 2026-09-18: tests/scripts/test-stack-clone-credential.sh (#535)
+# landed on disk in the same commit that wires it into shell-suites.yml's alpine
+# job, so the denominator moves too (195 -> 196, tracking check 1's new-file
+# count) and the gated count moves with it, not independently — MEASURED by
+# running this file on the merged tree before and after the wiring line landed,
+# not computed:
+#     173 of 196 suites are named by a pull_request-triggered workflow   (suite on
+#                                                                         disk, not
+#                                                                         yet wired)
+#     174 of 196 suites are named by a pull_request-triggered workflow   (wired)
+# The ungated SET pin is unchanged at 22 — the new suite was never in it.
+#
+# 174 (#490) and 174 (#535) -> RE-MEASURED on 2026-09-18 while merging origin/main
+# into land/490-vault-prose. Same shape as the 172/170 reconciliation above: both
+# notes above reached 174 independently and only of their own tree, each gating a
+# DIFFERENT new suite (test-no-literal-vault-brand-prose.sh here,
+# test-stack-clone-credential.sh from #535 on main) — the merged tree gates BOTH, so
+# the true number is not 174, it is whatever running this file on the merged tree
+# prints. The number below was taken that way, never by adding 1 to either side.
+# THE MEASUREMENT on the merged tree, taken by running this file (GUARD_PREMERGE=0
+# to see the raw count without the assignment below tripping int() on a stale
+# value):
+#     175 of 197 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22 — neither new suite was ever in it.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-175}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED

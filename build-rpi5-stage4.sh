@@ -2273,10 +2273,17 @@ rebrand_sysroot() {
     # Harbor image-project segment (registry.<host>/<project>/<svc>). Defaults to the
     # brand; the HARBOR_PROJECT env is a first-class seam for a differently-named project.
     local _hproj; _hproj="$(_sed_rep_escape "${HARBOR_PROJECT:-${BRAND}}")"
-    # Escaped brand for the vault-base sentinel restore below (every other builder
-    # already had one). The five PRE-EXISTING raw interpolations in this function are
-    # issue #491 and are deliberately left alone here.
-    local _brand; _brand="$(_sed_rep_escape "${BRAND}")"
+    # All of these land on the REPLACEMENT side of `sed s|..|VALUE|` across the baked
+    # cluster tree (configs that later execute on the device); escape sed metacharacters
+    # so a tainted brand/domain/org/title/games-domain cannot inject a second sed
+    # command or corrupt output — matches every other build-*-stage4.sh builder (issue
+    # #491; this builder previously interpolated these five raw).
+    local _btitle _org _games _domain _brand
+    _btitle="$(_sed_rep_escape "${BRAND_TITLE}")"
+    _org="$(_sed_rep_escape "${ORG}")"
+    _games="$(_sed_rep_escape "${GAMES_DOMAIN}")"
+    _domain="$(_sed_rep_escape "${CLUSTER_DOMAIN}")"
+    _brand="$(_sed_rep_escape "${BRAND}")"
     local roots=("${SYSROOT}/var/lib/hugmesh/cluster" "${SYSROOT}/etc/hugmesh")
     local f
     while IFS= read -r -d '' f; do
@@ -2341,13 +2348,13 @@ rebrand_sysroot() {
             -e "s|\([ {(,=\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
             -e "s|hugmesh\\\\\.net/|@@SDSYSKEYESC@@/|g" \
             -e "s|platform\.hugmesh\.net|@@SDSYSAPIGRP@@|g" \
-            -e "s|HugMesh Systems|${BRAND_TITLE}|g" \
-            -e "s|//id\.hugmesh\.games|//id.${GAMES_DOMAIN}|g" \
-            -e "s|//hugmesh\.games|//${GAMES_DOMAIN}|g" \
-            -e "s|hugmesh\.net|${CLUSTER_DOMAIN}|g" \
+            -e "s|HugMesh Systems|${_btitle}|g" \
+            -e "s|//id\.hugmesh\.games|//id.${_games}|g" \
+            -e "s|//hugmesh\.games|//${_games}|g" \
+            -e "s|hugmesh\.net|${_domain}|g" \
             -e "s|\(registry\.[A-Za-z0-9.-]*\)/hugmesh/|\1/${_hproj}/|g" \
-            -e "s|hugmesh-|${BRAND}-|g" \
-            -e "s|hugmesh|${ORG}|g" \
+            -e "s|hugmesh-|${_brand}-|g" \
+            -e "s|hugmesh|${_org}|g" \
             -e "s|@@SDSYSAPIGRP@@|platform.hugmesh.net|g" \
             -e "s|@@SDSYSKEYESC@@/|hugmesh\\\\.net/|g" \
             -e "s|@@SDSYSKEY@@/|hugmesh.net/|g" \
