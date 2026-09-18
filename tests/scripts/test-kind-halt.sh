@@ -112,6 +112,21 @@
 #   M23 halt: `create configmap` -> create|apply, losing the lock
 #   M24 halt: skip the post-scale verification (a denied scale reads as done)
 #
+# THE SECOND RUN OF THIS BATTERY WAS NOT CLEAN, and that is why four of the
+# scenarios below exist at all. Against the suite as first written, M06, M13 and M19
+# SURVIVED and M16 matched nothing:
+#   M06 survived because no scenario had a workload someone scaled back up BY HAND
+#       while the lane was halted -> scenario resume-leaves-a-hand-scaled-workload-alone
+#   M13 survived because nothing asserted on the "<-- NOT healthy/synced when frozen"
+#       flag, which is requirement 3 of #356 -> scenario names-what-it-froze
+#   M19 survived because the POST-SCALE verify caught what the suspend verify missed,
+#       so the two passes could not be told apart -> scenario
+#       verify-suspend-alone-unparseable, which truncates ONLY the suspend re-read
+#   M16 matched nothing, and then could not be killed by any small fixture: the
+#       ceiling is ARG_MAX -> scenario dump-past-arg-max, which pads the dump to
+#       several MB with a handful of objects rather than thousands of them
+# A battery that is green on its first run has usually not been designed hard enough.
+#
 # M11 SURVIVED the first time this battery ran, and the reason is worth keeping.
 # The halt verifies its suspend and re-suspends anything a parent re-asserted — and
 # that retry net quietly did the whole job when the primary loop was cut out, so the
@@ -126,6 +141,11 @@
 # has no reconcile loop. The order is argued from specs/cluster (98 of 98 app files
 # carry prune+selfHeal), pinned as a CALL SEQUENCE by scenario 10, and never
 # exercised against a real controller.
+#
+# 36 scenario fixtures, 48 labelled cases, 136 assertions. The S-numbers are
+# stable identifiers (a failure is grepped by them), so they are NOT renumbered
+# when a scenario is inserted — S36b and S37b are later additions that kill a
+# mutant S36 and S37 could not, and they keep their neighbours' names on purpose.
 #
 # Run it with:  make kind-halt-check      (offline, no cluster, a few seconds)
 
@@ -589,7 +609,7 @@ print(json.dumps(rec.get(q), sort_keys=True))'
 
 make_fakes
 
-head_ "1-9  the census contract: an errored census is never an empty census"
+head_ "A. the census contract: an errored census is never an empty census"
 
 scenario census-kind-fails
 echo 1 > "${SCEN}/kind_rc"
@@ -645,7 +665,7 @@ scenario census-crds-fail
 echo 1 > "${SCEN}/crd_list_rc"
 run_halt; expect_rc 5 "$?" "S9  CRDs cannot be listed -> refuse rather than scale a conversion webhook blind"
 
-head_ "10-15  the happy path, the call ORDER, and the floor in two tiers"
+head_ "B. the happy path, the call ORDER, and the floor in two tiers"
 
 scenario halt-happy
 run_halt; rc=$?
@@ -714,7 +734,7 @@ run_halt KIND_HALT_SKIP_NS=""; rc=$?
 expect_eq "$(replicas_of kyverno kyverno)" "1" "S15 an EMPTY KIND_HALT_SKIP_NS cannot unset the floor"
 expect_eq "$(replicas_of kube-system coredns)" "2" "S15 nor tier 1 of it"
 
-head_ "16  a parent that keeps re-asserting: the pass that DECIDES"
+head_ "C. a parent that keeps re-asserting: the pass that DECIDES"
 
 scenario reassert-forever
 printf 'mesh-a\n' > "${SCEN}/patch_noop"
@@ -723,7 +743,7 @@ expect_rc 6 "${rc}" "S16 an Application that stays armed through TWO suspends is
 if saw "STILL auto-syncing after two suspends"; then ok "S16 says which Application never suspended"; else bad "S16 did not name the Application that stayed armed"; fi
 expect_eq "$(record_field completed)" "false" "S16 the record stays INCOMPLETE, so a re-run finishes it"
 
-head_ "17-22  resume restores what was halted, not everything"
+head_ "D. resume restores what was halted, not everything"
 
 scenario roundtrip
 run_halt; expect_rc 0 "$?" "S17 halt"
@@ -747,7 +767,7 @@ scenario resume-without-halt
 run_verb resume; expect_rc 4 "$?" "S22 resume with no halt record -> refuse 4, never a guess at what to re-arm"
 if notsaw "it was suspended by something else"; then ok "S22 and does not assert a cause it never observed"; else bad "S22 asserted why the cluster is suspended without having observed it"; fi
 
-head_ "23-24  the context pin, and that it cannot be overridden"
+head_ "E. the context pin, and that it cannot be overridden"
 
 scenario context-pin
 run_halt; expect_rc 0 "$?" "S23 halt"
@@ -774,7 +794,7 @@ else
   bad "S24 KIND_HALT_CONTEXT still steered kubectl at $(grep -a -F 'some-production-cluster' "${SCEN}/kubectl.log" | head -1)"
 fi
 
-head_ "25-26  HPAs are censused and named, never touched"
+head_ "F. HPAs are censused and named, never touched"
 
 scenario hpa-named
 run_halt; expect_rc 0 "$?" "S25 halt"
@@ -796,7 +816,7 @@ expect_rc 0 "${rc}" "S26 an HPA read failure does not block the halt (it is info
 if saw "COULD NOT BE CENSUSED"; then ok "S26 …but it is reported as unknown, never as 'there are none'"; else bad "S26 a failed HPA read was rendered as an empty census"; fi
 expect_eq "$(record_field hpas_censused)" "false" "S26 and the record says so, for whoever reads it later"
 
-head_ "27-31  BLOCKER B1: the record is written BEFORE the first mutation"
+head_ "G. BLOCKER B1: the record is written BEFORE the first mutation"
 
 # The Studio launches this verb with cancellable=True, which arms a Cancel button
 # that terminates the whole process GROUP (local_stack_node.py:749-751). The same
@@ -845,7 +865,7 @@ expect_eq "$(replicas_of hugmesh-backend api)" "2" "S31 …and nothing was mutat
 expect_eq "$(automated_of mesh-a)" '{"prune": true, "selfHeal": true}' "S31 …nor was any Application suspended"
 if saw "NOTHING was halted"; then ok "S31 and it says plainly that nothing was halted"; else bad "S31 did not say the cluster is unchanged"; fi
 
-head_ "32-35  BLOCKER B2: an errored record read is never an absent record"
+head_ "H. BLOCKER B2: an errored record read is never an absent record"
 
 # `kubectl get configmap 2>/dev/null` with the exit status discarded made "absent"
 # and "unreadable" the same answer. Both skeptics drove that one line to the same
@@ -876,7 +896,7 @@ printf '' > "${SCEN}/record.json"
 run_halt; rc=$?
 expect_rc 5 "${rc}" "S35 a record ConfigMap with no ${STATE_KEY:-halt.json} key -> refuse rather than overwrite it"
 
-head_ "36-37  BLOCKER B3: a verify pass that cannot parse has NOT verified"
+head_ "I. BLOCKER B3: a verify pass that cannot parse has NOT verified"
 
 # The suspend check ran through a helper whose exit status was discarded, so
 # truncated JSON produced an empty answer that read as "nothing re-asserted" — and
@@ -910,7 +930,7 @@ run_halt; rc=$?
 expect_rc 6 "${rc}" "S37 a scale ACCEPTED but not applied -> partial, caught by re-reading"
 if saw "NOT at 0 after the scale"; then ok "S37 and names the workload that never moved"; else bad "S37 trusted the scale's exit status"; fi
 
-head_ "38-41  BLOCKER B4: resume verifies before it deletes the only way back"
+head_ "J. BLOCKER B4: resume verifies before it deletes the only way back"
 
 scenario resume-leaves-a-hand-scaled-workload-alone
 run_halt; expect_rc 0 "$?" "S37b halt"
@@ -990,7 +1010,7 @@ else
   bad "S41 a record call used the wrong namespace: $(grep -a -v '^devops$' "${SCEN}/cm_ns.log" | head -1)"
 fi
 
-head_ "42-45  the halt says what it froze, and survives a real-sized cluster"
+head_ "K. the halt says what it froze, and survives a real-sized cluster"
 
 # Requirement 3 of #356: the two standing reds (#352 external-secrets-config
 # Degraded, #354 harbor) are exactly what a halt freezes mid-flight, and a halt that
@@ -1018,7 +1038,7 @@ run_halt; rc=$?
 expect_rc 0 "${rc}" "S45 a multi-megabyte cluster dump does not break the halt (E2BIG)"
 expect_eq "$(replicas_of hugmesh-backend api)" "0" "S45 …and it really halted"
 
-head_ "46  status is read-only"
+head_ "L. status is read-only"
 
 scenario status-readonly
 run_verb status; expect_rc 0 "$?" "S46 status on a cluster that is not halted"

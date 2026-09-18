@@ -497,7 +497,6 @@ def note(ns, text):
     why.setdefault(ns, set()).add(text)
 
 for cfg in load("HALT_WEBHOOKS_FILE").get("items", []):
-    kind = cfg.get("kind") or ""
     for w in cfg.get("webhooks", []) or []:
         if w.get("failurePolicy") != "Fail":
             continue
