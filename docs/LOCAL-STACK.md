@@ -98,7 +98,7 @@ make stack-up ENV=prod CASDOOR_ISSUER=https://id.hugmesh.net     # prod mode
 ## Cold builds — `make stack-m2-bootstrap` (private maven artifacts)
 
 Four Java services (**admin/user/mod-bff, federation-api**) resolve org-PRIVATE
-maven artifacts (`systems.hugmesh:hugmesh-parent/-commons/-auth-core/
+maven artifacts (`net.hugmesh:hugmesh-parent/-commons/-auth-core/
 -build-config`) at **image-build** time via their committed `settings.xml`
 (`${env.CI_API_V4_URL}/groups/${env.GITLAB_GROUP_ID}/-/packages/maven` — the
 GitLab group registry, unreachable off the VPN). While the built
@@ -116,9 +116,11 @@ vendored):
 1. Clones the four library repos at **pinned commits** (the repos carry no git
    tags; each SHA's `pom.xml` is exactly the version the services require — today
    `hugmesh-build-config` **0.5.0**, `hugmesh-parent` **2.8.0**,
-   `hugmesh-commons` **2.1.0** and a single `hugmesh-auth-core` **2.4.2** for both
-   user-bff and admin-bff; ⚠️ auth-core has been re-cut twice under a released
-   coordinate — 2.4.0 → 2.4.1 → 2.4.2 — so re-check
+   `hugmesh-commons` **2.1.0**, and **two** `hugmesh-auth-core` pins — **2.4.2**
+   for user-bff main and **2.5.0** for admin-bff main, by design: the two
+   consumers are on separate release cadences, so a cold build needs both jars
+   in the local registry; ⚠️ auth-core has been re-cut four times under a
+   released coordinate — 2.4.0 → 2.4.1 → 2.4.2 → 2.5.0 — so re-check
    [`tests/stack/m2-bootstrap.sh`](../tests/stack/m2-bootstrap.sh), which is the
    authoritative pin, rather than this sentence)
    into `~/.cache/hugmesh-stack-maven/src` and `mvn install`s them into
