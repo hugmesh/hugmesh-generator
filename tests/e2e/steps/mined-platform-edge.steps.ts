@@ -742,6 +742,47 @@ Then(
   },
 );
 
+// Generalised twins of the two steps above — take WHICH table ('compose' or
+// 'cluster') as an explicit quoted argument instead of hard-coding 'cluster',
+// so a single scenario outline can pin the SAME carve-out on both lanes at
+// once (hugmesh-generator#480). Kept alongside the cluster-only steps rather
+// than replacing them: the unquoted literal "the cluster fe gateway routes …"
+// / "…declares …" elsewhere in this feature still matches those steps, not
+// these.
+Then(
+  'the {string} fe gateway routes {string} to the {string} upstream',
+  async ({}, which: string, pattern: string, upstream: string) => {
+    const { rel, routes } = tableOf(which);
+    const matching = routes.filter((r) => r.paths.includes(pattern));
+    expect(
+      matching.map((r) => r.id),
+      `no route in ${rel} declares the path '${pattern}'.`,
+    ).not.toHaveLength(0);
+    expect(
+      matching.find((r) => r.uri.includes(upstream)),
+      `'${pattern}' is routed by [${matching.map((r) => `${r.id} -> ${r.uri}`).join(', ')}] in `
+      + `${rel}, none of which forwards to '${upstream}'.`,
+    ).toBeDefined();
+  },
+);
+
+Then(
+  'the {string} fe gateway declares {string} before {string}',
+  async ({}, which: string, earlier: string, later: string) => {
+    const { rel, routes } = tableOf(which);
+    const a = routes.find((r) => r.paths.includes(earlier));
+    const b = routes.find((r) => r.paths.includes(later));
+    expect(a, `${rel} declares no route for '${earlier}'`).toBeDefined();
+    expect(b, `${rel} declares no route for '${later}'`).toBeDefined();
+    expect(
+      a!.order,
+      `route '${a!.id}' ('${earlier}') is declared AFTER '${b!.id}' ('${later}') in ${rel}. `
+      + `Spring Cloud Gateway / the chart matches FIRST-IN-DECLARED-ORDER, not most-specific, `
+      + `so '${later}' would swallow '${earlier}' and the request would reach the wrong service.`,
+    ).toBeLessThan(b!.order);
+  },
+);
+
 Then(
   'the {string} fe gateway claims {string} before the {string} catch-all',
   async ({}, which: string, requestPath: string, catchAllId: string) => {

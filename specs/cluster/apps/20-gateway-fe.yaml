@@ -441,6 +441,20 @@ spec:
           - id: hugmesh-user-bff-api-register
             uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/register/**
+          # BAN-APPEAL CARVE-OUT (hugmesh-generator#480), same shape as the
+          # register/complete carve-out directly above: admin-bff owns POST+GET
+          # /bff/me/appeal (AccountAppealUserController) — a curtailed/suspended
+          # principal's own appeal surface — under the SAME /bff/me/** prefix
+          # user-bff's entry below claims. Without this exact-path entry ABOVE
+          # it, /bff/me/** swallows /bff/me/appeal and a suspended account's own
+          # appeal POST/GET 404s on the cluster (recorded on #366, this is the
+          # sixth path in that family). Compose already gets this right (its
+          # /bff/user-bff entry lists EXACT paths, never a /bff/me/** subtree),
+          # so this brings the cluster table in line. MORE SPECIFIC FIRST — same
+          # reason /bff/register/complete sits above /bff/register/**.
+          - id: hugmesh-admin-bff-api-me-appeal
+            uri: https://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080
+            path: /bff/me/appeal
           - id: hugmesh-user-bff-api-me
             uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/me/**

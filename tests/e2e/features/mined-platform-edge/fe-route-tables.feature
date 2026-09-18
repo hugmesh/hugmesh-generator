@@ -87,6 +87,26 @@ Feature: The fe route tables put every protocol and asset prefix ahead of the SP
       | phpbb           | /bff/forum/**           |
       | character-forge | /bff/character-forge/** |
 
+  # ── BAN-APPEAL CARVE-OUT (hugmesh-generator#480) ──────────────────────────
+  # The cluster table's /bff/me/** -> user-bff entry swallows admin-bff's
+  # POST+GET /bff/me/appeal (AccountAppealUserController), the surface a
+  # curtailed principal reaches to contest their own suspension — a 404 for
+  # exactly the caller least able to route around a front-door failure.
+  # Compose already gets this right (EXACT paths never widen to a subtree);
+  # this carve-out brings the cluster table in line, in the same shape the
+  # existing hugmesh-admin-bff-api-register-complete row already uses for the
+  # sibling /bff/register/** swallow.
+  Scenario Outline: /bff/me/appeal reaches admin-bff on <table>, not the /bff/me/** catch-all @layer:bff
+    Then the "<table>" fe gateway routes "/bff/me/appeal" to the "hugmesh-admin-bff-api" upstream
+
+    Examples:
+      | table   |
+      | compose |
+      | cluster |
+
+  Scenario: the cluster fe gateway declares /bff/me/appeal before the /bff/me/** catch-all @layer:bff
+    Then the "cluster" fe gateway declares "/bff/me/appeal" before "/bff/me/**"
+
   # ── THE FRAGMENT FLEET ─────────────────────────────────────────────────────
   # A route to a live host on a dead port is not a 404. The gateway 5xxes or
   # hangs, the shell's loadRemoteModule rejects, and the fragment region renders
