@@ -600,10 +600,26 @@ for w in wls.get("items", []):
         continue
     reps = s.get("replicas")
     row = {"namespace": ns, "kind": kind, "name": m["name"], "replicas": reps,
-           "skipped": None}
+           "skipped": None, "floor_unbacked": False}
     if ns in skip:
-        row["skipped"] = floor_why.get(
-            ns, "on the hardcoded floor (resume itself depends on it) or KIND_HALT_SKIP_NS")
+        # #544. "On the floor" and "actually running" are DIFFERENT facts, and the
+        # first version printed only the first one. On the operator's cluster today
+        # all three external-secrets Deployments were at 0 when a halt ran, and the
+        # record called them "Left RUNNING on purpose … backs failurePolicy=Fail
+        # webhook (and 16 more)" — a sentence that is false in the only direction
+        # that matters: 17 Fail webhooks with no endpoints behind them, described
+        # as held. The floor cannot hold what is already down. Say so, and mark it
+        # machine-readably so the render can shout about it.
+        if reps is not None and int(reps) == 0 and ns in floor_why:
+            row["skipped"] = ("ALREADY AT 0 - the admission floor did NOT hold it (nothing "
+                              "here scaled it; it was down before this halt): " + floor_why[ns])
+            row["floor_unbacked"] = True
+        elif reps is not None and int(reps) == 0:
+            row["skipped"] = ("already at 0, and on the hardcoded floor (resume itself "
+                              "depends on it) or KIND_HALT_SKIP_NS")
+        else:
+            row["skipped"] = floor_why.get(
+                ns, "on the hardcoded floor (resume itself depends on it) or KIND_HALT_SKIP_NS")
     elif reps is None:
         row["skipped"] = "no .spec.replicas to restore - not scaled, not recorded"
     elif int(reps) == 0:
@@ -653,6 +669,20 @@ record = {
                          .strftime("%Y-%m-%dT%H:%M:%SZ"),
     "skipped_namespaces": sorted(skip),
     "admission_floor": floor_why,
+    # #544. `workloads` is EVERY workload censused, scaled or not, each carrying its
+    # own `skipped` reason - so `len(workloads)` is not the number this halt moved,
+    # and reading it as one is how "the design says 24 of 27, the record says 39"
+    # was arrived at. The counts the halt actually acted on are stated here rather
+    # than left to be derived, and `workloads_scaled` is by construction the number
+    # of WL rows in the plan resume replays.
+    "counts": {
+        "workloads_censused": len(wl_rows),
+        "workloads_scaled": len(zeroed),
+        "workloads_left_running": len(wl_rows) - len(zeroed),
+        "workloads_on_unbacked_floor": len([r for r in wl_rows if r["floor_unbacked"]]),
+        "applications_censused": len(app_rows),
+        "applications_suspended": len([r for r in app_rows if r["was_automated"]]),
+    },
     "applications": app_rows,
     "workloads": wl_rows,
     "hpas": hpa_rows,
@@ -779,6 +809,14 @@ if theirs:
     for a in sorted(theirs, key=lambda x: (x["namespace"], x["name"])):
         print("    %-28s sync=%-12s health=%s" % (a["name"], a["sync"], a["health"]))
 
+counts = rec.get("counts") or {}
+print("")
+print("  Workloads: %d censused, %d scaled to 0 by this halt, %d left running."
+      % (counts.get("workloads_censused", len(wls)),
+         counts.get("workloads_scaled", len(scaled)),
+         counts.get("workloads_left_running", len(skipped))))
+print("  (The list below is the SCALED half. Everything censused is recorded, each with")
+print("   its own reason, so the length of the record is not the number this halt moved.)")
 print("")
 print("  Workloads scaled to 0 by this halt (%d), with the replica count resume restores:" % len(scaled))
 for w in sorted(scaled, key=lambda x: (x["namespace"], x["kind"], x["name"])):
@@ -798,6 +836,44 @@ if floor:
     print("  cluster's own webhook configuration, not from a hardcoded list:")
     for ns in sorted(floor):
         print("    %-24s %s" % (ns, floor[ns]))
+
+# #544. The floor is a claim about what is still RUNNING. When a workload on it is
+# already at 0, that claim is false, and it is false in the direction that hides a
+# broken admission path: a failurePolicy=Fail webhook whose Service has no
+# endpoints REJECTS the resources it guards. This block exists because the previous
+# render described exactly that state as "Left RUNNING on purpose".
+def _unbacked(w):
+    # A record written by this version carries the flag either way. A record
+    # written BEFORE #544 has no such key at all, and that is precisely the record
+    # sitting on the operator's cluster today — so derive it rather than let
+    # `status` stay silent about the state the issue was filed for.
+    if "floor_unbacked" in w:
+        return bool(w["floor_unbacked"])
+    return (w.get("namespace") in floor
+            and w.get("replicas") is not None and int(w["replicas"]) == 0)
+
+unbacked = [w for w in wls if _unbacked(w)]
+if unbacked:
+    by_ns = {}
+    for w in unbacked:
+        by_ns.setdefault(w["namespace"], []).append(w)
+    print("")
+    print("  *** THE ADMISSION FLOOR IS NOT BACKED ***")
+    print("  %d workload(s) in %d floor namespace(s) are at 0 REPLICAS. The floor kept this"
+          % (len(unbacked), len(by_ns)))
+    print("  halt from scaling them, and that is all it can do - they were already down:")
+    for ns in sorted(by_ns):
+        print("    %s   %s" % (ns, floor.get(ns, "on the derived admission floor")))
+        for w in sorted(by_ns[ns], key=lambda x: (x["kind"], x["name"])):
+            print("      %-12s %-34s replicas=0" % (w["kind"], w["name"]))
+    print("  Consequences, stated rather than implied:")
+    print("    - every failurePolicy=Fail webhook backed by those namespaces is UNBACKED")
+    print("      right now, so creating or updating a resource it guards is REJECTED;")
+    print("    - `make kind-resume` will NOT fix it. These were at 0 when the record was")
+    print("      written, so 0 is the count it would restore. Scale them back by hand, or")
+    print("      let their ArgoCD Application reconcile once auto-sync is re-armed;")
+    print("    - this halt did not cause it. Something zeroed them BEFORE the record was")
+    print("      written; this control only refused to make it worse.")
 
 hpas = rec.get("hpas")
 if not rec.get("hpas_censused", True):

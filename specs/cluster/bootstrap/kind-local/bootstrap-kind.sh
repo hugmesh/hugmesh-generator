@@ -49,7 +49,17 @@ CLUSTER_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"       # specs/cluster (this dir
 REPO_ROOT="$(cd "${CLUSTER_DIR}/../.." && pwd)"        # repo root (for `git show <branch>:<path>`)
 
 CLUSTER_NAME="${KIND_CLUSTER_NAME:-hugmesh-local}"
-ARGOCD_VERSION="${ARGOCD_VERSION:-stable}"
+# ArgoCD version PIN (issue #394) — see bootstrap.sh (the sibling this script
+# reuses the install/re-namespace logic from) for the full rationale and the
+# bump procedure. Short version: `stable` silently tracks upstream, and
+# argoproj/argo-cd#29103 (merged 2026-09-09) flips the default diff strategy
+# to Server-Side Diff for every ServerSideApply=true Application the moment
+# `stable` advances past it. Pinned to v3.5.3, MEASURED as what
+# kind-hugmesh-local actually runs today (2026-09-18) and confirmed to
+# predate #29103. Bump: diff the target tag's install.yaml first, resolve the
+# open per-app-annotation-vs-global-flag decision on #394 BEFORE bumping past
+# #29103, then re-run tests/scripts/test-argocd-serverside-diff.sh.
+ARGOCD_VERSION="${ARGOCD_VERSION:-v3.5.3}"
 ARGOCD_NS="${ARGOCD_NS:-devops}"
 GITOPS_REPO_DEFAULT="https://github.com/hugmesh/hugmesh-generator.git"
 REPO="${HUGMESH_GITOPS_REPO:-${GITOPS_REPO_DEFAULT}}"

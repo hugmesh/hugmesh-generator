@@ -43,6 +43,17 @@
  *     gone — is kept by `doorLost` below: a row that finds the browser on its
  *     own error page marks the door lost, and every later row skips with that
  *     reason instead of burning its 120 s timeout.
+ *
+ *  6. A VISIBLE TESTID IS NOT A SETTLED VIEW (#554). The row's last `do[]`
+ *     action only proves the awaited element is in the DOM; it says nothing
+ *     about whether the entry transition has finished fading or the fonts
+ *     have swapped in. waitForSettle() (./settle.ts) sits between that action
+ *     and shot() and blocks until fonts are ready, every FINITE animation has
+ *     finished and two viewport frames are byte-identical — freezing the
+ *     shell's own infinite background animation first so that loop cannot
+ *     keep the comparison from ever converging. A row that never settles
+ *     fails loudly there; it does not shoot anyway. See settle.ts for the
+ *     full reasoning, and settle.spec.ts for the offline pin.
  */
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import * as fs from 'node:fs';
@@ -50,6 +61,7 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { onboard, registerOnly, shot, SHOTS, apiContext, SUPERADMIN_USERNAME } from '../specs/helpers';
 import { loginPassword } from '../specs/rbac-roles';
+import { waitForSettle, resumeFrozenAnimations } from './settle';
 
 interface DoAction {
   action: 'goto' | 'click' | 'fill' | 'press' | 'expect' | 'expectAttached' | 'expectHidden';
@@ -187,7 +199,17 @@ for (const row of ROWS) {
 
       for (const a of row.do ?? []) await runAction(page, a);
 
-      await shot(page, name);                       // specs/helpers.ts shot(): fullPage, into SNAP_SHOTS
+      // #554: the row's last action landing does not mean the VIEW has. Wait
+      // for fonts, every finite animation and two identical frames (settle.ts)
+      // before shooting, so a plan image is never a ghosted mid-transition or
+      // half-rendered frame. A row that never settles fails loudly here and
+      // shoots nothing.
+      await waitForSettle(page, name);
+      try {
+        await shot(page, name);                     // specs/helpers.ts shot(): fullPage, into SNAP_SHOTS
+      } finally {
+        await resumeFrozenAnimations(page);          // let any frozen infinite animation keep looping
+      }
 
       // The evidence guard lives in evidence.mjs so it can be exercised OFFLINE
       // (`node shot-harness/evidence.mjs <file.png>`) — a guard nobody can run
