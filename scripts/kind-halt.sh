@@ -257,6 +257,10 @@ KCTX="kind-${CLUSTER_NAME}"
 ARGOCD_NS="${ARGOCD_NS:-devops}"
 STATE_CM="${KIND_HALT_STATE_CONFIGMAP:-hugmesh-kind-halt}"
 STATE_KEY="halt.json"
+# kubectl jsonpath treats an unescaped dot as a path separator, so {.data.halt.json}
+# resolves .data.halt -> .json and returns EMPTY for a key that is plainly there —
+# which read_record then reports as "exists but has no 'halt.json' key" and refuses.
+STATE_KEY_JSONPATH="${STATE_KEY//./\\.}"
 #: How long to let a GitOps parent re-assert a suspend before re-checking. Only a
 #: repo-recursing root (HUGMESH_GITOPS_ROOT_RECURSE=1) or an ApplicationSet can do
 #: that; on this cluster neither applies. Tests set it to 0.
@@ -419,7 +423,7 @@ read_record() {
   errf="${TMPDIR_HALT}/record.err"
   RECORD_ERR=""
   out="$(kc -n "${ARGOCD_NS}" get configmap "${STATE_CM}" \
-           -o "jsonpath={.data.${STATE_KEY}}" 2>"${errf}")"
+           -o "jsonpath={.data.${STATE_KEY_JSONPATH}}" 2>"${errf}")"
   rc=$?
   if [ "${rc}" -eq 0 ]; then
     if [ -z "${out}" ]; then
