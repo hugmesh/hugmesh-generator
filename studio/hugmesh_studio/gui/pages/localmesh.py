@@ -97,7 +97,12 @@ from ...core.local_mesh_bootstrap import (
     LocalMeshBootstrap, LocalMeshBootstrapConfig, _parse_web_locales,
     discover_brands)
 from ...core.local_mesh_stages import verb_phases
-from ...core.local_stack_node import LocalStackNode
+from ...core.local_stack_node import (
+    LocalStackNode,
+    # ONE reader of the KIND_CLUSTER_NAME override, so the confirmation text
+    # can never name a different cluster than the verb deletes (#356).
+    _kind_cluster_name as kind_cluster_name,
+)
 from ...core import mesh_monitor
 from ...core.local_services import (
     KIND_ADDONS, UNAVAILABLE_LOCALLY, by_slug as local_service, default_selection,
@@ -123,6 +128,47 @@ from ._widgets import _row, collapsible, label_finish_as_exit, own_probe, probe_
 # progress.py imports nothing from this module (the reverse dependency is via
 # gui/pages/__init__), so this cannot cycle.
 from .progress import _STAGE_GLYPH, _STATUS_GLYPH, _display_safe, _fmt_elapsed
+
+# THE DevOps-lane DELETE confirmation (#356). A module-level seam on purpose, the
+# same shape `gui.pages.progress.confirm_flash` uses: headless tests monkeypatch this
+# name, so the gate on this page's most destructive button is EXERCISED by the suite
+# instead of being stubbed away with _devops_down.
+#
+# Why it was unguarded until now is worth recording. `Delete DevOps lane` (:1485)
+# went straight to _launch — one click deleted the kind cluster, its Vault KV, its
+# Casdoor identities and every seeded account — while the LESS destructive
+# `Stop && clean Docker…` did confirm (_bootstrap_clean). The destructive control was
+# the one with no confirmation. Decision 44 kept that fix in scope regardless of how
+# the halt itself landed.
+#
+# Called from _devops_down — an explicit button click — and NEVER from validatePage /
+# initializePage / isComplete / itemChanged, where a modal deadlocks the offscreen
+# tests.
+confirm_devops_down = QtWidgets.QMessageBox.warning
+#: what a confirmed delete must return; anything else cancels.
+DEVOPS_DOWN_OK = QtWidgets.QMessageBox.StandardButton.Ok
+DEVOPS_DOWN_CANCEL = QtWidgets.QMessageBox.StandardButton.Cancel
+
+#: The HALT is not destructive, so it gets no modal — pressing it loses nothing and
+#: Resume sits beside it. The DELETE is the destructive one. The text lives here so
+#: tests assert on the sentences rather than a paraphrase.
+_DEVOPS_DOWN_CONFIRM_TITLE = "Delete the DevOps lane?"
+_DEVOPS_DOWN_CONFIRM_TEXT = (
+    "This DELETES the kind cluster `{cluster}` and everything in it:\n"
+    "  • every pod, PVC and Secret — including Vault's KV and the Casdoor\n"
+    "    identities seeded into it, and every account seeded with them\n"
+    "  • the `{cluster}-control-plane` container and its image cache\n\n"
+    "It does NOT touch the docker compose project of the same name: your local\n"
+    "mesh's containers and volumes are untouched, and no `docker system prune`\n"
+    "is run.\n\n"
+    "The next `Start DevOps lane` is a FULL bring-up (image pulls + rollouts,\n"
+    "long), and the cluster comes back EMPTY until it is reseeded — nothing will\n"
+    "tell you that it is empty.\n\n"
+    "If you only want to STOP the lane, use `Halt DevOps lane` on the monitor\n"
+    "below instead: it keeps the cluster and everything in it, and Resume brings\n"
+    "it back.\n\n"
+    "Delete it?"
+)
 
 # Per-provider placeholder hints — the SAME endpoint shapes gui/pages/idp.py
 # carries (one picker, two frames: the node wizard page and this bootstrap tab).
@@ -1525,6 +1571,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.monitor.view_up_requested.connect(self._view_up)
         self.monitor.view_down_requested.connect(self._view_down)
         self.monitor.scale_requested.connect(self._scale_monitor)
+        # The kind lane's non-destructive stop and its undo (#356). They sit on the
+        # monitor because this is the screen that reads BOTH lanes, and therefore the
+        # screen an operator is on when they decide to stop something. Both go through
+        # _launch, so the page's existing busy guard covers them: a halt racing a
+        # bring-up is worse than either.
+        self.monitor.halt_requested.connect(self._devops_halt)
+        self.monitor.resume_requested.connect(self._devops_resume)
         #: Which row's scale is in flight ("" when none) — what _on_scale_done forgets.
         self._scaling_key = ""
         lay.addWidget(self.monitor_section)
@@ -2618,6 +2671,21 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                      stream=True, cancellable=True, verb="devops-up")
 
     def _devops_down(self):
+        """DESTRUCTIVE — `kind delete cluster`. Confirms first, through the
+        module-level ``confirm_devops_down`` seam, and the confirmation enumerates
+        what goes and what stays rather than asking a generic "are you sure?" —
+        a generic one is what makes operators click through. It also points at the
+        non-destructive `Halt DevOps lane`, because most of the time that is what
+        the operator actually wants and its absence is why this button was being
+        pressed at all (#356)."""
+        cluster = kind_cluster_name()
+        answer = confirm_devops_down(
+            self, _DEVOPS_DOWN_CONFIRM_TITLE,
+            _DEVOPS_DOWN_CONFIRM_TEXT.format(cluster=cluster),
+            DEVOPS_DOWN_OK | DEVOPS_DOWN_CANCEL, DEVOPS_DOWN_CANCEL)
+        if answer != DEVOPS_DOWN_OK:
+            self._note("[devops] cancelled — the cluster was NOT deleted.", queue=False)
+            return
         node = self.boot._stack_node()
         self._note("[devops] deleting the local Kubernetes cluster (the docker "
                    "mesh and its volumes are untouched) …")
@@ -2625,6 +2693,35 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                      lambda on_line, cancel: node.devops_down(on_line=on_line,
                                                               cancel=cancel),
                      stream=True, cancellable=True, verb="devops-down")
+
+    # ── the NON-destructive stop (#356, decision 44 = a) ──────────────────────
+    def _devops_halt(self):
+        """`make kind-halt` — scale the mesh workloads to 0 AND suspend ArgoCD
+        auto-sync. NOT destructive: the cluster, its volumes, its Vault KV and its
+        Casdoor identities all stay, so this deliberately does NOT confirm. The
+        streamed output is the point — it names every Application it suspended and
+        the state each was in when it froze."""
+        node = self.boot._stack_node()
+        self._note("[devops] halting the DevOps lane: suspending ArgoCD auto-sync "
+                   "and scaling the mesh workloads to 0. NOTHING is deleted — the "
+                   "cluster and its data stay, and Resume puts back exactly what "
+                   "this suspends …")
+        self._launch("Halting the DevOps lane",
+                     lambda on_line, cancel: node.devops_halt(on_line=on_line,
+                                                              cancel=cancel),
+                     stream=True, cancellable=True, verb="devops-halt")
+
+    def _devops_resume(self):
+        """`make kind-resume` — put back exactly what the halt recorded. Never
+        "everything": an Application suspended for another reason stays suspended."""
+        node = self.boot._stack_node()
+        self._note("[devops] resuming the DevOps lane: restoring the replica counts "
+                   "and the auto-sync the halt recorded (anything suspended for "
+                   "another reason stays suspended) …")
+        self._launch("Resuming the DevOps lane",
+                     lambda on_line, cancel: node.devops_resume(on_line=on_line,
+                                                                cancel=cancel),
+                     stream=True, cancellable=True, verb="devops-resume")
 
     # ── saved meshes (ask C): save / probe / start / load ─────────────────────
     def _sync_saved_gate(self):
@@ -3150,6 +3247,14 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # read plus a TCP connect per door is I/O, and this slot is on the GUI thread)
         self.monitor.set_view_session(bool(getattr(snap, "view_doors", ())),
                                       lane=str(getattr(snap, "view_lane", "") or ""))
+        # Halt/Resume are armed from the KIND lane's tri-state, not from a boolean and
+        # not from this page's `_mesh_up` (which answers COMPOSE only — invariant I11).
+        # running is None means the census could not be taken, and that must grey the
+        # controls with a reason rather than offering them (I5).
+        _kind = getattr(snap, "kind", None)
+        self.monitor.set_kind_lane(getattr(_kind, "running", None),
+                                   str(getattr(_kind, "error", "") or
+                                       getattr(_kind, "detail", "") or ""))
         self._sync_monitor_gate()
 
     def _on_monitor_toggled(self, on: bool):

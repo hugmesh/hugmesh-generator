@@ -135,6 +135,40 @@ _VIEW_DOWN_TIP = ("`make view-stop`: stop the background view session and sweep 
                   "port-forwards.")
 _VIEW_DOWN_IDLE_TIP = "No `make view` session is running."
 
+# The kind lane's stop, and its undo (#356, decision 44 = a). Both tooltips say what
+# the verb keeps, because the neighbouring `Delete DevOps lane` on the bring-up page
+# is the one that destroys and the two must never be confused.
+_HALT_TIP = (
+    "`make kind-halt`: STOP the Kubernetes lane without deleting it. Suspends "
+    "ArgoCD auto-sync and scales the mesh's Deployments and StatefulSets to 0.\n\n"
+    "The cluster, its PVCs, its Vault KV and its Casdoor identities are all KEPT — "
+    "this is not `Delete DevOps lane`. Resume puts back exactly what it suspends, "
+    "and names every Application it froze plus the state each was in.\n\n"
+    "coredns, kyverno, the storage provisioner and ArgoCD itself keep running: "
+    "scaling any of them to 0 would make Resume impossible.")
+_RESUME_TIP = (
+    "`make kind-resume`: undo a halt. Restores the exact replica counts it recorded "
+    "and re-arms auto-sync on exactly the Applications it suspended — never "
+    "'everything', so an Application suspended for some other reason stays "
+    "suspended.")
+#: Greyed-with-a-REASON, the idiom this widget already uses. Invariant I5 is that
+#: Unknown is never "no": a lane whose state could not be established must not offer
+#: a control that acts on it — that is the run-ungated-lane.sh exit-5 mistake in GUI
+#: form, where a census that errored gets treated as an answer.
+_HALT_TIP_UNKNOWN = (
+    "The Kubernetes lane's state could not be read, so this is disabled. Unknown is "
+    "not 'nothing running' — halting a lane nobody could census is exactly the "
+    "mistake this control refuses to make. Press Refresh, or check `kind get "
+    "clusters` and your kubeconfig.")
+_HALT_TIP_DOWN = ("The Kubernetes lane is not running — there is nothing to halt. "
+                  "Start it with `Start DevOps lane` on the bring-up step.")
+_RESUME_TIP_UNKNOWN = (
+    "The Kubernetes lane's state could not be read, so this is disabled. Press "
+    "Refresh, or check `kind get clusters` and your kubeconfig.")
+_RESUME_TIP_DOWN = ("The Kubernetes lane is not running, so there is nothing to "
+                    "resume into. A halted lane still reads as running — the halt "
+                    "keeps the cluster.")
+
 
 def _grey_note(text: str) -> QtWidgets.QLabel:
     lbl = QtWidgets.QLabel(text)
@@ -163,6 +197,13 @@ class MeshMonitorWidget(QtWidgets.QWidget):
     #: (row key, target replicas) — emitted by Apply. The MOUNTING page runs it off the
     #: GUI thread; this widget never shells anything.
     scale_requested = Signal(str, int)
+    #: The kind lane's NON-destructive stop and its undo (#356). They live HERE, on the
+    #: monitor, because this is the screen that reads BOTH lanes and therefore the
+    #: screen an operator is on when they decide to stop something — the bring-up page
+    #: cannot even tell them what is running. Like every other control on this widget
+    #: they only EMIT; the mounting page owns the shelling.
+    halt_requested = Signal()
+    resume_requested = Signal()
 
     def __init__(self, parent=None, *, scaling: bool = False):
         super().__init__(parent)
@@ -223,6 +264,15 @@ class MeshMonitorWidget(QtWidgets.QWidget):
                                  "the clipboard.")
         self.copy_btn.clicked.connect(self._copy_clicked)
         frow.addWidget(self.copy_btn)
+        # The kind lane's stop. NO ellipsis and no modal: it is not destructive.
+        self.halt_btn = QtWidgets.QPushButton("Halt DevOps lane")
+        self.halt_btn.setToolTip(_HALT_TIP)
+        self.halt_btn.clicked.connect(self.halt_requested.emit)
+        frow.addWidget(self.halt_btn)
+        self.resume_btn = QtWidgets.QPushButton("Resume DevOps lane")
+        self.resume_btn.setToolTip(_RESUME_TIP)
+        self.resume_btn.clicked.connect(self.resume_requested.emit)
+        frow.addWidget(self.resume_btn)
         lay.addWidget(footer)
         self.footer = footer
 
@@ -237,6 +287,9 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         self._scale_targets: dict[str, int] = {}
         self._scale_busy = False
         self.set_view_session(False)
+        # No snapshot yet is UNKNOWN, not 'down'. The halt must not be offered
+        # before anything has been read (I5).
+        self.set_kind_lane(None, "no snapshot has been taken yet")
 
     # ── what the page reads ──────────────────────────────────────────────────────
     @property
@@ -294,6 +347,34 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         else:
             self.view_up_btn.setToolTip(_VIEW_UP_TIP)
             self.view_down_btn.setToolTip(_VIEW_DOWN_IDLE_TIP)
+
+    # ── the kind lane's halt/resume gate ─────────────────────────────────────────
+    def set_kind_lane(self, running, reason: str = "") -> None:
+        """Arm Halt and Resume from the kind lane's TRI-STATE, never from a boolean.
+
+        ``running`` is ``mesh_monitor.LaneState.running``: True, False, or **None**
+        for "could not be established". Invariant I5 is that unknown is never "no",
+        and this is where that bites hardest — a control that acts on an unknown lane
+        is the run-ungated-lane.sh exit-5 mistake wearing a button. So None disables
+        BOTH, and says why in the tooltip rather than leaving a dead control with a
+        stale sentence on it.
+
+        Both tooltips are rewritten on EVERY branch. Writing only the disabled one
+        left the enabled button explaining why it was disabled, which is the bug
+        set_view_session above already had to fix once."""
+        live = running is True
+        self.halt_btn.setEnabled(live)
+        self.resume_btn.setEnabled(live)
+        if live:
+            self.halt_btn.setToolTip(_HALT_TIP)
+            self.resume_btn.setToolTip(_RESUME_TIP)
+        elif running is None:
+            why = (" (" + reason + ")") if reason else ""
+            self.halt_btn.setToolTip(_HALT_TIP_UNKNOWN + why)
+            self.resume_btn.setToolTip(_RESUME_TIP_UNKNOWN + why)
+        else:
+            self.halt_btn.setToolTip(_HALT_TIP_DOWN)
+            self.resume_btn.setToolTip(_RESUME_TIP_DOWN)
 
     # ── the scale busy guard ─────────────────────────────────────────────────────
     def set_scale_busy(self, busy: bool, text: str = "") -> None:
