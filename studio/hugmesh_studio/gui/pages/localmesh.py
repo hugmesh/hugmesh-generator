@@ -90,6 +90,7 @@ from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
 from ...core import saved_meshes, vaults
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
+from ...core.domain_services import ACTION_MESH_START, gate_reason
 from ...core.e2e_catalogue import Catalogue, load_catalogue
 from ...core.egress_conf import validate_egress_conf
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
@@ -2486,7 +2487,40 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             if idle else
             "Disabled while a verb is running — wait for it to finish, or Cancel.")
 
+    def _domain_services_refusal(self) -> str:
+        """"" when a mesh may start; otherwise the refusal naming every domain with no
+        recorded service configuration (#495).
+
+        A pure read through ``core.domain_services.gate_reason`` — the SAME seam the
+        image-build gate calls — so the two paths cannot drift and a test can drive
+        the refusal with a bare ImageConfig and no docker."""
+        cfg = getattr(getattr(self, "wiz", None), "cfg", None)
+        if cfg is None:
+            return ""
+        return gate_reason(cfg, ACTION_MESH_START)
+
     def _bootstrap_up(self):
+        # THE PER-DOMAIN SERVICES GATE (#494/#495), on the docker/local-mesh half of
+        # the operator's ask ("before building or starting a mesh in docker or nodes").
+        # Same seam as the image-build gate on gui/pages/launch.py, same refusal
+        # wording, and it lands in the same status line every other refusal on this
+        # page uses — no modal, and the button stays enabled so the reason is readable
+        # and actionable rather than a disabled control that explains nothing.
+        #
+        # The SAME gate guards Saved meshes -> Start/Restore (_start_saved): both
+        # bring a docker mesh up on the same compose project from the same wiz.cfg.
+        #
+        # SCOPE, PLAINLY: this reads ``wiz.cfg.domains`` — the superadmin Domains
+        # table. The local-mesh bootstrap's own surface has ONE ``cluster_domain`` and
+        # no domains table, so on a flow that never filled that table there is nothing
+        # to refuse and this is a no-op. It bites where domains DO exist: a saved
+        # config loaded on the Sessions screen, or a mesh flow the operator stepped
+        # into the local-docker lane from. ``LocalMeshDialog`` has no wizard at all,
+        # hence the getattr.
+        refusal = self._domain_services_refusal()
+        if refusal:
+            self.status.setText(refusal)
+            return
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
         if self.login_theme.error_text():
             self.status.setText(
@@ -2911,6 +2945,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self.status.setText("A local mesh is running — stop it first. Starting "
                                 "a saved mesh over a live one would bring up a "
                                 "second stack on the same compose project.")
+            return
+        # THE PER-DOMAIN SERVICES GATE (#494/#495), SECOND DOOR. Saved meshes ->
+        # Start/Restore brings a docker mesh up on the same compose project
+        # _bootstrap_up does, from the same wiz.cfg, so gating only _bootstrap_up
+        # would have left the operator's ask ("before … starting a mesh in docker")
+        # satisfied by one button and bypassed by the one next to it. Same seam, same
+        # sentence, same status line, and BEFORE apply_bootstrap so a refused click
+        # does not silently rewrite the form on its way to doing nothing.
+        refusal = self._domain_services_refusal()
+        if refusal:
+            self.status.setText(refusal)
             return
         cfg = LocalMeshBootstrapConfig.from_dict(rec.config)
         missing = self.apply_bootstrap(cfg, form=rec.form)
@@ -3718,9 +3763,10 @@ class LocalMeshReviewPage(_LocalMeshStep):
         # _MeshWorker QThread — minutes of docker output — and every word that verb
         # says to the operator lives in run_view (status line, stage tree, log, Cancel).
         # It also carries the REFUSALS: _start_saved's "Still running: …", "A local
-        # mesh is running — stop it first", the theme error and boot.validate()'s
-        # problems all land in ctl.status, and the row buttons stay enabled through
-        # each of them. Claimed here, a refused click says why and a started verb can
+        # mesh is running — stop it first", the per-domain services gate's "Cannot
+        # start this mesh: …" (#495), the theme error and boot.validate()'s problems
+        # all land in ctl.status, and the row buttons stay enabled through each of
+        # them. Claimed here, a refused click says why and a started verb can
         # be watched and cancelled; unclaimed, both are silent. LocalMeshPage
         # .showEvent reclaims it on entry, so the hand-back to the bring-up step
         # needs no code here.
