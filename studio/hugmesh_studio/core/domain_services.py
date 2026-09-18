@@ -38,11 +38,14 @@ from __future__ import annotations
 from typing import Iterable
 
 from .config import (INFRA_SERVICES_CHOICES, OPTIONAL_SERVICES_CHOICES,
-                     SERVICE_DESCRIPTIONS, SERVICE_GROUPS,
-                     superadmin_plane_applies)
+                     SERVICE_DESCRIPTIONS, SERVICE_GROUPS, SERVICES_ALL,
+                     SERVICES_NONE, superadmin_plane_applies)
 
 __all__ = [
-    "SCOPE_DOMAIN", "SCOPE_IMAGE", "SCOPE_NODE", "SCOPE_LABELS",
+    "SCOPE_DOMAIN", "SCOPE_IMAGE", "SCOPE_NODE", "SCOPE_LABELS", "SCOPE_WHERE",
+    "SCOPE_BINDS", "INFRA_WHERE", "OTHER_SCOPE_HEADERS",
+    "IMAGE_SCOPE_ROW_LABEL",
+    "image_service_state", "node_service_state", "other_scope_rows",
     "DOMAIN_CATALOGUE", "ENFORCEMENT_NOTE",
     "scope_of", "grouped_domain_catalogue", "split_services", "normalise_slugs",
     "carried_over_slugs", "describe", "describe_carried_over",
@@ -66,6 +69,48 @@ SCOPE_LABELS = {
     SCOPE_IMAGE: "Image / mesh-wide",
     SCOPE_NODE: "Node / cluster plane",
 }
+
+#: scope -> WHERE that choice is made, in words the operator can act on. Issue #497's
+#: actual requirement: "the operator can see — without reading source — which of their
+#: choices binds the domain, which binds the image, and which binds a node".
+SCOPE_WHERE = {
+    SCOPE_DOMAIN: "here, once per domain",
+    SCOPE_IMAGE: "on the ‘Network & services’ step, once for the whole build",
+    SCOPE_NODE: "on the ‘Network & services’ step, and — for the two that have a "
+                "per-node spelling — in the worklist’s own Services column",
+}
+
+#: PER-SLUG "where", because the four infra slugs do NOT all live in the same place and
+#: one shared sentence would be false for two of them. ``tor`` and ``egress-vpn`` are the
+#: only genuine per-NODE image services (``core/worklist.WORKLIST_INFRA_SERVICES``);
+#: ``workloadConsole`` and ``anubis`` are CLUSTER-plane and have no per-node spelling at
+#: all, so telling the operator to look for them in the worklist would send them hunting
+#: for a control that does not exist.
+INFRA_WHERE = {
+    "tor": "the ‘Network & services’ step (mesh-wide), or per node in the worklist’s "
+           "own Services column",
+    "egress-vpn": "the ‘Network & services’ step (mesh-wide), or per node in the "
+                  "worklist’s own Services column",
+    "workloadConsole": "the ‘Network & services’ step — cluster-plane, it has no "
+                       "per-node control",
+    "anubis": "the ‘Network & services’ step — cluster-plane, it has no per-node "
+              "control",
+}
+
+#: scope -> WHAT that choice binds. Kept apart from SCOPE_WHERE because they are two
+#: different questions and conflating them is how the scopes got flattened before.
+SCOPE_BINDS = {
+    SCOPE_DOMAIN: "this domain, and no other",
+    SCOPE_IMAGE: "every image this build produces — not one domain",
+    SCOPE_NODE: "a node, or the whole cluster — never one domain",
+}
+
+#: The read-only "not domain-scoped" table's columns.
+OTHER_SCOPE_HEADERS = ("Service", "Scope", "Where it is set", "Right now")
+
+#: The one row standing for the whole image-wide services table, which is a surface
+#: rather than a slug and so cannot be listed slug by slug here without duplicating it.
+IMAGE_SCOPE_ROW_LABEL = "the services step’s own table"
 
 #: The per-domain catalogue: the user-level cluster slugs, i.e. exactly what
 #: ``--all-services`` expands to. Consumed, never copied, so a slug added to the
@@ -383,3 +428,71 @@ def restart_gate_reason(cfg) -> str:
     if not reviewed_names(cfg):
         return ""
     return gate_reason(cfg, ACTION_BUILD_RESTART)
+
+
+# ── #497: the choices this page SHOWS but does not own ──────────────────────────────
+def image_service_state(cfg, slug: str) -> str:
+    """Whether ``slug`` is on MESH-WIDE right now, read off the image-wide selection the
+    ‘Network & services’ step wrote (``cfg.optional_services``).
+
+    The two sentinels are handled explicitly rather than by membership, because
+    membership would get both of them wrong:
+
+    * ``SERVICES_NONE`` is an EXPLICIT empty allow-list — everything selectable is off;
+    * ``SERVICES_ALL`` expands to the USER-LEVEL set only (``--all-services``), which by
+      construction excludes every INFRA slug — so "all" does NOT turn tor or anubis on,
+      and reporting it as if it did would be exactly the kind of quiet lie this page
+      exists to stop.
+
+    ``tor`` additionally has a dedicated x86 flag (``--with-tor`` /
+    ``cfg.tor_onion_service``); it is ORed in, because either spelling really does bake
+    the onion."""
+    svcs = [str(x) for x in (getattr(cfg, "optional_services", None) or [])]
+    if slug == "tor" and getattr(cfg, "tor_onion_service", False):
+        return "on (mesh-wide)"
+    if SERVICES_NONE in svcs:
+        return "off — the services step selected ‘no optional services at all’"
+    if SERVICES_ALL in svcs:
+        return ("off — ‘every user-level service’ does not include the infra slugs"
+                if slug in INFRA_SERVICES_CHOICES else "on (mesh-wide)")
+    return "on (mesh-wide)" if slug in svcs else "off"
+
+
+def node_service_state(entries, slug: str) -> str:
+    """Which worklist NODES opted into ``slug`` in their own Services column. ``entries``
+    is ``wiz.worklist.entries`` (``WorklistEntry.infra_services``); only ``tor`` and
+    ``egress-vpn`` are a per-node axis at all (``worklist.WORKLIST_INFRA_SERVICES`` —
+    workloadConsole and anubis are cluster-plane and have no per-node spelling)."""
+    named = [getattr(e, "id", "") for e in (entries or ())
+             if slug in (getattr(e, "infra_services", None) or ())]
+    return ", ".join(n for n in named if n)
+
+
+def other_scope_rows(cfg=None, entries=()) -> list[tuple[str, str, str, str]]:
+    """``[(service, scope, where it is set, right now), ...]`` for every choice this
+    page SHOWS but does not own (#497).
+
+    Two jobs, and they pull in opposite directions unless both are done:
+
+    * the operator must not have to hunt for where anubis is configured — so the infra
+      slugs stay VISIBLE in the same flow, with their descriptions and their current
+      state;
+    * nothing infra-scoped may become a per-domain checkbox — so these rows are DATA,
+      never controls, and every one of them carries the scope that says why.
+
+    The last row stands for the image-wide services table as a whole: it is a SURFACE
+    (dedicated-flag services, edge-AI and its sub-options, the managed backing
+    services), not a slug list, and re-listing it here slug by slug would create a
+    second catalogue to drift against the first."""
+    rows: list[tuple[str, str, str, str]] = []
+    for slug in INFRA_SERVICES_CHOICES:
+        state = image_service_state(cfg, slug) if cfg is not None else ""
+        nodes = node_service_state(entries, slug)
+        if nodes:
+            state = (state + "; per node: " + nodes) if state else "per node: " + nodes
+        rows.append((slug, SCOPE_NODE,
+                     INFRA_WHERE.get(slug, SCOPE_WHERE[SCOPE_NODE]), state))
+    rows.append((IMAGE_SCOPE_ROW_LABEL, SCOPE_IMAGE, SCOPE_WHERE[SCOPE_IMAGE],
+                 "the dedicated-flag services, edge-AI and its sub-options, and the "
+                 "managed backing services"))
+    return rows

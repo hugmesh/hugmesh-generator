@@ -35,6 +35,15 @@ named by the gate:
 All four through the single seam ``core.domain_services.gate_reason`` so a test can
 drive the refusal with a bare ``ImageConfig``.
 
+SCOPE IS NAMED, NOT IMPLIED (#497). Every row on the checkbox table carries a Scope
+column reading "Domain" — on the row, not in a tooltip, because "the operator can see
+without reading source which of their choices binds what" is the requirement and a
+hover is not seeing. Below it sits a READ-ONLY table of the choices this page shows but
+does not own: the four infra slugs with the scope they really have, where each one IS
+set, and what it is doing right now (the image-wide selection, plus any per-node opt-in
+in the worklist). They are DATA, never controls — see the next paragraph — and a legend
+spells out all three scopes with where each is chosen and what each binds.
+
 SCOPE IS NOT FLATTENED. The catalogue offered here is ``DOMAIN_CATALOGUE``
 (= ``OPTIONAL_SERVICES_CHOICES``, what ``--all-services`` expands to): the only slugs
 whose own descriptions are ``<domain>``-scoped. The INFRA slugs (tor, egress-vpn,
@@ -65,21 +74,36 @@ from ..styles import MUTED, WARN, muted
 from ._scroll import scrollable
 from ...core.config import superadmin_plane_applies
 from ...core.domain_services import (
-    DOMAIN_CATALOGUE, ENFORCEMENT_NOTE, SCOPE_DOMAIN, carried_over_slugs, describe,
-    describe_carried_over, grouped_domain_catalogue, normalise_slugs,
-    record_reviewed, reviewed_names, scope_of, unconfigured_domains,
+    DOMAIN_CATALOGUE, ENFORCEMENT_NOTE, OTHER_SCOPE_HEADERS, SCOPE_BINDS,
+    SCOPE_DOMAIN, SCOPE_IMAGE, SCOPE_LABELS, SCOPE_NODE, SCOPE_WHERE,
+    carried_over_slugs, describe, describe_carried_over,
+    grouped_domain_catalogue, normalise_slugs, other_scope_rows, record_reviewed,
+    reviewed_names, scope_of, unconfigured_domains,
 )
 
-#: Table columns. ``_COL_SETTING`` is deliberately present and empty: it is where
-#: the per-service source forge / credential fields of #499 land without another
-#: restructure (see the module docstring).
-_COL_ON, _COL_NAME, _COL_SETTING, _COL_DESC = range(4)
-_HEADERS = ("On", "Service", "", "What it does for this domain")
+#: Table columns. ``_COL_SCOPE`` (#497) says what each row BINDS, on the row itself and
+#: not in a tooltip — "the operator can see, without reading source, which of their
+#: choices binds the domain, which binds the image, and which binds a node", and a hover
+#: is not seeing. ``_COL_SETTING`` is deliberately present and empty: it is where the
+#: per-service source forge / credential fields of #499 land without another restructure
+#: (see the module docstring).
+_COL_ON, _COL_NAME, _COL_SCOPE, _COL_SETTING, _COL_DESC = range(5)
+_HEADERS = ("On", "Service", "Scope", "", "What it does for this domain")
 
 #: The label a carried-over slug wears — one this build's catalogue does not offer.
 #: The row's DESCRIPTION says the rest (core.domain_services.describe_carried_over),
 #: which keeps whatever the slug's own catalogue line says instead of replacing it.
 _EXTRA_NOTE = "  (kept from your config)"
+
+
+def _scope_legend() -> str:
+    """The three scopes, each with where it is chosen and what it binds (#497).
+
+    Built from ``core.domain_services`` rather than retyped, so a scope whose wording
+    changes there cannot leave a stale sentence behind on this page."""
+    return "  ·  ".join(
+        f"{SCOPE_LABELS[k]}: set {SCOPE_WHERE[k]}, binds {SCOPE_BINDS[k]}"
+        for k in (SCOPE_DOMAIN, SCOPE_IMAGE, SCOPE_NODE))
 
 
 class DomainServicesPage(QtWidgets.QWizardPage):
@@ -107,6 +131,8 @@ class DomainServicesPage(QtWidgets.QWizardPage):
         self._index = 0
         self._rows: dict[str, QtWidgets.QTreeWidgetItem] = {}
         self._boxes: dict[str, QtWidgets.QCheckBox] = {}
+        #: the read-only #497 rows, keyed the same way — data, never controls.
+        self._other_rows: dict[str, QtWidgets.QTreeWidgetItem] = {}
 
         lay = scrollable(self)
 
@@ -153,10 +179,41 @@ class DomainServicesPage(QtWidgets.QWizardPage):
         self.table.setMinimumHeight(300)
         hdr = self.table.header()
         hdr.setStretchLastSection(True)
-        for c in (_COL_ON, _COL_NAME, _COL_SETTING):
+        for c in (_COL_ON, _COL_NAME, _COL_SCOPE, _COL_SETTING):
             hdr.setSectionResizeMode(
                 c, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setToolTip(_scope_legend())
         lay.addWidget(self.table)
+
+        # ── the choices this page SHOWS but does not own (#497) ───────────────────
+        self.other_head = QtWidgets.QLabel(
+            "<b>Not domain-scoped</b> — shown here so you do not have to hunt for "
+            "them, and shown as DATA rather than as tick-boxes because none of them "
+            "binds one domain. Each row says where it is set and what it is doing "
+            "right now.")
+        self.other_head.setWordWrap(True)
+        self.other_head.setTextFormat(Qt.TextFormat.RichText)
+        lay.addWidget(self.other_head)
+
+        self.other_table = QtWidgets.QTreeWidget()
+        self.other_table.setColumnCount(len(OTHER_SCOPE_HEADERS))
+        self.other_table.setHeaderLabels(list(OTHER_SCOPE_HEADERS))
+        self.other_table.setRootIsDecorated(False)
+        self.other_table.setAlternatingRowColors(True)
+        self.other_table.setUniformRowHeights(False)
+        self.other_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
+        other_hdr = self.other_table.header()
+        other_hdr.setStretchLastSection(True)
+        for c in range(len(OTHER_SCOPE_HEADERS) - 1):
+            other_hdr.setSectionResizeMode(
+                c, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        lay.addWidget(self.other_table)
+
+        self.legend = QtWidgets.QLabel(_scope_legend())
+        self.legend.setWordWrap(True)
+        self.legend.setStyleSheet(muted())
+        lay.addWidget(self.legend)
 
         # ── how far through the domains this walk is ──────────────────────────────
         self.remaining = QtWidgets.QLabel("")
@@ -242,6 +299,8 @@ class DomainServicesPage(QtWidgets.QWizardPage):
             self.head.setText("No domains to configure.")
             self.table.clear()
             self._rows, self._boxes = {}, {}
+            self.other_table.clear()
+            self._other_rows = {}
             self.remaining.setText("")
             self.prev_btn.setEnabled(False)
             self.next_btn.setEnabled(False)
@@ -260,6 +319,7 @@ class DomainServicesPage(QtWidgets.QWizardPage):
         self.prev_btn.setEnabled(self._index > 0)
         self.next_btn.setEnabled(self._index < total - 1)
         self._rebuild(name)
+        self._rebuild_other_scopes()
         left = [n for n in self._names if n not in self._reviewed]
         if left:
             self.remaining.setText(
@@ -295,6 +355,50 @@ class DomainServicesPage(QtWidgets.QWizardPage):
                 self._svc_row(gitem, slug, slug + _EXTRA_NOTE,
                               describe_carried_over(slug), True)
 
+    def _rebuild_other_scopes(self) -> None:
+        """Fill the read-only table of choices this page shows but does not own (#497).
+
+        DATA, NEVER CONTROLS. Nothing here gets a checkbox: the four infra slugs are
+        node- or cluster-plane scoped, and ``domains.py`` has said since #227 that a
+        per-DOMAIN checkbox for them "would be a new lie". Showing them read-only is
+        what satisfies the other half of the ask — that they stay reachable from this
+        flow instead of the operator having to hunt for where anubis is configured.
+
+        Rebuilt on every _show() because the state column is LIVE: it reads the
+        image-wide selection and the worklist's per-node opt-ins, either of which the
+        operator may have changed since this page was last painted."""
+        self.other_table.clear()
+        self._other_rows = {}
+        for slug, scope, where, state in other_scope_rows(self.wiz.cfg,
+                                                          self._entries()):
+            item = QtWidgets.QTreeWidgetItem(self.other_table)
+            # NOT CHECKABLE, explicitly. A QTreeWidgetItem carries ItemIsUserCheckable
+            # by default and renders no box only because nobody set a check state —
+            # which makes "this row is data" an accident of omission rather than a
+            # decision. Clearing the flag makes it the decision it is: a per-DOMAIN
+            # tick-box for a node- or cluster-plane slug would be a new lie, and the
+            # next person to add a setCheckState here should have to remove this line
+            # first.
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+            item.setText(0, slug)
+            item.setText(1, SCOPE_LABELS[scope])
+            item.setToolTip(1, f"Binds {SCOPE_BINDS[scope]}.")
+            item.setText(2, where)
+            item.setToolTip(2, where)
+            item.setText(3, state)
+            item.setToolTip(3, state)
+            desc = describe(slug)
+            if desc:
+                item.setToolTip(0, desc)
+            self._other_rows[slug] = item
+
+    def _entries(self):
+        """The worklist rows this wizard is carrying, or () — the per-node half of the
+        state column. Tolerant on purpose: pages are constructed before WorklistPage has
+        ever run, and a cloud flow has no worklist at all."""
+        wl = getattr(self.wiz, "worklist", None)
+        return list(getattr(wl, "entries", None) or ())
+
     def _group_row(self, title: str) -> "QtWidgets.QTreeWidgetItem":
         item = QtWidgets.QTreeWidgetItem(self.table)
         item.setText(_COL_NAME, title)
@@ -311,6 +415,13 @@ class DomainServicesPage(QtWidgets.QWizardPage):
         one line saying what it does."""
         item = QtWidgets.QTreeWidgetItem(parent)
         item.setText(_COL_NAME, label)
+        # EVERY row on this table is domain-scoped — the catalogue is the domain
+        # catalogue and _rebuild asserts it — so the column is not decoration: it is
+        # what makes the read-only table below legible as "and these are not".
+        item.setText(_COL_SCOPE, SCOPE_LABELS[SCOPE_DOMAIN])
+        item.setToolTip(_COL_SCOPE,
+                        f"Set {SCOPE_WHERE[SCOPE_DOMAIN]}; binds "
+                        f"{SCOPE_BINDS[SCOPE_DOMAIN]}.")
         item.setText(_COL_DESC, desc)
         item.setToolTip(_COL_DESC, desc)
         box = QtWidgets.QCheckBox()
