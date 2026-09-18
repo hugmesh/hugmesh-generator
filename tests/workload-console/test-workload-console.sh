@@ -474,6 +474,33 @@ raw = env.get("WORKLOAD_CONSOLE_EXEC_READONLY") or ""
 entries = [e.strip() for e in raw.split(",") if e.strip()]
 (ok if entries else bad)("exec allowlist non-empty" if entries else "exec allowlist empty")
 
+# 3a. DECISION PIN (#545). This is NOT a second security oracle and must not be read
+#     as one — the property above is the oracle, and it PASSES bare `df` (bare `df`
+#     leaks no bytes, no environment, executes nothing, writes nothing). What this
+#     pins is a CAPABILITY DECISION that the property cannot express and therefore
+#     cannot defend: `df` is on the list to answer "how full is the disk", and it is
+#     pinned to `df -h` so it cannot also be asked
+#     `df --output=source,target <path>` (a mount-topology and path-existence oracle
+#     over the whole container filesystem) or `df --sync` (a node-wide sync — a side
+#     effect from a read-only console). Reverting it to a bare name would leave every
+#     other check in this file green, which is exactly why the decision needs a pin of
+#     its own. The reasoning, and the deliberate NON-decision on `stat`, are recorded
+#     against the value in workload-console-patch.yaml and on #545.
+DECIDED_PINNED = {"df": "df -h", "ps": "ps -e", "date": "date -u"}
+for head, want in sorted(DECIDED_PINNED.items()):
+    present = [e for e in entries if e == head or e.startswith(head + " ")]
+    if not present:
+        ok(f"exec allowlist: {head!r} is absent entirely — a dropped entry is narrower "
+           f"than the decided pin {want!r}, so the #545 decision still holds")
+    elif present == [want]:
+        ok(f"exec allowlist: {head!r} is pinned to {want!r} exactly, as decided (#545) — "
+           f"a bare name would license every argv starting with {head!r}")
+    else:
+        bad(f"exec allowlist: {head!r} appears as {present!r}, not the decided pinned "
+            f"form {want!r} (#545). A bare name is licensed for EVERY argv by the "
+            f"shipped first-token matcher; re-open the decision on #545 before widening "
+            f"it here.")
+
 # 4. port-forward triples: the documented curation rule is "app-tier BFFs ONLY", so it
 #    is checked as an ALLOWLIST. A denylist of datastore-ish substrings ("db","postgres",
 #    "cassandra","clickhouse","kafka","redis","vault","casdoor","pki") is NOT that rule
@@ -631,12 +658,65 @@ fi
 # acceptance bar for the exec seam. If it cannot run, the suite must go red rather
 # than print a reassuring line about a property nobody checked.
 PROP="${REPO}/tests/workload-console/exec_argv_property.py"
+
+# The verdict, re-derived from the raw counters in a DIFFERENT language from the one
+# that printed it. Not belt and braces: the precedence rule is exactly what was got
+# wrong once already (a run with both a real violation and a blind leg came back as
+# plain `unproven`), and a rule stated in only one place is a rule nothing can
+# contradict. It also keeps __COUNTS load-bearing, so the counters cannot quietly
+# stop being emitted. Empty/absent counters deliberately derive to a value that
+# matches no verdict, so they fail rather than pass silently.
+verdict_from_counts() {  # $1 = the payload of the __COUNTS line, marker stripped
+  printf '%s\n' "$1" | awk 'NF==3 {seen=1;
+    f=$2+0; u=$3+0;
+    print (f==0) ? "ok" : (u==0) ? "violated" : (u>=f) ? "unproven" : "violated+unproven" }
+    END { if (!seen) print "(no counters)" }'
+}
+
+# Every NON-ok wording lives in this one function so the control below drives the
+# exact sentences a reader is handed. The reassurance clause — "not a finding
+# against the allowlist … do not read this as a hazardous entry" — is the half that
+# can lie: it is true of a run whose only failures are blind legs, and FALSE the
+# moment the same run also condemned a real entry. It therefore sits on the
+# `unproven` arm and NOWHERE else, and pmsg_ctl() asserts that in both directions.
+prop_bad_message() {  # $1 = __VERDICT as printed ; $2 = the script's exit status
+  local v
+  local rc
+  v="$1"; rc="$2"
+  case "${v}" in
+    unproven)
+      printf '%s' "exec allowlist property P is UNPROVEN on this host — at least one entry could not be JUDGED and NONE of the failures above is a claim about the allowlist (see the FAILs above). An unproven property is not a passing one, and it is not a finding against the allowlist either: fix the runner, do not read this as a hazardous entry." ;;
+    violated)
+      printf '%s' "exec allowlist VIOLATES property P — see the FAILs above" ;;
+    violated+unproven)
+      printf '%s' "exec allowlist VIOLATES property P **and** part of this run is UNPROVEN — BOTH, and neither cancels the other. At least one entry was argued into breaking P and must be pinned to a whole-argv form or dropped; at least one OTHER entry could not be judged on this runner at all. Read every FAIL above individually: fixing the runner will NOT make the violation go away." ;;
+    ok)
+      printf '%s' "exec_argv_property.py printed __VERDICT ok but exited ${rc} — its verdict and its exit status disagree, so the exec allowlist property is UNPROVEN" ;;
+    *)
+      printf '%s' "exec_argv_property.py exited ${rc} without printing a verdict this wrapper understands (got '${v}') — the exec allowlist property is UNPROVEN" ;;
+  esac
+}
+
 if [ -f "${PROP}" ] && command -v python3 >/dev/null; then
-  python3 "${PROP}" "${PATCH}"
-  if [ $? -eq 0 ]; then
+  # Captured rather than streamed so the script's VERDICT line can be read back. A
+  # non-zero exit ALONE cannot tell "an entry violates P" from "the check could not
+  # judge an entry": #405 was the second, and this line reported the first, which
+  # reads as a security finding about the allowlist and was in fact a blind guard.
+  # Both still fail the suite; only one of them is a claim about the allowlist.
+  prop_out="$(python3 "${PROP}" "${PATCH}" 2>&1)"; prop_rc=$?
+  printf '%s\n' "${prop_out}"
+  prop_verdict="$(printf '%s\n' "${prop_out}" | sed -n 's/^__VERDICT //p' | tail -1)"
+  prop_counts="$(printf '%s\n' "${prop_out}" | sed -n 's/^__COUNTS //p' | tail -1)"
+  prop_derived="$(verdict_from_counts "${prop_counts}")"
+  if [ "${prop_derived}" = "${prop_verdict}" ]; then
+    ok "the property script's __VERDICT (${prop_verdict}) is what its own __COUNTS (P F U = ${prop_counts:-none}) imply, re-derived here independently"
+  else
+    bad "exec_argv_property.py printed __VERDICT '${prop_verdict}' but its own __COUNTS '${prop_counts}' imply '${prop_derived}' — the verdict and the numbers it was computed from disagree, so the exec allowlist property is UNPROVEN"
+  fi
+  if [ "${prop_rc}" -eq 0 ] && [ "${prop_verdict}" = "ok" ]; then
     ok "exec allowlist holds property P (no entry can be argued into reading a file, dumping an environment, executing, or writing)"
   else
-    bad "exec allowlist VIOLATES property P — see the FAILs above"
+    bad "$(prop_bad_message "${prop_verdict}" "${prop_rc}")"
   fi
 else
   bad "exec_argv_property.py or python3 missing — the exec allowlist property is UNPROVEN"
@@ -686,6 +766,84 @@ if [ -f "${PROP}" ] && command -v python3 >/dev/null; then
       'EXECUTED another program' fail
   # NEGATIVE 3 — fail-closed on an entry that cannot be probed at all.
   ctl "an entry whose binary is absent" "hugmesh-no-such-command" "unprobed entry is an unproven entry" fail
+  # NEGATIVE 3b — UNPROVEN and VIOLATED must stay DISTINCT verdicts. Both fail the
+  # run, but only one of them says anything about the allowlist, and #405 is what it
+  # costs to conflate them: an inert guard was printed as "exec allowlist VIOLATES
+  # property P" for weeks. Asserted in BOTH directions so neither verdict can quietly
+  # decay into the other's synonym. `cut` is the violated side because it trips the
+  # documentation leg without a behavioural battery, so this control stays cheap.
+  vtl() {  # $1 = label ; $2 = entries ; $3 = expected __VERDICT
+    local out
+    local v
+    local c
+    local d
+    out="$(python3 "${PROP}" --entries "$2" 2>&1)"
+    v="$(printf '%s\n' "${out}" | sed -n 's/^__VERDICT //p' | tail -1)"
+    c="$(printf '%s\n' "${out}" | sed -n 's/^__COUNTS //p' | tail -1)"
+    d="$(verdict_from_counts "${c}")"
+    if [ "${v}" = "$3" ] && [ "${d}" = "$3" ]; then
+      ok "control: $1 — reported __VERDICT $3, and its own counters (${c}) independently imply $3"
+    else
+      bad "control: $1 — expected __VERDICT $3 from counters implying $3, got '${v}' from counters '${c}' implying '${d}'"
+    fi
+  }
+  vtl "an unprobeable entry is UNPROVEN, not a finding against the list" "hugmesh-no-such-command" unproven
+  vtl "an entry that really can read a file is VIOLATED, not unproven" "cut" violated
+  # NEGATIVE 3c — the MIXED state, which is the one that used to be misreported. With
+  # `unproven` winning outright, a run carrying BOTH a real violation and a blind leg
+  # came back as plain `unproven`, and the wrapper then told the reader in so many
+  # words not to read it as a hazardous entry — while `cut` sat right there in the
+  # FAILs, argued into reading an arbitrary file. Nothing was skipped and rc stayed 1,
+  # so only the SUMMARY lied; on a suite whose whole history is people trusting the
+  # summary, that is the failure mode, not a cosmetic one. Both pure controls above
+  # stayed green through it because neither run mixes the two.
+  vtl "a run with BOTH a real violation and a blind entry is neither of them alone" \
+      "cut,hugmesh-no-such-command" "violated+unproven"
+  # Order must not decide the verdict either: the blind entry first would restore the
+  # old precedence by accident if the rule were ever written as "first one wins".
+  vtl "the mixed verdict does not depend on which entry comes first" \
+      "hugmesh-no-such-command,cut" "violated+unproven"
+  # NEGATIVE 3d — the verdict is only worth having if the SENTENCE it produces is true
+  # for it. These drive prop_bad_message() directly, because the real call site can
+  # only ever exercise whichever verdict this host happens to produce (ok), leaving
+  # every other arm — including the one that was wrong — unexecuted by the suite.
+  pmsg_ctl() {  # $1 = label ; $2 = verdict ; $3 = rc ; $4,$5 = must contain ; $6 = must NOT contain
+    local label
+    local verdict
+    local rc
+    local want_a
+    local want_b
+    local nope
+    local msg
+    label="$1"; verdict="$2"; rc="$3"; want_a="$4"; want_b="$5"; nope="$6"
+    msg="$(prop_bad_message "${verdict}" "${rc}")"
+    if [ -n "${want_a}" ] && ! printf '%s' "${msg}" | grep -F "${want_a}" >/dev/null; then
+      bad "control: ${label} — the message for __VERDICT '${verdict}' does not say '${want_a}': ${msg}"
+      return
+    fi
+    if [ -n "${want_b}" ] && ! printf '%s' "${msg}" | grep -F "${want_b}" >/dev/null; then
+      bad "control: ${label} — the message for __VERDICT '${verdict}' does not say '${want_b}': ${msg}"
+      return
+    fi
+    if [ -n "${nope}" ] && printf '%s' "${msg}" | grep -F "${nope}" >/dev/null; then
+      bad "control: ${label} — the message for __VERDICT '${verdict}' still says '${nope}', which is FALSE for it: ${msg}"
+      return
+    fi
+    ok "control: ${label} — the summary a reader gets for __VERDICT '${verdict}' is true for it"
+  }
+  REASSURE="do not read this as a hazardous entry"
+  pmsg_ctl "a purely blind run is the ONLY one allowed to reassure" \
+    unproven 1 "UNPROVEN on this host" "${REASSURE}" ""
+  pmsg_ctl "a violation is never softened by the blind-run wording" \
+    violated 1 "VIOLATES property P" "" "${REASSURE}"
+  pmsg_ctl "the mixed verdict states BOTH and reassures about neither" \
+    violated+unproven 1 "VIOLATES property P" "UNPROVEN" "${REASSURE}"
+  pmsg_ctl "a verdict this wrapper does not understand fails closed" \
+    hugmesh-not-a-verdict 1 "UNPROVEN" "" "${REASSURE}"
+  pmsg_ctl "an empty verdict line fails closed rather than silently" \
+    "" 1 "UNPROVEN" "" "${REASSURE}"
+  pmsg_ctl "__VERDICT ok with a non-zero exit is a contradiction, not a pass" \
+    ok 1 "UNPROVEN" "verdict and its exit status disagree" "${REASSURE}"
   # NEGATIVE 4a/4b — the OPERAND sub-class: a reader that needs NO FLAG AT ALL.
   # `base64 /var/run/secrets/workload-console-read/token` is the whole exploit, and
   # both legs used to wave it through — the doc leg because it only ever read the
@@ -709,6 +867,104 @@ if [ -f "${PROP}" ] && command -v python3 >/dev/null; then
   # the leak, and every metadata tool on the list would have to be exempted by name.
   ctl "a command that really does hold P (uname)" "uname" "" pass
   ctl "a FILE-operand command that leaks no bytes (stat)" "stat" "" pass
+
+  # NEGATIVE 5b — the differential leg's OWN self-test must actually RUN. The module
+  # can prove that Oracle B' still tells a leak from the weather (#492: `df <file>`
+  # prints the FILESYSTEM's used and available blocks, and on a busy host those move
+  # in step with the probe sequence well enough to read as a content leak). What the
+  # module cannot prove is that the proof is still being asked for, and deleting one
+  # call is the cheapest way to make the repair disappear with every line above still
+  # green.
+  #
+  # MEASURED 2026-09-17 on this tree, as a mutation battery over the repaired module:
+  # reverting the round-2 confirmation, making round 2 repeat round 1's ordering,
+  # rotating round 2 to the same content phase, and turning the two rounds'
+  # intersection into a union ALL left the du/base64/cut/nice controls above green --
+  # they stay red for their own reasons, so they cannot see a weakened oracle. The
+  # differential self-test was the only line that moved in any of those four.
+  #
+  # There are TWO ways to escape it from outside the module, not one, and each gets
+  # its own assertion below:
+  #   (a) delete the differential_self_test() CALL -- caught by the PASS line check;
+  #   (b) delete a STUB from the module's _DIFF_STUBS table, after which the self-test
+  #       still prints PASS while no longer asking the question. `flip` is the stub
+  #       that pins the round-2 confirmation and `leak` is the one that pins detection
+  #       at all, so the self-test names the stubs it actually exercised and this
+  #       control reads the names back. That turns (b) from a silent one-line escape
+  #       into a red line. It is not airtight -- a second edit here would still
+  #       defeat it -- but no self-test can be, and the point is to make the cheap
+  #       path cost something.
+  diff_st_out="$(python3 "${PROP}" --entries 'uname' 2>&1)"
+  if printf '%s' "${diff_st_out}" | grep -F "PASS differential self-test:" >/dev/null; then
+    ok "control: the differential leg's self-test RAN in this invocation — Oracle B' was shown, in this very process, to fire on a token derived from the probed file's bytes and to stay silent on one that merely moves with the clock"
+  else
+    bad "control: the property script ran WITHOUT its differential self-test (#492) — nothing in this suite then separates an Oracle B' that catches a leak from one a busy filesystem can talk into a false positive, and the entry that flaked is on the shipped allowlist"
+  fi
+
+  diff_st_missing=""
+  for _stub in flip hold2 leak; do
+    # "[flip]", not "flip": the PASS line's own prose says "flipping", "holding" and
+    # "leak", so a bare-name grep here matches its own sentence and passes with the
+    # stub table gutted. MEASURED: with the bare form, deleting the `flip` tuple left
+    # this suite 74 passed / 0 failed.
+    printf '%s' "${diff_st_out}" | grep -F "stubs exercised:" | grep -F "[${_stub}]" >/dev/null \
+      || diff_st_missing="${diff_st_missing} ${_stub}"
+  done
+  if [ -z "${diff_st_missing}" ]; then
+    ok "control: the differential self-test exercised every stub it claims to — flip (pins the round-2 confirmation), hold2 (documents the rejected pairing schedule) and leak (pins that the leg still detects anything at all); dropping one from _DIFF_STUBS would keep the PASS line and silently stop asking"
+  else
+    bad "control: the differential self-test did not report exercising stub(s)${diff_st_missing} — either the tuple was dropped from _DIFF_STUBS (the self-test then still prints PASS while no longer asking that question) or the self-test did not run at all (#492); without 'flip' nothing here catches a reverted round-2 confirmation and without 'leak' nothing catches detection being switched off"
+  fi
+
+  # NEGATIVE 5 — a help text this parser CANNOT READ is UNPROVEN and non-zero, never
+  # a quiet green. #405 was exactly this shape: GNU coreutils 9.11 wraps every option
+  # token in an OSC 8 hyperlink and SGR bold even into a pipe, the parser saw ESC
+  # where it expected `-`, and the option surface came back EMPTY for ls/df/id/stat/
+  # uname/du/base64. The parser now strips the decoration it knows AND fails closed on
+  # decoration it does not, and on a help whose option surface simply will not parse.
+  #
+  # Both of those branches are UNREACHABLE by any real command on a host where the
+  # real commands parse, which is precisely why they need driving by hand. MEASURED
+  # 2026-09-17: with only the first control present, replacing the FAIL in the
+  # unparseable-option-surface branch with a bare `continue` — a silent skip, the one
+  # outcome this check must never have — left this suite at 62 passed / 0 failed.
+  # Adding the second control turned that same mutation red. Neither control can be
+  # satisfied by a non-zero exit alone: each names the MECHANISM and requires the
+  # UNPROVEN verdict, so "the entry is hazardous" cannot stand in for "I could not
+  # read this".
+  fake_help_ctl() {  # $1 = label ; $2 = command name ; $3 = help bytes ; $4 = mechanism
+    local label name helpbytes mech
+    local dir out rc v
+    label="$1"; name="$2"; helpbytes="$3"; mech="$4"
+    dir="${WORK}/fake-help-${name}"
+    mkdir -p "${dir}"
+    # The help is materialised by THIS suite's bash and the throwaway command only
+    # cats it, so the control does not depend on what /bin/sh's printf makes of an
+    # octal escape.
+    printf '%b' "${helpbytes}" > "${dir}/help.txt"
+    printf '#!/bin/sh\nexec cat %s\n' "${dir}/help.txt" > "${dir}/${name}"
+    chmod +x "${dir}/${name}"
+    out="$(PATH="${dir}:${PATH}" python3 "${PROP}" --entries "${name}" 2>&1)"; rc=$?
+    v="$(printf '%s\n' "${out}" | sed -n 's/^__VERDICT //p' | tail -1)"
+    if [ "${rc}" -ne 0 ] && [ "${v}" = "unproven" ] \
+       && printf '%s' "${out}" | grep -F "${mech}" >/dev/null; then
+      ok "control: ${label} — UNPROVEN and non-zero, via ${mech}"
+    else
+      bad "control: ${label} — expected rc!=0 + __VERDICT unproven + '${mech}', got rc=${rc} verdict='${v}': ${out}"
+    fi
+  }
+  # 5a — decoration the sanitiser does not understand. ESC DEL is the payload: not a
+  # valid sequence in any terminal grammar, so no sanitiser should claim to know it.
+  fake_help_ctl "help decorated in a form the parser cannot strip" \
+    "hugmesh-opaque-help" \
+    'Usage: hugmesh-opaque-help [OPTION]... [FILE]...\nReport usage for each FILE.\n\n  \033\177-a, --all       do everything\n  \033\177-o, --output=F  write output to F\n' \
+    'survive sanitisation'
+  # 5b — no decoration at all, and still no option line the parser can read. This is
+  # the branch that a silent `continue` used to be able to occupy for free.
+  fake_help_ctl "help whose option surface will not parse at all" \
+    "hugmesh-optionless-help" \
+    'Usage: hugmesh-optionless-help [FILE]...\nReport something about each FILE.\nThis build of it documents no options whatsoever.\n' \
+    'could not parse a single option'
 fi
 
 # RENDER-level proof when kubectl is available: the dark render carries ZERO

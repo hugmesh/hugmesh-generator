@@ -2273,6 +2273,17 @@ rebrand_sysroot() {
     # Harbor image-project segment (registry.<host>/<project>/<svc>). Defaults to the
     # brand; the HARBOR_PROJECT env is a first-class seam for a differently-named project.
     local _hproj; _hproj="$(_sed_rep_escape "${HARBOR_PROJECT:-${BRAND}}")"
+    # All of these land on the REPLACEMENT side of `sed s|..|VALUE|` across the baked
+    # cluster tree (configs that later execute on the device); escape sed metacharacters
+    # so a tainted brand/domain/org/title/games-domain cannot inject a second sed
+    # command or corrupt output — matches every other build-*-stage4.sh builder (issue
+    # #491; this builder previously interpolated these five raw).
+    local _btitle _org _games _domain _brand
+    _btitle="$(_sed_rep_escape "${BRAND_TITLE}")"
+    _org="$(_sed_rep_escape "${ORG}")"
+    _games="$(_sed_rep_escape "${GAMES_DOMAIN}")"
+    _domain="$(_sed_rep_escape "${CLUSTER_DOMAIN}")"
+    _brand="$(_sed_rep_escape "${BRAND}")"
     local roots=("${SYSROOT}/var/lib/hugmesh/cluster" "${SYSROOT}/etc/hugmesh")
     local f
     while IFS= read -r -d '' f; do
@@ -2306,21 +2317,48 @@ rebrand_sysroot() {
         # still rewritten by that catch-all: unsupported. The sentinels contain neither
         # `hugmesh` nor `hugmesh-`, so the middle rules skip them; the last -e rules
         # restore them verbatim.
+        # VAULT KV BASE — issue #285, decision 38 = B on #347 ("the reader follows
+        # the writer"). An ExternalSecret's remoteRef is `key: <base>/<doc>` and <base>
+        # must equal the segment the WRITER uses (scripts/gen-cluster-secrets.sh writes
+        # under BASE="${BRAND:-hugmesh}"; the in-cluster harbor-provision Job writes
+        # <base>/harbor-robots). MEASURED 2026-09-17, and it is the whole reason this
+        # rule is shaped the way it is: ArgoCD does NOT read the manifests under
+        # ${SYSROOT}/var/lib/hugmesh/cluster/manifests. specs/cluster/apps/04-external-
+        # secrets-config.yaml (and 03b, and 12) are Applications whose source is a git
+        # repoURL + path, and specs/cluster/bootstrap/bootstrap.sh applies from the baked
+        # tree ONLY namespaces/, manifests/local-path and apps/*.yaml. So a sed over the
+        # baked manifests/ subtree is INERT — the live cluster on this build host was read
+        # to confirm it (external-secrets-config: repoURL github.com/hugmesh/hugmesh-
+        # generator.git @ main, path specs/cluster/manifests/external-secrets).
+        # What IS live is apps/*.yaml, so that is where the brand is carried: each of
+        # those three Applications holds a one-line kustomize JSON-6902 op setting the
+        # platform.hugmesh.net/vault-base annotation, a `replacements` block in the
+        # git-served kustomization.yaml copies that annotation into every remoteRef base
+        # (and onto harbor's VAULT_KV_BASE env), and the two rules below are what make
+        # that one value follow BRAND instead of being eaten by the catch-all
+        # `hugmesh -> ORG`. Captured FIRST, restored LAST, so the middle knobs cannot
+        # touch it. The second rule keeps the baked (unserved) annotation defaults in
+        # agreement with what the served render produces. Default brand: the whole
+        # function early-returns, so this is a byte no-op.
+        # Pinned by tests/scripts/test-eso-remoteref-brand.sh.
         sed -i \
+            -e "s|\(~1vault-base, value: \"\)hugmesh\(\"\)|\1@@SDSYSVAULTBASE@@\2|g" \
+            -e "s|\(vault-base: \"\)hugmesh\(\"\)|\1@@SDSYSVAULTBASE@@\2|g" \
             -e "s|^hugmesh\.net/|@@SDSYSKEY@@/|g" \
             -e "s|\([ {(,=\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
             -e "s|hugmesh\\\\\.net/|@@SDSYSKEYESC@@/|g" \
             -e "s|platform\.hugmesh\.net|@@SDSYSAPIGRP@@|g" \
-            -e "s|HugMesh Systems|${BRAND_TITLE}|g" \
-            -e "s|//id\.hugmesh\.games|//id.${GAMES_DOMAIN}|g" \
-            -e "s|//hugmesh\.games|//${GAMES_DOMAIN}|g" \
-            -e "s|hugmesh\.net|${CLUSTER_DOMAIN}|g" \
+            -e "s|HugMesh Systems|${_btitle}|g" \
+            -e "s|//id\.hugmesh\.games|//id.${_games}|g" \
+            -e "s|//hugmesh\.games|//${_games}|g" \
+            -e "s|hugmesh\.net|${_domain}|g" \
             -e "s|\(registry\.[A-Za-z0-9.-]*\)/hugmesh/|\1/${_hproj}/|g" \
-            -e "s|hugmesh-|${BRAND}-|g" \
-            -e "s|hugmesh|${ORG}|g" \
+            -e "s|hugmesh-|${_brand}-|g" \
+            -e "s|hugmesh|${_org}|g" \
             -e "s|@@SDSYSAPIGRP@@|platform.hugmesh.net|g" \
             -e "s|@@SDSYSKEYESC@@/|hugmesh\\\\.net/|g" \
             -e "s|@@SDSYSKEY@@/|hugmesh.net/|g" \
+            -e "s|@@SDSYSVAULTBASE@@|${_brand}|g" \
             "${f}"
     done < <(find "${roots[@]}" -type f -print0 2>/dev/null)
     info "Rebrand complete (compound names like '${BRAND}-host-shell' may want review)."

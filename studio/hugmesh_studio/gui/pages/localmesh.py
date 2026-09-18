@@ -90,6 +90,7 @@ from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
 from ...core import saved_meshes, vaults
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
+from ...core.domain_services import ACTION_MESH_START, gate_reason
 from ...core.e2e_catalogue import Catalogue, load_catalogue
 from ...core.egress_conf import validate_egress_conf
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
@@ -97,13 +98,19 @@ from ...core.local_mesh_bootstrap import (
     LocalMeshBootstrap, LocalMeshBootstrapConfig, _parse_web_locales,
     discover_brands)
 from ...core.local_mesh_stages import verb_phases
-from ...core.local_stack_node import LocalStackNode
+from ...core.local_stack_node import (
+    LocalStackNode,
+    # ONE reader of the KIND_CLUSTER_NAME override, so the confirmation text
+    # can never name a different cluster than the verb deletes (#356).
+    _kind_cluster_name as kind_cluster_name,
+)
 from ...core import mesh_monitor
 from ...core.local_services import (
     KIND_ADDONS, UNAVAILABLE_LOCALLY, by_slug as local_service, default_selection,
     describe as local_describe, kind_addon_slugs, local_groups, local_slugs)
 from ...core.progress_parse import ProgressParser
 from ...core import credentials_truth
+from ...core import kind_seed
 from ...core.seeded_credentials import Roster, annotate, load_roster
 from ...core.instance import state_dir
 from ...core.stage_tracker import StageTracker
@@ -123,6 +130,47 @@ from ._widgets import _row, collapsible, label_finish_as_exit, own_probe, probe_
 # progress.py imports nothing from this module (the reverse dependency is via
 # gui/pages/__init__), so this cannot cycle.
 from .progress import _STAGE_GLYPH, _STATUS_GLYPH, _display_safe, _fmt_elapsed
+
+# THE DevOps-lane DELETE confirmation (#356). A module-level seam on purpose, the
+# same shape `gui.pages.progress.confirm_flash` uses: headless tests monkeypatch this
+# name, so the gate on this page's most destructive button is EXERCISED by the suite
+# instead of being stubbed away with _devops_down.
+#
+# Why it was unguarded until now is worth recording. `Delete DevOps lane` (:1485)
+# went straight to _launch — one click deleted the kind cluster, its Vault KV, its
+# Casdoor identities and every seeded account — while the LESS destructive
+# `Stop && clean Docker…` did confirm (_bootstrap_clean). The destructive control was
+# the one with no confirmation. Decision 44 kept that fix in scope regardless of how
+# the halt itself landed.
+#
+# Called from _devops_down — an explicit button click — and NEVER from validatePage /
+# initializePage / isComplete / itemChanged, where a modal deadlocks the offscreen
+# tests.
+confirm_devops_down = QtWidgets.QMessageBox.warning
+#: what a confirmed delete must return; anything else cancels.
+DEVOPS_DOWN_OK = QtWidgets.QMessageBox.StandardButton.Ok
+DEVOPS_DOWN_CANCEL = QtWidgets.QMessageBox.StandardButton.Cancel
+
+#: The HALT is not destructive, so it gets no modal — pressing it loses nothing and
+#: Resume sits beside it. The DELETE is the destructive one. The text lives here so
+#: tests assert on the sentences rather than a paraphrase.
+_DEVOPS_DOWN_CONFIRM_TITLE = "Delete the DevOps lane?"
+_DEVOPS_DOWN_CONFIRM_TEXT = (
+    "This DELETES the kind cluster `{cluster}` and everything in it:\n"
+    "  • every pod, PVC and Secret — including Vault's KV and the Casdoor\n"
+    "    identities seeded into it, and every account seeded with them\n"
+    "  • the `{cluster}-control-plane` container and its image cache\n\n"
+    "It does NOT touch the docker compose project of the same name: your local\n"
+    "mesh's containers and volumes are untouched, and no `docker system prune`\n"
+    "is run.\n\n"
+    "The next `Start DevOps lane` is a FULL bring-up (image pulls + rollouts,\n"
+    "long), and the cluster comes back EMPTY until it is reseeded — nothing will\n"
+    "tell you that it is empty.\n\n"
+    "If you only want to STOP the lane, use `Halt DevOps lane` on the monitor\n"
+    "below instead: it keeps the cluster and everything in it, and Resume brings\n"
+    "it back.\n\n"
+    "Delete it?"
+)
 
 # Per-provider placeholder hints — the SAME endpoint shapes gui/pages/idp.py
 # carries (one picker, two frames: the node wizard page and this bootstrap tab).
@@ -1491,10 +1539,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.add_user_btn = QtWidgets.QPushButton("Add user…")
         self.add_user_btn.setToolTip(
             "Create a NEW named account on the RUNNING mesh (username, password, "
-            "roles) by re-running the idempotent seeder with EXTRA_ROLE_USERS — "
-            "the same machinery that seeds mesh-operator, including registration "
-            "stage 2 and Matrix/Mastodon provisioning for the roles it holds. "
-            "The stack must be up (the seeder says so plainly if it is not).")
+            "roles) through that lane's OWN seeder — never a bespoke Casdoor call, "
+            "so the account is created by the machinery that created every other "
+            "persona. On the docker mesh that is the idempotent `make stack-seed` "
+            "with EXTRA_ROLE_USERS (registration stage 2 included); on the kind "
+            "lane it is seed-accounts.sh --roles + apply-systems-roles.sh against "
+            "the live Casdoor, exactly as bootstrap-kind.sh step 10 does, applied "
+            "through the `make view LANE=kind-svc` casdoor door. Either way the "
+            "identity is READ BACK from the mesh afterwards: the seeder's own exit "
+            "code is not evidence. A mesh must be up (it says plainly if not).")
         self.add_user_btn.clicked.connect(self._add_user)
         brow.addWidget(self.add_user_btn)
         # No trailing addStretch: a FlowLayout has no stretch concept, and a
@@ -1525,6 +1578,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.monitor.view_up_requested.connect(self._view_up)
         self.monitor.view_down_requested.connect(self._view_down)
         self.monitor.scale_requested.connect(self._scale_monitor)
+        # The kind lane's non-destructive stop and its undo (#356). They sit on the
+        # monitor because this is the screen that reads BOTH lanes, and therefore the
+        # screen an operator is on when they decide to stop something. Both go through
+        # _launch, so the page's existing busy guard covers them: a halt racing a
+        # bring-up is worse than either.
+        self.monitor.halt_requested.connect(self._devops_halt)
+        self.monitor.resume_requested.connect(self._devops_resume)
         #: Which row's scale is in flight ("" when none) — what _on_scale_done forgets.
         self._scaling_key = ""
         lay.addWidget(self.monitor_section)
@@ -2433,7 +2493,40 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             if idle else
             "Disabled while a verb is running — wait for it to finish, or Cancel.")
 
+    def _domain_services_refusal(self) -> str:
+        """"" when a mesh may start; otherwise the refusal naming every domain with no
+        recorded service configuration (#495).
+
+        A pure read through ``core.domain_services.gate_reason`` — the SAME seam the
+        image-build gate calls — so the two paths cannot drift and a test can drive
+        the refusal with a bare ImageConfig and no docker."""
+        cfg = getattr(getattr(self, "wiz", None), "cfg", None)
+        if cfg is None:
+            return ""
+        return gate_reason(cfg, ACTION_MESH_START)
+
     def _bootstrap_up(self):
+        # THE PER-DOMAIN SERVICES GATE (#494/#495), on the docker/local-mesh half of
+        # the operator's ask ("before building or starting a mesh in docker or nodes").
+        # Same seam as the image-build gate on gui/pages/launch.py, same refusal
+        # wording, and it lands in the same status line every other refusal on this
+        # page uses — no modal, and the button stays enabled so the reason is readable
+        # and actionable rather than a disabled control that explains nothing.
+        #
+        # The SAME gate guards Saved meshes -> Start/Restore (_start_saved): both
+        # bring a docker mesh up on the same compose project from the same wiz.cfg.
+        #
+        # SCOPE, PLAINLY: this reads ``wiz.cfg.domains`` — the superadmin Domains
+        # table. The local-mesh bootstrap's own surface has ONE ``cluster_domain`` and
+        # no domains table, so on a flow that never filled that table there is nothing
+        # to refuse and this is a no-op. It bites where domains DO exist: a saved
+        # config loaded on the Sessions screen, or a mesh flow the operator stepped
+        # into the local-docker lane from. ``LocalMeshDialog`` has no wizard at all,
+        # hence the getattr.
+        refusal = self._domain_services_refusal()
+        if refusal:
+            self.status.setText(refusal)
+            return
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
         if self.login_theme.error_text():
             self.status.setText(
@@ -2618,6 +2711,21 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                      stream=True, cancellable=True, verb="devops-up")
 
     def _devops_down(self):
+        """DESTRUCTIVE — `kind delete cluster`. Confirms first, through the
+        module-level ``confirm_devops_down`` seam, and the confirmation enumerates
+        what goes and what stays rather than asking a generic "are you sure?" —
+        a generic one is what makes operators click through. It also points at the
+        non-destructive `Halt DevOps lane`, because most of the time that is what
+        the operator actually wants and its absence is why this button was being
+        pressed at all (#356)."""
+        cluster = kind_cluster_name()
+        answer = confirm_devops_down(
+            self, _DEVOPS_DOWN_CONFIRM_TITLE,
+            _DEVOPS_DOWN_CONFIRM_TEXT.format(cluster=cluster),
+            DEVOPS_DOWN_OK | DEVOPS_DOWN_CANCEL, DEVOPS_DOWN_CANCEL)
+        if answer != DEVOPS_DOWN_OK:
+            self._note("[devops] cancelled — the cluster was NOT deleted.", queue=False)
+            return
         node = self.boot._stack_node()
         self._note("[devops] deleting the local Kubernetes cluster (the docker "
                    "mesh and its volumes are untouched) …")
@@ -2625,6 +2733,48 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                      lambda on_line, cancel: node.devops_down(on_line=on_line,
                                                               cancel=cancel),
                      stream=True, cancellable=True, verb="devops-down")
+
+    # ── the NON-destructive stop (#356, decision 44 = a) ──────────────────────
+    def _devops_halt(self):
+        """`make kind-halt` — scale the mesh workloads to 0 AND suspend ArgoCD
+        auto-sync. NOT destructive: the cluster, its volumes, its Vault KV and its
+        Casdoor identities all stay, so this deliberately does NOT confirm. The
+        streamed output is the point — it names every Application it suspended and
+        the state each was in when it froze.
+
+        CANCELLABLE, and safe to cancel — but only because of how kind-halt.sh is
+        built. ``cancellable=True`` arms a Cancel that terminates the verb's whole
+        process GROUP (local_stack_node.py:749-751), so the halt can stop between any
+        two API calls. The script therefore writes its record BEFORE the first
+        mutation: a cancelled halt leaves a cluster that Resume can fully undo and
+        that a second Halt will finish, with the pre-halt replica counts intact.
+        (Before that, cancelling was MORE destructive than letting it finish — the
+        cluster ended up halted with no record of how to put it back.) The note below
+        says so, because an operator deciding whether to press Cancel should not have
+        to infer it."""
+        node = self.boot._stack_node()
+        self._note("[devops] halting the DevOps lane: suspending ArgoCD auto-sync "
+                   "and scaling the mesh workloads to 0. NOTHING is deleted — the "
+                   "cluster and its data stay, and Resume puts back exactly what "
+                   "this suspends. Cancel is safe here: the record of what to undo "
+                   "is written before the first change, so a cancelled halt can be "
+                   "resumed or finished …")
+        self._launch("Halting the DevOps lane",
+                     lambda on_line, cancel: node.devops_halt(on_line=on_line,
+                                                              cancel=cancel),
+                     stream=True, cancellable=True, verb="devops-halt")
+
+    def _devops_resume(self):
+        """`make kind-resume` — put back exactly what the halt recorded. Never
+        "everything": an Application suspended for another reason stays suspended."""
+        node = self.boot._stack_node()
+        self._note("[devops] resuming the DevOps lane: restoring the replica counts "
+                   "and the auto-sync the halt recorded (anything suspended for "
+                   "another reason stays suspended) …")
+        self._launch("Resuming the DevOps lane",
+                     lambda on_line, cancel: node.devops_resume(on_line=on_line,
+                                                                cancel=cancel),
+                     stream=True, cancellable=True, verb="devops-resume")
 
     # ── saved meshes (ask C): save / probe / start / load ─────────────────────
     def _sync_saved_gate(self):
@@ -2801,6 +2951,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self.status.setText("A local mesh is running — stop it first. Starting "
                                 "a saved mesh over a live one would bring up a "
                                 "second stack on the same compose project.")
+            return
+        # THE PER-DOMAIN SERVICES GATE (#494/#495), SECOND DOOR. Saved meshes ->
+        # Start/Restore brings a docker mesh up on the same compose project
+        # _bootstrap_up does, from the same wiz.cfg, so gating only _bootstrap_up
+        # would have left the operator's ask ("before … starting a mesh in docker")
+        # satisfied by one button and bypassed by the one next to it. Same seam, same
+        # sentence, same status line, and BEFORE apply_bootstrap so a refused click
+        # does not silently rewrite the form on its way to doing nothing.
+        refusal = self._domain_services_refusal()
+        if refusal:
+            self.status.setText(refusal)
             return
         cfg = LocalMeshBootstrapConfig.from_dict(rec.config)
         missing = self.apply_bootstrap(cfg, form=rec.form)
@@ -3150,6 +3311,19 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # read plus a TCP connect per door is I/O, and this slot is on the GUI thread)
         self.monitor.set_view_session(bool(getattr(snap, "view_doors", ())),
                                       lane=str(getattr(snap, "view_lane", "") or ""))
+        # Halt/Resume are armed from the KIND lane's tri-state, not from a boolean and
+        # not from this page's `_mesh_up` (which answers COMPOSE only — invariant I11).
+        # running is None means the census could not be taken, and that must grey the
+        # controls with a reason rather than offering them (I5).
+        _kind = getattr(snap, "kind", None)
+        # halted is the SECOND tri-state and is read off the same snapshot: a halted
+        # lane still reports running=True, so without it Halt is offered on a lane
+        # that is already halted (#356). None means the record could not be read,
+        # which is not 'not halted' — the widget leaves both offered and says so.
+        self.monitor.set_kind_lane(getattr(_kind, "running", None),
+                                   str(getattr(_kind, "error", "") or
+                                       getattr(_kind, "detail", "") or ""),
+                                   halted=getattr(_kind, "halted", None))
         self._sync_monitor_gate()
 
     def _on_monitor_toggled(self, on: bool):
@@ -3319,11 +3493,26 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._creds_dialog.exec()
 
     def _add_user(self):
-        """Add ONE named user to the RUNNING mesh by re-running the idempotent
-        seeder with EXTRA_ROLE_USERS appended (seed-accounts.sh's additive door).
-        The FULL re-seed is the only correct lane: apply-systems-roles.sh sets
-        each role's members to EXACTLY the rendered list, so a single-user
-        render would wipe every other persona's memberships."""
+        """Add ONE named user to the RUNNING mesh — on EITHER lane (#540).
+
+        The dialog is the same on both: username, roles, password. What differs is
+        the APPLY, because the two lanes seed differently and neither may be driven
+        with the other's seeder:
+
+          * COMPOSE — re-run the idempotent seeder with EXTRA_ROLE_USERS appended
+            (``make stack-seed``, seed-accounts.sh's additive door);
+          * KIND — render with ``seed-accounts.sh --roles`` and apply
+            ``roles/apply-systems-roles.sh`` against the live Casdoor, which is what
+            bootstrap-kind.sh step 10 does (``core/kind_seed``).
+
+        Neither is a bespoke Casdoor call: the account is created by exactly the
+        machinery that created every other persona on its lane. The FULL spec list
+        is re-rendered in both cases, because apply-systems-roles.sh sets each
+        role's members to EXACTLY the rendered list — a single-user render would
+        wipe every other persona's memberships.
+
+        The lane is decided in the WORKER (``stack.status()`` is blocking), never
+        here."""
         dlg = AddUserDialog(self.generator_dir, parent=self)
         if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
@@ -3340,7 +3529,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             if spec.count(":") >= 2 else ()
 
         def _seed(on_line, cancel):
-            ok, msg = stack.seed(env, on_line=on_line, cancel=cancel)
+            try:
+                compose_up = bool(stack.status().running)
+            except Exception:               # docker absent: not a compose mesh
+                compose_up = False
+            if compose_up:
+                ok, msg = stack.seed(env, on_line=on_line, cancel=cancel)
+            else:
+                ok, msg = self._add_user_kind(uname, roles, pw_env, password,
+                                              stack, on_line)
             if ok:
                 # Runs on the worker thread; a plain list swap under the GIL, read
                 # on the GUI thread only at the next credentials press. Name and
@@ -3352,6 +3549,29 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._note(f"[add-user] re-seeding with '{uname}' appended (idempotent; "
                    "existing personas re-applied unchanged) …")
         self._launch(f"Adding user {uname}", _seed, stream=True, cancellable=True)
+
+    def _add_user_kind(self, uname, roles, pw_env, password, stack, on_line):
+        """The kind-lane apply. Runs on the WORKER thread (blocking by contract).
+
+        Refuses rather than guessing when no kind cluster is there either: "the
+        casdoor door is not up" would be a true sentence about the wrong problem."""
+        cluster = kind_cluster_name()
+        up = kind_seed.kind_lane_up(cluster=cluster)
+        if up is not True:
+            return False, (
+                "No mesh is running to add a user to: the compose stack is down and "
+                + (f"there is no kind cluster named {cluster}." if up is False else
+                   "docker did not answer about the kind cluster.")
+                + " Start one first.")
+        try:
+            env = stack._build_env(write_overlays=False)      # an add READS the env
+        except Exception:
+            env = None
+        outcome = kind_seed.add_user_kind(
+            generator_dir=self.generator_dir, cluster=cluster,
+            specs=self._added_user_specs, username=uname, roles=roles,
+            password=password, password_env=pw_env, env=env, on_line=on_line)
+        return outcome.ok, outcome.message
 
     def _copy_onion(self):
         """Copy the published .onion address to the clipboard. A normal browser
@@ -3595,9 +3815,10 @@ class LocalMeshReviewPage(_LocalMeshStep):
         # _MeshWorker QThread — minutes of docker output — and every word that verb
         # says to the operator lives in run_view (status line, stage tree, log, Cancel).
         # It also carries the REFUSALS: _start_saved's "Still running: …", "A local
-        # mesh is running — stop it first", the theme error and boot.validate()'s
-        # problems all land in ctl.status, and the row buttons stay enabled through
-        # each of them. Claimed here, a refused click says why and a started verb can
+        # mesh is running — stop it first", the per-domain services gate's "Cannot
+        # start this mesh: …" (#495), the theme error and boot.validate()'s problems
+        # all land in ctl.status, and the row buttons stay enabled through each of
+        # them. Claimed here, a refused click says why and a started verb can
         # be watched and cancelled; unclaimed, both are silent. LocalMeshPage
         # .showEvent reclaims it on entry, so the hand-back to the bring-up step
         # needs no code here.

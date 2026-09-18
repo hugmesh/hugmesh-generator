@@ -118,6 +118,13 @@ MODE_DEFAULT_ROLE = {
 # image is built around, not an "additional" domain, so that flow keeps its tables
 # unconditionally and its page order is unchanged.
 #
+# "domain_services" (#494/#495) sits IMMEDIATELY after "domains": the operator asked for
+# "a service page per domain you make you have to go through before building or starting
+# a mesh", so the per-domain service choice is a STEP in the domain flow rather than a
+# toolbutton in a Domains-table row nothing obliged anyone to open. It is dynamically
+# skipped (applies_to) when the flow has no named domain, and standalone skips it
+# statically for the same reason it skips "domains" — no admin/mesh plane at all.
+#
 # ASK 22 splits the terminal pair in three: "build" is the REVIEW screen (what will be
 # built + the knobs), "launch" is the separate BUILD screen (continue the build / back
 # to the main menu), "progress" runs it. Nothing dispatches until Continue is pressed.
@@ -163,7 +170,8 @@ WIZARD_PAGE_SLUGS = ("welcome", "sessions",
                      "e2e", "qemu", "meshemu", "localcloud",
                      "idp", "role",
                      "worklist", "hardware", "branding", "network", "keyzip",
-                     "domains_choice", "domains", "users_choice", "users",
+                     "domains_choice", "domains", "domain_services",
+                     "users_choice", "users",
                      "system", "vault", "home", "build", "launch", "progress")
 MODE_SKIPPED_PAGES = {
     # standalone/cloud build ONE image the old way (role/hardware/branding per image);
@@ -180,8 +188,12 @@ MODE_SKIPPED_PAGES = {
     # tie is the point of the image), so offering it a "just the internal domain"
     # choice would be a knob with one legal answer.
     "standalone": ("idp", "worklist", "keyzip",
-                   "domains_choice", "domains", "users_choice", "users",
+                   "domains_choice", "domains", "domain_services",
+                   "users_choice", "users",
                    "vault"),                                  # single image, no admin/mesh plane
+    # "domain_services" (#495) is NOT skipped in cloud: a cloud client image IS built
+    # around its --domains tie, its Domains table is unconditional, and the domain it
+    # carries is exactly the one whose services the operator must answer for.
     "cloud": ("idp", "worklist", "domains_choice", "users_choice",
               "vault"),                                       # single image, admin plane via key-zip
     # mesh USED to skip "branding" outright; it no longer can: the page now also hosts
@@ -1242,7 +1254,12 @@ NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile",
                    "login_footer_hidden", "login_footer_size", "login_footer_bg",
                    "login_footer_text",
                    "login_bg_effect",
-                   "additional_domains", "configure_users", "qemu_device_tests")
+                   "additional_domains", "configure_users", "qemu_device_tests",
+                   # #495: which domains have been through their Services page. Pure
+                   # wizard-flow bookkeeping for the build/mesh-start gate — saved with
+                   # the config so re-opening one you already configured does not
+                   # refuse, and emitted nowhere.
+                   "domain_services_reviewed")
 
 
 # ── role-class capability layer (Qt-free; BESIDE PLATFORM_FIELD_SUPPORT, NEVER inside
@@ -2856,6 +2873,19 @@ class ImageConfig:
     # list + empty dict are the native defaults and keep argv byte-identical.
     base_ca_certs: list[str] = field(default_factory=list)
     domain_ca: dict[str, str] = field(default_factory=dict)
+    # ── per-domain service configuration, the GATE's bookkeeping (#494/#495) ──
+    # The NAMES of the domains whose per-domain Services page the operator actually
+    # went through. NOT provisioning data and NOT argv (NON_ARGV_FIELDS): neither mesh
+    # manifest carries it — manifest_v2 emits an explicit key list, and mesh_manifest()
+    # filters this key out by name — so a manifest is byte-identical whether or not the
+    # page was walked. It exists because ``optional_services == []`` is ALREADY
+    # meaningful ("the cluster-wide set applies", see the emission table above), so
+    # emptiness cannot double as "never configured"; a domain loaded from an older
+    # worklist keeps its slugs AND stays unconfigured until someone confirms them,
+    # which is the only reading that invents no selection. Consumed by
+    # core/domain_services.gate_reason, which is what refuses an image build or a
+    # docker mesh start naming the domains that were never configured.
+    domain_services_reviewed: list[str] = field(default_factory=list)
     # ── hardware ──
     gpu_driver: str = "auto"           # auto|nvidia|amd-free|amd-pro|intel|none
     nvidia_cuda: bool = False          # --nvidia-cuda (CUDA bake for GPU/edge-AI images; x86)
@@ -3182,6 +3212,16 @@ class ImageConfig:
                 d.pop(_k)
         if "domain_ca" in d and not isinstance(d["domain_ca"], dict):
             d.pop("domain_ca")
+        # #495: tolerate `null` / a hand-edited scalar exactly as "domains": null is
+        # tolerated — treat it as ABSENT (the native empty list), which is the
+        # fail-CLOSED reading: every domain then counts as unconfigured and the gate
+        # says so, rather than a junk value quietly standing in for "all reviewed".
+        if "domain_services_reviewed" in d:
+            v = d["domain_services_reviewed"]
+            if isinstance(v, (list, tuple)):
+                d["domain_services_reviewed"] = [x for x in v if isinstance(x, str)]
+            else:
+                d.pop("domain_services_reviewed")
         # MIGRATE the pre-2026-08-26 spelling of the post-build device-test opt-in.
         # from_dict filters unknown keys, so without this a config saved under the old
         # name would load with the opt-in silently OFF — the `games` precedent above:

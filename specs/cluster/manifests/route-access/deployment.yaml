@@ -5,7 +5,7 @@
 # (R2DBC at ROUTE_ACCESS_R2DBC_URL), which then read-cache the rows in Cassandra.
 #
 # Credentials: ALL passwords come from the ESO Secret route-access-db-roles (Vault
-# secret/hugmesh/route-access-db; in test the offline bundle materializes the
+# secret/<brand>/route-access-db; in test the offline bundle materializes the
 # SAME Secret — no committed literal). The OWNER role is only used for DDL; every
 # runtime consumer logs in as its OWN least-privilege, non-owner role (see below).
 #
