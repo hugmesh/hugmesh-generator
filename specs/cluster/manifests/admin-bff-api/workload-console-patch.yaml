@@ -200,14 +200,16 @@ spec:
             # same moving free-block counters `df` does (the reason `df` itself was pinned
             # to `-h` in #545/#551) — so the pinned form can never become a second
             # mount-topology oracle once paths are reachable again. `stat --file-system`
-            # and `stat -f` are the two rejected shapes; tests/workload-console proves the
-            # exact strings `stat`, `stat -t`, `stat --file-system` and `stat -f` are the
-            # only ones on this list, and that only `stat -t` is (the property test
-            # additionally confirms `-t` carries no path-valued, environment-dumping or
-            # program-running documentation, same as every other pinned entry). None of
-            # this is a property-P violation on EITHER shape — bare `stat --file-system`
-            # with no operand leaks nothing either — so, like `df`, this is a CAPABILITY
-            # decision, not a property finding.
+            # and `stat -f` are the two rejected shapes; tests/workload-console proves
+            # that the value below carries exactly `stat -t` and NEITHER rejected shape
+            # (a mutated-copy negative control), and separately proves the shipped
+            # first-token matcher REFUSES `stat --file-system` and `stat -f` against this
+            # exact config (the property test additionally confirms `-t` carries no
+            # path-valued, environment-dumping or program-running documentation, same as
+            # every other pinned entry). None of this is a property-P violation on EITHER
+            # rejected shape — bare `stat --file-system` with no operand leaks nothing
+            # either — so, like `df`, this is a CAPABILITY decision, not a property
+            # finding.
             #
             # `uptime` — noted, no action (#545). `uptime -r` was measured to move between
             # two identical probes (`260061.540000` -> `260061.550000`), like every other
