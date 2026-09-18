@@ -287,19 +287,19 @@ spring:
                 # 2026-09-17) chose FULL alignment now over the cheaper option of
                 # carving the two /bff/register/* paths back to admin-bff.
                 #
-                # THIS IS A DELIBERATE, ACCEPTED REGRESSION FOR TWO OF THEM.
-                # user-bff serves only three of the five (LegacyPathParityController,
-                # hugmesh/hugmesh-user-bff-api#15 @ c3d24c4: GET /me/namespaces,
-                # POST /provision/matrix, POST /provision/mastodon). It has NO
-                # handler for /bff/register/google or /bff/register/discord —
-                # SsoAuthController maps the EXACT path /bff/register only — so
-                # from this commit those two 404 on the compose lane exactly as
-                # they already 404 on a cluster. Restoring them means adding the
-                # handlers to user-bff (hugmesh/hugmesh-user-bff-api#13), NOT
-                # re-pointing these two entries at admin-bff. Anyone tempted to
-                # "fix" the 404 by moving them back: that is the split this
-                # change removed, and tests/scripts/test-fe-bff-route-lane-parity.sh
-                # goes RED on it.
+                # UPDATE 2026-09-18: user-bff now serves ALL FIVE. The other two 404'd
+                # on both lanes until hugmesh/hugmesh-user-bff-api#20 (PR #20, commit
+                # dc34c8b) added POST /bff/register/google and POST /bff/register/
+                # discord to LegacyPathParityController — the line below that used to
+                # say otherwise was stale as of that merge (flagged on
+                # hugmesh-generator#347 2026-09-18T07:21Z). user-bff serves all five
+                # (LegacyPathParityController: GET /me/namespaces, POST
+                # /provision/matrix, POST /provision/mastodon, POST /register/google,
+                # POST /register/discord); SsoAuthController still maps the exact path
+                # /bff/register only, which does not collide with the two ABOVE it.
+                # tests/scripts/test-fe-bff-route-lane-parity.sh's FIVE table asserts
+                # `has_handler=True` for every one of the five, so a claim that any of
+                # them still 404s goes RED rather than only printing.
                 #
                 # EXACT paths, never the cluster's `/bff/me/**` /
                 # `/bff/register/**` / `/bff/provision/**` subtrees. admin-bff
