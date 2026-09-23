@@ -529,6 +529,12 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # controls 6 caught / 0 survived, and against the PRE-CHANGE compose table
 # (origin/main's copy dropped in on disk) it prints 14 passed / 5 failed rc=1,
 # one failure per #366 path.
+# ADDENDUM 2026-09-23 (the note above is kept verbatim, as every note is): its
+# "two of the five have no handler anywhere and 404 by ACCEPTED decision" was
+# true when written and is not any more — hugmesh-user-bff-api#20 (dc34c8b,
+# landed 2026-09-18) added the /bff/register/{google,discord} handlers, and the
+# parity suite now ASSERTS has_handler=True for all five (hugmesh-generator#568).
+# The suite count is unchanged: no suite was added or removed by that change.
 #
 # 170 -> RE-MEASURED on 2026-09-17 while merging origin/main into
 # iss/285-vault-brand-remoteref. BOTH sides of this merge said 170 and NEITHER is
