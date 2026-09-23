@@ -57,9 +57,10 @@
 # it, so fixing it there does not turn this file red.
 #
 # NEGATIVE CONTROLS: every mutation in CONTROLS (route tables) and TTL_CONTROLS
-# (decision 60) must trip its check. A guard whose controls are never exercised
-# can rot into a vacuous pass; these run in-process on copies, so the files on
-# disk are never modified.
+# (decision 60) must trip its check, and each list must still contain every
+# label in its REQUIRED_* set — a shrunk or emptied list is a FAIL, not a
+# quieter pass. Controls run in-process on copies, so the files on disk are
+# never modified.
 #
 # Offline: reads the two fe route tables, tests/stack/compose.local.yaml and the
 # two BFF Deployments. No cluster, no docker, no network.
@@ -454,6 +455,40 @@ CONTROLS = [
                                ".svc.cluster.local:8080"))),
 ]
 
+# The labels a control list must still contain, spelled out rather than
+# derived from the list: deleting a tuple must not also delete it from the
+# requirement. A count ("at least N") is blind to a control being deleted and
+# another added, and an ok()-only check is blind to everything; this is the
+# fail-closed shape of tests/stack/test-gateway-auth-flag-parity.sh's
+# vacuity lines.
+REQUIRED_ROUTE_CONTROLS = frozenset([
+    "compose drops /bff/me/namespaces (a partial revert)",
+    "compose drops all five (the full revert to the #366 split)",
+    "compose user-bff route is moved BELOW the /bff/** admin catch-all",
+    "compose 'un-does' decision 40 by re-pointing user-bff back at admin-bff",
+    "compose mirrors the cluster subtree /bff/me/** instead of exact paths",
+    "cluster re-points /bff/register/** back at admin-bff (the split, from "
+    "the other side)",
+])
+
+
+def assert_controls_complete(name, controls, required, caught, survived):
+    """One PASS when every required label is present and every control was
+    caught; otherwise a FAIL naming what is missing. Called after each control
+    loop so an emptied or shrunk list can never pass quietly."""
+    present = {label for label, _ in controls}
+    missing = sorted(required - present)
+    if missing:
+        bad(f"{name}: REQUIRED control(s) missing from the list: {missing} — a "
+            f"control that is gone cannot be exercised, and the guard is now "
+            f"blind to what it caught")
+    elif survived or caught != len(controls):
+        bad(f"{name}: {caught} caught / {survived} survived of {len(controls)} — "
+            f"every control must be caught")
+    else:
+        ok(f"{name}: all {caught} controls caught, every required label present")
+
+
 caught = survived = 0
 for label, mutate in CONTROLS:
     mc, mk = mutate()
@@ -466,6 +501,8 @@ for label, mutate in CONTROLS:
         survived += 1
         bad(f"CONTROL SURVIVED: {label} — this guard is blind to it")
 
+assert_controls_complete("route-table controls", CONTROLS, REQUIRED_ROUTE_CONTROLS,
+                         caught, survived)
 print(f"\ncontrols: {caught} caught / {survived} survived")
 
 # ---------------------------------------------------------------------------
@@ -627,6 +664,19 @@ TTL_CONTROLS = [
      lambda: with_lanes({"cluster mod-bff-api": cluster_env(mod_cluster_full, "no such container (control)")})),
 ]
 
+# Spelled out rather than derived from TTL_CONTROLS: deleting a tuple from the
+# list must not also delete it from the requirement.
+REQUIRED_TTL_CONTROLS = frozenset([
+    "compose admin-bff-api drops the pin",
+    "compose mod-bff-api set to 5000 (the pre-2026-09-18 image default)",
+    "cluster admin-bff-api drops the pin",
+    "cluster mod-bff-api set to 5000 (the pre-2026-09-18 image default)",
+    "BOTH lanes drift to the SAME non-zero value (parity alone would miss this)",
+    "cluster admin-bff-api tidies value: \"0\" to an unquoted int 0 (API rejects it)",
+    "compose service renamed (compose_env finds nothing)",
+    "cluster container renamed (cluster_env finds nothing)",
+])
+
 ttl_caught = ttl_survived = 0
 for label, mutate in TTL_CONTROLS:
     mfails = check_ttl_pin(mutate())
@@ -638,13 +688,11 @@ for label, mutate in TTL_CONTROLS:
         ttl_survived += 1
         bad(f"CONTROL SURVIVED: {label} — this guard is blind to it")
 
-# Vacuity: the live, unmutated dicts must have produced ZERO failures above
-# (already asserted via ttl_fails), and at least one control must exist and be
-# caught — otherwise "0 survived" would be true of an empty CONTROLS list too.
-if ttl_caught == len(TTL_CONTROLS) and len(TTL_CONTROLS) >= 5:
-    ok(f"decision 60 negative controls: {ttl_caught}/{len(TTL_CONTROLS)} caught, "
-       f"including the parity-is-not-enough case (both lanes drifting to the "
-       f"SAME wrong value)")
+# Vacuity, fail-closed: the live lanes produced zero failures (asserted via
+# ttl_fails above), every REQUIRED label is still in the list and every control
+# was caught. An emptied or shrunk TTL_CONTROLS is a FAIL, not a missing PASS.
+assert_controls_complete("decision 60 controls", TTL_CONTROLS, REQUIRED_TTL_CONTROLS,
+                         ttl_caught, ttl_survived)
 
 print(f"\ndecision 60 controls: {ttl_caught} caught / {ttl_survived} survived")
 print(f"{passed} passed, {failed} failed")
