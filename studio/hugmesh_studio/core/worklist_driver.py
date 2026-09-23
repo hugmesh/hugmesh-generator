@@ -290,6 +290,10 @@ class WorklistDriver:
             # v2 and the v1 shim emit the same user rows byte for byte.
             "users": [u.to_dict() for u in self.manifest_users()],
             "images": images,
+            # the own domain's per-domain services (#494): OMIT-WHEN-EMPTY, exactly
+            # as the v1 shim (config.mesh_manifest) emits it.
+            **({"cluster_domain_services": list(base.cluster_domain_services)}
+               if base.cluster_domain_services else {}),
         }
 
     def manifest_users(self) -> list[User]:

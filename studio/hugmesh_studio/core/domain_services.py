@@ -51,6 +51,7 @@ __all__ = [
     "carried_over_slugs", "describe", "describe_carried_over",
     "CARRIED_OVER_NOTE", "reviewed_names", "unconfigured_domains",
     "gate_applies", "gate_reason", "record_reviewed",
+    "implicit_own_domain", "domain_names_for_services",
     "services_summary", "domain_summary",
     "restart_gate_reason",
     "ACTION_IMAGE_BUILD", "ACTION_MESH_START", "ACTION_BUILD_RESTART",
@@ -329,8 +330,13 @@ def unconfigured_domains(cfg) -> list[str]:
     return out
 
 
-def gate_reason(cfg, action: str = ACTION_IMAGE_BUILD) -> str:
+def gate_reason(cfg, action: str = ACTION_IMAGE_BUILD, remedy: str | None = None) -> str:
     """"" when ``action`` may proceed; otherwise the refusal, naming every domain.
+
+    ``remedy`` overrides the ``ACTION_REMEDY`` sentence for a route whose steps have
+    different names — the generate-a-new-local-mesh route (``core/local_mesh_domains.
+    LOCAL_MESH_REMEDY``) has its own Domains / Domain services steps, and a refusal
+    that sends the operator to "the image flow" from there is a dead end.
 
     THE SEAM. Every gate calls exactly this — the image build at
     ``gui/pages/launch.py``, BOTH docker mesh-start doors at ``gui/pages/localmesh.py``
@@ -344,7 +350,7 @@ def gate_reason(cfg, action: str = ACTION_IMAGE_BUILD) -> str:
     if not missing:
         return ""
     plural = "s" if len(missing) > 1 else ""
-    remedy = ACTION_REMEDY.get(action)
+    remedy = remedy or ACTION_REMEDY.get(action)
     return (
         f"Cannot {action}: {len(missing)} domain{plural} ha{'ve' if plural else 's'} "
         f"no recorded service configuration — " + ", ".join(missing) + ". "
@@ -364,14 +370,61 @@ def record_reviewed(cfg, names: Iterable[str]) -> list[str]:
     # only a hand-edited or externally produced config reaches this — which is exactly
     # the config that must not be able to wedge the gate.
     keep = {str(n).strip() for n in names or ()}
-    out = [(getattr(d, "name", "") or "").strip()
-           for d in (getattr(cfg, "domains", None) or [])
-           if (getattr(d, "name", "") or "").strip()
-           and (getattr(d, "name", "") or "").strip() in keep]
+    # The mesh's OWN domain first (mesh mode only — implicit_own_domain), then the
+    # table rows in table order: it is a domain with a services page too, and
+    # rebuilding from the table alone would drop its marker on every write.
+    own = implicit_own_domain(cfg)
+    out = [own] if own and own in keep else []
+    out += [(getattr(d, "name", "") or "").strip()
+            for d in (getattr(cfg, "domains", None) or [])
+            if (getattr(d, "name", "") or "").strip()
+            and (getattr(d, "name", "") or "").strip() in keep]
     seen: set[str] = set()
     cfg.domain_services_reviewed = [n for n in out
                                     if not (n in seen or seen.add(n))]
     return cfg.domain_services_reviewed
+
+
+def implicit_own_domain(cfg) -> str:
+    """The MESH's own domain as a services-page subject, or "".
+
+    A mesh serves ``cfg.cluster_domain`` whether or not the operator adds more
+    domains (ask 19's default card is "Just this mesh's own domain"), and the
+    operator's rule is a service page per domain — so on the mesh route the own
+    domain gets one even when the Domains table is skipped (reported 2026-09-23:
+    "the checkbox doesn't seem to be present on each domain page"). It is IMPLICIT:
+    never a ``cfg.domains`` row, so the ASK-8 emission guard holds — an untouched
+    flow still emits no ``--domains`` and no manifest ``domains`` entry; its
+    selection lives in ``cfg.cluster_domain_services`` and reaches the manifest
+    only when non-empty.
+
+    Mesh mode only. A cloud client's Domains table prefills the cluster domain as a
+    REAL row 0 (``pages/domains.py``), standalone has no domains at all — and a
+    ``cfg.domains`` row already named after the cluster domain makes it a row, not
+    an implicit one, so the two can never be asked twice."""
+    if (getattr(cfg, "mode", "") or "") != "mesh":
+        return ""
+    own = (getattr(cfg, "cluster_domain", "") or "").strip()
+    if not own:
+        return ""
+    for d in (getattr(cfg, "domains", None) or []):
+        if (getattr(d, "name", "") or "").strip() == own:
+            return ""
+    return own
+
+
+def domain_names_for_services(cfg) -> list[str]:
+    """Every domain that gets a services page, in walk order: the implicit own
+    domain first (when there is one), then the named table rows, deduped."""
+    out: list[str] = []
+    own = implicit_own_domain(cfg)
+    if own:
+        out.append(own)
+    for d in (getattr(cfg, "domains", None) or []):
+        name = (getattr(d, "name", "") or "").strip()
+        if name and name not in out:
+            out.append(name)
+    return out
 
 
 def services_summary(selected, reviewed: bool) -> str:
