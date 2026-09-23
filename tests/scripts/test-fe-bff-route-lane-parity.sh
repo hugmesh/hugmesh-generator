@@ -549,9 +549,11 @@ def check_ttl_pin(lanes):
             continue
         if val is None:
             fails.append(f"[{label}] {TTL_KEY} is ABSENT — decision 60 (2026-09-18) "
-                         f"pins it to \"0\" explicitly; dropping the line silently "
-                         f"reopens the suspension-bypass window to whichever image "
-                         f"default ships (application.yml's is 5000 = 5s)")
+                         f"pins it to \"0\" explicitly; dropping the line hands the "
+                         f"suspension-bypass window to whichever image tag is "
+                         f"deployed (0 on both BFF mains since 2026-09-18 — "
+                         f"admin-bff-api PR #74, mod-bff-api PR #20 — and 5000 = "
+                         f"5 s on any older tag)")
         elif str(val) != "0":
             fails.append(f"[{label}] {TTL_KEY}={val!r}, not \"0\" — decision 60 "
                          f"(2026-09-18) pinned this to a zero suspension-bypass "
@@ -605,11 +607,11 @@ def with_value(env, value):
 TTL_CONTROLS = [
     ("compose admin-bff-api drops the pin",
      lambda: with_lanes({"compose admin-bff-api": without_key(LIVE_LANES["compose admin-bff-api"])})),
-    ("compose mod-bff-api reverts to the image default (5000)",
+    ("compose mod-bff-api set to 5000 (the pre-2026-09-18 image default)",
      lambda: with_lanes({"compose mod-bff-api": with_value(LIVE_LANES["compose mod-bff-api"], "5000")})),
     ("cluster admin-bff-api drops the pin",
      lambda: with_lanes({"cluster admin-bff-api": without_key(LIVE_LANES["cluster admin-bff-api"])})),
-    ("cluster mod-bff-api reverts to the image default (5000)",
+    ("cluster mod-bff-api set to 5000 (the pre-2026-09-18 image default)",
      lambda: with_lanes({"cluster mod-bff-api": with_value(LIVE_LANES["cluster mod-bff-api"], "5000")})),
     ("BOTH lanes drift to the SAME non-zero value (parity alone would miss this)",
      lambda: with_lanes({"compose admin-bff-api": with_value(LIVE_LANES["compose admin-bff-api"], "5000"),

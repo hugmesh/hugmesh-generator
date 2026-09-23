@@ -708,20 +708,17 @@ spec:
             - { name: APP_BFF_EXCHANGE_ENABLED, value: "true" }
             # Positive-swap cache TTL = the suspension-bypass window (a cache hit
             # skips admin-bff's OWN suspensionGate() re-check on the exchange
-            # above). The application.yml default is 5000 (5s); this pins it to 0
-            # (cache OFF, every exchange re-consults the gate) so the posture does
-            # not depend on the image default. Decision 60 (generator#347,
-            # operator 2026-09-18), extending decision 7's "B: zero window now"
-            # (hugmesh-gateway#2) past the gateway door: the gateway's own mirror
-            # of this cache (HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS) was pinned
-            # to 0 in #398/PR#406; admin-bff-api#56 and mod-bff-api#15 asked
-            # whether this service's MIRROR of the same cache should follow — the
-            # operator answered "extend it: default 0 in both BFFs". The actual
-            # default flips inside hugmesh-admin-bff-api (admin-bff-api#56, a
-            # separate lane/PR); this line makes the posture explicit here too,
-            # regardless of which admin-bff-api image tag is pinned, exactly as
-            # #398 did for the gateway. tests/scripts/test-fe-bff-route-lane-parity.sh
-            # asserts BOTH lanes carry this pin at exactly "0".
+            # above). 0 = cache OFF, every exchange re-consults the gate. Decision
+            # 60 (generator#347, operator 2026-09-18) extended decision 7's "B:
+            # zero window now" (hugmesh-gateway#2; the gateway's own mirror,
+            # HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS, was pinned in #398/PR#406)
+            # to this service's mirror of the same cache: "extend it: default 0
+            # in both BFFs". The image default is 0 since hugmesh-admin-bff-api
+            # PR #74 (2026-09-18, admin-bff-api#56); image tags older than that
+            # default to 5000 (a 5 s window). This line states the posture
+            # regardless of which image tag is pinned, exactly as #398 did for the
+            # gateway. tests/scripts/test-fe-bff-route-lane-parity.sh asserts BOTH
+            # lanes carry this pin as the string "0".
             - { name: APP_BFF_EXCHANGE_CACHE_TTL_MS, value: "0" }
             # ── Homeserver account broker (POST /bff/provision/{matrix,mastodon}) ──
             # broker.svc-password is the ONE placeholder in this app's
