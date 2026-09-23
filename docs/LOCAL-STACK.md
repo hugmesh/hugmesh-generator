@@ -430,7 +430,10 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
 `tests/scripts/test-fe-bff-route-lane-parity.sh` is the offline guard that keeps
 the fe pair honest for the `/bff/**` surface: it simulates Spring Cloud Gateway's
 first-match-wins ordering over BOTH tables and fails if the same path resolves to
-a different BFF on each.
+a different BFF on each. The same guard also pins decision 60
+(`APP_BFF_EXCHANGE_CACHE_TTL_MS: "0"` for admin-bff-api and mod-bff-api on both
+lanes; the gateway's own mirror of that cache is
+`tests/stack/test-gateway-auth-flag-parity.sh`'s).
 
 ### All five `/bff/{me,provision,register}/*` paths now resolve to user-bff (updated 2026-09-18)
 
