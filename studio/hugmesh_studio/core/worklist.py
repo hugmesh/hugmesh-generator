@@ -485,7 +485,7 @@ class WorklistConfig:
         #     (docs/TOR-HIDDEN-SERVICE.md / EGRESS-VPN.md), ADDITIVE to the mesh-wide
         #     Network-page default already on the base. Emitted via the mechanism THIS
         #     platform's builder actually accepts, so a per-node selection is a REAL
-        #     flag, never a silent no-op (the dead-default class this file guards):
+        #     flag, never a silent no-op (the silently-does-nothing default this file guards against):
         #       - x86 tor  -> --with-tor            (tor_onion_service; the x86-only field)
         #       - rpi5 tor / rpi5 egress-vpn -> --optional-services <slug> (node services)
         #     BEFORE step 5 so strip_platform_unsupported is the safety net; a service the

@@ -102,7 +102,7 @@ def test_a_mesh_flow_lands_on_it_after_domains(wiz):
 
 
 def test_it_is_skipped_when_no_domain_is_named(wiz):
-    """Emission-neutral: with no named domain there is nothing to record and nothing
+    """Leaves the output unchanged: with no named domain there is nothing to record and nothing
     for the gate to refuse, so skipping cannot smuggle a domain past it."""
     page = wiz.page(wiz._page_ids["domain_services"])
     assert not page.applies_to(ImageConfig(mode="mesh", additional_domains=True))

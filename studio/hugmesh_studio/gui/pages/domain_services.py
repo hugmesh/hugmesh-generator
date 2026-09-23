@@ -32,7 +32,7 @@ named by the gate:
 * ``gui/pages/sessions_widget.py`` refuses a previous-builds RESTART, narrowly — see
   ``core.domain_services.restart_gate_reason`` for why that one door is not blanket.
 
-All four through the single seam ``core.domain_services.gate_reason`` so a test can
+All four through the single override point ``core.domain_services.gate_reason`` so a test can
 drive the refusal with a bare ``ImageConfig``.
 
 SCOPE IS NAMED, NOT IMPLIED (#497). Every row on the checkbox table carries a Scope
@@ -226,7 +226,7 @@ class DomainServicesPage(QtWidgets.QWizardPage):
         """Shown wherever the Domains table is, and only when there is at least one
         NAMED domain to configure.
 
-        Emission-neutral when skipped, in the strong sense the nextId() ALL-OPTIONS
+        Leaves the output unchanged when skipped, in the strong sense the nextId() ALL-OPTIONS
         guard asks for: with no named domain there is nothing to record, nothing to
         write to cfg — and nothing for the build/mesh-start gate to refuse either, so
         skipping cannot smuggle a domain past it."""

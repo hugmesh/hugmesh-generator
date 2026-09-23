@@ -93,7 +93,7 @@ def test_the_column_is_appended_after_sign_in(wiz):
 def test_cloud_hides_the_column_and_collects_no_choice(wiz):
     """A cloud client image provisions no domains, so the base CA is as meaningless
     there as the per-domain Casdoor is — hidden for the same reason, and a hidden
-    combo still collects its untouched 'None' (emission-neutral either way)."""
+    combo still collects its untouched 'None' (leaves the output unchanged either way)."""
     wiz.cfg.base_ca_certs = [CA_ROOT]
     pick_mode(wiz, "cloud")
     dom = advance_to(wiz, wizard_mod.DomainsPage)

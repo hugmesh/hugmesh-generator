@@ -3,7 +3,7 @@
 Hermetic, like every emulation suite here: the fixtures write the REAL on-disk
 shapes the harness writes (a session dir of artifact names, per-row verdict
 JSONs, device-registry records — field for field), and BOTH of
-``core.emulation``'s probe seams are pinned autouse, so no test shells out to
+``core.emulation``'s probe override points are pinned autouse, so no test shells out to
 the runner or to docker.
 
 What these pins are actually protecting:
@@ -43,7 +43,7 @@ def _isolated_state_dir(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_probes(monkeypatch):
-    """Pin both of status()'s probe seams: these tests never shell out.
+    """Pin both of status()'s probe override points: these tests never shell out.
 
     ``_runner_devices`` returning None drops status onto the registry lane, and
     ``_docker_running_names`` returning None means "docker never answered", which

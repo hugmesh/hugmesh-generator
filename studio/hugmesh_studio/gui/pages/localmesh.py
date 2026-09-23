@@ -67,7 +67,7 @@ verb RUN with its stages nested underneath (label, state, elapsed), and the sing
 pane below FOLLOWS the selection — a stage shows only its own captured slice, the run
 row the full raw log. This is deliberately progress.py's implementation, imported rather
 than re-created, down to the glyph palette. It stays honest by construction because
-StageTracker owns the semantics: a stage goes green only once the run advanced PAST it,
+StageTracker owns the semantics: a stage passes only once the run advanced PAST it,
 a nonzero exit fails the RUNNING stage and leaves trailing ones pending, and a cancel
 marks the running stage 'stopped' (neutral), never failed.
 
@@ -131,7 +131,7 @@ from ._widgets import _row, collapsible, label_finish_as_exit, own_probe, probe_
 # gui/pages/__init__), so this cannot cycle.
 from .progress import _STAGE_GLYPH, _STATUS_GLYPH, _display_safe, _fmt_elapsed
 
-# THE DevOps-lane DELETE confirmation (#356). A module-level seam on purpose, the
+# THE DevOps-lane DELETE confirmation (#356). A module-level override point on purpose, the
 # same shape `gui.pages.progress.confirm_flash` uses: headless tests monkeypatch this
 # name, so the gate on this page's most destructive button is EXERCISED by the suite
 # instead of being stubbed away with _devops_down.
@@ -230,7 +230,7 @@ _IDP_JWKS_HINTS = {
 class _StatusProbe(QtCore.QThread):
     """Ask the RUNNING stack what it is, off the GUI thread.
 
-    `docker compose ps` shells out and can block for seconds (a busy or wedged
+    `docker compose ps` shells out and can block for seconds (a busy or hung
     daemon blocks for its whole timeout), so this must never run inline — that is
     the same class of bug as the per-line log delivery: work on the GUI thread
     with no way for the event loop to breathe. It runs on page entry, so doing it
@@ -261,7 +261,7 @@ class _E2EGateProbe(QtCore.QThread):
     running_env()'s `compose ps -q` + `docker inspect` (local_stack_node.py:690 and :697)
     — plus a 5s urlopen probe of Casdoor. Run inline from initializePage (via
     _refresh_status -> _sync_e2e_gate) that is a potential ~95s freeze on merely ENTERING
-    the page, on top of MeshNode.status()'s own 30s (mesh_node.py:135). A wedged docker
+    the page, on top of MeshNode.status()'s own 30s (mesh_node.py:135). A hung docker
     daemon blocks each of those for its full timeout, and none of that work needs the GUI
     thread.
 
@@ -325,7 +325,7 @@ class _CredsProbe(QtCore.QThread):
     the dialog presented whatever was on disk as the way in. Now the click starts
     this probe and the dialog is constructed in its result slot, from facts:
     core/credentials_truth.probe_credentials is docker + Casdoor + stat, blocking
-    by contract (up to ~30s on a wedged daemon), so it runs here.
+    by contract (up to ~30s on a hung daemon), so it runs here.
 
     Emits ``(Roster, CredentialTruth | None)``. Never raises: a failure lands in
     ``Roster.error`` so the dialog's existing unreadable-roster branch renders it,
@@ -740,7 +740,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         return not self._running
 
     def initializePage(self):
-        # Custody first (_reclaim_sections runs on every show, and take_section is
+        # Ownership first (_reclaim_sections runs on every show, and take_section is
         # idempotent), then the things that must happen only on a real forward entry:
         # the probes.
         self.take_section("bringup", self._body)
@@ -1099,7 +1099,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                     # DEVOPS-LANE row: INFORMATIONAL, never a checkbox — the same
                     # honesty idiom as the unavailable rows above, except this one
                     # points at a lane that WORKS (the DevOps buttons below, which
-                    # `describe` names). A checkbox here could only be inert: no
+                    # `describe` names). A checkbox here could only do nothing: no
                     # compose profile and no federation row exists to flip.
                     grey = QtGui.QBrush(QtGui.QColor("#888888"))
                     for _c in (_LS_COL_NAME, _LS_COL_MECH, _LS_COL_DESC):
@@ -1520,7 +1520,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         #
         # They start at the LANE's shipped default (metrics-server ON), not at
         # off: the seven HPAs the lane deploys are already applied and already
-        # inert without it, so an unticked default would render the broken state
+        # ineffective without it, so an unticked default would render the broken state
         # as the normal one.
         self.kind_addon_boxes: dict[str, QtWidgets.QCheckBox] = {}
         for _addon in KIND_ADDONS:
@@ -1703,7 +1703,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
     def _reclaim_sections(self) -> None:
         """Take back what THIS page shows: the bring-up block and the run view.
 
-        Widget custody only; NO probe runs here, so it is safe on every show. Qt calls
+        Widget ownership only; NO probe runs here, so it is safe on every show. Qt calls
         initializePage only on a FORWARD visit, and the run view is CONTENDED — the
         join step and the review step claim it too — so the reclaim has to hang off a
         hook that fires both ways or a Back would leave the log on the page behind.
@@ -1746,7 +1746,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     def collect_bootstrap(self) -> LocalMeshBootstrapConfig:
         """BOOTSTRAP-tab widgets -> LocalMeshBootstrapConfig — EVERY operator-visible
-        control, so none can silently do nothing (the dead-default class: ``brand``
+        control, so none can silently do nothing (the silently-does-nothing-default class: ``brand``
         was declared on the config but never passed here, making the GUI strictly
         less capable than the CLI's ``--brand``)."""
         return LocalMeshBootstrapConfig(
@@ -2055,9 +2055,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # bring-up left running). This is what "populates right after generation
         # completes" without inventing a generation-completed signal: there is
         # none, and _probe_mesh_state is already the page's ONE "state changed,
-        # re-read" entry point — the seam tests silence (`_probe_mesh_state =
+        # re-read" entry point — the override point tests silence (`_probe_mesh_state =
         # lambda: None`) to keep a page quiet while they drive verbs. A second
-        # background read started directly here ran behind that seam's back:
+        # background read started directly here ran behind that override point's back:
         # measured as three REAL `kubectl get` reads and a Qt abort at teardown
         # in two suites that never asked for a monitor.
         self._monitor_stale = True
@@ -2071,7 +2071,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # until the operator leaves the page and comes back. It rides
         # _on_mesh_state for the same reason the monitor does: a re-scan started
         # directly here would go behind the `_probe_mesh_state = lambda: None`
-        # seam the tests use to keep a page quiet while they drive verbs.
+        # override point the tests use to keep a page quiet while they drive verbs.
         self._saved_stale = True
         self._probe_mesh_state()
         self.completeChanged.emit()
@@ -2308,7 +2308,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         """Kick off the JOIN-tab node probe, off the GUI thread.
 
         MeshNode.status() shells `docker compose ps` with a 30s timeout
-        (core/mesh_node.py:135) and a wedged daemon blocks for all of it. This ran INLINE
+        (core/mesh_node.py:135) and a hung daemon blocks for all of it. This ran INLINE
         from initializePage, so entering the page could freeze the window for 30s before
         it had even painted — the same defect the _StatusProbe docstring describes, on the
         same class of call, so it uses the same probe (MeshStatus and StackStatus both
@@ -2497,7 +2497,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         """"" when a mesh may start; otherwise the refusal naming every domain with no
         recorded service configuration (#495).
 
-        A pure read through ``core.domain_services.gate_reason`` — the SAME seam the
+        A pure read through ``core.domain_services.gate_reason`` — the SAME override point the
         image-build gate calls — so the two paths cannot drift and a test can drive
         the refusal with a bare ImageConfig and no docker."""
         cfg = getattr(getattr(self, "wiz", None), "cfg", None)
@@ -2508,7 +2508,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
     def _bootstrap_up(self):
         # THE PER-DOMAIN SERVICES GATE (#494/#495), on the docker/local-mesh half of
         # the operator's ask ("before building or starting a mesh in docker or nodes").
-        # Same seam as the image-build gate on gui/pages/launch.py, same refusal
+        # Same override point as the image-build gate on gui/pages/launch.py, same refusal
         # wording, and it lands in the same status line every other refusal on this
         # page uses — no modal, and the button stays enabled so the reason is readable
         # and actionable rather than a disabled control that explains nothing.
@@ -2618,7 +2618,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
         OFF-THREAD (see _E2EGateProbe): e2e_ready() is three 30s docker subprocesses plus
         a 5s HTTP probe, and running it inline from initializePage could freeze the window
-        for ~95s on a wedged daemon. A probe already in flight is left alone rather than
+        for ~95s on a hung daemon. A probe already in flight is left alone rather than
         stacking threads."""
         btn = getattr(self, "e2e_btn", None)
         if btn is None:
@@ -2712,7 +2712,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     def _devops_down(self):
         """DESTRUCTIVE — `kind delete cluster`. Confirms first, through the
-        module-level ``confirm_devops_down`` seam, and the confirmation enumerates
+        module-level ``confirm_devops_down`` override point, and the confirmation enumerates
         what goes and what stays rather than asking a generic "are you sure?" —
         a generic one is what makes operators click through. It also points at the
         non-destructive `Halt DevOps lane`, because most of the time that is what
@@ -2956,7 +2956,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # Start/Restore brings a docker mesh up on the same compose project
         # _bootstrap_up does, from the same wiz.cfg, so gating only _bootstrap_up
         # would have left the operator's ask ("before … starting a mesh in docker")
-        # satisfied by one button and bypassed by the one next to it. Same seam, same
+        # satisfied by one button and bypassed by the one next to it. Same override point, same
         # sentence, same status line, and BEFORE apply_bootstrap so a refused click
         # does not silently rewrite the form on its way to doing nothing.
         refusal = self._domain_services_refusal()
@@ -3786,7 +3786,7 @@ class LocalMeshOverlayPage(_LocalMeshStep):
     def applies_to(self, cfg) -> bool:
         """Prod only. A test mesh publishes nothing and attaches no overlay, so the
         group was already hidden on the old single page; as a STEP the honest form of
-        "hidden" is "not visited". Emission-neutral: every field here is a
+        "hidden" is "not visited". Leaves the output unchanged: every field here is a
         LocalMeshBootstrapConfig field, and collect_bootstrap reads the widgets
         directly, so an unvisited step leaves them exactly as apply_bootstrap or the
         constructor set them."""

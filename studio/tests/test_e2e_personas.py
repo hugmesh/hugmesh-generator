@@ -577,7 +577,7 @@ def test_the_never_seeded_handles_are_declared_by_their_own_specs(index):
 # ── THE GUARD ───────────────────────────────────────────────────────────────────
 
 def test_guard_real_checkout_is_clean(index):
-    """THE deliverable. Everything below proves this can go red; this proves it is
+    """THE deliverable. Everything below proves this can fail; this proves it is
     green now, so a future change to a spec, a roster or a matrix lands here."""
     assert index.blocking == (), "\n".join(
         f"[{f.kind}] {f.subject}: {f.detail}" for f in index.blocking)

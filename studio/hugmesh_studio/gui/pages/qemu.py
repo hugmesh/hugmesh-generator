@@ -52,7 +52,7 @@ WHAT THIS PAGE OFFERS
      ``cfg.qemu_device_tests``
      set, so the tests run against the images that build produces. The chaining flag
      is the SAME one BuildPage exposes, and the ownership latch in ``validatePage``
-     is unchanged. Two things make this arm REPORT ITSELF as inert if they are
+     is unchanged. Two things make this arm REPORT ITSELF as ineffective if they are
      omitted, and both were: the button bar must be refreshed when the arm is picked
      (``_source_changed``'s ``setFinalPage``), because QWizard caches whether the
      current page can continue and would otherwise leave FINISH on screen with no
@@ -105,7 +105,7 @@ loop mount, which is root. A GUI cannot answer an interactive sudo prompt, so th
 harness runs inside a --privileged container instead — root for anyone in the
 ``docker`` group. The availability probe is ASYNC now
 (``_emulation_common.DockerProbe``): the synchronous one froze the whole window for
-up to fifteen seconds against a wedged daemon, before the page had even painted.
+up to fifteen seconds against a hung daemon, before the page had even painted.
 
 Modeless throughout: every refusal is an inline label plus the log, never a dialog —
 a modal in page logic hangs the headless tests (the no-modals rule).
@@ -727,7 +727,7 @@ class QemuPage(QtWidgets.QWizardPage):
             self.cmd_view.setPlainText("")
         else:
             self._refresh_command()
-        # REFRESH THE BUTTON BAR — this is what made the radio read as INERT.
+        # REFRESH THE BUTTON BAR — this is what made the radio look as if it did nothing.
         #
         # nextId() reports the right answer the instant this toggles. QWizard does not
         # ask it again: canContinue/canFinish are cached by
@@ -1028,7 +1028,7 @@ class QemuPage(QtWidgets.QWizardPage):
 
         Cancelling sends SIGTERM to the process GROUP (the runner spawns docker
         children, so signalling the shell alone would orphan them) and nothing here
-        escalates to SIGKILL. A runner that ignores the first signal — a qemu wedged
+        escalates to SIGKILL. A runner that ignores the first signal — a qemu hung
         in TCG, a docker pull mid-layer — would be uncancellable from the GUI for the
         rest of the run if one click disarmed the button. Re-sending is the only
         escalation the operator has; ``_set_running`` greys the button the moment the

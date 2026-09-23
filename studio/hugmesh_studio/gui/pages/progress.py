@@ -93,7 +93,7 @@ def _display_safe(line: str) -> str:
     return _C0_RE.sub("", strip_ansi(line))
 
 
-# THE flash confirmation (#337). A module-level seam on purpose: headless tests
+# THE flash confirmation (#337). A module-level override point on purpose: headless tests
 # monkeypatch this name, so the one destructive gate the GUI owns is exercised by the
 # suite instead of being stubbed away with _start_flash. It is called from
 # _start_flash — an explicit click / an explicitly opted-in post-build action — and
@@ -347,7 +347,7 @@ class _ImageCheckWorker(QtCore.QThread):
 class _DetachedLogWindow(QtWidgets.QWidget):
     """The top-level window the log panel is popped into by "Detach ⇱".
 
-    Two deliberate ownership choices, both load-bearing (see ProgressPage._detach_log):
+    Two deliberate ownership choices, both relied on (see ProgressPage._detach_log):
 
     * **Parented to the WIZARD** (``Qt.WindowType.Window`` makes it a real top-level
       anyway), so it can never outlive the app or linger as a stray window — and so
@@ -1366,7 +1366,7 @@ class ProgressPage(QtWidgets.QWizardPage):
     def _build_row(self, index: int, label: str, platform: str,
                    log_root: str = "") -> None:
         row = _Row(index, label, platform, log_root)
-        # JOB item (top-level) — the GitHub-Actions "all jobs listed up front" seam.
+        # JOB item (top-level) — the GitHub-Actions "all jobs listed up front" convention.
         job_item = QtWidgets.QTreeWidgetItem(self.tree)
         job_item.setData(_COL_NAME, Qt.ItemDataRole.UserRole, (index, None))
         row.job_item = job_item
@@ -2040,7 +2040,7 @@ class ProgressPage(QtWidgets.QWizardPage):
 
         Expands the job, the stage(s) hosting its emerge groups and the group nodes
         themselves, then scrolls to the first group. It EXPANDS only; it never collapses
-        anything the operator opened, and it is inert while the job's latch is still
+        anything the operator opened, and it does nothing while the job's latch is still
         closed (belt and braces — the disabled button cannot emit `clicked` in the first
         place, so this also covers a programmatic call).
 
@@ -2542,7 +2542,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         because gui/build_supervisor.py owns it now and the tray badge keeps reporting
         it from the status file.
 
-        Two things are load-bearing and must stay:
+        Two things are relied on and must stay:
 
         * ``_redock_log()`` FIRST, exactly as the old abort did. The detached log
           window is a child of the wizard; reparenting the log panel back into this
@@ -3087,7 +3087,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         deviation from "a modal only in an explicit click handler": the checkbox was
         ticked minutes-to-hours earlier on the BuildPage, and the issue asks for the
         warning "at the moment the flash is started", which is here. It is safe
-        headlessly only because ``confirm_flash`` is a module-level seam every test
+        headlessly only because ``confirm_flash`` is a module-level override point every test
         monkeypatches — do NOT inline a QMessageBox call here. Operator consequence,
         stated plainly: ticking flash-with-build and walking away now leaves a waiting
         dialog rather than a flashed stick.
@@ -3301,7 +3301,7 @@ class ProgressPage(QtWidgets.QWizardPage):
                 # assignment never started — and the row is currently claiming
                 # "writing…", which is a lie about a device nothing has touched. Say
                 # so loudly and move on; every following row hits the same guard and
-                # is marked the same way, so the table never shows a phantom write.
+                # is marked the same way, so the table never shows a write that never happened.
                 self._flash_busy_skipped = False
                 self.log.appendPlainText(
                     f"Flash plan: {a.entry_id} → {a.target.path} was NOT started — the "
@@ -3346,7 +3346,7 @@ class ProgressPage(QtWidgets.QWizardPage):
 
         One OK/Cancel warning, here, at the moment the flash starts, for every path
         into it (the Flash… button and each post-build plan assignment). It is a
-        module-level seam (``confirm_flash``) so the headless suite exercises the real
+        module-level override point (``confirm_flash``) so the headless suite exercises the real
         gate, and it is called from a click / an explicitly opted-in post-build action
         — never from validatePage, initializePage, isComplete or itemChanged, where a
         modal deadlocks an offscreen test."""

@@ -5,7 +5,7 @@ local-mesh identity import into ImageConfig, and the abbreviated worklist (ONLY
 laptop + node rows on offer).
 
 Runs the REAL wizard on Qt's offscreen platform, like test_wizard.py. Nothing here
-talks to kind: both k8s seams (``local_k8s_running`` / ``local_k8s_teardown``) are
+talks to kind: both k8s override points (``local_k8s_running`` / ``local_k8s_teardown``) are
 stubbed, so the suite is deterministic on a host with or without a live cluster and
 no test can delete one.
 """
@@ -67,7 +67,7 @@ def k8s_state():
 def _canned_k8s(monkeypatch, k8s_state):
     """No cluster unless a test says otherwise. The page probes the REAL host on entry,
     so without this a dev box running `hugmesh-local` would change what every other
-    test here sees — and the teardown seam is stubbed in the same breath so no test can
+    test here sees — and the teardown override point is stubbed in the same breath so no test can
     ever delete the operator's cluster."""
     def _never(_gd, on_line=None, cancel=None):
         raise AssertionError("local_k8s_teardown called without a test stubbing it")
@@ -253,7 +253,7 @@ def test_the_teardown_never_runs_without_the_consent(wiz, qapp, k8s_state, monke
 
 def test_stopping_kubernetes_runs_the_verb_off_thread_and_opens_the_gate(
         wiz, qapp, k8s_state, monkeypatch):
-    """The wiring end to end: the press runs the real `make kind-down` seam on a WORKER
+    """The wiring end to end: the press runs the real `make kind-down` override point on a WORKER
     (the click returns with the verb still in flight — a synchronous call here would
     freeze the wizard for the minutes a teardown takes), streams its output into the
     page's console, and the gate opens only once the RE-PROBE says the cluster is gone."""

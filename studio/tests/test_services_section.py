@@ -115,7 +115,7 @@ def mesh(wiz, *ids):
 
     Seeded HERE, in the shared helper, rather than in each test: the three tests below
     that use a desktop worklist were written before the person requirement landed and
-    were silently failing for want of it, which is precisely the kind of rot a per-test
+    were silently failing for want of it, which is precisely the kind of staleness a per-test
     copy invites. Only desktop-class rows are touched, so a node-only worklist is
     byte-identical to before."""
     pick_mode(wiz, "mesh")
@@ -360,7 +360,7 @@ def test_every_offered_row_says_what_enabling_it_does(wiz):
         assert len(desc) > 20, f"{slug} has no description of what enabling it does"
         assert item.toolTip(_SVC_COL_DESC).strip() == desc
         checked += 1
-    # NON-VACUITY. Every assertion above sits behind a `continue`, so a change that
+    # REAL-CASES CHECK. Every assertion above sits behind a `continue`, so a change that
     # hid every row would turn this test into an empty loop that passes — the
     # can't-fail shape this codebase has been bitten by before.
     assert checked >= 8, (
@@ -405,7 +405,7 @@ def test_group_grey_never_over_greys_a_supported_service(wiz):
         assert flag_platforms <= svc_platforms, (
             f"{slug} ({fld}) is parsed on {flag_platforms - svc_platforms}, where the "
             "services group is greyed as a unit — its row would be dead there")
-    # non-vacuity: the subset relation is not trivially true because both sides are equal
+    # real-cases check: the subset relation is not trivially true because both sides are equal
     assert any(set(PLATFORM_FIELD_SUPPORT[f]) < svc_platforms
                for f, _t in _FLAG_SERVICE_FIELDS.values()), (
         "no flag is a STRICT subset — the assertion above would be vacuous")
@@ -525,7 +525,7 @@ def test_regrouping_a_row_cannot_change_what_it_emits(wiz):
 
 def test_builtin_default_services_match_both_builders():
     """BUILTIN_DEFAULT_SERVICES is the set the table arrives with TICKED, so it must be
-    the builders' real default and not a comment that rotted: pre-ticking the wrong three
+    the builders' real default and not a comment that went stale: pre-ticking the wrong three
     would put the lie back with the boxes the other way up. Parsed out of both scripts."""
     pat = re.compile(r'OPTIONAL_SERVICES="\$\{OPTIONAL_SERVICES:-([^}"]*)\}"')
     seen = {}
@@ -543,7 +543,7 @@ def test_builtin_default_services_match_both_builders():
 
 def test_user_level_services_match_both_builders():
     """USER_LEVEL_SERVICES is what the "every user-level service" preset EXPANDS TO, and
-    the page now greys+ticks exactly those rows on that preset. Same anti-rot treatment as
+    the page now greys+ticks exactly those rows on that preset. Same anti-staleness treatment as
     BUILTIN_DEFAULT_SERVICES: parsed out of both scripts, not restated in a comment."""
     pat = re.compile(r'^USER_LEVEL_SERVICES="([^"]*)"', re.M)
     for script in ("build-x86-host-stage4.sh", "build-rpi5-stage4.sh"):
@@ -553,7 +553,7 @@ def test_user_level_services_match_both_builders():
         assert set(found[0].split()) == set(USER_LEVEL_SERVICES), (
             f"{script} expands 'all' to {sorted(found[0].split())}, the wizard claims "
             f"{sorted(USER_LEVEL_SERVICES)}")
-    # non-vacuity for the preset rule this constant drives: it must be a STRICT superset
+    # real-cases check for the preset rule this constant drives: it must be a STRICT superset
     # of the builders' default set (or "all" would tick nothing new) and it must NOT cover
     # the infra slugs (or nothing would be left live underneath the preset).
     assert set(BUILTIN_DEFAULT_SERVICES) < set(USER_LEVEL_SERVICES)
@@ -873,7 +873,7 @@ def _flow_pages(wiz):
 
     The next id is peeked with nextId() BEFORE navigating, so the walk can decline to
     enter that page rather than entering and regretting it. Everything up to and
-    including LaunchPage is inert on arrival (ask 22 pins that the build screen
+    including LaunchPage does nothing on arrival (ask 22 pins that the build screen
     dispatches nothing), so stopping there costs no coverage."""
     seen = []
     for _ in range(len(WIZARD_PAGE_SLUGS) + 1):
@@ -905,7 +905,7 @@ def test_standalone_desktop_fields_are_unreachable_in_the_mesh_node_flow(wiz):
 
 def test_the_same_fields_stay_reachable_on_the_desktop_mesh_track(wiz):
     """The other half of ask 11 — "keep that to the desktop mesh track" — and the
-    non-vacuity proof for the test above: a gate that hid these everywhere would pass it
+    real-cases check proof for the test above: a gate that hid these everywhere would pass it
     while deleting the flow they belong to.
 
     A mesh worklist made entirely of desktop rows IS that track (build-rpi5-stage4.sh:1007
@@ -1072,7 +1072,7 @@ def test_the_excluded_rows_come_back_read_only_on_request(wiz):
 
 
 def test_mesh_capability_is_derived_from_the_catalog_not_a_hand_kept_list():
-    """The predicate must stay derived, or ask 18 becomes a list that rots: a device that
+    """The predicate must stay derived, or ask 18 becomes a list that goes stale: a device that
     GAINS a mesh role has to appear on the screen in the same commit that gives it one."""
     cat = device_catalog.load_catalog()
     for dev in cat.devices:

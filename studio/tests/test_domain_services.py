@@ -10,7 +10,7 @@ THIS FILE HAS NO QT IMPORT, and that is the point rather than a convenience. The
 pre-merge CI job (`.github/workflows/studio-tests.yml`) installs **no Qt binding** on
 purpose, and a `pytest.importorskip("hugmesh_studio.gui.qt")` anywhere in a module
 skips the WHOLE module — so a gate tested only inside a GUI file is a gate the
-pre-merge job never runs. `core/domain_services.py` exists as a Qt-free seam precisely
+pre-merge job never runs. `core/domain_services.py` exists as a Qt-free override point precisely
 so the refusal can be driven with a bare `ImageConfig`; these tests are what cash that
 in. The GUI surfaces live in tests/test_domain_services_page.py (the step) and
 tests/test_domain_services_scope.py (the scope column), both of which DO skip without
@@ -47,7 +47,7 @@ def _mesh(**kw):
     return ImageConfig(**kw)
 
 
-# ── the seam ──────────────────────────────────────────────
+# ── the override point ──────────────────────────────────────────────
 def test_gate_passes_when_there_are_no_domains():
     assert ds.gate_reason(_mesh()) == ""
 
@@ -316,7 +316,7 @@ def test_domain_summary_is_services_summary_for_a_domain():
     assert ds.domain_summary(Domain(name="a.example"), cfg) == "cluster default"
 
 
-# ── whitespace cannot wedge the gate ─────────────────────────────────────────────
+# ── whitespace cannot hang the gate ─────────────────────────────────────────────
 def test_a_padded_name_can_still_satisfy_the_gate():
     """record_reviewed stored d.name RAW while unconfigured_domains compared the
     STRIPPED name, so a hand-edited config carrying ' a.example ' could never satisfy

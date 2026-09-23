@@ -26,7 +26,7 @@ WHAT THIS FILE PINS
   STALE. And the completion line counts those buckets instead of reporting the
   runner's exit status as "device tests passed".
 * WHAT LEFT — no device table, no keep-alive tick, no second spawn lane. A test that
-  only added the new face would let the old one rot back in.
+  only added the new face would let the old one creep back in.
 * THE BUILD CHAIN — unchanged, and asserted unchanged: the radio seeds
   cfg.qemu_device_tests,
   BuildPage's checkbox owns it from the moment it is reached, and the --env gate holds.
@@ -243,7 +243,7 @@ def work_dir(fake_generator):
 def results(work_dir):
     """WRITE a per-row verdict in the runner's own on-disk format.
 
-    ``started_at`` is the load-bearing field: ``emulation.status`` grades a verdict
+    ``started_at`` is the field that matters: ``emulation.status`` grades a verdict
     STALE when it predates the plan's epoch, which is stamped when the run starts.
     The far-future/far-past stamps below are how a test says "this belongs to this
     run" or "this is last week's" without racing a wall clock.
@@ -503,7 +503,7 @@ def test_qemu_cancel_stays_armed_so_a_second_press_re_signals(wiz, qapp,
                                                               monkeypatch):
     """Cancel sends SIGTERM and nothing escalates to SIGKILL.
 
-    A runner that ignores the first signal — a qemu wedged in TCG, a docker pull
+    A runner that ignores the first signal — a qemu hung in TCG, a docker pull
     mid-layer — would be uncancellable from the GUI for the rest of the run if the
     first press disarmed the button. Re-sending is the only escalation the operator
     has, so the button stays armed while the work is still in flight and the log
@@ -699,7 +699,7 @@ def test_qemu_page_says_when_docker_is_missing(wiz, monkeypatch):
 
 def test_qemu_docker_probe_is_not_the_fifteen_second_freeze(wiz, monkeypatch):
     """The old page called the SYNCHRONOUS probe inside initializePage, whose default
-    wall clock is 15 seconds — a wedged daemon froze the window before it painted."""
+    wall clock is 15 seconds — a hung daemon froze the window before it painted."""
     seen = {}
 
     def slow():
@@ -742,7 +742,7 @@ _FINISH = QtWidgets.QWizard.WizardButton.FinishButton
 def test_qemu_build_first_makes_the_wizard_next_button_live(wiz, qapp):
     """Ticking the radio must put a REACHABLE Next in the button bar.
 
-    This is the operator-visible bug and the reason the control read as inert:
+    This is the operator-visible bug and the reason the control read as ineffective:
     QWizard caches canContinue/canFinish in updateCurrentPage() when the page is
     ENTERED, and nothing re-runs it when a page's nextId() changes afterwards. The
     page arrives with "use existing" checked, so nextId() is -1 and the bar shows
@@ -925,7 +925,7 @@ def test_progress_skips_the_device_tests_without_the_opt_in(wiz):
 
 # ---- the Playwright browser suite over an emulated device (ask 4) ---------------------
 #
-# VACUITY NOTE, and it is the whole design of this section: asserting that the widgets
+# CHECKED-NOTHING PASS NOTE, and it is the whole design of this section: asserting that the widgets
 # EXIST proves nothing — tests/qemu/run-qemu-e2e.sh had worked for months with no door
 # in the Studio, and a door that spawns the wrong script is worse than none. Every
 # assertion below reads the argv a CHILD PROCESS received (the stub echoes its own
@@ -969,7 +969,7 @@ def test_qemu_playwright_list_button_runs_the_e2e_script_not_the_docker_runner(
         wiz, qapp, fake_generator):
     """THE naming test. If the envelope were aimed at run-qemu-docker.sh — the
     confusion cfg.qemu_e2e's name caused for months — the child would echo
-    STUB-RUNNER and this goes red."""
+    STUB-RUNNER and this fails."""
     _gen, full, _abort = fake_generator
     page = _qemu_page(wiz)
     labels = [page.pw_row.itemData(i) for i in range(page.pw_row.count())]
@@ -1034,7 +1034,7 @@ def test_qemu_playwright_run_refuses_without_root_and_spawns_nothing(wiz):
 def test_qemu_playwright_real_run_argv_when_root_is_available(wiz, qapp, monkeypatch,
                                                               fake_generator):
     """The BOOT argv, asserted on the child — with the root gate stubbed open at its
-    one named seam (emulation.playwright_root_blocker) rather than by acquiring root,
+    one named override point (emulation.playwright_root_blocker) rather than by acquiring root,
     which this box cannot and must not do."""
     _gen, full, _abort = fake_generator
     monkeypatch.setattr(qemu_page.emulation, "playwright_root_blocker", lambda: "")

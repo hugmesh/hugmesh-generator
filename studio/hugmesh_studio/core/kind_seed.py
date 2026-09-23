@@ -40,7 +40,7 @@ gather_kind_identities``, the #539 reader) AND hold every role it was granted. A
 created with ROLE_MOD on a cluster whose ROLE_MOD has no members afterwards is a FAILED
 add, not a successful one.
 
-Qt-free by construction. Every external effect goes through an injected seam
+Qt-free by construction. Every external effect goes through an injected override point
 (``runner`` / ``doors`` / ``identities``), which is how the whole path is exercised
 against a fake cluster without seeding anything anywhere.
 """
@@ -109,7 +109,7 @@ class AddUserOutcome:
 
 
 def _run(cmd, *, env=None, cwd=None, timeout=60) -> tuple[int, str]:
-    """The default seam: one bounded subprocess, stdout+stderr folded, never raising."""
+    """The default override point: one bounded subprocess, stdout+stderr folded, never raising."""
     try:
         r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True,
                            timeout=timeout)
@@ -217,7 +217,7 @@ def add_user_kind(*, generator_dir: str, cluster: str, specs, username: str,
     rendered list, so a single-user render would wipe every other persona's
     memberships. That is the same reason the compose verb re-seeds wholesale.
 
-    Seams: ``runner`` (every subprocess), ``doors`` (the live view doors) and
+    Override points: ``runner`` (every subprocess), ``doors`` (the live view doors) and
     ``identities`` (the read-back; defaults to the #539 kind reader). A test supplies
     all three and nothing touches a cluster."""
     def note(line: str):
@@ -259,7 +259,7 @@ def add_user_kind(*, generator_dir: str, cluster: str, specs, username: str,
                               f"Cannot authenticate to Casdoor: {why}. Without it "
                               f"apply-systems-roles.sh would be rejected — and a "
                               f"rejection is HTTP 200 with a status=error envelope, "
-                              f"so it must not be attempted blind.")
+                              f"so it must not be attempted without a password.")
 
     # 4. RENDER, with the FULL spec list (see the docstring).
     work = tempfile.mkdtemp(prefix="hugmesh-studio-kind-seed-")

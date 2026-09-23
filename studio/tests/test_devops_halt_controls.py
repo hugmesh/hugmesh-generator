@@ -7,7 +7,7 @@ THE INVERSION. `Delete DevOps lane` went straight to `_launch`: one click delete
 kind cluster, its Vault KV, its Casdoor identities and every account seeded with them,
 with nothing in between — while the LESS destructive `Stop && clean Docker…` did
 confirm (`_bootstrap_clean`). The destructive control was the one with no
-confirmation. That is fixed here through a module-level seam, `confirm_devops_down`,
+confirmation. That is fixed here through a module-level override point, `confirm_devops_down`,
 the same shape `gui.pages.progress.confirm_flash` uses: the gate is EXERCISED by this
 suite rather than stubbed away with the method that carries it. A test that patched
 `_devops_down` would prove nothing about the dialog.

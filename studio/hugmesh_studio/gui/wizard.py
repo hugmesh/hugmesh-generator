@@ -128,7 +128,7 @@ def centred_top_left(frame, avail) -> "QtCore.QPoint":
     a test that drives this arithmetic over screens the host does not have can actually
     fail when the centring is wrong, so the arithmetic lives here in the open.
 
-    The move() that consumes this is still load-bearing beyond the centring itself: it
+    The move() that consumes this is still relied on beyond the centring itself: it
     sets Qt's explicit-position flag, which is what stops adjustPosition re-centring the
     window over a position the user dragged it to (see showEvent)."""
     fg = QtCore.QRect(frame)
@@ -345,7 +345,7 @@ class StudioWizard(QtWidgets.QWizard):
 
     def _dynamically_skipped(self, nid, terminal) -> bool:
         """True when page ``nid`` is a non-terminal page whose ``applies_to(cfg)`` reports
-        it contributes nothing for the committed config (emission-neutral skip)."""
+        it contributes nothing for the committed config (skip that leaves the output unchanged)."""
         if nid < 0 or nid in terminal:
             return False
         page = self.page(nid)

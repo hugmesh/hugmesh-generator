@@ -316,7 +316,7 @@ class PendingStep:
 class IdpScreen:
     """The mesh-node identity-provider step — Casdoor is pickable; the external
     providers need issuer/client-id plumbing the TUI has not ported, so they are
-    LISTED but refused with the reason (the inert-control rule, not a dead end)."""
+    LISTED but refused with the reason (the do-nothing-control rule, not a dead end)."""
 
     slug = "idp"
     title = "Identity provider (mesh nodes)"
@@ -348,7 +348,7 @@ class IdpScreen:
             return
         idp = IDP_CHOICES[idx]
         if idp != "casdoor":
-            # honest refusal, state unchanged — never a silently-inert pick
+            # honest refusal, state unchanged — never a silently ineffective pick
             j.status = (f"{IDP_LABELS[idp]} needs issuer/client-id entry that is "
                         "not yet ported to the TUI — configure it in the GUI "
                         f"(kept: {IDP_LABELS[j.cfg.idp]}).")
@@ -377,7 +377,7 @@ class VaultScreen:
     (``config.vault_field_error``), so what this face accepts is exactly what the
     argv accepts, and the SAME base CA list (``cfg.base_ca_certs``) through the same
     ``config.ca_cert_error``. Every edit is validated BEFORE it is committed and a
-    refusal is an inline status line (never a dead end, never a silently-inert
+    refusal is an inline status line (never a dead end, never a silently ineffective
     command); clearing the internal address clears the external address with it — the
     byte-identity rule the GUI's validatePage applies. Dropping a certificate clears
     every domain that pointed at it, exactly as the GUI does. Enter keeps the current
@@ -1089,7 +1089,7 @@ class Journey:
         # "qemu" is in SIDE_FLOW_SLUGS but is no longer a mode-menu id, so this
         # comprehension only ever CLEARS qemu_selected. The single writer that can
         # RAISE it is E2EScreen's device-lane door (the GUI twin: E2EPage._sync_arm).
-        # Its MEMBERSHIP is still load-bearing and must not be tidied away with the
+        # Its MEMBERSHIP is still relied on and must not be tidied away with the
         # dead comparison: it is what keeps _advance's positional walk off the qemu
         # screen and what lets goto("qemu") resolve. Pinned by
         # test_tui_journey::test_qemu_stays_a_side_flow_slug_even_though_its_card_went.

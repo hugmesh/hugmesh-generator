@@ -117,7 +117,7 @@ def local_k8s_teardown(generator_dir: str, on_line=None,
                        cancel=None) -> tuple[bool, str]:
     """`make kind-down` — delete the local Kubernetes cluster. Destructive for the
     DevOps lane ONLY: the docker mesh and every one of its volumes are untouched.
-    Same single-symbol seam as ``local_k8s_running``; streams and cancels because it
+    Same single-symbol override point as ``local_k8s_running``; streams and cancels because it
     is always run off the GUI thread (see LocalCloudNodesPage._stop_k8s)."""
     return LocalMeshBootstrap(generator_dir)._stack_node().devops_down(
         on_line=on_line, cancel=cancel)

@@ -18,7 +18,7 @@ It also owns the ONCE-PER-WORKLIST steps that used to live in ``BuildPage._build
   checkbox, default on).
 
 Sequential-only in v1 (same-arch build trees + loop-device contention under
-``docker --privileged``); the per-entry ``build_subdir`` is the later parallelism seam.
+``docker --privileged``); the per-entry ``build_subdir`` is the later hook for parallelism.
 
 Qt-free by construction — the GUI wraps :meth:`run_all` in a QThread and connects the
 callbacks to signals; the headless tests drive it directly.

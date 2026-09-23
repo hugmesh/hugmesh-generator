@@ -8,7 +8,7 @@ docker-compose OVERLAY with one Casdoor (+ its postgres) per own-idp domain,
 mirroring the PROVEN second-Casdoor wiring of tests/stack/compose.brand-b.yaml
 service for service, and derives the multi-issuer registry env
 (APP_TENANCY_ISSUERS / APP_TENANCY_HOSTS) the gateways' opt-in per-brand token
-decoder consumes — the exact seam `make stack-up BRAND_B=1` threads via the
+decoder consumes — the exact env-var contract `make stack-up BRAND_B=1` threads via the
 Makefile's STACK_BRAND_B_ENV, scaled from one hardcoded second brand to N
 domains.
 

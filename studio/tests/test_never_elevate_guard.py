@@ -23,7 +23,7 @@ from conftest import ElevationAttempted, expect_elevation_attempt
 # ── caught ───────────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("argv", [
     ["sudo", "--version"],
-    ["sudo", "-A", "--version"],                            # the wedge's own prefix
+    ["sudo", "-A", "--version"],                            # the hang's own prefix
     ["/usr/bin/sudo", "--version"],
     ["pkexec", "--version"],
     ["doas", "-V"],

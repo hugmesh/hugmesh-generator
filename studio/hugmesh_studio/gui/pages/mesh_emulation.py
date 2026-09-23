@@ -914,7 +914,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                     WARN)
         # Everything else QEMU can report — prelaunch, inmigrate, guest-panicked,
         # io-error … — is shown VERBATIM rather than rounded to running or paused,
-        # because rounding is how a wedged guest comes to read as a healthy one.
+        # because rounding is how a hung guest comes to read as a healthy one.
         return (f"qemu: {known}",
                 f"State {state}. The emulator reports run-state “{known}”, which is "
                 "neither running nor paused.", WARN)
@@ -1633,7 +1633,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
 
         def verb(on_line, _cancel):
             def run(argv):
-                # The save orchestrator's process seam, wired to THE spawn — so a
+                # The save orchestrator's process override point, wired to THE spawn — so a
                 # mesh save streams into this log and cancels by process group like
                 # every other verb on this page.
                 return emulation.spawn(argv, gen, on_line=on_line, cancel=cancel)

@@ -29,7 +29,7 @@ One module per ask, in the operator's own words:
   to continue the build and go back to the main menu." ProgressPage DISPATCHES ON
   ARRIVAL, so every walk onto it here goes through ``_install_inert_build_driver`` —
   the walk that did not (2026-09-04) launched a real ``sudo -A bash
-  ./build-x86-host-stage4.sh`` per run and left 60 root-owned launchers wedged on an
+  ./build-x86-host-stage4.sh`` per run and left 60 root-owned launchers hung on an
   offscreen askpass dialog. The unstubbed arrival is now pinned to be REFUSED.
 
 Every gate here has a MUTATION proof recorded in the lane report: reverting the gating
@@ -121,7 +121,7 @@ def visited_slugs(wiz):
 def _install_inert_build_driver(monkeypatch):
     """Arriving at ProgressPage dispatches the committed worklist through the REAL
     WorklistDriver -> BuildDriver -> `sudo -A bash ./build-x86-host-stage4.sh` (this
-    file's pinned host is non-root, native). Replace the per-image driver with an inert
+    file's pinned host is non-root, native). Replace the per-image driver with a do-nothing
     one that records what it was asked to build, and the mesh node-key generator's
     Popen with a no-op, so a walk onto the page proves DISPATCH without a process.
     Same shape as tests/test_pages_progress.py::_install_fake_builddriver."""
@@ -566,7 +566,7 @@ def test_ask9_a_desktop_asks_for_the_account_exactly_once(wiz):
         "the account question vanished entirely instead of moving")
     assert home.local_user_note.isVisibleTo(home), (
         "HomePage must SAY that this account is also the image's default user")
-    # emission-neutral: the hidden row emits nothing, and the surviving one does emit
+    # leaves the output unchanged: the hidden row emits nothing, and the surviving one does emit
     got = pairs(c.to_cli_args())
     assert ("--hostname", derive_hostname(c)) in got
     assert "--user" not in c.to_cli_args()
@@ -1259,7 +1259,7 @@ def test_ask21_encrypt_root_always_is_keyed_on_the_real_emission_table(wiz):
     for plat in sorted(supported | {"jetson"}):
         cfg = ImageConfig(mode="standalone", platform=plat)
         assert encrypt_root_always(cfg) is (plat in supported), plat
-    # the jetson exclusion is load-bearing, not cosmetic
+    # the jetson exclusion is relied on, not cosmetic
     with pytest.raises(ValueError):
         ImageConfig(mode="standalone", role="full", platform="jetson",
                     encrypt_root=True).to_cli_args()
@@ -1317,7 +1317,7 @@ def test_loaded_mesh_config_keeps_both_new_gates_coherent(wiz):
 #    — AND THE BUTTON ITSELF must state which users get generated and where the
 #    credentials will be found when it is done"
 #
-# The load-bearing half is the CARD TEXT, and it is only worth anything if it is TRUE.
+# The half that matters is the CARD TEXT, and it is only worth anything if it is TRUE.
 # These read the claim off the real key channel (scripts/gen-provision-keys.sh, via
 # core.worklist_driver.key_profile) rather than trusting the sentence.
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -1375,7 +1375,7 @@ def test_ask20_generated_card_is_recomputed_every_visit(wiz):
 
 
 def test_ask20_generated_card_names_the_folder_the_keys_are_actually_written_to(wiz):
-    """ASK 20's ONE load-bearing requirement — "where the credentials will be found" —
+    """ASK 20's ONE requirement that matters — "where the credentials will be found" —
     was wrong. The card printed ``<out>/keys-<id>``; on the GUI path ProgressPage always
     hands the driver ``workdir=<out>/sessions/<session id>/``, and _generate_keys joins
     ``keys-<id>`` onto THAT. So the operator was sent to a folder that never exists.
@@ -1520,7 +1520,7 @@ def test_ask21_standalone_is_cleared_when_the_role_moves_out_of_scope(qapp):
     """The ``and scope_allows("standalone", c)`` conjunct in RolePage.validatePage,
     which nothing covered — the mutation removing it survived the whole suite.
 
-    It is load-bearing because ``gate_widgets_role_class(hide=True)`` only sets
+    It is relied on because ``gate_widgets_role_class(hide=True)`` only sets
     visibility: a box ticked on an in-scope role stays TICKED when the operator moves
     to a role the field is out of scope for. Without the conjunct that stale tick is
     committed, and --standalone reaches a builder that rejects it. standalone-thick/x86
@@ -1659,7 +1659,7 @@ def test_ask22_launch_is_never_dynamically_skipped(wiz):
 
 def test_ask22_continue_advances_to_the_run(wiz, qapp, monkeypatch, tmp_path):
     """"an option to continue the build" — the card is what advances to the page that
-    actually runs it. The page dispatches on arrival, so the driver is INERT here (see
+    actually runs it. The page dispatches on arrival, so the driver does nothing here (see
     _install_inert_build_driver) and the dispatch is asserted through it: before
     2026-09-04 this test walked onto the page unstubbed and started a real
     `sudo -A bash ./build-x86-host-stage4.sh` every run."""
@@ -1677,7 +1677,7 @@ def test_ask22_continue_advances_to_the_run(wiz, qapp, monkeypatch, tmp_path):
 
 
 def test_ask22_an_unstubbed_arrival_is_refused_not_elevated(wiz, qapp, monkeypatch, tmp_path):
-    """The 2026-09-04 wedge, end to end through the REAL page and the REAL driver, with
+    """The 2026-09-04 hang, end to end through the REAL page and the REAL driver, with
     nothing stubbed on the dispatch path: arriving at ProgressPage under pytest must
     surface core.build_driver.ElevationRefused in the log pane and end the run — never
     Popen a `sudo -A` (tests/conftest.py's spy would error this test if it did).
