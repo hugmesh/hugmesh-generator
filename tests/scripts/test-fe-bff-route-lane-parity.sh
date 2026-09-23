@@ -40,6 +40,15 @@
 #      and seventh 404 nobody decided on.
 #   4. NON-REGRESSION — /bff/me/appeal and /bff/register/complete still reach
 #      admin-bff on the compose lane.
+#   5. DECISION 60 (hugmesh-generator#347, operator 2026-09-18; generator half
+#      hugmesh-generator#569) — APP_BFF_EXCHANGE_CACHE_TTL_MS is pinned to the
+#      string "0" for admin-bff-api AND mod-bff-api on BOTH lanes: the compose
+#      service blocks in tests/stack/compose.local.yaml and the cluster
+#      Deployments under specs/cluster/manifests/{admin,mod}-bff-api/. Checked
+#      by VALUE, not presence. This is the BFF mirror of the gateway's own
+#      pin, which lives in tests/stack/test-gateway-auth-flag-parity.sh; the
+#      DECISION 60 section below says why the BFF pin is asserted here and
+#      not there.
 #
 # KNOWN DIVERGENCE, reported and NOT asserted: the cluster's `/bff/me/**` already
 # swallows /bff/me/appeal, so that path 404s on a cluster today. It is recorded on
@@ -47,11 +56,13 @@
 # which this lane does not own. This guard PRINTS it every run rather than pinning
 # it, so fixing it there does not turn this file red.
 #
-# NEGATIVE CONTROLS: six mutations of the parsed tables must each trip the checks.
-# A guard whose controls are never exercised can rot into a vacuous pass; these
-# run in-process on copies, so the files on disk are never modified.
+# NEGATIVE CONTROLS: every mutation in CONTROLS (route tables) and TTL_CONTROLS
+# (decision 60) must trip its check. A guard whose controls are never exercised
+# can rot into a vacuous pass; these run in-process on copies, so the files on
+# disk are never modified.
 #
-# Offline: reads two files. No cluster, no docker, no network.
+# Offline: reads the two fe route tables, tests/stack/compose.local.yaml and the
+# two BFF Deployments. No cluster, no docker, no network.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -458,18 +469,26 @@ for label, mutate in CONTROLS:
 print(f"\ncontrols: {caught} caught / {survived} survived")
 
 # ---------------------------------------------------------------------------
-# A SECOND, ORTHOGONAL CONCERN in this same offline file (deliberately, not a
-# new script — see the ownership note in this repo's decision-60 landing
-# commit): decision 60 (generator#347, operator 2026-09-18) pins
-# APP_BFF_EXCHANGE_CACHE_TTL_MS = "0" for admin-bff-api and mod-bff-api on
-# BOTH lanes, exactly the shape hugmesh-gateway#398/PR#406 pinned
-# HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS for the gateway and guarded with
-# tests/stack/test-gateway-auth-flag-parity.sh — a file this lane does not
-# own. This is the equivalent guard for the two services this lane's file
-# ownership DOES cover, checked by VALUE (a fixture with both lanes drifted to
-# the SAME non-zero number would pass a parity-only check while silently
-# undoing the decision — see #398's own landing notes for why parity alone is
-# not enough), not merely by presence.
+# DECISION 60 — a second, orthogonal assertion kept in this same offline file.
+# Decision 60 (hugmesh-generator#347, operator 2026-09-18; generator half
+# hugmesh-generator#569) pins APP_BFF_EXCHANGE_CACHE_TTL_MS = "0" for
+# admin-bff-api and mod-bff-api on BOTH lanes: the same posture #398/PR#406
+# pinned for the gateway's own mirror of the cache
+# (HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS), which
+# tests/stack/test-gateway-auth-flag-parity.sh guards.
+#
+# WHY HERE AND NOT IN THAT SIBLING. The sibling resolves every value through the
+# gateway image's application.yml, so it needs the org-private hugmesh-gateway
+# checkout and FAILS as INCOMPLETE without one; that keeps it out of the GitHub
+# pre-merge gate (it is in the ungated lane there, and GitLab-only otherwise).
+# Its cluster mode also reads ArgoCD Application helm `extraEnv`, not the raw
+# Deployments the BFFs are deployed from. This file needs nothing but the tree
+# and is pre-merge gated on both hosts, and it already owns the four files the
+# pin lives in, so the BFF pin is asserted here. The two guards name each other.
+#
+# CHECKED BY VALUE, NOT PRESENCE. A fixture with both lanes drifted to the SAME
+# non-zero number is perfect parity and a reopened suspension-bypass window;
+# the sibling records the same measurement for the gateway's key.
 print("\n== decision 60: APP_BFF_EXCHANGE_CACHE_TTL_MS pinned to \"0\" on both lanes ==")
 
 COMPOSE_STACK = f"{root}/tests/stack/compose.local.yaml"
@@ -488,18 +507,13 @@ def cluster_env(doc, container_name):
     return {e["name"]: e.get("value") for e in (ctr.get("env") or [])}
 
 
-def check_ttl_pin(admin_compose_env, mod_compose_env, admin_cluster_env, mod_cluster_env):
-    """[(label, env_dict)] -> list of failure strings. A MISSING key (None) and
-    a PRESENT-BUT-WRONG value are reported differently, so a reader knows
-    immediately whether the line was deleted or edited."""
+def check_ttl_pin(lanes):
+    """{label: env_dict} -> list of failure strings, one per lane that is not
+    pinned. A MISSING key and a PRESENT-BUT-WRONG value are reported
+    differently, so a reader knows immediately whether the line was deleted
+    or edited."""
     fails = []
-    rows = [
-        ("compose admin-bff-api", admin_compose_env),
-        ("compose mod-bff-api", mod_compose_env),
-        ("cluster admin-bff-api", admin_cluster_env),
-        ("cluster mod-bff-api", mod_cluster_env),
-    ]
-    for label, env in rows:
+    for label, env in lanes.items():
         val = env.get(TTL_KEY)
         if val is None:
             fails.append(f"[{label}] {TTL_KEY} is ABSENT — decision 60 (2026-09-18) "
@@ -518,45 +532,58 @@ compose_full = yaml.safe_load(open(COMPOSE_STACK))
 admin_cluster_full = yaml.safe_load(open(CLUSTER_ADMIN_BFF))
 mod_cluster_full = yaml.safe_load(open(CLUSTER_MOD_BFF))
 
-live_admin_compose = compose_env(compose_full, "hugmesh-admin-bff-api")
-live_mod_compose = compose_env(compose_full, "hugmesh-mod-bff-api")
-live_admin_cluster = cluster_env(admin_cluster_full, "hugmesh-admin-bff-api")
-live_mod_cluster = cluster_env(mod_cluster_full, "hugmesh-mod-bff-api")
+# The four lanes under the pin, keyed by the label every verdict prints. Adding
+# a lane is one row here plus a control below.
+LIVE_LANES = {
+    "compose admin-bff-api": compose_env(compose_full, "hugmesh-admin-bff-api"),
+    "compose mod-bff-api":   compose_env(compose_full, "hugmesh-mod-bff-api"),
+    "cluster admin-bff-api": cluster_env(admin_cluster_full, "hugmesh-admin-bff-api"),
+    "cluster mod-bff-api":   cluster_env(mod_cluster_full, "hugmesh-mod-bff-api"),
+}
 
-ttl_fails = check_ttl_pin(live_admin_compose, live_mod_compose,
-                          live_admin_cluster, live_mod_cluster)
+ttl_fails = check_ttl_pin(LIVE_LANES)
 if ttl_fails:
     for msg in ttl_fails:
         bad(msg)
 else:
-    ok(f"{TTL_KEY} pinned to \"0\" on all four lanes (compose admin-bff-api, "
-       f"compose mod-bff-api, cluster admin-bff-api, cluster mod-bff-api)")
+    ok(f"{TTL_KEY} pinned to \"0\" on all {len(LIVE_LANES)} lanes "
+       f"({', '.join(LIVE_LANES)})")
 
-# Negative controls: each mutation must produce at least one failure, over a
-# COPY of the live dicts — nothing on disk is touched.
+
+def with_lanes(changes):
+    """The live lanes with the named ones replaced — a COPY; the live dicts and
+    the files on disk are never touched."""
+    unknown = set(changes) - set(LIVE_LANES)
+    assert not unknown, f"control names a lane that does not exist: {unknown}"
+    return {**LIVE_LANES, **changes}
+
+
+def without_key(env):
+    return {k: v for k, v in env.items() if k != TTL_KEY}
+
+
+def with_value(env, value):
+    return {**env, TTL_KEY: value}
+
+
+# Negative controls: each mutation must produce at least one failure.
 TTL_CONTROLS = [
     ("compose admin-bff-api drops the pin",
-     lambda: ({k: v for k, v in live_admin_compose.items() if k != TTL_KEY},
-              live_mod_compose, live_admin_cluster, live_mod_cluster)),
+     lambda: with_lanes({"compose admin-bff-api": without_key(LIVE_LANES["compose admin-bff-api"])})),
     ("compose mod-bff-api reverts to the image default (5000)",
-     lambda: (live_admin_compose, dict(live_mod_compose, **{TTL_KEY: "5000"}),
-              live_admin_cluster, live_mod_cluster)),
+     lambda: with_lanes({"compose mod-bff-api": with_value(LIVE_LANES["compose mod-bff-api"], "5000")})),
     ("cluster admin-bff-api drops the pin",
-     lambda: (live_admin_compose, live_mod_compose,
-              {k: v for k, v in live_admin_cluster.items() if k != TTL_KEY},
-              live_mod_cluster)),
+     lambda: with_lanes({"cluster admin-bff-api": without_key(LIVE_LANES["cluster admin-bff-api"])})),
     ("cluster mod-bff-api reverts to the image default (5000)",
-     lambda: (live_admin_compose, live_mod_compose, live_admin_cluster,
-              dict(live_mod_cluster, **{TTL_KEY: "5000"}))),
+     lambda: with_lanes({"cluster mod-bff-api": with_value(LIVE_LANES["cluster mod-bff-api"], "5000")})),
     ("BOTH lanes drift to the SAME non-zero value (parity alone would miss this)",
-     lambda: (dict(live_admin_compose, **{TTL_KEY: "5000"}), live_mod_compose,
-              dict(live_admin_cluster, **{TTL_KEY: "5000"}), live_mod_cluster)),
+     lambda: with_lanes({"compose admin-bff-api": with_value(LIVE_LANES["compose admin-bff-api"], "5000"),
+                         "cluster admin-bff-api": with_value(LIVE_LANES["cluster admin-bff-api"], "5000")})),
 ]
 
 ttl_caught = ttl_survived = 0
 for label, mutate in TTL_CONTROLS:
-    ac, mc2, acl, mcl = mutate()
-    mfails = check_ttl_pin(ac, mc2, acl, mcl)
+    mfails = check_ttl_pin(mutate())
     if mfails:
         ttl_caught += 1
         print(f"  CAUGHT  {label}")
