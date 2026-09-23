@@ -461,8 +461,12 @@ user-bff serves all five via `LegacyPathParityController`
 hugmesh/hugmesh-user-bff-api#20 @ `dc34c8b` added the last two).
 `SsoAuthController` still maps the exact path `/bff/register` only, which does
 not collide with either. `tests/scripts/test-fe-bff-route-lane-parity.sh`'s
-FIVE table asserts `has_handler=True` for every path, so a regression back to
-a 404 on either goes red rather than only printing.
+FIVE table asserts `has_handler=True` for every path, so that table going
+stale or `False` turns the run red rather than only printing. That guard reads
+only this repo's route tables, never user-bff's source, so a **genuine** handler
+removal in hugmesh-user-bff-api is caught over there — by its
+`LegacyPathParityRegisterTest` and `SecurityConfigSsoPathRulesTest` — not by
+this guard.
 
 What you will actually notice on a local stack: nothing different from the
 first three — all five now behave the same way (seeded `ROLE_USER` in the
@@ -470,6 +474,10 @@ gateway's `CanonicalSeed`, so an unauthenticated `POST` is refused before it
 reaches any BFF; a signed-in caller reaches a real handler on both register
 paths, not a 404).
 
+- **The QEMU seeder never goes through the front door.** `tests/qemu/seed-accounts.sh`
+  calls `POST ${BFF}/bff/register/google` **directly at admin-bff on
+  `127.0.0.1:8403`, with no gateway in the path**, so neither fe route table
+  affects it; it was unaffected while the two paths 404'd and is unaffected now.
 - **A stale `./.stack-src` breaks some or all five, depending how stale.** Compose
   builds user-bff from `${STACK_SRC:-./.stack-src}/hugmesh-user-bff-api`. A
   checkout pinned **before `c3d24c4`** has no `LegacyPathParityController` at
