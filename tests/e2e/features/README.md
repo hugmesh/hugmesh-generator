@@ -302,8 +302,9 @@ seed's own comments say admins reach a floor row via the bypass, which is why
 actually gets through is what the driven `@env:docker` scenarios answer. Two
 honest facts beat one blended number.
 
-Verify with `bash ../scripts/test-e2e-func-media-games.sh` (offline; seven
-mutations, tree restored on exit).
+Verify with `bash ../scripts/test-e2e-func-media-games.sh` (starts nothing;
+eight mutations M1–M8, tree restored on exit; with no e2e credential on the box
+its `@env:*` scenarios skip even if a stack is up — see its header).
 
 ## 3. Steps
 
