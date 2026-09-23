@@ -21,12 +21,22 @@ export KUBECONFIG="${KUBECONFIG:-/etc/kubernetes/admin.conf}"
 # TO BUMP: before changing the version below, diff the target tag's
 # manifests/install.yaml against the pinned one, and in particular check
 # whether it post-dates argo-cd#29103 — if so, the default diff strategy
-# changes for every ServerSideApply=true Application at once, and the choice
-# between the per-app `compare-options: ServerSideDiff=true` annotation
-# (what #354 used) and the global `controller.diff.server.side` flag is an
-# OPEN operator decision (#394) that must be made BEFORE bumping past it, not
-# after. Then set ARGOCD_VERSION=vX.Y.Z here (or export it for one run) and
-# re-run tests/scripts/test-argocd-serverside-diff.sh.
+# changes for every ServerSideApply=true Application at once.
+#
+# DECISION 65 = per-app (operator, 2026-09-18, #347): when that bump happens,
+# EVERY deployed ServerSideApply=true Application gets the per-app
+# `compare-options: ServerSideDiff=true` annotation (what #354 used for
+# harbor), NOT the global `controller.diff.server.side` controller flag. The
+# annotation becomes a no-op the moment the bump lands (the controller default
+# already does what it states), so the bump's job is to add it to whichever
+# apps do not already carry it, never to remove harbor's. Deployed today on
+# the kind profile (#394's own comment, re-verified 2026-09-18): `harbor`
+# (already annotated, #354), `ingress-nginx-internal`, `kyverno` — the other
+# 7 of the 10 repo-level ServerSideApply=true spec files are not in this
+# profile and need no annotation until they are. This comment records the
+# decision; it does NOT apply the annotation now (no live-behaviour change).
+# Then set ARGOCD_VERSION=vX.Y.Z here (or export it for one run) and re-run
+# tests/scripts/test-argocd-serverside-diff.sh.
 ARGOCD_VERSION="${ARGOCD_VERSION:-v3.5.3}"
 ARGOCD_NS="${ARGOCD_NS:-devops}"
 REPO="${HUGMESH_GITOPS_REPO:-https://github.com/hugmesh/hugmesh-generator.git}"

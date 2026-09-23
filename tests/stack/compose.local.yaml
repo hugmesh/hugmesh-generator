@@ -739,6 +739,16 @@ services:
       # custody is already keyed (APP_BFF_CUSTODY_KEY below). Fail-open by design: any
       # exchange failure falls through to the pre-fix "no bearer" behaviour.
       APP_BFF_EXCHANGE_ENABLED: ${APP_BFF_EXCHANGE_ENABLED:-true}
+      # Positive-swap cache TTL = the suspension-bypass window. 0 = cache OFF,
+      # every exchange re-consults admin-bff's own suspension gate (application.yml
+      # default is 5000 = a 5s window). Decision 60 (generator#347, operator
+      # 2026-09-18), extending decision 7's "B: zero window now" (hugmesh-gateway#2,
+      # pinned for the gateway's own mirror in #398/PR#406) to this service's
+      # mirror of the same cache. A plain literal, not `${VAR:-0}`: this pin must
+      # not be silently overridable by an inherited env var the way ENABLED above
+      # deliberately is. Kept in parity with specs/cluster/manifests/admin-bff-api/
+      # deployment.yaml by tests/scripts/test-fe-bff-route-lane-parity.sh.
+      APP_BFF_EXCHANGE_CACHE_TTL_MS: "0"
       # The cookie->JWT session exchange calls this BFF back on ITS OWN address. Left
       # empty (application.yml's default) the app derives an IN-CLUSTER k8s DNS name
       # (hugmesh-<svc>.hugmesh-backend.svc.cluster.local) that does not exist on
@@ -918,6 +928,16 @@ services:
       # APP_BFF_CUSTODY_KEY). Fail-open by design: an exchange failure degrades to
       # the pre-fix no-header behaviour (every downstream has its own fail-closed gate).
       APP_BFF_EXCHANGE_ENABLED: ${APP_BFF_EXCHANGE_ENABLED:-true}
+      # Positive-swap cache TTL = the suspension-bypass window. 0 = cache OFF,
+      # every exchange re-consults admin-bff's suspension gate (application.yml
+      # default is 5000 = a 5s window). Decision 60 (generator#347, operator
+      # 2026-09-18), extending decision 7's "B: zero window now" (hugmesh-gateway#2,
+      # pinned for the gateway's own mirror in #398/PR#406) to this service's
+      # mirror of the same cache. A plain literal, not `${VAR:-0}`, for the same
+      # reason as the admin-bff-api service block above. Kept in parity with
+      # specs/cluster/manifests/mod-bff-api/deployment.yaml by
+      # tests/scripts/test-fe-bff-route-lane-parity.sh.
+      APP_BFF_EXCHANGE_CACHE_TTL_MS: "0"
       # The cookie->JWT session exchange calls this BFF back on ITS OWN address. Left
       # empty (application.yml's default) the app derives an IN-CLUSTER k8s DNS name
       # (hugmesh-<svc>.hugmesh-backend.svc.cluster.local) that does not exist on
