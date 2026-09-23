@@ -547,11 +547,16 @@ fi
 # controls E-H exercise check 5's scanner. Pure python logic, no bddgen needed,
 # so each runs against a throwaway features dir rather than a full make_copy.
 
-# control E — EVERY malformed shape must be flagged, and nothing else. Eight
-# shapes, eight rows: an uppercase repo, a missing number, a bare prefix, a
+# control E — EVERY malformed shape must be flagged, and nothing else. Eleven
+# shapes, eleven rows: an uppercase repo, a missing number, a bare prefix, a
 # leading dash, trailing garbage, an underscore, a capitalised `@Issue:` prefix,
-# and one spelled into a Scenario title. A well-formed tag in the same file
-# proves the regex is not simply rejecting everything.
+# one spelled into a Scenario title, and three added 2026-09-23 after a
+# mutation battery loosened the regex three ways and the first eight shapes
+# caught NONE of them: a dash with no digits after it (`-[0-9]+` -> `-[0-9]*`),
+# an underscore INSIDE the repo segment followed by a valid `-<n>` (`_` admitted
+# to the class), and a repo segment that starts with a dash (`^[a-z0-9]` widened).
+# Each shape exists to kill exactly one of those three. A well-formed tag in the
+# same file proves the regex is not simply rejecting everything.
 CE="${SCRATCH}/ctrl-issue-malformed/features"
 mkdir -p "${CE}/onboarding"
 cat > "${CE}/onboarding/zz-control-issue.feature" <<'CTRL'
@@ -577,6 +582,15 @@ Feature: negative control E
     Given nothing
   Scenario: title-embedded @issue:GENERATOR-549
     Given nothing
+  @issue:generator-
+  Scenario: dash but no number
+    Given nothing
+  @issue:gen_erator-549
+  Scenario: underscore inside the repo segment, valid number
+    Given nothing
+  @issue:-generator-549
+  Scenario: repo segment starting with a dash
+    Given nothing
   @issue:github.io-15 @issue:user-bff-api-19
   Scenario: two well-formed tags, dots and dashes in the repo segment
     Given nothing
@@ -589,7 +603,8 @@ CE_MISSING=""
 # substring match would let `@issue:generator` be satisfied by `@issue:generator-549x`.
 for shape in '@issue:Generator-549' '@issue:generator' '@issue:' '@issue:-549' \
              '@issue:generator-549x' '@issue:generator_549' '@Issue:generator-549' \
-             '@issue:GENERATOR-549'; do
+             '@issue:GENERATOR-549' '@issue:generator-' '@issue:gen_erator-549' \
+             '@issue:-generator-549'; do
   esc="$(printf '%s' "${shape}" | sed 's/\./\\./g')"
   printf '%s\n' "${CE_MALFORMED}" | grep -E -- ": ${esc}\$" >/dev/null 2>&1 \
     || CE_MISSING="${CE_MISSING} ${shape}"
@@ -598,11 +613,11 @@ if [ -n "${CE_MISSING// /}" ]; then
   bad "CONTROL E: malformed @issue: shape(s) NOT flagged — check 5's regex is asleep for:${CE_MISSING}"
 elif printf '%s\n' "${CE_MALFORMED}" | grep -F -e 'github.io-15' -e 'user-bff-api-19' >/dev/null 2>&1; then
   bad "CONTROL E: a WELL-FORMED @issue: tag was flagged as malformed — the regex rejects everything"
-elif [ "${CE_N}" -ne 8 ]; then
-  bad "CONTROL E: expected exactly 8 malformed rows, got ${CE_N}:"
+elif [ "${CE_N}" -ne 11 ]; then
+  bad "CONTROL E: expected exactly 11 malformed rows, got ${CE_N}:"
   printf '%s\n' "${CE_MALFORMED}" | sed 's/^/         /'
 else
-  ok "CONTROL E: all 8 malformed @issue: shapes are flagged, the 2 well-formed ones are not"
+  ok "CONTROL E: all 11 malformed @issue: shapes are flagged, the 2 well-formed ones are not"
 fi
 
 # control F — a @fixme scenario with no @issue: tag must be REPORTED (not
@@ -715,10 +730,10 @@ fi
 
 # control I — VERDICT WIRING. Controls E-H prove the SCANNER can see a defect;
 # none of them proves the defect reaches `bad`. Run the real verdict over the
-# control-E tree (8 malformed rows) and require F to move by exactly one —
+# control-E tree (11 malformed rows) and require F to move by exactly one —
 # then put F back, because this is a control, not a finding. A verdict edited
 # to `echo`/`ok` (turning FAIL into REPORT) stays green under E-H and goes red
-# here. Output is swallowed: the eight rows already printed under control E.
+# here. Output is swallowed: the eleven rows already printed under control E.
 F_BEFORE="${F}"; P_BEFORE="${P}"
 issue_tag_verdict "${CE}" >/dev/null
 CI_DELTA=$((F - F_BEFORE))
@@ -726,7 +741,7 @@ F="${F_BEFORE}"; P="${P_BEFORE}"
 if [ "${CI_DELTA}" -eq 1 ]; then
   ok "CONTROL I: a malformed @issue: tag reaches the verdict as a FAIL (F moved by exactly 1)"
 else
-  bad "CONTROL I: the verdict did NOT fail on 8 malformed @issue: tags (F moved by ${CI_DELTA}, expected 1) — check 5 has become a report"
+  bad "CONTROL I: the verdict did NOT fail on 11 malformed @issue: tags (F moved by ${CI_DELTA}, expected 1) — check 5 has become a report"
 fi
 
 echo

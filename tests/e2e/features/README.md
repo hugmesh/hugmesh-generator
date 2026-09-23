@@ -668,8 +668,10 @@ Scenario: ...
 alphanumeric, then a literal `-`, then digits, nothing else. Enforced, not just
 documented: check 5 of `tests/scripts/test-e2e-gherkin-harness.sh` **fails** the
 build on a malformed `@issue:` tag — `@issue:Generator-549`, `@issue:generator`,
-a bare `@issue:`, `@issue:-549`, `@issue:generator-549x`, `@issue:generator_549`,
-and a capitalised `@Issue:` prefix are all red. It judges **tag lines and
+`@issue:generator-`, a bare `@issue:`, `@issue:-549`, `@issue:-generator-549`,
+`@issue:generator-549x`, `@issue:generator_549`, `@issue:gen_erator-549` and a
+capitalised `@Issue:` prefix are all red (each shape in that list kills a
+specific loosening of the regex; the harness's control E proves it). It judges **tag lines and
 keyword titles only**: a `"@issue:…"` inside a quoted step argument, a table
 cell, a docstring or a comment is text, not a tag, and is never judged
 (`cli/mesh-cli-surfaces.feature` already quotes `@interface:cli` inside a step
