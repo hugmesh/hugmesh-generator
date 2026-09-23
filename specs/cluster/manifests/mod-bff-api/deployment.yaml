@@ -228,18 +228,17 @@ spec:
             - { name: APP_BFF_EXCHANGE_ENABLED, value: "true" }
             # Positive-swap cache TTL = the suspension-bypass window (a cache hit
             # skips admin-bff's suspensionGate() re-check on the exchange above).
-            # The application.yml default is 5000 (5s); this pins it to 0 (cache
-            # OFF, every exchange re-consults the gate). Decision 60
-            # (generator#347, operator 2026-09-18), extending decision 7's
-            # "B: zero window now" (hugmesh-gateway#2, pinned for the gateway in
-            # #398/PR#406) to this service's own mirror of the cache —
-            # admin-bff-api#56 / mod-bff-api#15 asked whether it should follow,
-            # answer "extend it: default 0 in both BFFs". The application
-            # default flips inside hugmesh-mod-bff-api (mod-bff-api#15, a
-            # separate lane/PR); this line states the posture here too,
-            # regardless of image tag, mirroring admin-bff-api/deployment.yaml.
-            # tests/scripts/test-fe-bff-route-lane-parity.sh asserts both lanes
-            # carry this pin at exactly "0".
+            # 0 = cache OFF, every exchange re-consults the gate. Decision 60
+            # (generator#347, operator 2026-09-18) extended decision 7's "B: zero
+            # window now" (hugmesh-gateway#2, pinned for the gateway in
+            # #398/PR#406) to this service's own mirror of the cache: "extend it:
+            # default 0 in both BFFs". The image default is 0 since
+            # hugmesh-mod-bff-api PR #20 (2026-09-18, mod-bff-api#15); image tags
+            # older than that default to 5000 (a 5 s window). This line states
+            # the posture regardless of image tag, mirroring
+            # admin-bff-api/deployment.yaml. tests/scripts/
+            # test-fe-bff-route-lane-parity.sh asserts both lanes carry this pin
+            # as the string "0".
             - { name: APP_BFF_EXCHANGE_CACHE_TTL_MS, value: "0" }
           # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
           # so curl PRESENTS this pod's client cert and validates the server cert
