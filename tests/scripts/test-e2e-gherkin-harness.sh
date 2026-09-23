@@ -62,7 +62,8 @@ P=0; F=0
 # green). A deleted check — `issue_tag_verdict "${FEATURES}"` commented out, say —
 # is invisible to the negative controls and shows up ONLY here. Adding a check or
 # a control moves it: change the number in the same commit, and say so.
-EXPECTED_VERDICTS=19
+# 19 -> 20 on 2026-09-23: control J (real tree judged by path) added.
+EXPECTED_VERDICTS=20
 ok()  { echo "  PASS $*"; P=$((P+1)); }
 bad() { echo "  FAIL $*"; F=$((F+1)); }
 
@@ -456,6 +457,13 @@ split_report() { printf '%s\n' "$2" | grep "^$1"$'\t' | cut -f2- || true; }
 # edit someone makes when a malformed tag blocks their PR.
 issue_tag_verdict() {
   local report malformed_rows fixme_rows fixme_n
+  # Record which tree this verdict judged, so control J can prove the REAL tree
+  # was among them. Kept inside the function, away from the call site: the
+  # verdict census below catches a DELETED call, but not one re-pointed at an
+  # empty directory (measured 2026-09-23: `issue_tag_verdict "${GEN}"` passed
+  # vacuously, 20 passed, exit 0). Exact-path membership catches both.
+  ISSUE_VERDICT_TREES="${ISSUE_VERDICT_TREES:-}
+$1"
   report="$(issue_tag_report "$1")"
   malformed_rows="$(split_report MALFORMED "${report}")"
   fixme_rows="$(split_report FIXME-NO-ISSUE "${report}")"
@@ -759,6 +767,19 @@ if [ "${CI_DELTA}" -eq 1 ]; then
   ok "CONTROL I: a malformed @issue: tag reaches the verdict as a FAIL (F moved by exactly 1)"
 else
   bad "CONTROL I: the verdict did NOT fail on 11 malformed @issue: tags (F moved by ${CI_DELTA}, expected 1) — check 5 has become a report"
+fi
+
+# control J — THE REAL TREE WAS JUDGED, BY PATH. The census below counts
+# verdicts, so it sees the real-tree call deleted — but a call re-pointed at a
+# directory with no .feature in it (`"${GEN}"`, `"${SCRATCH}"`) still yields one
+# green verdict ("every @issue: tag ... matches", vacuously) and the census
+# stays at its number. The verdict records each tree it judged; the real one
+# must be in that record, spelled exactly (grep -Fx, so a parent or sibling
+# path does not satisfy it).
+if printf '%s\n' "${ISSUE_VERDICT_TREES:-}" | grep -Fx -- "${FEATURES}" >/dev/null 2>&1; then
+  ok "CONTROL J: check 5's verdict ran over the real tree (${FEATURES#"${REPO}/"})"
+else
+  bad "CONTROL J: check 5's verdict never ran over the real tree ${FEATURES} — the real-tree call is gone or judges a different directory"
 fi
 
 # ── verdict census: a check that was DELETED never fails ─────────────────────
