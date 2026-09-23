@@ -535,6 +535,12 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # landed 2026-09-18) added the /bff/register/{google,discord} handlers, and the
 # parity suite now ASSERTS has_handler=True for all five (hugmesh-generator#568).
 # The suite count is unchanged: no suite was added or removed by that change.
+# ADDENDUM 2026-09-23, second: the same suite has owned decision 60 since PR #570
+# (2026-09-18) — it also asserts APP_BFF_EXCHANGE_CACHE_TTL_MS == "0" for
+# admin-bff-api and mod-bff-api on both lanes (tests/stack/compose.local.yaml +
+# specs/cluster/manifests/{admin,mod}-bff-api/). Anyone reading the description above as the suite's whole
+# scope and "simplifying" it back to route tables would delete decision 60's only
+# guard. Suite count unchanged.
 #
 # 170 -> RE-MEASURED on 2026-09-17 while merging origin/main into
 # iss/285-vault-brand-remoteref. BOTH sides of this merge said 170 and NEITHER is
