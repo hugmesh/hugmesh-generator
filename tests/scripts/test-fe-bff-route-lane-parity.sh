@@ -498,22 +498,39 @@ TTL_KEY = "APP_BFF_EXCHANGE_CACHE_TTL_MS"
 
 
 def compose_env(doc, service):
-    return dict((doc.get("services") or {}).get(service, {}).get("environment") or {})
+    """The service's environment mapping, or None when no service of that name
+    is in the file. None is a distinct verdict: a renamed service must be
+    reported as NOT FOUND, not as a missing pin on a service that exists."""
+    svc = (doc.get("services") or {}).get(service)
+    if svc is None:
+        return None
+    return dict(svc.get("environment") or {})
 
 
 def cluster_env(doc, container_name):
+    """The container's env as {name: value}, or None when the Deployment has no
+    container of that name (same rule as compose_env: a rename is its own
+    verdict, never a traceback and never ABSENT)."""
     spec = doc["spec"]["template"]["spec"]
-    ctr = next(c for c in spec["containers"] if c["name"] == container_name)
+    ctr = next((c for c in spec["containers"] if c.get("name") == container_name), None)
+    if ctr is None:
+        return None
     return {e["name"]: e.get("value") for e in (ctr.get("env") or [])}
 
 
 def check_ttl_pin(lanes):
-    """{label: env_dict} -> list of failure strings, one per lane that is not
-    pinned. A MISSING key and a PRESENT-BUT-WRONG value are reported
-    differently, so a reader knows immediately whether the line was deleted
-    or edited."""
+    """{label: env_dict_or_None} -> list of failure strings, one per lane that
+    is not pinned. Three verdicts, reported differently so a reader knows what
+    to fix: the service/container was NOT FOUND (None), the key is ABSENT, or
+    the value is PRESENT-BUT-WRONG."""
     fails = []
     for label, env in lanes.items():
+        if env is None:
+            fails.append(f"[{label}] service/container NOT FOUND under the name this "
+                         f"guard looks for — renamed or removed. The pin cannot be "
+                         f"judged until LIVE_LANES names it again; this is not a "
+                         f"verdict on {TTL_KEY} itself")
+            continue
         val = env.get(TTL_KEY)
         if val is None:
             fails.append(f"[{label}] {TTL_KEY} is ABSENT — decision 60 (2026-09-18) "
@@ -558,12 +575,15 @@ def with_lanes(changes):
     return {**LIVE_LANES, **changes}
 
 
+# Both pass a NOT FOUND lane (None) through unchanged: the live check has
+# already failed that lane, and a control over it must not turn into a
+# traceback that hides the tally.
 def without_key(env):
-    return {k: v for k, v in env.items() if k != TTL_KEY}
+    return None if env is None else {k: v for k, v in env.items() if k != TTL_KEY}
 
 
 def with_value(env, value):
-    return {**env, TTL_KEY: value}
+    return None if env is None else {**env, TTL_KEY: value}
 
 
 # Negative controls: each mutation must produce at least one failure.
@@ -579,6 +599,11 @@ TTL_CONTROLS = [
     ("BOTH lanes drift to the SAME non-zero value (parity alone would miss this)",
      lambda: with_lanes({"compose admin-bff-api": with_value(LIVE_LANES["compose admin-bff-api"], "5000"),
                          "cluster admin-bff-api": with_value(LIVE_LANES["cluster admin-bff-api"], "5000")})),
+    # A rename is reported as NOT FOUND, never as ABSENT and never as a traceback.
+    ("compose service renamed (compose_env finds nothing)",
+     lambda: with_lanes({"compose mod-bff-api": compose_env(compose_full, "no such service (control)")})),
+    ("cluster container renamed (cluster_env finds nothing)",
+     lambda: with_lanes({"cluster mod-bff-api": cluster_env(mod_cluster_full, "no such container (control)")})),
 ]
 
 ttl_caught = ttl_survived = 0
