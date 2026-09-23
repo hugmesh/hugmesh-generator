@@ -2190,7 +2190,7 @@ stack-e2e-bdd-gen: ## compile tests/e2e/features/*.feature into runnable Playwri
 # Makefile gate instead, exactly as the anti-decoration guard above is.
 #   env x interface — was UNWIRED on arrival (tests/scripts/test-guard-integrity.sh
 #   check 3 listed it as "suite(s) nothing runs" on this very tree); wired here.
-stack-e2e-bdd-check: ## OFFLINE: verify every .feature generates, binds and is collected (+ the anti-decoration guards)
+stack-e2e-bdd-check: ## STARTS NOTHING (uses a live stack only with an e2e credential present): verify every .feature generates, binds and is collected (+ the anti-decoration guards)
 	@$(E2E_READY) || exit 2
 	$(BDD_RUN) --list --reporter=line
 	bash tests/scripts/test-e2e-gherkin-harness.sh
