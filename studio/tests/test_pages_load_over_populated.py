@@ -93,7 +93,13 @@ def _mesh_cfg(domains=(), users=()):
 
 
 def _names(table, col):
-    return [table.item(r, col).text() for r in range(table.rowCount())]
+    """The ADDED rows' text — row 0 is the mesh's own domain since #494 (display-only,
+    never a cfg.domains row), so it is not one of "the rows a load must replace"."""
+    dom = table.parentWidget()
+    while dom is not None and not hasattr(dom, "is_own_row"):
+        dom = dom.parentWidget()
+    return [table.item(r, col).text() for r in range(table.rowCount())
+            if dom is None or not dom.is_own_row(r)]
 
 
 # ---- Domains: load over a populated table ---------------------------------------
@@ -153,7 +159,7 @@ def test_a_config_with_no_domains_clears_a_populated_domains_table(wiz):
 
     wiz.load_session(WorklistConfig(base=_mesh_cfg()).to_dict())
     advance_to(wiz, wizard_mod.DomainsPage)
-    assert dom.table.rowCount() == 0
+    assert _names(dom.table, _COL_NAME) == []          # only the own row is left
 
 
 # ---- Domains: restart on the SAME cfg keeps in-progress edits --------------------

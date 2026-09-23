@@ -52,6 +52,24 @@ implied:
 Removing a certificate on the Vault step clears every domain that pointed at it
 (VaultPage.validatePage), and this page rebuilds ``cfg.domain_ca`` from the table
 alone, so a renamed or deleted domain cannot leave a stranded entry behind.
+
+ROW 0 IS THE MESH'S OWN DOMAIN (issue #494, reported 2026-09-23: "the checkbox doesn't
+seem to be present on each domain page"). In mesh mode the table now opens with the
+cluster domain as a DISPLAY-ONLY first row — name and title fixed (they are the Network
+and Branding steps' fields), Applies-to / Sign-in / Base CA rendered as the facts they
+are for the apex (every image, the central Casdoor, the mesh default) — so the operator
+sees every domain this mesh serves in one place. It is NOT a ``cfg.domains`` row:
+``validatePage`` skips it, ``_remove`` refuses it, and its services summary mirrors
+``cfg.cluster_domain_services`` (written by the Domain services step, which walks the
+own domain first — ``core.domain_services.implicit_own_domain``). So the ASK-8 guard is
+untouched: an untouched flow emits no ``--domains`` and no manifest ``domains`` entry.
+
+ONE TABLE, TWO HOSTS. The table, its cells and its row rules live on
+:class:`DomainsTableBody`, a plain mixin: this page hosts it in the image flow and
+:class:`DomainsTableWidget` hosts the SAME body on the generate-a-new-local-mesh route
+(``pages/localmesh.py``), where the rows feed ``LocalMeshBootstrapConfig`` instead of
+``ImageConfig``. Nothing is forked: the columns, the cell widgets, the read-only
+services mirror and the own-row rules are one implementation.
 """
 from __future__ import annotations
 
@@ -61,8 +79,8 @@ from ..qt import Qt, QtWidgets
 from ..styles import WARN, muted
 from ...core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain,
                             image_class, superadmin_plane_applies)
-from ...core.domain_services import (normalise_slugs, reviewed_names,
-                                     services_summary, split_services)
+from ...core.domain_services import (implicit_own_domain, normalise_slugs,
+                                     reviewed_names, services_summary, split_services)
 
 _COL_NAME, _COL_TITLE, _COL_SERVICES, _COL_APPLIES = range(4)
 # The per-domain sign-in column (issue #47) is APPENDED so the four pre-existing
@@ -78,6 +96,18 @@ _CA_NONE_LABEL = "None (mesh default)"
 # node-role images take no --domains — the attachment is manifest/provisioning data
 # only, so the menu never implies argv it cannot emit.
 _NODE_NOTE = "  (manifest only — nodes take no --domains)"
+#: The name item's UserRole marker on the mesh's OWN domain row (row 0 in mesh mode).
+#: Tests and both hosts read it through :meth:`DomainsTableBody.is_own_row`.
+_OWN_ROW = "own"
+#: What the own row's three per-domain pickers READ AS for the apex: it attaches to
+#: every image, its sign-in is the mesh's central Casdoor by definition, and it chains
+#: to the mesh default. Rendered as labels, never as pickers with one legal answer.
+_OWN_APPLIES = "All images (this mesh's own domain)"
+_OWN_IDP = "Superdomain Casdoor (the mesh's central one)"
+_OWN_CA = "Mesh default"
+_OWN_TIP = ("This mesh's OWN domain — the cluster domain. It is always served, cannot "
+            "be removed here, and its services are picked on the ‘Domain services’ "
+            "step like every other domain's (it is that step's first page).")
 
 # (schema value, combo label, per-item tooltip) for the Sign-in column. The DATA
 # role carries the schema value — labels are free to change, tests read the data.
@@ -242,61 +272,25 @@ class _ServicesCell(QtWidgets.QLabel):
         return list(self._slugs)
 
 
-class DomainsPage(QtWidgets.QWizardPage):
-    """Superadmin: define domains."""
-    def __init__(self, wiz):
-        super().__init__()
-        self.wiz = wiz
-        #: The CONFIGURATION OBJECT this table was last filled from (#542). Identity,
-        #: not equality: ``load_config`` / ``load_session`` / ``start_build_from_session``
-        #: replace ``wiz.cfg`` wholesale and then call ``restart()``, which re-runs
-        #: ``initializePage`` — and a table that is already populated must be refilled
-        #: from the NEW configuration, not left holding the previous flow's rows.
-        #: Leaving them is not a display bug: ``validatePage`` rebuilds ``cfg.domains``
-        #: from the table, so the loaded domains are ERASED from the configuration, and
-        #: the #495 per-domain services gate can never refuse a domain that is no longer
-        #: in ``cfg.domains``. A ``restart()`` on the SAME object keeps today's
-        #: behaviour (in-progress edits survive), which is what this identity check
-        #: buys over an unconditional refill. Same idiom as
-        #: ``pages/domain_services.py``, for the same reason.
-        self._cfg_seen = None
-        self.setTitle("Domains & their services")
-        self.setSubTitle(
-            "Beyond the superadmin apex, define the OTHER domains this mesh "
-            "hosts. Which optional services each one provides is picked on the next "
-            "step, which gives every domain its own page; this table SHOWS what is "
-            "recorded. "
-            "Every domain you add here is given its own default admin with a "
-            "generated random password (surfaced on the next, Users, step).")
-        lay = QtWidgets.QVBoxLayout(self)
-        # read-only header naming the Tailscale root domain (spec 5): all mesh nodes
-        # join it, it is never a table row and is never attachable.
-        self.header = QtWidgets.QLabel("")
-        self.header.setWordWrap(True)
-        self.header.setTextFormat(Qt.TextFormat.RichText)
-        lay.addWidget(self.header)
-        # STEP 5 clarity: what the two editable columns are FOR (the 'Applies to' column
-        # is mesh-only and hidden in cloud — see initializePage).
-        self.table_help = QtWidgets.QLabel(
-            "‘Title’ = this domain's display name, read by cluster provisioning from "
-            "the mesh manifest — it is not shown anywhere on a cloud build. ‘Optional "
-            "services’ = the per-domain service slugs this domain provides, READ-ONLY "
-            "here: they are picked on the ‘Domain services’ step that follows, which "
-            "gives every domain its own service page (empty = the cluster-wide set "
-            "applies, which is a real answer and not the same as a domain nobody has "
-            "configured — a build or a docker mesh start refuses while any domain is "
-            "unconfigured, and names it); these slugs are provisioning input carried "
-            "in the mesh manifest — they are not baked into the image, which ships the "
-            "services you chose on the services step. ‘Applies to’ = which built node images the domain attaches "
-            "to. ‘Sign-in’ = which Casdoor serves this domain's login: Superdomain "
-            "(its users sign in via the mesh's central Casdoor — the default) or Own "
-            "(this domain runs its own Casdoor instance, provisioned just for it). "
-            "‘Base CA’ = which certificate authority from the Secrets store step this "
-            "domain chains to; it is recorded with your config and consumed by nothing "
-            "yet, and the list it offers is the one you fill in on that later step.")
-        self.table_help.setWordWrap(True)
-        self.table_help.setStyleSheet("color: gray;")
-        lay.addWidget(self.table_help)
+class DomainsTableBody:
+    """The domains TABLE — columns, cell widgets, row rules — as a plain-Python mixin.
+
+    A host calls :meth:`_init_table` with the layout to fill and overrides the hooks
+    (:meth:`_cfg`, :meth:`_entries`, :meth:`_certs`, :meth:`_own_name_editable`).
+    Every widget and every verb lives directly on the host object — no delegation —
+    so ``DomainsPage`` keeps the attributes its tests read (``table``, ``_add``,
+    ``_remove``, ``_refresh_*``) and ``DomainsTableWidget`` gets the same ones.
+
+    THE OWN ROW. :meth:`_add_own` inserts the mesh's own domain as a display-only
+    row 0 (marked ``_OWN_ROW`` on its name item); :meth:`rows` never returns it,
+    :meth:`_remove` refuses it, and :meth:`_refresh_services_cells` mirrors its
+    services from the host's ``cluster_domain_services`` (an ImageConfig) or from its
+    own ``Domain`` row (the local-mesh state, where it IS a real row — see
+    ``core/local_mesh_domains.py``)."""
+
+    def _init_table(self, lay, *, with_applies: bool = True, with_ca: bool = True) -> None:
+        self._with_applies = with_applies
+        self._with_ca = with_ca
         # 'Optional services' fills Domain.optional_services (G19) — the per-domain
         # service slugs consumed by cluster provisioning via the mesh manifest (empty =
         # the cluster-wide set applies). Since #495 it is READ-ONLY (_ServicesCell):
@@ -343,6 +337,11 @@ class DomainsPage(QtWidgets.QWizardPage):
             "the PEM files on the Secrets store step (later in this wizard); until "
             "you have, every row here offers only ‘None’.")
         self.table.horizontalHeader().setStretchLastSection(True)
+        # A host with no worklist (the local docker mesh) hides Applies-to; one with
+        # no Secrets-store step hides Base CA — the column would offer one answer
+        # ("None") and name a step the route does not have.
+        self.table.setColumnHidden(_COL_APPLIES, not with_applies)
+        self.table.setColumnHidden(_COL_CA, not with_ca)
         lay.addWidget(self.table)
         btns = QtWidgets.QHBoxLayout()
         add = QtWidgets.QPushButton("Add domain")
@@ -351,39 +350,37 @@ class DomainsPage(QtWidgets.QWizardPage):
         rem.clicked.connect(self._remove)
         btns.addWidget(add); btns.addWidget(rem); btns.addStretch(1)
         lay.addLayout(btns)
-        # STEP 6 surfacing: each domain gets a default admin whose credentials are
-        # generated + presented at provisioning — not entered or stored here.
-        self.admin_note = QtWidgets.QLabel(
-            "Each domain automatically gets a default admin account. Its random "
-            "password is generated and shown at provisioning time — you never type or "
-            "store it here. Add named users to each domain on the next step.")
-        self.admin_note.setWordWrap(True)
-        self.admin_note.setStyleSheet("color: gray;")
-        lay.addWidget(self.admin_note)
-        # Re-offer the base-CA list whenever this page becomes current (#335).
-        # initializePage is NOT enough: Qt calls it when a page is entered going
-        # FORWARD, and the operator's route here is the other one — Domains, on to
-        # the Secrets store, add a PEM, BACK. Qt fires no initializePage on that, so
-        # without this the picker would still offer only "None" and the column would
-        # look broken for exactly the operator who had just filled the list.
-        # currentIdChanged fires on every transition in both directions; the guard
-        # keeps the work to the one that lands here. Rebuilding combos only — no
-        # dialog, no cfg write, nothing page validation can reach.
-        wiz.currentIdChanged.connect(self._on_page_changed)
+        # Inline, never a modal: where "that row cannot be removed" is said.
+        self.row_note = QtWidgets.QLabel("")
+        self.row_note.setWordWrap(True)
+        self.row_note.setStyleSheet(f"color: {WARN};")
+        self.row_note.setVisible(False)
+        lay.addWidget(self.row_note)
 
-    def _on_page_changed(self, _page_id=None):
-        if self.wiz.currentPage() is self:
-            self._refresh_base_ca()
-            self._refresh_services_cells()
+    # ── host hooks ────────────────────────────────────────────────────────────────
+    def _cfg(self):
+        """The object the reviewed markers and the own domain's services are read
+        off (an ImageConfig, or a LocalMeshDomains). None renders every row as
+        unconfigured."""
+        return None
 
     def _entries(self):
         """The current worklist entries (mesh); empty when no worklist is set."""
-        wl = getattr(self.wiz, "worklist", None)
-        return list(wl.entries) if wl is not None else []
+        return []
 
     def _certs(self):
         """The certificate paths the Vault step has collected ([] before it runs)."""
-        return list(getattr(self.wiz.cfg, "base_ca_certs", None) or [])
+        return []
+
+    def _own_name_editable(self) -> bool:
+        """Whether the own row's NAME may be typed. False on the image flow (it is
+        the Network step's cluster domain); True on a prod local mesh, where row 0
+        IS the public apex the operator must name."""
+        return False
+
+    # ── rows ──────────────────────────────────────────────────────────────────────
+    def _reviewed(self) -> set[str]:
+        return reviewed_names(self._cfg())
 
     def _add(self, name="", title="", services="", images=None,
              idp=DOMAIN_IDP_SUPERDOMAIN, base_ca=""):
@@ -393,15 +390,58 @@ class DomainsPage(QtWidgets.QWizardPage):
         self.table.setItem(r, _COL_TITLE, QtWidgets.QTableWidgetItem(title))
         self.table.setCellWidget(
             r, _COL_SERVICES,
-            _ServicesCell(services, reviewed=(name in reviewed_names(self.wiz.cfg))))
+            _ServicesCell(services, reviewed=(name in self._reviewed())))
         self.table.setCellWidget(r, _COL_APPLIES,
                                  _AppliesToButton(self._entries(), images or []))
         self.table.setCellWidget(r, _COL_IDP, _IdpCombo(idp))
         self.table.setCellWidget(r, _COL_CA, _BaseCaCombo(self._certs(), base_ca))
 
+    def _add_own(self, name: str, title: str = "", services=None,
+                 reviewed: bool = False) -> None:
+        """Insert the mesh's OWN domain as display-only row 0 (see the class doc)."""
+        self.table.insertRow(0)
+        item = QtWidgets.QTableWidgetItem(name)
+        item.setData(Qt.ItemDataRole.UserRole, _OWN_ROW)
+        item.setToolTip(_OWN_TIP)
+        if not self._own_name_editable():
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.table.setItem(0, _COL_NAME, item)
+        titem = QtWidgets.QTableWidgetItem(title or "")
+        titem.setFlags(titem.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        titem.setToolTip("The brand title — set on the Branding step, shown here.")
+        self.table.setItem(0, _COL_TITLE, titem)
+        self.table.setCellWidget(0, _COL_SERVICES,
+                                 _ServicesCell(services, reviewed=reviewed))
+        for col, text in ((_COL_APPLIES, _OWN_APPLIES), (_COL_IDP, _OWN_IDP),
+                          (_COL_CA, _OWN_CA)):
+            lab = QtWidgets.QLabel(text)
+            lab.setStyleSheet(muted())
+            lab.setToolTip(_OWN_TIP)
+            self.table.setCellWidget(0, col, lab)
+
+    def is_own_row(self, r: int) -> bool:
+        item = self.table.item(r, _COL_NAME)
+        return bool(item) and item.data(Qt.ItemDataRole.UserRole) == _OWN_ROW
+
+    def own_row_name(self) -> str:
+        """The own row's name as typed (editable hosts), or "" when there is none."""
+        for r in range(self.table.rowCount()):
+            if self.is_own_row(r):
+                item = self.table.item(r, _COL_NAME)
+                return item.text().strip() if item else ""
+        return ""
+
     def _remove(self):
+        refused = False
         for idx in sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True):
+            if self.is_own_row(idx):
+                refused = True
+                continue
             self.table.removeRow(idx)
+        self.row_note.setText(
+            "Row 0 is this mesh's own domain — it is always served and cannot be "
+            "removed here." if refused else "")
+        self.row_note.setVisible(refused)
 
     def _refresh_applies_to(self):
         """Rebuild every row's applies-to menu against the current worklist (back-nav:
@@ -427,23 +467,164 @@ class DomainsPage(QtWidgets.QWizardPage):
                     r, _COL_CA, _BaseCaCombo(self._certs(), combo.selected_ca()))
 
     def _refresh_services_cells(self):
-        """Re-read every row's services cell from cfg (#495).
+        """Re-read every row's services cell from the host's config (#495).
 
-        The Domain services step runs AFTER this page and writes the per-domain
-        selection back onto ``cfg.domains``; ``initializePage`` only fills the table
-        when it is empty, so without this a Back into this page would show the
-        pre-edit slugs and the 'not configured yet' state of a domain the operator had
-        just configured. currentIdChanged already brings us here in both directions —
-        this is the same hook the base-CA column uses, and for the same reason."""
-        by_name = {d.name: d for d in (self.wiz.cfg.domains or [])}
-        done = reviewed_names(self.wiz.cfg)
+        The Domain services step runs AFTER this table and writes the per-domain
+        selection back onto the rows (and the own domain's onto
+        ``cluster_domain_services``); ``initializePage`` only fills the table when it
+        is empty, so without this a Back into this page would show the pre-edit slugs
+        and the 'not configured yet' state of a domain the operator had just
+        configured."""
+        cfg = self._cfg()
+        by_name = {(getattr(d, "name", "") or "").strip(): d
+                   for d in (getattr(cfg, "domains", None) or [])}
+        done = self._reviewed()
         for r in range(self.table.rowCount()):
             item = self.table.item(r, _COL_NAME)
             name = item.text().strip() if item else ""
             cell = self.table.cellWidget(r, _COL_SERVICES)
+            if not isinstance(cell, _ServicesCell):
+                continue
             dom = by_name.get(name)
-            if isinstance(cell, _ServicesCell) and dom is not None:
+            if dom is not None:
                 cell.set_slugs(dom.optional_services, reviewed=(name in done))
+            elif self.is_own_row(r):
+                cell.set_slugs(getattr(cfg, "cluster_domain_services", None),
+                               reviewed=(name in done))
+
+    def rows(self) -> "tuple[list[Domain], dict[str, str]]":
+        """The table's ADDED domains as ``Domain`` rows (never the own row), plus the
+        per-domain base-CA choices. Services come from the host's config BY NAME when
+        it knows the domain (the services step is the writer), and from the cell only
+        for a row the config does not know yet — see ``DomainsPage.validatePage``."""
+        cfg = self._cfg()
+        recorded = {(getattr(d, "name", "") or "").strip(): list(d.optional_services)
+                    for d in (getattr(cfg, "domains", None) or [])
+                    if (getattr(d, "name", "") or "").strip()}
+        out: list[Domain] = []
+        base_ca: dict[str, str] = {}
+        for r in range(self.table.rowCount()):
+            if self.is_own_row(r):
+                continue
+            name = self.table.item(r, _COL_NAME).text().strip() if self.table.item(r, _COL_NAME) else ""
+            if not name:
+                continue
+            title = self.table.item(r, _COL_TITLE).text().strip() if self.table.item(r, _COL_TITLE) else ""
+            svc_cell = self.table.cellWidget(r, _COL_SERVICES)
+            services = recorded.get(name)
+            if services is None:
+                services = (svc_cell.selected_slugs()
+                            if isinstance(svc_cell, _ServicesCell) else [])
+            btn = self.table.cellWidget(r, _COL_APPLIES)
+            images = btn.selected_ids() if isinstance(btn, _AppliesToButton) else []
+            combo = self.table.cellWidget(r, _COL_IDP)
+            idp = (combo.selected_idp() if isinstance(combo, _IdpCombo)
+                   else DOMAIN_IDP_SUPERDOMAIN)
+            ca_combo = self.table.cellWidget(r, _COL_CA)
+            ca = ca_combo.selected_ca() if isinstance(ca_combo, _BaseCaCombo) else ""
+            if ca:
+                base_ca[name] = ca
+            out.append(Domain(name=name, title=title or name,
+                              optional_services=services, images=images, idp=idp))
+        return out, base_ca
+
+
+class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
+    """Superadmin: define domains."""
+    def __init__(self, wiz):
+        super().__init__()
+        self.wiz = wiz
+        #: The CONFIGURATION OBJECT this table was last filled from (#542). Identity,
+        #: not equality: ``load_config`` / ``load_session`` / ``start_build_from_session``
+        #: replace ``wiz.cfg`` wholesale and then call ``restart()``, which re-runs
+        #: ``initializePage`` — and a table that is already populated must be refilled
+        #: from the NEW configuration, not left holding the previous flow's rows.
+        #: Leaving them is not a display bug: ``validatePage`` rebuilds ``cfg.domains``
+        #: from the table, so the loaded domains are ERASED from the configuration, and
+        #: the #495 per-domain services gate can never refuse a domain that is no longer
+        #: in ``cfg.domains``. A ``restart()`` on the SAME object keeps today's
+        #: behaviour (in-progress edits survive), which is what this identity check
+        #: buys over an unconditional refill. Same idiom as
+        #: ``pages/domain_services.py``, for the same reason.
+        self._cfg_seen = None
+        self.setTitle("Domains & their services")
+        self.setSubTitle(
+            "Every domain this mesh serves: its own domain first, then the OTHER "
+            "domains you add. Which optional services each one provides is picked on "
+            "the next step, which gives every domain its own page; this table SHOWS "
+            "what is recorded. "
+            "Every domain you add here is given its own default admin with a "
+            "generated random password (surfaced on the next, Users, step).")
+        lay = QtWidgets.QVBoxLayout(self)
+        # read-only header naming the Tailscale root domain (spec 5): all mesh nodes
+        # join it, it is never a table row and is never attachable.
+        self.header = QtWidgets.QLabel("")
+        self.header.setWordWrap(True)
+        self.header.setTextFormat(Qt.TextFormat.RichText)
+        lay.addWidget(self.header)
+        # STEP 5 clarity: what the two editable columns are FOR (the 'Applies to' column
+        # is mesh-only and hidden in cloud — see initializePage).
+        self.table_help = QtWidgets.QLabel(
+            "Row 0 is this mesh's OWN domain (the cluster domain from the Network "
+            "step): always served, never removable, its services picked on the next "
+            "step like every other domain's. "
+            "‘Title’ = this domain's display name, read by cluster provisioning from "
+            "the mesh manifest — it is not shown anywhere on a cloud build. ‘Optional "
+            "services’ = the per-domain service slugs this domain provides, READ-ONLY "
+            "here: they are picked on the ‘Domain services’ step that follows, which "
+            "gives every domain its own service page (empty = the cluster-wide set "
+            "applies, which is a real answer and not the same as a domain nobody has "
+            "configured — a build or a docker mesh start refuses while any domain is "
+            "unconfigured, and names it); these slugs are provisioning input carried "
+            "in the mesh manifest — they are not baked into the image, which ships the "
+            "services you chose on the services step. ‘Applies to’ = which built node images the domain attaches "
+            "to. ‘Sign-in’ = which Casdoor serves this domain's login: Superdomain "
+            "(its users sign in via the mesh's central Casdoor — the default) or Own "
+            "(this domain runs its own Casdoor instance, provisioned just for it). "
+            "‘Base CA’ = which certificate authority from the Secrets store step this "
+            "domain chains to; it is recorded with your config and consumed by nothing "
+            "yet, and the list it offers is the one you fill in on that later step.")
+        self.table_help.setWordWrap(True)
+        self.table_help.setStyleSheet("color: gray;")
+        lay.addWidget(self.table_help)
+        self._init_table(lay)
+        # STEP 6 surfacing: each domain gets a default admin whose credentials are
+        # generated + presented at provisioning — not entered or stored here.
+        self.admin_note = QtWidgets.QLabel(
+            "Each domain automatically gets a default admin account. Its random "
+            "password is generated and shown at provisioning time — you never type or "
+            "store it here. Add named users to each domain on the next step.")
+        self.admin_note.setWordWrap(True)
+        self.admin_note.setStyleSheet("color: gray;")
+        lay.addWidget(self.admin_note)
+        # Re-offer the base-CA list whenever this page becomes current (#335).
+        # initializePage is NOT enough: Qt calls it when a page is entered going
+        # FORWARD, and the operator's route here is the other one — Domains, on to
+        # the Secrets store, add a PEM, BACK. Qt fires no initializePage on that, so
+        # without this the picker would still offer only "None" and the column would
+        # look broken for exactly the operator who had just filled the list.
+        # currentIdChanged fires on every transition in both directions; the guard
+        # keeps the work to the one that lands here. Rebuilding combos only — no
+        # dialog, no cfg write, nothing page validation can reach.
+        wiz.currentIdChanged.connect(self._on_page_changed)
+
+    def _on_page_changed(self, _page_id=None):
+        if self.wiz.currentPage() is self:
+            self._refresh_base_ca()
+            self._refresh_services_cells()
+
+    # ── body hooks ────────────────────────────────────────────────────────────────
+    def _cfg(self):
+        return self.wiz.cfg
+
+    def _entries(self):
+        """The current worklist entries (mesh); empty when no worklist is set."""
+        wl = getattr(self.wiz, "worklist", None)
+        return list(wl.entries) if wl is not None else []
+
+    def _certs(self):
+        """The certificate paths the Vault step has collected ([] before it runs)."""
+        return list(getattr(self.wiz.cfg, "base_ca_certs", None) or [])
 
     def applies_to(self, cfg) -> bool:
         """Dynamic-skip predicate (wizard.nextId): a cloud NODE image emits no
@@ -490,17 +671,20 @@ class DomainsPage(QtWidgets.QWizardPage):
         # which is the absent-key default — emission-neutral either way.
         self.table.setColumnHidden(_COL_CA, c.mode != "mesh")
         if self.table.rowCount() == 0:
+            # ROW 0: the mesh's own domain, display-only (mesh mode; see module doc).
+            # A cfg.domains row already named after it makes it a real row instead.
+            own = implicit_own_domain(c)
+            if own:
+                self._add_own(own, c.brand_title, c.cluster_domain_services,
+                              reviewed=(own in reviewed_names(c)))
             for d in c.domains:
                 self._add(d.name, d.title, list(d.optional_services), d.images,
                           d.idp, (c.domain_ca or {}).get(d.name, ""))
             # default prefill (spec 4): seed row 0 with the cluster domain so a fresh
             # cloud superadmin starts from a valid PRIMARY domain (table position =
-            # first --domains element). Scoped to CLOUD: mesh prefill is spec-4 too, but
-            # WS-FLOWUI's test_switching_back_to_standalone_clears_stranded_admin_state
-            # pins a fresh mesh Domains + one add to exactly ["acme.example"], so mesh
-            # prefill can only land once that test expects the prefilled cluster-domain
-            # row (handoff). In mesh a superadmin defines domains against the worklist
-            # images directly, so the omission does not block the attach flow.
+            # first --domains element). Scoped to CLOUD: in mesh the own domain is the
+            # display-only row above, never a --domains element, so the manifest and
+            # argv of an untouched mesh flow stay byte-identical (ASK 8).
             if not c.domains and c.mode == "cloud":
                 self._add(c.cluster_domain, c.brand_title, "", [])
         else:
@@ -525,35 +709,11 @@ class DomainsPage(QtWidgets.QWizardPage):
 
         So the slugs come from ``cfg`` BY NAME whenever that domain is still there,
         and from the cell only for a row cfg does not know yet — a row just added, or
-        renamed, where the cell is the only carrier. The table stays the sole writer of
-        WHICH domains exist, their titles, images, sign-in and base CA."""
-        out = []
-        base_ca: dict[str, str] = {}
-        # snapshot BEFORE the rebuild: cfg.domains is replaced at the end of this method
-        recorded = {(getattr(d, "name", "") or "").strip(): list(d.optional_services)
-                    for d in (self.wiz.cfg.domains or [])
-                    if (getattr(d, "name", "") or "").strip()}
-        for r in range(self.table.rowCount()):
-            name = self.table.item(r, _COL_NAME).text().strip() if self.table.item(r, _COL_NAME) else ""
-            if not name:
-                continue
-            title = self.table.item(r, _COL_TITLE).text().strip() if self.table.item(r, _COL_TITLE) else ""
-            svc_cell = self.table.cellWidget(r, _COL_SERVICES)
-            services = recorded.get(name)
-            if services is None:
-                services = (svc_cell.selected_slugs()
-                            if isinstance(svc_cell, _ServicesCell) else [])
-            btn = self.table.cellWidget(r, _COL_APPLIES)
-            images = btn.selected_ids() if isinstance(btn, _AppliesToButton) else []
-            combo = self.table.cellWidget(r, _COL_IDP)
-            idp = (combo.selected_idp() if isinstance(combo, _IdpCombo)
-                   else DOMAIN_IDP_SUPERDOMAIN)
-            ca_combo = self.table.cellWidget(r, _COL_CA)
-            ca = ca_combo.selected_ca() if isinstance(ca_combo, _BaseCaCombo) else ""
-            if ca:
-                base_ca[name] = ca
-            out.append(Domain(name=name, title=title or name,
-                              optional_services=services, images=images, idp=idp))
+        renamed, where the cell is the only carrier (``DomainsTableBody.rows``). The
+        table stays the sole writer of WHICH domains exist, their titles, images,
+        sign-in and base CA. The own row (row 0) is never written: it is not a
+        ``domains`` row, so an untouched mesh flow still emits none."""
+        out, base_ca = self.rows()
         self.wiz.cfg.domains = out
         # REBUILT from the table, never merged into what was there: a renamed or
         # deleted domain must not leave a stranded entry, and an untouched table
@@ -565,3 +725,52 @@ class DomainsPage(QtWidgets.QWizardPage):
         # a page change firing.
         self._refresh_services_cells()
         return True
+
+
+class DomainsTableWidget(QtWidgets.QWidget, DomainsTableBody):
+    """The SAME table as a plain widget, for a host that is not the image flow's
+    wizard page — the generate-a-new-local-mesh route embeds it on its ‘Domains’ step
+    (``pages/localmesh.py``) over a ``core.local_mesh_domains.LocalMeshDomains``.
+
+    ``cfg`` is a callable returning that state; ``own_name_editable`` one returning
+    whether row 0's name may be typed (a prod local mesh: row 0 IS the public apex).
+    No worklist and no Secrets-store step on that route, so Applies-to and Base CA
+    are hidden rather than offered with one legal answer."""
+
+    def __init__(self, cfg, own_name_editable=None, parent=None):
+        super().__init__(parent)
+        self._cfg_fn = cfg
+        self._own_editable_fn = own_name_editable
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self._init_table(lay, with_applies=False, with_ca=False)
+
+    def _cfg(self):
+        return self._cfg_fn() if self._cfg_fn else None
+
+    def _own_name_editable(self) -> bool:
+        return bool(self._own_editable_fn()) if self._own_editable_fn else False
+
+    def fill(self, domains, own_name: str, own_title: str = "") -> None:
+        """Rebuild the table from ``domains`` (Domain rows; the one named
+        ``own_name`` becomes the display-only row 0, or an empty own row is added
+        when none is)."""
+        self.table.setRowCount(0)
+        self.row_note.setVisible(False)
+        done = self._reviewed()
+        own_name = (own_name or "").strip()
+        domains = list(domains)
+        # The own row is ROW 0 of the state by construction (seed / commit / apply all
+        # keep it there), matched by name so a blank prod apex is still the own row
+        # and never a second, added row.
+        own_row = (domains[0] if domains
+                   and (domains[0].name or "").strip() == own_name else None)
+        if own_row is not None:
+            self._add_own(own_name, own_row.title or own_title, own_row.optional_services,
+                          reviewed=(own_name in done))
+        else:
+            self._add_own(own_name, own_title, None, reviewed=(own_name in done))
+        for d in domains:
+            if d is own_row:
+                continue
+            self._add(d.name, d.title, list(d.optional_services), [], d.idp)

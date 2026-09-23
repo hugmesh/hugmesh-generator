@@ -22,13 +22,39 @@ path into wizard steps:
     an existing mesh with a key, card two GENERATE a new mesh.
   - JOIN is one terminal step (``LocalMeshJoinPage``): a tailnet/headscale auth key +
     node knobs into a LocalMeshConfig, driving LocalMeshNode start/stop/logs.
-  - GENERATE & START a NEW local mesh FROM SCRATCH is seven steps, in the order this
-    surface has always had its sections — Environment & brand -> Repo source ->
-    Services -> Identity provider -> Mesh overlay (prod only) -> Saved meshes &
-    review -> Bring-up & monitor. It mints ALL credentials and brings up the full
-    platform stack seeded with a fresh superadmin, via LocalMeshBootstrap. Nothing
-    runs on mere selection: the read-only plan preview on the review step says what
-    an ``up`` will do, and the button on the last step is what runs it.
+  - GENERATE & START a NEW local mesh FROM SCRATCH is nine steps, in the order this
+    surface has always had its sections — Environment & brand -> Domains -> Domain
+    services -> Repo source -> Services -> Identity provider -> Mesh overlay (prod
+    only) -> Saved meshes & review -> Bring-up & monitor. It mints ALL credentials
+    and brings up the full platform stack seeded with a fresh superadmin, via
+    LocalMeshBootstrap. Nothing runs on mere selection: the read-only plan preview
+    on the review step says what an ``up`` will do, and the button on the last step
+    is what runs it.
+
+DOMAINS ON THIS ROUTE (issue #494; reported 2026-09-23: "no gui based multidomain
+config in the studio for the generate new mesh path"). The route used to carry ONE
+domain field (``boot_domain``, on the prod-only overlay step) and no per-domain
+services, so the #495 gate ``_bootstrap_up`` calls could never bite here. Now:
+  - ``self.mesh_domains`` (core/local_mesh_domains.LocalMeshDomains) is the domain
+    state — kept OFF wiz.cfg, because this branch emits zero ImageConfig fields and
+    wiz.cfg.mode is an image mode on which the gate would be a no-op;
+  - the ‘Domains’ step hosts the SAME table as the image flow (pages/domains.py
+    DomainsTableWidget): row 0 is this mesh's own domain — the brand-default apex on a
+    test mesh (fixed), the public apex on a prod one (typed HERE; the overlay step's
+    Domain field is a read-only mirror of it, so there are never two disagreeing
+    domain fields) — and every added row's Sign-in=own feeds
+    ``LocalMeshBootstrapConfig.own_idp_domains`` (one Casdoor each, core/own_casdoor);
+  - the ‘Domain services’ step hosts the SAME per-domain services stepper as the
+    image flow (pages/domain_services.DomainServicesWidget), one domain at a time;
+    the selection is RECORDED with the mesh (``LocalMeshBootstrapConfig.domains``)
+    and is NOT what picks the compose profiles — the mesh-wide Services step is;
+  - ``_domain_services_refusal`` — the ONE seam both start doors call — gates
+    ``mesh_domains`` with a remedy naming these two steps, then wiz.cfg as before.
+  - EMISSION NEUTRALITY: a flow that only clicks Next through both steps collects a
+    LocalMeshBootstrapConfig byte-identical to one from before the steps existed
+    (row 0 is default-shaped, so it is not recorded; no own-IdP rows; the test-env
+    apex is never written into ``boot_domain``). Pinned by
+    tests/test_localmesh_domains_steps.py.
 
 ONE PAGE STILL OWNS EVERYTHING. ``LocalMeshPage`` builds the whole surface in
 ``__init__`` exactly as it always did and keeps each block in ``self.sections``;
@@ -90,7 +116,10 @@ from ..choice_cards import ChoiceCard, ChoiceCardGroup
 from ..flow_layout import flow_box
 from ...core import saved_meshes, vaults
 from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
-from ...core.domain_services import ACTION_MESH_START, gate_reason
+from ...core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
+from ...core.domain_services import ACTION_MESH_START, gate_reason, record_reviewed
+from ...core.local_mesh_domains import (
+    LOCAL_MESH_REMEDY, LocalMeshDomains, bootstrap_domain_records, own_idp_names)
 from ...core.e2e_catalogue import Catalogue, load_catalogue
 from ...core.egress_conf import validate_egress_conf
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
@@ -116,6 +145,8 @@ from ...core.instance import state_dir
 from ...core.stage_tracker import StageTracker
 from ...core import e2e_environments
 from ._credentials_dialog import CredentialsDialog
+from .domain_services import DomainServicesWidget
+from .domains import DomainsTableWidget
 from ._mesh_monitor_widget import MeshMonitorProbe, MeshMonitorWidget, MeshScaleWorker
 from ._add_user_dialog import AddUserDialog
 from ._saved_meshes_widget import SavedMeshProbe, SavedMeshesWidget
@@ -476,6 +507,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.node = LocalMeshNode(self.generator_dir, LocalMeshConfig())
         self.boot = LocalMeshBootstrap(self.generator_dir, LocalMeshBootstrapConfig())
         self.worker: _MeshWorker | None = None
+        # THE DOMAINS OF THIS MESH (#494) — see the module docstring. Empty until the
+        # Domains step seeds row 0 on its first visit (never here: a host with no
+        # steps, and a saved-mesh Start on a flow that never opened the step, keep
+        # passing the gate exactly as before).
+        self.mesh_domains = LocalMeshDomains()
         # THE CONTROLLER HANDLE. Every local-mesh step page (LocalMeshChoicePage and
         # the _LocalMeshStep subclasses at the bottom of this module) finds this page
         # here, and only at initializePage time — so the wizard may construct the steps
@@ -539,6 +575,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.sections: dict[str, QtWidgets.QWidget] = {
             "join": self._build_join_section(),
             "env": self._build_env_section(),
+            "domains": self._build_domains_section(),
+            "domain_services": self._build_domain_services_section(),
             "source": self._build_source_section(),
             "services": self._build_services_section(),
             "idp": self._build_idp_section(),
@@ -939,6 +977,123 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         lay.addStretch(1)
         return w
 
+    # ── DOMAINS + DOMAIN SERVICES sections (#494) ────────────────────────────────
+    def _build_domains_section(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.domains_help = QtWidgets.QLabel(
+            "Row 0 is this mesh's OWN domain: on a test mesh the brand-default apex "
+            "(fixed — a test mesh publishes nothing), on a prod mesh the public apex, "
+            "typed here (it is what the minted issuer and superadmin align with; the "
+            "Mesh overlay step shows it read-only). Add every OTHER domain this mesh "
+            "serves below. ‘Sign-in’ = which Casdoor serves that domain: Superdomain "
+            "(the mesh's central one) or Own (a Casdoor instance of its own is brought "
+            "up beside the central one — host ports 8001, 8002, … in row order). "
+            "‘Optional services’ is READ-ONLY here: every domain — this row 0 "
+            "included — gets its own page on the ‘Domain services’ step that follows, "
+            "and a mesh start refuses while any domain here has never been through "
+            "it, naming the domain.")
+        self.domains_help.setWordWrap(True)
+        self.domains_help.setStyleSheet("color: gray;")
+        lay.addWidget(self.domains_help)
+        self.domains_table = DomainsTableWidget(
+            cfg=lambda: self.mesh_domains,
+            own_name_editable=lambda: self.env_prod.isChecked())
+        lay.addWidget(self.domains_table)
+        # Inline (never a modal): a prod mesh whose own domain is still blank.
+        self.domains_note = QtWidgets.QLabel("")
+        self.domains_note.setWordWrap(True)
+        self.domains_note.setStyleSheet("color: #c62828;")
+        self.domains_note.setVisible(False)
+        lay.addWidget(self.domains_note)
+        return w
+
+    def _build_domain_services_section(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        # The SAME body as the image flow's DomainServicesPage. No mesh-wide config to
+        # read the "not domain-scoped" table's state column from on this route (that
+        # column reads an ImageConfig's services; the local mesh's live on the
+        # Services step, two steps on), so scope_cfg stays None and the step subtitle
+        # says so rather than leaving the column looking broken.
+        self.domain_services = DomainServicesWidget(
+            scope_cfg=None, entries=None,
+            lane_note=("ON THIS LOCAL DOCKER MESH: the per-domain selection is "
+                       "recorded with the mesh (and shown in the plan) — it is NOT "
+                       "what decides which compose profiles come up; the mesh-wide "
+                       "‘Services’ step two steps on is."))
+        lay.addWidget(self.domain_services)
+        return w
+
+    def _own_domain_name(self) -> str:
+        """The mesh's own domain as the Domains step shows it in row 0: the resolved
+        apex (``LocalMeshBootstrapConfig.resolved_domain``: the typed cluster domain,
+        else the brand default) on a test mesh; on a prod mesh exactly what
+        ``boot_domain`` holds — possibly "" until the operator types it here."""
+        typed = self.boot_domain.text().strip()
+        if self.env_prod.isChecked():
+            return typed
+        return typed or LocalMeshBootstrapConfig().resolved_domain()
+
+    def _seed_domains(self) -> None:
+        """Enter the Domains step: make row 0 the mesh's own domain and fill the table.
+
+        First visit: seeds the single own row. Later visits: re-syncs row 0's name
+        with the environment / ``boot_domain`` (the env may have changed on the step
+        before, or a saved mesh may have been applied), keeping every added row.
+        The seed happens HERE, not in the constructor (see ``mesh_domains``)."""
+        md = self.mesh_domains
+        own = self._own_domain_name()
+        if not md.domains:
+            md.domains = [Domain(name=own, title="")]
+            md.own_name = own
+        elif md.own_name != own:
+            row = md.by_name(md.own_name)
+            if row is not None:
+                row.name = own
+            else:
+                md.domains.insert(0, Domain(name=own, title=""))
+            md.own_name = own
+            # a renamed own domain is a domain nobody has reviewed under that name
+            record_reviewed(md, md.domain_services_reviewed)
+        self.domains_table.fill(md.domains, md.own_name)
+        self.domains_note.setVisible(False)
+        # Once the Domains step owns the own domain, the overlay's field is a mirror.
+        self.boot_domain.setReadOnly(True)
+        self.boot_domain_note.setVisible(True)
+
+    def _commit_domains(self) -> bool:
+        """Leave the Domains step: the table's rows become ``mesh_domains``, row 0's
+        typed name (prod) becomes ``boot_domain`` — the ONE direction the mirror is
+        written in — and the reviewed markers are pruned to the rows that still
+        exist. Never refuses (inline note only): the bring-up's own validate() is
+        what refuses a prod mesh with no apex, as it always has."""
+        md = self.mesh_domains
+        added, _ca = self.domains_table.rows()
+        own = self.domains_table.own_row_name()
+        prod = self.env_prod.isChecked()
+        if prod:
+            if own != self.boot_domain.text().strip():
+                self.boot_domain.setText(own)
+        else:
+            own = md.own_name or own
+        prev = md.by_name(md.own_name) if md.own_name else None
+        own_row = Domain(name=own, title="", idp=DOMAIN_IDP_SUPERDOMAIN,
+                         optional_services=list(prev.optional_services) if prev else [])
+        md.domains = [own_row] + added
+        md.own_name = own
+        record_reviewed(md, md.domain_services_reviewed)
+        blank = prod and not own
+        self.domains_note.setText(
+            "A prod mesh needs its public apex domain in row 0 — the minted issuer "
+            "and superadmin align with it. The mesh cannot start without it."
+            if blank else "")
+        self.domains_note.setVisible(blank)
+        self._refresh_plan()
+        return True
+
     def _build_source_section(self) -> QtWidgets.QWidget:
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(w)
@@ -1215,6 +1370,16 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.boot_domain = QtWidgets.QLineEdit()
         self.boot_domain.setPlaceholderText("public apex domain, e.g. example.com (required in prod)")
         pg.addWidget(_row("Domain", self.boot_domain))
+        # Read-only MIRROR of the Domains step's row 0 once that step has been visited
+        # (_seed_domains flips it): one domain field the operator types, one place it
+        # is shown again. A host with no steps (LocalMeshDialog) keeps it editable.
+        self.boot_domain_note = QtWidgets.QLabel(
+            "Set on the ‘Domains’ step (row 0, this mesh's own domain); shown here "
+            "read-only so the overlay and the domains table can never disagree.")
+        self.boot_domain_note.setWordWrap(True)
+        self.boot_domain_note.setStyleSheet("color: gray;")
+        self.boot_domain_note.setVisible(False)
+        pg.addWidget(self.boot_domain_note)
         self.boot_auth_key = QtWidgets.QLineEdit()
         self.boot_auth_key.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
         self.boot_auth_key.setPlaceholderText("tskey-… (required in prod — attaches the overlay)")
@@ -1786,6 +1951,14 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             # matches what the lane ships) — the same split collect_services()
             # uses, and for the same reason.
             kind_addons=self.collect_kind_addons(),
+            # THE DOMAINS (#494): the rows the Domains step recorded, and the names
+            # whose sign-in is Own — derived from the same rows, so the Casdoor the
+            # compose lane brings up and the row the operator sees cannot disagree.
+            # Both are () on a flow that never touched the steps, or only clicked
+            # Next through them (row 0 default-shaped is not recorded).
+            domains=bootstrap_domain_records(self.mesh_domains.domains,
+                                             self.mesh_domains.own_name),
+            own_idp_domains=own_idp_names(self.mesh_domains.domains),
         )
 
     def theme_form(self) -> dict:
@@ -1868,6 +2041,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self.idp_jwks.setText(cfg.idp_jwks)
             self.boot_domain.setText(cfg.cluster_domain)
             self.boot_login_server.setText(cfg.login_server)
+            self._apply_domains(cfg)
             missing.append("auth_key")          # never stored; left as typed
             if cfg.kind_addons is None:
                 missing.append("kind_addons")
@@ -1875,13 +2049,57 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 chosen = set(cfg.kind_addons)
                 for slug, box in self.kind_addon_boxes.items():
                     box.setChecked(slug in chosen)
-            for name in ("out_dir", "node_name", "own_idp_domains"):
+            for name in ("out_dir", "node_name"):
                 if getattr(cfg, name):
                     missing.append(name)
         finally:
             self._applying_bootstrap = False
         self._refresh_plan()
         return missing
+
+    def _apply_domains(self, cfg: LocalMeshBootstrapConfig) -> None:
+        """The inverse of the two domain fields ``collect_bootstrap`` emits: rebuild
+        ``mesh_domains`` from the record's rows and its own-IdP names (a CLI-made
+        record carries the latter without the former), row 0 being the record's
+        cluster domain (or the brand default). Every loaded row is marked REVIEWED:
+        a saved-mesh record only exists after a start that passed the gate, so its
+        rows were walked. A record carrying neither leaves the state alone — the
+        Domains step seeds row 0 on its own visit — so applying a pre-#494 record
+        changes nothing about the gate."""
+        md = self.mesh_domains
+        if not cfg.domains and not cfg.own_idp_domains and not md.domains:
+            return
+        own = cfg.cluster_domain.strip() or cfg.resolved_domain()
+        rows: list[Domain] = [Domain(name=own, title="")]
+        for rec in cfg.domains:
+            name = (rec.get("name") or "").strip()
+            if not name:
+                continue
+            row = rows[0] if name == own else None
+            if row is None:
+                row = Domain(name=name)
+                rows.append(row)
+            row.title = (rec.get("title") or "").strip()
+            row.idp = (rec.get("idp") or DOMAIN_IDP_SUPERDOMAIN)
+            row.optional_services = list(rec.get("optional_services") or [])
+        for name in cfg.own_idp_domains:
+            name = name.strip()
+            if not name:
+                continue
+            row = next((r for r in rows if r.name == name), None)
+            if row is None:
+                row = Domain(name=name)
+                rows.append(row)
+            if name != own:
+                row.idp = DOMAIN_IDP_OWN
+        rows[0].idp = DOMAIN_IDP_SUPERDOMAIN
+        md.domains = rows
+        md.own_name = own
+        record_reviewed(md, [r.name for r in rows])
+        self.domains_table.fill(md.domains, md.own_name)
+        self.domains_note.setVisible(False)
+        self.boot_domain.setReadOnly(True)
+        self.boot_domain_note.setVisible(True)
 
     def collect_kind_addons(self) -> tuple[str, ...]:
         """The ticked DevOps-lane add-ons, in catalogue order (never widget order).
@@ -2500,6 +2718,17 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         A pure read through ``core.domain_services.gate_reason`` — the SAME seam the
         image-build gate calls — so the two paths cannot drift and a test can drive
         the refusal with a bare ImageConfig and no docker."""
+        # THIS ROUTE'S OWN DOMAINS FIRST (#494): the rows the Domains step recorded,
+        # with the remedy naming that step. Record the stepper's walked pages before
+        # asking, so a domain reviewed and then left by Back (no validatePage on
+        # Back) still counts. Empty until the step is first visited — a host with no
+        # steps keeps passing, exactly as before.
+        md = getattr(self, "mesh_domains", None)
+        if md is not None and md.domains:
+            self.domain_services.record(md)
+            refusal = gate_reason(md, ACTION_MESH_START, remedy=LOCAL_MESH_REMEDY)
+            if refusal:
+                return refusal
         cfg = getattr(getattr(self, "wiz", None), "cfg", None)
         if cfg is None:
             return ""
@@ -2516,13 +2745,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # The SAME gate guards Saved meshes -> Start/Restore (_start_saved): both
         # bring a docker mesh up on the same compose project from the same wiz.cfg.
         #
-        # SCOPE, PLAINLY: this reads ``wiz.cfg.domains`` — the superadmin Domains
-        # table. The local-mesh bootstrap's own surface has ONE ``cluster_domain`` and
-        # no domains table, so on a flow that never filled that table there is nothing
-        # to refuse and this is a no-op. It bites where domains DO exist: a saved
-        # config loaded on the Sessions screen, or a mesh flow the operator stepped
-        # into the local-docker lane from. ``LocalMeshDialog`` has no wizard at all,
-        # hence the getattr.
+        # SCOPE, PLAINLY: this reads THIS route's Domains step (``mesh_domains`` —
+        # row 0 the mesh's own domain, plus every added one) with a remedy naming
+        # that step, and then ``wiz.cfg.domains`` — the superadmin Domains table of a
+        # config loaded on the Sessions screen, or of a mesh flow the operator
+        # stepped into the local-docker lane from. ``LocalMeshDialog`` has no wizard
+        # at all, hence the getattr.
         refusal = self._domain_services_refusal()
         if refusal:
             self.status.setText(refusal)
@@ -2919,7 +3147,6 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                            "Themes group was reset to the shipped brand)",
         "out_dir": "out_dir (this page has no control for it)",
         "node_name": "node_name (this page has no control for it)",
-        "own_idp_domains": "own-Casdoor domains (this page has no control for them)",
     }
 
     def _not_applied_text(self, rec, missing: list[str]) -> str:
@@ -3753,6 +3980,64 @@ class LocalMeshEnvPage(_LocalMeshStep):
                 "uses, and the superadmin account the bring-up mints.")
 
 
+class LocalMeshDomainsPage(_LocalMeshStep):
+    """The mesh's domains (#494): row 0 its own, then every other one it serves."""
+
+    SECTION = "domains"
+    TITLE = "Domains"
+    SUBTITLE = ("Every domain this mesh serves, its own domain first. Each one gets "
+                "its own service page on the next step, and the mesh will not start "
+                "while any domain here has never been through it. A row whose sign-in "
+                "is ‘Own’ brings up a Casdoor of its own beside the central one.")
+
+    def initializePage(self):
+        super().initializePage()
+        ctl = self.ctl
+        if ctl is not None:
+            ctl._seed_domains()
+
+    def validatePage(self):
+        ctl = self.ctl
+        return True if ctl is None else ctl._commit_domains()
+
+    def cleanupPage(self):
+        """Back also records: Qt calls cleanupPage (not validatePage) on Back, and a
+        row typed here must reach ``mesh_domains`` either way."""
+        ctl = self.ctl
+        if ctl is not None:
+            ctl._commit_domains()
+
+
+class LocalMeshDomainServicesPage(_LocalMeshStep):
+    """One domain's services at a time (#494) — the image flow's page, re-hosted."""
+
+    SECTION = "domain_services"
+    TITLE = "Domain services"
+    SUBTITLE = ("Which optional services each domain provides, one domain per page — "
+                "this mesh's own domain first. The ‘not domain-scoped’ table below "
+                "lists the choices that bind the whole mesh instead; on this route "
+                "they are made on the ‘Services’ step two steps on, so its state "
+                "column is empty here.")
+
+    def initializePage(self):
+        super().initializePage()
+        ctl = self.ctl
+        if ctl is not None:
+            ctl.domain_services.load(ctl.mesh_domains)
+
+    def validatePage(self):
+        ctl = self.ctl
+        if ctl is not None:
+            ctl.domain_services.record(ctl.mesh_domains)
+            ctl._refresh_plan()
+        return True
+
+    def cleanupPage(self):
+        ctl = self.ctl
+        if ctl is not None:
+            ctl.domain_services.record(ctl.mesh_domains)
+
+
 class LocalMeshSourcePage(_LocalMeshStep):
     SECTION = "source"
     TITLE = "Repo source"
@@ -3780,8 +4065,9 @@ class LocalMeshIdpPage(_LocalMeshStep):
 class LocalMeshOverlayPage(_LocalMeshStep):
     SECTION = "overlay"
     TITLE = "Mesh overlay"
-    SUBTITLE = ("The public domain and the tailnet key that attach this mesh to the "
-                "overlay. Prod only — a test mesh never sees this step.")
+    SUBTITLE = ("The tailnet key that attaches this mesh to the overlay, and the "
+                "public domain it was given on the Domains step. Prod only — a test "
+                "mesh never sees this step.")
 
     def applies_to(self, cfg) -> bool:
         """Prod only. A test mesh publishes nothing and attaches no overlay, so the

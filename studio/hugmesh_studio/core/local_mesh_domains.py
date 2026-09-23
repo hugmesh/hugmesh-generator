@@ -73,6 +73,11 @@ class LocalMeshDomains:
     mode: ClassVar[str] = "mesh"
     domains: list[Domain] = field(default_factory=list)
     domain_services_reviewed: list[str] = field(default_factory=list)
+    #: The name of row 0 — the mesh's own domain — once the Domains step seeded it
+    #: ("" before). A REAL row here (unlike ImageConfig's implicit own domain): the
+    #: services stepper walks it like any other, and ``bootstrap_domain_records``
+    #: is what keeps it out of the record while it is default-shaped.
+    own_name: str = ""
 
     def names(self) -> list[str]:
         return [(d.name or "").strip() for d in self.domains if (d.name or "").strip()]

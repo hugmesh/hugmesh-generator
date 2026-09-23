@@ -638,8 +638,11 @@ class DomainServicesWidget(QtWidgets.QWidget, DomainServicesBody):
         return list(self._entries_fn() or ()) if self._entries_fn else []
 
     def load(self, cfg) -> None:
-        """Enter the walk for ``cfg`` (its named rows, in table order)."""
-        self._load(cfg, domain_names_for_services(cfg), implicit_own_domain(cfg))
+        """Enter the walk for ``cfg`` (its named rows, in table order). A state that
+        names its own domain as a REAL row (``LocalMeshDomains.own_name``) gets the
+        "(this mesh's own domain)" header on it; an ImageConfig's is implicit."""
+        own = implicit_own_domain(cfg) or (getattr(cfg, "own_name", "") or "").strip()
+        self._load(cfg, domain_names_for_services(cfg), own)
 
     def record(self, cfg) -> None:
         """Write the working selections and the reviewed marker onto ``cfg``."""
