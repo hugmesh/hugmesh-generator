@@ -389,7 +389,7 @@ for dirpath, _dirs, files in os.walk(root):
                 continue
             if s.startswith('@'):
                 # a tag line. Gherkin permits a trailing `# comment`; strip it.
-                toks = set(TAG_TOKEN.findall(re.split(r'\s#', s, 1)[0]))
+                toks = set(TAG_TOKEN.findall(re.split(r'\s#', s, maxsplit=1)[0]))
                 judge(toks, rel, lineno)
                 pending |= toks
                 continue
@@ -432,24 +432,34 @@ PY
 # on no match is the empty case, not an error.
 split_report() { printf '%s\n' "$2" | grep "^$1"$'\t' | cut -f2- || true; }
 
-ISSUE_REPORT="$(issue_tag_report "${FEATURES}")"
-MALFORMED_ROWS="$(split_report MALFORMED "${ISSUE_REPORT}")"
-FIXME_ROWS="$(split_report FIXME-NO-ISSUE "${ISSUE_REPORT}")"
+# issue_tag_verdict <features-dir> — the VERDICT: scanner rows -> ok/bad/REPORT.
+# A function rather than inline so control I below can prove the wiring: the
+# controls E-H read issue_tag_report's rows directly and would stay green if
+# this block were edited to `echo` instead of `bad` — which is precisely the
+# edit someone makes when a malformed tag blocks their PR.
+issue_tag_verdict() {
+  local report malformed_rows fixme_rows fixme_n
+  report="$(issue_tag_report "$1")"
+  malformed_rows="$(split_report MALFORMED "${report}")"
+  fixme_rows="$(split_report FIXME-NO-ISSUE "${report}")"
 
-if [ -n "${MALFORMED_ROWS}" ]; then
-  bad "malformed @issue: tag(s) — must match ^@issue:[a-z0-9][a-z0-9.-]*-[0-9]+$ (features/README.md §8):"
-  printf '%s\n' "${MALFORMED_ROWS}" | sed 's/^/         /'
-else
-  ok "every @issue: tag under tests/e2e/features matches ^@issue:[a-z0-9][a-z0-9.-]*-[0-9]+\$"
-fi
+  if [ -n "${malformed_rows}" ]; then
+    bad "malformed @issue: tag(s) — must match ^@issue:[a-z0-9][a-z0-9.-]*-[0-9]+$ (features/README.md §8):"
+    printf '%s\n' "${malformed_rows}" | sed 's/^/         /'
+  else
+    ok "every @issue: tag under tests/e2e/features matches ^@issue:[a-z0-9][a-z0-9.-]*-[0-9]+\$"
+  fi
 
-if [ -n "${FIXME_ROWS}" ]; then
-  FIXME_N="$(printf '%s\n' "${FIXME_ROWS}" | grep -c . || true)"
-  echo "  REPORT ${FIXME_N} @fixme scenario(s) with no @issue: tag (not a failure; see features/README.md §8):"
-  printf '%s\n' "${FIXME_ROWS}" | sed 's/^/         /'
-else
-  echo "  REPORT every @fixme scenario under tests/e2e/features carries an @issue: tag"
-fi
+  if [ -n "${fixme_rows}" ]; then
+    fixme_n="$(printf '%s\n' "${fixme_rows}" | grep -c . || true)"
+    echo "  REPORT ${fixme_n} @fixme scenario(s) with no @issue: tag (not a failure; see features/README.md §8):"
+    printf '%s\n' "${fixme_rows}" | sed 's/^/         /'
+  else
+    echo "  REPORT every @fixme scenario under tests/e2e/features carries an @issue: tag"
+  fi
+}
+
+issue_tag_verdict "${FEATURES}"
 
 # ── negative controls ────────────────────────────────────────────────────────
 # Synthesise a copy of tests/e2e carrying each defect and re-run the SAME logic
@@ -701,6 +711,22 @@ if [ -n "${CH_BAD// /}" ]; then
   printf '%s\n' "${CH_FIXME}" | sed 's/^/         /'
 else
   ok "CONTROL H: Examples-block tags scope to their outline, Rule tags inherit, neither bleeds"
+fi
+
+# control I — VERDICT WIRING. Controls E-H prove the SCANNER can see a defect;
+# none of them proves the defect reaches `bad`. Run the real verdict over the
+# control-E tree (8 malformed rows) and require F to move by exactly one —
+# then put F back, because this is a control, not a finding. A verdict edited
+# to `echo`/`ok` (turning FAIL into REPORT) stays green under E-H and goes red
+# here. Output is swallowed: the eight rows already printed under control E.
+F_BEFORE="${F}"; P_BEFORE="${P}"
+issue_tag_verdict "${CE}" >/dev/null
+CI_DELTA=$((F - F_BEFORE))
+F="${F_BEFORE}"; P="${P_BEFORE}"
+if [ "${CI_DELTA}" -eq 1 ]; then
+  ok "CONTROL I: a malformed @issue: tag reaches the verdict as a FAIL (F moved by exactly 1)"
+else
+  bad "CONTROL I: the verdict did NOT fail on 8 malformed @issue: tags (F moved by ${CI_DELTA}, expected 1) — check 5 has become a report"
 fi
 
 echo
