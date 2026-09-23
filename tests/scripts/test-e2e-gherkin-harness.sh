@@ -34,6 +34,17 @@
 # live under a scratch dir and share the real node_modules by symlink; the real
 # tests/e2e tree is never written to.
 #
+# MUTATION BATTERY (2026-09-23, each run sha256-verified to have changed this file
+# and restored it byte-identical): regex `-[0-9]+` -> `-[0-9]*` (E: `@issue:generator-`);
+# `_` admitted to the repo class (E: `gen_erator-549`); `^[a-z0-9]` widened to a
+# leading dash (E: `-generator-549`); verdict `bad` -> `echo` (I); `.lower()`
+# dropped from judge (E: `@Issue:`); title tokens not judged (E: title-embedded);
+# docstring toggle removed (G); Examples-block tags not scoped (H); fixme scan
+# neutered (F) — nine of nine killed by the named control. The tenth, deleting
+# the REAL tree's `issue_tag_verdict "${FEATURES}"` call, SURVIVED every control
+# (18 passed, 0 failed): controls prove a check CAN fail, not that it RAN. Hence
+# EXPECTED_VERDICTS below — the one thing that moved under that mutation.
+#
 # OFFLINE. No stack, no network, no cluster. Needs node + the installed
 # tests/e2e/node_modules only, and says so loudly (exit 2) when they are absent —
 # it never exits 0 having checked nothing.
@@ -46,6 +57,12 @@ FEATURES="${E2E}/features"
 GEN="${E2E}/.features-gen"
 
 P=0; F=0
+# Every ok/bad call site prints exactly one verdict, so P+F is invariant at this
+# number whichever way each check goes (measured 19 on ten battery runs, red and
+# green). A deleted check — `issue_tag_verdict "${FEATURES}"` commented out, say —
+# is invisible to the negative controls and shows up ONLY here. Adding a check or
+# a control moves it: change the number in the same commit, and say so.
+EXPECTED_VERDICTS=19
 ok()  { echo "  PASS $*"; P=$((P+1)); }
 bad() { echo "  FAIL $*"; F=$((F+1)); }
 
@@ -742,6 +759,15 @@ if [ "${CI_DELTA}" -eq 1 ]; then
   ok "CONTROL I: a malformed @issue: tag reaches the verdict as a FAIL (F moved by exactly 1)"
 else
   bad "CONTROL I: the verdict did NOT fail on 11 malformed @issue: tags (F moved by ${CI_DELTA}, expected 1) — check 5 has become a report"
+fi
+
+# ── verdict census: a check that was DELETED never fails ─────────────────────
+echo
+echo "-- 7) verdict census: every check above actually ran --"
+if [ "$((P + F))" -eq "${EXPECTED_VERDICTS}" ]; then
+  ok "all ${EXPECTED_VERDICTS} verdicts were reached (a deleted check would drop this count)"
+else
+  bad "expected ${EXPECTED_VERDICTS} verdicts, counted $((P + F)) — a check was deleted or added; if added, bump EXPECTED_VERDICTS in the same commit"
 fi
 
 echo
