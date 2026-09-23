@@ -495,10 +495,15 @@ def assert_controls_complete(name, controls, required, caught, survived, not_run
     PASS line so nobody reads it as full coverage."""
     present = {c[0] for c in controls}
     missing = sorted(required - present)
+    unregistered = sorted(present - required)
     if missing:
         bad(f"{name}: REQUIRED control(s) missing from the list: {missing} — a "
             f"control that is gone cannot be exercised, and the guard is now "
             f"blind to what it caught")
+    elif unregistered:
+        bad(f"{name}: control(s) in the list but not in its REQUIRED_* set: "
+            f"{unregistered} — an unregistered control can be deleted without this "
+            f"check noticing; add the label to the set")
     elif survived or caught + not_run != len(controls):
         bad(f"{name}: {caught} caught / {survived} survived / {not_run} not run of "
             f"{len(controls)} — every control that runs must be caught")
