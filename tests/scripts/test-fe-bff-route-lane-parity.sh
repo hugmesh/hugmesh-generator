@@ -45,7 +45,10 @@
 #      string "0" for admin-bff-api AND mod-bff-api on BOTH lanes: the compose
 #      service blocks in tests/stack/compose.local.yaml and the cluster
 #      Deployments under specs/cluster/manifests/{admin,mod}-bff-api/. Checked
-#      by VALUE, not presence. This is the BFF mirror of the gateway's own
+#      by VALUE, not presence, and on the cluster side against what kustomize
+#      RENDERS, not deployment.yaml alone (an offline scan of every patch the
+#      kustomization applies, plus the rendered Deployment when kustomize or
+#      kubectl is on PATH). This is the BFF mirror of the gateway's own
 #      pin, which lives in tests/stack/test-gateway-auth-flag-parity.sh; the
 #      DECISION 60 section below says why the BFF pin is asserted here and
 #      not there.
@@ -59,11 +62,15 @@
 # NEGATIVE CONTROLS: every mutation in CONTROLS (route tables) and TTL_CONTROLS
 # (decision 60) must trip its check, and each list must still contain every
 # label in its REQUIRED_* set — a shrunk or emptied list is a FAIL, not a
-# quieter pass. Controls run in-process on copies, so the files on disk are
-# never modified.
+# quieter pass. Controls run in-process on copies, or on a staged copy of a
+# manifests directory under a temporary dir for the kustomize layers; the tree
+# is never modified.
 #
 # Offline: reads the two fe route tables, tests/stack/compose.local.yaml and the
-# two BFF Deployments. No cluster, no docker, no network.
+# two BFF Deployments with their kustomizations. No cluster, no docker, no
+# network. kustomize/kubectl is OPTIONAL: with one on PATH the rendered
+# Deployment is asserted too; without one the run prints NOTE ... NOT RUN and
+# the patch scan stands alone. It never prints a PASS it did not earn.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -71,8 +78,12 @@ ROOT="$(cd "${HERE}/../.." && pwd)"
 
 python3 - "$ROOT" <<'PY'
 import copy
+import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 
 root = sys.argv[1]
 
@@ -472,21 +483,25 @@ REQUIRED_ROUTE_CONTROLS = frozenset([
 ])
 
 
-def assert_controls_complete(name, controls, required, caught, survived):
-    """One PASS when every required label is present and every control was
-    caught; otherwise a FAIL naming what is missing. Called after each control
-    loop so an emptied or shrunk list can never pass quietly."""
-    present = {label for label, _ in controls}
+def assert_controls_complete(name, controls, required, caught, survived, not_run=0):
+    """One PASS when every required label is present and every control that ran
+    was caught; otherwise a FAIL naming what is missing. Called after each
+    control loop so an emptied or shrunk list can never pass quietly. not_run
+    is for controls whose tool is absent on this host; they are named in the
+    PASS line so nobody reads it as full coverage."""
+    present = {c[0] for c in controls}
     missing = sorted(required - present)
     if missing:
         bad(f"{name}: REQUIRED control(s) missing from the list: {missing} — a "
             f"control that is gone cannot be exercised, and the guard is now "
             f"blind to what it caught")
-    elif survived or caught != len(controls):
-        bad(f"{name}: {caught} caught / {survived} survived of {len(controls)} — "
-            f"every control must be caught")
+    elif survived or caught + not_run != len(controls):
+        bad(f"{name}: {caught} caught / {survived} survived / {not_run} not run of "
+            f"{len(controls)} — every control that runs must be caught")
     else:
-        ok(f"{name}: all {caught} controls caught, every required label present")
+        ok(f"{name}: all {caught} controls that ran were caught, every required "
+           f"label present" + (f" ({not_run} NOT RUN on this host — see the NOTE above)"
+                               if not_run else ""))
 
 
 caught = survived = 0
@@ -695,6 +710,274 @@ assert_controls_complete("decision 60 controls", TTL_CONTROLS, REQUIRED_TTL_CONT
                          ttl_caught, ttl_survived)
 
 print(f"\ndecision 60 controls: {ttl_caught} caught / {ttl_survived} survived")
+
+# ---------------------------------------------------------------------------
+# THE CLUSTER LANE IS WHAT KUSTOMIZE RENDERS. ArgoCD builds each manifests/
+# directory through its kustomization.yaml and applies the RESULT; the pin
+# read from deployment.yaml above is only the input. Both kustomizations
+# already carry patches (a JSON6902 op each, and admin-bff's strategic-merge
+# workload-console-patch.yaml, which edits containers[].env), so a patch that
+# sets APP_BFF_EXCHANGE_CACHE_TTL_MS to another value would deploy that value
+# while deployment.yaml still says "0" and the check above stays green.
+#
+# Two layers, because the CI jobs that run this suite (python:3-slim) have no
+# kubectl:
+#   (a) ALWAYS: an offline scan of every patch a kustomization can apply.
+#       FAIL if any patch text names the key, if any JSON6902 op has a path
+#       under a container's env (an index-based op rewrites the value without
+#       naming it), or if the kustomization uses a field this scan cannot see
+#       through (replacements, components, transformers, generators — none
+#       is used today; using one is a decision, made by extending this scan).
+#   (b) WHEN kustomize OR kubectl IS ON PATH: the directory is rendered and
+#       the rendered Deployment's container env is put through check_ttl_pin
+#       like any other lane. Without a binary the run prints a NOTE and (a)
+#       stands alone; it never prints a PASS it did not earn.
+print("\n== decision 60: the cluster lane as kustomize RENDERS it ==")
+
+KUSTOMIZE_LANES = {
+    # label -> (kustomization dir, Deployment name, container name)
+    "cluster admin-bff-api": (os.path.dirname(CLUSTER_ADMIN_BFF), "hugmesh-admin-bff-api",
+                              "hugmesh-admin-bff-api"),
+    "cluster mod-bff-api": (os.path.dirname(CLUSTER_MOD_BFF), "hugmesh-mod-bff-api",
+                            "hugmesh-mod-bff-api"),
+}
+OPAQUE_KUSTOMIZE_FIELDS = ("replacements", "components", "transformers", "generators")
+
+
+def kustomize_patch_texts(kdir):
+    """(kustomization dict, [(where, text)]) for every patch the kustomization
+    can apply: inline `patches[].patch`, `patches[].path` files, and the legacy
+    patchesStrategicMerge / patchesJson6902 forms."""
+    kdoc = yaml.safe_load(open(os.path.join(kdir, "kustomization.yaml"))) or {}
+    out = []
+
+    def file_text(rel):
+        return open(os.path.join(kdir, rel)).read()
+
+    for i, p in enumerate(kdoc.get("patches") or []):
+        if isinstance(p, dict):
+            if p.get("patch") is not None:
+                out.append((f"patches[{i}].patch (inline)", str(p["patch"])))
+            if p.get("path"):
+                out.append((f"patches[{i}].path={p['path']}", file_text(p["path"])))
+        elif isinstance(p, str):
+            out.append((f"patches[{i}]={p}", file_text(p)))
+    for i, p in enumerate(kdoc.get("patchesStrategicMerge") or []):
+        if isinstance(p, str) and os.path.isfile(os.path.join(kdir, p)):
+            out.append((f"patchesStrategicMerge[{i}]={p}", file_text(p)))
+        else:
+            out.append((f"patchesStrategicMerge[{i}] (inline)", str(p)))
+    for i, p in enumerate(kdoc.get("patchesJson6902") or []):
+        if isinstance(p, dict):
+            if p.get("path"):
+                out.append((f"patchesJson6902[{i}].path={p['path']}", file_text(p["path"])))
+            if p.get("patch") is not None:
+                out.append((f"patchesJson6902[{i}].patch (inline)", str(p["patch"])))
+    return kdoc, out
+
+
+def json6902_env_ops(text):
+    """The op paths under a container env in a patch text that parses as a
+    JSON6902 op list; [] for strategic-merge patches and anything else."""
+    try:
+        ops = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(ops, list):
+        return []
+    return [str(op.get("path")) for op in ops
+            if isinstance(op, dict) and re.search(r"/containers/\d+/env(/|$)", str(op.get("path")))]
+
+
+def check_kustomize_patches(label, kdir):
+    """Failure strings for layer (a): the offline scan of kustomization.yaml."""
+    kdoc, texts = kustomize_patch_texts(kdir)
+    kfile = os.path.join(kdir, "kustomization.yaml")
+    fails = []
+    for where, text in texts:
+        if TTL_KEY in text:
+            fails.append(f"[{label}] {kfile} {where} names {TTL_KEY} — a patch is what "
+                         f"ArgoCD applies on top of deployment.yaml, so the rendered "
+                         f"value can differ from the file the check above reads. The "
+                         f"pin lives in deployment.yaml only; remove the patch, or "
+                         f"re-open decision 60 on #347")
+        for path in json6902_env_ops(text):
+            fails.append(f"[{label}] {kfile} {where} has a JSON6902 op at {path} — an "
+                         f"op under containers[].env can rewrite {TTL_KEY} by index "
+                         f"without naming it; env is owned by deployment.yaml, edit it "
+                         f"there")
+    for field in OPAQUE_KUSTOMIZE_FIELDS:
+        if kdoc.get(field):
+            fails.append(f"[{label}] {kfile} uses `{field}`, which can rewrite the "
+                         f"rendered Deployment without naming {TTL_KEY} in any text this "
+                         f"scan reads; extend the scan before using it")
+    return fails
+
+
+def kustomize_cmd():
+    if shutil.which("kustomize"):
+        return ["kustomize", "build"]
+    if shutil.which("kubectl"):
+        return ["kubectl", "kustomize"]
+    return None
+
+
+def rendered_container_env(cmd, kdir, deploy_name, container_name):
+    """Layer (b): the container env of the Deployment kustomize renders, or None
+    when no Deployment/container of those names is rendered. Raises on a
+    render error so it lands as a FAIL, never as a quiet None."""
+    res = subprocess.run(cmd + [kdir], capture_output=True, text=True)
+    if res.returncode != 0:
+        raise RuntimeError(f"{' '.join(cmd)} {kdir}: rc={res.returncode}: "
+                           f"{res.stderr.strip()[:300]}")
+    for doc in yaml.safe_load_all(res.stdout):
+        if (isinstance(doc, dict) and doc.get("kind") == "Deployment"
+                and (doc.get("metadata") or {}).get("name") == deploy_name):
+            return cluster_env(doc, container_name)
+    return None
+
+
+KCMD = kustomize_cmd()
+
+# Layer (a) on the live tree.
+for label, (kdir, _deploy, _ctr) in KUSTOMIZE_LANES.items():
+    scan_fails = check_kustomize_patches(label, kdir)
+    for msg in scan_fails:
+        bad(msg)
+    if not scan_fails:
+        ok(f"[{label}] no kustomize patch names {TTL_KEY} or edits containers[].env "
+           f"by index, and no opaque field is used ({kdir}/kustomization.yaml)")
+
+# Layer (b) on the live tree.
+if KCMD is None:
+    print(f"  NOTE render assertion NOT RUN: neither kustomize nor kubectl is on PATH "
+          f"(the python:3-slim CI jobs that run this suite have neither). The patch "
+          f"scan above is the assertion that stands on this host; a host with either "
+          f"binary also asserts the rendered Deployment.")
+else:
+    rendered = {}
+    for label, (kdir, deploy, ctr) in KUSTOMIZE_LANES.items():
+        try:
+            rendered[f"rendered {label}"] = rendered_container_env(KCMD, kdir, deploy, ctr)
+        except Exception as e:                                    # noqa: BLE001
+            bad(f"[{label}] kustomize render failed: {e}")
+    render_fails = check_ttl_pin(rendered)
+    for msg in render_fails:
+        bad(msg)
+    if rendered and not render_fails:
+        ok(f"{TTL_KEY} is the string \"0\" in the kustomize-RENDERED Deployment for "
+           f"{', '.join(rendered)} (via {' '.join(KCMD)})")
+
+
+# Negative controls for both layers, staged as COPIES of a manifests directory
+# under a temporary dir (TMPDIR honoured); the tree is never modified.
+def staged_dir(label, extra_patch):
+    """A copy of the lane's kustomization directory with one extra entry
+    appended to `patches:`: {"path": file} for a strategic-merge patch text, or
+    {"patch": text, "target": {...}} for an inline JSON6902 op list. Returns
+    (tmp_root, copy_dir); the caller removes tmp_root."""
+    kdir, deploy, _ctr = KUSTOMIZE_LANES[label]
+    tmp = tempfile.mkdtemp(prefix="ttl-pin-kustomize-")
+    dst = os.path.join(tmp, os.path.basename(kdir))
+    shutil.copytree(kdir, dst)
+    kpath = os.path.join(dst, "kustomization.yaml")
+    kdoc = yaml.safe_load(open(kpath))
+    if extra_patch["kind"] == "strategic":
+        with open(os.path.join(dst, "ttl-control-patch.yaml"), "w") as f:
+            f.write(extra_patch["text"])
+        kdoc.setdefault("patches", []).append({"path": "ttl-control-patch.yaml"})
+    else:
+        kdoc.setdefault("patches", []).append(
+            {"patch": extra_patch["text"],
+             "target": {"kind": "Deployment", "name": deploy}})
+    with open(kpath, "w") as f:
+        yaml.safe_dump(kdoc, f)
+    return tmp, dst
+
+
+def strategic_patch_5000(label):
+    _kdir, deploy, ctr = KUSTOMIZE_LANES[label]
+    return {"kind": "strategic", "text": (
+        "apiVersion: apps/v1\nkind: Deployment\n"
+        f"metadata: {{name: {deploy}, namespace: hugmesh-backend}}\n"
+        "spec:\n  template:\n    spec:\n      containers:\n"
+        f"        - name: {ctr}\n          env:\n"
+        f"            - {{name: {TTL_KEY}, value: \"5000\"}}\n")}
+
+
+def json6902_by_index_5000(label):
+    """Rewrites the pin's value by its INDEX in env — the text never contains
+    the key name, which is exactly what a plain grep would miss."""
+    _kdir, _deploy, ctr = KUSTOMIZE_LANES[label]
+    doc = yaml.safe_load(open(KUSTOMIZE_LANES[label][0] + "/deployment.yaml"))
+    spec = doc["spec"]["template"]["spec"]
+    ci = next(i for i, c in enumerate(spec["containers"]) if c["name"] == ctr)
+    ei = next(i for i, e in enumerate(spec["containers"][ci]["env"]) if e["name"] == TTL_KEY)
+    return {"kind": "json6902", "text": (
+        f"- op: replace\n  path: /spec/template/spec/containers/{ci}/env/{ei}/value\n"
+        f"  value: \"5000\"\n")}
+
+
+def scan_control(label, patch):
+    tmp, dst = staged_dir(label, patch)
+    try:
+        return check_kustomize_patches(label, dst)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def render_control(label, patch):
+    _kdir, deploy, ctr = KUSTOMIZE_LANES[label]
+    tmp, dst = staged_dir(label, patch)
+    try:
+        env = rendered_container_env(KCMD, dst, deploy, ctr)
+        return check_ttl_pin({f"rendered {label}": env})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# (label, needs_render, fn) — fn returns the failure strings the mutation must
+# produce. The two scan controls run on every host; the render control needs
+# a binary and is reported as NOT RUN without one.
+KUSTOMIZE_CONTROLS = [
+    ("scan: a strategic-merge patch sets the admin-bff pin to 5000", False,
+     lambda: scan_control("cluster admin-bff-api", strategic_patch_5000("cluster admin-bff-api"))),
+    ("scan: an inline JSON6902 op rewrites the mod-bff pin by index, never naming the key", False,
+     lambda: scan_control("cluster mod-bff-api", json6902_by_index_5000("cluster mod-bff-api"))),
+    ("render: the rendered admin-bff Deployment carries 5000 from a strategic-merge patch", True,
+     lambda: render_control("cluster admin-bff-api", strategic_patch_5000("cluster admin-bff-api"))),
+    ("render: the rendered mod-bff Deployment carries 5000 from an index-only JSON6902 op", True,
+     lambda: render_control("cluster mod-bff-api", json6902_by_index_5000("cluster mod-bff-api"))),
+]
+REQUIRED_KUSTOMIZE_CONTROLS = frozenset([
+    "scan: a strategic-merge patch sets the admin-bff pin to 5000",
+    "scan: an inline JSON6902 op rewrites the mod-bff pin by index, never naming the key",
+    "render: the rendered admin-bff Deployment carries 5000 from a strategic-merge patch",
+    "render: the rendered mod-bff Deployment carries 5000 from an index-only JSON6902 op",
+])
+
+k_caught = k_survived = k_not_run = 0
+for label, needs_render, mutate in KUSTOMIZE_CONTROLS:
+    if needs_render and KCMD is None:
+        k_not_run += 1
+        print(f"  NOT RUN {label} (no kustomize/kubectl on this host)")
+        continue
+    try:
+        kfails = mutate()
+    except Exception as e:                                        # noqa: BLE001
+        kfails = []
+        print(f"          -> control raised: {e}")
+    if kfails:
+        k_caught += 1
+        print(f"  CAUGHT  {label}")
+        print(f"          -> {kfails[0]}")
+    else:
+        k_survived += 1
+        bad(f"CONTROL SURVIVED: {label} — this guard is blind to it")
+
+assert_controls_complete("kustomize controls", KUSTOMIZE_CONTROLS, REQUIRED_KUSTOMIZE_CONTROLS,
+                         k_caught, k_survived, not_run=k_not_run)
+print(f"\nkustomize controls: {k_caught} caught / {k_survived} survived / {k_not_run} not run")
 print(f"{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
 PY
