@@ -722,7 +722,10 @@ under a `@fixme` tag never prints its reason.
 `@issue:` tag in its effective tag set — the Feature line, an enclosing `Rule:`
 line, its own tag block, the tag block above its `Examples:` block, or a tag
 spelled into its title (§2b) — is listed by the harness under `REPORT`, with
-the count. It is not a failure: ten such scenarios predate this convention
+the count (control H pins every one of those five scoping rules, including a
+two-line tag block, and control K pins that the `REPORT <n>` line and its rows
+really reach the output, after a skeptic round found both unguarded). It is
+not a failure: ten such scenarios predate this convention
 (measured 2026-09-23 on the merged tree; other lanes move that number). But
 an untraceable `@fixme` is a TODO nobody can follow up on, so do not add to
 that list.

@@ -45,6 +45,21 @@
 # (18 passed, 0 failed): controls prove a check CAN fail, not that it RAN. Hence
 # EXPECTED_VERDICTS below — the one thing that moved under that mutation.
 #
+# SKEPTIC ROUND (2026-09-23, two independent batteries on f1e9a6e7): seven
+# REPORT-side mutants survived at 21/0 — the `REPORT ${fixme_n}` echo replaced
+# by `:`, `fixme_n=` pinned to 0, Feature-line tags dropped from the effective
+# set (two sites), title tokens dropped from it, and `pending |= toks` -> `=`
+# (a two-line tag block keeps only its last line). Control F proves the SCANNER
+# sees an untraceable @fixme; nothing proved the VERDICT prints it or prints the
+# right count, and control H scoped only Rule and Examples tags. Control K (the
+# verdict's REPORT line over control F's tree, exact count) and control H's
+# second file (Feature-line inheritance, title-embedded tags, two-line blocks in
+# both orders) close all seven. STILL OPEN, on purpose: the census `-eq` -> `-ge`
+# (equivalent while P+F is exact); any two-site mutant that deletes a check AND
+# edits EXPECTED_VERDICTS; the tag-line trailing-comment strip removed
+# (near-equivalent: only bites on a `# comment` that itself contains @issue: or
+# @fixme); and mutants of the CONTROLS themselves (control E's `-ne 11`).
+#
 # OFFLINE. No stack, no network, no cluster. Needs node + the installed
 # tests/e2e/node_modules only, and says so loudly (exit 2) when they are absent —
 # it never exits 0 having checked nothing.
@@ -63,7 +78,8 @@ P=0; F=0
 # is invisible to the negative controls and shows up ONLY here. Adding a check or
 # a control moves it: change the number in the same commit, and say so.
 # 19 -> 20 on 2026-09-23: control J (real tree judged by path) added.
-EXPECTED_VERDICTS=20
+# 20 -> 21 on 2026-09-23: control K (REPORT wiring: count + rows reach stdout) added.
+EXPECTED_VERDICTS=21
 ok()  { echo "  PASS $*"; P=$((P+1)); }
 bad() { echo "  FAIL $*"; F=$((F+1)); }
 
@@ -731,6 +747,19 @@ Feature: negative control H
   Scenario: the scenario AFTER a tagged Examples block must not inherit it
     Given nothing
 
+  @issue:generator-6
+  @fixme
+  Scenario: two tag lines with the issue on the first line, traceable
+    Given nothing
+
+  @fixme
+  @layer:gateway
+  Scenario: two tag lines with the fixme on the first line, untraceable
+    Given nothing
+
+  Scenario: a fixme spelled into the title @fixme
+    Given nothing
+
   @fixme
   Rule: every scenario under a fixme rule is pending
     @issue:generator-2
@@ -739,6 +768,29 @@ Feature: negative control H
     Scenario: under the rule, untraceable
       Given nothing
 CTRL
+# A second file in the same dir (the scanner walks it) so a Feature-line @fixme
+# can be tested without turning every scenario of the file above pending. Added
+# 2026-09-23 after two skeptic batteries found `feature_tags = set()`,
+# `'tags': rule_tags | ...` (Feature line not inherited), title tokens dropped
+# from the effective set and `pending = toks` (a two-line tag block keeps only
+# its last line) all SURVIVING at 21/0 — README §8 promised each of those and
+# nothing pinned them. The two-line blocks above kill `pending = toks` in
+# BOTH orders: issue-first would be reported (wrong), fixme-first would not be
+# (wrong).
+cat > "${CH}/onboarding/zz-control-feature-line.feature" <<'CTRL'
+@fixme
+Feature: negative control H, the Feature line
+
+  Scenario: under a fixme feature and naming no issue
+    Given nothing
+
+  @issue:generator-3
+  Scenario: under a fixme feature with the issue in its tag block
+    Given nothing
+
+  Scenario: under a fixme feature with the issue in its title @issue:generator-4
+    Given nothing
+CTRL
 CH_REPORT="$(issue_tag_report "${CH}")"
 CH_FIXME="$(split_report FIXME-NO-ISSUE "${CH_REPORT}")"
 CH_BAD=""
@@ -746,11 +798,17 @@ printf '%s\n' "${CH_FIXME}" | grep -F 'an outline whose Examples block' >/dev/nu
 printf '%s\n' "${CH_FIXME}" | grep -F 'AFTER a tagged Examples block' >/dev/null 2>&1 && CH_BAD="${CH_BAD} examples-tag-bled-to-next-scenario"
 printf '%s\n' "${CH_FIXME}" | grep -F 'under the rule, untraceable' >/dev/null 2>&1 || CH_BAD="${CH_BAD} rule-tag-not-inherited"
 printf '%s\n' "${CH_FIXME}" | grep -F 'under the rule, but traceable' >/dev/null 2>&1 && CH_BAD="${CH_BAD} rule-scenario-with-issue-reported"
+printf '%s\n' "${CH_FIXME}" | grep -F 'issue on the first line, traceable' >/dev/null 2>&1 && CH_BAD="${CH_BAD} two-line-block-lost-its-first-line"
+printf '%s\n' "${CH_FIXME}" | grep -F 'fixme on the first line, untraceable' >/dev/null 2>&1 || CH_BAD="${CH_BAD} two-line-block-lost-its-fixme"
+printf '%s\n' "${CH_FIXME}" | grep -F 'a fixme spelled into the title' >/dev/null 2>&1 || CH_BAD="${CH_BAD} title-fixme-not-in-effective-set"
+printf '%s\n' "${CH_FIXME}" | grep -F 'under a fixme feature and naming no issue' >/dev/null 2>&1 || CH_BAD="${CH_BAD} feature-line-fixme-not-inherited"
+printf '%s\n' "${CH_FIXME}" | grep -F 'with the issue in its tag block' >/dev/null 2>&1 && CH_BAD="${CH_BAD} feature-line-scenario-with-issue-reported"
+printf '%s\n' "${CH_FIXME}" | grep -F 'with the issue in its title' >/dev/null 2>&1 && CH_BAD="${CH_BAD} title-issue-not-in-effective-set"
 if [ -n "${CH_BAD// /}" ]; then
   bad "CONTROL H: tag scoping is wrong —${CH_BAD}:"
   printf '%s\n' "${CH_FIXME}" | sed 's/^/         /'
 else
-  ok "CONTROL H: Examples-block tags scope to their outline, Rule tags inherit, neither bleeds"
+  ok "CONTROL H: Feature-line and Rule tags inherit, Examples-block and title tags scope to their own scenario, two-line tag blocks keep both lines, nothing bleeds"
 fi
 
 # control I — VERDICT WIRING. Controls E-H prove the SCANNER can see a defect;
@@ -767,6 +825,26 @@ if [ "${CI_DELTA}" -eq 1 ]; then
   ok "CONTROL I: a malformed @issue: tag reaches the verdict as a FAIL (F moved by exactly 1)"
 else
   bad "CONTROL I: the verdict did NOT fail on 11 malformed @issue: tags (F moved by ${CI_DELTA}, expected 1) — check 5 has become a report"
+fi
+
+# control K — REPORT WIRING. Control I proves a malformed tag reaches `bad`;
+# nothing above proves an untraceable @fixme reaches STDOUT with the right
+# count — the `REPORT ${fixme_n} ...` echo replaced by `:`, or `fixme_n` pinned
+# to 0, survived two skeptic batteries at 21/0 (2026-09-23). Run the real
+# verdict over control F's tree (exactly one untraceable @fixme) and require the
+# exact REPORT line, its row, and no FAIL. Captured with `$(...)`, so the verdict
+# runs in a subshell: P, F and ISSUE_VERDICT_TREES in THIS shell are untouched
+# and need no restore (unlike control I, which must see F move).
+CK_OUT="$(issue_tag_verdict "${CF}")"
+if printf '%s\n' "${CK_OUT}" | grep -F '  FAIL' >/dev/null 2>&1; then
+  bad "CONTROL K: the verdict FAILED on control F's tree, which holds no malformed tag — REPORT has become a FAIL"
+elif ! printf '%s\n' "${CK_OUT}" | grep -Fx '  REPORT 1 @fixme scenario(s) with no @issue: tag (not a failure; see features/README.md §8):' >/dev/null 2>&1; then
+  bad "CONTROL K: the verdict did not print 'REPORT 1 @fixme scenario(s) with no @issue: tag' over a tree holding exactly one — the REPORT line or its count is gone:"
+  printf '%s\n' "${CK_OUT}" | sed 's/^/         /'
+elif ! printf '%s\n' "${CK_OUT}" | grep -F 'naming no issue at all' >/dev/null 2>&1; then
+  bad "CONTROL K: the REPORT count is right but the row naming the scenario is not printed — the list under REPORT is gone"
+else
+  ok "CONTROL K: an untraceable @fixme reaches the verdict as 'REPORT 1 ...' with its row, and not as a FAIL"
 fi
 
 # control J — THE REAL TREE WAS JUDGED, BY PATH. The census below counts
