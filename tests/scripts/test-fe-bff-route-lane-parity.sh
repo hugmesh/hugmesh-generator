@@ -16,11 +16,15 @@
 # Operator decision 40 (hugmesh-generator#347, answers comment of 2026-09-17)
 # chose FULL alignment onto user-bff, over the cheaper option of carving the two
 # `/bff/register/*` paths back to admin-bff on the cluster. Two of the five —
-# POST /bff/register/google and POST /bff/register/discord — have NO user-bff
-# handler, so they now 404 on BOTH lanes. That is an ACCEPTED regression
-# (hugmesh/hugmesh-user-bff-api#13 is the fix), not a defect to be undone by
-# re-pointing the routes. This guard is what stops a well-meaning "fix" from
-# quietly restoring the split.
+# POST /bff/register/google and POST /bff/register/discord — initially had NO
+# user-bff handler and 404'd on BOTH lanes, an ACCEPTED regression pending a
+# fix. UPDATED 2026-09-18: that fix landed
+# (hugmesh/hugmesh-user-bff-api#20, commit dc34c8b, LegacyPathParityController)
+# — this guard's own FIVE table went stale claiming otherwise for a day
+# (flagged on hugmesh-generator#347 2026-09-18T07:21Z) because `has_handler`
+# was only ever printed, never asserted; it is asserted now (see the FIVE
+# table below). This guard is what stops a well-meaning "fix" from quietly
+# restoring the split.
 #
 # WHAT IS ASSERTED
 # ----------------
@@ -186,8 +190,16 @@ USER_BFF = "hugmesh-user-bff-api"
 ADMIN_BFF = "hugmesh-admin-bff-api"
 
 # The five paths of #366. `owner` is the service BOTH tables must resolve them to
-# after decision 40. `handler` records whether that service actually has one —
-# False is the accepted 404, deliberately kept visible in this table.
+# after decision 40. `handler` records whether that service actually has one.
+# UPDATED 2026-09-18: all five now do — user-bff-api#20 (commit dc34c8b) added
+# the last two, closing the "accepted 404" gap this table used to carry for
+# them (stale claim flagged on hugmesh-generator#347 2026-09-18T07:21Z: this
+# table still said has_handler=False and printed a 404-ACCEPTED line for both
+# after #20 had already landed). `has_handler` is now ASSERTED below, not only
+# printed: any entry with has_handler=False fails the run, because decision
+# 40's five-path alignment no longer expects any 404s among them — a False
+# value here is either a stale claim (fix this table) or a real regression (a
+# handler was removed), and either way it must not go green silently.
 FIVE = [
     ("/bff/me/namespaces",      USER_BFF, True,
      "admin-ui bff.service.ts myNamespaces()"),
@@ -195,10 +207,10 @@ FIVE = [
      "login-ui provisionServiceTokens(), every sign-in"),
     ("/bff/provision/mastodon", USER_BFF, True,
      "login-ui provisionServiceTokens(), every sign-in"),
-    ("/bff/register/google",    USER_BFF, False,
-     "tests/qemu/seed-accounts.sh (DIRECT to admin-bff:8403, not via a gateway)"),
-    ("/bff/register/discord",   USER_BFF, False,
-     "generated clients only"),
+    ("/bff/register/google",    USER_BFF, True,
+     "LegacyPathParityController (hugmesh-user-bff-api#20, commit dc34c8b)"),
+    ("/bff/register/discord",   USER_BFF, True,
+     "LegacyPathParityController (hugmesh-user-bff-api#20, commit dc34c8b)"),
 ]
 
 # Paths that must NOT move, and are the reason compose keeps EXACT entries rather
@@ -266,15 +278,27 @@ def check(compose, cluster, report=False):
             continue
         if cs != owner:
             note(f"{path} resolves to {cs} on BOTH lanes; decision 40 requires "
-                 f"{owner}. If this was an attempt to un-break the "
-                 f"{'404' if not has_handler else 'route'}, the fix is a "
-                 f"user-bff handler (hugmesh/hugmesh-user-bff-api#13), NOT a "
-                 f"re-point.")
+                 f"{owner}. re-open decision 40 on hugmesh-generator#347 before "
+                 f"widening it here.")
+            continue
+        # has_handler is ASSERTED, not merely printed (hugmesh-generator#347,
+        # 2026-09-18T07:21Z — this table went stale claiming has_handler=False
+        # for two paths whose user-bff handler had already landed, and nothing
+        # here turned red over it). Decision 40's alignment no longer expects
+        # ANY 404 among the five: every entry must claim has_handler=True, or
+        # this table is either behind reality (fix the claim) or reporting a
+        # real regression (a handler was removed) — either way it is a FAIL,
+        # never a print-only FYI.
+        if not has_handler:
+            note(f"{path}: has_handler=False in the FIVE table (caller: "
+                 f"{caller}) — decision 40's five-path alignment landed real "
+                 f"user-bff handlers for all five (hugmesh-user-bff-api#15, "
+                 f"#20); a False entry here is stale unless a handler has "
+                 f"genuinely been removed. Verify against user-bff's source "
+                 f"before either fixing this table or filing the regression.")
             continue
         if report:
-            tail = ("serves it" if has_handler
-                    else "404 — ACCEPTED, user-bff-api#13; caller: " + caller)
-            ok(f"{path} -> {owner} on BOTH lanes ({tail})")
+            ok(f"{path} -> {owner} on BOTH lanes (serves it — {caller})")
 
     # 3. No widening on compose.
     compose_paths = [p.strip() for r in compose for p in r["paths"]]
@@ -407,7 +431,7 @@ CONTROLS = [
     ("compose user-bff route is moved BELOW the /bff/** admin catch-all",
      lambda: (move_below_catchall(compose, "hugmesh-user-bff-api",
                                   "hugmesh-admin-bff-api"), cluster)),
-    ("compose 'fixes' the accepted 404 by re-pointing at admin-bff",
+    ("compose 'un-does' decision 40 by re-pointing user-bff back at admin-bff",
      lambda: (repoint(compose, "hugmesh-user-bff-api",
                       "http://hugmesh-admin-bff-api:8080"), cluster)),
     ("compose mirrors the cluster subtree /bff/me/** instead of exact paths",
