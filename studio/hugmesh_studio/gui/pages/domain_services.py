@@ -61,6 +61,27 @@ where the refusal can be acted on, beside the ‘back to the main menu’ card.)
 HONESTY, and it is on the page rather than in this docstring: the selection does not
 yet reach the cluster (``ENFORCEMENT_NOTE`` / issue #496).
 
+THE MESH'S OWN DOMAIN GETS A PAGE TOO (reported 2026-09-23: "the checkbox doesn't
+seem to be present on each domain page"). Ask 19's default card — "Just this mesh's own
+domain" — skips the Domains table, and until now that skipped this step with it, so the
+one domain every mesh serves (``cfg.cluster_domain``) never had a services page. Now
+``applies_to`` is True on every mesh flow and the walk starts with the own domain
+(``core.domain_services.implicit_own_domain``), then the table rows. The own domain is
+IMPLICIT — never a ``cfg.domains`` row, so the ASK-8 emission guard holds (an untouched
+flow emits no ``--domains`` and no manifest ``domains`` entry); its selection is
+``cfg.cluster_domain_services``, which both manifests carry only when non-empty. The
+gate (``unconfigured_domains``) still names TABLE rows only: the own domain's page is
+enforced by being unavoidable on the flow, not by the gate, because a gate that refused
+a mesh-mode config for its own domain would also refuse the local-docker route an
+operator reaches after clicking "Mesh node" first — a flow that has no such step.
+
+ONE BODY, TWO HOSTS. ``DomainServicesBody`` is the surface and its logic as a plain
+mixin; this page hosts it in the image flow, and ``DomainServicesWidget`` hosts the
+SAME body on the generate-a-new-local-mesh route (``pages/localmesh.py``), where the
+"config" is ``core.local_mesh_domains.LocalMeshDomains`` rather than an ImageConfig.
+Nothing is forked: the catalogue, the scope tables, the recording and the reviewed
+bookkeeping are one implementation.
+
 WHERE #499 (per-service source forge + credentials) GOES: each service row is a
 QTreeWidgetItem in ``self._rows`` keyed by slug, and the table already carries a
 per-row settings column that is empty today. A forge/repo/branch control per row hangs
@@ -76,9 +97,10 @@ from ...core.config import superadmin_plane_applies
 from ...core.domain_services import (
     DOMAIN_CATALOGUE, ENFORCEMENT_NOTE, OTHER_SCOPE_HEADERS, SCOPE_BINDS,
     SCOPE_DOMAIN, SCOPE_IMAGE, SCOPE_LABELS, SCOPE_NODE, SCOPE_WHERE,
-    carried_over_slugs, describe, describe_carried_over,
-    grouped_domain_catalogue, normalise_slugs, other_scope_rows, record_reviewed,
-    reviewed_names, scope_of, unconfigured_domains,
+    carried_over_slugs, describe, describe_carried_over, domain_names_for_services,
+    grouped_domain_catalogue, implicit_own_domain, normalise_slugs,
+    other_scope_rows, record_reviewed, reviewed_names, scope_of,
+    unconfigured_domains,
 )
 
 #: Table columns. ``_COL_SCOPE`` (#497) says what each row BINDS, on the row itself and
@@ -106,15 +128,18 @@ def _scope_legend() -> str:
         for k in (SCOPE_DOMAIN, SCOPE_IMAGE, SCOPE_NODE))
 
 
-class DomainServicesPage(QtWidgets.QWizardPage):
-    """One domain's services, one domain at a time."""
+class DomainServicesBody:
+    """The per-domain services surface and its logic, as a plain-Python mixin.
 
-    def __init__(self, wiz):
-        super().__init__()
-        self.wiz = wiz
-        self.setTitle("Domain services")
+    A host calls :meth:`_init_body` with the layout to fill, overrides the three
+    hooks (:meth:`_set_titles`, :meth:`_scope_cfg`, :meth:`_entries`) and drives
+    :meth:`_load` / :meth:`_record` from its own entry/exit points. Every widget and
+    every piece of working state lives directly on the host object — no delegation —
+    so ``DomainServicesPage`` keeps the attributes its tests read."""
+
+    def _init_body(self, lay) -> None:
         #: domain name -> the slugs chosen for it (the working copy; cfg is written
-        #: at validatePage, which is also what ``collect_all`` calls).
+        #: at _record, which is what validatePage and ``collect_all`` reach).
         self._selection: dict[str, list[str]] = {}
         #: the domain names actually walked in this wizard run, plus whatever a loaded
         #: config already recorded.
@@ -128,13 +153,14 @@ class DomainServicesPage(QtWidgets.QWizardPage):
         #: equality: two configs can be equal and still be different sessions.
         self._cfg_seen = None
         self._names: list[str] = []
+        #: the mesh's OWN domain when it is on the walk (implicit_own_domain), so the
+        #: header can say so and _record knows which field takes its selection.
+        self._own_name = ""
         self._index = 0
         self._rows: dict[str, QtWidgets.QTreeWidgetItem] = {}
         self._boxes: dict[str, QtWidgets.QCheckBox] = {}
         #: the read-only #497 rows, keyed the same way — data, never controls.
         self._other_rows: dict[str, QtWidgets.QTreeWidgetItem] = {}
-
-        lay = scrollable(self)
 
         # ── which domain this screen is ────────────────────────────────────────────
         self.head = QtWidgets.QLabel("")
@@ -157,6 +183,15 @@ class DomainServicesPage(QtWidgets.QWizardPage):
         self.enforcement.setWordWrap(True)
         self.enforcement.setStyleSheet(f"color: {WARN};")
         lay.addWidget(self.enforcement)
+
+        # What THIS lane does with the selection, when the host has a sentence to add
+        # (the local docker mesh: recorded with the mesh, not what picks the compose
+        # profiles). Hidden while empty so the image flow's page is unchanged.
+        self.lane_note = QtWidgets.QLabel("")
+        self.lane_note.setWordWrap(True)
+        self.lane_note.setStyleSheet(f"color: {WARN};")
+        self.lane_note.setVisible(False)
+        lay.addWidget(self.lane_note)
 
         self.help = QtWidgets.QLabel(
             "Tick the services THIS domain provides. They ride the mesh manifest as "
@@ -221,22 +256,25 @@ class DomainServicesPage(QtWidgets.QWizardPage):
         lay.addWidget(self.remaining)
         lay.addStretch(1)
 
+    # ── host hooks ────────────────────────────────────────────────────────────────
+    def _set_titles(self, title: str, subtitle: str) -> None:
+        """Where the host shows "Services for <domain>" (a wizard page's title bar, a
+        widget's header label)."""
+
+    def _scope_cfg(self):
+        """The config the read-only "not domain-scoped" table reads the mesh-wide
+        state off (``other_scope_rows``); None renders the state column empty."""
+        return None
+
+    def _entries(self):
+        """The worklist rows the host is carrying, or () — the per-node half of the
+        state column."""
+        return ()
+
     # ── flow ──────────────────────────────────────────────────────────────────────
-    def applies_to(self, cfg) -> bool:
-        """Shown wherever the Domains table is, and only when there is at least one
-        NAMED domain to configure.
-
-        Emission-neutral when skipped, in the strong sense the nextId() ALL-OPTIONS
-        guard asks for: with no named domain there is nothing to record, nothing to
-        write to cfg — and nothing for the build/mesh-start gate to refuse either, so
-        skipping cannot smuggle a domain past it."""
-        if not superadmin_plane_applies(cfg):
-            return False
-        return any((getattr(d, "name", "") or "").strip()
-                   for d in (getattr(cfg, "domains", None) or []))
-
-    def initializePage(self):
-        cfg = self.wiz.cfg
+    def _load(self, cfg, names, own_name: str = "") -> None:
+        """Enter the walk for ``cfg``: ``names`` in walk order, ``own_name`` the
+        implicit own domain among them (or "")."""
         if cfg is not self._cfg_seen:
             # A DIFFERENT configuration object — Load config / Load session / a restart
             # from the previous-builds manager. Drop every working answer: they belong
@@ -248,19 +286,25 @@ class DomainServicesPage(QtWidgets.QWizardPage):
             self._reviewed = set()
             self._index = 0
             self._cfg_seen = cfg
-        self._names = [(d.name or "").strip() for d in (cfg.domains or [])
-                       if (d.name or "").strip()]
+        self._names = [n for n in names if n]
+        self._own_name = (own_name or "").strip()
         # Seed from cfg every entry: the Domains table may have added, renamed or
         # dropped rows since the last visit. A name that survived keeps its working
-        # selection; a new one starts from whatever the manifest already carried.
+        # selection; a new one starts from whatever the manifest already carried —
+        # the row's slugs, or ``cluster_domain_services`` for the own domain.
+        rows = {(getattr(d, "name", "") or "").strip(): d
+                for d in (getattr(cfg, "domains", None) or [])}
         fresh: dict[str, list[str]] = {}
-        for d in (cfg.domains or []):
-            name = (d.name or "").strip()
-            if not name:
-                continue
-            fresh[name] = (self._selection.get(name)
-                           if name in self._selection
-                           else normalise_slugs(d.optional_services))
+        for name in self._names:
+            if name in self._selection:
+                fresh[name] = self._selection[name]
+            elif name == self._own_name and name not in rows:
+                fresh[name] = normalise_slugs(
+                    getattr(cfg, "cluster_domain_services", None))
+            else:
+                row = rows.get(name)
+                fresh[name] = normalise_slugs(
+                    getattr(row, "optional_services", None) if row else None)
         # ASSIGNED, never merged into what was there: a domain dropped from the table
         # must not keep a working selection that a later re-add would silently restore.
         self._selection = fresh
@@ -310,12 +354,13 @@ class DomainServicesPage(QtWidgets.QWizardPage):
         # for, and demanding a second "confirm" click would be a ceremony that adds no
         # information. Domains never shown stay unconfigured and the gate names them.
         self._reviewed.add(name)
-        self.setTitle(f"Services for {name}")
-        self.setSubTitle(
+        own = " (this mesh's own domain)" if name == self._own_name else ""
+        self._set_titles(
+            f"Services for {name}",
             f"Domain {self._index + 1} of {total} — every domain gets its own "
             "service page, and a domain you never open is refused at build time.")
         self.head.setText(
-            f"<b>{name}</b> &nbsp;·&nbsp; domain {self._index + 1} of {total}")
+            f"<b>{name}</b>{own} &nbsp;·&nbsp; domain {self._index + 1} of {total}")
         self.prev_btn.setEnabled(self._index > 0)
         self.next_btn.setEnabled(self._index < total - 1)
         self._rebuild(name)
@@ -369,7 +414,7 @@ class DomainServicesPage(QtWidgets.QWizardPage):
         operator may have changed since this page was last painted."""
         self.other_table.clear()
         self._other_rows = {}
-        for slug, scope, where, state in other_scope_rows(self.wiz.cfg,
+        for slug, scope, where, state in other_scope_rows(self._scope_cfg(),
                                                           self._entries()):
             item = QtWidgets.QTreeWidgetItem(self.other_table)
             # NOT CHECKABLE, explicitly. A QTreeWidgetItem carries ItemIsUserCheckable
@@ -391,13 +436,6 @@ class DomainServicesPage(QtWidgets.QWizardPage):
             if desc:
                 item.setToolTip(0, desc)
             self._other_rows[slug] = item
-
-    def _entries(self):
-        """The worklist rows this wizard is carrying, or () — the per-node half of the
-        state column. Tolerant on purpose: pages are constructed before WorklistPage has
-        ever run, and a cloud flow has no worklist at all."""
-        wl = getattr(self.wiz, "worklist", None)
-        return list(getattr(wl, "entries", None) or ())
 
     def _group_row(self, title: str) -> "QtWidgets.QTreeWidgetItem":
         item = QtWidgets.QTreeWidgetItem(self.table)
@@ -448,9 +486,10 @@ class DomainServicesPage(QtWidgets.QWizardPage):
             name = self.current_domain()
         return list(self._selection.get(name, []))
 
-    def validatePage(self):
+    def _record(self, cfg) -> None:
         """RECORD, never refuse. Writes the per-domain selections onto ``cfg.domains``
-        and the walked names onto ``cfg.domain_services_reviewed``.
+        (and the own domain's onto ``cfg.cluster_domain_services``) and the walked
+        names onto ``cfg.domain_services_reviewed``.
 
         Always returns True on purpose. ``collect_all()`` re-runs a visited page's
         validatePage to harvest it, so a False here would make saving a config depend
@@ -469,18 +508,78 @@ class DomainServicesPage(QtWidgets.QWizardPage):
         onto another's domains. ``QWizard::restart()`` calls ``cleanupPage`` on every
         visited page, and ``load_config`` calls ``restart()``, so that is not a
         hypothetical ordering."""
-        cfg = self.wiz.cfg
         if cfg is not self._cfg_seen:
-            return True
+            return
         self._capture()
-        for d in (cfg.domains or []):
-            name = (d.name or "").strip()
+        rows = [(d, (getattr(d, "name", "") or "").strip())
+                for d in (getattr(cfg, "domains", None) or [])]
+        for d, name in rows:
             if name in self._selection:
                 d.optional_services = list(self._selection[name])
+        own = self._own_name
+        if own and own in self._selection and own not in {n for _d, n in rows}:
+            cfg.cluster_domain_services = list(self._selection[own])
         # REBUILT from the domains that still exist (record_reviewed does the
         # restriction), so a renamed or deleted domain cannot leave a stranded marker
         # that would let the gate pass for a domain nobody configured.
         record_reviewed(cfg, self._reviewed)
+
+    # ── introspection for the gate's own callers/tests ───────────────────────────
+    def unconfigured(self) -> list[str]:
+        """The domains this walk has not been through yet, in table order."""
+        return [n for n in self._names if n not in self._reviewed]
+
+
+class DomainServicesPage(QtWidgets.QWizardPage, DomainServicesBody):
+    """One domain's services, one domain at a time — the image flow's host."""
+
+    def __init__(self, wiz):
+        super().__init__()
+        self.wiz = wiz
+        self.setTitle("Domain services")
+        self._init_body(scrollable(self))
+
+    # ── body hooks ────────────────────────────────────────────────────────────────
+    def _set_titles(self, title: str, subtitle: str) -> None:
+        self.setTitle(title)
+        self.setSubTitle(subtitle)
+
+    def _scope_cfg(self):
+        return self.wiz.cfg
+
+    def _entries(self):
+        """The worklist rows this wizard is carrying, or () — the per-node half of the
+        state column. Tolerant on purpose: pages are constructed before WorklistPage has
+        ever run, and a cloud flow has no worklist at all."""
+        wl = getattr(self.wiz, "worklist", None)
+        return list(getattr(wl, "entries", None) or ())
+
+    # ── flow ──────────────────────────────────────────────────────────────────────
+    def applies_to(self, cfg) -> bool:
+        """On EVERY mesh flow (the mesh's own domain always has a services page —
+        ``implicit_own_domain``), and otherwise wherever the Domains table is, when
+        it names at least one domain.
+
+        Emission-neutral when skipped, in the strong sense the nextId() ALL-OPTIONS
+        guard asks for: a cloud node names no domain, so there is nothing to record,
+        nothing to write to cfg — and nothing for the build/mesh-start gate to refuse
+        either, so skipping cannot smuggle a domain past it. Standalone is skipped
+        statically (MODE_SKIPPED_PAGES)."""
+        if implicit_own_domain(cfg):
+            return True
+        if not superadmin_plane_applies(cfg):
+            return False
+        return any((getattr(d, "name", "") or "").strip()
+                   for d in (getattr(cfg, "domains", None) or []))
+
+    def initializePage(self):
+        cfg = self.wiz.cfg
+        self._load(cfg, domain_names_for_services(cfg), implicit_own_domain(cfg))
+
+    def validatePage(self):
+        """Record (see ``DomainServicesBody._record``); always True — the refusal
+        belongs at the build/mesh-start screens, where it can be acted on."""
+        self._record(self.wiz.cfg)
         return True
 
     def cleanupPage(self):
@@ -497,10 +596,54 @@ class DomainServicesPage(QtWidgets.QWizardPage):
         """
         self.validatePage()
 
-    # ── introspection for the gate's own callers/tests ───────────────────────────
-    def unconfigured(self) -> list[str]:
-        """The domains this walk has not been through yet, in table order."""
-        return [n for n in self._names if n not in self._reviewed]
+
+class DomainServicesWidget(QtWidgets.QWidget, DomainServicesBody):
+    """The SAME body as a plain widget, for a host that is not a wizard page of the
+    image flow — the generate-a-new-local-mesh route embeds it on its ‘Domain
+    services’ step (``pages/localmesh.py``) and drives :meth:`load` / :meth:`record`
+    with a ``core.local_mesh_domains.LocalMeshDomains``.
+
+    ``scope_cfg`` / ``entries`` are callables returning what the read-only
+    "not domain-scoped" table reads its state column from; ``lane_note`` is the one
+    sentence saying what this lane does with the selection."""
+
+    def __init__(self, scope_cfg=None, entries=None, lane_note: str = "",
+                 parent=None):
+        super().__init__(parent)
+        self._scope_cfg_fn = scope_cfg
+        self._entries_fn = entries
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.title_label = QtWidgets.QLabel("")
+        self.title_label.setStyleSheet("font-weight: bold;")
+        self.title_label.setWordWrap(True)
+        lay.addWidget(self.title_label)
+        self.subtitle_label = QtWidgets.QLabel("")
+        self.subtitle_label.setWordWrap(True)
+        self.subtitle_label.setStyleSheet(muted())
+        lay.addWidget(self.subtitle_label)
+        self._init_body(lay)
+        if lane_note:
+            self.lane_note.setText(lane_note)
+            self.lane_note.setVisible(True)
+
+    def _set_titles(self, title: str, subtitle: str) -> None:
+        self.title_label.setText(title)
+        self.subtitle_label.setText(subtitle)
+
+    def _scope_cfg(self):
+        return self._scope_cfg_fn() if self._scope_cfg_fn else None
+
+    def _entries(self):
+        return list(self._entries_fn() or ()) if self._entries_fn else []
+
+    def load(self, cfg) -> None:
+        """Enter the walk for ``cfg`` (its named rows, in table order)."""
+        self._load(cfg, domain_names_for_services(cfg), implicit_own_domain(cfg))
+
+    def record(self, cfg) -> None:
+        """Write the working selections and the reviewed marker onto ``cfg``."""
+        self._record(cfg)
 
 
 def pending_gate_domains(cfg) -> list[str]:
