@@ -30,13 +30,15 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { expect, type Response } from '@playwright/test';
-import { Given, When, Then, requireDimension, substep } from './world';
+import type { APIRequestContext } from '@playwright/test';
+import { Given, When, Then, After, requireDimension, substep } from './world';
 import { persona, personaSource, shellRoster, knownPersonas } from './dimensions';
 import {
-  registerOnly, getSession, personaPassword,
+  registerOnly, getSession, personaPassword, apiContext,
   parseResolverRules, resolveForNode,
 } from '../specs/helpers';
 import { SYSTEMS_SEED_USERS } from '../specs/rbac-roles';
+import { api, record } from './mined-identity.steps';
 
 // ── generic UI vocabulary (see MERGE NOTE above) ─────────────────────────────
 
@@ -417,3 +419,286 @@ Then('a shell seeder really does create the persona', async ({ dimensions }) => 
     + `feature naming it would 401 at login with a bare "invalid credentials".`,
   ).toBe(true);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// The provider registration legs + sign-out  (identity lane, 2026-09-23)
+//
+//   features/onboarding/register-provider-paths.feature   #366 / user-bff #16 #19 #14
+//   features/onboarding/email-register.feature            gateway #29 / user-bff #13
+//   features/onboarding/native-login.feature (#306 row)
+//   features/mined-identity/sign-out-ends-session.feature (#549 / #569)
+//
+// Everything below drives the SAME front door the browser lane drives, through
+// the resolver-aware apiContext() (so a @env:kind row resolves hugmesh.net the
+// way tests/e2e/run.sh --env kind expects) and records into the SAME world keys
+// mined-identity.steps.ts's `record()` / `the response status is {int}` read.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** An identity this scenario invited itself; provider decides the body shape. */
+interface InvitedIdentity { provider: 'google' | 'discord'; handle: string }
+
+const ONBOARDING_CONTEXTS = 'onboarding:contexts';
+const ONBOARDING_INVITES = 'onboarding:invites';
+const ONBOARDING_ADMIN_API = 'onboarding:adminApi';
+/** The admin the suite already uses to invite identities (spec 02). */
+const INVITING_ADMIN = 'admin@hugmesh.net';
+
+function trackOnboardingContext(
+  world: { has(k: string): boolean; get<T>(k: string): T; set<T>(k: string, v: T): void },
+  ctx: APIRequestContext,
+): APIRequestContext {
+  const list = world.has(ONBOARDING_CONTEXTS) ? world.get<APIRequestContext[]>(ONBOARDING_CONTEXTS) : [];
+  list.push(ctx);
+  world.set(ONBOARDING_CONTEXTS, list);
+  return ctx;
+}
+
+/** LEAVE NO TRACE. Every identity a scenario invited is un-invited again, even
+ *  when a step in between failed — the running stack is the operator's, and
+ *  the admin allowlist console is a surface they read by hand. The ACCOUNT row
+ *  a successful registration created cannot be removed through any front-door
+ *  API (there is none), which is why the handle carries a `bdd-` prefix and a
+ *  per-run stamp: recognisable, and never colliding with a seeded persona. */
+After(async ({ world }) => {
+  if (world.has(ONBOARDING_INVITES) && world.has(ONBOARDING_ADMIN_API)) {
+    const admin = world.get<APIRequestContext>(ONBOARDING_ADMIN_API);
+    for (const inv of world.get<InvitedIdentity[]>(ONBOARDING_INVITES)) {
+      const data = inv.provider === 'google' ? { email: inv.handle } : { discord: inv.handle };
+      await admin.delete('/bff/admin/allowlist', { data }).catch(() => { /* best effort */ });
+    }
+  }
+  if (world.has(ONBOARDING_CONTEXTS)) {
+    for (const ctx of world.get<APIRequestContext[]>(ONBOARDING_CONTEXTS)) {
+      await ctx.dispose().catch(() => { /* already torn down with the test */ });
+    }
+  }
+});
+
+async function signedInApi(
+  baseURL: string | undefined,
+  world: { has(k: string): boolean; get<T>(k: string): T; set<T>(k: string, v: T): void },
+  handle: string,
+): Promise<APIRequestContext> {
+  const ctx = trackOnboardingContext(world, await apiContext(baseURL));
+  const r = await ctx.post('/bff/login', {
+    data: { username: handle, password: personaPassword(handle) },
+  });
+  expect(r.status(), `native login ${handle} -> ${r.status()}`).toBe(200);
+  return ctx;
+}
+
+/** A per-run stamp: a registration that succeeded is durable (the account row
+ *  survives an un-invite), so a FIXED handle would be "already complete" from
+ *  the second run on and the fresh-registration legs would read as a regression. */
+function freshStamp(): string {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/** Invite `identity` as the suite's admin through the real
+ *  POST /bff/admin/allowlist (AdminController#invite: durable allowlist row +
+ *  best-effort Casdoor record), and remember it for the After hook. */
+async function inviteAsAdmin(
+  baseURL: string | undefined,
+  world: { has(k: string): boolean; get<T>(k: string): T; set<T>(k: string, v: T): void },
+  identity: InvitedIdentity,
+): Promise<void> {
+  const admin = world.has(ONBOARDING_ADMIN_API)
+    ? world.get<APIRequestContext>(ONBOARDING_ADMIN_API)
+    : await signedInApi(baseURL, world, INVITING_ADMIN);
+  world.set(ONBOARDING_ADMIN_API, admin);
+  const data = identity.provider === 'google' ? { email: identity.handle } : { discord: identity.handle };
+  const r = await admin.post('/bff/admin/allowlist', { data });
+  const invites = world.has(ONBOARDING_INVITES) ? world.get<InvitedIdentity[]>(ONBOARDING_INVITES) : [];
+  invites.push(identity);
+  world.set(ONBOARDING_INVITES, invites);
+  expect(
+    r.status(),
+    `${INVITING_ADMIN} inviting ${identity.provider}:${identity.handle} -> ${r.status()} `
+    + `${(await r.text().catch(() => '')).slice(0, 300)}. A 422 here is the reserved/confusable `
+    + `username gate refusing the DERIVED username, not a registration defect.`,
+  ).toBe(200);
+}
+
+Given('a freshly invited Gmail identity for this scenario', async ({ baseURL, world }) => {
+  const identity: InvitedIdentity = { provider: 'google', handle: `bdd-invite-${freshStamp()}@gmail.com` };
+  await inviteAsAdmin(baseURL, world, identity);
+  world.set('invitedIdentity', identity);
+});
+
+Given('a freshly invited Discord identity for this scenario', async ({ baseURL, world }) => {
+  const identity: InvitedIdentity = { provider: 'discord', handle: `bdd-invite-${freshStamp()}` };
+  await inviteAsAdmin(baseURL, world, identity);
+  world.set('invitedIdentity', identity);
+});
+
+function registerBody(identity: InvitedIdentity): Record<string, string> {
+  return identity.provider === 'google' ? { email: identity.handle } : { username: identity.handle };
+}
+
+/**
+ * POST the invited identity to its provider's registration path THROUGH THE
+ * CALLER'S CURRENT SESSION. That is not an accident of the step: the front door
+ * seeds `/bff/register/**` as ROLE_USER (route-access row :627) and lists no
+ * `/bff/register/*` in the gateway's PUBLIC_PATHS, so an anonymous registration
+ * POST is 401'd before any BFF sees it (hugmesh-gateway#29 records the same for
+ * `/bff/register`). A signed-in member is therefore the only front-door caller
+ * these legs have today. On success user-bff's emitAndSession mints the NEW
+ * account's bff_ cookie onto this same jar — from here on `the API client` IS
+ * the freshly registered identity, which is exactly what the follow-up steps
+ * assert on.
+ */
+When('the API client registers the invited identity through {string}',
+  async ({ world }, path: string) => {
+    const identity = world.get<InvitedIdentity>('invitedIdentity');
+    const data = registerBody(identity);
+    await record(world, `POST ${path} ${JSON.stringify(data)}`, await api(world).post(path, { data }));
+  });
+
+/**
+ * The precondition of the decision-57 leg: an invited identity whose account is
+ * ALREADY registrationComplete. Built through the same front-door legs a user
+ * takes, and idempotent on a persistent stack:
+ *   * 200  -> a fresh account; complete its registration now
+ *   * 409  -> already complete (decision 57's answer, once it lands)
+ *   * 503  -> already complete, on a user-bff that still answers the pre-decision
+ *             refusal (hugmesh-user-bff-api#19's declared 503)
+ * so the SECOND registration, the one the scenario asserts on, always meets a
+ * completed account. Anything else is a real failure and says which leg.
+ */
+Given('the invited {string} identity {string} already holds a completed registration',
+  async ({ baseURL, world }, provider: string, handle: string) => {
+    if (provider !== 'google' && provider !== 'discord') {
+      throw new Error(`provider must be google or discord, got '${provider}'`);
+    }
+    const identity: InvitedIdentity = { provider, handle };
+    await inviteAsAdmin(baseURL, world, identity);
+    world.set('invitedIdentity', identity);
+    const path = `/bff/register/${provider}`;
+    const r = await api(world).post(path, { data: registerBody(identity) });
+    const body = (await r.text().catch(() => '')).slice(0, 300);
+    if (r.status() === 200) {
+      const done = await api(world).post('/bff/register/complete', { data: { displayName: handle } });
+      expect(done.status(), `POST /bff/register/complete for the fresh ${identity.provider}: account`)
+        .toBe(200);
+      return;
+    }
+    expect(
+      [409, 503],
+      `${path} for an identity that should either be fresh (200) or already complete `
+      + `(409, or the pre-decision-57 503) answered ${r.status()} ${body}`,
+    ).toContain(r.status());
+  });
+
+When('the API client completes registration with the display name {string}',
+  async ({ world }, displayName: string) => {
+    await record(world, `POST /bff/register/complete {displayName:'${displayName}'}`,
+      await api(world).post('/bff/register/complete', { data: { displayName } }));
+  });
+
+/** GET /bff/session through the client's CURRENT jar and pin who it now is. */
+async function apiSession(world: any): Promise<Record<string, unknown>> {
+  const r = await api(world).get('/bff/session', { headers: { accept: 'application/json' } });
+  expect(r.status(), `GET /bff/session -> ${r.status()} ${(await r.text().catch(() => '')).slice(0, 200)}`)
+    .toBe(200);
+  return r.json();
+}
+
+Then('the API client session is a {string} account for the invited identity',
+  async ({ world }, provider: string) => {
+    const identity = world.get<InvitedIdentity>('invitedIdentity');
+    const s = await apiSession(world);
+    expect(s.provider, `session provider after registering ${identity.handle}`).toBe(provider);
+    expect(
+      String(s.handle).toLowerCase(),
+      `the session must now be the REGISTERED identity's — a jar still carrying the `
+      + `caller's previous session means emitAndSession minted no cookie`,
+    ).toBe(identity.handle.toLowerCase());
+  });
+
+Then('the API client session registration is complete', async ({ world }) => {
+  expect((await apiSession(world)).registrationComplete, 'session.registrationComplete').toBe(true);
+});
+
+Then('the API client session registration is not complete', async ({ world }) => {
+  expect((await apiSession(world)).registrationComplete, 'session.registrationComplete').toBe(false);
+});
+
+// ── #306 Family A: repeated native sign-ins in a short window ────────────────
+
+When('the API client signs in natively {int} times in a row as the persona for this scenario',
+  async ({ baseURL, dimensions, world }, times: number) => {
+    const handle = persona(requireDimension(dimensions, 'role'));
+    const statuses: number[] = [];
+    let last: APIRequestContext | undefined;
+    for (let i = 1; i <= times; i += 1) {
+      // substep: N distinguishable sign-ins, so a reviewer sees WHICH one 401'd
+      // rather than a single opaque failure.
+      await substep(`native sign-in ${i}/${times} as ${handle}`, async () => {
+        const ctx = trackOnboardingContext(world, await apiContext(baseURL));
+        const r = await ctx.post('/bff/login', {
+          data: { username: handle, password: personaPassword(handle) },
+        });
+        statuses.push(r.status());
+        last = ctx;
+      });
+    }
+    world.set('signInStatuses', statuses);
+    world.set('api', last);
+    world.set('username', handle);
+  });
+
+Then('every native sign-in in that run was accepted', async ({ world }) => {
+  const statuses = world.get<number[]>('signInStatuses');
+  expect(
+    statuses,
+    `POST /bff/login statuses in order: ${statuses.join(', ')}. A 401 that appears only `
+    + `after earlier 200s with the SAME correct password is hugmesh-generator#306's Family A `
+    + `shape — not a wrong password.`,
+  ).toEqual(statuses.map(() => 200));
+});
+
+// ── sign-out through the shell (hugmesh-generator#549) ──────────────────────
+
+/** The host shell's account menu: profile-trigger opens it, menu-logout is the
+ *  'Sign out' entry (hugmesh-host-shell header-controls.component.ts:161). Its
+ *  handler AWAITS POST /bff/sessionOut before clearing local state and returning
+ *  to the authgate — the 2026-08-15 fix — which is why the assertions that
+ *  follow may read the post-logout state straight away. */
+When('I sign out through the profile menu', async ({ page }) => {
+  await page.getByTestId('profile-trigger').click();
+  await page.getByTestId('menu-logout').click();
+});
+
+/** page.request shares the BROWSER's cookie jar, so this is the same question
+ *  the shell asks on its next hydrate — served from the same cookies. */
+Then('a browser GET to {string} answers {int}', async ({ page }, path: string, status: number) => {
+  const r = await page.request.get(path, { headers: { accept: 'application/json' } });
+  expect(
+    r.status(),
+    `GET ${path} from the browser's own jar -> ${r.status()}. After a sign-out this must be `
+    + `401: a 200 means the server session is still alive and the shell's next hydrate `
+    + `signs the user straight back in.`,
+  ).toBe(status);
+});
+
+Then('the browser holds no cookie named {string}', async ({ context }, name: string) => {
+  await expect
+    .poll(async () => (await context.cookies()).some((c) => c.name === name), {
+      message: `'${name}' must be gone from the browser jar after sign-out`,
+    })
+    .toBe(false);
+});
+
+/** Register an arbitrary handle (invited or not) through a provider path. The
+ *  body shape follows the path's provider — RegisterEmailRequest {email} for
+ *  google, RegisterDiscordRequest {username} for discord — so an Examples row
+ *  names the handle and never spells JSON into a table cell. */
+When('the API client registers the handle {string} through {string}',
+  async ({ world }, handle: string, path: string) => {
+    const provider = path.endsWith('/google') ? 'google' : path.endsWith('/discord') ? 'discord' : null;
+    if (!provider) {
+      throw new Error(`'${path}' is not a provider registration path (…/google or …/discord)`);
+    }
+    const data = registerBody({ provider, handle });
+    await record(world, `POST ${path} ${JSON.stringify(data)}`, await api(world).post(path, { data }));
+  });
