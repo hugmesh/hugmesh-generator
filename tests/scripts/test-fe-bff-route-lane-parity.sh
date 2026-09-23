@@ -518,11 +518,20 @@ def cluster_env(doc, container_name):
     return {e["name"]: e.get("value") for e in (ctr.get("env") or [])}
 
 
+def is_kubernetes_lane(label):
+    """Every lane that is not a compose service is a Kubernetes container. The
+    distinction matters for the TYPE of the value: EnvVar.value must be a
+    string, so an unquoted `value: 0` is rejected by the API server and the
+    ArgoCD sync fails, while compose coerces a bare 0 to "0" and runs."""
+    return not label.startswith("compose ")
+
+
 def check_ttl_pin(lanes):
     """{label: env_dict_or_None} -> list of failure strings, one per lane that
-    is not pinned. Three verdicts, reported differently so a reader knows what
-    to fix: the service/container was NOT FOUND (None), the key is ABSENT, or
-    the value is PRESENT-BUT-WRONG."""
+    is not pinned. Four verdicts, reported differently so a reader knows what
+    to fix: the service/container was NOT FOUND (None), the key is ABSENT, the
+    value is NOT A STRING on a Kubernetes lane, or the value is
+    PRESENT-BUT-WRONG."""
     fails = []
     for label, env in lanes.items():
         if env is None:
@@ -532,6 +541,12 @@ def check_ttl_pin(lanes):
                          f"verdict on {TTL_KEY} itself")
             continue
         val = env.get(TTL_KEY)
+        if is_kubernetes_lane(label) and TTL_KEY in env and not isinstance(val, str):
+            fails.append(f"[{label}] {TTL_KEY} is {val!r} ({type(val).__name__}), not the "
+                         f"string \"0\" — Kubernetes EnvVar.value must be a string, so "
+                         f"the API server rejects this Deployment and the ArgoCD sync "
+                         f"fails; write value: \"0\" (quoted)")
+            continue
         if val is None:
             fails.append(f"[{label}] {TTL_KEY} is ABSENT — decision 60 (2026-09-18) "
                          f"pins it to \"0\" explicitly; dropping the line silently "
@@ -599,6 +614,10 @@ TTL_CONTROLS = [
     ("BOTH lanes drift to the SAME non-zero value (parity alone would miss this)",
      lambda: with_lanes({"compose admin-bff-api": with_value(LIVE_LANES["compose admin-bff-api"], "5000"),
                          "cluster admin-bff-api": with_value(LIVE_LANES["cluster admin-bff-api"], "5000")})),
+    # An unquoted 0 on a Kubernetes lane parses as int 0 and str(0) == "0"; the
+    # API server rejects it, so the guard must too.
+    ("cluster admin-bff-api tidies value: \"0\" to an unquoted int 0 (API rejects it)",
+     lambda: with_lanes({"cluster admin-bff-api": with_value(LIVE_LANES["cluster admin-bff-api"], 0)})),
     # A rename is reported as NOT FOUND, never as ABSENT and never as a traceback.
     ("compose service renamed (compose_env finds nothing)",
      lambda: with_lanes({"compose mod-bff-api": compose_env(compose_full, "no such service (control)")})),
