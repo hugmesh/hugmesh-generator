@@ -456,6 +456,124 @@ for label, mutate in CONTROLS:
         bad(f"CONTROL SURVIVED: {label} — this guard is blind to it")
 
 print(f"\ncontrols: {caught} caught / {survived} survived")
+
+# ---------------------------------------------------------------------------
+# A SECOND, ORTHOGONAL CONCERN in this same offline file (deliberately, not a
+# new script — see the ownership note in this repo's decision-60 landing
+# commit): decision 60 (generator#347, operator 2026-09-18) pins
+# APP_BFF_EXCHANGE_CACHE_TTL_MS = "0" for admin-bff-api and mod-bff-api on
+# BOTH lanes, exactly the shape hugmesh-gateway#398/PR#406 pinned
+# HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS for the gateway and guarded with
+# tests/stack/test-gateway-auth-flag-parity.sh — a file this lane does not
+# own. This is the equivalent guard for the two services this lane's file
+# ownership DOES cover, checked by VALUE (a fixture with both lanes drifted to
+# the SAME non-zero number would pass a parity-only check while silently
+# undoing the decision — see #398's own landing notes for why parity alone is
+# not enough), not merely by presence.
+print("\n== decision 60: APP_BFF_EXCHANGE_CACHE_TTL_MS pinned to \"0\" on both lanes ==")
+
+COMPOSE_STACK = f"{root}/tests/stack/compose.local.yaml"
+CLUSTER_ADMIN_BFF = f"{root}/specs/cluster/manifests/admin-bff-api/deployment.yaml"
+CLUSTER_MOD_BFF = f"{root}/specs/cluster/manifests/mod-bff-api/deployment.yaml"
+TTL_KEY = "APP_BFF_EXCHANGE_CACHE_TTL_MS"
+
+
+def compose_env(doc, service):
+    return dict((doc.get("services") or {}).get(service, {}).get("environment") or {})
+
+
+def cluster_env(doc, container_name):
+    spec = doc["spec"]["template"]["spec"]
+    ctr = next(c for c in spec["containers"] if c["name"] == container_name)
+    return {e["name"]: e.get("value") for e in (ctr.get("env") or [])}
+
+
+def check_ttl_pin(admin_compose_env, mod_compose_env, admin_cluster_env, mod_cluster_env):
+    """[(label, env_dict)] -> list of failure strings. A MISSING key (None) and
+    a PRESENT-BUT-WRONG value are reported differently, so a reader knows
+    immediately whether the line was deleted or edited."""
+    fails = []
+    rows = [
+        ("compose admin-bff-api", admin_compose_env),
+        ("compose mod-bff-api", mod_compose_env),
+        ("cluster admin-bff-api", admin_cluster_env),
+        ("cluster mod-bff-api", mod_cluster_env),
+    ]
+    for label, env in rows:
+        val = env.get(TTL_KEY)
+        if val is None:
+            fails.append(f"[{label}] {TTL_KEY} is ABSENT — decision 60 (2026-09-18) "
+                         f"pins it to \"0\" explicitly; dropping the line silently "
+                         f"reopens the suspension-bypass window to whichever image "
+                         f"default ships (application.yml's is 5000 = 5s)")
+        elif str(val) != "0":
+            fails.append(f"[{label}] {TTL_KEY}={val!r}, not \"0\" — decision 60 "
+                         f"(2026-09-18) pinned this to a zero suspension-bypass "
+                         f"window on both lanes; re-open the decision on #347 "
+                         f"before widening it here")
+    return fails
+
+
+compose_full = yaml.safe_load(open(COMPOSE_STACK))
+admin_cluster_full = yaml.safe_load(open(CLUSTER_ADMIN_BFF))
+mod_cluster_full = yaml.safe_load(open(CLUSTER_MOD_BFF))
+
+live_admin_compose = compose_env(compose_full, "hugmesh-admin-bff-api")
+live_mod_compose = compose_env(compose_full, "hugmesh-mod-bff-api")
+live_admin_cluster = cluster_env(admin_cluster_full, "hugmesh-admin-bff-api")
+live_mod_cluster = cluster_env(mod_cluster_full, "hugmesh-mod-bff-api")
+
+ttl_fails = check_ttl_pin(live_admin_compose, live_mod_compose,
+                          live_admin_cluster, live_mod_cluster)
+if ttl_fails:
+    for msg in ttl_fails:
+        bad(msg)
+else:
+    ok(f"{TTL_KEY} pinned to \"0\" on all four lanes (compose admin-bff-api, "
+       f"compose mod-bff-api, cluster admin-bff-api, cluster mod-bff-api)")
+
+# Negative controls: each mutation must produce at least one failure, over a
+# COPY of the live dicts — nothing on disk is touched.
+TTL_CONTROLS = [
+    ("compose admin-bff-api drops the pin",
+     lambda: ({k: v for k, v in live_admin_compose.items() if k != TTL_KEY},
+              live_mod_compose, live_admin_cluster, live_mod_cluster)),
+    ("compose mod-bff-api reverts to the image default (5000)",
+     lambda: (live_admin_compose, dict(live_mod_compose, **{TTL_KEY: "5000"}),
+              live_admin_cluster, live_mod_cluster)),
+    ("cluster admin-bff-api drops the pin",
+     lambda: (live_admin_compose, live_mod_compose,
+              {k: v for k, v in live_admin_cluster.items() if k != TTL_KEY},
+              live_mod_cluster)),
+    ("cluster mod-bff-api reverts to the image default (5000)",
+     lambda: (live_admin_compose, live_mod_compose, live_admin_cluster,
+              dict(live_mod_cluster, **{TTL_KEY: "5000"}))),
+    ("BOTH lanes drift to the SAME non-zero value (parity alone would miss this)",
+     lambda: (dict(live_admin_compose, **{TTL_KEY: "5000"}), live_mod_compose,
+              dict(live_admin_cluster, **{TTL_KEY: "5000"}), live_mod_cluster)),
+]
+
+ttl_caught = ttl_survived = 0
+for label, mutate in TTL_CONTROLS:
+    ac, mc2, acl, mcl = mutate()
+    mfails = check_ttl_pin(ac, mc2, acl, mcl)
+    if mfails:
+        ttl_caught += 1
+        print(f"  CAUGHT  {label}")
+        print(f"          -> {mfails[0]}")
+    else:
+        ttl_survived += 1
+        bad(f"CONTROL SURVIVED: {label} — this guard is blind to it")
+
+# Vacuity: the live, unmutated dicts must have produced ZERO failures above
+# (already asserted via ttl_fails), and at least one control must exist and be
+# caught — otherwise "0 survived" would be true of an empty CONTROLS list too.
+if ttl_caught == len(TTL_CONTROLS) and len(TTL_CONTROLS) >= 5:
+    ok(f"decision 60 negative controls: {ttl_caught}/{len(TTL_CONTROLS)} caught, "
+       f"including the parity-is-not-enough case (both lanes drifting to the "
+       f"SAME wrong value)")
+
+print(f"\ndecision 60 controls: {ttl_caught} caught / {ttl_survived} survived")
 print(f"{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
 PY

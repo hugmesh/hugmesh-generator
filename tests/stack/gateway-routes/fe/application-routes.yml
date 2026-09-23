@@ -65,9 +65,20 @@ spring:
             # dropped the operator out of the shell and into the bare remote,
             # with no menu, no shell chrome and no session UI — reported
             # 2026-08-14: "refreshing takes us into the federated remote instead
-            # of just refreshing the view". /user, /admin and /mod never showed
-            # it because they have NO gateway route and already fell through to
-            # the catch-all host.
+            # of just refreshing the view".
+            #
+            # CORRECTED (hugmesh-generator#381): this comment used to claim
+            # /user, /admin and /mod "never showed it because they have NO
+            # gateway route and already fell through to the catch-all host".
+            # That was false — admin-ui, mod-ui and user-ui below DO have their
+            # own gateway routes (git blame: /user/** from 2026-06-20, well
+            # before this deep-link route was added on 2026-08-14) — and it
+            # hid the exact same bug for those three: a hard GET of
+            # /user/profile was measured serving user-ui's OWN standalone
+            # index.html (no shell chrome, base href /user/) instead of the
+            # host shell. They carry the identical fix now: all three
+            # prefixes are in the Path list below alongside the
+            # social/wiki/tube/owncast/character remotes.
             #
             # This route sends only HTML NAVIGATIONS for those prefixes to the
             # shell, which serves index.html (with its nonce-CSP injection
@@ -83,12 +94,19 @@ spring:
             # one case that is already broken.
             #
             # NOT listed here: /social/phpbb (a server-rendered app, not a shell
-            # remote — it must keep serving its own HTML) and /api-docs (mounted
-            # in the shell at the DIFFERENT path /admin/docs, so it never collides).
+            # remote — it must keep serving its own HTML), /api-docs (mounted in
+            # the shell at the DIFFERENT path /admin/docs, so it never collides)
+            # and /login (deliberately excluded — the standalone login-ui IS the
+            # designed door; it must keep answering its own index.html on a
+            # direct GET, not be routed to the shell). tests/scripts/
+            # test-deeplink-remote-coverage.sh asserts every OTHER in-shell
+            # `*-ui` remote route (matched by its route id) has its Path here on
+            # BOTH this table and the cluster twin, and that /login/** never
+            # does — so the next remote added cannot silently repeat this bug.
             - id: remote-deeplink-to-host-shell
               uri: http://hugmesh-host-shell:8080
               predicates:
-                - Path=/social/matrix/**,/social/mastodon/**,/social/forum/**,/wiki/**,/tube/**,/owncast/**,/character-studio/**,/character-forge/**
+                - Path=/social/matrix/**,/social/mastodon/**,/social/forum/**,/wiki/**,/tube/**,/owncast/**,/character-studio/**,/character-forge/**,/admin/**,/mod/**,/user/**
                 - Header=Accept, .*text/html.*
             - id: matrix-ui
               uri: http://hugmesh-matrix-ui:80
@@ -442,8 +460,9 @@ spring:
             # exactly what was swallowing them. They do NOT collide with the FIRST
             # route (`remote-deeplink-to-host-shell`): that one is scoped to the
             # shell-mounted prefixes (/social/**, /wiki/**, /tube/**, /owncast/**,
-            # /character-studio/**, /character-forge/**) and /_matrix, /.well-known,
-            # /api/v1, /api/v2 and /oauth are none of them, so its Accept: text/html
+            # /character-studio/**, /character-forge/**, /admin/**, /mod/**,
+            # /user/**) and /_matrix, /.well-known, /api/v1, /api/v2 and /oauth
+            # are none of them, so its Accept: text/html
             # predicate is never even evaluated for this traffic. Nor do they collide
             # with `federation-home-reads` (/api/federation/**, a different second
             # segment) or with any /bff/** route. Declared here — after every

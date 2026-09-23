@@ -146,3 +146,79 @@ export async function resumeFrozenAnimations(page: Page): Promise<void> {
     delete store[key];
   }, FREEZE_KEY);
 }
+
+// ── full-height capture (operator report, 2026-09-18) ───────────────────────
+//
+// The host shell's background layer is `position: fixed` and sized to the
+// VIEWPORT (100vh), not the document. `shot()` (specs/helpers.ts) captures
+// with `fullPage: true`, which grows the rendered PAGE for the screenshot but
+// does not change the fixed layer's own height — Chromium keeps it pinned to
+// one viewport's worth of pixels. On any row taller than the viewport, the
+// PNG below that first viewport-height shows the bare body colour instead of
+// the background. In a real browser this is invisible (the fixed layer
+// visually follows scroll); it is purely a `fullPage` screenshot artifact.
+//
+// growToFullHeight() grows the viewport's HEIGHT (width unchanged) to the
+// document's full scroll height before the shot, so a `100vh` element
+// recomputes against a viewport that already covers the whole page — no
+// "grow the fixed layer" special-casing needed, because there is no longer a
+// gap for it to fall short of. restoreViewport() puts the original size back
+// afterwards so later rows in the same run are unaffected.
+
+export interface FullHeightOptions {
+  /** Hard cap on the grown viewport height, in px. Default 12,000. */
+  maxHeightPx?: number;
+}
+
+const DEFAULT_MAX_HEIGHT_PX = 12_000;
+
+/**
+ * Grow `page`'s viewport height to the document's full scroll height (width
+ * unchanged), capped at `maxHeightPx`, and let layout reflow so any
+ * `100vh`-sized element (e.g. a fixed background) recomputes against the new
+ * viewport before anything is measured or shot. Returns the viewport size in
+ * effect before the call, to hand to `restoreViewport()` afterwards.
+ *
+ * A no-op (returns the current size, does not resize) when the document is
+ * already no taller than the current viewport.
+ */
+export async function growToFullHeight(
+  page: Page,
+  label: string,
+  opts: FullHeightOptions = {},
+): Promise<{ width: number; height: number }> {
+  const maxHeightPx = opts.maxHeightPx ?? DEFAULT_MAX_HEIGHT_PX;
+  const original = page.viewportSize();
+  if (!original) throw new Error(`${label}: growToFullHeight needs a page with a set viewport`);
+
+  const scrollHeight = await page.evaluate(() => Math.max(
+    document.documentElement.scrollHeight,
+    document.body ? document.body.scrollHeight : 0,
+  ));
+
+  if (scrollHeight <= original.height) return original;
+
+  let targetHeight = scrollHeight;
+  if (targetHeight > maxHeightPx) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `${label}: full-page height ${targetHeight}px exceeds the ${maxHeightPx}px cap for growToFullHeight — `
+      + `capping at ${maxHeightPx}px`,
+    );
+    targetHeight = maxHeightPx;
+  }
+
+  await page.setViewportSize({ width: original.width, height: targetHeight });
+  // Two rAFs: one for the resize's layout to land, one for anything (e.g. a
+  // fixed 100vh background) that reads the new size on the frame after that.
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+
+  return original;
+}
+
+/** Undo growToFullHeight(): restore the viewport so later rows are unaffected. */
+export async function restoreViewport(page: Page, size: { width: number; height: number }): Promise<void> {
+  await page.setViewportSize(size);
+}

@@ -206,6 +206,23 @@ lint:fragment-route-target:
   script:
     - bash tests/scripts/test-fragment-route-target.sh
 
+# hugmesh-generator#381: every in-shell `*-ui` remote route's own path must also
+# be on the SPA deep-link fallback route's Path list, on BOTH fe route tables,
+# and /login must never be (the standalone login-ui is the designed door). The
+# set is DERIVED from each table's own `*-ui` route entries rather than
+# hardcoded, so a future remote lands red the moment its route exists without a
+# matching deep-link entry — six negative controls (including a synthesised
+# brand-new remote and moving the deep-link route itself out of position) prove
+# that generality. Offline, no cluster, no network.
+lint:deeplink-remote-coverage:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-deeplink-remote-coverage.sh
+
 # ExternalSecret TARGET-OWNERSHIP gate. The job above reads this repo's own
 # manifests; it cannot know what an UPSTREAM chart creates, and that is exactly
 # where this bug lived. specs/cluster declared an ExternalSecret targeting Secret
