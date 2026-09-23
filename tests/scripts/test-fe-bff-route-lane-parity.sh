@@ -59,12 +59,16 @@
 # which this lane does not own. This guard PRINTS it every run rather than pinning
 # it, so fixing it there does not turn this file red.
 #
-# NEGATIVE CONTROLS: every mutation in CONTROLS (route tables) and TTL_CONTROLS
-# (decision 60) must trip its check, and each list must still contain every
-# label in its REQUIRED_* set — a shrunk or emptied list is a FAIL, not a
-# quieter pass. Controls run in-process on copies, or on a staged copy of a
-# manifests directory under a temporary dir for the kustomize layers; the tree
-# is never modified.
+# NEGATIVE CONTROLS: every mutation in CONTROLS (route tables), TTL_CONTROLS
+# (decision 60, by value) and KUSTOMIZE_CONTROLS (decision 60, as rendered)
+# must trip its check, and each list must still contain every label in its
+# REQUIRED_* set — a shrunk or emptied list is a FAIL, not a quieter pass. The
+# decision-60 controls also carry the VERDICT they expect (NOT FOUND, ABSENT,
+# not "0", ...): a control that trips the wrong branch is reported as caught
+# with the wrong verdict and fails, so a diagnosis cannot rot back while the
+# tally stays green. Controls run in-process on copies, or on a staged copy of
+# a manifests directory under a temporary dir for the kustomize layers; the
+# tree is never modified.
 #
 # Offline: reads the two fe route tables, tests/stack/compose.local.yaml and the
 # two BFF Deployments with their kustomizations. No cluster, no docker, no
@@ -563,8 +567,9 @@ def cluster_env(doc, container_name):
     """The container's env as {name: value}, or None when the Deployment has no
     container of that name (same rule as compose_env: a rename is its own
     verdict, never a traceback and never ABSENT)."""
-    spec = doc["spec"]["template"]["spec"]
-    ctr = next((c for c in spec["containers"] if c.get("name") == container_name), None)
+    spec = (((doc.get("spec") or {}).get("template") or {}).get("spec") or {})
+    ctr = next((c for c in (spec.get("containers") or [])
+                if isinstance(c, dict) and c.get("name") == container_name), None)
     if ctr is None:
         return None
     return {e["name"]: e.get("value") for e in (ctr.get("env") or [])}
@@ -582,8 +587,9 @@ def check_ttl_pin(lanes):
     """{label: env_dict_or_None} -> list of failure strings, one per lane that
     is not pinned. Four verdicts, reported differently so a reader knows what
     to fix: the service/container was NOT FOUND (None), the key is ABSENT, the
-    value is NOT A STRING on a Kubernetes lane, or the value is
-    PRESENT-BUT-WRONG."""
+    key is present with NO LITERAL VALUE (an empty `value:` or a `valueFrom:`
+    reference), the value is NOT A STRING on a Kubernetes lane, or the value
+    is PRESENT-BUT-WRONG."""
     fails = []
     for label, env in lanes.items():
         if env is None:
@@ -593,6 +599,13 @@ def check_ttl_pin(lanes):
                          f"verdict on {TTL_KEY} itself")
             continue
         val = env.get(TTL_KEY)
+        if TTL_KEY in env and val is None:
+            fails.append(f"[{label}] {TTL_KEY} is present but carries NO LITERAL VALUE "
+                         f"(an empty `value:` or a `valueFrom:` reference) — decision 60 "
+                         f"pins the literal string \"0\"; an empty value hands Spring "
+                         f"\"\" and a reference hands it whatever resolves at runtime, "
+                         f"neither of which is a pinned zero window")
+            continue
         if is_kubernetes_lane(label) and TTL_KEY in env and not isinstance(val, str):
             fails.append(f"[{label}] {TTL_KEY} is {val!r} ({type(val).__name__}), not the "
                          f"string \"0\" — Kubernetes EnvVar.value must be a string, so "
@@ -655,27 +668,33 @@ def with_value(env, value):
     return None if env is None else {**env, TTL_KEY: value}
 
 
-# Negative controls: each mutation must produce at least one failure.
+# Negative controls: (label, expected verdict substring, mutation). Each
+# mutation must produce at least one failure AND that failure must carry the
+# expected verdict — "some failure" would let the NOT FOUND branch rot back
+# into ABSENT (finding 4's misdiagnosis) while every control still read CAUGHT.
 TTL_CONTROLS = [
-    ("compose admin-bff-api drops the pin",
+    ("compose admin-bff-api drops the pin", "is ABSENT",
      lambda: with_lanes({"compose admin-bff-api": without_key(LIVE_LANES["compose admin-bff-api"])})),
-    ("compose mod-bff-api set to 5000 (the pre-2026-09-18 image default)",
+    ("compose mod-bff-api set to 5000 (the pre-2026-09-18 image default)", "not \"0\"",
      lambda: with_lanes({"compose mod-bff-api": with_value(LIVE_LANES["compose mod-bff-api"], "5000")})),
-    ("cluster admin-bff-api drops the pin",
+    ("cluster admin-bff-api drops the pin", "is ABSENT",
      lambda: with_lanes({"cluster admin-bff-api": without_key(LIVE_LANES["cluster admin-bff-api"])})),
-    ("cluster mod-bff-api set to 5000 (the pre-2026-09-18 image default)",
+    ("cluster mod-bff-api set to 5000 (the pre-2026-09-18 image default)", "not \"0\"",
      lambda: with_lanes({"cluster mod-bff-api": with_value(LIVE_LANES["cluster mod-bff-api"], "5000")})),
-    ("BOTH lanes drift to the SAME non-zero value (parity alone would miss this)",
+    ("BOTH lanes drift to the SAME non-zero value (parity alone would miss this)", "not \"0\"",
      lambda: with_lanes({"compose admin-bff-api": with_value(LIVE_LANES["compose admin-bff-api"], "5000"),
                          "cluster admin-bff-api": with_value(LIVE_LANES["cluster admin-bff-api"], "5000")})),
     # An unquoted 0 on a Kubernetes lane parses as int 0 and str(0) == "0"; the
     # API server rejects it, so the guard must too.
-    ("cluster admin-bff-api tidies value: \"0\" to an unquoted int 0 (API rejects it)",
+    ("cluster admin-bff-api tidies value: \"0\" to an unquoted int 0 (API rejects it)", "not the string",
      lambda: with_lanes({"cluster admin-bff-api": with_value(LIVE_LANES["cluster admin-bff-api"], 0)})),
+    # A valueFrom reference (or an empty value:) parses as None with the key present.
+    ("cluster mod-bff-api pin becomes a valueFrom reference (no literal value)", "NO LITERAL VALUE",
+     lambda: with_lanes({"cluster mod-bff-api": with_value(LIVE_LANES["cluster mod-bff-api"], None)})),
     # A rename is reported as NOT FOUND, never as ABSENT and never as a traceback.
-    ("compose service renamed (compose_env finds nothing)",
+    ("compose service renamed (compose_env finds nothing)", "NOT FOUND",
      lambda: with_lanes({"compose mod-bff-api": compose_env(compose_full, "no such service (control)")})),
-    ("cluster container renamed (cluster_env finds nothing)",
+    ("cluster container renamed (cluster_env finds nothing)", "NOT FOUND",
      lambda: with_lanes({"cluster mod-bff-api": cluster_env(mod_cluster_full, "no such container (control)")})),
 ]
 
@@ -688,20 +707,33 @@ REQUIRED_TTL_CONTROLS = frozenset([
     "cluster mod-bff-api set to 5000 (the pre-2026-09-18 image default)",
     "BOTH lanes drift to the SAME non-zero value (parity alone would miss this)",
     "cluster admin-bff-api tidies value: \"0\" to an unquoted int 0 (API rejects it)",
+    "cluster mod-bff-api pin becomes a valueFrom reference (no literal value)",
     "compose service renamed (compose_env finds nothing)",
     "cluster container renamed (cluster_env finds nothing)",
 ])
 
+def judge_control(label, expect, mfails):
+    """True when the control was caught WITH the expected verdict. A control
+    that produced no failure, or a failure of the wrong kind, is reported as a
+    FAIL either way; the second case is what keeps a diagnosis honest."""
+    if not mfails:
+        bad(f"CONTROL SURVIVED: {label} — this guard is blind to it")
+        return False
+    if not any(expect in m for m in mfails):
+        bad(f"CONTROL CAUGHT WITH THE WRONG VERDICT: {label} — expected {expect!r} in "
+            f"the failure, got: {mfails[0]}")
+        return False
+    print(f"  CAUGHT  {label}")
+    print(f"          -> {mfails[0]}")
+    return True
+
+
 ttl_caught = ttl_survived = 0
-for label, mutate in TTL_CONTROLS:
-    mfails = check_ttl_pin(mutate())
-    if mfails:
+for label, expect, mutate in TTL_CONTROLS:
+    if judge_control(label, expect, check_ttl_pin(mutate())):
         ttl_caught += 1
-        print(f"  CAUGHT  {label}")
-        print(f"          -> {mfails[0]}")
     else:
         ttl_survived += 1
-        bad(f"CONTROL SURVIVED: {label} — this guard is blind to it")
 
 # Vacuity, fail-closed: the live lanes produced zero failures (asserted via
 # ttl_fails above), every REQUIRED label is still in the list and every control
@@ -717,21 +749,32 @@ print(f"\ndecision 60 controls: {ttl_caught} caught / {ttl_survived} survived")
 # read from deployment.yaml above is only the input. Both kustomizations
 # already carry patches (a JSON6902 op each, and admin-bff's strategic-merge
 # workload-console-patch.yaml, which edits containers[].env), so a patch that
-# sets APP_BFF_EXCHANGE_CACHE_TTL_MS to another value would deploy that value
-# while deployment.yaml still says "0" and the check above stays green.
+# sets APP_BFF_EXCHANGE_CACHE_TTL_MS to another value — or drops the env list,
+# or the whole container — would deploy that while deployment.yaml still says
+# "0" and the check above stays green.
 #
 # Two layers, because the CI jobs that run this suite (python:3-slim) have no
-# kubectl:
+# kubectl, so layer (a) is the only layer that gates a merge:
 #   (a) ALWAYS: an offline scan of every patch a kustomization can apply.
-#       FAIL if any patch text names the key, if any JSON6902 op has a path
-#       under a container's env (an index-based op rewrites the value without
-#       naming it), or if the kustomization uses a field this scan cannot see
-#       through (replacements, components, transformers, generators — none
-#       is used today; using one is a decision, made by extending this scan).
+#       FAIL if any patch text names the key; if any JSON6902 op's `path` or
+#       `from` is ON THE CHAIN /spec/template/spec/containers/<n>/env — the
+#       env itself or anything under it (an index-based op rewrites the value
+#       without naming it) and every ANCESTOR of it (a `replace` of a whole
+#       container, of the containers list or of the pod spec, and a `move` of
+#       env elsewhere, all drop the pin without naming it); if a
+#       strategic-merge patch carries a `$patch` / `$retainKeys` /
+#       `$setElementOrder` / `$deleteFromPrimitiveList` directive, or sets any
+#       node on that chain to null (`env: null` and `containers: null` both
+#       render WITHOUT the pin — measured with kubectl kustomize v5.8.1; an
+#       empty `env: []` is a no-op); if a patch file the kustomization names
+#       is missing; or if the kustomization uses a field this scan cannot see
+#       through (replacements, components, transformers, generators — none is
+#       used today; using one is a decision, made by extending this scan).
 #   (b) WHEN kustomize OR kubectl IS ON PATH: the directory is rendered and
 #       the rendered Deployment's container env is put through check_ttl_pin
-#       like any other lane. Without a binary the run prints a NOTE and (a)
-#       stands alone; it never prints a PASS it did not earn.
+#       like any other lane; a lane that produces no rendered verdict is a
+#       FAIL, never a missing PASS. Without a binary the run prints a NOTE and
+#       (a) stands alone; it never prints a PASS it did not earn.
 print("\n== decision 60: the cluster lane as kustomize RENDERS it ==")
 
 KUSTOMIZE_LANES = {
@@ -742,58 +785,134 @@ KUSTOMIZE_LANES = {
                             "hugmesh-mod-bff-api"),
 }
 OPAQUE_KUSTOMIZE_FIELDS = ("replacements", "components", "transformers", "generators")
+# The chain from the Deployment root down to a container's env; None marks the
+# list index. An op on ANY node of this chain, or under its last node, can
+# drop or rewrite the pin without naming it.
+ENV_CHAIN = ("spec", "template", "spec", "containers", None, "env")
+SMP_DIRECTIVE = re.compile(r"\$(patch|retainKeys|setElementOrder|deleteFromPrimitiveList)\b")
 
 
 def kustomize_patch_texts(kdir):
-    """(kustomization dict, [(where, text)]) for every patch the kustomization
-    can apply: inline `patches[].patch`, `patches[].path` files, and the legacy
-    patchesStrategicMerge / patchesJson6902 forms."""
+    """(kustomization dict, [(where, text)], [(where, missing file)]) for every
+    patch the kustomization can apply: inline `patches[].patch`,
+    `patches[].path` files, and the legacy patchesStrategicMerge /
+    patchesJson6902 forms. A named file that does not exist is returned in the
+    third list so the scan can FAIL on it instead of tracing back."""
     kdoc = yaml.safe_load(open(os.path.join(kdir, "kustomization.yaml"))) or {}
-    out = []
+    out, missing = [], []
 
-    def file_text(rel):
-        return open(os.path.join(kdir, rel)).read()
+    def add_file(where, rel):
+        full = os.path.join(kdir, rel)
+        if os.path.isfile(full):
+            out.append((where, open(full).read()))
+        else:
+            missing.append((where, rel))
 
     for i, p in enumerate(kdoc.get("patches") or []):
         if isinstance(p, dict):
             if p.get("patch") is not None:
                 out.append((f"patches[{i}].patch (inline)", str(p["patch"])))
             if p.get("path"):
-                out.append((f"patches[{i}].path={p['path']}", file_text(p["path"])))
+                add_file(f"patches[{i}].path={p['path']}", p["path"])
         elif isinstance(p, str):
-            out.append((f"patches[{i}]={p}", file_text(p)))
+            add_file(f"patches[{i}]={p}", p)
     for i, p in enumerate(kdoc.get("patchesStrategicMerge") or []):
-        if isinstance(p, str) and os.path.isfile(os.path.join(kdir, p)):
-            out.append((f"patchesStrategicMerge[{i}]={p}", file_text(p)))
+        if isinstance(p, str) and (os.path.isfile(os.path.join(kdir, p))
+                                   or re.fullmatch(r"[\w./-]+\.ya?ml", p)):
+            add_file(f"patchesStrategicMerge[{i}]={p}", p)
         else:
             out.append((f"patchesStrategicMerge[{i}] (inline)", str(p)))
     for i, p in enumerate(kdoc.get("patchesJson6902") or []):
         if isinstance(p, dict):
             if p.get("path"):
-                out.append((f"patchesJson6902[{i}].path={p['path']}", file_text(p["path"])))
+                add_file(f"patchesJson6902[{i}].path={p['path']}", p["path"])
             if p.get("patch") is not None:
                 out.append((f"patchesJson6902[{i}].patch (inline)", str(p["patch"])))
-    return kdoc, out
+    return kdoc, out, missing
 
 
-def json6902_env_ops(text):
-    """The op paths under a container env in a patch text that parses as a
-    JSON6902 op list; [] for strategic-merge patches and anything else."""
+def on_env_chain(pointer):
+    """True when a JSON pointer is a container's env, anything under it, or
+    any ANCESTOR of it: "" (the document root), /spec, /spec/template,
+    /spec/template/spec, /spec/template/spec/containers,
+    /spec/template/spec/containers/N, .../N/env, .../N/env/22/value. Compared
+    segment by segment — a plain string-prefix test would flag the live
+    /spec/template/spec/imagePullSecrets op, which shares three segments and
+    cannot touch env. A container index must be digits: `containers/-` (append
+    a sidecar) is not on the chain."""
+    if not isinstance(pointer, str):
+        return False
+    if pointer == "":
+        return True
+    if not pointer.startswith("/"):
+        return False
+    segs = pointer[1:].split("/")
+    for seg, want in zip(segs, ENV_CHAIN):
+        if want is None:
+            if not seg.isdigit():
+                return False
+        elif seg != want:
+            return False
+    return True
+
+
+def json6902_chain_ops(text):
+    """'<op> path=<p>' / '<op> from=<p>' for every op in a text that parses as
+    a JSON6902 op list whose path or from is on the env chain; [] for
+    strategic-merge patches and anything else."""
     try:
         ops = yaml.safe_load(text)
     except yaml.YAMLError:
         return []
     if not isinstance(ops, list):
         return []
-    return [str(op.get("path")) for op in ops
-            if isinstance(op, dict) and re.search(r"/containers/\d+/env(/|$)", str(op.get("path")))]
+    hits = []
+    for op in ops:
+        if not isinstance(op, dict):
+            continue
+        for field in ("path", "from"):
+            if field in op and on_env_chain(op.get(field)):
+                hits.append(f"{op.get('op')} {field}={op.get(field)}")
+    return hits
+
+
+def strategic_merge_hazards(text):
+    """Hazards in a text read as a strategic-merge patch: a `$...` directive
+    anywhere (a `$patch: replace|delete` swaps or drops the element it sits
+    in), or a null on the spec.template.spec.containers[].env chain (null in
+    a strategic merge DELETES the node). [] for a JSON6902 op list."""
+    hazards = [f"directive ${d}" for d in sorted(set(SMP_DIRECTIVE.findall(text)))]
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return hazards
+    if not isinstance(doc, dict):
+        return hazards
+    node, walked = doc, []
+    for key in ("spec", "template", "spec", "containers"):
+        if not isinstance(node, dict) or key not in node:
+            return hazards
+        walked.append(key)
+        node = node[key]
+        if node is None:
+            hazards.append(f"{'.'.join(walked)}: null (deletes it)")
+            return hazards
+    if isinstance(node, list):
+        for c in node:
+            if isinstance(c, dict) and "env" in c and c["env"] is None:
+                hazards.append(f"containers[name={c.get('name')}].env: null (deletes it)")
+    return hazards
 
 
 def check_kustomize_patches(label, kdir):
     """Failure strings for layer (a): the offline scan of kustomization.yaml."""
-    kdoc, texts = kustomize_patch_texts(kdir)
+    kdoc, texts, missing = kustomize_patch_texts(kdir)
     kfile = os.path.join(kdir, "kustomization.yaml")
     fails = []
+    for where, rel in missing:
+        fails.append(f"[{label}] {kfile} {where} names a patch file that does not exist "
+                     f"({rel}) — kustomize itself refuses this tree, and this scan cannot "
+                     f"read what is not there")
     for where, text in texts:
         if TTL_KEY in text:
             fails.append(f"[{label}] {kfile} {where} names {TTL_KEY} — a patch is what "
@@ -801,11 +920,19 @@ def check_kustomize_patches(label, kdir):
                          f"value can differ from the file the check above reads. The "
                          f"pin lives in deployment.yaml only; remove the patch, or "
                          f"re-open decision 60 on #347")
-        for path in json6902_env_ops(text):
-            fails.append(f"[{label}] {kfile} {where} has a JSON6902 op at {path} — an "
-                         f"op under containers[].env can rewrite {TTL_KEY} by index "
-                         f"without naming it; env is owned by deployment.yaml, edit it "
-                         f"there")
+        for hit in json6902_chain_ops(text):
+            fails.append(f"[{label}] {kfile} {where} has a JSON6902 op on the "
+                         f"containers[].env chain ({hit}) — an op under env rewrites "
+                         f"{TTL_KEY} by index without naming it, and a replace/move of "
+                         f"env, of a container, of the containers list or of the pod "
+                         f"spec drops the pin without naming it; env is owned by "
+                         f"deployment.yaml, edit it there")
+        for hz in strategic_merge_hazards(text):
+            fails.append(f"[{label}] {kfile} {where} strategic-merge {hz} — a directive "
+                         f"or a null on the spec.template.spec.containers[].env chain "
+                         f"replaces or deletes the list that carries {TTL_KEY} without "
+                         f"naming it (env: null and containers: null both render WITHOUT "
+                         f"the pin); env is owned by deployment.yaml, edit it there")
     for field in OPAQUE_KUSTOMIZE_FIELDS:
         if kdoc.get(field):
             fails.append(f"[{label}] {kfile} uses `{field}`, which can rewrite the "
@@ -845,8 +972,9 @@ for label, (kdir, _deploy, _ctr) in KUSTOMIZE_LANES.items():
     for msg in scan_fails:
         bad(msg)
     if not scan_fails:
-        ok(f"[{label}] no kustomize patch names {TTL_KEY} or edits containers[].env "
-           f"by index, and no opaque field is used ({kdir}/kustomization.yaml)")
+        ok(f"[{label}] no kustomize patch names {TTL_KEY}, touches the containers[].env "
+           f"chain, carries a strategic-merge directive or null, or names a missing "
+           f"file, and no opaque field is used ({kdir}/kustomization.yaml)")
 
 # Layer (b) on the live tree.
 if KCMD is None:
@@ -855,44 +983,77 @@ if KCMD is None:
           f"scan above is the assertion that stands on this host; a host with either "
           f"binary also asserts the rendered Deployment.")
 else:
-    rendered = {}
+    rendered, render_errors = {}, set()
     for label, (kdir, deploy, ctr) in KUSTOMIZE_LANES.items():
         try:
             rendered[f"rendered {label}"] = rendered_container_env(KCMD, kdir, deploy, ctr)
         except Exception as e:                                    # noqa: BLE001
-            bad(f"[{label}] kustomize render failed: {e}")
+            render_errors.add(label)
+            bad(f"[{label}] kustomize render failed: {type(e).__name__}: {e}")
+    # Every lane must reach a verdict: a lane that neither rendered nor
+    # errored is a render assertion that silently went away, not a PASS.
+    unrendered = [label for label in KUSTOMIZE_LANES
+                  if label not in render_errors and f"rendered {label}" not in rendered]
+    for label in unrendered:
+        bad(f"[{label}] kustomize render produced NO verdict although {' '.join(KCMD)} "
+            f"is on PATH — the render assertion did not run for this lane")
     render_fails = check_ttl_pin(rendered)
     for msg in render_fails:
         bad(msg)
-    if rendered and not render_fails:
+    if rendered and not render_fails and not render_errors and not unrendered:
         ok(f"{TTL_KEY} is the string \"0\" in the kustomize-RENDERED Deployment for "
            f"{', '.join(rendered)} (via {' '.join(KCMD)})")
 
 
 # Negative controls for both layers, staged as COPIES of a manifests directory
 # under a temporary dir (TMPDIR honoured); the tree is never modified.
-def staged_dir(label, extra_patch):
-    """A copy of the lane's kustomization directory with one extra entry
-    appended to `patches:`: {"path": file} for a strategic-merge patch text, or
-    {"patch": text, "target": {...}} for an inline JSON6902 op list. Returns
-    (tmp_root, copy_dir); the caller removes tmp_root."""
+def staged_dir(label, mutation):
+    """A copy of the lane's kustomization directory with one mutation applied
+    to its kustomization.yaml: kind "strategic" writes the text to a file and
+    appends {"path": file} to `patches:`; "json6902" appends {"patch": text,
+    "target": {...}}; "missing" appends a path to a file that does not exist;
+    "field" sets a top-level kustomization key. Returns (tmp_root, copy_dir);
+    the caller removes tmp_root."""
     kdir, deploy, _ctr = KUSTOMIZE_LANES[label]
     tmp = tempfile.mkdtemp(prefix="ttl-pin-kustomize-")
     dst = os.path.join(tmp, os.path.basename(kdir))
     shutil.copytree(kdir, dst)
     kpath = os.path.join(dst, "kustomization.yaml")
     kdoc = yaml.safe_load(open(kpath))
-    if extra_patch["kind"] == "strategic":
+    kind = mutation["kind"]
+    if kind == "strategic":
         with open(os.path.join(dst, "ttl-control-patch.yaml"), "w") as f:
-            f.write(extra_patch["text"])
+            f.write(mutation["text"])
         kdoc.setdefault("patches", []).append({"path": "ttl-control-patch.yaml"})
-    else:
+    elif kind == "json6902":
         kdoc.setdefault("patches", []).append(
-            {"patch": extra_patch["text"],
+            {"patch": mutation["text"],
              "target": {"kind": "Deployment", "name": deploy}})
+    elif kind == "missing":
+        kdoc.setdefault("patches", []).append({"path": mutation["path"]})
+    elif kind == "field":
+        kdoc[mutation["field"]] = mutation["value"]
+    else:                                                          # pragma: no cover
+        raise ValueError(f"unknown staged mutation kind {kind!r}")
     with open(kpath, "w") as f:
         yaml.safe_dump(kdoc, f)
     return tmp, dst
+
+
+def live_container(label):
+    """(container index, deep copy of the container dict) from the lane's
+    deployment.yaml, for controls that re-list a container without the pin."""
+    _kdir, _deploy, ctr = KUSTOMIZE_LANES[label]
+    doc = yaml.safe_load(open(KUSTOMIZE_LANES[label][0] + "/deployment.yaml"))
+    spec = doc["spec"]["template"]["spec"]
+    ci = next(i for i, c in enumerate(spec["containers"]) if c["name"] == ctr)
+    return ci, copy.deepcopy(spec["containers"][ci])
+
+
+def container_minus_pin(label):
+    ci, c = live_container(label)
+    c["env"] = [e for e in c["env"] if e["name"] != TTL_KEY]
+    return ci, c
 
 
 def strategic_patch_5000(label):
@@ -908,27 +1069,75 @@ def strategic_patch_5000(label):
 def json6902_by_index_5000(label):
     """Rewrites the pin's value by its INDEX in env — the text never contains
     the key name, which is exactly what a plain grep would miss."""
-    _kdir, _deploy, ctr = KUSTOMIZE_LANES[label]
-    doc = yaml.safe_load(open(KUSTOMIZE_LANES[label][0] + "/deployment.yaml"))
-    spec = doc["spec"]["template"]["spec"]
-    ci = next(i for i, c in enumerate(spec["containers"]) if c["name"] == ctr)
-    ei = next(i for i, e in enumerate(spec["containers"][ci]["env"]) if e["name"] == TTL_KEY)
+    ci, c = live_container(label)
+    ei = next(i for i, e in enumerate(c["env"]) if e["name"] == TTL_KEY)
     return {"kind": "json6902", "text": (
         f"- op: replace\n  path: /spec/template/spec/containers/{ci}/env/{ei}/value\n"
         f"  value: \"5000\"\n")}
 
 
-def scan_control(label, patch):
-    tmp, dst = staged_dir(label, patch)
+def json6902_replace_container(label):
+    """Replaces the WHOLE container with a copy that lacks the pin: no key
+    name, no op under env — only an ancestor path."""
+    ci, c = container_minus_pin(label)
+    return {"kind": "json6902", "text": yaml.safe_dump(
+        [{"op": "replace", "path": f"/spec/template/spec/containers/{ci}", "value": c}])}
+
+
+def json6902_replace_containers_list(label):
+    ci, c = container_minus_pin(label)
+    return {"kind": "json6902", "text": yaml.safe_dump(
+        [{"op": "replace", "path": "/spec/template/spec/containers", "value": [c]}])}
+
+
+def json6902_move_env_to_args(label):
+    """A `move` whose `path` is nowhere near env — only its `from` is."""
+    ci, _c = live_container(label)
+    return {"kind": "json6902", "text": (
+        f"- op: move\n  from: /spec/template/spec/containers/{ci}/env\n"
+        f"  path: /spec/template/spec/containers/{ci}/args\n")}
+
+
+def strategic_patch_directive_replace(label):
+    """A `$patch: replace` element at the head of the container's env list,
+    re-listing every entry but the pin: the key is never named, no null, no
+    JSON6902 op. Renders WITHOUT the pin (measured, kubectl kustomize v5.8.1);
+    the same directive on the container element itself is merged, not
+    replaced, by kustomize, so the env-level form is the one staged here."""
+    _kdir, deploy, _ctr = KUSTOMIZE_LANES[label]
+    _ci, c = container_minus_pin(label)
+    body = {"apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {"name": deploy, "namespace": "hugmesh-backend"},
+            "spec": {"template": {"spec": {"containers": [
+                {"name": c["name"], "env": [{"$patch": "replace"}] + c["env"]}]}}}}
+    return {"kind": "strategic", "text": yaml.safe_dump(body)}
+
+
+def strategic_patch_null(label, node):
+    """`env: null` under the container, or `containers: null` under the pod
+    spec — both delete the list in a strategic merge (measured)."""
+    _kdir, deploy, ctr = KUSTOMIZE_LANES[label]
+    if node == "env":
+        pod_spec = {"containers": [{"name": ctr, "env": None}]}
+    else:
+        pod_spec = {"containers": None}
+    body = {"apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {"name": deploy, "namespace": "hugmesh-backend"},
+            "spec": {"template": {"spec": pod_spec}}}
+    return {"kind": "strategic", "text": yaml.safe_dump(body)}
+
+
+def scan_control(label, mutation):
+    tmp, dst = staged_dir(label, mutation)
     try:
         return check_kustomize_patches(label, dst)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def render_control(label, patch):
+def render_control(label, mutation):
     _kdir, deploy, ctr = KUSTOMIZE_LANES[label]
-    tmp, dst = staged_dir(label, patch)
+    tmp, dst = staged_dir(label, mutation)
     try:
         env = rendered_container_env(KCMD, dst, deploy, ctr)
         return check_ttl_pin({f"rendered {label}": env})
@@ -936,28 +1145,88 @@ def render_control(label, patch):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-# (label, needs_render, fn) — fn returns the failure strings the mutation must
-# produce. The two scan controls run on every host; the render control needs
-# a binary and is reported as NOT RUN without one.
+ADMIN, MOD = "cluster admin-bff-api", "cluster mod-bff-api"
+# (label, needs_render, expected verdict substring, fn) — fn returns the
+# failure strings the mutation must produce, and one of them must carry the
+# expected verdict. Scan controls run on every host; render controls need a
+# binary and are reported as NOT RUN without one. The scan controls are the
+# ones that gate a merge, so every bypass class the scan claims to close has
+# one here: name, index-op, ancestor-op (container, list, move), directive,
+# null (env, containers), missing file, opaque field.
 KUSTOMIZE_CONTROLS = [
     ("scan: a strategic-merge patch sets the admin-bff pin to 5000", False,
-     lambda: scan_control("cluster admin-bff-api", strategic_patch_5000("cluster admin-bff-api"))),
+     f"names {TTL_KEY}",
+     lambda: scan_control(ADMIN, strategic_patch_5000(ADMIN))),
     ("scan: an inline JSON6902 op rewrites the mod-bff pin by index, never naming the key", False,
-     lambda: scan_control("cluster mod-bff-api", json6902_by_index_5000("cluster mod-bff-api"))),
+     "JSON6902 op on the containers[].env chain",
+     lambda: scan_control(MOD, json6902_by_index_5000(MOD))),
+    ("scan: a JSON6902 replace of the WHOLE mod-bff container drops the pin (ancestor path)", False,
+     "JSON6902 op on the containers[].env chain",
+     lambda: scan_control(MOD, json6902_replace_container(MOD))),
+    ("scan: a JSON6902 replace of the admin-bff containers LIST drops the pin (ancestor path)", False,
+     "JSON6902 op on the containers[].env chain",
+     lambda: scan_control(ADMIN, json6902_replace_containers_list(ADMIN))),
+    ("scan: a JSON6902 move of mod-bff env to args (only `from` is on the chain)", False,
+     "JSON6902 op on the containers[].env chain",
+     lambda: scan_control(MOD, json6902_move_env_to_args(MOD))),
+    ("scan: a strategic-merge `$patch: replace` re-lists the mod-bff env without the pin", False,
+     "strategic-merge directive $patch",
+     lambda: scan_control(MOD, strategic_patch_directive_replace(MOD))),
+    ("scan: a strategic-merge `env: null` deletes the admin-bff env list", False,
+     "env: null",
+     lambda: scan_control(ADMIN, strategic_patch_null(ADMIN, "env"))),
+    ("scan: a strategic-merge `containers: null` deletes the mod-bff containers list", False,
+     "containers: null",
+     lambda: scan_control(MOD, strategic_patch_null(MOD, "containers"))),
+    ("scan: the admin-bff kustomization names a patch file that does not exist", False,
+     "does not exist",
+     lambda: scan_control(ADMIN, {"kind": "missing", "path": "no-such-patch.yaml"})),
+    ("scan: the mod-bff kustomization uses `replacements` (an opaque field)", False,
+     "uses `replacements`",
+     lambda: scan_control(MOD, {"kind": "field", "field": "replacements", "value": [
+         {"source": {"kind": "Service", "name": "hugmesh-mod-bff-api", "fieldPath": "metadata.name"},
+          "targets": [{"select": {"kind": "Deployment"},
+                       "fieldPaths": ["spec.template.spec.containers.0.env.0.value"]}]}]})),
     ("render: the rendered admin-bff Deployment carries 5000 from a strategic-merge patch", True,
-     lambda: render_control("cluster admin-bff-api", strategic_patch_5000("cluster admin-bff-api"))),
+     "not \"0\"",
+     lambda: render_control(ADMIN, strategic_patch_5000(ADMIN))),
     ("render: the rendered mod-bff Deployment carries 5000 from an index-only JSON6902 op", True,
-     lambda: render_control("cluster mod-bff-api", json6902_by_index_5000("cluster mod-bff-api"))),
+     "not \"0\"",
+     lambda: render_control(MOD, json6902_by_index_5000(MOD))),
+    ("render: the rendered mod-bff container lacks the pin after a whole-container replace", True,
+     "is ABSENT",
+     lambda: render_control(MOD, json6902_replace_container(MOD))),
+    ("render: the rendered mod-bff env lacks the pin after an env-level `$patch: replace`", True,
+     "is ABSENT",
+     lambda: render_control(MOD, strategic_patch_directive_replace(MOD))),
+    ("render: the rendered admin-bff container lacks env after `env: null`", True,
+     "is ABSENT",
+     lambda: render_control(ADMIN, strategic_patch_null(ADMIN, "env"))),
+    ("render: the rendered mod-bff Deployment has no container after `containers: null`", True,
+     "NOT FOUND",
+     lambda: render_control(MOD, strategic_patch_null(MOD, "containers"))),
 ]
 REQUIRED_KUSTOMIZE_CONTROLS = frozenset([
     "scan: a strategic-merge patch sets the admin-bff pin to 5000",
     "scan: an inline JSON6902 op rewrites the mod-bff pin by index, never naming the key",
+    "scan: a JSON6902 replace of the WHOLE mod-bff container drops the pin (ancestor path)",
+    "scan: a JSON6902 replace of the admin-bff containers LIST drops the pin (ancestor path)",
+    "scan: a JSON6902 move of mod-bff env to args (only `from` is on the chain)",
+    "scan: a strategic-merge `$patch: replace` re-lists the mod-bff env without the pin",
+    "scan: a strategic-merge `env: null` deletes the admin-bff env list",
+    "scan: a strategic-merge `containers: null` deletes the mod-bff containers list",
+    "scan: the admin-bff kustomization names a patch file that does not exist",
+    "scan: the mod-bff kustomization uses `replacements` (an opaque field)",
     "render: the rendered admin-bff Deployment carries 5000 from a strategic-merge patch",
     "render: the rendered mod-bff Deployment carries 5000 from an index-only JSON6902 op",
+    "render: the rendered mod-bff container lacks the pin after a whole-container replace",
+    "render: the rendered mod-bff env lacks the pin after an env-level `$patch: replace`",
+    "render: the rendered admin-bff container lacks env after `env: null`",
+    "render: the rendered mod-bff Deployment has no container after `containers: null`",
 ])
 
 k_caught = k_survived = k_not_run = 0
-for label, needs_render, mutate in KUSTOMIZE_CONTROLS:
+for label, needs_render, expect, mutate in KUSTOMIZE_CONTROLS:
     if needs_render and KCMD is None:
         k_not_run += 1
         print(f"  NOT RUN {label} (no kustomize/kubectl on this host)")
@@ -965,15 +1234,16 @@ for label, needs_render, mutate in KUSTOMIZE_CONTROLS:
     try:
         kfails = mutate()
     except Exception as e:                                        # noqa: BLE001
-        kfails = []
-        print(f"          -> control raised: {e}")
-    if kfails:
+        # A control that cannot even be BUILT (e.g. the live container was
+        # renamed, so the constructor finds nothing) is its own diagnosis.
+        k_survived += 1
+        bad(f"CONTROL ERROR: {label} — the mutation raised {type(e).__name__}: {e!s} "
+            f"(the control could not be built, so it proved nothing)")
+        continue
+    if judge_control(label, expect, kfails):
         k_caught += 1
-        print(f"  CAUGHT  {label}")
-        print(f"          -> {kfails[0]}")
     else:
         k_survived += 1
-        bad(f"CONTROL SURVIVED: {label} — this guard is blind to it")
 
 assert_controls_complete("kustomize controls", KUSTOMIZE_CONTROLS, REQUIRED_KUSTOMIZE_CONTROLS,
                          k_caught, k_survived, not_run=k_not_run)
