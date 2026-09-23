@@ -259,7 +259,7 @@ def add_user_kind(*, generator_dir: str, cluster: str, specs, username: str,
                               f"Cannot authenticate to Casdoor: {why}. Without it "
                               f"apply-systems-roles.sh would be rejected — and a "
                               f"rejection is HTTP 200 with a status=error envelope, "
-                              f"so it must not be attempted without a password.")
+                              f"so it must not be attempted without authenticating first.")
 
     # 4. RENDER, with the FULL spec list (see the docstring).
     work = tempfile.mkdtemp(prefix="hugmesh-studio-kind-seed-")
