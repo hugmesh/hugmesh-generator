@@ -57,10 +57,12 @@ menu, and Studio:
   directly in the from-scratch bring-up above — same result, reported at the end and via
   `make stack-onion`.) See [TOR-HIDDEN-SERVICE.md](TOR-HIDDEN-SERVICE.md).
   On the **local docker mesh** that is `make stack-up TOR=1`; `make stack-onion` then prints
-  the address as **`https://<onion>/`** — open it over https, not http: the gateway's
-  content-security policy upgrades every request of an http page to https, so an http entry
-  loads a blank shell (Tor Browser shows a certificate warning once — the local TLS front's
-  certificate cannot name an onion). `make stack-e2e-tor` signs a test persona in through that
+  the address as **`https://<onion>/`**. Open it over https: that is a secure context
+  (Chromium does not treat an http `.onion` as one), it matches the `:443` a real node
+  publishes, and a mesh with user-bff's default `Secure` session cookie cannot keep you signed
+  in over http. Tor Browser shows a certificate warning once, because the local TLS front's
+  certificate cannot name an onion. (The SPA does boot over http; an older note here blamed
+  the CSP for a blank shell, which the live stack disproved, hugmesh-generator#628.) `make stack-e2e-tor` signs a test persona in through that
   onion over the real Tor network.
 - **`duckdns`** — a common **Dynamic-DNS** host (DuckDNS / Cloudflare-DDNS): a single-token
   updater + cron drop-in for a box on a **dynamic IP**, no dashboard fiddling.
