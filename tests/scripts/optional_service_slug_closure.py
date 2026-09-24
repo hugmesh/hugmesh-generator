@@ -36,6 +36,36 @@ exists for are all cross-surface, and the worst one is only visible from surface
     successful runtime toggle of the two unlisted slugs would be selfHealed back to
     git's baseline inside a sync interval.
 
+THE DELIBERATE EXCLUSIONS ARE CHECKED TOO, NOT MERELY UNMENTIONED. Slugs the
+optional-services catalogue (specs/cluster/optional-services.yaml) marks `scope: node`
+— today egress-vpn and tor — are NODE services (OpenRC + node reconcile agents), not
+cluster Applications. They are outside G by construction, and this gate asserts they
+stay out of EVERY surface (13a, the ConfigMap booleans and services.json, the CRD enum,
+the seed CRs, apps/16's pointers, and both halves of the Java registry), then prints
+them as the deliberate exclusions. A node slug leaking into the enum would be
+defect (a) again: accepted, reconciled by nothing.
+
+THE JAVA REGISTRY IS PARSED WHOLE, AND ITS OWN CLAIMS ARE CHECKED. Every
+`new Entry(...)` in the ENTRIES table must parse as the record's five fields (slug,
+namespace, mountAt|null, displayName, configMapSelfHealProtected) — a table where some
+calls parse and some do not is INCOMPLETE, never a partial comparison. The
+NOT_TOGGLEABLE half carries a NAMED reason per slug, and each reason is a factual
+claim about the generator's manifests: NOT_IN_CRD_ENUM must really be absent from the
+enum, NO_APPLICATIONSET_ELEMENT must really have no 13a element, and each entry's
+configMapSelfHealProtected must equal whether apps/16 carries /data/<slug>. A stale
+reason is how a slug the generator made toggleable stays silently inert in the
+controller.
+
+HISTORY: THIS GATE COMPARED NOTHING FROM 2026-08-26 TO 2026-09-23 (hugmesh-generator
+#584). Its first regex matched a one-line three-argument `new Entry("slug","ns",
+"mount")`; the Java ENTRIES table was born two-line/five-argument (admin-bff b8ed324,
+23 minutes after this checker's aed812b9), so the checker never matched a real file and
+every run exited 3 INCOMPLETE. It failed closed, which is the only reason that was
+visible at all. `--parse-registry FILE` and the committed fixture
+tests/fixtures/optional-service-slug-closure/OptionalServiceRegistry.java.fixture (a
+verbatim copy of the controller file) pin the parser to the real shape so it cannot
+silently drift off it again.
+
 Without the checkout there is nothing to compare on surface 5, so an absent checkout
 is INCOMPLETE (rc 3) and the calling suite FAILS. It never degrades to "checked four
 of five" — that is how (a) survived a review that looked at the four in-repo surfaces
@@ -215,33 +245,152 @@ def read_ignore_pointers(cluster: Path) -> list[str]:
 # in a javadoc paragraph must not count as registered (comment-token inversion is a
 # catalogued failure mode in this org, and this file's javadoc names slugs it does
 # NOT carry — workloadConsole, egress-vpn, tor — precisely as exclusions).
+#
+# The pattern is the record's EXACT five-field shape:
+#     record Entry(String slug, String namespace, String mountAt, String displayName,
+#                  boolean configMapSelfHealProtected)
+# spread over any number of lines. It is deliberately NOT tolerant of a different
+# arity: a Java call with another arity would not compile against that record, so a
+# mismatch means the record changed and this parser must be updated with it —
+# _count_entry_calls() turns that into INCOMPLETE instead of a partial comparison.
+_JSTR = r'"(?:[^"\\\n]|\\.)*"'
 _ENTRY_RE = re.compile(
     r"""new\s+Entry\s*\(\s*
         "(?P<slug>[^"]+)"\s*,\s*
         "(?P<ns>[^"]+)"\s*,\s*
-        (?:"(?P<mount>[^"]*)"|(?P<null>null))\s*\)""",
+        (?:"(?P<mount>[^"]*)"|(?P<null>null))\s*,\s*
+        (?P<display>""" + _JSTR + r""")\s*,\s*
+        (?P<protected>true|false)\s*\)""",
     re.X,
 )
+_ENTRY_CALL_RE = re.compile(r"new\s+Entry\s*\(")
+_NOT_TOGGLEABLE_RE = re.compile(
+    r"""NOT_TOGGLEABLE\s*\.\s*put\s*\(\s*
+        "(?P<slug>[^"]+)"\s*,\s*
+        NotToggleable\s*\.\s*(?P<reason>[A-Z_]+)\s*\)""",
+    re.X,
+)
+_PUT_CALL_RE = re.compile(r"NOT_TOGGLEABLE\s*\.\s*put\s*\(")
+# The reasons this gate knows how to verify against the manifests. A reason outside
+# this set is a new claim nobody checks, so it FAILS until it is taught here.
+KNOWN_REASONS = ("NOT_IN_CRD_ENUM", "NO_APPLICATIONSET_ELEMENT")
 
 
-def read_java_registry(src_root: Path) -> dict[str, tuple[str, str | None]]:
+def _strip_java_comments(text: str) -> str:
+    """Remove /* */ and // comments so prose naming a slug cannot register it.
+
+    String literals are skipped over rather than scanned, so a "//" inside a string
+    (a URL in a displayName) cannot swallow the rest of the line.
+    """
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i:j + 1])
+            i = j + 1
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            out.append(" ")
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+            out.append(" ")
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def parse_registry_text(text: str, where: str) -> tuple[dict, dict, list[str]]:
+    """Parse BOTH halves of the Java registry from source text.
+
+    Returns (entries, not_toggleable, duplicate_slugs) where entries maps
+    slug -> (namespace, mountAt|None, displayName, configMapSelfHealProtected) and
+    not_toggleable maps slug -> reason name. Raises Incomplete when either half parses
+    to nothing, or when any `new Entry(` / `NOT_TOGGLEABLE.put(` call in code failed to
+    parse — a partial parse would compare a subset and call it the registry.
+    """
+    stripped = _strip_java_comments(text)
+    calls = len(_ENTRY_CALL_RE.findall(stripped))
+    matches = list(_ENTRY_RE.finditer(stripped))
+    if not matches:
+        raise Incomplete(
+            f"{where}: parsed ZERO registry entries. Either the ENTRIES table moved or its "
+            "shape changed — a green run on an empty registry would compare nothing."
+        )
+    if len(matches) != calls:
+        raise Incomplete(
+            f"{where}: {calls} `new Entry(` call(s) in code but only {len(matches)} parse as "
+            "the five-field record (slug, namespace, mountAt|null, displayName, "
+            "configMapSelfHealProtected). The record changed shape; update _ENTRY_RE with "
+            "it rather than compare a subset."
+        )
+    entries: dict[str, tuple[str, str | None, str, bool]] = {}
+    seen: list[str] = []
+    for m in matches:
+        slug = m.group("slug")
+        seen.append(slug)
+        entries[slug] = (
+            m.group("ns"),
+            None if m.group("null") else m.group("mount"),
+            m.group("display")[1:-1],
+            m.group("protected") == "true",
+        )
+    dupes = sorted({x for x in seen if seen.count(x) > 1})
+
+    puts = len(_PUT_CALL_RE.findall(stripped))
+    nt_matches = list(_NOT_TOGGLEABLE_RE.finditer(stripped))
+    if not nt_matches:
+        raise Incomplete(
+            f"{where}: parsed ZERO NOT_TOGGLEABLE entries. The platform-known-but-not-"
+            "toggleable half moved or changed shape; its reasons are claims this gate "
+            "checks, so an empty parse is not 'no claims'."
+        )
+    if len(nt_matches) != puts:
+        raise Incomplete(
+            f"{where}: {puts} `NOT_TOGGLEABLE.put(` call(s) in code but only "
+            f"{len(nt_matches)} parse as put(\"slug\", NotToggleable.REASON)."
+        )
+    not_toggleable = {m.group("slug"): m.group("reason") for m in nt_matches}
+    return entries, not_toggleable, dupes
+
+
+def read_java_registry(src_root: Path) -> tuple[dict, dict, list[str]]:
     """Surface 5. Raises Incomplete when the checkout is absent — never returns {}."""
     p = src_root / SERVICE_REPO / REGISTRY_REL
     if not p.is_file():
         raise Incomplete(f"{SERVICE_REPO}: no {REGISTRY_REL} at {p}")
-    text = p.read_text(encoding="utf-8", errors="replace")
-    # Strip comments so prose naming a slug cannot register it.
-    stripped = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
-    stripped = re.sub(r"//[^\n]*", " ", stripped)
-    out: dict[str, tuple[str, str | None]] = {}
-    for m in _ENTRY_RE.finditer(stripped):
-        out[m.group("slug")] = (m.group("ns"), None if m.group("null") else m.group("mount"))
-    if not out:
+    return parse_registry_text(p.read_text(encoding="utf-8", errors="replace"), str(p))
+
+
+def read_node_scoped(cluster: Path) -> list[str]:
+    """The deliberate exclusions: catalogue slugs with `scope: node`.
+
+    specs/cluster/optional-services.yaml is the registry of optional services; a slug it
+    marks scope: node is an OpenRC service + node reconcile agent, never a cluster
+    Application, so it must appear on none of the five surfaces.
+    """
+    p = cluster / "optional-services.yaml"
+    doc = _load(p)
+    try:
+        services = doc["spec"]["services"]
+    except (KeyError, TypeError) as e:
+        raise Incomplete(f"{p}: no spec.services ({e})") from e
+    if not isinstance(services, list) or not services:
+        raise Incomplete(f"{p}: spec.services is empty")
+    node = [s["slug"] for s in services
+            if isinstance(s, dict) and s.get("scope") == "node" and s.get("slug")]
+    if not node:
         raise Incomplete(
-            f"{p}: parsed ZERO registry entries. Either the ENTRIES table moved or its "
-            "shape changed — a green run on an empty registry would compare nothing."
+            f"{p}: no `scope: node` slug. The node-service exclusion (egress-vpn, tor) is "
+            "what this gate reports as deliberate; an empty set would make that leg vacuous."
         )
-    return out
+    return node
 
 
 def read_reconciler_flag(cluster: Path) -> tuple[int, list[str]]:
@@ -322,7 +471,8 @@ def run(cluster: Path, src_root: Path) -> None:
     enum = read_crd_enum(cluster)
     seeds = read_seed_crs(cluster)
     pointers = read_ignore_pointers(cluster)
-    registry = read_java_registry(src_root)
+    registry, not_toggleable, reg_dupes = read_java_registry(src_root)
+    node_scoped = read_node_scoped(cluster)
 
     el_slugs = [e["slug"] for e in elements]
     el_by_slug = {e["slug"]: e for e in elements}
@@ -339,7 +489,9 @@ def run(cluster: Path, src_root: Path) -> None:
     print(f"  derived governable set G ({len(G)}): {' '.join(G)}")
     print(f"  surfaces: 13a={len(el_slugs)} configmap-bools={len(cm_bools)} "
           f"crd-enum={len(enum)} seed-crs={len(seeds)} apps16-pointers={len(pointers)} "
-          f"java-registry={len(registry)}")
+          f"java-registry={len(registry)} java-not-toggleable={len(not_toggleable)}")
+    print(f"  deliberate exclusions (catalogue scope: node — node services, outside G by "
+          f"construction, asserted absent from every surface): {' '.join(node_scoped)}")
 
     # ── 0. duplicates anywhere would make the set comparisons lie ───────────────
     for label, items in (("13a elements", el_slugs), ("CRD enum", enum),
@@ -347,6 +499,9 @@ def run(cluster: Path, src_root: Path) -> None:
                          ("apps/16 pointers", pointers)):
         dupes = sorted({x for x in items if items.count(x) > 1})
         check(f"[dupes] {label} contains duplicate entries: {dupes}", not dupes)
+    check(f"[dupes] Java registry ENTRIES contains duplicate slugs: {reg_dupes}. "
+          "The constructor's LinkedHashMap keeps the LAST one, so the first row is dead "
+          "text that still reads as the registry.", not reg_dupes)
 
     # ── 1. every 13a element must have a ConfigMap boolean ─────────────────────
     orphan_elements = [s for s in el_slugs if s not in cm_bools]
@@ -429,6 +584,72 @@ def run(cluster: Path, src_root: Path) -> None:
         reg_slugs == gset,
     )
 
+    # ── 6b. the NOT_TOGGLEABLE half: every reason must be TRUE of the manifests ──
+    both = sorted(set(not_toggleable) & reg_slugs)
+    check(
+        f"[java-not-toggleable] slug(s) both in ENTRIES and NOT_TOGGLEABLE: {both}. The "
+        "admin surface would refuse a toggle the reconciler would actuate.",
+        not both,
+    )
+    unknown_reasons = sorted({r for r in not_toggleable.values() if r not in KNOWN_REASONS})
+    check(
+        f"[java-not-toggleable] reason(s) this gate cannot verify: {unknown_reasons}. "
+        f"Teach KNOWN_REASONS what each claims about the manifests.",
+        not unknown_reasons,
+    )
+    enum_set = set(enum)
+    stale_enum = sorted(s for s, r in not_toggleable.items()
+                        if r == "NOT_IN_CRD_ENUM" and s in enum_set)
+    check(
+        f"[java-not-toggleable] {SERVICE_REPO} classifies {stale_enum} as NOT_IN_CRD_ENUM, "
+        "but the CRD spec.slug enum CARRIES it. The reason is stale: the API server now "
+        "ACCEPTS the CR, the reconciler (isKnown=false) logs 'unknown slug — ignoring' "
+        "and skips /status, and the admin surface refuses the toggle for a reason that "
+        "is no longer true. Give the slug a managed ENTRIES row and drop the "
+        "NOT_TOGGLEABLE line (and refresh the controller's vendored CRD fixture).",
+        not stale_enum,
+    )
+    el_set = set(el_slugs)
+    stale_el = sorted(s for s, r in not_toggleable.items()
+                      if r == "NO_APPLICATIONSET_ELEMENT" and s in el_set)
+    check(
+        f"[java-not-toggleable] {SERVICE_REPO} classifies {stale_el} as "
+        "NO_APPLICATIONSET_ELEMENT, but apps/13a HAS an element for it. The reason is "
+        "stale.",
+        not stale_el,
+    )
+    for slug in sorted(reg_slugs & gset):
+        protected = registry[slug][3]
+        has_ptr = f"/data/{slug}" in set(pointers)
+        check(
+            f"[java-selfheal-flag] {slug}: Java configMapSelfHealProtected={str(protected).lower()} "
+            f"but apps/16 {'CARRIES' if has_ptr else 'does NOT carry'} /data/{slug}. The admin "
+            "catalogue and toggle response surface this flag as a selfHeal warning; a stale "
+            f"value {'raises a false alarm' if has_ptr else 'hides a real revert'}.",
+            protected == has_ptr,
+        )
+
+    # ── 6c. the deliberate exclusions stay excluded on EVERY surface ────────────
+    surfaces = {
+        "13a elements": set(el_slugs),
+        "configmap booleans": set(cm_bools),
+        "services.json rows": set(services_json),
+        "CRD enum": enum_set,
+        "seed CRs": set(seed_slugs),
+        "apps/16 pointers": {p.rsplit("/", 1)[-1] for p in pointers},
+        "Java ENTRIES": reg_slugs,
+        "Java NOT_TOGGLEABLE": set(not_toggleable),
+    }
+    for label, present in surfaces.items():
+        leaked = sorted(set(node_scoped) & present)
+        check(
+            f"[node-scope] catalogue scope:node slug(s) {leaked} appear in {label}. A node "
+            "service (OpenRC + node reconcile agent) has no Application to create and no "
+            "greying key the reconciler owns; on a cluster surface it is an accepted, "
+            "un-actuatable toggle.",
+            not leaked,
+        )
+
     # ── 7. namespace / mountAt agreement across the surfaces that carry them ───
     for slug in G:
         el_ns = el_by_slug[slug].get("namespace")
@@ -444,7 +665,7 @@ def run(cluster: Path, src_root: Path) -> None:
             el_ns == row.get("namespace"),
         )
         if slug in registry:
-            r_ns, r_mount = registry[slug]
+            r_ns, r_mount = registry[slug][0], registry[slug][1]
             check(
                 f"[namespace] {slug}: services.json namespace {row.get('namespace')!r} != "
                 f"Java registry namespace {r_ns!r}.",
@@ -485,7 +706,29 @@ def main() -> int:
     ap.add_argument("--src-root", help="tree containing the service checkout(s)")
     ap.add_argument("--list-repos", action="store_true",
                     help="print the service repos this gate needs, one per line")
+    ap.add_argument("--parse-registry", metavar="JAVA_FILE",
+                    help="parse ONE OptionalServiceRegistry.java and print what the gate "
+                         "reads from it (the parser self-test; exit 3 if it parses nothing)")
     args = ap.parse_args()
+
+    if args.parse_registry:
+        p = Path(args.parse_registry)
+        if not p.is_file():
+            print(f"INCOMPLETE: no file {p}")
+            return 3
+        try:
+            entries, nt, dupes = parse_registry_text(
+                p.read_text(encoding="utf-8", errors="replace"), str(p))
+        except Incomplete as e:
+            print(f"INCOMPLETE: {e}")
+            return 3
+        for slug, (ns, mount, display, protected) in entries.items():
+            print(f"ENTRY\t{slug}\t{ns}\t{mount if mount is not None else '<null>'}\t"
+                  f"{display}\t{str(protected).lower()}")
+        for slug, reason in nt.items():
+            print(f"NOT_TOGGLEABLE\t{slug}\t{reason}")
+        print(f"entries={len(entries)} not_toggleable={len(nt)} duplicates={len(dupes)}")
+        return 0
 
     if args.list_repos:
         print(SERVICE_REPO)
