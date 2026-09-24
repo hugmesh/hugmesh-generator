@@ -510,6 +510,12 @@ class DomainsTableBody:
         recorded = {(getattr(d, "name", "") or "").strip(): list(d.optional_services)
                     for d in (getattr(cfg, "domains", None) or [])
                     if (getattr(d, "name", "") or "").strip()}
+        # The Tor front door (#582) is written by the services step too, and has no
+        # cell here at all — so it is carried BY NAME exactly like the services, or a
+        # Next through this table would silently drop every domain's onion.
+        recorded_tor = {(getattr(d, "name", "") or "").strip(): bool(getattr(d, "tor", False))
+                        for d in (getattr(cfg, "domains", None) or [])
+                        if (getattr(d, "name", "") or "").strip()}
         out: list[Domain] = []
         base_ca: dict[str, str] = {}
         for r in range(self.table.rowCount()):
@@ -534,7 +540,8 @@ class DomainsTableBody:
             if ca:
                 base_ca[name] = ca
             out.append(Domain(name=name, title=title or name,
-                              optional_services=services, images=images, idp=idp))
+                              optional_services=services, images=images, idp=idp,
+                              tor=recorded_tor.get(name, False)))
         return out, base_ca
 
 

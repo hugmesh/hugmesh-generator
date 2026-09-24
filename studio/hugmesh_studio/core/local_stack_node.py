@@ -47,6 +47,11 @@ _TOR_SERVICE = "hugmesh-tor"
 #: whole `stack-down`/`stack-up` (tens of seconds), which is what the check exists
 #: to refuse (#581).
 _ONION_START_SKEW_S = 2.0
+#: The node contract's per-domain slug (#599; core.domain_services.TOR_SLUG_RE) and a
+#: v3 onion hostname (56 base32 characters). A per-domain readout is read out of a
+#: root-owned shared directory, so both are checked before anything hands it out.
+_TOR_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+_ONION_V3_RE = re.compile(r"^[a-z2-7]{56}\.onion$")
 _DOCKER_TIME_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$")
 
@@ -195,7 +200,8 @@ class LocalStackNode:
                  idp_issuer: str = "", idp_client_id: str = "", idp_jwks: str = "",
                  services=None,
                  own_idp_domains: tuple[str, ...] = (),
-                 kind_addons=None):
+                 kind_addons=None,
+                 tor_domains=()):
         self.generator_dir = os.path.abspath(generator_dir)
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
@@ -320,6 +326,13 @@ class LocalStackNode:
         # ports 8001+), flips OWN_CASDOOR=1 (the Makefile's `own-casdoor`
         # profile) and exports the multi-issuer APP_TENANCY_* registry.
         self.own_idp_domains = tuple(own_idp_domains or ())
+        # The domains with their OWN Tor front door (#582, decision 68 = A):
+        # ``((name, slug, tenant), ...)`` from core.domain_services.tor_domain_entries.
+        # Threaded as TOR_ONION_DOMAINS="<slug>=<tenant> ..." ONLY on a TOR=1 stack —
+        # the tor entrypoint mints one onion per slug and registers each in the
+        # gateway's host map (hugmesh-gateway#38). Empty (the default, and every
+        # caller from before this existed) threads nothing new.
+        self.tor_domains = tuple(tuple(e) for e in (tor_domains or ()))
 
     @property
     def web_url(self) -> str:
@@ -386,9 +399,11 @@ class LocalStackNode:
             return None
         return _parse_docker_time(started)
 
-    def onion_url(self) -> str:
+    def onion_url(self, slug: str = "") -> str:
         """``https://<onion>/`` for the onion the RUNNING tor container published, or
-        "" when there is none to hand out.
+        "" when there is none to hand out. With ``slug``, that Tor DOMAIN's own onion
+        instead (#582 — :meth:`onion_urls`, same freshness rule); without, the mesh's
+        primary onion, which serves the mesh's own domain.
 
         HTTPS, like ``make stack-onion``: the compose onion publishes ``:443`` to the
         TLS front (tests/stack/tor/entrypoint.sh, #598), which is the door that boots
@@ -408,6 +423,8 @@ class LocalStackNode:
         :data:`_ONION_START_SKEW_S`). The entrypoint copies without ``-p`` on every
         start, so a live container always refreshes the mtime.
         ``onion_hostname()`` stays the raw, probe-free file read."""
+        if slug:
+            return self.onion_url_for(slug)
         h = self.onion_hostname()
         if not h:
             return ""
@@ -422,6 +439,54 @@ class LocalStackNode:
         if written + _ONION_START_SKEW_S < started:
             return ""                     # a previous container's copy — stale
         return f"https://{h}/"
+
+    def onion_urls(self) -> dict[str, str]:
+        """``{slug: "https://<onion>/"}`` for every PER-DOMAIN onion (#582) the RUNNING
+        tor container published — ``tests/stack/tor-onion/<slug>.hostname``, one per
+        ``TOR_ONION_DOMAINS`` entry — or ``{}``.
+
+        The SAME freshness rule as :meth:`onion_url` (#581, per-domain half): a file
+        counts only when a ``hugmesh-tor`` container is running AND the copy is no
+        older than that container's StartedAt. ONE container probe for all of them. A
+        file whose slug the node contract would refuse, or whose content is not a v3
+        onion, is not an onion and is skipped — the directory is root-owned and
+        shared, so it is read as data, never trusted."""
+        out_dir = os.path.dirname(os.path.join(self.generator_dir,
+                                               _TOR_ONION_HOSTNAME_FILE))
+        try:
+            names = sorted(os.listdir(out_dir))
+        except OSError:
+            return {}
+        candidates: dict[str, str] = {}
+        for fn in names:
+            if not fn.endswith(".hostname"):
+                continue
+            slug = fn[:-len(".hostname")]
+            if not _TOR_SLUG_RE.match(slug):
+                continue
+            candidates[slug] = os.path.join(out_dir, fn)
+        if not candidates:
+            return {}
+        started = self._tor_started_at()
+        if started is None:
+            return {}                     # nothing running can be serving those keys
+        out: dict[str, str] = {}
+        for slug, path in candidates.items():
+            try:
+                with open(path, encoding="utf-8") as f:
+                    h = "".join(f.read().split())
+                written = os.stat(path).st_mtime
+            except OSError:
+                continue
+            if not _ONION_V3_RE.match(h) or written + _ONION_START_SKEW_S < started:
+                continue                  # not an onion, or a previous container's copy
+            out[slug] = f"https://{h}/"
+        return out
+
+    def onion_url_for(self, slug: str) -> str:
+        """One domain's onion (``onion_urls()[slug]``), or "" — the per-domain twin of
+        :meth:`onion_url`, whose primary onion serves the mesh's own domain."""
+        return self.onion_urls().get((slug or "").strip(), "") if slug else ""
 
     def available(self) -> tuple[bool, str]:
         if not shutil.which("make"):
@@ -672,6 +737,14 @@ class LocalStackNode:
         # TOR=1 in the operator's shell can't silently flip it, exactly like SOCIAL —
         # and `$(strip $(TOR))` empty leaves the unprofiled env byte-identical.
         env["TOR"] = "1" if self.with_tor else ""
+        # The per-domain onions (#582). Set EXPLICITLY on a TOR=1 stack (an inherited
+        # TOR_ONION_DOMAINS must not mint onions this mesh never chose — the
+        # SOCIAL/TOR rule), and REMOVED otherwise, so a TOR-off env is unchanged.
+        if self.with_tor:
+            from .domain_services import tor_onion_domains_env
+            env["TOR_ONION_DOMAINS"] = tor_onion_domains_env(self.tor_domains)
+        else:
+            env.pop("TOR_ONION_DOMAINS", None)
         # Set explicitly ("" = off) for the same reason as SOCIAL/TOR: an
         # inherited PHPBB=1/AKKOMA=1 in the operator's shell must not silently
         # flip a stack the picker said nothing about.

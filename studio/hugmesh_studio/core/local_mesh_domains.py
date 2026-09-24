@@ -149,7 +149,8 @@ def added_row_problems(names, own_name: str) -> list[str]:
 def _default_shaped(d: Domain) -> bool:
     return (not (d.title or "").strip()
             and getattr(d, "idp", DOMAIN_IDP_SUPERDOMAIN) == DOMAIN_IDP_SUPERDOMAIN
-            and not normalise_slugs(d.optional_services))
+            and not normalise_slugs(d.optional_services)
+            and not getattr(d, "tor", False))
 
 
 def bootstrap_domain_records(domains, own_name: str) -> tuple[dict, ...]:
@@ -168,10 +169,16 @@ def bootstrap_domain_records(domains, own_name: str) -> tuple[dict, ...]:
             continue
         if name == own and _default_shaped(d):
             continue
-        out.append({"name": name, "title": (d.title or "").strip(),
-                    "idp": getattr(d, "idp", DOMAIN_IDP_SUPERDOMAIN)
-                    or DOMAIN_IDP_SUPERDOMAIN,
-                    "optional_services": normalise_slugs(d.optional_services)})
+        rec = {"name": name, "title": (d.title or "").strip(),
+               "idp": getattr(d, "idp", DOMAIN_IDP_SUPERDOMAIN)
+               or DOMAIN_IDP_SUPERDOMAIN,
+               "optional_services": normalise_slugs(d.optional_services)}
+        # the domain's own Tor front door (#582): OMIT-WHEN-FALSE, so every record
+        # without one keeps its bytes. Unlike optional_services this one RUNS on the
+        # compose lane — LocalStackNode threads it as TOR_ONION_DOMAINS when TOR=1.
+        if getattr(d, "tor", False) and name != own:
+            rec["tor"] = True
+        out.append(rec)
     return tuple(out)
 
 
@@ -213,6 +220,7 @@ def domains_from_bootstrap(cfg) -> "LocalMeshDomains | None":
         row.title = (rec.get("title") or "").strip()
         row.idp = rec.get("idp") or DOMAIN_IDP_SUPERDOMAIN
         row.optional_services = list(rec.get("optional_services") or [])
+        row.tor = rec.get("tor") is True and name != own
     for name in idp_names:
         row = next((r for r in rows if r.name == name), None)
         if row is None:
@@ -256,6 +264,9 @@ def record_walk(cfg, md: "LocalMeshDomains", names) -> None:
             continue
         form_row = md.by_name(name)
         picked = normalise_slugs(form_row.optional_services) if form_row else []
+        # the walk's Tor front door (#582) travels with its ticks; OMIT-WHEN-FALSE.
+        tor = bool(form_row is not None and getattr(form_row, "tor", False)
+                   and name != (md.own_name or "").strip())
         row = by_name.get(name)
         if row is None:
             row = {"name": name,
@@ -266,6 +277,10 @@ def record_walk(cfg, md: "LocalMeshDomains", names) -> None:
             by_name[name] = row
         else:
             row["optional_services"] = picked
+        if tor:
+            row["tor"] = True
+        else:
+            row.pop("tor", None)
         if name not in marks:
             marks.append(name)
     cfg.domains = tuple(rows)

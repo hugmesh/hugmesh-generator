@@ -76,8 +76,17 @@ _MECH_INPUTS = {
 }
 
 # Mechanisms that need NO public domain (the endpoint is not a DNS name). For these
-# the driver's --domain is purely cosmetic, so the front-end must not demand it.
+# the front-end must not DEMAND one. Onion still ACCEPTS a domain since #582
+# (decision 68 = A): a Tor domain has its own onion, so a domain given with the onion
+# mechanism names WHICH onion — see GoLiveDriver.domain_onion / preflight.
 _NO_DOMAIN_MECHANISMS = frozenset({"onion"})
+
+# Where the node agent exports the onions (specs/usr/sbin/hugmesh-tor-reconcile, #599;
+# go-live-providers.sh's _GLP_ONION_EXPORT_DIR): ``hostname`` for the primary and
+# ``<slug>.hostname`` per Tor domain. GL_ONION_EXPORT_DIR overrides it, as it does for
+# the driver.
+_ONION_EXPORT_DIR_DEFAULT = "/var/lib/hugmesh/tor"
+_ONION_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
 # Terminal emulators the commit/rollback can run in, most-specific first; each
 # entry is (binary, exec-style args that precede the command argv).
@@ -211,6 +220,35 @@ class GoLiveDriver:
                 return "".join(f.read().split())
         except OSError:
             return ""
+
+    def tor_domain_onions(self) -> dict[str, str]:
+        """``{slug: "<hash>.onion"}`` — the per-domain onions this node exports (#582),
+        read the way the driver's ``_glp_onion_domains`` reads them. {} when none."""
+        d = os.environ.get("GL_ONION_EXPORT_DIR", _ONION_EXPORT_DIR_DEFAULT)
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            return {}
+        out: dict[str, str] = {}
+        for fn in names:
+            slug = fn[:-len(".hostname")] if fn.endswith(".hostname") else ""
+            if not slug or not _ONION_SLUG_RE.match(slug):
+                continue
+            try:
+                with open(os.path.join(d, fn), encoding="utf-8") as f:
+                    addr = "".join(f.read().split())
+            except OSError:
+                continue
+            if addr:
+                out[slug] = addr
+        return out
+
+    def domain_onion(self, domain: str) -> str:
+        """The onion a Go-Live for ``domain`` exposes over Tor: that domain's OWN onion
+        when it is a Tor domain here (its slug is exported), else "" — the primary
+        onion serves the node's own (cluster) domain and needs no lookup."""
+        from .own_casdoor import slug as _slug
+        return self.tor_domain_onions().get(_slug((domain or "").strip()), "")
 
     # ---- provider registry (via the driver's `list` — the source of truth) ----
     def providers(self) -> list[GoLiveProvider]:
@@ -413,6 +451,20 @@ class GoLiveDriver:
                     problems.append("DDNS subdomain must be a single lowercase DNS label "
                                     "([a-z0-9-], 1-63 chars, no dots) — the driver rejects "
                                     "anything else (root-cron injection guard).")
+            if p.mechanism == "onion" and opts.domain:
+                # #582: onion ACCEPTS a domain. The node's own domain is the primary
+                # onion; any other must be a Tor domain on this node, or the plan
+                # would list no onion for it.
+                own = self.autofill_domain()
+                if opts.domain != own and not self.domain_onion(opts.domain):
+                    served = ", ".join(sorted(self.tor_domain_onions())) or "none"
+                    problems.append(
+                        f"{opts.domain} has no Tor front door on this node — the "
+                        "onion plan lists the primary onion"
+                        + (f" ({own})" if own else "")
+                        + f" and the Tor domains exported here ({served}). Give the "
+                        "domain its ‘Tor front door’ in the Studio's Domain services "
+                        "step, or clear the domain.")
             if p.mechanism == "files" and not (opts.ingress_ip or opts.tunnel_cname):
                 problems.append(f"Provider '{p.id}': no ingress IP / tunnel CNAME — emitted "
                                 "records will be PLACEHOLDERS (re-run with --ingress-ip or "

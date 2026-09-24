@@ -52,6 +52,16 @@ per-domain checkboxes — ``domains.py`` has said since #227 that that "would be
 lie", and a required page is a worse place to tell it than a menu was. An assert in
 ``_rebuild`` pins that nothing node-scoped can reach the checkbox list.
 
+ONE EXCEPTION, BY RULING: THE TOR FRONT DOOR (#582, decision 68 = A on #347). "A Tor
+domain = its own HiddenService stanza fronting the SAME gateway, distinguished by the
+onion Host." So every domain but the mesh's own gets a ‘Tor front door’ row with scope
+"onion (per domain)", writing ``Domain.tor`` — never ``optional_services``. The node
+still has to RUN Tor, which stays node-scoped and read-only below (the ``tor`` row);
+the inline ``tor_note`` says when it is off, and which login the onion will serve (a
+domain on the superdomain's sign-in serves the default brand over its onion). The
+assert admits ``PER_DOMAIN_INFRA`` and nothing else; egress-vpn, workloadConsole and
+anubis are unchanged.
+
 NO MODAL ANYWHERE. Every refusal and every hint on this page is an inline QLabel; the
 only interactive controls are checkboxes and two step buttons. ``validatePage`` opens
 nothing and blocks nothing — it RECORDS, and the gates downstream refuse. (A page that
@@ -90,16 +100,19 @@ header block beside ``self.head``, which is already per-domain state.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from ..qt import Qt, QtWidgets
 from ..styles import MUTED, WARN, muted
 from ._scroll import scrollable
 from ...core.domain_services import (
-    DOMAIN_CATALOGUE, ENFORCEMENT_NOTE, OTHER_SCOPE_HEADERS, SCOPE_BINDS,
-    SCOPE_DOMAIN, SCOPE_IMAGE, SCOPE_LABELS, SCOPE_NODE, SCOPE_WHERE,
+    DOMAIN_CATALOGUE, ENFORCEMENT_NOTE, OTHER_SCOPE_HEADERS, PER_DOMAIN_INFRA,
+    SCOPE_BINDS, SCOPE_DOMAIN, SCOPE_IMAGE, SCOPE_LABELS, SCOPE_NODE, SCOPE_ONION,
+    SCOPE_WHERE, TOR_OWN_DOMAIN_NOTE, TOR_ROW_DESC, TOR_ROW_LABEL,
     carried_over_slugs, describe, describe_carried_over, domain_names_for_services,
-    grouped_domain_catalogue, implicit_own_domain, normalise_slugs,
+    grouped_domain_catalogue, implicit_own_domain, mesh_tor_on, normalise_slugs,
     other_scope_rows, record_reviewed, reviewed_names, scope_of,
-    services_page_applies, unconfigured_domains,
+    services_page_applies, tor_row_problem, tor_row_state, unconfigured_domains,
 )
 
 #: Table columns. ``_COL_SCOPE`` (#497) says what each row BINDS, on the row itself and
@@ -124,7 +137,14 @@ def _scope_legend() -> str:
     changes there cannot leave a stale sentence behind on this page."""
     return "  ·  ".join(
         f"{SCOPE_LABELS[k]}: set {SCOPE_WHERE[k]}, binds {SCOPE_BINDS[k]}"
-        for k in (SCOPE_DOMAIN, SCOPE_IMAGE, SCOPE_NODE))
+        for k in (SCOPE_DOMAIN, SCOPE_ONION, SCOPE_IMAGE, SCOPE_NODE))
+
+
+def _offerable(slug: str) -> bool:
+    """Whether ``slug`` may become a per-domain CHECKBOX on this page: a domain-scoped
+    catalogue slug, or one of the per-domain infra slugs (``tor`` alone — decision 68
+    = A on #347, #582). The #227 rule for every other infra slug is unchanged."""
+    return scope_of(slug) == SCOPE_DOMAIN or slug in PER_DOMAIN_INFRA
 
 
 class DomainServicesBody:
@@ -160,6 +180,14 @@ class DomainServicesBody:
         self._boxes: dict[str, QtWidgets.QCheckBox] = {}
         #: the read-only #497 rows, keyed the same way — data, never controls.
         self._other_rows: dict[str, QtWidgets.QTreeWidgetItem] = {}
+        #: domain name -> its own Tor front door (#582, ``Domain.tor``). Kept APART
+        #: from ``_selection`` on purpose: the front door is a field of its own and
+        #: must never land in ``optional_services`` (the inert slot it replaced).
+        self._tor: dict[str, bool] = {}
+        #: the front-door row + its checkbox for the domain on screen (None for the
+        #: mesh's own domain, whose front door IS the primary onion — no control).
+        self._tor_item: QtWidgets.QTreeWidgetItem | None = None
+        self._tor_box: QtWidgets.QCheckBox | None = None
 
         # ── which domain this screen is ────────────────────────────────────────────
         self.head = QtWidgets.QLabel("")
@@ -218,6 +246,35 @@ class DomainServicesBody:
                 c, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         hdr.setToolTip(_scope_legend())
         lay.addWidget(self.table)
+
+        # ── the domain's FRONT DOOR (#582, decision 68 = A) ────────────────────────
+        # Its own table, not a group in the services table above: that table IS the
+        # per-domain service catalogue (every row a domain-scoped service, grouped by
+        # SERVICE_GROUPS), and the Tor front door is not a service of the domain — it
+        # is how the domain is REACHED. Same columns, so the Scope column still says
+        # what it binds on the row itself.
+        self.front_door_table = QtWidgets.QTreeWidget()
+        self.front_door_table.setColumnCount(len(_HEADERS))
+        self.front_door_table.setHeaderLabels(["On", "Front door", "Scope", "",
+                                               "What it does for this domain"])
+        self.front_door_table.setRootIsDecorated(False)
+        self.front_door_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
+        self.front_door_table.setMaximumHeight(90)
+        fd_hdr = self.front_door_table.header()
+        fd_hdr.setStretchLastSection(True)
+        for c in (_COL_ON, _COL_NAME, _COL_SCOPE, _COL_SETTING):
+            fd_hdr.setSectionResizeMode(
+                c, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        lay.addWidget(self.front_door_table)
+
+        # The front door's live state — inline, never a modal: which login the
+        # domain's onion serves, and whether Tor runs on this mesh at all. Repainted
+        # on every toggle of the row's checkbox.
+        self.tor_note = QtWidgets.QLabel("")
+        self.tor_note.setWordWrap(True)
+        self.tor_note.setStyleSheet(muted())
+        lay.addWidget(self.tor_note)
 
         # ── the choices this page SHOWS but does not own (#497) ───────────────────
         self.other_head = QtWidgets.QLabel(
@@ -283,6 +340,7 @@ class DomainServicesBody:
             # record that travels with a configuration.
             self._selection = {}
             self._reviewed = set()
+            self._tor = {}
             self._index = 0
             self._cfg_seen = cfg
         self._names = [n for n in names if n]
@@ -307,6 +365,13 @@ class DomainServicesBody:
         # ASSIGNED, never merged into what was there: a domain dropped from the table
         # must not keep a working selection that a later re-add would silently restore.
         self._selection = fresh
+        # The Tor front door, by the same rule: a surviving name keeps its working
+        # answer, a new one starts from its row's ``tor``. The mesh's OWN domain has
+        # none — implicit (image flow) or row 0 (local mesh) alike, its front door is
+        # the primary onion, so there is nothing to choose and nothing to record.
+        self._tor = {name: (self._tor[name] if name in self._tor
+                            else bool(getattr(rows.get(name), "tor", False)))
+                     for name in self._names if name != self._own_name}
         # A config loaded from disk brings its own record of what was configured —
         # re-walking it must not be demanded twice. Names that no longer exist drop.
         self._reviewed = {n for n in (self._reviewed | reviewed_names(cfg))
@@ -342,6 +407,9 @@ class DomainServicesBody:
             self.head.setText("No domains to configure.")
             self.table.clear()
             self._rows, self._boxes = {}, {}
+            self.front_door_table.clear()
+            self._tor_item = self._tor_box = None
+            self.tor_note.setText("")
             self.other_table.clear()
             self._other_rows = {}
             self.remaining.setText("")
@@ -383,13 +451,15 @@ class DomainServicesBody:
         next domain's screen."""
         self.table.clear()
         self._rows, self._boxes = {}, {}
+        self._tor_item = self._tor_box = None
         chosen = set(self._selection.get(name, []))
         for group, slugs in grouped_domain_catalogue():
             gitem = self._group_row(group)
             for slug in slugs:
                 # The scope rule of #227, kept as an assert rather than a comment: a
                 # node/cluster-plane slug must never become a per-domain checkbox.
-                assert scope_of(slug) == SCOPE_DOMAIN, \
+                # RELAXED for ``tor`` ALONE (decision 68 = A, #582) — see _offerable.
+                assert _offerable(slug), \
                     f"{slug} is not domain-scoped and must not be offered per domain"
                 self._svc_row(gitem, slug, slug, describe(slug), slug in chosen)
         extras = carried_over_slugs(self._selection.get(name, []))
@@ -398,6 +468,69 @@ class DomainServicesBody:
             for slug in extras:
                 self._svc_row(gitem, slug, slug + _EXTRA_NOTE,
                               describe_carried_over(slug), True)
+        # ── the per-domain infra slugs: today exactly one, the Tor front door ──────
+        self.front_door_table.clear()
+        for slug in PER_DOMAIN_INFRA:
+            assert _offerable(slug), \
+                f"{slug} is not domain-scoped and must not be offered per domain"
+            self._front_door_row(name)
+        self._paint_tor_note()
+
+    def _front_door_row(self, name: str) -> None:
+        """The domain's own Tor front door (#582). A checkbox for every domain except
+        the mesh's OWN one, whose front door is the primary onion — that row is data,
+        exactly like the #497 rows (the check flag is cleared, not merely unset)."""
+        item = QtWidgets.QTreeWidgetItem(self.front_door_table)
+        item.setText(_COL_NAME, TOR_ROW_LABEL)
+        item.setText(_COL_SCOPE, SCOPE_LABELS[SCOPE_ONION])
+        item.setToolTip(_COL_SCOPE, f"Set {SCOPE_WHERE[SCOPE_ONION]}; binds "
+                                    f"{SCOPE_BINDS[SCOPE_ONION]}.")
+        self._tor_item = item
+        if name not in self._tor:
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+            item.setText(_COL_DESC, TOR_OWN_DOMAIN_NOTE)
+            item.setToolTip(_COL_DESC, TOR_OWN_DOMAIN_NOTE)
+            return
+        item.setText(_COL_DESC, TOR_ROW_DESC)
+        item.setToolTip(_COL_DESC, TOR_ROW_DESC)
+        box = QtWidgets.QCheckBox()
+        box.setChecked(bool(self._tor.get(name, False)))
+        box.toggled.connect(self._on_tor_toggled)
+        self.front_door_table.setItemWidget(item, _COL_ON, box)
+        self._tor_box = box
+
+    def _on_tor_toggled(self, _checked: bool) -> None:
+        """Repaint the inline state. Guarded: PyQt6 qFatals on a slot exception."""
+        try:
+            self._paint_tor_note()
+        except Exception:                      # noqa: BLE001
+            pass
+
+    def _tor_view(self, name: str):
+        """A row-shaped view of ``name``'s front door AS IT STANDS ON SCREEN (the box,
+        not the last recorded value), for core's wording functions."""
+        cfg = self._cfg_seen
+        row = next((d for d in (getattr(cfg, "domains", None) or [])
+                    if (getattr(d, "name", "") or "").strip() == name), None)
+        on = (self._tor_box.isChecked() if self._tor_box is not None
+              else bool(self._tor.get(name, False)))
+        return SimpleNamespace(name=name, tor=on, idp=getattr(row, "idp", ""))
+
+    def _paint_tor_note(self) -> None:
+        name = self.current_domain()
+        if not name:
+            self.tor_note.setText("")
+            return
+        view = self._tor_view(name)
+        text = tor_row_state(view, self._scope_cfg(), self._entries(), self._own_name)
+        self.tor_note.setText(f"{TOR_ROW_LABEL}: {text}")
+        cfg = self._scope_cfg()
+        warn = view.tor and (bool(tor_row_problem(view))
+                             or (cfg is not None
+                                 and not mesh_tor_on(cfg, self._entries())))
+        self.tor_note.setStyleSheet(f"color: {WARN};" if warn else muted())
+        if self._tor_item is not None:
+            self._tor_item.setToolTip(_COL_NAME, text)
 
     def _rebuild_other_scopes(self) -> None:
         """Fill the read-only table of choices this page shows but does not own (#497).
@@ -476,6 +609,8 @@ class DomainServicesBody:
             return
         self._selection[name] = normalise_slugs(
             [slug for slug, box in self._boxes.items() if box.isChecked()])
+        if self._tor_box is not None and name in self._tor:
+            self._tor[name] = self._tor_box.isChecked()
 
     def selected_slugs(self, name: str | None = None) -> list[str]:
         """The slugs recorded for ``name`` (the current domain by default) — the API
@@ -484,6 +619,14 @@ class DomainServicesBody:
             self._capture()
             name = self.current_domain()
         return list(self._selection.get(name, []))
+
+    def tor_front_door(self, name: str | None = None) -> bool:
+        """Whether ``name`` (the current domain by default) has its own Tor front door
+        in this walk — the API tests read the row through (#582)."""
+        if name is None:
+            self._capture()
+            name = self.current_domain()
+        return bool(self._tor.get(name, False))
 
     def _record(self, cfg) -> None:
         """RECORD, never refuse. Writes the per-domain selections onto ``cfg.domains``
@@ -515,6 +658,8 @@ class DomainServicesBody:
         for d, name in rows:
             if name in self._selection:
                 d.optional_services = list(self._selection[name])
+            if name in self._tor:
+                d.tor = bool(self._tor[name])
         own = self._own_name
         if own and own in self._selection and own not in {n for _d, n in rows}:
             cfg.cluster_domain_services = list(self._selection[own])

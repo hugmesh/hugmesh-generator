@@ -862,6 +862,55 @@ _COMPOSE_ONION_SERVICE = "hugmesh-tor"
 _COMPOSE_TOR_CLIENT_SERVICE = "hugmesh-tor-client"
 
 
+def _domain_onions(node) -> list[tuple[str, str, str]]:
+    """``[(domain label, slug, "https://<onion>/"), ...]`` — the PER-DOMAIN onions the
+    running hugmesh-tor published (#582, decision 68 = A; ``LocalStackNode.
+    onion_urls`` applies the #581 freshness rule). The label is the domain's NAME when
+    the node knows it (``tor_domains``), else its slug. Never raises: a node without
+    the seam (older callers, test doubles) has none."""
+    try:
+        urls = dict(node.onion_urls() or {})
+    except Exception:                                 # noqa: BLE001
+        return []
+    names = {}
+    for entry in (getattr(node, "tor_domains", None) or ()):
+        try:
+            names[str(entry[1])] = str(entry[0])
+        except (IndexError, TypeError):
+            continue
+    return [(names.get(slug, slug), slug, str(url))
+            for slug, url in sorted(urls.items()) if url]
+
+
+def _domain_onion_units(tor_unit: "MeshUnit", onions) -> list["MeshUnit"]:
+    """ONE row — one Door — per (domain, onion), each carrying THAT domain's login URL
+    ``https://<onion>/login``. They are the SAME container as the hugmesh-tor row (one
+    tor process, one HiddenService stanza per domain), so they share its phase and
+    readiness and scale with it, never on their own.
+
+    HTTPS, not http: #598/#600 measured that an http onion page cannot boot the SPA
+    (the gateway's CSP upgrade-insecure-requests), and the primary onion's door hands
+    out https too. The Door has no URL for the same reason the primary has none — a
+    normal browser cannot reach a .onion — and says where to open it instead."""
+    out: list[MeshUnit] = []
+    for label, slug, url in onions:
+        login = url.rstrip("/") + "/login"
+        out.append(MeshUnit(
+            lane=tor_unit.lane, namespace=tor_unit.namespace,
+            name=f"{tor_unit.name} · {label} onion", owner=tor_unit.owner,
+            phase=tor_unit.phase, ready=tor_unit.ready, reason=tor_unit.reason,
+            state=tor_unit.state, cluster_path=tor_unit.cluster_path, external=login,
+            door=Door(blocked=f"a normal browser cannot reach a .onion — open {login} "
+                              f"in Tor Browser (the {label} sign-in)"),
+            detail="\n".join([f"domain: {label}", f"onion key directory: {slug}",
+                              f"login: {login}",
+                              f"served by: the {tor_unit.owner or 'hugmesh-tor'} "
+                              "container (one tor, one stanza per domain)"]),
+            scale=ScaleTarget(refused=f"one onion of the {tor_unit.owner or 'tor'} "
+                                      "container — it is not a workload of its own")))
+    return out
+
+
 def _is_compose_service(service: str, name: str, want: str) -> bool:
     """True when this row IS compose service ``want``: its service label, or — for
     a row that carries no label — a container name of compose's
@@ -974,6 +1023,7 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
         onion = str(node.onion_url() or "")
     except Exception:                                 # noqa: BLE001
         onion = ""
+    domain_onions = _domain_onions(node)
     by_name = {d.name: d for d in (catalog or [])}
     units: list[MeshUnit] = []
     for r in rows:
@@ -1078,6 +1128,8 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
                    if service else
                    ScaleTarget(refused="this container carries no compose service "
                                        "label, so there is no service to scale"))))
+        if domain_onions and _is_compose_service(service, name, _COMPOSE_ONION_SERVICE):
+            units.extend(_domain_onion_units(units[-1], domain_onions))
     if not units:
         notes.append("the compose project reports running but listed zero containers")
     bits = [f"project {_COMPOSE_PROJECT}", f"{len(units)} container(s)"]

@@ -1656,6 +1656,14 @@ ANUBIS          ?=
 # a recorded residual (#586), not a guarantee this knob makes.
 TOR             ?=
 TOR_SOCKS_HOST_PORT ?= 9050
+# TOR_ONION_DOMAINS="<slug>=<tenant> ..." — per-DOMAIN onions (hugmesh-generator#582,
+# decision 68 = A): one more HiddenService per entry, fronting the SAME gateway, each
+# registered in the fe-gateway's host map (hugmesh-gateway#38) so its onion Host
+# serves <tenant>'s brand. The Studio sets it from the Domain services step's ‘Tor
+# front door’ rows; BRAND_B=1 TOR=1 adds `brandb=brandb` on its own, so
+#   make stack-up TOR=1 BRAND_B=1   mints TWO onions: the mesh's (default) and brand B's
+# (`ls tests/stack/tor-onion/` -> hostname + brandb.hostname). Inert without TOR=1.
+TOR_ONION_DOMAINS ?=
 # TTS=1 — edge-ai-tts (Piper TTS + visemes; compose.edge-ai-tts.yaml, DEFAULT-OFF)
 TTS             ?=
 # POISONER=1 — the AI MEDIA CLOAK worker (hugmesh-media-poisoner;
@@ -1813,7 +1821,14 @@ STACK_ANUBIS_ENV := $(if $(strip $(ANUBIS)), ANUBIS_ENABLED='true',)
 # TOR_ONION_UPSTREAM (command line or environment) always wins. Empty with TOR
 # unset, so a plain bring-up's STACK_ENV is byte-identical to before.
 STACK_TOR_ANUBIS_UPSTREAM := hugmesh-anubis:8923
-STACK_TOR_ENV := $(if $(strip $(TOR)), TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)'$(if $(strip $(ANUBIS)),$(if $(strip $(TOR_ONION_UPSTREAM)),, TOR_ONION_UPSTREAM='$(STACK_TOR_ANUBIS_UPSTREAM)'),),)
+# #582: TOR=1 also turns on the fe-gateway's onion host map (APP_TENANCY_HOSTS_FILE,
+# written by hugmesh-tor into the tor-tenancy-map volume) and threads the per-domain
+# onions — the caller's TOR_ONION_DOMAINS plus brand B's when BRAND_B=1. With the map
+# set, an onion the map does not name is REFUSED by the gateway, so hugmesh-tor always
+# registers the mesh's own onion as `default` first (the #39 writer contract).
+STACK_TOR_MAP_FILE := /tenancy/onion-hosts.map
+STACK_TOR_DOMAINS := $(strip $(TOR_ONION_DOMAINS) $(if $(strip $(BRAND_B)),brandb=brandb,))
+STACK_TOR_ENV := $(if $(strip $(TOR)), TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)'$(if $(strip $(ANUBIS)),$(if $(strip $(TOR_ONION_UPSTREAM)),, TOR_ONION_UPSTREAM='$(STACK_TOR_ANUBIS_UPSTREAM)'),) APP_TENANCY_HOSTS_FILE='$(STACK_TOR_MAP_FILE)'$(if $(STACK_TOR_DOMAINS), TOR_ONION_DOMAINS='$(STACK_TOR_DOMAINS)',),)
 # MFA OPERATIONAL FLIP, opt-in per run — issue #47, following the PHPBB=1/AKKOMA=1
 # knob precedent. ONE switch, three lanes, and it flips ONLY app.mfa.enabled — the
 # freshness window keeps its default (600000) and the privileged floor stays on its

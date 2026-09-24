@@ -2735,6 +2735,16 @@ class Domain:
     # saved config/manifest == superdomain (_domain_from_dict normalizes), and
     # both manifest emitters OMIT the default so pre-#47 bytes never change.
     idp: str = DOMAIN_IDP_SUPERDOMAIN
+    # Does this domain get its OWN Tor v3 onion (hugmesh-generator#582, operator
+    # decision 68 = A on #347)? ``tor`` is the ONE infra slug that became per-domain:
+    # a Tor domain is its own HiddenService stanza fronting the SAME gateway, and the
+    # gateway tells the domains apart by the onion Host (hugmesh-gateway#38's host
+    # map). It needs Tor on the node / mesh (the node-plane ``tor`` selection) to do
+    # anything — see core/domain_services.tor_front_door_state. Manifest emission is
+    # OMIT-WHEN-FALSE, like ``idp``, so every pre-#582 manifest keeps its bytes. A
+    # legacy ``"tor"`` in ``optional_services`` (the pre-#227 freeform cell, an inert
+    # slot no builder read) MIGRATES here at load — the ``games`` precedent.
+    tor: bool = False
 
 
 @dataclass
@@ -3170,6 +3180,26 @@ class ImageConfig:
                 f"domain {kw.get('name', '')!r}: idp must be one of "
                 f"{'|'.join(DOMAIN_IDP_CHOICES)}, got {v!r}")
         kw["idp"] = v
+        # per-domain Tor front door (#582). A real bool, or the two hand-written
+        # spellings; junk fails loudly at load (the idp rule), never coerced.
+        t = kw.get("tor", False)
+        if isinstance(t, str) and t.strip().lower() in ("true", "false", ""):
+            t = t.strip().lower() == "true"
+        if t is None:
+            t = False
+        if not isinstance(t, bool):
+            raise ValueError(
+                f"domain {kw.get('name', '')!r}: tor must be true or false, got {t!r}")
+        # MIGRATION: a legacy per-domain ``tor`` slug (pre-#227 freeform cell, kept as
+        # a carried-over slug since) was an inert slot — the manifest carried it and no
+        # builder read it (#580 addendum). Decision 68 made per-domain Tor a real
+        # mechanism, so the intent moves onto the field that drives it, and the slug
+        # leaves the allow-list rather than rendering a second, dead "tor" row.
+        svcs = kw.get("optional_services")
+        if isinstance(svcs, (list, tuple)) and "tor" in svcs:
+            t = True
+            kw["optional_services"] = [x for x in svcs if x != "tor"]
+        kw["tor"] = t
         return Domain(**kw)
 
     @staticmethod
@@ -4631,8 +4661,11 @@ class ImageConfig:
             "brand": self.brand, "brand_title": self.brand_title, "org": self.org,
             "cluster_domain": self.cluster_domain,
             "superdomain": self.effective_superdomain(),
+            # per-domain ``tor`` (#582) is OMIT-WHEN-FALSE the same way: a domain
+            # without its own onion emits no key, so pre-#582 bytes never change.
             "domains": [{k: v for k, v in asdict(d).items()
-                         if not (k == "idp" and v == DOMAIN_IDP_SUPERDOMAIN)}
+                         if not (k == "idp" and v == DOMAIN_IDP_SUPERDOMAIN)
+                         and not (k == "tor" and not v)}
                         for d in self.domains],
             # per-user ``roles`` (issue #228) is OMIT-WHEN-SINGLE the same way (User.to_dict):
             # ``role`` stays the primary every consumer reads; a multi-role account adds

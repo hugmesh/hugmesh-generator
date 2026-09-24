@@ -284,7 +284,10 @@ class WorklistDriver:
                          "optional_services": list(d.optional_services),
                          "images": list(d.images),
                          **({"idp": d.idp}
-                            if d.idp != DOMAIN_IDP_SUPERDOMAIN else {})}
+                            if d.idp != DOMAIN_IDP_SUPERDOMAIN else {}),
+                         # per-domain Tor front door (#582): OMIT-WHEN-FALSE, exactly
+                         # as the v1 shim emits it.
+                         **({"tor": True} if getattr(d, "tor", False) else {})}
                         for d in base.domains],
             # per-user `roles` (issue #228) is OMIT-WHEN-SINGLE too (User.to_dict), so
             # v2 and the v1 shim emit the same user rows byte for byte.

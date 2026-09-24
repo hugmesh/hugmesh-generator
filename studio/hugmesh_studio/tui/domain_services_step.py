@@ -20,6 +20,12 @@ SAY so — it prints them, read-only, with the scope they really have, where eac
 set and what it is doing right now, plus a legend naming all three scopes. Both halves
 of that issue: reachable from the same flow, and visibly not domain-scoped.
 
+ONE EXCEPTION, BY RULING (#582, decision 68 = A): under the services, every domain but
+the mesh's own has a ‘Tor front door’ row (command ``t``) — scope "onion (per domain)",
+writing ``Domain.tor`` (never ``optional_services``) — and a one-line state saying which
+login its onion serves and whether Tor runs on this mesh at all. Same row, same words
+and same field as the GUI page's front-door table.
+
 HONESTY: the selection does not yet reach the cluster — issue #496. The screen prints
 ``ENFORCEMENT_NOTE``, the same words the GUI page shows, because a required step that
 implies otherwise is worse than the menu it replaced.
@@ -42,15 +48,16 @@ from __future__ import annotations
 
 from ..core.domain_services import (
     DOMAIN_CATALOGUE, ENFORCEMENT_NOTE, OTHER_SCOPE_HEADERS, SCOPE_BINDS,
-    SCOPE_DOMAIN, SCOPE_IMAGE, SCOPE_LABELS, SCOPE_NODE, SCOPE_WHERE,
+    SCOPE_DOMAIN, SCOPE_IMAGE, SCOPE_LABELS, SCOPE_NODE, SCOPE_ONION, SCOPE_WHERE,
+    TOR_OWN_DOMAIN_NOTE, TOR_ROW_DESC, TOR_ROW_LABEL,
     carried_over_slugs, describe, describe_carried_over, domain_names_for_services,
     implicit_own_domain, normalise_slugs, other_scope_rows, record_reviewed,
-    reviewed_names,
+    reviewed_names, tor_row_state,
 )
 from . import model
 
 __all__ = ["DomainServicesScreen", "service_table", "other_scope_table",
-           "scope_legend"]
+           "scope_legend", "front_door_table", "TOR_COMMAND"]
 
 
 class _OwnDomainView:
@@ -99,8 +106,7 @@ def service_table(domain) -> tuple[list[str], list[list[str]]]:
     does. Every row here is domain-scoped by construction; the column exists so the
     read-only table below reads as "and these are not"."""
     chosen = set(normalise_slugs(getattr(domain, "optional_services", None)))
-    offered = list(DOMAIN_CATALOGUE) + carried_over_slugs(
-        getattr(domain, "optional_services", None))
+    offered = _offered(domain)
     rows = []
     for i, slug in enumerate(offered, 1):
         note = (describe(slug) if slug in DOMAIN_CATALOGUE
@@ -108,6 +114,31 @@ def service_table(domain) -> tuple[list[str], list[list[str]]]:
         rows.append([str(i), "on" if slug in chosen else "-", slug,
                      SCOPE_LABELS[SCOPE_DOMAIN], note])
     return (["#", "on", "service", "scope", "what it does for this domain"], rows)
+
+
+#: The front door's command — a letter, never a number, so the service rows' numbers
+#: (catalogue + carried-over slugs) never shift under it.
+TOR_COMMAND = "t"
+
+
+def front_door_table(domain, own: bool = False) -> tuple[list[str], list[list[str]]]:
+    """(headers, rows) for the domain's FRONT DOOR (#582, decision 68 = A): its own Tor
+    onion, the ONE infra slug with a per-domain spelling, scoped "onion (per domain)"
+    and written to ``Domain.tor`` — never to ``optional_services``. The GUI page's own
+    table, same row, same words. ``own`` = the mesh's own domain, whose front door is
+    the primary onion: data, never a toggle (no command)."""
+    if own:
+        row = ["", "", TOR_ROW_LABEL, SCOPE_LABELS[SCOPE_ONION], TOR_OWN_DOMAIN_NOTE]
+    else:
+        row = [TOR_COMMAND, "on" if getattr(domain, "tor", False) else "-",
+               TOR_ROW_LABEL, SCOPE_LABELS[SCOPE_ONION], TOR_ROW_DESC]
+    return (["cmd", "on", "front door", "scope", "what it does for this domain"], [row])
+
+
+def _offered(domain) -> list[str]:
+    """The numbered SERVICE rows, in order."""
+    return list(DOMAIN_CATALOGUE) + carried_over_slugs(
+        getattr(domain, "optional_services", None))
 
 
 def other_scope_table(cfg, entries=()) -> tuple[list[str], list[list[str]]]:
@@ -122,7 +153,7 @@ def scope_legend() -> list[str]:
     """One line per scope: where it is chosen, and what it binds. Built from core so a
     wording change cannot leave a stale sentence behind on either face."""
     return [f"{SCOPE_LABELS[k]}: set {SCOPE_WHERE[k]}, binds {SCOPE_BINDS[k]}"
-            for k in (SCOPE_DOMAIN, SCOPE_IMAGE, SCOPE_NODE)]
+            for k in (SCOPE_DOMAIN, SCOPE_ONION, SCOPE_IMAGE, SCOPE_NODE)]
 
 
 class DomainServicesScreen:
@@ -199,8 +230,18 @@ class DomainServicesScreen:
                ""]
         if self.lane_note:
             out += [self.lane_note, ""]
+        is_own = bool(own)
         headers, rows = service_table(d)
         out += model.format_table(headers, rows)
+        out.append("")
+        headers, rows = front_door_table(d, own=is_own)
+        out += model.format_table(headers, rows)
+        # the front door's live state — which login its onion serves, and whether Tor
+        # runs on this mesh at all (unknowable on a host with no ImageConfig).
+        scope_cfg = cfg if self._cfg_of is None else None
+        out.append(f"{TOR_ROW_LABEL}: "
+                   + tor_row_state(d, scope_cfg, self._entries(j),
+                                   d.name if is_own else ""))
         out.append("")
         left = [x.name for x in doms if x.name not in done]
         if left:
@@ -211,7 +252,9 @@ class DomainServicesScreen:
         else:
             out.append(f"All {len(doms)} domain"
                        f"{'s' if len(doms) != 1 else ''} configured.")
-        out.append("commands: NUMBER=toggle that service · n=next domain · "
+        out.append("commands: NUMBER=toggle that service · "
+                   + ("" if is_own else f"{TOR_COMMAND}=toggle the Tor front door · ")
+                   + "n=next domain · "
                    "p=previous domain · "
                    + ("b=back · " if self._on_back else "") + "Enter=continue")
         out.append("")
@@ -222,7 +265,6 @@ class DomainServicesScreen:
                    "domain):")
         # the mesh-wide state column reads an ImageConfig; a host walking something
         # else (the local docker mesh) has none, and the column reads "off".
-        scope_cfg = cfg if self._cfg_of is None else None
         headers, rows = other_scope_table(scope_cfg, self._entries(j))
         out += model.format_table(headers, rows)
         out.append("")
@@ -259,7 +301,18 @@ class DomainServicesScreen:
             self._mark(j)
             return
         d = self.current(j)
-        offered = list(DOMAIN_CATALOGUE) + carried_over_slugs(d.optional_services)
+        if verb == TOR_COMMAND:
+            # the Tor front door (#582): Domain.tor, never optional_services. The
+            # mesh's own domain has none to toggle — its front door is the primary
+            # onion (the GUI page shows that row as data, too).
+            if d.name == _own_name(self.cfg(j)):
+                j.status = (f"{d.name} is this mesh's own domain — its front door is "
+                            "the mesh's own onion; nothing to toggle")
+                return
+            d.tor = not bool(getattr(d, "tor", False))
+            j.status = f"{d.name}: {TOR_ROW_LABEL} -> {'on' if d.tor else 'off'}"
+            return
+        offered = _offered(d)
         try:
             n = int(line)
         except ValueError:

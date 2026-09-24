@@ -197,6 +197,24 @@ re-adding it brings back the same address. Nothing in the image build writes
 `/etc/hugmesh/tor/domains` yet — the Studio/builder side that bakes it from the mesh's
 Tor domains is separate work.
 
+**Where a Tor domain is chosen (hugmesh-generator#582).** In the Studio's *Domain
+services* step, every domain except the mesh's own has a **Tor front door** row, scope
+*onion (per domain)* — GUI and TUI (command `t`). It writes `Domain.tor`; the mesh
+manifest carries it as `domains[].tor: true` (both the v1 shim and the v2 envelope; the
+key is omitted when false, so older manifests keep their bytes). A legacy `tor` in a
+domain's `optional_services` — an inert slot no builder ever read — migrates to
+`tor: true` when a config loads. The node must still **run** Tor (the node-scoped `tor`
+selection, mesh-wide or per worklist node); the row says so inline when it is off.
+
+**The seam between the Studio and a node** — one spelling everywhere:
+
+| | Rule | Owner |
+|---|---|---|
+| **slug** | `core.own_casdoor.slug(name)`: lowercase, every run of non-`[a-z0-9]` becomes `-`, trimmed; e.g. `shop.example` → `shop-example`. A name whose slug exceeds 63 characters gets **no** onion (never truncated, which could collide two domains onto one key); the row says so. | `core/domain_services.onion_slug` |
+| **tenant** | The gateway tenancy key the onion `Host` maps to: the slug when the domain runs its **own** Casdoor (the value its `APP_TENANCY_HOSTS` entry already has), else `default`. A domain on the superdomain's sign-in has no issuer of its own, so a slug tenant would make the gateway refuse every signed-in user on its onion; its onion is a separate **address** serving the default brand, and a separate **login** needs sign-in *own*. | `core/domain_services.onion_tenant` |
+| **node input** | `/etc/hugmesh/tor/domains`: one slug per line. **Not yet written from `domains[].tor` by any builder or provisioner** (see above); admin-bff's runtime writer is hugmesh/hugmesh-admin-bff-api#112. | builder / provisioning (open) |
+| **gateway host map** | `APP_TENANCY_HOSTS_FILE`: `<primary onion>=default` first, then one `<onion>=<tenant>` per Tor domain, written temp-then-rename in the same directory (the hugmesh-gateway#39 writer contract). | compose: `hugmesh-tor` (below). Hardware node: **open** — no writer yet. |
+
 A secondary, **opt-in** capability (`hugmesh.net/tor-onion=true` label +
 `tor-onion-marked` NetworkPolicy) lets a pod egress through the node Tor SOCKS proxy. It
 is **inert by default** and additionally requires binding `SocksPort` to the pod network
@@ -263,15 +281,17 @@ reload the service). Like the other node modules it is authored-but-not-yet-comp
 ## The local docker mesh (`make stack-up TOR=1`)
 
 The compose stack has its own, single-container analogue of the node service
-(`tests/stack/tor/`, compose profile `tor`). Everything below is compose-lane only — the kind
-lane has no Tor door (hugmesh-generator#577) — and it is one onion for the whole mesh, not one
-per domain (#582).
+(`tests/stack/tor/`, compose profile `tor`). Everything below is compose-lane only (the kind
+lane's door is `make kind-tor`, below). It serves the mesh's own onion plus **one more per Tor
+domain** (#582, decision 68 = A).
 
 | Piece | What it is |
 |---|---|
 | `hugmesh-tor` | Serves the v3 onion. **`:443` → `hugmesh-https-front:8443`** (the stack's TLS front, `TOR_ONION_TLS_UPSTREAM`) and **`:80` → `hugmesh-fe-gateway:8080`** (`TOR_ONION_UPSTREAM`). Key in the `tor-onion-keys` volume, so the address survives `make stack-halt` and restarts; `make stack-down` drops the volume and the next up mints a **new** onion. |
 | `hugmesh-tor-client` | A Tor SOCKS5 client on **`127.0.0.1:${TOR_SOCKS_HOST_PORT:-9050}`** (loopback only — never an open proxy for the LAN). The e2e lane's browser dials the onion through it. |
 | `tests/stack/tor-onion/hostname` | The **public** hostname, copied out for the Studio and `make stack-onion`. Removed when `hugmesh-tor` starts and again when it stops or dies (#581), so it exists only while that onion is being served. |
+| `TOR_ONION_DOMAINS` | `"<slug>=<tenant> ..."` — one more `HiddenService` per entry, fronting the **same** two upstreams, key in `tor-onion-domain-keys` (`/var/lib/tor/hugmesh-onion.d/<slug>`). Readout `tests/stack/tor-onion/<slug>.hostname`, same lifecycle as `hostname`. A malformed entry is refused and logged. The Studio sets it from the Tor front door rows (only on a `TOR=1` stack); `BRAND_B=1 TOR=1` adds `brandb=brandb` itself. |
+| host map | `hugmesh-tor` writes `/tenancy/onion-hosts.map` (volume `tor-tenancy-map`) **before** it publishes `hostname`: the mesh's onion as `default`, each domain's onion as its tenant. `TOR=1` points the **fe-gateway** at it (`APP_TENANCY_HOSTS_FILE`, read-only mount). From then on the gateway **refuses** any `.onion` Host the map does not name (hugmesh-gateway#39). Removed on start, stop and crash, like the readouts. |
 
 ```sh
 make stack-up TOR=1          # + ANUBIS=1: the onion's :80 goes through the PoW gate
@@ -291,8 +311,26 @@ succeeded. So the door is `https://<onion>/`, served by the TLS front. Its certi
 stack's own (minted for the cluster domain), so Tor Browser warns once. Whether Tor Browser —
 which treats `.onion` as a secure context — behaves differently on the http port is unmeasured.
 
-**What the onion Host resolves to.** The gateway maps an unknown `Host` to the default domain,
-so the onion serves the default brand (hugmesh-gateway#38 tracks an explicit onion mapping).
+**What the onion Host resolves to.** On a `TOR=1` stack the fe-gateway reads the host map
+above (hugmesh-gateway#38, landed in #39): the mesh's onion serves the default brand, a Tor
+domain's onion serves its tenant, and an onion the map does not name is refused with
+`403 X-Route-Denied` (an anonymous request to a protected path may get 401 or a login redirect
+first). Only the fe-gateway takes the map: both onion ports reach it, `:443` through
+`hugmesh-https-front`, which forwards the `Host`. A gateway image older than #39 ignores
+`APP_TENANCY_HOSTS_FILE`, and every onion then serves the default brand, as before.
+
+```sh
+make stack-up TOR=1 BRAND_B=1 && make stack-seed
+ls tests/stack/tor-onion/                        # hostname  brandb.hostname
+curl --socks5-hostname 127.0.0.1:9050 -k https://$(cat tests/stack/tor-onion/brandb.hostname)/login
+```
+
+**Not yet run live** (no mesh on 2026-09-23/24): two onions minted; brand B's onion serves brand
+B's login and a brand-B persona signs in there; the mesh's onion still serves the default brand;
+an unregistered onion `Host` is refused. The offline pins are
+`studio/tests/test_domain_services_tor.py` (the entrypoint executed against a stub tor, the
+compose/Makefile wiring, the Studio seams) and `test_domain_services_tor_page.py` (the GUI and
+TUI row), both run pre-merge by `tests/scripts/test-studio-tor-domain-pins.sh`.
 
 **Known residuals.** With `ANUBIS=1 TOR=1` only the onion's `:80` is PoW-gated; `:443` reaches the
 TLS front, which forwards to the fe-gateway directly (#586). tor resolves both upstream hostnames
