@@ -87,6 +87,16 @@ class FleetConfig:
     pentest_env: str = ""              # PENTEST_ENV compose|local|cluster
     pentest_scan: str = ""             # PENTEST_SCAN baseline|full
     pentest_pipeline: str = ""         # PENTEST_PIPELINE main|games
+    # ── node services (#579) ──
+    # WITH_TOR=1: every CLUSTER-NODE image of the run carries the Tor v3 onion
+    # (net-vpn/tor + hugmesh-tor-reconcile). The script emits it per builder through
+    # the channel that builder parses — x86 --with-tor, rpi5 'tor' folded into its
+    # --optional-services — and nowhere a builder cannot bake it; it REFUSES (exit 2,
+    # before any build) where it cannot be honoured exactly. Not an extra_flags
+    # string: a pass-through --with-tor would reach builders that have no such flag.
+    with_tor: bool = False             # WITH_TOR=1
+    optional_services: str = ""        # OPTIONAL_SERVICES="akkoma tuwunel ..." (both node
+                                       # builders' env knob; the rpi5 tor fold's base)
     # ── brand mesh (the same env channel BuildDriver forwards for G2) ──
     headscale_url: str = ""            # HEADSCALE_URL baked by the x86/rpi5/frite builders
     # ── pass-through builder args (forwarded to EVERY per-role builder) ──
@@ -112,7 +122,8 @@ class FleetConfig:
             validate_domain_name(self.cluster_domain)
         for name, roleset in (("x86_roles", self.x86_roles),
                               ("rpi_roles", self.rpi_roles),
-                              ("jetson_roles", self.jetson_roles)):
+                              ("jetson_roles", self.jetson_roles),
+                              ("optional_services", self.optional_services)):
             for tok in roleset.split():
                 if not _ROLE_TOKEN_RE.match(tok):
                     raise IdentityValidationError(
@@ -145,6 +156,7 @@ class FleetConfig:
             ("ORANGEPI4LTS_ONLY", self.orangepi4lts_only),
             ("SKIP_KEYS", self.skip_keys),
             ("PENTEST", self.pentest), ("PENTEST_ONLY", self.pentest_only),
+            ("WITH_TOR", self.with_tor),
         ):
             if val:
                 env[var] = "1"
@@ -165,6 +177,7 @@ class FleetConfig:
             ("PENTEST_ENV", self.pentest_env), ("PENTEST_SCAN", self.pentest_scan),
             ("PENTEST_PIPELINE", self.pentest_pipeline),
             ("HEADSCALE_URL", self.headscale_url),
+            ("OPTIONAL_SERVICES", " ".join(self.optional_services.split())),
         ):
             if val:
                 env[var] = val

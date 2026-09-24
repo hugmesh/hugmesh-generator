@@ -50,10 +50,16 @@ def _pinned_host(monkeypatch):
                         lambda builder_image="hugmesh-builder": HOST)
 
 
+#: The REAL reader, kept before the autouse fixture below cans it — the #579 tests
+#: put it back so at least one path reads an actual saved-mesh record off disk.
+_REAL_IDENTITY = lc_mod.local_mesh_identity
+
+
 @pytest.fixture(autouse=True)
 def _canned_local_mesh(monkeypatch):
+    # (domain, users, with_tor) — the canned mesh ran no Tor.
     monkeypatch.setattr(lc_mod, "local_mesh_identity",
-                        lambda _gd: (CANNED_DOMAIN, list(CANNED_USERS)))
+                        lambda _gd: (CANNED_DOMAIN, list(CANNED_USERS), False))
 
 
 @pytest.fixture
@@ -399,3 +405,115 @@ def test_restriction_lifts_when_another_mode_is_picked(wiz):
     # the full catalog is back on offer: a desktop variant row is visible again
     assert not wl.rows["desktop.x86"].isHidden()
     assert wl.show_non_mesh.isVisible()
+
+
+# ---- #579: a saved mesh that ran Tor reaches the node images ----------------------
+# THE ASSERTION THE OPERATOR ASKED FOR, at the two levels that can run without a
+# build (the image build itself is not run here — the builders are argv-pinned):
+# a saved record whose services include `tor`, imported through this gate and built
+# as an x86 row + an rpi5 row, yields builder argv that bakes the onion on BOTH, and
+# the package preview (the surface an operator reads "does this image include tor"
+# from) lists net-vpn/tor for both.
+import socket  # noqa: E402
+
+from hugmesh_studio.core import package_catalog as pc  # noqa: E402
+from hugmesh_studio.core import saved_meshes as sm  # noqa: E402
+from hugmesh_studio.core.local_mesh_bootstrap import (  # noqa: E402
+    LocalMeshBootstrapConfig,
+)
+
+
+def _save_record(tmp_path, *, services, with_tor=False, domain="saved.example.org"):
+    cfg = LocalMeshBootstrapConfig(
+        env="prod", cluster_domain=domain, out_dir=str(tmp_path / "keys"),
+        services=services, with_tor=with_tor, social="tuwunel" in (services or ()))
+    rec = sm.SavedMesh(id=sm.new_id(), label="tor-mesh", generator_dir=GENERATOR_DIR,
+                       hostname=socket.gethostname(), config=cfg.to_dict())
+    assert sm.save(rec), "the record must land in the isolated state dir"
+    return rec
+
+
+def _real_reader(monkeypatch):
+    monkeypatch.setattr(lc_mod, "local_mesh_identity", _REAL_IDENTITY)
+
+
+def _argv_and_atoms(wiz):
+    out = {}
+    for entry, cfg in wiz.worklist.materialize():
+        out[entry.id] = (cfg.to_cli_args(), pc.adhoc_atoms(cfg))
+    return out
+
+
+def _optional_services(argv):
+    assert "--optional-services" in argv, argv
+    return argv[argv.index("--optional-services") + 1].split()
+
+
+def test_saved_tor_mesh_builds_tor_into_x86_and_rpi5_node_images(wiz, monkeypatch,
+                                                                  tmp_path):
+    _save_record(tmp_path, services=("tuwunel", "tor"))
+    _real_reader(monkeypatch)                          # NOT canned: the record is read
+    page = _confirm_and_enter_mesh_chain(wiz)
+    assert page._with_tor is True
+    assert "tor-mesh" in page._source                  # says which record it read
+    assert wiz.cfg.cluster_domain == "saved.example.org"
+    assert wiz.cfg.tor_onion_service is True           # the bridge, on the base
+    wl = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(wl, "backend.x86", "backend.rpi5")
+    assert wl.validatePage() is True
+    got = _argv_and_atoms(wiz)
+    x86_argv, x86_atoms = got["backend.x86"]
+    rpi_argv, rpi_atoms = got["backend.rpi5"]
+    assert "--with-tor" in x86_argv
+    assert "tor" in _optional_services(rpi_argv)
+    # ADDITIVE: the rpi5 node keeps the builder's default services next to tor
+    assert {"akkoma", "tuwunel", "phpbb"} <= set(_optional_services(rpi_argv))
+    assert "net-vpn/tor" in x86_atoms
+    assert "net-vpn/tor" in rpi_atoms
+
+
+def test_saved_mesh_without_tor_builds_no_tor(wiz, monkeypatch, tmp_path):
+    # with_tor=True is the LEGACY flag; the services tuple is the authority and has
+    # no tor row, so the saved mesh did not run Tor and the images must not carry it.
+    _save_record(tmp_path, services=("tuwunel",), with_tor=True)
+    _real_reader(monkeypatch)
+    page = _confirm_and_enter_mesh_chain(wiz)
+    assert page._with_tor is False
+    assert not page.tor_note.isVisible()
+    wl = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(wl, "backend.x86", "backend.rpi5")
+    assert wl.validatePage() is True
+    for rid, (argv, atoms) in _argv_and_atoms(wiz).items():
+        assert "--with-tor" not in argv, rid
+        assert "tor" not in (argv[argv.index("--optional-services") + 1].split()
+                             if "--optional-services" in argv else []), rid
+        assert "net-vpn/tor" not in atoms, rid
+
+
+def test_tor_note_is_inline_and_names_the_platform_that_cannot_carry_it(
+        wiz, monkeypatch):
+    monkeypatch.setattr(lc_mod, "local_mesh_identity",
+                        lambda _gd: (CANNED_DOMAIN, list(CANNED_USERS), True))
+    pick_mode(wiz, "localcloud")
+    page = advance_to(wiz, wizard_mod.LocalCloudNodesPage)
+    assert page.tor_note.isVisible()                   # an inline label, no modal
+    text = page.tor_note.text()
+    assert "cannot carry Tor" in text and "jetson" in text
+    assert "x86" in text and "rpi5" in text
+    assert "Tor onion: <b>on</b>" in page.summary.text()
+
+
+def test_no_record_imports_the_defaults_with_tor_off(wiz, monkeypatch):
+    _real_reader(monkeypatch)                          # empty isolated state dir
+    pick_mode(wiz, "localcloud")
+    page = advance_to(wiz, wizard_mod.LocalCloudNodesPage)
+    assert page._with_tor is False and page._source == ""
+    assert "no saved mesh for this checkout" in page.summary.text()
+    assert not page.tor_note.isVisible()
+
+
+def test_a_mesh_without_tor_never_clears_an_operator_tor_choice(wiz):
+    # the canned mesh ran no Tor; an operator who already chose Tor keeps it
+    wiz.cfg.tor_onion_service = "on"
+    _confirm_and_enter_mesh_chain(wiz)
+    assert wiz.cfg.tor_onion_service == "on"
