@@ -644,7 +644,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # this file on the tree with the new suite wired, not assumed (GUARD_PREMERGE=0):
 #     176 of 198 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 22 — the new suite was never in it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-176}"
+#
+# 176 -> 177 on 2026-09-23: tests/scripts/test-tor-node-contract.sh (hugmesh-generator
+# #583, decision 70 = B on #347) landed on disk in the same commit that wires it into
+# shell-suites.yml's alpine job (beside the other builder --print-plan suites), so the
+# denominator moves too (198 -> 199). MEASURED by RUNNING this file on the tree with the
+# suite wired (GUARD_PREMERGE=0), not computed:
+#     177 of 199 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22 — the new suite was never in it.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-177}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED

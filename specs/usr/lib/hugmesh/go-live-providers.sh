@@ -619,7 +619,19 @@ glp_emit_router-portforward() {
 # reachability is INDEPENDENT of the go-live marker: the onion is live whenever the
 # node's tor service is running, with no ports opened. GL_ONION_HOSTNAME overrides
 # the file (e.g. a from-a-dev-box preview, or a node queried over the mesh).
-_GLP_ONION_HOSTNAME_FILES=(/var/lib/hugmesh/tor/hostname /var/lib/tor/hugmesh-onion/hostname)
+#
+# WHAT THE NODE PUBLISHES (hugmesh-generator#583 — this card used to say :80/http,
+# which a node never served): every onion is `HiddenServicePort 443 -> <upstream>`,
+# i.e. HTTPS on the onion's :443, answered by the fe-gateway ingress with the CLUSTER
+# DOMAIN's certificate (no onion SAN is minted anywhere), so Tor Browser shows a
+# certificate warning the visitor must accept. <upstream> defaults to 127.0.0.1:443
+# (ingress-nginx hostNetwork on the hugmesh.net/backend node) and is overridden per
+# node by /etc/hugmesh/tor/upstream. (The COMPOSE lane's onion is different: plain
+# HTTP on :80 — tests/stack/tor — and is not what this node-side card describes.)
+# Per-domain onions (decision 68 = A) are exported beside the primary as
+# <slug>.hostname; GL_ONION_EXPORT_DIR overrides that directory.
+_GLP_ONION_EXPORT_DIR="${GL_ONION_EXPORT_DIR:-/var/lib/hugmesh/tor}"
+_GLP_ONION_HOSTNAME_FILES=("${_GLP_ONION_EXPORT_DIR}/hostname" /var/lib/tor/hugmesh-onion/hostname)
 _glp_onion_hostname() {
     if [ -n "${GL_ONION_HOSTNAME:-}" ]; then printf '%s' "${GL_ONION_HOSTNAME}"; return 0; fi
     local f
@@ -628,9 +640,22 @@ _glp_onion_hostname() {
     done
     return 1
 }
+# _glp_onion_domains — "<slug> <onion>" per exported per-domain hostname, sorted.
+_glp_onion_domains() {
+    local f slug addr
+    for f in "${_GLP_ONION_EXPORT_DIR}"/*.hostname; do
+        [ -r "${f}" ] || continue
+        slug="$(basename "${f}" .hostname)"
+        addr="$(tr -d '[:space:]' < "${f}")"
+        [ -n "${addr}" ] && printf '%s %s\n' "${slug}" "${addr}"
+    done | sort
+}
 glp_emit_tor-onion() {
-    local out="$1" onion=""
+    local out="$1"
+    local onion=""
+    local domains=""
     onion="$(_glp_onion_hostname || true)"
+    domains="$(_glp_onion_domains || true)"
 
     # onion.txt — the address itself (the ONLY artifact that ever leaves the node).
     {
@@ -645,6 +670,12 @@ glp_emit_tor-onion() {
             printf '# then re-run this plan there, or pass GL_ONION_HOSTNAME=<addr>.\n'
         fi
     } > "${out}/onion.txt"
+
+    # domain-onions.txt — one "<domain slug> <onion>" line per Tor domain this node
+    # serves (decision 68 = A); absent when the node serves only the primary onion.
+    if [ -n "${domains}" ]; then
+        printf '%s\n' "${domains}" > "${out}/domain-onions.txt"
+    fi
 
     # deeplinks.txt — how a visitor reaches a .onion.
     {
@@ -663,10 +694,23 @@ glp_emit_tor-onion() {
         printf 'publishes the in-cluster fe-gateway as a STABLE v3 .onion.\n\n'
         if [ -n "${onion}" ]; then
             printf 'Your address:  %s\n' "${onion}"
-            printf 'Open it:       Tor Browser -> http://%s/\n\n' "${onion}"
+            printf 'Open it:       Tor Browser -> https://%s/\n\n' "${onion}"
         else
             printf 'Your address:  (minted on the node — see onion.txt)\n\n'
         fi
+        if [ -n "${domains}" ]; then
+            printf 'Per-domain onions (each its own address, the SAME gateway; see\n'
+            printf 'domain-onions.txt):\n'
+            printf '%s\n' "${domains}" | while read -r _d _a; do
+                printf '  %-20s https://%s/\n' "${_d}" "${_a}"
+            done
+            printf '\n'
+        fi
+        printf 'CERTIFICATE: the onion serves HTTPS on :443 with your CLUSTER DOMAIN'"'"'s\n'
+        printf '  certificate — no .onion name is on it — so Tor Browser warns once per\n'
+        printf '  visitor. The Tor circuit itself is end-to-end encrypted and the .onion\n'
+        printf '  address authenticates the service; accepting the warning is expected.\n\n'
+
         printf 'PREREQUISITE (the reachability, not this wizard, comes from it):\n'
         printf '  1. Build the node image with the `tor` service:  --with-tor\n'
         printf '     (Studio: Network & services -> "Tor v3 onion service"; or add `tor`\n'
@@ -674,8 +718,10 @@ glp_emit_tor-onion() {
         printf '      and a no-op on CLIENT/standalone-desktop roles.\n'
         printf '  2. On first boot hugmesh-tor-reconcile mints + PERSISTS the v3 keypair\n'
         printf '     under /var/lib/tor/hugmesh-onion (off-git, never a Secret) and writes\n'
-        printf '     /etc/tor/torrc mapping the onion :80 -> the fe-gateway ingress\n'
-        printf '     (127.0.0.1:8443 by default; override in /etc/hugmesh/tor/upstream).\n'
+        printf '     /etc/tor/torrc mapping the onion :443 (HTTPS) -> the fe-gateway ingress\n'
+        printf '     (127.0.0.1:443 by default — the ingress binds there on the backend node;\n'
+        printf '      on any other node, or a host tor fronting kind (127.0.0.1:8443), write\n'
+        printf '      one host:port line to /etc/hugmesh/tor/upstream).\n'
         printf '  3. The .onion is then LIVE — reachable from any Tor Browser, immediately.\n\n'
         printf 'POSTURE — this is the one provider that does NOT need the public flip:\n'
         printf '  The onion works with the firewall CLOSED (release-state internal). You do\n'
@@ -684,7 +730,7 @@ glp_emit_tor-onion() {
         printf '  the onion — for Tor-only exposure, leave the host internal and just share\n'
         printf '  the .onion. (rollback/commit never touch the onion either way.)\n\n'
         printf 'VERIFY (from any machine with Tor):\n'
-        printf '  torsocks curl -sI http://%s/     # answers over Tor\n' "${onion:-<your-onion>}"
+        printf '  torsocks curl -skI https://%s/    # answers over Tor (-k: no onion SAN)\n' "${onion:-<your-onion>}"
         printf '  # or just open it in Tor Browser.\n'
     } > "${out}/instructions.txt"
     return 0

@@ -790,7 +790,13 @@ spec:
     # (hugmesh.net/tor-onion) keys the NetworkPolicy interaction
     # (manifests/networkpolicy/tor-onion-marked.yaml) — a forward-hook for the OPT-IN
     # pod-egress-via-tor capability (inert by default). nodeServices lists the DISTRO
-    # `tor` service (baked with the package, linked when selected) + our reconcile agent.
+    # `tor` service (baked with the package) + our reconcile agent — BOTH are linked
+    # into the default runlevel when selected on a cluster-node role (decision 70 = B on
+    # hugmesh-generator#347; the reconcile converges an already-running tor with a
+    # reload, never a second daemon). nodePackages / nodeServices / the upstream below
+    # are CONSUMED: tests/scripts/test-tor-node-contract.sh asserts each equals what
+    # both builders' tor gates (TOR_NODE_PACKAGES / TOR_NODE_SERVICES, PLAN_TOR_ONION)
+    # and the reconcile agent's default actually do.
     - slug: tor
       displayName: "Tor (v3 hidden service)"
       namespace: hugmesh-backend
@@ -815,10 +821,12 @@ spec:
       nodeServices: [tor, hugmesh-tor-reconcile]
       # The per-service opt-in label the NetworkPolicy interaction keys off.
       torOnionLabel: hugmesh.net/tor-onion
-      # The in-cluster upstream the v3 hidden service exposes (host:port). A HOST-level
-      # Tor daemon can't resolve cluster DNS, so the node-local fe-gateway ingress is the
-      # default; override per node via /etc/hugmesh/tor/upstream.
-      torHiddenServiceUpstream: 127.0.0.1:8443
+      # The upstream the v3 hidden service's :443 (HTTPS) exposes (host:port). A
+      # HOST-level Tor daemon can't resolve cluster DNS, so the default is the edge that
+      # binds on HARDWARE: ingress-nginx hostNetwork :443 on the hugmesh.net/backend node
+      # (apps/10-ingress-nginx.yaml). Any other node — or a host tor fronting kind, whose
+      # port map is 127.0.0.1:8443 — overrides it via /etc/hugmesh/tor/upstream.
+      torHiddenServiceUpstream: 127.0.0.1:443
 
     # ── workloadConsole — podman/OpenShift-equivalent pod console (DEFAULT-OFF) ──
     # UNLIKE the deployed services, the Workload Console is RBAC + route-access + an
