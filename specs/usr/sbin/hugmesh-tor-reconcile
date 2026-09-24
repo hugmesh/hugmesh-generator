@@ -1,51 +1,164 @@
 #!/bin/bash
 # hugmesh-tor-reconcile — materialise the v3 Tor onion (hidden) service.
 #
-# A NODE-level optional service (DEFAULT-OFF), gated like egress-vpn: this agent is
-# BAKED into every node image but the OpenRC service that runs it is linked into a
-# runlevel ONLY when the 'tor' optional service is selected (PR gate). It reuses the
-# DISTRO Tor daemon (net-vpn/tor → /etc/init.d/tor, runs as the tor:tor user) — we do
-# NOT ship a bespoke tor runner; we only OWN the torrc + the onion-key custody.
+# A NODE-level optional service (DEFAULT-OFF), gated like egress-vpn. This agent is
+# BAKED into every rpi5 image and every x86 image EXCEPT --unaffiliated (the x86 bake
+# sits inside the `if ! ${UNAFFILIATED}` platform block); it is INERT until the 'tor'
+# optional service is selected on a cluster-node role. Selection (decision 70 = B on
+# hugmesh-generator#347, #583) links BOTH OpenRC services into the default runlevel:
+#
+#   tor                    the DISTRO Tor daemon (net-vpn/tor -> /etc/init.d/tor, runs
+#                          as tor:tor) — OpenRC supervises it like any other service;
+#   hugmesh-tor-reconcile  this agent (a oneshot ordered `before tor`, + a 24h cron) —
+#                          it OWNS ONLY the torrc and the onion-key custody.
+#
+# We do NOT ship a bespoke tor runner, and this agent NEVER execs a tor daemon itself.
 #
 # WHAT IT DOES (idempotent; safe to re-run at boot + on the 24h cron):
-#   1. ensure the onion state dir (/var/lib/tor/hugmesh-onion, 0700 tor:tor) and
-#      the DataDirectory (/var/lib/tor/data, 0700 tor:tor) exist;
-#   2. write a MANAGED /etc/tor/torrc that publishes a v3 hidden service for the
-#      in-cluster fe-gateway (HiddenServicePort 443 -> the node-local ingress);
-#   3. restart the distro `tor` service so it (re)reads the torrc — Tor MINTS the v3
-#      onion keypair into the HiddenServiceDir on first start (ed25519, off-git);
-#   4. export the stable .onion hostname to /var/lib/hugmesh/tor/hostname for
-#      admin/cluster consumption (the only thing that leaves the node).
+#   1. ensure the onion state dirs (/var/lib/tor/hugmesh-onion, and one directory per
+#      Tor domain under /var/lib/tor/hugmesh-onion.d/<slug>) and the DataDirectory
+#      (/var/lib/tor/data), all 0700 tor:tor;
+#   2. render the MANAGED torrc to a candidate file, verify it with
+#      `tor --verify-config -f <candidate>`, and install it over /etc/tor/torrc ONLY
+#      when it verifies AND differs from what is there (a failed verify leaves the
+#      running config untouched — it never overwrites first and checks second);
+#   3. converge the distro `tor` service WITHOUT a second instance and without a
+#      needless restart:
+#        tor running + torrc changed    -> `rc-service tor reload` (SIGHUP; falls back
+#                                          to kill -HUP <pidfile>) — Tor re-reads the
+#                                          torrc and mints any new onion keypair;
+#        tor running + torrc unchanged  -> nothing (the 24h cron is a no-op);
+#        tor crashed (OpenRC status 32) -> `rc-service tor restart`   } cron / the binary
+#        tor stopped                    -> `rc-service tor start`     } run directly ONLY
+#      it NEVER restarts a healthy tor. (The cron therefore also starts a tor an admin
+#      stopped by hand — unlink the cron, or deselect tor, to keep it down.)
+#   4. export each stable .onion hostname: the mesh's primary onion to
+#      /var/lib/hugmesh/tor/hostname (unchanged path), every Tor domain's to
+#      /var/lib/hugmesh/tor/<slug>.hostname — the only artefacts that leave the node.
 #
-# ONION-KEY CUSTODY (OFF-GIT, the whole point): the v3 keypair
-# (hs_ed25519_secret_key + hostname) lives under /var/lib/tor/hugmesh-onion —
-# node-local runtime state, owned by tor:tor (0700/0600). It is NEVER baked into the
-# image, NEVER committed to git, and NEVER materialised as a K8s Secret. The .onion
-# address is therefore STABLE across reboots (the key persists) but the private key
-# never leaves the node it was minted on.
+# RUN AS THE BOOT ONESHOT (RC_SVCNAME=hugmesh-tor-reconcile, set by openrc-run) the
+# agent NEVER starts or restarts tor, and does not wait for a hostname tor is not yet
+# running to mint. The oneshot is ordered `before tor`, so OpenRC records tor as
+# `iafter hugmesh-tor-reconcile`; a nested `rc-service tor start` from inside this
+# oneshot's start() would make that child openrc-run wait on the oneshot's own
+# exclusive lock — the WAIT_TIMEOUT (60 s) of "waiting for hugmesh-tor-reconcile" on
+# every boot — before starting tor anyway. It is also redundant: decision 70 = B links
+# `tor` into the default runlevel, so OpenRC starts it right after this oneshot
+# returns, reading the torrc just written. The boot sequence is therefore:
+#   oneshot: dirs + verified torrc, export any hostname already minted (every boot
+#            after the first) -> OpenRC starts tor (one daemon) -> the cron.d
+#            `@reboot` entry (a delay, then this agent WITHOUT RC_SVCNAME) finds tor
+#            running and the torrc unchanged, waits for the first-boot keypair and
+#            exports it. The 24h entry re-asserts all of it daily.
 #
-# FAIL-SOFT: any error preserves the existing keypair + torrc and exits 0, so a
+# ROUTING. Every onion publishes HiddenServicePort 443 -> UPSTREAM (HTTPS). The
+# default UPSTREAM is 127.0.0.1:443: correct on the ONE node that runs the cluster's
+# hostNetwork ingress edge, and ONLY there. Which node that is depends on the image's
+# RELEASE_STATE (baked at /etc/hugmesh/release-state):
+#   internal (the DEFAULT) — the builders prune apps/10-ingress-nginx.yaml; the only
+#       :443 listener is ingress-nginx-internal, pinned to the hugmesh.net/pki node
+#       (apps/11-ingress-nginx-internal.yaml);
+#   public — ingress-nginx, pinned to the hugmesh.net/backend node
+#       (apps/10-ingress-nginx.yaml).
+# An omnibus node carries both labels. On EVERY other node write the edge's
+# "host:port" as one line of /etc/hugmesh/tor/upstream. kind's host port map is
+# 127.0.0.1:8443 (specs/cluster/bootstrap/kind-local/kind-local.yaml) — the override
+# for a host tor fronting a kind node.
+# KNOWN GAP (the onion reaches the edge, NOT yet the login page): the fe-gateway
+# Ingress admits only the cluster domain (<domain> and *.<domain>,
+# apps/20-gateway-fe.yaml) and both controllers run with defaultBackend disabled, so
+# a request whose Host/SNI is <x>.onion gets ingress-nginx's own 404 and its default
+# (fake) certificate until the minted onion is admitted as an Ingress host. Nothing on
+# a hardware node does that yet (kind does, via `make kind-tor`); see "Known gap" in
+# docs/TOR-HIDDEN-SERVICE.md.
+#
+# PER-DOMAIN ONIONS (decision 68 = A: tor is the one per-domain infra slug). Each
+# non-comment line of /etc/hugmesh/tor/domains names one domain slug
+# ([a-z0-9][a-z0-9-]{0,62}); each gets its OWN HiddenService stanza fronting the SAME
+# upstream — the gateway tells the domains apart by the onion Host header. The primary
+# onion is unaffected by the file. Removing a slug from the file drops its stanza and
+# its exported hostname but NEVER its keypair, so re-adding it restores the same
+# address.
+#
+# ONION-KEY CUSTODY (OFF-GIT, the whole point): every v3 keypair
+# (hs_ed25519_secret_key + hostname) lives under /var/lib/tor — node-local runtime
+# state, owned by tor:tor (0700/0600). It is NEVER baked into the image, NEVER
+# committed to git, and NEVER materialised as a K8s Secret. The .onion addresses are
+# therefore STABLE across reboots but the private keys never leave the node.
+#
+# FAIL-SOFT: any error preserves the existing keypairs + torrc and exits 0, so a
 # failed reconcile never faults the boot or tears down a working onion service.
+#
+# TEST SEAM: HUGMESH_TOR_ROOT prefixes every FILESYSTEM path this agent touches (never
+# the paths it writes INTO the torrc, which are the node's). Empty on a node; the
+# hermetic suite tests/scripts/test-tor-node-contract.sh points it at a sandbox and
+# stubs rc-service/tor/id/chown on PATH. HUGMESH_TOR_WAIT_TRIES bounds the hostname
+# wait (default 10 x 2s).
 set -uo pipefail
 
+R="${HUGMESH_TOR_ROOT:-}"
 TOR_USER="tor"
 DATA_DIR="/var/lib/tor/data"
 HS_DIR="/var/lib/tor/hugmesh-onion"
+HS_DOMAIN_ROOT="/var/lib/tor/hugmesh-onion.d"
 TORRC="/etc/tor/torrc"
+PIDFILE="/run/tor/tor.pid"
 EXPORT_DIR="/var/lib/hugmesh/tor"
 UPSTREAM_FILE="/etc/hugmesh/tor/upstream"
-LOG="/var/log/hugmesh-tor-reconcile.log"
+DOMAINS_FILE="/etc/hugmesh/tor/domains"
+LOG="${R}/var/log/hugmesh-tor-reconcile.log"
+WAIT_TRIES="${HUGMESH_TOR_WAIT_TRIES:-10}"
 
 log() { echo "[$(date -Is 2>/dev/null || date)] $*" >>"${LOG}" 2>/dev/null || true; }
+# _trim — strip LEADING/TRAILING whitespace only (bash builtins). Whitespace INSIDE a
+# value is kept, so the validators below refuse it ("my domain" is not silently
+# folded to slug "mydomain", nor "10.0.0.7 :443" to an upstream).
+_trim() {
+    local _v
+    _v="$1"
+    _v="${_v#"${_v%%[![:space:]]*}"}"
+    _v="${_v%"${_v##*[![:space:]]}"}"
+    printf '%s' "${_v}"
+}
 
-# The in-cluster service the onion exposes. A HOST-level Tor daemon cannot resolve a
-# cluster DNS name, so the default is the node-local fe-gateway ingress (a NodePort /
-# host-exposed HTTPS port). Override by writing one "host:port" line to
-# /etc/hugmesh/tor/upstream (staged by the operator / admin-bff).
-UPSTREAM="127.0.0.1:8443"
-if [ -r "${UPSTREAM_FILE}" ]; then
-    _u="$(grep -m1 -vE '^\s*(#|$)' "${UPSTREAM_FILE}" 2>/dev/null | tr -d '[:space:]')"
-    [ -n "${_u}" ] && UPSTREAM="${_u}"
+# The service the onion exposes (see ROUTING above). One "host:port" line in
+# /etc/hugmesh/tor/upstream overrides it; anything that is not a plain host:port token
+# is REFUSED (it is written verbatim into the torrc) and the default is kept.
+# (Parsed with bash builtins only — no grep, so a NUL byte cannot make a match fail
+# open, and the agent behaves the same under GNU and busybox userlands.)
+UPSTREAM="127.0.0.1:443"
+_UPSTREAM_RE='^([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\]):[0-9]{1,5}$'
+if [ -r "${R}${UPSTREAM_FILE}" ]; then
+    _u=""
+    while IFS= read -r _line || [ -n "${_line}" ]; do
+        _line="$(_trim "${_line}")"
+        case "${_line}" in ''|'#'*) continue ;; esac
+        _u="${_line}"; break
+    done < "${R}${UPSTREAM_FILE}"
+    if [ -n "${_u}" ]; then
+        if [[ "${_u}" =~ ${_UPSTREAM_RE} ]]; then
+            UPSTREAM="${_u}"
+        else
+            log "ignoring malformed ${UPSTREAM_FILE} entry '${_u}' (want host:port) — keeping ${UPSTREAM}"
+        fi
+    fi
+fi
+
+# Per-domain onion slugs (trimmed, validated, de-duplicated, file order kept; a last
+# line without a trailing newline still counts — the future writers may omit it).
+DOMAIN_SLUGS=()
+if [ -r "${R}${DOMAINS_FILE}" ]; then
+    while IFS= read -r _line || [ -n "${_line}" ]; do
+        _s="$(_trim "${_line}")"
+        case "${_s}" in ''|'#'*) continue ;; esac
+        if ! [[ "${_s}" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
+            log "ignoring invalid Tor domain slug '${_s}' in ${DOMAINS_FILE}"
+            continue
+        fi
+        _dup=false
+        for _k in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do [ "${_k}" = "${_s}" ] && _dup=true; done
+        ${_dup} || DOMAIN_SLUGS+=("${_s}")
+    done < "${R}${DOMAINS_FILE}"
 fi
 
 # 1) State dirs, owned by the distro tor user (Tor refuses a world-readable HS dir).
@@ -53,55 +166,173 @@ if ! id "${TOR_USER}" >/dev/null 2>&1; then
     log "tor user missing — net-vpn/tor not installed? leaving onion service inert"
     exit 0
 fi
-mkdir -p "${DATA_DIR}" "${HS_DIR}" "${EXPORT_DIR}" "$(dirname "${UPSTREAM_FILE}")" 2>/dev/null || true
-chown "${TOR_USER}:${TOR_USER}" "${DATA_DIR}" "${HS_DIR}" 2>/dev/null || true
-chmod 0700 "${DATA_DIR}" "${HS_DIR}" 2>/dev/null || true
-chmod 0700 "${EXPORT_DIR}" 2>/dev/null || true
+mkdir -p "${R}${DATA_DIR}" "${R}${HS_DIR}" "${R}${EXPORT_DIR}" "${R}$(dirname "${TORRC}")" \
+         "${R}$(dirname "${UPSTREAM_FILE}")" 2>/dev/null || true
+_owned=("${R}${DATA_DIR}" "${R}${HS_DIR}")
+if [ "${#DOMAIN_SLUGS[@]}" -gt 0 ]; then
+    mkdir -p "${R}${HS_DOMAIN_ROOT}" 2>/dev/null || true
+    _owned+=("${R}${HS_DOMAIN_ROOT}")
+    for _s in "${DOMAIN_SLUGS[@]}"; do
+        mkdir -p "${R}${HS_DOMAIN_ROOT}/${_s}" 2>/dev/null || true
+        _owned+=("${R}${HS_DOMAIN_ROOT}/${_s}")
+    done
+fi
+chown "${TOR_USER}:${TOR_USER}" "${_owned[@]}" 2>/dev/null || true
+chmod 0700 "${_owned[@]}" 2>/dev/null || true
+chmod 0700 "${R}${EXPORT_DIR}" 2>/dev/null || true
 
-# 2) Managed torrc (idempotent). Preserves the distro minimal directives + adds the
-#    v3 hidden service. Tor mints the keypair into HS_DIR on (re)start.
-cat > "${TORRC}" <<EOF
+# 2) Render the managed torrc to a CANDIDATE, verify it, install only if it differs.
+_cand="$(mktemp "${R}${TORRC}.hugmesh.XXXXXX" 2>/dev/null)" || {
+    log "cannot create a candidate torrc next to ${TORRC} — leaving service as-is (fail-soft)"
+    exit 0
+}
+trap 'rm -f "${_cand}"' EXIT
+{
+    cat <<EOT
 # Managed by hugmesh-tor-reconcile — DO NOT EDIT BY HAND.
-# v3 Tor onion (hidden) service exposing the in-cluster fe-gateway.
+# v3 Tor onion (hidden) services exposing the fe-gateway (HiddenServicePort 443 ->
+# ${UPSTREAM}; HTTPS with the cluster-domain certificate — no onion SAN).
 User ${TOR_USER}
-PIDFile /run/tor/tor.pid
+PIDFile ${PIDFILE}
 Log notice syslog
 DataDirectory ${DATA_DIR}
 # Node-local SOCKS proxy (pods reach it via the tor-onion-marked NetworkPolicy).
 SocksPort 127.0.0.1:9050
-# The v3 onion service. Keypair is minted into HiddenServiceDir on first start and
-# persisted there (OFF-GIT, tor:tor 0700). 443 -> the node-local fe-gateway ingress.
+# The mesh's primary onion. Keypair minted into HiddenServiceDir on first start and
+# persisted there (OFF-GIT, tor:tor 0700).
 HiddenServiceDir ${HS_DIR}
 HiddenServiceVersion 3
 HiddenServicePort 443 ${UPSTREAM}
-EOF
-log "wrote ${TORRC} (hidden service 443 -> ${UPSTREAM})"
+EOT
+    for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do
+        cat <<EOT
+# Tor domain '${_s}' (its own onion, the SAME gateway; told apart by the onion Host).
+HiddenServiceDir ${HS_DOMAIN_ROOT}/${_s}
+HiddenServiceVersion 3
+HiddenServicePort 443 ${UPSTREAM}
+EOT
+    done
+} > "${_cand}"
 
-# 3) Validate the config, then (re)start the distro tor service to mint/refresh keys.
 if command -v tor >/dev/null 2>&1; then
-    if ! tor --verify-config --hush >/dev/null 2>&1; then
-        log "torrc verify FAILED — leaving service as-is (fail-soft)"
+    if ! tor --verify-config -f "${_cand}" --hush >/dev/null 2>&1; then
+        log "candidate torrc FAILED tor --verify-config — ${TORRC} left untouched (fail-soft)"
         exit 0
     fi
 fi
-if command -v rc-service >/dev/null 2>&1; then
-    rc-service tor restart >/dev/null 2>&1 || rc-service tor start >/dev/null 2>&1 || true
+TORRC_CHANGED=false
+if ! cmp -s "${_cand}" "${R}${TORRC}"; then
+    chmod 0644 "${_cand}" 2>/dev/null || true
+    if mv -f "${_cand}" "${R}${TORRC}"; then
+        TORRC_CHANGED=true
+        log "wrote ${TORRC} (primary + ${#DOMAIN_SLUGS[@]} domain onion(s); 443 -> ${UPSTREAM})"
+    else
+        log "could not install ${TORRC} — leaving service as-is (fail-soft)"
+        exit 0
+    fi
+else
+    log "${TORRC} already current (443 -> ${UPSTREAM})"
 fi
 
-# Give Tor a moment to mint the keypair on a cold first boot, then export hostname.
-for _i in 1 2 3 4 5 6 7 8 9 10; do
-    [ -s "${HS_DIR}/hostname" ] && break
+# 3) Converge the distro tor service — never a second instance, never a needless restart.
+_tor_pid() {  # the live tor pid from the pidfile, or fail
+    local _p
+    _p="$(tr -d '[:space:]' < "${R}${PIDFILE}" 2>/dev/null)"
+    case "${_p}" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "${_p}" 2>/dev/null || return 1
+    printf '%s' "${_p}"
+}
+_hup() {  # reload via OpenRC, else SIGHUP the pidfile's tor directly
+    if command -v rc-service >/dev/null 2>&1 && rc-service tor reload >/dev/null 2>&1; then
+        return 0
+    fi
+    local _p
+    _p="$(_tor_pid)" || return 1
+    kill -HUP "${_p}" 2>/dev/null
+}
+# The boot oneshot (see RUN AS THE BOOT ONESHOT above) never starts/restarts tor.
+BOOT_ONESHOT=false
+[ "${RC_SVCNAME:-}" = "hugmesh-tor-reconcile" ] && BOOT_ONESHOT=true
+TOR_UP=false   # tor is (or is being made) live, so a hostname wait can succeed
+if command -v rc-service >/dev/null 2>&1; then
+    rc-service tor status >/dev/null 2>&1
+    _st=$?
+else
+    # No OpenRC (never on a node image): a live pidfile is the only evidence.
+    if _tor_pid >/dev/null; then _st=0; else _st=3; fi
+fi
+case "${_st}" in
+    0)
+        TOR_UP=true
+        if ${TORRC_CHANGED}; then
+            if _hup; then log "tor already running — reloaded (SIGHUP) to pick up the new torrc"
+            else log "tor running but reload FAILED — config applies at next tor start (fail-soft)"; fi
+        else
+            log "tor already running with the current torrc — nothing to do"
+        fi
+        ;;
+    32)
+        if ${BOOT_ONESHOT}; then
+            log "tor is CRASHED per OpenRC — not restarted from the boot oneshot (a nested restart would wait on this oneshot's lock); the cron restarts it"
+        else
+            log "tor is CRASHED per OpenRC — restarting it"
+            TOR_UP=true
+            rc-service tor restart >/dev/null 2>&1 || { TOR_UP=false; log "tor restart failed (fail-soft)"; }
+        fi
+        ;;
+    *)
+        if ${BOOT_ONESHOT}; then
+            log "tor not running — the boot oneshot leaves the start to OpenRC (tor is linked and ordered after this oneshot)"
+        elif command -v rc-service >/dev/null 2>&1; then
+            log "tor not running — starting it"
+            TOR_UP=true
+            rc-service tor start >/dev/null 2>&1 || { TOR_UP=false; log "tor start failed (fail-soft)"; }
+        else
+            log "tor not running and no OpenRC to start it — leaving it stopped"
+        fi
+        ;;
+esac
+
+# Give Tor a moment to mint keypairs on a cold first boot, then export hostnames —
+# only when tor is live: waiting on a stopped tor (the boot oneshot) buys nothing.
+_all_minted() {
+    [ -s "${R}${HS_DIR}/hostname" ] || return 1
+    local _s
+    for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do
+        [ -s "${R}${HS_DOMAIN_ROOT}/${_s}/hostname" ] || return 1
+    done
+    return 0
+}
+_i=0
+${TOR_UP} || _i="${WAIT_TRIES}"
+while [ "${_i}" -lt "${WAIT_TRIES}" ]; do
+    _all_minted && break
     sleep 2
+    _i=$((_i + 1))
 done
 
-# 4) Export the stable .onion hostname (the ONLY artefact that leaves the node).
-if [ -s "${HS_DIR}/hostname" ]; then
-    install -m 0644 "${HS_DIR}/hostname" "${EXPORT_DIR}/hostname" 2>/dev/null || \
-        cp -f "${HS_DIR}/hostname" "${EXPORT_DIR}/hostname" 2>/dev/null || true
-    log "onion hostname: $(cat "${EXPORT_DIR}/hostname" 2>/dev/null)"
-else
-    log "onion hostname not yet present (tor still bootstrapping); will export next run"
-fi
+# 4) Export the stable .onion hostnames (the ONLY artefacts that leave the node).
+_export() {  # SRC DEST LABEL
+    if [ -s "$1" ]; then
+        install -m 0644 "$1" "$2" 2>/dev/null || cp -f "$1" "$2" 2>/dev/null || true
+        log "$3 onion hostname: $(cat "$2" 2>/dev/null)"
+    else
+        log "$3 onion hostname not yet present (tor still bootstrapping); will export next run"
+    fi
+}
+_export "${R}${HS_DIR}/hostname" "${R}${EXPORT_DIR}/hostname" "primary"
+for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do
+    _export "${R}${HS_DOMAIN_ROOT}/${_s}/hostname" "${R}${EXPORT_DIR}/${_s}.hostname" "domain '${_s}'"
+done
+# Withdraw the export of a domain no longer listed (its KEY stays, see above) so no
+# consumer keeps advertising an onion this node has stopped serving.
+for _f in "${R}${EXPORT_DIR}"/*.hostname; do
+    [ -e "${_f}" ] || continue
+    _b="$(basename "${_f}" .hostname)"
+    _keep=false
+    for _s in "${DOMAIN_SLUGS[@]+"${DOMAIN_SLUGS[@]}"}"; do [ "${_s}" = "${_b}" ] && _keep=true; done
+    ${_keep} || { rm -f "${_f}"; log "withdrew the export for unlisted Tor domain '${_b}'"; }
+done
 
-log "reconcile complete (upstream=${UPSTREAM})"
+log "reconcile complete (upstream=${UPSTREAM}, domains=${#DOMAIN_SLUGS[@]})"
 exit 0

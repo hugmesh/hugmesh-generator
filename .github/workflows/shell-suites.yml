@@ -157,7 +157,11 @@
 #       checking four surfaces of five and calling that a pass — so listing it here
 #       would just paint the PR gate red for a missing clone rather than a real
 #       defect. It IS gated post-merge by .gitlab-ci.yml's
-#       lint:optional-service-slug-closure, which clones it sparsely.
+#       lint:optional-service-slug-closure, which clones it sparsely. It is ALSO red
+#       on main today on two real controller facts (hugmesh-admin-bff-api#106,
+#       re-measured 2026-09-23 by #584, which fixed the checker's stale regex that had
+#       made it compare nothing since 2026-08-26), so it stays out of this workflow
+#       for both reasons until #106 lands.
 #   * tests/scripts/test-selected-services-only.sh
 #       RED ON MAIN ON PURPOSE, and therefore NOT listed above: a red suite in this
 #       workflow blocks every pull request in the repo. It pins the whole
@@ -405,6 +409,7 @@ jobs:
             tests/scripts/test-sunshine-fence.sh
             tests/scripts/test-superadmin-bff-reachability.sh
             tests/scripts/test-tools-path-lib.sh
+            tests/scripts/test-tor-node-contract.sh
             tests/scripts/test-x86-fetchcommand-bound.sh
             tests/scripts/test-x86-identity-injection.sh
             tests/scripts/test-x86-kernel-net-symbols.sh
