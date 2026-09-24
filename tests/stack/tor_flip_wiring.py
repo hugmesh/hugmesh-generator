@@ -22,7 +22,11 @@ What TOR=1 has to mean, end to end:
   * teardown reaps the profile whatever the bring-up knobs were (T11);
   * `make stack-e2e-tor` reaches the onion THROUGH TOR without pointing the
     unproxied @env:docker probe at it (T12);
-  * `make stack-onion` prints only a well-formed, currently-served onion (T13).
+  * `make stack-onion` prints only a well-formed, currently-served onion (T13);
+  * the census-named mechanism wrapper never reports a green that checked nothing
+    (T14, executed against stub harnesses);
+  * the @via:onion steps cannot reach the mesh around Tor: no unproxied context or
+    fixture in their step file, and apiContext() refuses under SNAP_PROXY (T15).
 
 BEHAVIOUR, not source text, wherever it can be executed: STACK_ENV and the
 profile are expanded by make itself; the entrypoint is RUN against a stub tor;
@@ -58,6 +62,10 @@ ENTRY = os.path.join(ROOT, "tests", "stack", "tor", "entrypoint.sh")
 DOCKERFILE = os.path.join(ROOT, "tests", "stack", "tor", "Dockerfile")
 RUNSH = os.path.join(ROOT, "tests", "e2e", "run.sh")
 STUDIO_NODE = os.path.join(ROOT, "studio", "hugmesh_studio", "core", "local_stack_node.py")
+MECH = os.path.join(ROOT, "tests", "stack", "test-tor-onion-mechanism.sh")
+E2E_HELPERS = os.path.join(ROOT, "tests", "e2e", "specs", "helpers.ts")
+E2E_FEATURES = os.path.join(ROOT, "tests", "e2e", "features")
+E2E_STEPS = os.path.join(ROOT, "tests", "e2e", "steps")
 
 ONION_SVC = "hugmesh-tor"
 CLIENT_SVC = "hugmesh-tor-client"
@@ -77,10 +85,14 @@ def incomplete(msg: str) -> None:
     sys.exit(3)
 
 
-for path in (MAKEFILE, COMPOSE, ENTRY, DOCKERFILE, RUNSH, STUDIO_NODE):
+for path in (MAKEFILE, COMPOSE, ENTRY, DOCKERFILE, RUNSH, STUDIO_NODE, MECH, E2E_HELPERS):
     if not os.path.isfile(path):
         incomplete("%s is missing — nothing to grade" % path)
-for tool in ("make", "sh", "cmp", "grep", "bash"):
+for path in (E2E_FEATURES, E2E_STEPS):
+    if not os.path.isdir(path):
+        incomplete("%s is missing — nothing to grade" % path)
+for tool in ("make", "sh", "cmp", "grep", "bash", "sed", "timeout", "dirname", "head",
+             "sleep", "cat"):
     if shutil.which(tool) is None:
         incomplete("%s is not on PATH" % tool)
 
@@ -358,6 +370,12 @@ problems = []
 sb = sandbox("t10-stop")
 with open(os.path.join(sb["dir"], "out", "hostname"), "w") as fh:
     fh.write(STALE_ONION + "\n")
+# `restart: unless-stopped` restarts the SAME container, so an earlier start's
+# "Bootstrapped 100%" is still in the notice log — the healthcheck would call a
+# tor at 0% HEALTHY unless every start truncates it.
+STALE_BOOT = "[notice] Bootstrapped 100% (done): Done -- LEFT BY AN EARLIER START"
+with open(os.path.join(sb["dir"], "data", "notice.log"), "w") as fh:
+    fh.write(STALE_BOOT + "\n")
 proc = subprocess.Popen(["sh", ENTRY], env=sb["env"], stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, text=True)
 out_file = os.path.join(sb["dir"], "out", "hostname")
@@ -369,6 +387,9 @@ if seen:
                     "every reader in that window announces a dead onion" % seen)
 if not published:
     problems.append("the minted hostname was never published to OUT_DIR (have %r)" % read(out_file))
+if "LEFT BY AN EARLIER START" in read(os.path.join(sb["dir"], "data", "notice.log")):
+    problems.append("an earlier start's 'Bootstrapped 100%' survived into this start's notice "
+                    "log — after a restart the healthcheck passes before tor bootstraps")
 for want in ("HiddenServicePort 80 up80.test:8080", "HiddenServicePort 443 up443.test:8443",
              "HiddenServiceVersion 3", "SocksPort 0"):
     if want not in torrc.splitlines():
@@ -473,6 +494,18 @@ policies = [l for l in ctorrc if l.startswith("SocksPolicy ")]
 if role == "client":
     if not socks or socks[0] in ("0",) or ":" not in socks[0]:
         problems.append("client torrc SocksPort is %r" % socks)
+    elif socks[0].rsplit(":", 1)[0] != "0.0.0.0":
+        problems.append("client torrc SocksPort %r does not listen on every container "
+                        "interface (0.0.0.0) — compose publishes to the container's bridge "
+                        "address, so a loopback-only listener is unreachable from the host"
+                        % socks[0])
+    private = {"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
+    accepts = [l.split(None, 2)[2].strip() for l in policies
+               if len(l.split()) >= 3 and l.split()[1] == "accept"]
+    wide = [a for a in accepts if a not in private]
+    if wide:
+        problems.append("client torrc accepts SOCKS from %r — only loopback and the private "
+                        "bridge ranges may be admitted (the first matching policy wins)" % wide)
     if not policies or policies[-1].strip() != "SocksPolicy reject *":
         problems.append("client torrc must END its SocksPolicy with `reject *` (else an open "
                         "proxy on every interface it listens on): %r" % policies)
@@ -509,7 +542,43 @@ for target in ("stack-halt", "stack-down", "stack-clean"):
         problems.append("%s's compose down does not carry `--profile tor` unconditionally" % target)
 check("T11-teardown-reaps", not problems, "; ".join(problems))
 
-# ── T12: `make stack-e2e-tor` -> run.sh --via onion, planned (nothing executed) ─
+# A stub docker that answers "running" ONLY for the exact onion service — never
+# hugmesh-tor-client, which is running whenever TOR=1 is and so would vouch for a
+# dead onion. Serves both run.sh (`docker ps --filter label=...service=X`) and
+# `make stack-onion` (`compose ps -q --status running X`).
+STUB_DOCKER = r'''#!/bin/sh
+[ "$1" = image ] && exit 1
+[ "${STUB_RUNNING:-}" = 1 ] || exit 0
+hit=0; last=""; ps=0
+for a in "$@"; do
+  [ "$a" = "label=com.docker.compose.service=hugmesh-tor" ] && hit=1
+  [ "$a" = ps ] && ps=1
+  last="$a"
+done
+[ "$ps" = 1 ] && [ "$last" = "hugmesh-tor" ] && hit=1
+[ "$hit" = 1 ] && echo 0123456789ab
+exit 0
+'''
+
+# A stub npx for EXECUTED runs: logs its argv, and for the playwright leg the
+# environment the child really received, then writes the summary the case asks
+# for and exits with the case's status.
+STUB_NPX = r'''#!/bin/sh
+echo "ARGV $*" >> "$STUB_NPX_LOG"
+case "$*" in
+  *"playwright test"*)
+    {
+      echo "ENV SNAP_ONION_BASE_URL=${SNAP_ONION_BASE_URL-<unset>}"
+      echo "ENV SNAP_PROXY=${SNAP_PROXY-<unset>}"
+      echo "ENV SNAP_BASE_URL=${SNAP_BASE_URL-<unset>}"
+    } >> "$STUB_NPX_LOG"
+    if [ -n "${STUB_SUMMARY:-}" ]; then printf '%s' "$STUB_SUMMARY" > "$SNAP_REPORT_DIR/summary.json"; fi
+    exit "${STUB_PW_RC:-0}" ;;
+esac
+exit 0
+'''
+
+# ── T12: `make stack-e2e-tor` -> run.sh --via onion, planned AND executed ─────
 problems = []
 e2e_blk = makefile_text.split("\nstack-e2e-tor:", 1)
 e2e_recipe = e2e_blk[1].split("\n\n", 1)[0] if len(e2e_blk) == 2 else ""
@@ -518,7 +587,7 @@ if "tests/e2e/run.sh" not in e2e_recipe or "--via onion" not in e2e_recipe:
 sbr = sandbox("t12-runsh")
 write_exe(os.path.join(sbr["dir"], "bin", "node"), "#!/bin/sh\ncat\n")   # plan lines verbatim
 write_exe(os.path.join(sbr["dir"], "bin", "npx"), "#!/bin/sh\nexit 97\n")  # nothing runs
-write_exe(os.path.join(sbr["dir"], "bin", "docker"), "#!/bin/sh\nexit 1\n")
+write_exe(os.path.join(sbr["dir"], "bin", "docker"), STUB_DOCKER)
 hostfile = os.path.join(sbr["dir"], "hostname")
 open(hostfile, "w").write(GOOD_ONION + "\n")
 renv = dict(sbr["env"], SNAP_ONION_HOSTNAME_FILE=hostfile, E2E_PASSWORD="x")
@@ -545,10 +614,100 @@ else:
     if first("PROXY") != "socks5://127.0.0.1:%s" % socks_default:
         problems.append("default proxy %r is not the tor-client's socks5://127.0.0.1:%s"
                         % (first("PROXY"), socks_default))
-    if "@via:onion" not in first("TAGS"):
-        problems.append("tags %r do not restrict the run to @via:onion" % first("TAGS"))
+    if first("TAGS") != "@via:onion":
+        problems.append("tags %r are not exactly @via:onion" % first("TAGS"))
     if "--project=bdd" not in (plan.get("ARGV") or []):
         problems.append("the run is not the Gherkin project")
+# A caller's --tags NARROW the onion run; they never widen it (`or` would run
+# unproxied scenarios while calling the run "over Tor").
+pt = subprocess.run(["bash", RUNSH, "--via", "onion", "--tags", "@smoke", "--print-command"],
+                    env=renv, capture_output=True, text=True, timeout=60)
+tags_t = [l.split("\t", 1)[1] for l in pt.stdout.splitlines() if l.startswith("TAGS\t")]
+if pt.returncode != 0 or tags_t != ["(@smoke) and @via:onion"]:
+    problems.append("--via onion --tags @smoke planned tags %r (rc=%s), want exactly "
+                    "'(@smoke) and @via:onion'" % (tags_t, pt.returncode))
+# An http:// onion is refused even when the caller supplies it outright.
+ph = subprocess.run(["bash", RUNSH, "--via", "onion", "--print-command"],
+                    env=dict(renv, SNAP_ONION_BASE_URL="http://" + GOOD_ONION),
+                    capture_output=True, text=True, timeout=60)
+if ph.returncode == 0:
+    problems.append("SNAP_ONION_BASE_URL=http://<onion> was accepted — the CSP upgrades it and "
+                    "the SPA never boots")
+# A 56-character name that is not base32 is not an onion.
+open(hostfile, "w").write("1" * 52 + "abcd.onion\n")
+pb = subprocess.run(["bash", RUNSH, "--via", "onion", "--print-command"], env=renv,
+                    capture_output=True, text=True, timeout=60)
+bad_url = [l.split("\t", 1)[1] for l in pb.stdout.splitlines() if l.startswith("ONION_BASE_URL\t")]
+if bad_url != [""]:
+    problems.append("a 56-char hostname that is not base32 was read as an onion: %r" % bad_url)
+open(hostfile, "w").write(GOOD_ONION + "\n")
+
+# EXECUTED runs (stub npx): the onion and the proxy must reach the child's
+# ENVIRONMENT — the plan above prints shell variables, not what playwright gets —
+# and a run that passed nothing must FAIL, whatever playwright's exit status.
+npx_log = os.path.join(sbr["dir"], "npx.log")
+rep_dir = os.path.join(sbr["dir"], "report")
+os.makedirs(rep_dir, exist_ok=True)
+write_exe(os.path.join(sbr["dir"], "bin", "npx"), STUB_NPX)
+SUMMARY_OK = '{"testTotals":{"passed":1,"failed":0,"skipped":0,"total":1},"tests":[]}'
+SUMMARY_SKIP = ('{"testTotals":{"passed":0,"failed":0,"skipped":1,"total":1},"tests":'
+                '[{"status":"skipped","skipReason":"STUB-SKIP-REASON"}]}')
+
+
+def run_lane(label: str, summary: str | None, pw_rc: int = 0, stale: str | None = None,
+             extra: list[str] | None = None) -> tuple[int, str, list[str]]:
+    if os.path.exists(npx_log):
+        os.remove(npx_log)
+    sfile = os.path.join(rep_dir, "summary.json")
+    if os.path.exists(sfile):
+        os.remove(sfile)
+    if stale is not None:
+        open(sfile, "w").write(stale)
+    env = dict(renv, STUB_RUNNING="1", STUB_NPX_LOG=npx_log, SNAP_REPORT_DIR=rep_dir,
+               SNAP_EVIDENCE_SUMMARY="0", STUB_PW_RC=str(pw_rc))
+    env.pop("STUB_SUMMARY", None)
+    if summary is not None:
+        env["STUB_SUMMARY"] = summary
+    p = subprocess.run(["bash", RUNSH, "--via", "onion"] + (extra or []), env=env,
+                       capture_output=True, text=True, timeout=60)
+    return p.returncode, p.stderr, read(npx_log).splitlines()
+
+
+rc_ok, err_ok, log_ok = run_lane("passed", SUMMARY_OK)
+envs = {l[4:].split("=", 1)[0]: l[4:].split("=", 1)[1] for l in log_ok if l.startswith("ENV ")}
+if rc_ok != 0:
+    problems.append("an executed onion run whose one scenario PASSED exited %s: %s"
+                    % (rc_ok, err_ok[-300:]))
+if envs.get("SNAP_ONION_BASE_URL") != "https://" + GOOD_ONION:
+    problems.append("playwright's environment carried SNAP_ONION_BASE_URL=%r, want https://<onion> "
+                    "— without it the steps skip and nothing crossed Tor"
+                    % envs.get("SNAP_ONION_BASE_URL"))
+if envs.get("SNAP_PROXY") != "socks5://127.0.0.1:%s" % socks_default:
+    problems.append("playwright's environment carried SNAP_PROXY=%r" % envs.get("SNAP_PROXY"))
+if ".onion" in envs.get("SNAP_BASE_URL", "") or not envs.get("SNAP_BASE_URL", "").startswith("https://"):
+    problems.append("playwright's SNAP_BASE_URL=%r is not the stack's local https door"
+                    % envs.get("SNAP_BASE_URL"))
+if "ARGV bddgen test --tags @via:onion" not in log_ok:
+    problems.append("bddgen did not generate exactly the @via:onion scenarios: %r"
+                    % [l for l in log_ok if "bddgen" in l])
+_rc, _err, log_t = run_lane("caller tags", SUMMARY_OK, extra=["--tags", "@smoke"])
+if "ARGV bddgen test --tags (@smoke) and @via:onion" not in log_t:
+    problems.append("with --tags @smoke bddgen ran %r, want '(@smoke) and @via:onion'"
+                    % [l for l in log_t if "bddgen" in l])
+rc_sk, err_sk, _ = run_lane("skipped", SUMMARY_SKIP)
+if rc_sk == 0 or "STUB-SKIP-REASON" not in err_sk:
+    problems.append("an executed onion run that SKIPPED its scenario exited %s (want non-zero, "
+                    "naming the skip reason): %s" % (rc_sk, err_sk[-300:]))
+rc_no, _err, _ = run_lane("no summary", None)
+if rc_no == 0:
+    problems.append("an executed onion run that wrote no summary.json exited 0")
+rc_st, _err, _ = run_lane("stale summary", None, stale=SUMMARY_OK)
+if rc_st == 0:
+    problems.append("a PREVIOUS run's summary.json (passed=1) vouched for a run that wrote none")
+rc_pf, _err, _ = run_lane("playwright failed", SUMMARY_OK, pw_rc=1)
+if rc_pf != 1:
+    problems.append("playwright exit 1 became %s — the lane must pass a failure through" % rc_pf)
+
 ps_ = subprocess.run(["bash", RUNSH, "--via", "onion"], env=renv, capture_output=True,
                      text=True, timeout=60)
 if ps_.returncode != 2 or "stale" not in ps_.stderr:
@@ -566,8 +725,7 @@ check("T12-e2e-lane", not problems, "; ".join(problems))
 # ── T13: `make stack-onion` prints only a well-formed, served onion ───────────
 problems = []
 sbo = sandbox("t13-onion")
-write_exe(os.path.join(sbo["dir"], "bin", "docker"),
-          '#!/bin/sh\n[ "${STUB_RUNNING:-}" = 1 ] && echo 0123456789ab\nexit 0\n')
+write_exe(os.path.join(sbo["dir"], "bin", "docker"), STUB_DOCKER)
 ofile = os.path.join(sbo["dir"], "onion-hostname")
 
 
@@ -590,6 +748,7 @@ for label, content, running, want in [
         ("stale (container not running)", GOOD_ONION + "\n", "0", None),
         ("malformed", "evil$(id).onion\n", "1", None),
         ("short", GOOD_ONION[1:] + "\n", "1", None),
+        ("56 chars, not base32", "1" * 52 + "abcd.onion\n", "1", None),
         ("not an onion", "example.com\n", "1", None)]:
     rc, out = stack_onion(content, running)
     if want is None and (rc == 0 or ".onion" in out):
@@ -597,6 +756,156 @@ for label, content, running, want in [
     if want is not None and (rc != 0 or out.splitlines()[-1:] != [want]):
         problems.append("stack-onion for the %s case -> rc=%s %r, want %r" % (label, rc, out, want))
 check("T13-stack-onion", not problems, "; ".join(problems))
+
+# ── T14: the mechanism wrapper's verdicts, EXECUTED against stub harnesses ─────
+# test-tor-onion-mechanism.sh is the census-named door to tor-onion-e2e.sh (#585).
+# Its exit status is the whole contract — 0 only for rc 0 AND the anchored SUCCESS
+# line, 1 for any failure or timeout, 2 (checked nothing) for no opt-in / no tor /
+# no Tor network — so every branch is driven here through TOR_MECHANISM_HARNESS.
+# PATH is a private dir of the few tools the wrapper needs and NO tor (CI images
+# and some hosts have none; this one does), so "no tor" is deterministic.
+problems = []
+sbm = sandbox("t14-mech")
+tools = os.path.join(sbm["dir"], "tools")
+os.makedirs(tools, exist_ok=True)
+for t in ("bash", "sed", "grep", "timeout", "dirname", "head", "sleep", "cat", "python3"):
+    src = shutil.which(t)
+    if src is None:
+        incomplete("%s is not on PATH (T14 needs it)" % t)
+    os.symlink(src, os.path.join(tools, t))
+write_exe(os.path.join(tools, "curl"), "#!/bin/sh\nexit 0\n")   # presence only
+fake_tor = os.path.join(sbm["dir"], "fake-tor")
+write_exe(fake_tor, "#!/bin/sh\necho 'Tor version 0.0.0-stub.'\n")
+SUCCESS_LINE = "RESULT: SUCCESS (marker returned over Tor)"
+harnesses = {
+    "ok": "echo booted\necho '%s'\nexit 0\n" % SUCCESS_LINE,
+    "rc0-no-line": "echo 'RESULT: something else'\nexit 0\n",
+    "line-rc1": "echo '%s'\nexit 1\n" % SUCCESS_LINE,
+    "indented": "echo '   %s'\nexit 0\n" % SUCCESS_LINE,
+    "no-network": "echo 'FAIL: tor did not reach Bootstrapped 100% in 120s'\nexit 1\n",
+    "no-network-rc0": "echo 'FAIL: tor did not reach Bootstrapped 100% in 120s'\nexit 0\n",
+    # the sleeps drop stdout so an orphaned sleep cannot hold the wrapper's pipe
+    "hang": "exec sleep 4 >/dev/null 2>&1\n",
+    "hang-then-ok": "sleep 4 >/dev/null 2>&1\necho '%s'\nexit 0\n" % SUCCESS_LINE,
+}
+hpaths = {}
+for hname, body in harnesses.items():
+    hpaths[hname] = os.path.join(sbm["dir"], "harness-%s.sh" % hname)
+    open(hpaths[hname], "w").write("#!/usr/bin/env bash\n" + body)
+bash_abs = shutil.which("bash")
+
+
+def mech(harness: str | None, opt_in: bool = True, tor: str | None = fake_tor,
+         timeout_s: str = "60") -> tuple[int, str]:
+    env = {"PATH": tools, "HOME": sbm["dir"], "TOR_MECHANISM_TIMEOUT": timeout_s,
+           "TOR_MECHANISM_HARNESS": hpaths.get(harness or "", os.path.join(sbm["dir"], "absent.sh"))}
+    if opt_in:
+        env["HUGMESH_TOR_E2E"] = "1"
+    env["TOR_BIN"] = tor if tor is not None else os.path.join(sbm["dir"], "no-such-tor")
+    p = subprocess.run([bash_abs, MECH], env=env, capture_output=True, text=True, timeout=90)
+    return p.returncode, p.stdout + p.stderr
+
+
+for label, kwargs, want_rc, want_text in [
+        ("not opted in (a SUCCESS harness behind it)", dict(harness="ok", opt_in=False), 2, "SKIPPED"),
+        ("no tor binary", dict(harness="ok", tor=None), 2, "no tor binary"),
+        ("rc 0 + anchored SUCCESS", dict(harness="ok"), 0, "PASS:"),
+        ("rc 0 without the SUCCESS line", dict(harness="rc0-no-line"), 1, "never printed"),
+        ("SUCCESS line but rc 1", dict(harness="line-rc1"), 1, "exited 1"),
+        ("an indented (unanchored) SUCCESS line", dict(harness="indented"), 1, "never printed"),
+        ("no Tor network", dict(harness="no-network"), 2, "never bootstrapped"),
+        ("no-bootstrap text but rc 0", dict(harness="no-network-rc0"), 1, "never printed"),
+        ("a hung harness", dict(harness="hang", timeout_s="1"), 1, "did not finish within"),
+        ("a harness slower than the timeout", dict(harness="hang-then-ok", timeout_s="1"), 1,
+         "did not finish within"),
+        ("the harness is missing", dict(harness=None), 1, "is missing"),
+        ("a non-numeric timeout", dict(harness="ok", timeout_s="soon"), 1, "not a number")]:
+    rc, out = mech(**kwargs)
+    if rc != want_rc or want_text not in out:
+        problems.append("%s -> rc=%s (want %s, saying %r): %s"
+                        % (label, rc, want_rc, want_text, out.strip()[-160:]))
+check("T14-mechanism-wrapper", not problems, "; ".join(problems))
+
+# ── T15: the @via:onion steps cannot reach the mesh around Tor ────────────────
+# run.sh --via onion runs ONLY @via:onion scenarios, and those steps build their
+# own proxied context (helpers.ts onionContext). The one thing that would quietly
+# defeat "reached over Tor" is a step that reaches the mesh some OTHER way: the
+# unproxied `page`/`context`/`request` fixtures, a standalone request/browser
+# context, or apiContext(). None of those is recorded by the scenario's HAR, so
+# the audit cannot catch it after the fact — it is refused here, statically, for
+# every step file that defines an @via:onion step, and apiContext() itself refuses
+# at runtime while SNAP_PROXY is set.
+problems = []
+STEP_KW = re.compile(r"^\s*(Given|When|Then|And|But)\s+(.+?)\s*$")
+onion_steps: set[str] = set()
+for dirpath, _dirs, files in os.walk(E2E_FEATURES):
+    for fn in files:
+        if not fn.endswith(".feature"):
+            continue
+        text = open(os.path.join(dirpath, fn), encoding="utf-8").read()
+        lines = text.splitlines()
+        feature_tagged = False
+        pending_tags: list[str] = []
+        in_onion = False
+        for ln in lines:
+            st = ln.strip()
+            if st.startswith("@"):
+                pending_tags += st.split()
+                continue
+            if st.startswith("Feature:"):
+                feature_tagged = "@via:onion" in pending_tags
+                pending_tags = []
+                continue
+            if st.startswith(("Scenario:", "Scenario Outline:", "Background:")):
+                in_onion = feature_tagged or "@via:onion" in pending_tags or "@via:onion" in st
+                pending_tags = []
+                continue
+            m = STEP_KW.match(ln)
+            if m and in_onion:
+                onion_steps.add(m.group(2))
+if not onion_steps:
+    problems.append("no @via:onion scenario was found under tests/e2e/features — the Tor lane "
+                    "would run nothing")
+DEF_RE = re.compile(r"\b(?:Given|When|Then)\(\s*'((?:[^'\\]|\\.)*)'")
+defs: dict[str, list[str]] = {}
+for fn in sorted(os.listdir(E2E_STEPS)):
+    if fn.endswith(".ts"):
+        text = open(os.path.join(E2E_STEPS, fn), encoding="utf-8").read()
+        for m in DEF_RE.finditer(text):
+            defs.setdefault(m.group(1), []).append(fn)
+onion_files: set[str] = set()
+for step in sorted(onion_steps):
+    where = defs.get(step)
+    if not where:
+        problems.append("@via:onion step %r has no literal definition under tests/e2e/steps" % step)
+        continue
+    onion_files.update(where)
+FIXTURE_RE = re.compile(r"\b(?:Given|When|Then)\(\s*'(?:[^'\\]|\\.)*'\s*,\s*async\s*\(\s*\{([^}]*)\}")
+for fn in sorted(onion_files):
+    text = open(os.path.join(E2E_STEPS, fn), encoding="utf-8").read()
+    code = re.sub(r"//[^\n]*", "", text)
+    for token in ("apiContext(", "newContext(", "request.get(", "request.post("):
+        if token in code:
+            problems.append("%s (defines @via:onion steps) calls %s — an unproxied route to "
+                            "the mesh the HAR audit cannot see" % (fn, token))
+    for m in FIXTURE_RE.finditer(code):
+        names = {n.strip().split(":")[0].strip() for n in m.group(1).split(",")}
+        leaked = sorted(names & {"page", "context", "request"})
+        if leaked:
+            problems.append("%s: a @via:onion step takes the unproxied %s fixture(s)"
+                            % (fn, leaked))
+    if "onionContext(" not in code:
+        problems.append("%s never builds the proxied onionContext()" % fn)
+helpers_text = open(E2E_HELPERS, encoding="utf-8").read()
+m_api = re.search(r"export async function apiContext\([^)]*\)[^{]*\{(.*?)\n\}", helpers_text, re.S)
+api_body = re.sub(r"//[^\n]*", "", m_api.group(1)) if m_api else ""
+if not re.match(r"\s*if \(process\.env\.SNAP_PROXY\) \{\s*throw new Error\(", api_body):
+    problems.append("helpers.ts apiContext() does not FIRST refuse under SNAP_PROXY — a future "
+                    "@via:onion step or helper could reach the local door around Tor")
+m_oc = re.search(r"export async function onionContext\((.*?)\n\}", helpers_text, re.S)
+if not m_oc or "proxy: { server: door.proxy" not in m_oc.group(1):
+    problems.append("helpers.ts onionContext() does not put the SOCKS proxy on the context")
+check("T15-onion-steps-proxied", not problems, "; ".join(problems))
 
 shutil.rmtree(WORK, ignore_errors=True)
 

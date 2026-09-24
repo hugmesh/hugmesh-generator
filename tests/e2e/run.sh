@@ -417,6 +417,21 @@ elif [ "${LANE}" = "bdd" ] && docker image inspect "${IMAGE}" >/dev/null 2>&1; t
   echo "    interfaces drive repo commands the browsers image does not carry." >&2
 fi
 
+# The Tor lane runs exactly the @via:onion scenario(s), so EVERY skip path — the
+# @env:docker probe missing the local door, an onion env that never reached the
+# steps, a tag that matched nothing — would otherwise exit 0 having tested
+# nothing. Its verdict therefore also reads the run's own summary.json (removed
+# first, so a previous run's file cannot answer for this one): at least one
+# scenario PASSED and none was skipped, or the lane FAILS.
+ONION_SUMMARY=""
+if [ -n "${VIA}" ] && [ "${MODE}" = "run" ]; then
+  case "${REPORT_DIR}" in
+    /*) ONION_SUMMARY="${REPORT_DIR}/summary.json" ;;
+    *)  ONION_SUMMARY="${HERE}/${REPORT_DIR}/summary.json" ;;
+  esac
+  rm -f "${ONION_SUMMARY}"
+fi
+
 set +e
 if [ "${USE_DOCKER}" -eq 1 ]; then
   # The container sees ONLY what -e hands it — PUBLIC_HTTPS_PORT does not cross
@@ -433,6 +448,36 @@ else
 fi
 rc=$?
 set -e
+
+if [ -n "${ONION_SUMMARY}" ] && [ "${rc}" -eq 0 ]; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "run.sh: --via onion: python3 is needed to read ${ONION_SUMMARY}; the Tor lane's verdict is UNKNOWN, so it FAILS." >&2
+    rc=1
+  elif ! python3 - "${ONION_SUMMARY}" <<'ONION_PY'
+import json, sys
+path = sys.argv[1]
+try:
+    s = json.load(open(path, encoding="utf-8"))
+    t = s["testTotals"]
+    passed, skipped, failed = int(t["passed"]), int(t["skipped"]), int(t["failed"])
+except Exception as exc:  # noqa: BLE001 - any unreadable summary is a FAIL
+    print("run.sh: --via onion: no readable summary at %s (%s) — nothing proves a "
+          "scenario ran over Tor, so the lane FAILS." % (path, exc), file=sys.stderr)
+    sys.exit(1)
+if passed >= 1 and skipped == 0 and failed == 0:
+    sys.exit(0)
+why = sorted({str(x.get("skipReason") or "") for x in (s.get("tests") or [])
+              if x.get("status") == "skipped"} - {""})
+print("run.sh: --via onion executed %d passed / %d skipped / %d failed — the Tor lane "
+      "must PASS at least one @via:onion scenario and skip none, so it FAILS.%s"
+      % (passed, skipped, failed,
+         "".join("\n    skipped: " + w for w in why)), file=sys.stderr)
+sys.exit(1)
+ONION_PY
+  then
+    rc=1
+  fi
+fi
 
 # The summary is a courtesy. It must never change the verdict: `rc` is captured
 # above and is what this script exits with, whatever the reporter does. An

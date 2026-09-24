@@ -101,6 +101,17 @@ export function resolveForNode(
  * cannot resolve. See docs/KIND-SSO-E2E-FINDINGS.md item 20.
  */
 export async function apiContext(baseUrl: string | undefined): Promise<APIRequestContext> {
+  // A --via onion run (tests/e2e/run.sh exports SNAP_PROXY) proves "reached OVER
+  // TOR". A standalone Node context has no proxy and would quietly talk to the
+  // local door around Tor, and the scenario's request audit (page listener + HAR)
+  // cannot see it. So it is refused, loudly, rather than proxied on an unmeasured
+  // path: the measured Node-side route is the proxied context's own page.request.
+  if (process.env.SNAP_PROXY) {
+    throw new Error(
+      `apiContext('${baseUrl ?? ''}') bypasses Tor — under --via onion (SNAP_PROXY=`
+      + `${process.env.SNAP_PROXY}) use page.request inside onionContext() instead`,
+    );
+  }
   const t = resolveForNode(baseUrl ?? '');
   return request.newContext({
     baseURL: t.url || baseUrl,

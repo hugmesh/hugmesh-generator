@@ -12,12 +12,16 @@
 # gateway's CSP upgrade-insecure-requests upgrades every subresource to https
 # (measured 2026-09-23 over a live onion), so the onion must serve :443 too.
 #
-# WHAT IS GRADED, AND HOW. tests/stack/tor_flip_wiring.py holds the model — 13
+# WHAT IS GRADED, AND HOW. tests/stack/tor_flip_wiring.py holds the model — 15
 # checks, run against the real tree here and against staged mutants below. It
 # executes wherever it can: make expands STACK_ENV/the profile; the entrypoint is
 # RUN against a stub tor (publish, stop, crash); both compose healthchecks are
-# EXECUTED against a sandbox; run.sh prints its own --via onion plan; `make
-# stack-onion` is run against served / absent / stale / malformed readouts.
+# EXECUTED against a sandbox; run.sh prints its own --via onion plan AND is run
+# against a stub npx that records the environment playwright really receives and
+# the summary it leaves (a skipped or empty run must FAIL); `make stack-onion` is
+# run against served / absent / stale / malformed readouts; the mechanism wrapper
+# (test-tor-onion-mechanism.sh) is run against stub harnesses; and the @via:onion
+# step file is held to "no unproxied route to the mesh".
 #
 # NEGATIVE CONTROLS. Every check is exercised by at least one mutant that breaks
 # exactly it, staged into a COPY — the repo tree is NEVER mutated, so an
@@ -60,7 +64,7 @@ if [ "${REAL_RC}" -eq 3 ]; then
   exit 1
 fi
 if [ "${REAL_RC}" -eq 0 ]; then
-  ok "the repo tree satisfies the TOR=1 contract (13 checks)"
+  ok "the repo tree satisfies the TOR=1 contract (15 checks)"
 else
   bad "the repo tree does NOT satisfy the TOR=1 contract (see above)"
 fi
@@ -78,6 +82,17 @@ stage() {
   cp "${REPO}/tests/e2e/run.sh"                  "${dst}/tests/e2e/run.sh"
   cp "${REPO}/studio/hugmesh_studio/core/local_stack_node.py" \
      "${dst}/studio/hugmesh_studio/core/local_stack_node.py"
+  cp "${REPO}/tests/stack/test-tor-onion-mechanism.sh" "${dst}/tests/stack/test-tor-onion-mechanism.sh"
+  mkdir -p "${dst}/tests/e2e/specs" "${dst}/tests/e2e/steps" "${dst}/tests/e2e/features"
+  cp "${REPO}/tests/e2e/specs/helpers.ts"        "${dst}/tests/e2e/specs/helpers.ts"
+  cp "${REPO}"/tests/e2e/steps/*.ts               "${dst}/tests/e2e/steps/"
+  # Only the @via:onion features: T15 grades exactly those scenarios' steps.
+  # -a: one NUL byte would make grep skip a file and report it as a miss.
+  local f
+  while IFS= read -r f; do
+    mkdir -p "${dst}/$(dirname "${f#"${REPO}"/}")"
+    cp "${f}" "${dst}/${f#"${REPO}"/}"
+  done < <(grep -rlaF '@via:onion' "${REPO}/tests/e2e/features" --include='*.feature')
 }
 
 # control <id> <expected-failing-check> <python mutator on stdin>
@@ -268,6 +283,143 @@ PY
 control N27-run-trusts-stale-readout T12-e2e-lane <<PY
 ${MUT_LIB}
 sub("tests/e2e/run.sh", '      die "--via onion: \${ONION_FILE} names', '      echo "--via onion: \${ONION_FILE} names')
+PY
+
+# ── skeptic round (2026-09-23): each of these SURVIVED the first battery ─────
+control N29-onion-env-not-exported T12-e2e-lane <<PY
+${MUT_LIB}
+sub("tests/e2e/run.sh", '  export SNAP_ONION_BASE_URL="\${ONION_BASE_URL}"\n  export SNAP_PROXY="\${ONION_PROXY}"\n', '')
+PY
+
+control N30-no-executed-nothing-backstop T12-e2e-lane <<PY
+${MUT_LIB}
+sub("tests/e2e/run.sh", 'if [ -n "\${ONION_SUMMARY}" ] && [ "\${rc}" -eq 0 ]; then', 'if false; then')
+PY
+
+control N31-stale-summary-vouches T12-e2e-lane <<PY
+${MUT_LIB}
+sub("tests/e2e/run.sh", '  rm -f "\${ONION_SUMMARY}"\n', '')
+PY
+
+control N32-caller-tags-or T12-e2e-lane <<PY
+${MUT_LIB}
+sub("tests/e2e/run.sh", 'else TAGS="(\${TAGS}) and @via:onion"; fi', 'else TAGS="(\${TAGS}) or @via:onion"; fi')
+PY
+
+control N33-caller-tags-unrestricted T12-e2e-lane <<PY
+${MUT_LIB}
+sub("tests/e2e/run.sh", 'else TAGS="(\${TAGS}) and @via:onion"; fi', 'else TAGS="\${TAGS}"; fi')
+PY
+
+control N34-stale-bootstrap-kept T10-readout-lifecycle <<PY
+${MUT_LIB}
+sub("tests/stack/tor/entrypoint.sh", ': > "\$NOTICE_LOG"\n', '')
+PY
+
+control N35-client-listens-loopback T9-socks-client <<PY
+${MUT_LIB}
+sub("tests/stack/tor/entrypoint.sh", "SocksPort 0.0.0.0:9050\n", "SocksPort 127.0.0.1:9050\n")
+PY
+
+control N36-client-accepts-anyone-first T9-socks-client <<PY
+${MUT_LIB}
+sub("tests/stack/tor/entrypoint.sh", "SocksPolicy accept 127.0.0.0/8\n", "SocksPolicy accept *\nSocksPolicy accept 127.0.0.0/8\n")
+PY
+
+control N37-run-stale-check-asks-the-client T12-e2e-lane <<PY
+${MUT_LIB}
+sub("tests/e2e/run.sh", "label=com.docker.compose.service=hugmesh-tor --filter", "label=com.docker.compose.service=hugmesh-tor-client --filter")
+PY
+
+control N38-stack-onion-asks-the-client T13-stack-onion <<PY
+${MUT_LIB}
+sub("Makefile", "--status running hugmesh-tor 2>/dev/null", "--status running hugmesh-tor-client 2>/dev/null")
+PY
+
+control N39-stack-onion-no-charset T13-stack-onion <<PY
+${MUT_LIB}
+sub("Makefile", "case \"\$\$base\" in *[!a-z2-7]*|'') base=bad ;; esac; ", "")
+PY
+
+control N40-run-no-charset T12-e2e-lane <<PY
+${MUT_LIB}
+sub("tests/e2e/run.sh", "  case \"\${base}\" in *[!a-z2-7]*|'') return 1 ;; esac\n", "")
+PY
+
+control N41-run-accepts-http T12-e2e-lane <<PY
+${MUT_LIB}
+sub("tests/e2e/run.sh", "    ''|https://*.onion) ;;", "    ''|http*://*.onion) ;;")
+PY
+
+control N42-apicontext-unguarded T15-onion-steps-proxied <<PY
+${MUT_LIB}
+sub("tests/e2e/specs/helpers.ts", "  if (process.env.SNAP_PROXY) {\n    throw new Error(", "  if (false) {\n    throw new Error(")
+PY
+
+control N43-step-calls-apicontext T15-onion-steps-proxied <<PY
+${MUT_LIB}
+sub("tests/e2e/steps/tor-onion.steps.ts", "  const page = await ctx.newPage();\n", "  const page = await ctx.newPage();\n  await apiContext(door.baseUrl);\n")
+PY
+
+control N44-step-takes-page-fixture T15-onion-steps-proxied <<PY
+${MUT_LIB}
+sub("tests/e2e/steps/tor-onion.steps.ts", "Then('the onion login page renders', async ({ world, ", "Then('the onion login page renders', async ({ world, page, ")
+PY
+
+control N45-onion-context-unproxied T15-onion-steps-proxied <<PY
+${MUT_LIB}
+sub("tests/e2e/specs/helpers.ts", "    proxy: { server: door.proxy, bypass: '<-loopback>' },\n", "")
+PY
+
+control N46-feature-untagged T15-onion-steps-proxied <<PY
+${MUT_LIB}
+sub("tests/e2e/features/platform/tor-onion-front-door.feature", "@env:docker @via:onion @service:login", "@env:docker @service:login")
+PY
+
+# ── the mechanism wrapper (#585): its verdict logic, not only its existence ──
+control W1-success-line-ignored T14-mechanism-wrapper <<PY
+${MUT_LIB}
+sub("tests/stack/test-tor-onion-mechanism.sh", '  || fail "the harness exited 0 but never printed', '  || true "the harness exited 0 but never printed')
+PY
+
+control W2-rc-ignored T14-mechanism-wrapper <<PY
+${MUT_LIB}
+sub("tests/stack/test-tor-onion-mechanism.sh", '|| fail "the harness exited \${rc}"', '|| true "the harness exited \${rc}"')
+PY
+
+control W3-skip-exits-0 T14-mechanism-wrapper <<PY
+${MUT_LIB}
+sub("tests/stack/test-tor-onion-mechanism.sh", "  exit 2\n}", "  exit 0\n}")
+PY
+
+control W4-timeout-unnamed T14-mechanism-wrapper <<PY
+${MUT_LIB}
+sub("tests/stack/test-tor-onion-mechanism.sh", 'if [ "\${rc}" -eq 124 ] || [ "\${rc}" -eq 137 ]; then', 'if false; then')
+PY
+
+control W5-failure-as-skip T14-mechanism-wrapper <<PY
+${MUT_LIB}
+sub("tests/stack/test-tor-onion-mechanism.sh", 'echo "FAIL: \$*"\n  exit 1', 'echo "FAIL: \$*"\n  exit 2')
+PY
+
+control W6-no-opt-in T14-mechanism-wrapper <<PY
+${MUT_LIB}
+sub("tests/stack/test-tor-onion-mechanism.sh", '[ "\${HUGMESH_TOR_E2E:-}" = "1" ]', '[ 1 = 1 ]')
+PY
+
+control W7-success-unanchored T14-mechanism-wrapper <<PY
+${MUT_LIB}
+sub("tests/stack/test-tor-onion-mechanism.sh", "grep -a -E '^RESULT: +SUCCESS", "grep -a -E 'RESULT: +SUCCESS")
+PY
+
+control W8-no-timeout T14-mechanism-wrapper <<PY
+${MUT_LIB}
+sub("tests/stack/test-tor-onion-mechanism.sh", 'timeout --kill-after=20 "\${TIMEOUT_S}" bash', 'bash')
+PY
+
+control W9-no-tor-not-skipped T14-mechanism-wrapper <<PY
+${MUT_LIB}
+sub("tests/stack/test-tor-onion-mechanism.sh", '|| skip "no tor binary', '|| true "no tor binary')
 PY
 
 # ── the sources going missing must be INCOMPLETE, never green ────────────────
