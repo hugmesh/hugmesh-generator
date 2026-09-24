@@ -517,3 +517,35 @@ def test_a_mesh_that_cannot_say_its_env_is_not_called_a_disagreement(tmp_path, s
     rec = sm.capture(gen, LocalMeshBootstrapConfig(env="prod"),
                      _Node(running_env=""), _Boot(gen))
     assert "disagrees_with_running" not in rec.last_seen
+
+
+# ── #579: which record describes THIS checkout's mesh ────────────────────────────
+def _write_raw(rec):
+    os.makedirs(sm.meshes_dir(), exist_ok=True)
+    with open(rec.path(), "w", encoding="utf-8") as fh:
+        json.dump(rec.to_dict(), fh)
+
+
+def test_latest_for_checkout_picks_the_newest_save_of_this_checkout_and_host(tmp_path):
+    gd = str(tmp_path / "gen")
+    older = sm.SavedMesh(id="20260101-000000-aaaaaa", label="old", generator_dir=gd,
+                         hostname="h1", updated="2026-01-01T00:00:00+00:00")
+    # created EARLIER (smaller id) but re-saved LATER: `updated` decides, not the id
+    resaved = sm.SavedMesh(id="20250101-000000-bbbbbb", label="resaved",
+                           generator_dir=gd, hostname="h1",
+                           updated="2026-06-01T00:00:00-07:00")
+    other_dir = sm.SavedMesh(id="20270101-000000-cccccc", label="elsewhere",
+                             generator_dir=str(tmp_path / "other"), hostname="h1",
+                             updated="2027-01-01T00:00:00+00:00")
+    other_host = sm.SavedMesh(id="20270102-000000-dddddd", label="other-host",
+                              generator_dir=gd, hostname="h2",
+                              updated="2027-01-02T00:00:00+00:00")
+    for r in (older, resaved, other_dir, other_host):
+        _write_raw(r)
+    assert sm.latest_for_checkout(gd, hostname="h1").label == "resaved"
+    assert sm.latest_for_checkout(gd, hostname="h2").label == "other-host"
+    assert sm.latest_for_checkout(str(tmp_path / "nowhere"), hostname="h1") is None
+
+
+def test_latest_for_checkout_is_none_with_no_records(tmp_path):
+    assert sm.latest_for_checkout(str(tmp_path)) is None
