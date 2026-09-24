@@ -274,7 +274,7 @@ if [ -n "${VIA}" ]; then
   fi
   case "${ONION_BASE_URL}" in
     ''|https://*.onion) ;;
-    *) die "SNAP_ONION_BASE_URL=${ONION_BASE_URL} is not https://<v3>.onion — an http:// entry is upgraded by the gateway's CSP and tests nothing (see --help)." ;;
+    *) die "SNAP_ONION_BASE_URL=${ONION_BASE_URL} is not https://<v3>.onion — the lane tests the :443 door a person is told to use: a secure context (Chromium drops Secure cookies over http://<onion>), the node's own :443, and user-bff's default Secure session cookie (docs/TOR-HIDDEN-SERVICE.md \"Why :443\", #628)." ;;
   esac
   if [ "${ENV_ID}" = "kind" ] && [ -z "${SNAP_PROXY:-}" ]; then
     ONION_PROXY="$(bash "${REPO}/scripts/kind-tor.sh" socks)"

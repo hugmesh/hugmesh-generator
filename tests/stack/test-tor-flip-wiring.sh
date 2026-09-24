@@ -429,6 +429,41 @@ ${MUT_LIB}
 sub("tests/e2e/steps/onion-session.ts", "/** ROLE_FOO_BAR -> foo_bar", "export const leak = (r: any) => r.newContext({});\n\n/** ROLE_FOO_BAR -> foo_bar")
 PY
 
+# The sibling scan reads every spelling of a relative specifier and follows
+# siblings of siblings: each of these hid a fetch from the first version of the
+# scan (single-quoted, extensionless, one hop only), found by the #633 skeptics.
+control N57-sibling-double-quoted-import T15-onion-steps-proxied <<PY
+${MUT_LIB}
+sub("tests/e2e/steps/tor-onion.steps.ts", "from './onion-session';", 'from "./onion-session";')
+sub("tests/e2e/steps/onion-session.ts", "/** ROLE_FOO_BAR -> foo_bar", "export const leak = () => fetch('https://localhost:8488/bff/session');\n\n/** ROLE_FOO_BAR -> foo_bar")
+PY
+
+control N58-sibling-js-suffix-import T15-onion-steps-proxied <<PY
+${MUT_LIB}
+sub("tests/e2e/steps/tor-onion.steps.ts", "from './onion-session';", "from './onion-session.js';")
+sub("tests/e2e/steps/onion-session.ts", "/** ROLE_FOO_BAR -> foo_bar", "export const leak = () => fetch('https://localhost:8488/bff/session');\n\n/** ROLE_FOO_BAR -> foo_bar")
+PY
+
+control N59-transitive-sibling-fetches T15-onion-steps-proxied <<PY
+${MUT_LIB}
+open(root + "/tests/e2e/steps/onion-leak2.ts", "w").write("export const leak2 = () => fetch('https://localhost:8488/bff/session');\n")
+sub("tests/e2e/steps/onion-session.ts", "import { effectiveRoles } from '../specs/rbac-route-access';", "import { effectiveRoles } from '../specs/rbac-route-access';\nexport { leak2 } from './onion-leak2';")
+PY
+
+control N60-dynamic-import-sibling-fetches T15-onion-steps-proxied <<PY
+${MUT_LIB}
+open(root + "/tests/e2e/steps/onion-leak3.ts", "w").write("export const leak3 = () => fetch('https://localhost:8488/bff/session');\n")
+sub("tests/e2e/steps/tor-onion.steps.ts", "from './onion-session';", "from './onion-session';\nconst _leak3 = () => import(\"./onion-leak3.js\");")
+PY
+
+control N61-subdirectory-sibling-fetches T15-onion-steps-proxied <<PY
+${MUT_LIB}
+import os
+os.makedirs(root + "/tests/e2e/steps/lib", exist_ok=True)
+open(root + "/tests/e2e/steps/lib/leak4.ts", "w").write("export const leak4 = () => fetch('https://localhost:8488/bff/session');\n")
+sub("tests/e2e/steps/onion-session.ts", "import { effectiveRoles } from '../specs/rbac-route-access';", "import { effectiveRoles } from '../specs/rbac-route-access';\nimport { leak4 } from '../steps/lib/leak4';")
+PY
+
 # ── the mechanism wrapper (#585): its verdict logic, not only its existence ──
 control W1-success-line-ignored T14-mechanism-wrapper <<PY
 ${MUT_LIB}

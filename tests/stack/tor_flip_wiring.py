@@ -617,8 +617,9 @@ else:
         problems.append("SNAP_BASE_URL was pointed at the onion (%s): the @env:docker probe is "
                         "an UNPROXIED Node request and would skip every scenario" % first("BASE_URL"))
     if first("ONION_BASE_URL") != "https://" + GOOD_ONION:
-        problems.append("onion URL is %r, want https://<onion> (an http entry is upgraded by "
-                        "the gateway CSP and boots nothing)" % first("ONION_BASE_URL"))
+        problems.append("onion URL is %r, want https://<onion> (the :443 door: a secure context, "
+                        "the node's own :443, user-bff's default Secure cookie; #628)"
+                        % first("ONION_BASE_URL"))
     if first("PROXY") != "socks5://127.0.0.1:%s" % socks_default:
         problems.append("default proxy %r is not the tor-client's socks5://127.0.0.1:%s"
                         % (first("PROXY"), socks_default))
@@ -639,8 +640,9 @@ ph = subprocess.run(["bash", RUNSH, "--via", "onion", "--print-command"],
                     env=dict(renv, SNAP_ONION_BASE_URL="http://" + GOOD_ONION),
                     capture_output=True, text=True, timeout=60)
 if ph.returncode == 0:
-    problems.append("SNAP_ONION_BASE_URL=http://<onion> was accepted — the CSP upgrades it and "
-                    "the SPA never boots")
+    problems.append("SNAP_ONION_BASE_URL=http://<onion> was accepted — the lane must test the "
+                    ":443 door (secure context, the node's :443, user-bff's default Secure "
+                    "cookie; #628), not the http door")
 # A 56-character name that is not base32 is not an onion.
 open(hostfile, "w").write("1" * 52 + "abcd.onion\n")
 pb = subprocess.run(["bash", RUNSH, "--via", "onion", "--print-command"], env=renv,
@@ -910,19 +912,48 @@ for fn in sorted(onion_files):
 # A step file's own relative imports under steps/ (steps/onion-session.ts, #624)
 # are held to the same "no unproxied route" rule: moving a request out of the
 # step file into a sibling module must not take it out of this check's sight.
-IMPORT_RE = re.compile(r"from\s+'\./([A-Za-z0-9_.-]+)'")
-siblings: set[str] = set()
-for fn in sorted(onion_files):
-    text = re.sub(r"//[^\n]*", "", open(os.path.join(E2E_STEPS, fn), encoding="utf-8").read())
+# Every spelling of a relative module specifier counts (single or double quotes,
+# `import ... from`, `export ... from`, a bare `import './x'`, a dynamic
+# `import('./x')`, a `.ts`/`.js` suffix, a subdirectory, `../steps/x`), and the
+# scan follows each sibling's own imports until no new file appears, so a
+# second hop cannot hide a request either. A specifier that resolves outside
+# steps/ (../specs/helpers, whose apiContext()/onionContext() are pinned below)
+# is not a sibling.
+IMPORT_RE = re.compile(r"""(?:\bfrom|\bimport)\s*\(?\s*(['"])(\.{1,2}/[^'"]+)\1""")
+STEPS_REAL = os.path.realpath(E2E_STEPS)
+
+
+def _step_imports(path: str) -> list[str]:
+    text = re.sub(r"//[^\n]*", "", open(path, encoding="utf-8").read())
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    found = []
     for m in IMPORT_RE.finditer(text):
-        name = m.group(1) if m.group(1).endswith(".ts") else m.group(1) + ".ts"
-        if name not in onion_files and os.path.isfile(os.path.join(E2E_STEPS, name)):
-            siblings.add(name)
-for fn in sorted(siblings):
-    code = re.sub(r"//[^\n]*", "", open(os.path.join(E2E_STEPS, fn), encoding="utf-8").read())
+        spec = re.sub(r"\.(?:ts|js|mjs|cjs)$", "", m.group(2))
+        base = os.path.realpath(os.path.join(os.path.dirname(path), spec))
+        for cand in (base + ".ts", os.path.join(base, "index.ts")):
+            if os.path.isfile(cand) and os.path.commonpath([cand, STEPS_REAL]) == STEPS_REAL:
+                found.append(cand)
+                break
+    return found
+
+
+onion_paths = {os.path.realpath(os.path.join(E2E_STEPS, fn)) for fn in onion_files}
+siblings: set[str] = set()
+frontier = sorted(onion_paths)
+while frontier:
+    nxt = []
+    for path in frontier:
+        for dep in _step_imports(path):
+            if dep not in onion_paths and dep not in siblings:
+                siblings.add(dep)
+                nxt.append(dep)
+    frontier = nxt
+for path in sorted(siblings):
+    fn = os.path.relpath(path, STEPS_REAL)
+    code = re.sub(r"//[^\n]*", "", open(path, encoding="utf-8").read())
     for token in ("apiContext(", "newContext(", "request.get(", "request.post(", "fetch("):
         if token in code:
-            problems.append("steps/%s (imported by a @via:onion step file) calls %s — a route to "
+            problems.append("steps/%s (reached through a @via:onion step file's imports) calls %s — a route to "
                             "the mesh outside the step file, which the HAR audit and this check "
                             "cannot vouch for" % (fn, token))
 helpers_text = open(E2E_HELPERS, encoding="utf-8").read()

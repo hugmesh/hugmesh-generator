@@ -26,8 +26,10 @@
 // sessionRoles): a well-formed identity (a non-empty `id`, the field host-shell
 // itself rejects a body without), registration complete, and the session's roles
 // EQUAL to the persona's seeded roles from specs/rbac-roles.ts. Equal, not "contains":
-// every privileged persona also carries ROLE_USER, so "contains user" would pass
-// for an admin session. /bff/session reports roles lower-cased with ROLE_ stripped
+// a privileged persona can also carry ROLE_USER (e2e-admin is admin + user), so
+// "contains user" would pass for an admin session. For e2e-user the check proves
+// "a plain-user account signed in over the onion", not which one: the server never
+// returns the username, so nothing finer is available. /bff/session reports roles lower-cased with ROLE_ stripped
 // ("user", "fleet_admin"), so the catalogue's ROLE_* names are normalised the same
 // way before comparing.
 //
@@ -62,6 +64,9 @@ export function expectOnionSessionIsPersona(
     body = JSON.parse(text) as typeof body;
   } catch {
     throw new Error(`GET /bff/session over ${where} returned 200 but not JSON: ${text.slice(0, 300)}`);
+  }
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    throw new Error(`GET /bff/session over ${where} returned 200 but not a JSON object: ${text.slice(0, 300)}`);
   }
   expect(typeof body.id === 'string' && body.id !== '',
     `the session over ${where} names no account id: ${text.slice(0, 300)}`).toBe(true);
