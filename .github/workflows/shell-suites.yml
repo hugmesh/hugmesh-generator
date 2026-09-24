@@ -529,6 +529,7 @@ jobs:
             tests/stack/test-anubis-flip-wiring.sh
             tests/stack/test-mfa-flip-wiring.sh
             tests/stack/test-patch-stack-src.sh
+            tests/stack/test-tor-flip-wiring.sh
             tests/workload-console/test-console-posture-and-inventory.sh
             tests/workload-console/test-workload-console.sh
           "

@@ -42,6 +42,7 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass, fields
+from typing import NamedTuple
 
 from . import own_casdoor, theme
 from .config import IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
@@ -468,6 +469,21 @@ class LocalMeshBootstrapConfig:
         for k, f in known.items():
             if k in vals and f.type == "str" and not isinstance(vals[k], str):
                 vals[k] = "" if vals[k] is None else str(vals[k])
+        # ONE AUTHORITY PER PROFILE (#579). With a services TUPLE the picker's rows are
+        # what decide the social/tor profiles (effective_social/effective_with_tor), and
+        # the legacy booleans are ignored — so a record whose booleans disagree with its
+        # own tuple (hand-edited, or written by a page that let them drift) loads as a
+        # config that says two things: `with_tor=True, services=("tuwunel",)` brings up
+        # NO hugmesh-tor while every reader of the raw flag believes it does. NORMALISED
+        # here, not rejected: the tuple is what the saved mesh actually ran, and
+        # refusing the record would strand an operator's saved mesh over bookkeeping.
+        # services=None (CLI-made, "no picker was used") keeps the booleans as the
+        # authority, untouched.
+        svc = vals.get("services")
+        if svc is not None:
+            flags = profile_flags(svc)
+            vals["with_tor"] = bool(flags.get(PROFILE_TOR, False))
+            vals["social"] = bool(flags.get(PROFILE_SOCIAL, False))
         return cls(**vals)
 
 
@@ -479,6 +495,42 @@ class LocalMeshBootstrap:
     def __init__(self, generator_dir: str, cfg: LocalMeshBootstrapConfig | None = None):
         self.generator_dir = os.path.abspath(generator_dir)
         self.cfg = cfg or LocalMeshBootstrapConfig()
+
+    # ---- built from a saved-mesh record (core/saved_meshes.py) -------------------
+    @classmethod
+    def for_record(cls, generator_dir: str, rec,
+                   auth_key: str = "") -> "LocalMeshBootstrap":
+        """The bootstrap a saved-mesh record describes: its OWN config (never the
+        form's re-collection), plus the one field a record never carries — the
+        tailnet auth key, which the caller supplies. THE seam `mesh-restore` and the
+        localcloud identity import share, so a saved mesh's services selection —
+        tor included — is read the same way wherever a record becomes a mesh."""
+        cfg = LocalMeshBootstrapConfig.from_dict(dict(getattr(rec, "config", None) or {}))
+        if auth_key:
+            cfg.auth_key = auth_key
+        return cls(generator_dir, cfg)
+
+    @classmethod
+    def for_checkout(cls, generator_dir: str, hostname: str | None = None):
+        """``(bootstrap, record-or-None)`` for the local mesh THIS checkout drives, as
+        far as anything on disk can say: the newest saved-mesh record for this
+        checkout and host, else a default config (the brand default, no Tor).
+
+        OFFLINE by contract (plain file reads — it runs in page ``initializePage``):
+        the running stack is never probed. That is also its limit, stated where the
+        answer is used: a record is the mesh AS SAVED, and ``capture()`` records the
+        form's selection, not a docker probe of what is running (#309)."""
+        from . import saved_meshes
+        try:
+            rec = saved_meshes.latest_for_checkout(generator_dir, hostname=hostname)
+        except Exception:                                  # noqa: BLE001 — offline read
+            rec = None
+        if rec is None:
+            return cls(generator_dir), None
+        try:
+            return cls.for_record(generator_dir, rec), rec
+        except (TypeError, ValueError):
+            return cls(generator_dir), None
 
     # ---- resolved runtime paths (named in the plan so the operator sees them) ----
     @property
@@ -963,7 +1015,11 @@ class LocalMeshBootstrap:
         lines.append("")
         lines.append("(4) SERVE / EXPOSE (this bring-up serves the mesh LOCALLY):")
         lines.append(f"      Local front door once up: {self._stack_node().web_url}")
-        if c.with_tor:
+        # effective_*, never the raw flag (#586): with a services selection the tor ROW
+        # decided the profile, so `with_tor` could say ON over a stack that starts no
+        # hugmesh-tor (and OFF over one that does) — step (3) above already reads it
+        # this way, and one plan must not say both things.
+        if c.effective_with_tor():
             lines.append("      Public (no IP/DNS): already ON — the Tor v3 .onion above.")
         else:
             lines.append("      Public exposure is a SEPARATE, opt-in step — run Go Live")
@@ -1433,6 +1489,58 @@ class LocalMeshBootstrap:
 # modules (NO Qt), so it runs in the Qt-free/system-python environment CI uses.
 
 
+class LocalMeshIdentity(NamedTuple):
+    """What the node-image flows import from the local mesh (#50/#579): its apex
+    domain, the Studio-provisioned accounts ``[(username, roles)]``, whether it ran
+    the Tor onion, and one line saying WHERE that came from (a saved record's label,
+    or "" for the defaults). A NamedTuple, so ``domain, users, with_tor = ...`` still
+    unpacks the first three and a canned 3-tuple builds one."""
+    domain: str
+    users: list
+    with_tor: bool = False
+    source: str = ""
+
+
+def saved_mesh_source(rec) -> str:
+    """One human line naming the record an import read, or "" when none was."""
+    if rec is None:
+        return ""
+    label = str(getattr(rec, "label", "") or getattr(rec, "id", "") or "?")
+    when = str(getattr(rec, "updated", "") or getattr(rec, "created", "") or "")
+    return f"saved mesh '{label}'" + (f" (saved {when})" if when else "")
+
+
+def tor_carrier_platforms(platforms) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Split ``platforms`` into (can carry the Tor onion, cannot) — by what the
+    builders actually express: x86's dedicated ``--with-tor`` or a platform whose
+    ``--optional-services`` catalogue lists ``tor`` (rpi5). Every other builder bakes
+    no net-vpn/tor, so a node there is built WITHOUT the onion whatever the mesh ran
+    (worklist._apply_infra_services drops it rather than emit a dead flag)."""
+    from .config import OPTIONAL_SERVICES_BY_PLATFORM, PLATFORM_FIELD_SUPPORT
+    flag = PLATFORM_FIELD_SUPPORT.get("tor_onion_service", ("x86",))
+    seen = list(dict.fromkeys(p for p in platforms if p))
+    can = tuple(p for p in seen
+                if p in flag or "tor" in OPTIONAL_SERVICES_BY_PLATFORM.get(p, ()))
+    return can, tuple(p for p in seen if p not in can)
+
+
+def localcloud_tor_note(platforms) -> str:
+    """The inline (never modal) sentence the localcloud gate shows when the imported
+    mesh ran Tor — the GUI page and the TUI screen render this one string."""
+    can, cannot = tor_carrier_platforms(platforms)
+    text = ("Tor onion: this mesh ran Tor (TOR=1), so the node images will carry the "
+            "Tor v3 onion service too (net-vpn/tor + hugmesh-tor-reconcile) — the "
+            "mesh-wide Tor row on the Network step starts ticked; untick it there to "
+            "build without. Carried on " + (", ".join(can) or "no platform")
+            + " node images (x86 via --with-tor, rpi5 as the tor node service); a "
+            "laptop/desktop image never carries it.")
+    if cannot:
+        text += (" This platform cannot carry Tor: " + ", ".join(cannot)
+                 + " — its builder bakes no net-vpn/tor, so a node there is built "
+                   "without the onion.")
+    return text
+
+
 def _read_authkey(args: argparse.Namespace) -> str:
     """Resolve the auth key from --authkey-file (preferred: off the argv/process
     table) or --authkey. Trailing whitespace/newlines stripped."""
@@ -1551,11 +1659,10 @@ def _saved_mesh_cli(args: argparse.Namespace) -> int:
     if rec is None:
         print(f"no saved mesh with id {args.mesh_id}", file=sys.stderr)
         return 1
-    cfg = LocalMeshBootstrapConfig.from_dict(rec.config)
-    key = _read_authkey(args)
-    if key:
-        cfg.auth_key = key          # the one field a record never carries
-    boot = LocalMeshBootstrap(args.generator_dir, cfg)
+    # the one field a record never carries (the auth key) rides the seam's argument
+    boot = LocalMeshBootstrap.for_record(args.generator_dir, rec,
+                                         auth_key=_read_authkey(args))
+    cfg = boot.cfg
     plan = saved_meshes.restore_plan(rec, **saved_meshes.probe_state(rec))
     print(f"{rec.id}  {rec.label}")
     print(f"  {plan.sentence}")

@@ -33,6 +33,7 @@ pages, a narrowed worklist, and the identity already filled in.
 from __future__ import annotations
 
 import functools
+import html
 import threading
 
 from .. import console
@@ -44,7 +45,9 @@ from ...core.config import (
     MODE_DEFAULT_ROLE, ROLE_CHOICES, User, enter_mesh_defaults, image_class,
     normalize_user_roles,
 )
-from ...core.local_mesh_bootstrap import LocalMeshBootstrap
+from ...core.local_mesh_bootstrap import (
+    LocalMeshBootstrap, LocalMeshIdentity, localcloud_tor_note, saved_mesh_source,
+)
 from ...core.seeded_credentials import load_roster
 
 # The abbreviated worklist (issue #50): ONLY the laptop and the cluster-node image
@@ -54,6 +57,11 @@ from ...core.seeded_credentials import load_roster
 LOCALCLOUD_ALLOWED_ROLES = tuple(
     role for role, _platforms, _label in ROLE_CHOICES["mesh"]
     if role == "laptop" or image_class("mesh", role) == "node")
+# ...and the platforms those rows come on — what the Tor note (#579) splits into
+# "carries the onion" / "cannot", derived the same way, never listed.
+LOCALCLOUD_PLATFORMS = tuple(dict.fromkeys(
+    plat for role, platforms, _label in ROLE_CHOICES["mesh"]
+    if role in LOCALCLOUD_ALLOWED_ROLES for plat in platforms))
 
 # Casdoor role grants -> ImageConfig User.roles (issue #228: EVERY mapped grant is
 # carried, not the top of a ladder — a persona holding ROLE_ADMIN and ROLE_GAMES
@@ -76,19 +84,23 @@ def _person_roles(roles) -> list[str]:
         [person for granted, person in _CASDOOR_ROLE_MAP if granted in roles])
 
 
-def local_mesh_identity(generator_dir: str) -> tuple[str, list[tuple[str, list[str]]]]:
-    """The local mesh's importable identity: ``(apex domain, [(username, roles)...])``.
+def local_mesh_identity(generator_dir: str) -> LocalMeshIdentity:
+    """The local mesh's importable identity: ``(apex domain, [(username, roles)...],
+    with_tor, source)`` — a :class:`LocalMeshIdentity`.
 
     READ-ONLY and offline (plain file reads, no docker/compose probe — this runs in
-    ``initializePage`` and must never stall the GUI): the apex comes from the
-    bootstrap config's resolution (the brand default unless the operator set one),
-    the accounts from the two channels the Studio itself provisioned — the minted
-    superadmin in the runtime secrets bundle (``keys-out/vault/secrets.json``) and
-    the seeder's persona roster. Users created interactively AFTER go-live live in
-    the running mesh's identity tier; they cannot be enumerated from disk and do
-    not need to be — building node images for the same domain leaves them valid.
-    Passwords are never read into the config (User rows carry no secret)."""
-    boot = LocalMeshBootstrap(generator_dir)
+    ``initializePage`` and must never stall the GUI). The mesh's CONFIG comes from the newest saved-mesh record
+    for this checkout (``LocalMeshBootstrap.for_checkout``), so the apex and whether
+    the mesh ran the Tor onion (``effective_with_tor()`` — the services row whenever
+    there is a selection) are what that mesh actually SAVED, not a default config's
+    brand domain with Tor off (#579). No record: the defaults, and ``source`` is "".
+    A record is the mesh as saved, not a probe of what is running (#309). The
+    accounts come from the two channels the Studio itself provisioned — the minted
+    superadmin in the runtime secrets bundle and the seeder's persona roster. Users
+    created after go-live live in the running mesh's identity tier; they cannot be
+    enumerated from disk and do not need to be. Passwords are never read into the
+    config (User rows carry no secret)."""
+    boot, rec = LocalMeshBootstrap.for_checkout(generator_dir)
     domain = boot.cfg.resolved_domain()
     users: list[tuple[str, list[str]]] = []
     creds = boot.superadmin_login()
@@ -100,7 +112,8 @@ def local_mesh_identity(generator_dir: str) -> tuple[str, list[tuple[str, list[s
         if u.username not in seen:
             seen.add(u.username)
             users.append((u.username, _person_roles(u.roles)))
-    return domain, users
+    return LocalMeshIdentity(domain, users, bool(boot.cfg.effective_with_tor()),
+                             saved_mesh_source(rec))
 
 
 def local_k8s_running(generator_dir: str) -> bool:
@@ -152,6 +165,8 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         self._imported = False       # one-shot import latch (see validatePage)
         self._domain = ""
         self._users: list[tuple[str, list[str]]] = []
+        self._with_tor = False       # the imported mesh ran the Tor onion (#579)
+        self._source = ""            # which saved record the import read ("" = none)
         self.worker: _MeshWorker | None = None
         self._k8s_probe: _K8sGateProbe | None = None
         self._running = False        # a `make kind-down` is in flight
@@ -183,6 +198,14 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         self.summary.setWordWrap(True)
         self.summary.setTextFormat(Qt.TextFormat.RichText)
         lay.addWidget(self.summary)
+
+        # The Tor carry-over (#579), INLINE — never a modal (a modal in page logic
+        # hangs headless tests). Hidden unless the imported mesh ran Tor; says what
+        # the images will carry and names the platforms that cannot carry it.
+        self.tor_note = QtWidgets.QLabel("")
+        self.tor_note.setWordWrap(True)
+        self.tor_note.setVisible(False)
+        lay.addWidget(self.tor_note)
 
         # ── the k8s gate — INLINE and modeless (no QMessageBox/exec in page logic:
         # a modal here hangs headless tests; the checkbox + isComplete() is the
@@ -357,7 +380,10 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         # asked afresh each time the operator routes through it.
         self._imported = False
         self.confirm.setChecked(False)
-        self._domain, self._users = local_mesh_identity(self.wiz.generator_dir)
+        # LocalMeshIdentity(*...) so a canned 3-tuple (with_tor, no source) loads too.
+        ident = LocalMeshIdentity(*local_mesh_identity(self.wiz.generator_dir))
+        self._domain, self._users = ident.domain, list(ident.users)
+        self._with_tor, self._source = bool(ident.with_tor), str(ident.source or "")
         # Re-establish the k8s truth too — unless a teardown is still streaming
         # (the operator can walk Back and forward while `make kind-down` runs, and
         # that run, not a fresh probe, owns the gate until it finishes).
@@ -368,12 +394,19 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         listed = ", ".join(
             f"{name} ({roles if isinstance(roles, str) else ', '.join(roles)})"
             for name, roles in self._users)
+        # RichText: every imported string is escaped (a record label is operator text).
         self.summary.setText(
-            f"<b>Imported from the local mesh:</b><br>"
-            f"apex domain <b>{self._domain or '(brand default)'}</b>"
-            + (f"<br>accounts: {listed}" if listed
+            "<b>Imported from the local mesh:</b><br>"
+            + (f"from the {html.escape(self._source)}<br>" if self._source
+               else "no saved mesh for this checkout — the defaults below<br>")
+            + f"apex domain <b>{html.escape(self._domain or '(brand default)')}</b>"
+            + (f"<br>accounts: {html.escape(listed)}" if listed
                else "<br>accounts: none found on disk (unseeded or "
-                    "terminal-managed mesh)"))
+                    "terminal-managed mesh)")
+            + f"<br>Tor onion: <b>{'on' if self._with_tor else 'off'}</b>")
+        self.tor_note.setText(localcloud_tor_note(LOCALCLOUD_PLATFORMS)
+                              if self._with_tor else "")
+        self.tor_note.setVisible(self._with_tor)
 
     def validatePage(self) -> bool:
         if not self.isComplete():
@@ -405,6 +438,16 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
             self._imported = True
             if self._domain:
                 cfg.cluster_domain = self._domain
+            # THE SAVED-MESH -> NODE-IMAGE BRIDGE (#579): a mesh that ran Tor builds
+            # node images that carry it. Set on the BASE, as the mesh-wide default the
+            # Network step owns (it shows there ticked, and can be unticked) — the
+            # worklist rows do not exist yet at this point. materialize() emits it
+            # through each platform's real channel: x86 --with-tor, rpi5 the `tor`
+            # node slug (worklist._apply_infra_services), nothing where no builder
+            # can bake it. Only ever turns it ON: a mesh without Tor leaves the
+            # operator's own choice alone.
+            if self._with_tor:
+                cfg.tor_onion_service = True
             superdomain = cfg.effective_superdomain()
             existing = {(u.username, u.domain) for u in cfg.users}
             for username, roles in self._users:
