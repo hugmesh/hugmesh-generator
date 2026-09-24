@@ -1,0 +1,280 @@
+#!/bin/bash
+# hugmesh-tor-ingress-admit — admit this node's minted .onion hosts at the cluster's
+# ingress edge (hugmesh-generator#614).
+#
+# THE GAP IT CLOSES. hugmesh-tor-reconcile publishes every onion as
+# `HiddenServicePort 443 -> <edge>` (127.0.0.1:443 on the ingress-edge node), so a Tor
+# client reaches ingress-nginx with Host/SNI `<56 chars>.onion`. The fe-gateway Ingress
+# admits only the cluster domain (`host: <domain>`, `extraHosts: ["*.<domain>"]`,
+# apps/20-gateway-fe.yaml) and both controllers run with defaultBackend disabled, so
+# without a rule for the onion Host ingress-nginx answers from its default server: a
+# 404 with its fake certificate, and the gateway is never reached. kind closes the same
+# gap at runtime with `make kind-tor` (scripts/kind-tor.sh, #577). This is the hardware
+# node's equivalent.
+#
+# WHAT IT DOES (idempotent; fail-soft — every error logs and exits 0):
+#   1. reads the onions THIS node exports — /var/lib/hugmesh/tor/hostname (the primary)
+#      and every /var/lib/hugmesh/tor/<slug>.hostname (decision 68 = A per-domain onions),
+#      both written by hugmesh-tor-reconcile — and keeps only valid v3 names
+#      (^[a-z2-7]{56}\.onion$; anything else is refused, it would reach a kubectl patch);
+#   2. reads the fe-gateway ArgoCD Application (its name + namespace come from the BAKED
+#      /var/lib/hugmesh/cluster/apps/20-gateway-fe.yaml, because a non-default brand
+#      renames it <brand>-gateway-fe) and computes its helm parameters: every parameter
+#      that is not `ingress.onionHosts[i]` is kept as-is; the onion list keeps the
+#      entries other nodes admitted, drops the ones THIS node admitted earlier and no
+#      longer exports (its record: /var/lib/hugmesh/tor-ingress/admitted), and appends
+#      this node's current onions;
+#   3. patches the Application ONLY when that set differs from the live one (a steady
+#      state is a read and nothing else), with the Application's resourceVersion in the
+#      patch, so a concurrent writer makes the patch fail with a conflict instead of
+#      silently losing an entry; the cron retries. ArgoCD re-renders the chart and the
+#      Ingress gains one rule per onion (charts/hugmesh-gateway templates/service.yaml,
+#      `ingress.onionHosts`), with the SAME class and backend as the cluster host — so
+#      the release state's `nginx-internal` class and the Anubis PoW shield both apply to
+#      the onion exactly as they apply to the clearnet name.
+#   With no exported onion the set is empty: a node that admitted onions before withdraws
+#   them, and a node that never did issues no patch at all.
+#
+# WHY A LIST OF ITS OWN (`ingress.onionHosts`, not `ingress.extraHosts[N]`): extending
+# extraHosts needs N = the length of the committed list, which lives in the
+# Application's values YAML — and a node image carries jq, not a YAML parser. The chart
+# key is never set in git, so this writer indexes from 0, and kind's extraHosts writer
+# can never collide with it.
+#
+# WHERE IT CAN RUN. The patch needs cluster-admin credentials, i.e.
+# /etc/kubernetes/admin.conf, which kubeadm writes on CONTROL-PLANE nodes only:
+#   * RELEASE_STATE=internal (the default): the edge is ingress-nginx-internal on the
+#     pki node — a control plane. Tor on pki: minted and admitted on the same node.
+#   * omnibus: control plane and edge in one.
+#   * RELEASE_STATE=public: the edge is ingress-nginx on the BACKEND node, a worker with
+#     no admin.conf. Select tor on the pki node and point it at the edge with
+#     /etc/hugmesh/tor/upstream (`<backend-ip>:443`) — the onion is then minted AND
+#     admitted on pki. A tor selected on a worker cannot admit its own onions: this
+#     agent logs that and does nothing (a transport for a worker's onions is
+#     hugmesh/hugmesh-admin-bff-api#108's node-facts path).
+#
+# DURABILITY. The device applies the BAKED Application set with no recursing root
+# (specs/cluster/bootstrap/bootstrap.sh), so nothing re-asserts the Application object
+# and the runtime parameters stay. They are dropped only when an operator re-provisions
+# (KEYS + .provision-force) or runs HUGMESH_GITOPS_ROOT_RECURSE=1 — the cron (every
+# 5 minutes, /etc/cron.d/hugmesh-tor-reconcile) puts them back.
+#
+# WHAT IT DOES NOT DO. It does not map the onion to a domain at the gateway: that is
+# hugmesh/hugmesh-gateway#38 (an onion Host -> domain map). Until the gateway knows the
+# onion, it serves it as the default domain. It never touches the onion keys, the torrc
+# or tor itself (hugmesh-tor-reconcile owns those).
+#
+# Usage: hugmesh-tor-ingress-admit [apply]   (the cron's default)
+#        hugmesh-tor-ingress-admit status    print the exported onions and whether the
+#                                            live Application admits each
+#        hugmesh-tor-ingress-admit plan      Application JSON on stdin -> the helm
+#                                            parameters `apply` would write (pure; reads
+#                                            only the exports and the admitted record)
+#
+# TEST SEAMS: HUGMESH_TOR_ROOT prefixes every filesystem path (empty on a node);
+# HUGMESH_TOR_KUBECTL names the kubectl binary (default kubectl). The hermetic suite is
+# tests/scripts/test-tor-onion-ingress.sh.
+set -uo pipefail
+
+R="${HUGMESH_TOR_ROOT:-}"
+KUBECTL="${HUGMESH_TOR_KUBECTL:-kubectl}"
+EXPORT_DIR="/var/lib/hugmesh/tor"
+STATE_DIR="/var/lib/hugmesh/tor-ingress"
+ADMITTED="${STATE_DIR}/admitted"
+LAST="${STATE_DIR}/last-status"
+KUBECONFIG_FILE="/etc/kubernetes/admin.conf"
+BAKED_APP="/var/lib/hugmesh/cluster/apps/20-gateway-fe.yaml"
+DEFAULT_APP="hugmesh-gateway-fe"
+DEFAULT_APP_NS="devops"
+LOG="${R}/var/log/hugmesh-tor-ingress-admit.log"
+ONION_RE='^[a-z2-7]{56}\.onion$'
+PARAM_RE='^ingress\.onionHosts\[[0-9]+\]$'
+NAME_RE='^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+
+log() { echo "[$(date -Is 2>/dev/null || date)] $*" >>"${LOG}" 2>/dev/null || true; }
+# log_once — a 5-minute cron that says the same thing every run would bury the log; a
+# steady-state message is written once, and again only when it changes.
+log_once() {
+    local _prev
+    _prev="$(cat "${R}${LAST}" 2>/dev/null || true)"
+    [ "${_prev}" = "$*" ] && return 0
+    log "$*"
+    mkdir -p "${R}${STATE_DIR}" 2>/dev/null || true
+    printf '%s' "$*" > "${R}${LAST}" 2>/dev/null || true
+}
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# read_onion FILE — the v3 onion in FILE (whitespace stripped), or fail.
+read_onion() {
+    local _v
+    [ -s "$1" ] || return 1
+    _v="$(tr -d '[:space:]' < "$1" 2>/dev/null)" || return 1
+    [[ "${_v}" =~ ${ONION_RE} ]] || { log "refusing '$1': not a v3 onion hostname"; return 1; }
+    printf '%s' "${_v}"
+}
+
+# own_onions — this node's exported onions as a JSON array: the primary first, then the
+# per-domain exports in slug order, de-duplicated.
+own_onions() {
+    local _list=() _o _f _k _dup
+    if _o="$(read_onion "${R}${EXPORT_DIR}/hostname")"; then _list+=("${_o}"); fi
+    for _f in "${R}${EXPORT_DIR}"/*.hostname; do
+        [ -e "${_f}" ] || continue
+        _o="$(read_onion "${_f}")" || continue
+        _dup=false
+        for _k in "${_list[@]+"${_list[@]}"}"; do [ "${_k}" = "${_o}" ] && _dup=true; done
+        ${_dup} || _list+=("${_o}")
+    done
+    if [ "${#_list[@]}" -eq 0 ]; then printf '[]'; return 0; fi
+    printf '%s\n' "${_list[@]}" | jq -R . | jq -cs .
+}
+
+# prev_onions — what THIS node admitted on its last successful write (JSON array).
+prev_onions() {
+    local _line _list=()
+    if [ -r "${R}${ADMITTED}" ]; then
+        while IFS= read -r _line || [ -n "${_line}" ]; do
+            [[ "${_line}" =~ ${ONION_RE} ]] && _list+=("${_line}")
+        done < "${R}${ADMITTED}"
+    fi
+    if [ "${#_list[@]}" -eq 0 ]; then printf '[]'; return 0; fi
+    printf '%s\n' "${_list[@]}" | jq -R . | jq -cs .
+}
+
+# app_field FIELD — metadata.name / metadata.namespace of the baked fe-gateway
+# Application (top-level `metadata:` block, two-space indent), or fail.
+app_field() {
+    local _v
+    [ -r "${R}${BAKED_APP}" ] || return 1
+    _v="$(awk -v k="$1" '
+        /^metadata:/ { m = 1; next }
+        m && /^[^[:space:]#]/ { m = 0 }
+        m && $0 ~ "^  " k ":" { sub("^  " k ":[[:space:]]*", ""); sub("[[:space:]]*(#.*)?$", ""); gsub(/["\047]/, ""); print; exit }
+    ' "${R}${BAKED_APP}" 2>/dev/null)"
+    [[ "${_v}" =~ ${NAME_RE} ]] || return 1
+    printf '%s' "${_v}"
+}
+
+# plan_params OWN PREV — Application JSON on stdin -> the full parameters list (JSON).
+plan_params() {
+    jq -c --argjson own "$1" --argjson prev "$2" --arg re "${PARAM_RE}" '
+        (.spec.source.helm.parameters // []) as $p
+        | [ $p[] | select(((.name // "") | test($re)) | not) ] as $rest
+        | [ $p[] | select((.name // "") | test($re)) | .value ] as $cur
+        # withdraw what THIS node admitted before and no longer exports; keep the rest
+        # (other nodes entries), de-duplicated in their existing order
+        | (reduce ($cur[] | select(. as $v | (($prev | index([$v])) != null and ($own | index([$v])) == null) | not)) as $v
+              ([]; if index([$v]) != null then . else . + [$v] end)) as $kept
+        | ($kept + [ $own[] | select(. as $v | ($kept | index([$v])) == null) ]) as $hosts
+        | $rest + [ range(0; $hosts | length) as $i | {name: "ingress.onionHosts[\($i)]", value: $hosts[$i]} ]
+    '
+}
+
+# same_params A B — equal as SETS of {name,value} (order is not a change worth a patch,
+# and treating it as one would let two writers that order differently patch forever).
+same_params() {
+    [ "$(jq -cS 'sort_by(.name, (.value | tostring))' <<<"$1")" = "$(jq -cS 'sort_by(.name, (.value | tostring))' <<<"$2")" ]
+}
+
+kc() { "${KUBECTL}" --kubeconfig "${R}${KUBECONFIG_FILE}" "$@"; }
+
+resolve_app() {
+    APP_NAME="$(app_field name)" || { APP_NAME="${DEFAULT_APP}"; log "no readable fe-gateway Application name in ${BAKED_APP}; using ${APP_NAME}"; }
+    APP_NS="$(app_field namespace)" || APP_NS="${DEFAULT_APP_NS}"
+}
+
+cmd_plan() {
+    have jq || { echo "jq is required" >&2; return 1; }
+    local _own _prev
+    _own="$(own_onions)" || return 1
+    _prev="$(prev_onions)" || return 1
+    plan_params "${_own}" "${_prev}"
+}
+
+cmd_apply() {
+    have jq || { log_once "jq not installed — cannot compute the onion admission"; return 0; }
+    local _own _prev _app _cur _new _rv _body _n
+    _own="$(own_onions)" || { log "could not read the exported onions"; return 0; }
+    _prev="$(prev_onions)" || _prev='[]'
+    _n="$(jq 'length' <<<"${_own}")"
+    if [ "${_own}" = '[]' ] && [ "${_prev}" = '[]' ]; then
+        log_once "no exported onion and nothing admitted earlier — nothing to do"
+        return 0
+    fi
+    if [ ! -r "${R}${KUBECONFIG_FILE}" ]; then
+        log_once "${_n} exported onion(s) but no ${KUBECONFIG_FILE} (not a control-plane node) — cannot admit them here; select tor on the pki/omnibus node, or see hugmesh/hugmesh-admin-bff-api#108"
+        return 0
+    fi
+    have "${KUBECTL}" || { log_once "kubectl not installed — cannot admit ${_n} onion(s)"; return 0; }
+    resolve_app
+    if ! _app="$(kc -n "${APP_NS}" get application "${APP_NAME}" -o json 2>/dev/null)"; then
+        log_once "cannot read Application ${APP_NS}/${APP_NAME} yet (API or ArgoCD not up?) — retrying on the next run"
+        return 0
+    fi
+    if [ "$(jq -r 'if (.spec.source.helm | type) == "object" then "ok" else "no" end' <<<"${_app}" 2>/dev/null)" != ok ]; then
+        log_once "Application ${APP_NS}/${APP_NAME} has no spec.source.helm (multi-source or not the gateway chart?) — refusing to patch it"
+        return 0
+    fi
+    _cur="$(jq -c '.spec.source.helm.parameters // []' <<<"${_app}")" || return 0
+    _new="$(plan_params "${_own}" "${_prev}" <<<"${_app}")" || { log "computing the parameters failed — nothing patched"; return 0; }
+    if same_params "${_cur}" "${_new}"; then
+        log_once "Application ${APP_NS}/${APP_NAME} already admits this node's ${_n} onion(s) — nothing to do"
+        _record "${_own}"
+        return 0
+    fi
+    _rv="$(jq -r '.metadata.resourceVersion // ""' <<<"${_app}")"
+    _body="$(jq -cn --arg rv "${_rv}" --argjson p "${_new}" \
+        'if $rv == "" then {spec:{source:{helm:{parameters:$p}}}}
+         else {metadata:{resourceVersion:$rv}, spec:{source:{helm:{parameters:$p}}}} end')"
+    if ! kc -n "${APP_NS}" patch application "${APP_NAME}" --type merge -p "${_body}" >/dev/null 2>&1; then
+        log "patching Application ${APP_NS}/${APP_NAME} failed (a concurrent writer, RBAC or the API) — nothing recorded; retrying on the next run"
+        return 0
+    fi
+    kc -n "${APP_NS}" annotate application "${APP_NAME}" argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
+    _record "${_own}"
+    log "Application ${APP_NS}/${APP_NAME}: ingress.onionHosts now $(jq -c '[.[] | select(.name | startswith("ingress.onionHosts[")) | .value]' <<<"${_new}") (this node: ${_own})"
+    printf '' > "${R}${LAST}" 2>/dev/null || true
+    return 0
+}
+
+# _record OWN — remember what this node has admitted (so a later run can withdraw it).
+_record() {
+    mkdir -p "${R}${STATE_DIR}" 2>/dev/null || true
+    jq -r '.[]' <<<"$1" > "${R}${ADMITTED}.tmp" 2>/dev/null \
+        && mv -f "${R}${ADMITTED}.tmp" "${R}${ADMITTED}" 2>/dev/null || true
+}
+
+cmd_status() {
+    have jq || { echo "jq is required" >&2; return 1; }
+    local _own _app _o
+    _own="$(own_onions)"
+    if [ "${_own}" = '[]' ]; then echo "no exported onion on this node"; return 0; fi
+    resolve_app
+    _app=""
+    if [ -r "${R}${KUBECONFIG_FILE}" ] && have "${KUBECTL}"; then
+        _app="$(kc -n "${APP_NS}" get application "${APP_NAME}" -o json 2>/dev/null)" || _app=""
+    fi
+    for _o in $(jq -r '.[]' <<<"${_own}"); do
+        if [ -z "${_app}" ]; then
+            echo "${_o} unknown (no readable Application ${APP_NS}/${APP_NAME} from this node)"
+        elif jq -e --arg o "${_o}" --arg re "${PARAM_RE}" \
+               'any(.spec.source.helm.parameters[]?; ((.name // "") | test($re)) and .value == $o)' <<<"${_app}" >/dev/null; then
+            echo "${_o} admitted"
+        else
+            echo "${_o} NOT admitted"
+        fi
+    done
+}
+
+case "${1:-apply}" in
+    apply)
+        # One writer at a time on this node (the cron and a by-hand run).
+        if have flock; then
+            mkdir -p "${R}${STATE_DIR}" 2>/dev/null || true
+            if { exec 9>"${R}${STATE_DIR}/.lock"; } 2>/dev/null; then flock -n 9 || exit 0; fi
+        fi
+        cmd_apply; exit 0 ;;
+    plan)   cmd_plan ;;
+    status) cmd_status ;;
+    *) echo "usage: $0 [apply|plan|status]" >&2; exit 2 ;;
+esac
