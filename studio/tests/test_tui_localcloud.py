@@ -21,10 +21,14 @@ def _isolated_state_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
 
 
+_REAL_IDENTITY = lc.local_mesh_identity     # the real reader, before it is canned
+
+
 @pytest.fixture(autouse=True)
 def _canned_local_mesh(monkeypatch):
+    # (domain, users, with_tor) — the canned mesh ran no Tor.
     monkeypatch.setattr(lc, "local_mesh_identity",
-                        lambda _gd: (CANNED_DOMAIN, list(CANNED_USERS)))
+                        lambda _gd: (CANNED_DOMAIN, list(CANNED_USERS), False))
 
 
 def _at_gate() -> journey.Journey:
@@ -150,3 +154,89 @@ def test_any_other_mode_commit_lifts_the_restriction():
     text = "\n".join(j.lines())
     assert "Abbreviated flow" not in text
     assert "chromebook" in text                     # the full catalog is back
+
+
+# ── #579: a saved mesh that ran Tor reaches the node images (TUI face) ─────────────
+import os  # noqa: E402
+import socket  # noqa: E402
+
+from hugmesh_studio.core import package_catalog as pc  # noqa: E402
+from hugmesh_studio.core import saved_meshes as sm  # noqa: E402
+from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig  # noqa: E402
+from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry  # noqa: E402
+
+_GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _save(tmp_path, services, with_tor=False):
+    cfg = LocalMeshBootstrapConfig(env="prod", cluster_domain="saved.example.org",
+                                   out_dir=str(tmp_path / "keys"), services=services,
+                                   with_tor=with_tor)
+    rec = sm.SavedMesh(id=sm.new_id(), label="tor-mesh", generator_dir=_GEN,
+                       hostname=socket.gethostname(), config=cfg.to_dict())
+    assert sm.save(rec)
+
+
+def test_real_reader_reads_tor_and_domain_from_the_saved_record(tmp_path):
+    _save(tmp_path, ("tuwunel", "tor"))
+    ident = _REAL_IDENTITY(_GEN)
+    assert ident.domain == "saved.example.org"
+    assert ident.with_tor is True
+    assert "tor-mesh" in ident.source
+
+
+def test_real_reader_follows_the_services_tuple_not_the_legacy_flag(tmp_path):
+    _save(tmp_path, ("tuwunel",), with_tor=True)
+    assert _REAL_IDENTITY(_GEN).with_tor is False
+
+
+def test_real_reader_ignores_another_checkouts_record(tmp_path):
+    _save(tmp_path, ("tor",))
+    other = tmp_path / "other-checkout"
+    other.mkdir()
+    ident = _REAL_IDENTITY(str(other))
+    assert ident.with_tor is False and ident.source == ""
+
+
+def test_tui_gate_bridges_a_tor_mesh_into_x86_and_rpi5_node_argv(tmp_path, monkeypatch):
+    _save(tmp_path, ("tuwunel", "tor"))
+    monkeypatch.setattr(lc, "local_mesh_identity", _REAL_IDENTITY)
+    j = journey.Journey(_GEN)
+    j.feed("")
+    j.feed("2")
+    assert j.slug == "localcloud"
+    text = "\n".join(j.lines())
+    assert "Tor onion: on" in text and "cannot carry Tor: jetson" in text
+    j.feed("y")
+    assert j.cfg.tor_onion_service is True
+    wl = WorklistConfig(base=j.cfg, entries=[
+        WorklistEntry(role="backend", platform="x86"),
+        WorklistEntry(role="backend", platform="rpi5")])
+    got = {e.id: c for e, c in wl.materialize()}
+    x86, rpi = got["backend.x86"], got["backend.rpi5"]
+    assert "--with-tor" in x86.to_cli_args()
+    argv = rpi.to_cli_args()
+    svcs = argv[argv.index("--optional-services") + 1].split()
+    assert "tor" in svcs and {"akkoma", "tuwunel", "phpbb"} <= set(svcs)
+    assert "net-vpn/tor" in pc.adhoc_atoms(x86)
+    assert "net-vpn/tor" in pc.adhoc_atoms(rpi)
+
+
+def test_apply_gate_without_tor_leaves_tor_alone():
+    j = journey.Journey(".")
+    j.cfg.tor_onion_service = "off"
+    lc.apply_gate(j, "mesh.example.org", [])
+    assert j.cfg.tor_onion_service == "off"
+
+
+def test_real_reader_falls_back_on_a_malformed_newest_record(tmp_path):
+    # A record from_dict cannot read (services must be a sequence) must not raise out
+    # of the TUI's gate: the defaults come back and no source is claimed.
+    rec = sm.SavedMesh(id=sm.new_id(), label="broken", generator_dir=_GEN,
+                       hostname=socket.gethostname(),
+                       config={"env": "prod", "cluster_domain": "bad.example.org",
+                               "services": 42})
+    assert sm.save(rec)
+    ident = _REAL_IDENTITY(_GEN)
+    assert ident.source == "" and ident.with_tor is False
+    assert ident.domain != "bad.example.org"

@@ -662,7 +662,16 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # computed:
 #     178 of 201 suites are named by a pull_request-triggered workflow
 # The ungated SET pin moves 22 -> 23 (the mechanism wrapper).
-PREMERGE_BASELINE="${GUARD_PREMERGE:-178}"
+#
+# 178 -> 179 on 2026-09-23 (RE-MEASURED on the MERGE of tor/saved-mesh-bridge-20260923,
+# hugmesh-generator PR #600, with origin/main f3963e86 — which already carried the 178
+# above): tests/scripts/test-studio-tor-domain-pins.sh (#591) joined the gate, named in
+# .github/workflows/studio-tests.yml's pytest job (a pull_request workflow), so the
+# denominator moves by one (201 -> 202). MEASURED by RUNNING this file on that merged
+# tree (GUARD_PREMERGE=0), not computed:
+#     179 of 202 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 23 — the new suite was never in it.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-179}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED
