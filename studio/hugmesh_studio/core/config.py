@@ -194,6 +194,10 @@ MODE_SKIPPED_PAGES = {
     # "domain_services" (#495) is NOT skipped in cloud: a cloud client image IS built
     # around its --domains tie, its Domains table is unconditional, and the domain it
     # carries is exactly the one whose services the operator must answer for.
+    # "vault" STAYS skipped in cloud (#588, decided 2026-09-24): the builder ignores
+    # --vault-addr on a client role and the per-domain CA is recorded-only, so the
+    # step would offer knobs a client build discards. The Domains step says where a
+    # client's trust really comes from instead (CLIENT_CA_INHERITANCE_NOTE).
     "cloud": ("idp", "worklist", "domains_choice", "users_choice",
               "vault"),                                       # single image, admin plane via key-zip
     # mesh USED to skip "branding" outright; it no longer can: the page now also hosts
@@ -903,6 +907,32 @@ def vault_field_error(addr: str, external_addr: str = "") -> str:
 # the SUBJECT + EXPIRY are read only when python-cryptography happens to be installed
 # (it is NOT a studio requirement — the urwid/TUI precedent: degrade, never hard-fail).
 CA_CERT_MAX_BYTES = 1 << 20             # 1 MiB: a CA bundle is kilobytes; refuse a blob
+
+#: WHERE A MESH DESKTOP CLIENT GETS ITS CERTIFICATE AUTHORITIES (#588). Cloud mode
+#: keeps skipping the Secrets store step and keeps the Domains table's Base CA column
+#: hidden, and says THIS on its Domains step instead (both faces render this one
+#: string, parity-pinned), because the two alternatives were dead knobs measured on
+#: the builders, not guessed:
+#:
+#: * ``bake_vault_conf`` (build-x86-host-stage4.sh) warns and RETURNS on a client role
+#:   — "--vault-addr given for a client role ... ignoring" — so a Vault address offered
+#:   to a client build is discarded by the builder;
+#: * the per-domain Base CA is recorded-only everywhere (no builder parses a CA flag).
+#:
+#: What really decides a client's trust is keys-provision's bulk import
+#: (specs/etc/keys-provision/provision.sh: every KEYS/certs/*.crt and *.pem copied to
+#: /usr/local/share/ca-certificates, then update-ca-certificates) — mesh-wide, from the
+#: stick, never per domain. studio/tests/test_client_ca_inheritance.py pins all three
+#: facts against the scripts, so this sentence goes red the day one of them changes.
+CLIENT_CA_INHERITANCE_NOTE = (
+    "Certificate authorities on a Mesh desktop client: the image carries none of its "
+    "own, so there is no per-domain CA to pick here and the Secrets store step is "
+    "skipped. At first boot keys-provision imports every certificate in the KEYS "
+    "stick's certs/ folder (*.crt and *.pem — the mesh's cluster-ca.crt among them) "
+    "into the system trust store, so this client trusts exactly the certificate "
+    "authorities on the stick you provision it with, for every domain it is tied to. "
+    "(A Vault address would be ignored too: the builder drops --vault-addr on a "
+    "client role — Vault/ESO seeding is a cluster-node first-boot step.)")
 _PEM_CERT_RE = re.compile(
     r"-----BEGIN CERTIFICATE-----\s*(?P<body>[A-Za-z0-9+/=\s]+?)\s*"
     r"-----END CERTIFICATE-----")
