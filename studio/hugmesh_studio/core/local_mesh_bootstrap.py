@@ -1494,11 +1494,18 @@ class LocalMeshIdentity(NamedTuple):
     domain, the Studio-provisioned accounts ``[(username, roles)]``, whether it ran
     the Tor onion, and one line saying WHERE that came from (a saved record's label,
     or "" for the defaults). A NamedTuple, so ``domain, users, with_tor = ...`` still
-    unpacks the first three and a canned 3-tuple builds one."""
+    unpacks the first three and a canned 3-tuple builds one.
+
+    ``mesh_domains`` (#636): the saved mesh's domain rows as a
+    ``core.local_mesh_domains.LocalMeshDomains`` (``imported_mesh_domains``) — row 0 the
+    mesh's own domain, then every added domain with its title, sign-in and per-domain
+    services, and the record's own reviewed markers — or None when the record carries
+    none, which imports exactly what the apex-only import did."""
     domain: str
     users: list
     with_tor: bool = False
     source: str = ""
+    mesh_domains: object = None
 
 
 def saved_mesh_source(rec) -> str:

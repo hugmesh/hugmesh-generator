@@ -48,6 +48,9 @@ from ...core.config import (
 from ...core.local_mesh_bootstrap import (
     LocalMeshBootstrap, LocalMeshIdentity, localcloud_tor_note, saved_mesh_source,
 )
+from ...core.local_mesh_domains import (
+    apply_imported_domains, imported_domains_lines, imported_mesh_domains,
+)
 from ...core.seeded_credentials import load_roster
 
 # The abbreviated worklist (issue #50): ONLY the laptop and the cluster-node image
@@ -86,7 +89,7 @@ def _person_roles(roles) -> list[str]:
 
 def local_mesh_identity(generator_dir: str) -> LocalMeshIdentity:
     """The local mesh's importable identity: ``(apex domain, [(username, roles)...],
-    with_tor, source)`` — a :class:`LocalMeshIdentity`.
+    with_tor, source, mesh_domains)`` — a :class:`LocalMeshIdentity`.
 
     READ-ONLY and offline (plain file reads, no docker/compose probe — this runs in
     ``initializePage`` and must never stall the GUI). The mesh's CONFIG comes from the newest saved-mesh record
@@ -112,8 +115,13 @@ def local_mesh_identity(generator_dir: str) -> LocalMeshIdentity:
         if u.username not in seen:
             seen.add(u.username)
             users.append((u.username, _person_roles(u.roles)))
+    # #636: EVERY domain the saved mesh carries, not just the apex — the rows its
+    # Domains step recorded (title, sign-in, per-domain services) and which of them
+    # its Domain services step walked. None for a one-domain / pre-#494 record.
     return LocalMeshIdentity(domain, users, bool(boot.cfg.effective_with_tor()),
-                             saved_mesh_source(rec))
+                             saved_mesh_source(rec),
+                             imported_mesh_domains(boot.cfg) if rec is not None
+                             else None)
 
 
 def local_k8s_running(generator_dir: str) -> bool:
@@ -167,6 +175,7 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         self._users: list[tuple[str, list[str]]] = []
         self._with_tor = False       # the imported mesh ran the Tor onion (#579)
         self._source = ""            # which saved record the import read ("" = none)
+        self._mesh_domains = None    # the saved mesh's domain rows (#636), or None
         self.worker: _MeshWorker | None = None
         self._k8s_probe: _K8sGateProbe | None = None
         self._running = False        # a `make kind-down` is in flight
@@ -384,6 +393,7 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         ident = LocalMeshIdentity(*local_mesh_identity(self.wiz.generator_dir))
         self._domain, self._users = ident.domain, list(ident.users)
         self._with_tor, self._source = bool(ident.with_tor), str(ident.source or "")
+        self._mesh_domains = ident.mesh_domains
         # Re-establish the k8s truth too — unless a teardown is still streaming
         # (the operator can walk Back and forward while `make kind-down` runs, and
         # that run, not a fresh probe, owns the gate until it finishes).
@@ -403,7 +413,11 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
             + (f"<br>accounts: {html.escape(listed)}" if listed
                else "<br>accounts: none found on disk (unseeded or "
                     "terminal-managed mesh)")
-            + f"<br>Tor onion: <b>{'on' if self._with_tor else 'off'}</b>")
+            + f"<br>Tor onion: <b>{'on' if self._with_tor else 'off'}</b>"
+            + "".join(f"<br>{'domains: ' if i == 0 else '&nbsp;' * 9}"
+                      f"{html.escape(line)}"
+                      for i, line in enumerate(
+                          imported_domains_lines(self._mesh_domains))))
         self.tor_note.setText(localcloud_tor_note(LOCALCLOUD_PLATFORMS)
                               if self._with_tor else "")
         self.tor_note.setVisible(self._with_tor)
@@ -438,6 +452,11 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
             self._imported = True
             if self._domain:
                 cfg.cluster_domain = self._domain
+            # EVERY DOMAIN, not just the apex (#636) — after cluster_domain, which is
+            # how the import tells the mesh's own row from the added ones. Shared with
+            # the TUI (core.local_mesh_domains.apply_imported_domains), so the two faces
+            # cannot import a different set of domains.
+            apply_imported_domains(cfg, self._mesh_domains)
             # THE SAVED-MESH -> NODE-IMAGE BRIDGE (#579): a mesh that ran Tor builds
             # node images that carry it. Set on the BASE, as the mesh-wide default the
             # Network step owns (it shows there ticked, and can be unticked) — the
