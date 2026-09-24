@@ -35,7 +35,7 @@ the daemon through the linked `tor` service. `hugmesh-tor-reconcile` is an OpenR
 ordered `before tor`, plus a cron drop-in with an `@reboot` entry (after a 90 s delay) and a
 daily one. It never execs tor itself, and it converges whatever state it finds:
 
-| tor is …                       | cron / by-hand run | boot oneshot (`RC_SVCNAME=hugmesh-tor-reconcile`) |
+| tor is …                       | cron, or `/usr/sbin/hugmesh-tor-reconcile` run directly | the OpenRC service — at boot, or `rc-service hugmesh-tor-reconcile restart` (`RC_SVCNAME=hugmesh-tor-reconcile`) |
 |--------------------------------|--------------------|-----------------------------------------------------|
 | running, torrc unchanged        | nothing | nothing |
 | running, torrc changed          | `rc-service tor reload` (SIGHUP; falls back to `kill -HUP` on `/run/tor/tor.pid`) | the same reload |

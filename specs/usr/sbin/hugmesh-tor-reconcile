@@ -28,8 +28,8 @@
 #                                          to kill -HUP <pidfile>) — Tor re-reads the
 #                                          torrc and mints any new onion keypair;
 #        tor running + torrc unchanged  -> nothing (the 24h cron is a no-op);
-#        tor crashed (OpenRC status 32) -> `rc-service tor restart`   } cron / by-hand
-#        tor stopped                    -> `rc-service tor start`     } runs ONLY
+#        tor crashed (OpenRC status 32) -> `rc-service tor restart`   } cron / the binary
+#        tor stopped                    -> `rc-service tor start`     } run directly ONLY
 #      it NEVER restarts a healthy tor. (The cron therefore also starts a tor an admin
 #      stopped by hand — unlink the cron, or deselect tor, to keep it down.)
 #   4. export each stable .onion hostname: the mesh's primary onion to
