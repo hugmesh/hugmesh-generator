@@ -8,11 +8,12 @@
 # hugmesh-tor service block, the published onion hostname outlived the container
 # that served it (the Studio announced a dead .onion after every stack-down), the
 # `make stack-onion` the Studio and the docs told people to run did not exist, and
-# no e2e reached the onion at all. And a plain-http onion cannot boot the SPA: the
-# gateway's CSP upgrade-insecure-requests upgrades every subresource to https
-# (measured 2026-09-23 over a live onion), so the onion must serve :443 too.
+# no e2e reached the onion at all. The onion serves :443 too, because https is the
+# door (a secure context, the node's :443; docs/TOR-HIDDEN-SERVICE.md "Why :443"),
+# and with ANUBIS=1 its http :80 door needs the gate's cookies without Secure
+# (T16, #627).
 #
-# WHAT IS GRADED, AND HOW. tests/stack/tor_flip_wiring.py holds the model — 15
+# WHAT IS GRADED, AND HOW. tests/stack/tor_flip_wiring.py holds the model — 16
 # checks, run against the real tree here and against staged mutants below. It
 # executes wherever it can: make expands STACK_ENV/the profile; the entrypoint is
 # RUN against a stub tor (publish, stop, crash); both compose healthchecks are
@@ -64,7 +65,7 @@ if [ "${REAL_RC}" -eq 3 ]; then
   exit 1
 fi
 if [ "${REAL_RC}" -eq 0 ]; then
-  ok "the repo tree satisfies the TOR=1 contract (15 checks)"
+  ok "the repo tree satisfies the TOR=1 contract (16 checks)"
 else
   bad "the repo tree does NOT satisfy the TOR=1 contract (see above)"
 fi
@@ -167,7 +168,7 @@ PY
 
 control N4-anubis-ignored T4-env <<PY
 ${MUT_LIB}
-sub("Makefile", "\$(if \$(strip \$(ANUBIS)),\$(if \$(strip \$(TOR_ONION_UPSTREAM)),, TOR_ONION_UPSTREAM='\$(STACK_TOR_ANUBIS_UPSTREAM)'),)", "")
+sub("Makefile", "\$(if \$(strip \$(ANUBIS)),\$(if \$(strip \$(TOR_ONION_UPSTREAM)),, TOR_ONION_UPSTREAM='\$(STACK_TOR_ANUBIS_UPSTREAM)')\$(STACK_TOR_ANUBIS_COOKIE_ENV),)", "")
 PY
 
 control N5-caller-overridden T4-env <<PY
@@ -379,6 +380,53 @@ PY
 control N47-kind-scenarios-in-the-compose-lane T12-e2e-lane <<PY
 ${MUT_LIB}
 sub("tests/e2e/run.sh", "then TAGS='@via:onion and @env:docker'; else", "then TAGS='@via:onion'; else")
+PY
+
+# ── #627: the Anubis gate's cookies on the onion's http door (T16) ───────────
+control N48-cookie-flip-unthreaded T16-anubis-onion-cookie <<PY
+${MUT_LIB}
+sub("Makefile", "TOR_ONION_UPSTREAM='\$(STACK_TOR_ANUBIS_UPSTREAM)')\$(STACK_TOR_ANUBIS_COOKIE_ENV),),)", "TOR_ONION_UPSTREAM='\$(STACK_TOR_ANUBIS_UPSTREAM)'),),)")
+PY
+
+control N49-cookie-compose-literal T16-anubis-onion-cookie <<PY
+${MUT_LIB}
+sub("tests/stack/compose.local.yaml", "      COOKIE_SECURE: \${ANUBIS_COOKIE_SECURE:-true}\n", "      COOKIE_SECURE: \"true\"\n")
+PY
+
+control N50-cookie-compose-absent T16-anubis-onion-cookie <<PY
+${MUT_LIB}
+sub("tests/stack/compose.local.yaml", "      COOKIE_SECURE: \${ANUBIS_COOKIE_SECURE:-true}\n", "")
+PY
+
+control N51-cookie-insecure-everywhere T16-anubis-onion-cookie <<PY
+${MUT_LIB}
+sub("tests/stack/compose.local.yaml", "\${ANUBIS_COOKIE_SECURE:-true}", "\${ANUBIS_COOKIE_SECURE:-false}")
+PY
+
+control N52-cookie-caller-overridden T16-anubis-onion-cookie <<PY
+${MUT_LIB}
+sub("Makefile", "STACK_TOR_ANUBIS_COOKIE_ENV := \$(if \$(strip \$(ANUBIS_COOKIE_SECURE)),, ANUBIS_COOKIE_SECURE='false')", "STACK_TOR_ANUBIS_COOKIE_ENV :=  ANUBIS_COOKIE_SECURE='false'")
+PY
+
+control N53-cookie-flip-on-tor-alone T16-anubis-onion-cookie <<PY
+${MUT_LIB}
+sub("Makefile", "TOR_ONION_UPSTREAM='\$(STACK_TOR_ANUBIS_UPSTREAM)')\$(STACK_TOR_ANUBIS_COOKIE_ENV),),)", "TOR_ONION_UPSTREAM='\$(STACK_TOR_ANUBIS_UPSTREAM)'),)\$(STACK_TOR_ANUBIS_COOKIE_ENV),)")
+PY
+
+control N54-cookie-var-renamed-one-side T16-anubis-onion-cookie <<PY
+${MUT_LIB}
+sub("tests/stack/compose.local.yaml", "\${ANUBIS_COOKIE_SECURE:-true}", "\${ANUBIS_SECURE_COOKIE:-true}")
+PY
+
+# ── #624: a sibling module an onion step file imports is held to T15 too ─────
+control N55-sibling-module-fetches T15-onion-steps-proxied <<PY
+${MUT_LIB}
+sub("tests/e2e/steps/onion-session.ts", "/** ROLE_FOO_BAR -> foo_bar", "export const leak = () => fetch('https://localhost:8488/bff/session');\n\n/** ROLE_FOO_BAR -> foo_bar")
+PY
+
+control N56-sibling-module-newcontext T15-onion-steps-proxied <<PY
+${MUT_LIB}
+sub("tests/e2e/steps/onion-session.ts", "/** ROLE_FOO_BAR -> foo_bar", "export const leak = (r: any) => r.newContext({});\n\n/** ROLE_FOO_BAR -> foo_bar")
 PY
 
 # ── the mechanism wrapper (#585): its verdict logic, not only its existence ──

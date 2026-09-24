@@ -200,15 +200,44 @@ make stack-e2e-tor           # the @via:onion sign-in, THROUGH Tor (tests/e2e/ru
 make stack-tor-mechanism-check   # host-tor mechanism proof: no docker, needs the public Tor network
 ```
 
-**Why `:443`, and why https.** The gateway sends `Content-Security-Policy: … upgrade-insecure-requests`
-on every response. Measured on 2026-09-23 against a live onion with Playwright's Chromium: a page
-entered over `http://<onion>/` had its same-origin script upgraded to `https://<onion>/` and,
-with only `:80` published, the script failed (`ERR_SOCKS_CONNECTION_FAILED`) and the SPA never
-booted; with `:443` published but the page still entered over http, the upgraded `fetch()` became
-cross-origin and failed (`ERR_FAILED`); entered over `https://<onion>/`, script and fetch both
-succeeded. So the door is `https://<onion>/`, served by the TLS front. Its certificate is the
-stack's own (minted for the cluster domain), so Tor Browser warns once. Whether Tor Browser —
-which treats `.onion` as a secure context — behaves differently on the http port is unmeasured.
+**Why `:443`, and why https.** The door is `https://<onion>/`, served by the TLS front, for
+these measured reasons (hugmesh-generator#628, live onion, 2026-09-24):
+
+- **A secure context.** Chromium does not treat a `.onion` origin as trustworthy. Over
+  `http://<onion>/`, `window.isSecureContext` is `false`, the shell's
+  `Cross-Origin-Opener-Policy` is ignored ("the URL's origin was untrustworthy"), and any
+  `Secure` cookie the page is sent is dropped.
+- **Parity with the node.** A baked node publishes its onion on `:443` too (the node contract
+  above), so the compose lane, the kind lane and a device are entered the same way.
+- **The session cookie.** user-bff marks `bff_session` `Secure` by default
+  (`APP_SESSION_COOKIE_SECURE`, default `true` in its `application.yml`). The compose stack sets
+  it `false` (`compose.local.yaml`, `hugmesh-user-bff-api`), which is the only reason a sign-in
+  over `http://<onion>/` works locally: `POST http://<onion>/bff/login` answered
+  `Set-Cookie: bff_session=…; HTTPOnly; SameSite=Lax` with no `Secure`. A mesh with the
+  production default would lose the session on the http door.
+- **The Anubis gate.** With `ANUBIS=1 TOR=1` the http door is the proof-of-work gate, whose
+  cookies needed their own fix to work there (#627, below).
+
+**What is not the reason: CSP `upgrade-insecure-requests`.** Earlier versions of this page
+said the gateway's CSP upgrades every subresource of a page entered over http, so the SPA
+could not boot over `http://<onion>/`. On the live stack that is false. The SPA documents
+(`/`, `/login`) carry host-shell nginx's nonce CSP, which has no `upgrade-insecure-requests`,
+on both onion ports; the gateway passes that header through. The gateway's own CSP, which does
+end in `upgrade-insecure-requests` (hugmesh-gateway `SecurityConfig`), appears only on
+responses the gateway generates itself, such as the anonymous `401` for `/user` or
+`/social/matrix`, and those never govern the document. In Chromium through the SOCKS client,
+`http://<onion>/` booted the SPA to `/login` with no request upgraded to https. The
+2026-09-23 measurement that suggested otherwise used a test server that put the gateway's
+CSP on the document itself.
+
+**HSTS on the http door.** `http://<onion>/` does send `Strict-Transport-Security`
+(host-shell nginx adds it `always`, and nothing strips it on `:80`; the TLS front strips it on
+`:443`). Chromium ignores HSTS received over plain http (RFC 6797 §8.1), so a second http
+visit stays http. Tor Browser's handling of it is unmeasured.
+
+The TLS front's certificate is the stack's own (minted for the cluster domain), so Tor
+Browser warns once. Whether Tor Browser, which treats `.onion` as a secure context, behaves
+differently on the http port is unmeasured.
 
 **What the onion Host resolves to.** The gateway maps an unknown `Host` to the default domain,
 so the onion serves the default brand (hugmesh-gateway#38 tracks an explicit onion mapping).
@@ -218,7 +247,19 @@ TLS front, which forwards to the fe-gateway directly (#586). tor resolves both u
 once, when it parses its torrc, so recreating `hugmesh-fe-gateway` or `hugmesh-https-front` with a
 new container IP needs `hugmesh-tor` recreated too.
 
-The contract is gated offline by `tests/stack/test-tor-flip-wiring.sh` (15 checks, each with a
+**The Anubis cookie on the http door (#627).** Anubis sets its cookies `Secure; SameSite=None`
+by default. On `http://<onion>/` Chromium drops them, returns to `pass-challenge` without them,
+and Anubis answers `500` ("Oh noes!"; its log says "user has cookies disabled"), so the gate
+could not be passed. `make stack-up ANUBIS=1 TOR=1` therefore exports
+`ANUBIS_COOKIE_SECURE='false'` (Makefile `STACK_TOR_ENV`), which `hugmesh-anubis` reads as
+`COOKIE_SECURE`: the cookies lose `Secure` and SameSite drops from `None` to `Lax`. Every other
+bring-up keeps Anubis's default, and a caller's own `ANUBIS_COOKIE_SECURE` wins. The localhost
+door (`:8923`) works either way, because Chromium treats localhost as secure. Not yet exercised
+through the real onion: the live check is Chromium via the SOCKS client on `http://<onion>/`
+ending on the HugMesh `/login` page rather than "Oh noes!", on a stack brought up with this
+change. Tor Browser is a person's check.
+
+The contract is gated offline by `tests/stack/test-tor-flip-wiring.sh` (16 checks, each with a
 mutant that must turn it red).
 
 ## Kind lane — a host tor fronting the kind node (`make kind-tor`)
