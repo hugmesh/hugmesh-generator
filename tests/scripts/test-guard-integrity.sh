@@ -806,11 +806,20 @@ PREMERGE_UNGATED=(
   # five reds has a control that plants the fix and requires it to go green
   # (A4 NC10e, B2 NC21, B3 NC22, C5b NC23, C7 NC14).
   tests/scripts/test-selected-services-only.sh
-  # Needs the hugmesh-admin-bff-api checkout for its fifth surface (the
-  # controller's OptionalServiceRegistry). It reports INCOMPLETE and FAILS without
-  # it rather than checking four surfaces of five, so a hosted runner that cannot
-  # clone the org-private repo would go red for a missing clone, not a defect.
-  # Gated post-merge by .gitlab-ci.yml's lint:optional-service-slug-closure.
+  # RED ON MAIN on real cross-repo defects (re-measured 2026-09-23, #584):
+  # meshbridge is in the generator's CRD enum + seed CRs while the controller's
+  # OptionalServiceRegistry keeps it NOT_TOGGLEABLE for a reason (NOT_IN_CRD_ENUM)
+  # that has been false since 2026-08-26, and character-forge's selfHeal flag is
+  # stale — both filed as hugmesh-admin-bff-api#106; control 20 plants that fix and
+  # goes green. The text that stood here until 2026-09-23 gave only the checkout
+  # reason and HID a dead parser: the gate had exited 3 INCOMPLETE on every run
+  # since admin-bff b8ed324 widened the Java Entry record from 3 to 5 fields, 23
+  # minutes after the checker landed, and nothing moved its regex with it. That
+  # parser is now pinned by a fixture self-test (section P) that needs no checkout.
+  # It STILL needs the hugmesh-admin-bff-api checkout for its fifth surface, which a
+  # hosted pre-merge runner cannot clone. Its only automated runner is
+  # .gitlab-ci.yml's lint:optional-service-slug-closure — nothing on the GitHub side
+  # runs it; `make e2e-ungated` runs it locally. Leave it listed until #106 lands.
   tests/scripts/test-optional-service-slug-closure.sh
   tests/scripts/test-service-env-contract.sh
   tests/stack/test-gateway-auth-flag-parity.sh
