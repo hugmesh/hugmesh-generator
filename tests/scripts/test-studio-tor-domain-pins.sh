@@ -68,6 +68,12 @@ NAMED=(
   tests/test_worklist_tor_fold.py
   tests/test_fleet_tor.py
   tests/test_tui_domain_services.py
+  # #587 / #588 / #621 (studio-routes lane): the Fleet + Go-Live per-domain surfaces,
+  # the cloud client's CA inheritance, and the --with-tor client-guard pin
+  tests/test_fleet_domains.py
+  tests/test_golive_domains.py
+  tests/test_client_ca_inheritance.py
+  tests/test_services_section.py
 )
 FAMILIES=(
   "tests/test_domain_services*.py"
