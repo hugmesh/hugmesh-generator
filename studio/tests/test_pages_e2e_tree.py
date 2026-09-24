@@ -357,6 +357,22 @@ def test_uncovered_services_have_no_checkbox_and_carry_their_reason(dlg, catalog
     assert {"owncast", "tube", "wiki", "character-studio"} <= seen
 
 
+def test_the_tor_row_names_its_kind_lane_door_and_checks_it(dlg):
+    """#577: tor has no compose spec, so it stays a NO COVERAGE row with its reason
+    FIRST — but the row also states the kind lane's onion door, checked against the
+    tree. The fake checkout has no tor-onion-kind.feature, so the line must say the
+    door is MISSING rather than vouch for it."""
+    rows = [it for it in _walk(_group(dlg, GROUP_UNCOVERED))
+            if dlg.node_of(it).get("kind") == NODE_SERVICE
+            and dlg.node_of(it).get("slug") == "tor"]
+    assert len(rows) == 1, "tor is not a NO COVERAGE row"
+    kids = [rows[0].child(i).text(0) for i in range(rows[0].childCount())]
+    assert "NO spec" in kids[0], kids
+    door = [k for k in kids[1:] if k.startswith("kind:")]
+    assert len(door) == 1, kids
+    assert "make kind-tor" in door[0] and "MISSING" in door[0], door
+
+
 def test_no_uncovered_slug_can_ever_reach_the_selection(dlg, catalogue):
     """Belt and braces: even after checking everything checkable, no service slug is
     in the compiled run."""

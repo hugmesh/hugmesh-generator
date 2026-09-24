@@ -644,7 +644,17 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # this file on the tree with the new suite wired, not assumed (GUARD_PREMERGE=0):
 #     176 of 198 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 22 — the new suite was never in it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-176}"
+#
+# 176 -> 177 on 2026-09-23: tests/scripts/test-kind-tor.sh joined the gate (wired
+# into shell-suites.yml's extras job, which carries helm + make, and .gitlab-ci.yml's
+# lint:kind-tor), pinning the kind lane's .onion front door — scripts/kind-tor.sh's
+# `HiddenServicePort 443 127.0.0.1:8443`, its read-modify-write helm-parameter patch
+# and the fe-gateway Ingress that patch renders (hugmesh-generator#577, decision
+# 67 = B). MEASURED by RUNNING this file on the tree with the new suite wired, not
+# assumed (GUARD_PREMERGE=0):
+#     177 of 199 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22 — the new suite was never in it.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-177}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED

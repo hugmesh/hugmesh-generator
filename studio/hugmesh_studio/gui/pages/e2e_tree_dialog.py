@@ -550,6 +550,8 @@ class E2ETreeDialog(QtWidgets.QDialog):
                                "reason": c.reason or ec.UNCOVERED_REASON,
                                "search": c.slug.lower()})
             self._plain_child(it, c.reason or ec.UNCOVERED_REASON)
+            for line in ec.lane_door_lines(self.generator_dir, c.slug):
+                self._plain_child(it, line)
         g2 = self._group(GROUP_UNREACHABLE)
         if not unreachable:
             self._plain_child(g2, "every catalogued service runs on a lane this suite drives.")
@@ -561,6 +563,8 @@ class E2ETreeDialog(QtWidgets.QDialog):
                                "reason": c.reason or ec.UNREACHABLE_REASON,
                                "search": c.slug.lower()})
             self._plain_child(it, c.reason or ec.UNREACHABLE_REASON)
+            for line in ec.lane_door_lines(self.generator_dir, c.slug):
+                self._plain_child(it, line)
 
     def _add_orphan_shot_group(self) -> None:
         shots = list(self.cat.orphan_screenshots)

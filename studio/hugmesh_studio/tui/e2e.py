@@ -30,7 +30,14 @@ from __future__ import annotations
 
 import shlex
 
+import os
+
+from ..core import e2e_catalogue
 from ..core import e2e_environments as env_mod
+
+#: The generator checkout this Studio runs from (studio/hugmesh_studio/tui -> ../../..).
+_GENERATOR_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir))
 
 __all__ = ["E2EScreen", "DEVICE_LANE_KEY", "environment_lines", "plan_lines",
            "device_lane_lines"]
@@ -75,6 +82,10 @@ def plan_lines(env_id: str) -> list[str]:
         "",
         f"START it (nothing here does): {plan.start_hint}",
     ]
+    doors = e2e_catalogue.lane_door_lines_for_lane(_GENERATOR_DIR, env_id)
+    if doors:
+        out += ["", "also on this environment (its own door, its own command):"]
+        out += [f"  - {d}" for d in doors]
     if plan.refusals:
         out += ["", "REFUSED:"] + [f"  - {r}" for r in plan.refusals]
     out += [

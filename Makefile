@@ -391,7 +391,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e stack-e2e-list \
         kind-images kind-up kind-e2e kind-e2e-mfa kind-mfa-posture kind-down kind-honesty \
-        kind-metrics-check kind-addon-check \
+        kind-metrics-check kind-addon-check kind-tor kind-tor-down kind-tor-status kind-e2e-tor kind-tor-check \
         view view-list view-stop view-trust view-untrust view-honesty \
         scan-hardware sessions-list sessions-show sessions-artifacts sessions-delete
 
@@ -1308,6 +1308,51 @@ kind-e2e-mfa: playwright-deps ## run the MFA e2e (spec 29) against the kind clus
 
 kind-mfa-posture: ## print the kind gateway's LIVE APP_MFA_ENABLED (fail-closed; never guesses)
 	@bash scripts/kind-mfa-posture.sh
+
+# ── kind .onion front door (hugmesh-generator#577, operator decision 67 = B) ──
+# A HOST tor, run as YOU (no sudo, no system service, no /etc/tor), publishes the
+# kind node's host ports as a v3 onion: HiddenServicePort 443 -> 127.0.0.1:8443
+# (kind-local.yaml's TLS door, the same shape as the node contract in
+# specs/usr/sbin/hugmesh-tor-reconcile) and 80 -> 127.0.0.1:8080 (force-ssl-
+# redirected to https by the fe-gateway Ingress). The minted onion is admitted on
+# that Ingress by ONE appended helm parameter, ingress.extraHosts[N], written
+# read-modify-write so kind-up's className / force-ssl-redirect / MFA=1
+# parameters survive. State (keys, torrc, pid, log) lives in the gitignored
+# tests/stack/.run/kind-tor/; the keys are kept across kind-tor-down, so the
+# address is stable. A `make kind-up` re-run rewrites the gateway's helm
+# parameters and drops the onion rule — `make kind-tor` again restores it, and
+# kind-tor-status says when it is missing. Full notes: docs/TOR-HIDDEN-SERVICE.md.
+#
+#   make kind-up && make kind-images && make kind-tor && make kind-e2e-tor
+#
+# KIND_TOR_SOCKS_PORT (default 9052, NOT 9050, which a system tor or the compose
+# lane's tor client may hold) is the client-side SOCKS port; a busy port is refused.
+kind-tor: ## publish the kind front door as a v3 .onion via a HOST tor run as you (no sudo); run after kind-up
+	bash scripts/kind-tor.sh up
+
+kind-tor-down: ## stop the kind lane's host tor and drop its onion from the Ingress (onion keys are KEPT)
+	bash scripts/kind-tor.sh down
+
+kind-tor-status: ## is the kind lane's tor alive, and does the Ingress admit its onion? (non-zero when not)
+	bash scripts/kind-tor.sh status
+
+# The @env:kind @via:onion scenario (tests/e2e/features/platform/tor-onion-kind.feature).
+# The onion is read from the LIVE tor (`kind-tor.sh onion` refuses a leftover
+# hostname) and becomes the @env:kind baseURL; SNAP_PROXY is that tor's SOCKS port.
+# The browser-side proxy plumbing (playwright.config.ts honouring SNAP_PROXY) is the
+# compose-lane Tor work, hugmesh-generator#576: until it lands the scenario FAILS
+# naming it, rather than reaching the plain kind door and passing.
+kind-e2e-tor: ## run the @env:kind @via:onion e2e through the kind onion (needs kind-up + kind-tor)
+	@$(E2E_READY) || exit 2
+	@onion="$$(bash scripts/kind-tor.sh onion)" || exit 1; \
+	  bash scripts/kind-tor.sh status || exit 1; \
+	  socks="$$(bash scripts/kind-tor.sh socks)"; \
+	  echo "==> kind onion door: https://$${onion}/ via $${socks}"; \
+	  SNAP_KIND_ONION="$${onion}" SNAP_ENV_KIND_BASE_URL="https://$${onion}" SNAP_PROXY="$${socks}" \
+	    bash tests/e2e/run.sh --bdd --env kind --tags '@env:kind and @via:onion'
+
+kind-tor-check: ## offline: pin the kind onion door (torrc 443 -> 127.0.0.1:8443, the Ingress extraHost render, no sudo)
+	bash tests/scripts/test-kind-tor.sh
 
 # The BEHAVIOURAL half of the metrics-server add-on. Asserting that
 # 01-metrics-server.yaml is in an array proves the string is in the array and
