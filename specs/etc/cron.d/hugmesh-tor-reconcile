@@ -1,14 +1,22 @@
 # hugmesh-tor-reconcile — Tor v3 onion-service refresh timer (24h default).
 #
 # The TIMER half of the onion-service reconcile (the OpenRC oneshot runs the agent
-# once at boot; this cron entry re-runs it daily). cronie reads /etc/cron.d (the same
-# mechanism the egress-VPN + backup + device-registry-sync timers use). Installed ONLY
-# when the 'tor' optional service is selected (PR gate).
+# once at boot; this file re-runs it). cronie reads /etc/cron.d (the same mechanism
+# the egress-VPN + backup + device-registry-sync timers use). Installed ONLY when the
+# 'tor' optional service is selected (PR gate).
 #
-# The agent is FAIL-SOFT + idempotent: the v3 onion keypair is minted once on first
-# boot and PERSISTS (off-git, tor:tor) so the .onion address is stable; the daily run
-# just re-asserts the managed torrc + re-exports the hostname (and would re-mint only
-# if the keypair were ever lost). Initial mint is at boot, not here.
+# The agent is FAIL-SOFT + idempotent: the v3 onion keypair is minted once, by tor,
+# on first boot and PERSISTS (off-git, tor:tor) so the .onion address is stable.
+#
+# @reboot — the boot oneshot runs BEFORE tor and never starts it (a nested start
+# would stall the boot on the oneshot's own OpenRC lock), so on the FIRST boot no
+# keypair exists yet when it exits. This run, after a delay, finds tor running (OpenRC
+# started it after the oneshot), waits for the fresh keypair and EXPORTS the hostname
+# — without it the first-boot hostname would appear only at the next midnight run.
+# If tor is somehow still down by then, this run (no RC_SVCNAME) starts it.
+# daily   — re-asserts the managed torrc, starts a stopped/crashed tor (this also
+# restarts a tor an admin stopped by hand) and re-exports the hostnames.
 #
 # Field order: min hour dom month dow user command
+@reboot root sleep 90; /usr/sbin/hugmesh-tor-reconcile >> /var/log/hugmesh-tor-reconcile.log 2>&1
 0 0 * * * root /usr/sbin/hugmesh-tor-reconcile >> /var/log/hugmesh-tor-reconcile.log 2>&1

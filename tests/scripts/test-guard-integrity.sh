@@ -644,7 +644,25 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # this file on the tree with the new suite wired, not assumed (GUARD_PREMERGE=0):
 #     176 of 198 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 22 — the new suite was never in it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-176}"
+#
+# 176 -> 177 on 2026-09-23: tests/scripts/test-tor-node-contract.sh (hugmesh-generator
+# #583, decision 70 = B on #347) landed on disk in the same commit that wires it into
+# shell-suites.yml's alpine job (beside the other builder --print-plan suites), so the
+# denominator moves too (198 -> 199). MEASURED by RUNNING this file on the tree with the
+# suite wired (GUARD_PREMERGE=0), not computed:
+#     177 of 199 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22 — the new suite was never in it.
+#
+# 177 -> 178 on 2026-09-23 (RE-MEASURED on the MERGE of tor/compose-e2e-20260923,
+# hugmesh-generator PR #598, with origin/main b5901697 — which already carried the
+# 177 above): tests/stack/test-tor-flip-wiring.sh (#576/#581/#586) joined the gate in
+# shell-suites.yml's debian job, and tests/stack/test-tor-onion-mechanism.sh (#585)
+# landed on disk OUTSIDE it (recorded in PREMERGE_UNGATED below), so the denominator
+# moves by two (199 -> 201). MEASURED by RUNNING this file on that merged tree, not
+# computed:
+#     178 of 201 suites are named by a pull_request-triggered workflow
+# The ungated SET pin moves 22 -> 23 (the mechanism wrapper).
+PREMERGE_BASELINE="${GUARD_PREMERGE:-178}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED
@@ -824,6 +842,12 @@ PREMERGE_UNGATED=(
   tests/scripts/test-service-env-contract.sh
   tests/stack/test-gateway-auth-flag-parity.sh
   tests/stack/test-m2-bootstrap.sh
+  # Needs a host tor binary and the PUBLIC Tor network for minutes (it mints a real
+  # v3 onion and fetches it back over Tor); no shell-suites image carries tor.
+  # Without them it exits 2 SKIPPED-LOUDLY, never 0. Run it with
+  # `make stack-tor-mechanism-check`. Its own exit-code contract IS gated: T14 of
+  # tests/stack/test-tor-flip-wiring.sh drives it against stub harnesses (#585).
+  tests/stack/test-tor-onion-mechanism.sh
   tests/stack/test-web-locales-wiring.sh
 )
 if [ -n "${GUARD_PREMERGE_UNGATED+x}" ]; then UNGATED_TEXT="${GUARD_PREMERGE_UNGATED}"
