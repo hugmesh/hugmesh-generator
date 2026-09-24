@@ -159,7 +159,14 @@ nothing. A transport for a worker's onions belongs to hugmesh/hugmesh-admin-bff-
 **Durability.** A device applies its baked Application set and has no recursing root
 (`specs/cluster/bootstrap/bootstrap.sh`), so nothing re-asserts the Application object and
 the runtime parameters stay. An operator re-provision (`KEYS` + `.provision-force`) or
-`HUGMESH_GITOPS_ROOT_RECURSE=1` drops them, and the next cron run puts them back.
+`HUGMESH_GITOPS_ROOT_RECURSE=1` may drop them (a client-side `kubectl apply` of the baked
+Application, which carries no parameters, leaves them alone); either way the next cron
+run puts them back.
+
+**Orphaned onions.** Only the node that admitted an onion withdraws it. If that node is
+rebuilt with a new onion key or retired, its old onion stays an Ingress host: a harmless
+Host rule that points at the gateway, which no Tor client can reach any more. Remove it by
+hand from the fe-gateway Application's `ingress.onionHosts[i]` parameters.
 
 **What admission does not do.** It does not map the onion Host to a domain. The gateway
 does that (hugmesh/hugmesh-gateway#38, landed): until something registers the onion in its
@@ -171,7 +178,10 @@ reaches the gateway too, but it serves its own domain only once its
 **Verified offline, not live.** `tests/scripts/test-tor-onion-ingress.sh` renders the
 chart as ArgoCD does (`helm template` with the helm parameters). With the hostname file
 present, the Ingress admits the onion; without it, the Ingress admits no `.onion` host.
-It also drives the agent against a stub `kubectl`. No booted node has run it yet: the
+The onion rule routes path `/` (Prefix) with the cluster host's exact backend. It
+also drives the agent's `apply` and its real `status` (what the QEMU live leg grades on)
+against a stub `kubectl` that, like the real one, refuses a patch without
+`--type merge`. No booted node has run it yet: the
 live proof is a pki node built `--with-tor`, where Tor Browser at `https://<onion>/`
 shows the certificate warning and then the login page.
 
@@ -199,7 +209,14 @@ is not selected. It used to sit in the auto-synced `manifests/networkpolicy`, wh
 main shipped it to every cluster whatever the image selected (hugmesh-generator#617).
 `tests/scripts/test-optional-netpol-autosync.sh` fails if an optional service's
 NetworkPolicy is served from git by an Application every build keeps. It runs the real
-build prune and compares the git render with the baked one.
+build prune and compares the git render with the baked one, and it renders the directory
+08b's own `spec.source.path` names.
+
+Two consequences of the manual sync: on a tor build the `networkpolicy-tor` Application
+shows OutOfSync until someone syncs it (the 08a precedent). And a tracking cluster that
+already carries `tor-onion-marked` from the old auto-synced path loses it at the next
+08-networkpolicy prune, and gets it back only when 08b is synced by hand. The policy is
+inert either way.
 
 ## SELinux
 

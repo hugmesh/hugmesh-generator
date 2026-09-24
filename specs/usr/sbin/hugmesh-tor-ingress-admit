@@ -55,9 +55,11 @@
 #
 # DURABILITY. The device applies the BAKED Application set with no recursing root
 # (specs/cluster/bootstrap/bootstrap.sh), so nothing re-asserts the Application object
-# and the runtime parameters stay. They are dropped only when an operator re-provisions
-# (KEYS + .provision-force) or runs HUGMESH_GITOPS_ROOT_RECURSE=1 — the cron (every
-# 5 minutes, /etc/cron.d/hugmesh-tor-reconcile) puts them back.
+# and the runtime parameters stay. An operator re-provision (KEYS + .provision-force) or
+# HUGMESH_GITOPS_ROOT_RECURSE=1 may drop them (a client-side apply of the baked
+# Application leaves them) — the cron (every 5 minutes, /etc/cron.d/hugmesh-tor-reconcile)
+# puts them back. Only the node that admitted an onion withdraws it: a rebuilt or retired
+# node's old onion stays admitted (a harmless Host rule) until removed by hand.
 #
 # WHAT IT DOES NOT DO. It does not map the onion to a domain at the gateway: that is
 # hugmesh/hugmesh-gateway#38 (an onion Host -> domain map). Until the gateway knows the
