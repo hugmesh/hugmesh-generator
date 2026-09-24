@@ -69,6 +69,8 @@
 #                        lane's tor client may hold; a busy port is refused, never shared
 #   KIND_TOR_WAIT        seconds `up` waits for the onion to answer (default 300)
 #   KIND_TOR_INGRESS_WAIT seconds `up` waits for the Ingress to list the onion (default 300)
+#   KIND_TOR_POLL_S      seconds between `up`'s readiness polls (default 5 for the Ingress,
+#                        6 for the onion probe; the offline guard sets 0)
 #   KIND_CLUSTER_NAME    default hugmesh-local; kubectl always runs with
 #                        --context kind-${KIND_CLUSTER_NAME}, so this can never patch
 #                        whatever cluster the current context happens to name
