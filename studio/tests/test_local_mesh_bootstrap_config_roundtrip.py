@@ -31,7 +31,11 @@ def _full_cfg(**over) -> LocalMeshBootstrapConfig:
         source_dir="/src", web_locales=("de", "fr"), login_theme_css=":root{}",
         idp="oidc", idp_issuer="https://id.example.org", idp_client_id="cid",
         idp_jwks="https://id.example.org/jwks", own_idp_domains=("a.org",),
-        kind_addons=("metrics-server",))
+        kind_addons=("metrics-server",),
+        # #494: the recorded domain rows — a tuple of JSON objects, the one field
+        # whose items are not scalars, so "every field round-trips" has to carry one
+        domains=({"name": "a.org", "title": "A", "idp": "own",
+                  "optional_services": ["games"]},))
     base.update(over)
     return LocalMeshBootstrapConfig(**base)
 

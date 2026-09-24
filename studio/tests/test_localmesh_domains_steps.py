@@ -259,8 +259,9 @@ def test_the_start_refuses_an_unwalked_domain_and_names_the_step(wiz, monkeypatc
     assert started == []
     text = ctl.status.text()
     assert "acme.example" in text and "team.example" in text
-    assert ctl.mesh_domains.own_name not in text.split("—")[0].split(":", 1)[1] \
-        if ":" in text else True
+    # the own domain WAS shown (it opens the walk), so the refusal must not name it
+    named = text.split(" — ", 1)[1].split(". ", 1)[0].split(", ")
+    assert named == ["acme.example", "team.example"], named
     assert "start this mesh" in text
     assert LOCAL_MESH_REMEDY in text                        # the step to go back to
     assert "image flow" not in text                         # not the image-flow remedy
