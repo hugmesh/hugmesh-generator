@@ -40,6 +40,7 @@ from ..core.config import (
     ImageConfig, ca_cert_error, derive_hostname, describe_ca_cert,
     enter_mesh_defaults, vault_field_error,
 )
+from ..core.domain_services import services_page_applies
 from ..core.validate import validate_domain_name
 from ..core.worklist import (
     WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
@@ -168,8 +169,9 @@ PENDING_NOTE = ("this step is not yet ported to the TUI — configure it in the 
 #: DEPLOY) are both hosted here and only the MDM/cloud drivers remain stubbed.
 #: "e2e" (:mod:`.e2e`) is hosted for the same reason: the GUI grew a real page, so a
 #: stub here would be the TUI breaking a promise the menu makes on both faces.
+# "localmesh" is HOSTED since #494 (tui/localmesh.py: its choice screen and its
+# Domains / Domain services steps; the rest of the route is still GUI-only, #519).
 _SIDE_FLOW_STUB = {
-    "localmesh": "Local Docker mesh",
     "phone": "MDM phone",
     "quest": "MDM Quest headset",
     "deploy": "Cloud deploy",
@@ -959,6 +961,7 @@ class Journey:
         from .domains_step import DomainsScreen
         from .e2e import E2EScreen
         from .localcloud import LocalCloudScreen
+        from .localmesh import LocalMeshScreen
         from .meshemu import MeshEmuScreen
         from .qemu import QemuScreen
         self.generator_dir = generator_dir
@@ -974,7 +977,7 @@ class Journey:
         self.effect: str | None = None   # "sessions" -> the face runs its review
         self.overlay = None              # e.g. the Themes screen (a screen object)
         screens = [
-            WelcomeScreen(), ModeScreen(),
+            WelcomeScreen(), ModeScreen(), LocalMeshScreen(),
             LocalCloudScreen(), E2EScreen(), QemuScreen(), MeshEmuScreen(),
             IdpScreen(), RoleScreen(), WorklistScreen(),
             YesNoStep("domains_choice", "Domains",
@@ -1065,15 +1068,15 @@ class Journey:
                 continue
             if slug in MODE_SKIPPED_PAGES.get(cfg.mode, ()):
                 continue
-            if slug in ("domains", "domain_services") and cfg.mode == "mesh" \
+            if slug == "domains" and cfg.mode == "mesh" \
                     and not cfg.additional_domains:
                 continue
-            # #495: nothing to ask when no domain is named, and skipping is safe
-            # because the gate has nothing to refuse either (the GUI page's
-            # applies_to says the same thing in the same words).
-            if slug == "domain_services" and not [
-                    d for d in (cfg.domains or [])
-                    if (getattr(d, "name", "") or "").strip()]:
+            # #495/#494: the per-domain services step is walked exactly when the
+            # GUI page's applies_to says so — the SAME core predicate, so a mesh's
+            # OWN domain gets its page on the default path here too (#589, decision
+            # 69), and a flow that names no domain skips it (nothing to record,
+            # nothing for the gate to refuse).
+            if slug == "domain_services" and not services_page_applies(cfg):
                 continue
             if slug == "users" and cfg.mode == "mesh" \
                     and not cfg.configure_users:

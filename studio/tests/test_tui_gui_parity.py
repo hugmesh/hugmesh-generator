@@ -19,7 +19,8 @@ pytest.importorskip("hugmesh_studio.gui.qt",
 from hugmesh_studio.core import e2e_environments as env_mod           # noqa: E402
 from hugmesh_studio.core import emulation as em                       # noqa: E402
 from hugmesh_studio.core import qemu_tests as qt                      # noqa: E402
-from hugmesh_studio.core.config import VAULT_FIELDS, WIZARD_PAGE_SLUGS  # noqa: E402
+from hugmesh_studio.core.config import (                               # noqa: E402
+    VAULT_FIELDS, WIZARD_PAGE_SLUGS, Domain, ImageConfig)
 from hugmesh_studio.core.platform_info import HostInfo                 # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                    # noqa: E402
 from hugmesh_studio.gui.pages import _theme_editor                     # noqa: E402
@@ -31,6 +32,7 @@ from hugmesh_studio.gui.qt import QtWidgets                            # noqa: E
 from hugmesh_studio.tui import domains_step, journey, themes           # noqa: E402
 from hugmesh_studio.tui import e2e as tui_e2e                          # noqa: E402
 from hugmesh_studio.tui import localcloud as tui_lc                    # noqa: E402
+from hugmesh_studio.tui import localmesh as tui_lm                     # noqa: E402
 from hugmesh_studio.tui import qemu as tui_qemu                        # noqa: E402
 
 from _helpers import advance_to                                        # noqa: E402
@@ -314,3 +316,62 @@ def test_worklist_screen_title_matches_the_gui_page(wiz):
     page = next(wiz.page(i) for i in wiz.pageIds()
                 if isinstance(wiz.page(i), wizard_mod.WorklistPage))
     assert journey.WorklistScreen.title == page.title() == "Choose the images to build"
+
+
+# ── #494 (decisions 69 + 71): domains and their services on both faces ──────────────
+def _localmesh_choice_page(wiz):
+    return next(wiz.page(i) for i in wiz.pageIds()
+                if isinstance(wiz.page(i), wizard_mod.LocalMeshChoicePage))
+
+
+def test_localmesh_choice_cards_match_the_gui_page(wiz):
+    page = _localmesh_choice_page(wiz)
+    assert [(cid, title) for cid, title, _ in page.choices] == \
+        list(tui_lm.LOCALMESH_CHOICES)
+    checked = [cid for cid, btn in page._buttons.items() if btn.isChecked()]
+    assert checked == [tui_lm.LOCALMESH_DEFAULT_CHOICE]
+
+
+def test_localmesh_domain_steps_are_hosted_on_both_faces(wiz):
+    """The GUI expands the slot into Domains + Domain services steps right after Env
+    & brand; the TUI hosts the same two steps (not a stub) over the same state."""
+    slugs = [s for s, _c in wizard_mod._LOCALMESH_STEPS]
+    assert slugs.index("localmesh_domain_services") == \
+        slugs.index("localmesh_domains") + 1
+    j = journey.Journey(GENERATOR_DIR)
+    screen = j.screen_for("localmesh")
+    assert isinstance(screen, tui_lm.LocalMeshScreen)
+    assert not isinstance(screen, journey.PendingSideFlow)
+    lm = wiz.page(wiz._page_ids["localmesh"])
+    for note in (lm.domain_services.lane_note.text(), tui_lm.LANE_NOTE):
+        assert "NOT what decides which compose profiles come up" in note
+
+
+def test_the_own_row_reads_the_same_on_both_faces():
+    assert (domains_step.OWN_APPLIES, domains_step.OWN_IDP, domains_step.OWN_CA) == \
+        (gui_domains._OWN_APPLIES, gui_domains._OWN_IDP, gui_domains._OWN_CA)
+
+
+@pytest.mark.parametrize("cfg", [
+    ImageConfig(mode="mesh"),                                       # default path
+    ImageConfig(mode="mesh", cluster_domain=""),
+    ImageConfig(mode="mesh", cluster_domain="", additional_domains=True,
+                domains=[Domain(name="a.example")]),
+    ImageConfig(mode="mesh", additional_domains=True,
+                domains=[Domain(name="a.example")]),
+    ImageConfig(mode="cloud", role="desktop", domains=[Domain(name="a.example")]),
+    ImageConfig(mode="cloud", role="desktop"),
+], ids=["mesh-default", "mesh-no-apex", "mesh-rows-no-apex", "mesh-rows",
+        "cloud-row", "cloud-empty"])
+def test_both_faces_walk_the_services_step_on_the_same_flows(wiz, cfg):
+    """The GUI page's applies_to and the TUI walk decide from the SAME predicate
+    (core services_page_applies), and both walk the same domains, own domain first."""
+    page = wiz.page(wiz._page_ids["domain_services"])
+    j = journey.Journey(GENERATOR_DIR, cfg=cfg)
+    j.slug = "domains"
+    j.advance()
+    assert (j.slug == "domain_services") == page.applies_to(cfg)
+    if page.applies_to(cfg):
+        from hugmesh_studio.core.domain_services import domain_names_for_services
+        assert [d.name for d in j.screen().domains(j)] == \
+            domain_names_for_services(cfg)

@@ -51,7 +51,7 @@ __all__ = [
     "carried_over_slugs", "describe", "describe_carried_over",
     "CARRIED_OVER_NOTE", "reviewed_names", "unconfigured_domains",
     "gate_applies", "gate_reason", "record_reviewed",
-    "implicit_own_domain", "domain_names_for_services",
+    "implicit_own_domain", "domain_names_for_services", "services_page_applies",
     "services_summary", "domain_summary",
     "restart_gate_reason",
     "ACTION_IMAGE_BUILD", "ACTION_MESH_START", "ACTION_BUILD_RESTART",
@@ -426,6 +426,28 @@ def domain_names_for_services(cfg) -> list[str]:
             out.append(name)
     return out
 
+
+
+def services_page_applies(cfg) -> bool:
+    """Whether the per-domain services step is part of this flow — ONE predicate for
+    both faces (``gui/pages/domain_services.DomainServicesPage.applies_to`` and the
+    TUI walk in ``tui/journey.Journey.advance``), so the two cannot disagree about
+    which flows walk it.
+
+    On EVERY mesh flow with a cluster domain (the mesh's own domain always has a
+    services page — :func:`implicit_own_domain`, #494 / #589 decision 69), and
+    otherwise wherever the Domains table is, when it names at least one domain.
+
+    Emission-neutral when False, in the strong sense the wizard's nextId() ALL-OPTIONS
+    guard asks for: nothing is named, so there is nothing to record and nothing for
+    the build/mesh-start gate to refuse either — skipping cannot smuggle a domain past
+    it. Standalone is skipped statically (MODE_SKIPPED_PAGES) on both faces."""
+    if implicit_own_domain(cfg):
+        return True
+    if not superadmin_plane_applies(cfg):
+        return False
+    return any((getattr(d, "name", "") or "").strip()
+               for d in (getattr(cfg, "domains", None) or []))
 
 def services_summary(selected, reviewed: bool) -> str:
     """ONE line for a domain's recorded services, and the ONLY place its wording lives.

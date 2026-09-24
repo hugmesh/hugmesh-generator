@@ -93,14 +93,13 @@ from __future__ import annotations
 from ..qt import Qt, QtWidgets
 from ..styles import MUTED, WARN, muted
 from ._scroll import scrollable
-from ...core.config import superadmin_plane_applies
 from ...core.domain_services import (
     DOMAIN_CATALOGUE, ENFORCEMENT_NOTE, OTHER_SCOPE_HEADERS, SCOPE_BINDS,
     SCOPE_DOMAIN, SCOPE_IMAGE, SCOPE_LABELS, SCOPE_NODE, SCOPE_WHERE,
     carried_over_slugs, describe, describe_carried_over, domain_names_for_services,
     grouped_domain_catalogue, implicit_own_domain, normalise_slugs,
     other_scope_rows, record_reviewed, reviewed_names, scope_of,
-    unconfigured_domains,
+    services_page_applies, unconfigured_domains,
 )
 
 #: Table columns. ``_COL_SCOPE`` (#497) says what each row BINDS, on the row itself and
@@ -564,13 +563,9 @@ class DomainServicesPage(QtWidgets.QWizardPage, DomainServicesBody):
         guard asks for: a cloud node names no domain, so there is nothing to record,
         nothing to write to cfg — and nothing for the build/mesh-start gate to refuse
         either, so skipping cannot smuggle a domain past it. Standalone is skipped
-        statically (MODE_SKIPPED_PAGES)."""
-        if implicit_own_domain(cfg):
-            return True
-        if not superadmin_plane_applies(cfg):
-            return False
-        return any((getattr(d, "name", "") or "").strip()
-                   for d in (getattr(cfg, "domains", None) or []))
+        statically (MODE_SKIPPED_PAGES). The predicate is core's
+        (``services_page_applies``) so the TUI walk asks the same question."""
+        return services_page_applies(cfg)
 
     def initializePage(self):
         cfg = self.wiz.cfg
