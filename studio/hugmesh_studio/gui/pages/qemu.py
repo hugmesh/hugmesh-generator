@@ -58,7 +58,11 @@ WHAT THIS PAGE OFFERS
      current page can continue and would otherwise leave FINISH on screen with no
      Next to press; and the arm must SAY what Next will do (``chain_note``), because
      every other widget on this page belongs to the other arm and is hidden, so
-     picking it otherwise blanks the page.
+     picking it otherwise blanks the page. And the arm CHOOSES WHICH BUILD: this route
+     never passes the Mode screen, so it used to inherit whatever ``cfg.mode`` an
+     earlier flow had committed; ``build_mode_box`` preselects that mode, NAMES it as
+     inherited, and ``validatePage`` commits the pick through the Mode screen's own
+     ``commit_image_mode``.
 
   3. READ THE VERDICTS HONESTLY — the results table is one row per PLANNED row, fed
      by ``emulation.status()``. A planned row that produced no verdict says
@@ -119,7 +123,7 @@ import threading
 
 from ..qt import Qt, QtWidgets
 from .. import console
-from ..styles import MUTED, WARN
+from ..styles import MUTED, WARN, muted
 from ...core import emulation, qemu_tests
 from ...core.domain_services import session_boot_gate_reason
 from ...core.local_stack_node import LocalStackNode
@@ -128,6 +132,7 @@ from ._mesh_monitor_widget import MeshMonitorSection
 from ._scroll import scrollable
 from ._widgets import label_finish_as_exit
 from .localmesh import _MeshWorker
+from .mode import IMAGE_MODE_TITLES, commit_image_mode
 
 #: Result-table columns. Symbolic, never hardcoded at a call site (progress.py's
 #: rule), with the headers beside them so a column cannot be labelled as its
@@ -244,6 +249,31 @@ class QemuPage(QtWidgets.QWizardPage):
         self.chain_note.setTextFormat(Qt.TextFormat.RichText)
         self.chain_note.setVisible(False)
         sg.addWidget(self.chain_note)
+        # WHICH BUILD "Build first" continues into — chosen HERE, explicitly. This
+        # route reaches the image flow without passing the Mode screen (its "Run e2e
+        # tests" card commits no cfg.mode), so without this the build took whatever
+        # mode an EARLIER flow had committed: a mesh walked this morning turned "test
+        # a desktop image" into a mesh worklist, and a fresh Studio's default sent a
+        # mesh operator down the standalone desktop pages. The inherited mode is
+        # preselected AND named, so nothing changes silently; validatePage commits the
+        # pick through the Mode screen's own commit_image_mode.
+        self.build_mode_box = QtWidgets.QGroupBox("Which image build should run first?")
+        bm = QtWidgets.QVBoxLayout(self.build_mode_box)
+        self.build_mode_group = QtWidgets.QButtonGroup(self)
+        self.build_mode_radios: dict[str, QtWidgets.QRadioButton] = {}
+        for mid in ("mesh", "cloud", "standalone"):
+            rb = QtWidgets.QRadioButton(IMAGE_MODE_TITLES[mid])
+            rb.setProperty("mode", mid)
+            self.build_mode_group.addButton(rb)
+            self.build_mode_radios[mid] = rb
+            bm.addWidget(rb)
+        self.build_mode_note = QtWidgets.QLabel("")
+        self.build_mode_note.setWordWrap(True)
+        self.build_mode_note.setStyleSheet(muted())
+        bm.addWidget(self.build_mode_note)
+        self.build_mode_box.setVisible(False)
+        self.build_mode_group.buttonToggled.connect(self._build_mode_changed)
+        sg.addWidget(self.build_mode_box)
         lay.addWidget(self.source_group)
 
         # ── session picker + the rows it implies ────────────────────────────────
@@ -577,6 +607,7 @@ class QemuPage(QtWidgets.QWizardPage):
     def initializePage(self):
         self._refresh_docker_note()
         self._refresh_kvm_note()
+        self._seed_build_mode()
         self._reload_sessions()
         self._source_changed()
 
@@ -632,10 +663,47 @@ class QemuPage(QtWidgets.QWizardPage):
         again BuildPage reads as unvisited, this method re-arms, and the bug survives
         unchanged. (Measured: the trace still showed qemu.py validatePage as the writer.)
         """
+        if self.build_first.isChecked():
+            # The build this arm continues into takes the mode picked HERE (see
+            # build_mode_box), committed exactly as the Mode screen commits it — BEFORE
+            # the wizard asks nextId(), which reads cfg.mode to pick the flow.
+            commit_image_mode(self.wiz, self.selected_build_mode())
         if getattr(self.wiz, "qemu_device_tests_owned_by_build", False):
             return True
         self.wiz.cfg.qemu_device_tests = self.build_first.isChecked()
         return True
+
+    # ── the build-first arm's explicit mode ─────────────────────────────────────
+    def selected_build_mode(self) -> str:
+        btn = self.build_mode_group.checkedButton()
+        return str(btn.property("mode")) if btn is not None else self.wiz.cfg.mode
+
+    def _seed_build_mode(self):
+        """Preselect the mode the configuration is CARRYING — and say so — every time
+        the page is entered, so a pick is never silently a leftover."""
+        inherited = self.wiz.cfg.mode
+        rb = self.build_mode_radios.get(inherited)
+        if rb is not None:
+            rb.setChecked(True)
+        self._inherited_mode = inherited
+        self._build_mode_changed()
+
+    def _build_mode_changed(self, *_):
+        try:
+            picked = self.selected_build_mode()
+            inherited = getattr(self, "_inherited_mode", "")
+            title = IMAGE_MODE_TITLES.get(picked, picked)
+            if picked == inherited:
+                text = (f"Preselected: {title} — the build mode this Studio session "
+                        "is already carrying (from an earlier flow or a loaded "
+                        "configuration), NOT a choice made for this test. Pick the "
+                        "build these tests should run against.")
+            else:
+                text = (f"Next continues into the {title} build (the session was "
+                        f"carrying {IMAGE_MODE_TITLES.get(inherited, inherited)}).")
+            self.build_mode_note.setText(text)
+        except Exception:                    # noqa: BLE001 — PyQt6 qFatals on a slot raise
+            pass
 
     # ── docker / kvm notes ──────────────────────────────────────────────────────
     def _refresh_docker_note(self):
@@ -740,6 +808,7 @@ class QemuPage(QtWidgets.QWizardPage):
                   self.avc_combo):
             w.setVisible(existing)
         self.chain_note.setVisible(not existing)
+        self.build_mode_box.setVisible(not existing)
         if not existing:
             self.rows_label.setText("")
             self.cmd_view.setPlainText("")

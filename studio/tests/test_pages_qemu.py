@@ -1233,3 +1233,69 @@ def test_qemu_boots_a_session_with_no_record_exactly_as_before(wiz, fake_generat
     page = _qemu_page(wiz)
     assert page._boot_refusal == ""
     assert not page.domain_gate_note.isVisible()
+
+
+# ---- the build-first arm chooses its build mode explicitly (#631 lane, item 4) -------
+# E2E -> QEMU -> "Build new images first" reaches the image flow WITHOUT the Mode
+# screen (the "Run e2e tests" card commits no cfg.mode), so the build used to take
+# whatever mode an earlier flow had committed.
+from hugmesh_studio.gui.pages import mode as mode_mod  # noqa: E402
+
+
+def test_build_first_names_the_inherited_mode_and_offers_all_three(wiz):
+    wiz.cfg.mode = "mesh"                       # left over from an earlier flow
+    page = _qemu_page(wiz)
+    assert not page.build_mode_box.isVisible()  # the other arm's control
+    page.build_first.setChecked(True)
+    assert page.build_mode_box.isVisible()
+    assert set(page.build_mode_radios) == set(mode_mod.IMAGE_MODE_TITLES)
+    assert page.build_mode_radios["mesh"].isChecked()
+    note = page.build_mode_note.text()
+    assert "Mesh node" in note and "already carrying" in note
+    page.build_mode_radios["standalone"].setChecked(True)
+    assert "Standalone Gentoo desktop" in page.build_mode_note.text()
+    assert "carrying Mesh node" in page.build_mode_note.text()
+
+
+def test_build_first_takes_the_picked_mode_not_the_stale_one(wiz):
+    wiz.cfg.mode = "mesh"                       # stale
+    page = _qemu_page(wiz)
+    page.build_first.setChecked(True)
+    page.build_mode_radios["standalone"].setChecked(True)
+    wiz.next()
+    assert wiz.cfg.mode == "standalone"
+    assert isinstance(wiz.currentPage(), wizard_mod.RolePage), \
+        type(wiz.currentPage()).__name__
+    assert wiz.cfg.domains == [] and wiz.cfg.sso is False   # the Mode card's clears
+
+
+def test_build_first_into_mesh_from_a_fresh_studio(wiz):
+    assert wiz.cfg.mode == "standalone"         # ImageConfig's default
+    page = _qemu_page(wiz)
+    page.build_first.setChecked(True)
+    assert page.build_mode_radios["standalone"].isChecked()
+    page.build_mode_radios["mesh"].setChecked(True)
+    wiz.next()
+    assert wiz.cfg.mode == "mesh"
+    assert not isinstance(wiz.currentPage(), (wizard_mod.RolePage,
+                                              wizard_mod.QemuPage))
+    advance_to(wiz, wizard_mod.WorklistPage)    # the mesh flow, not the desktop one
+
+
+def test_the_use_existing_arm_commits_no_mode(wiz):
+    wiz.cfg.mode = "cloud"
+    page = _qemu_page(wiz)
+    page.build_mode_radios["mesh"].setChecked(True)   # a pick on the hidden arm
+    assert page.validatePage() is True
+    assert wiz.cfg.mode == "cloud"
+
+
+def test_the_mode_screen_and_the_build_first_arm_share_one_commit(wiz):
+    """Not a copy: ModePage.validatePage calls commit_image_mode, the function the
+    build-first arm calls — so the two can never commit a mode differently."""
+    import inspect
+    src = inspect.getsource(mode_mod.ModePage.validatePage)
+    assert "commit_image_mode(self.wiz, mid)" in src
+    assert "enter_mesh_defaults" not in src
+    with pytest.raises(ValueError):
+        mode_mod.commit_image_mode(wiz, "e2e")
