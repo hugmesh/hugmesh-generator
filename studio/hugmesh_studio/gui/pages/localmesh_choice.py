@@ -12,9 +12,9 @@ Two cards, and they are the two things the tabs were:
 * **Join an existing mesh with a key** — the token-based local node. Raises
   ``wiz.localmesh_join_selected`` and Next lands on ``LocalMeshJoinPage``, which is
   terminal (a joined node is the end of this path).
-* **Generate a new mesh** — raises nothing, and Next walks the seven bring-up steps
-  (Environment & brand -> Repo source -> Services -> Identity provider -> Mesh
-  overlay -> Saved meshes & review -> Bring-up & monitor).
+* **Generate a new mesh** — raises nothing, and Next walks the nine bring-up steps
+  (Environment & brand -> Domains -> Domain services -> Repo source -> Services ->
+  Identity provider -> Mesh overlay -> Saved meshes & review -> Bring-up & monitor).
 
 WHAT THIS SCREEN COMMITS is one wizard-transient flag and nothing else. Like
 ``wiz.localmesh_selected`` (ModePage) it is deliberately NOT an ImageConfig field:
@@ -78,8 +78,8 @@ class LocalMeshChoicePage(QtWidgets.QWizardPage):
             ("generate", "Generate a new mesh",
              "Mint every credential from scratch and bring up the whole platform stack "
              "here, seeded with a fresh superadmin. A few steps of setup follow — "
-             "environment, source, services, identity, then a plan you read before "
-             "anything runs."),
+             "environment, domains and their services, source, services, identity, "
+             "then a plan you read before anything runs."),
         ]
         self._buttons: dict[str, ChoiceCard] = {}
         for i, (cid, title, desc) in enumerate(self.choices):
