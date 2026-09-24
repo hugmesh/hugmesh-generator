@@ -702,6 +702,12 @@ jobs:
           # test-kind-tor.sh (hugmesh-generator#577) is here for helm + make: it
           # renders the fe-gateway chart with the kind onion's extraHost parameter
           # and reads `make -n` for its targets, and exits 2 without helm.
+          # test-tor-onion-ingress.sh (hugmesh-generator#614) is here for helm: it
+          # renders the fe-gateway chart with the node agent's ingress.onionHosts
+          # parameters exactly as ArgoCD does, and FAILS (never skips) without helm.
+          # test-optional-netpol-autosync.sh (#617) is here for kubectl kustomize: it
+          # renders every git-served overlay the build's prune touched, and FAILS
+          # without kubectl.
           missing=""
           for b in bash jq openssl python3 git helm kubectl checkpolicy make; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
@@ -717,6 +723,8 @@ jobs:
             tests/stack/test-mdm-manifests-render.sh
             tests/scripts/test-eso-remoteref-brand.sh
             tests/scripts/test-kind-tor.sh
+            tests/scripts/test-tor-onion-ingress.sh
+            tests/scripts/test-optional-netpol-autosync.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do

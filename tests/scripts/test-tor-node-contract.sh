@@ -507,8 +507,9 @@ has "${ins}" "the onion :443 (HTTPS)" && hasnt "${ins}" "onion :80" && ok "C car
 has "${ins}" "127.0.0.1:443 by default" && ok "C card names the real default upstream" || bad "C card default upstream wrong"
 has "${ins}" "the pki node under release-state internal" && has "${ins}" "backend" && hasnt "${ins}" "the ingress binds there on the backend node" \
     && ok "C card says WHICH node the default upstream is right on (pki under internal, backend once public)" || bad "C card still ties the default upstream to the backend node alone"
-has "${ins}" "KNOWN GAP (hugmesh-generator#614)" && has "${ins}" "NOT the login page" && hasnt "${ins}" "reachable from any Tor Browser, immediately" \
-    && ok "C card states the Ingress-host gap (#614): the onion reaches the edge's 404, not the login page" || bad "C card promises a login page the node cannot serve yet"
+has "${ins}" "INGRESS ADMISSION (hugmesh-generator#614)" && has "${ins}" "hugmesh-tor-ingress-admit status" && has "${ins}" "CONTROL-PLANE node" \
+    && has "${ins}" "NOT the login page" && hasnt "${ins}" "reachable from any Tor Browser, immediately" && hasnt "${ins}" "until #614 lands" \
+    && ok "C card states the Ingress admission (#614): who admits the onion, how to check it, and that a worker's onion gets the edge's 404" || bad "C card's Ingress-admission text is missing or still says #614 has not landed"
 has "${ins}" "CERTIFICATE:" && has "${ins}" "no .onion name is on it" && ok "C card carries the certificate note" || bad "C card lacks the certificate note"
 has "${ins}" "curl -skI https://${ONION_A}/" && ok "C VERIFY line uses https + -k" || bad "C VERIFY line wrong"
 [ "$(cat "${GL}/out1/onion.txt" 2>/dev/null)" = "${ONION_A}" ] && ok "C onion.txt is the primary address alone (Studio's golive test reads it whole)" || bad "C onion.txt changed shape"
@@ -544,6 +545,7 @@ fx() {  # NAME ROLE ARTEFACTS... -> fixture root in FX
             package)   mkdir -p "${FX}/usr/bin"; : > "${FX}/usr/bin/tor" ;;
             initd)     : > "${FX}/etc/init.d/tor" ;;
             agent)     mkdir -p "${FX}/usr/sbin"; printf '#!/bin/sh\n' > "${FX}/usr/sbin/hugmesh-tor-reconcile"; chmod +x "${FX}/usr/sbin/hugmesh-tor-reconcile" ;;
+            admit)     mkdir -p "${FX}/usr/sbin"; printf '#!/bin/sh\n' > "${FX}/usr/sbin/hugmesh-tor-ingress-admit"; chmod +x "${FX}/usr/sbin/hugmesh-tor-ingress-admit" ;;
             tor-linked) ln -s /etc/init.d/tor "${FX}/etc/runlevels/default/tor" ;;
             reconcile-linked) ln -s /etc/init.d/hugmesh-tor-reconcile "${FX}/etc/runlevels/default/hugmesh-tor-reconcile" ;;
             cron)      mkdir -p "${FX}/etc/cron.d"; : > "${FX}/etc/cron.d/hugmesh-tor-reconcile" ;;
@@ -552,6 +554,16 @@ fx() {  # NAME ROLE ARTEFACTS... -> fixture root in FX
             procother) mkdir -p "${FX}/proc/103"; echo sshd > "${FX}/proc/103/comm" ;;
             torrc)     mkdir -p "${FX}/etc/tor"; printf 'User tor\nHiddenServicePort 443 127.0.0.1:443\n' > "${FX}/etc/tor/torrc" ;;
             hostname)  mkdir -p "${FX}/var/lib/hugmesh/tor"; echo "${ONION_A}" > "${FX}/var/lib/hugmesh/tor/hostname" ;;
+            adminconf) mkdir -p "${FX}/etc/kubernetes"; : > "${FX}/etc/kubernetes/admin.conf" ;;
+            admitted|notadmitted|unknown)  # an admit agent whose `status` answers like the real one
+                mkdir -p "${FX}/usr/sbin"
+                case "${a}" in
+                    admitted)    _st="${ONION_A} admitted" ;;
+                    notadmitted) _st="${ONION_A} NOT admitted" ;;
+                    unknown)     _st="${ONION_A} unknown (no readable Application devops/hugmesh-gateway-fe from this node)" ;;
+                esac
+                printf '#!/bin/sh\n[ "$1" = status ] && [ -n "${HUGMESH_TOR_ROOT}" ] && echo "%s"\n' "${_st}" > "${FX}/usr/sbin/hugmesh-tor-ingress-admit"
+                chmod +x "${FX}/usr/sbin/hugmesh-tor-ingress-admit" ;;
         esac
     done
 }
@@ -560,7 +572,7 @@ run_fx() {  # [live] [status-rc]
     TOR_STATUS_FILE="${WORK}/tor-status" PATH="${DSTUB}:${PATH}" bash -c '
         set -u; source "$1/scripts/_roles-lib.sh"; source "$2"; assert_tor_node_contract "$3" "$4"' _ "${REPO}" "${EXT}" "${FX}" "${1:-}" 2>&1
 }
-FULL=(package initd agent tor-linked reconcile-linked cron)
+FULL=(package initd agent admit tor-linked reconcile-linked cron)
 LIVE_OK=("${FULL[@]}" proc1 procother torrc hostname)
 
 fx none backend; o="$(run_fx)"
@@ -591,8 +603,12 @@ for crole in omnibus edge-ai backend-gpu generic; do
     hasnt "${o}" FAIL && hasnt "${o}" "unusable" && has_v "${o}" PASS "tor selected — cron present" \
         && ok "D ${crole} graded as a cluster node (full contract -> no FAIL)" || { bad "D ${crole} not graded as a cluster node"; echo "${o}" | sed 's/^/      | /'; }
 done
-fx no-agent backend package initd tor-linked reconcile-linked cron; o="$(run_fx)"
+fx no-agent backend package initd admit tor-linked reconcile-linked cron; o="$(run_fx)"
 has_v "${o}" FAIL "cannot start" && ok "D linked reconcile with no executable agent binary -> FAIL" || { bad "D missing agent binary not caught"; echo "${o}" | sed 's/^/      | /'; }
+fx no-admit pki package initd agent tor-linked reconcile-linked cron; o="$(run_fx)"
+has_v "${o}" FAIL "no executable /usr/sbin/hugmesh-tor-ingress-admit" && ok "D tor selected with no ingress-admit agent -> FAIL (#614: the onion would stop at the edge's 404)" || { bad "D missing ingress-admit agent not caught"; echo "${o}" | sed 's/^/      | /'; }
+fx full-admit omnibus "${FULL[@]}"; o="$(run_fx)"
+has_v "${o}" PASS "hugmesh-tor-ingress-admit is baked" && ok "D full contract -> the ingress-admit agent PASSes by name" || { bad "D ingress-admit PASS line missing"; echo "${o}" | sed 's/^/      | /'; }
 # the role classes must cover EXACTLY the canonical vocabulary — a role that drifts out
 # of the lists would SKIP (fail open), a stale one would grade nothing.
 fn_body="$(sed -n '/^assert_tor_node_contract() {/,/^}/p' "${ASSERTIONS}")"
@@ -616,6 +632,15 @@ fx live-torrc backend "${LIVE_OK[@]}"; printf 'HiddenServicePort 80 127.0.0.1:80
 has_v "${o}" FAIL "no managed 'HiddenServicePort 443" && ok "D live: torrc without the 443 stanza -> FAIL" || { bad "D torrc not caught"; echo "${o}" | sed 's/^/      | /'; }
 fx live-host backend "${LIVE_OK[@]}"; echo "not-an-onion" > "${FX}/var/lib/hugmesh/tor/hostname"; o="$(run_fx live 0)"
 has_v "${o}" FAIL "holds no v3 onion" && ok "D live: garbage exported hostname -> FAIL" || { bad "D hostname not caught"; echo "${o}" | sed 's/^/      | /'; }
+# #614: the live admission leg (only a control-plane node, which holds admin.conf, can admit)
+has_v "$(fx live-worker backend "${LIVE_OK[@]}"; run_fx live 0)" SKIP "a worker cannot admit its onion" \
+    && ok "D live: no admin.conf -> the admission leg SKIPs (never a PASS it did not measure)" || bad "D live worker admission not skipped"
+fx live-admitted pki "${LIVE_OK[@]}" adminconf admitted; o="$(run_fx live 0)"
+hasnt "${o}" FAIL && has_v "${o}" PASS "every exported onion is an fe-gateway Ingress host" && ok "D live: control plane + admitted -> PASS" || { bad "D live admitted"; echo "${o}" | sed 's/^/      | /'; }
+fx live-notadmitted pki "${LIVE_OK[@]}" adminconf notadmitted; o="$(run_fx live 0)"
+has_v "${o}" FAIL "is NOT an fe-gateway Ingress host" && ok "D live: control plane + NOT admitted -> FAIL (the 404 at the edge)" || { bad "D live not-admitted not caught"; echo "${o}" | sed 's/^/      | /'; }
+fx live-unknown pki "${LIVE_OK[@]}" adminconf unknown; o="$(run_fx live 0)"
+has_v "${o}" SKIP "admission unknown" && hasnt "${o}" "every exported onion is an fe-gateway Ingress host" && ok "D live: Application unreadable -> SKIP, not PASS" || { bad "D live unknown"; echo "${o}" | sed 's/^/      | /'; }
 
 echo
 echo "== RESULT: ${P} passed, ${F} failed =="

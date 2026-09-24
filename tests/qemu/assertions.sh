@@ -520,6 +520,13 @@ assert_tor_node_contract() {  # $1 = root prefix ("" on the live guest); $2 = "l
     else
         bad "role ${_role}: tor selected but /etc/init.d/tor or an executable /usr/sbin/hugmesh-tor-reconcile is missing — the linked services cannot start"
     fi
+    # The cron's */5 entry runs the ingress half (hugmesh-generator#614): without it the
+    # onion reaches the edge and gets ingress-nginx's 404, never the gateway.
+    if [ -x "${_R}/usr/sbin/hugmesh-tor-ingress-admit" ]; then
+        ok "role ${_role}: tor selected — an executable /usr/sbin/hugmesh-tor-ingress-admit is baked (the cron admits the onion at the ingress edge)"
+    else
+        bad "role ${_role}: tor selected but no executable /usr/sbin/hugmesh-tor-ingress-admit — the cron cannot admit the onion as an Ingress host (the edge answers 404)"
+    fi
 
     if [ "${_live}" != live ]; then
         skip "role ${_role}: tor runtime (service state, daemon count, torrc, exported hostname) — not a live guest"
@@ -557,6 +564,19 @@ assert_tor_node_contract() {  # $1 = root prefix ("" on the live guest); $2 = "l
     else
         bad "role ${_role}: /var/lib/hugmesh/tor/hostname holds no v3 onion ('${_h}') — nothing was minted or exported"
     fi
+    # #614: the onion must be an Ingress host, or the edge answers 404. Only a
+    # control-plane node (admin.conf) can admit it; the agent's own `status` asks the
+    # live Application.
+    if [ ! -r "${_R}/etc/kubernetes/admin.conf" ]; then
+        skip "role ${_role}: onion Ingress admission — no /etc/kubernetes/admin.conf here (a worker cannot admit its onion; see hugmesh-generator#614)"
+        return
+    fi
+    _l="$(HUGMESH_TOR_ROOT="${_R}" "${_R}/usr/sbin/hugmesh-tor-ingress-admit" status 2>/dev/null)"
+    case "${_l}" in
+        *" NOT admitted"*) bad "role ${_role}: an exported onion is NOT an fe-gateway Ingress host — https://<onion>/ answers ingress-nginx's 404 (${_l//$'\n'/; })" ;;
+        *" admitted"*)     ok "role ${_role}: every exported onion is an fe-gateway Ingress host (${_l//$'\n'/; })" ;;
+        *) skip "role ${_role}: onion Ingress admission unknown — the fe-gateway Application is not readable from this node ('${_l}')" ;;
+    esac
 }
 
 assert_tor_node_contract "" live

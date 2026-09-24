@@ -64,13 +64,14 @@
 # "host:port" as one line of /etc/hugmesh/tor/upstream. kind's host port map is
 # 127.0.0.1:8443 (specs/cluster/bootstrap/kind-local/kind-local.yaml) — the override
 # for a host tor fronting a kind node.
-# KNOWN GAP (the onion reaches the edge, NOT yet the login page): the fe-gateway
-# Ingress admits only the cluster domain (<domain> and *.<domain>,
-# apps/20-gateway-fe.yaml) and both controllers run with defaultBackend disabled, so
-# a request whose Host/SNI is <x>.onion gets ingress-nginx's own 404 and its default
-# (fake) certificate until the minted onion is admitted as an Ingress host. Nothing on
-# a hardware node does that yet (kind does, via `make kind-tor`); see "Known gap" in
-# docs/TOR-HIDDEN-SERVICE.md.
+# INGRESS ADMISSION (hugmesh-generator#614): the fe-gateway Ingress admits the cluster
+# domain (<domain> and *.<domain>, apps/20-gateway-fe.yaml) and both controllers run
+# with defaultBackend disabled, so a request whose Host/SNI is <x>.onion gets
+# ingress-nginx's own 404 unless the onion is an Ingress host. This agent does NOT do
+# that — its hand-off is the exported hostname files below. /usr/sbin/hugmesh-tor-ingress-admit
+# (the same cron drop-in, every 5 minutes) reads them and writes them onto the
+# fe-gateway Application as `ingress.onionHosts[i]`, from a control-plane node (it needs
+# /etc/kubernetes/admin.conf); see "Ingress admission" in docs/TOR-HIDDEN-SERVICE.md.
 #
 # PER-DOMAIN ONIONS (decision 68 = A: tor is the one per-domain infra slug). Each
 # non-comment line of /etc/hugmesh/tor/domains names one domain slug
