@@ -13,10 +13,10 @@
 # only ever served by a running stack. The onion itself is reached by the steps'
 # own proxied browser context, never the `page` fixture (steps/tor-onion.steps.ts).
 #
-# https://<onion>/, not http: the gateway's CSP upgrade-insecure-requests upgrades
-# every subresource of an http page to https (measured over a live onion
-# 2026-09-23 — see tests/stack/tor/entrypoint.sh), so the onion's :443 (the TLS
-# front) is the door and this scenario enters there.
+# https://<onion>/, not http: the onion's :443 (the TLS front) is the door a person
+# is told to use, a secure context and the node's :443, so this scenario enters
+# there (docs/TOR-HIDDEN-SERVICE.md "Why :443"; not CSP upgrade-insecure-requests,
+# which the SPA document never carries, #628).
 #
 # @via: is not a dimension axis — like @issue: it passes through the Before hook
 # untouched; run.sh selects on it with bddgen --tags.

@@ -26,7 +26,10 @@ What TOR=1 has to mean, end to end:
   * the census-named mechanism wrapper never reports a green that checked nothing
     (T14, executed against stub harnesses);
   * the @via:onion steps cannot reach the mesh around Tor: no unproxied context or
-    fixture in their step file, and apiContext() refuses under SNAP_PROXY (T15).
+    fixture in their step file or the sibling modules it imports, and apiContext()
+    refuses under SNAP_PROXY (T15);
+  * with ANUBIS=1 the onion's plain-http door can pass the PoW gate in Chromium:
+    the gate's cookies drop Secure only for ANUBIS=1 TOR=1 (T16, #627).
 
 BEHAVIOUR, not source text, wherever it can be executed: STACK_ENV and the
 profile are expanded by make itself; the entrypoint is RUN against a stub tor;
@@ -118,7 +121,8 @@ def clean_env() -> dict:
     env = os.environ.copy()
     for k in ("TOR", "ANUBIS", "TOR_ONION_UPSTREAM", "TOR_ONION_TLS_UPSTREAM",
               "TOR_SOCKS_HOST_PORT", "SNAP_ONION_BASE_URL", "SNAP_PROXY", "E2E_VIA",
-              "SNAP_BASE_URL", "SNAP_ENV_DOCKER_BASE_URL", "SNAP_ONION_HOSTNAME_FILE"):
+              "SNAP_BASE_URL", "SNAP_ENV_DOCKER_BASE_URL", "SNAP_ONION_HOSTNAME_FILE",
+              "ANUBIS_COOKIE_SECURE"):
         env.pop(k, None)
     return env
 
@@ -613,8 +617,9 @@ else:
         problems.append("SNAP_BASE_URL was pointed at the onion (%s): the @env:docker probe is "
                         "an UNPROXIED Node request and would skip every scenario" % first("BASE_URL"))
     if first("ONION_BASE_URL") != "https://" + GOOD_ONION:
-        problems.append("onion URL is %r, want https://<onion> (an http entry is upgraded by "
-                        "the gateway CSP and boots nothing)" % first("ONION_BASE_URL"))
+        problems.append("onion URL is %r, want https://<onion> (the :443 door: a secure context, "
+                        "the node's own :443, user-bff's default Secure cookie; #628)"
+                        % first("ONION_BASE_URL"))
     if first("PROXY") != "socks5://127.0.0.1:%s" % socks_default:
         problems.append("default proxy %r is not the tor-client's socks5://127.0.0.1:%s"
                         % (first("PROXY"), socks_default))
@@ -635,8 +640,9 @@ ph = subprocess.run(["bash", RUNSH, "--via", "onion", "--print-command"],
                     env=dict(renv, SNAP_ONION_BASE_URL="http://" + GOOD_ONION),
                     capture_output=True, text=True, timeout=60)
 if ph.returncode == 0:
-    problems.append("SNAP_ONION_BASE_URL=http://<onion> was accepted — the CSP upgrades it and "
-                    "the SPA never boots")
+    problems.append("SNAP_ONION_BASE_URL=http://<onion> was accepted — the lane must test the "
+                    ":443 door (secure context, the node's :443, user-bff's default Secure "
+                    "cookie; #628), not the http door")
 # A 56-character name that is not base32 is not an onion.
 open(hostfile, "w").write("1" * 52 + "abcd.onion\n")
 pb = subprocess.run(["bash", RUNSH, "--via", "onion", "--print-command"], env=renv,
@@ -903,6 +909,53 @@ for fn in sorted(onion_files):
                             % (fn, leaked))
     if "onionContext(" not in code:
         problems.append("%s never builds the proxied onionContext()" % fn)
+# A step file's own relative imports under steps/ (steps/onion-session.ts, #624)
+# are held to the same "no unproxied route" rule: moving a request out of the
+# step file into a sibling module must not take it out of this check's sight.
+# Every spelling of a relative module specifier counts (single or double quotes,
+# `import ... from`, `export ... from`, a bare `import './x'`, a dynamic
+# `import('./x')`, a `.ts`/`.js` suffix, a subdirectory, `../steps/x`), and the
+# scan follows each sibling's own imports until no new file appears, so a
+# second hop cannot hide a request either. A specifier that resolves outside
+# steps/ (../specs/helpers, whose apiContext()/onionContext() are pinned below)
+# is not a sibling.
+IMPORT_RE = re.compile(r"""(?:\bfrom|\bimport)\s*\(?\s*(['"])(\.{1,2}/[^'"]+)\1""")
+STEPS_REAL = os.path.realpath(E2E_STEPS)
+
+
+def _step_imports(path: str) -> list[str]:
+    text = re.sub(r"//[^\n]*", "", open(path, encoding="utf-8").read())
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    found = []
+    for m in IMPORT_RE.finditer(text):
+        spec = re.sub(r"\.(?:ts|js|mjs|cjs)$", "", m.group(2))
+        base = os.path.realpath(os.path.join(os.path.dirname(path), spec))
+        for cand in (base + ".ts", os.path.join(base, "index.ts")):
+            if os.path.isfile(cand) and os.path.commonpath([cand, STEPS_REAL]) == STEPS_REAL:
+                found.append(cand)
+                break
+    return found
+
+
+onion_paths = {os.path.realpath(os.path.join(E2E_STEPS, fn)) for fn in onion_files}
+siblings: set[str] = set()
+frontier = sorted(onion_paths)
+while frontier:
+    nxt = []
+    for path in frontier:
+        for dep in _step_imports(path):
+            if dep not in onion_paths and dep not in siblings:
+                siblings.add(dep)
+                nxt.append(dep)
+    frontier = nxt
+for path in sorted(siblings):
+    fn = os.path.relpath(path, STEPS_REAL)
+    code = re.sub(r"//[^\n]*", "", open(path, encoding="utf-8").read())
+    for token in ("apiContext(", "newContext(", "request.get(", "request.post(", "fetch("):
+        if token in code:
+            problems.append("steps/%s (reached through a @via:onion step file's imports) calls %s — a route to "
+                            "the mesh outside the step file, which the HAR audit and this check "
+                            "cannot vouch for" % (fn, token))
 helpers_text = open(E2E_HELPERS, encoding="utf-8").read()
 m_api = re.search(r"export async function apiContext\([^)]*\)[^{]*\{(.*?)\n\}", helpers_text, re.S)
 api_body = re.sub(r"//[^\n]*", "", m_api.group(1)) if m_api else ""
@@ -913,6 +966,39 @@ m_oc = re.search(r"export async function onionContext\((.*?)\n\}", helpers_text,
 if not m_oc or "proxy: { server: door.proxy" not in m_oc.group(1):
     problems.append("helpers.ts onionContext() does not put the SOCKS proxy on the context")
 check("T15-onion-steps-proxied", not problems, "; ".join(problems))
+
+# ── T16: ANUBIS=1 TOR=1 serves the gate's cookies without Secure (#627) ──────
+# The onion's :80 door is plain http on a .onion origin, which Chromium does not
+# treat as trustworthy, so a Secure cookie set there is dropped and the challenge
+# ends in a 500 (measured live 2026-09-24). The compose gate must read its
+# COOKIE_SECURE from a variable that defaults to Anubis's own `true`, and
+# ANUBIS=1 TOR=1 (and only that pair) must export that variable as 'false',
+# unless the caller set it. The variable name is DERIVED from the compose block.
+problems = []
+anubis_svc = anubis_target.split(":", 1)[0]
+cookie_expr = str(((services.get(anubis_svc) or {}).get("environment") or {}).get("COOKIE_SECURE", ""))
+m_cookie = re.match(r"^\$\{([A-Z_][A-Z0-9_]*):-([^}]*)\}$", cookie_expr)
+if not m_cookie:
+    problems.append("%s must set COOKIE_SECURE from a `${VAR:-true}` variable the Makefile can "
+                    "flip for the onion (got %r)" % (anubis_svc, cookie_expr or None))
+else:
+    cookie_var, cookie_default = m_cookie.group(1), m_cookie.group(2)
+    flip = "%s='false'" % cookie_var
+    if cookie_default != "true":
+        problems.append("%s COOKIE_SECURE defaults to %r — every bring-up but ANUBIS=1 TOR=1 must "
+                        "keep Anubis's own default, true" % (anubis_svc, cookie_default))
+    if flip not in env_both:
+        problems.append("ANUBIS=1 TOR=1 does not export %s, so the onion's http door keeps the "
+                        "Secure cookie Chromium drops" % flip)
+    for label, text in (("a plain bring-up", env_plain), ("TOR=1 alone", env_tor),
+                        ("ANUBIS=1 alone", env_anubis)):
+        if re.search(r"\b%s=" % re.escape(cookie_var), text):
+            problems.append("%s exports %s" % (label, cookie_var))
+    env_cookie_caller = make_eval("$(STACK_ENV)", ["TOR=1", "ANUBIS=1", "%s=true" % cookie_var],
+                                  clean_env())
+    if flip in env_cookie_caller:
+        problems.append("a caller's own %s=true is overridden" % cookie_var)
+check("T16-anubis-onion-cookie", not problems, "; ".join(problems))
 
 shutil.rmtree(WORK, ignore_errors=True)
 
