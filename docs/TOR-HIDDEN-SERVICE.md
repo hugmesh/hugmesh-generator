@@ -221,6 +221,75 @@ new container IP needs `hugmesh-tor` recreated too.
 The contract is gated offline by `tests/stack/test-tor-flip-wiring.sh` (15 checks, each with a
 mutant that must turn it red).
 
+## Kind lane — a host tor fronting the kind node (`make kind-tor`)
+
+Operator decision 67 = B (hugmesh-generator#577, 2026-09-23): the kind lane gets a Tor
+door. The kind node is the stock `kindest/node` image, not a baked stage4 node, so
+nothing inside it runs Tor. Instead [`scripts/kind-tor.sh`](../scripts/kind-tor.sh) runs
+the distro `tor` binary **on the host, as you** — no sudo, no system service, no
+`/etc/tor`, no `User` directive — with a private `DataDirectory` and `HiddenServiceDir`
+under the gitignored `tests/stack/.run/kind-tor/`:
+
+| torrc line | what it reaches |
+|---|---|
+| `HiddenServicePort 443 127.0.0.1:8443` | the kind node's TLS door — `kind-local.yaml` maps ingress-nginx-internal's `:443` to host `:8443`. Same shape as the node contract above. |
+| `HiddenServicePort 80 127.0.0.1:8080` | the plain door; kind's fe-gateway Ingress carries `force-ssl-redirect`, so `http://<onion>/` answers `308` to `https://<onion>/`. |
+| `SocksPort 127.0.0.1:9052` | the client side for `curl` and the e2e browser. Not 9050, which a system tor or the compose lane's tor client may hold; `KIND_TOR_SOCKS_PORT` overrides, and a busy port is refused rather than shared. |
+
+**Admitting the onion.** ingress-nginx answers a `Host: <onion>` request from its default
+server (404) unless an Ingress rule names that host. `make kind-tor` appends ONE helm
+parameter, `ingress.extraHosts[N]=<onion>`, to the ArgoCD Application
+`hugmesh-gateway-fe` — N being the length of the `extraHosts` list the Application's own
+values carry, so `*.hugmesh.net` is kept. The patch is **read-modify-write**:
+`bootstrap-kind.sh` merge-patches `spec.source.helm.parameters`, which REPLACES the list
+wholesale, so a literal list here would silently drop `ingress.className=nginx-internal`,
+`force-ssl-redirect` and `MFA=1`'s `mfa.enabled`. Consequence the other way round: a
+`make kind-up` re-run drops the onion rule — `make kind-tor` again restores it, and
+`make kind-tor-status` says when it is missing.
+
+**Custody.** The onion keys stay in `tests/stack/.run/kind-tor/hs/` (gitignored, `0700`)
+and survive `make kind-tor-down`, so the address is stable across restarts; delete that
+directory to mint a new one. `make kind-tor-status` and `scripts/kind-tor.sh onion`
+answer only while **this** tor is alive (its pidfile names a live process whose command
+line carries this torrc) — a leftover `hostname` file is not a live door.
+
+**Certificate.** The kind Ingress has no TLS block, so `:443` presents ingress-nginx's
+default certificate, not one for the onion. Tor Browser shows a certificate warning on
+`https://<onion>/`; the e2e run uses `ignoreHTTPSErrors`. The onion address itself
+authenticates the service, so this is a warning about the name, not about the channel.
+
+**Which domain answers.** hugmesh-gateway#38 (PR #39, merged) makes an unmapped `.onion`
+fail CLOSED, but only once onion tenancy is configured: `APP_TENANCY_HOSTS_FILE` is set, or
+`APP_TENANCY_HOSTS` maps a named onion. The kind lane sets neither, so the gateway still
+maps the kind onion to its default domain (`DomainRegistry.domainForHost`), and that is why
+it serves the primary domain. When hugmesh-generator#582's host-map writer sets that file
+on kind, the kind onion needs its own `<onion>=default` line, or every request to it gets
+a 403.
+
+```bash
+make kind-up && make kind-images   # the kind lane itself (unchanged)
+make kind-tor                      # host tor + Ingress rule; waits until the onion answers
+curl --socks5-hostname 127.0.0.1:9052 -k -I https://$(bash scripts/kind-tor.sh onion)/
+make kind-e2e-tor                  # @env:kind @via:onion — tests/e2e/features/platform/tor-onion-kind.feature
+make kind-tor-down                 # stop tor, drop the Ingress rule (keys kept)
+make kind-tor-check                # OFFLINE guard: tests/scripts/test-kind-tor.sh
+```
+
+`make kind-e2e-tor` is `tests/e2e/run.sh --bdd --env kind --via onion`. It reads the onion
+and the SOCKS port from the LIVE kind tor (`kind-tor.sh onion` / `socks`) and exports them
+as `SNAP_ONION_BASE_URL` and `SNAP_PROXY`. It runs ONLY `@via:onion and @env:kind`
+scenarios, and it FAILS unless at least one passed and none skipped. The steps
+(`tests/e2e/steps/kind-onion.steps.ts`) build their own proxied browser context with
+`onionContext()` from `specs/helpers.ts`, the same seam the compose lane's onion scenario
+uses, and never touch the unproxied `page` fixture. They check that `http://<onion>/`
+redirects to `https://<onion>/`, sign a persona in, read `/bff/session` over the onion,
+and fail on any request, in the page listener or in the HAR, that went to a host other
+than the onion. The `@env:kind` base URL stays the local kind door
+(`https://hugmesh.net:8443`), because the availability probe in `world.ts` is an
+unproxied Node request and could never reach an onion. The scenario has a 10-minute
+budget, with up to 12 retries for first contact, because a cold onion descriptor took
+118 s to publish on this host.
+
 ## Related
 
 - [EGRESS-VPN.md](EGRESS-VPN.md) — the OUTBOUND dual (split-tunnel public egress).

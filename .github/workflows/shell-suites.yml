@@ -699,6 +699,9 @@ jobs:
           # same reason: it renders the baked ArgoCD Application against the git
           # manifests through real kustomize, and it exits 2 rather than reporting a
           # pass when kubectl/kustomize or PyYAML is absent.
+          # test-kind-tor.sh (hugmesh-generator#577) is here for helm + make: it
+          # renders the fe-gateway chart with the kind onion's extraHost parameter
+          # and reads `make -n` for its targets, and exits 2 without helm.
           missing=""
           for b in bash jq openssl python3 git helm kubectl checkpolicy make; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
@@ -713,6 +716,7 @@ jobs:
             tests/stack/test-gateway-mfa-env.sh
             tests/stack/test-mdm-manifests-render.sh
             tests/scripts/test-eso-remoteref-brand.sh
+            tests/scripts/test-kind-tor.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do
