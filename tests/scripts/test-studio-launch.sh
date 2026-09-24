@@ -107,6 +107,39 @@ assert_grep "headless-no-python: never installs" "${ho}" 'never installs'
 assert_no_venv "headless-no-python"
 rm -rf "${bindir}"
 
+# ── 5a. through a SYMLINK (#635) — the way the first-run bootstrap installs it ────────
+# scripts/_first-run-lib.sh -> core/first_run.py installs ~/.local/bin/hugmesh-studio as a
+# symlink to this launcher. Before #635 the launcher derived SCRIPT_DIR (and REPO_DIR,
+# STUDIO_DIR, PYTHONPATH, the venv) and the _first-run-lib.sh path from the LINK's own
+# directory, so the installed command died with "…/bin/_first-run-lib.sh: No such file".
+# bash (non-POSIX mode) carries on past a failed `.`, so an exit status alone cannot see
+# it — the discriminators are the stderr, the venv path the DETECT line derives from
+# STUDIO_DIR, and a module import that needs PYTHONPATH=<real repo>/studio.
+# Three shapes: an absolute link, a RELATIVE link, and a link to a link (a chain).
+lnk="$(mktemp -d)"
+# The cwd sits at a DIFFERENT depth from bin/, so a relative target wrongly resolved
+# against the cwd instead of the link's own directory lands somewhere else.
+mkdir -p "${lnk}/bin" "${lnk}/chain" "${lnk}/cwd/a/b"
+ln -s "${LAUNCH}" "${lnk}/bin/hugmesh-studio"
+( cd "${lnk}/bin" && ln -s "$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "${LAUNCH}" "${lnk}/bin")" hugmesh-studio-rel )
+ln -s "${lnk}/bin/hugmesh-studio" "${lnk}/chain/hugmesh-studio"
+for via in "${lnk}/bin/hugmesh-studio" "${lnk}/bin/hugmesh-studio-rel" "${lnk}/chain/hugmesh-studio"; do
+    name="symlink ${via#"${lnk}"/}"
+    [ -L "${via}" ] && _ok || _bad "${name}: the fixture is not a symlink"
+    sd_err="${lnk}/detect.err"
+    sd="$(cd "${lnk}/cwd/a/b" && "${BASH_BIN}" "${via}" --detect 2>"${sd_err}")"; sdrc=$?
+    sd_e="$(cat "${sd_err}")"
+    assert_eq   "${name}: --detect exit 0" "${sdrc}" 0
+    printf '%s\n' "${sd_e}" | grep -a 'No such file' >/dev/null \
+        && _bad "${name}: stderr reports a missing file: ${sd_e}" || _ok
+    assert_grep "${name}: venv path is the REAL checkout's" "${sd}" \
+        "^DETECT venv=(found|missing) path=${REPO_DIR}/studio/\\.venv-studio\$"
+    sp="$(cd "${lnk}/cwd/a/b" && env -u PYTHONPATH "${BASH_BIN}" "${via}" --print-command --backend native 2>/dev/null)"; sprc=$?
+    assert_eq   "${name}: --print-command exit 0 (PYTHONPATH from the real path)" "${sprc}" 0
+    assert_grep "${name}: builder emitted" "${sp}" 'build-[a-z0-9-]+-stage4\.sh'
+done
+rm -rf "${lnk}"
+
 # ── 5b. arg classification: interactive GUI modes take the GUIDED path, not headless ────
 # Source in a subshell with the flag as $@ (the guard skips dispatch), then read HEADLESS.
 _headless_for() { ( set -- "$1"; source "${LAUNCH}" >/dev/null 2>&1; printf '%s' "${HEADLESS}" ); }
@@ -120,7 +153,7 @@ done
 # ── 6. pure detection functions (SOURCE the launcher; its guard suppresses launching) ───
 # shellcheck disable=SC1090
 source "${LAUNCH}"
-unset PYTHONPATH   # the source computed a bogus PYTHONPATH off $0; keep the env clean
+unset PYTHONPATH   # the source exported PYTHONPATH=<repo>/studio; keep the env clean
 
 assert_eq "family: nixos"                "$(OS_ID=nixos    OS_ID_LIKE=''             distro_family)" nixos
 assert_eq "family: steamos->arch"        "$(OS_ID=steamos  OS_ID_LIKE='arch'         distro_family)" arch
