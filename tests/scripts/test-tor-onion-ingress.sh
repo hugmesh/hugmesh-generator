@@ -20,14 +20,21 @@
 #      non-v3 names; withdrawal of what THIS node admitted before; other nodes' entries
 #      and every non-onion parameter (kind's extraHosts[N] included) kept untouched.
 #   C. the RENDER proof: plan output fed to `helm template` exactly as ArgoCD passes
-#      helm parameters -> the Ingress admits the onion when the hostname file exists and
-#      admits no .onion host at all when it does not.
+#      helm parameters -> the Ingress admits the onion when the hostname file exists
+#      (path `/` Prefix, the primary rule's exact http block) and admits no .onion host
+#      at all when it does not.
 #   D. the agent's `apply` against a STUB kubectl that serves an Application JSON and
-#      applies merge patches to it: no admin kubeconfig -> no kubectl call at all;
+#      applies merge patches to it (and, like the real kubectl on a CRD, refuses a patch
+#      without `--type merge`): no admin kubeconfig -> no kubectl call at all;
 #      first run -> one patch carrying the resourceVersion + a refresh annotation;
 #      steady state -> a read and no patch; withdrawal; get/patch failures fail soft and
 #      record nothing; the rebranded Application name is read from the baked tree; an
-#      Application without spec.source.helm is refused.
+#      Application without spec.source.helm is refused; a lost admitted record is
+#      rewritten on a steady-state run; a second writer holding the node lock -> no call.
+#   F. the agent's REAL `status` (what tests/qemu/assertions.sh's live leg, the Go-Live
+#      card and the operator checklist grade on) against the same stub: admitted, NOT
+#      admitted (absent, or the onion under another parameter name), unknown (no admin
+#      kubeconfig), and nothing exported — each also graded by the live leg's own `case`.
 #   E. the wiring — the cron runs the agent every 5 minutes; both stage4 builders' own
 #      tor `cp` lines, EXECUTED in a sandbox sysroot, bake it executable next to the
 #      reconcile.
@@ -94,7 +101,11 @@ ing = [d for d in yaml.safe_load_all(sys.stdin) if d and d.get("kind") == "Ingre
 print(json.dumps(ing[0] if len(ing) == 1 else {"_count": len(ing)}))'
 }
 hosts_of()   { jq -r '[.spec.rules[]?.host] | join(" ")' <<<"$1"; }
-backend_of() { jq -r --arg h "$2" '.spec.rules[] | select(.host == $h) | .http.paths[0].backend.service | "\(.name):\(.port.number)"' <<<"$1"; }
+backend_of() { jq -r --arg h "$2" '[.spec.rules[] | select(.host == $h) | .http.paths[].backend.service | "\(.name):\(.port.number)"] | unique | join(",")' <<<"$1"; }
+# paths_of ING HOST -> the rule's [{path,pathType}] list; http_of -> its whole http block
+paths_of()   { jq -c --arg h "$2" '[.spec.rules[] | select(.host == $h) | .http.paths[] | {path, pathType}]' <<<"$1"; }
+http_of()    { jq -cS --arg h "$2" '[.spec.rules[] | select(.host == $h) | .http]' <<<"$1"; }
+ROOT_PATHS='[{"path":"/","pathType":"Prefix"}]'
 
 # ═════════════════════════════ A. the chart ═════════════════════════════
 echo "== A. the gateway chart renders onionHosts as Ingress rules =="
@@ -111,8 +122,17 @@ has " ${h1} " " ${ONION_A} " && has " ${h1} " " ${ONION_B} " && ok "A onionHosts
     && ok "A exactly two rules added, nothing else changed in the rule list" || bad "A rule count wrong: $(jq '.spec.rules|length' <<<"${ING1}")"
 [ "$(backend_of "${ING1}" "${ONION_A}")" = "$(backend_of "${ING1}" "${PRIMARY}")" ] \
     && ok "A the onion rule has the SAME backend as the cluster host ($(backend_of "${ING1}" "${PRIMARY}"))" || bad "A onion backend '$(backend_of "${ING1}" "${ONION_A}")' != primary '$(backend_of "${ING1}" "${PRIMARY}")'"
-[ "$(jq -r '[.spec.tls[]?.hosts[]?] | map(select(endswith(".onion"))) | length' <<<"${ING1}")" -eq 0 ] \
-    && ok "A no TLS entry names an onion (no onion SAN exists; the edge default certificate answers)" || bad "A a TLS entry names an onion"
+for _o in "${ONION_A}" "${ONION_B}"; do
+    [ "$(paths_of "${ING1}" "${_o}")" = "${ROOT_PATHS}" ] && [ "$(http_of "${ING1}" "${_o}")" = "$(http_of "${ING1}" "${PRIMARY}" | jq -cS '.')" ] \
+        && ok "A the ${_o:0:6}….onion rule routes path / (Prefix) — the primary rule's exact http block" \
+        || bad "A the ${_o:0:6}….onion rule's paths $(paths_of "${ING1}" "${_o}") / http differ from the primary's $(paths_of "${ING1}" "${PRIMARY}")"
+done
+# the shipped values never enable ingress.tls, so render once WITH tls on: that is the
+# only render in which an onion TLS entry could appear at all.
+ING1T="$(render "${WORK}/values.yaml" "$(jq -cn --arg a "${ONION_A}" '[{name:"ingress.onionHosts[0]",value:$a},{name:"ingress.tls",value:"true"}]')")"
+[ "$(jq -r '[.spec.tls[]?.hosts[]?] | length' <<<"${ING1T}")" -ge 1 ] || bad "A tls=true fixture rendered no TLS block (fixture broken)"
+[ "$(jq -r '[.spec.tls[]?.hosts[]?] | map(select(endswith(".onion"))) | length' <<<"${ING1T}")" -eq 0 ] && has " $(hosts_of "${ING1T}") " " ${ONION_A} " \
+    && ok "A ingress.tls=true: the TLS block names no onion (no onion SAN exists; the edge default certificate answers)" || bad "A a TLS entry names an onion: $(jq -c '.spec.tls' <<<"${ING1T}")"
 # The internal release state (the builders' sed: className nginx -> nginx-internal) and the
 # Anubis PoW shield (backendServiceName: anubis) must carry over to the onion rule.
 sed -E 's/^([[:space:]]*className: )nginx$/\1nginx-internal/' "${WORK}/values.yaml" > "${WORK}/values-internal.yaml"
@@ -187,6 +207,7 @@ echo "== C. render: hostname file present -> admitted; absent -> no .onion host 
 plan "${R2}"; ING="$(render "${WORK}/values.yaml" "${p}")"
 has " $(hosts_of "${ING}") " " ${ONION_A} " && [ "$(backend_of "${ING}" "${ONION_A}")" = "$(backend_of "${ING}" "${PRIMARY}")" ] \
     && ok "C hostname file present: the rendered Ingress admits ${ONION_A:0:12}….onion -> $(backend_of "${ING}" "${ONION_A}")" || bad "C present: hosts '$(hosts_of "${ING}")'"
+[ "$(paths_of "${ING}" "${ONION_A}")" = "${ROOT_PATHS}" ] && ok "C the admitted onion's rule serves path / (Prefix), so https://<onion>/ is not a 404" || bad "C onion paths $(paths_of "${ING}" "${ONION_A}") != ${ROOT_PATHS}"
 plan "${R1}"; ING="$(render "${WORK}/values.yaml" "${p}")"
 hasnt "$(hosts_of "${ING}")" ".onion" && ok "C hostname file absent: the rendered Ingress admits no .onion host" || bad "C absent: hosts '$(hosts_of "${ING}")'"
 plan "${R3}"; ING="$(render "${WORK}/values.yaml" "${p}")"
@@ -201,17 +222,22 @@ cat > "${STUB}/kubectl" <<'SH'
 # Stub: logs argv, serves ${KT_APP} for `get application`, applies a merge patch to it
 # (honouring a resourceVersion precondition like the API server does).
 echo "$*" >> "${KT_LOG}"
-args=("$@"); verb=""; name=""; body=""
+args=("$@"); verb=""; name=""; body=""; ptype=""
 for ((i=0; i<${#args[@]}; i++)); do
     case "${args[i]}" in
         get|patch|annotate) [ -z "${verb}" ] && { verb="${args[i]}"; name="${args[i+2]:-}"; } ;;
         -p) body="${args[i+1]}" ;;
+        --type) ptype="${args[i+1]}" ;;
+        --type=*) ptype="${args[i]#--type=}" ;;
     esac
 done
 [ -n "${KT_FAIL:-}" ] && [ "${KT_FAIL}" = "${verb}" ] && { echo "stub: ${verb} fails" >&2; exit 1; }
 case "${verb}" in
     get)   [ "${name}" = "${KT_WANT_NAME}" ] || { echo "not found: ${name}" >&2; exit 1; }; cat "${KT_APP}" ;;
     patch)
+        # the real kubectl/API: a CRD (argoproj.io Application) takes no strategic merge
+        # patch, which is kubectl's default --type
+        [ "${ptype}" = merge ] || { echo 'Error: strategic merge patch is not supported for argoproj.io/v1alpha1, Kind=Application locally, try --type merge' >&2; exit 1; }
         rv="$(jq -r '.metadata.resourceVersion // empty' <<<"${body}")"
         cur="$(jq -r '.metadata.resourceVersion' "${KT_APP}")"
         [ -z "${rv}" ] || [ "${rv}" = "${cur}" ] || { echo "Conflict" >&2; exit 1; }
@@ -266,6 +292,21 @@ jq '.spec.source.helm.parameters |= ([.[] | select(.name|startswith("ingress.oni
 [ "$(jq -r '.spec.source.helm.parameters[0].name' "${WORK}/live.json")" = "ingress.onionHosts[0]" ] || bad "D3 reorder fixture did not reorder (fixture broken)"
 apply "${D2}"
 [ "$(n_verb patch)" -eq 0 ] && ok "D3 a reordered but equal parameter set -> NO patch" || bad "D3 reorder patched: ${KLOG}"
+# the record lost (re-provision, a failed write) while the Application still admits this
+# node's onion: the steady-state run must write it back, or a later withdrawal never fires
+rm -f "${D2}/var/lib/hugmesh/tor-ingress/admitted"
+apply "${D2}"
+[ "$(n_verb patch)" -eq 0 ] && [ "$(cat "${D2}/var/lib/hugmesh/tor-ingress/admitted" 2>/dev/null)" = "${ONION_A}" ] \
+    && ok "D3 a lost admitted record is rewritten on a steady-state run (no patch)" || bad "D3 record not rewritten: patches=$(n_verb patch) record='$(cat "${D2}/var/lib/hugmesh/tor-ingress/admitted" 2>/dev/null)'"
+# one writer per node: a run that finds the node lock held does nothing at all
+if command -v flock >/dev/null 2>&1; then
+    : > "${WORK}/kt.log"
+    flock "${D2}/var/lib/hugmesh/tor-ingress/.lock" env HUGMESH_TOR_ROOT="${D2}" HUGMESH_TOR_KUBECTL="${STUB}/kubectl" KT_LOG="${WORK}/kt.log" \
+        KT_APP="${WORK}/live.json" KT_WANT_NAME=hugmesh-gateway-fe bash "${AGENT}" apply >/dev/null 2>&1
+    [ $? -eq 0 ] && [ ! -s "${WORK}/kt.log" ] && ok "D3 the node lock held by another writer -> exit 0, no kubectl call" || bad "D3 lock ignored: $(cat "${WORK}/kt.log")"
+else
+    bad "flock is required (an absent tool is a FAIL here, never a skip)"
+fi
 
 rm -f "${D2}/var/lib/hugmesh/tor/hostname"
 apply "${D2}"
@@ -297,6 +338,54 @@ jq --arg x "${ONION_X}" '.spec.source.helm.parameters = [{name:"ingress.onionHos
 D9="$(mkroot twonodes)"; baked "${D9}"; printf '%s\n' "${ONION_A}" > "${D9}/var/lib/hugmesh/tor/hostname"
 apply "${D9}"
 [ "$(live_onions)" = "${ONION_X} ${ONION_A}" ] && ok "D9 a second tor control-plane node appends; the first node's onion survives" || bad "D9 '$(live_onions)'"
+
+# ═════════════════════════════ F. the real `status` ═════════════════════════════
+echo "== F. hugmesh-tor-ingress-admit status (stub kubectl) =="
+status() {  # ROOT -> the agent's real `status` output in S, its rc in STATUS_RC; stub log in KLOG
+    : > "${WORK}/kt.log"
+    S="$(HUGMESH_TOR_ROOT="$1" HUGMESH_TOR_KUBECTL="${STUB}/kubectl" KT_LOG="${WORK}/kt.log" KT_APP="${WORK}/live.json" \
+        KT_WANT_NAME="${KT_WANT_NAME:-hugmesh-gateway-fe}" KT_FAIL="${KT_FAIL:-}" bash "${AGENT}" status 2>"${WORK}/status.err")"
+    STATUS_RC=$?
+    KLOG="$(cat "${WORK}/kt.log")"
+}
+# live_grade OUT -> PASS|FAIL|SKIP exactly as tests/qemu/assertions.sh's live leg grades
+# the same output (keep the two case blocks identical)
+live_grade() {
+    case "$1" in
+        *" NOT admitted"*) echo FAIL ;;
+        *" admitted"*)     echo PASS ;;
+        *)                 echo SKIP ;;
+    esac
+}
+grep -aF '*" NOT admitted"*) bad' "${REPO}/tests/qemu/assertions.sh" >/dev/null && grep -aF '*" admitted"*)     ok' "${REPO}/tests/qemu/assertions.sh" >/dev/null \
+    && ok "F the QEMU live leg still grades on the same two status patterns this section pins" || bad "F tests/qemu/assertions.sh no longer grades on ' NOT admitted' / ' admitted' — re-pin section F to its new shape"
+F1="$(mkroot st)"; baked "${F1}"; printf '%s\n' "${ONION_A}" > "${F1}/var/lib/hugmesh/tor/hostname"; printf '%s\n' "${ONION_B}" > "${F1}/var/lib/hugmesh/tor/brandb.hostname"
+jq --arg a "${ONION_A}" --arg b "${ONION_B}" '.spec.source.helm.parameters = [{name:"image.tag",value:"1.2.3"},{name:"ingress.onionHosts[0]",value:$a},{name:"ingress.onionHosts[1]",value:$b}]' "${WORK}/app.json" > "${WORK}/live.json"
+status "${F1}"
+[ "${STATUS_RC}" -eq 0 ] && [ "${S}" = "${ONION_A} admitted"$'\n'"${ONION_B} admitted" ] && [ "$(live_grade "${S}")" = PASS ] \
+    && ok "F both exported onions are ingress.onionHosts[i] -> '<onion> admitted' per onion (live leg: PASS)" || bad "F admitted: rc=${STATUS_RC} '${S}' $(head -c 200 "${WORK}/status.err")"
+has "${KLOG}" "get application hugmesh-gateway-fe" && has "${KLOG}" "--kubeconfig ${F1}/etc/kubernetes/admin.conf" && ok "F status reads the live Application with the node admin kubeconfig" || bad "F status kubectl argv: ${KLOG}"
+jq --arg a "${ONION_A}" '.spec.source.helm.parameters = [{name:"ingress.onionHosts[0]",value:$a}]' "${WORK}/app.json" > "${WORK}/live.json"
+status "${F1}"
+[ "${S}" = "${ONION_A} admitted"$'\n'"${ONION_B} NOT admitted" ] && [ "$(live_grade "${S}")" = FAIL ] \
+    && ok "F one onion absent from the Application -> '<onion> NOT admitted' for it alone (live leg: FAIL)" || bad "F partly admitted: '${S}'"
+jq --arg a "${ONION_A}" --arg b "${ONION_B}" '.spec.source.helm.parameters = [{name:"ingress.extraHosts[1]",value:$a},{name:"image.tag",value:$b}]' "${WORK}/app.json" > "${WORK}/live.json"
+status "${F1}"
+[ "${S}" = "${ONION_A} NOT admitted"$'\n'"${ONION_B} NOT admitted" ] && [ "$(live_grade "${S}")" = FAIL ] \
+    && ok "F the onion value under another parameter name (extraHosts[1], image.tag) -> NOT admitted (only ingress.onionHosts[i] admits)" || bad "F wrong key graded admitted: '${S}'"
+jq '.spec.source.helm.parameters = []' "${WORK}/app.json" > "${WORK}/live.json"
+status "${F1}"
+[ "${S}" = "${ONION_A} NOT admitted"$'\n'"${ONION_B} NOT admitted" ] && ok "F no onion parameter at all -> every exported onion NOT admitted" || bad "F none: '${S}'"
+F2="$(mkroot st-worker)"; printf '%s\n' "${ONION_A}" > "${F2}/var/lib/hugmesh/tor/hostname"
+status "${F2}"
+[ "${STATUS_RC}" -eq 0 ] && [ -z "${KLOG}" ] && [ "${S#"${ONION_A} unknown ("}" != "${S}" ] && [ "$(live_grade "${S}")" = SKIP ] \
+    && ok "F no admin kubeconfig -> '<onion> unknown (...)', no kubectl call (live leg: SKIP, never PASS)" || bad "F worker: rc=${STATUS_RC} '${S}' kubectl: ${KLOG}"
+KT_FAIL=get status "${F1}"
+[ "${S}" = "${ONION_A} unknown (no readable Application devops/hugmesh-gateway-fe from this node)"$'\n'"${ONION_B} unknown (no readable Application devops/hugmesh-gateway-fe from this node)" ] && [ "$(live_grade "${S}")" = SKIP ] \
+    && ok "F Application unreadable -> unknown (live leg: SKIP, never PASS)" || bad "F unreadable: '${S}'"
+F3="$(mkroot st-none)"; baked "${F3}"
+status "${F3}"
+[ "${S}" = "no exported onion on this node" ] && [ -z "${KLOG}" ] && ok "F nothing exported -> 'no exported onion on this node', no kubectl call" || bad "F none exported: '${S}' ${KLOG}"
 
 # ═════════════════════════════ E. wiring ═════════════════════════════
 echo "== E. cron + builder bake =="

@@ -145,11 +145,30 @@ printf '%s\n' "${OUT}" | grep -a '^INFO' | sed 's/^/  /' | head -40
     && ok "a build without tor bakes no 08b-networkpolicy-tor Application and no networkpolicy-tor overlay" || bad "the tor netpol Application/overlay survived a build without tor"
 rm -rf "${WORK}/sys-tor"; mkdir -p "${WORK}/sys-tor/var/lib/hugmesh"; cp -r "${REPO}/specs/cluster" "${WORK}/sys-tor/var/lib/hugmesh/cluster"
 ( set +u; source "${LIB}"; info() { :; }; warn() { :; }; SYSROOT="${WORK}/sys-tor"; OPTIONAL_SERVICES="tor"; gate_optional_services ) >/dev/null 2>&1
-if [ -f "${WORK}/sys-tor/var/lib/hugmesh/cluster/apps/08b-networkpolicy-tor.yaml" ] \
-   && kubectl kustomize "${WORK}/sys-tor/var/lib/hugmesh/cluster/manifests/networkpolicy-tor" 2>/dev/null | grep -a '^  name: tor-onion-marked$' >/dev/null; then
-    ok "a build WITH tor keeps the 08b Application, and its overlay renders tor-onion-marked"
+# Where 08b points is read from the BAKED Application itself (never a hard-coded path):
+# it must be its own overlay, not the auto-synced directory 08-networkpolicy serves, and
+# the directory it names must render tor-onion-marked — in git (what ArgoCD applies) and
+# in the tor build's baked tree.
+app_path() {  # APP_FILE -> spec.source.path (empty when unreadable)
+    python3 -c '
+import sys, yaml
+d = [x for x in yaml.safe_load_all(open(sys.argv[1])) if x and x.get("kind") == "Application"][0]
+print(((d.get("spec") or {}).get("source") or {}).get("path") or "")' "$1" 2>/dev/null
+}
+B08B="${WORK}/sys-tor/var/lib/hugmesh/cluster/apps/08b-networkpolicy-tor.yaml"
+p08b="$( [ -f "${B08B}" ] && app_path "${B08B}")"
+p08="$(app_path "${WORK}/sys-tor/var/lib/hugmesh/cluster/apps/08-networkpolicy.yaml")"
+if [ "${p08b}" = "specs/cluster/manifests/networkpolicy-tor" ] && [ -n "${p08}" ] && [ "${p08b}" != "${p08}" ]; then
+    ok "a build WITH tor keeps the 08b Application, pointed at its own overlay (${p08b}), not 08-networkpolicy's auto-synced ${p08}"
 else
-    bad "a tor build lost the 08b Application or its overlay does not render tor-onion-marked"
+    bad "a tor build's 08b Application is missing or points at '${p08b}' (08-networkpolicy serves '${p08}') — it must serve specs/cluster/manifests/networkpolicy-tor alone"
+fi
+if [ -n "${p08b}" ] \
+   && kubectl kustomize "${REPO}/${p08b}" 2>/dev/null | grep -a '^  name: tor-onion-marked$' >/dev/null \
+   && kubectl kustomize "${WORK}/sys-tor/var/lib/hugmesh/cluster/${p08b#specs/cluster/}" 2>/dev/null | grep -a '^  name: tor-onion-marked$' >/dev/null; then
+    ok "the directory 08b names renders tor-onion-marked, from git and from the tor build's baked tree"
+else
+    bad "the directory 08b names ('${p08b}') does not render tor-onion-marked (git or baked) — a tor build would ship the policy nowhere"
 fi
 python3 - "${REPO}/specs/cluster/apps/08b-networkpolicy-tor.yaml" <<'PY' && ok "08b-networkpolicy-tor is MANUAL-sync (egress-axis policy ships dark)" || bad "08b-networkpolicy-tor has an automated sync block (or is unreadable)"
 import sys, yaml
