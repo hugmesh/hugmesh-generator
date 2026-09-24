@@ -663,14 +663,18 @@ Scenario: ...
 ```
 
 **Spelling.** `<repo>` drops the `hugmesh-` prefix (`hugmesh-user-bff-api` →
-`user-bff-api`) and keeps its own dots and dashes (`hugmesh-github.io` →
-`github.io`); `<number>` is that repo's issue number. The whole tag matches
+`user-bff-api`, `hugmesh.github.io` → `github.io`) and keeps its own dots and
+dashes; `<number>` is that repo's issue number. The whole tag matches
 `^@issue:[a-z0-9][a-z0-9.-]*-[0-9]+$` — lowercase, the repo segment starts
-alphanumeric, then a literal `-`, then digits, nothing else. Enforced, not just
+alphanumeric, then a literal `-`, then digits, nothing else — and the repo
+segment never starts `hugmesh-` or `hugmesh.` (the prefix really is dropped:
+`@issue:hugmesh-generator-549` is red, because the lookup grep below cannot
+find it). Enforced, not just
 documented: check 5 of `tests/scripts/test-e2e-gherkin-harness.sh` **fails** the
 build on a malformed `@issue:` tag — `@issue:Generator-549`, `@issue:generator`,
 `@issue:generator-`, a bare `@issue:`, `@issue:-549`, `@issue:-generator-549`,
-`@issue:generator-549x`, `@issue:generator_549`, `@issue:gen_erator-549` and a
+`@issue:generator-549x`, `@issue:generator_549`, `@issue:gen_erator-549`,
+`@issue:hugmesh-generator-549`, `@issue:hugmesh.github.io-15` and a
 capitalised `@Issue:` prefix are all red (each shape in that list kills a
 specific loosening of the regex; the harness's control E proves it). It judges **tag lines and
 keyword titles only**: a `"@issue:…"` inside a quoted step argument, a table
@@ -739,5 +743,8 @@ guard.
 **Finding every scenario written for an issue:**
 
 ```sh
-grep -rn "@issue:generator-549" tests/e2e/features
+grep -rnwF "@issue:generator-549" tests/e2e/features
 ```
+
+`-w` so `@issue:generator-5490` is not a hit; `-F` so the `.` in
+`@issue:github.io-15` is literal.

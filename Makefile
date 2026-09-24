@@ -2506,6 +2506,12 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 #     and is GREEN in the real tree. DO NOT RE-MEASURE THIS LIST FROM A WORKTREE.
 #         tests/scripts/test-selected-services-only.sh         rc=1
 #         tests/scripts/test-optional-service-slug-closure.sh  rc=1
+#           (RE-MEASURED 2026-09-23, #584: until then this rc=1 was its own
+#           parser reading ZERO registry entries — INCOMPLETE, comparing
+#           nothing. It now compares, and is red on two stale controller facts
+#           filed as hugmesh-admin-bff-api#106: meshbridge enum-accepted but
+#           unmanaged, character-forge's selfHeal flag. Its verdict is
+#           position-independent when SERVICE_SRC_ROOT names the checkout tree.)
 #         tests/scripts/test-liquibase-grant-roles.sh          rc=1
 #         tests/egress-vpn/test-secret-contract.sh             rc=1
 #         tests/scripts/test-eso-target-collisions.sh          rc=1

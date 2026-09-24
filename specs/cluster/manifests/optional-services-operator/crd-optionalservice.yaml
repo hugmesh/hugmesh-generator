@@ -122,23 +122,24 @@ spec:
                     # character-forge (3D maker multi-app slug, docs/XR-CHAT.md) —
                     # added WITH its 13a element + ConfigMap boolean + seed CR.
                     #
-                    # ⚠ OPEN, CROSS-REPO, AND SILENT (measured 2026-08-26): the
-                    # admin-bff OptionalServiceRegistry.java still lists only 12
-                    # entries and OMITS this slug. The consequence is not a
-                    # rejection — it is a toggle that reports success and does
-                    # nothing. The API server ACCEPTS spec.slug: character-forge
-                    # (it is in this enum), `kubectl get optionalservices` shows
-                    # enabled:true, and the reconciler logs "unknown slug —
-                    # ignoring", writes NEITHER the 13a element NOR the ConfigMap
-                    # key, and skips that CR's /status entirely — so even
-                    # .status.phase stays empty and nothing anywhere records that
-                    # the toggle was a no-op. A slug in this enum but absent from
-                    # the registry is strictly WORSE than one missing from both
-                    # (meshbridge's old shape, which at least failed loud).
+                    # A slug in this enum but absent from the admin-bff
+                    # OptionalServiceRegistry is a toggle that reports success and
+                    # does nothing: the API server ACCEPTS the CR, `kubectl get
+                    # optionalservices` shows enabled:true, and the reconciler logs
+                    # "unknown slug — ignoring", writes NEITHER the 13a element NOR
+                    # the ConfigMap key, and skips that CR's /status entirely. That
+                    # is strictly WORSE than a slug missing from both.
+                    # character-forge had that shape until admin-bff b8ed324
+                    # (2026-08-26) registered it. Re-measured 2026-09-23
+                    # (hugmesh-generator #584): the registry still marks it
+                    # configMapSelfHealProtected=false although apps/16 carries
+                    # /data/character-forge (a false selfHeal warning), and
+                    # MESHBRIDGE below now has the silent shape — it is in this enum
+                    # and the seed CRs while the registry keeps it NOT_TOGGLEABLE as
+                    # NOT_IN_CRD_ENUM. Both are hugmesh-admin-bff-api#106.
                     # tests/scripts/test-optional-service-slug-closure.sh reads the
-                    # sibling hugmesh-admin-bff-api checkout and fails on exactly
-                    # this divergence; it is RED on that leg until the registry
-                    # gains character-forge + meshbridge.
+                    # sibling hugmesh-admin-bff-api checkout and is RED on exactly
+                    # those two facts until #106 lands.
                     - character-forge
                     - anubis
                     - coturn
