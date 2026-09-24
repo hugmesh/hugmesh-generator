@@ -3661,6 +3661,9 @@ cp "${SHARED_SPECS}/etc/cron.d/hugmesh-vpn-reconcile" "${SYSROOT}/etc/hugmesh/re
 # v3 onion keypair OFF-GIT under /var/lib/tor/hugmesh-onion. The cron drop-in is STAGED
 # at /etc/hugmesh/registry (the gate places it into /etc/cron.d on selection).
 cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-reconcile"   "${SYSROOT}/usr/sbin/hugmesh-tor-reconcile";   chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-reconcile"
+# Its ingress half (#614): admits the exported onions as fe-gateway Ingress hosts from a
+# control-plane node; run by the same cron drop-in (*/5), inert without a hostname.
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-ingress-admit" "${SYSROOT}/usr/sbin/hugmesh-tor-ingress-admit"; chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-ingress-admit"
 cp "${SHARED_SPECS}/etc/init.d/hugmesh-tor-reconcile" "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile"; chmod +x "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile"
 cp "${SHARED_SPECS}/etc/cron.d/hugmesh-tor-reconcile"  "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile"
 

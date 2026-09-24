@@ -1043,6 +1043,17 @@ lint:kind-tor:
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
     - bash tests/scripts/test-kind-tor.sh
 
+# A hardware node's .onion admitted at the ingress edge (hugmesh-generator#614): the
+# node agent specs/usr/sbin/hugmesh-tor-ingress-admit (plan + apply against a stub
+# kubectl) and the fe-gateway Ingress its ingress.onionHosts parameters render — a
+# REAL `helm template`, so this inherits lint:gateway-mfa-env's pinned, sha256-verified,
+# fail-closed helm install. The suite FAILS (never skips) without helm, jq or PyYAML.
+lint:tor-onion-ingress:
+  extends: lint:gateway-mfa-env
+  script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends jq >/dev/null
+    - bash tests/scripts/test-tor-onion-ingress.sh
+
 # MFA OPERATIONAL FLIP wiring gate (issue #47). The companion of the two jobs
 # above: they pin the default-OFF POSTURE, this one pins the SWITCH — MFA=1 must
 # reach EVERY consumer of the gateway MFA trio on every lane it claims to drive
@@ -3437,6 +3448,7 @@ orphan-guards-verify:
         tests/scripts/test-installer-ui-node-default.sh
         tests/scripts/test-intltool-preseed.sh
         tests/scripts/test-kernel-artifact-cache.sh
+        tests/scripts/test-optional-netpol-autosync.sh
         tests/scripts/test-passhash-lib.sh
         tests/scripts/test-platform-key-spelling.sh
         tests/scripts/test-portage-config-sync.sh
