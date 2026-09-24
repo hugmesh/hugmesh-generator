@@ -1950,8 +1950,9 @@ def effective_domain_note(cfg: "ImageConfig") -> str:
     joins (derived ``<brand>.internal`` when left blank — ``effective_superdomain``)."""
     return (f"Serve only {cfg.cluster_domain or 'the cluster domain'} and the internal "
             f"Tailscale root domain {cfg.effective_superdomain()} that every node joins. "
-            "No domains table, no per-domain services to pick — this is the default and "
-            "what almost every mesh wants.")
+            "No domains table — this is the default and what almost every mesh wants. "
+            f"The services {cfg.cluster_domain or 'the cluster domain'} provides are "
+            "still picked on its own services page, which comes next.")
 
 
 def users_table_applies(cfg: "ImageConfig") -> bool:
@@ -2886,6 +2887,18 @@ class ImageConfig:
     # core/domain_services.gate_reason, which is what refuses an image build or a
     # docker mesh start naming the domains that were never configured.
     domain_services_reviewed: list[str] = field(default_factory=list)
+    # The per-domain services of the MESH'S OWN domain (``cluster_domain``) — the
+    # implicit domain every mesh serves and which #494's rule gives a services page
+    # too, even on the default "just this mesh's own domain" path where the Domains
+    # table is skipped (core/domain_services.implicit_own_domain). It is a separate
+    # field, NOT a ``domains`` row, so the ASK-8 guard holds: an untouched flow emits
+    # no ``--domains`` and no manifest ``domains`` entry. Provisioning input like
+    # ``domains[].optional_services`` (never argv): both mesh manifests carry it as
+    # ``cluster_domain_services`` ONLY when non-empty — empty means "the cluster-wide
+    # set applies", the same reading as an empty per-domain list, and keeps every
+    # pre-existing manifest byte-identical. Mesh mode only; cloud prefills its
+    # cluster domain as a real row 0 and standalone has no domains.
+    cluster_domain_services: list[str] = field(default_factory=list)
     # ── hardware ──
     gpu_driver: str = "auto"           # auto|nvidia|amd-free|amd-pro|intel|none
     nvidia_cuda: bool = False          # --nvidia-cuda (CUDA bake for GPU/edge-AI images; x86)
@@ -3222,6 +3235,14 @@ class ImageConfig:
                 d["domain_services_reviewed"] = [x for x in v if isinstance(x, str)]
             else:
                 d.pop("domain_services_reviewed")
+        # The own domain's services (#494): the same tolerance — junk is ABSENT, i.e.
+        # the cluster-wide set, never a list holding a scalar.
+        if "cluster_domain_services" in d:
+            v = d["cluster_domain_services"]
+            if isinstance(v, (list, tuple)):
+                d["cluster_domain_services"] = [x for x in v if isinstance(x, str)]
+            else:
+                d.pop("cluster_domain_services")
         # MIGRATE the pre-2026-08-26 spelling of the post-build device-test opt-in.
         # from_dict filters unknown keys, so without this a config saved under the old
         # name would load with the opt-in silently OFF — the `games` precedent above:
@@ -4617,6 +4638,10 @@ class ImageConfig:
             # ``role`` stays the primary every consumer reads; a multi-role account adds
             # the full list beside it. test_user_multi_role.py pins both shapes.
             "users": [u.to_dict() for u in self.users],
+            # the mesh's OWN domain's per-domain services (#494) — OMIT-WHEN-EMPTY, so
+            # a manifest whose own domain takes the cluster-wide set keeps its bytes.
+            **({"cluster_domain_services": list(self.cluster_domain_services)}
+               if self.cluster_domain_services else {}),
         }
 
     def write_mesh_manifest(self, output_dir: str) -> str:

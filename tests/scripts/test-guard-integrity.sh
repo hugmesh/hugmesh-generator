@@ -690,7 +690,18 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # computed:
 #     180 of 203 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 23 — the new suite was never in it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-180}"
+#
+# 180 -> 182 on 2026-09-24 (iss/614-node-onion-ingress, on origin/main e6838857 — which
+# already carried the 180 above): two new suites, both wired into shell-suites.yml's
+# extras job (helm + kubectl): tests/scripts/test-tor-onion-ingress.sh (#614 — a
+# hardware node's .onion admitted as an fe-gateway Ingress host, rendered with a real
+# `helm template`) and tests/scripts/test-optional-netpol-autosync.sh (#617 — no
+# optional-service NetworkPolicy served from git by an Application every build keeps,
+# via `kubectl kustomize`). The denominator moves 203 -> 205. MEASURED by RUNNING this
+# file on that tree (GUARD_PREMERGE=0), not computed:
+#     182 of 205 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 23 — neither new suite was ever in it.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-182}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED

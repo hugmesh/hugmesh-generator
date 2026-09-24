@@ -788,7 +788,9 @@ spec:
     # first boot, and exposes the in-cluster fe-gateway as a stable .onion — INBOUND
     # reachability with no public IP / DDNS / Cloudflare. The per-service opt-in label
     # (hugmesh.net/tor-onion) keys the NetworkPolicy interaction
-    # (manifests/networkpolicy/tor-onion-marked.yaml) — a forward-hook for the OPT-IN
+    # (manifests/networkpolicy-tor/tor-onion-marked.yaml, served by its own MANUAL-sync
+    # apps/08b-networkpolicy-tor.yaml, which the bake removes when tor is not selected —
+    # hugmesh-generator#617) — a forward-hook for the OPT-IN
     # pod-egress-via-tor capability (inert by default). nodeServices lists the DISTRO
     # `tor` service (baked with the package) + our reconcile agent — BOTH are linked
     # into the default runlevel when selected on a cluster-node role (decision 70 = B on
@@ -807,7 +809,7 @@ spec:
       scope: node            # NODE service, not a cluster Application
       apps: []
       sharedApps: []
-      manifestPath: manifests/networkpolicy   # only the interaction NetworkPolicy
+      manifestPath: manifests/networkpolicy-tor   # only the interaction NetworkPolicy (apps/08b-networkpolicy-tor.yaml)
       esoFile: null
       esoKeys: []
       gatewayHost: null
@@ -816,7 +818,7 @@ spec:
       federationModule: null
       casdoorSeed: null
       # NODE-level gate artefacts (added/linked by the SVCS/PKGS gates; the
-      # NetworkPolicy is pruned by gate_optional_services when NOT selected):
+      # NetworkPolicy's Application is pruned by gate_optional_services when NOT selected):
       nodePackages: [net-vpn/tor]
       nodeServices: [tor, hugmesh-tor-reconcile]
       # The per-service opt-in label the NetworkPolicy interaction keys off.
@@ -828,9 +830,10 @@ spec:
       # prune apps/10-ingress-nginx.yaml, leaving apps/11-ingress-nginx-internal.yaml),
       # the hugmesh.net/backend node under RELEASE_STATE=public (apps/10-ingress-nginx.yaml),
       # either on an omnibus node. Any other node — or a host tor fronting kind, whose
-      # port map is 127.0.0.1:8443 — overrides it via /etc/hugmesh/tor/upstream. (The
-      # onion reaches that edge; the fe-gateway Ingress does not admit an onion Host yet
-      # — docs/TOR-HIDDEN-SERVICE.md "Known gap".)
+      # port map is 127.0.0.1:8443 — overrides it via /etc/hugmesh/tor/upstream. The
+      # edge admits the onion Host because /usr/sbin/hugmesh-tor-ingress-admit writes it
+      # onto the fe-gateway Application (ingress.onionHosts, hugmesh-generator#614) from a
+      # control-plane node — docs/TOR-HIDDEN-SERVICE.md "Ingress admission".
       torHiddenServiceUpstream: 127.0.0.1:443
 
     # ── workloadConsole — podman/OpenShift-equivalent pod console (DEFAULT-OFF) ──

@@ -23,6 +23,16 @@ config that never met this column round-trips byte-identically.
 Title/optional-services/applies-to editing is not ported yet (honest note);
 add/remove, the Sign-in toggle and the base-CA choice are, so both per-domain
 choices are real TUI surfaces.
+
+THE OWN ROW (#494; #589, operator decision 69 = A). In mesh mode the table opens with
+the mesh's OWN domain (``core.domain_services.implicit_own_domain`` — the cluster
+domain) as a display-only first row, exactly as the GUI table's row 0: numbered
+``own`` rather than 1 so every add/delete/sign-in/base-CA command keeps addressing
+the ``cfg.domains`` rows it always did, never removable, its Applies-to / Sign-in /
+Base CA the facts they are for the apex (the same words as ``gui/pages/domains.py``,
+parity-pinned), and its services the summary of what the Domain services step
+recorded into ``cfg.cluster_domain_services``. It is NOT a ``cfg.domains`` row, so an
+untouched flow still emits no ``--domains`` and no manifest ``domains`` entry.
 """
 from __future__ import annotations
 
@@ -32,9 +42,18 @@ import re
 from ..core.config import (
     DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain,
 )
+from ..core.domain_services import (implicit_own_domain, reviewed_names,
+                                    services_summary)
 from . import model
 
-__all__ = ["DomainsScreen", "IDP_LABELS", "domain_table"]
+__all__ = ["DomainsScreen", "IDP_LABELS", "domain_table", "OWN_APPLIES", "OWN_IDP",
+           "OWN_CA"]
+
+#: What the own row's three per-domain columns READ AS — the GUI table's
+#: ``_OWN_APPLIES`` / ``_OWN_IDP`` / ``_OWN_CA`` word for word (parity-pinned).
+OWN_APPLIES = "All images (this mesh's own domain)"
+OWN_IDP = "Superdomain Casdoor (the mesh's central one)"
+OWN_CA = "Mesh default"
 
 #: schema value -> the label the GUI combo shows (parity-pinned).
 IDP_LABELS = {
@@ -47,15 +66,24 @@ IDP_LABELS = {
 _NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
 
 
-def domain_table(cfg) -> tuple[list[str], list[list[str]]]:
+def domain_table(cfg, with_own: bool = False) -> tuple[list[str], list[list[str]]]:
     """(headers, rows) for the domains table. The Sign-in column appears ONLY
-    in mesh mode — the GUI hides it in cloud for the same reason."""
+    in mesh mode — the GUI hides it in cloud for the same reason. ``with_own``
+    prepends the mesh's own domain as the display-only ``own`` row (see the module
+    doc); off by default so row ``i`` stays ``cfg.domains[i]`` for every caller that
+    indexes the rows."""
     mesh = cfg.mode == "mesh"
     headers = ["#", "domain", "title", "optional services", "applies to"]
     if mesh:
         headers += ["sign-in", "base CA"]
     domain_ca = getattr(cfg, "domain_ca", None) or {}
     rows: list[list[str]] = []
+    own = implicit_own_domain(cfg) if with_own else ""
+    if own:
+        rows.append(["own", own, getattr(cfg, "brand_title", "") or "-",
+                     services_summary(getattr(cfg, "cluster_domain_services", None),
+                                      own in reviewed_names(cfg)),
+                     OWN_APPLIES, OWN_IDP, OWN_CA])
     for i, d in enumerate(cfg.domains, 1):
         row = [str(i), d.name, d.title or "-",
                ", ".join(d.optional_services) or "-",
@@ -82,11 +110,15 @@ class DomainsScreen:
         out = ["The go-live domains this mesh serves to browsers."
                if cfg.mode == "mesh" else
                "The domains this client image is tied to.", ""]
-        if cfg.domains:
-            headers, rows = domain_table(cfg)
+        headers, rows = domain_table(cfg, with_own=True)
+        if rows:
             out += model.format_table(headers, rows)
-        else:
+        if not cfg.domains:
             out.append("(no additional domains yet)")
+        if implicit_own_domain(cfg):
+            out.append("Row 'own' is this mesh's OWN domain (the cluster domain): "
+                       "always served, never removable, its services picked on the "
+                       "next step like every other domain's.")
         out.append("")
         commands = ["a NAME=add a domain", "d NUMBER=delete"]
         if cfg.mode == "mesh":

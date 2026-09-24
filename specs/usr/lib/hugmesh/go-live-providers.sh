@@ -628,9 +628,12 @@ glp_emit_router-portforward() {
 # defaults to 127.0.0.1:443, which is right only on the node running that edge — the
 # hugmesh.net/pki node under RELEASE_STATE=internal (the default), the
 # hugmesh.net/backend node once public — and is overridden per node by
-# /etc/hugmesh/tor/upstream. KNOWN GAP (hugmesh-generator#614): the fe-gateway Ingress
-# does not admit an onion Host yet, so on a hardware node the onion answers
-# ingress-nginx's 404, not the login page; the card says so. (The COMPOSE lane's onion
+# /etc/hugmesh/tor/upstream. INGRESS ADMISSION (hugmesh-generator#614): the edge
+# serves the onion only once it is an fe-gateway Ingress host, which
+# /usr/sbin/hugmesh-tor-ingress-admit writes from a CONTROL-PLANE node (admin.conf) —
+# pki under internal, omnibus; under public select tor on pki with the upstream file
+# pointing at the backend edge. A worker's onion answers ingress-nginx's 404; the card
+# says so. (The COMPOSE lane's onion
 # is different — tests/stack/tor — and is not what this node-side card describes.)
 # Per-domain onions (decision 68 = A) are exported beside the primary as
 # <slug>.hostname; GL_ONION_EXPORT_DIR overrides that directory.
@@ -714,10 +717,12 @@ glp_emit_tor-onion() {
         printf '  certificate — no .onion name is on it — so Tor Browser warns once per\n'
         printf '  visitor. The Tor circuit itself is end-to-end encrypted and the .onion\n'
         printf '  address authenticates the service; accepting the warning is expected.\n\n'
-        printf 'KNOWN GAP (hugmesh-generator#614): the gateway Ingress does not admit a\n'
-        printf '  .onion Host yet, so today the onion reaches the ingress edge and gets its\n'
-        printf '  404 — NOT the login page. Until #614 lands, the onion proves the Tor path\n'
-        printf '  (circuit, key custody, torrc, edge) but does not serve the mesh.\n\n'
+        printf 'INGRESS ADMISSION (hugmesh-generator#614): the edge serves the onion only\n'
+        printf '  once it is an fe-gateway Ingress host. hugmesh-tor-ingress-admit (cron,\n'
+        printf '  every 5 min) adds it from a CONTROL-PLANE node: the pki node under\n'
+        printf '  release-state internal, or omnibus. A tor selected on a worker cannot\n'
+        printf '  admit its onion: it answers the edge'"'"'s 404, NOT the login page. Check\n'
+        printf '  with:  hugmesh-tor-ingress-admit status   (on that control-plane node)\n\n'
 
         printf 'PREREQUISITE (the reachability, not this wizard, comes from it):\n'
         printf '  1. Build the node image with the `tor` service:  --with-tor\n'
@@ -732,8 +737,9 @@ glp_emit_tor-onion() {
         printf '      node once public, either on omnibus. On any other node, or a host tor\n'
         printf '      fronting kind (127.0.0.1:8443), write one host:port line to\n'
         printf '      /etc/hugmesh/tor/upstream).\n'
-        printf '  3. The .onion is then published — Tor Browser reaches the ingress edge\n'
-        printf '     (see KNOWN GAP above for what answers there today).\n\n'
+        printf '  3. The .onion is then published, and within 5 minutes of the cluster\n'
+        printf '     API answering it is admitted as an Ingress host (see INGRESS\n'
+        printf '     ADMISSION above) — Tor Browser then reaches the login page.\n\n'
         printf 'POSTURE — this is the one provider that does NOT need the public flip:\n'
         printf '  The onion works with the firewall CLOSED (release-state internal). You do\n'
         printf '  NOT need `hugmesh-go-live commit` to be reachable over Tor. Commit only\n'
@@ -742,7 +748,7 @@ glp_emit_tor-onion() {
         printf '  the .onion. (rollback/commit never touch the onion either way.)\n\n'
         printf 'VERIFY (from any machine with Tor):\n'
         printf '  torsocks curl -skI https://%s/    # answers over Tor (-k: no onion SAN;\n' "${onion:-<your-onion>}"
-        printf '                                       # 404 from the edge until #614 lands)\n'
+        printf '                                       # a 404 = not admitted yet: see above)\n'
         printf '  # or just open it in Tor Browser.\n'
     } > "${out}/instructions.txt"
     return 0

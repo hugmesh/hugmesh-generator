@@ -4145,6 +4145,9 @@ cp "${SHARED_SPECS}/etc/cron.d/hugmesh-domain-reconcile"    "${SYSROOT}/etc/hugm
 # this agent (ordered `before tor`) writes the managed torrc and mints + persists the
 # v3 onion keypair OFF-GIT under /var/lib/tor/hugmesh-onion on first boot.
 cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-reconcile"        "${SYSROOT}/usr/sbin/hugmesh-tor-reconcile";        chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-reconcile"
+# Its ingress half (#614): admits the exported onions as fe-gateway Ingress hosts from a
+# control-plane node; run by the same cron drop-in (*/5), inert without a hostname.
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-ingress-admit"    "${SYSROOT}/usr/sbin/hugmesh-tor-ingress-admit";    chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-ingress-admit"
 cp "${SHARED_SPECS}/etc/init.d/hugmesh-tor-reconcile"      "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile";      chmod +x "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile"
 cp "${SHARED_SPECS}/etc/cron.d/hugmesh-tor-reconcile"      "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile"
 mkdir -p "${SYSROOT}/usr/share/hugmesh/generator/scripts" "${SYSROOT}/usr/share/hugmesh/generator/templates"

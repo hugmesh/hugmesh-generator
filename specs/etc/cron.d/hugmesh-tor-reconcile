@@ -16,7 +16,13 @@
 # If tor is somehow still down by then, this run (no RC_SVCNAME) starts it.
 # daily   — re-asserts the managed torrc, starts a stopped/crashed tor (this also
 # restarts a tor an admin stopped by hand) and re-exports the hostnames.
+# */5     — hugmesh-tor-ingress-admit (hugmesh-generator#614): admits the exported
+# onions as fe-gateway Ingress hosts (helm parameters ingress.onionHosts[i] on the
+# ArgoCD Application) from a control-plane node, withdraws the ones no longer
+# exported. The API server and ArgoCD come up long after the @reboot export, so it
+# runs on a 5-minute floor; a steady state is one read and no write.
 #
 # Field order: min hour dom month dow user command
 @reboot root sleep 90; /usr/sbin/hugmesh-tor-reconcile >> /var/log/hugmesh-tor-reconcile.log 2>&1
 0 0 * * * root /usr/sbin/hugmesh-tor-reconcile >> /var/log/hugmesh-tor-reconcile.log 2>&1
+*/5 * * * * root /usr/sbin/hugmesh-tor-ingress-admit >> /var/log/hugmesh-tor-ingress-admit.log 2>&1
