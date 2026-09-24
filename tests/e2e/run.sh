@@ -206,12 +206,11 @@ done
 #    proxy; pointed at the onion it could never answer, and the scenario would
 #    skip with "start the stack" against a running stack. The onion travels as
 #    SNAP_ONION_BASE_URL, which only the @via:onion steps read.
-#  * The URL is https://<onion>/, never http. The gateway's CSP carries
-#    upgrade-insecure-requests: a page entered over http:// has every
-#    subresource and fetch() upgraded to https:// (measured 2026-09-23 over a
-#    live onion: the script died ERR_SOCKS_CONNECTION_FAILED with :443 absent,
-#    the fetch died ERR_FAILED cross-origin with :443 present), so an http entry
-#    tests nothing the SPA can do. The onion's :443 is the TLS front.
+#  * The URL is https://<onion>/, never http: the door a person is told to use
+#    (make stack-onion), a secure context, and the node's :443. The onion's :443
+#    is the TLS front. (Not because of CSP upgrade-insecure-requests: the SPA
+#    document does not carry it and boots over http too, measured live
+#    2026-09-24, #628. See docs/TOR-HIDDEN-SERVICE.md "Why :443".)
 #  * Only @via:onion @env:docker scenarios run. Every other scenario builds its
 #    contexts without the proxy, and a lane that ran them "over Tor" would really
 #    have run them over localhost. @env:docker because this is the COMPOSE
@@ -275,7 +274,7 @@ if [ -n "${VIA}" ]; then
   fi
   case "${ONION_BASE_URL}" in
     ''|https://*.onion) ;;
-    *) die "SNAP_ONION_BASE_URL=${ONION_BASE_URL} is not https://<v3>.onion — an http:// entry is upgraded by the gateway's CSP and tests nothing (see --help)." ;;
+    *) die "SNAP_ONION_BASE_URL=${ONION_BASE_URL} is not https://<v3>.onion — the lane tests the :443 door a person is told to use: a secure context (Chromium drops Secure cookies over http://<onion>), the node's own :443, and user-bff's default Secure session cookie (docs/TOR-HIDDEN-SERVICE.md \"Why :443\", #628)." ;;
   esac
   if [ "${ENV_ID}" = "kind" ] && [ -z "${SNAP_PROXY:-}" ]; then
     ONION_PROXY="$(bash "${REPO}/scripts/kind-tor.sh" socks)"

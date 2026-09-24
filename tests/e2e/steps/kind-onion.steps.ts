@@ -40,6 +40,7 @@ import {
   onboard, personaPassword, onionFrontDoor, onionContext,
 } from '../specs/helpers';
 import type { OnionFrontDoor } from '../specs/helpers';
+import { expectOnionSessionIsPersona } from './onion-session';
 
 interface KindOnionRun {
   door: OnionFrontDoor;
@@ -162,10 +163,9 @@ Then('the kind onion session belongs to that persona', async ({ world }) => {
     });
     return { status: r.status, body: await r.text() };
   });
-  expect(me.status, `GET /bff/session over the kind onion -> ${me.status}: ${me.body.slice(0, 300)}`).toBe(200);
-  const body = JSON.parse(me.body) as { handle?: unknown; registrationComplete?: unknown };
-  expect(body.handle, 'the session the onion minted is the persona that signed in').toBe(handle);
-  expect(body.registrationComplete).toBe(true);
+  // Identity by roles, not by `handle`: the handle is the Casdoor sub, never the
+  // username (#624). The same judgement as the compose lane, in onion-session.ts.
+  expectOnionSessionIsPersona(me.status, me.body, handle, 'the kind onion');
 });
 
 Then('every request the kind onion browser made stayed on the onion',
