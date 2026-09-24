@@ -25,7 +25,8 @@
 #      would be pure decoration). .stack-src is excluded: it is a gitignored
 #      vendor checkout of OTHER repos' suites.
 #   5. Every `@issue:` tag is well-formed (features/README.md §8):
-#      ^@issue:[a-z0-9][a-z0-9.-]*-[0-9]+$ — a typo'd issue tag is unsearchable,
+#      ^@issue:[a-z0-9][a-z0-9.-]*-[0-9]+$ and never keeps the `hugmesh-`/
+#      `hugmesh.` prefix on the repo — a typo'd issue tag is unsearchable,
 #      so the scenario reads as untracked. A @fixme scenario carrying no @issue:
 #      is REPORTED with a count, never failed: @fixme predates the convention.
 #
@@ -58,7 +59,20 @@
 # (equivalent while P+F is exact); any two-site mutant that deletes a check AND
 # edits EXPECTED_VERDICTS; the tag-line trailing-comment strip removed
 # (near-equivalent: only bites on a `# comment` that itself contains @issue: or
-# @fixme); and mutants of the CONTROLS themselves (control E's `-ne 11`).
+# @fixme); and mutants of the CONTROLS themselves (control E's `-ne 13`).
+#
+# LANDING PASS (2026-09-23, after two skeptic batteries on the merged head
+# 5a487ed3). Closed: `@issue:hugmesh-generator-549` passing (the lookahead in
+# VALID_ISSUE; control E's two new shapes), the ``` docstring fence (control
+# G), `example` / `scenarios` dropped from the keyword sets, Feature-title and
+# Examples-title tokens dropped from the effective set, and the traceability
+# prefix loosened from `@issue:` to `@issue` (control H, five new rows).
+# STILL OPEN, disclosed: the REAL tree's call silenced with `>/dev/null` (P/F
+# still move, so a malformed tag still fails the run, but its FAIL line, the
+# REPORT count and every row vanish from the log; control K checks control F's
+# tree, not the real one — closing it needs a saved-fd comparison, not done);
+# and `rule_tags` not reset at a Feature: line (equivalent: the state is
+# re-initialised per file and a .feature holds one Feature).
 #
 # OFFLINE. No stack, no network, no cluster. Needs node + the installed
 # tests/e2e/node_modules only, and says so loudly (exit 2) when they are absent —
@@ -348,7 +362,8 @@ fi
 # against at all.
 #
 #   FAIL  — any `@issue:` token ON A TAG LINE OR IN A KEYWORD TITLE that does not
-#           match ^@issue:[a-z0-9][a-z0-9.-]*-[0-9]+$ (a capitalised `@Issue:`
+#           match ^@issue:[a-z0-9][a-z0-9.-]*-[0-9]+$, or whose repo segment
+#           kept the `hugmesh-`/`hugmesh.` prefix (a capitalised `@Issue:`
 #           prefix counts as malformed too — the grep above would miss it).
 #           A step's quoted argument, a table cell, a docstring and a comment
 #           are TEXT, not tags, and are never judged: cli/mesh-cli-surfaces.feature
@@ -381,7 +396,13 @@ issue_tag_report() {
 import os, re
 root = os.environ["FEAT_DIR"]
 
-VALID_ISSUE = re.compile(r'^[a-z0-9][a-z0-9.-]*-[0-9]+$')
+# The lookahead refuses a repo segment that KEPT the `hugmesh-` prefix
+# (`@issue:hugmesh-generator-549`): README §8 says the prefix is dropped, and
+# `grep -rnwF "@issue:generator-549"` cannot find the long spelling. Safe to
+# refuse outright: after stripping `hugmesh-`, the only org repo whose name
+# still starts `hugmesh` is hugmesh.github.io, which §8 spells `github.io`
+# (checked against `gh repo list hugmesh` on 2026-09-23).
+VALID_ISSUE = re.compile(r'^(?!hugmesh[-.])[a-z0-9][a-z0-9.-]*-[0-9]+$')
 TAG_TOKEN = re.compile(r'@\S+')
 # Every keyword line that carries a title (and so, by §2b, may carry tags spelled
 # into it). The trailing `\s*:` disambiguates Example/Examples and Scenario/
@@ -485,10 +506,10 @@ $1"
   fixme_rows="$(split_report FIXME-NO-ISSUE "${report}")"
 
   if [ -n "${malformed_rows}" ]; then
-    bad "malformed @issue: tag(s) — must match ^@issue:[a-z0-9][a-z0-9.-]*-[0-9]+$ (features/README.md §8):"
+    bad "malformed @issue: tag(s) — must match ^@issue:[a-z0-9][a-z0-9.-]*-[0-9]+$ with no hugmesh- prefix on the repo (features/README.md §8):"
     printf '%s\n' "${malformed_rows}" | sed 's/^/         /'
   else
-    ok "every @issue: tag under tests/e2e/features matches ^@issue:[a-z0-9][a-z0-9.-]*-[0-9]+\$"
+    ok "every @issue: tag under tests/e2e/features matches ^@issue:[a-z0-9][a-z0-9.-]*-[0-9]+\$ with no hugmesh- prefix on the repo"
   fi
 
   if [ -n "${fixme_rows}" ]; then
@@ -588,16 +609,21 @@ fi
 # controls E-H exercise check 5's scanner. Pure python logic, no bddgen needed,
 # so each runs against a throwaway features dir rather than a full make_copy.
 
-# control E — EVERY malformed shape must be flagged, and nothing else. Eleven
-# shapes, eleven rows: an uppercase repo, a missing number, a bare prefix, a
+# control E — EVERY malformed shape must be flagged, and nothing else. Thirteen
+# shapes, thirteen rows: an uppercase repo, a missing number, a bare prefix, a
 # leading dash, trailing garbage, an underscore, a capitalised `@Issue:` prefix,
 # one spelled into a Scenario title, and three added 2026-09-23 after a
 # mutation battery loosened the regex three ways and the first eight shapes
 # caught NONE of them: a dash with no digits after it (`-[0-9]+` -> `-[0-9]*`),
 # an underscore INSIDE the repo segment followed by a valid `-<n>` (`_` admitted
 # to the class), and a repo segment that starts with a dash (`^[a-z0-9]` widened).
-# Each shape exists to kill exactly one of those three. A well-formed tag in the
-# same file proves the regex is not simply rejecting everything.
+# Each shape exists to kill exactly one of those three. Two more were added by
+# the landing pass after BOTH skeptics of the conventions lane put
+# `@issue:hugmesh-generator-549` on a real scenario and got 22 passed, 0 failed:
+# the repo segment keeping the `hugmesh-` prefix, in its dash and its dot
+# spelling (each kills the `(?!hugmesh[-.])` lookahead being dropped). A
+# well-formed tag in the same file proves the regex is not simply rejecting
+# everything.
 CE="${SCRATCH}/ctrl-issue-malformed/features"
 mkdir -p "${CE}/onboarding"
 cat > "${CE}/onboarding/zz-control-issue.feature" <<'CTRL'
@@ -632,6 +658,12 @@ Feature: negative control E
   @issue:-generator-549
   Scenario: repo segment starting with a dash
     Given nothing
+  @issue:hugmesh-generator-549
+  Scenario: repo segment that kept the hugmesh- prefix
+    Given nothing
+  @issue:hugmesh.github.io-15
+  Scenario: repo segment that kept the hugmesh. prefix
+    Given nothing
   @issue:github.io-15 @issue:user-bff-api-19
   Scenario: two well-formed tags, dots and dashes in the repo segment
     Given nothing
@@ -645,20 +677,23 @@ CE_MISSING=""
 for shape in '@issue:Generator-549' '@issue:generator' '@issue:' '@issue:-549' \
              '@issue:generator-549x' '@issue:generator_549' '@Issue:generator-549' \
              '@issue:GENERATOR-549' '@issue:generator-' '@issue:gen_erator-549' \
-             '@issue:-generator-549'; do
+             '@issue:-generator-549' '@issue:hugmesh-generator-549' \
+             '@issue:hugmesh.github.io-15'; do
   esc="$(printf '%s' "${shape}" | sed 's/\./\\./g')"
   printf '%s\n' "${CE_MALFORMED}" | grep -E -- ": ${esc}\$" >/dev/null 2>&1 \
     || CE_MISSING="${CE_MISSING} ${shape}"
 done
 if [ -n "${CE_MISSING// /}" ]; then
   bad "CONTROL E: malformed @issue: shape(s) NOT flagged — check 5's regex is asleep for:${CE_MISSING}"
-elif printf '%s\n' "${CE_MALFORMED}" | grep -F -e 'github.io-15' -e 'user-bff-api-19' >/dev/null 2>&1; then
+# anchored, like the shape loop: `hugmesh.github.io-15` is a malformed shape that
+# ENDS in `github.io-15`, so an unanchored -F match would call it well-formed.
+elif printf '%s\n' "${CE_MALFORMED}" | grep -E -e ': @issue:github\.io-15$' -e ': @issue:user-bff-api-19$' >/dev/null 2>&1; then
   bad "CONTROL E: a WELL-FORMED @issue: tag was flagged as malformed — the regex rejects everything"
-elif [ "${CE_N}" -ne 11 ]; then
-  bad "CONTROL E: expected exactly 11 malformed rows, got ${CE_N}:"
+elif [ "${CE_N}" -ne 13 ]; then
+  bad "CONTROL E: expected exactly 13 malformed rows, got ${CE_N}:"
   printf '%s\n' "${CE_MALFORMED}" | sed 's/^/         /'
 else
-  ok "CONTROL E: all 11 malformed @issue: shapes are flagged, the 2 well-formed ones are not"
+  ok "CONTROL E: all 13 malformed @issue: shapes are flagged, the 2 well-formed ones are not"
 fi
 
 # control F — a @fixme scenario with no @issue: tag must be REPORTED (not
@@ -699,7 +734,9 @@ fi
 # control G — PRECISION. Text that is not a tag must never be judged: a quoted
 # step argument, a table cell, a docstring and a comment all carry a malformed
 # `@issue:` here, and the docstring also carries a fake `@fixme` + `Scenario:`
-# pair that a scanner ignoring docstrings would report as a scenario.
+# pair that a scanner ignoring docstrings would report as a scenario. Both
+# docstring fences are exercised: a ``` docstring was added 2026-09-23 after a
+# skeptic dropped the ``` half of the toggle and every control stayed green.
 CG="${SCRATCH}/ctrl-issue-precision/features"
 mkdir -p "${CG}/onboarding"
 cat > "${CG}/onboarding/zz-control-precision.feature" <<'CTRL'
@@ -715,6 +752,12 @@ Feature: negative control G
       @fixme
       Scenario: not a scenario @issue:Qux
       """
+    And the backtick docstring holds:
+      ```
+      @issue:Quux
+      @fixme
+      Scenario: not a scenario either @issue:Corge
+      ```
     Then nothing
 CTRL
 CG_REPORT="$(issue_tag_report "${CG}")"
@@ -761,6 +804,27 @@ Feature: negative control H
     Given nothing
 
   @fixme
+  Example: an Example keyword scenario, untraceable
+    Given nothing
+
+  Scenario Outline: an outline whose Scenarios block carries the fixme <x>
+    Given nothing
+    @fixme
+    Scenarios:
+      | x |
+      | 1 |
+
+  Scenario Outline: an outline whose Examples title carries the fixme <x>
+    Given nothing
+    Examples: pending rows @fixme
+      | x |
+      | 1 |
+
+  @fixme @issues:generator-7
+  Scenario: a fixme whose only issue tag is misspelt, untraceable
+    Given nothing
+
+  @fixme
   Rule: every scenario under a fixme rule is pending
     @issue:generator-2
     Scenario: under the rule, but traceable
@@ -777,6 +841,18 @@ CTRL
 # nothing pinned them. The two-line blocks above kill `pending = toks` in
 # BOTH orders: issue-first would be reported (wrong), fixme-first would not be
 # (wrong).
+# A third file: an @issue: spelled into the FEATURE TITLE reaches every
+# scenario (dropping Feature-title tokens from the effective set survived a
+# skeptic battery at 22/0 on 2026-09-23, as did the Example:/Scenarios:
+# keywords, an Examples-title @fixme and `@issue:` loosened to `@issue`; the
+# four extra scenarios in the first file and this file close all five).
+cat > "${CH}/onboarding/zz-control-feature-title.feature" <<'CTRL'
+Feature: negative control H, an issue in the Feature title @issue:generator-5
+
+  @fixme
+  Scenario: under a Feature title naming the issue, traceable
+    Given nothing
+CTRL
 cat > "${CH}/onboarding/zz-control-feature-line.feature" <<'CTRL'
 @fixme
 Feature: negative control H, the Feature line
@@ -804,19 +880,24 @@ printf '%s\n' "${CH_FIXME}" | grep -F 'a fixme spelled into the title' >/dev/nul
 printf '%s\n' "${CH_FIXME}" | grep -F 'under a fixme feature and naming no issue' >/dev/null 2>&1 || CH_BAD="${CH_BAD} feature-line-fixme-not-inherited"
 printf '%s\n' "${CH_FIXME}" | grep -F 'with the issue in its tag block' >/dev/null 2>&1 && CH_BAD="${CH_BAD} feature-line-scenario-with-issue-reported"
 printf '%s\n' "${CH_FIXME}" | grep -F 'with the issue in its title' >/dev/null 2>&1 && CH_BAD="${CH_BAD} title-issue-not-in-effective-set"
+printf '%s\n' "${CH_FIXME}" | grep -F 'an Example keyword scenario, untraceable' >/dev/null 2>&1 || CH_BAD="${CH_BAD} example-keyword-not-a-scenario"
+printf '%s\n' "${CH_FIXME}" | grep -F 'an outline whose Scenarios block' >/dev/null 2>&1 || CH_BAD="${CH_BAD} scenarios-block-tag-not-on-outline"
+printf '%s\n' "${CH_FIXME}" | grep -F 'an outline whose Examples title' >/dev/null 2>&1 || CH_BAD="${CH_BAD} examples-title-fixme-not-in-effective-set"
+printf '%s\n' "${CH_FIXME}" | grep -F 'only issue tag is misspelt, untraceable' >/dev/null 2>&1 || CH_BAD="${CH_BAD} issues-typo-counted-as-traceable"
+printf '%s\n' "${CH_FIXME}" | grep -F 'under a Feature title naming the issue' >/dev/null 2>&1 && CH_BAD="${CH_BAD} feature-title-issue-not-inherited"
 if [ -n "${CH_BAD// /}" ]; then
   bad "CONTROL H: tag scoping is wrong —${CH_BAD}:"
   printf '%s\n' "${CH_FIXME}" | sed 's/^/         /'
 else
-  ok "CONTROL H: Feature-line and Rule tags inherit, Examples-block and title tags scope to their own scenario, two-line tag blocks keep both lines, nothing bleeds"
+  ok "CONTROL H: Feature-line, Feature-title and Rule tags inherit, Examples/Scenarios-block and title tags scope to their own scenario, Example: is a scenario, @issues: is not @issue:, two-line tag blocks keep both lines, nothing bleeds"
 fi
 
 # control I — VERDICT WIRING. Controls E-H prove the SCANNER can see a defect;
 # none of them proves the defect reaches `bad`. Run the real verdict over the
-# control-E tree (11 malformed rows) and require F to move by exactly one —
+# control-E tree (13 malformed rows) and require F to move by exactly one —
 # then put F back, because this is a control, not a finding. A verdict edited
 # to `echo`/`ok` (turning FAIL into REPORT) stays green under E-H and goes red
-# here. Output is swallowed: the eleven rows already printed under control E.
+# here. Output is swallowed: the thirteen rows already printed under control E.
 F_BEFORE="${F}"; P_BEFORE="${P}"
 issue_tag_verdict "${CE}" >/dev/null
 CI_DELTA=$((F - F_BEFORE))
@@ -824,7 +905,7 @@ F="${F_BEFORE}"; P="${P_BEFORE}"
 if [ "${CI_DELTA}" -eq 1 ]; then
   ok "CONTROL I: a malformed @issue: tag reaches the verdict as a FAIL (F moved by exactly 1)"
 else
-  bad "CONTROL I: the verdict did NOT fail on 11 malformed @issue: tags (F moved by ${CI_DELTA}, expected 1) — check 5 has become a report"
+  bad "CONTROL I: the verdict did NOT fail on 13 malformed @issue: tags (F moved by ${CI_DELTA}, expected 1) — check 5 has become a report"
 fi
 
 # control K — REPORT WIRING. Control I proves a malformed tag reaches `bad`;
