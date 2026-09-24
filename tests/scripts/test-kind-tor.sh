@@ -389,6 +389,22 @@ cp "${FIX}/app.json" "${WORK}/app.live.json"; cp "${FIX}/app.orig.json" "${FIX}/
   && bad "status rc=0 after a kind-up wiped the onion extraHost" \
   || { grep -aq "does NOT admit" "${WORK}/status.wiped" && ok "status non-zero, naming the missing Ingress rule, after a kind-up wiped it" \
        || bad "status failed without naming the Ingress rule: $(tr '\n' ' ' < "${WORK}/status.wiped")"; }
+# A changed KIND_TOR_SOCKS_PORT while tor is running must not make `socks` (what
+# kind-e2e-tor hands the browser) or the reuse probe name a port nothing serves.
+OTHER="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+s_live="$(env PATH="${SPATH}" KIND_TOR_STATE_DIR="${ST}" KIND_TOR_SOCKS_PORT="${OTHER}" bash "${SCRIPT}" socks 2>/dev/null)"
+[ "${s_live}" = "socks5://127.0.0.1:${SP}" ] && ok "socks names the RUNNING tor's port, not a changed KIND_TOR_SOCKS_PORT" \
+  || bad "socks printed '${s_live}' while the live tor listens on ${SP}"
+cp "${CALLS}" "${WORK}/calls.before-reuse"
+env PATH="${SPATH}" KIND_TOR_STATE_DIR="${ST}" KIND_TOR_SOCKS_PORT="${OTHER}" KIND_TOR_WAIT=5 TOR_BIN="${STUB}/tor" \
+  bash "${SCRIPT}" up > "${WORK}/up-other.out" 2>&1; reap_stubs
+# (diff exits 1 on any difference, so it must not sit in a pipeline under pipefail)
+diff "${WORK}/calls.before-reuse" "${CALLS}" > "${WORK}/calls.reuse.diff"
+if grep -a "^> curl .*--socks5-hostname 127.0.0.1:${SP} " "${WORK}/calls.reuse.diff" >/dev/null; then
+  ok "a reusing up probes through the live tor's port even when KIND_TOR_SOCKS_PORT changed"
+else
+  bad "a reusing up did not probe through the live port ${SP}: $(grep -a '^> curl' "${WORK}/calls.reuse.diff" | head -1)"
+fi
 "${RUN[@]}" bash "${SCRIPT}" up > "${WORK}/up2.out" 2>&1; reap_stubs
 "${RUN[@]}" bash "${SCRIPT}" status >/dev/null 2>&1 && ok "a second up re-admits the onion after the wipe" || bad "status still non-zero after re-running up"
 n_launch="$(grep -ac "^tor -f " "${CALLS}")"

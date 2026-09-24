@@ -55,6 +55,7 @@
 #   scripts/kind-tor.sh status                 exit 0 only if THIS tor is alive and the Ingress admits it
 #   scripts/kind-tor.sh onion                  print the onion, refusing when this tor is not alive
 #   scripts/kind-tor.sh socks                  print socks5://127.0.0.1:<port> for the client side
+#                                              (the RUNNING tor's port when one is up)
 #   scripts/kind-tor.sh torrc                  print the torrc this script writes (pure; starts nothing)
 #   scripts/kind-tor.sh params <onion> [--remove]
 #                                              read the Application JSON on stdin, print the helm
@@ -184,6 +185,25 @@ current_onion() {
 
 port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 
+# live_socks_port — the SOCKS port the RUNNING tor was started with (its torrc), so
+# a changed KIND_TOR_SOCKS_PORT cannot make `socks`/`up` name a port nothing serves.
+live_socks_port() {
+  local p
+  p="$(awk '$1=="SocksPort"{print $2; exit}' "${TORRC}" 2>/dev/null)"
+  p="${p##*:}"
+  [ -n "${p}" ] || return 1
+  printf '%s\n' "${p}"
+}
+
+cmd_socks() {
+  local p
+  if tor_pid >/dev/null && p="$(live_socks_port)"; then
+    printf 'socks5://127.0.0.1:%s\n' "${p}"
+  else
+    printf 'socks5://127.0.0.1:%s\n' "${SOCKS_PORT}"
+  fi
+}
+
 ingress_hosts() {
   kc -n "${GW_NS}" get ingress "${GW_INGRESS}" -o jsonpath='{.spec.rules[*].host}' 2>/dev/null
 }
@@ -212,7 +232,7 @@ preflight_tools() {
 
 cmd_up() {
   local dry="$1"
-  local pid onion code i deadline
+  local pid onion code i deadline live_port
   if [ -n "${dry}" ]; then
     echo "# DRY RUN — nothing is started, written or patched."
     echo "# state dir: ${STATE_DIR}"
@@ -233,6 +253,11 @@ cmd_up() {
 
   if pid="$(tor_pid)"; then
     log "tor already running for the kind lane (pid ${pid}) — reusing it"
+    live_port="$(live_socks_port)" || die "the running tor's ${TORRC} names no SocksPort"
+    if [ "${live_port}" != "${SOCKS_PORT}" ]; then
+      log "that tor listens on SOCKS ${live_port}, not ${SOCKS_PORT}; using ${live_port} ('make kind-tor-down && make kind-tor' moves it)"
+      SOCKS_PORT="${live_port}"
+    fi
   else
     port_busy "${SOCKS_PORT}" \
       && die "127.0.0.1:${SOCKS_PORT} is already in use by something that is not this script's tor — set KIND_TOR_SOCKS_PORT="
@@ -360,7 +385,7 @@ case "${sub}" in
   down)   cmd_down "${DRY}" ;;
   status) cmd_status ;;
   onion)  cmd_onion ;;
-  socks)  printf 'socks5://127.0.0.1:%s\n' "${SOCKS_PORT}" ;;
+  socks)  cmd_socks ;;
   torrc)  render_torrc ;;
   params)
     [ $# -ge 1 ] || usage
