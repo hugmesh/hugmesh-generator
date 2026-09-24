@@ -257,7 +257,7 @@ PY
 
 control N22-unrestricted-tags T12-e2e-lane <<PY
 ${MUT_LIB}
-sub("tests/e2e/run.sh", "then TAGS='@via:onion'; else", "then TAGS=''; else")
+sub("tests/e2e/run.sh", "then TAGS='@via:onion and @env:docker'; else", "then TAGS=''; else")
 PY
 
 control N23-lane-without-via T12-e2e-lane <<PY
@@ -303,12 +303,12 @@ PY
 
 control N32-caller-tags-or T12-e2e-lane <<PY
 ${MUT_LIB}
-sub("tests/e2e/run.sh", 'else TAGS="(\${TAGS}) and @via:onion"; fi', 'else TAGS="(\${TAGS}) or @via:onion"; fi')
+sub("tests/e2e/run.sh", 'else TAGS="(\${TAGS}) and @via:onion and @env:docker"; fi', 'else TAGS="(\${TAGS}) or @via:onion and @env:docker"; fi')
 PY
 
 control N33-caller-tags-unrestricted T12-e2e-lane <<PY
 ${MUT_LIB}
-sub("tests/e2e/run.sh", 'else TAGS="(\${TAGS}) and @via:onion"; fi', 'else TAGS="\${TAGS}"; fi')
+sub("tests/e2e/run.sh", 'else TAGS="(\${TAGS}) and @via:onion and @env:docker"; fi', 'else TAGS="\${TAGS}"; fi')
 PY
 
 control N34-stale-bootstrap-kept T10-readout-lifecycle <<PY
@@ -376,6 +376,11 @@ ${MUT_LIB}
 sub("tests/e2e/features/platform/tor-onion-front-door.feature", "@env:docker @via:onion @service:login", "@env:docker @service:login")
 PY
 
+control N47-kind-scenarios-in-the-compose-lane T12-e2e-lane <<PY
+${MUT_LIB}
+sub("tests/e2e/run.sh", "then TAGS='@via:onion and @env:docker'; else", "then TAGS='@via:onion'; else")
+PY
+
 # ── the mechanism wrapper (#585): its verdict logic, not only its existence ──
 control W1-success-line-ignored T14-mechanism-wrapper <<PY
 ${MUT_LIB}
@@ -430,6 +435,28 @@ if [ "${INC_RC}" -eq 3 ]; then
   ok "N28: a missing source is INCOMPLETE (exit 3), not a silent pass"
 else
   bad "N28: a missing source exited ${INC_RC} — it must be 3 (INCOMPLETE)"
+fi
+
+# ── coexistence: the KIND lane's @via:onion scenario (#577, @env:kind) proxies
+# through its own seam (the `page` fixture under a proxied project). It is not a
+# compose-lane scenario, so T15 must not grade it — a planted one stays GREEN.
+KIND="${WORK}/kind-coexist"; rm -rf "${KIND}"; stage "${KIND}"
+mkdir -p "${KIND}/tests/e2e/features/platform"
+cat > "${KIND}/tests/e2e/features/platform/tor-onion-kind-probe.feature" <<'FEAT'
+@layer:gateway @env:kind @via:onion
+Feature: planted kind-lane onion scenario
+  @role:e2e-user
+  Scenario: kind onion probe
+    When I open the planted kind onion door
+FEAT
+cat > "${KIND}/tests/e2e/steps/planted-kind-onion.steps.ts" <<'STEPS'
+When('I open the planted kind onion door', async ({ page }) => { await page.goto('/'); });
+STEPS
+python3 "${MODEL}" "${KIND}" >/dev/null 2>&1; KIND_RC=$?
+if [ "${KIND_RC}" -eq 0 ]; then
+  ok "coexistence: a kind-lane @env:kind @via:onion scenario is not graded as a compose-lane one"
+else
+  bad "coexistence: a planted kind-lane @via:onion scenario turned the model red (rc=${KIND_RC})"
 fi
 
 # ── positive control: the harness is not just always-red ─────────────────────

@@ -95,7 +95,8 @@ Front door (how the browser reaches the mesh)
   --via onion              the docker stack's Tor .onion, THROUGH TOR: the
                            browser dials https://<onion>/ via the SOCKS5 proxy
                            hugmesh-tor-client publishes. Runs ONLY the
-                           @via:onion scenarios (implies --bdd --env docker).
+                           @via:onion @env:docker scenarios (implies --bdd
+                           --env docker).
                              start: make stack-up TOR=1  (then: make stack-seed)
                            onion:  SNAP_ONION_BASE_URL, else the hostname in
                                    SNAP_ONION_HOSTNAME_FILE (default
@@ -204,9 +205,12 @@ done
 #    live onion: the script died ERR_SOCKS_CONNECTION_FAILED with :443 absent,
 #    the fetch died ERR_FAILED cross-origin with :443 present), so an http entry
 #    tests nothing the SPA can do. The onion's :443 is the TLS front.
-#  * Only @via:onion scenarios run. Every other scenario builds its contexts
-#    without the proxy, and a lane that ran them "over Tor" would really have
-#    run them over localhost. The tag is AND-ed onto any --tags given.
+#  * Only @via:onion @env:docker scenarios run. Every other scenario builds its
+#    contexts without the proxy, and a lane that ran them "over Tor" would really
+#    have run them over localhost. @env:docker because this is the COMPOSE
+#    stack's onion: the kind lane's own @via:onion scenario (#577, @env:kind)
+#    would only skip here, and a skip fails this lane (see the summary check
+#    below). Both tags are AND-ed onto any --tags given.
 #  * A missing or malformed onion is a hard stop for a RUN (exit 2, naming what
 #    to start). --list / --gen / --print-command execute nothing, so they do not
 #    demand one.
@@ -233,7 +237,7 @@ if [ -n "${VIA}" ]; then
     die "--via onion is the DOCKER stack's door (make stack-up TOR=1); --env ${ENV_ID} has no Tor front door (kind: hugmesh-generator#577)."
   fi
   LANE=bdd
-  if [ -z "${TAGS}" ]; then TAGS='@via:onion'; else TAGS="(${TAGS}) and @via:onion"; fi
+  if [ -z "${TAGS}" ]; then TAGS='@via:onion and @env:docker'; else TAGS="(${TAGS}) and @via:onion and @env:docker"; fi
   ONION_FILE="${SNAP_ONION_HOSTNAME_FILE:-${REPO}/tests/stack/tor-onion/hostname}"
   if [ -n "${SNAP_ONION_BASE_URL:-}" ]; then
     ONION_BASE_URL="$(echo "${SNAP_ONION_BASE_URL}" | sed 's:/*$::')"

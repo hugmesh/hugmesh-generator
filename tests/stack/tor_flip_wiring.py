@@ -579,6 +579,10 @@ exit 0
 '''
 
 # ── T12: `make stack-e2e-tor` -> run.sh --via onion, planned AND executed ─────
+# The compose onion lane runs the COMPOSE stack's onion scenarios and nothing
+# else: @env:docker keeps the kind lane's @via:onion scenario (#577) out of it,
+# where it could only skip — and a skip fails this lane.
+ONION_TAGS = "@via:onion and @env:docker"
 problems = []
 e2e_blk = makefile_text.split("\nstack-e2e-tor:", 1)
 e2e_recipe = e2e_blk[1].split("\n\n", 1)[0] if len(e2e_blk) == 2 else ""
@@ -614,8 +618,8 @@ else:
     if first("PROXY") != "socks5://127.0.0.1:%s" % socks_default:
         problems.append("default proxy %r is not the tor-client's socks5://127.0.0.1:%s"
                         % (first("PROXY"), socks_default))
-    if first("TAGS") != "@via:onion":
-        problems.append("tags %r are not exactly @via:onion" % first("TAGS"))
+    if first("TAGS") != ONION_TAGS:
+        problems.append("tags %r are not exactly %r" % (first("TAGS"), ONION_TAGS))
     if "--project=bdd" not in (plan.get("ARGV") or []):
         problems.append("the run is not the Gherkin project")
 # A caller's --tags NARROW the onion run; they never widen it (`or` would run
@@ -623,9 +627,9 @@ else:
 pt = subprocess.run(["bash", RUNSH, "--via", "onion", "--tags", "@smoke", "--print-command"],
                     env=renv, capture_output=True, text=True, timeout=60)
 tags_t = [l.split("\t", 1)[1] for l in pt.stdout.splitlines() if l.startswith("TAGS\t")]
-if pt.returncode != 0 or tags_t != ["(@smoke) and @via:onion"]:
+if pt.returncode != 0 or tags_t != ["(@smoke) and " + ONION_TAGS]:
     problems.append("--via onion --tags @smoke planned tags %r (rc=%s), want exactly "
-                    "'(@smoke) and @via:onion'" % (tags_t, pt.returncode))
+                    "'(@smoke) and %s'" % (tags_t, pt.returncode, ONION_TAGS))
 # An http:// onion is refused even when the caller supplies it outright.
 ph = subprocess.run(["bash", RUNSH, "--via", "onion", "--print-command"],
                     env=dict(renv, SNAP_ONION_BASE_URL="http://" + GOOD_ONION),
@@ -687,13 +691,13 @@ if envs.get("SNAP_PROXY") != "socks5://127.0.0.1:%s" % socks_default:
 if ".onion" in envs.get("SNAP_BASE_URL", "") or not envs.get("SNAP_BASE_URL", "").startswith("https://"):
     problems.append("playwright's SNAP_BASE_URL=%r is not the stack's local https door"
                     % envs.get("SNAP_BASE_URL"))
-if "ARGV bddgen test --tags @via:onion" not in log_ok:
+if "ARGV bddgen test --tags " + ONION_TAGS not in log_ok:
     problems.append("bddgen did not generate exactly the @via:onion scenarios: %r"
                     % [l for l in log_ok if "bddgen" in l])
 _rc, _err, log_t = run_lane("caller tags", SUMMARY_OK, extra=["--tags", "@smoke"])
-if "ARGV bddgen test --tags (@smoke) and @via:onion" not in log_t:
-    problems.append("with --tags @smoke bddgen ran %r, want '(@smoke) and @via:onion'"
-                    % [l for l in log_t if "bddgen" in l])
+if "ARGV bddgen test --tags (@smoke) and " + ONION_TAGS not in log_t:
+    problems.append("with --tags @smoke bddgen ran %r, want '(@smoke) and %s'"
+                    % ([l for l in log_t if "bddgen" in l], ONION_TAGS))
 rc_sk, err_sk, _ = run_lane("skipped", SUMMARY_SKIP)
 if rc_sk == 0 or "STUB-SKIP-REASON" not in err_sk:
     problems.append("an executed onion run that SKIPPED its scenario exited %s (want non-zero, "
@@ -833,8 +837,10 @@ check("T14-mechanism-wrapper", not problems, "; ".join(problems))
 # unproxied `page`/`context`/`request` fixtures, a standalone request/browser
 # context, or apiContext(). None of those is recorded by the scenario's HAR, so
 # the audit cannot catch it after the fact — it is refused here, statically, for
-# every step file that defines an @via:onion step, and apiContext() itself refuses
-# at runtime while SNAP_PROXY is set.
+# every step file that defines a step of a @via:onion @env:docker scenario (the
+# ones `make stack-e2e-tor` runs), and apiContext() itself refuses at runtime while
+# SNAP_PROXY is set. The kind lane's @via:onion scenario (@env:kind, #577) proxies
+# through a different seam and is that lane's to guard.
 problems = []
 STEP_KW = re.compile(r"^\s*(Given|When|Then|And|But)\s+(.+?)\s*$")
 onion_steps: set[str] = set()
@@ -844,7 +850,7 @@ for dirpath, _dirs, files in os.walk(E2E_FEATURES):
             continue
         text = open(os.path.join(dirpath, fn), encoding="utf-8").read()
         lines = text.splitlines()
-        feature_tagged = False
+        feature_tags: set[str] = set()
         pending_tags: list[str] = []
         in_onion = False
         for ln in lines:
@@ -853,18 +859,19 @@ for dirpath, _dirs, files in os.walk(E2E_FEATURES):
                 pending_tags += st.split()
                 continue
             if st.startswith("Feature:"):
-                feature_tagged = "@via:onion" in pending_tags
+                feature_tags = set(pending_tags)
                 pending_tags = []
                 continue
             if st.startswith(("Scenario:", "Scenario Outline:", "Background:")):
-                in_onion = feature_tagged or "@via:onion" in pending_tags or "@via:onion" in st
+                tags = feature_tags | set(pending_tags) | set(st.split())
+                in_onion = "@via:onion" in tags and "@env:docker" in tags
                 pending_tags = []
                 continue
             m = STEP_KW.match(ln)
             if m and in_onion:
                 onion_steps.add(m.group(2))
 if not onion_steps:
-    problems.append("no @via:onion scenario was found under tests/e2e/features — the Tor lane "
+    problems.append("no @via:onion @env:docker scenario was found under tests/e2e/features — the Tor lane "
                     "would run nothing")
 DEF_RE = re.compile(r"\b(?:Given|When|Then)\(\s*'((?:[^'\\]|\\.)*)'")
 defs: dict[str, list[str]] = {}
