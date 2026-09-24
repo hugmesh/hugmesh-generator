@@ -1299,3 +1299,24 @@ def test_the_mode_screen_and_the_build_first_arm_share_one_commit(wiz):
     assert "enter_mesh_defaults" not in src
     with pytest.raises(ValueError):
         mode_mod.commit_image_mode(wiz, "e2e")
+
+
+def test_qemu_playwright_run_is_refused_for_an_unwalked_domain_even_with_root(
+        wiz, monkeypatch, fake_generator):
+    """The Playwright BOOT with the root gate stubbed open (the one seam the test
+    above uses) and a row picked: the only thing left to refuse it is #637's gate —
+    on the button AND in the slot."""
+    _gen, full, _abort = fake_generator
+    write_build_record(full.name, domains=("b.example",), reviewed=("hugmesh.net",))
+    monkeypatch.setattr(qemu_page.emulation, "playwright_root_blocker", lambda: "")
+    spawns = []
+    monkeypatch.setattr(emulation, "spawn",
+                        lambda argv, *a, **k: spawns.append(list(argv)) or 0)
+    page = _qemu_page(wiz)
+    labels = [page.pw_row.itemData(i) for i in range(page.pw_row.count())]
+    page.pw_row.setCurrentIndex(labels.index("rpi5/pki"))
+    assert page.pw_list_btn.isEnabled()          # listing boots nothing: still live
+    assert not page.pw_run_btn.isEnabled()
+    page._launch_playwright()
+    assert spawns == [], "a refused session's row was booted by the Playwright lane"
+    assert "b.example" in page.note.text()
