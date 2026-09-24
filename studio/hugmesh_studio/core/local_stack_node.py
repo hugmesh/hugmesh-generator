@@ -361,8 +361,9 @@ class LocalStackNode:
 
         By compose LABEL (project + service), never by container name: the name is
         compose's to choose, the labels are the contract (mesh_monitor and
-        saved_meshes filter the same way). Blocking — two short docker calls — so an
-        off-GUI-thread caller is the norm (the monitor, capture, ``_await_onion``)."""
+        saved_meshes filter the same way). Blocking — two docker calls, 5 s each at
+        most — so an off-GUI-thread caller is the norm (the monitor, capture,
+        ``_await_onion``); the one GUI-thread caller is the Copy .onion button."""
         if not shutil.which("docker"):
             return None
         try:
@@ -371,13 +372,13 @@ class LocalStackNode:
                  "--filter", f"label=com.docker.compose.project={_COMPOSE_PROJECT}",
                  "--filter", f"label=com.docker.compose.service={_TOR_SERVICE}",
                  "--filter", "status=running"],
-                capture_output=True, text=True, timeout=10)
+                capture_output=True, text=True, timeout=5)
             ids = r.stdout.split() if r.returncode == 0 else []
             if not ids:
                 return None
             r = subprocess.run(
                 ["docker", "inspect", "-f", "{{.State.Running}} {{.State.StartedAt}}",
-                 ids[0]], capture_output=True, text=True, timeout=10)
+                 ids[0]], capture_output=True, text=True, timeout=5)
         except (OSError, subprocess.SubprocessError):
             return None
         running, _, started = r.stdout.strip().partition(" ")

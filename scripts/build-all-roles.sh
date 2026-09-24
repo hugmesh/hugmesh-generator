@@ -137,7 +137,9 @@
 #   client roles (x86 standalone-*, rpi5 desktop) and every other platform: nothing —
 #                      the onion is a k8s NODE service, and frite/jetson/orangepi builders
 #                      bake no net-vpn/tor at all (said in the summary, never a dead flag).
-# WITH_TOR=1 REFUSES (exit 2, before any build) where it cannot be honoured exactly:
+# WITH_TOR=1 REFUSES (exit 2, before any build) where it cannot be honoured exactly —
+# each of these is about the rpi5 fold, so it applies only when an rpi5 NODE role will
+# build (an x86-only run needs none of them: --with-tor is additive in its builder):
 #   * a pass-through --optional-services/--all-services (put 'tor' in that list instead);
 #   * an OPTIONAL_SERVICES carrying the 'all' sentinel (the rpi5 builder's all-expansion
 #     keeps only the user-level set, so 'tor' would be dropped);

@@ -116,6 +116,12 @@ class FleetConfig:
         known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         return cls(**{k: v for k, v in d.items() if k in known})
 
+    def _services_words(self) -> str:
+        """``optional_services`` as the builders read it: commas tolerated as
+        separators (both node builders normalise ``,`` to a space), whitespace
+        collapsed."""
+        return " ".join(self.optional_services.replace(",", " ").split())
+
     # ---- validation (fail-closed, mirrors ImageConfig.validate_identity) -----
     def validate(self) -> None:
         if self.cluster_domain:
@@ -123,7 +129,7 @@ class FleetConfig:
         for name, roleset in (("x86_roles", self.x86_roles),
                               ("rpi_roles", self.rpi_roles),
                               ("jetson_roles", self.jetson_roles),
-                              ("optional_services", self.optional_services)):
+                              ("optional_services", self._services_words())):
             for tok in roleset.split():
                 if not _ROLE_TOKEN_RE.match(tok):
                     raise IdentityValidationError(
@@ -177,7 +183,7 @@ class FleetConfig:
             ("PENTEST_ENV", self.pentest_env), ("PENTEST_SCAN", self.pentest_scan),
             ("PENTEST_PIPELINE", self.pentest_pipeline),
             ("HEADSCALE_URL", self.headscale_url),
-            ("OPTIONAL_SERVICES", " ".join(self.optional_services.split())),
+            ("OPTIONAL_SERVICES", self._services_words()),
         ):
             if val:
                 env[var] = val

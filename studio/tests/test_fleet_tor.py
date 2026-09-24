@@ -39,6 +39,9 @@ def test_optional_services_rides_the_env_normalised():
     assert FleetConfig(optional_services=" akkoma   tuwunel ").to_env()[
         "OPTIONAL_SERVICES"] == "akkoma tuwunel"
     assert "OPTIONAL_SERVICES" not in FleetConfig().to_env()
+    # commas are separators, as both node builders read them — not a rejected token
+    assert FleetConfig(optional_services="akkoma,tuwunel").to_env()[
+        "OPTIONAL_SERVICES"] == "akkoma tuwunel"
 
 
 def test_optional_services_tokens_are_allowlisted():
