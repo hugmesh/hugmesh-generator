@@ -390,6 +390,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         playwright-deps e2e e2e-list ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e stack-e2e-list \
+        stack-onion stack-e2e-tor stack-tor-mechanism-check \
         kind-images kind-up kind-e2e kind-e2e-mfa kind-mfa-posture kind-down kind-honesty \
         kind-metrics-check kind-addon-check \
         view view-list view-stop view-trust view-untrust view-honesty \
@@ -1591,6 +1592,23 @@ AKKOMA          ?=
 # STACK_ANUBIS_ENV below is what lights it.
 #   make stack-up ANUBIS=1
 ANUBIS          ?=
+# TOR=1 — publish the local mesh as a Tor v3 .onion (compose.local.yaml's `tor`
+# profile; docs/TOR-HIDDEN-SERVICE.md "The local docker mesh"). Starts TWO
+# containers: hugmesh-tor serves the onion (:443 -> the TLS front, :80 -> the
+# fe-gateway) and hugmesh-tor-client is a SOCKS5 proxy on
+# 127.0.0.1:$(TOR_SOCKS_HOST_PORT) that the e2e lane dials the onion through.
+# The knob was CONSUMED (STACK_TOR_PROFILE below) long before it was declared
+# here — the ANUBIS shape again (hugmesh-generator#586); STACK_TOR_ENV below is
+# what threads its two settings, and tests/stack/test-tor-flip-wiring.sh gates
+# the whole switch.
+#   make stack-up TOR=1        then  make stack-onion   (prints https://<onion>/)
+#   make stack-e2e-tor         the @via:onion sign-in, over the real Tor network
+# ANUBIS=1 TOR=1: the onion's plain :80 port is sent through the PoW gate instead
+# of straight to the fe-gateway. Its :443 port still goes to the TLS front, which
+# proxies to the fe-gateway directly, so the https onion door is NOT PoW-gated —
+# a recorded residual (#586), not a guarantee this knob makes.
+TOR             ?=
+TOR_SOCKS_HOST_PORT ?= 9050
 # TTS=1 — edge-ai-tts (Piper TTS + visemes; compose.edge-ai-tts.yaml, DEFAULT-OFF)
 TTS             ?=
 # POISONER=1 — the AI MEDIA CLOAK worker (hugmesh-media-poisoner;
@@ -1743,6 +1761,12 @@ STACK_MFA_FLOOR_ENV := $(if $(strip $(MFA_FLOOR)), APP_MFA_ENFORCE_PRIVILEGED_FL
 # ANUBIS=1 also flips admin-bff's Anubis console on (compose defaults it false so
 # an untouched bring-up stays byte-identical — the STACK_MFA_FLOOR_ENV rule).
 STACK_ANUBIS_ENV := $(if $(strip $(ANUBIS)), ANUBIS_ENABLED='true',)
+# TOR=1 threads the client's host port and — with ANUBIS=1 too — points the
+# onion's :80 at the PoW gate (hugmesh-anubis BIND :8923). A caller's own
+# TOR_ONION_UPSTREAM (command line or environment) always wins. Empty with TOR
+# unset, so a plain bring-up's STACK_ENV is byte-identical to before.
+STACK_TOR_ANUBIS_UPSTREAM := hugmesh-anubis:8923
+STACK_TOR_ENV := $(if $(strip $(TOR)), TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)'$(if $(strip $(ANUBIS)),$(if $(strip $(TOR_ONION_UPSTREAM)),, TOR_ONION_UPSTREAM='$(STACK_TOR_ANUBIS_UPSTREAM)'),),)
 # MFA OPERATIONAL FLIP, opt-in per run — issue #47, following the PHPBB=1/AKKOMA=1
 # knob precedent. ONE switch, three lanes, and it flips ONLY app.mfa.enabled — the
 # freshness window keeps its default (600000) and the privileged floor stays on its
@@ -1811,7 +1835,7 @@ STACK_ENV := $(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_T
              MANAGED_FORUM_BFF_R2DBC_URL='$(MANAGED_FORUM_BFF_R2DBC_URL)' \
              MANAGED_FORUM_BFF_LIQUIBASE_URL='$(MANAGED_FORUM_BFF_LIQUIBASE_URL)' \
              MANAGED_WIKI_BFF_R2DBC_URL='$(MANAGED_WIKI_BFF_R2DBC_URL)' \
-             MANAGED_WIKI_BFF_LIQUIBASE_URL='$(MANAGED_WIKI_BFF_LIQUIBASE_URL)'$(STACK_MFA_FLOOR_ENV)$(STACK_MFA_ENV)$(STACK_ANUBIS_ENV) \
+             MANAGED_WIKI_BFF_LIQUIBASE_URL='$(MANAGED_WIKI_BFF_LIQUIBASE_URL)'$(STACK_MFA_FLOOR_ENV)$(STACK_MFA_ENV)$(STACK_ANUBIS_ENV)$(STACK_TOR_ENV) \
              EGRESS_VPN_CONF='$(abspath $(EGRESS_VPN_CONF))' \
              DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
@@ -2137,6 +2161,59 @@ stack-e2e: ## run the Playwright e2e suite against the RUNNING local stack (E2E_
 stack-e2e-list: ## enumerate the e2e specs as JSON without running them (no stack, no network; E2E_ARGS narrows)
 	@$(E2E_READY) || exit 2
 	@cd tests/e2e && npx playwright test -c playwright.config.ts --list --reporter=json $(E2E_ARGS) $(E2E_SPECS)
+
+# ── The Tor front door (TOR=1) ───────────────────────────────────────────────
+# stack-onion: the CURRENT onion, or a non-zero exit saying why there is none.
+# tests/stack/tor/entrypoint.sh removes tests/stack/tor-onion/hostname when the
+# hugmesh-tor container starts and when it stops (#581), so an absent file means
+# "not serving". A file can still be left by a container that died without a
+# SIGTERM (kill -9, host crash), so when the docker CLI is present this ALSO asks
+# compose whether hugmesh-tor is running and refuses a file it is not serving.
+# Prints the https:// URL: the gateway's CSP upgrade-insecure-requests makes a
+# browser that enters over http:// upgrade every subresource and fetch() to
+# https:// (measured, see tor/entrypoint.sh), so https is the door a person uses.
+# Studio (core/local_mesh_bootstrap.py) and docs/SERVE-YOUR-MESH.md already cite
+# this target by name; it did not exist until now.
+STACK_ONION_FILE := tests/stack/tor-onion/hostname
+stack-onion: ## print the local mesh's Tor .onion address (needs `make stack-up TOR=1`)
+	@f='$(STACK_ONION_FILE)'; \
+	if [ ! -s "$$f" ]; then \
+	  echo "stack-onion: no onion is published ($$f is absent or empty) — hugmesh-tor is not running. Start it: make stack-up TOR=1" >&2; exit 1; \
+	fi; \
+	onion="$$(tr -d '[:space:]' < "$$f")"; base="$${onion%.onion}"; \
+	case "$$base" in *[!a-z2-7]*|'') base=bad ;; esac; \
+	if [ "$$base" = "$$onion" ] || [ "$${#base}" -ne 56 ]; then \
+	  echo "stack-onion: $$f does not hold a v3 onion hostname (56 base32 chars + .onion): '$$onion'" >&2; exit 1; \
+	fi; \
+	if command -v docker >/dev/null 2>&1; then \
+	  running="$$($(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile tor ps -q --status running hugmesh-tor 2>/dev/null)"; \
+	  if [ -z "$$running" ]; then \
+	    echo "stack-onion: $$f names $$onion but hugmesh-tor is NOT running — a stale readout from a container that died without cleaning up. Start it: make stack-up TOR=1" >&2; exit 1; \
+	  fi; \
+	else \
+	  echo "stack-onion: (docker CLI absent — cannot confirm hugmesh-tor is running; the address below is only as current as $$f)" >&2; \
+	fi; \
+	echo "https://$$onion/"
+
+# stack-e2e-tor: the @via:onion Gherkin scenario(s), driven THROUGH TOR. The
+# browser dials the onion via hugmesh-tor-client's SOCKS5 port, so the request
+# crosses the real Tor network exactly as a Tor Browser user's would. Starts
+# nothing: needs `make stack-up TOR=1` + `make stack-seed`. SNAP_BASE_URL stays
+# the local https door ON PURPOSE: the @env:docker availability probe is a plain
+# Node request (no proxy), so it must knock on a door it can reach; the onion
+# URL travels separately as SNAP_ONION_BASE_URL (tests/e2e/run.sh --via onion).
+stack-e2e-tor: ## run the @via:onion sign-in over the stack's Tor .onion (needs stack-up TOR=1 + stack-seed)
+	@$(E2E_READY) || exit 2
+	SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)' \
+	  bash tests/e2e/run.sh --bdd --env docker --via onion $(if $(strip $(BDD_TAGS)),--tags '$(BDD_TAGS)',) $(BDD_ARGS)
+
+# stack-tor-mechanism-check: the host-Tor MECHANISM proof (tests/stack/tor-onion-
+# e2e.sh via its census-named wrapper) — mint a real v3 onion for a loopback
+# backend and fetch it back over the PUBLIC Tor network. No docker, no root, no
+# stack. Running this target IS the opt-in (HUGMESH_TOR_E2E=1); the wrapper exits
+# 2 (SKIPPED, checked nothing) when the host has no tor binary.
+stack-tor-mechanism-check: ## OPT-IN, needs the public Tor network + a host tor binary: prove a v3 onion round-trips over Tor (no docker)
+	HUGMESH_TOR_E2E=1 bash tests/stack/test-tor-onion-mechanism.sh
 
 stack-logs: ## tail logs from the running local stack
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
