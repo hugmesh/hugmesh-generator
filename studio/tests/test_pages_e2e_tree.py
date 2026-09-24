@@ -396,9 +396,13 @@ def test_the_door_survives_tor_becoming_covered(qapp, fake_gen):
     vanished from the tree. Here tor is COVERED and the door line must still show,
     verified against the fake tree (feature present -> 'drives this service')."""
     specs = fake_gen / "tests" / "e2e" / "specs"
+    # A helper that DRIVES something (page.) and names the onion — the shape of
+    # #576's specs/helpers.ts, which is what flipped tor to covered on main.
     (specs / "helpers.ts").write_text(
-        "export async function onionContext(browser: any) {\n"
-        "  return browser.newContext({ proxy: { server: 'socks5://127.0.0.1:9050' } });\n"
+        "export async function openOnion(page: any) {\n"
+        "  const via = 'onion';\n"
+        "  await page.goto('/login');\n"
+        "  return via;\n"
         "}\n", encoding="utf-8")
     feat = fake_gen / ec.LANE_DOORS[0].feature
     feat.parent.mkdir(parents=True, exist_ok=True)
