@@ -160,7 +160,9 @@ Then('every request the browser made went to the onion', async ({ world, $testIn
     + 'an absolute localhost/hugmesh.net URL works on the local door and breaks for every Tor user';
   expect(run.requests.filter(offOnion), why).toEqual([]);
   // The HAR is audited too: it also records the context's Node-side calls
-  // (page.request — onboard()'s session hydrate), which the page listener cannot see.
+  // (page.request — onboard()'s session hydrate), which the page listener cannot
+  // see. Measured 2026-09-23 over a live onion: a page.request GET appeared in the
+  // HAR and not in the listener; failed loopback requests appeared in both.
   const har = JSON.parse(fs.readFileSync(run.harPath, 'utf8')) as
     { log?: { entries?: Array<{ request?: { url?: string } }> } };
   const harUrls = (har.log?.entries ?? []).map((e) => e.request?.url ?? '');

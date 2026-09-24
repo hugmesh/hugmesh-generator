@@ -159,10 +159,13 @@ export function onionFrontDoor(env: NodeJS.ProcessEnv = process.env): OnionFront
  * onion, so every relative `page.goto('/login')` in the shared helpers (onboard(),
  * registerOnly()) follows it unchanged, and `page.request` inherits the proxy
  * (measured: a Node-side request through the context resolved the .onion inside
- * Tor and came back 200). `<-loopback>` removes Chromium's implicit proxy bypass
- * for localhost, so an absolute https://localhost:8488/... link baked into a UI
- * cannot quietly succeed around Tor — Tor refuses it, and the request-host
- * assertion names it.
+ * Tor and came back 200). `<-loopback>` sends loopback THROUGH the proxy too, so
+ * an absolute http(s)://localhost:8488/... link baked into a UI cannot quietly
+ * succeed around Tor. Measured 2026-09-23 over a live onion: with it, goto
+ * http://127.0.0.1:<port>/ and http://localhost:<port>/ both died
+ * net::ERR_SOCKS_CONNECTION_FAILED while the onion answered 200. Playwright 1.61
+ * already adds the token by default (the same run without it behaved
+ * identically); it is spelled out so the property does not hang on a default.
  */
 export async function onionContext(
   browser: Browser,
