@@ -218,7 +218,7 @@ TLS front, which forwards to the fe-gateway directly (#586). tor resolves both u
 once, when it parses its torrc, so recreating `hugmesh-fe-gateway` or `hugmesh-https-front` with a
 new container IP needs `hugmesh-tor` recreated too.
 
-The contract is gated offline by `tests/stack/test-tor-flip-wiring.sh` (13 checks, each with a
+The contract is gated offline by `tests/stack/test-tor-flip-wiring.sh` (15 checks, each with a
 mutant that must turn it red).
 
 ## Related
