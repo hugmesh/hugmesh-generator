@@ -670,6 +670,16 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         # provisions no domains). A hidden combo still collects its untouched "None",
         # which is the absent-key default — emission-neutral either way.
         self.table.setColumnHidden(_COL_CA, c.mode != "mesh")
+        # Row 0 is derived state, so it is re-derived on EVERY forward entry, not
+        # only when the table is empty (#494 fix round): a same-object Back (no
+        # _cfg_seen change) may have switched the mode to cloud, or renamed the
+        # cluster domain on the Network step, since the table was filled.
+        # Only a table that already has rows is reconciled: an empty one takes the
+        # fill branch, which adds the own row itself. The table can only become
+        # empty HERE when a mode switch dropped the own row (cloud / standalone),
+        # and then the fill below — the cloud prefill — is exactly main's behaviour.
+        if self.table.rowCount() > 0:
+            self._reconcile_own_row(c)
         if self.table.rowCount() == 0:
             # ROW 0: the mesh's own domain, display-only (mesh mode; see module doc).
             # A cfg.domains row already named after it makes it a real row instead.
@@ -690,6 +700,31 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         else:
             self._refresh_applies_to()
             self._refresh_base_ca()
+
+    def _reconcile_own_row(self, c) -> None:
+        """Make the display-only own row agree with ``implicit_own_domain(c)`` NOW.
+
+        The table is only REFILLED on an empty table or a new config object, so
+        without this the own row survives whatever changed since it was drawn:
+
+        * mesh -> Back to Mode -> cloud: the stale mesh own row kept the table
+          non-empty, so the cloud prefill (the FD-08 ``--domains`` primary) never
+          ran, and ``rows()`` skipped the own row — a cloud client built with NO
+          ``--domains`` while the table showed the domain, as a row it refused to
+          remove. Removing the row here leaves the table empty again, so the fill
+          branch below runs exactly as it does on main.
+        * the cluster domain renamed on the Network step: row 0 kept the old name
+          while the Domain services step named the new one.
+
+        Only row 0 is touched (it carries no operator input — every cell is a
+        fact); the ADDED rows, and so every in-progress edit, are left alone."""
+        own = implicit_own_domain(c)
+        for r in range(self.table.rowCount() - 1, -1, -1):
+            if self.is_own_row(r):
+                self.table.removeRow(r)
+        if own:
+            self._add_own(own, c.brand_title, c.cluster_domain_services,
+                          reviewed=(own in reviewed_names(c)))
 
     def validatePage(self):
         """Rebuild ``cfg.domains`` from the table.
