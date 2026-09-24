@@ -517,3 +517,42 @@ def test_a_mesh_without_tor_never_clears_an_operator_tor_choice(wiz):
     wiz.cfg.tor_onion_service = "on"
     _confirm_and_enter_mesh_chain(wiz)
     assert wiz.cfg.tor_onion_service == "on"
+
+
+def _save_malformed(tmp_path):
+    # The newest record for this checkout carries a config from_dict cannot read
+    # (services must be a sequence) — a hand-edited or future-format file.
+    rec = sm.SavedMesh(id=sm.new_id(), label="broken", generator_dir=GENERATOR_DIR,
+                       hostname=socket.gethostname(),
+                       config={"env": "prod", "cluster_domain": "bad.example.org",
+                               "services": 42})
+    assert sm.save(rec), "the record must land in the isolated state dir"
+    return rec
+
+
+def test_a_malformed_newest_record_falls_back_to_the_defaults(wiz, monkeypatch,
+                                                              tmp_path):
+    # initializePage must not raise out of the wizard on a record it cannot read;
+    # it shows the defaults and says no saved mesh was used.
+    _save_malformed(tmp_path)
+    _real_reader(monkeypatch)
+    pick_mode(wiz, "localcloud")
+    page = advance_to(wiz, wizard_mod.LocalCloudNodesPage)
+    assert page._with_tor is False and page._source == ""
+    assert "no saved mesh for this checkout" in page.summary.text()
+    assert "bad.example.org" not in page.summary.text()
+
+
+def test_the_imported_record_label_and_domain_are_escaped_in_the_summary(
+        wiz, monkeypatch, tmp_path):
+    # The summary is RichText; a record label is operator text and must never be
+    # rendered as markup.
+    rec = _save_record(tmp_path, services=("tuwunel",))
+    rec.label = "<b>evil</b> & co"
+    assert sm.save(rec)
+    _real_reader(monkeypatch)
+    pick_mode(wiz, "localcloud")
+    page = advance_to(wiz, wizard_mod.LocalCloudNodesPage)
+    text = page.summary.text()
+    assert "&lt;b&gt;evil&lt;/b&gt; &amp; co" in text
+    assert "<b>evil</b>" not in text

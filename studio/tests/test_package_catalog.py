@@ -365,3 +365,14 @@ def test_rpi5_ignores_the_x86_only_flag():
     cfg = ImageConfig(mode="mesh", role="backend", platform="rpi5",
                       tor_onion_service=True)
     assert not _tor_in(cfg)
+
+
+@pytest.mark.parametrize("role,platform", [("rpi5-desktop", "rpi5"), ("laptop", "x86")])
+def test_client_role_with_a_tor_slug_predicts_nothing(role, platform):
+    # Both builders gate net-vpn/tor on _tor_node_selected (! ROLE_CLIENT &&
+    # _opt_selected tor, #583): a `tor` slug on a desktop image is dropped with a
+    # warning, so the preview must not list the package for it either.
+    cfg = ImageConfig(mode="mesh", role=role, platform=platform,
+                      optional_services=["akkoma", "tor"])
+    assert image_class(cfg.mode, cfg.role) == "desktop"
+    assert not _tor_in(cfg)

@@ -207,3 +207,38 @@ def test_rpi5_refusals_do_not_block_an_x86_only_tor_run(tree):
     assert r.returncode == 0, r.stdout + r.stderr
     x86 = _by_role(_invocations(r.stdout), "build-x86-host-stage4.sh")["backend"]
     assert "--with-tor" in x86
+
+
+def test_with_tor_refuses_a_brand_conf_auto_detected_in_the_working_directory(tree, tmp_path):
+    # The builders auto-load ./brand.conf when no --config is given; the fold's argv
+    # would override that profile's OPTIONAL_SERVICES just the same, so the refusal
+    # must see the auto-detected file too, not only an explicit -C/--config.
+    cwd = tmp_path / "operator-cwd"
+    cwd.mkdir()
+    (cwd / "brand.conf").write_text('BRAND="acme"\nexport OPTIONAL_SERVICES="akkoma"\n')
+    r = _run(tree, {"WITH_TOR": "1", "RPI_ROLES": "backend"}, cwd=cwd)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "sets OPTIONAL_SERVICES" in r.stderr and str(cwd / "brand.conf") in r.stderr
+    assert "__ARGV__" not in r.stdout                           # refused BEFORE any build
+    # a brand.conf that does not set the list is no reason to refuse
+    (cwd / "brand.conf").write_text('BRAND="acme"\n')
+    r = _run(tree, {"WITH_TOR": "1", "RPI_ROLES": "backend", "SKIP_X86": "1"}, cwd=cwd)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_with_tor_refuses_when_the_rpi5_default_cannot_be_read(tree):
+    # No default line to read -> refusing is the only honest answer: a bare
+    # `--optional-services tor` would silently drop akkoma/tuwunel/phpbb from the node.
+    stub = tree / "build-rpi5-stage4.sh"
+    stub.write_text("\n".join(l for l in stub.read_text().splitlines()
+                              if not l.startswith("OPTIONAL_SERVICES=")) + "\n")
+    r = _run(tree, {"WITH_TOR": "1", "RPI_ROLES": "backend"})
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "could not read the rpi5 builder's default OPTIONAL_SERVICES" in r.stderr
+    assert "__ARGV__" not in r.stdout
+    # an operator-stated list needs no default, so it still builds
+    r = _run(tree, {"WITH_TOR": "1", "RPI_ROLES": "backend", "SKIP_X86": "1",
+                    "OPTIONAL_SERVICES": "akkoma"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    rpi = _by_role(_invocations(r.stdout), "build-rpi5-stage4.sh")["backend"]
+    assert rpi[rpi.index("--optional-services") + 1] == "akkoma tor"

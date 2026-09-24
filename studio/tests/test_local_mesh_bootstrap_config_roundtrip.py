@@ -288,7 +288,7 @@ def test_down_log_says_volumes_are_kept(monkeypatch, tmp_path):
 # no longer say "with_tor=True" over a mesh that starts no hugmesh-tor (or the
 # reverse). And both bring-up paths of a saved mesh — the warm start and the cold
 # restore — build their stack node from the RECORD through one seam (for_record).
-_ONION = "http://txljwl7mdg7t3wmqdci77ttof5ikxeqg2epmfadzfxlzxvjgtx5k4fad.onion/"
+_ONION = "https://txljwl7mdg7t3wmqdci77ttof5ikxeqg2epmfadzfxlzxvjgtx5k4fad.onion/"
 
 
 @pytest.mark.parametrize("given,want_tor", [

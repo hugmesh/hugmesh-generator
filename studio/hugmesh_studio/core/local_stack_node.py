@@ -387,8 +387,14 @@ class LocalStackNode:
         return _parse_docker_time(started)
 
     def onion_url(self) -> str:
-        """``http://<onion>/`` for the onion the RUNNING tor container published, or
+        """``https://<onion>/`` for the onion the RUNNING tor container published, or
         "" when there is none to hand out.
+
+        HTTPS, like ``make stack-onion``: the compose onion publishes ``:443`` to the
+        TLS front (tests/stack/tor/entrypoint.sh, #598), which is the door that boots
+        the SPA; its plain ``:80`` goes to the fe-gateway (or the Anubis gate) and an
+        http page cannot boot the app (#586). The monitor's door, the Copy .onion
+        button and a saved record's ``doors.onion`` all hand out this one string.
 
         The hostname file is a bind-mount copy that OUTLIVES the key it names (#581):
         ``make stack-down``/``stack-clean`` run ``down -v``, which drops the
@@ -415,7 +421,7 @@ class LocalStackNode:
             return ""
         if written + _ONION_START_SKEW_S < started:
             return ""                     # a previous container's copy — stale
-        return f"http://{h}/"
+        return f"https://{h}/"
 
     def available(self) -> tuple[bool, str]:
         if not shutil.which("make"):

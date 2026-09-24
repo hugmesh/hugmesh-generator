@@ -567,11 +567,20 @@ class WorklistConfig:
         rather than a flag. Without it an rpi5 node lost the mesh-wide onion
         silently: the base platform is forced x86, so the flag rode the deepcopy and
         step 5's ``strip_platform_unsupported`` then cleared the x86-only field on
-        the rpi5 entry, emitting nothing."""
+        the rpi5 entry, emitting nothing.
+
+        The fold reaches NODE-class rows only. The onion is a cluster-node service:
+        both stage4 builders drop a tor selection on a CLIENT role
+        (``_tor_node_selected`` — #583), so folding the mesh-wide default into an
+        rpi5-desktop row would emit ``--optional-services ... tor`` for an image that
+        bakes nothing, and before #599 it baked net-vpn/tor + a linked reconcile agent
+        into a person's desktop. A per-node selection the operator made on the row
+        itself is left as it was (main's behaviour); only the IMPLICIT fold is gated."""
         plat_optional = OPTIONAL_SERVICES_BY_PLATFORM.get(entry.platform, ())
         wanted = list(entry.infra_services)
         if (ImageConfig._tri(cfg.tor_onion_service) == "on"
                 and entry.platform not in _TOR_WITH_FLAG_PLATFORMS
+                and image_class(cfg.mode, entry.role) == "node"
                 and "tor" not in wanted):
             wanted.append("tor")                           # mesh-wide onion -> slug nodes
         for svc in wanted:

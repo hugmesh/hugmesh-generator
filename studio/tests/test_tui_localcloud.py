@@ -227,3 +227,16 @@ def test_apply_gate_without_tor_leaves_tor_alone():
     j.cfg.tor_onion_service = "off"
     lc.apply_gate(j, "mesh.example.org", [])
     assert j.cfg.tor_onion_service == "off"
+
+
+def test_real_reader_falls_back_on_a_malformed_newest_record(tmp_path):
+    # A record from_dict cannot read (services must be a sequence) must not raise out
+    # of the TUI's gate: the defaults come back and no source is claimed.
+    rec = sm.SavedMesh(id=sm.new_id(), label="broken", generator_dir=_GEN,
+                       hostname=socket.gethostname(),
+                       config={"env": "prod", "cluster_domain": "bad.example.org",
+                               "services": 42})
+    assert sm.save(rec)
+    ident = _REAL_IDENTITY(_GEN)
+    assert ident.source == "" and ident.with_tor is False
+    assert ident.domain != "bad.example.org"

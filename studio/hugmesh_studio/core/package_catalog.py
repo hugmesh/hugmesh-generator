@@ -141,13 +141,18 @@ def _tor_selected(cfg: ImageConfig) -> bool:
     domain's list for tor (``worklist._apply_infra_services`` reads only the entry's
     per-node set and ``--with-tor``), so counting it here showed ``net-vpn/tor`` in the
     package preview of an image that bakes nothing. Tor is node-scoped (#494 #C) until
-    #582 rules on a per-domain onion; the #580 addendum asked for exactly this cut."""
+    #582 rules on a per-domain onion; the #580 addendum asked for exactly this cut.
+
+    Neither channel counts on a DESKTOP-class image: both builders gate the package
+    and the runlevel links on ``_tor_node_selected`` (``! ROLE_CLIENT && _opt_selected
+    tor`` — #583), so a ``tor`` slug on a client role bakes nothing either."""
+    if _is_desktop(cfg):
+        return False
     if "tor" in (cfg.optional_services or []):
         return True
     plat = cfg.platform or "x86"
     return (ImageConfig._tri(cfg.tor_onion_service) == "on"
-            and plat in PLATFORM_FIELD_SUPPORT.get("tor_onion_service", ("x86",))
-            and not _is_desktop(cfg))
+            and plat in PLATFORM_FIELD_SUPPORT.get("tor_onion_service", ("x86",)))
 
 
 def _flavor_live(cfg: ImageConfig) -> bool:

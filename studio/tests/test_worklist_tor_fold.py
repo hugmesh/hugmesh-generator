@@ -109,3 +109,21 @@ def test_none_sentinel_plus_tor_emits_just_tor():
     got = _mat(ImageConfig(mode="mesh", platform="x86", optional_services=[SERVICES_NONE]),
                WorklistEntry(role="backend", platform="rpi5", infra_services=("tor",)))
     assert _svcs(got["backend.rpi5"]) == ["tor"]
+
+
+# ── the mesh-wide fold never reaches a CLIENT row ──────────────────────────────────
+def test_mesh_wide_tor_does_not_reach_an_rpi5_desktop_row():
+    # The onion is a cluster-node service: both builders drop a client tor selection
+    # (_tor_node_selected, #583). The mesh-wide default must reach the rpi5 NODE and
+    # leave the rpi5 DESKTOP row exactly as main leaves it — no --optional-services,
+    # and no net-vpn/tor in its package preview.
+    from hugmesh_studio.core import package_catalog as pc
+    got = _mat(ImageConfig(mode="mesh", platform="x86", tor_onion_service=True),
+               WorklistEntry(role="rpi5-desktop", platform="rpi5"),
+               WorklistEntry(role="backend", platform="rpi5"))
+    desk = got["rpi5-desktop.rpi5"]
+    assert _svcs(desk) is None
+    assert "net-vpn/tor" not in pc.adhoc_atoms(desk)
+    node = got["backend.rpi5"]
+    assert "tor" in _svcs(node)
+    assert "net-vpn/tor" in pc.adhoc_atoms(node)

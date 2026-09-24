@@ -49,7 +49,7 @@ def test_onion_hostname_reads_the_published_file(tmp_path, monkeypatch):
     monkeypatch.setattr(LocalStackNode, "_tor_started_at",
                         lambda self: os.stat(hostfile).st_mtime - 5.0)
     assert node.onion_url() == \
-        "http://txljwl7mdg7t3wmqdci77ttof5ikxeqg2epmfadzfxlzxvjgtx5k4fad.onion/"
+        "https://txljwl7mdg7t3wmqdci77ttof5ikxeqg2epmfadzfxlzxvjgtx5k4fad.onion/"
 
 
 # ── 2b. #581: the hostname file outlives the key it names ────────────────────────
@@ -87,7 +87,7 @@ def test_a_copy_written_by_the_running_container_is_the_onion(tmp_path, monkeypa
     # cp races docker's stamp on a warm restart) — within _ONION_START_SKEW_S.
     _hostfile(tmp_path, _NEW, 1_000_599.5)
     monkeypatch.setattr(LocalStackNode, "_tor_started_at", lambda self: 1_000_600.0)
-    assert LocalStackNode(str(tmp_path)).onion_url() == f"http://{_NEW}/"
+    assert LocalStackNode(str(tmp_path)).onion_url() == f"https://{_NEW}/"
 
 
 def test_await_onion_waits_past_a_stale_copy_for_the_new_one(tmp_path, monkeypatch):
@@ -109,7 +109,7 @@ def test_await_onion_waits_past_a_stale_copy_for_the_new_one(tmp_path, monkeypat
     notes = []
     url = boot._await_onion(LocalStackNode(str(tmp_path)), notes.append, None,
                             timeout_s=30)
-    assert url == f"http://{_NEW}/"
+    assert url == f"https://{_NEW}/"
     assert len(polls) >= 2                         # it did NOT take the stale first read
 
 
@@ -199,7 +199,7 @@ def _happy_tor_boot(monkeypatch):
 
 def test_up_reports_the_published_onion(monkeypatch):
     boot = _happy_tor_boot(monkeypatch)
-    onion = "http://txljwl7mdg7t3wmqdci77ttof5ikxeqg2epmfadzfxlzxvjgtx5k4fad.onion/"
+    onion = "https://txljwl7mdg7t3wmqdci77ttof5ikxeqg2epmfadzfxlzxvjgtx5k4fad.onion/"
     monkeypatch.setattr(LocalStackNode, "onion_url", lambda self: onion)
     streamed = []
     ok, _log = boot.up(on_line=streamed.append)
