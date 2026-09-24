@@ -119,7 +119,9 @@ from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
 from ...core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
 from ...core.domain_services import ACTION_MESH_START, gate_reason, record_reviewed
 from ...core.local_mesh_domains import (
-    LOCAL_MESH_REMEDY, LocalMeshDomains, bootstrap_domain_records, own_idp_names)
+    DOMAIN_NAME_RE, LOCAL_MESH_REMEDY, SAVED_MESH_REMEDY, LocalMeshDomains,
+    added_row_problems, bootstrap_domain_records, domains_from_bootstrap,
+    own_idp_names, reviewed_record_names)
 from ...core.e2e_catalogue import Catalogue, load_catalogue
 from ...core.egress_conf import validate_egress_conf
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
@@ -1064,12 +1066,37 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.boot_domain.setReadOnly(True)
         self.boot_domain_note.setVisible(True)
 
+    def _domain_row_problems(self) -> list[str]:
+        """Why the recorded rows cannot go to a bring-up; [] when they can.
+
+        The ADDED rows (``mesh_domains.domains[1:]`` — row 0 is the own domain by
+        construction) must be domain names, distinct, and not the own domain again;
+        a typed prod apex must be a domain name. The TUI refuses the same cases at
+        entry, with the same words (``core.local_mesh_domains.added_row_problems``).
+        A BLANK prod apex is not listed: the bring-up's own validate() refuses that,
+        as it always has, and the step shows its own note for it."""
+        md = self.mesh_domains
+        problems = added_row_problems([d.name for d in md.domains[1:]], md.own_name)
+        own = (md.own_name or "").strip()
+        if self.env_prod.isChecked() and own and not DOMAIN_NAME_RE.match(own):
+            problems.insert(0, f"row 0: not a domain name: {own!r} (lowercase "
+                               "dotted hostname, e.g. example.org)")
+        return problems
+
     def _commit_domains(self) -> bool:
         """Leave the Domains step: the table's rows become ``mesh_domains``, row 0's
         typed name (prod) becomes ``boot_domain`` — the ONE direction the mirror is
         written in — and the reviewed markers are pruned to the rows that still
-        exist. Never refuses (inline note only): the bring-up's own validate() is
-        what refuses a prod mesh with no apex, as it always has."""
+        exist.
+
+        Refuses (returns False, inline note — never a modal) only on a row that
+        cannot be a domain: a non-hostname, a duplicate, or an added row named
+        after row 0 (PR #595 skeptics: those reached ``own_idp_domains`` as a
+        duplicate ``casdoor-<slug>`` service, or an own Casdoor for the mesh's own
+        apex). The rows are STILL recorded, so a Back keeps what was typed and the
+        next entry shows it again; the refusal is on Next, and the bring-up
+        re-checks (``_bootstrap_up``). A blank prod apex is a note, not a refusal:
+        the bring-up's own validate() refuses that, as it always has."""
         md = self.mesh_domains
         added, _ca = self.domains_table.rows()
         own = self.domains_table.own_row_name()
@@ -1086,13 +1113,19 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         md.own_name = own
         record_reviewed(md, md.domain_services_reviewed)
         blank = prod and not own
-        self.domains_note.setText(
-            "A prod mesh needs its public apex domain in row 0 — the minted issuer "
-            "and superadmin align with it. The mesh cannot start without it."
-            if blank else "")
-        self.domains_note.setVisible(blank)
+        problems = self._domain_row_problems()
+        lines = list(problems)
+        if blank:
+            lines.append(
+                "A prod mesh needs its public apex domain in row 0 — the minted "
+                "issuer and superadmin align with it. The mesh cannot start without "
+                "it.")
+        if problems:
+            lines.append("Fix or remove these rows to continue.")
+        self.domains_note.setText("\n".join(lines))
+        self.domains_note.setVisible(bool(lines))
         self._refresh_plan()
-        return True
+        return not problems
 
     def _build_source_section(self) -> QtWidgets.QWidget:
         w = QtWidgets.QWidget()
@@ -1914,6 +1947,8 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         control, so none can silently do nothing (the dead-default class: ``brand``
         was declared on the config but never passed here, making the GUI strictly
         less capable than the CLI's ``--brand``)."""
+        records = bootstrap_domain_records(self.mesh_domains.domains,
+                                           self.mesh_domains.own_name)
         return LocalMeshBootstrapConfig(
             env=("prod" if self.env_prod.isChecked() else "test"),
             superadmin_username=self.superadmin.text().strip() or "superadmin",
@@ -1956,9 +1991,11 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             # compose lane brings up and the row the operator sees cannot disagree.
             # Both are () on a flow that never touched the steps, or only clicked
             # Next through them (row 0 default-shaped is not recorded).
-            domains=bootstrap_domain_records(self.mesh_domains.domains,
-                                             self.mesh_domains.own_name),
+            domains=records,
             own_idp_domains=own_idp_names(self.mesh_domains.domains),
+            # which of those rows were walked — what a saved-mesh Start gates on
+            # (never a name that is not recorded, so () on an untouched flow)
+            domain_services_reviewed=reviewed_record_names(self.mesh_domains, records),
         )
 
     def theme_form(self) -> dict:
@@ -2058,44 +2095,29 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         return missing
 
     def _apply_domains(self, cfg: LocalMeshBootstrapConfig) -> None:
-        """The inverse of the two domain fields ``collect_bootstrap`` emits: rebuild
-        ``mesh_domains`` from the record's rows and its own-IdP names (a CLI-made
-        record carries the latter without the former), row 0 being the record's
-        cluster domain (or the brand default). Every loaded row is marked REVIEWED:
-        a saved-mesh record only exists after a start that passed the gate, so its
-        rows were walked. A record carrying neither leaves the state alone — the
-        Domains step seeds row 0 on its own visit — so applying a pre-#494 record
-        changes nothing about the gate."""
+        """The inverse of the domain fields ``collect_bootstrap`` emits: rebuild
+        ``mesh_domains`` from the record (``core.local_mesh_domains.
+        domains_from_bootstrap`` — row 0 the record's cluster domain or the brand
+        default, then its rows, then any own-IdP name a CLI-made record carries
+        alone). REVIEWED is what the record SAYS was reviewed
+        (``domain_services_reviewed``), plus an unrecorded own domain — never every
+        loaded row: a record can be written from a form with un-walked rows, or by
+        the CLI with no rows at all, so the gate must still name those. A record
+        carrying no domains leaves the state alone when the Domains step was never
+        visited (the step seeds row 0 on its own visit), and otherwise resets it to
+        the own row — so applying a pre-#494 record changes nothing about the
+        gate."""
         md = self.mesh_domains
-        if not cfg.domains and not cfg.own_idp_domains and not md.domains:
-            return
-        own = cfg.cluster_domain.strip() or cfg.resolved_domain()
-        rows: list[Domain] = [Domain(name=own, title="")]
-        for rec in cfg.domains:
-            name = (rec.get("name") or "").strip()
-            if not name:
-                continue
-            row = rows[0] if name == own else None
-            if row is None:
-                row = Domain(name=name)
-                rows.append(row)
-            row.title = (rec.get("title") or "").strip()
-            row.idp = (rec.get("idp") or DOMAIN_IDP_SUPERDOMAIN)
-            row.optional_services = list(rec.get("optional_services") or [])
-        for name in cfg.own_idp_domains:
-            name = name.strip()
-            if not name:
-                continue
-            row = next((r for r in rows if r.name == name), None)
-            if row is None:
-                row = Domain(name=name)
-                rows.append(row)
-            if name != own:
-                row.idp = DOMAIN_IDP_OWN
-        rows[0].idp = DOMAIN_IDP_SUPERDOMAIN
-        md.domains = rows
-        md.own_name = own
-        record_reviewed(md, [r.name for r in rows])
+        loaded = domains_from_bootstrap(cfg)
+        if loaded is None:
+            if not md.domains:
+                return
+            own = cfg.cluster_domain.strip() or cfg.resolved_domain()
+            loaded = LocalMeshDomains(domains=[Domain(name=own, title="")],
+                                      domain_services_reviewed=[own], own_name=own)
+        md.domains = loaded.domains
+        md.own_name = loaded.own_name
+        md.domain_services_reviewed = list(loaded.domain_services_reviewed)
         self.domains_table.fill(md.domains, md.own_name)
         # The stepper's working copy belongs to the rows it was seeded from. The rows
         # were just REPLACED under it, so re-seed it from them: otherwise the next
@@ -2743,6 +2765,31 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             return ""
         return gate_reason(cfg, ACTION_MESH_START)
 
+    def _saved_domain_services_refusal(self, rec, cfg: LocalMeshBootstrapConfig) -> str:
+        """"" when saved mesh ``rec`` (its config already parsed as ``cfg``) may
+        start; otherwise the refusal naming every domain OF THE RECORD with no
+        recorded service configuration.
+
+        Reviewed = the record's own markers (``domains_from_bootstrap``), plus the
+        form's markers for the record's names ONLY while the form holds this very
+        record (``Load into the form`` sets ``_loaded_record_id``) — that is the
+        remedy the refusal names: load it, walk the named domains, start it again.
+        A draft's walk of some other mesh's rows never counts. The image flow's
+        half (``wiz.cfg`` — a superadmin Domains table loaded on the Sessions
+        screen) is gated exactly as ``_bootstrap_up`` gates it."""
+        md = domains_from_bootstrap(cfg)
+        if md is not None:
+            if getattr(self, "_loaded_record_id", None) == rec.id:
+                names = set(md.names())
+                extra = [n for n in self.mesh_domains.domain_services_reviewed
+                         if n in names and n not in md.domain_services_reviewed]
+                md.domain_services_reviewed = list(md.domain_services_reviewed) + extra
+            refusal = gate_reason(md, ACTION_MESH_START, remedy=SAVED_MESH_REMEDY)
+            if refusal:
+                return refusal
+        wcfg = getattr(getattr(self, "wiz", None), "cfg", None)
+        return "" if wcfg is None else gate_reason(wcfg, ACTION_MESH_START)
+
     def _bootstrap_up(self):
         # THE PER-DOMAIN SERVICES GATE (#494/#495), on the docker/local-mesh half of
         # the operator's ask ("before building or starting a mesh in docker or nodes").
@@ -2760,6 +2807,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # config loaded on the Sessions screen, or of a mesh flow the operator
         # stepped into the local-docker lane from. ``LocalMeshDialog`` has no wizard
         # at all, hence the getattr.
+        # Rows that cannot be a domain first — the Domains step refuses them on Next;
+        # this is the backstop for any other way they got here (the TUI's words, one
+        # helper) — and only then the services gate, which is about the rows that
+        # can: fixing a row may change which domains still need their page.
+        row_problems = self._domain_row_problems()
+        if row_problems:
+            self.status.setText("Cannot start: domains: " + "; ".join(row_problems)
+                                + " — fix them on the ‘Domains’ step.")
+            return
         refusal = self._domain_services_refusal()
         if refusal:
             self.status.setText(refusal)
@@ -3168,6 +3224,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
     def _load_saved(self, rec):
         cfg = LocalMeshBootstrapConfig.from_dict(rec.config)
         missing = self.apply_bootstrap(cfg, form=rec.form)
+        # the form now holds THIS record's rows: a domain walked on the Domain
+        # services step from here on counts for this record's Start (the saved-mesh
+        # refusal's remedy — _saved_domain_services_refusal)
+        self._loaded_record_id = rec.id
         self.saved_meshes.set_note(self._not_applied_text(rec, missing))
 
     def _start_saved(self, rec, mode: str):
@@ -3190,16 +3250,21 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             return
         # THE PER-DOMAIN SERVICES GATE (#494/#495), SECOND DOOR. Saved meshes ->
         # Start/Restore brings a docker mesh up on the same compose project
-        # _bootstrap_up does, from the same wiz.cfg, so gating only _bootstrap_up
-        # would have left the operator's ask ("before … starting a mesh in docker")
-        # satisfied by one button and bypassed by the one next to it. Same seam, same
-        # sentence, same status line, and BEFORE apply_bootstrap so a refused click
-        # does not silently rewrite the form on its way to doing nothing.
-        refusal = self._domain_services_refusal()
+        # _bootstrap_up does, so gating only _bootstrap_up would have left the
+        # operator's ask ("before … starting a mesh in docker") satisfied by one
+        # button and bypassed by the one next to it. Same seam, same status line,
+        # and BEFORE apply_bootstrap so a refused click does not silently rewrite the
+        # form on its way to doing nothing.
+        #
+        # It gates THE RECORD's domains — the record's config is what runs — never
+        # the form's in-progress rows (PR #595 skeptics: a draft with two un-walked
+        # domains refused Start of an unrelated record, while a CLI-made record's
+        # own-IdP domains started with no services page ever shown).
+        cfg = LocalMeshBootstrapConfig.from_dict(rec.config)
+        refusal = self._saved_domain_services_refusal(rec, cfg)
         if refusal:
             self.status.setText(refusal)
             return
-        cfg = LocalMeshBootstrapConfig.from_dict(rec.config)
         missing = self.apply_bootstrap(cfg, form=rec.form)
         self.saved_meshes.set_note(self._not_applied_text(rec, missing))
         # The RECORD's config is what runs — never the form's re-collection,

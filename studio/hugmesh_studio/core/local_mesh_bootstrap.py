@@ -291,6 +291,17 @@ class LocalMeshBootstrapConfig:
     # ``optional_services`` are recorded and NOT enforced on this lane: the compose
     # profiles come from ``services`` (the mesh-wide Services step).
     domains: tuple[dict, ...] = ()
+    # WHICH of the recorded ``domains`` rows had been through the Studio's Domain
+    # services step when this config was collected (#494 fix round). A saved-mesh
+    # Start/Restore gates on THE RECORD's rows (never the form's draft), and a record
+    # can be written from a form holding un-walked rows (Save mesh records the page's
+    # config) or by the CLI (``own_idp_domains`` with no rows at all), so "the row is
+    # in the record" is not evidence it was reviewed; this is. Only names that are
+    # also in ``domains`` are ever collected, so an untouched flow records () —
+    # byte-identical env, argv and plan (the to_dict key set grows by one, as it did
+    # for ``domains``). The mesh's own domain, when it is not a recorded row, is the
+    # implicit cluster default and is never asked about on a saved start.
+    domain_services_reviewed: tuple[str, ...] = ()
     # WHICH infra Applications the DEVOPS (kind) lane adds to its curated set
     # (core/local_services.KIND_ADDONS slugs). A SEPARATE axis from `services`:
     # these are Kubernetes Applications, they have no compose profile and no
@@ -409,7 +420,7 @@ class LocalMeshBootstrapConfig:
     # JSON null and () as [], and BOTH directions are pinned by test — collapsing
     # them silently re-enables metrics-server and flips the profile semantics.
     _TUPLE_OR_NONE_FIELDS = ("services", "kind_addons")
-    _TUPLE_FIELDS = ("web_locales", "own_idp_domains")
+    _TUPLE_FIELDS = ("web_locales", "own_idp_domains", "domain_services_reviewed")
     #: tuples of JSON objects (the recorded domain rows, #494).
     _DICT_TUPLE_FIELDS = ("domains",)
     _BOOL_FIELDS = ("social", "with_tor")
@@ -703,6 +714,27 @@ class LocalMeshBootstrap:
                     f"own-Casdoor domain '{name}' is not a DNS name (dot-"
                     f"separated [a-z0-9-] labels) — no casdoor-<slug> "
                     f"service/issuer can be derived from it.")
+        # Two rows with one name, or a row named after the mesh's OWN apex (#494 fix
+        # round). own_casdoor derives one compose service + one postgres volume per
+        # NAME, so a duplicate emits the same casdoor-<slug> key twice on two ports,
+        # and the own apex already signs in via the central Casdoor — an own one for
+        # it maps APP_TENANCY_HOSTS to a phantom. The CLI collapses duplicates on
+        # parse and the Studio refuses both inline; this is the backstop for a
+        # hand-edited record or any other door.
+        seen_idp: set[str] = set()
+        apex = self.cfg.resolved_domain().strip().lower()
+        for name in self.cfg.own_idp_domains:
+            key = name.strip().lower()
+            if not key:
+                continue
+            if key in seen_idp:
+                problems.append(f"own-Casdoor domain '{name.strip()}' is listed twice "
+                                "— each domain gets exactly one own Casdoor.")
+            seen_idp.add(key)
+            if key == apex:
+                problems.append(
+                    f"own-Casdoor domain '{name.strip()}' is this mesh's own domain — "
+                    "it signs in via the central Casdoor and cannot have an own one.")
         if self.cfg.is_prod():
             if not self.cfg.cluster_domain.strip():
                 problems.append("prod requires a public cluster domain "

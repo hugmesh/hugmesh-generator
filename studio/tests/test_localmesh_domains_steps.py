@@ -41,7 +41,8 @@ from hugmesh_studio.core import domain_services as ds                  # noqa: E
 from hugmesh_studio.core.config import (                                # noqa: E402
     DOMAIN_IDP_OWN, OPTIONAL_SERVICES_CHOICES, ImageConfig)
 from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig  # noqa: E402
-from hugmesh_studio.core.local_mesh_domains import LOCAL_MESH_REMEDY   # noqa: E402
+from hugmesh_studio.core.local_mesh_domains import (                  # noqa: E402
+    LOCAL_MESH_REMEDY, SAVED_MESH_REMEDY)
 from hugmesh_studio.core.platform_info import HostInfo                 # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                    # noqa: E402
 from hugmesh_studio.gui.pages import domain_services as dsp_mod        # noqa: E402
@@ -202,13 +203,15 @@ def test_an_untouched_walk_through_both_steps_emits_byte_identically(wiz):
     # services/kind_addons explicitly — see collect_bootstrap — so only these three
     # are compared to a bare config)
     bare = LocalMeshBootstrapConfig().to_dict()
-    for k in ("domains", "own_idp_domains", "cluster_domain"):
+    for k in ("domains", "own_idp_domains", "cluster_domain",
+              "domain_services_reviewed"):
         assert before[0][k] == bare[k], k
     _to(wiz, localmesh_mod.LocalMeshPage)                          # Next, Next, …
     after = _snapshot(ctl)
     assert after == before
     cfg = ctl.collect_bootstrap()
     assert cfg.domains == () and cfg.own_idp_domains == () and cfg.cluster_domain == ""
+    assert cfg.domain_services_reviewed == ()               # the own row is not recorded
     assert "domains recorded" not in ctl.boot.plan()
     # …and the gate is satisfied: the own domain was shown on its page
     assert ctl._domain_services_refusal() == ""
@@ -267,19 +270,101 @@ def test_the_start_refuses_an_unwalked_domain_and_names_the_step(wiz, monkeypatc
     assert "image flow" not in text                         # not the image-flow remedy
 
 
-def test_the_saved_mesh_start_is_gated_by_the_same_rows(wiz, monkeypatch):
+def test_a_drafts_unwalked_rows_do_not_refuse_an_unrelated_saved_mesh(wiz, monkeypatch):
+    """The saved-mesh door gates THE RECORD's rows — the record's config is what runs
+    (PR #595 skeptics: the form's draft rows used to refuse a record that has no
+    domains at all, naming domains the record does not carry)."""
     ctl = _two_added(wiz)
     _to(wiz, localmesh_mod.LocalMeshDomainServicesPage)
     review = _to(wiz, localmesh_mod.LocalMeshReviewPage)
     assert isinstance(review, localmesh_mod.LocalMeshReviewPage)
-    started, applied = [], []
+    assert ctl._domain_services_refusal() != ""             # the DRAFT is refused …
+    started = []
     monkeypatch.setattr(ctl, "_launch", lambda *a, **k: started.append(a))
-    monkeypatch.setattr(ctl, "apply_bootstrap", lambda *a, **k: applied.append(a) or [])
     rec = SimpleNamespace(id="r", label="r", form={},
                           config=LocalMeshBootstrapConfig().to_dict())
     ctl._start_saved(rec, "start")
+    assert "team.example" not in ctl.status.text()          # … the record is not
+    assert "acme.example" not in ctl.status.text()
+    assert started, "a record with no domains must start: " + ctl.status.text()
+
+
+def _cli_record(**over):
+    """A CLI-made record: own-IdP names, no recorded rows, no reviewed markers."""
+    kw = dict(own_idp_domains=("never.example",))
+    kw.update(over)
+    return SimpleNamespace(id="cli", label="cli", form={},
+                           config=LocalMeshBootstrapConfig(**kw).to_dict())
+
+
+@pytest.mark.parametrize("mode", ["start", "restore"])
+def test_a_saved_mesh_with_unwalked_domains_is_refused_before_the_form_is_touched(
+        wiz, monkeypatch, mode):
+    ctl = _ctl(wiz)
+    _to_env(wiz)
+    started, applied = [], []
+    monkeypatch.setattr(ctl, "_launch", lambda *a, **k: started.append(a))
+    monkeypatch.setattr(ctl, "apply_bootstrap", lambda *a, **k: applied.append(a) or [])
+    ctl._start_saved(_cli_record(), mode)
     assert started == [] and applied == []
-    assert "team.example" in ctl.status.text() and LOCAL_MESH_REMEDY in ctl.status.text()
+    text = ctl.status.text()
+    named = text.split(" — ", 1)[1].split(". ", 1)[0].split(", ")
+    assert named == ["never.example"], named                # never the own apex
+    assert SAVED_MESH_REMEDY in text
+
+
+def test_a_recorded_row_without_its_reviewed_marker_is_refused(wiz, monkeypatch):
+    """Save mesh records the PAGE's config, un-walked rows included, so a row being
+    in the record is not evidence it was reviewed; the marker is."""
+    ctl = _ctl(wiz)
+    _to_env(wiz)
+    monkeypatch.setattr(ctl, "_launch", lambda *a, **k: None)
+    rows = ({"name": "a.example", "title": "", "idp": "superdomain",
+             "optional_services": []},
+            {"name": "b.example", "title": "", "idp": "superdomain",
+             "optional_services": []})
+    ctl._start_saved(_cli_record(own_idp_domains=(), domains=rows,
+                                 domain_services_reviewed=("a.example",)), "start")
+    text = ctl.status.text()
+    assert "b.example" in text and "a.example" not in text.split(" — ", 1)[1].split(". ")[0]
+
+
+def test_the_saved_mesh_remedy_load_walk_start_clears_the_refusal(wiz, monkeypatch):
+    ctl = _ctl(wiz)
+    _to_env(wiz)
+    started = []
+    monkeypatch.setattr(ctl, "_launch", lambda *a, **k: started.append(a))
+    rec = _cli_record()
+    ctl._start_saved(rec, "start")
+    assert started == [] and "never.example" in ctl.status.text()
+    ctl._load_saved(rec)                                    # the remedy, step 1
+    _to(wiz, localmesh_mod.LocalMeshDomainServicesPage)     # step 2: walk it
+    w = ctl.domain_services
+    while w.current_domain() != "never.example":
+        w._step(1)
+    _to(wiz, localmesh_mod.LocalMeshReviewPage)
+    assert "never.example" in ctl.mesh_domains.domain_services_reviewed
+    ctl.status.setText("")          # a started (here: mocked) launch leaves it as is
+    ctl._start_saved(rec, "start")                          # step 3
+    assert "never.example" not in ctl.status.text(), ctl.status.text()
+    assert started, "the remedied record must start: " + ctl.status.text()
+
+
+def test_a_walk_counts_for_a_saved_mesh_only_while_the_form_holds_that_record(
+        wiz, monkeypatch):
+    """A draft's walk of a same-named domain never satisfies some OTHER record."""
+    ctl = _ctl(wiz)
+    _to_env(wiz)
+    _to(wiz, localmesh_mod.LocalMeshDomainsPage)
+    ctl.domains_table._add("never.example", "", idp=DOMAIN_IDP_OWN)
+    _to(wiz, localmesh_mod.LocalMeshDomainServicesPage)
+    ctl.domain_services._step(1)                            # never.example walked
+    _to(wiz, localmesh_mod.LocalMeshReviewPage)
+    assert "never.example" in ctl.mesh_domains.domain_services_reviewed
+    started = []
+    monkeypatch.setattr(ctl, "_launch", lambda *a, **k: started.append(a))
+    ctl._start_saved(_cli_record(), "start")
+    assert started == [] and "never.example" in ctl.status.text()
 
 
 def test_walking_the_domains_clears_the_gate_and_the_mesh_starts(wiz, monkeypatch):
@@ -327,8 +412,8 @@ def test_a_domain_left_by_back_still_counts_as_walked_and_keeps_its_ticks(wiz):
 
 def test_loading_a_saved_mesh_after_the_walk_replaces_the_steppers_working_state(wiz):
     """A saved-mesh record loaded into the form on the review step REPLACES the rows
-    under a stepper that has already been walked. The loaded rows are walked (a
-    record only exists after a start that passed the gate), and the old walk's
+    under a stepper that has already been walked. The loaded rows carry their
+    reviewed markers (``domain_services_reviewed``), and the old walk's
     working copy must not survive to be written back: neither its ticks over the
     loaded ones, nor its reviewed set over the loaded rows' markers."""
     ctl = _two_added(wiz)
@@ -343,7 +428,8 @@ def test_loading_a_saved_mesh_after_the_walk_replaces_the_steppers_working_state
                   "optional_services": ["phpbb"]},
                  {"name": "zeta.example", "title": "Zeta", "idp": DOMAIN_IDP_OWN,
                   "optional_services": []}),
-        own_idp_domains=("zeta.example",)).to_dict())
+        own_idp_domains=("zeta.example",),
+        domain_services_reviewed=("acme.example", "zeta.example")).to_dict())
     ctl._load_saved(rec)
     assert ctl._domain_services_refusal() == ""
     # Back into the stepper and forward again: its record must carry the LOADED rows
@@ -403,7 +489,8 @@ def test_a_reviewed_selection_survives_a_round_trip_through_apply_bootstrap(wiz)
         cluster_domain="",
         domains=({"name": "a.example", "title": "A", "idp": DOMAIN_IDP_OWN,
                   "optional_services": ["games"]},),
-        own_idp_domains=("a.example", "b.example"))
+        own_idp_domains=("a.example", "b.example"),
+        domain_services_reviewed=("a.example",))
     missing = ctl.apply_bootstrap(rec)
     assert "own_idp_domains" not in missing                 # the page HAS a control now
     own = LocalMeshBootstrapConfig().resolved_domain()
@@ -411,12 +498,15 @@ def test_a_reviewed_selection_survives_a_round_trip_through_apply_bootstrap(wiz)
     assert list(rows) == [own, "a.example", "b.example"]
     assert rows["a.example"].idp == DOMAIN_IDP_OWN and rows["a.example"].optional_services == ["games"]
     assert rows["b.example"].idp == DOMAIN_IDP_OWN           # a CLI-made record's name
-    # a record only exists after a start that passed the gate: its rows are walked
-    assert ctl._domain_services_refusal() == ""
+    # REVIEWED is what the record says, never "every loaded row" (PR #595 skeptics):
+    # the CLI-made b.example was never walked, so the gate still names it, alone
+    refusal = ctl._domain_services_refusal()
+    assert refusal.split(" — ", 1)[1].split(". ", 1)[0].split(", ") == ["b.example"]
     assert ctl.domains_table.table.rowCount() == 3 and ctl.domains_table.is_own_row(0)
     again = ctl.collect_bootstrap()
     assert again.own_idp_domains == ("a.example", "b.example")
     assert again.domains[0]["name"] == "a.example"
+    assert again.domain_services_reviewed == ("a.example",)
 
 
 def test_a_pre_494_record_leaves_the_domain_state_alone(wiz):
@@ -519,3 +609,69 @@ def test_a_standalone_host_with_no_steps_keeps_the_whole_surface_and_passes(qapp
     assert page.domains_table.table.rowCount() == 0
     assert page._domain_services_refusal() == ""
     assert not page.boot_domain.isReadOnly()
+
+
+# ── 8. rows that cannot be a domain are refused on Next (PR #595 skeptics) ─────────
+@pytest.mark.parametrize("names, said", [
+    (("a.example", "a.example"), "already listed: a.example"),
+    (("hugmesh-own",), "not a domain name: 'hugmesh-own'"),
+    (("Shop.Example",), "not a domain name"),
+    ((None,), "is this mesh's own domain (row 0)"),         # None = the own apex
+])
+def test_the_domains_step_refuses_rows_that_cannot_be_a_domain(wiz, names, said):
+    ctl = _ctl(wiz)
+    _to_env(wiz)
+    step = _to(wiz, localmesh_mod.LocalMeshDomainsPage)
+    own = ctl.mesh_domains.own_name
+    for n in names:
+        ctl.domains_table._add(own if n is None else n, "dup", idp=DOMAIN_IDP_OWN)
+    before = wiz.currentId()
+    wiz.next()
+    assert wiz.currentId() == before, "Next must be refused"
+    assert step.validatePage() is False
+    assert ctl.domains_note.isVisibleTo(ctl.domains_table.parentWidget())
+    assert said in ctl.domains_note.text(), ctl.domains_note.text()
+    # the backstop: the bring-up names the same problem and launches nothing
+    started = []
+    ctl._launch = lambda *a, **k: started.append(a)
+    ctl._bootstrap_up()
+    assert started == [] and said in ctl.status.text(), ctl.status.text()
+
+
+def test_fixing_the_row_lets_the_step_continue(wiz):
+    ctl = _ctl(wiz)
+    _to_env(wiz)
+    _to(wiz, localmesh_mod.LocalMeshDomainsPage)
+    t = ctl.domains_table
+    t._add("a.example", "")
+    t._add("a.example", "")
+    before = wiz.currentId()
+    wiz.next()
+    assert wiz.currentId() == before
+    t.table.item(2, 0).setText("b.example")
+    wiz.next()
+    assert isinstance(wiz.currentPage(), localmesh_mod.LocalMeshDomainServicesPage)
+    assert not ctl.domains_note.isVisibleTo(ctl.domains_table.parentWidget())
+
+
+def test_a_prod_apex_that_is_not_a_domain_name_is_refused(wiz):
+    ctl = _ctl(wiz)
+    _to_env(wiz)
+    ctl.env_prod.setChecked(True)
+    _to(wiz, localmesh_mod.LocalMeshDomainsPage)
+    ctl.domains_table.table.item(0, 0).setText("not a domain")
+    before = wiz.currentId()
+    wiz.next()
+    assert wiz.currentId() == before
+    assert "row 0: not a domain name" in ctl.domains_note.text()
+
+
+def test_a_back_keeps_a_refused_row_so_it_can_be_fixed(wiz):
+    ctl = _ctl(wiz)
+    _to_env(wiz)
+    _to(wiz, localmesh_mod.LocalMeshDomainsPage)
+    ctl.domains_table._add("junk", "")
+    wiz.back()
+    _to(wiz, localmesh_mod.LocalMeshDomainsPage)
+    assert "junk" in [ctl.domains_table.table.item(r, 0).text()
+                      for r in range(ctl.domains_table.table.rowCount())]

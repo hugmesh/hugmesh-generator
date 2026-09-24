@@ -32,15 +32,15 @@ Choice default is ``join`` by id, as the GUI page's is.
 """
 from __future__ import annotations
 
-import re
 import shlex
 
 from ..core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
 from ..core.domain_services import (ACTION_MESH_START, gate_reason, normalise_slugs,
                                     record_reviewed)
 from ..core.local_mesh_bootstrap import LocalMeshBootstrapConfig
-from ..core.local_mesh_domains import (LOCAL_MESH_REMEDY, LocalMeshDomains,
-                                       bootstrap_domain_records, own_idp_names)
+from ..core.local_mesh_domains import (DOMAIN_NAME_RE, LOCAL_MESH_REMEDY,
+                                       LocalMeshDomains, bootstrap_domain_records,
+                                       own_idp_names)
 from . import model
 from .domain_services_step import DomainServicesScreen
 from .domains_step import IDP_LABELS, OWN_IDP
@@ -62,9 +62,9 @@ LANE_NOTE = ("ON THIS LOCAL DOCKER MESH: the per-domain selection is recorded wi
              "mesh (and shown in the plan) — it is NOT what decides which compose "
              "profiles come up; the mesh-wide ‘Services’ step (in the GUI) is.")
 
-# the domains_step shape: a lowercase dotted hostname.
-_NAME_RE = re.compile(
-    r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
+# the domains_step shape: a lowercase dotted hostname — ONE regex, shared with the
+# GUI's local-mesh Domains step (core/local_mesh_domains.DOMAIN_NAME_RE).
+_NAME_RE = DOMAIN_NAME_RE
 
 
 def _test_apex() -> str:
