@@ -423,6 +423,15 @@ class DomainsTableBody:
         item = self.table.item(r, _COL_NAME)
         return bool(item) and item.data(Qt.ItemDataRole.UserRole) == _OWN_ROW
 
+    def _added_row_named(self, name: str) -> bool:
+        """True when a row other than the own row already carries ``name``."""
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, _COL_NAME)
+            if (not self.is_own_row(r) and item is not None
+                    and item.text().strip() == name):
+                return True
+        return False
+
     def own_row_name(self) -> str:
         """The own row's name as typed (editable hosts), or "" when there is none."""
         for r in range(self.table.rowCount()):
@@ -722,7 +731,10 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         for r in range(self.table.rowCount() - 1, -1, -1):
             if self.is_own_row(r):
                 self.table.removeRow(r)
-        if own:
+        # An ADDED row already carrying the own name is that domain's row (a cloud
+        # prefill kept across Back -> mesh, before any Next wrote it to cfg.domains):
+        # drawing the own row too would list the same domain twice (PR #595 skeptics).
+        if own and not self._added_row_named(own):
             self._add_own(own, c.brand_title, c.cluster_domain_services,
                           reviewed=(own in reviewed_names(c)))
 

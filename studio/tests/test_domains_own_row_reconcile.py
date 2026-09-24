@@ -118,3 +118,17 @@ def test_an_own_only_table_renamed_keeps_exactly_one_own_row(wiz):
     assert _own_rows(dom) == [0] and dom.table.rowCount() == 1
     assert dom.table.item(0, 0).text() == "changed.example"
     assert dom.validatePage() is True and wiz.cfg.domains == []
+
+
+def test_a_kept_cloud_prefill_row_is_not_listed_twice_on_the_mesh_table(wiz):
+    """cloud -> Domains (the prefill adds a REAL own-named row) -> Back without Next
+    -> mesh -> Add more domains -> Domains: the own row must not be drawn next to
+    the kept real row carrying the same name (PR #595 skeptics, round 2)."""
+    pick_mode(wiz, "cloud")
+    dom = advance_to(wiz, wizard_mod.DomainsPage)
+    own = wiz.cfg.cluster_domain
+    assert added_names(dom) == [own]
+    back_to(wiz, wizard_mod.ModePage)
+    dom = _mesh_domains(wiz)
+    names = [dom.table.item(r, 0).text() for r in range(dom.table.rowCount())]
+    assert names.count(own) == 1, names

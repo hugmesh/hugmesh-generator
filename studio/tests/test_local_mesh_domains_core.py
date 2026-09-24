@@ -10,14 +10,16 @@ No Qt import, so this runs on the pre-merge CI job that installs no Qt binding:
 * ``LocalMeshBootstrap.validate()`` is the backstop for any other door: a duplicate
   own-IdP name, or one equal to the mesh's own apex, is a problem;
 * ``domains_from_bootstrap`` marks REVIEWED only what the record says was reviewed
-  (plus an unrecorded own domain) — never every row in the record.
+  (plus an unrecorded own domain) — never every row in the record;
+* ``record_walk`` writes a form walk INTO a saved record: markers plus the walk's
+  ticks, never a field that runs.
 """
 from hugmesh_studio.core.config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
 from hugmesh_studio.core.local_mesh_bootstrap import (LocalMeshBootstrap,
                                                       LocalMeshBootstrapConfig)
 from hugmesh_studio.core.local_mesh_domains import (
     LocalMeshDomains, added_row_problems, bootstrap_domain_records,
-    domains_from_bootstrap, own_idp_names, reviewed_record_names)
+    domains_from_bootstrap, own_idp_names, record_walk, reviewed_record_names)
 
 import os
 
@@ -92,3 +94,34 @@ def test_reviewed_record_names_never_names_an_unrecorded_domain():
     assert [r["name"] for r in recs] == ["a.example"]
     assert reviewed_record_names(md, recs) == ("a.example",)
     assert reviewed_record_names(md, ()) == ()
+
+
+def test_record_walk_writes_markers_and_ticks_and_nothing_that_runs():
+    cfg = LocalMeshBootstrapConfig(
+        own_idp_domains=("cli.example",),
+        domains=({"name": "a.example", "title": "A", "idp": DOMAIN_IDP_SUPERDOMAIN,
+                  "optional_services": ["phpbb"]},),
+        domain_services_reviewed=())
+    runs_before = {k: v for k, v in cfg.to_dict().items()
+                   if k not in ("domains", "domain_services_reviewed")}
+    form = LocalMeshDomains(domains=[
+        Domain(name="a.example", title="changed in the form", idp=DOMAIN_IDP_OWN,
+               optional_services=["games"]),
+        Domain(name="cli.example", title="", optional_services=["tube"])])
+    record_walk(cfg, form, ["a.example", "cli.example"])
+    rows = {r["name"]: r for r in cfg.domains}
+    # a recorded row: the walk's ticks replace the old selection; title and sign-in
+    # stay the RECORD's (what runs is the record, not the form)
+    assert rows["a.example"] == {"name": "a.example", "title": "A",
+                                 "idp": DOMAIN_IDP_SUPERDOMAIN,
+                                 "optional_services": ["games"]}
+    # an own-IdP name the record carried alone gets a row, sign-in own
+    assert rows["cli.example"]["idp"] == DOMAIN_IDP_OWN
+    assert rows["cli.example"]["optional_services"] == ["tube"]
+    assert cfg.domain_services_reviewed == ("a.example", "cli.example")
+    assert {k: v for k, v in cfg.to_dict().items()
+            if k not in ("domains", "domain_services_reviewed")} == runs_before
+    # idempotent: a second write adds no duplicate marker or row
+    record_walk(cfg, form, ["a.example"])
+    assert cfg.domain_services_reviewed == ("a.example", "cli.example")
+    assert [r["name"] for r in cfg.domains] == ["a.example", "cli.example"]

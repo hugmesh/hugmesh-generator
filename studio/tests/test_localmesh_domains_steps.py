@@ -38,6 +38,7 @@ pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
 from hugmesh_studio.core import domain_services as ds                  # noqa: E402
+from hugmesh_studio.core import saved_meshes                           # noqa: E402
 from hugmesh_studio.core.config import (                                # noqa: E402
     DOMAIN_IDP_OWN, OPTIONAL_SERVICES_CHOICES, ImageConfig)
 from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig  # noqa: E402
@@ -290,11 +291,29 @@ def test_a_drafts_unwalked_rows_do_not_refuse_an_unrelated_saved_mesh(wiz, monke
 
 
 def _cli_record(**over):
-    """A CLI-made record: own-IdP names, no recorded rows, no reviewed markers."""
+    """A CLI-made record, SAVED to the (conftest-isolated) state dir: own-IdP names,
+    no recorded rows, no reviewed markers."""
     kw = dict(own_idp_domains=("never.example",))
     kw.update(over)
-    return SimpleNamespace(id="cli", label="cli", form={},
-                           config=LocalMeshBootstrapConfig(**kw).to_dict())
+    rec = saved_meshes.SavedMesh(id=saved_meshes.new_id(), label="cli",
+                                 config=LocalMeshBootstrapConfig(**kw).to_dict())
+    assert saved_meshes.save(rec), "the isolated state dir must be writable"
+    return rec
+
+
+def _walk_to_review(wiz, ctl, name, tick=None):
+    """Domain services: step to ``name`` (optionally ticking ``tick``), then on to
+    the review step."""
+    _to(wiz, localmesh_mod.LocalMeshDomainServicesPage)
+    w = ctl.domain_services
+    for _ in range(8):
+        if w.current_domain() == name:
+            break
+        w._step(1)
+    assert w.current_domain() == name
+    if tick:
+        w._boxes[tick].setChecked(True)
+    _to(wiz, localmesh_mod.LocalMeshReviewPage)
 
 
 @pytest.mark.parametrize("mode", ["start", "restore"])
@@ -348,6 +367,57 @@ def test_the_saved_mesh_remedy_load_walk_start_clears_the_refusal(wiz, monkeypat
     ctl._start_saved(rec, "start")                          # step 3
     assert "never.example" not in ctl.status.text(), ctl.status.text()
     assert started, "the remedied record must start: " + ctl.status.text()
+
+
+@pytest.mark.parametrize("mode", ["start", "restore"])
+def test_the_saved_mesh_remedy_heals_the_record_so_every_later_start_passes(
+        wiz, monkeypatch, mode):
+    """PR #595 robustness skeptic, round 2: the remedy worked for ONE Start. The
+    Start re-applied the record over the form, which threw the walk away, and the
+    record on disk never learned of it — so the second Start (and every Start in a
+    later session) was refused again. The walk is now written INTO the record."""
+    ctl = _ctl(wiz)
+    _to_env(wiz)
+    started = []
+    monkeypatch.setattr(ctl, "_launch", lambda *a, **k: started.append(a))
+    rec = _cli_record()
+    ctl._load_saved(rec)
+    _walk_to_review(wiz, ctl, "never.example", tick="games")
+    ctl.status.setText("")
+    ctl._start_saved(rec, mode)                             # 1st: passes on the walk
+    assert len(started) == 1, ctl.status.text()
+    # the form keeps the walk, and what RUNS carries it (a later Save mesh captures
+    # boot.cfg, so it is not lost there either)
+    assert "never.example" in ctl.mesh_domains.domain_services_reviewed
+    assert "never.example" in ctl.boot.cfg.domain_services_reviewed
+    # … and the record ON DISK is healed, with the walk's ticks on its row
+    disk = LocalMeshBootstrapConfig.from_dict(saved_meshes.load(rec.path()).config)
+    assert disk.domain_services_reviewed == ("never.example",)
+    row = {d["name"]: d for d in disk.domains}["never.example"]
+    assert row["idp"] == DOMAIN_IDP_OWN and row["optional_services"] == ["games"]
+    assert disk.own_idp_domains == ("never.example",)       # what runs: unchanged
+    ctl.status.setText("")
+    ctl._start_saved(rec, mode)                             # 2nd, same session
+    assert len(started) == 2, ctl.status.text()
+    # a later session: the form does not hold the record, and the record is read
+    # back from disk — it must pass on its own markers
+    ctl._loaded_record_id = None
+    ctl.status.setText("")
+    ctl._start_saved(saved_meshes.load(rec.path()), mode)
+    assert len(started) == 3, ctl.status.text()
+
+
+def test_a_start_that_needed_no_walk_leaves_the_record_file_alone(wiz, monkeypatch):
+    """Healing writes only when the form's walk was what let the Start through: a
+    record that passes on its own is never rewritten by a Start."""
+    ctl = _ctl(wiz)
+    _to_env(wiz)
+    monkeypatch.setattr(ctl, "_launch", lambda *a, **k: None)
+    rec = _cli_record(own_idp_domains=())
+    before = open(rec.path(), "rb").read()
+    ctl._load_saved(rec)
+    ctl._start_saved(rec, "start")
+    assert open(rec.path(), "rb").read() == before
 
 
 def test_a_walk_counts_for_a_saved_mesh_only_while_the_form_holds_that_record(

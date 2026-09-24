@@ -121,7 +121,7 @@ from ...core.domain_services import ACTION_MESH_START, gate_reason, record_revie
 from ...core.local_mesh_domains import (
     DOMAIN_NAME_RE, LOCAL_MESH_REMEDY, SAVED_MESH_REMEDY, LocalMeshDomains,
     added_row_problems, bootstrap_domain_records, domains_from_bootstrap,
-    own_idp_names, reviewed_record_names)
+    own_idp_names, record_walk, reviewed_record_names)
 from ...core.e2e_catalogue import Catalogue, load_catalogue
 from ...core.egress_conf import validate_egress_conf
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
@@ -2779,16 +2779,51 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         screen) is gated exactly as ``_bootstrap_up`` gates it."""
         md = domains_from_bootstrap(cfg)
         if md is not None:
-            if getattr(self, "_loaded_record_id", None) == rec.id:
-                names = set(md.names())
-                extra = [n for n in self.mesh_domains.domain_services_reviewed
-                         if n in names and n not in md.domain_services_reviewed]
-                md.domain_services_reviewed = list(md.domain_services_reviewed) + extra
+            extra = self._saved_walk_extras(rec, md)
+            md.domain_services_reviewed = list(md.domain_services_reviewed) + extra
             refusal = gate_reason(md, ACTION_MESH_START, remedy=SAVED_MESH_REMEDY)
             if refusal:
                 return refusal
         wcfg = getattr(getattr(self, "wiz", None), "cfg", None)
         return "" if wcfg is None else gate_reason(wcfg, ACTION_MESH_START)
+
+    def _saved_walk_extras(self, rec, md: LocalMeshDomains | None) -> list[str]:
+        """The record's domains (``md`` — ``domains_from_bootstrap`` of its config)
+        that the FORM walked but the record does not mark reviewed — counted only
+        while the form holds this very record (``_loaded_record_id``); [] otherwise."""
+        if md is None or getattr(self, "_loaded_record_id", None) != rec.id:
+            return []
+        names = set(md.names())
+        return [n for n in self.mesh_domains.domain_services_reviewed
+                if n in names and n not in md.domain_services_reviewed]
+
+    def _heal_saved_record(self, rec, cfg: LocalMeshBootstrapConfig,
+                           extras: list[str]) -> str:
+        """Write the form's walk of ``extras`` into saved mesh ``rec`` — into
+        ``cfg`` (what runs now, so ``boot.cfg`` and a later Save mesh carry it, and
+        ``apply_bootstrap`` re-seeds the form WITH it) and into the record on disk
+        (so the next Start, in this session or the next, passes on the record's own
+        markers). Without this the remedy worked for one Start only: applying the
+        record re-seeded the form's markers from the un-healed record (PR #595
+        robustness skeptic, round 2).
+
+        Best-effort, like every other record write: a failed write never refuses
+        the Start the gate just allowed — it is said, inline, in the saved-meshes
+        note. Returns that sentence ("" when the record was written)."""
+        record_walk(cfg, self.mesh_domains, extras)
+        rec.config["domains"] = [dict(r) for r in cfg.domains]
+        rec.config["domain_services_reviewed"] = list(cfg.domain_services_reviewed)
+        try:
+            path = saved_meshes.save(rec)
+        except (OSError, RuntimeError):
+            path = ""
+        named = ", ".join(extras)
+        if path:
+            self._note(f"[saved-mesh] recorded the service configuration of {named} "
+                       f"into '{rec.label or rec.id}' -> {path}")
+            return ""
+        return (f" The service configuration walked for {named} could NOT be written "
+                "into the saved record, so the next Start will ask for it again.")
 
     def _bootstrap_up(self):
         # THE PER-DOMAIN SERVICES GATE (#494/#495), on the docker/local-mesh half of
@@ -3265,8 +3300,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         if refusal:
             self.status.setText(refusal)
             return
+        # The gate passed on the form's walk of some of the record's domains: write
+        # that walk INTO the record before the record is applied back over the form
+        # (which would otherwise throw the walk away) — see _heal_saved_record.
+        extras = self._saved_walk_extras(rec, domains_from_bootstrap(cfg))
+        healed = self._heal_saved_record(rec, cfg, extras) if extras else ""
         missing = self.apply_bootstrap(cfg, form=rec.form)
-        self.saved_meshes.set_note(self._not_applied_text(rec, missing))
+        self.saved_meshes.set_note(self._not_applied_text(rec, missing) + healed)
         # The RECORD's config is what runs — never the form's re-collection,
         # which would turn a CLI-made record's services=None (profile defaults)
         # into whatever the boxes happen to hold, and an egress conf that moved

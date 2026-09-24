@@ -51,6 +51,7 @@ from .domain_services import normalise_slugs
 
 __all__ = ["LocalMeshDomains", "bootstrap_domain_records", "own_idp_names",
            "added_row_problems", "domains_from_bootstrap", "reviewed_record_names",
+           "record_walk",
            "DOMAIN_NAME_RE", "LOCAL_MESH_REMEDY", "SAVED_MESH_REMEDY"]
 
 #: A domain row's name: a lowercase dotted hostname (the TUI Domains steps' shape).
@@ -226,3 +227,46 @@ def domains_from_bootstrap(cfg) -> "LocalMeshDomains | None":
                 if r.name in marks or (r.name == own and own not in recorded)]
     return LocalMeshDomains(domains=rows, domain_services_reviewed=reviewed,
                             own_name=own)
+
+
+def record_walk(cfg, md: "LocalMeshDomains", names) -> None:
+    """Write the Domain services walk of ``names`` — done in the FORM while it held
+    a saved mesh — INTO that mesh's bootstrap config ``cfg`` (in place).
+
+    The saved-mesh refusal's remedy is "load it, walk the named domains, Start it
+    again"; the walk lives in the form, and the next Start re-applies the RECORD to
+    the form (``_apply_domains``), so a walk that is not written into the record
+    counts for exactly one Start (PR #595 robustness skeptic, round 2). So, for each
+    name: its reviewed marker is appended, and its per-domain selection (the ticks
+    the walk recorded) is written onto its recorded row — a new row for a name the
+    record carried only as an own-IdP name (a CLI-made record), with sign-in
+    ``own`` exactly as ``domains_from_bootstrap`` read it.
+
+    Nothing that RUNS changes: ``own_idp_domains``, ``cluster_domain`` and every
+    other field are untouched, and a recorded row's title and sign-in stay the
+    record's — only the record-only fields (``domains[].optional_services``,
+    ``domain_services_reviewed``) grow."""
+    rows = [dict(r) for r in (getattr(cfg, "domains", None) or ())]
+    by_name = {(r.get("name") or "").strip(): r for r in rows}
+    own_idp = {n.strip() for n in (getattr(cfg, "own_idp_domains", None) or ())}
+    marks = list(getattr(cfg, "domain_services_reviewed", None) or ())
+    for raw in names:
+        name = (raw or "").strip()
+        if not name:
+            continue
+        form_row = md.by_name(name)
+        picked = normalise_slugs(form_row.optional_services) if form_row else []
+        row = by_name.get(name)
+        if row is None:
+            row = {"name": name,
+                   "title": (form_row.title or "").strip() if form_row else "",
+                   "idp": DOMAIN_IDP_OWN if name in own_idp else DOMAIN_IDP_SUPERDOMAIN,
+                   "optional_services": picked}
+            rows.append(row)
+            by_name[name] = row
+        else:
+            row["optional_services"] = picked
+        if name not in marks:
+            marks.append(name)
+    cfg.domains = tuple(rows)
+    cfg.domain_services_reviewed = tuple(marks)
