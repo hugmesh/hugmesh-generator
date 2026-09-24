@@ -1728,10 +1728,11 @@ services:
   # Linux docker AND Docker Desktop (Windows/macOS) and on arm64 hosts.
   #
   # TWO onion ports (tor/entrypoint.sh says why, with the measurement):
-  #   :443 -> the TLS front (hugmesh-https-front:8443) — THE door. The gateway's
-  #           CSP carries upgrade-insecure-requests, so a browser that enters
-  #           over http://<onion>/ has every subresource and fetch() upgraded to
-  #           https://<onion>/ and the SPA never boots.
+  #   :443 -> the TLS front (hugmesh-https-front:8443) — THE door: a secure
+  #           context, the node's :443, and a Secure session cookie on a
+  #           production-configured mesh (docs/TOR-HIDDEN-SERVICE.md "Why :443").
+  #           The SPA does boot over http too; the old "CSP
+  #           upgrade-insecure-requests" reason was false (#628).
   #   :80  -> TOR_ONION_UPSTREAM (the fe-gateway; the Anubis gate when the
   #           Makefile runs ANUBIS=1 TOR=1 — see STACK_TOR_ENV there).
   # tor resolves these hostnames ONCE, when it parses the torrc, which is why both
@@ -1837,6 +1838,13 @@ services:
       USE_REMOTE_ADDRESS: "true"
       DIFFICULTY: "5"
       SERVE_ROBOTS_TXT: "true"
+      # The Secure flag on the gate's cookies (-cookie-secure, default true).
+      # `make stack-up ANUBIS=1 TOR=1` sets it false (Makefile STACK_TOR_ENV,
+      # #627): the onion's :80 door is plain http on a .onion origin, which
+      # Chromium does not treat as secure, so it drops a Secure cookie and the
+      # challenge ends in a 500. With the flag off, SameSite drops from None to
+      # Lax. Every other bring-up keeps Anubis's own default.
+      COOKIE_SECURE: ${ANUBIS_COOKIE_SECURE:-true}
     ports:
       # The PoW-gated door; 8923 is free on this stack and matches the cluster
       # gate port. The :9090 metrics/health listener stays UNPUBLISHED (the

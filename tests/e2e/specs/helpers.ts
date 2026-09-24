@@ -127,11 +127,12 @@ export async function apiContext(baseUrl: string | undefined): Promise<APIReques
  * `null` when the run was not pointed at an onion, which is how a @via:onion
  * scenario knows to SKIP with a reason in an ordinary lane instead of failing.
  *
- * HTTPS, never http, and it throws rather than "fixing" an http URL: the
- * gateway's CSP carries upgrade-insecure-requests, so a page entered over
- * http://<onion>/ has every subresource and fetch() upgraded to https:// and the
- * SPA never boots (measured 2026-09-23 over a live onion; tests/stack/tor/
- * entrypoint.sh). The onion's :443 is the stack's TLS front.
+ * HTTPS, never http, and it throws rather than "fixing" an http URL: https is
+ * the door a person is told to use, a secure context (Chromium does not treat an
+ * http .onion as one) and the node's :443 (docs/TOR-HIDDEN-SERVICE.md "Why
+ * :443"). Not because of CSP upgrade-insecure-requests: the SPA document never
+ * carries it (measured live 2026-09-24, #628). The onion's :443 is the stack's
+ * TLS front.
  */
 export interface OnionFrontDoor {
   /** https://<56 base32 chars>.onion — no trailing slash. */

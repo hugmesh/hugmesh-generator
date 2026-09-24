@@ -23,6 +23,8 @@
 // OVER THE ONION", and the cookie-only read is the one whose failure can only mean
 // that. It is read with fetch() INSIDE the page, so it rides the same proxied
 // browser and shows up in the request log the last Then audits.
+// Its `handle` is the Casdoor sub, not the username, so the persona is recognised
+// by its seeded roles (steps/onion-session.ts, #624).
 
 import * as fs from 'node:fs';
 import { expect } from '@playwright/test';
@@ -33,6 +35,7 @@ import {
   onboard, personaPassword, onionFrontDoor, onionContext,
 } from '../specs/helpers';
 import type { OnionFrontDoor } from '../specs/helpers';
+import { expectOnionSessionIsPersona } from './onion-session';
 
 /** Everything the steps below hand each other, in one typed record. */
 interface OnionRun {
@@ -110,8 +113,8 @@ When('I open the onion login page through Tor', async ({ browser, world, $testIn
 
 Then('the onion login page renders', async ({ world, $testInfo }) => {
   const { page } = world.get<OnionRun>('onion');
-  // The SPA booted: these are rendered by login-ui's JavaScript, which is exactly
-  // what an http entry (or an upgraded subresource with no :443 behind it) kills.
+  // The SPA booted: these are rendered by login-ui's JavaScript, so a door that
+  // serves the document but not its scripts and fetches fails here, not later.
   await expect(page.getByTestId('login-username')).toBeVisible({ timeout: 90_000 });
   await expect(page.getByTestId('login-password')).toBeVisible();
   await expect(page.getByTestId('login-submit')).toBeVisible();
@@ -138,10 +141,9 @@ Then('the onion session belongs to that persona', async ({ world }) => {
     });
     return { status: r.status, body: await r.text() };
   });
-  expect(me.status, `GET /bff/session over the onion -> ${me.status}: ${me.body.slice(0, 300)}`).toBe(200);
-  const body = JSON.parse(me.body) as { handle?: unknown; registrationComplete?: unknown };
-  expect(body.handle, 'the session the onion minted is the persona that signed in').toBe(handle);
-  expect(body.registrationComplete).toBe(true);
+  // Identity by roles, not by `handle`: the handle is the Casdoor sub, never the
+  // username (#624). The judgement and its reasons live in onion-session.ts.
+  expectOnionSessionIsPersona(me.status, me.body, handle, 'the onion');
 });
 
 Then('every request the browser made went to the onion', async ({ world, $testInfo }) => {

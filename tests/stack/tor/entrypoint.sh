@@ -14,19 +14,17 @@
 #     relay. The e2e lane's browser dials the onion above through it
 #     (`make stack-e2e-tor`); Tor Browser on the host would use its own.
 #
-# TWO PORTS, AND WHY :443 IS NOT OPTIONAL (hugmesh-generator#586, measured
-# 2026-09-23 with the host tor and the cached Playwright chromium, no docker):
-# the fe-gateway emits `Content-Security-Policy: … upgrade-insecure-requests` on
-# every response, and on a page loaded from http://<onion>/ Chromium upgrades
-# every same-origin subresource to https://<onion>/. With only :80 published the
-# upgraded script died `net::ERR_SOCKS_CONNECTION_FAILED` and the SPA never
-# booted; with :443 published but the page entered over http, the upgraded
-# fetch() became CROSS-ORIGIN and died `net::ERR_FAILED`. Entered over
-# https://<onion>/ with :443 served, script and fetch both succeeded. So :443 ->
-# the stack's TLS front (its self-signed cert: a Tor Browser user accepts the
-# warning once; the e2e runs with ignoreHTTPSErrors) is the door, and :80 stays
-# for plain clients (curl, the anubis gate). The node agent already publishes
-# :443 (specs/usr/sbin/hugmesh-tor-reconcile), so this also matches the device.
+# TWO PORTS (hugmesh-generator#586, #628). :443 -> the stack's TLS front is the
+# door (its self-signed cert: a Tor Browser user accepts the warning once; the
+# e2e runs with ignoreHTTPSErrors). Why https: a secure context (Chromium does
+# not treat an http .onion as one), a Secure session cookie on a
+# production-configured mesh, and the node agent already publishes :443
+# (specs/usr/sbin/hugmesh-tor-reconcile), so this matches the device. :80 stays
+# for plain clients (curl, the anubis gate). An earlier comment here blamed CSP
+# upgrade-insecure-requests for an SPA that could not boot over http; measured
+# live on 2026-09-24 the SPA document never carries that directive and the SPA
+# boots over http://<onion>/ with nothing upgraded (docs/TOR-HIDDEN-SERVICE.md
+# "Why :443").
 #
 # PER-DOMAIN ONIONS (hugmesh-generator#582, operator decision 68 = A on #347): "a Tor
 # domain = its own HiddenService stanza fronting the SAME gateway, distinguished by
