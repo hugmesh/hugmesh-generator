@@ -715,9 +715,12 @@ def load_last_run(generator_dir: str, directory: str = "") -> LastRun:
 # above are what actually happens, and there is a test pinning them.
 #
 # The map cuts the other way too, and that is the half worth keeping in mind: `tube`,
-# `tor`, `edge-ai-tts` and `media-poisoner` are searched under EVERY spelling the
-# suite might use (peertube, onion, piper/tts, poisoner/cloak) and still match
-# nothing. Their zero-coverage verdict is stronger for it, not weaker.
+# `edge-ai-tts` and `media-poisoner` are searched under EVERY spelling the suite
+# might use (peertube, piper/tts, poisoner/cloak) and still match nothing. Their
+# zero-coverage verdict is stronger for it, not weaker. `tor` was in that list until
+# 2026-09-23 (hugmesh-generator#576): it is now reached as `onion` by specs/helpers.ts's
+# Tor front door (onionFrontDoor/onionContext — a proxied browser context), which the
+# @via:onion Gherkin scenario drives through the real Tor network.
 SPEC_TOKENS: dict[str, tuple[str, ...]] = {
     "tuwunel": ("tuwunel", "matrix"),          # the specs say "matrix" throughout
     "akkoma": ("akkoma", "mastodon", "pleroma"),  # local social tier is Mastodon
@@ -887,8 +890,8 @@ def service_coverage(generator_dir: str,
 
     Measured over the specs in this checkout, comments stripped and declarative
     tables excluded (see :func:`is_runnable_source`): wiki, owncast, tube,
-    character-studio, tor, anubis, edge-ai-tts, media-poisoner and egress-vpn match
-    NOTHING. The five covered are tuwunel (18 files), akkoma (18), games (9),
+    character-studio, anubis, edge-ai-tts, media-poisoner and egress-vpn match
+    NOTHING (tor did too until the onion front door landed, hugmesh-generator#576). The five covered are tuwunel (18 files), akkoma (18), games (9),
     phpbb (1) and character-forge (1). The numbers move when the suite does -- they
     are re-measured, and pinned as INEQUALITIES where the exact count is not the
     point; the covered/uncovered VERDICTS are what the tests pin exactly.
