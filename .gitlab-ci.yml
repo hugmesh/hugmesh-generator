@@ -178,6 +178,12 @@ lint:client-connect-routes:
 # EXACT paths rather than the cluster's subtrees (which would also move
 # /bff/me/appeal and /bff/register/complete off admin-bff), and that those two
 # still reach admin-bff. Six negative controls must each trip it.
+# The same suite also owns decision 60 (#347, generator half #569): it asserts
+# APP_BFF_EXCHANGE_CACHE_TTL_MS is the string "0" for admin-bff-api and
+# mod-bff-api on both lanes (compose.local.yaml + the two cluster Deployments),
+# with its own mutation-tested controls. The BFF pin lives here rather than in
+# tests/stack/test-gateway-auth-flag-parity.sh because that guard needs the
+# gateway checkout; this one needs only the tree.
 # Offline, no cluster, no network.
 lint:fe-bff-route-lane-parity:
   stage: lint
