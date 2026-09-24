@@ -1705,10 +1705,15 @@ lint:liquibase-grant-roles:
 # one that catches the silent case, and without the clone the checker exits 3
 # INCOMPLETE and the suite FAILS rather than reporting four green legs of five.
 #
-# ⚠ EXPECTED RED until hugmesh-admin-bff-api's OptionalServiceRegistry gains
-# character-forge and meshbridge (in flight on that repo's
-# feat/superadmin-optional-services-endpoint). That red is the defect, not a flaw in
-# the gate: it is a live, named, one-merge-away inconsistency. Do NOT add
+# ⚠ EXPECTED RED until hugmesh-admin-bff-api#106 lands (re-measured 2026-09-23,
+# hugmesh-generator #584): the controller's OptionalServiceRegistry keeps meshbridge
+# NOT_TOGGLEABLE as NOT_IN_CRD_ENUM although the CRD enum and seed CRs carry it, and
+# marks character-forge configMapSelfHealProtected=false although apps/16 carries its
+# pointer. (feat/superadmin-optional-services-endpoint, named here before, merged as
+# b8ed324 and did NOT fix either.) Until 2026-09-23 this job was red for a different
+# reason — the checker's regex no longer matched the controller's five-field Entry
+# record, so it exited INCOMPLETE and compared nothing. That red is the defect, not a
+# flaw in the gate: it is a live, named, one-merge-away inconsistency. Do NOT add
 # allow_failure and do NOT weaken the Java leg to get green — the suite's own
 # positive control stages exactly that landing and requires the whole gate to pass,
 # so the exit criterion is executable.
