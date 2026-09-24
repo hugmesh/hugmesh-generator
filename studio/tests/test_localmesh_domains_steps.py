@@ -306,15 +306,21 @@ def test_the_gate_reads_the_one_seam(wiz):
         ctl.mesh_domains, ds.ACTION_MESH_START, remedy=LOCAL_MESH_REMEDY)
 
 
-def test_a_domain_left_by_back_still_counts_as_walked(wiz):
-    """Qt calls cleanupPage, not validatePage, on Back — the walk must be recorded
-    either way, and the gate re-records before it asks."""
+def test_a_domain_left_by_back_still_counts_as_walked_and_keeps_its_ticks(wiz):
+    """Qt calls cleanupPage, not validatePage, on Back — the walk AND the ticks must
+    be recorded either way. The gate re-records before it asks, so the discriminating
+    read is ``collect_bootstrap()``, which does not: a tick made just before Back has
+    to be in the record already."""
     ctl = _two_added(wiz)
     _to(wiz, localmesh_mod.LocalMeshDomainServicesPage)
-    ctl.domain_services._step(1)
-    ctl.domain_services._step(1)
+    ctl.domain_services._step(1)                          # acme.example
+    ctl.domain_services._boxes["games"].setChecked(True)
+    ctl.domain_services._step(1)                          # team.example
     wiz.back()                                            # to the Domains step
     assert isinstance(wiz.currentPage(), localmesh_mod.LocalMeshDomainsPage)
+    rec = {d["name"]: d for d in ctl.collect_bootstrap().domains}
+    assert rec["acme.example"]["optional_services"] == ["games"]
+    assert ctl.domains_table.table.cellWidget(1, 2).text() == "games"   # mirror caught up
     assert ctl._domain_services_refusal() == ""
 
 

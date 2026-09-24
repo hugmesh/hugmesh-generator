@@ -3996,6 +3996,15 @@ class LocalMeshDomainsPage(_LocalMeshStep):
         if ctl is not None:
             ctl._seed_domains()
 
+    def showEvent(self, ev):
+        """Back into this step fires no initializePage, and the services column is a
+        read-only MIRROR of what the next step recorded — refresh it on every show,
+        exactly what the image flow's DomainsPage does through currentIdChanged."""
+        super().showEvent(ev)
+        ctl = self.ctl
+        if ctl is not None:
+            ctl.domains_table._refresh_services_cells()
+
     def validatePage(self):
         ctl = self.ctl
         return True if ctl is None else ctl._commit_domains()
