@@ -20,7 +20,7 @@
 # re-learning about. If the array cannot be parsed, this script FAILS (exit 1)
 # rather than running a guessed subset.
 #
-#   E2E_UNGATED_SET=all   (DEFAULT)  every PREMERGE_UNGATED entry — 22 of 22
+#   E2E_UNGATED_SET=all   (DEFAULT)  every PREMERGE_UNGATED entry — 23 of 23
 #                                    today; the runner prints the live count
 #                                    every run and hardcodes no number. Operator
 #                                    decision 32c on #347, 2026-09-17: the

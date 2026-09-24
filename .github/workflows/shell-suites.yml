@@ -409,6 +409,7 @@ jobs:
             tests/scripts/test-sunshine-fence.sh
             tests/scripts/test-superadmin-bff-reachability.sh
             tests/scripts/test-tools-path-lib.sh
+            tests/scripts/test-tor-node-contract.sh
             tests/scripts/test-x86-fetchcommand-bound.sh
             tests/scripts/test-x86-identity-injection.sh
             tests/scripts/test-x86-kernel-net-symbols.sh
@@ -528,6 +529,7 @@ jobs:
             tests/stack/test-anubis-flip-wiring.sh
             tests/stack/test-mfa-flip-wiring.sh
             tests/stack/test-patch-stack-src.sh
+            tests/stack/test-tor-flip-wiring.sh
             tests/workload-console/test-console-posture-and-inventory.sh
             tests/workload-console/test-workload-console.sh
           "

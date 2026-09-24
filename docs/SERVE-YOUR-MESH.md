@@ -56,6 +56,12 @@ menu, and Studio:
   open ports; reachable in Tor Browser. (You can also skip this step and just enable **Tor**
   directly in the from-scratch bring-up above — same result, reported at the end and via
   `make stack-onion`.) See [TOR-HIDDEN-SERVICE.md](TOR-HIDDEN-SERVICE.md).
+  On the **local docker mesh** that is `make stack-up TOR=1`; `make stack-onion` then prints
+  the address as **`https://<onion>/`** — open it over https, not http: the gateway's
+  content-security policy upgrades every request of an http page to https, so an http entry
+  loads a blank shell (Tor Browser shows a certificate warning once — the local TLS front's
+  certificate cannot name an onion). `make stack-e2e-tor` signs a test persona in through that
+  onion over the real Tor network.
 - **`duckdns`** — a common **Dynamic-DNS** host (DuckDNS / Cloudflare-DDNS): a single-token
   updater + cron drop-in for a box on a **dynamic IP**, no dashboard fiddling.
 - **`cloudflare-tunnel`** — a Zero-Trust tunnel with autofilled public hostnames, no
