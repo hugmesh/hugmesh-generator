@@ -1029,6 +1029,20 @@ lint:gateway-mfa-env:
   script:
     - bash tests/stack/test-gateway-mfa-env.sh
 
+# The kind lane's .onion front door (hugmesh-generator#577, decision 67 = B):
+# scripts/kind-tor.sh's torrc (HiddenServicePort 443 -> 127.0.0.1:8443, the kind
+# node's TLS door), its read-modify-write helm-parameter patch, and the fe-gateway
+# Ingress that patch renders — which needs a REAL `helm template`, so this job
+# inherits lint:gateway-mfa-env's pinned, sha256-verified, fail-closed helm install
+# rather than restating it. The suite also reads `make -n` and `git check-ignore`,
+# hence git + make. It exits 2 (never a pass) when helm or PyYAML is missing.
+lint:kind-tor:
+  extends: lint:gateway-mfa-env
+  script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends git make >/dev/null
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - bash tests/scripts/test-kind-tor.sh
+
 # MFA OPERATIONAL FLIP wiring gate (issue #47). The companion of the two jobs
 # above: they pin the default-OFF POSTURE, this one pins the SWITCH — MFA=1 must
 # reach EVERY consumer of the gateway MFA trio on every lane it claims to drive
