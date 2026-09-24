@@ -813,7 +813,8 @@ PREMERGE_UNGATED=(
   # stale — both filed as hugmesh-admin-bff-api#106; control 20 plants that fix and
   # goes green. The text that stood here until 2026-09-23 gave only the checkout
   # reason and HID a dead parser: the gate had exited 3 INCOMPLETE on every run
-  # since it landed, because its regex never matched the Java ENTRIES shape. That
+  # since admin-bff b8ed324 widened the Java Entry record from 3 to 5 fields, 23
+  # minutes after the checker landed, and nothing moved its regex with it. That
   # parser is now pinned by a fixture self-test (section P) that needs no checkout.
   # It STILL needs the hugmesh-admin-bff-api checkout for its fifth surface, which a
   # hosted pre-merge runner cannot clone. Its only automated runner is

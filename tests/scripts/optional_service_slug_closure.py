@@ -57,10 +57,12 @@ reason is how a slug the generator made toggleable stays silently inert in the
 controller.
 
 HISTORY: THIS GATE COMPARED NOTHING FROM 2026-08-26 TO 2026-09-23 (hugmesh-generator
-#584). Its first regex matched a one-line three-argument `new Entry("slug","ns",
-"mount")`; the Java ENTRIES table was born two-line/five-argument (admin-bff b8ed324,
-23 minutes after this checker's aed812b9), so the checker never matched a real file and
-every run exited 3 INCOMPLETE. It failed closed, which is the only reason that was
+#584). Its first regex (aed812b9, 2026-08-26 22:29) matched the one-line three-argument
+`new Entry("slug","ns","mount")` the controller carried then — it parses all 12 rows of
+the pre-b8ed324 file. Twenty-three minutes later admin-bff b8ed324 (22:52) widened the
+record to five fields spread over two lines, and nothing moved the parser with it, so
+from then on every run exited 3 INCOMPLETE at the first step. That was drift, not a
+parser that was dead on arrival. It failed closed, which is the only reason it was
 visible at all. `--parse-registry FILE` and the committed fixture
 tests/fixtures/optional-service-slug-closure/OptionalServiceRegistry.java.fixture (a
 verbatim copy of the controller file) pin the parser to the real shape so it cannot

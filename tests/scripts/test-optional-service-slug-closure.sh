@@ -39,11 +39,12 @@
 # than reporting four green legs out of five.
 #
 # THIS GATE COMPARED NOTHING FROM 2026-08-26 TO 2026-09-23 (hugmesh-generator #584).
-# The checker's first regex matched a ONE-line THREE-argument `new Entry(...)`; the
-# Java ENTRIES table was born TWO-line FIVE-argument (admin-bff b8ed324, 23 minutes
-# after the checker's aed812b9). Every run exited 3 INCOMPLETE at the first step, so
-# not one control below ever executed and the header's "expected red" was a parser
-# that could not read its input. It failed closed, which is the only reason it was
+# The checker's first regex (aed812b9) matched the ONE-line THREE-argument
+# `new Entry(...)` the controller carried at the time. Twenty-three minutes later
+# admin-bff b8ed324 widened the record to FIVE fields over TWO lines and the parser was
+# never moved with it (drift, not dead on arrival). From then on every run exited 3
+# INCOMPLETE at the first step, so not one control below ever executed and the
+# header's "expected red" was a parser that could not read its input. It failed closed, which is the only reason it was
 # visible. Section P below now pins the parser to a VERBATIM copy of the controller
 # file (tests/fixtures/optional-service-slug-closure/OptionalServiceRegistry.java.fixture)
 # and runs FIRST, with or without the service checkout, so the parser can never again
@@ -189,6 +190,11 @@ pexpect 0 "P2 one-line-per-entry spelling of the same table parses identically" 
 # P3. a displayName holding "//" and an escaped quote does not truncate the parse.
 pmutate 's = s.replace("\"HugMesh Games\"", "\"HugMesh \\\"Games\\\" // https://x\"", 1)' &&
 pexpect 0 "P3 a displayName with // and an escaped quote still parses (strings are not comments)" "${F}" '^entries=13 ' '^ENTRY	games	'
+# P3b. an ODD number of escaped quotes before a "//": a scanner that ignored the
+#      backslash would close the string early and read the rest as a comment. P3's two
+#      escaped quotes cancel out, so only an odd count pins the escape handling.
+pmutate 's = s.replace("\"HugMesh Games\"", "\"HugMesh \\\"Games // x\"", 1)' &&
+pexpect 0 "P3b a displayName with ONE escaped quote before // still parses (escapes are honoured)" "${F}" '^entries=13 not_toggleable=4 '
 # P4. ONE entry with a sixth argument: the record changed shape -> INCOMPLETE, never 12-of-13.
 pmutate 's = s.replace("\"Owncast (live streaming)\", true)", "\"Owncast (live streaming)\", true, 7)", 1)' &&
 pexpect 3 "P4 one entry off the five-field shape is INCOMPLETE (no partial comparison)" "${F}" 'INCOMPLETE.*13 .new Entry\(. call.*only 12 parse'
@@ -255,6 +261,25 @@ expect() {
     echo "  PASS ${label}"
   else
     echo "  FAIL ${label}: wanted rc=${want} + /${pat}/, got rc=${rc}"
+    printf '%s\n' "${out}" | sed 's/^/         | /'
+    FAILED=1
+  fi
+}
+
+# expect_not <want-rc> <must-match> <must-NOT-match> <label> -- <staged-dir>
+# For a leg whose job is to stay SILENT on a true claim: the tree is red for another
+# named reason (<must-match>) and the leg's own line (<must-NOT-match>) must be absent.
+# Without it, a leg pointed at the wrong surface would only ever add a line to a tree
+# that is already red, and no positive-pattern control could tell.
+expect_not() {
+  local want="$1" pat="$2" npat="$3" label="$4" _dash="$5" d="$6"
+  local out rc
+  out="$(python3 "${CHECKER}" "${d}/specs/cluster" --src-root "${d}/src" 2>&1)"; rc=$?
+  if [ "${rc}" -eq "${want}" ] && printf '%s' "${out}" | grep -a -E -- "${pat}" >/dev/null \
+     && ! printf '%s' "${out}" | grep -a -E -- "${npat}" >/dev/null; then
+    echo "  PASS ${label}"
+  else
+    echo "  FAIL ${label}: wanted rc=${want} + /${pat}/ and NO /${npat}/, got rc=${rc}"
     printf '%s\n' "${out}" | sed 's/^/         | /'
     FAILED=1
   fi
@@ -404,6 +429,18 @@ expect 1 "java-not-toggleable.*classifies \\[[^]]*'coturn'[^]]*\\] as NOT_IN_CRD
 expect 1 "java-registry.*missing=\\[[^]]*'coturn'" \
   "...and the same staged tree really moved coturn OUT of ENTRIES (compound-mutation check)" -- "${D}"
 
+# ── 21b. a TRUE NOT_IN_CRD_ENUM reason stays silent (the leg reads the ENUM) ─────
+# coturn leaves the enum AND ENTRIES and is recorded NOT_IN_CRD_ENUM: it still has a
+# 13a element, so the reason is TRUE. A leg that checked the claim against 13a instead
+# of the enum would call it stale here; only this control can see that.
+stage
+mutate "${D}" specs/cluster/manifests/optional-services-operator/crd-optionalservice.yaml \
+  's = s.replace("                    - coturn\n", "", 1)' &&
+mutate "${D}" "src/hugmesh-admin-bff-api/${JAVA_REL}" \
+  'import re; s = re.sub(r"\n\s*new Entry\(\"coturn\",.*?true\),", "", s, count=1, flags=re.S).replace("        NOT_TOGGLEABLE.put(\"headwind\"", "        NOT_TOGGLEABLE.put(\"coturn\", NotToggleable.NOT_IN_CRD_ENUM);\n        NOT_TOGGLEABLE.put(\"headwind\"", 1)' &&
+expect_not 1 "crd-enum.*missing=\\['coturn'\\]" "classifies \\[[^]]*'coturn'[^]]*\\] as NOT_IN_CRD_ENUM" \
+  "a TRUE NOT_IN_CRD_ENUM reason (slug has a 13a element, not in the enum) is not called stale" -- "${D}"
+
 # ── 22. a stale NO_APPLICATIONSET_ELEMENT reason ─────────────────────────────
 stage
 mutate "${D}" "src/hugmesh-admin-bff-api/${JAVA_REL}" \
@@ -412,6 +449,18 @@ expect 1 "classifies \\['tube'\\] as NO_APPLICATIONSET_ELEMENT, but apps/13a HAS
   "a NO_APPLICATIONSET_ELEMENT reason for a slug with a 13a element is named as stale" -- "${D}"
 expect 1 "both in ENTRIES and NOT_TOGGLEABLE: \\['tube'\\]" \
   "a slug in BOTH halves of the registry (refused by the admin surface, actuated by the reconciler)" -- "${D}"
+
+# ── 22c. a TRUE NO_APPLICATIONSET_ELEMENT reason stays silent (the leg reads 13a) ─
+# ghostservice gains an enum value but no 13a element, and is recorded
+# NO_APPLICATIONSET_ELEMENT: TRUE. A leg that checked it against the enum would call it
+# stale.
+stage
+mutate "${D}" specs/cluster/manifests/optional-services-operator/crd-optionalservice.yaml \
+  's = s.replace("                    - anubis\n", "                    - anubis\n                    - ghostservice\n", 1)' &&
+mutate "${D}" "src/hugmesh-admin-bff-api/${JAVA_REL}" \
+  's = s.replace("NOT_TOGGLEABLE.put(\"headwind\"", "NOT_TOGGLEABLE.put(\"ghostservice\", NotToggleable.NO_APPLICATIONSET_ELEMENT);\n        NOT_TOGGLEABLE.put(\"headwind\"", 1)' &&
+expect_not 1 "crd-enum.*extra=\\['ghostservice'\\]" "classifies \\[[^]]*'ghostservice'[^]]*\\] as NO_APPLICATIONSET_ELEMENT" \
+  "a TRUE NO_APPLICATIONSET_ELEMENT reason (in the enum, no 13a element) is not called stale" -- "${D}"
 
 # ── 23. a reason the gate does not know how to verify ─────────────────────────
 stage
@@ -426,6 +475,16 @@ mutate "${D}" specs/cluster/apps/16-reserved-prefixes-policy.yaml \
   's = s.replace("        - /data/akkoma\n", "", 1)' &&
 expect 1 'java-selfheal-flag. akkoma: Java configMapSelfHealProtected=true but apps/16 does NOT carry' \
   "the Java selfHeal flag claims protection apps/16 no longer gives (a hidden revert)" -- "${D}"
+
+# ── 24b. the OTHER direction: false while apps/16 DOES carry the pointer ────────
+# This is the direction of the live character-forge defect (a false alarm). It is
+# planted on akkoma, a clean slug, so it keeps guarding after hugmesh-admin-bff-api#106
+# fixes character-forge and the live run stops exercising it.
+stage
+mutate "${D}" "src/hugmesh-admin-bff-api/${JAVA_REL}" \
+  's = s.replace("\"Akkoma (Mastodon)\", true)", "\"Akkoma (Mastodon)\", false)", 1)' &&
+expect 1 'java-selfheal-flag. akkoma: Java configMapSelfHealProtected=false but apps/16 CARRIES /data/akkoma' \
+  "the Java selfHeal flag denies protection apps/16 does give (a false alarm)" -- "${D}"
 
 # ── 25. a DUPLICATE Java entry (the LinkedHashMap keeps the last; the first is dead) ─
 stage
@@ -459,6 +518,41 @@ mutate "${D}" specs/cluster/manifests/policy/installed-services-configmap.yaml \
 expect 1 "node-scope. catalogue scope:node slug.s. \\['egress-vpn'\\] appear in configmap booleans" \
   "egress-vpn (scope: node) as a greying boolean is a node-scope violation" -- "${D}"
 
+# ── 28b-28f. the node-scope leg ARM BY ARM ────────────────────────────────────
+# The leg checks eight surfaces. 26/27/28 pin three; these pin the other five, each by
+# the node-scope line for THAT surface, so deleting one arm cannot hide behind another
+# leg that also happens to go red. 28b matters most: with a TRUE reason
+# (NO_APPLICATIONSET_ELEMENT), tor in NOT_TOGGLEABLE trips no other leg at all.
+stage
+mutate "${D}" "src/hugmesh-admin-bff-api/${JAVA_REL}" \
+  's = s.replace("        NOT_TOGGLEABLE.put(\"headwind\"", "        NOT_TOGGLEABLE.put(\"tor\", NotToggleable.NO_APPLICATIONSET_ELEMENT);\n        NOT_TOGGLEABLE.put(\"headwind\"", 1)' &&
+expect 1 "node-scope. catalogue scope:node slug.s. \\['tor'\\] appear in Java NOT_TOGGLEABLE" \
+  "tor in the Java NOT_TOGGLEABLE half (a true reason, so ONLY node-scope sees it)" -- "${D}"
+
+stage
+mutate "${D}" specs/cluster/manifests/policy/installed-services-configmap.yaml \
+  's = s.replace("      { \"slug\": \"akkoma\",", "      { \"slug\": \"tor\", \"displayName\": \"Tor\", \"namespace\": \"hugmesh-backend\", \"mountAt\": null },\n      { \"slug\": \"akkoma\",", 1)' &&
+expect 1 "node-scope. catalogue scope:node slug.s. \\['tor'\\] appear in services.json rows" \
+  "tor as a services.json console row is a node-scope violation" -- "${D}"
+
+stage
+mutate "${D}" specs/cluster/manifests/optional-services-operator/seed-optionalservices.yaml \
+  's = s + "---\napiVersion: platform.hugmesh.net/v1alpha1\nkind: OptionalService\nmetadata:\n  name: tor\n  namespace: devops\nspec:\n  slug: tor\n  enabled: false\n"' &&
+expect 1 "node-scope. catalogue scope:node slug.s. \\['tor'\\] appear in seed CRs" \
+  "tor as a seed OptionalService CR is a node-scope violation" -- "${D}"
+
+stage
+mutate "${D}" specs/cluster/apps/16-reserved-prefixes-policy.yaml \
+  's = s.replace("        - /data/akkoma\n", "        - /data/akkoma\n        - /data/tor\n", 1)' &&
+expect 1 "node-scope. catalogue scope:node slug.s. \\['tor'\\] appear in apps/16 pointers" \
+  "a /data/tor selfHeal exemption in apps/16 is a node-scope violation" -- "${D}"
+
+stage
+mutate "${D}" specs/cluster/apps/13a-optional-services.yaml \
+  's = s.replace("          - { slug: coturn,", "          - { slug: tor, path: specs/cluster/manifests/tor, namespace: hugmesh-backend, installed: \"false\" }\n          - { slug: coturn,", 1)' &&
+expect 1 "node-scope. catalogue scope:node slug.s. \\['tor'\\] appear in 13a elements" \
+  "tor as an ApplicationSet element is a node-scope violation" -- "${D}"
+
 # ── 29. the exclusion is REPORTED, not merely unmentioned ────────────────────
 stage
 expect "${RC}" 'deliberate exclusions .*: egress-vpn tor$' \
@@ -467,28 +561,28 @@ expect "${RC}" 'deliberate exclusions .*: egress-vpn tor$' \
 echo
 echo "-- vacuity controls: an EMPTY derived list must be INCOMPLETE, never a pass --"
 
-# ── 15. an empty 13a element list ────────────────────────────────────────────
+# ── V1. an empty 13a element list ────────────────────────────────────────────
 stage
 mutate "${D}" specs/cluster/apps/13a-optional-services.yaml \
   'import re; s = re.sub(r"^ *- \{ slug: .*\n", "", s, flags=re.M).replace("        elements:", "        elements: []")' &&
 expect 3 'INCOMPLETE' \
   "vacuity: no ApplicationSet elements is INCOMPLETE (G would be empty and every set equal)" -- "${D}"
 
-# ── 16. an empty CRD enum ────────────────────────────────────────────────────
+# ── V2. an empty CRD enum ────────────────────────────────────────────────────
 stage
 mutate "${D}" specs/cluster/manifests/optional-services-operator/crd-optionalservice.yaml \
   'import re; s = re.sub(r"^                    - [a-z0-9-]+\n", "", s, flags=re.M).replace("                  enum:", "                  enum: []")' &&
 expect 3 'INCOMPLETE' \
   "vacuity: an empty spec.slug enum is INCOMPLETE, not 'nothing disagrees'" -- "${D}"
 
-# ── 17. a Java registry whose ENTRIES table parses to nothing ────────────────
+# ── V3. a Java registry whose ENTRIES table parses to nothing ────────────────
 stage
 mutate "${D}" "src/hugmesh-admin-bff-api/${JAVA_REL}" \
   'import re; s = re.sub(r"new Entry\(", "new Removed(", s)' &&
 expect 3 'INCOMPLETE.*ZERO registry entries' \
   "vacuity: a registry that parses to zero entries is INCOMPLETE, never a silent pass" -- "${D}"
 
-# ── 18. apps/16 with NO ignoreDifferences at all ─────────────────────────────
+# ── V4. apps/16 with NO ignoreDifferences at all ─────────────────────────────
 # The keystone's TOTAL ABSENCE must not read as "no pointers to disagree with".
 stage
 mutate "${D}" specs/cluster/apps/16-reserved-prefixes-policy.yaml \
@@ -496,21 +590,21 @@ mutate "${D}" specs/cluster/apps/16-reserved-prefixes-policy.yaml \
 expect 3 'INCOMPLETE' \
   "vacuity: apps/16 with the whole keystone deleted is INCOMPLETE, not green" -- "${D}"
 
-# ── 18b. a catalogue with NO scope:node slug (the exclusion leg would be vacuous) ─
+# ── V5. a catalogue with NO scope:node slug (the exclusion leg would be vacuous) ─
 stage
 mutate "${D}" specs/cluster/optional-services.yaml \
   'import re; s = re.sub(r"^(\s+)scope: node\b", r"\1scope: cluster", s, flags=re.M)' &&
 expect 3 'INCOMPLETE.*no .scope: node. slug' \
   "vacuity: a catalogue with no node-scoped slug is INCOMPLETE, not 'nothing leaked'" -- "${D}"
 
-# ── 18c. a registry whose NOT_TOGGLEABLE half parses to nothing ──────────────
+# ── V6. a registry whose NOT_TOGGLEABLE half parses to nothing ──────────────
 stage
 mutate "${D}" "src/hugmesh-admin-bff-api/${JAVA_REL}" \
   'import re; s = re.sub(r"\n\s*NOT_TOGGLEABLE\.put\([^;]*;", "", s)' &&
 expect 3 'INCOMPLETE.*ZERO NOT_TOGGLEABLE' \
   "vacuity: a NOT_TOGGLEABLE half that parses to nothing is INCOMPLETE" -- "${D}"
 
-# ── 19. an absent service checkout ───────────────────────────────────────────
+# ── V7. an absent service checkout ───────────────────────────────────────────
 stage
 rm -rf "${D}/src/hugmesh-admin-bff-api"
 expect 3 'INCOMPLETE' \
@@ -540,8 +634,13 @@ else
   # Each part is idempotent, so a PARTIAL upstream fix (say meshbridge added, the flag
   # not yet flipped) stages only what is still missing instead of planting a duplicate.
   # The staged fix must have changed all three things, or the green above is not the fix.
-  grep -a -c 'NOT_TOGGLEABLE.put("meshbridge"' "${D}/src/hugmesh-admin-bff-api/${JAVA_REL}" >/dev/null &&
+  STAGED_JAVA="${D}/src/hugmesh-admin-bff-api/${JAVA_REL}"
+  grep -a -c 'NOT_TOGGLEABLE.put("meshbridge"' "${STAGED_JAVA}" >/dev/null &&
     { echo "  FAIL control 20 setup: the meshbridge NOT_TOGGLEABLE line survived"; FAILED=1; }
+  grep -a -c 'new Entry("meshbridge"' "${STAGED_JAVA}" >/dev/null ||
+    { echo "  FAIL control 20 setup: no managed meshbridge ENTRIES row was staged"; FAILED=1; }
+  grep -a -c '"Character Forge (3D)", true)' "${STAGED_JAVA}" >/dev/null ||
+    { echo "  FAIL control 20 setup: character-forge's selfHeal flag was not staged true"; FAILED=1; }
 fi
 
 echo
