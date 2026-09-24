@@ -537,3 +537,53 @@ def test_no_domain_catalogue_slug_leaks_into_the_not_domain_scoped_table():
     listed = {r[0] for r in ds.other_scope_rows(ImageConfig())}
     for slug in OPTIONAL_SERVICES_CHOICES:
         assert slug not in listed
+
+
+# ── #637: booting a PREVIOUS session's images (Mesh emulation / QEMU tests) ──────────
+from _session_records import write_build_record  # noqa: E402
+
+
+@pytest.fixture
+def _state(tmp_path, monkeypatch):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+
+
+def test_a_session_with_an_unwalked_row_is_refused_by_name(_state):
+    write_build_record("20260901-000000-aaaaaa", domains=("a.example", "b.example"),
+                       reviewed=("hugmesh.net", "a.example"))
+    msg = ds.session_boot_gate_reason("20260901-000000-aaaaaa")
+    assert "b.example" in msg and "Cannot boot this build session's images" in msg
+    assert ds.ACTION_REMEDY[ds.ACTION_EMULATE] in msg
+    assert "Redo" in msg
+
+
+def test_a_fully_walked_session_boots(_state):
+    write_build_record("s1", domains=("a.example",),
+                       reviewed=("hugmesh.net", "a.example"))
+    assert ds.session_boot_gate_reason("s1") == ""
+
+
+def test_the_session_gate_is_narrow_like_the_restart(_state):
+    """No record, or a record from before #495 (no marker at all): not refused —
+    those images are on disk and nobody could have answered the question then."""
+    assert ds.session_boot_gate_reason("no-such-session") == ""
+    assert ds.session_boot_gate_reason("") == ""
+    write_build_record("old", domains=("a.example",), reviewed=())
+    assert ds.session_boot_gate_reason("old") == ""
+
+
+def test_the_session_gate_never_asks_about_the_own_domain(_state):
+    """A session recorded before #631 walked its rows and never had the own domain
+    gated — emulating its images must not be refused over it."""
+    write_build_record("s2", domains=("a.example",), reviewed=("a.example",))
+    assert ds.session_boot_gate_reason("s2") == ""
+    assert ds.ACTION_EMULATE not in ds.OWN_DOMAIN_GATED_ACTIONS
+
+
+def test_an_unreadable_record_is_a_record_with_nothing_to_say(_state, tmp_path):
+    from hugmesh_studio.core import build_sessions
+    import os as _os
+    _os.makedirs(build_sessions.sessions_dir(), exist_ok=True)
+    with open(_os.path.join(build_sessions.sessions_dir(), "junk.json"), "w") as fh:
+        fh.write("{not json")
+    assert ds.session_boot_gate_reason("junk") == ""

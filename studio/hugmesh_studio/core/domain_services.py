@@ -53,9 +53,9 @@ __all__ = [
     "gate_applies", "gate_reason", "record_reviewed", "OWN_DOMAIN_GATED_ACTIONS",
     "implicit_own_domain", "domain_names_for_services", "services_page_applies",
     "services_summary", "domain_summary",
-    "restart_gate_reason",
+    "restart_gate_reason", "session_boot_gate_reason",
     "ACTION_IMAGE_BUILD", "ACTION_MESH_START", "ACTION_BUILD_RESTART",
-    "ACTION_REMEDY",
+    "ACTION_EMULATE", "ACTION_REMEDY",
 ]
 
 #: The three scopes a service choice can have in this platform (#497). They are NOT
@@ -137,6 +137,10 @@ ACTION_MESH_START = "start this mesh"
 #: The previous-builds manager's RESTART. Narrower than the other two on purpose —
 #: see :func:`restart_gate_reason`.
 ACTION_BUILD_RESTART = "restart this build"
+#: Booting a PREVIOUS build session's images — Mesh emulation (Start mesh / a device's
+#: Start) and the QEMU device tests' "Images from a previous build session" arm, on both
+#: faces (#637). Narrow like the restart — see :func:`session_boot_gate_reason`.
+ACTION_EMULATE = "boot this build session's images"
 
 #: action -> HOW TO FIX IT FROM WHERE YOU ARE STANDING. Not one shared sentence,
 #: because "go back to the Domain services step" is FALSE at both call sites in
@@ -162,6 +166,11 @@ ACTION_REMEDY = {
         "This session's saved configuration names domains it never recorded services "
         "for. Use Redo instead — it loads the same configuration into the wizard, "
         "where the ‘Domain services’ step gives every domain its own page.",
+    ACTION_EMULATE:
+        "These images were built from a configuration that names domains it never "
+        "recorded services for. Open that session in ‘Review prior sessions’ and use "
+        "Redo — the wizard's ‘Domain services’ step gives every domain its own page "
+        "— then emulate the session that build produces.",
 }
 
 
@@ -551,6 +560,45 @@ def restart_gate_reason(cfg) -> str:
     if not reviewed_names(cfg):
         return ""
     return gate_reason(cfg, ACTION_BUILD_RESTART)
+
+
+def session_boot_gate_reason(session_id: str) -> str:
+    """The gate for BOOTING a previous build session's images (#637): "" when they may
+    boot; otherwise the refusal naming every domain of that session's recorded
+    configuration with no recorded service configuration.
+
+    THE MANIFEST CANNOT ANSWER THIS. ``domain_services_reviewed`` is emitted into
+    neither mesh manifest (the module doc), so the question is put to the session's
+    BUILD RECORD instead: an artifact session dir ``out/sessions/<id>`` is named after
+    its record ``<state>/sessions/<id>.json`` (``build_sessions.session_workdir``), whose
+    ``config.base`` is the ImageConfig the images were built from.
+
+    NARROW, exactly like :func:`restart_gate_reason` and for the same reason — it is
+    that rule, applied to the configuration a session RECORDED:
+
+    * no record (a CLI build, a record pruned since, an unreadable one) -> "": there is
+      nothing to read a marker from, and inventing "unconfigured" would refuse images
+      that are already on disk over a question nobody could have answered;
+    * a record with NO reviewed marker (built before #495) -> "": history;
+    * a record with markers that still names an unwalked TABLE ROW -> refused. The own
+      domain is not asked (``OWN_DOMAIN_GATED_ACTIONS``): a session from before #631
+      never had it gated.
+
+    Qt-free and the ONE seam both GUI doors (``gui/pages/mesh_emulation.py``,
+    ``gui/pages/qemu.py``) and both TUI screens (``tui/meshemu.py``, ``tui/qemu.py``)
+    call, so the four cannot disagree about which session boots."""
+    name = (session_id or "").strip()
+    if not name:
+        return ""
+    try:
+        from . import build_sessions        # lazy: build_sessions -> worklist -> config
+        rec = build_sessions.find(name)
+        base = rec.worklist().base if rec is not None else None
+    except Exception:                       # noqa: BLE001 — a record we cannot read
+        return ""                           # is a record with nothing to say
+    if base is None or not reviewed_names(base):
+        return ""
+    return gate_reason(base, ACTION_EMULATE)
 
 
 # ── #497: the choices this page SHOWS but does not own ──────────────────────────────

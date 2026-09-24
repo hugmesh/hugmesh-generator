@@ -113,6 +113,7 @@ a modal in page logic hangs the headless tests (the no-modals rule).
 from __future__ import annotations
 
 import dataclasses
+import html
 import shlex
 import threading
 
@@ -120,6 +121,7 @@ from ..qt import Qt, QtWidgets
 from .. import console
 from ..styles import MUTED, WARN
 from ...core import emulation, qemu_tests
+from ...core.domain_services import session_boot_gate_reason
 from ...core.local_stack_node import LocalStackNode
 from . import _emulation_common as common
 from ._mesh_monitor_widget import MeshMonitorSection
@@ -162,6 +164,10 @@ class QemuPage(QtWidgets.QWizardPage):
         #: buttons stay greyed meanwhile — offering a run that is about to die at
         #: spawn is exactly what the note above exists to prevent.
         self._docker_ok = False
+        #: The per-domain services refusal for the picked session (#637), "" when its
+        #: images may boot — core.domain_services.session_boot_gate_reason, the seam
+        #: the Mesh emulation page reads too. Listing and previews stay available.
+        self._boot_refusal = ""
         self._sessions: list[qemu_tests.BuildSession] = []
         #: The PREVIEW plan — what the current session + envelope would run. Rebuilt
         #: on every knob change; boots nothing.
@@ -256,6 +262,14 @@ class QemuPage(QtWidgets.QWizardPage):
         self.session_note.setWordWrap(True)
         self.session_note.setTextFormat(Qt.TextFormat.RichText)
         sb.addWidget(self.session_note)
+        # The per-domain services refusal (#637), INLINE under the picker — never a
+        # modal. Plain text: it carries operator-typed domain names.
+        self.domain_gate_note = QtWidgets.QLabel()
+        self.domain_gate_note.setWordWrap(True)
+        self.domain_gate_note.setTextFormat(Qt.TextFormat.PlainText)
+        self.domain_gate_note.setStyleSheet(f"color: {WARN};")
+        self.domain_gate_note.setVisible(False)
+        sb.addWidget(self.domain_gate_note)
         self.rows_label = QtWidgets.QLabel()
         self.rows_label.setWordWrap(True)
         sb.addWidget(self.rows_label)
@@ -692,6 +706,10 @@ class QemuPage(QtWidgets.QWizardPage):
     def _session_changed(self, *_):
         session = self._current_session()
         self.session_note.setText(common.partial_note(session))
+        self._boot_refusal = (session_boot_gate_reason(session.name)
+                              if session is not None else "")
+        self.domain_gate_note.setText(self._boot_refusal)
+        self.domain_gate_note.setVisible(bool(self._boot_refusal))
         if session and session.rows:
             listing = "<br>".join(
                 f"&nbsp;&nbsp;<tt>{r.label}</tt> &mdash; {r.basename}"
@@ -905,6 +923,8 @@ class QemuPage(QtWidgets.QWizardPage):
         opts = self._playwright_options()
         if plan is None or opts is None:
             return
+        if not (list_only or dry_run) and self._refuse_boot():
+            return
         if not (list_only or dry_run):
             blocker = emulation.playwright_root_blocker()
             if blocker:
@@ -936,6 +956,8 @@ class QemuPage(QtWidgets.QWizardPage):
         """
         if self._running:
             return
+        if not list_only and self._refuse_boot():
+            return
         plan = self._build_plan()
         if plan is None:
             return
@@ -958,6 +980,8 @@ class QemuPage(QtWidgets.QWizardPage):
 
     def _launch_avc(self):
         """Boot ONE planned row through the SELinux AVC workout (issue #45)."""
+        if self._refuse_boot():
+            return
         plan = self.plan or self._build_plan()
         label = str(self.avc_combo.currentData() or "")
         if plan is None or not label:
@@ -971,6 +995,17 @@ class QemuPage(QtWidgets.QWizardPage):
                       f"[avc] {label}: a full emulated boot plus the confined "
                       "workloads — Cancel stops it and its containers.")
         self._run(f"avc workout {label}", argv)
+
+    def _refuse_boot(self) -> bool:
+        """DEFENCE IN DEPTH for the #637 gate: every verb that BOOTS a row asks, not
+        only the buttons' enabled state. Inline note + log, never a modal. Listing and
+        dry runs boot nothing and are never refused."""
+        if not self._boot_refusal:
+            return False
+        self.note.setText(f'<span style="color:{WARN}">'
+                          f"{html.escape(self._boot_refusal)}</span>")
+        console.write(self.log, f"!! refused: {self._boot_refusal}")
+        return True
 
     def _run(self, label: str, argv: list[str], *, on_done=None):
         """One argv, off the GUI thread, through ``emulation.spawn`` and nothing else.
@@ -1054,9 +1089,10 @@ class QemuPage(QtWidgets.QWizardPage):
         idle = not self._running
         docker_ok = getattr(self, "_docker_ok", False)
         planned = self.plan is not None and bool(self.plan.rows)
-        for w in (self.run_btn, self.list_btn):
-            w.setEnabled(idle and docker_ok and planned)
-        self.avc_btn.setEnabled(idle and docker_ok and planned
+        boots = not self._boot_refusal           # #637: a refused session boots nothing
+        self.run_btn.setEnabled(idle and docker_ok and planned and boots)
+        self.list_btn.setEnabled(idle and docker_ok and planned)
+        self.avc_btn.setEnabled(idle and docker_ok and planned and boots
                                 and bool(self.avc_combo.currentData()))
         # The Playwright lane does NOT gate on docker: run-qemu-e2e.sh drives the
         # host launchers directly (that is exactly why it needs root and the
@@ -1065,7 +1101,7 @@ class QemuPage(QtWidgets.QWizardPage):
         pw_row = bool(self.pw_row.currentData())
         for w in (self.pw_list_btn, self.pw_preview_btn):
             w.setEnabled(idle and planned and pw_row)
-        self.pw_run_btn.setEnabled(idle and planned and pw_row
+        self.pw_run_btn.setEnabled(idle and planned and pw_row and boots
                                    and not emulation.playwright_root_blocker())
         self.refresh_btn.setEnabled(idle)
         self.cancel_btn.setEnabled(self._running)

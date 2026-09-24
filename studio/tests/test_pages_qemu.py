@@ -1189,3 +1189,47 @@ def test_the_monitor_reaches_no_modal_from_page_logic(wiz):
         if m:
             assert "QMessageBox" not in m.group(0), name
             assert ".exec(" not in m.group(0), name
+
+
+# ---- #637: a session whose recorded config names an unwalked domain is not booted ----
+from _session_records import write_build_record  # noqa: E402
+
+
+def test_qemu_refuses_to_boot_a_session_with_an_unwalked_domain(wiz, monkeypatch,
+                                                                 fake_generator):
+    _gen, full, _abort = fake_generator
+    write_build_record(full.name, domains=("a.example", "b.example"),
+                       reviewed=("hugmesh.net", "a.example"))
+    spawns = []
+    monkeypatch.setattr(emulation, "spawn",
+                        lambda argv, *a, **k: spawns.append(list(argv)) or 0)
+    page = _qemu_page(wiz)
+    assert page._current_session().name == full.name
+    assert page.domain_gate_note.isVisible()
+    assert "b.example" in page.domain_gate_note.text()
+    assert not page.run_btn.isEnabled()
+    assert not page.avc_btn.isEnabled()
+    assert not page.pw_run_btn.isEnabled()
+    # the slots refuse on their own — no boot reaches the spawn boundary
+    page._launch(list_only=False)
+    page._launch_avc()
+    page._launch_playwright()
+    assert spawns == [], "a refused session booted anyway"
+    assert "b.example" in page.note.text()
+
+
+def test_qemu_listing_is_never_refused(wiz, monkeypatch, fake_generator, qapp):
+    """--list boots nothing, so the per-domain gate has nothing to say about it."""
+    _gen, full, _abort = fake_generator
+    write_build_record(full.name, domains=("b.example",), reviewed=("hugmesh.net",))
+    page = _qemu_page(wiz)
+    assert page._boot_refusal
+    page._launch(list_only=True)
+    _finish(page, qapp)
+    assert "refused" not in page.log.toPlainText()
+
+
+def test_qemu_boots_a_session_with_no_record_exactly_as_before(wiz, fake_generator):
+    page = _qemu_page(wiz)
+    assert page._boot_refusal == ""
+    assert not page.domain_gate_note.isVisible()
