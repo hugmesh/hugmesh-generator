@@ -368,7 +368,7 @@ def test_the_monitor_shows_one_door_per_domain_onion(monkeypatch):
                           "hugmesh-local-hugmesh-tor-1 · brandb onion"]
     a = by["hugmesh-local-hugmesh-tor-1 · acme.example onion"]
     b = by["hugmesh-local-hugmesh-tor-1 · brandb onion"]
-    # THAT domain's login URL, over https (#598/#600: http cannot boot the SPA)
+    # THAT domain's login URL, over https — the primary door's scheme (#598/#600/#628)
     assert a.external == f"https://{ONION_A}/login"
     assert b.external == f"https://{ONION_B}/login"
     for u in (a, b):

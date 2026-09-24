@@ -888,9 +888,10 @@ def _domain_onion_units(tor_unit: "MeshUnit", onions) -> list["MeshUnit"]:
     tor process, one HiddenService stanza per domain), so they share its phase and
     readiness and scale with it, never on their own.
 
-    HTTPS, not http: #598/#600 measured that an http onion page cannot boot the SPA
-    (the gateway's CSP upgrade-insecure-requests), and the primary onion's door hands
-    out https too. The Door has no URL for the same reason the primary has none — a
+    HTTPS, like the primary onion's door (``LocalStackNode.onion_url``): the onion's
+    :443 is the door — a secure context, a Secure session cookie on a production-
+    configured mesh, and the node agent's own port (docs/TOR-HIDDEN-SERVICE.md "Why
+    :443"; the older CSP reason was false, #628). The Door has no URL for the same reason the primary has none — a
     normal browser cannot reach a .onion — and says where to open it instead."""
     out: list[MeshUnit] = []
     for label, slug, url in onions:

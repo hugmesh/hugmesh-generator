@@ -406,9 +406,10 @@ class LocalStackNode:
         primary onion, which serves the mesh's own domain.
 
         HTTPS, like ``make stack-onion``: the compose onion publishes ``:443`` to the
-        TLS front (tests/stack/tor/entrypoint.sh, #598), which is the door that boots
-        the SPA; its plain ``:80`` goes to the fe-gateway (or the Anubis gate) and an
-        http page cannot boot the app (#586). The monitor's door, the Copy .onion
+        TLS front (tests/stack/tor/entrypoint.sh, #598) — a secure context, a Secure
+        session cookie on a production-configured mesh, and the node agent's own port
+        (docs/TOR-HIDDEN-SERVICE.md "Why :443"; the older "an http page cannot boot the
+        app" reason was false, #628). The monitor's door, the Copy .onion
         button and a saved record's ``doors.onion`` all hand out this one string.
 
         The hostname file is a bind-mount copy that OUTLIVES the key it names (#581):
