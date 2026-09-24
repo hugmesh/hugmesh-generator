@@ -505,6 +505,10 @@ has "${ins}" "Tor Browser -> https://${ONION_A}/" && ok "C card opens https://<o
 hasnt "${ins}" "http://${ONION_A}" && ok "C card never offers http://<onion> (the node serves :443 only)" || bad "C card still offers http://<onion>"
 has "${ins}" "the onion :443 (HTTPS)" && hasnt "${ins}" "onion :80" && ok "C card maps the onion :443, not :80" || bad "C card port claim wrong"
 has "${ins}" "127.0.0.1:443 by default" && ok "C card names the real default upstream" || bad "C card default upstream wrong"
+has "${ins}" "the pki node under release-state internal" && has "${ins}" "backend" && hasnt "${ins}" "the ingress binds there on the backend node" \
+    && ok "C card says WHICH node the default upstream is right on (pki under internal, backend once public)" || bad "C card still ties the default upstream to the backend node alone"
+has "${ins}" "KNOWN GAP (hugmesh-generator#614)" && has "${ins}" "NOT the login page" && hasnt "${ins}" "reachable from any Tor Browser, immediately" \
+    && ok "C card states the Ingress-host gap (#614): the onion reaches the edge's 404, not the login page" || bad "C card promises a login page the node cannot serve yet"
 has "${ins}" "CERTIFICATE:" && has "${ins}" "no .onion name is on it" && ok "C card carries the certificate note" || bad "C card lacks the certificate note"
 has "${ins}" "curl -skI https://${ONION_A}/" && ok "C VERIFY line uses https + -k" || bad "C VERIFY line wrong"
 [ "$(cat "${GL}/out1/onion.txt" 2>/dev/null)" = "${ONION_A}" ] && ok "C onion.txt is the primary address alone (Studio's golive test reads it whole)" || bad "C onion.txt changed shape"
