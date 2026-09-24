@@ -10,8 +10,14 @@
 #      Decision 70 = B links the distro `tor` service TOO, so the agent must converge a
 #      tor that OpenRC may already have started: reload (never restart, never a second
 #      start) on a torrc change, nothing when unchanged, start only when stopped,
-#      restart only when OpenRC says crashed; verify the candidate torrc BEFORE it
-#      replaces the live one; refuse a malformed upstream; render one extra
+#      restart only when OpenRC says crashed — and, run as the BOOT ONESHOT
+#      (RC_SVCNAME=hugmesh-tor-reconcile), never start/restart at all (a nested start
+#      would wait on the oneshot's own OpenRC lock) and never wait for a hostname a
+#      stopped tor cannot mint; wait for and export a cold-boot keypair on the cron
+#      path; verify the candidate torrc BEFORE it replaces the live one (0644, no
+#      candidate left behind); keep the state dirs 0700; refuse a malformed upstream
+#      (trim, never fold inner whitespace; a last line without a newline counts);
+#      render one extra
 #      HiddenService stanza per /etc/hugmesh/tor/domains slug and withdraw the export
 #      (never the key) of a slug that is removed.
 #   B. both stage4 builders — `--print-plan` across node and client roles
@@ -108,7 +114,17 @@ cat > "${STUB}/id" <<'EOF'
 exit 0
 EOF
 printf '#!/bin/bash\nexit 0\n' > "${STUB}/chown"
-printf '#!/bin/bash\necho sleep >> "${STATE_DIR}/sleep.log"\nexit 0\n' > "${STUB}/sleep"
+# sleep: logs each call; with $STATE_DIR/mint-at = N and $STATE_DIR/mint-file = PATH,
+# the Nth sleep writes ONION_LATE into PATH — tor minting a key mid-wait.
+cat > "${STUB}/sleep" <<'EOF'
+#!/bin/bash
+echo sleep >> "${STATE_DIR}/sleep.log"
+if [ -f "${STATE_DIR}/mint-at" ]; then
+    _n=0; while IFS= read -r _x; do _n=$((_n + 1)); done < "${STATE_DIR}/sleep.log"
+    [ "${_n}" -ge "$(cat "${STATE_DIR}/mint-at")" ] && echo "${ONION_LATE}" > "$(cat "${STATE_DIR}/mint-file")"
+fi
+exit 0
+EOF
 chmod +x "${STUB}"/*
 NORC="${WORK}/norc"; mkdir -p "${NORC}"   # the same stubs minus rc-service
 for t in tor id chown sleep; do ln -s "${STUB}/${t}" "${NORC}/${t}"; done
@@ -116,6 +132,8 @@ for t in tor id chown sleep; do ln -s "${STUB}/${t}" "${NORC}/${t}"; done
 ONION_A="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion"
 ONION_G="gggggggggggggggggggggggggggggggggggggggggggggggggggggggg.onion"
 ONION_S="ssssssssssssssssssssssssssssssssssssssssssssssssssssssss.onion"
+ONION_LATE="llllllllllllllllllllllllllllllllllllllllllllllllllllllll.onion"
+export ONION_LATE
 
 # fresh_root NAME — a sandbox node root with the primary keypair already minted
 # (so the agent never waits) and an empty state dir for the stubs.
@@ -125,14 +143,27 @@ fresh_root() {
     echo "${ONION_A}" > "${R}/var/lib/tor/hugmesh-onion/hostname"
     export STATE_DIR
 }
-# run_agent [PATHDIR] — the real agent under a hermetic PATH; records its exit code.
+# fresh_cold NAME — the same, but NO keypair minted yet (a true first boot).
+fresh_cold() {
+    fresh_root "$1"; rm -f "${R}/var/lib/tor/hugmesh-onion/hostname"
+}
+# run_agent [PATHDIR] — the real agent under a hermetic PATH, as the CRON / by-hand
+# path (RC_SVCNAME removed, whatever the host has); records its exit code.
 run_agent() {
     local pd
     pd="${1:-${STUB}}"
-    HUGMESH_TOR_ROOT="${R}" HUGMESH_TOR_WAIT_TRIES=2 STATE_DIR="${STATE_DIR}" \
+    env -u RC_SVCNAME HUGMESH_TOR_ROOT="${R}" HUGMESH_TOR_WAIT_TRIES=2 STATE_DIR="${STATE_DIR}" \
         PATH="${pd}:${TOOLS}" /bin/bash "${AGENT}" >/dev/null 2>&1
     AGENT_RC=$?
 }
+# run_boot — the same agent as openrc-run's boot oneshot runs it (RC_SVCNAME set).
+run_boot() {
+    RC_SVCNAME=hugmesh-tor-reconcile HUGMESH_TOR_ROOT="${R}" HUGMESH_TOR_WAIT_TRIES=2 STATE_DIR="${STATE_DIR}" \
+        PATH="${STUB}:${TOOLS}" /bin/bash "${AGENT}" >/dev/null 2>&1
+    AGENT_RC=$?
+}
+mode_of() { stat -c %a "$1" 2>/dev/null; }
+no_candidate() { ! ls -A "${R}/etc/tor/" 2>/dev/null | grep -F 'torrc.hugmesh.' >/dev/null; }
 rc_log()  { cat "${STATE_DIR}/rc.log" 2>/dev/null; }
 torrc()   { cat "${R}/etc/tor/torrc" 2>/dev/null; }
 agent_log() { cat "${R}/var/log/hugmesh-tor-reconcile.log" 2>/dev/null; }
@@ -157,6 +188,11 @@ has "$(cat "${STATE_DIR}/tor.log" 2>/dev/null)" "--verify-config -f ${R}/etc/tor
     && ok "A1 primary hostname exported to /var/lib/hugmesh/tor/hostname" || bad "A1 primary hostname not exported"
 [ ! -e "${STATE_DIR}/sleep.log" ] && ok "A1 no hostname wait when the key is already minted" || bad "A1 slept although the hostname existed"
 ls "${R}/etc/tor/" | grep -F 'torrc.hugmesh.' >/dev/null && bad "A1 a candidate torrc was left behind" || ok "A1 no candidate file left behind"
+[ "$(mode_of "${R}/etc/tor/torrc")" = 644 ] && ok "A1 installed torrc is 0644 (tor re-reads it as tor:tor on SIGHUP)" \
+    || bad "A1 installed torrc mode is '$(mode_of "${R}/etc/tor/torrc")', want 644"
+[ "$(mode_of "${R}/var/lib/tor/hugmesh-onion")" = 700 ] && [ "$(mode_of "${R}/var/lib/tor/data")" = 700 ] \
+    && ok "A1 HiddenServiceDir + DataDirectory are 0700 (Tor refuses a group/world-readable HS dir)" \
+    || bad "A1 state dir modes: hs='$(mode_of "${R}/var/lib/tor/hugmesh-onion")' data='$(mode_of "${R}/var/lib/tor/data")', want 700"
 
 # A2 — the same node again, tor running, nothing changed: a pure no-op.
 : > "${STATE_DIR}/rc.log"; echo 0 > "${STATE_DIR}/status"
@@ -165,6 +201,7 @@ cp "${R}/etc/tor/torrc" "${WORK}/a2.before"; run_agent
     && ok "A2 running + unchanged torrc -> only 'rc-service tor status' (no start/restart/reload)" \
     || bad "A2 running + unchanged torrc made calls: $(rc_log | tr '\n' ';')"
 cmp -s "${WORK}/a2.before" "${R}/etc/tor/torrc" && ok "A2 torrc byte-identical on a re-run" || bad "A2 torrc changed on an idempotent re-run"
+no_candidate && ok "A2 an unchanged run leaves no candidate torrc in /etc/tor" || bad "A2 a candidate torrc was left behind by an unchanged run"
 
 # A3 — running tor, upstream override changes the torrc: reload exactly once.
 : > "${STATE_DIR}/rc.log"; mkdir -p "${R}/etc/hugmesh/tor"
@@ -201,9 +238,10 @@ echo 0 > "${STATE_DIR}/status"; echo 1 > "${STATE_DIR}/verify"; run_agent
 hasnt "$(rc_log)" "reload" && hasnt "$(rc_log)" "start" && ok "A6 no reload/start after a failed verify" \
     || bad "A6 service touched after a failed verify: $(rc_log | tr '\n' ';')"
 [ "${AGENT_RC}" -eq 0 ] && ok "A6 still exits 0 (fail-soft)" || bad "A6 exit ${AGENT_RC}"
+no_candidate && ok "A6 the rejected candidate is removed (nothing left in /etc/tor)" || bad "A6 a rejected candidate torrc was left in /etc/tor"
 
 # A7 — malformed upstream lines are refused (written verbatim into the torrc otherwise).
-for bogus in '1.2.3.4' 'host:443;HiddenServiceDir' 'host/x:443' 'a:99999999' ':443' 'host:443#x'; do
+for bogus in '1.2.3.4' 'host:443;HiddenServiceDir' 'host/x:443' 'a:99999999' ':443' 'host:443#x' '10.0.0.7 :443' '10.0.0.7:4 43'; do
     fresh_root a7; mkdir -p "${R}/etc/hugmesh/tor"; printf '%s\n' "${bogus}" > "${R}/etc/hugmesh/tor/upstream"
     run_agent
     if has "$(torrc)" "HiddenServicePort 443 ${REG_UP}" && [ "$(torrc | grep -c '^HiddenServicePort')" -eq 1 ]; then
@@ -214,20 +252,27 @@ for bogus in '1.2.3.4' 'host:443;HiddenServiceDir' 'host/x:443' 'a:99999999' ':4
 done
 fresh_root a7b; mkdir -p "${R}/etc/hugmesh/tor"; echo '[fd00::7]:8443' > "${R}/etc/hugmesh/tor/upstream"; run_agent
 has "$(torrc)" "HiddenServicePort 443 [fd00::7]:8443" && ok "A7 a bracketed IPv6 host:port is accepted" || bad "A7 IPv6 upstream refused"
+fresh_root a7c; mkdir -p "${R}/etc/hugmesh/tor"; printf '\t10.0.0.9:443' > "${R}/etc/hugmesh/tor/upstream"; run_agent
+has "$(torrc)" "HiddenServicePort 443 10.0.0.9:443" && ok "A7 an upstream file whose only line has NO trailing newline (and a leading tab) is honoured" \
+    || bad "A7 upstream without a trailing newline ignored"
 
 # A8 — per-domain onions (decision 68 = A).
 fresh_root a8; echo 0 > "${STATE_DIR}/status"; mkdir -p "${R}/etc/hugmesh/tor"
-printf 'games\n# comment\nBad_Slug\n\nshop\ngames\n-x\n' > "${R}/etc/hugmesh/tor/domains"
+printf '  games  \n# comment\nBad_Slug\n\nshop.example\nmy domain\ngames\n-x\nshop' > "${R}/etc/hugmesh/tor/domains"
 mkdir -p "${R}/var/lib/tor/hugmesh-onion.d/games" "${R}/var/lib/tor/hugmesh-onion.d/shop"
 echo "${ONION_G}" > "${R}/var/lib/tor/hugmesh-onion.d/games/hostname"
 echo "${ONION_S}" > "${R}/var/lib/tor/hugmesh-onion.d/shop/hostname"
 run_agent
-[ "$(torrc | grep -c '^HiddenServiceDir ')" -eq 3 ] && ok "A8 primary + 2 valid, de-duplicated domain stanzas (invalid slugs dropped)" \
+[ "$(torrc | grep -c '^HiddenServiceDir ')" -eq 3 ] && ok "A8 primary + 2 valid, trimmed, de-duplicated domain stanzas (invalid slugs dropped; a last line without a newline counts)" \
     || { bad "A8 want 3 HiddenServiceDir lines"; torrc | grep '^HiddenService' | sed 's/^/      | /'; }
 has "$(torrc)" "HiddenServiceDir /var/lib/tor/hugmesh-onion.d/games" && has "$(torrc)" "HiddenServiceDir /var/lib/tor/hugmesh-onion.d/shop" \
     && ok "A8 each domain has its own HiddenServiceDir" || bad "A8 domain HiddenServiceDir missing"
 [ "$(torrc | grep -c "^HiddenServicePort 443 ${REG_UP}\$")" -eq 3 ] && ok "A8 every onion fronts the SAME upstream" || bad "A8 domain stanza upstream differs"
 hasnt "$(torrc)" "Bad_Slug" && hasnt "$(torrc)" "onion.d/-x" && ok "A8 invalid slugs never reach the torrc" || bad "A8 invalid slug in torrc"
+hasnt "$(torrc)" "shop.example" && hasnt "$(torrc)" "mydomain" && hasnt "$(torrc)" "my domain" \
+    && ok "A8 a dotted slug and a slug with inner whitespace are refused (never folded to 'mydomain')" || bad "A8 a dotted or whitespace-folded slug reached the torrc"
+[ "$(mode_of "${R}/var/lib/tor/hugmesh-onion.d/games")" = 700 ] && [ "$(mode_of "${R}/var/lib/tor/hugmesh-onion.d")" = 700 ] \
+    && ok "A8 per-domain HiddenServiceDirs are 0700" || bad "A8 per-domain HS dir mode '$(mode_of "${R}/var/lib/tor/hugmesh-onion.d/games")'"
 [ "$(cat "${R}/var/lib/hugmesh/tor/games.hostname" 2>/dev/null)" = "${ONION_G}" ] && [ "$(cat "${R}/var/lib/hugmesh/tor/shop.hostname" 2>/dev/null)" = "${ONION_S}" ] \
     && ok "A8 each domain onion exported to <slug>.hostname" || bad "A8 domain hostname exports missing"
 [ "$(cat "${R}/var/lib/hugmesh/tor/hostname" 2>/dev/null)" = "${ONION_A}" ] && ok "A8 primary export unchanged by the domain list" || bad "A8 primary export disturbed"
@@ -238,6 +283,12 @@ printf 'games\n' > "${R}/etc/hugmesh/tor/domains"; : > "${STATE_DIR}/rc.log"; ru
     || bad "A8 the removed domain's key directory was deleted"
 [ -e "${R}/var/lib/hugmesh/tor/games.hostname" ] && [ -e "${R}/var/lib/hugmesh/tor/hostname" ] \
     && ok "A8 remaining exports intact" || bad "A8 a kept export was withdrawn"
+# every domain removed (the file emptied): every <slug>.hostname goes, the primary stays.
+: > "${R}/etc/hugmesh/tor/domains"; run_agent
+n_dom="$(ls "${R}/var/lib/hugmesh/tor/" | grep -c -E '[.]hostname$')"
+[ "${n_dom}" -eq 0 ] && [ -s "${R}/var/lib/hugmesh/tor/hostname" ] \
+    && ok "A8 all domains removed -> every per-domain export withdrawn, primary kept" || bad "A8 all domains removed: ${n_dom} per-domain export(s) left, primary $( [ -s "${R}/var/lib/hugmesh/tor/hostname" ] && echo kept || echo GONE)"
+[ "$(torrc | grep -c '^HiddenServiceDir ')" -eq 1 ] && ok "A8 all domains removed -> only the primary stanza remains" || bad "A8 domain stanzas left after the list was emptied"
 
 # A9 — no tor user (net-vpn/tor absent): inert, no torrc, no service call.
 fresh_root a9; touch "${STATE_DIR}/no-tor-user"; run_agent
@@ -252,6 +303,66 @@ has "$(agent_log)" "no OpenRC to start it" && [ ! -e "${STATE_DIR}/rc.log" ] \
 n_other="$(grep -c -v -F -- '--verify-config' "${STATE_DIR}/tor.log" 2>/dev/null)"
 [ -s "${STATE_DIR}/tor.log" ] && [ "${n_other:-0}" -eq 0 ] \
     && ok "A10 tor was only ever invoked for --verify-config (never exec'd as a daemon)" || bad "A10 tor invoked outside --verify-config: $(cat "${STATE_DIR}/tor.log" 2>/dev/null)"
+
+# A11 — BOOT ONESHOT, first boot (tor stopped, no key yet): write the torrc, but never
+# `rc-service tor start` (a nested start waits on this oneshot's own OpenRC lock for
+# 60 s — tor is `iafter` it) and never wait for a hostname a stopped tor cannot mint.
+fresh_cold a11; echo 3 > "${STATE_DIR}/status"; run_boot
+[ "${AGENT_RC}" -eq 0 ] && has "$(torrc)" "HiddenServicePort 443 ${REG_UP}" && ok "A11 boot oneshot: verified torrc written, exit 0" || bad "A11 boot oneshot: rc=${AGENT_RC}, torrc missing"
+[ "$(rc_log)" = "tor status" ] && ok "A11 boot oneshot + stopped tor -> only 'rc-service tor status' (no nested start: OpenRC starts tor next)" \
+    || bad "A11 boot oneshot made service calls: $(rc_log | tr '\n' ';')"
+[ ! -e "${STATE_DIR}/sleep.log" ] && ok "A11 boot oneshot: no hostname wait on a stopped tor (no 20 s on the boot path)" || bad "A11 boot oneshot slept $(grep -c . "${STATE_DIR}/sleep.log") time(s) on a stopped tor"
+has "$(agent_log)" "leaves the start to OpenRC" && ok "A11 boot oneshot logs why it did not start tor" || bad "A11 no log line for the deferred start"
+[ ! -e "${R}/var/lib/hugmesh/tor/hostname" ] && ok "A11 nothing exported before a key exists (the @reboot cron run exports it)" || bad "A11 exported a hostname that does not exist"
+
+# A12 — BOOT ONESHOT, OpenRC says crashed: no nested restart either.
+fresh_root a12; echo 32 > "${STATE_DIR}/status"; run_boot
+[ "$(rc_log)" = "tor status" ] && ok "A12 boot oneshot + crashed tor -> no nested restart/start (the cron restarts it)" \
+    || bad "A12 boot oneshot touched a crashed tor: $(rc_log | tr '\n' ';')"
+
+# A13 — BOOT ONESHOT, tor already running (a by-hand restart of the oneshot) and the
+# torrc changed: reload exactly once, as on the cron path.
+fresh_root a13; echo 0 > "${STATE_DIR}/status"; run_boot
+[ "$(rc_log | grep -c -F 'tor reload')" -eq 1 ] && hasnt "$(rc_log)" "tor start" && hasnt "$(rc_log)" "restart" \
+    && ok "A13 boot oneshot + running tor + changed torrc -> exactly one reload, no start/restart" || bad "A13: $(rc_log | tr '\n' ';')"
+
+# A14 — BOOT ONESHOT on a REBOOT (key already minted, tor stopped): exported at once.
+fresh_root a14; echo 3 > "${STATE_DIR}/status"; run_boot
+[ "$(cat "${R}/var/lib/hugmesh/tor/hostname" 2>/dev/null)" = "${ONION_A}" ] && hasnt "$(rc_log)" "tor start" \
+    && ok "A14 boot oneshot on a reboot exports the persisted hostname without starting tor" || bad "A14 reboot export: $(rc_log | tr '\n' ';')"
+
+# A15 — CRON path (the @reboot run), cold first boot: tor stopped -> start it, then WAIT
+# for the key tor mints mid-wait, and export it.
+fresh_cold a15; echo 3 > "${STATE_DIR}/status"
+echo 1 > "${STATE_DIR}/mint-at"; echo "${R}/var/lib/tor/hugmesh-onion/hostname" > "${STATE_DIR}/mint-file"
+run_agent
+has "$(rc_log)" "tor start" && ok "A15 cron path + stopped tor -> rc-service tor start" || bad "A15 cron path did not start a stopped tor: $(rc_log | tr '\n' ';')"
+[ -s "${STATE_DIR}/sleep.log" ] && ok "A15 cron path waits for a key that is not minted yet" || bad "A15 no hostname wait on a cold boot"
+[ "$(cat "${R}/var/lib/hugmesh/tor/hostname" 2>/dev/null)" = "${ONION_LATE}" ] \
+    && ok "A15 the key minted during the wait is exported (first-boot export)" || bad "A15 first-boot hostname not exported after the wait"
+
+# A16 — CRON path, the key never appears: bounded wait (WAIT_TRIES=2), logged, no export.
+fresh_cold a16; echo 0 > "${STATE_DIR}/status"; run_agent
+[ "$(grep -c . "${STATE_DIR}/sleep.log" 2>/dev/null)" = 2 ] && ok "A16 the wait is bounded by HUGMESH_TOR_WAIT_TRIES (2 sleeps)" \
+    || bad "A16 slept $(grep -c . "${STATE_DIR}/sleep.log" 2>/dev/null) time(s), want 2"
+has "$(agent_log)" "primary onion hostname not yet present" && [ ! -e "${R}/var/lib/hugmesh/tor/hostname" ] \
+    && ok "A16 a never-minted key is logged 'not yet present' and nothing is exported" || bad "A16 missing-key path wrong"
+
+# ── the OpenRC / cron wiring the boot sequence depends on (static) ──
+INITD="${REPO}/specs/etc/init.d/hugmesh-tor-reconcile"
+CRON="${REPO}/specs/etc/cron.d/hugmesh-tor-reconcile"
+dep_body="$(sed -n '/^depend() {/,/^}/p' "${INITD}" | grep -v -E '^[[:space:]]*#')"
+printf '%s\n' "${dep_body}" | grep -E '^[[:space:]]*before[[:space:]]+(.*[[:space:]])?tor([[:space:]]|$)' >/dev/null \
+    && ok "init.d: depend() orders the oneshot 'before tor' (the managed torrc exists when tor first reads it)" \
+    || bad "init.d: depend() no longer says 'before tor'"
+cron_code="$(grep -v -E '^[[:space:]]*(#|$)' "${CRON}")"
+printf '%s\n' "${cron_code}" | grep -E '^@reboot[[:space:]]+root[[:space:]].*/usr/sbin/hugmesh-tor-reconcile' >/dev/null \
+    && ok "cron.d: an @reboot entry runs the agent (exports the first-boot hostname the boot oneshot cannot)" \
+    || bad "cron.d: no @reboot entry — a first-boot hostname would wait for the next midnight run"
+printf '%s\n' "${cron_code}" | grep -E '^0 0 [*] [*] [*][[:space:]]+root[[:space:]]+/usr/sbin/hugmesh-tor-reconcile' >/dev/null \
+    && ok "cron.d: the daily entry runs the agent" || bad "cron.d: the daily entry is gone"
+printf '%s\n' "${cron_code}" | grep -F 'RC_SVCNAME' >/dev/null \
+    && bad "cron.d: a cron entry sets RC_SVCNAME (it would never start a stopped tor)" || ok "cron.d: no cron entry poses as the boot oneshot"
 
 # ═════════════════════════════ B. the builders ════════════════════════════════
 echo "== B. builders: PLAN_TOR_ONION across roles, then the real gate code =="
@@ -283,6 +394,10 @@ for role in desktop laptop standalone-unaffiliated; do
             || bad "B x86 CLIENT ${role} ${sel}: no drop warning — the client check is dead again"
     done
 done
+leg "x86 backend --standalone --with-tor" "off" build-x86-host-stage4.sh --role backend --standalone --with-tor
+has "${LEG_OUT}" "tor selected on CLIENT role 'backend' — dropped" \
+    && ok "B x86 backend --standalone --with-tor: the drop is WARNED (the check runs after the STANDALONE fold)" \
+    || bad "B x86 backend --standalone --with-tor: dropped SILENTLY — the client check runs before the STANDALONE fold"
 leg "rpi5 frontend --optional-services tor" "${WANT_ON}" build-rpi5-stage4.sh --role frontend --optional-services tor
 leg "rpi5 pki (tor not selected)"           "off"        build-rpi5-stage4.sh --role pki
 leg "rpi5 CLIENT desktop --optional-services tor" "off"  build-rpi5-stage4.sh --role desktop --optional-services tor
@@ -338,9 +453,10 @@ done
 # the CLIENT drop must run AFTER the role case (the x86 check used to run before it and never fired)
 x86_role_ln="$(grep -n -E '^    laptop\|chromebook\)' "${X86}" | head -1 | cut -d: -f1)"
 x86_drop_ln="$(grep -n -F 'if ${ROLE_CLIENT} && _opt_selected tor; then' "${X86}" | head -1 | cut -d: -f1)"
-[ -n "${x86_role_ln}" ] && [ -n "${x86_drop_ln}" ] && [ "${x86_drop_ln}" -gt "${x86_role_ln}" ] \
-    && ok "B x86: the CLIENT drop (line ${x86_drop_ln}) runs after the role case (line ${x86_role_ln})" \
-    || bad "B x86: CLIENT drop at '${x86_drop_ln}' is not after the role case at '${x86_role_ln}'"
+x86_sa_ln="$(grep -n -E '^if [$][{]STANDALONE[}]; then$' "${X86}" | head -1 | cut -d: -f1)"
+[ -n "${x86_role_ln}" ] && [ -n "${x86_drop_ln}" ] && [ -n "${x86_sa_ln}" ] && [ "${x86_drop_ln}" -gt "${x86_role_ln}" ] && [ "${x86_drop_ln}" -gt "${x86_sa_ln}" ] \
+    && ok "B x86: the CLIENT drop (line ${x86_drop_ln}) runs after the role case (line ${x86_role_ln}) AND the STANDALONE fold (line ${x86_sa_ln})" \
+    || bad "B x86: CLIENT drop at '${x86_drop_ln}' is not after the role case '${x86_role_ln}' and the STANDALONE fold '${x86_sa_ln}'"
 
 # x86 PKGS gate: the real line, executed.
 eval "$(tor_defs "${X86}")"
@@ -455,11 +571,33 @@ done
 fx no-initd backend package agent tor-linked reconcile-linked cron; o="$(run_fx)"
 has_v "${o}" FAIL "cannot start" && ok "D linked tor with no /etc/init.d/tor -> FAIL" || { bad "D missing init.d/tor not caught"; echo "${o}" | sed 's/^/      | /'; }
 fx cli-bad desktop tor-linked reconcile-linked; o="$(run_fx)"
-has_v "${o}" FAIL "scheduled on a CLIENT image" && ok "D client image with tor linked -> FAIL" || { bad "D client tor not caught"; echo "${o}" | sed 's/^/      | /'; }
+has_v "${o}" FAIL "on a CLIENT image" && ok "D client image with tor linked -> FAIL" || { bad "D client tor not caught"; echo "${o}" | sed 's/^/      | /'; }
 fx cli-cron laptop cron; o="$(run_fx)"
-has_v "${o}" FAIL "scheduled on a CLIENT image" && ok "D client image with the tor cron -> FAIL" || { bad "D client cron not caught"; echo "${o}" | sed 's/^/      | /'; }
+has_v "${o}" FAIL "on a CLIENT image" && ok "D client image with the tor cron -> FAIL" || { bad "D client cron not caught"; echo "${o}" | sed 's/^/      | /'; }
+fx cli-pkg desktop package; o="$(run_fx)"
+has_v "${o}" FAIL "on a CLIENT image" && ok "D client image carrying only /usr/bin/tor -> FAIL (#583 item 6's package half)" || { bad "D client package-only not caught"; echo "${o}" | sed 's/^/      | /'; }
+for srole in standalone-thin standalone-thick standalone-unaffiliated; do
+    fx "sa-bad-${srole}" "${srole}" tor-linked; o="$(run_fx)"
+    has_v "${o}" FAIL "on a CLIENT image" && ok "D ${srole} with tor linked -> FAIL (graded as a client)" || { bad "D ${srole} tor not caught"; echo "${o}" | sed 's/^/      | /'; }
+done
+fx sa-ok standalone-unaffiliated; o="$(run_fx)"
+has_v "${o}" PASS "no tor node artefact" && hasnt "${o}" FAIL && ok "D clean standalone-unaffiliated image -> PASS" || { bad "D clean standalone"; echo "${o}" | sed 's/^/      | /'; }
+for crole in omnibus edge-ai backend-gpu generic; do
+    fx "cl-${crole}" "${crole}" "${FULL[@]}"; o="$(run_fx)"
+    hasnt "${o}" FAIL && hasnt "${o}" "unusable" && has_v "${o}" PASS "tor selected — cron present" \
+        && ok "D ${crole} graded as a cluster node (full contract -> no FAIL)" || { bad "D ${crole} not graded as a cluster node"; echo "${o}" | sed 's/^/      | /'; }
+done
+fx no-agent backend package initd tor-linked reconcile-linked cron; o="$(run_fx)"
+has_v "${o}" FAIL "cannot start" && ok "D linked reconcile with no executable agent binary -> FAIL" || { bad "D missing agent binary not caught"; echo "${o}" | sed 's/^/      | /'; }
+# the role classes must cover EXACTLY the canonical vocabulary — a role that drifts out
+# of the lists would SKIP (fail open), a stale one would grade nothing.
+fn_body="$(sed -n '/^assert_tor_node_contract() {/,/^}/p' "${ASSERTIONS}")"
+cls_roles="$(printf '%s\n' "${fn_body}" | grep -E '^[[:space:]]+[a-z|-]+[)] _class=(cluster|client) ;;' | sed -E 's/^[[:space:]]+//; s/[)].*//' | tr '|' '\n' | sort | tr '\n' ' ')"
+canon="$(bash -c 'source "$1/scripts/_roles-lib.sh"; printf "%s\n" ${HUGMESH_ROLES_CANONICAL}' _ "${REPO}" | sort | tr '\n' ' ')"
+[ -n "${canon}" ] && [ "${cls_roles}" = "${canon}" ] && ok "D the tor block's role classes cover exactly HUGMESH_ROLES_CANONICAL" \
+    || bad "D the tor block's role classes '${cls_roles}' != canonical '${canon}'"
 fx cli-ok desktop; o="$(run_fx)"
-has_v "${o}" PASS "no tor node service scheduled" && hasnt "${o}" FAIL && ok "D clean client image -> PASS" || { bad "D clean client"; echo "${o}" | sed 's/^/      | /'; }
+has_v "${o}" PASS "no tor node artefact" && hasnt "${o}" FAIL && ok "D clean client image -> PASS" || { bad "D clean client"; echo "${o}" | sed 's/^/      | /'; }
 fx live-ok backend "${LIVE_OK[@]}"; o="$(run_fx live 0)"
 hasnt "${o}" FAIL && has_v "${o}" PASS "exactly one tor daemon" && has_v "${o}" PASS "v3 onion hostname is exported" \
     && ok "D live: started, one daemon, torrc 443, v3 hostname -> no FAIL" || { bad "D live ok"; echo "${o}" | sed 's/^/      | /'; }

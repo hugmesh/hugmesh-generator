@@ -1322,7 +1322,7 @@ fi
 # is resolved by the role case block further down, so a check here would read its
 # `false` default for every role — it did, and `--with-tor --role desktop` emerged
 # net-vpn/tor on a desktop (hugmesh-generator#583 item 6). The CLIENT strip lives
-# right after the role case block ("Tor NODE service: CLIENT roles never carry it").
+# right after the STANDALONE fold ("Tor NODE service: CLIENT roles never carry it").
 WANT_TOR="${WANT_TOR:-}"
 if [ "${WANT_TOR}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
@@ -1631,14 +1631,14 @@ case "${ROLE}" in
         exit 1 ;;
 esac
 
-# ── Tor NODE service: CLIENT roles never carry it (hugmesh-generator#583) ─────────
+# ── Tor NODE service: the ONE predicate (hugmesh-generator#583) ───────────────────
 # The onion is a k8s NODE service fronting the cluster's fe-gateway; a CLIENT /
-# standalone / unaffiliated desktop has no cluster to front. ROLE_CLIENT is known only
-# from here on, so this is the ONE place a CLIENT selection — however it arrived:
-# --with-tor, --optional-services tor, or brand.conf — is dropped, with a warning, so
-# PLAN_OPTIONAL_SERVICES and every later gate see the truth. _tor_node_selected is the
-# single predicate every tor gate below (SVCS, PKGS, PLAN_TOR_ONION) calls; the
-# ROLE_CLIENT test inside it is belt-and-suspenders for a selection re-added later.
+# standalone / unaffiliated desktop has no cluster to front. _tor_node_selected is the
+# single predicate every tor gate below (SVCS, PKGS, PLAN_TOR_ONION) calls; it reads
+# ROLE_CLIENT at CALL time, so it is right however late ROLE_CLIENT settles. The
+# CLIENT selection itself is dropped (with a warning) after the STANDALONE fold below
+# — the last place ROLE_CLIENT changes (`--role backend --standalone` turns a node
+# role into a client there).
 # TOR_NODE_PACKAGES / TOR_NODE_SERVICES must equal the tor entry's nodePackages /
 # nodeServices in specs/cluster/optional-services.yaml (pinned by
 # tests/scripts/test-tor-node-contract.sh). Decision 70 = B on #347: the DISTRO tor
@@ -1646,13 +1646,6 @@ esac
 TOR_NODE_PACKAGES=(net-vpn/tor)
 TOR_NODE_SERVICES=(tor hugmesh-tor-reconcile)
 _tor_node_selected() { ! ${ROLE_CLIENT} && _opt_selected tor; }
-if ${ROLE_CLIENT} && _opt_selected tor; then
-    warn "tor selected on CLIENT role '${ROLE}' — dropped: the Tor onion service is a k8s NODE service (no cluster to front on a desktop); nothing Tor-related is baked."
-    _tor_kept=""
-    for _tor_s in ${OPTIONAL_SERVICES}; do [ "${_tor_s}" = tor ] || _tor_kept="${_tor_kept} ${_tor_s}"; done
-    OPTIONAL_SERVICES="${_tor_kept# }"
-    unset _tor_kept _tor_s
-fi
 
 # ── UNAFFILIATED plain desktop (composable: --unaffiliated onto any client/
 # standalone role, or the standalone-unaffiliated role arm above). Runs BEFORE
@@ -1756,6 +1749,22 @@ if ${STANDALONE}; then
     INSTALLER_ISO=true          # guarantee the installer artifact (the FDE path)
     [ -z "${LOCAL_USER}" ] && LOCAL_USER="${DEFAULT_USER}"
     info "STANDALONE desktop: no mesh / no SSO / no k8s; local user '${LOCAL_USER}'; LUKS FDE on install; media-data auto-detect=${MEDIA_DATA}"
+fi
+
+# ── Tor NODE service: CLIENT roles never carry it (hugmesh-generator#583) ─────────
+# ROLE_CLIENT is FINAL only from here: the role case block sets it for the desktop
+# roles, and the UNAFFILIATED -> STANDALONE folds above set it for everything else
+# (`--role backend --standalone`). So this is the ONE place a CLIENT tor selection —
+# however it arrived: --with-tor, --optional-services tor, or brand.conf — is
+# dropped, with a warning, so PLAN_OPTIONAL_SERVICES and every later gate see the
+# truth. (The check used to sit before the role case and read ROLE_CLIENT's `false`
+# default for every role: `--with-tor --role desktop` emerged net-vpn/tor.)
+if ${ROLE_CLIENT} && _opt_selected tor; then
+    warn "tor selected on CLIENT role '${ROLE}' — dropped: the Tor onion service is a k8s NODE service (no cluster to front on a desktop); nothing Tor-related is baked."
+    _tor_kept=""
+    for _tor_s in ${OPTIONAL_SERVICES}; do [ "${_tor_s}" = tor ] || _tor_kept="${_tor_kept} ${_tor_s}"; done
+    OPTIONAL_SERVICES="${_tor_kept# }"
+    unset _tor_kept _tor_s
 fi
 
 # ── Boot-chain identifiers (volids / CDLABEL / UKI name / installer cmdline key /
@@ -4989,7 +4998,9 @@ fi
 # supervises the daemon) and hugmesh-tor-reconcile (decision 70 = B on #347). The
 # reconcile agent is ordered `before tor`, owns only the managed torrc + the off-git
 # onion keypairs, and converges an ALREADY-RUNNING tor idempotently (reload on a torrc
-# change, nothing otherwise, start only if stopped) — so the two owners never produce a
+# change, nothing otherwise). As the boot oneshot it never starts tor (OpenRC does,
+# right after it — a nested start would stall the boot on the oneshot's lock); only
+# its cron (@reboot + 24h) starts a stopped one — so the two owners never produce a
 # second daemon. The 24h refresh cron (staged at
 # /etc/hugmesh/registry/cron-tor-reconcile) is installed alongside. Unselected =>
 # neither linked + net-vpn/tor absent => ZERO execution.
@@ -4999,7 +5010,7 @@ if _tor_node_selected; then
         mkdir -p "${SYSROOT}/etc/cron.d"
         cp -f "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile" \
               "${SYSROOT}/etc/cron.d/hugmesh-tor-reconcile"
-        info "OPTIONAL_SERVICES: tor selected — linked ${TOR_NODE_SERVICES[*]} + 24h cron (reconcile converges the running daemon; v3 onion keypair off-git, minted first-boot)"
+        info "OPTIONAL_SERVICES: tor selected — linked ${TOR_NODE_SERVICES[*]} + @reboot/24h cron (reconcile converges the running daemon; v3 onion keypair off-git, minted first-boot)"
     fi
 fi
 for s in "${SVCS[@]}"; do ln -sf "/etc/init.d/${s}" "${SYSROOT}/etc/runlevels/default/${s}" 2>/dev/null || true; done

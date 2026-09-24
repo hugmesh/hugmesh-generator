@@ -822,10 +822,15 @@ spec:
       # The per-service opt-in label the NetworkPolicy interaction keys off.
       torOnionLabel: hugmesh.net/tor-onion
       # The upstream the v3 hidden service's :443 (HTTPS) exposes (host:port). A
-      # HOST-level Tor daemon can't resolve cluster DNS, so the default is the edge that
-      # binds on HARDWARE: ingress-nginx hostNetwork :443 on the hugmesh.net/backend node
-      # (apps/10-ingress-nginx.yaml). Any other node — or a host tor fronting kind, whose
-      # port map is 127.0.0.1:8443 — overrides it via /etc/hugmesh/tor/upstream.
+      # HOST-level Tor daemon can't resolve cluster DNS, so the default is loopback :443
+      # — right ONLY on the node running the hostNetwork ingress edge: the
+      # hugmesh.net/pki node under RELEASE_STATE=internal (the default; the builders
+      # prune apps/10-ingress-nginx.yaml, leaving apps/11-ingress-nginx-internal.yaml),
+      # the hugmesh.net/backend node under RELEASE_STATE=public (apps/10-ingress-nginx.yaml),
+      # either on an omnibus node. Any other node — or a host tor fronting kind, whose
+      # port map is 127.0.0.1:8443 — overrides it via /etc/hugmesh/tor/upstream. (The
+      # onion reaches that edge; the fe-gateway Ingress does not admit an onion Host yet
+      # — docs/TOR-HIDDEN-SERVICE.md "Known gap".)
       torHiddenServiceUpstream: 127.0.0.1:443
 
     # ── workloadConsole — podman/OpenShift-equivalent pod console (DEFAULT-OFF) ──

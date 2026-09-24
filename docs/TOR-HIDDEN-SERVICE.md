@@ -31,22 +31,37 @@ It reuses the **distro** Tor daemon (`net-vpn/tor` → `/etc/init.d/tor`, runs a
 `torrc` and the onion-key custody, via a small reconcile agent.
 
 **Two owners, one daemon (decision 70 = B on hugmesh-generator#347).** OpenRC supervises
-the daemon through the linked `tor` service; `hugmesh-tor-reconcile` (an OpenRC oneshot
-ordered `before tor`, plus a 24h cron) never execs tor itself and converges whatever
-state it finds:
+the daemon through the linked `tor` service. `hugmesh-tor-reconcile` is an OpenRC oneshot
+ordered `before tor`, plus a cron drop-in with an `@reboot` entry (after a 90 s delay) and a
+daily one. It never execs tor itself, and it converges whatever state it finds:
 
-| tor is …                       | the reconcile does |
-|--------------------------------|--------------------|
-| running, torrc unchanged        | nothing (the daily cron is a no-op) |
-| running, torrc changed          | `rc-service tor reload` (SIGHUP; falls back to `kill -HUP` on `/run/tor/tor.pid`) |
-| crashed (OpenRC status 32)      | `rc-service tor restart` |
-| stopped                         | `rc-service tor start` |
+| tor is …                       | cron / by-hand run | boot oneshot (`RC_SVCNAME=hugmesh-tor-reconcile`) |
+|--------------------------------|--------------------|-----------------------------------------------------|
+| running, torrc unchanged        | nothing | nothing |
+| running, torrc changed          | `rc-service tor reload` (SIGHUP; falls back to `kill -HUP` on `/run/tor/tor.pid`) | the same reload |
+| crashed (OpenRC status 32)      | `rc-service tor restart` | nothing — left to the cron |
+| stopped                         | `rc-service tor start` | nothing — OpenRC starts tor right after the oneshot |
 
-It never restarts a healthy tor, so the boot-time race between OpenRC's own `tor`
-start and the oneshot cannot produce a second daemon or a flapping onion. The candidate
-torrc is verified with `tor --verify-config -f <candidate>` **before** it replaces
-`/etc/tor/torrc`, and is installed only when it differs — a config that fails
-verification never touches the running one.
+**Why the boot oneshot never starts tor.** Because the oneshot is `before tor`, OpenRC
+records tor as `iafter hugmesh-tor-reconcile`. A `rc-service tor start` issued from
+inside the oneshot's `start()` would make that child `openrc-run` wait on the oneshot's
+own exclusive lock. It would print "waiting for hugmesh-tor-reconcile" until the 60 s
+`WAIT_TIMEOUT` and only then start tor, on every boot. (This comes from reading the
+OpenRC source, `librc-depend.c` and `openrc-run.c`; it has not been seen on a guest.) It
+would also be redundant, since `tor` is linked into the runlevel. So at boot the sequence
+is:
+1. The oneshot writes the directories and the verified torrc. It exports any hostname that
+   is already minted, which is every boot after the first.
+2. OpenRC starts tor, reading that torrc. This is the only daemon.
+3. The cron's `@reboot` run (no `RC_SVCNAME`) finds tor running and the torrc unchanged,
+   waits for the first-boot keypair and exports it.
+
+The daily run re-asserts all of this. It also starts a tor that an admin stopped by hand,
+so to keep tor down, deselect it or remove the cron drop-in. A healthy tor is never
+restarted. The candidate torrc is verified with `tor --verify-config -f <candidate>`
+**before** it replaces `/etc/tor/torrc`, and it is installed (mode 0644, so tor can
+re-read it as `tor:tor` on SIGHUP) only when it differs. A config that fails verification
+never touches the running one, and no candidate file is left in `/etc/tor`.
 
 **Where the agent is baked.** Every rpi5 image, and every x86 image **except
 `--unaffiliated`** (the x86 bake sits inside the `if ! ${UNAFFILIATED}` platform block).
@@ -72,27 +87,48 @@ them is tracked separately.
 ## Routing
 
 Every onion publishes `HiddenServicePort 443` → an upstream, i.e. **HTTPS on the onion's
-:443**, answered by the fe-gateway ingress with the **cluster domain's certificate**. No
-onion SAN is minted anywhere, so Tor Browser shows a certificate warning once per visitor;
-the Tor circuit itself is end-to-end encrypted and the `.onion` address authenticates the
-service. (The **compose** lane's onion is different — plain HTTP on :80, see
-`tests/stack/tor/` — and is not what a node publishes.)
+:443**, answered by the node's `hostNetwork` ingress edge. No onion SAN is minted anywhere,
+so the certificate never carries the `.onion` name and Tor Browser shows a certificate
+warning once per visitor. The Tor circuit itself is end-to-end encrypted, and the `.onion`
+address authenticates the service. (The **compose** lane's onion is different; see
+`tests/stack/tor/`. It is not what a node publishes.)
 
-A HOST-level Tor daemon cannot resolve cluster DNS, so the default upstream is the edge
-that actually binds on hardware: **`127.0.0.1:443`** — ingress-nginx runs `hostNetwork`
-:80/:443 on the node labelled `hugmesh.net/backend=true`
-([`apps/10-ingress-nginx.yaml`](../specs/cluster/apps/10-ingress-nginx.yaml)). Any other
-node binds nothing on :443: point it at the backend node by writing one `host:port`
-line to `/etc/hugmesh/tor/upstream` (anything that is not a plain `host:port` is
-refused and the default kept, because the value is written verbatim into the torrc).
-A host tor fronting a **kind** node uses kind's port map, `127.0.0.1:8443`
+A HOST-level Tor daemon cannot resolve cluster DNS, so the default upstream is
+**`127.0.0.1:443`**. That is correct only on the one node that runs the ingress edge, and
+which node that is depends on the image's `RELEASE_STATE` (baked at
+`/etc/hugmesh/release-state`):
+
+| RELEASE_STATE | the `:443` listener | where the default upstream is right |
+|---|---|---|
+| `internal` (the **default**) | the builders prune `apps/10-ingress-nginx.yaml`; `ingress-nginx-internal` ([`apps/11-ingress-nginx-internal.yaml`](../specs/cluster/apps/11-ingress-nginx-internal.yaml)) runs `hostNetwork` on the `hugmesh.net/pki` node | the **pki** node (and omnibus) |
+| `public` | `ingress-nginx` ([`apps/10-ingress-nginx.yaml`](../specs/cluster/apps/10-ingress-nginx.yaml)) runs `hostNetwork` on the `hugmesh.net/backend` node | the **backend** node (and omnibus) |
+
+Every other node binds nothing on :443. Point it at the edge node by writing one
+`host:port` line to `/etc/hugmesh/tor/upstream`. Leading and trailing whitespace is
+trimmed. Anything that is not a plain `host:port` is refused and the default kept,
+including a value with whitespace inside it, because the value is written verbatim into
+the torrc. A host tor fronting a **kind** node uses kind's port map, `127.0.0.1:8443`
 ([`kind-local.yaml`](../specs/cluster/bootstrap/kind-local/kind-local.yaml)).
-Today nothing writes `/etc/hugmesh/tor/upstream` for you.
+Today nothing writes `/etc/hugmesh/tor/upstream` for you (hugmesh/hugmesh-admin-bff-api#108).
+
+### Known gap: the onion reaches the edge, not the login page (hugmesh-generator#614)
+
+The fe-gateway Ingress admits only the cluster domain: `host: <domain>` and
+`extraHosts: ["*.<domain>"]` in [`apps/20-gateway-fe.yaml`](../specs/cluster/apps/20-gateway-fe.yaml).
+Both ingress controllers run with `defaultBackend` disabled. So a request whose Host/SNI is
+`<x>.onion` is answered by ingress-nginx's default server, with a **404** and its default
+certificate. It never reaches the gateway. On a hardware node nothing admits the minted
+onion as an Ingress host yet. The kind lane does it at runtime with `make kind-tor`. Until
+#614 lands, a node's onion proves the Tor path (circuit, key custody, torrc, edge) but does
+not serve the mesh. Once it lands, the gateway still has to map the onion Host to a domain
+(hugmesh/hugmesh-gateway#38). This gap is inferred from the manifests; no booted node has
+shown it yet.
 
 ### Per-domain onions (decision 68 = A)
 
 `tor` is the one per-domain infra slug: each non-comment line of
-`/etc/hugmesh/tor/domains` names a domain slug (`[a-z0-9][a-z0-9-]{0,62}`), and each gets
+`/etc/hugmesh/tor/domains` names a domain slug (`[a-z0-9][a-z0-9-]{0,62}`; whitespace
+around it is trimmed, and a line with whitespace or a dot inside is refused), and each gets
 its **own** `HiddenService` stanza fronting the **same** upstream; the gateway tells the
 domains apart by the onion `Host` header. The primary onion does not depend on the file.
 Removing a slug drops its stanza and its exported hostname but **never** its keypair, so
@@ -139,7 +175,9 @@ reload the service). Like the other node modules it is authored-but-not-yet-comp
 - **Not yet exercised:** a booted QEMU or hardware node built with tor. The
   `tests/qemu/assertions.sh` tor block (both services linked, `/usr/bin/tor` present,
   exactly one tor process, a v3 hostname exported) has never run against a real guest,
-  and the QEMU lane has no tor pass-through yet.
+  and the QEMU lane has no tor pass-through yet. The same goes for the boot order (the
+  oneshot leaves the start to OpenRC, and the `@reboot` cron exports the first-boot
+  hostname) and for the known gap above.
 
 ## Related
 

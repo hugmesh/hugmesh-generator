@@ -28,25 +28,49 @@
 #                                          to kill -HUP <pidfile>) — Tor re-reads the
 #                                          torrc and mints any new onion keypair;
 #        tor running + torrc unchanged  -> nothing (the 24h cron is a no-op);
-#        tor crashed (OpenRC status 32) -> `rc-service tor restart`;
-#        tor stopped                    -> `rc-service tor start` (OpenRC refuses a
-#                                          second start of a started service anyway);
-#      it NEVER restarts a healthy tor, so a boot where OpenRC's own `tor` start and
-#      this agent race cannot produce two daemons or a flapping onion;
+#        tor crashed (OpenRC status 32) -> `rc-service tor restart`   } cron / by-hand
+#        tor stopped                    -> `rc-service tor start`     } runs ONLY
+#      it NEVER restarts a healthy tor. (The cron therefore also starts a tor an admin
+#      stopped by hand — unlink the cron, or deselect tor, to keep it down.)
 #   4. export each stable .onion hostname: the mesh's primary onion to
 #      /var/lib/hugmesh/tor/hostname (unchanged path), every Tor domain's to
 #      /var/lib/hugmesh/tor/<slug>.hostname — the only artefacts that leave the node.
 #
-# ROUTING. Every onion publishes HiddenServicePort 443 -> UPSTREAM (HTTPS; the
-# certificate presented is the cluster domain's — no onion SAN is minted, so Tor
-# Browser shows a certificate warning). The default UPSTREAM is 127.0.0.1:443, the
-# edge that binds on HARDWARE: ingress-nginx runs hostNetwork :80/:443 on the node
-# labelled hugmesh.net/backend=true (specs/cluster/apps/10-ingress-nginx.yaml), so a
-# tor-selected BACKEND node reaches it on loopback. A frontend/pki node binds nothing
-# on :443 — point it at the backend node by writing one "host:port" line to
-# /etc/hugmesh/tor/upstream. kind's host port map is 127.0.0.1:8443
-# (specs/cluster/bootstrap/kind-local/kind-local.yaml) — the documented override for a
-# host tor fronting a kind node.
+# RUN AS THE BOOT ONESHOT (RC_SVCNAME=hugmesh-tor-reconcile, set by openrc-run) the
+# agent NEVER starts or restarts tor, and does not wait for a hostname tor is not yet
+# running to mint. The oneshot is ordered `before tor`, so OpenRC records tor as
+# `iafter hugmesh-tor-reconcile`; a nested `rc-service tor start` from inside this
+# oneshot's start() would make that child openrc-run wait on the oneshot's own
+# exclusive lock — the WAIT_TIMEOUT (60 s) of "waiting for hugmesh-tor-reconcile" on
+# every boot — before starting tor anyway. It is also redundant: decision 70 = B links
+# `tor` into the default runlevel, so OpenRC starts it right after this oneshot
+# returns, reading the torrc just written. The boot sequence is therefore:
+#   oneshot: dirs + verified torrc, export any hostname already minted (every boot
+#            after the first) -> OpenRC starts tor (one daemon) -> the cron.d
+#            `@reboot` entry (a delay, then this agent WITHOUT RC_SVCNAME) finds tor
+#            running and the torrc unchanged, waits for the first-boot keypair and
+#            exports it. The 24h entry re-asserts all of it daily.
+#
+# ROUTING. Every onion publishes HiddenServicePort 443 -> UPSTREAM (HTTPS). The
+# default UPSTREAM is 127.0.0.1:443: correct on the ONE node that runs the cluster's
+# hostNetwork ingress edge, and ONLY there. Which node that is depends on the image's
+# RELEASE_STATE (baked at /etc/hugmesh/release-state):
+#   internal (the DEFAULT) — the builders prune apps/10-ingress-nginx.yaml; the only
+#       :443 listener is ingress-nginx-internal, pinned to the hugmesh.net/pki node
+#       (apps/11-ingress-nginx-internal.yaml);
+#   public — ingress-nginx, pinned to the hugmesh.net/backend node
+#       (apps/10-ingress-nginx.yaml).
+# An omnibus node carries both labels. On EVERY other node write the edge's
+# "host:port" as one line of /etc/hugmesh/tor/upstream. kind's host port map is
+# 127.0.0.1:8443 (specs/cluster/bootstrap/kind-local/kind-local.yaml) — the override
+# for a host tor fronting a kind node.
+# KNOWN GAP (the onion reaches the edge, NOT yet the login page): the fe-gateway
+# Ingress admits only the cluster domain (<domain> and *.<domain>,
+# apps/20-gateway-fe.yaml) and both controllers run with defaultBackend disabled, so
+# a request whose Host/SNI is <x>.onion gets ingress-nginx's own 404 and its default
+# (fake) certificate until the minted onion is admitted as an Ingress host. Nothing on
+# a hardware node does that yet (kind does, via `make kind-tor`); see "Known gap" in
+# docs/TOR-HIDDEN-SERVICE.md.
 #
 # PER-DOMAIN ONIONS (decision 68 = A: tor is the one per-domain infra slug). Each
 # non-comment line of /etc/hugmesh/tor/domains names one domain slug
@@ -86,6 +110,16 @@ LOG="${R}/var/log/hugmesh-tor-reconcile.log"
 WAIT_TRIES="${HUGMESH_TOR_WAIT_TRIES:-10}"
 
 log() { echo "[$(date -Is 2>/dev/null || date)] $*" >>"${LOG}" 2>/dev/null || true; }
+# _trim — strip LEADING/TRAILING whitespace only (bash builtins). Whitespace INSIDE a
+# value is kept, so the validators below refuse it ("my domain" is not silently
+# folded to slug "mydomain", nor "10.0.0.7 :443" to an upstream).
+_trim() {
+    local _v
+    _v="$1"
+    _v="${_v#"${_v%%[![:space:]]*}"}"
+    _v="${_v%"${_v##*[![:space:]]}"}"
+    printf '%s' "${_v}"
+}
 
 # The service the onion exposes (see ROUTING above). One "host:port" line in
 # /etc/hugmesh/tor/upstream overrides it; anything that is not a plain host:port token
@@ -97,7 +131,7 @@ _UPSTREAM_RE='^([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\]):[0-9]{1,5}$'
 if [ -r "${R}${UPSTREAM_FILE}" ]; then
     _u=""
     while IFS= read -r _line || [ -n "${_line}" ]; do
-        _line="${_line//[[:space:]]/}"
+        _line="$(_trim "${_line}")"
         case "${_line}" in ''|'#'*) continue ;; esac
         _u="${_line}"; break
     done < "${R}${UPSTREAM_FILE}"
@@ -110,11 +144,12 @@ if [ -r "${R}${UPSTREAM_FILE}" ]; then
     fi
 fi
 
-# Per-domain onion slugs (validated, de-duplicated, file order kept).
+# Per-domain onion slugs (trimmed, validated, de-duplicated, file order kept; a last
+# line without a trailing newline still counts — the future writers may omit it).
 DOMAIN_SLUGS=()
 if [ -r "${R}${DOMAINS_FILE}" ]; then
     while IFS= read -r _line || [ -n "${_line}" ]; do
-        _s="${_line//[[:space:]]/}"
+        _s="$(_trim "${_line}")"
         case "${_s}" in ''|'#'*) continue ;; esac
         if ! [[ "${_s}" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
             log "ignoring invalid Tor domain slug '${_s}' in ${DOMAINS_FILE}"
@@ -215,6 +250,10 @@ _hup() {  # reload via OpenRC, else SIGHUP the pidfile's tor directly
     _p="$(_tor_pid)" || return 1
     kill -HUP "${_p}" 2>/dev/null
 }
+# The boot oneshot (see RUN AS THE BOOT ONESHOT above) never starts/restarts tor.
+BOOT_ONESHOT=false
+[ "${RC_SVCNAME:-}" = "hugmesh-tor-reconcile" ] && BOOT_ONESHOT=true
+TOR_UP=false   # tor is (or is being made) live, so a hostname wait can succeed
 if command -v rc-service >/dev/null 2>&1; then
     rc-service tor status >/dev/null 2>&1
     _st=$?
@@ -224,6 +263,7 @@ else
 fi
 case "${_st}" in
     0)
+        TOR_UP=true
         if ${TORRC_CHANGED}; then
             if _hup; then log "tor already running — reloaded (SIGHUP) to pick up the new torrc"
             else log "tor running but reload FAILED — config applies at next tor start (fail-soft)"; fi
@@ -232,20 +272,29 @@ case "${_st}" in
         fi
         ;;
     32)
-        log "tor is CRASHED per OpenRC — restarting it"
-        rc-service tor restart >/dev/null 2>&1 || log "tor restart failed (fail-soft)"
+        if ${BOOT_ONESHOT}; then
+            log "tor is CRASHED per OpenRC — not restarted from the boot oneshot (a nested restart would wait on this oneshot's lock); the cron restarts it"
+        else
+            log "tor is CRASHED per OpenRC — restarting it"
+            TOR_UP=true
+            rc-service tor restart >/dev/null 2>&1 || { TOR_UP=false; log "tor restart failed (fail-soft)"; }
+        fi
         ;;
     *)
-        if command -v rc-service >/dev/null 2>&1; then
+        if ${BOOT_ONESHOT}; then
+            log "tor not running — the boot oneshot leaves the start to OpenRC (tor is linked and ordered after this oneshot)"
+        elif command -v rc-service >/dev/null 2>&1; then
             log "tor not running — starting it"
-            rc-service tor start >/dev/null 2>&1 || log "tor start failed (fail-soft)"
+            TOR_UP=true
+            rc-service tor start >/dev/null 2>&1 || { TOR_UP=false; log "tor start failed (fail-soft)"; }
         else
             log "tor not running and no OpenRC to start it — leaving it stopped"
         fi
         ;;
 esac
 
-# Give Tor a moment to mint keypairs on a cold first boot, then export hostnames.
+# Give Tor a moment to mint keypairs on a cold first boot, then export hostnames —
+# only when tor is live: waiting on a stopped tor (the boot oneshot) buys nothing.
 _all_minted() {
     [ -s "${R}${HS_DIR}/hostname" ] || return 1
     local _s
@@ -255,6 +304,7 @@ _all_minted() {
     return 0
 }
 _i=0
+${TOR_UP} || _i="${WAIT_TRIES}"
 while [ "${_i}" -lt "${WAIT_TRIES}" ]; do
     _all_minted && break
     sleep 2

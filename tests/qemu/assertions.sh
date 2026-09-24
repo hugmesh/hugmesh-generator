@@ -455,9 +455,9 @@ assert_role_topology ""
 #                                                                  `hugmesh-tor-reconcile`
 # The guest carries no record of whether tor was ASKED for (the QEMU lane passes no
 # tor selection today), so this grades CONSISTENCY, never intent: all four or none on a
-# cluster node, and no linked tor service or cron at all on a CLIENT image (the builders
-# drop a client tor selection). A half-applied selection — the daemon linked with no
-# reconcile to write its torrc, or the reconcile linked with no daemon to converge —
+# cluster node, and NONE of the four — not even the package — on a CLIENT image (the
+# builders drop a client tor selection). A half-applied selection — the daemon linked
+# with no reconcile to write its torrc, or the reconcile linked with no daemon to converge —
 # is the defect. On a LIVE guest ($2 = live) a selected node must also be running
 # EXACTLY ONE tor (two owners, one daemon: the reconcile must never start a second),
 # carry the managed `HiddenServicePort 443` torrc, and have exported a v3 hostname.
@@ -495,11 +495,13 @@ assert_tor_node_contract() {  # $1 = root prefix ("" on the live guest); $2 = "l
     [ -f "${_R}/etc/cron.d/hugmesh-tor-reconcile" ] && _have="${_have} cron"
 
     if [ "${_class}" = client ]; then
-        case " ${_have} " in
-            *" tor-linked "*|*" reconcile-linked "*|*" cron "*)
-                bad "role ${_role}: tor node service scheduled on a CLIENT image (found:${_have}) — the builders drop a client tor selection; the onion is a cluster-node service" ;;
-            *)  ok "role ${_role}: no tor node service scheduled on this client image" ;;
-        esac
+        # ALL FOUR artefacts, the package included: #583 item 6 was net-vpn/tor emerged
+        # on a desktop with nothing linked, so a package-only regression must fail too.
+        if [ -n "${_have}" ]; then
+            bad "role ${_role}: tor node artefacts on a CLIENT image (found:${_have}) — the builders drop a client tor selection; the onion is a cluster-node service"
+        else
+            ok "role ${_role}: no tor node artefact (package, runlevel link or cron) on this client image"
+        fi
         return
     fi
 

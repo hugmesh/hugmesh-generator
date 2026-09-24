@@ -3839,7 +3839,9 @@ fi
 # (OpenRC supervises the daemon) and hugmesh-tor-reconcile (decision 70 = B on #347).
 # The reconcile agent is ordered `before tor`, owns only the managed torrc + the
 # off-git onion keypairs, and converges an ALREADY-RUNNING tor idempotently (reload on
-# a torrc change, nothing otherwise, start only if stopped) — never a second daemon.
+# a torrc change, nothing otherwise). As the boot oneshot it never starts tor (OpenRC
+# does, right after it — a nested start would stall the boot on the oneshot's lock);
+# only its cron (@reboot + 24h) starts a stopped one — never a second daemon.
 # The 24h refresh cron (staged at /etc/hugmesh/registry/cron-tor-reconcile) is
 # installed alongside. Unselected => neither linked + net-vpn/tor absent.
 if _tor_node_selected; then
@@ -3848,7 +3850,7 @@ if _tor_node_selected; then
         mkdir -p "${SYSROOT}/etc/cron.d"
         cp -f "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile" \
               "${SYSROOT}/etc/cron.d/hugmesh-tor-reconcile"
-        info "OPTIONAL_SERVICES: tor selected — linked ${TOR_NODE_SERVICES[*]} + 24h cron (reconcile converges the running daemon)"
+        info "OPTIONAL_SERVICES: tor selected — linked ${TOR_NODE_SERVICES[*]} + @reboot/24h cron (reconcile converges the running daemon)"
     fi
 fi
 # Domain-registry -> brand-repo bridge (#4, DEFAULT-OFF optional service): link the
