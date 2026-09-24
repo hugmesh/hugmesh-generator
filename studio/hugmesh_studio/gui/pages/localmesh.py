@@ -2097,6 +2097,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         md.own_name = own
         record_reviewed(md, [r.name for r in rows])
         self.domains_table.fill(md.domains, md.own_name)
+        # The stepper's working copy belongs to the rows it was seeded from. The rows
+        # were just REPLACED under it, so re-seed it from them: otherwise the next
+        # time the Domain services step records (Next or Back out of it) it writes
+        # the old walk's ticks over the loaded ones and rebuilds the reviewed markers
+        # from the old walk, un-reviewing every loaded row.
+        self.domain_services.reload(md)
         self.domains_note.setVisible(False)
         self.boot_domain.setReadOnly(True)
         self.boot_domain_note.setVisible(True)
@@ -2719,13 +2725,16 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         image-build gate calls — so the two paths cannot drift and a test can drive
         the refusal with a bare ImageConfig and no docker."""
         # THIS ROUTE'S OWN DOMAINS FIRST (#494): the rows the Domains step recorded,
-        # with the remedy naming that step. Record the stepper's walked pages before
-        # asking, so a domain reviewed and then left by Back (no validatePage on
-        # Back) still counts. Empty until the step is first visited — a host with no
-        # steps keeps passing, exactly as before.
+        # with the remedy naming that step. A PURE READ: the Domain services step
+        # records on the way out in BOTH directions (validatePage on Next,
+        # cleanupPage on Back), and both start buttons live on later steps, so the
+        # record is already written when this runs. Re-recording from the stepper
+        # here was worse than redundant — after a saved mesh was loaded into the form
+        # it rebuilt the reviewed markers from the stepper's OLD walk and refused the
+        # loaded rows. Empty until the step is first visited — a host with no steps
+        # keeps passing, exactly as before.
         md = getattr(self, "mesh_domains", None)
         if md is not None and md.domains:
-            self.domain_services.record(md)
             refusal = gate_reason(md, ACTION_MESH_START, remedy=LOCAL_MESH_REMEDY)
             if refusal:
                 return refusal

@@ -309,9 +309,9 @@ def test_the_gate_reads_the_one_seam(wiz):
 
 def test_a_domain_left_by_back_still_counts_as_walked_and_keeps_its_ticks(wiz):
     """Qt calls cleanupPage, not validatePage, on Back — the walk AND the ticks must
-    be recorded either way. The gate re-records before it asks, so the discriminating
-    read is ``collect_bootstrap()``, which does not: a tick made just before Back has
-    to be in the record already."""
+    be recorded either way. The gate is a pure read, and so is
+    ``collect_bootstrap()``: a tick made just before Back has to be in the record
+    already."""
     ctl = _two_added(wiz)
     _to(wiz, localmesh_mod.LocalMeshDomainServicesPage)
     ctl.domain_services._step(1)                          # acme.example
@@ -323,6 +323,37 @@ def test_a_domain_left_by_back_still_counts_as_walked_and_keeps_its_ticks(wiz):
     assert rec["acme.example"]["optional_services"] == ["games"]
     assert ctl.domains_table.table.cellWidget(1, 2).text() == "games"   # mirror caught up
     assert ctl._domain_services_refusal() == ""
+
+
+def test_loading_a_saved_mesh_after_the_walk_replaces_the_steppers_working_state(wiz):
+    """A saved-mesh record loaded into the form on the review step REPLACES the rows
+    under a stepper that has already been walked. The loaded rows are walked (a
+    record only exists after a start that passed the gate), and the old walk's
+    working copy must not survive to be written back: neither its ticks over the
+    loaded ones, nor its reviewed set over the loaded rows' markers."""
+    ctl = _two_added(wiz)
+    _to(wiz, localmesh_mod.LocalMeshDomainServicesPage)
+    w = ctl.domain_services
+    w._step(1)                                            # acme.example
+    w._boxes["games"].setChecked(True)
+    w._step(1)                                            # team.example
+    _to(wiz, localmesh_mod.LocalMeshReviewPage)
+    rec = SimpleNamespace(id="r", label="r", form={}, config=LocalMeshBootstrapConfig(
+        domains=({"name": "acme.example", "title": "Acme", "idp": "superdomain",
+                  "optional_services": ["phpbb"]},
+                 {"name": "zeta.example", "title": "Zeta", "idp": DOMAIN_IDP_OWN,
+                  "optional_services": []}),
+        own_idp_domains=("zeta.example",)).to_dict())
+    ctl._load_saved(rec)
+    assert ctl._domain_services_refusal() == ""
+    # Back into the stepper and forward again: its record must carry the LOADED rows
+    _back_to(wiz, localmesh_mod.LocalMeshDomainServicesPage)
+    _to(wiz, localmesh_mod.LocalMeshPage)
+    assert ctl._domain_services_refusal() == "", ctl._domain_services_refusal()
+    rows = {d["name"]: d for d in ctl.collect_bootstrap().domains}
+    assert set(rows) == {"acme.example", "zeta.example"}
+    assert rows["acme.example"]["optional_services"] == ["phpbb"]
+    assert ctl.collect_bootstrap().own_idp_domains == ("zeta.example",)
 
 
 # ── 6. what the rows turn into ─────────────────────────────────────────────────────

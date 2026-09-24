@@ -648,6 +648,17 @@ class DomainServicesWidget(QtWidgets.QWidget, DomainServicesBody):
         """Write the working selections and the reviewed marker onto ``cfg``."""
         self._record(cfg)
 
+    def reload(self, cfg) -> None:
+        """Drop every working answer and re-enter the walk from ``cfg``.
+
+        For a host that REPLACED the rows under the stepper (a saved-mesh record
+        applied to the form): ``load`` keeps the working copy while the config object
+        is the same, which is right for the Domains step's edits and wrong for a
+        wholesale replacement — the stale copy would be written back over the loaded
+        rows on the step's next record."""
+        self._cfg_seen = None
+        self.load(cfg)
+
 
 def pending_gate_domains(cfg) -> list[str]:
     """Thin re-export so a caller holding only this module can ask the gate's
