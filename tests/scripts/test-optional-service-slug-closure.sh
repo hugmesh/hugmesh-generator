@@ -62,9 +62,13 @@
 #   * character-forge carries configMapSelfHealProtected=false although apps/16 has
 #     carried /data/character-forge since aed812b9, so the admin surface raises a
 #     false selfHeal warning. Leg [java-selfheal-flag].
-# The fix is in hugmesh-admin-bff-api, NOT a weaker guard or allow_failure. Control
-# 20 stages exactly that landing and requires the whole gate to go GREEN, so the
-# guard is provably not always-red and the exit criterion is executable.
+# The fix is in hugmesh-admin-bff-api (#106), NOT a weaker guard or allow_failure.
+# Control 20 stages exactly that landing and requires the whole gate to go GREEN, so
+# the guard is provably not always-red and the exit criterion is executable. WHEN #106
+# LANDS: the live run goes green and control 20 passes on that alone; refresh the
+# fixture from the new controller file and P1's `entries=13 not_toggleable=4` pin with
+# it (P1 keeps passing on the OLD fixture, so nothing forces this — the fixture must
+# track the controller's shape, not its contents), and rewrite this paragraph.
 #
 # Negative controls: one per assertion family, each planted into a STAGED copy of the
 # current corpus so it cannot go stale; the vacuity controls (an empty derived list
@@ -213,6 +217,7 @@ if [ "${RC}" -eq 3 ]; then
   echo "   toggle is not run at all. Set SERVICE_SRC_ROOT (CI clones it; locally a"
   echo "   sibling checkout beside this repo is found automatically)."
   echo "   A green run without it would be a lie, so this is a FAIL."
+  [ "${FAILED}" -eq 0 ] || echo "== optional-service slug closure: FAIL (section P also failed — see above) =="
   exit 1
 fi
 [ "${RC}" -eq 0 ] || { echo "  FAIL the tree violates slug closure (rc=${RC}) — see the FAIL line(s) above"; FAILED=1; }
@@ -405,9 +410,6 @@ mutate "${D}" "src/hugmesh-admin-bff-api/${JAVA_REL}" \
   's = s.replace("NOT_TOGGLEABLE.put(\"headwind\"", "NOT_TOGGLEABLE.put(\"tube\", NotToggleable.NO_APPLICATIONSET_ELEMENT);\n        NOT_TOGGLEABLE.put(\"headwind\"", 1)' &&
 expect 1 "classifies \\['tube'\\] as NO_APPLICATIONSET_ELEMENT, but apps/13a HAS" \
   "a NO_APPLICATIONSET_ELEMENT reason for a slug with a 13a element is named as stale" -- "${D}"
-stage
-mutate "${D}" "src/hugmesh-admin-bff-api/${JAVA_REL}" \
-  's = s.replace("NOT_TOGGLEABLE.put(\"headwind\"", "NOT_TOGGLEABLE.put(\"tube\", NotToggleable.NO_APPLICATIONSET_ELEMENT);\n        NOT_TOGGLEABLE.put(\"headwind\"", 1)' &&
 expect 1 "both in ENTRIES and NOT_TOGGLEABLE: \\['tube'\\]" \
   "a slug in BOTH halves of the registry (refused by the admin surface, actuated by the reconciler)" -- "${D}"
 
@@ -447,9 +449,6 @@ mutate "${D}" "src/hugmesh-admin-bff-api/${JAVA_REL}" \
   's = s.replace("            new Entry(\"anubis\",", "            new Entry(\"tor\", \"hugmesh-backend\", null, \"Tor\", true),\n            new Entry(\"anubis\",", 1)' &&
 expect 1 "java-registry.*extra=\\['tor'\\]" \
   "tor as a Java managed entry is named by the registry-equality leg" -- "${D}"
-stage
-mutate "${D}" "src/hugmesh-admin-bff-api/${JAVA_REL}" \
-  's = s.replace("            new Entry(\"anubis\",", "            new Entry(\"tor\", \"hugmesh-backend\", null, \"Tor\", true),\n            new Entry(\"anubis\",", 1)' &&
 expect 1 "node-scope. catalogue scope:node slug.s. \\['tor'\\] appear in Java ENTRIES" \
   "tor as a Java managed entry trips the node-scope leg itself, not only set equality" -- "${D}"
 
@@ -526,14 +525,24 @@ echo "-- positive control: the guard is not always-red --"
 # character-forge's configMapSelfHealProtected becomes true (apps/16 carries its
 # pointer). The WHOLE gate must go green — this is what "done" looks like, and it
 # proves every other leg above is already satisfied by the live tree.
-stage
-mutate "${D}" "src/hugmesh-admin-bff-api/${JAVA_REL}" \
-  's = s.replace("            new Entry(\"anubis\",", "            new Entry(\"meshbridge\",       \"hugmesh-backend\",   null,\n                    \"Mesh radio bridge (Meshtastic \u2194 Matrix)\", true),\n            new Entry(\"anubis\",", 1).replace("        NOT_TOGGLEABLE.put(\"meshbridge\", NotToggleable.NOT_IN_CRD_ENUM);\n", "", 1).replace("\"Character Forge (3D)\", false)", "\"Character Forge (3D)\", true)", 1)' &&
-expect 0 'all [0-9]+ assertion' \
-  "with meshbridge managed + character-forge's selfHeal flag true the whole gate goes GREEN" -- "${D}"
-# The staged fix must have changed all three things, or the green above is not the fix.
-grep -a -c 'NOT_TOGGLEABLE.put("meshbridge"' "${D}/src/hugmesh-admin-bff-api/${JAVA_REL}" >/dev/null &&
-  { echo "  FAIL control 20 setup: the meshbridge NOT_TOGGLEABLE line survived"; FAILED=1; }
+# Once hugmesh-admin-bff-api#106 lands the LIVE tree is green, and planting meshbridge
+# again would plant a DUPLICATE (the [dupes] leg would fire and this control would go
+# red for the wrong reason — the trap the first version of this control fell into
+# when character-forge landed upstream). A green live run IS the exit criterion met.
+if [ "${RC}" -eq 0 ]; then
+  echo "  PASS the live tree is already GREEN — the exit criterion control 20 stages is met"
+else
+  stage
+  mutate "${D}" "src/hugmesh-admin-bff-api/${JAVA_REL}" \
+    's = s if "new Entry(\"meshbridge\"" in s else s.replace("            new Entry(\"anubis\",", "            new Entry(\"meshbridge\",       \"hugmesh-backend\",   null,\n                    \"Mesh radio bridge (Meshtastic \u2194 Matrix)\", true),\n            new Entry(\"anubis\",", 1); s = s.replace("        NOT_TOGGLEABLE.put(\"meshbridge\", NotToggleable.NOT_IN_CRD_ENUM);\n", "", 1).replace("\"Character Forge (3D)\", false)", "\"Character Forge (3D)\", true)", 1)' &&
+  expect 0 'all [0-9]+ assertion' \
+    "with meshbridge managed + character-forge's selfHeal flag true the whole gate goes GREEN" -- "${D}"
+  # Each part is idempotent, so a PARTIAL upstream fix (say meshbridge added, the flag
+  # not yet flipped) stages only what is still missing instead of planting a duplicate.
+  # The staged fix must have changed all three things, or the green above is not the fix.
+  grep -a -c 'NOT_TOGGLEABLE.put("meshbridge"' "${D}/src/hugmesh-admin-bff-api/${JAVA_REL}" >/dev/null &&
+    { echo "  FAIL control 20 setup: the meshbridge NOT_TOGGLEABLE line survived"; FAILED=1; }
+fi
 
 echo
 if [ "${FAILED}" -eq 0 ]; then
