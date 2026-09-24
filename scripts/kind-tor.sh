@@ -37,11 +37,13 @@
 #     while THIS tor (pidfile + /proc cmdline naming THIS torrc) is alive — a
 #     leftover hostname is exactly the stale-onion trap hugmesh-generator#581
 #     found on the compose lane.
-#   * It does not map the onion to a domain at the gateway. Today the gateway's
-#     DomainRegistry falls back to DEFAULT_DOMAIN for an unmapped Host, which is
-#     what makes this door serve the primary domain; hugmesh-gateway#38 makes an
-#     unmapped .onion fail CLOSED, and the day it merges the kind onion needs a
-#     host-map entry too (recorded on #577).
+#   * It does not map the onion to a domain at the gateway. hugmesh-gateway#38
+#     (PR #39) fails an unmapped .onion CLOSED only once onion tenancy is
+#     configured (APP_TENANCY_HOSTS_FILE set, or a literal onion in
+#     APP_TENANCY_HOSTS). kind sets neither, so the gateway's DomainRegistry still
+#     maps this onion to DEFAULT_DOMAIN, which is what makes this door serve the
+#     primary domain. The day hugmesh-generator#582's writer sets that file on kind,
+#     the kind onion needs an `<onion>=default` line too (recorded on #577).
 #
 # THE CERTIFICATE. The Ingress carries no TLS block on kind, so ingress-nginx
 # answers :443 with its own default certificate — not one for the onion. Tor
@@ -66,6 +68,7 @@
 #   KIND_TOR_SOCKS_PORT  default 9052 — NOT 9050, which a system tor or the compose
 #                        lane's tor client may hold; a busy port is refused, never shared
 #   KIND_TOR_WAIT        seconds `up` waits for the onion to answer (default 300)
+#   KIND_TOR_INGRESS_WAIT seconds `up` waits for the Ingress to list the onion (default 300)
 #   KIND_CLUSTER_NAME    default hugmesh-local; kubectl always runs with
 #                        --context kind-${KIND_CLUSTER_NAME}, so this can never patch
 #                        whatever cluster the current context happens to name
@@ -77,6 +80,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE_DIR="${KIND_TOR_STATE_DIR:-${REPO_ROOT}/tests/stack/.run/kind-tor}"
 SOCKS_PORT="${KIND_TOR_SOCKS_PORT:-9052}"
 WAIT_S="${KIND_TOR_WAIT:-300}"
+INGRESS_WAIT_S="${KIND_TOR_INGRESS_WAIT:-300}"
 CLUSTER_NAME="${KIND_CLUSTER_NAME:-hugmesh-local}"
 KCTX="kind-${CLUSTER_NAME}"
 ARGOCD_NS="${ARGOCD_NS:-devops}"
@@ -282,11 +286,14 @@ cmd_up() {
 
   patch_params "${onion}" add
   log "admitted ${onion} on the fe-gateway Ingress (helm parameter ingress.extraHosts[N]); waiting for ArgoCD to render it"
-  deadline=$(( $(date +%s) + 300 ))
+  # The door is probed only once the Ingress SERVES the rule: before that,
+  # ingress-nginx answers the onion Host from its default server (404), and any
+  # status line would read as "the door answered".
+  deadline=$(( $(date +%s) + INGRESS_WAIT_S ))
   until ingress_hosts | tr ' ' '\n' | grep -axF -- "${onion}" >/dev/null; do
     [ "$(date +%s)" -lt "${deadline}" ] \
-      || die "the Ingress ${GW_NS}/${GW_INGRESS} still does not list ${onion} after 300s — check 'kubectl --context ${KCTX} -n ${ARGOCD_NS} get application ${GW_APP}'"
-    sleep 5
+      || die "the Ingress ${GW_NS}/${GW_INGRESS} still does not list ${onion} after ${INGRESS_WAIT_S}s — check 'kubectl --context ${KCTX} -n ${ARGOCD_NS} get application ${GW_APP}'"
+    sleep "${KIND_TOR_POLL_S:-5}"
   done
   log "Ingress ${GW_NS}/${GW_INGRESS} admits ${onion}"
 
@@ -303,7 +310,7 @@ cmd_up() {
     fi
     [ "$(date +%s)" -lt "${deadline}" ] \
       || die "https://${onion}/ never answered over Tor within ${WAIT_S}s (tor log: ${TOR_LOG}); tor is left running — 'make kind-tor-down' stops it"
-    sleep 6
+    sleep "${KIND_TOR_POLL_S:-6}"
   done
   printf '%s\n' "${onion}" > "${STATE_DIR}/onion"
   cat <<EOF
@@ -345,12 +352,17 @@ cmd_down() {
 }
 
 cmd_status() {
-  local pid onion hosts rc=0
-  if pid="$(tor_pid)"; then echo "tor:     running (pid ${pid}), SOCKS 127.0.0.1:${SOCKS_PORT}"
+  local pid onion hosts port rc=0
+  if pid="$(tor_pid)"; then
+    port="$(live_socks_port || echo "${SOCKS_PORT}")"
+    echo "tor:     running (pid ${pid}), SOCKS 127.0.0.1:${port}"
   else echo "tor:     NOT running (no live pid in ${PIDFILE} naming ${TORRC})"; rc=1; fi
   if onion="$(current_onion)"; then echo "onion:   ${onion}"
   else echo "onion:   none minted in ${HS_DIR}"; rc=1; fi
-  if [ -n "${onion:-}" ] && command -v kubectl >/dev/null 2>&1; then
+  if [ -n "${onion:-}" ] && ! command -v kubectl >/dev/null 2>&1; then
+    echo "ingress: UNCHECKED — kubectl is not on PATH, so whether the Ingress admits the onion is unknown"
+    rc=1
+  elif [ -n "${onion:-}" ]; then
     hosts="$(ingress_hosts || true)"
     if printf '%s\n' ${hosts} | grep -axF -- "${onion}" >/dev/null; then
       echo "ingress: ${GW_NS}/${GW_INGRESS} admits the onion"

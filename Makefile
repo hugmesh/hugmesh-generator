@@ -1339,18 +1339,20 @@ kind-tor-status: ## is the kind lane's tor alive, and does the Ingress admit its
 
 # The @env:kind @via:onion scenario (tests/e2e/features/platform/tor-onion-kind.feature).
 # The onion is read from the LIVE tor (`kind-tor.sh onion` refuses a leftover
-# hostname) and becomes the @env:kind baseURL; SNAP_PROXY is that tor's SOCKS port.
-# The browser-side proxy plumbing (playwright.config.ts honouring SNAP_PROXY) is the
-# compose-lane Tor work, hugmesh-generator#576: until it lands the scenario FAILS
-# naming it, rather than reaching the plain kind door and passing.
+# hostname) and travels as SNAP_ONION_BASE_URL with SNAP_PROXY = that tor's SOCKS
+# port; the steps build their own proxied browser context from the two
+# (specs/helpers.ts onionContext, the compose lane's seam from #576). The @env:kind
+# baseURL stays the LOCAL kind door, because world.ts's availability probe is an
+# unproxied Node request that could never reach an onion. run.sh --via onion runs
+# ONLY @via:onion @env:kind scenarios and FAILS unless one passed and none skipped.
 kind-e2e-tor: ## run the @env:kind @via:onion e2e through the kind onion (needs kind-up + kind-tor)
 	@$(E2E_READY) || exit 2
 	@onion="$$(bash scripts/kind-tor.sh onion)" || exit 1; \
 	  bash scripts/kind-tor.sh status || exit 1; \
 	  socks="$$(bash scripts/kind-tor.sh socks)"; \
 	  echo "==> kind onion door: https://$${onion}/ via $${socks}"; \
-	  SNAP_KIND_ONION="$${onion}" SNAP_ENV_KIND_BASE_URL="https://$${onion}" SNAP_PROXY="$${socks}" \
-	    bash tests/e2e/run.sh --bdd --env kind --tags '@env:kind and @via:onion'
+	  SNAP_ONION_BASE_URL="https://$${onion}" SNAP_PROXY="$${socks}" \
+	    bash tests/e2e/run.sh --bdd --env kind --via onion
 
 kind-tor-check: ## offline: pin the kind onion door (torrc 443 -> 127.0.0.1:8443, the Ingress extraHost render, no sudo)
 	bash tests/scripts/test-kind-tor.sh

@@ -28,15 +28,18 @@ the GUI, the Makefile and the CLI do not also run.
 """
 from __future__ import annotations
 
-import shlex
-
 import os
+import shlex
 
 from ..core import e2e_catalogue
 from ..core import e2e_environments as env_mod
 
-#: The generator checkout this Studio runs from (studio/hugmesh_studio/tui -> ../../..).
-_GENERATOR_DIR = os.path.abspath(
+#: The checkout this package sits in (studio/hugmesh_studio/tui -> ../../..). ONLY a
+#: fallback for a caller that names none: the screen passes the journey's own
+#: ``generator_dir`` (the TUI's --generator-dir), exactly as the GUI e2e page reads
+#: its ``self.generator_dir`` — so an installed Studio pointed at a checkout judges
+#: THAT checkout's feature files, on both faces (decision 71).
+_PACKAGE_CHECKOUT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir))
 
 __all__ = ["E2EScreen", "DEVICE_LANE_KEY", "environment_lines", "plan_lines",
@@ -61,8 +64,11 @@ def environment_lines(default_id: str = "") -> list[str]:
     return out
 
 
-def plan_lines(env_id: str) -> list[str]:
+def plan_lines(env_id: str, generator_dir: str | None = None) -> list[str]:
     """One environment's whole story: what it is, the copy-ready run, how to start it.
+
+    ``generator_dir`` is the checkout whose lane doors are verified (the journey's
+    --generator-dir); omitted, the checkout this package sits in.
 
     The command is ``plan()``'s own argv and env, rendered — this module composes no
     command of its own, which is what keeps the printed hint and the GUI's spawn
@@ -82,7 +88,7 @@ def plan_lines(env_id: str) -> list[str]:
         "",
         f"START it (nothing here does): {plan.start_hint}",
     ]
-    doors = e2e_catalogue.lane_door_lines_for_lane(_GENERATOR_DIR, env_id)
+    doors = e2e_catalogue.lane_door_lines_for_lane(generator_dir or _PACKAGE_CHECKOUT, env_id)
     if doors:
         out += ["", "also on this environment (its own door, its own command):"]
         out += [f"  - {d}" for d in doors]
@@ -130,9 +136,9 @@ class E2EScreen:
         self._sub = "pick"
         self._env = ""
 
-    def lines(self, j) -> list[str]:  # noqa: ARG002 — screen-protocol signature
+    def lines(self, j) -> list[str]:
         if self._sub == "plan" and self._env:
-            return plan_lines(self._env) + \
+            return plan_lines(self._env, getattr(j, "generator_dir", None)) + \
                 ["", "(q = back to the environment list)"]
         out = [
             "Run the end-to-end suite against a mesh that is ALREADY RUNNING. "

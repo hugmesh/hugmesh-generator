@@ -34,7 +34,19 @@
 #      `down` stops it, keeps the keys and drops the parameter, and afterwards
 #      `onion`/`status` REFUSE the leftover hostname; `up` refuses a busy SOCKS port
 #      and a cluster that does not answer, without launching tor;
-#   I. the Makefile wiring and the @env:kind @via:onion feature exist and agree.
+#      `up` probes the door ONLY after the Ingress lists the onion, and declares
+#      the door UP only when the probe got a status line (a 000 dies naming the tor
+#      log); `status` names the RUNNING tor's port and refuses to vouch for the
+#      Ingress without kubectl; the state/data/hs dirs are 0700;
+#   I. the Makefile wiring and the @env:kind @via:onion feature exist and agree,
+#      and the feature's steps reach the mesh ONLY through the proxied onion
+#      context (no `page`/`context`/`request`/`baseURL` fixture, no unproxied
+#      request route) — the same static rule tor_flip_wiring.py T15 holds for the
+#      compose lane's onion steps;
+#   J. tests/e2e/run.sh --env kind --via onion (what `make kind-e2e-tor` runs)
+#      plans and EXECUTES the kind onion lane: onion + proxy from the live
+#      kind-tor.sh, the local kind door kept as the probe base, exactly the
+#      @via:onion @env:kind tags, and a run that skipped FAILS.
 #
 # Exit: 0 all pass, 1 any failure, 2 a required tool is missing (never a pass).
 set -uo pipefail
@@ -213,6 +225,13 @@ a["spec"]["source"]["helm"]["parameters"]=p["spec"]["source"]["helm"]["parameter
 json.dump(a,open(sys.argv[1],"w"))' "${KT_FIX}/app.json" ;;
   "annotate application") exit 0 ;;
   "get ingress")
+    # KT_INGRESS_LAG=N: the first N reads do not list the onion yet (ArgoCD has not
+    # rendered it); KT_INGRESS_NEVER=1: it never does.
+    n=0; [ -f "${KT_FIX}/ingress-reads" ] && n="$(cat "${KT_FIX}/ingress-reads")"
+    n=$((n+1)); echo "${n}" > "${KT_FIX}/ingress-reads"
+    if [ "${KT_INGRESS_NEVER:-0}" = 1 ] || [ "${n}" -le "${KT_INGRESS_LAG:-0}" ]; then
+      printf 'hugmesh.net *.hugmesh.net'; exit 0
+    fi
     # What ArgoCD would render: the committed hosts + every extraHosts parameter.
     python3 -c '
 import json,sys,yaml
@@ -241,7 +260,8 @@ EOF
 cat > "${STUB}/curl" <<'EOF'
 #!/usr/bin/env bash
 printf 'curl %s\n' "$*" >> "${KT_CALLS}"
-printf '308'
+# KT_CURL_CODE=000 is curl's "no answer" (the onion never came up over Tor).
+printf '%s' "${KT_CURL_CODE:-308}"
 EOF
 cat > "${STUB}/sudo" <<'EOF'
 #!/usr/bin/env bash
@@ -380,6 +400,10 @@ grep -a "^curl .*--socks5-hostname 127.0.0.1:${SP} .*https://${ONION_A}/" "${CAL
   && ok "the door is probed through the kind tor's own SOCKS port" || bad "no curl probe through 127.0.0.1:${SP} to https://<onion>/"
 o="$("${RUN[@]}" bash "${SCRIPT}" onion 2>/dev/null)"
 [ "${o}" = "${ONION_A}" ] && ok "onion prints the live onion" || bad "onion printed '${o}'"
+# The keys dir is what makes the address; tor itself refuses a group/world-readable
+# HiddenServiceDir, and the docs promise 0700. Checked on disk, not in the source.
+perms="$(stat -c '%a' "${ST}" "${ST}/data" "${ST}/hs" 2>/dev/null | tr '\n' ' ')"
+[ "${perms}" = "700 700 700 " ] && ok "state, data and hs dirs are 0700" || bad "state/data/hs modes are '${perms}', want 700 700 700"
 "${RUN[@]}" bash "${SCRIPT}" status >/dev/null 2>&1 && ok "status rc=0 while tor is alive and the Ingress admits the onion" || bad "status non-zero on a live door"
 # `make kind-up` re-run: bootstrap-kind.sh merge-patches the gateway's parameters
 # WHOLESALE, which drops the onion extraHost while tor keeps running. status must
@@ -395,6 +419,21 @@ OTHER="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); 
 s_live="$(env PATH="${SPATH}" KIND_TOR_STATE_DIR="${ST}" KIND_TOR_SOCKS_PORT="${OTHER}" bash "${SCRIPT}" socks 2>/dev/null)"
 [ "${s_live}" = "socks5://127.0.0.1:${SP}" ] && ok "socks names the RUNNING tor's port, not a changed KIND_TOR_SOCKS_PORT" \
   || bad "socks printed '${s_live}' while the live tor listens on ${SP}"
+st_live="$(env PATH="${SPATH}" KIND_TOR_STATE_DIR="${ST}" KIND_TOR_SOCKS_PORT="${OTHER}" bash "${SCRIPT}" status 2>/dev/null | head -1)"
+case "${st_live}" in
+  *"SOCKS 127.0.0.1:${SP}") ok "status names the RUNNING tor's port, not a changed KIND_TOR_SOCKS_PORT" ;;
+  *) bad "status printed '${st_live}' while the live tor listens on ${SP}" ;;
+esac
+# Without kubectl the Ingress half of `status` cannot be answered — it must say so
+# and fail, never report a live door it did not check. A PATH holding only what the
+# tor/onion half needs (no kubectl anywhere on it).
+NOKUBE="${WORK}/nokube"; mkdir -p "${NOKUBE}"
+for t in tr grep awk cat; do ln -sf "$(command -v "${t}")" "${NOKUBE}/${t}"; done
+env PATH="${NOKUBE}" KIND_TOR_STATE_DIR="${ST}" "$(command -v bash)" "${SCRIPT}" status > "${WORK}/status.nokube" 2>&1 \
+  && bad "status rc=0 with no kubectl on PATH (the Ingress was never checked)" \
+  || { grep -aq "UNCHECKED" "${WORK}/status.nokube" && grep -aq "running (pid" "${WORK}/status.nokube" \
+         && ok "status without kubectl fails, saying the Ingress is UNCHECKED" \
+         || bad "status without kubectl: $(tr '\n' ' ' < "${WORK}/status.nokube")"; }
 cp "${CALLS}" "${WORK}/calls.before-reuse"
 env PATH="${SPATH}" KIND_TOR_STATE_DIR="${ST}" KIND_TOR_SOCKS_PORT="${OTHER}" KIND_TOR_WAIT=5 TOR_BIN="${STUB}/tor" \
   bash "${SCRIPT}" up > "${WORK}/up-other.out" 2>&1; reap_stubs
@@ -431,6 +470,37 @@ echo "$$" > "${ST}/tor.pid"
   || ok "onion refuses a pidfile whose live process does not run this torrc"
 rm -f "${ST}/tor.pid"
 
+# THE TWO READINESS GATES OF `up`. (1) The door is probed only after the Ingress
+# SERVES the onion rule — before that ingress-nginx answers the onion Host from
+# its default server, and a 404 would read as "the door answered". (2) Only a
+# status line counts as an answer; curl's 000 means the onion never came up.
+ST2="${WORK}/state-lag"; : > "${CALLS}"; rm -f "${FIX}/ingress-reads"; cp "${FIX}/app.orig.json" "${FIX}/app.json"
+env PATH="${SPATH}" KT_INGRESS_LAG=2 KIND_TOR_POLL_S=0 KIND_TOR_STATE_DIR="${ST2}" KIND_TOR_SOCKS_PORT="${SP}" \
+  KIND_TOR_WAIT=5 TOR_BIN="${STUB}/tor" bash "${SCRIPT}" up > "${WORK}/up-lag.out" 2>&1; lrc=$?; reap_stubs
+first_curl="$(grep -an '^curl ' "${CALLS}" | head -1 | cut -d: -f1)"
+reads_before="$(head -n "$(( ${first_curl:-1} - 1 ))" "${CALLS}" | grep -ac 'get ingress')"
+[ "${lrc}" = 0 ] && [ -n "${first_curl}" ] && [ "${reads_before}" -ge 3 ] \
+  && ok "up waits for the Ingress to list the onion before probing it (${reads_before} Ingress reads, 2 without it, then the probe)" \
+  || bad "Ingress lag: rc=${lrc}, ${reads_before} Ingress reads before the first curl (line ${first_curl:-none}); want >=3"
+env PATH="${SPATH}" KIND_TOR_STATE_DIR="${ST2}" bash "${SCRIPT}" down >/dev/null 2>&1
+ST3="${WORK}/state-never"; : > "${CALLS}"; rm -f "${FIX}/ingress-reads"; cp "${FIX}/app.orig.json" "${FIX}/app.json"
+env PATH="${SPATH}" KT_INGRESS_NEVER=1 KIND_TOR_INGRESS_WAIT=1 KIND_TOR_POLL_S=0 KIND_TOR_STATE_DIR="${ST3}" \
+  KIND_TOR_SOCKS_PORT="${SP}" KIND_TOR_WAIT=5 TOR_BIN="${STUB}/tor" bash "${SCRIPT}" up > "${WORK}/up-never.out" 2>&1; vrc=$?; reap_stubs
+[ "${vrc}" != 0 ] && grep -aq "still does not list" "${WORK}/up-never.out" && ! grep -a '^curl ' "${CALLS}" >/dev/null \
+  && ! grep -aq "is UP" "${WORK}/up-never.out" \
+  && ok "up dies naming the Ingress when it never lists the onion, and never probes" \
+  || bad "Ingress never admits: rc=${vrc}, curl calls $(grep -ac '^curl ' "${CALLS}"), out: $(tail -c 200 "${WORK}/up-never.out")"
+env PATH="${SPATH}" KIND_TOR_STATE_DIR="${ST3}" bash "${SCRIPT}" down >/dev/null 2>&1
+ST4="${WORK}/state-000"; : > "${CALLS}"; rm -f "${FIX}/ingress-reads"; cp "${FIX}/app.orig.json" "${FIX}/app.json"
+env PATH="${SPATH}" KT_CURL_CODE=000 KIND_TOR_POLL_S=0 KIND_TOR_STATE_DIR="${ST4}" KIND_TOR_SOCKS_PORT="${SP}" \
+  KIND_TOR_WAIT=1 TOR_BIN="${STUB}/tor" bash "${SCRIPT}" up > "${WORK}/up-000.out" 2>&1; zrc=$?; reap_stubs
+[ "${zrc}" != 0 ] && grep -aqF "${ST4}/tor.log" "${WORK}/up-000.out" && ! grep -aq "is UP" "${WORK}/up-000.out" \
+  && [ ! -e "${ST4}/onion" ] && grep -a '^curl ' "${CALLS}" >/dev/null \
+  && ok "up dies naming the tor log when the onion never answers (curl 000), and never declares the door UP" \
+  || bad "onion never answers: rc=${zrc}, onion file $( [ -e "${ST4}/onion" ] && echo written || echo absent), out: $(tail -c 200 "${WORK}/up-000.out")"
+env PATH="${SPATH}" KIND_TOR_STATE_DIR="${ST4}" bash "${SCRIPT}" down >/dev/null 2>&1
+rm -f "${FIX}/ingress-reads"; cp "${FIX}/app.orig.json" "${FIX}/app.json"
+
 # Refusals that must happen BEFORE tor is launched.
 : > "${CALLS}"
 python3 -c '
@@ -452,26 +522,154 @@ env PATH="${SPATH}" KT_CLUSTER_UP=0 KIND_TOR_STATE_DIR="${WORK}/state-down" KIND
   || bad "no-cluster: rc=${nrc}, tor calls $(grep -ac '^tor' "${CALLS}"), out: $(tail -c 200 "${WORK}/nocluster.out")"
 
 echo "== I. Makefile + feature wiring =="
-MK="$(make -s -C "${REPO}" -n kind-tor kind-tor-down kind-e2e-tor 2>/dev/null)"
+MK="$(make -s -C "${REPO}" -n kind-tor kind-tor-down kind-tor-status kind-e2e-tor 2>/dev/null)"
 printf '%s\n' "${MK}" | grep -axF 'bash scripts/kind-tor.sh up' >/dev/null && ok "make kind-tor runs 'kind-tor.sh up'" || bad "make kind-tor does not run 'bash scripts/kind-tor.sh up'"
 printf '%s\n' "${MK}" | grep -axF 'bash scripts/kind-tor.sh down' >/dev/null && ok "make kind-tor-down runs 'kind-tor.sh down'" || bad "make kind-tor-down does not run 'bash scripts/kind-tor.sh down'"
-for needle in 'kind-tor.sh onion' 'SNAP_ENV_KIND_BASE_URL="https://${onion}"' 'SNAP_KIND_ONION="${onion}"' 'SNAP_PROXY="${socks}"' "--env kind --tags '@env:kind and @via:onion'"; do
+printf '%s\n' "${MK}" | grep -axF 'bash scripts/kind-tor.sh status' >/dev/null && ok "make kind-tor-status runs 'kind-tor.sh status'" || bad "make kind-tor-status does not run 'bash scripts/kind-tor.sh status'"
+for needle in 'onion="$(bash scripts/kind-tor.sh onion)" || exit 1;' 'bash scripts/kind-tor.sh status || exit 1;' 'SNAP_ONION_BASE_URL="https://${onion}"' 'SNAP_PROXY="${socks}"' 'bash tests/e2e/run.sh --bdd --env kind --via onion'; do
   printf '%s\n' "${MK}" | grep -aF -- "${needle}" >/dev/null && ok "make kind-e2e-tor carries: ${needle}" || bad "make kind-e2e-tor lacks: ${needle}"
 done
+# NEGATIVE: the @env:kind baseURL must stay the LOCAL kind door. world.ts's
+# availability probe is an unproxied Node request; pointed at the onion it can
+# never answer and the scenario would SKIP against a running cluster.
+if printf '%s\n' "${MK}" | grep -aF 'SNAP_ENV_KIND_BASE_URL' >/dev/null || printf '%s\n' "${MK}" | grep -aE 'SNAP_BASE_URL=[^ ]*onion' >/dev/null; then
+  bad "make kind-e2e-tor points the @env:kind baseURL at the onion (the availability probe cannot reach it)"
+else
+  ok "make kind-e2e-tor leaves the @env:kind baseURL at the local kind door"
+fi
 if [ -r "${FEATURE}" ]; then
   tags="$(grep -aE '^[[:space:]]*@' "${FEATURE}" | tr '\n' ' ')"
   for t in '@env:kind' '@via:onion' '@issue:generator-577'; do
     printf '%s' "${tags}" | grep -aF -- "${t}" >/dev/null && ok "feature tagged ${t}" || bad "feature lacks ${t}"
   done
-  grep -aF "Given the front door under test is the kind lane's live onion" "${FEATURE}" >/dev/null \
-    && grep -aF "Given('the front door under test is the kind lane\\'s live onion'" "${STEPS}" >/dev/null \
-    && ok "the feature's first step is defined in steps/kind-onion.steps.ts" \
-    || bad "the onion guard step is missing from the feature or from steps/kind-onion.steps.ts"
-  grep -aF "every request this scenario made went to the onion host" "${FEATURE}" >/dev/null \
+  grep -aF "every request the kind onion browser made stayed on the onion" "${FEATURE}" >/dev/null \
     && ok "the feature asserts no request left the onion" || bad "the feature lost the no-leak assertion"
+  # EVERY step of the scenario must be defined in kind-onion.steps.ts, and that file
+  # must reach the mesh only through onionContext(): a shared step, or a step that
+  # takes the `page`/`context`/`request`/`baseURL` fixture, drives the UNPROXIED
+  # local kind door and would pass without Tor.
+  kv="$(python3 - "${FEATURE}" "${REPO}/tests/e2e/steps" "${STEPS}" <<'KV'
+import os, re, sys
+feature, steps_dir, mine = sys.argv[1], sys.argv[2], sys.argv[3]
+STEP_KW = re.compile(r"^\s*(Given|When|Then|And|But)\s+(.+?)\s*$")
+used = [m.group(2) for m in map(STEP_KW.match, open(feature, encoding="utf-8").read().splitlines()) if m]
+DEF_RE = re.compile(r"\b(?:Given|When|Then)\(\s*'((?:[^'\\]|\\.)*)'")
+defs = {}
+for fn in sorted(os.listdir(steps_dir)):
+    if fn.endswith(".ts"):
+        for m in DEF_RE.finditer(open(os.path.join(steps_dir, fn), encoding="utf-8").read()):
+            defs.setdefault(m.group(1).replace("\\'", "'"), []).append(fn)
+problems = []
+if len(used) < 6:
+    problems.append("the scenario has only %d steps" % len(used))
+for st in used:
+    where = defs.get(st)
+    if where != [os.path.basename(mine)]:
+        problems.append("step %r is defined in %r, not (only) in %s" % (st, where, os.path.basename(mine)))
+code = re.sub(r"//[^\n]*", "", open(mine, encoding="utf-8").read())
+for token in ("apiContext(", "request.newContext(", "request.get(", "request.post(", "chromium.launch("):
+    if token in code:
+        problems.append("%s calls %s — an unproxied route to the mesh" % (os.path.basename(mine), token))
+if code.count("newContext(") and "onionContext(" not in code:
+    problems.append("a context is built without onionContext()")
+for need in ("onionFrontDoor()", "onionContext(browser, door"):
+    if need not in code:
+        problems.append("%s never calls %s" % (os.path.basename(mine), need))
+# A Tor-sized budget: the config's 90 s cannot hold a cold descriptor plus the
+# sign-in chain over circuits (the compose lane's steps use the same 10 min).
+bm = re.search(r"const SCENARIO_BUDGET_MS = ([0-9_ *]+);", code)
+budget = eval(bm.group(1).replace("_", "")) if bm else 0
+if budget < 5 * 60_000 or "$testInfo.setTimeout(SCENARIO_BUDGET_MS)" not in code:
+    problems.append("the scenario has no Tor-sized budget (SCENARIO_BUDGET_MS=%s, setTimeout %s)"
+                    % (budget, "$testInfo.setTimeout(SCENARIO_BUDGET_MS)" in code))
+FIXTURE_RE = re.compile(r"\b(?:Given|When|Then)\(\s*'(?:[^'\\]|\\.)*'\s*,\s*async\s*\(\s*\{([^}]*)\}")
+n = 0
+for m in FIXTURE_RE.finditer(code):
+    n += 1
+    names = {x.strip().split(":")[0].strip() for x in m.group(1).split(",")}
+    leaked = sorted(names & {"page", "context", "request", "baseURL"})
+    if leaked:
+        problems.append("a step takes the unproxied fixture(s) %s" % ",".join(leaked))
+if n < len(set(used)):
+    problems.append("only %d step definitions parsed for %d steps" % (n, len(set(used))))
+print("OK" if not problems else "; ".join(problems))
+KV
+)"
+  [ "${kv}" = OK ] && ok "every scenario step is kind-onion.steps.ts's own, and it reaches the mesh only via onionContext()" || bad "${kv}"
 else
   bad "missing ${FEATURE}"
 fi
+
+echo "== J. run.sh --env kind --via onion (what make kind-e2e-tor runs) =="
+RUNSH="${REPO}/tests/e2e/run.sh"
+JB="${WORK}/j-bin"; mkdir -p "${JB}"
+printf '#!/bin/sh\ncat\n' > "${JB}/node"            # print-plan.mjs -> the plan lines verbatim
+printf '#!/bin/sh\nexit 1\n' > "${JB}/docker"        # no bundled-browser image
+cat > "${JB}/npx" <<'NPX'
+#!/bin/sh
+echo "ARGV $*" >> "$KT_NPX_LOG"
+case "$*" in
+  *"playwright test"*)
+    {
+      echo "ENV SNAP_ONION_BASE_URL=${SNAP_ONION_BASE_URL-<unset>}"
+      echo "ENV SNAP_PROXY=${SNAP_PROXY-<unset>}"
+      echo "ENV SNAP_BASE_URL=${SNAP_BASE_URL-<unset>}"
+      echo "ENV SNAP_ENV=${SNAP_ENV-<unset>}"
+    } >> "$KT_NPX_LOG"
+    if [ -n "${KT_SUMMARY:-}" ]; then printf '%s' "$KT_SUMMARY" > "$SNAP_REPORT_DIR/summary.json"; fi
+    exit 0 ;;
+esac
+exit 0
+NPX
+chmod +x "${JB}"/*
+plan_of() { # <label> <env assignments...> -- prints TAB plan lines of --print-command
+  env -u SNAP_ONION_BASE_URL -u SNAP_PROXY -u SNAP_ENV_KIND_BASE_URL -u SNAP_BASE_URL -u SNAP_HOST_RESOLVER -u E2E_VIA \
+    PATH="${JB}:${SPATH}" E2E_PASSWORD=x "$@" bash "${RUNSH}" --env kind --via onion --print-command 2>&1
+}
+field() { printf '%s\n' "$1" | awk -F'\t' -v k="$2" '$1==k{print $2; exit}'; }
+# (1) explicit onion + proxy, the way the Makefile passes them
+P1="$(plan_of SNAP_ONION_BASE_URL="https://${ONION_A}" SNAP_PROXY="socks5://127.0.0.1:${SP}")"
+[ "$(field "${P1}" ENV_ID)" = kind ] && ok "--env kind --via onion plans the kind environment" || bad "ENV_ID='$(field "${P1}" ENV_ID)': $(printf '%s' "${P1}" | tail -c 200)"
+[ "$(field "${P1}" TAGS)" = '@via:onion and @env:kind' ] && ok "it runs exactly '@via:onion and @env:kind'" || bad "tags '$(field "${P1}" TAGS)'"
+[ "$(field "${P1}" BASE_URL)" = 'https://hugmesh.net:8443' ] && ok "SNAP_BASE_URL stays the LOCAL kind door (the unproxied probe's target)" || bad "BASE_URL '$(field "${P1}" BASE_URL)'"
+[ "$(field "${P1}" ONION_BASE_URL)" = "https://${ONION_A}" ] && [ "$(field "${P1}" PROXY)" = "socks5://127.0.0.1:${SP}" ] \
+  && ok "the onion and the proxy reach the plan" || bad "onion '$(field "${P1}" ONION_BASE_URL)' proxy '$(field "${P1}" PROXY)'"
+[ -n "$(field "${P1}" HOST_RESOLVER)" ] && ok "SNAP_HOST_RESOLVER is set (world.ts skips @env:kind browser scenarios without it)" || bad "no HOST_RESOLVER in the kind onion plan"
+# (2) nothing passed in: the onion and the port come from the LIVE kind tor
+ST5="${WORK}/state-j"; : > "${CALLS}"; rm -f "${FIX}/ingress-reads"; cp "${FIX}/app.orig.json" "${FIX}/app.json"
+env PATH="${SPATH}" KIND_TOR_STATE_DIR="${ST5}" KIND_TOR_SOCKS_PORT="${SP}" KIND_TOR_WAIT=5 KIND_TOR_POLL_S=0 TOR_BIN="${STUB}/tor" \
+  bash "${SCRIPT}" up > "${WORK}/up-j.out" 2>&1; reap_stubs
+P2="$(plan_of KIND_TOR_STATE_DIR="${ST5}" KIND_TOR_SOCKS_PORT="${OTHER}")"
+[ "$(field "${P2}" ONION_BASE_URL)" = "https://${ONION_A}" ] && [ "$(field "${P2}" PROXY)" = "socks5://127.0.0.1:${SP}" ] \
+  && ok "with nothing passed in, run.sh reads the onion and the RUNNING tor's port from kind-tor.sh" \
+  || bad "live read: onion '$(field "${P2}" ONION_BASE_URL)' proxy '$(field "${P2}" PROXY)'"
+env PATH="${SPATH}" KIND_TOR_STATE_DIR="${ST5}" bash "${SCRIPT}" down >/dev/null 2>&1
+P3="$(plan_of KIND_TOR_STATE_DIR="${ST5}")"
+[ -z "$(field "${P3}" ONION_BASE_URL)" ] && printf '%s' "$(field "${P3}" ONION_NOTE)" | grep -aF 'make kind-tor' >/dev/null \
+  && ok "with the kind tor stopped, the leftover hostname is NOT used and the note names make kind-tor" \
+  || bad "stopped tor: onion '$(field "${P3}" ONION_BASE_URL)' note '$(field "${P3}" ONION_NOTE)'"
+# (3) EXECUTED against a stub npx: the env reaches playwright, and a skip FAILS
+KT_NPX_LOG="${WORK}/npx.log"; JREP="${WORK}/j-report"; mkdir -p "${JREP}"
+run_j() { # <summary-json>
+  rm -f "${KT_NPX_LOG}" "${JREP}/summary.json"
+  env -u SNAP_ENV_KIND_BASE_URL -u SNAP_BASE_URL -u E2E_VIA PATH="${JB}:${SPATH}" E2E_PASSWORD=x KT_NPX_LOG="${KT_NPX_LOG}" \
+    SNAP_REPORT_DIR="${JREP}" SNAP_EVIDENCE_SUMMARY=0 KT_SUMMARY="$1" \
+    SNAP_ONION_BASE_URL="https://${ONION_A}" SNAP_PROXY="socks5://127.0.0.1:${SP}" \
+    bash "${RUNSH}" --bdd --env kind --via onion > "${WORK}/j-run.out" 2>&1
+}
+run_j '{"testTotals":{"passed":1,"failed":0,"skipped":0,"total":1},"tests":[]}'; jrc=$?
+[ "${jrc}" = 0 ] && ok "an executed kind onion run whose scenario PASSED exits 0" || bad "passed run rc=${jrc}: $(tail -c 300 "${WORK}/j-run.out")"
+grep -axF "ENV SNAP_ONION_BASE_URL=https://${ONION_A}" "${KT_NPX_LOG}" >/dev/null && grep -axF "ENV SNAP_PROXY=socks5://127.0.0.1:${SP}" "${KT_NPX_LOG}" >/dev/null \
+  && grep -axF "ENV SNAP_BASE_URL=https://hugmesh.net:8443" "${KT_NPX_LOG}" >/dev/null && grep -axF "ENV SNAP_ENV=kind" "${KT_NPX_LOG}" >/dev/null \
+  && ok "playwright's environment carries the onion, the proxy, the local kind door and SNAP_ENV=kind" \
+  || bad "playwright env: $(grep -a '^ENV' "${KT_NPX_LOG}" 2>/dev/null | tr '\n' ' ')"
+grep -axF "ARGV bddgen test --tags @via:onion and @env:kind" "${KT_NPX_LOG}" >/dev/null \
+  && ok "bddgen generated exactly the @via:onion @env:kind scenarios" || bad "bddgen argv: $(grep -a 'bddgen' "${KT_NPX_LOG}" | tr '\n' ' ')"
+run_j '{"testTotals":{"passed":0,"failed":0,"skipped":1,"total":1},"tests":[{"status":"skipped","skipReason":"KT-SKIP"}]}'; jrc=$?
+[ "${jrc}" != 0 ] && grep -aq "KT-SKIP" "${WORK}/j-run.out" \
+  && ok "a kind onion run that only SKIPPED fails, naming the skip reason" || bad "skipped run rc=${jrc}: $(tail -c 300 "${WORK}/j-run.out")"
+env PATH="${JB}:${SPATH}" E2E_PASSWORD=x bash "${RUNSH}" --env qemu --via onion --print-command > "${WORK}/j-qemu.out" 2>&1 \
+  && bad "--env qemu --via onion was accepted (qemu has no Tor front door)" || ok "--env qemu --via onion is refused"
 
 echo "== kind onion door: ${pass} passed, ${fail} failed =="
 [ "${fail}" -eq 0 ]

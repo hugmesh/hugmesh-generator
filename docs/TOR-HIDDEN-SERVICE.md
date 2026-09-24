@@ -258,10 +258,13 @@ default certificate, not one for the onion. Tor Browser shows a certificate warn
 `https://<onion>/`; the e2e run uses `ignoreHTTPSErrors`. The onion address itself
 authenticates the service, so this is a warning about the name, not about the channel.
 
-**Which domain answers.** The gateway maps an unmapped `Host` to its default domain
-today (`DomainRegistry.domainForHost`), which is why the kind onion serves the primary
-domain. hugmesh-gateway#38 makes an unmapped `.onion` fail CLOSED; once it merges, the
-kind onion needs a host-map entry as well.
+**Which domain answers.** hugmesh-gateway#38 (PR #39, merged) makes an unmapped `.onion`
+fail CLOSED, but only once onion tenancy is configured: `APP_TENANCY_HOSTS_FILE` is set, or
+`APP_TENANCY_HOSTS` maps a named onion. The kind lane sets neither, so the gateway still
+maps the kind onion to its default domain (`DomainRegistry.domainForHost`), and that is why
+it serves the primary domain. When hugmesh-generator#582's host-map writer sets that file
+on kind, the kind onion needs its own `<onion>=default` line, or every request to it gets
+a 403.
 
 ```bash
 make kind-up && make kind-images   # the kind lane itself (unchanged)
@@ -272,10 +275,20 @@ make kind-tor-down                 # stop tor, drop the Ingress rule (keys kept)
 make kind-tor-check                # OFFLINE guard: tests/scripts/test-kind-tor.sh
 ```
 
-`make kind-e2e-tor` signs a persona in through the onion and fails on any request that
-left for a host other than the onion. It needs the browser routed through `SNAP_PROXY`,
-which is the compose-lane Tor work's `playwright.config.ts` plumbing (hugmesh-generator#576);
-until that lands the scenario FAILS naming it rather than reaching the plain kind door.
+`make kind-e2e-tor` is `tests/e2e/run.sh --bdd --env kind --via onion`. It reads the onion
+and the SOCKS port from the LIVE kind tor (`kind-tor.sh onion` / `socks`) and exports them
+as `SNAP_ONION_BASE_URL` and `SNAP_PROXY`. It runs ONLY `@via:onion and @env:kind`
+scenarios, and it FAILS unless at least one passed and none skipped. The steps
+(`tests/e2e/steps/kind-onion.steps.ts`) build their own proxied browser context with
+`onionContext()` from `specs/helpers.ts`, the same seam the compose lane's onion scenario
+uses, and never touch the unproxied `page` fixture. They check that `http://<onion>/`
+redirects to `https://<onion>/`, sign a persona in, read `/bff/session` over the onion,
+and fail on any request, in the page listener or in the HAR, that went to a host other
+than the onion. The `@env:kind` base URL stays the local kind door
+(`https://hugmesh.net:8443`), because the availability probe in `world.ts` is an
+unproxied Node request and could never reach an onion. The scenario has a 10-minute
+budget, with up to 12 retries for first contact, because a cold onion descriptor took
+118 s to publish on this host.
 
 ## Related
 

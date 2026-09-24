@@ -1,9 +1,10 @@
 """The e2e catalogue's per-lane door rows (hugmesh-generator#577, decision 67 = B).
 
-`tor` has no compose-lane SPEC, so service_coverage() rightly reports it uncovered.
-Its kind-lane door (`make kind-tor`) is driven by a Gherkin feature instead, and the
-catalogue says so next to the row — but only while that feature really exists and
-still carries the tags `make kind-e2e-tor` selects on. These tests pin both halves.
+`tor`'s kind-lane door (`make kind-tor`) is driven by a Gherkin feature, which is not
+a compose-lane SPEC and so never changes service_coverage()'s verdict (tor is covered
+there since #576's onion helpers landed). The catalogue states the door — but only
+while that feature really exists and still carries the tags `make kind-e2e-tor`
+selects on (through tests/e2e/run.sh --env kind --via onion). These tests pin both.
 """
 import os
 import re
@@ -30,7 +31,8 @@ def test_the_real_checkout_reports_the_kind_onion_door_as_driven():
 
 def test_the_door_does_not_flip_the_compose_coverage_verdict():
     # A .feature is not a compose spec; tor's service_coverage verdict belongs to the
-    # compose lane and must not be changed by the kind door existing.
+    # compose lane (covered today by specs/helpers.ts) and the kind feature is never
+    # one of the files that verdict counts.
     cov = {c.slug: c for c in ec.service_coverage(GENERATOR_DIR)}
     assert all("tor-onion-kind" not in f for f in cov["tor"].spec_files)
 
@@ -70,24 +72,49 @@ def test_every_make_target_a_door_names_exists():
 
 
 def test_the_door_tags_are_what_the_make_target_selects_on():
+    # kind-e2e-tor runs `tests/e2e/run.sh --env kind --via onion`, and run.sh's kind
+    # onion branch is what spells the bddgen tag expression: both are read here.
     door = _tor_kind_door()
     with open(os.path.join(GENERATOR_DIR, "Makefile"), encoding="utf-8") as fh:
         mk = fh.read()
     m = re.search(r"^kind-e2e-tor:.*?(?=^\S)", mk, re.MULTILINE | re.DOTALL)
     assert m, "no kind-e2e-tor recipe"
-    expr = " and ".join(door.tags)
-    assert f"--tags '{expr}'" in m.group(0), m.group(0)
+    assert "tests/e2e/run.sh --bdd --env kind --via onion" in m.group(0), m.group(0)
+    with open(os.path.join(GENERATOR_DIR, "tests", "e2e", "run.sh"), encoding="utf-8") as fh:
+        runsh = fh.read()
+    t = re.search(r"^\s*if \[ -z \"\$\{TAGS\}\" \]; then TAGS='([^']*@env:kind[^']*)'", runsh, re.MULTILINE)
+    assert t, "run.sh has no kind onion tag expression"
+    assert set(t.group(1).split(" and ")) == set(door.tags), t.group(1)
 
 
 # ── both faces tell the kind plan the same thing (decision 71: TUI parity) ────────
 def test_the_tui_kind_plan_names_the_onion_door_and_the_others_do_not():
     from hugmesh_studio.tui import e2e as tui_e2e
-    kind = "\n".join(tui_e2e.plan_lines("kind"))
+    kind = "\n".join(tui_e2e.plan_lines("kind", GENERATOR_DIR))
     want = ec.lane_door_lines_for_lane(GENERATOR_DIR, "kind")
     assert want and all(w in kind for w in want), kind
     assert "make kind-tor" in kind and "tor-onion-kind.feature" in kind
     for other in ("docker", "qemu"):
-        assert "make kind-tor" not in "\n".join(tui_e2e.plan_lines(other))
+        assert "make kind-tor" not in "\n".join(tui_e2e.plan_lines(other, GENERATOR_DIR))
+
+
+def test_the_tui_judges_the_checkout_it_was_pointed_at(tmp_path):
+    """--generator-dir parity (decision 71): the GUI verifies the door against its
+    wizard's generator_dir; the TUI must use the journey's, not the checkout the
+    package happens to sit in. A checkout WITHOUT the feature says MISSING, the real
+    one says 'drives' — through the screen, exactly as a user reaches it."""
+    from hugmesh_studio.tui import e2e as tui_e2e
+
+    class _J:
+        generator_dir = str(tmp_path)
+
+    scr = tui_e2e.E2EScreen()
+    scr._sub, scr._env = "plan", "kind"
+    empty = "\n".join(scr.lines(_J()))
+    assert "MISSING" in empty and "drives this service" not in empty, empty
+    _J.generator_dir = GENERATOR_DIR
+    real = "\n".join(scr.lines(_J()))
+    assert "tor-onion-kind.feature drives this service" in real, real
 
 
 def test_the_gui_e2e_page_says_the_same_as_the_tui(monkeypatch):

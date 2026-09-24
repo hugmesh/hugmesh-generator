@@ -927,13 +927,16 @@ def uncovered_services(coverage: Sequence[ServiceCoverage]) -> tuple[ServiceCove
 #
 # service_coverage() reads tests/e2e/specs/*.ts, the compose lane's specs, and is
 # right to: a Gherkin .feature is not a spec file and must not flip that verdict.
-# But "NO COVERAGE" on its own would say something false about a service that DOES
-# have a driven scenario on another lane. `tor` is the case today: the kind lane
-# publishes its front door as a v3 onion (`make kind-tor`, hugmesh-generator#577,
-# decision 67 = B) and features/platform/tor-onion-kind.feature drives a persona
-# through it. A LaneDoor is that fact, stated next to the row, CHECKED against the
-# tree — a door whose feature file is gone, or lost the tags that select it, says
-# so instead of vouching for a scenario that no longer exists.
+# A service can ALSO have a door on another lane that the compose verdict never
+# mentions. `tor` is the case: the kind lane publishes its front door as a v3 onion
+# (`make kind-tor`, hugmesh-generator#577, decision 67 = B) and
+# features/platform/tor-onion-kind.feature drives a persona through it. That is
+# true whether or not tor is covered on the compose lane (it became covered when
+# #576's onion helpers landed), so the e2e tree lists every LaneDoor in its OWN
+# group, independent of the coverage verdict, and repeats the line under the
+# service's NO COVERAGE / unreachable row when it has one. Each line is CHECKED
+# against the tree — a door whose feature file is gone, or lost the tags that
+# select it, says so instead of vouching for a scenario that no longer exists.
 
 @dataclass(frozen=True)
 class LaneDoor:
@@ -985,8 +988,9 @@ def _door_line(generator_dir: str, door: LaneDoor) -> str:
                 f"`{door.run}` selects nothing — nothing drives this door.")
     return (f"{door.lane}: {name} drives this service through the "
             f"{door.lane} lane's own door. Bring it up with "
-            f"`{door.bring_up}`, run it with `{door.run}`. It is a "
-            f".feature, so it does not count as a compose-lane spec above.")
+            f"`{door.bring_up}`, run it with `{door.run}` — only that live run "
+            f"proves the door. It is a .feature, so it is not counted in the "
+            f"compose-lane spec coverage.")
 
 
 def lane_door_lines(generator_dir: str, slug: str) -> tuple[str, ...]:

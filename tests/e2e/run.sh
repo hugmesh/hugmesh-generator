@@ -104,6 +104,13 @@ Front door (how the browser reaches the mesh)
                            proxy:  SNAP_PROXY, else
                                    socks5://127.0.0.1:${TOR_SOCKS_HOST_PORT:-9050}
                            (E2E_VIA=onion is the same switch)
+  --via onion --env kind   the KIND lane's .onion (make kind-tor, #577), THROUGH
+                           the host tor scripts/kind-tor.sh runs. Runs ONLY the
+                           @via:onion @env:kind scenarios.
+                             start: make kind-up && make kind-images && make kind-tor
+                           onion:  SNAP_ONION_BASE_URL, else `scripts/kind-tor.sh
+                                   onion` (which refuses a leftover hostname)
+                           proxy:  SNAP_PROXY, else `scripts/kind-tor.sh socks`
 
 Modes
   --gen                    compile the features and stop
@@ -211,6 +218,13 @@ done
 #    stack's onion: the kind lane's own @via:onion scenario (#577, @env:kind)
 #    would only skip here, and a skip fails this lane (see the summary check
 #    below). Both tags are AND-ed onto any --tags given.
+#  * `--env kind` selects the KIND lane's onion instead (#577, `make kind-tor`):
+#    a HOST tor (scripts/kind-tor.sh) fronting the kind node, the @via:onion
+#    @env:kind scenario, and SNAP_BASE_URL left at the kind lane's LOCAL door for
+#    the same probe reason as above. The onion and the proxy come from
+#    kind-tor.sh itself, which answers only while its tor is alive, so there is
+#    no hostname file here to go stale. Every other rule — https only, the
+#    summary verdict below — is shared.
 #  * A missing or malformed onion is a hard stop for a RUN (exit 2, naming what
 #    to start). --list / --gen / --print-command execute nothing, so they do not
 #    demand one.
@@ -233,14 +247,26 @@ if [ -n "${VIA}" ]; then
     *) die "unknown --via ${VIA}. Legal front doors: onion (omit --via for the mesh's own door)." ;;
   esac
   if [ -z "${ENV_ID}" ]; then ENV_ID=docker; fi
-  if [ "${ENV_ID}" != "docker" ]; then
-    die "--via onion is the DOCKER stack's door (make stack-up TOR=1); --env ${ENV_ID} has no Tor front door (kind: hugmesh-generator#577)."
+  if [ "${ENV_ID}" != "docker" ] && [ "${ENV_ID}" != "kind" ]; then
+    die "--via onion is the DOCKER stack's door (make stack-up TOR=1) or the KIND lane's (make kind-tor); --env ${ENV_ID} has no Tor front door."
   fi
   LANE=bdd
+  if [ "${ENV_ID}" = "kind" ]; then
+    if [ -z "${TAGS}" ]; then TAGS='@via:onion and @env:kind'; else TAGS="(${TAGS}) and @via:onion and @env:kind"; fi
+  else
   if [ -z "${TAGS}" ]; then TAGS='@via:onion and @env:docker'; else TAGS="(${TAGS}) and @via:onion and @env:docker"; fi
+  fi
   ONION_FILE="${SNAP_ONION_HOSTNAME_FILE:-${REPO}/tests/stack/tor-onion/hostname}"
   if [ -n "${SNAP_ONION_BASE_URL:-}" ]; then
     ONION_BASE_URL="$(echo "${SNAP_ONION_BASE_URL}" | sed 's:/*$::')"
+  elif [ "${ENV_ID}" = "kind" ]; then
+    # kind-tor.sh `onion` refuses unless ITS tor is alive: no stale readout.
+    if kind_onion="$(bash "${REPO}/scripts/kind-tor.sh" onion 2>/dev/null)"; then
+      ONION_BASE_URL="https://${kind_onion}"
+    else
+      ONION_BASE_URL=""
+      ONION_NOTE="the kind lane's tor is not running — start it: make kind-tor (after make kind-up)"
+    fi
   elif ONION_BASE_URL="$(onion_from_file "${ONION_FILE}")"; then
     :
   else
@@ -251,7 +277,11 @@ if [ -n "${VIA}" ]; then
     ''|https://*.onion) ;;
     *) die "SNAP_ONION_BASE_URL=${ONION_BASE_URL} is not https://<v3>.onion — an http:// entry is upgraded by the gateway's CSP and tests nothing (see --help)." ;;
   esac
+  if [ "${ENV_ID}" = "kind" ] && [ -z "${SNAP_PROXY:-}" ]; then
+    ONION_PROXY="$(bash "${REPO}/scripts/kind-tor.sh" socks)"
+  else
   ONION_PROXY="${SNAP_PROXY:-socks5://127.0.0.1:${TOR_SOCKS_HOST_PORT:-9050}}"
+  fi
   case "${ONION_PROXY}" in
     socks5://*) ;;
     *) die "SNAP_PROXY=${ONION_PROXY} must be socks5://host:port — a .onion only resolves inside Tor." ;;
@@ -263,7 +293,7 @@ if [ -n "${VIA}" ]; then
   # container killed without SIGTERM leaves it behind. When docker can answer,
   # refuse a readout no running container is serving — the same rule as
   # `make stack-onion` — rather than spend ten minutes of Tor retries on it.
-  if [ "${MODE}" = "run" ] && [ -z "${SNAP_ONION_BASE_URL:-}" ] && command -v docker >/dev/null 2>&1; then
+  if [ "${MODE}" = "run" ] && [ "${ENV_ID}" = "docker" ] && [ -z "${SNAP_ONION_BASE_URL:-}" ] && command -v docker >/dev/null 2>&1; then
     if [ -z "$(docker ps -q --filter label=com.docker.compose.service=hugmesh-tor --filter status=running 2>/dev/null)" ]; then
       die "--via onion: ${ONION_FILE} names ${ONION_BASE_URL} but no hugmesh-tor container is running — a stale readout. Start it: make stack-up TOR=1"
     fi
