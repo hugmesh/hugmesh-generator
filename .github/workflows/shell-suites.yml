@@ -299,11 +299,25 @@ jobs:
           # devices_test.sh, save_test.sh, mesh-cluster_test.sh, avc-workout_test.sh)
           # remain ungated — they were NOT measured in this image and are not being
           # claimed as covered here.
+          # tests/*.sh at depth 1 (#385): ten suites that ran in no CI job. MEASURED,
+          # 2026-09-30, in alpine:3 with EXACTLY this job's apk set (checkout copied
+          # in, `git init`ed): all ten rc=0 (140/0, ALL PASS, PASS, PASS, PASS, PASS,
+          # 24/0, 88/0, ALL PASS (27), 25/0). build-arm-payload-gates.sh prints 140
+          # passed here vs 146 on a Gentoo host: its section C execution tier needs
+          # portage and prints "NOTE ... execution tier SKIPPED" otherwise, so CI gets
+          # its static tier only — the other nine are identical on both.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
             tests/auto-update/test-update-poller.sh
             tests/boot/test-kubelet-join-bootstrap.sh
+            tests/build-arm-payload-gates.sh
+            tests/build-image-idp.sh
+            tests/build-image-progress.sh
+            tests/build-image-spec-guards.sh
+            tests/build-image-spec-parity.sh
+            tests/build-image-tor-onion.sh
+            tests/build-package-completeness.sh
             tests/cloud-deploy/test-cloud-deploy-driver.sh
             tests/cluster/test-bootstrap-applies-baked-apps.sh
             tests/desktop-governance/test-desktop-sudo-mapper.sh
@@ -324,6 +338,7 @@ jobs:
             tests/keystores/test-keystores-external-ca.sh
             tests/keystores/test-keystores.sh
             tests/menu/build_menu_cmd_test.sh
+            tests/no-openrc-virtual-shadow.sh
             tests/node-storage/test-bake-coverage.sh
             tests/node-storage/test-degrade.sh
             tests/node-storage/test-pool-entrypoint.sh
@@ -331,6 +346,7 @@ jobs:
             tests/pentest/test-dast-honesty.sh
             tests/phone/test-make-phone-face.sh
             tests/phone/test-mdm-providers.sh
+            tests/posix-sh-no-arrays.sh
             tests/qemu/loop_preflight_test.sh
             tests/qemu/stage4_rootfs_test.sh
             tests/qemu/kernel_extract_test.sh
@@ -343,6 +359,7 @@ jobs:
             tests/qemu/save_test.sh
             tests/qemu/verdict_test.sh
             tests/qemu/qemu-e2e-lane_test.sh
+            tests/requested-atoms-resolvable.sh
             tests/scripts/test-anubis-env-gate.sh
             tests/scripts/test-arm-ro-distdir.sh
             tests/scripts/test-binpkg-pool-fingerprint.sh
