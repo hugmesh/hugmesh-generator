@@ -561,7 +561,7 @@ class DomainServicesPage(QtWidgets.QWizardPage, DomainServicesBody):
         ``implicit_own_domain``), and otherwise wherever the Domains table is, when
         it names at least one domain.
 
-        Emission-neutral when skipped, in the strong sense the nextId() ALL-OPTIONS
+        Leaves the output unchanged when skipped, in the strong sense the nextId() ALL-OPTIONS
         guard asks for: a cloud node names no domain, so there is nothing to record,
         nothing to write to cfg — and nothing for the build/mesh-start gate to refuse
         either, so skipping cannot smuggle a domain past it. Standalone is skipped
