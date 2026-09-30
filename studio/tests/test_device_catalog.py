@@ -5,7 +5,7 @@ six builders' own role/board allowlists, in three directions:
    tuples; role_allow only narrows; reasons are honest (non-empty where required).
 2. config.py -> catalog (surjectivity): every config board/platform is claimed by a
    selectable device — adding rpi6 to RPI_BOARDS (or a new platform) without a catalog
-   entry goes RED, and deleting a config board the catalog still claims goes RED via 1.
+   entry fails, and deleting a config board the catalog still claims fails via 1.
 3. catalog -> builder scripts: parse each build-*-stage4.sh's OWN "--board/--role must
    be one of" error strings (the check.sh code-copy-assertion idiom) and assert
    set-equality with the config tuples / mapped studio role ids; assert the rpi3
@@ -292,7 +292,7 @@ def test_buildable_iff_config_accepts_the_axes():
 def test_catalog_covers_the_named_families_and_verdicts():
     """The #351 verdicts stay visible: the named-but-unbuildable families exist with
     honest statuses, and at least one experimental + one unsupported device exist
-    (non-vacuity — the badge machinery discriminates)."""
+    (real-cases check — the badge machinery discriminates)."""
     by_status = {s: [d.id for d in CAT.devices if d.status == s] for s in dc.STATUSES}
     assert by_status["experimental"] and by_status["unsupported"]
     expect_unsupported = {"rpi2", "rpi6", "opi2", "opi3", "opi4", "opi6",

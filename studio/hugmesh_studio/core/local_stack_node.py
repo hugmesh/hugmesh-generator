@@ -37,6 +37,38 @@ _COMPOSE_FILE = os.path.join("tests", "stack", "compose.local.yaml")
 # (PUBLIC — never the key) for the host/GUI to read. Bind-mounted from ./tor-onion
 # in the compose file; written ~30s after `make stack-up TOR=1`.
 _TOR_ONION_HOSTNAME_FILE = os.path.join("tests", "stack", "tor-onion", "hostname")
+#: The compose service that mints and publishes the onion (compose.local.yaml).
+_TOR_SERVICE = "hugmesh-tor"
+#: How far a hostname copy may PRE-date the container's recorded StartedAt and still
+#: count as this container's. The entrypoint's `cp` runs a few ms after its process
+#: starts, and docker records StartedAt once runc returns — so on a restart with the
+#: key already in the volume the copy can land fractionally BEFORE the stamp. Two
+#: seconds covers that race; a copy from a PREVIOUS container is older by at least a
+#: whole `stack-down`/`stack-up` (tens of seconds), which is what the check exists
+#: to refuse (#581).
+_ONION_START_SKEW_S = 2.0
+_DOCKER_TIME_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$")
+
+
+def _parse_docker_time(value: str) -> float | None:
+    """docker's RFC 3339 ``State.StartedAt`` (nanoseconds, ``Z`` or an offset) as
+    epoch seconds, or None. Parsed by hand because the fraction carries NINE digits,
+    which ``datetime.fromisoformat`` does not accept on every Python this runs on;
+    docker's zero value (``0001-01-01T00:00:00Z``, never started) is None too."""
+    from datetime import datetime
+    m = _DOCKER_TIME_RE.match((value or "").strip())
+    if not m:
+        return None
+    base, frac, tz = m.groups()
+    tz = "+00:00" if tz == "Z" else tz
+    try:
+        ts = datetime.fromisoformat(base + tz).timestamp()
+    except ValueError:
+        return None
+    if ts <= 0:
+        return None
+    return ts + (float("0." + frac) if frac else 0.0)
 
 # ── cold-build preflight wiring (mirrors the Makefile's m2 knobs) ──────────────
 # `make stack-m2-bootstrap` (tests/stack/m2-bootstrap.sh) builds the org-private
@@ -248,7 +280,7 @@ class LocalStackNode:
         # default) sets NOTHING: the stack env stays byte-identical to before these
         # params existed. An EXTERNAL provider exports the provider-neutral
         # OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_JWKS_URI vars for `make stack-*`,
-        # and the Makefile CONSUMES all three (the Lane-B seam, landed): they map
+        # and the Makefile CONSUMES all three (the Lane-B env-var contract, landed): they map
         # onto CASDOOR_ISSUER_URI / CASDOOR_APP_CLIENT_ID / CASDOOR_JWKS_URI, so
         # gateway + BFF token VALIDATION runs against the external issuer/JWKS.
         # The coupled legs (native login, MFA step-up, role claims) stay
@@ -323,10 +355,73 @@ class LocalStackNode:
         except OSError:
             return ""
 
+    def _tor_started_at(self) -> float | None:
+        """Epoch seconds the RUNNING ``hugmesh-tor`` container of this compose project
+        started, or None — not running, docker absent/unreachable, or unparseable.
+
+        By compose LABEL (project + service), never by container name: the name is
+        compose's to choose, the labels are the contract (mesh_monitor and
+        saved_meshes filter the same way). Blocking — two docker calls, 5 s each at
+        most — so an off-GUI-thread caller is the norm (the monitor, capture,
+        ``_await_onion``); the one GUI-thread caller is the Copy .onion button."""
+        if not shutil.which("docker"):
+            return None
+        try:
+            r = subprocess.run(
+                ["docker", "ps", "-q", "--no-trunc",
+                 "--filter", f"label=com.docker.compose.project={_COMPOSE_PROJECT}",
+                 "--filter", f"label=com.docker.compose.service={_TOR_SERVICE}",
+                 "--filter", "status=running"],
+                capture_output=True, text=True, timeout=5)
+            ids = r.stdout.split() if r.returncode == 0 else []
+            if not ids:
+                return None
+            r = subprocess.run(
+                ["docker", "inspect", "-f", "{{.State.Running}} {{.State.StartedAt}}",
+                 ids[0]], capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        running, _, started = r.stdout.strip().partition(" ")
+        if r.returncode != 0 or running != "true":
+            return None
+        return _parse_docker_time(started)
+
     def onion_url(self) -> str:
-        """``http://<onion>/`` for the published onion, or "" when none yet."""
+        """``https://<onion>/`` for the onion the RUNNING tor container published, or
+        "" when there is none to hand out.
+
+        HTTPS, like ``make stack-onion``: the compose onion publishes ``:443`` to the
+        TLS front (tests/stack/tor/entrypoint.sh, #598), which is the door that boots
+        the SPA; its plain ``:80`` goes to the fe-gateway (or the Anubis gate) and an
+        http page cannot boot the app (#586). The monitor's door, the Copy .onion
+        button and a saved record's ``doors.onion`` all hand out this one string.
+
+        The hostname file is a bind-mount copy that OUTLIVES the key it names (#581):
+        ``make stack-down``/``stack-clean`` run ``down -v``, which drops the
+        ``tor-onion-keys`` volume — the next TOR=1 up mints a NEW onion — but never
+        touches ``tests/stack/tor-onion/hostname`` (root-owned, gitignored). Read
+        bare, it announced a dead address to the monitor, the Copy button, a saved
+        record's ``doors.onion`` and ``_await_onion`` (which returned the PREVIOUS
+        mesh's onion on its first poll after a re-create). So the file counts only
+        when a ``hugmesh-tor`` container is running AND the copy was written by it:
+        mtime no older than that container's StartedAt (minus
+        :data:`_ONION_START_SKEW_S`). The entrypoint copies without ``-p`` on every
+        start, so a live container always refreshes the mtime.
+        ``onion_hostname()`` stays the raw, probe-free file read."""
         h = self.onion_hostname()
-        return f"http://{h}/" if h else ""
+        if not h:
+            return ""
+        started = self._tor_started_at()
+        if started is None:
+            return ""                     # nothing running can be serving that key
+        try:
+            written = os.stat(os.path.join(self.generator_dir,
+                                           _TOR_ONION_HOSTNAME_FILE)).st_mtime
+        except OSError:
+            return ""
+        if written + _ONION_START_SKEW_S < started:
+            return ""                     # a previous container's copy — stale
+        return f"https://{h}/"
 
     def available(self) -> tuple[bool, str]:
         if not shutil.which("make"):
@@ -681,7 +776,7 @@ class LocalStackNode:
 
         # External IdP (I6.6): exported ONLY for an external provider WITH an issuer,
         # so the casdoor default (and a half-configured external) leaves the env
-        # byte-identical. Consumed by the Makefile's OIDC seam (landed): the vars
+        # byte-identical. Consumed by the Makefile's OIDC env-var contract (landed): the vars
         # map onto CASDOOR_ISSUER_URI / CASDOOR_APP_CLIENT_ID / CASDOOR_JWKS_URI
         # for gateway + BFF token validation (documented in __init__). Values are
         # public endpoints/identifiers — never secrets.
@@ -698,7 +793,7 @@ class LocalStackNode:
         # about; empty leaves the Makefile's `$(strip …)` profile arm off and
         # everything else untouched (byte-identical default,
         # test_domain_idp_schema.py pins it). Non-empty: export the gateways'
-        # multi-issuer registry (the BRAND_B=1 seam, scaled per domain — the
+        # multi-issuer registry (the BRAND_B=1 env-var contract, scaled per domain — the
         # central issuer stays tenant `default`) and write the compose overlay
         # the Makefile wildcard-includes. The write is best-effort like
         # .theme.css (never block a bring-up from here); a failed write leaves
@@ -1361,7 +1456,7 @@ class LocalStackNode:
         """Does this mesh's kind cluster exist RIGHT NOW? Read-only (`kind get
         clusters`, the same question devops_repo_access() already asks) so a caller
         can tell "the lane is already down" from "it has to come down first" without
-        firing the destructive verb blind.
+        firing the destructive verb without checking first.
 
         False whenever the answer cannot be established — kind not installed, the
         probe failing — because a cluster this lane created cannot exist without the
@@ -1378,6 +1473,34 @@ class LocalStackNode:
         """`make kind-down` — delete the local Kubernetes cluster. Destructive for
         the DevOps lane ONLY: the docker mesh and its volumes are untouched."""
         return self._make("kind-down", timeout=600,
+                          on_line=on_line, cancel=cancel)
+
+    def devops_halt(self, on_line=None, cancel=None) -> tuple[bool, str]:
+        """`make kind-halt` — STOP the DevOps lane without destroying it.
+
+        Deliberately NOT `kind-down`, exactly as ``stop()`` below is deliberately not
+        ``clean()``: "stop my lane" must not mean "destroy my lane". The kind lane had
+        only the destructive half until #356, and `kind` itself has no pause verb — so
+        the halt scales the mesh's Deployments and StatefulSets to 0 AND suspends
+        ArgoCD auto-sync. Both, because either alone is dishonest: 98 of 98 files in
+        specs/cluster/apps carry ``syncPolicy.automated {prune, selfHeal}``, so a
+        scale-only halt is undone by selfHeal within a reconcile, and a suspend with no
+        resume leaves the cluster silently no longer tracking git.
+
+        The cluster, its PVCs, its Vault KV and its Casdoor identities are all KEPT.
+        Streams, because it names every Application it suspends and the sync/health
+        state each was in when it froze — that list is the output's whole point."""
+        return self._make("kind-halt", timeout=900,
+                          on_line=on_line, cancel=cancel)
+
+    def devops_resume(self, on_line=None, cancel=None) -> tuple[bool, str]:
+        """`make kind-resume` — undo ``devops_halt``, restoring EXACTLY what it
+        recorded: the replica counts it zeroed and the auto-sync it suspended. Never
+        "everything" — an Application suspended before the halt (someone debugging it)
+        was never the halt's to touch and stays suspended. The record lives in a
+        ConfigMap inside the cluster, so this works whether or not the Studio that
+        pressed Halt is still running."""
+        return self._make("kind-resume", timeout=900,
                           on_line=on_line, cancel=cancel)
 
     def stop(self) -> tuple[bool, str]:

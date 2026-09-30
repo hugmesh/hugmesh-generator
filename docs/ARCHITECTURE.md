@@ -73,7 +73,7 @@ flowchart TD
     PKIGW --> PKI
 
     subgraph SSO["SSO / native login — shipped, lit by default"]
-        AUTHCORE["auth-core: account/session/MFA + custody seams (2.4.2)"]
+        AUTHCORE["auth-core: account/session/MFA + custody seams (2.4.2 / 2.5.0)"]
         GWEXCH["gateway bff_-exchange filter"]
         LOGINOIDC["login-ui native login form -> POST /bff/login"]
         UBRELOC["user-bff native login + server-side Casdoor exchange"]
@@ -170,7 +170,7 @@ stays dark to the internet).
 
 **Component ownership** (post auth-relocation):
 
-- **`hugmesh-auth-core`** (shared jar `systems.hugmesh:hugmesh-auth-core`) —
+- **`hugmesh-auth-core`** (shared jar `net.hugmesh:hugmesh-auth-core`) —
   the stateful auth stack: `AccountStore`/`BffSession` (account + session + MFA),
   `OidcExchangeClient` (code→token + refresh), `BffCustodyCipher` (AES-256-GCM
   encrypt-at-rest for the held JWT), `SessionCookieService` (the opaque `bff_`
@@ -257,16 +257,18 @@ ciphers inert until those Secrets land.
 
 **✅ shipped (merged to `main`):**
 
-- **auth-core extracted + published (current pin `2.4.2`)** — shared
+- **auth-core extracted + published (current pins `2.4.2` / `2.5.0`)** — shared
   account/session/MFA/Casdoor stack + the custody seams (`OidcExchangeClient`,
   `BffCustodyCipher`, `SessionCookieService`, `InternalTokenWebFilter`). The
   `2.1.0` BFF-JWT-custody columns, the `2.2.0` per-account session-listing seam
   and the `2.3.0` `gen_random_uuid()` mint change all shipped in that order; the
-  line has since moved to **`2.4.2`** (the authoritative pin is
-  `tests/stack/m2-bootstrap.sh`), which admin-bff + user-bff both consume.
-  ⚠️ `2.4.x` drifted twice (2.4.0 → 2.4.1 → 2.4.2) because a released coordinate
-  was re-cut — the pin-drift guard exists for exactly that and must run after
-  every auth-core release.
+  line has since split into two pins (the authoritative pins are in
+  `tests/stack/m2-bootstrap.sh`): **`2.4.2`** for user-bff main and **`2.5.0`**
+  for admin-bff main — the two consumers are on separate release cadences, so
+  both jars are built.
+  ⚠️ auth-core has drifted four times (2.4.0 → 2.4.1 → 2.4.2 → 2.5.0) because a
+  released coordinate was re-cut — the pin-drift guard exists for exactly that
+  and must run after every auth-core release.
 - **admin-bff adopted auth-core** (PR #111) — behavior-preserving, 1517 tests green.
 - **admin-bff `/bff/internal` account/session API** (PR #113) —
   ensure / get / complete / allowlist / sessions / namespaces, guarded by
@@ -289,7 +291,8 @@ ciphers inert until those Secrets land.
 > The `auth-core` `2.1.0` BFF-JWT-custody columns
 > (`access_token_enc` / `refresh_token_enc` / `access_token_expires_at` /
 > `custody_updated_at`) + `stampCustody` / `clearCustody` / `sessionRow` that this
-> snapshot tracked as in-flight have since **shipped** (current pin `2.4.2`).
+> snapshot tracked as in-flight have since **shipped** (current pins `2.4.2` /
+> `2.5.0`).
 
 **🚧 in-flight:** none currently open — login-ui PR-4 (native form, above) has
 since shipped.
@@ -551,8 +554,8 @@ implementation on `main`.
 | Repo | Role |
 |---|---|
 | `hugmesh/hugmesh-parent` | Metapom every Java service inherits (**2.8.0** — Spring Boot 4.0.7 / Spring Cloud 2025.1.2 / Java 25) |
-| `hugmesh/hugmesh-commons` | Shared security/tenancy library, `systems.hugmesh.commons.*` (**2.1.0**) |
-| `hugmesh/hugmesh-auth-core` | Shared account/session/bff-session store, Casdoor-admin client, MFA subsystem, session-cookie + internal-token filters (**2.4.2**; consumed by user-bff + admin-bff only) |
+| `hugmesh/hugmesh-commons` | Shared security/tenancy library, `net.hugmesh.commons.*` (**2.1.0**) |
+| `hugmesh/hugmesh-auth-core` | Shared account/session/bff-session store, Casdoor-admin client, MFA subsystem, session-cookie + internal-token filters (**2.4.2** for user-bff, **2.5.0** for admin-bff — two pins by design, separate release cadences; consumed by user-bff + admin-bff only) |
 | `hugmesh/hugmesh-build-config` | Shared PMD/Checkstyle/SpotBugs rulesets referenced by the parent (**0.5.0**) |
 
 ### Platform services

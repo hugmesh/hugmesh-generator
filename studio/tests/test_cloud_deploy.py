@@ -2,7 +2,7 @@
 Qt-free core it fronts (core/cloud_deploy.py).
 
 Everything here is HERMETIC: the driver is a STUB shell script pointed at through
-the SNAP_CLOUD_DEPLOY_CMD env seam (the exact pattern test_phone_wizard.py uses for
+the SNAP_CLOUD_DEPLOY_CMD env override point (the exact pattern test_phone_wizard.py uses for
 SNAP_PHONE_WIZARD) — no real cloud CLI, driver, or terminal emulator ever runs. The
 core assertions prove the contract that matters most: pasted creds NEVER land on
 argv, ride a 0600 --creds-file tempfile, and are shredded after the run; a
@@ -82,7 +82,7 @@ exit "${CD_STUB_RC:-0}"
 
 
 def _install_stub(tmp_path, monkeypatch):
-    """Write the stub driver + wire the SNAP_CLOUD_DEPLOY_CMD / CD_STUB_OUT seams.
+    """Write the stub driver + wire the SNAP_CLOUD_DEPLOY_CMD / CD_STUB_OUT override points.
     Returns the out-dir the stub writes its captures into."""
     stub = tmp_path / "stub-cloud-deploy.sh"
     stub.write_text(_STUB)
@@ -278,7 +278,7 @@ def test_validate_blockers_cover_the_rejection_table(tmp_path):
     probs = CloudDeploy(str(tmp_path), CloudDeployOptions(
         provider="aws-ec2", image=img, creds="x", creds_file=str(cf))).validate()
     assert any("one channel" in p for p in probs)
-    # group/world-readable creds file (custody bar) — fail-closed
+    # group/world-readable creds file (file-permission bar) — fail-closed
     cf.chmod(0o644)
     probs = CloudDeploy(str(tmp_path), CloudDeployOptions(
         provider="aws-ec2", image=img, creds_file=str(cf))).validate()

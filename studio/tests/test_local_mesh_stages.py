@@ -6,7 +6,7 @@ staged navigable table with a responsive log output below tied to what's selecte
 table, like in the other build screens". The other build screen is gui/pages/progress.py,
 so the implementation is ITS machinery reused — core/progress_parse.ProgressParser over a
 ``tracks`` phase table plus core/stage_tracker.StageTracker — and these tests pin the two
-halves that can rot independently:
+halves that can go stale independently:
 
   1. the TABLE half (Qt-free): every pattern must still be emitted verbatim by the
      Makefile / shell scripts that actually run, and no banner line may be ambiguous

@@ -36,6 +36,7 @@ JSON=0
 GENERATE=""          # "" = decided by lane; 1/0 = forced
 FEATURES=()
 PW_ARGS=()
+VIA="${E2E_VIA:-}"   # "" = the mesh's own door; onion = through Tor (see --via)
 IMAGE="${PW_IMAGE:-hugmeshgames-e2e:latest}"
 
 # ── the docker mesh's host door: ONE knob, the same one the TypeScript reads ──
@@ -89,6 +90,27 @@ Environment (which mesh)   THIS SCRIPT NEVER STARTS ONE
   --env qemu               a QEMU-emulated device
                              start: bash tests/qemu/run-qemu-e2e.sh --target x86 --img <image>
   (omit --env to leave SNAP_BASE_URL/SNAP_ENV exactly as the caller set them)
+
+Front door (how the browser reaches the mesh)
+  --via onion              the docker stack's Tor .onion, THROUGH TOR: the
+                           browser dials https://<onion>/ via the SOCKS5 proxy
+                           hugmesh-tor-client publishes. Runs ONLY the
+                           @via:onion @env:docker scenarios (implies --bdd
+                           --env docker).
+                             start: make stack-up TOR=1  (then: make stack-seed)
+                           onion:  SNAP_ONION_BASE_URL, else the hostname in
+                                   SNAP_ONION_HOSTNAME_FILE (default
+                                   tests/stack/tor-onion/hostname)
+                           proxy:  SNAP_PROXY, else
+                                   socks5://127.0.0.1:${TOR_SOCKS_HOST_PORT:-9050}
+                           (E2E_VIA=onion is the same switch)
+  --via onion --env kind   the KIND lane's .onion (make kind-tor, #577), THROUGH
+                           the host tor scripts/kind-tor.sh runs. Runs ONLY the
+                           @via:onion @env:kind scenarios.
+                             start: make kind-up && make kind-images && make kind-tor
+                           onion:  SNAP_ONION_BASE_URL, else `scripts/kind-tor.sh
+                                   onion` (which refuses a leftover hostname)
+                           proxy:  SNAP_PROXY, else `scripts/kind-tor.sh socks`
 
 Modes
   --gen                    compile the features and stop
@@ -154,6 +176,9 @@ while [ "$#" -gt 0 ]; do
     --features)        [ "$#" -ge 2 ] || die "--features needs a path"
                        FEATURES+=("$2"); LANE=bdd; shift 2 ;;
     --features=*)      FEATURES+=("${1#--features=}"); LANE=bdd; shift ;;
+    --via)             [ "$#" -ge 2 ] || die "--via needs a value (onion)"
+                       VIA="$2"; shift 2 ;;
+    --via=*)           VIA="${1#--via=}"; shift ;;
     --gen)             MODE=gen; LANE=bdd; shift ;;
     --list)            MODE=list; shift ;;
     --print-command)   MODE=print; shift ;;
@@ -170,6 +195,111 @@ while [ "$#" -gt 0 ]; do
     *)                 PW_ARGS+=("$1"); shift ;;
   esac
 done
+
+# ── the front door: --via onion ──────────────────────────────────────────────
+# The docker stack's Tor onion (make stack-up TOR=1), reached THROUGH TOR, the
+# way a Tor Browser user reaches it (hugmesh-generator#576). Four decisions here,
+# each one a trap somebody would otherwise fall into:
+#
+#  * SNAP_BASE_URL stays the stack's LOCAL door. The @env:docker availability
+#    probe (steps/dimensions.ts probeRequest) is a plain Node request with no
+#    proxy; pointed at the onion it could never answer, and the scenario would
+#    skip with "start the stack" against a running stack. The onion travels as
+#    SNAP_ONION_BASE_URL, which only the @via:onion steps read.
+#  * The URL is https://<onion>/, never http: the door a person is told to use
+#    (make stack-onion), a secure context, and the node's :443. The onion's :443
+#    is the TLS front. (Not because of CSP upgrade-insecure-requests: the SPA
+#    document does not carry it and boots over http too, measured live
+#    2026-09-24, #628. See docs/TOR-HIDDEN-SERVICE.md "Why :443".)
+#  * Only @via:onion @env:docker scenarios run. Every other scenario builds its
+#    contexts without the proxy, and a lane that ran them "over Tor" would really
+#    have run them over localhost. @env:docker because this is the COMPOSE
+#    stack's onion: the kind lane's own @via:onion scenario (#577, @env:kind)
+#    would only skip here, and a skip fails this lane (see the summary check
+#    below). Both tags are AND-ed onto any --tags given.
+#  * `--env kind` selects the KIND lane's onion instead (#577, `make kind-tor`):
+#    a HOST tor (scripts/kind-tor.sh) fronting the kind node, the @via:onion
+#    @env:kind scenario, and SNAP_BASE_URL left at the kind lane's LOCAL door for
+#    the same probe reason as above. The onion and the proxy come from
+#    kind-tor.sh itself, which answers only while its tor is alive, so there is
+#    no hostname file here to go stale. Every other rule — https only, the
+#    summary verdict below — is shared.
+#  * A missing or malformed onion is a hard stop for a RUN (exit 2, naming what
+#    to start). --list / --gen / --print-command execute nothing, so they do not
+#    demand one.
+ONION_BASE_URL=""
+ONION_PROXY=""
+ONION_NOTE=""
+onion_from_file() {
+  local f raw base
+  f="$1"
+  [ -s "${f}" ] || return 1
+  raw="$(tr -d '[:space:]' < "${f}")"
+  base="${raw%.onion}"
+  case "${base}" in *[!a-z2-7]*|'') return 1 ;; esac
+  if [ "${base}" = "${raw}" ] || [ "${#base}" -ne 56 ]; then return 1; fi
+  echo "https://${raw}"
+}
+if [ -n "${VIA}" ]; then
+  case "${VIA}" in
+    onion) ;;
+    *) die "unknown --via ${VIA}. Legal front doors: onion (omit --via for the mesh's own door)." ;;
+  esac
+  if [ -z "${ENV_ID}" ]; then ENV_ID=docker; fi
+  if [ "${ENV_ID}" != "docker" ] && [ "${ENV_ID}" != "kind" ]; then
+    die "--via onion is the DOCKER stack's door (make stack-up TOR=1) or the KIND lane's (make kind-tor); --env ${ENV_ID} has no Tor front door."
+  fi
+  LANE=bdd
+  if [ "${ENV_ID}" = "kind" ]; then
+    if [ -z "${TAGS}" ]; then TAGS='@via:onion and @env:kind'; else TAGS="(${TAGS}) and @via:onion and @env:kind"; fi
+  else
+  if [ -z "${TAGS}" ]; then TAGS='@via:onion and @env:docker'; else TAGS="(${TAGS}) and @via:onion and @env:docker"; fi
+  fi
+  ONION_FILE="${SNAP_ONION_HOSTNAME_FILE:-${REPO}/tests/stack/tor-onion/hostname}"
+  if [ -n "${SNAP_ONION_BASE_URL:-}" ]; then
+    ONION_BASE_URL="$(echo "${SNAP_ONION_BASE_URL}" | sed 's:/*$::')"
+  elif [ "${ENV_ID}" = "kind" ]; then
+    # kind-tor.sh `onion` refuses unless ITS tor is alive: no stale readout.
+    if kind_onion="$(bash "${REPO}/scripts/kind-tor.sh" onion 2>/dev/null)"; then
+      ONION_BASE_URL="https://${kind_onion}"
+    else
+      ONION_BASE_URL=""
+      ONION_NOTE="the kind lane's tor is not running — start it: make kind-tor (after make kind-up)"
+    fi
+  elif ONION_BASE_URL="$(onion_from_file "${ONION_FILE}")"; then
+    :
+  else
+    ONION_BASE_URL=""
+    ONION_NOTE="no v3 onion hostname in ${ONION_FILE} — start it: make stack-up TOR=1 (then: make stack-seed)"
+  fi
+  case "${ONION_BASE_URL}" in
+    ''|https://*.onion) ;;
+    *) die "SNAP_ONION_BASE_URL=${ONION_BASE_URL} is not https://<v3>.onion — the lane tests the :443 door a person is told to use: a secure context (Chromium drops Secure cookies over http://<onion>), the node's own :443, and user-bff's default Secure session cookie (docs/TOR-HIDDEN-SERVICE.md \"Why :443\", #628)." ;;
+  esac
+  if [ "${ENV_ID}" = "kind" ] && [ -z "${SNAP_PROXY:-}" ]; then
+    ONION_PROXY="$(bash "${REPO}/scripts/kind-tor.sh" socks)"
+  else
+  ONION_PROXY="${SNAP_PROXY:-socks5://127.0.0.1:${TOR_SOCKS_HOST_PORT:-9050}}"
+  fi
+  case "${ONION_PROXY}" in
+    socks5://*) ;;
+    *) die "SNAP_PROXY=${ONION_PROXY} must be socks5://host:port — a .onion only resolves inside Tor." ;;
+  esac
+  if [ "${MODE}" = "run" ] && [ -z "${ONION_BASE_URL}" ]; then
+    die "--via onion: ${ONION_NOTE}"
+  fi
+  # The hostname file is removed when hugmesh-tor starts and stops (#581), but a
+  # container killed without SIGTERM leaves it behind. When docker can answer,
+  # refuse a readout no running container is serving — the same rule as
+  # `make stack-onion` — rather than spend ten minutes of Tor retries on it.
+  if [ "${MODE}" = "run" ] && [ "${ENV_ID}" = "docker" ] && [ -z "${SNAP_ONION_BASE_URL:-}" ] && command -v docker >/dev/null 2>&1; then
+    if [ -z "$(docker ps -q --filter label=com.docker.compose.service=hugmesh-tor --filter status=running 2>/dev/null)" ]; then
+      die "--via onion: ${ONION_FILE} names ${ONION_BASE_URL} but no hugmesh-tor container is running — a stale readout. Start it: make stack-up TOR=1"
+    fi
+  fi
+  export SNAP_ONION_BASE_URL="${ONION_BASE_URL}"
+  export SNAP_PROXY="${ONION_PROXY}"
+fi
 
 # ── environment forwarding ───────────────────────────────────────────────────
 # An unknown value dies here NAMING THE LEGAL SET, the same contract
@@ -251,6 +381,10 @@ if [ "${MODE}" = "print" ]; then
     printf 'REPORT_DIR\t%s\n' "${REPORT_DIR}"
     printf 'RUN_ID\t%s\n' "${RUN_ID}"
     printf 'HOST_RESOLVER\t%s\n' "${SNAP_HOST_RESOLVER:-}"
+    printf 'VIA\t%s\n' "${VIA}"
+    printf 'ONION_BASE_URL\t%s\n' "${ONION_BASE_URL}"
+    printf 'PROXY\t%s\n' "${ONION_PROXY}"
+    printf 'ONION_NOTE\t%s\n' "${ONION_NOTE}"
     for a in "${SELECTED[@]+"${SELECTED[@]}"}"; do printf 'FEATURE\t%s\n' "${a}"; done
     for a in "${GEN_ARGV[@]}"; do printf 'GENARGV\t%s\n' "${a}"; done
     for a in "${PW_ARGV[@]}"; do printf 'ARGV\t%s\n' "${a}"; done
@@ -275,6 +409,9 @@ if [ "${MODE}" = "gen" ]; then exit 0; fi
 if [ -n "${ENV_ID}" ]; then
   echo "==> env=${ENV_ID}  base=${ENV_BASE_URL}"
   echo "    (not started by this script; to bring it up: ${ENV_HINT})"
+fi
+if [ -n "${VIA}" ]; then
+  echo "==> via=${VIA}  onion=${ONION_BASE_URL}  proxy=${ONION_PROXY}  tags=${TAGS}"
 fi
 
 # ── the seeded password, RESOLVED, never generated (kept from main) ───────────
@@ -313,6 +450,21 @@ elif [ "${LANE}" = "bdd" ] && docker image inspect "${IMAGE}" >/dev/null 2>&1; t
   echo "    interfaces drive repo commands the browsers image does not carry." >&2
 fi
 
+# The Tor lane runs exactly the @via:onion scenario(s), so EVERY skip path — the
+# @env:docker probe missing the local door, an onion env that never reached the
+# steps, a tag that matched nothing — would otherwise exit 0 having tested
+# nothing. Its verdict therefore also reads the run's own summary.json (removed
+# first, so a previous run's file cannot answer for this one): at least one
+# scenario PASSED and none was skipped, or the lane FAILS.
+ONION_SUMMARY=""
+if [ -n "${VIA}" ] && [ "${MODE}" = "run" ]; then
+  case "${REPORT_DIR}" in
+    /*) ONION_SUMMARY="${REPORT_DIR}/summary.json" ;;
+    *)  ONION_SUMMARY="${HERE}/${REPORT_DIR}/summary.json" ;;
+  esac
+  rm -f "${ONION_SUMMARY}"
+fi
+
 set +e
 if [ "${USE_DOCKER}" -eq 1 ]; then
   # The container sees ONLY what -e hands it — PUBLIC_HTTPS_PORT does not cross
@@ -329,6 +481,36 @@ else
 fi
 rc=$?
 set -e
+
+if [ -n "${ONION_SUMMARY}" ] && [ "${rc}" -eq 0 ]; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "run.sh: --via onion: python3 is needed to read ${ONION_SUMMARY}; the Tor lane's verdict is UNKNOWN, so it FAILS." >&2
+    rc=1
+  elif ! python3 - "${ONION_SUMMARY}" <<'ONION_PY'
+import json, sys
+path = sys.argv[1]
+try:
+    s = json.load(open(path, encoding="utf-8"))
+    t = s["testTotals"]
+    passed, skipped, failed = int(t["passed"]), int(t["skipped"]), int(t["failed"])
+except Exception as exc:  # noqa: BLE001 - any unreadable summary is a FAIL
+    print("run.sh: --via onion: no readable summary at %s (%s) — nothing proves a "
+          "scenario ran over Tor, so the lane FAILS." % (path, exc), file=sys.stderr)
+    sys.exit(1)
+if passed >= 1 and skipped == 0 and failed == 0:
+    sys.exit(0)
+why = sorted({str(x.get("skipReason") or "") for x in (s.get("tests") or [])
+              if x.get("status") == "skipped"} - {""})
+print("run.sh: --via onion executed %d passed / %d skipped / %d failed — the Tor lane "
+      "must PASS at least one @via:onion scenario and skip none, so it FAILS.%s"
+      % (passed, skipped, failed,
+         "".join("\n    skipped: " + w for w in why)), file=sys.stderr)
+sys.exit(1)
+ONION_PY
+  then
+    rc=1
+  fi
+fi
 
 # The summary is a courtesy. It must never change the verdict: `rc` is captured
 # above and is what this script exits with, whatever the reporter does. An

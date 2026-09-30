@@ -428,3 +428,31 @@ def test_run_all_hands_each_entry_its_own_hostname_to_its_own_builddriver(monkey
     argvs = [cfg.to_cli_args() for _e, cfg in drv.materialize()]
     assert [(a[a.index("--hostname") + 1] if "--hostname" in a else None) for a in argvs] == [
         "ca-1", "be-pi", None]
+
+
+# ── #494: the own domain's per-domain services on the v2 envelope ─────────────────
+def test_manifest_v2_omits_cluster_domain_services_when_empty(monkeypatch, tmp_path):
+    """OMIT-WHEN-EMPTY: an own domain that takes the cluster-wide set leaves the v2
+    envelope a mesh build writes byte-identical to one from before the key existed
+    (PR #595 skeptics: the v1 shim was pinned, the envelope was not)."""
+    _install_fake_builddriver(monkeypatch)
+    _install_fake_genkeys(monkeypatch)
+    wl = _worklist(tmp_path)
+    assert wl.base.cluster_domain_services == []
+    drv = WorklistDriver(str(tmp_path), wl, host=host())
+    assert "cluster_domain_services" not in drv.manifest_v2()
+    assert "cluster_domain_services" not in json.loads(open(drv.write_manifest_v2()).read())
+
+
+def test_manifest_v2_carries_cluster_domain_services_when_picked(monkeypatch, tmp_path):
+    _install_fake_builddriver(monkeypatch)
+    _install_fake_genkeys(monkeypatch)
+    wl = _worklist(tmp_path)
+    wl.base.cluster_domain_services = ["games", "akkoma"]
+    drv = WorklistDriver(str(tmp_path), wl, host=host())
+    assert drv.manifest_v2()["cluster_domain_services"] == ["games", "akkoma"]
+    written = json.loads(open(drv.write_manifest_v2()).read())
+    assert written["cluster_domain_services"] == ["games", "akkoma"]
+    # the v1 shim and the v2 envelope agree
+    for _entry, cfg in drv.materialize():
+        assert cfg.mesh_manifest()["cluster_domain_services"] == ["games", "akkoma"]

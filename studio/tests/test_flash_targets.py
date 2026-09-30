@@ -822,7 +822,7 @@ def test_the_post_build_auto_flash_is_gated_by_the_same_one_warning(monkeypatch,
                                                                     tmp_path):
     """MAJOR from the refutation: _maybe_auto_flash reaches a modal from a NON-click
     path (the BuildPage checkbox, ticked hours earlier). #337 asks for the warning "at
-    the moment the flash is started", so it stays — but it must be THE seam, so a
+    the moment the flash is started", so it stays — but it must be THE override point, so a
     headless run can never block. Cancel here must write nothing."""
     session = tmp_path / "sessions" / "s1"
     session.mkdir(parents=True)

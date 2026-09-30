@@ -1,7 +1,7 @@
 """LocalMeshBootstrapConfig.to_dict/from_dict + LocalMeshBootstrap.restore /
 start_saved — the core half of the saved-mesh lane (ask C, 2026-09-01).
 
-No Qt, no docker: every subprocess seam is monkeypatched on the bootstrap or the
+No Qt, no docker: every subprocess override point is monkeypatched on the bootstrap or the
 stack node, exactly as test_local_mesh_bringup.py's ``_happy_boot`` does.
 """
 from __future__ import annotations
@@ -31,7 +31,11 @@ def _full_cfg(**over) -> LocalMeshBootstrapConfig:
         source_dir="/src", web_locales=("de", "fr"), login_theme_css=":root{}",
         idp="oidc", idp_issuer="https://id.example.org", idp_client_id="cid",
         idp_jwks="https://id.example.org/jwks", own_idp_domains=("a.org",),
-        kind_addons=("metrics-server",))
+        kind_addons=("metrics-server",),
+        # #494: the recorded domain rows — a tuple of JSON objects, the one field
+        # whose items are not scalars, so "every field round-trips" has to carry one
+        domains=({"name": "a.org", "title": "A", "idp": "own",
+                  "optional_services": ["games"]},))
     base.update(over)
     return LocalMeshBootstrapConfig(**base)
 
@@ -280,3 +284,101 @@ def test_down_log_says_volumes_are_kept(monkeypatch, tmp_path):
         out_dir=str(tmp_path))).down()
     line = next(l for l in log if l.startswith("[stack-down]"))
     assert "kept its volumes" in line and "dropped" not in line
+
+
+# ── #579: a saved record's Tor selection is what a start/restore brings up ──────────
+# ONE authority per profile: with a services TUPLE the picker's rows decide the tor
+# profile and the legacy boolean is normalised to agree at from_dict, so a record can
+# no longer say "with_tor=True" over a mesh that starts no hugmesh-tor (or the
+# reverse). And both bring-up paths of a saved mesh — the warm start and the cold
+# restore — build their stack node from the RECORD through one seam (for_record).
+_ONION = "https://txljwl7mdg7t3wmqdci77ttof5ikxeqg2epmfadzfxlzxvjgtx5k4fad.onion/"
+
+
+@pytest.mark.parametrize("given,want_tor", [
+    ({"with_tor": True}, True),                                  # CLI record: flag rules
+    ({"with_tor": False, "services": ["tor"]}, True),            # the row rules...
+    ({"with_tor": True, "services": ["tuwunel"]}, False),        # ...both ways
+    ({"with_tor": True, "services": []}, False),                 # explicit none
+])
+def test_from_dict_normalises_the_tor_flag_to_the_services_row(given, want_tor):
+    cfg = LocalMeshBootstrapConfig.from_dict(given)
+    assert cfg.with_tor is want_tor
+    assert cfg.effective_with_tor() is want_tor
+    tor_env = LocalMeshBootstrap(GENERATOR_DIR, cfg)._stack_node()._build_env()["TOR"]
+    assert tor_env == ("1" if want_tor else "")
+
+
+def test_from_dict_normalises_social_the_same_way():
+    assert LocalMeshBootstrapConfig.from_dict(
+        {"social": False, "services": ["tuwunel"]}).social is True
+    assert LocalMeshBootstrapConfig.from_dict(
+        {"social": True, "services": ["tor"]}).social is False
+    assert LocalMeshBootstrapConfig.from_dict({"social": True}).social is True
+
+
+def _tor_record_boot(monkeypatch, tmp_path, services, with_tor=False):
+    cfg = LocalMeshBootstrapConfig(out_dir=str(tmp_path / "keys"),
+                                   superadmin_username="sa", services=services,
+                                   with_tor=with_tor)
+    rec = sm.SavedMesh(id=sm.new_id(), label="saved-tor", generator_dir=GENERATOR_DIR)
+    rec.config = cfg.to_dict()
+    rec.credentials = {"superadmin_username": "sa",
+                       "e2e_file": {"copied": False, "copy": ""},
+                       "secrets_json": {"copied": False, "copy": ""}}
+    boot = LocalMeshBootstrap.for_record(GENERATOR_DIR, rec)
+    os.makedirs(boot.vault_dir)
+    with open(boot.secrets_json, "w") as fh:
+        json.dump({"hugmesh-pki": {"casdoor-superadmin": {
+            "username": "sa", "password": SA_VALUE}}}, fh)
+    monkeypatch.setattr(boot, "guard_host_local", lambda: (True, ""))
+    monkeypatch.setattr(boot, "validate", lambda: [])
+    monkeypatch.setattr(boot, "preflight", lambda: [])
+    monkeypatch.setattr(boot, "generate_creds",
+                        lambda: pytest.fail("generate_creds must never run here"))
+    monkeypatch.setattr(sm, "probe_state", lambda rec, project="": dict(_LIVE_OK))
+    seen = {"tor": []}
+
+    def fake_start(self, on_line=None, cancel=None):
+        seen["tor"].append(self._build_env()["TOR"])   # what `make stack-up` would get
+        return True, "up"
+    monkeypatch.setattr(LocalStackNode, "start", fake_start)
+    monkeypatch.setattr(LocalStackNode, "seed",
+                        lambda self, extra_env=None, timeout=600, on_line=None,
+                        cancel=None: (True, "seeded"))
+    monkeypatch.setattr(LocalStackNode, "onion_url", lambda self: _ONION)
+    return boot, rec, seen
+
+
+def test_start_saved_of_a_tor_record_brings_up_the_tor_profile(monkeypatch, tmp_path):
+    boot, rec, seen = _tor_record_boot(monkeypatch, tmp_path, ("tor",))
+    ok, log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert ok, log
+    assert seen["tor"] == ["1"]
+
+
+def test_restore_of_a_tor_record_brings_up_the_tor_profile(monkeypatch, tmp_path):
+    boot, rec, seen = _tor_record_boot(monkeypatch, tmp_path, ("tor",))
+    streamed = []
+    ok, log = boot.restore(rec, on_line=streamed.append)
+    assert ok, log
+    assert seen["tor"] == ["1"]
+    assert any("onion published" in l for l in streamed)
+
+
+def test_a_record_whose_flag_disagrees_with_its_row_starts_no_tor(monkeypatch, tmp_path):
+    boot, rec, seen = _tor_record_boot(monkeypatch, tmp_path, ("tuwunel",),
+                                       with_tor=True)
+    assert boot.cfg.with_tor is False                  # normalised at load
+    ok, log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert ok, log
+    assert seen["tor"] == [""]
+
+
+def test_for_record_carries_the_auth_key_the_record_never_stores(tmp_path):
+    rec = sm.SavedMesh(id=sm.new_id(), config=LocalMeshBootstrapConfig(
+        env="prod", services=("tor",)).to_dict())
+    rec.config["auth_key"] = ""                        # what capture() writes
+    boot = LocalMeshBootstrap.for_record(GENERATOR_DIR, rec, auth_key="tskey-9")
+    assert boot.cfg.auth_key == "tskey-9" and boot.cfg.effective_with_tor() is True
+    assert LocalMeshBootstrap.for_record(GENERATOR_DIR, rec).cfg.auth_key == ""
