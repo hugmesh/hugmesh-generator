@@ -849,7 +849,14 @@ check("T14-mechanism-wrapper", not problems, "; ".join(problems))
 # through a different seam and is that lane's to guard.
 problems = []
 STEP_KW = re.compile(r"^\s*(Given|When|Then|And|But)\s+(.+?)\s*$")
-onion_steps: set[str] = set()
+# Two lanes, each with its own make target and its own tag, so each is counted on
+# its own: a lane whose one feature loses its tag runs nothing, and the other lane's
+# scenarios must not stand in for it. Both lanes' steps are held to the proxied rule.
+#   @via:onion          -> `make stack-e2e-tor`          (the mesh's own onion, #576)
+#   @via:onion-domains  -> `make stack-e2e-tor-domains`  (the per-domain onions, #582)
+LANES = (("@via:onion", "make stack-e2e-tor"),
+         ("@via:onion-domains", "make stack-e2e-tor-domains"))
+lane_steps: dict[str, set[str]] = {tag: set() for tag, _target in LANES}
 for dirpath, _dirs, files in os.walk(E2E_FEATURES):
     for fn in files:
         if not fn.endswith(".feature"):
@@ -858,7 +865,7 @@ for dirpath, _dirs, files in os.walk(E2E_FEATURES):
         lines = text.splitlines()
         feature_tags: set[str] = set()
         pending_tags: list[str] = []
-        in_onion = False
+        in_lanes: list[str] = []
         for ln in lines:
             st = ln.strip()
             if st.startswith("@"):
@@ -870,19 +877,19 @@ for dirpath, _dirs, files in os.walk(E2E_FEATURES):
                 continue
             if st.startswith(("Scenario:", "Scenario Outline:", "Background:")):
                 tags = feature_tags | set(pending_tags) | set(st.split())
-                # @via:onion-domains (hugmesh-generator#582, the per-domain onions,
-                # `make stack-e2e-tor-domains`) is held to the same rule: its steps
-                # may reach the mesh only through the proxied onionContext().
-                in_onion = (("@via:onion" in tags or "@via:onion-domains" in tags)
-                            and "@env:docker" in tags)
+                in_lanes = [tag for tag, _target in LANES
+                            if tag in tags and "@env:docker" in tags]
                 pending_tags = []
                 continue
             m = STEP_KW.match(ln)
-            if m and in_onion:
-                onion_steps.add(m.group(2))
-if not onion_steps:
-    problems.append("no @via:onion @env:docker scenario was found under tests/e2e/features — the Tor lane "
-                    "would run nothing")
+            if m:
+                for tag in in_lanes:
+                    lane_steps[tag].add(m.group(2))
+for tag, target in LANES:
+    if not lane_steps[tag]:
+        problems.append("no %s @env:docker scenario was found under tests/e2e/features — `%s` "
+                        "would run nothing" % (tag, target))
+onion_steps: set[str] = set().union(*lane_steps.values())
 DEF_RE = re.compile(r"\b(?:Given|When|Then)\(\s*'((?:[^'\\]|\\.)*)'")
 defs: dict[str, list[str]] = {}
 for fn in sorted(os.listdir(E2E_STEPS)):

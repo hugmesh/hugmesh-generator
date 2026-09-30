@@ -103,6 +103,22 @@ def _settle(qapp):
         qapp.processEvents()
 
 
+def _dispose(window, qapp):
+    """Really take a host's window down. ``deleteLater`` only posts a deferred
+    delete, and with no ``exec()`` loop ever running in a test process that event is
+    never delivered by ``processEvents`` alone — so every wizard this file builds
+    (three hosts under four looks, many times over) stayed alive, and the 43rd
+    test's style change had to re-polish forty windows' worth of widgets: the run
+    stalled at 100% CPU and 2 GB. Delivering the deferred deletes here keeps each
+    test to its own window."""
+    qt = _qt()
+    window.close()
+    window.deleteLater()
+    _settle(qapp)
+    qapp.sendPostedEvents(None, qt.QtCore.QEvent.Type.DeferredDelete.value)
+    _settle(qapp)
+
+
 def _walk_to(wiz, cls, limit=16):
     for _ in range(limit):
         if isinstance(wiz.currentPage(), cls):
@@ -244,9 +260,7 @@ def host(request, qapp, monkeypatch, tmp_path):
     default size, under the process's default look."""
     body, window = _build_host(request.param, qapp, monkeypatch, tmp_path)
     yield body, window
-    window.close()
-    window.deleteLater()
-    _settle(qapp)
+    _dispose(window, qapp)
 
 
 _STYLED = [(h, look) for look in _LOOKS for h in sorted(_HOSTS)]
@@ -266,9 +280,7 @@ def styled_host(request, qapp, monkeypatch, tmp_path):
         if pt is not None:
             assert body.table.font().pointSizeF() == pt
         yield body, window
-        window.close()
-        window.deleteLater()
-        _settle(qapp)
+        _dispose(window, qapp)
     finally:
         _restore_look(qapp, saved)
 
@@ -457,6 +469,22 @@ def test_both_tables_keep_the_operators_header(host):
         assert t.headerItem().text(mod._COL_ON) == SELECTION
 
 
+def test_every_rows_full_description_is_reachable_as_its_tooltip(host):
+    """The "What it does for this domain" column elides longer descriptions at the
+    default window size (#647, looked at); the whole text is reachable from the cell
+    as its tooltip — on every service row and on the front-door row — and that
+    tooltip is the description itself, not a shortened one."""
+    body, _window = host
+    mod = _mod()
+    assert body._boxes, "no service row to look at"
+    for slug, item in body._rows.items():
+        text = item.text(mod._COL_DESC)
+        assert text, slug
+        assert item.toolTip(mod._COL_DESC) == text, slug
+    tor_text = body._tor_item.text(mod._COL_DESC)
+    assert tor_text and body._tor_item.toolTip(mod._COL_DESC) == tor_text
+
+
 def test_the_tui_tables_are_headed_like_the_gui_tables(host):
     """PARITY, read off the live page: the TUI's headers are the GUI tables' own
     header texts in lower case (the GUI's empty settings column has no TUI twin, and
@@ -527,8 +555,6 @@ def test_the_local_mesh_steps_subtitle_is_whole(look, qapp, monkeypatch, tmp_pat
             assert need <= lab.height() + 1, \
                 f"the subtitle needs {need}px and has {lab.height()}px — it is cut off"
         finally:
-            window.close()
-            window.deleteLater()
-            _settle(qapp)
+            _dispose(window, qapp)
     finally:
         _restore_look(qapp, saved)

@@ -1408,9 +1408,11 @@ def test_the_steps_reach_the_mesh_only_through_the_proxied_context():
     assert "make stack-e2e-tor-domains" in code            # the skip names the command
     # the brand wall is graded the way the live check grades it: 403 + X-Route-Denied
     assert "x-route-denied" in code and "toBe(403)" in code
-    # the flip-wiring guard holds this lane's steps to the same rule as @via:onion's
+    # the flip-wiring guard holds this lane's steps to the same rule as @via:onion's,
+    # and counts the lane on its own (its one feature untagged = its target runs nothing)
     flip = open(FLIP, encoding="utf-8").read()
-    assert '"@via:onion-domains" in tags' in flip
+    assert '("@via:onion-domains", "make stack-e2e-tor-domains")' in flip
+    assert "for tag, target in LANES:\n    if not lane_steps[tag]:" in flip
 
 
 def test_the_brand_b_persona_is_the_seeders_spelling():
