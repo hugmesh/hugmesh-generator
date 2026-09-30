@@ -19,16 +19,16 @@ operator's ask ("screenshots in docker, local devops, and qemu ... through cli
 and gui"). Grouping the real index by env × interface is what turns a pile of
 PNGs into an answer.
 
-*** THE LOAD-BEARING CHECK: A MANIFEST THAT LIES IS WORSE THAN NO MANIFEST. ***
+*** THE CHECK THAT MATTERS: A MANIFEST THAT LIES IS WORSE THAN NO MANIFEST. ***
 A reviewer counts the rows and believes them. So `verify()` walks BOTH
 directions — every row must point at a file that exists, and every artefact on
 disk must have a row — and `missing`/`orphans` are rendered in the browser as
 loud rows, never dropped. The mutation battery deletes a grab while leaving its
-row in place and requires this to go red.
+row in place and requires this to fail.
 
 SCHEMA HANDLING. An unknown schema is REPORTED, not guessed at: `Manifest.problems`
 carries the mismatch and the caller shows it. Silently parsing a future shape
-because the field names happened to overlap is how a contract rots while every
+because the field names happened to overlap is how a contract goes stale while every
 consumer stays green.
 
 Qt-free, stdlib-only: the CLI channel must work with no display and no Qt.

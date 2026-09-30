@@ -190,16 +190,16 @@ def test_swapless_host_still_warns_on_low_available():
     assert len(w) == 1 and "1.0 GiB available" in w[0]
 
 
-# ---- meminfo seams: cached snapshot (jobs/cap) vs fresh read (warnings) -------------
+# ---- meminfo override points: cached snapshot (jobs/cap) vs fresh read (warnings) -------------
 
 # Captured at module-import time (collection), BEFORE the conftest autouse fixture
-# swaps both seams for canned lambdas — these are the real functions.
+# swaps both override points for canned lambdas — these are the real functions.
 _REAL_MEMINFO_CACHED = hr._meminfo_cached
 _REAL_MEMINFO_FRESH = hr._meminfo_fresh
 
 
 def test_process_snapshot_is_cached_once(monkeypatch):
-    # the jobs-default/cap seam: ONE /proc read per process (session-self-consistent —
+    # the jobs-default/cap override point: ONE /proc read per process (session-self-consistent —
     # MemTotal is constant, and a fresh config's jobs is pinned once at creation)
     calls = []
     _REAL_MEMINFO_CACHED.cache_clear()
@@ -217,7 +217,7 @@ def test_process_snapshot_is_cached_once(monkeypatch):
 def test_warnings_reflect_dispatch_time_state_not_a_launch_snapshot(monkeypatch):
     """The 2026-07-15 signature is memory filling up DURING a session: a Studio
     launched healthy must warn when the host is tight AT DISPATCH (and fall silent
-    again if it recovers). Proven against the REAL fresh seam with a mutating
+    again if it recovers). Proven against the REAL fresh override point with a mutating
     read_meminfo — no lru_cache anywhere on this path."""
     monkeypatch.setattr(hr, "_meminfo_fresh", _REAL_MEMINFO_FRESH)  # undo the conftest pin
     readings = [

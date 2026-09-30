@@ -77,7 +77,7 @@ class RunningBuild:
     def is_running(self) -> bool:
         """True while the run is live. ``finished`` is set by the supervisor's own
         slot; the thread probe is the belt-and-braces second opinion for a worker that
-        died without emitting (a crash), so we never advertise a phantom build."""
+        died without emitting (a crash), so we never advertise a build that does not exist."""
         if self.finished:
             return False
         w = self.worker
@@ -157,7 +157,7 @@ class BuildSupervisor(QtCore.QObject):
     # ---- reads --------------------------------------------------------------------
     def running(self) -> list[RunningBuild]:
         """The builds that are ACTUALLY running right now, oldest first. Finished rows
-        are reaped here rather than lingering as phantom tray entries."""
+        are reaped here rather than lingering as tray entries for builds that no longer exist."""
         live = [b for b in self._builds if b.is_running()]
         if len(live) != len(self._builds):
             for b in list(self._builds):

@@ -122,7 +122,10 @@ def main(argv=None) -> int:
     ap.add_argument("--askpass-no-gui", action="store_true",
                     help="kept for #221 scripts: identical to --askpass (which never pops "
                          "the dialog either). Uses $HUGMESH_STUDIO_SUDO_PASSWORD, then "
-                         "$HUGMESH_STUDIO_ASKPASS_COMMAND, then a terminal prompt.")
+                         "$HUGMESH_STUDIO_ASKPASS_COMMAND, then a terminal prompt — only "
+                         "when stdin is a TTY: with stdin redirected (`</dev/null`, "
+                         "`<file`, a `while read` loop) it does not prompt on the "
+                         "controlling terminal and fails fast (exit 1).")
     ap.add_argument("--config", help="config JSON (with --print-command/--print-commands/--print-specs)")
     ap.add_argument("--backend", choices=["auto", "native", "docker"], default="auto",
                     help="build backend for --print-command (auto = host default)")
@@ -477,7 +480,7 @@ def main(argv=None) -> int:
         # an explicit OPT-IN (--askpass-gui, what the driver's generated helper passes
         # for a GUI-launched build); --askpass / --askpass-no-gui (#221) never pop it,
         # and with no credential source and no TTY on stdin they fail fast rather than
-        # wedge a headless run. Every prompt and diagnostic goes to stderr, never the
+        # hang a headless run. Every prompt and diagnostic goes to stderr, never the
         # password channel.
         from .core.askpass import run_askpass
         return run_askpass(argv, allow_gui=bool(args.askpass_gui and not args.askpass_no_gui))
@@ -597,7 +600,7 @@ def main(argv=None) -> int:
     #
     # Scoped deliberately:
     #   * with a tray, the tray branch above already turned the flag off and the tray
-    #     itself is the reason to stay, so autoquit would be inert anyway;
+    #     itself is the reason to stay, so autoquit would do nothing anyway;
     #   * --go-live/--fleet open a single-purpose window the shell does not track, so
     #     turning the flag off for them would leave an invisible process with nothing
     #     on screen and no way back. Their pre-existing quit-on-close is correct.
