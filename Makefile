@@ -1813,7 +1813,16 @@ STACK_ANUBIS_ENV := $(if $(strip $(ANUBIS)), ANUBIS_ENABLED='true',)
 # TOR_ONION_UPSTREAM (command line or environment) always wins. Empty with TOR
 # unset, so a plain bring-up's STACK_ENV is byte-identical to before.
 STACK_TOR_ANUBIS_UPSTREAM := hugmesh-anubis:8923
-STACK_TOR_ENV := $(if $(strip $(TOR)), TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)'$(if $(strip $(ANUBIS)),$(if $(strip $(TOR_ONION_UPSTREAM)),, TOR_ONION_UPSTREAM='$(STACK_TOR_ANUBIS_UPSTREAM)'),),)
+# ANUBIS=1 TOR=1 also turns the gate's Secure cookie flag OFF (#627). Anubis
+# defaults to `Secure; SameSite=None`, and the onion's :80 door is plain http on
+# an origin Chromium does not treat as trustworthy (.onion is not localhost), so
+# Chromium drops both cookies, comes back to pass-challenge without them, and
+# Anubis answers 500 "Oh noes!" (measured live 2026-09-24). With the flag off
+# Anubis sends `SameSite=Lax` and no Secure. The localhost door (8923) works
+# either way, since Chromium treats localhost as secure. A caller's own
+# ANUBIS_COOKIE_SECURE wins, like TOR_ONION_UPSTREAM.
+STACK_TOR_ANUBIS_COOKIE_ENV := $(if $(strip $(ANUBIS_COOKIE_SECURE)),, ANUBIS_COOKIE_SECURE='false')
+STACK_TOR_ENV := $(if $(strip $(TOR)), TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)'$(if $(strip $(ANUBIS)),$(if $(strip $(TOR_ONION_UPSTREAM)),, TOR_ONION_UPSTREAM='$(STACK_TOR_ANUBIS_UPSTREAM)')$(STACK_TOR_ANUBIS_COOKIE_ENV),),)
 # MFA OPERATIONAL FLIP, opt-in per run — issue #47, following the PHPBB=1/AKKOMA=1
 # knob precedent. ONE switch, three lanes, and it flips ONLY app.mfa.enabled — the
 # freshness window keeps its default (600000) and the privileged floor stays on its
@@ -1970,6 +1979,10 @@ stack-m2-check:
 	 if [ "$$live" != "true" ] || [ -z "$$ip" ] || [ "$$ip" != "$$want" ]; then \
 	   echo "==> m2 registry stale (running=$$live ip=$${ip:-none} env=$${want:-none}) — re-running stack-m2-bootstrap"; \
 	   $(MAKE) --no-print-directory stack-m2-bootstrap; \
+	 elif pinmiss=$$(M2_CHECK_PINS=1 bash tests/stack/m2-bootstrap.sh 2>&1); [ $$? -ne 0 ]; then \
+	   echo "==> m2 cache is missing pinned artifact(s) (a PINS bump?) — re-running stack-m2-bootstrap"; \
+	   printf '%s\n' "$$pinmiss" | sed 's/^/    /'; \
+	   $(MAKE) --no-print-directory stack-m2-bootstrap; \
 	 fi
 
 # When SOCIAL=1, the included compose.real.yaml mastodon services need an
@@ -2074,8 +2087,7 @@ endif
 stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real SSO login; SOCIAL=1 also seeds Matrix/Mastodon
 	@echo "==> Seeding the running stack (Casdoor$(if $(strip $(SOCIAL)), + social,) tier)"
 	$(if $(strip $(SOCIAL)),,SEED_CASDOOR_ONLY=1 )$(if $(strip $(BRAND_B)),CASDOOR_BRAND_B_URL='$(BRANDB_CASDOOR)' )bash tests/stack/seed-e2e.sh
-	@pw="$$(bash tests/stack/e2e-password.sh)"; \
-	  echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin / $$pw) — $$pw is also readable from .e2e-credentials at the repo root."
+	@echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin); the shared password is in .e2e-credentials at the repo root (not printed here: this output is persisted by the Studio run log)."
 	$(STACK_SEED_STAGE2_NOTE)
 
 stack-halt: ## stop the local stack but KEEP its data (identity, rooms, accounts, DBs)
@@ -2216,9 +2228,11 @@ stack-e2e-list: ## enumerate the e2e specs as JSON without running them (no stac
 # "not serving". A file can still be left by a container that died without a
 # SIGTERM (kill -9, host crash), so when the docker CLI is present this ALSO asks
 # compose whether hugmesh-tor is running and refuses a file it is not serving.
-# Prints the https:// URL: the gateway's CSP upgrade-insecure-requests makes a
-# browser that enters over http:// upgrade every subresource and fetch() to
-# https:// (measured, see tor/entrypoint.sh), so https is the door a person uses.
+# Prints the https:// URL, the door a person uses: a secure context (Chromium does
+# not treat an http .onion as one), the node's :443, and a Secure session cookie
+# on a production-configured mesh (docs/TOR-HIDDEN-SERVICE.md "Why :443"). NOT
+# because of CSP upgrade-insecure-requests: the SPA document never carries it
+# (measured live 2026-09-24, #628).
 # Studio (core/local_mesh_bootstrap.py) and docs/SERVE-YOUR-MESH.md already cite
 # this target by name; it did not exist until now.
 STACK_ONION_FILE := tests/stack/tor-onion/hostname

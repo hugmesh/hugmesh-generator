@@ -20,6 +20,7 @@ What is pinned here is what only a real wizard can answer:
 Nothing here calls `.exec()`; a source scan pins that the page opens no dialog at all,
 because a modal in `validatePage`/`itemChanged` hangs this suite forever.
 """
+import copy
 import os
 
 import pytest
@@ -36,10 +37,12 @@ from hugmesh_studio.core.config import (                              # noqa: E4
 from hugmesh_studio.core.platform_info import HostInfo                # noqa: E402
 from hugmesh_studio.gui import wizard as wizard_mod                   # noqa: E402
 from hugmesh_studio.gui.pages import domain_services as page_mod      # noqa: E402
-from hugmesh_studio.gui.qt import QtWidgets                           # noqa: E402
+from hugmesh_studio.gui.pages import domains as domains_mod           # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtWidgets                       # noqa: E402
 
 from _helpers import (  # noqa: E402
-    advance_to, back_to, check_worklist_rows, enable_additional_domains, pick_mode)
+    added_names, added_row, advance_to, back_to, check_worklist_rows,
+    enable_additional_domains, pick_mode)
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -81,6 +84,15 @@ def _mesh_with_domains(wiz, *names):
     return dom
 
 
+def _to_added(wiz):
+    """Advance to the services step and past the mesh's OWN domain (#494: it opens
+    every mesh walk — being shown records it) onto the first ADDED domain."""
+    page = advance_to(wiz, page_mod.DomainServicesPage)
+    assert page.current_domain() == wiz.cfg.cluster_domain
+    page._step(1)
+    return page
+
+
 # ── 1. the page is a step in the domain flow ───────────────────────────────────
 def test_the_step_is_registered_right_after_domains():
     from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS
@@ -98,15 +110,24 @@ def test_standalone_skips_it_statically():
 def test_a_mesh_flow_lands_on_it_after_domains(wiz):
     _mesh_with_domains(wiz, "acme.example")
     page = advance_to(wiz, page_mod.DomainServicesPage)
+    # the mesh's OWN domain opens the walk (#494), the added one follows
+    assert page.current_domain() == wiz.cfg.cluster_domain
+    assert "this mesh's own domain" in page.head.text()
+    page._step(1)
     assert page.current_domain() == "acme.example"
 
 
-def test_it_is_skipped_when_no_domain_is_named(wiz):
-    """Emission-neutral: with no named domain there is nothing to record and nothing
-    for the gate to refuse, so skipping cannot smuggle a domain past it."""
+def test_it_is_skipped_only_when_no_domain_at_all_is_named(wiz):
+    """Leaves the output unchanged: with no named domain — no cluster domain and no table row —
+    there is nothing to record and nothing for the gate to refuse, so skipping cannot
+    smuggle a domain past it. A mesh with a cluster domain always applies (#494: the
+    own domain has a services page), with or without the Domains table."""
     page = wiz.page(wiz._page_ids["domain_services"])
-    assert not page.applies_to(ImageConfig(mode="mesh", additional_domains=True))
-    cfg = ImageConfig(mode="mesh", additional_domains=True,
+    assert not page.applies_to(ImageConfig(mode="mesh", additional_domains=True,
+                                           cluster_domain=""))
+    assert page.applies_to(ImageConfig(mode="mesh", additional_domains=False))
+    assert page.applies_to(ImageConfig(mode="mesh", additional_domains=True))
+    cfg = ImageConfig(mode="mesh", additional_domains=True, cluster_domain="",
                       domains=[Domain(name="acme.example")])
     assert page.applies_to(cfg)
 
@@ -115,13 +136,18 @@ def test_it_is_skipped_when_no_domain_is_named(wiz):
 def test_it_shows_one_domain_at_a_time_and_says_which(wiz):
     _mesh_with_domains(wiz, "acme.example", "beta.example")
     page = advance_to(wiz, page_mod.DomainServicesPage)
+    own = wiz.cfg.cluster_domain
+    assert page.current_domain() == own
+    assert own in page.title()
+    assert "1 of 3" in page.subTitle()
+    page._step(1)
     assert page.current_domain() == "acme.example"
     assert "acme.example" in page.title()
-    assert "1 of 2" in page.subTitle()
+    assert "2 of 3" in page.subTitle()
     page._step(1)
     assert page.current_domain() == "beta.example"
     assert "beta.example" in page.title()
-    assert "2 of 2" in page.subTitle()
+    assert "3 of 3" in page.subTitle()
 
 
 def test_it_offers_the_domain_catalogue_and_not_the_infra_slugs(wiz):
@@ -178,7 +204,7 @@ def test_the_page_opens_no_dialog_at_all(wiz):
 # ── 3. what a walk records ─────────────────────────────────────────────────────
 def test_ticking_reaches_cfg_and_the_mesh_manifest_in_catalogue_order(wiz):
     _mesh_with_domains(wiz, "acme.example")
-    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page = _to_added(wiz)
     page._boxes["owncast"].setChecked(True)
     page._boxes["games"].setChecked(True)
     advance_to(wiz, wizard_mod.UsersChoicePage)
@@ -191,16 +217,17 @@ def test_walking_one_of_two_domains_leaves_the_other_unconfigured(wiz):
     """THE GATE'S REASON TO EXIST. Stepping is what records a domain; a domain the
     operator never opened is not configured, and is named downstream."""
     _mesh_with_domains(wiz, "acme.example", "beta.example")
-    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page = _to_added(wiz)
     assert page.unconfigured() == ["beta.example"]
     advance_to(wiz, wizard_mod.UsersChoicePage)
-    assert wiz.cfg.domain_services_reviewed == ["acme.example"]
+    # the own domain first (it was shown too), then the walked table row
+    assert wiz.cfg.domain_services_reviewed == [wiz.cfg.cluster_domain, "acme.example"]
     assert ds.unconfigured_domains(wiz.cfg) == ["beta.example"]
 
 
 def test_stepping_through_every_domain_clears_the_gate(wiz):
     _mesh_with_domains(wiz, "acme.example", "beta.example")
-    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page = _to_added(wiz)
     page._step(1)
     assert page.unconfigured() == []
     advance_to(wiz, wizard_mod.UsersChoicePage)
@@ -212,14 +239,14 @@ def test_validate_page_records_but_never_refuses(wiz):
     so a False here would make SAVING a config depend on where the operator was
     standing — and the refusal belongs at the build screen, where it can be acted on."""
     _mesh_with_domains(wiz, "acme.example", "beta.example")
-    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page = _to_added(wiz)
     assert page.unconfigured() == ["beta.example"]
     assert page.validatePage() is True
 
 
 def test_a_per_domain_selection_does_not_leak_onto_the_next_domain(wiz):
     _mesh_with_domains(wiz, "acme.example", "beta.example")
-    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page = _to_added(wiz)
     page._boxes["akkoma"].setChecked(True)
     page._step(1)
     assert not page._boxes["akkoma"].isChecked()
@@ -240,7 +267,7 @@ def test_a_loaded_domain_keeps_its_slugs_and_still_counts_as_unconfigured(wiz):
                  Domain(name="beta.example", optional_services=["akkoma"])]
     wiz.restart()
     assert ds.unconfigured_domains(c) == ["acme.example", "beta.example"]
-    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page = _to_added(wiz)
     assert page.current_domain() == "acme.example"
     assert page.selected_slugs() == ["phpbb", "owncast"]
     assert page._boxes["phpbb"].isChecked() and page._boxes["owncast"].isChecked()
@@ -252,7 +279,7 @@ def test_a_slug_this_build_does_not_offer_is_kept_and_pre_ticked(wiz):
     c.mode, c.role, c.additional_domains = "mesh", "omnibus", True
     c.domains = [Domain(name="acme.example", optional_services=["akkoma", "tor"])]
     wiz.restart()
-    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page = _to_added(wiz)
     assert "tor" in page._boxes and page._boxes["tor"].isChecked()
     assert "kept from your config" in page._rows["tor"].text(page_mod._COL_NAME)
     # The row still says WHAT IT IS as well as where it came from: every infra slug
@@ -269,7 +296,7 @@ def test_a_config_that_already_recorded_its_domains_is_not_asked_twice(wiz):
     c = wiz.cfg
     c.mode, c.role, c.additional_domains = "mesh", "omnibus", True
     c.domains = [Domain(name="acme.example"), Domain(name="beta.example")]
-    c.domain_services_reviewed = ["acme.example", "beta.example"]
+    c.domain_services_reviewed = [c.cluster_domain, "acme.example", "beta.example"]
     wiz.restart()
     page = advance_to(wiz, page_mod.DomainServicesPage)
     assert page.unconfigured() == []
@@ -280,7 +307,7 @@ def test_the_page_resumes_on_the_first_domain_that_still_needs_walking(wiz):
     c = wiz.cfg
     c.mode, c.role, c.additional_domains = "mesh", "omnibus", True
     c.domains = [Domain(name="acme.example"), Domain(name="beta.example")]
-    c.domain_services_reviewed = ["acme.example"]
+    c.domain_services_reviewed = [c.cluster_domain, "acme.example"]
     wiz.restart()
     page = advance_to(wiz, page_mod.DomainServicesPage)
     assert page.current_domain() == "beta.example"
@@ -310,7 +337,7 @@ def test_launch_refuses_the_build_and_names_the_domain(wiz):
 def test_launch_lets_a_configured_build_through(wiz):
     page = _launch_page(wiz)
     wiz.cfg.domains = [Domain(name="acme.example")]
-    ds.record_reviewed(wiz.cfg, ["acme.example"])
+    ds.record_reviewed(wiz.cfg, [wiz.cfg.cluster_domain, "acme.example"])
     assert page._refuse() is False
     assert page.gate_err.isHidden()
     assert page.continue_card.isEnabled()
@@ -403,7 +430,7 @@ def test_the_selection_survives_to_the_launch_screen(wiz):
     """THE REGRESSION TEST. Walks to the LAST door before dispatch, not one page past
     the step."""
     _mesh_with_domains(wiz, "acme.example")
-    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page = _to_added(wiz)
     page._boxes["akkoma"].setChecked(True)
     page._boxes["owncast"].setChecked(True)
     advance_to(wiz, wizard_mod.LaunchPage)
@@ -416,7 +443,7 @@ def test_collect_all_is_re_entrant_and_domains_is_not_the_last_word(wiz):
     """Pins the MECHANISM rather than only the symptom: a bare collect_all() must not
     be able to undo the step either, however many times it runs."""
     _mesh_with_domains(wiz, "acme.example")
-    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page = _to_added(wiz)
     page._boxes["akkoma"].setChecked(True)
     advance_to(wiz, wizard_mod.UsersChoicePage)
     for _ in range(5):
@@ -433,7 +460,7 @@ def test_editing_a_loaded_rows_services_is_not_reverted_to_what_was_loaded(wiz):
     enable_additional_domains(wiz)
     dom = advance_to(wiz, wizard_mod.DomainsPage)
     dom._add("acme.example", "Acme", ["phpbb"])
-    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page = _to_added(wiz)
     assert page.selected_slugs() == ["phpbb"]
     page._boxes["phpbb"].setChecked(False)
     page._boxes["games"].setChecked(True)
@@ -447,7 +474,7 @@ def test_the_domains_table_still_owns_which_domains_exist(wiz):
     dom = _mesh_with_domains(wiz, "acme.example", "beta.example")
     advance_to(wiz, page_mod.DomainServicesPage)
     back_to(wiz, wizard_mod.DomainsPage)
-    dom.table.item(1, 0).setText("renamed.example")
+    dom.table.item(added_row(dom, 1), 0).setText("renamed.example")
     dom._add("third.example", "Third")
     advance_to(wiz, page_mod.DomainServicesPage)
     assert [d.name for d in wiz.cfg.domains] == \
@@ -458,10 +485,10 @@ def test_a_renamed_row_keeps_the_slugs_its_cell_carries(wiz):
     """cfg is consulted BY NAME, so a row cfg does not know yet falls back to the
     cell — which is the only carrier of a renamed row's slugs."""
     dom = _mesh_with_domains(wiz, "acme.example")
-    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page = _to_added(wiz)
     page._boxes["owncast"].setChecked(True)
     back_to(wiz, wizard_mod.DomainsPage)
-    dom.table.item(0, 0).setText("renamed.example")
+    dom.table.item(added_row(dom, 0), 0).setText("renamed.example")
     assert dom.validatePage() is True
     assert wiz.cfg.domains[0].name == "renamed.example"
     assert wiz.cfg.domains[0].optional_services == ["owncast"]
@@ -472,12 +499,12 @@ def test_a_renamed_row_keeps_the_slugs_its_cell_carries(wiz):
 def test_the_read_only_cell_shows_what_the_step_recorded(wiz):
     """The mirror must not keep displaying the pre-step text once cfg has moved on."""
     dom = _mesh_with_domains(wiz, "acme.example")
-    cell = dom.table.cellWidget(0, 2)
+    cell = dom.table.cellWidget(added_row(dom, 0), 2)
     assert cell.text() == "not configured yet"
-    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page = _to_added(wiz)
     page._boxes["games"].setChecked(True)
     back_to(wiz, wizard_mod.DomainsPage)
-    assert dom.table.cellWidget(0, 2).text() == "games"
+    assert dom.table.cellWidget(added_row(dom, 0), 2).text() == "games"
 
 
 def test_validate_page_leaves_the_mirror_consistent_with_what_it_wrote(wiz):
@@ -487,18 +514,18 @@ def test_validate_page_leaves_the_mirror_consistent_with_what_it_wrote(wiz):
     _on_page_changed does not fire without a page change, so the refresh has to happen
     where the write happens."""
     dom = _mesh_with_domains(wiz, "acme.example")
-    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page = _to_added(wiz)
     page._boxes["games"].setChecked(True)
     page.validatePage()                       # the step records into cfg
-    assert dom.table.cellWidget(0, 2).text() == "not configured yet"
+    assert dom.table.cellWidget(added_row(dom, 0), 2).text() == "not configured yet"
     dom.validatePage()                        # ...and the mirror catches up with it
-    assert dom.table.cellWidget(0, 2).text() == "games"
+    assert dom.table.cellWidget(added_row(dom, 0), 2).text() == "games"
 
 
 def test_the_cell_renders_cores_one_summary_string(wiz):
     """One wording, one source of truth — the cell used to carry its own copy."""
     dom = _mesh_with_domains(wiz, "acme.example")
-    cell = dom.table.cellWidget(0, 2)
+    cell = dom.table.cellWidget(added_row(dom, 0), 2)
     for slugs, reviewed in (([], False), (["akkoma"], False),
                             ([], True), (["games", "owncast"], True)):
         cell.set_slugs(slugs, reviewed=reviewed)
@@ -518,7 +545,7 @@ def test_the_continue_card_click_refuses_on_its_own(wiz, monkeypatch):
     monkeypatch.setattr(wiz, "next", lambda: nexts.append(1))
     page._continue()
     assert nexts == [], "the Continue card's own handler must refuse before next()"
-    ds.record_reviewed(wiz.cfg, ["unconfigured.example"])
+    ds.record_reviewed(wiz.cfg, [wiz.cfg.cluster_domain, "unconfigured.example"])
     page._continue()
     assert nexts == [1], "a configured build must still continue"
 
@@ -542,10 +569,10 @@ def test_loading_a_different_config_does_not_carry_a_reviewed_marker_into_it(wiz
     domain already marked configured — the gate satisfied for a domain nobody in that
     session had looked at."""
     _mesh_with_domains(wiz, "acme.example")
-    advance_to(wiz, page_mod.DomainServicesPage)
+    _to_added(wiz)
     assert wiz.cfg.domain_services_reviewed == []           # not yet written
     advance_to(wiz, wizard_mod.UsersChoicePage)
-    assert wiz.cfg.domain_services_reviewed == ["acme.example"]
+    assert wiz.cfg.domain_services_reviewed == [wiz.cfg.cluster_domain, "acme.example"]
 
     # a DIFFERENT configuration file that happens to name the same domain plus one more
     other = ImageConfig(mode="mesh", additional_domains=True,
@@ -561,6 +588,10 @@ def test_loading_a_different_config_does_not_carry_a_reviewed_marker_into_it(wiz
     # domain's screen is what records it — so the discriminator is WHICH domain it
     # lands on. With the leak, acme.example arrived already marked, the page skipped
     # straight to zeta.example, and one screen later nothing was left unconfigured.
+    # (the own domain opens every walk and is recorded by being shown, so the first
+    # domain the LEAK could have skipped is the first table row)
+    assert page.current_domain() == other.cluster_domain
+    page._step(1)
     assert page.current_domain() == "acme.example", \
         "a freshly loaded config must not inherit the last flow's walked domains"
     assert page.unconfigured() == ["zeta.example"]
@@ -571,7 +602,7 @@ def test_a_stale_page_cannot_write_its_answers_onto_a_new_config(wiz, tmp_path):
     restart() — so the page's own recording hook fires with the new cfg in place. It
     must be a no-op until initializePage has adopted that config."""
     _mesh_with_domains(wiz, "acme.example")
-    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page = _to_added(wiz)
     page._boxes["akkoma"].setChecked(True)
 
     other = ImageConfig(mode="mesh", additional_domains=True,
@@ -589,10 +620,10 @@ def test_the_working_selection_is_re_seeded_from_cfg_on_every_entry(wiz):
     """ASSIGNED, never merged: a domain dropped from the table must not keep a working
     selection that a later re-add would silently restore."""
     dom = _mesh_with_domains(wiz, "acme.example", "beta.example")
-    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page = _to_added(wiz)
     page._boxes["akkoma"].setChecked(True)          # acme.example
     back_to(wiz, wizard_mod.DomainsPage)
-    dom.table.removeRow(0)
+    dom.table.removeRow(added_row(dom, 0))
     advance_to(wiz, page_mod.DomainServicesPage)
     assert "acme.example" not in page._selection
     back_to(wiz, wizard_mod.DomainsPage)
@@ -756,3 +787,133 @@ def test_a_fleet_session_is_not_touched_by_the_services_restart_guard(monkeypatc
     flat = SimpleNamespace(id="f1", workdir=str(tmp_path), config=cfg.to_dict(),
                            kind="fleet", blanked_secrets=[], held_secret_files=[])
     assert sw.PreviousBuildsWidget.can_restart(flat) == (True, "")
+
+
+# ── 12. THE MESH'S OWN DOMAIN (issue #494, reported 2026-09-23) ────────────────
+# "the checkbox doesn't seem to be present on each domain page": ask 19's default
+# card skipped the Domains table and, with it, this step — so the one domain every
+# mesh serves never had a services page. Now the own domain opens every mesh walk.
+def _mesh_default_path(wiz):
+    pick_mode(wiz, "mesh")
+    wl = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(wl, "omnibus.x86")
+    choice = advance_to(wiz, wizard_mod.DomainsChoicePage)
+    assert choice._selected() == "internal"                # the DEFAULT card
+    return choice
+
+
+def test_the_mesh_default_path_visits_the_own_domains_page(wiz):
+    _mesh_default_path(wiz)
+    page = advance_to(wiz, page_mod.DomainServicesPage)
+    assert page.current_domain() == wiz.cfg.cluster_domain
+    assert "1 of 1" in page.subTitle()
+    assert "this mesh's own domain" in page.head.text()
+    assert wiz.cfg.domains == []                            # never a domains row
+    assert wiz.cfg.additional_domains is False
+
+
+def test_the_own_domain_page_is_emission_neutral_when_untouched(wiz):
+    """ASK 8's guard, re-pinned against the new page: an operator who never ticks
+    anything on the own domain's page emits exactly what the flow emitted before the
+    page existed — no --domains, no manifest domains entry, no new manifest key."""
+    _mesh_default_path(wiz)
+    argv_before = wiz.cfg.to_cli_args()
+    manifest_before = copy.deepcopy(wiz.cfg.mesh_manifest())
+    advance_to(wiz, page_mod.DomainServicesPage)
+    advance_to(wiz, wizard_mod.UsersChoicePage)
+    assert wiz.cfg.domains == []
+    assert "--domains" not in wiz.cfg.to_cli_args()
+    assert wiz.cfg.to_cli_args() == argv_before
+    after = wiz.cfg.mesh_manifest()
+    assert after["domains"] == [] and "cluster_domain_services" not in after
+    assert after == manifest_before
+    assert wiz.cfg.domain_services_reviewed == [wiz.cfg.cluster_domain]
+
+
+def test_ticking_on_the_own_domain_records_cluster_domain_services_only(wiz):
+    _mesh_default_path(wiz)
+    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page._boxes["games"].setChecked(True)
+    advance_to(wiz, wizard_mod.LaunchPage)
+    assert wiz.cfg.cluster_domain_services == ["games"]
+    assert wiz.cfg.domains == []
+    assert "--domains" not in wiz.cfg.to_cli_args()
+    m = wiz.cfg.mesh_manifest()
+    assert m["domains"] == [] and m["cluster_domain_services"] == ["games"]
+
+
+def test_the_domains_table_shows_the_own_domain_as_row_0(wiz):
+    dom = _mesh_with_domains(wiz, "acme.example")
+    assert dom.is_own_row(0)
+    assert dom.table.item(0, 0).text() == wiz.cfg.cluster_domain
+    assert not (dom.table.item(0, 0).flags() & Qt.ItemFlag.ItemIsEditable)
+    assert added_names(dom) == ["acme.example"]
+    assert isinstance(dom.table.cellWidget(0, 2), page_mod.__dict__.get(
+        "_ServicesCell", domains_mod._ServicesCell))
+    dom.table.selectAll()
+    dom._remove()
+    assert dom.is_own_row(0) and dom.row_note.isVisibleTo(dom)
+    assert dom.validatePage() is True
+    assert [d.name for d in wiz.cfg.domains] == []          # removed acme, kept own
+
+
+def test_the_own_row_mirrors_what_the_step_recorded(wiz):
+    dom = _mesh_with_domains(wiz, "acme.example")
+    assert dom.table.cellWidget(0, 2).text() == "not configured yet"
+    page = advance_to(wiz, page_mod.DomainServicesPage)   # own domain shown
+    page._boxes["owncast"].setChecked(True)
+    back_to(wiz, wizard_mod.DomainsPage)
+    assert dom.table.cellWidget(0, 2).text() == "owncast"
+    assert wiz.cfg.cluster_domain_services == ["owncast"]
+    assert [d.name for d in wiz.cfg.domains] == ["acme.example"]
+
+
+# ── 11. #631 section 1: the OWN domain is gated on the build screen too ─────────────
+# Before #631 the gate read the table rows only, so the own domain's page was enforced
+# by being unavoidable on a fresh walk and nothing else — a config LOADED on the
+# Sessions screen that never opened it went straight through the build door.
+def test_a_loaded_config_that_never_walked_its_own_domain_is_refused(wiz):
+    page = _launch_page(wiz)
+    wiz.cfg.domains = [Domain(name="acme.example")]
+    ds.record_reviewed(wiz.cfg, ["acme.example"])      # rows walked, own domain never
+    assert page._refuse() is True
+    text = page.gate_err.text()
+    assert "1 domain has no recorded service configuration — " \
+        f"{wiz.cfg.cluster_domain}." in text
+    assert not page.continue_card.isEnabled()
+    assert page.validatePage() is False
+
+
+def test_the_default_card_with_no_walk_is_refused_by_name(wiz):
+    """#589's suggested test, on the real build screen: default card (no rows) + build
+    -> the refusal names the primary domain when its services were never confirmed."""
+    page = _launch_page(wiz)
+    assert wiz.cfg.domains == [] and wiz.cfg.domain_services_reviewed == []
+    assert page._refuse() is True
+    assert wiz.cfg.cluster_domain in page.gate_err.text()
+
+
+def test_walking_the_own_domains_page_is_what_lets_the_build_through(wiz):
+    """The page walk sets the marker — the remedy the refusal names works."""
+    c = wiz.cfg
+    c.mode, c.role = "mesh", "omnibus"
+    wiz.restart()
+    svc = advance_to(wiz, page_mod.DomainServicesPage)
+    assert svc.current_domain() == wiz.cfg.cluster_domain
+    assert ds.gate_reason(wiz.cfg) != ""               # shown, not yet recorded
+    assert svc.validatePage() is True
+    assert ds.gate_reason(wiz.cfg) == ""
+    assert wiz.cfg.domain_services_reviewed == [wiz.cfg.cluster_domain]
+
+
+def test_a_fresh_default_card_walk_reaches_a_launch_that_lets_it_through(wiz):
+    """An UNTOUCHED fresh flow is not blocked, and still emits no --domains, no
+    manifest domains entry and no cluster_domain_services (argv identity across the
+    services step itself is pinned above, by the default-path emission test)."""
+    _mesh_default_path(wiz)
+    launch = advance_to(wiz, wizard_mod.LaunchPage)
+    assert launch.gate_refusal() == ""
+    assert launch._refuse() is False and launch.continue_card.isEnabled()
+    assert "--domains" not in wiz.cfg.to_cli_args()
+    m = wiz.cfg.mesh_manifest()
+    assert m["domains"] == [] and "cluster_domain_services" not in m

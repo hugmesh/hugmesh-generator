@@ -159,6 +159,26 @@ have_artifact() { # artifactId version kind(pom|jar|jar+tests) groupPath
   esac
 }
 
+# M2_CHECK_PINS=1 — CHECK-ONLY MODE (used by `make stack-m2-check`). Answers one
+# question and touches nothing: does the m2 cache hold EVERY artifact in PINS?
+# Prints each missing coordinate and exits 1, or exits 0. Without it the compose
+# lane re-ran this script only when the registry container was down or had moved
+# IP, so a PINS bump (auth-core 2.5.0 being the live example) was never built on a
+# box whose registry was already up, and `make stack-up` died on
+# `Could not find artifact ...` until someone ran stack-m2-bootstrap by hand.
+if [ "${M2_CHECK_PINS:-}" = "1" ]; then
+  _missing=0
+  for _pin in "${PINS[@]}"; do
+    IFS='|' read -r _repo _sha _artifact _version _kind _group <<< "${_pin}"
+    if ! have_artifact "${_artifact}" "${_version}" "${_kind}" "${_group}"; then
+      echo "missing from ${M2_REPO}: ${_group}:${_artifact}:${_version} (${_kind})"
+      _missing=$((_missing+1))
+    fi
+  done
+  [ "${_missing}" -eq 0 ]
+  exit $?
+fi
+
 ensure_src_at() { # repo sha -> checkout ${SRC_DIR}/<repo> at <sha> (detached)
   local dir="${SRC_DIR}/$1" sha="$2"
   if [ ! -d "${dir}/.git" ]; then

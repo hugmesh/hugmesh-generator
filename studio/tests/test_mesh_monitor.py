@@ -18,7 +18,7 @@ import pytest
 
 from hugmesh_studio.core import mesh_monitor as mm
 
-#: This module exercises the REAL snapshot (tests/conftest.py makes it inert for
+#: This module exercises the REAL snapshot (tests/conftest.py makes it do nothing for
 #: every other suite).
 pytestmark = pytest.mark.real_mesh_monitor
 from hugmesh_studio.core import view_doors
@@ -216,9 +216,26 @@ def test_init_container_waiting_reason_is_surfaced(catalog):
 
 
 def test_succeeded_is_done_never_failed(catalog):
+    """Decision 99 = A (#378): a Succeeded pod OWNED BY A JOB is finished work — the new
+    `completed` state, never failed and never the 'stopped' a halted service wears."""
     units, _ = mm._join(cluster_objects(), HOST_PORTS, catalog, {}, CLUSTER)
     job = _by_name(units)["seed-job-abc12"]
-    assert job.phase == "Succeeded" and job.state == "stopped"
+    assert job.phase == "Succeeded" and job.state == "completed"
+    assert not job.ready            # not running — it is just not counted against N/N
+
+
+def test_a_succeeded_pod_no_job_owns_is_still_stopped(catalog):
+    """Identified by what it IS (a Job's pod), not by how it ended: a bare or
+    ReplicaSet-owned pod that exited cleanly is down, not 'completed'."""
+    objs = cluster_objects()
+    objs["items"].append(_pod(PKI, "bare-done", {"app": "bare"}, "Succeeded", owner=None,
+                              containers=[_c("x", ready=False, terminated=0)]))
+    objs["items"].append(_pod(PKI, "rs-done-abcde", {"app": "rs"}, "Succeeded",
+                              owner=("ReplicaSet", "rs-done"),
+                              containers=[_c("x", ready=False, terminated=0)]))
+    units, _ = mm._join(objs, HOST_PORTS, [], {}, CLUSTER)
+    by = _by_name(units)
+    assert by["bare-done"].state == "stopped" and by["rs-done-abcde"].state == "stopped"
 
 
 def test_clusterip_only_service_has_no_browser_door(catalog):
@@ -501,8 +518,13 @@ def test_snapshot_kind_running_alone_counts_as_running(tools):
     assert snap.compose.running is False
     assert snap.kind.running is True and "hugmesh-local" in snap.kind.detail
     assert snap.any_running is True
-    assert snap.ready_counts[1] == len([i for i in cluster_objects()["items"]
-                                        if i["kind"] == "Pod"])
+    pods = [i for i in cluster_objects()["items"] if i["kind"] == "Pod"]
+    assert len(snap.units) == len(pods)           # every pod keeps its row (ask A)
+    # ...but the Job's Succeeded pod is `completed`: outside the N/N headline (#378)
+    done = [i for i in pods if i["status"]["phase"] == "Succeeded"
+            and any(o["kind"] == "Job" for o in i["metadata"]["ownerReferences"])]
+    assert len(done) == 1
+    assert snap.ready_counts[1] == len(pods) - len(done)
     assert snap.errors == ()
     # the kubectl call named the kind context explicitly — never the ambient one
     assert any("--context" in c and "kind-hugmesh-local" in c for c in node.calls)
@@ -649,6 +671,9 @@ def test_compose_lists_every_container_including_exited_ones(monkeypatch):
     assert ps and all("--all" in c for c in ps), node.calls
     by = {u.owner: u for u in units}
     init = by["cassandra-init"]
+    # (the fake compose file does not exist, so nothing is KNOWN to be a one-shot and
+    # an exit-0 row stays 'stopped' — reading as down is the safe default, see the
+    # `completed` tests below for the identified case)
     assert init.state == "stopped" and init.ready is False and "exit 0" in init.reason
     assert by["seed"].state == "failed" and "exit 3" in by["seed"].reason
     # the `docker ps` fallback lists all of them too
@@ -658,6 +683,140 @@ def test_compose_lists_every_container_including_exited_ones(monkeypatch):
     mm._compose_units(node2, "/g", [], {}, mm._Budget(25))
     fallback = [c for c in node2.calls if c[:2] == ["docker", "ps"]]
     assert fallback and "--all" in fallback[0], node2.calls
+
+
+def test_fallback_docker_ps_path_carries_the_exit_code_of_a_dead_container(monkeypatch):
+    """#377: when `docker compose ps --format json` is rejected the monitor falls back
+    to `docker ps --all --format {{json .}}`, whose rows have NO ExitCode field — the
+    code lives only in Status text ("Exited (137) 5 minutes ago"). The parser never
+    emitted it, so `_compose_units` read 0 and labelled a container that died with 137
+    a clean 'stopped (exit 0)'. It must read as FAILED with the real code."""
+    monkeypatch.setattr(mm.shutil, "which", lambda t: "/usr/bin/docker")
+    monkeypatch.setattr(mm, "_compose_base", lambda: ["docker", "compose"])
+    labels = "com.docker.compose.project=hugmesh-local,com.docker.compose.service="
+
+    def ps_row(service, state, status):
+        return json.dumps({"Names": f"hugmesh-local-{service}-1", "State": state,
+                           "Status": status, "Image": "img",
+                           "Labels": labels + service, "Ports": ""})
+    out = "\n".join([
+        ps_row("casdoor", "exited", "Exited (137) 5 minutes ago"),
+        ps_row("cassandra-init", "exited", "Exited (0) 2 hours ago"),
+        ps_row("gateway", "running", "Up 3 hours")])
+    node = _Node(script={"compose -f": (1, "unknown flag"), "docker ps": (0, out)})
+    _lane, units, _notes, _errors = mm._compose_units(node, "/g", [], {}, mm._Budget(25))
+    by = {u.owner: u for u in units}
+    assert by["casdoor"].state == "failed" and "exit 137" in by["casdoor"].reason
+    assert by["casdoor"].ready is False
+    assert by["cassandra-init"].state == "stopped" and "exit 0" in by["cassandra-init"].reason
+    assert by["gateway"].state != "failed"
+    # the parser itself: ExitCode only for an Exited (N) status; absent otherwise
+    rows = {r["Service"]: r for r in mm._parse_docker_ps(out)}
+    assert rows["casdoor"]["ExitCode"] == 137 and rows["cassandra-init"]["ExitCode"] == 0
+    assert "ExitCode" not in rows["gateway"]
+
+
+# ── #378 / Decision 99 = A: finished one-shots are `completed`, outside N/N ────────────
+_ONESHOT_COMPOSE = """\
+name: hugmesh-local
+x-amd64: &amd64
+  platform: linux/amd64
+services:
+  cassandra:
+    image: cassandra:5
+    restart: unless-stopped
+  cassandra-init:
+    <<: *amd64
+    image: cassandra:5
+    restart: "no"
+    depends_on:
+      cassandra: { condition: service_healthy }
+  admin-bff-db-init:
+    image: postgres:16-alpine
+    restart: 'no'   # one-shot
+  plain-service:
+    image: nginx
+  stopped-by-hand:
+    image: nginx
+    restart: on-failure:5
+volumes:
+  data: {}
+"""
+
+
+def _oneshot_rows():
+    def row(service, state, status, code):
+        return {"Name": f"hugmesh-local-{service}-1", "Service": service, "State": state,
+                "Status": status, "Health": "", "Image": "img", "ExitCode": code,
+                "Publishers": []}
+    return [row("cassandra", "running", "Up 3 hours", 0),
+            row("cassandra-init", "exited", "Exited (0) 3 hours ago", 0),
+            row("admin-bff-db-init", "exited", "Exited (0) 3 hours ago", 0),
+            row("plain-service", "exited", "Exited (0) 1 minute ago", 0),
+            row("stopped-by-hand", "exited", "Exited (0) 1 minute ago", 0)]
+
+
+def test_compose_oneshot_scan_reads_restart_no_services_only(tmp_path):
+    f = tmp_path / "compose.yaml"
+    f.write_text(_ONESHOT_COMPOSE)
+    assert mm._compose_oneshot_services(str(f)) == frozenset(
+        {"cassandra-init", "admin-bff-db-init"})
+    assert mm._compose_oneshot_services(str(tmp_path / "missing.yaml")) == frozenset()
+    assert mm._compose_oneshot_services("") == frozenset()
+
+
+def test_the_real_compose_file_names_exactly_its_two_one_shots():
+    """The scan is text over a committed file: pin it against the REAL one, so a change
+    to how the file spells `restart: "no"` (or a third one-shot) is noticed here rather
+    than as a mesh that reads 41/43 again."""
+    real = os.path.join(GENERATOR_DIR, "tests", "stack", "compose.local.yaml")
+    assert mm._compose_oneshot_services(real) == frozenset(
+        {"cassandra-init", "admin-bff-db-init"})
+
+
+def test_an_exit_zero_compose_one_shot_is_completed_but_a_service_that_stopped_is_not(
+        monkeypatch, tmp_path):
+    f = tmp_path / "compose.yaml"
+    f.write_text(_ONESHOT_COMPOSE)
+    monkeypatch.setattr(mm.shutil, "which", lambda t: "/usr/bin/docker")
+    monkeypatch.setattr(mm, "_compose_base", lambda: ["docker", "compose"])
+    node = _Node(script={"compose -f": (0, json.dumps(_oneshot_rows()))})
+    node.compose_file = str(f)
+    _lane, units, _notes, _errors = mm._compose_units(node, "/g", [], {}, mm._Budget(25))
+    by = {u.owner: u for u in units}
+    for one in ("cassandra-init", "admin-bff-db-init"):
+        assert by[one].state == "completed" and by[one].ready is False, by[one]
+        assert "exit 0" in by[one].reason and "completed" in by[one].phase
+    # identified by what it IS, not by exit code alone: still reads as down
+    assert by["plain-service"].state == "stopped"
+    assert by["stopped-by-hand"].state == "stopped"
+    assert by["cassandra"].state == "ok"
+    # a one-shot that died NON-zero is still a failure, never 'completed'
+    rows = _oneshot_rows()
+    rows[1].update(ExitCode=1, Status="Exited (1) 3 hours ago")
+    node = _Node(script={"compose -f": (0, json.dumps(rows))})
+    node.compose_file = str(f)
+    _lane, units, _n, _e = mm._compose_units(node, "/g", [], {}, mm._Budget(25))
+    assert {u.owner: u for u in units}["cassandra-init"].state == "failed"
+
+
+def test_completed_rows_stay_in_the_table_but_out_of_the_ready_headline():
+    """A healthy mesh read 41/43 ready because the two finished one-shots sat in the
+    denominator. They keep their rows; N/N is back."""
+    def unit(name, state, ready):
+        return mm.MeshUnit(lane="compose", namespace="", name=name, owner=name,
+                           phase=state, ready=ready, reason="", state=state)
+    units = tuple(unit(f"svc{i}", "ok", True) for i in range(41)) + (
+        unit("cassandra-init", "completed", False),
+        unit("admin-bff-db-init", "completed", False))
+    snap = mm.MonitorSnapshot(taken_at="t", compose=mm.LaneState(True), kind=mm.LaneState(False),
+                              units=units)
+    assert len(snap.units) == 43                     # rows kept
+    assert snap.ready_counts == (41, 41)
+    # a halted service is still counted against the headline (reads as down)
+    snap2 = mm.MonitorSnapshot(taken_at="t", compose=mm.LaneState(True), kind=mm.LaneState(False),
+                               units=units + (unit("halted", "stopped", False),))
+    assert snap2.ready_counts == (41, 42)
 
 
 def test_snapshot_carries_the_lane_the_live_view_session_serves(tools, tmp_path,

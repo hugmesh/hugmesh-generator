@@ -280,7 +280,7 @@ class LocalStackNode:
         # default) sets NOTHING: the stack env stays byte-identical to before these
         # params existed. An EXTERNAL provider exports the provider-neutral
         # OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_JWKS_URI vars for `make stack-*`,
-        # and the Makefile CONSUMES all three (the Lane-B seam, landed): they map
+        # and the Makefile CONSUMES all three (the Lane-B env-var contract, landed): they map
         # onto CASDOOR_ISSUER_URI / CASDOOR_APP_CLIENT_ID / CASDOOR_JWKS_URI, so
         # gateway + BFF token VALIDATION runs against the external issuer/JWKS.
         # The coupled legs (native login, MFA step-up, role claims) stay
@@ -776,7 +776,7 @@ class LocalStackNode:
 
         # External IdP (I6.6): exported ONLY for an external provider WITH an issuer,
         # so the casdoor default (and a half-configured external) leaves the env
-        # byte-identical. Consumed by the Makefile's OIDC seam (landed): the vars
+        # byte-identical. Consumed by the Makefile's OIDC env-var contract (landed): the vars
         # map onto CASDOOR_ISSUER_URI / CASDOOR_APP_CLIENT_ID / CASDOOR_JWKS_URI
         # for gateway + BFF token validation (documented in __init__). Values are
         # public endpoints/identifiers — never secrets.
@@ -793,7 +793,7 @@ class LocalStackNode:
         # about; empty leaves the Makefile's `$(strip …)` profile arm off and
         # everything else untouched (byte-identical default,
         # test_domain_idp_schema.py pins it). Non-empty: export the gateways'
-        # multi-issuer registry (the BRAND_B=1 seam, scaled per domain — the
+        # multi-issuer registry (the BRAND_B=1 env-var contract, scaled per domain — the
         # central issuer stays tenant `default`) and write the compose overlay
         # the Makefile wildcard-includes. The write is best-effort like
         # .theme.css (never block a bring-up from here); a failed write leaves
@@ -1456,7 +1456,7 @@ class LocalStackNode:
         """Does this mesh's kind cluster exist RIGHT NOW? Read-only (`kind get
         clusters`, the same question devops_repo_access() already asks) so a caller
         can tell "the lane is already down" from "it has to come down first" without
-        firing the destructive verb blind.
+        firing the destructive verb without checking first.
 
         False whenever the answer cannot be established — kind not installed, the
         probe failing — because a cluster this lane created cannot exist without the

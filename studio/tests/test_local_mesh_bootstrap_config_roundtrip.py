@@ -1,7 +1,7 @@
 """LocalMeshBootstrapConfig.to_dict/from_dict + LocalMeshBootstrap.restore /
 start_saved — the core half of the saved-mesh lane (ask C, 2026-09-01).
 
-No Qt, no docker: every subprocess seam is monkeypatched on the bootstrap or the
+No Qt, no docker: every subprocess override point is monkeypatched on the bootstrap or the
 stack node, exactly as test_local_mesh_bringup.py's ``_happy_boot`` does.
 """
 from __future__ import annotations
@@ -31,7 +31,11 @@ def _full_cfg(**over) -> LocalMeshBootstrapConfig:
         source_dir="/src", web_locales=("de", "fr"), login_theme_css=":root{}",
         idp="oidc", idp_issuer="https://id.example.org", idp_client_id="cid",
         idp_jwks="https://id.example.org/jwks", own_idp_domains=("a.org",),
-        kind_addons=("metrics-server",))
+        kind_addons=("metrics-server",),
+        # #494: the recorded domain rows — a tuple of JSON objects, the one field
+        # whose items are not scalars, so "every field round-trips" has to carry one
+        domains=({"name": "a.org", "title": "A", "idp": "own",
+                  "optional_services": ["games"]},))
     base.update(over)
     return LocalMeshBootstrapConfig(**base)
 
@@ -267,6 +271,51 @@ def test_a_probe_that_cannot_answer_refuses_rather_than_starting(monkeypatch, tm
     assert any("could not be established" in l for l in log)
     ok, log = boot.restore(rec, on_line=lambda _l: None)
     assert not ok and calls["start"] == 0 and calls["seed"] == []
+
+
+@pytest.mark.parametrize("unanswered", [
+    {"mesh_running": None},                                   # docker ps failed
+    {"volumes_present": None, "volumes_missing": (),
+     "unanswered": ("volumes",)},                             # docker volume ls failed
+    {"images_present": None},                                 # docker images failed
+    {"volumes_present": None, "volumes_missing": (), "images_present": None,
+     "mesh_running": None,
+     "unanswered": ("volumes", "images", "containers")},      # docker down altogether
+])
+def test_a_docker_that_did_not_answer_refuses_both_verbs(monkeypatch, tmp_path, unanswered):
+    """#361: probe_state now reports None for a fact docker could not answer, and
+    _live_plan must treat ANY None as refuse. Before, the failure read as 'volumes gone,
+    nothing running' -> a RESEED plan -> `make stack-up` + `stack-seed` ran over the live
+    mesh with this record's credentials once docker answered again."""
+    boot, calls = _boot(monkeypatch, tmp_path)
+    calls["facts"].update(unanswered)
+    rec = _record(boot)
+    ok, log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert not ok and calls["start"] == 0
+    assert any("refused" in l for l in log), log
+    ok, log = boot.restore(rec, on_line=lambda _l: None)
+    assert not ok and calls["start"] == 0 and calls["seed"] == [], (calls, log)
+    assert any("refused" in l and "did not answer" in l for l in log), log
+    assert not any(SA_VALUE in l for l in log)
+
+
+def test_the_cli_restore_stops_at_a_plan_docker_could_not_establish(monkeypatch, tmp_path,
+                                                                      capsys):
+    """`mesh-restore` prints the plan and used to fall through to restore() for anything
+    but BLOCKED — including a plan built from a docker that did not answer (#361)."""
+    boot, calls = _boot(monkeypatch, tmp_path)
+    calls["facts"].update(mesh_running=None, unanswered=("containers",))
+    rec = _record(boot)
+    monkeypatch.setattr(sm, "find", lambda mesh_id: rec)
+    for verb in ("restore", "start_saved"):
+        monkeypatch.setattr(LocalMeshBootstrap, verb,
+                            lambda *a, **k: pytest.fail("the CLI went on to " + verb))
+    from hugmesh_studio.core import local_mesh_bootstrap as lmb
+    rc = lmb.main(["mesh-restore", rec.id, "--generator-dir", GENERATOR_DIR,
+                   "--out", str(tmp_path / "keys")])
+    out = capsys.readouterr().out
+    assert rc == 1 and "Docker did not answer" in out, out
+    assert calls["start"] == 0 and calls["seed"] == []
 
 
 def test_down_log_says_volumes_are_kept(monkeypatch, tmp_path):

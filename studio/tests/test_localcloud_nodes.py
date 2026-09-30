@@ -5,7 +5,7 @@ local-mesh identity import into ImageConfig, and the abbreviated worklist (ONLY
 laptop + node rows on offer).
 
 Runs the REAL wizard on Qt's offscreen platform, like test_wizard.py. Nothing here
-talks to kind: both k8s seams (``local_k8s_running`` / ``local_k8s_teardown``) are
+talks to kind: both k8s override points (``local_k8s_running`` / ``local_k8s_teardown``) are
 stubbed, so the suite is deterministic on a host with or without a live cluster and
 no test can delete one.
 """
@@ -73,7 +73,7 @@ def k8s_state():
 def _canned_k8s(monkeypatch, k8s_state):
     """No cluster unless a test says otherwise. The page probes the REAL host on entry,
     so without this a dev box running `hugmesh-local` would change what every other
-    test here sees — and the teardown seam is stubbed in the same breath so no test can
+    test here sees — and the teardown override point is stubbed in the same breath so no test can
     ever delete the operator's cluster."""
     def _never(_gd, on_line=None, cancel=None):
         raise AssertionError("local_k8s_teardown called without a test stubbing it")
@@ -259,7 +259,7 @@ def test_the_teardown_never_runs_without_the_consent(wiz, qapp, k8s_state, monke
 
 def test_stopping_kubernetes_runs_the_verb_off_thread_and_opens_the_gate(
         wiz, qapp, k8s_state, monkeypatch):
-    """The wiring end to end: the press runs the real `make kind-down` seam on a WORKER
+    """The wiring end to end: the press runs the real `make kind-down` override point on a WORKER
     (the click returns with the verb still in flight — a synchronous call here would
     freeze the wizard for the minutes a teardown takes), streams its output into the
     page's console, and the gate opens only once the RE-PROBE says the cluster is gone."""
@@ -556,3 +556,77 @@ def test_the_imported_record_label_and_domain_are_escaped_in_the_summary(
     text = page.summary.text()
     assert "&lt;b&gt;evil&lt;/b&gt; &amp; co" in text
     assert "<b>evil</b>" not in text
+
+
+# ---- #636: a local mesh generated with N domains imports ALL of them --------------
+from hugmesh_studio.core.config import DOMAIN_IDP_OWN, Domain  # noqa: E402
+from hugmesh_studio.core import domain_services as ds  # noqa: E402
+from hugmesh_studio.gui.pages import domain_services as dsp_mod  # noqa: E402
+
+
+def _save_n_domain_record(tmp_path):
+    cfg = LocalMeshBootstrapConfig(
+        env="prod", cluster_domain="saved.example.org", out_dir=str(tmp_path / "keys"),
+        domains=({"name": "saved.example.org", "title": "", "idp": "superdomain",
+                  "optional_services": ["games"]},
+                 {"name": "a.example", "title": "Alpha", "idp": "superdomain",
+                  "optional_services": ["phpbb"]},
+                 {"name": "b.example", "title": "Beta", "idp": DOMAIN_IDP_OWN,
+                  "optional_services": []}),
+        own_idp_domains=("b.example",),
+        domain_services_reviewed=("saved.example.org", "a.example"))
+    rec = sm.SavedMesh(id=sm.new_id(), label="three-domains",
+                       generator_dir=GENERATOR_DIR, hostname=socket.gethostname(),
+                       config=cfg.to_dict())
+    assert sm.save(rec)
+
+
+def test_saved_n_domain_mesh_imports_every_domain(wiz, monkeypatch, tmp_path):
+    _save_n_domain_record(tmp_path)
+    _real_reader(monkeypatch)
+    pick_mode(wiz, "localcloud")
+    page = advance_to(wiz, wizard_mod.LocalCloudNodesPage)
+    summary = page.summary.text()
+    assert "a.example — superdomain sign-in; services: phpbb" in summary
+    assert "b.example — own Casdoor" in summary
+    page.confirm.setChecked(True)
+    wiz.next()
+    c = wiz.cfg
+    assert c.cluster_domain == "saved.example.org"
+    assert [d.name for d in c.domains] == ["a.example", "b.example"]
+    assert c.own_idp_domains() == ("b.example",)
+    assert c.cluster_domain_services == ["games"]
+    assert c.additional_domains is True
+    assert c.domain_services_reviewed == ["saved.example.org", "a.example"]
+
+
+def test_the_imported_domains_survive_the_walk_to_the_build_screen(
+        wiz, monkeypatch, tmp_path):
+    """The rows must not be cleared by the Domains choice card on the way (it is
+    preselected from additional_domains), and the per-domain services step walks
+    them — the one never walked on the local mesh included."""
+    _save_n_domain_record(tmp_path)
+    _real_reader(monkeypatch)
+    _confirm_and_enter_mesh_chain(wiz)
+    wl = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(wl, "backend.x86")
+    choice = advance_to(wiz, wizard_mod.DomainsChoicePage)
+    assert choice._selected() == "more"
+    svc = advance_to(wiz, dsp_mod.DomainServicesPage)
+    # it resumes on the one domain the local mesh never walked
+    assert svc.current_domain() == "b.example"
+    launch = advance_to(wiz, wizard_mod.LaunchPage)
+    assert [d.name for d in wiz.cfg.domains] == ["a.example", "b.example"]
+    assert wiz.cfg.own_idp_domains() == ("b.example",)
+    assert launch.gate_refusal() == ""                 # the walk recorded all three
+    m = wiz.cfg.mesh_manifest()
+    assert [d["name"] for d in m["domains"]] == ["a.example", "b.example"]
+    assert m["cluster_domain_services"] == ["games"]
+
+
+def test_a_one_domain_mesh_imports_no_rows(wiz, monkeypatch, tmp_path):
+    _save_record(tmp_path, services=("tuwunel",))
+    _real_reader(monkeypatch)
+    page = _confirm_and_enter_mesh_chain(wiz)
+    assert page._mesh_domains is None
+    assert wiz.cfg.domains == [] and wiz.cfg.additional_domains is False

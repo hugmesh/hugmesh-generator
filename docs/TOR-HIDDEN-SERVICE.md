@@ -14,10 +14,10 @@ Selection drives two NODE-level gates in both image builders (identical in spiri
 egress-vpn), and both gates call one predicate, `_tor_node_selected` = *tor selected
 **and** a cluster-node role*:
 
-| When `tor` is …      | net-vpn/tor package | `tor` + `hugmesh-tor-reconcile` services | `tor-onion-marked` NetworkPolicy |
+| When `tor` is …      | net-vpn/tor package | `tor` + `hugmesh-tor-reconcile` services | `tor-onion-marked` NetworkPolicy (`apps/08b-networkpolicy-tor.yaml`) |
 |----------------------|---------------------|---------------------------------------------|----------------------------------|
-| **selected** on a cluster-node role | added to the image | **both** linked into the default runlevel | kept |
-| **not selected** (default) | absent        | neither linked (daemon simply absent)       | pruned by `gate_optional_services` |
+| **selected** on a cluster-node role | added to the image | **both** linked into the default runlevel | its Application is baked (MANUAL sync) |
+| **not selected** (default) | absent        | neither linked (daemon simply absent)       | its Application is pruned by `gate_optional_services`, so the cluster never gets it |
 | selected on a CLIENT / standalone / unaffiliated desktop | absent | neither linked | n/a (no cluster tree) — the selection is **dropped with a warning** right after the role is resolved |
 
 Both builders' `--print-plan` states the outcome as `PLAN_TOR_ONION` — `off`, or
@@ -111,18 +111,79 @@ the torrc. A host tor fronting a **kind** node uses kind's port map, `127.0.0.1:
 ([`kind-local.yaml`](../specs/cluster/bootstrap/kind-local/kind-local.yaml)).
 Today nothing writes `/etc/hugmesh/tor/upstream` for you (hugmesh/hugmesh-admin-bff-api#108).
 
-### Known gap: the onion reaches the edge, not the login page (hugmesh-generator#614)
+### Ingress admission: the onion must be an Ingress host (hugmesh-generator#614)
 
-The fe-gateway Ingress admits only the cluster domain: `host: <domain>` and
-`extraHosts: ["*.<domain>"]` in [`apps/20-gateway-fe.yaml`](../specs/cluster/apps/20-gateway-fe.yaml).
-Both ingress controllers run with `defaultBackend` disabled. So a request whose Host/SNI is
-`<x>.onion` is answered by ingress-nginx's default server, with a **404** and its default
-certificate. It never reaches the gateway. On a hardware node nothing admits the minted
-onion as an Ingress host yet. The kind lane does it at runtime with `make kind-tor`. Until
-#614 lands, a node's onion proves the Tor path (circuit, key custody, torrc, edge) but does
-not serve the mesh. Once it lands, the gateway still has to map the onion Host to a domain
-(hugmesh/hugmesh-gateway#38). This gap is inferred from the manifests; no booted node has
-shown it yet.
+The fe-gateway Ingress admits the cluster domain (`host: <domain>`,
+`extraHosts: ["*.<domain>"]` in [`apps/20-gateway-fe.yaml`](../specs/cluster/apps/20-gateway-fe.yaml)),
+and both ingress controllers run with `defaultBackend` disabled. A request whose Host/SNI
+is `<x>.onion` and that no Ingress rule names is answered by ingress-nginx's default
+server: a **404** with its default certificate, never the gateway.
+
+On a hardware node **`/usr/sbin/hugmesh-tor-ingress-admit`** closes that gap (kind's
+equivalent is `make kind-tor`). It runs from the tor cron drop-in every 5 minutes:
+
+1. It reads the onions this node exports: `/var/lib/hugmesh/tor/hostname` and every
+   `/var/lib/hugmesh/tor/<slug>.hostname`. Anything that is not a v3 name
+   (`^[a-z2-7]{56}\.onion$`) is refused.
+2. It writes them onto the fe-gateway ArgoCD Application as helm parameters
+   `ingress.onionHosts[0..n]`. The Application's name comes from the baked
+   `apps/20-gateway-fe.yaml`, because a non-default brand renames it `<brand>-gateway-fe`.
+   Every other parameter is kept as it is. Onions that other nodes admitted are kept. The
+   ones this node admitted before and no longer exports are withdrawn; its record is
+   `/var/lib/hugmesh/tor-ingress/admitted`. It patches only when the set changes, and it
+   puts the read `resourceVersion` in the patch, so a concurrent writer gets a conflict
+   instead of losing an entry.
+3. ArgoCD re-renders the gateway chart. `ingress.onionHosts` adds one rule per onion to
+   the **same** Ingress, with the same backend as the cluster host. So the release state's
+   ingress class (`nginx-internal` under `internal`) and the Anubis PoW gate apply to the
+   onion exactly as they do to the clearnet name. There is no TLS entry for the onion,
+   because no onion SAN exists; the edge's default certificate answers, and Tor Browser
+   shows one warning.
+
+With no exported onion, a node that admitted onions before withdraws them, and a node
+that never did makes no write at all. `hugmesh-tor-ingress-admit status` prints each
+exported onion and whether the live Application admits it. The log is
+`/var/log/hugmesh-tor-ingress-admit.log`.
+
+**Where it can run.** The patch needs `/etc/kubernetes/admin.conf`, which kubeadm writes
+only on **control-plane** nodes:
+
+| RELEASE_STATE | the edge | where to select tor |
+|---|---|---|
+| `internal` (default) | `ingress-nginx-internal` on the **pki** node, a control plane | pki (or omnibus). The onion is minted and admitted on the same node. |
+| `public` | `ingress-nginx` on the **backend** node, a worker with no `admin.conf` | the **pki** node, with `/etc/hugmesh/tor/upstream` set to `<backend-ip>:443`. The onion is minted and admitted on pki. |
+
+A tor selected on a worker cannot admit its own onions. The agent logs that and does
+nothing. A transport for a worker's onions belongs to hugmesh/hugmesh-admin-bff-api#108.
+
+**Durability.** A device applies its baked Application set and has no recursing root
+(`specs/cluster/bootstrap/bootstrap.sh`), so nothing re-asserts the Application object and
+the runtime parameters stay. An operator re-provision (`KEYS` + `.provision-force`) or
+`HUGMESH_GITOPS_ROOT_RECURSE=1` may drop them (a client-side `kubectl apply` of the baked
+Application, which carries no parameters, leaves them alone); either way the next cron
+run puts them back.
+
+**Orphaned onions.** Only the node that admitted an onion withdraws it. If that node is
+rebuilt with a new onion key or retired, its old onion stays an Ingress host: a harmless
+Host rule that points at the gateway, which no Tor client can reach any more. Remove it by
+hand from the fe-gateway Application's `ingress.onionHosts[i]` parameters.
+
+**What admission does not do.** It does not map the onion Host to a domain. The gateway
+does that (hugmesh/hugmesh-gateway#38, landed): until something registers the onion in its
+`APP_TENANCY_HOSTS_FILE`, the gateway serves an onion as the **default** domain. The
+primary onion therefore reaches the default domain's login page. A per-domain onion
+reaches the gateway too, but it serves its own domain only once its
+`<onion>=<slug>` line is written; that writer is hugmesh-generator#582.
+
+**Verified offline, not live.** `tests/scripts/test-tor-onion-ingress.sh` renders the
+chart as ArgoCD does (`helm template` with the helm parameters). With the hostname file
+present, the Ingress admits the onion; without it, the Ingress admits no `.onion` host.
+The onion rule routes path `/` (Prefix) with the cluster host's exact backend. It
+also drives the agent's `apply` and its real `status` (what the QEMU live leg grades on)
+against a stub `kubectl` that, like the real one, refuses a patch without
+`--type merge`. No booted node has run it yet: the
+live proof is a pki node built `--with-tor`, where Tor Browser at `https://<onion>/`
+shows the certificate warning and then the login page.
 
 ### Per-domain onions (decision 68 = A)
 
@@ -140,7 +201,22 @@ A secondary, **opt-in** capability (`hugmesh.net/tor-onion=true` label +
 `tor-onion-marked` NetworkPolicy) lets a pod egress through the node Tor SOCKS proxy. It
 is **inert by default** and additionally requires binding `SocksPort` to the pod network
 (a deliberate future enablement) — see the header of
-[`manifests/networkpolicy/tor-onion-marked.yaml`](../specs/cluster/manifests/networkpolicy/tor-onion-marked.yaml).
+[`manifests/networkpolicy-tor/tor-onion-marked.yaml`](../specs/cluster/manifests/networkpolicy-tor/tor-onion-marked.yaml).
+The policy has its own Application,
+[`apps/08b-networkpolicy-tor.yaml`](../specs/cluster/apps/08b-networkpolicy-tor.yaml). It
+syncs manually, because this is an egress-axis policy, and the build removes it when tor
+is not selected. It used to sit in the auto-synced `manifests/networkpolicy`, where git
+main shipped it to every cluster whatever the image selected (hugmesh-generator#617).
+`tests/scripts/test-optional-netpol-autosync.sh` fails if an optional service's
+NetworkPolicy is served from git by an Application every build keeps. It runs the real
+build prune and compares the git render with the baked one, and it renders the directory
+08b's own `spec.source.path` names.
+
+Two consequences of the manual sync: on a tor build the `networkpolicy-tor` Application
+shows OutOfSync until someone syncs it (the 08a precedent). And a tracking cluster that
+already carries `tor-onion-marked` from the old auto-synced path loses it at the next
+08-networkpolicy prune, and gets it back only when 08b is synced by hand. The policy is
+inert either way.
 
 ## SELinux
 
@@ -172,12 +248,17 @@ reload the service). Like the other node modules it is authored-but-not-yet-comp
   real x86 gate lines executed in a sandbox, the registry ↔ builder ↔ agent agreement,
   the Go-Live card's :443/https text, and the `tests/qemu/assertions.sh` tor block against
   fixture root filesystems.
+- **Offline (runs pre-merge):** `tests/scripts/test-tor-onion-ingress.sh` — the onion's
+  Ingress admission (#614), described above; `tests/scripts/test-optional-netpol-autosync.sh`
+  — where the tor NetworkPolicy ships (#617).
 - **Not yet exercised:** a booted QEMU or hardware node built with tor. The
   `tests/qemu/assertions.sh` tor block (both services linked, `/usr/bin/tor` present,
   exactly one tor process, a v3 hostname exported) has never run against a real guest,
   and the QEMU lane has no tor pass-through yet. The same goes for the boot order (the
   oneshot leaves the start to OpenRC, and the `@reboot` cron exports the first-boot
-  hostname) and for the known gap above.
+  hostname) and for the Ingress admission above: on a live control-plane guest the tor
+  block also asks `hugmesh-tor-ingress-admit status` whether every exported onion is an
+  Ingress host.
 
 ## The local docker mesh (`make stack-up TOR=1`)
 
@@ -200,15 +281,44 @@ make stack-e2e-tor           # the @via:onion sign-in, THROUGH Tor (tests/e2e/ru
 make stack-tor-mechanism-check   # host-tor mechanism proof: no docker, needs the public Tor network
 ```
 
-**Why `:443`, and why https.** The gateway sends `Content-Security-Policy: … upgrade-insecure-requests`
-on every response. Measured on 2026-09-23 against a live onion with Playwright's Chromium: a page
-entered over `http://<onion>/` had its same-origin script upgraded to `https://<onion>/` and,
-with only `:80` published, the script failed (`ERR_SOCKS_CONNECTION_FAILED`) and the SPA never
-booted; with `:443` published but the page still entered over http, the upgraded `fetch()` became
-cross-origin and failed (`ERR_FAILED`); entered over `https://<onion>/`, script and fetch both
-succeeded. So the door is `https://<onion>/`, served by the TLS front. Its certificate is the
-stack's own (minted for the cluster domain), so Tor Browser warns once. Whether Tor Browser —
-which treats `.onion` as a secure context — behaves differently on the http port is unmeasured.
+**Why `:443`, and why https.** The door is `https://<onion>/`, served by the TLS front, for
+these measured reasons (hugmesh-generator#628, live onion, 2026-09-24):
+
+- **A secure context.** Chromium does not treat a `.onion` origin as trustworthy. Over
+  `http://<onion>/`, `window.isSecureContext` is `false`, the shell's
+  `Cross-Origin-Opener-Policy` is ignored ("the URL's origin was untrustworthy"), and any
+  `Secure` cookie the page is sent is dropped.
+- **Parity with the node.** A baked node publishes its onion on `:443` too (the node contract
+  above), so the compose lane, the kind lane and a device are entered the same way.
+- **The session cookie.** user-bff marks `bff_session` `Secure` by default
+  (`APP_SESSION_COOKIE_SECURE`, default `true` in its `application.yml`). The compose stack sets
+  it `false` (`compose.local.yaml`, `hugmesh-user-bff-api`), which is the only reason a sign-in
+  over `http://<onion>/` works locally: `POST http://<onion>/bff/login` answered
+  `Set-Cookie: bff_session=…; HTTPOnly; SameSite=Lax` with no `Secure`. A mesh with the
+  production default would lose the session on the http door.
+- **The Anubis gate.** With `ANUBIS=1 TOR=1` the http door is the proof-of-work gate, whose
+  cookies needed their own fix to work there (#627, below).
+
+**What is not the reason: CSP `upgrade-insecure-requests`.** Earlier versions of this page
+said the gateway's CSP upgrades every subresource of a page entered over http, so the SPA
+could not boot over `http://<onion>/`. On the live stack that is false. The SPA documents
+(`/`, `/login`) carry host-shell nginx's nonce CSP, which has no `upgrade-insecure-requests`,
+on both onion ports; the gateway passes that header through. The gateway's own CSP, which does
+end in `upgrade-insecure-requests` (hugmesh-gateway `SecurityConfig`), appears only on
+responses the gateway generates itself, such as the anonymous `401` for `/user` or
+`/social/matrix`, and those never govern the document. In Chromium through the SOCKS client,
+`http://<onion>/` booted the SPA to `/login` with no request upgraded to https. The
+2026-09-23 measurement that suggested otherwise used a test server that put the gateway's
+CSP on the document itself.
+
+**HSTS on the http door.** `http://<onion>/` does send `Strict-Transport-Security`
+(host-shell nginx adds it `always`, and nothing strips it on `:80`; the TLS front strips it on
+`:443`). Chromium ignores HSTS received over plain http (RFC 6797 §8.1), so a second http
+visit stays http. Tor Browser's handling of it is unmeasured.
+
+The TLS front's certificate is the stack's own (minted for the cluster domain), so Tor
+Browser warns once. Whether Tor Browser, which treats `.onion` as a secure context, behaves
+differently on the http port is unmeasured.
 
 **What the onion Host resolves to.** The gateway maps an unknown `Host` to the default domain,
 so the onion serves the default brand (hugmesh-gateway#38 tracks an explicit onion mapping).
@@ -218,7 +328,19 @@ TLS front, which forwards to the fe-gateway directly (#586). tor resolves both u
 once, when it parses its torrc, so recreating `hugmesh-fe-gateway` or `hugmesh-https-front` with a
 new container IP needs `hugmesh-tor` recreated too.
 
-The contract is gated offline by `tests/stack/test-tor-flip-wiring.sh` (15 checks, each with a
+**The Anubis cookie on the http door (#627).** Anubis sets its cookies `Secure; SameSite=None`
+by default. On `http://<onion>/` Chromium drops them, returns to `pass-challenge` without them,
+and Anubis answers `500` ("Oh noes!"; its log says "user has cookies disabled"), so the gate
+could not be passed. `make stack-up ANUBIS=1 TOR=1` therefore exports
+`ANUBIS_COOKIE_SECURE='false'` (Makefile `STACK_TOR_ENV`), which `hugmesh-anubis` reads as
+`COOKIE_SECURE`: the cookies lose `Secure` and SameSite drops from `None` to `Lax`. Every other
+bring-up keeps Anubis's default, and a caller's own `ANUBIS_COOKIE_SECURE` wins. The localhost
+door (`:8923`) works either way, because Chromium treats localhost as secure. Not yet exercised
+through the real onion: the live check is Chromium via the SOCKS client on `http://<onion>/`
+ending on the HugMesh `/login` page rather than "Oh noes!", on a stack brought up with this
+change. Tor Browser is a person's check.
+
+The contract is gated offline by `tests/stack/test-tor-flip-wiring.sh` (16 checks, each with a
 mutant that must turn it red).
 
 ## Kind lane — a host tor fronting the kind node (`make kind-tor`)

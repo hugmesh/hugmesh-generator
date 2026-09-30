@@ -164,6 +164,16 @@ def expected_build_contexts(generator_dir: str) -> list[str]:
     return sorted(set(_CONTEXT_RE.findall(text)))
 
 
+def _domain_record(x: dict) -> dict:
+    """One recorded domain row, coerced to its JSON shape (str fields, a list of str
+    slugs) — see ``LocalMeshBootstrapConfig.domains``."""
+    svcs = x.get("optional_services") or ()
+    return {"name": str(x.get("name") or "").strip(),
+            "title": str(x.get("title") or "").strip(),
+            "idp": str(x.get("idp") or "superdomain"),
+            "optional_services": [str(s) for s in svcs] if isinstance(svcs, (list, tuple)) else []}
+
+
 @dataclass
 class LocalMeshBootstrapConfig:
     """Operator-provided knobs for minting + starting a from-scratch local mesh.
@@ -247,7 +257,7 @@ class LocalMeshBootstrapConfig:
     # "casdoor" (the DEFAULT) threads NOTHING: the stack env stays byte-identical
     # to before these fields existed (the #1 invariant). An external provider
     # threads OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_JWKS_URI into the `make stack-*`
-    # env (env vars ONLY), and the Makefile CONSUMES all three (the Lane-B seam,
+    # env (env vars ONLY), and the Makefile CONSUMES all three (the Lane-B env-var contract,
     # landed): OIDC_ISSUER -> CASDOOR_ISSUER_URI, OIDC_CLIENT_ID ->
     # CASDOOR_APP_CLIENT_ID (the BFF login/exchange client id), OIDC_JWKS_URI ->
     # CASDOOR_JWKS_URI (gateway + resource-server key fetch). So the running
@@ -270,6 +280,29 @@ class LocalMeshBootstrapConfig:
     # proves (host ports 8001+, issuer http://casdoor-<slug>.localtest.me:<port>)
     # and threads the gateways' multi-issuer registry — see core/own_casdoor.py.
     own_idp_domains: tuple[str, ...] = ()
+    # ── the DOMAINS this mesh serves, as RECORDED by the Studio's Domains step
+    # (#494; core/local_mesh_domains.bootstrap_domain_records). One JSON-shaped row
+    # per domain: {"name", "title", "idp", "optional_services"}. Every added domain
+    # is here; the mesh's OWN domain (cluster_domain / brand default) only when it
+    # says something the rest of this config does not — a title, an own sign-in or
+    # a per-domain selection — so an untouched flow records () and stays
+    # byte-identical to a config from before the field existed. ``own_idp_domains``
+    # above is what the compose lane CONSUMES (derived from the same rows); this
+    # tuple is what the saved-mesh record and the plan carry. The per-domain
+    # ``optional_services`` are recorded and NOT enforced on this lane: the compose
+    # profiles come from ``services`` (the mesh-wide Services step).
+    domains: tuple[dict, ...] = ()
+    # WHICH of the recorded ``domains`` rows had been through the Studio's Domain
+    # services step when this config was collected (#494 fix round). A saved-mesh
+    # Start/Restore gates on THE RECORD's rows (never the form's draft), and a record
+    # can be written from a form holding un-walked rows (Save mesh records the page's
+    # config) or by the CLI (``own_idp_domains`` with no rows at all), so "the row is
+    # in the record" is not evidence it was reviewed; this is. Only names that are
+    # also in ``domains`` are ever collected, so an untouched flow records () —
+    # byte-identical env, argv and plan (the to_dict key set grows by one, as it did
+    # for ``domains``). The mesh's own domain, when it is not a recorded row, is the
+    # implicit cluster default and is never asked about on a saved start.
+    domain_services_reviewed: tuple[str, ...] = ()
     # WHICH infra Applications the DEVOPS (kind) lane adds to its curated set
     # (core/local_services.KIND_ADDONS slugs). A SEPARATE axis from `services`:
     # these are Kubernetes Applications, they have no compose profile and no
@@ -388,7 +421,9 @@ class LocalMeshBootstrapConfig:
     # JSON null and () as [], and BOTH directions are pinned by test — collapsing
     # them silently re-enables metrics-server and flips the profile semantics.
     _TUPLE_OR_NONE_FIELDS = ("services", "kind_addons")
-    _TUPLE_FIELDS = ("web_locales", "own_idp_domains")
+    _TUPLE_FIELDS = ("web_locales", "own_idp_domains", "domain_services_reviewed")
+    #: tuples of JSON objects (the recorded domain rows, #494).
+    _DICT_TUPLE_FIELDS = ("domains",)
     _BOOL_FIELDS = ("social", "with_tor")
 
     def to_dict(self) -> dict:
@@ -400,6 +435,8 @@ class LocalMeshBootstrapConfig:
             d[k] = None if d[k] is None else list(d[k])
         for k in self._TUPLE_FIELDS:
             d[k] = list(d[k] or ())
+        for k in self._DICT_TUPLE_FIELDS:
+            d[k] = [dict(x) for x in (d[k] or ())]
         return d
 
     @classmethod
@@ -419,6 +456,13 @@ class LocalMeshBootstrapConfig:
         for k in cls._TUPLE_FIELDS:
             if k in vals:
                 vals[k] = tuple(str(x) for x in (vals[k] or ()))
+        for k in cls._DICT_TUPLE_FIELDS:
+            if k in vals:
+                # a row that is not an object is junk from a hand-edited record: it
+                # is dropped (fail-closed: the mesh records nothing it cannot read)
+                # rather than turned into a row with a made-up name.
+                vals[k] = tuple(_domain_record(x) for x in (vals[k] or ())
+                                if isinstance(x, dict))
         for k in cls._BOOL_FIELDS:
             if k in vals:
                 vals[k] = bool(vals[k])
@@ -722,6 +766,27 @@ class LocalMeshBootstrap:
                     f"own-Casdoor domain '{name}' is not a DNS name (dot-"
                     f"separated [a-z0-9-] labels) — no casdoor-<slug> "
                     f"service/issuer can be derived from it.")
+        # Two rows with one name, or a row named after the mesh's OWN apex (#494 fix
+        # round). own_casdoor derives one compose service + one postgres volume per
+        # NAME, so a duplicate emits the same casdoor-<slug> key twice on two ports,
+        # and the own apex already signs in via the central Casdoor — an own one for
+        # it maps APP_TENANCY_HOSTS to a phantom. The CLI collapses duplicates on
+        # parse and the Studio refuses both inline; this is the backstop for a
+        # hand-edited record or any other door.
+        seen_idp: set[str] = set()
+        apex = self.cfg.resolved_domain().strip().lower()
+        for name in self.cfg.own_idp_domains:
+            key = name.strip().lower()
+            if not key:
+                continue
+            if key in seen_idp:
+                problems.append(f"own-Casdoor domain '{name.strip()}' is listed twice "
+                                "— each domain gets exactly one own Casdoor.")
+            seen_idp.add(key)
+            if key == apex:
+                problems.append(
+                    f"own-Casdoor domain '{name.strip()}' is this mesh's own domain — "
+                    "it signs in via the central Casdoor and cannot have an own one.")
         if self.cfg.is_prod():
             if not self.cfg.cluster_domain.strip():
                 problems.append("prod requires a public cluster domain "
@@ -788,7 +853,7 @@ class LocalMeshBootstrap:
                      + ("" if c.is_prod() else "  (brand default; not a public issuer in test)"))
         lines.append(f"Issuer:     {c.issuer()}")
         # I6.6: disclose the chosen IdP — and the honest external-mode limit
-        # (the Makefile seam consumes all three vars, so token VALIDATION really
+        # (the Makefile consumes all three vars, so token VALIDATION really
         # re-points at the external issuer/JWKS; the coupled login/MFA/role legs
         # do not move — docs/IDENTITY-PROVIDERS.md "Honest limits").
         lines.append(f"IdP:        {IDP_LABELS.get(c.idp, c.idp)}")
@@ -871,6 +936,22 @@ class LocalMeshBootstrap:
                 lines.append(f"             * {name}: host port "
                              f"{own_casdoor.port_for(i)}, issuer "
                              f"{own_casdoor.issuer_for(name, i)}")
+        # The DOMAINS the Studio's Domains step recorded (#494). Empty (the default,
+        # and every flow that never opened the step) renders NOTHING. Per-domain
+        # services are shown as what they are on this lane: recorded, not what picks
+        # the compose profiles — that is the Services step, printed below.
+        if c.domains:
+            lines.append("          -> domains recorded with this mesh (per-domain "
+                         "services are RECORDED, not enforced:")
+            lines.append("             the compose profiles come from the Services "
+                         "step below):")
+            for row in c.domains:
+                svcs = ", ".join(row.get("optional_services") or []) or "cluster default"
+                title = row.get("title") or ""
+                lines.append(f"             * {row.get('name', '')}"
+                             + (f" ({title})" if title else "")
+                             + f": sign-in={row.get('idp', 'superdomain')}, "
+                             f"services: {svcs}")
         lines.append("      make stack-seed (provisions ROLE_SUPERADMIN with the minted")
         lines.append("                       password, bridged via env only)")
         # SERVICES — spelled out per mechanism, because the operator's two questions
@@ -903,7 +984,7 @@ class LocalMeshBootstrap:
                 # No longer PENDING: seed-e2e.sh grew a leg-4 that consumes both
                 # vars verbatim against the compose federation-db and reads the
                 # registry back. The disclaimer that used to live here was true for
-                # as long as the checkboxes were inert; deleting it in the SAME
+                # as long as the checkboxes did nothing; deleting it in the SAME
                 # change that made them real is what keeps the surface and the
                 # seeder from disagreeing again.
                 lines.append("           (applied by `make stack-seed` — leg 4 sets "
@@ -1206,11 +1287,20 @@ class LocalMeshBootstrap:
         from . import saved_meshes
         try:
             facts = saved_meshes.probe_state(rec)
-            return saved_meshes.restore_plan(rec, **facts)
+            plan = saved_meshes.restore_plan(rec, **facts)
         except Exception as exc:                      # noqa: BLE001 — refuse, never raise
             _note("[saved-mesh] refused — what is on this machine could not be "
                   f"established ({type(exc).__name__}: {exc}); nothing was started.")
             return None
+        if plan.mode == saved_meshes.MODE_UNKNOWN:
+            # A fact docker did not ANSWER (None) is not a fact: it used to read as
+            # "volumes gone, nothing running" -> a RESEED plan -> `stack-up` +
+            # `stack-seed` over a mesh that was merely slow to answer (#361). No
+            # exception is raised for that, so this is where it must refuse.
+            _note(f"[saved-mesh] refused — {plan.sentence} Nothing was started or "
+                  "seeded.")
+            return None
+        return plan
 
     def start_saved(self, rec, on_line=None, cancel=None) -> tuple[bool, list[str]]:
         """The WARM restore (saved-mesh case 1: volumes + images present, after
@@ -1413,11 +1503,18 @@ class LocalMeshIdentity(NamedTuple):
     domain, the Studio-provisioned accounts ``[(username, roles)]``, whether it ran
     the Tor onion, and one line saying WHERE that came from (a saved record's label,
     or "" for the defaults). A NamedTuple, so ``domain, users, with_tor = ...`` still
-    unpacks the first three and a canned 3-tuple builds one."""
+    unpacks the first three and a canned 3-tuple builds one.
+
+    ``mesh_domains`` (#636): the saved mesh's domain rows as a
+    ``core.local_mesh_domains.LocalMeshDomains`` (``imported_mesh_domains``) — row 0 the
+    mesh's own domain, then every added domain with its title, sign-in and per-domain
+    services, and the record's own reviewed markers — or None when the record carries
+    none, which imports exactly what the apex-only import did."""
     domain: str
     users: list
     with_tor: bool = False
     source: str = ""
+    mesh_domains: object = None
 
 
 def saved_mesh_source(rec) -> str:
@@ -1587,8 +1684,8 @@ def _saved_mesh_cli(args: argparse.Namespace) -> int:
     print(f"  {plan.sentence}")
     for w in plan.warnings:
         print(f"  WARNING: {w}")
-    if plan.mode == saved_meshes.MODE_BLOCKED:
-        return 1
+    if plan.mode in (saved_meshes.MODE_BLOCKED, saved_meshes.MODE_UNKNOWN):
+        return 1          # UNKNOWN = docker did not answer (#361): no prod prompt either
     if cfg.is_prod():
         rc = _confirm_prod("restore")
         if rc:
@@ -1650,7 +1747,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="also publish the fe-gateway as a Tor v3 .onion (the `tor` "
                         "profile) — reachable in Tor Browser, no public IP/DNS/ports.")
     # The GUI grew a services picker; without this flag the CLI would be strictly less
-    # capable than the wizard — the same dead-default asymmetry --brand was added to
+    # capable than the wizard — the same asymmetry (a default that silently does nothing) --brand was added to
     # fix. Absent = untouched (see _cfg_from_args).
     p.add_argument("--services", default=None,
                    help="which services this local mesh runs — space/comma separated "

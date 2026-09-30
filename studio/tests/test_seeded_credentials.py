@@ -1,10 +1,10 @@
 """Seeded sign-in credentials — the roster the Local-Docker-mesh page shows so an
 operator knows WHO to log in as after `make stack-seed`.
 
-The load-bearing property under test is NO DRIFT: the roster is parsed out of
+The property that matters under test is NO DRIFT: the roster is parsed out of
 tests/qemu/seed-accounts.sh (the seeder that actually creates the accounts), and the
 password precedence mirrors that script's role_password(). A hardcoded copy would
-rot silently the first time a persona is added, and the dialog would then hand the
+go stale silently the first time a persona is added, and the dialog would then hand the
 operator credentials that do not work — worse than showing nothing. These tests pin
 the parse against the REAL seeder in this checkout, not a fixture, so a roster-format
 change in the seeder fails here instead of in front of a user.

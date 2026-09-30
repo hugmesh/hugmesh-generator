@@ -4,7 +4,7 @@ THE DEFECT CLASS THIS FILE GUARDS. A button that runs everything is honest by
 accident: it cannot claim to have run something it did not. A tree can, and there are
 exactly three ways it does:
 
-  1. VACUITY — the tree renders, the operator checks one feature, and Run ignores the
+  1. CHECKED-NOTHING PASS — the tree renders, the operator checks one feature, and Run ignores the
      selection and runs the whole suite anyway (or runs nothing). Nothing on screen
      would show the difference: the log scrolls, a summary line appears, and it is
      green. So the centre of this file
@@ -56,7 +56,7 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "fixtures", "e2e-catalogue")
 
-#: The stub `make`. It echoes its own argv — that echo is the ONLY thing the vacuity
+#: The stub `make`. It echoes its own argv — that echo is the ONLY thing the checked-nothing pass
 #: test reads, so the assertion is about what a CHILD PROCESS was given, not about
 #: anything the page or the dialog printed to itself.
 _STUB_MAKE = """#!/usr/bin/env bash
@@ -212,7 +212,7 @@ def _texts_under(dlg, title):
     return [it.text(0) for it in _walk(_group(dlg, title))]
 
 
-# ── 1. THE VACUITY GUARD ─────────────────────────────────────────────────────────
+# ── 1. THE CHECKED-NOTHING PASS GUARD ─────────────────────────────────────────────────────────
 def test_the_checked_spec_reaches_the_spawned_make_argv(qapp, dlg, wired_page,
                                                         stub_make):
     """THE test. Check ONE feature, press Run, and read the argv a child got.
@@ -261,7 +261,7 @@ def test_two_checked_specs_both_arrive_and_nothing_else_does(qapp, dlg, wired_pa
 
 def test_the_dialog_click_is_wired_to_the_page_run(qapp, fake_gen, wired_page,
                                                    stub_make, monkeypatch):
-    """The seam between the two halves: opening the tree FROM THE PAGE and pressing
+    """The override point between the two halves: opening the tree FROM THE PAGE and pressing
     its Run must dispatch the page's run with that selection. A dialog that compiles a
     perfect selection nobody connected is the same defect wearing a suit."""
     page, echoed = wired_page()
@@ -310,7 +310,7 @@ def test_reopening_the_tree_replaces_the_previous_one(qapp, fake_gen, wired_page
 
 
 def test_run_refuses_an_empty_selection_inline_and_never_falls_back_to_all(dlg):
-    """The other half of vacuity: Run must not quietly mean "everything"."""
+    """The other half of the checked-nothing pass: Run must not quietly mean "everything"."""
     assert not dlg.run_btn.isEnabled(), "Run is armed with nothing checked"
     dlg._on_run()                       # drive it anyway, as a stuck UI would
     assert dlg.run_specs == ()

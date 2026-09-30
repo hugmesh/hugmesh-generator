@@ -29,7 +29,8 @@ from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
 from hugmesh_studio.gui.pages.domains import _COL_IDP, _IdpCombo  # noqa: E402
 from hugmesh_studio.gui.qt import QtWidgets  # noqa: E402
 
-from _helpers import (  # noqa: E402
+from _helpers import (
+    added_row,   # noqa: E402
     advance_to, check_worklist_rows, enable_additional_domains, pick_mode)
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -71,7 +72,7 @@ def _mesh_domains(wiz):
 def test_combo_offers_both_choices_by_schema_value(wiz):
     dom = _mesh_domains(wiz)
     dom._add("acme.example", "Acme")
-    combo = dom.table.cellWidget(0, _COL_IDP)
+    combo = dom.table.cellWidget(added_row(dom, 0), _COL_IDP)
     assert isinstance(combo, _IdpCombo)
     values = [combo.itemData(i) for i in range(combo.count())]
     assert values == [DOMAIN_IDP_SUPERDOMAIN, DOMAIN_IDP_OWN]
@@ -93,7 +94,7 @@ def test_choosing_own_persists_to_config_and_manifest(wiz):
     dom = _mesh_domains(wiz)
     dom._add("acme.example", "Acme")
     dom._add("team.acme.example", "Team")
-    combo = dom.table.cellWidget(1, _COL_IDP)
+    combo = dom.table.cellWidget(added_row(dom, 1), _COL_IDP)
     combo.setCurrentIndex(combo.findData(DOMAIN_IDP_OWN))
     advance_to(wiz, wizard_mod.UsersChoicePage)
     c = wiz.cfg
@@ -110,7 +111,7 @@ def test_loaded_own_row_seeds_the_combo_back(wiz):
     c.domains = [Domain(name="acme.example", title="Acme", idp=DOMAIN_IDP_OWN)]
     wiz.restart()
     dom = advance_to(wiz, wizard_mod.DomainsPage)
-    combo = dom.table.cellWidget(0, _COL_IDP)
+    combo = dom.table.cellWidget(added_row(dom, 0), _COL_IDP)
     assert combo.selected_idp() == DOMAIN_IDP_OWN
     advance_to(wiz, wizard_mod.UsersChoicePage)     # round-trips, never rewritten
     assert [d.idp for d in c.domains] == [DOMAIN_IDP_OWN]

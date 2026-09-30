@@ -50,11 +50,12 @@ __all__ = [
     "scope_of", "grouped_domain_catalogue", "split_services", "normalise_slugs",
     "carried_over_slugs", "describe", "describe_carried_over",
     "CARRIED_OVER_NOTE", "reviewed_names", "unconfigured_domains",
-    "gate_applies", "gate_reason", "record_reviewed",
+    "gate_applies", "gate_reason", "record_reviewed", "OWN_DOMAIN_GATED_ACTIONS",
+    "implicit_own_domain", "domain_names_for_services", "services_page_applies",
     "services_summary", "domain_summary",
-    "restart_gate_reason",
+    "restart_gate_reason", "session_boot_gate_reason",
     "ACTION_IMAGE_BUILD", "ACTION_MESH_START", "ACTION_BUILD_RESTART",
-    "ACTION_REMEDY",
+    "ACTION_EMULATE", "ACTION_REMEDY",
 ]
 
 #: The three scopes a service choice can have in this platform (#497). They are NOT
@@ -136,6 +137,10 @@ ACTION_MESH_START = "start this mesh"
 #: The previous-builds manager's RESTART. Narrower than the other two on purpose —
 #: see :func:`restart_gate_reason`.
 ACTION_BUILD_RESTART = "restart this build"
+#: Booting a PREVIOUS build session's images — Mesh emulation (Start mesh / a device's
+#: Start) and the QEMU device tests' "Images from a previous build session" arm, on both
+#: faces (#637). Narrow like the restart — see :func:`session_boot_gate_reason`.
+ACTION_EMULATE = "boot this build session's images"
 
 #: action -> HOW TO FIX IT FROM WHERE YOU ARE STANDING. Not one shared sentence,
 #: because "go back to the Domain services step" is FALSE at both call sites in
@@ -161,7 +166,38 @@ ACTION_REMEDY = {
         "This session's saved configuration names domains it never recorded services "
         "for. Use Redo instead — it loads the same configuration into the wizard, "
         "where the ‘Domain services’ step gives every domain its own page.",
+    ACTION_EMULATE:
+        "These images were built from a configuration that names domains it never "
+        "recorded services for. Open that session in ‘Review prior sessions’ and use "
+        "Redo — the wizard's ‘Domain services’ step gives every domain its own page "
+        "— then emulate the session that build produces.",
 }
+
+
+#: The actions whose gate covers the mesh's IMPLICIT own domain (:func:`implicit_own_domain`)
+#: as well as the Domains-table rows (#631 section 1). ONLY the image build, and on
+#: purpose:
+#:
+#: * the image BUILD is the door where the own domain's page is always reachable — the
+#:   own domain gets a services page on EVERY mesh flow (#589, decision 69), and the
+#:   refusal's remedy (``ACTION_REMEDY[ACTION_IMAGE_BUILD]``: back to the main menu, walk
+#:   to "Domain services") leads straight to it. Before this, a config LOADED on the
+#:   Sessions screen whose own-domain page was never opened built anyway, because the
+#:   page was enforced only by being unavoidable on a fresh walk;
+#: * the docker MESH START (``ACTION_MESH_START``) gates ``wiz.cfg`` too, but that
+#:   route is the local-mesh branch: an operator who clicked "Mesh node" and then went
+#:   Back into "Local Docker mesh" carries ``mode == "mesh"`` with the default cluster
+#:   domain and no walk, and the image flow's own domain does not reach a docker mesh at
+#:   all (its own domain is the local-mesh Domains step's row 0). Gating it there would
+#:   be a refusal over a page that route cannot show — a dead end;
+#: * the previous-builds RESTART (``ACTION_BUILD_RESTART``) re-dispatches a RECORDED
+#:   config, and every session recorded before this gate existed — including the
+#:   #495-to-#595 window, whose table rows carry markers but whose own domain had no page
+#:   yet — would be refused over a question nobody was asked. That is the migration rule
+#:   for configs saved before #595: a restart keeps its row-only check
+#:   (:func:`restart_gate_reason`), and anything that goes back through the wizard
+#:   (Redo, Load config) walks the own domain's page and so records it.
+OWN_DOMAIN_GATED_ACTIONS: frozenset[str] = frozenset({ACTION_IMAGE_BUILD})
 
 
 def scope_of(slug: str) -> str:
@@ -181,7 +217,7 @@ def grouped_domain_catalogue() -> list[tuple[str, list[str]]]:
     catalogue slug no group lists.
 
     SERVICE_GROUPS is a PRESENTATION table and DOMAIN_CATALOGUE is the catalogue: a slug
-    added to one and not the other would otherwise be silently un-offerable, which is
+    added to one and not the other would otherwise be silently impossible to offer, which is
     exactly the quiet drop the #227 menu already refused to make. Offer it ungrouped
     instead (a test pins that the two agree today, so this arm is a floor, not a licence
     to skip the grouping)."""
@@ -267,7 +303,7 @@ def describe_carried_over(slug: str) -> str:
 def reviewed_names(cfg) -> set[str]:
     """The domain NAMES whose services page has actually been gone through.
 
-    STRIPPED here, at the one read seam, so a hand-edited config carrying
+    STRIPPED here, at the one place the config is read, so a hand-edited config carrying
     ``" acme.example "`` still satisfies the gate for ``acme.example`` instead of
     wedging it for ever (``unconfigured_domains`` compares the stripped name)."""
     return {str(n).strip()
@@ -307,11 +343,18 @@ def gate_applies(cfg) -> bool:
     return True
 
 
-def unconfigured_domains(cfg) -> list[str]:
+def unconfigured_domains(cfg, include_own: bool = False) -> list[str]:
     """The named domains on ``cfg`` with no recorded service configuration, in table
     order. A row with an empty name is not a domain yet (the Domains table drops those
     at validatePage) and is never reported. Empty whenever :func:`gate_applies` is
     False.
+
+    ``include_own`` adds the mesh's IMPLICIT own domain (:func:`implicit_own_domain`),
+    FIRST — the walk order — when its page has not been gone through. Only
+    :func:`gate_reason` sets it, and only for ``OWN_DOMAIN_GATED_ACTIONS`` (see there
+    for why the image build and nothing else). It is a READ of the reviewed marker and
+    nothing more: the own domain stays implicit, never a ``cfg.domains`` row, so an
+    untouched flow still emits no ``--domains`` and no manifest ``domains`` entry.
 
     STRICTER THAN THE WORKLIST, on purpose: a mesh worklist filters ``base.domains``
     per entry by ``Domain.images`` (``worklist.entry_config``), and this does not — a
@@ -322,6 +365,10 @@ def unconfigured_domains(cfg) -> list[str]:
         return []
     done = reviewed_names(cfg)
     out: list[str] = []
+    if include_own:
+        own = implicit_own_domain(cfg)
+        if own and own not in done:
+            out.append(own)
     for d in getattr(cfg, "domains", None) or []:
         name = (getattr(d, "name", "") or "").strip()
         if name and name not in done and name not in out:
@@ -329,22 +376,31 @@ def unconfigured_domains(cfg) -> list[str]:
     return out
 
 
-def gate_reason(cfg, action: str = ACTION_IMAGE_BUILD) -> str:
+def gate_reason(cfg, action: str = ACTION_IMAGE_BUILD, remedy: str | None = None) -> str:
     """"" when ``action`` may proceed; otherwise the refusal, naming every domain.
 
-    THE SEAM. Every gate calls exactly this — the image build at
+    ``remedy`` overrides the ``ACTION_REMEDY`` sentence for a route whose steps have
+    different names — the generate-a-new-local-mesh route (``core/local_mesh_domains.
+    LOCAL_MESH_REMEDY``) has its own Domains / Domain services steps, and a refusal
+    that sends the operator to "the image flow" from there is a dead end.
+
+    THE OVERRIDE POINT. Every gate calls exactly this — the image build at
     ``gui/pages/launch.py``, BOTH docker mesh-start doors at ``gui/pages/localmesh.py``
     (``_bootstrap_up`` and ``_start_saved``), and, through
     :func:`restart_gate_reason`, the previous-builds RESTART at
     ``gui/pages/sessions_widget.py`` — and a test can drive it with a bare ImageConfig,
-    no Qt, no wizard, no build, no docker. Naming the domains is the
-    point: "configure your domains" is a message that scrolls past, "acme.example has
-    no recorded service configuration" is one the operator can act on."""
-    missing = unconfigured_domains(cfg)
+    no Qt, no wizard, no build, no docker. On ``ACTION_IMAGE_BUILD`` it also covers the
+    mesh's implicit OWN domain (``OWN_DOMAIN_GATED_ACTIONS``, #631), exactly as it covers
+    a table row: no reviewed marker, refused by name. Everywhere else it reads the
+    table rows only. Naming the domains is the point: "configure your domains" is a
+    message that scrolls past, "acme.example has no recorded service configuration" is
+    one the operator can act on."""
+    missing = unconfigured_domains(
+        cfg, include_own=action in OWN_DOMAIN_GATED_ACTIONS)
     if not missing:
         return ""
     plural = "s" if len(missing) > 1 else ""
-    remedy = ACTION_REMEDY.get(action)
+    remedy = remedy or ACTION_REMEDY.get(action)
     return (
         f"Cannot {action}: {len(missing)} domain{plural} ha{'ve' if plural else 's'} "
         f"no recorded service configuration — " + ", ".join(missing) + ". "
@@ -362,17 +418,86 @@ def record_reviewed(cfg, names: Iterable[str]) -> list[str]:
     # config carrying " acme.example " would otherwise record a marker the gate can
     # never match and refuse for ever. The Domains table strips at validatePage, so
     # only a hand-edited or externally produced config reaches this — which is exactly
-    # the config that must not be able to wedge the gate.
+    # the config that must not be able to hang the gate.
     keep = {str(n).strip() for n in names or ()}
-    out = [(getattr(d, "name", "") or "").strip()
-           for d in (getattr(cfg, "domains", None) or [])
-           if (getattr(d, "name", "") or "").strip()
-           and (getattr(d, "name", "") or "").strip() in keep]
+    # The mesh's OWN domain first (mesh mode only — implicit_own_domain), then the
+    # table rows in table order: it is a domain with a services page too, and
+    # rebuilding from the table alone would drop its marker on every write.
+    own = implicit_own_domain(cfg)
+    out = [own] if own and own in keep else []
+    out += [(getattr(d, "name", "") or "").strip()
+            for d in (getattr(cfg, "domains", None) or [])
+            if (getattr(d, "name", "") or "").strip()
+            and (getattr(d, "name", "") or "").strip() in keep]
     seen: set[str] = set()
     cfg.domain_services_reviewed = [n for n in out
                                     if not (n in seen or seen.add(n))]
     return cfg.domain_services_reviewed
 
+
+def implicit_own_domain(cfg) -> str:
+    """The MESH's own domain as a services-page subject, or "".
+
+    A mesh serves ``cfg.cluster_domain`` whether or not the operator adds more
+    domains (ask 19's default card is "Just this mesh's own domain"), and the
+    operator's rule is a service page per domain — so on the mesh route the own
+    domain gets one even when the Domains table is skipped (reported 2026-09-23:
+    "the checkbox doesn't seem to be present on each domain page"). It is IMPLICIT:
+    never a ``cfg.domains`` row, so the ASK-8 emission guard holds — an untouched
+    flow still emits no ``--domains`` and no manifest ``domains`` entry; its
+    selection lives in ``cfg.cluster_domain_services`` and reaches the manifest
+    only when non-empty.
+
+    Mesh mode only. A cloud client's Domains table prefills the cluster domain as a
+    REAL row 0 (``pages/domains.py``), standalone has no domains at all — and a
+    ``cfg.domains`` row already named after the cluster domain makes it a row, not
+    an implicit one, so the two can never be asked twice."""
+    if (getattr(cfg, "mode", "") or "") != "mesh":
+        return ""
+    own = (getattr(cfg, "cluster_domain", "") or "").strip()
+    if not own:
+        return ""
+    for d in (getattr(cfg, "domains", None) or []):
+        if (getattr(d, "name", "") or "").strip() == own:
+            return ""
+    return own
+
+
+def domain_names_for_services(cfg) -> list[str]:
+    """Every domain that gets a services page, in walk order: the implicit own
+    domain first (when there is one), then the named table rows, deduped."""
+    out: list[str] = []
+    own = implicit_own_domain(cfg)
+    if own:
+        out.append(own)
+    for d in (getattr(cfg, "domains", None) or []):
+        name = (getattr(d, "name", "") or "").strip()
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+
+def services_page_applies(cfg) -> bool:
+    """Whether the per-domain services step is part of this flow — ONE predicate for
+    both faces (``gui/pages/domain_services.DomainServicesPage.applies_to`` and the
+    TUI walk in ``tui/journey.Journey.advance``), so the two cannot disagree about
+    which flows walk it.
+
+    On EVERY mesh flow with a cluster domain (the mesh's own domain always has a
+    services page — :func:`implicit_own_domain`, #494 / #589 decision 69), and
+    otherwise wherever the Domains table is, when it names at least one domain.
+
+    Leaves the output unchanged when False, in the strong sense the wizard's nextId() ALL-OPTIONS
+    guard asks for: nothing is named, so there is nothing to record and nothing for
+    the build/mesh-start gate to refuse either — skipping cannot smuggle a domain past
+    it. Standalone is skipped statically (MODE_SKIPPED_PAGES) on both faces."""
+    if implicit_own_domain(cfg):
+        return True
+    if not superadmin_plane_applies(cfg):
+        return False
+    return any((getattr(d, "name", "") or "").strip()
+               for d in (getattr(cfg, "domains", None) or []))
 
 def services_summary(selected, reviewed: bool) -> str:
     """ONE line for a domain's recorded services, and the ONLY place its wording lives.
@@ -424,10 +549,56 @@ def restart_gate_reason(cfg) -> str:
     So this bites only for a configuration that ALREADY carries at least one reviewed
     name, i.e. one produced under this feature, and has since gained a domain with no
     recorded configuration. A session recorded under this feature cannot have an empty
-    marker list and a domain, because the build gate refused exactly that."""
+    marker list and a domain, because the build gate refused exactly that.
+
+    It reads the TABLE ROWS only — never the implicit own domain, which the build gate
+    covers since #631 (``OWN_DOMAIN_GATED_ACTIONS``). That is the migration rule for
+    sessions recorded before then: one from the #495-to-#595 window carries its rows'
+    markers and no own-domain marker (the own domain had no page yet), and refusing its
+    restart would be the same punishment for history this narrow gate exists to avoid.
+    Redo goes back through the wizard, where the own domain's page is walked."""
     if not reviewed_names(cfg):
         return ""
     return gate_reason(cfg, ACTION_BUILD_RESTART)
+
+
+def session_boot_gate_reason(session_id: str) -> str:
+    """The gate for BOOTING a previous build session's images (#637): "" when they may
+    boot; otherwise the refusal naming every domain of that session's recorded
+    configuration with no recorded service configuration.
+
+    THE MANIFEST CANNOT ANSWER THIS. ``domain_services_reviewed`` is emitted into
+    neither mesh manifest (the module doc), so the question is put to the session's
+    BUILD RECORD instead: an artifact session dir ``out/sessions/<id>`` is named after
+    its record ``<state>/sessions/<id>.json`` (``build_sessions.session_workdir``), whose
+    ``config.base`` is the ImageConfig the images were built from.
+
+    NARROW, exactly like :func:`restart_gate_reason` and for the same reason — it is
+    that rule, applied to the configuration a session RECORDED:
+
+    * no record (a CLI build, a record pruned since, an unreadable one) -> "": there is
+      nothing to read a marker from, and inventing "unconfigured" would refuse images
+      that are already on disk over a question nobody could have answered;
+    * a record with NO reviewed marker (built before #495) -> "": history;
+    * a record with markers that still names an unwalked TABLE ROW -> refused. The own
+      domain is not asked (``OWN_DOMAIN_GATED_ACTIONS``): a session from before #631
+      never had it gated.
+
+    Qt-free and the ONE seam both GUI doors (``gui/pages/mesh_emulation.py``,
+    ``gui/pages/qemu.py``) and both TUI screens (``tui/meshemu.py``, ``tui/qemu.py``)
+    call, so the four cannot disagree about which session boots."""
+    name = (session_id or "").strip()
+    if not name:
+        return ""
+    try:
+        from . import build_sessions        # lazy: build_sessions -> worklist -> config
+        rec = build_sessions.find(name)
+        base = rec.worklist().base if rec is not None else None
+    except Exception:                       # noqa: BLE001 — a record we cannot read
+        return ""                           # is a record with nothing to say
+    if base is None or not reviewed_names(base):
+        return ""
+    return gate_reason(base, ACTION_EMULATE)
 
 
 # ── #497: the choices this page SHOWS but does not own ──────────────────────────────
