@@ -493,22 +493,39 @@ pin_rpi "${RPI}" && ok "rpi5 pins: stale-mount refusal before the rm -rf of the 
 # and /dev under its sysroot for the qemu-chroot dracut step, so each shares the
 # stale-mount hazard — MEASURED here, by the bind itself, not by the x86 function
 # name `mount_chroot` (which none of them uses) — and each carries the same
-# refusal before its extraction branch. None gets the owner gate: a NON-ROOT
-# cross build owns its sysroot by design (`--no-same-owner` at the stage3
-# extract) and forces --owner=0 --group=0 when it packages the stage4 tarball.
-# None but rpi5 has a `*.a` clean step, and rpi5's cross toolchain links against
+# refusal before its extraction branch. The owner gate is there too, for a ROOT
+# build only, on the seven whose media are made straight from the sysroot and
+# keep its owners (jetson: the .img tar pipe; frite + orangepi: the live and
+# installer squashfs) — with the remedy "remove the tree", because those seven
+# extract a stage3 OVER an existing tree rather than wiping it. A NON-ROOT cross
+# build owns its sysroot by design (`--no-same-owner` at the stage3 extract) and
+# is exempt. rpi5 has no gate: every owner in its stage4 tarball is forced to 0
+# and its .img is filled from that tarball (both pinned). None but rpi5 has a
+# `*.a` clean step, and rpi5's cross toolchain links against
 # /usr/aarch64-unknown-linux-gnu, never the sysroot: no restore, no link test.
 pin_arm() {   # <builder> -> 0 when every pin holds
-    local b="$1" rc=0 n_ref n_skip
+    local b="$1" rc=0 n_ref n_skip n_gate n_cond
     grep -a -F 'mount --bind /proc "${SYSROOT}/proc"' "$b" >/dev/null 2>&1 || { echo "    (no /proc bind under the sysroot in $(basename "$b") — the hazard this pin is about is gone; re-measure)"; rc=1; }
     has "$b" 'source "${SCRIPT_DIR}/scripts/_builder-resume-lib.sh"' || rc=1
     n_ref="$(grep -a -n -F 'hmr_stale_mount_refuse "${SYSROOT}" "${_stale_mounts}"' "$b" | head -1 | cut -d: -f1)"
     n_skip="$(grep -a -n -F 'skipping extraction' "$b" | head -1 | cut -d: -f1)"
     [ -n "${n_ref}" ] && [ -n "${n_skip}" ] && [ "${n_ref}" -lt "${n_skip}" ] || rc=1
-    grep -a -F 'hmr_owner_gate' "$b" >/dev/null 2>&1 && rc=1     # would refuse every non-root cross build
     case "$(basename "$b")" in
-        build-rpi5-stage4.sh) ;;
-        *) grep -a -F "name '*.a' -delete" "$b" >/dev/null 2>&1 && rc=1 ;;   # a clean step arrived: needs the restore too
+        build-rpi5-stage4.sh)
+            # Every owner in its stage4 tarball is forced to 0 and its .img is filled
+            # FROM that tarball: a user-owned tree cannot reach the image, so no gate.
+            # Both halves of that evidence are pinned; if either moves, re-measure.
+            grep -a -F 'hmr_owner_gate' "$b" >/dev/null 2>&1 && rc=1
+            has "$b" '--numeric-owner --owner=0 --group=0' || rc=1
+            has "$b" '-xpf "${STAGE4_TARBALL}"' || rc=1 ;;
+        *)
+            # The gate, for a ROOT build only — the line right above it is the id -u
+            # test — before 'skipping extraction', with the remove-the-tree remedy.
+            # No *.a clean step (one arriving would need the restore too).
+            n_gate="$(grep -a -n -F 'hmr_owner_gate "${SYSROOT}" "remove ${SYSROOT} (this builder extracts the stage3 over an existing tree' "$b" | head -1 | cut -d: -f1)"
+            n_cond="$(grep -a -n -F 'if [ "$(id -u)" -eq 0 ]; then' "$b" | awk -F: -v g="${n_gate:-0}" '$1<g {l=$1} END{print l+0}')"
+            [ -n "${n_gate}" ] && [ "${n_gate}" -lt "${n_skip}" ] && [ $((n_gate - n_cond)) -eq 1 ] || rc=1
+            grep -a -F "name '*.a' -delete" "$b" >/dev/null 2>&1 && rc=1 ;;
     esac
     return "${rc}"
 }
@@ -525,12 +542,39 @@ run_arm_extract() {   # <builder> <sysroot> <epath>
         echo ARM-EXTRACT-GUARD-PASSED
     "
 }
+# The whole extraction if/else of each builder with RESUME=true on the FIX_UID-
+# owned fixture, with a stub `id` answering STUB_ID_UID to `id -u`, so the
+# root-only gate is driven both ways whatever user this file runs as.
+mkdir -p "${TDIR}/bin-id"; REAL_ID="$(command -v id)"
+cat > "${TDIR}/bin-id/id" <<STUB
+#!/usr/bin/env bash
+# \`id -u\` answers STUB_ID_UID when set; everything else goes to the real id.
+if [ "\${1:-}" = -u ] && [ -n "\${STUB_ID_UID:-}" ]; then
+    printf '%s\n' "\${STUB_ID_UID}"
+else
+    exec "${REAL_ID}" "\$@"
+fi
+STUB
+chmod +x "${TDIR}/bin-id/id"
+run_arm_resume() {   # <builder> <sysroot> <uid the stub id answers>
+    local sec="${TDIR}/sec-arm-resume.sh"
+    extract_section "$1" '^banner "Extracting stage3 into sysroot"$' 'skipping extraction' '^fi$' "${sec}" || return 99
+    PATH="${TDIR}/bin-id:${PATH}" STUB_ID_UID="$3" timeout "${WALL}" bash -c "
+        set -euo pipefail
+        . '${LIB}'
+        banner(){ echo \"==> \$1\"; }; info(){ echo \"    \$1\"; }; warn(){ echo \"    WARNING: \$1\"; }; err(){ echo \"    ERROR: \$1\" >&2; }
+        RESUME=true; SYSROOT='$2'; STAGE3_LOCAL='${SEED_OLD}'
+        . '${sec}'
+        echo ARM-RESUME-BRANCH-COMPLETED
+    "
+}
+make_sysroot "${SX}"   # user-owned again: the non-resume leg above re-extracted it (under root, as root's)
 n_arm=0
 for b in "${REPO}"/build-*-stage4.sh; do
     bn="$(basename "$b")"
     [ "${bn}" = build-x86-host-stage4.sh ] && continue
     n_arm=$((n_arm+1))
-    pin_arm "$b" || { bad "${bn} pins: lib sourced + stale-mount refusal before 'skipping extraction', no owner gate, no *.a clean (run: bash -x on pin_arm)"; continue; }
+    pin_arm "$b" || { bad "${bn} pins: lib sourced + stale-mount refusal before 'skipping extraction'; the root-only owner gate with the remove-the-tree remedy (rpi5: none, its owners are forced to 0); no *.a clean (run: bash -x on pin_arm)"; continue; }
     out="$(run_arm_extract "$b" "${SX}" "${TDIR}/bin-mnt" 2>&1)"; rc=$?
     if [ "${rc}" -ne 1 ] || ! printf '%s' "${out}" | grep -a -F "mounts are still attached under ${SX}" >/dev/null; then
         bad "${bn} extract guard (stale binds): rc=${rc}: ${out}"; continue
@@ -539,7 +583,25 @@ for b in "${REPO}"/build-*-stage4.sh; do
     if [ "${rc}" -ne 0 ] || ! printf '%s' "${out}" | grep -a -F "ARM-EXTRACT-GUARD-PASSED" >/dev/null; then
         bad "${bn} extract guard (no mounts): rc=${rc}: ${out}"; continue
     fi
-    ok "${bn}: binds host /proc under its sysroot; lib sourced; refusal pinned before the extraction branch and EXECUTED (stale binds -> refused with the loop hint; clean -> passes); no owner gate"
+    if [ "${bn}" = build-rpi5-stage4.sh ]; then
+        out="$(run_arm_resume "$b" "${SX}" 0 2>&1)"; rc=$?
+        if [ "${rc}" -ne 0 ] || ! printf '%s' "${out}" | grep -a -F "skipping extraction" >/dev/null; then
+            bad "${bn} resume (root, user-owned tree): expected to proceed (its owners are forced to 0 at packaging), got rc=${rc}: ${out}"; continue
+        fi
+        ok "${bn}: binds host /proc under its sysroot; lib sourced; stale refusal pinned + EXECUTED (stale binds -> refused with the loop hint; clean -> passes); a root resume on a user-owned tree proceeds — no gate, every owner in its stage4 tarball is forced to 0 and the .img is filled from it (pinned)"
+        continue
+    fi
+    out="$(run_arm_resume "$b" "${SX}" 0 2>&1)"; rc=$?
+    if [ "${rc}" -ne 1 ] || ! printf '%s' "${out}" | grep -a -F "Refusing --resume: the build system directory ${SX} is owned by uid ${FIX_UID}" >/dev/null \
+       || ! printf '%s' "${out}" | grep -a -F "remove ${SX} (this builder extracts the stage3 over an existing tree" >/dev/null \
+       || printf '%s' "${out}" | grep -a -F "skipping extraction" >/dev/null; then
+        bad "${bn} resume (root, user-owned tree): expected ONE refusal with the remove-the-tree remedy before 'skipping extraction', got rc=${rc}: ${out}"; continue
+    fi
+    out="$(run_arm_resume "$b" "${SX}" 1000 2>&1)"; rc=$?
+    if [ "${rc}" -ne 0 ] || ! printf '%s' "${out}" | grep -a -F "skipping extraction" >/dev/null; then
+        bad "${bn} resume (non-root, user-owned tree): expected to proceed (a non-root build owns its tree by design), got rc=${rc}: ${out}"; continue
+    fi
+    ok "${bn}: binds host /proc under its sysroot; lib sourced; stale refusal pinned + EXECUTED (stale binds -> refused with the loop hint; clean -> passes); root-only owner gate EXECUTED (root + user-owned tree -> refused, remedy says remove the tree; non-root -> proceeds)"
 done
 [ "${n_arm}" -eq 9 ] && ok "nine non-x86 builders measured (rpi5 + frite + jetson + six orangepi)" || bad "expected 9 non-x86 builders, found ${n_arm}: a builder was added or removed — re-measure its resume path"
 
@@ -606,6 +668,21 @@ cmp -s "${TDIR}/mut-lib.sh" "${LIB}" && bad "M8 lib mutation did not apply"
 out="$(bash -c ". '${TDIR}/mut-lib.sh'; hmr_seed_for_resume '${B3}' '${S5}' '${ONLYNEW}/$(basename "${SEED_NEW}")' '${L}'" 2>&1)"; rc=$?
 [ "${rc}" -eq 0 ] && ok "M8 version comparison disabled: the binutils-2.47 seed is accepted for a 2.46.1 build system (leg RED — the comparison is what refuses it)" \
     || bad "M8: disabling the comparison changed nothing (rc=${rc})"
+# M9 (cross builders): the root-only owner gate turned into a no-op in a COPY of
+# the jetson builder (a deleted line would leave an empty `if` body — a syntax
+# error, red for the wrong reason) -> a root resume on a user-owned tree
+# proceeds to 'skipping extraction' (leg RED) and the pin is RED.
+JET="${REPO}/build-jetson-stage4.sh"
+sed -e 's/^        hmr_owner_gate "\${SYSROOT}" "remove \${SYSROOT} (this builder extracts the stage3 over an existing tree.*$/        :/' "${JET}" > "${TDIR}/mut-jetson-no-gate.sh"
+if cmp -s "${TDIR}/mut-jetson-no-gate.sh" "${JET}"; then
+    bad "M9 mutation did not change the jetson builder text"
+else
+    make_sysroot "${SX}"
+    out="$(run_arm_resume "${TDIR}/mut-jetson-no-gate.sh" "${SX}" 0 2>&1)"; rc=$?
+    [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -a -F "skipping extraction" >/dev/null && ! pin_arm "${TDIR}/mut-jetson-no-gate.sh" \
+        && ok "M9 cross-builder owner gate removed: a root resume on a user-owned tree proceeds (leg RED) and the pin is RED" \
+        || bad "M9: removing the cross builder's owner gate was not caught (rc=${rc}: ${out})"
+fi
 
 echo
 echo "== ${P} passed, ${F} failed =="

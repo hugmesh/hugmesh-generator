@@ -191,9 +191,11 @@ source "${SCRIPT_DIR}/scripts/_shared-assets-lib.sh"
 # the x86 builder. Its static-library restore does not apply: no clean step
 # deletes *.a here, and the aarch64 cross toolchain links against its own
 # /usr/aarch64-unknown-linux-gnu (`aarch64-unknown-linux-gnu-gcc -print-sysroot`),
-# never ${SYSROOT}. Neither does the owner gate: a NON-ROOT build owns this
-# sysroot by design (the stage3 is extracted with --no-same-owner below) and the
-# stage4 tarball it packages forces --owner=0 --group=0.
+# never ${SYSROOT}. The owner gate applies to a ROOT build only: a non-root build
+# owns this sysroot by design (the stage3 is extracted with --no-same-owner
+# below), while a root build's user-owned tree would reach the image, because
+# the media this builder makes straight from the sysroot keep its owners (see
+# the resume branch of the Extract phase).
 # shellcheck source=scripts/_builder-resume-lib.sh
 source "${SCRIPT_DIR}/scripts/_builder-resume-lib.sh"
 # Seed-derived PYTHON_TARGETS/PYTHON_SINGLE_TARGET (pt_apply_seed_targets).
@@ -1477,6 +1479,18 @@ if [ -d "${SYSROOT}" ]; then
     fi
 fi
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
+    # A ROOT build may only reuse a build system that is still root's: the live and
+    # installer squashfs are made from the sysroot (mksquashfs without -all-root, or
+    # a `tar --numeric-owner` pipe), which keeps its owners,
+    # so a tree that a finished `make` run had handed to the invoking user would
+    # bake that user into the image — on x86 such an image booted with sshd and
+    # tor refusing to start (#659). A non-root build owns its sysroot by design
+    # (the stage3 is extracted with --no-same-owner below) and is exempt. Checked
+    # here, before any write to the tree. This builder extracts the stage3 OVER an
+    # existing tree rather than wiping it, so the remedy is to remove the tree.
+    if [ "$(id -u)" -eq 0 ]; then
+        hmr_owner_gate "${SYSROOT}" "remove ${SYSROOT} (this builder extracts the stage3 over an existing tree; it does not wipe it) and rebuild WITHOUT --resume as root" || exit 1
+    fi
     info "Sysroot already populated and --resume set, skipping extraction"
 else
     TAR_X=(--exclude='./dev/*')

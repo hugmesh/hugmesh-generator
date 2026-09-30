@@ -35,11 +35,16 @@ _hmr_warn() { if declare -F warn >/dev/null 2>&1; then warn "$1"; else printf 'W
 _hmr_info() { if declare -F info >/dev/null 2>&1; then info "$1"; else printf '%s\n' "$1"; fi; }
 
 # ── 1. Ownership ──────────────────────────────────────────────────────────────
-# hmr_owner_gate <sysroot> — 0 when every checked directory of the build system
-# is owned by uid 0; otherwise prints ONE sentence naming the directory and its
-# owner and returns 1. Checked: the root, etc, var, usr, usr/lib, usr/lib64, bin,
-# var/empty and var/db/pkg (whichever exist). `stat -L` follows a symlink (merged
-# usr ships /bin -> usr/bin), so the directory behind the link is what is read.
+# hmr_owner_gate <sysroot> [remedy] — 0 when every checked directory of the build
+# system is owned by uid 0; otherwise prints ONE sentence naming the directory
+# and its owner, ending in <remedy>, and returns 1. Checked: the root, etc, var,
+# usr, usr/lib, usr/lib64, bin, var/empty and var/db/pkg (whichever exist).
+# `stat -L` follows a symlink (merged usr ships /bin -> usr/bin), so the directory
+# behind the link is what is read. The default remedy is what the x86 and rpi5
+# builders do on a non-resume run (wipe, then extract the stage3 again as root);
+# a builder that extracts the stage3 OVER an existing tree passes its own, since
+# overlaying a stage3 on a user-owned tree leaves every later-installed file the
+# user's.
 #
 # Why REFUSE rather than restore root ownership: `chown -R user` erases the
 # information needed to undo it. A stage3 seed ships 24 entries that are NOT
@@ -55,13 +60,14 @@ _hmr_info() { if declare -F info >/dev/null 2>&1; then info "$1"; else printf '%
 HMR_OWNER_CHECK_DIRS="/ /etc /var /usr /usr/lib /usr/lib64 /bin /var/empty /var/db/pkg"
 hmr_owner_gate() {
     local sysroot="${1:?sysroot}"
+    local remedy="${2:-rebuild WITHOUT --resume so the build system is wiped and re-extracted as root}"
     local rel path uid
     for rel in ${HMR_OWNER_CHECK_DIRS}; do
         path="${sysroot%/}${rel%/}"
         [ -d "${path}" ] || continue
         uid="$(stat -L -c %u "${path}" 2>/dev/null || echo '?')"
         if [ "${uid}" != "0" ]; then
-            _hmr_err "Refusing --resume: the build system directory ${path} is owned by uid ${uid}, not root (a finished 'make' run used to hand the whole work directory to the invoking user), and an image built from such a tree boots broken because sshd, systemd-tmpfiles, snort and tor refuse directories that are not root's; rebuild WITHOUT --resume so the build system is wiped and re-extracted as root."
+            _hmr_err "Refusing --resume: the build system directory ${path} is owned by uid ${uid}, not root (a finished 'make' run used to hand the whole work directory to the invoking user), and an image built from such a tree boots broken because sshd, systemd-tmpfiles, snort and tor refuse directories that are not root's; ${remedy}."
             return 1
         fi
     done

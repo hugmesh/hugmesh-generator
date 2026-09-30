@@ -312,7 +312,7 @@ jobs:
           # test, stale-mount refusal, umount_chroot) and the Makefile's post-build
           # reown, executed against fixtures and stubs with a mutation battery.
           # MEASURED, 2026-09-30, in alpine:3 with EXACTLY this job's apk set, as
-          # root (checkout copied in): 53 passed / 0 failed (the one `unshare -Ur`
+          # root (checkout copied in): 54 passed / 0 failed (the one `unshare -Ur`
           # leg SKIPs here — user namespaces are blocked in a container — and its
           # stat-shim twin covers the pass path) and 9 / 0. Their sibling
           # tests/scripts/test-builder-unmount-real.sh needs `unshare -Urm` and exits

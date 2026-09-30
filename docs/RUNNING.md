@@ -837,7 +837,12 @@ so CI builds from a complete in-VPN copy. See [`docs/DEVOPS.md`](DEVOPS.md).
   account, and portage records no owner for what it installed. Rebuild **without**
   `--resume`; the builder wipes the build system and extracts the stage3 again as root
   (about an hour). `make` no longer hands the build system to your user after a native
-  build (only the artifacts; see §3b), so this should not recur.
+  build (only the artifacts; see §3b), so this should not recur. The cross builders
+  (jetson, frite, orangepi) make the same check for a root build, because the media they
+  make straight from the sysroot keep its owners; they extract the stage3 over an existing
+  tree instead of wiping it, so there the sentence says to remove the tree first. rpi5
+  needs no check: every owner in its stage4 tarball is forced to root and its `.img` is
+  filled from that tarball.
 - **`--resume` stops with `Refusing to restore the build system's static libraries: no cached seed tarball carries the toolchain …`**
   → every build's clean step deletes the static libraries, and a resumed build puts
   them back from the seed the build system was extracted from (`snap-build-x86/sysroot.seed`
