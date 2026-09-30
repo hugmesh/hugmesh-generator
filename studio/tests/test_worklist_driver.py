@@ -156,6 +156,32 @@ def test_failure_is_tolerated_and_summary_nonzero(monkeypatch, tmp_path):
     assert drv.summary_exit_code() == 1
 
 
+def test_a_raising_entry_is_failed_not_left_running_and_the_loop_continues(monkeypatch, tmp_path):
+    """#374: BuildDriver.run can RAISE (ElevationRefused under HUGMESH_STUDIO_NO_ELEVATION
+    / pytest, an OSError from Popen). Unhandled, run_all propagated with that entry still
+    RUNNING and still registered in _drivers, on_entry_done never called, and the session
+    later recorded 'stopped' (the operator-Stop state) instead of 'failed'."""
+    def boom(fake, cfg):
+        if cfg.role == "backend":
+            raise bd.ElevationRefused("refusing to spawn sudo (HUGMESH_STUDIO_NO_ELEVATION is set)")
+
+    _install_fake_builddriver(monkeypatch, on_run=boom)
+    _install_fake_genkeys(monkeypatch)
+    drv = WorklistDriver(str(tmp_path), _worklist(tmp_path), host=host())
+    lines, dones = [], []
+    code = drv.run_all(on_line=lambda i, ln: lines.append((i, ln)),
+                       on_entry_done=lambda i, c: dones.append((i, c)))
+    assert [r.status for r in drv.results] == ["ok", "failed", "ok"]   # tolerated, continued
+    assert drv.results[1].exit_code == 1
+    assert dones == [(0, 0), (1, 1), (2, 0)]        # the row reaches a terminal glyph
+    assert drv._drivers == {}                        # nothing left registered
+    assert any(i == 1 and ln.startswith("!! ") and "HUGMESH_STUDIO_NO_ELEVATION" in ln
+               for i, ln in lines), lines
+    assert code == 1
+    from hugmesh_studio.core import build_sessions as bs
+    assert bs.overall_status([r.status for r in drv.results]) == "failed"
+
+
 # ── mesh manifest v2 ─────────────────────────────────────────────────────────────────
 def test_manifest_v2_written_up_front(monkeypatch, tmp_path):
     _install_fake_builddriver(monkeypatch)

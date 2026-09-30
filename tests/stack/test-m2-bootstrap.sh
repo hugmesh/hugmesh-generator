@@ -356,17 +356,31 @@ else
   # is not a Maven project (hugmesh-api-docs), which is reported but not fatal.
   CORPUS_MISSING=""
   CORPUS_NOPOM=""
+  CORPUS_NOPOM_MAVEN=""
   for c in ${CONSUMERS}; do
     if [ ! -d "${SRC}/${c}" ]; then
       CORPUS_MISSING="${CORPUS_MISSING} ${c}"
     elif [ ! -f "${SRC}/${c}/pom.xml" ]; then
-      CORPUS_NOPOM="${CORPUS_NOPOM} ${c}"
+      # A directory without a pom.xml is only "not a Maven project" when the
+      # checkout PROVES it: its Dockerfile exists and never names maven/mvn. The
+      # old rule (any pom-less directory is informational) could not tell
+      # hugmesh-api-docs from a real consumer whose root pom went missing — a moved
+      # pom, a sparse checkout that dropped it — and passed with that consumer
+      # (the one that has drifted four times: admin-bff) entirely unchecked.
+      # No Dockerfile at all proves nothing, so it fails closed too.
+      if [ -f "${SRC}/${c}/Dockerfile" ] && ! grep -qiE 'maven|mvn' "${SRC}/${c}/Dockerfile"; then
+        CORPUS_NOPOM="${CORPUS_NOPOM} ${c}"
+      else
+        CORPUS_NOPOM_MAVEN="${CORPUS_NOPOM_MAVEN} ${c}"
+      fi
     fi
   done
   if [ -z "${CONSUMERS}" ]; then
     bad "could not derive ANY Maven consumer from tests/stack/compose.local.yaml — the corpus has nothing to be complete against, which is a defect in this guard"
   elif [ -n "${CORPUS_MISSING}" ]; then
     bad "the consumer corpus in ${SRC} carries NO checkout for:${CORPUS_MISSING} — their pins were compared against nothing (run 'make stack-clone', or point STACK_SRC at a complete tree)"
+  elif [ -n "${CORPUS_NOPOM_MAVEN}" ]; then
+    bad "the consumer corpus in ${SRC} has NO root pom.xml for:${CORPUS_NOPOM_MAVEN} — and their Dockerfile does not prove they are non-Maven (absent, or it names maven/mvn), so their pins were compared against nothing (a moved pom, a sparse checkout that dropped it, or a wrong GIT_REF)"
   else
     # SAY WHAT WAS PROVED, NOT MORE. This count is the number of compose build
     # contexts matching the Maven-consumer NAME PATTERN, which is not the same set
@@ -429,6 +443,7 @@ else
   # ── THE WALKER'S OUTPUT IS A PROTOCOL, NOT PROSE ────────────────────────────
   # Every line it prints is exactly one of
   #     DRIFT <repo>: wants <artifact> <v>, registry serves <v>
+#     UNSERVED <repo>: wants <gid>:<artifact> <v>, registry serves no version
   #     UNREADABLE <path> :: <why>
   #     SEEN <n>                                    (exactly once, digits only)
   # and the shell below FAILS on anything else. That rule exists because the
@@ -533,7 +548,7 @@ for repo in entries:
         gid = d.findtext("m:groupId", "", ns).strip()
         aid = d.findtext("m:artifactId", "", ns).strip()
         ver = d.findtext("m:version", "", ns).strip()
-        if gid not in groups or aid not in pins or not ver:
+        if gid not in groups or not ver:
             continue
         m = re.fullmatch(r"\$\{([^}]+)\}", ver)
         if m:
@@ -545,6 +560,17 @@ for repo in entries:
                 # positive (federation-api / tube-bff).
                 continue
             ver = props[m.group(1)]
+        if aid not in pins:
+            # A PINNED GROUP but an artifact the table does not name at all. The
+            # registry serves no version of it, so a cold `make stack-up` dies on
+            # `Could not find artifact <gid>:<aid>:jar:<v>` — the exact failure
+            # this leg exists to catch. This used to `continue` in the same
+            # condition as the not-in-groups case, so an unpinned private library
+            # passed green. It is a finding, and it is deliberately NOT counted in
+            # `seen` (nothing was resolved).
+            print("UNSERVED %s: wants %s:%s %s, registry serves no version"
+                  % (esc(repo), esc(gid), esc(aid), esc(ver)))
+            continue
         seen += 1
         if ver not in pins[aid]:
             print("DRIFT %s: wants %s %s, registry serves %s"
@@ -565,9 +591,10 @@ PYEOF
   SEEN_N="$(printf '%s\n' "${SEEN_LINES}" | grep -c '[0-9]')"
   SEEN="$(printf '%s\n' "${SEEN_LINES}" | head -1)"
   DRIFT="$(printf '%s\n' "${DRIFT_RAW}" | sed -n 's/^DRIFT //p')"
+  UNSERVED="$(printf '%s\n' "${DRIFT_RAW}" | sed -n 's/^UNSERVED //p')"
   UNREADABLE="$(printf '%s\n' "${DRIFT_RAW}" | sed -n 's/^UNREADABLE //p')"
   UNKNOWN="$(printf '%s\n' "${DRIFT_RAW}" \
-             | grep -vE '^(DRIFT |UNREADABLE |SEEN [0-9]+$)' | grep -v '^[[:space:]]*$')"
+             | grep -vE '^(DRIFT |UNSERVED |UNREADABLE |SEEN [0-9]+$)' | grep -v '^[[:space:]]*$')"
 
   if [ -n "${UNKNOWN}" ]; then
     bad "the pin-drift walker emitted line(s) OUTSIDE its output protocol — a filter that drops them turns a signal into a green:"
@@ -598,6 +625,10 @@ PYEOF
     bad "the pin-drift walk resolved ZERO ${PIN_GROUPS} coordinates in ${SRC} — nothing was actually checked (vacuous green)"
   else
     ok "pin-drift walk resolved ${SEEN} ${PIN_GROUPS} coordinate(s) across the consumer poms"
+  fi
+  if [ -n "${UNSERVED}" ]; then
+    bad "UNSERVED — a consumer requests a ${PIN_GROUPS} artifact the PINS table does not name, so the registry serves no version of it and a cold stack build will die resolving it (add it to PINS in tests/stack/m2-bootstrap.sh):"
+    printf '%s\n' "${UNSERVED}" | sed 's/^/         /'
   fi
   if [ -z "${DRIFT}" ]; then
     ok "every sibling-requested ${PIN_GROUPS} version matches its pin"
@@ -789,6 +820,34 @@ POM
     m2_neg "a consumer asking for an auth-core version ABSENT from PINS" "${NC}/drift" \
            "hugmesh-workload-bff-api: wants hugmesh-auth-core 0.0.0-NOT-IN-PINS"
 
+    # (viii-c) AN ARTIFACT THE TABLE DOES NOT NAME AT ALL. (viii) covers a pinned
+    #          artifactId at an unserved VERSION; this is the other axis — an
+    #          artifactId under a PINNED groupId that PINS never mentions. The
+    #          walker used to skip it (`aid not in pins`), so a consumer adding a
+    #          second private library passed green while a cold build died on it.
+    #          The fixture name is asserted absent from PINS so this cannot become
+    #          a tautology.
+    UNPINNED_AID="hugmesh-unpinned-lib"
+    case "$(printf '%s\n' "${PINNED:-}")" in *"${UNPINNED_AID}="*) UNPINNED_AID="hugmesh-unpinned-lib-$$" ;; esac
+    base_corpus "${NC}/unpinned"
+    mkdir -p "${NC}/unpinned/hugmesh-wiki-bff-api"
+    cat > "${NC}/unpinned/hugmesh-wiki-bff-api/pom.xml" <<POM
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <artifactId>consumer</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>${PIN_GROUP_1}</groupId>
+      <artifactId>${UNPINNED_AID}</artifactId>
+      <version>1.0.0</version>
+    </dependency>
+  </dependencies>
+</project>
+POM
+    m2_neg "a consumer requesting a ${PIN_GROUP_1} artifactId the PINS table does not name" "${NC}/unpinned" \
+           "hugmesh-wiki-bff-api: wants ${PIN_GROUP_1}:${UNPINNED_AID} 1.0.0, registry serves no version"
+
     # (viii-b) The same refusal must survive the PARENT coordinate too — that is
     #          the one pin every Java consumer carries, and a <parent> is not a
     #          <dependency>, so it travels a different branch of the walk.
@@ -916,6 +975,31 @@ POM
         bad "(xvi) the sparse-fetch path did NOT surface pattern-excluded context ${STRAY} (rc=${SPARSE_BAD_RC}) — (xiv) cannot bite where CI runs"
         printf '%s\n' "${SPARSE_BAD_OUT}" | sed -n '/2b) PIN drift/,/^-- 3)/p' | sed 's/^/           /'
       fi
+    fi
+
+    # ── (xv) A CONSUMER DIRECTORY WITHOUT ITS pom.xml IS NOT "NOT MAVEN" ─────
+    # The completeness leg used to accept any present-but-pom-less directory as
+    # informational (hugmesh-api-docs is one), so removing admin-bff's pom left the
+    # suite green with its three pins never compared. The fixture is exactly the
+    # issue's: the directory and a .git stay, the pom goes.
+    base_corpus "${NC}/nopom"
+    rm -f "${NC}/nopom/hugmesh-admin-bff-api/pom.xml"
+    mkdir -p "${NC}/nopom/hugmesh-admin-bff-api/.git"
+    m2_neg "a real Maven consumer whose checkout has no pom.xml" "${NC}/nopom" \
+           "NO root pom.xml for: hugmesh-admin-bff-api"
+
+    # (xv-b) ...and the legitimate pom-less directory must STILL pass, or (xv) would
+    #        be satisfiable by refusing everything. api-docs with a Dockerfile that
+    #        never names maven is the real shape.
+    base_corpus "${NC}/nonmaven"
+    rm -f "${NC}/nonmaven/hugmesh-api-docs/pom.xml"
+    printf 'FROM nginx:alpine\nCOPY . /usr/share/nginx/html\n' > "${NC}/nonmaven/hugmesh-api-docs/Dockerfile"
+    NONMAVEN_OUT="$(M2_SELFTEST_CHILD=1 STACK_SRC="${NC}/nonmaven" bash "${SELF_M2}" 2>&1)"; NONMAVEN_RC=$?
+    if [ "${NONMAVEN_RC}" -eq 0 ]; then
+      ok "(xv-b) a pom-less consumer whose Dockerfile proves it is not Maven (hugmesh-api-docs) still passes"
+    else
+      bad "(xv-b) a genuine non-Maven consumer (no pom.xml, Dockerfile without maven/mvn) was rejected (rc=${NONMAVEN_RC}):"
+      printf '%s\n' "${NONMAVEN_OUT}" | sed -n '/2b) PIN drift/,/^-- 3)/p' | sed 's/^/           /'
     fi
 
     # ── (xii) A PARTIAL CORPUS IS NOT A CORPUS ──────────────────────────────
