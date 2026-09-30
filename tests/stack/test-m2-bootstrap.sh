@@ -334,17 +334,31 @@ else
   # is not a Maven project (hugmesh-api-docs), which is reported but not fatal.
   CORPUS_MISSING=""
   CORPUS_NOPOM=""
+  CORPUS_NOPOM_MAVEN=""
   for c in ${CONSUMERS}; do
     if [ ! -d "${SRC}/${c}" ]; then
       CORPUS_MISSING="${CORPUS_MISSING} ${c}"
     elif [ ! -f "${SRC}/${c}/pom.xml" ]; then
-      CORPUS_NOPOM="${CORPUS_NOPOM} ${c}"
+      # A directory without a pom.xml is only "not a Maven project" when the
+      # checkout PROVES it: its Dockerfile exists and never names maven/mvn. The
+      # old rule (any pom-less directory is informational) could not tell
+      # hugmesh-api-docs from a real consumer whose root pom went missing — a moved
+      # pom, a sparse checkout that dropped it — and passed with that consumer
+      # (the one that has drifted four times: admin-bff) entirely unchecked.
+      # No Dockerfile at all proves nothing, so it fails closed too.
+      if [ -f "${SRC}/${c}/Dockerfile" ] && ! grep -qiE 'maven|mvn' "${SRC}/${c}/Dockerfile"; then
+        CORPUS_NOPOM="${CORPUS_NOPOM} ${c}"
+      else
+        CORPUS_NOPOM_MAVEN="${CORPUS_NOPOM_MAVEN} ${c}"
+      fi
     fi
   done
   if [ -z "${CONSUMERS}" ]; then
     bad "could not derive ANY Maven consumer from tests/stack/compose.local.yaml — the corpus has nothing to be complete against, which is a defect in this guard"
   elif [ -n "${CORPUS_MISSING}" ]; then
     bad "the consumer corpus in ${SRC} carries NO checkout for:${CORPUS_MISSING} — their pins were compared against nothing (run 'make stack-clone', or point STACK_SRC at a complete tree)"
+  elif [ -n "${CORPUS_NOPOM_MAVEN}" ]; then
+    bad "the consumer corpus in ${SRC} has NO root pom.xml for:${CORPUS_NOPOM_MAVEN} — and their Dockerfile does not prove they are non-Maven (absent, or it names maven/mvn), so their pins were compared against nothing (a moved pom, a sparse checkout that dropped it, or a wrong GIT_REF)"
   else
     # SAY WHAT WAS PROVED, NOT MORE. This count is the number of compose build
     # contexts matching the Maven-consumer NAME PATTERN, which is not the same set
@@ -850,6 +864,31 @@ POM
     base_corpus "${NC}/othergroup" "${OTHER_GROUP}"
     m2_neg "a corpus under a groupId the PINS table does not carry" "${NC}/othergroup" \
            "resolved ZERO"
+
+    # ── (xv) A CONSUMER DIRECTORY WITHOUT ITS pom.xml IS NOT "NOT MAVEN" ─────
+    # The completeness leg used to accept any present-but-pom-less directory as
+    # informational (hugmesh-api-docs is one), so removing admin-bff's pom left the
+    # suite green with its three pins never compared. The fixture is exactly the
+    # issue's: the directory and a .git stay, the pom goes.
+    base_corpus "${NC}/nopom"
+    rm -f "${NC}/nopom/hugmesh-admin-bff-api/pom.xml"
+    mkdir -p "${NC}/nopom/hugmesh-admin-bff-api/.git"
+    m2_neg "a real Maven consumer whose checkout has no pom.xml" "${NC}/nopom" \
+           "NO root pom.xml for: hugmesh-admin-bff-api"
+
+    # (xv-b) ...and the legitimate pom-less directory must STILL pass, or (xv) would
+    #        be satisfiable by refusing everything. api-docs with a Dockerfile that
+    #        never names maven is the real shape.
+    base_corpus "${NC}/nonmaven"
+    rm -f "${NC}/nonmaven/hugmesh-api-docs/pom.xml"
+    printf 'FROM nginx:alpine\nCOPY . /usr/share/nginx/html\n' > "${NC}/nonmaven/hugmesh-api-docs/Dockerfile"
+    NONMAVEN_OUT="$(M2_SELFTEST_CHILD=1 STACK_SRC="${NC}/nonmaven" bash "${SELF_M2}" 2>&1)"; NONMAVEN_RC=$?
+    if [ "${NONMAVEN_RC}" -eq 0 ]; then
+      ok "(xv-b) a pom-less consumer whose Dockerfile proves it is not Maven (hugmesh-api-docs) still passes"
+    else
+      bad "(xv-b) a genuine non-Maven consumer (no pom.xml, Dockerfile without maven/mvn) was rejected (rc=${NONMAVEN_RC}):"
+      printf '%s\n' "${NONMAVEN_OUT}" | sed -n '/2b) PIN drift/,/^-- 3)/p' | sed 's/^/           /'
+    fi
 
     # ── (xii) A PARTIAL CORPUS IS NOT A CORPUS ──────────────────────────────
     # have_poms() is satisfied by a single pom.xml, so a corpus with one consumer
