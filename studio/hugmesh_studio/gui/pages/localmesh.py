@@ -4174,11 +4174,13 @@ class LocalMeshDomainServicesPage(_LocalMeshStep):
 
     SECTION = "domain_services"
     TITLE = "Domain services"
+    # Two lines at the wizard's default size: the subtitle area holds no more, and the
+    # longer sentence this replaced was cut off mid-way (#647, looked at). The rest of
+    # what it said is on the page itself (the lane note above the tables, and the
+    # ‘not domain-scoped’ table's own heading).
     SUBTITLE = ("Which optional services each domain provides, one domain per page — "
-                "this mesh's own domain first. The ‘not domain-scoped’ table below "
-                "lists the choices that bind the whole mesh instead; on this route "
-                "they are made on the ‘Services’ step two steps on, so its state "
-                "column is empty here.")
+                "this mesh's own domain first. Choices that bind the whole mesh are "
+                "made on the ‘Services’ step, two steps on.")
 
     def initializePage(self):
         super().initializePage()

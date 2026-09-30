@@ -24,6 +24,20 @@ What is pinned here, on the REAL hosts of the shared body, headless (offscreen):
   TUI's tables head the same column "selection" — read off the live page, so neither
   face can be renamed alone.
 
+THE GEOMETRY CHECKS RUN UNDER SEVERAL LOOKS (``_LOOKS``): the default style at the
+default point size, the same at 8 pt, and every KDE style installed here (Breeze,
+Oxygen) at 8 pt — the rows of #647's table where the header-sized column hid or clipped
+the checkbox (Oxygen's indicator is 23 px; at 8 pt "Selection" alone left it 21 px). The
+style and font are set on the application BEFORE the host is built and restored after.
+The click and wording checks run under the default look only (the host is rebuilt for
+every case, and each build is a whole wizard).
+
+WHAT IS DRAWN IS ALSO CHECKED AS A WHOLE (#647, looked at): on every host the body's
+widgets follow one another instead of overlapping — the fleet's step laid the front-door
+table and the state line over the services table's lower rows until it scrolled like the
+other two hosts — and the local docker mesh step's subtitle is whole at the wizard's
+default size, where the longer sentence it replaced was cut off.
+
 The GUI half skips without a Qt binding (the Qt-free job); the TUI half never skips.
 Nothing here calls ``.exec()``.
 """
@@ -163,20 +177,100 @@ def _fleet(qapp, monkeypatch):
 
 _HOSTS = {"image-flow": _image_flow, "local-docker-mesh": _local_mesh, "fleet": _fleet}
 
+#: The KDE styles #647 measured the clipping under. Each one that is installed is
+#: measured; Fusion (built into Qt) always is.
+_KDE_STYLES = ("Breeze", "Oxygen")
+
+
+def _installed_looks():
+    """``[(style name, point size or None for the default), ...]`` — computed at
+    collection so each look is its own test id. Without a Qt binding the GUI tests
+    skip in ``_qt()`` anyway, so the list is then only a placeholder."""
+    try:
+        from hugmesh_studio.gui import qt as qt_mod
+    except Exception:                          # noqa: BLE001 — no binding: see _qt()
+        return [("Fusion", None)]
+    qt_mod.QtWidgets.QApplication.instance() \
+        or qt_mod.QtWidgets.QApplication(["hugmesh-studio-selection-column"])
+    keys = set(qt_mod.QtWidgets.QStyleFactory.keys())
+    return [("Fusion", None), ("Fusion", 8.0)] + [(s, 8.0) for s in _KDE_STYLES if s in keys]
+
+
+_LOOKS = _installed_looks()
+
+
+def _look_id(look):
+    style, pt = look
+    return f"{style}-{'default' if pt is None else str(int(pt)) + 'pt'}"
+
+
+def _apply_look(qapp, look):
+    """Put ``look`` (style name, point size or None) on the application; returns what
+    to restore. Asserted, so a style that failed to load cannot pass as measured."""
+    qt = _qt()
+    style, pt = look
+    if style not in qt.QtWidgets.QStyleFactory.keys():
+        pytest.fail(f"the Qt style {style!r} vanished between collection and this test")
+    saved = (qapp.style().objectName(), qt.QtGui.QFont(qapp.font()))
+    qapp.setStyle(qt.QtWidgets.QStyleFactory.create(style))
+    if pt is not None:
+        f = qt.QtGui.QFont(saved[1])
+        f.setPointSizeF(pt)
+        qapp.setFont(f)
+    _settle(qapp)
+    assert qapp.style().objectName().lower() == style.lower()
+    return saved
+
+
+def _restore_look(qapp, saved):
+    qt = _qt()
+    qapp.setStyle(qt.QtWidgets.QStyleFactory.create(saved[0]))
+    qapp.setFont(saved[1])
+    _settle(qapp)
+
+
+def _build_host(name, qapp, monkeypatch, tmp_path):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    body, window = _HOSTS[name](qapp, monkeypatch)
+    assert body.current_domain() == "acme.example"
+    _settle(qapp)
+    return body, window
+
 
 @pytest.fixture(params=sorted(_HOSTS))
 def host(request, qapp, monkeypatch, tmp_path):
     """``(body, window)`` — the shared body on one of its real hosts, walked onto an
     added domain (the screen with BOTH checkbox tables live), shown at the host's own
-    default size."""
-    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
-    body, window = _HOSTS[request.param](qapp, monkeypatch)
-    assert body.current_domain() == "acme.example"
-    _settle(qapp)
+    default size, under the process's default look."""
+    body, window = _build_host(request.param, qapp, monkeypatch, tmp_path)
     yield body, window
     window.close()
     window.deleteLater()
     _settle(qapp)
+
+
+_STYLED = [(h, look) for look in _LOOKS for h in sorted(_HOSTS)]
+
+
+@pytest.fixture(params=_STYLED, ids=lambda p: f"{p[0]}-{_look_id(p[1])}")
+def styled_host(request, qapp, monkeypatch, tmp_path):
+    """The same, built under each look in ``_LOOKS`` (#647): the style and font are on
+    the application before the host is built, checked on the table itself, and
+    restored afterwards — ``qapp`` outlives every test in this process."""
+    name, look = request.param
+    saved = _apply_look(qapp, look)
+    try:
+        body, window = _build_host(name, qapp, monkeypatch, tmp_path)
+        style, pt = look
+        assert body.table.style().objectName().lower() == style.lower()
+        if pt is not None:
+            assert body.table.font().pointSizeF() == pt
+        yield body, window
+        window.close()
+        window.deleteLater()
+        _settle(qapp)
+    finally:
+        _restore_look(qapp, saved)
 
 
 def _mod():
@@ -244,8 +338,8 @@ def _cell(table, item):
 
 
 # ── 1. visible, on every host, at the default window size ─────────────────────────
-def test_the_checkbox_column_shows_the_whole_checkbox_on_every_host(host):
-    body, _window = host
+def test_the_checkbox_column_shows_the_whole_checkbox_on_every_host(styled_host):
+    body, _window = styled_host
     mod = _mod()
     slug, item, box = _first_service(body)
     _assert_whole_checkbox(body.table, item, box)
@@ -320,12 +414,12 @@ def test_the_own_domains_front_door_row_takes_no_click(host):
 
 
 # ── 3. the width is NOT the header's ──────────────────────────────────────────────
-def test_the_old_two_letter_header_no_longer_hides_the_checkbox(host, qapp):
+def test_the_old_two_letter_header_no_longer_hides_the_checkbox(styled_host, qapp):
     # THE REGRESSION ITSELF. With a content-sized column, "On" made the section
     # exactly as wide as the row's indentation, the cell zero pixels wide, and the
     # checkbox was never laid out. The production header stays "Selection" — the
     # relabel is only how this test takes the header's help away.
-    body, _window = host
+    body, _window = styled_host
     mod = _mod()
     for t in (body.table, body.front_door_table):
         t.headerItem().setText(mod._COL_ON, "On")
@@ -341,8 +435,8 @@ def test_the_old_two_letter_header_no_longer_hides_the_checkbox(host, qapp):
     assert box.isChecked() is (not before)
 
 
-def test_a_style_with_a_bigger_checkbox_widens_the_column(host, qapp):
-    body, window = host
+def test_a_style_with_a_bigger_checkbox_widens_the_column(styled_host, qapp):
+    body, window = styled_host
     mod = _mod()
     narrow = body.table.header().sectionSize(mod._COL_ON)
     window.setStyleSheet("QCheckBox::indicator { width: 34px; height: 34px; }")
@@ -376,3 +470,65 @@ def test_the_tui_tables_are_headed_like_the_gui_tables(host):
         return [t.lower() for t in texts if t]
     assert gui(body.table) == tui_step.service_table(d)[0][1:]
     assert gui(body.front_door_table) == tui_step.front_door_table(d)[0][1:]
+
+
+# ── 5. what is drawn, as a whole ──────────────────────────────────────────────────
+def _ancestors(w):
+    p = w.parentWidget()
+    while p is not None:
+        yield p
+        p = p.parentWidget()
+
+
+def test_the_bodys_widgets_follow_one_another_on_every_host(host):
+    """No widget of the body is painted over another (#647, looked at: the fleet step
+    laid the front-door table and the state line across the services table's lower
+    rows). Each widget's top is at or below the previous one's bottom, in the layout
+    they share, and the services table keeps at least its minimum height."""
+    body, _window = host
+    order = [body.table, body.front_door_table, body.tor_note, body.other_head,
+             body.other_table]
+    parent = body.table.parentWidget()
+    for w in order:
+        assert w.parentWidget() is parent, type(w).__name__
+        assert w.isVisible()
+    rects = [w.geometry() for w in order]
+    for above, below, w in zip(rects, rects[1:], order[1:]):
+        assert below.top() >= above.bottom(), \
+            f"{type(w).__name__} at y={below.top()} starts above the previous widget's " \
+            f"bottom y={above.bottom()}"
+    assert body.table.height() >= body.table.minimumHeight()
+    # ...because the body sits in a scroll area on every host (a plain layout squeezes
+    # what it cannot fit and paints the rest on top of each other)
+    qt = _qt()
+    assert any(isinstance(a, qt.QtWidgets.QScrollArea) for a in _ancestors(body.table)), \
+        "the body is not inside a scroll area on this host"
+
+
+@pytest.mark.parametrize("look", _LOOKS, ids=_look_id)
+def test_the_local_mesh_steps_subtitle_is_whole(look, qapp, monkeypatch, tmp_path):
+    """The wizard's subtitle area holds two lines at the default size; the local docker
+    mesh step's subtitle fits them under every look measured here (it was three lines
+    and cut off mid-sentence, #647)."""
+    qt = _qt()
+    saved = _apply_look(qapp, look)
+    try:
+        body, window = _build_host("local-docker-mesh", qapp, monkeypatch, tmp_path)
+        try:
+            page = window.currentPage()
+            sub = page.subTitle()
+            assert sub and "two steps on" in sub
+            labels = [lab for lab in window.findChildren(qt.QtWidgets.QLabel)
+                      if lab.text() == sub and lab.isVisible()]
+            assert len(labels) == 1, "the wizard shows the subtitle exactly once"
+            lab = labels[0]
+            need = (lab.heightForWidth(lab.width()) if lab.wordWrap()
+                    else lab.sizeHint().height())
+            assert need <= lab.height() + 1, \
+                f"the subtitle needs {need}px and has {lab.height()}px — it is cut off"
+        finally:
+            window.close()
+            window.deleteLater()
+            _settle(qapp)
+    finally:
+        _restore_look(qapp, saved)
