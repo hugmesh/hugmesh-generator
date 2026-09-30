@@ -108,3 +108,65 @@ def test_a_faked_popen_is_invisible_to_the_spy_by_design(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: seen.append(cmd))
     subprocess.Popen(["sudo", "kill", "-TERM", "-1234"])
     assert seen == [["sudo", "kill", "-TERM", "-1234"]]
+
+
+# ── #375 (1): an attempt inside an unguarded QThread.run must not qFatal pytest ───────
+def test_an_attempt_from_a_qthread_is_recorded_not_raised():
+    """PyQt6 treats a Python exception escaping a reimplemented QThread.run (the shape of
+    progress._FlashWorker) as fatal: `Fatal Python error: Aborted`, rc 134, no report, and
+    every later test in the file lost. Off the main thread the spy therefore RECORDS the
+    attempt (the autouse fixture still fails the test at teardown) and neutralises the
+    spawn instead of raising. The thread's own result proves no sudo ran: a real
+    `sudo --version` prints a banner; the neutralised child prints nothing."""
+    from PyQt6 import QtCore
+
+    _app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
+    seen = {}
+
+    class T(QtCore.QThread):
+        def run(self):
+            seen["cp"] = subprocess.run(["sudo", "--version"], capture_output=True)
+
+    before = len(conftest._ELEVATION_ATTEMPTS)
+    t = T()
+    t.start()
+    assert t.wait(15000), "the thread never finished (it raised into Qt?)"
+    assert len(conftest._ELEVATION_ATTEMPTS) == before + 1, "the attempt was not recorded"
+    assert seen["cp"].returncode == 0 and seen["cp"].stdout == b"", seen["cp"]
+    del conftest._ELEVATION_ATTEMPTS[before:]      # consumed: the proving test must pass
+
+
+def test_a_plain_thread_attempt_is_recorded_too():
+    import threading
+
+    seen = {}
+    before = len(conftest._ELEVATION_ATTEMPTS)
+
+    def body():
+        seen["cp"] = subprocess.run(["sudo", "--version"], capture_output=True)
+
+    th = threading.Thread(target=body)
+    th.start()
+    th.join(15)
+    assert len(conftest._ELEVATION_ATTEMPTS) == before + 1
+    assert seen["cp"].stdout == b""
+    del conftest._ELEVATION_ATTEMPTS[before:]
+
+
+def test_the_main_thread_still_raises():
+    """The neutralise-don't-raise branch must not leak onto the main thread, where the
+    raise is what names the offending line."""
+    with expect_elevation_attempt():
+        subprocess.run(["sudo", "--version"], capture_output=True)
+
+
+# ── #375 (2): an iterator argv must reach the real Popen intact ───────────────────────
+def test_an_iterator_argv_is_not_consumed_by_the_spy():
+    out = subprocess.run(iter([sys.executable, "-c", "print('hi-iter')"]),
+                         capture_output=True, text=True)
+    assert out.stdout.strip() == "hi-iter"
+
+
+def test_an_iterator_argv_is_still_scanned_for_elevation():
+    with expect_elevation_attempt():
+        subprocess.Popen(iter(["sudo", "--version"]))
