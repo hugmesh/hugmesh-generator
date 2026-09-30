@@ -503,7 +503,7 @@ for head, want in sorted(DECIDED_PINNED.items()):
     else:
         bad(f"exec allowlist: {head!r} appears as {present!r}, not the decided pinned "
             f"form {want!r} (#545). A bare name is licensed for EVERY argv by the "
-            f"shipped first-token matcher; re-open the decision on #545 before widening "
+            f"shipped matcher; re-open the decision on #545 before widening "
             f"it here.")
 
 # 3a-i. NEGATIVE CONTROL for 3a's `stat` leg: prove the check above actually tells
@@ -537,8 +537,9 @@ else:
 # 3a-ii. RUNTIME MATCHER SIMULATION — prove the pinned form REFUSES `stat --file-system`
 # and `stat -f`, not merely that this file's OWN pin check does. This re-derives
 # WorkloadConsoleProperties#execReadOnlyAllowed (hugmesh-admin-bff-api,
-# `execReadOnlyCommands.contains(command.get(0))` — a FIRST-TOKEN, exact-membership
-# match against the comma-split entries, unchanged since #545) against the REAL,
+# the two-form matcher merged in hugmesh-admin-bff-api#114: a one-token BARE entry
+# licenses that command with any arguments (exact head), a multi-token PINNED entry
+# licenses exactly that whole argv) against the REAL,
 # live entries parsed from workload-console-patch.yaml above. It is not a second
 # implementation trusted on its own say-so: exec_argv_property.py's own module
 # docstring states the same rule in prose ("a PINNED form … licenses nothing today —
@@ -548,7 +549,14 @@ else:
 def _exec_read_only_allowed(command, allowlist):
     if not command:
         return False
-    return command[0] in allowlist
+    for entry in allowlist:
+        argv = entry.split(" ")
+        if len(argv) == 1:
+            if argv[0] == command[0]:
+                return True
+        elif argv == list(command):
+            return True
+    return False
 
 for _argv in (["stat", "--file-system", "/"], ["stat", "-f", "/"]):
     if _exec_read_only_allowed(_argv, entries):
@@ -557,9 +565,17 @@ for _argv in (["stat", "--file-system", "/"], ["stat", "-f", "/"]):
             f"to 'stat -t' does not refuse it")
     else:
         ok(f"runtime matcher simulation: {_argv!r} is REFUSED by the shipped "
-           f"first-token matcher (head {_argv[0]!r} is not itself an element of the "
-           f"live entries — only the compound string 'stat -t' is, and a first-token "
-           f"match never equals a multi-word entry)")
+           f"two-form matcher (bare 'stat' is not an entry, and the pinned 'stat -t' "
+           f"licenses exactly that whole argv, never a longer one)")
+# The pinned forms are now REACHABLE (they were dead under the old first-token matcher):
+# the exact argv is allowed, a longer one is not.
+for _argv, _want in ((["stat", "-t"], True), (["stat", "-t", "/"], False),
+                     (["df", "-h"], True), (["df", "-h", "/"], False), (["ps"], False)):
+    if "stat -t" in entries and "df -h" in entries:
+        if _exec_read_only_allowed(_argv, entries) == _want:
+            ok(f"runtime matcher simulation: {_argv!r} -> {'allowed' if _want else 'refused'} as pinned")
+        else:
+            bad(f"runtime matcher simulation: {_argv!r} should be {'allowed' if _want else 'refused'} by the two-form matcher")
 # Positive control for the simulation itself: a REAL bare entry must be ALLOWED, so
 # the function above is not simply returning False for everything.
 if _exec_read_only_allowed(["ls", "-la", "/"], entries):

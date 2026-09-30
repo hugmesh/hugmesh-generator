@@ -720,9 +720,10 @@ before assuming a bug — you are most likely just ahead of the RBAC app's sync.
   An entry whose binary is absent from the runner is a **failure**, not a skip: an
   unprobed entry is an unproven one.
 
-  **Cross-repo TODO (admin-bff wave):** match the whole argv
-  (`String.join(" ", command)`) instead of `command.get(0)`; until then only the bare
-  names are reachable. No entry may contain a comma (the env binds as a comma-delimited
+  **Matcher (hugmesh-admin-bff-api#114, merged):** two forms. A one-token bare name
+  (`ls`, `uname`, `free`) licenses that command with any arguments (exact head); a
+  multi-token pinned entry (`ps -e`, `df -h`, `stat -t`, `date -u`) licenses exactly
+  that whole argv. No entry may contain a comma (the env binds as a comma-delimited
   `List<String>`).
 * **The port-forward triples are an ALLOWLIST, not a substring denylist.** "App-tier
   BFFs only" means a triple ships only if its namespace is in
