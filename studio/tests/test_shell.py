@@ -357,7 +357,7 @@ def test_tray_menu_carries_a_running_builds_submenu(qapp):
     assert tray_mod.RUNNING_BUILDS_LABEL in texts
     sub = tray.builds_menu
     assert [a.text() for a in sub.actions()] == [tray_mod.NO_RUNNING_BUILDS]
-    assert sub.actions()[0].isEnabled() is False   # honest, not a clickable phantom
+    assert sub.actions()[0].isEnabled() is False   # honest, not a clickable entry for a dead run
 
 
 def test_submenu_lists_exactly_the_running_builds(qapp):
@@ -384,7 +384,7 @@ def test_selecting_a_build_opens_a_window_for_it(qapp):
 
 
 def test_the_running_roster_never_lists_a_stale_record(qapp, tmp_path):
-    """A record left at "running" by a SIGKILL'd Studio must not appear as a phantom
+    """A record left at "running" by a SIGKILL'd Studio must not appear as an entry for a run that no longer exists
     build the operator can click."""
     live = _session("live", "live one", pid=os.getpid())
     dead = _session("dead", "dead one", pid=999999999)
@@ -628,7 +628,7 @@ def test_a_closed_build_window_is_no_longer_a_reason_to_stay(shell, qapp, tmp_pa
     assert quits == [1], "nothing is on screen and nothing is building; the app stayed"
 
 
-# ── the tray/shell SEAM: the real wiring, not an injected fake ───────────────────────
+# ── the tray/shell JOIN: the real wiring, not an injected fake ───────────────────────
 # Every submenu test above injects builds_provider/on_open_build, which proves the menu
 # but not that the LAUNCH path connects it to anything. install_tray() is what app.py
 # actually calls.

@@ -15,6 +15,13 @@ real TTY (the GUI opens it in a terminal emulator). There is deliberately no byp
 flag, and this wizard does not add one (no -y/--yes) — unattended go-live is a v1
 non-goal.
 
+PER DOMAIN (#587): the Inputs step offers every domain the device has BAKED
+(``core.golive_domains.baked_domains`` — the cluster domain first, then
+/etc/hugmesh/domains) in a picker that fills the single Public domain field, which
+stays the default; the Generate step shows the plan for EVERY domain and the node's
+onions (``core.golive_domains.plan_rows``) — which one this run exposes, and that the
+others need a run of their own, because the driver takes one --domain per plan.
+
 Secrets: tokens are taken in masked fields, staged into a 0600 temp file handed to
 the driver as --token-file, deleted right after the run, and never persisted or
 placed in argv — GoLiveOptions has no field for a secret value at all.
@@ -31,6 +38,8 @@ from .. import choice_nav
 from ._scroll import scrollable
 from ..wizard import _file_picker, _row
 from ._widgets import label_finish_as_exit
+from ...core.golive_domains import (NO_EXTRA_DOMAINS_NOTE, baked_domains,
+                                    exposure_lines, plan_rows)
 from ...core.golive_driver import GoLiveDriver, GoLiveOptions, _NO_DOMAIN_MECHANISMS
 from ...core.progress_parse import ProgressParser, track_phases
 
@@ -241,6 +250,19 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
         self.setSubTitle("Everything autofillable is autofilled — the domain comes from "
                          "the device's baked cluster domain when present.")
         lay = QtWidgets.QVBoxLayout(self)
+        # PER DOMAIN (#587): every domain the device has baked, cluster domain first.
+        # Picking one FILLS the field below (which stays the default and stays
+        # editable) — the driver takes one --domain per run.
+        self.domain_pick = QtWidgets.QComboBox()
+        self.domain_pick.setToolTip(
+            "The domains baked on this device: /etc/hugmesh/cluster-domain first, then "
+            "/etc/hugmesh/domains. Each Go-Live run exposes ONE of them.")
+        self.domain_pick.currentIndexChanged.connect(self._picked)
+        lay.addWidget(_row("Baked domains", self.domain_pick))
+        self.domain_list_note = QtWidgets.QLabel("")
+        self.domain_list_note.setWordWrap(True)
+        self.domain_list_note.setStyleSheet("color: gray;")
+        lay.addWidget(self.domain_list_note)
         self.domain = QtWidgets.QLineEdit()
         self.domain.setPlaceholderText("example.org (autofilled from /etc/hugmesh/cluster-domain when baked)")
         lay.addWidget(_row("Public domain", self.domain))
@@ -305,6 +327,30 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
         lay.addWidget(_row("Keys layout dir", w))
         lay.addStretch(1)
 
+    def _picked(self, idx: int) -> None:
+        """A baked domain picked -> it becomes the Public domain (typed text wins
+        until the operator picks again). Guarded: PyQt6 qFatals on a slot raise."""
+        try:
+            name = self.domain_pick.itemData(idx) if idx >= 0 else ""
+            if name:
+                self.domain.setText(name)
+                self.domain_hint.setText("picked from the domains baked on this device")
+        except Exception:                      # noqa: BLE001
+            pass
+
+    def _fill_domain_pick(self) -> None:
+        baked = baked_domains(self.wiz.driver.autofill_domain())
+        self.domain_pick.blockSignals(True)
+        self.domain_pick.clear()
+        for i, name in enumerate(baked):
+            self.domain_pick.addItem(name + (" (cluster domain)" if i == 0 else ""), name)
+        cur = self.domain.text().strip().lower() or self.wiz.opts.domain
+        at = self.domain_pick.findData(cur)
+        self.domain_pick.setCurrentIndex(at if at >= 0 else (0 if baked else -1))
+        self.domain_pick.blockSignals(False)
+        self.domain_pick.setEnabled(len(baked) > 1)
+        self.domain_list_note.setText("" if len(baked) > 1 else NO_EXTRA_DOMAINS_NOTE)
+
     def initializePage(self):
         o = self.wiz.opts
         p = self.wiz.driver.provider(o.provider)
@@ -317,6 +363,7 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
             self.domain_hint.setText(
                 "autofilled from the device's baked cluster domain" if baked and not o.domain
                 else "")
+        self._fill_domain_pick()
         offers = p.offers if p else (lambda _name: True)
         self.ingress_row.setVisible(offers("ingress-ip"))
         self.ipv6_row.setVisible(offers("ingress-ipv6"))
@@ -376,6 +423,13 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
         self.cmd.setMaximumHeight(90)
         lay.addWidget(QtWidgets.QLabel("Command:"))
         lay.addWidget(self.cmd)
+        # PER DOMAIN (#587): what EVERY domain on the device gets — this run's, the
+        # ones that need a run of their own, and the node's onions.
+        lay.addWidget(QtWidgets.QLabel("Per-domain exposure (this device):"))
+        self.exposure = console.attach(QtWidgets.QPlainTextEdit())
+        self.exposure.setReadOnly(True)
+        self.exposure.setMaximumHeight(120)
+        lay.addWidget(self.exposure)
         self.preview_btn = QtWidgets.QPushButton("Refresh preview")
         self.generate_btn = QtWidgets.QPushButton("Generate artifacts now")
         self.open_btn = QtWidgets.QPushButton("Open artifacts folder")
@@ -416,6 +470,7 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
         self.cmd.setPlainText(d.command_string("plan", o)
                               + ("" if o.token_file or not self.wiz.token_secret
                                  else "  # --token-file <staged 0600 temp file> added at run time"))
+        self.exposure.setPlainText("\n".join(exposure_lines(plan_rows(d, o))))
         problems = d.preflight(o, has_secret=bool(self.wiz.token_secret))
         self.log.setPlainText("Preflight:\n  - " + "\n  - ".join(problems)
                               if problems else "Preflight OK.")

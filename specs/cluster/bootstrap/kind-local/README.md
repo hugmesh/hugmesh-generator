@@ -465,6 +465,18 @@ curl -k --resolve scale.hugmesh.net:8443:127.0.0.1  https://scale.hugmesh.net:84
 (`--resolve` only affects that one `curl` invocation — no system-wide DNS/hosts
 change required.)
 
+## Reaching the kind lane over Tor (`make kind-tor`)
+
+`make kind-tor` (after `make kind-up`) runs a host tor as you — no sudo — that
+publishes this node's `:8443`/`:8080` host ports as a v3 onion and admits that onion on
+the fe-gateway Ingress with one appended `ingress.extraHosts[N]` helm parameter.
+`make kind-e2e-tor` drives a persona through it; `make kind-tor-down` stops it (the
+onion keys are kept under the gitignored `tests/stack/.run/kind-tor/`). Re-running
+`make kind-up` rewrites the gateway's helm parameters and drops the onion rule, so run
+`make kind-tor` again afterwards (`make kind-tor-status` says when it is missing). Full
+notes, including the certificate and the default-domain fallback:
+[docs/TOR-HIDDEN-SERVICE.md](../../../../docs/TOR-HIDDEN-SERVICE.md#kind-lane--a-host-tor-fronting-the-kind-node-make-kind-tor).
+
 ## Tear down
 
 ```bash

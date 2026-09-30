@@ -217,10 +217,24 @@ def test_the_lead_is_never_a_row_the_assessment_says_is_not_there(tmp_path):
     assert lead is not None
     assert lead.username == "e2e-forum"
     assert lead.live not in (ct.NOT_SEEDED, ct.NOT_ON_LANE)
-    # …and when EVERY row is absent there is nothing better than the first: the
-    # dialog still needs something to feature, and the row carries its own marker.
+    # …and when EVERY row is absent there is NO lead (#539). This used to fall back
+    # to roster.users[0] — reaching back outside the filter it had just applied — on
+    # the reasoning that the dialog needs something to feature. It does not: on a kind
+    # mesh whose identity seed never ran, every row is absent, and "Start with
+    # <persona> / <password>" for an account that does not exist is the exact untruth
+    # this module was written to delete. The dialog's no-lead branch already says
+    # "none of them can sign in anywhere right now" instead.
     allgone = Roster(users=[SeededUser("a", (), "p", live=ct.NOT_SEEDED)])
-    assert suggested_signin(allgone).username == "a"
+    assert suggested_signin(allgone) is None
+    # A row that EXISTS but holds none of its roles is not a lead either (#539): it
+    # signs in on the gateway floor and then 403s on every page.
+    noroles = Roster(users=[SeededUser("a", ("ROLE_ADMIN",), "p", live=ct.NO_ROLES)])
+    assert suggested_signin(noroles) is None
+    # An UNASSESSED roster still leads with its first entry: nothing has claimed
+    # anything about those rows, and that lead vouches for nothing (the dialog only
+    # renders it when truth.verified anyway).
+    unassessed = Roster(users=[SeededUser("a", (), "p")])
+    assert suggested_signin(unassessed).username == "a"
 
 
 def test_copy_all_carries_the_liveness_it_is_copying(tmp_path):

@@ -75,6 +75,42 @@ _MARK = "__reference__"
 class CiLoader(yaml.SafeLoader):
     """yaml.safe_load semantics plus the one GitLab tag a pipeline may carry."""
 
+    def construct_mapping(self, node, deep=False):
+        # PyYAML's own construct_mapping keeps the LAST value for a duplicate key
+        # and says NOTHING (hugmesh-generator#386): a job carrying the same key
+        # twice — two `rules:` blocks, two `script:`, two `before_script:` —
+        # is checked with only the second and the first is silently gone.
+        # GitLab's own parser (Psych) is ALSO last-wins, so this is the exact
+        # shape that made lint:docs-command-coverage lose ITS rules: to a job
+        # pasted in above it, and would just as easily lose a job's script: with
+        # no finding anywhere in this file.
+        #
+        # Scan the RAW pairs before flatten_mapping() runs — flatten_mapping is
+        # what expands a `<<:` merge key by PREPENDING the anchor's pairs, and an
+        # explicit key in the block legitimately re-declaring (overriding) one of
+        # those merged-in pairs is a different, intentional YAML idiom, not this
+        # defect. Scanning before flattening means only keys hand-typed twice in
+        # THIS block are ever flagged.
+        if isinstance(node, yaml.MappingNode):
+            seen = {}
+            for key_node, _ in node.value:
+                if getattr(key_node, 'tag', None) == 'tag:yaml.org,2002:merge':
+                    continue                  # `<<:` — not a hand-typed duplicate
+                try:
+                    key = self.construct_object(key_node, deep=True)
+                    hash(key)
+                except TypeError:
+                    continue                  # let the base constructor raise its own error
+                if key in seen:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping", node.start_mark,
+                        "found duplicate key %r: first seen at line %d, again at line %d "
+                        "— PyYAML (and GitLab's own parser) would silently keep only the "
+                        "SECOND one" % (key, seen[key] + 1, key_node.start_mark.line + 1),
+                        key_node.start_mark)
+                seen[key] = key_node.start_mark.line
+        return super().construct_mapping(node, deep=deep)
+
 
 def _reference(loader, node):
     return {_MARK: loader.construct_sequence(node, deep=True)}
@@ -384,6 +420,30 @@ elif grep -q 'tests/foo/test-foo.sh' "${TMP}/ref-splice.out"; then
   ok "negative control: a suite spliced in as a !reference list item is still checked against rules:changes"
 else
   bad "negative control: ref-splice failed for the wrong reason: $(head -2 "${TMP}/ref-splice.out" | tr '\n' ' ')"
+fi
+
+# (n11) hugmesh-generator#386: a job carrying the SAME key twice — the
+# `lint:docs-command-coverage` shape, where a job pasted in above it split
+# `script:` from `rules:` and left the job with two `rules:` blocks. PyYAML
+# silently keeps the second and says nothing; this must be a named, loud
+# finding instead.
+{ printf 'stages: [lint]\nlint:dup-rules:\n  stage: lint\n  script:\n    - true\n  rules:\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n  rules:\n    - if: $CI_PIPELINE_SOURCE == "merge_request_event"\n'; } > "${TMP}/dup-key.yml"
+if check_file "${TMP}/dup-key.yml" >"${TMP}/dup-key.out" 2>&1; then
+  bad "negative control: a job with a DUPLICATE key (two rules: blocks) was NOT caught"
+elif grep -qi 'duplicate key' "${TMP}/dup-key.out"; then
+  ok "negative control: a duplicate mapping key is a named finding, not a silent last-wins"
+else
+  bad "negative control: dup-key failed for the wrong reason: $(head -2 "${TMP}/dup-key.out" | tr '\n' ' ')"
+fi
+
+# (n12) vacuity control for (n11): a LEGITIMATE re-declaration of a key that
+# arrived via a `<<:` anchor merge (override-by-name is the documented purpose
+# of merge keys) must still PASS — the duplicate check must not fire on it.
+{ printf 'stages: [lint]\n.base: &base\n  stage: lint\n  script:\n    - true\nlint:override:\n  <<: *base\n  stage: deploy\n'; } > "${TMP}/merge-override.yml"
+if check_file "${TMP}/merge-override.yml" >"${TMP}/merge-override.out" 2>&1; then
+  ok "vacuity control: overriding a merged (<<:) key by name still passes"
+else
+  bad "vacuity control: a legitimate <<: merge-key override was rejected as a duplicate: $(head -2 "${TMP}/merge-override.out" | tr '\n' ' ')"
 fi
 
 echo

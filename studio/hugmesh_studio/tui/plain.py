@@ -114,7 +114,7 @@ def print_meshemu(out: IO[str], generator_dir: str, session_name: str) -> bool:
 
 
 def run_journey(inp: IO[str] | None = None, out: IO[str] | None = None, *,
-                generator_dir: str = ".") -> int:
+                generator_dir: str = ".", start: str | None = None) -> int:
     """The JOURNEY loop (plain face): welcome -> the canonical page walk.
 
     One screen per iteration — render the current screen's lines, prompt, feed
@@ -125,6 +125,8 @@ def run_journey(inp: IO[str] | None = None, out: IO[str] | None = None, *,
     inp = inp if inp is not None else sys.stdin
     out = out if out is not None else sys.stdout
     j = journey_mod.Journey(generator_dir)
+    if start:                     # an expert entry point (--fleet / --go-live, #587)
+        j.goto(start)
     while not j.done:
         _say(out)
         for line in j.lines():
