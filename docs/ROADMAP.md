@@ -152,13 +152,13 @@ version, size and checksum on the download page is a placeholder.
 172 TODO/FIXME comments across 25 repositories, each read in its surrounding source
 rather than judged by its text. The first triage (2026-09-09) found 24 done, 19 isolated,
 70 needing coordination and 59 not work. After the #323 fan-out and a re-check on
-2026-09-24, it stands at:
+2026-09-30, it stands at:
 
 | | Count | Meaning |
 |---|---:|---|
-| ✅ already done | 54 | the work landed; the comment outlived it |
+| ✅ already done | 56 | the work landed; the comment outlived it |
 | 🚧 isolated, fixable | 0 | one person, one repo, no decision needed |
-| 🔭 needs coordination | 59 | spans repos, or waits on a decision |
+| 🔭 needs coordination | 57 | spans repos, or waits on a decision |
 | — not work | 59 | a marker, a legend, or a deliberate placeholder |
 
 The full triage is in [`roadmap-todos.tsv`](roadmap-todos.tsv), one row per comment.
@@ -178,8 +178,8 @@ Every isolated row has been either fixed or reclassified. The last few went like
 
 Open fixes for needs-coordination rows are named on the row itself:
 
-- hugmesh-admin-bff-api#113 for the registry half of #106
-- hugmesh-admin-bff-api#114 for the workload exec guard
+- hugmesh-admin-bff-api#113 for the registry half of #106 (merged 2026-09-30; its rows are done)
+- hugmesh-admin-bff-api#114 for the workload exec guard (merged 2026-09-30; its rows are done)
 - hugmesh-admin-ui#13 for step-up forwarding (merged; its two rows are now done)
 - hugmesh-admin-ui#14 for the adminGuard decision
 

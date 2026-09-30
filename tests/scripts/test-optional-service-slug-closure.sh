@@ -50,26 +50,15 @@
 # and runs FIRST, with or without the service checkout, so the parser can never again
 # drift off the real shape while the gate reports "INCOMPLETE" for a different reason.
 #
-# ⚠ EXPECTED RED (re-measured 2026-09-23 against hugmesh-admin-bff-api origin/main
-# 86cdf79c, whose OptionalServiceRegistry.java last changed in b8ed324): the first
-# comparison this gate ever made found TWO live cross-repo defects, both in the
-# controller, both named by a leg below —
-#   * meshbridge is in G (13a element, ConfigMap boolean, CRD enum, seed CR — all
-#     since aed812b9) but the Java registry keeps it in NOT_TOGGLEABLE with reason
-#     NOT_IN_CRD_ENUM, which has been FALSE since that commit. isKnown("meshbridge")
-#     is false, so the reconciler logs "unknown slug — ignoring" for the seeded CR and
-#     skips its /status: defect (a) again, for meshbridge. Legs [java-registry] and
-#     [java-not-toggleable].
-#   * character-forge carries configMapSelfHealProtected=false although apps/16 has
-#     carried /data/character-forge since aed812b9, so the admin surface raises a
-#     false selfHeal warning. Leg [java-selfheal-flag].
-# The fix is in hugmesh-admin-bff-api (#106), NOT a weaker guard or allow_failure.
-# Control 20 stages exactly that landing and requires the whole gate to go GREEN, so
-# the guard is provably not always-red and the exit criterion is executable. WHEN #106
-# LANDS: the live run goes green and control 20 passes on that alone; refresh the
-# fixture from the new controller file and P1's `entries=13 not_toggleable=4` pin with
-# it (P1 keeps passing on the OLD fixture, so nothing forces this — the fixture must
-# track the controller's shape, not its contents), and rewrite this paragraph.
+# HISTORY (was EXPECTED RED until hugmesh-admin-bff-api#113): the first comparison this
+# gate ever made found TWO live cross-repo defects, both in the controller — meshbridge
+# kept in NOT_TOGGLEABLE with a NOT_IN_CRD_ENUM reason that had gone false, and
+# character-forge's configMapSelfHealProtected=false although apps/16 carries its
+# pointer. #113 fixed both in the registry (the fix was NOT a weaker guard or
+# allow_failure); the live run is GREEN and the fixture was refreshed from that
+# controller (P1 is now `entries=14 not_toggleable=3`). Control 20 below is kept as the
+# executable exit criterion for that shape of defect and is a no-op while the live tree
+# is green. The fixture must keep tracking the controller's SHAPE, not its contents.
 #
 # Negative controls: one per assertion family, each planted into a STAGED copy of the
 # current corpus so it cannot go stale; the vacuity controls (an empty derived list
@@ -167,46 +156,46 @@ pmutate() {
   py "${PTMP}" "$(basename "${F}")" "$1" >/dev/null || { echo "  FAIL control setup: parser mutation was a no-op"; FAILED=1; return 1; }
 }
 
-# P1. the committed fixture parses whole: 13 managed entries, 4 not-toggleable, and
+# P1. the committed fixture parses whole: 14 managed entries, 3 not-toggleable, and
 #     the fields the gate compares come out right (a null mount is None, not "null").
-pexpect 0 "P1 the verbatim controller file parses as 13 entries + 4 not-toggleable reasons" "${FIXTURE}" \
-  '^entries=13 not_toggleable=4 duplicates=0$' \
+pexpect 0 "P1 the verbatim controller file parses as 14 entries + 3 not-toggleable reasons" "${FIXTURE}" \
+  '^entries=14 not_toggleable=3 duplicates=0$' \
   '^ENTRY	akkoma	hugmesh-backend	/social/mastodon	Akkoma \(Mastodon\)	true$' \
   '^ENTRY	anubis	hugmesh-frontend	<null>	' \
   '^ENTRY	coturn	hugmesh-backend	<null>	' \
-  '^ENTRY	character-forge	hugmesh-backend	/character-forge	Character Forge \(3D\)	false$' \
+  '^ENTRY	character-forge	hugmesh-backend	/character-forge	Character Forge \(3D\)	true$' \
   '^ENTRY	edge-ai-tts	hugmesh-inference	/admin/edge-ai-tts	' \
-  '^NOT_TOGGLEABLE	meshbridge	NOT_IN_CRD_ENUM$' \
+  '^ENTRY	meshbridge	hugmesh-backend	<null>	' \
   '^NOT_TOGGLEABLE	headwind	NO_APPLICATIONSET_ELEMENT$'
 # P1b. prose does not register: the javadoc names egress-vpn and tor as exclusions.
 pexpect 0 "P1b slugs named only in the javadoc (egress-vpn, tor) are NOT parsed as entries" "${FIXTURE}" \
-  '^entries=13 '
+  '^entries=14 '
 if python3 "${CHECKER}" --parse-registry "${FIXTURE}" 2>&1 | grep -a -E '	(tor|egress-vpn)	' >/dev/null; then
   echo "  FAIL P1b: a javadoc-only slug was parsed as registered"; FAILED=1
 fi
 # P2. the SAME table collapsed onto one line per entry still parses (whitespace is not shape).
 pmutate 'import re; s = re.sub(r",\n\s+\"", ", \"", s)' &&
-pexpect 0 "P2 one-line-per-entry spelling of the same table parses identically" "${F}" '^entries=13 not_toggleable=4 '
+pexpect 0 "P2 one-line-per-entry spelling of the same table parses identically" "${F}" '^entries=14 not_toggleable=3 '
 # P3. a displayName holding "//" and an escaped quote does not truncate the parse.
 pmutate 's = s.replace("\"HugMesh Games\"", "\"HugMesh \\\"Games\\\" // https://x\"", 1)' &&
-pexpect 0 "P3 a displayName with // and an escaped quote still parses (strings are not comments)" "${F}" '^entries=13 ' '^ENTRY	games	'
+pexpect 0 "P3 a displayName with // and an escaped quote still parses (strings are not comments)" "${F}" '^entries=14 ' '^ENTRY	games	'
 # P3b. an ODD number of escaped quotes before a "//": a scanner that ignored the
 #      backslash would close the string early and read the rest as a comment. P3's two
 #      escaped quotes cancel out, so only an odd count pins the escape handling.
 pmutate 's = s.replace("\"HugMesh Games\"", "\"HugMesh \\\"Games // x\"", 1)' &&
-pexpect 0 "P3b a displayName with ONE escaped quote before // still parses (escapes are honoured)" "${F}" '^entries=13 not_toggleable=4 '
+pexpect 0 "P3b a displayName with ONE escaped quote before // still parses (escapes are honoured)" "${F}" '^entries=14 not_toggleable=3 '
 # P4. ONE entry with a sixth argument: the record changed shape -> INCOMPLETE, never 12-of-13.
 pmutate 's = s.replace("\"Owncast (live streaming)\", true)", "\"Owncast (live streaming)\", true, 7)", 1)' &&
-pexpect 3 "P4 one entry off the five-field shape is INCOMPLETE (no partial comparison)" "${F}" 'INCOMPLETE.*13 .new Entry\(. call.*only 12 parse'
+pexpect 3 "P4 one entry off the five-field shape is INCOMPLETE (no partial comparison)" "${F}" 'INCOMPLETE.*14 .new Entry\(. call.*only 13 parse'
 # P5. the OLD three-argument shape the first parser expected is not the record -> INCOMPLETE.
 pmutate 'import re; s = re.sub(r",\s*\n\s*\"[^\"\n]*\", (true|false)\)", ")", s)' &&
 pexpect 3 "P5 the pre-#584 three-argument shape is INCOMPLETE, not silently accepted" "${F}" 'INCOMPLETE'
 # P6. a NOT_TOGGLEABLE.put the parser cannot read -> INCOMPLETE (its reasons are checked claims).
-pmutate 's = s.replace("NotToggleable.NOT_IN_CRD_ENUM);", "reasonFor(\"meshbridge\"));", 1)' &&
+pmutate 's = s.replace("NotToggleable.NO_APPLICATIONSET_ELEMENT);", "reasonFor(\"workloadConsole\"));", 1)' &&
 pexpect 3 "P6 an unparseable NOT_TOGGLEABLE.put is INCOMPLETE" "${F}" 'INCOMPLETE.*NOT_TOGGLEABLE.put'
 # P7. an entry commented out with // leaves its continuation line behind; it must not count.
 pmutate 's = s.replace("            new Entry(\"coturn\",", "            // new Entry(\"coturn\",", 1)' &&
-pexpect 0 "P7 a //-commented entry is not registered (its dangling second line is not an entry either)" "${F}" '^entries=12 ' &&
+pexpect 0 "P7 a //-commented entry is not registered (its dangling second line is not an entry either)" "${F}" '^entries=13 ' &&
 if python3 "${CHECKER}" --parse-registry "${F}" 2>&1 | grep -a -E '^ENTRY	coturn	' >/dev/null; then
   echo "  FAIL P7: the commented-out coturn entry was parsed as registered"; FAILED=1
 fi
