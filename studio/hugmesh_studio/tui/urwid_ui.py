@@ -173,8 +173,10 @@ class JourneyApp:
     :class:`SessionsReview` widget and returns here when it exits.
     """
 
-    def __init__(self, generator_dir: str = ".") -> None:
+    def __init__(self, generator_dir: str = ".", start: str | None = None) -> None:
         self.journey = journey_mod.Journey(generator_dir)
+        if start:                 # an expert entry point (--fleet / --go-live, #587)
+            self.journey.goto(start)
         self.input = urwid.Edit("> ")
         self.header = urwid.Text(("bold", ""))
         self.frame = urwid.Frame(
@@ -231,8 +233,8 @@ class JourneyApp:
             self.feed(self.input.edit_text)
 
 
-def run_journey(generator_dir: str = ".") -> int:
-    app = JourneyApp(generator_dir)
+def run_journey(generator_dir: str = ".", start: str | None = None) -> int:
+    app = JourneyApp(generator_dir, start)
     urwid.MainLoop(app.root, palette=_PALETTE,
                    unhandled_input=app.unhandled).run()
     return 0

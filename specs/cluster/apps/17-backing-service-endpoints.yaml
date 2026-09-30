@@ -1,0 +1,109 @@
+# backing-service-endpoints — the ArgoCD Application that owns the managed-backing-
+# service ENDPOINT INDIRECTION (manifests/backing-service-endpoints): one ConfigMap
+# per namespace on the axis + the fan-out writer's RBAC.
+#
+# Operator DECISION 34a / 34b, 2026-09-17 (hugmesh-generator#347,
+# hugmesh-admin-bff-api#9). 34a chose ONE ConfigMap PER NAMESPACE over the
+# recommended single hugmesh-backend object; 34b chose a TARGETED ROLLING RESTART as
+# the pickup mechanism. Both are recorded in the manifests' own headers.
+#
+# SAFE TO LAND AHEAD OF ITS CONSUMERS, and it must land ahead of them. The ConfigMap
+# values are byte-identical to the literals already in the consumer Deployments and
+# nothing reads the keys yet, so syncing this changes no running workload. The
+# reverse order is an outage: a Deployment whose `configMapKeyRef` names a key that
+# does not exist does not fall back to its packaged default — the container fails to
+# start (CreateContainerConfigError).
+#
+# Wave 0 (default). It only has to precede the consumer conversion, which is a
+# separate merge, not a separate wave.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: backing-service-endpoints
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hugmesh/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/backing-service-endpoints
+  destination:
+    server: https://kubernetes.default.svc
+    # The bundle's objects each carry an explicit metadata.namespace
+    # (hugmesh-backend / hugmesh-pki / hugmesh-games); this is the default for any
+    # that did not, and all three already exist from namespaces/namespaces.yaml.
+    # Same shape as apps/56-velero-config.yaml, whose destination is `velero` while
+    # manifests/velero/rbac.yaml places a Role in hugmesh-backend.
+    namespace: hugmesh-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    # RespectIgnoreDifferences=true is the KEYSTONE HALF that makes selfHeal honour
+    # the ignoreDifferences block below. Without it selfHeal re-applies git's
+    # self-hosted baseline every sync interval and the admin-bff effector's write is
+    # undone within it — while the ledger row still reports `managed`. That is the
+    # HPA-vs-GitOps fight this platform has already measured (seven Deployments
+    # rewritten ~950 times in 38 h), and the exact failure apps/16's own comment
+    # records for the installed-services ConfigMap.
+    syncOptions: [CreateNamespace=true, RespectIgnoreDifferences=true]
+  # ── THE ignoreDifferences KEYSTONE ────────────────────────────────────────────
+  # The admin-bff BackingServiceModeReconciler's effector is the SINGLE runtime
+  # writer of these data keys (a targeted merge-patch of exactly the two keys of the
+  # service being flipped — never a whole-object replace, which would clobber a
+  # concurrent flip and fight the build-time baseline of every other key). Let ONLY
+  # those keys diverge from git; every other field of every object in this bundle —
+  # the RBAC, the labels, the two empty ConfigMaps — stays fully selfHeal-enforced.
+  #
+  # THE RULE (mechanical — do not eyeball it, and do not paste it from a diff):
+  #     G = { id : id has a backing-service-endpoints ConfigMap key
+  #                AND a specs/cluster/backing-services.yaml tier-1/2 entry }
+  # because that is precisely the set the effector can actuate — it needs the key to
+  # write and the registry entry to compose the address from `scheme + endpoint +
+  # dbName`. Today G = the five v1 tier-2 BFF Postgres ids, |G| = 5, two pointers
+  # each. The pointers below were generated from the ConfigMap, not hand-listed.
+  #
+  # WHY THE MECHANICAL RULE IS SPELLED OUT, AND WHO ENFORCES IT. The sibling list in
+  # apps/16 was hand-maintained and silently fell behind — 12 pointers against 14
+  # elements — so two slugs had no exemption and a superadmin toggle of either was
+  # selfHealed straight back to git's baseline with the CR still reporting success.
+  # An ArgoCD Application manifest cannot compute G (no templating in apps/; the
+  # roots sync these as static files), so the derivation is enforced from OUTSIDE by
+  # tests/scripts/test-backing-service-endpoints-closure.sh, which recomputes G from
+  # the ConfigMaps themselves and fails on drift in EITHER direction — a key with no
+  # pointer, and a pointer with no key. It also fails if RespectIgnoreDifferences=true
+  # below is removed, which is the half that makes selfHeal honour any of this. That
+  # guard runs in the pre-merge gate (.github/workflows/shell-suites.yml, debian job)
+  # and post-merge in .gitlab-ci.yml's lint:backing-service-endpoints-closure, and
+  # tests/scripts/test-guard-integrity.sh records it at PREMERGE_BASELINE 170. So this
+  # list is no longer the weak point it was on the day it was written; it is still a
+  # list you must extend when you add a key, but forgetting is now RED, not silent.
+  #
+  # DELIBERATELY ABSENT: the hugmesh-pki and hugmesh-games ConfigMaps. They have no
+  # data keys (see their headers), and an exemption over a key that does not exist
+  # un-enforces nothing while implying a runtime writer that has nothing to write.
+  # They stay fully git-enforced until their first key lands, at which point G grows
+  # and their pointers are required here — the guard asserts that emptiness too, in
+  # both directions, so an exemption cannot be added ahead of the key either.
+  #
+  # ALSO NOT HERE, AND NOT AN OMISSION: the hugmesh-owncast, hugmesh-tube and
+  # hugmesh-forum ConfigMaps. Decision 34a's axis is SIX namespaces and all six ship,
+  # but those three namespaces are created by their own OPTIONAL-service Applications,
+  # so their objects ship from manifests/<svc>/ and their exemptions — when they ever
+  # have keys — belong in apps/52-owncast.yaml, apps/53-tube.yaml and apps/30-phpbb.yaml
+  # respectively. The closure guard checks each axis namespace against its OWN owning
+  # Application for exactly this reason.
+  ignoreDifferences:
+    - group: ""
+      kind: ConfigMap
+      name: backing-service-endpoints
+      namespace: hugmesh-backend
+      jsonPointers:
+        - /data/postgres-admin-bff.r2dbc-url
+        - /data/postgres-admin-bff.liquibase-url
+        - /data/postgres-user-bff.r2dbc-url
+        - /data/postgres-user-bff.liquibase-url
+        - /data/postgres-mod-bff.r2dbc-url
+        - /data/postgres-mod-bff.liquibase-url
+        - /data/postgres-forum-bff.r2dbc-url
+        - /data/postgres-forum-bff.liquibase-url
+        - /data/postgres-wiki-bff.r2dbc-url
+        - /data/postgres-wiki-bff.liquibase-url

@@ -64,7 +64,7 @@ def page(qapp):
 
 
 def test_tree_is_actually_populated(page):
-    """Non-vacuity for every assertion below: an empty tree would satisfy all of them."""
+    """Real-cases check for every assertion below: an empty tree would satisfy all of them."""
     assert page.tree.topLevelItemCount() > 0
     assert page.tree.sizeHintForColumn(_COL_CHECK) > 0
 

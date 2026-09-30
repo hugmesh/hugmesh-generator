@@ -365,12 +365,12 @@ fi
 # ── 2b. The BFF-side compiler must describe the SAME mesh. INCOMPLETE (exit 3),
 # never a silent skip, when the sibling checkout is not supplied.
 echo "-- BFF compile side (hugmesh-admin-bff-api) --"
-BFF_DEV="${BFF_ROOT}/src/main/java/systems/hugmesh/adminbff/device"
+BFF_DEV="${BFF_ROOT}/src/main/java/net/hugmesh/adminbff/device"
 BFF_COMPILER="${BFF_DEV}/HeadscaleAclCompiler.java"
 BFF_PROPS="${BFF_DEV}/HeadscaleAclProperties.java"
 BFF_CONFIG="${BFF_DEV}/HeadscaleAclConfig.java"
 BFF_YML="${BFF_ROOT}/src/main/resources/application.yml"
-BFF_COMPILER_TEST="${BFF_ROOT}/src/test/java/systems/hugmesh/adminbff/device/HeadscaleAclCompilerTest.java"
+BFF_COMPILER_TEST="${BFF_ROOT}/src/test/java/net/hugmesh/adminbff/device/HeadscaleAclCompilerTest.java"
 
 if [ ! -r "${BFF_COMPILER}" ]; then
     echo
@@ -403,7 +403,7 @@ for f in layer-a-parity-params.env layer-a-parity-export.json layer-a-parity-pol
         bad "parity fixture ${f} DIFFERS between hugmesh-generator and hugmesh-admin-bff-api — the two writers are being gated against DIFFERENT documents, so their agreement is unproven"
     fi
 done
-grep -Fq 'layer-a-parity-policy.golden.json' "${BFF_ROOT}/src/test/java/systems/hugmesh/adminbff/device/HeadscaleAclParityTest.java" 2>/dev/null \
+grep -Fq 'layer-a-parity-policy.golden.json' "${BFF_ROOT}/src/test/java/net/hugmesh/adminbff/device/HeadscaleAclParityTest.java" 2>/dev/null \
     && ok "BFF HeadscaleAclParityTest asserts against the shared golden" \
     || bad "BFF has no HeadscaleAclParityTest asserting the shared golden — full-document parity is only proven on the node side"
 

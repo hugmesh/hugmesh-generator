@@ -314,6 +314,15 @@ ingress:
   # Additional hosts this gateway's Ingress serves (same backend). Used e.g. by
   # the be-gateway to front scale.<domain> (headscale) and forward it to pki.
   extraHosts: []
+  # Tor v3 .onion hosts this gateway's Ingress admits (same backend as `host`).
+  # NEVER set in git: on a hardware node /usr/sbin/hugmesh-tor-ingress-admit writes
+  # them at runtime as helm parameters `ingress.onionHosts[i]` on the fe-gateway
+  # Application, from the node's exported /var/lib/hugmesh/tor/{hostname,<slug>.hostname}
+  # (hugmesh-generator#614). A list of its own — not extraHosts — so the node never
+  # has to know how long the committed extraHosts list is, and kind's
+  # `make kind-tor` (which appends ingress.extraHosts[N]) and this writer can never
+  # take the same index. Empty => the template renders byte-identically.
+  onionHosts: []
   annotations: {}
   tls: false
   # PUBLIC POW SHIELD (Anubis). By default the Ingress backend is THIS gateway's
