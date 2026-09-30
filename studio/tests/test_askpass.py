@@ -526,6 +526,47 @@ def test_from_terminal_declines_on_a_non_tty_stdin_even_with_a_controlling_tty()
     assert out.strip() == "None", (out, err)
 
 
+def test_from_terminal_prompts_and_returns_the_line_when_stdin_is_the_tty():
+    """The POSITIVE direction of the stdin-isatty rule (#360): the interactive
+    `sudo -A` shape (#221 / PR #239 contract). stdin IS a pty that is also the
+    controlling tty, stdout is a PIPE (sudo's password channel), no credential env:
+    the typed line must come back. Mutation: `sys.stdin` -> `sys.stdout` on the isatty
+    line makes this return None while every other askpass test stays green."""
+    import pty
+    master, slave = pty.openpty()
+    code = textwrap.dedent(f"""
+        import fcntl, os, sys, termios
+        from hugmesh_studio.core import askpass
+        fd = os.open({os.ttyname(slave)!r}, os.O_RDWR)
+        fcntl.ioctl(fd, termios.TIOCSCTTY, 0)      # this pty IS the controlling tty
+        os.dup2(fd, 0)                             # ...and stdin IS that terminal
+        print(repr(askpass._from_terminal('pw: ', sys.stderr)), flush=True)
+    """)
+    import time
+    env = {k: v for k, v in os.environ.items()
+           if k not in (askpass.PASSWORD_ENV, askpass.NO_ELEVATION_ENV,
+                        "HUGMESH_STUDIO_ASKPASS_COMMAND")}
+    env["PYTHONPATH"] = _studio_root()
+    proc = subprocess.Popen([sys.executable, "-c", code], env=env, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            start_new_session=True)
+    os.close(slave)
+    # getpass flushes pending input when it turns echo off (TCSAFLUSH), so keep
+    # re-typing the line until the child has read one and exited.
+    deadline = time.monotonic() + 60
+    try:
+        while proc.poll() is None and time.monotonic() < deadline:
+            os.write(master, b"typed-on-pty\n")
+            time.sleep(0.05)
+        if proc.poll() is None:
+            proc.kill()
+        out, err = proc.communicate(timeout=10)
+    finally:
+        os.close(master)
+    assert proc.returncode == 0, err
+    assert out.strip() == "'typed-on-pty'", (out, err)
+
+
 def test_from_terminal_never_reads_stdin_without_a_controlling_tty():
     """The /dev/tty openability probe in _from_terminal is relied on: without a
     controlling terminal, getpass's own fallback reads sys.stdin WITH ECHO — never an
