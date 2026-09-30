@@ -488,7 +488,7 @@ def services_page_applies(cfg) -> bool:
     services page — :func:`implicit_own_domain`, #494 / #589 decision 69), and
     otherwise wherever the Domains table is, when it names at least one domain.
 
-    Emission-neutral when False, in the strong sense the wizard's nextId() ALL-OPTIONS
+    Leaves the output unchanged when False, in the strong sense the wizard's nextId() ALL-OPTIONS
     guard asks for: nothing is named, so there is nothing to record and nothing for
     the build/mesh-start gate to refuse either — skipping cannot smuggle a domain past
     it. Standalone is skipped statically (MODE_SKIPPED_PAGES) on both faces."""
