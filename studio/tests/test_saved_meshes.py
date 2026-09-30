@@ -95,7 +95,7 @@ def seams(monkeypatch):
     """Every subprocess override point faked; returns the recorder."""
     calls = {"projects": [], "git": []}
 
-    def list_volumes(project=vaults.DEFAULT_PROJECT):
+    def list_volumes(project=vaults.DEFAULT_PROJECT, **_kw):
         calls["projects"].append(project)
         # a volume whose compose definition was RENAMED (survived stack-clean) —
         # only a LABEL inventory sees it
@@ -114,7 +114,9 @@ def seams(monkeypatch):
 
     monkeypatch.setattr(vaults, "list_volumes", list_volumes)
     monkeypatch.setattr(sm, "_git", git)
-    monkeypatch.setattr(sm, "_run", lambda *a, **k: (1, ""))
+    # docker ANSWERS and reports nothing running / no images (rc 0, empty). A docker that
+    # does not answer is rc != 0 and is pinned separately — it is UNKNOWN, not "no" (#361).
+    monkeypatch.setattr(sm, "_run", lambda *a, **k: (0, ""))
     return calls
 
 
@@ -393,7 +395,7 @@ def test_restore_plan_unknown_is_rendered_as_unknown_never_as_no():
 def test_probe_state_feeds_the_plan(seams, tmp_path, monkeypatch):
     rec = _capture(_gen(tmp_path))
     sm.save(rec)
-    # all volumes present, images absent (_run is faked to fail), nothing running
+    # all volumes present, images absent and nothing running (docker answered: empty)
     st = sm.probe_state(rec)
     assert st["volumes_present"] is True and st["volumes_missing"] == ()
     assert st["images_present"] is False and st["mesh_running"] is False
@@ -680,3 +682,80 @@ def test_put_copies_back_never_creates_the_target_wider_than_0600(tmp_path):
     assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
     assert target.read_text() == "secret-line\n"
     assert [p for p in os.listdir(target.parent) if p != ".e2e-credentials"] == []  # no tmp left
+
+
+# ── #361: "docker did not answer" is UNKNOWN, never "gone" ───────────────────────────
+_TWO_VOLS = {"included": False, "inventory": [
+    {"name": "hugmesh-local_casdoor-pg", "short": "casdoor-pg"},
+    {"name": "hugmesh-local_cassandra", "short": "cassandra"}]}
+
+
+def _two_vol_record():
+    return sm.SavedMesh(id="20260101-000000-abcabc", label="t", volumes=dict(_TWO_VOLS))
+
+
+def _assert_unknown(st, rec):
+    assert st["volumes_present"] is None and st["volumes_missing"] == ()
+    assert st["images_present"] is None and st["mesh_running"] is None
+    plan = sm.restore_plan(rec, **st)
+    assert plan.mode == sm.MODE_UNKNOWN
+    assert plan.volumes_text == "unknown" and "gone" not in plan.volumes_text
+    assert "did not answer" in plan.sentence
+    assert not plan.can_start() and not plan.can_reseed()
+
+
+def test_a_docker_that_exits_nonzero_reads_as_unknown_not_gone(tmp_path, monkeypatch):
+    """REAL _run + REAL vaults.list_volumes against a fake `docker` on PATH that exits 1
+    ('Cannot connect to the Docker daemon') — the measured #361 shape: it used to give
+    volumes_present=False, mesh_running=False -> RESEED / 'gone (cleaned)'."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake = bindir / "docker"
+    fake.write_text("#!/bin/sh\necho 'Cannot connect to the Docker daemon' >&2\nexit 1\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setattr(sm, "_git", lambda *a, **k: "")
+    rec = _two_vol_record()
+    _assert_unknown(sm.probe_state(rec), rec)
+
+
+def test_a_docker_that_hangs_past_the_timeout_reads_as_unknown(tmp_path, monkeypatch):
+    def hang(*a, **k):
+        raise subprocess.TimeoutExpired(a[0] if a else "docker", 15)
+    monkeypatch.setattr(subprocess, "run", hang)
+    monkeypatch.setattr(sm, "_git", lambda *a, **k: "")
+    rec = _two_vol_record()
+    _assert_unknown(sm.probe_state(rec), rec)
+
+
+def test_a_docker_that_answers_empty_is_still_a_definite_no(seams, tmp_path):
+    """The other side of the tri-state: an ANSWERING docker with no volumes is 'gone',
+    with nothing running is False — only a non-answer is None."""
+    sm.vaults  # noqa: B018 - the seams fixture fakes list_volumes
+    rec = _two_vol_record()
+    from hugmesh_studio.core import vaults as v
+    import pytest as _pt
+    with _pt.MonkeyPatch.context() as mp:
+        mp.setattr(v, "list_volumes", lambda project=v.DEFAULT_PROJECT, **k: [])
+        st = sm.probe_state(rec)
+    assert st["volumes_present"] is False and st["images_present"] is False
+    assert st["mesh_running"] is False
+    assert sm.restore_plan(rec, **st).mode == sm.MODE_RESEED
+
+
+@pytest.mark.parametrize("facts", [
+    {"volumes_present": True, "images_present": True, "mesh_running": None},
+    {"volumes_present": None, "images_present": True, "mesh_running": False},
+    {"volumes_present": True, "images_present": None, "mesh_running": False},
+])
+def test_restore_plan_refuses_to_decide_over_any_unanswered_fact(facts):
+    plan = sm.restore_plan(_two_vol_record(), **facts)
+    assert plan.mode == sm.MODE_UNKNOWN
+    assert not plan.can_start() and not plan.can_reseed()
+
+
+def test_a_running_mesh_still_blocks_even_when_other_facts_are_unknown():
+    """A TRUE fact is not weakened by an unanswered one: 'running' wins."""
+    plan = sm.restore_plan(_two_vol_record(), volumes_present=None, images_present=None,
+                           mesh_running=True)
+    assert plan.mode == sm.MODE_BLOCKED

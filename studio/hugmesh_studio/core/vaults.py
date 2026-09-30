@@ -125,15 +125,28 @@ def docker_available() -> Capability:
                "for this distro) and reopen this dialog.")
 
 
-def list_volumes(project: str = DEFAULT_PROJECT) -> list[ManagedVolume]:
+class DockerDidNotAnswer(RuntimeError):
+    """``docker volume ls`` exited non-zero / timed out / could not be run: the volume
+    list is UNKNOWN, which is not the same thing as EMPTY (#361)."""
+
+
+def list_volumes(project: str = DEFAULT_PROJECT, *, strict: bool = False
+                 ) -> list[ManagedVolume]:
     """Every volume the mesh's compose project owns, newest-name-order stable.
 
     Selected by compose LABEL, not by name prefix: this module offers a delete, and a
     name-prefix match would happily sweep in an unrelated volume someone named similarly.
+
+    A failed ``docker volume ls`` returns ``[]`` (the dialogs render "none") unless
+    ``strict`` — then it raises :class:`DockerDidNotAnswer`, for a caller whose answer
+    is a claim about the operator's data and must tell "docker said none" from "docker
+    could not say" (the saved-mesh probe).
     """
     r = _run(["docker", "volume", "ls", "--filter", f"label={_LBL_PROJECT}={project}",
               "--format", "{{.Name}}"])
     if r.returncode != 0:
+        if strict:
+            raise DockerDidNotAnswer((r.stderr or "docker volume ls failed").strip()[:200])
         return []
     names = [n.strip() for n in r.stdout.splitlines() if n.strip()]
     if not names:

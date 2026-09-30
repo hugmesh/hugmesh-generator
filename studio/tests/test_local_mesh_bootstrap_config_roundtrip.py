@@ -273,6 +273,51 @@ def test_a_probe_that_cannot_answer_refuses_rather_than_starting(monkeypatch, tm
     assert not ok and calls["start"] == 0 and calls["seed"] == []
 
 
+@pytest.mark.parametrize("unanswered", [
+    {"mesh_running": None},                                   # docker ps failed
+    {"volumes_present": None, "volumes_missing": (),
+     "unanswered": ("volumes",)},                             # docker volume ls failed
+    {"images_present": None},                                 # docker images failed
+    {"volumes_present": None, "volumes_missing": (), "images_present": None,
+     "mesh_running": None,
+     "unanswered": ("volumes", "images", "containers")},      # docker down altogether
+])
+def test_a_docker_that_did_not_answer_refuses_both_verbs(monkeypatch, tmp_path, unanswered):
+    """#361: probe_state now reports None for a fact docker could not answer, and
+    _live_plan must treat ANY None as refuse. Before, the failure read as 'volumes gone,
+    nothing running' -> a RESEED plan -> `make stack-up` + `stack-seed` ran over the live
+    mesh with this record's credentials once docker answered again."""
+    boot, calls = _boot(monkeypatch, tmp_path)
+    calls["facts"].update(unanswered)
+    rec = _record(boot)
+    ok, log = boot.start_saved(rec, on_line=lambda _l: None)
+    assert not ok and calls["start"] == 0
+    assert any("refused" in l for l in log), log
+    ok, log = boot.restore(rec, on_line=lambda _l: None)
+    assert not ok and calls["start"] == 0 and calls["seed"] == [], (calls, log)
+    assert any("refused" in l and "did not answer" in l for l in log), log
+    assert not any(SA_VALUE in l for l in log)
+
+
+def test_the_cli_restore_stops_at_a_plan_docker_could_not_establish(monkeypatch, tmp_path,
+                                                                      capsys):
+    """`mesh-restore` prints the plan and used to fall through to restore() for anything
+    but BLOCKED — including a plan built from a docker that did not answer (#361)."""
+    boot, calls = _boot(monkeypatch, tmp_path)
+    calls["facts"].update(mesh_running=None, unanswered=("containers",))
+    rec = _record(boot)
+    monkeypatch.setattr(sm, "find", lambda mesh_id: rec)
+    for verb in ("restore", "start_saved"):
+        monkeypatch.setattr(LocalMeshBootstrap, verb,
+                            lambda *a, **k: pytest.fail("the CLI went on to " + verb))
+    from hugmesh_studio.core import local_mesh_bootstrap as lmb
+    rc = lmb.main(["mesh-restore", rec.id, "--generator-dir", GENERATOR_DIR,
+                   "--out", str(tmp_path / "keys")])
+    out = capsys.readouterr().out
+    assert rc == 1 and "Docker did not answer" in out, out
+    assert calls["start"] == 0 and calls["seed"] == []
+
+
 def test_down_log_says_volumes_are_kept(monkeypatch, tmp_path):
     from hugmesh_studio.core.local_stack_node import StackStatus
     from hugmesh_studio.core.mesh_node import MeshNode
