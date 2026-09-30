@@ -129,6 +129,22 @@ def test_a_saved_config_round_trips_the_front_door():
     assert again.domains[0].tor is True
 
 
+def test_a_saved_config_and_a_fleet_record_omit_tor_when_false():
+    # A config file or a session record with no Tor domain must keep the bytes it had
+    # before Domain.tor existed: the key is written only when it is true.
+    from hugmesh_studio.core.fleet import FleetConfig
+    rows = [Domain(name="a.example"), Domain(name="b.example", tor=True)]
+    for saved in (_cfg_with(*rows).to_dict(),
+                  FleetConfig(cluster_domain="mesh.example", domains=rows).to_dict()):
+        assert list(saved["domains"][0]) == ["name", "title", "images",
+                                             "optional_services", "idp"]
+        assert saved["domains"][1]["tor"] is True
+    # and what is omitted loads as false
+    back = FleetConfig.from_dict(
+        FleetConfig(cluster_domain="mesh.example", domains=rows).to_dict())
+    assert [d.tor for d in back.domains] == [False, True]
+
+
 # ── 2. slug + tenant ──────────────────────────────────────────────────────────────
 def test_the_slug_is_the_node_contracts_shape():
     assert ds.onion_slug("acme.example") == "acme-example"
@@ -876,6 +892,22 @@ def test_a_previous_runs_readouts_and_map_are_gone_before_tor_starts(tmp_path):
         _stop(proc)
 
 
+def test_the_map_is_only_ever_renamed_into_place():
+    # The gateway re-reads the map every 5 s without locking, so a truncate-and-rewrite
+    # could be read half-written and drop onions for one poll (hugmesh-gateway#39,
+    # writer contract point 2). A test cannot catch a half-written read by running the
+    # script, so the text is pinned: the ONE thing that creates the map file is a
+    # rename of a temp file in the same directory.
+    text = open(ENTRY).read()
+    body = text.split("write_map() {", 1)[1].split("\n}\n", 1)[0]
+    assert 'tmp="$MAP_DIR/.onion-hosts.map.$$"' in body
+    assert '} > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$MAP_FILE"' in body
+    code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+    assert code.count('"$MAP_FILE"') == 3          # the rename, and two removals
+    assert '> "$MAP_FILE"' not in code and '>> "$MAP_FILE"' not in code
+    assert len(re.findall(r'rm -f [^\n]*"\$MAP_FILE"', code)) == 2
+
+
 def test_a_tor_crash_takes_the_domain_readouts_and_map_down(tmp_path):
     env = _sandbox(tmp_path, "brandb=brandb")
     env["STUB_DIE"] = "7"
@@ -925,9 +957,13 @@ def test_the_overlay_carries_the_domains_the_keys_and_the_map():
     # a LITERAL path (an exported variable must not be able to point it elsewhere)
     assert fe["volumes"] == [f"{mv}:{map_dir}:ro"]
     assert fe["environment"] == {"APP_TENANCY_HOSTS_FILE": map_dir + "/onion-hosts.map"}
-    # an EMPTY refresh value stops the gateway context (#39) — never set anywhere
-    for path in (COMPOSE, OVERLAY):
-        assert "APP_TENANCY_HOSTS_FILE_REFRESH_MS" not in open(path).read(), path
+    # an EMPTY refresh value stops the gateway context (#39) — no service of either
+    # file sets it (compose's `${VAR:-}` idiom would be exactly that empty value)
+    for model in (base, over):
+        for name, svc in model["services"].items():
+            env = (svc or {}).get("environment") or {}
+            keys = env if isinstance(env, dict) else [str(e).split("=", 1)[0] for e in env]
+            assert "APP_TENANCY_HOSTS_FILE_REFRESH_MS" not in keys, name
     # the Studio names the same file the Makefile loads
     from hugmesh_studio.core import local_stack_node as lsn
     assert os.path.join(GENERATOR_DIR, lsn._TOR_DOMAINS_COMPOSE_FILE) == OVERLAY

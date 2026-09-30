@@ -210,11 +210,17 @@ def test_gui_a_tor_domain_renders_a_checked_row_and_the_walk_records_it(wiz):
 
 
 def test_gui_services_table_offers_no_infra_slug(wiz):
+    from hugmesh_studio.gui.pages import domain_services as page_mod
     page = _page_at_added(wiz)
     page._step(1)
     for infra in INFRA_SERVICES_CHOICES:
         assert infra not in page._boxes, infra
     assert page.front_door_table.topLevelItemCount() == len(ds.PER_DOMAIN_INFRA) == 1
+    # the rule the page's assert enforces: a domain-scoped service, or tor — and no
+    # other infra slug, ever (decision 68 made ONE exception)
+    assert page_mod._offerable("tor") and page_mod._offerable("tuwunel")
+    for infra in INFRA_SERVICES_CHOICES:
+        assert page_mod._offerable(infra) is (infra == "tor"), infra
 
 
 def test_gui_inline_state_warns_when_tor_is_off_for_the_mesh(wiz):
