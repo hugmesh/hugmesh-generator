@@ -14,7 +14,7 @@ import pytest
 
 from hugmesh_studio.core import domain_services as ds
 from hugmesh_studio.core.config import (
-    INFRA_SERVICES_CHOICES, OPTIONAL_SERVICES_CHOICES, Domain)
+    INFRA_SERVICES_CHOICES, OPTIONAL_SERVICES_CHOICES, Domain, ImageConfig)
 from hugmesh_studio.tui import domain_services_step, journey
 
 
@@ -250,3 +250,43 @@ def test_the_domains_table_shows_the_own_domain_first_and_not_as_a_row():
     j.feed("d 1")
     assert j.cfg.domains == []
     assert j.cfg.cluster_domain in "\n".join(j.lines())
+
+
+# ── #631 section 1, TUI parity: the build screen says the GUI build will refuse ─────
+def _build_lines(cfg) -> str:
+    j = journey.Journey(".")
+    j.cfg = cfg
+    return "\n".join(j._screens["build"].lines(j))
+
+
+def test_the_build_screen_names_an_unwalked_own_domain():
+    """The TUI does not dispatch, but the GUI build it sends the operator to runs the
+    SAME seam — a saved config whose own domain was never walked is named here, with
+    the same sentence the GUI refuses with."""
+    cfg = ImageConfig(mode="mesh")
+    text = _build_lines(cfg)
+    assert "the GUI build will refuse this configuration" in text
+    assert ds.gate_reason(cfg, ds.ACTION_IMAGE_BUILD) in text
+    assert cfg.cluster_domain in text
+
+
+def test_the_build_screen_is_quiet_once_every_domain_is_walked():
+    cfg = ImageConfig(mode="mesh", domains=[Domain(name="acme.example")])
+    ds.record_reviewed(cfg, [cfg.cluster_domain, "acme.example"])
+    assert "will refuse" not in _build_lines(cfg)
+
+
+def test_a_walked_default_mesh_reaches_a_quiet_build_screen():
+    """The TUI walk records the own domain exactly as the GUI page does, so a default
+    walk (own domain only) arrives at "build" with nothing to refuse."""
+    j = journey.Journey(".")
+    for line in ("", "3", "", "1", "", "", "", ""):
+        j.feed(line)                          # as _at_mesh_domains, up to the choice
+    assert j.slug == "domains_choice"
+    j.feed("n")                               # the default: just this mesh's domain
+    assert j.slug == "domain_services"        # the TUI records a domain on showing it
+    while not j.done and j.slug != "build":
+        j.feed("")
+    assert j.slug == "build"
+    assert j.cfg.cluster_domain in ds.reviewed_names(j.cfg)
+    assert "will refuse" not in "\n".join(j.lines())

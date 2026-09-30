@@ -337,3 +337,27 @@ def test_q_walks_back_through_the_substates_not_out(gen):
     assert any("pick the session" in ln for ln in j.lines())
     j.feed("q")                                   # picker -> the mode menu
     assert j.slug == "mode" and not j.done
+
+
+# ── #637: a refused session prints the refusal, never the argv the GUI refuses ──────
+from _session_records import write_build_record  # noqa: E402
+
+
+def test_a_refused_session_shows_no_run_hint(gen):
+    write_build_record(COMPLETE, domains=("b.example",), reviewed=("hugmesh.net",))
+    j = _at_rows(gen)
+    text = "\n".join(j.lines())
+    assert "! refused" in text and "b.example" in text
+    plan = _plan(gen)
+    assert shlex.join(em.run_argv(plan)) not in text
+    j.feed("1")
+    detail = "\n".join(j.lines())
+    assert "b.example" in detail
+    assert shlex.join(em.start_device_argv(plan, plan.labels[0])) not in detail
+    assert shlex.join(em.avc_argv(plan, plan.labels[0])) not in detail
+
+
+def test_an_unrecorded_session_keeps_its_run_hint(gen):
+    text = "\n".join(_at_rows(gen).lines())
+    assert "! refused" not in text
+    assert shlex.join(em.run_argv(_plan(gen))) in text

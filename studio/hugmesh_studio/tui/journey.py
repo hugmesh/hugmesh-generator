@@ -40,7 +40,8 @@ from ..core.config import (
     ImageConfig, ca_cert_error, derive_hostname, describe_ca_cert,
     enter_mesh_defaults, vault_field_error,
 )
-from ..core.domain_services import services_page_applies
+from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
+                                    services_page_applies)
 from ..core.validate import validate_domain_name
 from ..core.worklist import (
     WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
@@ -903,6 +904,16 @@ class BuildScreen:
             out.append(f"  users     {len(cfg.users)}")
         themed = "customized" if cfg.login_theme_css() else "shipped defaults"
         out.append(f"  themes    {themed}")
+        # THE BUILD GATE, said here too (#495, own domain since #631): the TUI does not
+        # dispatch, but the GUI build this screen sends the operator to runs the SAME
+        # seam (gui/pages/launch.py) and will refuse. Saying so now is the difference
+        # between a saved config that builds and one that bounces off the build screen.
+        refusal = gate_reason(cfg, ACTION_IMAGE_BUILD)
+        if refusal:
+            out.append("")
+            out.append("! the GUI build will refuse this configuration: " + refusal)
+            out.append("  Walk the ‘Domain services’ step here (it gives every domain "
+                       "its own page) before saving.")
         out.append("")
         out.append("The TUI does not run builds yet — save this configuration "
                    "and build it in the GUI (python -m hugmesh_studio) or "

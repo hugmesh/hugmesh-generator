@@ -70,10 +70,12 @@ one domain every mesh serves (``cfg.cluster_domain``) never had a services page.
 IMPLICIT — never a ``cfg.domains`` row, so the ASK-8 emission guard holds (an untouched
 flow emits no ``--domains`` and no manifest ``domains`` entry); its selection is
 ``cfg.cluster_domain_services``, which both manifests carry only when non-empty. The
-gate (``unconfigured_domains``) still names TABLE rows only: the own domain's page is
-enforced by being unavoidable on the flow, not by the gate, because a gate that refused
-a mesh-mode config for its own domain would also refuse the local-docker route an
-operator reaches after clicking "Mesh node" first — a flow that has no such step.
+BUILD gate names the own domain too (#631 — ``core.domain_services.
+OWN_DOMAIN_GATED_ACTIONS``), because a config LOADED on the Sessions screen that never
+opened this page used to build; the docker MESH START and the previous-builds RESTART
+stay rows-only — the first because the local-docker route an operator reaches after
+clicking "Mesh node" first has no such step (a dead end), the second because a recorded
+session from before the own domain had a page must not be refused over it.
 
 ONE BODY, TWO HOSTS. ``DomainServicesBody`` is the surface and its logic as a plain
 mixin; this page hosts it in the image flow, and ``DomainServicesWidget`` hosts the
@@ -109,7 +111,7 @@ from ...core.domain_services import (
 #: per-service source forge / credential fields of #499 land without another restructure
 #: (see the module docstring).
 _COL_ON, _COL_NAME, _COL_SCOPE, _COL_SETTING, _COL_DESC = range(5)
-_HEADERS = ("On", "Service", "Scope", "", "What it does for this domain")
+_HEADERS = ("Selection", "Service", "Scope", "", "What it does for this domain")
 
 #: The label a carried-over slug wears — one this build's catalogue does not offer.
 #: The row's DESCRIPTION says the rest (core.domain_services.describe_carried_over),

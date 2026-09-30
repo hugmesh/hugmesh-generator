@@ -1189,3 +1189,134 @@ def test_the_monitor_reaches_no_modal_from_page_logic(wiz):
         if m:
             assert "QMessageBox" not in m.group(0), name
             assert ".exec(" not in m.group(0), name
+
+
+# ---- #637: a session whose recorded config names an unwalked domain is not booted ----
+from _session_records import write_build_record  # noqa: E402
+
+
+def test_qemu_refuses_to_boot_a_session_with_an_unwalked_domain(wiz, monkeypatch,
+                                                                 fake_generator):
+    _gen, full, _abort = fake_generator
+    write_build_record(full.name, domains=("a.example", "b.example"),
+                       reviewed=("hugmesh.net", "a.example"))
+    spawns = []
+    monkeypatch.setattr(emulation, "spawn",
+                        lambda argv, *a, **k: spawns.append(list(argv)) or 0)
+    page = _qemu_page(wiz)
+    assert page._current_session().name == full.name
+    assert page.domain_gate_note.isVisible()
+    assert "b.example" in page.domain_gate_note.text()
+    assert not page.run_btn.isEnabled()
+    assert not page.avc_btn.isEnabled()
+    assert not page.pw_run_btn.isEnabled()
+    # the slots refuse on their own — no boot reaches the spawn boundary
+    page._launch(list_only=False)
+    page._launch_avc()
+    page._launch_playwright()
+    assert spawns == [], "a refused session booted anyway"
+    assert "b.example" in page.note.text()
+
+
+def test_qemu_listing_is_never_refused(wiz, monkeypatch, fake_generator, qapp):
+    """--list boots nothing, so the per-domain gate has nothing to say about it."""
+    _gen, full, _abort = fake_generator
+    write_build_record(full.name, domains=("b.example",), reviewed=("hugmesh.net",))
+    page = _qemu_page(wiz)
+    assert page._boot_refusal
+    page._launch(list_only=True)
+    _finish(page, qapp)
+    assert "refused" not in page.log.toPlainText()
+
+
+def test_qemu_boots_a_session_with_no_record_exactly_as_before(wiz, fake_generator):
+    page = _qemu_page(wiz)
+    assert page._boot_refusal == ""
+    assert not page.domain_gate_note.isVisible()
+
+
+# ---- the build-first arm chooses its build mode explicitly (#631 lane, item 4) -------
+# E2E -> QEMU -> "Build new images first" reaches the image flow WITHOUT the Mode
+# screen (the "Run e2e tests" card commits no cfg.mode), so the build used to take
+# whatever mode an earlier flow had committed.
+from hugmesh_studio.gui.pages import mode as mode_mod  # noqa: E402
+
+
+def test_build_first_names_the_inherited_mode_and_offers_all_three(wiz):
+    wiz.cfg.mode = "mesh"                       # left over from an earlier flow
+    page = _qemu_page(wiz)
+    assert not page.build_mode_box.isVisible()  # the other arm's control
+    page.build_first.setChecked(True)
+    assert page.build_mode_box.isVisible()
+    assert set(page.build_mode_radios) == set(mode_mod.IMAGE_MODE_TITLES)
+    assert page.build_mode_radios["mesh"].isChecked()
+    note = page.build_mode_note.text()
+    assert "Mesh node" in note and "already carrying" in note
+    page.build_mode_radios["standalone"].setChecked(True)
+    assert "Standalone Gentoo desktop" in page.build_mode_note.text()
+    assert "carrying Mesh node" in page.build_mode_note.text()
+
+
+def test_build_first_takes_the_picked_mode_not_the_stale_one(wiz):
+    wiz.cfg.mode = "mesh"                       # stale
+    page = _qemu_page(wiz)
+    page.build_first.setChecked(True)
+    page.build_mode_radios["standalone"].setChecked(True)
+    wiz.next()
+    assert wiz.cfg.mode == "standalone"
+    assert isinstance(wiz.currentPage(), wizard_mod.RolePage), \
+        type(wiz.currentPage()).__name__
+    assert wiz.cfg.domains == [] and wiz.cfg.sso is False   # the Mode card's clears
+
+
+def test_build_first_into_mesh_from_a_fresh_studio(wiz):
+    assert wiz.cfg.mode == "standalone"         # ImageConfig's default
+    page = _qemu_page(wiz)
+    page.build_first.setChecked(True)
+    assert page.build_mode_radios["standalone"].isChecked()
+    page.build_mode_radios["mesh"].setChecked(True)
+    wiz.next()
+    assert wiz.cfg.mode == "mesh"
+    assert not isinstance(wiz.currentPage(), (wizard_mod.RolePage,
+                                              wizard_mod.QemuPage))
+    advance_to(wiz, wizard_mod.WorklistPage)    # the mesh flow, not the desktop one
+
+
+def test_the_use_existing_arm_commits_no_mode(wiz):
+    wiz.cfg.mode = "cloud"
+    page = _qemu_page(wiz)
+    page.build_mode_radios["mesh"].setChecked(True)   # a pick on the hidden arm
+    assert page.validatePage() is True
+    assert wiz.cfg.mode == "cloud"
+
+
+def test_the_mode_screen_and_the_build_first_arm_share_one_commit(wiz):
+    """Not a copy: ModePage.validatePage calls commit_image_mode, the function the
+    build-first arm calls — so the two can never commit a mode differently."""
+    import inspect
+    src = inspect.getsource(mode_mod.ModePage.validatePage)
+    assert "commit_image_mode(self.wiz, mid)" in src
+    assert "enter_mesh_defaults" not in src
+    with pytest.raises(ValueError):
+        mode_mod.commit_image_mode(wiz, "e2e")
+
+
+def test_qemu_playwright_run_is_refused_for_an_unwalked_domain_even_with_root(
+        wiz, monkeypatch, fake_generator):
+    """The Playwright BOOT with the root gate stubbed open (the one seam the test
+    above uses) and a row picked: the only thing left to refuse it is #637's gate —
+    on the button AND in the slot."""
+    _gen, full, _abort = fake_generator
+    write_build_record(full.name, domains=("b.example",), reviewed=("hugmesh.net",))
+    monkeypatch.setattr(qemu_page.emulation, "playwright_root_blocker", lambda: "")
+    spawns = []
+    monkeypatch.setattr(emulation, "spawn",
+                        lambda argv, *a, **k: spawns.append(list(argv)) or 0)
+    page = _qemu_page(wiz)
+    labels = [page.pw_row.itemData(i) for i in range(page.pw_row.count())]
+    page.pw_row.setCurrentIndex(labels.index("rpi5/pki"))
+    assert page.pw_list_btn.isEnabled()          # listing boots nothing: still live
+    assert not page.pw_run_btn.isEnabled()
+    page._launch_playwright()
+    assert spawns == [], "a refused session's row was booted by the Playwright lane"
+    assert "b.example" in page.note.text()

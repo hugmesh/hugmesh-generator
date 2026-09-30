@@ -47,11 +47,12 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from .config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
-from .domain_services import normalise_slugs
+from .domain_services import normalise_slugs, record_reviewed, reviewed_names
 
 __all__ = ["LocalMeshDomains", "bootstrap_domain_records", "own_idp_names",
            "added_row_problems", "domains_from_bootstrap", "reviewed_record_names",
-           "record_walk",
+           "record_walk", "imported_mesh_domains", "apply_imported_domains",
+           "imported_domains_lines",
            "DOMAIN_NAME_RE", "LOCAL_MESH_REMEDY", "SAVED_MESH_REMEDY"]
 
 #: A domain row's name: a lowercase dotted hostname (the TUI Domains steps' shape).
@@ -270,3 +271,101 @@ def record_walk(cfg, md: "LocalMeshDomains", names) -> None:
             marks.append(name)
     cfg.domains = tuple(rows)
     cfg.domain_services_reviewed = tuple(marks)
+
+
+# ── the saved mesh -> node images import (#636) ──────────────────────────────────────
+def imported_mesh_domains(boot_cfg) -> "LocalMeshDomains | None":
+    """The domain rows a saved local mesh (``boot_cfg``, its
+    ``LocalMeshBootstrapConfig``) hands to "Create nodes for local cloud", or None when
+    it carries none (a pre-#494 record, or a one-domain mesh: nothing to import, and the
+    import stays exactly what it was before #636).
+
+    ``domains_from_bootstrap`` with ONE difference: its reviewed list also marks the
+    record's own domain when the record does not list it as a row — a leniency for
+    STARTING that saved mesh ("the implicit cluster default, which no saved start has
+    ever asked about"). An IMPORT must not turn that into a walk nobody made, so here the
+    markers are only the record's own ``domain_services_reviewed``."""
+    md = domains_from_bootstrap(boot_cfg)
+    if md is None:
+        return None
+    marks = {str(n).strip()
+             for n in (getattr(boot_cfg, "domain_services_reviewed", None) or ())}
+    md.domain_services_reviewed = [n for n in md.names() if n in marks]
+    return md
+
+
+def apply_imported_domains(cfg, md: "LocalMeshDomains | None") -> list[str]:
+    """Write a saved local mesh's domains (``md`` — :func:`imported_mesh_domains`) onto
+    the node-image flow's ImageConfig ``cfg``, in place; returns the ADDED rows' names
+    in record order. Called ONCE per import (the localcloud gate's one-shot latch in the
+    GUI, ``apply_gate`` in the TUI), AFTER ``cfg.cluster_domain`` is set to the mesh's.
+
+    Before #636 the import carried the apex only, so a local mesh generated with N
+    domains lost every other row — its title, its Sign-in = Own choice and its
+    per-domain services — on the way into the node images that are meant to JOIN it.
+
+    * The OWN domain (the row named ``cfg.cluster_domain``) is NOT a table row: the
+      image flow's own domain is IMPLICIT (``domain_services.implicit_own_domain``), and a
+      row named after it would turn that off. Its per-domain selection goes to
+      ``cfg.cluster_domain_services``, written only when the record SAYS something (a
+      selection, or a reviewed "cluster default") — never invented.
+    * Every ADDED row lands in ``cfg.domains`` (matched by name: an existing row of the
+      same name takes the record's title, sign-in and services), and
+      ``cfg.additional_domains`` turns on — otherwise the "Just this mesh's own domain"
+      card, preselected from that flag, would clear the rows on the next page.
+    * REVIEWED markers: an imported name is reviewed exactly when the RECORD says it was
+      walked; a marker ``cfg`` held for a name the import just overwrote is dropped (the
+      services it vouched for are gone). ``record_reviewed`` rebuilds the list, so no
+      marker survives for a domain that does not exist.
+
+    None (nothing recorded) touches nothing — the pre-#636 import, byte for byte."""
+    if md is None:
+        return []
+    own = (getattr(cfg, "cluster_domain", "") or "").strip()
+    marks = set(md.domain_services_reviewed)
+    touched: set[str] = set()
+    added: list[str] = []
+    for row in md.domains:
+        name = (row.name or "").strip()
+        if not name or name in touched:
+            continue
+        touched.add(name)
+        picked = normalise_slugs(row.optional_services)
+        if name == own:
+            if picked or name in marks:
+                cfg.cluster_domain_services = list(picked)
+            continue
+        dom = next((d for d in cfg.domains if (d.name or "").strip() == name), None)
+        if dom is None:
+            dom = Domain(name=name)
+            cfg.domains.append(dom)
+        dom.title = (row.title or "").strip()
+        dom.idp = getattr(row, "idp", "") or DOMAIN_IDP_SUPERDOMAIN
+        dom.optional_services = list(picked)
+        added.append(name)
+    if added:
+        cfg.additional_domains = True
+    record_reviewed(cfg, (reviewed_names(cfg) - touched) | (touched & marks))
+    return added
+
+
+def imported_domains_lines(md: "LocalMeshDomains | None") -> list[str]:
+    """What the import will carry, one plain line per ADDED domain — the GUI summary
+    and the TUI screen render these same strings (escaped by the GUI). [] when the mesh
+    carries no domain rows beyond its own."""
+    if md is None:
+        return []
+    own = (md.own_name or "").strip()
+    marks = set(md.domain_services_reviewed)
+    out: list[str] = []
+    for row in md.domains:
+        name = (row.name or "").strip()
+        if not name or name == own:
+            continue
+        signin = ("own Casdoor" if getattr(row, "idp", "") == DOMAIN_IDP_OWN
+                  else "superdomain sign-in")
+        slugs = normalise_slugs(row.optional_services)
+        svc = ", ".join(slugs) if slugs else "cluster default"
+        state = "" if name in marks else " (services not confirmed yet)"
+        out.append(f"{name} — {signin}; services: {svc}{state}")
+    return out
