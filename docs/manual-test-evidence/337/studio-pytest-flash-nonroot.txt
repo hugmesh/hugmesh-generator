@@ -1,0 +1,14 @@
+# issue:   #337
+# label:   studio-pytest-flash-nonroot
+# cwd:     studio
+# command: HOME=/var/tmp/nb-home TMPDIR=/var/tmp/nb-home QT_QPA_PLATFORM=offscreen HUGMESH_STUDIO_NO_ELEVATION=1 setpriv --reuid=65534 --regid=65534 --clear-groups /var/tmp/venv6/bin/python -m pytest -p no:cacheprovider -q --timeout=900 tests/test_flash_targets.py tests/test_flash_image_choice.py
+# started: 2026-09-30T13:20:13Z
+# host:    Linux 6.18.44-fc-v50 x86_64, no docker daemon, no KVM, no tor, no kind/kubectl (Claude Code cloud container)
+# commit:  2017882
+-----
+........................................................................ [ 67%]
+..................................                                       [100%]
+106 passed in 28.00s
+-----
+# exit code: 0
+# finished: 2026-09-30T13:20:41Z
