@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 import pytest
@@ -43,19 +44,19 @@ def _isolate_studio_state_dir(monkeypatch, tmp_path):
     """
     monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio-state"))
     # (monkeypatch restores the session-wide default pytest_configure sets, not an
-    # unset variable — see the note there for why that difference is load-bearing.)
+    # unset variable — see the note there for why that difference is relied on.)
 
 
 @pytest.fixture(autouse=True)
 def _host_independent_build_defaults(monkeypatch):
     """Make the suite's host-aware build defaults (core/host_resources) deterministic
     on ANY test host: pin the jobs default to the historical 8 via its env override,
-    clear any ambient memory-cap override, and pin BOTH meminfo seams — the
+    clear any ambient memory-cap override, and pin BOTH meminfo override points — the
     per-process snapshot (_meminfo_cached: jobs default + cap) AND the per-call
     dispatch-time read (_meminfo_fresh: low-memory warnings) — to a canonical
     healthy 32 GiB reading (cap auto-derives, warnings stay quiet). Tests that
     exercise the formulas pass explicit env/meminfo (which win) or re-monkeypatch
-    the relevant seam themselves."""
+    the relevant override point themselves."""
     from hugmesh_studio.core import host_resources
     monkeypatch.setenv(host_resources.JOBS_ENV, "8")
     monkeypatch.delenv(host_resources.MEMORY_ENV, raising=False)
@@ -330,14 +331,14 @@ def _stop_supervised_builds() -> None:
 
 @pytest.fixture(autouse=True)
 def _inert_mesh_monitor(request, monkeypatch):
-    """Make the local-mesh page's running-mesh monitor INERT by default.
+    """Make the local-mesh page's running-mesh monitor DO NOTHING by default.
 
     ``LocalMeshPage`` re-reads BOTH mesh lanes off-thread (``core.mesh_monitor.
     snapshot``: ``kind get clusters``, one ``kubectl get … -A -o json``, ``docker
     inspect``, ``docker compose ps``) whenever its mesh-state probe answers or its
     monitor section is open. Ten test files build that page for unrelated reasons
     (verb attribution, the egress gate, log coalescing, the e2e tree, theming) and
-    stub only the seams THEY know about; without this fixture each of them would
+    stub only the override points THEY know about; without this fixture each of them would
     shell the operator's real kind cluster and docker daemon through the monitor,
     and a QThread still in that read when the page is torn down aborts the process
     (``QThread: Destroyed while thread is still running``) — measured on two suites
@@ -346,7 +347,7 @@ def _inert_mesh_monitor(request, monkeypatch):
     The stub answers instantly with BOTH lanes unestablished (never "no mesh": the
     page's tri-state rule) and records nothing. A module that wants the real
     function — the monitor's own core and GUI suites — opts out with
-    ``pytestmark = pytest.mark.real_mesh_monitor``; the GUI suite then seams
+    ``pytestmark = pytest.mark.real_mesh_monitor``; the GUI suite then stubs
     ``snapshot`` itself and the core suite calls it with scripted nodes.
     """
     if request.node.get_closest_marker("real_mesh_monitor"):
@@ -409,7 +410,7 @@ def _inert_entry_probes(request, monkeypatch):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NEVER ELEVATE: a spy on the real subprocess.Popen that fails any test which starts
-# sudo / pkexec / doas / su — the anti-vacuity control for the 2026-09-04 wedge.
+# sudo / pkexec / doas / su — the control that proves this guard sees real cases, for the 2026-09-04 hang.
 #
 # What happened: tests/test_pages_fields_asks.py walked the REAL wizard onto the
 # ProgressPage, which dispatches the committed worklist ON ARRIVAL — through the real
@@ -417,11 +418,11 @@ def _inert_entry_probes(request, monkeypatch):
 # Qt askpass helper as SUDO_ASKPASS. Under QT_QPA_PLATFORM=offscreen on a desktop
 # (DISPLAY set) the helper popped an INVISIBLE dialog and blocked forever; the test
 # itself PASSED (it only checked the page type), its worker thread died with the
-# interpreter, and the root-owned sudo was orphaned. 60 of them were found wedged, some
+# interpreter, and the root-owned sudo was orphaned. 60 of them were found hung, some
 # two days old, each pinning a 15-58 MB Qt process. No assertion anywhere could see it,
 # which is why the control sits at the one boundary every spawn crosses.
 #
-# Three pieces, each load-bearing:
+# Three pieces, each relied on:
 #   (a) pytest_configure replaces subprocess.Popen with a SUBCLASS — isinstance checks
 #       and run/call/check_output keep working (they all construct the module-global
 #       `Popen`) — that raises ElevationAttempted BEFORE anything is spawned;
@@ -436,7 +437,7 @@ def _inert_entry_probes(request, monkeypatch):
 # nothing, so this spy never sees it. The driver's own refusal
 # (core/build_driver.guard_elevation: ElevationRefused under pytest or
 # HUGMESH_STUDIO_NO_ELEVATION) is the first line of defence; this is the independent
-# second, and it is the one that would have caught every wedged launcher.
+# second, and it is the one that would have caught every hung launcher.
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: argv[0] basenames that mean "become another user".
@@ -472,6 +473,10 @@ def _elevation_program(args, shell: bool) -> str | None:
             tokens = [os.fsdecode(t) for t in args]
         except TypeError:
             return None
+    return _scan_tokens(tokens)
+
+
+def _scan_tokens(tokens: list[str]) -> str | None:
     inside_wrapper = False
     for tok in tokens:
         name = os.path.basename(tok)
@@ -507,11 +512,32 @@ def _install_never_elevate_popen() -> None:
         _hugmesh_never_elevate = True
 
         def __init__(self, args, *a, **kw):
+            # An iterator/generator argv is legal for the real Popen (_execute_child does
+            # list(args)); scanning it here would exhaust it and the real Popen would get
+            # an empty list (#375). Materialise ONCE, scan the list, hand the list on.
+            if not isinstance(args, (str, bytes, os.PathLike)):
+                try:
+                    args = list(args)
+                except TypeError:
+                    pass
             prog = _elevation_program(args, bool(kw.get("shell", False)))
             if prog is not None:
                 where = os.environ.get("PYTEST_CURRENT_TEST", "<outside any test>")
                 shown = _leading_tokens(args)
                 _ELEVATION_ATTEMPTS.append((where, shown))
+                if threading.current_thread() is not threading.main_thread():
+                    # Off the main thread a raise is worse than useless: escaping a
+                    # reimplemented QThread.run (progress._FlashWorker's shape) PyQt6
+                    # qFatals the interpreter — rc 134, no pass/fail line, the autouse
+                    # fixture and pytest_sessionfinish never run, every later test lost
+                    # (#375). The attempt is already RECORDED, so _never_elevate fails the
+                    # test at teardown; here the spawn is neutralised, not performed:
+                    # a harmless interpreter no-op replaces the argv (shell/executable
+                    # dropped so nothing of the original can run).
+                    kw.pop("executable", None)
+                    kw["shell"] = False
+                    super().__init__([sys.executable, "-c", "pass"], *a, **kw)
+                    return
                 raise ElevationAttempted(
                     f"the test suite must never start {prog} (it would block on a "
                     f"password prompt nobody can answer and wedge a root-owned launcher "
@@ -523,6 +549,25 @@ def _install_never_elevate_popen() -> None:
     Popen.__module__ = real.__module__
     Popen.__qualname__ = real.__qualname__
     subprocess.Popen = Popen
+
+
+@pytest.fixture(autouse=True)
+def _ambient_no_elevation_does_not_leak_in(monkeypatch):
+    """Clear an AMBIENT ``HUGMESH_STUDIO_NO_ELEVATION`` for the duration of each test.
+
+    Automation rightly exports it for a whole sweep so a stray launcher can never
+    prompt for a password. But ``core/build_driver.elevation_refusal`` lets that
+    variable beat the per-test opt-out, so every test whose subject is the sudo argv
+    (it fakes subprocess and sets ``HUGMESH_STUDIO_ALLOW_ELEVATION_UNDER_TEST``) or
+    the askpass env plumbing failed under such a sweep, yet passed when run alone
+    (13 tests measured, among them test_build_driver_cancel's
+    ``test_cancel_native_nonroot_wraps_kill_in_sudo``) — a flake that looks like test-order
+    pollution and is really an inherited variable. This does NOT weaken the guards:
+    the driver still refuses under pytest without the opt-out, the ``_never_elevate``
+    spy below still errors any real sudo/pkexec spawn, and the tests that exercise
+    the variable set it themselves with ``monkeypatch.setenv`` (theirs runs later
+    and wins)."""
+    monkeypatch.delenv("HUGMESH_STUDIO_NO_ELEVATION", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -579,7 +624,7 @@ def _report_elevation_attempts(session) -> None:
 # ``<stamp>-Checking-host-readiness-FAILED.log`` files whose body is the TEST constant
 # ``_M2_PROBLEM``, a string that exists nowhere in production code.)
 #
-# Three pieces, and each one is load-bearing:
+# Three pieces, and each one is relied on:
 #
 #   (a) HOME moves in ``pytest_configure``, NOT in a fixture. Some test modules bind a
 #       home-derived path at IMPORT time (tests/test_pages_identity.py's module-level
@@ -658,7 +703,7 @@ def pytest_configure(config):
     # found no override, hit `state_paths.state_dir()`'s refusal of the home fallback,
     # and raised inside a Qt slot — a PyQt6 abort AFTER "87 passed" was printed
     # (tests/test_pages_fields_asks.py, 2026-09-04). It is NOT the home fallback path,
-    # so the refusal still fires for anything that bypasses the seam entirely.
+    # so the refusal still fires for anything that bypasses the override point entirely.
     os.makedirs(os.path.join(home, "studio-state-session"), exist_ok=True)
     os.environ[STATE_DIR_ENV] = os.path.join(home, "studio-state-session")
 
@@ -672,7 +717,7 @@ def pytest_configure(config):
 # state_paths.state_dir()'s refusal of the home fallback under pytest.
 #
 # The DETECTION half of that branch is kept in full below: it is not a duplicate of
-# anything, and it is what catches a state accessor that never goes through the seam.
+# anything, and it is what catches a state accessor that never goes through the override point.
 
 def pytest_sessionfinish(session, exitstatus):
     """Drain the Studio's in-flight probe threads, then fail the RUN (not a test) if

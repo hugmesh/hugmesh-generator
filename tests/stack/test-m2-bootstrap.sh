@@ -197,6 +197,10 @@ elif [ -z "${DOCKER_LINE}" ]; then
   bad "(xiii) ${DUP_PIN_REPOS} is pinned more than once but build_one's docker line could not be read, so 'clean' cannot be verified"
 else
   case " ${DOCKER_LINE} " in
+    # `-Dmaven.clean.skip=true` keeps the token `clean` on the line and makes
+    # maven-clean-plugin a no-op, so the token test alone reported a clean that
+    # never happens. Refuse the skip property anywhere on the joined line.
+    *maven.clean.skip*) bad "(xiii) ${DUP_PIN_REPOS} is pinned more than once and build_one's mvn line sets maven.clean.skip, so 'clean' is a no-op and a class deleted between the SHAs would be packaged into the later jar: ${DOCKER_LINE}" ;;
     *" clean "*) ok "(xiii) ${DUP_PIN_REPOS} is pinned at two SHAs and build_one runs mvn clean, so the second build cannot package a stale class" ;;
     *) bad "(xiii) ${DUP_PIN_REPOS} is pinned more than once, so build_one rebuilds one working tree at two SHAs in place — but its mvn goals carry no 'clean', and a class deleted between the SHAs would be packaged into the later jar: ${DOCKER_LINE}" ;;
   esac
@@ -204,6 +208,19 @@ fi
 
 SRC="${STACK_SRC:-${REPO}/.stack-src}"
 have_poms() { [ -d "$1" ] && [ -n "$(find "$1" -mindepth 2 -maxdepth 2 -name pom.xml -print -quit 2>/dev/null)" ]; }
+
+# ci_job_runs_suite <gitlab-ci.yml> -> 0 only when the `lint:m2-bootstrap:` job has a
+# LIVE (uncommented) `script:` item that runs this suite. Scoped to the job block
+# (from its header to the next top-level key) so another job's script line, or a
+# comment that merely names the path, cannot satisfy it.
+ci_job_runs_suite() {
+  awk '
+    /^lint:m2-bootstrap:[[:space:]]*$/ { inj=1; next }
+    inj && /^[^[:space:]#]/            { inj=0 }
+    inj && /^[[:space:]]+-[[:space:]]+(ba)?sh[[:space:]]+tests\/stack\/test-m2-bootstrap\.sh([[:space:]]|$)/ { found=1 }
+    END { exit found ? 0 : 1 }
+  ' "$1"
+}
 
 # Derive the Maven consumers from the file the cold stack build itself uses, so a
 # new Java service cannot quietly escape the check: every ${STACK_SRC} build
@@ -239,6 +256,17 @@ CONSUMERS="$(sed -n 's|.*context: \${STACK_SRC:-[^}]*}/\([a-z0-9-]*\).*|\1|p' \
 ALL_CONTEXTS="$(sed -n 's|.*context: \${STACK_SRC:-[^}]*}/\([a-z0-9-]*\).*|\1|p' \
                   "${REPO}/tests/stack/compose.local.yaml" 2>/dev/null | sort -u)"
 
+# (xiv)'s anti-vacuity counts contexts EXAMINED; it cannot notice that the
+# unfiltered derivation was accidentally given the filter (ALL_CONTEXTS=$CONSUMERS),
+# which makes the audit compare a list with itself forever. The compose file always
+# carries UI build contexts that are not Maven consumers, so the unfiltered set is
+# strictly wider than the filtered one — assert that.
+if [ "$(printf '%s\n' ${ALL_CONTEXTS} | grep -c .)" -gt "$(printf '%s\n' ${CONSUMERS} | grep -c .)" ]; then
+  ok "the unfiltered compose build-context list ($(printf '%s\n' ${ALL_CONTEXTS} | grep -c .)) is strictly wider than the Maven-consumer list ($(printf '%s\n' ${CONSUMERS} | grep -c .)), so the (xiv) pattern audit has something to audit"
+else
+  bad "the unfiltered compose build-context list is not wider than the Maven-consumer list — the (xiv) pattern audit would compare a list with itself"
+fi
+
 if ! have_poms "${SRC}"; then
   # Where to fetch from, in falling order of explicitness:
   #   M2_PIN_GIT_BASE   this guard's own override (and what its proofs drive),
@@ -256,7 +284,14 @@ if ! have_poms "${SRC}"; then
     FETCH_FAIL=""
     NOT_MAVEN=""
     echo "  .. fetching consumer pom.xml (sparse, blobless) from ${GIT_BASE_M2%%://*}://…"
-    for c in ${CONSUMERS}; do
+    # FETCH EVERY COMPOSE BUILD CONTEXT, NOT THE PATTERN-FILTERED LIST. The corpus
+    # is the EVIDENCE control (xiv) audits the name pattern against; building it
+    # from that same pattern made (xiv) a tautology on this path — a context the
+    # pattern excluded was never fetched, so it had no directory, so (xiv) skipped
+    # it and could never report a miss. This is the only automated run (GitLab
+    # post-merge), so the control was decorative everywhere it mattered. Each clone
+    # is one shallow root-files fetch.
+    for c in ${ALL_CONTEXTS}; do
       if git clone --quiet --depth 1 --filter=blob:none --sparse \
            "${GIT_BASE_M2}/${c}.git" "${FETCH_DIR}/${c}" 2>/dev/null; then
         # A cloned consumer with no pom.xml is legitimately possible (the list is
@@ -264,7 +299,7 @@ if ! have_poms "${SRC}"; then
         # a Java service), so this is not a failure — but it MUST be visible.
         # Dropping it in silence is how the corpus quietly shrinks to nothing.
         if [ ! -f "${FETCH_DIR}/${c}/pom.xml" ]; then
-          NOT_MAVEN="${NOT_MAVEN} ${c}"
+          case " $(printf '%s ' ${CONSUMERS})" in *" ${c} "*) NOT_MAVEN="${NOT_MAVEN} ${c}" ;; esac
           # The DIRECTORY stays. The walk already skips a directory with no
           # pom.xml, so deleting it bought nothing — and it destroyed the only
           # evidence that the consumer was reached at all, which the completeness
@@ -321,17 +356,31 @@ else
   # is not a Maven project (hugmesh-api-docs), which is reported but not fatal.
   CORPUS_MISSING=""
   CORPUS_NOPOM=""
+  CORPUS_NOPOM_MAVEN=""
   for c in ${CONSUMERS}; do
     if [ ! -d "${SRC}/${c}" ]; then
       CORPUS_MISSING="${CORPUS_MISSING} ${c}"
     elif [ ! -f "${SRC}/${c}/pom.xml" ]; then
-      CORPUS_NOPOM="${CORPUS_NOPOM} ${c}"
+      # A directory without a pom.xml is only "not a Maven project" when the
+      # checkout PROVES it: its Dockerfile exists and never names maven/mvn. The
+      # old rule (any pom-less directory is informational) could not tell
+      # hugmesh-api-docs from a real consumer whose root pom went missing — a moved
+      # pom, a sparse checkout that dropped it — and passed with that consumer
+      # (the one that has drifted four times: admin-bff) entirely unchecked.
+      # No Dockerfile at all proves nothing, so it fails closed too.
+      if [ -f "${SRC}/${c}/Dockerfile" ] && ! grep -qiE 'maven|mvn' "${SRC}/${c}/Dockerfile"; then
+        CORPUS_NOPOM="${CORPUS_NOPOM} ${c}"
+      else
+        CORPUS_NOPOM_MAVEN="${CORPUS_NOPOM_MAVEN} ${c}"
+      fi
     fi
   done
   if [ -z "${CONSUMERS}" ]; then
     bad "could not derive ANY Maven consumer from tests/stack/compose.local.yaml — the corpus has nothing to be complete against, which is a defect in this guard"
   elif [ -n "${CORPUS_MISSING}" ]; then
     bad "the consumer corpus in ${SRC} carries NO checkout for:${CORPUS_MISSING} — their pins were compared against nothing (run 'make stack-clone', or point STACK_SRC at a complete tree)"
+  elif [ -n "${CORPUS_NOPOM_MAVEN}" ]; then
+    bad "the consumer corpus in ${SRC} has NO root pom.xml for:${CORPUS_NOPOM_MAVEN} — and their Dockerfile does not prove they are non-Maven (absent, or it names maven/mvn), so their pins were compared against nothing (a moved pom, a sparse checkout that dropped it, or a wrong GIT_REF)"
   else
     # SAY WHAT WAS PROVED, NOT MORE. This count is the number of compose build
     # contexts matching the Maven-consumer NAME PATTERN, which is not the same set
@@ -394,6 +443,7 @@ else
   # ── THE WALKER'S OUTPUT IS A PROTOCOL, NOT PROSE ────────────────────────────
   # Every line it prints is exactly one of
   #     DRIFT <repo>: wants <artifact> <v>, registry serves <v>
+#     UNSERVED <repo>: wants <gid>:<artifact> <v>, registry serves no version
   #     UNREADABLE <path> :: <why>
   #     SEEN <n>                                    (exactly once, digits only)
   # and the shell below FAILS on anything else. That rule exists because the
@@ -498,7 +548,7 @@ for repo in entries:
         gid = d.findtext("m:groupId", "", ns).strip()
         aid = d.findtext("m:artifactId", "", ns).strip()
         ver = d.findtext("m:version", "", ns).strip()
-        if gid not in groups or aid not in pins or not ver:
+        if gid not in groups or not ver:
             continue
         m = re.fullmatch(r"\$\{([^}]+)\}", ver)
         if m:
@@ -510,6 +560,17 @@ for repo in entries:
                 # positive (federation-api / tube-bff).
                 continue
             ver = props[m.group(1)]
+        if aid not in pins:
+            # A PINNED GROUP but an artifact the table does not name at all. The
+            # registry serves no version of it, so a cold `make stack-up` dies on
+            # `Could not find artifact <gid>:<aid>:jar:<v>` — the exact failure
+            # this leg exists to catch. This used to `continue` in the same
+            # condition as the not-in-groups case, so an unpinned private library
+            # passed green. It is a finding, and it is deliberately NOT counted in
+            # `seen` (nothing was resolved).
+            print("UNSERVED %s: wants %s:%s %s, registry serves no version"
+                  % (esc(repo), esc(gid), esc(aid), esc(ver)))
+            continue
         seen += 1
         if ver not in pins[aid]:
             print("DRIFT %s: wants %s %s, registry serves %s"
@@ -530,9 +591,10 @@ PYEOF
   SEEN_N="$(printf '%s\n' "${SEEN_LINES}" | grep -c '[0-9]')"
   SEEN="$(printf '%s\n' "${SEEN_LINES}" | head -1)"
   DRIFT="$(printf '%s\n' "${DRIFT_RAW}" | sed -n 's/^DRIFT //p')"
+  UNSERVED="$(printf '%s\n' "${DRIFT_RAW}" | sed -n 's/^UNSERVED //p')"
   UNREADABLE="$(printf '%s\n' "${DRIFT_RAW}" | sed -n 's/^UNREADABLE //p')"
   UNKNOWN="$(printf '%s\n' "${DRIFT_RAW}" \
-             | grep -vE '^(DRIFT |UNREADABLE |SEEN [0-9]+$)' | grep -v '^[[:space:]]*$')"
+             | grep -vE '^(DRIFT |UNSERVED |UNREADABLE |SEEN [0-9]+$)' | grep -v '^[[:space:]]*$')"
 
   if [ -n "${UNKNOWN}" ]; then
     bad "the pin-drift walker emitted line(s) OUTSIDE its output protocol — a filter that drops them turns a signal into a green:"
@@ -563,6 +625,10 @@ PYEOF
     bad "the pin-drift walk resolved ZERO ${PIN_GROUPS} coordinates in ${SRC} — nothing was actually checked (vacuous green)"
   else
     ok "pin-drift walk resolved ${SEEN} ${PIN_GROUPS} coordinate(s) across the consumer poms"
+  fi
+  if [ -n "${UNSERVED}" ]; then
+    bad "UNSERVED — a consumer requests a ${PIN_GROUPS} artifact the PINS table does not name, so the registry serves no version of it and a cold stack build will die resolving it (add it to PINS in tests/stack/m2-bootstrap.sh):"
+    printf '%s\n' "${UNSERVED}" | sed 's/^/         /'
   fi
   if [ -z "${DRIFT}" ]; then
     ok "every sibling-requested ${PIN_GROUPS} version matches its pin"
@@ -754,6 +820,34 @@ POM
     m2_neg "a consumer asking for an auth-core version ABSENT from PINS" "${NC}/drift" \
            "hugmesh-workload-bff-api: wants hugmesh-auth-core 0.0.0-NOT-IN-PINS"
 
+    # (viii-c) AN ARTIFACT THE TABLE DOES NOT NAME AT ALL. (viii) covers a pinned
+    #          artifactId at an unserved VERSION; this is the other axis — an
+    #          artifactId under a PINNED groupId that PINS never mentions. The
+    #          walker used to skip it (`aid not in pins`), so a consumer adding a
+    #          second private library passed green while a cold build died on it.
+    #          The fixture name is asserted absent from PINS so this cannot become
+    #          a tautology.
+    UNPINNED_AID="hugmesh-unpinned-lib"
+    case "$(printf '%s\n' "${PINNED:-}")" in *"${UNPINNED_AID}="*) UNPINNED_AID="hugmesh-unpinned-lib-$$" ;; esac
+    base_corpus "${NC}/unpinned"
+    mkdir -p "${NC}/unpinned/hugmesh-wiki-bff-api"
+    cat > "${NC}/unpinned/hugmesh-wiki-bff-api/pom.xml" <<POM
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <artifactId>consumer</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>${PIN_GROUP_1}</groupId>
+      <artifactId>${UNPINNED_AID}</artifactId>
+      <version>1.0.0</version>
+    </dependency>
+  </dependencies>
+</project>
+POM
+    m2_neg "a consumer requesting a ${PIN_GROUP_1} artifactId the PINS table does not name" "${NC}/unpinned" \
+           "hugmesh-wiki-bff-api: wants ${PIN_GROUP_1}:${UNPINNED_AID} 1.0.0, registry serves no version"
+
     # (viii-b) The same refusal must survive the PARENT coordinate too — that is
     #          the one pin every Java consumer carries, and a <parent> is not a
     #          <dependency>, so it travels a different branch of the walk.
@@ -773,6 +867,36 @@ POM
 POM
     m2_neg "a consumer whose <parent> version is ABSENT from PINS" "${NC}/driftparent" \
            "hugmesh-workload-bff-api: wants hugmesh-parent 0.0.0-NOT-IN-PINS"
+
+    # (viii-d) hugmesh-commons is the artifact every consumer depends on, and no
+    #          control exercised it: appending `or aid == "hugmesh-commons"` to the
+    #          walker's skip condition dropped the resolved count from 21 to 11 and
+    #          the whole battery stayed green. A consumer asking for a commons
+    #          version the registry does not serve must be refused by name.
+    #          The coordinate is asserted to BE pinned first, so this control cannot
+    #          decay into a tautology if commons ever leaves the table.
+    if [ -z "$(printf '%s\n' "${PINNED:-}" | sed -n 's/^hugmesh-commons=//p')" ]; then
+      bad "(viii-d) hugmesh-commons is not in the PINS table — the commons control could not run"
+    else
+      base_corpus "${NC}/driftcommons"
+      mkdir -p "${NC}/driftcommons/hugmesh-workload-bff-api"
+      cat > "${NC}/driftcommons/hugmesh-workload-bff-api/pom.xml" <<POM
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <artifactId>consumer</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>${PIN_GROUP_1}</groupId>
+      <artifactId>hugmesh-commons</artifactId>
+      <version>0.0.0-NOT-IN-PINS</version>
+    </dependency>
+  </dependencies>
+</project>
+POM
+      m2_neg "a consumer asking for a hugmesh-commons version ABSENT from PINS" "${NC}/driftcommons" \
+             "hugmesh-workload-bff-api: wants hugmesh-commons 0.0.0-NOT-IN-PINS"
+    fi
 
     # ── (ix) MORE THAN ONE SERVED VERSION IS LEGAL ──────────────────────────
     # The consumers are separate repos on separate cadences, so the registry
@@ -807,6 +931,76 @@ POM
     base_corpus "${NC}/othergroup" "${OTHER_GROUP}"
     m2_neg "a corpus under a groupId the PINS table does not carry" "${NC}/othergroup" \
            "resolved ZERO"
+
+    # ── (xvi) CONTROL (xiv) MUST BITE ON THE CI SPARSE-FETCH PATH ────────────
+    # (xiv) audits the Maven-consumer name pattern against the corpus on disk. In
+    # CI there is no .stack-src, so the corpus is FETCHED — and it used to be
+    # fetched from the pattern itself, so a context the pattern missed was never
+    # cloned and (xiv) could not see it. Drive the real fetch path against a local
+    # file:// mirror: one repo per compose build context, every Maven consumer with
+    # a healthy pom, and (negative leg) one pattern-EXCLUDED context carrying a
+    # pom.xml. The fetch path must pull it and (xiv) must name it.
+    CONS_SP=" $(printf '%s ' ${CONSUMERS})"
+    STRAY=""
+    for c in ${ALL_CONTEXTS}; do
+      case "${CONS_SP}" in *" ${c} "*) ;; *) STRAY="${c}"; break ;; esac
+    done
+    mk_mirror() { # mk_mirror <dir> <stray-context-or-empty>
+      local m="$1" stray="$2" n r
+      for n in ${ALL_CONTEXTS}; do
+        r="${m}/${n}.git"; mkdir -p "${r}"
+        case "${CONS_SP}" in
+          *" ${n} "*) healthy_pom "${r}" "${AUTH_CORE_PIN}" ;;
+          *) if [ "${n}" = "${stray}" ]; then healthy_pom "${r}" "${AUTH_CORE_PIN}"; else printf 'FROM nginx:alpine\n' > "${r}/Dockerfile"; fi ;;
+        esac
+        ( cd "${r}" && git init -q && git add -A \
+          && git -c user.name=m2 -c user.email=m2@invalid -c commit.gpgsign=false commit -q -m fixture ) >/dev/null 2>&1
+      done
+    }
+    if [ -z "${STRAY}" ]; then
+      bad "(xvi) every compose build context matches the Maven-consumer pattern — there is no excluded context to plant a pom in, so the sparse-path audit cannot be exercised"
+    else
+      mk_mirror "${NC}/mirror-ok" ""
+      mk_mirror "${NC}/mirror-stray" "${STRAY}"
+      SPARSE_OK_OUT="$(env -u M2_PIN_DRIFT_SKIP -u CI_REPOSITORY_URL -u GIT_BASE CI=1 M2_SELFTEST_CHILD=1 \
+                         STACK_SRC="${NC}/no-such-corpus" M2_PIN_GIT_BASE="file://${NC}/mirror-ok" bash "${SELF_M2}" 2>&1)"; SPARSE_OK_RC=$?
+      SPARSE_BAD_OUT="$(env -u M2_PIN_DRIFT_SKIP -u CI_REPOSITORY_URL -u GIT_BASE CI=1 M2_SELFTEST_CHILD=1 \
+                          STACK_SRC="${NC}/no-such-corpus" M2_PIN_GIT_BASE="file://${NC}/mirror-stray" bash "${SELF_M2}" 2>&1)"; SPARSE_BAD_RC=$?
+      if [ "${SPARSE_OK_RC}" -ne 0 ]; then
+        bad "(xvi) the sparse-fetch path rejected a complete fixture mirror (rc=${SPARSE_OK_RC}) — the positive leg is broken, so the negative leg proves nothing:"
+        printf '%s\n' "${SPARSE_OK_OUT}" | sed -n '/2b) PIN drift/,/^-- 3)/p' | sed 's/^/           /'
+      elif [ "${SPARSE_BAD_RC}" -ne 0 ] && printf '%s' "${SPARSE_BAD_OUT}" | grep -F "excludes them: ${STRAY}" >/dev/null; then
+        ok "(xvi) on the CI sparse-fetch path (xiv) names a pattern-excluded context that carries a pom.xml (${STRAY})"
+      else
+        bad "(xvi) the sparse-fetch path did NOT surface pattern-excluded context ${STRAY} (rc=${SPARSE_BAD_RC}) — (xiv) cannot bite where CI runs"
+        printf '%s\n' "${SPARSE_BAD_OUT}" | sed -n '/2b) PIN drift/,/^-- 3)/p' | sed 's/^/           /'
+      fi
+    fi
+
+    # ── (xv) A CONSUMER DIRECTORY WITHOUT ITS pom.xml IS NOT "NOT MAVEN" ─────
+    # The completeness leg used to accept any present-but-pom-less directory as
+    # informational (hugmesh-api-docs is one), so removing admin-bff's pom left the
+    # suite green with its three pins never compared. The fixture is exactly the
+    # issue's: the directory and a .git stay, the pom goes.
+    base_corpus "${NC}/nopom"
+    rm -f "${NC}/nopom/hugmesh-admin-bff-api/pom.xml"
+    mkdir -p "${NC}/nopom/hugmesh-admin-bff-api/.git"
+    m2_neg "a real Maven consumer whose checkout has no pom.xml" "${NC}/nopom" \
+           "NO root pom.xml for: hugmesh-admin-bff-api"
+
+    # (xv-b) ...and the legitimate pom-less directory must STILL pass, or (xv) would
+    #        be satisfiable by refusing everything. api-docs with a Dockerfile that
+    #        never names maven is the real shape.
+    base_corpus "${NC}/nonmaven"
+    rm -f "${NC}/nonmaven/hugmesh-api-docs/pom.xml"
+    printf 'FROM nginx:alpine\nCOPY . /usr/share/nginx/html\n' > "${NC}/nonmaven/hugmesh-api-docs/Dockerfile"
+    NONMAVEN_OUT="$(M2_SELFTEST_CHILD=1 STACK_SRC="${NC}/nonmaven" bash "${SELF_M2}" 2>&1)"; NONMAVEN_RC=$?
+    if [ "${NONMAVEN_RC}" -eq 0 ]; then
+      ok "(xv-b) a pom-less consumer whose Dockerfile proves it is not Maven (hugmesh-api-docs) still passes"
+    else
+      bad "(xv-b) a genuine non-Maven consumer (no pom.xml, Dockerfile without maven/mvn) was rejected (rc=${NONMAVEN_RC}):"
+      printf '%s\n' "${NONMAVEN_OUT}" | sed -n '/2b) PIN drift/,/^-- 3)/p' | sed 's/^/           /'
+    fi
 
     # ── (xii) A PARTIAL CORPUS IS NOT A CORPUS ──────────────────────────────
     # have_poms() is satisfied by a single pom.xml, so a corpus with one consumer
@@ -852,10 +1046,34 @@ POM
   elif grep -qF "M2_PIN_DRIFT_SKIP" "${CI_YML}"; then
     bad "(vii) .gitlab-ci.yml mentions M2_PIN_DRIFT_SKIP — CI could switch the pin-drift leg off silently:"
     grep -nF "M2_PIN_DRIFT_SKIP" "${CI_YML}" | sed 's/^/         /'
-  elif ! grep -qF "tests/stack/test-m2-bootstrap.sh" "${CI_YML}"; then
-    bad "(vii) no .gitlab-ci.yml job runs tests/stack/test-m2-bootstrap.sh — the pin-drift leg is not wired in"
+  elif ! ci_job_runs_suite "${CI_YML}"; then
+    bad "(vii) no .gitlab-ci.yml job runs tests/stack/test-m2-bootstrap.sh from a live 'script:' line — a comment naming the path is not wiring, so the pin-drift leg is not wired in"
   else
     ok "(vii) .gitlab-ci.yml runs this suite and never sets M2_PIN_DRIFT_SKIP, so the CI path cannot skip pin-drift"
+  fi
+
+  # (vii-b) THE WIRING TEST ITSELF MUST BE ABLE TO SAY NO. The assertion above used
+  #         to be `grep -qF "tests/stack/test-m2-bootstrap.sh"`, which a COMMENT
+  #         satisfies: deleting the entire lint:m2-bootstrap job left the comment
+  #         that names the path, and (vii) still printed PASS. This suite is
+  #         PREMERGE_UNGATED, so that one job is its only automated run. Feed the
+  #         predicate the shapes that must be refused, and one that must pass.
+  WIRE="$(scratch_dir m2-wiring)"
+  printf '%s\n' '# runs tests/stack/test-m2-bootstrap.sh in CI' 'other-job:' '  script:' '    - bash tests/other.sh' \
+    > "${WIRE}/comment-only.yml"
+  printf '%s\n' 'lint:m2-bootstrap:' '  stage: lint' '  script:' '    # - bash tests/stack/test-m2-bootstrap.sh' '    - bash tests/other.sh' \
+    > "${WIRE}/commented-script.yml"
+  printf '%s\n' 'other-job:' '  script:' '    - bash tests/other.sh' 'lint:m2-bootstrap:' '  stage: lint' \
+    '  script:' '    - bash tests/stack/test-m2-bootstrap.sh' > "${WIRE}/live.yml"
+  printf '%s\n' 'lint:m2-bootstrap:' '  stage: lint' '  script:' '    - echo hi' 'other-job:' '  script:' \
+    '    - bash tests/stack/test-m2-bootstrap.sh' > "${WIRE}/other-jobs-script.yml"
+  if ci_job_runs_suite "${WIRE}/comment-only.yml" || ci_job_runs_suite "${WIRE}/commented-script.yml" \
+     || ci_job_runs_suite "${WIRE}/other-jobs-script.yml"; then
+    bad "(vii-b) the CI wiring predicate accepted a comment, a commented-out script line, or another job's script as 'the suite is wired'"
+  elif ! ci_job_runs_suite "${WIRE}/live.yml"; then
+    bad "(vii-b) the CI wiring predicate refused a live 'lint:m2-bootstrap' job whose script runs the suite"
+  else
+    ok "(vii-b) the CI wiring predicate refuses a comment / commented-out line / another job's script and accepts a live job"
   fi
 fi
 
