@@ -1837,7 +1837,11 @@ STACK_TOR_ANUBIS_COOKIE_ENV := $(if $(strip $(ANUBIS_COOKIE_SECURE)),, ANUBIS_CO
 # registers the mesh's own onion as `default` first (the #39 writer contract).
 STACK_TOR_MAP_FILE := /tenancy/onion-hosts.map
 STACK_TOR_DOMAINS := $(strip $(TOR_ONION_DOMAINS) $(if $(strip $(BRAND_B)),brandb=brandb,))
-STACK_TOR_ENV := $(if $(strip $(TOR)), TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)'$(if $(strip $(ANUBIS)),$(if $(strip $(TOR_ONION_UPSTREAM)),, TOR_ONION_UPSTREAM='$(STACK_TOR_ANUBIS_UPSTREAM)')$(STACK_TOR_ANUBIS_COOKIE_ENV),) APP_TENANCY_HOSTS_FILE='$(STACK_TOR_MAP_FILE)'$(if $(STACK_TOR_DOMAINS), TOR_ONION_DOMAINS='$(STACK_TOR_DOMAINS)',),)
+STACK_TOR_ENV := $(if $(strip $(TOR)), TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)'$(if $(strip $(ANUBIS)),$(if $(strip $(TOR_ONION_UPSTREAM)),, TOR_ONION_UPSTREAM='$(STACK_TOR_ANUBIS_UPSTREAM)')$(STACK_TOR_ANUBIS_COOKIE_ENV),),)
+# Its own variable (joined into STACK_ENV on its first line) so the line above and the
+# STACK_ENV tail keep the exact spelling tests/stack/test-tor-flip-wiring.sh's mutators
+# anchor on.
+STACK_TOR_MAP_ENV := $(if $(strip $(TOR)), APP_TENANCY_HOSTS_FILE='$(STACK_TOR_MAP_FILE)'$(if $(STACK_TOR_DOMAINS), TOR_ONION_DOMAINS='$(STACK_TOR_DOMAINS)',),)
 # MFA OPERATIONAL FLIP, opt-in per run — issue #47, following the PHPBB=1/AKKOMA=1
 # knob precedent. ONE switch, three lanes, and it flips ONLY app.mfa.enabled — the
 # freshness window keeps its default (600000) and the privileged floor stays on its
@@ -1895,7 +1899,7 @@ STACK_BRAND_B_ENV := $(if $(strip $(BRAND_B)),APP_TENANCY_ISSUERS='$(CASDOOR_ISS
 # a `:=` immediate assignment, so a variable referenced there but defined later
 # expands to EMPTY and the knob silently does nothing.
 STACK_POISONER_ENV := $(if $(strip $(POISONER)),MEDIA_POISONING_ENABLED='true' MEDIA_POISONING_WORKER_URL='http://hugmesh-media-poisoner:8080' MEDIA_POISONING_DEFAULT_MODE='$(POISON_MODE)' MEDIA_POISONING_FALLBACK_MODE='$(POISON_FALLBACK)' ,)
-STACK_ENV := $(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_THEME_ENV) \
+STACK_ENV := $(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_THEME_ENV)$(STACK_TOR_MAP_ENV) \
              STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
              PUBLIC_HTTPS_PORT='$(PUBLIC_HTTPS_PORT)' \
