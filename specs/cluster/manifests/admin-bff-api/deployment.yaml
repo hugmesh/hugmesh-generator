@@ -485,9 +485,38 @@ spec:
             # there is no ExternalSecret for either (grep external-secrets/ — argocd
             # has none; the federation token must be a Casdoor JWT carrying
             # ROLE_SUPERADMIN). Until they are provisioned these two legs make a REAL
-            # call that comes back 401. That is a LOUD failure surfaced to the caller,
-            # which is why it is acceptable to land ahead of the tokens — unlike the
-            # builder below, whose failure mode is silent. They are NOT wired here as
+            # call that fails LOUDLY — surfaced to the caller, which is why it is
+            # acceptable to land ahead of the tokens, unlike the builder below whose
+            # failure mode is silent.
+            #
+            # CORRECTION, MEASURED 2026-09-17 — this note used to say both legs "come
+            # back 401". NEITHER DOES. Both fail earlier, at the TLS handshake, so the
+            # bearer token is never sent and a 401 is never reached. Do not go hunting
+            # for a token problem when you see these fail; the token gap above is real
+            # but it is the SECOND wall, not the first. Common root cause: both clients
+            # are built as a bare WebClient.builder() with no SSL customisation
+            # (hugmesh-admin-bff-api RestArgoCdClient.java:41 and
+            # RestFederationModuleClient.java:45), so each uses the JDK default
+            # truststore and presents no client certificate. The truststore this pod
+            # builds below holds the cluster CA, but it is bound to server.ssl.* — the
+            # SERVER side (application.yml:1010-1012, via SSL_TRUST_STORE) — and is
+            # never consulted for OUTBOUND calls.
+            #   - ARGOCD: argocd-server presents a SELF-SIGNED leaf (live cluster,
+            #     secret argocd-secret tls.crt: subject=O=Argo CD, issuer=O=Argo CD).
+            #     Measured from inside this pod, curl reports ssl_verify_result=18
+            #     (DEPTH_ZERO_SELF_SIGNED_CERT); a 200 comes back only with -k.
+            #     Expect a PKIX path-building failure. hugmesh/hugmesh-admin-bff-api#62.
+            #   - FEDERATION: the address pinned above is https:// (NOT the http://
+            #     packaged default), and that port does speak TLS with a cluster-CA
+            #     leaf (subject=CN=hugmesh-federation-api…, issuer=CN=hugmesh kind
+            #     local dev CA). Measured from inside this pod: code=000
+            #     ssl_verify_result=19, and code=000 EVEN WITH -k — so the handshake
+            #     fails in both directions and no HTTP status is ever produced.
+            #     hugmesh/hugmesh-admin-bff-api#82.
+            # Neither finding affects the base-url values pinned here: every correct
+            # https:// address for these Services hits the same wall, and dropping to
+            # plaintext would be a decision nobody has made.
+            # The tokens are NOT wired here as
             # secretKeyRefs on purpose: a non-optional secretKeyRef naming a Secret
             # that does not exist wedges this very pod in CreateContainerConfigError,
             # which would reproduce the exact hang class this unit exists to avoid.
@@ -515,6 +544,32 @@ spec:
             - { name: APPSTORE_EFFECTOR_ENABLED,   value: "true" }
             - { name: APPSTORE_FEDERATION_ENABLED, value: "true" }
             - { name: APPSTORE_BUILDER_ENABLED,    value: "false" }
+            # app.appstore.argocd.base-url — the ArgoCD API server the effector in (1)
+            # above actually dials. The packaged default is
+            # `https://argocd-server.argocd.svc.cluster.local` (application.yml:759),
+            # i.e. UPSTREAM ArgoCD's own convention — and this platform has no `argocd`
+            # namespace at all. Both bootstraps install ArgoCD into ${ARGOCD_NS:-devops}
+            # and re-namespace the upstream install.yaml, which hardcodes `argocd`
+            # (bootstrap/bootstrap.sh:11,33; bootstrap/kind-local/bootstrap-kind.sh:53,657),
+            # and every Application in this tree is authored `namespace: devops`.
+            # `argocd` appears in neither namespaces/namespaces.yaml nor either
+            # bootstrap's ensure-namespaces list, so the unset default is NXDOMAIN in
+            # the pod. Measured on the live kind cluster: no `argocd` namespace exists,
+            # and Service argocd-server IS in devops exposing https=443 — so the scheme
+            # and the absent port stay exactly as packaged; ONLY the namespace was wrong.
+            # NOT a dark leg, unlike the two headscale keys above: APPSTORE_EFFECTOR_ENABLED
+            # is "true" here, so RestArgoCdClient is the wired bean and the first
+            # provisioning call dials this address for real.
+            # Same defect and same remedy as APPSTORE_SCAFFOLD_HEADSCALE_URL and
+            # APP_REGISTRY_HEADSCALE_ACL_BASE_URL: a platform-specific address belongs in
+            # the platform's manifest, not baked into a service's packaged default, which
+            # must stay usable against a stock upstream ArgoCD.
+            # THE PROBE'S LEG IS A SEPARATE INSTANCE OF THE SAME MISTAKE AND IS NOT
+            # FIXABLE FROM HERE: Fabric8PlatformCapabilityProbe.ARGOCD_NAMESPACE
+            # (hugmesh-admin-bff-api) is a Java constant still reading "argocd" with no
+            # placeholder, so no env var in this file can reach it — see the DUAL-WRITE
+            # note in manifests/admin-bff-platform-capability-rbac/rbac.yaml.
+            - { name: APPSTORE_ARGOCD_BASE_URL, value: "https://argocd-server.devops.svc.cluster.local" }
             # Where the optional-services reconciler writes its policy objects: the
             # deployed namespace is hugmesh-policy (namespaces/namespaces.yaml).
             - { name: APP_OPTIONAL_SERVICES_RECONCILE_POLICY_NAMESPACE, value: "hugmesh-policy" }
@@ -651,6 +706,20 @@ spec:
             # and forwards the real JWT to federation-api. Fail-open like mod-bff's
             # leg: exchange failure degrades to the pre-fix no-header behaviour.
             - { name: APP_BFF_EXCHANGE_ENABLED, value: "true" }
+            # Positive-swap cache TTL = the suspension-bypass window (a cache hit
+            # skips admin-bff's OWN suspensionGate() re-check on the exchange
+            # above). 0 = cache OFF, every exchange re-consults the gate. Decision
+            # 60 (generator#347, operator 2026-09-18) extended decision 7's "B:
+            # zero window now" (hugmesh-gateway#2; the gateway's own mirror,
+            # HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS, was pinned in #398/PR#406)
+            # to this service's mirror of the same cache: "extend it: default 0
+            # in both BFFs". The image default is 0 since hugmesh-admin-bff-api
+            # PR #74 (2026-09-18, admin-bff-api#56); image tags older than that
+            # default to 5000 (a 5 s window). This line states the posture
+            # regardless of which image tag is pinned, exactly as #398 did for the
+            # gateway. tests/scripts/test-fe-bff-route-lane-parity.sh asserts BOTH
+            # lanes carry this pin as the string "0".
+            - { name: APP_BFF_EXCHANGE_CACHE_TTL_MS, value: "0" }
             # ── Homeserver account broker (POST /bff/provision/{matrix,mastodon}) ──
             # broker.svc-password is the ONE placeholder in this app's
             # application.yml with NO default — deliberately, so a deployment that

@@ -454,7 +454,7 @@ def detect_session() -> str:
 def detect_wsl() -> tuple[bool, int]:
     """(is_wsl, version). WSL2 is a real kernel; WSL1 is a syscall shim.
 
-    The distinction is load-bearing, not trivia: WSL1 cannot run Docker's daemon or
+    The distinction is relied on, not trivia: WSL1 cannot run Docker's daemon or
     KVM and mis-handles many block-device syscalls, so an image build that WOULD work
     on WSL2 fails there for reasons no error message explains.
     """

@@ -17,7 +17,7 @@ structural here:
   a device changes nothing about emission (byte-identity by construction).
 * the drift guards in ``studio/tests/test_device_catalog.py`` pin the catalog to
   config.py's constants AND to the six builders' own role/board allowlists in three
-  directions — mutating any side goes red.
+  directions — mutating any side fails.
 
 Qt-free by construction: imported by the GUI pages, the headless catalog emitter
 (scripts/emit-image-catalog.py) and the pure-core test suite.

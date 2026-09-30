@@ -31,7 +31,7 @@ WHAT IS ASSERTED, and why it is spelled this way:
     ``*_THEME_CSS`` passthrough; hook: any ``$*_THEME_CSS`` reference in
     NON-COMMENT shell) and then compared. Renaming BOTH sides together stays
     green — that is the point, this gate is the enabler a future rename needs,
-    not a freeze on the current spelling. Renaming ONE side goes red and names
+    not a freeze on the current spelling. Renaming ONE side fails and names
     the repo.
   * Comments are STRIPPED from the hook before the name is read. Every hook's
     header prose mentions ``$SNAP_THEME_CSS``; matching that would make the gate
@@ -44,7 +44,7 @@ WHAT IS ASSERTED, and why it is spelled this way:
     thing to forbid. So the consumer side is checked by CONTAINMENT ("the hook
     reads the name compose passes"), not equality. Equality would have made this
     gate fire on the very migration step it exists to enable, which is how a
-    rename ends up half-done. What still goes red is the defect: a hook that
+    rename ends up half-done. What still fails is the defect: a hook that
     reads NONE of the spellings compose passes.
   * The Dockerfile must COPY the hook it found. A hook present in the checkout
     but never copied into the image is the same silent zero-byte outcome.
@@ -56,15 +56,15 @@ FALSE-RED DISCIPLINE (this test is READ-ONLY and never writes under STACK_SRC).
 The clone tree is gitignored and no CI checkout has one, so an ABSENT checkout is
 a SKIP with a message naming what to run — never a failure. ``REQUIRE_STACK_SRC=1``
 turns those skips into failures for a lane that has just run
-scripts/clone-all-repos.sh and wants the pin load-bearing; this is the same knob
+scripts/clone-all-repos.sh and wants the pin enforced; this is the same knob
 and the same wording tests/stack/test-no-store-posture.sh already uses.
 
 WHERE EACH HALF ACTUALLY BITES — stated plainly rather than implied:
   * the two PRODUCER tests read only compose.local.yaml, so they gate EVERY run,
     CI included. A compose-side rename or a service quietly losing its
-    passthrough goes red in CI today.
+    passthrough fails in CI today.
   * the three BOUNDARY tests need a materialised ${STACK_SRC} tree, which CI
-    does not have — there they SKIP, and they are load-bearing on a developer
+    does not have — there they SKIP, and they matter on a developer
     or build host that has run `make stack-clone`, and on any lane that opts in
     with REQUIRE_STACK_SRC=1. That is a real limit of a cross-repo static gate
     against gitignored checkouts, not an oversight.
@@ -214,7 +214,7 @@ def _skip_or_fail(skipped):
     pytest.skip(msg)
 
 
-# ── the comparison rule itself (no clone tree needed: always load-bearing) ─────────
+# ── the comparison rule itself (no clone tree needed: always relied on) ─────────
 
 # A dual-read hook body, verbatim in shape from the fleet's
 # docker-entrypoint.d/50-snap-theme.sh. Its header prose deliberately names only
@@ -339,7 +339,7 @@ def test_every_themed_compose_service_has_a_hook_reading_the_same_env_var(capsys
         # CONTAINMENT, not equality. A hook that reads BOTH spellings is a dual
         # read — the deliberate intermediate state of a cross-process rename, and
         # the only shape under which the producer can be flipped without an
-        # image rebuild landing first. Demanding equality here would go red on
+        # image rebuild landing first. Demanding equality here would fail on
         # the migration step itself. The defect is a hook that reads none of
         # what compose passes, and that still fails below.
         if not _hook_honours(key, read):
