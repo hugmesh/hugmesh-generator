@@ -903,15 +903,24 @@ def _parse_docker_ps(text: str) -> list[dict]:
                              "TargetPort": int(tport), "Protocol": proto})
             except ValueError:
                 continue
-        rows.append({
+        status = r.get("Status") or ""
+        row = {
             "Name": r.get("Names") or r.get("Name") or "",
             "Service": labels.get("com.docker.compose.service", ""),
             "State": str(r.get("State") or "").lower(),
-            "Status": r.get("Status") or "",
+            "Status": status,
             "Health": "",
             "Image": r.get("Image") or "",
             "Publishers": pubs,
-        })
+        }
+        # `docker ps --format {{json .}}` has no exit-code field of its own: it lives
+        # only in the Status text ("Exited (137) 5 minutes ago"). Without it
+        # _compose_units read 0 and showed a container that died non-zero as a clean
+        # 'stopped (exit 0)' (#377).
+        m = re.match(r"\s*Exited \((\d+)\)", str(status))
+        if m:
+            row["ExitCode"] = int(m.group(1))
+        rows.append(row)
     return rows
 
 
