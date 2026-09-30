@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 import pytest
@@ -472,6 +473,10 @@ def _elevation_program(args, shell: bool) -> str | None:
             tokens = [os.fsdecode(t) for t in args]
         except TypeError:
             return None
+    return _scan_tokens(tokens)
+
+
+def _scan_tokens(tokens: list[str]) -> str | None:
     inside_wrapper = False
     for tok in tokens:
         name = os.path.basename(tok)
@@ -507,11 +512,32 @@ def _install_never_elevate_popen() -> None:
         _hugmesh_never_elevate = True
 
         def __init__(self, args, *a, **kw):
+            # An iterator/generator argv is legal for the real Popen (_execute_child does
+            # list(args)); scanning it here would exhaust it and the real Popen would get
+            # an empty list (#375). Materialise ONCE, scan the list, hand the list on.
+            if not isinstance(args, (str, bytes, os.PathLike)):
+                try:
+                    args = list(args)
+                except TypeError:
+                    pass
             prog = _elevation_program(args, bool(kw.get("shell", False)))
             if prog is not None:
                 where = os.environ.get("PYTEST_CURRENT_TEST", "<outside any test>")
                 shown = _leading_tokens(args)
                 _ELEVATION_ATTEMPTS.append((where, shown))
+                if threading.current_thread() is not threading.main_thread():
+                    # Off the main thread a raise is worse than useless: escaping a
+                    # reimplemented QThread.run (progress._FlashWorker's shape) PyQt6
+                    # qFatals the interpreter — rc 134, no pass/fail line, the autouse
+                    # fixture and pytest_sessionfinish never run, every later test lost
+                    # (#375). The attempt is already RECORDED, so _never_elevate fails the
+                    # test at teardown; here the spawn is neutralised, not performed:
+                    # a harmless interpreter no-op replaces the argv (shell/executable
+                    # dropped so nothing of the original can run).
+                    kw.pop("executable", None)
+                    kw["shell"] = False
+                    super().__init__([sys.executable, "-c", "pass"], *a, **kw)
+                    return
                 raise ElevationAttempted(
                     f"the test suite must never start {prog} (it would block on a "
                     f"password prompt nobody can answer and wedge a root-owned launcher "
