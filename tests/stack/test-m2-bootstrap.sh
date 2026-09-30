@@ -407,6 +407,7 @@ else
   # ── THE WALKER'S OUTPUT IS A PROTOCOL, NOT PROSE ────────────────────────────
   # Every line it prints is exactly one of
   #     DRIFT <repo>: wants <artifact> <v>, registry serves <v>
+#     UNSERVED <repo>: wants <gid>:<artifact> <v>, registry serves no version
   #     UNREADABLE <path> :: <why>
   #     SEEN <n>                                    (exactly once, digits only)
   # and the shell below FAILS on anything else. That rule exists because the
@@ -511,7 +512,7 @@ for repo in entries:
         gid = d.findtext("m:groupId", "", ns).strip()
         aid = d.findtext("m:artifactId", "", ns).strip()
         ver = d.findtext("m:version", "", ns).strip()
-        if gid not in groups or aid not in pins or not ver:
+        if gid not in groups or not ver:
             continue
         m = re.fullmatch(r"\$\{([^}]+)\}", ver)
         if m:
@@ -523,6 +524,17 @@ for repo in entries:
                 # positive (federation-api / tube-bff).
                 continue
             ver = props[m.group(1)]
+        if aid not in pins:
+            # A PINNED GROUP but an artifact the table does not name at all. The
+            # registry serves no version of it, so a cold `make stack-up` dies on
+            # `Could not find artifact <gid>:<aid>:jar:<v>` — the exact failure
+            # this leg exists to catch. This used to `continue` in the same
+            # condition as the not-in-groups case, so an unpinned private library
+            # passed green. It is a finding, and it is deliberately NOT counted in
+            # `seen` (nothing was resolved).
+            print("UNSERVED %s: wants %s:%s %s, registry serves no version"
+                  % (esc(repo), esc(gid), esc(aid), esc(ver)))
+            continue
         seen += 1
         if ver not in pins[aid]:
             print("DRIFT %s: wants %s %s, registry serves %s"
@@ -543,9 +555,10 @@ PYEOF
   SEEN_N="$(printf '%s\n' "${SEEN_LINES}" | grep -c '[0-9]')"
   SEEN="$(printf '%s\n' "${SEEN_LINES}" | head -1)"
   DRIFT="$(printf '%s\n' "${DRIFT_RAW}" | sed -n 's/^DRIFT //p')"
+  UNSERVED="$(printf '%s\n' "${DRIFT_RAW}" | sed -n 's/^UNSERVED //p')"
   UNREADABLE="$(printf '%s\n' "${DRIFT_RAW}" | sed -n 's/^UNREADABLE //p')"
   UNKNOWN="$(printf '%s\n' "${DRIFT_RAW}" \
-             | grep -vE '^(DRIFT |UNREADABLE |SEEN [0-9]+$)' | grep -v '^[[:space:]]*$')"
+             | grep -vE '^(DRIFT |UNSERVED |UNREADABLE |SEEN [0-9]+$)' | grep -v '^[[:space:]]*$')"
 
   if [ -n "${UNKNOWN}" ]; then
     bad "the pin-drift walker emitted line(s) OUTSIDE its output protocol — a filter that drops them turns a signal into a green:"
@@ -576,6 +589,10 @@ PYEOF
     bad "the pin-drift walk resolved ZERO ${PIN_GROUPS} coordinates in ${SRC} — nothing was actually checked (vacuous green)"
   else
     ok "pin-drift walk resolved ${SEEN} ${PIN_GROUPS} coordinate(s) across the consumer poms"
+  fi
+  if [ -n "${UNSERVED}" ]; then
+    bad "UNSERVED — a consumer requests a ${PIN_GROUPS} artifact the PINS table does not name, so the registry serves no version of it and a cold stack build will die resolving it (add it to PINS in tests/stack/m2-bootstrap.sh):"
+    printf '%s\n' "${UNSERVED}" | sed 's/^/         /'
   fi
   if [ -z "${DRIFT}" ]; then
     ok "every sibling-requested ${PIN_GROUPS} version matches its pin"
@@ -766,6 +783,34 @@ POM
     # protocol line here would fail against a control that is working perfectly.
     m2_neg "a consumer asking for an auth-core version ABSENT from PINS" "${NC}/drift" \
            "hugmesh-workload-bff-api: wants hugmesh-auth-core 0.0.0-NOT-IN-PINS"
+
+    # (viii-c) AN ARTIFACT THE TABLE DOES NOT NAME AT ALL. (viii) covers a pinned
+    #          artifactId at an unserved VERSION; this is the other axis — an
+    #          artifactId under a PINNED groupId that PINS never mentions. The
+    #          walker used to skip it (`aid not in pins`), so a consumer adding a
+    #          second private library passed green while a cold build died on it.
+    #          The fixture name is asserted absent from PINS so this cannot become
+    #          a tautology.
+    UNPINNED_AID="hugmesh-unpinned-lib"
+    case "$(printf '%s\n' "${PINNED:-}")" in *"${UNPINNED_AID}="*) UNPINNED_AID="hugmesh-unpinned-lib-$$" ;; esac
+    base_corpus "${NC}/unpinned"
+    mkdir -p "${NC}/unpinned/hugmesh-wiki-bff-api"
+    cat > "${NC}/unpinned/hugmesh-wiki-bff-api/pom.xml" <<POM
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <artifactId>consumer</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>${PIN_GROUP_1}</groupId>
+      <artifactId>${UNPINNED_AID}</artifactId>
+      <version>1.0.0</version>
+    </dependency>
+  </dependencies>
+</project>
+POM
+    m2_neg "a consumer requesting a ${PIN_GROUP_1} artifactId the PINS table does not name" "${NC}/unpinned" \
+           "hugmesh-wiki-bff-api: wants ${PIN_GROUP_1}:${UNPINNED_AID} 1.0.0, registry serves no version"
 
     # (viii-b) The same refusal must survive the PARENT coordinate too — that is
     #          the one pin every Java consumer carries, and a <parent> is not a
