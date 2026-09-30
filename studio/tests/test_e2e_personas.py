@@ -217,13 +217,59 @@ def test_swarm_members_are_matched_without_being_materialised(index):
     assert index.catalogue_counts()[CAT_SWARM] == index.swarm.total
 
 
-def test_the_swarm_spec_reports_generated_actors_and_names_none(index):
+def _named_swarm_members(index, spec):
+    """The names in ``spec``'s cast that belong to the procedural swarm.
+
+    EMPTY is the healthy answer: the population is reported as a pattern and a count
+    (``generated_count``) and never as named actors. A non-empty answer means it was
+    unrolled, whether by a spec spelling a member out or by the index materialising
+    the whole population."""
+    return [n for n in spec.usernames if index.matches_generated(n)]
+
+
+def test_the_swarm_spec_reports_generated_actors_and_names_only_its_two_live_ui_actors(
+        index):
+    """Spec 24 draws from TWO populations, and the index has to keep them apart.
+
+      * the swarm: 126 procedural identities out of ``swarm()``, reported as a pattern
+        and a count (``generated_count``) and never as named rows;
+      * the two actors section (E) names since #626: ``e2e-user`` (sees the admin
+        launcher card DISABLED, with helptext) and ``e2e-admin`` (the positive control,
+        so a shell that greyed the card for everyone would fail). Ordinary seeded
+        personas, not swarm members.
+
+    This test used to assert ``usernames == ()``. That was true while (E) was a
+    ``test.skip`` stub, but it stood in for a different claim, "the swarm is not
+    unrolled", and #626 broke the stand-in while the claim stayed true. The claim is
+    asserted directly now (``_named_swarm_members``), and the named cast is pinned BY
+    NAME, as PLATFORM_POOLS is, so a third actor is a deliberate edit here and not a
+    silent one."""
     sweep = index.for_spec("24-final-e2e-sweep.spec.ts")
     assert sweep.generated_count == index.swarm.total
-    assert sweep.usernames == (), (
-        "spec 24's actors are procedural; naming any of them here means the "
+    assert not _named_swarm_members(index, sweep), (
+        "spec 24's swarm is procedural; naming any member of it here means the "
         "population was unrolled after all")
+    assert set(sweep.usernames) == {"e2e-user", "e2e-admin"}, (
+        "spec 24 names exactly its two section (E) actors; a different cast is a "
+        "roster change, so update this pin on purpose")
+    assert all(u.known for u in sweep.uses), "a named actor that no catalogue provisions"
     assert sweep.drives_personas and not sweep.actor_less
+
+
+def test_a_spec_that_spells_out_a_swarm_member_counts_as_unrolling_it():
+    """The negative control for the test above. ``_named_swarm_members`` is only worth
+    asserting EMPTY if it can be non-empty: a spec that onboards ``e2e-swarm-user-042``
+    by name is exactly the unrolled shape, and a real persona beside it must not be
+    flagged."""
+    idx = _index_over({"x.spec.ts": (
+        "import {registerOnly} from './helpers';\n"
+        "test('t', async ({page}) => {\n"
+        "  await registerOnly(page, 'e2e-swarm-user-042');\n"
+        "  await registerOnly(page, 'e2e-admin');\n"
+        "});\n")})
+    spec = idx.for_spec("x.spec.ts")
+    assert _named_swarm_members(idx, spec) == ["e2e-swarm-user-042"]
+    assert "e2e-admin" in spec.usernames
 
 
 # ── the shell side ──────────────────────────────────────────────────────────────
