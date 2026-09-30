@@ -78,6 +78,15 @@ class TestVolumeEnumeration:
         monkeypatch.setattr(vaults, "_run", FakeRun({"volume ls": (1, "", "boom")}))
         assert vaults.list_volumes() == []
 
+    def test_strict_raises_instead_of_reporting_none_when_docker_fails(self, monkeypatch):
+        """#361: a failed `docker volume ls` is UNKNOWN, not EMPTY — a caller that makes a
+        claim about the operator's data asks for strict and gets an exception."""
+        monkeypatch.setattr(vaults, "_run", FakeRun({"volume ls": (1, "", "boom")}))
+        with pytest.raises(vaults.DockerDidNotAnswer):
+            vaults.list_volumes(strict=True)
+        monkeypatch.setattr(vaults, "_run", FakeRun({"volume ls": (0, "", "")}))
+        assert vaults.list_volumes(strict=True) == []      # an ANSWERED empty is still []
+
 
 class TestSizeParsing:
     @pytest.mark.parametrize("raw,expected", [

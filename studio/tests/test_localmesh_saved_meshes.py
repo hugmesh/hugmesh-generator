@@ -464,6 +464,33 @@ def test_rows_state_what_a_restore_gives_back_before_the_click(qapp, page):
     assert not w.start_btn.isEnabled() and w.restore_btn.isEnabled()
 
 
+def test_a_probe_that_docker_could_not_answer_offers_neither_verb(qapp, page):
+    """#361: a wedged/unreachable docker made the probe say volumes gone + nothing
+    running, so the row OFFERED Restore (reseed) — over a live mesh once docker answered
+    again. The probe now reports None ('did not answer') and the row must disable BOTH
+    verbs and say it does not know, even though the page's own _mesh_up reads False
+    (LocalStackNode.status() also returns running=False when docker raises)."""
+    _record()
+    w = page.saved_meshes
+    table = w.table
+    for answer in (
+            dict(_PROBE_OK, mesh_running=None),                  # only `docker ps` failed
+            dict(_PROBE_OK, volumes_present=None, images_present=None,
+                 mesh_running=None, volumes_missing=())):        # docker down altogether
+        page.probe["answer"] = answer
+        page.initializePage()
+        _settle(qapp, page)
+        page._mesh_up = False
+        page._set_verbs_enabled(True)
+        page._probe_saved(w.records())
+        _settle(qapp, page)
+        restore_cell = table.item(0, smw._SM_COL_RESTORE).text()
+        assert not restore_cell.startswith(("Start", "Restore (reseed)")), restore_cell
+        _select(page)
+        assert not w.start_btn.isEnabled() and not w.restore_btn.isEnabled()
+    assert table.item(0, smw._SM_COL_VOLUMES).text() == "unknown"
+
+
 def test_start_is_disabled_for_a_record_from_another_checkout(qapp, page):
     _record(generator_dir="/somewhere/else/hugmesh-generator")
     page.initializePage()
