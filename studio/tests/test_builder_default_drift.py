@@ -21,7 +21,7 @@ BOTH arms — and, crucially, that each declared `policy` is the emission studio
 produces. That last assertion is what makes the table honest rather than aspirational: the
 remaining `override` entry (bundle_source) pins a KNOWN GAP (studio emits a flat constant,
 so the builder's role-aware line is dead code), so the moment someone fixes it the guard
-goes RED and forces the declaration to be updated with it. This is not hypothetical: the
+fails and forces the declaration to be updated with it. This is not hypothetical: the
 mechanism already fired once for real. installer_ui was declared `override` while its fix
 sat in a sibling PR; #384 landed underneath this branch, the marker went RED, and the
 declaration was re-earned as `resolve` — which is now itself defended by
@@ -52,9 +52,9 @@ nothing — so each is handled explicitly below and mutation-proven in the test 
       (:1065, "Reuse the CLIENT desktop machinery (ROLE_CLIENT=true -> Xorg/lightdm...)").
       It sits in the `desktop)` arm's slice, so an unanchored grep over the raw slice keeps
       reporting `desktop` as a client role even if the REAL assignment is deleted — the
-      guard goes blind exactly where it is supposed to bite. This is the same hole found in
+      guard stops seeing exactly where it is supposed to bite. This is the same hole found in
       #380's log guard, so comments are STRIPPED before any arm is parsed, and the test
-      below mutation-proves that deleting the real assignment goes RED.
+      below mutation-proves that deleting the real assignment fails.
 """
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 # Role tokens the x86 builder accepts as case-arm patterns that are NOT Studio role ids —
 # legacy/spelling aliases that fold onto a canonical arm. Allowlisted explicitly (never
 # skipped by a blanket "unknown token" rule) so a NEW builder role token cannot appear
-# without this guard going RED and forcing a decision about whether Studio should offer it.
+# without this guard failing and forcing a decision about whether Studio should offer it.
 # There are no builder-only role tokens left: every accepted spelling folds in
 # scripts/_roles-lib.sh BEFORE the case block runs, so the arms are exactly the
 # canonical roles. `*` is the fail-closed internal net that used to be the
@@ -176,7 +176,7 @@ def test_builder_role_arms_are_parsed_non_vacuously():
 
 def test_builder_role_tokens_are_known():
     """Every case-arm token is either a Studio x86 role id or an explicitly allowlisted
-    builder-only alias — a NEW builder role goes RED here rather than sliding past."""
+    builder-only alias — a NEW builder role fails here rather than sliding past."""
     unknown = set(ARMS) - set(X86_ROLES) - BUILDER_ONLY_ROLE_TOKENS
     assert not unknown, (
         f"build-x86 grew role token(s) {sorted(unknown)} that Studio neither offers nor "
@@ -202,7 +202,7 @@ def test_image_class_matches_builder_role_client(role):
 
 
 def test_builder_client_set_equals_studio_desktop_set():
-    """The same claim as a set-equality, so a role added to ONE side alone goes RED even
+    """The same claim as a set-equality, so a role added to ONE side alone fails even
     though the parametrized test above only iterates Studio's side."""
     builder_clients = {r for r, c in ARMS.items() if c and r in X86_ROLES}
     studio_desktops = {r for r in X86_ROLES if image_class("", r) == "desktop"}
@@ -219,7 +219,7 @@ def test_mutation_deleting_a_real_assignment_bites_despite_the_comment():
     """H3 proof, the important one. Delete the REAL `ROLE_CLIENT=true` from the `desktop)`
     arm. The :1065 comment containing the literal string still sits inside that arm's
     slice, so an unstripped parser keeps calling `desktop` a client and stays GREEN. The
-    comment-stripping parser must go RED."""
+    comment-stripping parser must fail."""
     text = _builder_text("x86")
     mutated = text.replace(
         '    desktop)\n        GPU=true; ROLE_CLIENT=true; ROLE_K8S="none"; ROLE_HEADSCALE=false',
@@ -228,8 +228,8 @@ def test_mutation_deleting_a_real_assignment_bites_despite_the_comment():
     assert _builder_role_arms(mutated)["desktop"] is False, (
         "guard is BLIND (H3): the real assignment is gone but the parser still reports "
         "desktop as a client — it is reading the comment at :1065")
-    # ...and the naive/unstripped parser is proven to be the thing that goes blind, so the
-    # stripping is load-bearing rather than decorative.
+    # ...and the naive/unstripped parser is proven to be the thing that stops seeing, so the
+    # stripping is relied on rather than decorative.
     naive_body = _role_case_block(mutated)   # NOT comment-stripped
     assert _sets_role_client(naive_body[naive_body.index("desktop)"):]), (
         "expected the unstripped body to still 'see' ROLE_CLIENT=true via the comment — "
@@ -369,7 +369,7 @@ def test_sentinels_parse_non_vacuously():
 def test_guard_a_sentinel_set_matches_declarations():
     """THE guard: the set of variables the builder self-resolves == the set BUILDER_DEFAULTS
     declares. A new builder sentinel that Studio does not know about, or a declaration for a
-    sentinel the builder dropped, both go RED here."""
+    sentinel the builder dropped, both fail here."""
     found = set(SENTINELS["x86"])
     assert found == set(DECLARED), (
         f"builder sentinels {sorted(found)} != declared BuilderDefault vars "
@@ -391,7 +391,7 @@ def test_guard_a_arm_builders_have_no_sentinels():
 def test_guard_a_declarations_match_the_real_fork():
     """Not just the NAMES: the fork condition and both arms are transcribed verbatim, so a
     builder-side edit to any part of a sentinel (e.g. flipping BUNDLE_SOURCE's arms, or
-    re-forking INSTALLER_UI on something other than ${STANDALONE}) goes RED."""
+    re-forking INSTALLER_UI on something other than ${STANDALONE}) fails."""
     for var, (cond, when_true, when_false) in SENTINELS["x86"].items():
         fld, bd = DECLARED[var]
         assert (bd.condition, bd.when_true, bd.when_false) == (cond, when_true, when_false), (
@@ -432,7 +432,7 @@ def test_guard_a_policy_override_pins_the_known_gap():
     """The two `override` entries are a GAP, recorded on purpose. installer_ui always emits
     `--installer-ui all`, so build-x86:1244 never fires and a headless node gets the ISO
     installer stack; bundle_source always emits, so :1248 never fires. This test pins the
-    BROKEN behaviour deliberately: when the owning fix lands, it goes RED and whoever landed
+    BROKEN behaviour deliberately: when the owning fix lands, it fails and whoever landed
     it must come update BUILDER_DEFAULTS. A gap nobody is forced to revisit is a gap that
     stays."""
     for fld, bd in BUILDER_DEFAULTS.items():
@@ -463,7 +463,7 @@ def test_guard_a_policy_resolve_produces_the_builders_own_arm():
     This is what makes `resolve` different from `override`: both emit a flat explicit value
     instead of letting `[ -z ... ]` fire, but `resolve` emits the value the sentinel WOULD
     have produced, so the outcome is identical to deferring. If a future edit changes the
-    resolver's target value without changing the builder, this goes RED — the declaration
+    resolver's target value without changing the builder, this fails — the declaration
     can no longer quietly become a lie.
 
     History: installer_ui was declared `override` (a recorded GAP) while its fix lived in a
@@ -493,7 +493,7 @@ def test_guard_a_policy_resolve_produces_the_builders_own_arm():
 # ---- mutation proofs: every assertion above must BITE ---------------------------------
 
 def test_mutation_a_fifth_sentinel_bites():
-    """Inject a new builder sentinel -> the set-equality must go RED ("builder resolves a
+    """Inject a new builder sentinel -> the set-equality must fail ("builder resolves a
     default Studio has no record of")."""
     text = _builder_text("x86")
     mutated = text.replace(
@@ -506,7 +506,7 @@ def test_mutation_a_fifth_sentinel_bites():
 
 def test_mutation_an_indented_sentinel_is_still_seen():
     """The reason this guard is NOT ^-anchored (see _SENTINEL_RE). Indent a new sentinel by
-    four spaces: the audited `^\\[ -z` regex goes blind and passes vacuously; ours bites."""
+    four spaces: the audited `^\\[ -z` regex matches nothing and passes vacuously; ours bites."""
     text = _builder_text("x86")
     injected = '    [ -z "${TELEMETRY}" ] && { ${STANDALONE} && TELEMETRY=on || TELEMETRY=off; }\n'
     mutated = text.replace('[ -z "${BUNDLE_SOURCE}" ] && {',
@@ -577,7 +577,7 @@ def test_sentinel_regex_excludes_role_arm_presets():
 
 # ── the secureboot cert-without-key preflight must stay EXPLICIT-ONLY ──────────────────
 # Finding 2 added a hard error for "--secureboot-cert with no --secureboot-key" (a cert
-# alone is inert: the signing block keys off SECUREBOOT_KEY, so passing one silently signs
+# alone does nothing: the signing block keys off SECUREBOOT_KEY, so passing one silently signs
 # with a throwaway key and ships an image that will not boot under Secure Boot).
 #
 # The first cut gated it on ${SECUREBOOT_CERT} — the variable --keys-usb AUTO-DISCOVERY also

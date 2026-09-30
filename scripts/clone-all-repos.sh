@@ -16,8 +16,15 @@
 #               Point at the internal mirror on the VPN, e.g.
 #               GIT_BASE=https://gitlab.hugmesh.net/hugmesh
 #   GIT_REF     (default main)  branch/tag to check out
-#   USE_GH      (default auto)  "1" forces `gh repo clone`, "0" forces git clone
-#   GH_TOKEN / GITHUB_TOKEN     if set, used for an https token clone (CI / Windows)
+#   USE_GH      (default auto)  "1" puts `gh repo clone` FIRST, "0" removes gh
+#               from the list entirely. In both cases the mechanism is still
+#               PROVED against one repo before the run commits to it — "gh is
+#               logged in" has never meant "gh can read these repos".
+#   GH_TOKEN / GITHUB_TOKEN     if set, TRIED FIRST for an https token clone
+#               (CI / Windows) — and dropped for the next mechanism if it cannot
+#               actually read the org.
+#   STACK_CLONE_PROBE_REPO      (default: the first entry of REPOS) the one repo
+#               the credential probe reads. Nothing else uses it.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -88,22 +95,209 @@ echo "==> Cloning ${#REPOS[@]} HugMesh repos into ${STACK_SRC}"
 echo "    base=${GIT_BASE} ref=${GIT_REF}"
 mkdir -p "${STACK_SRC}"
 
-# Decide the clone mechanism once.
+# Scratch for per-repo clone stderr, so a failure can be QUOTED instead of
+# summarised. Outside ${STACK_SRC}: nothing this script writes there may be
+# mistaken for a build context.
+CLONE_ERR="$(mktemp "${TMPDIR:-/tmp}/stack-clone-err.XXXXXX")"
+trap 'rm -f "${CLONE_ERR}"' EXIT
+
+# ── CREDENTIAL SELECTION: prove it, then use it ──────────────────────────────
+#
+# #535. `make stack-up` died at this, its FIRST step, with 0 ok / 26 failed and
+# the words "auth/VPN?" — on a box whose credentials were fine. Measured twice,
+# one minute apart, into two throwaway directories:
+#
+#     as the operator's login shell has it   ->  0 ok, 26 failed
+#     env -u GH_TOKEN -u GITHUB_TOKEN        ->  26 ok,  0 failed
+#
+# ~/.profile exports a FINE-GRAINED GH_TOKEN. It is a perfectly VALID token — `gh
+# auth status` exits 0 under it — it simply has no read grant on this org. Both
+# of the old mechanisms preferred it over the credential that works:
+#
+#   * the old clone_url() injected ${GH_TOKEN:-${GITHUB_TOKEN:-}} into the https
+#     URL whenever either was set, so every `git clone` authenticated as it and
+#     got `remote: Write access to repository not granted` / HTTP 403 (measured
+#     2026-09-18 with ls-remote: rc=128);
+#   * the old `USE_GH=auto` resolved to 1 from `gh auth status` exiting 0 — which
+#     asks "is gh logged in?", never "can gh read THESE repos?" — and `gh` also
+#     prefers an environment token over its keyring.
+#
+# The fix is not a bigger fallback chain, it is a PROOF. Each candidate mechanism
+# is tried against ONE repo with one `ls-remote` before the loop starts; the first
+# that can actually READ is the one all 26 clones use; the rest are reported, by
+# name, with the reason they were skipped. Nothing here guesses from a login
+# state, and the failure text never says "auth/VPN?" when the credential was
+# proved — a repo that fails AFTER a proved credential is a repo-specific fact.
+#
+# NOT FIXED HERE, stated rather than hidden: a successful `env-token` clone still
+# leaves the token in that checkout's .git/config origin URL (it always has). The
+# update path below does not need it, but removing it would change what a CI box
+# whose ONLY credential is GH_TOKEN can do on a second run, so it is left alone
+# and out of this issue's scope.
 have_gh() { command -v gh >/dev/null 2>&1; }
-if [ "${USE_GH}" = "auto" ]; then
-  if have_gh && gh auth status >/dev/null 2>&1; then USE_GH=1; else USE_GH=0; fi
+
+# The ambient token, named ONCE so every message can talk about it and no message
+# has to re-read two variables to know which one is in play.
+ENV_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+if   [ -n "${GH_TOKEN:-}" ];     then ENV_TOKEN_NAME="GH_TOKEN"
+elif [ -n "${GITHUB_TOKEN:-}" ]; then ENV_TOKEN_NAME="GITHUB_TOKEN"
+else                                  ENV_TOKEN_NAME=""
 fi
 
-clone_url() { # repo -> full clone URL (token-injected if a token is present)
-  local repo="$1" url="${GIT_BASE}/$1.git"
-  local tok="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
-  if [ -n "${tok}" ] && [[ "${url}" == https://* ]]; then
-    # https://oauth2:<token>@host/... — works for GitHub and GitLab https.
-    printf 'https://oauth2:%s@%s' "${tok}" "${url#https://}"
+# A token must never reach a log, a shell trace or a bug report. Every probe's
+# output goes through this before anything prints it.
+redact() { # <text>
+  if [ -n "${ENV_TOKEN}" ]; then
+    printf '%s' "${1//${ENV_TOKEN}/<${ENV_TOKEN_NAME}>}"
   else
-    printf '%s' "${url}"
+    printf '%s' "$1"
   fi
 }
+
+# No mechanism may park `make stack-up` on "Username for 'https://github.com':".
+# A credential that is not there must FAIL, so the next mechanism gets its turn.
+export GIT_TERMINAL_PROMPT=0
+
+# The mechanisms, in the order they are tried. `env-token` stays first so an
+# explicit CI/Windows token still wins when it works; the two that unset the
+# ambient tokens follow, because that is the exact difference #535 measured.
+MECH_ORDER=(env-token git-ambient gh-keyring gh-clone)
+
+# gh speaks to github.com. A GIT_BASE pointed at the internal GitLab mirror must
+# not silently fall through to `gh repo clone <org>/<repo>` and hand back the
+# GITHUB repo of the same name — which the old code would have done.
+gh_base_is_github() { [[ "${GIT_BASE}" == https://github.com/* ]]; }
+
+mech_skip_reason() { # <mech> -> "" if usable, else why not
+  case "$1" in
+    env-token)
+      if [ -z "${ENV_TOKEN}" ]; then printf 'no GH_TOKEN/GITHUB_TOKEN in the environment'
+      elif [[ "${GIT_BASE}" != https://* ]]; then printf 'GIT_BASE is not https, so a token cannot be injected into the URL'
+      fi ;;
+    git-ambient) : ;;
+    gh-keyring)
+      # Only `gh` itself is required. The credential helper is generic: asked for a
+      # host it has no credential for, `gh auth git-credential` returns nothing and
+      # git carries on — it cannot silently retarget the request the way the clone
+      # sub-command below can.
+      if ! have_gh; then printf 'the gh CLI is not installed'; fi ;;
+    gh-clone)
+      if ! have_gh; then printf 'the gh CLI is not installed'
+      elif ! gh_base_is_github; then printf 'GIT_BASE is not github.com, and `gh repo clone <org>/<repo>` would fetch the GITHUB repo of that name instead of the one GIT_BASE names'
+      fi ;;
+  esac
+}
+
+mech_desc() { # <mech> -> what an operator should picture
+  case "$1" in
+    env-token)   printf 'the %s in your environment, injected into the https clone URL' "${ENV_TOKEN_NAME:-token}" ;;
+    git-ambient) printf "git's own credential configuration (credential.helper / ~/.netrc / ssh), with %s deliberately unset" "${ENV_TOKEN_NAME:-any ambient token}" ;;
+    gh-keyring)  printf "the gh CLI keyring credential via git -c credential.helper='!gh auth git-credential', with %s unset" "${ENV_TOKEN_NAME:-any ambient token}" ;;
+    gh-clone)    printf 'gh repo clone, with %s unset so gh uses its keyring' "${ENV_TOKEN_NAME:-any ambient token}" ;;
+  esac
+}
+
+mech_url() { # <mech> <repo> -> the clone URL that mechanism uses
+  case "$1" in
+    env-token) printf 'https://oauth2:%s@%s/%s.git' "${ENV_TOKEN}" "${GIT_BASE#https://}" "$2" ;;
+    *)         printf '%s/%s.git' "${GIT_BASE}" "$2" ;;
+  esac
+}
+
+mech_git() { # <mech> <git args...>
+  local m
+  m="$1"; shift
+  case "${m}" in
+    env-token)   git "$@" ;;
+    git-ambient) env -u GH_TOKEN -u GITHUB_TOKEN git "$@" ;;
+    gh-keyring)  env -u GH_TOKEN -u GITHUB_TOKEN git -c credential.helper='!gh auth git-credential' "$@" ;;
+    *)           return 127 ;;
+  esac
+}
+
+# The probe. ONE `ls-remote` against ONE repo — cheap, read-only, and it asks the
+# question the run actually depends on.
+PROBE_OUT=""
+probe_mech() { # <mech> <repo>
+  local m
+  local repo
+  local url
+  local out
+  local rc
+  m="$1"; repo="$2"; rc=0
+  if [ "${m}" = "gh-clone" ]; then
+    out="$(env -u GH_TOKEN -u GITHUB_TOKEN gh repo view "${GIT_BASE##*/}/${repo}" --json name 2>&1)" || rc=$?
+    PROBE_OUT="$(redact "${out}")"
+    if [ "${rc}" -eq 0 ] && [ -n "${out}" ]; then return 0; fi
+    return 1
+  fi
+  url="$(mech_url "${m}" "${repo}")"
+  out="$(mech_git "${m}" ls-remote --heads "${url}" 2>&1)" || rc=$?
+  PROBE_OUT="$(redact "${out}")"
+  # An EMPTY listing is a FAILURE here, not a success. A credential that cannot
+  # see a private repo has been measured to make fetch/ls-remote print NOTHING and
+  # exit 0 rather than error — the shape that reads as "my branch is gone" instead
+  # of "the token is wrong". Requiring a ref back closes that.
+  if [ "${rc}" -eq 0 ] && [ -n "${out}" ]; then return 0; fi
+  return 1
+}
+
+PROBE_REPO="${STACK_CLONE_PROBE_REPO:-${REPOS[0]}}"
+CRED_MECH=""
+CRED_REPORT=()
+for _m in "${MECH_ORDER[@]}"; do
+  case "${USE_GH}" in
+    0) case "${_m}" in gh-keyring|gh-clone) CRED_REPORT+=("  - ${_m}: skipped (USE_GH=0)"); continue ;; esac ;;
+  esac
+  _skip="$(mech_skip_reason "${_m}")"
+  if [ -n "${_skip}" ]; then
+    CRED_REPORT+=("  - ${_m}: not available — ${_skip}")
+    continue
+  fi
+  if probe_mech "${_m}" "${PROBE_REPO}"; then
+    CRED_REPORT+=("  - ${_m}: OK — read ${PROBE_REPO}")
+    CRED_MECH="${_m}"
+    break
+  fi
+  CRED_REPORT+=("  - ${_m}: FAILED — $(printf '%s' "${PROBE_OUT}" | tail -2 | tr '\n' ' ')")
+done
+# USE_GH=1 used to mean "force gh". It still puts gh first, but it can no longer
+# force a credential that has been PROVED unable to read: that is the whole defect.
+if [ "${USE_GH}" = "1" ] && [ -n "${CRED_MECH}" ] && [ "${CRED_MECH}" != "gh-clone" ]; then
+  if [ -z "$(mech_skip_reason gh-clone)" ] && probe_mech gh-clone "${PROBE_REPO}"; then
+    CRED_MECH="gh-clone"
+    CRED_REPORT+=("  - gh-clone: OK — read ${PROBE_REPO} (USE_GH=1 asked for it, so it wins)")
+  else
+    CRED_REPORT+=("  - gh-clone: USE_GH=1 asked for gh, but it could NOT read ${PROBE_REPO} — using ${CRED_MECH} instead")
+  fi
+fi
+
+echo "==> Credential probe against ${PROBE_REPO}:"
+printf '%s\n' ${CRED_REPORT[@]+"${CRED_REPORT[@]}"}
+if [ -z "${CRED_MECH}" ]; then
+  echo "" >&2
+  echo "==> NOTHING could read ${GIT_BASE}/${PROBE_REPO}.git." >&2
+  echo "    Every mechanism and its EXACT failure is listed above — read those lines" >&2
+  echo "    rather than this one: 'Repository not found' means the org/repo name (or" >&2
+  echo "    GIT_BASE) is wrong; a 403 means the credential is; a connection error means" >&2
+  echo "    the network is. This script does not guess between them." >&2
+  if [ -n "${ENV_TOKEN_NAME}" ]; then
+    echo "" >&2
+    echo "    ${ENV_TOKEN_NAME} IS set in your environment. If it is a fine-grained token" >&2
+    echo "    (github_pat_...), it needs 'Contents: read' granted on ${GIT_BASE##*/} — a" >&2
+    echo "    fine-grained token WITHOUT that grant is still a valid token, so 'gh auth" >&2
+    echo "    status' exits 0 while every clone 403s. Quickest check:" >&2
+    echo "        env -u GH_TOKEN -u GITHUB_TOKEN make stack-up" >&2
+  else
+    echo "" >&2
+    echo "    No GH_TOKEN/GITHUB_TOKEN is set. Log in with 'gh auth login', configure a" >&2
+    echo "    git credential helper, or point GIT_BASE at the internal mirror on the VPN." >&2
+  fi
+  echo "" >&2
+  echo "    To build the trees already in ${STACK_SRC} without cloning: STACK_NO_CLONE=1 make stack-up" >&2
+  exit 1
+fi
+echo "    using: ${CRED_MECH} — $(mech_desc "${CRED_MECH}")"
 
 # ── pre-rename checkout migration (LEGACY_COMPAT) ────────────────────────────
 # The org renamed every service repo to hugmesh-* during the HugMesh rebrand. A
@@ -149,10 +343,21 @@ migrate_legacy_dir() { # canonical name
 # `repo` scope and works. Without this fallback every repo fails, `stack-clone`
 # exits 1, and `make stack-up` aborts before building anything — which reads as
 # "the local mesh is broken" when in fact only the credential is wrong.
-git_try() { # git <args...>, retried once under the gh-CLI credential helper
-  git "$@" 2>/dev/null && return 0
-  env -u GH_TOKEN -u GITHUB_TOKEN \
-    git -c credential.helper='!gh auth git-credential' "$@" 2>/dev/null
+# The UPDATE path cannot use env-token (the remote URL lives in .git/config and
+# carries whatever the clone put there), so it drives the PROVED mechanism first
+# and then the other git-capable ones — a checkout cloned under one credential on
+# a machine that has since changed credentials still updates.
+git_try() { # git <args...>
+  local m
+  if [ -n "${CRED_MECH}" ] && [ "${CRED_MECH}" != "gh-clone" ]; then
+    mech_git "${CRED_MECH}" "$@" 2>/dev/null && return 0
+  fi
+  for m in git-ambient gh-keyring; do
+    [ "${m}" = "${CRED_MECH}" ] && continue
+    [ -n "$(mech_skip_reason "${m}")" ] && continue
+    mech_git "${m}" "$@" 2>/dev/null && return 0
+  done
+  return 1
 }
 
 fetch_ref() { # <checkout-dir> <ref>
@@ -227,21 +432,30 @@ for repo in "${REPOS[@]}"; do
   fi
 
   echo "  ++ ${repo}: cloning"
-  if [ "${USE_GH}" = 1 ] && [ -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
-    # gh honours the logged-in auth; honour a non-default GIT_BASE org too.
+  clone_rc=0
+  if [ "${CRED_MECH}" = "gh-clone" ]; then
     org="${GIT_BASE##*/}"
-    if gh repo clone "${org}/${repo}" "${dest}" -- --depth 1 --branch "${GIT_REF}" >/dev/null 2>&1; then
-      ok=$((ok+1))
-    else
-      echo "     ERROR: gh clone failed for ${repo}" >&2; fail=$((fail+1))
-    fi
+    env -u GH_TOKEN -u GITHUB_TOKEN \
+      gh repo clone "${org}/${repo}" "${dest}" -- --depth 1 --branch "${GIT_REF}" \
+      >/dev/null 2>"${CLONE_ERR}" || clone_rc=$?
   else
-    if git clone --depth 1 --branch "${GIT_REF}" "$(clone_url "${repo}")" "${dest}" >/dev/null 2>&1; then
-      ok=$((ok+1))
-    else
-      echo "     ERROR: git clone failed for ${repo} (auth/VPN? GIT_BASE=${GIT_BASE})" >&2
-      fail=$((fail+1))
-    fi
+    mech_git "${CRED_MECH}" clone --depth 1 --branch "${GIT_REF}" \
+      "$(mech_url "${CRED_MECH}" "${repo}")" "${dest}" \
+      >/dev/null 2>"${CLONE_ERR}" || clone_rc=$?
+  fi
+  if [ "${clone_rc}" -eq 0 ]; then
+    ok=$((ok+1))
+  else
+    # NOT "auth/VPN?". The credential was PROVED against ${PROBE_REPO} before this
+    # loop started, so a failure here is a fact about THIS repo — it does not
+    # exist, it has no ${GIT_REF} branch, or this one repo is not granted — and
+    # saying "auth/VPN?" 26 times is what sent #535 looking at the network.
+    echo "     ERROR: clone failed for ${repo} via ${CRED_MECH} (which DID read ${PROBE_REPO})." >&2
+    echo "            So this is about ${repo} itself: missing repo, missing '${GIT_REF}' branch," >&2
+    echo "            or a per-repo grant. git said:" >&2
+    redact "$(sed -n '1,3p' "${CLONE_ERR}" 2>/dev/null || true)" >&2
+    echo "" >&2
+    fail=$((fail+1))
   fi
 done
 
@@ -260,7 +474,10 @@ if [ "${kept}" -gt 0 ]; then
   echo "    The stack will build THOSE trees, not ${GIT_REF}."
 fi
 if [ "${fail}" -gt 0 ]; then
-  echo "    Some repos did not clone. Check GitHub auth (gh auth login) or the"
-  echo "    internal VPN + GIT_BASE, then re-run. Existing checkouts were kept." >&2
+  echo "    ${fail} repo(s) failed, using ${CRED_MECH} — $(mech_desc "${CRED_MECH}")." >&2
+  echo "    That credential was PROVED able to read ${GIT_BASE}/${PROBE_REPO}.git before" >&2
+  echo "    this run started, so these are per-repo failures (see each ERROR above)," >&2
+  echo "    NOT a blanket auth or VPN problem. Existing checkouts were kept." >&2
+  echo "    To build the trees already in ${STACK_SRC} as they are: STACK_NO_CLONE=1 make stack-up" >&2
   exit 1
 fi

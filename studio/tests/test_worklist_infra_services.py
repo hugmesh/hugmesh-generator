@@ -4,7 +4,7 @@ operator ask "finish tor egress work in gui" — the per-node half).
 The gap: tor/egress-vpn are scope:node in optional-services.yaml, but Studio only
 carried them mesh-wide (one base ImageConfig). WorklistEntry.infra_services makes
 them PER NODE. These tests PROVE the selection reaches real builder argv on each
-platform (the dead-default class this repo keeps hitting: a flag that emits nothing):
+platform (the trap this repo keeps hitting: a flag whose default emits nothing):
   - x86 tor        -> --with-tor
   - rpi5 tor       -> --optional-services "... tor"
   - rpi5 egress-vpn-> --optional-services "... egress-vpn"

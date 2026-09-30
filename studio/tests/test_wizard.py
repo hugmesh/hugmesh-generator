@@ -136,6 +136,7 @@ def test_page_slugs_map_to_the_right_pages(wiz):
               "network": wizard_mod.NetworkPage, "keyzip": wizard_mod.KeyZipPage,
               "domains_choice": wizard_mod.DomainsChoicePage,
               "domains": wizard_mod.DomainsPage,
+              "domain_services": wizard_mod.DomainServicesPage,
               "users_choice": wizard_mod.UsersChoicePage,
               "users": wizard_mod.UsersPage,
               "system": wizard_mod.SystemPage, "vault": wizard_mod.VaultPage,
@@ -950,7 +951,7 @@ def test_home_provisioning_greyed_for_x86_mesh_node(wiz):
     assert not any(a.startswith("--home-") for a in c.to_cli_args())
 
 
-# ---- dynamic page-skip (nextId applies_to) — emission-neutral -----------------------
+# ---- dynamic page-skip (nextId applies_to) — leaves the output unchanged -----------------------
 
 def test_superadmin_plane_predicate():
     """The dynamic-skip predicate: mesh applies only when the operator opted into

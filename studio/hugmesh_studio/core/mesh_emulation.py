@@ -298,7 +298,7 @@ def _as_mesh_plan(plan) -> MeshPlan:
     than silently emitting an empty identity file — a mesh with no identities is
     a mesh whose nodes cannot address each other.
 
-    Structural, not ``isinstance``, and that is load-bearing rather than lax:
+    Structural, not ``isinstance``, and that is relied on rather than lax:
     ``python -m hugmesh_studio.core.mesh_emulation`` loads THIS file twice — once
     as ``__main__`` and once, under its package name, by the facade it imports —
     so the plan handed back carries the OTHER copy's ``MeshPlan`` class and an

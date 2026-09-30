@@ -125,8 +125,13 @@ def test_delete_removes_the_row():
     assert "no such domain row" in j.status
 
 
-def test_enter_continues_to_the_users_choice():
+def test_enter_continues_to_the_per_domain_services_step_then_the_users_choice():
+    """#495 put a per-domain Services step between Domains and the Users choice — the
+    operator has to go through each domain's services before a build or a mesh start,
+    so the walk stops there first."""
     j = _at_mesh_domains()
     j.feed("a chat.example.org")
+    j.feed("")
+    assert j.slug == "domain_services"
     j.feed("")
     assert j.slug == "users_choice"
