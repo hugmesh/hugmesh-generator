@@ -162,7 +162,8 @@ def render_gui(gen: str, emit, rec: dict, python: str, tmpdir: str) -> dict:
     with open(cpath, "w", encoding="utf-8") as fh:
         json.dump(emit.gui_config(rec), fh)
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen",
-               HUGMESH_STUDIO_STATE_DIR=state)
+               HUGMESH_STUDIO_STATE_DIR=state,
+               HUGMESH_STUDIO_NO_ELEVATION="1")   # #304: a headless driver must never elevate
     res = subprocess.run(
         [python, "-m", "hugmesh_studio", "--print-command", "--config", cpath,
          "--backend", "native", "--generator-dir", gen],
@@ -361,6 +362,7 @@ def main(argv: list[str] | None = None) -> int:
 
     tmp = tempfile.mkdtemp(prefix="render-all-images-")
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ["HUGMESH_STUDIO_NO_ELEVATION"] = "1"   # #304: forced, not setdefault
     os.environ.setdefault("HUGMESH_STUDIO_STATE_DIR", os.path.join(tmp, "state"))
 
     from hugmesh_studio.core.platform_info import detect

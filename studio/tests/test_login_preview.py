@@ -3,7 +3,7 @@
 The asset is a CAPTURED SNAPSHOT of the real production login-ui build (rendered
 DOM + serialized component styles + compiled global stylesheet). These tests pin
 what makes it honest: it is the real page (the real form controls are in it), it
-is inert (zero scripts — a frozen visual snapshot), it records its provenance
+is static (zero scripts — a frozen visual snapshot), it records its provenance
 (the login-ui commit it was captured from), and the theme substitution point is
 exactly one ``style#snap-theme`` marker — the same text, same ``:root:root``
 mechanism that ships to containers. Proven end-to-end at build time: headless-

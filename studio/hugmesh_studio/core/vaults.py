@@ -30,7 +30,7 @@ Vault token travels in the child's environment and a written value travels on st
 
 BLOCKING BY CONTRACT. Every function here shells out to docker with a timeout and must
 therefore be called OFF the GUI thread (see the _StatusProbe/own_probe idiom in
-gui/pages/_widgets.py). `docker volume` calls are fast, but a wedged daemon blocks each
+gui/pages/_widgets.py). `docker volume` calls are fast, but a hung daemon blocks each
 for its full timeout, and this module is reached from a dialog the operator opened.
 """
 
@@ -264,7 +264,7 @@ def vault_capability(project: str = DEFAULT_PROJECT) -> Capability:
     (specs/cluster/apps/02-vault.yaml) on the DevOps/Kubernetes lane, so a local compose
     mesh has no vault container to talk to. Returning an empty entry list instead would
     read as "vault is running and empty", which invites the operator to add an entry that
-    would go nowhere — the exact inert-control trap this codebase has hit repeatedly.
+    would go nowhere — the exact do-nothing-control trap this codebase has hit repeatedly.
     """
     addr = os.environ.get("VAULT_ADDR", "").strip()
     r = _run(["docker", "ps", "--filter", f"label={_LBL_PROJECT}={project}",

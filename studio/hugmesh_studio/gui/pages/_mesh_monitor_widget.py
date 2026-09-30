@@ -13,7 +13,7 @@ page grows its own copy of them.
 The widget itself performs no I/O and starts no thread. It renders a
 ``core.mesh_monitor.MonitorSnapshot`` and emits what the operator pressed.
 
-TWO RENDERING RULES that a timed repaint makes load-bearing:
+TWO RENDERING RULES that a timed repaint makes essential:
 
 * Cells are written with ``set_cell`` (``_emulation_common``), which REUSES the item, so
   a 10 s repaint keeps the selection and the scroll anchor under the cursor. Rows are
@@ -32,7 +32,7 @@ page has always mounted — same header tuple, same column indices, same signals
 Replicas column and no per-row scale widget. The Replicas column is appended LAST rather
 than inserted, so ``_MON_COL_OPEN`` and its neighbours keep their values for every caller
 and every test. ``localmesh.py`` needed no change for any of this, and
-``test_localmesh_monitor`` PINS that: flip the default and it goes red.
+``test_localmesh_monitor`` PINS that: flip the default and it fails.
 
 The one thing a non-scaling mount did gain is ``scale_status`` — an empty, hidden
 QLabel that carries INLINE refusals (the no-modals rule). It exists on both mounts
@@ -135,6 +135,64 @@ _VIEW_DOWN_TIP = ("`make view-stop`: stop the background view session and sweep 
                   "port-forwards.")
 _VIEW_DOWN_IDLE_TIP = "No `make view` session is running."
 
+# The kind lane's stop, and its undo (#356, decision 44 = a). Both tooltips say what
+# the verb keeps, because the neighbouring `Delete DevOps lane` on the bring-up page
+# is the one that destroys and the two must never be confused.
+_HALT_TIP = (
+    "`make kind-halt`: STOP the Kubernetes lane without deleting it. Suspends "
+    "ArgoCD auto-sync and scales the mesh's Deployments and StatefulSets to 0.\n\n"
+    "The cluster, its PVCs, its Vault KV and its Casdoor identities are all KEPT — "
+    "this is not `Delete DevOps lane`. Resume puts back exactly what it suspends, "
+    "and names every Application it froze plus the state each was in.\n\n"
+    "coredns, kyverno, the storage provisioner and ArgoCD itself keep running: "
+    "scaling any of them to 0 would make Resume impossible.")
+_RESUME_TIP = (
+    "`make kind-resume`: undo a halt. Restores the exact replica counts it recorded "
+    "and re-arms auto-sync on exactly the Applications it suspended — never "
+    "'everything', so an Application suspended for some other reason stays "
+    "suspended.")
+#: Greyed-with-a-REASON, the idiom this widget already uses. Invariant I5 is that
+#: Unknown is never "no": a lane whose state could not be established must not offer
+#: a control that acts on it — that is the run-ungated-lane.sh exit-5 mistake in GUI
+#: form, where a census that errored gets treated as an answer.
+_HALT_TIP_UNKNOWN = (
+    "The Kubernetes lane's state could not be read, so this is disabled. Unknown is "
+    "not 'nothing running' — halting a lane nobody could census is exactly the "
+    "mistake this control refuses to make. Press Refresh, or check `kind get "
+    "clusters` and your kubeconfig.")
+_HALT_TIP_DOWN = ("The Kubernetes lane is not running — there is nothing to halt. "
+                  "Start it with `Start DevOps lane` on the bring-up step.")
+_RESUME_TIP_UNKNOWN = (
+    "The Kubernetes lane's state could not be read, so this is disabled. Press "
+    "Refresh, or check `kind get clusters` and your kubeconfig.")
+_RESUME_TIP_DOWN = ("The Kubernetes lane is not running, so there is nothing to "
+                    "resume into. A halted lane still reads as running — the halt "
+                    "keeps the cluster.")
+#: The lane IS halted. A halted lane still reads running=True, so without this the
+#: Studio offered Halt on an already-halted lane with no way to see that it was
+#: halted, and pressing it a second time was a normal operator action.
+_HALT_TIP_ALREADY = (
+    "This lane is already HALTED — `make kind-halt` left its record on the cluster. "
+    "Its workloads are at 0 and ArgoCD auto-sync is suspended on the Applications "
+    "the halt recorded.\n\nResume DevOps lane is the one you want. "
+    "`make kind-halt-status` prints exactly what was frozen and the state each "
+    "Application was in when it froze.")
+_RESUME_TIP_NOT_HALTED = (
+    "This lane is not halted — there is no `make kind-halt` record on the cluster, "
+    "so this control has nothing to put back. It deliberately will NOT re-arm "
+    "'everything': an Application suspended for some other reason is not this "
+    "control's to touch.")
+#: The halt record could not be READ, which is not the same as 'there is none'. Both
+#: controls stay offered and say so — kind-halt.sh itself refuses (exit 5) on this
+#: state, so the refusal happens where it can be explained properly.
+#: Deliberately worded so it shares no phrase with the lane-unknown tooltips above:
+#: two different uncertainties on the same button must not read as the same sentence,
+#: and a test that cannot tell them apart cannot pin either.
+_HALT_STATE_UNKNOWN = (
+    "\n\nNOTE: whether a halt record already exists on this cluster could not be "
+    "determined. Unknown is not the same as 'there is none' — run "
+    "`make kind-halt-status` before pressing this.")
+
 
 def _grey_note(text: str) -> QtWidgets.QLabel:
     lbl = QtWidgets.QLabel(text)
@@ -163,6 +221,13 @@ class MeshMonitorWidget(QtWidgets.QWidget):
     #: (row key, target replicas) — emitted by Apply. The MOUNTING page runs it off the
     #: GUI thread; this widget never shells anything.
     scale_requested = Signal(str, int)
+    #: The kind lane's NON-destructive stop and its undo (#356). They live HERE, on the
+    #: monitor, because this is the screen that reads BOTH lanes and therefore the
+    #: screen an operator is on when they decide to stop something — the bring-up page
+    #: cannot even tell them what is running. Like every other control on this widget
+    #: they only EMIT; the mounting page owns the shelling.
+    halt_requested = Signal()
+    resume_requested = Signal()
 
     def __init__(self, parent=None, *, scaling: bool = False):
         super().__init__(parent)
@@ -223,6 +288,15 @@ class MeshMonitorWidget(QtWidgets.QWidget):
                                  "the clipboard.")
         self.copy_btn.clicked.connect(self._copy_clicked)
         frow.addWidget(self.copy_btn)
+        # The kind lane's stop. NO ellipsis and no modal: it is not destructive.
+        self.halt_btn = QtWidgets.QPushButton("Halt DevOps lane")
+        self.halt_btn.setToolTip(_HALT_TIP)
+        self.halt_btn.clicked.connect(self.halt_requested.emit)
+        frow.addWidget(self.halt_btn)
+        self.resume_btn = QtWidgets.QPushButton("Resume DevOps lane")
+        self.resume_btn.setToolTip(_RESUME_TIP)
+        self.resume_btn.clicked.connect(self.resume_requested.emit)
+        frow.addWidget(self.resume_btn)
         lay.addWidget(footer)
         self.footer = footer
 
@@ -237,6 +311,9 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         self._scale_targets: dict[str, int] = {}
         self._scale_busy = False
         self.set_view_session(False)
+        # No snapshot yet is UNKNOWN, not 'down'. The halt must not be offered
+        # before anything has been read (I5).
+        self.set_kind_lane(None, "no snapshot has been taken yet", halted=None)
 
     # ── what the page reads ──────────────────────────────────────────────────────
     @property
@@ -294,6 +371,45 @@ class MeshMonitorWidget(QtWidgets.QWidget):
         else:
             self.view_up_btn.setToolTip(_VIEW_UP_TIP)
             self.view_down_btn.setToolTip(_VIEW_DOWN_IDLE_TIP)
+
+    # ── the kind lane's halt/resume gate ─────────────────────────────────────────
+    def set_kind_lane(self, running, reason: str = "", halted=None) -> None:
+        """Arm Halt and Resume from the kind lane's TWO tri-states, never a boolean.
+
+        ``running`` is ``mesh_monitor.LaneState.running``: True, False, or **None**
+        for "could not be established". Invariant I5 is that unknown is never "no",
+        and this is where that bites hardest — a control that acts on an unknown lane
+        is the run-ungated-lane.sh exit-5 mistake wearing a button. So None disables
+        BOTH, and says why in the tooltip rather than leaving a dead control with a
+        stale sentence on it.
+
+        ``halted`` is ``LaneState.halted``, the SECOND tri-state, and it exists
+        because a halted lane still reports running=True — the halt keeps the
+        cluster. Without it the Studio offered Halt on an already-halted lane and
+        Resume on one that was never halted, with nothing on screen saying which it
+        was. True greys Halt and points at Resume; False greys Resume; **None** (the
+        record could not be read) leaves both offered and says so, because unknown
+        is not 'not halted' here either.
+
+        Both tooltips are rewritten on EVERY branch. Writing only the disabled one
+        left the enabled button explaining why it was disabled, which is the bug
+        set_view_session above already had to fix once."""
+        live = running is True
+        self.halt_btn.setEnabled(live and halted is not True)
+        self.resume_btn.setEnabled(live and halted is not False)
+        if live:
+            unknown = _HALT_STATE_UNKNOWN if halted is None else ""
+            self.halt_btn.setToolTip(
+                _HALT_TIP_ALREADY if halted is True else _HALT_TIP + unknown)
+            self.resume_btn.setToolTip(
+                _RESUME_TIP_NOT_HALTED if halted is False else _RESUME_TIP + unknown)
+        elif running is None:
+            why = (" (" + reason + ")") if reason else ""
+            self.halt_btn.setToolTip(_HALT_TIP_UNKNOWN + why)
+            self.resume_btn.setToolTip(_RESUME_TIP_UNKNOWN + why)
+        else:
+            self.halt_btn.setToolTip(_HALT_TIP_DOWN)
+            self.resume_btn.setToolTip(_RESUME_TIP_DOWN)
 
     # ── the scale busy guard ─────────────────────────────────────────────────────
     def set_scale_busy(self, busy: bool, text: str = "") -> None:
@@ -534,11 +650,11 @@ class MeshMonitorProbe(QtCore.QThread):
     Until then the drift the duplication invites is PINNED rather than hoped about:
     ``test_localmesh_monitor.test_the_two_monitor_probes_have_not_drifted`` compares
     the two classes' constructor signature, signal and both run() paths, so a change to
-    one that the other does not get goes red.
+    one that the other does not get fails.
 
     The shape is identical on purpose — ``mesh_monitor.snapshot()`` is `kind get
     clusters` + ONE `kubectl get … -A -o json` + `docker inspect` + `docker compose
-    ps`, each bounded and together up to ~25 s on a wedged daemon, so it is never
+    ps`, each bounded and together up to ~25 s on a hung daemon, so it is never
     called inline.
 
     Never raises: snapshot() already folds every failure into LaneState.error, and an
@@ -568,7 +684,7 @@ class MeshScaleWorker(QtCore.QThread):
 
     `docker compose up --scale` pulls and starts containers; `kubectl scale` waits on
     the API server. Neither belongs on the thread that has to keep repainting the table
-    that shows the result, and a wedged daemon would freeze the window for the whole
+    that shows the result, and a hung daemon would freeze the window for the whole
     ceiling (``SCALE_TIMEOUT_S``).
     """
     done = Signal(bool, str)

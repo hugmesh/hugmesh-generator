@@ -1,0 +1,80 @@
+# backing-service-endpoints (hugmesh-backend) — the ENDPOINT INDIRECTION for the
+# managed-backing-service axis (specs/cluster/backing-services.yaml).
+#
+# WHAT IT IS. One ConfigMap PER NAMESPACE, same name and same key scheme in each —
+# operator DECISION 34a, 2026-09-17 (hugmesh-generator#347, hugmesh-admin-bff-api#9).
+# The recommendation put to the operator was a single object in hugmesh-backend; the
+# operator DECLINED it and chose the per-namespace fan-out, accepting its cost (a
+# fan-out writer in admin-bff + one RBAC grant per namespace) deliberately. Do not
+# "simplify" this back to one object — that is the option that was turned down.
+#
+# WHY A CONFIGMAP AT ALL. Today every consumer's Postgres address is a literal
+# `value:` baked into its own Deployment (manifests/<svc>/deployment.yaml), which is
+# what the BUILD-TIME gate `gate_backing_services()` rewrites. At RUNTIME those
+# objects belong to ArgoCD with `prune: true, selfHeal: true`, so an effector that
+# patched a Deployment env would be reverted within a sync interval. The runtime seam
+# therefore has to be an indirection the manifests already read and ArgoCD already
+# exempts — this object, plus the `ignoreDifferences` keystone in
+# apps/17-backing-service-endpoints.yaml.
+#
+# ⚠ HOW A FLIP REACHES A RUNNING POD: **A TARGETED ROLLING RESTART.** Operator
+# DECISION 34b, same date. `configMapKeyRef` env vars are resolved ONCE, when the
+# kubelet creates the container — editing this ConfigMap changes NOTHING in a running
+# pod, and ArgoCD still reports the Deployment Synced because its spec did not move.
+# So the admin-bff effector, after merge-patching the keys below, ALSO patches a
+# pod-template annotation (`hugmesh.net/backing-service-generation: <ledger
+# generation>`) onto exactly that service's consumer Deployment(s); the Deployment
+# controller then performs a normal rolling update and the new pods read the new
+# value. Flipping postgres-wiki-bff restarts ONE Deployment, not forty.
+# NEVER write this down as "no restart" or "a live re-dial" — it is neither. It is a
+# targeted rolling restart, and the restart is the mechanism, not an accident.
+#
+# BYTE-IDENTICAL SEED (backing-services.yaml §"THE #1 INVARIANT"). Every value below
+# is character-for-character the literal that is in the consumer Deployment today, so
+# introducing this object changes nothing on a self-hosted mesh. Verified against
+# specs/cluster/manifests/<svc>/deployment.yaml on 2026-09-17:
+#   admin-bff  :253 / :265   user-bff :295 / :307   mod-bff  :182 / :194
+#   forum-bff  :158 / :170   wiki-bff :132 / :144
+#
+# KEY SCHEME: `<service-id>.<field>`, where <service-id> is the
+# specs/cluster/backing-services.yaml id VERBATIM (postgres-admin-bff, not
+# admin-bff) — the same id `_MGD_TIER12_IDS` accepts and the same id the
+# `backing_service_mode` ledger row carries, so no translation table can rot.
+# TWO keys per service, never one: SPRING_R2DBC_URL is the runtime handle and
+# SPRING_LIQUIBASE_URL is a SEPARATE JDBC handle used once at startup —
+# backing-services.yaml:26-28 already states the trap ("miss one and Liquibase or
+# the runtime pool silently targets the wrong host").
+#
+# NOTHING READS THESE KEYS YET, AND THAT IS THE CORRECT ORDER. Converting the five
+# consumer Deployments from a literal `value:` to a `configMapKeyRef` is a SEPARATE
+# slice that must land together with the build-time writer (`_mgd_rewrite_env` fails
+# OPEN on a `valueFrom:` block and would report success while baking the old address)
+# and with tests/managed-services/test-managed-services-gate.sh. A Deployment that
+# references a key which does not exist yet does not fall back — the container fails
+# to start (CreateContainerConfigError). ConfigMap FIRST, consumers after.
+# Remaining boxes are numbered on hugmesh-admin-bff-api#9.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backing-service-endpoints
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: backing-service-endpoints
+    app.kubernetes.io/component: backing-services
+    app.kubernetes.io/part-of: hugmesh.net
+data:
+  # ── postgres-admin-bff ─────────────────────────────────────────────────────
+  postgres-admin-bff.r2dbc-url: "r2dbc:postgresql://admin-bff-db.hugmesh-backend.svc.cluster.local:5432/adminbff"
+  postgres-admin-bff.liquibase-url: "jdbc:postgresql://admin-bff-db.hugmesh-backend.svc.cluster.local:5432/adminbff"
+  # ── postgres-user-bff ──────────────────────────────────────────────────────
+  postgres-user-bff.r2dbc-url: "r2dbc:postgresql://user-bff-db.hugmesh-backend.svc.cluster.local:5432/userbff"
+  postgres-user-bff.liquibase-url: "jdbc:postgresql://user-bff-db.hugmesh-backend.svc.cluster.local:5432/userbff"
+  # ── postgres-mod-bff ───────────────────────────────────────────────────────
+  postgres-mod-bff.r2dbc-url: "r2dbc:postgresql://mod-bff-db.hugmesh-backend.svc.cluster.local:5432/modbff"
+  postgres-mod-bff.liquibase-url: "jdbc:postgresql://mod-bff-db.hugmesh-backend.svc.cluster.local:5432/modbff"
+  # ── postgres-forum-bff ─────────────────────────────────────────────────────
+  postgres-forum-bff.r2dbc-url: "r2dbc:postgresql://forum-bff-db.hugmesh-backend.svc.cluster.local:5432/forumbff"
+  postgres-forum-bff.liquibase-url: "jdbc:postgresql://forum-bff-db.hugmesh-backend.svc.cluster.local:5432/forumbff"
+  # ── postgres-wiki-bff ──────────────────────────────────────────────────────
+  postgres-wiki-bff.r2dbc-url: "r2dbc:postgresql://wiki-bff-db.hugmesh-backend.svc.cluster.local:5432/wikibff"
+  postgres-wiki-bff.liquibase-url: "jdbc:postgresql://wiki-bff-db.hugmesh-backend.svc.cluster.local:5432/wikibff"

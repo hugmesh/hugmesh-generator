@@ -23,6 +23,7 @@ from .. import console
 from . import build_window
 from ...core import build_sessions
 from ...core import secret_files
+from ...core.domain_services import restart_gate_reason
 
 # status id -> (symbol, colour) — the ProgressPage glyph/colour language, extended
 # with the session-only states (unknown/unreadable grey/amber).
@@ -197,6 +198,31 @@ class _SessionDetailDialog(QtWidgets.QDialog):
         if not s.error_tail and row.status == "failed":
             parts.append("\n(no error tail was captured for this run)")
         return "\n".join(parts)
+
+
+def _session_services_refusal(session) -> str:
+    """"" when this session may be restarted; otherwise the per-domain services refusal
+    (#495), naming every domain its recorded configuration never configured.
+
+    Parses the session's own stored config the same way
+    ``StudioWizard.start_build_from_session`` does — the RECORD is what a restart
+    re-dispatches, never the wizard's current cfg, so reading anything else here would
+    gate the wrong object. A record that cannot be parsed is ALLOWED through: this
+    function's job is the services question, and turning a parse failure into a refusal
+    would break restart for every record shape it does not understand. The dispatch
+    preflight (``ProgressPage.initializePage``) is what refuses an unusable record.
+
+    Deferred import: ``core.worklist`` pulls the whole config layer in, and this module
+    is imported by the Sessions screen on every start."""
+    cfg_dict = getattr(session, "config", None)
+    if not isinstance(cfg_dict, dict):
+        return ""
+    try:
+        from ...core import worklist as worklist_mod
+        base = worklist_mod.WorklistConfig.from_dict(cfg_dict).base
+    except Exception:                          # noqa: BLE001 — see docstring
+        return ""
+    return restart_gate_reason(base)
 
 
 def _tail_file(path: str, lines: int = 200) -> str:
@@ -555,13 +581,29 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
     @staticmethod
     def can_restart(session) -> tuple[bool, str]:
         """RESTART gate: refuse a genuinely-running session (another Studio process);
-        a deleted workdir means only REDO applies (the caller offers it)."""
+        a deleted workdir means only REDO applies (the caller offers it); and refuse a
+        recorded configuration that names a domain with no recorded service
+        configuration (#495).
+
+        The services arm is NARROW and ``core.domain_services.restart_gate_reason``
+        owns the narrowing: ``start_build_from_session`` jumps straight to the terminal
+        progress page, which dispatches on arrival, so no wizard page — and therefore
+        no gate — stands between this button and a build. But every session recorded
+        before ``domain_services_reviewed`` existed carries no marker at all, and
+        refusing those would refuse every historical restart over a question nobody was
+        asked. So it bites only for a configuration produced under this feature (one
+        that already carries at least one reviewed name) that has since gained an
+        unconfigured domain. Its remedy is Redo, which is the route that exists from
+        here: Redo loads the same configuration into the wizard, where the step is."""
         if build_sessions.is_active(session):
             return False, ("This session appears to be running in another Studio "
                            "process — stop it there first.")
         if not os.path.isdir(session.workdir):
             return False, ("Its artifact directory no longer exists:\n"
                            f"{session.workdir}\nUse Redo to build it as a new session.")
+        why = _session_services_refusal(session)
+        if why:
+            return False, why
         return True, ""
 
     # ---- actions ---------------------------------------------------------------------
