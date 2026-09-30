@@ -351,6 +351,28 @@ for BUILDER in "${BUILDERS[@]}"; do
     done
     rm -rf "${SYSROOT}"
   done
+
+  # ── pass C: a metachar-bearing brand value must round-trip verbatim (issue
+  # #491 — build-rpi5-stage4.sh alone interpolated BRAND_TITLE/GAMES_DOMAIN/
+  # CLUSTER_DOMAIN/BRAND/ORG raw on the REPLACEMENT side of this same sed
+  # chain instead of routing them through _sed_rep_escape like every other
+  # builder; a title containing sed's own delimiter/metachars would corrupt or
+  # truncate the baked config instead of surviving literally). Only BRAND_TITLE
+  # is exercised here (GAMES_DOMAIN is builder-divergent — see the note above
+  # REWRITE_IN — so it is not in this shared matrix). ─────────────────────────
+  META_TITLE='A&B|C\Systems'
+  SYSROOT="$(mktemp -d)"; make_fixture "${SYSROOT}"
+  BRAND=acme BRAND_TITLE="${META_TITLE}" CLUSTER_DOMAIN=example.org ORG=hugmesh \
+    GAMES_DOMAIN=games.example.org rebrand_sysroot
+  roots=("${SYSROOT}/etc/hugmesh/rebrand-fixture")
+  [ "${walks_cluster}" -eq 1 ] && roots+=("${SYSROOT}/var/lib/hugmesh/cluster/rebrand-fixture")
+  for r in "${roots[@]}"; do
+    got="$(sed -n 's/^title: //p' "${r}/matrix-rewrite.txt")"
+    [ "${got}" = "${META_TITLE}" ] \
+      && ok "${BUILDER}[metachar]:${r#${SYSROOT}/}: title carries '&|\\' verbatim" \
+      || bad "${BUILDER}[metachar]:${r#${SYSROOT}/}: title became '${got}', expected '${META_TITLE}' verbatim"
+  done
+  rm -rf "${SYSROOT}"
 done
 
 echo

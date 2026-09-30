@@ -212,7 +212,7 @@ class HomePage(QtWidgets.QWizardPage):
         # combo strands its "Seed Stack Code" caption over an empty slot —
         # network.py's orphan-caption rule, stated on the egress section there
         # ("_row()'s 'Egress VPN' caption … is not a gate member"); named rather than
-        # cited by line so it cannot rot on that module's next edit.
+        # cited by line so it cannot go stale on that module's next edit.
         self.seed_row = _row("Seed Stack Code", self.seed)
         self.seed_row.setToolTip(_SEED_HELP)
         hl.addWidget(self.seed_row)
@@ -593,7 +593,7 @@ class HomePage(QtWidgets.QWizardPage):
         # local_pass — which on a mesh flow rides the shared base that _materialize_one
         # deepcopies onto every entry, i.e. a desktop password baked into every node image.
         #
-        # Emission-neutral by construction, which is why this is a hide and not a
+        # Leaves the output unchanged by construction, which is why this is a hide and not a
         # narrowing of the FIELD: local_user stays at its dataclass default (so
         # --local-user <invoking user> is emitted exactly as before — the x86 builder honours it on
         # every role, :1732 — `if ${STANDALONE} || [ -n "${LOCAL_USER}" ] || …`, with no

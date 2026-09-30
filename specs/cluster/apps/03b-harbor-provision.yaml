@@ -17,6 +17,22 @@ spec:
     repoURL: https://github.com/hugmesh/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/harbor
+    kustomize:
+      # THE MESH VAULT BASE SEGMENT — issue #285, decision 38 = B on #347. See
+      # apps/04-external-secrets-config.yaml for the full mechanism note: ArgoCD
+      # serves the manifests from git (identical for every mesh), this Application
+      # object is applied from the image's BAKED tree, so the brand reaches the
+      # cluster through the `value:` below, which rebrand_sysroot() rewrites to
+      # <BRAND>. Byte no-op at the default brand.
+      patches:
+        - target:
+            group: batch
+            version: v1
+            kind: Job
+            name: harbor-provision
+
+          patch: |-
+            - { op: replace, path: /metadata/annotations/platform.hugmesh.net~1vault-base, value: "hugmesh" }
   destination:
     server: https://kubernetes.default.svc
     namespace: hugmesh-pki

@@ -1,0 +1,100 @@
+# backing-service-endpoints (hugmesh-forum) — the SIXTH namespace on the
+# managed-backing-service axis. Operator DECISION 34a, 2026-09-17
+# (hugmesh-generator#347 answer table, hugmesh-admin-bff-api#9): ONE ConfigMap
+# PER NAMESPACE, same name and same key scheme in each of the SIX namespaces that
+# hold a Postgres address — NOT the single hugmesh-backend object that was
+# recommended and DECLINED. The full contract is in
+# manifests/backing-service-endpoints/endpoints-hugmesh-backend.yaml.
+#
+# WHY IT LIVES HERE AND NOT IN manifests/backing-service-endpoints/. hugmesh-forum
+# is created by THIS service's own namespace.yaml and only exists when the optional
+# service is installed (13a ships `installed:"false"`). Delivering this object from
+# the always-on apps/17-backing-service-endpoints.yaml Application would leave that
+# Application permanently unable to sync on a default mesh — a red nobody can
+# explain. It ships from the forum Application instead, so it appears exactly when
+# the namespace does. tests/scripts/test-backing-service-endpoints-closure.sh knows
+# this placement and FAILS if this file, or its kustomization.yaml line, is removed.
+#
+# WHY `data` IS EMPTY — measured 2026-09-17 against specs/cluster. TWO independent
+# reasons, and both have to stay written down:
+#
+#   1. phpbb's address is NOT a URL. phpbb.yaml:60 carries
+#      `PHPBB_DB_HOST=phpbb-db.hugmesh-forum.svc.cluster.local` with the port, name,
+#      user and password as four SEPARATE env lines inside an envFrom ConfigMap —
+#      there is no single `r2dbc:`/`jdbc:` handle to point a key at, and the key
+#      scheme is `<id>.r2dbc-url` / `<id>.liquibase-url`. Giving this namespace a key
+#      means first deciding what a bare-host managed endpoint looks like on this
+#      axis, which is a design nobody has written.
+#      (forum-bff's OWN Postgres, postgres-forum-bff, IS seeded — but it lives in
+#      hugmesh-backend with the other BFFs, not here. Only phpBB and phpbb-db live
+#      in this namespace.)
+#   2. phpbb-db has no specs/cluster/backing-services.yaml REGISTRY ID, and the key
+#      prefix is that id VERBATIM. Minting one is a registry decision nobody has made
+#      (tier, dbName, esoSecret, vaultPath, and the managed AWS/Azure target); an id
+#      invented in a manifest is correct on the day it is written and wrong forever
+#      after — the `object-store` vs `velero-objectstore` split
+#      (hugmesh-admin-bff-api#58) is that failure already happening once. Recorded on
+#      the issues, not invented here.
+#
+# THE OBJECT AND ITS GRANT SHIP ANYWAY, DELIBERATELY. Decision 34a is that the
+# CONTRACT is per-namespace: the object and the writer's grant exist in every
+# namespace on the axis, so the fan-out writer needs no special case the day a key
+# appears here. That is the cost the operator accepted; this file is part of paying
+# it in full rather than three-sixths of it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backing-service-endpoints
+  namespace: hugmesh-forum
+  labels:
+    app.kubernetes.io/name: backing-service-endpoints
+    app.kubernetes.io/component: backing-services
+    app.kubernetes.io/part-of: hugmesh.net
+data: {}
+---
+# The fan-out writer's grant for THIS namespace — resourceNames-closed to the one
+# object above. Subject: ServiceAccount `backups-effector` in hugmesh-backend, the SA
+# the admin-bff pod already runs as (manifests/admin-bff-api/deployment.yaml:51); a
+# RoleBinding may name a ServiceAccount from another namespace, which is how one SA
+# gets the whole fan-out without a ClusterRole.
+#
+# NO `deployments` RULE, on purpose: no service in this namespace has a ConfigMap key
+# yet, so decision 34b's targeted rolling restart has nothing to roll here. The
+# deployments grant is added by the slice that gives this namespace its first key —
+# an open `deployments: patch` handed out ahead of a need is exactly the grant this
+# design refuses.
+#
+# INERT AT DEFAULTS: admin-bff ships the effector dark
+# (`app.backing-services.effector.enabled=false`).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backing-service-endpoints-writer
+  namespace: hugmesh-forum
+  labels:
+    app.kubernetes.io/name: backing-service-endpoints
+    app.kubernetes.io/component: backing-services
+    app.kubernetes.io/part-of: hugmesh.net
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["backing-service-endpoints"]
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backing-service-endpoints-writer
+  namespace: hugmesh-forum
+  labels:
+    app.kubernetes.io/name: backing-service-endpoints
+    app.kubernetes.io/component: backing-services
+    app.kubernetes.io/part-of: hugmesh.net
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: backing-service-endpoints-writer
+subjects:
+  - kind: ServiceAccount
+    name: backups-effector
+    namespace: hugmesh-backend

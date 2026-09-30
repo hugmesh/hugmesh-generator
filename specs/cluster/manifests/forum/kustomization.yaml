@@ -7,6 +7,11 @@ resources:
   - phpbb-db.yaml           # Postgres 16 (hardened, least-privilege app role)
   - phpbb.yaml              # phpBB + hugmesh/forum-api extension (backend-only)
   - admin-sync-job.yaml     # Casdoor roles -> phpBB groups (declarative, stub-aware)
+  # Operator DECISION 34a (2026-09-17): one backing-service-endpoints ConfigMap
+  # PER NAMESPACE + the fan-out writer's resourceNames-closed grant. It ships from
+  # HERE, not from the always-on manifests/backing-service-endpoints/, because
+  # hugmesh-forum only exists when this optional service is installed.
+  - backing-service-endpoints.yaml
 
 # phpbb-db owns its hardening + the least-privilege app login role via initdb
 # (runs once on an empty data dir, alphabetical order):

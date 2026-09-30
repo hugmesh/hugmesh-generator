@@ -6,7 +6,7 @@
      configure-superusers / domain-users TABLE screen. On the default internal-only
      path, go to SYSTEM IDENTITY."
 
-The load-bearing half of this ask is the CARD TEXT, and it is only worth anything if it
+The half that matters of this ask is the CARD TEXT, and it is only worth anything if it
 is true. Every claim below is read off the real key channel rather than written to
 sound reassuring:
 

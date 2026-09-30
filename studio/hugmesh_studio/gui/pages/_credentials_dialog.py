@@ -17,8 +17,12 @@ CSPRNG value, never a fixed literal) and read here from the run-state file that
 script writes — plus the superadmin MINTED into keys-out/vault/secrets.json by the
 Studio's own bring-up. Nothing here can prove a shown value opens the running mesh
 unless a seed completed after it was written, so the banner and the Live column mark
-every row live / stale / halted / not seeded / not on this lane / unverified /
-unknown, and the "Start with …" lead is shown ONLY when the mesh is proven seeded.
+every row live / stale / halted / not seeded / not on this lane / no roles /
+unverified / unknown, and the "Start with …" lead is shown ONLY when the mesh is
+proven seeded. On the kind lane those markers are PER ROW and come from the running
+cluster's own Casdoor (#539): a persona the cluster does not hold reads "not seeded"
+instead of being offered with a password, which is the state that produced the
+"can't log into kind mesh e2e users" report.
 Nothing is written to disk or logged; the clipboard is only touched on an explicit
 click.
 """
@@ -151,7 +155,8 @@ class CredentialsDialog(QtWidgets.QDialog):
             # 31-row table without hiding the rest — unless the assessment says it
             # is not there, in which case bold would be a lie in a bigger font.
             featured = (roster.operator and u.username == roster.operator
-                        and u.live not in (_truth.NOT_ON_LANE, _truth.NOT_SEEDED))
+                        and u.live not in (_truth.NOT_ON_LANE, _truth.NOT_SEEDED,
+                                           _truth.NO_ROLES))
             for col, text in enumerate(cells):
                 item = QtWidgets.QTableWidgetItem(text)
                 if featured:

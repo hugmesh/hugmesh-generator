@@ -34,6 +34,7 @@ import shlex
 
 from ..core import emulation as emu
 from ..core import qemu_devices, qemu_tests
+from ..core.domain_services import session_boot_gate_reason
 from . import model
 
 __all__ = ["QemuScreen", "COMPLETE_BADGE", "MAKE_TARGET", "VERDICT_LEGEND",
@@ -113,12 +114,24 @@ def planned_table(plan: emu.EmulationPlan) -> tuple[list[str], list[list[str]]]:
     return headers, rows
 
 
-def run_hint_lines(plan: emu.EmulationPlan) -> list[str]:
+def refused_boot_lines(boot_refusal: str) -> list[str]:
+    """What a boot hint becomes when the session is REFUSED (#637): the refusal
+    itself, never a command to paste — handing over the argv the GUI refuses to run
+    would make this face the way around that gate."""
+    return ["! refused — this session's images are not booted from here:",
+            "  " + boot_refusal]
+
+
+def run_hint_lines(plan: emu.EmulationPlan, boot_refusal: str = "") -> list[str]:
     """The copy-ready whole-matrix run, plus the same lane's make-target spelling.
 
     The argv is ``emulation.run_argv`` VERBATIM — this module builds no command of
     its own, which is what keeps the printed hint and the GUI's spawn identical.
+    ``boot_refusal`` (``core.domain_services.session_boot_gate_reason``, #637)
+    replaces both with the refusal.
     """
+    if boot_refusal:
+        return refused_boot_lines(boot_refusal)
     return [
         f"run the whole TEST matrix for {plan.session_name} — boot every row, "
         "assert, power off (paste into a shell; this screen spawns nothing):",
@@ -190,7 +203,7 @@ def legend_lines(st: emu.MeshStatus) -> list[str]:
 
 
 def row_detail_lines(plan: emu.EmulationPlan, st: emu.MeshStatus,
-                     label: str) -> list[str]:
+                     label: str, boot_refusal: str = "") -> list[str]:
     """One row's verdict WITH its reason, plus the two per-row copy-ready argv."""
     row = st.row(label)
     planned = plan.row(label)
@@ -207,6 +220,8 @@ def row_detail_lines(plan: emu.EmulationPlan, st: emu.MeshStatus,
         lines.append(f"registry  container {dev.container or '-'} · booted "
                      f"{dev.started_at or '-'} · ssh port "
                      f"{dev.ssh_host_port or 'not published'}")
+    if boot_refusal:                  # #637: both per-row hints BOOT the row
+        return lines + [""] + refused_boot_lines(boot_refusal)
     lines += [
         "",
         "boot JUST this row and keep it up (artifacts and work dir pinned; "
@@ -234,11 +249,13 @@ class QemuScreen:
         self._default = -1
         self._plan: emu.EmulationPlan | None = None
         self._detail = ""                # the label whose detail is open
+        self._refusal = ""               # #637: the picked session's boot refusal
 
     def enter(self, j) -> None:
         self._sub = "pick"
         self._plan = None
         self._detail = ""
+        self._refusal = ""
         # only sessions that hold bootable images: an empty session cannot be
         # tested and is not offered (the mesh-emulation picker's rule).
         self._sessions = qemu_tests.discover_sessions(j.generator_dir,
@@ -264,13 +281,13 @@ class QemuScreen:
         assert plan is not None
         st = self._status()
         if self._sub == "detail" and self._detail:
-            return row_detail_lines(plan, st, self._detail) + \
+            return row_detail_lines(plan, st, self._detail, self._refusal) + \
                 ["", "(r = refresh · q = back to the row list)"]
         out = [f"session {plan.session_name} — {len(plan.rows)} planned "
                f"device(s); work dir {plan.work_dir}", ""]
         headers, rows = planned_table(plan)
         out += model.format_table(headers, rows)
-        out += [""] + run_hint_lines(plan)
+        out += [""] + run_hint_lines(plan, self._refusal)
         out += ["", f"verdicts — {st.summary()}"]
         headers, rows = results_table(st)
         out += model.format_table(headers, rows)
@@ -300,6 +317,8 @@ class QemuScreen:
                     j.status = f"no such session: {line!r}"
                     return
             self._plan = plan_for(j.generator_dir, self._sessions[index])
+            # the SAME seam the GUI's QEMU page reads (#637)
+            self._refusal = session_boot_gate_reason(self._sessions[index].name)
             self._sub = "rows"
             return
         if self._sub == "detail":

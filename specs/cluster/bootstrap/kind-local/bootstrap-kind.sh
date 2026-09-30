@@ -49,7 +49,27 @@ CLUSTER_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"       # specs/cluster (this dir
 REPO_ROOT="$(cd "${CLUSTER_DIR}/../.." && pwd)"        # repo root (for `git show <branch>:<path>`)
 
 CLUSTER_NAME="${KIND_CLUSTER_NAME:-hugmesh-local}"
-ARGOCD_VERSION="${ARGOCD_VERSION:-stable}"
+# ArgoCD version PIN (issue #394) — see bootstrap.sh (the sibling this script
+# reuses the install/re-namespace logic from) for the full rationale and the
+# bump procedure. Short version: `stable` silently tracks upstream, and
+# argoproj/argo-cd#29103 (merged 2026-09-09) flips the default diff strategy
+# to Server-Side Diff for every ServerSideApply=true Application the moment
+# `stable` advances past it. Pinned to v3.5.3, MEASURED as what
+# kind-hugmesh-local actually runs today (2026-09-18) and confirmed to
+# predate #29103.
+#
+# DECISION 65 = per-app (operator, 2026-09-18, #347): when the pin is bumped
+# past #29103, every deployed ServerSideApply=true Application gets the
+# per-app `compare-options: ServerSideDiff=true` annotation, NOT the global
+# `controller.diff.server.side` controller flag — see bootstrap.sh for the
+# full rationale and the current per-profile app list (harbor already
+# annotated; ingress-nginx-internal and kyverno are the other two deployed on
+# THIS kind profile today). Recorded here, not applied: no live-behaviour
+# change from this comment.
+#
+# Bump: diff the target tag's install.yaml first, then re-run
+# tests/scripts/test-argocd-serverside-diff.sh.
+ARGOCD_VERSION="${ARGOCD_VERSION:-v3.5.3}"
 ARGOCD_NS="${ARGOCD_NS:-devops}"
 GITOPS_REPO_DEFAULT="https://github.com/hugmesh/hugmesh-generator.git"
 REPO="${HUGMESH_GITOPS_REPO:-${GITOPS_REPO_DEFAULT}}"

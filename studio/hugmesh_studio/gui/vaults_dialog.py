@@ -14,13 +14,13 @@ them would misreport one of them (see core/vaults.py for the split):
 * VAULT ENTRIES come from a cluster-lane service. On the docker mesh there is no vault
   container at all, so the tab renders the honest blocker + remedy instead of an empty
   table. An empty table would read as "vault is running and has nothing in it", inviting
-  an operator to add an entry that goes nowhere — the inert-control trap this codebase
+  an operator to add an entry that goes nowhere — the do-nothing-control trap this codebase
   keeps hitting.
 
-TWO RULES INHERITED FROM EARLIER BUGS IN THIS TREE, both load-bearing:
+TWO RULES INHERITED FROM EARLIER BUGS IN THIS TREE, both relied on:
 
 1. EVERY docker call is off the GUI thread. `docker system df -v` alone can take tens of
-   seconds on a large install and a wedged daemon blocks for the full timeout; running
+   seconds on a large install and a hung daemon blocks for the full timeout; running
    that inline is precisely the freeze already fixed on the local-mesh and progress
    pages. The probe is owned via own_probe() so it is released rather than merely
    re-referenced (a probe still running when its page dies takes the Studio down).
@@ -43,7 +43,7 @@ class _VaultsProbe(QtCore.QThread):
     """Gather everything the dialog renders, off the GUI thread.
 
     One probe for BOTH tabs on purpose: they are read in the same breath, and two
-    probes would double the wedged-daemon exposure for no benefit. Never raises — an
+    probes would double the hung-daemon exposure for no benefit. Never raises — an
     exception escaping run() would leave the dialog stuck on 'Loading…' forever."""
 
     result = Signal(object)          # (volumes, vault_cap, docker_cap)
