@@ -156,9 +156,9 @@ rather than judged by its text. The first triage (2026-09-09) found 24 done, 19 
 
 | | Count | Meaning |
 |---|---:|---|
-| ✅ already done | 50 | the work landed; the comment outlived it |
+| ✅ already done | 54 | the work landed; the comment outlived it |
 | 🚧 isolated, fixable | 0 | one person, one repo, no decision needed |
-| 🔭 needs coordination | 63 | spans repos, or waits on a decision |
+| 🔭 needs coordination | 59 | spans repos, or waits on a decision |
 | — not work | 59 | a marker, a legend, or a deliberate placeholder |
 
 The full triage is in [`roadmap-todos.tsv`](roadmap-todos.tsv), one row per comment.
@@ -172,8 +172,9 @@ Every isolated row has been either fixed or reclassified. The last few went like
 - The `hugmesh-actions` token mint had already landed.
 - The `hugmesh-gateway` mTLS profile was already fixed at the root. A named fail-fast is
   open in hugmesh-gateway#42.
-- `bundle_source` in Studio and the `hugmesh-games` input gates 2/3 both wait on
-  decisions that their own TODOs spell out, so they moved to needs-coordination.
+- The `hugmesh-games` input gates 2/3 had shipped (PR #14, gate 3 off by default), so
+  their four rows are done. `bundle_source` in Studio waits on decisions its own TODO
+  spells out, so it moved to needs-coordination.
 
 Open fixes for needs-coordination rows are named on the row itself:
 
