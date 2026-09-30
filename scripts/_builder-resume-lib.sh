@@ -272,10 +272,38 @@ hmr_stale_mount_refuse() {
     _hmr_err "then re-run (add --resume back if you had it)."
 }
 
-# hmr_verify_detached <path>... — after umount: 0 when none of the paths is
-# still a mount point; otherwise warns per path and returns 1. `umount -l`
-# detaches from the namespace immediately, so a path that still answers
-# `mountpoint` here was never detached at all.
+# hmr_mount_layers <path> — how many mounts sit on exactly this path (a bind
+# stacked three times answers 3; an unmounted directory answers 0).
+hmr_mount_layers() {
+    local path="${1:?path}"
+    findmnt -rn -o TARGET 2>/dev/null | grep -a -c -x -F -e "${path}" || true
+}
+
+# hmr_umount_own <path> — detach ONE layer from <path>: the one this build
+# made. `umount -l` peels the topmost mount only, so layers somebody else (an
+# earlier crashed run, the operator) stacked beneath stay where they were, and
+# the stale-mount refusal at the next Extract phase names them. The detach is
+# VERIFIED by counting layers before and after (`umount -l ... || true` is
+# silent): a count that did not go down is said out loud. Never fails the
+# caller — a build's own cleanup must not turn a finished image into a failed
+# run — so the return value is informational.
+hmr_umount_own() {
+    local path="${1:?path}"
+    local before after
+    before="$(hmr_mount_layers "${path}")"
+    [ "${before}" -gt 0 ] || return 0
+    umount -l "${path}" 2>/dev/null || true
+    after="$(hmr_mount_layers "${path}")"
+    if [ "${after}" -ge "${before}" ]; then
+        _hmr_warn "${path} is STILL mounted (${after} layer(s)) after this build's own umount — it was not detached; see the stale-mount hint before the next build"
+        return 1
+    fi
+    return 0
+}
+
+# hmr_verify_detached <path>... — 0 when none of the paths is a mount point
+# any more; otherwise warns per path and returns 1. For a path that may carry
+# somebody else's layers beneath ours, use hmr_umount_own instead.
 hmr_verify_detached() {
     local p rc=0
     for p in "$@"; do

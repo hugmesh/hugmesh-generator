@@ -176,6 +176,17 @@ source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
 # docs/SHARED-BINPKG.md.
 # shellcheck source=scripts/_shared-assets-lib.sh
 source "${SCRIPT_DIR}/scripts/_shared-assets-lib.sh"
+# Mounts left under the build system by a crashed run are listed and refused
+# before the stage3 is extracted over them or a second bind is stacked on them
+# (#659). This cross builder shares only THAT part of the resume library with
+# the x86 builder. Its static-library restore does not apply: no clean step
+# deletes *.a here, and the aarch64 cross toolchain links against its own
+# /usr/aarch64-unknown-linux-gnu (`aarch64-unknown-linux-gnu-gcc -print-sysroot`),
+# never ${SYSROOT}. Neither does the owner gate: a NON-ROOT build owns this
+# sysroot by design (the stage3 is extracted with --no-same-owner below) and the
+# stage4 tarball it packages forces --owner=0 --group=0.
+# shellcheck source=scripts/_builder-resume-lib.sh
+source "${SCRIPT_DIR}/scripts/_builder-resume-lib.sh"
 # Seed-derived PYTHON_TARGETS/PYTHON_SINGLE_TARGET (pt_apply_seed_targets).
 # A frozen python3_NN literal is a BUG — see docs/PYTHON-TARGETS-SEED-DRIFT.md.
 # shellcheck source=scripts/_python-targets-lib.sh
@@ -1434,6 +1445,23 @@ fi
 info "stage3 seed verified: ${STAGE3_LOCAL}"
 
 banner "Extracting stage3 into sysroot"
+
+# NEVER touch a sysroot that still has mounts under it, on EITHER branch: the
+# initramfs steps below bind host /proc, /sys and /dev under it for the qemu
+# chroot, and a build killed there leaves them attached (a failed dracut
+# unmounts them itself; a kill does not). A non-resume run would then extract
+# the stage3 OVER those binds — its ./proc, ./sys and ./dev entries land on the
+# HOST's directories — and a --resume run would stack a second bind on each for
+# the next dracut. Same check and the same working hint as the x86 builder
+# (#659); the hint loops over the listing so stacked binds are unmounted once
+# per layer.
+if [ -d "${SYSROOT}" ]; then
+    _stale_mounts="$(hmr_stale_mounts "${SYSROOT}")"
+    if [ -n "${_stale_mounts}" ]; then
+        hmr_stale_mount_refuse "${SYSROOT}" "${_stale_mounts}"
+        exit 1
+    fi
+fi
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
     info "Sysroot already populated and --resume set, skipping extraction"
 else

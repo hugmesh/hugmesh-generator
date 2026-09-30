@@ -5262,27 +5262,22 @@ umount_chroot() {
     # MISSING from this list until #659: every build (failed or successful)
     # left one behind per mount_chroot call, stacked on the previous run's.
     # Each flag is reset after its umount so a second mount_chroot/umount_chroot
-    # pair (the live-ISO dracut step) starts from a clean slate.
-    local _hmr_own=()
+    # pair (the live-ISO dracut step) starts from a clean slate. hmr_umount_own
+    # peels ONE layer (ours), counts layers before and after, and warns when
+    # the count did not go down (`umount -l ... || true` alone is silent).
     if ${DISTFILES_MOUNTED:-false}; then
-        umount -l "${SYSROOT}/var/cache/distfiles-ro" 2>/dev/null || true
-        _hmr_own+=("${SYSROOT}/var/cache/distfiles-ro"); DISTFILES_MOUNTED=false
+        hmr_umount_own "${SYSROOT}/var/cache/distfiles-ro" || true; DISTFILES_MOUNTED=false
     fi
     if ${PORTAGE_SCRATCH_MOUNTED:-false}; then
-        umount -l "${SYSROOT}/var/tmp/portage" 2>/dev/null || true
-        _hmr_own+=("${SYSROOT}/var/tmp/portage"); PORTAGE_SCRATCH_MOUNTED=false
+        hmr_umount_own "${SYSROOT}/var/tmp/portage" || true; PORTAGE_SCRATCH_MOUNTED=false
     fi
     if ${HOST_REPO_MOUNTED:-false}; then
-        umount -l "${SYSROOT}/var/db/repos/gentoo" 2>/dev/null || true
-        _hmr_own+=("${SYSROOT}/var/db/repos/gentoo"); HOST_REPO_MOUNTED=false
+        hmr_umount_own "${SYSROOT}/var/db/repos/gentoo" || true; HOST_REPO_MOUNTED=false
     fi
     if ${X86_POOL_MOUNTED:-false}; then
-        umount -l "${SYSROOT}/var/cache/binpkgs" 2>/dev/null || true
-        _hmr_own+=("${SYSROOT}/var/cache/binpkgs"); X86_POOL_MOUNTED=false
+        hmr_umount_own "${SYSROOT}/var/cache/binpkgs" || true; X86_POOL_MOUNTED=false
     fi
     for m in run dev sys proc; do umount -lR "${SYSROOT}/$m" 2>/dev/null || true; done
-    # `umount -l ... || true` is silent; say so when one of OUR mounts is still there.
-    [ "${#_hmr_own[@]}" -eq 0 ] || hmr_verify_detached "${_hmr_own[@]}" || true
 }
 trap umount_chroot EXIT
 mount_chroot

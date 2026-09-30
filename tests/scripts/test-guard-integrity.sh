@@ -701,7 +701,23 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # file on that tree (GUARD_PREMERGE=0), not computed:
 #     182 of 205 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 23 — neither new suite was ever in it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-192}"
+# 192 -> 194 (denominator 215 -> 218, ungated SET 23 -> 24) on 2026-09-30 for
+# hugmesh-generator#659 (iss/659-x86-builder-resume-static-restore, on origin/main
+# 5c5ae084 — which already carried the 192 above): three new suites landed on
+# disk in the same commit that wires two of them. tests/scripts/
+# test-builder-resume-safety.sh (the --resume owner gate, seed choice, static
+# restore, link test, stale-mount refusal and umount_chroot, executed against
+# fixtures and stubs, with a mutation battery) and tests/scripts/
+# test-makefile-reown-skips-sysroot.sh (the Makefile's chown-artifacts never
+# descends into a build system) joined the gate in shell-suites.yml's alpine job
+# and .gitlab-ci.yml's orphan-guards-verify (which gained xz for the .tar.xz seed
+# fixtures). tests/scripts/test-builder-unmount-real.sh (the same unmount against
+# REAL stacked binds in a user+mount namespace) is ungated with its reason in
+# PREMERGE_UNGATED below and runs from `make builder-unmount-real-check`.
+# MEASURED by RUNNING this file on that tree (GUARD_PREMERGE=0), not computed:
+#     194 of 218 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (24 suite(s))
+PREMERGE_BASELINE="${GUARD_PREMERGE:-194}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
@@ -839,6 +855,17 @@ PREMERGE_UNGATED=(
   tests/device-registry/test-layer-a-headscale-acl.sh
   tests/egress-vpn/test-secret-contract.sh
   tests/pentest/nuclei/test-templates.sh
+  # Needs `unshare -Urm` (a private user+mount namespace) to stack REAL bind
+  # mounts under a scratch build system and drive the x86 builder's own
+  # umount_chroot and stale-mount hint against the kernel (#659). Docker's
+  # default seccomp profile blocks those namespaces, so in every shell-suites
+  # image it exits 2 SKIPPED-LOUDLY having run ZERO assertions — MEASURED in
+  # alpine:3 with that job's apk set before it was listed here. Gating it would
+  # raise the coverage number by one and gate nothing. `make
+  # builder-unmount-real-check` runs it on a developer host (6 passed there,
+  # 2026-09-30); the same code paths are proven with stubs, pre-merge, by
+  # tests/scripts/test-builder-resume-safety.sh.
+  tests/scripts/test-builder-unmount-real.sh
   tests/scripts/test-e2e-cli-lane.sh
   tests/scripts/test-e2e-coverage-matrix.sh
   tests/scripts/test-e2e-env-interface-dimensions.sh

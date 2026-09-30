@@ -350,6 +350,15 @@ Common `make` overrides: `ENV=test|prod`, `BRAND=`, `DOMAIN=`, `HEADSCALE_URL=`,
 `WORK_DIR=`, `JOBS=`, `ROLE=`, `ARCH=x86|arm64`, `DEV=/dev/sdX`, `IMG_FLAGS=`,
 `NATIVE=1`, `CA_CERT=`/`CA_KEY=`/`CA_KEY_PASS=`. `make help` lists every target.
 
+> **Ownership after a native build:** a native (root) build through `make` hands its
+> artifacts — the `.img`/`.iso`/`.fs.tar.xz`, logs, keys, `sessions/`, `shared/` — back
+> to your user so host-side qemu and flash need no sudo. It leaves the build system
+> (`<work dir>/snap-build-*/sysroot`) root's on purpose: it used to `chown -R` the whole
+> work directory, and the next `--resume` then built an image whose every directory was
+> yours, with sshd and tor refusing to start (hugmesh-generator#659). Never `chown -R` a
+> work directory yourself; to reown artifacts by hand, prune the build system:
+> `sudo find <work dir> -type d -name sysroot -prune -o -exec chown -h $(id -u):$(id -g) {} +`.
+>
 > **Scratch space:** the heavy stage4 build wants tens of GB. Point `WORK_DIR=` at
 > a roomy disk — e.g. a namespaced subdir of the portage scratch volume,
 > `WORK_DIR=/var/tmp/portage/hugmesh-build` (its own subdir, so it never
@@ -393,7 +402,7 @@ Full flag reference: `./build-rpi5-stage4.sh --help` and
 | `--img-size MiB` |9216 (Pi) / 8192 (x86) | compact ext4 root size |
 | `-w, --work-dir` | `./out` | products dir |
 | `-j, --jobs N` | `$(nproc)` | parallel emerge/make jobs |
-| `--skip-mesh` / `--skip-tailscale` / `--skip-kernel` / `--skip-clean` / `--resume` | off | phases |
+| `--skip-mesh` / `--skip-tailscale` / `--skip-kernel` / `--skip-clean` / `--resume` | off | phases. `--resume` reuses the build system an earlier run left (`<work dir>/snap-build-*/sysroot`) instead of extracting the stage3 again. On x86 it is refused, in one sentence, when that build system is not root's, when the static libraries every build's clean step deletes cannot be put back from the seed the build system came from, or when it cannot link a C program; then rebuild **without** `--resume` (see Troubleshooting) |
 | `--enable-wifi` / `--enable-bluetooth` | **off** | WiFi + Bluetooth are **disabled by default** (rfkill block + blacklisted modules + no service); these re-enable them. Ethernet + the tailnet are unaffected. (env/brand.conf: `ENABLE_WIFI` / `ENABLE_BLUETOOTH`) |
 | Pi: `--pcie-gen3`, `-c/--cpu`, `-d/--defconfig` | off / cortex-a76 / bcm2712 | board tuning |
 | x86: `--installer-iso`, `--no-live-iso`, `--no-tar` | off / live ISO on / tar on | x86 artifacts |
@@ -818,7 +827,33 @@ so CI builds from a complete in-VPN copy. See [`docs/DEVOPS.md`](DEVOPS.md).
 - **`make` can't find the builder image** → `make docker-image` (LONG first run).
 - **`build-rpi5-stage4.sh` fails early** → it must run as **root** with a built
   `crossdev aarch64-unknown-linux-gnu` toolchain (§0b). Use `--resume` to reuse a
-  populated sysroot after a failure.
+  populated sysroot after a failure (refused while a killed run's bind mounts are
+  still under it — see the `mounts are still attached` entry below).
+- **`--resume` stops at once with `Refusing --resume: the build system directory … is owned by uid …, not root`**
+  → the reused build system (`<work dir>/snap-build-x86/sysroot`) was handed to a user,
+  and an image built from it boots with every directory owned by that user (sshd,
+  systemd-tmpfiles, snort and tor refuse to start). Ownership cannot be put back safely:
+  a stage3 ships non-root owners (portage, man, …), a built image adds every service
+  account, and portage records no owner for what it installed. Rebuild **without**
+  `--resume`; the builder wipes the build system and extracts the stage3 again as root
+  (about an hour). `make` no longer hands the build system to your user after a native
+  build (only the artifacts; see §3b), so this should not recur.
+- **`--resume` stops with `Refusing to restore the build system's static libraries: no cached seed tarball carries the toolchain …`**
+  → every build's clean step deletes the static libraries, and a resumed build puts
+  them back from the seed the build system was extracted from (`snap-build-x86/sysroot.seed`
+  names it; for a build system made before that marker existed, the cached seed whose
+  glibc, gcc and binutils match the build system's package database). When no cached
+  seed matches — the seed cache was cleaned, or a later `@world` update moved the build
+  system's own toolchain — nothing can be restored safely: rebuild without `--resume`.
+- **`--resume` stops with `The reused build system cannot link a C program …`** → the
+  restore above ran and a link still fails; rebuild without `--resume` instead of
+  watching three packages fail with compiler errors minutes in.
+- **A build refuses to start with `mounts are still attached under <sysroot>`** → an
+  earlier run was killed with its bind mounts up, or an older builder left its
+  `distfiles-ro` bind behind (every x86 run did, until #659). Run the loop the message
+  prints — it unmounts once per listed line, so a bind stacked three times is cleared
+  three times — then re-run. The old hint, `umount -R <sysroot>`, never worked: the
+  build system's directory is not itself a mount point.
 - **No artifact to flash** → `./scripts/flash-disk.sh --role <r> --arch <a> --list`
   shows the candidates and the resolved work dir; check `--arch`/`--role` and that
   the build wrote to that `--work-dir`.
