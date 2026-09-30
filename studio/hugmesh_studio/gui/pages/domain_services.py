@@ -111,7 +111,7 @@ from ...core.domain_services import (
 #: per-service source forge / credential fields of #499 land without another restructure
 #: (see the module docstring).
 _COL_ON, _COL_NAME, _COL_SCOPE, _COL_SETTING, _COL_DESC = range(5)
-_HEADERS = ("On", "Service", "Scope", "", "What it does for this domain")
+_HEADERS = ("Selection", "Service", "Scope", "", "What it does for this domain")
 
 #: The label a carried-over slug wears — one this build's catalogue does not offer.
 #: The row's DESCRIPTION says the rest (core.domain_services.describe_carried_over),
