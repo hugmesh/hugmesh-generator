@@ -1,0 +1,38 @@
+# issue:   #337
+# label:   studio-pytest
+# cwd:     studio
+# command: QT_QPA_PLATFORM=offscreen HUGMESH_STUDIO_NO_ELEVATION=1 /tmp/claude-0/-home-user-hugmesh-generator/8813b170-78cf-5b4f-94b2-85042c956c3e/scratchpad/venv6/bin/python -m pytest -p no:cacheprovider -q --timeout=900 tests/test_flash_targets.py tests/test_flash_image_choice.py
+# started: 2026-09-30T13:18:29Z
+# host:    Linux 6.18.44-fc-v50 x86_64, no docker daemon, no KVM, no tor, no kind/kubectl (Claude Code cloud container)
+# commit:  2017882
+-----
+................................F....................................... [ 67%]
+..................................                                       [100%]
+=================================== FAILURES ===================================
+_____ test_flash_disk_sh_no_longer_refuses_an_explicit_compressed_artifact _____
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-5/test_flash_disk_sh_no_longer_r0')
+
+    @pytest.mark.skipif(not os.path.exists(_FLASH_SH), reason="flash-disk.sh not present")
+    def test_flash_disk_sh_no_longer_refuses_an_explicit_compressed_artifact(tmp_path):
+        """`--artifact <name>.img.xz` used to die on "artifact must be .img or .iso"
+        BEFORE any device work. It must now get past the extension check — here it stops
+        at the root requirement, which is the next gate and proves the refusal is gone."""
+        art = tmp_path / "hugmesh-rpi5-arm64-pki-prod-1.img.xz"
+        _touch(art, 1000)
+        r = subprocess.run(["bash", _FLASH_SH, "--role", "pki", "--arch", "arm64",
+                            "--artifact", str(art), "/dev/does-not-exist-337"],
+                           capture_output=True, text=True, timeout=60)
+        combined = r.stdout + r.stderr
+        assert "artifact must be" not in combined
+>       assert "run as root" in combined            # reached the destructive-path gate
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: assert 'run as root' in '[disk] ERROR: missing required tools: partprobe\n'
+
+tests/test_flash_targets.py:462: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_flash_targets.py::test_flash_disk_sh_no_longer_refuses_an_explicit_compressed_artifact
+1 failed, 105 passed in 28.35s
+-----
+# exit code: 1
+# finished: 2026-09-30T13:18:58Z
