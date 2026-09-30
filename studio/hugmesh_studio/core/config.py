@@ -919,17 +919,25 @@ CA_CERT_MAX_BYTES = 1 << 20             # 1 MiB: a CA bundle is kilobytes; refus
 #:   to a client build is discarded by the builder;
 #: * the per-domain Base CA is recorded-only everywhere (no builder parses a CA flag).
 #:
-#: What really decides a client's trust is keys-provision's bulk import
-#: (specs/etc/keys-provision/provision.sh: every KEYS/certs/*.crt and *.pem copied to
-#: /usr/local/share/ca-certificates, then update-ca-certificates) — mesh-wide, from the
-#: stick, never per domain. studio/tests/test_client_ca_inheritance.py pins all three
-#: facts against the scripts, so this sentence goes red the day one of them changes.
+#: What really decides a client's trust is keys-provision's certificate import
+#: (specs/etc/keys-provision/provision.sh provision_certs: every KEYS/certs/*.crt and
+#: *.pem copied to /usr/local/share/ca-certificates, then update-ca-certificates) —
+#: mesh-wide, from the stick, never per domain. It runs for EVERY manifest: until the
+#: post-merge review of #645 it was the tail of provision_files(), below that
+#: function's `jqe '.files' || return 0`, so a client stick (KEYS profile `host`, whose
+#: manifest has no `files` key) imported nothing and this note was untrue.
+#: gen-provision-keys.sh does not mint the CA for a client: it tells the operator to
+#: copy certs/cluster-ca.crt from the pki node onto the stick, which is why the note
+#: says "the certificates you put there". studio/tests/test_client_ca_inheritance.py
+#: EXECUTES the import against the host-profile manifest and pins the other facts
+#: against the scripts, so this sentence goes red the day one of them changes.
 CLIENT_CA_INHERITANCE_NOTE = (
     "Certificate authorities on a Mesh desktop client: the image carries none of its "
     "own, so there is no per-domain CA to pick here and the Secrets store step is "
-    "skipped. At first boot keys-provision imports every certificate in the KEYS "
-    "stick's certs/ folder (*.crt and *.pem — the mesh's cluster-ca.crt among them) "
-    "into the system trust store, so this client trusts exactly the certificate "
+    "skipped. At first boot keys-provision imports every certificate you put in the "
+    "KEYS stick's certs/ folder (*.crt and *.pem — the mesh's cluster-ca.crt, which "
+    "gen-provision-keys.sh tells you to copy there from the pki node, and any other "
+    "CA) into the system trust store, so this client trusts exactly the certificate "
     "authorities on the stick you provision it with, for every domain it is tied to. "
     "(A Vault address would be ignored too: the builder drops --vault-addr on a "
     "client role — Vault/ESO seeding is a cluster-node first-boot step.)")

@@ -586,7 +586,27 @@ provision_files() {
         chmod "${mode}" "${dst}"; chown "${owner}" "${dst}" 2>/dev/null || true
         log "Installed ${dst} (mode ${mode}, owner ${owner})"
     done
+}
 
+# ── KEYS/certs -> the system trust store ───────────────────────────
+# Its OWN step, called from main() right after provision_files, for EVERY manifest —
+# standalone images included (a CA the operator put on the stick is meant to be
+# trusted; nothing about a trust anchor is mesh-specific), so it sits above the
+# `if ! ${STANDALONE_IMG}` block on purpose.
+# It used to be the tail of provision_files(), below that function's
+# `jqe '.files' || return 0` — so it only ever ran for a manifest that carried a
+# `files` list (the backend / control-plane examples). Every CLIENT manifest
+# (KEYS profile `host`: desktop, laptop, chromebook — keys-template/examples/
+# provision.host.json) and the frontend profile have no `files` key, and a desktop
+# provisioned from such a stick never trusted the mesh CA on it, while the Studio's
+# cloud Domains step (CLIENT_CA_INHERITANCE_NOTE) said it did. Now the stick's
+# certs/ folder is imported whether or not the manifest lists files — which is what
+# "the client trusts exactly the certificate authorities on the stick" means. For a
+# manifest WITH a files list nothing changes: the same copies, in the same order.
+# studio/tests/test_client_ca_inheritance.py EXECUTES this against the host-profile
+# manifest and pins main()'s call order, so moving it back under a `.files` gate, or
+# dropping the call from main(), makes that file red.
+provision_certs() {
     # Bulk: drop everything in KEYS/certs into the system trust anchors
     if ls "${BASE}/certs/"* >/dev/null 2>&1; then
         mkdir -p /usr/local/share/ca-certificates /etc/ssl/keys
@@ -3222,6 +3242,7 @@ main() {
     provision_device_password   # superadmin client variant: set device password from KEYS hash
     provision_network
     provision_files
+    provision_certs      # KEYS/certs -> system trust store, for EVERY manifest (no `files` gate)
     provision_truststore
     provision_storage
     provision_vpn        # egress-VPN provider configs (own-domain-only, 0600; service default-off)
