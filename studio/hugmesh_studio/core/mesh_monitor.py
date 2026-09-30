@@ -70,7 +70,7 @@ from . import devops_tools, view_doors
 from .local_stack_node import _COMPOSE_PROJECT, _compose_base, _kind_cluster_name
 
 #: Per-call ceilings. ONE ``kubectl get`` round trip for the whole cluster rather than a
-#: per-namespace loop: N calls is N timeouts on a wedged API server.
+#: per-namespace loop: N calls is N timeouts on a hung API server.
 KIND_CLUSTERS_TIMEOUT_S = 10
 #: Where scripts/kind-halt.sh keeps its record, and how long to wait for it. Kept
 #: in step with that script's own defaults (ARGOCD_NS / STATE_CM / STATE_KEY); it is

@@ -257,7 +257,7 @@ class LocalMeshBootstrapConfig:
     # "casdoor" (the DEFAULT) threads NOTHING: the stack env stays byte-identical
     # to before these fields existed (the #1 invariant). An external provider
     # threads OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_JWKS_URI into the `make stack-*`
-    # env (env vars ONLY), and the Makefile CONSUMES all three (the Lane-B seam,
+    # env (env vars ONLY), and the Makefile CONSUMES all three (the Lane-B env-var contract,
     # landed): OIDC_ISSUER -> CASDOOR_ISSUER_URI, OIDC_CLIENT_ID ->
     # CASDOOR_APP_CLIENT_ID (the BFF login/exchange client id), OIDC_JWKS_URI ->
     # CASDOOR_JWKS_URI (gateway + resource-server key fetch). So the running
@@ -853,7 +853,7 @@ class LocalMeshBootstrap:
                      + ("" if c.is_prod() else "  (brand default; not a public issuer in test)"))
         lines.append(f"Issuer:     {c.issuer()}")
         # I6.6: disclose the chosen IdP — and the honest external-mode limit
-        # (the Makefile seam consumes all three vars, so token VALIDATION really
+        # (the Makefile consumes all three vars, so token VALIDATION really
         # re-points at the external issuer/JWKS; the coupled login/MFA/role legs
         # do not move — docs/IDENTITY-PROVIDERS.md "Honest limits").
         lines.append(f"IdP:        {IDP_LABELS.get(c.idp, c.idp)}")
@@ -984,7 +984,7 @@ class LocalMeshBootstrap:
                 # No longer PENDING: seed-e2e.sh grew a leg-4 that consumes both
                 # vars verbatim against the compose federation-db and reads the
                 # registry back. The disclaimer that used to live here was true for
-                # as long as the checkboxes were inert; deleting it in the SAME
+                # as long as the checkboxes did nothing; deleting it in the SAME
                 # change that made them real is what keeps the surface and the
                 # seeder from disagreeing again.
                 lines.append("           (applied by `make stack-seed` — leg 4 sets "
@@ -1738,7 +1738,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="also publish the fe-gateway as a Tor v3 .onion (the `tor` "
                         "profile) — reachable in Tor Browser, no public IP/DNS/ports.")
     # The GUI grew a services picker; without this flag the CLI would be strictly less
-    # capable than the wizard — the same dead-default asymmetry --brand was added to
+    # capable than the wizard — the same asymmetry (a default that silently does nothing) --brand was added to
     # fix. Absent = untouched (see _cfg_from_args).
     p.add_argument("--services", default=None,
                    help="which services this local mesh runs — space/comma separated "

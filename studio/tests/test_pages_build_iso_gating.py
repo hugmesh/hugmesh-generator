@@ -208,7 +208,7 @@ def test_artifacts_explainer_is_the_rewritten_copy(wiz):
 #
 # All three were UNGUARDED — which is exactly how they shipped. Each test below asserts
 # the CORRECTED claim positively, not just the absence of the old wording, so a revert
-# to a plausible-but-false string still goes red.
+# to a plausible-but-false string still fails.
 
 def test_compress_caption_is_platform_aware_not_one_false_sentence(wiz):
     """--compress does not mean one thing, so one caption cannot be true.

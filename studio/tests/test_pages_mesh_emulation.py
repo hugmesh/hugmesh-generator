@@ -849,7 +849,7 @@ def test_status_resyncs_a_device_paused_outside_the_studio(wiz, qapp, registry,
 def test_an_unparsed_status_line_leaves_the_run_state_unknown(wiz, qapp, registry,
                                                               mocked_spawn):
     """Nothing is INFERRED: rounding an unrecognized reply to "running" is how a
-    wedged guest comes to read as a healthy one."""
+    hung guest comes to read as a healthy one."""
     mocked_spawn.lines.append("some unrelated chatter from the runner")
     page = _page(wiz)
     registry(_device("rpi5/pki"))

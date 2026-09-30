@@ -118,7 +118,7 @@ def test_a_mesh_flow_lands_on_it_after_domains(wiz):
 
 
 def test_it_is_skipped_only_when_no_domain_at_all_is_named(wiz):
-    """Emission-neutral: with no named domain — no cluster domain and no table row —
+    """Leaves the output unchanged: with no named domain — no cluster domain and no table row —
     there is nothing to record and nothing for the gate to refuse, so skipping cannot
     smuggle a domain past it. A mesh with a cluster domain always applies (#494: the
     own domain has a services page), with or without the Domains table."""

@@ -1,6 +1,6 @@
 """core/saved_meshes.py — the saved-mesh RECORD (ask C, 2026-09-01).
 
-Pure-core, no Qt, no docker: every docker/git seam is monkeypatched at the
+Pure-core, no Qt, no docker: every docker/git override point is monkeypatched at the
 function the module calls (``vaults.list_volumes``, ``_git``, ``_run``), and the
 Studio state dir is the autouse tmp dir from conftest.
 
@@ -92,7 +92,7 @@ def _vol(name, short, in_use=("c1",)):
 
 @pytest.fixture
 def seams(monkeypatch):
-    """Every subprocess seam faked; returns the recorder."""
+    """Every subprocess override point faked; returns the recorder."""
     calls = {"projects": [], "git": []}
 
     def list_volumes(project=vaults.DEFAULT_PROJECT):
@@ -256,7 +256,7 @@ def test_capture_records_a_volume_inventory_and_marks_included_false(seams, tmp_
 
 def test_capture_inventories_by_label_not_by_the_compose_file(seams, tmp_path):
     rec = _capture(_gen(tmp_path))
-    # the seam is vaults.list_volumes(<compose project>) — the LABEL query — and
+    # the override point is vaults.list_volumes(<compose project>) — the LABEL query — and
     # the renamed-away 'synapse' volume (absent from the current compose files) is
     # in the inventory because of it
     assert seams["projects"] == [vaults.DEFAULT_PROJECT]

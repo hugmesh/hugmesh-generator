@@ -20,7 +20,7 @@ The Games checkbox is GONE: a truthy legacy ``games`` is migrated to
 ``optional_services += ["games"]`` by ``ImageConfig.from_dict`` on load, so loaded rows
 arrive pre-migrated and this page never sees a games flag again.
 
-Row order is load-bearing: the first attached domain is the PRIMARY one (the first
+Row order is relied on: the first attached domain is the PRIMARY one (the first
 ``--domains`` element, which lands in ROLE_TAG / the filename). The page prefills row 0
 with the cluster domain on a fresh cloud/mesh flow so a superadmin starts from a valid
 primary domain (spec 4). The Tailscale root domain (spec 5) is shown read-only in
@@ -146,7 +146,7 @@ class _BaseCaCombo(QtWidgets.QComboBox):
     ``certs`` is ``cfg.base_ca_certs`` (absolute paths); the label is the file's base
     name and the DATA is the full path, so tests and the config read the path while
     the label stays free to change. A ``selected`` path no longer in ``certs`` falls
-    back to None rather than being kept as a phantom row — the certificate really is
+    back to None rather than being kept as a row for a file that no longer exists — the certificate really is
     gone, and VaultPage.validatePage has already cleared it from cfg."""
 
     def __init__(self, certs=(), selected=""):
@@ -647,7 +647,7 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
     def applies_to(self, cfg) -> bool:
         """Dynamic-skip predicate (wizard.nextId): a cloud NODE image emits no
         --domains and writes no manifest, so this table contributes nothing and is
-        skipped (emission-neutral). Mesh and cloud client images still apply.
+        skipped (leaves the output unchanged). Mesh and cloud client images still apply.
 
         ASK 8: in MESH mode this now also requires ``cfg.additional_domains`` — the
         "this mesh also hosts other domains" opt-in on the Network step. Unticked, this
@@ -686,7 +686,7 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         # the base CA is a MESH provisioning intent for domains this operator runs, so
         # it hides in cloud for exactly the reason Sign-in does (a cloud client image
         # provisions no domains). A hidden combo still collects its untouched "None",
-        # which is the absent-key default — emission-neutral either way.
+        # which is the absent-key default — leaves the output unchanged either way.
         self.table.setColumnHidden(_COL_CA, c.mode != "mesh")
         self.client_ca_note.setVisible(c.mode == "cloud")
         # Row 0 is derived state, so it is re-derived on EVERY forward entry, not

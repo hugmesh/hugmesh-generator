@@ -4,7 +4,7 @@ docker cross-platform").
 
 Pins the wiring end-to-end WITHOUT bringing up docker (nobuild):
   1. TOR gate: with_tor -> TOR=1 in the make-env (the Makefile's STACK_TOR_PROFILE
-     adds `--profile tor`); OFF is byte-identical to before (no TOR footgun).
+     adds `--profile tor`); OFF is byte-identical to before (no way to turn Tor on by accident).
   2. onion readout: LocalStackNode reads the PUBLIC hostname the hugmesh-tor
      service copies to tests/stack/tor-onion/hostname; absent => "" (never raises).
   3. config -> stack threading + the plan text + up() reporting the address.

@@ -217,7 +217,7 @@ def grouped_domain_catalogue() -> list[tuple[str, list[str]]]:
     catalogue slug no group lists.
 
     SERVICE_GROUPS is a PRESENTATION table and DOMAIN_CATALOGUE is the catalogue: a slug
-    added to one and not the other would otherwise be silently un-offerable, which is
+    added to one and not the other would otherwise be silently impossible to offer, which is
     exactly the quiet drop the #227 menu already refused to make. Offer it ungrouped
     instead (a test pins that the two agree today, so this arm is a floor, not a licence
     to skip the grouping)."""
@@ -303,7 +303,7 @@ def describe_carried_over(slug: str) -> str:
 def reviewed_names(cfg) -> set[str]:
     """The domain NAMES whose services page has actually been gone through.
 
-    STRIPPED here, at the one read seam, so a hand-edited config carrying
+    STRIPPED here, at the one place the config is read, so a hand-edited config carrying
     ``" acme.example "`` still satisfies the gate for ``acme.example`` instead of
     wedging it for ever (``unconfigured_domains`` compares the stripped name)."""
     return {str(n).strip()
@@ -384,7 +384,7 @@ def gate_reason(cfg, action: str = ACTION_IMAGE_BUILD, remedy: str | None = None
     LOCAL_MESH_REMEDY``) has its own Domains / Domain services steps, and a refusal
     that sends the operator to "the image flow" from there is a dead end.
 
-    THE SEAM. Every gate calls exactly this — the image build at
+    THE OVERRIDE POINT. Every gate calls exactly this — the image build at
     ``gui/pages/launch.py``, BOTH docker mesh-start doors at ``gui/pages/localmesh.py``
     (``_bootstrap_up`` and ``_start_saved``), and, through
     :func:`restart_gate_reason`, the previous-builds RESTART at
@@ -418,7 +418,7 @@ def record_reviewed(cfg, names: Iterable[str]) -> list[str]:
     # config carrying " acme.example " would otherwise record a marker the gate can
     # never match and refuse for ever. The Domains table strips at validatePage, so
     # only a hand-edited or externally produced config reaches this — which is exactly
-    # the config that must not be able to wedge the gate.
+    # the config that must not be able to hang the gate.
     keep = {str(n).strip() for n in names or ()}
     # The mesh's OWN domain first (mesh mode only — implicit_own_domain), then the
     # table rows in table order: it is a domain with a services page too, and

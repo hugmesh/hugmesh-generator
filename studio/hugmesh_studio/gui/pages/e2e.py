@@ -434,7 +434,7 @@ class E2EPage(QtWidgets.QWizardPage):
 
         OFF-THREAD: ``e2e_ready()`` is three 30s docker subprocesses plus a 5s HTTP
         probe, and running it inline from initializePage could freeze the window for
-        ~95s against a wedged daemon. A probe already in flight is left alone rather
+        ~95s against a hung daemon. A probe already in flight is left alone rather
         than stacking threads.
 
         THE BLOCKER LIST MOVES WITH THE BUTTON, ALWAYS. Review found the first

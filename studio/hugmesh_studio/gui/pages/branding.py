@@ -349,7 +349,7 @@ class BrandingPage(QtWidgets.QWizardPage):
         So the skip now keys on the DESKTOP HALF, not on the role: an unaffiliated image
         that is desktop-class on a theme-emitting builder (the only shape that role has
         — x86 standalone) SHOWS the page; anything else still disappears, and stays
-        emission-neutral exactly as before via RolePage's clear at role-commit time.
+        leaves the output unchanged exactly as before via RolePage's clear at role-commit time.
 
         The web-login-theme half no longer rides on this decision either way: it is
         hidden outside mesh by initializePage, where an unaffiliated image never is.
@@ -467,7 +467,7 @@ class BrandingPage(QtWidgets.QWizardPage):
         # login_* keys into that image's saved config. Hiding the COLLAPSIBLE (not the
         # group inside it) takes the header with the content — network.py:906-909 /
         # :1180-1186 are the idiom; an orphan "Web login theme" header that expands to
-        # nothing is the defect that rule exists to stop. Emission-neutral by
+        # nothing is the defect that rule exists to stop. Leaves the output unchanged by
         # construction: every login_* field is NON_ARGV (config.py:755-766) and the
         # commit in validatePage stays UNCONDITIONAL, so a mesh config still round-trips
         # through a stray visit. Kept opened by default in mesh, where it is the half
@@ -489,7 +489,7 @@ class BrandingPage(QtWidgets.QWizardPage):
         not the bare line edit, or the "Brand logo" caption is left stranded over an
         empty slot (network.py:1180-1186).
 
-        Emission-neutral in both directions, the documented precondition: validatePage
+        Leaves the output unchanged in both directions, the documented precondition: validatePage
         resets both fields to their ImageConfig defaults ("" / False) while the widgets
         are hidden, and this runs on EVERY visit, so a switch back to a branded desktop
         restores the widgets and their collectable values.

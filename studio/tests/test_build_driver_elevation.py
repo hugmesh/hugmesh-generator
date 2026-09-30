@@ -212,7 +212,7 @@ def test_generated_helper_opts_into_the_dialog_explicitly(monkeypatch, tmp_path)
 
 
 # ── NEVER ELEVATE: the refusal, before subprocess is touched ─────────────────────────
-# The 2026-09-04 wedge at the driver: a GUI-launched native build dispatched under
+# The 2026-09-04 hang at the driver: a GUI-launched native build dispatched under
 # pytest used to Popen `sudo -A bash ./build-x86-host-stage4.sh` for real, with the Qt
 # askpass as SUDO_ASKPASS; under QT_QPA_PLATFORM=offscreen the dialog was invisible and
 # the root-owned sudo waited forever (60 found, some two days old). The driver now
@@ -254,7 +254,7 @@ def test_under_pytest_pkexec_is_refused_too(monkeypatch, tmp_path):
 
 
 def test_under_pytest_the_kill_tree_is_refused_too(monkeypatch, tmp_path):
-    """cancel() elevates through the same prefix — a `sudo -A kill` would wedge on the
+    """cancel() elevates through the same prefix — a `sudo -A kill` would hang on the
     same askpass. Refused the same way."""
     _force_sudo_a(monkeypatch, askpass="/run/ap.sh")
     _run_must_not_be_reached(monkeypatch)

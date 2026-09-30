@@ -32,7 +32,7 @@ named by the gate:
 * ``gui/pages/sessions_widget.py`` refuses a previous-builds RESTART, narrowly — see
   ``core.domain_services.restart_gate_reason`` for why that one door is not blanket.
 
-All four through the single seam ``core.domain_services.gate_reason`` so a test can
+All four through the single override point ``core.domain_services.gate_reason`` so a test can
 drive the refusal with a bare ``ImageConfig``.
 
 SCOPE IS NAMED, NOT IMPLIED (#497). Every row on the checkbox table carries a Scope

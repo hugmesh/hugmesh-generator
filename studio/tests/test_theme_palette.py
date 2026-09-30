@@ -11,7 +11,7 @@ OPERATOR ASK (2026-08-14, in three parts):
    alternate colors instead in whole or combination as readibility would be improved"
 
 So readability is not a nice-to-have here, it is the ACCEPTANCE CRITERION — the whole
-point of using more colours was that legibility improve, not degrade. The load-bearing
+point of using more colours was that legibility improve, not degrade. The decisive
 test in this file is therefore the sweep at the bottom: every pane surface of every flag
 preset in both ramps must still carry body text at AA. A palette that looked good and
 quietly broke contrast would be a failure of the actual request.

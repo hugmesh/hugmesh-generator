@@ -209,7 +209,7 @@ def test_localcloud_allowed_roles_match_the_gui_derivation():
 
 
 def test_localcloud_identity_readers_agree(tmp_path):
-    # both read the same on-disk seams (bootstrap config, secrets bundle,
+    # both read the same on-disk override points (bootstrap config, secrets bundle,
     # seeder roster); an empty generator dir must yield the same brand-default
     # answer from either face.
     assert tui_lc.local_mesh_identity(str(tmp_path)) == \

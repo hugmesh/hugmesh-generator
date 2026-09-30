@@ -726,7 +726,7 @@ def test_validator_refuses_a_non_flashable_file(tmp_path):
 
 def test_check_button_reports_inline_and_writes_nothing(page, qapp, tmp_path,
                                                         monkeypatch):
-    """The GUI seam: the button runs the checks off-thread, prints them into the
+    """The GUI override point: the button runs the checks off-thread, prints them into the
     inline pane, and never reaches _start_flash."""
     p = _img(tmp_path, "b-x86-amd64-omnibus-prod-1.img")
     page._entry_artifact_sets = {"e1": (p,)}
