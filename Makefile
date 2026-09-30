@@ -1979,6 +1979,10 @@ stack-m2-check:
 	 if [ "$$live" != "true" ] || [ -z "$$ip" ] || [ "$$ip" != "$$want" ]; then \
 	   echo "==> m2 registry stale (running=$$live ip=$${ip:-none} env=$${want:-none}) — re-running stack-m2-bootstrap"; \
 	   $(MAKE) --no-print-directory stack-m2-bootstrap; \
+	 elif pinmiss=$$(M2_CHECK_PINS=1 bash tests/stack/m2-bootstrap.sh 2>&1); [ $$? -ne 0 ]; then \
+	   echo "==> m2 cache is missing pinned artifact(s) (a PINS bump?) — re-running stack-m2-bootstrap"; \
+	   printf '%s\n' "$$pinmiss" | sed 's/^/    /'; \
+	   $(MAKE) --no-print-directory stack-m2-bootstrap; \
 	 fi
 
 # When SOCIAL=1, the included compose.real.yaml mastodon services need an
