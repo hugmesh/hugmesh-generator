@@ -97,6 +97,24 @@ def test_tui_own_domain_has_no_toggle(_isolated_state_dir):
     assert "t=toggle the Tor front door" not in text
 
 
+def test_tui_own_domain_front_door_row_is_rendered_as_data():
+    """The mesh's own domain's row on the TUI table: no ``t`` command, no on/off
+    cell, the own-onion note in place of the description — under the same headers
+    as an added domain's row (R20 of the robustness review: the ``t`` refusal was
+    pinned, the row's rendering was not)."""
+    d = Domain(name="mesh.example")
+    headers, rows = domain_services_step.front_door_table(d, own=True)
+    assert headers == domain_services_step.front_door_table(d)[0]
+    assert rows == [["", "", ds.TOR_ROW_LABEL, "onion (per domain)",
+                     ds.TOR_OWN_DOMAIN_NOTE]]
+    assert domain_services_step.TOR_COMMAND not in rows[0]
+    # and an added domain's row is the toggle, whatever its tor flag
+    assert domain_services_step.front_door_table(d)[1][0][:2] == ["t", "-"]
+    d.tor = True
+    assert domain_services_step.front_door_table(d)[1][0][:2] == ["t", "on"]
+    assert domain_services_step.front_door_table(d, own=True)[1][0][:2] == ["", ""]
+
+
 def test_tui_state_line_says_tor_is_off_for_the_mesh(_isolated_state_dir):
     j = _tui_at_added(tor=True)
     j.cfg.optional_services = []

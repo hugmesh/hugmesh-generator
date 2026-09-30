@@ -38,6 +38,18 @@ table and the state line over the services table's lower rows until it scrolled 
 other two hosts — and the local docker mesh step's subtitle is whole at the wizard's
 default size, where the longer sentence it replaced was cut off.
 
+AND WHAT IS ON SCREEN WITHOUT SCROLLING (looked at again, the correctness review of
+#582): the front-door checkbox, its table and the state line under it are inside the
+page's scroll viewport at each host's default window size, under every look — ticked
+and unticked. They were not: the services table kept a 300 px floor over some 180 px of
+rows and the front-door table 90 px for one row, and the state line (which login the
+onion serves, that Tor must be on for the mesh, what this route does with the tick) sat
+2 to 48 px under the fold of the local docker mesh step and the fleet step. Both tables
+are now exactly as tall as their rows (``fit_table_height``), re-fitted when the style
+or font changes and when a group row is folded, and the state line is the front-door
+table's caption with no gap. ``isVisible()`` cannot see a fold — a widget scrolled out
+of the viewport is "visible" — so these tests measure viewport-relative geometry.
+
 The GUI half skips without a Qt binding (the Qt-free job); the TUI half never skips.
 Nothing here calls ``.exec()``.
 """
@@ -558,3 +570,153 @@ def test_the_local_mesh_steps_subtitle_is_whole(look, qapp, monkeypatch, tmp_pat
             _dispose(window, qapp)
     finally:
         _restore_look(qapp, saved)
+
+
+# ── 6. above the fold: the front door and its state line, without scrolling ───────
+def _scroll_area_of(w):
+    qt = _qt()
+    for a in _ancestors(w):
+        if isinstance(a, qt.QtWidgets.QScrollArea):
+            return a
+    raise AssertionError("the body is not inside a scroll area on this host")
+
+
+def _span_in(viewport, w):
+    """``(top, bottom)`` of ``w`` in the viewport's own coordinates — what is on
+    screen is what lies between 0 and the viewport's height."""
+    top = w.mapTo(viewport, _qt().QtCore.QPoint(0, 0)).y()
+    return top, top + w.height()
+
+
+def _last_row(table):
+    last = table.topLevelItem(table.topLevelItemCount() - 1)
+    while last.isExpanded() and last.childCount():
+        last = last.child(last.childCount() - 1)
+    return last
+
+
+def test_the_front_door_and_its_state_line_are_above_the_fold_on_every_host(
+        styled_host, qapp):
+    """On every host at its default window size, under every look: the front-door
+    checkbox, its table and the state line under it lie wholly inside the page's
+    scroll viewport with the page not scrolled — with the front door unticked and,
+    since that is the longer line, ticked."""
+    body, _window = styled_host
+    sa = _scroll_area_of(body.table)
+    vp = sa.viewport()
+    for ticked in (False, True):
+        body._tor_box.setChecked(ticked)
+        _settle(qapp)
+        assert sa.verticalScrollBar().value() == 0, "the page had to scroll"
+        assert body.tor_note.text().startswith("Tor front door: ")
+        assert ("on — " in body.tor_note.text()
+                or "ticked — " in body.tor_note.text()) is ticked
+        for name, w in (("front-door checkbox", body._tor_box),
+                        ("front-door table", body.front_door_table),
+                        ("state line", body.tor_note)):
+            assert w.isVisible(), name
+            top, bottom = _span_in(vp, w)
+            assert top >= 0 and bottom <= vp.height(), \
+                f"the {name} spans y={top}..{bottom} in a {vp.height()}px viewport " \
+                f"({'ticked' if ticked else 'unticked'})"
+    # the caption: directly under its table, no gap
+    assert _span_in(vp, body.tor_note)[0] == _span_in(vp, body.front_door_table)[1]
+
+
+def test_each_checkbox_table_is_exactly_as_tall_as_its_rows(styled_host):
+    """No blank rows under the last one, no inner scrollbar hiding it: each of the
+    two checkbox tables is fixed at its header plus its rows plus its frame, and its
+    last row is drawn inside its own viewport."""
+    body, _window = styled_host
+    mod = _mod()
+    for t in (body.table, body.front_door_table):
+        assert t.height() == mod.table_content_height(t)
+        assert t.minimumHeight() == t.maximumHeight() == t.height()
+        assert not t.verticalScrollBar().isVisible()
+        assert t.visualItemRect(_last_row(t)).bottom() < t.viewport().height()
+    assert body.table.topLevelItemCount() >= 3 and body._boxes    # rows to speak of
+
+
+def test_the_tables_grow_with_a_bigger_checkbox_and_shrink_with_a_folded_group(
+        host, qapp):
+    """The height follows the rows the way the width follows the checkbox: a style
+    with a taller checkbox makes the rows taller and the tables grow to match; a
+    folded group takes its rows off screen and the table shrinks to what is left."""
+    body, window = host
+    mod = _mod()
+    before = {t: t.height() for t in (body.table, body.front_door_table)}
+    window.setStyleSheet("QCheckBox::indicator { width: 34px; height: 34px; }")
+    _settle(qapp)
+    for t, was in before.items():
+        assert _indicator_width(body._tor_box) >= 34      # the style really changed
+        assert t.height() > was, type(t).__name__
+        assert t.height() == mod.table_content_height(t)
+    group = body.table.topLevelItem(0)
+    assert group.childCount() > 0
+    tall = body.table.height()
+    group.setExpanded(False)
+    _settle(qapp)
+    assert body.table.height() == mod.table_content_height(body.table) < tall
+    group.setExpanded(True)
+    _settle(qapp)
+    assert body.table.height() == tall
+
+
+def test_the_tables_refit_when_the_walk_changes_the_rows(qapp, monkeypatch, tmp_path):
+    """Two domains, one carrying a slug this catalogue does not offer: its screen has
+    one group and one row more ("From your config"), so the services table must be
+    taller there and shorter again on the way back — the REBUILD re-fits the height,
+    not only the first show or a style change (nothing else resizes the table when
+    the walk moves between domains)."""
+    from hugmesh_studio.gui.pages.domain_services import DomainServicesWidget
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    mod = _mod()
+    w = DomainServicesWidget()
+    w.show()
+    w.load(LocalMeshDomains(domains=[Domain(name="mesh.example"),
+                                     Domain(name="plain.example"),
+                                     Domain(name="extra.example",
+                                            optional_services=["kept-from-config"])],
+                            own_name="mesh.example"))
+    w._step(1)
+    _settle(qapp)
+    assert w.current_domain() == "plain.example"
+    plain, plain_groups = w.table.height(), w.table.topLevelItemCount()
+    assert plain == mod.table_content_height(w.table)
+    w._step(1)
+    _settle(qapp)
+    assert w.current_domain() == "extra.example"
+    assert "kept-from-config" in w._boxes
+    assert w.table.topLevelItemCount() == plain_groups + 1
+    extra = w.table.height()
+    assert extra == mod.table_content_height(w.table) > plain
+    w._step(-1)
+    _settle(qapp)
+    assert w.current_domain() == "plain.example"
+    assert w.table.height() == mod.table_content_height(w.table) == plain
+    _dispose(w, qapp)
+
+
+def test_a_walk_with_no_domains_leaves_no_blank_tables(qapp, monkeypatch, tmp_path):
+    """The cleared screen ("No domains to configure.") re-fits both tables too: a
+    table emptied by the walk keeps no rows' worth of blank height."""
+    from hugmesh_studio.gui.pages.domain_services import DomainServicesWidget
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    mod = _mod()
+    w = DomainServicesWidget()
+    w.show()
+    w.load(LocalMeshDomains(domains=[Domain(name="mesh.example"),
+                                     Domain(name="b.example")],
+                            own_name="mesh.example"))
+    w._step(1)
+    _settle(qapp)
+    assert w.current_domain() == "b.example" and w._boxes
+    tall = w.table.height()
+    assert tall == mod.table_content_height(w.table)
+    w.reload(LocalMeshDomains(domains=[], own_name=""))
+    _settle(qapp)
+    assert w.current_domain() == "" and w.head.text() == "No domains to configure."
+    for t in (w.table, w.front_door_table):
+        assert t.topLevelItemCount() == 0
+        assert t.height() == mod.table_content_height(t) < tall
+    _dispose(w, qapp)

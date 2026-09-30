@@ -506,14 +506,33 @@ _TOR_ROWS = [
 ]
 
 
-def _monitor_units(monkeypatch, **kw):
+def _monitor_lane_units(monkeypatch, **kw):
     import json
     monkeypatch.setattr(mm.shutil, "which", lambda t: "/usr/bin/docker")
     monkeypatch.setattr(mm, "_compose_base", lambda: ["docker", "compose"])
     node = _MonNode(json.dumps(_TOR_ROWS), **kw)
     lane, units, _notes, errors = mm._compose_units(node, "/g", [], {}, mm._Budget(25))
     assert lane.running is True and not errors
-    return units
+    return lane, units
+
+
+def _monitor_units(monkeypatch, **kw):
+    return _monitor_lane_units(monkeypatch, **kw)[1]
+
+
+def test_the_lane_counts_containers_not_door_rows(monkeypatch):
+    """The compose lane's summary counts CONTAINERS; a domain's Door is a row of the
+    one hugmesh-tor container, not a container (two containers with two domain
+    onions read as four before)."""
+    lane, units = _monitor_lane_units(
+        monkeypatch, onion=f"https://{ONION_P}/",
+        domains={"brandb": f"https://{ONION_B}/", "acme-example": f"https://{ONION_A}/"},
+        names=(("acme.example", "acme-example", "default"),))
+    assert len(units) == 4                                   # 2 containers + 2 doors
+    assert lane.detail == f"project {mm._COMPOSE_PROJECT} · 2 container(s)"
+    lane, units = _monitor_lane_units(monkeypatch, onion=f"https://{ONION_P}/")
+    assert len(units) == 2
+    assert lane.detail == f"project {mm._COMPOSE_PROJECT} · 2 container(s)"
 
 
 def test_the_monitor_shows_one_door_per_domain_onion(monkeypatch):
@@ -653,6 +672,9 @@ sed -n 's/^HiddenServiceDir //p' "$torrc" | while read -r hs; do
   esac
   if [ "${STUB_BAD:-}" = "$base" ]; then
     echo "evil.example" > "$hs/hostname"
+  elif [ -n "${STUB_DELAY_DOMAINS:-}" ] && [ "$base" != hugmesh-onion ]; then
+    # a domain key minted only STUB_DELAY_DOMAINS seconds after the primary's
+    ( sleep "$STUB_DELAY_DOMAINS"; printf '%s.onion\n' "$(printf "%056d" 0 | tr 0 "$c")" > "$hs/hostname" ) &
   else
     printf '%s.onion\n' "$(printf "%056d" 0 | tr 0 "$c")" > "$hs/hostname"
   fi
@@ -775,6 +797,77 @@ def test_n_domains_mint_n_stanzas_n_readouts_and_one_host_map(tmp_path):
     # nothing outlives the container: readouts AND the map
     assert os.listdir(tmp_path / "out") == []
     assert not (tmp_path / "map" / "onion-hosts.map").exists()
+
+
+def test_the_primary_is_published_only_after_every_domain_key_exists(tmp_path):
+    """THE ORDER GUARANTEE against a tor that mints a domain's key LATE. Every reader
+    keys off the primary readout, so the script waits for EVERY key before it writes
+    the map and publishes anything (its "ORDER MATTERS" rule). The stub above mints
+    all keys at once, so the tests before this one held that rule only by the stub's
+    timing (R15 of the robustness review): with the wait cut back to the primary
+    alone they stayed green while a live stack would have got a map naming only the
+    primary — brand B's onion refused with 403 until a restart — and a false "not
+    minted within 120s". Here the domain key appears 3 s after the primary's: for as
+    long as it is missing the primary readout must not exist (looked at every 50 ms,
+    over at least ten looks), and once it is there both readouts and the complete
+    map follow."""
+    env = _sandbox(tmp_path, "brandb=brandb")
+    env["STUB_DELAY_DOMAINS"] = "3"
+    proc = subprocess.Popen(["sh", ENTRY], env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True)
+    primary_key = tmp_path / "data" / "hugmesh-onion" / "hostname"
+    domain_key = tmp_path / "data" / "hugmesh-onion.d" / "brandb" / "hostname"
+    readout = tmp_path / "out" / "hostname"
+    try:
+        assert _wait(lambda: primary_key.exists(), timeout=15), \
+            "the stub tor never minted the primary key"
+        looks = 0
+        deadline = time.time() + 20.0
+        while not domain_key.exists():
+            # the domain key is checked FIRST (the loop condition): the real script
+            # publishes the primary at least 0.4 s after that key exists (the slowed
+            # cp of the domain readout), so this can never see a publish that the
+            # key entitled
+            assert not readout.exists(), \
+                "the primary readout was published while the domain key was missing"
+            assert time.time() < deadline, "the stub tor never minted the domain key"
+            looks += 1
+            time.sleep(0.05)
+        assert looks >= 10, f"only {looks} looks between the two keys: no window seen"
+        assert _wait(lambda: readout.exists() and readout.read_text().strip(),
+                     timeout=15), "the primary was never published"
+        snap = {p.name: p.read_text() for p in (tmp_path / "out").iterdir()}
+        assert snap.get("brandb.hostname", "").strip() == ONION_B
+        mp = tmp_path / "map" / "onion-hosts.map"
+        lines = [ln for ln in mp.read_text().splitlines() if ln and not ln.startswith("#")]
+        assert lines == [f"{ONION_P}=default", f"{ONION_B}=brandb"]
+    finally:
+        rc, log = _stop(proc)
+    assert rc == 0
+    assert "not minted within" not in log
+    assert "domain onion 'brandb' (tenant 'brandb') published" in log
+
+
+def test_every_key_directory_is_private_to_tor(tmp_path):
+    """tor refuses a HiddenServiceDir that is not mode 0700, and the stub does not —
+    so the modes are measured on the tree while it is up: the primary's directory,
+    the per-domain root and each domain's (R38 of the robustness review). Under a
+    permissive umask on purpose, so a bare mkdir could not satisfy this."""
+    env = _sandbox(tmp_path, "brandb=brandb acme-example=default")
+    proc = subprocess.Popen(["sh", ENTRY], env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True,
+                            preexec_fn=lambda: os.umask(0o022))
+    try:
+        assert _wait(lambda: (tmp_path / "out" / "hostname").exists())
+        data = tmp_path / "data"
+        for d in (data / "hugmesh-onion", data / "hugmesh-onion.d",
+                  data / "hugmesh-onion.d" / "brandb",
+                  data / "hugmesh-onion.d" / "acme-example"):
+            assert d.is_dir(), d
+            mode = stat.S_IMODE(d.stat().st_mode)
+            assert mode == 0o700, f"{d} is mode {oct(mode)}, tor wants 0o700"
+    finally:
+        _stop(proc)
 
 
 def test_a_bare_slug_is_its_own_tenant(tmp_path):

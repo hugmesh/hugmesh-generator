@@ -75,6 +75,23 @@ more, on both tables of this body and therefore on every host of it (this page, 
 local docker mesh's step, the fleet's step). It is re-applied when the style or font
 changes, and a click anywhere in a row's Selection cell ticks that row.
 
+THE TWO CHECKBOX TABLES ARE AS TALL AS THEIR ROWS (#647, looked at again). The
+services table floored at 300 px while its eleven rows end near 180 px, and the
+front-door table took 90 px for one row — about 170 px of blank table, which pushed
+the front door's state line (``tor_note``: which login the onion serves, that Tor must
+be on for the mesh, what THIS route does with the tick) under the fold of the local
+docker mesh step and the fleet step at the wizard's default size. ``fit_table_height``
+gives each of the two tables a fixed height of exactly its header plus its rows (and
+its frame), re-applied on every rebuild and clear (a domain carrying a slug this
+catalogue does not offer has one group and one row more than its neighbour), on a
+style or font change and when a group row is folded — so the page scrolls only for
+what is really below, and a squeezed window scrolls the page rather than shrinking
+a table onto an inner scrollbar. The read-only "not domain-scoped" table keeps Qt's default height: it
+sits below the state line, and its wide "where" column shows a horizontal scrollbar at
+the default width, which this rule does not account for. The state line is laid out as
+the front-door table's CAPTION — directly under it, with no layout gap — because it
+describes that one row and the two read as one thing.
+
 NO MODAL ANYWHERE. Every refusal and every hint on this page is an inline QLabel; the
 only interactive controls are checkboxes and two step buttons. ``validatePage`` opens
 nothing and blocks nothing — it RECORDS, and the gates downstream refuse. (A page that
@@ -210,30 +227,73 @@ def fit_selection_column(table) -> None:
     hdr.resizeSection(_COL_ON, selection_column_width(table))
 
 
-class _SelectionColumnKeeper(QtCore.QObject):
-    """Re-applies :func:`fit_selection_column` when the table's style or font changes
-    (a theme switch, a stylesheet with a bigger checkbox): the width that fitted the
-    old checkbox would clip the new one. Deferred to the next event-loop turn, because
-    the change reaches the table before it reaches the checkboxes inside it."""
+def table_content_height(table) -> int:
+    """The height that shows every row of ``table`` at once: its header, every row
+    that is on screen (a folded group's children count for nothing) and its frame.
+    Row heights are the view's own (``visualItemRect``), so a checkbox widget in a
+    row, a bigger font or another style's taller rows are all counted."""
+    hdr = table.header()
+    h = 0 if hdr.isHidden() else hdr.sizeHint().height()
+    for i in range(table.topLevelItemCount()):
+        for item in _all_items(table.topLevelItem(i)):
+            h += table.visualItemRect(item).height()
+    return h + 2 * table.frameWidth()
+
+
+def fit_table_height(table) -> None:
+    """Give ``table`` a fixed height of exactly :func:`table_content_height` (#647): no
+    blank rows below the last one, no inner scrollbar hiding the last one, and a page
+    that scrolls for what is really there. Set only when it changed, so a refit
+    triggered by the resize it causes is a no-op rather than a loop.
+
+    Not accounted for: a horizontal scrollbar inside the table, which would cover
+    the bottom of the last row. On the two checkbox tables that needs a window
+    narrower than their four fixed columns (about 330 px), below the wizard's own
+    minimum width."""
+    h = table_content_height(table)
+    if table.minimumHeight() != h or table.maximumHeight() != h:
+        table.setFixedHeight(h)
+
+
+def fit_table(table) -> None:
+    """Both rules of a checkbox table (#647): the Selection column's width and the
+    table's height."""
+    fit_selection_column(table)
+    fit_table_height(table)
+
+
+class _TableFitKeeper(QtCore.QObject):
+    """Re-applies :func:`fit_table` when the table's style or font changes (a theme
+    switch, a stylesheet with a bigger checkbox: the width that fitted the old
+    checkbox would clip the new one, and the height that fitted the old rows would
+    hide the last of the new ones) and when a group row is folded or unfolded.
+    Deferred to the next event-loop turn, because a style or font change reaches
+    the table before it reaches the checkboxes inside it. A plain resize is not
+    watched: no row's height depends on the table's width (nothing wraps)."""
 
     def __init__(self, table):
         super().__init__(table)
         self._table = table
         table.installEventFilter(self)
+        table.itemExpanded.connect(self._later)
+        table.itemCollapsed.connect(self._later)
+
+    def _later(self, *_args) -> None:
+        QtCore.QTimer.singleShot(0, self.refit)
 
     def eventFilter(self, obj, event):          # noqa: N802 (Qt override)
         # Guarded: PyQt6 aborts the process on an exception escaping a Qt override.
         try:
             if event.type() in (QtCore.QEvent.Type.StyleChange,
                                 QtCore.QEvent.Type.FontChange):
-                QtCore.QTimer.singleShot(0, self.refit)
+                self._later()
         except Exception:                      # noqa: BLE001
             pass
         return False
 
     def refit(self) -> None:
         try:
-            fit_selection_column(self._table)
+            fit_table(self._table)
         except Exception:                      # noqa: BLE001 — the table is gone
             pass
 
@@ -336,7 +396,8 @@ class DomainServicesBody:
         self.table.setUniformRowHeights(False)
         self.table.setSelectionMode(
             QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
-        self.table.setMinimumHeight(300)
+        # No minimum height: the table is as tall as its rows (fit_table_height),
+        # never a 300 px floor with blank space under eleven rows.
         hdr = self.table.header()
         hdr.setStretchLastSection(True)
         for c in (_COL_NAME, _COL_SCOPE, _COL_SETTING):
@@ -361,35 +422,42 @@ class DomainServicesBody:
         self.front_door_table.setRootIsDecorated(False)
         self.front_door_table.setSelectionMode(
             QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
-        self.front_door_table.setMaximumHeight(90)
+        # No maximum height either: one row, one row's height (fit_table_height).
         fd_hdr = self.front_door_table.header()
         fd_hdr.setStretchLastSection(True)
         for c in (_COL_NAME, _COL_SCOPE, _COL_SETTING):
             fd_hdr.setSectionResizeMode(
                 c, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        lay.addWidget(self.front_door_table)
 
-        # ── the Selection column (#647): its own width rule, on BOTH tables ────────
-        # Applied here (so even an empty table has it), again after every rebuild
-        # (the rows decide the width) and on a style or font change (the keepers).
+        # The front door's live state — inline, never a modal: which login the
+        # domain's onion serves, and whether Tor runs on this mesh at all. Repainted
+        # on every toggle of the row's checkbox. Laid out as the table's CAPTION: the
+        # two share one block with no gap between them, so the line reads as part of
+        # the row it describes and sits as high on the page as the row itself.
+        self.tor_note = QtWidgets.QLabel("")
+        self.tor_note.setWordWrap(True)
+        self.tor_note.setStyleSheet(muted())
+        front_door_block = QtWidgets.QVBoxLayout()
+        front_door_block.setSpacing(0)
+        front_door_block.setContentsMargins(0, 0, 0, 0)
+        front_door_block.addWidget(self.front_door_table)
+        front_door_block.addWidget(self.tor_note)
+        lay.addLayout(front_door_block)
+
+        # ── the two rules of a checkbox table (#647), on BOTH tables ───────────────
+        # The Selection column's width and the table's height. Applied here (so even
+        # an empty table has them), again after every rebuild (the rows decide both)
+        # and on a style or font change or a folded group (the keepers).
         # A click anywhere in a row's Selection cell ticks that row: ``itemClicked``
         # fires for a real mouse click only, never for a programmatic change, and a
         # click the checkbox itself takes never reaches the table — so no click is
         # ever counted twice.
-        self._selection_keepers = []
+        self._fit_keepers = []
         for t in (self.table, self.front_door_table):
-            fit_selection_column(t)
-            self._selection_keepers.append(_SelectionColumnKeeper(t))
+            fit_table(t)
+            self._fit_keepers.append(_TableFitKeeper(t))
             t.itemClicked.connect(
                 lambda item, column, _t=t: self._on_cell_clicked(_t, item, column))
-
-        # The front door's live state — inline, never a modal: which login the
-        # domain's onion serves, and whether Tor runs on this mesh at all. Repainted
-        # on every toggle of the row's checkbox.
-        self.tor_note = QtWidgets.QLabel("")
-        self.tor_note.setWordWrap(True)
-        self.tor_note.setStyleSheet(muted())
-        lay.addWidget(self.tor_note)
 
         # ── the choices this page SHOWS but does not own (#497) ───────────────────
         self.other_head = QtWidgets.QLabel(
@@ -530,6 +598,8 @@ class DomainServicesBody:
             self.remaining.setText("")
             self.prev_btn.setEnabled(False)
             self.next_btn.setEnabled(False)
+            fit_table(self.table)
+            fit_table(self.front_door_table)
             return
         # BEING HERE IS GOING THROUGH IT. The operator is looking at this domain's
         # catalogue with its current selection ticked; that is the step the ask asks
@@ -590,8 +660,8 @@ class DomainServicesBody:
                 f"{slug} is not domain-scoped and must not be offered per domain"
             self._front_door_row(name)
         self._paint_tor_note()
-        fit_selection_column(self.table)
-        fit_selection_column(self.front_door_table)
+        fit_table(self.table)
+        fit_table(self.front_door_table)
 
     def _on_cell_clicked(self, table, item, column: int) -> None:
         """A click in a row's Selection cell, outside the checkbox itself (#647)."""

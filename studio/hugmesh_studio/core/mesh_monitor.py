@@ -1093,7 +1093,11 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
     domain_onions = _domain_onions(node)
     by_name = {d.name: d for d in (catalog or [])}
     units: list[MeshUnit] = []
+    # Counted apart from the rows: a per-domain onion Door is a row of the same
+    # hugmesh-tor container, not a container of its own.
+    containers = 0
     for r in rows:
+        containers += 1
         name = str(r.get("Name") or "")
         service = str(r.get("Service") or "")
         state_s = str(r.get("State") or "").lower()
@@ -1203,7 +1207,7 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
             units.extend(_domain_onion_units(units[-1], domain_onions))
     if not units:
         notes.append("the compose project reports running but listed zero containers")
-    bits = [f"project {_COMPOSE_PROJECT}", f"{len(units)} container(s)"]
+    bits = [f"project {_COMPOSE_PROJECT}", f"{containers} container(s)"]
     if detail and "container" not in detail:      # status() already counts them
         bits.append(detail)
     return LaneState(True, detail=" · ".join(bits)), units, notes, errors
