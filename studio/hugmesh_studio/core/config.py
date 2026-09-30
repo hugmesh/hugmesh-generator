@@ -2772,9 +2772,24 @@ class Domain:
     # map). It needs Tor on the node / mesh (the node-plane ``tor`` selection) to do
     # anything — see core/domain_services.tor_front_door_state. Manifest emission is
     # OMIT-WHEN-FALSE, like ``idp``, so every pre-#582 manifest keeps its bytes. A
-    # legacy ``"tor"`` in ``optional_services`` (the pre-#227 freeform cell, an inert
-    # slot no builder read) MIGRATES here at load — the ``games`` precedent.
+    # legacy ``"tor"`` in ``optional_services`` (the pre-#227 freeform cell, a slot no
+    # builder ever read) MOVES here at load — the ``games`` precedent.
     tor: bool = False
+
+
+def domain_rows_to_dict(domains) -> list[dict[str, Any]]:
+    """The SAVED shape of a list of domain rows (a config file, a session record):
+    every field, except ``tor`` when it is false (#582). A row that is not a Tor domain
+    is written exactly as it was before ``Domain.tor`` existed; loading treats an
+    absent key as false. A row that is already a plain dict is passed through the same
+    filter."""
+    out: list[dict[str, Any]] = []
+    for d in domains or []:
+        row = dict(d) if isinstance(d, dict) else asdict(d)
+        if not row.get("tor"):
+            row.pop("tor", None)
+        out.append(row)
+    return out
 
 
 @dataclass
@@ -3184,6 +3199,9 @@ class ImageConfig:
         # users: the User wire shape (issue #228 — `roles` OMIT-WHEN-SINGLE), not the
         # raw asdict, so a one-role account keeps its pre-#228 bytes.
         d["users"] = [u.to_dict() if isinstance(u, User) else u for u in self.users]
+        # domains: per-domain ``tor`` (#582) is OMIT-WHEN-FALSE here too, so a saved
+        # config or session record with no Tor domain keeps its pre-#582 bytes.
+        d["domains"] = domain_rows_to_dict(self.domains)
         if not include_secrets:
             for k in SECRET_FIELDS:
                 d[k] = ""
@@ -3221,7 +3239,7 @@ class ImageConfig:
             raise ValueError(
                 f"domain {kw.get('name', '')!r}: tor must be true or false, got {t!r}")
         # MIGRATION: a legacy per-domain ``tor`` slug (pre-#227 freeform cell, kept as
-        # a carried-over slug since) was an inert slot — the manifest carried it and no
+        # a carried-over slug since) did nothing — the manifest carried it and no
         # builder read it (#580 addendum). Decision 68 made per-domain Tor a real
         # mechanism, so the intent moves onto the field that drives it, and the slug
         # leaves the allow-list rather than rendering a second, dead "tor" row.

@@ -8,18 +8,23 @@ or docker:
 
 1. the model — ``Domain.tor``, its load rules (and the legacy slot's migration), and
    the manifest key ``domains[].tor`` in BOTH emitters, omitted when false;
-2. the naming rule — slug (the node contract's shape) and TENANT (what the gateway
+2. the naming rule — slug (the node contract's shape), TENANT (what the gateway
    host map maps the onion to: the domain's own brand only when it runs its own
-   Casdoor, else ``default``);
-3. the local docker mesh — records, saved-record round trip, and the
-   ``TOR_ONION_DOMAINS`` env LocalStackNode threads on a TOR=1 stack only;
+   Casdoor, else ``default``), two names that would share one key directory, and what
+   each ROUTE does with a tick (only the local docker mesh acts on it today);
+3. the local docker mesh — records, saved-record round trip, the import into node
+   images, and the ``TOR_ONION_DOMAINS`` env LocalStackNode passes ONLY for a TOR=1
+   stack that has a Tor domain;
 4. the readouts — ``LocalStackNode.onion_urls`` with #581's freshness rule, and the
    monitor's ONE Door per (domain, onion) carrying that domain's login URL;
-5. Go-Live — onion accepts a domain and names one that has no front door;
+5. Go-Live — onion accepts a domain, names one that has no front door, and both
+   faces' plan shows the run's domain's own onion;
 6. the compose writer — tests/stack/tor/entrypoint.sh EXECUTED against a stub tor:
    N stanzas, N readouts, the gateway host map (primary as ``default``, temp-then-
-   rename), refusals, and nothing surviving a stop;
-7. the compose + Makefile wiring that carries it to the fe-gateway.
+   rename, written only where its directory is mounted), refusals, and nothing
+   surviving a stop;
+7. the compose overlay + Makefile wiring that carries it to the fe-gateway, loaded
+   only for a TOR=1 stack with a Tor domain.
 
 Named ``test_domain_services*.py`` so tests/scripts/test-studio-tor-domain-pins.sh
 (the #591 pre-merge suite) runs it by its family glob.
@@ -44,9 +49,14 @@ from hugmesh_studio.core.config import (DOMAIN_IDP_OWN, INFRA_SERVICES_CHOICES,
 from hugmesh_studio.core.golive_driver import GoLiveDriver, GoLiveOptions, GoLiveProvider
 from hugmesh_studio.core.local_mesh_bootstrap import (LocalMeshBootstrap,
                                                       LocalMeshBootstrapConfig)
+from hugmesh_studio.core.fleet import FleetDomains
+from hugmesh_studio.core.golive_domains import exposure_lines, plan_rows
 from hugmesh_studio.core.local_mesh_domains import (LocalMeshDomains,
+                                                    apply_imported_domains,
                                                     bootstrap_domain_records,
                                                     domains_from_bootstrap,
+                                                    imported_domains_lines,
+                                                    imported_mesh_domains,
                                                     record_walk)
 from hugmesh_studio.core.local_stack_node import LocalStackNode
 from hugmesh_studio.core.platform_info import HostInfo
@@ -57,6 +67,7 @@ STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 ENTRY = os.path.join(GENERATOR_DIR, "tests", "stack", "tor", "entrypoint.sh")
 COMPOSE = os.path.join(GENERATOR_DIR, "tests", "stack", "compose.local.yaml")
+OVERLAY = os.path.join(GENERATOR_DIR, "tests", "stack", "compose.tor-domains.yaml")
 
 ONION_A = "a" * 56 + ".onion"
 ONION_B = "b" * 56 + ".onion"
@@ -172,6 +183,12 @@ def test_only_tor_is_a_per_domain_infra_slug():
     assert "Tor front door" in ds.INFRA_WHERE["tor"]
 
 
+def _mesh(*rows):
+    """A local docker mesh's domain rows — the route that ACTS on a tick."""
+    return LocalMeshDomains(domains=[Domain(name="mesh.example"), *rows],
+                            own_name="mesh.example")
+
+
 def test_row_state_names_the_login_and_the_missing_daemon():
     sup = Domain(name="blog.example", tor=True)
     own = Domain(name="shop.example", idp=DOMAIN_IDP_OWN, tor=True)
@@ -185,11 +202,73 @@ def test_row_state_names_the_login_and_the_missing_daemon():
     node = SimpleNamespace(id="omnibus.x86", infra_services=("tor",))
     assert "Tor is off" not in ds.tor_row_state(own, off, [node])
     # a host that cannot know (the local docker mesh's step, cfg None) says so
-    assert "must be on for the mesh" in ds.tor_row_state(own, None)
+    assert "must be on for the mesh" in ds.tor_row_state(own, None, walked=_mesh(own))
     assert ds.tor_row_state(Domain(name="x.example"), on).startswith("off")
     assert ds.tor_row_state(Domain(name="mesh.example", tor=True), on,
                             own_name="mesh.example") == ds.TOR_OWN_DOMAIN_NOTE
     assert "too long" in ds.tor_row_state(Domain(name="x" * 70 + ".example", tor=True), on)
+
+
+def test_each_route_says_what_a_tick_does_there():
+    # The row must never let the operator believe a node image will mint the onion:
+    # only the local docker mesh acts on the tick today (TOR_REACH).
+    own = Domain(name="shop.example", idp=DOMAIN_IDP_OWN, tor=True)
+    image = ImageConfig(mode="mesh", optional_services=["tor"])
+    client = ImageConfig(mode="cloud", role="desktop")
+    fleet = FleetDomains(domains=[Domain(name="mesh.example"), own],
+                         own_name="mesh.example")
+    assert [ds.tor_route(x) for x in (_mesh(own), image, client, fleet)] == \
+        [ds.TOR_ROUTE_COMPOSE, ds.TOR_ROUTE_IMAGE, ds.TOR_ROUTE_CLIENT,
+         ds.TOR_ROUTE_FLEET]
+    assert ds.tor_route(object()) == ds.TOR_ROUTE_IMAGE    # unknown: claim the least
+    compose = ds.tor_row_state(own, None, walked=_mesh(own))
+    assert compose.startswith("on — its own onion") and "takes effect" in compose
+    assert not ds.tor_row_warns(own, None, walked=_mesh(own))
+    for cfg, scope, words in ((image, image, "NOT YET BUILT INTO A NODE"),
+                              (client, client, "RECORDED ONLY"),
+                              (fleet, None, "RECORDED ONLY")):
+        line = ds.tor_row_state(own, scope, walked=cfg)
+        # "ticked", never "on — its own onion": this route mints nothing
+        assert line.startswith("ticked — it would be") and words in line, line
+        assert "on — its own onion" not in line
+        assert ds.tor_row_warns(own, scope, walked=cfg)
+        # and the operator is told BEFORE ticking, too
+        assert words in ds.tor_row_state(Domain(name="x.example"), scope, walked=cfg)
+    assert not ds.tor_row_warns(Domain(name="x.example"), image, walked=image)
+
+
+def test_no_builder_writes_a_nodes_tor_domains_file_yet():
+    # TOR_REACH's image sentence ("no image builder reads it") is a claim about the
+    # builders. This is that claim, measured: nothing under the build scripts writes
+    # /etc/hugmesh/tor/domains or reads a manifest's domains[]. The day a builder
+    # does, this fails — and the sentence on the page has to change with it.
+    import glob
+    builders = (glob.glob(os.path.join(GENERATOR_DIR, "build-*-stage4.sh"))
+                + glob.glob(os.path.join(GENERATOR_DIR, "scripts", "*.sh")))
+    assert len(builders) > 10
+    for path in builders:
+        text = open(path, encoding="utf-8", errors="replace").read()
+        assert "hugmesh/tor/domains" not in text, path
+    assert "no image builder reads it" in ds.TOR_REACH[ds.TOR_ROUTE_IMAGE]
+
+
+def test_two_names_with_one_key_directory_name_are_told_apart_on_the_row():
+    # "a-b.example" and "a.b.example" slug alike. Only the first in table order is
+    # minted (tor_domain_entries) — and the SECOND one's row has to say so, not claim
+    # an onion it will not get.
+    a = Domain(name="a-b.example", tor=True)
+    b = Domain(name="a.b.example", tor=True)
+    rows = [Domain(name="mesh.example"), a, b]
+    assert [e[0] for e in ds.tor_domain_entries(rows, "mesh.example")] == ["a-b.example"]
+    assert ds.tor_slug_clash(b, rows, "mesh.example") == "a-b.example"
+    assert ds.tor_slug_clash(a, rows, "mesh.example") == ""
+    line = ds.tor_row_state(b, None, walked=_mesh(a, b), domains=rows)
+    assert line.startswith("on, but") and "a-b.example comes first" in line
+    assert ds.tor_row_warns(b, None, walked=_mesh(a, b), domains=rows)
+    assert not ds.tor_row_warns(a, None, walked=_mesh(a, b), domains=rows)
+    # an earlier domain that is NOT a Tor domain claims nothing
+    a.tor = False
+    assert ds.tor_slug_clash(b, rows, "mesh.example") == ""
 
 
 # ── 3. the local docker mesh ──────────────────────────────────────────────────────
@@ -236,15 +315,41 @@ def test_record_walk_writes_the_walks_front_door_into_the_record():
     assert "tor" not in rec.domains[0]
 
 
-def _boot(tmp_path, with_tor, own_idp=()):
+def test_the_import_into_node_images_keeps_the_front_door():
+    # #636's "Create nodes for local cloud" import copies each saved domain's title,
+    # sign-in and services onto the image flow's rows. It landed without Domain.tor,
+    # so merged as-is it dropped the front door the local mesh was run with.
+    rows = [Domain(name="mesh.example"), Domain(name="b.example", tor=True),
+            Domain(name="c.example")]
+    saved = LocalMeshBootstrapConfig(
+        cluster_domain="mesh.example",
+        domains=bootstrap_domain_records(rows, "mesh.example"))
+    md = imported_mesh_domains(saved)
+    cfg = ImageConfig(mode="mesh", cluster_domain="mesh.example")
+    assert apply_imported_domains(cfg, md) == ["b.example", "c.example"]
+    by = {d.name: d for d in cfg.domains}
+    assert by["b.example"].tor is True and by["c.example"].tor is False
+    assert cfg.mesh_manifest()["domains"][0]["tor"] is True
+    # an existing row of the same name takes the record's answer, either way
+    cfg.domains[1].tor = True
+    apply_imported_domains(cfg, md)
+    assert {d.name: d.tor for d in cfg.domains} == {"b.example": True,
+                                                    "c.example": False}
+    lines = imported_domains_lines(md)
+    assert lines[0].endswith("; its own Tor front door")
+    assert "Tor" not in lines[1]
+
+
+def _boot(tmp_path, with_tor, own_idp=(), tor_rows=True):
     cfg = LocalMeshBootstrapConfig(
         cluster_domain="mesh.example", with_tor=with_tor, own_idp_domains=own_idp,
-        domains=({"name": "shop.example", "title": "", "idp": "own",
-                  "optional_services": [], "tor": True},
-                 {"name": "blog.example", "title": "", "idp": "superdomain",
-                  "optional_services": [], "tor": True},
-                 {"name": "mesh.example", "title": "T", "idp": "superdomain",
-                  "optional_services": [], "tor": True}))
+        domains=tuple(dict(r, **({"tor": True} if tor_rows else {})) for r in (
+            {"name": "shop.example", "title": "", "idp": "own",
+             "optional_services": []},
+            {"name": "blog.example", "title": "", "idp": "superdomain",
+             "optional_services": []},
+            {"name": "mesh.example", "title": "T", "idp": "superdomain",
+             "optional_services": []})))
     return LocalMeshBootstrap(str(tmp_path), cfg)
 
 
@@ -268,9 +373,46 @@ def test_the_tenant_follows_own_idp_domains_not_the_rows_label(tmp_path):
 
 def test_a_tor_off_stack_threads_nothing(tmp_path, monkeypatch):
     monkeypatch.setenv("TOR_ONION_DOMAINS", "inherited=default")
-    env = _boot(tmp_path, False)._stack_node()._build_env(write_overlays=False)
+    node = _boot(tmp_path, False)._stack_node()
+    env = node._build_env(write_overlays=False)
     assert "TOR_ONION_DOMAINS" not in env
     assert env["TOR"] == ""
+    assert node.tor_domains_overlay == ""
+
+
+def test_a_tor_stack_with_no_tor_domain_passes_nothing_new(tmp_path, monkeypatch):
+    # TOR=1 and no Tor domain is the one-onion stack it always was: the variable is
+    # ABSENT (never set empty), so the env equals the one from before this existed —
+    # and an inherited value still cannot mint onions this mesh never chose.
+    monkeypatch.delenv("TOR_ONION_DOMAINS", raising=False)
+    node = _boot(tmp_path, True, tor_rows=False)._stack_node()
+    plain = node._build_env(write_overlays=False)
+    assert plain["TOR"] == "1" and "TOR_ONION_DOMAINS" not in plain
+    assert node.tor_domains_overlay == ""
+    monkeypatch.setenv("TOR_ONION_DOMAINS", "inherited=default")
+    assert node._build_env(write_overlays=False) == plain
+
+
+def test_a_scale_loads_the_overlay_the_stack_was_brought_up_with(tmp_path, monkeypatch):
+    # A replica created without the overlay would be an fe-gateway with no onion host
+    # map: it would serve every onion as the default brand while its siblings refuse
+    # the unregistered ones.
+    monkeypatch.setattr(mm, "_compose_base", lambda: ["docker", "compose"])
+    unit = SimpleNamespace(scale=mm.ScaleTarget("compose-service", "hugmesh-fe-gateway",
+                                                "hugmesh-local", refused=""))
+    with_doms = _boot(tmp_path, True)._stack_node()
+    overlay = os.path.join(str(tmp_path), "tests", "stack", "compose.tor-domains.yaml")
+    assert with_doms.tor_domains_overlay == overlay
+    argv, refused = mm.scale_argv(unit, 2, generator_dir=str(tmp_path), node=with_doms)
+    assert not refused
+    assert argv[:9] == ["docker", "compose", "-p", "hugmesh-local",
+                        "-f", with_doms.compose_file, "-f", overlay, "up"]
+    # no Tor domain: exactly the command from before
+    plain = _boot(tmp_path, True, tor_rows=False)._stack_node()
+    argv, _ = mm.scale_argv(unit, 2, generator_dir=str(tmp_path), node=plain)
+    assert argv == ["docker", "compose", "-p", "hugmesh-local", "-f", plain.compose_file,
+                    "up", "-d", "--no-deps", "--no-recreate", "--scale",
+                    "hugmesh-fe-gateway=2", "hugmesh-fe-gateway"]
 
 
 # ── 4. the readouts ───────────────────────────────────────────────────────────────
@@ -296,6 +438,10 @@ def test_onion_urls_are_fresh_valid_and_per_slug(tmp_path, monkeypatch):
     assert node.onion_urls() == {"acme-example": f"https://{ONION_A}/",
                                  "brandb": f"https://{ONION_B}/"}
     assert node.onion_url("brandb") == f"https://{ONION_B}/"
+    # by the domain's NAME as well as by its key directory name
+    assert node.onion_url("acme.example") == f"https://{ONION_A}/"
+    assert node.onion_url("acme-example") == f"https://{ONION_A}/"
+    assert node.onion_url("other.example") == ""
     assert node.onion_url("gone") == ""
     assert node.onion_url() == f"https://{ONION_P}/"            # the primary unchanged
     # nothing running -> nothing handed out (#581's rule, per-domain half)
@@ -399,21 +545,32 @@ def test_a_node_without_the_seam_still_renders(monkeypatch):
 
 
 # ── 5. Go-Live ────────────────────────────────────────────────────────────────────
-def test_golive_onion_accepts_a_tor_domain_and_names_one_without_a_front_door(
-        tmp_path, monkeypatch):
+def _golive(tmp_path, monkeypatch, cluster_domain="mesh.example"):
     exp = tmp_path / "export"
     exp.mkdir()
     (exp / "hostname").write_text(ONION_P + "\n")
     (exp / "shop-example.hostname").write_text(ONION_A + "\n")
+    (exp / "half-written.hostname").write_text("not-an-onion\n")
     cd = tmp_path / "cluster-domain"
-    cd.write_text("mesh.example\n")
+    cd.write_text(cluster_domain + "\n" if cluster_domain else "")
     monkeypatch.setenv("GL_ONION_EXPORT_DIR", str(exp))
     monkeypatch.setenv("GOLIVE_CLUSTER_DOMAIN_FILE", str(cd))
+    monkeypatch.setenv("GOLIVE_DOMAINS_FILE", str(tmp_path / "no-domains-file"))
     drv = GoLiveDriver(GENERATOR_DIR)
-    drv._providers = [GoLiveProvider(id="tor-onion", mechanism="onion", model="onion")]
+    drv._providers = [GoLiveProvider(id="tor-onion", mechanism="onion", model="onion"),
+                      GoLiveProvider(id="byo-domain", mechanism="files", model="dns")]
+    return drv
+
+
+def test_golive_onion_accepts_a_tor_domain_and_names_one_without_a_front_door(
+        tmp_path, monkeypatch):
+    drv = _golive(tmp_path, monkeypatch)
+    # ONE reader of the export directory (the plan's), so only a well-formed v3
+    # address under a well-formed name counts
     assert drv.tor_domain_onions() == {"shop-example": ONION_A}
     assert drv.domain_onion("shop.example") == ONION_A
     assert drv.domain_onion("blog.example") == ""
+    assert drv.domain_onion("") == ""
 
     def probs(domain):
         return [p for p in drv.preflight(GoLiveOptions(provider="tor-onion", domain=domain))
@@ -423,6 +580,41 @@ def test_golive_onion_accepts_a_tor_domain_and_names_one_without_a_front_door(
     assert probs("shop.example") == []                  # a Tor domain here
     miss = probs("blog.example")
     assert len(miss) == 1 and "blog.example" in miss[0] and "shop-example" in miss[0]
+
+
+def test_golive_says_nothing_about_a_front_door_where_the_own_domain_is_unknown(
+        tmp_path, monkeypatch):
+    # No baked cluster domain (the Studio on a workstation): the typed domain may
+    # well be the node's own, which the node's onion opens — so nothing is claimed.
+    drv = _golive(tmp_path, monkeypatch, cluster_domain="")
+    opts = GoLiveOptions(provider="tor-onion", domain="blog.example")
+    assert [p for p in drv.preflight(opts) if "Tor front door" in p] == []
+    assert not [w for w, _h in plan_rows(drv, opts) if "this run's domain" in w]
+
+
+def test_the_golive_plan_names_the_runs_domain_onion_on_both_faces(tmp_path, monkeypatch):
+    # plan_rows is the ONE call the GUI's Generate step and the TUI's go-live screen
+    # both render, so a row here IS on both faces.
+    drv = _golive(tmp_path, monkeypatch)
+
+    def run_row(domain, provider="tor-onion"):
+        rows = plan_rows(drv, GoLiveOptions(provider=provider, domain=domain))
+        return [h for w, h in rows if w == f"Tor: {domain} (this run's domain)"]
+    assert run_row("shop.example") == [
+        f"https://{ONION_A}/ — this domain's own onion, the same gateway"]
+    none = run_row("blog.example")
+    assert len(none) == 1 and none[0].startswith("no onion of its own on this node")
+    # nothing is added for the cluster domain, for no domain, or another mechanism
+    assert run_row("mesh.example") == [] and run_row("") == []
+    assert run_row("shop.example", provider="byo-domain") == []
+    # the TUI screen prints exactly these lines
+    from hugmesh_studio.tui.golive import GoLiveScreen
+    screen = GoLiveScreen()
+    screen.driver = drv
+    screen.opts = GoLiveOptions(provider="tor-onion", domain="shop.example")
+    text = "\n".join(screen.plan_lines(SimpleNamespace(generator_dir=GENERATOR_DIR)))
+    assert text == "\n".join(exposure_lines(plan_rows(drv, screen.opts)))
+    assert f"Tor: shop.example (this run's domain)  https://{ONION_A}/" in text
 
 
 # ── 6. the compose writer, EXECUTED ───────────────────────────────────────────────
@@ -443,7 +635,11 @@ sed -n 's/^HiddenServiceDir //p' "$torrc" | while read -r hs; do
     acme-example) c=a ;;
     *) c=z ;;
   esac
-  printf '%s.onion\n' "$(printf "%056d" 0 | tr 0 "$c")" > "$hs/hostname"
+  if [ "${STUB_BAD:-}" = "$base" ]; then
+    echo "evil.example" > "$hs/hostname"
+  else
+    printf '%s.onion\n' "$(printf "%056d" 0 | tr 0 "$c")" > "$hs/hostname"
+  fi
 done
 log="$(sed -n 's/^Log notice file //p' "$torrc")"
 [ -n "$log" ] && echo "[notice] Bootstrapped 100% (done): Done" >> "$log"
@@ -458,8 +654,10 @@ def _exe(path, body):
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def _sandbox(tmp_path, domains):
-    for sub in ("bin", "data", "out", "map"):
+def _sandbox(tmp_path, domains, map_dir=True):
+    # ``map_dir`` False = the host map's directory is NOT mounted, which is every
+    # stack with no Tor domain (compose mounts it through the overlay only).
+    for sub in ("bin", "data", "out") + (("map",) if map_dir else ()):
         (tmp_path / sub).mkdir()
     _exe(tmp_path / "bin" / "tor", _STUB_TOR)
     _exe(tmp_path / "bin" / "chown", "#!/bin/sh\nexit 0\n")
@@ -500,8 +698,9 @@ def _wait(pred, timeout=8.0):
     return pred()
 
 
-def _run_until_published(tmp_path, domains):
-    env = _sandbox(tmp_path, domains)
+def _run_until_published(tmp_path, domains, map_dir=True, extra_env=None):
+    env = _sandbox(tmp_path, domains, map_dir=map_dir)
+    env.update(extra_env or {})
     proc = subprocess.Popen(["sh", ENTRY], env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True)
     primary = tmp_path / "out" / "hostname"
@@ -587,6 +786,79 @@ def test_no_domains_keeps_the_torrc_to_one_stanza_and_maps_the_primary(tmp_path)
         _stop(proc)
 
 
+# What the script wrote as its torrc BEFORE per-domain onions existed, for the same
+# inputs. A stack with no Tor domain must get exactly these bytes.
+_TORRC_BEFORE_582 = """DataDirectory {data}
+User tor
+# We SERVE an onion — we are not a SOCKS proxy and not a relay.
+SocksPort 0
+HiddenServiceDir {data}/hugmesh-onion
+HiddenServiceVersion 3
+HiddenServicePort 80 up80.test:8080
+HiddenServicePort 443 up443.test:8443
+Log notice stdout
+Log notice file {data}/notice.log
+"""
+
+
+def test_a_stack_with_no_tor_domain_gets_no_map_and_the_old_torrc(tmp_path):
+    # The map directory is mounted only by the overlay (a TOR=1 stack WITH a Tor
+    # domain). Without it this script must do what it always did: no map, no new
+    # directory, the same torrc byte for byte, the one readout, no new log line.
+    proc, ok, snap, snap_map = _run_until_published(tmp_path, None, map_dir=False)
+    try:
+        assert ok
+        assert (tmp_path / "torrc").read_text() == \
+            _TORRC_BEFORE_582.format(data=str(tmp_path / "data"))
+        assert sorted(snap) == ["hostname"] and snap_map is None
+        assert not (tmp_path / "map").exists()
+        assert not (tmp_path / "data" / "hugmesh-onion.d").exists()
+    finally:
+        rc, log = _stop(proc)
+    assert rc == 0
+    assert "host map" not in log and "NOTE" not in log and "WARNING" not in log
+
+
+def test_domains_without_the_map_directory_are_minted_and_say_so(tmp_path):
+    # TOR_ONION_DOMAINS given by hand without the overlay: the onions are minted and
+    # read out, no map is written, and the log says every onion is the default brand.
+    proc, ok, snap, snap_map = _run_until_published(tmp_path, "brandb=brandb",
+                                                    map_dir=False)
+    try:
+        assert ok and snap.get("brandb.hostname", "").strip() == ONION_B
+        assert snap_map is None and not (tmp_path / "map").exists()
+    finally:
+        _rc, log = _stop(proc)
+    assert "NOTE: Tor domains are listed but" in log
+    assert "served as the default brand" in log
+
+
+def test_only_a_well_formed_onion_name_reaches_the_map(tmp_path):
+    # The map decides which brand a Host is served as, so nothing but a v3 onion
+    # name is ever written into it. STUB_BAD makes the stub tor mint a malformed
+    # name for one domain; a malformed PRIMARY writes no map at all (the gateway then
+    # refuses every onion, which is the closed state).
+    proc, ok, _snap, snap_map = _run_until_published(
+        tmp_path, "brandb=brandb acme-example=default",
+        extra_env={"STUB_BAD": "brandb"})
+    try:
+        assert ok
+        assert [ln for ln in snap_map.splitlines() if not ln.startswith("#")] == \
+            [f"{ONION_P}=default", f"{ONION_A}=default"]
+    finally:
+        _stop(proc)
+
+
+def test_a_malformed_primary_writes_no_map_at_all(tmp_path):
+    proc, ok, _snap, snap_map = _run_until_published(
+        tmp_path, "brandb=brandb", extra_env={"STUB_BAD": "hugmesh-onion"})
+    try:
+        assert ok and snap_map is None
+    finally:
+        _rc, log = _stop(proc)
+    assert "the gateway host map could not be written" in log
+
+
 def test_a_previous_runs_readouts_and_map_are_gone_before_tor_starts(tmp_path):
     env = _sandbox(tmp_path, "brandb=brandb")
     (tmp_path / "out" / "brandb.hostname").write_text(ONION_A + "\n")
@@ -614,60 +886,111 @@ def test_a_tor_crash_takes_the_domain_readouts_and_map_down(tmp_path):
     assert not (tmp_path / "map" / "onion-hosts.map").exists()
 
 
-# ── 7. compose + Makefile ─────────────────────────────────────────────────────────
+# ── 7. the compose overlay + Makefile ─────────────────────────────────────────────
 def _entry_default(var):
     m = re.search(r'^%s="\$\{[A-Z_]+:-([^}]*)\}' % var, open(ENTRY).read(), re.M)
     return m.group(1) if m else ""
 
 
-def test_compose_carries_the_domains_the_keys_and_the_map():
-    model = yaml.safe_load(open(COMPOSE))
-    svcs, vols = model["services"], model.get("volumes") or {}
-    tor = svcs["hugmesh-tor"]
-    assert tor["environment"]["TOR_ONION_DOMAINS"] == "${TOR_ONION_DOMAINS:-}"
-    data_dir = _entry_default("DATA_DIR")
-    map_dir = _entry_default("MAP_DIR")
+def test_the_base_compose_file_carries_nothing_of_this():
+    # Every stack with no Tor domain runs compose.local.yaml alone, so nothing of the
+    # per-domain wiring may live there: not the variable, not the map, not a volume.
+    text = open(COMPOSE).read()
+    for needle in ("TOR_ONION_DOMAINS", "APP_TENANCY_HOSTS_FILE", "tor-tenancy-map",
+                   "tor-onion-domain-keys", "hugmesh-onion.d"):
+        assert needle not in text, needle
+
+
+def test_the_overlay_carries_the_domains_the_keys_and_the_map():
+    base = yaml.safe_load(open(COMPOSE))
+    over = yaml.safe_load(open(OVERLAY))
+    assert over["name"] == base["name"]                       # the SAME project
+    # it only ADDS to the two services it names; it declares no service of its own
+    assert sorted(over["services"]) == ["hugmesh-fe-gateway", "hugmesh-tor"]
+    assert set(over["services"]) <= set(base["services"])
+    tor, fe = over["services"]["hugmesh-tor"], over["services"]["hugmesh-fe-gateway"]
+    vols = over["volumes"]
+    assert tor["environment"] == {"TOR_ONION_DOMAINS": "${TOR_ONION_DOMAINS:-}"}
+    data_dir, map_dir = _entry_default("DATA_DIR"), _entry_default("MAP_DIR")
     assert data_dir == "/var/lib/tor" and map_dir == "/tenancy"
     mounts = {v.split(":")[1]: v.split(":")[0] for v in tor["volumes"]}
     # each domain key persists in its OWN named volume, beside the primary's
+    base_mounts = {v.split(":")[1]: v.split(":")[0]
+                   for v in base["services"]["hugmesh-tor"]["volumes"]}
     dk = mounts.get(data_dir + "/hugmesh-onion.d")
-    assert dk and dk in vols and dk != mounts.get(data_dir + "/hugmesh-onion")
+    assert dk and dk in vols and dk != base_mounts.get(data_dir + "/hugmesh-onion")
     mv = mounts.get(map_dir)
     assert mv and mv in vols
-    fe = svcs["hugmesh-fe-gateway"]
-    assert fe["environment"]["APP_TENANCY_HOSTS_FILE"] == "${APP_TENANCY_HOSTS_FILE:-}"
-    assert f"{mv}:{map_dir}:ro" in fe["volumes"]          # the SAME volume, read-only
-    # an EMPTY refresh value stops the gateway context (#39) — never threaded into
-    # any service's environment (compose's `${VAR:-}` would be exactly that)
-    for name, svc in svcs.items():
-        env = (svc or {}).get("environment") or {}
-        keys = env if isinstance(env, dict) else [str(e).split("=", 1)[0] for e in env]
-        assert "APP_TENANCY_HOSTS_FILE_REFRESH_MS" not in keys, name
+    # the gateway reads the file hugmesh-tor writes: the SAME volume, read-only, and
+    # a LITERAL path (an exported variable must not be able to point it elsewhere)
+    assert fe["volumes"] == [f"{mv}:{map_dir}:ro"]
+    assert fe["environment"] == {"APP_TENANCY_HOSTS_FILE": map_dir + "/onion-hosts.map"}
+    # an EMPTY refresh value stops the gateway context (#39) — never set anywhere
+    for path in (COMPOSE, OVERLAY):
+        assert "APP_TENANCY_HOSTS_FILE_REFRESH_MS" not in open(path).read(), path
+    # the Studio names the same file the Makefile loads
+    from hugmesh_studio.core import local_stack_node as lsn
+    assert os.path.join(GENERATOR_DIR, lsn._TOR_DOMAINS_COMPOSE_FILE) == OVERLAY
+    assert _make_var("STACK_TOR_DOMAINS_COMPOSE") == lsn._TOR_DOMAINS_COMPOSE_FILE
+
+
+_KNOBS = ("TOR", "BRAND_B", "TOR_ONION_DOMAINS", "ANUBIS", "TOR_ONION_UPSTREAM",
+          "APP_TENANCY_HOSTS_FILE", "MAKEFLAGS", "MFLAGS")
+
+
+def _make_var(name, *args):
+    """The expansion of one Makefile variable (no recipe runs)."""
+    env = {k: v for k, v in os.environ.items() if k not in _KNOBS}
+    p = subprocess.run(["make", "-s", "--no-print-directory", "-C", GENERATOR_DIR,
+                        *args, "-E", f"__pin: ; @echo \"$({name})\"", "__pin"],
+                       env=env, capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stderr
+    return p.stdout.rstrip("\n")
 
 
 def _make_env(*args):
-    env = {k: v for k, v in os.environ.items()
-           if k not in ("TOR", "BRAND_B", "TOR_ONION_DOMAINS", "ANUBIS",
-                        "TOR_ONION_UPSTREAM", "MAKEFLAGS", "MFLAGS")}
-    p = subprocess.run(["make", "-s", "--no-print-directory", "-C", GENERATOR_DIR,
-                        *args, "-E", "__pin: ; @echo \"$(STACK_ENV)\"", "__pin"],
-                       env=env, capture_output=True, text=True, timeout=60)
-    assert p.returncode == 0, p.stderr
-    return p.stdout
+    return _make_var("STACK_ENV", *args)
 
 
-def test_make_threads_the_map_and_brand_bs_onion_only_on_tor():
-    plain = _make_env()
-    assert "APP_TENANCY_HOSTS_FILE" not in plain and "TOR_ONION_DOMAINS" not in plain
-    assert "TOR_ONION_DOMAINS" not in _make_env("BRAND_B=1")
-    tor = _make_env("TOR=1")
-    map_file = _entry_default("MAP_DIR") + "/onion-hosts.map"
-    assert f"APP_TENANCY_HOSTS_FILE='{map_file}'" in tor
-    assert "TOR_ONION_DOMAINS" not in tor
+def test_make_passes_the_domains_and_the_overlay_only_for_a_tor_domain():
+    flag = " -f tests/stack/compose.tor-domains.yaml"
+    # no Tor domain — TOR=1 alone included — adds NOTHING: not the variable, not the
+    # overlay. The stack env is the one from before this existed.
+    for args in ((), ("TOR=1",), ("BRAND_B=1",), ("TOR=1", "ANUBIS=1"),
+                 ("TOR_ONION_DOMAINS=acme-example=default",)):
+        env = _make_env(*args)
+        assert "TOR_ONION_DOMAINS" not in env, args
+        assert "APP_TENANCY_HOSTS_FILE" not in env, args
+        assert _make_var("STACK_TOR_DOMAINS_FLAGS", *args) == "", args
     both = _make_env("TOR=1", "BRAND_B=1")
     # brand B's onion maps to the SAME tenant key its HTTPS door does
     m = re.search(r"APP_TENANCY_HOSTS='brandb\.localtest\.me=(\w+)'", both)
     assert m, both
     assert f"TOR_ONION_DOMAINS='brandb={m.group(1)}'" in both
+    assert _make_var("STACK_TOR_DOMAINS_FLAGS", "TOR=1", "BRAND_B=1") == flag
     caller = _make_env("TOR=1", "TOR_ONION_DOMAINS=acme-example=default")
     assert "TOR_ONION_DOMAINS='acme-example=default'" in caller
+    assert _make_var("STACK_TOR_DOMAINS_FLAGS", "TOR=1",
+                     "TOR_ONION_DOMAINS=acme-example=default") == flag
+    # the gateway's map path is the overlay's literal, never an env var make passes
+    assert "APP_TENANCY_HOSTS_FILE" not in both and "APP_TENANCY_HOSTS_FILE" not in caller
+
+
+def test_the_up_loads_the_overlay_and_the_teardowns_drop_its_volumes():
+    mk = open(os.path.join(GENERATOR_DIR, "Makefile")).read()
+    lines = mk.splitlines()
+    up = [ln for ln in lines if ln.startswith("\t") and ln.rstrip().endswith(" up -d")]
+    assert len(up) == 1
+    # joined to the tor profile with no space, so an empty value adds no byte at all
+    assert "$(STACK_TOR_PROFILE)$(STACK_TOR_DOMAINS_FLAGS) " in up[0]
+    # `down -v` removes only the volumes of the files it loads: stack-down and
+    # stack-clean load the overlay ALWAYS, so a per-domain key never outlives a
+    # stack-down (the #581 rule the mesh's own onion already follows)
+    for target in ("stack-down", "stack-clean"):
+        block = mk.split(f"\n{target}:", 1)[1].split("\n\n", 1)[0]
+        down = [ln for ln in block.splitlines() if " down -v" in ln and "COMPOSE_CMD" in ln]
+        assert len(down) == 1, target
+        assert " -f $(STACK_TOR_DOMAINS_COMPOSE) " in down[0], target
+    # stack-halt keeps every volume, so it has nothing of the overlay's to drop
+    halt = mk.split("\nstack-halt:", 1)[1].split("\n\n", 1)[0]
+    assert "STACK_TOR_DOMAINS_COMPOSE" not in halt

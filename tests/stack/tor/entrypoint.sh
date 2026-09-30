@@ -42,15 +42,22 @@
 # mesh's own onion as `default` (contract point 1 — once the file is set EVERY
 # unregistered onion is refused, the primary included) and one `<onion>=<tenant>`
 # per domain, written to a temp file in the same directory and RENAMED into place
-# (point 2 — the gateway re-reads it every 5 s non-atomically). Like the hostname
-# readouts, it never outlives the container: removed before tor starts, on stop and
-# when tor dies. Empty TOR_ONION_DOMAINS -> the torrc is byte-identical to before
-# and the map names the primary onion alone.
+# (point 2 — the gateway re-reads it every 5 s non-atomically). Only names shaped
+# like a v3 onion are written: the map decides which brand a Host is served as.
+# Like the hostname readouts, it never outlives the container: removed before tor
+# starts, on stop and when tor dies.
 #
-# Test seams (tests/stack/tor_flip_wiring.py drives this script with a stub tor):
+# THE MAP IS WRITTEN ONLY WHERE ITS DIRECTORY EXISTS. compose mounts /tenancy through
+# the tests/stack/compose.tor-domains.yaml overlay, which the Makefile loads only for
+# a TOR=1 stack that has a Tor domain. So on a stack with no Tor domain this script
+# does what it always did: the same torrc byte for byte, the same one readout, no
+# map, no new directory.
+#
+# Paths a test can point elsewhere (tests/stack/tor_flip_wiring.py and
+# studio/tests/test_domain_services_tor.py run this script against a stub tor):
 # HUGMESH_TOR_DATA_DIR, HUGMESH_TOR_OUT_DIR, HUGMESH_TOR_TORRC, HUGMESH_TOR_BIN,
-# HUGMESH_TOR_MAP_DIR (studio/tests/test_domain_services_tor.py, the #582 pins).
-# Their defaults are the container paths and nothing in compose sets them.
+# HUGMESH_TOR_MAP_DIR. Their defaults are the container paths and nothing in compose
+# sets them.
 set -eu
 
 ROLE="${HUGMESH_TOR_ROLE:-onion}"
@@ -64,8 +71,8 @@ HS_DIR="${DATA_DIR}/hugmesh-onion"
 # Per-domain key directories (#582) — a SEPARATE named volume in compose, never
 # nested inside the primary's HiddenServiceDir.
 DOMAIN_HS_ROOT="${DATA_DIR}/hugmesh-onion.d"
-# The gateway host map (hugmesh-gateway#38) — a named volume the fe-gateway mounts
-# read-only; APP_TENANCY_HOSTS_FILE points at MAP_FILE.
+# The gateway host map (hugmesh-gateway#38) — a named volume the overlay mounts here
+# and, read-only, in the fe-gateway; APP_TENANCY_HOSTS_FILE points at MAP_FILE.
 MAP_DIR="${HUGMESH_TOR_MAP_DIR:-/tenancy}"
 MAP_FILE="${MAP_DIR}/onion-hosts.map"
 # tor's own notice log, read by the compose healthchecks ("Bootstrapped 100%").
@@ -131,6 +138,9 @@ for tok in $(printf '%s' "${TOR_ONION_DOMAINS:-}" | tr ',' ' '); do
 "
 done
 set +f
+if [ -n "$DOMAIN_LINES" ] && [ ! -d "$MAP_DIR" ]; then
+  echo "[hugmesh-tor] NOTE: Tor domains are listed but $MAP_DIR is not mounted, so no gateway host map is written and every onion is served as the default brand (the map comes with tests/stack/compose.tor-domains.yaml)" >&2
+fi
 
 mkdir -p "$HS_DIR" "$OUT_DIR"
 # Every per-domain readout and the host map (#582) go first, by the #581 rule below:
@@ -190,17 +200,30 @@ all_minted() {
   done
 }
 
+# valid_onion NAME: a v3 onion hostname — 56 base32 characters, then ".onion".
+valid_onion() {
+  case "$1" in *.onion) ;; *) return 1 ;; esac
+  _vo="${1%.onion}"
+  case "$_vo" in ''|*[!a-z2-7]*) return 1 ;; esac
+  [ "${#_vo}" -eq 56 ]
+}
+
 # write_map: the gateway host map (hugmesh-gateway#38), temp-then-rename in the SAME
 # directory. The primary as `default`, then each minted domain onion as its tenant.
+# Nothing at all when the map directory is not mounted (a stack with no Tor domain).
 write_map() {
-  mkdir -p "$MAP_DIR" || return 1
+  [ -d "$MAP_DIR" ] || return 0
+  primary="$(tr -d '[:space:]' < "$HS_DIR/hostname")"
+  valid_onion "$primary" || return 1
   tmp="$MAP_DIR/.onion-hosts.map.$$"
   {
     echo "# written by hugmesh-tor (tests/stack/tor/entrypoint.sh), hugmesh-generator#582"
-    echo "$(tr -d '[:space:]' < "$HS_DIR/hostname")=default"
+    echo "${primary}=default"
     printf '%s' "$DOMAIN_LINES" | while read -r slug tenant; do
       [ -n "$slug" ] && [ -s "$DOMAIN_HS_ROOT/$slug/hostname" ] || continue
-      echo "$(tr -d '[:space:]' < "$DOMAIN_HS_ROOT/$slug/hostname")=$tenant"
+      name="$(tr -d '[:space:]' < "$DOMAIN_HS_ROOT/$slug/hostname")"
+      valid_onion "$name" || continue
+      echo "${name}=${tenant}"
     done
   } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$MAP_FILE"
 }

@@ -23,8 +23,14 @@ of that issue: reachable from the same flow, and visibly not domain-scoped.
 ONE EXCEPTION, BY RULING (#582, decision 68 = A): under the services, every domain but
 the mesh's own has a ‘Tor front door’ row (command ``t``) — scope "onion (per domain)",
 writing ``Domain.tor`` (never ``optional_services``) — and a one-line state saying which
-login its onion serves and whether Tor runs on this mesh at all. Same row, same words
-and same field as the GUI page's front-door table.
+login its onion serves, whether Tor runs on this mesh at all, and what THIS route does
+with the choice (``core.domain_services.TOR_REACH`` — only the local docker mesh acts on
+it today). Same row, same words and same field as the GUI page's front-door table.
+
+THE SELECTION COLUMN IS CALLED WHAT THE GUI CALLS IT (#647): both tables head their
+on/off column ``selection``, the GUI header's word (the operator's, PR #646) in this
+face's lower case. ``SELECTION_HEADER`` is the one spelling here and
+studio/tests/test_domain_services_selection_column.py pins it against the live page.
 
 HONESTY: the selection does not yet reach the cluster — issue #496. The screen prints
 ``ENFORCEMENT_NOTE``, the same words the GUI page shows, because a required step that
@@ -57,7 +63,12 @@ from ..core.domain_services import (
 from . import model
 
 __all__ = ["DomainServicesScreen", "service_table", "other_scope_table",
-           "scope_legend", "front_door_table", "TOR_COMMAND"]
+           "scope_legend", "front_door_table", "TOR_COMMAND", "SELECTION_HEADER"]
+
+#: The header of the column that says whether a row is ticked — the GUI page's
+#: "Selection" (``gui/pages/domain_services._HEADERS``), lower-cased like every other
+#: header on this face. The GUI owns the word; a parity test keeps the two alike.
+SELECTION_HEADER = "selection"
 
 
 class _OwnDomainView:
@@ -113,7 +124,8 @@ def service_table(domain) -> tuple[list[str], list[list[str]]]:
                 else describe_carried_over(slug))
         rows.append([str(i), "on" if slug in chosen else "-", slug,
                      SCOPE_LABELS[SCOPE_DOMAIN], note])
-    return (["#", "on", "service", "scope", "what it does for this domain"], rows)
+    return (["#", SELECTION_HEADER, "service", "scope",
+             "what it does for this domain"], rows)
 
 
 #: The front door's command — a letter, never a number, so the service rows' numbers
@@ -132,7 +144,8 @@ def front_door_table(domain, own: bool = False) -> tuple[list[str], list[list[st
     else:
         row = [TOR_COMMAND, "on" if getattr(domain, "tor", False) else "-",
                TOR_ROW_LABEL, SCOPE_LABELS[SCOPE_ONION], TOR_ROW_DESC]
-    return (["cmd", "on", "front door", "scope", "what it does for this domain"], [row])
+    return (["cmd", SELECTION_HEADER, "front door", "scope",
+             "what it does for this domain"], [row])
 
 
 def _offered(domain) -> list[str]:
@@ -236,12 +249,13 @@ class DomainServicesScreen:
         out.append("")
         headers, rows = front_door_table(d, own=is_own)
         out += model.format_table(headers, rows)
-        # the front door's live state — which login its onion serves, and whether Tor
-        # runs on this mesh at all (unknowable on a host with no ImageConfig).
+        # the front door's live state — which login its onion serves, whether Tor
+        # runs on this mesh at all (unknowable on a host with no ImageConfig), and
+        # what this route does with the choice.
         scope_cfg = cfg if self._cfg_of is None else None
         out.append(f"{TOR_ROW_LABEL}: "
-                   + tor_row_state(d, scope_cfg, self._entries(j),
-                                   d.name if is_own else ""))
+                   + tor_row_state(d, scope_cfg, self._entries(j), _own_name(cfg),
+                                   walked=cfg, domains=doms))
         out.append("")
         left = [x.name for x in doms if x.name not in done]
         if left:

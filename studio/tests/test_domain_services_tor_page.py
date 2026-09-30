@@ -12,9 +12,11 @@ What only the real surfaces can answer:
 * the mesh's OWN domain has no control (its front door is the primary onion);
 * the services table still offers no infra slug — the relaxed assert admits ``tor``
   alone, and only through the front-door table;
-* the inline state says when Tor is off for the mesh, and which login the onion serves;
+* the inline state says when Tor is off for the mesh, which login the onion serves,
+  and what THIS route does with the tick — node images and the fleet only record it,
+  and say so; the local docker mesh acts on it;
 * the local docker mesh's host of the same body records it on its rows;
-* the TUI twin: the same row, command ``t``, the same field.
+* the TUI twin: the same row, command ``t``, the same field, the same words.
 
 The GUI half skips without a Qt binding (the Qt-free job); the TUI half never skips.
 Nothing here calls ``.exec()`` — every refusal and hint is an inline label.
@@ -28,6 +30,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from hugmesh_studio.core import domain_services as ds                 # noqa: E402
 from hugmesh_studio.core.config import (                              # noqa: E402
     DOMAIN_IDP_OWN, INFRA_SERVICES_CHOICES, Domain)
+from hugmesh_studio.core.fleet import FleetDomains                     # noqa: E402
 from hugmesh_studio.core.local_mesh_domains import LocalMeshDomains    # noqa: E402
 from hugmesh_studio.tui import domain_services_step, journey          # noqa: E402
 
@@ -68,7 +71,10 @@ def test_tui_front_door_row_toggles_domain_tor_not_the_services(_isolated_state_
     assert d.tor is True and d.optional_services == before
     assert domain_services_step.front_door_table(d)[1][0][1] == "on"
     text = "\n".join(j.lines())
-    assert f"{ds.TOR_ROW_LABEL}: on" in text
+    # node images only RECORD the tick, and the line says so instead of claiming an
+    # onion (core.domain_services.TOR_REACH)
+    assert f"{ds.TOR_ROW_LABEL}: ticked — it would be" in text
+    assert ds.TOR_REACH[ds.TOR_ROUTE_IMAGE] in text
     assert "t=toggle the Tor front door" in text
     j.feed("t")
     assert d.tor is False
@@ -113,6 +119,23 @@ def test_tui_local_mesh_host_records_on_its_rows(_isolated_state_dir):
     assert md.by_name("b.example").tor is True
     text = "\n".join(screen.lines(j))
     assert "own login" in text and "must be on for the mesh" in text
+    # the one route that acts on the tick says so
+    assert f"{ds.TOR_ROW_LABEL}: on — its own onion" in text
+    assert ds.TOR_REACH[ds.TOR_ROUTE_COMPOSE] in text
+
+
+def test_tui_fleet_host_says_the_tick_is_only_recorded(_isolated_state_dir):
+    st = FleetDomains(domains=[Domain(name="mesh.example"), Domain(name="b.example")],
+                      own_name="mesh.example")
+    screen = domain_services_step.DomainServicesScreen(cfg_of=lambda j: st)
+    j = journey.Journey(".")
+    screen.enter(j)
+    screen.feed(j, "n")
+    screen.feed(j, "t")
+    assert st.by_name("b.example").tor is True
+    text = "\n".join(screen.lines(j))
+    assert ds.TOR_REACH[ds.TOR_ROUTE_FLEET] in text
+    assert "on — its own onion" not in text
 
 
 # ── GUI (skips only without a Qt binding) ─────────────────────────────────────────
@@ -203,6 +226,9 @@ def test_gui_inline_state_warns_when_tor_is_off_for_the_mesh(wiz):
     wiz.cfg.tor_onion_service = False
     for e in list(getattr(getattr(wiz, "worklist", None), "entries", None) or ()):
         e.infra_services = ()
+    # unticked: nothing to warn about, but the route is named before the choice
+    assert WARN not in page.tor_note.styleSheet()
+    assert ds.TOR_REACH[ds.TOR_ROUTE_IMAGE] in page.tor_note.text()
     page._tor_box.setChecked(True)
     assert "Tor is off" in page.tor_note.text()
     assert WARN in page.tor_note.styleSheet()
@@ -211,7 +237,10 @@ def test_gui_inline_state_warns_when_tor_is_off_for_the_mesh(wiz):
     page._tor_box.setChecked(False)
     page._tor_box.setChecked(True)
     assert "Tor is off" not in page.tor_note.text()
-    assert WARN not in page.tor_note.styleSheet()
+    # still standing out: node images only RECORD the tick, and the line says so
+    assert "NOT YET BUILT INTO A NODE" in page.tor_note.text()
+    assert "ticked — it would be" in page.tor_note.text()
+    assert WARN in page.tor_note.styleSheet()
 
 
 def test_gui_local_mesh_widget_records_on_its_rows(qapp):
@@ -227,7 +256,43 @@ def test_gui_local_mesh_widget_records_on_its_rows(qapp):
     w._tor_box.setChecked(True)
     assert "must be on for the mesh" in w.tor_note.text()
     assert "DEFAULT brand" in w.tor_note.text()
+    # the local docker mesh ACTS on the tick: said plainly, and not as a warning
+    from hugmesh_studio.gui.styles import WARN
+    assert ds.TOR_REACH[ds.TOR_ROUTE_COMPOSE] in w.tor_note.text()
+    assert WARN not in w.tor_note.styleSheet()
     w.record(md)
     assert md.by_name("b.example").tor is True
     assert md.by_name("mesh.example").tor is False
+    w.deleteLater()
+
+
+def test_gui_fleet_host_says_the_tick_is_only_recorded(qapp):
+    from hugmesh_studio.gui.pages.domain_services import DomainServicesWidget
+    from hugmesh_studio.gui.styles import WARN
+    st = FleetDomains(domains=[Domain(name="mesh.example"), Domain(name="b.example")],
+                      own_name="mesh.example")
+    w = DomainServicesWidget()
+    w.load(st)
+    w._step(1)
+    w._tor_box.setChecked(True)
+    assert ds.TOR_REACH[ds.TOR_ROUTE_FLEET] in w.tor_note.text()
+    assert "on — its own onion" not in w.tor_note.text()
+    assert WARN in w.tor_note.styleSheet()
+    w.deleteLater()
+
+
+def test_gui_two_domains_sharing_a_key_directory_name_say_so(qapp):
+    from hugmesh_studio.gui.pages.domain_services import DomainServicesWidget
+    from hugmesh_studio.gui.styles import WARN
+    md = LocalMeshDomains(domains=[Domain(name="mesh.example"),
+                                   Domain(name="a-b.example", tor=True),
+                                   Domain(name="a.b.example")],
+                          own_name="mesh.example")
+    w = DomainServicesWidget()
+    w.load(md)
+    w._step(2)
+    assert w.current_domain() == "a.b.example"
+    w._tor_box.setChecked(True)
+    assert "a-b.example comes first" in w.tor_note.text()
+    assert WARN in w.tor_note.styleSheet()
     w.deleteLater()

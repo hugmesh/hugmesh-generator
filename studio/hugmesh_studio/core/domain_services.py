@@ -671,7 +671,7 @@ def other_scope_rows(cfg=None, entries=()) -> list[tuple[str, str, str, str]]:
 
 
 # ── #582: the ONE per-domain infra slug — a domain's own Tor front door ─────────────
-# Operator decision 68 = A (hugmesh-generator#347, 2026-09-23) supersedes #494 #C for
+# Operator decision 68 = A (hugmesh-generator#347, 2026-09-23) replaces #494 #C for
 # ``tor`` ONLY: "a Tor domain = its own HiddenService stanza fronting the SAME gateway,
 # distinguished by the onion Host". egress-vpn, workloadConsole and anubis stay node- or
 # cluster-plane and stay read-only on this page.
@@ -679,21 +679,26 @@ def other_scope_rows(cfg=None, entries=()) -> list[tuple[str, str, str, str]]:
 # Two facts, kept apart on purpose:
 #   * the ``tor`` SLUG is still node-scoped (``scope_of("tor") == SCOPE_NODE``): it is
 #     what makes a node RUN Tor at all, set mesh-wide or per node, and the read-only
-#     table keeps showing it — it is the prerequisite of every onion;
+#     table keeps showing it — every onion needs it;
 #   * the per-domain FRONT DOOR is ``Domain.tor`` — its own checkable row, scope
 #     "onion (per domain)", which never writes into ``optional_services``.
 #
-# THE SLUG AND THE TENANT (the host-map line the gateway reads). A Tor domain's onion
-# is minted under a directory SLUG (``own_casdoor.slug`` — the node contract,
-# docs/TOR-HIDDEN-SERVICE.md, refuses dots, so "acme.example" is "acme-example") and
-# registered in the gateway's host map (hugmesh-gateway#38) as ``<onion>=<tenant>``.
-# The TENANT is the tenancy key the gateway already resolves that domain's HTTPS door
-# to: ``slug(name)`` for a domain that runs its own Casdoor (own_casdoor.tenancy_env's
-# ``APP_TENANCY_HOSTS`` value), and ``default`` for one that signs in through the
-# superdomain's Casdoor — such a domain has no issuer of its own, so mapping its onion
-# to a slug would 403 every signed-in user on it (GatewayRouteAccessFilter's
-# domainMatches). Its onion is a separate ADDRESS serving the default brand; a
-# separate LOGIN needs sign-in ``own``, and the row says so.
+# THE KEY DIRECTORY NAME AND THE TENANT (the host-map line the gateway reads). A Tor
+# domain's onion is minted under a directory named by a SLUG (``own_casdoor.slug`` —
+# the node contract, docs/TOR-HIDDEN-SERVICE.md, refuses dots, so "acme.example" is
+# "acme-example") and registered in the gateway's host map (hugmesh-gateway#38) as
+# ``<onion>=<tenant>``. The TENANT is the tenancy key the gateway already resolves that
+# domain's HTTPS door to: ``slug(name)`` for a domain that runs its own Casdoor
+# (own_casdoor.tenancy_env's ``APP_TENANCY_HOSTS`` value), and ``default`` for one that
+# signs in through the superdomain's Casdoor — such a domain has no issuer of its own,
+# so mapping its onion to a slug would 403 every signed-in user on it
+# (GatewayRouteAccessFilter's domainMatches). Its onion is a separate ADDRESS serving
+# the default brand; a separate LOGIN needs sign-in ``own``, and the row says so.
+#
+# WHAT A TICK DOES DEPENDS ON THE ROUTE, and the row says which — see ``TOR_REACH``.
+# Only the local docker mesh acts on it today. A required page that let the operator
+# believe a node image will mint the onion would be the kind of quiet untruth this
+# page exists to stop (the ENFORCEMENT_NOTE rule, applied to this row).
 import re as _re
 
 from . import own_casdoor as _own_casdoor
@@ -722,12 +727,12 @@ TOR_DEFAULT_TENANT = "default"
 #: emit it.
 TOR_SLUG_RE = _re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
-#: What the row says it does, on both faces.
+#: What the row is, on both faces. What THIS route does with a tick is ``TOR_REACH``.
 TOR_ROW_DESC = (
-    "Give this domain its OWN .onion address. It fronts the same gateway as every "
-    "other door; the gateway tells the domains apart by the onion's Host, so this "
-    "domain's onion serves this domain. Needs Tor running on the node (the read-only "
-    "‘tor’ row below).")
+    "This domain's OWN .onion address: one more Tor onion service in front of the "
+    "same gateway as every other door. The gateway tells the domains apart by the "
+    "onion name in the request, so this onion opens this domain. Tor itself has to "
+    "run on the node (the read-only ‘tor’ row below).")
 
 #: The own domain's row: never a control. The mesh's own onion IS its front door.
 TOR_OWN_DOMAIN_NOTE = (
@@ -776,49 +781,157 @@ def tor_domain_entries(domains, own_name: str = "") -> list[tuple[str, str, str]
 
 
 def tor_onion_domains_env(entries) -> str:
-    """The ``TOR_ONION_DOMAINS`` value the compose lane's tor entrypoint reads:
+    """The ``TOR_ONION_DOMAINS`` value the local docker mesh's tor entrypoint reads:
     space-separated ``<slug>=<tenant>`` (tests/stack/tor/entrypoint.sh). "" for none,
     so an untouched stack's env stays byte-identical."""
     return " ".join(f"{slug}={tenant}" for _name, slug, tenant in entries or ())
 
 
-def tor_row_problem(domain) -> str:
-    """Why a ticked Tor front door cannot be minted for ``domain`` ("" when it can)."""
+def tor_slug_clash(domain, domains=(), own_name: str = "") -> str:
+    """The name of the EARLIER Tor domain whose key directory name ``domain`` would
+    share, or "". Two names can slug alike ("a-b.example" and "a.b.example"); there is
+    one key directory per slug, so only the first in table order gets an onion
+    (:func:`tor_domain_entries`) — and the second one's row has to say so."""
+    name = (getattr(domain, "name", "") or "").strip()
+    slug = onion_slug(name)
+    if not slug:
+        return ""
+    own = (own_name or "").strip()
+    for d in domains or ():
+        get = d.get if isinstance(d, dict) else (lambda k, _d=d: getattr(_d, k, None))
+        other = str(get("name") or "").strip()
+        if other == name:
+            return ""
+        if other and other != own and get("tor") is True and onion_slug(other) == slug:
+            return other
+    return ""
+
+
+def tor_row_problem(domain, domains=(), own_name: str = "") -> str:
+    """Why a ticked Tor front door cannot be minted for ``domain`` ("" when it can).
+    ``domains`` (the rows in table order) lets it see a key-directory clash."""
     name = (getattr(domain, "name", "") or "").strip()
     if name and not onion_slug(name):
         return (f"{name} is too long to name an onion key directory (63 characters "
                 "once its dots become dashes) — no onion would be minted for it")
+    clash = tor_slug_clash(domain, domains, own_name)
+    if clash:
+        return (f"{name} and {clash} share one key directory name "
+                f"(‘{onion_slug(name)}’), and {clash} comes first — only {clash} "
+                "gets an onion; rename one of them")
     return ""
 
 
-def tor_row_state(domain, cfg=None, entries=(), own_name: str = "") -> str:
+#: The routes that host the per-domain services step. They differ in what a ticked Tor
+#: front door DOES, so the row names the one it is on.
+TOR_ROUTE_COMPOSE = "compose"      # the generate-a-local-docker-mesh route
+TOR_ROUTE_IMAGE = "image"          # node images for a mesh (the image flow, mesh mode)
+TOR_ROUTE_CLIENT = "client"        # a Mesh desktop client image (cloud mode)
+TOR_ROUTE_FLEET = "fleet"          # the fleet build
+
+#: route -> WHAT A TICK DOES THERE, measured on the builders and the local docker
+#: stack, not assumed. Shown on the row's state line on both faces, whether the box is ticked or
+#: not, so the operator knows before choosing.
+#:
+#: * compose — ``LocalStackNode`` passes the Tor domains to ``make stack-up`` as
+#:   ``TOR_ONION_DOMAINS`` (tests/stack/tor/entrypoint.sh mints one onion each and
+#:   writes the gateway's host map). It needs Tor on for the mesh.
+#: * image — both mesh manifests carry ``domains[].tor``. NO builder or provisioning
+#:   script reads a manifest's ``domains`` at all, so nothing writes
+#:   ``/etc/hugmesh/tor/domains`` on a node from it (hugmesh-tor-reconcile reads that
+#:   file; docs/TOR-HIDDEN-SERVICE.md). studio/tests/test_domain_services_tor.py pins
+#:   that no builder does, so this sentence fails the day one starts to.
+#: * client — a desktop client image serves no domain; cloud mode writes no manifest.
+#: * fleet — ``core/fleet.FLEET_LANE_NOTE``: the rows are recorded with the fleet's
+#:   session and reach no builder (build-all-roles.sh writes no mesh manifest).
+TOR_REACH = {
+    TOR_ROUTE_COMPOSE: (
+        "On this local docker mesh the choice takes effect: with Tor on, starting "
+        "the mesh mints this domain's onion and tells the gateway which sign-in it "
+        "opens."),
+    TOR_ROUTE_IMAGE: (
+        "RECORDED, NOT YET BUILT INTO A NODE: the mesh manifest carries the choice "
+        "(domains[].tor), but no image builder reads it, so a node built from this "
+        "mints no onion for the domain until its /etc/hugmesh/tor/domains names the "
+        "key directory (issue #582)."),
+    TOR_ROUTE_CLIENT: (
+        "RECORDED ONLY: a Mesh desktop client image serves no domain and mints no "
+        "onion, so the choice is kept with this configuration and nothing else."),
+    TOR_ROUTE_FLEET: (
+        "RECORDED ONLY: a fleet build keeps the choice with the fleet's session and "
+        "no builder reads it."),
+}
+
+
+def tor_route(walked) -> str:
+    """Which route ``walked`` — the object the services step is walking — belongs to:
+    a fleet's or a local docker mesh's domain rows, else an ImageConfig (``cloud`` is
+    the desktop client). An object this function has never heard of is treated as a
+    node image, the route whose sentence claims the least."""
+    # Lazy: both modules import this one.
+    from .fleet import FleetDomains
+    from .local_mesh_domains import LocalMeshDomains
+    if isinstance(walked, FleetDomains):
+        return TOR_ROUTE_FLEET
+    if isinstance(walked, LocalMeshDomains):
+        return TOR_ROUTE_COMPOSE
+    if (getattr(walked, "mode", "") or "") == "cloud":
+        return TOR_ROUTE_CLIENT
+    return TOR_ROUTE_IMAGE
+
+
+def tor_row_state(domain, cfg=None, entries=(), own_name: str = "",
+                  walked=None, domains=()) -> str:
     """ONE line for a domain's Tor front door, and the only place its wording lives:
-    whether it is on, whether Tor runs on the mesh at all (when this surface can know
-    — ``cfg`` None means it cannot, e.g. the local docker mesh's step comes BEFORE its
-    Services step), and which login the onion serves."""
+    whether it is on, which login the onion serves, whether Tor runs on the mesh at
+    all (when this surface can know — ``cfg`` None means it cannot, e.g. the local
+    docker mesh's step comes BEFORE its Services step), and what this route does with
+    the choice (``TOR_REACH``; ``walked`` is the object being walked, ``cfg`` when not
+    given). ``domains`` — the rows in table order — lets it name a key-directory
+    clash."""
     name = (getattr(domain, "name", "") or "").strip()
     if own_name and name == own_name:
         return TOR_OWN_DOMAIN_NOTE
+    route = tor_route(cfg if walked is None else walked)
+    reach = TOR_REACH[route]
     if not getattr(domain, "tor", False):
-        return "off — this domain has no onion of its own"
-    problem = tor_row_problem(domain)
+        return "off — this domain has no onion of its own. " + reach
+    problem = tor_row_problem(domain, domains, own_name)
     if problem:
-        return "on, but " + problem
-    bits = [f"on — its own onion, key directory ‘{onion_slug(name)}’"]
+        return "on, but " + problem + ". " + reach
+    # Only a route that ACTS on the tick may say the domain has an onion.
+    bits = [f"on — its own onion, key directory ‘{onion_slug(name)}’"
+            if route == TOR_ROUTE_COMPOSE else
+            "ticked — it would be this domain's own onion, key directory "
+            f"‘{onion_slug(name)}’"]
     if onion_tenant(domain) == TOR_DEFAULT_TENANT:
         bits.append("it signs in through the mesh's Casdoor, so its onion serves the "
                     "DEFAULT brand's login; choose sign-in ‘own’ on the Domains table "
                     "for a login of its own")
     else:
         bits.append("its onion serves this domain's own login")
-    if cfg is None:
+    if route == TOR_ROUTE_COMPOSE and cfg is None:
         bits.append("Tor itself must be on for the mesh (the ‘Services’ step) or no "
                     "onion is minted")
-    elif not mesh_tor_on(cfg, entries):
+    elif route == TOR_ROUTE_IMAGE and cfg is not None and not mesh_tor_on(cfg, entries):
         bits.append("BUT Tor is off for this mesh — turn ‘tor’ on (mesh-wide on the "
                     "‘Network & services’ step, or per node in the worklist), or no "
                     "onion is minted")
-    return "; ".join(bits)
+    return "; ".join(bits) + ". " + reach
+
+
+def tor_row_warns(domain, cfg=None, entries=(), own_name: str = "",
+                  walked=None, domains=()) -> bool:
+    """Whether the state line should stand out: the front door is ticked and either it
+    cannot be minted, Tor is off for the mesh, or this route only records the choice.
+    Both faces ask this rather than re-deriving it."""
+    name = (getattr(domain, "name", "") or "").strip()
+    if (own_name and name == own_name) or not getattr(domain, "tor", False):
+        return False
+    route = tor_route(cfg if walked is None else walked)
+    if route != TOR_ROUTE_COMPOSE or tor_row_problem(domain, domains, own_name):
+        return True
+    return cfg is not None and not mesh_tor_on(cfg, entries)
 
 
 def mesh_tor_on(cfg, entries=()) -> bool:
@@ -832,5 +945,8 @@ __all__ += [
     "SCOPE_ONION", "PER_DOMAIN_INFRA", "TOR_ROW_LABEL", "TOR_ROW_DESC",
     "TOR_OWN_DOMAIN_NOTE", "TOR_DEFAULT_TENANT", "TOR_SLUG_RE",
     "onion_slug", "onion_tenant", "tor_domain_entries", "tor_onion_domains_env",
-    "tor_row_problem", "tor_row_state", "mesh_tor_on",
+    "tor_slug_clash", "tor_row_problem", "tor_row_state", "tor_row_warns",
+    "mesh_tor_on",
+    "TOR_ROUTE_COMPOSE", "TOR_ROUTE_IMAGE", "TOR_ROUTE_CLIENT", "TOR_ROUTE_FLEET",
+    "TOR_REACH", "tor_route",
 ]

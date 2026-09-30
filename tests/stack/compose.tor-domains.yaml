@@ -1,0 +1,56 @@
+# compose.tor-domains.yaml — PER-DOMAIN Tor onions for the local stack
+# (hugmesh-generator#582, operator decision 68 = A on #347: "a Tor domain = its own
+# HiddenService stanza fronting the SAME gateway, distinguished by the onion Host").
+#
+# An OVERLAY, loaded only when a TOR=1 stack has at least one Tor domain
+# (the Makefile's STACK_TOR_DOMAINS_FLAGS — the caller's TOR_ONION_DOMAINS, plus brand
+# B's when BRAND_B=1). compose.local.yaml itself is unchanged, so a stack with no Tor
+# domain — TOR=1 or not — runs exactly the containers, environment and volumes it ran
+# before this file existed.
+#
+# What it adds, and nothing else:
+#   * hugmesh-tor       TOR_ONION_DOMAINS ("<slug>=<tenant> ..."), a named volume for
+#                       the per-domain keys, and the volume it writes the gateway's
+#                       host map into (tests/stack/tor/entrypoint.sh);
+#   * hugmesh-fe-gateway the SAME volume read-only, and APP_TENANCY_HOSTS_FILE pointing
+#                       at the map (hugmesh-gateway#38/#39). From then on the gateway
+#                       REFUSES any .onion Host the map does not name, so hugmesh-tor
+#                       registers the mesh's own onion as `default` first.
+#
+# Only the fe-gateway takes the map: it is the one both onion ports reach (directly on
+# :80, through hugmesh-https-front on :443, which forwards the Host).
+#
+# APP_TENANCY_HOSTS_FILE is a LITERAL, not ${VAR:-...}: it must name the file
+# hugmesh-tor writes (its MAP_DIR default, /tenancy), and an exported variable of the
+# same name in the operator's shell must not be able to point the gateway elsewhere.
+# APP_TENANCY_HOSTS_FILE_REFRESH_MS is deliberately NOT set: an empty value stops the
+# gateway context (hugmesh-gateway#39).
+#
+# `make stack-halt`, `stack-down` and `stack-clean` always load this file, so the two
+# volumes below are dropped with every other volume — a per-domain onion is as
+# disposable as the mesh's own (hugmesh-generator#581).
+name: hugmesh-local
+
+services:
+  hugmesh-tor:
+    environment:
+      TOR_ONION_DOMAINS: ${TOR_ONION_DOMAINS:-}
+    volumes:
+      # each Tor domain's key, beside (never inside) the primary's HiddenServiceDir
+      - tor-onion-domain-keys:/var/lib/tor/hugmesh-onion.d
+      # the gateway host map the fe-gateway reads
+      - tor-tenancy-map:/tenancy
+
+  hugmesh-fe-gateway:
+    environment:
+      APP_TENANCY_HOSTS_FILE: /tenancy/onion-hosts.map
+    volumes:
+      - tor-tenancy-map:/tenancy:ro
+
+volumes:
+  # The per-domain onion keys — the custody of tor-onion-keys, one subdirectory per
+  # Tor domain. Only the PUBLIC hostnames are ever copied out (to ./tor-onion).
+  tor-onion-domain-keys:
+  # hugmesh-tor's gateway host map: written by hugmesh-tor, read-only in the
+  # fe-gateway. Public .onion names and tenant keys only — no key material.
+  tor-tenancy-map:

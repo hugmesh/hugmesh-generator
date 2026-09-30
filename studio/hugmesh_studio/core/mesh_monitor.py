@@ -866,8 +866,8 @@ def _domain_onions(node) -> list[tuple[str, str, str]]:
     """``[(domain label, slug, "https://<onion>/"), ...]`` — the PER-DOMAIN onions the
     running hugmesh-tor published (#582, decision 68 = A; ``LocalStackNode.
     onion_urls`` applies the #581 freshness rule). The label is the domain's NAME when
-    the node knows it (``tor_domains``), else its slug. Never raises: a node without
-    the seam (older callers, test doubles) has none."""
+    the node knows it (``tor_domains``), else its slug. Never raises: a node object
+    with no ``onion_urls`` (older callers, test doubles) has none."""
     try:
         urls = dict(node.onion_urls() or {})
     except Exception:                                 # noqa: BLE001
@@ -1321,7 +1321,15 @@ def scale_argv(unit: MeshUnit, replicas: int, *, generator_dir: str,
         # that are already up alone — without it, `up` re-creates every listed
         # container, which restarts a healthy mesh to change one service's count.
         # --no-deps keeps the blast radius to the named service.
-        return ([*base, "-p", _COMPOSE_PROJECT, "-f", compose_file, "up", "-d",
+        #
+        # A stack with Tor domains was brought up with one more compose file (#582:
+        # ``LocalStackNode.tor_domains_overlay``). A replica created WITHOUT it would
+        # be an fe-gateway with no onion host map — it would serve every onion as the
+        # default brand while its siblings refuse the unregistered ones — so the scale
+        # loads the same file. "" (every stack with no Tor domain) adds nothing.
+        overlay = str(getattr(node, "tor_domains_overlay", "") or "")
+        return ([*base, "-p", _COMPOSE_PROJECT, "-f", compose_file,
+                 *(("-f", overlay) if overlay else ()), "up", "-d",
                  "--no-deps", "--no-recreate", "--scale", f"{target.name}={n}",
                  target.name], "")
     kubectl = devops_tools.which("kubectl", generator_dir)

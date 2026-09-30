@@ -176,7 +176,7 @@ def bootstrap_domain_records(domains, own_name: str) -> tuple[dict, ...]:
                "optional_services": normalise_slugs(d.optional_services)}
         # the domain's own Tor front door (#582): OMIT-WHEN-FALSE, so every record
         # without one keeps its bytes. Unlike optional_services this one RUNS on the
-        # compose lane — LocalStackNode threads it as TOR_ONION_DOMAINS when TOR=1.
+        # local docker mesh — LocalStackNode passes it as TOR_ONION_DOMAINS when TOR=1.
         if getattr(d, "tor", False) and name != own:
             rec["tor"] = True
         out.append(rec)
@@ -325,7 +325,9 @@ def apply_imported_domains(cfg, md: "LocalMeshDomains | None") -> list[str]:
       ``cfg.cluster_domain_services``, written only when the record SAYS something (a
       selection, or a reviewed "cluster default") — never invented.
     * Every ADDED row lands in ``cfg.domains`` (matched by name: an existing row of the
-      same name takes the record's title, sign-in and services), and
+      same name takes the record's title, sign-in, services and Tor front door — #582:
+      the image flow would otherwise drop the front door the local mesh was run with),
+      and
       ``cfg.additional_domains`` turns on — otherwise the "Just this mesh's own domain"
       card, preselected from that flag, would clear the rows on the next page.
     * REVIEWED markers: an imported name is reviewed exactly when the RECORD says it was
@@ -357,6 +359,7 @@ def apply_imported_domains(cfg, md: "LocalMeshDomains | None") -> list[str]:
         dom.title = (row.title or "").strip()
         dom.idp = getattr(row, "idp", "") or DOMAIN_IDP_SUPERDOMAIN
         dom.optional_services = list(picked)
+        dom.tor = bool(getattr(row, "tor", False))
         added.append(name)
     if added:
         cfg.additional_domains = True
@@ -382,5 +385,8 @@ def imported_domains_lines(md: "LocalMeshDomains | None") -> list[str]:
         slugs = normalise_slugs(row.optional_services)
         svc = ", ".join(slugs) if slugs else "cluster default"
         state = "" if name in marks else " (services not confirmed yet)"
-        out.append(f"{name} — {signin}; services: {svc}{state}")
+        # the domain's own Tor front door (#582) — said only when it has one, so a
+        # mesh without Tor domains reads exactly as before
+        door = "; its own Tor front door" if getattr(row, "tor", False) else ""
+        out.append(f"{name} — {signin}; services: {svc}{state}{door}")
     return out

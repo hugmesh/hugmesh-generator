@@ -37,6 +37,9 @@ _COMPOSE_FILE = os.path.join("tests", "stack", "compose.local.yaml")
 # (PUBLIC — never the key) for the host/GUI to read. Bind-mounted from ./tor-onion
 # in the compose file; written ~30s after `make stack-up TOR=1`.
 _TOR_ONION_HOSTNAME_FILE = os.path.join("tests", "stack", "tor-onion", "hostname")
+#: The compose overlay a TOR=1 stack with Tor domains is brought up with (#582; the
+#: Makefile's STACK_TOR_DOMAINS_COMPOSE — a test pins the two spellings together).
+_TOR_DOMAINS_COMPOSE_FILE = os.path.join("tests", "stack", "compose.tor-domains.yaml")
 #: The compose service that mints and publishes the onion (compose.local.yaml).
 _TOR_SERVICE = "hugmesh-tor"
 #: How far a hostname copy may PRE-date the container's recorded StartedAt and still
@@ -328,10 +331,10 @@ class LocalStackNode:
         self.own_idp_domains = tuple(own_idp_domains or ())
         # The domains with their OWN Tor front door (#582, decision 68 = A):
         # ``((name, slug, tenant), ...)`` from core.domain_services.tor_domain_entries.
-        # Threaded as TOR_ONION_DOMAINS="<slug>=<tenant> ..." ONLY on a TOR=1 stack —
-        # the tor entrypoint mints one onion per slug and registers each in the
-        # gateway's host map (hugmesh-gateway#38). Empty (the default, and every
-        # caller from before this existed) threads nothing new.
+        # Passed to `make stack-up` as TOR_ONION_DOMAINS="<slug>=<tenant> ..." ONLY on
+        # a TOR=1 stack — the tor entrypoint mints one onion per slug and registers
+        # each in the gateway's host map (hugmesh-gateway#38). Empty (the default, and
+        # every caller from before this existed) passes nothing new.
         self.tor_domains = tuple(tuple(e) for e in (tor_domains or ()))
 
     @property
@@ -399,11 +402,23 @@ class LocalStackNode:
             return None
         return _parse_docker_time(started)
 
-    def onion_url(self, slug: str = "") -> str:
+    @property
+    def tor_domains_overlay(self) -> str:
+        """The compose overlay this node's stack is brought up with when it is a TOR=1
+        stack with Tor domains (the Makefile's STACK_TOR_DOMAINS_FLAGS), else "". A
+        command that creates containers for this stack outside `make stack-up` (the
+        monitor's scale) must load it too, or a new fe-gateway replica would come up
+        without the onion host map and serve every onion as the default brand."""
+        if self.with_tor and self.tor_domains:
+            return os.path.join(self.generator_dir, _TOR_DOMAINS_COMPOSE_FILE)
+        return ""
+
+    def onion_url(self, domain: str = "") -> str:
         """``https://<onion>/`` for the onion the RUNNING tor container published, or
-        "" when there is none to hand out. With ``slug``, that Tor DOMAIN's own onion
-        instead (#582 — :meth:`onion_urls`, same freshness rule); without, the mesh's
-        primary onion, which serves the mesh's own domain.
+        "" when there is none to hand out. With ``domain`` — a Tor domain's name
+        ("shop.example") or its key directory name ("shop-example") — that DOMAIN's
+        own onion instead (#582 — :meth:`onion_urls`, same freshness rule); without,
+        the mesh's primary onion, which serves the mesh's own domain.
 
         HTTPS, like ``make stack-onion``: the compose onion publishes ``:443`` to the
         TLS front (tests/stack/tor/entrypoint.sh, #598) — a secure context, a Secure
@@ -424,8 +439,8 @@ class LocalStackNode:
         :data:`_ONION_START_SKEW_S`). The entrypoint copies without ``-p`` on every
         start, so a live container always refreshes the mtime.
         ``onion_hostname()`` stays the raw, probe-free file read."""
-        if slug:
-            return self.onion_url_for(slug)
+        if domain:
+            return self.onion_url_for(domain)
         h = self.onion_hostname()
         if not h:
             return ""
@@ -484,10 +499,18 @@ class LocalStackNode:
             out[slug] = f"https://{h}/"
         return out
 
-    def onion_url_for(self, slug: str) -> str:
-        """One domain's onion (``onion_urls()[slug]``), or "" — the per-domain twin of
-        :meth:`onion_url`, whose primary onion serves the mesh's own domain."""
-        return self.onion_urls().get((slug or "").strip(), "") if slug else ""
+    def onion_url_for(self, domain: str) -> str:
+        """One Tor domain's own onion, or "" — the per-domain twin of
+        :meth:`onion_url`, whose primary onion serves the mesh's own domain.
+        ``domain`` is the domain's name or its key directory name: the readouts are
+        keyed by the key directory name, ``core.domain_services.onion_slug`` of the
+        name (which leaves a key directory name as it is)."""
+        key = (domain or "").strip()
+        if not key:
+            return ""
+        from .domain_services import onion_slug
+        urls = self.onion_urls()
+        return urls.get(key) or urls.get(onion_slug(key), "")
 
     def available(self) -> tuple[bool, str]:
         if not shutil.which("make"):
@@ -738,12 +761,17 @@ class LocalStackNode:
         # TOR=1 in the operator's shell can't silently flip it, exactly like SOCIAL —
         # and `$(strip $(TOR))` empty leaves the unprofiled env byte-identical.
         env["TOR"] = "1" if self.with_tor else ""
-        # The per-domain onions (#582). Set EXPLICITLY on a TOR=1 stack (an inherited
-        # TOR_ONION_DOMAINS must not mint onions this mesh never chose — the
-        # SOCIAL/TOR rule), and REMOVED otherwise, so a TOR-off env is unchanged.
-        if self.with_tor:
+        # The per-domain onions (#582): passed only for a TOR=1 stack that HAS Tor
+        # domains. In every other case the variable is REMOVED rather than set empty:
+        # an inherited TOR_ONION_DOMAINS must not mint onions this mesh never chose
+        # (the SOCIAL/TOR rule), and a mesh with no Tor domain — TOR=1 or not — keeps
+        # exactly the env it had before this existed.
+        tor_doms = ""
+        if self.with_tor and self.tor_domains:
             from .domain_services import tor_onion_domains_env
-            env["TOR_ONION_DOMAINS"] = tor_onion_domains_env(self.tor_domains)
+            tor_doms = tor_onion_domains_env(self.tor_domains)
+        if tor_doms:
+            env["TOR_ONION_DOMAINS"] = tor_doms
         else:
             env.pop("TOR_ONION_DOMAINS", None)
         # Set explicitly ("" = off) for the same reason as SOCIAL/TOR: an

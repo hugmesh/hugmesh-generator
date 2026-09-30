@@ -530,16 +530,6 @@ services:
       SPRING_APPLICATION_NAME: hugmesh-fe-gateway
       APP_TENANCY_ISSUERS: ${APP_TENANCY_ISSUERS:-}
       APP_TENANCY_HOSTS: ${APP_TENANCY_HOSTS:-}
-      # The runtime ONION host map (hugmesh-gateway#38/#39; hugmesh-generator#582).
-      # EMPTY unless TOR=1 (the Makefile's STACK_TOR_ENV) — blank is "not configured"
-      # to the gateway (DomainRegistry), so a plain stack is unchanged. Set, EVERY
-      # .onion Host missing from the file is refused; hugmesh-tor writes it (the
-      # mesh's onion as `default`, each Tor domain's onion as its tenant) into the
-      # tor-tenancy-map volume mounted below. Only THIS gateway takes it: it is the
-      # one both onion ports reach (directly on :80, via hugmesh-https-front on :443,
-      # which forwards the Host). APP_TENANCY_HOSTS_FILE_REFRESH_MS is deliberately
-      # NOT threaded — an empty `${VAR:-}` there stops the gateway context (#39).
-      APP_TENANCY_HOSTS_FILE: ${APP_TENANCY_HOSTS_FILE:-}
       # Cookie -> custody-JWT exchange (BffJwtExchangeWebFilter). WITHOUT this the
       # gateway's cookie bridge forwards the raw OPAQUE `bff_...` session value as
       # the Bearer. The three original BFFs never noticed — admin-bff terminates
@@ -612,8 +602,6 @@ services:
       APP_MFA_ENFORCE_PRIVILEGED_FLOOR: ${APP_MFA_ENFORCE_PRIVILEGED_FLOOR:-false}
     volumes:
       - ./gateway-routes/fe:/config:ro
-      # hugmesh-tor's host map (#582) — read-only here; empty on a plain stack.
-      - tor-tenancy-map:/tenancy:ro
     ports:
       - "${PUBLIC_HOST_PORT:-8088}:8080"
     depends_on:
@@ -1758,18 +1746,9 @@ services:
     environment:
       TOR_ONION_UPSTREAM: ${TOR_ONION_UPSTREAM:-hugmesh-fe-gateway:8080}
       TOR_ONION_TLS_UPSTREAM: ${TOR_ONION_TLS_UPSTREAM:-hugmesh-https-front:8443}
-      # Per-domain onions (#582, decision 68 = A): "<slug>=<tenant> ..." — one more
-      # HiddenService per Tor domain, fronting the SAME two upstreams; the gateway
-      # tells them apart by the onion Host via the host map below. Empty = the
-      # mesh's one onion, exactly as before.
-      TOR_ONION_DOMAINS: ${TOR_ONION_DOMAINS:-}
     volumes:
       - tor-onion-keys:/var/lib/tor/hugmesh-onion
-      # each Tor domain's key, beside (never inside) the primary's HiddenServiceDir
-      - tor-onion-domain-keys:/var/lib/tor/hugmesh-onion.d
       - ./tor-onion:/onion-out
-      # the gateway host map the fe-gateway reads (APP_TENANCY_HOSTS_FILE)
-      - tor-tenancy-map:/tenancy
     depends_on:
       hugmesh-fe-gateway:
         condition: service_started
@@ -1874,8 +1853,3 @@ volumes:
   # Persisting the key keeps the .onion address stable across restarts; only the
   # PUBLIC hostname is ever copied out (to ./tor-onion) — the key never leaves here.
   tor-onion-keys:
-  # The per-domain onion keys (#582) — same custody, one subdirectory per Tor domain.
-  tor-onion-domain-keys:
-  # hugmesh-tor's gateway host map (#582): written by hugmesh-tor, read-only in the
-  # fe-gateway. Holds public .onion names and tenant keys only — no key material.
-  tor-tenancy-map:

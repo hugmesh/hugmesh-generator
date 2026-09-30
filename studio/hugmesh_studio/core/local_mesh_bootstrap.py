@@ -619,7 +619,7 @@ class LocalMeshBootstrap:
         """``[(name, slug, tenant), ...]`` — the recorded domains with their OWN Tor
         front door (#582), minus the mesh's own domain (its front door is the primary
         onion). What LocalStackNode threads as TOR_ONION_DOMAINS and the plan prints;
-        inert unless Tor is on for the mesh."""
+        they do nothing unless Tor is on for the mesh."""
         own = (self.cfg.cluster_domain or "").strip() or self.cfg.resolved_domain()
         # The TENANT follows what this stack actually registers: a name is its own
         # brand only when it is in ``own_idp_domains`` (the list own_casdoor turns

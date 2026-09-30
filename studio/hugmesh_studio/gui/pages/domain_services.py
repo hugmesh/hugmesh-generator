@@ -57,10 +57,23 @@ domain = its own HiddenService stanza fronting the SAME gateway, distinguished b
 onion Host." So every domain but the mesh's own gets a ‘Tor front door’ row with scope
 "onion (per domain)", writing ``Domain.tor`` — never ``optional_services``. The node
 still has to RUN Tor, which stays node-scoped and read-only below (the ``tor`` row);
-the inline ``tor_note`` says when it is off, and which login the onion will serve (a
-domain on the superdomain's sign-in serves the default brand over its onion). The
-assert admits ``PER_DOMAIN_INFRA`` and nothing else; egress-vpn, workloadConsole and
-anubis are unchanged.
+the inline ``tor_note`` says when it is off, which login the onion will serve (a
+domain on the superdomain's sign-in serves the default brand over its onion), and WHAT
+THIS ROUTE DOES WITH THE TICK — only the local docker mesh acts on it today; node
+images record it in the mesh manifest and no builder reads it yet
+(``core.domain_services.TOR_REACH``). The assert admits ``PER_DOMAIN_INFRA`` and
+nothing else; egress-vpn, workloadConsole and anubis are unchanged.
+
+THE SELECTION COLUMN HAS ITS OWN WIDTH RULE (#647). The operator could not see where to
+tick a service: the column holding the checkboxes was sized to its header text, and a
+service row's cell starts two indentation steps in (the group row, then the row), so
+under the old two-letter header the cell was ZERO pixels wide and the checkbox was never
+drawn. They renamed the header to "Selection" (PR #646), which made the column wide
+enough at the default font and no more. ``fit_selection_column`` replaces the guess:
+the column is as wide as its header OR the deepest checkbox row needs, whichever is
+more, on both tables of this body and therefore on every host of it (this page, the
+local docker mesh's step, the fleet's step). It is re-applied when the style or font
+changes, and a click anywhere in a row's Selection cell ticks that row.
 
 NO MODAL ANYWHERE. Every refusal and every hint on this page is an inline QLabel; the
 only interactive controls are checkboxes and two step buttons. ``validatePage`` opens
@@ -104,7 +117,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from ..qt import Qt, QtWidgets
+from ..qt import Qt, QtCore, QtWidgets
 from ..styles import MUTED, WARN, muted
 from ._scroll import scrollable
 from ...core.domain_services import (
@@ -112,9 +125,9 @@ from ...core.domain_services import (
     SCOPE_BINDS, SCOPE_DOMAIN, SCOPE_IMAGE, SCOPE_LABELS, SCOPE_NODE, SCOPE_ONION,
     SCOPE_WHERE, TOR_OWN_DOMAIN_NOTE, TOR_ROW_DESC, TOR_ROW_LABEL,
     carried_over_slugs, describe, describe_carried_over, domain_names_for_services,
-    grouped_domain_catalogue, implicit_own_domain, mesh_tor_on, normalise_slugs,
+    grouped_domain_catalogue, implicit_own_domain, normalise_slugs,
     other_scope_rows, record_reviewed, reviewed_names, scope_of,
-    services_page_applies, tor_row_problem, tor_row_state, unconfigured_domains,
+    services_page_applies, tor_row_state, tor_row_warns, unconfigured_domains,
 )
 
 #: Table columns. ``_COL_SCOPE`` (#497) says what each row BINDS, on the row itself and
@@ -140,6 +153,89 @@ def _scope_legend() -> str:
     return "  ·  ".join(
         f"{SCOPE_LABELS[k]}: set {SCOPE_WHERE[k]}, binds {SCOPE_BINDS[k]}"
         for k in (SCOPE_DOMAIN, SCOPE_ONION, SCOPE_IMAGE, SCOPE_NODE))
+
+
+#: Clear space, in pixels, kept on each side of a Selection-column checkbox (#647).
+_SELECTION_PAD = 4
+
+
+def _cell_offset(table, item) -> int:
+    """How far ``item``'s first-column cell starts from the column's left edge. Qt's
+    own rule (QTreeView::indentationForItem): one indentation step per ancestor, plus
+    one more when the root is decorated."""
+    depth = 1 if table.rootIsDecorated() else 0
+    parent = item.parent()
+    while parent is not None:
+        depth += 1
+        parent = parent.parent()
+    return depth * table.indentation()
+
+
+def _all_items(item):
+    yield item
+    for i in range(item.childCount()):
+        yield from _all_items(item.child(i))
+
+
+def selection_column_width(table) -> int:
+    """The width the Selection column needs (#647): its header's own width, or what
+    the most indented checkbox row needs to show its whole checkbox, whichever is more.
+
+    A row's checkbox is a widget placed in the cell (``setItemWidget``), and the view's
+    content-sized columns do not add the row's indentation to such a widget's width —
+    which is how a column exactly as wide as the indentation came to hide it. So the
+    need is computed here, from the row's real offset and the checkbox's own size hint
+    (never less than the style's indicator width), and it follows whatever style,
+    font scale or stylesheet is in force."""
+    indicator = table.style().pixelMetric(
+        QtWidgets.QStyle.PixelMetric.PM_IndicatorWidth, None, table)
+    need = 0
+    for i in range(table.topLevelItemCount()):
+        for item in _all_items(table.topLevelItem(i)):
+            box = table.itemWidget(item, _COL_ON)
+            if box is None:
+                continue
+            need = max(need, _cell_offset(table, item)
+                       + max(indicator, box.sizeHint().width())
+                       + 2 * _SELECTION_PAD)
+    return max(table.header().sectionSizeHint(_COL_ON), need)
+
+
+def fit_selection_column(table) -> None:
+    """Apply the Selection column's width rule to ``table`` — a fixed section of
+    :func:`selection_column_width`, so neither the header text nor a content-sized
+    guess decides whether the checkboxes can be seen."""
+    hdr = table.header()
+    hdr.setSectionResizeMode(_COL_ON, QtWidgets.QHeaderView.ResizeMode.Fixed)
+    hdr.resizeSection(_COL_ON, selection_column_width(table))
+
+
+class _SelectionColumnKeeper(QtCore.QObject):
+    """Re-applies :func:`fit_selection_column` when the table's style or font changes
+    (a theme switch, a stylesheet with a bigger checkbox): the width that fitted the
+    old checkbox would clip the new one. Deferred to the next event-loop turn, because
+    the change reaches the table before it reaches the checkboxes inside it."""
+
+    def __init__(self, table):
+        super().__init__(table)
+        self._table = table
+        table.installEventFilter(self)
+
+    def eventFilter(self, obj, event):          # noqa: N802 (Qt override)
+        # Guarded: PyQt6 aborts the process on an exception escaping a Qt override.
+        try:
+            if event.type() in (QtCore.QEvent.Type.StyleChange,
+                                QtCore.QEvent.Type.FontChange):
+                QtCore.QTimer.singleShot(0, self.refit)
+        except Exception:                      # noqa: BLE001
+            pass
+        return False
+
+    def refit(self) -> None:
+        try:
+            fit_selection_column(self._table)
+        except Exception:                      # noqa: BLE001 — the table is gone
+            pass
 
 
 def _offerable(slug: str) -> bool:
@@ -184,7 +280,7 @@ class DomainServicesBody:
         self._other_rows: dict[str, QtWidgets.QTreeWidgetItem] = {}
         #: domain name -> its own Tor front door (#582, ``Domain.tor``). Kept APART
         #: from ``_selection`` on purpose: the front door is a field of its own and
-        #: must never land in ``optional_services`` (the inert slot it replaced).
+        #: must never land in ``optional_services`` (the unread slot it replaced).
         self._tor: dict[str, bool] = {}
         #: the front-door row + its checkbox for the domain on screen (None for the
         #: mesh's own domain, whose front door IS the primary onion — no control).
@@ -243,7 +339,7 @@ class DomainServicesBody:
         self.table.setMinimumHeight(300)
         hdr = self.table.header()
         hdr.setStretchLastSection(True)
-        for c in (_COL_ON, _COL_NAME, _COL_SCOPE, _COL_SETTING):
+        for c in (_COL_NAME, _COL_SCOPE, _COL_SETTING):
             hdr.setSectionResizeMode(
                 c, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         hdr.setToolTip(_scope_legend())
@@ -257,7 +353,10 @@ class DomainServicesBody:
         # what it binds on the row itself.
         self.front_door_table = QtWidgets.QTreeWidget()
         self.front_door_table.setColumnCount(len(_HEADERS))
-        self.front_door_table.setHeaderLabels(["On", "Front door", "Scope", "",
+        # The SAME header word as the services table's checkbox column — the
+        # operator's own (PR #646) — never a second spelling of it.
+        self.front_door_table.setHeaderLabels([_HEADERS[_COL_ON], "Front door",
+                                               "Scope", "",
                                                "What it does for this domain"])
         self.front_door_table.setRootIsDecorated(False)
         self.front_door_table.setSelectionMode(
@@ -265,10 +364,24 @@ class DomainServicesBody:
         self.front_door_table.setMaximumHeight(90)
         fd_hdr = self.front_door_table.header()
         fd_hdr.setStretchLastSection(True)
-        for c in (_COL_ON, _COL_NAME, _COL_SCOPE, _COL_SETTING):
+        for c in (_COL_NAME, _COL_SCOPE, _COL_SETTING):
             fd_hdr.setSectionResizeMode(
                 c, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         lay.addWidget(self.front_door_table)
+
+        # ── the Selection column (#647): its own width rule, on BOTH tables ────────
+        # Applied here (so even an empty table has it), again after every rebuild
+        # (the rows decide the width) and on a style or font change (the keepers).
+        # A click anywhere in a row's Selection cell ticks that row: ``itemClicked``
+        # fires for a real mouse click only, never for a programmatic change, and a
+        # click the checkbox itself takes never reaches the table — so no click is
+        # ever counted twice.
+        self._selection_keepers = []
+        for t in (self.table, self.front_door_table):
+            fit_selection_column(t)
+            self._selection_keepers.append(_SelectionColumnKeeper(t))
+            t.itemClicked.connect(
+                lambda item, column, _t=t: self._on_cell_clicked(_t, item, column))
 
         # The front door's live state — inline, never a modal: which login the
         # domain's onion serves, and whether Tor runs on this mesh at all. Repainted
@@ -477,6 +590,19 @@ class DomainServicesBody:
                 f"{slug} is not domain-scoped and must not be offered per domain"
             self._front_door_row(name)
         self._paint_tor_note()
+        fit_selection_column(self.table)
+        fit_selection_column(self.front_door_table)
+
+    def _on_cell_clicked(self, table, item, column: int) -> None:
+        """A click in a row's Selection cell, outside the checkbox itself (#647)."""
+        try:
+            if column != _COL_ON:
+                return
+            box = table.itemWidget(item, _COL_ON)
+            if isinstance(box, QtWidgets.QCheckBox) and box.isEnabled():
+                box.toggle()
+        except Exception:                      # noqa: BLE001 — a Qt slot must not raise
+            pass
 
     def _front_door_row(self, name: str) -> None:
         """The domain's own Tor front door (#582). A checkbox for every domain except
@@ -518,19 +644,25 @@ class DomainServicesBody:
               else bool(self._tor.get(name, False)))
         return SimpleNamespace(name=name, tor=on, idp=getattr(row, "idp", ""))
 
+    def _tor_rows(self, current):
+        """Every walked domain's front door as it stands in this walk, in walk order —
+        what core needs to see two domains that would share one key directory."""
+        return [current if n == current.name
+                else SimpleNamespace(name=n, tor=bool(self._tor.get(n, False)))
+                for n in self._names]
+
     def _paint_tor_note(self) -> None:
         name = self.current_domain()
         if not name:
             self.tor_note.setText("")
             return
         view = self._tor_view(name)
-        text = tor_row_state(view, self._scope_cfg(), self._entries(), self._own_name)
+        args = (view, self._scope_cfg(), self._entries(), self._own_name)
+        kw = {"walked": self._cfg_seen, "domains": self._tor_rows(view)}
+        text = tor_row_state(*args, **kw)
         self.tor_note.setText(f"{TOR_ROW_LABEL}: {text}")
-        cfg = self._scope_cfg()
-        warn = view.tor and (bool(tor_row_problem(view))
-                             or (cfg is not None
-                                 and not mesh_tor_on(cfg, self._entries())))
-        self.tor_note.setStyleSheet(f"color: {WARN};" if warn else muted())
+        self.tor_note.setStyleSheet(
+            f"color: {WARN};" if tor_row_warns(*args, **kw) else muted())
         if self._tor_item is not None:
             self._tor_item.setToolTip(_COL_NAME, text)
 

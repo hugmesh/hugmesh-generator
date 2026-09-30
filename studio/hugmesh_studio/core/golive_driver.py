@@ -78,15 +78,9 @@ _MECH_INPUTS = {
 # Mechanisms that need NO public domain (the endpoint is not a DNS name). For these
 # the front-end must not DEMAND one. Onion still ACCEPTS a domain since #582
 # (decision 68 = A): a Tor domain has its own onion, so a domain given with the onion
-# mechanism names WHICH onion — see GoLiveDriver.domain_onion / preflight.
+# mechanism names WHICH onion — GoLiveDriver.domain_onion answers it, preflight says
+# when the domain has none, and core.golive_domains.plan_rows shows it on both faces.
 _NO_DOMAIN_MECHANISMS = frozenset({"onion"})
-
-# Where the node agent exports the onions (specs/usr/sbin/hugmesh-tor-reconcile, #599;
-# go-live-providers.sh's _GLP_ONION_EXPORT_DIR): ``hostname`` for the primary and
-# ``<slug>.hostname`` per Tor domain. GL_ONION_EXPORT_DIR overrides it, as it does for
-# the driver.
-_ONION_EXPORT_DIR_DEFAULT = "/var/lib/hugmesh/tor"
-_ONION_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
 # Terminal emulators the commit/rollback can run in, most-specific first; each
 # entry is (binary, exec-style args that precede the command argv).
@@ -222,33 +216,25 @@ class GoLiveDriver:
             return ""
 
     def tor_domain_onions(self) -> dict[str, str]:
-        """``{slug: "<hash>.onion"}`` — the per-domain onions this node exports (#582),
-        read the way the driver's ``_glp_onion_domains`` reads them. {} when none."""
-        d = os.environ.get("GL_ONION_EXPORT_DIR", _ONION_EXPORT_DIR_DEFAULT)
-        try:
-            names = sorted(os.listdir(d))
-        except OSError:
-            return {}
-        out: dict[str, str] = {}
-        for fn in names:
-            slug = fn[:-len(".hostname")] if fn.endswith(".hostname") else ""
-            if not slug or not _ONION_SLUG_RE.match(slug):
-                continue
-            try:
-                with open(os.path.join(d, fn), encoding="utf-8") as f:
-                    addr = "".join(f.read().split())
-            except OSError:
-                continue
-            if addr:
-                out[slug] = addr
-        return out
+        """``{key directory name: "<hash>.onion"}`` — the per-domain onions this node
+        exports (#582). ONE reader for the export directory: the go-live plan's own
+        (``core.golive_domains.onion_exports`` — ``$GL_ONION_EXPORT_DIR``, only
+        well-formed names and v3 addresses). {} when none."""
+        from .golive_domains import onion_exports       # lazy: it has no need of us
+        return dict(onion_exports()[1])
 
     def domain_onion(self, domain: str) -> str:
         """The onion a Go-Live for ``domain`` exposes over Tor: that domain's OWN onion
-        when it is a Tor domain here (its slug is exported), else "" — the primary
-        onion serves the node's own (cluster) domain and needs no lookup."""
-        from .own_casdoor import slug as _slug
-        return self.tor_domain_onions().get(_slug((domain or "").strip()), "")
+        when it is a Tor domain here, else "" — the primary onion serves the node's
+        own (cluster) domain and needs no lookup.
+
+        A domain is matched to its export by the key directory name the Studio gave it
+        when its ‘Tor front door’ was ticked (``core.domain_services.onion_slug``) —
+        a rule, not a guess: docs/TOR-HIDDEN-SERVICE.md spells it, and it is the only
+        name under which a node is ever told to mint that domain's onion."""
+        from .domain_services import onion_slug
+        slug = onion_slug((domain or "").strip())
+        return self.tor_domain_onions().get(slug, "") if slug else ""
 
     # ---- provider registry (via the driver's `list` — the source of truth) ----
     def providers(self) -> list[GoLiveProvider]:
@@ -455,8 +441,10 @@ class GoLiveDriver:
                 # #582: onion ACCEPTS a domain. The node's own domain is the primary
                 # onion; any other must be a Tor domain on this node, or the plan
                 # would list no onion for it.
+                # Said only when this host KNOWS its own domain: on a host with no
+                # baked cluster domain the typed one may well be the node's own.
                 own = self.autofill_domain()
-                if opts.domain != own and not self.domain_onion(opts.domain):
+                if own and opts.domain != own and not self.domain_onion(opts.domain):
                     served = ", ".join(sorted(self.tor_domain_onions())) or "none"
                     problems.append(
                         f"{opts.domain} has no Tor front door on this node — the "

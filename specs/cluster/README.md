@@ -172,6 +172,36 @@ Spring Cloud Gateway matches routes **first-in-declared-order**, so ordering in
    vanity host with no special path resolves to the profile instead of the front
    page.
 
+### More than one brand domain (`vanityDomains`, hugmesh-generator#582)
+
+The route's own `host` and the `extraHosts` entry are the **cluster domain's** wildcard.
+A mesh that serves further brand domains lists them in the gateway chart's
+`vanityDomains` (a helm parameter list on the fe-gateway Application,
+`vanityDomains[0]=brandb.example`, …). For each entry the chart does both halves at once:
+
+- the `vanity-subdomain` route (the one marked `vanity: true`) also matches
+  `Host=*.<domain>` — one comma-separated predicate, the cluster domain's wildcard first,
+  so precedence above is unchanged;
+- the Ingress admits `*.<domain>` with the same backend as the cluster domain (the PoW
+  shield included).
+
+A brand domain that is a **subdomain** of the cluster domain needs an entry too:
+`*.hugmesh.net` matches one label, so `alice.shop.hugmesh.net` is not covered by it.
+
+What this does **not** do, said plainly:
+
+- **Nothing writes `vanityDomains` yet.** It is never set in git, and no builder or
+  reconciler reads the mesh manifest's `domains[]` into it. Until one does, the list is
+  empty and every render is byte-identical to before.
+- It does not admit the brand domain's **apex** (`brandb.example` itself) — that is the
+  brand's front page, not a vanity subdomain.
+- The **wildcard DNS** and the **cloudflared** rule are still the cluster domain's only
+  (`manifests/lan-dns`, `manifests/cloudflared`): a brand domain needs its own entries
+  there before a request can arrive at the Ingress at all.
+
+`tests/scripts/test-gateway-vanity-domains.sh` renders the chart both ways with a real
+`helm template` and removes each half in a staged copy to prove its checks notice.
+
 **Username extraction:** the gateway does **not** parse the username. It preserves
 the `Host` header and `SetPath`s to `/api/federation/vanity` (no `{username}`),
 and federation-api's `VanityController.resolveByHost` takes the **first DNS label**

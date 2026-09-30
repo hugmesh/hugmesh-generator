@@ -701,7 +701,16 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # file on that tree (GUARD_PREMERGE=0), not computed:
 #     182 of 205 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 23 — neither new suite was ever in it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-182}"
+#
+# 182 -> 183 on 2026-09-30 (iss/582-per-domain-tor, on origin/main 6a052d51 — which
+# already carried the 182 above): one new suite, wired into shell-suites.yml's extras
+# job (helm): tests/scripts/test-gateway-vanity-domains.sh (#582 — the fe-gateway's
+# vanity-subdomain route and Ingress hosts per brand domain, rendered with a real
+# `helm template`). The denominator moves 205 -> 206. MEASURED by RUNNING this file on
+# that tree (GUARD_PREMERGE=0), not computed:
+#     183 of 206 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 23 — the new suite was never in it.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-183}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED
