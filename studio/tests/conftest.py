@@ -526,6 +526,25 @@ def _install_never_elevate_popen() -> None:
 
 
 @pytest.fixture(autouse=True)
+def _ambient_no_elevation_does_not_leak_in(monkeypatch):
+    """Clear an AMBIENT ``HUGMESH_STUDIO_NO_ELEVATION`` for the duration of each test.
+
+    Automation rightly exports it for a whole sweep so a stray launcher can never
+    prompt for a password. But ``core/build_driver.elevation_refusal`` lets that
+    variable beat the per-test opt-out, so every test whose subject is the sudo argv
+    (it fakes subprocess and sets ``HUGMESH_STUDIO_ALLOW_ELEVATION_UNDER_TEST``) or
+    the askpass env plumbing failed under such a sweep, yet passed when run alone
+    (13 tests measured, among them test_build_driver_cancel's
+    ``test_cancel_native_nonroot_wraps_kill_in_sudo``) — a flake that looks like test-order
+    pollution and is really an inherited variable. This does NOT weaken the guards:
+    the driver still refuses under pytest without the opt-out, the ``_never_elevate``
+    spy below still errors any real sudo/pkexec spawn, and the tests that exercise
+    the variable set it themselves with ``monkeypatch.setenv`` (theirs runs later
+    and wins)."""
+    monkeypatch.delenv("HUGMESH_STUDIO_NO_ELEVATION", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _never_elevate():
     """ERROR the test in whose window an elevation program was started (see NEVER
     ELEVATE above). Checked at teardown, so a raise the code under test swallowed
