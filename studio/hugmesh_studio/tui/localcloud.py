@@ -28,7 +28,12 @@ from ..core.config import (
     MODE_DEFAULT_ROLE, ROLE_CHOICES, User, enter_mesh_defaults, image_class,
     normalize_user_roles,
 )
-from ..core.local_mesh_bootstrap import LocalMeshBootstrap
+from ..core.local_mesh_bootstrap import (
+    LocalMeshBootstrap, LocalMeshIdentity, localcloud_tor_note, saved_mesh_source,
+)
+from ..core.local_mesh_domains import (
+    apply_imported_domains, imported_domains_lines, imported_mesh_domains,
+)
 from ..core.seeded_credentials import load_roster
 
 __all__ = ["ALLOWED_ROLES", "LocalCloudScreen", "apply_gate",
@@ -40,6 +45,11 @@ __all__ = ["ALLOWED_ROLES", "LocalCloudScreen", "apply_gate",
 ALLOWED_ROLES = tuple(
     role for role, _platforms, _label in ROLE_CHOICES["mesh"]
     if role == "laptop" or image_class("mesh", role) == "node")
+#: ...and the platforms those rows come on (the GUI's LOCALCLOUD_PLATFORMS, same
+#: derivation) — what the Tor note (#579) splits into "carries it" / "cannot".
+PLATFORMS = tuple(dict.fromkeys(
+    plat for role, platforms, _label in ROLE_CHOICES["mesh"]
+    if role in ALLOWED_ROLES for plat in platforms))
 
 # Casdoor role grants -> User.roles (issue #228: EVERY mapped grant is carried, not
 # the top of a ladder — a persona holding ROLE_ADMIN and ROLE_GAMES imports as
@@ -61,16 +71,23 @@ def _person_roles(roles) -> list[str]:
         [person for granted, person in _CASDOOR_ROLE_MAP if granted in roles])
 
 
-def local_mesh_identity(generator_dir: str) -> tuple[str, list[tuple[str, list[str]]]]:
-    """The local mesh's importable identity: ``(apex domain, [(username, roles)])``.
+def local_mesh_identity(generator_dir: str) -> LocalMeshIdentity:
+    """The local mesh's importable identity: ``(apex domain, [(username, roles)...],
+    with_tor, source, mesh_domains)`` — a :class:`LocalMeshIdentity`.
 
-    READ-ONLY and offline (plain file reads — no docker/compose probe): the apex
-    from the bootstrap config's resolution, the accounts from the two channels
-    the Studio itself provisioned — the minted superadmin in the runtime secrets
-    bundle and the seeder's persona roster. Accounts created after go-live live
-    in the mesh's identity tier; they cannot be enumerated from disk and do not
-    need to be. Passwords are never read into the config."""
-    boot = LocalMeshBootstrap(generator_dir)
+    READ-ONLY and offline (plain file reads, no docker/compose probe — this runs in
+    a screen's ``enter`` and must never stall the prompt loop). The mesh's CONFIG comes from the newest saved-mesh record
+    for this checkout (``LocalMeshBootstrap.for_checkout``), so the apex and whether
+    the mesh ran the Tor onion (``effective_with_tor()`` — the services row whenever
+    there is a selection) are what that mesh actually SAVED, not a default config's
+    brand domain with Tor off (#579). No record: the defaults, and ``source`` is "".
+    A record is the mesh as saved, not a probe of what is running (#309). The
+    accounts come from the two channels the Studio itself provisioned — the minted
+    superadmin in the runtime secrets bundle and the seeder's persona roster. Users
+    created after go-live live in the running mesh's identity tier; they cannot be
+    enumerated from disk and do not need to be. Passwords are never read into the
+    config (User rows carry no secret)."""
+    boot, rec = LocalMeshBootstrap.for_checkout(generator_dir)
     domain = boot.cfg.resolved_domain()
     users: list[tuple[str, list[str]]] = []
     creds = boot.superadmin_login()
@@ -82,10 +99,17 @@ def local_mesh_identity(generator_dir: str) -> tuple[str, list[tuple[str, list[s
         if u.username not in seen:
             seen.add(u.username)
             users.append((u.username, _person_roles(u.roles)))
-    return domain, users
+    # #636: EVERY domain the saved mesh carries, not just the apex — the rows its
+    # Domains step recorded (title, sign-in, per-domain services) and which of them
+    # its Domain services step walked. None for a one-domain / pre-#494 record.
+    return LocalMeshIdentity(domain, users, bool(boot.cfg.effective_with_tor()),
+                             saved_mesh_source(rec),
+                             imported_mesh_domains(boot.cfg) if rec is not None
+                             else None)
 
 
-def apply_gate(journey, domain: str, users: list[tuple[str, list[str]]]) -> None:
+def apply_gate(journey, domain: str, users: list[tuple[str, list[str]]],
+               with_tor: bool = False, mesh_domains=None) -> None:
     """Commit the abbreviated mesh chain — the GUI gate's validatePage, mirrored.
 
     Applied ONCE per confirmed gate pass (the prompt loop has no collect_all
@@ -106,6 +130,15 @@ def apply_gate(journey, domain: str, users: list[tuple[str, list[str]]]) -> None
     journey.worklist_role_allow = ALLOWED_ROLES
     if domain:
         cfg.cluster_domain = domain
+    # EVERY DOMAIN, not just the apex (#636) — the GUI gate's call, the same core
+    # function, after cluster_domain (which tells the own row from the added ones).
+    apply_imported_domains(cfg, mesh_domains)
+    # THE SAVED-MESH -> NODE-IMAGE BRIDGE (#579), the GUI gate's rule restated: a
+    # mesh that ran Tor sets the mesh-wide onion default on the base (the network
+    # step shows it and can clear it); materialize() emits it per platform. Only
+    # ever turns it ON.
+    if with_tor:
+        cfg.tor_onion_service = True
     superdomain = cfg.effective_superdomain()
     existing = {(u.username, u.domain) for u in cfg.users}
     for username, roles in users:
@@ -132,13 +165,19 @@ class LocalCloudScreen:
     def __init__(self):
         self._domain = ""
         self._users: list[tuple[str, list[str]]] = []
+        self._with_tor = False
+        self._source = ""
+        self._mesh_domains = None
 
     def enter(self, j) -> None:
         # re-read on EVERY forward entry (the mesh may have been re-bootstrapped
         # since); consent is asked afresh each time — that is the point of the
         # page. local_mesh_identity is looked up on the MODULE so tests can pin
         # a canned mesh exactly as the GUI tests do.
-        self._domain, self._users = local_mesh_identity(j.generator_dir)
+        ident = LocalMeshIdentity(*local_mesh_identity(j.generator_dir))
+        self._domain, self._users = ident.domain, list(ident.users)
+        self._with_tor, self._source = bool(ident.with_tor), str(ident.source or "")
+        self._mesh_domains = ident.mesh_domains
 
     def lines(self, j) -> list[str]:  # noqa: ARG002 — screen-protocol signature
         listed = ", ".join(
@@ -151,9 +190,15 @@ class LocalCloudScreen:
             "image types.",
             "",
             "Imported from the local mesh:",
+            "  " + (f"from the {self._source}" if self._source
+                    else "no saved mesh for this checkout — the defaults below"),
             f"  apex domain: {self._domain or '(brand default)'}",
             "  accounts: " + (listed or "none found on disk (unseeded or "
                                         "terminal-managed mesh)"),
+            f"  Tor onion: {'on' if self._with_tor else 'off'}",
+            *[("  domains: " if i == 0 else "           ") + line
+              for i, line in enumerate(imported_domains_lines(self._mesh_domains))],
+            *(["", localcloud_tor_note(PLATFORMS)] if self._with_tor else []),
             "",
             "If this mesh has already gone LIVE with real users, that stays "
             "valid — accounts created after go-live live in the mesh's "
@@ -173,7 +218,8 @@ class LocalCloudScreen:
 
     def feed(self, j, line: str) -> None:
         if line.lower() in ("y", "yes"):
-            apply_gate(j, self._domain, self._users)
+            apply_gate(j, self._domain, self._users, with_tor=self._with_tor,
+                       mesh_domains=self._mesh_domains)
             j.advance()                  # rejoin the mesh chain: idp -> worklist
             return
         # declining (or q/Enter/anything else) backs out with NOTHING committed

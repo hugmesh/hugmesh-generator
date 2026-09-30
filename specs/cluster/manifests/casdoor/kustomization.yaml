@@ -13,6 +13,6 @@ resources:
   - games-services-runner-sync-job.yaml  # ROLE_GAMES_SERVICES_RUNNER = ROLE_GAMES_SERVICES ∩ ROLE_MOD
 # The "casdoor-google" Secret (clientId / clientSecret) is now materialized by
 # External Secrets Operator from Vault (ClusterSecretStore "hugmesh-vault",
-# remote path secret/hugmesh/casdoor) — see manifests/external-secrets.
+# remote path secret/<brand>/casdoor) — see manifests/external-secrets.
 # The offline/USB path (KEYS/vault/secrets.json) is created by keys-provision.
 # The casdoor Deployment keeps its existing secretKeyRef usage unchanged.

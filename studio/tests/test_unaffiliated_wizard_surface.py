@@ -35,8 +35,8 @@ inverted test keeps a NEGATIVE half: the identity fields must still blank on a r
 commit and must still raise from ``to_cli_args()``. A test that merely stopped
 checking would let the affiliation leak back.
 
-The load-bearing property throughout is that hiding or skipping must be
-EMISSION-NEUTRAL (``StudioWizard.nextId``: applies_to may return False "ONLY when
+The property that matters throughout is that hiding or skipping must be
+LEAVES THE OUTPUT UNCHANGED (``StudioWizard.nextId``: applies_to may return False "ONLY when
 every config field the page emits is already at the mode-correct default"; every
 widget hide is paired with a validatePage clear to the dataclass default).
 """
@@ -159,7 +159,7 @@ def test_the_page_still_disappears_where_there_is_no_look_to_offer(wiz, cfg_kw, 
     ``applies_to`` no longer keys on the unaffiliated axis at all — it keys on whether
     a themable DESKTOP HALF exists (branding.py ``_desktop_half_allowed``: role class
     desktop AND a platform whose builder parses --theme). So an unaffiliated image
-    with nothing to theme must STILL vanish, and stay emission-neutral by RolePage's
+    with nothing to theme must STILL vanish, and still leave the output unchanged by RolePage's
     clear exactly as it did before. A change that simply made applies_to return True
     unconditionally would pass every other test in this section and fail here."""
     page = _page(wiz, BrandingPage)
@@ -174,7 +174,7 @@ def test_the_unaffiliated_page_hides_and_clears_only_the_identity_half(wiz):
     cards are live, and exactly two controls are gone — the brand-logo row (the whole
     _row(), caption included, so no orphan label is left behind) and the "Lock
     branding" checkbox. Both are paired with a validatePage clear back to the
-    ImageConfig dataclass default, which is what keeps the hide emission-neutral.
+    ImageConfig dataclass default, which is what keeps the hide leaving the output unchanged.
 
     --brand-logo matters more than it looks: it is a hard conflict AND every --theme
     preset ships its own logo.png, which apply_dir installs as the greeter's
@@ -194,7 +194,7 @@ def test_the_unaffiliated_page_hides_and_clears_only_the_identity_half(wiz):
     assert page.unaffiliated_note.isVisibleTo(page), (
         "the page must SAY why identity is missing, not just drop it silently")
 
-    # emission-neutral: drive the hidden controls, commit, and prove nothing escapes
+    # leaves the output unchanged: drive the hidden controls, commit, and prove nothing escapes
     page.locked.setChecked(True)
     page.validatePage()
     assert wiz.cfg.brand_logo == "" and wiz.cfg.brand_locked is False
@@ -275,7 +275,7 @@ def test_a_branded_desktop_walks_the_same_screens(wiz):
     branded one ONLY where a decision says it does. Since DECISION 1 that is nowhere
     in the page SEQUENCE — the difference moved inside BrandingPage, to two hidden
     identity widgets. If these two walks ever diverge again, a page-level skip has
-    come back and the emission-neutral audit has to be redone with it."""
+    come back and the audit that leaves the output unchanged has to be redone with it."""
     assert _walk(wiz, _unaff_cfg()) == _walk(wiz, _branded_cfg())
 
 
@@ -414,7 +414,7 @@ def test_hiding_the_services_box_leaves_the_emission_neutral(wiz):
     carries no ROLE_CLIENT guard, unlike its runlevel neighbour at :4833) into an
     image whose whole point is to bake none of it. Neutral means the ARGV answers the
     question the hidden picker would have asked, and the answer is an explicit none.
-    Absent any profile the added tokens are measurably inert."""
+    Absent any profile the added tokens are measurably ineffective."""
     page = _shown_net(wiz, _unaff_cfg())
     page.validatePage()
     argv = wiz.cfg.to_cli_args()

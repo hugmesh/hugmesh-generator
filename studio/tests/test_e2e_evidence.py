@@ -146,7 +146,7 @@ def test_an_absolute_path_breaks_the_relocation_contract(tmp_path):
 
 def test_an_unknown_schema_is_reported_not_guessed_at(tmp_path):
     """Silently parsing a future shape because the field names overlap is how a
-    contract rots while every consumer stays green."""
+    contract goes stale while every consumer stays green."""
     run = _make_run(tmp_path, [_row()], schema="hugmesh.bdd.evidence-manifest/2")
     man = e2e_evidence.load(run)
     assert not man.ok

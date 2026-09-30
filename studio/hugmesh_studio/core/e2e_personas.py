@@ -35,7 +35,7 @@ matrix.spec.ts is the pattern the brief pointed at, and it needs no edit at all:
 ``PERSONAS`` table writes ``username: 'mesh-operator'``, and the persona-key rule below
 reads it.
 
-THE VACUITY HAZARD, and the deliverable. An index that RESTATES a list of personas
+THE CHECKED-NOTHING PASS HAZARD, and the deliverable. An index that RESTATES a list of personas
 would be wrong the first time a spec changed, and — worse — would go on rendering a
 confident, stale table. Nothing here is restated: the RBAC matrix is parsed out of
 tests/e2e/specs/rbac-roles.ts, the seed roster out of the three shell scripts (via
@@ -199,7 +199,7 @@ _FUNC_SIG_RE = re.compile(r"function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)", re.DOT
 def strip_ts(text: str) -> str:
     """Remove TypeScript comments, STRING-AWARE.
 
-    Not the regex stripper in e2e_catalogue, and the difference is load-bearing here.
+    Not the regex stripper in e2e_catalogue, and the difference is relied on here.
     A naive ``/\\*.*?\\*/`` treats the ``/*`` inside the string ``'/bff/superadmin/**'``
     (rbac-roles.ts, SUPERADMIN_ALLOW_ROUTES) as the start of a block comment and
     swallows everything up to the next ``*/`` — measured: it eats the tail of the file
@@ -1112,10 +1112,10 @@ def guard_failures(idx: PersonaIndex, *, matrix: Sequence[MatrixPersona],
                    games_matrix: Sequence[MatrixPersona],
                    games_roster: Sequence[tuple[str, tuple[str, ...]]]
                    ) -> tuple[Finding, ...]:
-    """THE DELIVERABLE. Five checks, each one a way the index could silently rot.
+    """THE DELIVERABLE. Five checks, each one a way the index could silently go stale.
 
     A derived index that only ever agrees with itself is worth nothing; what makes it
-    load-bearing is that a spec, a roster or a matrix can be changed in a way that
+    relied on is that a spec, a roster or a matrix can be changed in a way that
     makes this FAIL. Each finding names the file to change, because a guard that says
     only "mismatch" gets suppressed rather than fixed."""
     out: list[Finding] = []

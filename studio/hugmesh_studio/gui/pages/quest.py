@@ -154,7 +154,7 @@ class QuestPage(QtWidgets.QWizardPage):
         lay.addWidget(_row("Mesh role", self.role))
 
         # ── Headwind management plane (mdm-enroll) ────────────────────────────────
-        # Paths/URLs/names only — never secrets (the phone_screen custody posture).
+        # Paths/URLs/names only — never secrets (the same secret-handling rule as phone_screen).
         self.headwind_url = QtWidgets.QLineEdit()
         self.headwind_url.setPlaceholderText("blank = driver HMDM_URL env")
         self.headwind_url.setToolTip(

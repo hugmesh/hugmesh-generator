@@ -48,7 +48,7 @@ _COL_FLAVOR = 7
 
 class _ScanWorker(QtCore.QThread):
     """Runs the read-only ``flash_targets.list_targets()`` scan off the GUI thread
-    (lsblk can block up to its 8 s timeout on a wedged device). Carries a req_id so
+    (lsblk can block up to its 8 s timeout on a hung device). Carries a req_id so
     the GUI slot can drop stale results from rapid refreshes — the _PreflightWorker
     idiom from build.py."""
     done = Signal(object, int)          # (targets: list[FlashTarget], req_id)
