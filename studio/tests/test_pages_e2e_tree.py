@@ -357,6 +357,72 @@ def test_uncovered_services_have_no_checkbox_and_carry_their_reason(dlg, catalog
     assert {"owncast", "tube", "wiki", "character-studio"} <= seen
 
 
+def test_the_tor_row_names_its_kind_lane_door_and_checks_it(dlg):
+    """#577: tor has no compose spec, so it stays a NO COVERAGE row with its reason
+    FIRST — but the row also states the kind lane's onion door, checked against the
+    tree. The fake checkout has no tor-onion-kind.feature, so the line must say the
+    door is MISSING rather than vouch for it."""
+    rows = [it for it in _walk(_group(dlg, GROUP_UNCOVERED))
+            if dlg.node_of(it).get("kind") == NODE_SERVICE
+            and dlg.node_of(it).get("slug") == "tor"]
+    assert len(rows) == 1, "tor is not a NO COVERAGE row"
+    kids = [rows[0].child(i).text(0) for i in range(rows[0].childCount())]
+    assert "NO spec" in kids[0], kids
+    door = [k for k in kids[1:] if k.startswith("kind:")]
+    assert len(door) == 1, kids
+    assert "make kind-tor" in door[0] and "MISSING" in door[0], door
+
+
+def _door_rows(d):
+    from hugmesh_studio.gui.pages.e2e_tree_dialog import GROUP_LANE_DOORS
+    return [it for it in _walk(_group(d, GROUP_LANE_DOORS))
+            if d.node_of(it).get("kind") == NODE_SERVICE
+            and d.node_of(it).get("slug") == "tor"]
+
+
+def test_the_kind_onion_door_has_its_own_group_row(dlg):
+    """#577: the door is listed in its OWN group whatever tor's compose verdict is,
+    and with no checkbox (a .feature runs through its own make target)."""
+    rows = _door_rows(dlg)
+    assert len(rows) == 1, "no tor row under the lane-door group"
+    assert not (rows[0].flags() & Qt.ItemFlag.ItemIsUserCheckable)
+    kids = [rows[0].child(i).text(0) for i in range(rows[0].childCount())]
+    assert len(kids) == 1 and kids[0].startswith("kind:") and "make kind-tor" in kids[0], kids
+
+
+def test_the_door_survives_tor_becoming_covered(qapp, fake_gen):
+    """THE REGRESSION the #613 skeptics found: once a compose spec names tor (#576's
+    onion helpers did), tor leaves NO COVERAGE — and a door listed only there
+    vanished from the tree. Here tor is COVERED and the door line must still show,
+    verified against the fake tree (feature present -> 'drives this service')."""
+    specs = fake_gen / "tests" / "e2e" / "specs"
+    # A helper that DRIVES something (page.) and names the onion — the shape of
+    # #576's specs/helpers.ts, which is what flipped tor to covered on main.
+    (specs / "helpers.ts").write_text(
+        "export async function openOnion(page: any) {\n"
+        "  const via = 'onion';\n"
+        "  await page.goto('/login');\n"
+        "  return via;\n"
+        "}\n", encoding="utf-8")
+    feat = fake_gen / ec.LANE_DOORS[0].feature
+    feat.parent.mkdir(parents=True, exist_ok=True)
+    feat.write_text("@env:kind @via:onion\nFeature: kind onion\n", encoding="utf-8")
+    cat = ec.load_catalogue(str(fake_gen), runner=_list_runner())
+    tor = [c for c in cat.services if c.slug == "tor"]
+    assert tor and not tor[0].needs_a_test and tor[0].reachable, tor
+    d = E2ETreeDialog(cat, str(fake_gen))
+    try:
+        assert not [it for it in _walk(_group(d, GROUP_UNCOVERED))
+                    if d.node_of(it).get("slug") == "tor"], "tor is covered here"
+        rows = _door_rows(d)
+        assert len(rows) == 1, "the kind onion door vanished once tor was covered"
+        line = rows[0].child(0).text(0)
+        assert line.startswith("kind: tor-onion-kind.feature drives this service"), line
+    finally:
+        d.deleteLater()
+        qapp.processEvents()
+
+
 def test_no_uncovered_slug_can_ever_reach_the_selection(dlg, catalogue):
     """Belt and braces: even after checking everything checkable, no service slug is
     in the compiled run."""

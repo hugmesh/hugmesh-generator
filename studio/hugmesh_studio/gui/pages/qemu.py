@@ -58,7 +58,11 @@ WHAT THIS PAGE OFFERS
      current page can continue and would otherwise leave FINISH on screen with no
      Next to press; and the arm must SAY what Next will do (``chain_note``), because
      every other widget on this page belongs to the other arm and is hidden, so
-     picking it otherwise blanks the page.
+     picking it otherwise blanks the page. And the arm CHOOSES WHICH BUILD: this route
+     never passes the Mode screen, so it used to inherit whatever ``cfg.mode`` an
+     earlier flow had committed; ``build_mode_box`` preselects that mode, NAMES it as
+     inherited, and ``validatePage`` commits the pick through the Mode screen's own
+     ``commit_image_mode``.
 
   3. READ THE VERDICTS HONESTLY — the results table is one row per PLANNED row, fed
      by ``emulation.status()``. A planned row that produced no verdict says
@@ -113,19 +117,22 @@ a modal in page logic hangs the headless tests (the no-modals rule).
 from __future__ import annotations
 
 import dataclasses
+import html
 import shlex
 import threading
 
 from ..qt import Qt, QtWidgets
 from .. import console
-from ..styles import MUTED, WARN
+from ..styles import MUTED, WARN, muted
 from ...core import emulation, qemu_tests
+from ...core.domain_services import session_boot_gate_reason
 from ...core.local_stack_node import LocalStackNode
 from . import _emulation_common as common
 from ._mesh_monitor_widget import MeshMonitorSection
 from ._scroll import scrollable
 from ._widgets import label_finish_as_exit
 from .localmesh import _MeshWorker
+from .mode import IMAGE_MODE_TITLES, commit_image_mode
 
 #: Result-table columns. Symbolic, never hardcoded at a call site (progress.py's
 #: rule), with the headers beside them so a column cannot be labelled as its
@@ -162,6 +169,10 @@ class QemuPage(QtWidgets.QWizardPage):
         #: buttons stay greyed meanwhile — offering a run that is about to die at
         #: spawn is exactly what the note above exists to prevent.
         self._docker_ok = False
+        #: The per-domain services refusal for the picked session (#637), "" when its
+        #: images may boot — core.domain_services.session_boot_gate_reason, the seam
+        #: the Mesh emulation page reads too. Listing and previews stay available.
+        self._boot_refusal = ""
         self._sessions: list[qemu_tests.BuildSession] = []
         #: The PREVIEW plan — what the current session + envelope would run. Rebuilt
         #: on every knob change; boots nothing.
@@ -238,6 +249,31 @@ class QemuPage(QtWidgets.QWizardPage):
         self.chain_note.setTextFormat(Qt.TextFormat.RichText)
         self.chain_note.setVisible(False)
         sg.addWidget(self.chain_note)
+        # WHICH BUILD "Build first" continues into — chosen HERE, explicitly. This
+        # route reaches the image flow without passing the Mode screen (its "Run e2e
+        # tests" card commits no cfg.mode), so without this the build took whatever
+        # mode an EARLIER flow had committed: a mesh walked this morning turned "test
+        # a desktop image" into a mesh worklist, and a fresh Studio's default sent a
+        # mesh operator down the standalone desktop pages. The inherited mode is
+        # preselected AND named, so nothing changes silently; validatePage commits the
+        # pick through the Mode screen's own commit_image_mode.
+        self.build_mode_box = QtWidgets.QGroupBox("Which image build should run first?")
+        bm = QtWidgets.QVBoxLayout(self.build_mode_box)
+        self.build_mode_group = QtWidgets.QButtonGroup(self)
+        self.build_mode_radios: dict[str, QtWidgets.QRadioButton] = {}
+        for mid in ("mesh", "cloud", "standalone"):
+            rb = QtWidgets.QRadioButton(IMAGE_MODE_TITLES[mid])
+            rb.setProperty("mode", mid)
+            self.build_mode_group.addButton(rb)
+            self.build_mode_radios[mid] = rb
+            bm.addWidget(rb)
+        self.build_mode_note = QtWidgets.QLabel("")
+        self.build_mode_note.setWordWrap(True)
+        self.build_mode_note.setStyleSheet(muted())
+        bm.addWidget(self.build_mode_note)
+        self.build_mode_box.setVisible(False)
+        self.build_mode_group.buttonToggled.connect(self._build_mode_changed)
+        sg.addWidget(self.build_mode_box)
         lay.addWidget(self.source_group)
 
         # ── session picker + the rows it implies ────────────────────────────────
@@ -256,6 +292,14 @@ class QemuPage(QtWidgets.QWizardPage):
         self.session_note.setWordWrap(True)
         self.session_note.setTextFormat(Qt.TextFormat.RichText)
         sb.addWidget(self.session_note)
+        # The per-domain services refusal (#637), INLINE under the picker — never a
+        # modal. Plain text: it carries operator-typed domain names.
+        self.domain_gate_note = QtWidgets.QLabel()
+        self.domain_gate_note.setWordWrap(True)
+        self.domain_gate_note.setTextFormat(Qt.TextFormat.PlainText)
+        self.domain_gate_note.setStyleSheet(f"color: {WARN};")
+        self.domain_gate_note.setVisible(False)
+        sb.addWidget(self.domain_gate_note)
         self.rows_label = QtWidgets.QLabel()
         self.rows_label.setWordWrap(True)
         sb.addWidget(self.rows_label)
@@ -563,6 +607,7 @@ class QemuPage(QtWidgets.QWizardPage):
     def initializePage(self):
         self._refresh_docker_note()
         self._refresh_kvm_note()
+        self._seed_build_mode()
         self._reload_sessions()
         self._source_changed()
 
@@ -618,10 +663,47 @@ class QemuPage(QtWidgets.QWizardPage):
         again BuildPage reads as unvisited, this method re-arms, and the bug survives
         unchanged. (Measured: the trace still showed qemu.py validatePage as the writer.)
         """
+        if self.build_first.isChecked():
+            # The build this arm continues into takes the mode picked HERE (see
+            # build_mode_box), committed exactly as the Mode screen commits it — BEFORE
+            # the wizard asks nextId(), which reads cfg.mode to pick the flow.
+            commit_image_mode(self.wiz, self.selected_build_mode())
         if getattr(self.wiz, "qemu_device_tests_owned_by_build", False):
             return True
         self.wiz.cfg.qemu_device_tests = self.build_first.isChecked()
         return True
+
+    # ── the build-first arm's explicit mode ─────────────────────────────────────
+    def selected_build_mode(self) -> str:
+        btn = self.build_mode_group.checkedButton()
+        return str(btn.property("mode")) if btn is not None else self.wiz.cfg.mode
+
+    def _seed_build_mode(self):
+        """Preselect the mode the configuration is CARRYING — and say so — every time
+        the page is entered, so a pick is never silently a leftover."""
+        inherited = self.wiz.cfg.mode
+        rb = self.build_mode_radios.get(inherited)
+        if rb is not None:
+            rb.setChecked(True)
+        self._inherited_mode = inherited
+        self._build_mode_changed()
+
+    def _build_mode_changed(self, *_):
+        try:
+            picked = self.selected_build_mode()
+            inherited = getattr(self, "_inherited_mode", "")
+            title = IMAGE_MODE_TITLES.get(picked, picked)
+            if picked == inherited:
+                text = (f"Preselected: {title} — the build mode this Studio session "
+                        "is already carrying (from an earlier flow or a loaded "
+                        "configuration), NOT a choice made for this test. Pick the "
+                        "build these tests should run against.")
+            else:
+                text = (f"Next continues into the {title} build (the session was "
+                        f"carrying {IMAGE_MODE_TITLES.get(inherited, inherited)}).")
+            self.build_mode_note.setText(text)
+        except Exception:                    # noqa: BLE001 — PyQt6 qFatals on a slot raise
+            pass
 
     # ── docker / kvm notes ──────────────────────────────────────────────────────
     def _refresh_docker_note(self):
@@ -692,6 +774,10 @@ class QemuPage(QtWidgets.QWizardPage):
     def _session_changed(self, *_):
         session = self._current_session()
         self.session_note.setText(common.partial_note(session))
+        self._boot_refusal = (session_boot_gate_reason(session.name)
+                              if session is not None else "")
+        self.domain_gate_note.setText(self._boot_refusal)
+        self.domain_gate_note.setVisible(bool(self._boot_refusal))
         if session and session.rows:
             listing = "<br>".join(
                 f"&nbsp;&nbsp;<tt>{r.label}</tt> &mdash; {r.basename}"
@@ -722,6 +808,7 @@ class QemuPage(QtWidgets.QWizardPage):
                   self.avc_combo):
             w.setVisible(existing)
         self.chain_note.setVisible(not existing)
+        self.build_mode_box.setVisible(not existing)
         if not existing:
             self.rows_label.setText("")
             self.cmd_view.setPlainText("")
@@ -905,6 +992,8 @@ class QemuPage(QtWidgets.QWizardPage):
         opts = self._playwright_options()
         if plan is None or opts is None:
             return
+        if not (list_only or dry_run) and self._refuse_boot():
+            return
         if not (list_only or dry_run):
             blocker = emulation.playwright_root_blocker()
             if blocker:
@@ -936,6 +1025,8 @@ class QemuPage(QtWidgets.QWizardPage):
         """
         if self._running:
             return
+        if not list_only and self._refuse_boot():
+            return
         plan = self._build_plan()
         if plan is None:
             return
@@ -958,6 +1049,8 @@ class QemuPage(QtWidgets.QWizardPage):
 
     def _launch_avc(self):
         """Boot ONE planned row through the SELinux AVC workout (issue #45)."""
+        if self._refuse_boot():
+            return
         plan = self.plan or self._build_plan()
         label = str(self.avc_combo.currentData() or "")
         if plan is None or not label:
@@ -971,6 +1064,17 @@ class QemuPage(QtWidgets.QWizardPage):
                       f"[avc] {label}: a full emulated boot plus the confined "
                       "workloads — Cancel stops it and its containers.")
         self._run(f"avc workout {label}", argv)
+
+    def _refuse_boot(self) -> bool:
+        """DEFENCE IN DEPTH for the #637 gate: every verb that BOOTS a row asks, not
+        only the buttons' enabled state. Inline note + log, never a modal. Listing and
+        dry runs boot nothing and are never refused."""
+        if not self._boot_refusal:
+            return False
+        self.note.setText(f'<span style="color:{WARN}">'
+                          f"{html.escape(self._boot_refusal)}</span>")
+        console.write(self.log, f"!! refused: {self._boot_refusal}")
+        return True
 
     def _run(self, label: str, argv: list[str], *, on_done=None):
         """One argv, off the GUI thread, through ``emulation.spawn`` and nothing else.
@@ -1054,9 +1158,10 @@ class QemuPage(QtWidgets.QWizardPage):
         idle = not self._running
         docker_ok = getattr(self, "_docker_ok", False)
         planned = self.plan is not None and bool(self.plan.rows)
-        for w in (self.run_btn, self.list_btn):
-            w.setEnabled(idle and docker_ok and planned)
-        self.avc_btn.setEnabled(idle and docker_ok and planned
+        boots = not self._boot_refusal           # #637: a refused session boots nothing
+        self.run_btn.setEnabled(idle and docker_ok and planned and boots)
+        self.list_btn.setEnabled(idle and docker_ok and planned)
+        self.avc_btn.setEnabled(idle and docker_ok and planned and boots
                                 and bool(self.avc_combo.currentData()))
         # The Playwright lane does NOT gate on docker: run-qemu-e2e.sh drives the
         # host launchers directly (that is exactly why it needs root and the
@@ -1065,7 +1170,7 @@ class QemuPage(QtWidgets.QWizardPage):
         pw_row = bool(self.pw_row.currentData())
         for w in (self.pw_list_btn, self.pw_preview_btn):
             w.setEnabled(idle and planned and pw_row)
-        self.pw_run_btn.setEnabled(idle and planned and pw_row
+        self.pw_run_btn.setEnabled(idle and planned and pw_row and boots
                                    and not emulation.playwright_root_blocker())
         self.refresh_btn.setEnabled(idle)
         self.cancel_btn.setEnabled(self._running)

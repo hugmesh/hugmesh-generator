@@ -44,7 +44,7 @@ from hugmesh_studio.gui.qt import Qt, QtWidgets
 # consolidated in _helpers so a flow change is edited in ONE place (design 6). mesh now
 # skips RolePage, so the mesh identity tests drive their image off the WorklistPage.
 from _helpers import (   # noqa: E402
-    advance_to, back_to, check_worklist_rows, enable_additional_domains,
+    added_row, advance_to, back_to, check_worklist_rows, enable_additional_domains,
     enable_configure_users, pairs, pick_mode, pick_role,
 )
 
@@ -799,7 +799,7 @@ def test_domains_table_round_trips_per_domain_services(wiz):
     dom = advance_to(wiz, wizard_mod.DomainsPage)
     # #227: the services cell is a checkable menu, so the row reads back through the
     # widget — QTableWidget.item() returns None once setCellWidget() has been called.
-    assert dom.table.cellWidget(0, 2).selected_slugs() == ["akkoma", "tube"]
+    assert dom.table.cellWidget(added_row(dom, 0), 2).selected_slugs() == ["akkoma", "tube"]
     dom._add("beta.example", "Beta", "phpbb, owncast")
     # ask 20: the users TABLE is behind its own choice screen, which is the page that
     # now follows Domains — one Next past Domains still collects the table.

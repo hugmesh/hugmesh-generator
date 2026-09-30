@@ -40,7 +40,9 @@ HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
                 has_kvm=False, is_root=False, builder_image="hugmesh-builder")
 
 #: the bring-up steps, in flow order — the section order the surface has always had.
-BOOTSTRAP_STEPS = ["LocalMeshEnvPage", "LocalMeshSourcePage", "LocalMeshServicesPage",
+BOOTSTRAP_STEPS = ["LocalMeshEnvPage", "LocalMeshDomainsPage",
+                   "LocalMeshDomainServicesPage", "LocalMeshSourcePage",
+                   "LocalMeshServicesPage",
                    "LocalMeshIdpPage", "LocalMeshOverlayPage", "LocalMeshReviewPage",
                    "LocalMeshPage"]
 
@@ -239,7 +241,7 @@ def test_every_local_mesh_page_is_skipped_on_an_image_mode(wiz, mode):
     assert mp.validatePage() is True
     assert wiz.localmesh_selected is False
     slugs = [s for s in wiz._page_ids if s == "localmesh" or s.startswith("localmesh_")]
-    assert len(slugs) == 9, slugs
+    assert len(slugs) == 11, slugs
     for slug in slugs:
         assert slug not in MODE_SKIPPED_PAGES[wiz.cfg.mode]     # never was, still is not
         assert wiz.page(wiz._page_ids[slug]).applies_to(wiz.cfg) is False, slug
@@ -250,7 +252,8 @@ def test_the_bootstrap_steps_are_off_the_join_branch_and_vice_versa(wiz):
     page = _to_choice(wiz)
     page._buttons["join"].setChecked(True)
     assert page.validatePage() is True
-    for slug in ("localmesh_env", "localmesh_source", "localmesh_services",
+    for slug in ("localmesh_env", "localmesh_domains", "localmesh_domain_services",
+                 "localmesh_source", "localmesh_services",
                  "localmesh_idp", "localmesh_overlay", "localmesh_review"):
         assert wiz.page(wiz._page_ids[slug]).applies_to(wiz.cfg) is False, slug
     assert wiz.page(wiz._page_ids["localmesh_join"]).applies_to(wiz.cfg) is True
@@ -370,7 +373,8 @@ def test_the_run_view_hands_back_to_the_bring_up_step(wiz):
 
 
 # ── the busy guard, on EVERY step (refute round, major) ────────────────────────────
-@pytest.mark.parametrize("slug", ["localmesh_env", "localmesh_source",
+@pytest.mark.parametrize("slug", ["localmesh_env", "localmesh_domains",
+                                  "localmesh_domain_services", "localmesh_source",
                                   "localmesh_services", "localmesh_idp",
                                   "localmesh_review", "localmesh_join"])
 def test_a_running_verb_greys_next_on_every_step(wiz, slug):

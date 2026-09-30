@@ -77,12 +77,13 @@ validatePage of every VISITED page).
 """
 from __future__ import annotations
 
+import html
 import threading
 
 from ..qt import Qt, QtWidgets
 from .. import console
 from ..styles import MUTED, WARN
-from ...core import e2e_environments
+from ...core import e2e_catalogue, e2e_environments
 from ...core.local_mesh_bootstrap import (LocalMeshBootstrap,
                                           LocalMeshBootstrapConfig,
                                           discover_brands)
@@ -367,6 +368,10 @@ class E2EPage(QtWidgets.QWizardPage):
                 "whether the mesh itself is serving is answered by the harness, which "
                 "SKIPS each scenario with a reason naming what to start "
                 "(tests/e2e/steps/world.ts).</span>")
+        # Service doors this environment has OUTSIDE the plain run (the kind onion,
+        # #577) — authored by core.e2e_catalogue, the same lines the TUI prints.
+        for line in e2e_catalogue.lane_door_lines_for_lane(self.generator_dir, env_id):
+            parts.append("Also on this environment: " + html.escape(line))
         if env_id == "qemu":
             running = e2e_environments.emulator_running()
             if running is True:

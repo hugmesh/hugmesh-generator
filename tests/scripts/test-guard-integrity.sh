@@ -535,6 +535,12 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # landed 2026-09-18) added the /bff/register/{google,discord} handlers, and the
 # parity suite now ASSERTS has_handler=True for all five (hugmesh-generator#568).
 # The suite count is unchanged: no suite was added or removed by that change.
+# ADDENDUM 2026-09-23, second: the same suite has owned decision 60 since PR #570
+# (2026-09-18) — it also asserts APP_BFF_EXCHANGE_CACHE_TTL_MS == "0" for
+# admin-bff-api and mod-bff-api on both lanes (tests/stack/compose.local.yaml +
+# specs/cluster/manifests/{admin,mod}-bff-api/). Anyone reading the description above as the suite's whole
+# scope and "simplifying" it back to route tables would delete decision 60's only
+# guard. Suite count unchanged.
 #
 # 170 -> RE-MEASURED on 2026-09-17 while merging origin/main into
 # iss/285-vault-brand-remoteref. BOTH sides of this merge said 170 and NEITHER is
@@ -638,7 +644,64 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # this file on the tree with the new suite wired, not assumed (GUARD_PREMERGE=0):
 #     176 of 198 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 22 — the new suite was never in it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-176}"
+#
+# 176 -> 177 on 2026-09-23: tests/scripts/test-tor-node-contract.sh (hugmesh-generator
+# #583, decision 70 = B on #347) landed on disk in the same commit that wires it into
+# shell-suites.yml's alpine job (beside the other builder --print-plan suites), so the
+# denominator moves too (198 -> 199). MEASURED by RUNNING this file on the tree with the
+# suite wired (GUARD_PREMERGE=0), not computed:
+#     177 of 199 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22 — the new suite was never in it.
+#
+# 177 -> 178 on 2026-09-23 (RE-MEASURED on the MERGE of tor/compose-e2e-20260923,
+# hugmesh-generator PR #598, with origin/main b5901697 — which already carried the
+# 177 above): tests/stack/test-tor-flip-wiring.sh (#576/#581/#586) joined the gate in
+# shell-suites.yml's debian job, and tests/stack/test-tor-onion-mechanism.sh (#585)
+# landed on disk OUTSIDE it (recorded in PREMERGE_UNGATED below), so the denominator
+# moves by two (199 -> 201). MEASURED by RUNNING this file on that merged tree, not
+# computed:
+#     178 of 201 suites are named by a pull_request-triggered workflow
+# The ungated SET pin moves 22 -> 23 (the mechanism wrapper).
+#
+# 178 -> 179 on 2026-09-23 (RE-MEASURED on the MERGE of tor/saved-mesh-bridge-20260923,
+# hugmesh-generator PR #600, with origin/main f3963e86 — which already carried the 178
+# above): tests/scripts/test-studio-tor-domain-pins.sh (#591) joined the gate, named in
+# .github/workflows/studio-tests.yml's pytest job (a pull_request workflow), so the
+# denominator moves by one (201 -> 202). MEASURED by RUNNING this file on that merged
+# tree (GUARD_PREMERGE=0), not computed:
+#     179 of 202 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 23 — the new suite was never in it.
+#
+# (kind-tor, recorded as 176 -> 177 on its own branch before the merge below)
+# tests/scripts/test-kind-tor.sh joined the gate (wired into shell-suites.yml's extras job, which carries helm + make, and .gitlab-ci.yml's
+# lint:kind-tor), pinning the kind lane's .onion front door — scripts/kind-tor.sh's
+# `HiddenServicePort 443 127.0.0.1:8443`, its read-modify-write helm-parameter patch
+# and the fe-gateway Ingress that patch renders (hugmesh-generator#577, decision
+# 67 = B). MEASURED by RUNNING this file on the tree with the new suite wired, not
+# assumed (GUARD_PREMERGE=0):
+#     177 of 199 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 22 — the new suite was never in it.
+#
+# 179 -> 180 on 2026-09-23 (RE-MEASURED on the MERGE of iss/577-kind-tor-host-onion,
+# hugmesh-generator PR #613, with origin/main 2e7d089d — which already carried the 179
+# above from #600; #613 had independently written 179 against f3963e86):
+# tests/scripts/test-kind-tor.sh is the one new gated suite, so the denominator moves
+# 202 -> 203. MEASURED by RUNNING this file on that merged tree (GUARD_PREMERGE=0), not
+# computed:
+#     180 of 203 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 23 — the new suite was never in it.
+#
+# 180 -> 182 on 2026-09-24 (iss/614-node-onion-ingress, on origin/main e6838857 — which
+# already carried the 180 above): two new suites, both wired into shell-suites.yml's
+# extras job (helm + kubectl): tests/scripts/test-tor-onion-ingress.sh (#614 — a
+# hardware node's .onion admitted as an fe-gateway Ingress host, rendered with a real
+# `helm template`) and tests/scripts/test-optional-netpol-autosync.sh (#617 — no
+# optional-service NetworkPolicy served from git by an Application every build keeps,
+# via `kubectl kustomize`). The denominator moves 203 -> 205. MEASURED by RUNNING this
+# file on that tree (GUARD_PREMERGE=0), not computed:
+#     182 of 205 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 23 — neither new suite was ever in it.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-182}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED
@@ -800,15 +863,30 @@ PREMERGE_UNGATED=(
   # five reds has a control that plants the fix and requires it to go green
   # (A4 NC10e, B2 NC21, B3 NC22, C5b NC23, C7 NC14).
   tests/scripts/test-selected-services-only.sh
-  # Needs the hugmesh-admin-bff-api checkout for its fifth surface (the
-  # controller's OptionalServiceRegistry). It reports INCOMPLETE and FAILS without
-  # it rather than checking four surfaces of five, so a hosted runner that cannot
-  # clone the org-private repo would go red for a missing clone, not a defect.
-  # Gated post-merge by .gitlab-ci.yml's lint:optional-service-slug-closure.
+  # RED ON MAIN on real cross-repo defects (re-measured 2026-09-23, #584):
+  # meshbridge is in the generator's CRD enum + seed CRs while the controller's
+  # OptionalServiceRegistry keeps it NOT_TOGGLEABLE for a reason (NOT_IN_CRD_ENUM)
+  # that has been false since 2026-08-26, and character-forge's selfHeal flag is
+  # stale — both filed as hugmesh-admin-bff-api#106; control 20 plants that fix and
+  # goes green. The text that stood here until 2026-09-23 gave only the checkout
+  # reason and HID a dead parser: the gate had exited 3 INCOMPLETE on every run
+  # since admin-bff b8ed324 widened the Java Entry record from 3 to 5 fields, 23
+  # minutes after the checker landed, and nothing moved its regex with it. That
+  # parser is now pinned by a fixture self-test (section P) that needs no checkout.
+  # It STILL needs the hugmesh-admin-bff-api checkout for its fifth surface, which a
+  # hosted pre-merge runner cannot clone. Its only automated runner is
+  # .gitlab-ci.yml's lint:optional-service-slug-closure — nothing on the GitHub side
+  # runs it; `make e2e-ungated` runs it locally. Leave it listed until #106 lands.
   tests/scripts/test-optional-service-slug-closure.sh
   tests/scripts/test-service-env-contract.sh
   tests/stack/test-gateway-auth-flag-parity.sh
   tests/stack/test-m2-bootstrap.sh
+  # Needs a host tor binary and the PUBLIC Tor network for minutes (it mints a real
+  # v3 onion and fetches it back over Tor); no shell-suites image carries tor.
+  # Without them it exits 2 SKIPPED-LOUDLY, never 0. Run it with
+  # `make stack-tor-mechanism-check`. Its own exit-code contract IS gated: T14 of
+  # tests/stack/test-tor-flip-wiring.sh drives it against stub harnesses (#585).
+  tests/stack/test-tor-onion-mechanism.sh
   tests/stack/test-web-locales-wiring.sh
 )
 if [ -n "${GUARD_PREMERGE_UNGATED+x}" ]; then UNGATED_TEXT="${GUARD_PREMERGE_UNGATED}"

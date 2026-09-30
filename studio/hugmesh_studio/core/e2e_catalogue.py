@@ -715,9 +715,12 @@ def load_last_run(generator_dir: str, directory: str = "") -> LastRun:
 # above are what actually happens, and there is a test pinning them.
 #
 # The map cuts the other way too, and that is the half worth keeping in mind: `tube`,
-# `tor`, `edge-ai-tts` and `media-poisoner` are searched under EVERY spelling the
-# suite might use (peertube, onion, piper/tts, poisoner/cloak) and still match
-# nothing. Their zero-coverage verdict is stronger for it, not weaker.
+# `edge-ai-tts` and `media-poisoner` are searched under EVERY spelling the suite
+# might use (peertube, piper/tts, poisoner/cloak) and still match nothing. Their
+# zero-coverage verdict is stronger for it, not weaker. `tor` was in that list until
+# 2026-09-23 (hugmesh-generator#576): it is now reached as `onion` by specs/helpers.ts's
+# Tor front door (onionFrontDoor/onionContext — a proxied browser context), which the
+# @via:onion Gherkin scenario drives through the real Tor network.
 SPEC_TOKENS: dict[str, tuple[str, ...]] = {
     "tuwunel": ("tuwunel", "matrix"),          # the specs say "matrix" throughout
     "akkoma": ("akkoma", "mastodon", "pleroma"),  # local social tier is Mastodon
@@ -887,8 +890,8 @@ def service_coverage(generator_dir: str,
 
     Measured over the specs in this checkout, comments stripped and declarative
     tables excluded (see :func:`is_runnable_source`): wiki, owncast, tube,
-    character-studio, tor, anubis, edge-ai-tts, media-poisoner and egress-vpn match
-    NOTHING. The five covered are tuwunel (18 files), akkoma (18), games (9),
+    character-studio, anubis, edge-ai-tts, media-poisoner and egress-vpn match
+    NOTHING (tor did too until the onion front door landed, hugmesh-generator#576). The five covered are tuwunel (18 files), akkoma (18), games (9),
     phpbb (1) and character-forge (1). The numbers move when the suite does -- they
     are re-measured, and pinned as INEQUALITIES where the exact count is not the
     point; the covered/uncovered VERDICTS are what the tests pin exactly.
@@ -918,6 +921,89 @@ def service_coverage(generator_dir: str,
 def uncovered_services(coverage: Sequence[ServiceCoverage]) -> tuple[ServiceCoverage, ...]:
     """The rows a surface must render as "no coverage", never as a green Run button."""
     return tuple(c for c in coverage if c.needs_a_test)
+
+
+# ── doors a service has on a lane OTHER than the compose specs ──────────────────
+#
+# service_coverage() reads tests/e2e/specs/*.ts, the compose lane's specs, and is
+# right to: a Gherkin .feature is not a spec file and must not flip that verdict.
+# A service can ALSO have a door on another lane that the compose verdict never
+# mentions. `tor` is the case: the kind lane publishes its front door as a v3 onion
+# (`make kind-tor`, hugmesh-generator#577, decision 67 = B) and
+# features/platform/tor-onion-kind.feature drives a persona through it. That is
+# true whether or not tor is covered on the compose lane (it became covered when
+# #576's onion helpers landed), so the e2e tree lists every LaneDoor in its OWN
+# group, independent of the coverage verdict, and repeats the line under the
+# service's NO COVERAGE / unreachable row when it has one. Each line is CHECKED
+# against the tree — a door whose feature file is gone, or lost the tags that
+# select it, says so instead of vouching for a scenario that no longer exists.
+
+@dataclass(frozen=True)
+class LaneDoor:
+    """One lane's own way in to a service, and the scenario that drives it."""
+    slug: str
+    lane: str
+    bring_up: str
+    run: str
+    #: Repo-relative .feature path.
+    feature: str
+    #: Tags the feature must carry for `run` to select it.
+    tags: tuple[str, ...]
+
+
+LANE_DOORS: tuple[LaneDoor, ...] = (
+    LaneDoor(slug="tor", lane="kind",
+             bring_up="make kind-up && make kind-images && make kind-tor",
+             run="make kind-e2e-tor",
+             feature="tests/e2e/features/platform/tor-onion-kind.feature",
+             tags=("@env:kind", "@via:onion")),
+)
+
+
+def _feature_tags(text: str) -> set[str]:
+    """Every @tag on a Gherkin TAG line (comments and step text are not tags)."""
+    tags: set[str] = set()
+    for raw in text.splitlines():
+        line = raw.split(" #", 1)[0].strip()
+        if line.startswith("@"):
+            tags.update(t for t in line.split() if t.startswith("@"))
+    return tags
+
+
+def _door_line(generator_dir: str, door: LaneDoor) -> str:
+    """One plain line for ``door``, verified against the checkout at ``generator_dir``."""
+    path = os.path.join(generator_dir, door.feature)
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            tags = _feature_tags(fh.read())
+    except OSError:
+        tags = None
+    name = os.path.basename(door.feature)
+    if tags is None:
+        return (f"{door.lane}: a door is declared ({door.bring_up}) but "
+                f"{door.feature} is MISSING — nothing drives it.")
+    if not set(door.tags) <= tags:
+        missing = " ".join(t for t in door.tags if t not in tags)
+        return (f"{door.lane}: {name} lost its {missing} tag(s), so "
+                f"`{door.run}` selects nothing — nothing drives this door.")
+    return (f"{door.lane}: {name} drives this service through the "
+            f"{door.lane} lane's own door. Bring it up with "
+            f"`{door.bring_up}`, run it with `{door.run}` — only that live run "
+            f"proves the door. It is a .feature, so it is not counted in the "
+            f"compose-lane spec coverage.")
+
+
+def lane_door_lines(generator_dir: str, slug: str) -> tuple[str, ...]:
+    """One plain line per lane door of service ``slug`` (the e2e tree's service rows)."""
+    return tuple(_door_line(generator_dir, d) for d in LANE_DOORS if d.slug == slug)
+
+
+def lane_door_lines_for_lane(generator_dir: str, lane: str) -> tuple[str, ...]:
+    """The same lines, keyed the other way: every service door ON environment ``lane``
+    (the GUI e2e page's and the TUI e2e screen's per-environment plan — one telling,
+    authored here, for both faces)."""
+    return tuple(f"{d.slug} — {_door_line(generator_dir, d)}"
+                 for d in LANE_DOORS if d.lane == lane)
 
 
 # ── personas the seeder deliberately leaves gated ───────────────────────────────

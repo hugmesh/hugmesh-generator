@@ -178,6 +178,12 @@ lint:client-connect-routes:
 # EXACT paths rather than the cluster's subtrees (which would also move
 # /bff/me/appeal and /bff/register/complete off admin-bff), and that those two
 # still reach admin-bff. Six negative controls must each trip it.
+# The same suite also owns decision 60 (#347, generator half #569): it asserts
+# APP_BFF_EXCHANGE_CACHE_TTL_MS is the string "0" for admin-bff-api and
+# mod-bff-api on both lanes (compose.local.yaml + the two cluster Deployments),
+# with its own mutation-tested controls. The BFF pin lives here rather than in
+# tests/stack/test-gateway-auth-flag-parity.sh because that guard needs the
+# gateway checkout; this one needs only the tree.
 # Offline, no cluster, no network.
 lint:fe-bff-route-lane-parity:
   stage: lint
@@ -1023,6 +1029,31 @@ lint:gateway-mfa-env:
   script:
     - bash tests/stack/test-gateway-mfa-env.sh
 
+# The kind lane's .onion front door (hugmesh-generator#577, decision 67 = B):
+# scripts/kind-tor.sh's torrc (HiddenServicePort 443 -> 127.0.0.1:8443, the kind
+# node's TLS door), its read-modify-write helm-parameter patch, and the fe-gateway
+# Ingress that patch renders — which needs a REAL `helm template`, so this job
+# inherits lint:gateway-mfa-env's pinned, sha256-verified, fail-closed helm install
+# rather than restating it. The suite also reads `make -n` and `git check-ignore`,
+# hence git + make. It exits 2 (never a pass) when helm or PyYAML is missing.
+lint:kind-tor:
+  extends: lint:gateway-mfa-env
+  script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends git make >/dev/null
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - bash tests/scripts/test-kind-tor.sh
+
+# A hardware node's .onion admitted at the ingress edge (hugmesh-generator#614): the
+# node agent specs/usr/sbin/hugmesh-tor-ingress-admit (plan + apply against a stub
+# kubectl) and the fe-gateway Ingress its ingress.onionHosts parameters render — a
+# REAL `helm template`, so this inherits lint:gateway-mfa-env's pinned, sha256-verified,
+# fail-closed helm install. The suite FAILS (never skips) without helm, jq or PyYAML.
+lint:tor-onion-ingress:
+  extends: lint:gateway-mfa-env
+  script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends jq >/dev/null
+    - bash tests/scripts/test-tor-onion-ingress.sh
+
 # MFA OPERATIONAL FLIP wiring gate (issue #47). The companion of the two jobs
 # above: they pin the default-OFF POSTURE, this one pins the SWITCH — MFA=1 must
 # reach EVERY consumer of the gateway MFA trio on every lane it claims to drive
@@ -1685,10 +1716,15 @@ lint:liquibase-grant-roles:
 # one that catches the silent case, and without the clone the checker exits 3
 # INCOMPLETE and the suite FAILS rather than reporting four green legs of five.
 #
-# ⚠ EXPECTED RED until hugmesh-admin-bff-api's OptionalServiceRegistry gains
-# character-forge and meshbridge (in flight on that repo's
-# feat/superadmin-optional-services-endpoint). That red is the defect, not a flaw in
-# the gate: it is a live, named, one-merge-away inconsistency. Do NOT add
+# ⚠ EXPECTED RED until hugmesh-admin-bff-api#106 lands (re-measured 2026-09-23,
+# hugmesh-generator #584): the controller's OptionalServiceRegistry keeps meshbridge
+# NOT_TOGGLEABLE as NOT_IN_CRD_ENUM although the CRD enum and seed CRs carry it, and
+# marks character-forge configMapSelfHealProtected=false although apps/16 carries its
+# pointer. (feat/superadmin-optional-services-endpoint, named here before, merged as
+# b8ed324 and did NOT fix either.) Until 2026-09-23 this job was red for a different
+# reason — the checker's regex no longer matched the controller's five-field Entry
+# record, so it exited INCOMPLETE and compared nothing. That red is the defect, not a
+# flaw in the gate: it is a live, named, one-merge-away inconsistency. Do NOT add
 # allow_failure and do NOT weaken the Java leg to get green — the suite's own
 # positive control stages exactly that landing and requires the whole gate to pass,
 # so the exit criterion is executable.
@@ -3412,6 +3448,7 @@ orphan-guards-verify:
         tests/scripts/test-installer-ui-node-default.sh
         tests/scripts/test-intltool-preseed.sh
         tests/scripts/test-kernel-artifact-cache.sh
+        tests/scripts/test-optional-netpol-autosync.sh
         tests/scripts/test-passhash-lib.sh
         tests/scripts/test-platform-key-spelling.sh
         tests/scripts/test-portage-config-sync.sh

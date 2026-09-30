@@ -204,7 +204,8 @@ def test_dialog_hosts_both_paths_with_no_tab_bar(qapp):
     assert dlg.page.findChild(QtWidgets.QTabWidget) is None
     # both paths' widgets are present and hosted on the ONE page (one implementation)
     assert dlg.auth_key is not None and dlg.boot_start_btn is not None
-    assert list(dlg.page.sections) == ["join", "env", "source", "services", "idp",
+    assert list(dlg.page.sections) == ["join", "env", "domains", "domain_services",
+                                       "source", "services", "idp",
                                        "overlay", "review", "bringup"]
     assert dlg.page._stepped_sections() == set()      # no wizard, so nothing is claimed
     # nothing is claimed away here: with no step pages, every section stays on the page

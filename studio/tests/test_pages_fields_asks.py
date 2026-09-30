@@ -285,10 +285,20 @@ def test_ask8_mesh_skips_domains_and_users_without_the_opt_in(wiz):
 
 def test_ask19_default_domains_choice_lands_on_the_users_choice(wiz):
     """ASK 19, verbatim: "On the default (internal only) go straight to the USERS
-    button-choice screen." One Next from the domains choice, no table in between."""
+    button-choice screen." No Domains TABLE in between — but since #494 (operator
+    report 2026-09-23, issue #589) the mesh's OWN domain has a services page like every
+    other domain, and that ONE page sits between the choice and the users choice: it
+    is the own domain's, it names it, and it is the only page before the users
+    choice."""
     mesh_flow(wiz)
     dc = advance_to(wiz, wizard_mod.DomainsChoicePage)
     assert dc._buttons["internal"].isChecked()
+    wiz.next()
+    own = wiz.currentPage()
+    assert isinstance(own, wizard_mod.DomainServicesPage), (
+        f"landed on {type(own).__name__}, not the own domain's services page")
+    assert own.current_domain() == wiz.cfg.cluster_domain
+    assert "1 of 1" in own.subTitle()                       # no other domain: no table
     wiz.next()
     assert isinstance(wiz.currentPage(), wizard_mod.UsersChoicePage), (
         f"landed on {type(wiz.currentPage()).__name__}, not the users choice screen")
@@ -378,6 +388,10 @@ def test_ask8_deselecting_clears_what_was_entered(wiz):
     dc = back_to(wiz, wizard_mod.DomainsChoicePage)
     dc._buttons["internal"].setChecked(True)
     wiz.next()                                                # domains table now skipped
+    own = wiz.currentPage()                                   # …the own domain's page stays (#494)
+    assert isinstance(own, wizard_mod.DomainServicesPage)
+    assert own.current_domain() == wiz.cfg.cluster_domain and "1 of 1" in own.subTitle()
+    wiz.next()
     uc = wiz.currentPage()
     assert isinstance(uc, wizard_mod.UsersChoicePage)
     uc._buttons["generated"].setChecked(True)

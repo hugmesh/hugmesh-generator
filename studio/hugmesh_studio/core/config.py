@@ -194,6 +194,10 @@ MODE_SKIPPED_PAGES = {
     # "domain_services" (#495) is NOT skipped in cloud: a cloud client image IS built
     # around its --domains tie, its Domains table is unconditional, and the domain it
     # carries is exactly the one whose services the operator must answer for.
+    # "vault" STAYS skipped in cloud (#588, decided 2026-09-24): the builder ignores
+    # --vault-addr on a client role and the per-domain CA is recorded-only, so the
+    # step would offer knobs a client build discards. The Domains step says where a
+    # client's trust really comes from instead (CLIENT_CA_INHERITANCE_NOTE).
     "cloud": ("idp", "worklist", "domains_choice", "users_choice",
               "vault"),                                       # single image, admin plane via key-zip
     # mesh USED to skip "branding" outright; it no longer can: the page now also hosts
@@ -903,6 +907,32 @@ def vault_field_error(addr: str, external_addr: str = "") -> str:
 # the SUBJECT + EXPIRY are read only when python-cryptography happens to be installed
 # (it is NOT a studio requirement — the urwid/TUI precedent: degrade, never hard-fail).
 CA_CERT_MAX_BYTES = 1 << 20             # 1 MiB: a CA bundle is kilobytes; refuse a blob
+
+#: WHERE A MESH DESKTOP CLIENT GETS ITS CERTIFICATE AUTHORITIES (#588). Cloud mode
+#: keeps skipping the Secrets store step and keeps the Domains table's Base CA column
+#: hidden, and says THIS on its Domains step instead (both faces render this one
+#: string, parity-pinned), because the two alternatives were dead knobs measured on
+#: the builders, not guessed:
+#:
+#: * ``bake_vault_conf`` (build-x86-host-stage4.sh) warns and RETURNS on a client role
+#:   — "--vault-addr given for a client role ... ignoring" — so a Vault address offered
+#:   to a client build is discarded by the builder;
+#: * the per-domain Base CA is recorded-only everywhere (no builder parses a CA flag).
+#:
+#: What really decides a client's trust is keys-provision's bulk import
+#: (specs/etc/keys-provision/provision.sh: every KEYS/certs/*.crt and *.pem copied to
+#: /usr/local/share/ca-certificates, then update-ca-certificates) — mesh-wide, from the
+#: stick, never per domain. studio/tests/test_client_ca_inheritance.py pins all three
+#: facts against the scripts, so this sentence goes red the day one of them changes.
+CLIENT_CA_INHERITANCE_NOTE = (
+    "Certificate authorities on a Mesh desktop client: the image carries none of its "
+    "own, so there is no per-domain CA to pick here and the Secrets store step is "
+    "skipped. At first boot keys-provision imports every certificate in the KEYS "
+    "stick's certs/ folder (*.crt and *.pem — the mesh's cluster-ca.crt among them) "
+    "into the system trust store, so this client trusts exactly the certificate "
+    "authorities on the stick you provision it with, for every domain it is tied to. "
+    "(A Vault address would be ignored too: the builder drops --vault-addr on a "
+    "client role — Vault/ESO seeding is a cluster-node first-boot step.)")
 _PEM_CERT_RE = re.compile(
     r"-----BEGIN CERTIFICATE-----\s*(?P<body>[A-Za-z0-9+/=\s]+?)\s*"
     r"-----END CERTIFICATE-----")
@@ -1950,8 +1980,9 @@ def effective_domain_note(cfg: "ImageConfig") -> str:
     joins (derived ``<brand>.internal`` when left blank — ``effective_superdomain``)."""
     return (f"Serve only {cfg.cluster_domain or 'the cluster domain'} and the internal "
             f"Tailscale root domain {cfg.effective_superdomain()} that every node joins. "
-            "No domains table, no per-domain services to pick — this is the default and "
-            "what almost every mesh wants.")
+            "No domains table — this is the default and what almost every mesh wants. "
+            f"The services {cfg.cluster_domain or 'the cluster domain'} provides are "
+            "still picked on its own services page, which comes next.")
 
 
 def users_table_applies(cfg: "ImageConfig") -> bool:
@@ -2886,6 +2917,18 @@ class ImageConfig:
     # core/domain_services.gate_reason, which is what refuses an image build or a
     # docker mesh start naming the domains that were never configured.
     domain_services_reviewed: list[str] = field(default_factory=list)
+    # The per-domain services of the MESH'S OWN domain (``cluster_domain``) — the
+    # implicit domain every mesh serves and which #494's rule gives a services page
+    # too, even on the default "just this mesh's own domain" path where the Domains
+    # table is skipped (core/domain_services.implicit_own_domain). It is a separate
+    # field, NOT a ``domains`` row, so the ASK-8 guard holds: an untouched flow emits
+    # no ``--domains`` and no manifest ``domains`` entry. Provisioning input like
+    # ``domains[].optional_services`` (never argv): both mesh manifests carry it as
+    # ``cluster_domain_services`` ONLY when non-empty — empty means "the cluster-wide
+    # set applies", the same reading as an empty per-domain list, and keeps every
+    # pre-existing manifest byte-identical. Mesh mode only; cloud prefills its
+    # cluster domain as a real row 0 and standalone has no domains.
+    cluster_domain_services: list[str] = field(default_factory=list)
     # ── hardware ──
     gpu_driver: str = "auto"           # auto|nvidia|amd-free|amd-pro|intel|none
     nvidia_cuda: bool = False          # --nvidia-cuda (CUDA bake for GPU/edge-AI images; x86)
@@ -3222,6 +3265,14 @@ class ImageConfig:
                 d["domain_services_reviewed"] = [x for x in v if isinstance(x, str)]
             else:
                 d.pop("domain_services_reviewed")
+        # The own domain's services (#494): the same tolerance — junk is ABSENT, i.e.
+        # the cluster-wide set, never a list holding a scalar.
+        if "cluster_domain_services" in d:
+            v = d["cluster_domain_services"]
+            if isinstance(v, (list, tuple)):
+                d["cluster_domain_services"] = [x for x in v if isinstance(x, str)]
+            else:
+                d.pop("cluster_domain_services")
         # MIGRATE the pre-2026-08-26 spelling of the post-build device-test opt-in.
         # from_dict filters unknown keys, so without this a config saved under the old
         # name would load with the opt-in silently OFF — the `games` precedent above:
@@ -4617,6 +4668,10 @@ class ImageConfig:
             # ``role`` stays the primary every consumer reads; a multi-role account adds
             # the full list beside it. test_user_multi_role.py pins both shapes.
             "users": [u.to_dict() for u in self.users],
+            # the mesh's OWN domain's per-domain services (#494) — OMIT-WHEN-EMPTY, so
+            # a manifest whose own domain takes the cluster-wide set keeps its bytes.
+            **({"cluster_domain_services": list(self.cluster_domain_services)}
+               if self.cluster_domain_services else {}),
         }
 
     def write_mesh_manifest(self, output_dir: str) -> str:

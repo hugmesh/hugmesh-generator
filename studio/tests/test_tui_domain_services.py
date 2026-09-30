@@ -14,7 +14,7 @@ import pytest
 
 from hugmesh_studio.core import domain_services as ds
 from hugmesh_studio.core.config import (
-    INFRA_SERVICES_CHOICES, OPTIONAL_SERVICES_CHOICES, Domain)
+    INFRA_SERVICES_CHOICES, OPTIONAL_SERVICES_CHOICES, Domain, ImageConfig)
 from hugmesh_studio.tui import domain_services_step, journey
 
 
@@ -52,14 +52,28 @@ def test_the_step_is_registered_for_its_slug():
 
 def test_a_step_with_no_domains_is_skipped_by_the_walk():
     """Nothing to ask, and nothing for the gate to refuse either — the GUI page's
-    applies_to says the same thing."""
+    applies_to says the same thing (it is the same core predicate). A MESH always
+    names its own domain (#494), so the discriminating flow is a mesh with no cluster
+    domain and an empty table."""
     j = _at_mesh_domains()
+    j.cfg.cluster_domain = ""
     j.feed("")                               # Enter with an empty table
+    assert j.slug == "users_choice"
+
+
+def test_an_empty_table_still_walks_the_own_domains_page():
+    """#494 / #589 decision 69: the mesh's own domain is a domain with a page."""
+    j = _at_mesh_domains()
+    j.feed("")
+    assert j.slug == "domain_services"
+    assert j.screen().current(j).name == j.cfg.cluster_domain
+    j.feed("")
     assert j.slug == "users_choice"
 
 
 def test_walking_the_only_domain_clears_the_gate():
     j = _at_services("chat.example.org")
+    j.feed("n")                              # past the own domain onto the added one
     assert ds.gate_reason(j.cfg) == ""
     j.feed("")
     assert j.slug == "users_choice"
@@ -67,8 +81,11 @@ def test_walking_the_only_domain_clears_the_gate():
 
 def test_a_domain_never_stepped_onto_is_still_refused():
     """THE GATE'S REASON TO EXIST, on the TUI side: being on a domain's screen is what
-    records it, so a second domain nobody stepped to is named downstream."""
+    records it, so a domain nobody stepped to is named downstream. The walk opens on
+    the mesh's own domain (#494), so both added rows are still pending there."""
     j = _at_services("a.example.org", "b.example.org")
+    assert ds.unconfigured_domains(j.cfg) == ["a.example.org", "b.example.org"]
+    j.feed("n")
     assert ds.unconfigured_domains(j.cfg) == ["b.example.org"]
     assert "b.example.org" in ds.gate_reason(j.cfg)
     j.feed("n")
@@ -108,6 +125,7 @@ def test_it_prints_the_not_yet_enforced_note():
 # ── toggling ────────────────────────────────────────────────────────────────────
 def test_a_number_toggles_that_service_on_the_current_domain():
     j = _at_services("chat.example.org")
+    j.feed("n")                              # past the own domain
     idx = list(OPTIONAL_SERVICES_CHOICES).index("phpbb") + 1
     j.feed(str(idx))
     assert j.cfg.domains[0].optional_services == ["phpbb"]
@@ -120,6 +138,7 @@ def test_toggling_records_in_catalogue_order_not_click_order():
     grouping disagree, so this can tell the two apart. optional_services must be
     byte-stable across a load/save round trip."""
     j = _at_services("chat.example.org")
+    j.feed("n")                              # past the own domain
     cat = list(OPTIONAL_SERVICES_CHOICES)
     j.feed(str(cat.index("owncast") + 1))
     j.feed(str(cat.index("games") + 1))
@@ -128,6 +147,7 @@ def test_toggling_records_in_catalogue_order_not_click_order():
 
 def test_each_domain_keeps_its_own_selection():
     j = _at_services("a.example.org", "b.example.org")
+    j.feed("n")                              # past the own domain
     cat = list(OPTIONAL_SERVICES_CHOICES)
     j.feed(str(cat.index("akkoma") + 1))
     j.feed("n")
@@ -162,3 +182,111 @@ def test_junk_input_is_refused_inline_and_changes_nothing():
     j.feed("99")
     assert "no such service row" in j.status
     assert j.cfg.domains[0].optional_services == []
+
+
+# ── the mesh's OWN domain (#494; #589 decision 69 = A; decision 71 = A) ─────────
+def _at_mesh_default_path() -> journey.Journey:
+    """The DEFAULT mesh path: "n" on the domains choice — no Domains table."""
+    j = journey.Journey(".")
+    for line in ("", "3", "", "1", "", "", "", ""):
+        j.feed(line)
+    assert j.slug == "domains_choice"
+    j.feed("n")
+    return j
+
+
+def test_the_default_mesh_path_walks_the_own_domains_page():
+    j = _at_mesh_default_path()
+    assert j.slug == "domain_services"
+    screen = j.screen()
+    assert screen.current(j).name == j.cfg.cluster_domain
+    text = "\n".join(j.lines())
+    assert f"{j.cfg.cluster_domain} (this mesh's own domain) — domain 1 of 1" in text
+    assert ds.ENFORCEMENT_NOTE in text
+    assert j.cfg.domains == []                       # never a domains row
+    assert j.cfg.domain_services_reviewed == [j.cfg.cluster_domain]
+    j.feed("")
+    assert j.slug == "users_choice"
+
+
+def test_the_own_domains_page_is_emission_neutral_when_untouched():
+    """ASK 8 on the TUI: walking the own domain's page without ticking changes no
+    argv and no manifest — no --domains, no domains entry, no new manifest key."""
+    j = journey.Journey(".")
+    for line in ("", "3", "", "1", "", "", "", ""):
+        j.feed(line)
+    argv_before = j.cfg.to_cli_args()
+    manifest_before = j.cfg.mesh_manifest()
+    j.feed("n")
+    j.feed("")
+    assert j.slug == "users_choice"
+    assert j.cfg.to_cli_args() == argv_before
+    assert "--domains" not in j.cfg.to_cli_args()
+    after = j.cfg.mesh_manifest()
+    assert after == manifest_before and "cluster_domain_services" not in after
+
+
+def test_ticking_on_the_own_domain_records_cluster_domain_services_only():
+    j = _at_mesh_default_path()
+    cat = list(OPTIONAL_SERVICES_CHOICES)
+    j.feed(str(cat.index("games") + 1))
+    assert j.cfg.cluster_domain_services == ["games"]
+    assert j.cfg.domains == []
+    assert "--domains" not in j.cfg.to_cli_args()
+    m = j.cfg.mesh_manifest()
+    assert m["domains"] == [] and m["cluster_domain_services"] == ["games"]
+
+
+def test_the_domains_table_shows_the_own_domain_first_and_not_as_a_row():
+    j = _at_mesh_domains()
+    j.feed("a chat.example.org")
+    text = "\n".join(j.lines())
+    own_line = next(ln for ln in text.splitlines() if ln.startswith("own "))
+    assert j.cfg.cluster_domain in own_line
+    assert "not configured yet" in own_line
+    from hugmesh_studio.tui import domains_step
+    assert domains_step.OWN_APPLIES in own_line
+    # numbering of the real rows is unchanged: row 1 is still cfg.domains[0]
+    j.feed("d 1")
+    assert j.cfg.domains == []
+    assert j.cfg.cluster_domain in "\n".join(j.lines())
+
+
+# ── #631 section 1, TUI parity: the build screen says the GUI build will refuse ─────
+def _build_lines(cfg) -> str:
+    j = journey.Journey(".")
+    j.cfg = cfg
+    return "\n".join(j._screens["build"].lines(j))
+
+
+def test_the_build_screen_names_an_unwalked_own_domain():
+    """The TUI does not dispatch, but the GUI build it sends the operator to runs the
+    SAME seam — a saved config whose own domain was never walked is named here, with
+    the same sentence the GUI refuses with."""
+    cfg = ImageConfig(mode="mesh")
+    text = _build_lines(cfg)
+    assert "the GUI build will refuse this configuration" in text
+    assert ds.gate_reason(cfg, ds.ACTION_IMAGE_BUILD) in text
+    assert cfg.cluster_domain in text
+
+
+def test_the_build_screen_is_quiet_once_every_domain_is_walked():
+    cfg = ImageConfig(mode="mesh", domains=[Domain(name="acme.example")])
+    ds.record_reviewed(cfg, [cfg.cluster_domain, "acme.example"])
+    assert "will refuse" not in _build_lines(cfg)
+
+
+def test_a_walked_default_mesh_reaches_a_quiet_build_screen():
+    """The TUI walk records the own domain exactly as the GUI page does, so a default
+    walk (own domain only) arrives at "build" with nothing to refuse."""
+    j = journey.Journey(".")
+    for line in ("", "3", "", "1", "", "", "", ""):
+        j.feed(line)                          # as _at_mesh_domains, up to the choice
+    assert j.slug == "domains_choice"
+    j.feed("n")                               # the default: just this mesh's domain
+    assert j.slug == "domain_services"        # the TUI records a domain on showing it
+    while not j.done and j.slug != "build":
+        j.feed("")
+    assert j.slug == "build"
+    assert j.cfg.cluster_domain in ds.reviewed_names(j.cfg)
+    assert "will refuse" not in "\n".join(j.lines())

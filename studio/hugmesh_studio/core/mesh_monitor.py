@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -854,6 +855,22 @@ def _parse_compose_ps(text: str) -> list[dict] | None:
     return rows or None
 
 
+# The compose services TOR=1 starts (tests/stack/compose.local.yaml). Matched
+# EXACTLY: a substring test for "tor" also caught hugmesh-tor-client (and would
+# catch any future "*tor*" service, e.g. a "monitor"), and hung the onion on it.
+_COMPOSE_ONION_SERVICE = "hugmesh-tor"
+_COMPOSE_TOR_CLIENT_SERVICE = "hugmesh-tor-client"
+
+
+def _is_compose_service(service: str, name: str, want: str) -> bool:
+    """True when this row IS compose service ``want``: its service label, or — for
+    a row that carries no label — a container name of compose's
+    ``<project>-<service>-<n>`` shape."""
+    if service:
+        return service == want
+    return re.fullmatch(r"(?:.+[-_])?%s[-_]\d+" % re.escape(want), name or "") is not None
+
+
 def _parse_docker_ps(text: str) -> list[dict]:
     """``docker ps --format '{{json .}}'`` (one object per line) -> compose-ish rows."""
     rows: list[dict] = []
@@ -1020,10 +1037,17 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
             else:
                 door = Door(label="Open", url=f"http://127.0.0.1:{plain_port}/",
                             via="compose")
-        elif onion and "tor" in (service or name).lower():
+        elif onion and _is_compose_service(service, name, _COMPOSE_ONION_SERVICE):
             external_bits.append(onion)
             door = Door(blocked="a normal browser cannot reach a .onion — use the "
                                 "'Copy .onion address' button and Tor Browser")
+        elif _is_compose_service(service, name, _COMPOSE_TOR_CLIENT_SERVICE):
+            # The SOCKS5 client the Tor e2e lane dials the onion through. It is
+            # NOT the onion: attributing the .onion (or the Tor Browser hint) to
+            # this row would point a person at a proxy port as if it were the door.
+            door = Door(blocked="a SOCKS5 proxy into Tor for the e2e lane "
+                                "(make stack-e2e-tor), not a web page — the onion "
+                                f"itself is the {_COMPOSE_ONION_SERVICE} row")
         else:
             web = [(pp, tp) for pp, tp in published if _port_is_http("", tp)]
             if web:

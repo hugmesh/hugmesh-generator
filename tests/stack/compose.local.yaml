@@ -740,14 +740,16 @@ services:
       # exchange failure falls through to the pre-fix "no bearer" behaviour.
       APP_BFF_EXCHANGE_ENABLED: ${APP_BFF_EXCHANGE_ENABLED:-true}
       # Positive-swap cache TTL = the suspension-bypass window. 0 = cache OFF,
-      # every exchange re-consults admin-bff's own suspension gate (application.yml
-      # default is 5000 = a 5s window). Decision 60 (generator#347, operator
-      # 2026-09-18), extending decision 7's "B: zero window now" (hugmesh-gateway#2,
-      # pinned for the gateway's own mirror in #398/PR#406) to this service's
-      # mirror of the same cache. A plain literal, not `${VAR:-0}`: this pin must
-      # not be silently overridable by an inherited env var the way ENABLED above
-      # deliberately is. Kept in parity with specs/cluster/manifests/admin-bff-api/
-      # deployment.yaml by tests/scripts/test-fe-bff-route-lane-parity.sh.
+      # every exchange re-consults admin-bff's own suspension gate. Decision 60
+      # (generator#347, operator 2026-09-18), extending decision 7's "B: zero
+      # window now" (hugmesh-gateway#2, pinned for the gateway's own mirror in
+      # #398/PR#406) to this service's mirror of the same cache. The image default
+      # is 0 since hugmesh-admin-bff-api PR #74 (2026-09-18); an older image
+      # defaults to 5000 = a 5 s window, so the value is stated here rather than
+      # inherited. A plain literal, not `${VAR:-0}`: this pin must not be silently
+      # overridable by an inherited env var the way ENABLED above deliberately is.
+      # Kept in parity with specs/cluster/manifests/admin-bff-api/deployment.yaml
+      # by tests/scripts/test-fe-bff-route-lane-parity.sh.
       APP_BFF_EXCHANGE_CACHE_TTL_MS: "0"
       # The cookie->JWT session exchange calls this BFF back on ITS OWN address. Left
       # empty (application.yml's default) the app derives an IN-CLUSTER k8s DNS name
@@ -929,12 +931,13 @@ services:
       # the pre-fix no-header behaviour (every downstream has its own fail-closed gate).
       APP_BFF_EXCHANGE_ENABLED: ${APP_BFF_EXCHANGE_ENABLED:-true}
       # Positive-swap cache TTL = the suspension-bypass window. 0 = cache OFF,
-      # every exchange re-consults admin-bff's suspension gate (application.yml
-      # default is 5000 = a 5s window). Decision 60 (generator#347, operator
-      # 2026-09-18), extending decision 7's "B: zero window now" (hugmesh-gateway#2,
-      # pinned for the gateway's own mirror in #398/PR#406) to this service's
-      # mirror of the same cache. A plain literal, not `${VAR:-0}`, for the same
-      # reason as the admin-bff-api service block above. Kept in parity with
+      # every exchange re-consults admin-bff's suspension gate. Decision 60
+      # (generator#347, operator 2026-09-18), extending decision 7's "B: zero
+      # window now" (hugmesh-gateway#2, pinned for the gateway's own mirror in
+      # #398/PR#406) to this service's mirror of the same cache. The image default
+      # is 0 since hugmesh-mod-bff-api PR #20 (2026-09-18); an older image
+      # defaults to 5000 = a 5 s window. A plain literal, not `${VAR:-0}`, for the
+      # same reason as the admin-bff-api service block above. Kept in parity with
       # specs/cluster/manifests/mod-bff-api/deployment.yaml by
       # tests/scripts/test-fe-bff-route-lane-parity.sh.
       APP_BFF_EXCHANGE_CACHE_TTL_MS: "0"
@@ -1704,29 +1707,82 @@ services:
       HUG_THEME_CSS: ${HUG_THEME_CSS:-${SNAP_THEME_CSS:-}}
 
   # ── hugmesh-tor — v3 onion (hidden service) for the local mesh (OPT-IN) ──
-  # Publishes the fe-gateway as a Tor v3 .onion, mirroring the NODE `tor` optional
+  # Publishes the stack as a Tor v3 .onion, mirroring the NODE `tor` optional
   # service (docs/TOR-HIDDEN-SERVICE.md) for the LOCAL docker mesh — INBOUND
   # reachability with NO public IP / DNS / open ports. OPT-IN behind the `tor`
   # compose profile: `make stack-up TOR=1` (or `--profile tor`); a default stack
   # never creates it, so the unprofiled stack is byte-identical to before. Built
   # from ./tor (multi-arch alpine+tor, NO platform pin) so it runs natively on
-  # Linux docker AND Docker Desktop (Windows/macOS) and on arm64 hosts. tor
-  # resolves `hugmesh-fe-gateway` over the compose network and forwards the
-  # onion :80 there. The minted .onion hostname is copied to ./tor-onion/hostname
-  # (gitignored) for the host/GUI to read; the private key persists in the
-  # tor-onion-keys volume so the address is stable across restarts.
+  # Linux docker AND Docker Desktop (Windows/macOS) and on arm64 hosts.
+  #
+  # TWO onion ports (tor/entrypoint.sh says why, with the measurement):
+  #   :443 -> the TLS front (hugmesh-https-front:8443) — THE door: a secure
+  #           context, the node's :443, and a Secure session cookie on a
+  #           production-configured mesh (docs/TOR-HIDDEN-SERVICE.md "Why :443").
+  #           The SPA does boot over http too; the old "CSP
+  #           upgrade-insecure-requests" reason was false (#628).
+  #   :80  -> TOR_ONION_UPSTREAM (the fe-gateway; the Anubis gate when the
+  #           Makefile runs ANUBIS=1 TOR=1 — see STACK_TOR_ENV there).
+  # tor resolves these hostnames ONCE, when it parses the torrc, which is why both
+  # upstreams are depends_on here: recreate either container with a new bridge IP
+  # and this one must be recreated too (the stale-IP trap tls-front/default.conf
+  # documents for nginx; tor has no per-request resolver to fix it with).
+  #
+  # The minted .onion hostname is copied to ./tor-onion/hostname (gitignored) for
+  # the host/GUI to read, and REMOVED again when this container starts or stops
+  # (#581), so the file exists only while this onion is being served. The private
+  # key persists in the tor-onion-keys volume so the address is stable across
+  # `stack-halt`/restarts; `stack-down` (down -v) drops it and the next up mints a
+  # new one. `make stack-onion` prints the current address.
+  #
+  # HEALTHY means: the published file was written by THIS container's key (it
+  # matches the HiddenServiceDir copy) AND tor reached "Bootstrapped 100%" in
+  # this start's truncated notice log. Descriptor propagation to the HSDir ring
+  # still takes seconds to a couple of minutes after that — the e2e lane retries.
   hugmesh-tor:
     profiles: ["tor"]
     build:
       context: ./tor
     environment:
       TOR_ONION_UPSTREAM: ${TOR_ONION_UPSTREAM:-hugmesh-fe-gateway:8080}
+      TOR_ONION_TLS_UPSTREAM: ${TOR_ONION_TLS_UPSTREAM:-hugmesh-https-front:8443}
     volumes:
       - tor-onion-keys:/var/lib/tor/hugmesh-onion
       - ./tor-onion:/onion-out
     depends_on:
       hugmesh-fe-gateway:
         condition: service_started
+      hugmesh-https-front:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "[ -s /onion-out/hostname ] && cmp -s /onion-out/hostname /var/lib/tor/hugmesh-onion/hostname && grep -q 'Bootstrapped 100%' /var/lib/tor/notice.log"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
+    restart: unless-stopped
+
+  # ── hugmesh-tor-client — a Tor SOCKS5 client for the e2e lane (OPT-IN) ──
+  # Same image, client role: SocksPort 9050 and nothing else. `make stack-e2e-tor`
+  # points the Playwright browser at socks5://127.0.0.1:${TOR_SOCKS_HOST_PORT} so
+  # the @via:onion scenario reaches the onion above over the REAL Tor network,
+  # exactly as Tor Browser would (hugmesh-generator#576). Published on LOOPBACK
+  # ONLY — on 0.0.0.0 it would be an open proxy for the whole LAN. Host port is a
+  # knob because a host tor daemon already owns 9050 on some boxes.
+  hugmesh-tor-client:
+    profiles: ["tor"]
+    build:
+      context: ./tor
+    environment:
+      HUGMESH_TOR_ROLE: client
+    ports:
+      - "127.0.0.1:${TOR_SOCKS_HOST_PORT:-9050}:9050"
+    healthcheck:
+      test: ["CMD-SHELL", "grep -q 'Bootstrapped 100%' /var/lib/tor/notice.log"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
     restart: unless-stopped
 
   # ── hugmesh-anubis — Techaro Anubis PoW anti-scraper gate (OPT-IN) ──
@@ -1761,6 +1817,13 @@ services:
       USE_REMOTE_ADDRESS: "true"
       DIFFICULTY: "5"
       SERVE_ROBOTS_TXT: "true"
+      # The Secure flag on the gate's cookies (-cookie-secure, default true).
+      # `make stack-up ANUBIS=1 TOR=1` sets it false (Makefile STACK_TOR_ENV,
+      # #627): the onion's :80 door is plain http on a .onion origin, which
+      # Chromium does not treat as secure, so it drops a Secure cookie and the
+      # challenge ends in a 500. With the flag off, SameSite drops from None to
+      # Lax. Every other bring-up keeps Anubis's own default.
+      COOKIE_SECURE: ${ANUBIS_COOKIE_SECURE:-true}
     ports:
       # The PoW-gated door; 8923 is free on this stack and matches the cluster
       # gate port. The :9090 metrics/health listener stays UNPUBLISHED (the
