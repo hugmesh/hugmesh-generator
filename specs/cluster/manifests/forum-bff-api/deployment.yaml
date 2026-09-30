@@ -155,6 +155,22 @@ spec:
             # `forumbff_app` (DML only), created by forum-bff-db's initdb/10-roles.sh.
             # Password from its OWN ESO Secret forum-bff-db-app-auth (the SAME the DB
             # pod's FORUMBFF_APP_PASSWORD mounts).
+            # R2DBC POOL SIZE (hugmesh-generator: kind sign-in answered 500, measured
+            # 2026-09-30). The app role above is created with CONNECTION LIMIT 20
+            # (initdb/10-roles.sh) and the database runs with max_connections=60. With
+            # NO pool setting, r2dbc-pool's Spring Boot default of 10 connections per
+            # replica applies, so the HorizontalPodAutoscaler's maxReplicas of 6 asked
+            # for 6 x 10 = 60 connections against a limit of 20: two pods held the whole
+            # budget and the other four failed every query with "Failed to obtain R2DBC
+            # Connection" (FATAL: too many connections for role). Sized so that
+            # maxReplicas x max-size fits the role limit with margin: 6 x 3 = 18 <= 20.
+            # initial-size must not exceed max-size (r2dbc-pool refuses to build).
+            # tests/scripts/test-db-connection-budget.sh pins this inequality for every
+            # Deployment that has both a database role and an autoscaler.
+            - name: SPRING_R2DBC_POOL_INITIAL_SIZE
+              value: "1"
+            - name: SPRING_R2DBC_POOL_MAX_SIZE
+              value: "3"
             - name: SPRING_R2DBC_URL
               value: "r2dbc:postgresql://forum-bff-db.hugmesh-backend.svc.cluster.local:5432/forumbff"
             - name: SPRING_R2DBC_USERNAME
