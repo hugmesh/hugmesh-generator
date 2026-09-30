@@ -119,6 +119,9 @@ _STATUS_GLYPH = {
     "ok": ("✓", "#188038"),
     "failed": ("✗", "#c5221f"),
     "stopped": ("■", "#888888"),
+    # a finished one-shot on the Local-mesh monitor (#378): done, neither running nor
+    # halted — a grey check, never the green ✓ of a healthy service.
+    "completed": ("✔", "#5f6368"),
 }
 
 # stage state -> (symbol, colour) for the per-STAGE glyph (nested under a job). Neutral

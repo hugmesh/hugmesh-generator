@@ -188,7 +188,12 @@ class MeshUnit:
     phase: str                    # "Running 1/1" | "ImagePullBackOff" | "Init:CreateContainerConfigError"
     ready: bool
     reason: str                   # why not ready, "" when ready
-    state: str                    # progress.py _STATUS_GLYPH key: ok|failed|running|queued|stopped
+    #: progress.py _STATUS_GLYPH key: ok|failed|running|queued|stopped|completed.
+    #: ``completed`` (Decision 99 = A, #378) is a one-shot that ran to completion — a
+    #: Succeeded pod owned by a Job, or an exit-0 compose service whose file says
+    #: ``restart: "no"``. It keeps its row but is outside the ``N/N ready`` headline and
+    #: is not a running replica; a service that merely stopped (exit 0) stays ``stopped``.
+    state: str
     cluster_path: str = ""        # in-mesh address, "" when no Service selects it
     external: str = ""            # "hugmesh.net/ (ingress)" | "0.0.0.0:8088->8080" | ""
     door: Door = field(default_factory=Door)
@@ -242,7 +247,11 @@ class MonitorSnapshot:
 
     @property
     def ready_counts(self) -> tuple[int, int]:
-        return sum(1 for u in self.units if u.ready), len(self.units)
+        """``(ready, total)`` for the headline. ``completed`` one-shots (finished work)
+        keep their table rows but are left out of BOTH numbers, so a healthy mesh reads
+        N/N instead of 41/43 (#378)."""
+        counted = [u for u in self.units if u.state != "completed"]
+        return sum(1 for u in counted if u.ready), len(counted)
 
 
 # ── the HSTS gate ──────────────────────────────────────────────────────────────────
@@ -565,7 +574,11 @@ def _join(objects: dict, host_ports: dict[int, tuple[str, int]], catalog, live: 
                       "no Service selects this pod — readiness read from its own "
                       "container status")
         if phase_text == "Succeeded":
-            state = "stopped"
+            # finished work is `completed` only when a JOB made it (what it IS, not how
+            # it ended): a bare / ReplicaSet-owned pod that exited cleanly is down.
+            job_owned = any((o or {}).get("kind") == "Job"
+                            for o in (meta.get("ownerReferences") or []))
+            state = "completed" if job_owned else "stopped"
         elif failure:
             state = "failed"
         elif ready:
@@ -924,6 +937,47 @@ def _parse_docker_ps(text: str) -> list[dict]:
     return rows
 
 
+_COMPOSE_SERVICES_HEAD = re.compile(r"^services:\s*(?:#.*)?$")
+_COMPOSE_SERVICE_KEY = re.compile(r"^  ([A-Za-z0-9][A-Za-z0-9_.-]*):\s*(?:#.*)?$")
+_COMPOSE_RESTART_NO = re.compile(r"""^    restart:\s*(?:"no"|'no'|no)\s*(?:#.*)?$""")
+
+
+def _compose_oneshot_services(compose_file: str) -> frozenset[str]:
+    """Compose services the file itself declares as one-shots: ``restart: "no"``.
+
+    Identified by what the service IS rather than by exit code, so a service that
+    merely stopped cleanly (exit 0) still reads as down (Decision 99 = A, #378). A text
+    scan, deliberately: Studio carries no YAML parser and ``tests/stack/compose.local.yaml``
+    is generated and uniformly formatted (a test pins the scan against the real file).
+    Any read failure is an EMPTY set, i.e. the conservative reading — nothing is
+    hidden from the headline. ``services:`` children sit at two spaces, their keys at
+    four."""
+    if not compose_file:
+        return frozenset()
+    try:
+        with open(compose_file, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read(2_000_000).splitlines()
+    except OSError:
+        return frozenset()
+    out: set[str] = set()
+    in_services = False
+    current = ""
+    for line in lines:
+        if _COMPOSE_SERVICES_HEAD.match(line):
+            in_services, current = True, ""
+            continue
+        if in_services and line and not line[0].isspace() and not line.startswith("#"):
+            in_services, current = False, ""          # the next top-level key
+        if not in_services:
+            continue
+        m = _COMPOSE_SERVICE_KEY.match(line)
+        if m:
+            current = m.group(1)
+        elif current and _COMPOSE_RESTART_NO.match(line):
+            out.add(current)
+    return frozenset(out)
+
+
 def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budget, *,
                    kind_ports=(KIND_HTTPS_PORT_DEFAULT,)
                    ) -> tuple[LaneState, list[MeshUnit], list[str], list[str]]:
@@ -979,6 +1033,9 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
     https_port = int(getattr(node, "public_https_port", 0) or 0)
     plain_port = int(getattr(node, "public_host_port", 0) or 0)
     web_url = str(getattr(node, "web_url", "") or "")
+    oneshots = (_compose_oneshot_services(compose_file)
+                if any(str(r.get("State") or "").lower() in ("exited", "dead")
+                       for r in rows) else frozenset())
     try:
         onion = str(node.onion_url() or "")
     except Exception:                                 # noqa: BLE001
@@ -1006,6 +1063,10 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
         elif state_s in ("exited", "dead"):
             reason = f"{state_s} (exit {exit_code})"
             state = "failed" if exit_code != 0 else "stopped"
+            if state == "stopped" and service in oneshots:
+                # a declared one-shot (`restart: "no"`) that ran to completion
+                state = "completed"
+                phase = f"completed (exit {exit_code})"
         else:
             reason, state = state_s or "unknown", "queued"
         pubs = [p for p in (r.get("Publishers") or []) if isinstance(p, dict)]
@@ -1234,7 +1295,7 @@ def replicas_now(units, target: ScaleTarget) -> int:
     just deleted reads 2 for the seconds in between — which is what the table is
     showing anyway.
 
-    Rows in the terminal ``stopped`` state are NOT counted: a Succeeded pod and an
+    Rows in the terminal ``stopped`` / ``completed`` states are NOT counted: a Succeeded pod and an
     exited compose one-shot are finished work, not running replicas, and counting them
     would make a "+1" from the GUI hand compose a number it would immediately undo.
     """
@@ -1242,7 +1303,7 @@ def replicas_now(units, target: ScaleTarget) -> int:
         return 0
     rows = getattr(units, "units", units) or ()
     return sum(1 for u in rows
-               if u.scale.key == target.key and u.state != "stopped")
+               if u.scale.key == target.key and u.state not in ("stopped", "completed"))
 
 
 def scale_argv(unit: MeshUnit, replicas: int, *, generator_dir: str,
