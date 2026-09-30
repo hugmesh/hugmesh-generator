@@ -18,7 +18,7 @@ It also owns the ONCE-PER-WORKLIST steps that used to live in ``BuildPage._build
   checkbox, default on).
 
 Sequential-only in v1 (same-arch build trees + loop-device contention under
-``docker --privileged``); the per-entry ``build_subdir`` is the later parallelism seam.
+``docker --privileged``); the per-entry ``build_subdir`` is the later hook for parallelism.
 
 Qt-free by construction — the GUI wraps :meth:`run_all` in a QThread and connects the
 callbacks to signals; the headless tests drive it directly.
@@ -290,6 +290,10 @@ class WorklistDriver:
             # v2 and the v1 shim emit the same user rows byte for byte.
             "users": [u.to_dict() for u in self.manifest_users()],
             "images": images,
+            # the own domain's per-domain services (#494): OMIT-WHEN-EMPTY, exactly
+            # as the v1 shim (config.mesh_manifest) emits it.
+            **({"cluster_domain_services": list(base.cluster_domain_services)}
+               if base.cluster_domain_services else {}),
         }
 
     def manifest_users(self) -> list[User]:
@@ -350,8 +354,18 @@ class WorklistDriver:
                                  workdir=self.workdir)
             with self._lock:
                 self._drivers[i] = driver
-            code = driver.run(cfg, self.backend,
-                              on_line=(lambda ln, i=i: on_line(i, ln)) if on_line else None)
+            try:
+                code = driver.run(cfg, self.backend,
+                                  on_line=(lambda ln, i=i: on_line(i, ln)) if on_line else None)
+            except Exception as e:  # noqa: BLE001 - one image's raise must not strand the run
+                # #374: ElevationRefused (HUGMESH_STUDIO_NO_ELEVATION / pytest) or an
+                # OSError from Popen. Left to propagate, this entry stayed RUNNING and
+                # registered, on_entry_done never fired, and the session was recorded
+                # 'stopped' (the operator-Stop state). Fail THIS image and keep going —
+                # the same tolerate-failures contract as a non-zero exit.
+                if on_line:
+                    on_line(i, f"!! {e}")
+                code = 1
             with self._lock:
                 self._drivers.pop(i, None)
                 cancelled = i in self._cancelled or self._cancel_all.is_set()

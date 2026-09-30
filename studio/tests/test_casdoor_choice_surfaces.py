@@ -38,7 +38,7 @@ def _boot(tmp_path, **kw):
     return LocalMeshBootstrap(GENERATOR_DIR, cfg)
 
 
-# ── 1. CLI flag -> config field (the GUI-CLI parity seam) ───────────────────────
+# ── 1. CLI flag -> config field (the GUI-CLI parity boundary) ───────────────────────
 def test_cli_repeatable_flag_threads_own_idp_domains(tmp_path, capsys, monkeypatch):
     seen = {}
 

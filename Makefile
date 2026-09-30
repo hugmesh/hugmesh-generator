@@ -390,8 +390,9 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         playwright-deps e2e e2e-list ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e stack-e2e-list \
+        stack-onion stack-e2e-tor stack-tor-mechanism-check \
         kind-images kind-up kind-e2e kind-e2e-mfa kind-mfa-posture kind-down kind-honesty \
-        kind-metrics-check kind-addon-check \
+        kind-metrics-check kind-addon-check kind-tor kind-tor-down kind-tor-status kind-e2e-tor kind-tor-check \
         view view-list view-stop view-trust view-untrust view-honesty \
         scan-hardware sessions-list sessions-show sessions-artifacts sessions-delete
 
@@ -1309,6 +1310,53 @@ kind-e2e-mfa: playwright-deps ## run the MFA e2e (spec 29) against the kind clus
 kind-mfa-posture: ## print the kind gateway's LIVE APP_MFA_ENABLED (fail-closed; never guesses)
 	@bash scripts/kind-mfa-posture.sh
 
+# ── kind .onion front door (hugmesh-generator#577, operator decision 67 = B) ──
+# A HOST tor, run as YOU (no sudo, no system service, no /etc/tor), publishes the
+# kind node's host ports as a v3 onion: HiddenServicePort 443 -> 127.0.0.1:8443
+# (kind-local.yaml's TLS door, the same shape as the node contract in
+# specs/usr/sbin/hugmesh-tor-reconcile) and 80 -> 127.0.0.1:8080 (force-ssl-
+# redirected to https by the fe-gateway Ingress). The minted onion is admitted on
+# that Ingress by ONE appended helm parameter, ingress.extraHosts[N], written
+# read-modify-write so kind-up's className / force-ssl-redirect / MFA=1
+# parameters survive. State (keys, torrc, pid, log) lives in the gitignored
+# tests/stack/.run/kind-tor/; the keys are kept across kind-tor-down, so the
+# address is stable. A `make kind-up` re-run rewrites the gateway's helm
+# parameters and drops the onion rule — `make kind-tor` again restores it, and
+# kind-tor-status says when it is missing. Full notes: docs/TOR-HIDDEN-SERVICE.md.
+#
+#   make kind-up && make kind-images && make kind-tor && make kind-e2e-tor
+#
+# KIND_TOR_SOCKS_PORT (default 9052, NOT 9050, which a system tor or the compose
+# lane's tor client may hold) is the client-side SOCKS port; a busy port is refused.
+kind-tor: ## publish the kind front door as a v3 .onion via a HOST tor run as you (no sudo); run after kind-up
+	bash scripts/kind-tor.sh up
+
+kind-tor-down: ## stop the kind lane's host tor and drop its onion from the Ingress (onion keys are KEPT)
+	bash scripts/kind-tor.sh down
+
+kind-tor-status: ## is the kind lane's tor alive, and does the Ingress admit its onion? (non-zero when not)
+	bash scripts/kind-tor.sh status
+
+# The @env:kind @via:onion scenario (tests/e2e/features/platform/tor-onion-kind.feature).
+# The onion is read from the LIVE tor (`kind-tor.sh onion` refuses a leftover
+# hostname) and travels as SNAP_ONION_BASE_URL with SNAP_PROXY = that tor's SOCKS
+# port; the steps build their own proxied browser context from the two
+# (specs/helpers.ts onionContext, the compose lane's seam from #576). The @env:kind
+# baseURL stays the LOCAL kind door, because world.ts's availability probe is an
+# unproxied Node request that could never reach an onion. run.sh --via onion runs
+# ONLY @via:onion @env:kind scenarios and FAILS unless one passed and none skipped.
+kind-e2e-tor: ## run the @env:kind @via:onion e2e through the kind onion (needs kind-up + kind-tor)
+	@$(E2E_READY) || exit 2
+	@onion="$$(bash scripts/kind-tor.sh onion)" || exit 1; \
+	  bash scripts/kind-tor.sh status || exit 1; \
+	  socks="$$(bash scripts/kind-tor.sh socks)"; \
+	  echo "==> kind onion door: https://$${onion}/ via $${socks}"; \
+	  SNAP_ONION_BASE_URL="https://$${onion}" SNAP_PROXY="$${socks}" \
+	    bash tests/e2e/run.sh --bdd --env kind --via onion
+
+kind-tor-check: ## offline: pin the kind onion door (torrc 443 -> 127.0.0.1:8443, the Ingress extraHost render, no sudo)
+	bash tests/scripts/test-kind-tor.sh
+
 # The BEHAVIOURAL half of the metrics-server add-on. Asserting that
 # 01-metrics-server.yaml is in an array proves the string is in the array and
 # nothing else; this asks the CLUSTER whether metrics.k8s.io answers and whether a
@@ -1327,6 +1375,49 @@ kind-addon-check: ## offline: prove a KIND_ADDONS selection reaches bootstrap-ki
 
 kind-down: ## delete the kind cluster
 	kind delete cluster --name $${KIND_CLUSTER_NAME:-hugmesh-local}
+
+# The NON-destructive stop, and its resume (hugmesh-generator#356, decision 44 = a).
+#
+# `kind-down` above is the destructive one and stays that way: it deletes the
+# cluster, its Vault KV, its Casdoor identities and every seeded account, and the
+# next `kind-up` is a full cold bring-up that comes back EMPTY until reseeded.
+# `kind-halt` is the other half the lane never had — stop WITHOUT destroying.
+#
+# It is a matched PAIR and both halves must exist for either to be honest:
+#   * halt alone would be a lie if it only scaled, because every live Application
+#     here carries syncPolicy.automated {prune, selfHeal} and would scale the
+#     workloads straight back up. So halt suspends auto-sync too.
+#   * a suspend that is never undone is WORSE than no halt, because the cluster
+#     then silently stops tracking git. So resume exists, and it restores exactly
+#     what halt recorded — never "everything", which would undo a deliberate
+#     suspend someone else made.
+#
+# The record lives in a ConfigMap INSIDE the cluster, which is what makes these
+# three targets work with no Studio running: a halted cluster whose only resume
+# path was a GUI would be a trap.
+#
+# AND IT IS WRITTEN BEFORE THE FIRST MUTATION, which is the line the whole pair
+# hangs on. The Studio runs `kind-halt` with a Cancel button that terminates the
+# process group, so the halt can stop between any two API calls; written last, a
+# cancelled halt left the cluster halted with NO record of how to undo it, and the
+# only way out was `kind-down && kind-up` — destroying the cluster, the one outcome
+# #356 exists to prevent. Written first, a cancelled halt is fully undoable by
+# `kind-resume` and can be finished by running `kind-halt` again. If the record
+# cannot be written, NOTHING is halted (exit 5).
+kind-halt: ## stop the DevOps lane WITHOUT deleting it (scale mesh workloads to 0 + suspend ArgoCD auto-sync; `kind-down` is the destructive one)
+	bash scripts/kind-halt.sh halt
+
+kind-resume: ## undo `kind-halt`: restore exactly the replica counts and the auto-sync it recorded
+	bash scripts/kind-halt.sh resume
+
+kind-halt-status: ## read-only: is the DevOps lane halted, and what did the halt suspend?
+	bash scripts/kind-halt.sh status
+
+# Offline guard for the pair above. Stubs kind/docker/kubectl on PATH and proves
+# every refusal actually bites — above all that a census which ERRORS is never
+# read as "no cluster".
+kind-halt-check: ## offline: prove kind-halt's refusals bite (stubbed kind/docker/kubectl; touches no cluster)
+	bash tests/scripts/test-kind-halt.sh
 
 # kind-doctor — the standing "can this cluster actually run the mesh?" check.
 #
@@ -1548,6 +1639,23 @@ AKKOMA          ?=
 # STACK_ANUBIS_ENV below is what lights it.
 #   make stack-up ANUBIS=1
 ANUBIS          ?=
+# TOR=1 — publish the local mesh as a Tor v3 .onion (compose.local.yaml's `tor`
+# profile; docs/TOR-HIDDEN-SERVICE.md "The local docker mesh"). Starts TWO
+# containers: hugmesh-tor serves the onion (:443 -> the TLS front, :80 -> the
+# fe-gateway) and hugmesh-tor-client is a SOCKS5 proxy on
+# 127.0.0.1:$(TOR_SOCKS_HOST_PORT) that the e2e lane dials the onion through.
+# The knob was CONSUMED (STACK_TOR_PROFILE below) long before it was declared
+# here — the ANUBIS shape again (hugmesh-generator#586); STACK_TOR_ENV below is
+# what threads its two settings, and tests/stack/test-tor-flip-wiring.sh gates
+# the whole switch.
+#   make stack-up TOR=1        then  make stack-onion   (prints https://<onion>/)
+#   make stack-e2e-tor         the @via:onion sign-in, over the real Tor network
+# ANUBIS=1 TOR=1: the onion's plain :80 port is sent through the PoW gate instead
+# of straight to the fe-gateway. Its :443 port still goes to the TLS front, which
+# proxies to the fe-gateway directly, so the https onion door is NOT PoW-gated —
+# a recorded residual (#586), not a guarantee this knob makes.
+TOR             ?=
+TOR_SOCKS_HOST_PORT ?= 9050
 # TTS=1 — edge-ai-tts (Piper TTS + visemes; compose.edge-ai-tts.yaml, DEFAULT-OFF)
 TTS             ?=
 # POISONER=1 — the AI MEDIA CLOAK worker (hugmesh-media-poisoner;
@@ -1700,6 +1808,21 @@ STACK_MFA_FLOOR_ENV := $(if $(strip $(MFA_FLOOR)), APP_MFA_ENFORCE_PRIVILEGED_FL
 # ANUBIS=1 also flips admin-bff's Anubis console on (compose defaults it false so
 # an untouched bring-up stays byte-identical — the STACK_MFA_FLOOR_ENV rule).
 STACK_ANUBIS_ENV := $(if $(strip $(ANUBIS)), ANUBIS_ENABLED='true',)
+# TOR=1 threads the client's host port and — with ANUBIS=1 too — points the
+# onion's :80 at the PoW gate (hugmesh-anubis BIND :8923). A caller's own
+# TOR_ONION_UPSTREAM (command line or environment) always wins. Empty with TOR
+# unset, so a plain bring-up's STACK_ENV is byte-identical to before.
+STACK_TOR_ANUBIS_UPSTREAM := hugmesh-anubis:8923
+# ANUBIS=1 TOR=1 also turns the gate's Secure cookie flag OFF (#627). Anubis
+# defaults to `Secure; SameSite=None`, and the onion's :80 door is plain http on
+# an origin Chromium does not treat as trustworthy (.onion is not localhost), so
+# Chromium drops both cookies, comes back to pass-challenge without them, and
+# Anubis answers 500 "Oh noes!" (measured live 2026-09-24). With the flag off
+# Anubis sends `SameSite=Lax` and no Secure. The localhost door (8923) works
+# either way, since Chromium treats localhost as secure. A caller's own
+# ANUBIS_COOKIE_SECURE wins, like TOR_ONION_UPSTREAM.
+STACK_TOR_ANUBIS_COOKIE_ENV := $(if $(strip $(ANUBIS_COOKIE_SECURE)),, ANUBIS_COOKIE_SECURE='false')
+STACK_TOR_ENV := $(if $(strip $(TOR)), TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)'$(if $(strip $(ANUBIS)),$(if $(strip $(TOR_ONION_UPSTREAM)),, TOR_ONION_UPSTREAM='$(STACK_TOR_ANUBIS_UPSTREAM)')$(STACK_TOR_ANUBIS_COOKIE_ENV),),)
 # MFA OPERATIONAL FLIP, opt-in per run — issue #47, following the PHPBB=1/AKKOMA=1
 # knob precedent. ONE switch, three lanes, and it flips ONLY app.mfa.enabled — the
 # freshness window keeps its default (600000) and the privileged floor stays on its
@@ -1768,7 +1891,7 @@ STACK_ENV := $(STACK_BRAND_B_ENV)$(STACK_POISONER_ENV)$(STACK_OIDC_ENV)$(STACK_T
              MANAGED_FORUM_BFF_R2DBC_URL='$(MANAGED_FORUM_BFF_R2DBC_URL)' \
              MANAGED_FORUM_BFF_LIQUIBASE_URL='$(MANAGED_FORUM_BFF_LIQUIBASE_URL)' \
              MANAGED_WIKI_BFF_R2DBC_URL='$(MANAGED_WIKI_BFF_R2DBC_URL)' \
-             MANAGED_WIKI_BFF_LIQUIBASE_URL='$(MANAGED_WIKI_BFF_LIQUIBASE_URL)'$(STACK_MFA_FLOOR_ENV)$(STACK_MFA_ENV)$(STACK_ANUBIS_ENV) \
+             MANAGED_WIKI_BFF_LIQUIBASE_URL='$(MANAGED_WIKI_BFF_LIQUIBASE_URL)'$(STACK_MFA_FLOOR_ENV)$(STACK_MFA_ENV)$(STACK_ANUBIS_ENV)$(STACK_TOR_ENV) \
              EGRESS_VPN_CONF='$(abspath $(EGRESS_VPN_CONF))' \
              DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
@@ -1855,6 +1978,10 @@ stack-m2-check:
 	 want=$$(sed -n 's|^CI_API_V4_URL=http://\([^:]*\):.*|\1|p' $(STACK_M2_ENV)); \
 	 if [ "$$live" != "true" ] || [ -z "$$ip" ] || [ "$$ip" != "$$want" ]; then \
 	   echo "==> m2 registry stale (running=$$live ip=$${ip:-none} env=$${want:-none}) — re-running stack-m2-bootstrap"; \
+	   $(MAKE) --no-print-directory stack-m2-bootstrap; \
+	 elif pinmiss=$$(M2_CHECK_PINS=1 bash tests/stack/m2-bootstrap.sh 2>&1); [ $$? -ne 0 ]; then \
+	   echo "==> m2 cache is missing pinned artifact(s) (a PINS bump?) — re-running stack-m2-bootstrap"; \
+	   printf '%s\n' "$$pinmiss" | sed 's/^/    /'; \
 	   $(MAKE) --no-print-directory stack-m2-bootstrap; \
 	 fi
 
@@ -1960,8 +2087,7 @@ endif
 stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real SSO login; SOCIAL=1 also seeds Matrix/Mastodon
 	@echo "==> Seeding the running stack (Casdoor$(if $(strip $(SOCIAL)), + social,) tier)"
 	$(if $(strip $(SOCIAL)),,SEED_CASDOOR_ONLY=1 )$(if $(strip $(BRAND_B)),CASDOOR_BRAND_B_URL='$(BRANDB_CASDOOR)' )bash tests/stack/seed-e2e.sh
-	@pw="$$(bash tests/stack/e2e-password.sh)"; \
-	  echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin / $$pw) — $$pw is also readable from .e2e-credentials at the repo root."
+	@echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin); the shared password is in .e2e-credentials at the repo root (not printed here: this output is persisted by the Studio run log)."
 	$(STACK_SEED_STAGE2_NOTE)
 
 stack-halt: ## stop the local stack but KEEP its data (identity, rooms, accounts, DBs)
@@ -2095,6 +2221,61 @@ stack-e2e-list: ## enumerate the e2e specs as JSON without running them (no stac
 	@$(E2E_READY) || exit 2
 	@cd tests/e2e && npx playwright test -c playwright.config.ts --list --reporter=json $(E2E_ARGS) $(E2E_SPECS)
 
+# ── The Tor front door (TOR=1) ───────────────────────────────────────────────
+# stack-onion: the CURRENT onion, or a non-zero exit saying why there is none.
+# tests/stack/tor/entrypoint.sh removes tests/stack/tor-onion/hostname when the
+# hugmesh-tor container starts and when it stops (#581), so an absent file means
+# "not serving". A file can still be left by a container that died without a
+# SIGTERM (kill -9, host crash), so when the docker CLI is present this ALSO asks
+# compose whether hugmesh-tor is running and refuses a file it is not serving.
+# Prints the https:// URL, the door a person uses: a secure context (Chromium does
+# not treat an http .onion as one), the node's :443, and a Secure session cookie
+# on a production-configured mesh (docs/TOR-HIDDEN-SERVICE.md "Why :443"). NOT
+# because of CSP upgrade-insecure-requests: the SPA document never carries it
+# (measured live 2026-09-24, #628).
+# Studio (core/local_mesh_bootstrap.py) and docs/SERVE-YOUR-MESH.md already cite
+# this target by name; it did not exist until now.
+STACK_ONION_FILE := tests/stack/tor-onion/hostname
+stack-onion: ## print the local mesh's Tor .onion address (needs `make stack-up TOR=1`)
+	@f='$(STACK_ONION_FILE)'; \
+	if [ ! -s "$$f" ]; then \
+	  echo "stack-onion: no onion is published ($$f is absent or empty) — hugmesh-tor is not running. Start it: make stack-up TOR=1" >&2; exit 1; \
+	fi; \
+	onion="$$(tr -d '[:space:]' < "$$f")"; base="$${onion%.onion}"; \
+	case "$$base" in *[!a-z2-7]*|'') base=bad ;; esac; \
+	if [ "$$base" = "$$onion" ] || [ "$${#base}" -ne 56 ]; then \
+	  echo "stack-onion: $$f does not hold a v3 onion hostname (56 base32 chars + .onion): '$$onion'" >&2; exit 1; \
+	fi; \
+	if command -v docker >/dev/null 2>&1; then \
+	  running="$$($(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile tor ps -q --status running hugmesh-tor 2>/dev/null)"; \
+	  if [ -z "$$running" ]; then \
+	    echo "stack-onion: $$f names $$onion but hugmesh-tor is NOT running — a stale readout from a container that died without cleaning up. Start it: make stack-up TOR=1" >&2; exit 1; \
+	  fi; \
+	else \
+	  echo "stack-onion: (docker CLI absent — cannot confirm hugmesh-tor is running; the address below is only as current as $$f)" >&2; \
+	fi; \
+	echo "https://$$onion/"
+
+# stack-e2e-tor: the @via:onion Gherkin scenario(s), driven THROUGH TOR. The
+# browser dials the onion via hugmesh-tor-client's SOCKS5 port, so the request
+# crosses the real Tor network exactly as a Tor Browser user's would. Starts
+# nothing: needs `make stack-up TOR=1` + `make stack-seed`. SNAP_BASE_URL stays
+# the local https door ON PURPOSE: the @env:docker availability probe is a plain
+# Node request (no proxy), so it must knock on a door it can reach; the onion
+# URL travels separately as SNAP_ONION_BASE_URL (tests/e2e/run.sh --via onion).
+stack-e2e-tor: ## run the @via:onion sign-in over the stack's Tor .onion (needs stack-up TOR=1 + stack-seed)
+	@$(E2E_READY) || exit 2
+	SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)' \
+	  bash tests/e2e/run.sh --bdd --env docker --via onion $(if $(strip $(BDD_TAGS)),--tags '$(BDD_TAGS)',) $(BDD_ARGS)
+
+# stack-tor-mechanism-check: the host-Tor MECHANISM proof (tests/stack/tor-onion-
+# e2e.sh via its census-named wrapper) — mint a real v3 onion for a loopback
+# backend and fetch it back over the PUBLIC Tor network. No docker, no root, no
+# stack. Running this target IS the opt-in (HUGMESH_TOR_E2E=1); the wrapper exits
+# 2 (SKIPPED, checked nothing) when the host has no tor binary.
+stack-tor-mechanism-check: ## OPT-IN, needs the public Tor network + a host tor binary: prove a v3 onion round-trips over Tor (no docker)
+	HUGMESH_TOR_E2E=1 bash tests/stack/test-tor-onion-mechanism.sh
+
 stack-logs: ## tail logs from the running local stack
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_ALT_PROFILE) $(STACK_TOR_PROFILE) $(STACK_GAMES_PROFILE) $(STACK_BRAND_B_PROFILE) $(STACK_OWN_CASDOOR_FLAGS) $(STACK_LIMITS_FLAGS) $(STACK_EGRESS_FLAGS) logs -f --tail=100
 
@@ -2147,7 +2328,7 @@ stack-e2e-bdd-gen: ## compile tests/e2e/features/*.feature into runnable Playwri
 # Makefile gate instead, exactly as the anti-decoration guard above is.
 #   env x interface — was UNWIRED on arrival (tests/scripts/test-guard-integrity.sh
 #   check 3 listed it as "suite(s) nothing runs" on this very tree); wired here.
-stack-e2e-bdd-check: ## OFFLINE: verify every .feature generates, binds and is collected (+ the anti-decoration guards)
+stack-e2e-bdd-check: ## STARTS NOTHING (uses a live stack only with an e2e credential present): verify every .feature generates, binds and is collected (+ the anti-decoration guards)
 	@$(E2E_READY) || exit 2
 	$(BDD_RUN) --list --reporter=line
 	bash tests/scripts/test-e2e-gherkin-harness.sh
@@ -2291,15 +2472,21 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 # Its own target and its own .PHONY line, for the same reason the BDD lane has
 # them: the recipes above are edited by other work in flight.
 #
-#   make e2e-ungated                          the tests/scripts/test-e2e-*.sh
-#                                             suites #246 was written about (8 of
-#                                             22 when this was written; the runner
-#                                             prints the live count every run)
-#   E2E_UNGATED_SET=all make e2e-ungated      every PREMERGE_UNGATED suite —
-#                                             additionally the stack, kind,
+#   make e2e-ungated                          EVERY PREMERGE_UNGATED suite — 22
+#                                             of 22 today; the runner prints the
+#                                             live count every run and hardcodes
+#                                             no number. Operator decision 32c on
+#                                             #347 (2026-09-17): the default is
+#                                             22, NOT the 8 that shipped. It
+#                                             therefore includes the stack, kind,
 #                                             casdoor, pentest, eso and liquibase
-#                                             ones, which are ungated for their
-#                                             own reasons
+#                                             suites that are ungated for their
+#                                             OWN reasons — see WHAT THIS DEFAULT
+#                                             COSTS below.
+#   E2E_UNGATED_SET=e2e make e2e-ungated      only the tests/scripts/test-e2e-*.sh
+#                                             suites #246 was written about, 8 of
+#                                             22 today. The old default, now an
+#                                             explicit opt-in.
 #   E2E_UNGATED_STRICT=1 make e2e-ungated     treat a SKIPPED-LOUDLY exit 2 as red
 #                                             (use on a box you believe is fully
 #                                             equipped: it turns "the toolchain
@@ -2317,15 +2504,22 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 #                                             python3) and goes RED, not SKIP, when
 #                                             that interpreter lacks pytest.
 #                                             MEASURED 2026-09-16 on the operator's
-#                                             box: 7 of 8 without it, 8 of 8 with
-#                                             it. The default set takes ~21 min.
+#                                             box, against the then-default 8-suite
+#                                             e2e subset: 7 of 8 green without it,
+#                                             8 of 8 with it. That subset takes
+#                                             ~21 min; the 22-suite default has
+#                                             never been timed end to end.
 #   E2E_UNGATED_DRY_RUN=1 make e2e-ungated    print WHICH suites the selection
 #                                             resolves to and whether a real run
 #                                             would be allowed beside whatever is
 #                                             currently up, then stop having
 #                                             executed nothing. Verified here on
-#                                             2026-09-10: 8 of 22 by default, 22
-#                                             of 22 with E2E_UNGATED_SET=all.
+#                                             2026-09-10, when the default was
+#                                             still 8: 8 of 22 by default, 22 of
+#                                             22 with E2E_UNGATED_SET=all. Since
+#                                             decision 32c the default IS 22 of
+#                                             22 and E2E_UNGATED_SET=e2e is the
+#                                             8.
 #
 # Neither set is hardcoded here. tests/scripts/run-ungated-lane.sh DERIVES both
 # from the PREMERGE_UNGATED array in tests/scripts/test-guard-integrity.sh, so a
@@ -2333,27 +2527,94 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 # second copy of the list in this file would drift, and would drift silently.
 #
 # THE LIVE STACK. #246's third bullet says the lane must never disturb the
-# operator's live hugmesh-local stack. The runner REFUSES TO START (exit 3) when
-# it sees a hugmesh-local container or kind cluster, REFUSES (exit 5) when docker
+# operator's live hugmesh-local stack. Operator decision 32a on #347 (2026-09-17)
+# widened that to BOTH live shapes: the watch list is `hugmesh-local
+# hugmesh-real`, because tests/stack/compose.real.yaml is its own compose project
+# (`name: hugmesh-real`) with a standalone bring-up path, so its containers are
+# hugmesh-real-* and a hugmesh-local-only census could not see them
+# (hugmesh-generator#397). E2E_UNGATED_LIVE_PREFIX replaces the list and is
+# refused when empty. The runner REFUSES TO START (exit 3) when
+# it sees a container or kind cluster under either prefix, REFUSES (exit 5) when docker
 # or kind is installed but its census command fails (an erroring census is not
 # an empty one, and the override cannot police itself without a before/after),
-# tears nothing down in any mode, and under the explicit
-# E2E_UNGATED_ALLOW_LIVE_STACK=1 override censuses that footprint before and
-# after and exits 4 if it moved. What the suites THEMSELVES start, measured
-# 2026-09-16 (correcting a 2026-09-10 claim that none did): ONE suite in the
-# default set, test-e2e-env-interface-dimensions.sh, runs a throwaway
-# python:3.12-slim http.server container named e2eguard-m7-* and removes only
-# that name; every other verb in the 22 is a read. The runner header carries
-# the inventory, and tests/scripts/test-run-ungated-lane.sh (pre-merge gated)
-# pins every refusal above against mutated copies of the runner.
+# tears nothing down in any mode, and HAS NO OVERRIDE — operator decision 32b on
+# #347 (2026-09-17) removed E2E_UNGATED_ALLOW_LIVE_STACK entirely, because #246
+# asked for a Make target and not an escape hatch. The before/after census
+# outlived it and exits 4 if the footprint moved, which now means a suite BROUGHT
+# one up (the before-census is always empty when the lane proceeds). What the
+# suites THEMSELVES start, measured
+# 2026-09-16 (correcting a 2026-09-10 claim that none did):
+# test-e2e-env-interface-dimensions.sh runs a throwaway python:3.12-slim
+# http.server container named e2eguard-m7-* and removes only that name, and
+# tests/casdoor/test-jwt-custom-token.sh starts casdoor-pg and
+# casdoor-jwtcustom-test on a private network and removes both in an EXIT trap
+# (FIXED names, so concurrent runs collide and a killed run leaves them behind).
+# Every other verb in the 22 is a read. The runner header carries the inventory,
+# and tests/scripts/test-run-ungated-lane.sh (pre-merge gated) pins every
+# refusal above against mutated copies of the runner.
 #
-# EXIT: 0 all green (skips tolerated unless STRICT), 1 a suite was red or
-# errored, 3 refused beside a live stack, 4 the live footprint changed, 5 the
+# WHAT THIS DEFAULT COSTS (decision 32c, recorded rather than worked around).
+# Widening the default from the 8 browser/Qt suites to all 22 pulls in suites
+# that were ungated for reasons of their OWN, not for a missing toolchain.
+#   * THE LANE IS NOW RED BY DEFAULT ON A HEALTHY TREE. RE-MEASURED 2026-09-17:
+#     of the fourteen newly-defaulted suites, FIVE exit 1 and ONE exits 3
+#     (INCOMPLETE, which is also red) — not the "three" an earlier draft of this
+#     paragraph claimed. That first number came from three suites run inside a
+#     git worktree, and half of these suites change verdict with their
+#     checkout's POSITION: they look for a sibling checkout at ../ or for
+#     .stack-src, neither of which a worktree has.
+#     tests/stack/test-gateway-auth-flag-parity.sh was named as one of the three
+#     and is GREEN in the real tree. DO NOT RE-MEASURE THIS LIST FROM A WORKTREE.
+#         tests/scripts/test-selected-services-only.sh         rc=1
+#         tests/scripts/test-optional-service-slug-closure.sh  rc=1
+#           (RE-MEASURED 2026-09-23, #584: until then this rc=1 was its own
+#           parser reading ZERO registry entries — INCOMPLETE, comparing
+#           nothing. It now compares, and is red on two stale controller facts
+#           filed as hugmesh-admin-bff-api#106: meshbridge enum-accepted but
+#           unmanaged, character-forge's selfHeal flag. Its verdict is
+#           position-independent when SERVICE_SRC_ROOT names the checkout tree.)
+#         tests/scripts/test-liquibase-grant-roles.sh          rc=1
+#         tests/egress-vpn/test-secret-contract.sh             rc=1
+#         tests/scripts/test-eso-target-collisions.sh          rc=1
+#         tests/device-registry/test-layer-a-headscale-acl.sh  rc=3 INCOMPLETE
+#     Green in the real tree: test-federation-module-slugs, test-service-env-contract,
+#     test-gateway-auth-flag-parity, test-m2-bootstrap, test-web-locales-wiring.
+#     tests/pentest/nuclei/test-templates.sh SKIPs (no nuclei v3.9.0 here).
+#     tests/scripts/test-kind-metrics-api.sh is rc=0 only when run DIRECTLY
+#     beside a live kind cluster; inside this lane that state is refused, so it
+#     can only ever SKIP. tests/casdoor/test-jwt-custom-token.sh was NOT run by
+#     anybody measuring this (it starts two containers) — its lane verdict is
+#     still unknown. The runner header carries the full table with one-line
+#     reasons.
+#     These are EXPECTED REDS naming real platform defects, not suite bugs —
+#     .gitlab-ci.yml says so of the selected-services job ("RED on today's main
+#     … five checks, each naming a live defect") and the others say so in their
+#     own headers. A suite that exits non-zero makes the LANE exit 1, so
+#     `make e2e-ungated` cannot be green until those defects are fixed, and its
+#     red no longer distinguishes "something broke" from "the known six".
+#   * a verdict the runner could not previously express. At least three of the
+#     newcomers use exit 3 as a documented INCOMPLETE; the runner used to print
+#     "ERROR … (exit 3)" for it, which reads as a crash and collides with the
+#     lane's OWN exit 3 (refused beside a live stack). It now has an INCOMPLETE
+#     bucket, still red.
+#   * one more container-starting suite (casdoor, above), with fixed names.
+#   * an untimed runtime: ~21 min plus fourteen more suites.
+# None of that is a reason to narrow the default back — it is the cost the
+# operator accepted. It is written here so the next person does not read the
+# red as a broken lane. If the lane must be actionable before those six defects
+# land, the honest shapes are an expected-red allowlist in the runner or fixing
+# them; both are decisions nobody has made.
+#
+# EXIT: 0 all green (skips tolerated unless STRICT), 1 a suite was red, errored
+# or INCOMPLETE, 3 refused beside a live stack, 4 a suite brought a watched
+# footprint up while the lane ran, 5 the
 # footprint could not be censused, 6 VACUOUS — suites were selected and not one
-# passed (every one skipped; a lane that asserted nothing is not green).
+# passed (every one skipped; a lane that asserted nothing is not green),
+# 7 INTERRUPTED — SIGINT/SIGTERM/SIGHUP reached the lane, which prints the
+# verdicts it had reached and marks the evidence dir PARTIAL (#397 item 2).
 # Evidence: one dated dir per run under tests/.ungated-lane/ (gitignored),
 # never under out/.
 .PHONY: e2e-ungated
 
-e2e-ungated: ## MANUAL ONLY: run the PREMERGE_UNGATED suites (test-e2e-* by default, ~21 min; E2E_UNGATED_SET=all for every entry)
+e2e-ungated: ## MANUAL ONLY: run ALL the PREMERGE_UNGATED suites (22 of 22 by default since #347 decision 32c; E2E_UNGATED_SET=e2e for just the 8 test-e2e-* ones, ~21 min)
 	bash tests/scripts/run-ungated-lane.sh

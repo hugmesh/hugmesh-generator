@@ -110,7 +110,7 @@ _PLAYWRIGHT_PLATFORM_TARGETS = {
 
 #: Wall clock for the ``--devices`` shell-out in :func:`status`. The subcommand
 #: boots nothing (a file read plus one ``docker ps``), so anything slower than
-#: this is a wedged daemon — and the registry fallback answers instead.
+#: this is a hung daemon — and the registry fallback answers instead.
 DEVICES_PROBE_TIMEOUT_S = 10.0
 #: Wall clock for the fallback lane's own ``docker ps``.
 DOCKER_PS_TIMEOUT_S = 5.0
@@ -705,7 +705,7 @@ def _runner_devices(generator_dir: str, work_dir: str) -> list[Device] | None:
 def _docker_running_names() -> set[str] | None:
     """Names of running containers, or None when docker did not answer.
 
-    None is load-bearing: the fallback downgrade must NOT run on it. An unanswered
+    None is relied on: the fallback downgrade must NOT run on it. An unanswered
     daemon says nothing about the containers, and downgrading every record to
     stopped because docker was slow is the same lie in the other direction.
     """

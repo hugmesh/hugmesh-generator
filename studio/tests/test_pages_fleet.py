@@ -398,6 +398,31 @@ def test_fleet_run_writes_honest_complete_record(qapp, wiz, tmp_path):
     assert page.pending_session_id is None      # the next run mints a fresh record
 
 
+def test_fleet_run_refused_elevation_ends_the_run_failed_with_the_reason(qapp, wiz, tmp_path):
+    """#373: BuildDriver._spawn raises ElevationRefused under HUGMESH_STUDIO_NO_ELEVATION
+    (the operator's production knob). Raised inside QThread.run with no guard it qFatals
+    the process (rc 134), or — with crashlog installed — strands the page with no `done`
+    ever emitted and the session 'running' for ever. The worker must end the run non-zero
+    through the normal `done` path and put the reason in the log."""
+    from hugmesh_studio.core.build_driver import ElevationRefused
+
+    win, page = _open_ready_window(wiz, tmp_path, code=0)
+
+    def refusing_run(cfg, backend, on_line=None):
+        raise ElevationRefused("refusing to spawn sudo (HUGMESH_STUDIO_NO_ELEVATION is set)")
+
+    page.driver.run = refusing_run
+    _dispatch_and_wait(qapp, page)
+    (s,) = bs.load_all()
+    assert s.kind == "fleet" and s.status == "failed"      # NOT left 'running'
+    assert s.images[0]["status"] == "failed" and s.images[0]["exit_code"] == 1
+    with open(s.log_path, encoding="utf-8") as fh:
+        log = fh.read()
+    assert "fleet run aborted before completion" in log
+    assert "HUGMESH_STUDIO_NO_ELEVATION" in log
+    assert not page.stop_btn.isEnabled()                   # _done ran
+
+
 def test_fleet_run_failure_keeps_error_tail(qapp, wiz, tmp_path):
     win, page = _open_ready_window(wiz, tmp_path, code=3,
                                    lines=("starting", "boom: emerge died"))

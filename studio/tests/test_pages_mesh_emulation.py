@@ -849,7 +849,7 @@ def test_status_resyncs_a_device_paused_outside_the_studio(wiz, qapp, registry,
 def test_an_unparsed_status_line_leaves_the_run_state_unknown(wiz, qapp, registry,
                                                               mocked_spawn):
     """Nothing is INFERRED: rounding an unrecognized reply to "running" is how a
-    wedged guest comes to read as a healthy one."""
+    hung guest comes to read as a healthy one."""
     mocked_spawn.lines.append("some unrelated chatter from the runner")
     page = _page(wiz)
     registry(_device("rpi5/pki"))
@@ -1737,3 +1737,36 @@ def test_a_scale_from_this_page_runs_off_the_gui_thread_behind_the_busy_guard(
     assert seen["ask"] == (unit.key, 2)
     assert seen["thread"] != threading.get_ident(), "the scale ran ON the GUI thread"
     assert "asked for 2 replica(s)" in page.monitor.monitor.scale_status_text()
+
+
+# ---- #637: a session whose recorded config names an unwalked domain is not booted ----
+from _session_records import write_build_record  # noqa: E402
+
+_MESH_SESSION = "20260810-101010-mesh"
+
+
+def test_an_unwalked_domain_refuses_every_start_inline(wiz, qapp, mocked_spawn):
+    write_build_record(_MESH_SESSION, domains=("a.example", "b.example"),
+                       reviewed=("hugmesh.net", "a.example"))
+    page = _page(wiz)
+    assert page._current_session().name == _MESH_SESSION
+    note = page.domain_gate_note
+    assert note.isVisible() and "b.example" in note.text()
+    assert "a.example" not in note.text().split("—")[1]
+    assert not page.start_btn.isEnabled()
+    assert all(not row.start.isEnabled() for row in page._rows)
+    # defence in depth: the slots themselves refuse, not only the greyed buttons
+    page._start_mesh()
+    page._start_device(0)
+    assert len(mocked_spawn) == 0, "a refused session booted anyway"
+    assert "refused" in page.log.toPlainText() and "b.example" in page.note.text()
+
+
+def test_a_walked_or_pre_495_session_still_starts(wiz, qapp, mocked_spawn):
+    write_build_record(_MESH_SESSION, domains=("a.example",), reviewed=())
+    page = _page(wiz)
+    assert not page.domain_gate_note.isVisible()
+    assert page.start_btn.isEnabled()
+    page.start_btn.click()
+    _finish(page, qapp)
+    assert len(mocked_spawn) == 1

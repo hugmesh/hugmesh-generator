@@ -128,7 +128,10 @@ KNOWN_UBFF=(hugmesh-user-bff-api)
 # posture available, so pinning it here cannot weaken anything. Any NON-zero value
 # reopens a window in which a suspended session still gets through, and this gate
 # will refuse it. Parity of the same key across the compose and cluster lanes is
-# hugmesh-generator#398 / tests/stack/test-gateway-auth-flag-parity.sh.
+# hugmesh-generator#398 / tests/stack/test-gateway-auth-flag-parity.sh. The BFFs'
+# OWN mirror of that cache (APP_BFF_EXCHANGE_CACHE_TTL_MS on admin-bff-api and
+# mod-bff-api, decision 60 / #569) is a different key with a different guard:
+# tests/scripts/test-fe-bff-route-lane-parity.sh pins it to "0" on both lanes.
 PINNED_KNOBS=("hugmesh-fe-gateway:HUGMESH_GATEWAY_BFF_EXCHANGE_CACHE_TTL_MS=0")
 knob_is_pinned() { # <service> <ENV> <value> -> 0 when pinned at exactly this value
   local want

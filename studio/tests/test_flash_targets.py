@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -822,7 +823,7 @@ def test_the_post_build_auto_flash_is_gated_by_the_same_one_warning(monkeypatch,
                                                                     tmp_path):
     """MAJOR from the refutation: _maybe_auto_flash reaches a modal from a NON-click
     path (the BuildPage checkbox, ticked hours earlier). #337 asks for the warning "at
-    the moment the flash is started", so it stays — but it must be THE seam, so a
+    the moment the flash is started", so it stays — but it must be THE override point, so a
     headless run can never block. Cancel here must write nothing."""
     session = tmp_path / "sessions" / "s1"
     session.mkdir(parents=True)
@@ -859,3 +860,53 @@ def test_a_declined_flash_leaves_no_caveat_on_the_next_devices_warning(monkeypat
     page.flash_worker = _Busy()
     pg.ProgressPage._start_flash(page, FAKE)
     assert page._flash_caveats == []
+
+
+# ── #304: _FlashWorker owns its Popen, so it needs its own elevation guard ─────────────
+def _run_flash_worker(monkeypatch, argv, tmp_path):
+    """Run _FlashWorker.run() synchronously (no QThread start: its body is what is
+    under test) and return (lines, done_codes, popen_calls)."""
+    popen_calls = []
+
+    def no_popen(*a, **k):
+        popen_calls.append(a)
+        raise AssertionError("the flasher was spawned")
+    monkeypatch.setattr(pg.subprocess, "Popen", no_popen)
+    w = pg._FlashWorker(argv, str(tmp_path))
+    lines, done = [], []
+    w.line.connect(lines.append)
+    w.done.connect(done.append)
+    w.run()
+    return lines, done, popen_calls
+
+
+def test_flash_worker_refuses_to_spawn_sudo_under_the_no_elevation_knob(monkeypatch, tmp_path):
+    """The operator's production knob: `flash_argv` is `sudo -A .../flash-disk.sh ...`;
+    the worker must refuse BEFORE the Popen, say why, and end non-zero through `done`
+    (an escape would qFatal the Studio)."""
+    monkeypatch.setenv("HUGMESH_STUDIO_NO_ELEVATION", "1")
+    argv = ["sudo", "-A", str(tmp_path / "flash-disk.sh"), "--role", "pki", "--arch", "x86"]
+    lines, done, popen_calls = _run_flash_worker(monkeypatch, argv, tmp_path)
+    assert popen_calls == []                       # nothing was spawned
+    assert done == [1]
+    assert any("refusing to spawn sudo" in ln and "HUGMESH_STUDIO_NO_ELEVATION" in ln
+               for ln in lines), lines
+
+
+def test_flash_worker_refuses_under_pytest_even_without_the_knob(monkeypatch, tmp_path):
+    monkeypatch.delenv("HUGMESH_STUDIO_NO_ELEVATION", raising=False)
+    lines, done, popen_calls = _run_flash_worker(
+        monkeypatch, ["sudo", "-A", str(tmp_path / "flash-disk.sh")], tmp_path)
+    assert popen_calls == [] and done == [1]
+    assert any("pytest is running this process" in ln for ln in lines), lines
+
+
+def test_flash_worker_still_launches_a_non_elevating_argv(monkeypatch, tmp_path):
+    """The guard must not break the root-host path (argv without sudo)."""
+    monkeypatch.setenv("HUGMESH_STUDIO_NO_ELEVATION", "1")
+    w = pg._FlashWorker([sys.executable, "-c", "print('flashed')"], str(tmp_path))
+    lines, done = [], []
+    w.line.connect(lines.append)
+    w.done.connect(done.append)
+    w.run()
+    assert lines == ["flashed"] and done == [0]

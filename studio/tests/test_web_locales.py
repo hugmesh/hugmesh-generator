@@ -3,7 +3,7 @@ support'), threaded Studio -> LocalStackNode -> `make stack-up` env ->
 compose build arg -> the login-ui Dockerfile's ARG HUG_WEB_LOCALES.
 
 This is the anti-dead-knob coverage for THIS feature. The session's hardest-won
-rule is 'never ship a knob wired to nothing', so the load-bearing assertions here
+rule is 'never ship a knob wired to nothing', so the assertions that matter here
 are: (1) the DEFAULT emits NOTHING (byte-identical to a plain stack-up) and (2) a
 non-empty value reaches the SAME env var `make stack-up` forwards to compose.
 Everything is Qt-free and never starts a container.
