@@ -66,6 +66,7 @@ from ..qt import Qt, QtCore, QtGui, QtWidgets
 from .. import console
 from ..styles import MUTED, WARN
 from ...core import emulation, emulation_save, mesh_emulation, qemu_devices, qemu_tests
+from ...core.domain_services import session_boot_gate_reason
 from ...core.local_stack_node import LocalStackNode
 from . import _emulation_common as common
 from ._mesh_monitor_widget import MeshMonitorSection
@@ -320,6 +321,10 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         #: from ``_cancel``, which emulation.spawn sets itself on every exit.
         self._cancel_pressed = False
         self._docker_ok = False
+        #: The per-domain services refusal for the picked session (#637), "" when it
+        #: may boot. Read once per session change through the ONE seam
+        #: (core.domain_services.session_boot_gate_reason); every boot verb checks it.
+        self._boot_refusal = ""
         self.worker: _MeshWorker | None = None
         self._sessions: list[qemu_tests.BuildSession] = []
         #: The DEPLOY plan. ``epoch=""`` on purpose: this page routinely inspects a
@@ -371,6 +376,15 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self.session_note.setWordWrap(True)
         self.session_note.setTextFormat(Qt.TextFormat.RichText)
         sb.addWidget(self.session_note)
+        # The per-domain services refusal (#637) — INLINE, under the picker it is about,
+        # never a modal (a modal in page logic hangs the headless tests). Plain text:
+        # the sentence carries operator-typed domain names.
+        self.domain_gate_note = QtWidgets.QLabel()
+        self.domain_gate_note.setWordWrap(True)
+        self.domain_gate_note.setTextFormat(Qt.TextFormat.PlainText)
+        self.domain_gate_note.setStyleSheet(f"color: {WARN};")
+        self.domain_gate_note.setVisible(False)
+        sb.addWidget(self.domain_gate_note)
         self.plan_label = QtWidgets.QLabel()
         self.plan_label.setWordWrap(True)
         self.plan_label.setTextFormat(Qt.TextFormat.RichText)
@@ -625,6 +639,10 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
     def _session_changed(self, *_):
         session = self._current_session()
         self.session_note.setText(common.partial_note(session))
+        self._boot_refusal = (session_boot_gate_reason(session.name)
+                              if session is not None else "")
+        self.domain_gate_note.setText(self._boot_refusal)
+        self.domain_gate_note.setVisible(bool(self._boot_refusal))
         # A different session is a different mesh; a preview of the old one must not
         # survive to be armed against the new one.
         self._mesh_save_preview = None
@@ -914,7 +932,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
                     WARN)
         # Everything else QEMU can report — prelaunch, inmigrate, guest-panicked,
         # io-error … — is shown VERBATIM rather than rounded to running or paused,
-        # because rounding is how a wedged guest comes to read as a healthy one.
+        # because rounding is how a hung guest comes to read as a healthy one.
         return (f"qemu: {known}",
                 f"State {state}. The emulator reports run-state “{known}”, which is "
                 "neither running nor paused.", WARN)
@@ -935,7 +953,8 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
     def _sync_controls(self):
         idle = not self._running
         planned = self.plan is not None and bool(self._rows)
-        self.start_btn.setEnabled(idle and planned and self._docker_ok)
+        self.start_btn.setEnabled(idle and planned and self._docker_ok
+                                  and not self._boot_refusal)
         self.stop_btn.setEnabled(idle and any(row.up for row in self._rows))
         self.refresh_btn.setEnabled(idle and planned)
         self.cancel_btn.setEnabled(self._running)
@@ -948,9 +967,13 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
     def _arm_row(self, row: _Row, idle: bool):
         up = row.up
         live = up and idle
-        row.start.setEnabled(idle and not up and self._docker_ok)
+        row.start.setEnabled(idle and not up and self._docker_ok
+                             and not self._boot_refusal)
         row.start.setToolTip(
             f"Disabled: {row.label} is already running." if up else
+            "Disabled: this session's configuration names a domain with no recorded "
+            "service configuration — see the note under the session picker."
+            if self._boot_refusal else
             "Boot this one device with --keep-alive, pinned to THIS session's "
             "artifacts and addressed with --only-exact — a FULL emulated boot; "
             "Cancel stops it.")
@@ -987,9 +1010,9 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         if not strip.pending:
             strip.target = observed
         strip.paint(observed, busy=not idle)
-        if not self._docker_ok:
-            # Stopping never needs docker to be healthy; starting always does, and
-            # the note above the table already says why it is not.
+        if not self._docker_ok or self._boot_refusal:
+            # Stopping never needs docker to be healthy, nor a configured domain;
+            # starting needs both, and the notes above the table say why not.
             strip.plus.setEnabled(False)
             if strip.target > observed:
                 strip.apply.setEnabled(False)
@@ -1298,8 +1321,19 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         self._cancel.set()
 
     # ── mesh-wide verbs ─────────────────────────────────────────────────────────
+    def _refuse_boot(self) -> bool:
+        """DEFENCE IN DEPTH for the #637 gate: every boot verb asks, not only the
+        buttons' enabled state (a signal or a test can reach a slot a greyed button
+        cannot). Inline note + log, never a modal."""
+        if not self._boot_refusal:
+            return False
+        self.note.setText(f'<span style="color:{WARN}">'
+                          f"{html.escape(self._boot_refusal)}</span>")
+        console.write(self.log, f"!! refused: {self._boot_refusal}")
+        return True
+
     def _start_mesh(self):
-        if self.plan is None:
+        if self.plan is None or self._refuse_boot():
             return
         console.write(self.log,
                       "[mesh] booting every planned device with --keep-alive — "
@@ -1329,7 +1363,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
         restart of ``x86/be`` could boot a different build than the row was planned
         from and drag ``be+gpu``/``be-ha`` along with it.
         """
-        if self.plan is None:
+        if self.plan is None or self._refuse_boot():
             return
         row = self._rows[index]
         try:
@@ -1633,7 +1667,7 @@ class MeshEmulationPage(QtWidgets.QWizardPage):
 
         def verb(on_line, _cancel):
             def run(argv):
-                # The save orchestrator's process seam, wired to THE spawn — so a
+                # The save orchestrator's process override point, wired to THE spawn — so a
                 # mesh save streams into this log and cancels by process group like
                 # every other verb on this page.
                 return emulation.spawn(argv, gen, on_line=on_line, cancel=cancel)

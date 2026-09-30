@@ -563,7 +563,7 @@ def test_askpass_mode_prints_password_and_exits_zero(monkeypatch, qapp):
 def test_bare_askpass_never_pops_the_dialog(monkeypatch, qapp):
     """The dialog is opt-in ONLY: plain `--askpass` with a reachable display, no
     credential source and no TTY must decline (exit 1, nothing on stdout) instead of
-    showing the dialog that wedged 60 headless `sudo -A` launchers (2026-09-04)."""
+    showing the dialog that hung 60 headless `sudo -A` launchers (2026-09-04)."""
     import contextlib
     import io
 
@@ -879,7 +879,7 @@ def test_worklist_show_command_renders_inline_and_never_moves_the_page(wiz):
     """A worklist row's "Show command" renders THAT image's argv NEXT TO THE ROW.
 
     Two reports, one button. It first shipped writing into the page-wide "Exact builder
-    command (advanced)" pane, folded and ~1100px down, and read as inert; the fix for that
+    command (advanced)" pane, folded and ~1100px down, and read as ineffective; the fix for that
     was to unfold the pane and scroll to it, and #234's verdict was "it just scrolls the
     window to the preview tab". So this pins the output's LOCATION, not just its content:
     the inline pane fills and appears, and the page-wide fold and the viewport are both
@@ -994,7 +994,7 @@ def test_worklist_inline_command_does_not_outlive_the_options_it_was_rendered_fr
     build.outdir.setText("/tmp/a-different-outdir")
     build.preview_btn.click()                       # the page's own Refresh preview
 
-    assert "/tmp/a-different-outdir" in build.cmd.toPlainText()   # non-vacuity
+    assert "/tmp/a-different-outdir" in build.cmd.toPlainText()   # real-cases check
     assert not build.wl_cmd.isVisible()
     assert build.wl_cmd.toPlainText() == ""
     assert not build.wl_cmd_caption.isVisible()

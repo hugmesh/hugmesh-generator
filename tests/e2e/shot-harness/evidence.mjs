@@ -47,12 +47,31 @@ export function assertRealEvidence(file, { unlink = true } = {}) {
   const height = buf.readUInt32BE(20);
   if (width < MIN_EDGE || height < MIN_EDGE) reject(`${width}x${height} is too small to show a control`);
 
-  // Flat-frame check. pngjs is a declared dependency of this package; a box
-  // without it loses THIS check and keeps every other one, rather than failing
-  // every shot over a missing dev dependency.
+  // Flat-frame check. pngjs is a declared dependency of this package, and this
+  // check is the ENTIRE point of this module (see the file header): an empty
+  // or error-page PNG under a believable filename is indistinguishable from
+  // evidence to everyone who did not run the harness. A missing decoder used
+  // to lose only this one check and silently ACCEPT exactly the images it
+  // exists to reject (hugmesh-generator#382) — fail CLOSED instead, per the
+  // README's own stated stance, rather than degrade to flatChecked=false.
+  let PNG;
+  try {
+    ({ PNG } = createRequire(import.meta.url)('pngjs'));
+  } catch (e) {
+    throw new Error(
+      `${path.basename(file)}: cannot flat-check this PNG — the 'pngjs' dependency is not `
+      + `resolvable (${e && e.message ? e.message : e}). This check exists to reject a blank or `
+      + `error-page PNG that would otherwise pass as evidence, so a missing decoder is a hard `
+      + `failure here, not a silent pass. Run 'npm ci' in tests/e2e (or wherever this is invoked `
+      + 'from) before trusting any PNG this harness accepts.',
+    );
+  }
+  // pngjs is resolvable; a decode failure on THESE bytes is a separate, narrower
+  // situation this issue is not about (e.g. a PNG shape pngjs cannot parse) —
+  // keep degrading gracefully rather than rejecting a possibly-real screenshot.
   let png;
   try {
-    png = createRequire(import.meta.url)('pngjs').PNG.sync.read(buf);
+    png = PNG.sync.read(buf);
   } catch {
     return { width, height, bytes: buf.length, flatChecked: false };
   }

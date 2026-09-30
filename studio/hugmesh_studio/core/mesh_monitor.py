@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -69,8 +70,15 @@ from . import devops_tools, view_doors
 from .local_stack_node import _COMPOSE_PROJECT, _compose_base, _kind_cluster_name
 
 #: Per-call ceilings. ONE ``kubectl get`` round trip for the whole cluster rather than a
-#: per-namespace loop: N calls is N timeouts on a wedged API server.
+#: per-namespace loop: N calls is N timeouts on a hung API server.
 KIND_CLUSTERS_TIMEOUT_S = 10
+#: Where scripts/kind-halt.sh keeps its record, and how long to wait for it. Kept
+#: in step with that script's own defaults (ARGOCD_NS / STATE_CM / STATE_KEY); it is
+#: one small read, so it gets a short ceiling and never eats the snapshot deadline.
+ARGOCD_NS = "devops"
+KIND_HALT_STATE_CM = "hugmesh-kind-halt"
+KIND_HALT_STATE_KEY = "halt.json"
+KIND_HALT_READ_TIMEOUT_S = 10
 KUBECTL_GET_TIMEOUT_S = 20
 DOCKER_INSPECT_TIMEOUT_S = 10
 COMPOSE_PS_TIMEOUT_S = 20
@@ -200,6 +208,12 @@ class LaneState:
     running: bool | None          # None = COULD NOT ESTABLISH (I5), never rendered as False
     detail: str = ""
     error: str = ""
+    #: kind lane only (#356): has `make kind-halt` halted this lane? TRI-STATE for
+    #: the same reason ``running`` is — True halted, False not halted, **None** the
+    #: question could not be answered. A halted lane still reads running=True (the
+    #: halt KEEPS the cluster), so without this the GUI offers Halt on an already
+    #: halted lane and Resume on one that was never halted, with no way to tell.
+    halted: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -774,7 +788,41 @@ def _kind_units(node, generator_dir: str, catalog, live: dict, budget: _Budget, 
         detail += f" · API https://{api[0]}:{api[1]}"
     if pods == 0:
         notes.append(f"the kind cluster {cluster} answered with zero pods")
-    return LaneState(True, detail=detail), units, notes, errors
+    halted = _halt_record_present(node, kubectl, ctx, budget)
+    if halted is True:
+        detail += " · HALTED"
+        notes.append(f"the kind lane is HALTED: {KIND_HALT_STATE_CM} exists in "
+                     f"{ARGOCD_NS}. Its workloads are at 0 and ArgoCD auto-sync is "
+                     f"suspended on the Applications the halt recorded. "
+                     f"`make kind-resume` (or Resume DevOps lane) puts them back.")
+    elif halted is None:
+        notes.append("whether the kind lane is HALTED could not be read, so Halt "
+                     "and Resume are both offered; `make kind-halt-status` is the "
+                     "authority. Unknown is not 'not halted'.")
+    return LaneState(True, detail=detail, halted=halted), units, notes, errors
+
+
+def _halt_record_present(node, kubectl: str, ctx: str, budget: _Budget) -> bool | None:
+    """Is `make kind-halt`'s record on the cluster? True / False / **None**.
+
+    None is not a formality. kind-halt.sh refuses (exit 5) when it cannot READ its
+    own record, precisely because "the ConfigMap is absent" and "the API would not
+    answer" are different answers and conflating them let a second halt overwrite a
+    good record with an all-zero one. The GUI makes the same distinction: a read it
+    could not take greys nothing and says so, rather than reporting 'not halted'.
+    """
+    if budget.remaining() <= 1:
+        return None
+    rc, out = _probe(node, [kubectl, "--context", ctx, "-n", ARGOCD_NS, "get",
+                            "configmap", KIND_HALT_STATE_CM, "-o",
+                            f"jsonpath={{.data.{KIND_HALT_STATE_KEY}}}"],
+                     budget.bounded(KIND_HALT_READ_TIMEOUT_S))
+    if rc == 0:
+        return bool((out or "").strip())
+    # NotFound is the ONE failure that means "there is no halt record".
+    if "notfound" in (out or "").lower() or "not found" in (out or "").lower():
+        return False
+    return None
 
 
 # ── compose lane ───────────────────────────────────────────────────────────────────
@@ -805,6 +853,22 @@ def _parse_compose_ps(text: str) -> list[dict] | None:
         if isinstance(r, dict):
             rows.append(r)
     return rows or None
+
+
+# The compose services TOR=1 starts (tests/stack/compose.local.yaml). Matched
+# EXACTLY: a substring test for "tor" also caught hugmesh-tor-client (and would
+# catch any future "*tor*" service, e.g. a "monitor"), and hung the onion on it.
+_COMPOSE_ONION_SERVICE = "hugmesh-tor"
+_COMPOSE_TOR_CLIENT_SERVICE = "hugmesh-tor-client"
+
+
+def _is_compose_service(service: str, name: str, want: str) -> bool:
+    """True when this row IS compose service ``want``: its service label, or — for
+    a row that carries no label — a container name of compose's
+    ``<project>-<service>-<n>`` shape."""
+    if service:
+        return service == want
+    return re.fullmatch(r"(?:.+[-_])?%s[-_]\d+" % re.escape(want), name or "") is not None
 
 
 def _parse_docker_ps(text: str) -> list[dict]:
@@ -973,10 +1037,17 @@ def _compose_units(node, generator_dir: str, catalog, live: dict, budget: _Budge
             else:
                 door = Door(label="Open", url=f"http://127.0.0.1:{plain_port}/",
                             via="compose")
-        elif onion and "tor" in (service or name).lower():
+        elif onion and _is_compose_service(service, name, _COMPOSE_ONION_SERVICE):
             external_bits.append(onion)
             door = Door(blocked="a normal browser cannot reach a .onion — use the "
                                 "'Copy .onion address' button and Tor Browser")
+        elif _is_compose_service(service, name, _COMPOSE_TOR_CLIENT_SERVICE):
+            # The SOCKS5 client the Tor e2e lane dials the onion through. It is
+            # NOT the onion: attributing the .onion (or the Tor Browser hint) to
+            # this row would point a person at a proxy port as if it were the door.
+            door = Door(blocked="a SOCKS5 proxy into Tor for the e2e lane "
+                                "(make stack-e2e-tor), not a web page — the onion "
+                                f"itself is the {_COMPOSE_ONION_SERVICE} row")
         else:
             web = [(pp, tp) for pp, tp in published if _port_is_http("", tp)]
             if web:

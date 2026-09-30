@@ -21,7 +21,7 @@ That "the GUI offers a theme the builder rejects" defect class is what
 (the builder's accepted set *is* the directory listing — it resolves
 ``${SPECS_DIR}/branding/themes/<name>`` and fails when that directory is absent, so
 directory-set equality is builder equality; ``test_branding_themes.py`` pins that
-builder line verbatim so the equivalence cannot rot).
+builder line verbatim so the equivalence cannot go stale).
 
 Colour + copy for each theme live here too, so exactly one table feeds
 

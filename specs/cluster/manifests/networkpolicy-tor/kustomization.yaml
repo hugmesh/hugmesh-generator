@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# ─────────────── tor OPTIONAL SERVICE — its NetworkPolicy interaction ───────────────
+# The `tor-onion-marked` policy (egress to the node Tor SOCKS proxy for a pod labelled
+# hugmesh.net/tor-onion=true) lives in its OWN overlay, served by its OWN Application
+# (apps/08b-networkpolicy-tor.yaml), so that the tor selection actually decides whether
+# a cluster gets it (hugmesh-generator#617):
+#   * it used to sit in manifests/networkpolicy, which apps/08-networkpolicy.yaml
+#     AUTO-SYNCS from git main with prune + selfHeal. Git always listed it, so every
+#     tracking cluster got it whatever the image selected, and the bake-time prune
+#     (scripts/_optional-services-lib.sh) only edited a tree ArgoCD never read;
+#   * a device applies its BAKED apps/*.yaml (specs/cluster/bootstrap/bootstrap.sh), and
+#     the bake removes apps/08b-networkpolicy-tor.yaml when tor is not selected — so the
+#     Application, and with it this overlay, exists only on a tor-selected build.
+# The Application is MANUAL-sync (no `automated:` block): this is an EGRESS-axis policy
+# (a labelled pod loses every egress but DNS + SOCKS), and egress policies ship dark
+# (see manifests/networkpolicy-egress). It stays inert either way — no workload sets the
+# label, and the node binds SocksPort to 127.0.0.1 only (see the policy's header).
+resources:
+  - tor-onion-marked.yaml

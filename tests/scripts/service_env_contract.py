@@ -417,14 +417,48 @@ def resolve_service_src(repo_root: Path, explicit: str | None, repos: set[str]) 
     )
 
 
+def _overrides_with_something(svc: ServiceContainer, name: str) -> bool:
+    """True if `name` in the Deployment's env map actually SUPPLIES a value.
+
+    hugmesh-generator#411: `check_derived` used to test only whether the NAME was
+    present in the container's env map — `set(hit.names) & set(svc.env)` — so a
+    Deployment that set the key to the empty string ("") counted as an override
+    exactly like a real address, and the pod started with an unusable value
+    while this gate said PASS. A `fromSecret` reference has no literal `value`
+    to inspect here (its content is Vault/ESO's business, decided at apply
+    time, not this static check's), so it is presumed a real override — this
+    rule is only about a Deployment that TELLS a pod an empty string directly.
+    """
+    entry = svc.env.get(name)
+    if entry is None:
+        return False
+    if "secret" in entry:
+        return True
+    return str(entry.get("value") or "").strip() != ""
+
+
 def check_derived(svc: ServiceContainer, src_root: Path, facts: ClusterFacts) -> None:
     """[env-derived] + [env-startup] — the service's OWN config states the contract."""
     app_yml = src_root / svc.repo / APPLICATION_YML
     hits = stale_defaults(app_yml, facts)
     covered = 0
     for hit in hits:
-        if set(hit.names) & set(svc.env):
+        present = [n for n in hit.names if n in svc.env]
+        if any(_overrides_with_something(svc, n) for n in present):
             covered += 1
+            continue
+        if present:
+            # The name IS set, but to nothing usable — worse than the default
+            # it silently replaces (a malformed/empty value at call time rather
+            # than an NXDOMAIN with a name in it), and NOT the same finding as
+            # "unset", so it gets its own message rather than being folded into
+            # the "none of … is set" case below.
+            fail(
+                "env-derived",
+                f"{svc.label}: {'/'.join(present)} is set to an EMPTY value, which does NOT "
+                f"override {svc.repo}'s packaged default for {hit.prop} = {hit.default!r} — "
+                f"{hit.detail}",
+            )
             continue
         fail(
             "env-derived",
