@@ -575,6 +575,10 @@ _dq() {
 # _word VALUE — like _dq but leaves a value made only of shell-safe characters
 # untouched (so plain paths/names stay byte-identical on the command line).
 _word() {
+    local v="$1"
+    # A typed "~/x" used to reach the shell unquoted and expand; keep that.
+    case "${v}" in "~/"*) v="${HOME}/${v#\~/}" ;; esac
+    set -- "${v}"
     case "$1" in
         ""|*[!A-Za-z0-9_./:=@%+,-]*) _dq "$1" ;;
         *) printf '%s' "$1" ;;

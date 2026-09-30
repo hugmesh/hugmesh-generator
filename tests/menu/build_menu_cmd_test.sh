@@ -1107,5 +1107,11 @@ grep -q '^make clean' "${CLEAN_LOG}" && _ok || _bad "clean: did not clean when i
 unset -f make menu_build_alive foreign_build_pid ui_yesno ui_msg
 
 
+# _word keeps a typed leading "~/" working (it reached the shell unquoted before).
+_got="$(HOME=/home/u _word '~/wall.png')"
+[ "${_got}" = "/home/u/wall.png" ] && _ok || _bad "_word: ~/wall.png -> ${_got}"
+_got="$(HOME='/home/my user' _word '~/a b.png')"
+[ "${_got}" = '"/home/my user/a b.png"' ] && _ok || _bad "_word: ~ with spaces -> ${_got}"
+
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]
