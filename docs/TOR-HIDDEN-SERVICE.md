@@ -381,7 +381,15 @@ added from the pod view is created with the overlay too, so it has the same map.
 make stack-up TOR=1 BRAND_B=1 && make stack-seed
 ls tests/stack/tor-onion/                        # hostname  brandb.hostname
 curl --socks5-hostname 127.0.0.1:9050 -k https://$(cat tests/stack/tor-onion/brandb.hostname)/login
+bash tests/stack/tor-domains-live-check.sh       # the whole proof, row by row (it changes nothing)
 ```
+
+`tests/stack/tor-domains-live-check.sh` is the live proof in one run: the readouts, the map as
+the gateway reads it, each onion's login page through Tor, an unregistered onion `Host` refused,
+the default persona good on the mesh's onion and refused on brand B's, and brand B's persona
+signing in on brand B's onion. If brand B's own sign-in also fails on its HTTPS door it reports
+`BLOCKED` (the brand's sign-in is broken on that stack), not an onion failure. Its grading is
+pinned offline against a stub gateway (`test_the_live_check_*`); the run itself needs the stack.
 
 **Not yet run live** (no compose mesh on 2026-09-23/24 or 09-30): two onions minted; brand B's
 onion serves brand B's login and a brand-B persona signs in there; the mesh's onion still

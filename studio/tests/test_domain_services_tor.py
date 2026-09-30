@@ -1030,3 +1030,171 @@ def test_the_up_loads_the_overlay_and_the_teardowns_drop_its_volumes():
     # stack-halt keeps every volume, so it has nothing of the overlay's to drop
     halt = mk.split("\nstack-halt:", 1)[1].split("\n\n", 1)[0]
     assert "STACK_TOR_DOMAINS_COMPOSE" not in halt
+
+
+# ── 8. the live check, graded offline ─────────────────────────────────────────────
+# tests/stack/tor-domains-live-check.sh is the LIVE proof (a running TOR=1 stack with
+# a Tor domain). It cannot run here, so what is pinned is its GRADING: against a stub
+# `curl` that answers the way the gateway does, a correct stack passes and each way of
+# getting it wrong is named. The stub models exactly the rule under test — a Host
+# resolves to a tenant, a session is good only on its own tenant's door, and with the
+# host map on an onion the map does not name is refused.
+LIVE = os.path.join(GENERATOR_DIR, "tests", "stack", "tor-domains-live-check.sh")
+
+_STUB_CURL = r'''#!/usr/bin/env python3
+import json, os, sys
+sc = json.load(open(os.environ["STUB_SCENARIO"]))
+a = sys.argv[1:]
+url = a[-1]; hdrs = {}; jar_in = jar_out = dump = body = None; socks = False; i = 0
+while i < len(a) - 1:
+    o = a[i]
+    if o in ("-o", "-w", "--max-time", "-X"): i += 2; continue
+    if o == "-D": dump = a[i + 1]; i += 2; continue
+    if o == "-H":
+        k, _, v = a[i + 1].partition(":"); hdrs[k.strip().lower()] = v.strip(); i += 2; continue
+    if o == "-b": jar_in = a[i + 1]; i += 2; continue
+    if o == "-c": jar_out = a[i + 1]; i += 2; continue
+    if o == "-d": body = a[i + 1]; i += 2; continue
+    if o == "--socks5-hostname": socks = True; i += 2; continue
+    i += 1
+rest = url.split("://", 1)[1]
+urlhost, _, path = rest.partition("/"); path = "/" + path
+urlhost = urlhost.split(":")[0]
+host = hdrs.get("host", urlhost)
+def out(code, denied=False):
+    if dump:
+        open(dump, "w").write("HTTP/1.1 %d\r\n%s\r\n" % (code, "X-Route-Denied: domain\r\n" if denied else ""))
+    sys.stdout.write(str(code)); sys.exit(0)
+if urlhost.endswith(".onion") and not socks:
+    sys.stdout.write("000"); sys.exit(6)          # a .onion does not resolve without Tor
+if host.endswith(".onion"):
+    if host == sc["primary"]: tenant = "default"
+    elif host in sc["domains"]: tenant = sc["domains"][host]
+    else: tenant = None
+    if not sc["map_on"]: tenant = "default"       # before #582: every onion is default
+    elif host not in sc["map"]: tenant = None     # the map is what the gateway knows
+else:
+    tenant = sc["https"].get(host, "default")
+if tenant is None: out(403, True)
+cookie = hdrs.get("cookie", "")
+if jar_in and os.path.exists(jar_in):
+    for ln in open(jar_in):
+        f = ln.rstrip("\n").split("\t")
+        if len(f) >= 7: cookie = "%s=%s" % (f[5], f[6])
+user = cookie.partition("bff_session=")[2].split(";")[0] if "bff_session=" in cookie else ""
+if path == "/bff/login":
+    user = json.loads(body)["username"]
+    if sc["personas"].get(user) == tenant and tenant not in sc.get("login_broken", []):
+        if jar_out:
+            open(jar_out, "w").write("# Netscape HTTP Cookie File\n#HttpOnly_%s\tFALSE\t/\tTRUE\t0\tbff_session\t%s\n" % (urlhost, user))
+        out(200)
+    out(401)
+if path == "/bff/me":
+    if not user: out(401)
+    out(200) if sc["personas"].get(user) == tenant else out(403, True)
+out(200)
+'''
+
+
+def _live(tmp_path, args=(), password="pw", **over):
+    sc = {"primary": ONION_P, "domains": {ONION_B: "brandb"},
+          "map": [ONION_P, ONION_B], "map_on": True,
+          "https": {"brandb.localtest.me": "brandb"},
+          "personas": {"e2e-user": "default", "e2e-tenant2-user": "brandb"}}
+    readouts = {"hostname": ONION_P, "brandb.hostname": ONION_B}
+    readouts.update(over.pop("readouts", {}))
+    map_text = over.pop("map_text", f"# written by hugmesh-tor\n{ONION_P}=default\n{ONION_B}=brandb\n")
+    gwenv = over.pop("gwenv", "/tenancy/onion-hosts.map\n")
+    sc.update(over)
+    (tmp_path / "bin").mkdir()
+    _exe(tmp_path / "bin" / "curl", _STUB_CURL)
+    (tmp_path / "ro").mkdir()
+    for fn, val in readouts.items():
+        (tmp_path / "ro" / fn).write_text(val + "\n")
+    (tmp_path / "map").write_text(map_text)
+    (tmp_path / "gwenv").write_text(gwenv)
+    import json
+    (tmp_path / "sc.json").write_text(json.dumps(sc))
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("E2E_", "LIVE_"))}
+    env.update(PATH=str(tmp_path / "bin") + os.pathsep + env.get("PATH", ""),
+               STUB_SCENARIO=str(tmp_path / "sc.json"),
+               LIVE_READOUT_DIR=str(tmp_path / "ro"),
+               LIVE_MAP_CMD=f"cat {tmp_path / 'map'}",
+               LIVE_GWENV_CMD=f"cat {tmp_path / 'gwenv'}",
+               E2E_CREDENTIALS_FILE=str(tmp_path / "no-such-credentials"))
+    if password:
+        env["E2E_PASSWORD"] = password
+    p = subprocess.run(["bash", LIVE, *args], env=env, capture_output=True, text=True,
+                       timeout=120)
+    return p.returncode, p.stdout
+
+
+def _rows(out, verdict):
+    return [ln.strip() for ln in out.splitlines() if ln.strip().startswith(verdict + " ")]
+
+
+def test_the_live_check_passes_a_stack_that_does_what_582_says(tmp_path):
+    rc, out = _live(tmp_path)
+    assert rc == 0, out
+    assert _rows(out, "FAIL") == [] and _rows(out, "BLOCKED") == []
+    assert "== RESULT: 13 passed, 0 failed, 0 blocked ==" in out
+    # each claim is its own row
+    for words in ("the mesh's onion is registered first, as default",
+                  "brandb: its onion is registered as brandb",
+                  "an unregistered onion Host is refused (403 X-Route-Denied)",
+                  "the default persona is REFUSED on its onion",
+                  "e2e-tenant2-user signs in on its onion and /bff/me answers 200"):
+        assert any(words in r for r in _rows(out, "PASS")), words
+
+
+def test_the_live_check_names_every_row_of_the_pre_582_baseline(tmp_path):
+    # hugmesh-gateway#38's live baseline (2026-09-24): no host map, so every onion —
+    # brand B's and a stranger's alike — is served as the default brand.
+    rc, out = _live(tmp_path, map_on=False, map_text="", gwenv="")
+    assert rc == 1
+    fails = "\n".join(_rows(out, "FAIL"))
+    assert "APP_TENANCY_HOSTS_FILE is ''" in fails
+    assert "the map's first entry is ''" in fails
+    assert "an unregistered onion Host on a public path -> 200" in fails
+    assert "the default persona on its onion -> 200, want 403 X-Route-Denied" in fails
+    # brand B's persona can sign in on the brand's HTTPS door but not on "its" onion
+    assert "signs in on brandb.localtest.me (200) but NOT on its onion" in fails
+
+
+def test_the_live_check_catches_a_map_that_forgot_the_meshs_own_onion(tmp_path):
+    # writer contract point 1: with the map set, an onion it does not name is refused
+    # — the mesh's own door included
+    rc, out = _live(tmp_path, map=[ONION_B], map_text=f"{ONION_B}=brandb\n")
+    assert rc == 1
+    fails = "\n".join(_rows(out, "FAIL"))
+    assert f"not {ONION_P}=default" in fails
+    assert "the mesh's onion /login -> 403" in fails
+    assert "could not sign in on the mesh's onion" in fails
+
+
+def test_the_live_check_tells_a_broken_brand_login_from_an_onion_defect(tmp_path):
+    # the brand's own sign-in fails on its HTTPS door too: BLOCKED, not FAIL — and
+    # still not a pass
+    rc, out = _live(tmp_path, login_broken=["brandb"])
+    assert rc == 1
+    assert _rows(out, "FAIL") == []
+    blocked = _rows(out, "BLOCKED")
+    assert len(blocked) == 1 and "NOR on its HTTPS door brandb.localtest.me" in blocked[0]
+
+
+def test_the_live_check_never_passes_without_the_password_or_with_a_shared_onion(tmp_path):
+    rc, out = _live(tmp_path, password="")
+    assert rc == 1 and any("P/B UNCHECKED" in r for r in _rows(out, "FAIL"))
+    (tmp_path / "second").mkdir()
+    rc, out = _live(tmp_path / "second", readouts={"brandb.hostname": ONION_P},
+                    domains={}, map=[ONION_P])
+    assert rc == 1 and any("is not its own" in r for r in _rows(out, "FAIL"))
+
+
+def test_the_live_check_is_a_consumer_of_the_password_never_a_generator():
+    # the e2e password contract: a consumer resolves from the environment or the
+    # credentials file and fails without one; only the seeders may generate
+    text = open(LIVE).read()
+    code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+    assert "e2e-password.sh" not in code and "e2e_password_ensure" not in code
+    assert "stack-up" not in code and " down" not in code and " up -d" not in code
