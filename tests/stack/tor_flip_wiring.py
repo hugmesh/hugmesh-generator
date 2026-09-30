@@ -870,7 +870,11 @@ for dirpath, _dirs, files in os.walk(E2E_FEATURES):
                 continue
             if st.startswith(("Scenario:", "Scenario Outline:", "Background:")):
                 tags = feature_tags | set(pending_tags) | set(st.split())
-                in_onion = "@via:onion" in tags and "@env:docker" in tags
+                # @via:onion-domains (hugmesh-generator#582, the per-domain onions,
+                # `make stack-e2e-tor-domains`) is held to the same rule: its steps
+                # may reach the mesh only through the proxied onionContext().
+                in_onion = (("@via:onion" in tags or "@via:onion-domains" in tags)
+                            and "@env:docker" in tags)
                 pending_tags = []
                 continue
             m = STEP_KW.match(ln)

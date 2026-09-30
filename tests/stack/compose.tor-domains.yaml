@@ -26,9 +26,10 @@
 # APP_TENANCY_HOSTS_FILE_REFRESH_MS is deliberately NOT set: an empty value stops the
 # gateway context (hugmesh-gateway#39).
 #
-# `make stack-halt`, `stack-down` and `stack-clean` always load this file, so the two
-# volumes below are dropped with every other volume — a per-domain onion is as
-# disposable as the mesh's own (hugmesh-generator#581).
+# `make stack-down` and `stack-clean` always load this file (the way they always load
+# the egress overlay), so the two volumes below are dropped with every other volume —
+# a per-domain onion is as disposable as the mesh's own (hugmesh-generator#581).
+# `make stack-halt` keeps every volume and creates no container, so it needs no overlay.
 name: hugmesh-local
 
 services:

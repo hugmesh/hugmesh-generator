@@ -391,13 +391,28 @@ signing in on brand B's onion. If brand B's own sign-in also fails on its HTTPS 
 `BLOCKED` (the brand's sign-in is broken on that stack), not an onion failure. Its grading is
 pinned offline against a stub gateway (`test_the_live_check_*`); the run itself needs the stack.
 
+**The Gherkin lane.** `make stack-e2e-tor-domains` runs `tests/e2e/run.sh --bdd --env docker
+--via onion-domains`: the browser, through Tor, on
+`tests/e2e/features/platform/tor-onion-domains.feature`. The default persona signs in on the
+mesh's own onion and that session is refused on brand B's onion (403 `X-Route-Denied`); brand
+B's persona (`e2e-tenant2-user`, seeded into brand B's Casdoor by `make stack-seed` under
+`BRAND_B=1`) signs in on brand B's onion, and every request the brand-B browser made stayed on
+that onion. `run.sh` resolves the domains' onions from the `<slug>.hostname` readouts
+(`SNAP_ONION_DOMAIN_URLS`) beside the mesh's own. The scenario carries its own tag
+(`@via:onion-domains`), so `make stack-e2e-tor` on a stack with no Tor domain never collects it —
+a skip fails an onion lane — and outside any onion lane it skips naming the command. The steps
+are held to the mesh onion lane's rule (only the proxied browser context, audited by the HAR;
+`tests/stack/test-tor-flip-wiring.sh`).
+
 **Not yet run live** (no compose mesh on 2026-09-23/24 or 09-30): two onions minted; brand B's
 onion serves brand B's login and a brand-B persona signs in there; the mesh's onion still
 serves the default brand; an unregistered onion `Host` is refused; `make stack-down` then
-`make stack-up TOR=1 BRAND_B=1` mints a **new** brand-B onion. The offline pins are
-`studio/tests/test_domain_services_tor.py` (the entrypoint executed against a stub tor, the
-overlay and Makefile wiring, what the Studio passes) and `test_domain_services_tor_page.py`
-(the GUI and TUI row), both run pre-merge by `tests/scripts/test-studio-tor-domain-pins.sh`.
+`make stack-up TOR=1 BRAND_B=1` mints a **new** brand-B onion; the Gherkin lane above. The
+offline pins are `studio/tests/test_domain_services_tor.py` (the entrypoint executed against
+a stub tor, the overlay and Makefile wiring, what the Studio passes, and `run.sh --via
+onion-domains` against stub readouts), `test_domain_services_tor_page.py` (the GUI and TUI
+row) and `test_domain_services_tor_journey.py` (both faces walked from the first screen to
+the effect), all run pre-merge by `tests/scripts/test-studio-tor-domain-pins.sh`.
 
 **Known residuals.** With `ANUBIS=1 TOR=1` only the onion's `:80` is PoW-gated; `:443` reaches the
 TLS front, which forwards to the fe-gateway directly (#586). tor resolves both upstream hostnames

@@ -390,7 +390,7 @@ ORANGEPI4LTS_PASS    := ORANGEPI4LTS_FLAVOR='$(ORANGEPI4LTS_FLAVOR)'
         playwright-deps e2e e2e-list ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-halt stack-down stack-logs stack-ps stack-e2e stack-e2e-list \
-        stack-onion stack-e2e-tor stack-tor-mechanism-check \
+        stack-onion stack-e2e-tor stack-e2e-tor-domains stack-tor-mechanism-check \
         kind-images kind-up kind-e2e kind-e2e-mfa kind-mfa-posture kind-down kind-honesty \
         kind-metrics-check kind-addon-check kind-tor kind-tor-down kind-tor-status kind-e2e-tor kind-tor-check \
         view view-list view-stop view-trust view-untrust view-honesty \
@@ -2293,6 +2293,17 @@ stack-e2e-tor: ## run the @via:onion sign-in over the stack's Tor .onion (needs 
 	@$(E2E_READY) || exit 2
 	SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)' \
 	  bash tests/e2e/run.sh --bdd --env docker --via onion $(if $(strip $(BDD_TAGS)),--tags '$(BDD_TAGS)',) $(BDD_ARGS)
+
+# stack-e2e-tor-domains: the PER-DOMAIN onions (hugmesh-generator#582): the
+# @via:onion-domains Gherkin scenario(s), through Tor, on a stack that has a Tor
+# domain — `make stack-up TOR=1 BRAND_B=1` mints brand B's onion beside the mesh's
+# own, and `make stack-seed` seeds brand B's persona. Its own target and tag, not
+# a variant of stack-e2e-tor: a skip fails an onion lane, so the scenario that
+# needs a second onion must never be collected by the lane that has one.
+stack-e2e-tor-domains: ## run the per-domain onion sign-in (#582) over brand B's .onion (needs stack-up TOR=1 BRAND_B=1 + stack-seed)
+	@$(E2E_READY) || exit 2
+	SNAP_BASE_URL='https://localhost:$(PUBLIC_HTTPS_PORT)' TOR_SOCKS_HOST_PORT='$(TOR_SOCKS_HOST_PORT)' \
+	  bash tests/e2e/run.sh --bdd --via onion-domains --env docker $(if $(strip $(BDD_TAGS)),--tags '$(BDD_TAGS)',) $(BDD_ARGS)
 
 # stack-tor-mechanism-check: the host-Tor MECHANISM proof (tests/stack/tor-onion-
 # e2e.sh via its census-named wrapper) — mint a real v3 onion for a loopback

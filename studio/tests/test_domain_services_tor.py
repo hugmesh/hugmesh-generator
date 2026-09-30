@@ -1198,3 +1198,231 @@ def test_the_live_check_is_a_consumer_of_the_password_never_a_generator():
     code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
     assert "e2e-password.sh" not in code and "e2e_password_ensure" not in code
     assert "stack-up" not in code and " down" not in code and " up -d" not in code
+
+
+# ── 9. the Gherkin lane: run.sh --via onion-domains, its make target, its scenario ──
+# The end-to-end proof of the ruling for the web is a Gherkin scenario signed in as the
+# persona the choice is about (tests/e2e/features/platform/tor-onion-domains.feature,
+# `make stack-e2e-tor-domains`). It needs a live stack; what runs here is the LANE that
+# carries it — tests/e2e/run.sh --via onion-domains against stub readouts, a stub docker
+# that says hugmesh-tor is running and a stub npx that records what playwright was given
+# — plus the scenario's own shape: the tag run.sh selects on, every step defined, no
+# unproxied route to the mesh, and the persona spelled the way the seeder spells it.
+RUNSH = os.path.join(GENERATOR_DIR, "tests", "e2e", "run.sh")
+MAKEFILE = os.path.join(GENERATOR_DIR, "Makefile")
+FEATURE = os.path.join(GENERATOR_DIR, "tests", "e2e", "features", "platform",
+                       "tor-onion-domains.feature")
+STEPS = os.path.join(GENERATOR_DIR, "tests", "e2e", "steps", "tor-onion-domains.steps.ts")
+SEED = os.path.join(GENERATOR_DIR, "tests", "stack", "seed-e2e.sh")
+FLIP = os.path.join(GENERATOR_DIR, "tests", "stack", "tor_flip_wiring.py")
+ONION_TAGS_DOMAINS = "@via:onion-domains and @env:docker"
+
+_STUB_DOCKER = r'''#!/bin/sh
+[ "$1" = image ] && exit 1
+[ "${STUB_RUNNING:-}" = 1 ] || exit 0
+hit=0; last=""; ps=0
+for a in "$@"; do
+  [ "$a" = "label=com.docker.compose.service=hugmesh-tor" ] && hit=1
+  [ "$a" = ps ] && ps=1
+  last="$a"
+done
+[ "$ps" = 1 ] && [ "$last" = "hugmesh-tor" ] && hit=1
+[ "$hit" = 1 ] && echo 0123456789ab
+exit 0
+'''
+_STUB_NPX = r'''#!/bin/sh
+echo "ARGV $*" >> "$STUB_NPX_LOG"
+case "$*" in
+  *"playwright test"*)
+    {
+      echo "ENV SNAP_ONION_BASE_URL=${SNAP_ONION_BASE_URL-<unset>}"
+      echo "ENV SNAP_ONION_DOMAIN_URLS=${SNAP_ONION_DOMAIN_URLS-<unset>}"
+      echo "ENV SNAP_PROXY=${SNAP_PROXY-<unset>}"
+      echo "ENV SNAP_BASE_URL=${SNAP_BASE_URL-<unset>}"
+    } >> "$STUB_NPX_LOG"
+    mkdir -p "$SNAP_REPORT_DIR"
+    printf '%s' "$STUB_SUMMARY" > "$SNAP_REPORT_DIR/summary.json"
+    ;;
+esac
+exit 0
+'''
+_SUMMARY_PASSED = '{"testTotals":{"passed":1,"failed":0,"skipped":0,"total":1},"tests":[]}'
+
+
+def _lane(tmp_path, args, readouts=None, **env_over):
+    """run.sh with stubs on PATH: (completed process, the printed plan as
+    {key: [values]}, the stub npx log). ``readouts`` -> tests/stack/tor-onion/."""
+    sb = tmp_path / "lane"
+    for d in ("bin", "ro", "report"):
+        (sb / d).mkdir(parents=True, exist_ok=True)
+    _exe(sb / "bin" / "docker", _STUB_DOCKER)
+    _exe(sb / "bin" / "node", "#!/bin/sh\ncat\n")
+    _exe(sb / "bin" / "npx", _STUB_NPX)
+    if readouts is None:
+        readouts = {"hostname": ONION_P, "brandb.hostname": ONION_B}
+    for fn, val in readouts.items():
+        (sb / "ro" / fn).write_text(val + "\n")
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("SNAP_", "E2E_", "STUB_", "TOR_"))}
+    env.update(PATH=str(sb / "bin") + os.pathsep + env.get("PATH", ""),
+               E2E_PASSWORD="x", SNAP_ONION_HOSTNAME_FILE=str(sb / "ro" / "hostname"),
+               STUB_RUNNING="1", STUB_NPX_LOG=str(sb / "npx.log"),
+               SNAP_REPORT_DIR=str(sb / "report"), SNAP_EVIDENCE_SUMMARY="0",
+               STUB_SUMMARY=_SUMMARY_PASSED)
+    env.update(env_over)
+    p = subprocess.run(["bash", RUNSH, *args], env=env, capture_output=True, text=True,
+                       timeout=120)
+    plan: dict[str, list[str]] = {}
+    for ln in p.stdout.splitlines():
+        if "\t" in ln:
+            k, v = ln.split("\t", 1)
+            plan.setdefault(k, []).append(v)
+    log = (sb / "npx.log").read_text() if (sb / "npx.log").exists() else ""
+    return p, plan, log
+
+
+def _first(plan, key):
+    return (plan.get(key) or [""])[0]
+
+
+def test_the_lane_resolves_every_domain_readout_and_only_those(tmp_path):
+    p, plan, _ = _lane(tmp_path, ["--via", "onion-domains", "--print-command"], readouts={
+        "hostname": ONION_P, "brandb.hostname": ONION_B, "acme-example.hostname": ONION_A,
+        "Bad_Slug.hostname": ONION_A,               # not the node contract's shape
+        "junk.hostname": "not-an-onion",            # not a v3 onion
+        ("x" * 64) + ".hostname": ONION_A})         # a slug too long for the contract
+    assert p.returncode == 0, p.stderr[-400:]
+    assert _first(plan, "ENV_ID") == "docker" and _first(plan, "VIA") == "onion-domains"
+    assert _first(plan, "TAGS") == ONION_TAGS_DOMAINS
+    assert _first(plan, "ONION_BASE_URL") == "https://" + ONION_P
+    assert _first(plan, "PROXY") == "socks5://127.0.0.1:9050"
+    assert _first(plan, "ONION_DOMAIN_URLS") == \
+        f"acme-example=https://{ONION_A} brandb=https://{ONION_B}"
+    assert ".onion" not in _first(plan, "BASE_URL")     # the probe's door stays local
+    # a caller's --tags narrow the lane, never widen it
+    pt, plan_t, _ = _lane(tmp_path, ["--via", "onion-domains", "--tags", "@smoke",
+                                     "--print-command"])
+    assert pt.returncode == 0 and _first(plan_t, "TAGS") == f"(@smoke) and {ONION_TAGS_DOMAINS}"
+
+
+def test_the_mesh_onion_lane_is_untouched_by_the_domains(tmp_path):
+    # `make stack-e2e-tor` collects @via:onion alone, so the domain scenario (a skip on a
+    # stack with no Tor domain, and a skip fails that lane) is never in it.
+    p, plan, _ = _lane(tmp_path, ["--via", "onion", "--print-command"])
+    assert p.returncode == 0, p.stderr[-400:]
+    assert _first(plan, "TAGS") == "@via:onion and @env:docker"
+    assert _first(plan, "ONION_DOMAIN_URLS") == ""
+
+
+def test_an_executed_run_hands_playwright_the_domains_and_the_lanes_tags(tmp_path):
+    p, _plan, log = _lane(tmp_path, ["--via", "onion-domains"])
+    assert p.returncode == 0, p.stderr[-400:]
+    envs = {ln[4:].split("=", 1)[0]: ln[4:].split("=", 1)[1]
+            for ln in log.splitlines() if ln.startswith("ENV ")}
+    assert envs.get("SNAP_ONION_DOMAIN_URLS") == f"brandb=https://{ONION_B}"
+    assert envs.get("SNAP_ONION_BASE_URL") == "https://" + ONION_P
+    assert envs.get("SNAP_PROXY") == "socks5://127.0.0.1:9050"
+    assert "ARGV bddgen test --tags " + ONION_TAGS_DOMAINS in log
+
+
+def test_a_run_with_no_domain_readout_is_a_hard_stop_naming_brand_b(tmp_path):
+    p, _plan, log = _lane(tmp_path, ["--via", "onion-domains"], readouts={"hostname": ONION_P})
+    assert p.returncode == 2
+    assert "make stack-up TOR=1 BRAND_B=1" in p.stderr and "onion-domains" in p.stderr
+    assert "playwright test" not in log                  # nothing ran
+    # --print-command never demands one (it executes nothing)
+    pp, plan, _ = _lane(tmp_path, ["--via", "onion-domains", "--print-command"],
+                        readouts={"hostname": ONION_P})
+    assert pp.returncode == 0 and _first(plan, "ONION_DOMAIN_URLS") == ""
+
+
+@pytest.mark.parametrize("bad", [
+    f"brandb=http://{ONION_B}",                 # the http door — the :443 rule
+    f"Bad_Slug=https://{ONION_B}",              # a slug the node contract refuses
+    f"brandb=https://{ONION_B}:8443",           # a port on an onion
+    "brandb",                                   # no url at all
+])
+def test_a_callers_domain_list_is_held_to_the_shape(tmp_path, bad):
+    p, _plan, _ = _lane(tmp_path, ["--via", "onion-domains", "--print-command"],
+                        SNAP_ONION_DOMAIN_URLS=bad)
+    assert p.returncode != 0 and bad in p.stderr
+
+
+def test_the_domains_lane_is_docker_only(tmp_path):
+    p, _plan, _ = _lane(tmp_path, ["--via", "onion-domains", "--env", "kind",
+                                   "--print-command"])
+    assert p.returncode != 0 and "--env kind has none" in p.stderr
+    pu, _plan, _ = _lane(tmp_path, ["--via", "onion-brandb", "--print-command"])
+    assert pu.returncode != 0 and "onion, onion-domains" in pu.stderr
+
+
+def test_the_make_target_runs_the_lane_and_only_it():
+    p = subprocess.run(["make", "-n", "-s", "stack-e2e-tor-domains"], cwd=GENERATOR_DIR,
+                       capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stderr[-400:]
+    lines = [ln for ln in p.stdout.splitlines() if "tests/e2e/run.sh" in ln]
+    assert len(lines) == 1 and "--via onion-domains" in lines[0] \
+        and "--env docker" in lines[0] and "--bdd" in lines[0]
+    assert "https://localhost:" in p.stdout                # the probe's LOCAL door
+    mk = open(MAKEFILE, encoding="utf-8").read()
+    phony = mk.split(".PHONY:", 1)[1].split("\n\n", 1)[0]
+    assert "stack-e2e-tor-domains" in phony
+    # the mesh onion target still runs its own lane, not this one
+    pt = subprocess.run(["make", "-n", "-s", "stack-e2e-tor"], cwd=GENERATOR_DIR,
+                        capture_output=True, text=True, timeout=60)
+    assert "--via onion " in pt.stdout + " " and "onion-domains" not in pt.stdout
+
+
+def _feature_steps(text):
+    kw = re.compile(r"^\s*(Given|When|Then|And|But)\s+(.+?)\s*$")
+    return [m.group(2) for m in (kw.match(ln) for ln in text.splitlines()) if m]
+
+
+def test_the_scenario_is_the_lanes_own_and_every_step_is_defined():
+    feature = open(FEATURE, encoding="utf-8").read()
+    tag_lines = [ln.strip() for ln in feature.splitlines() if ln.strip().startswith("@")]
+    tags = {t for ln in tag_lines for t in ln.split()}
+    # run.sh selects on exactly these; a scenario tagged @via:onion would be collected
+    # by `make stack-e2e-tor` and skip there, which fails that lane
+    assert {"@via:onion-domains", "@env:docker", "@issue:generator-582"} <= tags
+    assert "@via:onion" not in tags
+    steps = _feature_steps(feature)
+    assert len(steps) >= 6
+    defs = re.findall(r"\b(?:Given|When|Then)\(\s*'((?:[^'\\]|\\.)*)'",
+                      open(STEPS, encoding="utf-8").read())
+    defs = [d.replace("\\'", "'") for d in defs]
+    missing = [s for s in steps if s not in defs]
+    assert missing == [], missing
+
+
+def test_the_steps_reach_the_mesh_only_through_the_proxied_context():
+    code = re.sub(r"//[^\n]*", "", open(STEPS, encoding="utf-8").read())
+    for token in ("apiContext(", "newContext(", "request.get(", "request.post("):
+        assert token not in code, token
+    fixture_re = re.compile(
+        r"\b(?:Given|When|Then)\(\s*'(?:[^'\\]|\\.)*'\s*,\s*async\s*\(\s*\{([^}]*)\}")
+    for m in fixture_re.finditer(code):
+        names = {n.strip().split(":")[0].strip() for n in m.group(1).split(",")}
+        assert not (names & {"page", "context", "request"}), m.group(0)[:80]
+    assert "onionContext(" in code and "domainOnionDoors(" in code
+    assert "make stack-e2e-tor-domains" in code            # the skip names the command
+    # the brand wall is graded the way the live check grades it: 403 + X-Route-Denied
+    assert "x-route-denied" in code and "toBe(403)" in code
+    # the flip-wiring guard holds this lane's steps to the same rule as @via:onion's
+    flip = open(FLIP, encoding="utf-8").read()
+    assert '"@via:onion-domains" in tags' in flip
+
+
+def test_the_brand_b_persona_is_the_seeders_spelling():
+    code = open(STEPS, encoding="utf-8").read()
+    persona = re.search(r"const DOMAIN_PERSONA = '([^']+)'", code).group(1)
+    roles = re.search(r"const DOMAIN_PERSONA_ROLES = \[([^\]]*)\]", code).group(1)
+    seed = open(SEED, encoding="utf-8").read()
+    spec = re.search(r'SYSTEMS_ROLE_USERS="([^"]+)"', seed.split("LEG 1b", 1)[1]).group(1)
+    handle, seeded_roles, _pw = spec.split(":", 2)
+    assert persona == handle
+    assert sorted(r.strip(" '\"") for r in roles.split(",")) == \
+        sorted(r.replace("ROLE_", "").lower() for r in seeded_roles.split(","))
+    slug = re.search(r"const DOMAIN_SLUG = '([^']+)'", code).group(1)
+    mk = open(MAKEFILE, encoding="utf-8").read()
+    assert f"{slug}={slug}" in mk                          # BRAND_B=1 TOR=1 mints it
