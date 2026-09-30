@@ -75,7 +75,7 @@ serializes (correct results, one at a time) **FAILS** — concurrency is contrac
 | X2 | `ROLE_GAMES` alone / `ROLE_ADMIN` alone → DENIED `/games/admin/**` | gateway | **DOC** (specs 12/16/17) |
 | X3 | domain-locked user → toot/boost/announce does NOT federate; control DOES | homeserver+egress | **WIRED** (specs 19/20/21/22) |
 | X4 | pending (no roles, registration incomplete) → denied every user surface | gateway+ui | **DOC** (spec 17/18) |
-| X5 | every DISABLED UI control carries helptext (why-denied) | ui | **DOC** stub (E) — primitive `assertDisabledHasHelptext` ready; activates with the role-conditional host shell |
+| X5 | every DISABLED UI control carries helptext (why-denied) | ui | **WIRED** (E — the host shell's `/home` `card-admin` is greyed + explained (`card-admin-help`) for e2e-user and enabled for e2e-admin; a CORE card, so it runs on the default lane) |
 | X6 | domain-lock × mod-ban interaction: a domain-locked user banned by its mod — ban applies LOCALLY (post attempt rejected), NOTHING about the ban federates to the peer, and after the lift local posting recovers while the lock persists (independent axes) | bff+homeserver+egress | **WIRED** (spec 23; peer-gated like specs 19–22, positive control = spec 22) |
 | X7 | read-after-write across principals AT CONCURRENCY: N author→observer pairs post simultaneously; each OBSERVER (a different principal) sees its author's marker within a bounded window | homeserver | **WIRED** (G — `expectObservedWithin`, concurrency floor asserted) |
 
