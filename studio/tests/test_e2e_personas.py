@@ -482,13 +482,27 @@ def test_the_federated_announcement_spec_resolves_to_its_persona(index):
 
 
 def test_specs_that_drive_nobody_are_reported_as_driving_nobody(index):
-    # Honest emptiness, not a failure: spec 18's tests are all test.skip placeholders
-    # and 01/30 log nobody in. An index that invented actors for them would be lying
-    # in the direction that flatters the suite.
-    for fn in ("01-frontpage.spec.ts", "18-rbac-phase8-10-pending.spec.ts",
-               "30-node-host-resolution.spec.ts"):
+    # Honest emptiness, not a failure: spec 30 logs nobody in. An index that invented
+    # actors for it would be lying in the direction that flatters the suite. Specs 01
+    # (#293's e2e-user positive control) and 18 (its live games-entry matrix replaced
+    # the all-skip placeholders) used to be here; they are pinned positively below.
+    for fn in ("30-node-host-resolution.spec.ts",):
         got = index.for_spec(fn)
         assert got.usernames == () and not got.drives_personas, fn
+
+
+def test_the_rbac_pending_spec_drives_the_games_personas_it_now_asserts(index):
+    got = index.for_spec("18-rbac-phase8-10-pending.spec.ts")
+    assert got.drives_personas
+    assert {"e2e-gamesonly", "e2e-gamesadmin"} <= set(got.usernames)
+
+
+def test_the_frontpage_spec_drives_e2e_user_through_its_positive_control(index):
+    # #293 added `registerOnly(page, 'e2e-user', personaPassword('e2e-user'))` to spec
+    # 01. Pinned positively so a silent rename back to an anonymous control is caught.
+    got = index.for_spec("01-frontpage.spec.ts")
+    assert got.usernames == ("e2e-user",) and got.drives_personas
+    assert got.uses[0].mechanism == MECH_CALLSITE
 
 
 def test_no_password_or_payload_literal_became_a_persona(index):

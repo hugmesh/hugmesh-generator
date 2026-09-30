@@ -486,6 +486,8 @@ census_exempt(){ # census_exempt <path> -> prints the reason, or nothing
     case "$1" in
       specs/cluster/manifests/networkpolicy/egress-vpn-interaction.yaml)
         echo "slug TAG on a NetworkPolicy object (every optional-service object carries hugmesh.net/optional-service), NOT a copy of the Secret SELECTOR — nothing here selects a Secret, and coupling the two would turn a legitimate slug-tag change into a false contract break" ;;
+      studio/hugmesh_studio/core/credentials_truth.py|studio/hugmesh_studio/core/kind_seed.py)
+        echo "HOMONYM, not a copy: KIND_SEED_SECRET_NS / KIND_SEED_SECRET_KEY name the kind lane's seed-password Secret (hugmesh-frontend, E2E_PASSWORD) and merely END in the projector's SECRET_NS / SECRET_KEY token. They select no egress-vpn Secret, so coupling them to this contract would turn a legitimate rename of the seed Secret into a false contract break. Exempted by exact path (not by pattern) so a NEW file with the same shape still goes red" ;;
       tests/egress-vpn/*)
         echo "the guards themselves + lib: they READ the contract, and their fixtures deliberately carry the OLD wrong values (ns=hugmesh-backend, key=config) to prove the guard fails on them — asserting fixtures against the contract would delete the negative cases" ;;
       *) echo "" ;;
