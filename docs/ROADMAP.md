@@ -156,9 +156,9 @@ rather than judged by its text. The first triage (2026-09-09) found 24 done, 19 
 
 | | Count | Meaning |
 |---|---:|---|
-| ✅ already done | 48 | the work landed; the comment outlived it |
+| ✅ already done | 50 | the work landed; the comment outlived it |
 | 🚧 isolated, fixable | 0 | one person, one repo, no decision needed |
-| 🔭 needs coordination | 65 | spans repos, or waits on a decision |
+| 🔭 needs coordination | 63 | spans repos, or waits on a decision |
 | — not work | 59 | a marker, a legend, or a deliberate placeholder |
 
 The full triage is in [`roadmap-todos.tsv`](roadmap-todos.tsv), one row per comment.
@@ -179,7 +179,7 @@ Open fixes for needs-coordination rows are named on the row itself:
 
 - hugmesh-admin-bff-api#113 for the registry half of #106
 - hugmesh-admin-bff-api#114 for the workload exec guard
-- hugmesh-admin-ui#13 for step-up forwarding
+- hugmesh-admin-ui#13 for step-up forwarding (merged; its two rows are now done)
 - hugmesh-admin-ui#14 for the adminGuard decision
 
 Such a row flips to done only when its PR merges.
