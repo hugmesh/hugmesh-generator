@@ -52,6 +52,7 @@ record write so the Sessions screen's Previous-builds table refreshes LIVE.
 from __future__ import annotations
 
 import os
+import traceback
 from collections import deque
 
 from ..qt import QtCore, QtWidgets, Signal
@@ -104,7 +105,22 @@ class _FleetWorker(QtCore.QThread):
         self.driver, self.cfg, self.backend = driver, cfg, backend
 
     def run(self):
-        code = self.driver.run(self.cfg, self.backend, on_line=lambda s: self.line.emit(s))
+        # NEVER let an exception escape this thread (#373). BuildDriver._spawn raises
+        # ElevationRefused before the Popen under HUGMESH_STUDIO_NO_ELEVATION (the
+        # operator's headless/CI knob), and FleetDriver prepends sudo on a non-root native
+        # host. Escaping a reimplemented QThread.run, PyQt6 qFatals the process (rc 134);
+        # with crashlog installed the thread merely dies with `done` NEVER emitted, so
+        # FleetPage._done never closes the tee/stop button and the session stays
+        # 'running'. Mirrors progress._WorklistWorker.run.
+        try:
+            code = self.driver.run(self.cfg, self.backend,
+                                   on_line=lambda s: self.line.emit(s))
+        except BaseException as e:  # noqa: BLE001 - a hung GUI is worse than any re-raise
+            self.line.emit(f"!! fleet run aborted before completion: {e}")
+            for ln in traceback.format_exc().rstrip().splitlines():
+                self.line.emit(f"   {ln}")
+            self.done.emit(1)
+            return
         self.done.emit(code)
 
 
