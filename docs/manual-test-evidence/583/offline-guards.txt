@@ -1,0 +1,42 @@
+# issue:   #583
+# label:   offline-guards
+# cwd:     /home/user/hugmesh-generator
+# command: bash tests/scripts/test-tor-node-contract.sh 2>&1 | tail -30; bash tests/scripts/test-kind-tor.sh 2>&1 | tail -10
+# started: 2026-09-30T13:37:45Z
+# host:    Linux 6.18.44-fc-v50 x86_64, no docker daemon, no KVM, no tor, no kind/kubectl (Claude Code cloud container)
+# commit:  2017882
+-----
+  PASS D half-applied selection without cron -> FAIL names it
+  PASS D linked tor with no /etc/init.d/tor -> FAIL
+  PASS D client image with tor linked -> FAIL
+  PASS D client image with the tor cron -> FAIL
+  PASS D client image carrying only /usr/bin/tor -> FAIL (#583 item 6's package half)
+  PASS D standalone-thin with tor linked -> FAIL (graded as a client)
+  PASS D standalone-thick with tor linked -> FAIL (graded as a client)
+  PASS D standalone-unaffiliated with tor linked -> FAIL (graded as a client)
+  PASS D clean standalone-unaffiliated image -> PASS
+  PASS D omnibus graded as a cluster node (full contract -> no FAIL)
+  PASS D edge-ai graded as a cluster node (full contract -> no FAIL)
+  PASS D backend-gpu graded as a cluster node (full contract -> no FAIL)
+  PASS D generic graded as a cluster node (full contract -> no FAIL)
+  PASS D linked reconcile with no executable agent binary -> FAIL
+  PASS D tor selected with no ingress-admit agent -> FAIL (#614: the onion would stop at the edge's 404)
+  PASS D full contract -> the ingress-admit agent PASSes by name
+  PASS D the tor block's role classes cover exactly HUGMESH_ROLES_CANONICAL
+  PASS D clean client image -> PASS
+  PASS D live: started, one daemon, torrc 443, v3 hostname -> no FAIL
+  PASS D live: two tor processes -> FAIL (two owners, two daemons)
+  PASS D live: no tor process -> FAIL
+  PASS D live: rc-service status non-zero -> FAIL
+  PASS D live: torrc without the 443 stanza -> FAIL
+  PASS D live: garbage exported hostname -> FAIL
+  PASS D live: no admin.conf -> the admission leg SKIPs (never a PASS it did not measure)
+  PASS D live: control plane + admitted -> PASS
+  PASS D live: control plane + NOT admitted -> FAIL (the 404 at the edge)
+  PASS D live: Application unreadable -> SKIP, not PASS
+
+== RESULT: 164 passed, 0 failed ==
+FATAL: helm required — refusing to report a pass without it
+-----
+# exit code: 0
+# finished: 2026-09-30T13:37:51Z
