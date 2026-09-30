@@ -3,7 +3,7 @@ of gui/pages/vault.py.
 
 Qt-free. Pins: the step is in the mesh walk (after system) and absent from the
 standalone/cloud walks; every edit goes through config.vault_field_error and a
-refusal is an inline status with state unchanged (never a silently-inert command);
+refusal is an inline status with state unchanged (never a silently ineffective command);
 clearing the internal address clears everything that hangs off it; Enter keeps the
 values and continues; the walk ends in a config the CLI emits the flags from.
 
@@ -87,7 +87,7 @@ def test_the_removed_path_commands_are_gone_from_the_vocabulary_and_the_screen()
     choice -- the mount is pinned by the shipped ClusterSecretStore and the
     ExternalSecrets read the literal hugmesh/<service> -- so 'm' and 'p' were
     removed with the fields and the two builder flags.
-    A dropped command must be UNRECOGNISED, never silently inert — the TUI's own
+    A dropped command must be UNRECOGNISED, never silently ineffective — the TUI's own
     rule — and the screen must say why rather than going quiet about it."""
     j = _to_vault()
     j.feed(f"a {ADDR}")

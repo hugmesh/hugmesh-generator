@@ -18,7 +18,7 @@ It also owns the ONCE-PER-WORKLIST steps that used to live in ``BuildPage._build
   checkbox, default on).
 
 Sequential-only in v1 (same-arch build trees + loop-device contention under
-``docker --privileged``); the per-entry ``build_subdir`` is the later parallelism seam.
+``docker --privileged``); the per-entry ``build_subdir`` is the later hook for parallelism.
 
 Qt-free by construction — the GUI wraps :meth:`run_all` in a QThread and connects the
 callbacks to signals; the headless tests drive it directly.
@@ -290,6 +290,10 @@ class WorklistDriver:
             # v2 and the v1 shim emit the same user rows byte for byte.
             "users": [u.to_dict() for u in self.manifest_users()],
             "images": images,
+            # the own domain's per-domain services (#494): OMIT-WHEN-EMPTY, exactly
+            # as the v1 shim (config.mesh_manifest) emits it.
+            **({"cluster_domain_services": list(base.cluster_domain_services)}
+               if base.cluster_domain_services else {}),
         }
 
     def manifest_users(self) -> list[User]:

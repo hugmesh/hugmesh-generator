@@ -157,7 +157,11 @@
 #       checking four surfaces of five and calling that a pass — so listing it here
 #       would just paint the PR gate red for a missing clone rather than a real
 #       defect. It IS gated post-merge by .gitlab-ci.yml's
-#       lint:optional-service-slug-closure, which clones it sparsely.
+#       lint:optional-service-slug-closure, which clones it sparsely. It is ALSO red
+#       on main today on two real controller facts (hugmesh-admin-bff-api#106,
+#       re-measured 2026-09-23 by #584, which fixed the checker's stale regex that had
+#       made it compare nothing since 2026-08-26), so it stays out of this workflow
+#       for both reasons until #106 lands.
 #   * tests/scripts/test-selected-services-only.sh
 #       RED ON MAIN ON PURPOSE, and therefore NOT listed above: a red suite in this
 #       workflow blocks every pull request in the repo. It pins the whole
@@ -374,10 +378,12 @@ jobs:
             tests/scripts/test-kind-addon-channel.sh
             tests/scripts/test-kind-bootstrap-honesty.sh
             tests/scripts/test-kind-doctor.sh
+            tests/scripts/test-kind-halt.sh
             tests/scripts/test-kind-profile-app-closure.sh
             tests/scripts/test-kind-profile-route-closure.sh
             tests/scripts/test-lsm-posture-honesty.sh
             tests/scripts/test-no-duplicate-env.sh
+            tests/scripts/test-no-literal-vault-brand-prose.sh
             tests/scripts/test-nullmailer-cross-postinst.sh
             tests/scripts/test-outbound-mtls-client.sh
             tests/scripts/test-password-reset-front-door.sh
@@ -396,12 +402,14 @@ jobs:
             tests/scripts/test-seed-password-reconcile.sh
             tests/scripts/test-shared-build-assets.sh
             tests/scripts/test-spec-use-parity.sh
+            tests/scripts/test-stack-clone-credential.sh
             tests/scripts/test-stack-e2e-argv.sh
             tests/scripts/test-stack-fetch-repos.sh
             tests/scripts/test-studio-launch.sh
             tests/scripts/test-sunshine-fence.sh
             tests/scripts/test-superadmin-bff-reachability.sh
             tests/scripts/test-tools-path-lib.sh
+            tests/scripts/test-tor-node-contract.sh
             tests/scripts/test-x86-fetchcommand-bound.sh
             tests/scripts/test-x86-identity-injection.sh
             tests/scripts/test-x86-kernel-net-symbols.sh
@@ -493,14 +501,17 @@ jobs:
             tests/phone/test-phone-wizard.sh
             tests/scripts/test-appstore-effector-flags.sh
             tests/scripts/test-argocd-serverside-diff.sh
+            tests/scripts/test-backing-service-endpoints-closure.sh
             tests/scripts/test-casdoor-login-budget.sh
             tests/scripts/test-cassandra-cluster-wiring.sh
             tests/scripts/test-client-connect-routes.sh
             tests/scripts/test-cluster-manifest-integrity.sh
+            tests/scripts/test-deeplink-remote-coverage.sh
             tests/scripts/test-e2e-shell-nav-entry.sh
             tests/scripts/test-e2e-spec-symbol-resolution.sh
             tests/scripts/test-eso-provider-refs.sh
             tests/scripts/test-eso-seed-contract.sh
+            tests/scripts/test-fe-bff-route-lane-parity.sh
             tests/scripts/test-first-run-lib.sh
             tests/scripts/test-fragment-route-target.sh
             tests/scripts/test-gitlab-ci-wellformed.sh
@@ -518,6 +529,7 @@ jobs:
             tests/stack/test-anubis-flip-wiring.sh
             tests/stack/test-mfa-flip-wiring.sh
             tests/stack/test-patch-stack-src.sh
+            tests/stack/test-tor-flip-wiring.sh
             tests/workload-console/test-console-posture-and-inventory.sh
             tests/workload-console/test-workload-console.sh
           "
@@ -683,6 +695,19 @@ jobs:
           # tests/stack/test-mdm-manifests-render.sh exits 0 having rendered and
           # asserted nothing. If the download above ever silently fails, this job
           # would pass while covering a third less than it claims.
+          # test-eso-remoteref-brand.sh lives in THIS job, not in `guards`, for the
+          # same reason: it renders the baked ArgoCD Application against the git
+          # manifests through real kustomize, and it exits 2 rather than reporting a
+          # pass when kubectl/kustomize or PyYAML is absent.
+          # test-kind-tor.sh (hugmesh-generator#577) is here for helm + make: it
+          # renders the fe-gateway chart with the kind onion's extraHost parameter
+          # and reads `make -n` for its targets, and exits 2 without helm.
+          # test-tor-onion-ingress.sh (hugmesh-generator#614) is here for helm: it
+          # renders the fe-gateway chart with the node agent's ingress.onionHosts
+          # parameters exactly as ArgoCD does, and FAILS (never skips) without helm.
+          # test-optional-netpol-autosync.sh (#617) is here for kubectl kustomize: it
+          # renders every git-served overlay the build's prune touched, and FAILS
+          # without kubectl.
           missing=""
           for b in bash jq openssl python3 git helm kubectl checkpolicy make; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
@@ -696,6 +721,10 @@ jobs:
             tests/scripts/test-selinux-auditallow-generator.sh
             tests/stack/test-gateway-mfa-env.sh
             tests/stack/test-mdm-manifests-render.sh
+            tests/scripts/test-eso-remoteref-brand.sh
+            tests/scripts/test-kind-tor.sh
+            tests/scripts/test-tor-onion-ingress.sh
+            tests/scripts/test-optional-netpol-autosync.sh
           "
           rc=0; failed=""; ran=0
           for t in $SUITES; do

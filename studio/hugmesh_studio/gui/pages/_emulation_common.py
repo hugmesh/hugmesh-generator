@@ -430,7 +430,7 @@ def describe_file(path: str) -> str:
 #: "checking…" and letting the probe land later.
 #:
 #: Both pages used to call the synchronous ``docker_available()`` inside
-#: ``initializePage``, whose default wall clock is 15 SECONDS — and a wedged daemon
+#: ``initializePage``, whose default wall clock is 15 SECONDS — and a hung daemon
 #: takes all of it, with the window frozen and unpainted the whole time. A healthy
 #: daemon answers in tens of milliseconds and a missing binary answers instantly, so
 #: this grace covers every case that is not already broken, and the broken case now

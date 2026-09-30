@@ -15,6 +15,7 @@ const plan = {
   lane: 'legacy', generate: false, tags: null,
   features: [], reportDir: null, runId: null, evidenceDir: null,
   hostResolver: null, generateArgv: [], argv: [],
+  via: null, onionBaseUrl: null, proxy: null, onionNote: null,
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -34,6 +35,10 @@ for await (const line of rl) {
     case 'REPORT_DIR':    plan.reportDir = value || null; break;
     case 'RUN_ID':        plan.runId = value || null; break;
     case 'HOST_RESOLVER': plan.hostResolver = value || null; break;
+    case 'VIA':           plan.via = value || null; break;
+    case 'ONION_BASE_URL': plan.onionBaseUrl = value || null; break;
+    case 'PROXY':         plan.proxy = value || null; break;
+    case 'ONION_NOTE':    plan.onionNote = value || null; break;
     case 'FEATURE':       plan.features.push(value); break;
     case 'GENARGV':       plan.generateArgv.push(value); break;
     case 'ARGV':          plan.argv.push(value); break;

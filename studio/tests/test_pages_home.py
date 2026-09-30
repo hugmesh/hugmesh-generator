@@ -165,7 +165,7 @@ def test_branding_look_survives_unaffiliated_and_identity_does_not(wiz):
     assert c.color_scheme == "/tmp/Acme.colors"
     # ...IDENTITY does not (RolePage clears it at commit; BrandingPage clears it again
     # on leave — either alone is enough, and both together are the belt & braces the
-    # emission-neutrality precondition asks for).
+    # unchanged-output precondition asks for).
     assert c.brand_logo == "" and c.brand_locked is False
     args = c.to_cli_args()   # would raise on a leftover identity asset
     pairs = flag_pairs(args)
@@ -458,7 +458,7 @@ def test_system_identity_preselects_the_builder_derived_values(qapp):
                                        ("standalone", UNAFFILIATED_ROLE),
                                        ("cloud", "laptop")])
 def test_system_default_user_row_is_hidden_on_a_desktop_image(qapp, mode, role):
-    """HIDDEN (not greyed) and EMISSION-NEUTRAL: c.user goes back to its dataclass
+    """HIDDEN (not greyed) and LEAVES THE OUTPUT UNCHANGED: c.user goes back to its dataclass
     default, so the argv carries --local-user alone — exactly what an operator who never
     opened this page produced. The image is unchanged; only the duplicate flag is gone."""
     cfg = ImageConfig(mode=mode, role=role, platform="x86", user="magus")
@@ -506,7 +506,7 @@ def test_system_default_user_row_stays_on_a_node_image(qapp):
 
 
 def test_system_default_user_row_returns_when_the_flow_becomes_a_node(qapp):
-    """The other half of emission-neutrality: a field hidden on one visit must be
+    """The other half of the unchanged-output rule: a field hidden on one visit must be
     reachable AND emitted again on the next, or the gate has silently deleted a knob."""
     cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
     page = _system_page(cfg)
@@ -680,7 +680,7 @@ def test_home_seed_stack_code_hidden_and_reset_on_unaffiliated(qapp):
 
 
 def test_home_seed_stack_code_stays_on_a_branded_desktop(qapp):
-    """Mutation guard + emission-neutrality: the row is back (and collectable) the
+    """Mutation guard + unchanged-output rule: the row is back (and collectable) the
     moment the role is a branded desktop again."""
     cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
     page = HomePage(SimpleNamespace(cfg=cfg, worklist=None))

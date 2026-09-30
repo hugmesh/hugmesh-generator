@@ -9,7 +9,7 @@ The builders drive their chroots through UNQUOTED heredocs:
     CHROOT
 
 An unquoted delimiter means the HOST shell expands the body before the guest ever
-parses it — which is load-bearing (``${UKI_NAME}``/``${ROOT_LABEL}`` must expand
+parses it — which is relied on (``${UKI_NAME}``/``${ROOT_LABEL}`` must expand
 host-side) but also means a backtick is COMMAND SUBSTITUTION even inside what looks
 like a comment. build-x86-host-stage4.sh says so in-line:
 

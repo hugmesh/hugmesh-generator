@@ -32,8 +32,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from .config import (
-    ImageConfig, ROLE_CHOICES, clear_role_class_fields, image_class,
-    strip_platform_unsupported,
+    PLATFORM_FIELD_SUPPORT, ImageConfig, ROLE_CHOICES, clear_role_class_fields,
+    image_class, strip_platform_unsupported,
 )
 
 # platform id -> specs subdir (note orangepizero2 -> specs-orangepi-zero2).
@@ -122,11 +122,37 @@ def _media_on(cfg: ImageConfig) -> bool:
     return _is_desktop(cfg) and cfg.media_data not in (False, "off", "false")
 
 
-def _opt_services(cfg: ImageConfig) -> set[str]:
-    svc = set(cfg.optional_services or [])
-    for d in cfg.domains:
-        svc |= set(getattr(d, "optional_services", []) or [])
-    return svc
+def _tor_selected(cfg: ImageConfig) -> bool:
+    """Does THIS image's builder bake net-vpn/tor? The two NODE-level channels the
+    builders actually read, and nothing else (#580):
+
+    * the ``tor`` slug in the image's own ``--optional-services`` allow-list —
+      ``_opt_selected tor`` gates the package on x86 (build-x86-host-stage4.sh:5267)
+      and rpi5 (build-rpi5-stage4.sh:2751) alike;
+    * the x86 dedicated ``--with-tor`` flag (``tor_onion_service``), which the x86
+      builder folds into OPTIONAL_SERVICES (:1318-1331) — but only on a NODE: for a
+      CLIENT role it warns and resets WANT_TOR, so a desktop image never bakes it that
+      way. The field is TRI-STATE (``True``/``"on"``/``"off"``/``""``), so it is read
+      through ``ImageConfig._tri`` — ``bool("off")`` is True and would claim a
+      ``--no-tor`` image carries the daemon.
+
+    A DOMAIN row's ``optional_services`` is deliberately NOT read. ``from_dict`` keeps
+    a ``tor`` on a domain row and the mesh manifest carries it, but no builder reads a
+    domain's list for tor (``worklist._apply_infra_services`` reads only the entry's
+    per-node set and ``--with-tor``), so counting it here showed ``net-vpn/tor`` in the
+    package preview of an image that bakes nothing. Tor is node-scoped (#494 #C) until
+    #582 rules on a per-domain onion; the #580 addendum asked for exactly this cut.
+
+    Neither channel counts on a DESKTOP-class image: both builders gate the package
+    and the runlevel links on ``_tor_node_selected`` (``! ROLE_CLIENT && _opt_selected
+    tor`` — #583), so a ``tor`` slug on a client role bakes nothing either."""
+    if _is_desktop(cfg):
+        return False
+    if "tor" in (cfg.optional_services or []):
+        return True
+    plat = cfg.platform or "x86"
+    return (ImageConfig._tri(cfg.tor_onion_service) == "on"
+            and plat in PLATFORM_FIELD_SUPPORT.get("tor_onion_service", ("x86",)))
 
 
 def _flavor_live(cfg: ImageConfig) -> bool:
@@ -258,7 +284,7 @@ ADHOC_ADDS: tuple[AdhocAdd, ...] = (
     AdhocAdd("egress-wireguard", "Egress VPN (WireGuard)", ("net-vpn/wireguard-tools",),
              lambda cfg: bool(_egress(cfg)) and not _egress(cfg).endswith(".ovpn")),
     AdhocAdd("tor", "Tor onion service (net-vpn/tor)", ("net-vpn/tor",),
-             lambda cfg: "tor" in _opt_services(cfg)),
+             _tor_selected),
     AdhocAdd("snort", "Snort IDS", ("net-analyzer/snort",),
              lambda cfg: bool(getattr(cfg, "snort", False))),
     AdhocAdd("nvidia-container-toolkit", "NVIDIA container runtime",
@@ -386,7 +412,7 @@ def default_cell_config(mode: str, role: str, platform: str) -> ImageConfig:
     carries no option atoms: the web UI layers those client-side from adhoc_adds. Fails
     loud if a future default-ON option would leak atoms into the baseline.
 
-    KNOWN SEAM: WorklistConfig._materialize_one additionally forces tailscale=True and
+    KNOWN INCONSISTENCY: WorklistConfig._materialize_one additionally forces tailscale=True and
     sso=True for MESH mode after the strips; that forcing is deliberately NOT mirrored
     here because no PLATFORM_LISTS gate and no ADHOC_ADDS predicate reads cfg.tailscale
     or cfg.sso today, so tiers() output is identical either way. If a future gate or
