@@ -258,6 +258,10 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
             "The domains baked on this device: /etc/hugmesh/cluster-domain first, then "
             "/etc/hugmesh/domains. Each Go-Live run exposes ONE of them.")
         self.domain_pick.currentIndexChanged.connect(self._picked)
+        # ``activated`` too: after typing another domain below, picking the entry the
+        # combo ALREADY shows changes no index, so currentIndexChanged alone did
+        # nothing and the field kept the typed text (the post-merge review of #645).
+        self.domain_pick.activated.connect(self._picked)
         lay.addWidget(_row("Baked domains", self.domain_pick))
         self.domain_list_note = QtWidgets.QLabel("")
         self.domain_list_note.setWordWrap(True)

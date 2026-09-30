@@ -188,6 +188,29 @@ def test_the_inputs_picker_offers_the_baked_domains_and_fills_the_field(wiz, dev
     assert page.validatePage() and wiz.opts.domain == "typed.example"
 
 
+def test_picking_the_entry_the_combo_already_shows_refills_the_field(wiz, device):
+    """After typing another domain, picking the entry the combo ALREADY shows changes
+    no index, so ``currentIndexChanged`` never fires (the post-merge review of #645,
+    N7): the picker listens to ``activated`` — what Qt emits on a user's pick — too."""
+    page = _to_inputs(wiz)
+    assert page.domain_pick.currentIndex() == 0
+    page.domain.setText("typed.example")
+    page.domain_pick.activated.emit(0)
+    assert page.domain.text() == "mesh.example"
+    assert page.domain_hint.text() == "picked from the domains baked on this device"
+
+
+def test_re_entering_the_inputs_page_keeps_a_typed_domain(wiz, device):
+    """A Back-and-Next re-entry refills the picker; the refill must not fire the pick
+    handler and overwrite what the operator typed (the picker's signals are blocked
+    while it is rebuilt)."""
+    page = _to_inputs(wiz)
+    page.domain.setText("typed.example")
+    page.initializePage()
+    assert page.domain.text() == "typed.example"
+    assert page.domain_pick.currentIndex() == 0       # no baked entry matches it
+
+
 def test_a_bare_node_picker_is_the_cluster_domain_and_says_why(wiz, bare_node):
     page = _to_inputs(wiz)
     assert page.domain_pick.count() == 1

@@ -54,6 +54,20 @@ FLEET_SCRIPT = "scripts/build-all-roles.sh"
 # fail-closed like ImageConfig.validate_identity().
 _ROLE_TOKEN_RE = re.compile(r"[A-Za-z0-9_+.-]+\Z")
 
+#: ``-j`` on both faces: the GUI's spin box range and what ``validate`` accepts from
+#: the TUI's ``set jobs N`` (which used to take 0 and -5 straight into the command).
+JOBS_RANGE: tuple[int, int] = (1, 128)
+
+#: What WITH_TOR does per builder — the note under the GUI's Tor checkbox and the
+#: line the TUI's options screen prints for the ``with_tor`` knob (both faces, one
+#: string; parity-pinned). It is NOT on the checkbox itself: a QCheckBox never
+#: wraps, and this sentence on it made the fleet window 825 px wide at its 760 px
+#: default (the post-merge review of #645).
+WITH_TOR_NOTE = (
+    "Sent per builder through the channel it parses — x86 --with-tor, rpi5 ‘tor’ "
+    "folded into --optional-services. Client roles never carry it; build-all-roles.sh "
+    "refuses (exit 2, before any build) where a builder cannot bake it exactly.")
+
 #: The builders' own cluster domain when no ``--cluster-domain`` is passed (x86 and
 #: rpi5 ``CLUSTER_DOMAIN=`` default; ImageConfig carries the same literal). A fleet
 #: whose Cluster domain field is empty builds for THIS domain, so it is row 0.
@@ -285,6 +299,25 @@ class FleetConfig:
                 if not _ROLE_TOKEN_RE.match(tok):
                     raise IdentityValidationError(
                         f"invalid {name} token: {tok!r} — rejected by the fleet allowlist")
+        # extra_flags is shlex-split into argv by to_cli_args: an unbalanced quote (a
+        # plain apostrophe in a note, an unterminated "...) raised ValueError from
+        # shlex there, which the TUI's review did not catch — the whole text-mode fleet
+        # flow died on it. Refuse it HERE, at the one validation seam both faces call
+        # (the TUI on every `set`, the GUI's preview and preflight), with the reason.
+        if self.extra_flags:
+            try:
+                shlex.split(self.extra_flags)
+            except ValueError as e:
+                raise IdentityValidationError(
+                    f"extra_flags cannot be split into arguments ({e}) — balance the "
+                    "quotes, e.g. --note \"it's\"") from e
+        # -j: the GUI's spin box already stops at JOBS_RANGE; the TUI's `set jobs N`
+        # took any int (0, -5) straight into the command until this check.
+        if (isinstance(self.jobs, bool) or not isinstance(self.jobs, int)
+                or not JOBS_RANGE[0] <= self.jobs <= JOBS_RANGE[1]):
+            raise IdentityValidationError(
+                f"jobs must be a whole number from {JOBS_RANGE[0]} to {JOBS_RANGE[1]}, "
+                f"not {self.jobs!r}")
 
     # ---- the canonical env-knob + argv translation ---------------------------
     def to_env(self) -> dict[str, str]:

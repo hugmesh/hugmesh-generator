@@ -92,7 +92,11 @@ def test_preflight_refuses_an_unwalked_domain_naming_it():
     problems = FleetDriver(GENERATOR_DIR, HOST).preflight(_cfg(), "native")
     refusal = [p for p in problems if p.startswith(f"Cannot {ACTION_FLEET_BUILD}")]
     assert refusal and "acme.example" in refusal[0] and FLEET_REMEDY in refusal[0]
-    assert "mesh.example" not in refusal[0].split("—")[1].split(".")[0]
+    # EXACTLY the unwalked domain is named between the dash and the remedy — the
+    # walked own domain is not. (The earlier form of this line sliced at the first
+    # "." and so compared " acme" with "mesh.example": it could never fail.)
+    named = refusal[0].split("— ", 1)[1].split(". ", 1)[0]
+    assert named == "acme.example", refusal[0]
 
 
 def test_a_fully_walked_fleet_and_a_legacy_record_pass():
@@ -119,6 +123,28 @@ def test_mode_is_a_class_constant_not_a_field():
     assert FleetConfig.mode == "mesh"
     assert "mode" not in FleetConfig().to_dict()
     assert FleetConfig.from_dict({"mode": "standalone", "jobs": 3}).jobs == 3
+
+
+def test_validate_refuses_unbalanced_quotes_and_a_jobs_count_out_of_range():
+    """``extra_flags`` is shlex-split into argv, so an unbalanced quote used to raise a
+    bare ValueError from ``to_cli_args`` — which the TUI's review did not catch (the
+    post-merge review of #645: the whole text-mode fleet flow died on an apostrophe).
+    Now ``validate`` refuses it as an IdentityValidationError, with the remedy, and
+    ``-j`` is held to the GUI spin box's range on both faces."""
+    from hugmesh_studio.core.config import IdentityValidationError
+    from hugmesh_studio.core.fleet import JOBS_RANGE
+    for flags in ("--note it's", '--note "abc'):
+        with pytest.raises(IdentityValidationError, match="balance the quotes"):
+            FleetConfig(extra_flags=flags).validate()
+        with pytest.raises(IdentityValidationError):
+            FleetConfig(extra_flags=flags).to_cli_args()
+    assert FleetConfig(extra_flags='--note "it is"').to_cli_args() == ["--note", "it is"]
+    assert JOBS_RANGE == (1, 128)
+    for jobs in (0, -5, 129):
+        with pytest.raises(IdentityValidationError, match="jobs must be"):
+            FleetConfig(jobs=jobs).validate()
+    FleetConfig(jobs=1).validate()
+    FleetConfig(jobs=128).validate()
 
 
 # ── the steps' shared Qt-free logic ──────────────────────────────────────────────────
@@ -193,6 +219,94 @@ def test_the_tui_fleet_row_one_cannot_be_removed():
     j.feed("d 1")
     assert "cannot be removed" in j.status
     assert j.screen().state(j).names() == [FLEET_DEFAULT_DOMAIN]
+
+
+def test_the_tui_fleet_survives_an_apostrophe_in_extra_flags():
+    """The post-merge review of #645 (robustness M1): ``set extra_flags --note it's``
+    then Enter to Review raised ValueError('No closing quotation') out of shlex and
+    the plain face has no handler around feed(), so the whole TUI died with a
+    traceback. Now the value is refused at ``set`` time with the reason, the old value
+    is kept, and the walk goes on to Review."""
+    text = _tui(["set extra_flags --note it's", "", "", "", "q"])
+    assert "refused: extra_flags cannot be split into arguments" in text
+    assert "balance the quotes" in text
+    assert "fleet-review>" in text            # the walk went on: no traceback
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("fleet")
+    j.feed('set extra_flags --note "abc')
+    assert j.status.startswith("refused:") and j.screen().options(j).extra_flags == ""
+    j.feed("set jobs -5")
+    assert "jobs must be" in j.status and j.screen().options(j).jobs == 8
+    j.feed("set jobs 0")
+    assert "jobs must be" in j.status and j.screen().options(j).jobs == 8
+    j.feed("set jobs 128")
+    assert j.screen().options(j).jobs == 128
+
+
+def test_the_tui_domains_stage_refuses_junk_a_duplicate_and_the_own_domain_again():
+    """The TUI's ``a NAME`` refuses at entry what the GUI table refuses on Next — with
+    the same words as the shared ``added_row_problems`` (the post-merge review's M4:
+    these refusals existed and nothing pinned them)."""
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("fleet")
+    j.feed("set cluster_domain mesh.example")
+    j.feed("")                                 # options -> domains
+    st = j.screen().state(j)
+    j.feed("a Not A Domain")
+    assert j.status.startswith("not a domain name: 'Not A Domain'")
+    assert st.names() == ["mesh.example"]
+    j.feed("a acme.example")
+    assert st.names() == ["mesh.example", "acme.example"]
+    j.feed("a acme.example")
+    assert j.status == "already listed: acme.example"
+    j.feed("a mesh.example")
+    assert j.status.startswith("mesh.example is this fleet's own domain (row 1)")
+    assert st.names() == ["mesh.example", "acme.example"]
+
+
+def test_the_tui_enter_refuses_a_row_that_a_rename_made_the_own_domain_again():
+    """The one way a TUI row can be refused at Enter (entry already refuses junk and
+    duplicates): rename the fleet's own domain, on the options stage, to a name that is
+    an added row. Seeding renames row 1 and Enter then refuses the twin — the stage
+    stays ``domains`` and the status says why — until the row is deleted."""
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("fleet")
+    j.feed("set cluster_domain mesh.example")
+    j.feed("")
+    j.feed("a acme.example")
+    j.feed("b")                                # back to the options
+    j.feed("set cluster_domain acme.example")
+    j.feed("")                                 # -> domains: row 1 renamed
+    st = j.screen().state(j)
+    assert st.names() == ["acme.example", "acme.example"]
+    j.feed("")                                 # Enter: refused
+    assert j.screen().stage == "domains"
+    assert "acme.example is this mesh's own domain (row 0)" in j.status
+    assert "Fix or remove these rows to continue." in j.status
+    j.feed("d 2")
+    assert st.names() == ["acme.example"]
+    j.feed("")
+    assert j.screen().stage == "services"
+
+
+def test_the_tui_delete_prunes_the_deleted_rows_reviewed_marker():
+    """A row walked on the services step and then deleted must not leave its marker
+    behind (a stranded marker is what lets a re-added domain pass the gate unwalked)."""
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("fleet")
+    j.feed("set cluster_domain mesh.example")
+    j.feed("")
+    j.feed("a acme.example")
+    j.feed("")                                 # -> services: the own domain, marked
+    j.feed("n")                                # acme's page: marked
+    st = j.screen().state(j)
+    assert st.domain_services_reviewed == ["mesh.example", "acme.example"]
+    j.feed("b")                                # back to Domains
+    assert j.screen().stage == "domains"
+    j.feed("d 2")
+    assert j.status == "removed acme.example"
+    assert st.names() == ["mesh.example"]
+    assert st.domain_services_reviewed == ["mesh.example"]
 
 
 # ── the GUI face ─────────────────────────────────────────────────────────────────────
@@ -300,3 +414,54 @@ def test_the_services_step_says_what_the_fleet_does_with_the_rows(page):
     page.next_btn.click()
     assert page.domain_services.lane_note.text() == FLEET_LANE_NOTE
     assert not page.domain_services.lane_note.isHidden()
+
+
+def test_back_from_the_domains_step_records_a_typed_row(page):
+    """Back records too (never refuses): a row typed on Domains must reach the state
+    whichever way the operator leaves, and be in the table when they come back."""
+    _to_domains(page)
+    page.domains_table._add("acme.example", "Acme")
+    page.back_btn.click()
+    assert page.stack.currentIndex() == fleet_mod.STEP_SHARED
+    assert page.fleet_domains.names() == ["mesh.example", "acme.example"]
+    page.next_btn.click()
+    assert page.stack.currentIndex() == fleet_mod.STEP_DOMAINS
+    assert page.domains_table.table.rowCount() == 2
+
+
+def test_removing_a_walked_domain_on_the_gui_prunes_its_marker(page):
+    """Leaving the Domains step rebuilds the reviewed markers from the rows that still
+    exist (``commit_fleet_domains``): a domain walked, then removed, leaves nothing
+    behind. Measured through Back, which records without loading the services step
+    (whose own load would hide the prune this pins)."""
+    _to_domains(page)
+    page.domains_table._add("acme.example", "Acme")
+    page.next_btn.click()                                   # -> Domain services (own)
+    page.domain_services._step(+1)                          # acme's page: walked
+    page.back_btn.click()                                   # -> Domains, walk recorded
+    assert set(page.fleet_domains.domain_services_reviewed) == {"mesh.example",
+                                                                "acme.example"}
+    page.domains_table.table.selectRow(1)
+    page.domains_table._remove()
+    assert page.domains_table.table.rowCount() == 1
+    page.back_btn.click()                                   # records the removal
+    assert page.fleet_domains.names() == ["mesh.example"]
+    assert page.fleet_domains.domain_services_reviewed == ["mesh.example"]
+    assert page.collect().domain_services_reviewed == ["mesh.example"]
+
+
+def test_the_gui_shows_an_unbalanced_quote_inline_and_refuses_to_build(page):
+    """The GUI twin of the TUI apostrophe case: the Review preview says INVALID with
+    the remedy, inline, and "Build fleet now" refuses without reaching the driver."""
+    page.extra_flags.setText("--note it's")
+    _to_domains(page)
+    page.next_btn.click()                                   # -> Domain services
+    page.next_btn.click()                                   # -> Review
+    assert page.stack.currentIndex() == fleet_mod.STEP_REVIEW
+    assert page.cmd.toPlainText().startswith("INVALID: extra_flags cannot be split")
+    assert "balance the quotes" in page.cmd.toPlainText()
+    page.next_btn.click()                                   # "Build fleet now"
+    assert page.stack.currentIndex() == fleet_mod.STEP_REVIEW
+    assert "Preflight FAILED" in page.problems.toPlainText()
+    assert "balance the quotes" in page.problems.toPlainText()
+    assert page.runs == [] and page.worker is None
