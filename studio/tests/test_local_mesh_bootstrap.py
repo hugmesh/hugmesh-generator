@@ -421,7 +421,7 @@ def test_up_prod_stack_receives_domain(tmp_path, monkeypatch):
 # ── Finding 2: the seeded superadmin login matches the minted/advertised name ────
 
 def test_up_bridges_custom_superadmin_username_into_seed(tmp_path, monkeypatch):
-    # a custom --superadmin-username must reach `make stack-seed` (not just the inert
+    # a custom --superadmin-username must reach `make stack-seed` (not just the unread
     # secrets.json), so the operator can actually log in as the advertised name.
     seed_calls, start_calls = [], []
     _patch_up_happy(monkeypatch, seed_calls, start_calls)

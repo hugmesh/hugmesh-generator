@@ -122,7 +122,7 @@ _SUNSHINE_TIP = (
 # NAMES THE ARM, NOT A LINE RANGE, on purpose: this string is not a comment — it is the
 # reason the OPERATOR reads in a tooltip when the posture / --capable / desktop-weight
 # rows are hidden. The first spelling cited "build-x86-host-stage4.sh:1482-1509", which
-# was already stale when it was written (see the RE-DERIVED note above) and would rot
+# was already stale when it was written (see the RE-DERIVED note above) and would go stale
 # again on the builder's next edit — in an operator-facing string, silently. The arm
 # name is stable: `grep -n 'standalone-thin)' build-x86-host-stage4.sh` finds it forever.
 _REDUNDANT_NOTE = (
@@ -1060,7 +1060,7 @@ class RolePage(QtWidgets.QWizardPage):
         already answered. Called from _role_changed, so — like _sync_standalone_gate —
         it re-runs on every selection change AND on every page visit, which is what keeps
         a hidden field REACHABLE again the moment it becomes applicable (the documented
-        emission-neutrality precondition).
+        unchanged-output precondition).
 
         FOUR gates, two different reasons, and the difference decides what validatePage
         owes each field:
@@ -1072,7 +1072,7 @@ class RolePage(QtWidgets.QWizardPage):
           field is therefore NOT cleared — an operator loading a saved standalone-thick
           config with capable=true gets it back unchanged (operator: "keep the FIELD
           itself untouched so a saved config round-trips"), and nothing hidden can change
-          the image, which is the property the emission-neutrality rule protects.
+          the image, which is the property the unchanged-output rule protects.
         * INAPPLICABLE (--with-sunshine on standalone; --unaffiliated in cloud/mesh or on
           the standalone-unaffiliated role): the value would reach a builder that CANNOT
           honour it — or, for the dedicated role, an emitter that already suppresses it —
@@ -1338,7 +1338,7 @@ class RolePage(QtWidgets.QWizardPage):
             # standalone-unaffiliated x86 build (session 20260826-151356-64070a).
             # The IDENTITY fields are still zeroed AT THE COMMIT POINT — but note the
             # REASON changed under the same decision, so do not read this clear as
-            # redundant and delete it. It used to be load-bearing because BrandingPage
+            # redundant and delete it. It used to be relied on because BrandingPage
             # removed itself for this role (applies_to) and a skipped page never
             # validates; that page is now IN the flow again for an unaffiliated desktop
             # (branding.py applies_to -> _desktop_half_allowed), and it clears the two
@@ -1353,7 +1353,7 @@ class RolePage(QtWidgets.QWizardPage):
             #     and THEN chose unaffiliated gets it taken back — one page earlier than
             #     BrandingPage would, so the stale identity never reaches an argv even
             #     if the flow is abandoned before the branding step.
-            # Either way it keeps applies_to()'s emission-neutral precondition true.
+            # Either way it keeps applies_to()'s unchanged-output precondition true.
             #
             # field_default() rather than literals: brand/brand_title/org do NOT default
             # to "" (they are "hugmesh"/"HugMesh Systems"/"hugmesh"), and the builder's

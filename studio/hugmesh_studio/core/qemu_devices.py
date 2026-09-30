@@ -81,7 +81,7 @@ from hugmesh_studio.core.cloud_deploy import TERMINALS
 # The runner path lives in qemu_tests so the two device-facing modules can never
 # disagree about which script they drive. SESSIONS_SUBDIR comes from the same place
 # for the same reason: the save refusal below has to know where golden build images
-# live, and a second spelling of "out/sessions" would rot the day the builders move.
+# live, and a second spelling of "out/sessions" would go stale the day the builders move.
 from hugmesh_studio.core.qemu_tests import (DEFAULT_WORK_SUBDIR, RUNNER_SCRIPT,
                                             SESSIONS_SUBDIR)
 

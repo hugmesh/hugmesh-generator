@@ -358,6 +358,33 @@ def find(mesh_id: str) -> SavedMesh | None:
     return None
 
 
+def latest_for_checkout(generator_dir: str,
+                        hostname: str | None = None) -> SavedMesh | None:
+    """The most recently SAVED record that describes the mesh this checkout drives
+    (:meth:`SavedMesh.same_checkout` — same generator dir, same host), or None.
+
+    "Most recent" is ``updated`` (a re-save moves a record forward), falling back to
+    ``created`` and then the sortable id. Pure file reads, no docker — the one reader
+    the node-image flows use to learn what a saved local mesh RAN (its domain, its
+    services and therefore whether it ran Tor, #579). ``hostname`` defaults to this
+    host; pass ``""`` to match any host."""
+    host = socket.gethostname() if hostname is None else hostname
+    mine = [r for r in scan()[0] if r.same_checkout(generator_dir, host)]
+    if not mine:
+        return None
+    return max(mine, key=lambda r: (_stamp(r.updated) or _stamp(r.created), r.id))
+
+
+def _stamp(value: str) -> float:
+    """An ISO-8601 record timestamp as epoch seconds (0.0 when unparseable). Parsed
+    rather than string-compared: ``_now()`` writes the LOCAL offset, so two records
+    either side of a DST change would otherwise sort by their text."""
+    try:
+        return datetime.fromisoformat(str(value)).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _is_record_copy_dir(path: str, rec_id: str) -> bool:
     """Safety shape-check for ANY rmtree: True only when ``path`` matches the
     ``<state>/meshes/<id>`` footprint :meth:`SavedMesh.copy_dir` mints — the
@@ -407,7 +434,7 @@ def delete_path(path: str) -> None:
 # ── small blocking helpers (docker / git / hashing) ────────────────────────────
 def _run(args: list[str], *, cwd: str | None = None,
          timeout: int = _CMD_TIMEOUT) -> tuple[int, str]:
-    """One subprocess call. Never raises — a missing binary or a wedged daemon is
+    """One subprocess call. Never raises — a missing binary or a hung daemon is
     an honest "unknown", not a traceback out of a worker thread."""
     try:
         r = subprocess.run(args, cwd=cwd, capture_output=True, text=True,

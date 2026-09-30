@@ -45,7 +45,7 @@ from hugmesh_studio.gui.qt import Qt, QtWidgets                               # 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
-# is_root=True is LOAD-BEARING: a native worklist preflight otherwise fails "needs root"
+# is_root=True is RELIED ON: a native worklist preflight otherwise fails "needs root"
 # and the build would never start (mirrors test_pages_progress's HOST). Native backend so
 # the dispatched argv is `bash ./<script> …` with no sudo prefix.
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,

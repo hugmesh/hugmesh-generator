@@ -295,7 +295,7 @@ ClusterSecretStore **`hugmesh-vault`** (provider `vault`, token auth from the
 `vault-token` Secret in `external-secrets`) and one ExternalSecret each
 (refresh `1h`):
 
-| Vault path (`secret/hugmesh/…`) | → k8s Secret | Namespace |
+| Vault path (`secret/<brand>/…`) | → k8s Secret | Namespace |
 |---|---|---|
 | `casdoor` (`google_client_id`/`google_client_secret`) | `casdoor-google` (`clientId`/`clientSecret`) | `hugmesh-pki` |
 | `casdoor` (`db_password_plain`) | `casdoor-db` (`username`=`casdoor`/`password`) | `hugmesh-pki` |

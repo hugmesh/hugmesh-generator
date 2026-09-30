@@ -84,7 +84,10 @@ def test_the_hosted_screens_are_real_not_honest_stubs():
     # "e2e" joined them on 2026-08-27 — it is a mode-menu card on BOTH faces, so a
     # stub here would be the TUI breaking a promise the menu makes. "qemu" STAYS
     # hosted even though its own card went: it is reached from the e2e screen.
-    assert hosted == {"localcloud", "e2e", "qemu", "meshemu"}
+    # "localmesh" joined them with #494 (operator decision 71): its choice screen and
+    # its Domains / Domain services steps are hosted (tui/localmesh.py); the rest of
+    # that route stays GUI-only and the screen says so (#519).
+    assert hosted == {"localcloud", "e2e", "qemu", "meshemu", "localmesh"}
 
 
 def test_the_e2e_card_opens_the_real_e2e_screen():
@@ -263,7 +266,10 @@ def test_mesh_walk_reaches_worklist_and_gates_the_tables():
     j.feed("")            # -> keyzip
     j.feed("")            # -> domains_choice
     assert j.slug == "domains_choice"
-    j.feed("n")           # no extra domains -> the domains table is skipped
+    j.feed("n")           # no extra domains -> the domains table is skipped …
+    assert j.slug == "domain_services"      # … but the OWN domain's page is not (#494)
+    assert j.screen().current(j).name == j.cfg.cluster_domain
+    j.feed("")
     assert j.slug == "users_choice"
     j.feed("n")           # users table skipped too
     assert j.slug == "system"

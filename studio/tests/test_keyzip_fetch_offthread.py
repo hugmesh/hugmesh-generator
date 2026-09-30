@@ -3,7 +3,7 @@
 WHY THIS TEST EXISTS. KeyZipPage._fetch called _fetch_to_zip() INLINE from a `clicked`
 slot, and _fetch_to_zip called ``urllib.request.urlopen(url)`` with NO timeout. urlopen's
 default is the process-wide socket default, normally None — i.e. no deadline at all. A
-server that accepts the connection and then never answers (a half-open NAT, a wedged
+server that accepts the connection and then never answers (a half-open NAT, a hung
 reverse proxy, a black-holed address) therefore froze the entire wizard window with no
 Cancel, no progress and no way to close it. Both halves are needed: a timeout alone would
 still freeze the window, just for a bounded 60 seconds.
@@ -106,7 +106,7 @@ def test_the_click_returns_immediately_while_the_server_stalls(qapp, page, monke
     assert not page.fetch_btn.isEnabled(), "a second click must not start a second thread"
     assert "Fetching" in page.out.text()
     qapp.processEvents()                     # the event loop is alive; the window is not
-    page._fetch()                            # a repeat click while in flight is inert
+    page._fetch()                            # a repeat click while in flight does nothing
     assert page._fetch_worker.isRunning()
 
     parked.set()
