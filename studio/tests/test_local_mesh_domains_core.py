@@ -215,18 +215,57 @@ def test_a_record_with_no_domain_rows_imports_exactly_the_apex():
     assert imported_domains_lines(None) == []
 
 
-def test_an_existing_row_of_the_same_name_takes_the_record_and_loses_its_marker():
+def test_the_record_replaces_the_rows_an_earlier_flow_left():
+    """The node images join THIS mesh: its record is the whole domain set. A row an
+    earlier flow of the same Studio session left in cfg is not one of its domains
+    (the post-merge review of PR #644 found such a row built into the local cloud's
+    images), and a same-named row takes the record's title, sign-in and services."""
     cfg = _node_flow_cfg()
     cfg.domains = [Domain(name="b.example", title="Old", optional_services=["tube"]),
                    Domain(name="keep.example")]
     _ds.record_reviewed(cfg, ["b.example", "keep.example"])
+    before = cfg.domains
     apply_imported_domains(cfg, imported_mesh_domains(_n_domain_record()))
-    assert [d.name for d in cfg.domains] == ["b.example", "keep.example", "a.example"]
-    b = cfg.domains[0]
+    assert [d.name for d in cfg.domains] == ["a.example", "b.example"]   # record order
+    assert cfg.domains is not before, "replaced with a new list, never merged in place"
+    b = cfg.domains[1]
     assert (b.title, b.idp, b.optional_services) == ("Beta", DOMAIN_IDP_OWN, [])
-    # b's old marker vouched for services that are gone; keep.example's stays
-    assert "b.example" not in cfg.domain_services_reviewed
-    assert "keep.example" in cfg.domain_services_reviewed
+    # b's old marker vouched for services that are gone, and the record never walked
+    # it; keep.example is gone with its row
+    assert cfg.domain_services_reviewed == ["saved.example.org", "a.example"]
+
+
+def test_a_record_with_no_domain_rows_clears_an_earlier_flows_rows():
+    """None means the mesh serves its own domain only — so the rows and the opt-in an
+    earlier flow left are cleared too, for the reason above."""
+    cfg = _node_flow_cfg()
+    cfg.domains = [Domain(name="x.example", title="X")]
+    cfg.additional_domains = True
+    _ds.record_reviewed(cfg, ["x.example"])
+    assert apply_imported_domains(cfg, None) == []
+    assert cfg.domains == [] and cfg.additional_domains is False
+    assert cfg.domain_services_reviewed == []
+
+
+def test_a_hand_edited_record_row_is_read_as_the_config_would_read_it():
+    """A record edited by hand (the only way to get these): a sign-in the config cannot
+    hold reads as the default (``_domain_from_dict``'s rule), a row whose name is not a
+    hostname is not a domain and is not imported, and a name is stripped and
+    lowercased — so the imported config still survives a save/load round trip."""
+    rec = _n_domain_record(domains=(
+        {"name": " A.Example ", "title": "Alpha", "idp": "nonsense",
+         "optional_services": ["phpbb"]},
+        {"name": "5", "title": "Five", "idp": "own", "optional_services": []},
+        {"name": "b.example", "title": "Beta", "idp": DOMAIN_IDP_OWN,
+         "optional_services": []}))
+    cfg = _node_flow_cfg()
+    added = apply_imported_domains(cfg, imported_mesh_domains(rec))
+    assert added == ["a.example", "b.example"]
+    a = cfg.domains[0]
+    assert (a.name, a.title, a.idp, a.optional_services) == \
+        ("a.example", "Alpha", DOMAIN_IDP_SUPERDOMAIN, ["phpbb"])
+    assert cfg.own_idp_domains() == ("b.example",)
+    ImageConfig.from_dict(cfg.to_dict())          # would raise on idp='nonsense'
 
 
 def test_the_imported_rows_reach_the_mesh_manifest():

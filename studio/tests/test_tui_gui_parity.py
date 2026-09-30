@@ -518,3 +518,27 @@ def test_tui_and_gui_worklist_passes_agree_on_a_loaded_worklist(wiz):
     screen.feed(j, "")
     tui = [e.to_dict() for e in j.worklist.entries]
     assert tui == gui == before
+
+
+# ── #638 / decision 71 = A: the build-first mode picker on both faces ──────────────
+def test_the_build_first_arm_offers_the_same_three_builds_on_both_faces(wiz):
+    from hugmesh_studio.core import emulation as _emu
+    from hugmesh_studio.gui.pages import mode as gui_mode
+    page = wiz.page(wiz._page_ids["qemu"])
+    gui = [(rb.property("mode"), rb.text()) for rb in page.build_mode_radios.values()]
+    assert tuple(gui) == tui_qemu.image_mode_choices()
+    assert dict(tui_qemu.image_mode_choices()) == gui_mode.IMAGE_MODE_TITLES
+    # the sentence under the picker is ONE core string on both faces
+    page._seed_build_mode()                 # what entering the page does
+    page.build_first.setChecked(True)
+    page.build_mode_radios["cloud"].setChecked(True)
+    assert page.build_mode_note.text() == _emu.build_first_mode_note(
+        gui_mode.IMAGE_MODE_TITLES["cloud"], gui_mode.IMAGE_MODE_TITLES[wiz.cfg.mode])
+    j = journey.Journey(GENERATOR_DIR)
+    j.feed("")
+    j.feed("4")
+    j.feed(tui_e2e.DEVICE_LANE_KEY)
+    j.feed(tui_qemu.BUILD_FIRST_KEY)
+    assert _emu.build_first_mode_note(
+        gui_mode.IMAGE_MODE_TITLES[j.cfg.mode],
+        gui_mode.IMAGE_MODE_TITLES[j.cfg.mode]) in "\n".join(j.lines())

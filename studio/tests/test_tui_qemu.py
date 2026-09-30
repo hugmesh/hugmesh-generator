@@ -361,3 +361,96 @@ def test_an_unrecorded_session_keeps_its_run_hint(gen):
     text = "\n".join(_at_rows(gen).lines())
     assert "! refused" not in text
     assert shlex.join(em.run_argv(_plan(gen))) in text
+
+
+# ── #638, decision 71 = A: the build-first arm has a text-mode twin ────────────────
+from hugmesh_studio.core.config import ImageConfig  # noqa: E402
+
+
+def _at_build(gen, mode="standalone") -> journey.Journey:
+    j = journey.Journey(gen, cfg=ImageConfig(mode=mode))
+    j.feed("")
+    j.feed("4")
+    j.feed(tui_e2e.DEVICE_LANE_KEY)
+    assert j.slug == "qemu"
+    j.feed(tui_qemu.BUILD_FIRST_KEY)
+    return j
+
+
+def test_the_picker_offers_the_build_first_arm_and_its_key_is_not_a_back_key(gen):
+    text = "\n".join(_at_picker(gen).lines())
+    assert f"{tui_qemu.BUILD_FIRST_KEY} = build new images first" in text
+    assert tui_qemu.BUILD_FIRST_KEY not in ("q", "quit", "exit")
+    assert not tui_qemu.BUILD_FIRST_KEY.isdigit()       # a digit picks a session
+
+
+def test_the_build_arm_lists_the_three_image_builds_and_marks_the_inherited_one(gen):
+    """The route here passes no Mode screen, so the preselected build is whatever
+    this Studio session was already carrying — marked, and said to be a leftover."""
+    j = _at_build(gen, mode="mesh")                    # left over from an earlier flow
+    text = "\n".join(j.lines())
+    for i, (mid, title) in enumerate(tui_qemu.image_mode_choices(), 1):
+        assert f"{i:2d}. {title}" in text
+        assert (f" *{i:2d}. {title}" in text) == (mid == "mesh")
+    assert "Preselected: Mesh node" in text and "already carrying" in text
+    assert "NOT a choice made for this test" in text
+
+
+def test_enter_takes_the_inherited_build_and_walks_into_its_chain(gen):
+    j = _at_build(gen, mode="standalone")
+    j.feed("")
+    assert j.cfg.mode == "standalone" and j.cfg.qemu_device_tests is True
+    assert j.slug == "role"                            # the desktop chain, as the GUI
+
+
+def test_a_number_picks_another_build_and_commits_it_like_the_mode_screen(gen):
+    """The commit is the journey's ONE mode commit (the TUI twin of the GUI's
+    commit_image_mode): mesh's role reset, its defaults, a fresh worklist."""
+    j = _at_build(gen, mode="standalone")
+    j.worklist = object()                               # anything an earlier flow left
+    j.feed("1")                                         # 1 = Mesh node
+    assert j.cfg.mode == "mesh" and j.cfg.role == "omnibus"
+    assert j.worklist is None
+    assert j.cfg.qemu_device_tests is True
+    assert j.slug == "idp"                              # the mesh chain, as the GUI
+    assert j.flags.get("qemu_selected") is False        # any other commit disarms it
+
+
+def test_the_build_screen_says_the_device_tests_will_run_after_the_build(gen):
+    j = _at_build(gen, mode="standalone")
+    j.feed("")
+    while j.slug != "build" and not j.done:
+        j.feed("")
+    assert j.slug == "build"
+    assert "the QEMU emulated-device tests run" in "\n".join(j.lines())
+
+
+def test_a_bad_pick_on_the_build_arm_says_the_keys_and_commits_nothing(gen):
+    j = _at_build(gen, mode="cloud")
+    j.feed("9")
+    assert j.slug == "qemu" and "a NUMBER picks a build" in j.status
+    assert j.cfg.mode == "cloud" and not j.cfg.qemu_device_tests
+    j.feed("x")
+    assert j.slug == "qemu" and j.cfg.mode == "cloud"
+
+
+def test_q_leaves_the_build_arm_for_the_picker_not_the_journey(gen):
+    j = _at_build(gen)
+    j.feed("q")
+    assert j.slug == "qemu" and not j.done
+    assert "pick the session" in "\n".join(j.lines())
+    assert not j.cfg.qemu_device_tests
+
+
+def test_the_build_arm_is_offered_with_no_session_to_boot(tmp_path):
+    """The GUI forces build-first when nothing is bootable; the TUI's empty list
+    points at the same door."""
+    empty = tmp_path / "empty"
+    (empty / "out" / "sessions").mkdir(parents=True)
+    j = _at_picker(str(empty))
+    assert f"build new images first: {tui_qemu.BUILD_FIRST_KEY}" in "\n".join(j.lines())
+    j.feed("")
+    assert tui_qemu.BUILD_FIRST_KEY in j.status
+    j.feed(tui_qemu.BUILD_FIRST_KEY)
+    j.feed("")
+    assert j.cfg.qemu_device_tests is True and j.slug == "role"

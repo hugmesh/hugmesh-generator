@@ -630,3 +630,200 @@ def test_a_one_domain_mesh_imports_no_rows(wiz, monkeypatch, tmp_path):
     page = _confirm_and_enter_mesh_chain(wiz)
     assert page._mesh_domains is None
     assert wiz.cfg.domains == [] and wiz.cfg.additional_domains is False
+
+
+# ---- post-merge review of PR #644: the import must win over what an earlier flow of
+# the SAME Studio session left in the image-flow pages' working copies ---------------
+# gui/pages/domains.py refills its table only when the config OBJECT changes, and the
+# import writes the same object in place; the Domain services walk keeps a working copy
+# the same way. On origin/main c882fb67 both survived into the build screen.
+
+def _touch(page):
+    if isinstance(page, wizard_mod.WorklistPage):
+        check_worklist_rows(page, "backend.x86")
+
+
+def _walk_to_launch(wiz):
+    for _ in range(len(WIZARD_PAGE_SLUGS) + 6):
+        page = wiz.currentPage()
+        if isinstance(page, wizard_mod.LaunchPage):
+            return page
+        _touch(page)
+        before = wiz.currentId()
+        wiz.next()
+        assert wiz.currentId() != before, f"stuck on {type(page).__name__}"
+    raise AssertionError("never reached the Launch page")
+
+
+def _save_named(tmp_path, label, **kw):
+    cfg = LocalMeshBootstrapConfig(env="prod", cluster_domain="saved.example.org",
+                                   out_dir=str(tmp_path / "keys"), **kw)
+    rec = sm.SavedMesh(id=sm.new_id(), label=label, generator_dir=GENERATOR_DIR,
+                       hostname=socket.gethostname(), config=cfg.to_dict())
+    assert sm.save(rec)
+    return rec
+
+
+def _names(cfg):
+    return [d.name for d in cfg.domains]
+
+
+_AB_ROWS = ({"name": "a.example", "title": "Alpha", "idp": "superdomain",
+             "optional_services": ["phpbb"]},
+            {"name": "b.example", "title": "Beta", "idp": DOMAIN_IDP_OWN,
+             "optional_services": []})
+
+
+def test_a_second_import_in_the_same_session_carries_the_new_domain_and_the_record(
+        wiz, monkeypatch, tmp_path):
+    """Create nodes for a 2-domain mesh, Back to the main menu, the mesh is generated
+    again with a THIRD domain and a changed selection, create nodes again: the build
+    screen must carry the third domain, the record's selection for a.example, and
+    treat b.example as unwalked again (the record says so) even though the first pass
+    walked it here."""
+    _save_named(tmp_path, "A", domains=_AB_ROWS, own_idp_domains=("b.example",),
+                domain_services_reviewed=("a.example", "b.example"))
+    _real_reader(monkeypatch)
+    _confirm_and_enter_mesh_chain(wiz)
+    launch = _walk_to_launch(wiz)
+    assert _names(wiz.cfg) == ["a.example", "b.example"]
+    launch._main_menu()                                  # restart() on the SAME object
+    time.sleep(1.2)                                      # the record id is time-sortable
+    _save_named(tmp_path, "B",
+                domains=({"name": "a.example", "title": "Alpha", "idp": "superdomain",
+                          "optional_services": ["akkoma"]},
+                         _AB_ROWS[1],
+                         {"name": "c.example", "title": "Gamma", "idp": "superdomain",
+                          "optional_services": ["akkoma"]}),
+                own_idp_domains=("b.example",),
+                domain_services_reviewed=("saved.example.org", "a.example", "c.example"))
+    pick_mode(wiz, "localcloud")
+    page = advance_to(wiz, wizard_mod.LocalCloudNodesPage)
+    assert "c.example" in page.summary.text(), "fixture: the summary must list c.example"
+    page.confirm.setChecked(True)
+    wiz.next()
+    assert _names(wiz.cfg) == ["a.example", "b.example", "c.example"]
+    svc = advance_to(wiz, dsp_mod.DomainServicesPage)
+    assert svc.current_domain() == "b.example", "the record never walked b.example"
+    _walk_to_launch(wiz)
+    assert _names(wiz.cfg) == ["a.example", "b.example", "c.example"], \
+        "the third domain was dropped on the way to the build screen"
+    by = {d.name: d for d in wiz.cfg.domains}
+    assert by["a.example"].optional_services == ["akkoma"], \
+        "the first import's selection was written back over the record's"
+    m = wiz.cfg.mesh_manifest()
+    assert [d["name"] for d in m["domains"]] == ["a.example", "b.example", "c.example"]
+
+
+def test_an_import_after_an_earlier_mesh_flow_builds_only_the_imported_domains(
+        wiz, monkeypatch, tmp_path):
+    """A plain 'Mesh node' flow with one hand-added row up to the build screen, Back to
+    the main menu, then 'Create nodes for local cloud' for a saved 3-domain mesh: the
+    build screen must carry the saved mesh's rows, not the earlier flow's."""
+    from _helpers import enable_additional_domains
+    pick_mode(wiz, "mesh")
+    wl = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(wl, "backend.x86")
+    enable_additional_domains(wiz)
+    dom = advance_to(wiz, wizard_mod.DomainsPage)
+    dom._add("x.example", "X")
+    launch = _walk_to_launch(wiz)
+    assert _names(wiz.cfg) == ["x.example"]
+    launch._main_menu()
+    _save_named(tmp_path, "three-domain", domains=_AB_ROWS,
+                own_idp_domains=("b.example",), domain_services_reviewed=("a.example",))
+    _real_reader(monkeypatch)
+    pick_mode(wiz, "localcloud")
+    page = advance_to(wiz, wizard_mod.LocalCloudNodesPage)
+    assert "a.example" in page.summary.text() and "b.example" in page.summary.text()
+    page.confirm.setChecked(True)
+    wiz.next()
+    assert _names(wiz.cfg) == ["a.example", "b.example"], "fixture: the import wrote them"
+    _walk_to_launch(wiz)
+    assert _names(wiz.cfg) == ["a.example", "b.example"], (
+        f"the build screen carries {_names(wiz.cfg)}: the earlier flow's table won")
+
+
+def test_a_forgotten_domains_table_writes_nothing_until_it_is_entered_again(
+        wiz, monkeypatch, tmp_path):
+    """collect_all() re-runs every visited page's validatePage. After the import told
+    the Domains table to forget its rows, that re-run must not rebuild cfg.domains
+    from the (now empty) table — the import's rows stay until the page is walked."""
+    _save_named(tmp_path, "three-domain", domains=_AB_ROWS,
+                own_idp_domains=("b.example",), domain_services_reviewed=("a.example",))
+    _real_reader(monkeypatch)
+    _confirm_and_enter_mesh_chain(wiz)
+    dom = wiz.page(wiz._page_ids["domains"])
+    assert dom._cfg_seen is None and dom.table.rowCount() == 0
+    assert dom.validatePage() is True
+    assert _names(wiz.cfg) == ["a.example", "b.example"]
+    svc = wiz.page(wiz._page_ids["domain_services"])
+    assert svc._cfg_seen is None
+    svc.validatePage()
+    assert wiz.cfg.domain_services_reviewed == ["a.example"]   # the record's markers
+
+
+# ---- #661 / #647 / #656 rule: the page is LOOKED AT, two styles, 8 pt as well -------
+from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS  # noqa: E402
+
+from _look import (LOOK_CASES, LOOK_IDS, DEFAULT_WINDOW, assert_fits,  # noqa: E402
+                   assert_inside, assert_page_fits_its_window, assert_whole, looking,
+                   settle)
+
+
+@pytest.mark.parametrize(("style", "pt"), LOOK_CASES, ids=LOOK_IDS)
+def test_the_page_fits_its_window_and_every_line_is_drawn_whole(
+        qapp, monkeypatch, tmp_path, style, pt):
+    """#661: on main the consent sentence sat on a QCheckBox, which never wraps, so
+    the page was 804 px wide in a 736 px window and every line was cut at the right
+    edge with no sideways scroll. Now: nothing reaches past the viewport, the consent
+    box and its wrapped sentence are whole, and so are the imported-domain lines."""
+    _save_n_domain_record(tmp_path)
+    _real_reader(monkeypatch)
+    with looking(qapp, style, pt):
+        w = wizard_mod.StudioWizard(GENERATOR_DIR)
+        w.show()
+        try:
+            pick_mode(w, "localcloud")
+            page = advance_to(w, wizard_mod.LocalCloudNodesPage)
+            assert _wait_until(qapp, lambda: page._k8s_up is not None)
+            settle(qapp)
+            assert (w.width(), w.height()) == DEFAULT_WINDOW
+            assert_page_fits_its_window(page)
+            assert_fits(page.confirm, "the consent tick-box")
+            assert_inside(page, page.confirm_text, "the consent sentence")
+            assert_whole(page.confirm_text, "the consent sentence")
+            assert page.confirm_text.width() >= 300, "the sentence is squeezed"
+            assert_whole(page.summary, "the imported-mesh summary")
+            assert "b.example — own Casdoor" in page.summary.text()
+            assert_whole(page.gate_note, "the k8s gate note")
+        finally:
+            _drain(page, qapp)
+            w.close()
+            w.deleteLater()
+            settle(qapp)
+
+
+def test_the_consent_sentence_is_one_control_with_its_box(wiz, qapp):
+    """Clicking the wrapped sentence ticks the box (#661 moved the words off the box;
+    the line must still behave as the one control it was)."""
+    from hugmesh_studio.gui.qt import QtCore, QtGui
+    page = _settled(wiz, qapp)
+    assert "k8s will stop to proceed" in page.confirm.text()
+    assert page.confirm_text.text().startswith("—")
+    assert not page.confirm.isChecked()
+
+    def click(widget):
+        pos = QtCore.QPointF(3.0, 3.0)
+        for kind in (QtCore.QEvent.Type.MouseButtonPress,
+                     QtCore.QEvent.Type.MouseButtonRelease):
+            ev = QtGui.QMouseEvent(kind, pos, Qt.MouseButton.LeftButton,
+                                   Qt.MouseButton.LeftButton,
+                                   Qt.KeyboardModifier.NoModifier)
+            qapp.sendEvent(widget, ev)
+        qapp.processEvents()
+
+    click(page.confirm_text)
+    assert page.confirm.isChecked()
+    click(page.confirm_text)
+    assert not page.confirm.isChecked()
