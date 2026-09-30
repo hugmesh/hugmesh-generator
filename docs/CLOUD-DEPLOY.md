@@ -140,7 +140,7 @@ seam too.
 | Make delegates | `Makefile` (`deploy-plan/apply/status/destroy`) |
 | Driver + registry (parallel lane) | `specs/usr/sbin/hugmesh-cloud-deploy`, `specs/usr/lib/hugmesh/cloud-deploy-providers.sh` |
 | Packaging (parallel lane) | `scripts/cloud-package.sh` |
-| Tests (hermetic, stub driver) | `studio/tests/test_cloud_deploy.py`, `tests/menu/build_menu_cmd_test.sh` (deploy block) |
+| Tests (hermetic, stub driver) | `studio/tests/test_cloud_deploy.py`, `studio/tests/test_cloud_deploy_cli.py` (real argparse, Qt-free), `tests/menu/build_menu_cmd_test.sh` (deploy block) |
 
 The env seam `SNAP_CLOUD_DEPLOY_CMD` points every face at a stub driver in tests —
 the exact `SNAP_PHONE_WIZARD` pattern.

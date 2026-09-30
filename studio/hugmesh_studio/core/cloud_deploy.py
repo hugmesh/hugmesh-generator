@@ -481,12 +481,23 @@ def main(argv: list[str] | None = None) -> int:
                          "contents stay in your custody)")
     ap.add_argument("--out-dir", default="", help="where plan renders its artifacts")
     ap.add_argument("--keys-dir", default="")
+    # IdP passthrough (I7): the menu, the Makefile deploy-* delegates and
+    # CloudDeployOptions.to_cli_args() all thread these; the driver owns the value
+    # validation (casdoor|entra|aws|oidc, https:// shapes), so they pass through.
+    ap.add_argument("--idp", default="",
+                    help="identity provider: casdoor (built-in default, adds nothing) "
+                         "| entra | aws | oidc (external: needs --idp-issuer)")
+    ap.add_argument("--idp-issuer", default="", help="external IdP issuer URL (https://)")
+    ap.add_argument("--idp-client-id", default="", help="optional IdP client id")
+    ap.add_argument("--idp-jwks", default="", help="optional IdP JWKS URL override")
     ap.add_argument("--generator-dir", default=_REPO_ROOT)
     ns = ap.parse_args(argv)
 
     opts = CloudDeployOptions(
         provider=ns.provider, image=ns.image, domain=ns.domain, region=ns.region,
-        creds_file=ns.creds_file, out_dir=ns.out_dir, keys_dir=ns.keys_dir)
+        creds_file=ns.creds_file, out_dir=ns.out_dir, keys_dir=ns.keys_dir,
+        idp=ns.idp, idp_issuer=ns.idp_issuer, idp_client_id=ns.idp_client_id,
+        idp_jwks=ns.idp_jwks)
     cd = CloudDeploy(ns.generator_dir, opts)
 
     if ns.verb == "preview":
