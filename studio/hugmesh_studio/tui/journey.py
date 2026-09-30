@@ -32,6 +32,7 @@ canonical order end to end, finishing with a saveable config.
 """
 from __future__ import annotations
 
+import copy
 import os
 
 from ..core.config import (
@@ -636,8 +637,12 @@ class WorklistScreen:
             if not self._checked:
                 j.status = "pick at least one row first (a NUMBER toggles)"
                 return
-            # a row staying checked KEEPS the per-image hostname the System step
-            # gave it (issue #229) — the GUI WorklistPage's keep.hostname rule.
+            # a row staying checked KEEPS everything it carries (#383): the System
+            # step's hostname (issue #229), and board / flavor / desktop / encrypt_root
+            # / package deltas / infra_services / the desktop person — the GUI
+            # WorklistPage's keep-prior-state rule. Copying the loaded entry whole
+            # (rather than naming three fields) means a field added to WorklistEntry
+            # later cannot be silently dropped by a pass through this screen.
             prior = ({e.id: e for e in j.worklist.entries}
                      if j.worklist is not None else {})
             entries = []
@@ -645,9 +650,8 @@ class WorklistScreen:
                 if i not in self._checked:
                     continue
                 keep = prior.get(entry_id(role, platform))
-                entries.append(WorklistEntry(
-                    role=role, platform=platform,
-                    hostname=keep.hostname if keep else ""))
+                entries.append(copy.deepcopy(keep) if keep is not None
+                               else WorklistEntry(role=role, platform=platform))
             j.worklist = WorklistConfig(base=j.cfg, entries=entries)
             j.advance()
             return
