@@ -562,6 +562,25 @@ _shell_quote() {
     printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
 
+# _dq VALUE — VALUE as ONE double-quoted shell word, with \ " $ ` escaped, so a
+# free-text value (path / label / issuer with spaces or metacharacters) can be
+# spliced into a flag string that a recipe later expands unquoted, without being
+# word-split or executed. Double quotes (not single) because they also survive the
+# Makefile's own single-quoted IMG_FLAGS='...' Docker hop.
+_dq() {
+    local v="$1"
+    v="${v//\\/\\\\}"; v="${v//\"/\\\"}"; v="${v//\$/\\\$}"; v="${v//\`/\\\`}"
+    printf '"%s"' "${v}"
+}
+# _word VALUE — like _dq but leaves a value made only of shell-safe characters
+# untouched (so plain paths/names stay byte-identical on the command line).
+_word() {
+    case "$1" in
+        ""|*[!A-Za-z0-9_./:=@%+,-]*) _dq "$1" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
 # _redacted_run_make ARGS... — echoes a `make`-argv array joined for safe
 # display/logging: any element shaped like STANDALONE_FLAGS=...--local-pass...
 # or ...--luks-pass... is replaced WHOLESALE with a fixed placeholder. Used by
@@ -635,7 +654,7 @@ build_make_cmd() {
     # arch-independent (SOURCE tarballs), so it threads to EVERY builder via IMG_FLAGS
     # (single-arch + prebuild-binaries invocations honor $(IMG_FLAGS)); new fetches
     # still land in each build's private DISTDIR. Empty by default (no change).
-    [ -n "${OPT_DISTDIR}" ] && imgflags="${imgflags:+${imgflags} }--distdir ${OPT_DISTDIR}"
+    [ -n "${OPT_DISTDIR}" ] && imgflags="${imgflags:+${imgflags} }--distdir $(_word "${OPT_DISTDIR}")"
     [ -n "${imgflags}" ] && RUN_MAKE+=("IMG_FLAGS=${imgflags}")
     # Root SSH login: only forwarded when opted IN; empty => every image stays hardened
     # (PermitRootLogin no) by the builders' own default. Applies to ALL targets/arches.
@@ -656,6 +675,12 @@ build_make_cmd() {
         [ "${OPT_FRITE_FLEET}" = yes ]  && RUN_MAKE+=("FRITE=1")
         [ "${OPT_JETSON_FLEET}" = yes ] && RUN_MAKE+=("JETSON=1")
         [ "${OPT_ORANGEPI5_FLEET}" = yes ] && RUN_MAKE+=("ORANGEPI5=1")
+        # The per-platform axes ride the same fleet invocation (Makefile ROLESET_ENVVARS
+        # forwards them to build-all-roles.sh); without them a board/kernel picked on
+        # the single-role screen silently reverts to the builder default in the fleet.
+        [ "${OPT_FRITE_FLEET}" = yes ] && RUN_MAKE+=("FRITE_BOARD=${OPT_FRITE_BOARD}" "FRITE_FLAVOR=${OPT_FRITE_FLAVOR}" "FRITE_DESKTOP=${OPT_FRITE_DESKTOP}")
+        [ "${OPT_JETSON_FLEET}" = yes ] && RUN_MAKE+=("JETSON_BOARD=${OPT_JETSON_BOARD}" "JETSON_KERNEL_FLAVOR=${OPT_JETSON_KFLAVOR}")
+        [ "${OPT_ORANGEPI5_FLEET}" = yes ] && RUN_MAKE+=("ORANGEPI5_BOARD=${OPT_ORANGEPI5_BOARD}" "ORANGEPI5_FLAVOR=${OPT_ORANGEPI5_FLAVOR}")
         [ "${OPT_PENTEST}" = yes ]     && RUN_MAKE+=("PENTEST=1")
     fi
     # ── RPi (bare 'rpi' 3-role fleet target AND rpi-% single-role targets): the
@@ -774,7 +799,7 @@ build_make_cmd() {
             bf+=" --steam ${OPT_SA_STEAM}"
             [ "${OPT_SA_MEDIA}" = no ] && bf+=" --no-media-data"
             # match the media data device by FS LABEL (only meaningful with media ON)
-            [ "${OPT_SA_MEDIA}" = yes ] && [ -n "${OPT_SA_MEDIA_LABEL}" ] && bf+=" --media-label ${OPT_SA_MEDIA_LABEL}"
+            [ "${OPT_SA_MEDIA}" = yes ] && [ -n "${OPT_SA_MEDIA_LABEL}" ] && bf+=" --media-label $(_word "${OPT_SA_MEDIA_LABEL}")"
             [ -n "${OPT_SA_USER}" ] && bf+=" --local-user $(_shell_quote "${OPT_SA_USER}")"
             [ -n "${SA_LOCAL_PASS}" ] && bf+=" --local-pass $(_shell_quote "${SA_LOCAL_PASS}")"
             [ -n "${SA_LUKS_PASS}" ]  && bf+=" --luks-pass $(_shell_quote "${SA_LUKS_PASS}")"
@@ -789,12 +814,12 @@ build_make_cmd() {
             # operator's report is the reason: the old blanket conflict removed the whole
             # theme step from that image ("There should be the menu for adding the themes
             # as in the branded images").
-            { [ -n "${OPT_SA_THEME}" ] && [ "${OPT_SA_THEME}" != none ]; } && bf+=" --theme ${OPT_SA_THEME}"
+            { [ -n "${OPT_SA_THEME}" ] && [ "${OPT_SA_THEME}" != none ]; } && bf+=" --theme $(_word "${OPT_SA_THEME}")"
             [ "${OPT_SA_PROXY}" = no ]    && bf+=" --no-proxy-stack"
             [ "${OPT_SA_SNORT}" = no ]    && bf+=" --no-snort"
             [ "${OPT_SA_AIDE}" = yes ]    && bf+=" --with-aide"
             [ "${OPT_SA_KBUILTIN}" = yes ] && bf+=" --kernel-builtin"
-            [ -n "${OPT_SA_EGRESS}" ]     && bf+=" --egress-vpn ${OPT_SA_EGRESS}"
+            [ -n "${OPT_SA_EGRESS}" ]     && bf+=" --egress-vpn $(_word "${OPT_SA_EGRESS}")"
         else
             # OPTIONAL services catalog + Tor + Character Studio — CLUSTER-role knobs
             # (standalone desktops are not cluster members, so they are skipped there;
@@ -805,7 +830,7 @@ build_make_cmd() {
             elif [ -n "${OPT_SERVICES}" ]; then
                 # comma list -> the builder's space-separated list (kept as ONE shell
                 # word via embedded double quotes, which survive both make legs).
-                bf+=" --optional-services \"${OPT_SERVICES//,/ }\""
+                bf+=" --optional-services $(_dq "${OPT_SERVICES//,/ }")"
                 # games is opt-in — mirror the checklist with the explicit toggle too
                 case ",${OPT_SERVICES}," in *,games,*) bf+=" --enable-games" ;; esac
             fi
@@ -818,8 +843,8 @@ build_make_cmd() {
             # external provider threads --idp + issuer + client-id [+ jwks]; issuer
             # and jwks are double-quoted as one shell word (survives both make legs).
             if [ -n "${OPT_IDP}" ] && [ "${OPT_IDP}" != casdoor ]; then
-                bf+=" --idp ${OPT_IDP} --idp-issuer \"${OPT_IDP_ISSUER}\" --idp-client-id \"${OPT_IDP_CLIENT_ID}\""
-                [ -n "${OPT_IDP_JWKS}" ] && bf+=" --idp-jwks \"${OPT_IDP_JWKS}\""
+                bf+=" --idp ${OPT_IDP} --idp-issuer $(_dq "${OPT_IDP_ISSUER}") --idp-client-id $(_dq "${OPT_IDP_CLIENT_ID}")"
+                [ -n "${OPT_IDP_JWKS}" ] && bf+=" --idp-jwks $(_dq "${OPT_IDP_JWKS}")"
             fi
             # Managed backing services (I8/M2): each space-separated id=endpoint token ->
             # a repeatable --managed-service (double-quoted as one shell word, surviving
@@ -828,7 +853,7 @@ build_make_cmd() {
             if [ -n "${OPT_MANAGED_SERVICES}" ]; then
                 local _ms
                 for _ms in ${OPT_MANAGED_SERVICES}; do
-                    [ -n "${_ms}" ] && bf+=" --managed-service \"${_ms}\""
+                    [ -n "${_ms}" ] && bf+=" --managed-service $(_dq "${_ms}")"
                 done
             fi
             [ "${OPT_CHARACTER_STUDIO}" = yes ] && bf+=" --with-character-studio"
@@ -849,9 +874,9 @@ build_make_cmd() {
                 case "${target}" in x86-edge-ai) ai_always=yes ;; esac
                 [ "${ai_always}" = no ] && [ "${OPT_X86_EDGE_AI}" = yes ] && bf+=" --with-edge-ai"
                 if [ "${ai_always}" = yes ] || [ "${OPT_X86_EDGE_AI}" = yes ]; then
-                    [ -n "${OPT_EDGE_AI_RUNTIME}" ] && [ "${OPT_EDGE_AI_RUNTIME}" != ollama ] && bf+=" --edge-ai-runtime ${OPT_EDGE_AI_RUNTIME}"
-                    [ -n "${OPT_EDGE_AI_MODELS}" ]  && bf+=" --edge-ai-models ${OPT_EDGE_AI_MODELS}"
-                    [ -n "${OPT_EDGE_AI_MODEL_DEFAULT}" ] && bf+=" --edge-ai-model-default ${OPT_EDGE_AI_MODEL_DEFAULT}"
+                    [ -n "${OPT_EDGE_AI_RUNTIME}" ] && [ "${OPT_EDGE_AI_RUNTIME}" != ollama ] && bf+=" --edge-ai-runtime $(_word "${OPT_EDGE_AI_RUNTIME}")"
+                    [ -n "${OPT_EDGE_AI_MODELS}" ]  && bf+=" --edge-ai-models $(_word "${OPT_EDGE_AI_MODELS}")"
+                    [ -n "${OPT_EDGE_AI_MODEL_DEFAULT}" ] && bf+=" --edge-ai-model-default $(_word "${OPT_EDGE_AI_MODEL_DEFAULT}")"
                 fi
                 # --with-edge-ai-analysis folds edge-ai too (its dependency), so it applies
                 # on any GPU target incl. the edge-ai role.
@@ -864,26 +889,26 @@ build_make_cmd() {
         # SPLIT 2026-08-26 along the identity/look line the builder now draws. These
         # five say what the desktop LOOKS LIKE and name nobody, so they apply to the
         # unaffiliated desktop as well; they bake under neutral artefact names there.
-        [ -n "${OPT_BR_WALLPAPER}" ] && bf+=" --wallpaper ${OPT_BR_WALLPAPER}"
-        [ -n "${OPT_BR_GRUB_BG}" ]   && bf+=" --grub-background ${OPT_BR_GRUB_BG}"
-        [ -n "${OPT_BR_LOGIN_BG}" ]  && bf+=" --login-background ${OPT_BR_LOGIN_BG}"
-        [ -n "${OPT_BR_ACCENT}" ]    && bf+=" --accent-color ${OPT_BR_ACCENT}"
-        [ -n "${OPT_BR_SCHEME}" ]    && bf+=" --color-scheme ${OPT_BR_SCHEME}"
+        [ -n "${OPT_BR_WALLPAPER}" ] && bf+=" --wallpaper $(_word "${OPT_BR_WALLPAPER}")"
+        [ -n "${OPT_BR_GRUB_BG}" ]   && bf+=" --grub-background $(_word "${OPT_BR_GRUB_BG}")"
+        [ -n "${OPT_BR_LOGIN_BG}" ]  && bf+=" --login-background $(_word "${OPT_BR_LOGIN_BG}")"
+        [ -n "${OPT_BR_ACCENT}" ]    && bf+=" --accent-color $(_word "${OPT_BR_ACCENT}")"
+        [ -n "${OPT_BR_SCHEME}" ]    && bf+=" --color-scheme $(_word "${OPT_BR_SCHEME}")"
         # ...and the ONE that stays gated: a logo is the brand MARK, not a look. The
         # builder installs it as the greeter's default-user-image, so it is the single
         # asset that says WHOSE image this is — still a hard conflict on --unaffiliated.
-        { [ "${unaff}" = no ] && [ -n "${OPT_BR_LOGO}" ]; } && bf+=" --brand-logo ${OPT_BR_LOGO}"
+        { [ "${unaff}" = no ] && [ -n "${OPT_BR_LOGO}" ]; } && bf+=" --brand-logo $(_word "${OPT_BR_LOGO}")"
         # Home provisioning — standalone + tailnet CLIENT desktops only (a cluster
         # node has no provisioned user home to adopt/restore).
         case "${target}" in
             x86-standalone*|x86-laptop|x86-chromebook|x86-desktop)
-                [ -n "${OPT_HOME_MODE}" ]    && bf+=" --home-mode ${OPT_HOME_MODE}"
-                [ -n "${OPT_HOME_DEVICE}" ]  && bf+=" --home-device ${OPT_HOME_DEVICE}"
-                [ -n "${OPT_HOME_BACKUP}" ]  && bf+=" --home-backup ${OPT_HOME_BACKUP}"
+                [ -n "${OPT_HOME_MODE}" ]    && bf+=" --home-mode $(_word "${OPT_HOME_MODE}")"
+                [ -n "${OPT_HOME_DEVICE}" ]  && bf+=" --home-device $(_word "${OPT_HOME_DEVICE}")"
+                [ -n "${OPT_HOME_BACKUP}" ]  && bf+=" --home-backup $(_word "${OPT_HOME_BACKUP}")"
                 [ "${OPT_HOME_ENCRYPTED}" = yes ] && bf+=" --home-encrypted"
                 # unaffiliated: --home-seed-code seeds the HugMesh stack — hard conflict
-                { [ "${unaff}" = no ] && [ -n "${OPT_HOME_SEED}" ] && [ "${OPT_HOME_SEED}" != none ]; } && bf+=" --home-seed-code ${OPT_HOME_SEED}"
-                [ -n "${OPT_HOME_ARCHIVE}" ] && bf+=" --include-home-archive ${OPT_HOME_ARCHIVE}"
+                { [ "${unaff}" = no ] && [ -n "${OPT_HOME_SEED}" ] && [ "${OPT_HOME_SEED}" != none ]; } && bf+=" --home-seed-code $(_word "${OPT_HOME_SEED}")"
+                [ -n "${OPT_HOME_ARCHIVE}" ] && bf+=" --include-home-archive $(_word "${OPT_HOME_ARCHIVE}")"
                 ;;
         esac
         # Installer front-ends offered on the live ISO (empty = builder default:
@@ -916,6 +941,36 @@ build_make_cmd() {
         [ -n "${bf}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${bf# }")
         ;;
     esac
+    _warn_dropped_opts "${target}"
+}
+
+# _warn_dropped_opts TARGET — the x86-only knobs (cluster services, Tor, IdP, managed
+# services, edge-AI, branding overrides, home provisioning, installer UI) are only
+# composed onto x86-* single-role targets; every other target (Pi / Frite / Jetson /
+# Orange Pi single-role, and the multi-role fleet targets) would silently drop them.
+# Say so BEFORE the build launches. The fleet targets also have no STANDALONE_FLAGS
+# channel, so "Extra builder flags" is dropped on build-all / build-everything.
+_warn_dropped_opts() {
+    local target="$1" d=""
+    case "${target}" in x86-*) return 0 ;; esac
+    [ -n "${OPT_SERVICES:-}" ] && d+=" optional-services"
+    [ "${OPT_TOR_ONION:-no}" = yes ] && d+=" tor"
+    [ "${OPT_SUNSHINE:-no}" = yes ] && d+=" sunshine"
+    [ -n "${OPT_IDP:-}" ] && [ "${OPT_IDP}" != casdoor ] && d+=" idp"
+    [ -n "${OPT_MANAGED_SERVICES:-}" ] && d+=" managed-services"
+    { [ "${OPT_CHARACTER_STUDIO:-no}" = yes ] || [ "${OPT_CHARACTER_FORGE:-no}" = yes ]; } && d+=" character-studio/forge"
+    { [ "${OPT_X86_EDGE_AI:-no}" = yes ] || [ "${OPT_X86_EDGE_AI_ANALYSIS:-no}" = yes ] || [ "${OPT_EDGE_AI_TTS:-no}" = yes ]; } && d+=" edge-ai"
+    { [ -n "${OPT_BR_WALLPAPER:-}" ] || [ -n "${OPT_BR_GRUB_BG:-}" ] || [ -n "${OPT_BR_LOGIN_BG:-}" ] \
+        || [ -n "${OPT_BR_ACCENT:-}" ] || [ -n "${OPT_BR_SCHEME:-}" ] || [ -n "${OPT_BR_LOGO:-}" ]; } && d+=" branding-overrides"
+    { [ -n "${OPT_HOME_MODE:-}" ] || [ -n "${OPT_HOME_DEVICE:-}" ] || [ -n "${OPT_HOME_BACKUP:-}" ] \
+        || [ -n "${OPT_HOME_SEED:-}" ] || [ -n "${OPT_HOME_ARCHIVE:-}" ]; } && d+=" home-provisioning"
+    [ -n "${OPT_INSTALLER_UI:-}" ] && d+=" installer-ui"
+    [ -n "${d}" ] && warn "'${target}' does not take these x86-only options, so they are NOT passed to the build:${d}. Pick an x86-* role to apply them (or clear them in Options)."
+    case "${target}" in
+        build-all|build-everything)
+            [ -n "${OPT_EXTRA_FLAGS:-}" ] && warn "'${target}' is a multi-role fleet build with no single role to apply 'Extra builder flags' to, so they are NOT passed. Use a single-role target, or the IMG_FLAGS option." ;;
+    esac
+    return 0
 }
 
 # Launch the composed build DETACHED and record its PID + metadata, so we can
@@ -1516,7 +1571,7 @@ options_screen() {
 
 # Build a single role (pick arch then role).
 single_role_screen() {
-    local arch role board
+    local arch role board kflavor
     arch="$(ui_menu "Single role" "Which architecture?" \
         rpi "Raspberry Pi 5 / 4 / 3 (arm64 mesh node OR desktop; --board rpi5|rpi4|rpi3)" \
         x86 "x86-64 (amd64 node / GPU host / client)" \
@@ -1602,6 +1657,12 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
                 back "‹ back")" || return 0
             [ "${board}" = back ] && return 0
             OPT_JETSON_BOARD="${board}"
+            kflavor="$(ui_menu "Jetson kernel" "Kernel route (--kernel-flavor; current: ${OPT_JETSON_KFLAVOR}):" \
+                mainline "mainline — gentoo-sources, buildable (DEFAULT; NO CUDA)" \
+                l4t "l4t      — NVIDIA L4T/CUDA kernel (documented STUB, not buildable yet)" \
+                back "‹ back")" || return 0
+            [ "${kflavor}" = back ] && return 0
+            OPT_JETSON_KFLAVOR="${kflavor}"
             # --standalone only composes onto --role desktop, same reasoning as rpi5.
             [ "${role}" = desktop ] && arm_secrets_prompt "Jetson ${role} (${OPT_JETSON_BOARD})"
             save_conf
@@ -2046,9 +2107,18 @@ _local_mesh_bootstrap_run() {
         trap '_phone_shred_key' INT TERM EXIT
     fi
     args+=(--generator-dir "${REPO_DIR}")
-    local out
-    out="$(PYTHONPATH="${REPO_DIR}/studio" python3 -m hugmesh_studio.core.local_mesh_bootstrap "${args[@]}" 2>&1)"
-    local rc=$?
+    local out rc
+    if [ "${sub}" = up ] && [ "${env}" = prod ]; then
+        # prod `up` TTY-confirms ("Type 'yes' ..."): the prompt is written to stdout,
+        # so capturing it in $(...) hid it and the operator stared at a blank screen.
+        # Run it in the foreground on the real terminal instead (stdin/stdout untouched).
+        PYTHONPATH="${REPO_DIR}/studio" python3 -m hugmesh_studio.core.local_mesh_bootstrap "${args[@]}"
+        rc=$?
+        out="(output shown above)"
+    else
+        out="$(PYTHONPATH="${REPO_DIR}/studio" python3 -m hugmesh_studio.core.local_mesh_bootstrap "${args[@]}" 2>&1)"
+        rc=$?
+    fi
     if [ -n "${keyfile}" ]; then
         trap - INT TERM EXIT
         _phone_shred_key
@@ -2329,6 +2399,11 @@ logs_screen() {
 }
 
 clean_screen() {
+    # `make clean` wipes the work dir the running build is writing into.
+    if menu_build_alive || [ -n "$(foreign_build_pid)" ]; then
+        ui_msg "Clean" "A build is running — stop it first (Stop build), then Clean.\n\nRefusing to wipe ${OPT_WORK_DIR} under a live build."
+        return 0
+    fi
     ui_yesno "Clean" "Wipe the work dir?\n\n  ${OPT_WORK_DIR}\n\nThis deletes ALL build artifacts + sysroots and forces a from-scratch rebuild." || return 0
     say "running: make clean WORK_DIR=${OPT_WORK_DIR}"
     ( cd "${REPO_DIR}" && make clean "WORK_DIR=${OPT_WORK_DIR}" $([ "${OPT_PATH}" = native ] && echo NATIVE=1) ) \
