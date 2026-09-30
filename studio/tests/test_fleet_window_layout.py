@@ -24,6 +24,17 @@ relative to the text) — never on ``isHidden()`` alone:
 The helpers tolerate both layouts (a step in its own scroll area, or one scroll area
 around the page), so the same file runs on the tree before the fix and fails there on
 geometry, not on an attribute.
+
+THE STYLE IS SET ON THE WINDOW'S OWN WIDGET TREE, NEVER ON THE APPLICATION. A
+``QApplication.setStyle`` / ``setFont`` re-polishes every widget alive in the process
+— and in the #591 wrapper, which runs twenty-odd files in one process, that includes
+the windows earlier files left behind (a ``deleteLater`` is never delivered by
+``processEvents``). Measured 2026-09-30: the fixture's restore of the application
+style hung at 99 % CPU for 20 minutes inside one of those leftovers (faulthandler:
+the fixture's teardown line), while the same file alone took 17 s. ``QWidget.setStyle``
+does not propagate, so it is applied to every descendant, again after a step is
+entered (a table row's cell widgets are made then), and the style object is kept
+alive until the window is gone (a widget does not own its style).
 """
 import os
 
@@ -66,22 +77,27 @@ def qapp():
 
 
 @pytest.fixture(params=COMBOS, ids=[f"{s}-{pt or 'default'}pt" for s, pt in COMBOS])
-def styled(qapp, request):
-    """Style and font are process-global: set them for one case, restore after."""
-    style, pt = request.param
-    before_style, before_font = qapp.style().objectName(), qapp.font()
-    qapp.setStyle(style)
-    if pt:
-        f = qapp.font()
-        f.setPointSizeF(pt)
-        qapp.setFont(f)
-    yield style, pt
-    qapp.setStyle(before_style)
-    qapp.setFont(before_font)
+def styled(request):
+    """(style name, point size) for one case — applied to the window, never to the
+    application (see the module doc)."""
+    return request.param
+
+
+def _restyle(win):
+    """Give every widget of ``win``'s tree the case's style (no propagation in Qt),
+    and the case's font to the window (that one propagates)."""
+    style = win._case_style
+    for w in [win, *win.findChildren(QtWidgets.QWidget)]:
+        w.setStyle(style)
+    if win._case_pt:
+        f = win.font()
+        f.setPointSizeF(win._case_pt)
+        win.setFont(f)
 
 
 @pytest.fixture
-def window(styled, monkeypatch):
+def window(qapp, styled, monkeypatch):
+    style_name, pt = styled
     monkeypatch.setattr(build_driver, "detect",
                         lambda builder_image="hugmesh-builder": HOST)
     win = fleet_mod.FleetWindow(GENERATOR_DIR)
@@ -89,12 +105,20 @@ def window(styled, monkeypatch):
     p.driver = FleetDriver(GENERATOR_DIR, HOST)
     p.driver._image_present = lambda: True
     p.driver.run = lambda *a, **k: 0
+    style = QtWidgets.QStyleFactory.create(style_name)
+    assert style is not None, style_name
+    win._case_style, win._case_pt = style, pt        # the window does not own it
+    _restyle(win)
     win.show()
+    _events()
+    _restyle(win)
     _events()
     yield win
     win.close()
     win.deleteLater()
+    QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
     _events()
+    del style                                        # after the window is gone
 
 
 def _events():
@@ -128,6 +152,8 @@ def _hbar_max(win, i):
 
 def _goto(win, i):
     win.page._goto(i)
+    _events()
+    _restyle(win)          # a step's table rows make their cell widgets on entry
     _events()
 
 
@@ -176,6 +202,7 @@ def test_a_refused_row_is_explained_where_the_operator_can_see_it(window, size):
     _events()
     _goto(win, fleet_mod.STEP_DOMAINS)
     p.domains_table._add("Not A Domain", "")
+    _restyle(win)
     p.next_btn.click()
     _events()
     assert p.stack.currentIndex() == fleet_mod.STEP_DOMAINS
@@ -194,8 +221,7 @@ def test_the_tor_checkbox_and_its_note_are_whole(window):
     win, p = window, window.page
     _goto(win, fleet_mod.STEP_SHARED)
     cb = p.with_tor
-    ind = QtWidgets.QApplication.style().pixelMetric(
-        QtWidgets.QStyle.PixelMetric.PM_IndicatorWidth)
+    ind = cb.style().pixelMetric(QtWidgets.QStyle.PixelMetric.PM_IndicatorWidth)
     need = cb.fontMetrics().horizontalAdvance(cb.text()) + ind + 6
     assert need <= cb.width(), f"the Tor checkbox needs {need}px, has {cb.width()}px"
     vp = _viewport(win, fleet_mod.STEP_SHARED)
@@ -210,8 +236,11 @@ def test_the_review_refusal_wraps_instead_of_scrolling_sideways(window):
     p.cluster_domain.setText("mesh.example")
     _goto(win, fleet_mod.STEP_DOMAINS)
     p.domains_table._add("acme.example", "Acme")
+    _restyle(win)
     p.next_btn.click()                                    # -> Domain services
     p.next_btn.click()                                    # -> Review: refused
+    _events()
+    _restyle(win)
     _events()
     assert p.stack.currentIndex() == fleet_mod.STEP_REVIEW
     assert "acme.example" in p.problems.toPlainText()
