@@ -1,0 +1,118 @@
+--- leg0 pre-existing state (halted before this run) 2026-09-30T16:36:25Z
+pods total: 26  notRunning: 0
+apps with syncPolicy.automated: 0 / 25
+bash scripts/kind-halt.sh status
+
+Cluster 'hugmesh-local' is HALTED
+
+  halted at 2026-09-30T13:37:35Z   cluster hugmesh-local   context kind-hugmesh-local
+
+  ArgoCD auto-sync SUSPENDED by this halt (25) - state at the moment it froze:
+    admin-bff-api                sync=Synced       health=Healthy     
+    admin-bff-db                 sync=Synced       health=Healthy     
+    casdoor                      sync=Synced       health=Healthy     
+    cassandra                    sync=Synced       health=Healthy     
+    cassandra-init               sync=Synced       health=Healthy     
+    external-secrets             sync=Synced       health=Healthy     
+    external-secrets-config      sync=Synced       health=Degraded       <-- NOT healthy/synced when frozen
+    federation-db                sync=Synced       health=Healthy     
+    harbor                       sync=Synced       health=Healthy     
+    harbor-provision             sync=Synced       health=Healthy     
+    hugmesh-federation-api       sync=Synced       health=Healthy     
+    hugmesh-gateway-fe           sync=Synced       health=Healthy     
+    hugmesh-host-shell           sync=Synced       health=Healthy     
+    hugmesh-social-ui            sync=Synced       health=Healthy     
+    hugmesh-user-ui              sync=Synced       health=Healthy     
+    ingress-nginx-internal       sync=Synced       health=Healthy     
+    keda                         sync=Synced       health=Healthy     
+    kyverno                      sync=Synced       health=Healthy     
+    metrics-server               sync=Synced       health=Healthy     
+    route-access-db              sync=Synced       health=Healthy     
+    user-bff-api                 sync=Synced       health=Healthy     
+    user-bff-db                  sync=Synced       health=Healthy     
+    vault                        sync=Synced       health=Healthy     
+    vault-pki                    sync=Synced       health=Healthy     
+    workload-console-rbac        sync=Synced       health=Healthy     
+
+  1 Application(s) above were frozen MID-FLIGHT. Their status will now stay
+  exactly as shown until the lane is resumed - that is the halt holding them, not a
+  new fault. hugmesh-generator#352 (external-secrets-config Degraded) and #354
+  (harbor) are the two standing reds this is expected to catch.
+
+  Workloads: 43 censused, 27 scaled to 0 by this halt, 16 left running.
+  (The list below is the SCALED half. Everything censused is recorded, each with
+   its own reason, so the length of the record is not the number this halt moved.)
+
+  Workloads scaled to 0 by this halt (27), with the replica count resume restores:
+    hugmesh-backend        Deployment   admin-bff-db                       1 -> 0
+    hugmesh-backend        Deployment   federation-db                      1 -> 0
+    hugmesh-backend        Deployment   hugmesh-admin-bff-api              6 -> 0
+    hugmesh-backend        Deployment   hugmesh-federation-api             1 -> 0
+    hugmesh-backend        Deployment   hugmesh-user-bff-api               6 -> 0
+    hugmesh-backend        Deployment   user-bff-db                        1 -> 0
+    hugmesh-frontend       Deployment   hugmesh-admin-ui                   2 -> 0
+    hugmesh-frontend       Deployment   hugmesh-fe-gateway                 1 -> 0
+    hugmesh-frontend       Deployment   hugmesh-host-shell                 2 -> 0
+    hugmesh-frontend       Deployment   hugmesh-login-ui                   2 -> 0
+    hugmesh-frontend       Deployment   hugmesh-mastodon-ui                2 -> 0
+    hugmesh-frontend       Deployment   hugmesh-matrix-ui                  2 -> 0
+    hugmesh-frontend       Deployment   hugmesh-user-ui                    2 -> 0
+    hugmesh-pki            Deployment   casdoor                            1 -> 0
+    hugmesh-pki            Deployment   casdoor-pg                         1 -> 0
+    hugmesh-pki            Deployment   harbor-core                        1 -> 0
+    hugmesh-pki            Deployment   harbor-jobservice                  1 -> 0
+    hugmesh-pki            Deployment   harbor-portal                      1 -> 0
+    hugmesh-pki            Deployment   harbor-registry                    1 -> 0
+    hugmesh-pki            Deployment   route-access-db                    1 -> 0
+    hugmesh-pki            StatefulSet  cassandra                          1 -> 0
+    hugmesh-pki            StatefulSet  harbor-database                    1 -> 0
+    hugmesh-pki            StatefulSet  harbor-redis                       1 -> 0
+    keda                   Deployment   keda-admission-webhooks            1 -> 0
+    keda                   Deployment   keda-operator                      1 -> 0
+    keda                   Deployment   keda-operator-metrics-apiserver    1 -> 0
+    vault                  StatefulSet  vault                              1 -> 0
+
+  Left RUNNING on purpose (16) - the floor, and anything already at 0:
+    devops                 Deployment   argocd-applicationset-controller on the hardcoded floor (resume itself depends on it) or KIND_HALT_SKIP_NS
+    devops                 Deployment   argocd-dex-server              on the hardcoded floor (resume itself depends on it) or KIND_HALT_SKIP_NS
+    devops                 Deployment   argocd-notifications-controller on the hardcoded floor (resume itself depends on it) or KIND_HALT_SKIP_NS
+    devops                 Deployment   argocd-redis                   on the hardcoded floor (resume itself depends on it) or KIND_HALT_SKIP_NS
+    devops                 Deployment   argocd-repo-server             on the hardcoded floor (resume itself depends on it) or KIND_HALT_SKIP_NS
+    devops                 Deployment   argocd-server                  on the hardcoded floor (resume itself depends on it) or KIND_HALT_SKIP_NS
+    devops                 Deployment   gitops-repo-server             on the hardcoded floor (resume itself depends on it) or KIND_HALT_SKIP_NS
+    devops                 StatefulSet  argocd-application-controller  on the hardcoded floor (resume itself depends on it) or KIND_HALT_SKIP_NS
+    external-secrets       Deployment   external-secrets               backs failurePolicy=Fail webhook externalsecret-validate/validate.externalsecret.external-secrets.io (and 16 more)
+    external-secrets       Deployment   external-secrets-cert-controller backs failurePolicy=Fail webhook externalsecret-validate/validate.externalsecret.external-secrets.io (and 16 more)
+    external-secrets       Deployment   external-secrets-webhook       backs failurePolicy=Fail webhook externalsecret-validate/validate.externalsecret.external-secrets.io (and 16 more)
+    kube-system            Deployment   coredns                        on the hardcoded floor (resume itself depends on it) or KIND_HALT_SKIP_NS
+    kube-system            Deployment   metrics-server                 on the hardcoded floor (resume itself depends on it) or KIND_HALT_SKIP_NS
+    kyverno                Deployment   kyverno-admission-controller   backs failurePolicy=Fail webhook kyverno-exception-validating-webhook-cfg/kyverno-svc.kyverno.svc (and 4 more)
+    kyverno                Deployment   kyverno-background-controller  backs failurePolicy=Fail webhook kyverno-exception-validating-webhook-cfg/kyverno-svc.kyverno.svc (and 4 more)
+    local-path-storage     Deployment   local-path-provisioner         on the hardcoded floor (resume itself depends on it) or KIND_HALT_SKIP_NS
+    DaemonSets are never touched in any namespace (no replica count to restore).
+
+  Held on the DERIVED admission floor (3 namespace(s)) - censused from this
+  cluster's own webhook configuration, not from a hardcoded list:
+    external-secrets         backs failurePolicy=Fail webhook externalsecret-validate/validate.externalsecret.external-secrets.io (and 16 more)
+    ingress-nginx-internal   backs failurePolicy=Fail webhook ingress-nginx-internal-admission/validate.nginx.ingress.kubernetes.io
+    kyverno                  backs failurePolicy=Fail webhook kyverno-exception-validating-webhook-cfg/kyverno-svc.kyverno.svc (and 4 more)
+
+  HorizontalPodAutoscalers: 8 on this cluster, 8 targeting a workload this halt
+  zeroed. NONE is touched - an HPA has no halted state to record.
+    hugmesh-backend        hugmesh-admin-bff-api          -> Deployment/hugmesh-admin-bff-api   min=2 max=6
+    hugmesh-backend        hugmesh-user-bff-api           -> Deployment/hugmesh-user-bff-api    min=2 max=6
+    hugmesh-frontend       hugmesh-admin-ui               -> Deployment/hugmesh-admin-ui        min=2 max=6
+    hugmesh-frontend       hugmesh-host-shell             -> Deployment/hugmesh-host-shell      min=2 max=6
+    hugmesh-frontend       hugmesh-login-ui               -> Deployment/hugmesh-login-ui        min=2 max=6
+    hugmesh-frontend       hugmesh-mastodon-ui            -> Deployment/hugmesh-mastodon-ui     min=2 max=6
+    hugmesh-frontend       hugmesh-matrix-ui              -> Deployment/hugmesh-matrix-ui       min=2 max=6
+    hugmesh-frontend       hugmesh-user-ui                -> Deployment/hugmesh-user-ui         min=2 max=6
+    Two consequences, and the second is the one that bites:
+      - They do not undo the halt: the HPA controller reports ScalingActive=False
+        once its target is at 0. That is upstream DOCUMENTED behaviour, read and
+        not measured by this control.
+      - The replica counts above are the HPA-CHOSEN counts, not git's. Resume puts
+        those back and then re-arms ArgoCD, which is the HPA-vs-GitOps fight this
+        repo has already measured at ~950 Deployment rewrites in 38 h.
+
+Resume with:  make kind-resume

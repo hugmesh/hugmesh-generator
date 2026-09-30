@@ -1,0 +1,58 @@
+== pods not fully Ready (READY col x/y with x!=y, excluding Completed)
+hugmesh-backend          hugmesh-admin-bff-api-59cd6874f-57jqh                 0/1   Running            0             34s
+hugmesh-backend          hugmesh-admin-bff-api-59cd6874f-5tjq7                 0/1   Running            0             34s
+hugmesh-backend          hugmesh-admin-bff-api-59cd6874f-ctvfk                 0/1   Running            0             34s
+hugmesh-backend          hugmesh-admin-bff-api-59cd6874f-d6q7p                 0/1   Running            0             34s
+hugmesh-backend          hugmesh-admin-bff-api-59cd6874f-m2tnn                 0/1   Running            0             34s
+hugmesh-backend          hugmesh-admin-bff-api-59cd6874f-wwwzn                 0/1   Running            0             34s
+hugmesh-frontend         hugmesh-fe-gateway-b44759c54-vj6wk                    0/1   CrashLoopBackOff   1 (5s ago)    34s
+hugmesh-pki              casdoor-54777d6b7b-bl8rc                              0/1   Running            2 (29s ago)   33s
+hugmesh-pki              cassandra-0                                           0/1   Running            0             33s
+hugmesh-pki              harbor-jobservice-6986698c57-g6fvh                    0/1   Running            2 (30s ago)   32s
+== vault status
+Defaulted container "vault" out of: vault, vault-unseal, vault-tls-init (init)
+Key                     Value
+---                     -----
+Seal Type               shamir
+Initialized             true
+Sealed                  false
+Total Shares            1
+Threshold               1
+Version                 1.21.4
+Build Date              2026-03-04T17:40:05Z
+Storage Type            raft
+Cluster Name            vault-cluster-4aa2c3cc
+Cluster ID              1ef7daae-9114-dbfc-f881-9ec0bc97b0f9
+Removed From Cluster    false
+HA Enabled              true
+HA Cluster              https://vault.vault.svc.cluster.local:8201
+HA Mode                 active
+Active Since            2026-09-30T16:36:31.797825244Z
+Raft Committed Index    187
+Raft Applied Index      187
+== apps
+admin-bff-api Synced Progressing
+admin-bff-db Synced Healthy
+casdoor Synced Progressing
+cassandra Synced Progressing
+cassandra-init Synced Healthy
+external-secrets Synced Healthy
+external-secrets-config Synced Degraded
+federation-db Synced Healthy
+harbor Synced Progressing
+harbor-provision Synced Healthy
+hugmesh-federation-api Synced Healthy
+hugmesh-gateway-fe Synced Progressing
+hugmesh-host-shell Synced Degraded
+hugmesh-social-ui Synced Degraded
+hugmesh-user-ui Synced Healthy
+ingress-nginx-internal Synced Healthy
+keda Synced Healthy
+kyverno Synced Healthy
+metrics-server Synced Healthy
+route-access-db Synced Healthy
+user-bff-api Synced Healthy
+user-bff-db Synced Healthy
+vault Synced Healthy
+vault-pki Synced Healthy
+workload-console-rbac Synced Healthy
