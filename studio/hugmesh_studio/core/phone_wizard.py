@@ -22,7 +22,7 @@ Options/Driver):
     run stages it into a 0600 ``--authkey-file`` and shreds it afterwards, exactly as
     _phone_run does.
   - ``PhoneWizard`` — resolves the driver path (honouring the ``SNAP_PHONE_WIZARD``
-    env seam the ncurses + the phone tests use), gates ``available()`` on the script
+    env override point the ncurses + the phone tests use), gates ``available()`` on the script
     being executable, reads the driver's own vetted device catalog
     (``phone-devices.tsv``) for the codename picker, streams a read-only/non-
     interactive verb line-by-line into a page (``run``), and defers the two verbs
@@ -32,7 +32,7 @@ Options/Driver):
 
 This module imports only os/shutil/subprocess/tempfile/threading/shlex/dataclasses —
 NO Qt — so it runs in the Qt-free/system-python environment CI uses, and is unit-
-testable against a stub driver through the env seam.
+testable against a stub driver through the env override point.
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ from . import proc_text
 from collections.abc import Callable
 from dataclasses import dataclass
 
-# The env seam the ncurses phone_screen honours (build-menu.sh:1745) and the phone
+# The env override point the ncurses phone_screen honours (build-menu.sh:1745) and the phone
 # tests override: SNAP_PHONE_WIZARD wins over the in-repo scripts/phone-wizard.sh.
 ENV_DRIVER = "SNAP_PHONE_WIZARD"
 DRIVER_REL = ("scripts", "phone-wizard.sh")
@@ -197,7 +197,7 @@ class PhoneWizard:
     # ── driver / catalog locations ───────────────────────────────────────────────
     @property
     def driver_path(self) -> str:
-        """The resolved driver: ``$SNAP_PHONE_WIZARD`` (test seam) wins over the
+        """The resolved driver: ``$SNAP_PHONE_WIZARD`` (test override point) wins over the
         in-repo ``scripts/phone-wizard.sh`` — the exact resolution the ncurses uses
         (build-menu.sh:1745)."""
         return os.environ.get(ENV_DRIVER) or os.path.join(self.generator_dir, *DRIVER_REL)
@@ -206,7 +206,7 @@ class PhoneWizard:
     def devices_tsv(self) -> str:
         """The device catalog SITS NEXT TO the driver (the ncurses reads
         ``$(dirname "${wiz}")/phone-devices.tsv``, build-menu.sh:1778) so a stubbed
-        driver can ship its own catalog through the same env seam. CLASS-SCOPED,
+        driver can ship its own catalog through the same env override point. CLASS-SCOPED,
         exactly like the driver (main() switches DEVICES_TSV on --device-class):
         quest resolves quest-devices.tsv — `panther` is BOTH the Pixel 7 and the
         Quest 3S, so the class must pick the catalog."""

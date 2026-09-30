@@ -64,6 +64,11 @@ import {
 } from '../specs/rbac-route-access';
 import { SYSTEMS_SEED_USERS, generateSwarm } from '../specs/rbac-roles';
 import { shellRoster } from './dimensions';
+// Same quote-aware `--`/`/* */` stripper governance-sources.ts's sqlSeedRows()
+// already applies to this identical file — hugmesh-generator#379. ROW_RE below
+// used to run over the RAW file, so a `--` comment that merely NAMES a tuple
+// (e.g. documenting a row that was deliberately left out) parsed as a real one.
+import { stripComments } from '../specs/governance-sources';
 
 // ── 1. THE AUTHORITATIVE SEED ────────────────────────────────────────────────
 
@@ -91,6 +96,41 @@ const ROW_RE = /\(\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*(true|false
 let sqlRowCache: RouteRow[] | undefined;
 
 /**
+ * The row-extraction half of sqlRouteRows(), pulled out so it can be pinned
+ * directly against a small in-memory fixture rather than only against the
+ * live 20-schema.sql — hugmesh-generator#379. `sourceLabel` is only used in
+ * the zero-rows error message.
+ *
+ * Comments MUST be gone before ROW_RE runs. A `-- ('gateway', '/pattern',
+ * 'ROLE', true)`-shaped fragment inside a `--` line comment — documenting a
+ * row rather than seeding one — is otherwise indistinguishable from a real
+ * tuple to a regex that only looks for parens and quotes. stripComments is
+ * quote-aware, so a line- or block-comment opener that lives inside a quoted
+ * literal is not mistaken for a comment.
+ */
+export function parseRouteRowsFromSql(text: string, sourceLabel: string): RouteRow[] {
+  const clean = stripComments(text, '--');
+  const out: RouteRow[] = [];
+  for (const m of clean.matchAll(ROW_RE)) {
+    // The file also contains non-route 4-tuples in comments/DDL; a route row is
+    // identified by its gateway name, which is the ONLY thing in this file that
+    // matches /^hugmesh-.*gateway$/.
+    if (!/^hugmesh-[a-z0-9-]*gateway$/.test(m[1])) continue;
+    if (!m[2].startsWith('/')) continue;
+    out.push({ gateway: m[1], pattern: m[2], role: m[3], allow: m[4] === 'true' });
+  }
+  if (out.length === 0) {
+    throw new Error(
+      `parsed ZERO route rows out of ${sourceLabel}. The INSERT grammar changed `
+      + `(expected ('gateway', '/pattern', 'ROLE', true|false)). Fix this parser rather `
+      + `than letting the whole governance FUNCTION matrix decide against an empty table, `
+      + `which would make every ALLOW expectation fail and every DENY pass for free.`,
+    );
+  }
+  return out;
+}
+
+/**
  * Every gateway_route_access row the initdb seed inserts, parsed — never copied.
  * A copy is how the TS mirror drifted 19 governance rows behind in the first
  * place; this file exists to measure that gap, so it must not create a third
@@ -110,23 +150,7 @@ export function sqlRouteRows(): RouteRow[] {
       + `silent fallback would turn every one of those into a vacuous DENY that passes.`,
     );
   }
-  const out: RouteRow[] = [];
-  for (const m of text.matchAll(ROW_RE)) {
-    // The file also contains non-route 4-tuples in comments/DDL; a route row is
-    // identified by its gateway name, which is the ONLY thing in this file that
-    // matches /^hugmesh-.*gateway$/.
-    if (!/^hugmesh-[a-z0-9-]*gateway$/.test(m[1])) continue;
-    if (!m[2].startsWith('/')) continue;
-    out.push({ gateway: m[1], pattern: m[2], role: m[3], allow: m[4] === 'true' });
-  }
-  if (out.length === 0) {
-    throw new Error(
-      `parsed ZERO route rows out of ${SQL_SEED_PATH}. The INSERT grammar changed `
-      + `(expected ('gateway', '/pattern', 'ROLE', true|false)). Fix this parser rather `
-      + `than letting the whole governance FUNCTION matrix decide against an empty table, `
-      + `which would make every ALLOW expectation fail and every DENY pass for free.`,
-    );
-  }
+  const out = parseRouteRowsFromSql(text, SQL_SEED_PATH);
   sqlRowCache = out;
   return out;
 }

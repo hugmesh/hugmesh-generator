@@ -124,6 +124,32 @@
 #         PENTEST_PIPELINE = main (default) | games             (run-pentest --pipeline)
 # PENTEST_ONLY=1 runs ONLY the pen-test (skips the image builds + keys).
 #
+# Tor v3 onion NODE service (net-vpn/tor + hugmesh-tor-reconcile) — OPT-IN, fleet-wide:
+#   WITH_TOR=1 ./scripts/build-all-roles.sh   # every CLUSTER-NODE image of the run carries it
+# Emitted per builder through the channel THAT builder parses (a pass-through --with-tor
+# would reach builders that have no such flag):
+#   x86 node roles  -> --with-tor (the builder folds 'tor' into its OPTIONAL_SERVICES)
+#   rpi5 node roles -> --optional-services "<base> tor", where <base> is OPTIONAL_SERVICES
+#                      if you set it, else the rpi5 builder's OWN default (read from its
+#                      `OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-...}"` line, never copied
+#                      here) — --optional-services REPLACES that default, so a bare "tor"
+#                      would silently drop akkoma/tuwunel/phpbb from the node.
+#   client roles (x86 standalone-*, rpi5 desktop) and every other platform: nothing —
+#                      the onion is a k8s NODE service, and frite/jetson/orangepi builders
+#                      bake no net-vpn/tor at all (said in the summary, never a dead flag).
+# WITH_TOR=1 REFUSES (exit 2, before any build) where it cannot be honoured exactly —
+# each of these is about the rpi5 fold, so it applies only when an rpi5 NODE role will
+# build (an x86-only run needs none of them: --with-tor is additive in its builder):
+#   * a pass-through --optional-services/--all-services (put 'tor' in that list instead);
+#   * an OPTIONAL_SERVICES carrying the 'all' sentinel (the rpi5 builder's all-expansion
+#     keeps only the user-level set, so 'tor' would be dropped);
+#   * a brand profile (--config/-C, or ./brand.conf) that sets OPTIONAL_SERVICES while
+#     OPTIONAL_SERVICES is unset here (argv outranks brand.conf, so the fold would
+#     silently override the brand's narrowing — set OPTIONAL_SERVICES explicitly).
+# OPTIONAL_SERVICES itself is an ordinary env knob both node builders already read
+# (lowest tier: built-in < env < brand.conf < --optional-services); this script only
+# reads it as the rpi5 fold's base.
+#
 # Any extra args are passed through to BOTH builders, e.g.:
 #   ./scripts/build-all-roles.sh -j 16 --cluster-domain hugmesh.net
 #
@@ -349,6 +375,69 @@ elif [ "${ORANGEPI4LTS:-0}" = "1" ]; then
 fi
 ORANGEPI4LTS_FLAVOR_SEL="${ORANGEPI4LTS_FLAVOR:-both}"
 
+# ── WITH_TOR=1: resolve the per-builder Tor channel ONCE, fail closed before any build ──
+WITH_TOR="${WITH_TOR:-0}"
+RPI_TOR_SERVICES=""        # the rpi5 --optional-services value when WITH_TOR=1
+# Placed AFTER the role sets are resolved: every refusal below is about the rpi5 fold,
+# so it fires only when an rpi5 NODE role will actually build (x86's --with-tor is
+# additive in its own builder and needs none of them).
+_rpi_tor=false
+if [ "${WITH_TOR}" = "1" ]; then
+    for _r in "${RPI_ROLES[@]+"${RPI_ROLES[@]}"}"; do
+        if hugmesh_role_is_node_role "$(hugmesh_role_canonicalize "${_r}" 2>/dev/null || echo "${_r}")"; then
+            _rpi_tor=true
+        fi
+    done
+fi
+if ${_rpi_tor}; then
+    for _a in "$@"; do
+        case "${_a}" in
+            --optional-services|--all-services)
+                echo "!! WITH_TOR=1 with a pass-through ${_a}: the two would fight over one" >&2
+                echo "!!   allow-list. Put 'tor' in that list yourself (or drop WITH_TOR)." >&2
+                exit 2 ;;
+        esac
+    done
+    # The rpi5 builder's OWN default, read from its declaration (never a copy here).
+    # No `| head`: under pipefail a SIGPIPE'd sed would kill this assignment (set -e).
+    _rpi_default="$(sed -n 's/^OPTIONAL_SERVICES="\${OPTIONAL_SERVICES:-\(.*\)}"$/\1/p' "${BUILD_RPI}" 2>/dev/null || true)"
+    _rpi_default="${_rpi_default%%$'\n'*}"
+    if [ -z "${OPTIONAL_SERVICES:-}" ]; then
+        _cfg=""
+        for ((_i = 1; _i <= $#; _i++)); do
+            case "${!_i}" in -C|--config) _j=$((_i + 1)); _cfg="${!_j}" ;; esac
+        done
+        [ -z "${_cfg}" ] && [ -f "$(pwd)/brand.conf" ] && _cfg="$(pwd)/brand.conf"
+        if [ -n "${_cfg}" ] && grep -aEq '^[[:space:]]*(export[[:space:]]+)?OPTIONAL_SERVICES=' "${_cfg}" 2>/dev/null; then
+            echo "!! WITH_TOR=1: brand profile ${_cfg} sets OPTIONAL_SERVICES, and the rpi5 fold" >&2
+            echo "!!   is an --optional-services argv that would OVERRIDE it. Set OPTIONAL_SERVICES" >&2
+            echo "!!   to the brand's list yourself; WITH_TOR=1 then adds 'tor' to it." >&2
+            exit 2
+        fi
+        if [ -z "${_rpi_default}" ]; then
+            echo "!! WITH_TOR=1: could not read the rpi5 builder's default OPTIONAL_SERVICES" >&2
+            echo "!!   from ${BUILD_RPI} — refusing rather than guess the node's service set." >&2
+            exit 2
+        fi
+    fi
+    # Word-split with read (no glob expansion), commas tolerated like the builders do.
+    read -r -a _svcs <<< "${OPTIONAL_SERVICES:-${_rpi_default}}"
+    _svcs=("${_svcs[@]//,/ }")
+    read -r -a _svcs <<< "${_svcs[*]}"
+    case " ${_svcs[*]} " in
+        *" all "*)
+            echo "!! WITH_TOR=1 with OPTIONAL_SERVICES containing 'all': the rpi5 builder expands" >&2
+            echo "!!   'all' to the user-level set only and would DROP tor. List the services." >&2
+            exit 2 ;;
+        *" tor "*) ;;
+        *) _svcs+=(tor) ;;
+    esac
+    RPI_TOR_SERVICES="${_svcs[*]}"
+    unset _a _cfg _svcs _rpi_default
+fi
+unset _r _rpi_tor
+
+
 echo "==> RPi5 roles:  ${RPI_ROLES[*]:-(none)}  (board=${RPI_BOARD_SEL})"
 echo "==> x86 roles:   ${X86_BUILD_ROLES[*]:-(none)}"
 echo "==> Frite:       $([ "${BUILD_FRITE_IMG}" = true ] && echo "${FRITE_BOARD_SEL} (flavor=${FRITE_FLAVOR_SEL}, desktop=${FRITE_DESKTOP_SEL})" || echo '(off — set FRITE=1)')"
@@ -359,6 +448,11 @@ echo "==> OPi Zero 2W: $([ "${BUILD_ORANGEPIZERO2W_IMG}" = true ] && echo "(flav
 echo "==> OPi Zero 3: $([ "${BUILD_ORANGEPIZERO3_IMG}" = true ] && echo "(flavor=${ORANGEPIZERO3_FLAVOR_SEL}; EXPERIMENTAL, headless)" || echo '(off — set ORANGEPIZERO3=1)')"
 echo "==> OPi 3 LTS:  $([ "${BUILD_ORANGEPI3LTS_IMG}" = true ] && echo "(flavor=${ORANGEPI3LTS_FLAVOR_SEL}; EXPERIMENTAL, headless)" || echo '(off — set ORANGEPI3LTS=1)')"
 echo "==> OPi 4 LTS:  $([ "${BUILD_ORANGEPI4LTS_IMG}" = true ] && echo "(flavor=${ORANGEPI4LTS_FLAVOR_SEL}; EXPERIMENTAL, light desktop)" || echo '(off — set ORANGEPI4LTS=1)')"
+if [ "${WITH_TOR}" = "1" ]; then
+    echo "==> Tor onion:   ON — x86 node roles: --with-tor; rpi5 node roles: --optional-services \"${RPI_TOR_SERVICES}\"; client roles and frite/jetson/orangepi: none (no Tor on those builders)"
+else
+    echo "==> Tor onion:   (off — set WITH_TOR=1)"
+fi
 echo "==> Build ENV:   ${BUILD_ENV}  $([ "${BUILD_ENV}" = test ] && echo '(LAN-first; cluster wildcard DNS; cloudflared/ACME pruned)' || echo '(PROD: public domain; Cloudflare/ACME; creds from keys USB)')"
 echo "==> Pen-test:    $([ "${PENTEST}" = 1 ] && echo "ON (env=${PENTEST_ENV:-compose} scan=${PENTEST_SCAN:-baseline} pipeline=${PENTEST_PIPELINE:-main})$([ "${PENTEST_ONLY:-0}" = 1 ] && echo ' [PENTEST_ONLY]')" || echo '(off — set PENTEST=1 / --pentest)')"
 echo "    Work/target dir: ${WORK_DIR}"
@@ -370,11 +464,23 @@ echo
 # (whose FATAL gate then never runs). Accumulate failures and report them loudly at the
 # end instead, so one role's transient failure (fetch/OOM/ENOSPC) never voids the rest.
 BUILDS_FAILED=()
+# The Tor fold rides only CLUSTER-NODE roles: the onion is a k8s node service, and a
+# client image carrying net-vpn/tor is the #583 defect, not a feature.
+_tor_args_for() {  # $1 = platform (x86|rpi5), $2 = role -> prints nothing or the args, NUL-separated
+    [ "${WITH_TOR}" = "1" ] || return 0
+    hugmesh_role_is_node_role "$(hugmesh_role_canonicalize "$2" 2>/dev/null || echo "$2")" || return 0
+    case "$1" in
+        x86)  printf '%s\0' --with-tor ;;
+        rpi5) printf '%s\0' --optional-services "${RPI_TOR_SERVICES}" ;;
+    esac
+}
 for role in "${RPI_ROLES[@]}"; do
     echo "############################################################"
     echo "#  Building RPi role: ${role} (board=${RPI_BOARD_SEL})"
     echo "############################################################"
-    "${BUILD_RPI}" --role "${role}" --board "${RPI_BOARD_SEL}" "$@" \
+    TOR_ARGS=()
+    while IFS= read -r -d '' _t; do TOR_ARGS+=("${_t}"); done < <(_tor_args_for rpi5 "${role}")
+    "${BUILD_RPI}" --role "${role}" --board "${RPI_BOARD_SEL}" "$@" "${TOR_ARGS[@]+"${TOR_ARGS[@]}"}" \
         || { echo "!! RPi role '${role}' (board=${RPI_BOARD_SEL}) build FAILED — continuing with the remaining roles" >&2; BUILDS_FAILED+=("rpi-${RPI_BOARD_SEL}:${role}"); }
 done
 
@@ -397,7 +503,9 @@ for role in "${X86_BUILD_ROLES[@]}"; do
     echo "############################################################"
     echo "#  Building x86 role: ${role}"
     echo "############################################################"
-    "${BUILD_X86}" --role "${role}" "$@" \
+    TOR_ARGS=()
+    while IFS= read -r -d '' _t; do TOR_ARGS+=("${_t}"); done < <(_tor_args_for x86 "${role}")
+    "${BUILD_X86}" --role "${role}" "$@" "${TOR_ARGS[@]+"${TOR_ARGS[@]}"}" \
         || { echo "!! x86 role '${role}' build FAILED — continuing with the remaining roles" >&2; BUILDS_FAILED+=("x86:${role}"); }
 done
 

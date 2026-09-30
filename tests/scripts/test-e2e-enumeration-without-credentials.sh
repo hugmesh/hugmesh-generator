@@ -92,7 +92,12 @@ fi
 # SKIPS LOUDLY there and is counted as a skip, never as a pass.
 echo "-- 3. playwright --list with NO credential --"
 NM="${E2E_NODE_MODULES:-${E2E}/node_modules}"
-if [ ! -x "${NM}/.bin/playwright" ]; then
+if [ ! -x "${NM}/.bin/playwright" ] && [ "${E2E_REQUIRE_ENUMERATION:-}" = "1" ]; then
+  # The CI node job sets this. A leg that can only ever SKIP gates nothing, and
+  # the skip is exactly how it went unnoticed for weeks (#413): where the job
+  # promises an installed tests/e2e, its absence is a failure, not a skip.
+  bad "E2E_REQUIRE_ENUMERATION=1 but there is no Playwright at ${NM}/.bin/playwright — the job was supposed to install tests/e2e, and the real enumeration leg asserted nothing"
+elif [ ! -x "${NM}/.bin/playwright" ]; then
   skip "no Playwright at ${NM}/.bin/playwright — set E2E_NODE_MODULES=<installed tests/e2e/node_modules> to run the real enumeration leg (nothing in section 3 was asserted).
          SECTION 1 IS NOT A SUBSTITUTE: it reads source and resolves ONE level of
          indirection, so an eager resolution reached through a deeper chain, or
@@ -104,8 +109,15 @@ else
   # A COPY, so a listing can never touch the repo's tests/e2e — and so the
   # helpers' walk-up for .e2e-credentials cannot reach the repo root either,
   # which is the whole point: this must work with nothing seeded anywhere.
-  cp -r "${E2E}/specs" "${E2E}/reporters" "${E2E}/playwright.config.ts" \
-        "${E2E}/package.json" "${LIVE}/" 2>/dev/null
+  # EVERYTHING the config and the specs import, not a hand-picked subset: spec 34
+  # imports ../steps/governance and the config globs features/ and steps/, so a
+  # copy without them failed with "Cannot find module '../steps/governance'" —
+  # and this leg had never run in CI, so nobody saw it rot. A failed copy must be
+  # LOUD too (it used to be `2>/dev/null`): an incomplete copy is a broken leg,
+  # not an empty listing.
+  cp -r "${E2E}/specs" "${E2E}/reporters" "${E2E}/steps" "${E2E}/features" \
+        "${E2E}/playwright.config.ts" "${E2E}/package.json" "${LIVE}/" \
+    || { bad "could not copy tests/e2e into the scratch tree — the real enumeration leg cannot run"; }
   ln -snf "${NM}" "${LIVE}/node_modules"
   listing="${TMP}/listing.json"
   ( cd "${LIVE}" \
@@ -140,6 +152,43 @@ except Exception: print('      <unreadable>')
     bad "playwright --list enumerated ${suites} spec file(s) but reported ${errs} error(s) — a partial listing is not a pass"
   else
     ok "enumerated ${suites} spec file(s) with no credential, no browser and no stack"
+  fi
+fi
+
+# ── 4. the real leg must be WIRED where it can run, and must not be skippable ─
+# Section 3 sat SKIPPED in every CI run for weeks (#413): nothing installed
+# tests/e2e there. The fix is in the workflow, so the workflow is what must be
+# pinned, from its LIVE (uncommented) lines only, inside the node job block:
+#   - the suite is in that job's SUITES list,
+#   - `npm ci --prefix tests/e2e` runs there,
+#   - E2E_NODE_MODULES points at that install and E2E_REQUIRE_ENUMERATION is "1",
+#     which turns this suite's SKIP into a FAIL.
+# Drop any one and the leg silently reverts to gating nothing.
+echo "-- 4. CI wiring: the real enumeration leg runs in the node job and cannot SKIP --"
+WF="${REPO}/.github/workflows/shell-suites.yml"
+if [ ! -f "${WF}" ]; then
+  bad "${WF} not found — cannot prove the real enumeration leg is wired into CI"
+else
+  NODE_JOB="$(awk '
+    /^  node:[[:space:]]*$/ { inj=1; next }
+    inj && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { inj=0 }
+    inj && !/^[[:space:]]*#/ { print }
+  ' "${WF}")"
+  wiring_missing=""
+  printf '%s\n' "${NODE_JOB}" | grep -E '^[[:space:]]+tests/scripts/test-e2e-enumeration-without-credentials\.sh[[:space:]]*$' >/dev/null \
+    || wiring_missing="${wiring_missing} [suite not in the node job's SUITES list]"
+  printf '%s\n' "${NODE_JOB}" | grep -E '^[[:space:]]+npm ci --prefix tests/e2e[[:space:]]*$' >/dev/null \
+    || wiring_missing="${wiring_missing} [no 'npm ci --prefix tests/e2e' step]"
+  printf '%s\n' "${NODE_JOB}" | grep -E '^[[:space:]]+E2E_REQUIRE_ENUMERATION:[[:space:]]*"?1"?[[:space:]]*$' >/dev/null \
+    || wiring_missing="${wiring_missing} [E2E_REQUIRE_ENUMERATION is not 1, so a missing install SKIPs]"
+  printf '%s\n' "${NODE_JOB}" | grep -E '^[[:space:]]+E2E_NODE_MODULES:.*tests/e2e/node_modules' >/dev/null \
+    || wiring_missing="${wiring_missing} [E2E_NODE_MODULES does not point at tests/e2e/node_modules]"
+  if [ -z "$(printf '%s' "${NODE_JOB}" | tr -d '[:space:]')" ]; then
+    bad "the 'node:' job block could not be found in shell-suites.yml — the wiring cannot be verified"
+  elif [ -n "${wiring_missing}" ]; then
+    bad "the real enumeration leg is not wired into the CI node job:${wiring_missing}"
+  else
+    ok "the node job runs this suite with tests/e2e installed and E2E_REQUIRE_ENUMERATION=1 (the real leg cannot SKIP in CI)"
   fi
 fi
 
