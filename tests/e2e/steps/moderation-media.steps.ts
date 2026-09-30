@@ -918,3 +918,204 @@ Then('concurrent author-observer pairs each achieve read-after-write within {int
       await req.dispose();
     }
   });
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BDD coverage round 2026-09-23 (services lane) — generator#506, admin-bff-api#3,
+// auth-core#2, admin-bff-api#93. Every step below reuses the helpers this file
+// already carries (apiSignIn / primedGet / verdictOf / csrfHeaders) so the
+// Gherkin drives the SAME code spec 29 drives, and none of them starts a stack.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Fold the browser's cookie jar into the API vocabulary. `page.request` shares
+ * the page's cookies (spec 29's leg b+d relies on exactly this), so a governed
+ * path read after `I enroll …` / `I complete …` is read on the SAME identity the
+ * shipped wizard pages just stamped — the only way the enroll → challenge → flip
+ * chain can be one principal with factor freshness as its only changed input.
+ */
+Given('my browser session is also my API session', async ({ page, dimensions, world }) => {
+  world.set('api', page.request);
+  world.set('username', persona(requireDimension(dimensions, 'role')));
+});
+
+/**
+ * ENROLL at the shipped wizard (login-ui MfaEnrollComponent), verbatim from spec
+ * 29. A DARK admin-bff MFA surface renders the terminal `mfa-dark` step instead
+ * of the display-once secret; that is an unmet PRECONDITION (APP_CASDOOR_MFA_ENABLED
+ * + APP_MFA_FACTOR_KEY on the admin-bff under test), reported as a named skip so
+ * a dark stack never reads as a failed enrolment.
+ */
+When('I enroll a TOTP factor through the shipped wizard', async ({ page, world, $testInfo }) => {
+  await page.goto('/login/mfa/enroll');
+  await expect(page.getByTestId('mfa-enroll-view')).toBeVisible();
+  await page.getByTestId('mfa-choose-totp').click();
+  await expect(page.getByTestId('mfa-secret').or(page.getByTestId('mfa-dark'))).toBeVisible();
+  if ((await page.getByTestId('mfa-dark').count()) > 0) {
+    $testInfo.skip(
+      true,
+      'the admin-bff MFA surface is DARK (every /bff/mfa/* call 503s): login-ui rendered the '
+      + 'terminal mfa-dark step instead of the display-once secret. The stack under test must set '
+      + 'APP_CASDOOR_MFA_ENABLED=true AND APP_MFA_FACTOR_KEY on admin-bff (docs/MFA-ROLLOUT.md §2) '
+      + 'before TOTP enrolment can be driven.',
+    );
+    return;
+  }
+  // The base32 secret is display-once: read it BEFORE verify, which clears it.
+  const secret = (await page.getByTestId('mfa-secret').innerText()).trim();
+  expect(secret.length, 'display-once base32 secret shown').toBeGreaterThan(0);
+  const verifyPost = page.waitForResponse(
+    (r) => r.url().includes('/bff/mfa/enroll/totp/verify') && r.request().method() === 'POST',
+  );
+  await page.getByTestId('mfa-passcode').fill(totpCode(secret));
+  await page.getByTestId('mfa-verify-totp').click();
+  expect((await verifyPost).status(), 'POST /bff/mfa/enroll/totp/verify').toBe(200);
+  world.set('totpSecret', secret);
+});
+
+/** Display-once recovery codes are the proof the factor flipped ENABLED server-side. */
+Then('I am shown a fresh, display-once set of recovery codes', async ({ page }) => {
+  await expect(page.getByTestId('mfa-recovery')).toBeVisible();
+  await expect(page.getByTestId('mfa-recovery-codes')).not.toBeEmpty();
+  await page.getByTestId('mfa-recovery-done').click();
+});
+
+/**
+ * CHALLENGE at the shipped step-up page (login-ui MfaChallengeComponent). Enroll-
+ * verify stamped the accepted step as the replay floor, and TotpService.verifyAt
+ * accepts current±1 STRICTLY ABOVE it — so a code for step+1 verifies at once
+ * instead of sleeping out the 30-second window. Asserted on the RESPONSE (the
+ * component navigates away in the same tick it sets satisfied()).
+ */
+When('I complete a TOTP step-up challenge with the enrolled secret', async ({ page, world }) => {
+  const secret = world.get<string>('totpSecret');
+  expect(secret, 'no enrolled TOTP secret — run `I enroll a TOTP factor through the shipped wizard` first').toBeTruthy();
+  await page.goto('/login/mfa/challenge');
+  await expect(page.getByTestId('mfa-challenge-view')).toBeVisible();
+  await expect(
+    page.getByTestId('mfa-challenge-dark'),
+    'the step-up surface is DARK — see the enroll precondition',
+  ).toHaveCount(0);
+  await page.getByTestId('mfa-method-totp').check();
+  const challengePost = page.waitForResponse(
+    (r) => r.url().includes('/bff/mfa/challenge') && r.request().method() === 'POST',
+  );
+  await page.getByTestId('mfa-challenge-code').fill(totpCode(secret, 1));
+  await page.getByTestId('mfa-challenge-submit').click();
+  const challenged = await challengePost;
+  expect(challenged.status(), 'POST /bff/mfa/challenge').toBe(200);
+  expect((await challenged.json()).mfaSatisfied, 'the BFF stamped the session').toBe(true);
+});
+
+/**
+ * The FLIP read. The fresh stamp reaches the gateway through admin-bff introspect
+ * on the next request, so the verdict is polled out of DENIED (spec 29 polls the
+ * same way) and the END state is what the next Then asserts, hard.
+ */
+When('I request the governed path {string} until the gateway verdict settles',
+  async ({ world }, path: string) => {
+    const ctx = api(world);
+    let last = await primedGet(ctx, path);
+    const deadline = Date.now() + 30_000;
+    while (verdictOf(last) === 'DENIED' && Date.now() < deadline) {
+      await new Promise((f) => setTimeout(f, 2_000));
+      last = await primedGet(ctx, path);
+    }
+    world.set('governed', last);
+    world.set('governedPath', path);
+  });
+
+// ── the native sign-in body (admin-bff-api#3: per-role MFA defaults) ──────────
+//
+// `/bff/login` answers `{registrationComplete, status, mfaRequired}` today with
+// mfaRequired=false for everyone. admin-bff-api#3's remaining box 1 makes the
+// session seam consult role_mfa_policy: a role the policy REQUIRES MFA for must
+// not get an MFA-free session. Two fix shapes satisfy that (a 200 whose body says
+// mfaRequired=true, or a refusal to mint at all), so the privileged assertion
+// accepts either and the non-privileged one pins today's — and tomorrow's — 200.
+
+When('I sign in through the native login API as the persona for this scenario',
+  async ({ baseURL, dimensions, world }) => {
+    const handle = persona(requireDimension(dimensions, 'role'));
+    const ctx = await apiContext(baseURL);
+    openContexts.push(ctx);
+    const r = await ctx.post('/bff/login', {
+      data: { username: handle, password: personaPassword(handle) },
+      failOnStatusCode: false,
+    });
+    world.set('login', r);
+    world.set('api', ctx);
+    world.set('username', handle);
+  });
+
+async function loginBody(r: APIResponse): Promise<Record<string, unknown>> {
+  return (await r.json().catch(() => ({}))) as Record<string, unknown>;
+}
+
+Then('the native sign-in reports the session as MFA-gated', async ({ world }) => {
+  const r = world.get<APIResponse>('login');
+  const body = await loginBody(r);
+  const gated = r.status() !== 200 || body.mfaRequired === true;
+  expect(
+    gated,
+    `${world.get<string>('username')} POST /bff/login -> ${r.status()} ${JSON.stringify(body)}: `
+    + 'a role whose per-role MFA policy is REQUIRED (superadmin/admin) must not be handed an '
+    + 'MFA-free session — either mfaRequired=true on the 200, or no session minted at all',
+  ).toBe(true);
+});
+
+Then('the native sign-in mints a session that is not MFA-gated', async ({ world }) => {
+  const r = world.get<APIResponse>('login');
+  const body = await loginBody(r);
+  expect(r.status(), `${world.get<string>('username')} POST /bff/login -> ${JSON.stringify(body)}`).toBe(200);
+  expect(
+    body.mfaRequired,
+    `${world.get<string>('username')} is a role whose per-role MFA default is optional/relaxable, `
+    + `yet POST /bff/login answered ${JSON.stringify(body)}`,
+  ).toBe(false);
+});
+
+/**
+ * GET /bff/admin/mfa/role-policy (admin-bff-api#3 slice 1, PR #61) answers
+ * `{domain, policies:[{role, required, …}]}` with the built-in defaults when no
+ * row exists: superadmin=true, admin=true, mod=false, user=false.
+ */
+Then('the per-role MFA policy read lists {string} as MFA-required and {string} as not',
+  async ({ world }, requiredCsv: string, optionalCsv: string) => {
+    const r = world.get<APIResponse>('governed');
+    const path = world.get<string>('governedPath');
+    expect(r.status(), `${world.get<string>('username')} GET ${path} -> ${whyOf(r)}`).toBe(200);
+    const body = (await r.json()) as { policies?: Array<{ role: string; required: boolean }> };
+    const byRole = new Map((body.policies ?? []).map((p) => [p.role, p.required]));
+    const csv = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
+    for (const role of csv(requiredCsv)) {
+      expect(byRole.get(role), `${path}: role ${role} must be MFA-required (got ${JSON.stringify(body)})`).toBe(true);
+    }
+    for (const role of csv(optionalCsv)) {
+      expect(byRole.get(role), `${path}: role ${role} must NOT be MFA-required (got ${JSON.stringify(body)})`).toBe(false);
+    }
+  });
+
+// ── the mod-bff notify_channels directive (admin-bff-api#93, the wire half) ──
+//
+// mod-bff's BanRequest carries `notifyChannels` and AdminSuspensionClient puts it
+// in the body it POSTs to admin-bff. A TTL'd ban on the standing banned persona is
+// the least-destructive real write that exercises that path: the effect expires
+// on its own and touches a persona no other scenario expects to be unbanned.
+
+When('I ban {string} on platform {string} for {int} seconds with the notify channels {string}',
+  async ({ world }, target: string, platform: string, ttlSeconds: number, channelsCsv: string) => {
+    const ctx = api(world);
+    const notifyChannels = channelsCsv.split(',').map((s) => s.trim()).filter(Boolean);
+    const r = await ctx.post('/bff/mod/ban', {
+      headers: await csrfHeaders(ctx),
+      data: { platform, target, reason: 'bdd: notify_channels directive (admin-bff-api#93)', ttlSeconds, notifyChannels },
+      failOnStatusCode: false,
+    });
+    world.set('ban', r);
+  });
+
+Then('the ban was accepted as pending-reconcile with HTTP {int}', async ({ world }, status: number) => {
+  const r = world.get<APIResponse>('ban');
+  expect(r.status(), `POST /bff/mod/ban -> ${r.status()} ${(await r.text()).slice(0, 300)}`).toBe(status);
+});

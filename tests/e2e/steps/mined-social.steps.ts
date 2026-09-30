@@ -37,7 +37,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { expect } from '@playwright/test';
-import type { APIRequestContext } from '@playwright/test';
+import type { APIRequestContext, APIResponse } from '@playwright/test';
 import { Then, When, requireDimension } from './world';
 
 /** Repo root — steps/ is tests/e2e/steps, so three levels up. */
@@ -355,4 +355,54 @@ Then('the capability slug {string} reports installed {string}', async ({ world }
     + `enabled AND circuit-closed (CapabilityDto.from) — a registered, enabled, `
     + `circuit-closed module is the only thing the host shell will mount.`,
   ).toBe(installed);
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BDD coverage round 2026-09-23 (services lane) — forum-bff-api#1: the phpBB
+// suspend leg. forum-bff's ForumAdminController answers a ban with
+// `{state: applied|pending-reconcile, op, subject, external: <outcome>, note?}`:
+// 200 + state=applied when the phpBB extension really acknowledged it, 202 +
+// external="stubbed" while external.forum.enabled=false short-circuits the HTTP
+// call. The Then below asserts the REAL outcome the issue asks for, never the
+// stub, and the lift step leaves the shared persona as it found it.
+// ═══════════════════════════════════════════════════════════════════════════
+
+function forumApi(world: { get<T>(k: string): T }): APIRequestContext {
+  const ctx = world.get<APIRequestContext>('api');
+  if (!ctx) {
+    throw new Error('no API client — run `Given an API client signed in as the persona for this scenario` first');
+  }
+  return ctx;
+}
+
+When('the admin bans the forum subject {string} with the reason {string}',
+  async ({ world }, subject: string, reason: string) => {
+    const r = await forumApi(world).post(`/bff/forum/admin/users/${encodeURIComponent(subject)}/ban`, {
+      data: { reason },
+      failOnStatusCode: false,
+    });
+    world.set('forumBan', r);
+    world.set('forumBanBody', await r.text().catch(() => ''));
+  });
+
+Then('the forum ban reached phpBB as a real applied outcome', async ({ world }) => {
+  const r = world.get<APIResponse>('forumBan');
+  const text = world.get<string>('forumBanBody');
+  let body: Record<string, unknown> = {};
+  try { body = JSON.parse(text) as Record<string, unknown>; } catch { /* asserted below */ }
+  expect(r.status(), `POST /bff/forum/admin/users/{subject}/ban -> ${r.status()} ${text.slice(0, 300)}`).toBe(200);
+  expect(body.state, `the ban must be APPLIED in phpBB, not pending-reconcile: ${text.slice(0, 300)}`).toBe('applied');
+  expect(
+    body.external,
+    `the external outcome must be a real phpBB acknowledgement, never the "stubbed" short-circuit `
+    + `(external.forum.enabled=false): ${text.slice(0, 300)}`,
+  ).not.toBe('stubbed');
+});
+
+When('the admin lifts the forum ban on {string}', async ({ world }, subject: string) => {
+  const r = await forumApi(world).delete(`/bff/forum/admin/users/${encodeURIComponent(subject)}/ban`, {
+    failOnStatusCode: false,
+  });
+  expect([200, 202], `DELETE /bff/forum/admin/users/${subject}/ban -> ${r.status()}`).toContain(r.status());
 });

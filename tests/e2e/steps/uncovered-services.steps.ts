@@ -42,6 +42,8 @@ import { expect } from '@playwright/test';
 import { Then, requireDimension } from './world';
 import { shellRoster } from './dimensions';
 import { SYSTEMS_SEED_USERS } from '../specs/rbac-roles';
+import { runCli, cliVerdict, type CliTranscript } from './runners';
+import { siblingFile, siblingSkipReason } from '../specs/governance-sources';
 
 /** Repo root — steps/ is tests/e2e/steps, so three levels up. */
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -506,3 +508,225 @@ Then(
     ).not.toHaveLength(0);
   },
 );
+
+// ═════════════════════════════════════════════════════════════════════════════
+// BDD coverage round 2026-09-23 (services lane) — the steps the @issue:-tagged
+// scenarios under features/uncovered-services/ need and no shared step offers.
+// Each is a THEN over evidence a previous step already captured (a CLI
+// transcript, a served page, a committed artefact, a sibling checkout's source)
+// so the Gherkin stays declarative and the failure message names the file.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** The transcript key `common.steps.ts` stores `I run the shell command` under. */
+const CLI_TRANSCRIPT_KEY = 'cli.transcript';
+
+/**
+ * The NEGATIVE twin of common.steps.ts's `the command output contains`. Kept in
+ * this domain file rather than the shared vocabulary because the catalogue lane
+ * owns common.steps.ts; if that lane lands the same text this copy is the one
+ * to delete (a duplicate step text is a hard bddgen error, so it cannot drift).
+ */
+Then('the command output does not contain {string}', async ({ world }, needle: string) => {
+  const t = world.get<CliTranscript>(CLI_TRANSCRIPT_KEY);
+  expect(
+    `${t.stdout}\n${t.stderr}`,
+    `\`${t.command}\` (${cliVerdict(t)}) output CONTAINED ${JSON.stringify(needle)}, which it must not`,
+  ).not.toContain(needle);
+});
+
+/**
+ * A rendered attribute on a test-id'd element. The host shell's launcher cards
+ * carry their state as `data-state` (enabled | role | registration | absent),
+ * and a card that LOOKS clickable while its API refuses the persona is the
+ * exact card/API mismatch generator#310 records — so the state is asserted as
+ * an attribute value, never inferred from styling.
+ */
+Then('the element with test id {string} carries the attribute {string} equal to {string}',
+  async ({ page }, testId: string, attr: string, expected: string) => {
+    await expect(page.getByTestId(testId)).toHaveAttribute(attr, expected);
+  });
+
+// ── the admin-bff OpenAPI document (a SIBLING checkout, read-only) ───────────
+//
+// generator#300 step 10 / #302 step 10: the admin console fetches
+// GET /bff/games-services/catalog and no controller maps it, so the "Offered
+// servers" list stays empty. No seeded persona holds ROLE_GAMES_SERVICES, so the
+// gate cannot be walked through the BFF; the committed OpenAPI document that
+// admin-bff's OpenApiSpecDumpTest keeps in sync with the live handlers IS the
+// authoritative offline oracle for "does the endpoint exist". Sibling resolution
+// (SNAP_REPO_ROOT, or the directory holding hugmesh-generator) and the loud skip
+// reason are governance-sources.ts's, shared with the mined-governance features.
+
+const ADMIN_BFF_OPENAPI_REL = 'src/main/resources/openapi/openapi.json';
+
+Then('the admin-bff OpenAPI document declares the path {string}',
+  async ({ $testInfo }, wanted: string) => {
+    const src = siblingFile('hugmesh-admin-bff-api', ADMIN_BFF_OPENAPI_REL);
+    if (src === null) { $testInfo.skip(true, siblingSkipReason('hugmesh-admin-bff-api')); return; }
+    let doc: { paths?: Record<string, unknown> };
+    try {
+      doc = JSON.parse(src) as { paths?: Record<string, unknown> };
+    } catch (e) {
+      throw new Error(`hugmesh-admin-bff-api ${ADMIN_BFF_OPENAPI_REL} is not JSON: ${(e as Error).message}`);
+    }
+    const paths = Object.keys(doc.paths ?? {});
+    expect(paths.length, `${ADMIN_BFF_OPENAPI_REL} declares no paths at all`).toBeGreaterThan(0);
+    const neighbours = paths.filter((p) => p.startsWith(wanted.split('/').slice(0, 3).join('/'))).sort();
+    expect(
+      paths,
+      `admin-bff's committed OpenAPI document (${ADMIN_BFF_OPENAPI_REL}, kept in step with the `
+      + `live handlers by OpenApiSpecDumpTest) does NOT declare ${wanted}. The console fetches it `
+      + `(hugmesh-admin-ui bff.service.ts) and swallows the 404, so the offered-catalog list and `
+      + `the "Game server" select render empty. Paths under the same prefix today: `
+      + `${JSON.stringify(neighbours)}`,
+    ).toContain(wanted);
+  });
+
+// ── optional-service selection: the five cardinalities (generator#496) ───────
+//
+// #496 counts five different sizes for one supposedly 1:1 slug set. Three of
+// them live in THIS repo and are compared here by SET, not by count — a count
+// can agree while the members differ. The ConfigMap is asserted one way only
+// (every 13a element has a boolean): its extra keys are deliberate toggles for
+// things that are not optional services and #496 leaves "name each difference"
+// as an alternative to reconciling, so a strict equality there would invent a
+// decision. The admin-bff Java registry (the fifth cardinality) is cross-repo.
+
+const APPSET_13A_YAML = 'specs/cluster/apps/13a-optional-services.yaml';
+const OPT_CRD_YAML = 'specs/cluster/manifests/optional-services-operator/crd-optionalservice.yaml';
+const OPT_SEED_YAML = 'specs/cluster/manifests/optional-services-operator/seed-optionalservices.yaml';
+const INSTALLED_SERVICES_CM_YAML = 'specs/cluster/manifests/policy/installed-services-configmap.yaml';
+
+/** `- { slug: akkoma, path: …, installed: "false" }` rows of the 13a list generator. */
+function appset13aElements(): Array<{ slug: string; path: string; installed: string }> {
+  const out: Array<{ slug: string; path: string; installed: string }> = [];
+  for (const line of readRepoFile(APPSET_13A_YAML).split('\n')) {
+    const m = /^\s*-\s*\{\s*slug:\s*([a-z0-9-]+)\s*,\s*path:\s*([^,\s]+)\s*,.*installed:\s*"(true|false)"/.exec(line);
+    if (m) out.push({ slug: m[1], path: m[2], installed: m[3] });
+  }
+  return out;
+}
+
+/** The `spec.slug` enum of the OptionalService CRD (comment lines inside it skipped). */
+function crdSlugEnum(): string[] {
+  const text = readRepoFile(OPT_CRD_YAML);
+  const start = text.indexOf('slug:');
+  const enumAt = text.indexOf('enum:', start);
+  if (start < 0 || enumAt < 0) throw new Error(`${OPT_CRD_YAML}: no spec.slug enum found`);
+  const out: string[] = [];
+  for (const line of text.slice(enumAt + 'enum:'.length).split('\n')) {
+    const s = line.trim();
+    if (!s) continue;
+    if (s.startsWith('#')) continue;
+    const m = /^-\s*([a-z0-9-]+)$/.exec(s);
+    if (!m) break;
+    out.push(m[1]);
+  }
+  return out;
+}
+
+/** `metadata.name` of every `kind: OptionalService` CR in the seed. */
+function seedCrNames(): string[] {
+  const out: string[] = [];
+  const docs = readRepoFile(OPT_SEED_YAML).split(/^---\s*$/m);
+  for (const d of docs) {
+    if (!/kind:\s*OptionalService\b/.test(d)) continue;
+    const m = /metadata:\s*\n\s+name:\s*([a-z0-9-]+)/.exec(d);
+    if (m) out.push(m[1]);
+  }
+  return out;
+}
+
+/** The per-slug booleans of the installed-services ConfigMap `data:` block. */
+function installedServicesBooleans(): Record<string, string> {
+  const out: Record<string, string> = {};
+  let inData = false;
+  for (const line of readRepoFile(INSTALLED_SERVICES_CM_YAML).split('\n')) {
+    if (/^data:\s*$/.test(line)) { inData = true; continue; }
+    if (!inData) continue;
+    const m = /^  ([a-z0-9-]+):\s*"(true|false)"/.exec(line);
+    if (m) out[m[1]] = m[2];
+  }
+  return out;
+}
+
+const sortedUnique = (xs: string[]) => [...new Set(xs)].sort();
+
+Then('the optional-service slug sets agree across the 13a ApplicationSet, the CRD enum and the seed CRs',
+  async ({}) => {
+    const appset = sortedUnique(appset13aElements().map((e) => e.slug));
+    const crd = sortedUnique(crdSlugEnum());
+    const seed = sortedUnique(seedCrNames());
+    expect(appset.length, `${APPSET_13A_YAML} lists no elements`).toBeGreaterThan(0);
+    expect(crd, `CRD enum (${OPT_CRD_YAML}) vs 13a elements (${APPSET_13A_YAML})`).toEqual(appset);
+    expect(seed, `seed CRs (${OPT_SEED_YAML}) vs 13a elements (${APPSET_13A_YAML})`).toEqual(appset);
+  });
+
+Then('every 13a optional-service element has an installed-services ConfigMap boolean',
+  async ({}) => {
+    const booleans = installedServicesBooleans();
+    const missing = appset13aElements().map((e) => e.slug).filter((s) => !(s in booleans));
+    expect(
+      missing,
+      `13a elements with NO installed-services boolean (${INSTALLED_SERVICES_CM_YAML}) — `
+      + `a slug the renderer cannot flip: ${JSON.stringify(missing)}`,
+    ).toEqual([]);
+  });
+
+// ── optional-service selection on a LIVE cluster (generator#496 "Done when") ─
+//
+// The build-time selection is rendered into the installed-services ConfigMap
+// (the only artefact of the selection that reaches the cluster today). The
+// contract #496 asks for is that a service rendered `"false"` has NO ArgoCD
+// Application — and the hardcoded per-service Applications (apps/30-akkoma.yaml
+// …) are matched by their SOURCE PATH, not by name, because the §10 cut-over
+// that #496 records as never having happened is exactly a name that differs
+// (`akkoma` vs the ApplicationSet's `optional-akkoma`) over the same manifests.
+
+const KIND_CONTEXT = process.env.SNAP_KUBE_CONTEXT ?? 'kind-hugmesh-local';
+
+function kubectlJson(args: string[]): { transcript: CliTranscript; json: any | null } {
+  const transcript = runCli(['kubectl', '--context', KIND_CONTEXT, ...args, '-o', 'json'], { timeoutMs: 60_000 });
+  let json: any | null = null;
+  if (transcript.exitCode === 0) {
+    try { json = JSON.parse(transcript.stdout); } catch { json = null; }
+  }
+  return { transcript, json };
+}
+
+Then('every optional service the installed-services ConfigMap marks false has no ArgoCD Application on the cluster',
+  async ({ $testInfo }) => {
+    const cm = kubectlJson(['get', 'configmap', 'installed-services', '-n', 'hugmesh-policy']);
+    if (cm.transcript.spawnError) {
+      $testInfo.skip(true, `kubectl is not on PATH (${cm.transcript.spawnError}); this @env:kind scenario reads the live cluster through it.`);
+      return;
+    }
+    expect(
+      cm.json,
+      `kubectl --context ${KIND_CONTEXT} get configmap installed-services -n hugmesh-policy: `
+      + `${cliVerdict(cm.transcript)}\n${cm.transcript.stderr}`,
+    ).not.toBeNull();
+    const data: Record<string, string> = cm.json.data ?? {};
+    const deselected = Object.entries(data).filter(([, v]) => v === 'false').map(([k]) => k);
+    const pathsOf = new Map(appset13aElements().map((e) => [e.slug, e.path]));
+    const apps = kubectlJson(['get', 'applications.argoproj.io', '-A']);
+    expect(apps.json, `kubectl get applications.argoproj.io -A: ${cliVerdict(apps.transcript)}\n${apps.transcript.stderr}`).not.toBeNull();
+    const items: any[] = apps.json.items ?? [];
+    const offenders: string[] = [];
+    for (const slug of deselected) {
+      const srcPath = pathsOf.get(slug);
+      for (const app of items) {
+        const name: string = app.metadata?.name ?? '';
+        const sources: any[] = [app.spec?.source, ...(app.spec?.sources ?? [])].filter(Boolean);
+        const byPath = srcPath ? sources.some((s) => s.path === srcPath) : false;
+        const byName = name === `optional-${slug}` || name === slug;
+        if (byPath || byName) offenders.push(`${slug} -> Application ${app.metadata?.namespace}/${name}`);
+      }
+    }
+    expect(
+      offenders,
+      `installed-services marks these slugs "false" yet an ArgoCD Application still exists for them — `
+      + `the build-time selection did not reach the cluster (generator#496): ${JSON.stringify(offenders)}. `
+      + `Deselected: ${JSON.stringify(deselected)}`,
+    ).toEqual([]);
+  });
