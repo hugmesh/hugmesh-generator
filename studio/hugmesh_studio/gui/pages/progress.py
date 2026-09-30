@@ -66,6 +66,7 @@ from .. import console
 from .. import flag_badges
 from ..tray import write_build_status
 from ...core import build_sessions
+from ...core.build_driver import ElevationRefused, guard_elevation
 from ...core import flash_targets, flash_validate
 from ...core import qemu_tests
 from ...core import secret_files
@@ -306,9 +307,15 @@ class _FlashWorker(QtCore.QThread):
 
     def run(self) -> None:
         try:
+            # #304: this worker owns its own Popen, so BuildDriver._spawn's guard does not
+            # cover it. flash_argv() starts with `sudo -A`; guard_elevation refuses it
+            # under HUGMESH_STUDIO_NO_ELEVATION / pytest BEFORE the spawn (and before any
+            # prompt), and the refusal is reported like any other launch failure instead
+            # of escaping a QThread.run (PyQt6 qFatal).
+            guard_elevation(self._argv)
             proc = subprocess.Popen(self._argv, cwd=self._cwd, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, bufsize=1)
-        except OSError as e:
+        except (OSError, ElevationRefused) as e:
             self.line.emit(f"!! could not launch the flasher: {e}")
             self.done.emit(1)
             return

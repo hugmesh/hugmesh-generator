@@ -104,6 +104,15 @@ python -m hugmesh_studio --print-command --config my-image.json --backend docker
 The config's `platform` field (`x86` | `rpi5` | `frite` | `jetson` |
 `orangepi5` | `orangepizero2` | `orangepizero2w` | `orangepizero3` | `orangepi3-lts` |
 `orangepi4-lts`) selects the builder script the command targets.
+**Driving the GUI headlessly (offscreen)?** Export `HUGMESH_STUDIO_NO_ELEVATION=1`.
+A GUI-launched build's generated `SUDO_ASKPASS` helper passes `--askpass-gui` by design
+(it is the operator's real credential prompt), so a non-pytest harness that walks the
+real wizard under `QT_QPA_PLATFORM=offscreen` with `DISPLAY` set and WITHOUT the knob
+would run a root `sudo -A` build and block on a dialog nobody can see (the #288 wedge).
+With the knob set the driver and the flash worker refuse to spawn any elevation program.
+pytest is covered automatically; every other harness must set it where it is written
+(`scripts/render-all-images.py` does).
+
 This headless path is what the build-matrix harness (`make matrix-check` at
 the repo root) drives to prove the GUI channel agrees with the
 CLI/make/menu/job channels on every matrix cell.
