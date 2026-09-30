@@ -296,7 +296,7 @@ def test_a_config_that_already_recorded_its_domains_is_not_asked_twice(wiz):
     c = wiz.cfg
     c.mode, c.role, c.additional_domains = "mesh", "omnibus", True
     c.domains = [Domain(name="acme.example"), Domain(name="beta.example")]
-    c.domain_services_reviewed = ["acme.example", "beta.example"]
+    c.domain_services_reviewed = [c.cluster_domain, "acme.example", "beta.example"]
     wiz.restart()
     page = advance_to(wiz, page_mod.DomainServicesPage)
     assert page.unconfigured() == []
@@ -337,7 +337,7 @@ def test_launch_refuses_the_build_and_names_the_domain(wiz):
 def test_launch_lets_a_configured_build_through(wiz):
     page = _launch_page(wiz)
     wiz.cfg.domains = [Domain(name="acme.example")]
-    ds.record_reviewed(wiz.cfg, ["acme.example"])
+    ds.record_reviewed(wiz.cfg, [wiz.cfg.cluster_domain, "acme.example"])
     assert page._refuse() is False
     assert page.gate_err.isHidden()
     assert page.continue_card.isEnabled()
@@ -545,7 +545,7 @@ def test_the_continue_card_click_refuses_on_its_own(wiz, monkeypatch):
     monkeypatch.setattr(wiz, "next", lambda: nexts.append(1))
     page._continue()
     assert nexts == [], "the Continue card's own handler must refuse before next()"
-    ds.record_reviewed(wiz.cfg, ["unconfigured.example"])
+    ds.record_reviewed(wiz.cfg, [wiz.cfg.cluster_domain, "unconfigured.example"])
     page._continue()
     assert nexts == [1], "a configured build must still continue"
 
@@ -866,3 +866,54 @@ def test_the_own_row_mirrors_what_the_step_recorded(wiz):
     assert dom.table.cellWidget(0, 2).text() == "owncast"
     assert wiz.cfg.cluster_domain_services == ["owncast"]
     assert [d.name for d in wiz.cfg.domains] == ["acme.example"]
+
+
+# ── 11. #631 section 1: the OWN domain is gated on the build screen too ─────────────
+# Before #631 the gate read the table rows only, so the own domain's page was enforced
+# by being unavoidable on a fresh walk and nothing else — a config LOADED on the
+# Sessions screen that never opened it went straight through the build door.
+def test_a_loaded_config_that_never_walked_its_own_domain_is_refused(wiz):
+    page = _launch_page(wiz)
+    wiz.cfg.domains = [Domain(name="acme.example")]
+    ds.record_reviewed(wiz.cfg, ["acme.example"])      # rows walked, own domain never
+    assert page._refuse() is True
+    text = page.gate_err.text()
+    assert "1 domain has no recorded service configuration — " \
+        f"{wiz.cfg.cluster_domain}." in text
+    assert not page.continue_card.isEnabled()
+    assert page.validatePage() is False
+
+
+def test_the_default_card_with_no_walk_is_refused_by_name(wiz):
+    """#589's suggested test, on the real build screen: default card (no rows) + build
+    -> the refusal names the primary domain when its services were never confirmed."""
+    page = _launch_page(wiz)
+    assert wiz.cfg.domains == [] and wiz.cfg.domain_services_reviewed == []
+    assert page._refuse() is True
+    assert wiz.cfg.cluster_domain in page.gate_err.text()
+
+
+def test_walking_the_own_domains_page_is_what_lets_the_build_through(wiz):
+    """The page walk sets the marker — the remedy the refusal names works."""
+    c = wiz.cfg
+    c.mode, c.role = "mesh", "omnibus"
+    wiz.restart()
+    svc = advance_to(wiz, page_mod.DomainServicesPage)
+    assert svc.current_domain() == wiz.cfg.cluster_domain
+    assert ds.gate_reason(wiz.cfg) != ""               # shown, not yet recorded
+    assert svc.validatePage() is True
+    assert ds.gate_reason(wiz.cfg) == ""
+    assert wiz.cfg.domain_services_reviewed == [wiz.cfg.cluster_domain]
+
+
+def test_a_fresh_default_card_walk_reaches_a_launch_that_lets_it_through(wiz):
+    """An UNTOUCHED fresh flow is not blocked, and still emits no --domains, no
+    manifest domains entry and no cluster_domain_services (argv identity across the
+    services step itself is pinned above, by the default-path emission test)."""
+    _mesh_default_path(wiz)
+    launch = advance_to(wiz, wizard_mod.LaunchPage)
+    assert launch.gate_refusal() == ""
+    assert launch._refuse() is False and launch.continue_card.isEnabled()
+    assert "--domains" not in wiz.cfg.to_cli_args()
+    m = wiz.cfg.mesh_manifest()
+    assert m["domains"] == [] and "cluster_domain_services" not in m

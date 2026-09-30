@@ -31,6 +31,9 @@ from ..core.config import (
 from ..core.local_mesh_bootstrap import (
     LocalMeshBootstrap, LocalMeshIdentity, localcloud_tor_note, saved_mesh_source,
 )
+from ..core.local_mesh_domains import (
+    apply_imported_domains, imported_domains_lines, imported_mesh_domains,
+)
 from ..core.seeded_credentials import load_roster
 
 __all__ = ["ALLOWED_ROLES", "LocalCloudScreen", "apply_gate",
@@ -70,7 +73,7 @@ def _person_roles(roles) -> list[str]:
 
 def local_mesh_identity(generator_dir: str) -> LocalMeshIdentity:
     """The local mesh's importable identity: ``(apex domain, [(username, roles)...],
-    with_tor, source)`` — a :class:`LocalMeshIdentity`.
+    with_tor, source, mesh_domains)`` — a :class:`LocalMeshIdentity`.
 
     READ-ONLY and offline (plain file reads, no docker/compose probe — this runs in
     a screen's ``enter`` and must never stall the prompt loop). The mesh's CONFIG comes from the newest saved-mesh record
@@ -96,12 +99,17 @@ def local_mesh_identity(generator_dir: str) -> LocalMeshIdentity:
         if u.username not in seen:
             seen.add(u.username)
             users.append((u.username, _person_roles(u.roles)))
+    # #636: EVERY domain the saved mesh carries, not just the apex — the rows its
+    # Domains step recorded (title, sign-in, per-domain services) and which of them
+    # its Domain services step walked. None for a one-domain / pre-#494 record.
     return LocalMeshIdentity(domain, users, bool(boot.cfg.effective_with_tor()),
-                             saved_mesh_source(rec))
+                             saved_mesh_source(rec),
+                             imported_mesh_domains(boot.cfg) if rec is not None
+                             else None)
 
 
 def apply_gate(journey, domain: str, users: list[tuple[str, list[str]]],
-               with_tor: bool = False) -> None:
+               with_tor: bool = False, mesh_domains=None) -> None:
     """Commit the abbreviated mesh chain — the GUI gate's validatePage, mirrored.
 
     Applied ONCE per confirmed gate pass (the prompt loop has no collect_all
@@ -122,6 +130,9 @@ def apply_gate(journey, domain: str, users: list[tuple[str, list[str]]],
     journey.worklist_role_allow = ALLOWED_ROLES
     if domain:
         cfg.cluster_domain = domain
+    # EVERY DOMAIN, not just the apex (#636) — the GUI gate's call, the same core
+    # function, after cluster_domain (which tells the own row from the added ones).
+    apply_imported_domains(cfg, mesh_domains)
     # THE SAVED-MESH -> NODE-IMAGE BRIDGE (#579), the GUI gate's rule restated: a
     # mesh that ran Tor sets the mesh-wide onion default on the base (the network
     # step shows it and can clear it); materialize() emits it per platform. Only
@@ -156,6 +167,7 @@ class LocalCloudScreen:
         self._users: list[tuple[str, list[str]]] = []
         self._with_tor = False
         self._source = ""
+        self._mesh_domains = None
 
     def enter(self, j) -> None:
         # re-read on EVERY forward entry (the mesh may have been re-bootstrapped
@@ -165,6 +177,7 @@ class LocalCloudScreen:
         ident = LocalMeshIdentity(*local_mesh_identity(j.generator_dir))
         self._domain, self._users = ident.domain, list(ident.users)
         self._with_tor, self._source = bool(ident.with_tor), str(ident.source or "")
+        self._mesh_domains = ident.mesh_domains
 
     def lines(self, j) -> list[str]:  # noqa: ARG002 — screen-protocol signature
         listed = ", ".join(
@@ -183,6 +196,8 @@ class LocalCloudScreen:
             "  accounts: " + (listed or "none found on disk (unseeded or "
                                         "terminal-managed mesh)"),
             f"  Tor onion: {'on' if self._with_tor else 'off'}",
+            *[("  domains: " if i == 0 else "           ") + line
+              for i, line in enumerate(imported_domains_lines(self._mesh_domains))],
             *(["", localcloud_tor_note(PLATFORMS)] if self._with_tor else []),
             "",
             "If this mesh has already gone LIVE with real users, that stays "
@@ -203,7 +218,8 @@ class LocalCloudScreen:
 
     def feed(self, j, line: str) -> None:
         if line.lower() in ("y", "yes"):
-            apply_gate(j, self._domain, self._users, with_tor=self._with_tor)
+            apply_gate(j, self._domain, self._users, with_tor=self._with_tor,
+                       mesh_domains=self._mesh_domains)
             j.advance()                  # rejoin the mesh chain: idp -> worklist
             return
         # declining (or q/Enter/anything else) backs out with NOTHING committed

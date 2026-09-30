@@ -240,3 +240,47 @@ def test_real_reader_falls_back_on_a_malformed_newest_record(tmp_path):
     ident = _REAL_IDENTITY(_GEN)
     assert ident.source == "" and ident.with_tor is False
     assert ident.domain != "bad.example.org"
+
+
+# ── #636: a local mesh generated with N domains imports ALL of them (TUI face) ───────
+from hugmesh_studio.core.config import DOMAIN_IDP_OWN  # noqa: E402
+
+
+def _save_n_domains(tmp_path):
+    cfg = LocalMeshBootstrapConfig(
+        env="prod", cluster_domain="saved.example.org", out_dir=str(tmp_path / "keys"),
+        domains=({"name": "a.example", "title": "Alpha", "idp": "superdomain",
+                  "optional_services": ["phpbb"]},
+                 {"name": "b.example", "title": "Beta", "idp": DOMAIN_IDP_OWN,
+                  "optional_services": []}),
+        own_idp_domains=("b.example",),
+        domain_services_reviewed=("a.example",))
+    rec = sm.SavedMesh(id=sm.new_id(), label="three-domains", generator_dir=_GEN,
+                       hostname=socket.gethostname(), config=cfg.to_dict())
+    assert sm.save(rec)
+
+
+def test_tui_gate_imports_every_domain_of_the_saved_mesh(tmp_path, monkeypatch):
+    _save_n_domains(tmp_path)
+    monkeypatch.setattr(lc, "local_mesh_identity", _REAL_IDENTITY)
+    j = journey.Journey(_GEN)
+    j.feed("")
+    j.feed("2")
+    assert j.slug == "localcloud"
+    text = "\n".join(j.lines())
+    assert "domains: a.example — superdomain sign-in; services: phpbb" in text
+    assert "b.example — own Casdoor; services: cluster default " \
+        "(services not confirmed yet)" in text
+    j.feed("y")
+    assert j.cfg.cluster_domain == "saved.example.org"
+    assert [d.name for d in j.cfg.domains] == ["a.example", "b.example"]
+    assert j.cfg.own_idp_domains() == ("b.example",)
+    assert j.cfg.domains[0].optional_services == ["phpbb"]
+    assert j.cfg.additional_domains is True
+    assert j.cfg.domain_services_reviewed == ["a.example"]
+
+
+def test_tui_apply_gate_without_domains_imports_the_apex_only():
+    j = journey.Journey(".")
+    lc.apply_gate(j, "mesh.example.org", [])
+    assert j.cfg.domains == [] and j.cfg.additional_domains is False
