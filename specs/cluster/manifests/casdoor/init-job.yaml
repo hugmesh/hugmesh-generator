@@ -71,7 +71,7 @@ data:
     # casdoor's bootstrap default, so they burned the wrong-password budget at
     # 17:13:49Z and banned the account for fifteen minutes. This Job's CORRECT
     # "123" login was refused inside that window, and the message below told the
-    # operator to "reconcile secret/hugmesh/casdoor with the account's real
+    # operator to "reconcile secret/<brand>/casdoor with the account's real
     # password" about a secret that was byte-for-byte correct. `make kind-up`
     # exited 1 at 17:21:55Z on a cluster that converged by itself at 17:29:32Z.
     #
@@ -293,7 +293,7 @@ data:
         (hugmesh-generator#396). No password value is printed on any path."""
         if ADMIN_PASS == CASDOOR_BOOTSTRAP_PASSWORD:
             fail("the provisioned admin password IS the casdoor bootstrap default — "
-                 "rotate secret/hugmesh/casdoor in Vault; refusing to leave the IdP "
+                 "rotate secret/<brand>/casdoor in Vault; refusing to leave the IdP "
                  "on a publicly known credential")
             return False
         if try_login(ADMIN_PASS):
@@ -317,13 +317,13 @@ data:
         elif LOCKED_OUT:
             # NOT a wrong password. While the ban holds casdoor refuses the CORRECT
             # password too, so nothing observable from here can tell you whether
-            # secret/hugmesh/casdoor is right — and the old message confidently said
+            # secret/<brand>/casdoor is right — and the old message confidently said
             # it was wrong. Say what casdoor actually said, and name the thing that
             # spends this budget.
             fail("casdoor is refusing EVERY admin login: its sign-in throttle has "
                  f"banned the account ({LOCKED_OUT[0]!r}). This is NOT evidence of "
                  "a wrong password — the correct one is refused too while the ban "
-                 "holds, so do NOT rotate secret/hugmesh/casdoor on the strength of "
+                 "holds, so do NOT rotate secret/<brand>/casdoor on the strength of "
                  "this line. Something spent the account's wrong-password budget "
                  "before this Job got a turn; on a fresh cluster that is a sibling "
                  "Job in manifests/casdoor logging in with the provisioned password "
@@ -334,7 +334,7 @@ data:
             return False
         else:
             fail("admin login failed with BOTH the provisioned password and the "
-                 "casdoor bootstrap default — reconcile secret/hugmesh/casdoor with "
+                 "casdoor bootstrap default — reconcile secret/<brand>/casdoor with "
                  "the account's real password (nothing below can run)")
             return False
         # The exposure is the DEFAULT still working, so assert it does not. This is

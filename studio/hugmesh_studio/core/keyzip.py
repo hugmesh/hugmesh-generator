@@ -30,10 +30,10 @@ MAX_FILES = 5000
 
 #: The one environment override the whole Studio state family honours
 #: (``core.instance.state_dir``, ``core.build_sessions``, ``core.crashlog``). The
-#: key-zip host dirs were the ONE member of that family with no seam at all: they
+#: key-zip host dirs were the ONE member of that family with no override point at all: they
 #: were hard-coded to ``os.path.expanduser("~")``, so nothing — no test, no second
 #: profile, no sandbox — could point them anywhere else. Since :func:`extract`
-#: *recursively deletes* its staging dir before unpacking, "no seam" meant the
+#: *recursively deletes* its staging dir before unpacking, "no override point" meant the
 #: studio test suite wiped the operator's real ``~/.hugmesh/keyzip`` (staged
 #: Secure-Boot signing material and the offline vault bundle) on every run, green.
 STATE_DIR_ENV = "HUGMESH_STUDIO_STATE_DIR"

@@ -3,7 +3,7 @@
 Pins, in order of importance:
   1. ZERO REGRESSION: the default ("clone") mode produces a make-env byte-identical
      to the pre-field behaviour — no STACK_SRC, no STACK_NO_CLONE.
-  2. THE FOOTGUN GUARD: "existing" mode always pairs STACK_SRC with STACK_NO_CLONE=1,
+  2. THE EASY-MISTAKE GUARD: "existing" mode always pairs STACK_SRC with STACK_NO_CLONE=1,
      because `stack-up` depends unconditionally on `stack-clone`, whose update path
      `git reset --hard`s every checkout under STACK_SRC (clone-all-repos.sh:88-99) —
      pointed at the operator's own tree it would destroy uncommitted work. The
@@ -41,7 +41,7 @@ def test_default_clone_mode_env_is_byte_identical_to_pre_field_behaviour():
     assert "STACK_NO_CLONE" not in with_axis
 
 
-# ── 2. the footgun guard ───────────────────────────────────────────────────────────
+# ── 2. the easy-mistake guard ───────────────────────────────────────────────────────────
 def test_existing_mode_sets_stack_src_and_the_no_clone_interlock_as_a_pair(tmp_path):
     env = LocalStackNode(GENERATOR_DIR, source_mode="existing",
                          source_dir=str(tmp_path))._build_env()
