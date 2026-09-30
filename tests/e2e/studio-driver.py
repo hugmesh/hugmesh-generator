@@ -14,11 +14,29 @@ is constructed here, so a Studio regression shows up in this lane too.
 
 CONTRACT WITH THE NODE SIDE (steps/runners.ts:runStudio):
   * the LAST line of stdout is a single JSON object, always;
-  * on success  : {"ok": true,  "png": …, "page": …, "binding": …, "width": …, "height": …}
+  * on success  : {"ok": true,  "png": …, "page": …, "binding": …, "width": …, "height": …,
+                   "texts": [...], "controls": [...]}
   * on failure  : {"ok": false, "error": …}  and a non-zero exit code
   * everything else — Qt warnings, tracebacks — goes to stderr, which the runner
     keeps in the transcript. Never print diagnostics to stdout: a stray line
     would be parsed as the result.
+
+WHAT THE PAGE SAYS, NOT JUST WHAT IT LOOKS LIKE. `texts` is every visible label,
+group title, tree/table header and tree row on the page that was grabbed;
+`controls` is every button, choice card, checkbox and checkable tree row with its
+enabled state (and, for checkboxes, whether it is tri-state). A PNG proves a page
+rendered; it cannot prove that the refusal sentence on it names the right domain
+or that the Continue card is disabled. Steps assert on this report, so a grab of
+the wrong screen — or the right screen with the wrong words — cannot pass as
+evidence. The Studio has no test ids (it is Qt, not the web), so a control is
+named here by its VISIBLE text, exactly as the manual test plans name them.
+
+`--config PATH` loads a saved config through the SAME loader the GUI's
+"Load config…" button uses (StudioWizard.load_config -> worklist.load_any)
+before jumping to --page, so a scenario can photograph a page as the wizard
+would show it for a KNOWN configuration — e.g. the launch page refusing to build
+while a domain's services are unconfigured (#494/#495). It reads the file; it
+never writes it back and never builds.
 
 EXIT CODES
   0  grabbed (or --self-check / --list-pages succeeded)
@@ -82,6 +100,107 @@ def _reveal(page, widget) -> "None":
     for area in page.findChildren(QtWidgets.QScrollArea):
         if area.widget() is not None and area.widget().isAncestorOf(widget):
             area.ensureWidgetVisible(widget, 50, 50)
+
+
+def _enum_int(value) -> int:
+    """PyQt6 exposes Qt enums as Python enums (``.value``); PySide6 lets them act as
+    ints. One spelling for both, so the report does not depend on the binding."""
+    try:
+        return int(getattr(value, "value", value))
+    except (TypeError, ValueError):
+        return -1
+
+
+def _flag_has(flags, flag) -> bool:
+    return bool(_enum_int(flags) & _enum_int(flag))
+
+
+def _page_report(page) -> "tuple[list[str], list[dict]]":
+    """What the CURRENT page says: (visible texts, controls with their state).
+
+    Structural, not page-specific — it walks every QLabel / QAbstractButton /
+    QGroupBox / QTreeWidget / QTableWidget under the page, so it works on a page
+    whose layout changes and reports nothing a page does not actually show.
+    Visibility is relative to the page (``isVisibleTo``), so a hidden refusal
+    label (gate_err.hide()) is NOT reported as text the operator can read — that
+    difference is exactly what a gate assertion turns on.
+    """
+    from hugmesh_studio.gui.qt import QtCore, QtWidgets
+    texts: "list[str]" = []
+    controls: "list[dict]" = []
+
+    def vis(w) -> bool:
+        try:
+            return bool(w.isVisibleTo(page))
+        except RuntimeError:              # C++ side already gone
+            return False
+
+    def check_fields(entry: dict, box) -> None:
+        try:
+            entry["tristate"] = bool(box.isTristate())
+            entry["checkState"] = _enum_int(box.checkState())
+        except Exception:                 # noqa: BLE001 - report never throws
+            pass
+
+    for lab in page.findChildren(QtWidgets.QLabel):
+        t = (lab.text() or "").strip()
+        if t and vis(lab):
+            texts.append(t)
+    for box in page.findChildren(QtWidgets.QGroupBox):
+        t = (box.title() or "").strip()
+        if t and vis(box):
+            texts.append(t)
+    for btn in page.findChildren(QtWidgets.QAbstractButton):
+        t = (btn.text() or "").strip()
+        if not t and hasattr(btn, "title"):
+            # ChoiceCard is a QAbstractButton whose visible text is its title label.
+            try:
+                t = str(btn.title() or "").strip()
+            except Exception:             # noqa: BLE001
+                t = ""
+        entry = {"kind": type(btn).__name__, "text": t,
+                 "enabled": bool(btn.isEnabled()), "visible": vis(btn)}
+        if isinstance(btn, QtWidgets.QCheckBox):
+            check_fields(entry, btn)
+        controls.append(entry)
+    for tree in page.findChildren(QtWidgets.QTreeWidget):
+        if not vis(tree):
+            continue
+        cols = tree.columnCount()
+        hdr = tree.headerItem()
+        if hdr is not None:
+            texts.extend(h for h in ((hdr.text(c) or "").strip() for c in range(cols)) if h)
+
+        def walk(item) -> None:
+            cells = [(item.text(c) or "").strip() for c in range(cols)]
+            row = {"kind": "TreeItem", "text": " | ".join(c for c in cells if c),
+                   "enabled": _flag_has(item.flags(), QtCore.Qt.ItemFlag.ItemIsEnabled),
+                   "visible": not item.isHidden()}
+            if _flag_has(item.flags(), QtCore.Qt.ItemFlag.ItemIsUserCheckable):
+                row["tristate"] = _flag_has(item.flags(), QtCore.Qt.ItemFlag.ItemIsUserTristate)
+                row["checkState"] = _enum_int(item.checkState(0))
+            for c in range(cols):
+                w = tree.itemWidget(item, c)
+                if isinstance(w, QtWidgets.QCheckBox):
+                    check_fields(row, w)
+                    row["enabled"] = row["enabled"] and bool(w.isEnabled())
+            if row["text"] and row["visible"]:
+                texts.append(row["text"])
+            controls.append(row)
+            for i in range(item.childCount()):
+                walk(item.child(i))
+
+        for i in range(tree.topLevelItemCount()):
+            walk(tree.topLevelItem(i))
+    for table in page.findChildren(QtWidgets.QTableWidget):
+        if not vis(table):
+            continue
+        for c in range(table.columnCount()):
+            h = table.horizontalHeaderItem(c)
+            t = (h.text() or "").strip() if h is not None else ""
+            if t:
+                texts.append(t)
+    return texts, controls
 
 
 def _live_thread_names() -> "list[str]":
@@ -164,6 +283,12 @@ def main(argv: "list[str]") -> int:
                          "photograph of the real chooser holding the real "
                          "selection, and the result JSON reports what the page "
                          "ACTUALLY says it will run — not what we asked for.")
+    ap.add_argument("--config", metavar="PATH",
+                    help="load this saved config (flat JSON or worklist envelope) "
+                         "through StudioWizard.load_config — the GUI's own "
+                         "'Load config…' path — BEFORE jumping to --page, so the "
+                         "grab and the report show the page for a KNOWN config. "
+                         "Read-only: the file is never written back.")
     ap.add_argument("--width", type=int, default=1100)
     ap.add_argument("--height", type=int, default=760)
     args = ap.parse_args(argv)
@@ -221,6 +346,21 @@ def main(argv: "list[str]") -> int:
     wiz.resize(args.width, args.height)
     wiz.show()
     app.processEvents()
+
+    if args.config:
+        # The GUI's own loader (worklist.load_any behind "Load config…"), so a
+        # config that the Studio would refuse or migrate is refused or migrated
+        # here identically — a driver-private JSON reader would be a second
+        # loader that drifts. load_config() restarts the wizard; the --page
+        # jump below then re-lands on the requested page with cfg loaded.
+        cfg_path = os.path.abspath(args.config)
+        try:
+            wiz.load_config(cfg_path)
+            app.processEvents()
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc(file=sys.stderr)
+            _fail(4, "could not load --config %s through StudioWizard.load_config: "
+                     "%s: %s" % (cfg_path, type(exc).__name__, exc))
 
     page_name = type(wiz.currentPage()).__name__
     if args.page:
@@ -293,11 +433,34 @@ def main(argv: "list[str]") -> int:
     if not os.path.exists(dest) or os.path.getsize(dest) == 0:
         _fail(5, "grab wrote no bytes to %s" % dest)
 
+    # The page is reported by SLUG whenever the wizard can name it (the reverse of
+    # the slug -> id map it jumps by), so a scenario that grabs the ENTRY page
+    # with no --page can still assert which page the wizard opened on — which is
+    # exactly the question #538 asks (a running mesh should open on the monitor,
+    # not on welcome). The class name is kept alongside, as before.
+    ids = getattr(wiz, "_page_ids", None)
+    page_slug = args.page
+    if not page_slug and isinstance(ids, dict):
+        for slug, pid in ids.items():
+            if pid == wiz.currentId():
+                page_slug = slug
+                break
+    try:
+        texts, controls = _page_report(wiz.currentPage())
+    except Exception as exc:  # noqa: BLE001 - the grab is the evidence of record;
+        # a report failure is stated, never silently emptied.
+        traceback.print_exc(file=sys.stderr)
+        texts, controls = [], []
+        print("page report failed: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
+
     result = {
         "ok": True,
         "png": dest,
-        "page": args.page or page_name,
+        "page": page_slug or page_name,
         "pageClass": page_name,
+        "config": os.path.abspath(args.config) if args.config else None,
+        "texts": texts,
+        "controls": controls,
         "binding": binding,
         "width": pix.width(),
         "height": pix.height(),
