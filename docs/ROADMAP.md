@@ -150,47 +150,40 @@ version, size and checksum on the download page is a placeholder.
 ## Code TODOs
 
 172 TODO/FIXME comments across 25 repositories, each read in its surrounding source
-rather than judged by its text. What came back:
+rather than judged by its text. The first triage (2026-09-09) found 24 done, 19 isolated,
+70 needing coordination and 59 not work. After the #323 fan-out and a re-check on
+2026-09-24, it stands at:
 
 | | Count | Meaning |
 |---|---:|---|
-| ✅ already done | 24 | the work landed; the comment outlived it |
-| 🚧 isolated, fixable | 19 | one person, one repo, no decision needed |
-| 🔭 needs coordination | 70 | spans repos, or waits on a decision |
+| ✅ already done | 54 | the work landed; the comment outlived it |
+| 🚧 isolated, fixable | 0 | one person, one repo, no decision needed |
+| 🔭 needs coordination | 59 | spans repos, or waits on a decision |
 | — not work | 59 | a marker, a legend, or a deliberate placeholder |
 
 The full triage is in [`roadmap-todos.tsv`](roadmap-todos.tsv), one row per comment.
+A row that was re-checked says so and gives its evidence in a `[re-checked <date>]`
+prefix.
 
-### 24 comments describe work that already shipped
+### Nothing isolated is left
 
-These are the cheapest thing on this page: the code does the thing, and only the
-comment still says otherwise. Deleting them costs nothing and stops the next reader
-re-doing finished work. They cluster in `hugmesh-generator` (13) and
-`hugmesh-mastodon-ui` (5).
+Every isolated row has been either fixed or reclassified. The last few went like this:
 
-### 19 are isolated and fixable now
+- The `hugmesh-actions` token mint had already landed.
+- The `hugmesh-gateway` mTLS profile was already fixed at the root. A named fail-fast
+  landed in hugmesh-gateway#42 (merged 2026-09-30).
+- The `hugmesh-games` input gates 2/3 had shipped (PR #14, gate 3 off by default), so
+  their four rows are done. `bundle_source` in Studio waits on decisions its own TODO
+  spells out, so it moved to needs-coordination.
 
-| Repo | Location | Effort | What it asks for |
-|---|---|---|---|
-| `hugmesh-admin-bff-api` | `src/main/java/net/hugmesh/adminbff/imagegen/Fabric8ImageJobLauncher.java:76` | trivial | Suggests converting the KubernetesClient acquire/use/close inside apply() from a synchronous try-with-resources block to Mono.usingWhen for a more 'reactive' resource lifecycle |
-| `hugmesh-admin-bff-api` | `src/main/java/net/hugmesh/adminbff/storage/Fabric8NodeStorageConfigMapWriter.java:65` | trivial | Suggests converting the KubernetesClient acquire/use/close inside writeAssignments() from a synchronous try-with-resources block to Mono.usingWhen for a more 'reactive' resource lifecycle |
-| `hugmesh-admin-bff-api` | `src/main/java/net/hugmesh/adminbff/testreports/Fabric8JobLauncher.java:52` | trivial | Suggests converting the KubernetesClient acquire/use/close inside apply() from a synchronous try-with-resources block to Mono.usingWhen for a more 'reactive' resource lifecycle |
-| `hugmesh-generator` | `tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts:30` | small | Replace the test.skip() stub for 'host shell shows a ROLE_GAMES games entry-point only for games members' with a real Playwright assertion now that the host-shell UI it was waiting on has shipped |
-| `hugmesh-auth-core` | `src/main/java/net/hugmesh/authcore/account/BffSession.java:26` | small | Javadoc TODO noting that neither BffSession nor Account persists the Casdoor UUID `sub`, only the folded provider:handle id, and that a consumer needing the real subject would need a new nullable casdoor_sub column plus a version bump |
-| `hugmesh-mastodon-ui` | `src/app/notifications-column.component.ts:54` | small | Add auto-refresh to the notifications column — today it only re-fetches on an explicit filter switch/load-more/dismiss/clear-all, never on an interval or a push |
-| `hugmesh-actions` | `e2e/scripts/bring-up-stack.sh:76` | small | The token-minting step of the e2e stack bring-up script is a stub: it logs a TODO and writes an empty {} to e2e/.tokens.json instead of actually acquiring per-role bearer JWTs from Casdoor |
-| `hugmesh-gateway` | `checkstyle-suppressions.xml:18` | small | Verify whether this checkstyle-suppressions.xml is actually consumed by anything, since this repo's own pom.xml declares no checkstyle-maven-plugin/PMD/SpotBugs and deliberately opts out of the hugmesh-parent POM — then either wire checkstyle into this repo's build or remove the now-orphaned file |
-| `hugmesh-generator` | `specs/cluster/manifests/networkpolicy/tier-egress.yaml:109` | small | The five *-bff-db/federation-db pods are excluded from tier-egress but have no Egress NetworkPolicy anywhere, leaving their egress default-allow; add a DNS-only egress policy for them |
-| `hugmesh-games` | `docs/GODOT_DEVELOPER_GUIDE.md:7` | small | Finish the level->chapter terminology pass on this guide's prose (levels/level_id/level_assets/level_prerequisites -> chapters/chapter_id/chapter_assets/chapter_prerequisites) to match current source and CLAUDE.md's Naming section |
-| `hugmesh-generator` | `.gitlab-ci.yml:1668` | medium | Make the mesh-node key-zip generation step probeable/skippable so test_mesh_node_worklist_starts_all_images can rejoin the studio-suite CI job instead of being deselected |
-| `hugmesh-games` | `.gitlab-ci.yml:22` | medium | Add a real test-invocation stage (mvnw test / ng test / cargo test) to the pipeline; today build:image only compiles far enough to produce a runnable image, so a red unit/integration suite on main would not fail CI |
-| `hugmesh-pki-gateway` | `README.md:206` | medium | Add the two deployed `signup-gate-signup`/`signup-gate-login` routes (with a SIGNUP_GATE_URI env-overridable default) to this repo's application-pki.yml and the Liquibase gateway_routes seed, ahead of the casdoor-* routes, matching the generator's ArgoCD Application so a stack built from only this repo's local-dev mirror doesn't bypass the confusable-username signup gate |
-| `hugmesh-mod-ui` | `src/app/moderation-console.component.ts:278` | medium | Add the platform's MFA step-up gate (already shipped in admin-ui) in front of mod-ui's sensitive writes — ban/lift, domainLock/domainUnlock, and block — none of which currently require step-up MFA before submitting |
-| `hugmesh-generator` | `tests/qemu/docker-entrypoint.sh:1072` | medium | Suspected OpenRC ordering bug: keys-provision's start() inline-starts headscale via `rc-service headscale start` while its own depend() also declares it must run 'before headscale', a double-start race deliberately left unfixed until captured guest logs pin the exact failure |
-| `hugmesh-generator` | `tests/scripts/cluster_manifest_integrity.py:85` | medium | casdoor-pg and casdoor-games-pg are carried in the DB_ISOLATION_KNOWN_GAPS allowlist instead of getting the same per-pod NetworkPolicy + tier-ingress NotIn exclusion every other backend/pki Postgres pod already has under ADR-32 |
-| `hugmesh-games` | `backend/src/main/java/games/hugmesh/bff/controller/InputEventController.java:152` | medium | Implement gates 2 and 3 (features.<kind> and game_event_support) so InputEventController.submit() checks a game's enabled event kinds before accepting an event, beyond today's (kind,type) reference-row gate |
-| `hugmesh-games` | `docs/wiki/architecture/04-data-model.md:229` | medium | Implement validation gates 2 and 3 in InputEventController.submit() — checking the active game's games.features.<kind> flag and the game_event_support (game_slug, kind, type) opt-in table — so an input emit is refused (405) unless the game actually declared support for it, not just gate 1 (kind/type existing in the reference table) |
-| `hugmesh-generator` | `studio/hugmesh_studio/core/config.py:1808` | large | Give `bundle_source` a tri-state unset representation (like tailscale/sso) so it stops emitting unconditionally on out-of-scope node builds, now that the sequencing exemplar it was waiting on has landed |
+Open fixes for needs-coordination rows are named on the row itself:
+
+- hugmesh-admin-bff-api#113 for the registry half of #106
+- hugmesh-admin-bff-api#114 for the workload exec guard
+- hugmesh-admin-ui#13 for step-up forwarding (merged; its two rows are now done)
+- hugmesh-admin-ui#14 for the adminGuard decision
+
+Such a row flips to done only when its PR merges.
 
 ### Not work, and staying
 

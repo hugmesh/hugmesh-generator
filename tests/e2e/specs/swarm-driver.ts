@@ -186,7 +186,13 @@ export async function expectSse(
  */
 export async function assertDisabledHasHelptext(page: Page, testId: string): Promise<void> {
   const el = page.getByTestId(testId);
-  await expect(el, `${testId} should be disabled for this role`).toBeDisabled();
+  // toBeDisabled() honours aria-disabled ONLY on elements carrying an ARIA widget
+  // role. The host shell greys a launcher card as a role-less
+  // <span aria-disabled="true"> (home-services.component.html), which toBeDisabled()
+  // reads as ENABLED — so an explicit aria-disabled="true" counts on its own.
+  if ((await el.getAttribute('aria-disabled')) !== 'true') {
+    await expect(el, `${testId} should be disabled for this role`).toBeDisabled();
+  }
   const describedBy = await el.getAttribute('aria-describedby');
   const title = await el.getAttribute('title');
   const reason = await el.getAttribute('data-disabled-reason');
