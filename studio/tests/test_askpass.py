@@ -13,7 +13,7 @@ helper passes for a GUI-launched build), and the terminal prompt needs a termina
 STDIN. A helper with no credential source, no TTY and no opt-in fails fast — exit 1,
 nothing on stdout, CANCEL_MARKER on stderr — even with DISPLAY set. Before this the
 same shape (a pytest run, QT_QPA_PLATFORM=offscreen, on a desktop) blocked forever on
-an invisible dialog, and 60 root-owned `sudo -A` launchers were found wedged.
+an invisible dialog, and 60 root-owned `sudo -A` launchers were found hung.
 """
 import io
 import os
@@ -194,6 +194,22 @@ def test_cli_flags_plumb_allow_gui_to_the_helper(monkeypatch):
     assert app.main(["--askpass-gui"]) == 0
     assert app.main(["--askpass-gui", "--askpass-no-gui"]) == 0
     assert seen == [False, False, True, False]
+
+
+def test_no_gui_flag_help_says_the_terminal_prompt_needs_stdin_on_a_tty(capsys):
+    """#370 (Decision 96 = A): the stricter stdin-must-be-a-TTY rule stays, so the
+    `--askpass-no-gui` help text must say so (it used to read as the pre-#289 relaxed
+    rule). Pinned on the rendered `--help`, whitespace-normalised: the flag's paragraph
+    must carry the stdin condition, like `--askpass`'s does."""
+    from hugmesh_studio import app
+
+    with pytest.raises(SystemExit):
+        app.main(["--help"])
+    text = " ".join(capsys.readouterr().out.split())
+    start = text.index("kept for #221 scripts")
+    end = text.index("--config", start)
+    para = text[start:end]
+    assert "stdin is a TTY" in para or "stdin must be a TTY" in para, para
 
 
 def test_run_askpass_defaults_to_no_dialog(monkeypatch):
@@ -415,7 +431,7 @@ def test_integration_cancel_aborts_the_inner_command(tmp_path):
 def _headless_env(helper, **extra):
     """No credential source, no TTY (see _run_detached), and a display that LOOKS
     reachable (DISPLAY set — _display_available() is True on any box) rendered
-    offscreen: the exact shape of the wedged pytest launchers."""
+    offscreen: the exact shape of the hung pytest launchers."""
     env = {**os.environ, "SUDO_ASKPASS": str(helper), "DISPLAY": ":99",
            "QT_QPA_PLATFORM": "offscreen", **extra}
     for k in (askpass.PASSWORD_ENV, askpass.COMMAND_ENV, askpass.NO_ELEVATION_ENV,
@@ -446,7 +462,7 @@ def test_integration_headless_helper_fails_fast_even_with_a_display(tmp_path):
 def test_integration_no_elevation_env_refuses_even_the_gui_opt_in(tmp_path):
     """Defence in depth: even the driver's own --askpass-gui helper answers nothing
     under HUGMESH_STUDIO_NO_ELEVATION (sudo hands the helper the caller's env — measured
-    on the wedged launchers: DISPLAY, HOME, QT_QPA_PLATFORM all reached it)."""
+    on the hung launchers: DISPLAY, HOME, QT_QPA_PLATFORM all reached it)."""
     helper, stub = _write_helper(tmp_path, flag="--askpass-gui")
     env = _headless_env(helper)
     env[askpass.NO_ELEVATION_ENV] = "1"
@@ -511,7 +527,7 @@ def test_from_terminal_declines_on_a_non_tty_stdin_even_with_a_controlling_tty()
 
 
 def test_from_terminal_never_reads_stdin_without_a_controlling_tty():
-    """The /dev/tty openability probe in _from_terminal is load-bearing: without a
+    """The /dev/tty openability probe in _from_terminal is relied on: without a
     controlling terminal, getpass's own fallback reads sys.stdin WITH ECHO — never an
     acceptable place for a password. Run the real function in a fresh session (no
     ctty) with a line waiting on stdin and pin that it declines (None) instead of

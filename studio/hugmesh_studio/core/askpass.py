@@ -25,7 +25,7 @@ Nothing else may touch that stdout. So this module obeys three rules:
   where ``DISPLAY`` is set. Before this rule, that exact shape (a pytest run
   under ``QT_QPA_PLATFORM=offscreen`` on a desktop) fell through to an invisible
   offscreen dialog and blocked forever: 60 root-owned ``sudo -A`` launchers were
-  found wedged on 2026-09-04, some two days old.
+  found hung on 2026-09-04, some two days old.
 
 Acquisition order (first that can answer wins):
 

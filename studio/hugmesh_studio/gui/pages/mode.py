@@ -62,6 +62,79 @@ _MODE_ICONS = {
 
 _GENTOO_URL = "https://www.gentoo.org/"
 
+#: The three IMAGE modes — the only values ``cfg.mode`` ever holds — with the title
+#: their Mode-screen card carries. ONE table, read by ModePage's cards AND by the QEMU
+#: page's "Build new images first" arm (#631 lane, item 4), which rejoins the image flow
+#: without passing this screen and must name the same three builds the same way.
+IMAGE_MODE_TITLES = {
+    "mesh": "Mesh node",
+    "cloud": "Mesh desktop client",
+    "standalone": "Standalone Gentoo desktop",
+}
+
+
+def commit_image_mode(wiz, mid: str) -> None:
+    """Commit IMAGE mode ``mid`` ("standalone" | "cloud" | "mesh") to ``wiz.cfg`` —
+    exactly what picking that card on the Mode screen does, and the ONE place it is
+    done: ModePage.validatePage calls it, and so does QemuPage's build-first arm, the
+    one route into the image flow that does not pass the Mode screen (its "Run e2e
+    tests" card commits no mode, so before this the build it rejoined took whatever
+    ``cfg.mode`` an EARLIER flow had left behind).
+
+    Idempotent for a re-commit of the mode already held (``collect_all()`` re-runs a
+    visited page's validatePage): ``fresh=`` and the worklist reset key off the
+    TRANSITION, never off the call."""
+    if mid not in IMAGE_MODE_TITLES:
+        raise ValueError(f"not an image mode: {mid!r}")
+    prev = wiz.cfg.mode
+    wiz.cfg.mode = mid
+    # a role from another mode is meaningless here — reset to the mode default
+    # (RolePage preselects it and lets the user pick any role in the catalog; mesh
+    # uses the WorklistPage, whose default row derives from this reset role)
+    if wiz.cfg.role not in {r for r, _, _ in ROLE_CHOICES[mid]}:
+        wiz.cfg.role = MODE_DEFAULT_ROLE[mid]
+    # bundle the generator source only for standalone (self-hosting appliance);
+    # cloud/mesh client images keep it off, mirroring the build script's default.
+    # The UNAFFILIATED role must stay clear: bundling the HugMesh source is a
+    # builder hard-conflict there (RolePage clears it again when it's picked).
+    wiz.cfg.bundle_source = (mid == "standalone"
+                             and wiz.cfg.role != UNAFFILIATED_ROLE)
+    if mid == "mesh":
+        # entering mesh: clear the desktop-class surfaces (theming/home/tailnet-SSO)
+        # and force tailscale=sso on off-UI (materialize re-forces them per image),
+        # so a mesh node can never carry a theme or a stale desktop option (I4).
+        #
+        # fresh= distinguishes ARRIVING in mesh from re-walking the Mode step of a
+        # flow that is already mesh. Only the arrival seeds the ask-12 encrypted-root
+        # default: re-walking must never re-tick a box the operator has since
+        # un-ticked on the Home step (which stepping Back through here would
+        # otherwise do on every pass).
+        enter_mesh_defaults(wiz.cfg, fresh=(prev != "mesh"))
+        if prev != "mesh":
+            wiz.worklist = None      # fresh worklist on transition into mesh
+    else:
+        if prev == "mesh":
+            # leaving mesh (any direction): stranded worklist rows must not survive a
+            # mode switch (same rationale as the standalone admin-plane clear below).
+            wiz.worklist = None
+        if mid == "standalone":
+            # standalone SKIPS the worklist/key-zip/domains/users pages
+            # (MODE_SKIPPED_PAGES) — clear anything a previously visited cloud/mesh
+            # flow parked in the config, so pages the user can no longer reach can't
+            # strand stale state into save() or the emitted argv. Spec 3: standalone
+            # images have no tailnet, so tailscale/sso are forced off (always emitted
+            # as --no-tailscale/--no-sso).
+            wiz.cfg.keyzip = ""
+            wiz.cfg.domains = []
+            wiz.cfg.users = []
+            # ...and the two ask-19/20 FLOW flags that gate their tables. They are
+            # mesh-only state; a standalone flow sees neither choice screen, so a
+            # True left over from a mesh detour would be unreachable-but-saved.
+            wiz.cfg.additional_domains = False
+            wiz.cfg.configure_users = False
+            wiz.cfg.tailscale = False
+            wiz.cfg.sso = False
+
 
 class ModePage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
@@ -105,7 +178,7 @@ class ModePage(QtWidgets.QWizardPage):
              "accounts and offers ONLY the laptop and node image types. The local "
              "k8s (DevOps) stack must stop first — the next screen asks you to "
              "confirm that."),
-            ("mesh", "Mesh node",
+            ("mesh", IMAGE_MODE_TITLES["mesh"],
              "Superadmin: build the server node image(s) — PKI, backend, frontend, GPU, "
              "edge-AI — that run a mesh on dedicated hardware."),
             # RUN E2E TESTS took the slot the "QEMU device tests" card held until
@@ -139,10 +212,10 @@ class ModePage(QtWidgets.QWizardPage):
              "Enroll a USB Meta Quest 3/3S as an MDM-managed mesh device (Headwind + "
              "tailnet + XR-chat URL) — no image build, no flash. Same driver, quest "
              "device class."),
-            ("cloud", "Mesh desktop client",
+            ("cloud", IMAGE_MODE_TITLES["cloud"],
              "Build a branded desktop that JOINS an existing mesh (tailnet + SSO). "
              "Load your admin-provided key-zip or configuration link."),
-            ("standalone", "Standalone Gentoo desktop",
+            ("standalone", IMAGE_MODE_TITLES["standalone"],
              "A personal hardened LUKS/SELinux desktop — or a plain UNAFFILIATED Gentoo "
              "desktop with zero HugMesh branding/tooling. No mesh, no SSO."),
         ]
@@ -256,52 +329,8 @@ class ModePage(QtWidgets.QWizardPage):
         if mid in ("localmesh", "phone", "quest", "deploy", "e2e", "meshemu",
                    "localcloud"):
             return True
-        prev = self.wiz.cfg.mode
-        self.wiz.cfg.mode = mid
-        # a role from another mode is meaningless here — reset to the mode default
-        # (RolePage preselects it and lets the user pick any role in the catalog; mesh
-        # uses the WorklistPage, whose default row derives from this reset role)
-        if self.wiz.cfg.role not in {r for r, _, _ in ROLE_CHOICES[mid]}:
-            self.wiz.cfg.role = MODE_DEFAULT_ROLE[mid]
-        # bundle the generator source only for standalone (self-hosting appliance);
-        # cloud/mesh client images keep it off, mirroring the build script's default.
-        # The UNAFFILIATED role must stay clear: bundling the HugMesh source is a
-        # builder hard-conflict there (RolePage clears it again when it's picked).
-        self.wiz.cfg.bundle_source = (mid == "standalone"
-                                      and self.wiz.cfg.role != UNAFFILIATED_ROLE)
-        if mid == "mesh":
-            # entering mesh: clear the desktop-class surfaces (theming/home/tailnet-SSO)
-            # and force tailscale=sso on off-UI (materialize re-forces them per image),
-            # so a mesh node can never carry a theme or a stale desktop option (I4).
-            #
-            # fresh= distinguishes ARRIVING in mesh from re-walking the Mode step of a
-            # flow that is already mesh. Only the arrival seeds the ask-12 encrypted-root
-            # default: re-walking must never re-tick a box the operator has since
-            # un-ticked on the Home step (which stepping Back through here would
-            # otherwise do on every pass).
-            enter_mesh_defaults(self.wiz.cfg, fresh=(prev != "mesh"))
-            if prev != "mesh":
-                self.wiz.worklist = None      # fresh worklist on transition into mesh
-        else:
-            if prev == "mesh":
-                # leaving mesh (any direction): stranded worklist rows must not survive a
-                # mode switch (same rationale as the standalone admin-plane clear below).
-                self.wiz.worklist = None
-            if mid == "standalone":
-                # standalone SKIPS the worklist/key-zip/domains/users pages
-                # (MODE_SKIPPED_PAGES) — clear anything a previously visited cloud/mesh
-                # flow parked in the config, so pages the user can no longer reach can't
-                # strand stale state into save() or the emitted argv. Spec 3: standalone
-                # images have no tailnet, so tailscale/sso are forced off (always emitted
-                # as --no-tailscale/--no-sso).
-                self.wiz.cfg.keyzip = ""
-                self.wiz.cfg.domains = []
-                self.wiz.cfg.users = []
-                # ...and the two ask-19/20 FLOW flags that gate their tables. They are
-                # mesh-only state; a standalone flow sees neither choice screen, so a
-                # True left over from a mesh detour would be unreachable-but-saved.
-                self.wiz.cfg.additional_domains = False
-                self.wiz.cfg.configure_users = False
-                self.wiz.cfg.tailscale = False
-                self.wiz.cfg.sso = False
+        # The image-mode commit itself lives in ONE function, shared with the one
+        # route into the image flow that does not pass this screen (QemuPage's
+        # build-first arm) — see commit_image_mode.
+        commit_image_mode(self.wiz, mid)
         return True

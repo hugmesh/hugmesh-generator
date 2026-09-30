@@ -1315,15 +1315,15 @@ if ${EDGE_AI_WANT}; then
     esac
 fi
 
-# Tor NODE service selection: --with-tor folds 'tor' onto any k8s role (idempotent).
-# Never auto-selected — purely opt-in via --with-tor / OPTIONAL_SERVICES. A
-# CLIENT/standalone desktop is not a cluster member, so it is a no-op there (and the
-# SVCS/PKGS gate below also guards on !ROLE_CLIENT).
+# Tor NODE service selection: --with-tor folds 'tor' into OPTIONAL_SERVICES
+# (idempotent). Never auto-selected — purely opt-in via --with-tor / OPTIONAL_SERVICES /
+# brand.conf. The fold stays HERE (before the EXCLUDE_SERVICES leg, so
+# --exclude-services tor still wins). It does NOT decide the CLIENT case: ROLE_CLIENT
+# is resolved by the role case block further down, so a check here would read its
+# `false` default for every role — it did, and `--with-tor --role desktop` emerged
+# net-vpn/tor on a desktop (hugmesh-generator#583 item 6). The CLIENT strip lives
+# right after the STANDALONE fold ("Tor NODE service: CLIENT roles never carry it").
 WANT_TOR="${WANT_TOR:-}"
-if [ "${WANT_TOR}" = "true" ] && ${ROLE_CLIENT}; then
-    warn "--with-tor on a CLIENT/standalone role has no effect (no cluster tree); the Tor onion service is a k8s NODE service."
-    WANT_TOR=false
-fi
 if [ "${WANT_TOR}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
         *" tor "*) ;;
@@ -1631,6 +1631,22 @@ case "${ROLE}" in
         exit 1 ;;
 esac
 
+# ── Tor NODE service: the ONE predicate (hugmesh-generator#583) ───────────────────
+# The onion is a k8s NODE service fronting the cluster's fe-gateway; a CLIENT /
+# standalone / unaffiliated desktop has no cluster to front. _tor_node_selected is the
+# single predicate every tor gate below (SVCS, PKGS, PLAN_TOR_ONION) calls; it reads
+# ROLE_CLIENT at CALL time, so it is right however late ROLE_CLIENT settles. The
+# CLIENT selection itself is dropped (with a warning) after the STANDALONE fold below
+# — the last place ROLE_CLIENT changes (`--role backend --standalone` turns a node
+# role into a client there).
+# TOR_NODE_PACKAGES / TOR_NODE_SERVICES must equal the tor entry's nodePackages /
+# nodeServices in specs/cluster/optional-services.yaml (pinned by
+# tests/scripts/test-tor-node-contract.sh). Decision 70 = B on #347: the DISTRO tor
+# service is linked TOO, and hugmesh-tor-reconcile converges it idempotently.
+TOR_NODE_PACKAGES=(net-vpn/tor)
+TOR_NODE_SERVICES=(tor hugmesh-tor-reconcile)
+_tor_node_selected() { ! ${ROLE_CLIENT} && _opt_selected tor; }
+
 # ── UNAFFILIATED plain desktop (composable: --unaffiliated onto any client/
 # standalone role, or the standalone-unaffiliated role arm above). Runs BEFORE
 # the STANDALONE fold so the STANDALONE=true it forces is folded normally.
@@ -1733,6 +1749,22 @@ if ${STANDALONE}; then
     INSTALLER_ISO=true          # guarantee the installer artifact (the FDE path)
     [ -z "${LOCAL_USER}" ] && LOCAL_USER="${DEFAULT_USER}"
     info "STANDALONE desktop: no mesh / no SSO / no k8s; local user '${LOCAL_USER}'; LUKS FDE on install; media-data auto-detect=${MEDIA_DATA}"
+fi
+
+# ── Tor NODE service: CLIENT roles never carry it (hugmesh-generator#583) ─────────
+# ROLE_CLIENT is FINAL only from here: the role case block sets it for the desktop
+# roles, and the UNAFFILIATED -> STANDALONE folds above set it for everything else
+# (`--role backend --standalone`). So this is the ONE place a CLIENT tor selection —
+# however it arrived: --with-tor, --optional-services tor, or brand.conf — is
+# dropped, with a warning, so PLAN_OPTIONAL_SERVICES and every later gate see the
+# truth. (The check used to sit before the role case and read ROLE_CLIENT's `false`
+# default for every role: `--with-tor --role desktop` emerged net-vpn/tor.)
+if ${ROLE_CLIENT} && _opt_selected tor; then
+    warn "tor selected on CLIENT role '${ROLE}' — dropped: the Tor onion service is a k8s NODE service (no cluster to front on a desktop); nothing Tor-related is baked."
+    _tor_kept=""
+    for _tor_s in ${OPTIONAL_SERVICES}; do [ "${_tor_s}" = tor ] || _tor_kept="${_tor_kept} ${_tor_s}"; done
+    OPTIONAL_SERVICES="${_tor_kept# }"
+    unset _tor_kept _tor_s
 fi
 
 # ── Boot-chain identifiers (volids / CDLABEL / UKI name / installer cmdline key /
@@ -2484,6 +2516,10 @@ if ${PRINT_PLAN}; then
     _plan SUPERDOMAIN        "${SUPERDOMAIN}"
     _plan HOSTNAME           "${HOSTNAME:-${BRAND}-host}"
     _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo none || echo "${OPTIONAL_SERVICES:-none}")"
+    # Additive PLAN_ key (grep -qx consumers unaffected): what the tor NODE gates below
+    # will do, from the SAME predicate + arrays they call — `off`, or the packages and
+    # runlevel services a tor-selected node image carries.
+    _plan TOR_ONION          "$(_tor_node_selected && echo "on packages=${TOR_NODE_PACKAGES[*]} services=${TOR_NODE_SERVICES[*]}" || echo off)"
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
     _plan SSO                "$(${SKIP_SSO} && echo off || echo casdoor-oidc)"
     _plan IDP                "${IDP}"
@@ -3233,7 +3269,33 @@ rebrand_sysroot() {
         # still rewritten by that catch-all: unsupported. The sentinels contain neither
         # `hugmesh` nor `hugmesh-`, so the middle rules skip them; the last -e rules
         # restore them verbatim.
+        # VAULT KV BASE — issue #285, decision 38 = B on #347 ("the reader follows
+        # the writer"). An ExternalSecret's remoteRef is `key: <base>/<doc>` and <base>
+        # must equal the segment the WRITER uses (scripts/gen-cluster-secrets.sh writes
+        # under BASE="${BRAND:-hugmesh}"; the in-cluster harbor-provision Job writes
+        # <base>/harbor-robots). MEASURED 2026-09-17, and it is the whole reason this
+        # rule is shaped the way it is: ArgoCD does NOT read the manifests under
+        # ${SYSROOT}/var/lib/hugmesh/cluster/manifests. specs/cluster/apps/04-external-
+        # secrets-config.yaml (and 03b, and 12) are Applications whose source is a git
+        # repoURL + path, and specs/cluster/bootstrap/bootstrap.sh applies from the baked
+        # tree ONLY namespaces/, manifests/local-path and apps/*.yaml. So a sed over the
+        # baked manifests/ subtree is INERT — the live cluster on this build host was read
+        # to confirm it (external-secrets-config: repoURL github.com/hugmesh/hugmesh-
+        # generator.git @ main, path specs/cluster/manifests/external-secrets).
+        # What IS live is apps/*.yaml, so that is where the brand is carried: each of
+        # those three Applications holds a one-line kustomize JSON-6902 op setting the
+        # platform.hugmesh.net/vault-base annotation, a `replacements` block in the
+        # git-served kustomization.yaml copies that annotation into every remoteRef base
+        # (and onto harbor's VAULT_KV_BASE env), and the two rules below are what make
+        # that one value follow BRAND instead of being eaten by the catch-all
+        # `hugmesh -> ORG`. Captured FIRST, restored LAST, so the middle knobs cannot
+        # touch it. The second rule keeps the baked (unserved) annotation defaults in
+        # agreement with what the served render produces. Default brand: the whole
+        # function early-returns, so this is a byte no-op.
+        # Pinned by tests/scripts/test-eso-remoteref-brand.sh.
         sed -i \
+            -e "s|\(~1vault-base, value: \"\)hugmesh\(\"\)|\1@@SDSYSVAULTBASE@@\2|g" \
+            -e "s|\(vault-base: \"\)hugmesh\(\"\)|\1@@SDSYSVAULTBASE@@\2|g" \
             -e "s|^hugmesh\.net/|@@SDSYSKEY@@/|g" \
             -e "s|\([ {(,=\"'\`]\)hugmesh\.net/|\1@@SDSYSKEY@@/|g" \
             -e "s|hugmesh\\\\\.net/|@@SDSYSKEYESC@@/|g" \
@@ -3248,6 +3310,7 @@ rebrand_sysroot() {
             -e "s|@@SDSYSAPIGRP@@|platform.hugmesh.net|g" \
             -e "s|@@SDSYSKEYESC@@/|hugmesh\\\\.net/|g" \
             -e "s|@@SDSYSKEY@@/|hugmesh.net/|g" \
+            -e "s|@@SDSYSVAULTBASE@@|${_brand}|g" \
             "${f}"
     done < <(find "${SYSROOT}/var/lib/hugmesh/cluster" "${SYSROOT}/etc/hugmesh" -type f -print0 2>/dev/null)
 }
@@ -4075,11 +4138,16 @@ cp "${SHARED_SPECS}/etc/cron.d/hugmesh-domain-reconcile"    "${SYSROOT}/etc/hugm
 
 # ── Tor v3 onion (hidden) service (#tor) — DEFAULT-OFF NODE service ──────────────
 # Bake the onion-service reconcile agent + its OpenRC oneshot + the 24h cron into every
-# host image (INERT until enabled). The DISTRO Tor daemon (net-vpn/tor → /etc/init.d/tor
-# + /etc/tor/torrc) is installed + linked ONLY when 'tor' is selected (the SVCS/PKGS
-# gates below); this agent (ordered `before tor`) writes the managed torrc and mints +
-# persists the v3 onion keypair OFF-GIT under /var/lib/tor/hugmesh-onion on first boot.
+# x86 image EXCEPT --unaffiliated (this whole block is inside `if ! ${UNAFFILIATED}`),
+# INERT until enabled. The DISTRO Tor daemon (net-vpn/tor → /etc/init.d/tor +
+# /etc/tor/torrc) is installed, and BOTH it and this agent are linked, ONLY when
+# _tor_node_selected (tor selected on a cluster-node role — the SVCS/PKGS gates below);
+# this agent (ordered `before tor`) writes the managed torrc and mints + persists the
+# v3 onion keypair OFF-GIT under /var/lib/tor/hugmesh-onion on first boot.
 cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-reconcile"        "${SYSROOT}/usr/sbin/hugmesh-tor-reconcile";        chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-reconcile"
+# Its ingress half (#614): admits the exported onions as fe-gateway Ingress hosts from a
+# control-plane node; run by the same cron drop-in (*/5), inert without a hostname.
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-ingress-admit"    "${SYSROOT}/usr/sbin/hugmesh-tor-ingress-admit";    chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-ingress-admit"
 cp "${SHARED_SPECS}/etc/init.d/hugmesh-tor-reconcile"      "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile";      chmod +x "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile"
 cp "${SHARED_SPECS}/etc/cron.d/hugmesh-tor-reconcile"      "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile"
 mkdir -p "${SYSROOT}/usr/share/hugmesh/generator/scripts" "${SYSROOT}/usr/share/hugmesh/generator/templates"
@@ -4927,22 +4995,25 @@ if ! ${ROLE_CLIENT} && _opt_selected domain-registry-bridge; then
     fi
 fi
 
-# Tor v3 onion (hidden) service (DEFAULT-OFF optional service): link ONLY the hugmesh
-# reconcile agent into the default runlevel when 'tor' is selected AND this is a k8s node
-# (a CLIENT desktop is not a cluster member) — mirroring egress-vpn, which links only its
-# reconcile agent, not the daemon. The DISTRO `tor` service is NOT linked here: the
-# reconcile agent OWNS tor's lifecycle (writes the managed torrc, mints the v3 onion
-# keypair OFF-GIT under /var/lib/tor/hugmesh-onion, then `rc-service tor restart`),
-# avoiding any double-start. The 24h refresh cron (staged at
+# Tor v3 onion (hidden) service (DEFAULT-OFF optional service): when _tor_node_selected
+# (tor selected AND a k8s node — a CLIENT desktop is not a cluster member), link BOTH
+# TOR_NODE_SERVICES into the default runlevel: the DISTRO `tor` service (OpenRC
+# supervises the daemon) and hugmesh-tor-reconcile (decision 70 = B on #347). The
+# reconcile agent is ordered `before tor`, owns only the managed torrc + the off-git
+# onion keypairs, and converges an ALREADY-RUNNING tor idempotently (reload on a torrc
+# change, nothing otherwise). As the boot oneshot it never starts tor (OpenRC does,
+# right after it — a nested start would stall the boot on the oneshot's lock); only
+# its cron (@reboot + 24h) starts a stopped one — so the two owners never produce a
+# second daemon. The 24h refresh cron (staged at
 # /etc/hugmesh/registry/cron-tor-reconcile) is installed alongside. Unselected =>
-# reconcile not linked + net-vpn/tor absent => ZERO execution.
-if ! ${ROLE_CLIENT} && _opt_selected tor; then
-    SVCS+=(hugmesh-tor-reconcile)
+# neither linked + net-vpn/tor absent => ZERO execution.
+if _tor_node_selected; then
+    SVCS+=("${TOR_NODE_SERVICES[@]}")
     if [ -f "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile" ]; then
         mkdir -p "${SYSROOT}/etc/cron.d"
         cp -f "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile" \
               "${SYSROOT}/etc/cron.d/hugmesh-tor-reconcile"
-        info "OPTIONAL_SERVICES: tor selected — linked hugmesh-tor-reconcile + 24h cron (reconcile agent owns the tor daemon; v3 onion keypair off-git, minted first-boot)"
+        info "OPTIONAL_SERVICES: tor selected — linked ${TOR_NODE_SERVICES[*]} + @reboot/24h cron (reconcile converges the running daemon; v3 onion keypair off-git, minted first-boot)"
     fi
 fi
 for s in "${SVCS[@]}"; do ln -sf "/etc/init.d/${s}" "${SYSROOT}/etc/runlevels/default/${s}" 2>/dev/null || true; done
@@ -5234,10 +5305,11 @@ if ${ROLE_CLIENT} && [ -n "${EGRESS_VPN_FILE}" ]; then
 fi
 # Tor NODE service (DEFAULT-OFF optional service): the v3 onion daemon (net-vpn/tor,
 # which ships /etc/init.d/tor + /etc/tor/torrc + the tor:tor user). Only added when
-# 'tor' is selected (parity with the egress-vpn package gate); otherwise the image does
+# _tor_node_selected — tor selected on a cluster-node role, the SAME predicate as the
+# SVCS gate (a CLIENT image never carries it, #583 item 6); otherwise the image does
 # not carry it. net-vpn/tor inherits USE=selinux from a SELinux node profile, giving the
 # upstream tor_t confinement the reconcile agent's hugmesh_tor.te references.
-_opt_selected tor && PKGS="${PKGS} net-vpn/tor" && info "Tor NODE service: net-vpn/tor for the v3 hidden service (fe-gateway onion; keypair off-git, minted first-boot)"
+_tor_node_selected && PKGS="${PKGS} ${TOR_NODE_PACKAGES[*]}" && info "Tor NODE service: ${TOR_NODE_PACKAGES[*]} for the v3 hidden service (fe-gateway onion; keypair off-git, minted first-boot)"
 # Network/host security stack: Squid+Privoxy (desktops), Snort (all), AIDE (opt-in).
 # WANT_PROXY_STACK was resolved at the SVCS step above.
 ${WANT_PROXY_STACK} && PKGS="${PKGS} net-proxy/squid net-proxy/privoxy" && info "Proxy stack: Squid + Privoxy (Firefox wired to 127.0.0.1:8118 -> :3128)"

@@ -417,6 +417,74 @@ def check_route_access(root):
            "all %d seeded gateway ids match a deployed gateway" % len(seen))
 
 
+# ── 5b) No gateway_route_access row ships a bare '/**' the admin API refuses ─
+# Decision 61 (hugmesh-generator#347, operator answer 2026-09-18: "refuse —
+# keep refusing it, change the seed"). hugmesh-admin-bff-api's AdminController.
+# addRouteRule refuses a url_pattern whose first path segment is a bare
+# wildcard ('/**' has none — ReservedNames.firstSegment returns "", and the
+# ONLY explicit exception is the literal pattern '/'). So this platform must
+# not SHIP a gateway_route_access row its own admin API can never recreate.
+#
+# Bounded to the ONE row that could not be closed: the pki-gateway headscale
+# catch-all (bug #15, r(PKI, "/**", "ROLE_SUPERADMIN") in hugmesh-gateway's
+# CanonicalSeed.pki(), mirrored here). It is genuinely open-ended —
+# apps/20-gateway-pki.yaml's `headscale` route matches Host=scale.hugmesh.net
+# with NO Path predicate, so ANY path on that Host must floor to SUPERADMIN or
+# the pre-bug-#15 hole reopens. Replacing it with a finite set of addressable
+# prefixes would mean fabricating an enumeration of headscale's own external,
+# evolving HTTP surface — a missed endpoint silently REOPENS bug #15 the next
+# time headscale gains one — or moving its enforcement out of
+# gateway_route_access entirely (a materially bigger, separately-authorised
+# change). Neither is done; hugmesh-admin-bff-api#57 records the residual.
+#
+# What this DOES buy: the set of bare-'/**' rows can never grow past this one
+# without a test change forcing the addition to be argued.
+BARE_DOUBLE_STAR_EXCEPTIONS = {
+    ("hugmesh-pki-gateway", "ROLE_SUPERADMIN"),
+}
+
+
+def check_route_access_no_bare_wildcard(root):
+    schema = os.path.join(root, "manifests", "route-access", "initdb", "20-schema.sql")
+    if not os.path.exists(schema):
+        fail("[route-access-wildcard]", "missing %s" % schema)
+        return
+    text = open(schema, encoding="utf-8").read()
+    bad = []
+    seen_exceptions = set()
+    for m in ROW_FULL_RE.finditer(text):
+        gateway, pattern, role, allow = m.group(1), m.group(2), m.group(3), m.group(4)
+        if pattern != "/**":
+            continue
+        key = (gateway, role)
+        if key in BARE_DOUBLE_STAR_EXCEPTIONS:
+            seen_exceptions.add(key)
+            continue
+        bad.append("(%s, '/**', %s, %s)" % (gateway, role, allow))
+    if bad:
+        fail("[route-access-wildcard]",
+             "20-schema.sql ships a bare '/**' gateway_route_access row the admin-bff "
+             "route-access CRUD can never recreate (AdminController.addRouteRule refuses "
+             "any url_pattern whose first path segment is a bare wildcard): %s. Decision 61 "
+             "= refuse (hugmesh-generator#347): replace it with explicit prefix rows, or if "
+             "it is a genuinely open-ended catch-all like the pki headscale row, add it to "
+             "BARE_DOUBLE_STAR_EXCEPTIONS here with the SAME reasoning that row carries."
+             % "; ".join(bad))
+        return
+    missing = BARE_DOUBLE_STAR_EXCEPTIONS - seen_exceptions
+    if missing:
+        fail("[route-access-wildcard]",
+             "the documented bare-'/**' exception(s) %s are no longer in 20-schema.sql — "
+             "either the row was silently dropped (re-opening bug #15 if it was the pki "
+             "headscale row) or BARE_DOUBLE_STAR_EXCEPTIONS is stale; update whichever "
+             "changed." % sorted(missing))
+        return
+    ok("[route-access-wildcard]",
+       "20-schema.sql ships no bare '/**' gateway_route_access row beyond the %d "
+       "documented exception(s), each of which is still present"
+       % len(BARE_DOUBLE_STAR_EXCEPTIONS))
+
+
 # ── 6) Vault PKI issuing roles ───────────────────────────────────────────────
 VAULT_STUB = r"""
 set -u
@@ -2528,6 +2596,7 @@ def main():
     check_namespaces(root)
     check_route_services(root)
     check_route_access(root)
+    check_route_access_no_bare_wildcard(root)
     check_pki_roles(root)
     check_mtls_secrets(root)
     check_secret_key_refs(root)
