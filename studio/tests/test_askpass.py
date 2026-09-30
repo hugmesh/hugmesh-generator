@@ -196,6 +196,22 @@ def test_cli_flags_plumb_allow_gui_to_the_helper(monkeypatch):
     assert seen == [False, False, True, False]
 
 
+def test_no_gui_flag_help_says_the_terminal_prompt_needs_stdin_on_a_tty(capsys):
+    """#370 (Decision 96 = A): the stricter stdin-must-be-a-TTY rule stays, so the
+    `--askpass-no-gui` help text must say so (it used to read as the pre-#289 relaxed
+    rule). Pinned on the rendered `--help`, whitespace-normalised: the flag's paragraph
+    must carry the stdin condition, like `--askpass`'s does."""
+    from hugmesh_studio import app
+
+    with pytest.raises(SystemExit):
+        app.main(["--help"])
+    text = " ".join(capsys.readouterr().out.split())
+    start = text.index("kept for #221 scripts")
+    end = text.index("--config", start)
+    para = text[start:end]
+    assert "stdin is a TTY" in para or "stdin must be a TTY" in para, para
+
+
 def test_run_askpass_defaults_to_no_dialog(monkeypatch):
     """run_askpass's own default is allow_gui=False — a caller that forgets the keyword
     gets the headless-safe path, never the dialog."""

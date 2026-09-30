@@ -122,7 +122,10 @@ def main(argv=None) -> int:
     ap.add_argument("--askpass-no-gui", action="store_true",
                     help="kept for #221 scripts: identical to --askpass (which never pops "
                          "the dialog either). Uses $HUGMESH_STUDIO_SUDO_PASSWORD, then "
-                         "$HUGMESH_STUDIO_ASKPASS_COMMAND, then a terminal prompt.")
+                         "$HUGMESH_STUDIO_ASKPASS_COMMAND, then a terminal prompt — only "
+                         "when stdin is a TTY: with stdin redirected (`</dev/null`, "
+                         "`<file`, a `while read` loop) it does not prompt on the "
+                         "controlling terminal and fails fast (exit 1).")
     ap.add_argument("--config", help="config JSON (with --print-command/--print-commands/--print-specs)")
     ap.add_argument("--backend", choices=["auto", "native", "docker"], default="auto",
                     help="build backend for --print-command (auto = host default)")
