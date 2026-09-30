@@ -6,6 +6,6 @@ resources:
   - deployment.yaml        # Deployment + Service (signup-gate:8000 -> casdoor)
 # The "signup-gate-casdoor" Secret (clientId/clientSecret for app-signup-gate) is
 # materialized by External Secrets Operator from Vault (ClusterSecretStore
-# "hugmesh-vault", remote path secret/hugmesh/casdoor-apps property
+# "hugmesh-vault", remote path secret/<brand>/casdoor-apps property
 # signup-gate) — see manifests/external-secrets/secretstore.yaml. The optional
 # "signup-gate-webhook" Secret (post-signup reconcile shared-secret) likewise.

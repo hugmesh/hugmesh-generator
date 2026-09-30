@@ -205,6 +205,19 @@ fi
 SRC="${STACK_SRC:-${REPO}/.stack-src}"
 have_poms() { [ -d "$1" ] && [ -n "$(find "$1" -mindepth 2 -maxdepth 2 -name pom.xml -print -quit 2>/dev/null)" ]; }
 
+# ci_job_runs_suite <gitlab-ci.yml> -> 0 only when the `lint:m2-bootstrap:` job has a
+# LIVE (uncommented) `script:` item that runs this suite. Scoped to the job block
+# (from its header to the next top-level key) so another job's script line, or a
+# comment that merely names the path, cannot satisfy it.
+ci_job_runs_suite() {
+  awk '
+    /^lint:m2-bootstrap:[[:space:]]*$/ { inj=1; next }
+    inj && /^[^[:space:]#]/            { inj=0 }
+    inj && /^[[:space:]]+-[[:space:]]+(ba)?sh[[:space:]]+tests\/stack\/test-m2-bootstrap\.sh([[:space:]]|$)/ { found=1 }
+    END { exit found ? 0 : 1 }
+  ' "$1"
+}
+
 # Derive the Maven consumers from the file the cold stack build itself uses, so a
 # new Java service cannot quietly escape the check: every ${STACK_SRC} build
 # context in compose.local.yaml whose repo is a *-api, the gateway, actions, or
@@ -774,6 +787,36 @@ POM
     m2_neg "a consumer whose <parent> version is ABSENT from PINS" "${NC}/driftparent" \
            "hugmesh-workload-bff-api: wants hugmesh-parent 0.0.0-NOT-IN-PINS"
 
+    # (viii-d) hugmesh-commons is the artifact every consumer depends on, and no
+    #          control exercised it: appending `or aid == "hugmesh-commons"` to the
+    #          walker's skip condition dropped the resolved count from 21 to 11 and
+    #          the whole battery stayed green. A consumer asking for a commons
+    #          version the registry does not serve must be refused by name.
+    #          The coordinate is asserted to BE pinned first, so this control cannot
+    #          decay into a tautology if commons ever leaves the table.
+    if [ -z "$(printf '%s\n' "${PINNED:-}" | sed -n 's/^hugmesh-commons=//p')" ]; then
+      bad "(viii-d) hugmesh-commons is not in the PINS table — the commons control could not run"
+    else
+      base_corpus "${NC}/driftcommons"
+      mkdir -p "${NC}/driftcommons/hugmesh-workload-bff-api"
+      cat > "${NC}/driftcommons/hugmesh-workload-bff-api/pom.xml" <<POM
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <artifactId>consumer</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>${PIN_GROUP_1}</groupId>
+      <artifactId>hugmesh-commons</artifactId>
+      <version>0.0.0-NOT-IN-PINS</version>
+    </dependency>
+  </dependencies>
+</project>
+POM
+      m2_neg "a consumer asking for a hugmesh-commons version ABSENT from PINS" "${NC}/driftcommons" \
+             "hugmesh-workload-bff-api: wants hugmesh-commons 0.0.0-NOT-IN-PINS"
+    fi
+
     # ── (ix) MORE THAN ONE SERVED VERSION IS LEGAL ──────────────────────────
     # The consumers are separate repos on separate cadences, so the registry
     # really does serve two versions of one artifact at a time. The old walker
@@ -852,10 +895,34 @@ POM
   elif grep -qF "M2_PIN_DRIFT_SKIP" "${CI_YML}"; then
     bad "(vii) .gitlab-ci.yml mentions M2_PIN_DRIFT_SKIP — CI could switch the pin-drift leg off silently:"
     grep -nF "M2_PIN_DRIFT_SKIP" "${CI_YML}" | sed 's/^/         /'
-  elif ! grep -qF "tests/stack/test-m2-bootstrap.sh" "${CI_YML}"; then
-    bad "(vii) no .gitlab-ci.yml job runs tests/stack/test-m2-bootstrap.sh — the pin-drift leg is not wired in"
+  elif ! ci_job_runs_suite "${CI_YML}"; then
+    bad "(vii) no .gitlab-ci.yml job runs tests/stack/test-m2-bootstrap.sh from a live 'script:' line — a comment naming the path is not wiring, so the pin-drift leg is not wired in"
   else
     ok "(vii) .gitlab-ci.yml runs this suite and never sets M2_PIN_DRIFT_SKIP, so the CI path cannot skip pin-drift"
+  fi
+
+  # (vii-b) THE WIRING TEST ITSELF MUST BE ABLE TO SAY NO. The assertion above used
+  #         to be `grep -qF "tests/stack/test-m2-bootstrap.sh"`, which a COMMENT
+  #         satisfies: deleting the entire lint:m2-bootstrap job left the comment
+  #         that names the path, and (vii) still printed PASS. This suite is
+  #         PREMERGE_UNGATED, so that one job is its only automated run. Feed the
+  #         predicate the shapes that must be refused, and one that must pass.
+  WIRE="$(scratch_dir m2-wiring)"
+  printf '%s\n' '# runs tests/stack/test-m2-bootstrap.sh in CI' 'other-job:' '  script:' '    - bash tests/other.sh' \
+    > "${WIRE}/comment-only.yml"
+  printf '%s\n' 'lint:m2-bootstrap:' '  stage: lint' '  script:' '    # - bash tests/stack/test-m2-bootstrap.sh' '    - bash tests/other.sh' \
+    > "${WIRE}/commented-script.yml"
+  printf '%s\n' 'other-job:' '  script:' '    - bash tests/other.sh' 'lint:m2-bootstrap:' '  stage: lint' \
+    '  script:' '    - bash tests/stack/test-m2-bootstrap.sh' > "${WIRE}/live.yml"
+  printf '%s\n' 'lint:m2-bootstrap:' '  stage: lint' '  script:' '    - echo hi' 'other-job:' '  script:' \
+    '    - bash tests/stack/test-m2-bootstrap.sh' > "${WIRE}/other-jobs-script.yml"
+  if ci_job_runs_suite "${WIRE}/comment-only.yml" || ci_job_runs_suite "${WIRE}/commented-script.yml" \
+     || ci_job_runs_suite "${WIRE}/other-jobs-script.yml"; then
+    bad "(vii-b) the CI wiring predicate accepted a comment, a commented-out script line, or another job's script as 'the suite is wired'"
+  elif ! ci_job_runs_suite "${WIRE}/live.yml"; then
+    bad "(vii-b) the CI wiring predicate refused a live 'lint:m2-bootstrap' job whose script runs the suite"
+  else
+    ok "(vii-b) the CI wiring predicate refuses a comment / commented-out line / another job's script and accepts a live job"
   fi
 fi
 

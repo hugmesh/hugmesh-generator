@@ -9,7 +9,13 @@ resources:
   - gateway-crossns-ingress.yaml   # cross-namespace gateway hops the tier/per-pod policies miss: superadmin-gateway (hugmesh-pki) -> admin-bff-api + federation-api, and fe-gateway -> the homeserver mTLS proxies :4443 (found by [gateway-netpol])
   - homeserver-egress.yaml   # default-deny egress on akkoma/tuwunel: DNS + akkoma-db + egress-proxy only (domain-lock/no-federation backstop)
   - egress-vpn-interaction.yaml   # per-service opt-in (hugmesh.net/vpn-egress=true) direct egress for the node split-tunnel; PRUNED when egress-vpn is not selected (default-off)
-  - tor-onion-marked.yaml   # per-service opt-in (hugmesh.net/tor-onion=true) egress to the node Tor SOCKS proxy; forward-hook for pod-egress-via-tor; PRUNED when tor is not selected (default-off)
+  # tor-onion-marked.yaml is NOT here (hugmesh-generator#617). This app auto-syncs git
+  # main with prune+selfHeal, so a file listed here ships on EVERY tracking cluster
+  # whatever the image selected — the bake-time prune edits a tree this app never
+  # reads. It lives in manifests/networkpolicy-tor behind apps/08b-networkpolicy-tor.yaml
+  # (MANUAL sync; the Application file itself is pruned from a build without tor).
+  # tests/scripts/test-optional-netpol-autosync.sh fails if an optional-service policy
+  # comes back into this list.
   # SHIPS DARK — tier-egress.yaml (tier-wide default-deny EGRESS, CLUSTER-HARDENING-PLAN §B)
   # is INTENTIONALLY NOT listed here. This auto-sync app (apps/08-networkpolicy.yaml) stays
   # INGRESS plus ONE narrow per-pod egress backstop (homeserver-egress.yaml, akkoma/tuwunel/akkoma-db, since 2026-06-11). Everything WIDER than that — tier-egress.yaml AND db-egress.yaml — ships dark below. Default-deny egress is HIGH blast radius (a missed allow black-holes a

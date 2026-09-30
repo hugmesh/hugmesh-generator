@@ -14,7 +14,7 @@ The assertions worth having here are about the two ways this feature could hurt 
    SELECTED row.
 2. LYING ABOUT VAULT. Vault is a cluster-lane service, absent from the docker mesh.
    Reporting "0 entries" would read as "vault is running and empty" and invite an
-   operator to add an entry that goes nowhere — the inert-control trap this codebase has
+   operator to add an entry that goes nowhere — the do-nothing-control trap this codebase has
    hit repeatedly. It must report unavailable WITH the remedy.
 
 Everything is driven through a fake `_run`, so the suite never needs docker and never

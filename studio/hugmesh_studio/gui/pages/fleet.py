@@ -22,13 +22,23 @@ structurally correct. ``hugmesh_studio --fleet`` (app.py) hosts the same class
 standalone as its own top-level window; the ``FleetDialog`` alias below keeps its
 deferred import working unchanged.
 
-PROGRESSIVE STEPS: the old all-at-once form is now five small steps inside a
-QStackedWidget (Platforms -> Roles & boards -> Shared options -> Review -> Run) —
-deliberately NOT a second QWizard. Every child widget keeps its attribute name /
+PROGRESSIVE STEPS: the old all-at-once form is now small steps inside a
+QStackedWidget (Platforms -> Roles & boards -> Shared options -> Domains -> Domain
+services -> Review -> Run) — deliberately NOT a second QWizard. Every child widget keeps its attribute name /
 widget type / ``_default_combo`` sentinel rule, and :meth:`FleetPage.collect` is
 byte-for-byte unchanged, so identical choices necessarily produce an identical
 FleetConfig and identical build-all-roles.sh argv on both backends (the page's
 whole emission contract; tests pin it against pre-refactor goldens).
+
+DOMAINS (#587): the two steps after Shared options are the image flow's own surfaces,
+re-hosted exactly as the generate-a-new-local-mesh route hosts them — the shared
+Domains table (``DomainsTableWidget``; row 0 is the fleet's own domain, taken from the
+Cluster domain field) and the per-domain services walk (``DomainServicesWidget``, one
+page per domain). The per-domain gate refuses at Review, INLINE in the preflight pane
+(never a modal), through ``FleetDriver.preflight`` — so a RESTART refuses too. The
+Sign-in column is hidden here: a fleet stands up no Casdoor, so offering "Own" would be
+a knob that reaches nothing. What the rows do and do not reach is ``core.fleet``'s
+module doc, and the services step says it in one sentence (``FLEET_LANE_NOTE``).
 
 SESSIONS: a dispatched fleet run writes a durable build-session record
 (core/build_sessions, kind="fleet") with its own per-session /out workdir — the
@@ -55,12 +65,18 @@ from ...core.config import (
     ORANGEPI4LTS_FLAVORS,
     RPI_BOARDS,
 )
-from ...core.fleet import FleetConfig, FleetDriver
+from ...core.fleet import (FLEET_LANE_NOTE, FleetConfig, FleetDomains, FleetDriver,
+                           commit_fleet_domains, fleet_domain_fields,
+                           fleet_domains_from_config, seed_fleet_domains)
 from ._widgets import _file_picker, _row
+from .domain_services import DomainServicesWidget
+from .domains import _COL_IDP, DomainsTableWidget
 
-# The five progressive steps (indices into FleetPage.stack).
-STEP_PLATFORMS, STEP_ROLES, STEP_SHARED, STEP_REVIEW, STEP_RUN = range(5)
-_STEP_TITLES = ("Platforms", "Roles & boards", "Shared options", "Review", "Run")
+# The progressive steps (indices into FleetPage.stack).
+(STEP_PLATFORMS, STEP_ROLES, STEP_SHARED, STEP_DOMAINS, STEP_DOMAIN_SERVICES,
+ STEP_REVIEW, STEP_RUN) = range(7)
+_STEP_TITLES = ("Platforms", "Roles & boards", "Shared options", "Domains",
+                "Domain services", "Review", "Run")
 
 # ── the log drain (see FleetPage.__init__'s coalescing note) ──────────────────────────
 #: ~20 Hz, the same figure localmesh.py and progress.py use: below the ~100 ms threshold
@@ -130,6 +146,10 @@ class FleetPage(QtWidgets.QWidget):
         self._log_fh = None
         self._tail: deque[str] = deque(maxlen=build_sessions.ERROR_TAIL_LINES)
         self._stop_requested = False
+        #: The Domains / Domain services steps' state (#587) — empty until the Domains
+        #: step is first entered (it seeds row 0 there), so a run that never walks the
+        #: steps (a RESTART lands on Review) carries exactly what its record carried.
+        self.fleet_domains = FleetDomains()
 
         # ── LINE COALESCING — the GUI thread must not do per-line I/O ────────────────
         # _FleetWorker emits ONE queued signal PER OUTPUT LINE, and the old slot did three
@@ -343,10 +363,55 @@ class FleetPage(QtWidgets.QWidget):
         self.extra_flags.setPlaceholderText("extra pass-through builder flags, appended verbatim")
         sl.addWidget(_row("Extra flags", self.extra_flags))
         l3.addWidget(shared)
+        # NODE SERVICES (#579 item 3's GUI half, #587): FleetConfig has carried these
+        # since #600 but this page never collected them, so a RESTART of a WITH_TOR=1
+        # fleet session silently rebuilt WITHOUT Tor (apply() had nowhere to put it).
+        node_svcs = QtWidgets.QGroupBox("Node services (every cluster-node image of the run)")
+        nl = QtWidgets.QVBoxLayout(node_svcs)
+        self.with_tor = QtWidgets.QCheckBox(
+            "Tor v3 onion on every cluster-node image (WITH_TOR=1 — x86 --with-tor, "
+            "rpi5 'tor' folded into --optional-services; client roles never carry it)")
+        nl.addWidget(self.with_tor)
+        self.optional_services = QtWidgets.QLineEdit()
+        self.optional_services.setPlaceholderText(
+            "OPTIONAL_SERVICES env for both node builders, space-separated "
+            "(empty = each builder's default)")
+        nl.addWidget(_row("Optional services", self.optional_services))
+        l3.addWidget(node_svcs)
         l3.addStretch(1)
         self.stack.addWidget(p3)
 
-        # ── step 4: REVIEW — the exact command (unchanged emission) + preflight ──
+        # ── step 4: DOMAINS — the shared table, row 0 = this fleet's own domain ──
+        p_dom = QtWidgets.QWidget(); ld = QtWidgets.QVBoxLayout(p_dom)
+        self.domains_help = QtWidgets.QLabel(
+            "Every domain this fleet's mesh serves. Row 0 is its OWN domain — the "
+            "Cluster domain from the previous step, or the builders' default when that "
+            "is empty — and cannot be removed. Add every OTHER domain below. Each one "
+            "gets its own page on the next step, and the build refuses while any "
+            "domain here has never been through it, naming the domain.")
+        self.domains_help.setWordWrap(True)
+        self.domains_help.setStyleSheet("color: gray;")
+        ld.addWidget(self.domains_help)
+        self.domains_table = DomainsTableWidget(cfg=lambda: self.fleet_domains)
+        # a fleet stands up no Casdoor: a per-domain "Own" sign-in would reach nothing
+        self.domains_table.table.setColumnHidden(_COL_IDP, True)
+        ld.addWidget(self.domains_table)
+        # Inline, never a modal: why Next refused (a junk / duplicate / own-again row).
+        self.domains_note = QtWidgets.QLabel("")
+        self.domains_note.setWordWrap(True)
+        self.domains_note.setStyleSheet("color: #c62828;")
+        self.domains_note.setVisible(False)
+        ld.addWidget(self.domains_note)
+        self.stack.addWidget(p_dom)
+
+        # ── step 5: DOMAIN SERVICES — one page per domain, own domain first ──
+        p_svc = QtWidgets.QWidget(); lsv = QtWidgets.QVBoxLayout(p_svc)
+        self.domain_services = DomainServicesWidget(
+            scope_cfg=None, entries=None, lane_note=FLEET_LANE_NOTE)
+        lsv.addWidget(self.domain_services)
+        self.stack.addWidget(p_svc)
+
+        # ── step 6: REVIEW — the exact command (unchanged emission) + preflight ──
         p4 = QtWidgets.QWidget(); l4 = QtWidgets.QVBoxLayout(p4)
         l4.addWidget(QtWidgets.QLabel("Command:"))
         self.cmd = console.attach(QtWidgets.QPlainTextEdit()); self.cmd.setReadOnly(True); self.cmd.setMaximumHeight(100)
@@ -359,7 +424,7 @@ class FleetPage(QtWidgets.QWidget):
         l4.addWidget(self.problems, 1)
         self.stack.addWidget(p4)
 
-        # ── step 5: RUN — live progress + Stop ──
+        # ── step 7: RUN — live progress + Stop ──
         p5 = QtWidgets.QWidget(); l5 = QtWidgets.QVBoxLayout(p5)
         self.stop_btn = QtWidgets.QPushButton("Stop"); self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._stop)
@@ -445,6 +510,11 @@ class FleetPage(QtWidgets.QWidget):
             output_dir=self.output_dir.text().strip(),
             jobs=self.jobs.value(),
             extra_flags=self.extra_flags.text().strip(),
+            with_tor=self.with_tor.isChecked(),
+            optional_services=self.optional_services.text().strip(),
+            # COPIES (core.fleet.fleet_domain_fields — the TUI's review builds its
+            # FleetConfig through the same call).
+            **fleet_domain_fields(self.fleet_domains),
         )
 
     # ---- FleetConfig -> widgets (the exact inverse of collect, for RESTART/REDO) ----
@@ -503,6 +573,15 @@ class FleetPage(QtWidgets.QWidget):
         self.output_dir.setText(cfg.output_dir)
         self.jobs.setValue(cfg.jobs)
         self.extra_flags.setText(cfg.extra_flags)
+        self.with_tor.setChecked(cfg.with_tor)
+        self.optional_services.setText(cfg.optional_services)
+        # the RECORDED rows and markers, never "every row reviewed" — a record whose
+        # walk was incomplete must still be refused at Review. A NEW state object on
+        # purpose, and NOT pushed into the services widget here: its next load() sees
+        # a different object and drops its working answers by itself, whereas a
+        # load() now would SHOW (and so mark walked) a domain the operator is not
+        # looking at — this runs on the way to Review, not on the services step.
+        self.fleet_domains = fleet_domains_from_config(cfg)
         self._update_group_visibility()
 
     def load_from_session(self, s, pin: bool = True) -> None:
@@ -519,9 +598,40 @@ class FleetPage(QtWidgets.QWidget):
     def _goto(self, i: int) -> None:
         self.stack.setCurrentIndex(i)
         self.step_title.setText(f"Step {i + 1} of {len(_STEP_TITLES)} — {_STEP_TITLES[i]}")
-        if i == STEP_REVIEW:
+        if i == STEP_DOMAINS:
+            self._seed_domains()
+        elif i == STEP_DOMAIN_SERVICES:
+            self.domain_services.load(self.fleet_domains)
+        elif i == STEP_REVIEW:
             self._enter_review()
         self._update_nav()
+
+    # ---- the Domains / Domain services steps (#587) ----------------------------
+    def _seed_domains(self) -> None:
+        """Enter Domains: row 0 = the fleet's own domain (re-synced with the Cluster
+        domain field on every entry), then fill the table from the state."""
+        seed_fleet_domains(self.fleet_domains, self.cluster_domain.text())
+        self.domains_table.fill(self.fleet_domains.domains, self.fleet_domains.own_name)
+        self.domains_note.setVisible(False)
+
+    def _commit_domains(self) -> bool:
+        """Leave Domains: record the table's rows (always — a Back keeps them) and
+        refuse Next, INLINE, on a row that cannot be a domain."""
+        added, _ca = self.domains_table.rows()
+        problems = commit_fleet_domains(self.fleet_domains, added)
+        self.domains_note.setText(
+            "\n".join(problems + ["Fix or remove these rows to continue."])
+            if problems else "")
+        self.domains_note.setVisible(bool(problems))
+        return not problems
+
+    def _leave(self, i: int) -> bool:
+        """Record what the step being LEFT holds; False keeps the operator there."""
+        if i == STEP_DOMAINS:
+            return self._commit_domains()
+        if i == STEP_DOMAIN_SERVICES:
+            self.domain_services.record(self.fleet_domains)
+        return True
 
     def _update_nav(self) -> None:
         i = self.stack.currentIndex()
@@ -537,6 +647,9 @@ class FleetPage(QtWidgets.QWidget):
     def _back(self) -> None:
         i = self.stack.currentIndex()
         if i > 0:
+            # Back RECORDS too (never refuses): a row typed on Domains must reach the
+            # state whichever way the operator leaves.
+            self._leave(i)
             self._goto(i - 1)
 
     def _next(self) -> None:
@@ -545,7 +658,8 @@ class FleetPage(QtWidgets.QWidget):
             if self._start():
                 self._goto(STEP_RUN)
         elif i < STEP_RUN:
-            self._goto(i + 1)
+            if self._leave(i):
+                self._goto(i + 1)
 
     def _update_group_visibility(self) -> None:
         """Step-2 groups follow step-1 participation — VISIBILITY ONLY, never

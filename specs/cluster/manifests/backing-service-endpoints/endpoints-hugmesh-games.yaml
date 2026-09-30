@@ -1,0 +1,31 @@
+# backing-service-endpoints (hugmesh-games) — the same object, the same name, the
+# same key scheme, in the third always-present namespace that holds a Postgres
+# address. Operator DECISION 34a (one ConfigMap PER NAMESPACE). Contract:
+# endpoints-hugmesh-backend.yaml.
+#
+# WHY `data` IS EMPTY — measured 2026-09-17 against specs/cluster on origin/main.
+# The only Postgres address in hugmesh-games is casdoor-games
+# (manifests/casdoor-games/app-conf-configmap.yaml:31, `host=casdoor-games-pg`), and
+# it fails BOTH halves of the key contract:
+#   * it has NO specs/cluster/backing-services.yaml id, and the key prefix is the
+#     registry id verbatim. Minting an id is a REGISTRY decision (tier, dbName,
+#     esoSecret, vaultPath, the managed AWS/Azure target) that nobody has made —
+#     recorded on hugmesh-admin-bff-api#9 rather than invented here, because an id
+#     invented in a manifest is correct on the day it is written and wrong forever
+#     after (the `object-store` vs `velero-objectstore` split, #58, is that failure
+#     already happening once).
+#   * like casdoor's, the address is a libpq dataSourceName inside a ConfigMap
+#     template rendered by an init container — there is no `configMapKeyRef` seam to
+#     point at a key.
+#
+# The object and its RBAC grant ship anyway: see endpoints-hugmesh-pki.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backing-service-endpoints
+  namespace: hugmesh-games
+  labels:
+    app.kubernetes.io/name: backing-service-endpoints
+    app.kubernetes.io/component: backing-services
+    app.kubernetes.io/part-of: hugmesh.net
+data: {}

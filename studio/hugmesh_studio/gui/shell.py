@@ -448,7 +448,7 @@ class StudioShell(QtCore.QObject):
 
     def handle_command(self, command: str):
         """Execute one command from a later launch. Unknown commands are IGNORED, not
-        guessed at — a future Studio talking to an older one must be inert, never
+        guessed at — a future Studio talking to an older one must do nothing, never
         surprising."""
         if command == instance.CMD_NEW_WINDOW:
             return self.open_window()
