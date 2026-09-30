@@ -451,3 +451,70 @@ def test_the_cloud_ca_inheritance_note_is_one_string_on_both_faces(wiz):
     j.goto("domains")
     assert dom.client_ca_note.text() == CLIENT_CA_INHERITANCE_NOTE
     assert CLIENT_CA_INHERITANCE_NOTE in j.screen().lines(j)
+
+
+# ── #383: a loaded worklist survives a pass through either face ─────────────────────
+def _fully_populated_worklist(base):
+    """One node row and one desktop row with EVERY optional per-entry field set — the
+    shape a saved JSON worklist has when an operator has edited it on the GUI."""
+    from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry
+    return WorklistConfig(base=base, entries=[
+        WorklistEntry(role="backend", platform="x86", board="", flavor="",
+                      desktop="", encrypt_root="on",
+                      packages_add="app-misc/foo", packages_drop="app-misc/bar",
+                      infra_services=("tor",), hostname="be-one"),
+        WorklistEntry(role="rpi5-desktop", platform="rpi5", board="rpi5",
+                      desktop="xfce", encrypt_root="off",
+                      packages_add="media-gfx/baz", packages_drop="app-misc/qux",
+                      desktop_user="alice", desktop_user_roles=["admin", "games"],
+                      hostname="alice-pi"),
+    ])
+
+
+def test_tui_worklist_feed_keeps_every_per_entry_field_of_a_loaded_worklist():
+    """WorklistScreen.feed rebuilt each kept entry as WorklistEntry(role, platform,
+    hostname) only, so board / flavor / desktop / encrypt_root / package deltas /
+    infra_services / the desktop person silently vanished on a re-entry through the TUI
+    (the loss is silent: the envelope just shrinks). Re-entering with the same rows
+    checked must be the identity on every entry."""
+    j = journey.Journey(GENERATOR_DIR)
+    j.worklist = _fully_populated_worklist(j.cfg)
+    before = [e.to_dict() for e in j.worklist.entries]
+    assert all(before[0][k] == v for k, v in (("encrypt_root", "on"), ("hostname", "be-one")))
+    screen = journey.WorklistScreen()
+    screen.enter(j)
+    assert len(screen._checked) == 2            # both loaded rows are pre-checked
+    screen.feed(j, "")
+    after = [e.to_dict() for e in j.worklist.entries]
+    assert after == before
+    # a NEW row starts from defaults, and an unchecked row is dropped, not carried
+    j2 = journey.Journey(GENERATOR_DIR)
+    j2.worklist = _fully_populated_worklist(j2.cfg)
+    s2 = journey.WorklistScreen()
+    s2.enter(j2)
+    gone = next(i for i, (r, p, _l) in enumerate(s2._rows) if (r, p) == ("backend", "x86"))
+    s2.feed(j2, str(gone + 1))                  # a NUMBER toggles: uncheck backend.x86
+    s2.feed(j2, "")
+    assert [e.id for e in j2.worklist.entries] == ["rpi5-desktop.rpi5"]
+    assert j2.worklist.entries[0].to_dict() == before[1]
+
+
+def test_tui_and_gui_worklist_passes_agree_on_a_loaded_worklist(wiz):
+    """The same loaded worklist, re-confirmed unchanged on each face, comes out equal
+    (the GUI path is the reference: its validatePage keeps prior state)."""
+    from _helpers import pick_mode
+    pick_mode(wiz, "mesh")
+    page = advance_to(wiz, wizard_mod.WorklistPage)
+    wiz.worklist = _fully_populated_worklist(wiz.cfg)
+    before = [e.to_dict() for e in wiz.worklist.entries]
+    page.initializePage()
+    assert page.validatePage()
+    gui = [e.to_dict() for e in wiz.worklist.entries]
+
+    j = journey.Journey(GENERATOR_DIR)
+    j.worklist = _fully_populated_worklist(j.cfg)
+    screen = journey.WorklistScreen()
+    screen.enter(j)
+    screen.feed(j, "")
+    tui = [e.to_dict() for e in j.worklist.entries]
+    assert tui == gui == before
