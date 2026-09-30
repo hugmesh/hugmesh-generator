@@ -153,8 +153,23 @@ def test_an_attempt_from_a_qthread_is_recorded_not_raised():
     every later test in the file lost. Off the main thread the spy therefore RECORDS the
     attempt (the autouse fixture still fails the test at teardown) and neutralises the
     spawn instead of raising. The thread's own result proves no sudo ran: a real
-    `sudo --version` prints a banner; the neutralised child prints nothing."""
-    from PyQt6 import QtCore
+    `sudo --version` prints a banner; the neutralised child prints nothing.
+
+    This is the ONE Qt-touching case in an otherwise Qt-free file, so the skip lives
+    INSIDE the test: a module-level ``importorskip`` would drop the other 36 cases, which
+    are pure subprocess-spy checks and must keep running in the pre-merge job that
+    installs no Qt binding (.github/workflows/studio-tests.yml).
+
+    It gates on PyQt6 BY NAME, not on the ``hugmesh_studio.gui.qt`` shim the GUI files
+    use, and that is deliberate. The behaviour pinned here is PyQt6's, and the shim
+    would also let the case run under PySide6 (GitLab's ``test:studio-suite`` installs
+    only that) — where it is unsafe: the QCoreApplication created below outlives the
+    test, so the NEXT GUI file's ``QApplication.instance() or QApplication(...)`` is
+    handed a QCoreApplication and Qt aborts the whole process (rc 134, every later test
+    lost). Measured with PySide6 6.11.2: this case, then tests/test_choice_cards.py.
+    Under PySide6 alone this case therefore skips, as it does with no binding at all."""
+    QtCore = pytest.importorskip(
+        "PyQt6.QtCore", reason="no PyQt6 binding installed (this case pins PyQt6's qFatal)")
 
     _app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
     seen = {}
