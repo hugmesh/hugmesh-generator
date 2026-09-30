@@ -197,6 +197,10 @@ elif [ -z "${DOCKER_LINE}" ]; then
   bad "(xiii) ${DUP_PIN_REPOS} is pinned more than once but build_one's docker line could not be read, so 'clean' cannot be verified"
 else
   case " ${DOCKER_LINE} " in
+    # `-Dmaven.clean.skip=true` keeps the token `clean` on the line and makes
+    # maven-clean-plugin a no-op, so the token test alone reported a clean that
+    # never happens. Refuse the skip property anywhere on the joined line.
+    *maven.clean.skip*) bad "(xiii) ${DUP_PIN_REPOS} is pinned more than once and build_one's mvn line sets maven.clean.skip, so 'clean' is a no-op and a class deleted between the SHAs would be packaged into the later jar: ${DOCKER_LINE}" ;;
     *" clean "*) ok "(xiii) ${DUP_PIN_REPOS} is pinned at two SHAs and build_one runs mvn clean, so the second build cannot package a stale class" ;;
     *) bad "(xiii) ${DUP_PIN_REPOS} is pinned more than once, so build_one rebuilds one working tree at two SHAs in place — but its mvn goals carry no 'clean', and a class deleted between the SHAs would be packaged into the later jar: ${DOCKER_LINE}" ;;
   esac
@@ -252,6 +256,17 @@ CONSUMERS="$(sed -n 's|.*context: \${STACK_SRC:-[^}]*}/\([a-z0-9-]*\).*|\1|p' \
 ALL_CONTEXTS="$(sed -n 's|.*context: \${STACK_SRC:-[^}]*}/\([a-z0-9-]*\).*|\1|p' \
                   "${REPO}/tests/stack/compose.local.yaml" 2>/dev/null | sort -u)"
 
+# (xiv)'s anti-vacuity counts contexts EXAMINED; it cannot notice that the
+# unfiltered derivation was accidentally given the filter (ALL_CONTEXTS=$CONSUMERS),
+# which makes the audit compare a list with itself forever. The compose file always
+# carries UI build contexts that are not Maven consumers, so the unfiltered set is
+# strictly wider than the filtered one — assert that.
+if [ "$(printf '%s\n' ${ALL_CONTEXTS} | grep -c .)" -gt "$(printf '%s\n' ${CONSUMERS} | grep -c .)" ]; then
+  ok "the unfiltered compose build-context list ($(printf '%s\n' ${ALL_CONTEXTS} | grep -c .)) is strictly wider than the Maven-consumer list ($(printf '%s\n' ${CONSUMERS} | grep -c .)), so the (xiv) pattern audit has something to audit"
+else
+  bad "the unfiltered compose build-context list is not wider than the Maven-consumer list — the (xiv) pattern audit would compare a list with itself"
+fi
+
 if ! have_poms "${SRC}"; then
   # Where to fetch from, in falling order of explicitness:
   #   M2_PIN_GIT_BASE   this guard's own override (and what its proofs drive),
@@ -269,7 +284,14 @@ if ! have_poms "${SRC}"; then
     FETCH_FAIL=""
     NOT_MAVEN=""
     echo "  .. fetching consumer pom.xml (sparse, blobless) from ${GIT_BASE_M2%%://*}://…"
-    for c in ${CONSUMERS}; do
+    # FETCH EVERY COMPOSE BUILD CONTEXT, NOT THE PATTERN-FILTERED LIST. The corpus
+    # is the EVIDENCE control (xiv) audits the name pattern against; building it
+    # from that same pattern made (xiv) a tautology on this path — a context the
+    # pattern excluded was never fetched, so it had no directory, so (xiv) skipped
+    # it and could never report a miss. This is the only automated run (GitLab
+    # post-merge), so the control was decorative everywhere it mattered. Each clone
+    # is one shallow root-files fetch.
+    for c in ${ALL_CONTEXTS}; do
       if git clone --quiet --depth 1 --filter=blob:none --sparse \
            "${GIT_BASE_M2}/${c}.git" "${FETCH_DIR}/${c}" 2>/dev/null; then
         # A cloned consumer with no pom.xml is legitimately possible (the list is
@@ -277,7 +299,7 @@ if ! have_poms "${SRC}"; then
         # a Java service), so this is not a failure — but it MUST be visible.
         # Dropping it in silence is how the corpus quietly shrinks to nothing.
         if [ ! -f "${FETCH_DIR}/${c}/pom.xml" ]; then
-          NOT_MAVEN="${NOT_MAVEN} ${c}"
+          case " $(printf '%s ' ${CONSUMERS})" in *" ${c} "*) NOT_MAVEN="${NOT_MAVEN} ${c}" ;; esac
           # The DIRECTORY stays. The walk already skips a directory with no
           # pom.xml, so deleting it bought nothing — and it destroyed the only
           # evidence that the consumer was reached at all, which the completeness
@@ -909,6 +931,51 @@ POM
     base_corpus "${NC}/othergroup" "${OTHER_GROUP}"
     m2_neg "a corpus under a groupId the PINS table does not carry" "${NC}/othergroup" \
            "resolved ZERO"
+
+    # ── (xvi) CONTROL (xiv) MUST BITE ON THE CI SPARSE-FETCH PATH ────────────
+    # (xiv) audits the Maven-consumer name pattern against the corpus on disk. In
+    # CI there is no .stack-src, so the corpus is FETCHED — and it used to be
+    # fetched from the pattern itself, so a context the pattern missed was never
+    # cloned and (xiv) could not see it. Drive the real fetch path against a local
+    # file:// mirror: one repo per compose build context, every Maven consumer with
+    # a healthy pom, and (negative leg) one pattern-EXCLUDED context carrying a
+    # pom.xml. The fetch path must pull it and (xiv) must name it.
+    CONS_SP=" $(printf '%s ' ${CONSUMERS})"
+    STRAY=""
+    for c in ${ALL_CONTEXTS}; do
+      case "${CONS_SP}" in *" ${c} "*) ;; *) STRAY="${c}"; break ;; esac
+    done
+    mk_mirror() { # mk_mirror <dir> <stray-context-or-empty>
+      local m="$1" stray="$2" n r
+      for n in ${ALL_CONTEXTS}; do
+        r="${m}/${n}.git"; mkdir -p "${r}"
+        case "${CONS_SP}" in
+          *" ${n} "*) healthy_pom "${r}" "${AUTH_CORE_PIN}" ;;
+          *) if [ "${n}" = "${stray}" ]; then healthy_pom "${r}" "${AUTH_CORE_PIN}"; else printf 'FROM nginx:alpine\n' > "${r}/Dockerfile"; fi ;;
+        esac
+        ( cd "${r}" && git init -q && git add -A \
+          && git -c user.name=m2 -c user.email=m2@invalid -c commit.gpgsign=false commit -q -m fixture ) >/dev/null 2>&1
+      done
+    }
+    if [ -z "${STRAY}" ]; then
+      bad "(xvi) every compose build context matches the Maven-consumer pattern — there is no excluded context to plant a pom in, so the sparse-path audit cannot be exercised"
+    else
+      mk_mirror "${NC}/mirror-ok" ""
+      mk_mirror "${NC}/mirror-stray" "${STRAY}"
+      SPARSE_OK_OUT="$(env -u M2_PIN_DRIFT_SKIP -u CI_REPOSITORY_URL -u GIT_BASE CI=1 M2_SELFTEST_CHILD=1 \
+                         STACK_SRC="${NC}/no-such-corpus" M2_PIN_GIT_BASE="file://${NC}/mirror-ok" bash "${SELF_M2}" 2>&1)"; SPARSE_OK_RC=$?
+      SPARSE_BAD_OUT="$(env -u M2_PIN_DRIFT_SKIP -u CI_REPOSITORY_URL -u GIT_BASE CI=1 M2_SELFTEST_CHILD=1 \
+                          STACK_SRC="${NC}/no-such-corpus" M2_PIN_GIT_BASE="file://${NC}/mirror-stray" bash "${SELF_M2}" 2>&1)"; SPARSE_BAD_RC=$?
+      if [ "${SPARSE_OK_RC}" -ne 0 ]; then
+        bad "(xvi) the sparse-fetch path rejected a complete fixture mirror (rc=${SPARSE_OK_RC}) — the positive leg is broken, so the negative leg proves nothing:"
+        printf '%s\n' "${SPARSE_OK_OUT}" | sed -n '/2b) PIN drift/,/^-- 3)/p' | sed 's/^/           /'
+      elif [ "${SPARSE_BAD_RC}" -ne 0 ] && printf '%s' "${SPARSE_BAD_OUT}" | grep -F "excludes them: ${STRAY}" >/dev/null; then
+        ok "(xvi) on the CI sparse-fetch path (xiv) names a pattern-excluded context that carries a pom.xml (${STRAY})"
+      else
+        bad "(xvi) the sparse-fetch path did NOT surface pattern-excluded context ${STRAY} (rc=${SPARSE_BAD_RC}) — (xiv) cannot bite where CI runs"
+        printf '%s\n' "${SPARSE_BAD_OUT}" | sed -n '/2b) PIN drift/,/^-- 3)/p' | sed 's/^/           /'
+      fi
+    fi
 
     # ── (xv) A CONSUMER DIRECTORY WITHOUT ITS pom.xml IS NOT "NOT MAVEN" ─────
     # The completeness leg used to accept any present-but-pom-less directory as
