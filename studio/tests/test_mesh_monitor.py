@@ -660,6 +660,37 @@ def test_compose_lists_every_container_including_exited_ones(monkeypatch):
     assert fallback and "--all" in fallback[0], node2.calls
 
 
+def test_fallback_docker_ps_path_carries_the_exit_code_of_a_dead_container(monkeypatch):
+    """#377: when `docker compose ps --format json` is rejected the monitor falls back
+    to `docker ps --all --format {{json .}}`, whose rows have NO ExitCode field — the
+    code lives only in Status text ("Exited (137) 5 minutes ago"). The parser never
+    emitted it, so `_compose_units` read 0 and labelled a container that died with 137
+    a clean 'stopped (exit 0)'. It must read as FAILED with the real code."""
+    monkeypatch.setattr(mm.shutil, "which", lambda t: "/usr/bin/docker")
+    monkeypatch.setattr(mm, "_compose_base", lambda: ["docker", "compose"])
+    labels = "com.docker.compose.project=hugmesh-local,com.docker.compose.service="
+
+    def ps_row(service, state, status):
+        return json.dumps({"Names": f"hugmesh-local-{service}-1", "State": state,
+                           "Status": status, "Image": "img",
+                           "Labels": labels + service, "Ports": ""})
+    out = "\n".join([
+        ps_row("casdoor", "exited", "Exited (137) 5 minutes ago"),
+        ps_row("cassandra-init", "exited", "Exited (0) 2 hours ago"),
+        ps_row("gateway", "running", "Up 3 hours")])
+    node = _Node(script={"compose -f": (1, "unknown flag"), "docker ps": (0, out)})
+    _lane, units, _notes, _errors = mm._compose_units(node, "/g", [], {}, mm._Budget(25))
+    by = {u.owner: u for u in units}
+    assert by["casdoor"].state == "failed" and "exit 137" in by["casdoor"].reason
+    assert by["casdoor"].ready is False
+    assert by["cassandra-init"].state == "stopped" and "exit 0" in by["cassandra-init"].reason
+    assert by["gateway"].state != "failed"
+    # the parser itself: ExitCode only for an Exited (N) status; absent otherwise
+    rows = {r["Service"]: r for r in mm._parse_docker_ps(out)}
+    assert rows["casdoor"]["ExitCode"] == 137 and rows["cassandra-init"]["ExitCode"] == 0
+    assert "ExitCode" not in rows["gateway"]
+
+
 def test_snapshot_carries_the_lane_the_live_view_session_serves(tools, tmp_path,
                                                                monkeypatch):
     """The GUI names WHICH lane a live `make view` session serves (a kind-lane
