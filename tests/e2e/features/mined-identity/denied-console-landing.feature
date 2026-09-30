@@ -28,10 +28,26 @@
 # is "bounced to /login". For the nine roleGuard mounts that CONTRADICTS
 # role-guard.factory.ts:44; for the two games mounts it merely codifies the
 # surviving defect. Only the corrected form is ported.
+#
+# THE HARD NAVIGATION, and why these rows could not pass before 2026-09-18.
+# `I open the path` is page.goto() — a refresh, a bookmark, a typed URL. Until
+# hugmesh-generator#381 (PR #442, merged 2026-09-18) the fe gateway's
+# remote-deeplink-to-host-shell route carried only the social/media prefixes,
+# so a hard GET of /admin, /mod or /user went STRAIGHT to the bare admin-ui /
+# mod-ui / user-ui container: no host shell, no roleGuard, no denied-notice —
+# the deny below could never render. tests/stack/gateway-routes/fe/
+# application-routes.yml now lists /admin/**,/mod/**,/user/** on that route, so
+# the first outline is the live proof of #381 from the user's side (the
+# route-table shape itself is pinned offline in
+# mined-platform-edge/fe-route-tables.feature). The /user row is the only honest
+# one for that mount: e2e-mod is the sole roster persona WITHOUT ROLE_USER.
+#
+# The two games mounts are tracked as hugmesh-host-shell#88.
 
 @layer:ui @env:docker
 Feature: A refused console explains itself instead of pretending you are signed out
 
+  @issue:generator-381
   Scenario Outline: <role> deep-linking <path> lands on the denied landing, never /login @role:<role> @layer:ui
     Given I am signed in as the persona for this scenario
     When I open the path "<path>"
@@ -39,9 +55,10 @@ Feature: A refused console explains itself instead of pretending you are signed 
     And the current URL carries a denied query naming "<path>"
     And the element with test id "denied-notice" is visible
 
-    Examples:
+    Examples: the three role-home mounts #381 added to the deep-link route
       | role      | path   |
       | e2e-mod   | /admin |
+      | e2e-mod   | /user  |
       | e2e-user  | /mod   |
       | e2e-user  | /admin |
 
@@ -54,27 +71,30 @@ Feature: A refused console explains itself instead of pretending you are signed 
     Then the URL matches "/login"
     And the element with test id "denied-notice" is not visible
 
-  # EXPECTED RED, and deliberately written as three separate scenarios rather
-  # than one outline: playwright-bdd reads @fail from a node's OWN tags, and a
-  # tag on a Scenario Outline does not reach the generated example tests.
-  # games.guard.ts:25 and games-admin.guard.ts:26 are the last two hand-rolled
-  # parseUrl('/login') denials in the shell. When both adopt roleGuard these
-  # three turn "expected to fail, but passed" and the tags have to come off.
-  @fail @role:e2e-mod
+  # KNOWN-FAILING until hugmesh-host-shell#88 lands: games.guard.ts:25 and
+  # games-admin.guard.ts:26 are the last two hand-rolled parseUrl('/login')
+  # denials in the shell (re-checked on host-shell origin/main e6a2dc3,
+  # 2026-09-23 — unchanged). Each scenario asserts the CORRECT landing, the one
+  # the nine roleGuard mounts already give, so it goes green unmodified the day
+  # both guards adopt roleGuard — then remove @fixme and the @issue tag here.
+  # Three separate scenarios rather than one outline, deliberately: the special
+  # tags are read from a node's OWN tags, and this shape lets each mount be
+  # un-fixme'd on its own.
+  @fixme @issue:host-shell-88 @role:e2e-mod
   Scenario: a bare moderator refused /games lands on the denied landing, not /login @role:e2e-mod @service:games @layer:ui
     Given I am signed in as the persona for this scenario
     When I open the path "/games"
     Then the URL matches "/home[?]denied="
     And the element with test id "denied-notice" is visible
 
-  @fail @role:e2e-adminonly
+  @fixme @issue:host-shell-88 @role:e2e-adminonly
   Scenario: an admin without games refused /games/admin lands on the denied landing @role:e2e-adminonly @service:games @layer:ui
     Given I am signed in as the persona for this scenario
     When I open the path "/games/admin"
     Then the URL matches "/home[?]denied="
     And the element with test id "denied-notice" is visible
 
-  @fail @role:e2e-gamesonly
+  @fixme @issue:host-shell-88 @role:e2e-gamesonly
   Scenario: a games member without admin refused /games/admin lands on the denied landing @role:e2e-gamesonly @service:games @layer:ui
     Given I am signed in as the persona for this scenario
     When I open the path "/games/admin"
