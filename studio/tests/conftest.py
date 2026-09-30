@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 import pytest
@@ -446,7 +447,20 @@ ELEVATION_PROGRAMS = frozenset({"sudo", "pkexec", "doas", "su", "run0"})
 #: `-`, or purely numeric (an optional s/m/h/d suffix) are the wrapper's own arguments.
 _TRANSPARENT_WRAPPERS = frozenset({"env", "nice", "ionice", "stdbuf", "setsid", "nohup",
                                    "timeout", "chrt", "taskset"})
-_WRAPPER_NUMERIC = re.compile(r"[0-9]+[smhd]?")
+_WRAPPER_NUMERIC = re.compile(r"(?:[0-9]+[smhd]?|0[xX][0-9a-fA-F]+)")
+#: Wrapper flags whose NEXT token is their argument (`env -u NAME`, `timeout -s SIG`,
+#: `timeout -k DUR`, `taskset -c LIST`, `ionice -c CLASS`, `env -C DIR`). Without this
+#: the bare argument ended the scan and `env -u GH_TOKEN sudo …` read as "not elevating"
+#: (#360/#304). The `--flag=value` spelling already passes via the `=` rule.
+_WRAPPER_ARG_FLAGS = frozenset({"-u", "--unset", "-C", "--chdir", "-s", "--signal",
+                                "-k", "--kill-after", "-c", "--cpu-list", "-n",
+                                "--adjustment", "-P", "--pid"})
+#: A leading shell assignment (`VAR=1 sudo …`) when the string runs through a shell.
+_SHELL_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# Known blind spots, by design (no in-tree caller spawns them; the driver's own
+# guard_elevation still covers every in-tree argv): `cd /x && sudo …`, `bash -c '…sudo…'`
+# / `sh -c`, and terminal-emulator wrappers (`konsole -e bash -c 'sudo …'`). A test that
+# needs one of these must fake the process layer instead.
 
 #: Every attempt, as (PYTEST_CURRENT_TEST or a placeholder, the leading argv tokens).
 _ELEVATION_ATTEMPTS: list[tuple[str, str]] = []
@@ -472,16 +486,27 @@ def _elevation_program(args, shell: bool) -> str | None:
             tokens = [os.fsdecode(t) for t in args]
         except TypeError:
             return None
+    return _scan_tokens(tokens, shell)
+
+
+def _scan_tokens(tokens: list[str], shell: bool = False) -> str | None:
     inside_wrapper = False
+    skip_next = False
     for tok in tokens:
+        if skip_next:                        # the argument of a wrapper flag
+            skip_next = False
+            continue
         name = os.path.basename(tok)
         if name in ELEVATION_PROGRAMS:
             return name
         if name in _TRANSPARENT_WRAPPERS:
             inside_wrapper = True
             continue
+        if shell and not inside_wrapper and _SHELL_ASSIGNMENT.match(tok):
+            continue                         # `VAR=1 sudo …` through a shell
         if inside_wrapper and ("=" in tok or tok.startswith("-")
                                or _WRAPPER_NUMERIC.fullmatch(tok)):
+            skip_next = tok in _WRAPPER_ARG_FLAGS
             continue
         return None
     return None
@@ -507,11 +532,35 @@ def _install_never_elevate_popen() -> None:
         _hugmesh_never_elevate = True
 
         def __init__(self, args, *a, **kw):
+            # An iterator/generator argv is legal for the real Popen (_execute_child does
+            # list(args)); scanning it here would exhaust it and the real Popen would get
+            # an empty list (#375). Materialise ONCE, scan the list, hand the list on.
+            if not isinstance(args, (str, bytes, os.PathLike)):
+                try:
+                    args = list(args)
+                except TypeError:
+                    pass
             prog = _elevation_program(args, bool(kw.get("shell", False)))
+            if prog is None and kw.get("executable"):
+                # `Popen(["harmless"], executable="/usr/bin/sudo")` runs sudo.
+                prog = _scan_tokens([os.fsdecode(kw["executable"])])
             if prog is not None:
                 where = os.environ.get("PYTEST_CURRENT_TEST", "<outside any test>")
                 shown = _leading_tokens(args)
                 _ELEVATION_ATTEMPTS.append((where, shown))
+                if threading.current_thread() is not threading.main_thread():
+                    # Off the main thread a raise is worse than useless: escaping a
+                    # reimplemented QThread.run (progress._FlashWorker's shape) PyQt6
+                    # qFatals the interpreter — rc 134, no pass/fail line, the autouse
+                    # fixture and pytest_sessionfinish never run, every later test lost
+                    # (#375). The attempt is already RECORDED, so _never_elevate fails the
+                    # test at teardown; here the spawn is neutralised, not performed:
+                    # a harmless interpreter no-op replaces the argv (shell/executable
+                    # dropped so nothing of the original can run).
+                    kw.pop("executable", None)
+                    kw["shell"] = False
+                    super().__init__([sys.executable, "-c", "pass"], *a, **kw)
+                    return
                 raise ElevationAttempted(
                     f"the test suite must never start {prog} (it would block on a "
                     f"password prompt nobody can answer and wedge a root-owned launcher "

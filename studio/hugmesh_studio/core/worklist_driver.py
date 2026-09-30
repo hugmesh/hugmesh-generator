@@ -357,8 +357,18 @@ class WorklistDriver:
                                  workdir=self.workdir)
             with self._lock:
                 self._drivers[i] = driver
-            code = driver.run(cfg, self.backend,
-                              on_line=(lambda ln, i=i: on_line(i, ln)) if on_line else None)
+            try:
+                code = driver.run(cfg, self.backend,
+                                  on_line=(lambda ln, i=i: on_line(i, ln)) if on_line else None)
+            except Exception as e:  # noqa: BLE001 - one image's raise must not strand the run
+                # #374: ElevationRefused (HUGMESH_STUDIO_NO_ELEVATION / pytest) or an
+                # OSError from Popen. Left to propagate, this entry stayed RUNNING and
+                # registered, on_entry_done never fired, and the session was recorded
+                # 'stopped' (the operator-Stop state). Fail THIS image and keep going —
+                # the same tolerate-failures contract as a non-zero exit.
+                if on_line:
+                    on_line(i, f"!! {e}")
+                code = 1
             with self._lock:
                 self._drivers.pop(i, None)
                 cancelled = i in self._cancelled or self._cancel_all.is_set()

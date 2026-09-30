@@ -1319,11 +1319,20 @@ class LocalMeshBootstrap:
         from . import saved_meshes
         try:
             facts = saved_meshes.probe_state(rec)
-            return saved_meshes.restore_plan(rec, **facts)
+            plan = saved_meshes.restore_plan(rec, **facts)
         except Exception as exc:                      # noqa: BLE001 — refuse, never raise
             _note("[saved-mesh] refused — what is on this machine could not be "
                   f"established ({type(exc).__name__}: {exc}); nothing was started.")
             return None
+        if plan.mode == saved_meshes.MODE_UNKNOWN:
+            # A fact docker did not ANSWER (None) is not a fact: it used to read as
+            # "volumes gone, nothing running" -> a RESEED plan -> `stack-up` +
+            # `stack-seed` over a mesh that was merely slow to answer (#361). No
+            # exception is raised for that, so this is where it must refuse.
+            _note(f"[saved-mesh] refused — {plan.sentence} Nothing was started or "
+                  "seeded.")
+            return None
+        return plan
 
     def start_saved(self, rec, on_line=None, cancel=None) -> tuple[bool, list[str]]:
         """The WARM restore (saved-mesh case 1: volumes + images present, after
@@ -1707,8 +1716,8 @@ def _saved_mesh_cli(args: argparse.Namespace) -> int:
     print(f"  {plan.sentence}")
     for w in plan.warnings:
         print(f"  WARNING: {w}")
-    if plan.mode == saved_meshes.MODE_BLOCKED:
-        return 1
+    if plan.mode in (saved_meshes.MODE_BLOCKED, saved_meshes.MODE_UNKNOWN):
+        return 1          # UNKNOWN = docker did not answer (#361): no prod prompt either
     if cfg.is_prod():
         rc = _confirm_prod("restore")
         if rc:

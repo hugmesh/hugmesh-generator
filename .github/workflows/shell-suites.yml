@@ -40,10 +40,10 @@
 # the DEBIAN job (joining test-e2e-shell-nav-entry.sh there) and the EIGHTH in
 # this file — COUNTED 2026-09-17, by JOB and never by line number, because a line
 # number inside this very header shifts the moment anyone edits this very header:
-#     alpine  enumeration-without-credentials, persona-catalogue
+#     alpine  persona-catalogue
 #     debian  shell-nav-entry, spec-symbol-resolution   <- this one
-#     node    coverage-matrix-harness, docker-base-url-parity, reporter-shape,
-#             toolchain-readiness
+#     node    coverage-matrix-harness, docker-base-url-parity,
+#             enumeration-without-credentials, reporter-shape, toolchain-readiness
 # all eight in pull_request-triggered jobs. Recount with
 # `grep -c '^ *tests/scripts/test-e2e-' .github/workflows/shell-suites.yml`
 # (anchored: an unanchored grep also matches these prose lines and answers 11).
@@ -299,11 +299,25 @@ jobs:
           # devices_test.sh, save_test.sh, mesh-cluster_test.sh, avc-workout_test.sh)
           # remain ungated — they were NOT measured in this image and are not being
           # claimed as covered here.
+          # tests/*.sh at depth 1 (#385): ten suites that ran in no CI job. MEASURED,
+          # 2026-09-30, in alpine:3 with EXACTLY this job's apk set (checkout copied
+          # in, `git init`ed): all ten rc=0 (140/0, ALL PASS, PASS, PASS, PASS, PASS,
+          # 24/0, 88/0, ALL PASS (27), 25/0). build-arm-payload-gates.sh prints 140
+          # passed here vs 146 on a Gentoo host: its section C execution tier needs
+          # portage and prints "NOTE ... execution tier SKIPPED" otherwise, so CI gets
+          # its static tier only — the other nine are identical on both.
           SUITES="
             tests/api/test-bff-admin.sh
             tests/auto-update/test-provision-update.sh
             tests/auto-update/test-update-poller.sh
             tests/boot/test-kubelet-join-bootstrap.sh
+            tests/build-arm-payload-gates.sh
+            tests/build-image-idp.sh
+            tests/build-image-progress.sh
+            tests/build-image-spec-guards.sh
+            tests/build-image-spec-parity.sh
+            tests/build-image-tor-onion.sh
+            tests/build-package-completeness.sh
             tests/cloud-deploy/test-cloud-deploy-driver.sh
             tests/cluster/test-bootstrap-applies-baked-apps.sh
             tests/desktop-governance/test-desktop-sudo-mapper.sh
@@ -324,6 +338,7 @@ jobs:
             tests/keystores/test-keystores-external-ca.sh
             tests/keystores/test-keystores.sh
             tests/menu/build_menu_cmd_test.sh
+            tests/no-openrc-virtual-shadow.sh
             tests/node-storage/test-bake-coverage.sh
             tests/node-storage/test-degrade.sh
             tests/node-storage/test-pool-entrypoint.sh
@@ -331,6 +346,7 @@ jobs:
             tests/pentest/test-dast-honesty.sh
             tests/phone/test-make-phone-face.sh
             tests/phone/test-mdm-providers.sh
+            tests/posix-sh-no-arrays.sh
             tests/qemu/loop_preflight_test.sh
             tests/qemu/stage4_rootfs_test.sh
             tests/qemu/kernel_extract_test.sh
@@ -343,6 +359,7 @@ jobs:
             tests/qemu/save_test.sh
             tests/qemu/verdict_test.sh
             tests/qemu/qemu-e2e-lane_test.sh
+            tests/requested-atoms-resolvable.sh
             tests/scripts/test-anubis-env-gate.sh
             tests/scripts/test-arm-ro-distdir.sh
             tests/scripts/test-binpkg-pool-fingerprint.sh
@@ -357,7 +374,6 @@ jobs:
             tests/scripts/test-container-image-tags.sh
             tests/scripts/test-download-verify.sh
             tests/scripts/test-dracut-cross-lib.sh
-            tests/scripts/test-e2e-enumeration-without-credentials.sh
             tests/scripts/test-e2e-persona-catalogue.sh
             tests/scripts/test-edge-ai-cuda-host-compiler.sh
             tests/scripts/test-fetch-retry-hardening.sh
@@ -570,6 +586,15 @@ jobs:
     timeout-minutes: 25
     container:
       image: node:24-alpine
+    env:
+      # test-e2e-enumeration-without-credentials.sh section 3 (hugmesh-generator#413,
+      # decision 93 = B): the only leg that really IMPORTS the e2e specs, so it needs
+      # an installed tests/e2e. It lives HERE and not in the alpine job because this
+      # job already has node and already runs an npm ci. REQUIRE turns its SKIP into
+      # a failure, so the leg can no longer degrade into the green-but-asserting-
+      # nothing state it sat in for weeks.
+      E2E_NODE_MODULES: ${{ github.workspace }}/tests/e2e/node_modules
+      E2E_REQUIRE_ENUMERATION: "1"
     steps:
       # make: test-e2e-toolchain-readiness.sh renders and DRIVES the repo Makefile
       # (legs C/D) — node:24-alpine ships no make, and without it the suite exits 2
@@ -599,6 +624,9 @@ jobs:
         # suite that rendered nothing.
         run: |
           npm ci --prefix scripts/tooling
+          # tests/e2e's own deps (Playwright's CLI, no browser download) for the
+          # enumeration suite's real leg — see the job-level env above.
+          npm ci --prefix tests/e2e
           git config --global user.email ci@hugmesh.invalid
           git config --global user.name  "hugmesh ci"
       - name: preflight
@@ -611,6 +639,7 @@ jobs:
           missing=""
           for b in bash jq openssl python3 git node make ssh-keygen; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
+          [ -x tests/e2e/node_modules/.bin/playwright ] || { echo "::error::tests/e2e/node_modules/.bin/playwright absent — the enumeration suite's real leg would have nothing to run"; exit 1; }
           [ -d scripts/tooling/node_modules/handlebars ] || { echo "::error::handlebars absent — the drift gate would render nothing"; exit 1; }
           # PCRE grep. tests/menu/ncurses_charset_test.sh proves the menu's non-UTF-8
           # transliteration leaves NO byte above 0x7F, and the only assertion that can
@@ -633,6 +662,7 @@ jobs:
             tests/menu/ncurses_charset_test.sh
             tests/scripts/test-e2e-coverage-matrix-harness.sh
             tests/scripts/test-e2e-docker-base-url-parity.sh
+            tests/scripts/test-e2e-enumeration-without-credentials.sh
             tests/scripts/test-e2e-reporter-shape.sh
             tests/scripts/test-e2e-toolchain-readiness.sh
           "

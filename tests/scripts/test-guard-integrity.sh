@@ -701,16 +701,27 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # file on that tree (GUARD_PREMERGE=0), not computed:
 #     182 of 205 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 23 — neither new suite was ever in it.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-193}"
+
+# 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
+# THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
+# wired into shell-suites.yml's alpine job. MEASURED by RUNNING this file on the
+# tree, not computed, at each step:
+#     census widened, ten suites unwired   182 of 215   (+ checks 3 and 7 red,
+#                                                        naming all ten)
+#     ten suites wired                     192 of 215
+# The ungated SET pin is unchanged at 23: none of the ten is in PREMERGE_UNGATED.
+# tests/e2e-extra-personas.sh is NOT counted: it is a sourced data library named
+# in NOT_SUITES, verified to be sourced.
 #
-# 182 -> 183 on 2026-09-30 (iss/582-per-domain-tor, on origin/main 6a052d51 — which
-# already carried the 182 above): one new suite, wired into shell-suites.yml's extras
-# job (helm): tests/scripts/test-gateway-vanity-domains.sh (#582 — the fe-gateway's
-# vanity-subdomain route and Ingress hosts per brand domain, rendered with a real
-# `helm template`). The denominator moves 205 -> 206. MEASURED by RUNNING this file on
-# that tree (GUARD_PREMERGE=0), not computed:
-#     183 of 206 suites are named by a pull_request-triggered workflow
+# 192 -> 193 (denominator 215 -> 216) on 2026-09-30 for #582 (iss/582-per-domain-tor,
+# merged onto origin/main 20178822, which carried the 192 above): one new suite,
+# wired into shell-suites.yml's extras job (helm): tests/scripts/
+# test-gateway-vanity-domains.sh — the fe-gateway's vanity-subdomain route and
+# Ingress hosts per brand domain, rendered with a real `helm template`. MEASURED by
+# RUNNING this file on the merged tree (GUARD_PREMERGE=0), not computed:
+#     193 of 216 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 23 — the new suite was never in it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-183}"
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED
@@ -977,15 +988,59 @@ def bad(m): print("  FAIL " + m); F[0] += 1
 # would slip through again, so the rule to keep is "add the spelling here the day
 # someone introduces it", and the negative control (j) below is what proves this
 # walker actually reaches the second one.
+#
+# THE THIRD SPELLING (#385): a suite sitting DIRECTLY in tests/ with a bare name
+# (tests/posix-sh-no-arrays.sh, tests/build-image-idp.sh ...). Ten of them matched
+# neither rule, so they were outside check 7's numerator AND denominator and ran in
+# no CI job; seven were reachable only through `make matrix-check`, which no CI file
+# invokes. Depth is what identifies them — every file at tests/*.sh is a suite
+# EXCEPT the named, verified non-suites in NOT_SUITES below.
+#
+# NOT_SUITES is a NAMED exemption, not a filter: each entry must be a sourced
+# library (nothing executes it as a test) and is verified to still be sourced by
+# something, so a stale entry — or a real suite renamed into it — cannot hide.
+NOT_SUITES = {
+    # Data library: defines the e2e persona list that seed-e2e.sh and
+    # bootstrap-kind.sh `source`. It runs no assertion.
+    "tests/e2e-extra-personas.sh",
+}
 suites = []
 for root, dirs, files in os.walk(os.path.join(repo, "tests")):
     dirs[:] = [d for d in dirs if d not in (".git", "node_modules")]
     for fn in files:
         if not fn.endswith(".sh"):
             continue
-        if fn.startswith("test-") or fn.endswith("_test.sh"):
-            suites.append(os.path.relpath(os.path.join(root, fn), repo))
+        rel = os.path.relpath(os.path.join(root, fn), repo)
+        if rel in NOT_SUITES:
+            continue
+        top_level = os.path.dirname(rel) == "tests"
+        if fn.startswith("test-") or fn.endswith("_test.sh") or top_level:
+            suites.append(rel)
 suites.sort()
+
+import re as _re
+for _ns in sorted(NOT_SUITES):
+    _base = os.path.basename(_ns)
+    _sourced = False
+    for _r, _d, _f in os.walk(repo):
+        _d[:] = [d for d in _d if d not in (".git", "node_modules", ".stack-src")]
+        for _fn in _f:
+            if not _fn.endswith((".sh", ".bash", "Makefile")) and _fn != "Makefile":
+                continue
+            try:
+                _txt = open(os.path.join(_r, _fn), errors="replace").read()
+            except OSError:
+                continue
+            if _re.search(r"^\s*(\.|source)\s+[^#\n]*" + _re.escape(_base), _txt, _re.M):
+                _sourced = True
+                break
+        if _sourced:
+            break
+    if not os.path.isfile(os.path.join(repo, _ns)):
+        pass    # nothing on disk to hide; a stale entry is inert, not a hole
+    elif not _sourced:
+        bad("NOT_SUITES exempts %s as a sourced library, but nothing sources it — it is "
+            "either dead or a real suite hiding behind an exemption" % _ns)
 
 if not suites:
     bad("found ZERO test-*.sh / *_test.sh suites under tests/ — this guard would be vacuous")
@@ -993,9 +1048,12 @@ if not suites:
     print("== guard integrity: %d passed, %d failed ==" % (P[0], F[0]))
     sys.exit(1)
 _dash  = sum(1 for s in suites if os.path.basename(s).startswith("test-"))
-_under = len(suites) - _dash
-ok("enumerated %d suites under tests/ (%d test-*.sh + %d *_test.sh)"
-   % (len(suites), _dash, _under))
+_top   = sum(1 for s in suites if os.path.dirname(s) == "tests"
+             and not os.path.basename(s).startswith("test-")
+             and not os.path.basename(s).endswith("_test.sh"))
+_under = len(suites) - _dash - _top
+ok("enumerated %d suites under tests/ (%d test-*.sh + %d *_test.sh + %d bare tests/*.sh)"
+   % (len(suites), _dash, _under, _top))
 
 # ── "what is the last thing this script actually runs?" ──────────────────────
 # Read BACKWARD from EOF. A forward heredoc-state machine is the obvious design
@@ -1741,6 +1799,34 @@ echo "== ${P} passed, ${F} failed =="
   printf 'echo orphan\nexit 0\n' > "${NEG}/tree/tests/probe/orphan_test.sh"
   neg_case "an orphaned suite using the *_test.sh convention" \
            "tests/probe/orphan_test.sh"
+
+  # (j2) THE THIRD SPELLING (#385): a suite directly in tests/ with a bare name.
+  #      Until 2026-09-30 neither rule matched `tests/<name>.sh`, so ten suites sat
+  #      outside check 3 and check 7 entirely. Reverting the census to its two-rule
+  #      form makes this case stop biting. Counter-free body, for control (j)'s reason.
+  build_tree 'P=0; F=0
+ok(){ echo "  PASS $*"; P=$((P+1)); }
+bad(){ echo "  FAIL $*"; F=$((F+1)); }
+ok "nothing wrong"
+echo "== ${P} passed, ${F} failed =="
+[ "${F}" -eq 0 ]'
+  printf 'echo orphan\nexit 0\n' > "${NEG}/tree/tests/orphan-top.sh"
+  neg_case "an orphaned suite sitting directly in tests/ with a bare name" \
+           "tests/orphan-top.sh"
+
+  # (j3) THE EXEMPTION MUST NOT BE A HIDING PLACE. tests/e2e-extra-personas.sh is
+  #      exempt from the census only because it is a SOURCED library. Plant a file
+  #      of that name that nothing sources and the census must refuse the
+  #      exemption rather than quietly drop an unwired file out of every check.
+  build_tree 'P=0; F=0
+ok(){ echo "  PASS $*"; P=$((P+1)); }
+bad(){ echo "  FAIL $*"; F=$((F+1)); }
+ok "nothing wrong"
+echo "== ${P} passed, ${F} failed =="
+[ "${F}" -eq 0 ]'
+  printf 'echo not-a-library\nexit 0\n' > "${NEG}/tree/tests/e2e-extra-personas.sh"
+  neg_case "a NOT_SUITES exemption for a file nothing sources" \
+           "nothing sources it"
 
   # (k) THE ONE-FOR-ONE SWAP — the hole check 7's CARDINALITY pin cannot see, and
   #     the reason 7b exists. Reproduced against the real repo on 2026-08-26:

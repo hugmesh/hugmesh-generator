@@ -105,6 +105,7 @@ widgets in the same order, with no tab bar in front of them.
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 import types
@@ -459,6 +460,32 @@ _ST_COL_NAME, _ST_COL_STATE, _ST_COL_TIME = 0, 1, 2
 #: image build's tree row keeps, and this page holds at most a handful of runs, so the
 #: buffer is deliberately larger than progress.py's.
 _RUN_LOG_MAXLEN = 20000
+
+
+# A persona credential printed as "<user> / <value>" (the shape `make stack-seed`
+# used to echo: "e2e-admin / <password>", then the bare value AGAIN in the same
+# sentence). Belt and braces behind the Makefile no longer printing it: a run log is
+# persisted to disk, so a line in this shape must not reach it with the value
+# attached. The value is learned from the shape and then scrubbed EVERYWHERE in the
+# run, not just where the shape matched — the old sentence repeated it.
+_PERSONA_SECRET_RE = re.compile(r"\be2e-[A-Za-z0-9_.-]+ / (\S+)")
+_MIN_SECRET_LEN = 6     # refuse to scrub a short token that would shred ordinary text
+
+
+def _redact_run_log(lines) -> list:
+    lines = list(lines)
+    secrets = set()
+    for ln in lines:
+        for m in _PERSONA_SECRET_RE.finditer(ln):
+            tok = m.group(1)
+            for cand in (tok, tok.rstrip(").,;:'\"")):
+                if len(cand) >= _MIN_SECRET_LEN:
+                    secrets.add(cand)
+    # Longest first, so a value that contains another is replaced whole.
+    for sec in sorted(secrets, key=len, reverse=True):
+        lines = [ln.replace(sec, "[redacted]") for ln in lines]
+    return lines
+
 
 #: LIVE log-pane block cap, pinned to _RUN_LOG_MAXLEN on purpose.
 #:
@@ -2240,19 +2267,30 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
         Best-effort by construction: this is a GUI callback on the finish path, so
         it must never raise and must never be the reason a run reports failure.
-        A path we could not write is simply not offered."""
+        A path we could not write is simply not offered.
+
+        PRIVATE BY CONSTRUCTION (#362). A verb's output can carry a secret (the
+        seeder's persona password once did), so the directory is 0700 and each
+        file 0600 — the default umask left both world-readable in the operator's
+        home. Known secret shapes are also redacted on the way to disk
+        (:func:`_redact_run_log`)."""
         try:
             d = os.path.join(state_dir(), "logs")
-            os.makedirs(d, exist_ok=True)
+            os.makedirs(d, mode=0o700, exist_ok=True)
+            # makedirs' mode only applies to a directory it CREATES; an existing
+            # one from an earlier Studio is still 0755.
+            os.chmod(d, 0o700)
             stamp = time.strftime("%Y%m%d-%H%M%S")
             safe = "".join(c if (c.isalnum() or c in "-_") else "-"
                            for c in (run.label or "verb")).strip("-") or "verb"
             path = os.path.join(d, f"{stamp}-{safe}-{'ok' if ok else 'FAILED'}.log")
-            with open(path, "w", encoding="utf-8", errors="replace") as fh:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            os.fchmod(fd, 0o600)    # a pre-existing file keeps its old mode otherwise
+            with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as fh:
                 fh.write(f"# {run.label} — {'succeeded' if ok else 'FAILED'}\n")
                 fh.write("# %d line(s) retained (the pane's ring buffer keeps the last "
                          "%d)\n\n" % (len(run.buffer), _RUN_LOG_MAXLEN))
-                for ln in run.buffer:
+                for ln in _redact_run_log(run.buffer):
                     fh.write(ln + "\n")
             return path
         except Exception:

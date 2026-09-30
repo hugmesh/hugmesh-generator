@@ -936,6 +936,10 @@ def test_replicas_now_does_not_count_finished_rows():
     assert mm.replicas_now(snap, target) == 2
     assert mm.replicas_now(snap.units, target) == 2      # bare sequence too
     assert mm.replicas_now(snap, mm.ScaleTarget()) == 0  # never-scalable counts nothing
+    # a `completed` one-shot is finished work too (Decision 99 = A, #378)
+    snap = _snap(_scalable("hugmesh", "gw-1"),
+                 _scalable("hugmesh", "gw-job", state="completed"))
+    assert mm.replicas_now(snap, target) == 1
 
 
 # ── what the two lanes actually run ────────────────────────────────────────────────
@@ -1748,3 +1752,12 @@ def test_a_scale_whose_probe_explodes_says_what_exploded(monkeypatch):
     ok, text = mm.scale("/gen", _Boom(), _scalable("hugmesh", "gw-1", ctrl="gw"), 2)
     assert ok is False
     assert "RuntimeError" in text and "the daemon went away" in text
+
+
+def test_completed_has_its_own_glyph_distinct_from_stopped_and_queued():
+    """The state rides progress.py's palette (no second catalogue): `completed` must not
+    fall back to the 'queued' glyph an unknown state gets, nor wear the halted
+    service's 'stopped' square."""
+    from hugmesh_studio.gui.pages import _mesh_monitor_widget as w
+    assert w._glyph("completed") not in (w._glyph("queued"), w._glyph("stopped"))
+    assert w._colour("completed") != w._colour("failed")
