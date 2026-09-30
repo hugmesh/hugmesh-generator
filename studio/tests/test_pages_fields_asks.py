@@ -1711,8 +1711,19 @@ def test_ask22_an_unstubbed_arrival_is_refused_not_elevated(wiz, qapp, monkeypat
     _settle_run(qapp, page)
     log = page.log.toPlainText()
     assert "refusing to spawn sudo" in log and "pytest is running this process" in log, log
-    assert "build run aborted before completion" in log            # the worker's own line
+    # the DRIVER now owns the refusal (#374): it fails that one image and the run ends
+    # through the normal path, so the worker's catch-all line is no longer the witness
+    assert "worklist finished (summary exit 1)" in log
     assert page.isComplete()                                       # the run ENDED
+    # #374: a refusal is a FAILED image, not a 'running' one recorded as the operator's
+    # 'stopped': the row reaches a terminal state, nothing stays registered, and the
+    # session history says failed.
+    assert [r.status for r in page.driver.results] == ["failed"]
+    assert page.driver.results[0].exit_code == 1
+    assert page.driver._drivers == {}
+    assert all(r.terminal for r in page._rows)                     # not stuck on the running glyph
+    from hugmesh_studio.core import build_sessions as _bs
+    assert [s.status for s in _bs.load_all()] == ["failed"]
     assert not (tmp_path / "out" / "sessions").exists() or not any(
         p.name.startswith("wl-") for s in (tmp_path / "out" / "sessions").iterdir()
         for p in s.iterdir()), "a build tree was created — something ran"
