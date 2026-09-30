@@ -6,5 +6,5 @@ namespace: hugmesh-backend
 resources:
   - deployment.yaml
 # clickhouse-auth (password) is materialized by External Secrets Operator from
-# Vault (ClusterSecretStore "hugmesh-vault", secret/hugmesh/clickhouse) —
+# Vault (ClusterSecretStore "hugmesh-vault", secret/<brand>/clickhouse) —
 # see manifests/external-secrets. The workload keeps its secretKeyRef unchanged.

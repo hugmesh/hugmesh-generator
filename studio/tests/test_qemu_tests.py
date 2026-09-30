@@ -620,7 +620,7 @@ def test_read_results_empty_without_dir(tmp_path):
 
 #: The two cross-checks below shell out to the real script; both carry this mark.
 #: It used to sit on ``_shell_rows`` instead, where pytest never reads it — a mark
-#: on a plain helper is inert, so a missing runner ERRORed the tests it was meant
+#: on a plain helper does nothing, so a missing runner ERRORed the tests it was meant
 #: to skip.
 _needs_runner = pytest.mark.skipif(not os.path.exists(RUNNER),
                                    reason="runner script not present")

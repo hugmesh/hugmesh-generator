@@ -197,7 +197,7 @@ class WelcomePage(QtWidgets.QWizardPage):
 
     def validatePage(self):
         # This page no longer OFFERS the local-stack flow (see the module docstring) —
-        # but it still CLEARS the transient flag, and that line is load-bearing rather
+        # but it still CLEARS the transient flag, and that line is relied on rather
         # than tidy-up: LocalMeshPage.applies_to reads it, and an operator who took
         # ModePage's "Local Docker mesh" card and then stepped Back to this screen would
         # otherwise walk forward through a stale True. Written as a constant False, not

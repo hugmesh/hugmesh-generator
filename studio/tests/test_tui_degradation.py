@@ -1,7 +1,7 @@
 """tui — the NO_TUI degradation gate (issue #51 phase 1).
 
 urwid must NEVER become a hard studio dependency: these tests run headlessly with
-urwid absent (the gate is probed through monkeypatched seams, both directions), and
+urwid absent (the gate is probed through monkeypatched override points, both directions), and
 they pin that importing the TUI package pulls in neither urwid nor a Qt binding.
 The gate itself is scripts/build-menu.sh's HAVE_TUI block, ported line for line.
 """

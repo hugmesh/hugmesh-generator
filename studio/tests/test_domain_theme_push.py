@@ -1,6 +1,6 @@
 """The Studio's per-domain theme writer.
 
-Two things here are load-bearing beyond ordinary HTTP plumbing:
+Two things here are relied on beyond ordinary HTTP plumbing:
 
 * **The Studio ships the RENDERED CSS, not just the choice.** The colour derivation has
   one implementation and it is the Studio's; the BFF stores the result as a cache and
@@ -248,7 +248,7 @@ class TestTokenResolution:
     The ORDER is the design: Vault is preferred, but it cannot be required. vaults.py is
     explicit that Vault is a DevOps/Kubernetes-lane service and a docker-compose mesh has
     no vault container at all — so a Vault-only lookup would ship a theme control that is
-    permanently dead on the lane the operator actually runs. That is the inert-control
+    permanently dead on the lane the operator actually runs. That is the do-nothing-control
     trap this codebase has hit repeatedly.
     """
 

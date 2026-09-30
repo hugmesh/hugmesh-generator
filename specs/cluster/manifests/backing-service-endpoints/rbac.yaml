@@ -1,0 +1,148 @@
+# RBAC for the backing-service-endpoints fan-out writer — the N grants operator
+# DECISION 34a (one ConfigMap PER NAMESPACE) deliberately paid for. One Role +
+# RoleBinding per namespace on the axis, each closed by `resourceNames` to exactly
+# the one object the writer owns.
+#
+# THE SUBJECT is ServiceAccount `backups-effector` in hugmesh-backend — the SA the
+# admin-bff pod already runs as (manifests/admin-bff-api/deployment.yaml:51). A
+# RoleBinding may name a ServiceAccount from another namespace, which is how one SA
+# gets the fan-out without a ClusterRole.
+#
+# ⚠ THE `get` HALF IS NOT NEW CONTAINMENT IN hugmesh-backend, and pretending it is
+# would be false. manifests/velero/rbac.yaml:83-115 already binds this same SA to a
+# Role granting `configmaps: get` in hugmesh-backend with NO `resourceNames`, so it
+# can already read every ConfigMap in that namespace. RBAC is additive: a narrow
+# Role cannot take that away. What this file genuinely contains is `patch`/`update`
+# — the verbs that matter for a WRITER — and, in hugmesh-pki and hugmesh-games where
+# no prior grant exists, the `get` too. Narrowing `backups-effector-menu-read` is a
+# change to the cloud-backups seam and needs its own review; it is NOT folded in here.
+#
+# ⚠ NO OPEN `deployments: patch`. The rolling-restart half of DECISION 34b patches a
+# pod-template annotation onto a consumer Deployment, so the writer needs
+# `deployments: get,patch` — but ONLY on the five named consumers, never namespace-
+# wide. An open grant in hugmesh-backend would let this SA patch the gateway and
+# every other backend workload. Verified 2026-09-17: `deployments: patch` exists
+# nowhere else in specs/cluster (every other hit is get/list/watch).
+#
+# INERT AT DEFAULTS. admin-bff ships the effector dark
+# (`app.backing-services.effector.enabled=false`), exactly as
+# manifests/optional-services-operator/rbac.yaml documents its own grants.
+
+# ── hugmesh-backend: the ConfigMap + the five v1 consumer Deployments ──────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backing-service-endpoints-writer
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: backing-service-endpoints
+    app.kubernetes.io/component: backing-services
+    app.kubernetes.io/part-of: hugmesh.net
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["backing-service-endpoints"]
+    verbs: ["get", "patch", "update"]
+  # The DECISION 34b rolling-restart seam: patch the pod-template annotation
+  # `hugmesh.net/backing-service-generation` onto exactly the consumer whose
+  # address moved. Names match metadata.name in manifests/<svc>/deployment.yaml
+  # verbatim — a typo here makes the grant silently inert, so they are listed and
+  # not globbed.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames:
+      - hugmesh-admin-bff-api
+      - hugmesh-user-bff-api
+      - hugmesh-mod-bff-api
+      - hugmesh-forum-bff-api
+      - hugmesh-wiki-bff-api
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backing-service-endpoints-writer
+  namespace: hugmesh-backend
+  labels:
+    app.kubernetes.io/name: backing-service-endpoints
+    app.kubernetes.io/component: backing-services
+    app.kubernetes.io/part-of: hugmesh.net
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: backing-service-endpoints-writer
+subjects:
+  - kind: ServiceAccount
+    name: backups-effector
+    namespace: hugmesh-backend
+---
+# ── hugmesh-pki: the ConfigMap only ───────────────────────────────────────────
+# No `deployments` rule: no service in this namespace has a ConfigMap key yet, so
+# there is nothing to restart. The grant is added in the slice that gives the
+# namespace its first key (see endpoints-hugmesh-pki.yaml for why it has none).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backing-service-endpoints-writer
+  namespace: hugmesh-pki
+  labels:
+    app.kubernetes.io/name: backing-service-endpoints
+    app.kubernetes.io/component: backing-services
+    app.kubernetes.io/part-of: hugmesh.net
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["backing-service-endpoints"]
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backing-service-endpoints-writer
+  namespace: hugmesh-pki
+  labels:
+    app.kubernetes.io/name: backing-service-endpoints
+    app.kubernetes.io/component: backing-services
+    app.kubernetes.io/part-of: hugmesh.net
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: backing-service-endpoints-writer
+subjects:
+  - kind: ServiceAccount
+    name: backups-effector
+    namespace: hugmesh-backend
+---
+# ── hugmesh-games: the ConfigMap only (same reason as hugmesh-pki) ─────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backing-service-endpoints-writer
+  namespace: hugmesh-games
+  labels:
+    app.kubernetes.io/name: backing-service-endpoints
+    app.kubernetes.io/component: backing-services
+    app.kubernetes.io/part-of: hugmesh.net
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["backing-service-endpoints"]
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backing-service-endpoints-writer
+  namespace: hugmesh-games
+  labels:
+    app.kubernetes.io/name: backing-service-endpoints
+    app.kubernetes.io/component: backing-services
+    app.kubernetes.io/part-of: hugmesh.net
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: backing-service-endpoints-writer
+subjects:
+  - kind: ServiceAccount
+    name: backups-effector
+    namespace: hugmesh-backend
