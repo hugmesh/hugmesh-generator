@@ -174,7 +174,7 @@ tail = re.sub(r'<version>[^<]+</version>', f'<version>{ver}</version>', tail, co
 open(p, 'w').write(head + tail)
 PY
     log "lib: $repo → install $ver (from source)"
-    rm -rf "$HOME/.m2/repository/systems/hugmesh/$repo/$ver" 2>/dev/null || true
+    rm -rf "$HOME/.m2/repository/net/hugmesh/$repo/$ver" 2>/dev/null || true
     # shellcheck disable=SC2086
     ( cd "$dest" && "$MVN" -q -o install $skips ) || ( cd "$dest" && "$MVN" -q install $skips )
     local r=$?

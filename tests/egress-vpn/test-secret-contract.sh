@@ -371,6 +371,66 @@ case "${D_KEY_CELL}" in
     *) bad "doc table data key column is '${D_KEY_CELL}' — it does not name the contract key '${C_KEY}'" ;;
 esac
 
+# ── 1d. THE REBRAND-FIXTURE COPY — tests/scripts/test-rebrand-frozen-label-keys.sh
+# That suite's KEEP matrix feeds the frozen label keys through every builder's
+# rebrand_sysroot() and requires them to come out byte-identical. Its entries
+# are the CURRENT contract values, not planted negatives: `<node label>: "true"`,
+# the `<selector key>: <value>` mapping, the quoted/`--selector=` selector, the
+# backticked node label, and the two EGRESS_VPN_*= contract lines. If the
+# contract moves and these do not follow, the rebrand suite keeps passing while
+# proving the rebrand leaves the OLD keys alone, which is no longer the protocol
+# identity it exists to protect (#641). So each shape is graded here against
+# the contract.
+#
+# Each extraction follows manifest_env's rule: EXACTLY one line of that shape,
+# or the check fails. With zero, deleting a KEEP entry would make the check
+# vacuous. With two, it could quietly grade the wrong entry.
+echo "-- rebrand-fixture copy (test-rebrand-frozen-label-keys.sh KEEP matrix)"
+RB="${REPO}/tests/scripts/test-rebrand-frozen-label-keys.sh"
+rb_one(){ # rb_one <ERE with ONE capture group> -> the capture if exactly one line matches, else '<N matching lines>'
+    local n
+    n="$(grep -cE -- "$1" "${RB}" 2>/dev/null || true)"
+    if [ "${n}" = "1" ]; then sed -n -E "s|$1|\\1|p" "${RB}"
+    else printf '<%s matching lines>\n' "${n:-0}"; fi
+}
+eqf "${RB}" "rebrand KEEP node label as a YAML key (<key>: \"true\")" \
+    "$(rb_one "^  '([a-z0-9.-]+/[a-z0-9.-]+): \"true\"'\$")" "${C_NODE}"
+eqf "${RB}" "rebrand KEEP selector as a YAML mapping (<key>: <value>)" \
+    "$(rb_one "^  '  ([a-z0-9.-]+/[a-z0-9.-]+: [A-Za-z0-9.-]+)'\$")" "${C_SEL_KEY}: ${C_SEL_VAL}"
+eqf "${RB}" "rebrand KEEP double-quoted selector" \
+    "$(rb_one "^  '\"([a-z0-9.-]+/[a-z0-9.-]+=[^\"]*)\"'\$")" "${C_SEL}"
+eqf "${RB}" "rebrand KEEP backticked node label" \
+    "$(rb_one "^  '\`([^\`]*)\`'\$")" "${C_NODE}"
+eqf "${RB}" "rebrand KEEP EGRESS_VPN_NODE_LABEL=" \
+    "$(rb_one "^  'EGRESS_VPN_NODE_LABEL=([^']*)'\$")" "${C_NODE}"
+eqf "${RB}" "rebrand KEEP EGRESS_VPN_SECRET_SELECTOR=" \
+    "$(rb_one "^  'EGRESS_VPN_SECRET_SELECTOR=([^']*)'\$")" "${C_SEL}"
+# The comma-free --selector entry. The comma one (`a=1,b=2`) is a pure shape
+# case with made-up keys and is left alone.
+eqf "${RB}" "rebrand KEEP --selector= (single-key form)" \
+    "$(rb_one "^  '--selector=([^',]*)'\$")" "${C_SEL}"
+# ...and every OTHER literal `EGRESS_VPN_<K>=<value>` in the file, prose
+# included (the header cites one), must name a contract key and spell its value.
+# Values that start with `'$` (the suite's own `'${c_label}'` diagnostics) are
+# not literals, and the value grammar skips them.
+rb_n=0; rb_bad=0; rb_det=""
+while IFS= read -r tok; do
+    [ -n "${tok}" ] || continue
+    rb_n=$((rb_n+1))
+    k="${tok%%=*}"; v="${tok#*=}"
+    want="$(contract_get "${CONTRACT}" "${k}" 2>/dev/null)" || want="<${k} is not a contract key>"
+    [ "${v}" = "${want}" ] && continue
+    rb_bad=$((rb_bad+1))
+    rb_det="${rb_det}         ${k}=${v}  (contract: ${want})
+"
+done <<RB_EOF
+$(grep -oE "EGRESS_VPN_[A-Z_]+=[A-Za-z0-9@][^[:space:]'\"\`,)]*" "${RB}" 2>/dev/null)
+RB_EOF
+okf "${RB}" "$( [ "${rb_n}" -ge 1 ] && [ "${rb_bad}" -eq 0 ] && echo 0 || echo 1 )" \
+    "rebrand suite: all ${rb_n} literal EGRESS_VPN_*= value(s) equal the contract" \
+    "rebrand suite: ${rb_bad} of ${rb_n} literal EGRESS_VPN_*= value(s) disagree with the contract (0 found also fails)"
+[ -n "${rb_det}" ] && printf '%s' "${rb_det}"
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 2. THE DEPLOY LEVER — this repo tells admin-bff where to write
 # ══════════════════════════════════════════════════════════════════════════════

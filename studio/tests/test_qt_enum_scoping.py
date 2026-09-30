@@ -81,19 +81,19 @@ def test_no_unscoped_qt_enum_access(cls, scope, members):
 # landed first and folds Qt.* into the SINGLE _UNSCOPED list as ("Qt", scope,
 # members) entries, which the parametrized test above already scans with the
 # identical regex — so that test was an exact duplicate and is dropped, and this
-# branch's four new Qt scopes were folded into the list instead. The Qt.* NON-
-# VACUITY check below is kept: it hardcodes its pattern and guards the Qt.* half.
+# branch's four new Qt scopes were folded into the list instead. The Qt.* real-
+# cases check below is kept: it hardcodes its pattern and guards the Qt.* half.
 
 
 def test_the_qt_namespace_guard_bites():
-    """Non-vacuity for the Qt.* half."""
+    """Real-cases check for the Qt.* half."""
     pat = re.compile(r"\bQt\.(?!ArrowType\b)(DownArrow|RightArrow)\b")
     assert pat.search("btn.setArrowType(Qt.DownArrow)")                  # the bug shape
     assert not pat.search("btn.setArrowType(Qt.ArrowType.DownArrow)")    # the fix
 
 
 def test_the_guard_itself_bites():
-    """Non-vacuity: the pattern must actually match the shape that shipped the crash."""
+    """Real-cases check: the pattern must actually match the shape that shipped the crash."""
     scope, members = next((s, m) for c, s, m in _UNSCOPED if c == "QWizard")
     pat = re.compile(rf"\bQWizard\.(?!{scope}\b)({'|'.join(members)})\b")
     assert pat.search("btn = wiz.button(QtWidgets.QWizard.BackButton)")      # the bug
@@ -101,7 +101,7 @@ def test_the_guard_itself_bites():
 
 
 def test_the_guard_covers_the_new_log_panel_enums():
-    """Non-vacuity for the Qt.* scopes the detachable log panel added: the unscoped form
+    """Real-cases check for the Qt.* scopes the detachable log panel added: the unscoped form
     of each must be caught (PyQt6 exposes only the scoped one)."""
     for cls, scope, member, bad in (
             ("Qt", "ArrowType", "DownArrow", "btn.setArrowType(Qt.DownArrow)"),

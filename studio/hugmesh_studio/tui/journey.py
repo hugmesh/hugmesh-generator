@@ -40,7 +40,8 @@ from ..core.config import (
     ImageConfig, ca_cert_error, derive_hostname, describe_ca_cert,
     enter_mesh_defaults, vault_field_error,
 )
-from ..core.domain_services import services_page_applies
+from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
+                                    services_page_applies)
 from ..core.validate import validate_domain_name
 from ..core.worklist import (
     WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
@@ -318,7 +319,7 @@ class PendingStep:
 class IdpScreen:
     """The mesh-node identity-provider step — Casdoor is pickable; the external
     providers need issuer/client-id plumbing the TUI has not ported, so they are
-    LISTED but refused with the reason (the inert-control rule, not a dead end)."""
+    LISTED but refused with the reason (the do-nothing-control rule, not a dead end)."""
 
     slug = "idp"
     title = "Identity provider (mesh nodes)"
@@ -350,7 +351,7 @@ class IdpScreen:
             return
         idp = IDP_CHOICES[idx]
         if idp != "casdoor":
-            # honest refusal, state unchanged — never a silently-inert pick
+            # honest refusal, state unchanged — never a silently ineffective pick
             j.status = (f"{IDP_LABELS[idp]} needs issuer/client-id entry that is "
                         "not yet ported to the TUI — configure it in the GUI "
                         f"(kept: {IDP_LABELS[j.cfg.idp]}).")
@@ -379,7 +380,7 @@ class VaultScreen:
     (``config.vault_field_error``), so what this face accepts is exactly what the
     argv accepts, and the SAME base CA list (``cfg.base_ca_certs``) through the same
     ``config.ca_cert_error``. Every edit is validated BEFORE it is committed and a
-    refusal is an inline status line (never a dead end, never a silently-inert
+    refusal is an inline status line (never a dead end, never a silently ineffective
     command); clearing the internal address clears the external address with it — the
     byte-identity rule the GUI's validatePage applies. Dropping a certificate clears
     every domain that pointed at it, exactly as the GUI does. Enter keeps the current
@@ -903,6 +904,16 @@ class BuildScreen:
             out.append(f"  users     {len(cfg.users)}")
         themed = "customized" if cfg.login_theme_css() else "shipped defaults"
         out.append(f"  themes    {themed}")
+        # THE BUILD GATE, said here too (#495, own domain since #631): the TUI does not
+        # dispatch, but the GUI build this screen sends the operator to runs the SAME
+        # seam (gui/pages/launch.py) and will refuse. Saying so now is the difference
+        # between a saved config that builds and one that bounces off the build screen.
+        refusal = gate_reason(cfg, ACTION_IMAGE_BUILD)
+        if refusal:
+            out.append("")
+            out.append("! the GUI build will refuse this configuration: " + refusal)
+            out.append("  Walk the ‘Domain services’ step here (it gives every domain "
+                       "its own page) before saving.")
         out.append("")
         out.append("The TUI does not run builds yet — save this configuration "
                    "and build it in the GUI (python -m hugmesh_studio) or "
@@ -960,6 +971,8 @@ class Journey:
         from .domain_services_step import DomainServicesScreen
         from .domains_step import DomainsScreen
         from .e2e import E2EScreen
+        from .fleet import FleetScreen
+        from .golive import GoLiveScreen
         from .localcloud import LocalCloudScreen
         from .localmesh import LocalMeshScreen
         from .meshemu import MeshEmuScreen
@@ -991,6 +1004,13 @@ class Journey:
             UsersScreen(), SystemScreen(), BrandingScreen(), VaultScreen(), BuildScreen(),
         ]
         self._screens = {s.slug: s for s in screens}
+        # The two EXPERT entry points (#587, decision 71 = A): the GUI reaches its
+        # fleet window from the Sessions screen / `hugmesh_studio --fleet` and Go-Live
+        # from the tray / `--go-live` — never from a mode card or the positional walk
+        # — so these are registered, entered only by `tui --fleet` / `--go-live`
+        # (app.py), and in neither PAGE_ORDER nor SIDE_FLOW_SLUGS.
+        for extra in (FleetScreen(), GoLiveScreen()):
+            self._screens[extra.slug] = extra
         for slug, title in _SIDE_FLOW_STUB.items():
             self._screens[slug] = PendingSideFlow(slug, title)
         for slug, title in _PENDING_STEPS.items():
@@ -1092,7 +1112,7 @@ class Journey:
         # "qemu" is in SIDE_FLOW_SLUGS but is no longer a mode-menu id, so this
         # comprehension only ever CLEARS qemu_selected. The single writer that can
         # RAISE it is E2EScreen's device-lane door (the GUI twin: E2EPage._sync_arm).
-        # Its MEMBERSHIP is still load-bearing and must not be tidied away with the
+        # Its MEMBERSHIP is still relied on and must not be tidied away with the
         # dead comparison: it is what keeps _advance's positional walk off the qemu
         # screen and what lets goto("qemu") resolve. Pinned by
         # test_tui_journey::test_qemu_stays_a_side_flow_slug_even_though_its_card_went.

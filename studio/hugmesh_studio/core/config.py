@@ -194,6 +194,10 @@ MODE_SKIPPED_PAGES = {
     # "domain_services" (#495) is NOT skipped in cloud: a cloud client image IS built
     # around its --domains tie, its Domains table is unconditional, and the domain it
     # carries is exactly the one whose services the operator must answer for.
+    # "vault" STAYS skipped in cloud (#588, decided 2026-09-24): the builder ignores
+    # --vault-addr on a client role and the per-domain CA is recorded-only, so the
+    # step would offer knobs a client build discards. The Domains step says where a
+    # client's trust really comes from instead (CLIENT_CA_INHERITANCE_NOTE).
     "cloud": ("idp", "worklist", "domains_choice", "users_choice",
               "vault"),                                       # single image, admin plane via key-zip
     # mesh USED to skip "branding" outright; it no longer can: the page now also hosts
@@ -546,7 +550,7 @@ SERVICES_ALL = "all"
 # is UNCHECKED; only pre-check what is genuinely on by default"), and it also made
 # unticking `phpbb` a no-op, since --optional-services REPLACES rather than subtracts.
 # tests/test_services_section.py parses both builder scripts and asserts set-equality with
-# this tuple, so it cannot rot into a comment.
+# this tuple, so it cannot go stale into a comment.
 BUILTIN_DEFAULT_SERVICES = ("akkoma", "tuwunel", "phpbb")
 
 # What the `all` sentinel / --all-services ACTUALLY expands to, mirrored from the single
@@ -817,7 +821,7 @@ SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password")
 # build-rpi5-stage4.sh), which bake CONNECTION FACTS ONLY into
 # /etc/hugmesh/vault.conf; keys-provision's provision_vault() reads that file
 # whenever the KEYS manifest carries no .vault block (the manifest still wins).
-# The token and unseal key are custody material: they ride the KEYS stick
+# The token and unseal key are secrets the operator keeps themselves: they ride the KEYS stick
 # (vault/token, vault/unseal-key), never a flag and never the image.
 # The INTERNAL/EXTERNAL split (issue #335): ``vault_addr`` is the address a node
 # reaches Vault at from INSIDE the mesh (the one that was always here, same key and
@@ -903,6 +907,32 @@ def vault_field_error(addr: str, external_addr: str = "") -> str:
 # the SUBJECT + EXPIRY are read only when python-cryptography happens to be installed
 # (it is NOT a studio requirement — the urwid/TUI precedent: degrade, never hard-fail).
 CA_CERT_MAX_BYTES = 1 << 20             # 1 MiB: a CA bundle is kilobytes; refuse a blob
+
+#: WHERE A MESH DESKTOP CLIENT GETS ITS CERTIFICATE AUTHORITIES (#588). Cloud mode
+#: keeps skipping the Secrets store step and keeps the Domains table's Base CA column
+#: hidden, and says THIS on its Domains step instead (both faces render this one
+#: string, parity-pinned), because the two alternatives were dead knobs measured on
+#: the builders, not guessed:
+#:
+#: * ``bake_vault_conf`` (build-x86-host-stage4.sh) warns and RETURNS on a client role
+#:   — "--vault-addr given for a client role ... ignoring" — so a Vault address offered
+#:   to a client build is discarded by the builder;
+#: * the per-domain Base CA is recorded-only everywhere (no builder parses a CA flag).
+#:
+#: What really decides a client's trust is keys-provision's bulk import
+#: (specs/etc/keys-provision/provision.sh: every KEYS/certs/*.crt and *.pem copied to
+#: /usr/local/share/ca-certificates, then update-ca-certificates) — mesh-wide, from the
+#: stick, never per domain. studio/tests/test_client_ca_inheritance.py pins all three
+#: facts against the scripts, so this sentence goes red the day one of them changes.
+CLIENT_CA_INHERITANCE_NOTE = (
+    "Certificate authorities on a Mesh desktop client: the image carries none of its "
+    "own, so there is no per-domain CA to pick here and the Secrets store step is "
+    "skipped. At first boot keys-provision imports every certificate in the KEYS "
+    "stick's certs/ folder (*.crt and *.pem — the mesh's cluster-ca.crt among them) "
+    "into the system trust store, so this client trusts exactly the certificate "
+    "authorities on the stick you provision it with, for every domain it is tied to. "
+    "(A Vault address would be ignored too: the builder drops --vault-addr on a "
+    "client role — Vault/ESO seeding is a cluster-node first-boot step.)")
 _PEM_CERT_RE = re.compile(
     r"-----BEGIN CERTIFICATE-----\s*(?P<body>[A-Za-z0-9+/=\s]+?)\s*"
     r"-----END CERTIFICATE-----")
@@ -1347,7 +1377,7 @@ class BuilderDefault:
     recorded a fiction for half the table, and GUARD A could only ever have checked the
     variable NAMES. Carrying the fork ``condition`` verbatim instead lets the guard pin the
     whole sentinel — name, condition and both arms — so a builder-side edit to any part of
-    it goes RED.
+    it fails.
 
     ``policy`` is what STUDIO does about that sentinel, and it is descriptive of today's
     code, not aspirational:
@@ -1424,7 +1454,7 @@ class FieldScope:
         carries a cluster domain.
 
     A blanket ``modes=("cloud","mesh")`` would therefore have hidden a widget whose value
-    the ARM builders really do take, and (via the emission-neutral clear the wizard pairs
+    the ARM builders really do take, and (via the clear that leaves the output unchanged the wizard pairs
     with every hide) silently reset it to "hugmesh.net" on an operator who had typed
     something else. Same shape of bug as the orangepizero2 --standalone regression above,
     on the other axis. None means "the mode rule holds everywhere"; a tuple means it holds
@@ -1474,8 +1504,8 @@ _BD_BUNDLE_SOURCE = BuilderDefault(
 # frite / orangepi5 / orangepi-zero2 parse --standalone with NO role concept whatsoever
 # (zero ROLE_CLIENT/ROLE_K8S occurrences), so there is no class rule there to enforce and
 # Studio must not invent one. test_field_scope.py derives this set from the builder scripts
-# and asserts equality, so a builder that grows or loses a role-class concept goes RED here
-# rather than letting the tuple rot into a fiction.
+# and asserts equality, so a builder that grows or loses a role-class concept fails here
+# rather than letting the tuple go stale into a fiction.
 _STANDALONE_CLASS_GATED_PLATFORMS = ("x86", "rpi5")
 
 # The CLUSTER-IDENTITY trio — the three fields NetworkPage's "Identity & domain"
@@ -1640,7 +1670,7 @@ def x86_desktop_axis(role: str) -> tuple[str, ...]:
     * cluster NODE roles (pki/be/fe/be+gpu/omnibus/edge_ai) are headless k8s
       servers — the builder plans DESKTOP=none and ignores the flag, so NO
       desktop axis exists for them at all (advertising one manufactured 12 of
-      the 16 phantom inventory entries).
+      the 16 inventory entries that never existed).
     """
     if role in X86_CLIENT_ROLES:
         return ("thin", "full")
@@ -1749,7 +1779,7 @@ def cluster_identity_applies(cfg: "ImageConfig") -> bool:
     THE QUESTION IT ANSWERS is deliberately narrow: "are --cluster-domain /
     --games-domain / --release-state actually EMITTED for this image". Not "does this
     image have a domain", not "is this a mesh". Emission is the only thing a widget gate
-    may key on, because the wizard's hide contract is EMISSION-NEUTRAL — a hidden field
+    may key on, because the wizard's hide contract leaves the output unchanged — a hidden field
     is cleared to its dataclass default in validatePage, so hiding a field that IS emitted
     silently changes the built image.
 
@@ -1895,7 +1925,7 @@ def flow_images(cfg: "ImageConfig", entries=None) -> tuple[ImageAxes, ...]:
 def flow_allows(pred, cfg: "ImageConfig", entries=None) -> bool:
     """``pred`` must hold for EVERY image this flow builds.
 
-    ALL, not ANY, and that is the load-bearing choice. These surfaces live on the SHARED
+    ALL, not ANY, and that is the choice that matters. These surfaces live on the SHARED
     mesh base, which ``WorklistConfig._materialize_one`` DEEPCOPIES onto every entry, and
     ``clear_role_class_fields`` clears only the theme/home families — nothing per-entry
     ever strips ``standalone`` / ``local_pass`` / the media-data trio / ``egress_vpn``.
@@ -1928,7 +1958,7 @@ def superadmin_plane_applies(cfg: "ImageConfig") -> bool:
     so every operator building three node images walked two superadmin tables they had
     nothing to put in. Now the mesh arm asks whether the operator opted into
     ``additional_domains`` on the Network step ("this mesh also hosts domains beyond its
-    own cluster domain"). Emission-neutrality is preserved by NetworkPage.validatePage,
+    own cluster domain"). Unchanged-output rule is preserved by NetworkPage.validatePage,
     which CLEARS cfg.domains/cfg.users whenever the opt-in is off — so a skipped table
     can never leave rows behind for mesh_manifest() to publish. See the ask-8 note in
     gui/pages/network.py.
@@ -2345,7 +2375,7 @@ def effective_installer_ui(cfg: "ImageConfig") -> str:
 def field_default(name: str):
     """The dataclass default for one ImageConfig field.
 
-    PUBLIC since 2026-08-26. Every emission-neutral hide in the page set has to reset
+    PUBLIC since 2026-08-26. Every hide that leaves the output unchanged in the page set has to reset
     its field to this value, so three GUI pages had grown their own byte-identical
     copy (network.py, build.py, and role.py by importing the underscore name). They all
     delegate here now: the dataclass is the single truth, and a page that compares
@@ -2398,7 +2428,7 @@ def mode_axis_violated(fld: str, cfg: "ImageConfig") -> bool:
     every mode for all nine ARM builders, and build-rpi5-stage4.sh:3386 bakes it into
     /etc/hugmesh/cluster-domain unconditionally. Reading the mode tuple flat would put a
     standalone rpi5 image's REAL, EMITTED cluster domain out of scope — hiding the widget
-    and (the wizard pairs every hide with an emission-neutral clear) resetting the typed
+    and (the wizard pairs every hide with a clear that leaves the output unchanged) resetting the typed
     value to the "hugmesh.net" default behind the operator's back.
 
     Returns False when the platform axis already owns the rejection (that gate, and
@@ -2606,7 +2636,7 @@ def scope_violations(cfg: "ImageConfig") -> tuple[list[str], list[str]]:
 #     * BUILDER_DEFAULTS['bundle_source'].policy flips override -> defer, which turns
 #       GUARD A's test_guard_a_policy_override_pins_the_known_gap RED by design, and
 #       test_cli_args.py's X86 tails plus test_field_scope.py:190 move with it.
-#   GUARD A is doing its job in the meantime: it goes RED the moment either flag stops
+#   GUARD A is doing its job in the meantime: it fails the moment either flag stops
 #   emitting unconditionally, so this cannot be quietly inherited.
 
 

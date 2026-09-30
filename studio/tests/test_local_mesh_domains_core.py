@@ -125,3 +125,124 @@ def test_record_walk_writes_markers_and_ticks_and_nothing_that_runs():
     record_walk(cfg, form, ["a.example"])
     assert cfg.domain_services_reviewed == ("a.example", "cli.example")
     assert [r["name"] for r in cfg.domains] == ["a.example", "cli.example"]
+
+
+# ── #636: the saved mesh -> node images import carries EVERY domain ─────────────────
+from hugmesh_studio.core import domain_services as _ds  # noqa: E402
+from hugmesh_studio.core.config import ImageConfig  # noqa: E402
+from hugmesh_studio.core.local_mesh_bootstrap import (  # noqa: E402
+    LocalMeshBootstrapConfig as _BootCfg,
+)
+from hugmesh_studio.core.local_mesh_domains import (  # noqa: E402
+    apply_imported_domains, imported_domains_lines, imported_mesh_domains,
+)
+
+
+def _n_domain_record(**kw):
+    """A saved local mesh generated with THREE domains: its own (with a per-domain
+    selection), an added superdomain-sign-in row, and an added own-Casdoor row — only
+    the own domain and a.example were walked."""
+    kw.setdefault("cluster_domain", "saved.example.org")
+    kw.setdefault("domains", (
+        {"name": "saved.example.org", "title": "", "idp": DOMAIN_IDP_SUPERDOMAIN,
+         "optional_services": ["games"]},
+        {"name": "a.example", "title": "Alpha", "idp": DOMAIN_IDP_SUPERDOMAIN,
+         "optional_services": ["phpbb", "akkoma"]},
+        {"name": "b.example", "title": "Beta", "idp": DOMAIN_IDP_OWN,
+         "optional_services": []},
+    ))
+    kw.setdefault("own_idp_domains", ("b.example",))
+    kw.setdefault("domain_services_reviewed", ("saved.example.org", "a.example"))
+    return _BootCfg(env="prod", **kw)
+
+
+def _node_flow_cfg(domain="saved.example.org"):
+    """The node-image flow's config at the moment the localcloud import runs: mesh
+    mode, cluster_domain already set to the imported apex."""
+    return ImageConfig(mode="mesh", cluster_domain=domain)
+
+
+def test_every_added_domain_reaches_the_node_image_config():
+    cfg = _node_flow_cfg()
+    added = apply_imported_domains(cfg, imported_mesh_domains(_n_domain_record()))
+    assert added == ["a.example", "b.example"]
+    by = {d.name: d for d in cfg.domains}
+    assert list(by) == ["a.example", "b.example"]          # the OWN domain is no row
+    assert (by["a.example"].title, by["a.example"].idp,
+            by["a.example"].optional_services) == (
+        "Alpha", DOMAIN_IDP_SUPERDOMAIN, ["akkoma", "phpbb"])  # catalogue order
+    assert (by["b.example"].title, by["b.example"].idp) == ("Beta", DOMAIN_IDP_OWN)
+    assert cfg.own_idp_domains() == ("b.example",)          # Sign-in = Own survives
+    assert cfg.cluster_domain_services == ["games"]          # the own row's selection
+    assert cfg.additional_domains is True                    # or the default card wipes
+    # the implicit own domain is untouched by the rows: still implicit
+    assert _ds.implicit_own_domain(cfg) == "saved.example.org"
+
+
+def test_only_what_the_record_walked_is_marked_reviewed():
+    cfg = _node_flow_cfg()
+    apply_imported_domains(cfg, imported_mesh_domains(_n_domain_record()))
+    assert cfg.domain_services_reviewed == ["saved.example.org", "a.example"]
+    # b.example was never walked on the local mesh: the build gate still names it
+    assert _ds.unconfigured_domains(cfg, include_own=True) == ["b.example"]
+
+
+def test_the_import_never_invents_the_own_domains_walk():
+    """domains_from_bootstrap marks the record's own domain reviewed when it is not a
+    recorded row (a START leniency). An import must not turn that into a walk."""
+    rec = _n_domain_record(
+        domains=({"name": "a.example", "title": "", "idp": DOMAIN_IDP_SUPERDOMAIN,
+                  "optional_services": []},),
+        own_idp_domains=(), domain_services_reviewed=("a.example",))
+    assert "saved.example.org" in domains_from_bootstrap(rec).domain_services_reviewed
+    md = imported_mesh_domains(rec)
+    assert md.domain_services_reviewed == ["a.example"]
+    cfg = _node_flow_cfg()
+    cfg.cluster_domain_services = ["tube"]            # the operator's own earlier pick
+    apply_imported_domains(cfg, md)
+    assert cfg.domain_services_reviewed == ["a.example"]
+    assert cfg.cluster_domain_services == ["tube"]     # the record said nothing: kept
+
+
+def test_a_record_with_no_domain_rows_imports_exactly_the_apex():
+    """The pre-#636 import, byte for byte: None, and nothing on cfg changes."""
+    rec = _BootCfg(env="prod", cluster_domain="saved.example.org")
+    assert imported_mesh_domains(rec) is None
+    cfg = _node_flow_cfg()
+    before = cfg.to_dict()
+    assert apply_imported_domains(cfg, None) == []
+    assert cfg.to_dict() == before
+    assert imported_domains_lines(None) == []
+
+
+def test_an_existing_row_of_the_same_name_takes_the_record_and_loses_its_marker():
+    cfg = _node_flow_cfg()
+    cfg.domains = [Domain(name="b.example", title="Old", optional_services=["tube"]),
+                   Domain(name="keep.example")]
+    _ds.record_reviewed(cfg, ["b.example", "keep.example"])
+    apply_imported_domains(cfg, imported_mesh_domains(_n_domain_record()))
+    assert [d.name for d in cfg.domains] == ["b.example", "keep.example", "a.example"]
+    b = cfg.domains[0]
+    assert (b.title, b.idp, b.optional_services) == ("Beta", DOMAIN_IDP_OWN, [])
+    # b's old marker vouched for services that are gone; keep.example's stays
+    assert "b.example" not in cfg.domain_services_reviewed
+    assert "keep.example" in cfg.domain_services_reviewed
+
+
+def test_the_imported_rows_reach_the_mesh_manifest():
+    cfg = _node_flow_cfg()
+    apply_imported_domains(cfg, imported_mesh_domains(_n_domain_record()))
+    m = cfg.mesh_manifest()
+    assert [d["name"] for d in m["domains"]] == ["a.example", "b.example"]
+    assert m["domains"][1]["idp"] == DOMAIN_IDP_OWN
+    assert m["domains"][0]["optional_services"] == ["akkoma", "phpbb"]
+    assert m["cluster_domain_services"] == ["games"]
+
+
+def test_the_summary_lines_name_every_added_domain_and_its_state():
+    lines = imported_domains_lines(imported_mesh_domains(_n_domain_record()))
+    assert lines == [
+        "a.example — superdomain sign-in; services: akkoma, phpbb",
+        "b.example — own Casdoor; services: cluster default "
+        "(services not confirmed yet)",
+    ]

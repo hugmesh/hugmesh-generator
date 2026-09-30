@@ -290,7 +290,7 @@ def test_x86_unaffiliated_look_fields_are_allowed_and_emitted(field, value, flag
 
 
 def test_x86_unaffiliated_look_and_identity_split_covers_every_branding_field():
-    """Anti-rot guard. THEME_FIELDS is exactly the ten-field family the old single
+    """Anti-staleness guard. THEME_FIELDS is exactly the ten-field family the old single
     "branding assets" conflict lumped together (theme/branding_dir/wallpaper/
     grub_background/grub_theme/login_background/brand_logo/accent_color/color_scheme/
     brand_locked). Every one of them must still be CLASSIFIED by the split — identity
@@ -1166,7 +1166,7 @@ def test_cluster_identity_applies_is_platform_asymmetric():
     The three asserts below are exactly those two builders' truth plus the control case.
     Each is cross-checked against the ARGV so the predicate cannot drift away from what
     to_cli_args() actually emits — which is the only property a hide-gate may key on
-    (hiding is paired with an emission-neutral clear)."""
+    (hiding is paired with a clear that leaves the output unchanged)."""
     x86_standalone = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
                                  cluster_domain="acme.example")
     rpi5_standalone = ImageConfig(mode="standalone", role="generic", platform="rpi5",

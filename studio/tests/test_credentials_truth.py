@@ -6,7 +6,7 @@ into the mesh that is running — with no evidence that anything had been seeded
 the file's value matched the identities, or that the superadmin it named was the one
 the Studio minted. ``assess()`` is the whole state machine and is PURE, so every state
 below is driven with plain facts and no docker; ``probe_credentials()`` is the blocking
-gatherer, exercised here only through fakes at its documented seam.
+gatherer, exercised here only through fakes at its documented override point.
 
 Two rules are pinned hard: UNKNOWN is never rendered as absent (a probe that could not
 run is not a "no"), and no password ever reaches ``headline`` or ``detail`` (they go
@@ -418,7 +418,7 @@ def test_credentials_file_honours_the_env_override_and_absence(tmp_path):
     assert ct.read_values(str(tmp_path / "nowhere"), {}) == {}
 
 
-# ── the gatherer at its seam ──────────────────────────────────────────────────────
+# ── the gatherer at its override point ──────────────────────────────────────────────────────
 
 class _Node:
     """A LocalStackNode stand-in: docker answers are scripted per command."""

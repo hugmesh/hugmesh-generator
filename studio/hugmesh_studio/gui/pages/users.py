@@ -241,7 +241,7 @@ class UsersPage(QtWidgets.QWizardPage):
     def applies_to(self, cfg) -> bool:
         """Dynamic-skip predicate (wizard.nextId): a cloud NODE image emits no
         --person-role/--domains and writes no manifest, so the users table contributes
-        nothing and is skipped (emission-neutral).
+        nothing and is skipped (leaves the output unchanged).
 
         ASK 8 made the mesh arm conditional; ASK 20 gave it its OWN condition. The gate
         is no longer the domains opt-in (``superadmin_plane_applies``) but

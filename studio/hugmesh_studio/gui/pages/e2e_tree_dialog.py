@@ -658,7 +658,7 @@ class E2ETreeDialog(QtWidgets.QDialog):
         accepted, rejected = self.selected_specs()
         if rejected:
             # Refuse the WHOLE run rather than quietly running the half that parsed:
-            # a partial run reported as the selection is the vacuity this unit exists
+            # a partial run reported as the selection is the checked-nothing pass this unit exists
             # to prevent.
             self.status.setText(
                 f"Refusing to run: {len(rejected)} selected path(s) are "

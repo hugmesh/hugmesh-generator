@@ -40,7 +40,8 @@ import os
 import re
 
 from ..core.config import (
-    DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain,
+    CLIENT_CA_INHERITANCE_NOTE, DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN,
+    DOMAIN_IDP_SUPERDOMAIN, Domain,
 )
 from ..core.domain_services import (implicit_own_domain, reviewed_names,
                                     services_summary)
@@ -144,6 +145,9 @@ class DomainsScreen:
                            "chains to. Recorded only. No certificates yet: add them "
                            "on the Secrets store step (its 'c' command), then come "
                            "back — this step runs before that one.")
+        elif cfg.mode == "cloud":
+            # #588: the GUI's cloud-arm note, the SAME string (parity-pinned).
+            out.append(CLIENT_CA_INHERITANCE_NOTE)
         out.append("Title/optional-services/applies-to editing is not yet "
                    "ported to the TUI — edit those columns in the GUI.")
         return out

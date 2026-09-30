@@ -434,7 +434,7 @@ def delete_path(path: str) -> None:
 # ── small blocking helpers (docker / git / hashing) ────────────────────────────
 def _run(args: list[str], *, cwd: str | None = None,
          timeout: int = _CMD_TIMEOUT) -> tuple[int, str]:
-    """One subprocess call. Never raises — a missing binary or a wedged daemon is
+    """One subprocess call. Never raises — a missing binary or a hung daemon is
     an honest "unknown", not a traceback out of a worker thread."""
     try:
         r = subprocess.run(args, cwd=cwd, capture_output=True, text=True,

@@ -18,7 +18,7 @@ import pytest
 
 from hugmesh_studio.core import mesh_monitor as mm
 
-#: This module exercises the REAL snapshot (tests/conftest.py makes it inert for
+#: This module exercises the REAL snapshot (tests/conftest.py makes it do nothing for
 #: every other suite).
 pytestmark = pytest.mark.real_mesh_monitor
 from hugmesh_studio.core import view_doors

@@ -1,7 +1,7 @@
 """LocalMeshBootstrapConfig.to_dict/from_dict + LocalMeshBootstrap.restore /
 start_saved — the core half of the saved-mesh lane (ask C, 2026-09-01).
 
-No Qt, no docker: every subprocess seam is monkeypatched on the bootstrap or the
+No Qt, no docker: every subprocess override point is monkeypatched on the bootstrap or the
 stack node, exactly as test_local_mesh_bringup.py's ``_happy_boot`` does.
 """
 from __future__ import annotations

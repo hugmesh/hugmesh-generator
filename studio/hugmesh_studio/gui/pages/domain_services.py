@@ -32,7 +32,7 @@ named by the gate:
 * ``gui/pages/sessions_widget.py`` refuses a previous-builds RESTART, narrowly — see
   ``core.domain_services.restart_gate_reason`` for why that one door is not blanket.
 
-All four through the single seam ``core.domain_services.gate_reason`` so a test can
+All four through the single override point ``core.domain_services.gate_reason`` so a test can
 drive the refusal with a bare ``ImageConfig``.
 
 SCOPE IS NAMED, NOT IMPLIED (#497). Every row on the checkbox table carries a Scope
@@ -80,10 +80,12 @@ one domain every mesh serves (``cfg.cluster_domain``) never had a services page.
 IMPLICIT — never a ``cfg.domains`` row, so the ASK-8 emission guard holds (an untouched
 flow emits no ``--domains`` and no manifest ``domains`` entry); its selection is
 ``cfg.cluster_domain_services``, which both manifests carry only when non-empty. The
-gate (``unconfigured_domains``) still names TABLE rows only: the own domain's page is
-enforced by being unavoidable on the flow, not by the gate, because a gate that refused
-a mesh-mode config for its own domain would also refuse the local-docker route an
-operator reaches after clicking "Mesh node" first — a flow that has no such step.
+BUILD gate names the own domain too (#631 — ``core.domain_services.
+OWN_DOMAIN_GATED_ACTIONS``), because a config LOADED on the Sessions screen that never
+opened this page used to build; the docker MESH START and the previous-builds RESTART
+stay rows-only — the first because the local-docker route an operator reaches after
+clicking "Mesh node" first has no such step (a dead end), the second because a recorded
+session from before the own domain had a page must not be refused over it.
 
 ONE BODY, TWO HOSTS. ``DomainServicesBody`` is the surface and its logic as a plain
 mixin; this page hosts it in the image flow, and ``DomainServicesWidget`` hosts the

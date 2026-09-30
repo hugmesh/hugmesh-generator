@@ -203,7 +203,7 @@ class GoLiveDriver:
     def _driver_env(self) -> dict[str, str]:
         """Environment for every driver invocation: point GL_PROVIDERS_LIB at the
         in-repo registry (so the dev Studio finds it without the /usr/lib bake),
-        unless the caller already set it (test seam). Deliberately never sets
+        unless the caller already set it (test override point). Deliberately never sets
         GL_ASSUME_YES — that would bypass the commit gate."""
         env = dict(os.environ)
         if "GL_PROVIDERS_LIB" not in env and os.path.exists(self.registry_path):

@@ -16,7 +16,7 @@ field:
    ``emerge_packages.EMERGE_GROUPS``, every platform accounts for all five as either
    emitted or not-applicable-with-a-reason, and the declared ``emitted`` set matches what
    that builder's source ACTUALLY greps out. Three-way: constant <-> table <-> source.
-3. EXECUTION ORDER — the forward-only matcher's load-bearing assumption is that builders
+3. EXECUTION ORDER — the forward-only matcher's assumption that matters is that builders
    emit banners in table order. That is NOT the same as file order (a banner inside a shell
    function runs when the function is CALLED, and if/else arms are alternatives), so this
    probe models both and replays every call site. A table row parked at the wrong index

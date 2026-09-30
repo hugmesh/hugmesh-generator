@@ -412,7 +412,7 @@ def default_cell_config(mode: str, role: str, platform: str) -> ImageConfig:
     carries no option atoms: the web UI layers those client-side from adhoc_adds. Fails
     loud if a future default-ON option would leak atoms into the baseline.
 
-    KNOWN SEAM: WorklistConfig._materialize_one additionally forces tailscale=True and
+    KNOWN INCONSISTENCY: WorklistConfig._materialize_one additionally forces tailscale=True and
     sso=True for MESH mode after the strips; that forcing is deliberately NOT mirrored
     here because no PLATFORM_LISTS gate and no ADHOC_ADDS predicate reads cfg.tailscale
     or cfg.sso today, so tiers() output is identical either way. If a future gate or

@@ -20,7 +20,7 @@ The Games checkbox is GONE: a truthy legacy ``games`` is migrated to
 ``optional_services += ["games"]`` by ``ImageConfig.from_dict`` on load, so loaded rows
 arrive pre-migrated and this page never sees a games flag again.
 
-Row order is load-bearing: the first attached domain is the PRIMARY one (the first
+Row order is relied on: the first attached domain is the PRIMARY one (the first
 ``--domains`` element, which lands in ROLE_TAG / the filename). The page prefills row 0
 with the cluster domain on a fresh cloud/mesh flow so a superadmin starts from a valid
 primary domain (spec 4). The Tailscale root domain (spec 5) is shown read-only in
@@ -77,8 +77,9 @@ import os
 
 from ..qt import Qt, QtWidgets
 from ..styles import WARN, muted
-from ...core.config import (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain,
-                            image_class, superadmin_plane_applies)
+from ...core.config import (CLIENT_CA_INHERITANCE_NOTE, DOMAIN_IDP_OWN,
+                            DOMAIN_IDP_SUPERDOMAIN, Domain, image_class,
+                            superadmin_plane_applies)
 from ...core.domain_services import (implicit_own_domain, normalise_slugs,
                                      reviewed_names, services_summary, split_services)
 
@@ -145,7 +146,7 @@ class _BaseCaCombo(QtWidgets.QComboBox):
     ``certs`` is ``cfg.base_ca_certs`` (absolute paths); the label is the file's base
     name and the DATA is the full path, so tests and the config read the path while
     the label stays free to change. A ``selected`` path no longer in ``certs`` falls
-    back to None rather than being kept as a phantom row — the certificate really is
+    back to None rather than being kept as a row for a file that no longer exists — the certificate really is
     gone, and VaultPage.validatePage has already cleared it from cfg."""
 
     def __init__(self, certs=(), selected=""):
@@ -603,6 +604,14 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         self.table_help.setWordWrap(True)
         self.table_help.setStyleSheet("color: gray;")
         lay.addWidget(self.table_help)
+        # CLOUD ONLY (#588): where a desktop client's certificate authorities really
+        # come from — the KEYS stick, mesh-wide — said on the step, because this flow
+        # hides the Base CA column and skips the Secrets store step (config.py
+        # CLIENT_CA_INHERITANCE_NOTE says why both would be dead knobs on a client).
+        self.client_ca_note = QtWidgets.QLabel(CLIENT_CA_INHERITANCE_NOTE)
+        self.client_ca_note.setWordWrap(True)
+        self.client_ca_note.setVisible(False)
+        lay.addWidget(self.client_ca_note)
         self._init_table(lay)
         # STEP 6 surfacing: each domain gets a default admin whose credentials are
         # generated + presented at provisioning — not entered or stored here.
@@ -645,7 +654,7 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
     def applies_to(self, cfg) -> bool:
         """Dynamic-skip predicate (wizard.nextId): a cloud NODE image emits no
         --domains and writes no manifest, so this table contributes nothing and is
-        skipped (emission-neutral). Mesh and cloud client images still apply.
+        skipped (leaves the output unchanged). Mesh and cloud client images still apply.
 
         ASK 8: in MESH mode this now also requires ``cfg.additional_domains`` — the
         "this mesh also hosts other domains" opt-in on the Network step. Unticked, this
@@ -684,8 +693,9 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         # the base CA is a MESH provisioning intent for domains this operator runs, so
         # it hides in cloud for exactly the reason Sign-in does (a cloud client image
         # provisions no domains). A hidden combo still collects its untouched "None",
-        # which is the absent-key default — emission-neutral either way.
+        # which is the absent-key default — leaves the output unchanged either way.
         self.table.setColumnHidden(_COL_CA, c.mode != "mesh")
+        self.client_ca_note.setVisible(c.mode == "cloud")
         # Row 0 is derived state, so it is re-derived on EVERY forward entry, not
         # only when the table is empty (#494 fix round): a same-object Back (no
         # _cfg_seen change) may have switched the mode to cloud, or renamed the
@@ -773,6 +783,15 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         # deleted domain must not leave a stranded entry, and an untouched table
         # (every picker on None) leaves the empty dict the native default already is —
         # so a config that never met this column is byte-identical after a round trip.
+        # A HIDDEN column (cloud, #588) is not an answer, though: its pickers only offer
+        # cfg.base_ca_certs, which the skipped Secrets store step never fills here, so
+        # rebuilding from them would silently erase a loaded config's record. Keep what
+        # cfg recorded instead — pruned to the domains still in the table, so the
+        # stranded-entry rule holds either way.
+        if self.table.isColumnHidden(_COL_CA):
+            names = {d.name for d in out}
+            base_ca = {k: v for k, v in (self.wiz.cfg.domain_ca or {}).items()
+                       if k in names}
         self.wiz.cfg.domain_ca = base_ca
         # Keep the mirror honest: a row whose slugs came from cfg above must not still
         # be displaying the pre-step text if the operator navigates back here without

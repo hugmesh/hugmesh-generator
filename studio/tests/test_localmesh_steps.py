@@ -5,7 +5,7 @@ one 600-line bootstrap tab — and is now ``LocalMeshChoicePage`` (two cards) ro
 either to a terminal join step or through seven bring-up steps, in the order the
 surface has always had its sections.
 
-These tests pin the parts that can silently rot:
+These tests pin the parts that can silently go stale:
 
 * the CARD ROUTING itself, in both directions, including the choice's default;
 * that the split forked NO implementation — every widget still lives on the one
@@ -438,7 +438,7 @@ def test_walking_the_join_step_untouched_commits_nothing_to_cfg(wiz):
 
 
 def test_the_controller_reclaims_the_run_view_on_any_show_not_only_a_forward_one(wiz):
-    """The custody rule is ONE rule: whichever local-mesh page is on screen holds the
+    """The ownership rule is ONE rule: whichever local-mesh page is on screen holds the
     run view, claimed from showEvent so it holds on a Back too.
 
     The controller is the last step today, so the wizard only ever enters it forward
