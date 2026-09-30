@@ -16,17 +16,25 @@
 #     rolconnlimit(adminbff_app)      = 20   (initdb/10-roles.sh: CONNECTION LIMIT 20)
 #     max_connections                 = 60   (entrypoint: -c max_connections=60)
 #     r2dbc pool per replica          = 10   (NO spring.r2dbc.pool.* anywhere; the
-#                                             Spring Boot / r2dbc-pool default; each
-#                                             pod held exactly 10 idle connections)
+#                                             Spring Boot / r2dbc-pool default:
+#                                             initial-size 10 AND max-size 10)
 #     HorizontalPodAutoscaler max     = 6    (hpa.yaml: minReplicas 2, maxReplicas 6)
 #     6 replicas x 10 = 60 > 20 (role)  and  > 57 (max_connections - 3 reserved)
-# Two pods held the whole budget of 20, the other four could not open a single
-# connection, and every request routed to them failed. At the HPA's minimum,
-# 2 x 10 = 20 = 20: it held with ZERO margin, which is why nothing failed until
-# the metrics API answered for the first time on 2026-09-30 (metrics-server had
-# been installed on 2026-09-24T16:08Z) and both autoscalers went 2 -> 3 -> 6 in
-# a minute, on a memory target read against a 256Mi request that the JVM
-# exceeds at idle. hugmesh-generator#663 has the full account.
+# How it plays out (user-bff-db's own connection log, 2026-09-30 17:03Z-20:0xZ):
+# r2dbc-pool opens initial-size connections on a pod's FIRST acquisition, so
+# after a simultaneous start the first two pods to touch the database took 10
+# each (the whole budget of 20), the other four got "FATAL: too many connections
+# for role" on every attempt (about one every 5 s, from their scheduled loops)
+# and failed every request routed to them, sign-in included. The pool sheds
+# idle connections after about an hour, so the budget moved to the next two
+# pods, and the last FATAL came 2 hours after the start; a sign-in run at 21:56Z
+# passed on the unchanged cluster. The defect therefore returns after every
+# restart, rollout or scale-up and hides itself two hours later. At the HPA's
+# minimum, 2 x 10 = 20 = 20: it held with ZERO margin, which is why nothing
+# failed until the metrics API answered on 2026-09-30 (metrics-server had been
+# installed on 2026-09-24T16:08Z) and both autoscalers went 2 -> 3 -> 6 in a
+# minute, on a memory target read against a 256Mi request that the JVM exceeds
+# at idle. hugmesh-generator#663 has the full account.
 #
 # WHAT THIS PINS, offline, over specs/cluster/manifests (no cluster, no network):
 #   For every Deployment whose container carries SPRING_R2DBC_URL +
@@ -38,7 +46,10 @@
 #     (2) that database's entrypoint sets -c max_connections=N; missing is FAIL;
 #     (3) replicas_max = the maxReplicas of the HorizontalPodAutoscaler whose
 #         scaleTargetRef names the Deployment, else the Deployment's
-#         spec.replicas, else 1;
+#         spec.replicas, else 1 — and every HorizontalPodAutoscaler under
+#         manifests must name a Deployment that exists there, or a typo in a
+#         scaleTargetRef would silently drop a service to the "1 replica" branch
+#         and pass;
 #     (4) pool_max = SPRING_R2DBC_POOL_MAX_SIZE from the container env, else 10
 #         (the r2dbc-pool default that Spring Boot applies when the property is
 #         absent — pinned here as an ASSUMPTION so a future default change shows
@@ -222,6 +233,23 @@ for path, dep in deployments:
 
 if candidates == 0:
     bad("no Deployment under specs/cluster/manifests carries SPRING_R2DBC_URL + SPRING_R2DBC_USERNAME: the census found nothing (tree moved?)")
+
+# Every HPA must point at a Deployment the census can see: a scaleTargetRef that
+# names nothing would make the (3) fallback read "1 replica" for a service that
+# is in fact autoscaled, and pass.
+dep_names = set()
+for path, dep in deployments:
+    meta = dep.get("metadata") or {}
+    dep_names.add((meta.get("namespace"), meta.get("name")))
+for path, h in hpas:
+    ref = (h.get("spec") or {}).get("scaleTargetRef") or {}
+    if ref.get("kind") != "Deployment":
+        continue
+    ns = (h.get("metadata") or {}).get("namespace")
+    if any(n == ref.get("name") and (ns is None or dns is None or ns == dns) for dns, n in dep_names):
+        ok("HPA %s targets Deployment %s, which exists under manifests" % (os.path.relpath(path, REPO), ref.get("name")))
+    else:
+        bad("HPA %s targets Deployment %r, which no manifest under specs/cluster/manifests defines (typo? the budget for that service would fall back to 1 replica)" % (os.path.relpath(path, REPO), ref.get("name")))
 
 for host in sorted(per_db):
     d = per_db[host]
