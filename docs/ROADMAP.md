@@ -170,8 +170,8 @@ prefix.
 Every isolated row has been either fixed or reclassified. The last few went like this:
 
 - The `hugmesh-actions` token mint had already landed.
-- The `hugmesh-gateway` mTLS profile was already fixed at the root. A named fail-fast is
-  open in hugmesh-gateway#42.
+- The `hugmesh-gateway` mTLS profile was already fixed at the root. A named fail-fast
+  landed in hugmesh-gateway#42 (merged 2026-09-30).
 - The `hugmesh-games` input gates 2/3 had shipped (PR #14, gate 3 off by default), so
   their four rows are done. `bundle_source` in Studio waits on decisions its own TODO
   spells out, so it moved to needs-coordination.
