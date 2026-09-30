@@ -971,6 +971,8 @@ class Journey:
         from .domain_services_step import DomainServicesScreen
         from .domains_step import DomainsScreen
         from .e2e import E2EScreen
+        from .fleet import FleetScreen
+        from .golive import GoLiveScreen
         from .localcloud import LocalCloudScreen
         from .localmesh import LocalMeshScreen
         from .meshemu import MeshEmuScreen
@@ -1002,6 +1004,13 @@ class Journey:
             UsersScreen(), SystemScreen(), BrandingScreen(), VaultScreen(), BuildScreen(),
         ]
         self._screens = {s.slug: s for s in screens}
+        # The two EXPERT entry points (#587, decision 71 = A): the GUI reaches its
+        # fleet window from the Sessions screen / `hugmesh_studio --fleet` and Go-Live
+        # from the tray / `--go-live` — never from a mode card or the positional walk
+        # — so these are registered, entered only by `tui --fleet` / `--go-live`
+        # (app.py), and in neither PAGE_ORDER nor SIDE_FLOW_SLUGS.
+        for extra in (FleetScreen(), GoLiveScreen()):
+            self._screens[extra.slug] = extra
         for slug, title in _SIDE_FLOW_STUB.items():
             self._screens[slug] = PendingSideFlow(slug, title)
         for slug, title in _PENDING_STEPS.items():

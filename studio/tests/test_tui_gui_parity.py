@@ -375,3 +375,79 @@ def test_both_faces_walk_the_services_step_on_the_same_flows(wiz, cfg):
         from hugmesh_studio.core.domain_services import domain_names_for_services
         assert [d.name for d in j.screen().domains(j)] == \
             domain_names_for_services(cfg)
+
+
+# ── #587 / #588: the fleet, Go-Live and cloud-CA surfaces (decision 71 = A) ────────────
+def test_the_fleet_steps_are_the_same_objects_on_both_faces(qapp, monkeypatch):
+    """The GUI fleet window's Domains / Domain services steps and the TUI's fleet
+    screen: same lane sentence, no Sign-in column on either, same refusal."""
+    from hugmesh_studio.core import build_driver
+    from hugmesh_studio.core.fleet import FLEET_LANE_NOTE, fleet_gate_reason
+    from hugmesh_studio.gui.pages import fleet as gui_fleet
+    from hugmesh_studio.tui.fleet import FleetScreen
+    monkeypatch.setattr(build_driver, "detect",
+                        lambda builder_image="hugmesh-builder": HOST)
+    page = gui_fleet.FleetPage(GENERATOR_DIR)
+    assert page.domain_services.lane_note.text() == FLEET_LANE_NOTE
+    assert FleetScreen().services.lane_note == FLEET_LANE_NOTE
+    assert page.domains_table.table.isColumnHidden(gui_domains._COL_IDP)
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("fleet")
+    j.feed("set cluster_domain mesh.example")
+    j.feed("")
+    j.feed("a acme.example")
+    headers, _rows = j.screen().table(j)
+    assert "sign-in" not in headers
+    # the same rows on both faces refuse with the same sentence
+    page.cluster_domain.setText("mesh.example")
+    page._goto(gui_fleet.STEP_DOMAINS)
+    page.domains_table._add("acme.example", "")
+    assert page._commit_domains()
+    page._goto(gui_fleet.STEP_DOMAIN_SERVICES)    # GUI: lands on the own domain
+    page._leave(gui_fleet.STEP_DOMAIN_SERVICES)   # ...and records it walked
+    j.feed("")                                    # TUI: domains -> services (own)
+    j.feed("")                                    # services -> review
+    assert fleet_gate_reason(page.collect()) == j.screen().refusal(j) != ""
+    page.deleteLater()
+
+
+def test_go_live_offers_and_plans_the_same_domains_on_both_faces(qapp, tmp_path,
+                                                                  monkeypatch):
+    from hugmesh_studio.core.golive_domains import exposure_lines, plan_rows
+    from hugmesh_studio.gui.pages import golive as gui_golive
+    from hugmesh_studio.tui.golive import GoLiveScreen
+    (tmp_path / "cd").write_text("mesh.example\n")
+    (tmp_path / "doms").write_text("shop.example\nmesh.example\n")
+    monkeypatch.setenv("GOLIVE_CLUSTER_DOMAIN_FILE", str(tmp_path / "cd"))
+    monkeypatch.setenv("GOLIVE_DOMAINS_FILE", str(tmp_path / "doms"))
+    monkeypatch.setenv("GL_ONION_EXPORT_DIR", str(tmp_path / "no-tor"))
+    w = gui_golive.GoLiveWizard(GENERATOR_DIR)
+    w.opts.provider, w.model = "byo-domain", w.driver.provider("byo-domain").model
+    inputs = w.page(w._page_ids["inputs"])
+    inputs.initializePage()
+    gui_list = [inputs.domain_pick.itemData(i) for i in range(inputs.domain_pick.count())]
+    j = journey.Journey(GENERATOR_DIR)
+    j.goto("golive")
+    screen = j.screen()
+    assert isinstance(screen, GoLiveScreen)
+    assert screen.domains(j) == gui_list == ["mesh.example", "shop.example"]
+    inputs.domain_pick.setCurrentIndex(1)
+    assert inputs.validatePage()
+    gen = w.page(w._page_ids["generate"])
+    gen.initializePage()
+    screen.opts.provider, screen.opts.domain = "byo-domain", "shop.example"
+    assert gen.exposure.toPlainText().splitlines() == screen.plan_lines(j) == \
+        exposure_lines(plan_rows(w.driver, w.opts))
+    w.deleteLater()
+
+
+def test_the_cloud_ca_inheritance_note_is_one_string_on_both_faces(wiz):
+    from hugmesh_studio.core.config import CLIENT_CA_INHERITANCE_NOTE
+    from _helpers import pick_mode
+    pick_mode(wiz, "cloud")
+    dom = advance_to(wiz, wizard_mod.DomainsPage)
+    j = journey.Journey(GENERATOR_DIR)
+    j.cfg.mode = "cloud"
+    j.goto("domains")
+    assert dom.client_ca_note.text() == CLIENT_CA_INHERITANCE_NOTE
+    assert CLIENT_CA_INHERITANCE_NOTE in j.screen().lines(j)
