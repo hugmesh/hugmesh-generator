@@ -241,13 +241,17 @@ gate_optional_services() {
                 rm -rf "${tree}/manifests/egress-vpn"
                 ;;
             tor)
-                # NODE service (DISTRO tor daemon + a reconcile agent), not a cluster
-                # Application. Prune the per-service NetworkPolicy interaction (file +
-                # kustomization line) so no tor-onion label is ever honoured; the
-                # net-vpn/tor package omission + the service-link SKIP are handled OUTSIDE
-                # this loop (they touch the rootfs, not the GitOps tree).
-                rm -f "${tree}/manifests/networkpolicy/tor-onion-marked.yaml"
-                _opt_drop_kustomize_line "${tree}/manifests/networkpolicy/kustomization.yaml" tor-onion-marked.yaml
+                # NODE service (DISTRO tor daemon + a reconcile agent). Its one cluster
+                # artefact is the NetworkPolicy interaction, served by its OWN Application
+                # (apps/08b-networkpolicy-tor.yaml -> manifests/networkpolicy-tor). The
+                # device applies its BAKED apps/*.yaml (bootstrap.sh), so removing the
+                # Application file is what keeps the policy off a cluster built without
+                # tor (hugmesh-generator#617: while the policy sat in the auto-synced
+                # manifests/networkpolicy, this prune edited a tree ArgoCD never read).
+                # The net-vpn/tor package omission + the service-link SKIP are handled
+                # OUTSIDE this loop (they touch the rootfs, not the GitOps tree).
+                rm -f "${apps}/08b-networkpolicy-tor.yaml"
+                rm -rf "${tree}/manifests/networkpolicy-tor"
                 ;;
             workloadConsole)
                 # The WORKLOAD CONSOLE is RBAC + route-access + an admin-bff deployment

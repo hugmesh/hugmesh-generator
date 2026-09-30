@@ -34,7 +34,7 @@ def test_ids_match_dimensions_ts():
     tests/e2e/steps/dimensions.ts. A copy is a list that can diverge silently —
     this repo already carries one unreconciled pair of persona catalogues — so
     the TS file is PARSED and the two are compared. Adding an environment on one
-    side only goes red here instead of going unnoticed."""
+    side only fails here instead of going unnoticed."""
     ts = env_mod.legal_ids_from_dimensions_ts(env_mod.dimensions_ts_path(REPO))
     assert tuple(sorted(ts)) == tuple(sorted(env_mod.environment_ids())), (
         "the Studio's environment list %s and the harness's %s disagree. Both "

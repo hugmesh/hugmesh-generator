@@ -12,7 +12,7 @@ rest of the page parsed as markup. Reproduced end to end in chromium from a real
 The old sanitiser was a two-character blacklist (``\\`` and ``"``) — ``<`` ``>`` ``/``
 ``;`` ``{`` ``}`` and newlines all walked through it. The same unsanitised text also
 ships to production as HUG_THEME_CSS / the login-theme ConfigMap, where ``</style>`` is
-inert but attacker-authored css still lands in the stylesheet served on the real login
+ineffective but attacker-authored css still lands in the stylesheet served on the real login
 page. So the fix is an ALLOWLIST at the composer (fonts.safe_font_family), a raw-text
 backstop at the sink (platform_preview.raw_text_safe), and a CSP on the artifact.
 
@@ -130,7 +130,7 @@ def test_preview_page_does_not_execute_a_malicious_family(tmp_path):
                                   font_family=PAYLOAD, font_bytes=_TTF)
     path = platform_preview.write_platform_preview(css, str(tmp_path))
     page = open(path, encoding="utf-8").read()
-    # Not a single tag survives — the leftovers of the payload are inert word
+    # Not a single tag survives — the leftovers of the payload are harmless word
     # characters inside a quoted css family name, which is the whole point.
     assert "<script" not in page and "</script" not in page
     assert "</style>" not in css
@@ -199,7 +199,7 @@ def test_login_only_preview_sink_is_guarded_too():
 
 
 def test_login_only_preview_is_byte_identical_for_real_themes():
-    """The backstop must be inert on every css this repo actually composes — the
+    """The backstop must change nothing on every css this repo actually composes — the
     login-only artifact stays byte-for-byte what it was before the hardening."""
     real = theme.compose_login_css("#7c4dff", "#00e5ff", font_preset="Humanist")
     assert login_preview.raw_text_safe(real) == real
@@ -227,7 +227,7 @@ def test_preview_artifact_carries_a_no_script_csp():
 
 @pytest.mark.parametrize("preset", sorted(fonts.FONT_PRESETS))
 def test_every_preset_still_composes_a_clean_page(preset):
-    """The hardening must be inert for every path an operator actually uses."""
+    """The hardening must change nothing for every path an operator actually uses."""
     css = theme.compose_login_css("#7c4dff", "", font_preset=preset)
     page = platform_preview.platform_preview_html(css)
     assert f'<style id="snap-theme">{css}</style>' in page

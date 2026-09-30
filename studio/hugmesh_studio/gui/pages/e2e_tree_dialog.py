@@ -56,6 +56,10 @@ GROUP_GHERKIN = "Gherkin features (.feature)"
 GROUP_SPECS = "Playwright specs"
 GROUP_UNCOVERED = "Services with NO e2e coverage"
 GROUP_UNREACHABLE = "Services this suite cannot reach"
+#: Every core.e2e_catalogue.LaneDoor, whatever the service's compose-lane verdict:
+#: a covered service's row appears in no other group, so a door listed only under
+#: NO COVERAGE vanished the day the service gained a compose spec (tor, #576/#577).
+GROUP_LANE_DOORS = "Service doors on other lanes"
 GROUP_ORPHAN_SHOTS = "Screenshots linked to no spec"
 
 # Node kinds — what the detail panes switch on.
@@ -550,6 +554,8 @@ class E2ETreeDialog(QtWidgets.QDialog):
                                "reason": c.reason or ec.UNCOVERED_REASON,
                                "search": c.slug.lower()})
             self._plain_child(it, c.reason or ec.UNCOVERED_REASON)
+            for line in ec.lane_door_lines(self.generator_dir, c.slug):
+                self._plain_child(it, line)
         g2 = self._group(GROUP_UNREACHABLE)
         if not unreachable:
             self._plain_child(g2, "every catalogued service runs on a lane this suite drives.")
@@ -561,6 +567,22 @@ class E2ETreeDialog(QtWidgets.QDialog):
                                "reason": c.reason or ec.UNREACHABLE_REASON,
                                "search": c.slug.lower()})
             self._plain_child(it, c.reason or ec.UNREACHABLE_REASON)
+            for line in ec.lane_door_lines(self.generator_dir, c.slug):
+                self._plain_child(it, line)
+        g3 = self._group(GROUP_LANE_DOORS)
+        if not ec.LANE_DOORS:
+            self._plain_child(g3, "no service has a door on another lane.")
+        for door in ec.LANE_DOORS:
+            # Like the rows above: NO checkbox. A .feature runs through its own
+            # make target on its own lane, never through this tree's compose run.
+            it = QtWidgets.QTreeWidgetItem(
+                g3, [f"{door.slug} — {door.lane} lane door", door.run])
+            it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            self._payload(it, {"kind": NODE_SERVICE, "slug": door.slug,
+                               "reason": "", "search": f"{door.slug} {door.lane}".lower()})
+            for line in ec.lane_door_lines(self.generator_dir, door.slug):
+                if line.startswith(f"{door.lane}:"):
+                    self._plain_child(it, line)
 
     def _add_orphan_shot_group(self) -> None:
         shots = list(self.cat.orphan_screenshots)
@@ -636,7 +658,7 @@ class E2ETreeDialog(QtWidgets.QDialog):
         accepted, rejected = self.selected_specs()
         if rejected:
             # Refuse the WHOLE run rather than quietly running the half that parsed:
-            # a partial run reported as the selection is the vacuity this unit exists
+            # a partial run reported as the selection is the checked-nothing pass this unit exists
             # to prevent.
             self.status.setText(
                 f"Refusing to run: {len(rejected)} selected path(s) are "

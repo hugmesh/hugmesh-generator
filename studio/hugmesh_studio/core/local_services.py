@@ -128,7 +128,7 @@ PROFILE_EGRESS_VPN = "egress-vpn"
 # ── the seeder contract for the federation half ─────────────────────────────────
 # CONSUMED by tests/stack/seed-e2e.sh leg 4 (added 2026-08-14) — it reads both vars
 # verbatim, UPDATEs federation_modules in the compose federation-db, and reads the
-# registry back. Until that leg existed these five checkboxes were INERT: the vars
+# registry back. Until that leg existed these five checkboxes did nothing: the vars
 # were exported and nothing consumed them, so ticking one changed nothing while
 # owncast/tube/character-forge sat enabled=false, running but absent from the menu.
 #
@@ -178,7 +178,7 @@ class LocalService:
     def is_selectable(self) -> bool:
         """Whether a CHECKBOX for this row would drive anything. False for the
         DevOps lane: no compose profile and no registry row exist to flip, so a
-        box there could only ever be inert."""
+        box there could only ever do nothing."""
         return self.is_profile() or self.is_federation()
 
     def mechanism_label(self) -> str:
@@ -290,7 +290,7 @@ LOCAL_SERVICES: tuple[LocalService, ...] = (
                    "cluster Application — so the control rendered permanently "
                    "unavailable no matter how many AI services were enabled "
                    "(operator report 2026-08-14). Enabling this starts the worker "
-                   "AND flips the BFF's media.poisoning.enabled, which ships dark; "
+                   "AND flips the BFF's media.poisoning.enabled, which is off by default; "
                    "either half alone leaves the control greyed. BUILT FROM SOURCE "
                    "(specs/cluster/manifests/media-poisoner/worker). CPU-ONLY here: "
                    "the default image is the lean Pillow baseline with no torch, so "
