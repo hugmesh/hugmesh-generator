@@ -1010,6 +1010,73 @@ POM
   fi
 fi
 
+# ── 2d) `make stack-m2-check` MUST NOTICE AN INCOMPLETE CACHE (#364) ──────────
+# stack-m2-check used to re-run the bootstrap only when the registry container was
+# down or had moved IP. It never asked whether the cache held every PINS artifact,
+# so a PINS bump was not picked up on a box whose registry was already running and
+# `make stack-up` died on `Could not find artifact` until a manual bootstrap. This
+# drives the REAL Makefile target with a stub `docker` (registry "running" at an IP
+# that matches the env file, so ONLY the cache probe can trigger a re-run) and an
+# scratch copy of the Makefile whose bootstrap recipe is replaced with a marker (the
+# sub-make reads ./Makefile, so the override must live in the copy itself), so
+# nothing is built and no real docker/git/maven is touched.
+if [ -z "${M2_SELFTEST_CHILD:-}" ]; then
+  echo "-- 2d) stack-m2-check re-runs the bootstrap when the cache lacks a pinned artifact --"
+  D2="$(scratch_dir m2-check)"
+  mkdir -p "${D2}/bin"
+  cat > "${D2}/bin/docker" <<'STUB'
+#!/bin/sh
+# Inert docker: the registry is always "running" at 10.9.8.7.
+case "$*" in
+  *State.Running*) echo true ;;
+  *IPAddress*) echo 10.9.8.7 ;;
+esac
+exit 0
+STUB
+  chmod +x "${D2}/bin/docker"
+  printf 'CI_API_V4_URL=http://10.9.8.7:8080/api/v4\n' > "${D2}/m2.env"
+  mkdir -p "${D2}/tree/tests/stack"
+  { cat "${REPO}/Makefile"; printf '\nstack-m2-bootstrap:\n\t@echo ran >> $(M2_MARK)\n'; } > "${D2}/tree/Makefile"
+  cp "${REPO}/tests/stack/m2-bootstrap.sh" "${D2}/tree/tests/stack/m2-bootstrap.sh"
+  # fake_cache <dir> [skip-version]: a cache holding every PINS artifact's files.
+  fake_cache() {
+    local dir="$1" skip="${2:-}" line a v k g b
+    while IFS='|' read -r _r _s a v k g; do
+      [ -n "${a}" ] || continue
+      [ -z "${skip}" ] || [ "${v}" != "${skip}" ] || continue
+      b="${dir}/m2/repository/${g}/${a}/${v}/${a}-${v}"
+      mkdir -p "$(dirname "${b}")"; : > "${b}.pom"
+      case "${k}" in jar) : > "${b}.jar" ;; jar+tests) : > "${b}.jar"; : > "${b}-tests.jar" ;; esac
+    done <<< "${PIN_LINES}"
+  }
+  run_check() { # run_check <cache-dir> -> echoes "ran" or "idle"
+    rm -f "${D2}/mark"
+    ( cd "${D2}/tree" && PATH="${D2}/bin:${PATH}" M2_CACHE="$1" M2_MARK="${D2}/mark" \
+        make --no-print-directory STACK_M2_ENV="${D2}/m2.env" stack-m2-check ) \
+      >"${D2}/make.out" 2>&1 || { echo "error"; return; }
+    [ -f "${D2}/mark" ] && echo ran || echo idle
+  }
+  fake_cache "${D2}/full"
+  AUTH_SKIP="$(printf '%s\n' "${PINNED:-}" | sed -n 's/^hugmesh-auth-core=//p' | tail -1)"
+  fake_cache "${D2}/short" "${AUTH_SKIP}"
+  mkdir -p "${D2}/empty"
+  R_FULL="$(run_check "${D2}/full")"; R_SHORT="$(run_check "${D2}/short")"; R_EMPTY="$(run_check "${D2}/empty")"
+  if [ -z "${AUTH_SKIP}" ] || [ -z "${PIN_LINES}" ]; then
+    bad "(2d) could not read the PINS table, so the stack-m2-check control did not run"
+  elif [ "${R_FULL}" != "idle" ]; then
+    bad "(2d) stack-m2-check re-ran the bootstrap (${R_FULL}) against a cache holding every pin with a healthy registry — false positive:"
+    sed 's/^/           /' "${D2}/make.out"
+  elif [ "${R_SHORT}" != "ran" ] || [ "${R_EMPTY}" != "ran" ]; then
+    bad "(2d) stack-m2-check did NOT re-run the bootstrap for an incomplete cache (missing ${AUTH_SKIP}: ${R_SHORT}; empty cache: ${R_EMPTY}) — a PINS bump is invisible to make stack-up"
+    sed 's/^/           /' "${D2}/make.out"
+  elif ! grep -F "${AUTH_SKIP}" "${D2}/make.out" >/dev/null; then
+    bad "(2d) the re-run did not name the missing pinned artifact (${AUTH_SKIP}):"
+    sed 's/^/           /' "${D2}/make.out"
+  else
+    ok "(2d) stack-m2-check stays idle on a complete cache and re-runs the bootstrap, naming the artifact, when a pin (${AUTH_SKIP}) or the whole cache is missing"
+  fi
+fi
+
 echo "-- 3) the truncation really does mean what we claim (harness) --"
 # Not a guard on the repo — a proof of the semantics the comments above assert, so
 # the reasoning is checkable rather than folklore.
