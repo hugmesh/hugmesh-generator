@@ -312,6 +312,24 @@ expect_catch_fn "a NEW stale default appears in a service repo (no list mentions
   "[env-derived] hugmesh-wiki-bff-api: none of WIKI_INDEXER_BASE_URL is set" \
   inject_new_stale_default
 
+# (13b) hugmesh-generator#411: the EMPTY-STRING escape hatch for (13). A
+#       Deployment that "overrides" a stale default with the empty string used
+#       to satisfy check_derived by NAME alone — `set(hit.names) & set(svc.env)`
+#       is true whether the value is a real address or "" — so this reported
+#       PASS ("all stale-default keys … are overridden") while the pod actually
+#       got an empty base-url, which Spring treats as a malformed URI at call
+#       time rather than the stale-but-at-least-named default it replaced. Same
+#       injected stale default as (13); the only difference is the manifest DOES
+#       set the key, to nothing.
+inject_new_stale_default_empty_override() {   # $1 = staged specs/cluster, $2 = staged service sources
+  inject_new_stale_default "$1" "$2"
+  python3 -c "${PY_ENV}" "$1/manifests/wiki-bff-api/deployment.yaml" hugmesh-wiki-bff-api \
+    'env.append({"name": "WIKI_INDEXER_BASE_URL", "value": ""})'
+}
+expect_catch_fn "a NEW stale default is 'overridden' with an EMPTY string, not a real value" \
+  "[env-derived] hugmesh-wiki-bff-api: WIKI_INDEXER_BASE_URL is set to an EMPTY value" \
+  inject_new_stale_default_empty_override
+
 # (14) The same rule from the CLUSTER side: the manifests and the services are both
 #      unchanged, and the cluster stops providing a namespace. Every address that
 #      pointed into it is now dangling — the mirror image of the casdoor-init drift

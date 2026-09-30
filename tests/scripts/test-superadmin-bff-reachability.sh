@@ -73,8 +73,11 @@
 # reachable. An earlier cut of this file listed it in PROBES and asserted it
 # reachable unconditionally, which made a test out of an exposure nobody asked for:
 # the app-store control plane rides the OPTIONAL `games` slug, so the floor would
-# have outlived its slug. 20-schema.sql now carries an unconditional DENY at the
-# longer pattern and §5b + §13 pin it.
+# have outlived its slug. 20-schema.sql carries an unconditional DENY at the longer
+# pattern (OPERATOR DECISION 28 = D, #347, 2026-09-17) and §5b + §10 + §13 pin it.
+# §5b still accepts EITHER posture — the deny row, or a ledgered survivor entry —
+# because which one is in force is an operator call, not this file's; what it will
+# not accept is neither, or both at once.
 #
 # WHAT THIS CANNOT PROVE — read before quoting a green run
 # ---------------------------------------------------------
@@ -625,30 +628,19 @@ DESELECT_SURVIVORS = {
         "survived deselection at the front door. Same BFF-side walls as the row "
         "above. Recorded here because docs/OPTIONAL-SERVICES.md used to claim the "
         "gateway 404s the whole prefix, and it never did.",
-    ("games", "/bff/superadmin/games-services/**"):
-        "OPERATOR POSTURE, recorded 2026-09-16 (#351) rather than asserted away. "
-        "`integrate/superadmin` seeded an explicit fe DENY row at this pattern so "
-        "the app-store control plane would be tailnet-only. The row is left out "
-        "because operator decision 8 (#244 ACCEPT) is SPECIFIC to it — answered "
-        "\"without the games-services deny row\" — even though it is the EARLIER "
-        "answer (2026-09-10) and decision 20 (\"land the whole branch\", "
-        "2026-09-16) is the LATER, GENERAL one. Recency and specificity point "
-        "opposite ways here, so this is a merge-time reading parked for the "
-        "operator as decision 28, not a ruling. Walls left on a games-deselected "
-        "build: the "
-        "admin-bff's own hasRole(\"SUPERADMIN\") on every games-services handler; "
-        "the gateway filter short-circuits ROLE_ADMIN/ROLE_SUPERADMIN BEFORE "
-        "decide() runs, so the row could not have changed what a privileged "
-        "principal reaches either way; a NON-privileged caller is already "
-        "governed-but-ungranted DENY under the /bff/superadmin/** floor; and the "
-        "games workloads themselves are pruned, so the curation endpoints have "
-        "nothing to curate. The cost of the row, measured on this merge, is that as "
-        "the LONGEST matching pattern with allow=false it is skipped by the "
-        "`WHERE allow = true` flip and strips the MFA step-up floor from this "
-        "subtree (test-mfa-required-rules.sh: 124 passed/1 failed with the row, "
-        "125 passed/0 failed without — re-measured on the land pass; an earlier "
-        "note here said 125/1). "
-        "Reinstating it is an operator call parked on #351, not a merge call.",
+    # ⚠ ("games", "/bff/superadmin/games-services/**") WAS HERE AND IS GONE —
+    # OPERATOR DECISION 28 = D (#347, 2026-09-17). The entry recorded a posture
+    # ("the family survives at the fe door via the /bff/superadmin/** floor, and
+    # here are the walls that are left") which stopped being true the moment the
+    # explicit fe DENY row was seeded: the family is no longer a deselect SURVIVOR
+    # at all, so §13's staleness check fails on the entry rather than tolerating
+    # it. Dropping it in the SAME change as the row is the point — a ledger that
+    # outlives the world it describes is worse than no ledger, because §5b reads it
+    # to decide WHICH of the two legal postures is in force. The measured cost the
+    # entry carried (the row strips the MFA floor from this subtree) is what
+    # decision D answered: the row is seeded with mfa_required = true, which the
+    # blanket flip could never have given it, and test-mfa-required-rules.sh pins
+    # both halves.
 }
 
 # ── §5b the optional-slug surfaces the floor must not carry UNEXAMINED ───────
@@ -658,11 +650,16 @@ DENY_ROW_KEY = (FE, "/bff/superadmin/games-services/**")
 _deny_seeded = DENY_ROW_KEY in BY_GW_PAT
 # TWO LEGAL SHAPES, and the ledger decides which one is in force. Either the
 # explicit fe DENY row walls this family at the public door (what
-# `integrate/superadmin` proposed), or the family is a RECORDED deselect survivor
-# governed by the /bff/superadmin/** floor with the remaining walls named (what
-# operator decision 8 chose — see DESELECT_SURVIVORS below). What is NOT legal is
-# neither: an open optional-slug control plane at the public door with nobody
-# having written down why.
+# `integrate/superadmin` proposed and what OPERATOR DECISION 28 = D chose on
+# 2026-09-17 — #347), or the family is a RECORDED deselect survivor governed by the
+# /bff/superadmin/** floor with the remaining walls named (the posture the
+# 2026-09-16 merge left in place, reading decision 8's "without the games-services
+# deny row"). What is NOT legal is neither: an open optional-slug control plane at
+# the public door with nobody having written down why — nor BOTH, which §13's
+# staleness check is what forbids.
+# The row's SHAPE is decided here; its mfa_required is §10's business and
+# test-mfa-required-rules.sh's verdict, because a deny row that wins the longest
+# match also decides isMfaRequiredSurface() for its subtree.
 if _deny_seeded:
     for path, why in DENY_PROBES:
         d, pat, at = decide(BY_GW_PAT, FE, path, {"ROLE_SUPERADMIN"})
@@ -849,10 +846,17 @@ else:
 # ── §10 MFA lockstep ─────────────────────────────────────────────────────────
 print()
 print("== §10 the new row is inside the mfa_required flip prefix ==")
-flip = re.search(r"UPDATE\s+gateway_route_access[\s\S]*?mfa_required\s*=\s*true[\s\S]*?;",
-                 sql)
+# ⚠ ANCHORED ON `WHERE allow = true`. Since #347 decision 28 = D the seed carries
+# TWO `SET mfa_required = true` statements — the blanket flip and a ROW-SCOPED seed
+# for the fe games-services DENY row — and the old lazy `UPDATE …
+# mfa_required = true … ;` pattern matched whichever came first in the file. It
+# found the row-scoped seed, which of course does not mention the prefix, and this
+# check went red for a file that was entirely correct.
+flip = re.search(r"UPDATE\s+gateway_route_access\s+SET\s+mfa_required\s*=\s*true\s+"
+                 r"WHERE\s+allow\s*=\s*true[\s\S]*?;", sql)
 if flip is None:
-    bad("no `UPDATE gateway_route_access SET mfa_required = true` statement found — "
+    bad("no blanket `UPDATE gateway_route_access SET mfa_required = true "
+        "WHERE allow = true …` statement found — "
         "test-mfa-required-rules.sh owns this, but the new row's coverage cannot be "
         "confirmed without it")
 elif "/bff/superadmin/%" in flip.group(0):
@@ -862,6 +866,34 @@ elif "/bff/superadmin/%" in flip.group(0):
 else:
     bad("the mfa_required flip no longer keys on '/bff/superadmin/%' — the new row "
        "would be left mfa_required=false as the deciding rule")
+
+# ── the DENY row's own floor, which the blanket flip CANNOT provide ───────────
+# The blanket flip is `WHERE allow = true`, so the fe games-services DENY row is
+# never reached by it. That matters because the row wins the LONGEST match for its
+# subtree and GatewayRouteAccessService.isMfaRequiredSurface() — the function
+# GatewayRouteAccessFilter's privileged step-up floor calls — is allow-blind and
+# role-blind: it ORs mfaRequired across every rule at that length. A deny row left
+# false therefore REMOVES the floor from everything under it. Shape check only;
+# test-mfa-required-rules.sh replays it on a real engine and owns the verdict.
+if DENY_ROW_KEY in BY_GW_PAT:
+    _seed_re = re.compile(
+        r"UPDATE\s+gateway_route_access\s+SET\s+mfa_required\s*=\s*true\s+"
+        r"WHERE\s+gateway\s*=\s*'hugmesh-fe-gateway'\s+"
+        r"AND\s+url_pattern\s*=\s*'/bff/superadmin/games-services/\*\*'\s+"
+        r"AND\s+role\s*=\s*'ROLE_SUPERADMIN'\s+"
+        r"AND\s+allow\s*=\s*false", re.I)
+    if _seed_re.search(sql):
+        ok("the seeded fe games-services DENY row carries its OWN mfa_required "
+           "seed (a row-scoped UPDATE naming that exact tuple) — the blanket flip "
+           "is allow-only and can never reach it, and isMfaRequiredSurface() is "
+           "allow-blind, so without this the row would strip the privileged "
+           "step-up floor from the whole subtree it decides (#347 decision 28 = D)")
+    else:
+        bad("the fe games-services DENY row is seeded but nothing pins its "
+            "mfa_required: the blanket flip is `WHERE allow = true` and skips it, "
+            "so it wins the longest match with the floor OFF and "
+            "isMfaRequiredSurface() answers false for the whole "
+            "/bff/superadmin/games-services/ subtree (#347 decision 28 = D)")
 
 # ── §11 admin-ui cross-check (optional input, LOUD skip) ─────────────────────
 print()
@@ -1413,13 +1445,15 @@ expect_caught("a BROADER fe floor is added as PUBLIC and the superadmin row is "
 
 # ── controls for the three defects the 2026-08-26 review found ───────────────
 DENY_ROW = (FE, "/bff/superadmin/games-services/**", "ROLE_SUPERADMIN", False)
-# ⚠ THESE THREE CONTROLS MUTATE A ROW THAT IS NOT SEEDED. They break the fe
-# games-services DENY row and require §5b to notice — which it cannot when the row
-# does not exist: dropping an absent row changes nothing, so all three reported
-# "SURVIVED … the check is vacuous for this defect" on the 2026-09-16 merge. That is
-# the controls being honest, not a defect in them, so they are GATED on the row's
-# presence and announce what is unverified rather than being deleted. They come back
-# the moment operator decision 8 is revisited and the row is seeded (#351).
+# ⚠ THE GATE BELOW IS HISTORY, NOT DEAD CODE. These three controls mutate the fe
+# games-services DENY row and require §5b to notice. Between 2026-09-16 and
+# 2026-09-17 that row was NOT seeded, dropping an absent row changes nothing, and
+# all three reported "SURVIVED … the check is vacuous for this defect" — the
+# controls being honest, not broken. They were gated on the row's presence and made
+# to announce what was unverified rather than deleted, precisely so they would come
+# back on their own if the row ever returned. Operator decision 28 = D (#347,
+# 2026-09-17) seeded it, so they run again. KEEP THE GATE: it is what makes the
+# skip visible if a future posture change removes the row once more.
 if DENY_ROW in ROWS:
 
 
@@ -1551,6 +1585,124 @@ if sorted(probe_orphans - set(DOCUMENTED_ORPHANS)) == [fake]:
 else:
     bad("negative control: a NEW un-routed /bff row would NOT be reported — the "
         "orphan ledger is vacuous")
+
+# ── §15 docs/OPTIONAL-SERVICES.md may not describe a world that stopped existing ─
+# THE DEFECT, found by the skeptic on the 2026-09-17 land pass of decision 28 = D
+# (#347). §5b and §13 above enforce the CODE's posture, and the same commit that
+# seeded the games-services deny row deleted that family's DESELECT_SURVIVORS entry
+# — correctly. But docs/OPTIONAL-SERVICES.md still told an operator the opposite
+# ("it is NOT denied at the fe door … decision 8 declined it") and cross-referenced
+# the very ledger entry the commit had removed. NOTHING could see it: no gate read
+# that file, so the contradiction would have rotted indefinitely while every suite
+# stayed green. The runbook's own posture is now a MARKED, MACHINE-READ claim:
+#
+#   * `<!-- gate:deselect-survivors -->` — a table mirroring DESELECT_SURVIVORS,
+#     compared in BOTH directions, so an entry cannot leave the ledger while the doc
+#     still points at it, and cannot enter the ledger unread by an operator.
+#   * `<!-- gate:games-fe-posture value=walled|ledgered -->` — the two legal
+#     postures of §5b, checked against the SEED rather than against prose.
+#
+# Both are read from the doc as data. Prose around them is still prose; these are
+# the load-bearing claims, and they are the ones that were wrong.
+print()
+print("== §15 docs/OPTIONAL-SERVICES.md agrees with the ledger and the seed ==")
+
+OPT_DOC = f"{root}/docs/OPTIONAL-SERVICES.md"
+
+
+def _doc_survivors(text):
+    """The (slug, url_pattern) pairs the doc's marked table claims, or None when the
+    marker is absent (which is itself a finding, not a pass)."""
+    m = re.search(r"<!--\s*gate:deselect-survivors\s*-->\s*((?:[ \t]*\|.*\n)+)", text)
+    if not m:
+        return None
+    return set(re.findall(r"^\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|", m.group(1), re.M))
+
+
+def _doc_posture(text):
+    m = re.search(r"<!--\s*gate:games-fe-posture\s+value=(\S+?)\s*-->", text)
+    return m.group(1) if m else None
+
+
+def _survivor_findings(text):
+    """Every disagreement between the doc's marked claims and this suite's state.
+    Returned as a list so the same function can be re-run on a MUTATED copy of the
+    document below and required to produce findings."""
+    out = []
+    listed = _doc_survivors(text)
+    if listed is None:
+        out.append("the gate:deselect-survivors table is GONE from "
+                   "docs/OPTIONAL-SERVICES.md — the ledger is undocumented again")
+    else:
+        want = set(DESELECT_SURVIVORS)
+        for k in sorted(want - listed):
+            out.append(f"DESELECT_SURVIVORS holds {k[0]} {k[1]} and the doc's table "
+                       f"does not — an operator cannot read which surfaces survive "
+                       f"a deselection")
+        for k in sorted(listed - want):
+            out.append(f"the doc's table claims {k[0]} {k[1]} survives, but "
+                       f"DESELECT_SURVIVORS has no such entry — a DANGLING "
+                       f"cross-reference (this is the 2026-09-17 defect)")
+    posture = _doc_posture(text)
+    real = "walled" if DENY_ROW_KEY in BY_GW_PAT else "ledgered"
+    if posture is None:
+        out.append("the gate:games-fe-posture marker is GONE from "
+                   "docs/OPTIONAL-SERVICES.md — the games app-store door posture is "
+                   "back to unchecked prose")
+    elif posture not in ("walled", "ledgered"):
+        out.append(f"the doc declares games-fe-posture={posture!r}, which is neither "
+                   f"'walled' nor 'ledgered'")
+    elif posture != real:
+        out.append(f"the doc declares the games app-store control plane "
+                   f"{posture!r} at the fe door; the seed says {real!r} — "
+                   f"docs/OPTIONAL-SERVICES.md is telling an operator the opposite of "
+                   f"what the front door does")
+    return out
+
+
+if not os.path.isfile(OPT_DOC):
+    bad("docs/OPTIONAL-SERVICES.md is missing — the deselect-survivor ledger and the "
+        "games app-store door posture have no operator-facing record at all")
+else:
+    _optdoc = open(OPT_DOC, encoding="utf-8").read()
+    _f = _survivor_findings(_optdoc)
+    if _f:
+        for _line in _f:
+            bad("docs/OPTIONAL-SERVICES.md: " + _line)
+    else:
+        ok(f"docs/OPTIONAL-SERVICES.md mirrors DESELECT_SURVIVORS exactly "
+           f"({len(DESELECT_SURVIVORS)} entr(ies)) and declares the games app-store "
+           f"door posture the seed actually implements")
+
+    # Negative controls, on COPIES of the document text — each breaks a different
+    # half of the record and must produce a finding.
+    _m1 = _optdoc.replace("<!-- gate:games-fe-posture value=walled -->",
+                          "<!-- gate:games-fe-posture value=ledgered -->", 1)
+    if _m1 != _optdoc and any("opposite of" in f for f in _survivor_findings(_m1)):
+        ok("negative control: the doc reverting to the pre-decision-28 claim "
+           "(posture=ledgered while the deny row is seeded) -> CAUGHT")
+    else:
+        bad("negative control: flipping the documented games posture to 'ledgered' "
+            "was NOT caught — §15's posture check is vacuous")
+
+    _fake = "| `brand-new-slug` | `/bff/superadmin/brand-new-surface/**` |\n"
+    _m2 = re.sub(r"(<!--\s*gate:deselect-survivors\s*-->\s*(?:[ \t]*\|.*\n)+)",
+                 lambda mm: mm.group(1) + _fake, _optdoc, count=1)
+    if _m2 != _optdoc and any("DANGLING" in f for f in _survivor_findings(_m2)):
+        ok("negative control: a doc table row pointing at a ledger entry that does "
+           "not exist (the 2026-09-17 defect shape) -> CAUGHT")
+    else:
+        bad("negative control: a DANGLING doc cross-reference was NOT caught — "
+            "§15's table check is vacuous")
+
+    _m3 = _optdoc.replace("<!-- gate:deselect-survivors -->", "", 1)
+    if _m3 != _optdoc and any("GONE" in f for f in _survivor_findings(_m3)):
+        ok("negative control: deleting the doc's ledger mirror entirely -> CAUGHT "
+           "(an absent table is a finding, not a pass)")
+    else:
+        bad("negative control: deleting the doc's ledger mirror was NOT caught — "
+            "§15 fails open on a missing table")
+
 
 print()
 print(f"== RESULT: {passed} passed, {failed} failed ==")

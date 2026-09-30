@@ -87,6 +87,12 @@ def main(argv=None, *, inp=None, out=None) -> int:
                     help="whole-mesh emulation status list for one artifact "
                          "session (per-device boot/ssh/provision/web) instead "
                          "of the journey")
+    ap.add_argument("--fleet", action="store_true",
+                    help="open the fleet build (build-all-roles.sh) flow directly — "
+                         "the GUI's `hugmesh_studio --fleet` window, TUI face (#587)")
+    ap.add_argument("--go-live", dest="go_live", action="store_true",
+                    help="open the Go-Live flow directly — provider, the domain this "
+                         "run exposes, and the per-domain exposure plan (#587)")
     ap.add_argument("--plain", action="store_true",
                     help="force the plain numbered-prompt fallback (same as NO_TUI=1)")
     args = ap.parse_args(argv)
@@ -126,11 +132,13 @@ def main(argv=None, *, inp=None, out=None) -> int:
         from . import plain
         return plain.run_sessions_review(inp=inp, out=out)
 
+    start = "fleet" if args.fleet else ("golive" if args.go_live else None)
     if rich:
         from . import urwid_ui
-        return urwid_ui.run_journey(args.generator_dir)
+        return urwid_ui.run_journey(args.generator_dir, start=start)
     from . import plain
-    return plain.run_journey(inp=inp, out=out, generator_dir=args.generator_dir)
+    return plain.run_journey(inp=inp, out=out, generator_dir=args.generator_dir,
+                             start=start)
 
 
 if __name__ == "__main__":

@@ -20,7 +20,11 @@
 #   * No pod carries the label by default, so the policy matches nothing — a pure
 #     structural allow that is inert until an operator explicitly labels a workload.
 #   * The whole `tor` optional service is DEFAULT-OFF; when it is not selected the
-#     gate prunes this manifest from the kustomization (no label is ever honoured).
+#     build removes this policy's Application (apps/08b-networkpolicy-tor.yaml) from
+#     the baked set the device applies, so the policy never reaches that cluster
+#     (hugmesh-generator#617 — it used to sit in the auto-synced manifests/networkpolicy,
+#     where git main shipped it to every cluster whatever was selected). Even on a tor
+#     build that Application is MANUAL-sync: an egress-axis policy ships dark.
 #
 # ⚠ ENABLEMENT CAVEAT (honest): pod-egress-via-tor additionally requires the Tor
 # SocksPort to be reachable from the pod network (the reconcile agent binds it to
