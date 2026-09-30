@@ -245,10 +245,18 @@ class WorklistDriver:
             owner = pwd.getpwuid(os.stat(probe).st_uid).pw_name if pwd else str(os.stat(probe).st_uid)
         except (KeyError, OSError):
             owner = str(os.stat(probe).st_uid)
+        # The remedy prunes any directory named `sysroot`: a build system that a
+        # person chowns to themselves produces, on the next --resume, an image
+        # whose every directory is theirs and whose sshd and tor refuse to start
+        # (hugmesh-generator#659). Same shape as the Makefile's chown-artifacts.
+        user = getpass.getuser()
         return [f"Output directory is not writable: {probe} is owned by '{owner}' and "
-                f"this Studio runs as '{getpass.getuser()}'. A native (sudo) build "
+                f"this Studio runs as '{user}'. A native (sudo) build "
                 f"leaves root-owned dirs behind; fix with: "
-                f"sudo chown -R {getpass.getuser()} {probe}"]
+                f"sudo find {probe} -type d -name sysroot -prune -o -exec chown -h {user} {{}} + "
+                f"(not 'chown -R' over the whole directory: the build system "
+                f"snap-build-*/sysroot under it must stay root's, or a later "
+                f"--resume builds a broken image)"]
 
     def preflight_warnings(self) -> list[str]:
         """Aggregate ADVISORY warnings (see BuildDriver.preflight_warnings) — the

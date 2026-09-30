@@ -81,6 +81,17 @@ source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
 # docs/SHARED-BINPKG.md.
 # shellcheck source=scripts/_shared-assets-lib.sh
 source "${SCRIPT_DIR}/scripts/_shared-assets-lib.sh"
+# Mounts left under the build system by a crashed run are listed and refused
+# before rm -rf can go through them (#659). This builder shares only THAT part
+# of the resume library with the x86 builder: its static-library restore and
+# link test do not apply here, because the aarch64 cross-compiler links
+# against its own built-in sysroot (/usr/aarch64-unknown-linux-gnu, measured
+# with `aarch64-unknown-linux-gnu-gcc -print-sysroot` on the host and in the
+# builder image), never against ${SYSROOT}, whose stripped *.a files are
+# therefore never on the link path; and its image is filled from a tarball
+# forced to --owner=0 --group=0, so a user-owned sysroot cannot leak into it.
+# shellcheck source=scripts/_builder-resume-lib.sh
+source "${SCRIPT_DIR}/scripts/_builder-resume-lib.sh"
 # Signed-kernel artifact cache (G4): a cross-compiled kernel + module tree + DTBs is
 # reusable across images of the SAME board when board + kernel version + kernel config
 # + SIGNING KEY FINGERPRINT all match. See scripts/_kernel-cache-lib.sh.
@@ -3200,6 +3211,19 @@ info "stage3 seed verified: ${STAGE3_LOCAL}"
 
 banner "Extracting stage3 into sysroot"
 
+# NEVER touch a sysroot that still has mounts under it, on EITHER branch: the
+# disk-initramfs step below binds host /proc, /sys and /dev under it, and a
+# build killed in that step leaves them attached — the non-resume `rm -rf`
+# would then delete straight through host /dev. Same check and the same
+# working hint as the x86 builder (#659); the hint loops over the listing so
+# stacked binds are unmounted once per layer.
+if [ -d "${SYSROOT}" ]; then
+    _stale_mounts="$(hmr_stale_mounts "${SYSROOT}")"
+    if [ -n "${_stale_mounts}" ]; then
+        hmr_stale_mount_refuse "${SYSROOT}" "${_stale_mounts}"
+        exit 1
+    fi
+fi
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
     info "Sysroot already populated and --resume set, skipping extraction"
 else

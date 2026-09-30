@@ -251,8 +251,17 @@ ensure-image:
 # invoking host user so host-side qemu/flash/read need no sudo. HOST_UID is set
 # by DOCKER_RUN (the default path); on a bare host run it is the caller's own
 # uid, so the chown is a harmless no-op.
+#
+# It must NOT descend into a build system (<work dir>/snap-build-*/sysroot). It
+# did (`chown -R ... "$(WORK_DIR)"`), and the next `--resume` built an image out
+# of a tree the operator owned: every directory in it uid 1002, sshd and tor
+# refusing to start, the build green (hugmesh-generator#659). The artifacts
+# (.img/.iso/.fs.tar.xz/stage4, logs, keys, sessions/, shared/, isoroot, the
+# locks) still go to the user; any directory named `sysroot` is pruned, at any
+# depth, so a custom --build-subdir is covered too. `chown -h` changes a
+# symlink itself rather than following it into the sysroot.
 define chown-artifacts
-	@[ -n "$(HOST_UID)" ] && $(SUDO) chown -R $(HOST_UID):$(HOST_GID) "$(WORK_DIR)" 2>/dev/null || true
+	@[ -n "$(HOST_UID)" ] && $(SUDO) find "$(WORK_DIR)" -type d -name sysroot -prune -o -exec chown -h $(HOST_UID):$(HOST_GID) {} + 2>/dev/null || true
 endef
 
 # RPi5/RPi4/RPi3 board axis (--board rpi5|rpi4|rpi3 on build-rpi5-stage4.sh; ONE
