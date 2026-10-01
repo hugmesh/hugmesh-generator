@@ -8,14 +8,41 @@ default font alone hides a clipped control.
 
 Every helper is a plain function over Qt geometry so a test can name exactly what
 it measured when it fails.
+
+WHERE THE LOOK TESTS RUN. Looking under a style and a font size means switching the
+APPLICATION's style, and ``QApplication.setStyle`` re-polishes every widget the process
+still holds. A pytest process that has run a few dozen wizard tests holds all of them
+(each wizard and its pages point at each other, so only the cycle collector frees
+them): measured on tests/test_pages_qemu.py, eight look cases that take 11 s in a fresh
+interpreter took more than 170 s after the file's other tests, and freeing the dead
+wizards first (``gc.collect`` + posted DeferredDelete) aborts PyQt6 whenever a probe
+thread is still alive — the failure tests/conftest.py documents. Styling one wizard's
+widgets instead of the application's is cheap but measures a different layout (at 8 pt
+the picker's note came out 28 px tall instead of 26). So the look tests run in a FRESH
+interpreter: every one is named ``test_look_*`` and starts with :func:`child_only`
+(it skips in an ordinary run), and ``tests/test_look.py`` starts one child per test file
+with :data:`LOOK_CHILD_ENV` set and reads its verdict.
 """
 from __future__ import annotations
 
 import contextlib
+import os
 
 import pytest
 
 from hugmesh_studio.gui.qt import QtGui, QtWidgets
+
+#: Set to "1" by tests/test_look.py in the child interpreter it starts.
+LOOK_CHILD_ENV = "HUGMESH_LOOK_CHILD"
+
+
+def child_only() -> None:
+    """First line of every ``test_look_*`` test: skip unless this is the fresh child
+    interpreter tests/test_look.py started (see the module docstring for why)."""
+    if os.environ.get(LOOK_CHILD_ENV) != "1":
+        pytest.skip("a look test runs in a fresh interpreter: tests/test_look.py "
+                    "starts it")
+
 
 #: (Qt style, point size or None = the application default). Two styles with
 #: different indicator sizes and margins, each at the default font and at 8 pt.
@@ -39,12 +66,20 @@ def looking(qapp, style: str, pt: float | None):
         pytest.skip(f"Qt style {style!r} is not installed here")
     old_style = qapp.style().objectName()
     old_font = QtGui.QFont(qapp.font())
-    qapp.setStyle(style)
-    if pt:
-        f = QtGui.QFont(old_font)
-        f.setPointSizeF(pt)
-        qapp.setFont(f)
     try:
+        qapp.setStyle(style)
+        # A case that silently measured the OLD style (or font) would be a Fusion run
+        # wearing another name, so what was asked for must be what is applied.
+        assert qapp.style().objectName().lower() == style.lower(), \
+            f"asked for the {style!r} style, the application has " \
+            f"{qapp.style().objectName()!r}"
+        if pt:
+            f = QtGui.QFont(old_font)
+            f.setPointSizeF(pt)
+            qapp.setFont(f)
+            assert abs(qapp.font().pointSizeF() - pt) < 0.01, \
+                f"asked for {pt} pt, the application font is " \
+                f"{qapp.font().pointSizeF()} pt"
         yield
     finally:
         qapp.setFont(old_font)
@@ -56,6 +91,22 @@ def settle(qapp, n: int = 3) -> None:
     for _ in range(n):
         qapp.processEvents()
         qapp.sendPostedEvents()
+
+
+def snap(wiz, name: str, style: str = "", pt: float | None = None) -> str:
+    """Save what the wizard window shows to ``$HUGMESH_LOOK_SHOTS/<name>-<style>-<pt>.png``
+    and return the path — "" when that variable is unset (the normal test run saves
+    nothing). The point of the look tests is that a person can open the picture a
+    reviewer is asked to look at, next to the geometry the test measured."""
+    out = os.environ.get("HUGMESH_LOOK_SHOTS", "")
+    if not out:
+        return ""
+    os.makedirs(out, exist_ok=True)
+    tag = "-".join(p for p in (name, style.lower() if style else "",
+                               f"{pt:g}pt" if pt else "default") if p)
+    path = os.path.join(out, tag + ".png")
+    wiz.grab().save(path)
+    return path
 
 
 def viewport_of(page):
@@ -77,6 +128,19 @@ def assert_inside(page, widget, what: str) -> None:
     assert widget.isVisible(), f"{what} is not visible"
     right, width = right_edge_in_viewport(page, widget)
     assert right <= width, f"{what}: right edge at {right}px, viewport is {width}px wide"
+
+
+def assert_seen_without_scrolling(page, widget, what: str) -> None:
+    """``widget`` is visible and WHOLLY inside the page's viewport as first shown —
+    right edge and bottom edge — so a person sees all of it without scrolling. A
+    page may still scroll for what sits BELOW the widget (a streamed log, say); that
+    is not the same as the widget itself being below the fold."""
+    assert_inside(page, widget, what)
+    vp = viewport_of(page)
+    bottom = vp.mapFromGlobal(widget.mapToGlobal(widget.rect().bottomLeft())).y() + 1
+    top = vp.mapFromGlobal(widget.mapToGlobal(widget.rect().topLeft())).y()
+    assert top >= 0 and bottom <= vp.height(), \
+        f"{what}: spans {top}..{bottom}px of a {vp.height()}px viewport (below the fold)"
 
 
 def assert_whole(label, what: str) -> None:

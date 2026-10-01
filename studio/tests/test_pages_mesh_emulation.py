@@ -1847,12 +1847,14 @@ def test_a_parseable_but_malformed_record_does_not_take_the_page_down(
 
 # ---- #647 / #656 rule: the refusal note is LOOKED AT, two styles, 8 pt as well -------
 from _look import (LOOK_CASES, LOOK_IDS, DEFAULT_WINDOW,  # noqa: E402
-                   assert_inside, assert_whole, looking, settle)
+                   assert_inside, assert_seen_without_scrolling, assert_whole,
+                   child_only, looking, settle, snap)
 
 
 @pytest.mark.parametrize(("style", "pt"), LOOK_CASES, ids=LOOK_IDS)
-def test_the_refusal_note_is_drawn_whole_under_the_session_picker(
+def test_look_the_refusal_note_is_drawn_whole_under_the_session_picker(
         qapp, fake_generator, style, pt):
+    child_only()
     gen, _sess, _abort = fake_generator
     write_build_record(_MESH_SESSION, domains=("a.example", "b.example"),
                        reviewed=("hugmesh.net", "a.example"))
@@ -1868,7 +1870,10 @@ def test_the_refusal_note_is_drawn_whole_under_the_session_picker(
             assert_whole(note, "the per-domain refusal note")
             assert note.width() >= 400, "the note is squeezed into a sliver"
             assert "b.example" in note.text()
+            assert_seen_without_scrolling(page, note, "the per-domain refusal note")
             assert not page.start_btn.isEnabled()
+            assert all(not row.start.isEnabled() for row in page._rows)
+            snap(w, "meshemu-refused", style, pt)
         finally:
             w.close()
             w.deleteLater()

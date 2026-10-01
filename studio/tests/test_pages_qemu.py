@@ -1428,12 +1428,14 @@ def test_commit_image_mode_gives_a_transition_into_mesh_a_fresh_worklist(wiz):
 
 # ---- #647 / #656 rule: the new controls are LOOKED AT, under two styles and at 8 pt ---
 from _look import (LOOK_CASES, LOOK_IDS, DEFAULT_WINDOW, assert_fits,  # noqa: E402
-                   assert_inside, assert_whole, looking, settle)
+                   assert_inside, assert_seen_without_scrolling, assert_whole,
+                   child_only, looking, settle, snap)
 
 
 @pytest.mark.parametrize(("style", "pt"), LOOK_CASES, ids=LOOK_IDS)
-def test_the_refusal_note_is_drawn_whole_under_the_session_picker(
+def test_look_the_refusal_note_is_drawn_whole_under_the_session_picker(
         qapp, fake_generator, style, pt):
+    child_only()
     _gen, full, _abort = fake_generator
     write_build_record(full.name, domains=("b.example",), reviewed=("hugmesh.net",))
     with looking(qapp, style, pt):
@@ -1448,8 +1450,11 @@ def test_the_refusal_note_is_drawn_whole_under_the_session_picker(
             assert_whole(note, "the per-domain refusal note")
             assert note.width() >= 400, "the note is squeezed into a sliver"
             assert "b.example" in note.text()
-            # it sits under the session picker, inside the same box
+            # it sits under the session picker, inside the same box, and is seen
+            # without scrolling
             assert note.y() > page.session_combo.y()
+            assert_seen_without_scrolling(page, note, "the per-domain refusal note")
+            snap(w, "qemu-refused", style, pt)
         finally:
             w.close()
             w.deleteLater()
@@ -1457,7 +1462,9 @@ def test_the_refusal_note_is_drawn_whole_under_the_session_picker(
 
 
 @pytest.mark.parametrize(("style", "pt"), LOOK_CASES, ids=LOOK_IDS)
-def test_the_build_first_mode_picker_is_drawn_whole(qapp, fake_generator, style, pt):
+def test_look_the_build_first_mode_picker_is_drawn_whole(qapp, fake_generator, style,
+                                                         pt):
+    child_only()
     _gen, _full, _abort = fake_generator
     with looking(qapp, style, pt):
         w = wizard_mod.StudioWizard(str(_gen))
@@ -1475,9 +1482,14 @@ def test_the_build_first_mode_picker_is_drawn_whole(qapp, fake_generator, style,
             assert page.build_mode_note.text(), "the note is blank"
             assert_inside(page, page.chain_note, "the what-Next-does note")
             assert_whole(page.chain_note, "the what-Next-does note")
-            # no scrolling needed to see the picker at the default window
-            bar = page._content_scroll.verticalScrollBar()
-            assert bar.maximum() == 0, f"the picker is below the fold ({bar.maximum()}px)"
+            # No scrolling needed to see the WHOLE picker at the default window: the
+            # page itself may still scroll for the streamed log that sits under it.
+            assert page._content_scroll.verticalScrollBar().value() == 0
+            assert_seen_without_scrolling(page, page.build_mode_box,
+                                          "the mode picker box")
+            assert_seen_without_scrolling(page, page.build_mode_note,
+                                          "the picker's note")
+            snap(w, "qemu-build-first", style, pt)
         finally:
             w.close()
             w.deleteLater()

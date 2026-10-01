@@ -744,6 +744,34 @@ def test_an_import_after_an_earlier_mesh_flow_builds_only_the_imported_domains(
         f"the build screen carries {_names(wiz.cfg)}: the earlier flow's table won")
 
 
+def test_the_page_names_a_saved_row_the_import_will_not_take(wiz, monkeypatch, tmp_path):
+    """A record edited by hand: a row whose name is no lowercase hostname, or whose
+    sign-in the configuration does not know, is not imported. The page the operator
+    reads BEFORE ticking the consent names each one (never lists it as if it would
+    come), and the build screen carries only the rows the import took — in a
+    configuration that still survives a save/load round trip."""
+    _save_named(tmp_path, "hand-edited",
+                domains=({"name": "Bad.Example", "title": "", "idp": "superdomain",
+                          "optional_services": []},
+                         {"name": "c.example", "title": "", "idp": "nonsense",
+                          "optional_services": []},
+                         _AB_ROWS[1]),
+                own_idp_domains=("b.example",))
+    _real_reader(monkeypatch)
+    pick_mode(wiz, "localcloud")
+    page = advance_to(wiz, wizard_mod.LocalCloudNodesPage)
+    text = page.summary.text()
+    assert "Bad.Example — NOT imported: not a domain name" in text
+    assert "c.example — NOT imported: sign-in" in text and "nonsense" in text
+    assert "b.example — own Casdoor" in text
+    page.confirm.setChecked(True)
+    wiz.next()
+    assert _names(wiz.cfg) == ["b.example"]
+    _walk_to_launch(wiz)
+    assert _names(wiz.cfg) == ["b.example"]
+    type(wiz.cfg).from_dict(wiz.cfg.to_dict())       # a kept bad sign-in raises here
+
+
 def test_a_forgotten_domains_table_writes_nothing_until_it_is_entered_again(
         wiz, monkeypatch, tmp_path):
     """collect_all() re-runs every visited page's validatePage. After the import told
@@ -767,17 +795,19 @@ def test_a_forgotten_domains_table_writes_nothing_until_it_is_entered_again(
 from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS  # noqa: E402
 
 from _look import (LOOK_CASES, LOOK_IDS, DEFAULT_WINDOW, assert_fits,  # noqa: E402
-                   assert_inside, assert_page_fits_its_window, assert_whole, looking,
-                   settle)
+                   assert_inside, assert_page_fits_its_window,
+                   assert_seen_without_scrolling, assert_whole, child_only, looking,
+                   settle, snap)
 
 
 @pytest.mark.parametrize(("style", "pt"), LOOK_CASES, ids=LOOK_IDS)
-def test_the_page_fits_its_window_and_every_line_is_drawn_whole(
+def test_look_the_page_fits_its_window_and_every_line_is_drawn_whole(
         qapp, monkeypatch, tmp_path, style, pt):
     """#661: on main the consent sentence sat on a QCheckBox, which never wraps, so
     the page was 804 px wide in a 736 px window and every line was cut at the right
     edge with no sideways scroll. Now: nothing reaches past the viewport, the consent
     box and its wrapped sentence are whole, and so are the imported-domain lines."""
+    child_only()
     _save_n_domain_record(tmp_path)
     _real_reader(monkeypatch)
     with looking(qapp, style, pt):
@@ -797,6 +827,13 @@ def test_the_page_fits_its_window_and_every_line_is_drawn_whole(
             assert_whole(page.summary, "the imported-mesh summary")
             assert "b.example — own Casdoor" in page.summary.text()
             assert_whole(page.gate_note, "the k8s gate note")
+            # the consent line and the gate note are what the page is for: seen
+            # whole, without scrolling, as the page opens
+            assert_seen_without_scrolling(page, page.confirm, "the consent tick-box")
+            assert_seen_without_scrolling(page, page.confirm_text,
+                                          "the consent sentence")
+            assert_seen_without_scrolling(page, page.gate_note, "the k8s gate note")
+            snap(w, "localcloud-nodes", style, pt)
         finally:
             _drain(page, qapp)
             w.close()

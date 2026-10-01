@@ -247,25 +247,35 @@ def test_a_record_with_no_domain_rows_clears_an_earlier_flows_rows():
     assert cfg.domain_services_reviewed == []
 
 
-def test_a_hand_edited_record_row_is_read_as_the_config_would_read_it():
-    """A record edited by hand (the only way to get these): a sign-in the config cannot
-    hold reads as the default (``_domain_from_dict``'s rule), a row whose name is not a
-    hostname is not a domain and is not imported, and a name is stripped and
-    lowercased — so the imported config still survives a save/load round trip."""
+def test_a_hand_edited_row_the_config_cannot_hold_is_not_imported_and_says_so():
+    """A record edited by hand (the only way to get these). A row whose name is not a
+    lowercase dotted hostname, or whose sign-in the configuration does not know, is NOT
+    imported — and a sign-in is never read as the default instead, because
+    ``config._domain_from_dict`` fails loudly on one rather than coercing it, and an
+    identity provider changed behind the operator's back is worse than a missing row.
+    The summary the operator reads BEFORE consenting names each refused row, so the
+    page never promises a domain the images will not carry."""
     rec = _n_domain_record(domains=(
-        {"name": " A.Example ", "title": "Alpha", "idp": "nonsense",
+        {"name": " A.Example ", "title": "Alpha", "idp": "superdomain",
          "optional_services": ["phpbb"]},
         {"name": "5", "title": "Five", "idp": "own", "optional_services": []},
+        {"name": "c.example", "title": "Gamma", "idp": "nonsense",
+         "optional_services": []},
         {"name": "b.example", "title": "Beta", "idp": DOMAIN_IDP_OWN,
          "optional_services": []}))
+    md = imported_mesh_domains(rec)
+    lines = imported_domains_lines(md)
+    assert lines[0] == "A.Example — NOT imported: not a domain name"
+    assert lines[1] == "5 — NOT imported: not a domain name"
+    assert lines[2] == ("c.example — NOT imported: sign-in 'nonsense' is not one of "
+                        "superdomain, own")
+    assert lines[3].startswith("b.example — own Casdoor")
     cfg = _node_flow_cfg()
-    added = apply_imported_domains(cfg, imported_mesh_domains(rec))
-    assert added == ["a.example", "b.example"]
-    a = cfg.domains[0]
-    assert (a.name, a.title, a.idp, a.optional_services) == \
-        ("a.example", "Alpha", DOMAIN_IDP_SUPERDOMAIN, ["phpbb"])
+    added = apply_imported_domains(cfg, md)
+    assert added == ["b.example"]
+    assert [d.name for d in cfg.domains] == ["b.example"]
     assert cfg.own_idp_domains() == ("b.example",)
-    ImageConfig.from_dict(cfg.to_dict())          # would raise on idp='nonsense'
+    ImageConfig.from_dict(cfg.to_dict())          # a coerced or kept bad sign-in raises
 
 
 def test_the_imported_rows_reach_the_mesh_manifest():

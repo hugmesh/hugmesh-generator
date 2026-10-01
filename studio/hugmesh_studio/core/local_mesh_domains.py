@@ -46,7 +46,7 @@ import re
 from dataclasses import dataclass, field
 from typing import ClassVar
 
-from .config import DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
+from .config import DOMAIN_IDP_CHOICES, DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN, Domain
 from .domain_services import normalise_slugs, record_reviewed, reviewed_names
 
 __all__ = ["LocalMeshDomains", "bootstrap_domain_records", "own_idp_names",
@@ -294,11 +294,24 @@ def imported_mesh_domains(boot_cfg) -> "LocalMeshDomains | None":
     return md
 
 
-#: The sign-in values a saved record may carry for a row. A hand-edited record with
-#: anything else is read as the default, exactly as ``config._domain_from_dict`` reads
-#: a loaded configuration — otherwise the imported row makes
-#: ``ImageConfig.from_dict(cfg.to_dict())`` raise ValueError on the next save/load.
-_IMPORTABLE_IDPS = (DOMAIN_IDP_OWN, DOMAIN_IDP_SUPERDOMAIN)
+def _import_problem(row) -> str:
+    """Why a saved ADDED row cannot become a domain row of the node-image flow; "" when
+    it can. ONE rule for the import and for the summary that promises it, so the page
+    never lists a domain the images will not carry (and the other way round).
+
+    A sign-in the configuration does not know is refused rather than read as the
+    default: ``config._domain_from_dict`` fails loudly on one at load time ("never
+    silently coerced into either real choice"), and quietly handing a domain the
+    central sign-in when the record said something else would be an identity-provider
+    change nobody asked for. Only a hand-edited record can carry either problem — the
+    local-mesh Domains step refuses both when the row is typed."""
+    name = (getattr(row, "name", "") or "").strip()
+    if not DOMAIN_NAME_RE.match(name):
+        return "not a domain name"
+    idp = getattr(row, "idp", "") or DOMAIN_IDP_SUPERDOMAIN
+    if idp not in DOMAIN_IDP_CHOICES:
+        return f"sign-in {idp!r} is not one of {', '.join(DOMAIN_IDP_CHOICES)}"
+    return ""
 
 
 def apply_imported_domains(cfg, md: "LocalMeshDomains | None") -> list[str]:
@@ -322,13 +335,15 @@ def apply_imported_domains(cfg, md: "LocalMeshDomains | None") -> list[str]:
       image flow's own domain is IMPLICIT (``domain_services.implicit_own_domain``), and a
       row named after it would turn that off. Its per-domain selection goes to
       ``cfg.cluster_domain_services``, written only when the record SAYS something (a
-      selection, or a reviewed "cluster default") — never invented.
+      selection, or a reviewed "cluster default") — never invented, and an earlier pick
+      of the operator's is kept when the record is silent (the walk ahead shows it as
+      unconfirmed and the build gate asks for it).
     * Every ADDED row lands in ``cfg.domains`` with the record's title, sign-in and
       services, and ``cfg.additional_domains`` turns on — otherwise the "Just this
       mesh's own domain" card, preselected from that flag, would clear the rows on the
-      next page. A record row whose name is not a hostname (``DOMAIN_NAME_RE``, after
-      stripping and lowercasing) is not a domain and is not imported; a sign-in the
-      record spells in a way the configuration cannot hold reads as the default.
+      next page. A record row the configuration cannot hold — a name that is not a
+      lowercase dotted hostname, or a sign-in it does not know (``_import_problem``) —
+      is not imported, and the summary (``imported_domains_lines``) says so by name.
     * REVIEWED markers: an imported name is reviewed exactly when the RECORD says it was
       walked. ``record_reviewed`` rebuilds the list from the rows that now exist, so no
       marker survives for a row the import dropped; the own domain's marker is the
@@ -345,7 +360,7 @@ def apply_imported_domains(cfg, md: "LocalMeshDomains | None") -> list[str]:
     seen: set[str] = set()
     own_reviewed = False
     for row in (md.domains if md is not None else ()):
-        name = (row.name or "").strip().lower()
+        name = (row.name or "").strip()
         if not name or name in seen:
             continue
         seen.add(name)
@@ -355,12 +370,13 @@ def apply_imported_domains(cfg, md: "LocalMeshDomains | None") -> list[str]:
                 cfg.cluster_domain_services = list(picked)
             own_reviewed = name in marks
             continue
-        if not DOMAIN_NAME_RE.match(name):
-            continue
-        idp = getattr(row, "idp", "") or DOMAIN_IDP_SUPERDOMAIN
-        rows.append(Domain(name=name, title=(row.title or "").strip(),
-                           idp=idp if idp in _IMPORTABLE_IDPS else DOMAIN_IDP_SUPERDOMAIN,
-                           optional_services=list(picked)))
+        if _import_problem(row):
+            continue                        # imported_domains_lines says so, by name
+        dom = Domain(name=name)
+        dom.title = (row.title or "").strip()
+        dom.idp = getattr(row, "idp", "") or DOMAIN_IDP_SUPERDOMAIN
+        dom.optional_services = list(picked)
+        rows.append(dom)
     cfg.domains = rows                      # replaced, never merged (see above)
     cfg.additional_domains = bool(rows)
     reviewed = {d.name for d in rows if d.name in marks}
@@ -372,8 +388,9 @@ def apply_imported_domains(cfg, md: "LocalMeshDomains | None") -> list[str]:
 
 def imported_domains_lines(md: "LocalMeshDomains | None") -> list[str]:
     """What the import will carry, one plain line per ADDED domain — the GUI summary
-    and the TUI screen render these same strings (escaped by the GUI). [] when the mesh
-    carries no domain rows beyond its own."""
+    and the TUI screen render these same strings (escaped by the GUI). A saved row the
+    import will not take (``_import_problem``) gets a "NOT imported: <why>" line rather
+    than a quiet omission. [] when the mesh carries no domain rows beyond its own."""
     if md is None:
         return []
     own = (md.own_name or "").strip()
@@ -382,6 +399,10 @@ def imported_domains_lines(md: "LocalMeshDomains | None") -> list[str]:
     for row in md.domains:
         name = (row.name or "").strip()
         if not name or name == own:
+            continue
+        problem = _import_problem(row)
+        if problem:                  # the import will not take it: say so, never list it
+            out.append(f"{name} — NOT imported: {problem}")
             continue
         signin = ("own Casdoor" if getattr(row, "idp", "") == DOMAIN_IDP_OWN
                   else "superdomain sign-in")
