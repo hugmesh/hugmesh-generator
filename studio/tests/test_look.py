@@ -39,6 +39,27 @@ LOOK_FILES = ("test_localcloud_nodes.py", "test_pages_qemu.py",
               "test_pages_mesh_emulation.py")
 
 
+def child_verdict(returncode: int, lines: list) -> str:
+    """"" when a child's run counts as a pass; otherwise why it does not. A clean exit
+    is not enough: a child whose every case SKIPPED (no style installed, the guard env
+    lost) also exits 0, and nothing was looked at."""
+    if returncode != 0:
+        return f"the child exited {returncode}"
+    summary = next((ln for ln in reversed(lines) if " passed" in ln), "")
+    passed = re.search(r"(\d+) passed", summary)
+    if not passed or int(passed.group(1)) == 0:
+        return "the child ran no look case that passed"
+    return ""
+
+
+def test_a_look_run_needs_a_clean_exit_and_at_least_one_passing_case():
+    assert child_verdict(0, ["....", "16 passed, 2 skipped in 9.1s"]) == ""
+    assert child_verdict(1, ["1 failed, 15 passed in 9.1s"]) != ""   # a case failed
+    assert child_verdict(0, ["16 skipped in 0.3s"]) != ""            # nothing looked at
+    assert child_verdict(5, ["no tests ran in 0.1s"]) != ""          # nothing selected
+    assert child_verdict(0, []) != ""
+
+
 @pytest.mark.parametrize("fname", LOOK_FILES)
 def test_the_looked_at_pages_are_drawn_whole_in_a_fresh_interpreter(fname):
     if os.environ.get(LOOK_CHILD_ENV) == "1":
@@ -51,12 +72,8 @@ def test_the_looked_at_pages_are_drawn_whole_in_a_fresh_interpreter(fname):
         cwd=STUDIO_ROOT, env=env, capture_output=True, text=True, timeout=900)
     lines = [ln for ln in (proc.stdout + proc.stderr).splitlines()
              if "propagateSizeHints" not in ln]
-    tail = "\n".join(lines[-60:])
-    assert proc.returncode == 0, f"a look case failed in {fname}:\n{tail}"
-    summary = next((ln for ln in reversed(lines) if " passed" in ln), "")
-    passed = re.search(r"(\d+) passed", summary)
-    assert passed and int(passed.group(1)) > 0, \
-        f"the child ran no look case that passed in {fname}:\n{tail}"
+    problem = child_verdict(proc.returncode, lines)
+    assert not problem, f"{problem} in {fname}:\n" + "\n".join(lines[-60:])
 
 
 def test_every_look_test_is_run():
