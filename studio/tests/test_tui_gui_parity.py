@@ -542,3 +542,18 @@ def test_the_build_first_arm_offers_the_same_three_builds_on_both_faces(wiz):
     assert _emu.build_first_mode_note(
         gui_mode.IMAGE_MODE_TITLES[j.cfg.mode],
         gui_mode.IMAGE_MODE_TITLES[j.cfg.mode]) in "\n".join(j.lines())
+
+
+# ── #661 / decision 71 = A: the consent line says the same thing on both faces ───────
+def test_the_consent_prompt_opens_with_the_tick_boxs_words(wiz):
+    """The GUI split its consent sentence (a short tick-box, the rest in a wrapped
+    label beside it) so the page fits its window; the TUI asks the same question in
+    one line. The words on the box are the opening of that question, and the box and
+    its label together are still the whole old sentence."""
+    box = wiz.page(wiz._page_ids["localcloud"]).confirm
+    assert box.text() == gui_lc.CONSENT_SHORT
+    prompt = tui_lc.LocalCloudScreen().prompt(journey.Journey(GENERATOR_DIR))
+    assert prompt.startswith(gui_lc.CONSENT_SHORT)
+    assert f"{gui_lc.CONSENT_SHORT} {gui_lc.CONSENT_REST}" == (
+        "I understand: k8s will stop to proceed — the local Kubernetes (DevOps) stack "
+        "must come down before these node images are configured and built.")
