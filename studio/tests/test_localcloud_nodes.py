@@ -791,6 +791,23 @@ def test_a_forgotten_domains_table_writes_nothing_until_it_is_entered_again(
     assert wiz.cfg.domain_services_reviewed == ["a.example"]   # the record's markers
 
 
+def test_telling_the_pages_is_not_a_crash_when_the_wizard_lacks_one():
+    """_forget_domain_pages asks the wizard's page registry by slug. A wizard without
+    the registry, or without one of the two pages, or with a page that has no such
+    method, must not turn an import into an AttributeError."""
+    from types import SimpleNamespace
+    forget = lc_mod.LocalCloudNodesPage._forget_domain_pages
+    forget(SimpleNamespace(wiz=SimpleNamespace()))                  # no registry at all
+    told = []
+    pages = {1: SimpleNamespace(forget_rows=lambda: told.append("rows")),
+             2: object()}                                           # no forget_answers
+    forget(SimpleNamespace(wiz=SimpleNamespace(
+        _page_ids={"domains": 1, "domain_services": 2}, page=pages.get)))
+    forget(SimpleNamespace(wiz=SimpleNamespace(
+        _page_ids={"domains": 1}, page=pages.get)))                 # no services page
+    assert told == ["rows", "rows"], "the page that has the method was not told"
+
+
 def test_forgetting_cuts_off_a_table_and_a_walk_that_were_already_filled(
         wiz, monkeypatch, tmp_path):
     """The case above is a page that was never entered, where "forgotten" and "never
