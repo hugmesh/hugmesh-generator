@@ -25,10 +25,10 @@
 # The first two pods took the whole budget of 20, and every pod that started
 # after them failed every request routed to it, sign-in included. At the
 # autoscaler's minimum, 2 x 10 = 20 = 20: it held with ZERO margin, which is why
-# nothing failed until the metrics API answered for the first time (metrics-server
-# had been installed on 2026-09-24) and both autoscalers went 2 -> 3 -> 6 within
-# a minute, on a memory target read against a 256Mi request that the JVM
-# exceeds at idle. The pools shed idle connections after a while, so the failure
+# nothing failed until the metrics API answered (the surviving logs show no earlier
+# rescale; metrics-server had been installed on 2026-09-24) and both autoscalers
+# went 2 -> 3 -> 6 within a minute, on a memory target read against a 256Mi
+# request that the JVM exceeds at idle. The pools shed idle connections after a while, so the failure
 # also clears by itself some hours after a restart, which is what made it look
 # like a flaky cluster.
 #
