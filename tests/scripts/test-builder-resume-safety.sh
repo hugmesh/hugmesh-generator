@@ -1089,6 +1089,12 @@ lib_mut M26 "the refusal stops naming the kernel's spelling" \
 lib_mut M27 "the refusal stops saying the commands are every mount under the directory" \
     's/They are ALL the mounts under that directory/They are mounts under that directory/' \
     'refusal text'
+lib_mut M28 "the layer count stops answering 0 for a table it cannot read (it would abort a build's own cleanup under set -e)" \
+    's/^\(    targets="\$(hmr_mount_targets 2>\/dev\/null)"\) || {.*$/\1 || return 1/' \
+    'hmr_mount_layers blind'
+lib_mut M29 "the refusal stops counting the mounts it lists" \
+    's/^    n="\$(printf .*$/    n=0/' \
+    'refusal text'
 fi
 
 echo
