@@ -312,13 +312,13 @@ jobs:
           # test, stale-mount refusal and umount_chroot, run through a symlink, a
           # space, an umlaut and a relative path against a fixture mount table) and
           # the Makefile's post-build reown, executed against fixtures and stubs with
-          # a mutation battery (the first suite re-runs itself against 18 mutated
-          # copies of the library, which is why it takes about 40 s).
+          # a mutation battery (the first suite re-runs itself against 20 mutated
+          # copies of the library, which is why it takes about a minute).
           # MEASURED, 2026-09-30, in alpine:3 with EXACTLY this job's apk set, as
-          # root (checkout copied in; busybox sed, grep and find): 98 passed / 0
-          # failed (the one `unshare -Ur` leg SKIPs here — user namespaces are
-          # blocked in a container — and its stat-shim twin covers the pass path)
-          # and 9 / 0. Their sibling
+          # root (checkout copied in; busybox sed, grep and find): 100 passed / 0
+          # failed in 57 s (the one `unshare -Ur` leg SKIPs here — user namespaces
+          # are blocked in a container — and its stat-shim twin covers the pass
+          # path) and 9 / 0. Their sibling
           # tests/scripts/test-builder-unmount-real.sh needs `unshare -Urm` and exits
           # 2 SKIPPED-LOUDLY in this image (measured the same way), so it is NOT
           # listed: see PREMERGE_UNGATED and `make builder-unmount-real-check`.

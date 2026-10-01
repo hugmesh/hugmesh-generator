@@ -3413,8 +3413,9 @@ orphan-guards-verify:
     # would fail on its fixtures, not on the builder. Named in the preflight below.
     # MEASURED, 2026-09-30, in eclipse-temurin:21-jdk-alpine with EXACTLY this apk
     # line, as root (checkout copied in): tests/scripts/test-builder-resume-safety.sh
-    # 98 passed / 0 failed in about 40 s (the one `unshare -Ur` leg SKIPs in a
-    # container) and tests/scripts/test-makefile-reown-skips-sysroot.sh 9 / 0.
+    # 100 passed / 0 failed in 73 s (the one `unshare -Ur` leg SKIPs in a
+    # container; the suite re-runs itself against 20 mutated copies of the
+    # library) and tests/scripts/test-makefile-reown-skips-sysroot.sh 9 / 0.
     - apk add --no-cache bash jq openssl python3 py3-yaml coreutils grep sed gawk findutils diffutils git tar xz util-linux openssh-keygen make kubectl
     - for t in bash jq openssl python3 git tar xz keytool ssh-keygen make kubectl; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t — this job's image cannot run its guards"; exit 1; }; done
   script:
