@@ -791,6 +791,39 @@ def test_a_forgotten_domains_table_writes_nothing_until_it_is_entered_again(
     assert wiz.cfg.domain_services_reviewed == ["a.example"]   # the record's markers
 
 
+def test_forgetting_cuts_off_a_table_and_a_walk_that_were_already_filled(
+        wiz, monkeypatch, tmp_path):
+    """The case above is a page that was never entered, where "forgotten" and "never
+    filled" look alike. This one walks the image flow first, so both pages hold a
+    working copy of THIS configuration, and then the gate tells them the rows were
+    replaced (what a second import does): each must drop its copy — the table its
+    rows, both their claim on the configuration — and until they are entered again a
+    validatePage() must leave what the import wrote exactly as it was."""
+    _save_named(tmp_path, "three-domain", domains=_AB_ROWS,
+                own_idp_domains=("b.example",), domain_services_reviewed=("a.example",))
+    _real_reader(monkeypatch)
+    gate = _confirm_and_enter_mesh_chain(wiz)
+    _walk_to_launch(wiz)
+    dom = wiz.page(wiz._page_ids["domains"])
+    svc = wiz.page(wiz._page_ids["domain_services"])
+    assert dom._cfg_seen is wiz.cfg and dom.table.rowCount() > 0, "fixture: filled"
+    assert svc._cfg_seen is wiz.cfg, "fixture: entered"
+    rows_before = _names(wiz.cfg)
+    marks_before = list(wiz.cfg.domain_services_reviewed)
+    assert rows_before == ["a.example", "b.example"] and marks_before
+
+    gate._forget_domain_pages()
+
+    assert dom.table.rowCount() == 0, "the Domains table kept its rows"
+    assert dom._cfg_seen is None, "the Domains table kept its claim on the config"
+    assert svc._cfg_seen is None, "the Domain services walk kept its claim"
+    assert dom.validatePage() is True
+    assert svc.validatePage() is True
+    assert _names(wiz.cfg) == rows_before, "a forgotten table rewrote the rows"
+    assert list(wiz.cfg.domain_services_reviewed) == marks_before, \
+        "a forgotten walk rewrote the markers"
+
+
 # ---- #661 / #647 / #656 rule: the page is LOOKED AT, two styles, 8 pt as well -------
 from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS  # noqa: E402
 

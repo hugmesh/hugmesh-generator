@@ -419,9 +419,11 @@ def test_a_number_picks_another_build_and_commits_it_like_the_mode_screen(gen):
 def test_the_build_screen_says_the_device_tests_will_run_after_the_build(gen):
     j = _at_build(gen, mode="standalone")
     j.feed("")
-    while j.slug != "build" and not j.done:
+    for _ in range(40):             # bounded: a walk that cannot reach Build must FAIL
+        if j.slug == "build" or j.done:
+            break
         j.feed("")
-    assert j.slug == "build"
+    assert j.slug == "build", f"the walk stopped on {j.slug!r}"
     assert "the QEMU emulated-device tests run" in "\n".join(j.lines())
 
 
