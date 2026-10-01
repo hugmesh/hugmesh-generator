@@ -15,8 +15,9 @@ still holds. A pytest process that has run a few dozen wizard tests holds all of
 (each wizard and its pages point at each other, so only the cycle collector frees
 them): measured on tests/test_pages_qemu.py, eight look cases that take 11 s in a fresh
 interpreter took more than 170 s after the file's other tests, and freeing the dead
-wizards first (``gc.collect`` + posted DeferredDelete) aborts PyQt6 whenever a probe
-thread is still alive — the failure tests/conftest.py documents. Styling one wizard's
+wizards first (``gc.collect`` + posted DeferredDelete) aborted the test process in that
+file ("Fatal Python error: Aborted"; tests/conftest.py documents this family of
+failure: a live probe thread or a queued slot meeting a deleted page). Styling one wizard's
 widgets instead of the application's is cheap but measures a different layout (at 8 pt
 the picker's note came out 28 px tall instead of 26). So the look tests run in a FRESH
 interpreter: every one is named ``test_look_*`` and starts with :func:`child_only`
