@@ -1,40 +1,45 @@
 #!/usr/bin/env bash
 # =============================================================================
-# test-db-connection-budget.sh — every service that can run more than one
-# replica must fit its database role's connection limit at its LARGEST replica
-# count, and every database must have room for all of its roles at once.
+# test-db-connection-budget.sh — a service whose pods each hold a database
+# connection pool must fit its database role's CONNECTION LIMIT at its LARGEST
+# replica count, INCLUDING the extra pods a rolling update adds, and every
+# database must have room for all of its roles at once.
 #
-# WHAT HAPPENED (measured on the kind cluster hugmesh-local, 2026-09-30).
-# The persona sign-in answered "Sign-in failed: Internal Server Error".
-# hugmesh-user-bff-api logged
+# WHAT HAPPENED (hugmesh-generator#663; measured on the kind cluster
+# hugmesh-local, 2026-09-30). The persona sign-in answered "Sign-in failed:
+# Internal Server Error". hugmesh-user-bff-api logged
 #     500 Server Error for HTTP POST "/bff/login"
 #     caused by 500 Internal Server Error from POST .../bff/internal/accounts/ensure
 # and hugmesh-admin-bff-api logged, for that very request,
 #     DataAccessResourceFailureException: Failed to obtain R2DBC Connection
 # while admin-bff-db logged FATAL: too many connections for role "adminbff_app".
-# The numbers, read live:
-#     rolconnlimit(adminbff_app)      = 20   (initdb/10-roles.sh: CONNECTION LIMIT 20)
-#     max_connections                 = 60   (entrypoint: -c max_connections=60)
-#     r2dbc pool per replica          = 10   (NO spring.r2dbc.pool.* anywhere; the
-#                                             Spring Boot / r2dbc-pool default:
-#                                             initial-size 10 AND max-size 10)
-#     HorizontalPodAutoscaler max     = 6    (hpa.yaml: minReplicas 2, maxReplicas 6)
+# The numbers:
+#     CONNECTION LIMIT of the app role   = 20   (initdb/10-roles.sh)
+#     max_connections                    = 60   (entrypoint: -c max_connections=60)
+#     r2dbc pool per replica             = 10   (nothing configured it; the
+#                                                Spring Boot 4.0.7 / r2dbc-pool
+#                                                default is initial-size 10 and
+#                                                max-size 10)
+#     HorizontalPodAutoscaler            = min 2, max 6   (hpa.yaml)
 #     6 replicas x 10 = 60 > 20 (role)  and  > 57 (max_connections - 3 reserved)
-# How it plays out (user-bff-db's own connection log, 2026-09-30 17:03Z-20:0xZ):
-# r2dbc-pool opens initial-size connections on a pod's FIRST acquisition, so
-# after a simultaneous start the first two pods to touch the database took 10
-# each (the whole budget of 20), the other four got "FATAL: too many connections
-# for role" on every attempt (about one every 5 s, from their scheduled loops)
-# and failed every request routed to them, sign-in included. The pool sheds
-# idle connections after about an hour, so the budget moved to the next two
-# pods, and the last FATAL came 2 hours after the start; a sign-in run at 21:56Z
-# passed on the unchanged cluster. The defect therefore returns after every
-# restart, rollout or scale-up and hides itself two hours later. At the HPA's
-# minimum, 2 x 10 = 20 = 20: it held with ZERO margin, which is why nothing
-# failed until the metrics API answered on 2026-09-30 (metrics-server had been
-# installed on 2026-09-24T16:08Z) and both autoscalers went 2 -> 3 -> 6 in a
-# minute, on a memory target read against a 256Mi request that the JVM exceeds
-# at idle. hugmesh-generator#663 has the full account.
+# The first two pods took the whole budget of 20, and every pod that started
+# after them failed every request routed to it, sign-in included. At the
+# autoscaler's minimum, 2 x 10 = 20 = 20: it held with ZERO margin, which is why
+# nothing failed until the metrics API answered for the first time (metrics-server
+# had been installed on 2026-09-24) and both autoscalers went 2 -> 3 -> 6 within
+# a minute, on a memory target read against a 256Mi request that the JVM
+# exceeds at idle. The pools shed idle connections after a while, so the failure
+# also clears by itself some hours after a restart, which is what made it look
+# like a flaky cluster.
+#
+# WHY THE ROLLING UPDATE IS PART OF THE SUM. A Deployment without a strategy
+# uses Kubernetes' default rolling update, maxSurge 25 % (rounded UP) and
+# maxUnavailable 25 % (rounded down): at 6 replicas a rollout runs up to 8 pods
+# at once, and every ArgoCD sync that changes a BFF is such a rollout. Offline
+# reproduction with the real Spring Boot pool against a limit-20 role (see
+# #663): at max-size 3, six saturated pods hold 18 and the two surge pods get one
+# connection each and fail 44 of 66 requests; at max-size 2, eight saturated
+# pods hold 16, nothing is refused and nothing fails.
 #
 # WHAT THIS PINS, offline, over specs/cluster/manifests (no cluster, no network):
 #   For every Deployment whose container carries SPRING_R2DBC_URL +
@@ -50,29 +55,33 @@
 #         manifests must name a Deployment that exists there, or a typo in a
 #         scaleTargetRef would silently drop a service to the "1 replica" branch
 #         and pass;
-#     (4) pool_max = SPRING_R2DBC_POOL_MAX_SIZE from the container env, else 10
+#     (4) surge = the Deployment's rolling-update maxSurge at replicas_max
+#         (an integer, or a percentage rounded UP; Kubernetes' default is 25 %
+#         when the Deployment names none; strategy Recreate adds none; any other
+#         spelling is FAIL);
+#     (5) pool_max = SPRING_R2DBC_POOL_MAX_SIZE from the container env, else 10
 #         (the r2dbc-pool default that Spring Boot applies when the property is
 #         absent — pinned here as an ASSUMPTION so a future default change shows
 #         up as a red test, not as a silent budget change);
-#     (5) pool_initial = SPRING_R2DBC_POOL_INITIAL_SIZE, else 10 (same default);
+#     (6) pool_initial = SPRING_R2DBC_POOL_INITIAL_SIZE, else 10 (same default);
 #         pool_initial <= pool_max, or r2dbc-pool refuses to build the pool and
 #         the pod never becomes ready;
-#     (6) replicas_max x pool_max <= rolconnlimit                    (per role)
-#     (7) sum(rolconnlimit of every role a Deployment uses) + superuser reserved
+#     (7) (replicas_max + surge) x pool_max <= rolconnlimit          (per role)
+#     (8) sum(rolconnlimit of every role a Deployment uses) + superuser reserved
 #         (3, Postgres' default) <= max_connections                 (per database)
 #   Zero candidate Deployments is FAIL: a census that finds nothing has lost the
 #   tree, not proved it clean.
 #
-# OUT OF SCOPE, and why: the gateway Helm chart (charts/hugmesh-gateway) opens
-# its route-access connections UNPOOLED (ConnectionFactories.get on a plain
-# r2dbc:postgresql:// URL) so it has no fixed per-replica pool to multiply; and
-# the compose stack (tests/stack) runs one instance of everything with no role
-# limits. Both are noted in the issue, neither is measured here.
+# OUT OF SCOPE, and why: pods that terminate slowly keep their connections for
+# a moment while their replacements start (this sum assumes they let go before
+# the surge is used up); the gateway Helm chart (charts/hugmesh-gateway) has its
+# own route-access pool and no Spring R2DBC variables to read; and the compose
+# stack (tests/stack) runs one instance of everything with no role limits.
 #
 # NEGATIVE CONTROL: BUDGET_ROOT=<tree> runs the same analyser over another
-# checkout. On origin/main c882fb67 (before the pool env landed) this file is
-# RED on all seven BFF Deployments: 6 x 10 = 60 > 20. The mutation battery in
-# the landing PR breaks each side of the inequality and sees RED.
+# checkout. On origin/main 7fb39ee2 (before the pool env landed) this file is
+# RED on all seven BFF Deployments: (6 + 2) x 10 = 80 > 20. The mutation battery
+# in the pull request breaks each side of the inequality and sees RED.
 #
 # Needs bash + python3 + PyYAML (the debian shell-suites job installs and
 # preflights PyYAML; the alpine job has py3-yaml).
@@ -87,7 +96,7 @@ python3 -c 'import yaml' 2>/dev/null || { echo "  FAIL PyYAML is required (pip i
 [ -d "${REPO}/specs/cluster/manifests" ] || { echo "  FAIL ${REPO}/specs/cluster/manifests is not a directory"; exit 2; }
 
 REPO="${REPO}" python3 - <<'PY'
-import os, re, sys, glob
+import math, os, re, sys, glob
 import yaml
 
 REPO = os.environ["REPO"]
@@ -124,6 +133,27 @@ def env_value(container, name):
         if e.get("name") == name:
             return e.get("value")
     return None
+
+def rollout_surge(spec, replicas, label):
+    """Extra pods a rolling update may run on top of `replicas` (None = unreadable)."""
+    strat = spec.get("strategy") or {}
+    if strat.get("type") == "Recreate":
+        return 0, "strategy Recreate"
+    ms = (strat.get("rollingUpdate") or {}).get("maxSurge")
+    if ms is None:
+        ms, how = "25%", "Kubernetes default maxSurge 25%"
+    else:
+        how = "maxSurge %s" % ms
+    if isinstance(ms, bool):
+        bad("%s: maxSurge %r is not an integer or a percentage" % (label, ms)); return None, how
+    if isinstance(ms, int):
+        if ms < 0:
+            bad("%s: maxSurge %d is negative" % (label, ms)); return None, how
+        return ms, how
+    m = re.fullmatch(r"(\d+)%", str(ms).strip())
+    if not m:
+        bad("%s: maxSurge %r is not an integer or a percentage" % (label, ms)); return None, how
+    return math.ceil(replicas * int(m.group(1)) / 100.0), how
 
 def hpa_max_for(dep_name, dep_ns):
     hits = []
@@ -222,11 +252,15 @@ for path, dep in deployments:
         else:
             ok("%s: pool initial %d <= max %d" % (label, pool_init, pool_max))
 
-        need = replicas_max * pool_max
+        surge, surge_how = rollout_surge(spec, replicas_max, label)
+        if surge is None:
+            continue
+        pods = replicas_max + surge
+        need = pods * pool_max
         if need <= lim:
-            ok("%s: %d replicas (%s) x pool %d (%s) = %d <= CONNECTION LIMIT %d for role %s" % (label, replicas_max, src, pool_max, pool_src, need, lim, role))
+            ok("%s: (%d replicas (%s) + %d rollout surge (%s)) = %d pods x pool %d (%s) = %d <= CONNECTION LIMIT %d for role %s" % (label, replicas_max, src, surge, surge_how, pods, pool_max, pool_src, need, lim, role))
         else:
-            bad("%s: %d replicas (%s) x pool %d (%s) = %d > CONNECTION LIMIT %d for role %s (%s): pods beyond the budget fail every query" % (label, replicas_max, src, pool_max, pool_src, need, lim, role, lim_file))
+            bad("%s: (%d replicas (%s) + %d rollout surge (%s)) = %d pods x pool %d (%s) = %d > CONNECTION LIMIT %d for role %s (%s): pods beyond the budget fail every query" % (label, replicas_max, src, surge, surge_how, pods, pool_max, pool_src, need, lim, role, lim_file))
 
         per_db.setdefault(host, {"max_conn": max_conn, "mc_src": mcs, "roles": {}})
         per_db[host]["roles"][role] = lim
