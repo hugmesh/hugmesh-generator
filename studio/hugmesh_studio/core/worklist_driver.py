@@ -28,6 +28,7 @@ from __future__ import annotations
 import getpass
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import threading
@@ -250,10 +251,11 @@ class WorklistDriver:
         # whose every directory is theirs and whose sshd and tor refuse to start
         # (hugmesh-generator#659). Same shape as the Makefile's chown-artifacts.
         user = getpass.getuser()
+        # Quoted: a path with a space in it would otherwise be two arguments to find.
         return [f"Output directory is not writable: {probe} is owned by '{owner}' and "
                 f"this Studio runs as '{user}'. A native (sudo) build "
                 f"leaves root-owned dirs behind; fix with: "
-                f"sudo find {probe} -type d -name sysroot -prune -o -exec chown -h {user} {{}} + "
+                f"sudo find {shlex.quote(probe)} -type d -name sysroot -prune -o -exec chown -h {shlex.quote(user)} {{}} + "
                 f"(not 'chown -R' over the whole directory: the build system "
                 f"snap-build-*/sysroot under it must stay root's, or a later "
                 f"--resume builds a broken image)"]

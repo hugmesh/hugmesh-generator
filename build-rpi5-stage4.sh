@@ -3215,8 +3215,9 @@ banner "Extracting stage3 into sysroot"
 # disk-initramfs step below binds host /proc, /sys and /dev under it, and a
 # build killed in that step leaves them attached — the non-resume `rm -rf`
 # would then delete straight through host /dev. Same check and the same
-# working hint as the x86 builder (#659); the hint loops over the listing so
-# stacked binds are unmounted once per layer.
+# refusal as the x86 builder (#659): the listing comes from the kernel's own
+# mount table (symlinks resolved, escapes undone), and the refusal prints every
+# mount as the umount command that removes it, once per stacked layer.
 if [ -d "${SYSROOT}" ]; then
     _stale_mounts="$(hmr_stale_mounts "${SYSROOT}")"
     if [ -n "${_stale_mounts}" ]; then

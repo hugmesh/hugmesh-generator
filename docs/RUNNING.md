@@ -850,15 +850,28 @@ so CI builds from a complete in-VPN copy. See [`docs/DEVOPS.md`](DEVOPS.md).
   glibc, gcc and binutils match the build system's package database). When no cached
   seed matches — the seed cache was cleaned, or a later `@world` update moved the build
   system's own toolchain — nothing can be restored safely: rebuild without `--resume`.
+  The comparison is exact (version and revision) on all three packages, so a build made
+  with `REBUILD_TOOLCHAIN=true` (which lets `@world` move gcc, glibc and binutils off the
+  seed's) is refused by every later `--resume`; and a resumed `@world` that adds a second
+  gcc slot while the seed's slot stays installed passes this check, then fails the link
+  test below instead. Both end the same way: rebuild without `--resume`.
 - **`--resume` stops with `The reused build system cannot link a C program …`** → the
   restore above ran and a link still fails; rebuild without `--resume` instead of
   watching three packages fail with compiler errors minutes in.
 - **A build refuses to start with `mounts are still attached under <sysroot>`** → an
   earlier run was killed with its bind mounts up, or an older builder left its
-  `distfiles-ro` bind behind (every x86 run did, until #659). Run the loop the message
-  prints — it unmounts once per listed line, so a bind stacked three times is cleared
-  three times — then re-run. The old hint, `umount -R <sysroot>`, never worked: the
-  build system's directory is not itself a mount point.
+  `distfiles-ro` bind behind (every x86 run did, until #659). The message lists EVERY
+  mount under the build system as the `umount` command that removes it, deepest first
+  and once per stacked layer (a bind stacked three times is listed, and needs
+  unmounting, three times). Read the list — it includes anything you mounted there on
+  purpose — then run the commands as root, top to bottom, and re-run. The old hint,
+  `umount -R <sysroot>`, never worked: the build system's directory is not itself a
+  mount point. The check reads the kernel's own table (`/proc/self/mountinfo`) and
+  compares the kernel's name for the directory (symlinks resolved), so it is the same
+  for a build directory reached through a symlink, a relative `--work-dir`, or a name
+  with a space or a non-ASCII letter; a path with a newline in it is refused, and so is
+  a table that cannot be read — the builder never reads "cannot tell" as "nothing is
+  mounted".
 - **No artifact to flash** → `./scripts/flash-disk.sh --role <r> --arch <a> --list`
   shows the candidates and the resolved work dir; check `--arch`/`--role` and that
   the build wrote to that `--work-dir`.

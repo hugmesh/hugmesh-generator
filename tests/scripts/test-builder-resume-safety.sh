@@ -18,26 +18,39 @@
 #   - the builder's OWN sections are extracted by their anchor lines and run
 #     with stubs on PATH: the Extract phase (owner gate, stale-mount refusal,
 #     seed marker), section 4b (the restore, no longer GPU-gated), the link
-#     check after mount_chroot (stub chroot + stub gcc), and umount_chroot
-#     (stub umount + mountpoint, recording every argument).
+#     check after mount_chroot (stub chroot + stub gcc), umount_chroot and the
+#     binpkgs guard after it (a stateful umount stub that edits the table).
+#   - the KERNEL'S MOUNT TABLE is a fixture written in the kernel's own format
+#     and escaping (HMR_MOUNTINFO), so every question about mounts is asked of a
+#     table whose spelling of the build system (canonical path, \040 for a space)
+#     differs from the spelling the builder is given (a symlink, a space, an
+#     umlaut, a relative path): the very difference the first version of the
+#     library could not see (a review found it unmounted nothing on such a path).
 #   - call-site pins against the builder text, for every builder, and the
 #     stale-mount refusal executed on each cross builder's own text.
 #   - a MUTATION BATTERY: each guard is removed from a COPY of the builder (the
-#     copy is `cmp`-checked to differ), and the leg that covers it must go RED.
+#     copy is `cmp`-checked to differ), and the leg that covers it must go RED;
+#     each line of the library that a leg depends on is mutated in a copy of the
+#     library and this whole suite is run against it (HMR_TEST_LIB), which must
+#     go red on the leg that covers that line.
 #
 # Real bind mounts (stacked, in a user+mount namespace) are the subject of the
 # sibling suite tests/scripts/test-builder-unmount-real.sh, which needs
 # `unshare -Urm`; this file needs no privilege at all.
 #
 # HOST TRAPS this file is written against: no `| grep -q` under pipefail (drain
-# to /dev/null and branch on the status); `grep -a` everywhere; one name per
-# `local`; every dynamic leg runs under `timeout`.
+# to /dev/null and branch on the status); `grep -a` everywhere; no `local` line
+# that reads one of its own names (bash 5.3); every dynamic leg runs under
+# `timeout`.
 set -uo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${TEST_DIR}/../.." && pwd)"
-LIB="${REPO}/scripts/_builder-resume-lib.sh"
-X86="${REPO}/build-x86-host-stage4.sh"
+# HMR_TEST_LIB / HMR_TEST_X86 point the whole suite at another copy of the library
+# or the x86 builder: how a mutation of either is run against EVERY leg from
+# outside (the battery at the end of this file mutates copies of its own).
+LIB="${HMR_TEST_LIB:-${REPO}/scripts/_builder-resume-lib.sh}"
+X86="${HMR_TEST_X86:-${REPO}/build-x86-host-stage4.sh}"
 RPI="${REPO}/build-rpi5-stage4.sh"
 WALL="${WALL:-60}"
 
@@ -50,7 +63,7 @@ hasr() { grep -a -E -e "$2" "$1" >/dev/null 2>&1; }       # file contains regex
 [ -f "${LIB}" ] || { echo "MISSING: ${LIB}"; exit 2; }
 [ -f "${X86}" ] || { echo "MISSING: ${X86}"; exit 2; }
 [ -f "${RPI}" ] || { echo "MISSING: ${RPI}"; exit 2; }
-for t in tar xz find stat mktemp timeout cmp; do
+for t in tar xz find stat mktemp timeout cmp readlink awk sort sed; do
     command -v "$t" >/dev/null 2>&1 || { echo "MISSING tool: $t"; exit 2; }
 done
 
@@ -117,6 +130,46 @@ info()   { echo "    $1"; }
 warn()   { echo "    WARNING: $1"; }
 err()    { echo "    ERROR: $1" >&2; }
 export -f banner info warn err
+
+# The kernel's mount table is a FIXTURE here, written in the kernel's own format and
+# escaping — deliberately NOT through the decoder under test. /proc/self/mountinfo
+# names a mount point with every space, tab, newline and backslash written as \NNN
+# (three octal digits) and every other byte as it is, and names it by its CANONICAL
+# path (symlinks resolved). HMR_MOUNTINFO points the library at the fixture.
+kernel_escape() {
+    local s="$1"
+    s="${s//\\/\\134}"; s="${s// /\\040}"; s="${s//$'\t'/\\011}"; s="${s//$'\n'/\\012}"
+    printf '%s' "${s}"
+}
+write_mountinfo() {   # <file> <mount point>... : one line each, ids ascending (a later line is on top)
+    local f="$1" id=100 p
+    shift; : > "${f}"
+    for p in "$@"; do
+        printf '%s 1 0:50 / %s rw,relatime shared:1 - tmpfs tmpfs rw\n' "${id}" "$(kernel_escape "${p}")" >> "${f}"
+        id=$((id+1))
+    done
+}
+export -f kernel_escape write_mountinfo
+# A stateful umount for that table: it resolves its path argument the way the
+# kernel does (symlinks), then removes the TOPMOST (last) line for that mount point,
+# or exits 32 ("not mounted") when there is none. Every call is recorded. The
+# match is on the escaped text (what the kernel would have written), so it shares no
+# code with the decoder under test. It edits ${STUB_TABLE}, which a leg points at the
+# same file as HMR_MOUNTINFO, or elsewhere when it wants the library to be blind.
+export STUB_STATE="${TDIR}/state"; mkdir -p "${STUB_STATE}" "${TDIR}/bin-um"
+cat > "${TDIR}/bin-um/umount" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${STUB_STATE}/umount-args"
+[ -f "${STUB_STATE}/still-mounted" ] && exit 0
+table="${STUB_TABLE:-${HMR_MOUNTINFO:-/nonexistent}}"
+p=""; for a in "$@"; do case "$a" in -*) ;; *) p="$a" ;; esac; done
+real="$(readlink -f -- "$p" 2>/dev/null || printf '%s' "$p")"
+s="$real"; s="${s//\\/\\134}"; s="${s// /\\040}"; s="${s//$'\t'/\\011}"; s="${s//$'\n'/\\012}"
+WANT="$s" awk '{ line[NR]=$0; if ($5==ENVIRON["WANT"]) last=NR } END { for (i=1;i<=NR;i++) if (i!=last) print line[i]; exit (last ? 0 : 1) }' "${table}" > "${table}.new" \
+    && mv "${table}.new" "${table}" || { rm -f "${table}.new"; exit 32; }
+exit 0
+STUB
+chmod +x "${TDIR}/bin-um/umount"
 
 echo "== 1. the library, executed =="
 # shellcheck source=../../scripts/_builder-resume-lib.sh
@@ -234,41 +287,258 @@ else
 fi
 out="$(PATH="${TDIR}/bin:${PATH}" STUB_GCC_FAIL=0 timeout "${WALL}" bash -c ". '${LIB}'; hmr_link_check_chroot '${SM}'" 2>&1)"; rc=$?
 [ "${rc}" -eq 0 ] && [ -z "${out}" ] && ok "link check: a working toolchain passes silently" || bad "link check (pass): rc=${rc}: ${out}"
-# 1j. stale-mount listing and hint: findmnt stubbed to report stacked binds.
-cat > "${TDIR}/bin/findmnt" <<STUB
+# ── scenario scripts: each takes the library (and builder) under test as an argument,
+# so the same scenario is run against the real files here and against a MUTATED copy
+# in the battery at the end of this file (the mutated copy must turn it red). ───────
+SCN="${TDIR}/scn"; mkdir -p "${SCN}"
+export STUB_BIN="${TDIR}/bin-um"
+# _hmr_unmangle against the kernel's escaping.
+cat > "${SCN}/unmangle.sh" <<'SCN'
 #!/usr/bin/env bash
-cat "${STUB_STATE}/mounts" 2>/dev/null
-STUB
-chmod +x "${TDIR}/bin/findmnt"
-printf '%s\n' "/" "/home" "${SM}/var/cache/distfiles-ro" "${SM}/var/cache/distfiles-ro" "${SM}/var/cache/distfiles-ro" "${SM}/dev" "${SM}/dev/pts" "${SM}-other/x" > "${STUB_STATE}/mounts"
-listing="$(PATH="${TDIR}/bin:${PATH}" bash -c ". '${LIB}'; hmr_stale_mounts '${SM}'")"
+# <lib>: exit 0 when every raw -> expected pair decodes as the kernel's escaping says.
+. "$1"
+fail=0
+chk() {   # <mount point as the kernel writes it> <the real path>
+    local got
+    got="$(_hmr_unmangle "$1"; printf x)"; got="${got%x}"
+    [ "${got}" = "$2" ] || { printf 'unmangle [%s] -> [%q], wanted [%q]\n' "$1" "${got}" "$2"; fail=1; }
+}
+chk '/home/u/out/snap-build-x86/sysroot' '/home/u/out/snap-build-x86/sysroot'
+chk '/a\040b' '/a b'
+chk '/build\0405/x' '/build 5/x'            # a space followed by a digit: what printf %b gets wrong
+chk '/a\040\040b' '/a  b'
+chk '\040lead' ' lead'
+chk 'trail\040' 'trail '
+chk '/a\011b' $'/a\tb'
+chk '/a\012b' $'/a\nb'
+chk '/a\134b' '/a\b'
+chk '/x\134040y' '/x\040y'                  # an escaped backslash followed by the digits 040 stays text
+chk '/x\134134y' '/x\134y'
+chk $'/j\303\266rg' $'/j\303\266rg'         # bytes above 0x7f are written as they are
+chk '/hash#x' '/hash#x'
+chk '/a\043b' '/a#b'                        # a kernel that also escapes # is decoded too
+chk '/odd\bname' '/odd\bname'               # a backslash NOT followed by three octal digits is kept
+chk '/pct%s%n' '/pct%s%n'
+exit "${fail}"
+SCN
+# hmr_canon.
+cat > "${SCN}/canon.sh" <<'SCN'
+#!/usr/bin/env bash
+# <lib> <scratch dir>: symlink, relative path, trailing slash, root.
+. "$1"; W="$2"
+fail=0
+mkdir -p "${W}/real/sub"; ln -s real "${W}/link"
+P="$(cd "${W}" && pwd -P)"
+chk() { [ "$2" = "$3" ] || { printf 'hmr_canon %s: got [%s] wanted [%s]\n' "$1" "$2" "$3"; fail=1; }; }
+chk "symlink component" "$(hmr_canon "${W}/link/sub")" "${P}/real/sub"
+chk "trailing slash" "$(hmr_canon "${W}/real/sub/")" "${P}/real/sub"
+chk "relative" "$(cd "${W}/real" && hmr_canon sub)" "${P}/real/sub"
+chk "root" "$(hmr_canon /)" "/"
+exit "${fail}"
+SCN
+# One build system reached by a spelling that differs from the kernel's.
+cat > "${SCN}/spelling.sh" <<'SCN'
+#!/usr/bin/env bash
+# <lib> <x86 builder> <the sysroot as the builder spells it> [cwd]
+# The kernel's table (a fixture in its own format) names the CANONICAL path; every check
+# is made through the spelling. Prints one line per failed expectation; exit 0 = all held.
+set -uo pipefail
+LIBP="$1"; BLD="$2"; S="$3"; cd "${4:-.}" || exit 99
+. "${LIBP}"
+fail=0
+bad() { printf '%s\n' "$*"; fail=1; }
+K="$(readlink -f -- "${S}")"
+MI="${STUB_STATE}/mi.$$"; export HMR_MOUNTINFO="${MI}" STUB_TABLE="${MI}"
+# a mount that LOOKS like it is under a glob-spelled sysroot ([1] read as a class matches '1')
+TWIN="${K//\[1\]/1}"
+MOUNTS=(/ /home "${K}/var/cache/distfiles-ro" "${K}/dev" "${K}-sibling/x")
+[ "${TWIN}" = "${K}" ] || MOUNTS+=("${TWIN}/var/cache/distfiles-ro")
+write_mountinfo "${MI}" "${MOUNTS[@]}"
+# 1. the stale listing names both mounts under it, and nothing else
+got="$(hmr_stale_mounts "${S}")"
+want="${K}/var/cache/distfiles-ro"$'\n'"${K}/dev"
+[ "${got}" = "${want}" ] || bad "stale listing for [${S}]: got [${got}], wanted [${want}]"
+# 2. the layer count sees the distfiles bind
+n="$(hmr_mount_layers "${S}/var/cache/distfiles-ro")"
+[ "${n}" = 1 ] || bad "layer count for [${S}/var/cache/distfiles-ro]: ${n}, wanted 1"
+# 3. the builder's own umount_chroot, with SYSROOT spelled the same way, detaches them
+UC="${STUB_STATE}/uc.$$"
+awk 'BEGIN{on=0} /^umount_chroot\(\) \{$/ {on=1} on {print} on && /^\}$/ {exit}' "${BLD}" > "${UC}"
+: > "${STUB_STATE}/umount-args"
+out="$( (SYSROOT="${S}"; DISTFILES_MOUNTED=true; PORTAGE_SCRATCH_MOUNTED=false; HOST_REPO_MOUNTED=false; X86_POOL_MOUNTED=false
+         . "${UC}"; PATH="${STUB_BIN}:${PATH}"; umount_chroot) 2>&1)"
+left="$(hmr_stale_mounts "${S}")"
+[ -z "${left}" ] || bad "umount_chroot with SYSROOT=[${S}] left [${left}] mounted"
+[ -z "${out}" ] || bad "umount_chroot with SYSROOT=[${S}] printed [${out}]"
+# 4. the Extract phase refuses on the stale bind, whichever way the sysroot is spelled
+write_mountinfo "${MI}" / "${K}/var/cache/distfiles-ro"
+SEC="${STUB_STATE}/ex.$$"
+awk -v s='^banner "Extracting stage3 into sysroot"$' -v l='hmr_seed_marker_write' -v e='^fi$' \
+    '!on && $0 ~ s {on=1} on {print; if (!seen && $0 ~ l) seen=1; if (seen && $0 ~ e) exit}' "${BLD}" > "${SEC}"
+for r in true false; do
+    out="$( (set -euo pipefail; acquire_build_lock() { :; }; RESUME=${r}; SYSROOT="${S}"; BUILD_ROOT="${STUB_STATE}/br.$$"; STAGE3_LOCAL=/nonexistent
+             . "${SEC}"; echo EXTRACT-PHASE-COMPLETED) 2>&1)"; rc=$?
+    if [ "${rc}" -eq 0 ] || ! printf '%s' "${out}" | grep -a -F "mounts are still attached under ${S}" >/dev/null \
+       || printf '%s' "${out}" | grep -a -F "EXTRACT-PHASE-COMPLETED" >/dev/null; then
+        bad "Extract phase (RESUME=${r}) with SYSROOT=[${S}] did not refuse: rc=${rc}: ${out}"
+    fi
+done
+exit "${fail}"
+SCN
+# The build's own umount does not wait for the table.
+cat > "${SCN}/blind.sh" <<'SCN'
+#!/usr/bin/env bash
+# <lib> <x86 builder> <sysroot spelling>: the library cannot read the table, the kernel
+# still has the bind; umount_chroot must unmount it anyway (and say nothing).
+set -uo pipefail
+LIBP="$1"; BLD="$2"; S="$3"
+. "${LIBP}"
+fail=0
+K="$(readlink -f -- "${S}")"
+TAB="${STUB_STATE}/blind.$$"; write_mountinfo "${TAB}" / "${K}/var/cache/distfiles-ro"
+export STUB_TABLE="${TAB}" HMR_MOUNTINFO="/nonexistent/mountinfo"
+UC="${STUB_STATE}/ucb.$$"
+awk 'BEGIN{on=0} /^umount_chroot\(\) \{$/ {on=1} on {print} on && /^\}$/ {exit}' "${BLD}" > "${UC}"
+: > "${STUB_STATE}/umount-args"
+out="$( (SYSROOT="${S}"; DISTFILES_MOUNTED=true; PORTAGE_SCRATCH_MOUNTED=false; HOST_REPO_MOUNTED=false; X86_POOL_MOUNTED=false
+         . "${UC}"; PATH="${STUB_BIN}:${PATH}"; umount_chroot) 2>&1)"
+grep -a -F "var/cache/distfiles-ro" "${STUB_STATE}/umount-args" >/dev/null || { echo "no umount was attempted on distfiles-ro while the table was unreadable"; fail=1; }
+grep -a -F "distfiles-ro" "${TAB}" >/dev/null && { echo "the bind is still in the kernel's table"; fail=1; }
+[ -z "${out}" ] || { echo "umount_chroot printed [${out}]"; fail=1; }
+exit "${fail}"
+SCN
+chmod +x "${SCN}"/*.sh
+# The spelled build systems: real directories, so readlink -f has something to resolve.
+SPD="${TDIR}/spell"; mkdir -p "${SPD}"
+mk_build_dir() { mkdir -p "$1/snap-build-x86/sysroot/var/cache/distfiles-ro" "$1/snap-build-x86/sysroot/dev"; }
+mk_build_dir "${SPD}/real"; ln -s real "${SPD}/link"
+mk_build_dir "${SPD}/with space"; mk_build_dir "${SPD}/build 2"; mk_build_dir "${SPD}/jörg"
+mk_build_dir "${SPD}/back\\slash"; mk_build_dir "${SPD}/sr[1]"; mk_build_dir "${SPD}/sr1"
+# spelling label | sysroot as the builder is given it | working directory
+SPELLINGS=(
+    "plain|${SPD}/real/snap-build-x86/sysroot|."
+    "symlink component|${SPD}/link/snap-build-x86/sysroot|."
+    "space|${SPD}/with space/snap-build-x86/sysroot|."
+    "space then a digit|${SPD}/build 2/snap-build-x86/sysroot|."
+    "non-ASCII (C locale)|${SPD}/jörg/snap-build-x86/sysroot|."
+    "backslash|${SPD}/back\\slash/snap-build-x86/sysroot|."
+    "glob characters|${SPD}/sr[1]/snap-build-x86/sysroot|."
+    "relative --work-dir|snap-build-x86/sysroot|${SPD}/real"
+)
+
+# 1j. stale-mount listing: the kernel's table is the fixture, one stacked bind three times.
+MI="${STUB_STATE}/mountinfo"
+KSM="$(readlink -f -- "${SM}")"
+write_mountinfo "${MI}" "/" "/home" "${KSM}/var/cache/distfiles-ro" "${KSM}/var/cache/distfiles-ro" "${KSM}/var/cache/distfiles-ro" "${KSM}/dev" "${KSM}/dev/pts" "${KSM}-other/x"
+listing="$(HMR_MOUNTINFO="${MI}" hmr_stale_mounts "${SM}")"
 [ "$(printf '%s\n' "${listing}" | wc -l)" -eq 5 ] && ! printf '%s' "${listing}" | grep -a -F -- "-other" >/dev/null \
     && ok "stale mounts: 5 lines under the sysroot (a bind stacked 3x listed 3x), the sibling dir excluded" \
     || bad "stale mounts: got: ${listing}"
-hint="$(hmr_stale_mount_hint "${SM}")"
-[ "${hint}" = "findmnt -rn -o TARGET | grep '^${SM}/' | sort -r | while read -r m; do umount \"\$m\"; done" ] \
-    && ok "stale-mount hint is a per-line loop, deepest first: ${hint}" \
-    || bad "stale-mount hint: ${hint}"
-# The hint, executed against the stub: every listed line gets its own umount, deeper paths first.
-cat > "${TDIR}/bin/umount" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "${STUB_STATE}/umount-args"; exit 0
-STUB
-chmod +x "${TDIR}/bin/umount"
+# 1k. the hint: explicit, quoted, deepest first, once per layer; executed against the stateful umount.
+hint="$(hmr_stale_mount_hint "${listing}")"
+want="umount '${KSM}/var/cache/distfiles-ro'
+umount '${KSM}/var/cache/distfiles-ro'
+umount '${KSM}/var/cache/distfiles-ro'
+umount '${KSM}/dev/pts'
+umount '${KSM}/dev'"
+[ "${hint}" = "${want}" ] && ok "stale-mount hint: one quoted umount per listed layer, a submount (dev/pts) before its parent (dev)" \
+    || bad "stale-mount hint: got [${hint}] wanted [${want}]"
 : > "${STUB_STATE}/umount-args"
-PATH="${TDIR}/bin:${PATH}" bash -c "${hint}"
-i_pts="$(grep -a -n -F "${SM}/dev/pts" "${STUB_STATE}/umount-args" | cut -d: -f1)"
-i_dev="$(grep -a -n -x -F "${SM}/dev" "${STUB_STATE}/umount-args" | cut -d: -f1)"
-if [ "$(wc -l < "${STUB_STATE}/umount-args")" -eq 5 ] && [ -n "${i_pts}" ] && [ -n "${i_dev}" ] && [ "${i_pts}" -lt "${i_dev}" ] \
-   && [ "$(grep -a -c "distfiles-ro" "${STUB_STATE}/umount-args")" -eq 3 ]; then
-    ok "hint executed: 5 umounts, a submount (dev/pts) before its parent (dev), distfiles-ro three times (one per stacked layer)"
+PATH="${TDIR}/bin-um:${PATH}" HMR_MOUNTINFO="${MI}" bash -c "${hint}"
+left="$(HMR_MOUNTINFO="${MI}" hmr_stale_mounts "${SM}")"
+if [ "$(wc -l < "${STUB_STATE}/umount-args")" -eq 5 ] && [ -z "${left}" ] && [ "$(wc -l < "${MI}")" -eq 3 ]; then
+    ok "hint executed (the line pasted as printed): 5 umounts, nothing left under the sysroot, the three unrelated mounts untouched"
 else
-    bad "hint executed: $(cat "${STUB_STATE}/umount-args")"
+    bad "hint executed: calls=$(wc -l < "${STUB_STATE}/umount-args") left=[${left}]"
 fi
-out="$(PATH="${TDIR}/bin:${PATH}" bash -c ". '${LIB}'; hmr_stale_mount_refuse '${SM}' \"\$(hmr_stale_mounts '${SM}')\"" 2>&1)"
-printf '%s' "${out}" | grep -a -F "while read -r m; do umount" >/dev/null && ! printf '%s' "${out}" | grep -a -F "umount -R" >/dev/null \
-    && ok "refusal text carries the loop hint and no 'umount -R'" || bad "refusal text: ${out}"
-rm -f "${TDIR}/bin/findmnt" "${TDIR}/bin/umount"
+# a path with a single quote, a double quote, a space and a dollar sign survives the quoting:
+# the pasted command is ONE correctly quoted word and unmounts exactly that mount
+QP="${KSM}/it's \"a\" \$x"
+write_mountinfo "${MI}" "/" "${QP}"
+q="$(hmr_stale_mount_hint "${QP}")"
+if [ "${q}" = "umount '${KSM}/it'\\''s \"a\" \$x'" ] && PATH="${TDIR}/bin-um:${PATH}" HMR_MOUNTINFO="${MI}" bash -c "${q}" \
+   && [ "$(wc -l < "${MI}")" -eq 1 ]; then
+    ok "hint quoting: a path with a single quote, a double quote, a space and a dollar sign is one quoted word and unmounts"
+else
+    bad "hint quoting: [${q}]"
+fi
+# 1l. the refusal: the WHOLE listing (no eight-line cut), the plain statement that it is everything.
+write_mountinfo "${MI}" "/" "${KSM}/proc" "${KSM}/sys" "${KSM}/sys/kernel" "${KSM}/sys/fs" "${KSM}/dev" "${KSM}/dev/pts" "${KSM}/dev/shm" "${KSM}/run" "${KSM}/run/lock" "${KSM}/var/tmp/portage" "${KSM}/var/db/repos/gentoo" "${KSM}/var/cache/binpkgs" "${KSM}/var/cache/distfiles-ro"
+listing="$(HMR_MOUNTINFO="${MI}" hmr_stale_mounts "${KSM}")"
+out="$(hmr_stale_mount_refuse "${KSM}" "${listing}" 2>&1)"
+n_cmd="$(printf '%s\n' "${out}" | grep -a -c "^    umount '")"
+if [ "${n_cmd}" -eq 13 ] && printf '%s' "${out}" | grep -a -F "mounts are still attached under ${KSM}: 13 in all" >/dev/null \
+   && printf '%s' "${out}" | grep -a -F "ALL the mounts under that directory" >/dev/null \
+   && printf '%s' "${out}" | grep -a -F "including any you mounted there on purpose" >/dev/null \
+   && printf '%s' "${out}" | grep -a -F "var/cache/binpkgs" >/dev/null && printf '%s' "${out}" | grep -a -F "sys/kernel" >/dev/null \
+   && ! printf '%s' "${out}" | grep -a -F "umount -R" >/dev/null && ! printf '%s' "${out}" | grep -a -F "while read" >/dev/null; then
+    ok "refusal: all 13 mounts printed as umount commands (the old cut at 8 lines is gone), says they are ALL the mounts under the directory, no 'umount -R', no loop"
+else
+    bad "refusal text (${n_cmd} commands): ${out}"
+fi
+# spelled through a symlink, the refusal also says what the kernel calls it
+out="$(hmr_stale_mount_refuse "${SPD}/link/snap-build-x86/sysroot" "x" 2>&1)"
+printf '%s' "${out}" | grep -a -F "(the kernel lists it as $(readlink -f -- "${SPD}/link/snap-build-x86/sysroot"))" >/dev/null \
+    && ok "refusal: a symlinked spelling is followed by the kernel's name for it" || bad "refusal (symlinked spelling): ${out}"
+# 1m. the decoder against the kernel's escaping (a space followed by a digit is the trap printf %b falls into)
+out="$(timeout "${WALL}" bash "${SCN}/unmangle.sh" "${LIB}" 2>&1)"; rc=$?
+[ "${rc}" -eq 0 ] && ok "decoder: 16 mount points decode as the kernel's \\NNN escaping says, including 'build 5' written build\\0405 and a backslash followed by 040" \
+    || bad "decoder: ${out}"
+# 1n. hmr_canon
+out="$(timeout "${WALL}" bash "${SCN}/canon.sh" "${LIB}" "${TDIR}/canon" 2>&1)"; rc=$?
+[ "${rc}" -eq 0 ] && ok "hmr_canon: symlink component, trailing slash, relative path and / resolved the way the kernel names them" || bad "hmr_canon: ${out}"
+# 1o. a table that cannot be read refuses; it never answers 'nothing mounted'
+out="$(HMR_MOUNTINFO=/nonexistent/mountinfo hmr_stale_mounts "${SM}" 2>&1)"; rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -a -F "cannot read the kernel's mount table" >/dev/null && [ "$(printf '%s\n' "${out}" | wc -l)" -eq 1 ]; then
+    ok "unreadable mount table: hmr_stale_mounts refuses (rc=1, one sentence) instead of printing nothing"
+else
+    bad "unreadable mount table: rc=${rc}: ${out}"
+fi
+out="$(HMR_MOUNTINFO=/nonexistent/mountinfo hmr_mount_layers "${SM}/dev" 2>/dev/null)"; rc=$?
+[ "${rc}" -eq 0 ] && [ "${out}" = 0 ] && ok "unreadable mount table: hmr_mount_layers answers 0 (and the build's own umount does not depend on it)" || bad "hmr_mount_layers blind: rc=${rc} out=${out}"
+out="$(hmr_stale_mounts "$(printf 'a\nb')" 2>&1)"; rc=$?
+[ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -a -F "contains a newline" >/dev/null && ok "a build system path with a newline in it is refused outright" || bad "newline path: rc=${rc}: ${out}"
+# 1p. the build system reached through every awkward spelling: listing, count, the builder's own
+# umount_chroot and its Extract phase, all through the spelling the builder was given.
+for entry in "${SPELLINGS[@]}"; do
+    IFS='|' read -r label spelled cwd <<EOF
+${entry}
+EOF
+    out="$(timeout "${WALL}" bash "${SCN}/spelling.sh" "${LIB}" "${X86}" "${spelled}" "${cwd}" 2>&1)"; rc=$?
+    [ "${rc}" -eq 0 ] && ok "spelling '${label}': stale listing, layer count, umount_chroot and the Extract-phase refusal all work through the builder's spelling" \
+        || bad "spelling '${label}' (rc=${rc}): ${out}"
+done
+# 1q. the build's own umount happens with a blind table
+out="$(timeout "${WALL}" bash "${SCN}/blind.sh" "${LIB}" "${X86}" "${SPD}/link/snap-build-x86/sysroot" 2>&1)"; rc=$?
+[ "${rc}" -eq 0 ] && ok "umount_chroot unmounts the bind even when the library cannot read the table (the umount never waits for a count)" || bad "blind umount: ${out}"
+# 1r. the seed refusal lists every cached seed, separated, with no stray space
+ONLY2="${TDIR}/seed-only2"; mkdir -p "${ONLY2}"
+SEED_NEWER="${ONLY2}/stage3-amd64-hardened-openrc-20261004T170000Z.tar.xz"
+make_seed "${SEED_NEWER}" glibc-2.43-r2 gcc-15.3.0 binutils-2.48
+cp "${SEED_NEW}" "${ONLY2}/"
+out="$(hmr_seed_for_resume "${BR}" "${SM}" "${SEED_NEWER}" "${L}" 2>&1 >/dev/null)"; rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -a -F "(the build system has sys-devel/binutils-2.46.1 sys-devel/gcc-15.3.0 sys-libs/glibc-2.43-r2; cached seeds: " >/dev/null \
+   && printf '%s' "${out}" | grep -a -F "cached seeds: stage3-amd64-hardened-openrc-20261004T170000Z.tar.xz: sys-devel/binutils-2.48 sys-devel/gcc-15.3.0 sys-libs/glibc-2.43-r2; stage3-amd64-hardened-openrc-20260927T170058Z.tar.xz: sys-devel/binutils-2.47 sys-devel/gcc-15.3.0 sys-libs/glibc-2.43-r2), so the files restored" >/dev/null \
+   && ! printf '%s' "${out}" | grep -a -F " ;" >/dev/null && ! printf '%s' "${out}" | grep -a -F "; )" >/dev/null; then
+    ok "seed refusal with two cached seeds: 'seed A: toolchain; seed B: toolchain' (separator between them, no stray space or dangling ';')"
+else
+    bad "seed refusal separators: rc=${rc}: ${out}"
+fi
+# 1s. the seed marker: never written through a symlink, never read as anything but a bare name
+BRS="${TDIR}/br-symlink"; mkdir -p "${BRS}"; echo "untouched" > "${TDIR}/marker-victim"; ln -s "${TDIR}/marker-victim" "${BRS}/sysroot.seed"
+out="$(hmr_seed_marker_write "${BRS}" "${SEED_OLD}" 2>&1)"; rc=$?
+[ "${rc}" -eq 1 ] && [ "$(cat "${TDIR}/marker-victim")" = untouched ] && printf '%s' "${out}" | grep -a -F "is a symlink" >/dev/null \
+    && ok "seed marker: a symlink planted at sysroot.seed is not written through (the victim file is untouched)" \
+    || bad "seed marker via symlink: rc=${rc} victim=$(cat "${TDIR}/marker-victim") ${out}"
+BRB="${TDIR}/br-badmarker"; mkdir -p "${BRB}"
+okm=1
+for v in '../../evil.tar.xz' '/etc/passwd' '..' '.' ''; do
+    printf '%s\n' "$v" > "${BRB}/sysroot.seed"
+    [ -z "$(hmr_seed_marker_read "${BRB}")" ] || { okm=0; echo "    marker [$v] was accepted"; }
+done
+printf '%s\n' "stage3-amd64-hardened-openrc-20260920T170055Z.tar.xz" > "${BRB}/sysroot.seed"
+[ "$(hmr_seed_marker_read "${BRB}")" = "stage3-amd64-hardened-openrc-20260920T170055Z.tar.xz" ] || okm=0
+[ "${okm}" -eq 1 ] && ok "seed marker: a value with a slash, '.', '..' or nothing is ignored; a bare seed name is read back" || bad "seed marker read validation"
 
 echo "== 2. the builder's own sections, extracted and executed =="
 # extract_section <file> <start regex> <end regex after start> <out>: the lines
@@ -283,11 +553,11 @@ extract_section() {   # <file> <start-re> <landmark-re> <end-re> <out>
 }
 # 2a. the Extract phase: owner gate on the resume branch, stale-mount refusal
 # on both, seed marker after a fresh extract.
-run_extract_phase() {   # <builder> <resume true|false> <sysroot> <build root> <seed> [extra PATH]
-    local b="$1" resume="$2" sysroot="$3" build_root="$4" seed="$5" epath="${6:-}"
+run_extract_phase() {   # <builder> <resume true|false> <sysroot> <build root> <seed> [extra PATH] [mount table fixture]
+    local b="$1" resume="$2" sysroot="$3" build_root="$4" seed="$5" epath="${6:-}" mtab="${7:-}"
     local sec="${TDIR}/sec-extract.sh"
     extract_section "$b" '^banner "Extracting stage3 into sysroot"$' 'hmr_seed_marker_write' '^fi$' "${sec}" || return 99
-    PATH="${epath:+${epath}:}${PATH}" timeout "${WALL}" bash -c "
+    HMR_MOUNTINFO="${mtab}" PATH="${epath:+${epath}:}${PATH}" timeout "${WALL}" bash -c "
         set -euo pipefail
         . '${LIB}'
         banner(){ echo \"==> \$1\"; }; info(){ echo \"    \$1\"; }; warn(){ echo \"    WARNING: \$1\"; }; err(){ echo \"    ERROR: \$1\" >&2; }
@@ -314,22 +584,34 @@ if [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -a -F "wiping for a clean st
 else
     bad "extract phase (no --resume): rc=${rc}: ${out}; marker=$(cat "${B1}/sysroot.seed" 2>/dev/null)"
 fi
-# stale mounts (stub findmnt) refuse on BOTH branches, with the loop hint.
-mkdir -p "${TDIR}/bin-mnt"; cat > "${TDIR}/bin-mnt/findmnt" <<STUB
-#!/usr/bin/env bash
-printf '%s\n' "${SX}/var/cache/distfiles-ro" "${SX}/var/cache/distfiles-ro"
-STUB
-chmod +x "${TDIR}/bin-mnt/findmnt"
+# stale mounts (the kernel's table is a fixture: two layers of distfiles-ro) refuse on
+# BOTH branches, listing each layer as the umount command that removes it.
+KSX="$(readlink -f -- "${SX}")"
+MI_STALE="${STUB_STATE}/mi-stale"; write_mountinfo "${MI_STALE}" "/" "${KSX}/var/cache/distfiles-ro" "${KSX}/var/cache/distfiles-ro"
+MI_CLEAR="${STUB_STATE}/mi-clear"; write_mountinfo "${MI_CLEAR}" "/" "/home"
 for r in true false; do
-    out="$(run_extract_phase "${X86}" "$r" "${SX}" "${B1}" "${SEED_OLD}" "${TDIR}/bin-mnt" 2>&1)"; rc=$?
+    out="$(run_extract_phase "${X86}" "$r" "${SX}" "${B1}" "${SEED_OLD}" "" "${MI_STALE}" 2>&1)"; rc=$?
     if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -a -F "mounts are still attached under ${SX}" >/dev/null \
-       && printf '%s' "${out}" | grep -a -F "while read -r m; do umount" >/dev/null \
+       && [ "$(printf '%s\n' "${out}" | grep -a -c "^    umount '${KSX}/var/cache/distfiles-ro'")" -eq 2 ] \
        && ! printf '%s' "${out}" | grep -a -F "EXTRACT-PHASE-COMPLETED" >/dev/null && [ -f "${SX}/etc/gentoo-release" ]; then
-        ok "extract phase (RESUME=$r, stale binds): refused with the loop hint before any wipe or skip"
+        ok "extract phase (RESUME=$r, stale binds): refused, one umount command per stacked layer, before any wipe or skip"
     else
         bad "extract phase (RESUME=$r, stale binds): rc=${rc}: ${out}"
     fi
 done
+# a table that cannot be read stops the phase on BOTH branches (the old code read it as 'nothing mounted')
+for r in true false; do
+    touch "${SX}/leftover-from-the-previous-attempt"
+    out="$(run_extract_phase "${X86}" "$r" "${SX}" "${B1}" "${SEED_OLD}" "" "/nonexistent/mountinfo" 2>&1)"; rc=$?
+    if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -a -F "cannot read the kernel's mount table" >/dev/null \
+       && ! printf '%s' "${out}" | grep -a -F "EXTRACT-PHASE-COMPLETED" >/dev/null && ! printf '%s' "${out}" | grep -a -F "skipping extraction" >/dev/null \
+       && [ -e "${SX}/leftover-from-the-previous-attempt" ]; then
+        ok "extract phase (RESUME=$r, unreadable mount table): stops with the sentence, nothing wiped or skipped"
+    else
+        bad "extract phase (RESUME=$r, unreadable mount table): rc=${rc}: ${out}"
+    fi
+done
+rm -f "${SX}/leftover-from-the-previous-attempt"
 # 2b. section 4b: the restore runs for a non-GPU role when the statics are missing.
 run_4b() {   # <builder> <sysroot> <build root> <current seed> <GPU true|false>
     local b="$1" sysroot="$2" build_root="$3" seed="$4" gpu="$5"
@@ -389,16 +671,20 @@ out="$(run_link_block "${X86}" true "${S4}" 0 2>&1)"; rc=$?
 [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -a -F "LINK-BLOCK-COMPLETED" >/dev/null && ok "link block (--resume, link works): continues" || bad "link block pass: rc=${rc}: ${out}"
 out="$(run_link_block "${X86}" false "${S4}" 1 2>&1)"; rc=$?
 [ "${rc}" -eq 0 ] && [ ! -s "${STUB_STATE}/chroot-dirs" ] && ok "link block (no --resume): the check is not run (a fresh extract always links)" || bad "link block (no resume): rc=${rc} chroot-dirs=$(cat "${STUB_STATE}/chroot-dirs")"
-# 2d. umount_chroot: the distfiles-ro bind is in the list, each flag resets, the detach is verified.
-run_umount_chroot() {   # <builder> <sysroot> <distfiles true|false>
-    local b="$1" sysroot="$2" dist="$3"
+# 2d. umount_chroot: the distfiles-ro bind is in the list, each flag resets, the detach is
+# verified — and the sysroot is spelled TWO ways (directly, and through a symlink: the
+# kernel's table names the real path either way, so a count made by comparing spellings
+# sees nothing on the second).
+MI2="${STUB_STATE}/mi-um"
+run_umount_chroot() {   # <builder> <sysroot as the builder spells it> <distfiles true|false> [library]
+    local b="$1" sysroot="$2" dist="$3" lib="${4:-${LIB}}"
     local sec="${TDIR}/sec-umount.sh"
     # awk -v processes backslash escapes once: double them so the regex keeps them.
     extract_section "$b" '^umount_chroot\\(\\) \\{$' 'umount_chroot' '^\\}$' "${sec}" || return 99
     : > "${STUB_STATE}/umount-args"
-    PATH="${TDIR}/bin-um:${PATH}" timeout "${WALL}" bash -c "
+    PATH="${TDIR}/bin-um:${PATH}" HMR_MOUNTINFO="${MI2}" STUB_TABLE="${MI2}" timeout "${WALL}" bash -c "
         set -euo pipefail
-        . '${LIB}'
+        . '${lib}'
         banner(){ echo \"==> \$1\"; }; info(){ echo \"    \$1\"; }; warn(){ echo \"    WARNING: \$1\"; }; err(){ echo \"    ERROR: \$1\" >&2; }
         SYSROOT='${sysroot}'
         DISTFILES_MOUNTED=${dist}; PORTAGE_SCRATCH_MOUNTED=true; HOST_REPO_MOUNTED=true; X86_POOL_MOUNTED=true
@@ -409,51 +695,79 @@ run_umount_chroot() {   # <builder> <sysroot> <distfiles true|false>
         echo UMOUNT-COMPLETED
     "
 }
-# A stateful mount table: findmnt prints it, umount peels ONE line equal to
-# its path argument (what the kernel does for a stacked bind) unless the
-# fixture says the detach silently fails (still-mounted).
-mkdir -p "${TDIR}/bin-um"
-cat > "${TDIR}/bin-um/findmnt" <<'STUB'
-#!/usr/bin/env bash
-cat "${STUB_STATE}/mounts" 2>/dev/null
-STUB
-cat > "${TDIR}/bin-um/umount" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "${STUB_STATE}/umount-args"
-[ -f "${STUB_STATE}/still-mounted" ] && exit 0
-p=""; for a in "$@"; do case "$a" in -*) ;; *) p="$a" ;; esac; done
-awk -v p="$p" '!done && $0==p {done=1; next} {print}' "${STUB_STATE}/mounts" > "${STUB_STATE}/mounts.new" 2>/dev/null && mv "${STUB_STATE}/mounts.new" "${STUB_STATE}/mounts"
-exit 0
-STUB
-chmod +x "${TDIR}/bin-um/umount" "${TDIR}/bin-um/findmnt"
-set_mounts() {   # <sysroot>: our four flagged binds (distfiles-ro stacked on one foreign layer) + run/dev/sys/proc
-    printf '%s\n' "$1/var/cache/distfiles-ro" "$1/var/cache/distfiles-ro" "$1/var/tmp/portage" "$1/var/db/repos/gentoo" "$1/var/cache/binpkgs" \
-                  "$1/run" "$1/dev" "$1/sys" "$1/proc" > "${STUB_STATE}/mounts"
+# The stateful umount (defined with the fixtures above) peels ONE table line per call,
+# as the kernel does for a stacked bind, unless the leg says the detach silently fails
+# (still-mounted).
+ln -s "$(basename "${B2}")" "${TDIR}/lnk"      # ${TDIR}/lnk/sysroot is ${S4}, through a symlink
+set_mounts() {   # <sysroot as spelled>: the KERNEL's spelling of our four flagged binds (distfiles-ro stacked on one foreign layer) + run/dev/sys/proc
+    local k; k="$(readlink -f -- "$1")"
+    # the directories mount_chroot makes before it binds (a umount of a path that is not there fails, as the real one does)
+    mkdir -p "${k}/var/cache/distfiles-ro" "${k}/var/tmp/portage" "${k}/var/db/repos/gentoo" "${k}/var/cache/binpkgs" "${k}/run" "${k}/dev" "${k}/sys" "${k}/proc"
+    write_mountinfo "${MI2}" "${k}/var/cache/distfiles-ro" "${k}/var/cache/distfiles-ro" "${k}/var/tmp/portage" "${k}/var/db/repos/gentoo" "${k}/var/cache/binpkgs" \
+                    "${k}/run" "${k}/dev" "${k}/sys" "${k}/proc"
 }
-set_mounts "${S4}"
-out="$(run_umount_chroot "${X86}" "${S4}" true 2>&1)"; rc=$?
-n_dist="$(grep -a -c "distfiles-ro" "${STUB_STATE}/umount-args")"
-n_all="$(wc -l < "${STUB_STATE}/umount-args")"
-left_dist="$(grep -a -c "distfiles-ro" "${STUB_STATE}/mounts")"
-if [ "${rc}" -eq 0 ] && [ "${n_dist}" -eq 1 ] && [ "${n_all}" -eq 12 ] && [ "${left_dist}" -eq 1 ] \
-   && printf '%s' "${out}" | grep -a -F "flags-after: false false false false" >/dev/null \
-   && ! printf '%s' "${out}" | grep -a -F "STILL mounted" >/dev/null; then
-    ok "umount_chroot: peels ONE distfiles-ro layer (the foreign one beneath stays), scratch, repo, pool + run/dev/sys/proc; flags reset so a second call unmounts only run/dev/sys/proc (12 umounts total); no warning"
-else
-    bad "umount_chroot: rc=${rc} distfiles=${n_dist} total=${n_all} left=${left_dist}: ${out} :: $(cat "${STUB_STATE}/umount-args")"
-fi
+for sp in "${S4}" "${TDIR}/lnk/sysroot"; do
+    set_mounts "${sp}"
+    out="$(run_umount_chroot "${X86}" "${sp}" true 2>&1)"; rc=$?
+    n_dist="$(grep -a -c "distfiles-ro" "${STUB_STATE}/umount-args")"
+    n_all="$(wc -l < "${STUB_STATE}/umount-args")"
+    left_dist="$(grep -a -c "distfiles-ro" "${MI2}")"
+    if [ "${rc}" -eq 0 ] && [ "${n_dist}" -eq 1 ] && [ "${n_all}" -eq 12 ] && [ "${left_dist}" -eq 1 ] && [ "$(wc -l < "${MI2}")" -eq 1 ] \
+       && printf '%s' "${out}" | grep -a -F "flags-after: false false false false" >/dev/null \
+       && ! printf '%s' "${out}" | grep -a -F "STILL mounted" >/dev/null; then
+        ok "umount_chroot (sysroot spelled ${sp#"${TDIR}"/}): peels ONE distfiles-ro layer (the foreign one beneath stays), scratch, repo, pool + run/dev/sys/proc; flags reset so a second call unmounts only run/dev/sys/proc (12 umounts total); no warning"
+    else
+        bad "umount_chroot (${sp}): rc=${rc} distfiles=${n_dist} total=${n_all} left=${left_dist} table=$(wc -l < "${MI2}"): ${out} :: $(cat "${STUB_STATE}/umount-args")"
+    fi
+done
 set_mounts "${S4}"
 out="$(run_umount_chroot "${X86}" "${S4}" false 2>&1)"; rc=$?
-[ "${rc}" -eq 0 ] && [ "$(grep -a -c "distfiles-ro" "${STUB_STATE}/umount-args")" -eq 0 ] && [ "$(grep -a -c "distfiles-ro" "${STUB_STATE}/mounts")" -eq 2 ] \
+[ "${rc}" -eq 0 ] && [ "$(grep -a -c "distfiles-ro" "${STUB_STATE}/umount-args")" -eq 0 ] && [ "$(grep -a -c "distfiles-ro" "${MI2}")" -eq 2 ] \
     && ok "umount_chroot: does NOT unmount distfiles-ro it did not mount (DISTFILES_MOUNTED=false); both foreign layers stay" \
     || bad "umount_chroot (not ours): rc=${rc} $(cat "${STUB_STATE}/umount-args")"
-set_mounts "${S4}"; touch "${STUB_STATE}/still-mounted"
-out="$(run_umount_chroot "${X86}" "${S4}" true 2>&1)"; rc=$?
-[ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -a -F "distfiles-ro is STILL mounted (2 layer(s)) after this build's own umount" >/dev/null \
-    && printf '%s' "${out}" | grep -a -F "UMOUNT-COMPLETED" >/dev/null \
-    && ok "umount_chroot: a detach that did not happen (layer count unchanged) is said out loud, build continues" \
-    || bad "umount_chroot verify: rc=${rc}: ${out}"
-rm -f "${STUB_STATE}/still-mounted"
+for sp in "${S4}" "${TDIR}/lnk/sysroot"; do
+    set_mounts "${sp}"; touch "${STUB_STATE}/still-mounted"
+    out="$(run_umount_chroot "${X86}" "${sp}" true 2>&1)"; rc=$?
+    [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -a -F "distfiles-ro is STILL mounted (2 layer(s)) after this build's own umount" >/dev/null \
+        && printf '%s' "${out}" | grep -a -F "UMOUNT-COMPLETED" >/dev/null \
+        && ok "umount_chroot (sysroot spelled ${sp#"${TDIR}"/}): a detach that did not happen (layer count unchanged) is said out loud, build continues" \
+        || bad "umount_chroot verify (${sp}): rc=${rc}: ${out}"
+    rm -f "${STUB_STATE}/still-mounted"
+done
+# the binpkgs guard after umount_chroot (x86 section 8): the builder text, extracted, with `mountpoint`
+# stubbed to say the pool is still mounted: it stops, and prints EVERY mount under the sysroot as a
+# umount command (the table fixture), or just the pool's command when the table cannot be read.
+run_binpkgs_guard() {   # <builder> <sysroot> <mount table fixture> [library]
+    local b="$1" sysroot="$2" mtab="$3" lib="${4:-${LIB}}"
+    local sec="${TDIR}/sec-binpkgs.sh"
+    extract_section "$b" '^if mountpoint -q "\\$\\{SYSROOT\\}/var/cache/binpkgs"' 'hmr_stale_mount_hint' '^fi$' "${sec}" || return 99
+    mkdir -p "${TDIR}/bin-mp"; printf '#!/usr/bin/env bash\nexit 0\n' > "${TDIR}/bin-mp/mountpoint"; chmod +x "${TDIR}/bin-mp/mountpoint"
+    PATH="${TDIR}/bin-mp:${PATH}" HMR_MOUNTINFO="${mtab}" timeout "${WALL}" bash -c "
+        set -euo pipefail
+        . '${lib}'
+        err(){ echo \"    ERROR: \$1\" >&2; }
+        SYSROOT='${sysroot}'; X86_POOL_DIR=/srv/pool
+        . '${sec}'
+        echo BINPKGS-GUARD-PASSED
+    "
+}
+KS4="$(readlink -f -- "${S4}")"
+write_mountinfo "${MI2}" "/" "${KS4}/dev" "${KS4}/dev/pts" "${KS4}/var/cache/binpkgs"
+out="$(run_binpkgs_guard "${X86}" "${TDIR}/lnk/sysroot" "${MI2}" 2>&1)"; rc=$?
+if [ "${rc}" -eq 1 ] && ! printf '%s' "${out}" | grep -a -F "BINPKGS-GUARD-PASSED" >/dev/null \
+   && [ "$(printf '%s\n' "${out}" | grep -a -c "^    umount '")" -eq 3 ] \
+   && printf '%s' "${out}" | grep -a -F "    umount '${KS4}/var/cache/binpkgs'" >/dev/null \
+   && printf '%s' "${out}" | grep -a -F "    umount '${KS4}/dev/pts'" >/dev/null; then
+    ok "binpkgs guard (x86 section 8): the pool is still a mount point -> stops, and prints all 3 mounts under the sysroot as quoted umount commands (the sysroot spelled through a symlink)"
+else
+    bad "binpkgs guard: rc=${rc}: ${out}"
+fi
+out="$(run_binpkgs_guard "${X86}" "${S4}" "/nonexistent/mountinfo" 2>&1)"; rc=$?
+if [ "${rc}" -eq 1 ] && [ "$(printf '%s\n' "${out}" | grep -a -c "^    umount '")" -eq 1 ] && printf '%s' "${out}" | grep -a -F "    umount '${KS4}/var/cache/binpkgs'" >/dev/null; then
+    ok "binpkgs guard: with the table unreadable it still stops and names the pool's own umount command"
+else
+    bad "binpkgs guard (blind): rc=${rc}: ${out}"
+fi
 
 echo "== 3. call-site pins (every builder) and the refusal executed on each cross builder =="
 pin_x86() {   # <builder> -> 0 when every pin holds
@@ -475,9 +789,13 @@ pin_x86() {   # <builder> -> 0 when every pin holds
     has "$b" 'hmr_stale_mount_refuse "${SYSROOT}" "${_stale_mounts}"' || rc=1
     has "$b" 'hmr_seed_marker_write "${BUILD_ROOT}" "${STAGE3_LOCAL}"' || rc=1
     grep -a -F "umount -R '\${SYSROOT}'" "$b" >/dev/null 2>&1 && rc=1
+    # hmr_stale_mount_hint takes the LISTING, not a path: handed the sysroot it prints
+    # `umount '<sysroot>'`, a command for a directory that is not a mount point
+    has "$b" 'hmr_stale_mount_hint "${_still_mounted}" "    " >&2' || rc=1
+    grep -a -F 'hmr_stale_mount_hint "${SYSROOT}"' "$b" >/dev/null 2>&1 && rc=1
     return "${rc}"
 }
-pin_x86 "${X86}" && ok "x86 pins: lib sourced; owner gate before 'skipping extraction'; 4b ungated (no '\${GPU} &&'); link check between mount_chroot and the first emerge; distfiles-ro in umount_chroot; stale refusal + marker present; no 'umount -R' hint left" \
+pin_x86 "${X86}" && ok "x86 pins: lib sourced; owner gate before 'skipping extraction'; 4b ungated (no '\${GPU} &&'); link check between mount_chroot and the first emerge; distfiles-ro in umount_chroot; stale refusal + marker present; the binpkgs guard hands the hint a listing; no 'umount -R' hint left" \
     || bad "x86 pins: one or more call sites missing (run: bash -x on pin_x86)"
 pin_rpi() {
     local b="$1" rc=0 n_ref n_rm
@@ -529,11 +847,12 @@ pin_arm() {   # <builder> -> 0 when every pin holds
     esac
     return "${rc}"
 }
-# The same Extract-phase stale refusal, executed on each builder's own text (stub findmnt).
-run_arm_extract() {   # <builder> <sysroot> <epath>
+# The same Extract-phase stale refusal, executed on each builder's own text (the kernel's
+# table is the fixture named by the third argument).
+run_arm_extract() {   # <builder> <sysroot> <mount table fixture>
     local sec="${TDIR}/sec-arm.sh"
     extract_section "$1" '^banner "Extracting stage3 into sysroot"$' 'hmr_stale_mount_refuse' '^fi$' "${sec}" || return 99
-    PATH="$3:${PATH}" timeout "${WALL}" bash -c "
+    HMR_MOUNTINFO="$3" timeout "${WALL}" bash -c "
         set -euo pipefail
         . '${LIB}'
         banner(){ echo \"==> \$1\"; }; info(){ echo \"    \$1\"; }; warn(){ echo \"    WARNING: \$1\"; }; err(){ echo \"    ERROR: \$1\" >&2; }
@@ -559,7 +878,7 @@ chmod +x "${TDIR}/bin-id/id"
 run_arm_resume() {   # <builder> <sysroot> <uid the stub id answers>
     local sec="${TDIR}/sec-arm-resume.sh"
     extract_section "$1" '^banner "Extracting stage3 into sysroot"$' 'skipping extraction' '^fi$' "${sec}" || return 99
-    PATH="${TDIR}/bin-id:${PATH}" STUB_ID_UID="$3" timeout "${WALL}" bash -c "
+    HMR_MOUNTINFO="${MI_CLEAR}" PATH="${TDIR}/bin-id:${PATH}" STUB_ID_UID="$3" timeout "${WALL}" bash -c "
         set -euo pipefail
         . '${LIB}'
         banner(){ echo \"==> \$1\"; }; info(){ echo \"    \$1\"; }; warn(){ echo \"    WARNING: \$1\"; }; err(){ echo \"    ERROR: \$1\" >&2; }
@@ -575,20 +894,26 @@ for b in "${REPO}"/build-*-stage4.sh; do
     [ "${bn}" = build-x86-host-stage4.sh ] && continue
     n_arm=$((n_arm+1))
     pin_arm "$b" || { bad "${bn} pins: lib sourced + stale-mount refusal before 'skipping extraction'; the root-only owner gate with the remove-the-tree remedy (rpi5: none, its owners are forced to 0); no *.a clean (run: bash -x on pin_arm)"; continue; }
-    out="$(run_arm_extract "$b" "${SX}" "${TDIR}/bin-mnt" 2>&1)"; rc=$?
-    if [ "${rc}" -ne 1 ] || ! printf '%s' "${out}" | grep -a -F "mounts are still attached under ${SX}" >/dev/null; then
+    out="$(run_arm_extract "$b" "${SX}" "${MI_STALE}" 2>&1)"; rc=$?
+    if [ "${rc}" -ne 1 ] || ! printf '%s' "${out}" | grep -a -F "mounts are still attached under ${SX}" >/dev/null \
+       || [ "$(printf '%s\n' "${out}" | grep -a -c "^    umount '${KSX}/var/cache/distfiles-ro'")" -ne 2 ]; then
         bad "${bn} extract guard (stale binds): rc=${rc}: ${out}"; continue
     fi
-    out="$(run_arm_extract "$b" "${SX}" "${TDIR}/bin-none" 2>&1)"; rc=$?
+    out="$(run_arm_extract "$b" "${SX}" "${MI_CLEAR}" 2>&1)"; rc=$?
     if [ "${rc}" -ne 0 ] || ! printf '%s' "${out}" | grep -a -F "ARM-EXTRACT-GUARD-PASSED" >/dev/null; then
         bad "${bn} extract guard (no mounts): rc=${rc}: ${out}"; continue
+    fi
+    out="$(run_arm_extract "$b" "${SX}" "/nonexistent/mountinfo" 2>&1)"; rc=$?
+    if [ "${rc}" -eq 0 ] || ! printf '%s' "${out}" | grep -a -F "cannot read the kernel's mount table" >/dev/null \
+       || printf '%s' "${out}" | grep -a -F "ARM-EXTRACT-GUARD-PASSED" >/dev/null; then
+        bad "${bn} extract guard (unreadable mount table): expected it to stop, rc=${rc}: ${out}"; continue
     fi
     if [ "${bn}" = build-rpi5-stage4.sh ]; then
         out="$(run_arm_resume "$b" "${SX}" 0 2>&1)"; rc=$?
         if [ "${rc}" -ne 0 ] || ! printf '%s' "${out}" | grep -a -F "skipping extraction" >/dev/null; then
             bad "${bn} resume (root, user-owned tree): expected to proceed (its owners are forced to 0 at packaging), got rc=${rc}: ${out}"; continue
         fi
-        ok "${bn}: binds host /proc under its sysroot; lib sourced; stale refusal pinned + EXECUTED (stale binds -> refused with the loop hint; clean -> passes); a root resume on a user-owned tree proceeds — no gate, every owner in its stage4 tarball is forced to 0 and the .img is filled from it (pinned)"
+        ok "${bn}: binds host /proc under its sysroot; lib sourced; stale refusal pinned + EXECUTED (stale binds -> refused, one umount command per layer; clean table -> passes; unreadable table -> stops); a root resume on a user-owned tree proceeds — no gate, every owner in its stage4 tarball is forced to 0 and the .img is filled from it (pinned)"
         continue
     fi
     out="$(run_arm_resume "$b" "${SX}" 0 2>&1)"; rc=$?
@@ -601,11 +926,14 @@ for b in "${REPO}"/build-*-stage4.sh; do
     if [ "${rc}" -ne 0 ] || ! printf '%s' "${out}" | grep -a -F "skipping extraction" >/dev/null; then
         bad "${bn} resume (non-root, user-owned tree): expected to proceed (a non-root build owns its tree by design), got rc=${rc}: ${out}"; continue
     fi
-    ok "${bn}: binds host /proc under its sysroot; lib sourced; stale refusal pinned + EXECUTED (stale binds -> refused with the loop hint; clean -> passes); root-only owner gate EXECUTED (root + user-owned tree -> refused, remedy says remove the tree; non-root -> proceeds)"
+    ok "${bn}: binds host /proc under its sysroot; lib sourced; stale refusal pinned + EXECUTED (stale binds -> refused, one umount command per layer; clean table -> passes; unreadable table -> stops); root-only owner gate EXECUTED (root + user-owned tree -> refused, remedy says remove the tree; non-root -> proceeds)"
 done
 [ "${n_arm}" -eq 9 ] && ok "nine non-x86 builders measured (rpi5 + frite + jetson + six orangepi)" || bad "expected 9 non-x86 builders, found ${n_arm}: a builder was added or removed — re-measure its resume path"
 
 echo "== 4. mutation battery: each guard removed from a COPY must turn its leg RED =="
+if [ -n "${HMR_TEST_INNER:-}" ]; then
+    echo "  (inner run against a mutated copy of the library: the battery is not repeated)"
+else
 mutate() {   # <name> <sed expr> -> path of mutated copy (fails the suite if unchanged)
     local m="${TDIR}/mut-$1.sh"
     sed -e "$2" "${X86}" > "$m"
@@ -647,14 +975,22 @@ if m="$(mutate no-distfiles-umount 's/hmr_umount_own "\${SYSROOT}\/var\/cache\/d
 fi
 # M5: the stale-mount refusal moved back inside the non-resume branch -> a resume stacks.
 if m="$(mutate stale-only-nonresume '/^if \[ -d "\${SYSROOT}" \]; then$/,/^fi$/{s/^if \[ -d "\${SYSROOT}" \]; then$/if ! ${RESUME} \&\& [ -d "${SYSROOT}" ]; then/}')"; then
-    out="$(run_extract_phase "$m" true "${SX}" "${B1}" "${SEED_OLD}" "${TDIR}/bin-mnt" 2>&1)"; rc=$?
+    out="$(run_extract_phase "$m" true "${SX}" "${B1}" "${SEED_OLD}" "" "${MI_STALE}" 2>&1)"; rc=$?
     ! printf '%s' "${out}" | grep -a -F "mounts are still attached" >/dev/null \
         && ok "M5 stale refusal gated on non-resume only: a resume over stacked binds is NOT refused (leg RED)" \
         || bad "M5: gating the stale refusal was not caught"
 fi
-# M6: the old hint restored -> the pin catches 'umount -R'.
-if m="$(mutate old-hint 's/hmr_stale_mount_hint "\${SYSROOT}")  — then re-run/umount -R '"'"'${SYSROOT}'"'"'  — then re-run/')"; then
+# M6: the old hint restored in the binpkgs guard -> the pin catches 'umount -R', and
+# handing the hint the SYSROOT instead of a listing is caught by the pin and by the leg.
+if m="$(mutate old-hint "s/err \"bottom; every mount under the build system is listed), then re-run:\"/err \"Unmount first: umount -R '\${SYSROOT}' then re-run\"/")"; then
     ! pin_x86 "$m" && ok "M6 old 'umount -R <sysroot>' hint restored: pin RED" || bad "M6: old hint not caught"
+fi
+if m="$(mutate hint-gets-sysroot 's/hmr_stale_mount_hint "\${_still_mounted}" "    " >&2/hmr_stale_mount_hint "${SYSROOT}" >\&2/')"; then
+    write_mountinfo "${MI2}" "/" "${KS4}/dev" "${KS4}/dev/pts" "${KS4}/var/cache/binpkgs"
+    out="$(run_binpkgs_guard "$m" "${S4}" "${MI2}" 2>&1)"; rc=$?
+    ! pin_x86 "$m" && [ "$(printf '%s\n' "${out}" | grep -a -c "^    umount '")" -ne 3 ] \
+        && ok "M6b the binpkgs guard hands the hint a path instead of the listing: pin RED and the leg RED (it prints a command for the sysroot directory)" \
+        || bad "M6b: handing the hint the sysroot was not caught"
 fi
 # M7: the seed marker write deleted -> a fresh extract leaves no marker.
 if m="$(mutate no-marker '/hmr_seed_marker_write "\${BUILD_ROOT}" "\${STAGE3_LOCAL}" || true/d')"; then
@@ -682,6 +1018,77 @@ else
     [ "${rc}" -eq 0 ] && printf '%s' "${out}" | grep -a -F "skipping extraction" >/dev/null && ! pin_arm "${TDIR}/mut-jetson-no-gate.sh" \
         && ok "M9 cross-builder owner gate removed: a root resume on a user-owned tree proceeds (leg RED) and the pin is RED" \
         || bad "M9: removing the cross builder's owner gate was not caught (rc=${rc}: ${out})"
+fi
+# Library mutations. The whole suite is run again against a MUTATED COPY of the
+# library (HMR_TEST_LIB), with this battery switched off (HMR_TEST_INNER), and the run
+# must go red ON THE LEG THAT COVERS THE MUTATED LINE — the FAIL line is matched by
+# its text, so a mutation that breaks something unrelated does not count.
+lib_mut() {   # <name> <what was broken> <sed script> <extended regex the FAIL line must match>
+    local name="$1" what="$2" script="$3" want="$4"
+    local m="${TDIR}/mutlib-${name}.sh" o="${TDIR}/mutlib-${name}.out" rc
+    sed -e "${script}" "${LIB}" > "${m}"
+    if cmp -s "${m}" "${LIB}"; then bad "${name}: the mutation did not change the library"; return; fi
+    HMR_TEST_INNER=1 HMR_TEST_LIB="${m}" timeout 180 bash "${BASH_SOURCE[0]}" > "${o}" 2>&1; rc=$?
+    if [ "${rc}" -ne 0 ] && grep -a -E "^  FAIL .*(${want})" "${o}" >/dev/null; then
+        ok "${name} ${what}: the suite goes RED on the leg that covers it ($(grep -a -c '^  FAIL ' "${o}") failing leg(s))"
+    else
+        bad "${name} ${what}: NOT caught (rc=${rc}; wanted a FAIL line matching '${want}'; got: $(grep -a '^  FAIL ' "${o}" | head -3 | cut -c1-160 | tr '\n' '|'))"
+    fi
+}
+lib_mut M10 "hmr_umount_own waits for the layer count again" \
+    's#^    umount -l "\${path}" 2>/dev/null || true$#    [ "${before:-0}" -gt 0 ] || return 0\n    umount -l "${path}" 2>/dev/null || true#' \
+    'blind umount'
+lib_mut M11 "hmr_canon stops resolving symlinks" \
+    's#^    c="\$(readlink -f -- "\${p}" 2>/dev/null || true)"$#    c=""#' \
+    "hmr_canon|spelling 'symlink component'|spelling 'relative --work-dir'"
+lib_mut M12 "the decoder is printf %b (reads \\0405 as one byte)" \
+    's/^_hmr_unmangle() {$/_hmr_unmangle() { printf "%b" "${1-}"; return 0; }\n_hmr_unmangle_real() {/' \
+    "decoder:|spelling 'space then a digit'"
+lib_mut M13 "the decoder does nothing" \
+    's/^_hmr_unmangle() {$/_hmr_unmangle() { printf "%s" "${1-}"; return 0; }\n_hmr_unmangle_real() {/' \
+    "decoder:|spelling 'space'|spelling 'backslash'"
+lib_mut M14 "an unreadable table is reported as success" \
+    '/^hmr_mount_targets() {$/,/^}$/ s/^        return 1$/        return 0/' \
+    'unreadable mount table'
+lib_mut M15 "the table error is swallowed by hmr_stale_mounts" \
+    's/^    targets="\$(hmr_mount_targets)" || return 1$/    targets="$(hmr_mount_targets || true)"/' \
+    'unreadable mount table'
+lib_mut M16 "the refusal is cut to eight lines again" \
+    's/^    hmr_stale_mount_hint "\${listing}" "    " >&2$/    hmr_stale_mount_hint "${listing}" "    " 2>\&1 | head -n 8 >\&2/' \
+    'refusal text'
+lib_mut M17 "the hint stops quoting each path" \
+    's/\$(_hmr_squote "\${m}")/${m}/' \
+    'hint quoting|stale-mount hint'
+lib_mut M18 "the hint stops sorting deepest first" \
+    's/ | LC_ALL=C sort -r | while/ | while/' \
+    'stale-mount hint'
+lib_mut M19 "the stale check compares as a glob (an unquoted prefix)" \
+    's/^            "\${prefix}"\*) printf/            ${prefix}*) printf/' \
+    "spelling 'glob characters'"
+lib_mut M20 "the marker is written through a symlink" \
+    's/^    if \[ -L "\${marker}" \]; then$/    if false; then/' \
+    'seed marker via symlink'
+lib_mut M21 "a marker naming a path outside the cache is trusted" \
+    's/) return 0 ;; esac$/) true ;; esac/' \
+    'seed marker read validation'
+lib_mut M22 "the cached seeds in the refusal lose their separator" \
+    's/tc_line="\${tc_line}\${tc_line:+; }\$(basename/tc_line="${tc_line}$(basename/' \
+    'seed refusal separators'
+lib_mut M23 "the still-mounted warning never fires" \
+    's/^    if \[ "\${after:-0}" -ge "\${before}" \]; then$/    if false; then/' \
+    'umount_chroot verify'
+lib_mut M24 "a newline in the build system path is accepted" \
+    's/^            return 1 ;;$/            true ;;/' \
+    'newline path'
+lib_mut M25 "the layer count compares the spelling it was given" \
+    's/^    canon="\$(hmr_canon "\${1:?path}")"$/    canon="${1:?path}"/' \
+    "spelling 'symlink component'|umount_chroot verify"
+lib_mut M26 "the refusal stops naming the kernel's spelling" \
+    's/^    \[ "\${canon}" = "\${sysroot%\/}" \] || note=.*$/    :/' \
+    'refusal \(symlinked spelling\)'
+lib_mut M27 "the refusal stops saying the commands are every mount under the directory" \
+    's/They are ALL the mounts under that directory/They are mounts under that directory/' \
+    'refusal text'
 fi
 
 echo

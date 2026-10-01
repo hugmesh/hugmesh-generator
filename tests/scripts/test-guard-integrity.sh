@@ -857,14 +857,15 @@ PREMERGE_UNGATED=(
   tests/pentest/nuclei/test-templates.sh
   # Needs `unshare -Urm` (a private user+mount namespace) to stack REAL bind
   # mounts under a scratch build system and drive the x86 builder's own
-  # umount_chroot and stale-mount hint against the kernel (#659). Docker's
+  # umount_chroot, stale-mount listing and printed umount commands against the
+  # kernel, through eight spellings of the build system's path (#659). Docker's
   # default seccomp profile blocks those namespaces, so in every shell-suites
   # image it exits 2 SKIPPED-LOUDLY having run ZERO assertions — MEASURED in
   # alpine:3 with that job's apk set before it was listed here. Gating it would
   # raise the coverage number by one and gate nothing. `make
-  # builder-unmount-real-check` runs it on a developer host (6 passed there,
-  # 2026-09-30); the same code paths are proven with stubs, pre-merge, by
-  # tests/scripts/test-builder-resume-safety.sh.
+  # builder-unmount-real-check` runs it on a developer host (16 passed there,
+  # 2026-09-30); the same code paths are proven against a fixture table,
+  # pre-merge, by tests/scripts/test-builder-resume-safety.sh.
   tests/scripts/test-builder-unmount-real.sh
   tests/scripts/test-e2e-cli-lane.sh
   tests/scripts/test-e2e-coverage-matrix.sh

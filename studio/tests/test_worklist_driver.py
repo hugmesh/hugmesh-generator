@@ -427,6 +427,22 @@ def test_preflight_flags_unwritable_output_dir(tmp_path, monkeypatch):
     assert "chown -h" in hits[0]
 
 
+def test_preflight_remedy_quotes_an_output_dir_with_a_space(tmp_path, monkeypatch):
+    # The remedy is a command to paste: a path with a space in it must reach `find`
+    # as ONE argument, or the person is told to chown two other directories.
+    out = tmp_path / "my builds" / "out"
+    (out / "sessions").mkdir(parents=True)
+    workdir = out / "sessions" / "20260930-090000-abcdef"
+    real_access = os.access
+    monkeypatch.setattr(
+        wd.os, "access",
+        lambda p, m: False if os.path.abspath(p) == str(out / "sessions") else real_access(p, m))
+    drv = WorklistDriver(str(tmp_path), _worklist(tmp_path), host=host(), workdir=str(workdir))
+    hits = [p for p in drv.preflight() if "not writable" in p]
+    assert len(hits) == 1
+    assert f"sudo find '{out / 'sessions'}' -type d -name sysroot -prune" in hits[0]
+
+
 def test_preflight_silent_when_output_dir_writable(tmp_path):
     # Control: the same shape with a writable tree must NOT produce a writability
     # problem (a check that fires on every run is worse than no check).

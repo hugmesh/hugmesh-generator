@@ -1459,9 +1459,10 @@ banner "Extracting stage3 into sysroot"
 # unmounts them itself; a kill does not). A non-resume run would then extract
 # the stage3 OVER those binds — its ./proc, ./sys and ./dev entries land on the
 # HOST's directories — and a --resume run would stack a second bind on each for
-# the next dracut. Same check and the same working hint as the x86 builder
-# (#659); the hint loops over the listing so stacked binds are unmounted once
-# per layer.
+# the next dracut. Same check and the same refusal as the x86 builder (#659):
+# the listing comes from the kernel's own mount table (symlinks resolved,
+# escapes undone), and the refusal prints every mount as the umount command
+# that removes it, once per stacked layer.
 if [ -d "${SYSROOT}" ]; then
     _stale_mounts="$(hmr_stale_mounts "${SYSROOT}")"
     if [ -n "${_stale_mounts}" ]; then

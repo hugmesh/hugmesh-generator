@@ -3706,11 +3706,16 @@ acquire_build_lock
 # them (three distfiles-ro binds were found under one sysroot on 2026-09-30,
 # #659). The flock above excludes a LIVE same-BUILD_ROOT build; this catches a
 # crashed one (flock died with it, mounts did not). Captured into a variable,
-# NOT `findmnt | grep -q`: under this script's pipefail, grep -q exiting at the
-# first match can SIGPIPE findmnt on a mount-heavy host, turning the pipeline
-# status non-zero — the guard silently NOT firing with mounts present. The hint
-# printed is a loop over the listing: stacked binds are listed once per layer
-# and unmounted once per line (`umount -R <sysroot>` named a directory that is
+# never piped into `grep -q`: under this script's pipefail, grep -q exiting at the
+# first match can SIGPIPE the producer on a mount-heavy host, turning the pipeline
+# status non-zero — the guard silently NOT firing with mounts present. The
+# listing is read from the kernel's own table and compared against the path the
+# kernel uses (symlinks resolved, escapes undone: scripts/_builder-resume-lib.sh),
+# so a work directory reached through a symlink, a relative --work-dir, or a name
+# with a space or an umlaut is checked the same as any other, and a table that
+# cannot be read stops the build instead of reading as "nothing mounted". The
+# refusal prints every mount as the umount command that removes it, deepest
+# first, once per stacked layer (`umount -R <sysroot>` named a directory that is
 # not itself a mount point and did nothing).
 if [ -d "${SYSROOT}" ]; then
     _stale_mounts="$(hmr_stale_mounts "${SYSROOT}")"
@@ -5263,8 +5268,11 @@ umount_chroot() {
     # left one behind per mount_chroot call, stacked on the previous run's.
     # Each flag is reset after its umount so a second mount_chroot/umount_chroot
     # pair (the live-ISO dracut step) starts from a clean slate. hmr_umount_own
-    # peels ONE layer (ours), counts layers before and after, and warns when
-    # the count did not go down (`umount -l ... || true` alone is silent).
+    # peels ONE layer (ours) whatever the mount table says (the umount never
+    # waits for a count, so a path spelled differently from the kernel's — a
+    # symlink, a space, an umlaut, a relative --work-dir — is unmounted like any
+    # other), then counts layers before and after and warns when the count did
+    # not go down (`umount -l ... || true` alone is silent).
     if ${DISTFILES_MOUNTED:-false}; then
         hmr_umount_own "${SYSROOT}/var/cache/distfiles-ro" || true; DISTFILES_MOUNTED=false
     fi
@@ -6744,7 +6752,11 @@ umount_chroot; trap - EXIT
 if mountpoint -q "${SYSROOT}/var/cache/binpkgs" 2>/dev/null; then
     err "${SYSROOT}/var/cache/binpkgs is STILL a mountpoint after umount_chroot —"
     err "refusing to touch it: it is the SHARED binpkg pool every amd64 image"
-    err "reuses (${X86_POOL_DIR:-<unset>}). Unmount first:  $(hmr_stale_mount_hint "${SYSROOT}")  — then re-run."
+    err "reuses (${X86_POOL_DIR:-<unset>}). Unmount what is still attached (as root, top to"
+    err "bottom; every mount under the build system is listed), then re-run:"
+    _still_mounted="$(hmr_stale_mounts "${SYSROOT}" 2>/dev/null || true)"
+    [ -n "${_still_mounted}" ] || _still_mounted="$(hmr_canon "${SYSROOT}/var/cache/binpkgs")"
+    hmr_stale_mount_hint "${_still_mounted}" "    " >&2
     exit 1
 fi
 # --cached carve-out (shared-binpkg): a CACHED image PROMISES an embedded binpkg

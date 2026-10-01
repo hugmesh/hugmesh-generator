@@ -26,9 +26,10 @@
 #
 # Every function here is plain bash, safe under `set -euo pipefail`, and uses
 # no `| grep -q` (SIGPIPE under pipefail can turn a FOUND match into a failure).
-# One name per `local` (bash 5.3 localises before assigning: `local a=$1 b=$a`
-# dies under set -u). Messages go through the builder's err/info/warn when they
-# are defined, else to stderr/stdout in plain form.
+# No `local` line reads one of its own names on its right-hand side (bash 5.3
+# localises every name BEFORE assigning, so `local a=$1 b=$a` dies under set -u;
+# `local a=$1 b=$2` is fine). Messages go through the builder's err/info/warn
+# when they are defined, else to stderr/stdout in plain form.
 
 _hmr_err()  { if declare -F err  >/dev/null 2>&1; then err  "$1"; else printf 'ERROR: %s\n' "$1" >&2; fi; }
 _hmr_warn() { if declare -F warn >/dev/null 2>&1; then warn "$1"; else printf 'WARNING: %s\n' "$1" >&2; fi; }
@@ -80,19 +81,33 @@ hmr_owner_gate() {
 # image, and the marker must do both. It holds the seed tarball's basename.
 HMR_SEED_MARKER_NAME="sysroot.seed"
 hmr_seed_marker_path()  { printf '%s/%s\n' "${1%/}" "${HMR_SEED_MARKER_NAME}"; }
+# The marker is written as root into <build root>, a directory the Makefile hands
+# to the invoking user (only directories NAMED sysroot are skipped), so a symlink
+# planted at the marker's path would be followed by a plain `>`. Refuse to write
+# through one; the caller carries on, and the next resume falls back to the
+# version match.
 hmr_seed_marker_write() {
     local build_root="${1:?build root}" seed="${2:?seed path}"
     local marker
     marker="$(hmr_seed_marker_path "${build_root}")"
+    if [ -L "${marker}" ]; then
+        _hmr_warn "not recording the seed name: ${marker} is a symlink; remove it"
+        return 1
+    fi
     printf '%s\n' "$(basename "${seed}")" > "${marker}" 2>/dev/null \
         || { _hmr_warn "could not record the seed name in ${marker}"; return 1; }
 }
+# What is read back is joined onto the seed cache directory as a file NAME, so
+# anything that is not a bare name (a `/`, `.`, `..`, nothing) is ignored: a
+# marker holding `../../x.tar.xz` cannot point the restore outside the cache.
 hmr_seed_marker_read() {
     local build_root="${1:?build root}"
-    local marker
+    local marker m
     marker="$(hmr_seed_marker_path "${build_root}")"
     [ -f "${marker}" ] || return 0
-    head -n1 "${marker}" 2>/dev/null | tr -d '[:space:]'
+    m="$(head -n1 "${marker}" 2>/dev/null | tr -d '[:space:]')"
+    case "${m}" in */*|.|..|'') return 0 ;; esac
+    printf '%s\n' "${m}"
 }
 
 # hmr_seed_list <seed.tar.xz> <listing out> — write the tarball's member list
@@ -153,14 +168,15 @@ EOF
 # Prints the path of the seed whose toolchain the build system carries, and
 # leaves that seed's member list in <listing out>. Order tried: the seed the
 # marker names (when it is still cached beside the current one), then the
-# current seed, then every other cached stage3 beside it, newest name first.
+# current seed, then every other cached stage3 beside it in glob order (oldest
+# name first; the order cannot matter, since a match is exact).
 # When none matches it prints ONE sentence and returns 1: the safe choice, since
 # restoring glibc/gcc/binutils static archives from a different toolchain than
 # the one the build system's shared libraries and compiler came from is exactly
 # the mismatch that produces link errors nobody can read.
 hmr_seed_for_resume() {
     local build_root="${1:?build root}" sysroot="${2:?sysroot}" current="${3:?current seed}" listing="${4:?listing out}"
-    local seeddir marker cand tried="" have tc_line
+    local seeddir marker cand tried="" have tc_line seed_tc
     seeddir="$(dirname "${current}")"
     marker="$(hmr_seed_marker_read "${build_root}")"
     for cand in "${seeddir}/${marker:-.none}" "${current}" "${seeddir}"/stage3-*.tar.xz; do
@@ -174,10 +190,13 @@ hmr_seed_for_resume() {
         fi
     done
     have="$(hmr_toolchain_from_sysroot "${sysroot}" | tr '\n' ' ')"
+    have="${have% }"
     tc_line=""
     for cand in ${tried}; do
         hmr_seed_list "${cand}" "${listing}" >/dev/null 2>&1 || true
-        tc_line="${tc_line}$(basename "${cand}"): $(hmr_toolchain_from_listing "${listing}" | tr '\n' ' ')${tc_line:+; }"
+        seed_tc="$(hmr_toolchain_from_listing "${listing}" | tr '\n' ' ')"
+        seed_tc="${seed_tc% }"
+        tc_line="${tc_line}${tc_line:+; }$(basename "${cand}"): ${seed_tc:-no toolchain record}"
     done
     : > "${listing}"
     _hmr_err "Refusing to restore the build system's static libraries: no cached seed tarball carries the toolchain this build system was extracted from (the build system has ${have:-no toolchain record}; cached seeds: ${tc_line:-none}), so the files restored would come from a different glibc, gcc or binutils than the one already installed; rebuild WITHOUT --resume."
@@ -248,75 +267,175 @@ hmr_link_check_chroot() {
 }
 
 # ── 5. Mounts under the build system ──────────────────────────────────────────
-# hmr_stale_mounts <sysroot> — every mount whose target is under the sysroot,
-# one per line, stacked binds listed as many times as they are stacked (that is
-# how /proc/self/mountinfo reports them). Captured, never piped into grep -q.
+# HOW THE MOUNT TABLE IS READ, AND WHY (found by review, 2026-09-30).
+# The first version of this section compared the path the builder was GIVEN with
+# the text `findmnt -rn -o TARGET` prints, and gated its `umount` on that count.
+# Measured, that fails whenever the builder's spelling differs from the kernel's,
+# and it failed SILENTLY:
+#   - the kernel names a mount by its canonical path (absolute, every symlink
+#     resolved), so a build system reached through a symlink (`make WORK_DIR=`
+#     pointing at one) or through a relative --work-dir never matched;
+#   - findmnt escapes what it prints: a space as \x20 in raw mode, and every byte
+#     above 0x7f under the C locale even in list mode (`jörg` comes out as
+#     `j\xc3\xb6rg`), and a literal `\x` as `\x5cx`; so a work directory with a
+#     space or an umlaut never matched either.
+# On such a path the count was 0, hmr_umount_own unmounted NOTHING and reported
+# success, the stale-mount check found nothing, and the next non-resume run's
+# `rm -rf` of the build system would have gone through the bind of the host's
+# portage tree and the fleet's binpkg pool.
+# Now: the builder's spelling is resolved to the kernel's (readlink -f); the
+# table is read straight from /proc/self/mountinfo (the file findmnt itself
+# parses), whose escaping is the kernel's and fixed: in the mount point field
+# every space, tab, newline and backslash is written as \NNN, three octal
+# digits, and every other byte as it is (_hmr_unmangle undoes exactly that);
+# paths are compared as literal text, never as a regex or a glob; the detach in
+# hmr_umount_own does not wait for any count; and a table that cannot be read
+# refuses, instead of answering "nothing is mounted", which is the answer that
+# lets a rm -rf run. A build system path holding a newline is refused outright.
+
+# _hmr_unmangle <string> — undo the kernel's escaping of one mount point. NOT
+# `printf %b`: bash reads \0NNN greedily, so a space followed by a digit
+# ("build 5", written build\0405) comes back as byte 0x05 and the path is lost.
+_hmr_unmangle() {
+    local s="${1-}" out="" pre oct ch
+    while :; do
+        case "${s}" in
+            *'\'[0-7][0-7][0-7]*) ;;
+            *) break ;;
+        esac
+        pre="${s%%\\[0-7][0-7][0-7]*}"
+        oct="${s:${#pre}+1:3}"
+        printf -v ch "\\${oct}"
+        out="${out}${pre}${ch}"
+        s="${s:${#pre}+4}"
+    done
+    printf '%s' "${out}${s}"
+}
+
+# _hmr_squote <string> — the string as ONE single-quoted shell word, safe to paste.
+_hmr_squote() {
+    local s="${1-}" q="'"
+    printf "'%s'" "${s//${q}/${q}\\${q}${q}}"
+}
+
+# hmr_canon <path> — the spelling the kernel uses for <path>: absolute, symlinks
+# resolved. A path readlink cannot resolve is returned as given.
+hmr_canon() {
+    local p="${1:?path}"
+    local c
+    c="$(readlink -f -- "${p}" 2>/dev/null || true)"
+    [ -n "${c}" ] || c="${p}"
+    [ "${c}" = "/" ] || c="${c%/}"
+    printf '%s\n' "${c}"
+}
+
+# hmr_mount_targets — every mount point in the kernel's table, one decoded path
+# per line, in the kernel's order (a bind stacked three times is three lines, the
+# top one last). The table is ${HMR_MOUNTINFO:-/proc/self/mountinfo}; only a test
+# sets the variable. Returns 1 with one sentence when the table cannot be read.
+hmr_mount_targets() {
+    local table="${HMR_MOUNTINFO:-/proc/self/mountinfo}"
+    local _id _parent _dev _root target _rest
+    if [ ! -r "${table}" ]; then
+        _hmr_err "cannot read the kernel's mount table (${table}), so there is no telling what is mounted under the build system; refusing to go on"
+        return 1
+    fi
+    while IFS=' ' read -r _id _parent _dev _root target _rest; do
+        [ -n "${target}" ] || continue
+        _hmr_unmangle "${target}"
+        printf '\n'
+    done < "${table}"
+}
+
+# hmr_stale_mounts <sysroot> — every mount whose mount point lies strictly under
+# the sysroot, one per line, a stacked bind once per layer. Empty means nothing
+# is mounted there. Returns 1, printing nothing, when the table cannot be read or
+# the sysroot's own path holds a newline: an empty answer from a table nobody
+# read is the answer that lets `rm -rf` run.
 hmr_stale_mounts() {
     local sysroot="${1:?sysroot}"
-    findmnt -rn -o TARGET 2>/dev/null | grep -a "^${sysroot%/}/" || true
+    local canon prefix targets t
+    canon="$(hmr_canon "${sysroot}")"
+    case "${canon}" in
+        *$'\n'*)
+            _hmr_err "the build system path ${sysroot} contains a newline, which this builder cannot check for mounts; use a path without one"
+            return 1 ;;
+    esac
+    prefix="${canon%/}/"
+    targets="$(hmr_mount_targets)" || return 1
+    while IFS= read -r t; do
+        case "${t}" in
+            "${prefix}"*) printf '%s\n' "${t}" ;;
+        esac
+    done <<< "${targets}"
 }
 
-# hmr_stale_mount_hint <sysroot> — the command a person runs to clear them. It
-# is a loop over the listing, deepest path first, one umount per LINE, so a
-# bind stacked three times on one directory is unmounted three times and an
-# rbind's submounts go before their parent. `umount -R <sysroot>` (the old
-# hint) fails because the sysroot directory itself is not a mount point.
+# hmr_stale_mount_hint <listing> [indent] — the commands that clear a listing:
+# one `umount '<path>'` per line, deepest path first (an rbind's submounts go
+# before their parent), a path listed twice unmounted twice (a bind stacked
+# twice needs two umounts). Built from the decoded listing and quoted per path,
+# so it is right for any spelling. The old hint, `umount -R <sysroot>`, never
+# worked: the sysroot directory itself is not a mount point.
 hmr_stale_mount_hint() {
-    local sysroot="${1:?sysroot}"
-    printf "findmnt -rn -o TARGET | grep '^%s/' | sort -r | while read -r m; do umount \"\$m\"; done" "${sysroot%/}"
+    local listing="${1:-}" indent="${2-}" m
+    [ -n "${listing}" ] || return 0
+    printf '%s\n' "${listing}" | LC_ALL=C sort -r | while IFS= read -r m; do
+        [ -n "${m}" ] || continue
+        printf '%sumount %s\n' "${indent}" "$(_hmr_squote "${m}")"
+    done
 }
 
-# hmr_stale_mount_refuse <sysroot> <listing> — the refusal lines (to stderr).
+# hmr_stale_mount_refuse <sysroot> <listing> — the refusal (to stderr): the WHOLE
+# listing, as the commands that remove it, and a plain statement that they are
+# every mount under the directory, including any a person mounted there on purpose.
 hmr_stale_mount_refuse() {
     local sysroot="${1:?sysroot}" listing="${2:-}"
-    _hmr_err "mounts are still attached under ${sysroot} (a crashed or interrupted build?):"
-    printf '%s\n' "${listing}" | head -n 8 >&2
-    _hmr_err "rm -rf or a new chroot would go THROUGH those binds (host /dev, the shared portage"
-    _hmr_err "scratch, the distfiles cache). Unmount every one first — the list may repeat a"
-    _hmr_err "path when binds are stacked, and the loop below unmounts each line:"
-    _hmr_err "  $(hmr_stale_mount_hint "${sysroot}")"
-    _hmr_err "then re-run (add --resume back if you had it)."
+    local canon n note=""
+    canon="$(hmr_canon "${sysroot}")"
+    [ "${canon}" = "${sysroot%/}" ] || note=" (the kernel lists it as ${canon})"
+    n="$(printf '%s\n' "${listing}" | grep -a -c . || true)"
+    _hmr_err "mounts are still attached under ${sysroot}${note}: ${n} in all (a crashed run, or an older builder that left its distfiles-ro bind behind). Each is listed below as the command that removes it:"
+    hmr_stale_mount_hint "${listing}" "    " >&2
+    _hmr_err "rm -rf or a new chroot would go THROUGH those mounts (host /dev, the shared portage scratch, the distfiles cache), so nothing is touched until they are gone."
+    _hmr_err "Run the commands above as root, top to bottom. They are ALL the mounts under that directory, deepest first, one umount per line (a path listed twice is stacked twice and needs two umounts), including any you mounted there on purpose: read them before you run them."
+    _hmr_err "Then re-run (add --resume back if you had it)."
 }
 
-# hmr_mount_layers <path> — how many mounts sit on exactly this path (a bind
-# stacked three times answers 3; an unmounted directory answers 0).
+# hmr_mount_layers <path> — how many mounts sit on exactly this path, however
+# the path is spelled (a bind stacked three times answers 3; nothing mounted
+# there, or a table that cannot be read, answers 0).
 hmr_mount_layers() {
-    local path="${1:?path}"
-    findmnt -rn -o TARGET 2>/dev/null | grep -a -c -x -F -e "${path}" || true
+    local canon targets t
+    local n=0
+    canon="$(hmr_canon "${1:?path}")"
+    targets="$(hmr_mount_targets 2>/dev/null)" || { printf '0\n'; return 0; }
+    while IFS= read -r t; do
+        if [ "${t}" = "${canon}" ]; then n=$((n+1)); fi
+    done <<< "${targets}"
+    printf '%s\n' "${n}"
 }
 
 # hmr_umount_own <path> — detach ONE layer from <path>: the one this build
-# made. `umount -l` peels the topmost mount only, so layers somebody else (an
-# earlier crashed run, the operator) stacked beneath stay where they were, and
-# the stale-mount refusal at the next Extract phase names them. The detach is
-# VERIFIED by counting layers before and after (`umount -l ... || true` is
-# silent): a count that did not go down is said out loud. Never fails the
-# caller — a build's own cleanup must not turn a finished image into a failed
-# run — so the return value is informational.
+# made. The `umount -l` is UNCONDITIONAL: it never waits for the layer count,
+# because a count that cannot see the path (an unreadable table, a spelling that
+# does not match) must not turn the build's own cleanup into a no-op. `umount -l`
+# peels the topmost mount only, so layers somebody else (an earlier crashed run,
+# the operator) stacked beneath stay where they were, and the stale-mount
+# refusal at the next Extract phase names them. The count is used only to VERIFY
+# (`umount -l ... || true` is silent): when it saw the path before and the count
+# did not go down, that is said out loud. Never fails the caller — a build's own
+# cleanup must not turn a finished image into a failed run — so the return value
+# is informational.
 hmr_umount_own() {
     local path="${1:?path}"
     local before after
     before="$(hmr_mount_layers "${path}")"
-    [ "${before}" -gt 0 ] || return 0
     umount -l "${path}" 2>/dev/null || true
+    [ "${before:-0}" -gt 0 ] || return 0
     after="$(hmr_mount_layers "${path}")"
-    if [ "${after}" -ge "${before}" ]; then
+    if [ "${after:-0}" -ge "${before}" ]; then
         _hmr_warn "${path} is STILL mounted (${after} layer(s)) after this build's own umount — it was not detached; see the stale-mount hint before the next build"
         return 1
     fi
     return 0
-}
-
-# hmr_verify_detached <path>... — 0 when none of the paths is a mount point
-# any more; otherwise warns per path and returns 1. For a path that may carry
-# somebody else's layers beneath ours, use hmr_umount_own instead.
-hmr_verify_detached() {
-    local p rc=0
-    for p in "$@"; do
-        if mountpoint -q "${p}" 2>/dev/null; then
-            _hmr_warn "${p} is STILL a mount point after this build's own umount — it was not detached; see the stale-mount hint before the next build"
-            rc=1
-        fi
-    done
-    return "${rc}"
 }
