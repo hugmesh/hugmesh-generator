@@ -60,9 +60,10 @@
 #         when the Deployment names none; strategy Recreate adds none; any other
 #         spelling is FAIL);
 #     (5) pool_max = SPRING_R2DBC_POOL_MAX_SIZE from the container env, else 10
-#         (the r2dbc-pool default that Spring Boot applies when the property is
-#         absent — pinned here as an ASSUMPTION so a future default change shows
-#         up as a red test, not as a silent budget change);
+#         (the default Spring Boot 4.0.7 applies when the property is absent,
+#         measured on 2026-09-30 from the Boot jar's metadata and a live context;
+#         it is an ASSUMPTION this test cannot re-check, which is why every BFF
+#         sets the variable explicitly);
 #     (6) pool_initial = SPRING_R2DBC_POOL_INITIAL_SIZE, else 10 (same default);
 #         pool_initial <= pool_max, or r2dbc-pool refuses to build the pool and
 #         the pod never becomes ready;
@@ -71,6 +72,16 @@
 #         (3, Postgres' default) <= max_connections                 (per database)
 #   Zero candidate Deployments is FAIL: a census that finds nothing has lost the
 #   tree, not proved it clean.
+#
+# KNOWN GAPS (changes this test cannot catch; the mutation battery in the pull
+# request did not close them): a Deployment that reaches its database role under
+# another variable name than SPRING_R2DBC_URL + SPRING_R2DBC_USERNAME is not a
+# candidate and is skipped silently (only "no candidates at all" is a FAIL); a
+# Boot upgrade that changes the pool default is not detected for a service that
+# leaves the variable unset (only hugmesh-federation-api does); an HPA, replica
+# count, strategy or environment supplied by a kustomize overlay or a Helm
+# chart outside specs/cluster/manifests/<service>/*.yaml is not read; and
+# live replica counts (a hand scale, a Studio scale) are not manifests.
 #
 # OUT OF SCOPE, and why: pods that terminate slowly keep their connections for
 # a moment while their replacements start (this sum assumes they let go before
