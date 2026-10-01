@@ -416,6 +416,30 @@ def test_a_number_picks_another_build_and_commits_it_like_the_mode_screen(gen):
     assert j.flags.get("qemu_selected") is False        # any other commit disarms it
 
 
+@pytest.mark.parametrize(("inherited", "first_slug"),
+                         [("mesh", "idp"), ("cloud", "role"), ("standalone", "role")])
+def test_enter_takes_whichever_build_the_session_was_carrying(gen, inherited,
+                                                              first_slug):
+    """Not only the desktop: Enter is "the preselected one", whichever of the three
+    that is — a mesh left over from an earlier flow walks into the mesh chain."""
+    j = _at_build(gen, mode=inherited)
+    j.feed("")
+    assert j.cfg.mode == inherited and j.cfg.qemu_device_tests is True
+    assert j.slug == first_slug
+
+
+@pytest.mark.parametrize(("number", "picked"),
+                         [("1", "mesh"), ("2", "cloud"), ("3", "standalone")])
+def test_each_number_picks_its_own_build(gen, number, picked):
+    """The numbers are the list's order (Mesh node, Mesh desktop client, Standalone
+    Gentoo desktop) — and the pick is not the inherited build, so a number that
+    silently fell back to it could not pass."""
+    inherited = "cloud" if picked != "cloud" else "mesh"
+    j = _at_build(gen, mode=inherited)
+    j.feed(number)
+    assert j.cfg.mode == picked and j.cfg.qemu_device_tests is True
+
+
 def test_the_build_screen_says_the_device_tests_will_run_after_the_build(gen):
     j = _at_build(gen, mode="standalone")
     j.feed("")
