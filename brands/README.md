@@ -13,6 +13,8 @@ time, and points the node at the brand's own headscale control plane.
 | `example.conf` | yes | a complete, safe-to-commit example (no secrets) |
 | `local.conf` | yes | the **LAN `.test` profile** — `hugmesh.test`, no OAuth/SMTP/Cloudflare, wildcard DNS on. Used by `make local` (ENV=test). |
 | `<yourbrand>.conf` | yes | your brand's branding + domain + mesh (no secrets) |
+| `example.yaml`, `acme.yaml` | yes | the structured brand schema plus the `repos[]` tenant-set manifest for the templating pipeline (see [`docs/MESH-TEMPLATING.md`](../docs/MESH-TEMPLATING.md)) |
+| `domains.conf` | yes | the multi-domain registry for the per-domain CA loop (`scripts/gen-keystores.sh`); every row is commented out, so a stock build provisions one domain |
 | `../brand.conf` | **no** (gitignored) | the same vars **with real passwords/tokens** |
 
 > **Local-first:** `make local` builds the whole fleet against `brands/local.conf`
@@ -29,7 +31,9 @@ time, and points the node at the brand's own headscale control plane.
 |-----|---------|
 | `BRAND` | short slug used in names (namespaces, gateways, hostnames) |
 | `BRAND_TITLE` | human-readable title shown in UIs/messages |
-| `ORG` | GitHub org / container-image namespace |
+| `ORG` | GitHub org / GitLab gitops-hosting group / Harbor registry project name |
+| `RELEASE_STATE` | `internal` (default; matches a `.test` domain) or `public` |
+| `MFA` | `1` renders `mfa.enabled: true` into this brand's gateway Applications (default off); read [`docs/MFA-ROLLOUT.md`](../docs/MFA-ROLLOUT.md) before you set it |
 | `CLUSTER_DOMAIN` | base domain (`id.`/`matrix.`/`mastodon.`/`api.` derived) |
 | `HEADSCALE_URL` | the brand's **own** headscale control server (its own mesh) |
 | `MESH_TAG` | brand-unique ACL tag, e.g. `tag:<brand>` (mesh isolation) |
