@@ -180,6 +180,7 @@ emissions are designed to coexist and must stay separate:
   portage's `--pretend` column verbatim, deliberately unparsed, and stays
   that way.
 
-GUI consumption of the plan (the collapsed up-front list; running-jobs-only
-during the build; partial/full collapse) is the GUI lane's follow-up on top of
-`parse_plan_line()`/`PlanLine`.
+GUI consumption of the plan is partly built. `gui/pages/progress.py` feeds each plan
+line to the flag-badge index (`gui/flag_badges.py`, through `parse_plan_line()`), so a
+package's USE badges can appear before it compiles. The collapsed up-front package list
+(running-jobs-only during the build; partial/full collapse) has no code yet.
