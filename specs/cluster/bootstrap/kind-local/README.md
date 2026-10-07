@@ -78,13 +78,15 @@ rediscover by trial and error) — see "Known bugs fixed here" below.
 ## Why a curated subset, not the real bring-up
 
 `specs/cluster/bootstrap/bootstrap.sh` installs ArgoCD and then applies the
-root `specs/cluster/app-of-apps.yaml`, which syncs **all 96** files under
-`specs/cluster/apps/*.yaml` (91 `Application` + 5 `ApplicationSet` objects,
-counted 2026-08-26) — the entire platform (GitLab, Cassandra, all 4 gateways,
+**baked** `apps/` set one file at a time: all **100** files under
+`specs/cluster/apps/*.yaml` (95 `Application` + 5 `ApplicationSet` objects,
+counted 2026-10-07) — the entire platform (GitLab, Cassandra, all 4 gateways,
 Matrix/tuwunel, Mastodon/Akkoma, games, media-poisoner, analytics,
-observability, …). That's correct for a real deployment but deliberately too
-much for validating one change: it's slow, heavy, and syncs dozens of
-Applications that a Vault/PKI/Casdoor/Harbor change never touches.
+observability, …). (With `HUGMESH_GITOPS_ROOT_RECURSE=1` it applies the
+repo-recursing root `app-of-apps.yaml` instead; see `specs/cluster/README.md`.)
+That's correct for a real deployment but deliberately too much for validating one
+change: it's slow, heavy, and syncs dozens of Applications that a
+Vault/PKI/Casdoor/Harbor change never touches.
 
 > That count said **81** here and in `bootstrap-kind.sh` until 2026-08-26, and
 > had been wrong long enough that nobody re-derived it. Read it as a magnitude,
@@ -165,11 +167,25 @@ Plus the two things that aren't ArgoCD `Application`s at all:
 `specs/cluster/manifests/local-path` (the `hugmesh-local` StorageClass,
 `kubectl apply -k`).
 
-### Explicitly excluded
+### Added by `KIND_PROFILE=sso` (what `make kind-up` runs)
+
+`make kind-up` passes `KIND_PROFILE=sso`; a bare `bootstrap-kind.sh` defaults to
+`core`. `sso` applies the core set above plus the `SSO_APPS` list in
+`bootstrap-kind.sh`: `00-cassandra`, `00b-cassandra-init`, `06-route-access-db`,
+`20-gateway-fe`, `30-admin-bff-db`, `31-admin-bff-api`, `34-user-bff-db`,
+`37-user-bff-api`, `40-frontend`, `45-social-ui`, `47-user-ui`, `28-federation-db`,
+`29-federation-api`, `15-kyverno`, `14-workload-console-rbac` and
+`05b-casdoor-domains`. It also creates the empty namespaces those Applications
+target (`hugmesh-forum`, `hugmesh-games`, `hugmesh-owncast`, `hugmesh-tube`,
+`hugmesh-image-builds`, `observability`, `velero` and others) so their
+ExternalSecrets and RoleBindings can land.
+
+### Explicitly excluded (from the `core` profile; `sso` adds back what is listed above)
 
 Everything else under `specs/cluster/apps/*.yaml` — most notably:
-`00-cassandra.yaml`, `03-gitlab.yaml`, both gateway apps
-(`20-gateway-be/fe/pki.yaml`, `22-gateway-superadmin.yaml`), `30-tuwunel.yaml`
+`00-cassandra.yaml` (`sso` adds it), `03-gitlab.yaml`, the gateway apps
+(`20-gateway-be/fe/pki.yaml`, `22-gateway-superadmin.yaml`; `sso` adds only
+`20-gateway-fe`), `30-tuwunel.yaml`
 (Matrix), `30-akkoma.yaml` (Mastodon), `50-games.yaml` / `06-casdoor-games.yaml`
 (the entirely separate games realm), `51-media-poisoner.yaml`, the analytics/
 observability/velero stack, `10-ingress-nginx.yaml` (public ingress), and
@@ -197,8 +213,8 @@ real hardware) — none of these were exercised before:
    reads a fine-grained read-only PAT from the offline KEYS USB
    (`KEYS/gitops/repo-token`, same custody as `vault/token`), exports it as
    `ARGOCD_REPO_TOKEN`, and `bootstrap.sh` creates the
-   `hugmesh-generator-repo` repository Secret **before** applying the
-   app-of-apps (failing closed with a clear error if no token is available).
+   `hugmesh-generator-repo` repository Secret **before** applying any
+   Application (failing closed with a clear error if no token is available).
    For a local kind cluster there is no KEYS USB — and no token is needed
    either: the **tokenless local sync path** (see "Repo access" below) mounts
    this checkout read-only into the kind node and serves it to ArgoCD from an
@@ -293,6 +309,7 @@ Env overrides (all optional):
 | Var | Default | Purpose |
 |---|---|---|
 | `KIND_CLUSTER_NAME` | `hugmesh-local` | kind cluster name |
+| `KIND_PROFILE` | `core` for a bare script run; `make kind-up` passes `sso` | `core` = the Vault/PKI/Casdoor/Harbor slice; `sso` = core plus the native-login slice (see "Added by `KIND_PROFILE=sso`") |
 | `HUGMESH_GITOPS_REPO` | `https://github.com/hugmesh/hugmesh-generator.git` | repoURL rewritten into every non-Harbor Application (fork support, mirrors `bootstrap.sh`). **Left at the default with no token, it is replaced by the tokenless local sync URL** (see "Repo access" below). |
 | `HUGMESH_GITOPS_REV` | `main` (`HEAD` on the local sync path) | targetRevision rewritten into every non-Harbor Application. On the tokenless local sync path an unset value defaults to `HEAD` — the branch this checkout has checked out — so ArgoCD syncs what you are actually running. |
 | `HARBOR_BRANCH` | `main` | Per-file **branch pin** for `03a-harbor.yaml` + `03b-harbor-provision.yaml`. Both merged, so the default equals the revision everything else is read at and the pin is INERT: the files come from this checkout's working tree like every other `CORE_APPS` entry. Set it to an unmerged branch and those two go back to the `git show <branch>:<path>` path (`app_pin()`), which is why the machinery is kept. |
@@ -380,9 +397,9 @@ it (`seed-vault-kv.sh`).
 > `FATAL: password authentication failed for user "userbff"`. Hit live. The
 > "idempotent" step wedged the cluster it claimed to converge.
 >
-> `seed-vault-kv.sh` now probes six sentinel KV paths (`casdoor`,
+> `seed-vault-kv.sh` now probes seven sentinel KV paths (`casdoor`,
 > `casdoor-apps`, `admin-bff-db`, `user-bff-db`, `route-access-db`,
-> `cassandra-admin`) first: all populated ⇒ skip; none populated ⇒ seed; a
+> `cassandra-admin`, `cassandra-app-creds`) first: all populated ⇒ skip; none populated ⇒ seed; a
 > *partial* set ⇒ hard failure with both remedies spelled out, because that is
 > an interrupted first run where either choice is silently wrong. Set
 > `KIND_KV_RESEED=1` to re-mint deliberately — **destructive**, correct only
@@ -417,7 +434,7 @@ hook could therefore run the entire seed anonymously — empty cookie jar, every
    would otherwise claim to be *the* cluster default).
 4. Install ArgoCD into namespace `devops`, pinned to
    `kubernetes.io/arch=amd64` — reusing `../bootstrap.sh`'s exact
-   install/re-namespace/pin logic (NOT its root app-of-apps step).
+   install/re-namespace/pin logic (NOT its Application-apply step).
 5. Give ArgoCD repo access ("Repo access" above): register the
    `ARGOCD_REPO_TOKEN` credential if the operator exported one, otherwise
    deploy the in-cluster read-only `git daemon` and rewrite every
