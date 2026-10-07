@@ -28,6 +28,7 @@ The launcher's flags mirror the Windows `.bat`:
 | `--auto` | as guided, but accept every offer without a prompt |
 | `--redo-first-run` | force the first-run bootstrap (see [FIRST-RUN.md](FIRST-RUN.md)) |
 | `--menu` | hand off to the ncurses build menu (`scripts/build-menu.sh`) |
+| `--tray`, `--stack-tray`, `--go-live`, `--fleet`, `--dev` | interactive GUI modes: forwarded to the wizard, but they keep the guided path (distro report, consent-gated venv) |
 | `--<anything-else>` | **headless** automation (e.g. `--print-command`): no prompts, no installs, straight to `python3 -m hugmesh_studio` |
 
 ---
@@ -149,8 +150,8 @@ display and no PySide6/PyQt6 — the build-matrix GUI channel relies on this:
 ./scripts/studio-launch.sh --print-command --config my-image.json --backend docker
 ```
 
-Any `--`-prefixed arg other than `--detect` / `--auto` / `--menu` takes this headless
-path: no prompts, no installs, straight to `python3 -m hugmesh_studio` with the
+Any `--`-prefixed arg other than `--detect` / `--auto` / `--menu` / `--redo-first-run` and the
+GUI modes in the table above takes this headless path: no prompts, no installs, straight to `python3 -m hugmesh_studio` with the
 args forwarded.
 
 ## What the launcher detects

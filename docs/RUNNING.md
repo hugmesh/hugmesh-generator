@@ -368,7 +368,8 @@ Common `make` overrides: `ENV=test|prod`, `BRAND=`, `DOMAIN=`, `HEADSCALE_URL=`,
 ### 3c. The scripts directly (native, root)
 
 ```bash
-# all three Pi roles + the per-role keys folders, in one pass
+# the default fleet in one pass (Pi pki/backend/frontend + x86 pki/backend/frontend/backend-gpu)
+# plus the per-role keys folders; for the Pi roles only, run it as: sudo env SKIP_X86=1 ./scripts/build-all-roles.sh
 sudo ./scripts/build-all-roles.sh -j "$(nproc)"
 
 # …or one role at a time
@@ -649,7 +650,8 @@ Via `make`: `make flash DEV=/dev/sdX ROLE=frontend ARCH=arm64`.
 
 ### 7b. Manual flash from the ISO (alternative)
 
-If you built ISOs instead of `.img`:
+If you built ISOs instead of `.img` (the Pi builder makes only the `.img` unless you pass
+`--iso` or `--both`; the x86 builder makes the `.img` and a live ISO by default):
 
 ```bash
 # RPi5: loop-mount the role ISO and run the bundled installer
@@ -728,7 +730,7 @@ resolves `*.<domain>` → the cluster. Full walkthrough:
 
 ```bash
 # 1. build
-make rpi                                      # or: sudo ./scripts/build-all-roles.sh SKIP_X86=1
+make rpi                                      # or: sudo env SKIP_X86=1 ./scripts/build-all-roles.sh
 # 2. secrets + keys
 ./scripts/gen-cluster-secrets.sh
 ./scripts/gen-provision-keys.sh -r pki      -o keys-pki
@@ -830,7 +832,7 @@ so CI builds from a complete in-VPN copy. See [`docs/DEVOPS.md`](DEVOPS.md).
 - **`build-rpi5-stage4.sh` fails early** → it must run as **root** with a built
   `crossdev aarch64-unknown-linux-gnu` toolchain (§0b). Use `--resume` to reuse a
   populated sysroot after a failure.
-- **No artifact to flash** → `./scripts/flash-disk.sh --role <r> --arch <a> --list`
+- **No artifact to flash** → `./scripts/flash-disk.sh --role <r> --arch <a> -w out --list`
   shows the candidates and the resolved work dir; check `--arch`/`--role` and that
   the build wrote to that `--work-dir`.
 - **Worker won't join** → confirm the kubeadm join token + ca-cert-hash in its

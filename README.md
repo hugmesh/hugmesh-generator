@@ -876,7 +876,8 @@ images are distinguishable and runs never clobber each other:
 is `date -u +%Y%m%dT%H%M%SZ`, computed once per run so the `.img`, `.iso`,
 `.stage4.tar.xz` and `.fs.tar.xz` all share it. The `make flash` / `make qemu`
 targets and `flash-disk.sh` autodetect the newest matching image, so you rarely
-type the full name.
+type the full name. Run `flash-disk.sh` or `run-qemu-test.sh` directly with
+`-w out`: their own default work dirs are `./rpi5-stage4-build` and `./x86-host-build`.
 
 ```bash
 # 0. Build-host prerequisites (one-time). RPi5 cross-toolchain + ISO tooling:
@@ -886,7 +887,7 @@ sudo crossdev --stable --target aarch64-unknown-linux-gnu
 #    QEMU integration test also needs:  app-emulation/qemu sys-fs/dosfstools sys-fs/e2fsprogs
 
 # 1. Build the images (--env defaults to test; add --env prod for a go-live image)
-sudo ./scripts/build-all-roles.sh -j "$(nproc)"          # all three Pi roles: pki, backend, frontend
+sudo ./scripts/build-all-roles.sh -j "$(nproc)"          # default fleet: Pi pki/backend/frontend + x86 pki/backend/frontend/backend-gpu (sudo env SKIP_X86=1 for Pi only)
 sudo ./build-rpi5-stage4.sh --role pki -j "$(nproc)"     # …or just one Pi role
 sudo ./build-x86-host-stage4.sh -j "$(nproc)"            # x86_64 GPU host (native amd64 Gentoo)
 
@@ -895,16 +896,15 @@ sudo ./build-x86-host-stage4.sh -j "$(nproc)"            # x86_64 GPU host (nati
 ./scripts/gen-provision-keys.sh -r pki -o keys-pki       # also: -r backend | -r frontend | -r host
 sudo ./scripts/make-keys-usb.sh /dev/sdY keys-pki        # FAT32 stick labelled KEYS (one per node)
 
-# 3. Flash the OS to each node's SD/NVMe (boot a Linux live env, mount the role's ISO)
-sudo mount -o loop out/hugmesh-rpi5-arm64-pki-*.iso /mnt/iso
-sudo /mnt/iso/install.sh /dev/sdX                        # SD card, or /dev/nvme0n1
-sudo umount /mnt/iso
+# 3. Flash the OS to each node's SD/NVMe. The Pi build makes a raw .img by default:
+sudo ./scripts/flash-disk.sh --role pki --arch arm64 -w out /dev/sdX     # SD card, or /dev/nvme0n1
+#    (only if you built with --iso/--both: mount the ISO and run /mnt/iso/install.sh /dev/sdX)
 #    x86 host: boot the hugmesh-x86-amd64-*.iso live image, then run  install-x86.sh /dev/sdX  from it.
 
 # 4. Boot each node with its KEYS stick inserted — first boot self-provisions.
 
 # 5. (optional) Integration-test an image under QEMU before flashing (root)
-sudo ./tests/qemu/run-qemu-test.sh --role pki
+sudo ./tests/qemu/run-qemu-test.sh -w out --role pki
 ```
 
 ## Generate the cluster
