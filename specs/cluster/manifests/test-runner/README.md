@@ -30,7 +30,7 @@ test-runner/
   kustomization.yaml
 ```
 
-## The two triggers
+## The two triggers (the heart of the architecture)
 
 The orchestrator (`orchestrator.sh`, a tight `kubectl`/`curl` control loop) is one
 long-lived pod. It owns BOTH edges:

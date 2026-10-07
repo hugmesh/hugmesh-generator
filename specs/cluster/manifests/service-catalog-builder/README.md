@@ -46,8 +46,10 @@ template for the builder.
 
 ArgoCD does **not** apply the Job template (it is not in `kustomization.yaml`). A Job
 exists only when the builder is enabled (`app.appstore.builder.enabled=true` in
-admin-bff, default false) and a DOCKERFILE deployment is provisioned. The ArgoCD leg has
-its own flag, `app.appstore.effector.enabled` (default false). The namespace and
+admin-bff, default false; `APPSTORE_BUILDER_ENABLED` is `false` in
+`specs/cluster/manifests/admin-bff-api/deployment.yaml`) and a DOCKERFILE deployment is
+provisioned. The ArgoCD leg has its own flag, `app.appstore.effector.enabled` (default
+false; the same deployment sets `APPSTORE_EFFECTOR_ENABLED` to `true`). The namespace and
 NetworkPolicy are inert until a build lands there. Registry push creds
 (`service-catalog-builder-registry`, `dockerconfigjson`) are ESO-materialized into the
 build namespace — **never in git**.
@@ -57,6 +59,15 @@ build namespace — **never in git**.
 `KanikoBuildLauncher` exists on admin-bff `main`. It renders the Job, creates it in
 `app.appstore.builder.namespace` (default `hugmesh-service-catalog-builds`), waits up to
 30 minutes for it to end, and returns the pushed image. `AddServiceEffector` then creates
-the ArgoCD Application. The two sides share the registry secret name
-(`service-catalog-builder-registry`) and the namespace. They do not share one Job
-template: admin-bff's copy has the extra `${DEST_IMAGE_MOVING}` placeholder.
+the ArgoCD Application. The two sides share the namespace. They share neither the
+registry secret nor one Job template:
+
+- This directory's copy mounts secret `service-catalog-builder-registry`, key
+  `.dockerconfigjson`. The ESO ExternalSecret here creates it.
+- admin-bff's copy mounts secret `service-catalog-registry-credentials`, key
+  `config.json`, and has the extra `${DEST_IMAGE_MOVING}` placeholder. Nothing under
+  `specs/` creates that secret. The mount is not `optional`, so enabling the builder
+  without it leaves the build pod in `ContainerCreating`.
+- The runtime name is the one that must exist, in `hugmesh-service-catalog-builds`.
+  The admin-bff deployment keeps `APPSTORE_BUILDER_ENABLED` at `false` for this reason
+  (`README.md`, root; guard: `tests/scripts/test-appstore-effector-flags.sh`).
