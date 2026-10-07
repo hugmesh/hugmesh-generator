@@ -31,8 +31,8 @@ makes the builder, after the normal `rebrand_sysroot` pass:
 
 `--idp-jwks` is optional; left empty it is derived per provider — Entra →
 `<issuer>/discovery/v2.0/keys` (Entra does **not** serve `/.well-known/jwks`),
-everything else → `<issuer>/.well-known/jwks`. Override it when your provider
-differs.
+AWS Cognito → `<issuer>/.well-known/jwks.json`, generic OIDC →
+`<issuer>/.well-known/jwks`. Override it when your provider differs.
 
 Client **secrets are never passed as flags** and never baked — only the public
 client id travels. A confidential-client secret, where one is needed, is an
@@ -67,7 +67,8 @@ Casdoor-only until the corresponding service-repo changes land.
 --idp-client-id ID               external OIDC public client id; REQUIRED unless
                                  --idp casdoor (secrets are never flags)
 --idp-jwks URL                   JWKS override; empty derives per provider
-                                 (Entra: /discovery/v2.0/keys, else /.well-known/jwks)
+                                 (Entra: /discovery/v2.0/keys, aws: /.well-known/jwks.json,
+                                 oidc: /.well-known/jwks)
 ```
 
 Placeholder issuer shapes: Entra
