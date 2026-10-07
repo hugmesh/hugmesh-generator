@@ -701,7 +701,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # file on that tree (GUARD_PREMERGE=0), not computed:
 #     182 of 205 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 23 — neither new suite was ever in it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-194}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-195}"
 
 # 192 -> 193 (denominator 215 -> 216) on 2026-09-30 for #663: the kind sign-in
 # answered 500 because the BFF autoscalers' maxReplicas (6) times the unconfigured
@@ -734,6 +734,20 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-194}"
 # tree (GUARD_PREMERGE=0), not computed:
 #     194 of 217 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 23 — the new suite was never in it.
+#
+# 194 -> 195 (denominator 217 -> 218) on 2026-10-07, the merge of origin/main
+# e14a94a7 into iss/582-per-domain-tor. Main and this branch had EACH raised the value
+# line above from 193 to 194, for a different new suite, so git merged the identical
+# one-line edit with no conflict and the file said 194 for a tree that now holds two
+# new suites: main's tests/scripts/test-edge-ai-ollama-pin.sh and this branch's
+# tests/scripts/test-gateway-vanity-domains.sh. Each side measured green alone
+# (194 of 217); the merged tree printed
+#     FAIL pre-merge suite coverage rose to 195, baseline still says 194
+# MEASURED by RUNNING this file on the merged tree (GUARD_PREMERGE=0), not computed:
+#     195 of 218 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 23 — neither suite was ever in it. A merge that
+# lands another suite after this one must re-measure again: a silent clean merge of
+# this line is exactly how the number went stale.
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED

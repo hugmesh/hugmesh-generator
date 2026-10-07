@@ -110,6 +110,13 @@ _M2_PROBE_TIMEOUT_S = 3.0
 # <project>-<service>. These four services resolve PRIVATE maven artifacts at
 # image-build time — a cold build of any of them needs the m2 registry.
 _COMPOSE_PROJECT = "hugmesh-local"
+#: `docker ps` filters that select the RUNNING hugmesh-tor container of the stack — by
+#: compose LABEL (project + service), never by container name.
+_TOR_PS_FILTERS = (
+    "--filter", f"label=com.docker.compose.project={_COMPOSE_PROJECT}",
+    "--filter", f"label=com.docker.compose.service={_TOR_SERVICE}",
+    "--filter", "status=running",
+)
 PRIVATE_ARTIFACT_SERVICES = (
     "hugmesh-admin-bff-api",
     "hugmesh-user-bff-api",
@@ -387,10 +394,7 @@ class LocalStackNode:
             return None
         try:
             r = subprocess.run(
-                ["docker", "ps", "-q", "--no-trunc",
-                 "--filter", f"label=com.docker.compose.project={_COMPOSE_PROJECT}",
-                 "--filter", f"label=com.docker.compose.service={_TOR_SERVICE}",
-                 "--filter", "status=running"],
+                ["docker", "ps", "-q", "--no-trunc", *_TOR_PS_FILTERS],
                 capture_output=True, text=True, timeout=5)
             ids = r.stdout.split() if r.returncode == 0 else []
             if not ids:
@@ -405,15 +409,53 @@ class LocalStackNode:
             return None
         return _parse_docker_time(started)
 
+    def _running_tor_has_domains(self) -> bool:
+        """Whether the RUNNING ``hugmesh-tor`` container of this compose project was
+        started with a non-empty ``TOR_ONION_DOMAINS`` — i.e. the stack really is a
+        TOR=1 stack with Tor domains, whoever brought it up (the Studio, or a person at
+        the command line with ``make stack-up TOR=1 BRAND_B=1``). False when it cannot
+        be told: no docker, no such container, an unreadable answer. Blocking (two
+        docker calls, 5 s each at most), like :meth:`_tor_started_at`; never raises."""
+        if not shutil.which("docker"):
+            return False
+        try:
+            r = subprocess.run(["docker", "ps", "-q", "--no-trunc", *_TOR_PS_FILTERS],
+                               capture_output=True, text=True, timeout=5)
+            ids = r.stdout.split() if r.returncode == 0 else []
+            if not ids:
+                return False
+            r = subprocess.run(
+                ["docker", "inspect", "-f",
+                 "{{range .Config.Env}}{{println .}}{{end}}", ids[0]],
+                capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if r.returncode != 0:
+            return False
+        for line in r.stdout.splitlines():
+            key, sep, value = line.partition("=")
+            if sep and key == "TOR_ONION_DOMAINS" and value.strip():
+                return True
+        return False
+
     @property
     def tor_domains_overlay(self) -> str:
         """The compose overlay this node's stack is brought up with when it is a TOR=1
         stack with Tor domains (the Makefile's STACK_TOR_DOMAINS_FLAGS), else "". A
         command that creates containers for this stack outside `make stack-up` (the
         monitor's scale) must load it too, or a new fe-gateway replica would come up
-        without the onion host map and serve every onion as the default brand."""
+        without the onion host map and serve every onion as the default brand.
+
+        A node object the Studio built for ITS OWN start knows (``with_tor`` and
+        ``tor_domains``). A bare ``LocalStackNode(generator_dir)`` — the QEMU and mesh
+        emulation pod views build one — and a stack a person started at the command
+        line know nothing, so for them the running tor container is asked: if it
+        carries ``TOR_ONION_DOMAINS`` the stack has the overlay, whoever started it."""
+        path = os.path.join(self.generator_dir, _TOR_DOMAINS_COMPOSE_FILE)
         if self.with_tor and self.tor_domains:
-            return os.path.join(self.generator_dir, _TOR_DOMAINS_COMPOSE_FILE)
+            return path
+        if self._running_tor_has_domains():
+            return path
         return ""
 
     def onion_url(self, domain: str = "") -> str:

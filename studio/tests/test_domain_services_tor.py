@@ -301,13 +301,19 @@ def test_two_names_with_one_key_directory_name_are_told_apart_on_the_row():
 
 # ── 3. the local docker mesh ──────────────────────────────────────────────────────
 def test_records_carry_tor_only_when_true_and_never_for_the_own_domain():
-    rows = [Domain(name="mesh.example", tor=True),
+    # The own row is TITLED on purpose: a bare own row is skipped by _default_shaped
+    # before the "name != own" guard in bootstrap_domain_records is ever reached, so a
+    # bare row would leave that guard unpinned (post-merge review R21). With a title
+    # the row IS recorded, and only the guard keeps the tor key off it.
+    rows = [Domain(name="mesh.example", title="Mesh HQ", tor=True),
             Domain(name="a.example"), Domain(name="b.example", tor=True)]
     recs = bootstrap_domain_records(rows, own_name="mesh.example")
     by = {r["name"]: r for r in recs}
     assert "tor" not in by["a.example"]
     assert by["b.example"]["tor"] is True
-    assert "tor" not in by.get("mesh.example", {})
+    assert "mesh.example" in by, "the titled own row must be recorded for the pin to bite"
+    assert by["mesh.example"]["title"] == "Mesh HQ"
+    assert "tor" not in by["mesh.example"]
     # an untouched own domain stays unrecorded (emission neutrality) — a tor on it
     # is not "something the rest of the config does not carry"... except it is not
     # a front door either; the row is recorded only for its OTHER fields.
@@ -419,6 +425,85 @@ def test_a_tor_stack_with_no_tor_domain_passes_nothing_new(tmp_path, monkeypatch
     assert node.tor_domains_overlay == ""
     monkeypatch.setenv("TOR_ONION_DOMAINS", "inherited=default")
     assert node._build_env(write_overlays=False) == plain
+
+
+_REAL_RUNNING_TOR_PROBE = LocalStackNode._running_tor_has_domains
+
+
+@pytest.fixture(autouse=True)
+def _no_docker_probe_unless_asked(monkeypatch):
+    """The overlay property asks the RUNNING tor container when the node object does
+    not know (a bare node, a stack started from the command line). No test here may
+    depend on what docker happens to be running on the machine it runs on, so the
+    probe answers False unless a test puts the real one back (``_real_probe``)."""
+    monkeypatch.setattr(LocalStackNode, "_running_tor_has_domains", lambda self: False)
+
+
+def _real_probe(monkeypatch, tor_env, *, running=True, which="/usr/bin/docker"):
+    """Put the real probe back and fake docker underneath it: ``tor_env`` is the
+    container's environment (a list of KEY=VALUE strings)."""
+    from hugmesh_studio.core import local_stack_node as lsn
+    monkeypatch.setattr(LocalStackNode, "_running_tor_has_domains",
+                        _REAL_RUNNING_TOR_PROBE)
+    calls = []
+
+    class _R:
+        def __init__(self, out, rc=0):
+            self.stdout, self.returncode = out, rc
+
+    def fake_run(argv, **_kw):
+        calls.append(list(argv))
+        if argv[:2] == ["docker", "ps"]:
+            return _R("abc123\n" if running else "")
+        return _R("".join(e + "\n" for e in tor_env))
+    monkeypatch.setattr(lsn.shutil, "which", lambda _n: which)
+    monkeypatch.setattr(lsn.subprocess, "run", fake_run)
+    return calls
+
+
+def test_a_bare_node_finds_the_overlay_from_the_running_tor_container(tmp_path,
+                                                                      monkeypatch):
+    # The QEMU and mesh-emulation pod views build LocalStackNode(generator_dir) with
+    # no with_tor and no tor_domains, and a stack started by `make stack-up TOR=1
+    # BRAND_B=1` is unknown to the Studio altogether. A scale from either must still
+    # load the overlay, or the new fe-gateway replica has no onion host map.
+    calls = _real_probe(monkeypatch, ["PATH=/usr/bin", "TOR=1",
+                                      "TOR_ONION_DOMAINS=brandb=brandb"])
+    bare = LocalStackNode(str(tmp_path))
+    overlay = os.path.join(str(tmp_path), "tests", "stack", "compose.tor-domains.yaml")
+    assert bare.tor_domains_overlay == overlay
+    # asked of the right container: by compose label, running only
+    ps = calls[0]
+    assert "label=com.docker.compose.project=hugmesh-local" in ps
+    assert "label=com.docker.compose.service=hugmesh-tor" in ps and "status=running" in ps
+    monkeypatch.setattr(mm, "_compose_base", lambda: ["docker", "compose"])
+    unit = SimpleNamespace(scale=mm.ScaleTarget("compose-service", "hugmesh-fe-gateway",
+                                                "hugmesh-local", refused=""))
+    argv, refused = mm.scale_argv(unit, 2, generator_dir=str(tmp_path), node=bare)
+    assert not refused and ["-f", overlay, "up"] == argv[argv.index("-f", 5):][:3]
+
+
+@pytest.mark.parametrize("env,running,which", [
+    (["TOR=1"], True, "/usr/bin/docker"),                         # a one-onion stack
+    (["TOR=1", "TOR_ONION_DOMAINS="], True, "/usr/bin/docker"),   # set empty
+    (["TOR=1", "TOR_ONION_DOMAINS=  "], True, "/usr/bin/docker"),
+    (["NOT_TOR_ONION_DOMAINS=a=b"], True, "/usr/bin/docker"),     # another variable
+    (["TOR_ONION_DOMAINS=brandb=brandb"], False, "/usr/bin/docker"),  # not running
+    (["TOR_ONION_DOMAINS=brandb=brandb"], True, None),            # no docker at all
+])
+def test_a_bare_node_loads_no_overlay_unless_the_running_stack_has_domains(
+        tmp_path, monkeypatch, env, running, which):
+    _real_probe(monkeypatch, env, running=running, which=which)
+    assert LocalStackNode(str(tmp_path)).tor_domains_overlay == ""
+
+
+def test_an_unreadable_docker_answer_loads_no_overlay(tmp_path, monkeypatch):
+    from hugmesh_studio.core import local_stack_node as lsn
+    _real_probe(monkeypatch, [])
+    def boom(argv, **_kw):
+        raise OSError("docker went away")
+    monkeypatch.setattr(lsn.subprocess, "run", boom)
+    assert LocalStackNode(str(tmp_path)).tor_domains_overlay == ""
 
 
 def test_a_scale_loads_the_overlay_the_stack_was_brought_up_with(tmp_path, monkeypatch):
@@ -684,6 +769,11 @@ sed -n 's/^HiddenServiceDir //p' "$torrc" | while read -r hs; do
   esac
   if [ "${STUB_BAD:-}" = "$base" ]; then
     echo "evil.example" > "$hs/hostname"
+  elif [ "${STUB_SHORT:-}" = "$base" ]; then
+    # base32 alphabet, ".onion" suffix, but 55 characters (a v3 name has 56)
+    printf '%s.onion\n' "$(printf "%055d" 0 | tr 0 "$c")" > "$hs/hostname"
+  elif [ "${STUB_LONG:-}" = "$base" ]; then
+    printf '%s.onion\n' "$(printf "%057d" 0 | tr 0 "$c")" > "$hs/hostname"
   elif [ -n "${STUB_DELAY_DOMAINS:-}" ] && [ "$base" != hugmesh-onion ]; then
     # a domain key minted only STUB_DELAY_DOMAINS seconds after the primary's
     ( sleep "$STUB_DELAY_DOMAINS"; printf '%s.onion\n' "$(printf "%056d" 0 | tr 0 "$c")" > "$hs/hostname" ) &
@@ -710,7 +800,15 @@ def _sandbox(tmp_path, domains, map_dir=True):
     for sub in ("bin", "data", "out") + (("map",) if map_dir else ()):
         (tmp_path / sub).mkdir()
     _exe(tmp_path / "bin" / "tor", _STUB_TOR)
-    _exe(tmp_path / "bin" / "chown", "#!/bin/sh\nexit 0\n")
+    # chown is a stub (the test user is not root), but it RECORDS what it was asked to
+    # do and whether the target existed at that moment: tor refuses a HiddenServiceDir
+    # it does not own, so the per-domain key root must be chowned AFTER it is created.
+    _exe(tmp_path / "bin" / "chown",
+         "#!/bin/sh\n"
+         'for last; do :; done\n'
+         'if [ -d "$last" ]; then e=exists; else e=missing; fi\n'
+         'echo "$* [$e]" >> "$STUB_CHOWN"\n'
+         "exit 0\n")
     # A SLOW cp for the per-domain readouts only: if the primary were published
     # before them, the moment it appears would find them missing — deterministically,
     # not by a millisecond race.
@@ -731,6 +829,7 @@ def _sandbox(tmp_path, domains, map_dir=True):
         "HUGMESH_TOR_MAP_DIR": str(tmp_path / "map"),
         "STUB_OUT": str(tmp_path / "out"), "STUB_MAP": str(tmp_path / "map"),
         "STUB_SEEN": str(tmp_path / "seen"),
+        "STUB_CHOWN": str(tmp_path / "chown.log"),
         "TOR_ONION_UPSTREAM": "up80.test:8080",
         "TOR_ONION_TLS_UPSTREAM": "up443.test:8443",
     })
@@ -968,6 +1067,47 @@ def test_only_a_well_formed_onion_name_reaches_the_map(tmp_path):
             [f"{ONION_P}=default", f"{ONION_A}=default"]
     finally:
         _stop(proc)
+
+
+@pytest.mark.parametrize("knob", ["STUB_SHORT", "STUB_LONG"])
+def test_a_base32_name_of_the_wrong_length_never_reaches_the_map(tmp_path, knob):
+    # A v3 onion name is exactly 56 base32 characters. The character test alone passes
+    # a 55- or 57-character name, so the length test is pinned on its own, from both
+    # sides (a "-ge 56" or "-le 56" would each let one of these through).
+    proc, ok, _snap, snap_map = _run_until_published(
+        tmp_path, "brandb=brandb acme-example=default", extra_env={knob: "brandb"})
+    try:
+        assert ok
+        lines = [ln for ln in snap_map.splitlines() if not ln.startswith("#")]
+        assert lines == [f"{ONION_P}=default", f"{ONION_A}=default"], lines
+    finally:
+        _stop(proc)
+
+
+def test_the_per_domain_key_root_is_chowned_to_tor_after_it_exists(tmp_path):
+    # The key directories are created AFTER the DataDirectory-wide chown, so on a live
+    # stack the second, explicit chown is what lets tor (User tor) accept every
+    # HiddenServiceDir. The stub chown cannot enforce ownership, so the recorded
+    # requests are the evidence: -R tor:tor on the per-domain root, with the root
+    # already in place when it was asked.
+    proc, ok, _snap, _map = _run_until_published(tmp_path, "brandb=brandb")
+    try:
+        assert ok
+        log = (tmp_path / "chown.log").read_text().splitlines()
+    finally:
+        _stop(proc)
+    root = f"{tmp_path / 'data'}/hugmesh-onion.d"
+    assert f"-R tor:tor {root} [exists]" in log, log
+
+
+def test_a_stack_with_no_tor_domain_chowns_no_per_domain_root(tmp_path):
+    proc, ok, _snap, _map = _run_until_published(tmp_path, None, map_dir=False)
+    try:
+        assert ok
+        log = (tmp_path / "chown.log").read_text()
+    finally:
+        _stop(proc)
+    assert "hugmesh-onion.d" not in log
 
 
 def test_a_malformed_primary_writes_no_map_at_all(tmp_path):
