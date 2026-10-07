@@ -11,9 +11,12 @@ Three named variants:
 
 | Role | Weight | Desktop | Default GPU |
 |------|--------|---------|-------------|
-| `standalone-thin`  | thin | LXDE / openbox | NVIDIA proprietary |
-| `standalone-thick` | full | **most-capable KDE Plasma workstation** | NVIDIA proprietary |
+| `standalone-thin`  | thin | LXDE / openbox | free / open (`all-free`) |
+| `standalone-thick` | full | **most-capable KDE Plasma workstation** | free / open (`all-free`) |
 | `standalone-unaffiliated` | full (thick) | KDE Plasma — **ZERO HugMesh affiliation** (see below) | free / open (`all-free`) |
+
+None of the three defaults to the proprietary NVIDIA driver. Pass
+`--gpu-driver nvidia` (or `--nvidia`) to get it; see [GPU driver](#gpu-driver--all-common-cards-free-drivers-by-default).
 
 Each variant emits **all four artifacts**: a live ISO, the stage4 tarball, the
 `.fs.tar.xz` filesystem tarball, and an **installer ISO** (which writes a
@@ -58,18 +61,21 @@ definition).
 
 ### Hard conflicts (builder exits non-zero)
 
-Unaffiliated means *no affiliation at all* — every flag that would bake a brand
-identity, brand assets, HugMesh source, or platform machinery into the image
-is a **hard error**, not a silent override:
+Unaffiliated means *no brand identity and no platform machinery*. Every flag that
+would bake either into the image is a **hard error**, not a silent override:
 
-- **Brand identity**: `--brand` / `--brand-title` / `--org` — there is no brand,
-  not even an explicit `--brand gentoo`; the builder forces the neutral
-  identity itself.
-- **Branding assets**: `--theme`, `--branding-dir`, `--wallpaper`,
-  `--grub-background`, `--grub-theme`, `--login-background`, `--brand-logo`,
-  `--accent-color`, `--color-scheme`, `--brand-locked`.
+- **Brand identity**: `--brand` / `--brand-title` / `--org` (also a `--config`
+  brand profile) — there is no brand, not even an explicit `--brand gentoo`; the
+  builder forces the neutral identity itself. Also `--brand-logo` and
+  `--brand-locked`: a logo is the brand mark, and a lock implies a managed
+  brand image.
 - **Platform machinery**: `--bundle-source`, `--home-seed-code`,
   `--with-tailscale`, `--with-sso`, `--person-role` / `--domains`.
+
+The *look* flags are **allowed** (since 2026-08-26): `--theme`,
+`--branding-dir`, `--wallpaper`, `--grub-background`, `--grub-theme`,
+`--login-background`, `--accent-color`, `--color-scheme`. See
+[Identity vs look on an unaffiliated image](#identity-vs-look-on-an-unaffiliated-image).
 
 ### What survives, under neutral names
 
@@ -95,8 +101,8 @@ is a standalone, manually-run gate that checks a build-output directory (live
 ISO, installer ISO, disk image, fs/stage4 tarballs, and the extracted sysroot)
 against every property claimed above — neutral volids/labels/GRUB titles, no
 `/etc/hugmesh` marker tree or bundled generator source, no k8s/mesh payload,
-and an attributed raw-string sweep (Qualcomm HugMesh driver strings in
-kernel/firmware are expected and not a failure). Run it against the artifacts
+and an attributed raw-string sweep of the live ISO (hits inside kernel or
+firmware are reported with their source and are not a failure). Run it against the artifacts
 produced by `make x86-standalone-unaffiliated`; see the script's own `--help`
 for options.
 
@@ -111,7 +117,7 @@ make x86-standalone-thick NATIVE=1 \
   STANDALONE_FLAGS='--local-user alice --local-pass s3cret --nvidia-driver proprietary --nvidia-cuda'
 
 # Or drive it from the ncurses menu (collects user/password/NVIDIA/Steam/factors):
-make menu      # → Single role → x86 → ★ standalone-thin / standalone-thick
+make menu      # → Single role → x86 → ★ standalone-thin / standalone-thick / standalone-unaffiliated
 ```
 
 The ncurses menu and the Studio GUI expose the **full option set** of this page —
@@ -166,8 +172,10 @@ licence is accepted only for that build (`package.license/{nvidia,amd-pro}`).
 
 ### E-ink / e-paper displays
 Client desktops also bake the mainline e-ink display drivers as kernel **modules**
-(`kernel/eink.config`): `DRM_REPAPER` (Pervasive Displays), `FB_METRONOME`,
-`FB_BROADSHEET`, `FB_AUO_K190X` — they cost nothing until an e-ink panel is attached.
+(`specs-x86/kernel/eink.config`): `TINYDRM_REPAPER` (Pervasive Displays RePaper),
+`DRM_PIXPAPER` (Mayqueen Pixpaper), `FB_METRONOME` and `FB_BROADSHEET` — they cost
+nothing until an e-ink panel is attached. The old `FB_AUO_K190X` drivers left
+mainline and are not built.
 
 ### Local user with a password (no SSO)
 `--local-user NAME` + `--local-pass PASS` create a normal user. The password is
@@ -252,7 +260,9 @@ See `build-x86-host-stage4.sh --help` for the full flag list.
 
 `--standalone`/`--local-user`/`--local-pass`/`--encrypt-root` are **not x86-only**
 — every ARM builder **except Jetson** (see below) composes them onto its own
-desktop-shaped role the same way x86 does, via `--role desktop --standalone`:
+desktop-shaped role. `build-rpi5-stage4.sh` takes `--role desktop --standalone`;
+Frite, Orange Pi 5 and Orange Pi 4 LTS have a single client-desktop role and no
+`--role` axis, so `--standalone` alone is enough:
 
 ```sh
 ./build-frite-stage4.sh    --board la-frite --standalone --encrypt-root \
@@ -276,6 +286,7 @@ hardware:
 | x86 | the target itself (installer boots on it) | same | no |
 | Frite | the target itself (live→installer flow) | same | **no** |
 | Orange Pi 5 / 5 Plus | the target itself (live→installer flow) | same | **no** |
+| Orange Pi 4 LTS | the target itself (live→installer flow) | same | **no** |
 | Orange Pi Zero 2 | the target itself (live→installer flow) | same | **no** |
 | Orange Pi Zero 2W | the target itself (live→installer flow) | same | **no** |
 | Orange Pi Zero 3 | the target itself (live→installer flow) | same | **no** |
@@ -357,8 +368,8 @@ natural fit: the desktop role is the *only* role it builds, and standalone is
 the desktop role's most complete configuration.
 
 See each platform's own `--help` (or `specs-<platform>/README.md` for the
-EXPERIMENTAL ones — Jetson, Orange Pi 5, Orange Pi Zero 2) for its full flag
-list; the composability contract above is identical to x86's.
+EXPERIMENTAL ones — Jetson and every Orange Pi board: 5, 4 LTS, 3 LTS, Zero 2,
+Zero 2W, Zero 3) for its full flag list; the composability contract above is identical to x86's.
 
 ## Home directory provisioning
 
@@ -578,9 +589,10 @@ sweep is safe. Add a symbol to `keep-as-module.list` if building it in breaks a 
 
 ## Hardware profiles + scanner
 
-`specs-x86/hwprofiles/profiles.json` is a curated catalog of pre-supported machines — **all
-Framework laptops**, the ASUS VivoBook F512DA, and best-selling Amazon/Best Buy/Costco/
-Walmart laptops & gaming desktops. The Generator Studio shows them as a menu and can also
+`specs-x86/hwprofiles/profiles.json` is a curated catalog of 36 pre-supported machines: four
+Framework laptops (13 AMD, 13 Intel, 16 AMD, 12), the ASUS VivoBook F512DA, and mainstream
+laptops, gaming laptops and desktops chosen from best sellers at Amazon, Best Buy, Costco and
+Walmart. It is not exhaustive. The Generator Studio shows them as a menu and can also
 **scan the machine it's running on** (Linux `lspci`/sysfs, Windows PowerShell/CIM) to
 auto-pick `--gpu-driver`, Wi-Fi/BT, and a profile.
 
