@@ -277,7 +277,7 @@ hmr_seed_verify() {
         return 1
     fi
     if ! "${verify}" "${seed}" "${digests}"; then
-        _hmr_err "Refusing to restore the build system's static libraries: the cached seed $(basename "${seed}") did not verify against its signed DIGESTS (${digests}); it is not the seed this run fetched and verified, and a cache is never trusted, so nothing is extracted from it; rebuild WITHOUT --resume."
+        _hmr_err "Refusing to restore the build system's static libraries: the cached seed $(basename "${seed}") did not verify against its signed DIGESTS (${digests}); it is not the seed this run fetched and verified, and a cache is never trusted, so nothing is extracted from it, and no other cached seed is tried in its place; rebuild WITHOUT --resume."
         return 1
     fi
     return 0

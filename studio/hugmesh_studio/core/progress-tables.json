@@ -174,7 +174,7 @@
       "not_applicable": {
               "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
               "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
-              "restore-toolchain": "a cross build links against the crossdev toolchain's own sysroot, never the image's, so the seed's static toolchain libs are never restored (x86 restores them on --resume for every role, since any package may have to compile: #659)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
               "bootloader": "the Raspberry Pi boot chain is closed-source firmware blobs (bootcode/start.elf) shipped by the firmware package — nothing is built or staged",
               "boot-tree": "the raw .img stage writes /boot directly from the sysroot",
               "image-live": "no LIVE media target on this platform — the raw .img IS the bootable medium"
@@ -222,7 +222,7 @@
       "not_applicable": {
               "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
               "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
-              "restore-toolchain": "a cross build links against the crossdev toolchain's own sysroot, never the image's, so the seed's static toolchain libs are never restored (x86 restores them on --resume for every role, since any package may have to compile: #659)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
               "bootloader": "the Tegra boot chain is NVIDIA's signed bootloader in QSPI, flashed by the L4T host tools — the image only supplies the extlinux boot tree",
               "image-live": "no LIVE media target on this platform — the raw .img IS the bootable medium",
               "image-installer": "no INSTALLER media target on this platform — the raw .img is flashed directly to SD/NVMe"
@@ -270,7 +270,7 @@
       "not_applicable": {
               "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
               "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
-              "restore-toolchain": "a cross build links against the crossdev toolchain's own sysroot, never the image's, so the seed's static toolchain libs are never restored (x86 restores them on --resume for every role, since any package may have to compile: #659)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
               "image-raw": "this platform ships a LIVE image and an INSTALLER image instead of a single raw .img"
       },
       "emerge_groups": {
@@ -318,7 +318,7 @@
       "not_applicable": {
               "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
               "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
-              "restore-toolchain": "a cross build links against the crossdev toolchain's own sysroot, never the image's, so the seed's static toolchain libs are never restored (x86 restores them on --resume for every role, since any package may have to compile: #659)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
               "image-raw": "this platform ships a LIVE image and an INSTALLER image instead of a single raw .img"
       },
       "emerge_groups": {
@@ -366,7 +366,7 @@
       "not_applicable": {
               "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
               "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
-              "restore-toolchain": "a cross build links against the crossdev toolchain's own sysroot, never the image's, so the seed's static toolchain libs are never restored (x86 restores them on --resume for every role, since any package may have to compile: #659)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
               "image-raw": "this platform ships a LIVE image and an INSTALLER image instead of a single raw .img"
       },
       "emerge_groups": {
@@ -414,7 +414,7 @@
       "not_applicable": {
               "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
               "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
-              "restore-toolchain": "a cross build links against the crossdev toolchain's own sysroot, never the image's, so the seed's static toolchain libs are never restored (x86 restores them on --resume for every role, since any package may have to compile: #659)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
               "image-raw": "this platform ships a LIVE image and an INSTALLER image instead of a single raw .img"
       },
       "emerge_groups": {
@@ -462,7 +462,7 @@
       "not_applicable": {
               "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
               "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
-              "restore-toolchain": "a cross build links against the crossdev toolchain's own sysroot, never the image's, so the seed's static toolchain libs are never restored (x86 restores them on --resume for every role, since any package may have to compile: #659)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
               "image-raw": "this platform ships a LIVE image and an INSTALLER image instead of a single raw .img"
       },
       "emerge_groups": {
@@ -510,7 +510,7 @@
       "not_applicable": {
               "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
               "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
-              "restore-toolchain": "a cross build links against the crossdev toolchain's own sysroot, never the image's, so the seed's static toolchain libs are never restored (x86 restores them on --resume for every role, since any package may have to compile: #659)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
               "image-raw": "this platform ships a LIVE image and an INSTALLER image instead of a single raw .img"
       },
       "emerge_groups": {
@@ -558,7 +558,7 @@
       "not_applicable": {
               "brand-desktop": "no desktop-branding stage on this platform (BRANDING_THEME is x86-only)",
               "stage-egress-vpn": "no egress-VPN staging stage on this platform (EGRESS_VPN is x86-only)",
-              "restore-toolchain": "a cross build links against the crossdev toolchain's own sysroot, never the image's, so the seed's static toolchain libs are never restored (x86 restores them on --resume for every role, since any package may have to compile: #659)",
+              "restore-toolchain": "a cross build never executes target binaries, so the seed's static toolchain libs are never restored (x86 needs them for the native in-chroot GPU source-compile)",
               "image-raw": "this platform ships a LIVE image and an INSTALLER image instead of a single raw .img"
       },
       "emerge_groups": {

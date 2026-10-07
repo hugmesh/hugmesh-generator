@@ -867,8 +867,11 @@ so CI builds from a complete in-VPN copy. See [`docs/DEVOPS.md`](DEVOPS.md).
   GPG-checked, and the file's SHA512 compared. The seed cache (`shared/seed/amd64`) is a
   directory `make` hands to your user, so "verified when it was fetched" is not "verified
   now"; root never extracts from a cached file nobody checked. The refusal also fires when
-  the mirror no longer serves that seed's `DIGESTS` (old releases rotate off) or the host
-  is offline: fail-closed, at the cost of a rebuild without `--resume`. The current seed
+  the mirror no longer serves that seed's `DIGESTS` (old releases rotate off: measured on
+  2026-10-07, `distfiles.gentoo.org/releases/amd64/autobuilds/` held six weekly releases, so
+  a build system whose seed is older than about six weeks cannot be resumed even though
+  the tarball is still cached) or the host is offline: fail-closed, at the cost of a
+  rebuild without `--resume`. No other cached seed is substituted for the one that failed. The current seed
   is not verified a second time.
 - **`--resume` stops with `The reused build system cannot link a C program …`** → the
   restore above ran and a link still fails; rebuild without `--resume` instead of
