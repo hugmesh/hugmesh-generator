@@ -3,7 +3,7 @@
 Status: **FD-04 shipped; desktop app governance implemented (ships dark); other
 later increments deferred.** This document is the staged
 implementation plan for the per-user *client* device images, distinct from the
-five Kubernetes **node** roles (`pki / backend / frontend / backend-gpu / omnibus`). A *client* is
+Kubernetes **node** roles (`pki / backend / frontend / backend-gpu / omnibus / edge-ai`). A *client* is
 a **person's device** — a desktop that joins the Tailscale mesh and runs the
 platform UI — not a cluster node.
 
@@ -35,12 +35,16 @@ platform UI — not a cluster node.
 > see [STANDALONE-DESKTOP.md](STANDALONE-DESKTOP.md#unaffiliated-plain-desktop-standalone-unaffiliated).
 
 - **✅ shipped:** the x86 laptop / thin-Chromebook / superadmin-desktop client arms
-  (FD-04, Increments 1 and 3), including the grub-mkimage / ESP fix (PR #93). The
+  (FD-04, Increments 1 and 3), including the grub-mkimage / ESP fix (merge 55c3b705, branch `fix/client-images-grub-mkimage`). The
   laptop client image has been QEMU-verified to the lightdm greeter + tailnet join
   (`tests/qemu/verify-client.sh`).
 - **🔭 deferred / roadmap:** FD-07 (LUKS2-decrypt == Casdoor), FD-06 (VPN-lock /
-  expiry), FD-08 (delegated ArgoCD pipeline), egress-VPN net atoms baking into the
-  x86 client.
+  expiry), FD-08 (delegated ArgoCD pipeline).
+- **✅ shipped, separately from FD-04:** the egress VPN. The x86 builder bakes
+  `--egress-vpn` / `--egress-vpn-locked` into client desktop roles (see
+  [STANDALONE-DESKTOP.md](STANDALONE-DESKTOP.md#egress-vpn-networkmanager)). An
+  earlier version of this list named "egress-VPN net atoms baking into the x86
+  client" as deferred; that is no longer true.
 - **✅ implemented, ships dark:** **desktop app governance** (per-license
   SSO-enforced sudo + admin-curated Plasma Discover store + user install-requests
   + admin remote-install over the device-SSH-license) — see Increment 7 below.
@@ -58,7 +62,7 @@ platform UI — not a cluster node.
 
 ## Two orthogonal axes (do not overload `--role`)
 
-- **node role** (existing): `pki|backend|frontend|backend-gpu|omnibus` — k8s scheduling/compute. `ROLE`.
+- **node role** (existing): `pki|backend|frontend|backend-gpu|omnibus|edge-ai` — k8s scheduling/compute. `ROLE`.
 - **device class** (new): `laptop | chromebook | desktop` (thin laptop + thin
   Chromebook are the FD-04 defaults; full desktop is opt-in). A device class sets
   `ROLE_CLIENT=true`.
@@ -81,19 +85,21 @@ the native amd64 chroot build with grub-EFI.
 ## Increments
 
 ### 1 — x86 client desktop role arm (thin laptop) — THIS CHANGE
-- `ROLE_CLIENT` intent + `laptop` (and `desktop` = full) arms in the role case
-  block (`build-x86-host-stage4.sh` ~241-269). GPU=true, `ROLE_K8S=none`,
+- `ROLE_CLIENT` intent + `laptop` / `chromebook` (and `desktop` = full) arms in the
+  role `case` block of `build-x86-host-stage4.sh`. GPU=true, `ROLE_K8S=none`,
   `ROLE_HEADSCALE=false`.
 - Client `SVCS`: drop `containerd/kubelet/headscale`; add
-  `dbus elogind display-manager` + `tailscaled` (mirror frite ~668-681).
-- Skip the k8s/cluster GitOps payload (`cp -r cluster` + `gate_*`, ~951-955) when
-  `ROLE_CLIENT`.
-- `specs-x86/portage/packages-desktop.list` (Xorg/openbox/lightdm + NetworkManager
-  applet + firefox-bin + fonts + acpid + firewalld) appended for client roles;
+  `dbus elogind display-manager`, plus `tailscaled` unless `--skip-mesh` or
+  `--skip-tailscale` (mirrors the Frite builder).
+- Skip the k8s/cluster GitOps payload (the cluster copy and the `gate_*` steps)
+  when `ROLE_CLIENT`.
+- `specs-x86/portage/packages-desktop.list` (Xorg, openbox/LXDE, lightdm,
+  `nm-applet`, netsurf, fonts, acpid, firewalld, plus flatpak, Discover, polkit
+  and python for desktop governance) appended for client roles;
   k8s atoms NOT emerged for clients (client base list).
 - `specs-x86/kernel/desktop.config` (i915/amdgpu/nouveau KMS, evdev/HID, ALSA,
   NVMe/AHCI/XHCI, ACPI/backlight/thermal, microcode) appended for client roles.
-- Desktop USE: a `@@CLIENT_USE@@` token in `make.conf.tmpl` (`X gtk dbus elogind`)
+- Desktop USE: a `@@CLIENT_USE@@` token in `make.conf.tmpl` (`X gtk dbus elogind udev`)
   set for client roles.
 - `PERSON_ROLE` + `DOMAINS` build flags → `/etc/hugmesh/{identity-role,domains}`
   markers (baked directly by the build); `provision_desktop_governance()` (in
@@ -102,12 +108,16 @@ the native amd64 chroot build with grub-EFI.
   artifact tag.
 - **✅ DONE** — laptop image **QEMU-verified to the lightdm greeter + tailnet
   join** (`build-x86-host-stage4.sh --role laptop --person-role user --domains
-  acme.example`); the grub-mkimage / ESP boot fix landed in PR #93. Verified via
+  acme.example`); the grub-mkimage / ESP boot fix landed in merge 55c3b705. Verified via
   `tests/qemu/verify-client.sh`.
 
 ### 2 — FD-07 LUKS2 decrypt-to-desktop — 🔭 DEFERRED (roadmap)
+**What shipped and what did not.** A LUKS2 root with a separate unlock passphrase
+(and optional keyfile or YubiKey factors) already ships as `--encrypt-root`; see
+[STANDALONE-DESKTOP.md](STANDALONE-DESKTOP.md). What stays deferred is the part
+below that binds the disk key to the Casdoor login.
 - LUKS2 root in the installer/`build_img` (cryptsetup luksFormat aes-xts-plain64,
-  argon2id — reuse `provision.sh` `luks_open_or_format` ~1358-1399), dracut
+  argon2id — reuse `provision.sh` `luks_open_or_format`), dracut
   `--add crypt`, `rd.luks.uuid` on the grub cmdline. `growroot` is already
   LUKS-aware (no change).
 - "disk password == Casdoor login": **offline-escrowed keyslot** (no network at
