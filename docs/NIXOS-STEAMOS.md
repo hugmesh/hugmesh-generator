@@ -14,8 +14,8 @@ Two additive front doors are added:
 
 - a **Nix flake + `shell.nix`** ([`flake.nix`](../flake.nix), [`shell.nix`](../shell.nix))
   that provide python3 + PySide6 + make + whiptail on any Nix host, and
-- a **portable POSIX launcher** ([`scripts/studio-launch.sh`](../scripts/studio-launch.sh))
-  that detects the distro, uses the system Python when it can, and otherwise
+- a **portable bash launcher** ([`scripts/studio-launch.sh`](../scripts/studio-launch.sh))
+  that detects the distro, uses the system Python (3.10 or newer) when it can, and otherwise
   bootstraps a project-local venv — and, crucially, exports
   `PYTHONPATH=$REPO/studio` so it runs from **any** working directory.
 
@@ -26,6 +26,7 @@ The launcher's flags mirror the Windows `.bat`:
 | *(none)* | guided run: detect, offer a venv if needed, launch the wizard |
 | `--detect` | print the machine-greppable `DETECT …` report and exit (never prompts/installs/launches) |
 | `--auto` | as guided, but accept every offer without a prompt |
+| `--redo-first-run` | force the first-run bootstrap (see [FIRST-RUN.md](FIRST-RUN.md)) |
 | `--menu` | hand off to the ncurses build menu (`scripts/build-menu.sh`) |
 | `--<anything-else>` | **headless** automation (e.g. `--print-command`): no prompts, no installs, straight to `python3 -m hugmesh_studio` |
 
@@ -154,7 +155,8 @@ args forwarded.
 
 ## What the launcher detects
 
-`./scripts/studio-launch.sh --detect` prints one greppable line per fact and exits 0:
+`./scripts/studio-launch.sh --detect` prints one greppable `DETECT` line per fact, then a short
+`note:` paragraph, and exits 0:
 
 ```
 DETECT os=steamos id_like=arch family=arch nix_shell=0 gamescope=1
