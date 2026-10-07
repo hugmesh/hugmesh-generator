@@ -44,11 +44,11 @@ from ..core.config import (
 from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
                                     services_page_applies)
 from ..core.validate import validate_domain_name
-from .local_ai import OPEN_COMMAND as _LOCAL_AI_COMMAND, LocalAIScreen as _LocalAIScreen
 from ..core.worklist import (
     WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
     resolve_hostname,
 )
+from .local_ai import OPEN_COMMAND as _LOCAL_AI_COMMAND, LocalAIScreen as _LocalAIScreen
 
 __all__ = [
     "PAGE_ORDER", "SIDE_FLOW_SLUGS", "WELCOME_CHOICES", "WELCOME_TARGET",
