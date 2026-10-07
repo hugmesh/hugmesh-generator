@@ -19,7 +19,8 @@ Contents: [1 Hardware](#1-what-this-pc-has-and-what-fits) ·
 [6 Assistant on the mesh code](#6-run-a-code-assistant-on-the-mesh-code) ·
 [7 The mesh's own GPU node](#7-use-the-meshs-own-gpu-node-instead) ·
 [8 Safety](#8-safety-rules) · [9 Measure your PC](#9-measure-your-own-pc) ·
-[10 Troubleshooting](#10-troubleshooting)
+[10 Troubleshooting](#10-troubleshooting) ·
+[11 Prepared mesh agents](#11-prepared-mesh-agents)
 
 ---
 
@@ -269,7 +270,9 @@ function, rename a field in one file, draft a commit message, convert a script.
 Poor: anything across many files, anything needing the whole repository in view,
 security decisions, anything where being wrong is silent.
 
-Start a session with a brief that sets the rules. This one has worked:
+Start a session with a brief that sets the rules (section 11 builds models and a
+`CLAUDE.md` that already carry the mesh facts, so a long hand-written brief is no longer
+needed). This one has worked:
 
 ```text
 You are a small local model working in a scratch clone with no remote. A person will
@@ -355,6 +358,80 @@ running at the same time change the numbers a lot.
 | `ollama pull` stalls | the network path: `curl -sI https://registry.ollama.ai | head -1`; any HTTP status line (even a 404) means the path is up, a timeout or connection error means it is not. The pull resumes |
 | the kind cluster or compose stack gets killed while a Tier B model loads | out of RAM: stop one of them first (`make kind-halt`), or use Tier A |
 | the disk is filling up | weights live in `~/.ollama/models` (or `OLLAMA_MODELS`; a service install uses the `ollama` user's home): `df ~/.ollama` shows which filesystem |
+
+## 11. Prepared mesh agents
+
+A plain base model knows nothing about this mesh: not which repository holds what, not that
+`make kind-images ONLY=<repo>` rebuilds one image, not that edits inside `.stack-src` are
+reset by `make stack-clone`. `scripts/local-ai-agents.sh` builds four Ollama models from one
+short, checked description of the mesh (`local-ai/primer.md`, about 1,470 tokens), so they start
+knowing it. Every make target, variable, repository and path the primer names is checked
+against this repository by `tests/scripts/test-local-ai-primer.sh`.
+
+| Model | Base (override) | Use it for |
+|---|---|---|
+| `hugmesh-agent` | `qwen3:8b` (`BASE_AGENT`) | tool-driven work in a scratch clone: small steps, reports what it did not verify |
+| `hugmesh-coder` | `qwen2.5-coder:7b` (`BASE_CODER`) | one-file edits in a chat: prints only the changed code |
+| `hugmesh-reviewer` | `qwen3:8b` (`BASE_AGENT`) | reviewing a diff: one `file:line - problem` per line, no praise |
+| `hugmesh-triage` | `qwen3:8b` (`BASE_AGENT`) | reading a failing log: cause, class (ENVIRONMENT, CODE or UNSURE), one next command |
+
+```bash
+scripts/local-ai-agents.sh create               # build all four (or name some: create hugmesh-agent)
+scripts/local-ai-agents.sh create --dry-run     # print the Modelfiles it would use; touches nothing
+scripts/local-ai-agents.sh list                 # which exist, and whether this script made them
+scripts/local-ai-agents.sh test                 # prepared vs plain base on 19 mesh questions
+scripts/local-ai-agents.sh print primer         # the primer as the models see it
+scripts/local-ai-agents.sh remove               # delete the ones this script made
+BASE_AGENT=qwen3:14b scripts/local-ai-agents.sh create hugmesh-agent hugmesh-reviewer hugmesh-triage   # a bigger base
+```
+
+The script talks only to an Ollama on this machine (`OLLAMA_HOST` must be `127.0.0.1`,
+`localhost` or `::1`) and never pulls a model: when the base is missing it stops and prints
+the exact `ollama pull <base>` command. It only creates, overwrites or deletes the four
+`hugmesh-` names above, and only a model that carries the marker the script wrote into it; a
+model of the same name that you made yourself is left alone and named in the message.
+
+Use them like any other model (section 6.4):
+
+```bash
+ollama run hugmesh-agent --think=false "How do I rebuild only the host shell image on kind?"
+git diff main... | ollama run hugmesh-reviewer --think=false
+./mvnw -B verify 2>&1 | tail -80 | ollama run hugmesh-triage --think=false
+ollama run hugmesh-coder "$(cat scripts/foo.sh)
+
+Add a --dry-run option. Output only the changed file."
+```
+
+> **A coding-agent harness does not see the primer through the model.** Ollama uses a
+> Modelfile's `SYSTEM` text only when the request has no system message of its own. A harness
+> such as `ollama launch claude` always sends one, which replaces the primer. Measured on
+> 2026-10-07: the same questions that `hugmesh-agent` answers from the primer, it answered no
+> better than the plain base once the request carried a generic system message (the table in
+> [`local-ai/README.md`](../local-ai/README.md) has the numbers). For a harness session, put the primer in the
+> scratch clone's `CLAUDE.md` and the role files where the harness looks for them:
+>
+> ```bash
+> cd ~/lm-scratch/hugmesh-user-bff-api            # the no-remote clone of section 6.1
+> /path/to/hugmesh-generator/scripts/local-ai-agents.sh print primer > CLAUDE.md
+> mkdir -p .claude/agents && cp /path/to/hugmesh-generator/local-ai/agents/*.md .claude/agents/
+> ollama launch claude --model hugmesh-agent
+> ```
+>
+> `local-ai/agents/` holds three role files (`mesh-builder`, `mesh-tester`, `mesh-reviewer`);
+> the last two are read-only roles with no editing tool.
+
+**Refresh after the primer changes.** Edit `local-ai/primer.md`, put the file that backs the new
+fact in its trailing sources comment, run `bash tests/scripts/test-local-ai-primer.sh`, then run
+`scripts/local-ai-agents.sh create` again (it rebuilds the four in place) and
+`scripts/local-ai-agents.sh test` to see the score. If the primer grew by more than 15%, count
+its tokens with `scripts/local-ai-agents.sh test --tokens` and update `MEASURED_TOKENS` and
+`MEASURED_BYTES` at the top of the guard. The budget is 2,500 tokens.
+
+**Remove them** with `scripts/local-ai-agents.sh remove`; the base models stay.
+
+What this does not do: it does not make a 7 to 8 billion parameter model reliable. The primer
+fixes what the model does not know; it does not fix what it gets wrong with the facts in front
+of it, and the score in `local-ai/README.md` is below 100% for that reason. Review every diff.
 
 ---
 

@@ -1,0 +1,25 @@
+# Mesh questions for scripts/local-ai-agents.sh test. Columns, separated by a TAB: id, question, expect.
+# expect is a substring check, not a judgement. The answer is lowercased and backticks and asterisks are removed.
+#   a && b      both must appear         a || b   either may appear         a >> b   b must appear after a
+# Every expected word comes from local-ai/primer.md or the repository, and tests/scripts/test-local-ai-primer.sh
+# fails if one does not, or if the question text itself already contains it.
+id	question	expect
+kind-one-image	On the HugMesh kind lane, how do I rebuild and reload only the host shell image? Give the exact make command.	kind-images && only=
+kind-order	In what order do I run the make commands to get a working kind cluster with the mesh images, and which one checks its health?	kind-up >> kind-images >> kind-doctor
+stack-src-vanish	Why can edits I make inside the .stack-src folder disappear?	stack-clone && reset
+mtu-env	Docker builds on this PC hang on npm with ETIMEDOUT behind a WireGuard tunnel. Which environment variable and value fixes the kind image build?	build_network=host
+studio-test-cmd	What exact command runs one Studio test file, including its environment variables?	hugmesh_studio_no_elevation=1 && qt_qpa_platform=offscreen
+scratch-clone	Where should a local coding agent do its work on mesh code, and what must that copy not have?	scratch clone && no remote
+compose-signin	I ran make stack-up and the sign-in page rejects every account. Which step is missing?	stack-seed
+halt-vs-down	Which make target stops the local compose stack but keeps its data, and which one deletes the volumes?	stack-halt && stack-down
+compose-one-service	Is there a make target that rebuilds a single compose service? If not, what do I run?	docker compose && tests/stack/compose.local.yaml
+maven-eleven-min	A Java image build fails after about eleven minutes saying it could not find a net.hugmesh artifact in central. Which script repairs it?	patch-stack-src
+argocd-token	make kind-up cannot give ArgoCD read access when I run it from a linked git worktree. Which environment variable avoids that?	argocd_repo_token
+docs-rule	I added a new script under scripts/. Which guard fails until a document names it?	test-docs-command-coverage
+no-modals	How should the Studio ask for a confirmation in page logic, given that dialogs hang the headless tests?	inline label || explicit second click
+guard-proof	What must be shown about a new guard before it is accepted?	negative control && mutation
+kind-pause	How do I stop the kind lane without deleting the cluster?	kind-halt
+mock-lane	Does a pass from tests/stack/up.sh prove the real gateway route tables work?	mock
+repo-source	In the Studio, which Repo source setting means my own checkouts are never fetched or reset, and what variable does it set?	stack_no_clone
+hub-repo	Which repository is the hub that holds the Makefile, the cluster manifests and the Studio?	hugmesh-generator
+pullbackoff	Kind nodes are Ready but many pods sit in ImagePullBackOff. Which make step was most likely never run?	kind-images
