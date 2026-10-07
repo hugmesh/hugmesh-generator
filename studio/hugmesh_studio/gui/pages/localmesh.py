@@ -152,6 +152,7 @@ from .domain_services import DomainServicesWidget
 from .domains import DomainsTableWidget
 from ._mesh_monitor_widget import MeshMonitorProbe, MeshMonitorWidget, MeshScaleWorker
 from ._add_user_dialog import AddUserDialog
+from ._local_agent_widget import LocalAgentWidget, context_from_page
 from ._saved_meshes_widget import SavedMeshProbe, SavedMeshesWidget
 from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
@@ -1778,6 +1779,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # No trailing addStretch: a FlowLayout has no stretch concept, and a
         # spacer item would be wrapped as if it were another button.
         lay.addWidget(brow_box)
+        # LOCAL AI AGENT (#695). The Docker mesh and the kind DevOps lane end on this one
+        # page, so one card serves both (its Lane drop-down only changes the brief). It
+        # reads the source choice and domains at press time through the context callable,
+        # so no refresh hook is needed here.
+        self.local_agent = LocalAgentWidget(
+            self.generator_dir, context=lambda: context_from_page(self))
+        lay.addWidget(self.local_agent)
 
         # ── RUNNING-MESH MONITOR (operator ask, 2026-09-01): every pod and container
         # of BOTH lanes, its addresses, and an Open button only where the browser may
