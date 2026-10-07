@@ -70,7 +70,7 @@ REPOSITORY PREFIX inside it — brands are then NOT registry-isolated until per-
   GIT_CONFIG_KEY_0=http.extraHeader / GIT_CONFIG_VALUE_0=…` (child environ, not
   argv; the equivalent of `-c http.extraHeader` without exposing the value to a
   co-located `ps auxww` / `/proc/<pid>/cmdline`), **curl** via `-H @<0600 tmpfile>`
-  (the house pattern from `scripts/go-live.sh`). The PAT is therefore never in the
+  (the house pattern; `scripts/go-live.sh` that first used it was removed in July 2026, and `specs/usr/lib/hugmesh/go-live-providers.sh` carries it now). The PAT is therefore never in the
   remote URL, `.git/config`, the reflog, or any argv (review finding #1 fix — the
   original `-c http.extraHeader=…` form leaked it into git's argv). Base URL
   configurable (`FORGEJO_BASE_URL`); default in-cluster svc DNS, set to the tailnet
