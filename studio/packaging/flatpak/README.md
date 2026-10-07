@@ -64,7 +64,21 @@ build cache warm took 215 s, almost all of it the compression. Both runs were ma
 fake `sudo`, `apt-get`, `dnf` and `pacman` first on `PATH` that record any call, and none
 was made (that covers the script and what it starts; the commands the Builder runs
 through the host's session helper start from the host's own environment). Both finished
-with all three smoke tests passing.
+with all three smoke tests passing. Measured again on 2026-10-07 with flatpak 1.18.4 and
+the toolchain already installed: 235 s, all three smoke tests passing, and fakes for
+`sudo`, `doas`, `pkexec`, `su`, `run0` and ten package managers first on `PATH` recorded
+no call. Two things that run saw are worth knowing: `flatpak install --bundle` also
+fetches updates for the runtime's related extensions (the GL drivers) from flathub into
+the private directory, so a re-run is not offline; and the two runs produced bundles
+with different checksums from the same source (an OSTree commit carries its timestamp),
+so a checksum identifies one build, not the source it came from.
+
+`../../tests/test_flatpak_packaging_files.py` runs the script against a scripted fake
+`flatpak` as well, and holds it to what this page says: every call goes to the private
+directory and none to `--system`, the Builder is granted that directory, the build uses
+the release workflow's flags, both validators run, and an empty `--print-specs` is a
+failure. (A mutation battery showed each of those could be lost with the earlier,
+file-reading checks still green; the script was right, its guard was thin.)
 
 If it fails, it says which step, and a re-run is safe: the toolchain and the caches are
 reused. Two failures have a specific cause worth knowing:
