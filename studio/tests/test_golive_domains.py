@@ -12,7 +12,10 @@ Pinned here:
 * the plan names EVERY domain's exposure — this run's, the ones that need a run of
   their own, the onion case (no clearnet domain at all) — plus the node's onions,
   per-domain slugs included, and refuses malformed onion files;
-* the GUI's Generate step and the TUI's plan render the SAME lines.
+* the GUI's Generate step and the TUI's plan render the SAME lines;
+* (the post-merge review of #645) an export directory this user CANNOT READ is told
+  apart from an absent one — the plan says so instead of "not minted" — and
+  GL_ONION_HOSTNAME overrides the exported address as the driver's own card does.
 """
 import io
 import os
@@ -23,8 +26,8 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from hugmesh_studio.core.golive_domains import (                        # noqa: E402
-    NO_EXTRA_DOMAINS_NOTE, baked_domains, exposure_lines, exposure_rows, onion_exports,
-    plan_rows)
+    NO_EXTRA_DOMAINS_NOTE, ONION_UNREADABLE_HOW, baked_domains, exposure_lines,
+    exposure_rows, onion_export_state, onion_exports, plan_rows)
 from hugmesh_studio.core.golive_driver import GoLiveDriver, GoLiveOptions  # noqa: E402
 from hugmesh_studio.tui import app as tui_app                           # noqa: E402
 
@@ -121,6 +124,95 @@ def test_a_typed_domain_that_is_not_baked_is_still_named():
     assert rows["other.example (typed — not baked on this device)"].endswith("THIS run")
 
 
+# ── unreadable is not absent (the post-merge review of #645) ──────────────────────────
+def test_an_unreadable_export_directory_is_told_apart_from_an_absent_one(device):
+    """hugmesh-tor-reconcile keeps /var/lib/hugmesh/tor root-only (chmod 0700), so a
+    Studio run as a user on a Tor node cannot read it — the NORMAL state there. It used
+    to collapse into ("", []) and the plan then said "not minted on this host" about a
+    node that had minted it. The real shape (a mode-0 directory) needs a non-root
+    user; the second shape (an export path that is a file) refuses root too."""
+    tor = device / "tor"
+    assert onion_export_state(str(tor)) == (ONION_A, [("games", ONION_B)], "")
+    assert onion_export_state(str(device / "absent-tor")) == ("", [], "")
+    if os.geteuid() != 0:
+        tor.chmod(0)
+        try:
+            primary, per, why = onion_export_state(str(tor))
+            old_shape = onion_exports(str(tor))           # the old shape, still blind
+        finally:
+            tor.chmod(0o700)
+        assert (primary, per) == ("", []) and old_shape == ("", [])
+        assert why.startswith(str(tor)) and "Permission denied" in why, why
+        (tor / "hostname").chmod(0)                       # a readable dir, root-only file
+        try:
+            primary, per, why = onion_export_state(str(tor))
+        finally:
+            (tor / "hostname").chmod(0o644)
+        assert primary == "" and per == [("games", ONION_B)]
+        assert why.startswith(str(tor / "hostname")) and "Permission denied" in why
+    primary, per, why = onion_export_state(str(device / "cluster-domain"))
+    assert (primary, per) == ("", []) and why.startswith(str(device / "cluster-domain"))
+    assert "Not a directory" in why
+
+
+def test_the_plan_says_the_onion_cannot_be_read_rather_than_not_minted():
+    why = "/var/lib/hugmesh/tor: Permission denied"
+    for mechanism, label, provider in (("onion", "onion (onion)", "tor-onion"),
+                                       ("files", "public-dns (files)", "byo-domain")):
+        rows = dict(exposure_rows(["mesh.example"], "mesh.example", provider, mechanism,
+                                  label, "", [], why))
+        how = rows["Tor: this node's onion"]
+        assert how == ONION_UNREADABLE_HOW.format(why=why)
+        assert how.startswith("cannot be read by this user (" + why + ")")
+        assert "not minted" not in how and "GL_ONION_HOSTNAME" in how
+    # a readable address wins over the reason; an absent export under a clearnet
+    # mechanism says nothing (no Tor on this host)
+    rows = dict(exposure_rows(["mesh.example"], "mesh.example", "tor-onion", "onion",
+                              "onion (onion)", ONION_A, [], why))
+    assert rows["Tor: this node's onion"].startswith(f"https://{ONION_A}/")
+    rows = dict(exposure_rows(["mesh.example"], "mesh.example", "byo-domain", "files",
+                              "public-dns (files)"))
+    assert "Tor: this node's onion" not in rows
+
+
+def test_plan_rows_carry_the_unreadable_reason_to_both_faces(device, monkeypatch):
+    """The ONE call both faces make: an export path that cannot be read reaches the
+    rendered lines as the reason, under the onion AND a clearnet mechanism."""
+    monkeypatch.setenv("GL_ONION_EXPORT_DIR", str(device / "cluster-domain"))
+    d = GoLiveDriver(GENERATOR_DIR)
+    for provider in ("tor-onion", "cloudflare-tunnel"):
+        rows = dict(plan_rows(d, GoLiveOptions(provider=provider, domain="mesh.example")))
+        how = rows["Tor: this node's onion"]
+        assert how.startswith("cannot be read by this user (")
+        assert str(device / "cluster-domain") in how and "Not a directory" in how
+        assert "not minted" not in how
+    lines = exposure_lines(plan_rows(d, GoLiveOptions(provider="tor-onion")))
+    assert any("cannot be read by this user" in ln for ln in lines)
+
+
+def test_gl_onion_hostname_overrides_the_export_as_the_drivers_card_does(bare_node,
+                                                                        monkeypatch):
+    """specs/usr/lib/hugmesh/go-live-providers.sh ``_glp_onion_hostname`` prints
+    GL_ONION_HOSTNAME before reading any file; the table reads the same override, so
+    the two cannot name different addresses. Only a well-formed v3 address counts — a
+    half-typed one must not reach a page as an address to share."""
+    monkeypatch.setenv("GL_ONION_HOSTNAME", ONION_A)
+    assert onion_export_state() == (ONION_A, [], "")
+    assert onion_exports() == (ONION_A, [])
+    d = GoLiveDriver(GENERATOR_DIR)
+    rows = dict(plan_rows(d, GoLiveOptions(provider="tor-onion")))
+    assert rows["Tor: this node's onion"].startswith(f"https://{ONION_A}/")
+    monkeypatch.setenv("GL_ONION_HOSTNAME", "not-an-onion")
+    assert onion_export_state() == ("", [], "")
+    rows = dict(plan_rows(d, GoLiveOptions(provider="tor-onion")))
+    assert rows["Tor: this node's onion"].startswith("not minted on this host")
+    # the override is the PRIMARY only: per-domain onions still come from the export
+    monkeypatch.setenv("GL_ONION_HOSTNAME", ONION_A)
+    monkeypatch.setenv("GL_ONION_EXPORT_DIR", str(bare_node))
+    (bare_node / "games.hostname").write_text(ONION_B + "\n")
+    assert onion_export_state() == (ONION_A, [("games", ONION_B)], "")
+
+
 # ── the GUI face ─────────────────────────────────────────────────────────────────────
 def _tui_plan(provider_no, domain_cmds):
     out = io.StringIO()
@@ -147,10 +239,33 @@ def test_the_tui_says_a_bare_node_has_one_domain(bare_node):
     assert NO_EXTRA_DOMAINS_NOTE in text
 
 
+def test_the_tui_enter_without_a_pick_takes_the_cluster_domain(device):
+    """Enter on the domain stage with nothing picked is the cluster domain (the stage
+    says so: "Enter=continue (default: the cluster domain)") — the plan's command then
+    carries ``--domain mesh.example``, not an empty pick left for the driver to fill
+    (the post-merge review of #645: this default had no pin)."""
+    d = GoLiveDriver(GENERATOR_DIR)
+    n = [p.id for p in d.providers()].index("cloudflare-tunnel") + 1
+    text = _tui_plan(n, [])
+    assert "--domain mesh.example" in text
+    want = exposure_lines(plan_rows(d, GoLiveOptions(provider="cloudflare-tunnel",
+                                                     domain="mesh.example")))
+    for line in want:
+        assert "  " + line in text
+
+
+def test_the_tui_plan_says_the_onion_cannot_be_read(device, monkeypatch):
+    monkeypatch.setenv("GL_ONION_EXPORT_DIR", str(device / "cluster-domain"))
+    d = GoLiveDriver(GENERATOR_DIR)
+    n = [p.id for p in d.providers()].index("tor-onion") + 1
+    text = _tui_plan(n, [])
+    assert "cannot be read by this user (" in text and "not minted" not in text
+
+
 pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding (PySide6/PyQt6) installed")
 
 from hugmesh_studio.gui.pages import golive as golive_mod                # noqa: E402
-from hugmesh_studio.gui.qt import QtWidgets                              # noqa: E402
+from hugmesh_studio.gui.qt import QtCore, QtWidgets                      # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -228,3 +343,30 @@ def test_the_generate_step_shows_the_same_lines_as_the_tui(wiz, device):
     assert gen.exposure.toPlainText().splitlines() == want
     assert any("shop.example" in ln and "THIS run" in ln for ln in want)
     assert any("mesh.example" in ln and "not exposed by this run" in ln for ln in want)
+
+
+def test_the_generate_exposure_pane_wraps_so_a_rows_remedy_is_read_whole(wiz, device,
+                                                                        monkeypatch):
+    """The unreadable-export row carries its remedy at the end of a long sentence; the
+    pane wraps at its width (no sideways scrolling) and the wizard's default size shows
+    the whole box — measured, not assumed (hugmesh-generator#647 / #656)."""
+    monkeypatch.setenv("GL_ONION_EXPORT_DIR", str(device / "cluster-domain"))
+    page = _to_inputs(wiz, provider="tor-onion")
+    assert page.validatePage()
+    gen = wiz.page(wiz._page_ids["generate"])
+    wiz.setStartId(wiz._page_ids["generate"])
+    wiz.restart()
+    wiz.show()
+    QtWidgets.QApplication.processEvents()
+    assert wiz.currentPage() is gen
+    box = gen.exposure
+    assert box.lineWrapMode() == QtWidgets.QPlainTextEdit.LineWrapMode.WidgetWidth
+    assert box.horizontalScrollBar().maximum() == 0
+    text = box.toPlainText()
+    assert "cannot be read by this user (" in text and "GL_ONION_HOSTNAME" in text
+    assert box.isVisible() and box.width() >= 400 and box.height() >= 100, (
+        box.width(), box.height())
+    # the box lies inside the wizard's window at its default size
+    r = QtCore.QRect(box.mapTo(wiz, QtCore.QPoint(0, 0)), box.size())
+    assert wiz.rect().contains(r), (r, wiz.size())
+    wiz.close()

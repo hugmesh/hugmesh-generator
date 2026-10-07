@@ -221,6 +221,22 @@ def test_the_tui_fleet_row_one_cannot_be_removed():
     assert j.screen().state(j).names() == [FLEET_DEFAULT_DOMAIN]
 
 
+def test_leaving_the_domains_step_keeps_the_own_rows_recorded_services():
+    """``commit_fleet_domains`` rebuilds the rows from the table's ADDED rows and the
+    own row — which must keep the services recorded for it on the services step (a
+    Back to Domains and a Next again must not silently empty them; the post-merge
+    review of #645 measured that this had no pin)."""
+    from hugmesh_studio.core.fleet import commit_fleet_domains
+    st = FleetDomains()
+    seed_fleet_domains(st, "mesh.example")
+    st.by_name("mesh.example").optional_services = ["akkoma", "games"]
+    assert commit_fleet_domains(st, [Domain(name="acme.example", title="Acme")]) == []
+    assert st.names() == ["mesh.example", "acme.example"]
+    assert st.by_name("mesh.example").optional_services == ["akkoma", "games"]
+    assert commit_fleet_domains(st, []) == []
+    assert st.by_name("mesh.example").optional_services == ["akkoma", "games"]
+
+
 def test_the_tui_fleet_survives_an_apostrophe_in_extra_flags():
     """The post-merge review of #645 (robustness M1): ``set extra_flags --note it's``
     then Enter to Review raised ValueError('No closing quotation') out of shlex and

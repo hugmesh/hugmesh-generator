@@ -432,7 +432,13 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
         lay.addWidget(QtWidgets.QLabel("Per-domain exposure (this device):"))
         self.exposure = console.attach(QtWidgets.QPlainTextEdit())
         self.exposure.setReadOnly(True)
-        self.exposure.setMaximumHeight(120)
+        # PROSE rows (each one's "how" is a sentence; the unreadable-export row carries
+        # its remedy), not column-aligned build output: wrap at the widget's width so
+        # the end of a row is read without scrolling sideways (the post-merge review
+        # of #645 saw every onion row cut at the right edge), and give the box the
+        # height its five-plus rows need at the wizard's default size.
+        self.exposure.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.exposure.setMaximumHeight(180)
         lay.addWidget(self.exposure)
         self.preview_btn = QtWidgets.QPushButton("Refresh preview")
         self.generate_btn = QtWidgets.QPushButton("Generate artifacts now")
