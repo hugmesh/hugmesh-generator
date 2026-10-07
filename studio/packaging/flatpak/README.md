@@ -90,7 +90,8 @@ or with no launcher exported. The test that the script never runs `sudo` or a pa
 manager is a static reading of the script, and it reads exactly the forms its own test
 pins: a command behind an environment assignment, a redirection, a prefix such as
 `env`, `timeout`, `coproc`, `busybox` or `unshare` (past the prefix options that take a
-separate value, such as `exec -a NAME` or `env -u VAR`), past the lock operand of
+separate value, such as `exec -a NAME` or `env -u VAR`; `env -S 'CMDLINE'` is read as a
+command line), past the lock operand of
 `flock` and the root of `chroot`, a shell's `-c` string (`flock`'s too), `eval`, the
 action string of `trap`, a here-string fed to a shell or python, `find -exec`,
 `flatpak-spawn --host`, a `--command=` option and the app id after it (the two forms
