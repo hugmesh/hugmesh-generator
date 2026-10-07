@@ -1,16 +1,18 @@
 # Federation examples — the module-federation walkthrough
 
-An end-to-end tour of HugMesh **native-federation** using the four runnable
-**example codebases** the mesh repo-templating machinery ships as archetypes.
+An end-to-end tour of HugMesh **native-federation** using the three runnable
+**example codebases** (plus the `remote-fragment` pointer) the mesh repo-templating
+machinery ships as archetypes.
 Read [`MESH-TEMPLATING.md`](MESH-TEMPLATING.md) first for the render engine +
 guardrails; this doc is the *runtime* side — how a **host shell** discovers and
 mounts **remotes** at runtime, and the full surface you touch to add one.
 
 The worked example is a `hello` remote mounted into a host shell, plus the
-`remote-fragment` pod that serves published bundles a tenant does not build. All
-four example codebases live under `templates/archetypes/<name>/_skeleton/` and
+`remote-fragment` pod that serves published bundles a tenant does not build. The
+three runnable codebases live under `templates/archetypes/<name>/_skeleton/` and
 render from their skeleton when the Tier-2 base is unpullable (two-tier
-fallback), so you can instantiate the whole trio with no base clone.
+fallback), so you can instantiate the whole trio with no base clone. The
+`remote-fragment` skeleton is only a pointer README.
 
 ---
 
@@ -128,10 +130,12 @@ Adding a remote to a live mesh touches eight places. The example trio exercises
    `db.changelog-master.xml`) — the generator does **not** own the federation DB
    schema. The generator records the metadata in two places instead:
    `specs/cluster/optional-services.yaml`
-   (`federationModule: { slug, mountAt, requiresRole, changeset }`) and, for a
-   top-level console, a
-   `manifests/<slug>/register-<slug>.descriptor.yaml`
-   (`kind: FederationModuleRegistration`) that the federation-api wave reads. The
+   (`federationModule: { slug, mountAt, changeset }`, plus `requiresRole` on some rows, for example `{ slug: mastodon,
+   mountAt: /social/mastodon, changeset: "023-register-akkoma-module.xml" }`) and,
+   for a top-level console, a
+   `manifests/federation-api/register-<slug>.descriptor.yaml`
+   (`kind: FederationModuleRegistration`) that the federation-api wave reads. Today
+   one such descriptor exists, `register-superadmin-service-catalog.descriptor.yaml`. The
    row's columns: `slug, display_name, kind (remote-shell), remote_entry_url,
    exposed_module (./routes), version, visibility (public|internal), enabled,
    circuit_state, metadata ({requiresRole, mountAt})`.
@@ -151,6 +155,13 @@ Adding a remote to a live mesh touches eight places. The example trio exercises
      filters:
        - StripPrefix=1     # /social/matrix/** uses StripPrefix=2 (two path segments)
    ```
+
+   The same file starts with a `remote-deeplink-to-host-shell` route (matched on
+   `Accept: text/html`, and it must stay first). Add an in-shell remote's path to it
+   too, or a browser refresh on a deep link is served the remote's standalone
+   `index.html` instead of the shell.
+   `tests/scripts/test-deeplink-remote-coverage.sh` asserts every in-shell `*-ui`
+   route is listed there.
 
 7. **Route-access rows.** The role floor for the remote's gateway paths lives in
    `gateway_route_access` (`manifests/route-access/initdb/20-schema.sql`): a
