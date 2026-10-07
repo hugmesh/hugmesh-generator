@@ -413,8 +413,8 @@ Internal mTLS / `svc.cluster.local` SANs are unaffected.
 > capabilities endpoint drives logged-out greying, and the host shell consumes that
 > install-state to grey out nav + home cards. What remains is migrating *runtime
 > ownership* of the surviving Applications to the ApplicationSet so an admin can flip
-> a slug on a live cluster (the admin-bff `TasksController`/`ArgoController` +
-> `service_state` reconcile + the cut-over in §10).
+> a slug on a live cluster (the `OptionalService` CRD reconciler of §7.1, which replaced
+> the earlier `service_state` table idea, plus the cut-over in §10).
 > The build now renders each slug's `installed` flag into BOTH the
 > `installed-services` ConfigMap **and** the `apps/13a-optional-services.yaml`
 > element (`_opt_render_appset_flag`), so the 13a generator selector agrees with the
@@ -424,9 +424,8 @@ Internal mTLS / `svc.cluster.local` SANs are unaffected.
 > service on" means in practice. The hardcoded `30-*`/`50-*`/`52-*`/`53-*`
 > Applications remain the build-time *owners* of the surviving (selected) workloads;
 > migrating *runtime ownership* to the ApplicationSet so an **admin can flip a slug on
-> a live cluster** (delete the hardcoded apps, wire the admin-bff `TasksController` /
-> `ArgoController` + a `service_state` reconcile) is the remaining cross-repo step
-> (§10). The build-time *exclusion* requirement is fully satisfied today.
+> a live cluster** (delete the hardcoded apps, then enable the §7.1 reconciler) is the
+> remaining cross-repo step (§10). The build-time *exclusion* requirement is fully satisfied today.
 
 Because ArgoCD syncs from the repo (not the baked copy), live add/remove uses the
 **runtime model**, not baked-file surgery:
