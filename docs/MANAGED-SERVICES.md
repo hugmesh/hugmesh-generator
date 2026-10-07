@@ -61,16 +61,18 @@ The same axis is selectable in the two interactive front-ends. Every front-end j
 composes the same `--managed-service id=endpoint` the builders parse — the empty
 default (all self-hosted) emits nothing, so an untouched surface is byte-identical.
 
-* **Studio wizard** (`studio/.../gui/pages/network.py`): a **Managed backing
-  services** section on the Domain/mesh/services step. Per tier-1/2 service a
-  *self-hosted (default) / managed* toggle plus an endpoint line-edit that is live
-  only when *managed* is checked; tier-3 services are shown read-only with their
-  blocker note (the builder refuses them in v1). The section is shown for
-  cloud/mesh builds and platform-gated to x86/rpi5 (`gate_widgets`, like
-  `optional_services`); it saves/loads `ImageConfig.managed_services`
-  (`dict[str,str]` id→endpoint). Because it is an `ImageConfig` field it rides the
-  `IMAGE_SPEC_JSON` / `--config` batch+web spec channel automatically.
-* **`ImageConfig.managed_services`** (`studio/.../core/config.py`): scoped
+* **Studio wizard** (`studio/hugmesh_studio/gui/pages/network.py`): the **Backing
+  Services** group in the single services tree on the *Domain, Mesh, and Services*
+  step (it was a separate "Managed backing services" section before the tree
+  replaced it). Per tier-1/2 service a *self-hosted (default) / managed* dropdown
+  plus an endpoint field that is live only while *managed* is picked; tier-3
+  services are shown read-only with their blocker note (the builder refuses them in
+  v1). The group is shown for cloud/mesh builds and platform-gated to x86/rpi5
+  (`gate_widgets`, like `optional_services`); it saves/loads
+  `ImageConfig.managed_services` (`dict[str,str]` id→endpoint). Because it is an
+  `ImageConfig` field it rides the `IMAGE_SPEC_JSON` / `--config` batch+web spec
+  channel automatically.
+* **`ImageConfig.managed_services`** (`studio/hugmesh_studio/core/config.py`): scoped
   `_X86_RPI5` in the platform capability table; `to_cli_args()` emits one
   `--managed-service id=endpoint` per entry in sorted-id order (empty = no flag);
   `validate_identity()` fail-closes each id to the tier-1/2 set (a tier-3 id is
@@ -100,10 +102,10 @@ not part of this generator-side surface. See the SEAM GAP note at the bottom.
 | ClickHouse | ClickHouse Cloud | Easy | 3 endpoint literals; no AWS/Azure first-party | **coded** |
 | Per-service Postgres ×core | RDS / Azure DB Flexible | Medium | dual URL envs per consumer (R2DBC + Liquibase), delete DB apps, re-run role-split SQL out of band, TLS params + truststore CA, Casdoor `sslmode=disable` hardcode, Citus initdb (federation/route-access) incompatible w/ vanilla RDS | **coded** (5 BFF + casdoor-pg) |
 | federation-bundles | S3 / Blob | Easy | `APP_BUNDLES_STORAGE=s3` flag already exists; add `APP_BUNDLES_S3_*` | **coded** |
-| Vault KV + ESO | Secrets Manager / Key Vault | Medium | 1 ClusterSecretStore + ~90 remoteRef renames + writer + provision.sh token-seeding removal | **docs-only** |
+| Vault KV + ESO | Secrets Manager / Key Vault | Medium | 1 ClusterSecretStore + about 80 remoteRef key renames + writer + provision.sh token-seeding removal | **docs-only** |
 | Cassandra | Keyspaces / Cosmos-Cassandra | **Hard** | auth/TLS only in the dark hardening overlay; SigV4/port 9142; LWT/DC semantics; 5 consumers | **docs-only** |
 | Harbor | ECR / ACR | **Hard** | registry host literal in ~30 kustomizations + dockerconfigjson + kaniko; robot-account Job has no analog; ECR 12h token expiry breaks static pull Secret; loses air-gap | **docs-only** |
-| Vault PKI | ACM-PCA / Key Vault certs | **Hardest** | `VaultDynamicSecret` is Vault-only; ~25 `<app>-mtls` + 7 DB certs + rotation; USB-custody cluster-CA-import model has no managed analog | **docs-only** |
+| Vault PKI | ACM-PCA / Key Vault certs | **Hardest** | `VaultDynamicSecret` is Vault-only; about 30 `<app>-mtls` Secrets + 7 DB certs + rotation; USB-custody cluster-CA-import model has no managed analog | **docs-only** |
 
 ## Credentials custody
 
@@ -208,7 +210,7 @@ The builder **refuses** `--managed-service` for these ids and dies with the
 blocker. They are named in the registry so the inventory is complete.
 
 * **vault-kv** (Secrets Manager / Key Vault): mechanical but broad — replace the one
-  `ClusterSecretStore`, rewrite ~90 `remoteRef.key` names, re-point the
+  `ClusterSecretStore`, rewrite about 80 distinct `remoteRef.key` names (141 refs), re-point the
   `gen-cluster-secrets` writer, and drop the vault-token/vault-ca seeding for
   IRSA/workload-identity. Entangled with vault-pki (same server). A dedicated wave.
 * **cassandra** (Keyspaces / Cosmos-Cassandra): auth/TLS knobs live only in the DARK
