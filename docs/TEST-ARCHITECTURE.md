@@ -25,7 +25,7 @@ specs/cluster/
                                   akkoma-peer (non-federation observer) + RBAC + PVC
     analytics/{discovery,clickhouse,kafka}   the split heavy bundle
 scripts/validate-prod-hygiene.sh  --static (CI/build) + --runtime (in-cluster)
-tests/e2e/                        Playwright suite (specs 01-25) + the swarm driver
+tests/e2e/                        Playwright suite (specs 01-35) + the swarm driver
 tests/qemu/seed-accounts.sh       --roles (role matrix) + --swarm N (the population)
 ```
 
@@ -38,7 +38,9 @@ single long-lived kubectl/curl control loop owning two readiness edges:
   Synced+Healthy + the seed Jobs Complete → spawn `test-job-lean` (`SNAP_EXPECT_HEAVY=0`,
   asserts the x86-absent in-memory-fallback usage path).
 * **HEAVY edge** — the **ACTUAL amd64 workloads** (kafka+clickhouse Deployments
-  `availableReplicas>=1`) + a Ready `arch=amd64` Node — **NOT** ArgoCD
+  with `availableReplicas` at or above `spec.replicas`; the script header says `>=1`,
+  the `dep_ready` function compares against the desired count) + a Ready
+  `arch=amd64` Node — **NOT** ArgoCD
   Application-Synced (which is Synced-but-Pending on a Pi-only cluster) → spawn
   `test-job-heavy` (`SNAP_EXPECT_HEAVY=1`, asserts the REAL Kafka+ClickHouse path).
   Edge-debounced (cooldown + node-generation token) so a NotReady→Ready flap does
@@ -86,18 +88,18 @@ test-runner `99`).
 > baked prod tree; the operator assembles the prod root). The default root remains
 > the shipped topology; the waved root is how you turn the blocking gate on.
 
-## RBAC role e2e (⏳ PARTIAL — per-realm + cross-realm-superadmin present)
+## RBAC role e2e (✅ cross-realm matrix present, offline; ⏳ live probe pending)
 
-The role/RBAC e2e coverage is **partial**:
-
-- ✅ **Present:** per-realm login (`specs/15-rbac-per-realm-login.spec.ts`) and
-  cross-realm **superadmin** (`specs/25-rbac-cross-realm-superadmin.spec.ts`), plus
-  the route-access / admin-API gating + mod-sibling-scope + user/pending specs
-  (12–18).
-- ⏳ **Remaining:** there is **no full systems × games × forum cross-realm role
-  matrix** yet (every role asserted across all three realms). The two-Casdoor
-  (systems `hugmesh` / games `threewizards`) boundary is exercised only at the
-  superadmin edge today.
+- ✅ **Present:** per-realm login (`specs/15-rbac-per-realm-login.spec.ts`), cross-realm
+  **superadmin** (`specs/25-rbac-cross-realm-superadmin.spec.ts`), the full
+  cross-realm authz matrix **systems × games × forum**
+  (`specs/26-rbac-cross-realm-matrix.spec.ts`: allow, deny isolation, superadmin
+  reach and the per-domain least-privilege cascade, for each realm pair), plus the
+  route-access / admin-API gating + mod-sibling-scope + user/pending specs (12–18).
+- ⏳ **Remaining:** spec 26's contract assertions run against the decision oracle
+  with no cluster; its live token-grant probe is skipped unless `LIVE_GATEWAY=1`
+  and real per-realm Casdoors (systems `hugmesh` / games `threewizards`) are up, and
+  the spec's own header says live validation waits on a kernel-fixed x86 image.
 
 ## The non-federation proof (domain-lock)
 

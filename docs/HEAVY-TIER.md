@@ -56,9 +56,12 @@ synced an amd64 app is `Synced-but-Progressing` until the pod actually schedules
 Reading the **workload Ready endpoints** is the only signal that means "the heavy
 tier is genuinely exercisable".
 
-* **LEAN tier** (`test-job-lean.yaml`, `SNAP_EXPECT_HEAVY=0`) runs when fe/be/pki
-  are ready and **x86/heavy is ABSENT** — it asserts the in-memory-fallback usage
-  marker + no Kafka producer connection.
+* **LEAN tier** (`test-job-lean.yaml`, `SNAP_EXPECT_HEAVY=0`) runs once, when the
+  required fe/be/pki Deployments are ready, their Applications are Synced+Healthy
+  and the seed Jobs are Complete. It is meant for a cluster with **x86/heavy
+  ABSENT** — it asserts the in-memory-fallback usage marker + no Kafka producer
+  connection — but the orchestrator does not test that the heavy tier is absent
+  before it spawns the Job (`lean_ready` in `orchestrator.yaml`).
 * **HEAVY tier** (`test-job-heavy.yaml`, `SNAP_EXPECT_HEAVY=1`) re-runs the full
   suite when the heavy edge fires — it asserts the REAL Kafka+ClickHouse path.
 
