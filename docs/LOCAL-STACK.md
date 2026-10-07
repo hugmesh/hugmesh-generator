@@ -5,7 +5,7 @@ docker-compose, **building every first-party service from its cloned repo** —
 the three gateways, the Spring backends (federation, actions and the
 admin / mod / user / forum / wiki / owncast / tube / character-forge BFFs),
 the static fragment fleet, and every Angular remote + the host — plus the
-datastores (eight Postgres databases, Cassandra) and Casdoor.
+datastores (nine Postgres databases, Cassandra) and Casdoor.
 
 It works on **Linux** (`make stack-up`) and on **Docker Desktop for Windows**
 (`scripts/stack-up.ps1`), for both **ENV=test** and **ENV=prod** build modes.
@@ -36,8 +36,9 @@ compose topology is a faithful translation of those manifests to compose DNS.
   - `gh auth login` (GitHub CLI logged in), or
   - a git credential helper / token (`GH_TOKEN` / `GITHUB_TOKEN`), or
   - the VPN + the internal mirror (`GIT_BASE=https://gitlab.hugmesh.net/hugmesh`).
-- **Resources:** the core platform is about 45 containers (JVM and nginx
-  services, eight Postgres databases, Cassandra, Casdoor). Budget **~8 GB RAM** for the core, **~12–16 GB** with `SOCIAL=1`
+- **Resources:** the default profile set is 43 compose services, two of them
+  one-shot init jobs (`docker compose config --services`): JVM and nginx services,
+  nine Postgres databases (one per service plus Casdoor's), Cassandra, Casdoor. Budget **~8 GB RAM** for the core, **~12–16 GB** with `SOCIAL=1`
   (tuwunel + the full Mastodon tier). First build compiles several Maven + Angular
   projects and is **slow** (tens of minutes, network-bound).
 
@@ -98,9 +99,11 @@ make stack-up ENV=prod CASDOOR_ISSUER=https://id.hugmesh.net     # prod mode
 
 ## Cold builds — `make stack-m2-bootstrap` (private maven artifacts)
 
-Every Java service (the BFFs, `federation-api`, the three gateways, `hugmesh-api`,
-`remote-fragment`) resolves org-PRIVATE maven artifacts (`net.hugmesh:hugmesh-parent/-commons/-auth-core/
--build-config`) at **image-build** time via their committed `settings.xml`
+Every Java service (the BFFs, `federation-api`, `remote-fragment`, the three gateways,
+`hugmesh-api`) resolves org-PRIVATE maven artifacts (`net.hugmesh:hugmesh-parent/-commons/-auth-core/
+-build-config`) at **image-build** time via a `settings.xml` (committed in the BFFs,
+`federation-api` and `remote-fragment`; injected by `scripts/patch-stack-src.sh`
+for the three gateways and `hugmesh-api`, which ship none)
 (`${env.CI_API_V4_URL}/groups/${env.GITLAB_GROUP_ID}/-/packages/maven` — the
 GitLab group registry, unreachable off the VPN). While the built
 `hugmesh-local-*` images exist locally you never notice; on a **cold build**
@@ -301,10 +304,12 @@ couple two otherwise independent teardowns.
 they reap these containers even when the `down` invocation does not repeat the
 knob that started them.
 
-### Packaging notes (checked 2026-10-07)
+### Packaging caveats (checked 2026-08-12) — read before copying this pattern
 
 Unlike `mastodon`/`tuwunel`/`postgres`, which this stack pins to maintained
-upstream images, **neither project publishes a usable first-party image**:
+upstream images, **neither project publishes a usable first-party image**. The
+upstream-image claims below were last checked on 2026-08-12. The phpBB build was
+re-read against `hugmesh-forum-api` and `compose.alt-social.yaml` on 2026-10-07.
 
 - **phpBB** — there is no official image on Docker Hub or ghcr;
   `github.com/phpbb/docker` is CI scaffolding pinned to PHP 5.4–7.0, and
@@ -345,11 +350,7 @@ make stack-up SOCIAL=1 && make stack-seed SOCIAL=1   # + Matrix/Mastodon fixture
 
 (equivalently `SEED_CASDOOR_ONLY=1 tests/stack/seed-e2e.sh` / `tests/stack/seed-e2e.sh`
 directly). It provisions (reusing `tests/qemu/seed-accounts.sh --roles` + its
-Casdoor apply hook — the same machinery the cluster/pentest seeds use).
-`make stack-seed` seeds registration **stage 1** (the Casdoor identity) only. Add
-`SEED_COMPLETE_REGISTRATION=1` to run stage 2 (`POST /bff/register/complete`) too.
-Without it you can sign in, but `GET /bff/session` reports
-`registrationComplete=false` and every service route answers 403:
+Casdoor apply hook — the same machinery the cluster/pentest seeds use):
 
 1. **The `app-user-bff` OAuth2 client** (`ensure_app()`): a confidential client
    mirroring the cluster's `reconcile_app` (authorization_code + refresh_token
@@ -374,6 +375,11 @@ Without it you can sign in, but `GET /bff/session` reports
    username validator rejects hyphens); follower relationship
    **`e2e_userb` → `e2e_usera`**; **one pending moderation-queue item** (an
    unresolved report of `e2e_usera` filed by `e2e_userb`).
+
+`make stack-seed` seeds registration **stage 1** (the Casdoor identity) only. Add
+`SEED_COMPLETE_REGISTRATION=1` to run stage 2 (`POST /bff/register/complete`) too.
+Without it you can sign in, but `GET /bff/session` reports
+`registrationComplete=false` and every service route answers 403.
 
 The script is **idempotent** (probe-before-create everywhere; safe to re-run)
 and **fail-honest**: every unmet dependency dies with a message naming it (which
