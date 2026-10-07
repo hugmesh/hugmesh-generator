@@ -52,8 +52,8 @@ the driver needs the host USB bus and a real TTY for its destructive gates;
 all 13 verbs have targets, including `phone-mdm-enroll`/`phone-attest`);
 the ncurses-menu face (✅ shipped: `phone_screen` in `scripts/build-menu.sh`
 wraps all 13 verbs, with an MDM/attestation sub-screen threading the
-Headwind/Auditor/ingest-token knobs file-path-only); the Studio face is 🔭
-(see [Deferred](#deferred)).
+Headwind/Auditor/ingest-token knobs file-path-only); the Studio face (✅
+shipped: `PhonePage` and `QuestPage` in `studio/hugmesh_studio/gui/pages/`).
 
 ## Verbs (the real surface)
 
@@ -94,8 +94,12 @@ see [Quest headsets](#quest-headsets-meta-quest-33s----device-class-quest).
 ### Options
 
 Device + release: `--serial S` (required when several devices are connected;
-always compared against what is actually detected) · `--codename C` (see
-[`scripts/phone-devices.tsv`](../scripts/phone-devices.tsv)) · `--channel
+always compared against what is actually detected) · `--device-class
+phone|quest` (default `phone`; see [Quest headsets](#quest-headsets-meta-quest-33s----device-class-quest)) ·
+`--codename C` (see
+[`scripts/phone-devices.tsv`](../scripts/phone-devices.tsv), or
+[`scripts/quest-devices.tsv`](../scripts/quest-devices.tsv) with
+`--device-class quest`) · `--channel
 stable|beta|alpha` (default `stable`) · `--graphene-version V` (pin an exact
 release, skips channel resolution) · `--work-dir D` (artifact dir, default
 `out/phone-wizard`) · `--out D` (output tree: enrollment/profile/ingest records
@@ -120,7 +124,9 @@ Enroll extras: `--tailscale-apk F` (adb-install during enroll) ·
 `--apk-signer-sha256 H` (pin the APK signer cert SHA-256; fail-closed when set).
 
 Management-plane extras (see [Management plane](#management-plane)):
-`--headwind-apk F` (Headwind DPC APK to adb-install during `mdm-enroll`) ·
+`--mdm-provider headwind|azure-intune` (default `headwind`; see
+[MDM providers](#mdm-providers)) · `--intune-device-id ID` (Intune only: the
+Graph `managedDevice` id the lock leg targets) · `--headwind-apk F` (Headwind DPC APK to adb-install during `mdm-enroll`) ·
 `--headwind-signer-sha256 H` (pin the Headwind APK signer cert SHA-256;
 fail-closed when set) · `--headwind-url URL` (Headwind server base URL,
 written into the DPC's non-interactive `init.json` as `com.hmdm.BASE_URL`;
@@ -130,8 +136,16 @@ fork's release-cert SHA-256; fail-closed when set) · `--attestation-url URL`
 (self-hosted AttestationServer console URL, printed in the `attest` pairing
 runbook; env `ATTEST_URL`).
 
+Quest-only extras (see [Quest headsets](#quest-headsets-meta-quest-33s----device-class-quest) and
+[Thin desktop](#thin-desktop-quest--thin-client-node-tailnet-only----thin-desktop)):
+`--headwind-config NAME` (the Headwind CONFIGURATION the headset joins; written as
+`com.hmdm.CONFIG`) · `--xr-chat-url URL` (https only; env `XR_CHAT_URL`) ·
+`--thin-desktop` · `--moonlight-apk F` · `--moonlight-signer-sha256 H` ·
+`--thin-desktop-hosts L` (env `THIN_DESKTOP_HOSTS`).
+
 Ingest: `--ingest-url URL` + `--client-cert F --client-key F --ca F` (mTLS
-client identity; POST is refused without cert+key).
+client identity; POST is refused without cert+key) · `--internal-token-file F`
+(the BFF's `X-Internal-Token`, see [Ingest](#ingest--device-registry)).
 
 Gates + overrides: `--yes` (non-interactive confirmation, per-verb gates) ·
 `--force` (downgrade FOUR independent hard-requirement checks to warnings:
@@ -155,9 +169,10 @@ the version over the network) · `--print-plan` (alias for the `plan` verb) ·
 Env seams (tests override these; defaults are the real thing): `PW_ADB`,
 `PW_FASTBOOT`, `PW_RELEASES_URL`, `PW_ALLOWED_SIGNERS`, `PW_EXPECTED_SIGNER_FP`
 (empty allowed ONLY with `PW_ALLOWED_SIGNERS` overridden), `PW_SKIP_FP_PIN=1`,
-`PW_JOIN_TIMEOUT`, `PW_POLL_INTERVAL`. Also `HMDM_URL` / `ATTEST_URL` supply
-default `--headwind-url` / `--attestation-url` values (an explicit flag always
-wins).
+`PW_JOIN_TIMEOUT`, `PW_POLL_INTERVAL`, `PW_FASTBOOT_REAPPEAR_TIMEOUT`. Also
+`HMDM_URL` / `ATTEST_URL` / `XR_CHAT_URL` / `THIN_DESKTOP_HOSTS` supply default
+`--headwind-url` / `--attestation-url` / `--xr-chat-url` / `--thin-desktop-hosts`
+values (an explicit flag always wins).
 
 ### Quick start
 
@@ -550,7 +565,8 @@ deliberate exception is the gated adb credential-set path above.
 ## Ingest — device registry
 
 `ingest` emits `<out>/device/<device-id>/ingest.json`, schema
-**`phone-ingest/v2`**: `device_id`, `device_class:"phone"`, `serial`,
+**`phone-ingest/v2`**: `device_id`, `device_class` (`"phone"`, or `"quest"` with
+`--device-class quest`), `serial`,
 `codename`, `marketing_name`, `os` (`grapheneos`|`android`|`unknown` —
 inherited from `enrollment.json`'s OS probe, see
 [Onboarding existing phones](#onboarding-existing-phones-no-reflash)),
@@ -560,24 +576,25 @@ inherited from `enrollment.json`'s OS probe, see
 `attestation_url`, `auditor_package`, `attestation_verdict` (folded in from
 `attestation.json` when `attest` has run — empty strings otherwise; advisory
 fields only, per D9 never enrollment-blocking),
-`mdm{enrolled,dpc_package,headwind_url,set_via,enrolled_at}` (folded in from
-`mdm.json` when `mdm-enroll` has run — `enrolled:false` with empty fields
-otherwise, mirroring `enterprise_profile`'s presence contract), `enrolled_at`,
-`generated_at`. Recorded facts (enrollment/profile records) are preferred;
+`mdm_provider`, `intune_device_id`,
+`mdm{enrolled,provider,dpc_package,headwind_url,intune_device_id,set_via,enrolled_at}`
+(folded in from `mdm.json` when `mdm-enroll` has run — `enrolled:false` with
+empty fields otherwise, mirroring `enterprise_profile`'s presence contract),
+`enrolled_at`, `generated_at`. Recorded facts (enrollment/profile records) are preferred;
 live adb detection fills only what is missing and reachable.
 
 The `mdm{...}` object is what bumped the schema string `v1`→`v2` — it closed
 the tracked "mdm.json is not folded into ingest.json" gap.
 
-**Merge-order note (cross-repo):** the `v2` bump is additive, but the BFF's
-`PhoneIngestRequest` DTO pattern-pins the accepted schema string. Widening it
-to accept both `phone-ingest/v1` and `phone-ingest/v2` is a coordinated
-hugmesh-admin-bff-api change that **must land first** — until it does, a
-`POST` of a `v2` record to a `v1`-only registry fails Bean Validation with a
-clean `400` (the record is still written to disk, so nothing is lost; only the
-POST leg fails). Once the BFF accepts both, v1 producers keep working (the
-`mdm` fields simply stay null for them) and the bump is non-breaking on the
-registry side.
+**Cross-repo note:** the `v2` bump is additive. The BFF's `PhoneIngestRequest`
+DTO pins the accepted schema string, and on `origin/main` it already accepts
+both `phone-ingest/v1` and `phone-ingest/v2`
+(`@Pattern(regexp = "phone-ingest/v1|phone-ingest/v2")`, `PhoneIngestRequest.java:45`).
+v1 producers keep working (the `mdm` fields stay null for them). Only a registry
+older than that change answers a `v2` POST with a `400` from Bean Validation; the
+record is still written to disk, so nothing is lost. The same DTO accepts only
+`device_class: phone` (`PhoneIngestRequest.java:56`), so a Quest record posted
+there gets a `400` today (see [Quest headsets](#quest-headsets-meta-quest-33s----device-class-quest)).
 
 Default is **emit-only**. The dedicated registry endpoint is
 **`POST /bff/internal/device-registry/phone-ingest`** (hugmesh-admin-bff-api):
@@ -608,8 +625,9 @@ on-phone resident daemon" — is **superseded**: Headwind's DPC agent
 (`com.hmdm.launcher`) is now an on-phone resident daemon by design, running in
 device-owner mode on every phone that has run `mdm-enroll`. What is still
 true, and remains a deliberate v1 non-goal: **no first-party APK store** —
-`phone-wizard.sh` sideloads exactly two vetted, signer-pinned APKs (the
-Headwind DPC, the HugMesh Auditor fork) plus the optional Tailscale APK;
+`phone-wizard.sh` sideloads only vetted, signer-pinned APKs: the Headwind DPC,
+the HugMesh Auditor fork, the optional Tailscale APK and, on a Quest with
+`--thin-desktop`, the Moonlight APK;
 general app push/update/delete across a fleet is a Headwind CE console
 capability, reachable by an operator directly against the Headwind server, not
 something this wizard drives. Losing a phone that never ran `mdm-enroll`
@@ -700,7 +718,10 @@ incomplete.
 
 ### Fleet owners & enterprise subscription
 
-The lockout controls above are **SUPERADMIN-only** and reached over the tailnet.
+The lockout controls above are **SUPERADMIN-only**. They are reached over the
+tailnet through `hugmesh-superadmin-gateway`, and the public `hugmesh-fe-gateway`
+also carries a `/bff/superadmin/** → ROLE_SUPERADMIN` row
+(`specs/cluster/manifests/route-access/initdb/20-schema.sql:982`).
 The **fleet-owner** tier lets a *non-superadmin* enterprise customer manage the
 subset of phones **they** own — locking/unlocking their own handsets — from the
 **public** front-door gateway, without ever seeing anyone else's devices. Three
@@ -731,9 +752,9 @@ thin seams make that safe:
   exempt. This is deliberately *thin*: it gates access, it is not a billing
   system.
 
-**The PUBLIC-fe-gateway caveat.** Unlike the superadmin lockout plane (tailnet-
-only, network-isolated), the fleet surface is reachable on the **public**
-`hugmesh-fe-gateway` at `/bff/admin/phone-fleet/**`. There is therefore **no
+**The PUBLIC-fe-gateway caveat.** Unlike the superadmin lockout plane, which has a tailnet-only
+gateway in front of it, the fleet surface exists only on the **public**
+`hugmesh-fe-gateway`, at `/bff/admin/phone-fleet/**`. There is therefore **no
 tailnet defence-in-depth** in front of it: the **owner + domain predicate is the
 SOLE tenancy wall**, so both legs of it are load-bearing and every path
 fails closed. The gateway route-access seed carries a dedicated
@@ -1005,15 +1026,15 @@ mismatch anywhere in the chain fails closed, never silently.
 
 | Capability | Where | State |
 | --- | --- | --- |
-| Driver: full verb surface (`plan`/`detect`/`fetch`/`flash`/`attest`/`mdm-enroll`/`enroll`/`profile`/`rotate-profile-pass`/`remove-profile`/`ingest`/`status`/`wizard`) | [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | 🚧 |
-| Fail-closed artifact verification (sshsig + double fingerprint pin, tamper ⇒ delete + exit 3) | `dlv_verify_sshsig` + [`scripts/phone-allowed-signers`](../scripts/phone-allowed-signers) | 🚧 |
-| Pinned device catalog (21 devices, unknown codename ⇒ exit 4, no escape hatch) | [`scripts/phone-devices.tsv`](../scripts/phone-devices.tsv) | 🚧 |
-| Destructive gates (typed-serial flash confirm; non-TTY needs `--yes`+`--serial`; typed profile-name removal) | `flash` / `remove-profile` | 🚧 |
-| Tailnet enroll (keys-dir contract, SEC-08 pre-auth or Casdoor OIDC, ADR-14 approval, 100.64/10 join verify) | `enroll` | 🚧 |
-| Escrowed enterprise profile (vault-seed custody, operator-set default, atomic rotation, revocation trail) | `profile` / `rotate-profile-pass` / `remove-profile` | 🚧 |
-| `phone-ingest/v2` registry record (attestation + mdm folds) + mTLS POST | `ingest` | 🚧 |
-| Offline `plan` dry-run + `REDACTED` secret discipline | `plan` / `--print-plan` | 🚧 |
-| `make phone-*` thin face (host-side delegates; secrets stay file-path knobs) — all 13 verbs incl. `phone-mdm-enroll`/`phone-attest` | `Makefile` | 🚧 |
+| Driver: full verb surface (`plan`/`detect`/`fetch`/`flash`/`attest`/`mdm-enroll`/`enroll`/`profile`/`rotate-profile-pass`/`remove-profile`/`ingest`/`status`/`wizard`) | [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | ✅ |
+| Fail-closed artifact verification (sshsig + double fingerprint pin, tamper ⇒ delete + exit 3) | `dlv_verify_sshsig` + [`scripts/phone-allowed-signers`](../scripts/phone-allowed-signers) | ✅ |
+| Pinned device catalog (21 devices, unknown codename ⇒ exit 4, no escape hatch) | [`scripts/phone-devices.tsv`](../scripts/phone-devices.tsv) | ✅ |
+| Destructive gates (typed-serial flash confirm; non-TTY needs `--yes`+`--serial`; typed profile-name removal) | `flash` / `remove-profile` | ✅ |
+| Tailnet enroll (keys-dir contract, SEC-08 pre-auth or Casdoor OIDC, ADR-14 approval, 100.64/10 join verify) | `enroll` | ✅ |
+| Escrowed enterprise profile (vault-seed custody, operator-set default, atomic rotation, revocation trail) | `profile` / `rotate-profile-pass` / `remove-profile` | ✅ |
+| `phone-ingest/v2` registry record (attestation + mdm folds) + mTLS POST | `ingest` | ✅ |
+| Offline `plan` dry-run + `REDACTED` secret discipline | `plan` / `--print-plan` | ✅ |
+| `make phone-*` thin face (host-side delegates; secrets stay file-path knobs) — all 13 verbs incl. `phone-mdm-enroll`/`phone-attest` | `Makefile` | ✅ |
 | Thin ncurses-menu face over the driver (all 13 verbs + MDM/attestation knob sub-screen, non-build precedent) | `phone_screen` in [`scripts/build-menu.sh`](../scripts/build-menu.sh) | ✅ |
 | Thin Studio (GUI) face over the driver (phone + quest side-flows off the ModePage; streamed verbs off-thread, TTY verbs handed to a terminal) | `PhonePage` / `QuestPage` in `studio/hugmesh_studio/gui/pages/` | ✅ |
 | Quest device class (`--device-class quest`): class-scoped catalog, oculus/Meta identity pin, 4-verb chain, unsupported verbs fail-closed w/ rationale | [`scripts/quest-devices.tsv`](../scripts/quest-devices.tsv) + `require_class_supports` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | ✅ merged (#450) |
@@ -1022,7 +1043,7 @@ mismatch anywhere in the chain fails closed, never silently.
 | Thin ncurses quest face (`quest_screen`: quest verbs only, Headwind sub-screen, XR-chat knob) | `quest_screen` in [`scripts/build-menu.sh`](../scripts/build-menu.sh) | ✅ |
 | Quest mocked-adb e2e (real command-sequence assertions incl. unauthorized-headset, no-dev-mode, wrong-vendor, unsupported-verb paths) | [`tests/phone/e2e-quest-join.sh`](../tests/phone/e2e-quest-join.sh) | ✅ merged (#450) |
 | APK store (general fleet app push/update/delete beyond the wizard's own vetted, signer-pinned sideloads) | — | 🔭 (deliberate v1 non-goal; Headwind's own console can do this directly, see [Remote-management model](#remote-management-model)) |
-| Existing-device onboarding (GrapheneOS + stock Android, USB-guided or `--no-usb`, no reflash) | `enroll` | 🚧 |
+| Existing-device onboarding (GrapheneOS + stock Android, USB-guided or `--no-usb`, no reflash) | `enroll` | ✅ |
 | Headwind MDM cluster optional-service (Postgres-backed, tailnet-only, `hugmesh-pki` namespace) | `specs/cluster/apps/23-headwind.yaml`, `specs/cluster/manifests/headwind/` | ✅ merged |
 | GrapheneOS AttestationServer cluster optional-service (SQLite PVC, tailnet-only, forked Auditor identity baked in) | `specs/cluster/apps/24-attestation-server.yaml`, `specs/cluster/manifests/attestation-server/` | ✅ merged |
 | `mdm-enroll` verb — Headwind device-owner enrollment, fresh-device precondition (now checks accounts too, not just users — #393), signer-pinned DPC APK, `init.json` `BASE_URL` injection | `cmd_mdm_enroll()` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | ✅ merged (#390, hardened #393) |
@@ -1065,7 +1086,6 @@ APK-store half of that non-goal still stands (see the Summary table).
   updates; Headwind CE ships no OTA lever, so a management-plane-visible
   update/compliance report would ride a future agent capability this driver
   does not have.
-- **Folding `mdm.json` into `ingest.json`** (or a `phone-ingest/v2` schema
-  bump carrying a dedicated `mdm{...}` object) — see
-  [Ingest](#ingest--device-registry). A real, currently-open gap, not a
-  design decision.
+- ~~**Folding `mdm.json` into `ingest.json`**~~ — **delivered**: `phone-ingest/v2`
+  carries the `mdm{...}` object (`cmd_ingest` in `scripts/phone-wizard.sh`); see
+  [Ingest](#ingest--device-registry).
