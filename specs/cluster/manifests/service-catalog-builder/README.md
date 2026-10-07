@@ -7,20 +7,26 @@ The SUPERADMIN Service Catalog has four service sources (hugmesh-superadmin-apps
 | **SELECT** (catalog tile, prebuilt image) | no | admin-bff effector → ArgoCD Application |
 | **GIT** (repo with its own CI) | no | admin-bff effector → ArgoCD Application |
 | **DOCKERFILE** (dropped Dockerfile) | **yes — Kaniko** | this builder → registry → effector |
-| **ZIP** (uploaded zip-as-repo) | **yes — Kaniko** | this builder → registry → effector |
+| **ZIP** (uploaded zip-as-repo) | would need Kaniko; **not built** | `KanikoBuildLauncher` rejects it with a 400 ("ZIP source upload is not yet implemented") |
 
-Before this builder, `build:images` was an **echo stub** (`.gitlab-ci.yml`) and no in-cluster
-builder existed, so the admin-bff `AddServiceEffector` **guards** DOCKERFILE/ZIP with a clear
-*"requires the in-cluster image builder (Kaniko)"* 400. This directory is that builder.
+Before this builder, no in-cluster builder existed, so the admin-bff `AddServiceEffector`
+**guards** DOCKERFILE/ZIP with a clear *"requires the in-cluster image builder (Kaniko)"*
+400. That guard still fires when admin-bff's `KanikoBuildLauncher` bean is absent. This
+directory holds the namespace and the Job template for that builder.
 
 ## What ships here
 
 - **`kaniko-build-job.template.yaml`** — a per-build **rootless** Kaniko `Job` TEMPLATE. The
-  admin-bff `AddService` task renders ONE copy per build (binding `${BUILD_NAME}` /
-  `${CONTEXT}` / `${DOCKERFILE}` / `${DEST_IMAGE}` / `${BUILD_NAMESPACE}`) and creates it in
-  the build namespace. Kaniko builds the Dockerfile in userspace (no Docker daemon, no
-  privileged socket) and pushes to the in-cluster Harbor registry, then the effector points an
-  ArgoCD `Application` at the resulting digest-pinned image. Security posture matches the
+  admin-bff `KanikoBuildLauncher` renders ONE copy per build and creates it in the build
+  namespace. This directory's copy binds `${BUILD_NAME}` / `${CONTEXT}` / `${DOCKERFILE}` /
+  `${DEST_IMAGE}` / `${BUILD_NAMESPACE}`. admin-bff renders its own copy,
+  `src/main/resources/kaniko/service-catalog-build-job.template.yaml`, which binds a sixth,
+  `${DEST_IMAGE_MOVING}`; the launcher reads its classpath copy, not this one. Kaniko builds the
+  Dockerfile in userspace (no Docker daemon, no privileged socket) and pushes to the
+  in-cluster Harbor registry (`registry.hugmesh.net` by default), then the effector points
+  an ArgoCD `Application` at the pushed image. The launcher tags it with a random
+  6-character hex short-SHA (`registry.hugmesh.net/<brand>/<service>:<short-sha>`),
+  not a digest. Security posture matches the
   platform sync Jobs: `runAsNonRoot`, drop `ALL` caps, `seccompProfile: RuntimeDefault`,
   `readOnlyRootFilesystem` (Kaniko workdir on `emptyDir`), `automountServiceAccountToken:false`,
   `ttlSecondsAfterFinished` + `activeDeadlineSeconds` reaping.
@@ -32,15 +38,17 @@ builder existed, so the admin-bff `AddServiceEffector` **guards** DOCKERFILE/ZIP
 ## SHIPS DARK
 
 The Job template is **not** applied by ArgoCD (it is not in `kustomization.yaml`) — it is
-instantiated only when the effector is enabled (`app.appstore.effector.enabled=true` in
-admin-bff) and a DOCKERFILE/ZIP deployment is provisioned. The namespace + NetworkPolicy are
+instantiated only when the builder is enabled (`app.appstore.builder.enabled=true` in
+admin-bff, default false) and a DOCKERFILE deployment is provisioned. The ArgoCD leg has its
+own flag, `app.appstore.effector.enabled` (default false). The namespace + NetworkPolicy are
 inert until a build lands there. Registry push creds (`service-catalog-builder-registry`,
 `dockerconfigjson`) are ESO-materialized into the build namespace — **never in git**.
 
-## What the admin-bff side still needs (follow-on, NOT in this PR)
+## The admin-bff side
 
-The `AddServiceEffector` currently guards DOCKERFILE/ZIP. Wiring it to render + create this
-Job (a `KanikoBuildLauncher` mirroring the games `JobLauncher` / `Fabric8` writers), wait for
-completion, then proceed to the ArgoCD Application with the built digest, is the next admin-bff
-increment. The contract (placeholders above + the registry secret name) is fixed here so the
-two sides line up.
+`KanikoBuildLauncher` exists on admin-bff `main`. It renders the Job, creates it in
+`app.appstore.builder.namespace` (default `hugmesh-service-catalog-builds`), waits up to 30
+minutes for it to end, and returns the pushed image. `AddServiceEffector` then creates the
+ArgoCD Application. The two sides share the registry secret name
+(`service-catalog-builder-registry`) and the namespace. They do not share one Job template:
+admin-bff's copy has the extra `${DEST_IMAGE_MOVING}` placeholder.
