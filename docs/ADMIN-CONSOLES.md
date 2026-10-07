@@ -31,18 +31,20 @@ The `superadmin` account's password is in your own minted secrets bundle
 (`keys-out/vault/secrets.json`) — it is generated per mesh and never displayed in the
 UI. You only need it for the `/admin/routes` panel below.
 
-Narrow test personas, all with the shared e2e password: `e2e-admin` (admin, user),
+Narrow test personas (`e2e-admin` (admin, user),
 `e2e-mod` (mod), `e2e-matrix` (matrix, user), `e2e-mastodon` (mastodon, user),
-`e2e-user` (user).
+`e2e-user` (user)) share one e2e password. It is generated per run, printed at the end of `make stack-seed` and kept in the gitignored `.e2e-credentials` file.
 
 ### Granting a role
 
-Two ways today:
+Three ways today:
 
+* **Admin → Roles** (`/admin/roles`, `ROLE_ADMIN`) — grant or revoke a role from a closed
+  list of grantable roles. On a stack that reports `casdoorAdminEnabled:false` the grant
+  is recorded locally but does not reach Casdoor, and the page says so.
 * **Studio → Local mesh → "Add user…"** — creates an account with chosen roles by
-  re-running the idempotent seeder. This is the supported path.
-* `POST /bff/admin/roles/{roleName}/{user}` (ROLE_ADMIN) — the API exists; see the
-  Roles panel note in §2.
+  re-running the idempotent seeder.
+* `POST` / `DELETE /bff/admin/roles/{roleName}/{user}` (`ROLE_ADMIN`) — the API behind the Roles page.
 
 ---
 
@@ -60,9 +62,15 @@ Two ways today:
 | Route definitions | `/admin/routes` | `ROLE_SUPERADMIN` | partial — an ADMIN sees an empty table, not a denial |
 | ArgoCD applications | `/admin/argocd` | `ROLE_ADMIN` | **dark — no backend controller exists in any repo** |
 
+The table lists the consoles probed on 2026-08-14, plus Admin → Roles. The admin
+remote has since grown many more (namespaces, backups, announcements, appeals, device
+licences, fleet, themes, MFA security and others): `src/app/admin.routes.ts` in
+`hugmesh-admin-ui` is the current list, and its comment block says who may open each.
+They have not been re-probed here.
+
 **Route access is the one to be careful with.** `GET /bff/admin/route-access` returns
-`{"rules":[]}` even for a superadmin, while the gateways are enforcing 129 seeded rules
-from a different database. Anything you add through that console lands in a table no
+`{"rules":[]}` even for a superadmin, while the gateways are enforcing seeded rules
+from a different database (129 on 2026-08-14; the seed file `specs/cluster/manifests/route-access/initdb/20-schema.sql` now holds 155 rows). Anything you add through that console lands in a table no
 gateway reads. Treat the panel as non-functional until the binding is fixed; the
 enforced rules live in `route-access-db`.
 
@@ -106,7 +114,7 @@ two repos:
 
 1. **`hugmesh-admin-ui`**
    * `src/app/admin.routes.ts` — delete the `{ path: 'argocd', component:
-     ArgocdDashboardComponent }` entry (line ~119) and its import (line ~8), and drop
+     ArgocdDashboardComponent }` entry (line ~139) and its import (line ~8), and drop
      `/admin/argocd` from the route-list doc comment (line ~53).
    * Delete `src/app/argocd-dashboard.component.ts` and
      `src/app/argocd-dashboard.component.spec.ts`.
@@ -117,7 +125,7 @@ two repos:
 2. **`hugmesh-host-shell`**
    * `src/app/menu/menu.component.ts` — delete
      `{ label: 'ArgoCD', route: '/admin/argocd', testid: 'subnav-admin-argocd' }`
-     (line ~239). Leaving the menu entry while the route is gone yields a blank
+     (line ~217). Leaving the menu entry while the route is gone yields a blank
      shell page, which is the same lie in a new costume.
 
 If the page is ever *restored* instead, the missing contract is: `GET
@@ -245,12 +253,11 @@ fallback is worse than no banner.
 
 ## 6. Known gaps (real work, not mysteries)
 
-Ordered by value. The first two are UI-only — the backends already work.
+Ordered by value. The second is UI-only — the backend already works.
 
-1. **Roles panel in the admin console** — `POST|DELETE /bff/admin/roles/{role}/{user}`
-   exist and are ADMIN-gated, but the only role-granting UI is the Studio desktop
-   dialog. Caveat to surface when built: this stack reports `casdoorAdminEnabled:false`,
-   so a grant is recorded locally but does not reach Casdoor.
+1. **Roles grants that reach Casdoor** — the Roles page (`/admin/roles`) exists, but this
+   stack reports `casdoorAdminEnabled:false`, so a grant is recorded locally and does not
+   reach Casdoor.
 2. **Matrix ban/unban + power-level editor** — the proxy already forwards these verbs;
    the UI simply has no controls, so a room admin cannot appoint a moderator.
 3. Bind the route-access console to the database the gateways actually read.
