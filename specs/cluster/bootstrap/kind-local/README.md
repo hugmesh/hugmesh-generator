@@ -1,34 +1,30 @@
 # kind-local — local kind bring-up (Vault + PKI + Casdoor + Harbor, + SSO slice)
 
-> **`KIND_PROFILE=sso`** extends the core slice below with the **native-login
-> path** — Cassandra, the route-access seed DB, the fe-gateway chart (Ingress
-> re-classed to `nginx-internal`), admin-bff + user-bff (+ their Postgres), the
-> Angular host shell, the login/social UI remotes, the **`/user/**` self-service
-> remote** (profile, preferences, password change) and **federation-api + its
-> Postgres** (the vanity/public-profile publish target a profile save calls) —
-> then seeds Vault KV
-> (`scripts/gen-cluster-secrets.sh` ONLINE mode through a `kubectl exec` shim
-> into `vault-0`, so no host `vault` CLI is needed) and the deterministic e2e
-> identity catalogue (`tests/qemu/seed-accounts.sh --roles` applied over a
-> Casdoor port-forward). First-party images are **built locally and
-> `kind load`ed** under the exact refs the manifests render
-> (`registry.hugmesh.net/hugmesh/<repo>:main`, gateway `:dev`) — the
+> **`KIND_PROFILE=sso`** extends the core slice below with the **native-login path**:
+> Cassandra, the route-access seed DB, the fe-gateway chart (Ingress re-classed to
+> `nginx-internal`), admin-bff and user-bff (with their Postgres), the Angular host
+> shell, the login and social UI remotes, the **`/user/**` self-service remote**
+> (profile, preferences, password change), and **federation-api with its Postgres**
+> (the vanity/public-profile publish target a profile save calls). It then seeds Vault
+> KV (`scripts/gen-cluster-secrets.sh` in ONLINE mode, through a `kubectl exec` shim into
+> `vault-0`, so no host `vault` CLI is needed) and the deterministic e2e identity
+> catalogue (`tests/qemu/seed-accounts.sh --roles`, applied over a Casdoor port-forward).
+> First-party images are **built locally and `kind load`ed** under the exact refs the
+> manifests render (`registry.hugmesh.net/hugmesh/<repo>:main`, gateway `:dev`). The
 > in-cluster Harbor is empty on a fresh cluster and is not used.
 >
-> **What this profile does NOT deploy, said plainly.** It is a slice, not a small
-> production cluster. The fe-gateway's route table is applied WHOLE, so roughly a
-> dozen routes point at tiers this profile never brings up — be-gateway, Matrix
-> (tuwunel), Mastodon (akkoma), the mod/forum/wiki/mesh/character-forge tiers and
-> their UIs, api-docs and remote-fragment. Those paths answer **503 behind a live
-> route**, which looks nothing like "not installed". The full, current inventory
-> with a reason per entry is the `EXEMPT` table in
-> `tests/scripts/kind_route_closure.py`, and
-> `tests/scripts/test-kind-profile-route-closure.sh` fails the build if a routed
-> Service is undeployed and *unexplained* — which is how `/user/**` was routed into
-> the void on every kind cluster until 2026-08-26 while `/bff/user/**` answered
-> `curl` perfectly.
+> **What this profile does NOT deploy.** It is a slice, not a small production cluster.
+> The fe-gateway's route table is applied WHOLE, so roughly a dozen routes point at
+> tiers this profile never brings up: be-gateway, Matrix (tuwunel), Mastodon (akkoma),
+> the mod/forum/wiki/mesh/character-forge tiers and their UIs, api-docs and
+> remote-fragment. Those paths answer **503 behind a live route**, which looks nothing
+> like "not installed". The `EXEMPT` table in `tests/scripts/kind_route_closure.py` is the
+> current inventory, with a reason per entry.
+> `tests/scripts/test-kind-profile-route-closure.sh` fails the build if a routed Service
+> is undeployed and *unexplained*. That is how `/user/**` sat routed into the void on
+> every kind cluster until 2026-08-26 while `/bff/user/**` answered `curl` perfectly.
 >
-> Driven end-to-end from the repo root:
+> Driven end to end from the repo root:
 >
 > ```sh
 > make kind-up       # bootstrap-kind.sh KIND_PROFILE=sso (idempotent — an
@@ -41,26 +37,23 @@
 > make kind-doctor   # CAN this cluster run the mesh? egress, images, pods, ArgoCD
 > ```
 >
-> `make kind-doctor` is the standing "is this thing actually alive" check, and
-> the reason it exists is worth a sentence. On 2026-09-10 this lane sat dead for
-> two days while every surface a person would look at reported health: `kind get
-> clusters` listed the cluster, `kubectl get nodes` said Ready, and nineteen pods
-> were in `ImagePullBackOff` past thirteen thousand attempts. Two independent
-> causes — the host had lost every docker netfilter table (so nothing could leave
-> the bridge, while docker's embedded resolver kept answering and made every
-> error read like DNS), and `make kind-images` had never run, so not one
-> first-party image existed in the node. `kind-doctor` tests raw TCP rather than
-> resolution, and compares every image a pod references against what the node
-> actually holds. It reports and exits non-zero; it never repairs. `make kind-up`
-> runs the same check at the end of bring-up in report-only mode — a fresh
-> cluster legitimately has no first-party image yet, because the documented order
-> above is `kind-up` THEN `kind-images`.
+> `make kind-doctor` is the standing "is this cluster alive" check. It exists because on
+> 2026-09-10 this lane sat dead for two days while every surface a person would look at
+> reported health: `kind get clusters` listed the cluster, `kubectl get nodes` said
+> Ready, and nineteen pods were in `ImagePullBackOff` past thirteen thousand attempts.
+> There were two independent causes. The host had lost every docker netfilter table, so
+> nothing could leave the bridge while docker's embedded resolver kept answering, which
+> made every error read like DNS. And `make kind-images` had never run, so no
+> first-party image existed in the node. `kind-doctor` tests raw TCP rather than name
+> resolution, and compares every image a pod references against what the node holds. It
+> reports and exits non-zero. It never repairs. `make kind-up` runs the same check at the
+> end of bring-up in report-only mode, because a fresh cluster has no first-party image
+> yet: the documented order is `kind-up` THEN `kind-images`.
 >
-> `make kind-e2e` maps `hugmesh.net -> 127.0.0.1` with a Chromium
-> host-resolver rule (no `/etc/hosts`, no sudo) and rides the
-> `kind-local.yaml` 443→8443 host port map into the internal ingress. This is
-> the kind-cluster leg of the SSO e2e roadmap item — the same proof
-> `tests/e2e/specs/27-native-login.spec.ts` runs against the compose stack.
+> `make kind-e2e` maps `hugmesh.net -> 127.0.0.1` with a Chromium host-resolver rule (no
+> `/etc/hosts`, no sudo) and rides the `kind-local.yaml` 443→8443 host port map into the
+> internal ingress. It is the kind-cluster leg of the SSO e2e roadmap item, the same
+> proof `tests/e2e/specs/27-native-login.spec.ts` runs against the compose stack.
 
 A reusable, local, single-node [kind](https://kind.sigs.k8s.io/) cluster that
 brings up a **curated slice** of the HugMesh GitOps tree so you can
@@ -263,39 +256,15 @@ script picks up the #2 fix before it merges to `main`.
 > carried two "ANALOGY" exemptions for `00b-cassandra-init`'s references to it.
 > Modelling them retired both.
 
-The Harbor registry migration lived on branch `feat/harbor-registry-migration`
-(draft PR #254) — `main` had no Harbor manifests at all. This script fetched
-Harbor's two `Application` objects straight from that branch
-(`git show <branch>:specs/cluster/apps/03a-harbor.yaml` /
-`03b-harbor-provision.yaml`) rather than from the local `main` checkout:
-
-- **`03a-harbor.yaml`** sources a Helm chart (`helm.goharbor.io`), not a git
-  path in this repo — applied as-is, no `targetRevision` rewrite needed.
-- **`03b-harbor-provision.yaml`** sources a git path
-  (`specs/cluster/manifests/harbor`) that only existed on the migration branch,
-  so its `targetRevision: main` was rewritten to
-  `targetRevision: feat/harbor-registry-migration` before applying, so
-  ArgoCD's own controller fetched the *correct* manifest content live from
-  that branch.
-
-Every other curated Application (Vault, ESO, Casdoor, ingress-nginx-internal)
-already exists on `main` unmodified and is applied straight from `main` — no
-override.
-
-**Known gap, by design:** the migration branch *also* adds a
-`harbor-externalsecrets.yaml` (the `harbor-mtls` cert) under
-`specs/cluster/manifests/external-secrets/`, and adds a `harbor` PKI role to
-`manifests/vault-pki/pki-init-configmap.yaml`. Neither of those is overridden
-here — `apps/04-external-secrets-config.yaml` and `apps/06-vault-pki.yaml` are
-applied straight from `main`, which does **not** yet include the Harbor
-additions. That means Harbor's own TLS secret and PKI issuing role won't
-exist after this script runs, so Harbor's `Application` may sit at
-`Progressing`/`Missing` rather than fully `Healthy`. **That's expected** —
-the full end-to-end Harbor validation (once the migration branch's ESO/PKI
-config additions are also in the loop) is a separate next step; this script's
-job is just to get the cluster + curated apps up and confirm they apply
-cleanly. Once #254 merges to `main`, drop `HARBOR_BRANCH` (or set it to
-`main`) and everything converges from one place.
+The migration lived on branch `feat/harbor-registry-migration` (draft PR #254), and
+`main` had no Harbor manifests. The script fetched Harbor's two `Application` objects
+from that branch with `git show <branch>:<path>`. `03a-harbor.yaml` sources a Helm chart
+(`helm.goharbor.io`) and was applied as-is. `03b-harbor-provision.yaml` sources a git
+path (`specs/cluster/manifests/harbor`) that existed only on the branch, so its
+`targetRevision: main` was rewritten to the branch before applying. The migration's ESO
+and PKI additions (`harbor-externalsecrets.yaml`, the `harbor` PKI role) were not
+overridden, so Harbor's `Application` could sit at `Progressing`/`Missing`. That was
+expected until #254 merged.
 
 ## Usage
 
@@ -387,23 +356,21 @@ unchanged content), detects an already-initialized Vault instead of re-running
 `KIND_PROFILE=sso` — **keeps an already-seeded Vault KV** instead of re-minting
 it (`seed-vault-kv.sh`).
 
-> **That last clause used to be missing, and its absence made the whole claim
-> false.** The KV step ran `scripts/gen-cluster-secrets.sh` with no already-done
-> guard, and that script mints *every* password unconditionally
-> (`openssl rand`) and `vault kv put`s it. The Postgres instances behind those
-> passwords never re-read them — `initdb` only runs on an empty `PGDATA` — so a
-> second `make kind-up` rotated Vault, ESO re-materialized the k8s Secrets, and
-> the BFFs crash-looped on credentials their databases had never seen:
-> `FATAL: password authentication failed for user "userbff"`. Hit live. The
-> "idempotent" step wedged the cluster it claimed to converge.
+> **That last clause used to be missing, and without it the claim was false.** The KV
+> step ran `scripts/gen-cluster-secrets.sh` with no already-done guard. That script mints
+> *every* password unconditionally (`openssl rand`) and `vault kv put`s it. The Postgres
+> instances behind those passwords never re-read them (`initdb` only runs on an empty
+> `PGDATA`), so a second `make kind-up` rotated Vault, ESO re-materialized the k8s
+> Secrets, and the BFFs crash-looped on credentials their databases had never seen:
+> `FATAL: password authentication failed for user "userbff"`. Hit live.
 >
-> `seed-vault-kv.sh` now probes seven sentinel KV paths (`casdoor`,
-> `casdoor-apps`, `admin-bff-db`, `user-bff-db`, `route-access-db`,
-> `cassandra-admin`, `cassandra-app-creds`) first: all populated ⇒ skip; none populated ⇒ seed; a
-> *partial* set ⇒ hard failure with both remedies spelled out, because that is
-> an interrupted first run where either choice is silently wrong. Set
-> `KIND_KV_RESEED=1` to re-mint deliberately — **destructive**, correct only
-> against a fresh cluster or wiped PVCs.
+> `seed-vault-kv.sh` now probes seven sentinel KV paths (`casdoor`, `casdoor-apps`,
+> `admin-bff-db`, `user-bff-db`, `route-access-db`, `cassandra-admin`,
+> `cassandra-app-creds`) first. All populated: skip. None populated: seed. A *partial*
+> set: hard failure with both remedies spelled out, because that is an interrupted first
+> run where either choice is silently wrong. Set `KIND_KV_RESEED=1` to re-mint
+> deliberately. That is **destructive** and correct only against a fresh cluster or wiped
+> PVCs.
 
 The identity seed is likewise **verified, not assumed**: after
 `apply-systems-roles.sh` runs, `verify-seeded-identities.sh` re-authenticates
