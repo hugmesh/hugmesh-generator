@@ -278,7 +278,7 @@ unrelated QEMU change), so rely on the named code, not the number.
   ⚠️ auth-core has drifted four times (2.4.0 → 2.4.1 → 2.4.2 → 2.5.0) because a
   released coordinate was re-cut. The pin-drift guard exists for exactly that and
   must run after every auth-core release.
-- **admin-bff adopted auth-core** (PR #111; behaviour-preserving, "1517 tests green").
+- **admin-bff adopted auth-core** (PR #111) — behavior-preserving, 1517 tests green.
 - **admin-bff `/bff/internal` account/session API** (PR #113): ensure, get,
   complete, allowlist, sessions, namespaces, guarded by `InternalTokenWebFilter`.
   The custody tail shipped too: Liquibase `180-bff-jwt-custody.xml`, `POST
@@ -432,6 +432,10 @@ domain-scoped, enforced at the gateway) governs every surface.
 - **Pen-test CI (✅ shipped):** continuous OWASP (ZAP DAST + Dependency-Check SCA +
   nuclei + k6) as a GitLab CI-pipeline stage, not a deployed CronJob. See
   [`PENTEST-SCHEDULES.md`](PENTEST-SCHEDULES.md).
+- **Generator supply-chain hardening (✅ shipped):** stage3 GPG/sha +
+  headscale / tailscale binary checksum verification, fail-closed in all ten
+  builders via `scripts/_download-lib.sh`, + de-defaulted baked creds (random
+  one-time first-boot fallback). See [`CRYPTO-AUDIT.md`](CRYPTO-AUDIT.md).
 
 ### Shipped, ships dark (✅ on `main`, inert behind a default-off flag)
 
@@ -497,11 +501,6 @@ are complete on `main`; each entry names what lights it and what caveat survives
   absence of a policy means OFF (fail-safe to off, never to a pull). Superadmin
   opts a fleet in via the live `devops/hugmesh-update-policy` ConfigMap. See
   [`DEVOPS.md`](DEVOPS.md).
-
-- **✅ Generator supply-chain hardening** — stage3 GPG/sha + headscale /
-  tailscale binary checksum verification, fail-closed in all ten builders via
-  `scripts/_download-lib.sh`, + de-defaulted baked creds (random one-time
-  first-boot fallback). See [`CRYPTO-AUDIT.md`](CRYPTO-AUDIT.md).
 
 ### Roadmap (🔭 planned / 🚧 in-flight)
 

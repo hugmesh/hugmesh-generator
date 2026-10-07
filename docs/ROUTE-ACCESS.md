@@ -81,9 +81,9 @@ Each gateway is pointed at the store via `ROUTE_ACCESS_R2DBC_URL`
 - **admin-bff-api** (Spring, backend namespace, behind the gateway): list, add and
   delete on `gateway_route_access` — `GET`, `POST` and `DELETE
   /bff/admin/route-access` in `AdminController`, `ROLE_ADMIN` only, domain-scoped, with
-  no `PUT`. It persists to Postgres with a best-effort Cassandra mirror. The old
-  design note said it reaches Casdoor for role/user lookups through the hugmesh-pki
-  gateway and never directly except for OAuth2 grants (not re-verified).
+  no `PUT`. It persists to Postgres with a best-effort Cassandra mirror. It reaches
+  Casdoor for role/user lookups through the hugmesh-pki gateway (JWT) — never calling
+  Casdoor directly except for OAuth2 grants.
 - **admin-ui** (`hugmesh-admin-ui`, ROLE_ADMIN only): a "Gateway access" view (nav label "Route access"; `route-access.component`)
   to list/add/remove `(gateway, url_pattern, role/user,
   allow)` rules.
