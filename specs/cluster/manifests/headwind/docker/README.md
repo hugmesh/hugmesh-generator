@@ -8,7 +8,7 @@ build-time fetches from h-mdm.com.
 | File | Provenance | Role |
 | --- | --- | --- |
 | `templates/conf/context_template.xml` | verbatim upstream | Tomcat context template — the WHOLE app config (JDBC.*, base.url, files dirs, hash.secret). Rendered to `conf/Catalina/localhost/ROOT.xml` by the entrypoint from headwind.yaml's `SQL_*`/`PROTOCOL`/`BASE_DOMAIN` env. |
-| `templates/conf/log4j_template.xml` | verbatim upstream | Copied to `work/log4j-hmdm.xml` (referenced by the context's `log4j.config`). |
+| `templates/conf/log4j_template.xml` | verbatim upstream (CRLF line endings stored as LF) | Copied to `work/log4j-hmdm.xml` (referenced by the context's `log4j.config`). |
 | `templates/sql/hmdm_init.en.sql` | verbatim upstream | First-boot DATA seed the WAR consumes from `work/init.sql`; line 6 is the `_ADMIN_EMAIL_` stamp + forced `passwordReset` headwind.yaml documents. (The `ru` variant is not vendored: the entrypoint always reads the `en` seed.) |
 | `templates/emails/en/*` | verbatim upstream | Password-recovery mail templates copied to `work/emails`. |
 | `server.xml` | verbatim upstream (`tomcat_conf/server.xml`) | Tomcat server config (plain HTTP :8080 connector — TLS is the gateway's). |
