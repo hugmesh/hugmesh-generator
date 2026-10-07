@@ -256,7 +256,12 @@ jobs:
   alpine:
     name: shell suites (alpine)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 40, not 25 (GEN-5). This job runs 133 suites serially and none is dominant
+    # (the slowest is ~3 min), so it cannot be split by moving one or two. MEASURED:
+    # 15 min 44 s in run 37682082806 (main) and 21 min 21 s in run 37691286476 (the PR
+    # that split the debian job), the same suites on the same image, so runner speed
+    # alone moves it by 5+ minutes and 25 left under 4 minutes of margin.
+    timeout-minutes: 40
     container:
       image: alpine:3
     steps:
