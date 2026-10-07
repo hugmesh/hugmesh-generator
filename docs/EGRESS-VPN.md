@@ -224,6 +224,16 @@ v1 keeps akkoma/tuwunel HTTP federation on the existing Squid egress-proxy; the
 VPN is primarily for coturn UDP + made-public egress, and akkoma/tuwunel egress is
 loosened onto the VPN only on an explicit assignment.
 
+## Desktop images: `--egress-vpn FILE`
+
+This is a different path from the node service above. `build-x86-host-stage4.sh
+--egress-vpn FILE` bakes a WireGuard `.conf`, an OpenVPN `.ovpn` or an NM
+`.nmconnection` into a **desktop** image. First boot imports it into
+NetworkManager, and the user can add, remove or toggle it. `--egress-vpn-locked`
+makes it autoconnect and keeps the user from removing it. A non-desktop role
+ignores the flag and installs nothing for it. See
+[`STANDALONE-DESKTOP.md`](STANDALONE-DESKTOP.md).
+
 ## Type-sniff
 
 `active.conf` is type-sniffed at start: an `[Interface]`/`[Peer]` config →
@@ -262,11 +272,17 @@ first-class.
   for carriers the assertions above do not name and fails on any that is neither
   verified nor exempt-with-a-reason. Exits 3 INCOMPLETE — never a green SKIP —
   when the sibling is missing.
+- `tests/egress-vpn/test-optional-service-gate.sh` — the optional-service gate in
+  `build-rpi5-stage4.sh`: default off, and an unselected build prunes the
+  interaction NetworkPolicy, the delivery half and the node packages.
+- `tests/egress-vpn/test-vpn-reconcile-verify.sh` — `vpn-verify.sh`, the
+  signed-export consumer: it accepts a correctly signed envelope and rejects a
+  tampered one.
 - `tests/egress-vpn/test-x86-role-gate.sh` — `--egress-vpn` is desktop-only on
   every leg: the extracted PKGS block and kernel `ROLE_CLIENT` arm are eval'd for
   both extensions × both roles, so a node role can never emerge (or compile in)
   the VPN userspace the builder just told it it would ignore.
 
 All of the above run in CI as the `egress-vpn-node-agents` verify job
-(`.gitlab-ci.yml`); they need only bash + stubbed tools — never a cluster, never
+(`.gitlab-ci.yml`, which loops over `tests/egress-vpn/*.sh`); they need only bash + stubbed tools — never a cluster, never
 real `nft`/`ip`.
