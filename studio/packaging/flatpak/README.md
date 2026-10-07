@@ -56,22 +56,26 @@ FLATPAK_USER_DIR=~/.hugmesh-wt-local/flatpak-studio flatpak run --user org.hugme
 rm -rf ~/.hugmesh-wt-local/flatpak-studio ~/.hugmesh-wt-local/dist-studio/flatpak-work
 ```
 
-Measured on 2026-09-30 (Gentoo, flatpak 1.18.1, no sudo, a fast connection): from an
-empty private directory it took 359 s end to end: about two minutes downloading the
-toolchain, under a minute building, three minutes compressing the bundle (one CPU), and
-a few seconds installing and checking. A re-run with the toolchain installed and the
-build cache warm took 215 s, almost all of it the compression. Both runs were made with
-fake `sudo`, `apt-get`, `dnf` and `pacman` first on `PATH` that record any call, and none
-was made (that covers the script and what it starts; the commands the Builder runs
-through the host's session helper start from the host's own environment). Both finished
-with all three smoke tests passing. Measured again on 2026-10-07 with flatpak 1.18.4 and
-the toolchain already installed: 235 s, all three smoke tests passing, and fakes for
-`sudo`, `doas`, `pkexec`, `su`, `run0` and ten package managers first on `PATH` recorded
-no call. Two things that run saw are worth knowing: `flatpak install --bundle` also
-fetches updates for the runtime's related extensions (the GL drivers) from flathub into
-the private directory, so a re-run is not offline; and the two runs produced bundles
-with different checksums from the same source (an OSTree commit carries its timestamp),
-so a checksum identifies one build, not the source it came from.
+Measured on 2026-09-30 (Gentoo, flatpak 1.18.1, no sudo, a fast connection), with the
+script as it then was (the Builder ran with `--state-dir`; see the next section for
+what that changed): from an empty private directory it took 359 s end to end: about two
+minutes downloading the toolchain, under a minute building, three minutes compressing
+the bundle (one CPU), and a few seconds installing and checking. A re-run with the
+toolchain installed and the build cache warm took 215 s, almost all of it the
+compression. Both runs were made with fake `sudo`, `apt-get`, `dnf` and `pacman` first
+on `PATH` that record any call, and none was made (that covers the script and what it
+starts; the commands the Builder runs through the host's session helper start from the
+host's own environment). Both finished with all three smoke tests passing. Measured
+again on 2026-10-07 with flatpak 1.18.4, the same script bytes and the toolchain already
+installed: 235 s, all three smoke tests passing, and fakes for `sudo`, `doas`, `pkexec`,
+`su`, `run0` and ten package managers first on `PATH` recorded no call. The script as
+committed (no `--state-dir`, `--cwd`) was measured the same day from an empty private
+directory and a long checkout path: 533 s with three other builds sharing the machine;
+see the next section. Two things those runs saw are worth knowing: `flatpak install
+--bundle` also fetches updates for the runtime's related extensions (the GL drivers)
+from flathub into the private directory, so a re-run is not offline; and two runs
+produce bundles with different checksums from the same source (an OSTree commit carries
+its timestamp), so a checksum identifies one build, not the source it came from.
 
 `../../tests/test_flatpak_packaging_files.py` runs the script against a scripted fake
 `flatpak` as well, through all three smoke tests, and holds it to what this page says:
@@ -83,16 +87,26 @@ the same output directory is refused, and each smoke test refuses what it must: 
 `--print-specs` that prints nothing, blank lines or anything but JSON objects; a Qt check
 that does not report `qt-ok` with PySide6; an install with any of the five files missing
 or with no launcher exported. The test that the script never runs `sudo` or a package
-manager reads every command position, following a command behind an environment
-assignment, a redirection, a prefix such as `env` or `timeout`, a shell's `-c`, `eval`,
-`flatpak-spawn --host`, a `--command=` option and the app id after it (the two forms the
-script itself uses), a `function` definition, a `$( )` substitution (in an unquoted
-heredoc too), and into embedded Python read whole for process calls; what it cannot read
-(a sourced file, a shell fed by a pipe or a file) it reports instead of passing. Its one
-blind spot, a program named through a variable, is pinned as such. (Two mutation
+manager is a static reading of the script, and it reads exactly the forms its own test
+pins: a command behind an environment assignment, a redirection, a prefix such as
+`env`, `timeout`, `coproc`, `busybox` or `unshare` (past the prefix options that take a
+separate value, such as `exec -a NAME` or `env -u VAR`), past the lock operand of
+`flock` and the root of `chroot`, a shell's `-c` string (`flock`'s too), `eval`, the
+action string of `trap`, a here-string fed to a shell or python, `find -exec`,
+`flatpak-spawn --host`, a `--command=` option and the app id after it (the two forms
+the script itself uses), a `function` definition, a `$( )`, `<( )` or `>( )`
+substitution (in an unquoted heredoc too), `$'...'` quoting, and embedded Python read
+whole for process calls. What it cannot read (a sourced file, a shell or python fed by a
+pipe, a file or a process substitution) it reports instead of passing. Anything else is
+outside it: a program named through a variable, an alias, a program in another language
+(`awk`, `perl`), a command run on another machine (`ssh`), a wrapper it does not know
+(`taskset`, `script`, ...). The test pins a sample of those as outside, expecting no
+hit, so that the scanner's reach is written down rather than assumed. (Three mutation
 batteries drove this: the first showed each file-reading check could be lost with the
 suite still green; the second put `sudo` into the script's own two spellings and the
-scanner of the time, which took the app id for a script file, saw neither.)
+scanner of the time, which took the app id for a script file, saw neither; the third
+put it behind a process substitution and the suite stayed green, while a probe of
+forty-two spellings found fifteen more it was silent on.)
 
 ### Where the Builder keeps its state, and why
 
@@ -106,11 +120,17 @@ bytes, and the build then stopped with a bare `File name too long` after the who
 toolchain had been installed and the validators had run (measured: a checkout path 38
 characters longer than `~/Github/hugmesh-generator` gave a 147-byte name, where that
 checkout's own is 109). The scripted test pins the `--cwd` and the absence of
-`--state-dir`. Measured once, partly: from exactly such a checkout (a 147-byte old-style
-name), from an empty private directory, the script with this change installed the
-toolchain, validated, and built the app through the Builder, the step that had failed in
-five seconds before, and was at the export step when the session running it was stopped.
-A complete end-to-end run from such a path has not been made yet.
+`--state-dir`. Measured end to end twice on 2026-10-07, with the script as committed,
+from checkouts whose old-style names would be 158 and 147 bytes, each from an empty
+private directory, with fakes for `sudo`, `doas`, `pkexec`, `su`, `run0`, eleven
+package managers and `flatpak-builder` first on `PATH`: exit 0 in 533 s and 631 s
+(other builds were sharing the machine both times), all three smoke tests passing, the
+bundle's `sha256sum -c` OK, no fake called, the Builder's state under
+`flatpak-work/.flatpak-builder/` with the one cache ref
+`x86_64-org.hugmesh.ImageStudio.yml`, nothing written into the checkout, and the user's
+own flatpak directories unchanged before and after. The previous script, run from the
+same checkouts against the same private directories, failed in 5 s and 7 s with `File
+name too long`.
 
 If it fails, it says which step, and a re-run is safe: the toolchain and the caches are
 reused. Two failures have a specific cause worth knowing:

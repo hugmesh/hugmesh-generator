@@ -21,7 +21,8 @@ keep the next gap of that kind from waiting for a release to be seen:
     text promises the user (narrow them and the promise has to change with them);
   * the local build script is executable IN GIT (a fresh clone takes its mode from the
     commit, not from your disk), never calls sudo or a package manager in any of the
-    ways a person would actually write that, refuses to touch a flatpak directory
+    forms the scanner below reads (the list is at ``_FORBIDDEN``; what is outside it is
+    pinned as outside, not assumed covered), refuses to touch a flatpak directory
     somebody already uses, and names the one broken-helper state that otherwise shows
     up only as an opaque bwrap error;
   * run against a scripted fake ``flatpak``, the script sends EVERY call to the private
@@ -410,35 +411,70 @@ def test_build_script_is_executable_here_and_in_git():
 
 
 #: What the script must never run. A word inside a message or a comment is fine; only a
-#: word in COMMAND position counts. The scanner follows a command into the places a
-#: person would really put one: behind an environment assignment, a redirection, a full
-#: path, a prefix such as env or timeout, a shell's -c, flatpak-spawn --host, a
-#: --command= option and the app id that follows it (``--command=sh APP -c '...'`` and
-#: ``--command=flatpak-spawn APP --host ...``, the two forms this script itself uses), a
-#: ``function`` definition, a $( ) substitution (in an unquoted heredoc too), and a
-#: process call in embedded Python, read whole (a call split over lines, ``import
-#: subprocess as sp``, ``from subprocess import run``). What it cannot read it reports
-#: instead of passing: a sourced file, and a shell or python taking its commands from a
-#: pipe or a file. A heredoc is read by whatever consumes it: as Python after
+#: word in COMMAND position counts. The scanner is a static reading of the forms listed
+#: here and nothing more; ``test_the_forbidden_command_scanner_sees_what_it_must`` pins
+#: each form it reads AND a set of forms outside it, so that nobody mistakes it for a
+#: complete reading of shell. It follows a command: behind an environment assignment, a
+#: redirection, a full path, a prefix such as env, timeout, coproc, busybox or unshare
+#: (and past the prefix options in ``_VALUE_OPTIONS`` that take a separate value, such
+#: as ``exec -a NAME`` or ``env -u VAR``), past the lock operand of flock and the root of
+#: chroot, into a shell's -c string (flock's too), ``eval``, the action string of
+#: ``trap``, a here-string fed to a shell or python, ``find -exec``, flatpak-spawn
+#: --host, a --command= option and the app id that follows it (``--command=sh APP -c
+#: '...'`` and ``--command=flatpak-spawn APP --host ...``, the two forms this script
+#: itself uses), a ``function`` definition, a $( ), <( ) or >( ) substitution (in an
+#: unquoted heredoc too), ANSI-C quoting (``$'...'``), and a process call in embedded
+#: Python, read whole (a call split over lines, ``import subprocess as sp``, ``from
+#: subprocess import run``). What it cannot read it reports instead of passing: a
+#: sourced file, and a shell or python taking its commands from a pipe, a file or a
+#: process substitution. A heredoc is read by whatever consumes it: as Python after
 #: ``python3 - <<'PY'``, as shell after ``sh -s <<'EOS'``, as prose after ``cat``.
-#: (The first version checked the first word of a line only, the second missed the two
-#: combined forms above: a mutation battery put sudo behind each and every one survived.)
+#: Outside it, by construction of a static reading: a program named through a variable
+#: (``"$elevate"``), an alias, a program written in another language (awk, perl, sed),
+#: a command run on another machine (ssh), and a wrapper it does not know (taskset,
+#: script, strace, ...). (The first version checked the first word of a line only, the
+#: second missed the two --command= forms above, the third a process substitution: three
+#: mutation batteries put sudo behind each and every one survived.)
 _FORBIDDEN = {"sudo", "doas", "pkexec", "run0", "su", "apt", "apt-get", "dpkg", "dnf", "yum",
               "pacman", "zypper", "emerge", "brew", "nix-env", "snap"}
 #: After these the command position is still open: the next word is run, not consumed.
 _PREFIXES = {"exec", "command", "builtin", "env", "nohup", "xargs", "time", "nice", "ionice",
-             "timeout", "setsid", "stdbuf", "chroot", "flatpak-spawn",
+             "timeout", "setsid", "stdbuf", "chroot", "flatpak-spawn", "coproc", "busybox",
+             "unshare", "flock",
              "then", "do", "else", "elif", "if", "while", "until", "!", "{"}
+#: Options of a prefix that take their value as the NEXT token, so that value is not
+#: mistaken for the command (``exec -a flatpak sudo`` runs sudo under the name flatpak).
+_VALUE_OPTIONS = {
+    "exec": {"-a"},
+    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+    "timeout": {"-s", "--signal", "-k", "--kill-after"},
+    "nice": {"-n", "--adjustment"},
+    "ionice": {"-c", "--class", "-n", "--classdata", "-p", "--pid"},
+    "xargs": {"-I", "-d", "--delimiter", "-a", "--arg-file", "-E", "-L", "--max-lines",
+              "-n", "--max-args", "-P", "--max-procs", "-s", "--max-chars"},
+    "stdbuf": {"-i", "--input", "-o", "--output", "-e", "--error"},
+    "flock": {"-w", "--wait", "--timeout", "-E", "--conflict-exit-code"},
+    "chroot": {"--userspec", "--groups"},
+    "unshare": {"-S", "--setuid", "-G", "--setgid", "--setgroups", "--propagation", "--root",
+                "--wd", "--map-user", "--map-group"},
+}
+#: These take an operand (the lock file or descriptor, the new root) BEFORE the command.
+_OPERAND_FIRST = {"flock", "chroot"}
+#: find's -exec and friends open a command position in the middle of find's own arguments.
+_FIND_EXEC = {"-exec", "-execdir", "-ok", "-okdir"}
 #: These run the string after -c as a command line of its own, or read stdin after - / -s.
 _SHELLS = {"sh", "bash", "dash", "zsh", "ksh"}
 _PYTHONS = {"python", "python3"}
 #: These run a file the scanner cannot see.
 _SOURCE = {"source", "."}
 _UNREADABLE_SOURCE = "<a sourced file>"
+_PROCESS_SUBSTITUTION = {"<(", ">("}
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _COUNT = re.compile(r"\d+(?:\.\d+)?[smhd]?")               # nice -n 10, timeout 30s
 _C_OPTION = re.compile(r"-[a-zA-Z]*c[a-zA-Z]*")             # -c, -ec, -xc
 _COMMAND_OPTION = re.compile(r"--?(?:command|exec)=(.+)")   # flatpak run --command=X
+#: A heredoc opener, and not the three < of a here-string.
+_HEREDOC_OPENER = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)(\w+)\1")
 _STRING_LITERAL = re.compile(r"""(['"])(.*?)\1""")
 _IMPORT_ALIAS = re.compile(r"\bimport\s+subprocess\s+as\s+(\w+)")
 _FROM_IMPORT = re.compile(r"\bfrom\s+subprocess\s+import\s+\(?([^)\n]+)")
@@ -466,6 +502,8 @@ def _is_redirection(token: str) -> bool:
 
 
 def _tokens(line: str) -> list[str]:
+    # $'...' is a quoted string with C escapes; shlex would read the $ into the word.
+    line = line.replace("$'", "'")
     # A quote that closes on a later line (the -c '...' body of smoke test 3) is closed
     # here instead, so the words before it are still read as words and not as one lump.
     for tail in ("", "'", '"'):
@@ -479,17 +517,20 @@ def _tokens(line: str) -> list[str]:
 
 
 def _substitutions(line: str):
-    """The text inside each ``$( ... )`` and backtick pair, nested ones included."""
-    start = line.find("$(")
-    while start >= 0:
-        depth, end = 0, start + 1
-        while end < len(line):
-            depth += {"(": 1, ")": -1}.get(line[end], 0)
-            if depth == 0:
-                break
-            end += 1
-        yield line[start + 2:end]
-        start = line.find("$(", start + 2)
+    """The text inside each ``$( ... )``, ``<( ... )``, ``>( ... )`` and backtick pair,
+    nested ones included. A process substitution runs its commands like ``$( )`` does;
+    what the command around it then reads from them is another matter (``_scan_line``)."""
+    for opener in ("$(", *_PROCESS_SUBSTITUTION):
+        start = line.find(opener)
+        while start >= 0:
+            depth, end = 0, start + 1
+            while end < len(line):
+                depth += {"(": 1, ")": -1}.get(line[end], 0)
+                if depth == 0:
+                    break
+                end += 1
+            yield line[start + 2:end]
+            start = line.find(opener, start + 2)
     yield from re.findall(r"`([^`]*)`", line)
 
 
@@ -532,9 +573,15 @@ def _after_command(word: str):
     """What follows a command word: is the position still open, and what the word reads."""
     if word == "eval":
         return True, ("eval", "eval")
+    if word == "trap":                         # trap 'ACTION' SIGNAL...: the action is shell
+        return False, ("next", "trap")
     if word in _SHELLS | _PYTHONS:
         return False, ("await-c", word)
-    return word in _PREFIXES, None
+    if word in _OPERAND_FIRST:
+        return False, ("operand", word)
+    if word in _PREFIXES:
+        return True, ("prefix", word)
+    return False, None
 
 
 def _scan_line(line: str) -> tuple[list[str], str | None]:
@@ -546,10 +593,13 @@ def _scan_line(line: str) -> tuple[list[str], str | None]:
     skip_next = False       # the next word is a redirection target or a function name
     piped = False           # this pipeline segment reads what the previous one wrote
     from_file = False       # this segment has a < redirection
+    substitution = 0        # inside <( ) or >( ): its commands are read by _substitutions
     inner = None            # ("app", X): --command=X seen, the app id still to come;
                             # ("await-c", X): a shell or python X was named, its -c string
-                            # or script may follow; ("next", X): the -c string is next;
-                            # ("stdin", X): X reads standard input; ("eval", "eval")
+                            # or script may follow; ("next", X): the string X runs is next;
+                            # ("stdin", X): X reads standard input; ("eval", "eval");
+                            # ("prefix", X): behind the prefix X, its options still to come;
+                            # ("operand", X): X takes an operand before its command
 
     def unreadable():
         if inner and inner[0] in ("await-c", "stdin") and (piped or from_file):
@@ -559,7 +609,21 @@ def _scan_line(line: str) -> tuple[list[str], str | None]:
         if skip_next:
             skip_next = False
             continue
+        if substitution:
+            if _is_separator(token) or token in _PROCESS_SUBSTITUTION:
+                substitution += token.count("(") - token.count(")")
+            continue
+        if token in _PROCESS_SUBSTITUTION:
+            # A shell or python handed <( ) reads commands another program wrote.
+            if inner and inner[0] in ("await-c", "stdin"):
+                words.append(_unreadable_stdin(inner[1]))
+                inner = None
+            substitution = 1
+            continue
         if _is_redirection(token):
+            if token.endswith("<<<") and inner and inner[0] in ("await-c", "stdin"):
+                inner = ("next", inner[1])     # a here-string is the script X reads
+                continue
             if "<" in token and "<<" not in token:
                 from_file = True
             skip_next = True
@@ -574,6 +638,9 @@ def _scan_line(line: str) -> tuple[list[str], str | None]:
             word = _program(option.group(1))
             words.append(word)
             inner = ("app", word)
+            continue
+        if token in _FIND_EXEC:                # find ... -exec CMD {} \;
+            expecting, inner = True, None
             continue
         if inner and inner[0] == "app":
             if not token.startswith("-"):      # the app id: X's own command line follows
@@ -597,9 +664,20 @@ def _scan_line(line: str) -> tuple[list[str], str | None]:
             continue
         if inner and inner[0] == "stdin":
             continue
+        if inner and inner[0] == "operand":    # flock [-n] LOCK CMD; chroot [opts] ROOT CMD
+            if token in _VALUE_OPTIONS[inner[1]]:
+                skip_next = True
+            elif not token.startswith("-"):
+                expecting, inner = True, ("prefix", inner[1])
+            continue
         if not expecting:
             continue
         if token.startswith("-") or _ASSIGNMENT.match(token) or _COUNT.fullmatch(token):
+            if inner and inner[0] == "prefix":
+                if token in _VALUE_OPTIONS.get(inner[1], ()):
+                    skip_next = True
+                elif inner[1] == "flock" and _C_OPTION.fullmatch(token):
+                    inner = ("next", "flock")  # flock LOCK -c 'COMMANDS'
             continue                           # an option, an assignment or a count: still to come
         word = _program(token)
         if word == "function":                 # function NAME { ... }: the name is not run
@@ -609,8 +687,11 @@ def _scan_line(line: str) -> tuple[list[str], str | None]:
             words.append(_UNREADABLE_SOURCE)
             expecting = False
             continue
+        # coproc NAME { ...; }: the name is not run, the compound command after it is.
+        named_coprocess = inner == ("prefix", "coproc")
         words.append(word)
         expecting, inner = _after_command(word)
+        expecting = expecting or named_coprocess
     unreadable()
     reader = inner[1] if inner and inner[0] in ("await-c", "stdin") and not (piped or from_file) else None
     return words, reader
@@ -668,7 +749,7 @@ def _command_words(text: str):
                 if word not in seen:           # a nested $( ) is scanned once per level
                     seen.append(word)
                     yield number, word
-        opener = re.search(r"<<-?\s*(['\"]?)(\w+)\1", line)
+        opener = _HEREDOC_OPENER.search(line)
         if opener:
             heredoc = (opener.group(2), bool(opener.group(1)),
                        next((r for r in readers if r), None), number + 1, [])
@@ -760,9 +841,58 @@ def test_build_script_never_runs_sudo_or_a_package_manager():
     ("sh < commands.txt", [_unreadable_stdin("sh")]),
     ("bash --version", []),
     ("python3 -m pip --version", []),
-    # Known blind spot, pinned so nobody mistakes the scanner for more than it is: a
-    # program named through a variable is invisible to any static reading.
+    # A third battery found `bash <(printf ... "sudo")` survived the whole suite, and a
+    # probe of forty-two snippets found fifteen more silent forms. The ones a script
+    # like this could plausibly grow (two of them, trap and flock, are idioms it already
+    # uses) are read now: a process substitution runs its own commands, and a shell or
+    # python handed one reads what another program wrote, which is reported; a
+    # here-string is the script of the shell or python it feeds and prose for anything
+    # else; trap's action string and flock's command or -c string are shell; coproc,
+    # busybox and unshare are prefixes; exec -a NAME, env -u VAR, timeout -s SIG,
+    # xargs -I X and stdbuf -o MODE take a value the scanner must not run; flock and
+    # chroot take an operand first; find -exec opens a command position; $'...' is a
+    # quoted string.
+    ('bash <(printf "%s" "sudo -n true") || true', [_unreadable_stdin("bash")]),
+    ("sh <(printf 'apt-get install -y x')", [_unreadable_stdin("sh")]),
+    ("python3 <(cat gen.py)", [_unreadable_stdin("python3")]),
+    ("diff <(sudo ls) <(ls)", ["sudo"]),
+    ("diff <(ls) <(ls -a)", []),
+    ("tee >(sudo -n true)", ["sudo"]),
+    ("while read -r f; do sudo rm \"$f\"; done < <(ls)", ["sudo"]),
+    ("sh <<< 'sudo -n true'", ["sudo"]),
+    ("sh - <<< 'sudo -n true'", ["sudo"]),
+    ("python3 - <<< 'import os; os.system(\"sudo -n true\")'", ["sudo"]),
+    ("cat <<< 'sudo is fine as prose'", []),
+    ("trap 'sudo -n true; on_exit' EXIT", ["sudo"]),
+    ("trap on_exit EXIT", []),
+    ('flock "$lock" sudo -n true', ["sudo"]),
+    ('flock -n "$lock" -c "echo hi; sudo -n true"', ["sudo"]),
+    ('flock -w 5 "$lock" sudo -n true', ["sudo"]),
+    ("flock -n 9 || die 'another build is running'", []),
+    ("chroot /newroot sudo -n true", ["sudo"]),
+    ("coproc sudo -n true", ["sudo"]),
+    ("coproc helper { sudo -n true; }", ["sudo"]),
+    ("exec -a flatpak sudo -n true", ["sudo"]),
+    ("env -u GH_TOKEN sudo -n true", ["sudo"]),
+    ("env -u GH_TOKEN -u GITHUB_TOKEN gh pr list", []),
+    ("timeout -s KILL 30 sudo -n true", ["sudo"]),
+    ("xargs -I {} sudo rm {}", ["sudo"]),
+    ("stdbuf -o L sudo -n true", ["sudo"]),
+    (r"find . -exec sudo rm {} \;", ["sudo"]),
+    ("unshare -r apt-get install x", ["apt-get"]),
+    ("busybox sh -c 'sudo -n true'", ["sudo"]),
+    ("sh -c $'sudo -n true'", ["sudo"]),
+    # Outside the scanner, pinned so nobody mistakes it for more than it is: a program
+    # named through a variable (invisible to any static reading), a command run on
+    # another machine, a program in another language, an alias, and a wrapper it does
+    # not know. Teach it one and move that line up, with its expected hit.
     ('elevate=sudo; "$elevate" -n true', []),
+    ("ssh host sudo -n true", []),
+    ("awk 'BEGIN { system(\"sudo -n true\") }'", []),
+    ("perl -e 'system(\"sudo -n true\")'", []),
+    ("alias s='sudo -n true'; s", []),
+    ("taskset -c 0 sudo -n true", []),
+    ("script -qc 'sudo -n true' /dev/null", []),
 ], ids=["plain", "after-and", "probe", "substitution", "substitution-after-and",
         "exec-prefix", "in-string", "in-comment", "in-message", "argument-on-continuation",
         "command-on-continuation", "in-heredoc", "trailing-comment",
@@ -778,9 +908,22 @@ def test_build_script_never_runs_sudo_or_a_package_manager():
         "python-message-beside-a-call",
         "unquoted-heredoc-substitution", "quoted-heredoc-substitution", "unquoted-heredoc-prose",
         "function-keyword", "sourced-file", "source-keyword", "shell-from-pipe",
-        "shell-from-file", "shell-version", "python-m", "variable-blind-spot"])
+        "shell-from-file", "shell-version", "python-m",
+        "shell-from-process-substitution", "sh-from-process-substitution",
+        "python-from-process-substitution", "process-substitution-command",
+        "process-substitution-benign", "output-process-substitution",
+        "loop-fed-by-process-substitution", "here-string", "here-string-after-dash",
+        "python-here-string", "here-string-as-prose", "trap-action", "trap-benign",
+        "flock-command", "flock-c-string", "flock-wait-value", "flock-lock-only",
+        "chroot-command", "coproc", "coproc-named", "exec-a-name", "env-unset-value",
+        "env-unset-benign", "timeout-signal-value", "xargs-replace-value",
+        "stdbuf-mode-value", "find-exec", "unshare", "busybox-sh-c", "ansi-c-quoting",
+        "outside-variable", "outside-ssh", "outside-awk", "outside-perl",
+        "outside-alias", "outside-unknown-wrapper", "outside-script-command"])
 def test_the_forbidden_command_scanner_sees_what_it_must(snippet, expected):
-    """The scanner is what the test above stands on, so it is pinned in both directions."""
+    """The scanner is what the test above stands on, so it is pinned in both directions:
+    what it reads, and what is outside it (the ``outside-*`` cases expect nothing, and
+    must be moved up with a hit when the scanner learns the form)."""
     assert [word for _line, word in _forbidden_in(snippet)] == expected
 
 
@@ -960,6 +1103,12 @@ def _scripted_flatpak(tmp_path):
     check prints, ``FAKE_FLATPAK_FILES`` names one file the sandbox shell does not find
     (``none``: it finds nothing; empty: it finds all of them), and ``FAKE_FLATPAK_EXPORT``
     set to ``none`` makes the bundle install export no launcher.
+
+    Smoke test 3 is not answered, it is RUN: the script's own ``-c`` body is executed by
+    the host's ``sh`` against a stand-in ``/app`` under the private directory that holds
+    every wanted file but the one ``FAKE_FLATPAK_FILES`` names, so the one line that
+    looks for the files is exercised here and not only by a real build (a mutation
+    that echoed every file without looking survived the earlier answer-from-a-list fake).
     """
     bin_dir = tmp_path / "scriptedbin"
     bin_dir.mkdir(exist_ok=True)
@@ -989,10 +1138,15 @@ def _scripted_flatpak(tmp_path):
         "            *' --command=python3 '*)\n"
         "                [ -z \"${FAKE_FLATPAK_QT-}\" ] || printf '%s\\n' \"$FAKE_FLATPAK_QT\" ;;\n"
         "            *' --command=sh '*)\n"
-        "                while [ \"$#\" -gt 0 ] && [ \"$1\" != _ ]; do shift; done\n"
-        "                [ \"$#\" -gt 0 ] && shift\n"
-        "                [ \"${FAKE_FLATPAK_FILES-}\" = none ] && exit 0\n"
-        "                for f in \"$@\"; do [ \"$f\" = \"${FAKE_FLATPAK_FILES-}\" ] || echo \"$f\"; done ;;\n"
+        "                while [ \"$#\" -gt 0 ] && [ \"$1\" != -c ]; do shift; done\n"
+        "                body=\"$2\"; shift 3\n"            # -c, the body, the `_` that is $0 in it
+        "                root=\"$FLATPAK_USER_DIR/fake-app\"\n"
+        "                for f in \"$@\"; do\n"
+        "                    [ \"${FAKE_FLATPAK_FILES-}\" = none ] || [ \"$f\" = \"${FAKE_FLATPAK_FILES-}\" ] ||\n"
+        "                        { mkdir -p \"$root$(dirname \"$f\")\" && : > \"$root$f\"; }\n"
+        "                    set -- \"$@\" \"$root$f\"; shift\n"      # /app/x becomes $root/app/x
+        "                done\n"
+        "                sh -c \"$body\" _ \"$@\" | sed \"s#^$root##\" ;;\n"
         "        esac ;;\n"
         "esac\n"
         "exit 0\n")
@@ -1078,8 +1232,11 @@ def test_script_sends_every_flatpak_call_to_the_private_directory(tmp_path):
     builder = [shlex.split(a) for a in args if a.startswith("run ") and "org.flatpak.Builder" in a]
     assert len(builder) == 2, args                      # the round-trip probe, then the build
     for words in builder:
+        # FLATPAK_BINARY names the host-side wrapper checked at the end of this test:
+        # without it the Builder's host commands start from the host environment and
+        # look for the runtime in the user's own flatpak directory.
         for grant in ("--user", f"--filesystem={private}", f"--env=FLATPAK_USER_DIR={private}",
-                      f"--cwd={work}"):
+                      f"--env=FLATPAK_BINARY={work}/bin/flatpak-private", f"--cwd={work}"):
             assert grant in words, f"the Builder ran without {grant}: {words}"
     build = next(w for w in builder if "--command=flatpak-builder" in w)
     tail = build[build.index("org.flatpak.Builder") + 1:]
