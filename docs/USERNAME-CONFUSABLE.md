@@ -69,7 +69,9 @@ different owner with a confusable handle is still flagged.
 It is **INTERNAL / ROLE_SERVICE gated** (not public — it would be an enumeration
 oracle) and applied at BOTH the write (registration) and read
 (`VanityController.resolveLabel`) layers. `override=confusable` is honored for
-`ROLE_ADMIN` only — **never** overriding `reserved`/`exact` — and is audited.
+`ROLE_ADMIN` only and is audited. It turns a `confusable` or `exact` verdict into
+`available`; it **never** overrides `reserved` or a hard reject (`mixed-script`,
+`zero-width`, `empty`) (`UsernameAvailabilityController` javadoc in federation-api).
 
 ## The Casdoor pre-signup gate (this repo)
 
@@ -139,15 +141,23 @@ proxy's `/casdoor/webhook` receiving path, which re-runs availability and
 
 ### Operational prerequisites / honest scope
 
-- **Federation availability endpoint must exist** — it is delivered by the
-  `hugmesh-federation-api` confusable PR (parallel work). Until it is live the
-  fail-closed proxy would 503 every signup; deploy the federation change first, or
-  set `AVAILABILITY_FAIL_OPEN=true` for the interim.
-- **Cross-namespace reachability** — the proxy calls
-  `hugmesh-federation-api.hugmesh-backend:8080` from `hugmesh-pki`. The
-  NetworkPolicy tiers must admit `signup-gate` → federation-api:8080 (it does not
-  today; add a from-rule when the netpol layer is activated — until then the
-  default-allow dev posture lets it through).
+- **Federation availability endpoint must exist.** It does:
+  `UsernameAvailabilityController` on `hugmesh-federation-api` `main` serves
+  `/api/federation/username/{candidate}/availability`. If the federation image a
+  cluster runs predates it, the fail-closed proxy answers 503 to every signup.
+  Deploy a federation-api that carries the endpoint first, or set
+  `AVAILABILITY_FAIL_OPEN=true` for the interim.
+- **Cross-namespace reachability is NOT admitted.** The proxy calls
+  `hugmesh-federation-api.hugmesh-backend:8080` from `hugmesh-pki`. No
+  NetworkPolicy in `specs/cluster/manifests/networkpolicy/` admits `signup-gate`
+  to federation-api:8080. The `hugmesh-backend` `tier-ingress` policy admits only
+  the `hugmesh-backend`, `hugmesh-frontend`, `devops` and `ingress-nginx`
+  namespaces, and `gateway-crossns-ingress.yaml` adds only the superadmin gateway.
+  `apps/08-networkpolicy.yaml` auto-syncs, so on a cluster running it the call is
+  dropped and the fail-closed proxy rejects the signups it gates. Add a from-rule
+  for `signup-gate` before relying on this gate. (The earlier wording, that the
+  default-allow dev posture lets the call through, no longer holds: tier ingress
+  is default-deny.)
 - **Casdoor API shape is version-specific** — the signup body field, the
   `/api/login` `type=signup` branch, the client-credentials token endpoint, and
   the webhook event schema must be validated against the deployed
