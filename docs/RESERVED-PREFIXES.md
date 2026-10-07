@@ -37,7 +37,9 @@ route-consistency check (below) fails the build/sync so it can never ship.
 
 [`specs/cluster/reserved-prefixes.yaml`](../specs/cluster/reserved-prefixes.yaml)
 — `spec.reserved` is **the** list. Everything else is derived from or checked
-against it. It currently holds **65** labels (`metadata.revision: "2"`):
+against it. It currently holds **82** labels (`metadata.revision: "9"`). Revision 2
+held 65; the label counts by revision are 65 (2), 70 (3), 72 (4), 76 (5), 77 (6),
+78 (7), 79 (8) and 82 (9). The 65 of revision 2 were:
 
 - the 60-label union shared with the app repos, **plus `pleroma`** — akkoma's
   AdminFE is served at `/pleroma/admin/**` on the be-gateway (revision 1),
@@ -58,6 +60,19 @@ against it. It currently holds **65** labels (`metadata.revision: "2"`):
   route-consistency check doesn't demand the label; it is reserved defensively
   so a vanity `forum`/`phpbb` handle (or a future `forum.<domain>` subdomain)
   can never collide.
+
+Later revisions added (names as in the file's header comment): revision 3 `tube`,
+`games-instances-console`, `superadmin`, and the forward-reserves `owncast` and
+`wiki`; revision 4 `character-studio` and `v1` (the `/v1/analyze/**` route); revision 5
+the webroot filenames `index.html`, `favicon.ico`, `importmap.json` and
+`remoteEntry.json`; revision 6 `ai` (the `ai.<domain>` edge-AI host); revision 7 `hmdm`;
+revision 8 `attest`; revision 9 `character-forge`, `games-character-forge` and
+`games-shadows-of-the-net`. `hmdm`, `attest` and `character-forge` are real
+first-segment routes that shipped in the same change as the route, unlike the
+`forum`/`phpbb`/`owncast`/`wiki` forward-reserves.
+
+PR numbers on this page (for example "PR #164") come from the pre-squash history
+and no longer resolve to the same work in the org; rely on the named files.
 
 The three app-repo `ReservedNames` copies must add the same labels to stay in
 sync (the validate script's **code-copy assertion** flags them mechanically, and
@@ -86,8 +101,8 @@ be reserved" rule — which would be **red on day one** — is avoided.
 | Layer | Where | What it enforces |
 |---|---|---|
 | **vanity-resolve** | `federation-api` `VanityController` / `ReservedNames` | refuses a reserved first-label when resolving `<user>.hugmesh.net` |
-| **profile DB / registration** | `user-bff-api` `ReservedNames`, `hugmesh-actions` | a profile/handle can't be saved/registered with a reserved name |
-| **admin-route management** | `admin-bff-api` `ReservedNames` | an admin can't create a route-access row that conflicts with a reserved name |
+| **profile DB / registration** | `hugmesh-auth-core` `ReservedNames` (consumed by `user-bff-api` and `admin-bff-api`), `hugmesh-actions` | a profile/handle can't be saved/registered with a reserved name |
+| **admin-route management** | `hugmesh-auth-core` `ReservedNames` (via `admin-bff-api`) | an admin can't create a route-access row that conflicts with a reserved name |
 | **GitOps / admission** *(this repo)* | Kyverno `ClusterPolicy` + ConfigMap | blocks vanity-shadowing Ingress/HTTPRoute hosts + reserved vanity CRD handles at admission/sync |
 | **route-federation consistency** *(this repo)* | `scripts/validate-reserved-prefixes.sh` (CI lint) | asserts the canonical set ⊇ every deployed route prefix; fails on drift |
 
@@ -153,7 +168,10 @@ the source**. It is wired into [`.gitlab-ci.yml`](../.gitlab-ci.yml) as the
 catches a newly added route prefix before it ships, independent of whether
 Kyverno is installed.
 
-The script runs **five stages** (each fails the build on a violation):
+The script runs **five stages** (each fails the build on a violation), plus a
+half-rename gate that rejects first-party workload names carrying the retired
+`-systems-` infix and checks that the host shell's paired names agree across the
+manifests, the ArgoCD Application and the compose lane:
 
 1. canonical source non-empty + no duplicates;
 2. the in-cluster **ConfigMap mirror == the canonical source** exactly;
@@ -238,12 +256,11 @@ to reporting a clean PASS on a skipped run.
   clones those repos so the assertion actually runs on every pipeline instead of
   skipping to a green result. A follow-up could publish `reserved.json` as a
   build artifact the app repos pull, removing the manual sync entirely.
-- `pleroma` (revision 1) and now `_synapse` / `media` / `forum` / `phpbb`
-  (revision 2) were added to the canonical set; the three copies
-  (`hugmesh-federation-api` / `hugmesh-actions` / `hugmesh-auth-core`, the last
-  covering `user-bff-api` + `admin-bff-api` via the Maven dependency) must add the
-  same labels to reach parity (the code-copy assertion FAILs until they do — that
-  is the intended signal).
+- Every label added after revision 1 (`pleroma`, then `_synapse` / `media` /
+  `forum` / `phpbb`, then the revision 3-9 labels above) must also reach the three
+  copies (`hugmesh-federation-api` / `hugmesh-actions` / `hugmesh-auth-core`, the last
+  covering `user-bff-api` + `admin-bff-api` via the Maven dependency). The code-copy
+  assertion FAILs until they do — that is the intended signal.
 - The scoped Service-name drift check (stage 4) keys on the route `uri` host, so
   it only sees Services a **gateway route** targets. A Service exposed by some
   other mechanism (a future Ingress/HTTPRoute) is covered by the Kyverno host
