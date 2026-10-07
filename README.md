@@ -1,37 +1,37 @@
 # hugmesh-generator
 
-Crossdev / native build scripts that produce **hardened Gentoo images** for the
-HugMesh cluster — three Raspberry Pi 5 (aarch64) role images plus an x86_64
-GPU host — and the **GitOps payload** that runs Casdoor, tuwunel (Matrix) + Akkoma (fediverse), the
-Spring APIs and hugmesh.games on them. Everything connects **behind
+Crossdev and native build scripts that produce **hardened Gentoo images** for the
+HugMesh cluster: three Raspberry Pi 5 (aarch64) role images plus an x86_64
+GPU host. The repo also holds the **GitOps payload** that runs Casdoor, tuwunel (Matrix) + Akkoma (fediverse), the
+Spring APIs and hugmesh.games on those images. Everything connects **behind
 `hugmesh.net`** through per-namespace Spring Cloud Gateways.
 
-Every image boots, then provisions itself at first boot from a USB **FAT32
+Every image boots, then provisions itself from a USB **FAT32
 `KEYS` partition** (users, SSH keys, passwords, certificates, headscale/k8s
-config, attached storage, backups) — see [`keys-template/`](keys-template/).
+config, attached storage, backups). See [`keys-template/`](keys-template/).
 
-Every build is stamped with a **build ENV** — `test` (default, LAN-only) or
-`prod` (real public domain) — baked into the image at creation. The simplest
+Every build is stamped with a **build ENV**, `test` (default, LAN-only) or
+`prod` (real public domain), baked into the image at creation. The simplest
 way in is `make local` (a LAN `.test` fleet) or `make prod`; see
 **[Build ENV](#build-env-testprod--baked-at-image-creation)** below.
 
-> **New operator? Start with [`docs/RUNNING.md`](docs/RUNNING.md)** — the
+> **New operator? Start with [`docs/RUNNING.md`](docs/RUNNING.md)**, the
 > end-to-end runbook (prerequisites → clone → `brand.conf` + build knobs → build
 > → keys + KEYS USB → flash → provision → cluster). Then read
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full topology and
 > [`docs/LOCAL-TESTING.md`](docs/LOCAL-TESTING.md) for LAN testing. To generate a
-> whole platform from scratch and **serve it** — locally, then publicly over a Tor
-> `.onion` / a Dynamic-DNS host / a tunnel — follow
+> whole platform from scratch and **serve it**, locally and then publicly over a Tor
+> `.onion` / a Dynamic-DNS host / a tunnel, follow
 > [`docs/SERVE-YOUR-MESH.md`](docs/SERVE-YOUR-MESH.md).
 
-All build output lands in a **git-ignored** work directory (`./out` by default,
-for both `make` and the scripts called directly; override with `WORK_DIR=` /
+All build output lands in a **git-ignored** work directory: `./out` by default,
+for both `make` and the scripts called directly (override with `WORK_DIR=` /
 `-w`). The finished **products** (`.img`, `.iso`, `.fs.tar.xz`, `stage4-*`,
 `keys-<role>/`) land directly in the work dir. Each arch's **heavy build tree**
 (sysroot, distfiles, pkgdir, ISO staging) lives in a **per-arch subdirectory**
-under it — `out/snap-build-pi5` (aarch64) and `out/snap-build-x86` (amd64) — so
-the Pi and x86 builds **never share a sysroot**, even when the whole fleet builds
-into one work dir via `make build-all`. Override a subdir name with
+under it: `out/snap-build-pi5` (aarch64) and `out/snap-build-x86` (amd64). The Pi and x86 builds
+therefore **never share a sysroot**, even when `make build-all` builds the whole fleet
+into one work dir. Override a subdir name with
 `--build-subdir NAME` (or `BUILD_SUBDIR=NAME`). `make clean` wipes the work dir,
 subdirs included.
 
@@ -40,44 +40,44 @@ subdirs included.
 _Written 2026-08-05; some entries were re-checked against `origin/main` on 2026-10-07 and say so, and an entry that carries its own date was not re-measured. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
 
 > **"Ships dark" counts as shipped.** Several capabilities below are complete on
-> `main` and deliberately inert behind a documented default-off flag — that is a
+> `main` and deliberately inert behind a documented default-off flag. That is a
 > deployment posture, not an unfinished feature. Every such entry names the flag
-> or runbook that lights it, and the honest caveats that survive the flip.
+> or runbook that lights it, and the caveats that survive the flip.
 
 - **✅ Hardened image fleet** — three RPi 5 role images (pki / backend / frontend)
   + the x86_64 GPU host, built compact and grown on first boot, plus the client /
   appliance families that ride the same arm64 cross path + mesh/KEYS provisioning:
   the opt-in **Frite** light desktop, the **Jetson Orin** edge-AI family, and the
   **Orange Pi** platform family (see below). All images build the **MCS** SELinux
-  policy with per-pod/per-app category isolation — but ⚠️ **nodes boot
+  policy with per-pod/per-app category isolation. But ⚠️ **nodes boot
   PERMISSIVE**, not enforcing: `provision.json`'s `.selinux.mode` defaults to
   `permissive`, and the enforce-gate (`specs/etc/init.d/selinux-enforce-gate`)
   ships **inert** (in no runlevel, `SELINUX_ENFORCE_GATE="no"`) unless an
   operator sets `HUGMESH_SELINUX_ENFORCE_GATE=1` at build time. That is
-  deliberate — the node-policy `.te` rules are still tagged `INFERRED-WIDE` and
+  deliberate: the node-policy `.te` rules are still tagged `INFERRED-WIDE` and
   can only be narrowed against a real AVC pass. See
   [`docs/selinux-module-loading.md`](docs/selinux-module-loading.md).
 - **✅ SELinux node policy compiled + loaded (all ten builders)** — the hugmesh
   node-policy modules are compiled against the *sysroot's* refpolicy headers,
   installed into every image and loaded at first boot from
-  `/usr/share/hugmesh/selinux-modules.list`; seven modules are mandatory (a
-  compile failure fails the build) and the two k8s exemplars are conditional on
-  `selinux-container` headers. Gated by `tests/scripts/test-selinux-policy-install.sh`
-  (the `SLX` bucket of the build matrix). Flipping the fleet to **enforcing** is
-  the honest remaining step — see [Roadmap](#roadmap).
+  `/usr/share/hugmesh/selinux-modules.list`. Seven modules are mandatory (a
+  compile failure fails the build); the two k8s exemplars are conditional on
+  `selinux-container` headers. `tests/scripts/test-selinux-policy-install.sh`
+  gates this (the `SLX` bucket of the build matrix). Flipping the fleet to
+  **enforcing** is the remaining step; see [Roadmap](#roadmap).
 - **✅ Boot + kernel hardening (both arches)** — kernel lockdown (`lsm=lockdown,
   yama,selinux,bpf` + `lockdown=integrity`), Secure Boot **UKI** signing on x86
   (dracut `--uefi` → org-key `sbsign`), and sysctl/SSH hardening, plus the x86
   build fixes that supersede the earlier kernel-config changes. The **x86 k8s
-  netfilter/NAT/eBPF kernel surface** the Service/kube-proxy/CNI path needs is now
-  carried in the amd64 fragment with a **fail-closed build guard** + a CI lint
-  (`lint:x86-kernel-net-symbols`) that keeps it from re-truncating (the standalone
-  fix PR is superseded; the symbols + guard + test landed on `main` with the
-  hardening pass). **Host firewall differs by arch:** x86 ships `firewalld`
-  (test/prod zone profiles); on the cross-compiled **rpi5** arm64 platform
-  firewalld is a **deliberate, gate-pinned exclusion** — the 2026-08-05 real build
-  proved `glib[introspection]`'s in-source gobject-introspection bootstrap does
-  not cross-compile — so `nftables` + `iptables` +
+  netfilter/NAT/eBPF kernel surface** the Service/kube-proxy/CNI path needs now
+  lives in the amd64 fragment, with a **fail-closed build guard** and a CI lint
+  (`lint:x86-kernel-net-symbols`) that keeps it from re-truncating. (The standalone
+  fix PR is superseded: the symbols, guard and test landed on `main` with the
+  hardening pass.) **Host firewall differs by arch:** x86 ships `firewalld`
+  (test/prod zone profiles). On the cross-compiled **rpi5** arm64 platform,
+  firewalld is a **deliberate, gate-pinned exclusion**: the 2026-08-05 real build
+  proved that `glib[introspection]`'s in-source gobject-introspection bootstrap does
+  not cross-compile. So `nftables` + `iptables` +
   `specs/usr/sbin/hugmesh-firewall-reconcile` carry the host firewall there, and
   `requested-atoms-resolvable.sh` fails the build if either half of that decision
   is quietly reverted.
@@ -129,7 +129,7 @@ _Written 2026-08-05; some entries were re-checked against `origin/main` on 2026-
   end-to-end by [`tests/e2e/specs/27-native-login.spec.ts`](tests/e2e/specs/27-native-login.spec.ts),
   which drives the real form and asserts the browser never navigates to a Casdoor
   origin.
-- **✅ Casdoor MFA (TOTP + WebAuthn + recovery codes)** — enrollment/challenge live
+- **✅ Casdoor MFA (TOTP + WebAuthn + recovery codes)** — enrollment and challenge live
   in admin-bff via `hugmesh-auth-core`: `APP_CASDOOR_MFA_ENABLED` is baked
   `"true"`, `APP_MFA_FACTOR_KEY` (ESO/Vault) encrypts enrolled TOTP secrets at
   rest, and `APP_MFA_WEBAUTHN_RP_ID`/`_ORIGINS` are branded per-tenant (not left
@@ -153,8 +153,8 @@ _Written 2026-08-05; some entries were re-checked against `origin/main` on 2026-
 - **✅ SCG-5 route config** — Spring Cloud Gateway 5.0 moved route config from
   `spring.cloud.gateway.routes` to `spring.cloud.gateway.server.webflux.routes`
   (the legacy prefix silently binds nothing). The `hugmesh-gateway` chart
-  templates + every generator route file render the corrected namespace; the
-  `routes:` lists in `apps/2x-gateway-*.yaml` are chart **values** the chart maps
+  templates and every generator route file render the corrected namespace. The
+  `routes:` lists in `apps/2x-gateway-*.yaml` are chart **values**, which the chart maps
   onto the new prefix.
 - **✅ Multi-tenancy / multi-brand + superadmin** — per-domain CA loop
   (`brands/domains.conf`), per-domain namespace + mTLS isolation, and a real
@@ -193,28 +193,28 @@ _Written 2026-08-05; some entries were re-checked against `origin/main` on 2026-
   DEFAULT-OFF optional service running RFC-5766 REST long-term-credential mode
   against a single ESO/Vault-sourced secret shared with tuwunel (which mints the
   time-limited credential on `GET /_matrix/client/v3/voip/turnServer`). A default
-  build deploys no coturn pod and clients keep `iceServers: []`. Enabling the slug
-  gives an in-cluster `ClusterIP` relay; **public reachability is a separate,
+  build deploys no coturn pod, and clients keep `iceServers: []`. Enabling the slug
+  gives an in-cluster `ClusterIP` relay. **Public reachability is a separate,
   operator-deferred opt-in overlay** (`manifests/coturn-public`: `hostNetwork`
   relay pod, the `coturn-public-config` public-IP/URI knobs, a
   `/etc/hugmesh/coturn-public` firewall marker, an unproxied A/AAAA record, and a
-  public cert for non-fleet clients). ⚠️ **No SFU exists** — coturn is a 1:1/mesh
+  public cert for non-fleet clients). ⚠️ **No SFU exists.** coturn is a 1:1/mesh
   relay only; scalable group calls (MatrixRTC / Element Call / LiveKit) are
-  genuinely not built. See [`docs/COTURN.md`](docs/COTURN.md).
+  not built. See [`docs/COTURN.md`](docs/COTURN.md).
 - **✅ Encrypted versioned backups — ships dark** — Velero server + node-agent
   (Kopia filesystem/PV backups) as `apps/55-velero.yaml`, and the
   BackupStorageLocation + ESO-sourced object-store credentials + least-privilege
-  RBAC + status-sweep CronJob as `apps/56-velero-config.yaml`. Per-domain +
-  superadmin, step-up gated in the admin-bff `cloudbackup` package
-  (`BackupStepUpGate` / `BackupAdminController` / `BackupService`);
-  **two independent OFFs** keep it dark — both Applications are
-  NON-automated (manual superadmin sync) and the admin-bff effector stays on the
+  RBAC + status-sweep CronJob as `apps/56-velero-config.yaml`. Backups are per-domain and
+  superadmin-scoped, and step-up gated in the admin-bff `cloudbackup` package
+  (`BackupStepUpGate` / `BackupAdminController` / `BackupService`).
+  **Two independent OFFs** keep them dark: both Applications are
+  NON-automated (manual superadmin sync), and the admin-bff effector stays on the
   `NoopBackupEffector` until `app.backups.effector.enabled=true`, so a created
   `backup_set` sits at `pending` and emits no Velero CR. Kopia repository
   passwords are provisioned, not upstream defaults. See
   [`docs/CLOUD-BACKUPS.md`](docs/CLOUD-BACKUPS.md).
 - **✅ Egress-VPN drop-in** — admin-supplied WireGuard/OpenVPN `.conf` for node
-  public egress with split-tunnel keeping the tailnet direct
+  public egress, with split tunneling that keeps the tailnet direct
   (`specs/usr/sbin/hugmesh-egress-vpn`, the `egress-vpn` node slug, its
   secret-projector delivery app `13e`). Default-off per node. See
   [`docs/EGRESS-VPN.md`](docs/EGRESS-VPN.md).
@@ -263,11 +263,11 @@ _Written 2026-08-05; some entries were re-checked against `origin/main` on 2026-
   (OWASP ZAP + Dependency-Check + nuclei + k6 as a **GitLab** pipeline stage, not
   a deployed CronJob).
 - **✅ Binhost auto-update — ships dark (default-off, superadmin opt-in)** —
-  `provision_update()` bakes the poller cron on every target as plumbing; the
+  `provision_update()` bakes the poller cron on every target as plumbing. The
   **absence** of a policy means auto-update is OFF (fail-safe to off, never to a
   pull). A superadmin opts a fleet in via the live `devops/hugmesh-update-policy`
-  ConfigMap (`enabled` / `cadence` / `window` / `reboot` / `staging`); changed
-  packages pull from the node's `PORTAGE_BINHOST` subtree and kured drains +
+  ConfigMap (`enabled` / `cadence` / `window` / `reboot` / `staging`). Changed
+  packages then pull from the node's `PORTAGE_BINHOST` subtree, and kured drains and
   reboots one node at a time. See [`docs/DEVOPS.md`](docs/DEVOPS.md).
 - **✅ Data-access standard** — the Spring services use **Spring Data R2DBC
   reactive repositories** (no raw SQL strings / inline `@Query`).
@@ -403,59 +403,59 @@ cluster._
   expectations in lockstep. Order and lockout preconditions:
   [`docs/MFA-ROLLOUT.md`](docs/MFA-ROLLOUT.md).
 - **🚧 SELinux — both acknowledged load defects are FIXED; enforcing now waits
-  on an AVC workout that has not run yet.** Updated 2026-08-19; this section
-  previously acknowledged that the modules bake and the loader is wired "but
-  nothing actually loads". Both root causes are closed. **The silent load
+  on an AVC workout that has not run yet.** Updated 2026-08-19. This section
+  used to say the modules bake and the loader is wired "but nothing actually
+  loads". Both root causes are closed. **The silent load
   failure (fixed, PR #68):** the manifest-driven loader ran one batched
   `semodule -i … 2>/dev/null || warn`, so all four 2026-08-14 QEMU runs shipped
   green ("33 passed, 0 failed") while every node kept base policy only.
   `provision.sh` now captures `semodule`'s stderr into the provision log,
-  retries per module on batch failure (per-module stderr too), and derives
+  retries per module when the batch fails (per-module stderr too), and derives
   per-module verdicts from the store (`semodule -l`, not exit codes) into
-  `/var/lib/keys-provision/selinux-modules.status`; any manifest module that
+  `/var/lib/keys-provision/selinux-modules.status`. Any manifest module that
   ends up not loaded records the `/var/lib/keys-provision/selinux-load-failed`
   marker, and the enforce-gate refuses to flip while it stands.
-  `tests/qemu/assertions.sh` no longer stops at `getenforce`: it asserts every
+  `tests/qemu/assertions.sh` no longer stops at `getenforce`. It asserts that every
   name in `/usr/share/hugmesh/selinux-modules.list` appears in the store, the
   status file is clean, the marker is down, and the mode matches the *expected*
-  mode — and it harvests AVCs into every `assertions.log`. **The x86
+  mode; it also harvests AVCs into every `assertions.log`. **The x86
   profile-binding no-op (fixed, PR #44):** `build-x86-host-stage4.sh` *copied*
   `specs-x86/portage/profile/parent` into `/etc/portage/profile/`, a placement
-  portage silently ignores, so every x86 image built against plain `hardened`
+  portage silently ignores. Every x86 image therefore built against plain `hardened`
   and shipped SELinux-inert userland (no policy loader in PID 1,
   selinux-unaware pam/sudo/dbus) while the summary banner claimed
   `hardened/selinux`. The builder now derives an absolute `make.profile`
-  symlink from the spec's `profile/parent` — the pattern the ARM builders had
-  all along — gated by `tests/requested-atoms-resolvable.sh` section E, and
-  confirmed live: the first post-fix x86 image completed with
+  symlink from the spec's `profile/parent`, the pattern the ARM builders had
+  all along. `tests/requested-atoms-resolvable.sh` section E gates it, and
+  the first post-fix x86 image confirmed it live, with
   `Profile: default/linux/amd64/23.0/hardened/selinux`. (Two earlier seams stay
   closed: `provision_selinux()` clears `/.autorelabel` after its own successful
   relabel so `check_relabel_clean()` can pass, and first boot still never fails
-  outright — degrade loudly, never brick.) **What honestly remains** is the
-  issue #45 roadmap: the AVC workout harness shipped with PR #68
+  outright: degrade loudly, never brick.) **What remains** is the
+  issue #45 roadmap. The AVC workout harness shipped with PR #68
   (`make avc-workout` boots an image behind a qcow2 overlay, drives the
   workloads the nine `specs/selinux/*.te` modules confine, and groups denials
-  by owning `.te` file) but has **not yet been run** against the rebuilt
-  images; until it has, the `INFERRED-WIDE` rules in `specs/selinux/*.te` stay
-  unnarrowed; and the enforce-gate flip (`HUGMESH_SELINUX_ENFORCE_GATE=1`)
-  stays pending until an **enforcing** workout pass comes back AVC-clean —
-  nodes still boot **PERMISSIVE** with the gate inert.
+  by owning `.te` file), but it has **not yet been run** against the rebuilt
+  images. Until it runs, the `INFERRED-WIDE` rules in `specs/selinux/*.te` stay
+  unnarrowed, and the enforce-gate flip (`HUGMESH_SELINUX_ENFORCE_GATE=1`)
+  stays pending until an **enforcing** workout pass comes back AVC-clean.
+  Nodes still boot **PERMISSIVE** with the gate inert.
 - **🔭 bpf-LSM enforcement, and lockdown beyond x86 + rpi5.** The LSM stack each
-  image advertises is now the one it runs — `yama` and `bpf` were named in
-  `CONFIG_LSM`, the cmdline, the generated `grub.cfg` and the signed UKI while the
-  kernel silently initialized only `lockdown,capability,selinux`; x86 + rpi5 now
+  image advertises is now the one it runs. `yama` and `bpf` were named in
+  `CONFIG_LSM`, the cmdline, the generated `grub.cfg` and the signed UKI, while the
+  kernel silently initialized only `lockdown,capability,selinux`. Now x86 + rpi5
   build `CONFIG_SECURITY_YAMA` + `CONFIG_BPF_LSM`, the 8 ARM boards dropped the
   `bpf` name they never built, and `tests/scripts/test-lsm-posture-honesty.sh`
   fails the build if the two ever diverge again. Two things remain. **bpf-LSM can
   register but not enforce:** attaching a `BPF_PROG_TYPE_LSM` program needs BTF,
   which both arch fragments deliberately omit (it forces `CONFIG_DEBUG_INFO` and
-  needs `dev-util/pahole` in the kernel-build toolchain) — it arrives with the same
+  needs `dev-util/pahole` in the kernel-build toolchain). BTF arrives with the same
   pahole-gated follow-up as cilium CO-RE. **Lockdown is a 2-of-10 posture, not a
   fleet one:** only x86 and rpi5 build `CONFIG_SECURITY_LOCKDOWN_LSM` and pass
-  `lockdown=integrity`; the 8 ARM boards ship neither, which is now asserted in
-  both directions rather than papered over by the QEMU harness appending its own
+  `lockdown=integrity`. The 8 ARM boards ship neither, and the test now asserts that in
+  both directions; before, the QEMU harness papered over it by appending its own
   `lockdown=integrity` to boards that never had it.
-- **🔭 Group-call SFU.** coturn gives 1:1/mesh TURN relay only. Scalable group
+- **🔭 Group-call SFU.** coturn gives a 1:1/mesh TURN relay only. Scalable group
   calls (MatrixRTC / Element Call / LiveKit) do not exist in any form.
 - **🔭 Desktop-governance go-live — three dark flags, zero dial rows, no image.**
   All three governance flags still default off, and one of them is invisible:
@@ -473,8 +473,8 @@ cluster._
   such artifact — so the desktop boot-verify (Qt6/KF6 Discover pull, the
   `hugmesh-desktop` PKCE client, the desktop-sudo claim → polkit path) has never
   run.
-- **🔭 Desktop-governance SSO greeter / PAM token producer** (FD-07 increment 2)
-  — without it the deposited-token path has no producer, so the SSO-sudo leg
+- **🔭 Desktop-governance SSO greeter / PAM token producer** (FD-07 increment 2).
+  Without it the deposited-token path has no producer, so the SSO-sudo leg
   stays inert even after the governance flags above flip.
 - **🔭 Notifications external channels** — Matrix DM + Akkoma feed + phpBB +
   email adapters on top of the shipped in-app MVP + SSE push.
@@ -526,19 +526,19 @@ cluster._
   without them, so the ordering cannot be got wrong silently. `CASDOOR_ADMIN_ENABLED`
   is still absent from the deployment (the per-service role leg stays skipped).
 - **🔭 DB-hardening flips. (needs a live cluster)** Merged dark, awaiting an
-  operator: PG in-cluster TLS is implemented but `PG_TLS_ENABLED` is `"false"` on
+  operator. PG in-cluster TLS is implemented, but `PG_TLS_ENABLED` is `"false"` on
   all 9 DB deployments (flip per DB only after each `<db>-mtls` ESO Secret
-  materializes); Cassandra **auth already ships ON** — only TLS stage 2 is open;
-  and the tier-egress default-deny NetworkPolicies are manual-sync with an overlay
-  whose `resources: []` renders **zero objects** by design, needing per-namespace
+  materializes). Cassandra **auth already ships ON**; only TLS stage 2 is open.
+  The tier-egress default-deny NetworkPolicies are manual-sync, with an overlay
+  whose `resources: []` renders **zero objects** by design. They need per-namespace
   staged enablement with the devops namespace last (ArgoCD self-wedge risk).
 - **🔭 x86 auto-update poller is not baked.** `build-frite-stage4.sh` copies
-  `hugmesh-update` + its init script and adds it to both SVCS arrays;
+  `hugmesh-update` + its init script and adds it to both SVCS arrays.
   `build-x86-host-stage4.sh` does neither, so `provision_update` falls to the else
   branch and only writes `/etc/hugmesh/cron-update.staged` with a warning. Until
   that protected edit lands, no x86 host and no x86 client image (laptop /
-  chromebook / desktop) can auto-update even if a superadmin flips `enabled: true`
-  — the per-node update schedule itself is shipped and ArgoCD-synced.
+  chromebook / desktop) can auto-update, even if a superadmin flips `enabled: true`.
+  The per-node update schedule itself is shipped and ArgoCD-synced.
 - **🔭 Real cross-build proof for the shared binpkg pools** — the mechanism and
   the fingerprint guard are shipped; the compile-once speedup is unmeasured.
 
@@ -1038,35 +1038,35 @@ The routing is:
 
 Three baked-in pieces make this work:
 
-1. **Wildcard DNS already points `*.hugmesh.net` at the backend ingress** —
+1. **Wildcard DNS already points `*.hugmesh.net` at the backend ingress.**
    `manifests/lan-dns` answers the whole brand zone (apex + every subdomain) with
    the ingress IP in `ENV=test`; the Cloudflare wildcard does so in `ENV=prod`.
-   The reserved service subdomains (`id. api. matrix. mastodon. scale. headscale.`)
-   are fronted by the **be-gateway** ingress + cloudflared, not the fe-gateway.
+   The **be-gateway** ingress + cloudflared front the reserved service subdomains
+   (`id. api. matrix. mastodon. scale. headscale.`), not the fe-gateway.
 
-2. **fe-gateway ingress admits the wildcard** — `apps/20-gateway-fe.yaml` adds
+2. **The fe-gateway ingress admits the wildcard.** `apps/20-gateway-fe.yaml` adds
    `ingress.extraHosts: ["*.hugmesh.net"]`, so the nginx Ingress accepts the
    vanity hosts and hands them to the gateway.
 
 3. **A `Host=*.hugmesh.net` gateway route, ordered for PRECEDENCE.** Spring
-   Cloud Gateway matches routes **first-in-declared-order**, so the route is placed
+   Cloud Gateway matches routes **first-in-declared-order**, so the route sits
    **after** the apex/path routes and **before** the `frontend-host` `Path=/**`
    catch-all. The `Host=*.<domain>` predicate matches `alice.<domain>` but **not**
    the apex `<domain>` (the `*` needs ≥1 label), so the apex still falls through to
-   `frontend-host`; the reserved hosts never reach this gateway. The route rewrites
+   `frontend-host`, and the reserved hosts never reach this gateway. The route rewrites
    the path to `/api/federation/vanity` (via `SetPath`) and forwards **directly to
-   federation-api** (NOT via the be-gateway) with the **Host header preserved**, so
-   federation extracts the username from the first DNS label
+   federation-api** (NOT via the be-gateway) with the **Host header preserved**.
+   Federation extracts the username from the first DNS label
    (`VanityController.resolveByHost`) and returns the public profile-fragment
-   descriptor. Direct (not via be-gateway) because the resolve is a **public read**
-   (no JWT — it IS the public profile) and federation-api already `permitAll`s
-   `GET /api/federation/vanity/**`; interposing the be-gateway would add an auth
+   descriptor. The route skips the be-gateway because the resolve is a **public read**
+   (no JWT; it IS the public profile) and federation-api already `permitAll`s
+   `GET /api/federation/vanity/**`. The be-gateway would add an auth
    layer that 401s the anonymous request.
 
-**Precedence summary (first-match wins, top to bottom):** the reserved service
-subdomains (`id. api. matrix. mastodon. scale. headscale.`) are claimed by the
-**be-gateway** ingress + the cloudflared rules *above* the wildcard, so they never
-reach the fe-gateway. The apex `hugmesh.net` is not matched by
+**Precedence summary (first-match wins, top to bottom):** the **be-gateway**
+ingress + the cloudflared rules claim the reserved service
+subdomains (`id. api. matrix. mastodon. scale. headscale.`) *above* the wildcard, so
+they never reach the fe-gateway. The apex `hugmesh.net` is not matched by
 `Host=*.<domain>` and falls through to `frontend-host`. Only the remaining
 `<username>.<domain>` hosts hit the vanity route. The cloudflared `*.<domain>` rule
 (`manifests/cloudflared`) is likewise ordered **after** the reserved hostnames and
@@ -1085,8 +1085,8 @@ federation-api, the cloudflared wildcard rule) renders clean (`helm template` /
 
 The PUBLISH path (marking a user's profile fragment `visibility=public` when they
 enable vanity in user-bff-api) and the SERVING page (the host shell that renders
-the resolved fragment) are documented — including the honest cross-service
-deferrals — in the
+the resolved fragment) are documented, with their cross-service
+deferrals, in the
 [hugmesh-federation-api README](https://github.com/hugmesh/hugmesh-federation-api)
 ("Vanity subdomains" + "Deferred / stubbed").
 
@@ -1300,24 +1300,35 @@ admin-bff-db**; user-bff reaches it via admin-bff `/bff/internal` over mTLS +
 
 ## CI
 
-Continuous integration runs on **GitLab** ([`.gitlab-ci.yml`](.gitlab-ci.yml)):
+Continuous integration runs on **GitLab** ([`.gitlab-ci.yml`](.gitlab-ci.yml)).
 GitHub is pull-mirrored into an in-cluster GitLab, and a privileged runner on
 the x86 node builds the role ISOs and delivers them as generic-package release
 assets (latest-link path) for the admin UI's download links. ISOs carry **no
-keys** — KEYS material is supplied from the USB at first boot, never baked in or
-published. The **app** container images (gateway, frontends, BFFs, …) are built
-from their own repos in the GitLab org mirror — the `build:images` job dispatches into the in-cluster Kaniko image-build pipeline (`specs/cluster/manifests/image-builder/`), which is **always-on**: `specs/cluster/apps/60-image-builder.yaml` is synced by the root app-of-apps, so the `hugmesh-image-builds` namespace + its default-deny NetworkPolicy always exist (the per-build Kaniko Job stays a template, so nothing runs until a build is dispatched). The `build:images` job itself is default-branch/tag-only and requires a cluster `KUBECONFIG` on the runner plus the ESO-materialized `image-builder-registry` push credential. The service-catalog Kaniko builder (PR #110) is the separate per-service-catalog build path. The OWASP pen-test suite (ZAP + Dependency-Check
-+ nuclei + k6) runs as a GitLab pipeline stage, not a deployed CronJob. The
-pipeline also runs **fail-closed lint/verify gates** before any build:
+keys**: KEYS material comes from the USB at first boot and is never baked in or
+published.
+
+The **app** container images (gateway, frontends, BFFs, …) are built
+from their own repos in the GitLab org mirror. The `build:images` job dispatches into the
+in-cluster Kaniko image-build pipeline (`specs/cluster/manifests/image-builder/`), which is
+**always-on**: the root app-of-apps syncs `specs/cluster/apps/60-image-builder.yaml`, so the
+`hugmesh-image-builds` namespace + its default-deny NetworkPolicy always exist. The per-build
+Kaniko Job stays a template, so nothing runs until a build is dispatched. The `build:images`
+job itself runs on the default branch and tags only, and needs a cluster `KUBECONFIG` on the
+runner plus the ESO-materialized `image-builder-registry` push credential. The service-catalog
+Kaniko builder (PR #110) is the separate per-service-catalog build path.
+
+The OWASP pen-test suite (ZAP + Dependency-Check + nuclei + k6) runs as a GitLab pipeline
+stage, not a deployed CronJob. The pipeline also runs **fail-closed lint/verify gates**
+before any build:
 `lint:x86-kernel-net-symbols` (the k8s netfilter/NAT fragment can't re-truncate),
 the **`casdoor-jwt-custom-gate`** (mints a real RS256 token against
-`casbin/casdoor` and asserts the JWT-Custom token shape — the leaked secrets stay
-ABSENT and the authz/MFA claims present — before that config can flip live), and
+`casbin/casdoor` and asserts the JWT-Custom token shape, with the leaked secrets
+ABSENT and the authz/MFA claims present, before that config can flip live), and
 `domain-registry-reconcile-verify` (the signed-export domain bridge fails closed
 on a bad/placeholder key). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
 
 > **CI lives in GitLab; GitHub Actions is additive.** `.gitlab-ci.yml` (119 jobs,
-> in-cluster privileged runner) is the real pipeline and remains so — it is the only
+> in-cluster privileged runner) is the real pipeline. It is the only
 > lane that can build ISOs and images.
 >
 > This repository previously said Actions was billing-blocked org-wide and that
@@ -1334,8 +1345,8 @@ on a bad/placeholder key). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
 > | [`studio-release.yml`](.github/workflows/studio-release.yml) | Builds the Studio's Windows MSI and Linux Flatpak and publishes them as a GitHub Release. Dispatch- or tag-triggered only. |
 >
 > **Never target `[self-hosted, hugmesh-x86]` from a GitHub workflow.** No self-hosted
-> runners are registered against this org, so such a job queues for 24 hours and is
-> cancelled. Use `ubuntu-latest` / `windows-latest`.
+> runners are registered against this org, so such a job queues for 24 hours and then
+> is cancelled. Use `ubuntu-latest` / `windows-latest`.
 
 ## Security notes
 
