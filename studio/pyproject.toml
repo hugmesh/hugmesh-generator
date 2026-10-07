@@ -50,7 +50,7 @@ tui = ["urwid"]
 # Windows ships no system timezone database, so core/timezones.py silently collapses
 # to its FALLBACK_ZONES list without this. A frozen Windows build must include it.
 win = ["tzdata"]
-test = ["pytest", "PyYAML", "jsonschema"]
+test = ["pytest", "PyYAML", "jsonschema", "cryptography"]
 
 [project.urls]
 Homepage = "https://hugmesh.net"
