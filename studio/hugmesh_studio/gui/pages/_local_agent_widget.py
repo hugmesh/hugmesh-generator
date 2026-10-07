@@ -197,6 +197,8 @@ def _wrapped(text: str = "", grey: bool = False) -> QtWidgets.QLabel:
     lab.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
                       QtWidgets.QSizePolicy.Policy.Minimum)
     lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    # top-left: a label given more height than its text needs must not float the text
+    lab.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
     if grey:
         pal = lab.palette()
         pal.setColor(QtGui.QPalette.ColorGroup.Normal, QtGui.QPalette.ColorRole.WindowText,
