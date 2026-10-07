@@ -531,6 +531,8 @@ def test_current_work_refreshes_now_and_every_five_seconds_while_open(qapp):
     win.show()
     assert win._timer.isActive()
     assert wait_for(qapp, lambda: len(n) >= 1)
+    # a click while a read is still in flight is folded into it on purpose, so let the first land
+    assert wait_for(qapp, lambda: not win._threads.in_flight)
     win.refresh_btn.click()
     assert wait_for(qapp, lambda: len(n) >= 2)
     win.hide()
