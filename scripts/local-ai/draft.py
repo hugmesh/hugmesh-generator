@@ -290,6 +290,8 @@ def main(argv):
         set_status(a.out, "no-issue issue.md is missing")
         return 1
     say(f"draft {a.repo}#{a.issue} agent={a.agent}")
+    # names only, never values: the log shows what this step was handed
+    say("environment names: " + " ".join(sorted(os.environ)))
     if a.agent == "plain":
         return run_plain(a, issue)
     if a.agent == "opencode":

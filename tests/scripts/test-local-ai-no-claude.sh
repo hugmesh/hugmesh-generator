@@ -114,11 +114,12 @@ mirror() {   # ROOT DEST -> copy the covered files, same relative paths
 
 echo "-- 1) static: nothing but the explicit branch names the Claude program --"
 nfiles="$(scan_files "${GEN}" | wc -l)"
-[ "${nfiles}" -ge 9 ] && ok "scan covers ${nfiles} files (not a vacuous scan)" \
+[ "${nfiles}" -ge 11 ] && ok "scan covers ${nfiles} files (not a vacuous scan)" \
     || bad "scan covers only ${nfiles} files: the glob matched almost nothing"
 for must in scripts/local-ai.sh scripts/local-ai/draft.sh scripts/local-ai/draft.py \
             scripts/local-ai/worker.sh scripts/local-ai/agent-explicit.sh \
-            studio/hugmesh_studio/core/local_ai_status.py; do
+            studio/hugmesh_studio/core/local_ai_status.py studio/hugmesh_studio/gui/_local_ai_dock.py \
+            studio/hugmesh_studio/tui/local_ai.py; do
     grep -qxF -- "${GEN}/${must}" <<<"$(scan_files "${GEN}")" && ok "scan covers ${must}" \
         || bad "scan does not cover ${must}"
 done
@@ -366,6 +367,15 @@ python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d["worker"
     && ok "after stop, status reports the worker stopped" || bad "after stop: ${sj}"
 [ ! -e "${LOG}/claude-was-run" ] && ok "the worker run never touched claude" || bad "the worker ran claude"
 
+echo "-- 3b) the draft step itself starts from an empty environment --"
+rm -rf "${LA_STATE}"; printf good >"${LOG}/mode"
+PATHV="${P_NO}" la env GH_TOKEN=secret-a GITHUB_TOKEN=secret-b REGISTRY_TOKEN=secret-c SOME_OTHER=keep-out \
+    bash "${GEN}/scripts/local-ai.sh" draft hugmesh-fixture 1 >/dev/null 2>&1
+names="$(grep -a '^\[.*\] environment names:' "${LA_STATE}/drafts/hugmesh-fixture-1/agent.log" 2>/dev/null | head -1)"
+if [ -z "${names}" ]; then bad "the draft step did not log the environment names it was handed"
+elif has "${names}" 'TOKEN|SOME_OTHER'; then bad "the draft step inherited a variable outside the allowlist: ${names}"
+else ok "the draft step was handed only: ${names#*names: }"; fi
+
 echo "-- 4) a coding agent (AGENT=opencode) gets only the allowlisted environment --"
 rm -rf "${LA_STATE}"; rm -f "${LOG}/ollama.argv"
 la env AGENT=opencode GH_TOKEN=secret-a GITHUB_TOKEN=secret-b REGISTRY_TOKEN=secret-c SOME_OTHER=keep-out \
@@ -383,6 +393,19 @@ has "${env_seen}" "^OLLAMA_HOST=127\.0\.0\.1:${PORT}$" && ok "the agent is point
 cwd="$(cat "${LOG}/agent-cwd.txt" 2>/dev/null)"
 [ "${cwd}" = "${LA_STATE}/scratch/hugmesh-fixture-1" ] && ok "the agent ran inside the scratch worktree" \
     || bad "the agent's directory was ${cwd}"
+# draft.py on its own, handed a DIRTY environment: its agent environment is built from an
+# allowlist too, so the guard does not rest on the caller having cleaned up first
+DIRECT="${WORK}/direct"; mkdir -p "${DIRECT}/out"
+git init -q "${DIRECT}/work" 2>/dev/null; printf 'alpha\nbeta\ngamma\n' >"${DIRECT}/work/hello.txt"
+git -C "${DIRECT}/work" add hello.txt; git -C "${DIRECT}/work" -c user.name=t -c user.email=t@example.invalid commit -q -m x
+printf '# Fix beta in hello.txt\n\nchange beta\n' >"${DIRECT}/out/issue.md"
+env -i PATH="${P_NO}" HOME="${HOMEDIR}" GH_TOKEN=secret-a GITHUB_TOKEN=secret-b REGISTRY_TOKEN=secret-c SOME_OTHER=keep-out \
+    OLLAMA_HOST="127.0.0.1:${PORT}" python3 "${GEN}/scripts/local-ai/draft.py" --repo x --issue 1 \
+    --out "${DIRECT}/out" --work "${DIRECT}/work" --agent opencode --model qwen3:8b >/dev/null 2>&1
+env_seen="$(cat "${LOG}/agent-env.txt" 2>/dev/null)"
+if [ -z "${env_seen}" ]; then bad "draft.py with a dirty environment never reached the agent"
+elif has "${env_seen}" 'secret-|SOME_OTHER|TOKEN'; then bad "draft.py handed the agent a variable outside the allowlist"
+else ok "draft.py builds the agent environment from the allowlist even when called with a dirty one"; fi
 mkdir -p "${WORK}/stubs-no-agent"
 ln -sf "${STUBS}/gh" "${STUBS}/ollama" "${WORK}/stubs-no-agent/"
 PATHV="${P_NO}" la env AGENT=opencode PATH="${WORK}/stubs-no-agent:${TOOLS}" bash "${GEN}/scripts/local-ai.sh" draft hugmesh-fixture 5 >/dev/null 2>&1

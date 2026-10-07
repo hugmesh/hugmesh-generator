@@ -44,6 +44,7 @@ from ..core.config import (
 from ..core.domain_services import (ACTION_IMAGE_BUILD, gate_reason,
                                     services_page_applies)
 from ..core.validate import validate_domain_name
+from .local_ai import OPEN_COMMAND as _LOCAL_AI_COMMAND, LocalAIScreen as _LocalAIScreen
 from ..core.worklist import (
     WorklistConfig, WorklistEntry, derived_hostname, duplicate_hostnames, entry_id,
     resolve_hostname,
@@ -1060,6 +1061,13 @@ class Journey:
         self.effect = None
         line = line.strip()
         screen = self.screen()
+        if line.lower() == _LOCAL_AI_COMMAND and not isinstance(screen, _LocalAIScreen):
+            # global, like q: the Local AI screen opens over whatever screen this is, and
+            # q returns to exactly it (an overlay that was open stays open underneath)
+            ai = _LocalAIScreen(generator_dir=self.generator_dir)
+            ai._under = self.overlay
+            self.open_overlay(ai)
+            return
         if line.lower() in ("q", "quit", "exit") and not getattr(
                 screen, "wants_q", False):
             self.done = True

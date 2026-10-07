@@ -16,6 +16,7 @@ from typing import IO
 
 from ..core import build_sessions
 from . import journey as journey_mod
+from . import local_ai
 from . import model
 
 __all__ = ["run_journey", "run_sessions_review", "print_worklist",
@@ -131,6 +132,7 @@ def run_journey(inp: IO[str] | None = None, out: IO[str] | None = None, *,
         _say(out)
         for line in j.lines():
             _say(out, line)
+        _say(out, local_ai.plain_status_line())
         answer = _prompt(inp, out, j.prompt())
         if answer is None:
             return 0

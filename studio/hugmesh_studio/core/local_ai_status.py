@@ -43,6 +43,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Callable, Iterable
 
 __all__ = [
+    "quick_snapshot", "quick_line",
     "DEFAULT_HOST", "DEFAULT_MODEL", "DOC", "STALE_AFTER", "LocalAIError", "NotLoopback",
     "Job", "Snapshot", "StartResult", "state_dir", "ollama_host", "base_url",
     "read_snapshot", "summary_line", "send_prompt", "pick_model", "write_status",
@@ -198,6 +199,7 @@ class Snapshot:
     fix: str = ""
     doc: str = DOC
     summary: str = ""
+    checked: bool = True                 # False: built from status.json, no request was made
 
     @property
     def ok(self) -> bool:
@@ -408,6 +410,32 @@ def read_snapshot(env: dict | None = None, *, now: float | None = None,
     return snap
 
 
+def quick_snapshot(env: dict | None = None, *, now: float | None = None) -> Snapshot:
+    """A snapshot that makes NO network call: the worker's last ``status.json`` stands in
+    for the probe. For a status line that is redrawn on every screen of a terminal
+    session, where a fresh HTTP request each time would be slow and would make a test
+    depend on the host it runs on. The Local AI screen takes the live one instead."""
+    env = os.environ if env is None else env
+    st = _read_json(os.path.join(state_dir(env), "status.json"))
+    loaded = [m for m in (st.get("model_loaded") or []) if isinstance(m, str)]
+    up = bool(st.get("ollama_up"))
+    snap = read_snapshot(env, now=now, builds=lambda: [],
+                         probe=lambda: (up, loaded or (["(unknown)"] if up else []), loaded, ""))
+    snap.checked = False
+    return snap
+
+
+def quick_line(env: dict | None = None, *, now: float | None = None) -> str:
+    """One line for a terminal's bottom row: what ``quick_snapshot`` knows, honest about
+    not having asked the server just now."""
+    snap = quick_snapshot(env, now=now)
+    if snap.worker == "stopped" and not snap.ollama_up:
+        pending = snap.counts.get("pending", 0)
+        return ("Local AI: not running" + (f", {pending} queued" if pending else "")
+                + " (local-ai: check it, start it, ask it)")
+    return snap.summary
+
+
 def summary_line(s: Snapshot) -> str:
     """The one-line status: ``Local AI: ready, qwen3:8b loaded, 2 queued, 1 running``."""
     if s.problem and not s.ollama_up:
@@ -433,7 +461,7 @@ def summary_line(s: Snapshot) -> str:
 
 def commands(generator_dir: str = ".") -> dict:
     """The exact commands a person can run, for screens that cannot start them."""
-    script = os.path.join(generator_dir, "scripts", "local-ai.sh")
+    script = os.path.join(os.path.abspath(generator_dir), "scripts", "local-ai.sh")
     return {"start": f"{script} start", "chat": f"{script} chat",
             "watch": f"{script} watch", "todo": f"{script} todo 6 --watch",
             "stop": f"{script} stop"}

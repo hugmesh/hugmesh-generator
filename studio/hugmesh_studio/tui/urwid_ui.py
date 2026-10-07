@@ -11,6 +11,7 @@ import urwid
 
 from ..core import build_sessions
 from . import journey as journey_mod
+from . import local_ai
 from . import model
 
 __all__ = ["JourneyApp", "SessionsReview", "run_journey", "run_sessions_review",
@@ -34,10 +35,11 @@ class SessionsReview:
         self._confirm_row: model.SessionRow | None = None
         self._confirm_stage = ""           # record | artifacts
         self.status = urwid.Text("")
+        self.ai_line = urwid.Text(("muted", local_ai.status_line()))
         self.frame = urwid.Frame(
             body=urwid.ListBox(urwid.SimpleFocusListWalker([])),
             header=urwid.Text(("bold", "HugMesh Studio — previous builds")),
-            footer=urwid.Pile([self.status, urwid.Text(_LIST_HELP)]))
+            footer=urwid.Pile([self.status, urwid.Text(_LIST_HELP), self.ai_line]))
         self.refresh()
 
     # ── screens ──────────────────────────────────────────────────────────────
@@ -57,7 +59,11 @@ class SessionsReview:
         self._set_help(_LIST_HELP)
 
     def _set_help(self, text: str) -> None:
-        self.frame.footer = urwid.Pile([self.status, urwid.Text(text)])
+        self.ai_line.set_text(("muted", local_ai.status_line()))
+        self.frame.footer = urwid.Pile([self.status, urwid.Text(text), self.ai_line])
+
+    def refresh_ai_line(self) -> None:
+        self.ai_line.set_text(("muted", local_ai.status_line()))
 
     def _focused_row(self) -> model.SessionRow | None:
         if self.mode != "list" or not self.rows:
@@ -196,10 +202,14 @@ class JourneyApp:
             self.journey.goto(start)
         self.input = urwid.Edit("> ")
         self.header = urwid.Text(("bold", ""))
+        # the Local AI status line sits UNDER the prompt on every screen; the Pile keeps
+        # focus on the Edit so every keystroke still lands there
+        self.ai_line = urwid.Text(("muted", local_ai.status_line()))
         self.frame = _JourneyFrame(
             body=urwid.ListBox(urwid.SimpleListWalker([])),
             header=self.header,
-            footer=urwid.AttrMap(self.input, None, focus_map="reversed"),
+            footer=urwid.Pile([urwid.AttrMap(self.input, None, focus_map="reversed"),
+                               self.ai_line], focus_item=0),
             focus_part="footer")           # every keystroke lands in the Edit
         self.root = urwid.WidgetPlaceholder(self.frame)
         self.sessions: SessionsReview | None = None
@@ -214,6 +224,11 @@ class JourneyApp:
         self.frame.body = _text_lines(j.lines()[1:])
         self.input.set_caption(j.prompt())
         self.input.set_edit_text("")
+        self.refresh_ai_line()
+
+    def refresh_ai_line(self) -> None:
+        """Re-read the Local AI line (files only, no network); also run by a timer."""
+        self.ai_line.set_text(("muted", local_ai.status_line()))
 
     def _open_sessions(self) -> None:
         self.sessions = SessionsReview()
@@ -248,21 +263,33 @@ class JourneyApp:
             return
         if key == "enter":
             self.feed(self.input.edit_text)
+        elif key == "f2":
+            self.feed(local_ai.OPEN_COMMAND)
+
+
+def _with_ai_line_timer(loop, app) -> "urwid.MainLoop":
+    """Redraw the Local AI line every few seconds (it reads files, never the network)."""
+    def tick(lp, _data=None):
+        app.refresh_ai_line()
+        lp.set_alarm_in(5, tick)
+    loop.set_alarm_in(5, tick)
+    return loop
 
 
 def run_journey(generator_dir: str = ".", start: str | None = None) -> int:
     app = JourneyApp(generator_dir, start)
-    urwid.MainLoop(app.root, palette=_PALETTE,
-                   unhandled_input=app.unhandled).run()
+    _with_ai_line_timer(urwid.MainLoop(app.root, palette=_PALETTE,
+                                       unhandled_input=app.unhandled), app).run()
     return 0
 
 
-_PALETTE = [("bold", "bold", ""), ("reversed", "standout", "")]
+_PALETTE = [("bold", "bold", ""), ("reversed", "standout", ""), ("muted", "dark gray", "")]
 
 
 def run_sessions_review() -> int:
     app = SessionsReview()
-    urwid.MainLoop(app.frame, palette=_PALETTE, unhandled_input=app.unhandled).run()
+    _with_ai_line_timer(urwid.MainLoop(app.frame, palette=_PALETTE,
+                                       unhandled_input=app.unhandled), app).run()
     return 0
 
 
