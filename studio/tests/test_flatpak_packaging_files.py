@@ -1052,6 +1052,58 @@ def test_script_refuses_to_use_the_users_own_flatpak_directory(tmp_path, where):
         f"flatpak was called before the refusal: {log.read_text()!r}")
 
 
+def _refused_without_a_flatpak_call(result, log):
+    assert result.returncode == 1, (result.returncode, result.stderr)
+    assert "private directory" in result.stderr, result.stderr
+    assert not log.exists() or not log.read_text().strip(), (
+        f"flatpak was called before the refusal: {log.read_text()!r}")
+
+
+@needs_bash
+@pytest.mark.parametrize("spelling", ["dotdot", "symlink"])
+def test_the_refusal_sees_through_a_path_spelled_another_way(tmp_path, spelling):
+    """The guard compares normalised paths. A ``..`` or a symlink must not get round it.
+
+    Without the normalisation the literal text of these paths differs from the protected
+    directory's, so a plain string comparison lets them through to flatpak.
+    """
+    home = tmp_path / "home"
+    (home / ".local" / "share" / "flatpak").mkdir(parents=True)
+    if spelling == "dotdot":
+        given = home / "x" / ".." / ".local" / "share" / "flatpak"
+    else:
+        given = home / "alias"
+        given.symlink_to(home / ".local" / "share" / "flatpak")
+    fake_bin, log = _fake_flatpak(tmp_path)
+    result = _run_script(
+        tmp_path, path=fake_bin + os.pathsep + os.environ["PATH"],
+        extra_env={"HUGMESH_STUDIO_FLATPAK_USER_DIR": str(given)})
+    _refused_without_a_flatpak_call(result, log)
+
+
+@needs_bash
+@pytest.mark.parametrize("spelling", ["dotdot", "symlink"])
+def test_the_output_directory_inside_the_private_one_is_refused_in_any_spelling(
+        tmp_path, spelling):
+    """Same for the build output: spelled to look elsewhere, it still sits in the private dir."""
+    private = tmp_path / "private"
+    private.mkdir()
+    if spelling == "dotdot":
+        out = tmp_path / "elsewhere" / ".." / "private" / "out"
+    else:
+        alias = tmp_path / "alias"
+        alias.symlink_to(private)
+        out = alias / "out"
+    fake_bin, log = _fake_flatpak(tmp_path)
+    result = _run_script(
+        tmp_path, path=fake_bin + os.pathsep + os.environ["PATH"],
+        extra_env={"HUGMESH_STUDIO_FLATPAK_USER_DIR": str(private),
+                   "HUGMESH_STUDIO_FLATPAK_OUT": str(out)})
+    assert result.returncode == 1, (result.returncode, result.stderr)
+    assert "private flatpak directory" in result.stderr, result.stderr
+    assert not log.exists() or not log.read_text().strip()
+
+
 @needs_bash
 def test_script_refuses_the_system_flatpak_directory(tmp_path):
     fake_bin, log = _fake_flatpak(tmp_path)
