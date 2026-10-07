@@ -110,7 +110,10 @@ merely **adds** Cloudflare/ACME on top.
 | `hugmesh-backend` | backend Pis | `hugmesh-be-gateway` (`api.` / `matrix.` / `mastodon.`) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs (incl. `hugmesh-federation-api` module-federation registry at `/api/federation/**`), DBs |
 | `hugmesh-frontend` | frontend Pis | `hugmesh-fe-gateway` (`hugmesh.net`) | hugmesh.net Angular host + social-ui micro-frontends + remote-fragment fleet (DB-hosted federation fragment bundles at `/_fragments/**`) |
 | `hugmesh-games` | x86_64 GPU worker | (internal) | hugmesh.games (Mesa/Vulkan via `/dev/dri`) |
-| `argocd` | x86_64 worker | (internal) | ArgoCD GitOps engine |
+| `devops` | x86_64 worker | (internal) | ArgoCD GitOps engine (`ARGOCD_NS` defaults to `devops`; `bootstrap.sh` pins every ArgoCD workload to amd64) |
+
+Optional services create further namespaces, for example `hugmesh-forum`,
+`hugmesh-inference`, `hugmesh-owncast` and `hugmesh-tube`.
 
 The Kubernetes control plane is the **pki Pi**; the x86_64 host joins as a GPU
 worker and is where ArgoCD + games are scheduled (via node labels).
@@ -186,15 +189,15 @@ chain and 401 the anonymous request, so the wildcard route targets
 
 ### Cross-service flow: PUBLISH → RESOLVE → SERVE
 
-This generator pass wires the **RESOLVE + routing** half. The full lifecycle and
-its honest deferrals:
+The generator wires the **RESOLVE + routing** half; the other stages live in the
+repos named below. Status on origin/main, 2026-10-07:
 
 | Stage | What happens | Status |
 |---|---|---|
 | **Opt-in / source of truth** | A user sets `user_profile.visibility=public` + `vanity_subdomain_enabled=true` in **user-bff-api**. These two flags are the upstream gate that *governs whether the profile is published public*. | Exists (user-bff-api). |
-| **PUBLISH** | On that save, user-bff-api must (1) publish the profile-fragment bundle and (2) upsert a **federation_modules** row `slug=profile-<username>, kind=fragment, owner_user_id=<username>, visibility=public, content_hash=…` in federation-api. The federation manifest + the vanity resolve read **only** from `federation_modules`. | **DEFERRED.** `ProfileService.save` persists the flags but makes **no** federation call; `FederationApiClient.PUT /api/federation/bundles/{slug}` writes only a `user_modules` row, not a `federation_modules` row (that registration is currently ROLE_ADMIN via `ModuleRegistryController`). Recommended follow-up: an **owner-scoped self-publish** endpoint in federation (e.g. owner-gated `PUT /api/federation/vanity/{username}`) rather than widening admin CRUD. Documented in the federation-api README. |
+| **PUBLISH** | On that save, user-bff-api publishes through federation-api: `ProfileService.save` calls `PUT /api/federation/vanity/{username}` when `visibility=public` and `vanity_subdomain_enabled=true`, and `DELETE /api/federation/vanity/{username}` otherwise. Federation-api owns the owner-scoped `federation_modules` row (`slug=profile-<username>`, `kind=fragment`, `visibility=public`). The sync is best-effort: a federation-api failure does not fail the profile save. | **Implemented** (user-bff-api `ProfileService`, federation-api `VanityController`). |
 | **RESOLVE** | fe-gateway `Host=*.<domain>` route → federation-api `GET /api/federation/vanity` returns the public fragment descriptor (`slug`, `remoteEntryUrl`, `exposedModule`, `contentHash`, the `/_fragments/<slug>/<hash>/` static path) iff `visibility=public` (+ enabled + circuit closed); else 404. **Public-only is double-enforced** (DB finder filters `visibility=public`, and the service re-asserts), so an internal/disabled/kill-switched fragment can never leak. | **Implemented this pass** (federation-api PR) + the routing here. |
-| **SERVE** | The `hugmesh-remote-fragment` fleet (apps/41-remote-fragment.yaml) already syncs every `kind=fragment` module in the manifest to `/_fragments/<slug>/<contentHash>/` and nginx-serves it; the fe-gateway already routes `/_fragments/**`. So the fragment bytes are served **once its `federation_modules` row exists** (i.e. once PUBLISH runs). | Substrate **exists**; the vanity **host shell page** (the Angular shell that `loadRemoteModule`s the fragment's `remoteEntry.json` and renders the profile under the bare vanity host) is a **frontend follow-up**, not built this pass. |
+| **SERVE** | The `hugmesh-remote-fragment` fleet (apps/41-remote-fragment.yaml) already syncs every `kind=fragment` module in the manifest to `/_fragments/<slug>/<contentHash>/` and nginx-serves it; the fe-gateway already routes `/_fragments/**`. So the fragment bytes are served once its `federation_modules` row exists (once PUBLISH runs). | Substrate **exists**. The vanity **host shell page** (the Angular shell that `loadRemoteModule`s the fragment's `remoteEntry.json` and renders the profile under the bare vanity host) is a **frontend follow-up**: a search of `hugmesh-host-shell` on origin/main for "vanity" finds nothing. |
 
 ### Gate: source of truth
 
@@ -205,21 +208,16 @@ its honest deferrals:
   when `federation_modules.visibility='public'` (never internal). Both gates must
   agree; federation is public-only by construction.
 
-### Honest cross-service deferral — shared gateway `PUBLIC_PATHS` (a THIRD repo)
+### Shared gateway `PUBLIC_PATHS` (a THIRD repo) — done
 
-The shared gateway image (`hugmesh-gateway` repo) ends every security chain
-with `anyExchange().authenticated()` and permits only a hardcoded `PUBLIC_PATHS`
-allowlist (`/api/auth`, `/api/registration`, `/api/login`, the
-login/registration/banned remotes). `/api/federation/vanity/**` is **not** in it,
-so the fe-gateway pod would itself **401** the anonymous vanity request before
-proxying. **To make the public vanity host actually reachable,
-`/api/federation/vanity/**` (or a `Host=*.<domain>` public rule) must be added to
-the gateway `PUBLIC_PATHS` in the `hugmesh-gateway` repo** — out of scope for
-this generator/federation-api pass, documented as a deferral here, inline in
-`apps/20-gateway-fe.yaml`, and in the federation-api README. The generator side
-(wildcard DNS already in place, fe-gateway ingress wildcard host, the ordered
-`Host=*.<domain>` route to federation-api, the cloudflared wildcard rule) is
-complete and renders clean.
+The shared gateway image (`hugmesh-gateway` repo) ends every security chain with
+`anyExchange().authenticated()` and permits only a hardcoded `PUBLIC_PATHS`
+allowlist. That allowlist now includes `/api/federation/vanity` and
+`/api/federation/vanity/**` (`SecurityConfig`), and `CanonicalSeed` carries
+matching `PUBLIC` rows, so the fe-gateway no longer 401s an anonymous vanity
+request before it proxies. The generator side (wildcard DNS, fe-gateway ingress
+wildcard host, the ordered `Host=*.<domain>` route to federation-api, the cloudflared
+wildcard rule) renders clean.
 
 ## AI-cloak / media poisoning (`manifests/media-poisoner`, OPTIONAL x86/GPU)
 
@@ -261,12 +259,12 @@ Dockerfile) ships under `manifests/media-poisoner/worker/`.
 
 ```
 cluster/
-├── app-of-apps.yaml        root ArgoCD Application (recurses apps/)
+├── app-of-apps.yaml        repo-recursing root Application (used only with HUGMESH_GITOPS_ROOT_RECURSE=1)
 ├── apps/                   one ArgoCD Application per workload
 ├── charts/hugmesh-gateway/   the gateway Helm chart (pki/be/fe)
 ├── manifests/              in-repo kustomize manifests (casdoor, apis, frontend, social-ui, games, media-poisoner)
 ├── namespaces/namespaces.yaml
-└── bootstrap/bootstrap.sh  installs ArgoCD + applies the root app
+└── bootstrap/bootstrap.sh  installs ArgoCD + applies the baked apps/ set one file at a time
 ```
 
 ## Bootstrapping
@@ -305,6 +303,9 @@ ClusterSecretStore **`hugmesh-vault`** (provider `vault`, token auth from the
 | `harbor-robots` (`pull_name`/`pull_secret`) | `hugmesh-registry-pull` (`.dockerconfigjson`) — same cred, **different Secret name**: the Harbor chart is released into this namespace and already owns `harbor-registry` (its own `REGISTRY_HTTP_SECRET`, template `registry/registry-secret.yaml`) | `hugmesh-pki` |
 | `harbor-robots` (`push_name`/`push_secret`) | `image-builder-registry` (`.dockerconfigjson`, **push**) | `hugmesh-image-builds` (opt-in) |
 | `casdoor-apps` (`fragment-sync`) | `fragment-sync-casdoor` (`clientId`=`app-fragment-sync`/`clientSecret`) | `hugmesh-frontend` |
+
+The table shows the first set only: `manifests/external-secrets/` holds many more
+(108 `ExternalSecret` objects on origin/main, 2026-10-07).
 
 The same materialized Secrets are also written to the KEYS stick at
 `vault/secrets.json` (with `vault/token` for online sync), so `keys-provision`
