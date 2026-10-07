@@ -341,19 +341,21 @@ unchanged.
   (`push_name`/`push_secret`). ESO materializes it as the `image-builder-registry`
   `.dockerconfigjson` the Kaniko Job mounts. It is distinct from the pull-scoped
   robot account above so the runtime pull secret can never push.
-- Casdoor uses an `emptyDir` and the all-in-one image — switch to a PVC + an
-  external DB, and seed the Google provider (`casdoor-google` Secret) + the
-  gateway OAuth2 client.
+- Casdoor runs on the external `casdoor-pg` Postgres (`manifests/casdoor/pg.yaml`) with
+  `casbin/casdoor:3.80.0`; its init Job seeds the OAuth2 apps and the Google provider
+  from the `casdoor-google` Secret.
 - Cassandra references an upstream chart; Akkoma + tuwunel are raw manifests
-  (no official charts) — pin image tags and supply DB/secret values.
+  (no official charts). tuwunel is pinned (`v1.7.0`); Akkoma still uses
+  `git.akkoma.dev/akkomagang/akkoma:stable`, marked "pin a real tag" in
+  `manifests/akkoma/akkoma.yaml`.
 - `hugmesh-federation-api` (the module-federation registry / manifest + bundles API
   upstream of `admin-bff` and the `remote-fragment` sync fleet) stores fragment
   bundle bytes on a **filesystem RWO PVC** (`federation-bundles`, 5Gi), so it runs
   **single-replica** with `strategy: Recreate`. PRODUCTION: set
   `APP_BUNDLES_STORAGE=s3` + the `APP_BUNDLES_S3_*` env (MinIO/S3) and drop the PVC
   to run multi-replica; the `remote-fragment` fleet is already the scalable serving
-  layer. Its DB (`federation-db`, Postgres in `hugmesh-backend`) uses the same
-  DEV placeholder password as `route-access-db` — move it to a Vault/ESO
-  `federation-db-auth` Secret + `secretKeyRef` for production.
+  layer. Its DB (`federation-db`, Postgres in `hugmesh-backend`) takes its owner
+  password from the ESO Secret `federation-db-auth` (Vault `secret/<brand>/federation-db`)
+  and runs the app as the least-privilege `federation_app` role.
 - Secrets are never committed here — they flow from Vault via ESO (or the USB
   KEYS fallback); see **Secrets (Vault + USB)** above.
