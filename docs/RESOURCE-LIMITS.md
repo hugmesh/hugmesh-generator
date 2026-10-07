@@ -44,7 +44,7 @@ The dialog states the **transformed** value for each lane rather than repeating 
 input back, because two of them change it:
 
 - **Compose** divides. A memory limit is a hard per-service ceiling and memory is
-  additive, so writing a 16 GiB budget onto each of 41 services would authorise 41×
+  additive, so writing a 16 GiB budget onto each of the 43 services in `tests/stack/compose.local.yaml` would authorise 43×
   the machine's RAM and protect nothing. It is divided, with a floor of 384 MiB per
   service — and if the
   share would be too small to start a service, **no memory limit is written at all**,
