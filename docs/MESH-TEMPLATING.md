@@ -28,8 +28,11 @@ onto the mesh node, the reconcile path MUST either:
 2. consume **pre-rendered** output produced off the root path (render on the build
    host / a non-root sidecar; the root cron only copies the already-rendered tree).
 
-It must **not** call `node` as root. This is a **known deferred reconciliation**,
-not solved in Phase 1 — but it is a hard gate for Phase 6. Every entry point
+It must **not** call `node` as root. This was a known deferred reconciliation, not
+solved in Phase 1 and a hard gate for Phase 6. Phase 6 met the gate by pinning the
+root-cron render to the sed engine, so Node never runs there (see "Phase 6" below;
+`hugmesh-domain-reconcile` passes no `--engine`). The rule stays a hard gate for any
+later change. Every entry point
 (`scripts/tooling/render-handlebars.{js,sh}`, `load-brand-schema.js`) carries a
 header repeating this. The emit-time secret scanner (`scripts/secret-scan.sh`) is
 deliberately **node-free** (pure bash + awk) so it can run on the constrained path.
