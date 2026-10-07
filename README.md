@@ -37,7 +37,7 @@ subdirs included.
 
 ## Current State
 
-_As of 2026-08-05. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
+_Reviewed 2026-10-07 against `origin/main`; a claim that carries its own date was not re-measured. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
 
 > **"Ships dark" counts as shipped.** Several capabilities below are complete on
 > `main` and deliberately inert behind a documented default-off flag — that is a
@@ -86,9 +86,11 @@ _As of 2026-08-05. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   **`hugmesh-parent`** (metapom, **2.8.0**), **`hugmesh-commons`** (shared
   security/tenancy, `net.hugmesh.commons.*`, **2.1.0**),
   **`hugmesh-auth-core`** (shared account/session/MFA/Casdoor-admin infra;
-  depends on commons; consumed by **user-bff + admin-bff only** — **two pins,
+  depends on commons; consumed by **user-bff + admin-bff only** — **two consumer pins,
   by design**: **2.4.2** for user-bff main, **2.5.0** for admin-bff main, since
-  the two consumers are on separate release cadences) and
+  the two consumers are on separate release cadences; `m2-bootstrap.sh` also builds
+  **2.5.1**, the coordinate the org release chain now publishes, for when both
+  consumers move to it) and
   **`hugmesh-build-config`** (**0.5.0** — the shared PMD/Checkstyle/SpotBugs
   rulesets the parent references). The groupId is `net.hugmesh:*` after the
   rebrand. `federation-api` was migrated onto this baseline. The authoritative
@@ -167,7 +169,7 @@ _As of 2026-08-05. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   `specs/etc/init.d|cron.d/hugmesh-domain-reconcile`, the
   `hugmesh_domain_reconcile` SELinux module, and `provision_domain_registry()`
   in the KEYS engine.
-- **✅ Optional services (add/remove)** — **19 slugs** in
+- **✅ Optional services (add/remove)** — **25 slugs** in
   [`specs/cluster/optional-services.yaml`](specs/cluster/optional-services.yaml):
   akkoma / tuwunel / phpBB / games / owncast / LocalTube (`tube`) /
   **character-studio** (VN character-creator + chat remote, default-off;
@@ -180,9 +182,12 @@ _As of 2026-08-05. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   mesh — [docs/EDGE-AI.md](docs/EDGE-AI.md)) / **coturn** / **meshbridge**
   (Meshtastic LoRa mesh ↔ Matrix bridge, DEFAULT-OFF runtime-only,
   `dependsOn: tuwunel` — [docs/MESHTASTIC-BRIDGE.md](docs/MESHTASTIC-BRIDGE.md)) /
-  and the non-user-level node slugs **egress-vpn** / **tor** /
-  **workloadConsole** / **anubis** / **headwind** / **attestation-server**. The UI
-  greys out when a service is absent, games defaults to `games.<domain>`.
+  and the non-user-level slugs **egress-vpn** / **tor** /
+  **workloadConsole** / **anubis** / **headwind** / **attestation-server** /
+  **metrics-server** / **keda** / **kyverno** / **observability** /
+  **service-catalog-builder** / **optional-services-operator**. The UI
+  greys out when a service is absent, games defaults to `games.<domain>`. A build
+  with no selection bakes `akkoma tuwunel phpbb`; the other user-level slugs are opt-in.
   Build-time prune ships; the **🚧 live ApplicationSet cut-over is pending**.
 - **✅ A/V relay via coturn (TURN/STUN) — ships dark** — the `coturn` slug is a
   DEFAULT-OFF optional service running RFC-5766 REST long-term-credential mode
@@ -274,9 +279,9 @@ _As of 2026-08-05. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   **Headwind MDM** (both merged, default-off, tailnet-only cluster
   optional-services), joins it to the mesh tailnet, and escrows an enterprise
   profile. Real pre-deploy gaps remain (Casdoor SSO for Headwind, an
-  automated attestation-verdict API, `make phone-mdm-enroll`/`phone-attest`
-  targets) — see [`docs/MDM.md`](docs/MDM.md)
-  "Deferred".
+  automated attestation-verdict API) — see [`docs/MDM.md`](docs/MDM.md)
+  "Deferred". The `make phone-*` targets exist, including `phone-mdm-enroll`
+  and `phone-attest`.
 - **✅ Orange Pi platform family (EXPERIMENTAL)** — six boards across three SoC
   vendors, each with its own `specs-<platform>/` tree, builder and `make` target:
   **Orange Pi 5 / 5 Plus** (Rockchip RK3588/RK3588S, light desktop, `--board`
@@ -331,7 +336,8 @@ _As of 2026-08-05. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   (the runtime host↔remote walkthrough).
 - **🚧 Kind SSO e2e harness** — `KIND_PROFILE=sso` plus `make kind-images` /
   `kind-up` / `kind-doctor` / `kind-e2e` / `kind-down` stand up a real kind cluster and drive the
-  native-login path against it. **The e2e is NOT green** — see
+  native-login path against it. The two specs the profile can drive passed on
+  2026-08-06; most of the blocker list is still open — see
   [Roadmap](#roadmap) and
   [`docs/KIND-SSO-E2E-FINDINGS.md`](docs/KIND-SSO-E2E-FINDINGS.md).
 - **🚧 Cloud deploy (Studio/ncurses/`make deploy-*` side-flow)** — publish an
@@ -356,33 +362,33 @@ into [Current State](#current-state) — a default-off flag is a posture, not an
 unfinished feature. See also the Roadmap section of
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)._
 
-_Re-audited against the tree and the 2026-08-14 build/boot artifacts. Each bullet
-carries the evidence for its own state. Items whose remaining step is only
-provable on a running cluster are marked **(needs a live cluster)** — this
-workstation has the compose mesh up but no kind cluster (`kind get clusters` →
-none), and compose green is not evidence for the cluster._
+_Re-audited against the tree and the 2026-08-14 build/boot artifacts; the items
+checked again on 2026-10-07 say so. Each bullet carries the evidence for its own
+state. Items whose remaining step is only provable on a running cluster are
+marked **(needs a live cluster)**. Compose green is not evidence for the
+cluster._
 
-- **🚧 SSO kind-cluster e2e — harness shipped, proof NOT achieved.** The
+- **🚧 SSO kind-cluster e2e — harness shipped, partly green.** The
   `KIND_PROFILE=sso` harness + `make kind-images|kind-up|kind-doctor|kind-e2e|kind-down` are
-  on `main`, and the first real run reached Casdoor and minted a session against
-  a real IdP. **The e2e is not green.** It fails downstream on **16 enumerated
-  fresh-cluster blockers** — the GitOps cluster payload had never been run end to
-  end, and every workaround lived in `tests/stack/compose.local.yaml` instead of
-  `specs/cluster`. Fixed in-repo so far: the `cluster-ca`/KV-mount/node-label
-  items (this harness) plus `fix/cluster-secret-contract-drift` and
-  `fix/pki-role-san-namespace`. **Blockers 5–16 are not fixed** — Cassandra
-  credentials + keyspace bootstrap, gateway probes hitting a role-gated actuator
-  path (no gateway can become Ready in k8s), Casdoor never importing
-  `init_data.json` (so the IdP keeps the default `123` admin password),
-  `casdoor-init` never checking API responses, `CASDOOR_ORG` / client-id /
-  redirect-uri / namespace pre-rebrand defaults across the BFFs, a hard-required
-  `SVC_PASSWORD` nothing provides, and an admin-bff Liquibase `GRANT` to a role
-  no initdb creates. Compose green is **not** evidence for the cluster — and there
-  is no cluster to re-run against right now (`kind get clusters` → none, while
-  `kubectl config current-context` still points at a dead `kind-hugmesh-local`).
-  `make kind-up` is the prerequisite for this and for every **(needs a live
-  cluster)** item below. See
-  [`docs/KIND-SSO-E2E-FINDINGS.md`](docs/KIND-SSO-E2E-FINDINGS.md).
+  on `main`. The first real run (2026-08-05) reached Casdoor, minted a session
+  against a real IdP and then failed on fresh-cluster blockers: the GitOps
+  cluster payload had never been run end to end, and every workaround lived in
+  `tests/stack/compose.local.yaml` instead of `specs/cluster`. The record of
+  status is the 2026-08-06 table in
+  [`docs/KIND-SSO-E2E-FINDINGS.md`](docs/KIND-SSO-E2E-FINDINGS.md): against a live
+  kind cluster on merged `main`, `01-frontpage` and `27-native-login` pass, plus
+  `29-mfa-privileged-floor`'s stack-free RFC 6238 vectors. That is the scope of
+  "green": the other specs drive services the profile does not deploy. Items
+  5–15, 17, 20 and 24–26 of the findings list stay open as listed there —
+  among them Cassandra credentials and keyspace bootstrap, gateway probes
+  hitting a role-gated actuator path, Casdoor never importing `init_data.json`
+  (so the IdP keeps the default `123` admin password), `casdoor-init` never
+  checking API responses, pre-rebrand `CASDOOR_ORG` / client-id /
+  redirect-uri / namespace defaults across the BFFs, and a hard-required
+  `SVC_PASSWORD` nothing provides. The admin-bff Liquibase `GRANT` item (16) was
+  fixed on 2026-08-06. Compose green is **not** evidence for the cluster, and
+  "the e2e is green" is not "the platform is finished". `make kind-up` is the
+  prerequisite for this and for every **(needs a live cluster)** item below.
 - **🔭 MFA privileged-floor — the live operator flip. (needs a live cluster)**
   Seeds, gateway env wiring, the `gateway_route_access.mfa_required` column and
   its fail-closed enforcement, the per-feature step-up legs (SSH key issuance,
@@ -461,7 +467,8 @@ none), and compose green is not evidence for the cluster._
   the running mesh, and the pinned channel factory refuses without an ACTIVE row
   carrying a matching `host_key_fp` (TOFU forbidden), so the flag is inert even
   when true. And no laptop / chromebook / desktop image has ever been built: the
-  default `X86_ROLE_LIST` is `pki backend frontend backend-gpu`, and 28 build sessions contain no
+  default x86 role set in `scripts/build-all-roles.sh` is `pki backend frontend backend-gpu`, and (as measured earlier;
+  not re-counted) 28 build sessions contain no
   such artifact — so the desktop boot-verify (Qt6/KF6 Discover pull, the
   `hugmesh-desktop` PKCE client, the desktop-sudo claim → polkit path) has never
   run.
@@ -472,26 +479,23 @@ none), and compose green is not evidence for the cluster._
   email adapters on top of the shipped in-app MVP + SSE push.
 - **🚧 Live ApplicationSet cut-over for optional services** — the build-time
   prune ships; the hardcoded `30-*/50-*` Applications still own the workloads.
-- **🔭 Headscale ACL — the BFF push leg is dark, and the LIVE node applier is
-  broken.** The write seam itself landed (`HeadscalePolicyClient`, `GET`/`PUT
-  /api/v1/policy`, real impl + Noop default, leader-gated reconciler), so this is
-  no longer a read-only story; it stays dark behind
+- **🔭 Headscale ACL — the BFF push leg is dark, and the node applier never reloads headscale.**
+  The write seam landed (`HeadscalePolicyClient`, `GET`/`PUT /api/v1/policy`, real
+  impl + Noop default, leader-gated reconciler). It stays dark behind
   `app.registry.headscale-acl.enabled=false`, blocked on the single-writer
-  decision (headscale runs `policy: mode: file`, the node renderer is the writer,
-  while `PUT /api/v1/policy` is DB-mode only). Two open defects sit underneath.
-  **The guard against the silent no-op is not on org `main`:** the
-  `requireDbPolicyMode()` context-failure check exists only in `.stack-src`, so on
-  `main` today enabling the flag against the file-mode fleet boots clean and then
-  4xx-degrades every 60s forever behind one WARN line while an operator believes
-  push is live. **The node-side applier never reloads headscale:** commit
-  `e1743555` fixed exactly this in `provision.sh` (capture stderr, restart
-  headscale) but the RECURRING writer `specs/usr/sbin/gen-headscale-policy.sh`
-  still calls `headscale policy set` and ignores the same mode-`file` error — so
-  the pki node rewrites `policy.hujson` every 60s and the running headscale never
-  loads it, and Layer-A revocations do not propagate. The cross-repo parity gate
-  that would catch this cannot run either: it exits 3 ("COMPILE SIDE NOT CHECKED")
-  because it hardcodes the pre-rename `systems/hugmesh` package path against a
-  tree that is now `net/hugmesh`.
+  decision: headscale runs `policy: mode: file`, the node renderer is the writer,
+  and `PUT /api/v1/policy` is DB-mode only. The `requireDbPolicyMode()` guard
+  against that silent no-op is now on `hugmesh-admin-bff-api` `main`
+  (`HeadscaleAclConfig.java`; checked 2026-10-07). **The node-side applier still
+  does not reload headscale:** commit `e1743555` fixed this in `provision.sh`
+  (capture stderr, restart headscale), but the RECURRING writer
+  `specs/usr/sbin/gen-headscale-policy.sh` still calls `headscale policy set -f`
+  and, when that fails in mode `file`, only logs a warning ("server may run stale
+  until next apply"). The pki node rewrites `policy.hujson` every 60s, the running
+  headscale does not load it, and Layer-A revocations do not propagate. The
+  cross-repo parity gate (`tests/device-registry/test-layer-a-headscale-acl.sh`)
+  exits 3 ("COMPILE SIDE NOT CHECKED") whenever the sibling admin-bff checkout
+  is missing; it now looks under `net/hugmesh`.
 - **🔭 Live in-cluster image build. (needs a live cluster)** The Kaniko manifests,
   the namespace + NetworkPolicy, the ESO wiring, the always-on ArgoCD Application
   (out of `apps-optional/`) and the `ROLE_IMAGE_BUILDER` seed + gateway route row
@@ -547,10 +551,12 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   (`brands/domains.conf`), per-domain namespace + mTLS isolation, and a real
   code-enforced **superadmin → admin → mod → user** role cascade enforced at the
   gateway. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/SECURITY.md`](docs/SECURITY.md).
-- **✅ Optional services (add/remove)** — 19 slugs: akkoma / tuwunel / phpBB /
+- **✅ Optional services (add/remove)** — 25 slugs: akkoma / tuwunel / phpBB /
   games / owncast / tube / character-studio / character-forge / edge-ai (+
   edge-ai-analysis / edge-ai-tts) (+ egress-vpn / tor / workloadConsole /
-  anubis / coturn / meshbridge / headwind / attestation-server); the UI greys
+  anubis / coturn / meshbridge / headwind / attestation-server / metrics-server /
+  keda / kyverno / observability / service-catalog-builder /
+  optional-services-operator); the UI greys
   out when a service is absent, games defaults to
   `games.<domain>`. Build-time prune ships; the **🚧 live ApplicationSet
   cut-over is pending**. See
@@ -576,14 +582,14 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   remote + two-SA RBAC), desktop app governance, coturn TURN relay, and the
   gateway MFA privileged floor are all on `main` behind documented default-off
   flags. See [Current State](#current-state) for each flag and its caveats.
-- **🚧 / 🔭 Roadmap** — the kind-cluster SSO e2e (harness shipped, **not green**),
-  SELinux node-policy modules that bake and wire but **fail to load on every
-  boot**, the live MFA operator flip, desktop-governance go-live (three dark
-  flags, no dial rows, no image ever built), the broken node-side headscale ACL
-  reload, the DB-hardening flips, a group-call SFU, the desktop-governance SSO
-  greeter/PAM token producer, notifications external channels, and the live
-  optional-services ApplicationSet cut-over. See
-  [Roadmap](#roadmap) and the Roadmap section of
+- **🚧 / 🔭 Roadmap** — the kind-cluster SSO e2e (harness shipped; two specs
+  green, most blockers open), SELinux node-policy modules whose load defects are
+  fixed but whose enforcing flip waits on an AVC workout, the live MFA operator
+  flip, desktop-governance go-live (three dark flags, no dial rows, no image ever
+  built), the node-side headscale ACL reload, the DB-hardening flips, a
+  group-call SFU, the desktop-governance SSO greeter/PAM token producer,
+  notifications external channels, and the live optional-services ApplicationSet
+  cut-over. See [Roadmap](#roadmap) and the Roadmap section of
   [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Images
@@ -596,7 +602,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
 | **host** (x86_64) | `sudo ./build-x86-host-stage4.sh` | GPU worker: ArgoCD, hugmesh.games, backend capacity |
 | **edge-ai** (x86_64 / Jetson) | `./build-x86-host-stage4.sh --role edge-ai` | GPU inference node: serves an OpenAI-compatible model API (Ollama) to the mesh over k8s + tailnet; NVIDIA + CUDA + nvidia-device-plugin. See [docs/EDGE-AI.md](docs/EDGE-AI.md) |
 | **Frite light desktop** (Libre Computer, arm64) — *opt-in client* | `make frite` (or `./build-frite-stage4.sh`) | LEAN LXDE desktop on the Amlogic La Frite / Le Potato SBC; joins the tailnet + Casdoor login. LIVE + INSTALLER flavors, `--desktop light\|none` |
-| **Jetson Orin edge-AI** (NVIDIA Tegra234, arm64) — **EXPERIMENTAL** | `make jetson` (or `./build-jetson-stage4.sh --role edge-ai\|backend-gpu\|full\|desktop`) | arm64 edge-AI node family on the Jetson Orin Nano/NX: same mesh + KEYS provisioning + shared cluster tree; mainline kernel (NO CUDA yet — the L4T/CUDA flavor is a documented stub). **Hardware validation pending** — see [`specs-jetson/README.md`](specs-jetson/README.md) |
+| **Jetson Orin edge-AI** (NVIDIA Tegra234, arm64) — **EXPERIMENTAL** | `make jetson` (or `./build-jetson-stage4.sh --role edge-ai\|backend-gpu\|omnibus\|desktop`) | arm64 edge-AI node family on the Jetson Orin Nano/NX: same mesh + KEYS provisioning + shared cluster tree; mainline kernel (NO CUDA yet — the L4T/CUDA flavor is a documented stub). **Hardware validation pending** — see [`specs-jetson/README.md`](specs-jetson/README.md) |
 | **Orange Pi family** (6 boards, arm64) — **EXPERIMENTAL** | `make orangepi5` / `orangepi4-lts` / `orangepizero2` / `orangepizero2w` / `orangepizero3` / `orangepi3-lts` (each `-live` / `-installer` too) | Light desktops on Rockchip (**Orange Pi 5 / 5 Plus** RK3588/RK3588S, `--board` axis; **Orange Pi 4 LTS** RK3399, single-board, blob-free boot chain) and headless appliances on Allwinner (**Zero 2** H616; **Zero 2W** + **Zero 3** H618 — headless is forced, no mainline display-engine driver; **3 LTS** H6, headless by scope). Same mesh + KEYS provisioning. **Hardware validation pending on all six** — see [`docs/BUILD-MATRIX.md`](docs/BUILD-MATRIX.md) and each `specs-orangepi*/README.md` |
 
 > The friendlier path is the **Makefile** (`make local` / `make prod` /
@@ -854,7 +860,7 @@ Products land in `./out` (gitignored). Run `make help` for every target. Use
 
 Run the builds as **root** (the cross-emerge merges into the sysroot's package DB
 and writes host caches; fakeroot is not enough). Artifacts land in the git-ignored
-`./rpi5-stage4-build/` and `./x86-host-build/`.
+`./out/` (`-w DIR` changes it).
 
 Every artifact of one build run is **brand- and timestamp-named** so test vs prod
 images are distinguishable and runs never clobber each other:
@@ -863,7 +869,7 @@ images are distinguishable and runs never clobber each other:
 <brand>-<arch>-<role>-<env>-<UTC-stamp>.<ext>
 
 # e.g. (test)  hugmesh-rpi5-arm64-frontend-test-20260610T193045Z.img
-#      (prod)  hugmesh-x86-amd64-host-prod-20260610T193045Z.img
+#      (prod)  hugmesh-x86-amd64-backend-gpu-prod-20260610T193045Z.img
 ```
 
 `<arch>` is `rpi5-arm64` or `x86-amd64`; `<env>` is `test` or `prod`; `<UTC-stamp>`
@@ -890,7 +896,7 @@ sudo ./build-x86-host-stage4.sh -j "$(nproc)"            # x86_64 GPU host (nati
 sudo ./scripts/make-keys-usb.sh /dev/sdY keys-pki        # FAT32 stick labelled KEYS (one per node)
 
 # 3. Flash the OS to each node's SD/NVMe (boot a Linux live env, mount the role's ISO)
-sudo mount -o loop rpi5-stage4-build/hugmesh-rpi5-arm64-pki-*.iso /mnt/iso
+sudo mount -o loop out/hugmesh-rpi5-arm64-pki-*.iso /mnt/iso
 sudo /mnt/iso/install.sh /dev/sdX                        # SD card, or /dev/nvme0n1
 sudo umount /mnt/iso
 #    x86 host: boot the hugmesh-x86-amd64-*.iso live image, then run  install-x86.sh /dev/sdX  from it.
@@ -1065,18 +1071,15 @@ reach the fe-gateway. The apex `hugmesh.net` is not matched by
 (`manifests/cloudflared`) is likewise ordered **after** the reserved hostnames and
 **before** the 404 catch-all.
 
-**Honest cross-service deferral (a THIRD repo).** The shared gateway image
+**Cross-service note (a THIRD repo).** The shared gateway image
 (`hugmesh-gateway`) ends its `SecurityConfig` with `anyExchange().authenticated()`
-and permits only a hardcoded `PUBLIC_PATHS` allowlist (`/api/auth`,
-`/api/registration`, `/api/login`, the login/registration/banned remotes).
-`/api/federation/vanity/**` is **not** in it, so the fe-gateway pod would itself
-401 the anonymous vanity request before proxying. **To make the public vanity host
-reachable, `/api/federation/vanity/**` (or a `Host=*.<domain>` public rule) must be
-added to the gateway `PUBLIC_PATHS` in the `hugmesh-gateway` repo** — out of
-scope for this generator/federation-api pass and documented as a deferral. The
-generator side here (wildcard DNS already in place, fe-gateway ingress wildcard
-host, the ordered `Host=*.<domain>` route to federation-api, the cloudflared
-wildcard rule) is complete and renders clean (`helm template` /
+and permits only a hardcoded `PUBLIC_PATHS` allowlist. That list used to omit
+`/api/federation/vanity/**`, so the fe-gateway pod would have 401'd the anonymous
+vanity request before proxying. It no longer does: `/api/federation/vanity` and
+`/api/federation/vanity/**` are in `PUBLIC_PATHS` on `hugmesh-gateway` `main`
+(`SecurityConfig.java`; checked 2026-10-07). The generator side (wildcard DNS,
+fe-gateway ingress wildcard host, the ordered `Host=*.<domain>` route to
+federation-api, the cloudflared wildcard rule) renders clean (`helm template` /
 `kubectl kustomize`).
 
 The PUBLISH path (marking a user's profile fragment `visibility=public` when they
@@ -1181,17 +1184,17 @@ for the full man-style reference. Highlights:
 
 | Flag | Default | Description |
 |---|---|---|
-| `-r, --role` | `generic` | `pki` \| `backend` \| `frontend` (RPi). Sets hostname, services, GitOps payload. |
+| `-r, --role` | `generic` (RPi) / `backend-gpu` (x86) | RPi: `pki` \| `backend` \| `frontend` \| `desktop` \| `generic`. Sets hostname, services, GitOps payload. |
 | `--env test\|prod` | `test` | **Build ENV, baked into `/etc/hugmesh/env`.** `test` = LAN-only (wildcard DNS kept, cloudflared/ACME pruned, internal CA); `prod` = real public domain (cloudflared/ACME kept, announced banner). See [Build ENV](#build-env-testprod-baked-at-image-creation). |
 | `-C, --config FILE` | auto `./brand.conf` | Source a brand profile (e.g. `brands/local.conf`). |
 | `--cluster-domain` | `hugmesh.net` | Base domain for gateways / Casdoor. |
-| `-w, --work-dir` | `./rpi5-stage4-build` | Git-ignored output directory. |
+| `-w, --work-dir` | `./out` | Git-ignored output directory. |
 | `-j, --jobs` | `$(nproc)` | Parallel emerge/make jobs. |
 | `--headscale-version` / `--tailscale-version` | pinned | Mesh binary versions. |
 | `--skip-mesh` / `--skip-tailscale` | off | Omit mesh VPN / tailscale client. |
 | `--skip-kernel` / `--skip-iso` / `--skip-clean` / `--resume` | off | Build phases. |
 | `--pcie-gen3` | off | Force PCIe Gen 3 for NVMe (RPi, test your drive). |
-| `--print-plan` | off | **Dry run** (all four builders): resolve + validate every flag, print the machine-greppable build plan (`PLAN_KEY=VALUE` lines) and exit 0 — no root, no writes, no network. Invalid role/flag combinations exit non-zero; secrets print as `REDACTED`. The build-matrix harness verifies every cell through it. |
+| `--print-plan` | off | **Dry run** (all ten builders): resolve + validate every flag, print the machine-greppable build plan (`PLAN_KEY=VALUE` lines) and exit 0 — no root, no writes, no network. Invalid role/flag combinations exit non-zero; secrets print as `REDACTED`. The build-matrix harness verifies every cell through it. |
 
 ### `make` targets
 
@@ -1212,7 +1215,7 @@ live list). Common overrides: `ENV=test|prod`, `BRAND=`, `DOMAIN=`,
 | `make omnibus` | the opt-in x86 all-namespaces-on-one-node image. |
 | `make frite` / `frite-live` / `frite-installer` | the opt-in Frite client (`FRITE_BOARD=`, `FRITE_FLAVOR=`, `FRITE_DESKTOP=light\|none`). |
 | `make jetson` / `make jetson-<role>` | the **EXPERIMENTAL** Jetson Orin edge-AI platform (`jetson-edge-ai`, `jetson-backend-gpu`, `jetson-omnibus`, `jetson-desktop`; `JETSON_BOARD=`, `JETSON_KERNEL_FLAVOR=`). Hardware validation pending. |
-| `make build-everything` | the **FULL documented matrix**: 3 Pi + all 11 x86 roles (nodes + omnibus + edge-ai + clients + standalone) + Frite + all 4 Jetson roles (honors `ENV=test\|prod`). |
+| `make build-everything` | the **FULL documented matrix**: 3 Pi + all 12 x86 roles (nodes + omnibus + edge-ai + clients + standalone, incl. unaffiliated) + Frite + Jetson + the six Orange Pi builders (honors `ENV=test\|prod`). |
 | `make matrix-check` | **dry-run validate the whole build matrix** across all four channels via the builders' `--print-plan` (no root, no writes; `tests/build-matrix/check.sh`). |
 | `make flash DEV=/dev/sdX ROLE=frontend ARCH=arm64` | write a role image to a disk (`.img` preferred). |
 | `make qemu` (`qemu-rpi` / `qemu-x86`) | boot a role image under QEMU (`ARCH=arm64`→Pi, `x86`→q35+OVMF). |
@@ -1223,12 +1226,12 @@ live list). Common overrides: `ENV=test|prod`, `BRAND=`, `DOMAIN=`,
 ### Build channels — all options in all menus
 
 Every documented image option is reachable from **every build front-end
-("channel")**: the **CLI** builders (`build-{rpi5,x86-host,frite,jetson}-stage4.sh`),
+("channel")**: the **CLI** builders (`build-*-stage4.sh`, ten of them),
 the **make** targets, the **ncurses menu** (`make menu`) and the **Studio GUI**
 (`studio/`), each crossed with the build ENV (`test`|`prod`). That is a standing
 rule ([`specs-jetson/README.md`](specs-jetson/README.md)), and it is **enforced,
 not aspirational**: [`tests/build-matrix/`](tests/build-matrix/) carries the
-canonical 78-cell matrix (platform × role × env × board/flavor/desktop) and
+canonical 150-cell `matrix.tsv` (platform × role × env × board/flavor/desktop) and
 `make matrix-check` proves all four channels agree on every cell — via the
 builders' `--print-plan` dry run, `make -n` recipe inspection, the menu's
 composed command and the Studio's headless `--print-command` — plus negative
@@ -1256,7 +1259,7 @@ provisioning engine, the backup engine, and the `cluster/` GitOps payload).
 | `specs-rpi5/portage/*` | RPi5 portage config (make.conf, packages, profile, keywords, USE) |
 | `specs-rpi5/kernel/hardened-k8s.config` | RPi kernel fragment (hardened + k8s + USB/VFAT + virtio); **reference** for the arch-neutral k8s netfilter/NAT/eBPF symbols both arches share |
 | `specs-x86/kernel/hardened-k8s.config` | amd64 kernel fragment (hardened + k8s). **Boot-critical:** carries the full netfilter/NAT/eBPF surface k8s Service networking needs — xtables match/target layer, `NF_NAT_MASQUERADE`, nft `NAT/MASQ/CT`, IPv6 nf tables, `IP_NF_MANGLE` (was a truncated copy that left ClusterIP/kube-proxy/MASQUERADE/dual-stack/NetworkPolicy dead). A **fail-closed build guard** in `build-x86-host-stage4.sh` (mirrored in `build-rpi5-stage4.sh`) asserts the load-bearing subset survives `make olddefconfig`; `tests/scripts/test-x86-kernel-net-symbols.sh` (CI `lint:x86-kernel-net-symbols`) keeps the fragment from re-truncating. eBPF CO-RE (BTF) is a separate pahole-gated follow-up — see the BTF note in the fragment. |
-| `specs-rpi5/boot/{config.txt.tmpl,cmdline.txt}` | RPi firmware boot config + kernel command line |
+| `specs-rpi5/boot/{config.txt.tmpl,cmdline.txt.tmpl}` | RPi firmware boot config + kernel command line |
 | `specs-rpi5/etc/fstab` | RPi filesystem table (mounts the `/boot` firmware partition) |
 | `specs-rpi5/installer/install.sh` | SD/NVMe installer (ships in the RPi5 ISO) |
 | `specs-x86/**` | amd64 host portage/kernel/installer/grub specs |
@@ -1311,7 +1314,7 @@ ABSENT and the authz/MFA claims present — before that config can flip live), a
 `domain-registry-reconcile-verify` (the signed-export domain bridge fails closed
 on a bad/placeholder key). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
 
-> **CI lives in GitLab; GitHub Actions is additive.** `.gitlab-ci.yml` (83 jobs,
+> **CI lives in GitLab; GitHub Actions is additive.** `.gitlab-ci.yml` (119 jobs,
 > in-cluster privileged runner) is the real pipeline and remains so — it is the only
 > lane that can build ISOs and images.
 >
@@ -1319,11 +1322,12 @@ on a bad/placeholder key). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
 > `.github/workflows` must not be added. **That is no longer true**:
 > `gh api repos/hugmesh/<repo>/actions/permissions` returns
 > `{"enabled":true,"allowed_actions":"all"}`, and sibling repositories have run
-> `ubuntu-latest` jobs successfully. Two workflows now exist, both narrow and both on
+> `ubuntu-latest` jobs successfully. Three workflows now exist, all on
 > GitHub-hosted runners:
 >
 > | Workflow | What it does |
 > |---|---|
+> | [`shell-suites.yml`](.github/workflows/shell-suites.yml) | The pre-merge gate: runs a curated set of the shell test suites on every pull request (jobs `alpine`, `debian`, `node`, `extras`). GitLab here is a pull mirror whose pipelines run after the merge, so this is what can stop a bad merge. |
 > | [`studio-tests.yml`](.github/workflows/studio-tests.yml) | Runs the Qt-free `studio/` test subset on a pull request that touches `studio/`. A fast pre-merge answer, not a replacement for GitLab's fuller `test:studio-suite`. |
 > | [`studio-release.yml`](.github/workflows/studio-release.yml) | Builds the Studio's Windows MSI and Linux Flatpak and publishes them as a GitHub Release. Dispatch- or tag-triggered only. |
 >
