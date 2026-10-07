@@ -165,7 +165,7 @@ cp brands/example.conf brands/acme.conf
 | `BRAND_TITLE` | `HugMesh Systems` | human title shown in UIs |
 | `ORG` | `hugmesh` | GitHub org / container-image namespace |
 | `CLUSTER_DOMAIN` | `hugmesh.net` | base domain (`id.`/`api.`/`matrix.`/`mastodon.` derived) |
-| `OPTIONAL_SERVICES` | `akkoma tuwunel phpbb games` (all) | which optional services to bake (see §2a) |
+| `OPTIONAL_SERVICES` | `akkoma tuwunel phpbb` | which optional services to bake (see §2a) |
 | `GAMES_DOMAIN` | `games.<CLUSTER_DOMAIN>` | games portal host + OIDC issuer (see §2b) |
 | `GROW_POLICY` | `fill` | first-boot root-grow policy baked into the `.img` (see §2c) |
 | `DEFAULT_USER` / `DEFAULT_USER_PASS` / `ROOT_PASS` | `pi` / `raspberry` / `gentoo` | **fallback** console accounts when no KEYS stick is present — change for real builds |
@@ -182,16 +182,19 @@ cp brands/example.conf brands/acme.conf
 
 ### 2a. `OPTIONAL_SERVICES` — add/remove services per image
 
-The four optional (non-architecture) services are `akkoma` (Mastodon/fediverse),
-`tuwunel` (Matrix), `phpbb` (forum) and `games`. The builders **prune** any slug
+The user-level optional (non-architecture) services are `akkoma` (Mastodon/fediverse),
+`tuwunel` (Matrix), `phpbb` (forum), `games`, `owncast`, `tube`, `character-studio`
+and `character-forge`. The builders **prune** any slug
 not listed from the baked GitOps tree (Application YAMLs, gateway host routes,
 route-access rows, the per-service ESO half — all enumerated by
 `specs/cluster/optional-services.yaml`); the rest of the stack degrades gracefully
-(greyed-out, never 502) when one is omitted. Built-in default is **all four on**.
+(greyed-out, never 502) when one is omitted. The built-in default is
+**`akkoma tuwunel phpbb`**; the other five are opt-in, and `OPTIONAL_SERVICES=all`
+(or `--all-services`) selects every one. An unknown slug is refused.
 
 ```sh
 # in brand.conf:
-OPTIONAL_SERVICES="akkoma games"       # forum-less + Matrix-less appliance
+OPTIONAL_SERVICES="akkoma games"       # forum-less + Matrix-less appliance, games on
 ```
 ```bash
 # or on the CLI (overrides the profile):
@@ -282,7 +285,7 @@ A host-side Python twin, `python -m hugmesh_studio.tui` (the Studio parity TUI:
 the guided journey — welcome screen, mode menu, Themes, create-nodes-for-local-cloud,
 whole-mesh emulation, domains with per-domain Sign-in — plus `--sessions`
 build-session review, `--worklist` table and `--meshemu` whole-mesh status
-list), follows the same `NO_TUI` degradation rule;
+list, `--fleet` and `--go-live`), follows the same `NO_TUI` degradation rule;
 its rich renderer is `dev-python/urwid` — ~arch on Gentoo, accepted with one line
 (`echo "dev-python/urwid ~amd64" >> /etc/portage/package.accept_keywords/hugmesh-studio`)
 — and entirely optional (see `studio/README.md`).
@@ -313,8 +316,8 @@ Qt-free headless faces".
 
 | Arch | Roles | Builder |
 |---|---|---|
-| **RPi5 (aarch64)** | `pki`, `backend`, `frontend` | `build-rpi5-stage4.sh --role <r>` |
-| **x86_64 (amd64)** | `pki`, `backend`, `frontend`, `backend-gpu`, `omnibus` | `build-x86-host-stage4.sh --role <r>` |
+| **RPi5 (aarch64)** | `pki`, `backend`, `frontend` (also `generic`, the builder default, and the client role `desktop`) | `build-rpi5-stage4.sh --role <r>` |
+| **x86_64 (amd64)** | `pki`, `backend`, `frontend`, `backend-gpu`, `omnibus` (also `edge-ai` and the client roles; see `--help`) | `build-x86-host-stage4.sh --role <r>` |
 
 Notes from the code:
 - On x86, `be`=backend, `fe`=frontend; **`host` is an alias for `backend-gpu`** (the
@@ -322,7 +325,10 @@ Notes from the code:
   node image.
 - `build-all-roles.sh` builds **Pi `pki backend frontend` + x86 `pki backend frontend backend-gpu`**
   by default; the x86 `omnibus` is opt-in (`X86_OMNIBUS=1`, `X86_ALL=1`, or an
-  explicit `X86_ROLES="…"`; `SKIP_X86=1` for Pi only).
+  explicit `X86_ROLES="…"`; `SKIP_X86=1` for Pi only). Pi 4 is `RPI_BOARD=rpi4`
+  (`rpi3` is `desktop`-only). The Frite below, a Jetson and six Orange Pi boards
+  are further opt-in platforms with their own `FRITE=1` / `JETSON=1` /
+  `ORANGEPI*=1` switches (header of `scripts/build-all-roles.sh`).
 
 ### 3b. `make` (Docker builder)
 
@@ -387,7 +393,7 @@ Full flag reference: `./build-rpi5-stage4.sh --help` and
 | `--env test\|prod` | `test` | baked build ENV (see §2e) |
 | `-C, --config FILE` | auto `./brand.conf` | source a brand profile |
 | `--brand` / `--brand-title` / `--org` / `--cluster-domain` | profile/defaults | per-field rebrand overrides |
-| `--optional-services "…"` | all four | prune optional services (see §2a) |
+| `--optional-services "…"` | `akkoma tuwunel phpbb` | prune optional services (see §2a) |
 | `--games-domain` | `games.<domain>` | games host + OIDC issuer (see §2b) |
 | `--grow fill\|none\|<size>` / `--no-grow` | `fill` | first-boot grow (see §2c) |
 | `--img-size MiB` |9216 (Pi) / 8192 (x86) | compact ext4 root size |
@@ -531,7 +537,8 @@ password hashes and the JKS keystores/truststore.
 ./scripts/gen-provision-keys.sh -r control-plane-additional -o keys-cp2
 ```
 
-Roles: `pki | backend | frontend | host | control-plane-additional`. Options:
+Roles (profiles): `pki | backend | frontend | host | control-plane-additional | mesh-extension`
+(default `pki`; a node role such as `backend-gpu` or `omnibus` folds to its profile). Options:
 
 | Flag | Meaning |
 |---|---|
@@ -614,23 +621,27 @@ whole-disk to the target. Arg-parsing, auto-detect and `--list` work **without
 root**; only the destructive write needs root.
 
 ```bash
-# see what would be flashed (no root):
-./scripts/flash-disk.sh --role pki --arch arm64 --list
+# see what would be flashed (no root). Run directly, the script searches
+# ./rpi5-stage4-build (arm64) or ./x86-host-build (x86) unless you pass -w;
+# builds land in ./out, so pass -w out (make flash does this for you):
+./scripts/flash-disk.sh --role pki --arch arm64 -w out --list
 
 # auto-pick the newest pki .img and flash it
-sudo ./scripts/flash-disk.sh --role pki --arch arm64 /dev/sda
+sudo ./scripts/flash-disk.sh --role pki --arch arm64 -w out /dev/sda
 
 # x86 host image to NVMe, no prompt
-sudo ./scripts/flash-disk.sh --role backend-gpu --arch x86 --no-confirm /dev/nvme0n1
+sudo ./scripts/flash-disk.sh --role backend-gpu --arch x86 -w out --no-confirm /dev/nvme0n1
 
 # also write a separate KEYS stick in the same run (different device!)
-sudo ./scripts/flash-disk.sh --role backend --arch arm64 \
+sudo ./scripts/flash-disk.sh --role backend --arch arm64 -w out \
      --with-keys keys-backend --keys-dev /dev/sdb /dev/sda
 ```
 
-Flags: `--role pki|backend|frontend|host|be|fe|omnibus` (`be`=backend,
-`fe`=frontend), `--arch arm64|x86`, `--work-dir DIR`, `--artifact FILE` (skip
-auto-pick), `--with-keys DIR` + `--keys-dev DEV`, `--no-confirm`, `--list`. The
+Flags: `--role pki|backend|frontend|backend-gpu|omnibus|edge-ai|generic|desktop`
+(old spellings `be`, `fe`, `host` still work), `--arch arm64|x86`, `--platform NAME`
+(only to pick between arm64 boards), `--work-dir DIR`, `--artifact FILE` (skip
+auto-pick; `.img.xz`/`.iso.xz` accepted), `--with-keys DIR` + `--keys-dev DEV`,
+`--no-confirm`, `--list`. The
 `.img` is self-partitioning (PARTUUID root) and growroot expands the root to fill
 the disk on first boot — one image boots from SD / USB / NVMe unchanged.
 
@@ -730,9 +741,9 @@ sudo ./scripts/flash-disk.sh --role pki --arch arm64 /dev/sda
 # 5. insert the matching KEYS stick, boot pki first, then the workers
 ```
 
-Board tuning if you are not on a Pi 5: `-c cortex-a72 -d bcm2711_defconfig
---dtb-prefix bcm2711 --kernel-img kernel8.img` (RPi 4). `--pcie-gen3` forces
-NVMe Gen 3 (test your drive first).
+For a Pi 4 use `--board rpi4` (`make rpi RPI_BOARD=rpi4`); it picks the CPU,
+defconfig, DTB prefix and kernel image. `--board rpi3` is `desktop`-only.
+`--pcie-gen3` forces NVMe Gen 3 (test your drive first).
 
 ### 9b. x86_64 (amd64) — the GPU host / omnibus
 
@@ -745,7 +756,7 @@ make omnibus                                  # or: sudo ./build-x86-host-stage4
 ./scripts/gen-provision-keys.sh -r host -o keys-host         # backend-gpu worker
 ./scripts/gen-provision-keys.sh -r pki  -o keys-omnibus      # omnibus = single-node control plane
 # flash + KEYS as above with --arch x86; the x86 .img is a UEFI GPT disk (ESP + ext4 root)
-sudo ./scripts/flash-disk.sh --role backend-gpu --arch x86 /dev/nvme0n1
+sudo ./scripts/flash-disk.sh --role backend-gpu --arch x86 -w out /dev/nvme0n1
 ```
 
 ---
@@ -754,11 +765,11 @@ sudo ./scripts/flash-disk.sh --role backend-gpu --arch x86 /dev/nvme0n1
 
 ```bash
 # QEMU integration test — boots a built image with a synthetic KEYS disk
-sudo ./tests/qemu/run-qemu-test.sh --role pki
+sudo ./tests/qemu/run-qemu-test.sh -w out --role pki
 make qemu-rpi ROLE=frontend          # or qemu-x86 ROLE=backend-gpu
 
 # first-boot provisioning emulation (no block device, no kernel boot)
-./tests/boot/emulate-firstboot.sh                 # all four roles
+./tests/boot/emulate-firstboot.sh                 # pki backend frontend backend-gpu
 ./tests/boot/emulate-firstboot.sh pki backend     # specific roles
 ```
 
@@ -773,7 +784,7 @@ sections.
 The image/ISO pipeline runs on **GitLab**, not GitHub Actions — because it needs the
 privileged in-cluster runner, not because Actions is unavailable. (This document used
 to say Actions was billing-blocked org-wide and that `.github/workflows` must not be
-added; that is stale — Actions is enabled, and two narrow Studio workflows now live in
+added; that is stale — Actions is enabled, and three workflows now live in
 `.github/workflows/`. See the CI note in the README.) `.gitlab-ci.yml` runs on a privileged x86
 runner: it builds the role ISOs + container images and delivers the ISOs as
 generic-package release assets for the admin UI's download links. ISOs carry **no
