@@ -402,7 +402,7 @@ Full flag reference: `./build-rpi5-stage4.sh --help` and
 | `--img-size MiB` |9216 (Pi) / 8192 (x86) | compact ext4 root size |
 | `-w, --work-dir` | `./out` | products dir |
 | `-j, --jobs N` | `$(nproc)` | parallel emerge/make jobs |
-| `--skip-mesh` / `--skip-tailscale` / `--skip-kernel` / `--skip-clean` / `--resume` | off | phases. `--resume` reuses the build system an earlier run left (`<work dir>/snap-build-*/sysroot`) instead of extracting the stage3 again. On x86 it is refused, in one sentence, when that build system is not root's, when the static libraries every build's clean step deletes cannot be put back from the seed the build system came from, or when it cannot link a C program; then rebuild **without** `--resume` (see Troubleshooting) |
+| `--skip-mesh` / `--skip-tailscale` / `--skip-kernel` / `--skip-clean` / `--resume` | off | phases. `--resume` reuses the build system an earlier run left (`<work dir>/snap-build-*/sysroot`) instead of extracting the stage3 again. On x86 it is refused, in one sentence, when that build system is not root's, when the static libraries every build's clean step deletes cannot be put back from the seed the build system came from, when that cached seed no longer verifies against its signed DIGESTS, or when it cannot link a C program; then rebuild **without** `--resume` (see Troubleshooting) |
 | `--enable-wifi` / `--enable-bluetooth` | **off** | WiFi + Bluetooth are **disabled by default** (rfkill block + blacklisted modules + no service); these re-enable them. Ethernet + the tailnet are unaffected. (env/brand.conf: `ENABLE_WIFI` / `ENABLE_BLUETOOTH`) |
 | Pi: `--pcie-gen3`, `-c/--cpu`, `-d/--defconfig` | off / cortex-a76 / bcm2712 | board tuning |
 | x86: `--installer-iso`, `--no-live-iso`, `--no-tar` | off / live ISO on / tar on | x86 artifacts |
@@ -850,11 +850,25 @@ so CI builds from a complete in-VPN copy. See [`docs/DEVOPS.md`](DEVOPS.md).
   glibc, gcc and binutils match the build system's package database). When no cached
   seed matches — the seed cache was cleaned, or a later `@world` update moved the build
   system's own toolchain — nothing can be restored safely: rebuild without `--resume`.
-  The comparison is exact (version and revision) on all three packages, so a build made
-  with `REBUILD_TOOLCHAIN=true` (which lets `@world` move gcc, glibc and binutils off the
-  seed's) is refused by every later `--resume`; and a resumed `@world` that adds a second
-  gcc slot while the seed's slot stays installed passes this check, then fails the link
-  test below instead. Both end the same way: rebuild without `--resume`.
+  The comparison is exact (version and revision) on every package the seed lists, so a
+  build made with `REBUILD_TOOLCHAIN=true` (which lets `@world` move gcc, glibc and
+  binutils off the seed's) is refused by every later `--resume`; a seed that itself ships
+  two gcc slots matches a build system carrying both; and a resumed `@world` that adds a
+  second gcc slot while the seed's slot stays installed passes this check, then fails the
+  link test below instead. Both end the same way: rebuild without `--resume`. The marker
+  is corrected whenever the seed actually used differs from what it names (a seed that
+  left the cache is not retried on every resume).
+- **`--resume` stops with `Refusing to restore the build system's static libraries: the cached seed … did not verify against its signed DIGESTS`**
+  → the seed the restore would extract from is not the one this run fetched and verified
+  (it is the marker's, or the one whose toolchain matches), so it is verified again, the
+  same way `sa_seed_acquire` verifies the current seed on every run: its signed `DIGESTS`
+  is fetched from the Gentoo autobuilds tree (`…/autobuilds/<timestamp>/<seed>.DIGESTS`),
+  GPG-checked, and the file's SHA512 compared. The seed cache (`shared/seed/amd64`) is a
+  directory `make` hands to your user, so "verified when it was fetched" is not "verified
+  now"; root never extracts from a cached file nobody checked. The refusal also fires when
+  the mirror no longer serves that seed's `DIGESTS` (old releases rotate off) or the host
+  is offline: fail-closed, at the cost of a rebuild without `--resume`. The current seed
+  is not verified a second time.
 - **`--resume` stops with `The reused build system cannot link a C program …`** → the
   restore above ran and a link still fails; rebuild without `--resume` instead of
   watching three packages fail with compiler errors minutes in.
@@ -871,7 +885,9 @@ so CI builds from a complete in-VPN copy. See [`docs/DEVOPS.md`](DEVOPS.md).
   for a build directory reached through a symlink, a relative `--work-dir`, or a name
   with a space or a non-ASCII letter; a path with a newline in it is refused, and so is
   a table that cannot be read — the builder never reads "cannot tell" as "nothing is
-  mounted".
+  mounted". A build system path that resolves to `/` (a symlink planted where the
+  directory should be) is refused outright, with nothing listed: every mount on the host
+  would otherwise be printed as a command to run.
 - **No artifact to flash** → `./scripts/flash-disk.sh --role <r> --arch <a> --list`
   shows the candidates and the resolved work dir; check `--arch`/`--role` and that
   the build wrote to that `--work-dir`.

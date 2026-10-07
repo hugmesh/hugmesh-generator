@@ -123,6 +123,26 @@ SEED_OLD="${SEEDDIR}/stage3-amd64-hardened-openrc-20260920T170055Z.tar.xz"   # m
 SEED_NEW="${SEEDDIR}/stage3-amd64-hardened-openrc-20260927T170058Z.tar.xz"   # binutils moved
 make_seed "${SEED_OLD}" glibc-2.43-r2 gcc-15.3.0 binutils-2.46.1
 make_seed "${SEED_NEW}" glibc-2.43-r2 gcc-15.3.0 binutils-2.47
+# The current seed's URL as the builder spells it (<autobuilds>/<timestamp>/<name>),
+# and a recording stand-in for the builder's verifier: section 4b re-verifies any
+# cached seed that is not the current one before root extracts from it, through
+# "${SA_VERIFY_CMD:-dlv_verify_stage3}" (the real one fetches the signed DIGESTS from
+# the mirror; nothing here touches the network). Every call is logged as
+# "<seed> <digests url>"; STUB_VERIFY_FAIL=1 makes it fail the way a checksum
+# mismatch does.
+STAGE3_URL_FIX="https://distfiles.gentoo.org/releases/amd64/autobuilds/20260927T170058Z/stage3-amd64-hardened-openrc-20260927T170058Z.tar.xz"
+DIGESTS_OLD="https://distfiles.gentoo.org/releases/amd64/autobuilds/20260920T170055Z/stage3-amd64-hardened-openrc-20260920T170055Z.tar.xz.DIGESTS"
+export VERIFY_LOG="${TDIR}/verify-calls"; : > "${VERIFY_LOG}"
+stub_verify() {
+    printf '%s %s\n' "$1" "$2" >> "${VERIFY_LOG}"
+    if [ "${STUB_VERIFY_FAIL:-0}" = 1 ]; then
+        echo "[verify-download] ERROR: stage3 tarball checksum did not match the signed DIGESTS — aborting build." >&2
+        return 1
+    fi
+    return 0
+}
+export -f stub_verify
+export SA_VERIFY_CMD=stub_verify
 
 # Builder log helpers the sections call (the real ones colour their output).
 banner() { echo "==> $1"; }
@@ -230,6 +250,21 @@ tcs="$(hmr_toolchain_from_sysroot "${SM}" | tr '\n' ' ')"
 hmr_toolchain_matches "${L}" "${SM}" && ok "toolchain match: 20260920 seed == sysroot" || bad "toolchain match: 20260920 seed should match"
 hmr_seed_list "${SEED_NEW}" "${L}"
 hmr_toolchain_matches "${L}" "${SM}" && bad "toolchain match: 20260927 seed (binutils 2.47) must NOT match" || ok "toolchain match: 20260927 seed (binutils 2.47 vs 2.46.1) rejected"
+# a seed that itself ships TWO gcc slots (a stage3 made during a gcc transition)
+# matches a build system carrying both; the old "exactly three packages" count
+# refused it even when the marker named it.
+SEED_2GCC="${TDIR}/stage3-amd64-hardened-openrc-20260801T170000Z.tar.xz"
+s2="$(mktemp -d "${TDIR}/seedsrc.XXXXXX")"
+mkdir -p "${s2}/var/db/pkg/sys-libs/glibc-2.43-r2" "${s2}/var/db/pkg/sys-devel/gcc-14.3.0" "${s2}/var/db/pkg/sys-devel/gcc-15.3.0" \
+         "${s2}/var/db/pkg/sys-devel/binutils-2.46.1" "${s2}/usr/lib64"
+echo "seed" > "${s2}/usr/lib64/libc_nonshared.a"
+tar -C "${s2}" -cJf "${SEED_2GCC}" . && rm -rf "${s2}"
+SM2="${TDIR}/sr-2gcc"; make_sysroot "${SM2}"; mkdir -p "${SM2}/var/db/pkg/sys-devel/gcc-14.3.0"
+hmr_seed_list "${SEED_2GCC}" "${L}"
+hmr_toolchain_matches "${L}" "${SM2}" && ok "toolchain match: a seed shipping two gcc slots matches a build system that carries both" \
+    || bad "toolchain match (two gcc slots): a seed with gcc-14 and gcc-15 was refused for a build system carrying both"
+hmr_toolchain_matches "${L}" "${SM}" && bad "toolchain match (two gcc slots): accepted by a build system lacking gcc-14" \
+    || ok "toolchain match: the two-slot seed is refused by a build system that lacks one of its slots"
 # 1e. seed choice: newest seed current, no marker -> the OLD cached seed is found.
 BR="${TDIR}/br-nomarker"; mkdir -p "${BR}"
 chosen="$(hmr_seed_for_resume "${BR}" "${SM}" "${SEED_NEW}" "${L}" 2>"${TDIR}/e1")"; rc=$?
@@ -240,6 +275,18 @@ BRM="${TDIR}/br-marker"; mkdir -p "${BRM}"; hmr_seed_marker_write "${BRM}" "${SE
 [ "$(hmr_seed_marker_read "${BRM}")" = "$(basename "${SEED_OLD}")" ] && ok "seed marker: written beside the sysroot as the basename, read back" || bad "seed marker round trip"
 chosen="$(hmr_seed_for_resume "${BRM}" "${SM}" "${SEED_OLD}" "${L}" 2>/dev/null)"
 [ "${chosen}" = "${SEED_OLD}" ] && ok "seed choice (marker): the marker's seed is chosen" || bad "seed choice (marker): got '${chosen}'"
+# the marker is tried FIRST: two cached seeds with the SAME toolchain, the marker
+# naming the older one, the newer one current -> the marker's seed is chosen (only
+# the version match ordered the candidates before; a newer seed with the same
+# versions can still differ in the files it ships).
+TWIN="${TDIR}/seed-twins"; mkdir -p "${TWIN}"
+SEED_TWIN_OLD="${TWIN}/stage3-amd64-hardened-openrc-20260913T170000Z.tar.xz"
+SEED_TWIN_NEW="${TWIN}/stage3-amd64-hardened-openrc-20260920T170055Z.tar.xz"
+cp "${SEED_OLD}" "${SEED_TWIN_OLD}"; cp "${SEED_OLD}" "${SEED_TWIN_NEW}"
+BRT="${TDIR}/br-twin"; mkdir -p "${BRT}"; hmr_seed_marker_write "${BRT}" "${SEED_TWIN_OLD}"
+chosen="$(hmr_seed_for_resume "${BRT}" "${SM}" "${SEED_TWIN_NEW}" "${L}" 2>/dev/null)"
+[ "${chosen}" = "${SEED_TWIN_OLD}" ] && ok "seed choice (marker first): with two cached seeds of the same toolchain the marker's wins over the current one" \
+    || bad "seed choice (marker first): got '${chosen}', wanted the marker's ${SEED_TWIN_OLD}"
 # 1g. refusal: only a mismatching seed cached -> one sentence, rc=1, says to rebuild.
 ONLYNEW="${TDIR}/seed-onlynew"; mkdir -p "${ONLYNEW}"; cp "${SEED_NEW}" "${ONLYNEW}/"
 out="$(hmr_seed_for_resume "${BR}" "${SM}" "${ONLYNEW}/$(basename "${SEED_NEW}")" "${L}" 2>&1 >/dev/null)"; rc=$?
@@ -524,6 +571,55 @@ if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -a -F "(the build system has
 else
     bad "seed refusal separators: rc=${rc}: ${out}"
 fi
+# a seed cache under a directory with a space and glob characters in its name: the
+# refusal names each seed and its toolchain (word-splitting the tried list printed
+# "my: no toolchain record; builds: no toolchain record" for a cache under "my builds [1]/")
+SPACED="${TDIR}/my builds [1]"; mkdir -p "${SPACED}"; cp "${SEED_NEW}" "${SPACED}/"
+out="$(hmr_seed_for_resume "${BR}" "${SM}" "${SPACED}/$(basename "${SEED_NEW}")" "${L}" 2>&1 >/dev/null)"; rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -a -F "cached seeds: stage3-amd64-hardened-openrc-20260927T170058Z.tar.xz: sys-devel/binutils-2.47 sys-devel/gcc-15.3.0 sys-libs/glibc-2.43-r2)" >/dev/null \
+   && ! printf '%s' "${out}" | grep -a -F "no toolchain record" >/dev/null; then
+    ok "seed refusal (seed cache under 'my builds [1]/'): the seed is named with its toolchain, no 'my: no toolchain record'"
+else
+    bad "seed cache with a space in its path: rc=${rc}: ${out}"
+fi
+# 1r2. the chosen seed is VERIFIED before anything is extracted from it, unless it is
+# the current seed this run already verified; the DIGESTS URL is the seed's own, on
+# the autobuilds tree the current seed came from.
+d="$(hmr_seed_digests_url "${STAGE3_URL_FIX}" "${SEED_OLD}")"; rc=$?
+[ "${rc}" -eq 0 ] && [ "${d}" = "${DIGESTS_OLD}" ] && ok "seed verify: the DIGESTS URL is <autobuilds>/<the seed's timestamp>/<its name>.DIGESTS" \
+    || bad "seed verify URL: rc=${rc} got '${d}' wanted '${DIGESTS_OLD}'"
+d="$(hmr_seed_digests_url "${STAGE3_URL_FIX}" "${TDIR}/stage3-amd64-hardened-openrc-custom.tar.xz")"; rc=$?
+[ "${rc}" -eq 1 ] && [ -z "${d}" ] && ok "seed verify: a seed name without a release timestamp has no DIGESTS URL (rc=1, nothing printed)" \
+    || bad "seed verify URL (no timestamp): rc=${rc} got '${d}'"
+: > "${VERIFY_LOG}"
+out="$(hmr_seed_verify "${SEED_OLD}" "${SEED_OLD}" "${STAGE3_URL_FIX}" 2>&1)"; rc=$?
+[ "${rc}" -eq 0 ] && [ -z "${out}" ] && [ ! -s "${VERIFY_LOG}" ] && ok "seed verify: the current seed is not re-verified (sa_seed_acquire did, this run): no call, silent" \
+    || bad "seed verify (current seed): rc=${rc} calls=$(cat "${VERIFY_LOG}") ${out}"
+: > "${VERIFY_LOG}"
+out="$(hmr_seed_verify "${SEED_OLD}" "${SEED_NEW}" "${STAGE3_URL_FIX}" 2>&1)"; rc=$?
+[ "${rc}" -eq 0 ] && [ "$(cat "${VERIFY_LOG}")" = "${SEED_OLD} ${DIGESTS_OLD}" ] && ok "seed verify: another cached seed is handed to the verifier ONCE with its own DIGESTS URL" \
+    || bad "seed verify (other seed): rc=${rc} calls=[$(cat "${VERIFY_LOG}")] ${out}"
+: > "${VERIFY_LOG}"
+out="$(STUB_VERIFY_FAIL=1 hmr_seed_verify "${SEED_OLD}" "${SEED_NEW}" "${STAGE3_URL_FIX}" 2>&1)"; rc=$?
+if [ "${rc}" -eq 1 ] && [ "$(printf '%s\n' "${out}" | grep -a -c "Refusing to restore")" -eq 1 ] \
+   && printf '%s' "${out}" | grep -a -F "did not verify against its signed DIGESTS" >/dev/null \
+   && printf '%s' "${out}" | grep -a -F "rebuild WITHOUT --resume" >/dev/null; then
+    ok "seed verify fail: a cached seed that does not verify -> rc=1, ONE refusal sentence naming the seed, 'rebuild WITHOUT --resume'"
+else
+    bad "seed verify fail: rc=${rc}: ${out}"
+fi
+out="$(hmr_seed_verify "${TDIR}/stage3-amd64-hardened-openrc-custom.tar.xz" "${SEED_NEW}" "${STAGE3_URL_FIX}" 2>&1)"; rc=$?
+[ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -a -F "carries no release timestamp" >/dev/null && ok "seed verify: a cached seed whose name has no timestamp is refused rather than extracted unverified" \
+    || bad "seed verify (no timestamp): rc=${rc}: ${out}"
+# 1r3. a build system path that resolves to / is refused outright: nothing listed, no
+# umount command printed (the host's whole mount table would be 'stale' otherwise).
+ROOTLINK="${TDIR}/rootlink"; ln -s / "${ROOTLINK}"
+out="$(HMR_MOUNTINFO="${MI}" hmr_stale_mounts "${ROOTLINK}" 2>&1)"; rc=$?
+if [ "${rc}" -eq 1 ] && [ "$(printf '%s\n' "${out}" | wc -l)" -eq 1 ] && printf '%s' "${out}" | grep -a -F "resolves to /, the host's own root" >/dev/null; then
+    ok "a build system path that resolves to / is refused in one sentence; no mount is listed"
+else
+    bad "sysroot resolving to /: rc=${rc}: ${out}"
+fi
 # 1s. the seed marker: never written through a symlink, never read as anything but a bare name
 BRS="${TDIR}/br-symlink"; mkdir -p "${BRS}"; echo "untouched" > "${TDIR}/marker-victim"; ln -s "${TDIR}/marker-victim" "${BRS}/sysroot.seed"
 out="$(hmr_seed_marker_write "${BRS}" "${SEED_OLD}" 2>&1)"; rc=$?
@@ -612,16 +708,28 @@ for r in true false; do
     fi
 done
 rm -f "${SX}/leftover-from-the-previous-attempt"
+# a sysroot that resolves to / (a symlink planted where the build system should be):
+# refused before anything, with no umount command printed (the host's whole mount
+# table is not "stale mounts under the build system")
+out="$(run_extract_phase "${X86}" true "${ROOTLINK}" "${B1}" "${SEED_OLD}" "" "${MI_CLEAR}" 2>&1)"; rc=$?
+if [ "${rc}" -ne 0 ] && printf '%s' "${out}" | grep -a -F "resolves to /, the host's own root" >/dev/null \
+   && [ "$(printf '%s\n' "${out}" | grep -a -c "^    umount '")" -eq 0 ] \
+   && ! printf '%s' "${out}" | grep -a -F "EXTRACT-PHASE-COMPLETED" >/dev/null && ! printf '%s' "${out}" | grep -a -F "skipping extraction" >/dev/null; then
+    ok "extract phase (sysroot is a symlink to /): stops with the sentence, prints no umount command, never reaches 'skipping extraction'"
+else
+    bad "extract phase (sysroot -> /): rc=${rc}: ${out}"
+fi
 # 2b. section 4b: the restore runs for a non-GPU role when the statics are missing.
 run_4b() {   # <builder> <sysroot> <build root> <current seed> <GPU true|false>
     local b="$1" sysroot="$2" build_root="$3" seed="$4" gpu="$5"
     local sec="${TDIR}/sec-4b.sh"
     extract_section "$b" '^# ── 4b\. Toolchain static restore' 'hmr_statics_restore' '^fi$' "${sec}" || return 99
+    : > "${VERIFY_LOG}"
     timeout "${WALL}" bash -c "
         set -euo pipefail
         . '${LIB}'
         banner(){ echo \"==> \$1\"; }; info(){ echo \"    \$1\"; }; warn(){ echo \"    WARNING: \$1\"; }; err(){ echo \"    ERROR: \$1\" >&2; }
-        GPU=${gpu}; SYSROOT='${sysroot}'; BUILD_ROOT='${build_root}'; STAGE3_LOCAL='${seed}'
+        GPU=${gpu}; SYSROOT='${sysroot}'; BUILD_ROOT='${build_root}'; STAGE3_LOCAL='${seed}'; STAGE3_URL='${STAGE3_URL_FIX}'
         . '${sec}'
         echo 4B-COMPLETED
     "
@@ -629,13 +737,14 @@ run_4b() {   # <builder> <sysroot> <build root> <current seed> <GPU true|false>
 B2="${TDIR}/b-4b"; mkdir -p "${B2}"; S4="${B2}/sysroot"; make_sysroot "${S4}"
 out="$(run_4b "${X86}" "${S4}" "${B2}" "${SEED_NEW}" false 2>&1)"; rc=$?
 if [ "${rc}" -eq 0 ] && [ -f "${S4}/usr/lib64/libc_nonshared.a" ] && [ -f "${S4}/usr/lib/gcc/x86_64-pc-linux-gnu/15/libgcc.a" ] \
-   && [ "$(cat "${B2}/sysroot.seed" 2>/dev/null)" = "$(basename "${SEED_OLD}")" ] && printf '%s' "${out}" | grep -a -F "Restored" >/dev/null; then
-    ok "4b (GPU=false, statics stripped, newest seed mismatches): restored from the MATCHING cached seed, marker recorded"
+   && [ "$(cat "${B2}/sysroot.seed" 2>/dev/null)" = "$(basename "${SEED_OLD}")" ] && printf '%s' "${out}" | grep -a -F "Restored" >/dev/null \
+   && [ "$(cat "${VERIFY_LOG}")" = "${SEED_OLD} ${DIGESTS_OLD}" ]; then
+    ok "4b (GPU=false, statics stripped, newest seed mismatches): the MATCHING cached seed is verified once against its own DIGESTS, restored from, and recorded in the marker"
 else
-    bad "4b (GPU=false): rc=${rc}: ${out}"
+    bad "4b (GPU=false): rc=${rc}: verify calls=[$(cat "${VERIFY_LOG}")] ${out}"
 fi
 out="$(run_4b "${X86}" "${S4}" "${B2}" "${SEED_NEW}" false 2>&1)"; rc=$?
-[ "${rc}" -eq 0 ] && ! printf '%s' "${out}" | grep -a -F "Restoring" >/dev/null && ok "4b: a no-op when the statics are present" || bad "4b no-op: rc=${rc}: ${out}"
+[ "${rc}" -eq 0 ] && ! printf '%s' "${out}" | grep -a -F "Restoring" >/dev/null && [ ! -s "${VERIFY_LOG}" ] && ok "4b: a no-op when the statics are present (no verifier call either)" || bad "4b no-op: rc=${rc}: ${out}"
 B3="${TDIR}/b-4b-refuse"; mkdir -p "${B3}"; S5="${B3}/sysroot"; make_sysroot "${S5}"
 out="$(run_4b "${X86}" "${S5}" "${B3}" "${ONLYNEW}/$(basename "${SEED_NEW}")" true 2>&1)"; rc=$?
 if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -a -F "Refusing to restore" >/dev/null && ! printf '%s' "${out}" | grep -a -F "4B-COMPLETED" >/dev/null \
@@ -643,6 +752,34 @@ if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -a -F "Refusing to restore" 
     ok "4b (only a mismatching seed cached, even for GPU=true): refused, nothing restored, build stops"
 else
     bad "4b refusal: rc=${rc}: ${out}"
+fi
+# the chosen seed fails verification -> refused before anything is extracted, no marker
+B7="${TDIR}/b-4b-badseed"; mkdir -p "${B7}"; S7="${B7}/sysroot"; make_sysroot "${S7}"
+out="$(STUB_VERIFY_FAIL=1 run_4b "${X86}" "${S7}" "${B7}" "${SEED_NEW}" false 2>&1)"; rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -a -F "did not verify against its signed DIGESTS" >/dev/null && ! printf '%s' "${out}" | grep -a -F "4B-COMPLETED" >/dev/null \
+   && [ ! -f "${S7}/usr/lib64/libc_nonshared.a" ] && [ ! -f "${S7}/usr/lib/gcc/x86_64-pc-linux-gnu/15/libgcc.a" ] && [ ! -e "${B7}/sysroot.seed" ] \
+   && [ "$(cat "${VERIFY_LOG}")" = "${SEED_OLD} ${DIGESTS_OLD}" ]; then
+    ok "4b (the matching cached seed does not verify): refused in one sentence, NOTHING extracted, no marker written, build stops"
+else
+    bad "4b verify fail: rc=${rc}: libc=$([ -f "${S7}/usr/lib64/libc_nonshared.a" ] && echo present || echo absent) marker=$(cat "${B7}/sysroot.seed" 2>/dev/null) ${out}"
+fi
+# the CURRENT seed matches -> restored from it with NO second verification (sa_seed_acquire verified it this run)
+B6="${TDIR}/b-4b-current"; mkdir -p "${B6}"; S6="${B6}/sysroot"; make_sysroot "${S6}"
+out="$(run_4b "${X86}" "${S6}" "${B6}" "${SEED_OLD}" false 2>&1)"; rc=$?
+if [ "${rc}" -eq 0 ] && [ -f "${S6}/usr/lib64/libc_nonshared.a" ] && [ ! -s "${VERIFY_LOG}" ] && [ "$(cat "${B6}/sysroot.seed" 2>/dev/null)" = "$(basename "${SEED_OLD}")" ]; then
+    ok "4b (the current seed matches): restored from it, the verifier NOT called again, marker recorded"
+else
+    bad "4b current seed: rc=${rc}: verify calls=[$(cat "${VERIFY_LOG}")] ${out}"
+fi
+# a marker naming a seed that has LEFT the cache: the version match restores from the
+# right seed and the marker is corrected to it (it used to stay stale for ever)
+B8="${TDIR}/b-4b-stalemarker"; mkdir -p "${B8}"; S8="${B8}/sysroot"; make_sysroot "${S8}"
+printf '%s\n' "stage3-amd64-hardened-openrc-20260101T000000Z.tar.xz" > "${B8}/sysroot.seed"
+out="$(run_4b "${X86}" "${S8}" "${B8}" "${SEED_NEW}" false 2>&1)"; rc=$?
+if [ "${rc}" -eq 0 ] && [ -f "${S8}/usr/lib64/libc_nonshared.a" ] && [ "$(cat "${B8}/sysroot.seed" 2>/dev/null)" = "$(basename "${SEED_OLD}")" ]; then
+    ok "4b (marker names a seed no longer cached): restored from the matching seed and the marker is CORRECTED to it"
+else
+    bad "4b stale marker: rc=${rc}: marker=$(cat "${B8}/sysroot.seed" 2>/dev/null) ${out}"
 fi
 # 2c. the link check after mount_chroot: only under --resume, stops before emerge.
 run_link_block() {   # <builder> <resume> <sysroot> <gcc fail 0|1>
@@ -788,6 +925,17 @@ pin_x86() {   # <builder> -> 0 when every pin holds
     has "$b" 'hmr_umount_own "${SYSROOT}/var/cache/distfiles-ro"' || rc=1
     has "$b" 'hmr_stale_mount_refuse "${SYSROOT}" "${_stale_mounts}"' || rc=1
     has "$b" 'hmr_seed_marker_write "${BUILD_ROOT}" "${STAGE3_LOCAL}"' || rc=1
+    # 4b: the chosen seed is verified AFTER it is chosen and BEFORE anything is
+    # extracted from it, and the marker is corrected whenever it disagrees
+    local n_sel n_ver n_res
+    n_sel="$(grep -a -n -F 'hmr_seed_for_resume "${BUILD_ROOT}" "${SYSROOT}" "${STAGE3_LOCAL}" "${_hmr_listing}"' "$b" | head -1 | cut -d: -f1)"
+    n_ver="$(grep -a -n -F 'hmr_seed_verify "${_hmr_seed}" "${STAGE3_LOCAL}" "${STAGE3_URL}" || { rm -f "${_hmr_listing}"; exit 1; }' "$b" | head -1 | cut -d: -f1)"
+    n_res="$(grep -a -n -F 'hmr_statics_restore "${SYSROOT}" "${_hmr_seed}" "${_hmr_listing}"' "$b" | head -1 | cut -d: -f1)"
+    [ -n "${n_sel}" ] && [ -n "${n_ver}" ] && [ -n "${n_res}" ] && [ "${n_sel}" -lt "${n_ver}" ] && [ "${n_ver}" -lt "${n_res}" ] || rc=1
+    has "$b" '[ "$(hmr_seed_marker_read "${BUILD_ROOT}")" = "$(basename "${_hmr_seed}")" ] || hmr_seed_marker_write "${BUILD_ROOT}" "${_hmr_seed}" || true' || rc=1
+    # the successful-build unmount: the explicit call before the Clean phase, at
+    # column 0 (the live-ISO dracut step has an indented second one of its own)
+    hasr "$b" '^umount_chroot; trap - EXIT$' || rc=1
     grep -a -F "umount -R '\${SYSROOT}'" "$b" >/dev/null 2>&1 && rc=1
     # hmr_stale_mount_hint takes the LISTING, not a path: handed the sysroot it prints
     # `umount '<sysroot>'`, a command for a directory that is not a mount point
@@ -795,7 +943,7 @@ pin_x86() {   # <builder> -> 0 when every pin holds
     grep -a -F 'hmr_stale_mount_hint "${SYSROOT}"' "$b" >/dev/null 2>&1 && rc=1
     return "${rc}"
 }
-pin_x86 "${X86}" && ok "x86 pins: lib sourced; owner gate before 'skipping extraction'; 4b ungated (no '\${GPU} &&'); link check between mount_chroot and the first emerge; distfiles-ro in umount_chroot; stale refusal + marker present; the binpkgs guard hands the hint a listing; no 'umount -R' hint left" \
+pin_x86 "${X86}" && ok "x86 pins: lib sourced; owner gate before 'skipping extraction'; 4b ungated (no '\${GPU} &&'); the chosen seed verified between choice and restore; marker corrected when it disagrees; link check between mount_chroot and the first emerge; distfiles-ro in umount_chroot; the end-of-build umount_chroot call; stale refusal + marker present; the binpkgs guard hands the hint a listing; no 'umount -R' hint left" \
     || bad "x86 pins: one or more call sites missing (run: bash -x on pin_x86)"
 pin_rpi() {
     local b="$1" rc=0 n_ref n_rm
@@ -998,6 +1146,28 @@ if m="$(mutate no-marker '/hmr_seed_marker_write "\${BUILD_ROOT}" "\${STAGE3_LOC
     out="$(run_extract_phase "$m" false "${SX}" "${B1}" "${SEED_OLD}" 2>&1)"; rc=$?
     [ ! -f "${B1}/sysroot.seed" ] && ! pin_x86 "$m" && ok "M7 marker write removed: no marker after a fresh extract (leg RED) and the pin is RED" || bad "M7: marker removal not caught"
 fi
+# M30: the verification of the chosen seed deleted -> a seed that does not verify is
+# extracted from anyway (leg RED) and the pin is RED.
+if m="$(mutate no-seed-verify '/hmr_seed_verify "\${_hmr_seed}" "\${STAGE3_LOCAL}" "\${STAGE3_URL}" || { rm -f "\${_hmr_listing}"; exit 1; }/d')"; then
+    rm -rf "${B7}"; mkdir -p "${B7}"; make_sysroot "${S7}"
+    out="$(STUB_VERIFY_FAIL=1 run_4b "$m" "${S7}" "${B7}" "${SEED_NEW}" false 2>&1)"; rc=$?
+    [ -f "${S7}/usr/lib64/libc_nonshared.a" ] && ! pin_x86 "$m" \
+        && ok "M30 seed verification removed: an unverified cached seed is extracted from (leg RED) and the pin is RED" \
+        || bad "M30: removing the seed verification was not caught (rc=${rc})"
+fi
+# M31: the explicit end-of-build umount_chroot call dropped (the EXIT trap alone) -> the pin is RED.
+if m="$(mutate no-final-umount 's/^umount_chroot; trap - EXIT$/trap - EXIT/')"; then
+    ! pin_x86 "$m" && ok "M31 end-of-build 'umount_chroot; trap - EXIT' removed: pin RED" || bad "M31: dropping the end-of-build umount_chroot was not caught"
+fi
+# M32: the marker write gated on 'no marker yet' again -> a stale marker is never corrected (leg RED) and the pin is RED.
+if m="$(mutate stale-marker-kept 's/^    \[ "\$(hmr_seed_marker_read "\${BUILD_ROOT}")" = "\$(basename "\${_hmr_seed}")" \] || hmr_seed_marker_write/    [ -n "$(hmr_seed_marker_read "${BUILD_ROOT}")" ] || hmr_seed_marker_write/')"; then
+    rm -rf "${B8}"; mkdir -p "${B8}"; make_sysroot "${S8}"
+    printf '%s\n' "stage3-amd64-hardened-openrc-20260101T000000Z.tar.xz" > "${B8}/sysroot.seed"
+    out="$(run_4b "$m" "${S8}" "${B8}" "${SEED_NEW}" false 2>&1)"; rc=$?
+    [ "$(cat "${B8}/sysroot.seed" 2>/dev/null)" = "stage3-amd64-hardened-openrc-20260101T000000Z.tar.xz" ] && ! pin_x86 "$m" \
+        && ok "M32 marker write gated on absence again: a marker naming a gone seed stays stale (leg RED) and the pin is RED" \
+        || bad "M32: the stale-marker regression was not caught (marker=$(cat "${B8}/sysroot.seed" 2>/dev/null))"
+fi
 # M8 (lib): the toolchain comparison short-circuited to 'match' -> the mismatching seed is accepted.
 sed -e 's/^hmr_toolchain_matches() {$/hmr_toolchain_matches() { return 0; }\nhmr_toolchain_matches_real() {/' "${LIB}" > "${TDIR}/mut-lib.sh"
 cmp -s "${TDIR}/mut-lib.sh" "${LIB}" && bad "M8 lib mutation did not apply"
@@ -1095,6 +1265,24 @@ lib_mut M28 "the layer count stops answering 0 for a table it cannot read (it wo
 lib_mut M29 "the refusal stops counting the mounts it lists" \
     's/^    n="\$(printf .*$/    n=0/' \
     'refusal text'
+lib_mut M33 "the seed verification always says yes" \
+    's/^hmr_seed_verify() {$/hmr_seed_verify() { return 0; }\nhmr_seed_verify_real() {/' \
+    'seed verify fail|4b verify fail'
+lib_mut M34 "the current seed is verified a second time (the short circuit removed)" \
+    's/^    if \[ "\${seed}" = "\${current}" \] || \[ "\${seed}" -ef "\${current}" \]; then$/    if false; then/' \
+    'seed verify \(current seed\)|4b current seed'
+lib_mut M35 "the refusal word-splits the seeds it tried again" \
+    's/^    while IFS= read -r cand; do$/    for cand in ${tried}; do/' \
+    'seed cache with a space'
+lib_mut M36 "the toolchain match wants exactly one gcc in the seed again" \
+    's/^            sys-devel\/gcc-\*)     gcc=1 ;;$/            sys-devel\/gcc-*)     gcc=$((gcc+1)) ;;/' \
+    'two gcc slots'
+lib_mut M37 "the marker's seed is no longer tried first" \
+    's#^    for cand in "\${seeddir}/\${marker:-.none}" "\${current}" "\${seeddir}"/stage3-\*.tar.xz; do$#    for cand in "${current}" "${seeddir}"/stage3-*.tar.xz; do#' \
+    'seed choice \(marker first\)'
+lib_mut M38 "a build system path resolving to / is looked under like any other" \
+    '/^        \/)$/,/^            return 1 ;;$/d' \
+    'sysroot resolving to /|extract phase \(sysroot -> /\)'
 fi
 
 echo

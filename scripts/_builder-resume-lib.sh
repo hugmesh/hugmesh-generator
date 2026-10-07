@@ -147,21 +147,28 @@ hmr_toolchain_from_sysroot() {
 
 # hmr_toolchain_matches <listing> <sysroot> — 0 when every toolchain package
 # the seed lists (exact <pf>: version and revision) is installed in the build
-# system, and the seed lists all three. A build system may hold MORE (a second
-# gcc slot); it may not lack or differ in any of the seed's.
+# system, and the seed lists at least one glibc, one gcc and one binutils. A
+# seed may itself ship two gcc slots (a stage3 made during a gcc transition):
+# then both must be installed. A build system may hold MORE than the seed (a
+# second gcc slot a resumed @world added); it may not lack or differ in any of
+# the seed's.
 hmr_toolchain_matches() {
     local listing="${1:?listing}" sysroot="${2:?sysroot}"
-    local seed_tc want n=0
+    local seed_tc want glibc=0 gcc=0 binutils=0
     seed_tc="$(hmr_toolchain_from_listing "${listing}")"
     [ -n "${seed_tc}" ] || return 1
     while IFS= read -r want; do
         [ -n "${want}" ] || continue
-        n=$((n+1))
         [ -d "${sysroot%/}/var/db/pkg/${want}" ] || return 1
+        case "${want}" in
+            sys-libs/glibc-*)    glibc=1 ;;
+            sys-devel/gcc-*)     gcc=1 ;;
+            sys-devel/binutils-*) binutils=1 ;;
+        esac
     done <<EOF
 ${seed_tc}
 EOF
-    [ "${n}" -eq 3 ]
+    [ "${glibc}" -eq 1 ] && [ "${gcc}" -eq 1 ] && [ "${binutils}" -eq 1 ]
 }
 
 # hmr_seed_for_resume <build root> <sysroot> <current seed> <listing out>
@@ -176,13 +183,18 @@ EOF
 # the mismatch that produces link errors nobody can read.
 hmr_seed_for_resume() {
     local build_root="${1:?build root}" sysroot="${2:?sysroot}" current="${3:?current seed}" listing="${4:?listing out}"
-    local seeddir marker cand tried="" have tc_line seed_tc
+    local seeddir marker cand tried="" have tc_line seed_tc nl=$'\n'
     seeddir="$(dirname "${current}")"
     marker="$(hmr_seed_marker_read "${build_root}")"
+    # The seeds tried are kept ONE PER LINE, never space-separated: a seed cache
+    # under a directory with a space in its name is read back as a whole path,
+    # and the refusal below names every seed correctly (word-splitting `${tried}`
+    # used to print "my: no toolchain record; builds: no toolchain record" for a
+    # cache under "my builds/").
     for cand in "${seeddir}/${marker:-.none}" "${current}" "${seeddir}"/stage3-*.tar.xz; do
         [ -f "${cand}" ] || continue
-        case " ${tried} " in *" ${cand} "*) continue ;; esac
-        tried="${tried} ${cand}"
+        case "${nl}${tried}${nl}" in *"${nl}${cand}${nl}"*) continue ;; esac
+        tried="${tried}${tried:+${nl}}${cand}"
         hmr_seed_list "${cand}" "${listing}" || continue
         if hmr_toolchain_matches "${listing}" "${sysroot}"; then
             printf '%s\n' "${cand}"
@@ -192,15 +204,74 @@ hmr_seed_for_resume() {
     have="$(hmr_toolchain_from_sysroot "${sysroot}" | tr '\n' ' ')"
     have="${have% }"
     tc_line=""
-    for cand in ${tried}; do
+    while IFS= read -r cand; do
+        [ -n "${cand}" ] || continue
         hmr_seed_list "${cand}" "${listing}" >/dev/null 2>&1 || true
         seed_tc="$(hmr_toolchain_from_listing "${listing}" | tr '\n' ' ')"
         seed_tc="${seed_tc% }"
         tc_line="${tc_line}${tc_line:+; }$(basename "${cand}"): ${seed_tc:-no toolchain record}"
-    done
+    done <<EOF
+${tried}
+EOF
     : > "${listing}"
     _hmr_err "Refusing to restore the build system's static libraries: no cached seed tarball carries the toolchain this build system was extracted from (the build system has ${have:-no toolchain record}; cached seeds: ${tc_line:-none}), so the files restored would come from a different glibc, gcc or binutils than the one already installed; rebuild WITHOUT --resume."
     return 1
+}
+
+# ── 2b. Is the chosen seed still the file the mirror signed? ──────────────────
+# hmr_seed_digests_url <current seed url> <seed path> — the URL of <seed>'s own
+# signed DIGESTS on the autobuilds tree the current seed came from. Gentoo lays
+# the tree out as <autobuilds>/<timestamp>/<tarball>, and the timestamp is the
+# last `-` field of the tarball's name (stage3-amd64-hardened-openrc-
+# 20260920T170055Z.tar.xz lives under 20260920T170055Z/); the current seed's URL
+# has that shape too, so its first two trailing components are the autobuilds
+# root. A name without such a timestamp returns 1, printing nothing.
+hmr_seed_digests_url() {
+    local current_url="${1:?current seed url}" seed="${2:?seed}"
+    local base stem ts root
+    base="$(basename "${seed}")"
+    stem="${base%.tar.xz}"
+    ts="${stem##*-}"
+    case "${ts}" in
+        [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) ;;
+        *) return 1 ;;
+    esac
+    root="${current_url%/*/*}"
+    [ -n "${root}" ] && [ "${root}" != "${current_url}" ] || return 1
+    printf '%s/%s/%s.DIGESTS\n' "${root}" "${ts}" "${base}"
+}
+
+# hmr_seed_verify <seed> <current seed> <current seed url> — 0 when <seed> IS
+# the current seed (sa_seed_acquire verified that very file minutes ago, in this
+# run) or when it verifies NOW against its own signed DIGESTS through the
+# builder's verifier ("${SA_VERIFY_CMD:-dlv_verify_stage3}": the GPG-signed
+# DIGESTS from the mirror, then the SHA512/SHA256 of the file). Otherwise ONE
+# sentence and 1, and the caller restores nothing.
+#
+# Why (review, 2026-10-07): the restore extracts, as root, into the tree that
+# becomes the image, from a tarball chosen by NAME out of a cache directory the
+# Makefile hands to the invoking user. The current seed is re-verified on every
+# run for exactly that reason ("a cache is never trusted"); a seed chosen from
+# the same directory by the marker or by its toolchain must meet the same bar,
+# or "verified when it was fetched" quietly becomes "trusted forever". Fail-
+# closed: a seed whose DIGESTS the mirror no longer serves is refused, which
+# costs a rebuild without --resume, not an image linked against files nobody
+# checked.
+hmr_seed_verify() {
+    local seed="${1:?seed}" current="${2:?current seed}" current_url="${3:?current seed url}"
+    local verify="${SA_VERIFY_CMD:-dlv_verify_stage3}" digests
+    if [ "${seed}" = "${current}" ] || [ "${seed}" -ef "${current}" ]; then
+        return 0
+    fi
+    if ! digests="$(hmr_seed_digests_url "${current_url}" "${seed}")"; then
+        _hmr_err "Refusing to restore the build system's static libraries: the cached seed $(basename "${seed}") carries no release timestamp in its name, so its signed DIGESTS cannot be located and the file cannot be verified before root extracts from it; rebuild WITHOUT --resume."
+        return 1
+    fi
+    if ! "${verify}" "${seed}" "${digests}"; then
+        _hmr_err "Refusing to restore the build system's static libraries: the cached seed $(basename "${seed}") did not verify against its signed DIGESTS (${digests}); it is not the seed this run fetched and verified, and a cache is never trusted, so nothing is extracted from it; rebuild WITHOUT --resume."
+        return 1
+    fi
+    return 0
 }
 
 # ── 3. The static files themselves ────────────────────────────────────────────
@@ -359,6 +430,13 @@ hmr_stale_mounts() {
     case "${canon}" in
         *$'\n'*)
             _hmr_err "the build system path ${sysroot} contains a newline, which this builder cannot check for mounts; use a path without one"
+            return 1 ;;
+        /)
+            # A sysroot that resolves to / (a symlink planted where the build
+            # system should be) would make every mount on the host "stale", and
+            # the refusal would print the host's whole mount table as umount
+            # commands to run top to bottom. Nothing is listed; the build stops.
+            _hmr_err "the build system path ${sysroot} resolves to /, the host's own root; refusing to look for mounts under it (every mount on the host would count), and refusing to build there"
             return 1 ;;
     esac
     prefix="${canon%/}/"

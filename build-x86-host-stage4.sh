@@ -837,8 +837,10 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --resume              Reuse an existing sysroot. Refused, in one sentence,
                             when that sysroot is not root's, when its stripped
                             static libraries cannot be restored from the seed
-                            it came from, or when it cannot link a C program;
-                            then rebuild without --resume (#659).
+                            it came from, when that cached seed no longer
+                            verifies against its signed DIGESTS, or when it
+                            cannot link a C program; then rebuild without
+                            --resume (#659).
       --print-plan          Resolve + validate all flags, print the build plan
                             (PLAN_KEY=VALUE lines) and exit 0 — no root, no
                             writes, no network. Secrets print as REDACTED.
@@ -5079,7 +5081,12 @@ harden_radios "${SYSROOT}"
 # the statics are missing, for every role, and from the seed this build system
 # was extracted from (the marker beside the sysroot, or the cached seed whose
 # glibc/gcc/binutils match the sysroot's package database), or a plain refusal.
-# Additive only; a cheap no-op when the files are present (every fresh extract).
+# That seed is VERIFIED again before root extracts a byte of it, unless it is
+# the current seed sa_seed_acquire verified minutes ago in this run: the seed
+# cache is a directory the Makefile hands to the invoking user, and "verified
+# when it was fetched" is not "verified now" (the same rule the current seed is
+# held to on every run). Additive only; a cheap no-op when the files are
+# present (every fresh extract).
 if hmr_statics_missing "${SYSROOT}"; then
     banner "Restoring toolchain static libs from the seed this build system came from"
     _hmr_listing="$(mktemp)"
@@ -5087,11 +5094,14 @@ if hmr_statics_missing "${SYSROOT}"; then
         rm -f "${_hmr_listing}"
         exit 1
     fi
+    hmr_seed_verify "${_hmr_seed}" "${STAGE3_LOCAL}" "${STAGE3_URL}" || { rm -f "${_hmr_listing}"; exit 1; }
     hmr_statics_restore "${SYSROOT}" "${_hmr_seed}" "${_hmr_listing}" || { rm -f "${_hmr_listing}"; exit 1; }
     rm -f "${_hmr_listing}"
-    # A pre-marker build system (extracted before the marker existed) now has
-    # its seed established by the version match: record it for the next resume.
-    [ -n "$(hmr_seed_marker_read "${BUILD_ROOT}")" ] || hmr_seed_marker_write "${BUILD_ROOT}" "${_hmr_seed}" || true
+    # Record the seed the restore came from whenever the marker does not already
+    # say so: a pre-marker build system (extracted before the marker existed) has
+    # its seed established by the version match, and a marker naming a seed that
+    # has since left the cache is corrected instead of retried on every resume.
+    [ "$(hmr_seed_marker_read "${BUILD_ROOT}")" = "$(basename "${_hmr_seed}")" ] || hmr_seed_marker_write "${BUILD_ROOT}" "${_hmr_seed}" || true
 fi
 # ── configure_root_login <sysroot> ────────────────────────────────────────────
 # Root SSH login is DISABLED BY DEFAULT (hardened posture). Write an AUTHORITATIVE
