@@ -256,7 +256,12 @@ jobs:
   alpine:
     name: shell suites (alpine)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 40, not 25 (GEN-5). This job runs 133 suites serially and none is dominant
+    # (the slowest is ~3 min), so it cannot be split by moving one or two. MEASURED:
+    # 15 min 44 s in run 37682082806 (main) and 21 min 21 s in run 37691286476 (the PR
+    # that split the debian job), the same suites on the same image, so runner speed
+    # alone moves it by 5+ minutes and 25 left under 4 minutes of margin.
+    timeout-minutes: 40
     container:
       image: alpine:3
     steps:
@@ -503,9 +508,71 @@ jobs:
           exit $rc
 
   debian:
-    name: shell suites (debian/python)
+    name: shell suites (debian/python${{ matrix.part }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # SPLIT 2026-10-07 (GEN-5). One job ran all 44 suites serially and finished run
+    # 37682082806 in 24 min 34 s against a 25-minute timeout; two suites were 16 of
+    # those minutes (test-tor-flip-wiring.sh 9m04s, test-cluster-manifest-integrity.sh
+    # 7m34s). The matrix runs them as their own legs, in parallel, on the SAME image
+    # and the SAME install/preflight/runner steps, so no suite is dropped and none
+    # runs in two legs. The first leg keeps the original check name,
+    # "shell suites (debian/python)", so a branch-protection rule that requires it
+    # still matches. fail-fast is off so one red leg does not cancel the others and
+    # hide a second failure.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: ''
+            suites: |
+              tests/auto-update/test-builder-opt-in.sh
+              tests/egress-vpn/test-vpn-reconcile-verify.sh
+              tests/keystores/test-keystores-multidomain.sh
+              tests/managed-services/test-managed-services-gate.sh
+              tests/node-storage/test-appset.sh
+              tests/node-storage/test-node-agent.sh
+              tests/platform-capability-rbac/test-argocd-route-honesty.sh
+              tests/platform-capability-rbac/test-probe-rbac-namespaces.sh
+              tests/phone/test-phone-wizard.sh
+              tests/scripts/test-appstore-effector-flags.sh
+              tests/scripts/test-argocd-serverside-diff.sh
+              tests/scripts/test-backing-service-endpoints-closure.sh
+              tests/scripts/test-casdoor-login-budget.sh
+              tests/scripts/test-cassandra-cluster-wiring.sh
+              tests/scripts/test-client-connect-routes.sh
+              tests/scripts/test-db-connection-budget.sh
+              tests/scripts/test-deeplink-remote-coverage.sh
+              tests/scripts/test-e2e-shell-nav-entry.sh
+              tests/scripts/test-e2e-spec-symbol-resolution.sh
+              tests/scripts/test-eso-provider-refs.sh
+              tests/scripts/test-eso-seed-contract.sh
+              tests/scripts/test-fe-bff-route-lane-parity.sh
+              tests/scripts/test-first-run-lib.sh
+              tests/scripts/test-fragment-route-target.sh
+              tests/scripts/test-gitlab-ci-wellformed.sh
+              tests/scripts/test-headscale-oidc-secret-staging.sh
+              tests/scripts/test-mfa-raw-jwt-posture.sh
+              tests/scripts/test-mfa-required-rules.sh
+              tests/scripts/test-passhash-lib.sh
+              tests/scripts/test-pki-role-san-coverage.sh
+              tests/scripts/test-provision-keys-escrow-guard.sh
+              tests/scripts/test-python-targets-seed.sh
+              tests/scripts/test-run-ungated-lane.sh
+              tests/scripts/test-url-embedded-credentials.sh
+              tests/scripts/test-docs-command-coverage.sh
+              tests/scripts/test-x86-artifact-integrity.sh
+              tests/stack/test-anubis-flip-wiring.sh
+              tests/stack/test-mfa-flip-wiring.sh
+              tests/stack/test-patch-stack-src.sh
+              tests/workload-console/test-console-posture-and-inventory.sh
+              tests/workload-console/test-workload-console.sh
+          - part: ', cluster-manifest'
+            suites: |
+              tests/scripts/test-cluster-manifest-integrity.sh
+          - part: ', tor-flip'
+            suites: |
+              tests/stack/test-tor-flip-wiring.sh
     container:
       image: python:3.12-slim
     steps:
@@ -535,52 +602,11 @@ jobs:
           python3 -c "import yaml" || { echo "::error::pyyaml missing — yaml suites would skip"; exit 1; }
       - name: run suites
         shell: bash
+        env:
+          # The leg's own suite list (matrix.suites above), passed through env so it is
+          # never interpolated into the script text.
+          SUITES: ${{ matrix.suites }}
         run: |
-          SUITES="
-            tests/auto-update/test-builder-opt-in.sh
-            tests/egress-vpn/test-vpn-reconcile-verify.sh
-            tests/keystores/test-keystores-multidomain.sh
-            tests/managed-services/test-managed-services-gate.sh
-            tests/node-storage/test-appset.sh
-            tests/node-storage/test-node-agent.sh
-            tests/platform-capability-rbac/test-argocd-route-honesty.sh
-            tests/platform-capability-rbac/test-probe-rbac-namespaces.sh
-            tests/phone/test-phone-wizard.sh
-            tests/scripts/test-appstore-effector-flags.sh
-            tests/scripts/test-argocd-serverside-diff.sh
-            tests/scripts/test-backing-service-endpoints-closure.sh
-            tests/scripts/test-casdoor-login-budget.sh
-            tests/scripts/test-cassandra-cluster-wiring.sh
-            tests/scripts/test-client-connect-routes.sh
-            tests/scripts/test-cluster-manifest-integrity.sh
-            tests/scripts/test-db-connection-budget.sh
-            tests/scripts/test-deeplink-remote-coverage.sh
-            tests/scripts/test-e2e-shell-nav-entry.sh
-            tests/scripts/test-e2e-spec-symbol-resolution.sh
-            tests/scripts/test-eso-provider-refs.sh
-            tests/scripts/test-eso-seed-contract.sh
-            tests/scripts/test-fe-bff-route-lane-parity.sh
-            tests/scripts/test-first-run-lib.sh
-            tests/scripts/test-fragment-route-target.sh
-            tests/scripts/test-gitlab-ci-wellformed.sh
-            tests/scripts/test-headscale-oidc-secret-staging.sh
-            tests/scripts/test-mfa-raw-jwt-posture.sh
-            tests/scripts/test-mfa-required-rules.sh
-            tests/scripts/test-passhash-lib.sh
-            tests/scripts/test-pki-role-san-coverage.sh
-            tests/scripts/test-provision-keys-escrow-guard.sh
-            tests/scripts/test-python-targets-seed.sh
-            tests/scripts/test-run-ungated-lane.sh
-            tests/scripts/test-url-embedded-credentials.sh
-            tests/scripts/test-docs-command-coverage.sh
-            tests/scripts/test-x86-artifact-integrity.sh
-            tests/stack/test-anubis-flip-wiring.sh
-            tests/stack/test-mfa-flip-wiring.sh
-            tests/stack/test-patch-stack-src.sh
-            tests/stack/test-tor-flip-wiring.sh
-            tests/workload-console/test-console-posture-and-inventory.sh
-            tests/workload-console/test-workload-console.sh
-          "
           # Accumulate. A bare `for t in ...; do bash "$t"; done` exits with the LAST
           # suite's status and silently forgives every earlier one — that is defect
           # shape (3) in tests/scripts/test-guard-integrity.sh's own taxonomy.
@@ -609,6 +635,8 @@ jobs:
             ran=$((ran+1))
           done
           echo "── ran $ran suite(s) ──"
+          # A leg whose list came out empty would run nothing and go green.
+          [ "$ran" -gt 0 ] || { echo "::error::this matrix leg ran 0 suites"; rc=1; }
           [ -z "$failed" ] || { echo "::error::failed:$failed"; }
           exit $rc
 

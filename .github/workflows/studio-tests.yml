@@ -88,7 +88,14 @@ jobs:
         # NO Qt binding is installed on purpose. The GUI tests are excluded below, and
         # importing a real Qt in a headless container is what makes the full suite
         # abort rather than fail — see the exclusion list.
-        run: python -m pip install --upgrade pip pytest PyYAML jsonschema
+        #
+        # cryptography IS installed on purpose, although it is an optional runtime
+        # dependency of the Studio: core/config.py reads a certificate's subject and
+        # expiry only when it is importable, and without it says "install
+        # python-cryptography to show subject and expiry". tests/test_tui_vault.py
+        # pins the cryptography-backed message, so a runner without it fails that test
+        # on every run (run 37682050311) while a box that has it passes.
+        run: python -m pip install --upgrade pip pytest PyYAML jsonschema cryptography
 
       - name: Run the Qt-free suite
         working-directory: studio
