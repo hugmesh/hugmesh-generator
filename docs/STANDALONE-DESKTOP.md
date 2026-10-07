@@ -437,10 +437,10 @@ Precedence (later wins): `--theme` → `--branding-dir` → individual file flag
 optional. `wallpaper.png` is the fallback for the two backgrounds.
 
 No build channel applies a theme by itself **except the ncurses menu**. `make
-menu` defaults branded standalone builds to `--theme dark`
-(`specs-x86/branding/themes/dark/`), through the persisted `OPT_SA_THEME` default
-in `scripts/build-menu.sh` (pick **None** under "Branding theme" for the stock
-look). The direct channels bake no theme unless you pass one:
+menu` defaults every standalone entry, `standalone-unaffiliated` included, to
+`--theme dark` (`specs-x86/branding/themes/dark/`), through the persisted
+`OPT_SA_THEME` default in `scripts/build-menu.sh` (pick **None** under "Branding
+theme" for the stock look). The direct channels bake no theme unless you pass one:
 `make x86-standalone` / `make x86-standalone-thick STANDALONE_FLAGS='--theme dark'`,
 or a fleet run (`scripts/build-all-roles.sh`; `X86_STANDALONE=1` appends the three
 standalone variants to the role set, `X86_STANDALONE_ONLY=1` builds only them)
