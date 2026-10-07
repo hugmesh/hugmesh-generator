@@ -653,7 +653,7 @@ make build-all ENV=prod BRAND=acme DOMAIN=acme.example
 
 ## LAN testing (no public internet, no Cloudflare)
 
-An `ENV=test` fleet is **fully testable on a LAN before any public address**.
+You can test an `ENV=test` fleet **fully on a LAN, before it has any public address**.
 Two pieces make that work with zero internet:
 
 1. **Cluster-served wildcard DNS.** Cluster *nodes* already resolve each other
@@ -681,14 +681,14 @@ Two pieces make that work with zero internet:
    (Vault-PKI / self-signed root) — **no ACME, no public CA, no internet**. This
    is the *same* offline issuer prod uses; prod merely **adds** the public edge.
 
-So `ENV=test` needs **no public internet, no Cloudflare, no OAuth, no SMTP** —
-just Casdoor's native login, the internal cluster CA, and the in-cluster
+So `ENV=test` needs **no public internet, no Cloudflare, no OAuth, no SMTP**:
+only Casdoor's native login, the internal cluster CA, and the in-cluster
 wildcard resolver. See [`docs/LOCAL-TESTING.md`](docs/LOCAL-TESTING.md).
 
 ## Rebranding (brand profiles in `brands/`)
 
-Everything is **string-independent**: the default naming is `hugmesh` /
-`hugmesh.net`, but you can build images for any brand/domain. A **brand
+The default naming is `hugmesh` / `hugmesh.net`, but you can build images for any
+brand/domain. A **brand
 profile** is a plain shell file the builders `source` (via `--config FILE`, or an
 auto-detected `./brand.conf`). Precedence is **built-in defaults < profile < CLI
 flags**, so an absent file changes nothing. See [`brands/README.md`](brands/).
@@ -711,13 +711,13 @@ make build-all BRAND=acme DOMAIN=acme.example   # DOMAIN= overrides the profile'
 ./build-rpi5-stage4.sh --role backend --brand acme --domain acme.example --org Acme-Inc --brand-title "Acme Corp"
 ```
 
-At build time the baked cluster payload is rewritten — every namespace
+At build time the builders rewrite the baked cluster payload from the hugmesh
+defaults to your brand: every namespace
 (`acme-pki`/`acme-backend`/…), gateway name, ingress host (`matrix.acme.example`),
-image org (`acme-inc/…`), title and hostname — from the hugmesh defaults to
-your brand. (Internal install paths like `/var/lib/hugmesh` and the
-provisioning JSON key are kept as the tool's vendor namespace.) Never put real
-secrets in a committed `brands/*.conf`; those go in the gitignored `./brand.conf`
-or the environment.
+image org (`acme-inc/…`), title and hostname. (Internal install paths like
+`/var/lib/hugmesh` and the provisioning JSON key keep the tool's vendor
+namespace.) Never put real secrets in a committed `brands/*.conf`; they go in the
+gitignored `./brand.conf` or the environment.
 
 ## Frite light desktop (Libre Computer Le/La Frite)
 
@@ -771,7 +771,7 @@ to onboard storage.
 
 ## OAuth + mail (optional; native login by default)
 
-Both OAuth and mail are **optional and absent by default**. With neither, the
+OAuth and mail are both **optional and absent by default**. With neither, the
 platform falls back to its **native username/password login** (the first-party
 `login-ui` form → `POST /bff/login` → user-bff → internal Casdoor credentials) and
 **admin-approval** registration (no email verification) — exactly what an
@@ -787,8 +787,8 @@ platform falls back to its **native username/password login** (the first-party
 > `hugmesh-auth-core`); see [Current State](#current-state).
 
 **OAuth federation providers (seeded into Casdoor when creds are present).**
-The provider seeding in the Casdoor init jobs is **read-if-present, else
-skipped** — an absent client secret no-ops the provider:
+The Casdoor init jobs seed each provider **if its creds are present, else skip it**:
+an absent client secret makes the provider a no-op.
 
 - **Systems realm** (`manifests/casdoor/init-job.yaml`): the **Google** OAuth
   provider, seeded from the `casdoor-google` Secret
@@ -801,21 +801,22 @@ skipped** — an absent client secret no-ops the provider:
 > `id.<domain.games>`) from the platform realm (org `hugmesh`); see
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-**Mail (SMTP).** A `MAIL_PROVIDER` brand knob selects the mail posture;
-`none` (the `brands/local.conf` default) disables mail entirely, which is the
-typical local/test setting — registration stays admin-approval rather than
+**Mail (SMTP).** The `MAIL_PROVIDER` brand knob selects the mail posture.
+`none` (the `brands/local.conf` default) disables mail entirely, the typical
+local/test setting: registration stays admin-approval instead of
 email-verify. Set it in your `brands/<x>.conf`:
 
 ```sh
 MAIL_PROVIDER="none"       # none | smtp   (none = no mail; the LAN/test default)
 ```
 
-**Credentials flow.** OAuth client IDs/secrets, cluster app secrets and the
-Cloudflare go-live token are produced by
-[`scripts/gen-cluster-secrets.sh`](scripts/gen-cluster-secrets.sh) and delivered
-either online via **Vault → External Secrets Operator** or offline via the
+**Credentials flow.** [`scripts/gen-cluster-secrets.sh`](scripts/gen-cluster-secrets.sh)
+produces the OAuth client IDs/secrets, cluster app secrets and the
+Cloudflare go-live token. Delivery is either online via **Vault → External Secrets
+Operator** or offline via the
 **KEYS USB** (`KEYS/vault/secrets.json`, plus `KEYS/cloudflared/tunnel-token` for
-the prod edge) — Vault first, USB fallback, all **read-if-present**. See
+the prod edge). Vault comes first, the USB is the fallback, and all of it is
+**read if present**. See
 [`keys-template/vault/README.md`](keys-template/vault/) and
 [`keys-template/cloudflared/README.md`](keys-template/cloudflared/).
 
@@ -939,21 +940,21 @@ kubectl -n devops get secret argocd-initial-admin-secret -o jsonpath='{.data.pas
 
 ## Disk growth on first boot (growable USB)
 
-The `.img` artifacts are built **compact** — only as large as the ext4 root
+The `.img` artifacts are built **compact**: only as large as the ext4 root
 (`--img-size`, default 9216 MiB on the Pi / 8192 MiB on x86) plus the 512 MiB
 boot/ESP partition and alignment. They are **never padded** to the size of the
-target USB, so they flash fast and a small image can be written to a large
+target USB, so they flash fast, and a small image can be written to a large
 medium. The root (ext4) partition is the **LAST** partition in the table.
 
-On first boot the `growroot` OpenRC service expands that last partition — and its
-filesystem — to fill the medium, then disables itself (a `/var/lib/growroot.done`
-marker makes it idempotent and re-run safe; it is strictly non-fatal so a quirk
-never blocks boot). Device detection is dynamic (`findmnt` → `/sys/class/block`
+On first boot the `growroot` OpenRC service expands that last partition, and its
+filesystem, to fill the medium. Then it disables itself: a `/var/lib/growroot.done`
+marker makes it idempotent and safe to re-run, and it is strictly non-fatal, so a quirk
+never blocks boot. Device detection is dynamic (`findmnt` → `/sys/class/block`
 → `lsblk PKNAME`), so the **same image** works on Pi SD/USB (`mmcblk*`, `sda`)
 and on x86 SATA/USB/NVMe (`sd*`, `nvme*`) with no hard-coded device name.
 
-**Grow policy — default `fill`, configurable.** "Fill the whole USB, or use as
-little of it as needed unless specified":
+**Grow policy: default `fill`, configurable.** The default fills the whole USB; set a
+size to use less:
 
 | value | effect |
 |---|---|
@@ -973,10 +974,10 @@ flashed medium without a rebuild**. Runtime precedence (first wins):
 
 > **Encryption-at-rest note.** The encrypted volumes (LUKS2) are the *attached*
 > data partitions provisioned by `keys-provision` (`.storage.devices[]`), which
-> are created at `100%` of their device already; the **root** that `growroot`
+> are created at `100%` of their device already. The **root** that `growroot`
 > expands is plaintext ext4, so the grow never touches LUKS today. `growroot` is
 > nonetheless LUKS-aware: if `/` is ever mounted from a `/dev/mapper/*` LUKS
-> device it grows the backing partition, runs `cryptsetup resize`, then
+> device, it grows the backing partition, runs `cryptsetup resize`, then
 > `resize2fs` (partition → crypt container → filesystem). See
 > [`docs/ENCRYPTION-AT-REST.md`](docs/ENCRYPTION-AT-REST.md).
 
