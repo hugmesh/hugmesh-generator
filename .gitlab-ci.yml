@@ -3456,6 +3456,7 @@ orphan-guards-verify:
         tests/scripts/test-calamares-boost-seed.sh
         tests/scripts/test-casdoor-jwt-no-preferred-username.sh
         tests/scripts/test-edge-ai-cuda-host-compiler.sh
+        tests/scripts/test-edge-ai-ollama-pin.sh
         tests/scripts/test-eso-remoteref-brand.sh
         tests/scripts/test-first-run-lib.sh
         tests/scripts/test-headscale-oidc-secret-staging.sh

@@ -91,6 +91,27 @@ no API key is baked (secrets never live in the image — auth is at the gateway)
 
 ---
 
+### Runtime version
+
+The inference runtime is the `ollama/ollama` container image, **pinned** to `0.40.0` in
+`specs/cluster/manifests/edge-ai/deployment.yaml` (`image:`) and
+`specs/cluster/manifests/edge-ai/kustomization.yaml` (`newTag`, which rewrites the
+image at render time). The pin is deliberate: a pod restart must not change the runtime
+under a running mesh, and an older Ollama refuses newer models at pull time (HTTP 412,
+"requires a newer version of Ollama"). The tag is multi-arch (amd64 and arm64), so the
+Jetson nodes run the same version. To upgrade:
+
+1. pick the release (<https://github.com/ollama/ollama/releases>) and confirm the tag
+   exists: `curl -s https://hub.docker.com/v2/repositories/ollama/ollama/tags/<version>`;
+2. change **both** files to the new version: `bash tests/scripts/test-edge-ai-ollama-pin.sh`
+   fails when they differ or when either goes back to `latest`, and
+   `bash tests/scripts/test-container-image-tags.sh` fails when the tag does not exist;
+3. let the Application sync, then
+   `kubectl -n hugmesh-inference rollout status deploy/hugmesh-edge-ai` and
+   `curl http://<svc>:11434/api/version`.
+
+A developer desktop is separate: see [LOCAL-AI-ASSISTANT.md](LOCAL-AI-ASSISTANT.md).
+
 ## 3. The model library (config exposed to the mesh)
 
 `manifests/edge-ai/models-configmap.yaml` (ConfigMap `edge-ai-models`) is the single
