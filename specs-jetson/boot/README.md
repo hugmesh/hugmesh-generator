@@ -25,16 +25,16 @@ arch/arm64/boot/dts/nvidia/tegra234-p3768-0000+p3767-0005.dtb
 * `p3768-0000` — the Orin Nano Developer Kit carrier board
 * `p3767-0005` — the Orin Nano (8 GB, no-eMMC devkit) module
 
-Other Orin modules on the same carrier (select with `--dtb`):
+Other Orin modules on the same carrier. Three have a `--board` value (all marked UNTESTED in the builder); the Orin Nano 8 GB p3767-0003 module is reachable only through `--dtb`:
 
-| Module | DTB |
-|---|---|
-| Orin NX 16 GB (p3767-0000) | `nvidia/tegra234-p3768-0000+p3767-0000.dtb` |
-| Orin NX 8 GB (p3767-0001) | `nvidia/tegra234-p3768-0000+p3767-0001.dtb` |
-| Orin Nano 8 GB (p3767-0003) | `nvidia/tegra234-p3768-0000+p3767-0003.dtb` |
-| Orin Nano 4 GB (p3767-0004) | `nvidia/tegra234-p3768-0000+p3767-0004.dtb` |
+| Module | `--board` | DTB |
+|---|---|---|
+| Orin NX 16 GB (p3767-0000) | `orin-nx-16gb` | `nvidia/tegra234-p3768-0000+p3767-0000.dtb` |
+| Orin NX 8 GB (p3767-0001) | `orin-nx-8gb` | `nvidia/tegra234-p3768-0000+p3767-0001.dtb` |
+| Orin Nano 8 GB (p3767-0003) | none (use `--dtb`) | `nvidia/tegra234-p3768-0000+p3767-0003.dtb` |
+| Orin Nano 4 GB (p3767-0004) | `orin-nano-4gb` | `nvidia/tegra234-p3768-0000+p3767-0004.dtb` |
 
-The builder copies the whole `nvidia/` DTB dir into `/boot/dtb/` and the
+The builder copies the whole `nvidia/` DTB dir into `/boot/dtb/nvidia/` and the
 extlinux `FDT` line selects the board file — the SAME kernel-owns-the-DTB
 policy as the Frite (never boot the firmware's stale DT against a different
 kernel).

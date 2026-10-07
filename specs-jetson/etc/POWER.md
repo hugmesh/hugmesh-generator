@@ -6,8 +6,7 @@ and are NOT baked into this image — this file documents the equivalents.
 
 ## Mainline kernel flavor (what this image ships)
 
-* **CPU frequency**: `ARM_TEGRA186_CPUFREQ` is enabled; the standard
-  `schedutil`/`performance` governors apply. Pin performance with:
+* **CPU frequency**: `ARM_TEGRA186_CPUFREQ` is enabled. The fragments select no governor, so the governors on offer come from the base arm64 defconfig. If `performance` is built in, pin it with:
   `echo performance > /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor`
 * **Thermal / fan**: `TEGRA_SOCTHERM` + `SENSORS_PWM_FAN` are enabled; the
   devkit fan is a pwm-fan cooling device driven by the DT's thermal zones.

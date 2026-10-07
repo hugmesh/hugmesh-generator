@@ -36,7 +36,7 @@ Roles (× `--env test|prod`, all 8 combos pass `--print-plan` today):
 |---|---|---|---|
 | `edge-ai` (default, headline) | GPU inference node | worker | yes |
 | `backend-gpu` | GPU worker (backend-gpu analogue) | worker | no |
-| `full` | full stack on one Orin (omnibus analogue) | single-node + headscale | yes |
+| `omnibus` (`full` is an accepted old spelling) | full stack on one Orin | single-node + headscale | yes |
 | `desktop` | arm64 client desktop (lean LXDE) | none | no |
 
 The builder (modeled on `build-frite-stage4.sh`, the other arm64 builder):
@@ -61,11 +61,15 @@ The builder (modeled on `build-frite-stage4.sh`, the other arm64 builder):
 
 | Subdir | Holds |
 |---|---|
-| `kernel/` | `hardened-node.config` (fleet posture + k8s data plane) + `tegra234.config` (Orin SoC bring-up) + the mainline-vs-L4T decision doc. |
+| `kernel/` | `hardened-node.config` (fleet posture + k8s data plane) + `tegra234.config` (Orin SoC bring-up) + `luks-crypt.config` (merged only with `--encrypt-root`, which the builder refuses; see below) + the mainline-vs-L4T decision doc. |
 | `portage/` | `make.conf.tmpl` (cortex-a78ae, glibc, hardened) + `packages.list` (base) / `packages-k8s.list` / `packages-edge-ai.list` / `packages-desktop.list` + cross-build package.use/env fixups. NVIDIA's `nvidia-l4t-*` userspace is NOT a portage atom — deliberately absent (documented in `packages-edge-ai.list`). |
 | `boot/` | `extlinux.conf.tmpl` + `cmdline.base` (ttyTCU0 console) + Orin Nano DTB table / UEFI-distro-boot notes. NO u-boot — the Orin's UEFI lives in QSPI. |
-| `etc/` | `fstab` (single `JETSON_ROOT` ext4), `modules-load.d/jetson.conf`, `POWER.md` (nvpmodel/jetson_clocks vs mainline equivalents). |
+| `etc/` | `fstab` (single `JETSON_ROOT` ext4), `modules-load.d/jetson.conf`, `dracut.conf.d/60-hugmesh-crypt.conf`, `POWER.md` (nvpmodel/jetson_clocks vs mainline equivalents). |
 | `installer/` | `TEGRAFLASH.md` — the normal dd-the-.img path vs the out-of-band recovery-mode tegraflash (QSPI firmware / future L4T+CUDA stack). |
+
+## Encryption is not available yet
+
+`--encrypt-root` and `--standalone` (which forces `--encrypt-root`) exit with an error on this platform. The image has one ext4 partition that holds both `/boot/extlinux/extlinux.conf` and the root filesystem, and the Orin's UEFI reads that file before Linux runs. A LUKS2 partition would leave the firmware with no kernel to find. The fix is a separate unencrypted boot partition, as on RPi5 and Frite. The builder carries LUKS code (`luks-crypt.config`, a dracut crypt module) that no run can reach today.
 
 ## Front-end wiring (all-options-in-all-menus)
 
@@ -85,6 +89,4 @@ up through the same builder + `--print-plan` contract.
 
 ## Cross-references
 - Capability (done, x86): [docs/EDGE-AI.md](../docs/EDGE-AI.md)
-- Hardware profiles + scanner: `specs-x86/hwprofiles/`
-- Memory: `hugmesh-edge-ai-jetson`, `hugmesh-hardware-profiles`,
-  `hugmesh-all-options-all-menus`, `hugmesh-selinux-sync`.
+- Hardware profiles: `specs-x86/hwprofiles/profiles.json` (no Jetson entry)

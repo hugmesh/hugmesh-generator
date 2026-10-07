@@ -12,8 +12,8 @@
 > (`specs-orangepi-zero2/README.md` is the direct template; each inherited
 > claim is marked as such below). **Not hardware-verified in this
 > environment** — there is no H6 hardware available in this sandbox. Treat
-> this exactly like `specs-jetson/`/`specs-orangepi5/` were treated before
-> their own hardware-validation passes: buildable and internally consistent
+> this exactly like `specs-jetson/`/`specs-orangepi5/`, which are also unvalidated:
+> buildable and internally consistent
 > (`--print-plan` clean across the whole flag matrix), but **do not trust it
 > to boot** until a real board confirms it end-to-end.
 
@@ -274,12 +274,12 @@ cannot be end-to-end tested in this environment.
    Without the paired `rd.luks.name=`, dracut's `crypt` module defaults the
    mapper device to `luks-<uuid>` instead of the name `root=` actually expects
    (`cryptroot`), and `root=/dev/mapper/cryptroot` never resolves —
-   `install-orangepi3-lts.sh` sets both, mirroring Frite/RPi5/Jetson/
-   Orange-Pi-5 exactly (x86 is the one sibling that appears to be missing this
+   `install-orangepi3-lts.sh` sets both, mirroring Frite, RPi5 and Orange Pi 5. (The Jetson builder has the same
+   code, but it refuses `--encrypt-root`.) (x86 is the one sibling that appears to be missing this
    pairing — treated as an x86 bug to NOT copy, not a pattern to follow).
 2. **PBKDF pinning depends on WHERE the LUKS format actually runs.** This
-   platform follows Frite's/Orange-Pi-5's **on-device** model, not RPi5's/
-   Jetson's **cross-host** model: `install-orangepi3-lts.sh` runs from WITHIN
+   platform follows Frite's/Orange-Pi-5's **on-device** model, not RPi5's
+   **cross-host** model: `install-orangepi3-lts.sh` runs from WITHIN
    the booted LIVE/INSTALLER session, ON THE ACTUAL Orange Pi 3 LTS board
    that will later unlock the root at every boot (the same board formats it
    and later reads it) — so cryptsetup's argon2id auto-benchmark is
@@ -312,7 +312,7 @@ Per the all-options-in-all-menus standing rule: `make orangepi3-lts`,
 `orangepizero2` single-dedicated-platform pattern, not a role-loop),
 `scripts/build-menu.sh`'s architecture picker + a dedicated flavor screen (no
 board sub-menu — there is only one board), the Studio
-(`studio/hugmesh_studio/core/config.py`'s `PLATFORM_BUILDERS`/`ROLE_CHOICES`/
+(`studio/hugmesh_studio/core/config.py`'s `BUILDER_SCRIPTS`/`ROLE_CHOICES`/
 `_orangepi3lts_args()`, labelled explicitly as a **headless appliance**, not a
 desktop), and `tests/build-matrix/matrix.tsv` + `check.sh` all reach this
 platform through the same `--print-plan` contract as every other builder.

@@ -9,8 +9,8 @@
 > claims about them. That makes the *symbol spellings and node facts* reliable;
 > it does **not** make the port hardware-verified. There is no RK3399 hardware
 > here, and this sandbox may also lack the network access for a real
-> cross-emerge. Treat this exactly like `specs-jetson/` was treated before its
-> own hardware-validation pass: buildable and internally consistent
+> cross-emerge. Treat this exactly like `specs-jetson/`, which is also unvalidated:
+> buildable and internally consistent
 > (`--print-plan` clean across the whole flag matrix), but **do not trust it to
 > boot** until a real board confirms it end-to-end.
 
@@ -68,7 +68,7 @@ build-time password) and `--encrypt-root` (LUKS2 full-disk encryption) support.
 
 ## Why this is a DESKTOP platform (unlike the Zero 2W / Zero 3 / 3 LTS appliances)
 
-The other Orange Pi platforms in this repo are headless appliances. That was
+The Zero 2, Zero 2W, Zero 3 and 3 LTS are headless appliances. That was
 never a house style — each had a specific reason (H616/H618: no working
 mainline display pipeline; H6/3 LTS: a deliberate scope call on borrowed
 wiring). **RK3399 is in neither situation**, and the upstream device tree says
@@ -222,11 +222,12 @@ install targets; LUKS2 unlock at boot.
    Without the paired `rd.luks.name=`, dracut's `crypt` module defaults the
    mapper device to `luks-<uuid>` instead of the name `root=` actually expects
    (`cryptroot`), and `root=/dev/mapper/cryptroot` never resolves —
-   `install-orangepi4-lts.sh` sets both, mirroring Frite/RPi5/Jetson exactly (x86
-   is the one sibling that appears to be missing this pairing — treated as an
+   `install-orangepi4-lts.sh` sets both, mirroring Frite and RPi5 (the Jetson
+   builder has the same code, but it refuses `--encrypt-root`). The x86
+   installer sets only `rd.luks.uuid=` (`install-x86.sh:224`) — treated as an
    x86 bug to NOT copy, not a pattern to follow).
 2. **PBKDF pinning depends on WHERE the LUKS format actually runs.** This
-   platform follows Frite's **on-device** model, not RPi5's/Jetson's
+   platform follows Frite's **on-device** model, not RPi5's
    **cross-host** model: `install-orangepi4-lts.sh` runs from WITHIN the booted
    LIVE/INSTALLER session, ON THE ACTUAL Orange Pi 4 LTS board that will later
    unlock the root at every boot (the same board formats it and later reads

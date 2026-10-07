@@ -9,16 +9,17 @@
 > hardware-verified in this environment** — there is no H616 hardware, and no
 > network access to actually cross-emerge a real Gentoo tree, available in this
 > sandbox. Treat this exactly like `specs-jetson/`/`specs-orangepi5/` were
-> treated before their own hardware-validation passes: buildable and internally
+> treated: they are also unvalidated. Buildable and internally
 > consistent (`--print-plan` clean across the whole flag matrix), but **do not
 > trust it to boot** until a real board confirms it end-to-end.
 
 ## Why this is the ONE platform in the repo with no desktop option — read this first
 
-Every other client-device platform in this repo (Frite, Orange Pi 5, RPi5's
-desktop role, Jetson's desktop role) ships a lean LXDE-class desktop. This one
-does not, and never will, for a concrete, researched reason — not because
-nobody got around to it:
+Frite, Orange Pi 5, Orange Pi 4 LTS, the RPi5 desktop role and the Jetson
+desktop role ship a lean LXDE-class desktop. The Zero 2 does not, and never
+will, for a concrete, researched reason — not because nobody got around to it.
+(The Zero 2W, Zero 3 and 3 LTS are headless too. This page holds the original
+H616 research; the Zero 2W and Zero 3 inherit it.)
 
 - The board **does** have a physical Micro-HDMI 2.0a port (confirmed against
   official specs/schematic and the upstream devicetree's own board-description
@@ -62,8 +63,8 @@ nobody got around to it:
 - Countervailing strength: this board has a **genuinely fully open-source,
   blob-free boot chain** — mainline U-Boot has **native**,
   community-reverse-engineered H616 DRAM init (no closed "boot0" blob at all,
-  unlike **every other** ARM platform in this repo, which each need at least
-  one proprietary blob) — confirmed onboard Gigabit Ethernet via a Realtek
+  unlike Frite and Orange Pi 5, which each need a vendor blob; the Orange Pi 3
+  LTS and 4 LTS chains are blob-free too) — confirmed onboard Gigabit Ethernet via a Realtek
   RTL8211F PHY (fully mainline), and it is a genuinely tiny/cheap/low-power
   board. That is exactly the profile of a good, lean, hardened, **SSH-only
   network appliance** — a small VPN/mesh gateway node, a tiny home-lab utility
@@ -105,8 +106,8 @@ are direct overrides rather than entries in a board table.
 ```
 Allwinner BootROM
   -> U-Boot SPL   (NATIVE H616 DRAM-init driver — NO blob. This is the
-                    project-first difference from every other arm64 platform
-                    here: Frite needs Amlogic FIP/BL31, Orange Pi 5 needs
+                    difference from Frite and Orange Pi 5: Frite needs
+                    Amlogic FIP/BL31, Orange Pi 5 needs
                     Rockchip rkbin DDR-init + TF-A BL31 blobs. This board's
                     mainline U-Boot alone can train DRAM.)
   -> U-Boot proper
@@ -220,12 +221,13 @@ cross-emerge — check before assuming otherwise).
    Without the paired `rd.luks.name=`, dracut's `crypt` module defaults the
    mapper device to `luks-<uuid>` instead of the name `root=` actually expects
    (`cryptroot`), and `root=/dev/mapper/cryptroot` never resolves —
-   `install-orangepi-zero2.sh` sets both, mirroring Frite/RPi5/Jetson/
-   Orange-Pi-5 exactly (x86 is the one sibling that appears to be missing this
-   pairing — treated as an x86 bug to NOT copy, not a pattern to follow).
+   `install-orangepi-zero2.sh` sets both, mirroring Frite, RPi5 and Orange Pi 5.
+   (The Jetson builder has the same code, but it refuses `--encrypt-root`.) The
+   x86 installer sets only `rd.luks.uuid=` (`install-x86.sh:224`) — treated as
+   an x86 bug to NOT copy, not a pattern to follow.
 2. **PBKDF pinning depends on WHERE the LUKS format actually runs.** This
-   platform follows Frite's/Orange-Pi-5's **on-device** model, not RPi5's/
-   Jetson's **cross-host** model: `install-orangepi-zero2.sh` runs from WITHIN
+   platform follows Frite's/Orange-Pi-5's **on-device** model, not RPi5's
+   **cross-host** model: `install-orangepi-zero2.sh` runs from WITHIN
    the booted LIVE/INSTALLER session, ON THE ACTUAL Orange Pi Zero 2 board
    that will later unlock the root at every boot (the same board formats it
    and later reads it) — so cryptsetup's argon2id auto-benchmark is
@@ -277,8 +279,8 @@ platform through the same `--print-plan` contract as every other builder.
 3. Run `install-orangepi-zero2.sh` against a microSD card (both the
    same-device and second-device paths) and confirm the installed system boots
    — PLAINTEXT first, then `--encrypt-root`.
-4. Confirm Gigabit Ethernet actually links and passes traffic via `r8169`-class
-   `dwmac-sun8i` + the RTL8211F PHY.
+4. Confirm Gigabit Ethernet actually links and passes traffic via `dwmac-sun8i`
+   (`CONFIG_DWMAC_SUN8I`) + the RTL8211F PHY (`CONFIG_REALTEK_PHY`).
 5. Confirm the board really has no usable HDMI output on this kernel (i.e.
    confirm the headless-only decision is still correct) — and if mainline DE33
    support has landed since this research, flag it prominently for a scope

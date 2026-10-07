@@ -8,7 +8,7 @@
 > write-up), **not hardware-verified in this environment** — there is no RK3588
 > hardware, and no network access to actually cross-emerge a real Gentoo tree,
 > available in this sandbox. Treat this exactly like `specs-jetson/` was
-> treated before its own hardware-validation pass: buildable and internally
+> treated: it is also unvalidated. Buildable and internally
 > consistent (`--print-plan` clean across the whole role/board/flag matrix),
 > but **do not trust it to boot** until a real board confirms it end-to-end.
 
@@ -194,12 +194,12 @@ otherwise).
    Without the paired `rd.luks.name=`, dracut's `crypt` module defaults the
    mapper device to `luks-<uuid>` instead of the name `root=` actually expects
    (`cryptroot`), and `root=/dev/mapper/cryptroot` never resolves —
-   `install-orangepi5.sh` sets both, mirroring Frite/RPi5/Jetson exactly (x86
-   is the one sibling that appears to be missing this pairing — treated as an
-   x86 bug to NOT copy, not a pattern to follow).
+   `install-orangepi5.sh` sets both, mirroring Frite and RPi5 (the Jetson builder
+   has the same code, but it refuses `--encrypt-root`, so no Jetson build reaches
+   it). The x86 installer sets only `rd.luks.uuid=` (`install-x86.sh:224`) —
+   treated as an x86 bug to NOT copy, not a pattern to follow.
 2. **PBKDF pinning depends on WHERE the LUKS format actually runs.** This
-   platform follows Frite's **on-device** model, not RPi5's/Jetson's
-   **cross-host** model: `install-orangepi5.sh` runs from WITHIN the booted
+   platform follows Frite's **on-device** model, not RPi5's **cross-host** model: `install-orangepi5.sh` runs from WITHIN the booted
    LIVE/INSTALLER session, ON THE ACTUAL Orange Pi 5 board that will later
    unlock the root at every boot (the same board formats it and later reads
    it) — so cryptsetup's argon2id auto-benchmark is trustworthy and
@@ -248,9 +248,8 @@ builder.
    behavior on real hardware (associates? passes traffic? neither?).
 
 ## Cross-references
-- Closest architectural sibling: `specs-frite/README` equivalent context is
-  inline in `build-frite-stage4.sh`'s own header (Frite has no separate
-  `specs-frite/README.md` — Jetson is the one with a dedicated README, used as
-  this file's template).
+- Closest architectural sibling: Frite. It has no `specs-frite/README.md`; its
+  context is inline in `build-frite-stage4.sh`'s own header. `specs-jetson/README.md`
+  was this file's template.
 - Hardware-profile / EXPERIMENTAL precedent: `specs-jetson/README.md`.
 - Standalone posture: `docs/STANDALONE-DESKTOP.md`.

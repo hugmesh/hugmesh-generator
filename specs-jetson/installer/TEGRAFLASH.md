@@ -12,10 +12,12 @@ distro-boots our image directly:
 
 ```sh
 # microSD or NVMe-over-USB adapter on any Linux box:
-xz -dc hugmesh-jetson-orin-nano-arm64-edge_ai-test-<ts>.img.xz | \
+xz -dc hugmesh-jetson-orin-nano-arm64-edge-ai-test-<ts>.img.xz | \
     sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
 # or:  sudo scripts/flash-disk.sh --arch arm64 --role edge-ai /dev/sdX
 ```
+
+The `.img.xz` exists only when you built with `--compress`. Without it, write the plain `.img` with the same `dd` command.
 
 Insert the card / NVMe, power on: UEFI's L4TLauncher finds
 `/boot/extlinux/extlinux.conf` on the `JETSON_ROOT` partition and boots it.

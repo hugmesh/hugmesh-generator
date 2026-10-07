@@ -12,7 +12,7 @@
 > each inherited claim is marked as such below). **Not hardware-verified in
 > this environment** — there is no H618 hardware available in this sandbox.
 > Treat this exactly like `specs-jetson/`/`specs-orangepi5/` were treated
-> before their own hardware-validation passes: buildable and internally
+> and are also unvalidated: buildable and internally
 > consistent (`--print-plan` clean across the whole flag matrix), but **do not
 > trust it to boot** until a real board confirms it end-to-end.
 
@@ -72,9 +72,9 @@ the two trees without checking which board it actually belongs to.
 
 ## Why this is a platform with no desktop option — read this first
 
-Every other client-device platform in this repo (Frite, Orange Pi 5, RPi5's
-desktop role, Jetson's desktop role) ships a lean LXDE-class desktop. This one
-does not, and never will, for a concrete, researched reason — not because
+Frite, Orange Pi 5, Orange Pi 4 LTS, the RPi5 desktop role and the Jetson
+desktop role ship a lean LXDE-class desktop. This one does not, and never will,
+for a concrete, researched reason — not because
 nobody got around to it (the trail below is the Zero 2 sibling's research; it
 applies verbatim because the H618 carries the SAME DE33 display engine and the
 Zero 2W's own DTS includes the same `sun50i-h616.dtsi`):
@@ -113,8 +113,8 @@ Zero 2W's own DTS includes the same `sun50i-h616.dtsi`):
   community-reverse-engineered H616-family DRAM init, here in its LPDDR4
   flavor (CONFIRMED for this exact board by fetching
   `orangepi_zero2w_defconfig`: `CONFIG_SUNXI_DRAM_H616_LPDDR4=y`, native
-  training parameters, no closed "boot0" blob at all, unlike **every other**
-  ARM platform in this repo). It is an even tinier/cheaper/lower-power board
+  training parameters, no closed "boot0" blob at all, unlike Frite and Orange Pi 5, which need
+  vendor blobs). It is an even tinier/cheaper/lower-power board
   than the Zero 2. That is still the profile of a good, lean, hardened,
   **SSH-only network appliance** — with the honest caveat that wired
   networking now needs a USB Ethernet adapter (or the expansion board).
@@ -155,7 +155,7 @@ are direct overrides rather than entries in a board table.
 ```
 Allwinner BootROM
   -> U-Boot SPL   (NATIVE H616-family LPDDR4 DRAM-init driver — NO blob. Same
-                    project-first property as the Zero 2 sibling: Frite needs
+                    property as the Zero 2 sibling: Frite needs
                     Amlogic FIP/BL31, Orange Pi 5 needs Rockchip rkbin
                     DDR-init + TF-A BL31 blobs. This board's mainline U-Boot
                     alone can train DRAM.)
@@ -259,11 +259,11 @@ run a real cross-emerge).
    Without the paired `rd.luks.name=`, dracut's `crypt` module defaults the
    mapper device to `luks-<uuid>` instead of the name `root=` actually expects
    (`cryptroot`), and `root=/dev/mapper/cryptroot` never resolves —
-   `install-orangepi-zero2w.sh` sets both, mirroring Frite/RPi5/Jetson/
-   Orange-Pi-5/Zero-2 exactly.
+   `install-orangepi-zero2w.sh` sets both, mirroring Frite, RPi5, Orange Pi 5 and the Zero 2. (The Jetson builder has
+   the same code, but it refuses `--encrypt-root`.)
 2. **PBKDF pinning depends on WHERE the LUKS format actually runs.** This
    platform follows the Zero 2's/Frite's/Orange-Pi-5's **on-device** model,
-   not RPi5's/Jetson's **cross-host** model: `install-orangepi-zero2w.sh` runs
+   not RPi5's **cross-host** model: `install-orangepi-zero2w.sh` runs
    from WITHIN the booted LIVE/INSTALLER session, ON THE ACTUAL Orange Pi Zero
    2W board that will later unlock the root at every boot — so cryptsetup's
    argon2id auto-benchmark is trustworthy and deliberately NOT pinned. If

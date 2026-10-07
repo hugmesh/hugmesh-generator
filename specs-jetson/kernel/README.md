@@ -6,7 +6,7 @@ selects between them with `--kernel-flavor` (default `mainline`):
 ## 1. `--kernel-flavor mainline` (DEFAULT — the buildable route)
 
 Mainline/gentoo-sources arm64 kernel: generic `defconfig` + two fragments merged
-by `scripts/kconfig/merge_config.sh` (same mechanism as the Frite builder):
+by `scripts/kconfig/merge_config.sh` (same mechanism as the Frite builder). A third fragment, `luks-crypt.config`, is merged only with `--encrypt-root`, which the builder refuses today (see [../README.md](../README.md)):
 
 | Fragment | Job |
 |---|---|
