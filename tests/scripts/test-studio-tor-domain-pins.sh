@@ -58,6 +58,9 @@ echo "== Studio Tor / per-domain pytest pins (#591) =="
 # ── the file set: explicit names + the two per-domain families ─────────────────
 NAMED=(
   tests/test_local_mesh_tor.py
+  # #588: keys-provision imports the KEYS stick's certs/ for every manifest (the client
+  # stick's CA import, EXECUTED out of provision.sh)
+  tests/test_keys_provision_certs.py
   tests/test_package_catalog.py
   tests/test_localcloud_nodes.py
   tests/test_tui_localcloud.py
