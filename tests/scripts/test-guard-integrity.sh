@@ -701,7 +701,16 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # file on that tree (GUARD_PREMERGE=0), not computed:
 #     182 of 205 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 23 — neither new suite was ever in it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-192}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-193}"
+
+# 192 -> 193 (denominator 215 -> 216) on 2026-09-30 for #663: the kind sign-in
+# answered 500 because the BFF autoscalers' maxReplicas (6) times the unconfigured
+# R2DBC pool (10) exceeded the app role's CONNECTION LIMIT (20).
+# tests/scripts/test-db-connection-budget.sh pins that inequality offline over
+# specs/cluster/manifests and joined shell-suites.yml's debian job (PyYAML).
+# MEASURED by RUNNING this file on the tree, not computed:
+#     suite added and wired                193 of 216
+# The ungated SET pin is unchanged at 23: the new suite was never in it.
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
