@@ -27,6 +27,7 @@ from dataclasses import dataclass
 
 from . import devops_tools, e2e_catalogue, own_casdoor, proc_group, proc_text
 from . import resource_limits, stack_limits
+from .domain_services import TOR_SLUG_RE as _TOR_SLUG_RE_SHARED
 from .local_services import (KIND_ADDONS_ENV, KIND_ADDONS_NONE, federation_env,
                              kind_addon_default_selection, kind_addon_env,
                              validate_kind_addons)
@@ -50,10 +51,12 @@ _TOR_SERVICE = "hugmesh-tor"
 #: whole `stack-down`/`stack-up` (tens of seconds), which is what the check exists
 #: to refuse (#581).
 _ONION_START_SKEW_S = 2.0
-#: The node contract's per-domain slug (#599; core.domain_services.TOR_SLUG_RE) and a
-#: v3 onion hostname (56 base32 characters). A per-domain readout is read out of a
-#: root-owned shared directory, so both are checked before anything hands it out.
-_TOR_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+#: The node contract's per-domain slug (#599) — THE one spelling, core.domain_services'
+#: (a second compile here drifted from it once; a test pins the two names to one
+#: object) — and a v3 onion hostname (56 base32 characters). A per-domain readout is
+#: read out of a root-owned shared directory, so both are checked before anything
+#: hands it out.
+_TOR_SLUG_RE = _TOR_SLUG_RE_SHARED
 _ONION_V3_RE = re.compile(r"^[a-z2-7]{56}\.onion$")
 _DOCKER_TIME_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$")

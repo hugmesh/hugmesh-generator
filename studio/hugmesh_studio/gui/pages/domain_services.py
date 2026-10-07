@@ -363,6 +363,55 @@ class DomainServicesBody:
         step.addStretch(1)
         lay.addLayout(step)
 
+        # ── the domain's FRONT DOOR (#582, decision 68 = A) ────────────────────────
+        # Its own table, not a group in the services table below: that table IS the
+        # per-domain service catalogue (every row a domain-scoped service, grouped by
+        # SERVICE_GROUPS), and the Tor front door is not a service of the domain — it
+        # is how the domain is REACHED. Same columns, so the Scope column still says
+        # what it binds on the row itself.
+        #
+        # ABOVE the services, right under the domain navigation, on purpose (#647,
+        # looked at again at a 120 and 144 font DPI): the catalogue is a dozen rows
+        # plus three paragraphs of prose, and anything laid out under it is the first
+        # thing a shorter viewport pushes below the fold — measured at the wizard's
+        # default size, the front door's row and its state line were off screen at a
+        # 13.5 pt face (what a forced font DPI of 144 gives a 9 pt face) and on any
+        # logical screen shorter than about 700 px (a 1366x768 laptop at 125 %
+        # scaling). One row and one line, placed before the long list, are on screen
+        # at every one of those; the list, which is expected to scroll, scrolls. The
+        # TUI step prints the same order (decision 71 = A).
+        self.front_door_table = QtWidgets.QTreeWidget()
+        self.front_door_table.setColumnCount(len(_HEADERS))
+        # The SAME header word as the services table's checkbox column — the
+        # operator's own (PR #646) — never a second spelling of it.
+        self.front_door_table.setHeaderLabels([_HEADERS[_COL_ON], "Front door",
+                                               "Scope", "",
+                                               "What it does for this domain"])
+        self.front_door_table.setRootIsDecorated(False)
+        self.front_door_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
+        # No maximum height either: one row, one row's height (fit_table_height).
+        fd_hdr = self.front_door_table.header()
+        fd_hdr.setStretchLastSection(True)
+        for c in (_COL_NAME, _COL_SCOPE, _COL_SETTING):
+            fd_hdr.setSectionResizeMode(
+                c, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+
+        # The front door's live state — inline, never a modal: which login the
+        # domain's onion serves, and whether Tor runs on this mesh at all. Repainted
+        # on every toggle of the row's checkbox. Laid out as the table's CAPTION: the
+        # two share one block with no gap between them, so the line reads as part of
+        # the row it describes and sits as high on the page as the row itself.
+        self.tor_note = QtWidgets.QLabel("")
+        self.tor_note.setWordWrap(True)
+        self.tor_note.setStyleSheet(muted())
+        front_door_block = QtWidgets.QVBoxLayout()
+        front_door_block.setSpacing(0)
+        front_door_block.setContentsMargins(0, 0, 0, 0)
+        front_door_block.addWidget(self.front_door_table)
+        front_door_block.addWidget(self.tor_note)
+        lay.addLayout(front_door_block)
+
         # ── the honesty banner (#496) — on the page, not in a tooltip ──────────────
         self.enforcement = QtWidgets.QLabel(ENFORCEMENT_NOTE)
         self.enforcement.setWordWrap(True)
@@ -405,44 +454,6 @@ class DomainServicesBody:
                 c, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         hdr.setToolTip(_scope_legend())
         lay.addWidget(self.table)
-
-        # ── the domain's FRONT DOOR (#582, decision 68 = A) ────────────────────────
-        # Its own table, not a group in the services table above: that table IS the
-        # per-domain service catalogue (every row a domain-scoped service, grouped by
-        # SERVICE_GROUPS), and the Tor front door is not a service of the domain — it
-        # is how the domain is REACHED. Same columns, so the Scope column still says
-        # what it binds on the row itself.
-        self.front_door_table = QtWidgets.QTreeWidget()
-        self.front_door_table.setColumnCount(len(_HEADERS))
-        # The SAME header word as the services table's checkbox column — the
-        # operator's own (PR #646) — never a second spelling of it.
-        self.front_door_table.setHeaderLabels([_HEADERS[_COL_ON], "Front door",
-                                               "Scope", "",
-                                               "What it does for this domain"])
-        self.front_door_table.setRootIsDecorated(False)
-        self.front_door_table.setSelectionMode(
-            QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
-        # No maximum height either: one row, one row's height (fit_table_height).
-        fd_hdr = self.front_door_table.header()
-        fd_hdr.setStretchLastSection(True)
-        for c in (_COL_NAME, _COL_SCOPE, _COL_SETTING):
-            fd_hdr.setSectionResizeMode(
-                c, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-
-        # The front door's live state — inline, never a modal: which login the
-        # domain's onion serves, and whether Tor runs on this mesh at all. Repainted
-        # on every toggle of the row's checkbox. Laid out as the table's CAPTION: the
-        # two share one block with no gap between them, so the line reads as part of
-        # the row it describes and sits as high on the page as the row itself.
-        self.tor_note = QtWidgets.QLabel("")
-        self.tor_note.setWordWrap(True)
-        self.tor_note.setStyleSheet(muted())
-        front_door_block = QtWidgets.QVBoxLayout()
-        front_door_block.setSpacing(0)
-        front_door_block.setContentsMargins(0, 0, 0, 0)
-        front_door_block.addWidget(self.front_door_table)
-        front_door_block.addWidget(self.tor_note)
-        lay.addLayout(front_door_block)
 
         # ── the two rules of a checkbox table (#647), on BOTH tables ───────────────
         # The Selection column's width and the table's height. Applied here (so even

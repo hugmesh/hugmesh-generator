@@ -148,10 +148,14 @@ def added_row_problems(names, own_name: str) -> list[str]:
 
 
 def _default_shaped(d: Domain) -> bool:
+    """Whether the mesh's OWN row says nothing the config does not already carry.
+    Asked only about the own row, whose front door is the mesh's primary onion — so a
+    ``tor`` flag on it (a hand-made object; no page sets one) is not a front door and
+    does not make the row worth recording (``bootstrap_domain_records`` would not
+    write it anyway)."""
     return (not (d.title or "").strip()
             and getattr(d, "idp", DOMAIN_IDP_SUPERDOMAIN) == DOMAIN_IDP_SUPERDOMAIN
-            and not normalise_slugs(d.optional_services)
-            and not getattr(d, "tor", False))
+            and not normalise_slugs(d.optional_services))
 
 
 def bootstrap_domain_records(domains, own_name: str) -> tuple[dict, ...]:

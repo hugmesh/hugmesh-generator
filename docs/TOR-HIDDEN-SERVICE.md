@@ -200,8 +200,10 @@ file is still open (hugmesh-generator#582).
 
 **Where a Tor domain is chosen (hugmesh-generator#582).** In the Studio's *Domain
 services* step, every domain except the mesh's own has a **Tor front door** row, scope
-*onion (per domain)* — GUI (a checkbox in its own small table, under the services) and TUI
-(command `t`). It writes `Domain.tor`; the mesh manifest carries it as `domains[].tor: true`
+*onion (per domain)* — GUI (a checkbox in its own small table, laid out above the services
+catalogue, right under the domain navigation, so a short viewport cannot push it below the
+fold — measured, hugmesh-generator#647) and TUI (command `t`, the same order). It writes
+`Domain.tor`; the mesh manifest carries it as `domains[].tor: true`
 (both the v1 shim and the v2 envelope; the key is omitted when false, so older manifests
 keep their bytes). A legacy `tor` in a domain's `optional_services` — a slot no builder ever
 read — moves to `tor: true` when a config loads. The node must still **run** Tor (the

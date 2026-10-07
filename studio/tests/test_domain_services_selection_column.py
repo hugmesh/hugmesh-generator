@@ -27,10 +27,22 @@ What is pinned here, on the REAL hosts of the shared body, headless (offscreen):
 THE GEOMETRY CHECKS RUN UNDER SEVERAL LOOKS (``_LOOKS``): the default style at the
 default point size, the same at 8 pt, and every KDE style installed here (Breeze,
 Oxygen) at 8 pt — the rows of #647's table where the header-sized column hid or clipped
-the checkbox (Oxygen's indicator is 23 px; at 8 pt "Selection" alone left it 21 px). The
-style and font are set on the application BEFORE the host is built and restored after.
-The click and wording checks run under the default look only (the host is rebuilt for
-every case, and each build is a whole wizard).
+the checkbox (Oxygen's indicator is 23 px; at 8 pt "Selection" alone left it 21 px) —
+and the default style at 11.25 pt and 13.5 pt: what a forced font DPI of 120 and 144
+makes of a 9 pt face on a platform that scales fonts alone (the robustness review of
+#582 asked for 120 and 144). The style and font are set on the application BEFORE the
+host is built and restored after. The click and wording checks run under the default
+look only (the host is rebuilt for every case, and each build is a whole wizard).
+
+WHY THE BIGGER FACES AND NOT ``QT_FONT_DPI``: under the offscreen platform that
+variable does not enlarge the font at all — measured, the 9 pt face is 14 px tall at
+96, 120 and 144 — it sets the device pixel ratio (1.25, 1.5) and so SHRINKS the logical
+screen from 800x800 to 640x640 and 533x533, and ``medium_size`` clamps the wizard to
+588x588 and 490x490. That is a small-screen case, which ``_SIZES`` covers directly and
+deterministically (the 640x640 one); the bigger faces cover the fonts-only case. Both
+are real desktops. So that the test host's screen cannot move what is measured, every
+wizard host is built and then sized to the 800x800 screen's default (``_BUILT_ON``):
+the same 736x736 window under any QT_FONT_DPI.
 
 WHAT IS DRAWN IS ALSO CHECKED AS A WHOLE (#647, looked at): on every host the body's
 widgets follow one another instead of overlapping — the fleet's step laid the front-door
@@ -49,6 +61,14 @@ are now exactly as tall as their rows (``fit_table_height``), re-fitted when the
 or font changes and when a group row is folded, and the state line is the front-door
 table's caption with no gap. ``isVisible()`` cannot see a fold — a widget scrolled out
 of the viewport is "visible" — so these tests measure viewport-relative geometry.
+
+AND AT OTHER WINDOW SIZES AND BIGGER FACES (the robustness review of #582): with the
+front door laid out UNDER the catalogue it was off screen again at a 13.5 pt face (the
+local mesh step's checkbox cut by 3 px at 1040x780) and on any logical screen shorter
+than about 700 px. The front-door block now comes right after the domain navigation,
+ABOVE the long catalogue and its prose, on both faces (the TUI prints the same order),
+and the fold is measured at the host's default size AND at every size in ``_SIZES``
+under every look in ``_LOOKS``. The catalogue, a list, is what scrolls.
 
 The GUI half skips without a Qt binding (the Qt-free job); the TUI half never skips.
 Nothing here calls ``.exec()``.
@@ -93,8 +113,9 @@ def test_tui_screen_prints_the_header(tmp_path, monkeypatch):
     screen.enter(j)
     screen.feed(j, "n")
     heads = [ln.split() for ln in screen.lines(j) if "selection" in ln.split()[:2]]
-    assert [h[:3] for h in heads] == [["#", "selection", "service"],
-                                      ["cmd", "selection", "front"]]
+    # the front door's table first, then the catalogue — the GUI page's order (#647)
+    assert [h[:3] for h in heads] == [["cmd", "selection", "front"],
+                                      ["#", "selection", "service"]]
 
 
 # ── GUI (skips only without a Qt binding) ─────────────────────────────────────────
@@ -221,10 +242,43 @@ def _installed_looks():
     qt_mod.QtWidgets.QApplication.instance() \
         or qt_mod.QtWidgets.QApplication(["hugmesh-studio-selection-column"])
     keys = set(qt_mod.QtWidgets.QStyleFactory.keys())
-    return [("Fusion", None), ("Fusion", 8.0)] + [(s, 8.0) for s in _KDE_STYLES if s in keys]
+    return ([("Fusion", None), ("Fusion", 8.0)]
+            + [(s, 8.0) for s in _KDE_STYLES if s in keys]
+            # 9 pt at a forced font DPI of 120 and 144 (fonts scaled, widgets not)
+            + [("Fusion", 11.25), ("Fusion", 13.5)])
 
 
 _LOOKS = _installed_looks()
+
+#: The screens a wizard window is sized for here, each through ``gui.wizard.
+#: medium_size`` (the wizard's own clamp, so a change to it moves these): the
+#: documented real ones — 1080p (1040x780), a 1366x768 laptop at 125 % scaling (a
+#: 1092x614 logical screen, 1004x564) and a 1024x600 netbook (942x552) — plus the
+#: offscreen platform's own 800x800 (736x736, the size the operator's #647
+#: measurements used) and the 640x640 LOGICAL screen that platform shows under
+#: QT_FONT_DPI=120 (588x588: there the variable sets the device pixel ratio, not the
+#: font — see the module docstring), kept as a small-screen case.
+_SCREENS = {"1080p": (1920, 1080), "768p-at-125pc": (1092, 614),
+            "1024x600-netbook": (1024, 600), "800x800-offscreen": (800, 800),
+            "640x640-logical": (640, 640)}
+
+#: Every "as built" measurement of a WIZARD host is taken at the 800x800 screen's
+#: default, set explicitly in ``_build_host``: the wizard sizes itself from the
+#: platform's screen, which under QT_FONT_DPI=120 / 144 is 640x640 / 533x533 logical
+#: pixels — a 490x490 window at a 13.5 pt face wraps the state line to ten lines and
+#: puts a scrollbar on a six-column table, and no desktop has that screen. Pinned, the
+#: file measures the same window whatever the test host's platform says.
+_BUILT_ON = "800x800-offscreen"
+
+#: Window sizes the fold is measured at, besides the host's as-built size.
+_SIZES = tuple(_SCREENS.items())
+
+
+def _size_of(label):
+    from hugmesh_studio.gui.wizard import medium_size
+    qt = _qt()
+    w, h = _SCREENS[label]
+    return medium_size(qt.QtCore.QRect(0, 0, w, h))
 
 
 def _look_id(look):
@@ -262,6 +316,12 @@ def _build_host(name, qapp, monkeypatch, tmp_path):
     body, window = _HOSTS[name](qapp, monkeypatch)
     assert body.current_domain() == "acme.example"
     _settle(qapp)
+    if isinstance(window, _qt().QtWidgets.QWizard):
+        # the wizard's default on the 800x800 screen, whatever this host's screen is
+        size = _size_of(_BUILT_ON)
+        window.resize(size)
+        _settle(qapp)
+        assert (window.width(), window.height()) == (size.width(), size.height())
     return body, window
 
 
@@ -526,8 +586,8 @@ def test_the_bodys_widgets_follow_one_another_on_every_host(host):
     rows). Each widget's top is at or below the previous one's bottom, in the layout
     they share, and the services table keeps at least its minimum height."""
     body, _window = host
-    order = [body.table, body.front_door_table, body.tor_note, body.other_head,
-             body.other_table]
+    order = [body.head, body.front_door_table, body.tor_note, body.enforcement,
+             body.help, body.table, body.other_head, body.other_table]
     parent = body.table.parentWidget()
     for w in order:
         assert w.parentWidget() is parent, type(w).__name__
@@ -545,29 +605,55 @@ def test_the_bodys_widgets_follow_one_another_on_every_host(host):
         "the body is not inside a scroll area on this host"
 
 
+def _subtitle_is_whole(window, must_say):
+    qt = _qt()
+    page = window.currentPage()
+    sub = page.subTitle()
+    assert sub and must_say in sub
+    labels = [lab for lab in window.findChildren(qt.QtWidgets.QLabel)
+              if lab.text() == sub and lab.isVisible()]
+    assert len(labels) == 1, "the wizard shows the subtitle exactly once"
+    lab = labels[0]
+    need = (lab.heightForWidth(lab.width()) if lab.wordWrap()
+            else lab.sizeHint().height())
+    assert need <= lab.height() + 1, \
+        f"the subtitle needs {need}px and has {lab.height()}px — it is cut off " \
+        f"(window {window.width()}x{window.height()}, {lab.font().pointSizeF()} pt)"
+
+
+#: The screens the subtitle is measured on — the wizard's documented real ones only
+#: (1080p, a 768p laptop at 125 %, a 1024x600 netbook). Qt's wizard header holds two
+#: lines of subtitle and clips the rest, so on the 640x640 logical screen (588 px
+#: wide) at 13.5 pt any sentence worth printing is three lines; the sizes a person's
+#: screen gives are what is promised.
+_SUBTITLE_SCREENS = tuple((k, _SCREENS[k])
+                          for k in ("1080p", "768p-at-125pc", "1024x600-netbook"))
+
+
 @pytest.mark.parametrize("look", _LOOKS, ids=_look_id)
-def test_the_local_mesh_steps_subtitle_is_whole(look, qapp, monkeypatch, tmp_path):
-    """The wizard's subtitle area holds two lines at the default size; the local docker
-    mesh step's subtitle fits them under every look measured here (it was three lines
-    and cut off mid-sentence, #647)."""
+def test_the_wizard_steps_subtitle_is_whole(look, qapp, monkeypatch, tmp_path):
+    """The wizard's subtitle area holds two lines; the local docker mesh step's
+    subtitle and the image flow page's fit them under every look measured here, at the
+    wizard's default size on each screen in ``_SUBTITLE_SCREENS`` (the local mesh one
+    was three lines and cut off mid-sentence at 9 pt, #647, and again at 13.5 pt until
+    it was shortened)."""
+    from hugmesh_studio.gui.wizard import medium_size
     qt = _qt()
     saved = _apply_look(qapp, look)
     try:
-        body, window = _build_host("local-docker-mesh", qapp, monkeypatch, tmp_path)
-        try:
-            page = window.currentPage()
-            sub = page.subTitle()
-            assert sub and "two steps on" in sub
-            labels = [lab for lab in window.findChildren(qt.QtWidgets.QLabel)
-                      if lab.text() == sub and lab.isVisible()]
-            assert len(labels) == 1, "the wizard shows the subtitle exactly once"
-            lab = labels[0]
-            need = (lab.heightForWidth(lab.width()) if lab.wordWrap()
-                    else lab.sizeHint().height())
-            assert need <= lab.height() + 1, \
-                f"the subtitle needs {need}px and has {lab.height()}px — it is cut off"
-        finally:
-            _dispose(window, qapp)
+        for name, must_say in (("local-docker-mesh", "two steps on"),
+                               ("image-flow", "every domain gets its own")):
+            _body, window = _build_host(name, qapp, monkeypatch, tmp_path)
+            try:
+                for label, (sw, sh) in _SUBTITLE_SCREENS:
+                    size = medium_size(qt.QtCore.QRect(0, 0, sw, sh))
+                    window.resize(size)
+                    _settle(qapp)
+                    assert (window.width(), window.height()) == (size.width(), size.height()), \
+                        f"{name} did not take the {label} size {size.width()}x{size.height()}"
+                    _subtitle_is_whole(window, must_say)
+            finally:
+                _dispose(window, qapp)
     finally:
         _restore_look(qapp, saved)
 
@@ -595,13 +681,7 @@ def _last_row(table):
     return last
 
 
-def test_the_front_door_and_its_state_line_are_above_the_fold_on_every_host(
-        styled_host, qapp):
-    """On every host at its default window size, under every look: the front-door
-    checkbox, its table and the state line under it lie wholly inside the page's
-    scroll viewport with the page not scrolled — with the front door unticked and,
-    since that is the longer line, ticked."""
-    body, _window = styled_host
+def _front_door_above_the_fold(body, qapp, where):
     sa = _scroll_area_of(body.table)
     vp = sa.viewport()
     for ticked in (False, True):
@@ -618,9 +698,72 @@ def test_the_front_door_and_its_state_line_are_above_the_fold_on_every_host(
             top, bottom = _span_in(vp, w)
             assert top >= 0 and bottom <= vp.height(), \
                 f"the {name} spans y={top}..{bottom} in a {vp.height()}px viewport " \
-                f"({'ticked' if ticked else 'unticked'})"
+                f"({'ticked' if ticked else 'unticked'}, {where})"
     # the caption: directly under its table, no gap
     assert _span_in(vp, body.tor_note)[0] == _span_in(vp, body.front_door_table)[1]
+
+
+def test_the_front_door_and_its_state_line_are_above_the_fold_on_every_host(
+        styled_host, qapp):
+    """On every host, under every look, at the host's default window size and at every
+    size in ``_SIZES``: the front-door checkbox, its table and the state line under it
+    lie wholly inside the page's scroll viewport with the page not scrolled — with the
+    front door unticked and, since that is the longer line, ticked.
+
+    A host's window takes a size no smaller than its own floor, and the fold is then
+    measured at the size it really took: the two wizard hosts scroll, so their floor
+    is small and every size here is reached; the fleet's window is floored by the
+    largest of ALL its stacked steps (its first step is 635 px tall and its third
+    807 px wide at 9 pt — measured the same on origin/main, where that is a
+    pre-existing fleet-window matter, not this step's: this step's own floor is
+    68x68 since it scrolls), so at the laptop and 640-logical sizes it stays at that
+    floor, and what is asserted is that the clamp IS the window's own minimum."""
+    body, window = styled_host
+    _front_door_above_the_fold(body, qapp, f"as built, {window.width()}x{window.height()}")
+    for label, _screen in _SIZES:
+        size = _size_of(label)
+        window.resize(size)
+        _settle(qapp)
+        floor = window.minimumSize()
+        took = (max(size.width(), floor.width()), max(size.height(), floor.height()))
+        assert (window.width(), window.height()) == took, \
+            f"asked {size.width()}x{size.height()}, floor {floor.width()}x{floor.height()}"
+        _front_door_above_the_fold(body, qapp, f"{label}: {took[0]}x{took[1]}")
+
+
+def test_the_front_door_is_laid_out_above_the_services_on_both_faces(host):
+    """The order that keeps the front door on screen (#647, looked at at 120 and 144
+    font DPI): on the GUI the front-door table and its state line come right after the
+    domain navigation and before the honesty banner, the help and the catalogue; the
+    TUI screen prints the same order (decision 71 = A — no new parity exemption)."""
+    body, _window = host
+    gui = [body.prev_btn, body.front_door_table, body.tor_note, body.enforcement,
+           body.help, body.table]
+    tops = [w.geometry().top() for w in gui]
+    assert tops == sorted(tops) and len(set(tops)) == len(tops), tops
+    assert body.front_door_table.geometry().bottom() <= body.table.geometry().top()
+    # the text face, on the same kind of domain (an added one with a front door)
+    md = LocalMeshDomains(domains=[Domain(name="mesh.example"), Domain(name="b.example")],
+                          own_name="mesh.example")
+    screen = tui_step.DomainServicesScreen(cfg_of=lambda j: md, lane_note="LANE")
+    j = journey.Journey(".")
+    screen.enter(j)
+    screen.feed(j, "n")
+    lines = screen.lines(j)
+
+    def at(pred):
+        hits = [i for i, ln in enumerate(lines) if pred(ln)]
+        assert len(hits) == 1, hits
+        return hits[0]
+    front_door = at(lambda ln: ln.split()[:2] == ["cmd", "selection"])
+    state = at(lambda ln: ln.startswith("Tor front door: "))
+    banner = at(lambda ln: ln == tui_step.ENFORCEMENT_NOTE)
+    lane = at(lambda ln: ln == "LANE")
+    services = at(lambda ln: ln.split()[:2] == ["#", "selection"])
+    # title, blank, then the table's header, rule and one row, then the state line
+    assert front_door == 2 and state == front_door + 3
+    assert front_door < state < banner < lane < services
+    assert lines[services - 2].startswith("The services THIS domain provides")
 
 
 def test_each_checkbox_table_is_exactly_as_tall_as_its_rows(styled_host):

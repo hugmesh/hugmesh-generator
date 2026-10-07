@@ -20,8 +20,10 @@ SAY so — it prints them, read-only, with the scope they really have, where eac
 set and what it is doing right now, plus a legend naming all three scopes. Both halves
 of that issue: reachable from the same flow, and visibly not domain-scoped.
 
-ONE EXCEPTION, BY RULING (#582, decision 68 = A): under the services, every domain but
-the mesh's own has a ‘Tor front door’ row (command ``t``) — scope "onion (per domain)",
+ONE EXCEPTION, BY RULING (#582, decision 68 = A): above the services, right under the
+domain line (the GUI page's order, #647 — the one-row front door is laid out before the
+long catalogue so a short viewport cannot push it off screen), every domain but the
+mesh's own has a ‘Tor front door’ row (command ``t``) — scope "onion (per domain)",
 writing ``Domain.tor`` (never ``optional_services``) — and a one-line state saying which
 login its onion serves, whether Tor runs on this mesh at all, and what THIS route does
 with the choice (``core.domain_services.TOR_REACH`` — only the local docker mesh acts on
@@ -234,19 +236,12 @@ class DomainServicesScreen:
         cfg = self.cfg(j)
         done = reviewed_names(cfg)
         own = " (this mesh's own domain)" if d.name == _own_name(cfg) else ""
-        out = [f"{d.name}{own} — domain {self.index + 1} of {len(doms)}",
-               "The services THIS domain provides. They ride the mesh manifest as "
-               "per-domain provisioning input; they do not change which services the "
-               "image bakes.",
-               "",
-               ENFORCEMENT_NOTE,
-               ""]
-        if self.lane_note:
-            out += [self.lane_note, ""]
         is_own = bool(own)
-        headers, rows = service_table(d)
-        out += model.format_table(headers, rows)
-        out.append("")
+        out = [f"{d.name}{own} — domain {self.index + 1} of {len(doms)}", ""]
+        # The front door FIRST, right under the domain line — the GUI page's order
+        # (its front-door table sits above the long services catalogue so a short
+        # viewport cannot push it below the fold, #647), kept alike here by decision
+        # 71 = A: same screen, same order, on both faces.
         headers, rows = front_door_table(d, own=is_own)
         out += model.format_table(headers, rows)
         # the front door's live state — which login its onion serves, whether Tor
@@ -256,6 +251,15 @@ class DomainServicesScreen:
         out.append(f"{TOR_ROW_LABEL}: "
                    + tor_row_state(d, scope_cfg, self._entries(j), _own_name(cfg),
                                    walked=cfg, domains=doms))
+        out += ["", ENFORCEMENT_NOTE, ""]
+        if self.lane_note:
+            out += [self.lane_note, ""]
+        out += ["The services THIS domain provides. They ride the mesh manifest as "
+                "per-domain provisioning input; they do not change which services the "
+                "image bakes.",
+                ""]
+        headers, rows = service_table(d)
+        out += model.format_table(headers, rows)
         out.append("")
         left = [x.name for x in doms if x.name not in done]
         if left:

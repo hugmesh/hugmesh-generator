@@ -31,6 +31,7 @@ Named ``test_domain_services*.py`` so tests/scripts/test-studio-tor-domain-pins.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -154,6 +155,17 @@ def test_the_slug_is_the_node_contracts_shape():
     # truncation — two long names could collide onto one key)
     assert ds.onion_slug("a" * 30 + "." + "b" * 33) == ""
     assert ds.TOR_SLUG_RE.pattern == r"^[a-z0-9][a-z0-9-]{0,62}$"
+
+
+def test_the_stack_node_checks_readout_names_with_the_one_shared_spelling():
+    """ONE Python spelling of the node contract's slug shape (#599): the stack node
+    checks a per-domain readout's name with ``core.domain_services.TOR_SLUG_RE`` — the
+    same object, not a second compile of the same text (the robustness review of #582
+    found two, free to drift apart). run.sh and the tor entrypoint carry the shell
+    spelling; ``test_the_lane_resolves_every_domain_readout_and_only_those`` holds
+    that one to the same answers."""
+    from hugmesh_studio.core import local_stack_node as lsn
+    assert lsn._TOR_SLUG_RE is ds.TOR_SLUG_RE
 
 
 def test_the_tenant_is_the_brand_the_https_door_already_serves():
@@ -1405,6 +1417,42 @@ def test_the_mesh_onion_lane_is_untouched_by_the_domains(tmp_path):
     assert p.returncode == 0, p.stderr[-400:]
     assert _first(plan, "TAGS") == "@via:onion and @env:docker"
     assert _first(plan, "ONION_DOMAIN_URLS") == ""
+
+
+PRINT_PLAN = os.path.join(GENERATOR_DIR, "tests", "e2e", "print-plan.mjs")
+
+
+def test_the_json_plan_carries_the_per_domain_doors():
+    """``--print-command`` prints the plan as JSON through tests/e2e/print-plan.mjs
+    (the tests above stub ``node`` to read the tab-separated lines; this one runs the
+    real serialiser). The per-domain doors run.sh resolves reach it as
+    ``onionDomainUrls`` — ``{slug: url}`` in the lane's order, null when the lane has
+    none — beside ``onionBaseUrl`` and ``proxy``; the correctness review of #582 found
+    the JSON summary silent about them while the tab-separated plan said them."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+
+    def plan(lines):
+        p = subprocess.run([node, PRINT_PLAN],
+                           input="".join(f"{k}\t{v}\n" for k, v in lines),
+                           capture_output=True, text=True, timeout=60)
+        assert p.returncode == 0, p.stderr[-400:]
+        return json.loads(p.stdout.strip().splitlines()[-1])
+
+    base = [("ENV_ID", "docker"), ("VIA", "onion-domains"),
+            ("ONION_BASE_URL", "https://" + ONION_P), ("PROXY", "socks5://127.0.0.1:9050"),
+            ("ONION_NOTE", "")]
+    got = plan(base + [("ONION_DOMAIN_URLS",
+                        f"acme-example=https://{ONION_A} brandb=https://{ONION_B}")])
+    assert got["onionDomainUrls"] == {"acme-example": "https://" + ONION_A,
+                                      "brandb": "https://" + ONION_B}
+    assert list(got["onionDomainUrls"]) == ["acme-example", "brandb"]
+    assert got["onionBaseUrl"] == "https://" + ONION_P
+    assert got["proxy"] == "socks5://127.0.0.1:9050" and got["via"] == "onion-domains"
+    # the mesh-onion lane, and a plan that never printed the line: null, not {}
+    assert plan(base + [("ONION_DOMAIN_URLS", "")])["onionDomainUrls"] is None
+    assert plan(base)["onionDomainUrls"] is None
 
 
 def test_an_executed_run_hands_playwright_the_domains_and_the_lanes_tags(tmp_path):
