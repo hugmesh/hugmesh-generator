@@ -413,6 +413,9 @@ The result is `drafts/<repo>-<n>/STATUS`, whose first word is one of:
 | `no-diff` | the model gave no diff, or said the issue is not one for it |
 | `no-issue`, `no-ollama`, `no-model`, `no-checkout`, `error` | the step could not run; the rest of the line says why |
 
+An issue that already has a `drafts/<repo>-<n>/STATUS` is skipped by `todo`; delete that
+directory to have it drafted again.
+
 A small local model gets some issues right and many wrong: on the reference PC, two
 real drafts against `qwen3:8b` ran to a clean `does-not-apply` (the model wrote a
 plausible diff for a line that is not in the file). Treat a draft as a head start for a
