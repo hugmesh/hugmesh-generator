@@ -237,7 +237,7 @@ only, for an already-provisioned device). Both are placed in `ARTIFACT_DIR`
 by `docker/build-firmware.sh` alongside a `manifest.json` describing exactly
 which is which (see `docs/MESH-FIRMWARE.md`).
 
-## Status: nothing built, nothing verified
+## Not compiled in this workspace
 
 **No firmware has been compiled, and none of the overlay exists.** Commit
 c8158b24 added this file as "design-only, no implementation yet". These
