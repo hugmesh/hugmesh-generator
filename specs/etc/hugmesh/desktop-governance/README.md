@@ -15,8 +15,8 @@ into their live system locations, substituting the `@@CLUSTER_DOMAIN@@`
 placeholder with the node's domain.
 
 > **Delivery note (corrected).** The `provision_desktop_governance()` function
-> render_gov's only its *named* templates — it has **no generic loop** and
-> does **not** touch `/etc/xdg/autostart`. Neither the function nor the x86
+> renders only its *named* templates through `render_gov` — it has **no generic
+> loop** and does **not** touch `/etc/xdg/autostart`. Neither the function nor the x86
 > builder (`build-x86-host-stage4.sh`) currently *bakes* this directory into the
 > sysroot, so the only working delivery today is the **KEYS-USB fallback**: drop
 > `KEYS/desktop-governance/` on the (read-only) KEYS stick and
@@ -118,10 +118,11 @@ JSON has no comments.)
 ### RESIDUAL #9a — `hugmesh-desktop` PKCE public client
 
 The desktop-governance config points the desktop login at the `hugmesh-desktop`
-client id (a PKCE public client) but `casdoor-init` did **not** seed it — so the
+client id (a PKCE public client). `casdoor-init` once did **not** seed it, so the
 login could obtain no token, the `desktop-sudo` claim was never issuable, and
-SSO-sudo was inert. This PR adds `reconcile_desktop_client()` to
-`specs/cluster/manifests/casdoor/init-job.yaml` (PUBLIC client, empty secret, PKCE,
-JWT tokens, native/loopback+OOB redirects, `authorization_code`+`device_code`) and
-seeds the `desktop-sudo` role in `init-data-configmap.yaml`. The exact Casdoor
+SSO-sudo was inert. That is fixed: `reconcile_desktop_client()` in
+`specs/cluster/manifests/casdoor/init-job.yaml` seeds the client (PUBLIC client,
+empty secret, PKCE, JWT tokens, native/loopback+OOB redirects,
+`authorization_code`+`device_code`), and `init-data-configmap.yaml` seeds the
+`desktop-sudo` role. The exact Casdoor
 object shape is version-specific — validate against the deployed Casdoor.
