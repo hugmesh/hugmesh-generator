@@ -73,7 +73,7 @@ flowchart TD
     PKIGW --> PKI
 
     subgraph SSO["SSO / native login — shipped, lit by default"]
-        AUTHCORE["auth-core: account/session/MFA + custody seams (2.4.2 / 2.5.0)"]
+        AUTHCORE["auth-core: account/session/MFA + custody seams (2.5.1; 2.4.2 / 2.5.0 until consumers bump)"]
         GWEXCH["gateway bff_-exchange filter"]
         LOGINOIDC["login-ui native login form -> POST /bff/login"]
         UBRELOC["user-bff native login + server-side Casdoor exchange"]

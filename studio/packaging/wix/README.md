@@ -179,22 +179,20 @@ update the note on the site at the same time.
 * **WiX and its extension:** the SHA-512 is NuGet's own `packageHash` for that version.
   Moving to WiX 7 means accepting its EULA, which is a decision for the project owner.
 
-## What the workflow still needs (it was not changed here)
+## What the workflow does now
 
-`.github/workflows/studio-release.yml` can now find the spec, but its `msi` job still cannot
-complete. Measured with the same commands in the .NET SDK container:
+`.github/workflows/studio-release.yml` (`msi` job, `windows-latest`) follows the same recipe as
+`build-msi-wine.sh`, with the three defects measured on 2026-09-30 removed:
 
-* `dotnet tool install --global wix` succeeds and installs **WiX 7.0.0**.
-* **The first failure is the "Harvest the frozen tree" step, at its first command**,
-  `wix extension add -g WixToolset.Util.wixext`: `WIX7015`, WiX 7 will not run until the EULA
-  is accepted (`--help`, `--version` and `eula` still work).
-* `wix harvest` does not exist in any release (`WIX0118`, with 7.0.0 and with 6.x).
-* `wix build -ext WixToolset.UI.wixext` fails with `WIX0144` because only the Util
-  extension was added. With WiX 6.x, adding Util unpinned pulls the 7.0.0 extension
-  (`WIX6101`).
+* WiX is installed **pinned**: `dotnet tool install --global wix --version 6.0.2`, then
+  `wix extension add -g WixToolset.UI.wixext/6.0.2` (the extension at the same version as the
+  tool). WiX 7 would need the Open Source Maintenance Fee EULA accepted (`WIX7015`), which is
+  the project owner's licence decision.
+* There is no harvest step: `Files.wxs` is committed and expands the frozen tree at build time.
+  The build passes `AppDir` as an absolute path.
+* The icon is rendered with `QT_QPA_PLATFORM=windows` (the `offscreen` default draws an empty
+  box where the "S" goes) and `check_icon.py` fails the job if the letter is missing.
 
-A working job would pin WiX 6.0.2, install `WixToolset.UI.wixext/6.0.2`, drop the harvest
-step (`Files.wxs` is now a committed source file and the build step already names it), and
-render the icon with Qt's `windows` platform or fix `gen_icons.py` (its `offscreen` default
-draws an empty box where the "S" goes, measured under Wine). The workflow's icon path and
-`pyinstaller --clean` are fine: `--clean` empties only `build/<spec name>/`, not `build/icons/`.
+What no machine has shown yet: that a real Windows Installer installs the MSI and that the
+Start Menu entry launches the app. A person has to do that on Windows 10/11 before the
+installer is called working.

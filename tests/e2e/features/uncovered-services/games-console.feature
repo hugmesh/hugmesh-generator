@@ -16,14 +16,14 @@
 # half and must BOTH be refused — the two negatives are what prove the AND, and
 # a single-role pass would be the defect.
 #
-# ONE INCONSISTENCY IS PINNED HERE DELIBERATELY. gamesGuard/gamesAdminGuard are
-# the two host-shell guards NOT built on role-guard.factory, so they still send a
+# A REFUSAL LANDS WHERE EVERY OTHER CONSOLE'S DOES. gamesGuard/gamesAdminGuard
+# were the two host-shell guards NOT built on role-guard.factory: they sent a
 # SIGNED-IN but unauthorized identity to /login rather than to
 # /home?denied=<path> like every other console does (see wiki-console.feature).
 # Telling a user who just signed in that they are not signed in is the exact
-# 2026-08-14 operator report; it was fixed for the factory-built guards and never
-# migrated for these two. The scenarios below assert the CURRENT behaviour so the
-# migration is a visible, deliberate change rather than a silent one.
+# 2026-08-14 operator report; hugmesh-host-shell#88 rebuilt both guards on the
+# factory, so the refused scenarios below assert the denied landing and the
+# notice that names the refused console, never /login.
 @service:games @layer:ui
 Feature: The games entry point and the derived games-admin mount
 
@@ -57,7 +57,8 @@ Feature: The games entry point and the derived games-admin mount
     Given I am signed in as the persona for this scenario
     When I open the path "/games/admin"
     Then the element with test id "games-admin-placeholder-message" is not visible
-    And the URL matches "/login"
+    And the URL matches "/home[?]denied="
+    And the element with test id "denied-notice" is visible
 
     Examples:
       | role          |
@@ -73,4 +74,5 @@ Feature: The games entry point and the derived games-admin mount
     Given I am signed in as the persona for this scenario
     When I open the path "/games"
     Then the element with test id "games-placeholder-message" is not visible
-    And the URL matches "/login"
+    And the URL matches "/home[?]denied="
+    And the element with test id "denied-notice" is visible
