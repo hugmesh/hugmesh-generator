@@ -50,6 +50,19 @@ The platform splits into two tiers:
   it — byte-identical to mainline. See
   [`docs/MESHTASTIC-BRIDGE.md`](MESHTASTIC-BRIDGE.md).
 
+**Registry census.** `specs/cluster/optional-services.yaml` lists 25 slugs:
+
+| Group | Slugs | Default |
+|---|---|---|
+| user-level, build-time gate | `akkoma`, `tuwunel`, `phpbb` | on |
+| user-level, build-time gate | `games`, `owncast`, `tube`, `character-studio`, `character-forge` | off |
+| infra, build-time gate | `edge-ai`, `edge-ai-analysis`, `edge-ai-tts`, `workloadConsole`, `headwind`, `attestation-server` | off |
+| infra, node-scoped | `egress-vpn`, `tor` | off |
+| infra, runtime gate | `coturn`, `meshbridge` (no build gate), `anubis` | off |
+| infra, no gate (always deployed) | `metrics-server`, `keda`, `kyverno`, `service-catalog-builder`, `optional-services-operator` (on); `observability` (off) | as listed |
+
+`all` expands to the eight user-level slugs only. Every infra slug is named on its own.
+
 The optional services are **add/remove-by-command on any generated USB image**,
 **identically on Pi5 (arm64) and x86 (amd64)** — the gate operates on the
 arch-agnostic `specs/cluster` GitOps tree that both stage4 builders bake. The
@@ -70,7 +83,7 @@ registry is that missing list). Each service entry carries:
 
 | field | meaning |
 |---|---|
-| `slug` | `akkoma` / `tuwunel` / `phpbb` / `games` / `owncast` / `tube` / `character-studio` / `character-forge` (+ `egress-vpn` / `tor` / `workloadConsole` / `anubis`) |
+| `slug` | one of the 25 slugs in the census above |
 | `namespace` | the k8s namespace it lands in |
 | `apps` | the ArgoCD Application YAMLs it **owns** (pruned on removal) |
 | `sharedApps` | apps shared with another slug (e.g. `45-social-ui.yaml`); pruned only when **all** owners are deselected |
@@ -241,9 +254,10 @@ EXCLUDE_SERVICES="phpbb tuwunel"        # forum-less + Matrix-less, keep the res
 > `edge-ai` dependency — unlike `edge-ai-analysis` its opt-in fold is wired in
 > **both** builders, not just x86; see [EDGE-AI.md](EDGE-AI.md#4c-voice-synthesis--tts-api-for-the-mesh-edge-ai-tts).
 
-`gate_optional_services()` (in **both** `build-x86-host-stage4.sh` and
-`build-rpi5-stage4.sh`, authored per-script and anchored to the
-`cp -r "${SHARED_SPECS}/cluster"` line) prunes, **for each unselected slug**:
+`gate_optional_services()` lives in one shared library,
+`scripts/_optional-services-lib.sh`, sourced by both `build-x86-host-stage4.sh` and
+`build-rpi5-stage4.sh` (each builder used to carry its own copy; the copies had
+drifted). It prunes, **for each unselected slug**:
 
 - its owned `apps/*.yaml` (e.g. `30-akkoma.yaml`; phpbb also drops
   `38-forum-bff-db`/`39-forum-bff-api`/`49-forum-ui`; games also drops
@@ -386,7 +400,7 @@ Internal mTLS / `svc.cluster.local` SANs are unaffected.
 > the repo-recursing root and the prune was inert) · build-time 13a render
 > ✅ SHIPPED **but held at `installed:"false"` for any slug whose hardcoded
 > `apps/30-*`/`50-*` Application still exists** — flipping it would doubly manage
-> one manifest dir (§10); `_opt_appset_cutover_done()` in `build-rpi5-stage4.sh`
+> one manifest dir (§10); `_opt_appset_cutover_done()` in `scripts/_optional-services-lib.sh`
 > is the guard and lifts itself at cut-over ·
 > federation `OverrideService` + public `GET /api/federation/capabilities` ✅ SHIPPED ·
 > host (hugmesh.net) capabilities consumption + `menu.component` `enabled()`
@@ -443,10 +457,10 @@ These admin-bff seams + the CRD reconcile bridge are described in §7.1 and §10
 
 ## 7.1. The `OptionalService` CRD + controller (the live-flip mechanism)
 
-The runtime desired-state object is a **CRD** (`optionalservices.platform.hugmesh.
-systems`, the platform's first CRD — `kind: OptionalService`, `shortName: optsvc`,
+The runtime desired-state object is a **CRD** (`optionalservices.platform.hugmesh.net`,
+the platform's first CRD — `kind: OptionalService`, `shortName: optsvc`,
 namespaced in `devops`), reconciled by a **Lease-gated single-writer controller** in
-`hugmesh-admin-bff-api` (`systems.hugmesh.adminbff.optionalservices.
+`hugmesh-admin-bff-api` (`net.hugmesh.adminbff.optionalservices.
 OptionalServiceReconciler`, cloned from the `NodeStorageReconciler` /
 `Fabric8NodeStorageConfigMapWriter` precedent). The user chose the CRD over a watched
 ConfigMap or a git-committing reconciler: no DB migration, `kubectl`-native, directly
@@ -471,17 +485,14 @@ table.
    updated so `kubectl get optsvc` shows the effective state.
 
 **Closed slug set (verified against `optional-services.yaml` + the ConfigMap + 13a):**
-the CRD enum is the **13 cluster-service slugs** — `akkoma tuwunel phpbb games owncast
-tube character-studio character-forge anubis coturn edge-ai edge-ai-analysis edge-ai-tts`. Deliberately
-EXCLUDED: `workloadConsole` (ConfigMap boolean but no 13a element — its RBAC is the
-hardcoded `apps/14-workload-console-rbac.yaml`; left build-determined) and the NODE
-services `egress-vpn`/`tor` (no cluster Application, no ConfigMap boolean — a separate
-node-reconcile track). **NOT YET in the enum: `meshbridge`** — it has BOTH a 13a
-element AND a ConfigMap boolean (so the manual GitOps flip works today), but adding it
-to the CRD requires the operator wave to extend the enum
-(`manifests/optional-services-operator/crd-optionalservice.yaml`) + seed CR AND the
-controller's built-in OptionalServiceRegistry (separate repo) in lockstep; until then
-the live-flip CRD mechanism does not cover it.
+the CRD enum is the **14 cluster-service slugs** — `akkoma tuwunel phpbb games owncast
+tube character-studio character-forge anubis coturn meshbridge edge-ai edge-ai-analysis edge-ai-tts`.
+Deliberately EXCLUDED: `workloadConsole`, `headwind` and `attestation-server` (each has a
+ConfigMap boolean but no 13a element; admin-bff's registry refuses them as
+`NO_APPLICATIONSET_ELEMENT`; `workloadConsole`'s RBAC is the hardcoded
+`apps/14-workload-console-rbac.yaml`, left build-determined) and the NODE services
+`egress-vpn`/`tor` (no cluster Application, no ConfigMap boolean — a separate
+node-reconcile track).
 
 **⚠ The `ignoreDifferences` KEYSTONE (the piece the whole mechanism hinges on).**
 ArgoCD's automated recurse roots (`app-of-apps.yaml` + `apps/00-app-of-apps-waved.
@@ -501,7 +512,7 @@ ConfigMap write back to git's inert baseline. So:
 - both roots carry `ignoreDifferences` on `argoproj.io ApplicationSet
   optional-services` `jsonPointers:[/spec/generators/0/list/elements]` **+
   `RespectIgnoreDifferences=true`**;
-- `apps/16` carries `ignoreDifferences` on the `installed-services` ConfigMap's 12
+- `apps/16` carries `ignoreDifferences` on the `installed-services` ConfigMap's 14
   controller-owned `/data/<slug>` keys **+ `RespectIgnoreDifferences=true`**;
 - `apps/13d-optional-services-operator.yaml` (which deploys the CRD + RBAC + seed CRs)
   carries `ignoreDifferences` on `OptionalService` `/spec/enabled` (+ `reason`,
@@ -856,14 +867,14 @@ When a service is **absent**, a user sees:
   actually stop selfHeal from reverting the element/ConfigMap writes — all
   offline-unverifiable.
 
-**🔭 NATURAL NEXT WAVE (not in this cut):** a superadmin BFF endpoint
-`PUT /bff/superadmin/optional-services/{slug}` (mirroring
-`WorkloadSuperadminController`/`GoLiveController` + a step-up gate) that patches the CR
-via the fabric8 client admin-bff already holds, and a toggle screen in
-`hugmesh-superadmin-service-catalog-ui`. kubectl-first; BFF endpoint + UI later.
-The gateway route AND the `ROLE_SUPERADMIN` `route_access` floor for that path are
-ALREADY in place, so the handler needs no new rows — today a superadmin calling it
-gets a 404 from admin-bff because no `@RequestMapping` matches.
+**✅ THE SUPERADMIN TOGGLE EXISTS (built after this section was first written):**
+admin-bff serves `GET /bff/superadmin/optional-services` (the catalogue) and
+`PUT /bff/superadmin/optional-services/{slug}` (`{enabled, reason?}`), both
+`SUPERADMIN` (`OptionalServiceSuperadminController`). The toggle patches the CR through
+the fabric8 client. While the reconciler is dark it answers 503 with `dark:true`; a slug
+the reconciler cannot action (`workloadConsole`, `headwind`, `attestation-server`) is a
+422 that names the reason. `hugmesh-superadmin-service-catalog-ui` has the screen
+(`service-catalog-optional-services.component.ts`).
 
 ### 10.1 Turning the reconciler on — the lever, and why it is GitOps-only
 
@@ -916,9 +927,11 @@ precondition for flipping this flag**, not a follow-up to it.
 
 ### 10.2 The slug set is DERIVED, and one guard pins all five surfaces
 
-The set was described for months as a "closed 1:1 set". Measured, it was **five
+The set was described for months as a "closed 1:1 set". When measured in August 2026 it was **five
 different cardinalities at once**: 17 ConfigMap booleans, 14 13a elements, 13 CRD
-enum values, 13 seed CRs, 12 Java registry entries. The governable set is
+enum values, 13 seed CRs, 12 Java registry entries. Re-counted on origin/main on 2026-10-07 it is 17, 14,
+14, 14 and 14: the three extra ConfigMap booleans are `workloadConsole`, `headwind` and
+`attestation-server`, which have no 13a element on purpose. The governable set is
 
 ```
 G = { slug : has a 13a ApplicationSet element AND an installed-services ConfigMap boolean }
