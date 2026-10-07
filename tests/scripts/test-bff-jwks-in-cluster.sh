@@ -34,7 +34,13 @@
 #     (3) the Service <svc> in <ns> exists under manifests, serves that port, and
 #         selects a workload the tree defines (closure: a URL into a namespace that
 #         never existed — the `casdoor.hugmesh-casdoor` shape this tree carried for
-#         months — is FAIL);
+#         months — is FAIL), and the URL's scheme is the one that port speaks
+#         (https against Casdoor's plain-http port 8000 is FAIL);
+#     (3b) that Service is the IdP that SIGNED the token. Every first-party pod
+#         validates systems-realm tokens, so it must name casdoor.hugmesh-pki; the
+#         games realm's casdoor-games.hugmesh-games is a Service that exists, is
+#         reachable and answers 200 with the WRONG keys, so (3) alone would wave it
+#         through and every token would fail its signature check;
 #     (4) the NetworkPolicies the networkpolicy kustomization ACTUALLY lists admit
 #         that pod to the Service's pod port on BOTH axes: Ingress policies in the
 #         Casdoor namespace that select the Casdoor pod, and Egress policies in the
@@ -54,19 +60,29 @@
 #   helm.parameters) must pass (2) and (3), and each Application that installs the
 #   chart (apps/*.yaml, destination namespace + helm.releaseName) must pass (4).
 #   Fewer than MIN_CANDIDATES containers is FAIL: a census that finds nothing has
-#   lost the tree, not proved it clean.
+#   lost the tree, not proved it clean. So is a manifest file whose non-comment text
+#   names CASDOOR_ISSUER_URI more often than the census found containers in it (a
+#   CronJob, a Pod, a ConfigMap: a kind this gate does not walk). And so is a
+#   container that lists CASDOOR_JWKS_URI or CASDOOR_ISSUER_URI twice: Kubernetes
+#   runs the LAST entry, this gate would read the first, and a merge of two branches
+#   that each added the line produces exactly that.
 #
 # KNOWN GAPS, said plainly: a service that reads its keys under another variable
-# name is not a candidate (phpbb's extension reads HUGMESH_JWKS_URI, public and
-# https-only by that extension's own rule; it is printed as INFO, not judged);
-# whether an IMAGE honours CASDOOR_JWKS_URI is a property of the service
-# repository's application.yml, which this tree does not contain — the ten
-# first-party BFFs were read on 2026-10-07 and all carry the expression above; an
+# name is not a candidate. phpbb's extension reads HUGMESH_JWKS_URI, public and
+# https-only by that extension's own rule (printed as INFO, not judged), and
+# akkoma's Ueberauth OIDC strategy names the public issuer host: both still fail
+# on a cluster where id.hugmesh.net does not resolve, and neither is fixed by this
+# gate or the change it pins. Whether an IMAGE honours CASDOOR_JWKS_URI is a
+# property of the service repository's application.yml, which this tree does not
+# contain — the ten first-party BFFs' sources were read on 2026-10-07 and all carry
+# the expression above (a source read, not a look inside a running image); an
 # env supplied by a kustomize patch outside specs/cluster/manifests/<service>/ is
 # not read; namespace labels other than kubernetes.io/metadata.name are known only
-# when a Namespace manifest in the tree declares them; and kind applies NO
-# NetworkPolicy at all (apps/08-networkpolicy.yaml is in none of
-# bootstrap-kind.sh's lists), so (4) describes a device cluster, not kind.
+# when a Namespace manifest in the tree declares them; and kind applies NONE of
+# manifests/networkpolicy (apps/08-networkpolicy.yaml is in none of
+# bootstrap-kind.sh's lists; a live `kubectl get networkpolicy -A` on 2026-10-07
+# showed only ArgoCD's own policies and Cassandra's), so (4) describes a device
+# cluster, not kind.
 #
 # NEGATIVE CONTROLS: each planted defect is applied to a scratch copy of
 # specs/cluster, the copy must actually differ (a no-op mutation reads exactly like
@@ -100,17 +116,21 @@ CLUSTER = os.path.abspath(sys.argv[1])
 MAN = os.path.join(CLUSTER, "manifests")
 CHARTS = os.path.join(CLUSTER, "charts")
 APPS = os.path.join(CLUSTER, "apps")
-MIN_CANDIDATES = 8      # 10 manifests + 3 chart Applications on 2026-10-07; well above
+MIN_CANDIDATES = 8      # 12 on 2026-10-07: 11 workload containers (games among them) + the gateway chart template; well above
 IN_CLUSTER = re.compile(
     r"^(https?)://([a-z0-9][a-z0-9-]*)\.([a-z0-9][a-z0-9-]*)\.svc\.cluster\.local(?::(\d+))?(/.*)?$")
 WORKLOADS = ("Deployment", "StatefulSet", "DaemonSet")
 JWKS_PATH = "/.well-known/jwks"
+# The IdP that signs every systems-realm token. A first-party pod's key URL must name
+# THIS Service (rule 3b); the games realm has its own Casdoor, see EXEMPT.
+SYSTEMS_CASDOOR = ("casdoor", "hugmesh-pki")
 
 # ── EXEMPTIONS ───────────────────────────────────────────────────────────────
 # "<namespace>/<kind>/<workload>/<container>" -> why that container may set
 # CASDOOR_ISSUER_URI without CASDOOR_JWKS_URI, plus `jwks_from`: the variable whose
 # value + /.well-known/jwks IS its key URL, which is then held to rules (2)-(4) in
-# CASDOOR_JWKS_URI's place. An entry is deleted the day its container sets
+# CASDOOR_JWKS_URI's place, and `expect`: the (Service, namespace) that URL must
+# resolve to, because the reason names a specific IdP. An entry is deleted the day its container sets
 # CASDOOR_JWKS_URI (gap closed) or stops setting CASDOOR_ISSUER_URI (nothing
 # references it); either state FAILS below.
 EXEMPT = {
@@ -120,6 +140,7 @@ EXEMPT = {
                   "${CASDOOR_ENDPOINT}/.well-known/jwks and never reads CASDOOR_JWKS_URI; "
                   "CASDOOR_ISSUER_URI (https://id.hugmesh.games) is the iss string only.",
         "jwks_from": "CASDOOR_ENDPOINT",
+        "expect": ("casdoor-games", "hugmesh-games"),
     },
 }
 
@@ -133,10 +154,14 @@ def info(m):
 def rel(p):
     return os.path.relpath(p, CLUSTER)
 
+# The C parser is ~10x faster over 6 MB of manifests and reads the same documents; fall
+# back to the pure-Python one where a PyYAML build ships without libyaml.
+YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
 def load_all(path):
     try:
         with open(path, encoding="utf-8") as fh:
-            return [d for d in yaml.safe_load_all(fh) if isinstance(d, dict)]
+            return [d for d in yaml.load_all(fh, Loader=YAML_LOADER) if isinstance(d, dict)]
     except (yaml.YAMLError, OSError) as e:
         bad("%s: not parseable YAML: %s" % (rel(path), e)); return []
 
@@ -272,6 +297,13 @@ def resolve_target(url):
     if chosen is None:
         return None, "%r: Service %s (%s) does not serve port %d (it serves %s)" % (
             url, svc, rel(spath), port, [p.get("port") for p in sports])
+    # The scheme must be the one the Service port speaks: Casdoor's port 8000 is named
+    # `http`, so https://casdoor...:8000 passes every other rule and dies in the TLS
+    # handshake. Only a port named (or appProtocol'd) http/https is judged.
+    speaks = str(chosen.get("appProtocol") or chosen.get("name") or "").lower()
+    if speaks in ("http", "https") and speaks != scheme:
+        return None, "%r: Service %s (%s) port %d speaks %s, the URL says %s — the handshake fails" % (
+            url, svc, rel(spath), port, speaks, scheme)
     selector = (sdoc.get("spec") or {}).get("selector") or {}
     backing = [(wp, wd) for (wp, wd, wns) in workloads if wns == ns and selector
                and sel_matches({"matchLabels": selector},
@@ -297,11 +329,14 @@ def resolve_target(url):
     return dict(svc=svc, ns=ns, spath=rel(spath), pod_labels=pod_labels,
                 pod_port=pod_port, pod_port_name=pod_port_name), None
 
-def judge(label, url, src_ns, src_labels):
-    """Rules (2)-(4) for one pod/URL pair."""
+def judge(label, url, src_ns, src_labels, want=SYSTEMS_CASDOOR):
+    """Rules (2)-(4) for one pod/URL pair; `want` is the (Service, namespace) it must be."""
     tgt, why = resolve_target(url)
     if tgt is None:
         bad("%s: %s" % (label, why)); return
+    if (tgt["svc"], tgt["ns"]) != want:
+        bad("%s: keys come from Service %s.%s, but this pod validates tokens signed by %s.%s — a Service that exists and answers 200 with the wrong keys fails every signature check" % (
+            label, tgt["svc"], tgt["ns"], want[0], want[1])); return
     lines = []
     good = True
     for direction, pns, plabels, ons, olabels in (
@@ -314,35 +349,46 @@ def judge(label, url, src_ns, src_labels):
         label, tgt["svc"], tgt["ns"], tgt["pod_port"], JWKS_PATH, tgt["spath"], tgt["pod_port"], "; ".join(lines))
     (ok if good else bad)(msg)
 
+def env_all(container, name):
+    return [e for e in (container.get("env") or []) if (e or {}).get("name") == name]
+
 def env_entry(container, name):
-    for e in container.get("env") or []:
-        if (e or {}).get("name") == name:
-            return e
-    return None
+    """The entry for `name`; callers have already refused a container that lists it twice."""
+    hits = env_all(container, name)
+    return hits[0] if hits else None
 
 # ── (A) kustomize-managed workloads ──────────────────────────────────────────
 print("-- manifests: every container that sets CASDOOR_ISSUER_URI --")
 candidates = 0
 used_exempt = set()
+seen_in_file = {}     # manifest path -> containers the census judged (for the blind-spot count)
+
 for path, doc, ns in workloads:
     meta = doc.get("metadata") or {}
     kind, wname = doc.get("kind"), meta.get("name")
     tspec = ((doc.get("spec") or {}).get("template") or {}).get("spec") or {}
     pod_labels = (((doc.get("spec") or {}).get("template") or {}).get("metadata") or {}).get("labels") or {}
     for c in (tspec.get("initContainers") or []) + (tspec.get("containers") or []):
-        issuer = env_entry(c, "CASDOOR_ISSUER_URI")
-        jwks = env_entry(c, "CASDOOR_JWKS_URI")
         key = "%s/%s/%s/%s" % (ns, kind, wname, c.get("name"))
         label = "%s/%s[%s] (%s)" % (ns, wname, c.get("name"), rel(path))
-        if issuer is None:
+        n_issuer = len(env_all(c, "CASDOOR_ISSUER_URI"))
+        if n_issuer == 0:
             for e in c.get("env") or []:
                 n = (e or {}).get("name") or ""
                 if n.endswith("JWKS_URI") and not IN_CLUSTER.match(str((e or {}).get("value") or "")):
                     info("%s: %s=%r is not in-cluster; it is read under another contract than CASDOOR_ISSUER_URI, so this gate does not judge it" % (label, n, e.get("value")))
             continue
         candidates += 1
+        seen_in_file[path] = seen_in_file.get(path, 0) + n_issuer
         if key in EXEMPT:
             used_exempt.add(key)
+        twice = [nm for nm in ("CASDOOR_ISSUER_URI", "CASDOOR_JWKS_URI") + ((EXEMPT[key]["jwks_from"],) if key in EXEMPT else ())
+                 if len(env_all(c, nm)) > 1]
+        if twice:
+            bad("%s: %s listed more than once — Kubernetes runs the LAST entry and this gate would read the first; keep one" % (label, ", ".join(twice)))
+            continue
+        jwks = env_entry(c, "CASDOOR_JWKS_URI")
+        if key in EXEMPT:
             ex = EXEMPT[key]
             if jwks is not None:
                 bad("%s: EXEMPT, but the container now sets CASDOOR_JWKS_URI — the gap the entry describes is closed; delete the exemption" % label)
@@ -354,7 +400,7 @@ for path, doc, ns in workloads:
                 continue
             print("     exempt: %s" % key)
             print("             %s" % ex["reason"])
-            judge(label + " via " + ex["jwks_from"], str(base).rstrip("/") + JWKS_PATH, ns, pod_labels)
+            judge(label + " via " + ex["jwks_from"], str(base).rstrip("/") + JWKS_PATH, ns, pod_labels, ex["expect"])
             continue
         if jwks is None:
             bad("%s: sets CASDOOR_ISSUER_URI but no CASDOOR_JWKS_URI — the key fetch goes to the public issuer host, which need not resolve in-cluster (and on kind does not)" % label)
@@ -363,6 +409,23 @@ for path, doc, ns in workloads:
             bad("%s: CASDOOR_JWKS_URI has no literal value (valueFrom cannot be read offline)" % label)
             continue
         judge(label, str(jwks["value"]), ns, pod_labels)
+
+# ── census blind spot: a file that names the variable more often than we judged ──
+# Only Deployment / StatefulSet / DaemonSet containers are walked above. A CronJob, a
+# bare Pod or a ConfigMap that carries CASDOOR_ISSUER_URI would otherwise be invisible
+# and a green run would mean nothing about it. Comment-only mentions are not counted.
+for dirpath, _dn, filenames in os.walk(MAN):
+    for name in sorted(filenames):
+        if not name.endswith((".yaml", ".yml")):
+            continue
+        path = os.path.join(dirpath, name)
+        try:
+            lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+        except OSError:
+            continue
+        named = sum(1 for ln in lines if "CASDOOR_ISSUER_URI" in ln and not ln.lstrip().startswith("#"))
+        if named > seen_in_file.get(path, 0):
+            bad("%s: %d non-comment line(s) name CASDOOR_ISSUER_URI but only %d workload container(s) there were judged — a kind this gate does not walk (CronJob, Pod, ConfigMap) or a second spelling; extend the gate" % (rel(path), named, seen_in_file.get(path, 0)))
 
 # ── anti-rot: every exemption must still be referenced ──────────────────────
 for key in sorted(set(EXEMPT) - used_exempt):
@@ -585,6 +648,65 @@ for p in glob.glob(os.path.join(root,"manifests","*","*.yaml"))+glob.glob(os.pat
     if t2!=t: open(p,"w").write(t2); n+=1
 assert n>=8, n
 EOF'
+
+expect_red "(18) user-bff keys pointed at the GAMES realm's Casdoor (exists, answers 200, wrong keys)" "validates tokens signed by casdoor.hugmesh-pki" '
+  sed -i "s#'"${INC}"'#http://casdoor-games.hugmesh-games.svc.cluster.local:8000/.well-known/jwks#" "$T/'"${UB}"'"'
+expect_red "(19) user-bff lists CASDOOR_JWKS_URI twice, the last one public" "listed more than once" '
+  python3 - "$T/'"${UB}"'" <<EOF
+import sys; p=sys.argv[1]; t=open(p).read()
+old="""- name: CASDOOR_JWKS_URI
+              value: "'"${INC}"'\""""
+new=old+"""
+            - name: CASDOOR_JWKS_URI
+              value: "'"${PUB}"'\""""
+assert old in t, "anchor missing"; open(p,"w").write(t.replace(old,new,1))
+EOF'
+expect_red "(20) a CronJob that sets CASDOOR_ISSUER_URI (a kind the gate does not walk)" "a kind this gate does not walk" '
+  cat > "$T/manifests/user-bff-api/planted-cronjob.yaml" <<EOF
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: planted, namespace: hugmesh-backend }
+spec:
+  schedule: "0 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: planted
+              image: planted:1
+              env:
+                - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.net" }
+EOF'
+expect_red "(21) a brand-new StatefulSet sets CASDOOR_ISSUER_URI and no CASDOOR_JWKS_URI" "planted-sts" '
+  mkdir -p "$T/manifests/planted-sts"
+  cat > "$T/manifests/planted-sts/statefulset.yaml" <<EOF
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: planted-sts, namespace: hugmesh-backend }
+spec:
+  selector: { matchLabels: { app: planted-sts } }
+  template:
+    metadata: { labels: { app: planted-sts } }
+    spec:
+      containers:
+        - name: planted-sts
+          image: planted:1
+          env:
+            - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.net" }
+EOF'
+expect_red "(22) games CASDOOR_ENDPOINT repointed at the systems Casdoor (exemption reason false)" "validates tokens signed by casdoor-games.hugmesh-games" '
+  sed -i "s#http://casdoor-games.hugmesh-games.svc.cluster.local:8000#http://casdoor.hugmesh-pki.svc.cluster.local:8000#" "$T/'"${GM}"'"'
+expect_red "(23) an Application overrides casdoor.jwksUri with the games Casdoor" "validates tokens signed by casdoor.hugmesh-pki" '
+  python3 - "$T/apps/20-gateway-fe.yaml" <<EOF
+import sys; p=sys.argv[1]; t=open(p).read()
+old="      releaseName: hugmesh-fe-gateway\n"
+assert old in t, "anchor missing"
+open(p,"w").write(t.replace(old, old+"      parameters:\n        - { name: casdoor.jwksUri, value: http://casdoor-games.hugmesh-games.svc.cluster.local:8000/.well-known/jwks }\n",1))
+EOF'
+expect_red "(24) user-bff keys over https against Casdoor's plain-http port" "speaks http, the URL says https" '
+  sed -i "s#http://casdoor.hugmesh-pki.svc.cluster.local:8000#https://casdoor.hugmesh-pki.svc.cluster.local:8000#" "$T/'"${UB}"'"'
 
 echo
 echo "== negative controls: ${NEG_P} passed, ${NEG_F} failed =="

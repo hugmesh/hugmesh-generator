@@ -703,7 +703,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # The ungated SET pin is unchanged at 23 — neither new suite was ever in it.
 PREMERGE_BASELINE="${GUARD_PREMERGE:-194}"
 
-# 193 unchanged, denominator 216 -> 217, on 2026-10-07 for #693: every signed-in
+# 194 unchanged, denominator 217 -> 218, on 2026-10-07 for #693: every signed-in
 # call on kind answered 500 because the BFF manifests set only CASDOOR_ISSUER_URI and
 # the key fetch went to the public issuer host, which does not resolve in-cluster.
 # tests/scripts/test-bff-jwks-in-cluster.sh pins the in-cluster CASDOOR_JWKS_URI, its
@@ -711,9 +711,10 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-194}"
 # shell-suites.yml — the lane that wrote it could not edit .github — so it lands in
 # PREMERGE_UNGATED below with that reason (the set pin moves 23 -> 24) and is run
 # post-merge by .gitlab-ci.yml's lint:bff-jwks-in-cluster. MEASURED by RUNNING this
-# file on the tree, not computed:
-#     suite added, wired in .gitlab-ci.yml only   193 of 217
-# When the shell-suites.yml line lands: delete that entry and raise this to 194.
+# file on origin/main (fa49fd05) and on this branch, not computed:
+#     origin/main                                  194 of 217   (ungated set 23)
+#     suite added, wired in .gitlab-ci.yml only    194 of 218   (ungated set 24)
+# When the shell-suites.yml line lands: delete that entry and raise this to 195.
 
 # 192 -> 193 (denominator 215 -> 216) on 2026-09-30 for #663: the kind sign-in
 # answered 500 because the BFF autoscalers' maxReplicas (6) times the unconfigured
@@ -861,12 +862,12 @@ PREMERGE_UNGATED=(
   tests/egress-vpn/test-secret-contract.sh
   tests/pentest/nuclei/test-templates.sh
   # NOT YET IN THE PULL_REQUEST GATE, and that is the only reason it is here: it is
-  # offline, PyYAML-only, ~3 s, and belongs beside test-db-connection-budget.sh in
+  # offline, PyYAML-only, ~12 s, and belongs beside test-db-connection-budget.sh in
   # shell-suites.yml's debian job. The lane that wrote it (hugmesh-generator#693,
   # 2026-10-07) was forbidden to edit anything under .github, so until that one
   # line lands it runs post-merge in .gitlab-ci.yml's lint:bff-jwks-in-cluster and
   # locally under `make e2e-ungated`. When the line lands: delete this entry and
-  # raise PREMERGE_BASELINE 193 -> 194 (check 7 will say so).
+  # raise PREMERGE_BASELINE 194 -> 195 (check 7 will say so).
   tests/scripts/test-bff-jwks-in-cluster.sh
   tests/scripts/test-e2e-cli-lane.sh
   tests/scripts/test-e2e-coverage-matrix.sh

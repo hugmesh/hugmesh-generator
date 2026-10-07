@@ -37,8 +37,10 @@
 # wired policy set for every CASDOOR_ISSUER_URI container and the chart gateways.
 #
 # ⚠ NOT LIVE-VERIFIED: derived from the manifests and the policy set. kind applies
-# no NetworkPolicy at all (apps/08-networkpolicy.yaml is in none of
-# bootstrap-kind.sh's lists), so only a device cluster exercises these rules.
+# none of manifests/networkpolicy (apps/08-networkpolicy.yaml is in none of
+# bootstrap-kind.sh's lists; a live `kubectl get networkpolicy -A` on 2026-10-07
+# showed only ArgoCD's own policies and Cassandra's), so only a device cluster
+# exercises these rules.
 ---
 # ── fe-gateway (hugmesh-frontend) -> casdoor :8000 ───────────────────────────
 apiVersion: networking.k8s.io/v1
