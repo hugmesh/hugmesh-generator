@@ -324,6 +324,13 @@ battery() {   # LABEL — the same commands on whichever PATHV is set
         && ok "[${label}] the model declines (NO CHANGE): STATUS no-diff" \
         || bad "[${label}] nochange: STATUS=$(status_word hugmesh-fixture-3)"
 
+    out="$(la bash "${GEN}/scripts/local-ai.sh" queue 2>&1)"
+    has "${out}" '^pending: 0  running: 0  done: 0' && ok "[${label}] queue lists an empty queue" || bad "[${label}] queue: ${out}"
+    out="$(printf 'hello\n/quit\n' | la bash "${GEN}/scripts/local-ai.sh" chat 2>&1)"
+    has "${out}" 'pong from the fake model' && ok "[${label}] chat answers a typed line and leaves on /quit" || bad "[${label}] chat: ${out}"
+    out="$(la timeout 3 bash "${GEN}/scripts/local-ai.sh" watch 2>&1 </dev/null)"
+    has "${out}" 'Local AI: ready, qwen3:8b loaded, idle' && ok "[${label}] watch draws the dashboard (no watch(1) needed)" \
+        || bad "[${label}] watch: ${out}"
     [ ! -e "${LOG}/claude-was-run" ] && ok "[${label}] the claude command was never run" \
         || bad "[${label}] a script RAN the claude command without AGENT=claude"
     if grep -q 'launch' "${LOG}/ollama.argv" 2>/dev/null; then

@@ -389,6 +389,7 @@ class LocalAIDock(QtWidgets.QFrame):
         self._alive = threading.Event()         # set when the dock is destroyed
         self._answered = False
         self._message = ""                      # a transient line (waiting, started, failed)
+        self._message_warn = False
         self._message_token = 0
 
         outer = QtWidgets.QVBoxLayout(self)
@@ -516,10 +517,11 @@ class LocalAIDock(QtWidgets.QFrame):
             self.work_window.show_snapshot(snap)
 
     # ---- the note line: a transient message wins over the standing problem ------------
-    def _say(self, text: str, seconds: float = 0.0) -> None:
+    def _say(self, text: str, seconds: float = 0.0, warn: bool = False) -> None:
         """Show ``text`` under the status line. ``seconds`` > 0 clears it after that long;
-        0 keeps it until the next action replaces it."""
+        0 keeps it until the next action replaces it. ``warn`` colours it as a problem."""
         self._message = text
+        self._message_warn = warn
         self._message_token += 1
         token = self._message_token
         self._render_note()
@@ -535,10 +537,12 @@ class LocalAIDock(QtWidgets.QFrame):
             pass
 
     def _render_note(self) -> None:
-        text = self._message
+        text, warn = self._message, self._message_warn
         if not text and self.snapshot is not None and self.snapshot.problem:
             text = (f"{self.snapshot.problem} {self.snapshot.fix} "
                     f"(See {self.snapshot.doc}.)")
+            warn = True
+        self.note.setStyleSheet(f"color: {styles.WARN};" if warn else styles.muted())
         self.note.setText(text)
         self.note.setVisible(bool(text))
 
@@ -653,7 +657,7 @@ class LocalAIDock(QtWidgets.QFrame):
         elif tag == "error":
             self._append(f"\n[{value}]\n\n")
             self._finish_prompt()
-            self._say(str(value), 30)
+            self._say(str(value), 30, warn=True)
             self.refresh()
         elif tag == "start":
             self.start_btn.setEnabled(True)
@@ -668,7 +672,7 @@ class LocalAIDock(QtWidgets.QFrame):
                 # exact command to run yourself.
                 cmd = res.command if res is not None else lai.commands(self.generator_dir)["start"]
                 why = res.message if res is not None else str(error)
-                self._say(f"{why} Run it yourself: {cmd}", 60)
+                self._say(f"{why} Run it yourself: {cmd}", 60, warn=True)
                 self.show_current_work()
 
 

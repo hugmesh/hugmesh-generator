@@ -431,8 +431,7 @@ def quick_line(env: dict | None = None, *, now: float | None = None) -> str:
     snap = quick_snapshot(env, now=now)
     if snap.worker == "stopped" and not snap.ollama_up:
         pending = snap.counts.get("pending", 0)
-        return ("Local AI: not running" + (f", {pending} queued" if pending else "")
-                + " (local-ai: check it, start it, ask it)")
+        return "Local AI: no worker running" + (f", {pending} queued" if pending else "")
     return snap.summary
 
 

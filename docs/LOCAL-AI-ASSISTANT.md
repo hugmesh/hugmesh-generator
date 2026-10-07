@@ -472,10 +472,14 @@ loop), `issues.py` (reads `gh` output: which issues to pick, how to print one) a
   their STATUS and a button to open each draft diff, the model loaded and the Studio's
   own running builds. The bar remembers whether you left it open or closed. Nothing
   starts until you press a button; the bar never opens a modal dialog.
-* **Text screen.** `python -m hugmesh_studio.tui` shows the same status line at the
-  bottom of every screen; **F2** opens the Local AI screen (status, work list, and a
-  prompt line: type a question and press Enter, `back` returns). The plain-prompt face
-  prints the status line and accepts the command `ai`.
+* **Text screen.** `python -m hugmesh_studio.tui` shows the same status line as the
+  bottom row of every screen (it reads the worker's `status.json` and makes no network
+  call, so it costs nothing to redraw). **F2** opens the Local AI screen over the screen
+  you are on: a live status, the work list, and a prompt line (anything you type that
+  is not `start`, `r`, `clear` or `q` is sent to the local model); `q` returns to
+  exactly where you were. The plain-prompt face (no urwid, or `NO_TUI=1`) prints the
+  status line above every prompt and opens the same screen when you type `local-ai`
+  (the urwid face accepts that too).
 * **Command line.** `python -m hugmesh_studio --local-ai-status [--json]` and
   `python -m hugmesh_studio --local-ai-prompt "question"`; both exit non-zero with a
   plain sentence when Ollama is down.

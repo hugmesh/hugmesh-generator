@@ -91,8 +91,8 @@ def run_plain(script, generator_dir="."):
 
 
 # ── the status line ──────────────────────────────────────────────────────────────────
-def test_the_line_says_not_running_when_nothing_has_been_started(state):
-    assert lai.quick_line() == "Local AI: not running (local-ai: check it, start it, ask it)"
+def test_the_line_says_no_worker_is_running_when_nothing_has_been_started(state):
+    assert lai.quick_line() == "Local AI: no worker running"
 
 
 def test_the_line_reads_the_workers_status_and_the_queue(state, worker_proc):
