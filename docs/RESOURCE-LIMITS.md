@@ -23,25 +23,33 @@ remained, and this feature closes them:
 
 ## What the setting does, per lane
 
-One number, five delivery mechanisms, because each lane expresses limits differently:
+One number, five lanes, because each lane expresses limits differently. Three
+deliver the limit today. Two are designed but not wired:
 
-| Lane | How the limit is delivered |
-|---|---|
-| Single-image build | `docker run --cpus/--memory/--gpus` (`core/build_driver.py`) |
-| Fleet build | the same flags (`core/fleet.py`) |
-| Local compose stack | a generated `tests/stack/.compose.limits.yaml` overlay |
-| QEMU emulation | `-smp` on the guest |
-| kind / Kubernetes | `docker update` on the node container |
+| Lane | How the limit is delivered | Wired |
+|---|---|---|
+| Single-image build | `docker run --cpus/--memory/--gpus` (`core/build_driver.py`) | yes |
+| Fleet build | the same flags (`core/fleet.py`) | yes |
+| Local compose stack | a generated `tests/stack/.compose.limits.yaml` overlay | yes |
+| QEMU emulation | `-smp` on the guest | **no** |
+| kind / Kubernetes | `docker update` on the node container | **no** |
+
+QEMU: `qemu_smp()` exists and the dialog prints its result, but
+`core/emulation.py` never reads it and keeps its own `--smp` default. kind:
+`docker update` appears only in a docstring; no code runs it. Until both are
+wired, the dialog's line for emulated devices states a setting the emulated guests
+do not receive.
 
 The dialog states the **transformed** value for each lane rather than repeating your
 input back, because two of them change it:
 
 - **Compose** divides. A memory limit is a hard per-service ceiling and memory is
   additive, so writing a 16 GiB budget onto each of 41 services would authorise 41×
-  the machine's RAM and protect nothing. It is divided, with a floor — and if the
+  the machine's RAM and protect nothing. It is divided, with a floor of 384 MiB per
+  service — and if the
   share would be too small to start a service, **no memory limit is written at all**,
   because a limit every service breaches at startup is worse than none.
-- **QEMU** rounds **down**. `-smp` is a whole number of vCPUs and the setting is a
+- **QEMU** (once wired) rounds **down**. `-smp` is a whole number of vCPUs and the setting is a
   ceiling, so 1.5 becomes 1. Rounding up would hand the guest more of the host than
   you allowed.
 
