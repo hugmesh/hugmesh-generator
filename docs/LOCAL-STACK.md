@@ -1,7 +1,7 @@
 # Run the ENTIRE HugMesh stack locally (docker-compose)
 
-This brings up the **whole HugMesh platform on one x86_64 machine** via
-docker-compose, **building every first-party service from its cloned repo** —
+This brings up the **whole HugMesh platform on one x86_64 machine** with
+docker-compose. It **builds every first-party service from its cloned repo**:
 the three gateways, the Spring backends (federation, actions and the
 admin / mod / user / forum / wiki / owncast / tube / character-forge BFFs),
 the static fragment fleet, and every Angular remote + the host — plus the
@@ -11,8 +11,8 @@ It works on **Linux** (`make stack-up`) and on **Docker Desktop for Windows**
 (`scripts/stack-up.ps1`), for both **ENV=test** and **ENV=prod** build modes.
 
 This is the dev "everything on my laptop" path. It is **not** the production
-deployment (that is the k8s cluster in `specs/cluster/` driven by ArgoCD); the
-compose topology is a faithful translation of those manifests to compose DNS.
+deployment, which is the k8s cluster in `specs/cluster/` driven by ArgoCD. The
+compose topology translates those manifests faithfully to compose DNS.
 
 ---
 
@@ -22,24 +22,25 @@ compose topology is a faithful translation of those manifests to compose DNS.
   on Windows includes it; on Linux install `docker-compose-plugin`.
 - **BuildKit / buildx** visible **in the environment you run `make` from**.
   Several service Dockerfiles use BuildKit syntax (`# syntax=docker/dockerfile:1.7`
-  + `RUN --mount=type=secret`); the Makefile exports `DOCKER_BUILDKIT=1`, but the
-  buildx CLI plugin is often installed **per-user** (`~/.docker/cli-plugins`), so a
-  `sudo`/systemd/other-`HOME` invocation silently falls back to the legacy builder
-  and dies with opaque Dockerfile parse errors. `docker buildx version` must work
-  as the invoking user.
-- **A cold build** (no `hugmesh-local-*` images yet — e.g. a fresh box or a
-  wiped docker data-root) additionally needs the org-private maven artifacts:
-  run **`make stack-m2-bootstrap` once first** (see "Cold builds" below).
+  + `RUN --mount=type=secret`). The Makefile exports `DOCKER_BUILDKIT=1`, but the
+  buildx CLI plugin is often installed **per-user** (`~/.docker/cli-plugins`). A
+  `sudo`/systemd/other-`HOME` invocation then falls back to the legacy builder
+  without a word and dies with opaque Dockerfile parse errors. `docker buildx version`
+  must work as the invoking user.
+- **A cold build** (no `hugmesh-local-*` images yet, e.g. a fresh box or a
+  wiped docker data-root) also needs the org-private maven artifacts. Run
+  **`make stack-m2-bootstrap` once first** (see "Cold builds" below).
 - **x86_64 / amd64.** First-party images are amd64 (Temurin JRE, node-alpine,
-  nginx). On Apple Silicon / arm64 you'd need emulation (out of scope).
-- **GitHub access OR internal VPN** so the repos can be cloned. Either:
+  nginx). Apple Silicon / arm64 would need emulation, which is out of scope.
+- **GitHub access OR internal VPN**, so the repos can be cloned. Either:
   - `gh auth login` (GitHub CLI logged in), or
   - a git credential helper / token (`GH_TOKEN` / `GITHUB_TOKEN`), or
   - the VPN + the internal mirror (`GIT_BASE=https://gitlab.hugmesh.net/hugmesh`).
 - **Resources:** the default profile set is 43 compose services, two of them
   one-shot init jobs (`docker compose config --services`): JVM and nginx services,
-  nine Postgres databases (one per service plus Casdoor's), Cassandra, Casdoor. Budget **~8 GB RAM** for the core, **~12–16 GB** with `SOCIAL=1`
-  (tuwunel + the full Mastodon tier). First build compiles several Maven + Angular
+  nine Postgres databases (one per service plus Casdoor's), Cassandra, Casdoor.
+  Budget **~8 GB RAM** for the core and **~12–16 GB** with `SOCIAL=1`
+  (tuwunel + the full Mastodon tier). The first build compiles several Maven + Angular
   projects and is **slow** (tens of minutes, network-bound).
 
 ---
@@ -62,23 +63,25 @@ What `make stack-up` does:
    service from `./.stack-src/<repo>`.
 3. **up** — `docker compose ... up -d`.
 
-`make stack-up` alone does **not** seed any personas, so sign-in fails until you
-also run `make stack-seed` (`tests/stack/seed-e2e.sh`) — it creates the org/
-roles/personas that back every login, and is a **required** follow-up step, not
-optional (see "Seeding the e2e fixtures" below).
+`make stack-up` alone seeds **no** personas, so sign-in fails until you
+also run `make stack-seed` (`tests/stack/seed-e2e.sh`). It creates the org,
+roles and personas behind every login, and it is a **required** follow-up step
+(see "Seeding the e2e fixtures" below).
 
-Then open **http://localhost:8088** (the fe-gateway front door) — or its HTTPS
-twin **https://localhost:8488** — and sign in at the **native login form**
-(`/login`); the browser POSTs credentials to `/bff/login` and never touches
+Then open **http://localhost:8088** (the fe-gateway front door), or its HTTPS
+twin **https://localhost:8488**, and sign in at the **native login form**
+(`/login`). The browser POSTs credentials to `/bff/login` and never touches
 Casdoor. Both doors serve the identical platform in ENV=test *and* ENV=prod:
 the `https-front` nginx terminator proxies everything to the same fe-gateway,
 using a **per-machine** CA + leaf that `make stack-certs` mints automatically
 on first `stack-up` (gitignored under `tests/stack/.tls-front/`). Import
-`tests/stack/.tls-front/ca.crt` into your browser for a green lock, or just
-accept the self-signed warning. `rm -rf tests/stack/.tls-front` re-mints. Casdoor is still published at **http://localhost:8000**
-in this dev stack, but ONLY as an admin/seed convenience (the `seed-e2e.sh`
-provisioning transport); it is **not** part of the login path and has no
-browser-facing role. In the cluster Casdoor gets no public ingress at all.
+`tests/stack/.tls-front/ca.crt` into your browser for a green lock, or accept the
+self-signed warning. `rm -rf tests/stack/.tls-front` re-mints.
+
+Casdoor is still published at **http://localhost:8000** in this dev stack, but
+ONLY as an admin/seed convenience (the `seed-e2e.sh` provisioning transport). It is
+**not** part of the login path and has no browser-facing role. In the cluster
+Casdoor gets no public ingress at all.
 
 Useful overrides:
 
@@ -114,23 +117,25 @@ make stack-m2-bootstrap   # once (idempotent)
 make stack-up             # now auto-wires the local registry into the build
 ```
 
-What it does (`tests/stack/m2-bootstrap.sh` — everything from SOURCE, nothing
+What it does (`tests/stack/m2-bootstrap.sh`, everything built from SOURCE, nothing
 vendored):
 
-1. Clones the four library repos at **pinned commits** (the repos carry no git
-   tags; each SHA's `pom.xml` is exactly the version the services require — today
-   `hugmesh-build-config` **0.5.0**, `hugmesh-parent` **2.8.0**,
-   `hugmesh-commons` **2.1.0**, and **three** `hugmesh-auth-core` pins — **2.5.1**
-   (the one coordinate the org release chain publishes; both BFFs move to it) plus
-   **2.4.2** (user-bff) and **2.5.0** (admin-bff), kept until both consumers' mains
-   name 2.5.1: the consumers are on separate release cadences, so a cold build
-   against an older consumer pom needs its jar in the local registry; ⚠️ auth-core has been re-cut four times under a
-   released coordinate — 2.4.0 → 2.4.1 → 2.4.2 → 2.5.0 — so re-check
-   [`tests/stack/m2-bootstrap.sh`](../tests/stack/m2-bootstrap.sh), which is the
-   authoritative pin, rather than this sentence)
-   into `~/.cache/hugmesh-stack-maven/src` and `mvn install`s them into
+1. Clones the four library repos at **pinned commits** into
+   `~/.cache/hugmesh-stack-maven/src`, then `mvn install`s them into
    `~/.cache/hugmesh-stack-maven/m2` using the official `maven` Docker image
-   (no host JDK/maven needed). Cached artifacts are skipped — no re-clone/re-build.
+   (no host JDK/maven needed). The repos carry no git tags, and each SHA's
+   `pom.xml` is exactly the version the services require. Today that is
+   `hugmesh-build-config` **0.5.0**, `hugmesh-parent` **2.8.0**,
+   `hugmesh-commons` **2.1.0**, and **three** `hugmesh-auth-core` pins:
+   **2.5.1** (the one coordinate the org release chain publishes; both BFFs move to it),
+   **2.4.2** (user-bff) and **2.5.0** (admin-bff). The last two stay until both
+   consumers' mains name 2.5.1. The consumers have separate release cadences, so a
+   cold build against an older consumer pom needs its jar in the local registry.
+   ⚠️ auth-core has been re-cut four times under a released coordinate
+   (2.4.0 → 2.4.1 → 2.4.2 → 2.5.0), so read
+   [`tests/stack/m2-bootstrap.sh`](../tests/stack/m2-bootstrap.sh), the
+   authoritative pin, rather than this sentence. Cached artifacts are skipped:
+   no re-clone, no re-build.
 2. Serves that m2 repo from a tiny static registry **container**
    (`hugmesh-m2-registry`, busybox httpd) shaped like the GitLab group
    registry URL. It must be a container: on some hosts, host-published ports are
@@ -148,10 +153,10 @@ Two committed companions make the resolution actually work:
 - the Makefile exports `DOCKER_BUILDKIT=1` on every stack compose call (the
   Dockerfiles use BuildKit secret mounts), and
 - `scripts/clone-all-repos.sh` runs `scripts/patch-stack-src.sh` after every
-  clone/update — the general post-clone patch pass. Its current patch injects a
+  clone/update, the general post-clone patch pass. Its current patch injects a
   `maven-default-http-blocker` mirror override into each consumer repo's
-  `settings.xml` (idempotent, marker-scoped), because Maven 3.9's bundled
-  settings block ALL external `http://` repositories and the local registry is
+  `settings.xml` (idempotent, marker-scoped). Maven 3.9's bundled
+  settings block ALL external `http://` repositories, and the local registry is
   plain HTTP by design.
 
 The registry container survives reboots (`--restart unless-stopped`), but its
