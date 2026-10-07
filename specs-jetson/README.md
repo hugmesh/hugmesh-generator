@@ -1,24 +1,24 @@
 # specs-jetson — NVIDIA Jetson Orin Nano platform (aarch64 + Tegra/L4T)
 
 > **Status: EXPERIMENTAL BUILDABLE (hardware validation pending).** The
-> cross-architecture **edge-AI capability** (the `edge-ai` node role + the
-> `edge-ai` inference service + the mesh/k8s/tailnet exposure + the model
-> library + all front-ends) is **done and runs on x86 today** — see
-> [docs/EDGE-AI.md](../docs/EDGE-AI.md). This tree now also carries a working
-> **`build-jetson-stage4.sh`** build entry: the full role/env matrix validates
-> via `--print-plan`, the mainline-kernel image assembly is implemented
-> end-to-end mirroring the proven RPi5/Frite cross flow — but **no physical
-> Orin has booted an image from this repo yet**, so every real build prints a
-> LOUD EXPERIMENTAL banner until first boot is confirmed on hardware.
+> cross-architecture **edge-AI capability** (the `edge-ai` node role, the
+> `edge-ai` inference service, the mesh/k8s/tailnet exposure, the model
+> library and all front-ends) is **done and runs on x86 today**. See
+> [docs/EDGE-AI.md](../docs/EDGE-AI.md). This tree also carries a working
+> **`build-jetson-stage4.sh`**. All 8 role/env combinations pass
+> `--print-plan`, and the mainline-kernel image assembly is written end to end,
+> mirroring the proven RPi5/Frite cross flow. But **no physical Orin has booted
+> an image from this repo**, so every real build prints a LOUD EXPERIMENTAL
+> banner until first boot is confirmed on hardware.
 
 ## What the Jetson adds
 
-The **Jetson Orin Nano Super Developer Kit** (Amazon B0BZJTQ5YP): aarch64 + Ampere
-GPU, 8 GB, 67 TOPS, ~$249. It is an **arm64 edge-AI node**: the same `edge-ai` role
-and `edge-ai` service that run on the x86 RTX host run here — Ollama has arm64 +
-Jetson CUDA images, and the kustomize manifests are arch-portable. The hard part is
-the **platform** (kernel + CUDA userspace + board boot), which is L4T (Linux for
-Tegra)-based rather than the mainline amd64/RPi5 path.
+The **Jetson Orin Nano Super Developer Kit** (Amazon B0BZJTQ5YP): aarch64 plus an
+Ampere GPU, 8 GB, 67 TOPS, about $249. It is an **arm64 edge-AI node**. The same
+`edge-ai` role and `edge-ai` service that run on the x86 RTX host run here:
+Ollama has arm64 and Jetson CUDA images, and the kustomize manifests are
+arch-portable. The hard part is the **platform** (kernel, CUDA userspace, board
+boot). It is based on L4T (Linux for Tegra), not on the mainline amd64/RPi5 path.
 
 ## Build entry (IMPLEMENTED — `build-jetson-stage4.sh`)
 
@@ -39,16 +39,16 @@ Roles (× `--env test|prod`, all 8 combos pass `--print-plan` today):
 | `omnibus` (`full` is an accepted old spelling) | full stack on one Orin | single-node + headscale | yes |
 | `desktop` | arm64 client desktop (lean LXDE) | none | no |
 
-The builder (modeled on `build-frite-stage4.sh`, the other arm64 builder):
-- seeds an arm64 **glibc** Gentoo stage3 (glibc on purpose — CUDA links glibc),
-- layers the kernel + the role payload (shared flag conventions: `--jobs`,
+The builder is modeled on `build-frite-stage4.sh`, the other arm64 builder. It:
+- seeds an arm64 **glibc** Gentoo stage3. Glibc is deliberate, because CUDA links glibc.
+- layers the kernel and the role payload. The shared flags are `--jobs`,
   `--work-dir`, `--compress`, `--resume`, `--permit-root-login`, `--skip-mesh`,
-  `--skip-tailscale`, `--img-size`, `--grow`),
-- reuses the SHARED `specs/` mesh/provisioning/sshd plumbing AND (cluster
-  roles) the SHARED `specs/cluster` GitOps tree (the edge-ai manifests are
-  arch-portable),
-- emits `<brand>-jetson-<board>-arm64-<role>-<env>-<ts>.stage4.tar.xz` + a
-  flashable raw `.img` (single ext4 `JETSON_ROOT`, extlinux boot).
+  `--skip-tailscale`, `--img-size` and `--grow`.
+- reuses the SHARED `specs/` mesh, provisioning and sshd plumbing. Cluster roles
+  also reuse the SHARED `specs/cluster` GitOps tree, because the edge-ai
+  manifests are arch-portable.
+- emits `<brand>-jetson-<board>-arm64-<role>-<env>-<ts>.stage4.tar.xz` and a
+  flashable raw `.img` (one ext4 partition, `JETSON_ROOT`, extlinux boot).
 
 ### The KERNEL DECISION (`--kernel-flavor`, hardware-gated)
 
@@ -69,16 +69,22 @@ The builder (modeled on `build-frite-stage4.sh`, the other arm64 builder):
 
 ## Encryption is not available yet
 
-`--encrypt-root` and `--standalone` (which forces `--encrypt-root`) exit with an error on this platform. The image has one ext4 partition that holds both `/boot/extlinux/extlinux.conf` and the root filesystem, and the Orin's UEFI reads that file before Linux runs. A LUKS2 partition would leave the firmware with no kernel to find. The fix is a separate unencrypted boot partition, as on RPi5 and Frite. The builder carries LUKS code (`luks-crypt.config`, a dracut crypt module) that no run can reach today.
+`--encrypt-root` and `--standalone` (which forces `--encrypt-root`) exit with an
+error on this platform. The image has one ext4 partition. It holds both
+`/boot/extlinux/extlinux.conf` and the root filesystem, and the Orin's UEFI reads
+that file before Linux runs. A LUKS2 partition would leave the firmware with no
+kernel to find. The fix is a separate unencrypted boot partition, as on RPi5 and
+Frite. The builder carries LUKS code (`luks-crypt.config`, a dracut crypt module)
+that no run can reach today.
 
 ## Front-end wiring (all-options-in-all-menus)
 
-Per the **all-options-in-all-menus** standing rule the platform is exposed in
-the CLI/make channel now that it validates: `make jetson`, `make jetson-<role>`
-(role pattern), `JETSON=1` / `JETSON_ONLY=1` / `JETSON_ROLES=...` knobs on
-`scripts/build-all-roles.sh`, and it is part of `make build-everything`. The
-ncurses menu (`scripts/build-menu.sh`) and the Studio wizard pick the platform
-up through the same builder + `--print-plan` contract.
+Under the **all-options-in-all-menus** standing rule, the platform is exposed in
+the CLI and make channel now that it validates: `make jetson`,
+`make jetson-<role>` (role pattern), the `JETSON=1` / `JETSON_ONLY=1` /
+`JETSON_ROLES=...` knobs on `scripts/build-all-roles.sh`, and
+`make build-everything`. The ncurses menu (`scripts/build-menu.sh`) and the
+Studio wizard pick it up through the same builder and `--print-plan` contract.
 
 ## Hardware-validation checklist (flip Status when done)
 

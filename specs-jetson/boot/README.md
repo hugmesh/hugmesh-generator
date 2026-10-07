@@ -8,11 +8,11 @@
 | Boot config | `config.txt`/`cmdline.txt` on FAT | `/extlinux/extlinux.conf` | **`/boot/extlinux/extlinux.conf`** (L4TLauncher UEFI app) |
 | We build the bootloader? | no (firmware pkg) | vendored u-boot.bin | **no — QSPI firmware is out-of-band** (`tegraflash`, recovery mode; see `../installer/TEGRAFLASH.md`) |
 
-The practical upshot: the image this builder produces is a **rootfs with
-`/boot/extlinux/extlinux.conf`** (rendered from `extlinux.conf.tmpl` +
-`cmdline.base`) on an ext4 partition labeled `JETSON_ROOT`, written to
-microSD or NVMe. A devkit whose QSPI firmware is current (JetPack 5/6 era,
-UEFI boot) will distro-boot it directly. No u-boot phase exists.
+In practice the builder produces a **rootfs with `/boot/extlinux/extlinux.conf`**
+(rendered from `extlinux.conf.tmpl` and `cmdline.base`) on an ext4 partition
+labeled `JETSON_ROOT`. You write it to microSD or NVMe. A devkit whose QSPI
+firmware is current (JetPack 5/6 era, UEFI boot) distro-boots it directly.
+There is no u-boot phase.
 
 ## Orin Nano Developer Kit DTB (mainline)
 
@@ -34,10 +34,9 @@ Other Orin modules on the same carrier. Three have a `--board` value (all marked
 | Orin Nano 8 GB (p3767-0003) | none (use `--dtb`) | `nvidia/tegra234-p3768-0000+p3767-0003.dtb` |
 | Orin Nano 4 GB (p3767-0004) | `orin-nano-4gb` | `nvidia/tegra234-p3768-0000+p3767-0004.dtb` |
 
-The builder copies the whole `nvidia/` DTB dir into `/boot/dtb/nvidia/` and the
-extlinux `FDT` line selects the board file — the SAME kernel-owns-the-DTB
-policy as the Frite (never boot the firmware's stale DT against a different
-kernel).
+The builder copies the whole `nvidia/` DTB dir into `/boot/dtb/nvidia/`, and the
+extlinux `FDT` line selects the board file. The kernel owns the DTB, as on the
+Frite: never boot the firmware's stale DT against a different kernel.
 
 ## Console
 
