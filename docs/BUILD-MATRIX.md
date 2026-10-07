@@ -216,7 +216,7 @@ Two closely-related-hardware situations look similar but resolve differently:
 
 **✅ shipped.** For **every** matrix row the harness proves all five channels
 agree on the cell — entirely **dry-run**: no root, no writes outside `mktemp`,
-no network, no docker/k8s, about three minutes:
+no network, no docker/k8s, a few minutes on this host:
 
 1. **CLI** — invokes the builder with `--print-plan` + the row's flags and
    asserts exit 0 plus exact `PLAN_BUILDER` / `PLAN_ROLE` / `PLAN_ENV` (and

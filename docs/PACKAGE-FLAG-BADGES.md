@@ -150,7 +150,7 @@ Symbol legend, confirmed against `man 1 emerge`, `--verbose` (rendered from
 ### 1.2 Ordering and grouping
 
 `_create_use_string` emits `enabled + disabled + removed` in that order, each
-group sorted by `_alnum_sort_key` (`output_helpers.py:249-258` — a natural sort
+group sorted by `_alnum_sort_key` (`output_helpers.py:249-259` — a natural sort
 that makes `python3_9` precede `python3_12`). With `--alphabetical` all three
 collapse into one alphabetical run. **A GUI that re-sorts loses information**:
 position alone tells the operator "everything past here is off".
@@ -158,7 +158,7 @@ position alone tells the operator "everything past here is off".
 ### 1.3 What is lost when the log is captured to a file
 
 `portage.output.colorize()` returns the string **unmodified** when
-`havecolor == 0` (`portage/output.py:383-389`), and emerge sets
+`havecolor == 0` (`portage/output.py:383-390`), and emerge sets
 `havecolor = 0` whenever stdout is not a tty:
 
 ```python
@@ -520,7 +520,7 @@ block the UI thread.
 
 ---
 
-## 5. Badge design
+## 5. Proposed badge design
 
 Built: `studio/hugmesh_studio/gui/flag_badges.py` follows this table (its
 palette constants are `TEAL = "#0e7a63"` and `GREEN = "#1a7f37"`; the rest reuse
