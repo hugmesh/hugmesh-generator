@@ -1,10 +1,10 @@
 # brands/ — drop-in brand profiles
 
-A **brand profile** is a plain shell file the image builders `source` to rebrand
-the images and select the brand's **own isolated mesh**. It rewrites every
-namespace, hostname, gateway name, image org, ingress host and title in the
-baked cluster payload from the HugMesh defaults to your brand/domain at build
-time, and points the node at the brand's own headscale control plane.
+A **brand profile** is a plain shell file the image builders `source`. It rebrands the
+images and selects the brand's **own isolated mesh**. At build time it rewrites every
+namespace, hostname, gateway name, image org, ingress host and title in the baked
+cluster payload from the HugMesh defaults to your brand and domain, and it points the
+node at the brand's own headscale control plane.
 
 ## Files here
 
@@ -18,12 +18,12 @@ time, and points the node at the brand's own headscale control plane.
 | `../brand.conf` | **no** (gitignored) | the same vars **with real passwords/tokens** |
 
 > **Local-first:** `make local` builds the whole fleet against `brands/local.conf`
-> with `--env test`, so the cluster is LAN-testable before any public address or
-> Cloudflare. See [`docs/LOCAL-TESTING.md`](../docs/LOCAL-TESTING.md).
+> with `--env test`, so you can test the cluster on a LAN before any public address
+> or Cloudflare exists. See [`docs/LOCAL-TESTING.md`](../docs/LOCAL-TESTING.md).
 
-> Never put real secrets (`DEFAULT_USER_PASS`, `ROOT_PASS`, `VAULT_TOKEN`, …) in
-> a committed `brands/*.conf`. Real values go in the gitignored `./brand.conf`
-> or in the environment.
+> Never put real secrets (`DEFAULT_USER_PASS`, `ROOT_PASS`, `VAULT_TOKEN`, …) in a
+> committed `brands/*.conf`. Real values go in the gitignored `./brand.conf` or in
+> the environment.
 
 ## Brandable variables
 
@@ -47,25 +47,23 @@ time, and points the node at the brand's own headscale control plane.
 
 ### External CA (optional)
 
-By default the cert generator mints a fresh self-signed root CA. Set `CA_CERT` +
-`CA_KEY` (env, `./brand.conf`, a `brands/*.conf` profile, or the `--ca-cert` /
-`--ca-key` flags on `scripts/gen-provision-keys.sh` / `scripts/gen-keystores.sh`)
-to sign **every** generated leaf/service cert with that existing CA instead. The
-provided CA is validated (the key must match the cert), bundled into the
-truststore so verifiers trust it, and is **never** overwritten or regenerated.
-On the `pki` role it is also seeded as the kubeadm control-plane CA. Leave them
-unset to keep the self-signed-root behavior.
+By default the cert generator mints a fresh self-signed root CA. To sign every
+generated leaf and service cert with an existing CA instead, set `CA_CERT` + `CA_KEY`
+(env, `./brand.conf`, a `brands/*.conf` profile, or the `--ca-cert` / `--ca-key` flags
+on `scripts/gen-provision-keys.sh` / `scripts/gen-keystores.sh`). The generators
+check the key against the cert, bundle the CA into the truststore so verifiers trust
+it, and never overwrite or regenerate it. On the `pki` role it is also seeded as the
+kubeadm control-plane CA. Leave both unset to keep the self-signed root.
 
-> `CA_KEY` / `CA_KEY_PASS` are **secrets** — keep them in the gitignored
-> `./brand.conf` or the environment, never in a committed `brands/*.conf`.
-> Through `make`, pass them on the command line:
-> `make ... CA_CERT=/path/ca.crt CA_KEY=/path/ca.key` (the key/passphrase are
-> read from the environment by the generators, never echoed).
+> `CA_KEY` / `CA_KEY_PASS` are **secrets**. Keep them in the gitignored `./brand.conf`
+> or the environment, never in a committed `brands/*.conf`. Through `make`, pass them
+> on the command line: `make ... CA_CERT=/path/ca.crt CA_KEY=/path/ca.key` (the
+> generators read the key and passphrase from the environment and never echo them).
 
-`HEADSCALE_URL` + `MESH_TAG` make each brand a **separate, isolated mesh**: its
-own headscale control plane and a brand-unique tag, so brands never share a
-tailnet. (The mesh setup honors these at provision time; this profile only
-declares them — it does not configure headscale itself.)
+`HEADSCALE_URL` + `MESH_TAG` make each brand a **separate, isolated mesh**: its own
+headscale control plane and a brand-unique tag, so brands never share a tailnet. The
+mesh setup honors them at provision time. The profile only declares them; it does not
+configure headscale itself.
 
 ## Usage
 
@@ -84,8 +82,8 @@ make build-all BRAND=acme DOMAIN=acme.example      # override the domain
 make x86-backend-gpu BRAND=acme DOMAIN=acme.example HEADSCALE_URL=https://hs.acme.example
 ```
 
-Precedence: **built-in defaults < the profile < explicit CLI flags**, so
-`DOMAIN=`/`HEADSCALE_URL=` on the `make` line override whatever the profile sets.
+Precedence: **built-in defaults < the profile < explicit CLI flags**, so `DOMAIN=` and
+`HEADSCALE_URL=` on the `make` line override whatever the profile sets.
 
-Auto-detection: if you copy a profile to `./brand.conf` (gitignored), the
-builders pick it up with no `--config` flag.
+Auto-detection: copy a profile to `./brand.conf` (gitignored) and the builders pick it
+up with no `--config` flag.
