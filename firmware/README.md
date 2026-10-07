@@ -1,5 +1,14 @@
 # HugMesh Mesh firmware — a thin fork overlay on Meshtastic
 
+> **Status: design only. Nothing described below exists in this repository yet.**
+> `firmware/` holds this file and nothing else. There is no `firmware/overlay/`
+> tree, no `docker/build-firmware.sh`, no `docker/Dockerfile.firmware-gen`, no
+> `IMAGE_TYPE=mesh-radio-firmware` build type and no `docs/MESH-FIRMWARE.md`.
+> No firmware has been built or flashed. Read every present-tense sentence
+> below as a plan. The upstream facts (the pinned tag, board environments,
+> `userPrefs.jsonc` keys, the build mechanism) were checked against the
+> upstream tag.
+
 **"Meshtastic" is a registered trademark of Meshtastic LLC.** Nothing here is
 produced by, endorsed by, or affiliated with the Meshtastic project. Firmware
 built by this pipeline is branded **"HugMesh Mesh firmware
@@ -10,7 +19,7 @@ the nominative sense, to say honestly what our fork is built from.
 
 ## What this is (and is not)
 
-This is **not** a fork of the Meshtastic firmware source tree living in this
+The plan is **not** a fork of the Meshtastic firmware source tree living in this
 repo. It is a thin **overlay**: a pinned upstream tag, a small set of
 generated/patched files layered on top of a fresh clone of that tag, and an
 in-cluster build job that does the clone + overlay + compile + package. The
@@ -26,8 +35,9 @@ things:
    default presence beacon, added as source + a small unified-diff patch
    against upstream's own module-registration site (never a hand-edited copy
    of the whole file).
-3. **An in-cluster build type** — a new `IMAGE_TYPE=mesh-radio-firmware`
-   image-gen build (see `docs/MESH-FIRMWARE.md`) that clones the pinned tag,
+3. **An in-cluster build type** — a planned `IMAGE_TYPE=mesh-radio-firmware`
+   image-gen build (its design doc, `docs/MESH-FIRMWARE.md`, does not exist
+   yet) that clones the pinned tag,
    applies this overlay, and runs the upstream build scripts unmodified,
    producing the same flashable artifact shapes upstream itself ships
    (`.uf2` / `.factory.bin` / `.bin`).
@@ -44,8 +54,9 @@ repo: https://github.com/meshtastic/firmware
 tag:  v2.7.26.54e0d8d
 ```
 
-The tag is pinned in exactly one place operationally significant: the
-`UPSTREAM_REF` default in `docker/build-firmware.sh` (overridable by the
+The plan pins the tag in exactly one operationally significant place: the
+`UPSTREAM_REF` default in `docker/build-firmware.sh` (a script that does not
+exist yet; overridable by the
 `IMAGE_SPEC_JSON` channel the same way the existing image-gen pipeline's
 `HARDWARE_CLASS`/board selection works — see that doc). Bumping the pin is a
 deliberate, reviewed change: a new upstream tag can rename variants, move the
@@ -55,6 +66,8 @@ loudly (see "Drift detection" below) rather than degrading quietly when that
 happens.
 
 ## Overlay approach
+
+Planned layout. None of these files exist yet.
 
 ```
 firmware/overlay/
@@ -74,7 +87,7 @@ firmware/overlay/
                                         this overlay)
 ```
 
-`apply-overlay.sh UPSTREAM_DIR` (POSIX `sh`, no bashisms — matches
+`apply-overlay.sh UPSTREAM_DIR` (planned; POSIX `sh`, no bashisms — matches
 `docker/build-image.sh`'s own portability constraint, since it runs inside
 the same class of minimal builder image) does, in order:
 
@@ -114,44 +127,42 @@ patch machinery needed (new files can't "conflict").
 
 ### Drift detection
 
-`apply-overlay.sh` runs `git apply --check` before doing anything
-destructive, and the same check is exercised offline against a synthesized
-fixture (`overlay/patches/testdata/`, see "Validation" in
-`docs/MESH-FIRMWARE.md` and `overlay/patches/testdata/run-tests.sh`) so a CI
+The plan has `apply-overlay.sh` run `git apply --check` before doing anything
+destructive, and has the same check run offline against a synthesized
+fixture (`overlay/patches/testdata/`, with a `run-tests.sh` beside it) so a CI
 run catches a broken patch **without ever cloning upstream**. A real
-in-cluster build additionally re-runs the same check against the real,
+in-cluster build would re-run the same check against the real,
 freshly cloned upstream tree — belt and suspenders, since the fixture can
 only prove the patch is well-formed against a mocked-up anchor, not that
-upstream hasn't actually moved it.
+upstream hasn't actually moved it. None of this is written yet.
 
 ## GPL-3.0 compliance
 
 The upstream Meshtastic firmware is licensed GPL-3.0 (see upstream's own
-`LICENSE`). Everything in `firmware/overlay/modules/` and
+`LICENSE`). Everything planned for `firmware/overlay/modules/` and
 `firmware/overlay/patches/` is a derivative work compiled into the same
-binary and therefore carries the same license:
+binary and will therefore carry the same license:
 
-- `HugMeshPresenceModule.h` / `.cpp` open with a full GPL-3.0 header
+- `HugMeshPresenceModule.h` / `.cpp` are to open with a full GPL-3.0 header
   (see those files) naming HugMesh as the additional copyright holder
   for the new material, upstream Meshtastic LLC and contributors for the
   base `SinglePortModule`/`MeshModule` classes it derives from.
-- The patch file itself carries a one-line GPL-3.0 notice in its preamble.
-- Every artifact `docker/build-firmware.sh` emits is accompanied by a
+- The patch file itself is to carry a one-line GPL-3.0 notice in its preamble.
+- Every artifact `docker/build-firmware.sh` will emit is to be accompanied by a
   **`SOURCE-OFFER.txt`** in the same `ARTIFACT_DIR`, satisfying GPLv3 §6
   ("Conveying Non-Source Forms"): it names the exact fork repository URL,
   the pinned upstream tag, the overlay commit/ref the build ran from, and
   a durable statement of where the complete corresponding source (upstream
   tag + this `firmware/` overlay, which together fully reconstruct the
-  built tree) can be obtained. See `docker/build-firmware.sh`'s
-  `write_source_offer()` for the exact fields and
-  `docs/MESH-FIRMWARE.md` for where the fork repo URL itself is expected to
-  live operationally (a generator-repo config value, not hardcoded in the
-  worker script — see that doc's follow-up seam list).
+  built tree) can be obtained. The script's planned `write_source_offer()`
+  will fix the exact fields. The fork repo URL is expected to live as a
+  generator-repo config value, not hardcoded in the worker script.
 - We never claim GPL-3.0 covers less than it does: `userPrefs.jsonc` (baked
   per-domain configuration compiled directly into the binary via
   `-D` flags, see "Defaults" below) is also part of the corresponding
   source obligation and is included in what `SOURCE-OFFER.txt` points at
-  (the rendered file itself is NOT committed anywhere — see "Secrets" — but
+  (the rendered file would NOT be committed anywhere, because it carries the
+  Vault-injected PSK and admin key, but
   the *template* + the render inputs needed to reproduce it are covered by
   the same overlay tree).
 
@@ -172,7 +183,7 @@ fork:
 
 Upstream's `bin/platformio-custom.py` reads `userPrefs.jsonc` (a JSONC file
 at the repo root — comments allowed, hence the extension) and turns every key
-into a `-DUSERPREFS_<KEY>=<value>` PlatformIO build flag, so these values are
+into a `-D<KEY>=<value>` PlatformIO build flag (the keys already start with `USERPREFS_`), so these values are
 **compiled into the binary**, not read at runtime from a config file on the
 device. That is exactly the mechanism this overlay uses to bake HugMesh
 per-domain defaults in: `overlay/userprefs/hugmesh-default.jsonc.hbs` is a
@@ -183,21 +194,21 @@ Handlebars template (rendered by `apply-overlay.sh`, or in-cluster by
 | Token | Upstream key | Notes |
 |---|---|---|
 | `{{MESH_CHANNEL_NAME}}` | `USERPREFS_CHANNEL_0_NAME` | HugMesh domain's default mesh channel. |
-| `{{MESH_CHANNEL_PSK_B64}}` | `USERPREFS_CHANNEL_0_PSK` | **Vault-injected at build time, never committed** — see "Secrets" below. |
+| `{{MESH_CHANNEL_PSK_B64}}` | `USERPREFS_CHANNEL_0_PSK` | Planned: injected from Vault at build time, never committed. |
 | `{{LORA_REGION}}` | `USERPREFS_CONFIG_LORA_REGION` | Region code (e.g. `US`, `EU_868`) — regulatory, must be correct for the shipping jurisdiction. |
 | owner long-name prefix | `USERPREFS_CONFIG_OWNER_LONG_NAME` | `"HugMesh Mesh · "` prefix + per-build suffix, so a flashed radio self-identifies honestly on first boot (also satisfies the trademark note above at the device level). |
 | `{{MQTT_ENABLED}}` / `{{MQTT_ADDRESS}}` | `USERPREFS_MQTT_ENABLED` / `USERPREFS_MQTT_ADDRESS` | Points at the domain's own MQTT broker (the same `mqtt` device-attachment shape `meshbridge` speaks — see "Relationship to meshbridge" below), not a public broker. |
-| `{{ADMIN_KEY_B64}}` | `USERPREFS_USE_ADMIN_KEY_0` | **Vault-injected at build time, never committed** — the domain's admin public key, so the domain's admin console can remote-administer flashed radios over the mesh. |
+| `{{ADMIN_KEY_B64}}` | `USERPREFS_USE_ADMIN_KEY_0` | Planned: injected from Vault at build time, never committed. The domain's admin public key, so the domain's admin console can remote-administer flashed radios over the mesh. |
 
-See `overlay/userprefs/hugmesh-default.jsonc.hbs` for the full template
-(all upstream keys listed in the task recon, including
-`USERPREFS_CHANNELS_TO_WRITE`, the 3-channel `_DOWNLINK_ENABLED` triad,
-`USERPREFS_LORACONFIG_MODEM_PRESET`, `USERPREFS_CONFIG_DEVICE_ROLE`, and
-`USERPREFS_OEM_TEXT`) with inline comments on every key.
+The planned template, `overlay/userprefs/hugmesh-default.jsonc.hbs` (not yet
+written), would also set `USERPREFS_CHANNELS_TO_WRITE`, the three
+`_DOWNLINK_ENABLED` keys, `USERPREFS_LORACONFIG_MODEM_PRESET`,
+`USERPREFS_CONFIG_DEVICE_ROLE` and `USERPREFS_OEM_TEXT`. All of these keys
+exist in upstream's `userPrefs.jsonc` at the pinned tag.
 
 ## Custom module: `HugMeshPresenceModule`
 
-A single new module (`overlay/modules/HugMeshPresenceModule.{h,cpp}`,
+A single new module (planned: `overlay/modules/HugMeshPresenceModule.{h,cpp}`,
 registered via `overlay/patches/0001-register-hugmesh-presence-module.patch`)
 sending a compact presence beacon (firmware variant tag + battery percentage
 + uptime) on Meshtastic's private-application portnum range every ~15
@@ -215,7 +226,7 @@ rationale, buffer-safety notes, and portnum choice.
 | Heltec Mesh Node T114 V2 | `heltec-mesh-node-t114` | `.uf2` | nRF52840; drag-and-drop UF2 bootloader flashing. |
 | ELECROW ThinkNode M1 | `thinknode_m1` | `.uf2` | nRF52840, e-ink display; drag-and-drop UF2. |
 | Heltec V3 (generic ESP32-S3 + SX1262, e.g. "Meshnology ESP32 LoRa V4") | `heltec-v3` | `.factory.bin` / `.bin` | ESP32-S3; flash via `esptool.py` or the Meshtastic web flasher. |
-| Same class of board, HugMesh DIY variant | `hugmesh-esp32s3-sx1262` (this overlay) | `.factory.bin` / `.bin` | Use when `heltec-v3`'s baked pinout doesn't match the actual board — see the variant's `variant.h` PINOUT TODOs; requires per-board pin confirmation before first flash. |
+| Same class of board, HugMesh DIY variant | `hugmesh-esp32s3-sx1262` (planned in this overlay; does not exist yet) | `.factory.bin` / `.bin` | Use when `heltec-v3`'s baked pinout doesn't match the actual board — see the variant's `variant.h` PINOUT TODOs; requires per-board pin confirmation before first flash. |
 
 nRF52-family boards (T114, ThinkNode M1) produce a `.uf2` — copy it onto the
 device's USB mass-storage bootloader volume, no special tooling needed.
@@ -226,35 +237,31 @@ only, for an already-provisioned device). Both are placed in `ARTIFACT_DIR`
 by `docker/build-firmware.sh` alongside a `manifest.json` describing exactly
 which is which (see `docs/MESH-FIRMWARE.md`).
 
-## Not compiled in this workspace
+## Status: nothing built, nothing verified
 
-**No firmware has been compiled by this change.** Embedded cross-compilation
-(PlatformIO + the ESP32-S3 / nRF52 toolchains) is not available in this
-session's sandbox, and even if it were, an honest first build belongs
-in-cluster or in CI, against a live clone of the pinned upstream tag, not
-against a hand-simulated tree here. What *has* been verified in this
-workspace:
+**No firmware has been compiled, and none of the overlay exists.** Commit
+c8158b24 added this file as "design-only, no implementation yet". These
+statements are therefore **not** true of this repository today, and an earlier
+draft of this section wrongly claimed them:
 
-- `overlay/apply-overlay.sh` is POSIX-`sh`-valid (`sh -n`) and shellcheck-clean.
-- `overlay/patches/0001-register-hugmesh-presence-module.patch` applies
-  cleanly (`git apply --check`, then a real `git apply`) against a small
-  synthesized fixture in `overlay/patches/testdata/` that reproduces the
-  exact anchor line upstream's `src/modules/Modules.cpp` carries at
-  v2.7.26.54e0d8d (per the task's recon — this fixture is NOT a copy of the
-  real file, which is not present in this workspace).
-- `overlay/patches/testdata/run-tests.sh` exercises `apply-overlay.sh`
-  end-to-end against a small fake "upstream" directory tree (userPrefs
-  render, module copy, variant copy, patch apply) and asserts every step's
-  output.
-- `docker/build-firmware.sh` and `docker/Dockerfile.firmware-gen` are
-  reviewed for contract-shape parity with the existing
-  `docker/build-image.sh` / `docker/Dockerfile.image-gen` pair, but neither
-  has been run against a real PlatformIO build — the actual `platformio run
-  -e <env>` step (and therefore the whole toolchain: PlatformIO package
-  downloads, the ESP32/nRF52 platform packages, the C++ compile itself) is
-  **entirely unverified** and must be proven in-cluster or in CI as a
-  follow-up. See `docs/MESH-FIRMWARE.md`'s validation section for the exact
-  scope of what is and isn't proven here.
+- that `overlay/apply-overlay.sh` is `sh -n` valid and shellcheck-clean;
+- that `overlay/patches/0001-register-hugmesh-presence-module.patch` applies
+  against a fixture in `overlay/patches/testdata/`;
+- that `overlay/patches/testdata/run-tests.sh` exercises the overlay;
+- that `docker/build-firmware.sh` and `docker/Dockerfile.firmware-gen` were
+  reviewed for parity with `docker/build-image.sh` / `docker/Dockerfile.image-gen`.
+
+`docker/` contains `build-image.sh` and `Dockerfile.image-gen`, but no firmware
+counterpart. Embedded cross-compilation (PlatformIO, the ESP32-S3 and nRF52
+toolchains) has never been run for this design. The first honest build belongs
+in-cluster or in CI, against a live clone of the pinned upstream tag.
+
+What *was* checked, against upstream tag `v2.7.26.54e0d8d` (commit `54e0d8d0`):
+the `USERPREFS_*` keys in the table above all appear in upstream's
+`userPrefs.jsonc`; `bin/platformio-custom.py` turns each key into a `-D` flag;
+`platformio.ini` globs `variants/*/diy/*/platformio.ini`; the environments
+`heltec-mesh-node-t114`, `thinknode_m1` and `heltec-v3` exist; and
+`ReplyModule` is a `SinglePortModule`.
 
 ## Relationship to `meshbridge`
 
