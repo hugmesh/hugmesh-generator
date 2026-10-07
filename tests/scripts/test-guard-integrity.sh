@@ -735,7 +735,14 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # that merged tree (GUARD_PREMERGE=0), not computed:
 #     195 of 219 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (24 suite(s))
-PREMERGE_BASELINE="${GUARD_PREMERGE:-195}"
+#
+# 195 -> 196 (denominator 219 -> 220) on 2026-10-07: re-measured on the merge of this
+# branch with origin/main e14a94a7, which gained tests/scripts/test-edge-ai-ollama-pin.sh
+# (gated, baseline 193 -> 194 on main) after the 195 above was measured. MEASURED by
+# RUNNING this file on that merged tree (GUARD_PREMERGE=0), not computed:
+#     196 of 220 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (24 suite(s))
+PREMERGE_BASELINE="${GUARD_PREMERGE:-196}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were

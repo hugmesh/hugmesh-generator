@@ -405,6 +405,7 @@ jobs:
             tests/scripts/test-dracut-cross-lib.sh
             tests/scripts/test-e2e-persona-catalogue.sh
             tests/scripts/test-edge-ai-cuda-host-compiler.sh
+            tests/scripts/test-edge-ai-ollama-pin.sh
             tests/scripts/test-fetch-retry-hardening.sh
             tests/scripts/test-frite-builder-input-validation.sh
             tests/scripts/test-github-auth-lib.sh
