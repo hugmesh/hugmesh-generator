@@ -32,7 +32,9 @@ Then do the **one-time resolver step** below, and browse to
 The builders **prune** the ENV-irrelevant ArgoCD app from the baked
 `/var/lib/hugmesh/cluster/apps` tree, so ArgoCD only ever syncs the right one:
 
-- `ENV=test` removes `apps/12-cloudflared.yaml` (no Cloudflare on a LAN).
+- `ENV=test` removes `apps/12-cloudflared.yaml` (no Cloudflare on a LAN). If the
+  domain does not end in `.test`, it also removes `apps/09-lan-dns.yaml`, so the
+  LAN resolver cannot hijack a real domain; use `brands/local.conf` for a LAN build.
 - `ENV=prod` removes `apps/09-lan-dns.yaml` (public DNS is authoritative).
 
 How to select it:
