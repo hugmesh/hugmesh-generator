@@ -40,7 +40,7 @@ Where things go (all of these can be overridden, `--help` lists them):
 | Setting | Default | Holds |
 |---|---|---|
 | `HUGMESH_STUDIO_FLATPAK_USER_DIR` | `~/.hugmesh-wt-local/flatpak-studio` | the private flatpak directory: runtimes, the Builder, the installed app (about 10 GiB) |
-| `HUGMESH_STUDIO_FLATPAK_OUT` | `~/.hugmesh-wt-local/dist-studio` | the bundle, its `.sha256`, and `flatpak-work/` (build state and log, about 2 GiB) |
+| `HUGMESH_STUDIO_FLATPAK_OUT` | `~/.hugmesh-wt-local/dist-studio` | the bundle, its `.sha256`, and `flatpak-work/` (the Builder's state in `.flatpak-builder/`, the repository, the log; about 2 GiB). May not be inside the private directory. |
 | `HUGMESH_STUDIO_FLATPAK_MIN_FREE_GIB` | 14 on a first run, 4 after | refuse to start with less free space than this |
 
 It refuses to run if the private directory is your own flatpak directory
@@ -74,11 +74,43 @@ with different checksums from the same source (an OSTree commit carries its time
 so a checksum identifies one build, not the source it came from.
 
 `../../tests/test_flatpak_packaging_files.py` runs the script against a scripted fake
-`flatpak` as well, and holds it to what this page says: every call goes to the private
-directory and none to `--system`, the Builder is granted that directory, the build uses
-the release workflow's flags, both validators run, and an empty `--print-specs` is a
-failure. (A mutation battery showed each of those could be lost with the earlier,
-file-reading checks still green; the script was right, its guard was thin.)
+`flatpak` as well, through all three smoke tests, and holds it to what this page says:
+every call goes to the private directory and none to `--system`, the Builder is granted
+that directory and runs with `flatpak-work/` as its working directory and no
+`--state-dir` (see below), the build uses the release workflow's flags, both validators
+run, the build output may not live inside the private directory, a second run against
+the same output directory is refused, and each smoke test refuses what it must: a
+`--print-specs` that prints nothing, blank lines or anything but JSON objects; a Qt check
+that does not report `qt-ok` with PySide6; an install with any of the five files missing
+or with no launcher exported. The test that the script never runs `sudo` or a package
+manager reads every command position, following a command behind an environment
+assignment, a redirection, a prefix such as `env` or `timeout`, a shell's `-c`, `eval`,
+`flatpak-spawn --host`, a `--command=` option and the app id after it (the two forms the
+script itself uses), a `function` definition, a `$( )` substitution (in an unquoted
+heredoc too), and into embedded Python read whole for process calls; what it cannot read
+(a sourced file, a shell fed by a pipe or a file) it reports instead of passing. Its one
+blind spot, a program named through a variable, is pinned as such. (Two mutation
+batteries drove this: the first showed each file-reading check could be lost with the
+suite still green; the second put `sudo` into the script's own two spellings and the
+scanner of the time, which took the app id for a script file, saw neither.)
+
+### Where the Builder keeps its state, and why
+
+The Builder runs with `flatpak-work/` as its working directory and **no `--state-dir`**,
+so its state is `flatpak-work/.flatpak-builder/` (as in the release workflow's in-tree
+build) and its cache branch is `x86_64-org.hugmesh.ImageStudio.yml`. With `--state-dir`
+it names that branch after the manifest's **absolute path** instead, with `/` spelled
+`_2F`, and keeps it as one file under `refs/heads/`. On an encrypted home (eCryptfs
+allows 143 bytes per file name) that name is too long for any checkout path over 77
+bytes, and the build then stopped with a bare `File name too long` after the whole
+toolchain had been installed and the validators had run (measured: a checkout path 38
+characters longer than `~/Github/hugmesh-generator` gave a 147-byte name, where that
+checkout's own is 109). The scripted test pins the `--cwd` and the absence of
+`--state-dir`. Measured once, partly: from exactly such a checkout (a 147-byte old-style
+name), from an empty private directory, the script with this change installed the
+toolchain, validated, and built the app through the Builder, the step that had failed in
+five seconds before, and was at the export step when the session running it was stopped.
+A complete end-to-end run from such a path has not been made yet.
 
 If it fails, it says which step, and a re-run is safe: the toolchain and the caches are
 reused. Two failures have a specific cause worth knowing:

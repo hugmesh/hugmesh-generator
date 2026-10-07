@@ -25,16 +25,18 @@ keep the next gap of that kind from waiting for a release to be seen:
     somebody already uses, and names the one broken-helper state that otherwise shows
     up only as an opaque bwrap error;
   * run against a scripted fake ``flatpak``, the script sends EVERY call to the private
-    directory and never to ``--system``, grants the Builder that directory, builds with
-    the release workflow's flags, runs both validators, and refuses an empty
-    ``--print-specs``. (A mutation battery showed all of that could be lost with the
-    static checks alone still green.)
+    directory and never to ``--system``, grants the Builder that directory and keeps its
+    state where a long checkout path cannot break it, builds with the release workflow's
+    flags, runs both validators, checks the bundle against its own checksum, and refuses
+    what each of its three smoke tests must refuse. (A mutation battery showed all of
+    that could be lost with the static checks alone still green.)
 
 Qt-free and offline: it reads files and runs the script against fakes only, and never
 starts the real flatpak.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -411,25 +413,41 @@ def test_build_script_is_executable_here_and_in_git():
 #: word in COMMAND position counts. The scanner follows a command into the places a
 #: person would really put one: behind an environment assignment, a redirection, a full
 #: path, a prefix such as env or timeout, a shell's -c, flatpak-spawn --host, a
-#: --command= option, a $( ) substitution, and a process call in embedded Python.
-#: (The first version checked the first word of a line only: a mutation battery put sudo
-#: behind each of those and every one survived.)
+#: --command= option and the app id that follows it (``--command=sh APP -c '...'`` and
+#: ``--command=flatpak-spawn APP --host ...``, the two forms this script itself uses), a
+#: ``function`` definition, a $( ) substitution (in an unquoted heredoc too), and a
+#: process call in embedded Python, read whole (a call split over lines, ``import
+#: subprocess as sp``, ``from subprocess import run``). What it cannot read it reports
+#: instead of passing: a sourced file, and a shell or python taking its commands from a
+#: pipe or a file. A heredoc is read by whatever consumes it: as Python after
+#: ``python3 - <<'PY'``, as shell after ``sh -s <<'EOS'``, as prose after ``cat``.
+#: (The first version checked the first word of a line only, the second missed the two
+#: combined forms above: a mutation battery put sudo behind each and every one survived.)
 _FORBIDDEN = {"sudo", "doas", "pkexec", "run0", "su", "apt", "apt-get", "dpkg", "dnf", "yum",
               "pacman", "zypper", "emerge", "brew", "nix-env", "snap"}
 #: After these the command position is still open: the next word is run, not consumed.
 _PREFIXES = {"exec", "command", "builtin", "env", "nohup", "xargs", "time", "nice", "ionice",
              "timeout", "setsid", "stdbuf", "chroot", "flatpak-spawn",
              "then", "do", "else", "elif", "if", "while", "until", "!", "{"}
-#: These run the string after -c as a command line of its own.
+#: These run the string after -c as a command line of its own, or read stdin after - / -s.
 _SHELLS = {"sh", "bash", "dash", "zsh", "ksh"}
 _PYTHONS = {"python", "python3"}
+#: These run a file the scanner cannot see.
+_SOURCE = {"source", "."}
+_UNREADABLE_SOURCE = "<a sourced file>"
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _COUNT = re.compile(r"\d+(?:\.\d+)?[smhd]?")               # nice -n 10, timeout 30s
 _C_OPTION = re.compile(r"-[a-zA-Z]*c[a-zA-Z]*")             # -c, -ec, -xc
 _COMMAND_OPTION = re.compile(r"--?(?:command|exec)=(.+)")   # flatpak run --command=X
-_PROCESS_CALL = re.compile(
-    r"subprocess\.|os\.(?:system|exec\w*|spawn\w*|popen)|Popen|check_call|check_output")
 _STRING_LITERAL = re.compile(r"""(['"])(.*?)\1""")
+_IMPORT_ALIAS = re.compile(r"\bimport\s+subprocess\s+as\s+(\w+)")
+_FROM_IMPORT = re.compile(r"\bfrom\s+subprocess\s+import\s+\(?([^)\n]+)")
+_PROCESS_FUNCTIONS = {"run", "call", "check_call", "check_output", "Popen", "getoutput",
+                      "getstatusoutput"}
+
+
+def _unreadable_stdin(program: str) -> str:
+    return f"<{program} reading its commands from a pipe or a file>"
 
 
 def _program(token: str) -> str:
@@ -448,12 +466,16 @@ def _is_redirection(token: str) -> bool:
 
 
 def _tokens(line: str) -> list[str]:
-    try:
-        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        return list(lexer)
-    except ValueError:                         # a quote that closes on a later line
-        return line.split()
+    # A quote that closes on a later line (the -c '...' body of smoke test 3) is closed
+    # here instead, so the words before it are still read as words and not as one lump.
+    for tail in ("", "'", '"'):
+        try:
+            lexer = shlex.shlex(line + tail, posix=True, punctuation_chars=True)
+            lexer.whitespace_split = True
+            return list(lexer)
+        except ValueError:
+            continue
+    return line.split()
 
 
 def _substitutions(line: str):
@@ -471,60 +493,142 @@ def _substitutions(line: str):
     yield from re.findall(r"`([^`]*)`", line)
 
 
+def _python_calls(text: str):
+    """Each process call in a piece of Python, as (line offset, the call's text).
+
+    The text runs from the call's name to the parenthesis that closes it, so a call split
+    over several lines is one call. Names: ``subprocess.<anything>(``, the same through
+    ``import subprocess as <alias>``, the functions ``from subprocess import`` binds,
+    ``os.system`` and the ``os.exec*`` / ``os.spawn*`` / ``os.popen`` family, and
+    ``Popen`` / ``check_call`` / ``check_output`` on their own.
+    """
+    modules = ["subprocess", *_IMPORT_ALIAS.findall(text)]
+    bare = {"Popen", "check_call", "check_output"}
+    for imported in _FROM_IMPORT.findall(text):
+        for name, alias in re.findall(r"(\w+)(?:\s+as\s+(\w+))?", imported):
+            if name in _PROCESS_FUNCTIONS:
+                bare.add(alias or name)
+    pattern = re.compile(r"\b(?:(?:%s)\.\w+|os\.(?:system|exec\w*|spawn\w*|popen)|%s)\s*\(" % (
+        "|".join(map(re.escape, modules)), "|".join(map(re.escape, sorted(bare)))))
+    for match in pattern.finditer(text):
+        depth, end = 0, match.end() - 1
+        while end < len(text):
+            depth += {"(": 1, ")": -1}.get(text[end], 0)
+            if depth == 0:
+                break
+            end += 1
+        yield text.count("\n", 0, match.start()), text[match.start():end + 1]
+
+
 def _python_call_words(text: str):
-    """The program each string argument of a process call names: subprocess.run(["sudo"])."""
-    if _PROCESS_CALL.search(text):
-        for _quote, literal in _STRING_LITERAL.findall(text):
+    """(line offset, program) for each string argument of a process call: subprocess.run(["sudo"])."""
+    for offset, call in _python_calls(text):
+        for _quote, literal in _STRING_LITERAL.findall(call):
             if literal.strip():
-                yield _program(literal)
+                yield offset, _program(literal)
 
 
-def _line_command_words(line: str):
-    """Yield each word one line of shell puts in command position."""
+def _after_command(word: str):
+    """What follows a command word: is the position still open, and what the word reads."""
+    if word == "eval":
+        return True, ("eval", "eval")
+    if word in _SHELLS | _PYTHONS:
+        return False, ("await-c", word)
+    return word in _PREFIXES, None
+
+
+def _scan_line(line: str) -> tuple[list[str], str | None]:
+    """The words one line of shell puts in command position, and the shell or python (if
+    any) left reading its commands from standard input at the end of the line, which is
+    what a heredoc on that line feeds."""
+    words: list[str] = []
     expecting = True        # the next word is run
-    skip_target = False     # the next word is a redirection target
-    inner = None            # a shell or python was named: "await-c", then "next"; or "eval"
+    skip_next = False       # the next word is a redirection target or a function name
+    piped = False           # this pipeline segment reads what the previous one wrote
+    from_file = False       # this segment has a < redirection
+    inner = None            # ("app", X): --command=X seen, the app id still to come;
+                            # ("await-c", X): a shell or python X was named, its -c string
+                            # or script may follow; ("next", X): the -c string is next;
+                            # ("stdin", X): X reads standard input; ("eval", "eval")
+
+    def unreadable():
+        if inner and inner[0] in ("await-c", "stdin") and (piped or from_file):
+            words.append(_unreadable_stdin(inner[1]))
+
     for token in _tokens(line):
-        if skip_target:
-            skip_target = False
+        if skip_next:
+            skip_next = False
             continue
         if _is_redirection(token):
-            skip_target = True
+            if "<" in token and "<<" not in token:
+                from_file = True
+            skip_next = True
             continue
         if _is_separator(token):
+            unreadable()
             expecting, inner = True, None
+            piped, from_file = token in ("|", "|&"), False
             continue
         option = _COMMAND_OPTION.fullmatch(token)
         if option:                             # --command=X runs X wherever the option sits
             word = _program(option.group(1))
-            yield word
-            inner = ("await-c", word) if word in _SHELLS | _PYTHONS else inner
+            words.append(word)
+            inner = ("app", word)
+            continue
+        if inner and inner[0] == "app":
+            if not token.startswith("-"):      # the app id: X's own command line follows
+                expecting, inner = _after_command(inner[1])
             continue
         if inner and inner[0] in ("next", "eval"):
             if not token.startswith("-"):
                 if inner[1] in _PYTHONS:
-                    yield from _python_call_words(token)
+                    words.extend(word for _offset, word in _python_call_words(token))
                 else:
-                    yield from _line_command_words(token)
+                    words.extend(_scan_line(token)[0])
                 inner = inner if inner[0] == "eval" else None
             continue
         if inner and inner[0] == "await-c":
             if _C_OPTION.fullmatch(token):
                 inner = ("next", inner[1])
+            elif token == "-" or (token == "-s" and inner[1] in _SHELLS):
+                inner = ("stdin", inner[1])    # the script comes on stdin; the rest are its arguments
             elif not token.startswith("-"):    # bash script.sh: a file, not a string
                 inner = None
+            continue
+        if inner and inner[0] == "stdin":
             continue
         if not expecting:
             continue
         if token.startswith("-") or _ASSIGNMENT.match(token) or _COUNT.fullmatch(token):
             continue                           # an option, an assignment or a count: still to come
         word = _program(token)
-        yield word
-        expecting = word in _PREFIXES
-        if word == "eval":
-            inner = ("eval", "eval")
-        elif word in _SHELLS | _PYTHONS:
-            inner = ("await-c", word)
+        if word == "function":                 # function NAME { ... }: the name is not run
+            skip_next = True
+            continue
+        if word in _SOURCE:
+            words.append(_UNREADABLE_SOURCE)
+            expecting = False
+            continue
+        words.append(word)
+        expecting, inner = _after_command(word)
+    unreadable()
+    reader = inner[1] if inner and inner[0] in ("await-c", "stdin") and not (piped or from_file) else None
+    return words, reader
+
+
+def _line_command_words(line: str):
+    """Yield each word one line of shell puts in command position."""
+    yield from _scan_line(line)[0]
+
+
+def _heredoc_words(reader: str | None, first_line: int, body: list[str]):
+    if reader in _PYTHONS:
+        for offset, word in _python_call_words("\n".join(body)):
+            yield first_line + offset, word
+    elif reader in _SHELLS:
+        for offset, line in enumerate(body):
+            for word in _line_command_words(line.strip()):
+                yield first_line + offset, word
 
 
 def _command_words(text: str):
@@ -532,41 +636,55 @@ def _command_words(text: str):
 
     Skips comments, joins backslash continuations, scans substitutions on their own (a
     quoted string is otherwise one opaque token and ``x="$(sudo foo)"`` would sail
-    through), and inside a heredoc body (the usage text, the embedded Python) looks only at
-    process calls, so prose there may say "sudo" and ``subprocess.run(["sudo"])`` may not.
+    through), and hands a heredoc body to what reads it: embedded Python is read whole
+    for process calls, a shell script fed to ``sh -s`` line by line as shell, and an
+    unquoted body's ``$( )`` as shell whatever reads it, so the usage text may say "sudo"
+    and ``subprocess.run(["sudo"])`` may not.
     """
     text = text.replace("\\\n", " ")
-    heredoc_end = None
+    heredoc = None          # (end marker, quoted, reader, first body line, body lines)
     for number, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
-        if heredoc_end is not None:
-            if line == heredoc_end:
-                heredoc_end = None
+        if heredoc is not None:
+            end, quoted, reader, first_line, body = heredoc
+            if line == end:
+                heredoc = None
+                yield from _heredoc_words(reader, first_line, body)
             else:
-                for word in _python_call_words(line):
-                    yield number, word
+                body.append(raw)
+                if not quoted:                 # $( ) expands in an unquoted heredoc
+                    for piece in _substitutions(line):
+                        for word in _line_command_words(piece):
+                            yield number, word
             continue
         if not line or line.startswith("#"):
             continue
         seen: list[str] = []
+        readers: list[str | None] = []
         for piece in [*_substitutions(line), line]:
-            for word in _line_command_words(piece):
+            words, reader = _scan_line(piece)
+            readers.append(reader)
+            for word in words:
                 if word not in seen:           # a nested $( ) is scanned once per level
                     seen.append(word)
                     yield number, word
         opener = re.search(r"<<-?\s*(['\"]?)(\w+)\1", line)
         if opener:
-            heredoc_end = opener.group(2)
+            heredoc = (opener.group(2), bool(opener.group(1)),
+                       next((r for r in readers if r), None), number + 1, [])
+    if heredoc is not None:                    # never closed: read what there is
+        yield from _heredoc_words(heredoc[2], heredoc[3], heredoc[4])
 
 
 def _forbidden_in(text: str) -> list[tuple[int, str]]:
-    return [(n, w) for n, w in _command_words(text) if w in _FORBIDDEN]
+    return [(n, w) for n, w in _command_words(text) if w in _FORBIDDEN or w.startswith("<")]
 
 
 def test_build_script_never_runs_sudo_or_a_package_manager():
     hits = _forbidden_in(_read(SCRIPT))
     assert not hits, (
-        "build-flatpak-local.sh must work on a machine with no sudo and no apt, but it runs: "
+        "build-flatpak-local.sh must work on a machine with no sudo and no apt, but it runs, "
+        "or hides from the scanner: "
         + ", ".join(f"{word} (line {line})" for line, word in hits))
 
 
@@ -584,7 +702,8 @@ def test_build_script_never_runs_sudo_or_a_package_manager():
     ("true \\\n  && sudo true", ["sudo"]),
     ("cat <<'EOF'\nsudo apt-get install foo\nEOF\nflatpak --version", []),
     ("flatpak --version  # sudo would be wrong here", []),
-    # The spellings the first scanner missed (the skeptics' mutations S31-S36 and more).
+    # Behind an environment assignment, a prefix, a full path, a shell's -c, eval,
+    # flatpak-spawn --host, a redirection, a count, a --command= option.
     ("DEBIAN_FRONTEND=noninteractive apt-get install -y flatpak-builder", ["apt-get"]),
     ("LC_ALL=C sudo -n true", ["sudo"]),
     ("env LC_ALL=C sudo -n true", ["sudo"]),
@@ -605,6 +724,42 @@ def test_build_script_never_runs_sudo_or_a_package_manager():
     ("python3 - <<'PY'\nprint(\"sudo is not needed\")\nPY", []),
     ("python3 -c 'import os; os.system(\"sudo -n true\")'", ["sudo"]),
     ("run0 true", ["run0"]),
+    # The script's own two forms: a shell named by --command= with the app id before its
+    # -c string, and flatpak-spawn named by --command= with the app id before --host. A
+    # second battery put sudo in both and the scanner, which took the app id for a script
+    # file, saw neither.
+    ("flatpak run --user --nofilesystem=host --command=sh \"$app_id\" -c 'sudo -n true' _ x y",
+     ["sudo"]),
+    ("flatpak run --user --nofilesystem=host --command=sh \"$app_id\" -c 'exit 0' _ x y", []),
+    ("flatpak run --command=bash org.x -lc 'apt-get install y'", ["apt-get"]),
+    ('"${builder[@]}" --command=flatpak-spawn org.flatpak.Builder --host sudo -n "$wrapper" --version',
+     ["sudo"]),
+    ('"${builder[@]}" --command=flatpak-spawn org.flatpak.Builder --host "$wrapper" --version', []),
+    ("flatpak run --command=sh org.x -c 'sudo -n true' 2>&1 | tee log", ["sudo"]),
+    # A shell fed a heredoc reads it as commands; python fed one is read for process
+    # calls, whole, so a call over two lines, an aliased import and a from-import count,
+    # and a message beside a harmless call does not.
+    ("flatpak run --command=sh org.x -s <<'EOS'\nsudo -n true\nEOS", ["sudo"]),
+    ("flatpak run --command=sh org.x -s <<'EOS'\necho 'no sudo here'\nEOS", []),
+    ("python3 - <<'PY'\nimport subprocess\nsubprocess.run(\n    [\"sudo\", \"-n\", \"true\"])\nPY",
+     ["sudo"]),
+    ("python3 - <<'PY'\nimport subprocess as sp\nsp.run([\"sudo\", \"-n\", \"true\"])\nPY", ["sudo"]),
+    ("python3 - <<'PY'\nfrom subprocess import run\nrun([\"sudo\"])\nPY", ["sudo"]),
+    ("python3 - \"$specs\" <<'PY'\nimport os\nos.system(\"sudo -n true\")\nPY", ["sudo"]),
+    ("python3 - <<'PY'\nimport subprocess\nsubprocess.run([\"flatpak\", \"--version\"])\n"
+     "print(\"sudo is not needed\")\nPY", []),
+    # An unquoted heredoc expands $( ) whatever reads it; a quoted one does not.
+    ("cat <<EOF\n$(sudo -n true)\nEOF", ["sudo"]),
+    ("cat <<'EOF'\n$(sudo -n true)\nEOF", []),
+    ("cat <<EOF\nno sudo needed\nEOF", []),
+    ("function elevate { sudo -n true; }", ["sudo"]),
+    # What the scanner cannot read it reports, so the test fails instead of passing blind.
+    (". ./elevate.sh", [_UNREADABLE_SOURCE]),
+    ("source elevate.sh", [_UNREADABLE_SOURCE]),
+    ("echo 'sudo -n true' | sh", [_unreadable_stdin("sh")]),
+    ("sh < commands.txt", [_unreadable_stdin("sh")]),
+    ("bash --version", []),
+    ("python3 -m pip --version", []),
     # Known blind spot, pinned so nobody mistakes the scanner for more than it is: a
     # program named through a variable is invisible to any static reading.
     ('elevate=sudo; "$elevate" -n true', []),
@@ -614,7 +769,16 @@ def test_build_script_never_runs_sudo_or_a_package_manager():
         "env-assignment", "env-assignment-sudo", "env-prefix", "full-path", "bash-c", "sh-ec",
         "bash-script-argument", "eval", "flatpak-spawn", "redirection-prefix",
         "two-redirections", "timeout", "nice", "command-option", "command-option-benign",
-        "python-subprocess", "python-message", "python-c", "run0", "variable-blind-spot"])
+        "python-subprocess", "python-message", "python-c", "run0",
+        "command-option-sh-c", "command-option-sh-c-benign", "command-option-bash-lc",
+        "command-option-flatpak-spawn-host", "command-option-flatpak-spawn-host-benign",
+        "command-option-sh-c-piped",
+        "sh-s-heredoc", "sh-s-heredoc-benign", "python-call-over-two-lines",
+        "python-aliased-import", "python-from-import", "python-stdin-with-argument",
+        "python-message-beside-a-call",
+        "unquoted-heredoc-substitution", "quoted-heredoc-substitution", "unquoted-heredoc-prose",
+        "function-keyword", "sourced-file", "source-keyword", "shell-from-pipe",
+        "shell-from-file", "shell-version", "python-m", "variable-blind-spot"])
 def test_the_forbidden_command_scanner_sees_what_it_must(snippet, expected):
     """The scanner is what the test above stands on, so it is pinned in both directions."""
     assert [word for _line, word in _forbidden_in(snippet)] == expected
@@ -785,19 +949,51 @@ def test_script_without_flatpak_says_so_and_stops(tmp_path):
 
 
 def _scripted_flatpak(tmp_path):
-    """A `flatpak` that answers like a machine with nothing installed yet, plus both
-    validators; every call is logged as ``tool<TAB>FLATPAK_USER_DIR<TAB>arguments``."""
+    """A ``flatpak`` that answers like a machine with nothing installed yet, plus both
+    validators; every call is logged as ``tool<TAB>FLATPAK_USER_DIR<TAB>arguments`` (the
+    -c script of smoke test 3 spans lines; ``_calls`` joins them back into one call).
+
+    Nothing is installed until the bundle is: ``info`` fails before that, so the script
+    has to install the toolchain and must not uninstall an app that is not there. What
+    the three smoke tests see is set per run: ``FAKE_FLATPAK_SPECS`` is what
+    ``--print-specs`` prints (empty: nothing at all), ``FAKE_FLATPAK_QT`` what the Qt
+    check prints, ``FAKE_FLATPAK_FILES`` names one file the sandbox shell does not find
+    (``none``: it finds nothing; empty: it finds all of them), and ``FAKE_FLATPAK_EXPORT``
+    set to ``none`` makes the bundle install export no launcher.
+    """
     bin_dir = tmp_path / "scriptedbin"
     bin_dir.mkdir(exist_ok=True)
     log = tmp_path / "scripted-calls.log"
     (bin_dir / "flatpak").write_text(
         "#!/bin/sh\n"
         f"printf 'flatpak\\t%s\\t%s\\n' \"${{FLATPAK_USER_DIR-unset}}\" \"$*\" >> \"{log}\"\n"
+        "installed=\"${FLATPAK_USER_DIR-/nonexistent}/.fake-installed\"\n"
         "case \"$1\" in\n"
         "    --default-arch) echo x86_64 ;;\n"
         "    --version) echo 'Flatpak 0.0-fake' ;;\n"
-        "    info) exit 1 ;;\n"                     # nothing is installed: the script must install
+        "    info)\n"
+        "        [ -e \"$installed\" ] || exit 1\n"
+        "        case \"$*\" in *--show-commit*) echo 0123abcd ;; esac ;;\n"
         "    build-bundle) : > \"$3\" ;;\n"          # an empty bundle is enough to reach the install step
+        "    install)\n"
+        "        case \"$*\" in *--bundle*)\n"
+        f"            mkdir -p \"$FLATPAK_USER_DIR/exports/share/applications\"\n"
+        "            [ \"${FAKE_FLATPAK_EXPORT-}\" = none ] ||\n"
+        f"                : > \"$FLATPAK_USER_DIR/exports/share/applications/{APP_ID}.desktop\"\n"
+        "            : > \"$installed\" ;;\n"
+        "        esac ;;\n"
+        "    run)\n"
+        "        case \"$*\" in\n"
+        "            *' --print-specs')\n"
+        "                [ -z \"${FAKE_FLATPAK_SPECS-}\" ] || printf '%s\\n' \"$FAKE_FLATPAK_SPECS\" ;;\n"
+        "            *' --command=python3 '*)\n"
+        "                [ -z \"${FAKE_FLATPAK_QT-}\" ] || printf '%s\\n' \"$FAKE_FLATPAK_QT\" ;;\n"
+        "            *' --command=sh '*)\n"
+        "                while [ \"$#\" -gt 0 ] && [ \"$1\" != _ ]; do shift; done\n"
+        "                [ \"$#\" -gt 0 ] && shift\n"
+        "                [ \"${FAKE_FLATPAK_FILES-}\" = none ] && exit 0\n"
+        "                for f in \"$@\"; do [ \"$f\" = \"${FAKE_FLATPAK_FILES-}\" ] || echo \"$f\"; done ;;\n"
+        "        esac ;;\n"
         "esac\n"
         "exit 0\n")
     for tool in ("desktop-file-validate", "appstreamcli"):
@@ -808,39 +1004,61 @@ def _scripted_flatpak(tmp_path):
     return str(bin_dir), log
 
 
-def _calls(log) -> list[tuple[str, ...]]:
-    if not log.exists():
-        return []
-    return [tuple(line.split("\t", 2)) for line in log.read_text().splitlines()]
+def _calls(log) -> list[tuple[str, str, str]]:
+    """Every logged call as (tool, FLATPAK_USER_DIR seen, arguments); a line that does not
+    start a call continues the previous one's arguments (the -c script of smoke test 3)."""
+    calls: list[list[str]] = []
+    if log.exists():
+        for line in log.read_text().splitlines():
+            if line.count("\t") >= 2 and line.split("\t", 1)[0] in (
+                    "flatpak", "desktop-file-validate", "appstreamcli"):
+                calls.append(line.split("\t", 2))
+            elif calls:
+                calls[-1][2] += " " + line.strip()
+    return [tuple(call) for call in calls]
 
 
-@needs_bash
-def test_script_sends_every_flatpak_call_to_the_private_directory(tmp_path):
-    """The whole script against a scripted flatpak, up to the first smoke test.
+#: What a working sandbox answers the three smoke tests with.
+_SMOKE_OK = {"FAKE_FLATPAK_SPECS": '{"os": "linux"}',
+             "FAKE_FLATPAK_QT": "qt-ok binding=PySide6 qt=0.0 platform=offscreen (fake)",
+             "FAKE_FLATPAK_FILES": ""}
 
-    What the fake is told is what the real flatpak would be told: no call may reach the
-    user's own installation (--system, a missing --user, FLATPAK_USER_DIR not exported, or
-    the host-side wrapper not pinning it), the Builder must be granted the private
-    directory it cannot otherwise see, the build must use the release workflow's flags,
-    both validators must run on the real files, and an empty --print-specs must be
-    refused rather than reported as a built app.
-    """
+
+def _scripted_run(tmp_path, **answers):
+    """The whole script against the scripted flatpak, with the smoke tests answered as
+    ``_SMOKE_OK`` unless ``answers`` says otherwise; returns (result, calls, private, out)."""
     fake_bin, log = _scripted_flatpak(tmp_path)
     private = os.path.realpath(str(tmp_path / "private"))
     out = os.path.realpath(str(tmp_path / "out"))
     run_dir = tmp_path / "run"
-    (run_dir / ".flatpak-helper" / "monitor").mkdir(parents=True)
-    result = _run_script(
-        tmp_path, path=fake_bin + os.pathsep + os.environ["PATH"],
-        extra_env={"HUGMESH_STUDIO_FLATPAK_USER_DIR": private,
-                   "HUGMESH_STUDIO_FLATPAK_OUT": out,
-                   "HUGMESH_STUDIO_FLATPAK_MIN_FREE_GIB": "0",
-                   "XDG_RUNTIME_DIR": str(run_dir),
-                   "DBUS_SESSION_BUS_ADDRESS": "unix:path=" + str(tmp_path / "no-such-bus")})
-    assert result.returncode == 1, result.stderr
-    assert "no output from --print-specs" in result.stderr, result.stderr
+    (run_dir / ".flatpak-helper" / "monitor").mkdir(parents=True, exist_ok=True)
+    env = {"HUGMESH_STUDIO_FLATPAK_USER_DIR": private,
+           "HUGMESH_STUDIO_FLATPAK_OUT": out,
+           "HUGMESH_STUDIO_FLATPAK_MIN_FREE_GIB": "0",
+           "XDG_RUNTIME_DIR": str(run_dir),
+           "DBUS_SESSION_BUS_ADDRESS": "unix:path=" + str(tmp_path / "no-such-bus"),
+           **_SMOKE_OK, **answers}
+    result = _run_script(tmp_path, path=fake_bin + os.pathsep + os.environ["PATH"], extra_env=env)
+    return result, _calls(log), private, out
 
-    calls = _calls(log)
+
+@needs_bash
+def test_script_sends_every_flatpak_call_to_the_private_directory(tmp_path):
+    """The whole script against a scripted flatpak, through all three smoke tests.
+
+    What the fake is told is what the real flatpak would be told: no call may reach the
+    user's own installation (--system, a missing --user, FLATPAK_USER_DIR not exported, or
+    the host-side wrapper not pinning it), the Builder must be granted the private
+    directory it cannot otherwise see and run with the build state directory as its
+    working directory and no --state-dir (with one, its cache ref is named after the
+    manifest's absolute path and an encrypted home refuses the name for a long checkout
+    path), the build must use the release workflow's flags, both validators must run on
+    the real files, and the exported launcher must be checked.
+    """
+    result, calls, private, out = _scripted_run(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "==> Done in" in result.stdout, result.stdout
+
     flatpak = [(seen, args) for tool, seen, args in calls if tool == "flatpak"]
     assert flatpak and flatpak[0][1] == "--default-arch", calls
     for seen, args in flatpak[1:]:
@@ -856,33 +1074,123 @@ def test_script_sends_every_flatpak_call_to_the_private_directory(tmp_path):
     assert ("desktop-file-validate", "-", os.path.realpath(DESKTOP)) in calls
     assert ("appstreamcli", "-", f"validate --no-net {os.path.realpath(METAINFO)}") in calls
 
+    work = os.path.join(out, "flatpak-work")
     builder = [shlex.split(a) for a in args if a.startswith("run ") and "org.flatpak.Builder" in a]
     assert len(builder) == 2, args                      # the round-trip probe, then the build
     for words in builder:
-        for grant in ("--user", f"--filesystem={private}", f"--env=FLATPAK_USER_DIR={private}"):
+        for grant in ("--user", f"--filesystem={private}", f"--env=FLATPAK_USER_DIR={private}",
+                      f"--cwd={work}"):
             assert grant in words, f"the Builder ran without {grant}: {words}"
     build = next(w for w in builder if "--command=flatpak-builder" in w)
     tail = build[build.index("org.flatpak.Builder") + 1:]
     for flag in ("--user", "--disable-rofiles-fuse", "--force-clean"):
         assert flag in tail, f"flatpak-builder ran without {flag} (the release workflow's flags): {tail}"
-    assert tail[-2:] == [os.path.join(out, "flatpak-work", "build-dir"), os.path.realpath(MANIFEST)]
+    assert not [w for w in tail if w.startswith("--state-dir")], (
+        f"flatpak-builder ran with --state-dir, which names its cache ref after the manifest's "
+        f"absolute path (see the script): {tail}")
+    assert tail[-2:] == [os.path.join(work, "build-dir"), os.path.realpath(MANIFEST)]
 
     studio_version = re.search(r'(?m)^__version__ = "([^"]+)"',
                                _read(os.path.join(STUDIO_ROOT, "hugmesh_studio", "__init__.py"))).group(1)
     bundle = os.path.join(out, f"hugmesh-studio-{studio_version}-x86_64.flatpak")
-    assert f"build-bundle {out}/flatpak-work/repo {bundle}.partial {APP_ID}" in args, args
+    assert f"build-bundle {work}/repo {bundle}.partial {APP_ID}" in args, args
     assert os.path.isfile(bundle) and os.path.isfile(bundle + ".sha256")
+    with open(bundle, "rb") as handle:
+        digest = hashlib.sha256(handle.read()).hexdigest()
+    assert _read(bundle + ".sha256").split() == [digest, os.path.basename(bundle)], (
+        "the .sha256 file does not name the bundle's own checksum in sha256sum's format")
+    assert f"{os.path.basename(bundle)}: OK" in result.stdout, (
+        "the checksum was written but never read back (sha256sum -c): a bundle that does "
+        "not match its own .sha256 would be installed and reported as built")
     assert f"install --user -y --noninteractive --bundle {bundle}" in args, args
-    assert args[-1] == f"run --user --command={_manifest_scalar('command')} {APP_ID} --print-specs"
+    assert not [a for a in args if a.startswith("uninstall")], "nothing was installed to uninstall"
+    assert f"run --user --command={_manifest_scalar('command')} {APP_ID} --print-specs" in args
+    smoke = [a for a in args if a.startswith("run ")]
+    assert "--command=python3" in smoke[-2] and "--nofilesystem=host" in smoke[-2], smoke
+    assert "--command=sh" in smoke[-1] and "--nofilesystem=host" in smoke[-1], smoke
+    assert smoke[-1].endswith(f"/app/share/icons/hicolor/256x256/apps/{APP_ID}.png"), smoke[-1]
+    assert f"ok       {private}/exports/share/applications/{APP_ID}.desktop" in result.stdout
 
     # The wrapper the Builder hands to the host must pin the private directory itself:
     # the host command does not inherit the Builder's environment.
-    wrapper = os.path.join(out, "flatpak-work", "bin", "flatpak-private")
+    fake_bin = str(tmp_path / "scriptedbin")
+    wrapper = os.path.join(work, "bin", "flatpak-private")
     assert os.access(wrapper, os.X_OK), "the host-side flatpak wrapper was not written"
+    log = tmp_path / "scripted-calls.log"
     subprocess.run([wrapper, "--version"], env={"PATH": fake_bin}, check=True,
                    capture_output=True, timeout=30)
     assert _calls(log)[-1] == ("flatpak", private, "--version"), (
         "the host-side wrapper does not pin FLATPAK_USER_DIR to the private directory")
+
+
+@needs_bash
+@pytest.mark.parametrize("answer, message", [
+    pytest.param("", "no output from --print-specs", id="nothing"),
+    pytest.param(" ", "printed only blank lines", id="blank"),
+    pytest.param("not json", "is not JSON", id="not-json"),
+    pytest.param("[]", "not a non-empty JSON object", id="not-an-object"),
+])
+def test_smoke_test_1_refuses_an_empty_or_wrong_print_specs(tmp_path, answer, message):
+    """An installed bundle whose --print-specs prints nothing is incomplete, not built."""
+    result, calls, _private, _out = _scripted_run(tmp_path, FAKE_FLATPAK_SPECS=answer)
+    assert result.returncode == 1, result.stderr
+    assert message in result.stderr, result.stderr
+    assert "Smoke test 1 of 3" in result.stderr, result.stderr
+    assert not [a for _t, _s, a in calls if "--command=python3" in a], "smoke test 2 ran anyway"
+
+
+@needs_bash
+@pytest.mark.parametrize("answer", ["", "Traceback (most recent call last): ImportError: PySide6",
+                                    "qt-ok binding=PyQt6 qt=6.8.3 platform=offscreen"],
+                         ids=["nothing", "traceback", "wrong-binding"])
+def test_smoke_test_2_refuses_a_qt_that_did_not_report_qt_ok(tmp_path, answer):
+    """--print-specs never loads Qt, so this is the only check that sees PySide6 missing,
+    and it has to report the one binding the licensing decision allows."""
+    result, calls, _private, _out = _scripted_run(tmp_path, FAKE_FLATPAK_QT=answer)
+    assert result.returncode == 1, result.stderr
+    assert "did not report qt-ok" in result.stderr, result.stderr
+    assert "Smoke test 2 of 3" in result.stderr, result.stderr
+    assert not [a for _t, _s, a in calls if "--command=sh" in a], "smoke test 3 ran anyway"
+
+
+@needs_bash
+@pytest.mark.parametrize("missing, count", [
+    pytest.param(f"/app/share/icons/hicolor/256x256/apps/{APP_ID}.png", 1, id="one-icon"),
+    pytest.param("none", 5, id="every-file"),
+])
+def test_smoke_test_3_refuses_an_install_with_a_file_missing(tmp_path, missing, count):
+    """The sandbox shell reports what it finds; a file it did not name is missing, and a
+    shell that names nothing (an empty answer) is five missing files, not a pass."""
+    result, _calls, _private, _out = _scripted_run(tmp_path, FAKE_FLATPAK_FILES=missing)
+    assert result.returncode == 1, result.stderr
+    assert f"{count} of 5 files are missing" in result.stderr, result.stderr
+    assert "Smoke test 3 of 3" in result.stderr, result.stderr
+    reported = re.findall(r"(?m)^MISSING  (\S+)$", result.stdout)
+    assert len(reported) == count and (missing in reported or missing == "none"), result.stdout
+
+
+@needs_bash
+def test_smoke_test_3_refuses_an_install_that_exported_no_launcher(tmp_path):
+    """flatpak writes the launcher into <private dir>/exports; the desktop sees the app
+    through that file, so an install that left none is not a usable install."""
+    result, _calls, private, _out = _scripted_run(tmp_path, FAKE_FLATPAK_EXPORT="none")
+    assert result.returncode == 1, result.stderr
+    assert f"did not export {APP_ID}.desktop into {private}/exports" in result.stderr, result.stderr
+    assert "Smoke test 3 of 3" in result.stderr, result.stderr
+
+
+@needs_bash
+def test_a_second_run_against_the_same_output_directory_is_refused(tmp_path):
+    """Two runs at once would fight over one build directory and one bundle file."""
+    fcntl = pytest.importorskip("fcntl")
+    out = tmp_path / "out"
+    out.mkdir()
+    with open(out / ".build-flatpak-local.lock", "w", encoding="utf-8") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result, calls, _private, _out = _scripted_run(tmp_path)
+    assert result.returncode == 1, result.stderr
+    assert "another build-flatpak-local.sh is already using" in result.stderr, result.stderr
+    assert [a for tool, _seen, a in calls if tool == "flatpak"] == ["--default-arch"], calls
 
 
 @needs_bash
@@ -900,6 +1208,59 @@ def test_script_without_a_session_bus_stops_before_it_installs_anything(tmp_path
     assert [a for tool, _seen, a in _calls(log) if tool == "flatpak"] == ["--default-arch"]
 
 
+@needs_bash
+def test_a_bad_free_space_setting_is_refused_under_its_own_step(tmp_path):
+    """``[ 671 -ge abc ]`` used to fail under the previous step's label ("Adding the
+    flathub remote"), so a first run that stopped for space named the wrong step."""
+    result, calls, _private, _out = _scripted_run(tmp_path, HUGMESH_STUDIO_FLATPAK_MIN_FREE_GIB="abc")
+    assert result.returncode == 1, result.stderr
+    assert "HUGMESH_STUDIO_FLATPAK_MIN_FREE_GIB must be a whole number" in result.stderr, result.stderr
+    assert "FAILED during: Checking free space" in result.stderr, result.stderr
+    assert not [a for _t, _s, a in calls if a.startswith("install")], "it installed anyway"
+
+
+@needs_bash
+@pytest.mark.parametrize("where", [
+    "private",              # the private directory itself
+    "private/out",          # inside it
+    "",                     # contains it (tmp_path itself)
+], ids=["same", "inside", "contains"])
+def test_build_output_may_not_live_in_the_private_flatpak_directory(tmp_path, where):
+    fake_bin, log = _fake_flatpak(tmp_path)
+    result = _run_script(
+        tmp_path, path=fake_bin + os.pathsep + os.environ["PATH"],
+        extra_env={"HUGMESH_STUDIO_FLATPAK_USER_DIR": str(tmp_path / "private"),
+                   "HUGMESH_STUDIO_FLATPAK_OUT": str(tmp_path / where)})
+    assert result.returncode == 1
+    assert "HUGMESH_STUDIO_FLATPAK_OUT" in result.stderr and "private flatpak directory" in result.stderr, result.stderr
+    assert not log.exists() or not log.read_text().strip()
+
+
+@needs_bash
+def test_script_refuses_an_incomplete_checkout_before_calling_flatpak(tmp_path):
+    """The script is run from a copy of the checkout with python-deps.json gone: the
+    file the manifest needs first, and the one that had never been committed."""
+    copy = tmp_path / "checkout" / "studio"
+    shutil.copytree(PACKAGING, copy / "packaging",
+                    ignore=shutil.ignore_patterns("wix", "build-dir", "repo", ".flatpak-builder"))
+    (copy / "hugmesh_studio").mkdir()
+    shutil.copy(os.path.join(STUDIO_ROOT, "hugmesh_studio", "__init__.py"), copy / "hugmesh_studio")
+    os.remove(copy / "packaging" / "flatpak" / "python-deps.json")
+    fake_bin, log = _fake_flatpak(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    result = subprocess.run(
+        [BASH, str(copy / "packaging" / "build-flatpak-local.sh")],
+        env={"PATH": fake_bin + os.pathsep + os.environ["PATH"], "HOME": str(home),
+             "HUGMESH_STUDIO_FLATPAK_USER_DIR": str(tmp_path / "private"),
+             "HUGMESH_STUDIO_FLATPAK_OUT": str(tmp_path / "out")},
+        capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1, result.stderr
+    assert "missing" in result.stderr and "python-deps.json" in result.stderr, result.stderr
+    assert "complete checkout" in result.stderr, result.stderr
+    assert not log.exists() or not log.read_text().strip(), "flatpak was called first"
+
+
 def test_script_takes_its_facts_from_the_manifest_not_from_itself():
     """Bump the runtime in the manifest and the script must follow, so it holds no copy."""
     code = "\n".join(line for line in _read(SCRIPT).splitlines()
@@ -908,3 +1269,8 @@ def test_script_takes_its_facts_from_the_manifest_not_from_itself():
     for literal in (f"//{version}", "org.kde.", _manifest_scalar("command") + " "):
         assert literal not in code, (
             f"build-flatpak-local.sh hard-codes {literal!r}; read it from the manifest")
+    # ``runtime_version=6.8`` in place of the manifest read has none of those literals.
+    bare = re.search(rf"(?<![\d.]){re.escape(version)}(?![\d.])", code)
+    assert not bare, (
+        f"build-flatpak-local.sh holds the runtime version {version!r} as a number of its "
+        "own; read it from the manifest")

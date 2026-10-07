@@ -134,6 +134,10 @@ for protected in "$(realpath -m -- "${XDG_DATA_HOME:-$HOME/.local/share}/flatpak
         die "HUGMESH_STUDIO_FLATPAK_USER_DIR ($user_dir) is, is inside, or contains $protected. This script installs into a private directory so your own flatpak data is never touched; pick another one."
     fi
 done
+# The build state is not flatpak data: keep it out of the directory flatpak manages.
+if nested "$out_dir" "$user_dir"; then
+    die "HUGMESH_STUDIO_FLATPAK_OUT ($out_dir) is, is inside, or contains the private flatpak directory ($user_dir); keep the build output in a directory of its own."
+fi
 
 # ---- facts come from the manifest and __init__.py, never from this script --------------
 manifest_value() {   # the value of a top-level `key: value` line, quotes and comment stripped
@@ -189,8 +193,9 @@ printf 'private dir:    %s\n' "$user_dir"
 printf 'output dir:     %s\n' "$out_dir"
 
 # ---- 1. the private flatpak directory --------------------------------------------------
-# Skipped when the remote is already there, so a re-run needs no network once the
-# runtimes are installed (remote-add --if-not-exists still fetches the .flatpakrepo first).
+# Skipped when the remote is already there (remote-add --if-not-exists still fetches the
+# .flatpakrepo first). A re-run still goes to flathub: the bundle install at step 5 fetches
+# the runtime's related extensions (the GL drivers) from the remote every time.
 remotes="$(flatpak remotes --user --columns=name)"
 case $'\n'"$remotes"$'\n' in
     *$'\nflathub\n'*) ;;
@@ -206,10 +211,12 @@ for ref in "${wanted_refs[@]}"; do
     flatpak info --user "$ref" >/dev/null 2>&1 || missing_refs+=("$ref")
 done
 
+step "Checking free space"
 min_free="${HUGMESH_STUDIO_FLATPAK_MIN_FREE_GIB:-}"
-if [ -z "$min_free" ]; then
-    if [ "${#missing_refs[@]}" -gt 0 ]; then min_free=14; else min_free=4; fi
-fi
+case "$min_free" in
+    "") if [ "${#missing_refs[@]}" -gt 0 ]; then min_free=14; else min_free=4; fi ;;
+    *[!0-9]*) die "HUGMESH_STUDIO_FLATPAK_MIN_FREE_GIB must be a whole number of GiB, not '$min_free'" ;;
+esac
 for dir in "$user_dir" "$out_dir"; do
     have="$(free_gib "$dir")"
     [ "$have" -ge "$min_free" ] \
@@ -254,7 +261,13 @@ wrapper="$work/bin/flatpak-private"
     printf 'exec %s "$@"\n' "$(sh_quote "$flatpak_bin")"
 } > "$wrapper"
 chmod 755 "$wrapper"
-builder=(flatpak run --user
+# The Builder runs with $work as its working directory and no --state-dir, so its state
+# is $work/.flatpak-builder (as in the release workflow's in-tree build). With --state-dir
+# it would name its cache branch after the manifest's ABSOLUTE path instead, one file
+# under refs/heads whose name grows with the checkout path, and on an encrypted home
+# (eCryptfs allows 143 bytes per file name) any checkout path over 77 bytes then failed
+# with a bare "File name too long" after the whole toolchain had been installed.
+builder=(flatpak run --user --cwd="$work"
          --filesystem="$user_dir" --filesystem="$out_dir"
          --env=FLATPAK_USER_DIR="$user_dir" --env=FLATPAK_BINARY="$wrapper")
 # One cheap round trip proves the whole route (Builder starts, session helper answers,
@@ -266,7 +279,7 @@ fi
 step "Building $app_id (downloads the pinned PySide6 wheels, installs the app, renders the icons)"
 "${builder[@]}" --command=flatpak-builder org.flatpak.Builder \
     --user --disable-rofiles-fuse --force-clean \
-    --state-dir="$work/state" --repo="$work/repo" "$work/build-dir" "$manifest" \
+    --repo="$work/repo" "$work/build-dir" "$manifest" \
     2>&1 | tee "$work/build.log"
 
 # ---- 4. the bundle -----------------------------------------------------------------------------
@@ -336,19 +349,24 @@ printf '%s\n' "$qt_out"
 case "$qt_out" in *"qt-ok binding=PySide6"*) ;; *) die "the Qt smoke test did not report qt-ok" ;; esac
 
 step "Smoke test 3 of 3: the launcher, metadata and icons are installed and exported"
-# The script in single quotes is meant for the shell INSIDE the sandbox, which expands
-# $1, $2 and $f from the two arguments that follow it.
+wanted_files=("/app/bin/$app_command"
+              "/app/share/applications/$app_id.desktop"
+              "/app/share/metainfo/$app_id.metainfo.xml"
+              "/app/share/icons/hicolor/16x16/apps/$app_id.png"
+              "/app/share/icons/hicolor/256x256/apps/$app_id.png")
+# The shell INSIDE the sandbox prints the paths it finds, one per line, and this side
+# decides: a file it did not print is missing, and so is every file if it printed nothing.
 # shellcheck disable=SC2016
-flatpak run --user --nofilesystem=host --command=sh "$app_id" -c '
-    status=0
-    for f in "/app/bin/$1" \
-             "/app/share/applications/$2.desktop" \
-             "/app/share/metainfo/$2.metainfo.xml" \
-             "/app/share/icons/hicolor/16x16/apps/$2.png" \
-             "/app/share/icons/hicolor/256x256/apps/$2.png"; do
-        if [ -e "$f" ]; then echo "ok       $f"; else echo "MISSING  $f"; status=1; fi
-    done
-    exit $status' _ "$app_command" "$app_id"
+present_files="$(flatpak run --user --nofilesystem=host --command=sh "$app_id" -c '
+    for f in "$@"; do [ -e "$f" ] && echo "$f"; done; exit 0' _ "${wanted_files[@]}")"
+missing_files=0
+for f in "${wanted_files[@]}"; do
+    case $'\n'"$present_files"$'\n' in
+        *$'\n'"$f"$'\n'*) printf 'ok       %s\n' "$f" ;;
+        *) printf 'MISSING  %s\n' "$f"; missing_files=$((missing_files + 1)) ;;
+    esac
+done
+[ "$missing_files" -eq 0 ] || die "$missing_files of ${#wanted_files[@]} files are missing from the installed app"
 [ -f "$user_dir/exports/share/applications/$app_id.desktop" ] \
     || die "flatpak did not export $app_id.desktop into $user_dir/exports"
 printf 'ok       %s\n' "$user_dir/exports/share/applications/$app_id.desktop"
