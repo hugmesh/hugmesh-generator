@@ -692,16 +692,11 @@ class QemuPage(QtWidgets.QWizardPage):
         try:
             picked = self.selected_build_mode()
             inherited = getattr(self, "_inherited_mode", "")
-            title = IMAGE_MODE_TITLES.get(picked, picked)
-            if picked == inherited:
-                text = (f"Preselected: {title} — the build mode this Studio session "
-                        "is already carrying (from an earlier flow or a loaded "
-                        "configuration), NOT a choice made for this test. Pick the "
-                        "build these tests should run against.")
-            else:
-                text = (f"Next continues into the {title} build (the session was "
-                        f"carrying {IMAGE_MODE_TITLES.get(inherited, inherited)}).")
-            self.build_mode_note.setText(text)
+            # ONE sentence for both faces (the TUI QEMU screen's build sub-state
+            # renders the same core string — decision 71 = A).
+            self.build_mode_note.setText(emulation.build_first_mode_note(
+                IMAGE_MODE_TITLES.get(picked, picked),
+                IMAGE_MODE_TITLES.get(inherited, inherited)))
         except Exception:                    # noqa: BLE001 — PyQt6 qFatals on a slot raise
             pass
 

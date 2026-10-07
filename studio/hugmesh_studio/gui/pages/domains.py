@@ -755,8 +755,32 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
             self._add_own(own, c.brand_title, c.cluster_domain_services,
                           reviewed=(own in reviewed_names(c)))
 
+    def forget_rows(self) -> None:
+        """Drop the table: the configuration's domain rows were REPLACED under this
+        page on the SAME object, so the identity check above cannot see it.
+
+        The one caller today is the "Create nodes for local cloud" gate
+        (``localcloud_nodes.py``): its import writes a saved mesh's domains into
+        ``wiz.cfg`` in place, and a table filled EARLIER in the same Studio session (a
+        "Mesh node" walk, or an earlier import, then Back to the main menu — a
+        ``restart()`` on the same object) would otherwise survive into the next
+        ``validatePage`` and rebuild ``cfg.domains`` from the stale rows — dropping the
+        imported domains, and building an unrelated flow's row into the local cloud's
+        images (post-merge review of PR #644). Until the page is next entered it also
+        WRITES NOTHING (``validatePage`` below): ``collect_all()`` re-runs every
+        visited page's validatePage, and an emptied table must not be able to erase
+        the rows the import just wrote."""
+        self.table.setRowCount(0)
+        self._cfg_seen = None
+
     def validatePage(self):
         """Rebuild ``cfg.domains`` from the table.
+
+        WRITES ONLY TO THE CONFIG IT WAS FILLED FROM (the rule ``DomainServicesBody.
+        _record`` follows): after ``forget_rows`` — or before the page was ever entered
+        — there is no table to rebuild from, and a ``collect_all()`` re-run reaching
+        this method must leave ``cfg.domains`` exactly as the import (or the loader)
+        wrote it rather than replace it with an empty list.
 
         THE SERVICES COLUMN IS A MIRROR, NOT A STORE (#495). The Domain services step
         runs AFTER this page and writes ``cfg.domains[].optional_services``; this
@@ -777,6 +801,8 @@ class DomainsPage(QtWidgets.QWizardPage, DomainsTableBody):
         table stays the sole writer of WHICH domains exist, their titles, images,
         sign-in and base CA. The own row (row 0) is never written: it is not a
         ``domains`` row, so an untouched mesh flow still emits none."""
+        if self.wiz.cfg is not self._cfg_seen:
+            return True                     # no table for THIS config yet: write nothing
         out, base_ca = self.rows()
         self.wiz.cfg.domains = out
         # REBUILT from the table, never merged into what was there: a renamed or

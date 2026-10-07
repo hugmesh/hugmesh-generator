@@ -284,3 +284,84 @@ def test_tui_apply_gate_without_domains_imports_the_apex_only():
     j = journey.Journey(".")
     lc.apply_gate(j, "mesh.example.org", [])
     assert j.cfg.domains == [] and j.cfg.additional_domains is False
+
+
+# ── post-merge review of PR #644 (decision 71 = A): the import REPLACES what an earlier
+# flow left, and says which saved rows it will not take — on this face too ─────────────
+from hugmesh_studio.core.config import Domain  # noqa: E402
+
+
+def _walk_to_build(j):
+    """From the consented gate (the idp step) to the Build screen, taking every default
+    and offering the worklist's first row."""
+    assert j.slug == "idp"
+    j.feed("")                                      # idp -> worklist
+    assert j.slug == "worklist"
+    j.feed("1")                                     # offer the first row ...
+    for _ in range(40):
+        if j.slug == "build" or j.done:
+            break
+        if j.slug == "domain_services":
+            # Enter would finish the step on its first domain; "n" shows the next one,
+            # and a domain is recorded as walked when it is shown.
+            for _ in range(len(j.cfg.domains) + 1):
+                j.feed("n")
+        j.feed("")                                  # ... and take every default after it
+    assert j.slug == "build", f"the walk stopped on {j.slug!r}"
+
+
+def test_tui_journey_builds_exactly_the_saved_meshs_domains(tmp_path, monkeypatch):
+    """A plain "Mesh node" walk of the same session left a hand-added row in the one
+    ImageConfig the Journey keeps. The saved mesh's record is the whole domain set of
+    the nodes that JOIN it, so the Build screen — and the manifest the nodes get — must
+    carry its two rows and not that third one."""
+    _save_n_domains(tmp_path)
+    monkeypatch.setattr(lc, "local_mesh_identity", _REAL_IDENTITY)
+    j = journey.Journey(_GEN)
+    j.cfg.domains = [Domain(name="x.example", title="X")]
+    j.cfg.additional_domains = True
+    j.feed("")                                      # welcome -> mode
+    j.feed("2")                                     # Create nodes for local cloud
+    j.feed("y")                                     # the consent
+    assert [d.name for d in j.cfg.domains] == ["a.example", "b.example"]
+    _walk_to_build(j)
+    assert [d.name for d in j.cfg.domains] == ["a.example", "b.example"]
+    text = "\n".join(j.lines())
+    assert "domains   2 (own Casdoor: b.example)" in text
+    assert "x.example" not in text
+    assert [d["name"] for d in j.cfg.mesh_manifest()["domains"]] == \
+        ["a.example", "b.example"]
+    assert "will refuse" not in text                # the walk recorded every domain
+
+
+def _save_hand_edited(tmp_path):
+    cfg = LocalMeshBootstrapConfig(
+        env="prod", cluster_domain="saved.example.org", out_dir=str(tmp_path / "keys"),
+        domains=({"name": "Bad.Example", "title": "", "idp": "superdomain",
+                  "optional_services": []},
+                 {"name": "c.example", "title": "", "idp": "nonsense",
+                  "optional_services": []},
+                 {"name": "b.example", "title": "Beta", "idp": DOMAIN_IDP_OWN,
+                  "optional_services": []}),
+        own_idp_domains=("b.example",))
+    rec = sm.SavedMesh(id=sm.new_id(), label="hand-edited", generator_dir=_GEN,
+                       hostname=socket.gethostname(), config=cfg.to_dict())
+    assert sm.save(rec)
+
+
+def test_tui_gate_says_which_saved_rows_it_will_not_import(tmp_path, monkeypatch):
+    """A record edited by hand: a row whose name is no lowercase hostname, or whose
+    sign-in the configuration does not know, is not imported — and the page the
+    operator reads BEFORE consenting says so by name, instead of listing it."""
+    _save_hand_edited(tmp_path)
+    monkeypatch.setattr(lc, "local_mesh_identity", _REAL_IDENTITY)
+    j = journey.Journey(_GEN)
+    j.feed("")
+    j.feed("2")
+    text = "\n".join(j.lines())
+    assert "Bad.Example — NOT imported: not a domain name" in text
+    assert ("c.example — NOT imported: sign-in 'nonsense' is not one of "
+            "superdomain, own") in text
+    assert "b.example — own Casdoor" in text
+    j.feed("y")
+    assert [d.name for d in j.cfg.domains] == ["b.example"]
