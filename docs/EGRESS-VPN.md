@@ -224,16 +224,6 @@ v1 keeps akkoma/tuwunel HTTP federation on the existing Squid egress-proxy; the
 VPN is primarily for coturn UDP + made-public egress, and akkoma/tuwunel egress is
 loosened onto the VPN only on an explicit assignment.
 
-## Desktop images: `--egress-vpn FILE`
-
-This is a different path from the node service above. `build-x86-host-stage4.sh
---egress-vpn FILE` bakes a WireGuard `.conf`, an OpenVPN `.ovpn` or an NM
-`.nmconnection` into a **desktop** image. First boot imports it into
-NetworkManager, and the user can add, remove or toggle it. `--egress-vpn-locked`
-makes it autoconnect and keeps the user from removing it. A non-desktop role
-ignores the flag and installs nothing for it. See
-[`STANDALONE-DESKTOP.md`](STANDALONE-DESKTOP.md).
-
 ## Type-sniff
 
 `active.conf` is type-sniffed at start: an `[Interface]`/`[Peer]` config →

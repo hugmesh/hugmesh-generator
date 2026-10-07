@@ -95,7 +95,7 @@ stamped from the **node's residency**, never the caller (`[FIX-NODEFAULT]`).
   `is_exclusive` pool already has an active assignment.
 - The node-agent's `df` on the attached disk is **authoritative** over the operator's
   `reserved_bytes` claim (verified at reconcile).
-- `is_exclusive` defaults true for video (one service per pool).
+- `is_exclusive` is one service per pool. The admin UI defaults it to true for video pools (`AttachPoolRequest`).
 
 ---
 

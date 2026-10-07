@@ -48,18 +48,23 @@ explicitly NOT a git-committing reconciler, docs/OPTIONAL-SERVICES.md §7.1):
 * build time — stage4 builders render the KEYS-manifest `domains[]` (with
   `idp`) into the element list at bake (follow-up, beside
   `_opt_render_installed_services`);
-* runtime — the admin-bff DomainReconciler (cross-repo, clone of
-  OptionalServiceReconciler, ships dark) mirrors the #118 domain-registry rows.
+* runtime — planned: an admin-bff `DomainReconciler` (cross-repo, a clone of
+  OptionalServiceReconciler, shipping dark) would mirror the #118 domain-registry
+  rows. It does not exist: admin-bff `main` has no such class (2026-10-07). What does
+  exist is the registry side: each `DomainEntry` in the signed export now carries
+  `idp`, `casdoorOrg`, `nsPrefix`, `appsetRegistered` and the MCS pair, and
+  `hugmesh-domain-reconcile` reads `idp` as a closed enum (`superdomain|own`).
 
 Both roots (`app-of-apps.yaml`, `00-app-of-apps-waved.yaml`) carry the
 `casdoor-domains` ignoreDifferences + `RespectIgnoreDifferences` keystone;
 without it selfHeal reverts every runtime write.
 
 MCS allocation: every instance needs TWO cluster-unique categories
-(`selinuxLevel`, `selinuxLevelPg`) — docs/SECURITY.md §3. The element writer
-owns the allocation (deterministic per-slug from a reserved range is the
-planned rule; the base's placeholders s0:c85/s0:c86 are never meant to go live
-unpatched).
+(`selinuxLevel`, `selinuxLevelPg`) — docs/SECURITY.md §3. The admin-bff
+`domain_registry` writer allocates the pair at insert (`McsCategoryAllocator`;
+operator DECISION 29c) under a uniqueness constraint, and exports both values on
+the `DomainEntry`. The element writer must carry them into the element. The base's
+placeholders s0:c85/s0:c86 are never meant to go live unpatched.
 
 ## Lane 2 — tenant set (brand repo)
 
@@ -105,9 +110,10 @@ per-domain, loud.
 ## Open follow-ups (tracked, not shipped here)
 
 * stage4 `_domains_render_appset_elements()` build-time bake of the element
-  list (+ the deterministic MCS allocator).
-* admin-bff DomainReconciler (cross-repo) + the #118 DomainEntry `idp` field and
-  `appsetRegistered` ack reuse.
+  list. The function does not exist yet. The MCS allocator has landed in
+  admin-bff.
+* admin-bff DomainReconciler (cross-repo). The #118 DomainEntry `idp` field has
+  landed; the `appsetRegistered` ack reuse is still open.
 * per-domain gateway/BFF registry env threading (build-time + runtime rollout;
   the row-restamp gate above).
 * `origin` env-interpolation validation against casbin/casdoor:3.80.0 (the

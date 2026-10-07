@@ -49,9 +49,9 @@ passthrough; monotonic + indeterminate-until-first-banner for x86/rpi5; hanging
 endpoint stays bounded; end-to-end `forward_and_wait` FIFO drive proving no
 deadlock, verbatim Job-log echo, and exit-code preservation).
 
-## admin-bff-api companion (shipped in the admin-bff-api repo)
+## admin-bff-api companion (spec only — NOT changed here)
 
-The other half has landed on admin-bff-api `main`. It is not part of this repo.
+This repo does not change admin-bff-api. The other half has since landed on admin-bff-api `main`.
 
 1. **Job env.** `src/main/resources/jobs/image-gen-job.yaml` sets `PROGRESS_URL` to
    `https://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8443/bff/internal/image-builds/${BUILD_ID}/progress`,
@@ -67,7 +67,7 @@ The other half has landed on admin-bff-api `main`. It is not part of this repo.
    stay with the terminal ingest. It turns the frame into an SSE event with
    `done=false` on the stream the admin UI already reads
    (`GET /bff/admin/image-builds/{id}/events`). A null percent becomes `0`. The
-   message reads `phase i/N: label`. An unknown or finished build is a no-op.
+   message reads `phase i/N: label`. An unknown or reaped build is a no-op.
 
 Not done there, so do not rely on it: the endpoint does not compare `buildId` in
 the body to `{id}`, does not store the latest frame, and does not drop a
