@@ -1,6 +1,33 @@
 # FINDINGS — ARM firewalld unresolvable (introspection chain) + sendfile triage
 
-Investigation branch: `fix/arm-firewalld-installable` (off origin/main 49f70b88).
+> **Status on 2026-10-07 (`origin/main` @ `cbf5d9a6`). Read this before the rest.**
+> This is the 2026-07-30 to 2026-08-05 record. Two of its conclusions no longer hold.
+>
+> 1. **The firewalld fix (§6, §8) was applied, then reverted.** The compile-side
+>    bet in §6 lost. The real rpi5 resume build of 2026-08-05 built 45 of the 52
+>    chain packages, then `glib-2.88.2` died twice in `src_configure`, inside its
+>    bundled gobject-introspection bootstrap. #513 (`b06b9036`) therefore deleted
+>    `specs-rpi5/portage/package.use/firewalld-introspection`, removed
+>    `net-firewall/firewalld` from `specs-rpi5/portage/packages.list` behind a
+>    comment block, and rewrote section B of `tests/requested-atoms-resolvable.sh`
+>    to pin the exclusion. That is Candidate C (§5), the fallback §6 named. Today no
+>    ARM platform requests firewalld; host firewalling on rpi5 is nftables, iptables
+>    and the `hugmesh-firewall-reconcile` OpenRC service. The gate now passes 25/0
+>    (it passed 16/0 when §8 was written).
+> 2. **The sendfile noise (§7, §8e) is no longer report-only.** A pinned patch to
+>    portage's `file_copy.py` (`scripts/patch-portage-file-copy.py`, `cdcf6e1b`,
+>    2026-08-19) silences the traceback for the expected errnos. It is applied to
+>    the builder image and to every sysroot, and re-applied in the x86 chroot after
+>    portage updates itself (`f6b6dd20`, 2026-08-27). The patch does not fix the
+>    cause: eCryptfs still has no splice write.
+>
+> The commits `bfa9d61` and `b6eaa5d` named in §8 are not in `main`'s history; the
+> work was squashed into `a7b2842d` (#512). The build logs and the bench session
+> `out/sessions/20260730-210421-a6d331` are gone (`out/sessions` now holds one
+> other session), so every count taken from them is UNVERIFIED and cannot be
+> re-measured. File and line numbers are as of that date.
+
+Investigation branch: `fix/arm-firewalld-installable` (off origin/main 49f70b88; merged as #512, then partly reverted by #513, see the status above).
 Test bench (READ-ONLY): `out/sessions/20260730-210421-a6d331` — the operator's failed
 2026-07-30 21:04 8-image mesh build. All resolution probes below are
 `emerge --pretend` only, run with `PORTAGE_CONFIGROOT` pointed at scratch COPIES of the
@@ -249,7 +276,7 @@ specs-x86/portage/packages.list:29:net-firewall/firewalld
 ```
 
 Of the 9 ARM platforms (frite, jetson, orangepi-zero2/zero2w/zero3, orangepi3-lts,
-orangepi4-lts, orangepi5, rpi5), **ONLY rpi5 requests firewalld at all** — the other
+orangepi4-lts, orangepi5, rpi5), **ONLY rpi5 requested firewalld at all** (as of 2026-08-05; since #513 none does) — the other
 eight never listed it (their firewall posture is nftables-only or nothing; a separate
 fleet-consistency observation, out of scope). So a Candidate-C degradation would touch
 only `specs-rpi5/portage/packages.list` (+ builder comment + gate annotation), i.e.
@@ -350,7 +377,7 @@ code cites bugs.gentoo.org/828844) but `_do_sendfile` has NO equivalent — EINV
 sendfile-less dst fs is "unexpected" and traceback-logged although `copyfile()`
 recovers by design. No specific upstream issue number identifiable from the log alone.
 
-**Fix small: NO — report only.** The unambiguous cause is portage-upstream noise +
+**Fix small: NO — report only** (as of 2026-08-05; patched on 2026-08-19, see the status at the top). The unambiguous cause is portage-upstream noise +
 eCryptfs lacking sendfile; the honest in-repo remedies are either (a) the operator
 moving `out/` off eCryptfs (mirrors the existing 143-char workaround, but relocating
 the merge TARGET is an operator storage decision, not a small code fix), or (b)
@@ -389,7 +416,7 @@ logs ~10x and slow every merge to the shutil.copyfile path."
 
 ## 8. FIX PHASE (2026-08-05) — implemented, proven, gated
 
-Chosen: **Candidate A**. Commits: `bfa9d61` (the fix), `b6eaa5d` (the gate).
+Chosen: **Candidate A** (reverted by #513, see the status at the top). Commits: `bfa9d61` (the fix), `b6eaa5d` (the gate); both were squashed into `a7b2842d` (#512).
 
 ### 8a. The fix
 
@@ -491,7 +518,7 @@ Mutation proofs (each numstat-confirmed, then restored and re-run green):
 
 ### 8e. Sendfile
 
-Per §7: **report-only, no code change** — the storm is non-fatal portage noise
+Per §7 (as of 2026-08-05): **report-only, no code change** (a pinned patch followed on 2026-08-19, see the status at the top) — the storm is non-fatal portage noise
 (eCryptfs destination lacks sendfile; `copyfile()` falls back to
 `shutil.copyfile` and every merge completes). The honest remedies (move `out/`
 off eCryptfs, or patch/pin portage in the builder image) are operator/storage
