@@ -11,20 +11,21 @@ There are two independent axes; pick one from each:
 | Axis | Options |
 | --- | --- |
 | **Environment** | `test` — LAN-only / offline (issuer `http://localhost:8000`, safe default) · `prod` — a real public domain (the production build) |
-| **Public reach** | not exposed (LAN only) · **tor-onion** (v3 `.onion`) · **duckdns** (Dynamic DNS) · **cloudflare-tunnel** · **byo-domain** · **router-portforward** |
+| **Public reach** | not exposed (LAN only) · **tor-onion** (v3 `.onion`) · **duckdns** (Dynamic DNS) · **cloudflare-tunnel** · **byo-domain** · **router-portforward** · **tailscale-funnel** |
 
 ---
 
 ## 1 — Generate everything and serve it locally
 
-**Studio → Local Mesh → “Generate && start a NEW local mesh from scratch”**
-(or the ncurses menu → *Local mesh* → *bootstrap*, or `make` — see
-[LOCAL-STACK.md](LOCAL-STACK.md)).
+**Studio → Local Docker mesh → Generate** (nine steps; the last one holds the
+**Generate && start** button), or the ncurses menu → *Local mesh — from scratch*,
+or `make mesh-bootstrap-plan` then `make mesh-bootstrap-up`. See
+[LOCAL-STACK.md](LOCAL-STACK.md).
 
 This one action:
 
 1. mints **all** credentials offline (Casdoor/DB/telemetry secrets + a fresh platform
-   **superadmin**, password written only to a gitignored `secrets.json` — never logged);
+   **superadmin**, password written only to the gitignored `keys-out/vault/secrets.json` — never logged);
 2. brings up the **full platform stack** from `tests/stack/compose.local.yaml`
    (Casdoor + DB + gateway + every BFF + the UIs) via `make stack-up`;
 3. **seeds** the superadmin so the login actually works.
@@ -32,7 +33,7 @@ This one action:
 Choose the **Environment**:
 
 - **`test`** — LAN-only, no public domain, no tailnet. The safe default; the front door
-  is served locally (e.g. `http://localhost:8080`).
+  is served locally at `https://localhost:8488` (plain `http://localhost:8088` also works).
 - **`prod`** — the **production build**: a real `cluster_domain` (required) drives the
   public Casdoor issuer, and a tailnet/headscale **auth key** attaches the mesh overlay.
 
@@ -69,9 +70,11 @@ menu, and Studio:
 - **`cloudflare-tunnel`** — a Zero-Trust tunnel with autofilled public hostnames, no
   inbound ports.
 - **`byo-domain`** / **`router-portforward`** — bring your own domain / forward a port.
+- **`tailscale-funnel`** — public HTTPS on the node's `<node>.<tailnet>.ts.net` name.
+  It needs Tailscale proper: the default self-hosted headscale does not implement Funnel.
 
 Go Live writes the provider’s config (tokens land 0600 in the keys tree, never in argv or
-logs) and tells you the exact public address.
+logs) and tells you the exact public address. Its dry run is `make go-live`.
 
 ---
 
@@ -84,7 +87,7 @@ logs) and tells you the exact public address.
         mint all creds ──►│──► make stack-up ──► make stack-seed
                           │        (full platform stack, superadmin seeded)
                           ▼
-                 SERVED LOCALLY  ── http://localhost:8080
+                 SERVED LOCALLY  ── https://localhost:8488
                           │
                           │   (optional) Studio · Go Live
                           ▼
