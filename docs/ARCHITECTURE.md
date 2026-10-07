@@ -3,7 +3,8 @@
 Everything connects **behind `hugmesh.net`** through per-namespace
 Spring Cloud Gateways that validate a single internal Casdoor OAuth2 JWT.
 Cloudflare maps the public `hugmesh.net` / `hugmesh.games` names onto
-those gateways (configured later, out of scope here).
+those gateways through an opt-in Cloudflare Tunnel (`apps/12-cloudflared.yaml`),
+present only in `ENV=prod` images; the builders prune it from `ENV=test` images.
 
 ## Nodes & images
 
@@ -12,7 +13,7 @@ those gateways (configured later, out of scope here).
 | `pki` | `build-rpi5-stage4.sh --role pki` | aarch64 (RPi 5) | **Kubernetes control plane** + identity: headscale (mesh control), Casdoor, Cassandra, `hugmesh-pki-gateway` |
 | `backend` | `build-rpi5-stage4.sh --role backend` | aarch64 (RPi 5) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs, databases, `hugmesh-be-gateway` |
 | `frontend` | `build-rpi5-stage4.sh --role frontend` | aarch64 (RPi 5) | `hugmesh.net` Angular host federating `hugmesh-matrix-ui` + `hugmesh-mastodon-ui` + `hugmesh-wiki-ui` + login/admin/mod/user/forum remotes, `hugmesh-fe-gateway` |
-| `host` | `build-x86-host-stage4.sh` | x86_64 (desktop/server) | GPU worker: ArgoCD, GitLab/Runner/binhost (devops), `hugmesh.games`, owncast + tube (GPU-dependent video), heavy datastores (Kafka/ClickHouse/Uptrace), local-path/node-storage default (Mesa/Vulkan via `/dev/dri`) |
+| `host` | `build-x86-host-stage4.sh` (default `--role backend-gpu`) | x86_64 (desktop/server) | GPU worker: ArgoCD, GitLab/Runner/binhost (devops), `hugmesh.games`, owncast + tube (GPU-dependent video), heavy datastores (Kafka/ClickHouse/Uptrace), local-path/node-storage default (Mesa/Vulkan via `/dev/dri`) |
 | `edge-ai` | `build-x86-host-stage4.sh --role edge-ai` (x86_64) **/** `build-jetson-stage4.sh --role edge-ai` (Jetson Orin Nano, arm64 crossdev — the x86 builder is amd64-only and cannot produce a Jetson image) | x86_64 / Jetson Orin Nano (arm64) | GPU **inference** node: Ollama serving an OpenAI-compatible model API (`/v1`) to the mesh over k8s (ClusterIP) + tailnet (`ai.<domain>` gateway route); NVIDIA proprietary + CUDA + `nvidia-device-plugin` (which also makes the GPU schedulable for owncast/coturn/tube voice+video). Model library is the `edge-ai-models` ConfigMap. See [EDGE-AI.md](EDGE-AI.md) |
 
 All nodes are hardened Gentoo, join one Kubernetes cluster, sit on one headscale
@@ -90,7 +91,7 @@ flowchart TD
     end
 
     subgraph ROADMAP["Roadmap — genuinely NOT done"]
-        KINDE2E["kind SSO e2e: harness shipped, NOT green (16 cluster blockers)"]
+        KINDE2E["kind SSO e2e: login path green 2026-08-06 (specs 01, 27); harness gaps still open"]
         MFAFLIP["MFA: the live-cluster operator flip (MFA-ROLLOUT.md)"]
         ENFORCE["SELinux enforcing (nodes boot permissive)"]
         SFU["Group-call SFU — does not exist"]
@@ -121,8 +122,9 @@ flowchart TD
 - **`ExternalAuthHeaderFilter`** appends `External-Authorization` /
   `External-Auth-Provider` / `External-Auth-Id` so downstreams see the outside
   identity without re-decoding tokens.
-- **Public paths** (`/api/auth`, `/api/login`, `/api/registration`) allow
-  Google-federated sign-up; everything else is authenticated. **Casdoor exposes
+- **Public paths** (`/api/auth`, `/api/login`, `/api/registration`, plus
+  `/bff/login` and a few other pre-login paths such as password reset and the public theme) allow
+  Google-federated sign-up and the native login; everything else is authenticated. **Casdoor exposes
   no browser-facing login UI** — the browser hits the platform's own native form
   and `/bff/login`; Casdoor is reachable only in-cluster.
 - Routes per gateway are rendered into an `application-routes.yml` ConfigMap and
@@ -150,9 +152,9 @@ the cluster** (there is no public ingress to Casdoor; the browser never sees it)
 ## Authentication / SSO (BFF JWT custody)
 
 > **State convention:** ✅ shipped = merged to `main` · 🚧 in-flight = code on an
-> open branch/PR, not yet merged · 🔭 planned = design-complete, no code. The whole
-> ensemble **ships dark** behind flags that default off/blank, so a default
-> deployment is byte-identical to today.
+> open branch/PR, not yet merged · 🔭 planned = design-complete, no code. The SSO
+> flags are lit by default on `main` (see "Safety-flag posture" below); only the
+> secret values behind two of them default to empty.
 
 **The mandate:** SSO login is a **native, first-party form** — the browser POSTs
 username/password (and, when challenged, an MFA passcode) to `user-bff`
@@ -244,77 +246,72 @@ sequenceDiagram
 (`app.bff.oidc.enabled` on user-bff/auth-core · `app.bff.custody-key` on
 `BffCustodyCipher` · `app.session.cookie.enabled` for the `bff_` cookie ·
 `hugmesh.gateway.bff-exchange.enabled` for the gateway swap ·
-`__SNAP_OIDC_ENABLED__` on login-ui), but **none of them ship dark on `main`**:
-`specs/cluster/manifests/{user,admin,mod}-bff-api/deployment.yaml` bake
-`APP_BFF_OIDC_ENABLED` / `APP_SESSION_COOKIE_ENABLED` / `APP_BFF_EXCHANGE_ENABLED`
-`"true"` by default, and `social-ui/deployment.yaml` bakes `SNAP_OIDC_ENABLED`
-`"true"`. Only the **secret values** behind two of them — the Casdoor client
+`__SNAP_OIDC_ENABLED__` on login-ui), but **none of them ship dark on `main`**.
+The manifests bake each flag `"true"` where its service reads it:
+`APP_BFF_OIDC_ENABLED` and `APP_SESSION_COOKIE_ENABLED` in
+`specs/cluster/manifests/user-bff-api/deployment.yaml`; `APP_BFF_OIDC_ENABLED` and
+`APP_BFF_EXCHANGE_ENABLED` in `admin-bff-api/deployment.yaml`;
+`APP_BFF_EXCHANGE_ENABLED` in `mod-bff-api/deployment.yaml`;
+`HUGMESH_GATEWAY_BFF_EXCHANGE_ENABLED` in `apps/20-gateway-fe.yaml`; and
+`SNAP_OIDC_ENABLED` in `social-ui/deployment.yaml`. Only the **secret values** behind two of them — the Casdoor client
 secret and the AES custody key — are `optional: true` ESO-Secret refs, so a
 fresh cluster without Vault/ESO populated boots with the flags lit but the
 ciphers inert until those Secrets land.
 
-### Progress (as of 2026-06-25)
+### Progress
+
+PR numbers in this section come from the pre-squash history. Most do not resolve
+to the same work in the org today (for example `hugmesh-generator#171` is an
+unrelated QEMU change), so rely on the named code, not the number.
 
 **✅ shipped (merged to `main`):**
 
-- **auth-core extracted + published (current pins `2.4.2` / `2.5.0`)** — shared
-  account/session/MFA/Casdoor stack + the custody seams (`OidcExchangeClient`,
+- **auth-core extracted and published.** It holds the shared account, session,
+  MFA and Casdoor stack and the custody seams (`OidcExchangeClient`,
   `BffCustodyCipher`, `SessionCookieService`, `InternalTokenWebFilter`). The
-  `2.1.0` BFF-JWT-custody columns, the `2.2.0` per-account session-listing seam
-  and the `2.3.0` `gen_random_uuid()` mint change all shipped in that order; the
-  line has since split into two pins (the authoritative pins are in
-  `tests/stack/m2-bootstrap.sh`): **`2.4.2`** for user-bff main and **`2.5.0`**
-  for admin-bff main — the two consumers are on separate release cadences, so
-  both jars are built.
+  `2.1.0` custody columns, the `2.2.0` per-account session-listing seam and the
+  `2.3.0` `gen_random_uuid()` mint change shipped in that order. The consumers
+  now sit on separate pins, recorded in `tests/stack/m2-bootstrap.sh`: **`2.4.2`**
+  for user-bff main and **`2.5.0`** for admin-bff main. auth-core main itself is
+  at **`2.5.1`**, which the pin table also builds; the `2.4.2` and `2.5.0` rows stay
+  until both consumers name `2.5.1`.
   ⚠️ auth-core has drifted four times (2.4.0 → 2.4.1 → 2.4.2 → 2.5.0) because a
-  released coordinate was re-cut — the pin-drift guard exists for exactly that
-  and must run after every auth-core release.
-- **admin-bff adopted auth-core** (PR #111) — behavior-preserving, 1517 tests green.
-- **admin-bff `/bff/internal` account/session API** (PR #113) —
-  ensure / get / complete / allowlist / sessions / namespaces, guarded by
-  `InternalTokenWebFilter`; ships inert.
-- (prior) gateway live + raw-API security proven + the SCG-5 route-namespace bug fixed.
-- **gateway BFF-session filter (PR-2/5 / #171 merged)** — `BffJwtExchangeWebFilter`
-  (`bff_` → custody-JWT, pre-security, fail-closed, `hugmesh.gateway.bff-exchange.enabled`).
-- **user-bff OIDC enable (PR-2/5 / #171 merged)** — user-bff OIDC login relocation +
-  admin-bff internal client (`app.bff.oidc.enabled`).
-- **SSO custody-key + internal-token bootstrap (PR-3/5 / #172 merged)** — custody-key
-  seeding + internal-token bootstrap for the BFF exchange path.
-- **login-ui native login form shipped (#255/#256 merged)** — the native
-  username/password form → `POST /bff/login` is now the platform's **only** login
-  surface: the dead `/bff/auth/callback` OAuth-redirect route + its route-access
-  seed were retired (#255 — "native `/bff/login` replaced it"), and e2e coverage
-  (#256, `tests/e2e/specs/27-native-login.spec.ts`) drives the real form and
-  asserts the old social-login testids are **absent** and no navigation to a
-  Casdoor origin occurs.
+  released coordinate was re-cut. The pin-drift guard exists for exactly that and
+  must run after every auth-core release.
+- **admin-bff adopted auth-core** (PR #111; behaviour-preserving, "1517 tests green").
+- **admin-bff `/bff/internal` account/session API** (PR #113): ensure, get,
+  complete, allowlist, sessions, namespaces, guarded by `InternalTokenWebFilter`.
+  The custody tail shipped too: Liquibase `180-bff-jwt-custody.xml`, `POST
+  /custody/stamp` (`InternalAccountController`) and `POST
+  /bff/internal/session/exchange`.
+- **Gateway BFF-session filter** (PR #171): `BffJwtExchangeWebFilter` swaps `bff_`
+  for the custody JWT, pre-security and fail-closed, behind
+  `hugmesh.gateway.bff-exchange.enabled`.
+- **user-bff OIDC login relocation** (PR #171): the native login lives in user-bff,
+  behind `app.bff.oidc.enabled`.
+- **SSO custody-key and internal-token bootstrap** (PR #172).
+- **Generator `app-user-bff` Casdoor client and the permitAll `/bff/login`
+  route-access seed** (#156): the client is in
+  `specs/cluster/manifests/casdoor/init-data-configmap.yaml`, the seed row in
+  `20-schema.sql`.
+- **login-ui native login form** (#255/#256): `POST /bff/login` is the platform's
+  only login surface. The dead `/bff/auth/callback` OAuth-redirect route and its seed
+  were retired, and `tests/e2e/specs/27-native-login.spec.ts` drives the real form,
+  asserts the old social-login test ids are absent and asserts no navigation to a
+  Casdoor origin.
+- **user-bff to admin-bff NetworkPolicy path** (documented in
+  `manifests/networkpolicy/tier-ingress.yaml`).
+- **kind SSO e2e, login path.** `KIND_PROFILE=sso` with `make
+  kind-images|kind-up|kind-e2e|kind-down` stands up a cluster. On 2026-08-06 specs
+  `01-frontpage` and `27-native-login` passed against a live kind cluster on merged
+  `main`, and the stack-free TOTP vectors of spec 29 passed. This says nothing
+  about the rest of the suite, which drives services the profile does not deploy.
+  Items 5-15, 17, 20 and 24-26 of
+  [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md) are still open.
 
-> The `auth-core` `2.1.0` BFF-JWT-custody columns
-> (`access_token_enc` / `refresh_token_enc` / `access_token_expires_at` /
-> `custody_updated_at`) + `stampCustody` / `clearCustody` / `sessionRow` that this
-> snapshot tracked as in-flight have since **shipped** (current pins `2.4.2` /
-> `2.5.0`).
+**🚧 in-flight:** none known.
 
-**🚧 in-flight:** none currently open — login-ui PR-4 (native form, above) has
-since shipped.
-
-**🔭 planned / next:**
-
-- **admin-bff custody tail** — Liquibase band-180 (`bff_session` custody columns) +
-  `/bff/internal/sessions/{token}/custody/stamp` + `/bff/internal/session/exchange`;
-  bumps the auth-core dep in lockstep (the auth-core custody seam has since shipped
-  in `2.3.0`).
-- **generator #156** (✅ now merged) — `app-user-bff` Casdoor confidential client
-  (authorization_code grant + internal redirect-uri) + permitAll `/bff/login` route
-  seed; the user-bff native-login enable + gateway BFF-session filter (#171) and the
-  SSO-secret bootstrap seeding (#172) followed on `main`.
-- a cross-repo **NetworkPolicy egress peer** user-bff → admin-bff internal `:8080`
-  (manifests/generator).
-- **SSO end-to-end live e2e** — kind + Playwright, proving the browser holds only `bff_`.
-  **Update (2026-08-05):** the harness now exists (`KIND_PROFILE=sso`, `make
-  kind-images|kind-up|kind-e2e|kind-down`) and reached a real Casdoor login, but
-  the run is **not green** — it fails on 16 enumerated fresh-cluster payload
-  blockers, of which 5–16 are still unfixed. See
-  [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md).
+**🔭 planned:** the live operator MFA flip and the other items under "Roadmap" below.
 
 ## GitOps
 
@@ -334,10 +331,10 @@ remotes (the `social-ui` ArgoCD grouping), and hugmesh.games. See
 > (`catalog/hugmesh-deploy.example.yaml`) all exist — but the source flip is
 > **live-gated** (needs a booted Forgejo + admin + OIDC + the org mirror +
 > `forgejo-scm-token`). **9 service repos have adopted the descriptor + a
-> `deploy/` kustomize tree** — as `hugmesh-deploy.yaml`, plus any that have not
-> yet renamed the descriptor from the pre-rebrand spelling; all ships-dark until
-> the flip. The generators filter on **both** names (the older one as
-> LEGACY_COMPAT); the live adoption state is registered in
+> `deploy/` kustomize tree**; all ship dark until the flip. On origin/main all nine
+> carry `hugmesh-deploy.yaml`, but `adopters.yaml` still records one of them
+> (`hugmesh-forum-bff-api`) under the pre-rebrand `snapdragon-deploy.yaml`, and the
+> generators filter on **both** names (the older one as LEGACY_COMPAT). The adoption state is registered in
 > [`catalog/adopters.yaml`](../specs/cluster/catalog/adopters.yaml) and enforced by
 > `scripts/validate-catalog-discovery.sh`. The org has **38** `hugmesh-*` repos,
 > **32** of which produce a container image, so **23 have not adopted yet**
@@ -345,12 +342,17 @@ remotes (the `social-ui` ArgoCD grouping), and hugmesh.games. See
 
 ### Autoscaling
 
-CPU-based **HPA** is wired on many workloads — `frontend`, `social-ui`,
-`remote-fragment`, `mod-bff-api`, `admin-bff-api`, `user-bff-api`, `forum-bff-api`,
-`user-ui`, `mod-ui`, `forum-ui`, `api-docs` (`manifests/<svc>/hpa.yaml`) — backed
-by **metrics-server** (`apps/01-metrics-server.yaml`). **KEDA** is also present
-(`apps/01b-keda.yaml`) for event/queue-driven scaling. ⏳ **Remaining:**
-latency/memory-based scaling beyond CPU.
+**HPA** (CPU and memory metrics) is wired on 15 workloads — `frontend`,
+`social-ui`, `remote-fragment`, `mod-bff-api`, `admin-bff-api`, `user-bff-api`,
+`forum-bff-api`, `wiki-bff-api`, `mesh-bff-api`, `character-forge-bff-api`,
+`user-ui`, `mod-ui`, `forum-ui`, `wiki-ui`, `api-docs`
+(`manifests/<svc>/hpa.yaml`) — backed by **metrics-server**
+(`apps/01-metrics-server.yaml`). **KEDA** is present too (`apps/01b-keda.yaml`).
+Request-load and latency scaling exists as KEDA ScaledObjects in
+`apps/01c-autoscaling-latency.yaml`, which ships **dark**: it has no automated sync
+and needs a Prometheus endpoint that the cluster does not have (observability is
+Uptrace and OTel). ⏳ **Remaining:** enable that app, which means adding Prometheus
+and retiring the per-service HPAs it supersedes.
 
 ## Secrets (Vault + USB)
 
@@ -358,11 +360,13 @@ Cluster secrets are generated once by
 [`scripts/gen-cluster-secrets.sh`](../scripts/gen-cluster-secrets.sh) and pushed
 to **HashiCorp Vault** (KV v2, mount `secret/`, base path `hugmesh/` — the
 base segment tracks the brand slug). The **External Secrets Operator** then
-materializes the k8s Secrets the workloads already consume — `casdoor-google`
-(`hugmesh-pki`), `clickhouse-auth` (`hugmesh-backend` + `observability`)
-and `uptrace-auth` (`observability`) — via a ClusterSecretStore
-**`hugmesh-vault`** (provider `vault`, token auth from the `vault-token`
-Secret in `external-secrets`), one ExternalSecret per Secret, refreshed hourly.
+materializes the k8s Secrets the workloads already consume — starting with
+`casdoor-google` (`hugmesh-pki`), `clickhouse-auth` (`hugmesh-backend` +
+`observability`) and `uptrace-auth` (`observability`), and now well over a hundred
+more (`specs/cluster/manifests/external-secrets/` holds 108 ExternalSecret
+objects) — via a ClusterSecretStore **`hugmesh-vault`** (provider `vault`, token
+auth from the `vault-token` Secret in `external-secrets`), one ExternalSecret per
+Secret, typically refreshed hourly.
 Workload `secretKeyRef`s are unchanged.
 
 The same materialized secrets are also written to the KEYS stick at
@@ -411,7 +415,7 @@ domain-scoped, enforced at the gateway) governs every surface.
   (hugmesh-admin-bff-api `HeadscaleAclCompiler` + reconcile loop, dark behind
   `app.registry.headscale-acl.enabled=false`). Its compile side is now reconciled with
   the node side and gated offline by `layer-a-headscale-acl` in CI, but ENABLING it
-  stays cluster-gated: it needs the live `docs/CANONICAL-FP.md` field confirmation, a
+  stays cluster-gated: it needs the live confirmation of the fields in `docs/CANONICAL-FP.md` (in `hugmesh-admin-bff-api`), a
   provisioned headscale API key, and — first — the single-writer decision, because
   headscale runs `policy: mode: file` (the node renderer is the writer) while the BFF's
   `PUT /api/v1/policy` is DB-mode only.
@@ -494,34 +498,36 @@ are complete on `main`; each entry names what lights it and what caveat survives
   opts a fleet in via the live `devops/hugmesh-update-policy` ConfigMap. See
   [`DEVOPS.md`](DEVOPS.md).
 
+- **✅ Generator supply-chain hardening** — stage3 GPG/sha + headscale /
+  tailscale binary checksum verification, fail-closed in all ten builders via
+  `scripts/_download-lib.sh`, + de-defaulted baked creds (random one-time
+  first-boot fallback). See [`CRYPTO-AUDIT.md`](CRYPTO-AUDIT.md).
+
 ### Roadmap (🔭 planned / 🚧 in-flight)
 
 What is genuinely **not done**. Nothing here has a working default-off
 implementation on `main`.
 
-- **🚧 kind-cluster SSO e2e — harness shipped, proof NOT achieved.**
+- **🚧 kind-cluster SSO e2e — login path green, the rest open.**
   `KIND_PROFILE=sso` + `make kind-images|kind-up|kind-e2e|kind-down` stand up a
-  real cluster, and the chain now reaches Casdoor and mints a session against a
-  real IdP — but the e2e is **not green**. It fails on 16 enumerated fresh-cluster
+  real cluster. The first run (2026-08-05) failed on enumerated fresh-cluster
   blockers, because the GitOps payload had never been run end to end and every
   workaround lived in `tests/stack/compose.local.yaml` instead of `specs/cluster`.
-  Fixed in-repo: the `cluster-ca` / Vault KV mount / node-label items plus
-  `fix/cluster-secret-contract-drift` and `fix/pki-role-san-namespace`. **Not
-  fixed (5–16):** Cassandra credentials + keyspace bootstrap, gateway probes
-  hitting a role-gated actuator path (no gateway can become Ready in k8s), Casdoor
-  never importing `init_data.json` (the IdP keeps the well-known default admin
-  password), `casdoor-init` never checking API responses, `CASDOOR_ORG` /
-  client-id / redirect-uri / namespace pre-rebrand defaults across the BFFs, a
-  hard-required `SVC_PASSWORD` nothing provides, and an admin-bff Liquibase
-  `GRANT` to a role no initdb creates. See
-  [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md).
+  The 2026-08-06 run against merged `main` passed `01-frontpage` and
+  `27-native-login`. What stays open (items 5-15, 17, 20 and 24-26 in
+  [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md)) includes the harness gap
+  that stops node-side API specs (19, 20, 23, 29) resolving the cluster hostname,
+  and non-Spring callers that never got the mTLS client wave. A green login e2e is
+  not a finished platform.
 - **🔭 The live MFA operator flip** — verify every privileged principal can
   produce a fresh `mfa_satisfied` stamp, then flip `mfa.enabled` → `true`, then
   (separately: `enforce-privileged-floor` is **not** a sub-flag of `enabled`)
   `enforcePrivilegedFloor` → `true`, moving the posture-gate expectations in
   lockstep. See [`MFA-ROLLOUT.md`](MFA-ROLLOUT.md).
-- **🔭 SELinux enforcing** — node-policy modules compile, install and load on
-  every image, but the fleet boots **permissive** and the enforce-gate ships inert
+- **🔭 SELinux enforcing** — node-policy modules compile and install into every
+  image and load wherever their refpolicy packages are present (a module whose
+  dependency is missing is skipped, with the package named). The fleet boots
+  **permissive** and the enforce-gate ships inert
   (no runlevel, `SELINUX_ENFORCE_GATE="no"`). The `.te` rules are still tagged
   `INFERRED-WIDE` and can only be narrowed against AVC logs from a real protected
   build + boot. See [`selinux-module-loading.md`](selinux-module-loading.md).
@@ -535,10 +541,6 @@ implementation on `main`.
   (`apps/60-image-builder.yaml`) is correct-by-construction and lint-gated but has
   never run a real build; blocked on bringing a cluster up on a kernel-fixed x86
   image.
-- **✅ Generator supply-chain hardening** — stage3 GPG/sha + headscale /
-  tailscale binary checksum verification, fail-closed in all builders via
-  `scripts/_download-lib.sh`, + de-defaulted baked creds (random one-time
-  first-boot fallback). See [`CRYPTO-AUDIT.md`](CRYPTO-AUDIT.md).
 
 ## Related repositories
 
@@ -555,7 +557,7 @@ implementation on `main`.
 |---|---|
 | `hugmesh/hugmesh-parent` | Metapom every Java service inherits (**2.8.0** — Spring Boot 4.0.7 / Spring Cloud 2025.1.2 / Java 25) |
 | `hugmesh/hugmesh-commons` | Shared security/tenancy library, `net.hugmesh.commons.*` (**2.1.0**) |
-| `hugmesh/hugmesh-auth-core` | Shared account/session/bff-session store, Casdoor-admin client, MFA subsystem, session-cookie + internal-token filters (**2.4.2** for user-bff, **2.5.0** for admin-bff — two pins by design, separate release cadences; consumed by user-bff + admin-bff only) |
+| `hugmesh/hugmesh-auth-core` | Shared account/session/bff-session store, Casdoor-admin client, MFA subsystem, session-cookie + internal-token filters (**2.4.2** for user-bff, **2.5.0** for admin-bff — two pins by design, separate release cadences; main is **2.5.1**; consumed by user-bff + admin-bff only) |
 | `hugmesh/hugmesh-build-config` | Shared PMD/Checkstyle/SpotBugs rulesets referenced by the parent (**0.5.0**) |
 
 ### Platform services
