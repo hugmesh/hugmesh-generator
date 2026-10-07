@@ -12,9 +12,10 @@ only by a manual from-source sweep, never by their own green CI.
 
 ## Why per-repo CI misses it
 
-Every repo's `.gitlab-ci.yml` `test` job runs `./mvnw -s settings.xml clean test|verify`,
-which resolves `hugmesh-commons`/`hugmesh-auth-core` (incl. the `tests` classifier)
-from the GitLab Maven **registry** via `CI_JOB_TOKEN`. So each repo is validated against the
+The BFF repos' `.gitlab-ci.yml` test jobs run `./mvnw -B -s settings.xml clean test` or
+`verify` (`hugmesh-gateway` runs `./mvnw verify -B` in a JDK container instead). They resolve
+`hugmesh-commons`/`hugmesh-auth-core` (incl. the `tests` classifier) from the GitLab Maven
+**registry** via `CI_JOB_TOKEN` (`settings.xml`). So each repo is validated against the
 last *published* artifact, in isolation — never against the live source of its intra-org
 dependencies. When the version isn't bumped on an API change ("content-bump-without-
 version-bump"), source and registry drift apart invisibly.
@@ -25,15 +26,16 @@ version-bump"), source and registry drift apart invisibly.
 
 1. Builds `hugmesh-commons` then `hugmesh-auth-core` from each repo's `origin/main`
    and installs each into the local `~/.m2` at **both its own `<version>` and its
-   `<parent>` version** (deduped). This matters because dependents resolve the two libs at
-   *different* coordinates: the commons MAIN jar resolves at `2.0.0` (its own version,
-   pinned by `hugmesh-parent`'s `<hugmesh-commons.version>`, since dependents declare
-   commons with no explicit `<version>`), while the auth-core MAIN jar resolves at `2.7.0`
-   (the parent line, via the BOM) and some repos pin `commons:2.7.0:tests`. Installing at
-   both coordinates guarantees the from-source build is the one actually consumed for every
-   dependent's main-jar **and** tests-classifier — otherwise a single (parent-only) install
-   leaves dependents on the stale cached jar and the tool *reproduces* drift instead of
-   detecting it.
+   `<parent>` version** (deduped). Dependents resolve the libs at whatever coordinate
+   their pom names, so a coordinate the script does not install is still read from the
+   cached or registry jar, and the tool then *reproduces* drift instead of detecting it.
+   On 2026-10-07 (`origin/main`): `hugmesh-parent` is `2.8.0`; `hugmesh-commons` is
+   `2.1.0`, which is also what `hugmesh-parent`'s `<hugmesh-commons.version>` and the
+   `commons:2.1.0:tests` pins in `hugmesh-user-bff-api` and `hugmesh-mod-bff-api`
+   name, so commons is covered. `hugmesh-auth-core` is `2.5.1` (parent `2.8.0`), but
+   `hugmesh-admin-bff-api` pins `2.5.0` and `hugmesh-user-bff-api` pins `2.4.2`.
+   Neither is installed from source, so those two dependents are not tested against
+   current auth-core source.
 2. Runs each dependent's `mvn -o test` against those freshly-built libs.
 3. Prints a PASS/FAIL table and exits non-zero if any repo is red against current lib source.
 
@@ -47,14 +49,19 @@ SKIP_LIB_BUILD=1 tests/ci/org-mainline-from-source.sh hugmesh-mod-bff-api
 ```
 
 Env: `GITHUB_ROOT` (clones parent dir), `WORK` (scratch), `MVN`, `SKIP_LIB_BUILD`.
-Needs the repos cloned locally, a JDK matching the parent (`java.version` = 25), and Docker
-(the BFF `@SpringBootTest` suites use Testcontainers-Postgres).
+Defaults: `GITHUB_ROOT` is the parent of this checkout, `WORK` is
+`/var/tmp/portage/hugmesh-mainline-verify`, `MVN` is `mvn`. Needs the repos cloned
+locally, a JDK matching the parent (`java.version` = 25), and Docker (the BFF
+`@SpringBootTest` suites use Testcontainers-Postgres).
 
 ## CI wiring
 
 [`org-integration-stage.gitlab-ci.yml`](./org-integration-stage.gitlab-ci.yml) is an
 include-able **scheduled** job (mirrors `tests/pentest/ci/pentest-stage.gitlab-ci.yml` — one
-source of truth org-wide). It clones the graph + runs the script under Docker-in-Docker.
+source of truth org-wide). It is a hidden template, `.org-mainline-from-source`: a
+scheduled pipeline opts in with `extends:`. It runs on schedule, or by hand from the web UI,
+in `maven:3.9-eclipse-temurin-25` with a `docker:27-dind` service; it shallow-clones the
+graph and runs the script.
 Run it on a schedule (nightly), not per-MR: it is a cross-repo net, not a per-repo gate.
 
 ## The real fix (recommended, not automated here)
