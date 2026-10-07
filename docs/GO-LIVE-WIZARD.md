@@ -2,9 +2,9 @@
 
 > **Status: v1 CONSOLIDATED.** One architecture. This ships the shared driver,
 > the provider registry, **three front-ends** (CLI, ncurses console menu, and the
-> Studio GUI wizard), and **all five providers implemented end-to-end** —
+> Studio GUI wizard), and **all six providers implemented end-to-end** —
 > bring-your-own-domain, cloudflare-tunnel, DuckDNS/Cloudflare-DDNS,
-> tailscale-funnel, and router-portforward. The mechanism is **baked on-image**
+> tailscale-funnel, router-portforward, and tor-onion. The mechanism is **baked on-image**
 > by the two server builders and surfaced from a **console** and a **Studio**
 > menu entry. What remains genuinely deferred is listed in
 > [Deferred](#deferred).
@@ -58,7 +58,7 @@ Mirroring how **image-gen** exposes one shared driver behind thin per-interface
 UIs:
 
 ```
-       CLI front-end        ncurses console menu     Studio GUI wizard     web (DEFERRED)
+       CLI front-end        ncurses console menu     Studio GUI wizard     web (via reconcile agent)
   hugmesh-go-live-cli   hugmesh-go-live-menu    gui/pages/golive.py        │
               └──────────────┬─────────┴─────────┬─────────┴────────┬───────────┘
                              ▼                                       ▼
@@ -92,7 +92,9 @@ hugmesh-go-live rollback                   # delete the marker (→ internal ≤
 ```
 
 `plan` flags: `--out-dir DIR`, `--ingress-ip IP`, `--ingress-ipv6 IP6`,
-`--tunnel-cname NAME`, `--domain D` (override the baked apex), `--ttl N`.
+`--turn-ip IP`, `--turn-ipv6 IP6`, `--tunnel-cname NAME`, `--domain D` (override the
+baked apex), `--ttl N`, `--ddns-subdomain LABEL`, `--ddns-service duckdns|cloudflare`,
+`--token-file PATH`, `--keys-dir DIR`.
 `commit` flags: `--persist-public` (also bake `release-state=public`, so go-live
 survives a marker delete), `-y`/`--yes`. `rollback` flags:
 `--revert-release-state`, `-y`/`--yes`.
@@ -152,8 +154,9 @@ raw UDP/TCP and a proxied record would advertise a relay that answers nothing.
 | 3 | `duckdns` | ddns | **FULL** | DuckDNS / Cloudflare-DDNS — a **real** thin single-token updater + `cron.d` drop-in (dynamic-IP homes). `plan` stores the token at `keys-template/ddns/token` (0600) and renders `ddns-update.sh` + a cron snippet (5-minute floor, mirroring the `hugmesh-*-reconcile` cron convention); the updater reads the token from the keys file at RUNTIME, never argv/cron mail. |
 | 4 | `tailscale-funnel` | funnel | **FULL** | Tailnet-native public HTTPS on the node's `<node>.<tailnet>.ts.net` name — **no public DNS** to mutate. **Caveat:** Funnel is a tailscale.com-hosted control-plane feature; the default HugMesh mesh is self-hosted **headscale, which does not implement Funnel** — this provider applies only to nodes joined to Tailscale proper. Emits the enable-Funnel checklist. |
 | 5 | `router-portforward` | instructions | **FULL** | Pure port-forward instructions (forward WAN 80/443 to the ingress node) + deep-links to your gateway / portforward.io. **v1 never mutates the router** — no UPnP, no vendor APIs. Pair with `byo-domain` (static IP) or `duckdns` (dynamic). |
+| 6 | `tor-onion` | onion | **FULL** | Reachability with no public DNS, IP or open ports. Reads the `.onion` address the node's own Tor daemon minted (`/var/lib/hugmesh/tor/hostname`, or `GL_ONION_HOSTNAME`) and emits `onion.txt` (plus `domain-onions.txt` when the node serves per-domain onions), `deeplinks.txt` for Tor Browser, and `instructions.txt`. It mints nothing and ignores the go-live marker: the onion is live whenever the `tor` optional service runs. See [`TOR-HIDDEN-SERVICE.md`](TOR-HIDDEN-SERVICE.md). |
 
-All five providers are implemented end-to-end. Each is a **real registry row**
+All six providers are implemented end-to-end. Each is a **real registry row**
 (label, mechanism, deep-link, emit fn `glp_emit_<id>`); the driver never
 hard-codes one — it iterates the registry, so a new provider is a single new row
 plus its emit function, not a change in any front-end.
@@ -268,11 +271,12 @@ deferred:
 
 - ✅ **ncurses console front-end** — `specs/usr/sbin/hugmesh-go-live-menu`.
 - ✅ **Studio GUI wizard** — `gui/pages/golive.py`, repointed onto this driver.
-- ✅ **All five provider emits** — `byo-domain`, `cloudflare-tunnel`,
-  DuckDNS/Cloudflare-DDNS, `tailscale-funnel`, `router-portforward`.
+- ✅ **All six provider emits** — `byo-domain`, `cloudflare-tunnel`,
+  DuckDNS/Cloudflare-DDNS, `tailscale-funnel`, `router-portforward`, `tor-onion`.
 - ✅ **On-image baking** — the two go-live server builders
   (`build-rpi5-stage4.sh`, `build-x86-host-stage4.sh`) bake the driver, the
-  registry, and the CLI/menu front-ends into the sysroot inside
+  registry, the CLI/menu front-ends and the web-UI effector
+  (`hugmesh-go-live-reconcile`, enabled as a boot service) into the sysroot inside
   `bake_host_firewall()`, right beside firewall-reconcile.
 - ✅ **Console + Studio menu entries** — a "Go Live…" tray action in Studio and
   the on-device `hugmesh-go-live-menu` console face.
@@ -380,11 +384,6 @@ lands, which is the desired self-healing behavior, not a bug.
 **Still deliberately out of scope, matching this codebase's precedent for the
 identical shape of gap (`hugmesh-domain-reconcile`'s own deferred
 writeback):**
-- **On-image baking.** This PR ships the agent + verify lib + init.d/cron
-  files but does not add the `cp`/`chmod` lines to the stage4 builders — those
-  lines land immediately after wherever the driver itself
-  (`hugmesh-go-live`/`-cli`/`-menu`) gets baked, to avoid a redundant edit
-  to the same builder-script region as that in-flight work.
 - **The physical secret path from `plan`'s provider emission to this agent.**
   This agent never runs `plan` — provider artifact emission (DNS records,
   tunnel tokens) is the web wizard's own client-side guidance, completed by
