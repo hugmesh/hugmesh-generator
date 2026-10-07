@@ -24,9 +24,14 @@ Two DIFFERENT "idp" axes exist; do not conflate them:
   Makefile `STACK_BRAND_B_ENV` spelling). Cross-brand token replay is
   hard-denied by that registry.
 * HARD GATE before any BFF takes the registry pair: its `domain='default'`
-  row-restamp migration must land first (the in-manifest warning at
-  manifests/wiki-bff-api/deployment.yaml — flipping the registry on existing
-  data silently hides every row). Gateways can take the pair first.
+  rows must be re-stamped (flipping the registry on existing data silently hides
+  every row). For wiki-bff the re-stamp migration has landed
+  (`RestampTargetEnvironmentPostProcessor`, hugmesh-wiki-bff-api#19): setting
+  `APP_TENANCY_ISSUERS` re-stamps the rows on that same boot. It is a one-way
+  door. Afterwards also pin `SPRING_LIQUIBASE_PARAMETERS_WIKI_RESTAMP_TARGET_DOMAIN`
+  and never remove it; read the warning in
+  `manifests/wiki-bff-api/deployment.yaml` first. Check each other BFF the same
+  way before it takes a pair. Gateways can take the pair first.
 
 ## Lane 1 — single mesh (ApplicationSet)
 
@@ -104,7 +109,7 @@ per-domain, loud.
 * admin-bff DomainReconciler (cross-repo) + the #118 DomainEntry `idp` field and
   `appsetRegistered` ack reuse.
 * per-domain gateway/BFF registry env threading (build-time + runtime rollout;
-  the wiki-bff row-restamp gate above).
+  the row-restamp gate above).
 * `origin` env-interpolation validation against casbin/casdoor:3.80.0 (the
   documented fallback: ApplicationSet strategic-merge patch of the whole
   app.conf blob).
