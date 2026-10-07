@@ -310,10 +310,16 @@ def source_root(generator_dir: str, source_mode: str, source_dir: str) -> str:
     """The directory compose resolves ``${STACK_SRC}`` to: the operator's tree in
     ``existing`` mode ("" until one is typed), ``<generator>/.stack-src`` in clone
     mode — the Makefile's ``STACK_SRC ?= $(CURDIR)/.stack-src`` (the Studio sets no
-    STACK_SRC in clone mode, so the default is what runs)."""
+    STACK_SRC in clone mode, so the default is what runs).
+
+    The ``existing`` spelling is EXACTLY ``LocalStackNode._build_env``'s
+    ``os.path.abspath(source_dir.strip())`` — no ``~`` expansion, because the build
+    does none: a typed ``~/src`` reaches make as ``<cwd>/~/src``, and the coverage
+    line on the same step tests the raw text too. Expanding it here would send the
+    operator to a folder the build never reads."""
     if source_mode == "existing":
         sd = (source_dir or "").strip()
-        return os.path.abspath(os.path.expanduser(sd)) if sd else ""
+        return os.path.abspath(sd) if sd else ""
     return os.path.join(os.path.abspath(generator_dir), STACK_SRC_DIR)
 
 
@@ -383,6 +389,9 @@ def code_folder_map(generator_dir: str, source_mode: str, source_dir: str,
         root_reason = ""
     elif source_mode == "existing":
         root_reason = NO_SOURCE_DIR_REASON if not root else f"{root} does not exist"
+        if root and (source_dir or "").strip().startswith("~"):
+            root_reason += (" — the build does not expand ‘~’, so type the full "
+                            "path (for example /home/you/src)")
     else:
         root_reason = NOT_DOWNLOADED_REASON
     notice = EXISTING_MODE_NOTICE if source_mode == "existing" else CLONE_MODE_NOTICE

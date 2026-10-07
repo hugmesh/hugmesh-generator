@@ -2337,6 +2337,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._tick.stop()          # unconditionally: an idle page must own no clock
         self._settle_run(ok)
         self._refresh_status()
+        self._refresh_code_folders()    # the verb may have created the checkouts
         # A verb is the one thing that CHANGES whether a mesh is up (start, stop,
         # clean), so re-read the real state rather than inferring it from the
         # verb's exit code — a partially-failed bring-up leaves containers behind
@@ -2643,6 +2644,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._selected, self._selected_stage = -1, None
 
     # ── BOOTSTRAP handlers ───────────────────────────────────────────────────────
+    def _refresh_code_folders(self):
+        """Re-read the Code folders block from the current source choice and Domains
+        table. Called from _refresh_plan AND when a verb finishes: 'Generate & start'
+        runs make stack-clone, which creates the very folders this block reported as
+        'not downloaded yet', and no form control changes when it does."""
+        self.code_folders.refresh(self.boot.cfg.source_mode, self.boot.cfg.source_dir,
+                                  self.mesh_domains.domains,
+                                  own_name=self._own_domain_name())
+
     def _refresh_plan(self):
         if getattr(self, "_applying_bootstrap", False):
             return                      # apply_bootstrap refreshes once at its end
@@ -2679,9 +2689,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         # The code-folder rows follow the same source choice and the Domains table
         # (every path that changes either already lands here). Cheap: the widget
         # rebuilds only when the map differs.
-        self.code_folders.refresh(self.boot.cfg.source_mode, self.boot.cfg.source_dir,
-                                  self.mesh_domains.domains,
-                                  own_name=self._own_domain_name())
+        self._refresh_code_folders()
         self.brand_note.setText(
             "" if self.boot.brand_has_conf() or not self.brand.currentText().strip()
             else f"No brands/{self.brand.currentText().strip()}.conf — runs with "

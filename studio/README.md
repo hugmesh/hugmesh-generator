@@ -69,7 +69,10 @@ all**; the block has **Open source root**. The folder is the one the build reads
 `./.stack-src/hugmesh-<name>` with *Download the source* — parsed from the
 `context:` values of `tests/stack/compose.local.yaml` and the files it includes
 (`core/code_folders.py`), so the rows cannot drift from what `docker compose build`
-resolves. A folder that is not there yet is a disabled button with the reason beside
+resolves. The source directory is read exactly as the build reads it, so `~` is not
+expanded (type the full path) and the block names the same folder the coverage line
+above it counts. The block re-reads the disk when a run finishes, so folders the
+Studio just cloned become openable without touching a control. A folder that is not there yet is a disabled button with the reason beside
 it ("not downloaded yet…", "no hugmesh-<name> checkout in …"); a service that runs a
 stock image (Akkoma, tuwunel, the databases) gets a note instead of a row. In
 *Download the source* mode the block says that `make stack-clone` git-resets the

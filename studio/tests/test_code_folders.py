@@ -259,6 +259,32 @@ def test_existing_mode_with_a_directory_that_does_not_exist(gen, tmp_path):
     assert m.root_exists is False and "does not exist" in m.root_reason
 
 
+# ── the root is spelled exactly as the build spells it ──────────────────────────
+@pytest.mark.parametrize("typed", ["~/x", "../x", "  /tmp  ", "rel/dir", "/a//b/../c"])
+def test_the_existing_root_is_the_exact_path_the_build_reads(gen, typed):
+    """source_root must equal the STACK_SRC the stack node hands to make — not a
+    similar-looking path. The build does NOT expand ``~``; this holds the two to one
+    spelling so neither can drift (a typed ~/src once enabled folders under the real
+    home while make read <cwd>/~/src)."""
+    from hugmesh_studio.core.local_stack_node import LocalStackNode
+    node = LocalStackNode(gen, source_mode="existing", source_dir=typed)
+    built = node._build_env(write_overlays=False)["STACK_SRC"]
+    assert cf.source_root(gen, "existing", typed) == built
+
+
+def test_a_typed_tilde_is_not_expanded_so_no_row_points_at_the_real_home(
+        gen, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / "x" / "hugmesh-gateway").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    m = cf.code_folder_map(gen, "existing", "~/x", [Domain(name="hugmesh.local")])
+    assert m.root == os.path.abspath("~/x") and m.root != str(home / "x")
+    assert m.root_exists is False
+    assert "does not expand" in m.root_reason
+    assert all(not a.openable for a in m.domains[0].apps)
+    assert m.domains[0].openable_paths() == ()
+
+
 # ── per-domain services ─────────────────────────────────────────────────────────
 def test_a_domain_without_optional_services_runs_only_the_platform_apps(gen):
     m = cf.code_folder_map(gen, "clone", "", [Domain(name="plain.example")])

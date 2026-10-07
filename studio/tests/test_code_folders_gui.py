@@ -242,6 +242,34 @@ def test_a_missing_folder_row_is_disabled_and_names_its_reason(wiz, src_tree, fa
         assert "not downloaded yet" in b.toolTip(), key
 
 
+def test_a_finished_verb_re_reads_the_folders_it_just_created(qapp, fake_gen):
+    """'Generate & start' runs make stack-clone, which creates the checkouts the
+    block reported as 'not downloaded yet'. No form control changes when it does, so
+    the verb's completion path itself must refresh the block (single-page frame:
+    the buttons and the block share one page and nothing else re-reads the map)."""
+    dlg = lm.LocalMeshDialog(fake_gen)
+    try:
+        page = dlg.page
+        page._probe_mesh_state = lambda: None
+        page._save_run_log = lambda run, ok: ""
+        page._runs = []
+        block = page.code_folders
+        own = page._own_domain_name()
+        btn = block.open_buttons[(own, "hugmesh-gateway")]
+        assert not btn.isEnabled() and "not downloaded yet" in btn.toolTip()
+        clone = os.path.join(fake_gen, ".stack-src", "hugmesh-gateway")
+        os.makedirs(clone)
+        page._verb_done(True)
+        _settle()
+        btn = block.open_buttons[(own, "hugmesh-gateway")]
+        assert btn.isEnabled(), "the Studio cloned it; the button must follow"
+        assert btn.toolTip() == clone
+        assert block.rows[(own, "hugmesh-gateway")].exists
+    finally:
+        dlg.close()
+        dlg.deleteLater()
+
+
 def test_open_all_opens_every_existing_folder_of_that_domain_once(wiz, src_tree):
     ctl, _page = _to_source(wiz, source_dir=src_tree)
     block = ctl.code_folders
