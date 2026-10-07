@@ -63,14 +63,14 @@ Three ways today:
 | ArgoCD applications | `/admin/argocd` | `ROLE_ADMIN` | **dark — no backend controller exists in any repo** |
 
 The table lists the consoles probed on 2026-08-14, plus Admin → Roles. The admin
-remote has since grown many more (namespaces, backups, announcements, appeals, device
+remote also mounts many more routes (namespaces, backups, announcements, appeals, device
 licences, fleet, themes, MFA security and others): `src/app/admin.routes.ts` in
 `hugmesh-admin-ui` is the current list, and its comment block says who may open each.
-They have not been re-probed here.
+They have not been probed here.
 
 **Route access is the one to be careful with.** `GET /bff/admin/route-access` returns
 `{"rules":[]}` even for a superadmin, while the gateways are enforcing seeded rules
-from a different database (129 on 2026-08-14; the seed file `specs/cluster/manifests/route-access/initdb/20-schema.sql` now holds 155 rows). Anything you add through that console lands in a table no
+from a different database (129 on 2026-08-14; `specs/cluster/manifests/route-access/initdb/20-schema.sql` now has 155 lines that start a seeded row). Anything you add through that console lands in a table no
 gateway reads. Treat the panel as non-functional until the binding is fixed; the
 enforced rules live in `route-access-db`.
 
