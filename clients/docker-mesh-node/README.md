@@ -20,7 +20,9 @@ an admin hands out a copy-paste `docker run` to onboard a remote box.
      retrying — it becomes reachable the moment a superadmin admits it
      (register-and-approve admission).
 3. Performs a **one-line Casdoor login** (OIDC device-code): it prints a URL + a
-   short code; you open the URL over the tailnet, enter the code, done.
+   short code; you open the URL over the tailnet, enter the code, done. If the
+   issuer does not advertise a device-code endpoint, it prints a browser sign-in URL
+   instead. It polls up to 60 times, and the node stays up whether or not you finish.
 4. For `superadmin`, it prints the tailnet-only superadmin UI URL
    (`https://superadmin.<domain>/` — no public forward, ADR-17).
 5. Stays running in the background (`--restart unless-stopped`). Its tailnet
@@ -65,6 +67,10 @@ kernel mesh routing. On Docker Desktop / locked-down hosts it falls back to
 ```
 
 `mesh-node.cmd` is a double-clickable wrapper for `mesh-node.ps1` (same flags).
+
+Both launchers also take `--name HOST` (`-Name`; sets the tailnet hostname) and
+`--image IMG` (`-Image`; the image tag, default `hugmesh/mesh-node:latest`).
+`install.sh` and `install.ps1` take the same two options.
 
 ---
 
