@@ -56,26 +56,35 @@ cd scripts/tooling && npm install    # installs handlebars + js-yaml locally
 `scripts/tooling/node_modules/` is gitignored — never committed. Nothing is
 installed at the repo root.
 
-## Tokens — 4 of 7 are live
+## Tokens — 9 of 11 are used
 
-`generate-brand-repos.sh` registers **7** tokens; only **4** actually appear in the
-13 templates:
+`generate-brand-repos.sh` (sed) and `render-handlebars.js` both register **11**
+tokens. Counting `{{TOKEN}}` in `templates/apps/*.hbs` (15 files) and
+`templates/manifests/casdoor/`, **9** are used and **2** are not:
 
-* **Live (4):** `BRAND`, `BRAND_TITLE`, `CLUSTER_DOMAIN`, `HARBOR_PROJECT`
-* **Registered-but-dead (3):** `ORG`, `HEADSCALE_URL`, `MESH_TAG` (in none of the
-  13 `templates/apps/*.hbs`)
+* **Used in `templates/apps/*.hbs` (8):** `BRAND` (138 uses), `CLUSTER_DOMAIN` (37),
+  `HARBOR_PROJECT` (18), `BRAND_TITLE` (14), `ORG` (4, all in
+  `13d-brand-repos.yaml.hbs`), `MFA_ENABLED` (3), `NS_PREFIX` (2), `ORG_SLUG` (1,
+  in `05-casdoor.yaml.hbs`)
+* **Used only in `templates/manifests/casdoor/` (1):** `CASDOOR_ORG`
+* **Registered but unused (2):** `HEADSCALE_URL`, `MESH_TAG`
 
-Both renderers register all 7 for compatibility; the dead 3 have no output effect.
-`HARBOR_PROJECT` is **derived** from `ORG` by the shell (single source of the slug
-rule) in both the sed script and the Handlebars wrapper.
+Both renderers register all 11 for compatibility; the two unused ones have no
+output effect. `scripts/tooling/tokens.json` still lists `ORG` under `dead`, although
+`13d` uses it. `HARBOR_PROJECT` is **derived** from `ORG` by the shell (single source
+of the slug rule) in both the sed script and the Handlebars wrapper.
 
 ## Guardrails
 
 ### Token classifier — `scripts/tooling/tokens.json` (+ `token-classifier.js`)
 
-* **allowlist** — git-safe brand-delta tokens that may be substituted/emitted
-  (the 7 live/dead tokens + the reserved pilot tokens `HOST_NAME`,
-  `GENERATOR_ORG_GROUP`, `NPM_SCOPE`). The Handlebars renderer **fails closed on
+* **allowlist** — git-safe brand-delta tokens that may be substituted/emitted.
+  `tokens.json` splits it into `live` (11: `BRAND`, `BRAND_TITLE`, `CASDOOR_ORG`,
+  `CLUSTER_DOMAIN`, `HARBOR_PROJECT`, `GENERATOR_ORG_GROUP`, `HOST_NAME`,
+  `MFA_ENABLED`, `NPM_SCOPE`, `NS_PREFIX`, `ORG_SLUG`), `dead` (3: `ORG`,
+  `HEADSCALE_URL`, `MESH_TAG`) and `reserved_pilot` (7: `APP_SLUG`, `TITLE_WORD`,
+  `PROFILE`, `REPO_NAME`, `LOGIN_PRIMARY_COLOR`, `LOGIN_SECONDARY_COLOR`,
+  `LOGIN_FONT`). The Handlebars renderer **fails closed on
   unknown tokens too**: a `{{token}}` that is neither allow- nor deny-listed
   aborts the render (with `strict:false` it would otherwise silently emit an empty
   string, diverging from the literal sed leaves — see the render path below).
@@ -123,7 +132,7 @@ scripts/secret-scan.sh --self-test            # clean=>0, planted-secret=>1, key
 
 ## Parity gate — the Phase 1 exit criterion
 
-`scripts/parity-gate.sh` renders the 13 CRDs **both** ways (sed + Handlebars) for
+`scripts/parity-gate.sh` renders the Application CRDs (15 templates today; the script's own comments still say 13) **both** ways (sed + Handlebars) for
 `brands/example.conf` **and** `brands/local.conf` and asserts the output trees are
 byte-identical. This must pass before anything else builds on the engine.
 
@@ -133,7 +142,7 @@ scripts/parity-gate.sh
 
 (`local.conf` is local-first and leaves `HEADSCALE_URL` empty, which the default
 sed script's prod-oriented field check rejects; since `HEADSCALE_URL`/`MESH_TAG`
-are dead tokens absent from all 13 templates, the gate feeds **both** renderers the
+are dead tokens absent from every template, the gate feeds **both** renderers the
 same normalized conf so the byte comparison stays honest.)
 
 ## Structured brand schema — `brands/<name>.yaml`
@@ -190,8 +199,8 @@ proves the **overlay-primary, skeleton-fallback** model on a real app repo:
   identity**, not tenant brand. Tier-1 is deliberately narrow.
 
 `NPM_SCOPE` / `HOST_NAME` / `GENERATOR_ORG_GROUP` are registered in the token
-classifier allowlist (`scripts/tooling/tokens.json`, `reserved_pilot`) — all
-ORG/BRAND-derived, none secret-bearing.
+classifier allowlist (`scripts/tooling/tokens.json`, now under `live`; they began
+as `reserved_pilot`) — all ORG/BRAND-derived, none secret-bearing.
 
 ## `render_repo_tree()` — `scripts/render-repo-tree.sh` (opt-in)
 
@@ -217,8 +226,13 @@ Behind the **required** `--enable-repo-tree` flag:
 
 ```
 LOGIN_UI_BASE_DIR=/path/to/read-only/base \
-  scripts/render-repo-tree.sh brands/example.conf --enable-repo-tree --repo login-ui
+  scripts/render-repo-tree.sh brands/example.conf --enable-repo-tree \
+  --archetype angular-mfe --repo login-ui --set APP_SLUG=login --set TITLE_WORD=Login
 ```
+
+(Since Phase 4 the script refuses to run without `--archetype`: "missing
+--archetype". The `--set` values are the `login-ui` identity row in
+`brands/example.yaml`.)
 
 > The app-CRD sweep (`generate-brand-repos.sh` + `render-handlebars.js`) now skips
 > the `templates/repos/**` overlay subtree, so the parity gate stays byte-identical.
@@ -268,9 +282,15 @@ the brand YAML's `repos[]`, not a second overlay dir. Each archetype ships:
 ### Per-archetype skeleton (two-tier fallback)
 - **angular-mfe**: BOOTABLE — a zero-dep static holding page; `npm ci && npm run
   build` works fully OFFLINE and emits a titled bundle.
-- **spring-bff / gateway**: NON-buildable placeholder README. A compiled Spring
-  service has no faithful minimal boot, so **"never refuses"** holds but
-  **"bootable"** does not. Documented, not a bug.
+- **spring-bff**: a runnable minimal example BFF (Spring Boot WebFlux on
+  `hugmesh-parent`, a hello endpoint, tests, Dockerfile); `mvn package` in a rendered
+  tree is green (`templates/archetypes/spring-bff/README.md`). `app_slug` must match
+  `[a-z0-9]+`.
+- **angular-host**: a static host shell with a federation bootstrap.
+- **gateway / remote-fragment**: NON-buildable placeholder README
+  (`_skeleton/README.md.hbs` only). A compiled Spring gateway has no faithful
+  minimal boot, so **"never refuses"** holds but **"bootable"** does not.
+  Documented, not a bug.
 
 ### Manifest + security boundary
 `repos[]` in `brands/<name>.yaml` = `{name, archetype, installed, identity}`. It is
@@ -605,10 +625,11 @@ existing destination; and the hardcoded **contract denylist** —
 spellings) — renaming those breaks the 13d `pathsExist`
 discovery filter, the fixed provenance manifest name, and the publish
 launder-refusal stamp reads) plus their siblings (`.sig`, base-origin/base-ref
-markers). BOTH deploy-descriptor spellings are denylisted because both are live:
-the rebrand renamed the file in 3 of the 9 adopting repos, so 13d and
-13-service-catalog each carry a filter entry for each name
-(`specs/cluster/catalog/adopters.yaml`). A missing optional `from` no-ops (presence-tolerant, like anchors);
+markers). Any file named in a `rename_denylist` array in `tokens.json` is refused
+as well; today that is the theme delivery chain. BOTH deploy-descriptor spellings are denylisted because both are live:
+the rebrand renamed the file in the adopting repos (8 of 9 per
+`specs/cluster/catalog/adopters.yaml`; all 9 on origin/main today), so 13d and
+13-service-catalog each carry a filter entry for each name. A missing optional `from` no-ops (presence-tolerant, like anchors);
 `required: true` refuses. The recipe-touched backstop scan in
 `render-repo-tree.sh` follows the rename map so a moved file is still scanned.
 
@@ -621,7 +642,9 @@ system, so an unpullable base fails the render). This closes the gap where
 `GENERATOR_ORG_GROUP` / 13d presumed a tenant-hosted
 `<org-slug>/hugmesh-generator` that nothing ever rendered. Deliberately
 narrow: README display brand (`HugMesh cluster` → `{{BRAND_TITLE}} cluster`),
-the CI include org/group, and the branding doc — whose per-org FILENAME is the
+the CI include org/group (a presence-tolerant anchor, a no-op today because the
+generator's `.gitlab-ci.yml` includes nothing from `hugmesh/hugmesh-generator`),
+and the branding doc — whose per-org FILENAME is the
 `renames[]` pilot (`docs/BRANDING.md` → `docs/BRANDING-{{ORG_SLUG}}.md`;
 `ORG_SLUG` is registered live in `tokens.json`, derived from the single ORG slug
 rule, value-identical to `NPM_SCOPE`). Everything else — `Makefile`,

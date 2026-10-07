@@ -20,7 +20,7 @@ three — still live on adopter repos' and other meshes' disks, see
 | Surface | Token | Where |
 |---|---|---|
 | README display brand ("for the … cluster") | `{{BRAND_TITLE}}` | `README.md` |
-| CI pentest-stage include org/group | `{{GENERATOR_ORG_GROUP}}` | `.gitlab-ci.yml` |
+| CI include org/group (a no-op today: the generator's own `.gitlab-ci.yml` includes nothing from `hugmesh/hugmesh-generator`, and the recipe anchor tolerates that) | `{{GENERATOR_ORG_GROUP}}` | `.gitlab-ci.yml` |
 | This doc's display brand + filename | `{{BRAND_TITLE}}` / `{{ORG_SLUG}}` | `docs/BRANDING.md` → `docs/BRANDING-<org-slug>.md` |
 
 ## Never rebranded (upstream code / protocol identity)
