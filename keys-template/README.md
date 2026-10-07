@@ -1,7 +1,7 @@
 # KEYS USB template
 
 This directory is the template for the **FAT32 "KEYS" USB partition** that
-a HugMesh node image reads at first boot (the `keys-provision` service ships in the x86, Raspberry Pi 5, Orange Pi, Jetson and Frite builds). Copy it onto a USB stick (label
+a HugMesh node image reads at first boot (all ten stage4 builders install `keys-provision`; an x86 `--unaffiliated` image does not link it). Copy it onto a USB stick (label
 the FAT32 partition `KEYS`), fill in your secrets, and insert it before the
 first boot. The on-board `keys-provision` service finds it, mounts it
 read-only, and applies everything described below — then writes a marker so
