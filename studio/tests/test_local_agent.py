@@ -489,6 +489,36 @@ def test_the_kind_brief_names_the_one_service_rebuild_and_that_it_does_not_resta
         assert re.search(r"^kind-images:", fh.read(), re.M)
 
 
+def test_in_the_own_tree_mode_the_named_command_carries_the_source_variables(source, state):
+    """A hand-typed `make kind-images` has neither STACK_SRC nor STACK_NO_CLONE (the
+    Studio sets them), so it would build ./.stack-src after resetting it. The brief
+    must name the form that builds the person's tree, and the variables must be ones
+    the Makefile and the script really honour."""
+    root = os.path.dirname(source)
+    kind = plan_for(source, state, lane=la.LANE_KIND).brief
+    assert f"STACK_SRC={root} STACK_NO_CLONE=1 make kind-images ONLY=hugmesh-user-bff-api" in kind
+    docker = plan_for(source, state, lane=la.LANE_DOCKER).brief
+    assert f"`STACK_SRC={root} STACK_NO_CLONE=1 make stack-build`" in docker
+    assert "that is what STACK_NO_CLONE=1 does" in docker
+    with open(os.path.join(GENERATOR_DIR, "Makefile"), encoding="utf-8") as fh:
+        make = fh.read()
+    assert re.search(r"^STACK_SRC\s*\?=", make, re.M)
+    assert re.search(r"if \[ -n \"\$\(STACK_NO_CLONE\)\" \]", make)
+    with open(os.path.join(GENERATOR_DIR, "scripts", "kind-load-images.sh"),
+              encoding="utf-8") as fh:
+        assert 'STACK_SRC="${STACK_SRC:-' in fh.read()
+
+
+def test_in_the_download_mode_the_command_is_bare_and_the_reset_is_named(source, state):
+    brief = la.prepare(
+        lane=la.LANE_KIND, mesh="m", domains=[], doors=[], repo="hugmesh-user-bff-api",
+        source=source, source_root="/gen/.stack-src", source_mode="clone",
+        generator_dir=GENERATOR_DIR, pr=good_probe(), environ=ENV, state_root=state).brief
+    assert "with: make kind-images ONLY=hugmesh-user-bff-api" in brief
+    assert "STACK_SRC=" not in brief and "STACK_NO_CLONE=1 make" not in brief
+    assert "resets .stack-src checkouts that have no local commits" in brief
+
+
 def test_a_repo_that_is_not_a_kind_image_is_not_given_a_command_that_would_be_refused(
         source, state):
     brief = plan_for(source, state, lane=la.LANE_KIND, repo="hugmesh-games").brief

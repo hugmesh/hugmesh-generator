@@ -666,17 +666,25 @@ def kind_image_repos(generator_dir: str) -> "frozenset[str]":
 
 
 def _rebuild_lines(lane: str, repo: str, kind_repos: "frozenset[str]", source_mode: str,
-                   cluster: str) -> "list[str]":
+                   cluster: str, source_root: str = "") -> "list[str]":
     """How this repo's change gets onto the running mesh. Every target named here was
     read in the Makefile and scripts/kind-load-images.sh; ones that do not exist yet
-    are not named."""
+    are not named.
+
+    In the person's-own-tree mode the Studio runs every build with STACK_SRC=<tree> and
+    STACK_NO_CLONE=1 (core/local_stack_node.py). A bare `make ...` typed by hand would
+    use ./.stack-src instead (the Makefile's default, and scripts/kind-load-images.sh
+    reads the same variable), after a `make stack-clone` that resets it, so the command
+    named here carries the two variables in that mode."""
+    own = source_mode == "existing" and bool(source_root)
+    pre = f"STACK_SRC={shlex.quote(source_root)} STACK_NO_CLONE=1 " if own else ""
     if lane == LANE_KIND:
         lines = []
         if repo in kind_repos:
             lines.append(
                 f"- On the kind lane ({cluster or 'hugmesh-local'}) the person rebuilds "
-                f"ONE image from the hugmesh-generator checkout with: make kind-images "
-                f"ONLY={repo}")
+                f"ONE image, from the hugmesh-generator checkout, with: {pre}make "
+                f"kind-images ONLY={repo}")
             lines.append(
                 "- That command builds and loads the image but does NOT restart the "
                 "pods that use it: they keep the old image until the person restarts "
@@ -693,8 +701,8 @@ def _rebuild_lines(lane: str, repo: str, kind_repos: "frozenset[str]", source_mo
     else:
         lines = [
             "- The Docker lane has no single-service rebuild target in this repository: "
-            "`make stack-build` builds every service and `make stack-up` builds and "
-            "starts the whole stack. Both are for the person to run, not you.",
+            f"`{pre}make stack-build` builds every service and `make stack-up` builds "
+            "and starts the whole stack. Both are for the person to run, not you.",
         ]
     if source_mode == "clone":
         lines.append(
@@ -702,8 +710,10 @@ def _rebuild_lines(lane: str, repo: str, kind_repos: "frozenset[str]", source_mo
             "which resets .stack-src checkouts that have no local commits, so a change "
             "must be committed there or applied to the person's own tree to survive.")
     else:
-        lines.append("- The mesh builds from the person's own source tree, which the "
-                     "Studio never fetches or resets.")
+        lines.append(
+            "- The mesh builds from the person's own source tree, which the Studio "
+            "never fetches or resets (that is what STACK_NO_CLONE=1 does). Without "
+            "STACK_SRC a hand-typed make would build .stack-src instead.")
     return lines
 
 
@@ -744,7 +754,7 @@ def render_brief(*, lane: str, mesh: str, domains: Sequence[str], doors: Sequenc
         out.append("- Doors: " + "; ".join(doors) + ".")
     out.append("- The Studio's running-mesh table lists the live doors and pods.")
     out += ["", "How a change gets onto the running mesh (the person does this, not you)"]
-    out += _rebuild_lines(lane, repo, kind_repos, source_mode, cluster)
+    out += _rebuild_lines(lane, repo, kind_repos, source_mode, cluster, source_root)
     out.append(f"- To hand a result back, leave it committed on {branch}. The person "
                f"reads `git diff {base_sha[:12]}..HEAD` and applies it to the real "
                "folder (`git format-patch` here, `git am` there).")
