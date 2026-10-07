@@ -20,6 +20,9 @@ Both run unchanged on **x86_64** (e.g. the RTX-4060 host) and on the **NVIDIA
 Jetson Orin Nano** (arm64 — see *Jetson* below). The role/service is the shared
 core; the Jetson platform bring-up is additive.
 
+> Running Ollama on your own desktop for a coding assistant, rather than serving the
+> mesh, is covered in [LOCAL-AI-ASSISTANT.md](LOCAL-AI-ASSISTANT.md).
+
 ---
 
 ## 1. Build an edge-AI node

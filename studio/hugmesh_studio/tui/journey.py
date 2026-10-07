@@ -908,6 +908,11 @@ class BuildScreen:
             out.append(f"  users     {len(cfg.users)}")
         themed = "customized" if cfg.login_theme_css() else "shipped defaults"
         out.append(f"  themes    {themed}")
+        if getattr(cfg, "qemu_device_tests", False):
+            # armed by the QEMU screen's build-first arm (#638) — the GUI's Build
+            # screen shows the same fact as its "after the build, run the QEMU
+            # emulated-device tests" checkbox.
+            out.append("  after the build  the QEMU emulated-device tests run")
         # THE BUILD GATE, said here too (#495, own domain since #631): the TUI does not
         # dispatch, but the GUI build this screen sends the operator to runs the SAME
         # seam (gui/pages/launch.py) and will refuse. Saying so now is the difference
