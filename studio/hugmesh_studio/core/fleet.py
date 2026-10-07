@@ -151,7 +151,11 @@ def commit_fleet_domains(state: FleetDomains, added) -> list[str]:
 def fleet_domain_fields(state: FleetDomains) -> dict[str, Any]:
     """The FleetConfig fields the steps' state becomes — COPIES (the config is recorded
     with the session while the state keeps being edited after a Back). Both faces
-    build their FleetConfig through this, so they record identical rows."""
+    build their FleetConfig through this, so they record the same domains, in the same
+    order, with the same services and reviewed markers. (One difference is left, and
+    is the one the text-mode ``a NAME`` always had: the GUI's table fills an empty
+    title with the domain's name, ``a NAME`` leaves it empty — as the local-mesh
+    route's does. A fleet build reads names only, so nothing built changes.)"""
     return {
         "domains": [Domain(**asdict(d)) for d in state.domains],
         "domain_services_reviewed": list(state.domain_services_reviewed),
