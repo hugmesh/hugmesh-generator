@@ -12,9 +12,43 @@ Everything below is either a **source line** (path + line number, on `main` at
 estimated. Where a platform has never produced a log in `out/sessions/`, this
 document says so instead of guessing.
 
----
+> **Status on 2026-10-07 (`origin/main` @ `cbf5d9a6`). Read this first.** Every
+> count, line number and log figure below was taken on `main` at `21f0ca0`
+> (2026-07-30) from build logs that are no longer on disk (`out/sessions` holds
+> one other session), so the log-derived figures are UNVERIFIED and cannot be
+> re-measured, and the script in §6 points at a directory that is gone. One pass
+> has landed since: #491 (`fe4d5c94`, 2026-07-30). Where each part stands:
+>
+> * **Stage names and ladder (§1, §5, D12, D13, D18, D21): done in
+>   `studio/hugmesh_studio/core/progress-tables.json`.** `_meta.canonical_stages`
+>   is one ordered list of 21 ids. Every platform's `phases` is a subsequence of
+>   it, and a stage the platform lacks is named in that platform's
+>   `not_applicable` map with a reason. No builder banner starts with `Phase N:`
+>   any more, all ten builders announce `Rebranding baked config`, and x86 prints
+>   `SKIPPED sysroot clean (--skip-clean)` (`build-x86-host-stage4.sh:6795`).
+>   Phase counts today: x86 19, rpi5 15, jetson 15, and 17 for each of the other
+>   seven. The shipped ladder is the §5 proposal
+>   with one id and one position changed: `brand-desktop`, not `brand-image`, and
+>   `rebrand-config` is stage 9 (after `stage-egress-vpn`), not stage 1. Five
+>   labels differ too: `Verify seed`, `Extract stage3`, `Restore toolchain libs`,
+>   `Stage bootloader` and `Package stage4`. Read the JSON, not §5, for the real
+>   ids and labels. The flag grid in §1.3 is unchanged: `--image-only` is still
+>   absent from x86 and rpi5 (D20 is a flag gap, not a banner gap).
+> * **Emerge groups (§2.2, D8 to D11): declared, not unified.** The same five
+>   names exist. x86 emits all five; the nine ARM builders emit `image`, `system`
+>   and `tools`. `progress-tables.json` now states each platform's `emitted`
+>   groups and gives a reason for each `not_applicable` one (`world` and
+>   `dependencies` on the cross builders). The work behind a name still differs
+>   (`_meta.emerge_groups.meanings`).
+> * **Per-package data (§3, D1 to D7): not changed.** `Dockerfile.build:98` still
+>   sets `EMERGE_DEFAULT_OPTS="--quiet-build=y ..."`, and only x86 overrides it
+>   (`build-x86-host-stage4.sh:5478`); `PORTAGE_LOGDIR` is set in 2 of the 10
+>   `make.conf.tmpl` files (x86 and rpi5); rpi5 still sets no `PORTAGE_TMPDIR`
+>   (`cross_emerge`, `build-rpi5-stage4.sh:3922-3938`) and runs `--jobs`
+>   `${CROSS_EMERGE_JOBS:-1}`, while the eight other cross builders run
+>   `--jobs=${JOBS}`; x86 still sets no `EMERGE_LOG_DIR`.
+> * **Platforms:** ten builders now, not eight (see the addendum).
 
-## 0. The headline measurement
 
 One session, one mesh, both images, same moment:
 `out/sessions/20260729-233913-719d4e/`. Snapshot taken **2026-07-30T08:41:41Z**
@@ -90,11 +124,11 @@ The `frite`, `orangepi5`, `orangepizero2`, `orangepizero2w` and `orangepizero3`
 phase lists are **byte-identical** to one another (verified by comparing the
 serialised `phases` arrays) — a copy-paste family; only the builders' u-boot
 defconfig variable differs, inside the banner *text*.
-`origin/feat/orangepi-234-platforms` is **not** ahead of `main` here: it
+(As of 2026-07-30; that branch no longer exists on `origin`.) `origin/feat/orangepi-234-platforms` is **not** ahead of `main` here: it
 carries the same 8-platform table (`git merge-base --is-ancestor` says it is not
 an ancestor of `main`, but its `progress-tables.json` platform set is identical
 to `main`'s, and its two "new" builders — Zero 2W / Zero 3 — are already on
-`main`). No 3 LTS / 4 LTS platform exists on `origin` yet.
+`main`). No 3 LTS / 4 LTS platform existed on `origin` when this was measured; both landed later the same day in #489 (see the addendum).
 
 ### 1.2 The same work under different names
 
@@ -436,7 +470,7 @@ Classification:
 | D21 | `Cleaning: SKIPPED` alternative banner on all 7 ARM builders, absent on x86 — yet x86 **does** support `--skip-clean`, so under that flag the "Clean sysroot" rung silently never appears | x86 | **drift** — the flag was added without the SKIPPED banner the ARM family emits | **MUST-UNIFY** | x86 `SKIP_CLEAN` at :174/:582/:874, guard at :5214 wraps `banner "Cleaning sysroot"` (:5215) with no `else`; `progress-tables.json` x86 phase has no SKIPPED alternative |
 | D22 | x86 emits its group banners as bare `echo` inside unquoted chroot heredocs; ARM uses `banner()` | x86 | **genuine** — `banner()` does not exist inside the chroot | **GENUINELY-PLATFORM-SPECIFIC** (already documented and gated; wire format is the `==> ` text) | `progress-tables.json` `_meta.source`; `check.sh` heredoc-safety probe |
 | D23 | `>>> Completed` appears twice per package on x86 (counter + ebuild ladder), once on ARM | x86 | consequence of D1 | **MUST-UNIFY** (follows from D1) | 50 + 50 = 100 vs 281 |
-| D24 | 6 of 8 platforms have never produced a log under `out/sessions/` | frite, orangepi5, opiz2, opiz2w, opiz3 (+ x86/rpi5/jetson do) | coverage gap, not a code divergence | **MAY-DIFFER-BUT-MUST-BE-NAMED-CONSISTENTLY** (uniformity claims for those five are source-only until a build exists) | `out/sessions` inventory §0 |
+| D24 | 5 of 8 platforms had never produced a log under `out/sessions/` (the §0 coverage table lists five without logs and three with) | frite, orangepi5, opiz2, opiz2w, opiz3 (+ x86/rpi5/jetson do) | coverage gap, not a code divergence | **MAY-DIFFER-BUT-MUST-BE-NAMED-CONSISTENTLY** (uniformity claims for those five are source-only until a build exists) | `out/sessions` inventory §0 |
 
 ---
 
@@ -494,9 +528,9 @@ source that survives the build:
 1. the counter stream (`Emerging/Installing/Completed (N of M)`) — already uniform;
 2. the ebuild ladder and tool output — today x86-only, recoverable on ARM by
    removing the `--quiet-build=y` leak (D1) and/or by tailing the per-package
-   log (the `feat/emerge-multijob-progress` tailer approach, which is **not yet
-   on `origin`** — `git ls-remote` finds no such head — so this survey assumes
-   it must compose rather than that it exists);
+   log (the `feat/emerge-multijob-progress` tailer approach, which was **not
+   on `origin`** when measured — `git ls-remote` found no such head — so this survey assumed
+   it must compose rather than that it exists. The branch is still absent on 2026-10-07. #488 (`70fcea37`, 2026-07-30) added Studio parsing of the `>>> Jobs:` lines (`emerge_packages.py:113-115`); whether it is the work meant here is UNVERIFIED);
 3. the elog header + USE flags — today x86-only, requires a `PORTAGE_LOGDIR`
    that actually lands under the build root on cross builds (D2/D3);
 4. `>>> Jobs:` scheduler state — today ARM-only; x86 must either emit it or the
