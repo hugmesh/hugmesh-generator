@@ -112,9 +112,21 @@ jobs:
         # side is complete without needing a display. A bundle missing
         # core/progress-tables.json fails right here, at import time, which is exactly
         # where it should fail rather than on a user's desktop.
+        #
+        # Start-Process, not `exe > specs.json`: the exe is a WINDOWED (console=False)
+        # executable. PowerShell neither waits for such a process nor hands it a valid
+        # stdout, so a plain redirect left it with "OSError: [Errno 22]" and an empty
+        # file (run 37690716536). Start-Process wires the file handles itself and waits.
+        # The timeout is there because a bundle that cannot import hangs on an error
+        # dialog instead of exiting (measured under Wine; see packaging/wix/README.md).
         run: |
-          dist\hugmesh-studio\hugmesh-studio.exe --print-specs > specs.json
-          if ((Get-Item specs.json).Length -eq 0) { throw "no output from --print-specs" }
+          $exe = (Resolve-Path dist\hugmesh-studio\hugmesh-studio.exe).Path
+          $p = Start-Process -FilePath $exe -ArgumentList '--print-specs' `
+            -RedirectStandardOutput specs.json -RedirectStandardError specs.err `
+            -NoNewWindow -PassThru
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); throw "--print-specs did not exit within 120 s" }
+          if ($p.ExitCode -ne 0) { Get-Content specs.err; throw "--print-specs exited $($p.ExitCode)" }
+          if ((Get-Item specs.json).Length -eq 0) { Get-Content specs.err; throw "no output from --print-specs" }
           Get-Content specs.json -TotalCount 3
         shell: pwsh
 
