@@ -67,6 +67,23 @@ ollama --version          # this PC: 0.21.2
 nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv   # NVIDIA only: how much VRAM is free
 ```
 
+### Keep Ollama current
+
+A model published after your Ollama was built is **refused at pull time**:
+
+```text
+Error: pull model manifest: 412:
+The model you are attempting to pull requires a newer version of Ollama.
+```
+
+On the reference PC (Ollama 0.21.2; the newest release on 2026-10-07 was 0.40.0, from
+<https://github.com/ollama/ollama/releases>) `ornith`, `lfm2.5`, `north-mini-code-1.0`
+and `laguna-xs-2.1` were refused this way, while `qwen3:8b`, `qwen2.5-coder`,
+`gpt-oss:20b` and `qwen3-coder:30b` pulled. Compare `ollama --version` with the latest
+release, and update through the same route you installed by (the package manager, the
+vendor installer again, or a new container image). Updating replaces the program and
+keeps `~/.ollama`, so the models you already pulled stay.
+
 ## 3. Start the server
 
 If your install registered a service, it is already running. Otherwise start it
@@ -105,27 +122,27 @@ after you pull, read the truth with `ollama show <model>`.
 The last two columns are what the benchmark in section 9 recorded on the reference PC
 at `num_ctx` 16384. A dash means the model has not been measured here yet: run the
 script on your own PC for your own numbers. Speeds move with what else the PC is
-doing (the figures marked * were taken while builds were running; † is a hand reading of `ollama ps` at 16k context, not a benchmark row).
+doing (the figures marked * were taken while builds were running and the load average was above 20).
 
 ### Tier A: fits the GPU (best for an agent that must stay responsive)
 
 | Model | Pull | Weights | Max context | Good for | Loaded size / on GPU | Generation |
 |---|---|---|---|---|---|---|
-| `qwen3:8b` | `ollama pull qwen3:8b` | 5.2 GB | 40K | general work and **tool use**; this is the model the Claude Code session in section 6 was verified on; has a thinking mode | 6.6 GB / 82%† | — |
+| `qwen3:8b` | `ollama pull qwen3:8b` | 5.2 GB | 40K | general work and **tool use**; this is the model the Claude Code session in section 6 was verified on; has a thinking mode | 6.6 GB / 100%* | about 45 tok/s* |
 | `qwen2.5-coder:7b` | `ollama pull qwen2.5-coder:7b` | 4.7 GB | 32K | code edits, tests, conversions in a chat; has `tools` but no thinking mode, and is a weaker agent than `qwen3:8b` | 6.1 GB / 87%* | 19 to 20 tok/s* |
-| `ornith:9b` | `ollama pull ornith:9b` | 5.6 GB | 256K | listed as a coding-agent model with tools and thinking | — | — |
-| `lfm2.5:8b` | `ollama pull lfm2.5:8b` | 5.2 GB | 125K | listed for fast tool calling on consumer hardware | — | — |
+| `ornith:9b` | `ollama pull ornith:9b` | 5.6 GB | 256K | listed as a coding-agent model with tools and thinking | needs a newer Ollama (pull refused, HTTP 412, on 0.21.2) | — |
+| `lfm2.5:8b` | `ollama pull lfm2.5:8b` | 5.2 GB | 125K | listed for fast tool calling on consumer hardware | needs a newer Ollama (pull refused, HTTP 412, on 0.21.2) | — |
 | `qwen2.5-coder:3b` / `:1.5b` | `ollama pull qwen2.5-coder:3b` | 1.9 GB / 0.99 GB | 32K | editor autocomplete beside a bigger model | — | — |
 
 ### Tier B: mixture-of-experts, runs partly on the CPU (needs about 14 to 20 GiB free RAM)
 
 | Model | Pull | Weights | Max context | Good for | Loaded size / on GPU | Generation |
 |---|---|---|---|---|---|---|
-| `gpt-oss:20b` | `ollama pull gpt-oss:20b` | 14 GB | 128K | reasoning and tool calling; the smallest of this tier | — | — |
-| `qwen3-coder:30b` | `ollama pull qwen3-coder:30b` | 19 GB | 256K | 30B total, about 3.3B active: agentic coding | — | — |
-| `north-mini-code-1.0` | `ollama pull north-mini-code-1.0` | 19 GB | 488K | 30B MoE, 3B active, "built for agentic software engineering" | — | — |
-| `laguna-xs-2.1` | `ollama pull laguna-xs-2.1` | 20 GB | 256K | 33B MoE, 3B active, "agentic coding and long-horizon work on a local machine" | — | — |
-| `ornith:35b` | `ollama pull ornith:35b` | 21 GB | 256K | the larger ornith | — | — |
+| `gpt-oss:20b` | `ollama pull gpt-oss:20b` | 14 GB | 128K | reasoning and tool calling; the smallest of this tier | pulls on 0.21.2; not measured yet | — |
+| `qwen3-coder:30b` | `ollama pull qwen3-coder:30b` | 19 GB | 256K | 30B total, about 3.3B active: agentic coding | pulls on 0.21.2; not measured yet | — |
+| `north-mini-code-1.0` | `ollama pull north-mini-code-1.0` | 19 GB | 488K | 30B MoE, 3B active, "built for agentic software engineering" | needs a newer Ollama (pull refused, HTTP 412, on 0.21.2) | — |
+| `laguna-xs-2.1` | `ollama pull laguna-xs-2.1` | 20 GB | 256K | 33B MoE, 3B active, "agentic coding and long-horizon work on a local machine" | needs a newer Ollama (pull refused, HTTP 412, on 0.21.2) | — |
+| `ornith:35b` | `ollama pull ornith:35b` | 21 GB | 256K | the larger ornith | needs a newer Ollama (pull refused, HTTP 412, on 0.21.2) | — |
 
 ### Tier C: does not suit this PC
 
