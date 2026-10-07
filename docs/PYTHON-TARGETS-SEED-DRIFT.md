@@ -5,6 +5,40 @@
 FIRST image (`build-pki.x86`) in a `dev-python/*` slot conflict, blocking every
 queued image behind it.
 
+> **Status on 2026-10-07 (`origin/main` @ `cbf5d9a6`): the fix in §7 is on `main`.**
+> It landed in #486 (`41a74124`, 2026-07-30) together with this document. "Today"
+> and "currently" in §0 and §2 to §9 mean `21f0ca0`; read them as the record, not as the
+> present. What `main` has now:
+>
+> * No `specs-*/portage/make.conf.tmpl` assigns `PYTHON_TARGETS` or
+>   `PYTHON_SINGLE_TARGET`; each carries a comment instead (for example
+>   `specs-x86/portage/make.conf.tmpl:110`). There are ten spec dirs now (the
+>   survey counted eight).
+> * `scripts/_python-targets-lib.sh` (`pt_apply_seed_targets`) derives both values
+>   from the seed. All ten builders (nine ARM, one x86) source it and call it after
+>   the specs are installed and before the first emerge into the sysroot
+>   (x86: `build-x86-host-stage4.sh:3866`). It fails the build if the seed cannot
+>   be read.
+> * It departs from §7 item 2 in three ways. It skips `dev-lang/python-exec`, whose
+>   USE lists every target it supports. It intersects the vdb targets with the
+>   interpreters the seed really has. It picks the newest non-freethreading target
+>   as `PYTHON_SINGLE_TARGET`. The `usr/lib/python3.*` probe is only the fallback
+>   for the interpreter list.
+> * Every `specs-*/portage/package.use/python-targets` is now a comment-only
+>   placeholder (one md5, `41798f02a98de4772e6d2150dec93afc`); the builder
+>   overwrites it with a seed-derived `*/* PYTHON_TARGETS: ...` line.
+> * `build-x86-host-stage4.sh:5709` runs `emerge --oneshot --update --newuse
+>   sys-apps/portage` (§7 item 5).
+> * `tests/scripts/test-python-targets-seed.sh` asserts the invariant, not the
+>   literal (§8). It passes 126/0 on `main`.
+> * Not changed, and still the same fault line: the build container's own seed in
+>   `Dockerfile.build:287` (`*/* PYTHON_TARGETS: python3_12 python3_13`) and the
+>   `python3_12` requirement in `scripts/_host-guard-lib.sh:226`.
+>
+> The session directories, logs and sysroots cited below are no longer on disk
+> (`out/sessions` holds one other session), so the measurements taken from them are
+> UNVERIFIED and cannot be re-measured. §1 was re-run on 2026-10-07; see §1.3.
+
 This document exists as a doc rather than only a commit message for three reasons:
 it is the reference the (rewritten) `tests/scripts/test-python-targets-seed.sh`
 guard points at when it fails; it is what someone needs to read the *next* time a
@@ -93,7 +127,7 @@ the canonical example has to spell `-*` out to get replacement.
 
 ### 1.2 What the source says
 
-`PYTHON_TARGETS` is **not** an incremental. `portage/const.py:122`:
+`PYTHON_TARGETS` is **not** an incremental. `portage/const.py:122` in portage 3.0.81.2 (it is `:125` in 3.0.82.2):
 
 ```python
 INCREMENTALS = (
@@ -107,8 +141,8 @@ INCREMENTALS = (
 (`USE_EXPAND` — the *list of expandable names* — is incremental. The expanded
 variables themselves, `PYTHON_TARGETS` etc., are not.)
 
-`portage/package/ebuild/config.py`, `regenerate()`, the USE_EXPAND stacking loop —
-this is the exact mechanism:
+`portage/package/ebuild/config.py`, `regenerate()`, the USE_EXPAND stacking loop
+(`:2961-2999` in 3.0.82.2) — this is the exact mechanism:
 
 ```python
 for var in cur_use_expand:
@@ -146,7 +180,7 @@ else:
 ```
 
 …which `config.setcpv()` appends to the pkg layer's USE — with portage's own comment
-saying so, `config.py:1998`:
+saying so, `config.py:1998` (`:1988` in 3.0.82.2):
 
 ```python
 self.configdict["pkg"]["USE"] = self.puse[:]  # this gets appended to USE
@@ -157,10 +191,16 @@ with no wipe. Hence: **package.use is a delta that adds.**
 
 ### 1.3 Executed proof
 
-Rather than argue from reading, four throwaway `PORTAGE_CONFIGROOT`s were built
+Rather than argue from reading, throwaway `PORTAGE_CONFIGROOT`s were built
 against this machine's real
 `/var/db/repos/gentoo/profiles/default/linux/amd64/23.0` profile and evaluated with
-`portage.package.ebuild.config` (portage 3.0.81.2). No emerge, no network, no build:
+`portage.package.ebuild.config` (portage 3.0.81.2). No emerge, no network, no build.
+Rows A to D are what `tests/scripts/python-targets-semantics-probe.py` rebuilds
+(its row D label, "what specs-*/ ship today", is out of date: see the status
+above); row E is a fifth, hand-built root that the probe does not repeat. On
+2026-10-07 all five rows were re-run on portage 3.0.82.2 and gave the same
+values (the profile default is still `python3_14`,
+`profiles/base/make.defaults:130-131`):
 
 | # | config | effective `PYTHON_TARGETS` | effective `PYTHON_SINGLE_TARGET` |
 |---|--------|---------------------------|----------------------------------|
@@ -178,7 +218,7 @@ value package.use would have added.
 
 **Verdict: the replace-vs-add claim is CONFIRMED, from docs, from source, and by
 execution.** The header comment in `specs-x86/portage/package.use/python-targets`
-states the intent was to "widen a USE flag, enabling the 3.12 target everywhere at
+(as of `21f0ca0`; the file is now a placeholder) stated the intent was to "widen a USE flag, enabling the 3.12 target everywhere at
 once". make.conf does the opposite of widening.
 
 ---
@@ -198,8 +238,8 @@ once". make.conf does the opposite of widening.
 | orangepi-zero2w (`:65-66`) | `python3_14` | same | `+python3_12` | `python3_12` | `python3_12` |
 | orangepi-zero3 (`:65-66`) | `python3_14` | same | `+python3_12` | `python3_12` | `python3_12` |
 
-All eight `package.use/python-targets` files are byte-identical
-(`md5 77497071b3f59634ff84e19b1bc1f4c7`) and all eight make.conf templates carry the
+All eight `package.use/python-targets` files were byte-identical
+(`md5 77497071b3f59634ff84e19b1bc1f4c7`) and all eight make.conf templates carried the
 identical two lines. "profile default" is the value measured in §1.3 row A from a
 2026-07-11 tree sync; `profiles/base/make.defaults` is the *only* file in the whole
 profile tree that assigns `PYTHON_TARGETS`, and it reads:
@@ -229,13 +269,13 @@ out/sessions/20260729-233913-719d4e/wl-pki.x86/sysroot/etc/portage/package.use/p
 
 ### 2.1 `PYTHON_SINGLE_TARGET` is its own, separate hazard
 
-`specs-x86/portage/package.use/python-targets` says, in its own header:
+`specs-x86/portage/package.use/python-targets` said, in its own header at `21f0ca0`:
 
 > `PYTHON_SINGLE_TARGET` is deliberately NOT set here: two enabled single-targets
 > violate REQUIRED_USE (`^^` exactly-one), and the resolver already derives the
 > right single target from the installed 3.12 interpreter.
 
-…and then make.conf sets it anyway, on all eight platforms. The `^^` argument is
+…and then make.conf set it anyway, on all eight platforms. The `^^` argument is
 about *package.use* (a delta, which could produce two enabled single-targets);
 make.conf's assignment is a replacement, so it cannot produce two. It produces a
 different problem: it pins the single-target to an interpreter the seed does not
@@ -392,7 +432,7 @@ reliably prevent TODAY's failure. The correct invariant is "superset of the seed
 
 ### 5.1 What actually happened on 2026-07-16
 
-The `package.use/python-targets` header records it:
+The `package.use/python-targets` header recorded it, as of `21f0ca0`:
 
 > freshly-pulled ebuilds (setuptools-83 / setuptools-scm-10.2 → jaraco-text →
 > jaraco-context, hatchling, flit-core, urllib3, jinja2, cython, …) come up with
@@ -455,7 +495,7 @@ built against, so the seed is what must be tracked.
 
 ## 6. The fix already exists — in exactly one of eight builders
 
-`build-rpi5-stage4.sh:3290-3305`:
+This is the state at `21f0ca0`. The block below is gone from `main`: every builder now calls `pt_apply_seed_targets` instead (see the status at the top). It was at `build-rpi5-stage4.sh:3290-3305`:
 
 ```bash
 # The arm64 stage3's python FLOATS — the current seed ships ONLY python3.14, but
@@ -471,7 +511,7 @@ if [[ "${_seed_py}" =~ ^python3\.[0-9]+$ ]]; then
         "${SYSROOT}/etc/portage/make.conf"
 ```
 
-`grep -c _seed_pt` over all eight builders: **rpi5 = 4, every other builder = 0.**
+`grep -c _seed_pt` over all eight builders at `21f0ca0`: **rpi5 = 4, every other builder = 0.** (On 2026-10-07 the count is 0 in all ten; the helper is `pt_apply_seed_targets`.)
 
 That is the measured reason rpi5 survived the same session that killed x86: its
 rendered sysroot make.conf reads `PYTHON_TARGETS="python3_14"` /
@@ -496,7 +536,7 @@ Two defects remain even in the rpi5 version:
 
 ## 7. Recommended fix
 
-Layered, smallest-blast-radius-first. Items 1–3 are the fix; 4 is the durable guard;
+_Implemented in #486; see the status at the top for the three differences._ Layered, smallest-blast-radius-first. Items 1–3 are the fix; 4 is the durable guard;
 5 is the loose thread #479 left.
 
 1. **`specs-*/portage/make.conf.tmpl` (×8):** stop assigning a frozen literal.
@@ -565,11 +605,12 @@ Layered, smallest-blast-radius-first. Items 1–3 are the fix; 4 is the durable 
 
 ## 8. What the guard test must assert instead
 
-`tests/scripts/test-python-targets-seed.sh` currently hard-codes
+At `21f0ca0`, `tests/scripts/test-python-targets-seed.sh` hard-coded
 `*/* PYTHON_TARGETS: python3_12` in three places (spec dirs, ARM copy loops,
-`Dockerfile.build`) and is wired into `check.sh`. Any correct fix fails it. It should
-assert the invariant, so that the *next* stage3 python bump is caught instead of
-re-frozen:
+`Dockerfile.build`) and was wired into `check.sh`. Any correct fix failed it. It was
+rewritten in #486 to assert the invariant, so that the *next* stage3 python bump is
+caught instead of re-frozen. The six points below were its specification; its
+sections 1 to 6 follow them in order:
 
 1. **No frozen version literal where the seed decides.** No
    `specs-*/portage/make.conf.tmpl` may assign `PYTHON_TARGETS` or
@@ -596,6 +637,8 @@ re-frozen:
 ---
 
 ## 9. Blast radius
+
+File and line references are as of `21f0ca0`; they have moved.
 
 | file | why |
 |---|---|
