@@ -1,24 +1,23 @@
 # Superadmin go-live wizard
 
-> **Status: v1 CONSOLIDATED.** One architecture. This ships the shared driver,
-> the provider registry, **three front-ends** (CLI, ncurses console menu, and the
-> Studio GUI wizard), and **all six providers implemented end-to-end** —
-> bring-your-own-domain, cloudflare-tunnel, DuckDNS/Cloudflare-DDNS,
-> tailscale-funnel, router-portforward, and tor-onion. The mechanism is **baked on-image**
-> by the two server builders and surfaced from a **console** and a **Studio**
-> menu entry. What remains genuinely deferred is listed in
+> **Status: v1 consolidated.** One architecture: a shared driver, a provider registry,
+> **three front-ends** (CLI, ncurses console menu, Studio GUI wizard) and **all six
+> providers implemented end to end**: bring-your-own-domain, cloudflare-tunnel,
+> DuckDNS/Cloudflare-DDNS, tailscale-funnel, router-portforward and tor-onion. The two
+> server builders **bake** the mechanism on-image, and a **console** menu and a
+> **Studio** menu entry surface it. What is still deferred is listed in
 > [Deferred](#deferred).
 >
-> *(This doc is the single canonical go-live reference. It absorbed the former
-> `docs/GO-LIVE.md` — the superseded #286 engine (`scripts/go-live.sh`,
-> `scripts/golive-providers.conf`, `scripts/go-live-menu.sh`) and its doc were
-> removed once their wins were ported onto this driver.)*
+> *(This page is the single canonical go-live reference. It absorbed the former
+> `docs/GO-LIVE.md`. The superseded #286 engine (`scripts/go-live.sh`,
+> `scripts/golive-providers.conf`, `scripts/go-live-menu.sh`) and its doc were removed
+> once their wins were ported onto this driver.)*
 
-The go-live wizard is the **human-facing effector of the existing
-`RELEASE_STATE` mechanism**. It does *not* reimplement the internal-vs-public
-posture switch — it **trips the one that already ships**. Its job is to walk a
-superadmin through provisioning the public edge (a tunnel token, or DNS records)
-and then, as a single deliberate terminal action, flip the box live.
+The go-live wizard is the **human-facing effector of the existing `RELEASE_STATE`
+mechanism**. It does *not* reimplement the internal-vs-public posture switch. It
+**trips the one that already ships**. It walks a superadmin through provisioning the
+public edge (a tunnel token, or DNS records) and then, as one deliberate terminal
+action, flips the box live.
 
 ---
 
@@ -45,10 +44,10 @@ provision the edge  ──►  write /etc/hugmesh/go-live  ──►  reconcile 
 rollback:            ──►  delete /etc/hugmesh/go-live  ──►  reconcile converges ≤60s  ──►  INTERNAL
 ```
 
-The wizard **never** touches nftables, ingress classes, or NetworkPolicies. It
-writes (or deletes) one marker file and lets the existing reconcile agent do the
-convergence. That is the whole safety story: the posture switch is one, audited,
-fail-closed mechanism; the wizard is just a friendly way to trip it.
+The wizard **never** touches nftables, ingress classes or NetworkPolicies. It writes or
+deletes one marker file and lets the existing reconcile agent converge. That is the whole
+safety story: the posture switch is one audited, fail-closed mechanism, and the wizard
+trips it.
 
 ---
 
@@ -266,37 +265,33 @@ root path.
 
 ## Deferred
 
-Now consolidated onto one architecture; the following are **DONE** and no longer
-deferred:
+These are **done** and no longer deferred:
 
 - ✅ **ncurses console front-end** — `specs/usr/sbin/hugmesh-go-live-menu`.
-- ✅ **Studio GUI wizard** — `gui/pages/golive.py`, repointed onto this driver.
+- ✅ **Studio GUI wizard** — `gui/pages/golive.py`, on this driver.
 - ✅ **All six provider emits** — `byo-domain`, `cloudflare-tunnel`,
   DuckDNS/Cloudflare-DDNS, `tailscale-funnel`, `router-portforward`, `tor-onion`.
-- ✅ **On-image baking** — the two go-live server builders
-  (`build-rpi5-stage4.sh`, `build-x86-host-stage4.sh`) bake the driver, the
-  registry, the CLI/menu front-ends and the web-UI effector
-  (`hugmesh-go-live-reconcile`, enabled as a boot service) into the sysroot inside
-  `bake_host_firewall()`, right beside firewall-reconcile.
-- ✅ **Console + Studio menu entries** — a "Go Live…" tray action in Studio and
-  the on-device `hugmesh-go-live-menu` console face.
-
-Still genuinely **deferred**, by design:
-
-- **A pre-flip `verify` subcommand** (probe DNS/HTTP/tunnel/DDNS/funnel before
-  `commit`). The gate today is preview-then-confirm; automated propagation
-  probes are a follow-up driver subcommand every front-end would then surface.
-- ✅ **The web front-end — DONE differently than the other three.** admin-bff's
-  web console (already merged, admin-bff-api PR #200) doesn't call the driver
-  directly like CLI/console/Studio do (it structurally can't — it runs in a
-  pod, not on the host); it records a signed intent, and
+- ✅ **On-image baking** — the two go-live server builders (`build-rpi5-stage4.sh`,
+  `build-x86-host-stage4.sh`) bake the driver, the registry, the CLI and menu front-ends
+  and the web-UI effector (`hugmesh-go-live-reconcile`, enabled as a boot service) into
+  the sysroot inside `bake_host_firewall()`, next to firewall-reconcile.
+- ✅ **Console and Studio menu entries** — a "Go Live…" tray action in Studio and the
+  on-device `hugmesh-go-live-menu` console face.
+- ✅ **The web front-end, done differently from the other three.** admin-bff's web
+  console (merged, admin-bff-api PR #200) cannot call the driver directly, because it
+  runs in a pod and not on the host. It records a signed intent.
   `hugmesh-go-live-reconcile` (see [Web-UI effector](#web-ui-effector-item-6-4-interface-parity)
-  below) is the thin host-side piece that turns that intent into the same
-  driver `commit`/`rollback` call the other three front-ends make directly.
-- **On-image bake for the 4 desktop/appliance builders is intentionally
-  omitted** — they bake neither firewall-reconcile nor release-state (they are
-  clients/appliances, not go-live server nodes), so they legitimately ship
-  without the wizard.
+  below) is the thin host-side piece that turns that intent into the same driver
+  `commit`/`rollback` call the other three front-ends make directly.
+
+Still **deferred**, by design:
+
+- **A pre-flip `verify` subcommand** (probe DNS, HTTP, tunnel, DDNS and funnel before
+  `commit`). The gate today is preview, then confirm. Automated propagation probes would
+  be a new driver subcommand that every front-end then surfaces.
+- **The other eight builders** (Frite, Jetson, Orange Pi) bake no go-live driver, on
+  purpose. They bake neither firewall-reconcile nor release-state, because they are
+  clients and appliances, not go-live server nodes.
 
 ## Validation
 
@@ -309,91 +304,74 @@ Still genuinely **deferred**, by design:
 
 ## Web-UI effector (item 6, 4-interface parity)
 
-The admin-bff-api web console (`GoLiveController`/`GoLiveService`) lets a
-superadmin **record** a go-live/rollback intent, signed and exported the same
-way the domain-registry bridge is (`GoLiveExportService`, the same
-`RegistrySigner` bean, the same Ed25519 + strict-monotonic-generation
-contract). But admin-bff runs inside a Kubernetes pod — it structurally cannot
-write `/etc/hugmesh/go-live` on the physical/VM host the way the
-CLI/ncurses/Studio front-ends do directly. That gap is closed by
-**`hugmesh-go-live-reconcile`** (`specs/usr/sbin/`, verify lib
-`specs/usr/lib/hugmesh/golive-verify.sh`): a boot-oneshot + 60s-cron agent,
-the same fetch/verify/apply idiom as `hugmesh-domain-reconcile`, that fetches
-the signed export over the SAME core-provisioned in-cluster mTLS transport
-(`node.env`'s `BFF_EXPORT_URL`/`BFF_CLIENT_CERT`/`BFF_CLIENT_KEY`), verifies it
-fail-closed, and — for THIS node's own cluster domain only — drives the
-canonical `hugmesh-go-live commit`/`rollback` subcommands. It never
-reimplements posture-flipping; it only ever calls the same driver a human
-operator would run. Idempotent (only invokes the driver on an actual state
-transition) and honors the export's absence-means-no-op contract (a domain with
-no recorded intent is a converged steady state, not an implicit rollback).
+The admin-bff-api web console (`GoLiveController`/`GoLiveService`) lets a superadmin
+**record** a go-live or rollback intent. The intent is signed and exported the way the
+domain-registry bridge is: `GoLiveExportService`, the same `RegistrySigner` bean, the
+same Ed25519 and strict-monotonic-generation contract. But admin-bff runs in a
+Kubernetes pod and cannot write `/etc/hugmesh/go-live` on the host the way the
+CLI, ncurses and Studio front-ends do. **`hugmesh-go-live-reconcile`** closes that gap
+(`specs/usr/sbin/`, verify lib `specs/usr/lib/hugmesh/golive-verify.sh`). It is a
+boot-oneshot plus 60s-cron agent with the same fetch, verify and apply idiom as
+`hugmesh-domain-reconcile`. It fetches the signed export over the same core-provisioned
+in-cluster mTLS transport (`node.env`'s `BFF_EXPORT_URL`/`BFF_CLIENT_CERT`/`BFF_CLIENT_KEY`)
+and verifies it fail-closed. Then, for THIS node's own cluster domain only, it drives the
+canonical `hugmesh-go-live commit`/`rollback` subcommands. It never reimplements
+posture-flipping. It calls the driver a human operator would run. It is idempotent: it
+invokes the driver only on an actual state transition. It honors the export's
+absence-means-no-op contract: a domain with no recorded intent is a converged steady
+state, not an implicit rollback.
 
-**Provider-catalog vocabulary — RECONCILED BY IDENTITY (was a drift):**
-admin-bff-api's `GoLiveProviderCatalog` (Java) and the shell provider registry
-(`specs/usr/lib/hugmesh/go-live-providers.sh` `GO_LIVE_PROVIDER_IDS`) were
-originally written with a drifted key for the same provider — Java's
-`generic-registrar` vs the shell's `byo-domain`. That drift is now closed by
-**renaming Java's `generic-registrar` row to `byo-domain`** so the two catalogs
-share the identity, and `map_bff_provider()` in `hugmesh-go-live-reconcile`
-is now an IDENTITY map for it. `generic-registrar` is RETAINED there only as a
-**legacy alias** (`generic-registrar -> byo-domain`) so pre-rename node images,
-cached signed exports, and any un-re-keyed `go_live_intent` rows still resolve;
-it is not deleted (dropping it would strand exactly those pre-rename artifacts —
-the fleet-skew case the rollout order guards against). The BFF rename ships
-merge-ordered: the generator/host-agent side (this repo) merges and BAKES into
-node images FIRST, so every fielded agent already understands `byo-domain`
-before the BFF starts emitting it.
+**Provider-catalog vocabulary: reconciled by identity.** admin-bff-api's
+`GoLiveProviderCatalog` (Java) and the shell registry (`GO_LIVE_PROVIDER_IDS` in
+`specs/usr/lib/hugmesh/go-live-providers.sh`) once used different keys for the same
+provider: Java's `generic-registrar` and the shell's `byo-domain`. Java's row is now
+named `byo-domain`, so the two catalogs share the identity, and `map_bff_provider()` in
+`hugmesh-go-live-reconcile` is an identity map for it. `generic-registrar` stays there
+only as a **legacy alias** (`generic-registrar -> byo-domain`), so pre-rename node
+images, cached signed exports and un-re-keyed `go_live_intent` rows still resolve.
+Dropping it would strand exactly those. The rename shipped merge-ordered: the
+generator and host-agent side merged and was baked into node images FIRST, so every
+fielded agent understood `byo-domain` before the BFF started emitting it.
 
-`cloudflare-ddns` is **NOT** part of this rename and is **NOT** drift: it is a
-deliberate separate wizard row backed by the shell `duckdns` driver's
-`GL_DDNS_SERVICE=cloudflare` leg, which `map_bff_provider()` collapses to
-`duckdns` as a driver-SUBOPTION (see the tripwire comment near that function —
-if `cmd_commit` ever starts reading `GL_DDNS_SERVICE`, that collapse assumption
-breaks). Leave it as-is.
+`cloudflare-ddns` is **not** part of this rename and is **not** drift. It is a separate
+wizard row backed by the shell `duckdns` driver's `GL_DDNS_SERVICE=cloudflare` leg, which
+`map_bff_provider()` collapses to `duckdns` as a driver sub-option (see the tripwire
+comment near that function: if `cmd_commit` ever starts reading `GL_DDNS_SERVICE`, that
+collapse breaks). Leave it as it is.
 
-**Residual (flagged, not closeable here — see the platform TODO queue):** there
-is no cross-repo CI spanning admin-bff-api and this generator, so nothing
-automatically asserts that *every* live `GET /bff/admin/go-live/providers`
+**Residual (not closeable here):** no cross-repo CI spans admin-bff-api and this
+generator, so nothing asserts that *every* live `GET /bff/admin/go-live/providers`
 catalog key maps in the host agent. The in-repo case-(m) guard in
-`tests/go-live/test-go-live-reconcile-verify.sh` covers this today but HARD-CODES
-the BFF key list rather than reading the live catalog, so it can silently drift
-from `GoLiveProviderCatalog` if a future BFF adds a key. The durable guard would
-be a stack-level e2e over both repos.
+`tests/go-live/test-go-live-reconcile-verify.sh` covers it today, but it HARD-CODES the
+BFF key list rather than reading the live catalog, so it can drift from
+`GoLiveProviderCatalog` if a future BFF adds a key. A stack-level e2e over both repos
+would be the durable guard.
 
-**The applied-ack loop is now WIRED** (companion admin-bff-api change: `POST
-/bff/internal/go-live/{intentId}/applied-ack {generation, appliedBy}`, over
-the same in-cluster mTLS transport `/export` uses). `ack_intent()` is called
-from `apply_entry()` both right after a commit/rollback it actually drove
-succeeds AND on an already-converged no-op cycle (the latter is what actually
-acks a freshly-recorded intent whose target already matches the host's
-current posture — the driver call is skipped as a no-op, but the ack still
-needs to fire since this may be the row's first-ever cycle). It defaults to
-POSTing at the same base URL as `/export` (`BFF_URL`/node.env's
-`BFF_EXPORT_URL`); `GOLIVE_ACK_URL` only needs setting to point the ack at a
-*different* base. It is best-effort: any failure (timeout, non-2xx) is logged
-and swallowed — the posture change already succeeded regardless, and the
-endpoint's CAS guard is idempotent server-side. This DOES mean a converged
-entry keeps getting re-acked every 60s cycle for as long as it remains in the
-export (no client-side tracking file suppresses this) — the thing that
-actually bounds the load is the BFF's own absence contract: a successful ack
-flips the row to `status=applied` server-side, which removes it from the
-*next* signed export, so this node simply stops seeing the entry and the
-re-ack traffic self-terminates. A failing ack is retried every cycle until it
-lands, which is the desired self-healing behavior, not a bug.
+**The applied-ack loop is wired** (companion admin-bff-api change:
+`POST /bff/internal/go-live/{intentId}/applied-ack {generation, appliedBy}`, over the same
+in-cluster mTLS transport `/export` uses). `ack_intent()` runs from `apply_entry()` both
+right after a commit or rollback it drove succeeds AND on an already-converged no-op
+cycle. The no-op case is what acks a freshly recorded intent whose target already matches
+the host's posture: the driver call is skipped, but the ack still has to fire, because
+this may be the row's first cycle. It POSTs to the same base URL as `/export`
+(`BFF_URL`, which comes from node.env's `BFF_EXPORT_URL`). Set `GOLIVE_ACK_URL` only to point the
+ack at a *different* base. The ack is best-effort: a timeout or non-2xx is logged and
+swallowed, because the posture change already succeeded and the endpoint's CAS guard is
+idempotent server-side. A converged entry keeps getting re-acked every 60s cycle while it
+stays in the export, because no client-side file suppresses it. The BFF's absence
+contract bounds the load: a successful ack flips the row to `status=applied`, which drops
+it from the *next* signed export, and the re-ack traffic stops by itself. A failing ack
+is retried every cycle until it lands. That is the intended self-healing, not a bug.
 
-**Still deliberately out of scope, matching this codebase's precedent for the
-identical shape of gap (`hugmesh-domain-reconcile`'s own deferred
-writeback):**
-- **The physical secret path from `plan`'s provider emission to this agent.**
-  This agent never runs `plan` — provider artifact emission (DNS records,
-  tunnel tokens) is the web wizard's own client-side guidance, completed by
-  the superadmin BEFORE recording the intent; this agent's sole job is
-  tripping the marker a recorded intent already authorizes.
+**Still out of scope**, as for `hugmesh-domain-reconcile`'s own deferred writeback: the
+**physical secret path from `plan`'s provider emission to this agent**. The agent never
+runs `plan`. Provider artifact emission (DNS records, tunnel tokens) is the web wizard's
+own client-side guidance, which the superadmin completes BEFORE recording the intent. The
+agent's only job is tripping the marker a recorded intent already authorizes.
 
-Test: `tests/go-live/test-go-live-reconcile-verify.sh` — offline (no root, no
-network), mirrors `test-domain-reconcile-verify.sh`'s verify-side rigor
-(genuine/tampered/unsigned/foreign-key/rollback cases, an inline canonical-bytes
-reference AND an independent python re-derivation) plus go-live-specific
-apply-side cases against the REAL driver in a sandboxed `GL_ETC_HUGMESH`
-(commit, rollback, the absence no-op contract, idempotency, and the two
-fail-closed defaults gates).
+Test: `tests/go-live/test-go-live-reconcile-verify.sh`. It runs offline (no root, no
+network) and mirrors `test-domain-reconcile-verify.sh`'s verify-side rigor
+(genuine, tampered, unsigned, foreign-key and rollback cases, an inline canonical-bytes
+reference AND an independent python re-derivation). It adds go-live-specific apply-side
+cases against the REAL driver in a sandboxed `GL_ETC_HUGMESH`: commit, rollback, the
+absence no-op contract, idempotency, and the two fail-closed defaults gates.

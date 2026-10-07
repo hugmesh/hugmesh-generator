@@ -105,8 +105,8 @@ Net effect: an admin opens `/admin/argocd` and sees an **empty application grid 
 warning**, which reads as "ArgoCD is connected and manages zero applications", on a
 mesh where ArgoCD manages the entire platform.
 
-**Decision: remove the page rather than add the row.** A route-access row would do
-nothing, because the floor already covers the prefix. A *narrower*
+**Decision: remove the page rather than add the row.** A route-access row would be a
+no-op, because the floor already covers the prefix. A *narrower*
 `/bff/admin/argocd/**` row would do harm: longest-pattern-wins means it would shadow
 the floor, and it would look like wiring when the only missing piece is a controller
 nobody wrote. A row that authorizes a 404 is the "green surface that proves nothing"
