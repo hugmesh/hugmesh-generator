@@ -47,6 +47,14 @@ ONION_A = "a" * 56 + ".onion"
 ONION_B = "b" * 56 + ".onion"
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_onion_override(monkeypatch):
+    """GL_ONION_HOSTNAME overrides the exported address (and the unreadable-export row
+    tells an operator to export it): a shell that has it set must not change what these
+    tests measure. The tests that want it set it themselves."""
+    monkeypatch.delenv("GL_ONION_HOSTNAME", raising=False)
+
+
 @pytest.fixture
 def device(tmp_path, monkeypatch):
     """A fake device: a baked cluster domain, a baked domain list with junk in it, the
@@ -357,6 +365,16 @@ def test_gl_onion_hostname_overrides_the_export_as_the_drivers_card_does(bare_no
     monkeypatch.setenv("GL_ONION_EXPORT_DIR", str(bare_node))
     (bare_node / "games.hostname").write_text(ONION_B + "\n")
     assert onion_export_state() == (ONION_A, [("games", ONION_B)], "", "")
+
+
+def test_gl_onion_hostname_with_stray_whitespace_is_still_the_address(bare_node,
+                                                                    monkeypatch):
+    """A value pasted with a trailing newline or spaces (`export GL_ONION_HOSTNAME="$(cat
+    hostname)"` strips them, a hand-typed one may not) is the address, not a malformed
+    one."""
+    monkeypatch.setenv("GL_ONION_HOSTNAME", "  " + ONION_A + " \n")
+    assert onion_export_state() == (ONION_A, [], "", "")
+    assert onion_override_problem() == ""
 
 
 def test_a_malformed_gl_onion_hostname_is_a_row_not_silence(bare_node, device,

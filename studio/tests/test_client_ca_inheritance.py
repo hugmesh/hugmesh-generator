@@ -107,6 +107,11 @@ def test_the_note_is_right_that_gen_provision_keys_tells_the_operator_to_copy_th
     pins live with the engine fix (studio/tests/test_keys_provision_certs.py on the
     keys-provision branch), not here."""
     assert "gen-provision-keys.sh tells you to copy there" in CLIENT_CA_INHERITANCE_NOTE
+    # ... and the sentence that makes the note honest: the operator PUTS the certificates
+    # on the stick; the image carries none, so it is not "every certificate in" a stick
+    # that arrives with some
+    assert "every certificate you put in the KEYS stick's certs/ folder" in (
+        CLIENT_CA_INHERITANCE_NOTE)
     src = _read(GEN_KEYS)
     assert re.search(r'^\s*echo .*Add: .*certs/cluster-ca\.crt', src, re.M), (
         "gen-provision-keys.sh no longer tells the operator to add certs/cluster-ca.crt "

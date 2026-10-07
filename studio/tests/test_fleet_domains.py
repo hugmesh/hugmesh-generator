@@ -145,6 +145,11 @@ def test_validate_refuses_unbalanced_quotes_and_a_jobs_count_out_of_range():
             FleetConfig(jobs=jobs).validate()
     FleetConfig(jobs=1).validate()
     FleetConfig(jobs=128).validate()
+    # a hand-edited saved record with `"jobs": true` must not put `-j True` on the command
+    # (bool is an int in Python, and 1 is inside the range)
+    for bad in (True, False, 8.0, "8", None):
+        with pytest.raises(IdentityValidationError, match="jobs must be"):
+            FleetConfig(jobs=bad).validate()
 
 
 # ── the steps' shared Qt-free logic ──────────────────────────────────────────────────

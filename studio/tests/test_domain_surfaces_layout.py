@@ -18,6 +18,7 @@ that is not installed here is not parametrized — never skipped, because the wr
 reads a skip as red.
 """
 import os
+import re
 
 import pytest
 
@@ -59,6 +60,14 @@ def qapp():
 @pytest.fixture(params=COMBOS, ids=[f"{s}-{pt or 'default'}pt" for s, pt in COMBOS])
 def styled(request):
     return request.param
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_onion_override(monkeypatch):
+    """GL_ONION_HOSTNAME is read by the plan (the remedy of the unreadable-export row
+    tells an operator to export it): a shell that has it set must not change what these
+    tests draw."""
+    monkeypatch.delenv("GL_ONION_HOSTNAME", raising=False)
 
 
 @pytest.fixture
@@ -234,6 +243,98 @@ def test_the_exposure_pane_shows_every_row_without_a_scrollbar(qapp, styled, dev
     finally:
         _dispose(wiz)
         del style
+
+
+def _gen_pane_at(qapp, styled, device, monkeypatch, size):
+    monkeypatch.setenv("GL_ONION_EXPORT_DIR", str(device / "cluster-domain"))
+    wiz, page, style = _golive_at(qapp, styled, "generate", provider="tor-onion")
+    wiz.resize(*size)
+    _events()
+    return wiz, page, style
+
+
+def test_the_exposure_pane_refits_its_height_when_the_window_is_resized(
+        qapp, styled, device, monkeypatch):
+    """The wrap depends on the width, so the pane's minimum height has to be re-read when
+    the window is resized — not only when its text is set. Narrow the window and the
+    same rows wrap onto more lines, so the minimum grows; widen it and it shrinks."""
+    wiz, page, style = _gen_pane_at(qapp, styled, device, monkeypatch, (1300, 900))
+    try:
+        box = page.exposure
+        wide = box.minimumHeight()
+        assert wide == min(box.content_height(), golive_mod.EXPOSURE_PANE_MAX_PX)
+        wiz.resize(560, 900)
+        _events()
+        narrow = box.minimumHeight()
+        assert narrow == min(box.content_height(), golive_mod.EXPOSURE_PANE_MAX_PX)
+        assert narrow > wide, (narrow, wide, box.width())
+        wiz.resize(1300, 900)
+        _events()
+        assert box.minimumHeight() == wide
+    finally:
+        _dispose(wiz)
+        del style
+
+
+def test_the_exposure_pane_refits_when_its_text_changes(qapp, styled, device, monkeypatch):
+    """A new plan (Refresh preview) is set into a pane that is already on screen at its
+    final width — no resize follows — so the fit has to be re-read when the text is set."""
+    wiz, page, style = _gen_pane_at(qapp, styled, device, monkeypatch, (820, 640))
+    try:
+        box = page.exposure
+        short = box.minimumHeight()
+        box.setPlainText("\n".join(f"row {i}: " + "word " * 30 for i in range(9)))
+        assert box.minimumHeight() == min(box.content_height(),
+                                          golive_mod.EXPOSURE_PANE_MAX_PX)
+        assert box.minimumHeight() > short
+        box.setPlainText("one row")
+        assert box.minimumHeight() == min(box.content_height(),
+                                          golive_mod.EXPOSURE_PANE_MAX_PX)
+        assert box.minimumHeight() < golive_mod.EXPOSURE_PANE_MAX_PX
+    finally:
+        _dispose(wiz)
+        del style
+
+
+def test_the_exposure_pane_grows_with_the_window(qapp, styled, device, monkeypatch):
+    """Extra window height is shared with the pane (it has a stretch of its own), not
+    all handed to the run log below it."""
+    wiz, page, style = _gen_pane_at(qapp, styled, device, monkeypatch, (820, 640))
+    try:
+        before = page.exposure.height()
+        wiz.resize(820, 1100)
+        _events()
+        grown = page.exposure.height() - before
+        assert grown >= 80, (before, page.exposure.height())
+    finally:
+        _dispose(wiz)
+        del style
+
+
+def test_a_short_plan_still_gets_the_pane_its_minimum_of_lines(qapp, styled, bare_node):
+    """A bare node has one or two rows; the pane must still be EXPOSURE_PANE_MIN_LINES
+    lines tall, not a sliver."""
+    wiz, page, style = _golive_at(qapp, styled, "generate")
+    try:
+        box = page.exposure
+        assert len(box.toPlainText().splitlines()) < golive_mod.EXPOSURE_PANE_MIN_LINES
+        assert box.minimumHeight() >= (golive_mod.EXPOSURE_PANE_MIN_LINES
+                                       * box.fontMetrics().lineSpacing())
+    finally:
+        _dispose(wiz)
+        del style
+
+
+# ── the #591 wrapper runs these files ─────────────────────────────────────────────────
+def test_the_pins_wrapper_runs_the_layout_files():
+    """tests/scripts/test-studio-tor-domain-pins.sh is what CI runs; a layout file it
+    does not name is a file nothing runs."""
+    with open(os.path.join(GENERATOR_DIR, "tests", "scripts",
+                           "test-studio-tor-domain-pins.sh"), encoding="utf-8") as fh:
+        wrapper = fh.read()
+    for name in ("test_fleet_window_layout.py", "test_domain_surfaces_layout.py",
+                 "test_keys_provision_certs.py"):
+        assert re.search(r"^\s*tests/" + re.escape(name) + r"\s*$", wrapper, re.M), name
 
 
 # ── cloud mode, Domains step: the certificate-authority note ──────────────────────────
