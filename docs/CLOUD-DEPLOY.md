@@ -1,15 +1,12 @@
 # Cloud deploy — publish a built x86 image to a cloud provider (the third side-flow)
 
-> **Status: 🚧 in-flight** — the Studio DeployPage, the ncurses `deploy_screen`, the
-> `make deploy-*` delegates and the shared Qt-free entrypoint
-> (`hugmesh_studio.core.cloud_deploy`) are in this tree; they all front the ONE
-> canonical driver **`specs/usr/sbin/hugmesh-cloud-deploy`** (built in the
-> parallel deploy-driver lane, together with its provider registry
+> **Status: ✅ shipped in this tree** — the Studio DeployPage, the ncurses `deploy_screen`,
+> the `make deploy-*` delegates and the shared Qt-free entrypoint
+> (`hugmesh_studio.core.cloud_deploy`) all front the ONE canonical driver
+> **`specs/usr/sbin/hugmesh-cloud-deploy`**, with its provider registry
 > `specs/usr/lib/hugmesh/cloud-deploy-providers.sh` and the packaging script
-> `scripts/cloud-package.sh`). Until that lane merges, every face reports
-> "driver not found" honestly — nothing pretends to deploy.
->
-> State key: **✅ shipped** · **🚧 in-flight** · **🔭 planned / deferred**.
+> `scripts/cloud-package.sh`. All four v1 providers are marked `full`; none has been
+> run against a real cloud (see *Honest limits*).
 
 This is the **third non-image side-flow** (after the Local Docker mesh and the MDM
 phone): it never builds an image and never touches `cfg.mode` / the builder argv.
@@ -138,8 +135,8 @@ seam too.
 | Studio page + standalone dialog | `studio/hugmesh_studio/gui/pages/deploy.py` |
 | ncurses screen | `scripts/build-menu.sh` (`deploy_screen` / `_deploy_run`) |
 | Make delegates | `Makefile` (`deploy-plan/apply/status/destroy`) |
-| Driver + registry (parallel lane) | `specs/usr/sbin/hugmesh-cloud-deploy`, `specs/usr/lib/hugmesh/cloud-deploy-providers.sh` |
-| Packaging (parallel lane) | `scripts/cloud-package.sh` |
+| Driver + registry | `specs/usr/sbin/hugmesh-cloud-deploy`, `specs/usr/lib/hugmesh/cloud-deploy-providers.sh` |
+| Packaging | `scripts/cloud-package.sh` |
 | Tests (hermetic, stub driver) | `studio/tests/test_cloud_deploy.py`, `studio/tests/test_cloud_deploy_cli.py` (real argparse, Qt-free), `tests/menu/build_menu_cmd_test.sh` (deploy block) |
 
 The env seam `SNAP_CLOUD_DEPLOY_CMD` points every face at a stub driver in tests —
