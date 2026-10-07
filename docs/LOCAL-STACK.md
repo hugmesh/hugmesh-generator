@@ -573,14 +573,15 @@ paths, not a 404).
   (RTMP ingest) and the tube-media signed-URL Nginx sidecar are out of scope here
   (only the UI+BFF pair for each is wired); `manifests/owncast` / `manifests/tube`
   show the full cluster shape.
-- **`ROLE_WIKI` / `ROLE_FORUM` (and the derived `ROLE_FORUM_MOD`) are not yet
-  seeded in `manifests/casdoor/init-data-configmap.yaml`** — a pre-existing gap
-  predating this compose wiring (the `gateway_route_access` rows that gate
-  `/bff/wiki/**`, `/bff/forum/**`, `/social/forum/**` etc. already referenced
-  these roles). Until a Casdoor seed grants them, only an admin/superadmin
-  persona (via the gateway's documented admin-bypass) reaches the forum/wiki
-  surfaces end-to-end locally; `ROLE_TUBE`/`ROLE_OWNCAST` ARE already seeded,
-  so a persona granted those reaches tube/owncast normally.
+- **`ROLE_WIKI` / `ROLE_FORUM` (and the derived `ROLE_FORUM_MOD`) start with no
+  members.** `manifests/casdoor/init-data-configmap.yaml` defines the roles, but
+  grants them to nobody. The `gateway_route_access` rows that gate
+  `/bff/wiki/**`, `/bff/forum/**`, `/social/forum/**` etc. need them. Until a
+  persona holds the role (`tests/qemu/seed-accounts.sh` defines an `e2e-forum`
+  persona with `ROLE_FORUM`), only an admin/superadmin persona (via the gateway's
+  documented admin-bypass) reaches the forum/wiki surfaces end-to-end locally.
+  `ROLE_TUBE` and `ROLE_OWNCAST` are seeded the same way, so a persona granted
+  those reaches tube/owncast normally.
 - **superadmin-service-catalog is intentionally NOT wired to the `:8088` front
   door.** Its cluster design (`specs/cluster/apps/22-gateway-superadmin.yaml`)
   is TAILNET-ONLY behind a dedicated `hugmesh-superadmin-gateway` — "off
