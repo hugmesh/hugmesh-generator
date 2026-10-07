@@ -171,7 +171,13 @@ Applied via each DB Deployment's `POSTGRES_*` env + container `args` and the
 - **No superuser for app roles** — every login role is
   `NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT`.
 - **Per-role connection limits** — `CONNECTION LIMIT` per role (gateways 5,
-  writers/apps 10–20) and a server cap (`max_connections` 50–60).
+  writers/apps 10–20) and a server cap (`max_connections` 50–60). The limit of 20
+  on a BFF's app role is a budget for EVERY pod that connects as that role: each
+  BFF Deployment sets `SPRING_R2DBC_POOL_INITIAL_SIZE=1` and
+  `SPRING_R2DBC_POOL_MAX_SIZE=2`, so that (the autoscaler's `maxReplicas` plus the
+  pods a rolling update adds) x pool stays within it (hugmesh-generator#663: with
+  the unset default of 10 per pod, six pods asked for 60 and the sign-in answered
+  500). `tests/scripts/test-db-connection-budget.sh` fails when it does not.
 - **Timeouts** — per-DB `statement_timeout=30s`,
   `idle_in_transaction_session_timeout=60s`, `lock_timeout=10s` so a stuck client
   can't pin a connection or hold locks.
