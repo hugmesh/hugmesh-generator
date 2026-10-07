@@ -16,17 +16,15 @@ is not a cluster node.
 > mesh-joined clients below. The `--standalone` / `--skip-sso` flags also
 > compose onto the client roles.
 >
-> **The standalone posture is not x86-only.** `build-frite-stage4.sh`,
-> `build-rpi5-stage4.sh` (rpi5/rpi4/rpi3 boards), `build-orangepi5-stage4.sh` and
-> `build-orangepi4-lts-stage4.sh` each have a `desktop` role that composes with
-> `--standalone --encrypt-root`. `build-orangepi-zero2-stage4.sh`,
-> `build-orangepi-zero2w-stage4.sh`, `build-orangepi-zero3-stage4.sh` and
-> `build-orangepi3-lts-stage4.sh` have the same posture on their headless
-> `appliance` role. See "ARM platforms" in STANDALONE-DESKTOP.md.
+> **The standalone posture is not x86-only.** The Frite, RPi5 (rpi5/rpi4/rpi3),
+> Orange Pi 5 and Orange Pi 4 LTS builders each have a `desktop` role that
+> composes with `--standalone --encrypt-root`. The Orange Pi Zero 2, Zero 2W,
+> Zero 3 and 3 LTS builders have the same posture on their headless `appliance`
+> role. See "ARM platforms" in STANDALONE-DESKTOP.md.
 > **`build-jetson-stage4.sh` is the one exception.** It hard-blocks
-> `--encrypt-root`, and `--standalone`, which forces it on. Its single
-> boot+root partition leaves the UEFI firmware unable to find a kernel once that
-> partition is LUKS2-encrypted. See the Jetson section of STANDALONE-DESKTOP.md.
+> `--encrypt-root`, and `--standalone`, which forces it on, because its single
+> boot+root partition cannot be LUKS2-encrypted and still boot. See the Jetson
+> section of STANDALONE-DESKTOP.md.
 > These ARM `desktop` roles form a **separate, simpler** role namespace from the
 > FD-04 client-device architecture below. They have no `PERSON_ROLE`, no
 > `DOMAINS` and no Casdoor desktop governance. They exist only as the mount

@@ -121,25 +121,18 @@ make x86-standalone-thick NATIVE=1 \
 make menu      # → Single role → x86 → ★ standalone-thin / standalone-thick / standalone-unaffiliated
 ```
 
-The ncurses menu and the Studio GUI expose the **full option set** of this page,
-not just the highlights (the all-options-in-all-menus rule,
-[BUILD-MATRIX.md](BUILD-MATRIX.md)): GPU, Steam and media (`--media-label`
-too); local user and never-persisted passwords; keyfile/YubiKey unlock factors;
-the branding theme **plus the per-piece overrides** (wallpaper, GRUB and login
-backgrounds, logo, accent, color scheme); home provisioning
-(create/adopt/archive/restore, eCryptfs, seed-code); the installer front-ends
-(`--installer-ui`); proxy/Snort/AIDE/`--kernel-builtin`/egress-VPN. An
-**extra-builder-flags escape hatch** keeps any remaining CLI flag reachable
-without a trip to the shell.
+The ncurses menu and the Studio GUI expose the **full option set** of this page
+(the all-options-in-all-menus rule, [BUILD-MATRIX.md](BUILD-MATRIX.md)): GPU,
+Steam and media (`--media-label` too); local user and never-persisted passwords;
+keyfile/YubiKey unlock factors; the branding theme **plus the per-piece
+overrides**; home provisioning (create/adopt/archive/restore, eCryptfs,
+seed-code); the installer front-ends (`--installer-ui`);
+proxy/Snort/AIDE/`--kernel-builtin`/egress-VPN. An **extra-builder-flags escape
+hatch** keeps any remaining CLI flag reachable without a trip to the shell.
 
-One menu default to know: standalone builds from the ncurses menu start with
-`--theme dark` preselected (the persisted `OPT_SA_THEME` default in
-`scripts/build-menu.sh`; pick **None** under "Branding theme" for the stock
-look). Since **2026-08-26** that includes the `standalone-unaffiliated` entry,
-because a theme is a LOOK, not an affiliation. Its artefacts bake under neutral
-names. That entry still refuses brand **identity**: `--brand` / `--brand-title` /
-`--org` / `--brand-logo` / `--brand-locked`. Direct `make` and CLI builds apply
-no theme unless you pass one; see "Desktop branding" below.
+One menu default to know: the ncurses menu preselects `--theme dark` for
+standalone builds. Direct `make` and CLI builds apply no theme. See "Desktop
+branding" below.
 
 Use the big scratch disk for the heavy build (namespaced; never touches
 portage's own dirs):

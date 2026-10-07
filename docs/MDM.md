@@ -200,8 +200,8 @@ $ scripts/phone-wizard.sh ingest --device-id phone-<s>                  # emit-o
 ## Verified GrapheneOS facts (pinned in the repo)
 
 The driver rests on these externally verified facts. The pinned files record
-their provenance (fetched **2026-07-15**), and the code enforces each fact,
-fail-closed. They are not prose promises.
+their provenance (fetched **2026-07-15**), and the code enforces each one,
+fail-closed.
 
 - **sshsig is the ONLY current verification method.** The old signify
   `factory.pub` is GONE: `releases.grapheneos.org` answers HTTP 410 for it.
