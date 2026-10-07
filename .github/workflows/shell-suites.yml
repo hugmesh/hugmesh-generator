@@ -260,7 +260,14 @@ jobs:
     container:
       image: alpine:3
     steps:
-      - run: apk add --no-cache attr bash coreutils curl e2fsprogs-extra flock gawk git helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xz
+      # git-daemon: on Alpine `git-http-backend` (the CGI that tests/scripts/
+      # test-stack-clone-credential.sh stands its real smart-HTTP-over-TLS fixture
+      # server on) ships in the SEPARATE `git-daemon` package, not in `git`
+      # (`apk info -W /usr/libexec/git-core/git-http-backend` -> git-daemon).
+      # MEASURED 2026-09-30 in this image WITHOUT it: that suite exits 2
+      # "SKIPPED-LOUDLY: /usr/libexec/git-core/git-http-backend is absent ... This
+      # guard checked NOTHING", which this job's runner rightly counts as a failure.
+      - run: apk add --no-cache attr bash coreutils curl e2fsprogs-extra flock gawk git git-daemon helm jq make mtools nodejs openjdk17-jre-headless openjdk21-jre-headless openssh-keygen openssl py3-yaml python3 tar util-linux xz
       - uses: actions/checkout@v4
       - name: trust the workspace
         # Container jobs run as root against a checkout git considers foreign, so
@@ -283,8 +290,13 @@ jobs:
           # exiting 0, so it cannot go quietly inert — but a missing package here
           # would still cost the whole job that suite, so name it at the door.
           for b in bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+          # git-http-backend lives in git's exec-path, not on PATH, so it cannot join the
+          # `command -v` list above. tests/scripts/test-stack-clone-credential.sh looks for
+          # it at exactly this path and exits 2 (a failure here) when it is absent; its
+          # package is git-daemon, which the install step names.
+          [ -x "$(git --exec-path)/git-http-backend" ] || missing="$missing git-http-backend(apk:git-daemon)"
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
-          echo "preflight ok: bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp"
+          echo "preflight ok: bash jq openssl python3 git make flock gawk mcopy minfo mformat sfdisk cmp git-http-backend"
       - name: run suites
         shell: bash
         run: |
@@ -595,6 +607,27 @@ jobs:
       # nothing state it sat in for weeks.
       E2E_NODE_MODULES: ${{ github.workspace }}/tests/e2e/node_modules
       E2E_REQUIRE_ENUMERATION: "1"
+      # test-e2e-toolchain-readiness.sh leg E drives the REAL probe
+      # (tests/e2e/check-toolchain.sh) against this checkout's tests/e2e install. This
+      # job has one since the tests/e2e npm ci step below, and it has NO browsers: a
+      # declaration, not an omission, because installing them cannot work. MEASURED
+      # 2026-09-30 in node:24-alpine with this lock: Playwright 1.61.1 prints "BEWARE:
+      # your OS is not officially supported ... downloading fallback build for
+      # ubuntu24.04-x64" and fetches 646 MB of GLIBC binaries (12 s); the probe then
+      # says READY, because it checks the revision dirs, the INSTALLATION_COMPLETE
+      # marker and an exec bit and never runs the binary; and neither chrome nor
+      # chrome-headless-shell can execute on musl (`not found`: there is no
+      # /lib64/ld-linux-x86-64.so.2). Leg G then launches the five guards' own
+      # preflights and all five die with `spawn .../chrome-headless-shell ENOENT`: the
+      # install would trade one red for five, at 646 MB per run.
+      # E2E_READINESS_EXPECT_NO_BROWSERS=1 makes leg E accept exactly "every pinned
+      # browser is ABSENT and nothing else is wrong": the install half of the probe
+      # must still be clean, a partial/broken/aliased browser still fails, a probe
+      # that cannot run still fails, and if a browser is ever PRESENT while this is
+      # set the leg fails telling you to delete this line. Only the exact value "1" is
+      # honoured, only by that suite, and nothing outside this job sets it, so a
+      # developer box with an installed-but-broken toolchain stays red.
+      E2E_READINESS_EXPECT_NO_BROWSERS: "1"
     steps:
       # make: test-e2e-toolchain-readiness.sh renders and DRIVES the repo Makefile
       # (legs C/D) — node:24-alpine ships no make, and without it the suite exits 2
