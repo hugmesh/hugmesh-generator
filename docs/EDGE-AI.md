@@ -217,7 +217,7 @@ CPU-only and self-contained: the default voice (`.onnx` + `.onnx.json`) is baked
 into the image at build time, no model is fetched and no upstream is called at
 request time — it schedules **anywhere in the mesh**, GPU node or not, and is wired
 on **both** `build-x86-host-stage4.sh` **and** `build-rpi5-stage4.sh` (unlike
-`edge-ai`/`edge-ai-analysis`, which need a GPU node).
+`edge-ai`, which needs a GPU node, and `edge-ai-analysis`, which is x86-only and needs `edge-ai`).
 
 It is reached at `https://ai.<domain>/v1/synthesize/**` (be-gateway, `ROLE_USER`
 floor) and in-cluster at `http://hugmesh-edge-ai-tts.hugmesh-inference.svc:8080`.
