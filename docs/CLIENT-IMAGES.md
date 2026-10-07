@@ -8,7 +8,8 @@ a **person's device** — a desktop that joins the Tailscale mesh and runs the
 platform UI — not a cluster node.
 
 > **See also: [STANDALONE-DESKTOP.md](STANDALONE-DESKTOP.md)** — the `standalone-thin`
-> / `standalone-thick` roles build a **self-contained hardened NVIDIA desktop** with
+> / `standalone-thick` roles build a **self-contained hardened desktop** (free GPU drivers by
+> default; proprietary NVIDIA is opt-in) with
 > NO mesh and NO Casdoor SSO: a normal local user, LUKS2 full-disk encryption on
 > install, optional keyfile/YubiKey unlock, and an auto-detected `/media` data disk
 > (Steam + gocryptfs Vaults). Those are the *opposite* of the mesh-joined clients
@@ -159,7 +160,7 @@ below that binds the disk key to the Casdoor login.
   `.ps1/.cmd` and Linux `sh` wrappers, one-line Casdoor login, honoring the
   ADR-14 mesh-join latch + register-and-approve admission. **Not** `make stack-up`
   (that's the local-dev full-stack runner).
-- **See also:** [`MDM.md`](MDM.md) — the **fourth onboarding form** (🚧): a GrapheneOS Pixel phone onboarded alongside the appliance images, these client desktops, and this FD-09 Docker mesh node; its `enroll` verb reuses this mesh node's `keys.example` keys-dir layout.
+- **See also:** [`MDM.md`](MDM.md) — the **fourth onboarding form** (✅ shipped): a GrapheneOS Pixel phone onboarded alongside the appliance images, these client desktops, and this FD-09 Docker mesh node; its `enroll` verb reuses this mesh node's `keys.example` keys-dir layout.
 
 ### 6 — FD-08 delegated build pipeline — 🔭 DEFERRED (roadmap)
 - superadmin-owned, role-gated ArgoCD pipeline: admin **configures** a
