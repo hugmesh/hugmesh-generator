@@ -14,11 +14,12 @@ guard; the compile-once-and-reuse speedup is owed a real cross-build to prove._
 > `--shared-assets DIR` / `--no-shared-assets` / `HUGMESH_SHARED_ASSETS`. See
 > **[The shared asset root](#the-shared-asset-root-seed--distfiles--pools)** below.
 
-The fleet builders already compile every package once per build
-(`FEATURES="buildpkg"` in all six `make.conf` templates) — but four of the five
-cross builders never **consumed** those binpkgs, so an arm64 re-run recompiled
-NetworkManager/samba/… from source every time. This track closes the
-produce→consume loop, adds a **compile-once prebuild phase**, shares the
+The fleet builders compile every package once per build
+(`FEATURES="buildpkg"` in all ten `make.conf` templates). Before this track,
+four of the five cross builders then existed that never **consumed** those
+binpkgs, so an arm64 re-run recompiled NetworkManager/samba/… from source every
+time. Today all ten builders pass `--usepkg=y --binpkg-respect-use=y`. This track
+closed the produce→consume loop, added a **compile-once prebuild phase**, shares the
 arch-independent **distfiles** read-only fleet-wide, and — most importantly —
 adds the **pool fingerprint guard** that makes cross-role/cross-run binpkg reuse
 *safe* against the aarch64 `-mcpu` SIGILL class portage cannot catch on its own.
@@ -126,7 +127,7 @@ custom pool could still point two ABI-incompatible builds at one pkgdir — and
 portage would happily `--usepkg` the wrong-`-mcpu` binary. Nothing else in the
 pipeline compares CFLAGS before reuse.
 
-`scripts/_binpkg-pool-lib.sh` (sourced by all six builders) closes that hole:
+`scripts/_binpkg-pool-lib.sh` (sourced by all ten builders) closes that hole:
 
 - **Fingerprint** = `sha256(CHOST + COMMON_FLAGS + CFLAGS + CXXFLAGS + profile
   [+ salt])`, read from the **rendered** `make.conf`. For the cross builders the
@@ -151,14 +152,15 @@ regressed it (e.g. reverted rpi5/rpi4/rpi3 back to one shared `snap-build-pi5`),
 the fingerprint preflight still **fails closed at build time**: the a76 build
 stamps the pool, the subsequent a72 build sees the mismatch and *dies* rather
 than shipping a SIGILL image. So the safety property is enforced by code that
-runs on every real build — not only by the (non-gating) regression tests below.
+runs on every real build — not only by the regression tests below.
 
 Hermetic proof: `tests/scripts/test-binpkg-pool-fingerprint.sh` (a76/a72/a53 →
 three distinct fingerprints from `-mcpu` alone; wrong stamp refuses; matching
 passes; empty pool writes fresh silently; a non-empty unstamped pool adopts +
-warns; a correctness **salt** flips it). These are registered as **non-gating**
-smokes per the harness convention — the *live* guard above is what enforces the
-invariant; the tests are regression coverage for it.
+warns; a correctness **salt** flips it). The build-matrix harness runs it in its
+fail-closed `SBP` bucket, so a missing or failing test fails the matrix — but the
+*live* guard above is what enforces the invariant; the test is regression coverage
+for it.
 
 ---
 
@@ -638,7 +640,7 @@ reports `PLAN_KERNEL_CACHE=<root>|off`.
     at the kernel phase. Only the kernel image, DTBs/overlays and `/lib/modules/<kver>`
     are cached on ARM. x86 does cache the initramfs and the unsigned UKI.
   - **No real hit has ever happened.** Every decision is proven hermetically against
-    fixture cache dirs (65 executed assertions, including the gate-bypass mutation); the
+    fixture cache dirs (73 executed assertions, including the gate-bypass mutation); the
     sandbox cannot compile a kernel. A real second build of one board on the operator box
     is the owed proof that the restored tree boots.
   - **No eviction policy.** Entries accumulate under `<root>/kernel/` until something
