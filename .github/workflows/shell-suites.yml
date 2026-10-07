@@ -546,6 +546,7 @@ jobs:
             tests/scripts/test-fragment-route-target.sh
             tests/scripts/test-gitlab-ci-wellformed.sh
             tests/scripts/test-headscale-oidc-secret-staging.sh
+            tests/scripts/test-local-ai-no-claude.sh
             tests/scripts/test-mfa-raw-jwt-posture.sh
             tests/scripts/test-mfa-required-rules.sh
             tests/scripts/test-passhash-lib.sh

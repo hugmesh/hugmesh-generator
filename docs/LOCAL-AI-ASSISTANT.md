@@ -19,7 +19,8 @@ Contents: [1 Hardware](#1-what-this-pc-has-and-what-fits) ·
 [6 Assistant on the mesh code](#6-run-a-code-assistant-on-the-mesh-code) ·
 [7 The mesh's own GPU node](#7-use-the-meshs-own-gpu-node-instead) ·
 [8 Safety](#8-safety-rules) · [9 Measure your PC](#9-measure-your-own-pc) ·
-[10 Troubleshooting](#10-troubleshooting)
+[10 Troubleshooting](#10-troubleshooting) ·
+[11 Running it all without Claude](#11-running-it-all-without-claude)
 
 ---
 
@@ -355,6 +356,139 @@ running at the same time change the numbers a lot.
 | `ollama pull` stalls | the network path: `curl -sI https://registry.ollama.ai | head -1`; any HTTP status line (even a 404) means the path is up, a timeout or connection error means it is not. The pull resumes |
 | the kind cluster or compose stack gets killed while a Tier B model loads | out of RAM: stop one of them first (`make kind-halt`), or use Tier A |
 | the disk is filling up | weights live in `~/.ollama/models` (or `OLLAMA_MODELS`; a service install uses the `ollama` user's home): `df ~/.ollama` shows which filesystem |
+
+## 11. Running it all without Claude
+
+Section 6.2 shows one way to use a hosted-assistant program with a local model. This
+section is the other way: **everything below needs no Claude program, no account at a
+hosted service and no API key.** It ships in this repository, talks only to the Ollama on
+your own PC, and works from a terminal, from the Studio window or from the Studio's
+text screens.
+
+### 11.1 The command: `scripts/local-ai.sh`
+
+```bash
+scripts/local-ai.sh up                       # start the loopback Ollama if it is down (detached)
+scripts/local-ai.sh start                    # up + the queue worker, both detached
+scripts/local-ai.sh status [--json]          # server, model loaded, queue, drafts, last heartbeat
+scripts/local-ai.sh todo 6 --watch           # THE ONE LINE: queue the 6 smallest open issues, then watch them
+scripts/local-ai.sh todo [N] [REPO...]       # queue only (default 6 issues of hugmesh-generator)
+scripts/local-ai.sh draft [--queue] REPO N   # one draft job now, or queued for the worker
+scripts/local-ai.sh queue                    # what is waiting and running
+scripts/local-ai.sh worker [--foreground]    # the queue worker (detached by default; no tmux needed)
+scripts/local-ai.sh stop [--server]          # stop the worker (and an Ollama this script started)
+scripts/local-ai.sh chat                     # a prompt loop with the local model
+scripts/local-ai.sh prompt "one question"    # one answer on stdout
+scripts/local-ai.sh watch                    # the live dashboard (refreshes every 5 seconds)
+```
+
+`status` exits 1 when something needs fixing (Ollama missing, not answering, no model
+pulled) and prints the problem, the fix and a link to this page.
+
+**What a draft does.** `todo` asks `gh` (with your own login) for the open issues of
+the repository, drops the ones labelled `manual`, `decision`, `roadmap` or `blocked`
+and the ones with a long description, and queues the smallest as *draft jobs*. A draft
+(`draft.sh`) then:
+
+1. fetches the issue **with its comments** before anything else — the model step never
+   calls `gh`;
+2. starts the loopback Ollama if it is down;
+3. makes a scratch worktree of the repository's `origin/main` under the state
+   directory (the checkout it comes from is found in `$HUGMESH_REPOS_ROOT`, by default
+   the folder that holds this repository; your own working tree is never touched);
+4. runs `draft.py` under `env -i` with only `PATH`, `HOME`, `LANG`, `TERM` and a
+   loopback `OLLAMA_HOST`;
+5. in the default mode sends the issue and the three files a search of the worktree
+   picked to the Ollama HTTP API and asks for a unified diff. The diff is checked with
+   `git apply --check` and, if it fits, applied **in the scratch worktree only**.
+   **Nothing the model wrote is ever run**, and nothing is pushed.
+
+The result is `drafts/<repo>-<n>/STATUS`, whose first word is one of:
+
+| Word | Meaning |
+|---|---|
+| `queued`, `running` | waiting for the worker, or being drafted now |
+| `applied` | the diff fits the current `origin/main`; `draft.diff` is git's own rendering of it. **Read it before you trust it** — "applies" is not "correct" and nothing was tested |
+| `does-not-apply` | the model's diff does not fit (it invented a line, usually); `draft.diff` shows what it wrote |
+| `no-diff` | the model gave no diff, or said the issue is not one for it |
+| `no-issue`, `no-ollama`, `no-model`, `no-checkout`, `error` | the step could not run; the rest of the line says why |
+
+A small local model gets some issues right and many wrong: on the reference PC, two
+real drafts against `qwen3:8b` ran to a clean `does-not-apply` (the model wrote a
+plausible diff for a line that is not in the file). Treat a draft as a head start for a
+person, never as a finished change.
+
+**Agent modes.** `AGENT=plain` is the default and needs nothing but Ollama.
+`AGENT=opencode scripts/local-ai.sh draft REPO N` runs `ollama launch opencode` inside
+the scratch worktree instead, **only if the `opencode` command is installed** (it is
+not on the reference PC, so this path is checked with a stand-in command in
+`tests/scripts` and has not run with the real program). An agent does run commands, so
+its environment is the same short allowlist plus settings that disable pushing; that
+is hardening, not a sandbox (section 8). A third, explicit mode exists for anyone who
+chooses to use the hosted assistant program against the local model as in section 6.2:
+it is the single file `agent-explicit.sh`, it is reached only when you set `AGENT`
+to that program's name yourself, and nothing else in these scripts can start it.
+
+**The queue and the worker.** A job is one file in `queue/pending` holding one line,
+`draft REPO ISSUE`. `worker.sh` takes them one at a time, moves the file through
+`queue/running` to `queue/done/<name>.result` (exit code, seconds, the line), and
+refuses any other line — the queue is not a way to run commands. The worker rewrites
+`status.json` every 5 seconds. A worker that stopped answering for 30 seconds is
+reported as *stalled* and a worker whose process is gone as *stopped*; neither ever
+counts as work in progress. `stop` returns the job in hand to the queue, and signals a
+process only when its command line really is the worker (process numbers are reused).
+
+**Where the state lives** — one directory, read by the Studio as well:
+`$HUGMESH_LOCAL_AI_DIR`, else `$XDG_STATE_HOME/hugmesh/local-ai`, else
+`~/.local/state/hugmesh/local-ai`:
+
+```text
+queue/{pending,running,done,logs}
+drafts/<repo>-<n>/{issue.md,agent.log,draft.diff,STATUS}
+scratch/            temporary worktrees, removed after each draft
+status.json         the worker's heartbeat: pid, time, Ollama up, model loaded, job in hand
+worker.pid  ollama.pid  worker.log  ollama-serve.log
+```
+
+Settings: `LOCAL_AI_MODEL` (default `qwen3:8b`), `OLLAMA_HOST` (**loopback only**: any
+other value is refused before a connection is tried, and system proxy settings are
+ignored), `HUGMESH_REPOS_ROOT`, `LOCAL_AI_ORG` (default `hugmesh`), `TODO_TIMEOUT`
+(seconds a draft may take, default 1500), `LOCAL_AI_INTERVAL` (watch refresh).
+
+What is deliberately **not** here: the prototype's limit-watcher (it reads another
+program's session files) and the CI-sweep triage. The dashboard shows local work only.
+
+The helper files are `draft.sh` and `draft.py` (one draft), `worker.sh` (the queue
+loop), `issues.py` (reads `gh` output: which issues to pick, how to print one) and
+`agent-explicit.sh` (the single explicit-agent door above), all in `scripts/local-ai/`.
+
+### 11.2 The same status in the Studio
+
+* **Window.** Every Studio page has a **Local AI** bar along the bottom: one line of
+  status (`Local AI: ready, qwen3:8b loaded, 2 queued, 1 running`), a chevron that
+  expands it into a prompt line and an answer area (Enter sends; the answer streams
+  in), a **Start local assistant** button (runs `scripts/local-ai.sh start` detached)
+  and a **Current work** button that opens a window listing the queue, the drafts with
+  their STATUS and a button to open each draft diff, the model loaded and the Studio's
+  own running builds. The bar remembers whether you left it open or closed. Nothing
+  starts until you press a button; the bar never opens a modal dialog.
+* **Text screen.** `python -m hugmesh_studio.tui` shows the same status line at the
+  bottom of every screen; **F2** opens the Local AI screen (status, work list, and a
+  prompt line: type a question and press Enter, `back` returns). The plain-prompt face
+  prints the status line and accepts the command `ai`.
+* **Command line.** `python -m hugmesh_studio --local-ai-status [--json]` and
+  `python -m hugmesh_studio --local-ai-prompt "question"`; both exit non-zero with a
+  plain sentence when Ollama is down.
+
+### 11.3 How this is kept honest
+
+`tests/scripts/test-local-ai-no-claude.sh` fails if any file under `scripts/local-ai*`
+or any Studio local-AI module names the Claude program, an Anthropic service or an API
+key outside `agent-explicit.sh`; it runs the real scripts end to end on a PATH where no
+`claude` exists and again with a decoy `claude` first on PATH (the decoy must never
+run); it proves the agent environment is the allowlist, that a non-loopback
+`OLLAMA_HOST` is refused, and that a stalled or dead worker never reads as running.
+Each of those checks is shown failing against a doctored copy.
 
 ---
 
