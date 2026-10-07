@@ -26,9 +26,12 @@ keep the next gap of that kind from waiting for a release to be seen:
     somebody already uses, and names the one broken-helper state that otherwise shows
     up only as an opaque bwrap error;
   * run against a scripted fake ``flatpak``, the script sends EVERY call to the private
-    directory and never to ``--system``, grants the Builder that directory and keeps its
-    state where a long checkout path cannot break it, builds with the release workflow's
-    flags, runs both validators, checks the bundle against its own checksum, and refuses
+    directory and never to ``--system``, grants the Builder that directory (and the host
+    wrapper that pins it) and keeps its state where a long checkout path cannot break it,
+    runs the same flatpak-builder flags, validators, build-bundle call, file names and
+    bundle install and run as the release workflow's flatpak job (read back from the
+    workflow, not from copies here), stops at a failed build or export without leaving an
+    old bundle that looks new, checks the bundle against its own checksum, and refuses
     what each of its three smoke tests must refuse. (A mutation battery showed all of
     that could be lost with the static checks alone still green.)
 
@@ -386,6 +389,38 @@ def test_runtime_branch_matches_what_the_release_workflow_installs():
         assert set(branches) == {version}, (
             f"the manifest builds against {ref}//{version} but the release workflow "
             f"installs {sorted(set(branches))}: the job would stop at a missing runtime")
+
+
+def _workflow_flatpak_lines() -> list[str]:
+    """The commands of the release workflow's ``flatpak`` job, one per entry: backslash
+    continuations joined, YAML and shell comments dropped, ``${VERSION}`` kept as written.
+    Fails when the job or the commands this file compares are not found, so a renamed job
+    cannot turn the comparison into one against nothing."""
+    text = _read(RELEASE_WORKFLOW)
+    match = re.search(r"(?ms)^  flatpak:\n(.*?)(?=^  \S|\Z)", text)
+    assert match, "the release workflow no longer has a job called flatpak"
+    kept = [ln.strip() for ln in match.group(1).splitlines()
+            if ln.strip() and not ln.strip().startswith("#")]
+    joined = re.sub(r"\\\n\s*", " ", "\n".join(kept))
+    lines = [ln for ln in joined.splitlines()
+             if ln.split(" ", 1)[0] in {"flatpak", "flatpak-builder", "desktop-file-validate",
+                                         "appstreamcli", "sha256sum"}]
+    assert any(ln.startswith("flatpak-builder ") for ln in lines), lines
+    return lines
+
+
+def _package_version() -> str:
+    return re.search(r'(?m)^__version__ = "([^"]+)"',
+                     _read(os.path.join(STUDIO_ROOT, "hugmesh_studio", "__init__.py"))).group(1)
+
+
+def _words_of(line: str) -> list[str]:
+    """A workflow command's words up to its first pipe or redirection."""
+    words = shlex.split(line)
+    for index, word in enumerate(words):
+        if word in {"|", ">", ">>"}:
+            return words[:index]
+    return words
 
 
 # ---------------------------------------------------------------------------------------
@@ -1102,7 +1137,9 @@ def _scripted_flatpak(tmp_path):
     ``--print-specs`` prints (empty: nothing at all), ``FAKE_FLATPAK_QT`` what the Qt
     check prints, ``FAKE_FLATPAK_FILES`` names one file the sandbox shell does not find
     (``none``: it finds nothing; empty: it finds all of them), and ``FAKE_FLATPAK_EXPORT``
-    set to ``none`` makes the bundle install export no launcher.
+    set to ``none`` makes the bundle install export no launcher. ``FAKE_FLATPAK_BUILD_EXIT``
+    and ``FAKE_FLATPAK_BUNDLE_EXIT`` are the exit status of the flatpak-builder run and of
+    ``build-bundle`` (both succeed unless set).
 
     Smoke test 3 is not answered, it is RUN: the script's own ``-c`` body is executed by
     the host's ``sh`` against a stand-in ``/app`` under the private directory that holds
@@ -1123,7 +1160,9 @@ def _scripted_flatpak(tmp_path):
         "    info)\n"
         "        [ -e \"$installed\" ] || exit 1\n"
         "        case \"$*\" in *--show-commit*) echo 0123abcd ;; esac ;;\n"
-        "    build-bundle) : > \"$3\" ;;\n"          # an empty bundle is enough to reach the install step
+        "    build-bundle)\n"                         # an empty bundle is enough to reach the install step
+        "        [ \"${FAKE_FLATPAK_BUNDLE_EXIT-0}\" = 0 ] || exit \"$FAKE_FLATPAK_BUNDLE_EXIT\"\n"
+        "        : > \"$3\" ;;\n"
         "    install)\n"
         "        case \"$*\" in *--bundle*)\n"
         f"            mkdir -p \"$FLATPAK_USER_DIR/exports/share/applications\"\n"
@@ -1133,6 +1172,7 @@ def _scripted_flatpak(tmp_path):
         "        esac ;;\n"
         "    run)\n"
         "        case \"$*\" in\n"
+        "            *' --command=flatpak-builder '*) exit \"${FAKE_FLATPAK_BUILD_EXIT-0}\" ;;\n"
         "            *' --print-specs')\n"
         "                [ -z \"${FAKE_FLATPAK_SPECS-}\" ] || printf '%s\\n' \"$FAKE_FLATPAK_SPECS\" ;;\n"
         "            *' --command=python3 '*)\n"
@@ -1286,6 +1326,8 @@ def test_script_sends_every_flatpak_call_to_the_private_directory(tmp_path):
     pytest.param(" ", "printed only blank lines", id="blank"),
     pytest.param("not json", "is not JSON", id="not-json"),
     pytest.param("[]", "not a non-empty JSON object", id="not-an-object"),
+    pytest.param("[1]", "not a non-empty JSON object", id="a-list-with-content"),
+    pytest.param("{}", "not a non-empty JSON object", id="empty-object"),
 ])
 def test_smoke_test_1_refuses_an_empty_or_wrong_print_specs(tmp_path, answer, message):
     """An installed bundle whose --print-specs prints nothing is incomplete, not built."""
@@ -1294,6 +1336,101 @@ def test_smoke_test_1_refuses_an_empty_or_wrong_print_specs(tmp_path, answer, me
     assert message in result.stderr, result.stderr
     assert "Smoke test 1 of 3" in result.stderr, result.stderr
     assert not [a for _t, _s, a in calls if "--command=python3" in a], "smoke test 2 ran anyway"
+
+
+@needs_bash
+def test_script_runs_the_same_commands_as_the_release_workflows_flatpak_job(tmp_path):
+    """The point of the script is that a green local build predicts the release job, so
+    the commands the script runs are read back against the workflow's, not against copies
+    kept in this file: the flatpak-builder flags and positional arguments, both
+    validators, the build-bundle call and the bundle and checksum names, and the install
+    and run of the bundle. What is DELIBERATELY different (the script's --user on the run,
+    --bundle on the install, a .partial name the bundle is renamed from, absolute paths)
+    is spelled out below; anything else that differs fails."""
+    result, calls, _private, out = _scripted_run(tmp_path)
+    assert result.returncode == 0, result.stderr
+    args = [a for tool, _seen, a in calls if tool == "flatpak"]
+    lines = _workflow_flatpak_lines()
+    version = _package_version()
+    name = f"hugmesh-studio-{version}-x86_64.flatpak"      # the fake flatpak's arch
+
+    def workflow_one(predicate, what):
+        found = [ln for ln in lines if predicate(ln)]
+        assert len(found) == 1, f"expected one {what} in the workflow's flatpak job, found {found}"
+        return found[0]
+
+    # flatpak-builder: the same flags, the same directories by name, the same manifest.
+    builder_words = _words_of(workflow_one(lambda ln: ln.startswith("flatpak-builder "), "build"))
+    script_build = next(shlex.split(a) for a in args if "--command=flatpak-builder" in a)
+    script_tail = script_build[script_build.index("org.flatpak.Builder") + 1:]
+
+    def flags(words):
+        return sorted(w for w in words if w.startswith("--") and not w.startswith("--repo="))
+    assert flags(script_tail) == flags(builder_words), (
+        f"flatpak-builder flags differ: script {flags(script_tail)}, workflow {flags(builder_words)}")
+    repo_of = lambda words: [os.path.basename(w[len("--repo="):]) for w in words if w.startswith("--repo=")]
+    assert repo_of(script_tail) == repo_of(builder_words) == ["repo"], (script_tail, builder_words)
+    assert [os.path.basename(w) for w in script_tail[-2:]] == builder_words[-2:] == [
+        "build-dir", os.path.basename(MANIFEST)], (script_tail, builder_words)
+
+    # The two validators: the same program, options and file names.
+    from_workflow = [" ".join(_words_of(ln)) for ln in lines
+                     if ln.split(" ", 1)[0] in {"desktop-file-validate", "appstreamcli"}]
+    from_script = [tool + " " + " ".join(os.path.basename(w) for w in a.split())
+                   for tool, _seen, a in calls if tool in {"desktop-file-validate", "appstreamcli"}]
+    assert len(from_workflow) == 2, from_workflow
+    assert sorted(from_script) == sorted(from_workflow), (from_script, from_workflow)
+
+    # build-bundle and the names it produces.
+    bundle_words = _words_of(workflow_one(lambda ln: ln.startswith("flatpak build-bundle "), "export"))
+    script_bundle = next(shlex.split(a) for a in args if a.startswith("build-bundle "))
+    assert bundle_words[3].replace("${VERSION}", version) == name, bundle_words
+    assert os.path.basename(script_bundle[1]) == bundle_words[2] == "repo", (script_bundle, bundle_words)
+    assert os.path.basename(script_bundle[2]) == name + ".partial", script_bundle
+    assert script_bundle[3] == bundle_words[4] == APP_ID, (script_bundle, bundle_words)
+    checksum = workflow_one(lambda ln: ln.startswith("sha256sum "), "checksum")
+    assert checksum.replace("${VERSION}", version).endswith(f'tee "{name}.sha256"'), checksum
+    assert os.path.isfile(os.path.join(out, name + ".sha256")), "the script wrote no .sha256 of that name"
+
+    # Install and run of the bundle (the workflow's smoke test).
+    install = _words_of(workflow_one(lambda ln: ln.startswith("flatpak install ") and ".flatpak" in ln,
+                                     "bundle install"))
+    script_install = next(shlex.split(a) for a in args if a.startswith("install ") and "--bundle" in a)
+    assert install[0] == "flatpak" and install[1] == "install"
+    assert [w for w in script_install[1:-1] if w != "--bundle"] == install[2:-1], (script_install, install)
+    assert install[-1].replace("${VERSION}", version) == name == os.path.basename(script_install[-1])
+    run_words = _words_of(workflow_one(lambda ln: ln.startswith("flatpak run "), "smoke test"))
+    script_run = next(shlex.split(a) for a in args if a.endswith(" --print-specs"))
+    assert [w for w in script_run if w != "--user"] == run_words[1:], (script_run, run_words)
+
+
+@needs_bash
+def test_a_failed_build_stops_the_script_before_it_exports_anything(tmp_path):
+    """flatpak-builder's output goes through ``tee``; without pipefail its failure would
+    vanish behind tee's exit status, and --force-clean empties only the build directory,
+    so ``build-bundle`` would export the repository of the PREVIOUS build and the script
+    would report a fresh, verified bundle."""
+    result, calls, _private, out = _scripted_run(tmp_path, FAKE_FLATPAK_BUILD_EXIT="1")
+    assert result.returncode == 1, result.stderr
+    assert "FAILED during: Building" in result.stderr, result.stderr
+    names = [a.split()[0] for tool, _s, a in calls if tool == "flatpak"]
+    assert "build-bundle" not in names and "install" not in names[names.index("run"):], names
+    assert not [f for f in os.listdir(out) if f.endswith((".flatpak", ".sha256", ".partial"))]
+
+
+@needs_bash
+def test_a_failed_export_leaves_no_old_bundle_to_be_mistaken_for_the_new_one(tmp_path):
+    """A bundle from an earlier run is removed before the new one is exported: if
+    build-bundle then fails, nothing named like a finished build is left in the output."""
+    out = tmp_path / "out"
+    out.mkdir()
+    bundle = f"hugmesh-studio-{_package_version()}-x86_64.flatpak"
+    for name in (bundle, bundle + ".sha256"):
+        (out / name).write_text("from an earlier run")
+    result, _calls, _private, _out = _scripted_run(tmp_path, FAKE_FLATPAK_BUNDLE_EXIT="1")
+    assert result.returncode == 1, result.stderr
+    assert "FAILED during: Exporting" in result.stderr, result.stderr
+    assert not [f for f in os.listdir(out) if f.endswith((".flatpak", ".sha256"))], os.listdir(out)
 
 
 @needs_bash

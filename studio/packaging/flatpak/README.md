@@ -175,7 +175,7 @@ The script proves that route with one cheap command before the long build depend
 |---|---|---|
 | Tooling | `apt-get install flatpak-builder appstream desktop-file-utils` (needs root) | `org.flatpak.Builder` from flathub, into a private directory |
 | Where it builds | inside the checkout, in `studio/packaging/flatpak` | outside it, under `HUGMESH_STUDIO_FLATPAK_OUT` |
-| Validators, runtime, `flatpak build-bundle`, bundle name, checksum | as listed in the workflow | the same calls, the same names |
+| Validators, runtime, `flatpak build-bundle`, bundle name, checksum | as listed in the workflow | the same calls and names, except that the bundle is first written as `<name>.partial` and renamed when whole. `tests/test_flatpak_packaging_files.py` reads the workflow and compares them. |
 | Smoke test | `--print-specs` is not empty | `--print-specs` is JSON; Qt starts with PySide6; launcher and icons exist |
 | Runs when | on a tag or by hand, on GitHub | whenever you run it |
 
