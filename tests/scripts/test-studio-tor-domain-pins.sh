@@ -76,6 +76,8 @@ NAMED=(
   tests/test_services_section.py
   # the post-merge review of #645: what a person SEES in the fleet window (#647/#656)
   tests/test_fleet_window_layout.py
+  # ... and on the Go-Live wizard (Inputs picker, Generate pane) and the cloud Domains step
+  tests/test_domain_surfaces_layout.py
 )
 FAMILIES=(
   "tests/test_domain_services*.py"
