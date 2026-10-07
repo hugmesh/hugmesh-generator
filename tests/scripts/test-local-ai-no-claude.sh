@@ -299,6 +299,11 @@ battery() {   # LABEL — the same commands on whichever PATHV is set
     else bad "[${label}] todo --dry-run: ${out}"; fi
 
     printf good >"${LOG}/mode"
+    git -C "${REPOS}/hugmesh-fixture" worktree prune
+    git -C "${REPOS}/hugmesh-fixture" worktree add -q --detach "${WORK}/other-wt" origin/main 2>/dev/null
+    rm -rf "${WORK}/other-wt"                                  # registered, folder gone
+    git -C "${REPOS}/hugmesh-fixture" worktree add -q --detach "${LA_STATE}/scratch/hugmesh-fixture-1" origin/main 2>/dev/null
+    rm -rf "${LA_STATE}/scratch/hugmesh-fixture-1"             # a crashed run's leftover: registered, folder gone
     la bash "${GEN}/scripts/local-ai.sh" draft hugmesh-fixture 1 >"${LOG}/draft.out" 2>&1; rc=$?
     w="$(status_word hugmesh-fixture-1)"
     [ "${rc}" -eq 0 ] && [ "${w}" = "applied" ] && ok "[${label}] draft with a good diff: STATUS applied" \
@@ -312,6 +317,13 @@ battery() {   # LABEL — the same commands on whichever PATHV is set
         || ok "[${label}] no scratch worktree stays registered in the source checkout"
     [ "$(git -C "${REPOS}/hugmesh-fixture" status --porcelain | wc -l)" -eq 0 ] \
         && ok "[${label}] the source checkout's own files were not touched" || bad "[${label}] source checkout was modified"
+
+    # the checkout belongs to the person: a worktree of theirs whose folder is missing right now
+    # (an unmounted path, say) must keep its registration, and a scratch entry that a crashed run
+    # left registered-but-missing must not stop the next draft
+    if [ -d "${REPOS}/hugmesh-fixture/.git/worktrees/other-wt" ]; then
+        ok "[${label}] another worktree of the checkout, whose folder is missing, is still registered afterwards"
+    else bad "[${label}] a draft pruned another worktree's registration from the person's checkout"; fi
 
     printf bad >"${LOG}/mode"
     la bash "${GEN}/scripts/local-ai.sh" draft hugmesh-fixture 2 >/dev/null 2>&1

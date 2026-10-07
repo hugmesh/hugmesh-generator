@@ -62,14 +62,17 @@ if ! git -C "$SRC" rev-parse -q --verify "$BASE^{commit}" >/dev/null; then
   exit 3
 fi
 
+# Only OUR scratch entry is ever touched. No `git worktree prune`: it would also drop the
+# registration of any other worktree of this checkout whose folder is missing right now
+# (an unmounted or remounted path, say), and this checkout belongs to the person.
 cleanup() {
   git -C "$SRC" worktree remove --force "$SCRATCH" >/dev/null 2>&1
   rm -rf "$SCRATCH"
-  git -C "$SRC" worktree prune >/dev/null 2>&1
 }
 trap cleanup EXIT
 cleanup
-if ! git -C "$SRC" worktree add --detach "$SCRATCH" "$BASE" >>"$OUT/agent.log" 2>&1; then
+# -f: a scratch folder that a crashed run left registered but missing is taken over
+if ! git -C "$SRC" worktree add -f --detach "$SCRATCH" "$BASE" >>"$OUT/agent.log" 2>&1; then
   status "error could not make a scratch worktree of $BASE"
   exit 3
 fi
