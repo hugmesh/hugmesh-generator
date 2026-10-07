@@ -14,8 +14,7 @@ before you start — the ORDER is load-bearing.
 ## 1. What the key is and why rotation is dangerous
 
 The device-license registry is enforced by two fail-closed layers, both driven
-from ONE signed, unscoped per-mesh export (see the
-`hugmesh-device-license-registry` memory and `tests/device-registry/`):
+from ONE signed, unscoped per-mesh export (see `tests/device-registry/`):
 
 - **Layer B** — per-node sshd. `specs/usr/sbin/hugmesh-authorized-keys-lookup`
   is the SOLE key source (`AuthorizedKeysFile none`). It verifies the export's
@@ -46,7 +45,12 @@ non-zero, the lookup prints nothing, and sshd denies. So:
   last-good cache (it never wipes), so the node enforces the **last** good license
   set for a while — but it can no longer pick up any change, and once that node's
   operators rotate their own SSH keys or a license changes, they are locked out.
-  A node that had no cache yet (fresh provision) denies ALL SSH except break-glass.
+  An enforcing node with no cache at all denies ALL SSH except break-glass. A
+  node that has never completed a verified sync is not enforcing yet: the sync
+  agent installs `device-registry.conf` (`AuthorizedKeysFile none` + the
+  AuthorizedKeysCommand) only after the FIRST verified sync (the "bootstrap
+  gate", `flip_enforcement_gate()` in `hugmesh-device-registry-sync`), and until
+  then the baked admin key still works.
 - This is the **fleet-lockout / stranded-node** failure. It is exercised by
   `tests/device-registry/test-registry-allow-deny.sh` Case 10
   ("FOREIGN/ROTATED signing key whose public half was NOT re-baked REJECT").
@@ -137,6 +141,14 @@ openssl pkey -in registry-signing-NEW.pem -pubout -outform DER \
    restart/reload the signer, and make the BFF re-sign each mesh's export with the
    **next** generation (strictly greater than the current last-good — section 5).
    From this moment the BFF emits `K_new`-signed exports only.
+
+   The signer (`RegistrySigner` in `hugmesh-admin-bff-api`) reads the private
+   half from `app.registry.signing-key` (env `APP_REGISTRY_SIGNING_KEY`, base64
+   PKCS#8) or from `app.registry.signing-key-path` (a mounted PEM or DER file, so
+   the `.pem` above works as is). With neither set it serves the export
+   **unsigned** and every node fails closed. `specs/cluster/manifests/admin-bff-api/deployment.yaml`
+   wires neither property: how the key reaches the pod is a deployment step this
+   repo does not provide.
 
 5. **Force a re-sign + re-export per mesh** so every node fetches a fresh
    `K_new`-signed export. The sync agent runs on a 60s cron and at boot; a license
@@ -229,9 +241,11 @@ Recovery:
 4. **Disable break-glass again** (remove the break-glass key file / re-disable the
    Match) and record the event in the audit log.
 
-If a node is stranded with NO valid cache at all (e.g. freshly provisioned with the
-wrong public key), it denies all SSH except break-glass from the start — same
-recovery: break-glass in, re-bake, sync.
+If an enforcing node is stranded with NO valid cache at all, it denies all SSH
+except break-glass — same recovery: break-glass in, re-bake, sync. A node that was
+freshly provisioned with the wrong public key and has not yet had a verified sync
+is still in bootstrap: the baked admin key works, and the first verified sync
+(after the key is fixed) flips it to enforcing.
 
 > Prevention beats recovery: confirm step 3 ("new public key on every reachable
 > node") before step 4. The only nodes that should ever need break-glass recovery
