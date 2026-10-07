@@ -63,7 +63,7 @@ hasr() { grep -a -E -e "$2" "$1" >/dev/null 2>&1; }       # file contains regex
 [ -f "${LIB}" ] || { echo "MISSING: ${LIB}"; exit 2; }
 [ -f "${X86}" ] || { echo "MISSING: ${X86}"; exit 2; }
 [ -f "${RPI}" ] || { echo "MISSING: ${RPI}"; exit 2; }
-for t in tar xz find stat mktemp timeout cmp readlink awk sort sed; do
+for t in tar xz find stat mktemp timeout cmp readlink awk sort sed mkfifo; do
     command -v "$t" >/dev/null 2>&1 || { echo "MISSING tool: $t"; exit 2; }
 done
 
@@ -297,6 +297,19 @@ if [ "${rc}" -eq 1 ] && [ "$(printf '%s\n' "${out}" | wc -l)" -eq 1 ] \
     ok "seed refusal: no matching seed -> rc=1, ONE sentence naming both toolchains and 'rebuild WITHOUT --resume'"
 else
     bad "seed refusal: rc=${rc}: ${out}"
+fi
+# 1g2. the fallback glob is restricted to the current seed's FLAVOUR: a cached
+# stage3-amd64-openrc (not hardened) seed whose toolchain versions match is never
+# a candidate for a stage3-amd64-hardened-openrc build system. With no hardened
+# seed matching, the refusal fires and does not even name the foreign one.
+FLAV="${TDIR}/seed-flavour"; mkdir -p "${FLAV}"; cp "${SEED_NEW}" "${FLAV}/"
+cp "${SEED_OLD}" "${FLAV}/stage3-amd64-openrc-20260920T170055Z.tar.xz"
+out="$(hmr_seed_for_resume "${BR}" "${SM}" "${FLAV}/$(basename "${SEED_NEW}")" "${L}" 2>&1 >/dev/null)"; rc=$?
+if [ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -a -F "rebuild WITHOUT --resume" >/dev/null \
+   && ! printf '%s' "${out}" | grep -a -F "stage3-amd64-openrc-" >/dev/null; then
+    ok "seed choice (flavour): a cached seed of another flavour (stage3-amd64-openrc) with a matching toolchain is not a candidate; refused without naming it"
+else
+    bad "seed choice (flavour): rc=${rc}: ${out}"
 fi
 # 1h. restore: only *.a and crt*.o come back; nothing else from the seed.
 hmr_seed_list "${SEED_OLD}" "${L}"
@@ -626,6 +639,13 @@ out="$(hmr_seed_marker_write "${BRS}" "${SEED_OLD}" 2>&1)"; rc=$?
 [ "${rc}" -eq 1 ] && [ "$(cat "${TDIR}/marker-victim")" = untouched ] && printf '%s' "${out}" | grep -a -F "is a symlink" >/dev/null \
     && ok "seed marker: a symlink planted at sysroot.seed is not written through (the victim file is untouched)" \
     || bad "seed marker via symlink: rc=${rc} victim=$(cat "${TDIR}/marker-victim") ${out}"
+# a FIFO planted at sysroot.seed: refused at once. A plain `>` would block the root
+# build for ever with no message (run under timeout so a regression ends as rc=124).
+BRF="${TDIR}/br-fifo"; mkdir -p "${BRF}"; mkfifo "${BRF}/sysroot.seed"
+out="$(timeout 5 bash -c ". '${LIB}'; hmr_seed_marker_write '${BRF}' '${SEED_OLD}'" 2>&1)"; rc=$?
+[ "${rc}" -eq 1 ] && printf '%s' "${out}" | grep -a -F "is not a regular file" >/dev/null \
+    && ok "seed marker: a FIFO planted at sysroot.seed is refused at once (rc=1) instead of blocking the write" \
+    || bad "seed marker via FIFO: rc=${rc} (124 = the write blocked until timeout) ${out}"
 BRB="${TDIR}/br-badmarker"; mkdir -p "${BRB}"
 okm=1
 for v in '../../evil.tar.xz' '/etc/passwd' '..' '.' ''; do
@@ -1278,11 +1298,17 @@ lib_mut M36 "the toolchain match wants exactly one gcc in the seed again" \
     's/^            sys-devel\/gcc-\*)     gcc=1 ;;$/            sys-devel\/gcc-*)     gcc=$((gcc+1)) ;;/' \
     'two gcc slots'
 lib_mut M37 "the marker's seed is no longer tried first" \
-    's#^    for cand in "\${seeddir}/\${marker:-.none}" "\${current}" "\${seeddir}"/stage3-\*.tar.xz; do$#    for cand in "${current}" "${seeddir}"/stage3-*.tar.xz; do#' \
+    's#^    for cand in "\${seeddir}/\${marker:-.none}" "\${current}" "\${seeddir}/\${flavour}"-\*.tar.xz; do$#    for cand in "${current}" "${seeddir}/${flavour}"-*.tar.xz; do#' \
     'seed choice \(marker first\)'
 lib_mut M38 "a build system path resolving to / is looked under like any other" \
     '/^        \/)$/,/^            return 1 ;;$/d' \
     'sysroot resolving to /|extract phase \(sysroot -> /\)'
+lib_mut M39 "a FIFO at the marker path is written into (the regular-file guard removed)" \
+    '/^    if \[ -e "\${marker}" \] && \[ ! -f "\${marker}" \]; then$/,/^    fi$/d' \
+    'seed marker via FIFO'
+lib_mut M40 "the fallback glob accepts a cached seed of any flavour again" \
+    's#^    for cand in "\${seeddir}/\${marker:-.none}" "\${current}" "\${seeddir}/\${flavour}"-\*.tar.xz; do$#    for cand in "${seeddir}/${marker:-.none}" "${current}" "${seeddir}"/stage3-*.tar.xz; do#' \
+    'seed choice \(flavour\)'
 fi
 
 echo

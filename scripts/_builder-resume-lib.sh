@@ -83,15 +83,20 @@ HMR_SEED_MARKER_NAME="sysroot.seed"
 hmr_seed_marker_path()  { printf '%s/%s\n' "${1%/}" "${HMR_SEED_MARKER_NAME}"; }
 # The marker is written as root into <build root>, a directory the Makefile hands
 # to the invoking user (only directories NAMED sysroot are skipped), so a symlink
-# planted at the marker's path would be followed by a plain `>`. Refuse to write
-# through one; the caller carries on, and the next resume falls back to the
-# version match.
+# planted at the marker's path would be followed by a plain `>`, and a FIFO
+# planted there would block that `>` for ever, with no message, in a root build.
+# Refuse to write through either; the caller carries on, and the next resume
+# falls back to the version match.
 hmr_seed_marker_write() {
     local build_root="${1:?build root}" seed="${2:?seed path}"
     local marker
     marker="$(hmr_seed_marker_path "${build_root}")"
     if [ -L "${marker}" ]; then
         _hmr_warn "not recording the seed name: ${marker} is a symlink; remove it"
+        return 1
+    fi
+    if [ -e "${marker}" ] && [ ! -f "${marker}" ]; then
+        _hmr_warn "not recording the seed name: ${marker} is not a regular file (a FIFO there would block this build for ever, a directory would fail the write); remove it"
         return 1
     fi
     printf '%s\n' "$(basename "${seed}")" > "${marker}" 2>/dev/null \
@@ -175,23 +180,27 @@ EOF
 # Prints the path of the seed whose toolchain the build system carries, and
 # leaves that seed's member list in <listing out>. Order tried: the seed the
 # marker names (when it is still cached beside the current one), then the
-# current seed, then every other cached stage3 beside it in glob order (oldest
-# name first; the order cannot matter, since a match is exact).
+# current seed, then every other cached stage3 OF THE SAME FLAVOUR beside it
+# (the current seed's name up to its release timestamp, stage3-amd64-hardened-
+# openrc-*: a cached seed of another profile whose toolchain versions happen to
+# match was built with other compiler defaults and is never a candidate) in
+# glob order (oldest name first; the order cannot matter, since a match is exact).
 # When none matches it prints ONE sentence and returns 1: the safe choice, since
 # restoring glibc/gcc/binutils static archives from a different toolchain than
 # the one the build system's shared libraries and compiler came from is exactly
 # the mismatch that produces link errors nobody can read.
 hmr_seed_for_resume() {
     local build_root="${1:?build root}" sysroot="${2:?sysroot}" current="${3:?current seed}" listing="${4:?listing out}"
-    local seeddir marker cand tried="" have tc_line seed_tc nl=$'\n'
+    local seeddir marker cand tried="" have tc_line seed_tc nl=$'\n' flavour
     seeddir="$(dirname "${current}")"
     marker="$(hmr_seed_marker_read "${build_root}")"
+    flavour="$(basename "${current}")"; flavour="${flavour%.tar.xz}"; flavour="${flavour%-*}"
     # The seeds tried are kept ONE PER LINE, never space-separated: a seed cache
     # under a directory with a space in its name is read back as a whole path,
     # and the refusal below names every seed correctly (word-splitting `${tried}`
     # used to print "my: no toolchain record; builds: no toolchain record" for a
     # cache under "my builds/").
-    for cand in "${seeddir}/${marker:-.none}" "${current}" "${seeddir}"/stage3-*.tar.xz; do
+    for cand in "${seeddir}/${marker:-.none}" "${current}" "${seeddir}/${flavour}"-*.tar.xz; do
         [ -f "${cand}" ] || continue
         case "${nl}${tried}${nl}" in *"${nl}${cand}${nl}"*) continue ;; esac
         tried="${tried}${tried:+${nl}}${cand}"

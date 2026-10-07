@@ -846,8 +846,9 @@ so CI builds from a complete in-VPN copy. See [`docs/DEVOPS.md`](DEVOPS.md).
 - **`--resume` stops with `Refusing to restore the build system's static libraries: no cached seed tarball carries the toolchain …`**
   → every build's clean step deletes the static libraries, and a resumed build puts
   them back from the seed the build system was extracted from (`snap-build-x86/sysroot.seed`
-  names it; for a build system made before that marker existed, the cached seed whose
-  glibc, gcc and binutils match the build system's package database). When no cached
+  names it; for a build system made before that marker existed, the cached seed of the
+  same flavour (`stage3-amd64-hardened-openrc-*`) whose glibc, gcc and binutils match
+  the build system's package database). When no cached
   seed matches — the seed cache was cleaned, or a later `@world` update moved the build
   system's own toolchain — nothing can be restored safely: rebuild without `--resume`.
   The comparison is exact (version and revision) on every package the seed lists, so a
