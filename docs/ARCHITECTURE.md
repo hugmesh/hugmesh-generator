@@ -306,6 +306,8 @@ unrelated QEMU change), so rely on the named code, not the number.
   `01-frontpage` and `27-native-login` passed against a live kind cluster on merged
   `main`, and the stack-free TOTP vectors of spec 29 passed. This says nothing
   about the rest of the suite, which drives services the profile does not deploy.
+  Spec 27 checks the session cookie only: issue #693 (open) reports that on a kind
+  cluster the BFFs cannot validate a Casdoor JWT and `GET /bff/session` answers 500.
   Items 5-15, 17, 20 and 24-26 of
   [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md) are still open.
 
@@ -524,8 +526,9 @@ implementation on `main`.
   `enforcePrivilegedFloor` → `true`, moving the posture-gate expectations in
   lockstep. See [`MFA-ROLLOUT.md`](MFA-ROLLOUT.md).
 - **🔭 SELinux enforcing** — node-policy modules compile and install into every
-  image and load wherever their refpolicy packages are present (a module whose
-  dependency is missing is skipped, with the package named). The fleet boots
+  image (a module whose refpolicy dependency is missing is skipped, with the
+  package named, per `selinux-module-loading.md`; whether booted images load them is
+  tracked in issue #45 and was not re-measured for this page). The fleet boots
   **permissive** and the enforce-gate ships inert
   (no runlevel, `SELINUX_ENFORCE_GATE="no"`). The `.te` rules are still tagged
   `INFERRED-WIDE` and can only be narrowed against AVC logs from a real protected
