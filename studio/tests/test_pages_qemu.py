@@ -1320,3 +1320,177 @@ def test_qemu_playwright_run_is_refused_for_an_unwalked_domain_even_with_root(
     page._launch_playwright()
     assert spawns == [], "a refused session's row was booted by the Playwright lane"
     assert "b.example" in page.note.text()
+
+
+# ---- post-merge review of PR #644: the handler half, alone ----------------------------
+# The refusal tests above press the slots AFTER asserting the greyed buttons, so a slot
+# guard that goes missing is covered by the button and nothing notices (mutations B21
+# and B22 survived). Each slot here is driven ALONE, with the worker joined before the
+# spawn count is read.
+
+def _join(page, qapp):
+    w = getattr(page, "worker", None)
+    if w is not None:
+        w.wait(15000)
+    qapp.processEvents()
+
+
+def _refused_qemu_page(wiz, monkeypatch, fake_generator, root=False):
+    _gen, full, _abort = fake_generator
+    write_build_record(full.name, domains=("b.example",), reviewed=("hugmesh.net",))
+    if root:
+        monkeypatch.setattr(qemu_page.emulation, "playwright_root_blocker", lambda: "")
+    spawns = []
+    monkeypatch.setattr(emulation, "spawn",
+                        lambda argv, *a, **k: spawns.append(list(argv)) or 0)
+    page = _qemu_page(wiz)
+    assert page._current_session().name == full.name and page._boot_refusal
+    return page, spawns
+
+
+def test_the_run_slot_alone_refuses_a_session_with_an_unwalked_domain(
+        wiz, monkeypatch, fake_generator, qapp):
+    page, spawns = _refused_qemu_page(wiz, monkeypatch, fake_generator)
+    page._launch(list_only=False)
+    _join(page, qapp)
+    assert spawns == [], "Run booted a refused session"
+    assert "b.example" in page.note.text()
+
+
+def test_the_avc_slot_alone_refuses_a_session_with_an_unwalked_domain(
+        wiz, monkeypatch, fake_generator, qapp):
+    page, spawns = _refused_qemu_page(wiz, monkeypatch, fake_generator)
+    assert page.avc_combo.currentData(), "fixture: no AVC row to boot"
+    page._launch_avc()
+    _join(page, qapp)
+    assert spawns == [], "the AVC workout booted a refused session"
+
+
+def test_the_playwright_slot_alone_refuses_a_session_with_an_unwalked_domain(
+        wiz, monkeypatch, fake_generator, qapp):
+    page, spawns = _refused_qemu_page(wiz, monkeypatch, fake_generator, root=True)
+    labels = [page.pw_row.itemData(i) for i in range(page.pw_row.count())]
+    page.pw_row.setCurrentIndex(labels.index("rpi5/pki"))
+    page._launch_playwright()
+    _join(page, qapp)
+    assert spawns == [], "the Playwright lane booted a refused session"
+
+
+def test_the_list_button_stays_live_for_a_refused_session(wiz, monkeypatch,
+                                                          fake_generator):
+    page, _spawns = _refused_qemu_page(wiz, monkeypatch, fake_generator)
+    assert page.list_btn.isEnabled(), "listing boots nothing and must stay available"
+
+
+def test_the_playwright_listing_and_dry_run_still_run_for_a_refused_session(
+        wiz, monkeypatch, fake_generator, qapp):
+    page, spawns = _refused_qemu_page(wiz, monkeypatch, fake_generator, root=True)
+    labels = [page.pw_row.itemData(i) for i in range(page.pw_row.count())]
+    page.pw_row.setCurrentIndex(labels.index("rpi5/pki"))
+    page._launch_playwright(list_only=True)
+    _join(page, qapp)
+    assert len(spawns) == 1, "the Playwright listing was refused"
+    page._launch_playwright(dry_run=True)
+    _join(page, qapp)
+    assert len(spawns) == 2, "the Playwright dry run was refused"
+
+
+def test_a_parseable_but_malformed_record_does_not_take_the_page_down(
+        wiz, fake_generator):
+    """A hand-edited record whose config is not a worklist: the gate's guard answers
+    "nothing to say" (test_domain_services pins the five shapes); without it the
+    record read raises inside a Qt slot and the whole Studio aborts."""
+    from hugmesh_studio.core import build_sessions
+    _gen, full, _abort = fake_generator
+    os.makedirs(build_sessions.sessions_dir(), exist_ok=True)
+    with open(os.path.join(build_sessions.sessions_dir(), full.name + ".json"), "w",
+              encoding="utf-8") as fh:
+        json.dump({"id": full.name, "config": None}, fh)
+    page = _qemu_page(wiz)
+    assert page._current_session().name == full.name
+    assert page._boot_refusal == "" and not page.domain_gate_note.isVisible()
+
+
+def test_commit_image_mode_gives_a_transition_into_mesh_a_fresh_worklist(wiz):
+    """ModePage's rule, now shared by the build-first arm: a worklist an earlier
+    flow left must not survive the transition INTO mesh; a re-commit of mesh keeps
+    the one being built."""
+    wiz.cfg.mode = "standalone"
+    stale = object()
+    wiz.worklist = stale
+    mode_mod.commit_image_mode(wiz, "mesh")
+    assert wiz.worklist is None, "a stale worklist survived the transition into mesh"
+    kept = object()
+    wiz.worklist = kept
+    mode_mod.commit_image_mode(wiz, "mesh")             # a collect_all re-run
+    assert wiz.worklist is kept
+
+
+# ---- #647 / #656 rule: the new controls are LOOKED AT, under two styles and at 8 pt ---
+from _look import (LOOK_CASES, LOOK_IDS, DEFAULT_WINDOW, assert_fits,  # noqa: E402
+                   assert_inside, assert_seen_without_scrolling, assert_whole,
+                   child_only, looking, settle, snap)
+
+
+@pytest.mark.parametrize(("style", "pt"), LOOK_CASES, ids=LOOK_IDS)
+def test_look_the_refusal_note_is_drawn_whole_under_the_session_picker(
+        qapp, fake_generator, style, pt):
+    child_only()
+    _gen, full, _abort = fake_generator
+    write_build_record(full.name, domains=("b.example",), reviewed=("hugmesh.net",))
+    with looking(qapp, style, pt):
+        w = wizard_mod.StudioWizard(str(_gen))
+        w.show()
+        try:
+            page = _qemu_page(w)
+            settle(qapp)
+            assert (w.width(), w.height()) == DEFAULT_WINDOW
+            note = page.domain_gate_note
+            assert_inside(page, note, "the per-domain refusal note")
+            assert_whole(note, "the per-domain refusal note")
+            assert note.width() >= 400, "the note is squeezed into a sliver"
+            assert "b.example" in note.text()
+            # it sits under the session picker, inside the same box, and is seen
+            # without scrolling
+            assert note.y() > page.session_combo.y()
+            assert_seen_without_scrolling(page, note, "the per-domain refusal note")
+            snap(w, "qemu-refused", style, pt)
+        finally:
+            w.close()
+            w.deleteLater()
+            settle(qapp)
+
+
+@pytest.mark.parametrize(("style", "pt"), LOOK_CASES, ids=LOOK_IDS)
+def test_look_the_build_first_mode_picker_is_drawn_whole(qapp, fake_generator, style,
+                                                         pt):
+    child_only()
+    _gen, _full, _abort = fake_generator
+    with looking(qapp, style, pt):
+        w = wizard_mod.StudioWizard(str(_gen))
+        w.show()
+        try:
+            page = _qemu_page(w)
+            page.build_first.setChecked(True)
+            settle(qapp)
+            assert_inside(page, page.build_mode_box, "the mode picker box")
+            for mid, rb in page.build_mode_radios.items():
+                assert_inside(page, rb, f"the {mid} radio")
+                assert_fits(rb, f"the {mid} radio")
+            assert_inside(page, page.build_mode_note, "the picker's note")
+            assert_whole(page.build_mode_note, "the picker's note")
+            assert page.build_mode_note.text(), "the note is blank"
+            assert_inside(page, page.chain_note, "the what-Next-does note")
+            assert_whole(page.chain_note, "the what-Next-does note")
+            # No scrolling needed to see the WHOLE picker at the default window: the
+            # page itself may still scroll for the streamed log that sits under it.
+            assert page._content_scroll.verticalScrollBar().value() == 0
+            assert_seen_without_scrolling(page, page.build_mode_box,
+                                          "the mode picker box")
+            assert_seen_without_scrolling(page, page.build_mode_note,
+                                          "the picker's note")
+            snap(w, "qemu-build-first", style, pt)
+        finally:
+            w.close()
+            w.deleteLater()
+            settle(qapp)

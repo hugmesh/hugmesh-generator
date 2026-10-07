@@ -573,6 +573,19 @@ class DomainServicesPage(QtWidgets.QWizardPage, DomainServicesBody):
         cfg = self.wiz.cfg
         self._load(cfg, domain_names_for_services(cfg), implicit_own_domain(cfg))
 
+    def forget_answers(self) -> None:
+        """Drop every working answer: the rows were REPLACED under this page on the
+        SAME configuration object (the ``DomainServicesWidget.reload`` case, for the
+        wizard host). ``_load`` keeps a surviving name's working selection and unions
+        the working reviewed set with the configuration's, which is right for the
+        Domains table's edits and wrong for a wholesale replacement — after a second
+        "Create nodes for local cloud" import an earlier walk's selection would be
+        written back over the record's, and its marker would let a domain the record
+        says nobody walked pass the build gate (post-merge review of PR #644). Until
+        the page is next entered ``_record`` writes nothing (its own guard), so a
+        ``collect_all()`` re-run cannot carry the stale answers across either."""
+        self._cfg_seen = None
+
     def validatePage(self):
         """Record (see ``DomainServicesBody._record``); always True — the refusal
         belongs at the build/mesh-start screens, where it can be acted on."""

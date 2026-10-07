@@ -215,18 +215,67 @@ def test_a_record_with_no_domain_rows_imports_exactly_the_apex():
     assert imported_domains_lines(None) == []
 
 
-def test_an_existing_row_of_the_same_name_takes_the_record_and_loses_its_marker():
+def test_the_record_replaces_the_rows_an_earlier_flow_left():
+    """The node images join THIS mesh: its record is the whole domain set. A row an
+    earlier flow of the same Studio session left in cfg is not one of its domains
+    (the post-merge review of PR #644 found such a row built into the local cloud's
+    images), and a same-named row takes the record's title, sign-in and services."""
     cfg = _node_flow_cfg()
     cfg.domains = [Domain(name="b.example", title="Old", optional_services=["tube"]),
                    Domain(name="keep.example")]
     _ds.record_reviewed(cfg, ["b.example", "keep.example"])
+    before = cfg.domains
     apply_imported_domains(cfg, imported_mesh_domains(_n_domain_record()))
-    assert [d.name for d in cfg.domains] == ["b.example", "keep.example", "a.example"]
-    b = cfg.domains[0]
+    assert [d.name for d in cfg.domains] == ["a.example", "b.example"]   # record order
+    assert cfg.domains is not before, "replaced with a new list, never merged in place"
+    b = cfg.domains[1]
     assert (b.title, b.idp, b.optional_services) == ("Beta", DOMAIN_IDP_OWN, [])
-    # b's old marker vouched for services that are gone; keep.example's stays
-    assert "b.example" not in cfg.domain_services_reviewed
-    assert "keep.example" in cfg.domain_services_reviewed
+    # b's old marker vouched for services that are gone, and the record never walked
+    # it; keep.example is gone with its row
+    assert cfg.domain_services_reviewed == ["saved.example.org", "a.example"]
+
+
+def test_a_record_with_no_domain_rows_clears_an_earlier_flows_rows():
+    """None means the mesh serves its own domain only — so the rows and the opt-in an
+    earlier flow left are cleared too, for the reason above."""
+    cfg = _node_flow_cfg()
+    cfg.domains = [Domain(name="x.example", title="X")]
+    cfg.additional_domains = True
+    _ds.record_reviewed(cfg, ["x.example"])
+    assert apply_imported_domains(cfg, None) == []
+    assert cfg.domains == [] and cfg.additional_domains is False
+    assert cfg.domain_services_reviewed == []
+
+
+def test_a_hand_edited_row_the_config_cannot_hold_is_not_imported_and_says_so():
+    """A record edited by hand (the only way to get these). A row whose name is not a
+    lowercase dotted hostname, or whose sign-in the configuration does not know, is NOT
+    imported — and a sign-in is never read as the default instead, because
+    ``config._domain_from_dict`` fails loudly on one rather than coercing it, and an
+    identity provider changed behind the operator's back is worse than a missing row.
+    The summary the operator reads BEFORE consenting names each refused row, so the
+    page never promises a domain the images will not carry."""
+    rec = _n_domain_record(domains=(
+        {"name": " A.Example ", "title": "Alpha", "idp": "superdomain",
+         "optional_services": ["phpbb"]},
+        {"name": "5", "title": "Five", "idp": "own", "optional_services": []},
+        {"name": "c.example", "title": "Gamma", "idp": "nonsense",
+         "optional_services": []},
+        {"name": "b.example", "title": "Beta", "idp": DOMAIN_IDP_OWN,
+         "optional_services": []}))
+    md = imported_mesh_domains(rec)
+    lines = imported_domains_lines(md)
+    assert lines[0] == "A.Example — NOT imported: not a domain name"
+    assert lines[1] == "5 — NOT imported: not a domain name"
+    assert lines[2] == ("c.example — NOT imported: sign-in 'nonsense' is not one of "
+                        "superdomain, own")
+    assert lines[3].startswith("b.example — own Casdoor")
+    cfg = _node_flow_cfg()
+    added = apply_imported_domains(cfg, md)
+    assert added == ["b.example"]
+    assert [d.name for d in cfg.domains] == ["b.example"]
+    assert cfg.own_idp_domains() == ("b.example",)
+    ImageConfig.from_dict(cfg.to_dict())          # a coerced or kept bad sign-in raises
 
 
 def test_the_imported_rows_reach_the_mesh_manifest():
