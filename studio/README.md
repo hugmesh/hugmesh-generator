@@ -57,6 +57,29 @@ a **local mesh node** from the system tray.
   timeouts (a first build compiles ~28 images and is never killed at minute 30),
   and an **Open web UI** shortcut to the running stack's front door.
 
+### Local mesh: code folders (on the Repo source step)
+
+Under the Repo source cards, a **Code folders** block lists every domain from the
+Domains step and, under each, the apps that domain runs: the platform apps (one set
+of images serves every domain) plus the optional services chosen for it on the
+Domain services step, marked `[<slug>]`. Each row names the git checkout compose
+builds that app from and has an **Open folder** button; every domain has **Open
+all**; the block has **Open source root**. The folder is the one the build reads —
+`<source dir>/hugmesh-<name>` with *Build from a source tree I already have*,
+`./.stack-src/hugmesh-<name>` with *Download the source* — parsed from the
+`context:` values of `tests/stack/compose.local.yaml` and the files it includes
+(`core/code_folders.py`), so the rows cannot drift from what `docker compose build`
+resolves. A folder that is not there yet is a disabled button with the reason beside
+it ("not downloaded yet…", "no hugmesh-<name> checkout in …"); a service that runs a
+stock image (Akkoma, tuwunel, the databases) gets a note instead of a row. In
+*Download the source* mode the block says that `make stack-clone` git-resets the
+checkouts under `.stack-src` (only ones holding local commits are kept), and that
+the other mode never touches yours. Opening is verified (`core/open_path.py`:
+`xdg-open`/`gio` on Linux, `explorer.exe` via `wslpath` on WSL2, `os.startfile` on
+Windows, `open` on macOS, with Qt's desktop fallback last and reported as
+unconfirmed); when nothing can be confirmed the block says so inline and offers the
+path to copy. No dialogs.
+
 ## Run
 
 ```sh

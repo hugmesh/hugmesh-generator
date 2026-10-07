@@ -152,6 +152,7 @@ from .domain_services import DomainServicesWidget
 from .domains import DomainsTableWidget
 from ._mesh_monitor_widget import MeshMonitorProbe, MeshMonitorWidget, MeshScaleWorker
 from ._add_user_dialog import AddUserDialog
+from ._code_folders_widget import CodeFoldersWidget
 from ._saved_meshes_widget import SavedMeshProbe, SavedMeshesWidget
 from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
@@ -1220,6 +1221,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         why.setStyleSheet("color: gray;")
         sl.addWidget(why)
         lay.addWidget(src_box)
+        # CODE FOLDERS (#689): the git checkout behind every app of every domain, with
+        # a button to open it. It reads the cards above, so it sits on this step in
+        # BOTH frames (the stepped wizard claims the whole "source" section; the
+        # single-page dialog keeps it) with no section claim of its own.
+        self.code_folders = CodeFoldersWidget(self.generator_dir)
+        lay.addWidget(self.code_folders)
         lay.addStretch(1)
         return w
 
@@ -2669,6 +2676,12 @@ class LocalMeshPage(QtWidgets.QWizardPage):
                 self.src_coverage.setText(f"{total} of {total} build contexts found.")
         else:
             self.src_coverage.setText("")
+        # The code-folder rows follow the same source choice and the Domains table
+        # (every path that changes either already lands here). Cheap: the widget
+        # rebuilds only when the map differs.
+        self.code_folders.refresh(self.boot.cfg.source_mode, self.boot.cfg.source_dir,
+                                  self.mesh_domains.domains,
+                                  own_name=self._own_domain_name())
         self.brand_note.setText(
             "" if self.boot.brand_has_conf() or not self.brand.currentText().strip()
             else f"No brands/{self.brand.currentText().strip()}.conf — runs with "
