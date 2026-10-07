@@ -7,7 +7,11 @@ portage 3.0.81.2's own source, its man pages, the Gentoo tree at
 `/var/db/repos/gentoo`, and real captured output from the live fleet build
 `out/sessions/20260729-233913-719d4e`. Where the operator's stated mapping
 differs from portage's real semantics, the **real** semantics are recorded and
-the difference is called out._
+the difference is called out. Re-checked on 2026-10-07 against the installed
+portage 3.0.82.2: the logic reads the same and the committed flag-state fixture
+regenerates identically. Every portage line number below is 3.0.82.2's; the
+session paths under `out/sessions/` are gone, so the measurements taken from
+them are not re-verifiable._
 
 The operator asked, during live QA of a real mesh build, for the emerge stage to
 show — per package — **four separate columns** (USE_EXPAND-style flags, plain USE
@@ -54,7 +58,7 @@ count **all** say `1 running` — never 2.
 **(c) The resolver display in our logs is an accident, not a channel.** The 229
 `[ebuild …]` lines in `build-pki.x86.log` were printed by
 `depgraph._show_merge_list()` because a **slot conflict** was hit
-(`/usr/lib/python3.12/site-packages/_emerge/depgraph.py:1546`). A build that
+(`/usr/lib/python3.12/site-packages/_emerge/depgraph.py:1723`). A build that
 resolves cleanly emits none. Any feature that depends on the resolver emission
 must **cause** that emission, not scrape for it.
 
@@ -64,7 +68,7 @@ must **cause** that emission, not scrape for it.
 
 All of this is `_create_use_string()` in
 `/usr/lib/python3.12/site-packages/_emerge/resolver/output_helpers.py:262-338`,
-driven by `Display._display_use()` in `.../resolver/output.py:184-260`.
+driven by `Display._display_use()` in `.../resolver/output.py:185-261`.
 
 The table below was **not written from memory**. It was produced by calling
 portage's own `_create_use_string` with one flag named `f` and every reachable
@@ -98,7 +102,7 @@ our builders actually run.
 | 13 | forced by profile, turning **on** | in `use.force`, off at the last merge | `(f*)` | green inside parens | `(f*)` | ✅ unambiguous |
 | 14 | masked by profile, turning **off** | in `use.mask`, on at the last merge | `(-f*)` | green inside parens | `(-f*)` | ✅ unambiguous |
 
-`iuse_forced` is `pkg.use.force ∪ pkg.use.mask` (`output.py:193-195`) — one set,
+`iuse_forced` is `pkg.use.force ∪ pkg.use.mask` (`output.py:194-196`) — one set,
 so **portage itself cannot distinguish "forced on" from "masked off" in the
 parentheses**; the sign inside them is the only hint (`(f)` was forced on,
 `(-f)` was masked off).
@@ -113,11 +117,11 @@ wrong inverts a badge's meaning. `_create_use_string` produces parentheses on
   parens and then `continue`s, so it never reaches the forced wrap. It always
   emits a `-` inside them: the only shapes it can ever produce are `(-f%)` and
   `(-f%*)`.
-* **the `iuse_forced` wrap** (`:324-325`, `if flag in iuse_forced: flag_str =
+* **the `iuse_forced` wrap** (`:325-326`, `if flag in iuse_forced: flag_str =
   "(" + flag_str + ")"`) closes around whatever the enabled/disabled branch
-  already built — **suffixes included**. So `yellow(flag) + "%*"` (`:295-296`,
+  already built — **suffixes included**. So `yellow(flag) + "%*"` (`:298-299`,
   newly in IUSE and on) becomes `(f%*)`, and `green(flag) + "*"` / `green("-" +
-  flag) + "*"` (`:297` / `:318`) become `(f*)` / `(-f*)`.
+  flag) + "*"` (`:301` / `:323`) become `(f*)` / `(-f*)`.
 
 > **Therefore: inside parentheses, `%` means "removed" only when the token also
 > carries `-`. `(f%*)` is the exact opposite of a removal — the flag is newly
@@ -146,7 +150,7 @@ Symbol legend, confirmed against `man 1 emerge`, `--verbose` (rendered from
 ### 1.2 Ordering and grouping
 
 `_create_use_string` emits `enabled + disabled + removed` in that order, each
-group sorted by `_alnum_sort_key` (`output_helpers.py:249-259` — a natural sort
+group sorted by `_alnum_sort_key` (`output_helpers.py:249-258` — a natural sort
 that makes `python3_9` precede `python3_12`). With `--alphabetical` all three
 collapse into one alphabetical run. **A GUI that re-sorts loses information**:
 position alone tells the operator "everything past here is off".
@@ -154,19 +158,19 @@ position alone tells the operator "everything past here is off".
 ### 1.3 What is lost when the log is captured to a file
 
 `portage.output.colorize()` returns the string **unmodified** when
-`havecolor == 0` (`portage/output.py:394-399`), and emerge sets
+`havecolor == 0` (`portage/output.py:383-389`), and emerge sets
 `havecolor = 0` whenever stdout is not a tty:
 
 ```python
-# _emerge/actions.py:2809-2814
+# _emerge/actions.py:2822-2828
 if "--color" in myopts:
     ...
 elif settings.get("TERM") == "dumb" or not sys.stdout.isatty():
     portage.output.havecolor = 0
 ```
 
-Our builders pipe emerge through `_emerge_notice_sink` and then to a file, so
-**colour is absent from every log we have** — verified: the fixture
+Our builders send emerge's output to a file, not a tty (the x86 builder through
+`_emerge_notice_sink`), so **colour is absent from every log we have** — verified: the fixture
 `emerge-resolver-lines.x86-pki.txt` contains zero escape sequences.
 
 The good news: the `-` prefix, the `*` and `%` suffixes and the parentheses are
@@ -176,21 +180,21 @@ two states). The exception is a single genuine two-way collision:
 
 > **states 10 and 11 both render as `(-f)` in plain text.** Blue `(-f)`
 > ("masked, unchanged") and yellow `(-f)` ("masked, and newly appeared in
-> IUSE") are only distinguishable by colour. `_create_use_string:318-321`
+> IUSE") are only distinguishable by colour. `_create_use_string:320-321`
 > deliberately suppresses the `%` marker for forced flags
 > (`if flag not in iuse_forced: flag_str += "%"`), which is exactly what
 > destroys the distinction.
 >
 > **The collision is exactly this one shape — a *bare* `(-f)`.** That `%`
-> suppression sits on the branch that emits nothing else (`:317-321`), so it can
+> suppression sits on the branch that emits nothing else (`:318-321`), so it can
 > never reach a token that carries `*`: `(-f*)` and `(f*)` come from the green
 > transition branches, which require the flag to have been in the *old* IUSE and
 > therefore cannot also be new. `(f)` likewise has one producer only (`red(flag)`
-> at `:293`). Flagging any of those as ambiguous would be inventing doubt that
+> at `:297`). Flagging any of those as ambiguous would be inventing doubt that
 > portage's own source rules out.
 
 **Consequence for the badge design:** either the emission runs with `--color=y`
-(which forces `havecolor = 1` regardless of tty — `actions.py:2810-2811`) and we
+(which forces `havecolor = 1` regardless of tty — `actions.py:2823-2824`) and we
 parse the ANSI, or the `(-f)` badge must honestly render as "forced/masked by
 profile" without claiming to know whether it is also new. **Recommendation: emit
 with `--color=y`.** It costs nothing, it is the only way to get states 10 vs 11
@@ -218,7 +222,7 @@ lines 105079-105307. Nothing in this section is from documentation alone.
 * **type** — `ebuild`, `binary`, `nomerge`, `blocks`, or a left-justified
   13-char operation for uninstalls (`output.py:_set_no_columns`).
 * **attrs** — exactly 7 characters, `PkgAttrDisplay.__str__`
-  (`output_helpers.py:603-649`), positional:
+  (`output_helpers.py:603-650`), positional:
 
   | pos | char | colour | meaning |
   |---|---|---|---|
@@ -230,7 +234,7 @@ lines 105079-105307. Nothing in this section is from documentation alone.
   | 6 | `D` | blue | Downgrade |
   | 7 | `#` / `*` / `~` | BAD / BAD / WARN | package.mask / missing keyword / unstable keyword |
 
-  Position 7 only exists when `verbosity > 1` (`output.py:124-125`), i.e. it is
+  Position 7 only exists when `verbosity > 1` (`output.py:126`), i.e. it is
   present by default and vanishes under `--quiet`. Real shapes present in the
   fixture: `[ebuild  N     ]` ×198, `[ebuild   R    ]` ×16, `[ebuild  N    ~]`
   ×11, `[ebuild  rR    ]`, `[ebuild  r  UD ]`, `[ebuild  NS    ]`,
@@ -238,11 +242,11 @@ lines 105079-105307. Nothing in this section is from documentation alone.
 
 * **USE_EXPAND groups are rendered as their own `KEY="…"` blocks**, after plain
   `USE`, in `sorted(pkg.use.expand)` order with `"USE"` forced first
-  (`output.py:244-245`). Each group's flags have the **group prefix stripped**:
+  (`output.py:245-246`). Each group's flags have the **group prefix stripped**:
   `python_targets_python3_12` is printed as `python3_12` inside
-  `PYTHON_TARGETS="…"` (`map_to_use_expand`, `output.py:166-174`). Groups listed
+  `PYTHON_TARGETS="…"` (`map_to_use_expand`, `output.py:167-175`). Groups listed
   in `USE_EXPAND_HIDDEN` are skipped entirely unless they are the sole reason for
-  a reinstall (`output.py:217-237`).
+  a reinstall (`output.py:218-238`).
 
 Real USE_EXPAND lines from the fixture, showing every decoration in the wild:
 
@@ -262,13 +266,13 @@ capture artefact — see §2.3.
 
 `grep -in "license" .../resolver/output.py` matches exactly **one** line — the
 file's own GPL copyright header at line 2. `grep -in "keyword"` matches three,
-all inside `gen_mask_str`'s `pkg.get_keyword_mask()` call (lines 137-141). There
+all inside `gen_mask_str`'s `pkg.get_keyword_mask()` call (lines 138-142). There
 is no KEYWORDS column and no LICENSE column in `emerge -pv`, at any verbosity,
 with any option. What exists instead:
 
 * **keywords** collapse to the single mask character at attrs position 7
   (`~` = accepted-unstable, `*` = missing keyword, `#` = package.mask,
-  `gen_mask_str`, `output.py:127-146`) — a *verdict*, not the keyword list. Per
+  `gen_mask_str`, `output.py:128-147`) — a *verdict*, not the keyword list. Per
   `man emerge`, `~` is suppressed when the keyword was accepted globally via
   `ACCEPT_KEYWORDS`.
 * **licences** appear only in the separate "license(s) that you'll have to
@@ -332,7 +336,7 @@ such files, **215 850 bytes total**. Sample committed as
 ### 3.1 What each channel does *not* have
 
 * **elog header** (`<sysroot>/var/log/portage/build/<cat>:<pf>:<stamp>.log`,
-  already parsed by `studio/hugmesh_studio/core/emerge_packages.py:314`) —
+  already parsed by `studio/hugmesh_studio/core/emerge_packages.py:630` (`parse_use_flags`)) —
   carries only `Package / Repository / Maintainer / USE / FEATURES`. Verified
   byte-for-byte on
   `wl-pki.x86/sysroot/var/log/portage/build/app-admin:perl-cleaner-2.31-r2:20260730-064846.log`:
@@ -394,12 +398,17 @@ below is already on disk.
 
 ### 4.1 Where the sources live
 
+Sizes and counts were re-measured on 2026-10-07 against the tree synced on
+2026-10-05 (entries are non-comment, non-blank lines; `metadata.xml` counts are
+`<cat>/<pkg>/metadata.xml` files). The tree moves, so treat them as orders of
+magnitude.
+
 | source | path | size | covers |
 |---|---|---|---|
-| global USE flag descriptions | `/var/db/repos/gentoo/profiles/use.desc` | 26 022 B, **401 entries** | flags meaningful tree-wide (`ssl`, `nls`, `debug`, …) |
-| local USE flag descriptions | `/var/db/repos/gentoo/profiles/use.local.desc` | 766 570 B, **9 255 entries**, keyed `cat/pkg:flag` | per-package flags |
-| per-package metadata | `/var/db/repos/gentoo/<cat>/<pkg>/metadata.xml` → `<use><flag name="…">…</flag></use>` | 19 397 files, 2 914 of which carry a `<use>` block | the same per-package flags — this is the **generator** of `use.local.desc` |
-| USE_EXPAND descriptions | `/var/db/repos/gentoo/profiles/desc/<group>.desc` | 93 262 B across **52 files**, **1 383 entries** | `PYTHON_TARGETS`, `ABI_X86`, `CPU_FLAGS_X86`, `LLVM_SLOT`, `L10N`, … |
+| global USE flag descriptions | `/var/db/repos/gentoo/profiles/use.desc` | 25 962 B, **400 entries** | flags meaningful tree-wide (`ssl`, `nls`, `debug`, …) |
+| local USE flag descriptions | `/var/db/repos/gentoo/profiles/use.local.desc` | 773 238 B, **9 327 entries**, keyed `cat/pkg:flag` | per-package flags |
+| per-package metadata | `/var/db/repos/gentoo/<cat>/<pkg>/metadata.xml` → `<use><flag name="…">…</flag></use>` | 19 436 files, 2 930 of which carry a `<use>` block | the same per-package flags — this is the **generator** of `use.local.desc` |
+| USE_EXPAND descriptions | `/var/db/repos/gentoo/profiles/desc/<group>.desc` | 93 330 B across **52 files**, **1 385 entries** | `PYTHON_TARGETS`, `ABI_X86`, `CPU_FLAGS_X86`, `LLVM_SLOT`, `L10N`, … |
 
 The 52 filenames in `profiles/desc/` are also the **authoritative offline list of
 USE_EXPAND group names** — no portage import, no `emerge --info`, just
@@ -409,13 +418,13 @@ USE_EXPAND group names** — no portage import, no `emerge --info`, just
 
 `<sysroot>/var/db/repos/gentoo` exists in every captured sysroot but is
 **empty** — it is a bind mount of the host tree, established at
-`build-x86-host-stage4.sh:4245`:
+`build-x86-host-stage4.sh:5129`:
 
 ```sh
 mount --bind /var/db/repos/gentoo "${SYSROOT}/var/db/repos/gentoo"
 ```
 
-and lazily unmounted at `:4314`. Confirmed: `ls -A` on
+and lazily unmounted by `umount_chroot` at `:5222`. Confirmed: `ls -A` on
 `wl-pki.x86/sysroot/var/db/repos/gentoo` returns **0 entries**.
 
 So the descriptions are reachable **during** a build (host tree) and on any
@@ -493,6 +502,14 @@ everything a role build touches:
 it and the hover text works forever, on any machine, offline, for archived
 sessions — which is the whole point.
 
+**Status: not built.** The Studio reads a sidecar if one exists
+(`SIDECAR_BASENAME = "flag-descriptions.json"` in
+`studio/hugmesh_studio/core/package_flags.py`), but no builder writes one; the
+x86 builder carries only a comment about the queued "badges-Emit" phase
+(`build-x86-host-stage4.sh:5444`). Until then the hover text needs a Gentoo tree
+on the machine that runs the Studio, or falls back to the built-in group-name
+snapshot (§4.2a).
+
 ### 4.5 Links may be constructed, never fetched
 
 `https://packages.gentoo.org/packages/<cat>/<pkg>` and
@@ -503,7 +520,11 @@ block the UI thread.
 
 ---
 
-## 5. Proposed badge design
+## 5. Badge design
+
+Built: `studio/hugmesh_studio/gui/flag_badges.py` follows this table (its
+palette constants are `TEAL = "#0e7a63"` and `GREEN = "#1a7f37"`; the rest reuse
+`styles.MUTED` and `styles.WARN`).
 
 Fourteen states is too many badges. They collapse to **six** distinct meanings
 plus one modifier, which is what the operator actually needs to see.
@@ -562,7 +583,7 @@ usual evidence for it is wrong.
 
 **The `>>> Jobs:` line is not a parallelism indicator.** It is printed by
 `JobStatusDisplay`, which is active only in *background mode*
-(`_emerge/Scheduler.py:441-503`):
+(`_emerge/Scheduler.py:470-532`, `_background_mode`):
 
 ```python
 parallel_jobs = self._max_jobs is True or self._max_jobs > 1
@@ -575,8 +596,8 @@ Either branch turns it on. The fleet's asymmetry is entirely the `quiet` branch:
 
 | | jobs flag | quiet flag | background? | `>>> Jobs:` in the live log |
 |---|---|---|---|---|
-| **rpi5** (runs in the build container) | `--jobs=1` on the `cross_emerge` command line (`build-rpi5-stage4.sh:3754`) | `--quiet-build=y` inherited from `Dockerfile.build:59` `EMERGE_DEFAULT_OPTS` | **yes** (via `quiet`) | 1 739 lines |
-| **x86** (runs on the host) | `EMERGE_JOBS=1` → `--jobs 1` (`build-x86-host-stage4.sh:4460, 4497`) | none | **no** | 0 lines |
+| **rpi5** (runs in the build container) | `--jobs=1` on the `cross_emerge` command line (`build-rpi5-stage4.sh:3933`) | `--quiet-build=y` inherited from `Dockerfile.build:98` `EMERGE_DEFAULT_OPTS` | **yes** (via `quiet`) | 1 739 lines |
+| **x86** (runs on the host) | `EMERGE_JOBS=1` → `--jobs 1` (`build-x86-host-stage4.sh:5375, 5478`) | none | **no** | 0 lines |
 
 The container ENV sets `--jobs=4`, but the explicit `--jobs=1` on the
 `cross_emerge` command line wins (emerge prepends `EMERGE_DEFAULT_OPTS` to
@@ -585,16 +606,17 @@ break down as 896 bare `N of M complete`, 281 `…, 1 merge wait`, and 562
 `…, 1 running`. **The running count is `1` in every line that has one; the
 string `2 running` never appears.**
 
-**So both builders are serial, on purpose.** The reason is recorded in the code
+**So both builders are serial, on purpose.** (The other eight ARM builders are
+not: they pass `--jobs="${JOBS}"`, §7.4.) The reason is recorded in the code
 and must not be discarded:
 
-> `build-x86-host-stage4.sh:4454-4459` — *"EMERGE_JOBS=1: SERIALIZE package
+> `build-x86-host-stage4.sh:5369-5374` — *"EMERGE_JOBS=1: SERIALIZE package
 > builds. At 2 concurrent, the payload's 8 Go packages
 > (kubelet/runc/cni-plugins/containerd/nerdctl/cri-tools/...) overlapped and
 > their shared-runtime recompiles were OOM-KILLED (silent death, no compiler
 > error — confirmed). … (Raise once known-good.)"*
 >
-> `build-rpi5-stage4.sh:3743-3746` — *"--jobs=1: SERIALIZE package builds — the
+> `build-rpi5-stage4.sh:3922-3925` — *"--jobs=1: SERIALIZE package builds — the
 > payload's Go packages … were OOM-killed at high concurrency on x86; one
 > cross-Go build at a time keeps RAM bounded (override with
 > CROSS_EMERGE_JOBS)."*
@@ -603,7 +625,7 @@ Whoever raises x86 parallelism must therefore: keep `--load-average`; keep
 `GOMAXPROCS`/`GOFLAGS -p` capped (Go ignores make's jobserver and `-l`, which is
 the actual OOM mechanism); make the degree an env override exactly as rpi5
 already does with `CROSS_EMERGE_JOBS`; and account for the 20 GB xfs scratch
-budget cited at `:4450-4453`. A default of 2 is the *first* untested step, not a
+budget cited at `:5365-5368`. A default of 2 is the *first* untested step, not a
 safe one — the comment says 2 is precisely what was observed to fail.
 
 A separate, cheaper win is available with **no** OOM risk: adding
@@ -622,14 +644,20 @@ all. That is a decision for the progress lane, not this one.
 2. **No coloured capture exists.** Every conclusion about ANSI codes comes from
    `portage/output.py` and from driving `colorize()` directly. A real
    `--color=y` emission has never been captured by the fleet.
-3. **`emerge -pv` has never been run by a builder.** The 229-line sample is a
-   slot-conflict by-product at default verbosity. The verbosity-3 shape
-   (per-row size, `:slot`, `::repo`, `[oldversion]`) is documented from
-   `output.py` and the man page but **not** proven against a fleet emission.
-4. **ARM cross builders were not measured.** frite / jetson / orangepi\* pass
-   `--jobs="${JOBS}"` (per `emerge_packages.py`'s own module docstring) and were
-   out of scope here; their resolver/telemetry shape is unverified.
-5. **`USE_EXPAND_HIDDEN` handling is untested.** `output.py:217-237` un-hides a
+3. **No builder has run `emerge -pv --color=y`.** The 229-line sample is a
+   slot-conflict by-product at default verbosity. Since the plan preview landed
+   (`scripts/_emerge-plan-lib.sh`), builders do run `--pretend --verbose
+   --color=n` before the multi-package groups, so the verbosity-3 row shape
+   (per-row size, `:slot`, `::repo`, `[oldversion]`) now has real captures:
+   `tests/build-matrix/fixtures/emerge-pretend-plan.verbose*.txt`. Those
+   captures are colourless, and the queued badges-Emit phase (§4.4) is what
+   would add `--color=y`.
+4. **ARM cross builders were not measured.** The eight builders other than
+   rpi5 (frite, jetson and the six Orange Pi platforms) pass
+   `--jobs="${JOBS}"` — not 1 — to `"${CROSS_TARGET}-emerge"` (e.g.
+   `build-frite-stage4.sh:1714`, `build-jetson-stage4.sh:1793`). They were out
+   of scope here; their resolver/telemetry shape is unverified.
+5. **`USE_EXPAND_HIDDEN` handling is untested.** `output.py:218-238` un-hides a
    hidden group when it is the sole reinstall trigger. No sample exists.
 6. **Non-`gentoo` repositories.** `guru` and `sage-on-gentoo` are enabled on this
    host; flags from an overlay resolve against that overlay's own
@@ -696,9 +724,15 @@ USE/USE_EXPAND need a resolver row (§2) that a normal merge never emits.
 `EMERGE_DEFAULT_OPTS` (x86 builder) carries `--jobs/--usepkg/--binpkg-respect-use`
 and no verbosity.
 
-**So the USE columns cannot be fixed in the GUI — the data is not in the log.**
-The fix is the deferred badges-Emit phase, or reusing the plan-preview
-`--pretend` emission which already carries portage's `USE="…"` column verbatim
-per package (`docs/EMERGE-PLAN-PREVIEW.md`). Note that on x86 the plan currently
-covers `world` + `image` but declares `system` *not planned*, so covering the
-operator's "make sure they're in both" requires promoting that group too.
+**So the USE columns cannot be fixed in the GUI alone — the data is not in the
+log.** Two sources can fill them: the plan-preview `--pretend` emission, which
+carries portage's `USE="…"` column verbatim per package
+(`docs/EMERGE-PLAN-PREVIEW.md`), and the queued badges-Emit phase.
+
+*Update.* The first is built. `ImageFlagJoin.feed_plan_line()`
+(`studio/hugmesh_studio/gui/flag_badges.py`, #571) indexes the plan rows next to
+resolver rows, and a badge fed from a plan says so in its tooltip (`PLAN_NOTE`).
+The second is not. And on x86 the plan covers `world` + `image` but declares
+`system` *not planned* (`progress-tables.json`, `platforms.x86.emerge_plan`), so
+x86 `system` packages still get no USE column; covering the operator's "make sure
+they're in both" would mean promoting that group too.
