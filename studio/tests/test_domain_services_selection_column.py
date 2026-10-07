@@ -621,13 +621,14 @@ def _subtitle_is_whole(window, must_say):
         f"(window {window.width()}x{window.height()}, {lab.font().pointSizeF()} pt)"
 
 
-#: The screens the subtitle is measured on — the wizard's documented real ones only
-#: (1080p, a 768p laptop at 125 %, a 1024x600 netbook). Qt's wizard header holds two
-#: lines of subtitle and clips the rest, so on the 640x640 logical screen (588 px
-#: wide) at 13.5 pt any sentence worth printing is three lines; the sizes a person's
-#: screen gives are what is promised.
-_SUBTITLE_SCREENS = tuple((k, _SCREENS[k])
-                          for k in ("1080p", "768p-at-125pc", "1024x600-netbook"))
+#: The screens the subtitle is measured on: the wizard's documented real ones (1080p, a
+#: 768p laptop at 125 %, a 1024x600 netbook) and the 800x800 one, whose 736 px wide
+#: window is where the operator saw the earlier sentence cut off (#647) and where, at
+#: 13.5 pt, the sentence it replaced is three lines again. Qt's wizard header holds
+#: two lines of subtitle and clips the rest; on the 640x640 logical screen (588 px
+#: wide) at 13.5 pt any sentence worth printing is three lines, so that one is out.
+_SUBTITLE_SCREENS = tuple((k, _SCREENS[k]) for k in
+                          ("1080p", "768p-at-125pc", "1024x600-netbook", "800x800-offscreen"))
 
 
 @pytest.mark.parametrize("look", _LOOKS, ids=_look_id)
