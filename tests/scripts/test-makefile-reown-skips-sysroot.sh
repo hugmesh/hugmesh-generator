@@ -177,10 +177,13 @@ else
     bad "worklist_driver.py: remedy still 'chown -R' or missing the prune"
 fi
 # every other reown of a work directory in the repo is one of these two, or is
-# the qemu harness's own run/result dirs (never a build system).
+# the qemu harness's own run/result dirs (never a build system), or the Studio
+# MSI builder's throwaway table-dump directory (build-msi-wine.sh hands back the
+# one directory it mounted into a container as /out; no image build system is
+# ever mounted there).
 others="$(grep -a -rn -E -e 'chown -R' --include=Makefile --include='*.sh' --include='*.py' "${REPO}" 2>/dev/null \
-    | grep -a -v -E -e '/(out|\.stack-src|node_modules|\.venv|tests)/' -e '^[^:]*:[0-9]+:[[:space:]]*#' -e 'worklist_driver.py' -e 'install-x86.sh' -e 'provision.sh' || true)"
-[ -z "${others}" ] && ok "no other 'chown -R' over a work directory in Makefile/scripts/Studio (installer, key provisioning and the qemu harness reown their own trees, not a build system)" \
+    | grep -a -v -E -e '/(out|\.stack-src|node_modules|\.venv|tests)/' -e '^[^:]*:[0-9]+:[[:space:]]*#' -e 'worklist_driver.py' -e 'install-x86.sh' -e 'provision.sh' -e 'build-msi-wine.sh' || true)"
+[ -z "${others}" ] && ok "no other 'chown -R' over a work directory in Makefile/scripts/Studio (installer, key provisioning, the MSI builder and the qemu harness reown their own trees, not a build system)" \
     || bad "other chown -R sites to review: ${others}"
 
 echo

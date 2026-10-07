@@ -616,8 +616,9 @@ out="$(hmr_seed_verify "${SEED_OLD}" "${SEED_NEW}" "${STAGE3_URL_FIX}" 2>&1)"; r
 out="$(STUB_VERIFY_FAIL=1 hmr_seed_verify "${SEED_OLD}" "${SEED_NEW}" "${STAGE3_URL_FIX}" 2>&1)"; rc=$?
 if [ "${rc}" -eq 1 ] && [ "$(printf '%s\n' "${out}" | grep -a -c "Refusing to restore")" -eq 1 ] \
    && printf '%s' "${out}" | grep -a -F "did not verify against its signed DIGESTS" >/dev/null \
+   && printf '%s' "${out}" | grep -a -F "no other cached seed is tried in its place" >/dev/null \
    && printf '%s' "${out}" | grep -a -F "rebuild WITHOUT --resume" >/dev/null; then
-    ok "seed verify fail: a cached seed that does not verify -> rc=1, ONE refusal sentence naming the seed, 'rebuild WITHOUT --resume'"
+    ok "seed verify fail: a cached seed that does not verify -> rc=1, ONE refusal sentence naming the seed, saying no other cached seed is tried, 'rebuild WITHOUT --resume'"
 else
     bad "seed verify fail: rc=${rc}: ${out}"
 fi
