@@ -1,16 +1,16 @@
 # Platform build uniformity — the measured survey
 
-_Survey lane. This document changes **no behaviour**. It is the sourced,
-re-measurable evidence base for the operator's request, made during a live
-mesh build of the x86 **and** Pi5 images at the same moment:_
+_A survey. It changes **no behaviour**. It is the sourced evidence behind the
+operator's request, made during a live mesh build of the x86 **and** Pi5 images
+at the same moment:_
 
 > "resolve differences in the ways and amount of data shown between the pi and
 > x86 builds and create a uniform build structure for all platforms"
 
-Everything below is either a **source line** (path + line number, on `main` at
-`21f0ca0`) or a **count taken from a real build log**. Nothing is remembered or
-estimated. Where a platform has never produced a log in `out/sessions/`, this
-document says so instead of guessing.
+Everything below is a **source line** (path and line number, on `main` at `21f0ca0`)
+or a **count taken from a real build log**. Nothing is remembered or estimated.
+Where a platform has never produced a log in `out/sessions/`, the document says so
+and does not guess.
 
 > **Status on 2026-10-07 (`origin/main` @ `cbf5d9a6`). Read this first.** Every
 > count, line number and log figure below was taken on `main` at `21f0ca0`
@@ -51,9 +51,9 @@ document says so instead of guessing.
 
 
 One session, one mesh, both images, same moment:
-`out/sessions/20260729-233913-719d4e/`. Snapshot taken **2026-07-30T08:41:41Z**
-(the x86 leg had finished; the rpi5 leg was still running, so its counters keep
-climbing — re-measure before quoting).
+`out/sessions/20260729-233913-719d4e/`. The snapshot was taken at
+**2026-07-30T08:41:41Z**. The x86 leg had finished. The rpi5 leg was still running,
+so its counters were still climbing; re-measure before quoting.
 
 | marker (`grep -cF`) | `build-pki.rpi5.log` | `build-pki.x86.log` |
 | --- | ---: | ---: |
@@ -73,14 +73,14 @@ climbing — re-measure before quoting).
 | `[verify-download]` | 5 | 5 |
 
 **The Pi merges 5.6× more packages than x86 and prints 27× fewer lines.** The Pi
-shows the *scheduler* and nothing else; x86 shows the *compiler* and no
-scheduler. Two builds of the same mesh tell the operator two unrelated stories.
+shows the *scheduler* and nothing else. x86 shows the *compiler* and no scheduler.
+Two builds of one mesh tell the operator two unrelated stories.
 
-The same shape reproduces on Jetson, from the last session that has one
+Jetson shows the same shape, in the last session that has a Jetson log
 (`out/sessions/20260719-103006-a775c2/build-jetson-desktop.jetson.log`,
 4,631 lines): 321 `>>> Emerging (`, **1,969** `>>> Jobs:`, **0** `checking `,
-**0** `make[`, **0** `>>> Compiling source`. So this is **not a Pi quirk — it is
-the cross-build lane**.
+**0** `make[`, **0** `>>> Compiling source`. So this is **not a Pi quirk. It belongs
+to the cross-build lane**.
 
 ### Log coverage actually available
 
@@ -93,14 +93,14 @@ the cross-build lane**.
 | jetson | `build-{jetson-desktop,edge_ai,full,gpu-host}.jetson.log` | 20260719-103006-a775c2 |
 | frite, orangepi5, orangepizero2, orangepizero2w, orangepizero3 | **none** | — |
 
-Claims about the five log-less platforms in this document are therefore
-**source-derived only**, and are labelled as such.
+Claims here about the five platforms without logs come from the source only, and
+are labelled as such.
 
 ---
 
 ## 1. Stage taxonomy — per platform, in source order
 
-Extracted mechanically from every `banner "..."` call site plus every bare
+Taken mechanically from every `banner "..."` call site and every bare
 `echo "==> ..."` call site, in file order (the same two shapes
 [`tests/build-matrix/check.sh`](../tests/build-matrix/check.sh) and
 `studio/tests/test_progress_parse.py` grep). Counts match the
@@ -121,14 +121,16 @@ Extracted mechanically from every `banner "..."` call site plus every bare
 | orangepizero3 | **16** | 25 | `Phase N:` prefixes |
 
 The `frite`, `orangepi5`, `orangepizero2`, `orangepizero2w` and `orangepizero3`
-phase lists are **byte-identical** to one another (verified by comparing the
-serialised `phases` arrays) — a copy-paste family; only the builders' u-boot
-defconfig variable differs, inside the banner *text*.
-(As of 2026-07-30; that branch no longer exists on `origin`.) `origin/feat/orangepi-234-platforms` is **not** ahead of `main` here: it
-carries the same 8-platform table (`git merge-base --is-ancestor` says it is not
-an ancestor of `main`, but its `progress-tables.json` platform set is identical
-to `main`'s, and its two "new" builders — Zero 2W / Zero 3 — are already on
-`main`). No 3 LTS / 4 LTS platform existed on `origin` when this was measured; both landed later the same day in #489 (see the addendum).
+phase lists are **byte-identical** (checked by comparing the serialised `phases`
+arrays). They are a copy-paste family. Only the builders' u-boot defconfig variable
+differs, inside the banner *text*.
+
+`origin/feat/orangepi-234-platforms` was **not** ahead of `main` here: it carried the
+same 8-platform table. `git merge-base --is-ancestor` said it was not an ancestor of
+`main`, but its `progress-tables.json` platform set matched `main`'s, and its two
+"new" builders (Zero 2W and Zero 3) were already on `main`. No 3 LTS or 4 LTS platform
+existed on `origin` then; both landed on 2026-07-30 in #489 (see the addendum). That
+branch no longer exists on `origin`.
 
 ### 1.2 The same work under different names
 
@@ -148,10 +150,9 @@ to `main`'s, and its two "new" builders — Zero 2W / Zero 3 — are already on
 | live media | `Building bootable LIVE ISO (grub-mkrescue + squashfs)` (:5683) | **absent** | **absent** | `Phase 5: Building LIVE image …` |
 | installer media | `Building installer ISO …` (:6004) | `Phase 6: Building bootable installer ISO` (:4557) | **absent** | `Phase 6: Building INSTALLER image …` |
 
-Nine rows are **the same work with three different names**. The `Phase N:`
-prefix is the loudest of them: it is a *cross-builder family convention*, not a
-statement about the build, and it makes the x86 and ARM ladders unreadable
-side by side.
+Nine rows are **the same work under three names**. The `Phase N:` prefix is the
+loudest. It is a *convention of the ARM builder family*, says nothing about the
+build, and makes the x86 and ARM ladders unreadable side by side.
 
 ### 1.3 Stages one platform has and another lacks
 
@@ -171,12 +172,12 @@ side by side.
 | `Cleaning: SKIPPED` alternative | ❌† | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 \* **the work happens, the banner does not.** All six of those builders call
-`rebrand_sysroot` unconditionally at the position where x86/rpi5 announce it.
-The stage is real, invisible, and un-tracked by the progress table.
+`rebrand_sysroot` unconditionally, at the point where x86 and rpi5 announce it.
+The stage is real, invisible and untracked by the progress table.
 
-† x86 **does** accept `--skip-clean` (`SKIP_CLEAN` at :174/:582/:874) but its
-guard at :5214 has no `else`, so the stage vanishes from the ladder instead of
-reporting itself skipped.
+† x86 **does** accept `--skip-clean` (`SKIP_CLEAN` at :174/:582/:874), but its guard
+at :5214 has no `else`. The stage vanishes from the ladder instead of reporting
+itself skipped.
 
 Flag support behind those rows (`grep -c` per builder):
 
@@ -205,8 +206,8 @@ export EMERGE_DEFAULT_OPTS="--jobs ${EMERGE_JOBS} --load-average ${JOBS} --usepk
 ```
 
 with `EMERGE_JOBS=1` pinned at :4460. Every merge is a bare `emerge` run inside
-`chroot "${SYSROOT}" /bin/bash` (:4491). Because the export **replaces** the
-inherited value, nothing from the builder container survives into it.
+`chroot "${SYSROOT}" /bin/bash` (:4491). The export **replaces** the inherited value,
+so nothing from the builder container survives into it.
 
 **rpi5 — cross, `ROOT=${SYSROOT}`.**
 [`build-rpi5-stage4.sh:3737`](../build-rpi5-stage4.sh):
@@ -230,12 +231,12 @@ PORTAGE_TMPDIR="${BUILD_ROOT}/tmp"
     --usepkg=y --binpkg-respect-use=y "$@"
 ```
 
-Two differences from rpi5, both undocumented: **`--jobs=${JOBS}`** (host core
-count, measured at **13** on the jetson session) instead of 1, and
-**`PORTAGE_TMPDIR` is set** — rpi5 does not set it, so its build dirs land in
-the container's default `/var/tmp/portage` and vanish with the container.
-rpi5's own comment claims it "Mirrors the x86 builder" (:3746), which is true of
-`--jobs` and false of `PORTAGE_TMPDIR`.
+They differ from rpi5 in two ways, neither documented. They run **`--jobs=${JOBS}`**
+(the host core count, measured at **13** on the jetson session) instead of 1. And
+they **set `PORTAGE_TMPDIR`**; rpi5 does not, so its build dirs land in the
+container's default `/var/tmp/portage` and vanish with the container. rpi5's own
+comment says it "Mirrors the x86 builder" (:3746). That is true of `--jobs` and false
+of `PORTAGE_TMPDIR`.
 
 | | x86 | rpi5 | jetson / frite / orangepi\* |
 | --- | --- | --- | --- |
@@ -249,7 +250,7 @@ rpi5's own comment claims it "Mirrors the x86 builder" (:3746), which is true of
 | `--root-deps` | *(unset)* | `rdeps` (injected by the crossdev wrapper's `CROSS_CMD`) | `rdeps` (same) |
 | `EMERGE_DEFAULT_OPTS` | **exported, overrides the container** | **inherited from the container** | **inherited from the container** |
 
-The wrapper's injection is real and verifiable:
+The wrapper's injection can be checked:
 `/usr/bin/aarch64-unknown-linux-gnu-emerge` ends with
 `: ${CROSS_CMD:=emerge --root-deps=rdeps}` / `exec ${CROSS_CMD} "$@"`.
 
@@ -272,10 +273,10 @@ the `EGB` bucket in [`tests/build-matrix/check.sh:1466`](../tests/build-matrix/c
 `EMERGE_GROUPS` in
 [`core/emerge_packages.py:106`](../studio/hugmesh_studio/core/emerge_packages.py)
 is the fixed 5-name taxonomy `("image", "tools", "dependencies", "system", "world")`.
-Only x86 uses all five; **`world` and `dependencies` are emitted by exactly one
+Only x86 uses all five. **`world` and `dependencies` are emitted by exactly one
 platform**.
 
-Worse than the count: **the same group name denotes different work.**
+The count is not the worst of it. **The same group name means different work.**
 
 | group | x86 means | every ARM builder means |
 | --- | --- | --- |
@@ -285,11 +286,11 @@ Worse than the count: **the same group name denotes different work.**
 | `image` | `${PKGS}`, the role payload (:4616) | `${STAGE4_PACKAGES[@]}`, the role payload (rpi5 :3823) — the one row that agrees |
 | `dependencies` | `sys-kernel/gentoo-sources`, pulled during the kernel phase (:4946) | **never emitted**; kernel sources ride inside `image` (rpi5's `STAGE4_PACKAGES` contains `sys-kernel/raspberrypi-sources` — visible in `wl-pki.rpi5/log/emerge.log`) |
 
-Also positional: on x86 the `tools` banner fires **late**, inside the chroot
-payload; on every ARM builder it fires **first**, before `Preparing build
+Position differs too. On x86 the `tools` banner fires **late**, inside the chroot
+payload. On every ARM builder it fires **first**, before `Preparing build
 directories`. `progress-tables.json` papers over this by attaching `tools` to
-`Verify prerequisites` on ARM and to `Emerge packages` on x86 — two different
-phases for one group name.
+`Verify prerequisites` on ARM and to `Emerge packages` on x86: two phases for one
+group name.
 
 ---
 
@@ -297,8 +298,8 @@ phases for one group name.
 
 ### 3.1 Root cause: portage background mode
 
-Portage suppresses per-package build output on stdout when
-`_background_mode()` is true. From the portage the builds actually run
+Portage suppresses per-package build output on stdout when `_background_mode()` is
+true. This is from the portage the builds actually run
 (3.0.81.2, `/usr/lib/python3.14/site-packages/_emerge/Scheduler.py:441-452`):
 
 ```python
@@ -308,14 +309,14 @@ background = (parallel_jobs or quiet) and not bool(
     self._opts_no_background.intersection(self.myopts))
 ```
 
-and at :495 `self._status_display.quiet = not background or …` — so `>>> Jobs:`
-lines appear **iff** background mode is on. That is the single switch that
-produces the whole 3,848-vs-105,398 divergence.
+and at :495 `self._status_display.quiet = not background or …`. So `>>> Jobs:` lines
+appear **if and only if** background mode is on. That one switch produces the whole
+3,848-against-105,398 divergence.
 
 ### 3.2 Which side of the switch each platform is on — measured
 
-The **normalised** option set portage records in its own `emerge.log` is the
-authority (it prints the resolved `myopts`, not the argv):
+The **normalised** option set that portage records in its own `emerge.log` is the
+authority. It prints the resolved `myopts`, not the argv:
 
 `wl-pki.rpi5/log/emerge.log`:
 
@@ -339,8 +340,8 @@ authority (it prints the resolved `myopts`, not the argv):
     --with-bdeps=n --quiet-build=y --regex-search-auto=y --root-deps=rdeps …
 ```
 
-**`--quiet-build=y` is on the ARM lines and absent from the x86 line — and no
-builder passes it.** Its origin is
+**`--quiet-build=y` is on the ARM lines and absent from the x86 line, and no
+builder passes it.** It comes from
 [`Dockerfile.build:59`](../Dockerfile.build):
 
 ```
@@ -349,17 +350,17 @@ ENV FEATURES="-news binpkg-multi-instance" \
     MAKEOPTS="-j4"
 ```
 
-x86 neutralises it by **exporting** `EMERGE_DEFAULT_OPTS` inside the chroot
-(:4497). `cross_emerge()` never exports it, so the container default leaks
-straight through: its `--jobs`/`--load-average` are overridden by the explicit
-flags, and `--quiet-build=y` — which no explicit flag contradicts — survives.
+x86 cancels it by **exporting** `EMERGE_DEFAULT_OPTS` inside the chroot (:4497).
+`cross_emerge()` never exports it, so the container default leaks straight through.
+The explicit flags override its `--jobs` and `--load-average`. Nothing contradicts
+`--quiet-build=y`, so it survives.
 
 So the ARM lane is in background mode for **two** independent reasons:
 
 1. the leaked `--quiet-build=y` (all seven cross builders), and
-2. `--jobs=${JOBS}` > 1 (the six non-rpi5 cross builders).
+2. `--jobs=${JOBS}` above 1 (the six non-rpi5 cross builders).
 
-Fixing only one of them would leave jetson/frite/orangepi\* dark.
+Fixing only one of them would leave jetson, frite and orangepi\* dark.
 
 ### 3.3 Where the per-package output goes instead
 
@@ -371,8 +372,8 @@ Fixing only one of them would leave jetson/frite/orangepi\* dark.
 | [`specs-rpi5/portage/make.conf.tmpl:24`](../specs-rpi5/portage/make.conf.tmpl) | `/var/log/portage/build` |
 | specs-jetson, specs-frite, specs-orangepi5, specs-orangepi-zero2, specs-orangepi-zero2w, specs-orangepi-zero3 | **unset** |
 
-And even where it is set, it only *lands in the sysroot* when portage runs
-**inside** that sysroot:
+Where it is set, it still *lands in the sysroot* only when portage runs **inside**
+that sysroot:
 
 | | resolves to | per-package logs on disk (measured) |
 | --- | --- | --- |
@@ -382,21 +383,21 @@ And even where it is set, it only *lands in the sysroot* when portage runs
 
 `wl-pki.rpi5/` has no `tmp/` either (rpi5 sets no `PORTAGE_TMPDIR`), so even the
 throwaway `…/temp/build.log` fallback is outside the artifact tree. On the six
-siblings `PORTAGE_TMPDIR="${BUILD_ROOT}/tmp"` at least keeps build dirs under
-`/out`, but portage deletes them on success (`wl-jetson-desktop.jetson/tmp/portage`
-retained exactly **1** entry after a full build).
+siblings, `PORTAGE_TMPDIR="${BUILD_ROOT}/tmp"` at least keeps build dirs under
+`/out`, but portage deletes them on success. `wl-jetson-desktop.jetson/tmp/portage`
+kept exactly **1** entry after a full build.
 
-**Net effect: on every ARM platform the per-package compile output reaches
-neither the stream nor any durable log. It is destroyed.**
+**Net effect: on every ARM platform the per-package compile output reaches neither
+the stream nor any durable log. It is destroyed.**
 
 ### 3.4 What the Studio consequently cannot show on ARM
 
 [`core/emerge_packages.py:367`](../studio/hugmesh_studio/core/emerge_packages.py)
 takes `log_root` = `<session>/wl-<role>.<arch>/sysroot/var/log/portage/build`
-and reads the elog header from it — that is the **only** source of USE flags
-(`grep -c 'USE:'` over a 3.16M-line x86 transcript returns 0; measured again
-here: 0 on x86's stream, 2 on rpi5's). That directory exists on x86 and does not
-exist on any ARM platform, so on ARM the per-package tree has:
+and reads the elog header from it. That is the **only** source of USE flags
+(`grep -c 'USE:'` over a 3.16M-line x86 transcript returns 0; measured again here:
+0 on x86's stream, 2 on rpi5's). The directory exists on x86 and on no ARM platform.
+So on ARM the per-package tree has:
 
 * no USE flags,
 * no elog header (Package / Repository / Maintainer / FEATURES),
@@ -421,16 +422,16 @@ Per-package data availability, measured:
 | USE flags / elog header | per-package log (57 files) | **nowhere** | **nowhere** | **nowhere** |
 | emerge summary log | `sysroot/var/log/emerge.log` (452 lines) | `<BUILD_ROOT>/log/emerge.log` (2,534 lines) | `<BUILD_ROOT>/log/emerge.log` | `<BUILD_ROOT>/log/emerge.log` |
 
-Note the last row is itself a divergence: x86's `emerge.log` is inside the
-**image** (`EMERGE_LOG_DIR` unset → chroot default), ARM's is beside it in the
-build root (`EMERGE_LOG_DIR="${BUILD_ROOT}/log"`).
+The last row is itself a divergence. x86's `emerge.log` is inside the **image**
+(`EMERGE_LOG_DIR` unset, so the chroot default). ARM's is beside it, in the build root
+(`EMERGE_LOG_DIR="${BUILD_ROOT}/log"`).
 
 ### 3.5 A second-order artefact worth knowing
 
-x86's `>>> Completed` count (100) is **50 counter lines + 50 ebuild-ladder
-`>>> Completed installing <atom> into <image>` lines**. Any parser or check that
-counts a bare `>>> Completed` double-counts on x86 and not on ARM. Use
-`>>> Completed (` — measured 50 (x86) / 281 (rpi5) — as the counter marker.
+x86's `>>> Completed` count (100) is **50 counter lines plus 50 ebuild-ladder
+`>>> Completed installing <atom> into <image>` lines**. A parser or check that counts a
+bare `>>> Completed` counts twice on x86 and once on ARM. Use `>>> Completed (` as
+the counter marker; it measured 50 (x86) and 281 (rpi5).
 
 ---
 
@@ -438,12 +439,12 @@ counts a bare `>>> Completed` double-counts on x86 and not on ARM. Use
 
 Classification:
 
-* **MUST-UNIFY** — the difference has no defensible cause; it is drift,
-  copy-paste, or a leak. Remove it.
-* **MAY-DIFFER-BUT-MUST-BE-NAMED-CONSISTENTLY** — the underlying work legitimately
-  differs, but the operator must see the same word for the same concept, and an
-  absent stage must be *stated*, never silent.
-* **GENUINELY-PLATFORM-SPECIFIC** — the hardware or the build model forces it.
+* **MUST-UNIFY**: the difference has no defensible cause. It is drift, copy-paste or
+  a leak. Remove it.
+* **MAY-DIFFER-BUT-MUST-BE-NAMED-CONSISTENTLY**: the work really does differ, but the
+  operator must see the same word for the same concept, and an absent stage must be
+  *stated*, never silent.
+* **GENUINELY-PLATFORM-SPECIFIC**: the hardware or the build model forces it.
 
 | # | what | platforms | root cause | classification | evidence |
 | --- | --- | --- | --- | --- | --- |
@@ -476,12 +477,12 @@ Classification:
 
 ## 5. Recommended canonical taxonomy
 
-One ordered stage list for **every** platform. Each platform declares each stage
-as **present**, **skipped-by-flag** (with the flag), or **not-applicable** (with
-the reason) — and the not-applicable ones are still *rendered*, greyed, so an
-operator sees the same ladder on a Pi and on x86 and can tell at a glance which
-rungs this board does not have. No stage may be silently absent, and no stage
-may be named differently on two platforms.
+One ordered stage list for **every** platform. Each platform declares each stage as
+**present**, **skipped-by-flag** (with the flag) or **not-applicable** (with the
+reason). The not-applicable stages are still *rendered*, greyed, so the operator sees
+the same ladder on a Pi and on x86 and can tell at a glance which rungs a board lacks.
+No stage may be silently absent, and no stage may be named differently on two
+platforms.
 
 | # | canonical id | canonical label | platform-specific detail belongs in the sub-label |
 | ---: | --- | --- | --- |
@@ -507,12 +508,12 @@ may be named differently on two platforms.
 | 20 | `image-live` | Build LIVE image | ISO on x86, SD/USB image on ARM |
 | 21 | `image-installer` | Build INSTALLER image | ISO on x86/rpi5, SD/eMMC image on ARM |
 
-Drop the `Phase N:` prefixes entirely: the ladder position already carries the
-ordering, and the numbers currently disagree between platforms anyway
-(jetson has two different `Phase 4:` stages).
+Drop the `Phase N:` prefixes entirely. The ladder position already carries the
+order, and the numbers disagreed between platforms anyway (jetson has two different
+`Phase 4:` stages).
 
-**Canonical emerge-group taxonomy.** Keep the five names, but give each exactly
-one meaning and require every platform to emit every group it performs:
+**Canonical emerge-group taxonomy.** Keep the five names. Give each exactly one
+meaning, and require every platform to emit every group it performs:
 
 | group | canonical meaning | today |
 | --- | --- | --- |
@@ -522,23 +523,26 @@ one meaning and require every platform to emit every group it performs:
 | `dependencies` | packages merged solely to satisfy another build step | x86 only (kernel sources) — ARM must emit it around its kernel-source merge |
 | `image` | the role payload | already uniform — the model for the rest |
 
-**Canonical per-package data contract.** Every platform must supply, from a
-source that survives the build:
+**Canonical per-package data contract.** Every platform must supply, from a source
+that survives the build:
 
 1. the counter stream (`Emerging/Installing/Completed (N of M)`) — already uniform;
-2. the ebuild ladder and tool output — today x86-only, recoverable on ARM by
-   removing the `--quiet-build=y` leak (D1) and/or by tailing the per-package
-   log (the `feat/emerge-multijob-progress` tailer approach, which was **not
-   on `origin`** when measured — `git ls-remote` found no such head — so this survey assumed
-   it must compose rather than that it exists. The branch is still absent on 2026-10-07. #488 (`70fcea37`, 2026-07-30) added Studio parsing of the `>>> Jobs:` lines (`emerge_packages.py:113-115`); whether it is the work meant here is UNVERIFIED);
-3. the elog header + USE flags — today x86-only, requires a `PORTAGE_LOGDIR`
-   that actually lands under the build root on cross builds (D2/D3);
-4. `>>> Jobs:` scheduler state — today ARM-only; x86 must either emit it or the
+2. the ebuild ladder and tool output, which were x86-only and are recoverable on ARM
+   by removing the `--quiet-build=y` leak (D1) or by tailing the per-package
+   log. The `feat/emerge-multijob-progress` tailer approach was **not on `origin`** when
+   measured (`git ls-remote` found no such head), so this survey assumed it must
+   compose with a fix and did not assume it exists. The branch is still absent on
+   2026-10-07. #488 (`70fcea37`, 2026-07-30) added Studio parsing of the `>>> Jobs:`
+   lines (`emerge_packages.py:113-115`); whether it is the work meant here is
+   UNVERIFIED;
+3. the elog header and USE flags, which were x86-only and need a `PORTAGE_LOGDIR` that
+   lands under the build root on cross builds (D2/D3);
+4. `>>> Jobs:` scheduler state, which was ARM-only; x86 must either emit it or the
    GUI must state that a serialised native build has no queue to show.
 
-Where a platform genuinely cannot supply one of the four, the GUI must say so in
-that platform's own words. A blank panel is the one outcome this document
-exists to prevent.
+Where a platform really cannot supply one of the four, the GUI must say so in that
+platform's own words. A blank panel is the one outcome this document exists to
+prevent.
 
 ---
 
@@ -564,20 +568,19 @@ grep -nE '^[[:space:]]*(banner "|echo "==> )' build-rpi5-stage4.sh
 ```
 
 `out/sessions/**` is **read-only input**. Never write there, and never `cat` the
-multi-hundred-megabyte transcripts — `grep -c` / `awk` only.
+transcripts, which run to hundreds of megabytes. Use `grep -c` or `awk`.
 
 ---
 
 ## Addendum (2026-07-30): two boards landed after the survey
 
-Every count above was measured on `main` at `21f0ca0`, when the fleet had
-**eight** builders. PR #489 then added **Orange Pi 3 LTS + 4 LTS**
-(`build-orangepi3-lts-stage4.sh` / `build-orangepi4-lts-stage4.sh`, both cloned
-from the Zero 2/Zero 3 template) — in the PRE-uniformity "Phase N" vocabulary.
-The taxonomy pass folded both into the canonical stage ladder and emerge-group
-declaration in the same change that canonicalized the original eight, so the
-canonical ladder now spans **ten builders**; a new platform that is not uniform
-would have defeated the point of the pass. The survey's per-platform
-measurements were NOT re-run for the two LTS boards (no archived log of either
-exists yet — they have never completed a real build); their rows inherit the
-Zero 2/Zero 3 template's shape, which is what their builders are.
+Every count above was measured on `main` at `21f0ca0`, when the fleet had **eight**
+builders. PR #489 then added **Orange Pi 3 LTS and 4 LTS**
+(`build-orangepi3-lts-stage4.sh` and `build-orangepi4-lts-stage4.sh`, both cloned from
+the Zero 2/Zero 3 template) in the old "Phase N" vocabulary. The taxonomy pass folded
+both into the canonical stage ladder and the emerge-group declaration, in the same
+change that canonicalised the original eight. The canonical ladder now spans **ten
+builders**; a new platform that is not uniform would have defeated the point of the
+pass. The per-platform measurements were NOT re-run for the two LTS boards: no
+archived log of either exists, because neither has completed a real build. Their rows
+inherit the shape of the Zero 2/Zero 3 template, which is what their builders are.
