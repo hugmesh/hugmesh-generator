@@ -8,7 +8,7 @@ rootless-Kaniko build pipeline that builds an app image from its repo and pushes
 in-cluster Harbor registry (`registry.hugmesh.net`; see `../../apps/03a-harbor.yaml` —
 GitLab's own bundled registry no longer serves this hostname).
 
-It is **modeled 1:1 on the proven [#110](../service-catalog-builder/) Service-Catalog Kaniko
+It is **modeled 1:1 on the [#110](../service-catalog-builder/) Service-Catalog Kaniko
 builder** — same rootless `gcr.io/kaniko-project/executor` floor, same security posture, same
 `dockerconfigjson` push-secret contract — but **generalized** to build any app repo's
 Dockerfile rather than only Service-Catalog DOCKERFILE/ZIP sources.
@@ -32,8 +32,8 @@ Dockerfile rather than only Service-Catalog DOCKERFILE/ZIP sources.
   - `${DEST_IMAGE}` — the **immutable** ref: a release tag on a tag pipeline, else the short
     SHA (`…/<app>:<release-tag-or-sha>`). Never moves.
   - `${DEST_IMAGE_MOVING}` — the **moving** dev ref the app kustomizations track via
-    `newTag: main` (`…/<app>:<ref-slug>`; the default branch resolves to `:main`). Re-pointed
-    each build. A driver wanting only the immutable tag binds both to the same value (Kaniko
+    `newTag: main`. The `build:images` job binds it to `IMAGE_REF` (`main`); the sibling
+    `build:image` jobs use the ref slug. Re-pointed each build. A driver wanting only the immutable tag binds both to the same value (Kaniko
     de-dups identical destinations).
 
 - **`namespace-and-netpol.yaml`** — the `hugmesh-image-builds` namespace + a default-deny
@@ -45,13 +45,15 @@ Dockerfile rather than only Service-Catalog DOCKERFILE/ZIP sources.
 
 The Job template is parameterized so it can be instantiated by any of:
 
-1. **`.gitlab-ci.yml` `build:images`** — the stub is replaced by a documented dispatch that
-   renders the template (substituting the build context / dest image) and `kubectl apply`s it
-   into `hugmesh-image-builds` on the in-cluster runner. This is the in-cluster build path.
-2. **ArgoCD** — render the Job into a Sync/PostSync hook Application.
+1. **`.gitlab-ci.yml` `build:images`** — the only driver that exists. It `sed`-renders
+   the template (build context, dest images) and `kubectl apply`s it into
+   `hugmesh-image-builds`, then waits for the Job (1800 s). It runs on the default branch and
+   on tags, has `allow_failure: true`, and builds one app: `IMAGE_APP` defaults to
+   `hugmesh-gateway`.
+2. **ArgoCD** — render the Job into a Sync/PostSync hook Application. Not wired.
 3. **Argo-Workflows** — a `WorkflowTemplate` step, *if/when* the Workflows controller is
-   installed (it is not present today; the proven #110 pattern is plain `batch/v1` Jobs, which
-   this mirrors).
+   installed. Not wired, and the controller is not present today; the #110 pattern is plain
+   `batch/v1` Jobs, which this mirrors.
 
 ## ALWAYS-ON — and what that does (and does not) start
 
