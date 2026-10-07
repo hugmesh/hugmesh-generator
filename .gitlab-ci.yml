@@ -147,6 +147,25 @@ lint:cluster-manifest-integrity:
     # regex cannot tell what a fused `for entry in ...` word list expands to.
     - bash tests/scripts/test-cluster-manifest-integrity.sh
 
+# Database connection budget gate (hugmesh-generator#663). Each BFF's autoscaler
+# can run up to 6 pods, a rolling update adds 2 more, and every pod holds an
+# R2DBC pool against a Postgres role created with CONNECTION LIMIT 20. With no pool
+# setting the default of 10 per pod asked for 6 x 10 = 60: the first two pods took
+# the whole budget and the persona sign-in answered 500. This job reads the
+# manifests (the role limit from each database's initdb, max_connections from its
+# entrypoint, maxReplicas from the HPA, the rolling-update surge, the pool env) and
+# fails when (replicas + surge) x pool exceeds the role limit, when initial-size
+# exceeds max-size, or when a database cannot hold all its roles at once. Offline,
+# no cluster, no network.
+lint:db-connection-budget:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-db-connection-budget.sh
+
 # External Matrix/Mastodon CLIENT reachability gate. The fe route table ends in a
 # /** catch-all to the Angular shell, whose nginx serves index.html for anything
 # unrouted — so a MISSING protocol route does not 404, it returns 200 text/html

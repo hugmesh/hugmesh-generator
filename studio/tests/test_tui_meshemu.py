@@ -258,3 +258,17 @@ def test_an_unrecorded_session_keeps_its_start_hints(gen):
     assert "! refused" not in "\n".join(j.lines())
     j.feed("1")
     assert "start the WHOLE mesh with:" in "\n".join(j.lines())
+
+
+def test_a_parseable_but_malformed_record_does_not_take_the_screen_down(gen):
+    """A hand-edited record whose config is not a worklist (post-merge review of
+    PR #644): the gate's guard answers "nothing to say" and the screen renders its
+    start hint as for an unrecorded session, instead of the screen dying on the
+    record read."""
+    from hugmesh_studio.core import build_sessions
+    os.makedirs(build_sessions.sessions_dir(), exist_ok=True)
+    with open(os.path.join(build_sessions.sessions_dir(), SESSION + ".json"), "w",
+              encoding="utf-8") as fh:
+        json.dump({"id": SESSION, "config": None}, fh)
+    j = _at_table(gen)
+    assert "! refused" not in "\n".join(j.lines())

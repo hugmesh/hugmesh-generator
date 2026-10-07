@@ -121,6 +121,24 @@ spec:
             # `charforgebff_app` (DML only), created by character-forge-bff-db's initdb/10-roles.sh.
             # Password from its OWN ESO Secret character-forge-bff-db-app-auth (the SAME the DB
             # pod's CHARFORGEBFF_APP_PASSWORD mounts).
+            # R2DBC POOL SIZE (hugmesh-generator#663: the kind sign-in answered 500).
+            # The app role below is created with CONNECTION LIMIT 20 (initdb/10-roles.sh)
+            # and the database runs with max_connections=60. With NO pool setting the
+            # Spring Boot / r2dbc-pool default of 10 connections per replica applies, so
+            # the autoscaler's maxReplicas of 6 asked for 6 x 10 = 60 against a limit of
+            # 20: the first two pods took the whole budget and every pod that came later
+            # failed every query ("Failed to obtain R2DBC Connection"; Postgres says
+            # FATAL: too many connections for role). Sized so the limit also holds during
+            # a rolling update at the top of the band: (6 replicas + 2 surge pods, the
+            # default maxSurge of 25 %) x 2 = 16 <= 20. initial-size 1: a pod needs one
+            # connection to start and opens the second only under load. initial-size must
+            # not exceed max-size (r2dbc-pool refuses to build the pool).
+            # tests/scripts/test-db-connection-budget.sh pins this for every Deployment
+            # that has a database role.
+            - name: SPRING_R2DBC_POOL_INITIAL_SIZE
+              value: "1"
+            - name: SPRING_R2DBC_POOL_MAX_SIZE
+              value: "2"
             - name: SPRING_R2DBC_URL
               value: "r2dbc:postgresql://character-forge-bff-db.hugmesh-backend.svc.cluster.local:5432/charforgebff"
             - name: SPRING_R2DBC_USERNAME
