@@ -1,0 +1,98 @@
+# casdoor-jwks-ingress — JWT-validating pods OUTSIDE hugmesh-backend reach the
+# IdP's signing keys in-cluster (hugmesh-generator#693).
+#
+# ── WHY ──────────────────────────────────────────────────────────────────────
+# Every first-party resource server fetches its JWT signing keys from
+# CASDOOR_JWKS_URI = http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks
+# (the public issuer host id.hugmesh.net need not resolve inside the cluster, and
+# on kind it does not). tier-ingress.yaml's hugmesh-pki policy makes the casdoor
+# pod default-deny and admits exactly four namespaces: hugmesh-pki, hugmesh-backend,
+# devops and ingress-nginx-internal. The eight backend BFFs ride the hugmesh-backend
+# line. Three JWT validators do not live there:
+#
+#   * the fe-gateway (charts/hugmesh-gateway, apps/20-gateway-fe.yaml, namespace
+#     hugmesh-frontend) — it has set CASDOOR_JWKS_URI to this Service since the
+#     chart was written, and db-ingress.yaml already admits it to route-access-db
+#     and Cassandra in hugmesh-pki; the casdoor hop was the one nobody wrote down;
+#   * owncast-bff-api (manifests/owncast, namespace hugmesh-owncast);
+#   * tube-bff-api (manifests/tube, namespace hugmesh-tube).
+#
+# Without a rule the key fetch dies in the CNI: no event, no restart, no pod-side
+# log, and every signed-in call answers 401/500 ("Could not obtain the keys").
+#
+# Each rule is the NARROWEST thing that opens the path: one source POD label ANDed
+# with one source NAMESPACE, on the casdoor http port only — the same shape and
+# reasoning as gateway-crossns-ingress.yaml. Deliberately NOT a namespace added to
+# the tier-ingress from-set, which would admit every pod in that namespace to every
+# pki pod (cassandra, route-access-db, headscale, harbor, the superadmin gateway).
+#
+# owncast and tube are DEFAULT-OFF optional services; this file still ships through
+# the auto-sync networkpolicy app on every cluster, exactly like tier-ingress.yaml's
+# hugmesh-games policy: a from-peer whose namespace does not exist matches nothing,
+# and the bake prunes nothing under manifests/networkpolicy for owncast or tube
+# (scripts/_optional-services-lib.sh), so git and the baked tree render the same
+# (tests/scripts/test-optional-netpol-autosync.sh).
+#
+# Pinned offline by tests/scripts/test-bff-jwks-in-cluster.sh, which evaluates the
+# wired policy set for every CASDOOR_ISSUER_URI container and the chart gateways.
+#
+# ⚠ NOT LIVE-VERIFIED: derived from the manifests and the policy set. kind applies
+# no NetworkPolicy at all (apps/08-networkpolicy.yaml is in none of
+# bootstrap-kind.sh's lists), so only a device cluster exercises these rules.
+---
+# ── fe-gateway (hugmesh-frontend) -> casdoor :8000 ───────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fe-gateway-to-casdoor-jwks
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  podSelector:
+    matchLabels: { app: casdoor }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-frontend } }
+          podSelector:
+            matchLabels: { app.kubernetes.io/instance: hugmesh-fe-gateway }
+      ports:
+        - { protocol: TCP, port: 8000 }
+---
+# ── owncast-bff-api (hugmesh-owncast) -> casdoor :8000 ───────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: owncast-bff-to-casdoor-jwks
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  podSelector:
+    matchLabels: { app: casdoor }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-owncast } }
+          podSelector:
+            matchLabels: { app: hugmesh-owncast }
+      ports:
+        - { protocol: TCP, port: 8000 }
+---
+# ── tube-bff-api (hugmesh-tube) -> casdoor :8000 ─────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tube-bff-to-casdoor-jwks
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.net }
+spec:
+  podSelector:
+    matchLabels: { app: casdoor }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-tube } }
+          podSelector:
+            matchLabels: { app: hugmesh-tube }
+      ports:
+        - { protocol: TCP, port: 8000 }
