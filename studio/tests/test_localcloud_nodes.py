@@ -926,6 +926,25 @@ def test_the_imported_accounts_fill_the_users_table_when_it_is_entered(
     assert shown == ["carol", "dave"]
 
 
+def test_an_account_edited_after_the_import_survives_back_past_the_gate_and_next(
+        wiz, monkeypatch, tmp_path):
+    """Replace-not-merge applies to a FRESH entry through the main menu only. Back from
+    the Users table past the gate and Next again is the same visit (the one-shot latch
+    holds): the operator's edit to an imported account must not be re-imported away."""
+    _save_named(tmp_path, "three-domain", domains=_AB_ROWS,
+                own_idp_domains=("b.example",))
+    _identity_with_users(monkeypatch, [("carol", ["user"])])
+    gate = _confirm_and_enter_mesh_chain(wiz)
+    usr = advance_to(wiz, wizard_mod.UsersPage)
+    assert usr.table.item(0, _USERS_COL_NAME).text() == "carol", "fixture: imported"
+    usr.table.item(0, _USERS_COL_NAME).setText("carol-edited")
+    back_to(wiz, wizard_mod.LocalCloudNodesPage)
+    assert gate.confirm.isChecked(), "fixture: Back does not re-ask the consent"
+    wiz.next()
+    _walk_to_launch(wiz)
+    assert [u.username for u in wiz.cfg.users] == ["carol-edited"]
+
+
 def test_a_repeated_account_in_the_identity_is_one_account(wiz, monkeypatch):
     monkeypatch.setattr(lc_mod, "local_mesh_identity",
                         lambda _gd: (CANNED_DOMAIN, [("alice", ["admin"]),
