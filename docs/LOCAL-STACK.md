@@ -340,13 +340,13 @@ re-read against `hugmesh-forum-api` and `compose.alt-social.yaml` on 2026-10-07.
 
 ## Seeding the e2e fixtures — `tests/stack/seed-e2e.sh` (a.k.a. `make stack-seed`)
 
-The UI e2e suites assume a set of personas/rooms/relationships exists, and —
-since PR #227 — this is also **the required step that makes login work at all**:
-a fresh compose Casdoor boots with no org/roles/personas, so without seeding
-there's nothing for the native `/bff/login` form (or an e2e persona) to
+The UI e2e suites assume a set of personas, rooms and relationships exists. Since
+PR #227 this is also **the required step that makes login work at all**.
+A fresh compose Casdoor boots with no org, roles or personas, so without seeding
+the native `/bff/login` form (or an e2e persona) has nothing to
 authenticate against. Against a
 **running** core stack (front door `http://localhost:8088`, Casdoor
-`http://localhost:8000` — `make stack-up`), run:
+`http://localhost:8000`, brought up by `make stack-up`), run:
 
 ```bash
 make stack-seed                # core identity leg only (org+roles+app-user-bff+personas)
@@ -360,23 +360,23 @@ Casdoor apply hook — the same machinery the cluster/pentest seeds use):
 1. **The `app-user-bff` OAuth2 client** (`ensure_app()`): a confidential client
    mirroring the cluster's `reconcile_app` (authorization_code + refresh_token
    grants, JWT-Custom/RS256 with the roles+permissions token attributes gateway
-   RBAC reads). This is the piece a fresh compose Casdoor lacks entirely — without
+   RBAC reads). A fresh compose Casdoor lacks this entirely. Without
    it, browser SSO login has no application to redirect to.
 2. **Personas** (Casdoor org `hugmesh`): the standard matrix
    (`e2e-user`/`e2e-mod`/`e2e-admin`/…) **plus** `e2e-superadmin`, `e2e-banned`
-   (ban = the **absence** of the platform access roles — seeded as the post-ban
-   state) and the domain-locked pair (`e2e-*-domainlocked` — lock = the
-   **presence** of the marker role). Because the compose Casdoor boots **empty**,
+   (ban = the **absence** of the platform access roles, seeded as the post-ban
+   state) and the domain-locked pair (`e2e-*-domainlocked`; lock = the
+   **presence** of the marker role). The compose Casdoor boots **empty**, so
    the script first creates the org + the `ROLE_*` objects, then applies users +
    role members and pre-mints per-persona JWTs into `tests/stack/.seed-e2e/jwt-cache`
    (usable as `SNAP_PREMINT_DIR`). Default admin creds are the fresh-casdoor dev
-   default (`admin`/`123`) — override `CASDOOR_ADMIN_PASS` otherwise.
-3. **Matrix (tuwunel)**: users `e2e-mod` + `e2e-user` — registered from the
-   host over the public CS-API (UIAA `m.login.dummy`; no container exec, the
+   default (`admin`/`123`); override `CASDOOR_ADMIN_PASS` otherwise.
+3. **Matrix (tuwunel)**: users `e2e-mod` + `e2e-user`, registered from the
+   host over the public CS-API (UIAA `m.login.dummy`; no container exec, because the
    distroless tuwunel image has no shell); **public room X**
    (`#e2e-public-x:localhost`) and **invite-only room Y** (`#e2e-invite-y:localhost`,
    `e2e-user` invited; verified `join_rule=invite`).
-4. **Mastodon**: accounts `e2e_usera` + `e2e_userb` (underscore — Mastodon's
+4. **Mastodon**: accounts `e2e_usera` + `e2e_userb` (underscore, because Mastodon's
    username validator rejects hyphens); follower relationship
    **`e2e_userb` → `e2e_usera`**; **one pending moderation-queue item** (an
    unresolved report of `e2e_usera` filed by `e2e_userb`).
@@ -387,8 +387,8 @@ Without it you can sign in, but `GET /bff/session` reports
 `registrationComplete=false` and every service route answers 403.
 
 The script is **idempotent** (probe-before-create everywhere; safe to re-run)
-and **fail-honest**: every unmet dependency dies with a message naming it (which
-service, which bring-up command) — it never prints success for something it did
+and **fail-honest**. Every unmet dependency dies with a message naming it (which
+service, which bring-up command). It never prints success for something it did
 not verify.
 
 ### What remains UNVERIFIABLE on compose (honest limitations)
@@ -398,23 +398,23 @@ not verify.
   here. The script WARNs loudly (fatal with `SEED_STRICT=1`); set
   `CASDOOR_BRAND_B_URL` (e.g. the pentest two-brand profile) to seed it for real.
 - **pleroma-admin-only verbs**: the compose social tier is **tuwunel + mainline
-  Mastodon** — the Matrix half now runs the same homeserver + image tag as the
+  Mastodon**. The Matrix half runs the same homeserver + image tag as the
   cluster payload (`ghcr.io/matrix-construct/tuwunel:v1.7.0`), though in
-  LAN-test posture (open registration, federation off, no mTLS proxy — the
-  cluster runs closed registration behind `tuwunel-proxy:4443`), while the
+  LAN-test posture: open registration, federation off, no mTLS proxy. The
+  cluster runs closed registration behind `tuwunel-proxy:4443`. The
   fediverse half is still Mastodon, not Akkoma. mod-bff actions wired to the
   pleroma-admin API (block/ban Akkoma leg: `PATCH /api/v1/pleroma/admin/users/
-  deactivate`, `DELETE /api/v1/pleroma/admin/instances/{host}`) will 404 upstream —
-  suites must assert the bff's **honest DEGRADED envelope** here, never a fake
-  success. The mod-bff **Matrix block leg is STUBBED BY DESIGN** everywhere
-  (tuwunel has no general REST admin API — only the Synapse-compat
-  `/_synapse/admin/v1/register` shared-secret shim; moderation lives in the
-  admin room) — it returns an honest 202/STUBBED envelope, never "OK".
+  deactivate`, `DELETE /api/v1/pleroma/admin/instances/{host}`) will 404 upstream.
+  Suites must assert the bff's **honest DEGRADED envelope** here, never a fake
+  success. The mod-bff **Matrix block leg is STUBBED BY DESIGN** everywhere:
+  tuwunel has no general REST admin API (only the Synapse-compat
+  `/_synapse/admin/v1/register` shared-secret shim), and moderation lives in the
+  admin room. The leg returns an honest 202/STUBBED envelope, never "OK".
 - **Domain-lock enforcement**: the Akkoma `ForceLocalForUsers` MRF + the egress
   backstop do not exist on mainline Mastodon/compose, so the non-federation specs
   (`tests/e2e/specs/19-23`) stay honestly **skipped** here (`SNAP_FEDERATION_PEER`
   / `SNAP_DOMAINLOCK_ENABLED` unset). The domain-locked **personas** are still
-  seeded so the UI surfaces (role badges, disabled+helptext controls) render.
+  seeded, so the UI surfaces (role badges, disabled+helptext controls) render.
 
 ---
 
@@ -454,18 +454,18 @@ lanes; the gateway's own mirror of that cache is
 
 ### All five `/bff/{me,provision,register}/*` paths now resolve to user-bff (updated 2026-09-18)
 
-Until 2026-09-17 the two fe route tables disagreed about five `/bff` paths: the
+Until 2026-09-17 the two fe route tables disagreed about five `/bff` paths. The
 cluster sent them to **user-bff** (via `/bff/register/**`, `/bff/me/**`,
-`/bff/provision/**`, all declared above its `/bff/**` admin catch-all), while
-compose had no entry for any of them and let all five fall through to its own
+`/bff/provision/**`, all declared above its `/bff/**` admin catch-all). Compose
+had no entry for any of them, so all five fell through to its own
 `/bff/**` **admin-bff** catch-all. That split is why the compose e2e lane never
 saw the cluster's 404s (hugmesh-generator#366).
 
-Operator decision 40 (hugmesh-generator#347) aligned compose onto the cluster —
+Operator decision 40 (hugmesh-generator#347) aligned compose onto the cluster:
 **all five, both lanes identical**. Two of the five, the `/bff/register/*`
-pair, initially had no user-bff handler and 404'd on BOTH lanes; that gap
-closed on 2026-09-18 (hugmesh/hugmesh-user-bff-api#20, commit `dc34c8b`) and
-this table was stale about it until this edit (flagged on hugmesh-generator#347
+pair, first had no user-bff handler and 404'd on BOTH lanes. That gap
+closed on 2026-09-18 (hugmesh/hugmesh-user-bff-api#20, commit `dc34c8b`). This
+table was stale about it until this edit (flagged on hugmesh-generator#347
 2026-09-18T07:21Z):
 
 | path | before (compose) | after (compose + cluster) | served? |
@@ -480,42 +480,42 @@ user-bff serves all five via `LegacyPathParityController`
 (hugmesh/hugmesh-user-bff-api#15 @ `c3d24c4` for the first three;
 hugmesh/hugmesh-user-bff-api#20 @ `dc34c8b` added the last two).
 `SsoAuthController` still maps the exact path `/bff/register` only, which does
-not collide with either. `tests/scripts/test-fe-bff-route-lane-parity.sh`'s
-FIVE table asserts `has_handler=True` for every path, so that table going
-stale or `False` turns the run red rather than only printing. That guard reads
-only this repo's route tables, never user-bff's source, so a **genuine** handler
-removal in hugmesh-user-bff-api is caught over there — by its
-`LegacyPathParityRegisterTest` and `SecurityConfigSsoPathRulesTest` — not by
+not collide with either. The FIVE table in `tests/scripts/test-fe-bff-route-lane-parity.sh`
+asserts `has_handler=True` for every path, so a stale or `False` entry turns the
+run red instead of only printing. That guard reads
+only this repo's route tables, never user-bff's source. A **genuine** handler
+removal in hugmesh-user-bff-api is caught over there, by its
+`LegacyPathParityRegisterTest` and `SecurityConfigSsoPathRulesTest`, not by
 this guard.
 
-What you will actually notice on a local stack: nothing different from the
-first three — all five now behave the same way (seeded `ROLE_USER` in the
+What you will notice on a local stack: nothing different from the
+first three. All five behave the same way (seeded `ROLE_USER` in the
 gateway's `CanonicalSeed`, so an unauthenticated `POST` is refused before it
 reaches any BFF; a signed-in caller reaches a real handler on both register
 paths, not a 404).
 
 - **The QEMU seeder never goes through the front door.** `tests/qemu/seed-accounts.sh`
   calls `POST ${BFF}/bff/register/google` **directly at admin-bff on
-  `127.0.0.1:8403`, with no gateway in the path**, so neither fe route table
-  affects it; it was unaffected while the two paths 404'd and is unaffected now.
+  `127.0.0.1:8403`, with no gateway in the path**. Neither fe route table
+  affects it: it was unaffected while the two paths 404'd and is unaffected now.
 - **A stale `./.stack-src` breaks some or all five, depending how stale.** Compose
   builds user-bff from `${STACK_SRC:-./.stack-src}/hugmesh-user-bff-api`. A
   checkout pinned **before `c3d24c4`** has no `LegacyPathParityController` at
-  all — `/bff/me/namespaces` and both `/bff/provision/*` 404 too, and
-  admin-bff no longer catches them (empty namespace grants in admin-ui, a
-  silent provision failure on every sign-in that login-ui swallows). A
+  all. `/bff/me/namespaces` and both `/bff/provision/*` 404 too, and
+  admin-bff no longer catches them: admin-ui gets empty namespace grants, and
+  every sign-in silently fails to provision (login-ui swallows the error). A
   checkout pinned **between `c3d24c4` and `dc34c8b`** has the controller but
-  not yet the two register handlers — only `/bff/register/google` and
-  `/bff/register/discord` 404, the other three work. Re-run
+  not yet the two register handlers. Only `/bff/register/google` and
+  `/bff/register/discord` 404; the other three work. Re-run
   `scripts/clone-all-repos.sh` (`make stack-up` does) so `.stack-src`
   fast-forwards to `main`, then rebuild the `hugmesh-user-bff-api` image.
 - **The mock lane is untouched, because it runs no gateway at all.**
   `tests/stack/up.sh` starts `mock-bff.mjs` plus the mock Matrix/Mastodon/UI
-  servers as bare node processes ("this never runs a real Spring BFF/gateway"),
-  and the fe route table is mounted only by the compose stack
-  (`compose.local.yaml`: `./gateway-routes/fe:/config:ro`), so no route table is
-  consulted on that lane. Do **not** read the mock lane as evidence that the two
-  register paths still work somewhere: `mock-bff.mjs` answers three of the five
+  servers as bare node processes ("this never runs a real Spring BFF/gateway").
+  Only the compose stack mounts the fe route table
+  (`compose.local.yaml`: `./gateway-routes/fe:/config:ro`), so that lane consults no
+  route table. Do **not** read the mock lane as evidence that the two
+  register paths work somewhere: `mock-bff.mjs` answers three of the five
   itself (`/bff/me/namespaces`, `/bff/provision/matrix`,
   `/bff/provision/mastodon`) plus `/bff/register/complete`, and has never had a
   `/bff/register/google` or `/bff/register/discord` handler.
@@ -524,50 +524,50 @@ paths, not a 404).
 
 ## Honest limitations / what needs creds
 
-- **Casdoor is empty on first boot, but `make stack-up` does NOT run the seeder.**
-  `make stack-seed` (`tests/stack/seed-e2e.sh`) is a **required** follow-up step,
-  not optional: it creates the `app-user-bff` OAuth2 client + the org/roles +
+- **Casdoor is empty on first boot, and `make stack-up` does NOT run the seeder.**
+  `make stack-seed` (`tests/stack/seed-e2e.sh`) is a **required** follow-up step.
+  It creates the `app-user-bff` OAuth2 client + the org/roles +
   e2e personas, and once it has run, **real browser SSO login works end-to-end**
-  (`/login` with an e2e persona, e.g. `e2e-admin` — see "Seeding the e2e
+  (`/login` with an e2e persona, e.g. `e2e-admin`; see "Seeding the e2e
   fixtures" above). **The password is generated fresh per run, never a fixed
   literal**: `make stack-seed` does not print it (the Studio persists that
-  output); read it from the run-state file (`${E2E_CREDENTIALS_FILE:-.e2e-credentials}`
-  at the repo root), and the Studio's local-mesh page shows it in a copyable
+  output). Read it from the run-state file (`${E2E_CREDENTIALS_FILE:-.e2e-credentials}`
+  at the repo root); the Studio's local-mesh page also shows it in a copyable
   credentials table (or "not seeded yet" if that run hasn't happened). Before
-  seeding — or for Casdoor **apps/users** this
+  seeding, and for the Casdoor **apps/users** this
   stack still doesn't provision (the federation manifest's fragment-sync client,
-  an `actions` client) — expect the UIs to load but those specific auth-gated
-  flows to 401 (the cluster seeds those via `manifests/casdoor/init-*`). The
-  route-access DB **does** seed from `manifests/route-access/initdb/20-schema.sql`
+  an `actions` client), expect the UIs to load but those auth-gated
+  flows to 401. The cluster seeds those via `manifests/casdoor/init-*`. The
+  route-access DB **does** seed from `manifests/route-access/initdb/20-schema.sql`,
   independent of `make stack-seed`.
 - **Fragment fleet serves an empty set** until federation has enabled modules +
-  a valid `app-fragment-sync` Casdoor client — so `/_fragments/**` is up but
+  a valid `app-fragment-sync` Casdoor client, so `/_fragments/**` is up but
   empty. It is the standalone sync image on `:8081` (in k8s it is nginx + a sync
   sidecar over a shared volume).
 - **admin-bff analytics is off:** the local stack runs only the `casdoor`
-  profile, not the cluster's `casdoor,clickhouse` — there is no Kafka/ClickHouse
+  profile, not the cluster's `casdoor,clickhouse`. There is no Kafka/ClickHouse
   here, so `/bff/admin/usage` is not exercised. Route-access CRUD works.
 - **hugmesh-actions two-Casdoor sync is inert:** both Casdoor URLs point at the
   single local Casdoor with placeholder client creds, so the games sync job does
   nothing locally (no separate games Casdoor in this stack).
 - **Social tier is heavy + opt-in.** `SOCIAL=1` pulls tuwunel + Mastodon
   (web/sidekiq/streaming + Postgres/Redis). tuwunel needs no first-run
-  step at all — the `tuwunel` service (`tests/stack/compose.real.yaml`) is
+  step: the `tuwunel` service (`tests/stack/compose.real.yaml`) is
   configured entirely declaratively via `TUWUNEL_*` env, so a fresh volume
-  comes up registration-enabled on every bring-up path, the same whether you
-  go via `SOCIAL=1` or `tests/stack/up-real.sh`. Mastodon's `db:prepare`
+  comes up registration-enabled whether you go via `SOCIAL=1` or
+  `tests/stack/up-real.sh`. Mastodon's `db:prepare`
   first-run migration runs by itself: the one-shot `mastodon-init` service
   (profile `social`) does it. `tests/stack/up-real.sh` (the dedicated
   real-services bring-up) does the same step by hand.
 - **No mTLS / no ingress / no SELinux-MCS.** The cluster's service-to-service
-  mTLS, nginx ingress, and per-pod SELinux levels are k8s concerns and are not
-  reproduced here. The *front door* does offer browser-facing TLS
+  mTLS, nginx ingress and per-pod SELinux levels are k8s concerns. This stack does
+  not reproduce them. The *front door* does offer browser-facing TLS
   (https://localhost:8488 via the `https-front` terminator, ENV=test and
   ENV=prod alike); inter-service traffic inside the compose network stays
   plain HTTP.
-- **prod creds are NOT committed.** `ENV=prod` only changes the issuer URL; you
+- **prod creds are NOT committed.** `ENV=prod` only changes the issuer URL, so you
   must inject real secrets yourself (see ENV section). Nothing secret lives in
-  this repo — only dev placeholders matching the cluster's dev placeholders.
+  this repo, only dev placeholders matching the cluster's dev placeholders.
 - **forum-bff points at `phpbb:8080`, which exists only with `PHPBB=1`.** Without
   that profile the forum BFF boots but has no backend. The owncast streaming pod
   (RTMP ingest) and the tube-media signed-URL Nginx sidecar are out of scope here
@@ -584,12 +584,12 @@ paths, not a 404).
   those reaches tube/owncast normally.
 - **superadmin-service-catalog is intentionally NOT wired to the `:8088` front
   door.** Its cluster design (`specs/cluster/apps/22-gateway-superadmin.yaml`)
-  is TAILNET-ONLY behind a dedicated `hugmesh-superadmin-gateway` — "off
+  is TAILNET-ONLY behind a dedicated `hugmesh-superadmin-gateway`, "off
   EVERY public-ingress gateway" by design (network isolation is one of its
   three intentional locks). This compose stack has no equivalent third
-  gateway; adding the route to the shared fe-gateway would collapse that
-  lock, so it is left unwired here (a real fix is a separate, dedicated
-  superadmin-gateway compose service + published port, not a `:8088` route).
-  There is likewise no separate "superadmin-appstore" service/repo to wire —
+  gateway, and adding the route to the shared fe-gateway would collapse that
+  lock, so it stays unwired here. A real fix is a separate, dedicated
+  superadmin-gateway compose service + published port, not a `:8088` route.
+  There is likewise no separate "superadmin-appstore" service/repo to wire:
   that name is the design doc's project codename for this same
   service-catalog feature, not a distinct deliverable.
