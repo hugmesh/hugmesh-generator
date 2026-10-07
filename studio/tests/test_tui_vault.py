@@ -13,7 +13,8 @@ faces cannot drift into accepting different things. The GUI picks a certificate 
 a file dialog and this one takes a typed path; that is the only difference, and it
 is why this file drives ca_cert_error with real fixture PEMs.
 """
-from ca_fixtures import CA_ALT, CA_ROOT
+import pytest
+from ca_fixtures import CA_ALT, CA_ROOT, HAVE_CRYPTOGRAPHY
 from hugmesh_studio.core.config import (
     MODE_SKIPPED_PAGES, VAULT_FIELDS, ImageConfig, vault_field_error)
 from hugmesh_studio.core.worklist import load_any
@@ -224,6 +225,8 @@ def test_the_external_address_reaches_every_node_argv(tmp_path):
 
 
 # ── the base CA list (#335): typed paths, the same predicate as the GUI picker ──────
+@pytest.mark.skipif(not HAVE_CRYPTOGRAPHY,
+                    reason="subject/expiry need python-cryptography (optional dependency)")
 def test_adding_a_certificate_records_it_and_reports_subject_and_expiry():
     j = _to_vault()
     j.feed(f"c {CA_ROOT}")
