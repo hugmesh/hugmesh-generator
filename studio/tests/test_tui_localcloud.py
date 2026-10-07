@@ -365,3 +365,58 @@ def test_tui_gate_says_which_saved_rows_it_will_not_import(tmp_path, monkeypatch
     assert "b.example — own Casdoor" in text
     j.feed("y")
     assert [d.name for d in j.cfg.domains] == ["b.example"]
+
+
+# ── post-merge review of PR #688: the ACCOUNTS are the saved mesh's, like the domains ───
+from hugmesh_studio.core.config import User  # noqa: E402
+
+
+def test_tui_import_replaces_the_accounts_an_earlier_flow_left():
+    """A plain "Mesh node" flow of the same session typed an account pinned to a domain
+    of ITS OWN. The saved mesh's accounts are the whole user list of the nodes that
+    join it: the stale one must not ride along next to the replaced domain set."""
+    j = journey.Journey(".")
+    j.cfg.users = [User(username="zed", domain="x.example", roles=["user"])]
+    j.feed("")                                      # welcome -> mode
+    j.feed("2")                                     # Create nodes for local cloud
+    j.feed("y")                                     # the consent
+    assert sorted((u.username, u.domain) for u in j.cfg.users) == sorted([
+        ("superadmin", j.cfg.effective_superdomain()),
+        ("alice", CANNED_DOMAIN), ("bob", CANNED_DOMAIN)])
+    assert j.cfg.configure_users is True
+
+
+def test_tui_import_with_no_accounts_on_disk_leaves_no_stale_account():
+    """An unseeded or terminal-managed mesh has no accounts to import. An earlier
+    flow's account is still not one of that mesh's, so none is carried and the
+    users step is not offered a table nobody asked for."""
+    j = journey.Journey(".")
+    j.cfg.users = [User(username="zed", domain="x.example", roles=["user"])]
+    j.cfg.configure_users = True
+    lc.apply_gate(j, CANNED_DOMAIN, [])
+    assert j.cfg.users == []
+    assert j.cfg.configure_users is False
+
+
+def test_tui_journey_builds_exactly_the_saved_meshs_accounts():
+    """From the first screen to the Build screen: the Build screen counts, and the
+    manifest carries, the three imported accounts and not the earlier flow's fourth,
+    and every account sits on a domain the manifest carries."""
+    j = journey.Journey(".")
+    j.cfg.users = [User(username="zed", domain="x.example", roles=["user"])]
+    j.feed("")
+    j.feed("2")
+    j.feed("y")
+    _walk_to_build(j)
+    assert "zed" not in [u.username for u in j.cfg.users]
+    assert "users     3" in "\n".join(j.lines())
+    m = j.cfg.mesh_manifest()
+    assert sorted(u["username"] for u in m["users"]) == ["alice", "bob", "superadmin"]
+
+
+def test_tui_import_collapses_a_repeated_account():
+    """The same (username, domain) twice in the identity is one account."""
+    j = journey.Journey(".")
+    lc.apply_gate(j, CANNED_DOMAIN, [("alice", ["admin"]), ("alice", ["user"])])
+    assert [(u.username, u.domain, u.role) for u in j.cfg.users] == \
+        [("alice", CANNED_DOMAIN, "admin")]

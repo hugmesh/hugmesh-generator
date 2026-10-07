@@ -841,6 +841,137 @@ def test_forgetting_cuts_off_a_table_and_a_walk_that_were_already_filled(
         "a forgotten walk rewrote the markers"
 
 
+# ---- post-merge review of PR #688: the ACCOUNTS are the saved mesh's, like the domains
+# The Users table keeps a working copy keyed to the config object (like the Domains
+# table), and the import used to MERGE into cfg.users: a stale account from an earlier
+# "Mesh node" walk survived next to the replaced domain set and the saved mesh's own
+# account was written over by the table at the build screen.
+
+_USERS_COL_NAME = 0
+
+
+def _identity_with_users(monkeypatch, users):
+    """The real saved-mesh reader (domains from the record), with the accounts pinned
+    so no test depends on the checkout's roster."""
+    monkeypatch.setattr(lc_mod, "local_mesh_identity",
+                        lambda gd: _REAL_IDENTITY(gd)._replace(users=list(users)))
+
+
+def _earlier_mesh_flow_with_a_typed_account(wiz):
+    """A plain "Mesh node" walk: name an account on the Users table, reach the build
+    screen, Back to the main menu (restart() on the SAME configuration object)."""
+    from _helpers import enable_configure_users
+    pick_mode(wiz, "mesh")
+    wl = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(wl, "backend.x86")
+    enable_configure_users(wiz)
+    usr = advance_to(wiz, wizard_mod.UsersPage)
+    usr._add("stale-person", "x.example", ["user"], "")
+    launch = _walk_to_launch(wiz)
+    assert [u.username for u in wiz.cfg.users] == ["stale-person"], "fixture"
+    launch._main_menu()
+    return usr
+
+
+def _accounts(cfg):
+    return sorted((u.username, u.domain) for u in cfg.users)
+
+
+def test_an_import_after_an_earlier_mesh_flow_builds_only_the_imported_accounts(
+        wiz, monkeypatch, tmp_path):
+    """The earlier flow's typed account is not one of the saved mesh's. After the
+    import AND after the walk to the build screen (where the Users table is read
+    back) the list is exactly the record's, every account sits on a domain the
+    manifest carries, and the saved mesh's own account is not lost."""
+    _earlier_mesh_flow_with_a_typed_account(wiz)
+    _save_named(tmp_path, "three-domain", domains=_AB_ROWS,
+                own_idp_domains=("b.example",), domain_services_reviewed=("a.example",))
+    _identity_with_users(monkeypatch, [("carol", ["user"])])
+    _confirm_and_enter_mesh_chain(wiz)
+    assert _accounts(wiz.cfg) == [("carol", "saved.example.org")], "fixture: the import"
+    _walk_to_launch(wiz)
+    assert _accounts(wiz.cfg) == [("carol", "saved.example.org")], (
+        f"the build screen carries {_accounts(wiz.cfg)}: the earlier flow's table won")
+    m = wiz.cfg.mesh_manifest()
+    known = {m["cluster_domain"], m["superdomain"], *(d["name"] for d in m["domains"])}
+    assert {u["domain"] for u in m["users"]} <= known, \
+        "an account is pinned to a domain the manifest does not carry"
+
+
+def test_a_mesh_with_no_accounts_on_disk_imports_none(wiz, monkeypatch, tmp_path):
+    """No accounts to import is still not a reason to keep an earlier flow's."""
+    _earlier_mesh_flow_with_a_typed_account(wiz)
+    _save_named(tmp_path, "three-domain", domains=_AB_ROWS,
+                own_idp_domains=("b.example",))
+    _identity_with_users(monkeypatch, [])
+    _confirm_and_enter_mesh_chain(wiz)
+    _walk_to_launch(wiz)
+    assert wiz.cfg.users == []
+    assert wiz.cfg.configure_users is False
+
+
+def test_the_imported_accounts_fill_the_users_table_when_it_is_entered(
+        wiz, monkeypatch, tmp_path):
+    """The table a first flow filled is emptied by the import and refilled from the
+    replaced list: what the operator then sees and may edit is the record's."""
+    usr = _earlier_mesh_flow_with_a_typed_account(wiz)
+    _save_named(tmp_path, "three-domain", domains=_AB_ROWS,
+                own_idp_domains=("b.example",))
+    _identity_with_users(monkeypatch, [("carol", ["user"]), ("dave", ["admin"])])
+    _confirm_and_enter_mesh_chain(wiz)
+    assert usr.table.rowCount() == 0, "the stale table survived the import"
+    advance_to(wiz, wizard_mod.UsersPage)
+    shown = [usr.table.item(r, _USERS_COL_NAME).text()
+             for r in range(usr.table.rowCount())]
+    assert shown == ["carol", "dave"]
+
+
+def test_a_repeated_account_in_the_identity_is_one_account(wiz, monkeypatch):
+    monkeypatch.setattr(lc_mod, "local_mesh_identity",
+                        lambda _gd: (CANNED_DOMAIN, [("alice", ["admin"]),
+                                                     ("alice", ["user"])], False))
+    _confirm_and_enter_mesh_chain(wiz)
+    assert [(u.username, u.domain, u.role) for u in wiz.cfg.users] == \
+        [("alice", CANNED_DOMAIN, "admin")]
+
+
+def test_a_forgotten_users_table_writes_nothing_until_it_is_entered_again(wiz):
+    """collect_all() re-runs every visited page's validatePage. After the import told
+    the Users table to forget its rows, that re-run must not rebuild cfg.users from the
+    (now empty) table — nor, once the page is entered again, from stale rows."""
+    from _helpers import enable_configure_users
+    from hugmesh_studio.core.config import User
+    pick_mode(wiz, "mesh")
+    advance_to(wiz, wizard_mod.WorklistPage)
+    enable_configure_users(wiz)
+    usr = advance_to(wiz, wizard_mod.UsersPage)
+    usr._add("stale-person", "x.example", ["user"], "")
+    usr.forget_rows()
+    assert usr.table.rowCount() == 0 and usr._cfg_seen is None
+    wiz.cfg.users = [User(username="carol", domain="saved.example.org", roles=["user"])]
+    assert usr.validatePage() is True
+    assert _accounts(wiz.cfg) == [("carol", "saved.example.org")], \
+        "a forgotten table rewrote the accounts"
+    usr.initializePage()                                 # entered again: refilled
+    assert usr.table.item(0, _USERS_COL_NAME).text() == "carol"
+    usr.table.item(0, _USERS_COL_NAME).setText("carol-renamed")
+    assert usr.validatePage() is True
+    assert [u.username for u in wiz.cfg.users] == ["carol-renamed"], \
+        "an entered Users table no longer writes its edits"
+
+
+def test_telling_the_users_page_is_not_a_crash_when_the_wizard_lacks_it():
+    from types import SimpleNamespace
+    forget = lc_mod.LocalCloudNodesPage._forget_domain_pages
+    told = []
+    pages = {3: SimpleNamespace(forget_rows=lambda: told.append("users"))}
+    forget(SimpleNamespace(wiz=SimpleNamespace(
+        _page_ids={"users": 3}, page=pages.get)))
+    forget(SimpleNamespace(wiz=SimpleNamespace(_page_ids={"domains": 1},
+                                               page=lambda _i: None)))
+    assert told == ["users"]
+
+
 # ---- #661 / #647 / #656 rule: the page is LOOKED AT, two styles, 8 pt as well -------
 from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS  # noqa: E402
 

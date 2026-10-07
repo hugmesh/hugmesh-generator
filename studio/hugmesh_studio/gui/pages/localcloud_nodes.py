@@ -406,13 +406,15 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         self._start_k8s_probe()
 
     def _forget_domain_pages(self) -> None:
-        """Tell the Domains table and the Domain services walk that their rows were
-        replaced under them (see ``validatePage``). By slug through the wizard's page
-        registry, so a flow built without one of the pages (a test wizard, a future
-        route) is not a crash; the pages' own methods say what forgetting means."""
+        """Tell the Domains table, the Domain services walk and the Users table that
+        their rows were replaced under them (see ``validatePage``). By slug through the
+        wizard's page registry, so a flow built without one of the pages (a test
+        wizard, a future route) is not a crash; the pages' own methods say what
+        forgetting means."""
         ids = getattr(self.wiz, "_page_ids", None) or {}
         for slug, method in (("domains", "forget_rows"),
-                             ("domain_services", "forget_answers")):
+                             ("domain_services", "forget_answers"),
+                             ("users", "forget_rows")):
             page = self.wiz.page(ids[slug]) if slug in ids else None
             forget = getattr(page, method, None)
             if forget is not None:
@@ -524,7 +526,14 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
             if self._with_tor:
                 cfg.tor_onion_service = True
             superdomain = cfg.effective_superdomain()
-            existing = {(u.username, u.domain) for u in cfg.users}
+            # THE ACCOUNTS ARE THE RECORD'S, LIKE THE DOMAINS: ``cfg.users`` is REPLACED,
+            # never merged with what an earlier flow of this Studio session left there.
+            # An account from a plain "Mesh node" walk is pinned to a domain of THAT
+            # flow; beside the replaced domain set it would be built into the node
+            # images for a domain their manifest no longer carries (post-merge review
+            # of PR #688). A fresh flow has no users, so its emission is unchanged.
+            imported: list[User] = []
+            seen: set[tuple[str, str]] = set()
             for username, roles in self._users:
                 # ``roles`` is one role name or the list of them (issue #228 — the
                 # canned fixtures and any older caller still hand in a bare string).
@@ -533,8 +542,10 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
                 # UsersPage locks their row there); everyone else lands on the
                 # imported apex the local mesh served them on.
                 dom = superdomain if "superadmin" in roles else cfg.cluster_domain
-                if (username, dom) not in existing:
-                    cfg.users.append(User(username=username, domain=dom, roles=roles))
+                if (username, dom) not in seen:
+                    seen.add((username, dom))
+                    imported.append(User(username=username, domain=dom, roles=roles))
+            cfg.users = imported
             # make the Users TABLE reachable so the imported accounts are visible
             # and editable (users_choice pre-selects the table card from this).
             cfg.configure_users = bool(cfg.users)

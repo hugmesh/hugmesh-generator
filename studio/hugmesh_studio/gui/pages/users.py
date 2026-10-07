@@ -107,6 +107,8 @@ class UsersPage(QtWidgets.QWizardPage):
         #: then rebuilds ``cfg.users`` from them, erasing every user the operator just
         #: loaded. A restart() on the same object still preserves in-progress edits.
         self._cfg_seen = None
+        #: Set by ``forget_rows``, cleared by ``initializePage``: no table to write.
+        self._stale = False
         self.setTitle("Superusers & domain users")
         self.setSubTitle(
             "Name the superusers (locked to the Tailscale root domain) "
@@ -257,6 +259,7 @@ class UsersPage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         c = self.wiz.cfg
+        self._stale = False
         if c is not self._cfg_seen:
             # A DIFFERENT configuration object (#542): Load config / Load session /
             # restart-from-session. Drop the previous flow's rows so the fill below
@@ -280,7 +283,25 @@ class UsersPage(QtWidgets.QWizardPage):
                         self._apply_role_lock(dom, role_cell)
         self._update_warning()
 
+    def forget_rows(self) -> None:
+        """Drop the table: ``cfg.users`` was REPLACED under this page on the SAME
+        configuration object, which the identity check in ``initializePage`` cannot see.
+
+        The one caller today is the "Create nodes for local cloud" gate
+        (``localcloud_nodes.py``): its import makes the saved mesh's accounts the whole
+        user list, and a table filled EARLIER in the same Studio session (a "Mesh node"
+        walk, Back to the main menu — a ``restart()`` on the same object) would
+        otherwise be written back over them by the next ``collect_all()`` re-run of
+        this page's ``validatePage``: the saved mesh's accounts lost, an unrelated
+        flow's account built into the node images (post-merge review of PR #688). Until
+        the page is entered again ``validatePage`` writes nothing."""
+        self.table.setRowCount(0)
+        self._cfg_seen = None
+        self._stale = True
+
     def validatePage(self):
+        if self._stale:
+            return True                     # forgotten, not yet re-entered: write nothing
         out = []
         for r in range(self.table.rowCount()):
             username = self.table.item(r, _COL_USER).text().strip() if self.table.item(r, _COL_USER) else ""
