@@ -229,7 +229,7 @@ selects the identity issuer the whole stack trusts:
 
 | | `test` (default) | `prod` |
 |---|---|---|
-| Casdoor issuer (`CASDOOR_ISSUER_URI`) | `http://localhost:8000` (the local Casdoor) | the **real** issuer, e.g. `https://id.hugmesh.net` |
+| Casdoor issuer (`CASDOOR_ISSUER_URI`) | `http://localhost:8000` (the local Casdoor) | the **real** issuer. `make` derives `https://id.<DOMAIN>` (`id.hugmesh.net` when `DOMAIN` is unset); `CASDOOR_ISSUER=…` overrides it |
 | creds | **dev placeholders** (committed: `gateway`/`federation`/`adminbff` DB passwords, dev Casdoor client ids) | **real** — sourced from **your env / the keys USB**, NOT committed |
 | domain-ish env (host MATRIX_URL/MASTODON_URL) | `http://localhost:…` | real `https://…` domain |
 
