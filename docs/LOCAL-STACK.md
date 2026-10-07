@@ -2,9 +2,10 @@
 
 This brings up the **whole HugMesh platform on one x86_64 machine** via
 docker-compose, **building every first-party service from its cloned repo** —
-the three gateways, the Spring backends (federation / admin-bff / mod-bff /
-user-bff / actions), the static fragment fleet, and every Angular remote +
-the host — plus the datastores (Postgres ×3, Cassandra) and Casdoor.
+the three gateways, the Spring backends (federation, actions and the
+admin / mod / user / forum / wiki / owncast / tube / character-forge BFFs),
+the static fragment fleet, and every Angular remote + the host — plus the
+datastores (eight Postgres databases, Cassandra) and Casdoor.
 
 It works on **Linux** (`make stack-up`) and on **Docker Desktop for Windows**
 (`scripts/stack-up.ps1`), for both **ENV=test** and **ENV=prod** build modes.
@@ -35,8 +36,8 @@ compose topology is a faithful translation of those manifests to compose DNS.
   - `gh auth login` (GitHub CLI logged in), or
   - a git credential helper / token (`GH_TOKEN` / `GITHUB_TOKEN`), or
   - the VPN + the internal mirror (`GIT_BASE=https://gitlab.hugmesh.net/hugmesh`).
-- **Resources:** the core platform is ~10 JVM/nginx containers + 3 Postgres +
-  Cassandra. Budget **~8 GB RAM** for the core, **~12–16 GB** with `SOCIAL=1`
+- **Resources:** the core platform is about 45 containers (JVM and nginx
+  services, eight Postgres databases, Cassandra, Casdoor). Budget **~8 GB RAM** for the core, **~12–16 GB** with `SOCIAL=1`
   (tuwunel + the full Mastodon tier). First build compiles several Maven + Angular
   projects and is **slow** (tens of minutes, network-bound).
 
@@ -97,8 +98,8 @@ make stack-up ENV=prod CASDOOR_ISSUER=https://id.hugmesh.net     # prod mode
 
 ## Cold builds — `make stack-m2-bootstrap` (private maven artifacts)
 
-Four Java services (**admin/user/mod-bff, federation-api**) resolve org-PRIVATE
-maven artifacts (`net.hugmesh:hugmesh-parent/-commons/-auth-core/
+Every Java service (the BFFs, `federation-api`, the three gateways, `hugmesh-api`,
+`remote-fragment`) resolves org-PRIVATE maven artifacts (`net.hugmesh:hugmesh-parent/-commons/-auth-core/
 -build-config`) at **image-build** time via their committed `settings.xml`
 (`${env.CI_API_V4_URL}/groups/${env.GITLAB_GROUP_ID}/-/packages/maven` — the
 GitLab group registry, unreachable off the VPN). While the built
@@ -106,7 +107,7 @@ GitLab group registry, unreachable off the VPN). While the built
 (fresh box, wiped docker data-root) `docker compose build` fails resolving them.
 
 ```bash
-make stack-m2-bootstrap   # once (idempotent; re-run after a docker restart)
+make stack-m2-bootstrap   # once (idempotent)
 make stack-up             # now auto-wires the local registry into the build
 ```
 
@@ -135,7 +136,7 @@ vendored):
 3. Writes `tests/stack/.m2-registry.env` (gitignored). Whenever that file
    exists, `make stack-up`/`stack-build` auto-include the committed override
    `tests/stack/compose.m2-local.yaml`, threading `CI_API_V4_URL`/
-   `GITLAB_GROUP_ID` as build args into the four services. No token is needed:
+   `GITLAB_GROUP_ID` as build args into every Java service. No token is needed:
    the Dockerfiles' `ci_job_token` secret mount is optional-guarded and the
    static registry ignores auth headers.
 
@@ -151,8 +152,9 @@ Two committed companions make the resolution actually work:
   plain HTTP by design.
 
 The registry container survives reboots (`--restart unless-stopped`), but its
-bridge IP can change when docker restarts — `make stack-m2-bootstrap` is cheap
-to re-run and refreshes `.m2-registry.env`. Remove it with
+bridge IP can change when docker restarts. `make stack-up` and `make stack-build`
+notice a stale `.m2-registry.env` (or a missing pinned artifact) and re-run
+`stack-m2-bootstrap` themselves; it is cheap and refreshes the file. Remove it with
 `docker rm -f hugmesh-m2-registry` once your images are built.
 
 ---
@@ -245,16 +247,18 @@ deliberately ships only dev placeholders so nothing secret is committed.
 | http://localhost:4000 | Mastodon streaming (only with `SOCIAL=1`) |
 | http://localhost:8081 | phpBB (only with `PHPBB=1`) — alternative forum |
 | http://localhost:4001 | Akkoma (only with `AKKOMA=1`) — alternative fediverse server |
-| 127.0.0.1:9042 | Cassandra (gateway revocation list + URL registry) |
+| (not published) | Cassandra (gateway revocation list + URL registry) — reachable only inside the compose network as `cassandra:9042` |
 
 The fe-gateway routes (`tests/stack/gateway-routes/fe/`) fan out from the front
 door to `/admin/**`, `/login/**`, `/social/**` (matrix/mastodon/forum),
 `/mod/**`, `/user/**`, `/api-docs/**`, `/wiki/**`, `/owncast/**`, `/tube/**`,
 `/character-studio/**`, `/bff/**` (each of admin/mod/user/forum/wiki/owncast/tube-bff,
 then the admin-bff catch-all), `/_fragments/**` (fragment fleet), and `/be/**`
-(the be-gateway → federation + actions). Only the fe-gateway is published to the
-host; everything else is internal compose DNS, exactly as in the cluster only the
-gateways are ingress-exposed.
+(the be-gateway → federation + actions). Of the platform services, only the fe-gateway
+(and its `https-front` terminator) is published to the host; everything else is
+internal compose DNS, exactly as in the cluster only the gateways are
+ingress-exposed. Casdoor and the social tier publish ports as dev conveniences
+(table above).
 
 ---
 
@@ -268,16 +272,15 @@ is unaffected:
 
 | Knob | Service | Alternative to | Port |
 |---|---|---|---|
-| `PHPBB=1` | phpBB 3.3.15 | the first-party `hugmesh-forum-ui` + `hugmesh-forum-bff-api` | 8081, **and `/social/phpbb/` at the front door** |
+| `PHPBB=1` | phpBB 3.3 + the `hugmesh/forumapi` extension | the first-party `hugmesh-forum-ui` + `hugmesh-forum-bff-api` | 8081, **and `/social/phpbb/` at the front door** |
 | `AKKOMA=1` | Akkoma v3.20.0 | Mastodon (Akkoma is a Pleroma fork with the same ActivityPub + Mastodon-client API surface) | 4001 |
 
 phpBB is also mounted on the fe-gateway at **`/social/phpbb/`**, a sibling of the
 first-party `/social/forum/`, so the two are comparable at the same front door.
 It is auth-gated identically (all three of `/social/forum/`, `/social/phpbb/`
-and `/social/mastodon/` return 401 unauthenticated). Note its route has **no**
-`StripPrefix`, unlike every other route in that file: phpBB is installed with
-`script_path=/social/phpbb` and builds its absolute URLs from it, so the
-upstream must receive the full path.
+and `/social/mastodon/` return 401 unauthenticated). Its route uses
+`StripPrefix=2`, like the other `/social/*` routes: the image installs phpBB with
+`script_path=/`, so the upstream expects paths rooted at `/`.
 
 Akkoma is reachable on its published port only; it is not wired into the
 gateway, because unlike Mastodon it has no platform OAuth/BFF integration to
@@ -298,24 +301,22 @@ couple two otherwise independent teardowns.
 they reap these containers even when the `down` invocation does not repeat the
 knob that started them.
 
-### Packaging caveats (checked 2026-08-12) — read before copying this pattern
+### Packaging notes (checked 2026-10-07)
 
 Unlike `mastodon`/`tuwunel`/`postgres`, which this stack pins to maintained
 upstream images, **neither project publishes a usable first-party image**:
 
 - **phpBB** — there is no official image on Docker Hub or ghcr;
   `github.com/phpbb/docker` is CI scaffolding pinned to PHP 5.4–7.0, and
-  `bitnami/phpbb` 404s. We therefore build a thin image
-  (`tests/stack/phpbb/Dockerfile`) from the **official release zip, pinned by
-  version and sha256**. The checksum is the supply-chain control — the zip
-  comes over a CDN, so an unverified download would silently accept a
-  substituted archive. Bump the version and the hash together; a mismatch
-  fails the build closed.
-  First run executes phpBB's own unattended CLI installer
-  (`install/phpbbcli.php`) so the profile comes up as a **working forum**
-  rather than a setup wizard — the same role `mastodon-init` plays for
-  Mastodon — then deletes `install/`, which phpBB requires post-install.
-  Dev-placeholder admin: `admin` / `adminadmin`.
+  `bitnami/phpbb` 404s. The stack therefore builds
+  `${STACK_SRC}/hugmesh-forum-api`, which is the phpBB image the cluster deploys
+  (`specs/cluster/manifests/forum/phpbb.yaml`): official phpBB 3.3 plus the
+  `hugmesh/forumapi` headless extension. The extension matters. phpBB ships no
+  REST API, and `hugmesh-forum-bff-api` can talk to nothing else; a vanilla
+  board answers 401 on every `/api/v1/hugmesh/**` call. The entrypoint
+  installs the schema once on an empty DB and enables the extension, so the
+  profile comes up as a working forum. Dev-placeholder admin: `sysadmin` /
+  `adminadmin` (from the extension repo's `docker/install-config.compose.yml`).
 - **Akkoma** — upstream ships **no prebuilt image at all**; its own
   docker-compose builds from source via `docker-resources/build.sh`. A
   from-source Elixir build would add many minutes to a default-off option, so
@@ -344,7 +345,11 @@ make stack-up SOCIAL=1 && make stack-seed SOCIAL=1   # + Matrix/Mastodon fixture
 
 (equivalently `SEED_CASDOOR_ONLY=1 tests/stack/seed-e2e.sh` / `tests/stack/seed-e2e.sh`
 directly). It provisions (reusing `tests/qemu/seed-accounts.sh --roles` + its
-Casdoor apply hook — the same machinery the cluster/pentest seeds use):
+Casdoor apply hook — the same machinery the cluster/pentest seeds use).
+`make stack-seed` seeds registration **stage 1** (the Casdoor identity) only. Add
+`SEED_COMPLETE_REGISTRATION=1` to run stage 2 (`POST /bff/register/complete`) too.
+Without it you can sign in, but `GET /bff/session` reports
+`registrationComplete=false` and every service route answers 403:
 
 1. **The `app-user-bff` OAuth2 client** (`ensure_app()`): a confidential client
    mirroring the cluster's `reconcile_app` (authorization_code + refresh_token
@@ -409,7 +414,7 @@ not verify.
 | `hugmesh-{pki,be,fe}-gateway` | build `hugmesh-gateway` (×3, `SPRING_APPLICATION_NAME`) | `apps/20-gateway-*.yaml` + `charts/hugmesh-gateway` |
 | `hugmesh-federation-api` | build `hugmesh-federation-api` | `manifests/federation-api` |
 | `hugmesh-admin-bff-api` | build `hugmesh-admin-bff-api` | `manifests/admin-bff-api` |
-| `hugmesh-mod-bff-api` / `-user-bff-api` | build the respective repos | (not yet in cluster; wired by analogy) |
+| `hugmesh-mod-bff-api` / `-user-bff-api` | build the respective repos | `manifests/mod-bff-api` / `manifests/user-bff-api` |
 | `hugmesh-forum-bff-api` / `-wiki-bff-api` / `-owncast-bff-api` / `-tube-bff-api` | build the respective repos (spring-bff archetype siblings of admin-bff/federation-api) | `manifests/forum-bff-api` / `wiki-bff-api` / (owncast + tube ship co-located in-cluster; no dedicated BFF manifest dir yet) |
 | `hugmesh-character-forge-bff-api` | build `hugmesh-character-forge-bff-api` (spring-bff archetype sibling) | `manifests/character-forge-bff-api` |
 | `hugmesh-api` | build `hugmesh-actions` | `manifests/hugmesh-apis` |
@@ -514,8 +519,8 @@ paths, not a 404).
   e2e personas, and once it has run, **real browser SSO login works end-to-end**
   (`/login` with an e2e persona, e.g. `e2e-admin` — see "Seeding the e2e
   fixtures" above). **The password is generated fresh per run, never a fixed
-  literal**: `make stack-seed`'s banner prints the actual value, it's readable
-  afterward from the run-state file (`${E2E_CREDENTIALS_FILE:-.e2e-credentials}`
+  literal**: `make stack-seed` does not print it (the Studio persists that
+  output); read it from the run-state file (`${E2E_CREDENTIALS_FILE:-.e2e-credentials}`
   at the repo root), and the Studio's local-mesh page shows it in a copyable
   credentials table (or "not seeded yet" if that run hasn't happened). Before
   seeding — or for Casdoor **apps/users** this
@@ -531,9 +536,6 @@ paths, not a 404).
 - **admin-bff analytics is off:** the local stack runs only the `casdoor`
   profile, not the cluster's `casdoor,clickhouse` — there is no Kafka/ClickHouse
   here, so `/bff/admin/usage` is not exercised. Route-access CRUD works.
-- **mod-bff / user-bff** have no cluster manifest yet; their env here is wired by
-  analogy (Casdoor resource server + federation URL) and may need adjustment when
-  their real manifests land.
 - **hugmesh-actions two-Casdoor sync is inert:** both Casdoor URLs point at the
   single local Casdoor with placeholder client creds, so the games sync job does
   nothing locally (no separate games Casdoor in this stack).
@@ -543,10 +545,9 @@ paths, not a 404).
   configured entirely declaratively via `TUWUNEL_*` env, so a fresh volume
   comes up registration-enabled on every bring-up path, the same whether you
   go via `SOCIAL=1` or `tests/stack/up-real.sh`. Mastodon's `db:prepare`
-  first-run migration is NOT run by `SOCIAL=1`, though; for a fully working
-  Mastodon (and to skip a manual `rails db:prepare`), use
-  `tests/stack/up-real.sh` (the dedicated real-services bring-up), which
-  still handles that step.
+  first-run migration runs by itself: the one-shot `mastodon-init` service
+  (profile `social`) does it. `tests/stack/up-real.sh` (the dedicated
+  real-services bring-up) does the same step by hand.
 - **No mTLS / no ingress / no SELinux-MCS.** The cluster's service-to-service
   mTLS, nginx ingress, and per-pod SELinux levels are k8s concerns and are not
   reproduced here. The *front door* does offer browser-facing TLS
@@ -556,15 +557,11 @@ paths, not a 404).
 - **prod creds are NOT committed.** `ENV=prod` only changes the issuer URL; you
   must inject real secrets yourself (see ENV section). Nothing secret lives in
   this repo — only dev placeholders matching the cluster's dev placeholders.
-- **forum-bff has no phpBB backend here.** `hugmesh-forum` (the isolated
-  phpBB pod + its `forum-api` extension) is not wired into this stack, so
-  `PHPBB_ENABLED`/`EXTERNAL_FORUM_ENABLED` are forced `"false"` — forum-bff
-  boots clean and always-audits instead of failing every call against an
-  absent backend (same class of limitation as the admin-bff analytics note
-  above). The owncast third-party streaming pod (RTMP ingest) and the
-  tube-media signed-URL Nginx sidecar are likewise out of scope here (only the
-  UI+BFF pair for each is wired) — `manifests/owncast` / `manifests/tube` show
-  the full cluster shape.
+- **forum-bff points at `phpbb:8080`, which exists only with `PHPBB=1`.** Without
+  that profile the forum BFF boots but has no backend. The owncast streaming pod
+  (RTMP ingest) and the tube-media signed-URL Nginx sidecar are out of scope here
+  (only the UI+BFF pair for each is wired); `manifests/owncast` / `manifests/tube`
+  show the full cluster shape.
 - **`ROLE_WIKI` / `ROLE_FORUM` (and the derived `ROLE_FORUM_MOD`) are not yet
   seeded in `manifests/casdoor/init-data-configmap.yaml`** — a pre-existing gap
   predating this compose wiring (the `gateway_route_access` rows that gate
