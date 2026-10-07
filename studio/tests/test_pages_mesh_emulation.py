@@ -1770,3 +1770,111 @@ def test_a_walked_or_pre_495_session_still_starts(wiz, qapp, mocked_spawn):
     page.start_btn.click()
     _finish(page, qapp)
     assert len(mocked_spawn) == 1
+
+
+# ---- post-merge review of PR #644: each boot slot ALONE, and the replica strip ------
+# test_an_unwalked_domain_refuses_every_start_inline presses the slots after asserting
+# the greyed buttons, so a slot guard that goes missing is covered by the button and
+# nothing notices (mutations B10 and B11 survived). Each slot is driven alone here.
+
+def _join(page, qapp):
+    w = getattr(page, "worker", None)
+    if w is not None:
+        w.wait(15000)
+    qapp.processEvents()
+
+
+def _refused_mesh_page(wiz):
+    write_build_record(_MESH_SESSION, domains=("a.example", "b.example"),
+                       reviewed=("hugmesh.net", "a.example"))
+    page = _page(wiz)
+    assert page._boot_refusal, "fixture: the session must be refused"
+    return page
+
+
+def test_the_start_mesh_slot_alone_refuses_a_session_with_an_unwalked_domain(
+        wiz, qapp, mocked_spawn):
+    page = _refused_mesh_page(wiz)
+    page._start_mesh()
+    _join(page, qapp)
+    assert len(mocked_spawn) == 0, "Start mesh booted a refused session"
+    assert "b.example" in page.note.text()
+
+
+def test_the_device_start_slot_alone_refuses_a_session_with_an_unwalked_domain(
+        wiz, qapp, mocked_spawn):
+    page = _refused_mesh_page(wiz)
+    page._start_device(0)
+    _join(page, qapp)
+    assert len(mocked_spawn) == 0, "a device Start booted a refused session"
+
+
+def test_the_replica_strip_is_greyed_for_a_refused_session(wiz, qapp, mocked_spawn):
+    page = _refused_mesh_page(wiz)
+    strips = [row.replicas for row in page._rows if row.replicas is not None]
+    assert strips, "fixture: no replica strip on any row"
+    assert all(not s.plus.isEnabled() for s in strips), "a '+' would start a device"
+    for i, row in enumerate(page._rows):
+        if row.replicas is not None:
+            page._bump_replicas(i, +1)
+            assert not row.replicas.apply.isEnabled(), "Apply would start a device"
+
+
+def test_the_replica_apply_slot_alone_never_reaches_spawn(wiz, qapp, mocked_spawn):
+    page = _refused_mesh_page(wiz)
+    i = next(i for i, row in enumerate(page._rows) if row.replicas is not None)
+    page._bump_replicas(i, +1)
+    page._apply_replicas(i)
+    _join(page, qapp)
+    assert len(mocked_spawn) == 0, "the replica Apply booted a refused session"
+
+
+def test_a_parseable_but_malformed_record_does_not_take_the_page_down(
+        wiz, qapp, mocked_spawn):
+    """A hand-edited record whose config is not a worklist: the gate's guard answers
+    "nothing to say" (test_domain_services pins the five shapes); without it the
+    record read raises inside a Qt slot and the whole Studio aborts."""
+    from hugmesh_studio.core import build_sessions
+    os.makedirs(build_sessions.sessions_dir(), exist_ok=True)
+    with open(os.path.join(build_sessions.sessions_dir(), _MESH_SESSION + ".json"),
+              "w", encoding="utf-8") as fh:
+        json.dump({"id": _MESH_SESSION, "config": None}, fh)
+    page = _page(wiz)
+    assert page._current_session().name == _MESH_SESSION
+    assert page._boot_refusal == "" and not page.domain_gate_note.isVisible()
+    assert page.start_btn.isEnabled()
+
+
+# ---- #647 / #656 rule: the refusal note is LOOKED AT, two styles, 8 pt as well -------
+from _look import (LOOK_CASES, LOOK_IDS, DEFAULT_WINDOW,  # noqa: E402
+                   assert_inside, assert_seen_without_scrolling, assert_whole,
+                   child_only, looking, settle, snap)
+
+
+@pytest.mark.parametrize(("style", "pt"), LOOK_CASES, ids=LOOK_IDS)
+def test_look_the_refusal_note_is_drawn_whole_under_the_session_picker(
+        qapp, fake_generator, style, pt):
+    child_only()
+    gen, _sess, _abort = fake_generator
+    write_build_record(_MESH_SESSION, domains=("a.example", "b.example"),
+                       reviewed=("hugmesh.net", "a.example"))
+    with looking(qapp, style, pt):
+        w = wizard_mod.StudioWizard(str(gen))
+        w.show()
+        try:
+            page = _page(w)
+            settle(qapp)
+            assert (w.width(), w.height()) == DEFAULT_WINDOW
+            note = page.domain_gate_note
+            assert_inside(page, note, "the per-domain refusal note")
+            assert_whole(note, "the per-domain refusal note")
+            assert note.width() >= 400, "the note is squeezed into a sliver"
+            assert "b.example" in note.text()
+            assert_seen_without_scrolling(page, note, "the per-domain refusal note")
+            assert not page.start_btn.isEnabled()
+            assert all(not row.start.isEnabled() for row in page._rows)
+            snap(w, "meshemu-refused", style, pt)
+        finally:
+            w.close()
+            w.deleteLater()
+            settle(qapp)

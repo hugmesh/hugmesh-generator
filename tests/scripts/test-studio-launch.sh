@@ -140,6 +140,20 @@ for via in "${lnk}/bin/hugmesh-studio" "${lnk}/bin/hugmesh-studio-rel" "${lnk}/c
 done
 rm -rf "${lnk}"
 
+# ── 5a2. the hop cap (#635): a link CYCLE ends instead of spinning ─────────────────────
+# The OS refuses to start a script through a cyclic link (ELOOP — "Too many levels of
+# symbolic links", exit 126), so no run of the launcher can reach its 40-hop cap: the
+# helper is driven DIRECTLY, by sourcing the launcher (its guard suppresses launching)
+# and calling it on a cycle under a clock. Without the cap the loop never ends and the
+# 20 s clock reports 124.
+cyc="$(mktemp -d)"
+ln -s "${cyc}/b" "${cyc}/a"
+ln -s "${cyc}/a" "${cyc}/b"
+cyc_out="$(timeout 20 "${BASH_BIN}" -c 'launch=$1; link=$2; set -- --detect; . "${launch}" >/dev/null 2>&1; _studio_realpath "${link}"' _ "${LAUNCH}" "${cyc}/a" 2>/dev/null)"; cyc_rc=$?
+assert_eq "link cycle: the resolver returns instead of spinning (not a 124 timeout)" "${cyc_rc}" 0
+[ -L "${cyc_out}" ] && _ok || _bad "link cycle: the resolver should end on a link of the cycle, got '${cyc_out}'"
+rm -rf "${cyc}"
+
 # ── 5b. arg classification: interactive GUI modes take the GUIDED path, not headless ────
 # Source in a subshell with the flag as $@ (the guard skips dispatch), then read HEADLESS.
 _headless_for() { ( set -- "$1"; source "${LAUNCH}" >/dev/null 2>&1; printf '%s' "${HEADLESS}" ); }
@@ -151,9 +165,17 @@ for f in --print-command --print-specs --login-agent --askpass; do
 done
 
 # ── 6. pure detection functions (SOURCE the launcher; its guard suppresses launching) ───
+# The launcher sets REPO_DIR itself (to the same value when it is right), so the
+# directory a SOURCED launcher must report as its own is read before sourcing it.
+EXPECT_SCRIPT_DIR="${REPO_DIR}/scripts"
 # shellcheck disable=SC1090
 source "${LAUNCH}"
 unset PYTHONPATH   # the source exported PYTHONPATH=<repo>/studio; keep the env clean
+
+# A sourced launcher locates itself by BASH_SOURCE, not by $0 — $0 is THIS script then,
+# and a launcher that followed it would look for its first-run lib in tests/scripts.
+assert_eq "sourced: SCRIPT_DIR is the launcher's own directory, not the sourcing script's" \
+    "${SCRIPT_DIR}" "${EXPECT_SCRIPT_DIR}"
 
 assert_eq "family: nixos"                "$(OS_ID=nixos    OS_ID_LIKE=''             distro_family)" nixos
 assert_eq "family: steamos->arch"        "$(OS_ID=steamos  OS_ID_LIKE='arch'         distro_family)" arch
