@@ -133,7 +133,7 @@ reserved list **from the ConfigMap** (single source) and:
 1. **rejects an Ingress** whose host's first DNS label under
    `*.hugmesh.net` / `*.hugmesh.games` is reserved (unless the object
    is a platform component, `app.kubernetes.io/part-of=hugmesh.net`),
-2. **rejects a Gateway-API `HTTPRoute`** on the same hostname rule, and
+2. **rejects a Gateway-API `HTTPRoute`** on the same hostname rule, and also when its first path segment is a reserved prefix, and
 3. **defensively rejects** a `VanityClaim`/`Profile`/`User` CRD whose handle is
    reserved — **inert** until such a CRD exists (the kind won't match), so it is
    safe to ship now as defence-in-depth mirroring the app-repo `ReservedNames`.
