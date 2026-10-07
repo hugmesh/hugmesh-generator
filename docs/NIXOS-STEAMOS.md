@@ -1,23 +1,23 @@
 # NixOS / SteamOS / gaming-distro launchers
 
-Running the **Studio wizard** and the **ncurses build menu** on hosts where the
-usual assumptions (`python3` on PATH, `make` installed, an FHS layout) do **not**
-hold: NixOS, SteamOS / Steam Deck, Arch, Debian/Ubuntu, Fedora.
+How to run the **Studio wizard** and the **ncurses build menu** on hosts that
+break the usual assumptions (`python3` on PATH, `make` installed, an FHS layout):
+NixOS, SteamOS / Steam Deck, Arch, Debian/Ubuntu, Fedora.
 
-Everything here is **additive** — it adds new launch paths, it does not change the
-existing `make` targets, the Windows `studio/hugmesh-studio.bat`, or the
-`python -m hugmesh_studio` entrypoint. Nothing installs anything without a `y/N`
-confirmation (or `--auto`), and the launcher never calls a system package manager
-for you — it only prints the exact command to run.
+Everything here is **additive**. It adds launch paths and changes nothing else:
+not the existing `make` targets, not the Windows `studio/hugmesh-studio.bat`, not the
+`python -m hugmesh_studio` entrypoint. Nothing installs without a `y/N`
+confirmation (or `--auto`), and the launcher never calls a system package manager.
+It only prints the exact command for you to run.
 
-Two additive front doors are added:
+There are two new front doors:
 
 - a **Nix flake + `shell.nix`** ([`flake.nix`](../flake.nix), [`shell.nix`](../shell.nix))
   that provide python3 + PySide6 + make + whiptail on any Nix host, and
 - a **portable bash launcher** ([`scripts/studio-launch.sh`](../scripts/studio-launch.sh))
   that detects the distro, uses the system Python (3.10 or newer) when it can, and otherwise
-  bootstraps a project-local venv — and, crucially, exports
-  `PYTHONPATH=$REPO/studio` so it runs from **any** working directory.
+  bootstraps a project-local venv. It also exports
+  `PYTHONPATH=$REPO/studio`, so it runs from **any** working directory.
 
 The launcher's flags mirror the Windows `.bat`:
 
@@ -51,22 +51,22 @@ nix run .#menu                  # launch the ncurses build menu
 nix-shell                       # then: ./scripts/studio-launch.sh   or   make menu
 ```
 
-`./scripts/studio-launch.sh` (with no args) on NixOS **outside** a nix shell prints
-these same commands and, with `--auto` and `nix` on PATH, re-execs through
+Run `./scripts/studio-launch.sh` (no args) on NixOS **outside** a nix shell and it prints
+these same commands. With `--auto` and `nix` on PATH it re-execs through
 `nix develop`. Inside a `nix develop` / `nix-shell` it launches the wizard directly.
 
-> The committed tree ships **no `flake.lock`** — generate it once on a real Nix host
-> (`nix flake lock`) and commit it, then smoke-test `nix develop -c true`.
+> The committed tree ships **no `flake.lock`**. Generate it once on a real Nix host
+> (`nix flake lock`), commit it, then smoke-test `nix develop -c true`.
 
 ---
 
 ## SteamOS / Steam Deck
 
 SteamOS has a **read-only rootfs** and an empty pacman keyring. **Do not** run
-`steamos-readonly disable` or pacman — you don't need to. The system Python is
-present, and PySide6's manylinux wheel bundles its own Qt, so the launcher bootstraps
-a venv **inside this checkout** (`studio/.venv-studio`, under `$HOME` — writable), and
-the rootfs is never touched.
+`steamos-readonly disable` or pacman; you don't need to. The system Python is
+present, and PySide6's manylinux wheel bundles its own Qt. So the launcher bootstraps
+a venv **inside this checkout** (`studio/.venv-studio`, under `$HOME`, which is writable),
+and the rootfs is never touched.
 
 ### Desktop Mode (recommended)
 
@@ -87,17 +87,17 @@ from the Steam UI: **Add a Non-Steam Game → Browse →** pick
 
 ### Missing shared library for the wheel
 
-If the venv builds but the wizard fails to start with a missing shared library
-(e.g. `libxcb-cursor.so.0`, `libxkbcommon`), install the freedesktop Flatpak runtime
+Sometimes the venv builds but the wizard fails to start on a missing shared library
+(e.g. `libxcb-cursor.so.0`, `libxkbcommon`). Install the freedesktop Flatpak runtime
 and run under it, or point `LD_LIBRARY_PATH` at a runtime that has the lib. The
-launcher **does not** auto-install system libraries (read-only rootfs); it prints
+launcher **does not** auto-install system libraries (read-only rootfs). It prints
 this remedy and stops.
 
 ### `make` for real builds
 
 The Deck has no `make` by default. The ncurses menu still **renders** and its
 python-driven local-mesh submenus work, but **real image builds shell `make`**. Get
-`make` from a Nix dev shell (`nix develop`) or a distrobox/toolbox container; the
+`make` from a Nix dev shell (`nix develop`) or a distrobox/toolbox container. The
 launcher warns when `make` is absent.
 
 ---
@@ -142,8 +142,8 @@ sudo pacman -S python python-pyside6 make libnewt
 
 ## Headless / automation (any distro)
 
-The `--print-command` path is **Qt-free** (only `core/` is imported), so it needs no
-display and no PySide6/PyQt6 — the build-matrix GUI channel relies on this:
+The `--print-command` path is **Qt-free** (it imports only `core/`). It needs no
+display and no PySide6/PyQt6, and the build-matrix GUI channel relies on that:
 
 ```sh
 ./scripts/studio-launch.sh --print-command --config my-image.json
@@ -151,8 +151,8 @@ display and no PySide6/PyQt6 — the build-matrix GUI channel relies on this:
 ```
 
 Any `--`-prefixed arg other than `--detect` / `--auto` / `--menu` / `--redo-first-run` and the
-GUI modes in the table above takes this headless path: no prompts, no installs, straight to `python3 -m hugmesh_studio` with the
-args forwarded.
+GUI modes in the table above takes this headless path. It prompts for nothing, installs
+nothing, and goes straight to `python3 -m hugmesh_studio` with the args forwarded.
 
 ## What the launcher detects
 
