@@ -13,7 +13,7 @@ config, attached storage, backups) — see [`keys-template/`](keys-template/).
 Every build is stamped with a **build ENV** — `test` (default, LAN-only) or
 `prod` (real public domain) — baked into the image at creation. The simplest
 way in is `make local` (a LAN `.test` fleet) or `make prod`; see
-**[Build ENV](#build-env-testprod-baked-at-image-creation)** below.
+**[Build ENV](#build-env-testprod--baked-at-image-creation)** below.
 
 > **New operator? Start with [`docs/RUNNING.md`](docs/RUNNING.md)** — the
 > end-to-end runbook (prerequisites → clone → `brand.conf` + build knobs → build
@@ -37,7 +37,7 @@ subdirs included.
 
 ## Current State
 
-_Reviewed 2026-10-07 against `origin/main`; a claim that carries its own date was not re-measured. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
+_Written 2026-08-05; some entries were re-checked against `origin/main` on 2026-10-07 and say so, and an entry that carries its own date was not re-measured. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
 
 > **"Ships dark" counts as shipped.** Several capabilities below are complete on
 > `main` and deliberately inert behind a documented default-off flag — that is a
@@ -673,7 +673,7 @@ Two pieces make that work with zero internet:
      -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'
    # point a client at it, then:
    dig @<BACKEND_IP> id.hugmesh.test +short      # -> the backend node IP
-   curl -k https://id.hugmesh.test/              # reaches Casdoor via ingress
+   curl -k https://hugmesh.test/                 # reaches the front door via the fe-gateway ingress
    ```
 
 2. **Internal cluster-CA TLS.** All certs chain to the internal cluster CA
@@ -765,7 +765,7 @@ to onboard storage.
 > FIP/BL31 blobs** to be flashable — mainline u-boot alone is not. The builder
 > does **not** vendor those blobs; pass a prebuilt, signed board image with
 > `--uboot-url` (e.g. a [Tow-Boot](https://tow-boot.org) release) or flash u-boot
-> separately. See [`docs/RUNNING.md`](docs/RUNNING.md#frite-light-desktop-image)
+> separately. See [`docs/RUNNING.md`](docs/RUNNING.md#3d-frite-light-desktop-image-libre-computer-lela-frite)
 > for the VERIFIED-vs-NEEDS-HARDWARE matrix.
 
 ## OAuth + mail (optional; native login by default)
@@ -1169,7 +1169,7 @@ KEYS directory (no block device needed) for each role — `pki`, `backend`,
 `frontend`, `host` — asserting users/SSH-keys/sudoers/host-keys/hostname/markers:
 
 ```bash
-./tests/boot/emulate-firstboot.sh                 # all four roles
+./tests/boot/emulate-firstboot.sh                 # pki, backend, frontend, backend-gpu
 ./tests/boot/emulate-firstboot.sh pki backend     # specific roles
 ```
 
@@ -1185,7 +1185,7 @@ for the full man-style reference. Highlights:
 | Flag | Default | Description |
 |---|---|---|
 | `-r, --role` | `generic` (RPi) / `backend-gpu` (x86) | RPi: `pki` \| `backend` \| `frontend` \| `desktop` \| `generic`. Sets hostname, services, GitOps payload. |
-| `--env test\|prod` | `test` | **Build ENV, baked into `/etc/hugmesh/env`.** `test` = LAN-only (wildcard DNS kept, cloudflared/ACME pruned, internal CA); `prod` = real public domain (cloudflared/ACME kept, announced banner). See [Build ENV](#build-env-testprod-baked-at-image-creation). |
+| `--env test\|prod` | `test` | **Build ENV, baked into `/etc/hugmesh/env`.** `test` = LAN-only (wildcard DNS kept, cloudflared/ACME pruned, internal CA); `prod` = real public domain (cloudflared/ACME kept, announced banner). See [Build ENV](#build-env-testprod--baked-at-image-creation). |
 | `-C, --config FILE` | auto `./brand.conf` | Source a brand profile (e.g. `brands/local.conf`). |
 | `--cluster-domain` | `hugmesh.net` | Base domain for gateways / Casdoor. |
 | `-w, --work-dir` | `./out` | Git-ignored output directory. |
@@ -1216,7 +1216,7 @@ live list). Common overrides: `ENV=test|prod`, `BRAND=`, `DOMAIN=`,
 | `make frite` / `frite-live` / `frite-installer` | the opt-in Frite client (`FRITE_BOARD=`, `FRITE_FLAVOR=`, `FRITE_DESKTOP=light\|none`). |
 | `make jetson` / `make jetson-<role>` | the **EXPERIMENTAL** Jetson Orin edge-AI platform (`jetson-edge-ai`, `jetson-backend-gpu`, `jetson-omnibus`, `jetson-desktop`; `JETSON_BOARD=`, `JETSON_KERNEL_FLAVOR=`). Hardware validation pending. |
 | `make build-everything` | the **FULL documented matrix**: 3 Pi + all 12 x86 roles (nodes + omnibus + edge-ai + clients + standalone, incl. unaffiliated) + Frite + Jetson + the six Orange Pi builders (honors `ENV=test\|prod`). |
-| `make matrix-check` | **dry-run validate the whole build matrix** across all four channels via the builders' `--print-plan` (no root, no writes; `tests/build-matrix/check.sh`). |
+| `make matrix-check` | **dry-run validate the whole build matrix** across five channels (CLI, make, menu, Studio GUI and the Job worker's whitelist; no root, no writes; `tests/build-matrix/check.sh`). |
 | `make flash DEV=/dev/sdX ROLE=frontend ARCH=arm64` | write a role image to a disk (`.img` preferred). |
 | `make qemu` (`qemu-rpi` / `qemu-x86`) | boot a role image under QEMU (`ARCH=arm64`→Pi, `x86`→q35+OVMF). |
 | `make e2e` | boot a role VM under QEMU and run the Playwright e2e with seeded accounts. |
@@ -1232,10 +1232,11 @@ the **make** targets, the **ncurses menu** (`make menu`) and the **Studio GUI**
 rule ([`specs-jetson/README.md`](specs-jetson/README.md)), and it is **enforced,
 not aspirational**: [`tests/build-matrix/`](tests/build-matrix/) carries the
 canonical 150-cell `matrix.tsv` (platform × role × env × board/flavor/desktop) and
-`make matrix-check` proves all four channels agree on every cell — via the
+`make matrix-check` proves the channels agree on every cell — via the
 builders' `--print-plan` dry run, `make -n` recipe inspection, the menu's
-composed command and the Studio's headless `--print-command` — plus negative
-checks that invalid combinations fail loudly. See
+composed command, the Studio's headless `--print-command` and the Job worker's
+whitelist (a fifth channel) — plus negative checks that invalid combinations
+fail loudly. See
 [`docs/BUILD-MATRIX.md`](docs/BUILD-MATRIX.md).
 
 > **On NixOS / SteamOS (Steam Deck) / Arch / Debian / Fedora**, where `python3` or

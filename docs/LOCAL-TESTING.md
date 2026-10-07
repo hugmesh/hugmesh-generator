@@ -15,7 +15,8 @@ make local          # builds the whole fleet for the LAN .test domain (hugmesh.t
 ```
 
 Then do the **one-time resolver step** below, and browse to
-`https://id.hugmesh.test`, `https://hugmesh.test`, etc. from any LAN device.
+`https://hugmesh.test` (the front door) from any LAN device. Casdoor has no ingress of its own:
+sign-in goes through the front door's native login form.
 
 ## The build ENV selector (baked at image creation)
 
@@ -95,7 +96,7 @@ IP on port 53. Then every LAN device resolves `*.<domain>` to the cluster.
 
    ```bash
    dig @<BACKEND_IP> id.hugmesh.test +short      # -> the backend node IP
-   curl -k https://id.hugmesh.test/               # reaches Casdoor via ingress
+   curl -k https://hugmesh.test/                  # reaches the front door via the fe-gateway ingress
    ```
 
 That's it — no `/etc/hosts` edits per host, no public DNS, no Cloudflare. The

@@ -251,7 +251,7 @@ written to `/etc/hugmesh/env`. `--env test` (the **default**, LAN-first/safe)
 keeps the cluster wildcard-DNS app and prunes cloudflared/ACME; `--env prod` bakes
 the **real** public domain (keeps cloudflared/external-DNS/ACME, prunes LAN DNS)
 and prints a LOUD announced banner. You do not flip it at runtime. Full table:
-[README → Build ENV](../README.md#build-env-testprod-baked-at-image-creation).
+[README → Build ENV](../README.md#build-env-testprod--baked-at-image-creation).
 
 ---
 
