@@ -70,6 +70,17 @@ ABOVE the long catalogue and its prose, on both faces (the TUI prints the same o
 and the fold is measured at the host's default size AND at every size in ``_SIZES``
 under every look in ``_LOOKS``. The catalogue, a list, is what scrolls.
 
+AND READABLE ACROSS, NOT ONLY ON SCREEN (the robustness review of #582, round 2): the
+fold check above measures a vertical span, so with the state line's word wrap turned
+off it stayed green while the rendered page was unreadable — the line became one row
+cut at the page's right edge, and since the page's content widget takes the width of
+its widest child, the banner, the lane note, the help and the "Not domain-scoped"
+heading were cut there too, with no horizontal scrollbar to reach the rest (the page's
+scroll area never shows one). So wherever the fold is measured, every prose label of
+the body is measured too (``_prose_is_readable``): it wraps, its right edge mapped
+into the scroll viewport is inside the viewport's width, it is as tall as the lines it
+wraps to, and the content widget as a whole is no wider than the viewport.
+
 The GUI half skips without a Qt binding (the Qt-free job); the TUI half never skips.
 Nothing here calls ``.exec()``.
 """
@@ -682,6 +693,50 @@ def _last_row(table):
     return last
 
 
+def _prose_of(body):
+    """Every prose label of the body, in page order: the per-domain head, the front
+    door's state line, the honesty banner, the lane note (hidden while it has nothing
+    to say), the help, the "Not domain-scoped" head, the scope legend and the walk's
+    progress line. All of them word-wrap; none may be wider than the page."""
+    return (("head", body.head), ("state line", body.tor_note),
+            ("banner", body.enforcement), ("lane note", body.lane_note),
+            ("help", body.help), ("other head", body.other_head),
+            ("legend", body.legend), ("progress line", body.remaining))
+
+
+def _prose_is_readable(body, qapp, where):
+    """Every prose label the body shows is readable, not only on screen: it wraps, it
+    lies wholly inside the scroll viewport's WIDTH, and it is as tall as the lines it
+    wraps to. The page's scroll area never shows a horizontal scrollbar, so a label
+    wider than the viewport is cut at the right edge with no way to reach the rest —
+    and one such label widens the content widget, so every label beside it is cut too
+    (seen with the state line's word wrap off: the fold check alone stayed green). The
+    content widget is therefore measured as a whole as well."""
+    qt = _qt()
+    sa = _scroll_area_of(body.table)
+    vp = sa.viewport()
+    _settle(qapp)
+    content = sa.widget()
+    assert content.width() <= vp.width(), \
+        f"the page's content is {content.width()}px wide in a {vp.width()}px " \
+        f"viewport, so its right edge is cut off ({where})"
+    for name, lab in _prose_of(body):
+        if not lab.isVisible():
+            # the one label allowed off the page is the lane note, and only while empty
+            assert name == "lane note" and lab.text() == "", f"the {name} is hidden"
+            continue
+        assert lab.text(), f"the {name} is on the page with nothing to say ({where})"
+        assert lab.wordWrap(), f"the {name} does not wrap ({where})"
+        left = lab.mapTo(vp, qt.QtCore.QPoint(0, 0)).x()
+        right = left + lab.width()
+        assert 0 <= left and right <= vp.width(), \
+            f"the {name} spans x={left}..{right} in a {vp.width()}px wide viewport " \
+            f"({where})"
+        need = lab.heightForWidth(lab.width())
+        assert need <= lab.height() + 1, \
+            f"the {name} needs {need}px for its text and has {lab.height()}px ({where})"
+
+
 def _front_door_above_the_fold(body, qapp, where):
     sa = _scroll_area_of(body.table)
     vp = sa.viewport()
@@ -700,6 +755,9 @@ def _front_door_above_the_fold(body, qapp, where):
             assert top >= 0 and bottom <= vp.height(), \
                 f"the {name} spans y={top}..{bottom} in a {vp.height()}px viewport " \
                 f"({'ticked' if ticked else 'unticked'}, {where})"
+        # ...and readable across: the state line is longest ticked, and every other
+        # prose label of the body is measured with it
+        _prose_is_readable(body, qapp, f"{'ticked' if ticked else 'unticked'}, {where}")
     # the caption: directly under its table, no gap
     assert _span_in(vp, body.tor_note)[0] == _span_in(vp, body.front_door_table)[1]
 
@@ -709,7 +767,9 @@ def test_the_front_door_and_its_state_line_are_above_the_fold_on_every_host(
     """On every host, under every look, at the host's default window size and at every
     size in ``_SIZES``: the front-door checkbox, its table and the state line under it
     lie wholly inside the page's scroll viewport with the page not scrolled — with the
-    front door unticked and, since that is the longer line, ticked.
+    front door unticked and, since that is the longer line, ticked — and every prose
+    label of the body is readable across (wrapped, inside the viewport's width, tall
+    enough for its lines; ``_prose_is_readable``).
 
     A host's window takes a size no smaller than its own floor, and the fold is then
     measured at the size it really took: the two wizard hosts scroll, so their floor
@@ -730,6 +790,30 @@ def test_the_front_door_and_its_state_line_are_above_the_fold_on_every_host(
         assert (window.width(), window.height()) == took, \
             f"asked {size.width()}x{size.height()}, floor {floor.width()}x{floor.height()}"
         _front_door_above_the_fold(body, qapp, f"{label}: {took[0]}x{took[1]}")
+
+
+def test_the_readability_check_sees_a_label_cut_at_the_right_edge(host, qapp):
+    """The control for ``_prose_is_readable``, on the live page: with the state line's
+    word wrap turned off (the change that left the fold check green while the page was
+    unreadable) the check names the state line; with one label given a fixed width
+    past the viewport it names that label; and put back, the page passes again."""
+    body, _window = host
+    body._tor_box.setChecked(True)
+    _settle(qapp)
+    _prose_is_readable(body, qapp, "as built")
+    body.tor_note.setWordWrap(False)
+    with pytest.raises(AssertionError, match="state line"):
+        _prose_is_readable(body, qapp, "state line unwrapped")
+    body.tor_note.setWordWrap(True)
+    _settle(qapp)
+    _prose_is_readable(body, qapp, "state line wrapped again")
+    vp = _scroll_area_of(body.table).viewport()
+    body.help.setMinimumWidth(vp.width() + 200)
+    with pytest.raises(AssertionError, match="help|content"):
+        _prose_is_readable(body, qapp, "help too wide")
+    body.help.setMinimumWidth(0)
+    _settle(qapp)
+    _prose_is_readable(body, qapp, "help free again")
 
 
 def test_the_front_door_is_laid_out_above_the_services_on_both_faces(host):

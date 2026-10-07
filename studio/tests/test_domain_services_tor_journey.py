@@ -184,6 +184,16 @@ def test_gui_local_mesh_journey_hands_the_front_door_to_the_stack(wiz, monkeypat
     assert body.current_domain() == DOMAIN and body._tor_box is not None
     body._tor_box.setChecked(True)
     assert ds.TOR_REACH[ds.TOR_ROUTE_COMPOSE] in body.tor_note.text()
+    # Back to the Domains step and Next through it again, as a person who goes back to
+    # fix a title would: the table has no front-door cell, so it carries the tick by
+    # name (gui/pages/domains.py), and the step keeps its working copy for the same
+    # walk — either way the tick must still be there, or the stack never sees it.
+    while not isinstance(wiz.currentPage(), localmesh_mod.LocalMeshDomainsPage):
+        wiz.back()
+    _to(wiz, localmesh_mod.LocalMeshDomainServicesPage)
+    if body.current_domain() != DOMAIN:
+        body._step(1)
+    assert body.current_domain() == DOMAIN and body._tor_box.isChecked()
     # on to the mesh page: Tor on for the mesh, then Start
     _to(wiz, localmesh_mod.LocalMeshPage)
     ctl.with_tor.setChecked(True)
@@ -231,3 +241,12 @@ def test_gui_image_journey_puts_the_front_door_into_the_mesh_manifest(wiz):
     # and a config saved from here loads with the front door
     from hugmesh_studio.core.config import ImageConfig
     assert ImageConfig.from_dict(wiz.cfg.to_dict()).domains[0].tor is True
+    # Back to the Domains table and Next through it again, as a person who goes back
+    # to fix a title would: the table has no front-door cell, so it carries the tick
+    # BY NAME (gui/pages/domains.py) — or this Next would silently drop the onion.
+    from _helpers import back_to
+    assert back_to(wiz, wizard_mod.DomainsPage) is dom
+    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page._step(1)
+    assert page.current_domain() == DOMAIN and page._tor_box.isChecked()
+    assert wiz.cfg.mesh_manifest()["domains"][0]["tor"] is True
