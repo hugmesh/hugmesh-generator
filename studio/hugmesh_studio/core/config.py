@@ -920,17 +920,21 @@ CA_CERT_MAX_BYTES = 1 << 20             # 1 MiB: a CA bundle is kilobytes; refus
 #: * the per-domain Base CA is recorded-only everywhere (no builder parses a CA flag).
 #:
 #: What really decides a client's trust is keys-provision's certificate import
-#: (specs/etc/keys-provision/provision.sh provision_certs: every KEYS/certs/*.crt and
-#: *.pem copied to /usr/local/share/ca-certificates, then update-ca-certificates) —
-#: mesh-wide, from the stick, never per domain. It runs for EVERY manifest: until the
-#: post-merge review of #645 it was the tail of provision_files(), below that
-#: function's `jqe '.files' || return 0`, so a client stick (KEYS profile `host`, whose
-#: manifest has no `files` key) imported nothing and this note was untrue.
-#: gen-provision-keys.sh does not mint the CA for a client: it tells the operator to
-#: copy certs/cluster-ca.crt from the pki node onto the stick, which is why the note
-#: says "the certificates you put there". studio/tests/test_client_ca_inheritance.py
-#: EXECUTES the import against the host-profile manifest and pins the other facts
-#: against the scripts, so this sentence goes red the day one of them changes.
+#: (specs/etc/keys-provision/provision.sh: every KEYS/certs/*.crt and *.pem copied to
+#: /usr/local/share/ca-certificates, then update-ca-certificates) — mesh-wide, from
+#: the stick, never per domain. THE ENGINE'S SIDE OF THIS SENTENCE IS ISSUE #588: as
+#: merged in #645 the import was the tail of provision_files(), below that function's
+#: `jqe '.files' || return 0`, so a client stick (KEYS profile `host`, whose manifest
+#: has no `files` key) imported nothing and the note promised an import that did not
+#: run. The engine fix — the import as its own step, provision_certs, called from
+#: main() for every manifest, with executing pins (studio/tests/
+#: test_keys_provision_certs.py) and the container and client-image proofs — is the
+#: keys-provision branch (fix/keys-provision-certs-every-manifest-20260930); this
+#: note is only true once it has landed. gen-provision-keys.sh does not mint the CA
+#: for a client: it tells the operator to copy certs/cluster-ca.crt from the pki node
+#: onto the stick, which is why the note says "the certificates you put there".
+#: studio/tests/test_client_ca_inheritance.py pins the text facts against the
+#: scripts, so this sentence goes red the day one of them changes.
 CLIENT_CA_INHERITANCE_NOTE = (
     "Certificate authorities on a Mesh desktop client: the image carries none of its "
     "own, so there is no per-domain CA to pick here and the Secrets store step is "

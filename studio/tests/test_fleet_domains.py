@@ -481,3 +481,17 @@ def test_the_gui_shows_an_unbalanced_quote_inline_and_refuses_to_build(page):
     assert "Preflight FAILED" in page.problems.toPlainText()
     assert "balance the quotes" in page.problems.toPlainText()
     assert page.runs == [] and page.worker is None
+
+
+def test_the_gui_jobs_spin_box_is_bounded_by_the_same_range_validate_enforces(page):
+    """One range on both faces: the spin box's bounds ARE ``JOBS_RANGE`` (what
+    ``FleetConfig.validate`` refuses outside of, for the TUI's ``set jobs N``), not a
+    second literal that could drift from it (the round-2 review's L8: decoupling the
+    spin box to (0, 256) stayed green)."""
+    from hugmesh_studio.core.fleet import JOBS_RANGE
+    assert (page.jobs.minimum(), page.jobs.maximum()) == JOBS_RANGE
+    page.jobs.setValue(JOBS_RANGE[1] + 100)
+    assert page.jobs.value() == JOBS_RANGE[1]
+    page.jobs.setValue(0)
+    assert page.jobs.value() == JOBS_RANGE[0]
+    page.collect().validate()                               # what it clamps to is valid

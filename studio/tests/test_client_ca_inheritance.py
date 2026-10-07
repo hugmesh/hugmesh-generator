@@ -20,11 +20,8 @@ So this file pins, in order:
    cloud walk used to rebuild it from pickers the skipped step never filled), pruned to
    the domains still in the table so the stranded-entry rule holds.
 """
-import json
 import os
 import re
-import shutil
-import subprocess
 
 import pytest
 
@@ -70,138 +67,13 @@ def test_the_builder_discards_a_vault_address_on_a_client_role():
 
 
 def test_keys_provision_imports_every_stick_certificate_into_the_trust_store():
-    """The import lives in ``provision_certs`` (its own step) and nowhere else: not in
-    ``provision_files``, whose ``.files`` early return used to hide it from every
-    manifest without a files list."""
     src = _read(PROVISION)
-    certs = _function_body(src, "provision_certs")
     for needle in ('cp -f "${BASE}/certs/"*.crt /usr/local/share/ca-certificates/',
                    'cp -f "${BASE}/certs/"*.pem /usr/local/share/ca-certificates/',
                    "update-ca-certificates"):
-        assert needle in certs, (
-            f"keys-provision no longer does {needle!r} in provision_certs — the client "
-            "trust path the cloud Domains step describes (CLIENT_CA_INHERITANCE_NOTE) "
-            "has changed")
-    assert 'cp -f "${BASE}/certs/"' not in _function_body(src, "provision_files")
-
-
-# ── the import, EXECUTED (the post-merge review of #645, B1) ─────────────────────────
-# The pin above reads text; it stayed green while the import sat below
-# `jqe '.files' || return 0` and never ran for a client stick. So: run the REAL
-# provision_files() and provision_certs() out of provision.sh, in main()'s order, with
-# every side-effecting command replaced by a logger, against the client manifests.
-_HARNESS = r"""
-set -u
-log(){ echo "LOG  $*"; }; warn(){ echo "WARN $*"; }
-have(){ return 0; }
-mkdir(){ echo "CALL mkdir $*"; }
-cp(){ echo "CALL cp $*"; }
-chmod(){ echo "CALL chmod $*"; }
-chown(){ echo "CALL chown $*"; }
-update-ca-certificates(){ echo "CALL update-ca-certificates"; }
-"""
-
-EXAMPLES = os.path.join(GENERATOR_DIR, "keys-template", "examples")
-
-
-def _run_import(src, base, manifest):
-    """stdout of provision_files() then provision_certs() (main()'s order) from the
-    given provision.sh text, with the stubs above, on stick ``base`` + ``manifest``."""
-    assert shutil.which("jq"), "jq is required: provision.sh's own hard dependency"
-    parts = [_HARNESS]
-    for name in ("jqm", "jqe"):
-        m = re.search(r"^%s\(\)\s*\{.*$" % name, src, re.M)
-        assert m, f"{name}() not found in provision.sh"
-        parts.append(m.group(0))
-    for fn in ("provision_files", "provision_certs"):
-        parts.append(fn + "() {\n" + _function_body(src, fn) + "}")
-    parts += ["declare -F provision_files provision_certs jqm jqe >/dev/null || exit 9",
-              'provision_files; echo "provision_files rc=$?"',
-              'provision_certs; echo "provision_certs rc=$?"']
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "BASE": base,
-           "MANIFEST": manifest}
-    p = subprocess.run(["bash", "-c", "\n".join(parts)], capture_output=True,
-                       text=True, env=env, timeout=60)
-    assert p.returncode == 0, p.stdout + p.stderr
-    return p.stdout
-
-
-def _stick(tmp_path, with_certs=True, names=("cluster-ca.crt", "extra.pem")):
-    base = tmp_path / "stick"
-    (base / "certs").mkdir(parents=True)
-    if with_certs:
-        for name in names:
-            (base / "certs" / name).write_text(
-                "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
-    return str(base)
-
-
-def _manifest(example):
-    path = os.path.join(EXAMPLES, example)
-    with open(path, encoding="utf-8") as fh:
-        return path, json.load(fh)
-
-
-@pytest.mark.parametrize("example", ["provision.host.json", "provision.frontend.json"])
-def test_a_stick_without_a_files_list_still_gets_its_certificates_imported(tmp_path,
-                                                                          example):
-    """The client stick (KEYS profile `host`: desktop, laptop, chromebook) and the
-    frontend profile carry no `files` key. Until the post-merge review of #645 the only
-    importer returned before the import on exactly these manifests: zero copies."""
-    path, manifest = _manifest(example)
-    assert "files" not in manifest, example
-    base = _stick(tmp_path)
-    out = _run_import(_read(PROVISION), base, path)
-    assert f"CALL cp -f {base}/certs/cluster-ca.crt /usr/local/share/ca-certificates/" in out
-    assert f"CALL cp -f {base}/certs/extra.pem /usr/local/share/ca-certificates/" in out
-    assert "CALL update-ca-certificates" in out
-    assert "LOG  Imported certificates from KEYS/certs" in out
-    assert "provision_files rc=0" in out and "provision_certs rc=0" in out
-
-
-def test_a_manifest_with_a_files_list_imports_exactly_as_before(tmp_path):
-    """The backend example carries a files list: its bulk import is unchanged (the
-    same copies, after the listed files, then update-ca-certificates)."""
-    path, manifest = _manifest("provision.backend.json")
-    assert manifest.get("files"), "the backend example lost its files list"
-    base = _stick(tmp_path)
-    out = _run_import(_read(PROVISION), base, path)
-    lines = out.splitlines()
-    files_done = lines.index("provision_files rc=0")
-    crt = next(i for i, ln in enumerate(lines)
-               if ln == f"CALL cp -f {base}/certs/cluster-ca.crt /usr/local/share/ca-certificates/")
-    assert files_done < crt < lines.index("CALL update-ca-certificates")
-
-
-def test_a_stick_without_certificates_imports_nothing(tmp_path):
-    path, _manifest_ = _manifest("provision.host.json")
-    out = _run_import(_read(PROVISION), _stick(tmp_path, with_certs=False), path)
-    assert "CALL cp" not in out and "update-ca-certificates" not in out
-    assert "provision_certs rc=0" in out
-
-
-def test_a_stick_whose_only_certificate_is_a_pem_still_imports_it(tmp_path):
-    """The note promises ``*.crt and *.pem``; the step's guard must see a stick that
-    carries only a .pem (a guard on ``*.crt`` alone would skip it — the skeptic's P8,
-    green before this pin)."""
-    path, _manifest_ = _manifest("provision.host.json")
-    base = _stick(tmp_path, names=("only.pem",))
-    out = _run_import(_read(PROVISION), base, path)
-    assert f"CALL cp -f {base}/certs/only.pem /usr/local/share/ca-certificates/" in out
-    assert "CALL update-ca-certificates" in out
-    assert "LOG  Imported certificates from KEYS/certs" in out
-
-
-def test_main_imports_the_certificates_for_every_manifest_right_after_the_files():
-    """main() calls provision_certs once, at top level (not inside the
-    `if ! ${STANDALONE_IMG}` block), right after provision_files and before
-    provision_truststore — so no manifest class skips the import."""
-    body = _function_body(_read(PROVISION), "main")
-    calls = re.findall(r"^    (provision_[a-z_]+)\b", body, re.M)
-    assert calls.count("provision_certs") == 1, calls
-    assert (calls.index("provision_files") + 1 == calls.index("provision_certs")
-            < calls.index("provision_truststore")), calls
-    assert body.index("    provision_certs") < body.index("if ! ${STANDALONE_IMG}; then")
+        assert needle in src, (
+            f"keys-provision no longer does {needle!r} — the client trust path the "
+            "cloud Domains step describes (CLIENT_CA_INHERITANCE_NOTE) has changed")
 
 
 def test_no_builder_parses_a_ca_flag():
@@ -228,7 +100,12 @@ def test_the_note_is_right_that_gen_provision_keys_tells_the_operator_to_copy_th
     to copy onto the stick from the pki node — not something it mints for a client.
     Pinned against the script: it prints that instruction (the "Add:" line and the
     pki -> certs/cluster-ca.crt copy line) and never writes certs/cluster-ca.crt itself
-    on a client stick."""
+    on a client stick.
+
+    Whether keys-provision then IMPORTS that file for a client stick is the engine's
+    side of the note (issue #588): the text pin above cannot see it, and the executing
+    pins live with the engine fix (studio/tests/test_keys_provision_certs.py on the
+    keys-provision branch), not here."""
     assert "gen-provision-keys.sh tells you to copy there" in CLIENT_CA_INHERITANCE_NOTE
     src = _read(GEN_KEYS)
     assert re.search(r'^\s*echo .*Add: .*certs/cluster-ca\.crt', src, re.M), (

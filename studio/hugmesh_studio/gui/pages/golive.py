@@ -413,6 +413,54 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
         return True
 
 
+#: The exposure pane fits its wrapped rows up to this height, then scrolls (and still
+#: takes its share of any extra window height). A fixed 180 px box (the first post-merge
+#: fix) cut the sixth row of a six-row plan at Fusion 9 pt behind a scrollbar.
+EXPOSURE_PANE_MAX_PX = 320
+#: ...and never shrinks below this many lines, so a one-row plan is still a pane.
+EXPOSURE_PANE_MIN_LINES = 3
+
+
+class _FittingPane(QtWidgets.QPlainTextEdit):
+    """A read-only prose pane whose MINIMUM height follows its wrapped content: every
+    row is read whole at the wizard's default size, up to :data:`EXPOSURE_PANE_MAX_PX`.
+
+    The wrap depends on the width, so the fit is redone on every resize. It is
+    measured on a clone of the document laid out at the width the pane has WITHOUT a
+    vertical scrollbar — never on the live layout, whose wrap moves with that
+    scrollbar (it appears, the viewport narrows, more lines wrap, more height is
+    needed, it disappears: a fit read off the live layout oscillates on that edge,
+    and read during a resize it is simply stale). The measure depends on the width
+    alone, so setting the minimum height from it cannot feed back into it."""
+
+    def setPlainText(self, text):
+        super().setPlainText(text)
+        self.fit_to_content()
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self.fit_to_content()
+
+    def content_height(self) -> int:
+        """Pixels the wrapped text needs at the current width (no scrollbar), frame
+        included; never less than :data:`EXPOSURE_PANE_MIN_LINES` lines."""
+        src = self.document()
+        probe = src.clone()
+        try:
+            probe.setDefaultFont(self.font())
+            probe.setDocumentMargin(src.documentMargin())
+            probe.setTextWidth(max(1, self.width() - 2 * self.frameWidth()))
+            text_px = probe.size().height()
+        finally:
+            probe.deleteLater()
+        floor = (EXPOSURE_PANE_MIN_LINES * self.fontMetrics().lineSpacing()
+                 + 2 * src.documentMargin())
+        return int(max(text_px, floor) + 2 * self.frameWidth() + 2)
+
+    def fit_to_content(self):
+        self.setMinimumHeight(min(self.content_height(), EXPOSURE_PANE_MAX_PX))
+
+
 class GoLiveGeneratePage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
@@ -430,16 +478,17 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
         # PER DOMAIN (#587): what EVERY domain on the device gets — this run's, the
         # ones that need a run of their own, and the node's onions.
         lay.addWidget(QtWidgets.QLabel("Per-domain exposure (this device):"))
-        self.exposure = console.attach(QtWidgets.QPlainTextEdit())
+        self.exposure = console.attach(_FittingPane())
         self.exposure.setReadOnly(True)
         # PROSE rows (each one's "how" is a sentence; the unreadable-export row carries
         # its remedy), not column-aligned build output: wrap at the widget's width so
         # the end of a row is read without scrolling sideways (the post-merge review
-        # of #645 saw every onion row cut at the right edge), and give the box the
-        # height its five-plus rows need at the wizard's default size.
+        # of #645 saw every onion row cut at the right edge). The box's height follows
+        # its rows (a fixed 180 px cut the sixth row of a six-row plan behind a
+        # scrollbar at 9 pt), and it grows with the window (the same stretch as the
+        # run log) instead of stopping at a fixed maximum.
         self.exposure.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.WidgetWidth)
-        self.exposure.setMaximumHeight(180)
-        lay.addWidget(self.exposure)
+        lay.addWidget(self.exposure, 1)
         self.preview_btn = QtWidgets.QPushButton("Refresh preview")
         self.generate_btn = QtWidgets.QPushButton("Generate artifacts now")
         self.open_btn = QtWidgets.QPushButton("Open artifacts folder")

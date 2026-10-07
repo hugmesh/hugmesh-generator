@@ -101,21 +101,33 @@ def baked_domains(primary: str = "", domains_file: str | None = None) -> list[st
 
 
 def onion_export_state(export_dir: str | None = None
-                       ) -> tuple[str, list[tuple[str, str]], str]:
-    """``(primary onion, [(slug, onion), ...], why the export could not be read)`` as
-    this host exports them — "" / [] when there are none, and the third item "" when
-    the export directory is simply absent (no Tor on this host).
+                       ) -> tuple[str, list[tuple[str, str]], str, str]:
+    """``(primary onion, [(slug, onion), ...], why a hostname file could not be read,
+    why the directory could not be listed)`` as this host exports them — "" / [] when
+    there are none, and the two reasons "" when the export directory is simply absent
+    (no Tor on this host).
 
     UNREADABLE IS NOT ABSENT. hugmesh-tor-reconcile keeps /var/lib/hugmesh/tor
     root-only (``chmod 0700``), so a Studio run as a user on a Tor node cannot read it
     — the NORMAL state there. Until the post-merge review of #645 every OSError
     collapsed into "" / [] and the plan then said the onion was "not minted on this
     host", sending the operator to look for a fault on a node that had minted it. Now
-    the reason (``"<path>: Permission denied"``) is carried and :func:`exposure_rows`
-    says what it cannot see. A missing directory or file stays "" / [] / "".
+    the reasons (``"<path>: Permission denied"``) are carried and :func:`exposure_rows`
+    says what it cannot see. A missing directory or file stays "" / [] / "" / "".
+
+    THE TWO REASONS ARE SEPARATE because they hide different things: the third item
+    is about the primary (``hostname``, or a ``<slug>.hostname`` that refused); the
+    fourth is about the LISTING, which is the only way the per-domain onions are
+    found (decision 68 = A: one ``<slug>.hostname`` per Tor domain). A directory with
+    x-but-no-r bits, or a 0700 one with ``GL_ONION_HOSTNAME`` set as the unreadable
+    row's own remedy says, yields a KNOWN primary and a refused listing — and the
+    round-2 review measured that one reason, spent on the primary's row, left the
+    per-domain onions dropped in silence exactly then.
 
     ``GL_ONION_HOSTNAME`` (:data:`ONION_HOSTNAME_ENV`) overrides the exported primary
-    exactly as the driver's tor-onion card does. Only well-formed v3 addresses and
+    as the driver's tor-onion card does for a well-formed v3 address (the card prints
+    ANY value; the Studio shows a malformed one as a problem row instead,
+    :func:`onion_override_problem`). Only well-formed v3 addresses and
     reconcile-shaped slugs count, from the files AND from the variable — the files
     are written by a root agent, but a half-written, hand-edited or half-typed one
     must not reach a page as an address to share."""
@@ -138,13 +150,14 @@ def onion_export_state(export_dir: str | None = None
         words = [w for w in _lines("hostname") if w]
         primary = words[0] if words and _ONION_RE.match(words[0]) else ""
     per: list[tuple[str, str]] = []
+    unlistable = ""
     try:
         names = sorted(os.listdir(d))
     except FileNotFoundError:
         names = []
     except OSError as e:                        # the directory exists and refuses us
         names = []
-        unreadable = unreadable or f"{d}: {e.strerror or e}"
+        unlistable = f"{d}: {e.strerror or e}"
     for fn in names:
         if not fn.endswith(".hostname") or fn == "hostname":
             continue
@@ -152,13 +165,13 @@ def onion_export_state(export_dir: str | None = None
         addr = next((w for w in _lines(fn) if w), "")
         if _SLUG_RE.match(slug) and _ONION_RE.match(addr):
             per.append((slug, addr))
-    return primary, per, unreadable
+    return primary, per, unreadable, unlistable
 
 
 def onion_exports(export_dir: str | None = None) -> tuple[str, list[tuple[str, str]]]:
     """``(primary onion, [(slug, onion), ...])`` — :func:`onion_export_state` without
-    the reason; callers that render a plan want the reason and use the state."""
-    primary, per, _unreadable = onion_export_state(export_dir)
+    the reasons; callers that render a plan want the reasons and use the state."""
+    primary, per, _unreadable, _unlistable = onion_export_state(export_dir)
     return primary, per
 
 
@@ -194,10 +207,25 @@ ONION_UNREADABLE_HOW = (
     "card both honour.")
 
 
+#: The per-domain row when the export directory exists but this user cannot LIST it
+#: (``{why}`` is the directory and the OS's reason). Said beside a known primary too
+#: — the x-but-no-r directory, or the 0700 one with GL_ONION_HOSTNAME set as the row
+#: above tells the operator to — because the primary's row says nothing about the
+#: per-domain onions, and before this row the plan dropped them in silence exactly
+#: when the operator had followed that remedy (the round-2 review of the #645 fix).
+ONION_LIST_UNREADABLE_HOW = (
+    "cannot be listed by this user ({why}) — hugmesh-tor-reconcile keeps the export "
+    "root-only (mode 0700), so any <slug>.hostname it exported (one per Tor domain) is "
+    "not shown here; this says nothing about whether there are any. Run the Studio "
+    "(or the plan) as root to see them, or read /var/lib/hugmesh/tor/<slug>.hostname "
+    "on the node.")
+
+
 def exposure_rows(domains, chosen: str, provider_id: str, mechanism: str,
                   model_label: str, onion: str = "",
                   domain_onions=(), onion_unreadable: str = "",
-                  override_problem: str = "") -> list[tuple[str, str]]:
+                  override_problem: str = "",
+                  listing_unreadable: str = "") -> list[tuple[str, str]]:
     """``[(what, how it is reached), ...]`` — the plan for EVERY domain on the device,
     not only the one this run covers.
 
@@ -214,7 +242,12 @@ def exposure_rows(domains, chosen: str, provider_id: str, mechanism: str,
     * ``override_problem`` (:func:`onion_override_problem`) gets a row of its own,
       whatever the mechanism, and stands in for "not minted": a set-but-malformed
       GL_ONION_HOSTNAME is what the driver's card will write, so the operator must be
-      told that rather than sent to set the variable again."""
+      told that rather than sent to set the variable again;
+    * ``listing_unreadable`` (the fourth item of :func:`onion_export_state`) is a row
+      of its own, whatever the mechanism and whether or not the primary is known:
+      the per-domain onions are found only by listing the directory, so a refused
+      listing must be said where they would have been listed, not folded into the
+      primary's row (which a known primary wins)."""
     rows: list[tuple[str, str]] = []
     primary = domains[0] if domains else ""
     for name in domains:
@@ -243,6 +276,9 @@ def exposure_rows(domains, chosen: str, provider_id: str, mechanism: str,
                      "the node (built with --with-tor)"))
     if override_problem:
         rows.append(("Tor: GL_ONION_HOSTNAME", override_problem))
+    if listing_unreadable:
+        rows.append(("Tor: per-domain onions",
+                     ONION_LIST_UNREADABLE_HOW.format(why=listing_unreadable)))
     for slug, addr in domain_onions:
         rows.append((f"Tor: domain slug '{slug}'",
                      f"https://{addr}/ — its own onion, the same gateway"))
@@ -267,6 +303,7 @@ def plan_rows(driver, opts) -> list[tuple[str, str]]:
     label = f"{p.model} ({p.mechanism})" if p else "(no provider picked)"
     domains = baked_domains(driver.autofill_domain())
     chosen = (opts.domain or "").strip().lower() or (domains[0] if domains else "")
-    onion, per, unreadable = onion_export_state()
+    onion, per, unreadable, unlistable = onion_export_state()
     return exposure_rows(domains, chosen, p.id if p else "?", mechanism, label,
-                         onion, per, unreadable, onion_override_problem())
+                         onion, per, unreadable, onion_override_problem(),
+                         listing_unreadable=unlistable)

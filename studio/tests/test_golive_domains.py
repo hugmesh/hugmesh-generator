@@ -17,7 +17,13 @@ Pinned here:
   apart from an absent one — the plan says so instead of "not minted" — and
   GL_ONION_HOSTNAME overrides the exported address as the driver's own card does;
   a set-but-MALFORMED override is a row of its own (the card would write it to
-  onion.txt as-is; the table must not call that "not minted").
+  onion.txt as-is; the table must not call that "not minted");
+* (round 2 of that review) a refused LISTING of the export is a row of its own, beside
+  a known primary too: the per-domain onions are found only by listing, and a 0700
+  export with GL_ONION_HOSTNAME set — what the unreadable row's remedy tells the
+  operator to do — used to show the primary and drop the per-domain onions in silence;
+* the Generate pane fits its rows (no row behind a scrollbar at the wizard's default
+  size) and grows with the window.
 """
 import io
 import os
@@ -28,9 +34,9 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from hugmesh_studio.core.golive_domains import (                        # noqa: E402
-    NO_EXTRA_DOMAINS_NOTE, ONION_OVERRIDE_PROBLEM_HOW, ONION_UNREADABLE_HOW,
-    baked_domains, exposure_lines, exposure_rows, onion_export_state, onion_exports,
-    onion_override_problem, plan_rows)
+    NO_EXTRA_DOMAINS_NOTE, ONION_LIST_UNREADABLE_HOW, ONION_OVERRIDE_PROBLEM_HOW,
+    ONION_UNREADABLE_HOW, baked_domains, exposure_lines, exposure_rows,
+    onion_export_state, onion_exports, onion_override_problem, plan_rows)
 from hugmesh_studio.core.golive_driver import GoLiveDriver, GoLiveOptions  # noqa: E402
 from hugmesh_studio.tui import app as tui_app                           # noqa: E402
 
@@ -180,37 +186,35 @@ def test_an_unreadable_export_directory_is_told_apart_from_an_absent_one(device)
     node that had minted it. Three shapes: a mode-0 directory, a readable directory
     with a root-only hostname file, and an export path that is a file."""
     tor = device / "tor"
-    assert onion_export_state(str(tor)) == (ONION_A, [("games", ONION_B)], "")
-    assert onion_export_state(str(device / "absent-tor")) == ("", [], "")
+    assert onion_export_state(str(tor)) == (ONION_A, [("games", ONION_B)], "", "")
+    assert onion_export_state(str(device / "absent-tor")) == ("", [], "", "")
     deny = _Deny(tor)
     try:
-        primary, per, why = onion_export_state(str(tor))
+        primary, per, why, unlistable = onion_export_state(str(tor))
         old_shape = onion_exports(str(tor))               # the old shape, still blind
     finally:
         deny.undo()
     assert (primary, per) == ("", []) and old_shape == ("", [])
-    assert why.startswith(str(tor)) and "Permission denied" in why, why
+    # the hostname read AND the listing are refused: two reasons, each its own path
+    assert why == f"{tor / 'hostname'}: Permission denied", why
+    assert unlistable == f"{tor}: Permission denied", unlistable
     deny = _Deny(tor / "hostname")                        # a readable dir, root-only file
     try:
-        primary, per, why = onion_export_state(str(tor))
+        primary, per, why, unlistable = onion_export_state(str(tor))
     finally:
         deny.undo()
     assert primary == "" and per == [("games", ONION_B)]
     assert why.startswith(str(tor / "hostname")) and "Permission denied" in why
-    assert onion_export_state(str(tor)) == (ONION_A, [("games", ONION_B)], "")  # undone
-    primary, per, why = onion_export_state(str(device / "cluster-domain"))
+    assert unlistable == ""                               # the listing WORKED
+    assert onion_export_state(str(tor)) == (ONION_A, [("games", ONION_B)], "", "")  # undone
+    primary, per, why, unlistable = onion_export_state(str(device / "cluster-domain"))
     assert (primary, per) == ("", []) and why.startswith(str(device / "cluster-domain"))
-    assert "Not a directory" in why
+    assert "Not a directory" in why and "Not a directory" in unlistable
 
 
-def test_a_directory_that_cannot_be_listed_still_names_itself_as_the_reason(device,
-                                                                           monkeypatch):
-    """The reason is recorded where the listing is refused too, not only where the
-    hostname read is: a directory with x-but-no-r bits lets ``hostname`` be opened by
-    name and refuses ``os.listdir`` — the primary is read, the per-domain onions are
-    NOT, and the plan must say so instead of listing none in silence (the skeptic's
-    O4: dropping the listdir branch's reason stayed green before this pin)."""
-    tor = device / "tor"
+def _refuse_listing(monkeypatch, tor):
+    """``os.listdir`` refuses ``tor`` alone — the x-but-no-r directory (the mode bits
+    cannot say it under a root runner, so it is said by the call itself)."""
     real_listdir = os.listdir
 
     def refuse(path="."):
@@ -218,14 +222,83 @@ def test_a_directory_that_cannot_be_listed_still_names_itself_as_the_reason(devi
             raise PermissionError(13, "Permission denied", str(path))
         return real_listdir(path)
     monkeypatch.setattr(os, "listdir", refuse)
-    primary, per, why = onion_export_state(str(tor))
-    assert primary == ONION_A and per == []
-    assert why == f"{tor}: Permission denied", why
+
+
+def test_a_directory_that_cannot_be_listed_is_a_row_beside_a_known_primary(device,
+                                                                          monkeypatch):
+    """A directory with x-but-no-r bits lets ``hostname`` be opened by name and refuses
+    ``os.listdir``: the primary is read, the per-domain onions are NOT. The refused
+    listing is its OWN reason (the fourth item: the third is about hostname files),
+    and its own ROW — the round-2 review of this fix measured that one reason, spent
+    on the primary's row, was never said once a primary was known: the plan showed
+    the onion and dropped the per-domain onions in silence."""
+    tor = device / "tor"
+    _refuse_listing(monkeypatch, tor)
+    primary, per, why, unlistable = onion_export_state(str(tor))
+    assert primary == ONION_A and per == [] and why == ""
+    assert unlistable == f"{tor}: Permission denied", unlistable
     rows = dict(exposure_rows(["mesh.example"], "mesh.example", "tor-onion", "onion",
-                              "onion (onion)", primary, per, why))
-    # a readable primary wins the onion row; the refused listing is still said
+                              "onion (onion)", primary, per, why, "",
+                              listing_unreadable=unlistable))
     assert rows["Tor: this node's onion"].startswith(f"https://{ONION_A}/")
+    assert rows["Tor: per-domain onions"] == ONION_LIST_UNREADABLE_HOW.format(why=unlistable)
+    assert rows["Tor: per-domain onions"].startswith(
+        "cannot be listed by this user (" + unlistable + ")")
+    assert "<slug>.hostname" in rows["Tor: per-domain onions"]
     assert not any(k.startswith("Tor: domain slug") for k in rows)
+    # the row comes AFTER the primary's and BEFORE any slug row would
+    keys = [k for k, _ in exposure_rows(["mesh.example"], "mesh.example", "tor-onion",
+                                        "onion", "onion (onion)", primary, per, why, "",
+                                        listing_unreadable=unlistable)]
+    assert keys.index("Tor: this node's onion") < keys.index("Tor: per-domain onions")
+    # through plan_rows (both faces), under the onion AND a clearnet mechanism
+    d = GoLiveDriver(GENERATOR_DIR)
+    for provider in ("tor-onion", "cloudflare-tunnel"):
+        rows = dict(plan_rows(d, GoLiveOptions(provider=provider, domain="mesh.example")))
+        assert rows["Tor: this node's onion"].startswith(f"https://{ONION_A}/")
+        assert rows["Tor: per-domain onions"].startswith("cannot be listed by this user (")
+        assert str(tor) in rows["Tor: per-domain onions"]
+
+
+def test_following_the_unreadable_rows_remedy_keeps_the_per_domain_onions_named(
+        device, monkeypatch):
+    """The realistic shape on a Tor node run as a user: the 0700 export directory AND
+    GL_ONION_HOSTNAME set — exactly what the unreadable row's own remedy says to do.
+    The primary is then known (the override), the listing is still refused, and the
+    plan must still say the per-domain onions could not be listed, not fall silent
+    (the round-2 review: following the remedy turned the warning into silence)."""
+    tor = device / "tor"
+    monkeypatch.setenv("GL_ONION_HOSTNAME", ONION_A)
+    deny = _Deny(tor)
+    try:
+        state = onion_export_state(str(tor))
+        d = GoLiveDriver(GENERATOR_DIR)
+        plans = {p: plan_rows(d, GoLiveOptions(provider=p, domain="mesh.example"))
+                 for p in ("tor-onion", "cloudflare-tunnel")}
+    finally:
+        deny.undo()
+    assert state == (ONION_A, [], "", f"{tor}: Permission denied"), state
+    for provider, plan in plans.items():
+        rows = dict(plan)
+        assert rows["Tor: this node's onion"].startswith(f"https://{ONION_A}/"), provider
+        assert "cannot be read" not in rows["Tor: this node's onion"]
+        assert rows["Tor: per-domain onions"] == ONION_LIST_UNREADABLE_HOW.format(
+            why=f"{tor}: Permission denied"), provider
+        assert not any(k.startswith("Tor: domain slug") for k in rows)
+        assert any("cannot be listed by this user (" in ln for ln in exposure_lines(plan))
+    # and the row is about the LISTING only: a readable directory whose hostname file
+    # is root-only, with the override set, lists its per-domain onions and must NOT
+    # claim they could not be listed
+    deny = _Deny(tor / "hostname")
+    try:
+        state = onion_export_state(str(tor))
+        rows = dict(plan_rows(GoLiveDriver(GENERATOR_DIR),
+                              GoLiveOptions(provider="tor-onion", domain="mesh.example")))
+    finally:
+        deny.undo()
+    assert state == (ONION_A, [("games", ONION_B)], "", "")
+    assert "Tor: per-domain onions" not in rows
+    assert rows["Tor: domain slug 'games'"].startswith(f"https://{ONION_B}/")
 
 
 def test_the_plan_says_the_onion_cannot_be_read_rather_than_not_minted():
@@ -270,7 +343,7 @@ def test_gl_onion_hostname_overrides_the_export_as_the_drivers_card_does(bare_no
     for a well-formed address the two name the same one. Only a well-formed v3 address
     counts as an address — a half-typed one must not reach a page as one to share."""
     monkeypatch.setenv("GL_ONION_HOSTNAME", ONION_A)
-    assert onion_export_state() == (ONION_A, [], "")
+    assert onion_export_state() == (ONION_A, [], "", "")
     assert onion_exports() == (ONION_A, [])
     assert onion_override_problem() == ""
     d = GoLiveDriver(GENERATOR_DIR)
@@ -283,7 +356,7 @@ def test_gl_onion_hostname_overrides_the_export_as_the_drivers_card_does(bare_no
     monkeypatch.setenv("GL_ONION_HOSTNAME", ONION_A)
     monkeypatch.setenv("GL_ONION_EXPORT_DIR", str(bare_node))
     (bare_node / "games.hostname").write_text(ONION_B + "\n")
-    assert onion_export_state() == (ONION_A, [("games", ONION_B)], "")
+    assert onion_export_state() == (ONION_A, [("games", ONION_B)], "", "")
 
 
 def test_a_malformed_gl_onion_hostname_is_a_row_not_silence(bare_node, device,
@@ -296,7 +369,7 @@ def test_a_malformed_gl_onion_hostname_is_a_row_not_silence(bare_node, device,
     readable export's address is still shown beside it, so the operator sees that
     the table and the card differ."""
     monkeypatch.setenv("GL_ONION_HOSTNAME", "not-an-onion")
-    assert onion_export_state(str(bare_node / "absent-tor")) == ("", [], "")
+    assert onion_export_state(str(bare_node / "absent-tor")) == ("", [], "", "")
     why = onion_override_problem()
     assert why == ONION_OVERRIDE_PROBLEM_HOW.format(value="not-an-onion")
     assert "'not-an-onion'" in why and "onion.txt" in why and "56 characters" in why
@@ -380,6 +453,24 @@ def test_the_tui_plan_names_a_malformed_gl_onion_hostname(bare_node, monkeypatch
     text = _tui_plan(n, [])
     assert "Tor: GL_ONION_HOSTNAME" in text and "'not-an-onion'" in text
     assert "not minted" not in text
+
+
+def test_the_tui_plan_says_the_per_domain_onions_cannot_be_listed(device, monkeypatch):
+    """The listing row reaches the text-mode plan too (one ``plan_rows`` call): the
+    0700 export with the override set — the remedy followed — in the TUI."""
+    tor = device / "tor"
+    monkeypatch.setenv("GL_ONION_HOSTNAME", ONION_A)
+    d = GoLiveDriver(GENERATOR_DIR)
+    n = [p.id for p in d.providers()].index("tor-onion") + 1
+    deny = _Deny(tor)
+    try:
+        text = _tui_plan(n, [])
+    finally:
+        deny.undo()
+    assert f"https://{ONION_A}/" in text
+    assert "Tor: per-domain onions" in text
+    assert f"cannot be listed by this user ({tor}: Permission denied)" in text
+    assert "domain slug" not in text and "not minted" not in text
 
 
 pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding (PySide6/PyQt6) installed")
@@ -486,7 +577,56 @@ def test_the_generate_exposure_pane_wraps_so_a_rows_remedy_is_read_whole(wiz, de
     assert "cannot be read by this user (" in text and "GL_ONION_HOSTNAME" in text
     assert box.isVisible() and box.width() >= 400 and box.height() >= 100, (
         box.width(), box.height())
+    # every row is in view: the box fits its wrapped rows (no row behind a scrollbar)
+    assert box.verticalScrollBar().maximum() == 0, (box.height(), box.content_height())
+    assert box.height() >= box.content_height()
     # the box lies inside the wizard's window at its default size
     r = QtCore.QRect(box.mapTo(wiz, QtCore.QPoint(0, 0)), box.size())
     assert wiz.rect().contains(r), (r, wiz.size())
+    wiz.close()
+
+
+def test_the_generate_exposure_pane_fits_six_rows_and_grows_with_the_window(wiz, device,
+                                                                           monkeypatch):
+    """Six rows at the wizard's default size — three baked domains, the node's onion,
+    a malformed GL_ONION_HOSTNAME and a per-domain onion — are ALL in view (the first
+    post-merge fix's fixed 180 px box cut the sixth behind a scrollbar at 9 pt; the
+    round-2 review's shots-override-default/04), and a taller window makes the box
+    taller instead of stopping at a fixed maximum."""
+    with open(device / "domains", "a", encoding="utf-8") as fh:
+        fh.write("blog.example\n")
+    monkeypatch.setenv("GL_ONION_HOSTNAME", "not-an-onion")
+    page = _to_inputs(wiz, provider="tor-onion")
+    assert page.validatePage()
+    gen = wiz.page(wiz._page_ids["generate"])
+    wiz.setStartId(wiz._page_ids["generate"])
+    wiz.restart()
+    wiz.resize(820, 640)                      # GoLiveWizard.__init__'s own default
+    wiz.show()
+    QtWidgets.QApplication.processEvents()
+    assert wiz.currentPage() is gen
+    box = gen.exposure
+    rows = box.toPlainText().splitlines()
+    assert len(rows) == 6, rows
+    assert rows[-1].startswith("Tor: domain slug 'games'")
+    assert box.verticalScrollBar().maximum() == 0, (box.height(), box.content_height())
+    assert box.horizontalScrollBar().maximum() == 0
+    assert box.height() >= box.content_height() >= 6 * box.fontMetrics().lineSpacing()
+    assert box.minimumHeight() == min(box.content_height(), golive_mod.EXPOSURE_PANE_MAX_PX)
+    r = QtCore.QRect(box.mapTo(wiz, QtCore.QPoint(0, 0)), box.size())
+    assert wiz.rect().contains(r), (r, wiz.size())
+    # a taller window: the box grows (it is not capped at a fixed maximum height)
+    h0 = box.height()
+    wiz.resize(wiz.width(), wiz.height() + 400)
+    QtWidgets.QApplication.processEvents()
+    QtWidgets.QApplication.processEvents()
+    assert box.height() > h0 + 100, (h0, box.height())
+    assert box.verticalScrollBar().maximum() == 0
+    # a narrower window wraps more: the box gets taller again and still scrolls nothing
+    wiz.resize(wiz.width() - 200, 640)
+    QtWidgets.QApplication.processEvents()
+    QtWidgets.QApplication.processEvents()
+    assert box.verticalScrollBar().maximum() == 0, (box.height(), box.content_height())
+    assert box.minimumHeight() >= box.content_height() or (
+        box.minimumHeight() == golive_mod.EXPOSURE_PANE_MAX_PX)
     wiz.close()

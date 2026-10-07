@@ -216,6 +216,10 @@ def test_the_domains_step_shows_its_buttons_and_its_whole_help(window):
         assert vp.rect().contains(r), (
             f"{text!r} is at {r} in a {vp.width()}x{vp.height()} viewport")
     assert _fits(p.domains_help), "the Domains help text is cut"
+    # the help names the row as the table numbers it (1), never "Row 0" (the
+    # reviewers' N10: a person counting from the header finds no row 0)
+    assert "The first row" in p.domains_help.text(), p.domains_help.text()
+    assert "Row 0" not in p.domains_help.text() and "row 0" not in p.domains_help.text()
 
 
 @pytest.mark.parametrize("size", [DEFAULT_SIZE, (700, 330), (520, 260)],
