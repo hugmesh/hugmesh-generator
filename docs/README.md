@@ -63,6 +63,7 @@ The doc set for the image/infra layer. State key used throughout:
 - [`NODE-STORAGE.md`](NODE-STORAGE.md) — attach + register node-pinned storage.
 - [`GAMES-APPSTORE.md`](GAMES-APPSTORE.md) — per-domain FOSS game-server catalog + instance lifecycle.
 - [`EDGE-AI.md`](EDGE-AI.md) — GPU inference node serving an OpenAI-compatible model API to the mesh (DEFAULT-OFF, GPU-gated).
+- [`LOCAL-AI-ASSISTANT.md`](LOCAL-AI-ASSISTANT.md) — set up Ollama on your own PC from the CLI, choose a local coding model for an 8 GB GPU, and run a code assistant on a scratch copy of the mesh code (`scripts/local-ai-bench.sh` measures the models on your machine).
 - [`COTURN.md`](COTURN.md) — TURN/STUN relay for Matrix (tuwunel) audio/video (DEFAULT-OFF, runtime-only slug).
 - [`TOR-HIDDEN-SERVICE.md`](TOR-HIDDEN-SERVICE.md) — Tor v3 hidden-service (onion) gateway exposure (DEFAULT-OFF).
 - [`CLOUD-BACKUPS.md`](CLOUD-BACKUPS.md) — generator-side leg of per-domain + total-cloud encrypted backups.
