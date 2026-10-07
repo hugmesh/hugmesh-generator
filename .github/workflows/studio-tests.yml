@@ -88,7 +88,13 @@ jobs:
         # NO Qt binding is installed on purpose. The GUI tests are excluded below, and
         # importing a real Qt in a headless container is what makes the full suite
         # abort rather than fail — see the exclusion list.
-        run: python -m pip install --upgrade pip pytest PyYAML jsonschema
+        #
+        # `cryptography` IS installed on purpose, although studio/requirements.txt
+        # lists it as optional: config.ca_cert_error / the certificate summary degrade
+        # to a framing-only check without it ("install python-cryptography to show
+        # subject and expiry"), so without it the subject/expiry path and every test
+        # guarded by `skipif(not HAVE_CRYPTOGRAPHY)` is silently skipped here.
+        run: python -m pip install --upgrade pip pytest PyYAML jsonschema cryptography
 
       - name: Run the Qt-free suite
         working-directory: studio
