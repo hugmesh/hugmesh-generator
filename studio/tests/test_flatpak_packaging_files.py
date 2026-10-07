@@ -452,7 +452,8 @@ def test_build_script_is_executable_here_and_in_git():
 #: complete reading of shell. It follows a command: behind an environment assignment, a
 #: redirection, a full path, a prefix such as env, timeout, coproc, busybox or unshare
 #: (and past the prefix options in ``_VALUE_OPTIONS`` that take a separate value, such
-#: as ``exec -a NAME`` or ``env -u VAR``), past the lock operand of flock and the root of
+#: as ``exec -a NAME`` or ``env -u VAR``; ``env -S 'CMDLINE'`` is read as a command line),
+#: past the lock operand of flock and the root of
 #: chroot, into a shell's -c string (flock's too), ``eval``, the action string of
 #: ``trap``, a here-string fed to a shell or python, ``find -exec``, flatpak-spawn
 #: --host, a --command= option and the app id that follows it (``--command=sh APP -c
@@ -481,7 +482,7 @@ _PREFIXES = {"exec", "command", "builtin", "env", "nohup", "xargs", "time", "nic
 #: mistaken for the command (``exec -a flatpak sudo`` runs sudo under the name flatpak).
 _VALUE_OPTIONS = {
     "exec": {"-a"},
-    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+    "env": {"-u", "--unset", "-C", "--chdir"},
     "timeout": {"-s", "--signal", "-k", "--kill-after"},
     "nice": {"-n", "--adjustment"},
     "ionice": {"-c", "--class", "-n", "--classdata", "-p", "--pid"},
@@ -498,7 +499,7 @@ _OPERAND_FIRST = {"flock", "chroot"}
 #: find's -exec and friends open a command position in the middle of find's own arguments.
 _FIND_EXEC = {"-exec", "-execdir", "-ok", "-okdir"}
 #: These run the string after -c as a command line of its own, or read stdin after - / -s.
-_SHELLS = {"sh", "bash", "dash", "zsh", "ksh"}
+_SHELLS = {"sh", "bash", "dash", "zsh", "ksh", "ash"}
 _PYTHONS = {"python", "python3"}
 #: These run a file the scanner cannot see.
 _SOURCE = {"source", "."}
@@ -508,6 +509,8 @@ _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _COUNT = re.compile(r"\d+(?:\.\d+)?[smhd]?")               # nice -n 10, timeout 30s
 _C_OPTION = re.compile(r"-[a-zA-Z]*c[a-zA-Z]*")             # -c, -ec, -xc
 _COMMAND_OPTION = re.compile(r"--?(?:command|exec)=(.+)")   # flatpak run --command=X
+_ENV_SPLIT_LONG = re.compile(r"--split-string(?:=(.*))?", re.DOTALL)   # env --split-string=STR
+_ENV_SPLIT_SHORT = re.compile(r"-[a-zA-Z]*S(.*)", re.DOTALL)           # env -S STR, -iS STR, -S'STR'
 #: A heredoc opener, and not the three < of a here-string.
 _HEREDOC_OPENER = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)(\w+)\1")
 _STRING_LITERAL = re.compile(r"""(['"])(.*?)\1""")
@@ -525,6 +528,17 @@ def _program(token: str) -> str:
     """The program a token names: its base name, and the first word if it is a string."""
     words = token.split()
     return (words[0] if words else token).rsplit("/", 1)[-1]
+
+
+def _env_split_string(token: str) -> str | None:
+    """env's -S / --split-string takes a command line in ONE string: None when the token is
+    not that option, else the string if it is attached to the option ('' if it is the next
+    token)."""
+    for pattern in (_ENV_SPLIT_LONG, _ENV_SPLIT_SHORT):
+        match = pattern.fullmatch(token)
+        if match:
+            return match.group(1) or ""
+    return None
 
 
 def _is_separator(token: str) -> bool:
@@ -645,9 +659,21 @@ def _scan_line(line: str) -> tuple[list[str], str | None]:
             skip_next = False
             continue
         if substitution:
-            if _is_separator(token) or token in _PROCESS_SUBSTITUTION:
-                substitution += token.count("(") - token.count(")")
-            continue
+            # shlex hands a separator or a redirection glued to the closing parenthesis over
+            # as ONE token: `);`, `)&&`, `)|`, `)>`. Count every parenthesis of a punctuation
+            # token; where the substitution closes, what is left of the token is read as a
+            # token of its own, so `cat <(ls); sudo x` still has a command after the `;`.
+            if not token or not set(token) <= set("();<>|&"):
+                continue
+            for at, char in enumerate(token):
+                substitution += {"(": 1, ")": -1}.get(char, 0)
+                if substitution == 0:
+                    token = token[at + 1:]
+                    break
+            else:
+                continue
+            if not token:
+                continue
         if token in _PROCESS_SUBSTITUTION:
             # A shell or python handed <( ) reads commands another program wrote.
             if inner and inner[0] in ("await-c", "stdin"):
@@ -709,7 +735,13 @@ def _scan_line(line: str) -> tuple[list[str], str | None]:
             continue
         if token.startswith("-") or _ASSIGNMENT.match(token) or _COUNT.fullmatch(token):
             if inner and inner[0] == "prefix":
-                if token in _VALUE_OPTIONS.get(inner[1], ()):
+                attached = _env_split_string(token) if inner[1] == "env" else None
+                if attached is not None:        # env -S 'sudo -n true': a command line in one string
+                    if attached:
+                        words.extend(_scan_line(attached)[0])
+                    else:
+                        inner = ("next", "env")
+                elif token in _VALUE_OPTIONS.get(inner[1], ()):
                     skip_next = True
                 elif inner[1] == "flock" and _C_OPTION.fullmatch(token):
                     inner = ("next", "flock")  # flock LOCK -c 'COMMANDS'
@@ -917,6 +949,29 @@ def test_build_script_never_runs_sudo_or_a_package_manager():
     ("unshare -r apt-get install x", ["apt-get"]),
     ("busybox sh -c 'sudo -n true'", ["sudo"]),
     ("sh -c $'sudo -n true'", ["sudo"]),
+    # The fourth skeptic round found two things the fix round took away: env -S STRING (a
+    # whole command line in one string, stepped over as the VALUE of a prefix option) and
+    # a separator glued to the closing parenthesis of a process substitution (`);` `)&&`
+    # `)|` `)>`, one token to shlex, which ended the command position that follows).
+    ("env -S 'sudo -n true'", ["sudo"]),
+    ("env -S sudo -n true", ["sudo"]),
+    ("env -i -S 'sudo -n true'", ["sudo"]),
+    ("env -iS 'sudo -n true'", ["sudo"]),
+    ("env -S'sudo -n true'", ["sudo"]),
+    ("env --split-string 'sudo -n true'", ["sudo"]),
+    ("env --split-string='sudo -n true'", ["sudo"]),
+    ("env -S 'true'", []),
+    ("env -u GH_TOKEN -S 'gh pr list'", []),
+    ("cat <(ls); sudo -n true", ["sudo"]),
+    ("cat <(ls)&& sudo -n true", ["sudo"]),
+    ("cat <(ls)| sudo tee x", ["sudo"]),
+    ("tee >(cat)>/dev/null; sudo -n true", ["sudo"]),
+    ("diff <(ls) <(ls -a); sudo -n true", ["sudo"]),
+    ("diff <(ls)<(ls -a); sudo -n true", ["sudo"]),
+    ("cat <(ls); true", []),
+    ("tee >(cat)>/dev/null; true", []),
+    ("busybox ash -c 'sudo -n true'", ["sudo"]),
+    ("ash -c 'sudo -n true'", ["sudo"]),
     # Outside the scanner, pinned so nobody mistakes it for more than it is: a program
     # named through a variable (invisible to any static reading), a command run on
     # another machine, a program in another language, an alias, and a wrapper it does
@@ -953,6 +1008,12 @@ def test_build_script_never_runs_sudo_or_a_package_manager():
         "chroot-command", "coproc", "coproc-named", "exec-a-name", "env-unset-value",
         "env-unset-benign", "timeout-signal-value", "xargs-replace-value",
         "stdbuf-mode-value", "find-exec", "unshare", "busybox-sh-c", "ansi-c-quoting",
+        "env-S-quoted", "env-S-bare", "env-i-S", "env-iS-bundled", "env-S-attached",
+        "env-split-string", "env-split-string-equals", "env-S-benign", "env-S-after-unset-benign",
+        "substitution-then-semicolon", "substitution-then-and", "substitution-then-pipe",
+        "output-substitution-then-redirect", "two-substitutions-then-semicolon",
+        "adjacent-substitutions-then-semicolon", "substitution-then-benign",
+        "output-substitution-benign", "busybox-ash-c", "ash-c",
         "outside-variable", "outside-ssh", "outside-awk", "outside-perl",
         "outside-alias", "outside-unknown-wrapper", "outside-script-command"])
 def test_the_forbidden_command_scanner_sees_what_it_must(snippet, expected):
