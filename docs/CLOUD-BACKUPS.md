@@ -4,8 +4,8 @@ This document covers the **generator** half of the per-domain + total-cloud clou
 backups feature: installing Velero, provisioning the backup destination
 (`BackupStorageLocation`) + ESO/Vault credentials + least-privilege RBAC, and the
 status-sweep. The catalog, role gates, versioning, restore step-up, and the
-per-service menu live in the **admin-bff** (`cloudbackup` package: foundation
-PR #74 + the Velero effector PR #76); the UI lives in `hugmesh-admin-ui`.
+per-service menu live in the **admin-bff** (`cloudbackup` package); the UI lives
+in `hugmesh-admin-ui`.
 
 The whole feature **ships dark** — installing Velero must NOT silently start real
 backups. Two independent gates keep it inert until a superadmin opts in.
@@ -125,6 +125,12 @@ backup can run until the effector flag flips (step 4).
   namespace only**. No pods, secrets, exec, or cluster scope.
 - `backups-sweep` (SA in `velero`): `get/list/watch/patch` on the same CRs, to
   mirror `.status.phase`. Cannot create or delete CRs.
+
+- `backups-effector` also holds a second Role, `backups-effector-menu-read`, in
+  `hugmesh-backend`: `get` on core `configmaps`, no more. The admin-bff reads the
+  per-brand `hugmesh-installed-services-<domainSlug>` ConfigMap with it to trim a
+  scoped admin's backup menu. Without it the read gets 403 and the menu falls back
+  to the full catalog.
 
 Velero's own server SA (chart-created `velero`) is separate and unchanged.
 
