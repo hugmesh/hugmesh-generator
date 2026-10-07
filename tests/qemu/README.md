@@ -7,7 +7,8 @@ worked end-to-end:
 - users created from `users.json` on KEYS, SSH key-only login works
 - `keys-provision` ran (done + users.created markers)
 - hostname applied from `provision.json`
-- headscale binary present, service started, listening on `:8080`
+- headscale binary present; when the KEYS manifest asks for headscale, the
+  service is started and listening on `:8080` (otherwise those two checks skip)
 - containerd / kubelet / kubeadm / kubectl present, kubeadm config staged
 - Kubernetes kernel modules + sysctls active
 - `jq` present and `/etc/hugmesh/role` marker written
@@ -22,7 +23,7 @@ PL011 so it boots under `-M virt` as well as on real hardware).
 
 `kubernetes.bootstrap` is `false` in the test manifest: it verifies config is
 *staged*, it does not run a full `kubeadm init` (impractical under TCG
-emulation). Pass `--keep` and SSH in to drive a real `kubeadm init` manually.
+emulation). `mesh-cluster.sh` (below) is the lane that runs a real `kubeadm init`.
 
 ## Prerequisites (Gentoo host)
 
@@ -50,8 +51,10 @@ Ensure QEMU is built with the aarch64 system target
 sudo ./tests/qemu/run-qemu-test.sh --role pki
 ```
 
-Useful flags: `--timeout 1200` (slow TCG hosts), `--mem 3072`, `--keep` (leave
-the VM/disks in `<work>/qemu-test` and don't power off), `--ssh-port 2223`.
+Useful flags: `--timeout 2400` (the default is 1800 s; raise it on slow TCG
+hosts), `--mem 3072`, `--keep` (keep the scratch dir `<work>/qemu-test` instead
+of deleting it; the guest is still powered off after the assertions),
+`--ssh-port 2223`.
 
 On a slow emulated boot the first SSH attempt can take several minutes; the
 runner polls until `--timeout`. Console output is captured to
@@ -68,16 +71,12 @@ runner polls until `--timeout`. Console output is captured to
 | `launch-x86.sh` | Boot a self-booting x86 `.img` under OVMF/KVM (`--gpu`, `--keys-img`, `--run-dir`). |
 | `launch-pi.sh` | Boot a Pi **golden `.img`** under `-M virt` with a KEYS disk (`--kernel` loaded directly — QEMU has no BCM2712 model; it takes no `--stage4`, that is `run-qemu-test.sh`'s input). |
 | `launch-arm.sh` | Boot a non-Pi ARM `.img` (frite/jetson/orangepi5/orangepizero2[w]/orangepizero3/orangepi3-lts/orangepi4-lts) under `-M virt` (kernel+DTB direct). |
-
-All three launchers carry the same default-off mesh flags — `--mesh-net SPEC`,
-`--mesh-mac MAC`, `--mesh-id N` — spelled from one identical block, so a
-mixed-arch mesh is a launcher choice rather than a missing feature. Without
-`--mesh-net` the QEMU argv is byte-identical to a copy of the launcher with the
-mesh code cut out (pinned that way in `mesh-cluster_test.sh`).
+| `run-qemu-docker.sh` | Containerized device tests: one `--privileged` container per platform/role row against a build session's artifacts; `--keep-alive` leaves the devices running and registers them for the Studio; `--save-device`, `--stop-all-devices`. Needs `docker` group membership, not `sudo`. |
+| `docker-entrypoint.sh` | Runs inside the `hugmesh-qemu-runner` container (`docker/Dockerfile.qemu-runner`): one container, one emulated device. |
 | `run-matrix-e2e.sh` | Opt-in matrix driver: walk `matrix.tsv`, boot each cell + assert size/load. |
 | `mesh-cluster.sh` | Opt-in 3-node k8s cluster: CP `kubeadm init` + two pinned-token joins over a shared QEMU mcast L2 (issue #48). `--identities FILE` takes the nodes' MAC/IP/L2 from the planner. |
 | `mesh-identities.sh` | **Sourced, not run.** The one reader of the planner's identity file, shared by `mesh-cluster.sh` and `run-qemu-docker.sh` (parse + per-row sanity; each lane keeps its own policy). |
-| `mesh-cluster_test.sh` | Static gate + hermetic tests for the whole mesh lane — all three launchers, the driver, the shared identity reader and the runner's shared-L2 plumbing (nothing boots; also run by `check.sh`'s smokes + CI `lint:qemu-mesh-cluster`). |
+| `mesh-cluster_test.sh` | Static gate + hermetic tests for the whole mesh lane — all three launchers, the driver, the shared identity reader and the runner's shared-L2 plumbing (nothing boots; also run by `tests/build-matrix/check.sh`'s smokes + CI `lint:qemu-mesh-cluster`). |
 | `matrix-assertions.sh` | `assert_size` / `assert_build_load` / `assert_runtime_load` helpers (limits read from the code). |
 | `make-test-keys.sh` | Packs a directory into a FAT32 `KEYS` image (reusable, non-root with mtools). |
 | `assertions.sh` | The node checks, executed inside the guest over SSH. |
@@ -85,8 +84,14 @@ mesh code cut out (pinned that way in `mesh-cluster_test.sh`).
 | `avc-workout.sh` | SELinux AVC workout driver: boot ONE image, drive confined workloads, harvest AVCs, emit the narrowing report (issue #45). |
 | `avc-workload.sh` | The in-guest probe list (one probe per workload the `specs/selinux/*.te` modules confine; presence-gated = role-appropriate). |
 | `avc-report.sh` | Groups a raw AVC harvest by source type → the owning `specs/selinux/*.te` (hermetic text processing). |
-| `avc-workout_test.sh` | Hermetic tests + mutation legs for the whole workout lane (nothing boots; also run by `check.sh`'s smokes). |
-| `stage4_rootfs_test.sh` | Hermetic tests + mutation legs for the stage4 rootfs lane: `build_rootfs()` driven against fixture tarballs with `mount`/`umount`/`losetup` stubbed to fail loudly, and `assertions.sh`'s rootfs-is-labelled precondition (nothing boots, no root; also run by `check.sh`'s smokes). |
+| `avc-workout_test.sh` | Hermetic tests + mutation legs for the whole workout lane (nothing boots; also run by `tests/build-matrix/check.sh`'s smokes). |
+| `stage4_rootfs_test.sh` | Hermetic tests + mutation legs for the stage4 rootfs lane: `build_rootfs()` driven against fixture tarballs with `mount`/`umount`/`losetup` stubbed to fail loudly, and `assertions.sh`'s rootfs-is-labelled precondition (nothing boots, no root; also run by `tests/build-matrix/check.sh`'s smokes). |
+
+All three launchers carry the same default-off mesh flags — `--mesh-net SPEC`,
+`--mesh-mac MAC`, `--mesh-id N` — spelled from one identical block, so a
+mixed-arch mesh is a launcher choice rather than a missing feature. Without
+`--mesh-net` the QEMU argv is byte-identical to a copy of the launcher with the
+mesh code cut out (pinned that way in `mesh-cluster_test.sh`).
 
 ## 3-node emulated k8s cluster (`mesh-cluster.sh`, issue #48)
 
@@ -165,7 +170,8 @@ Status: every layer above is gated hermetically (`mesh-cluster_test.sh`: launche
 argv byte-identity, identity parsing and its fail-closed legs, the driver
 end-to-end through the file, the bridge lifecycle against a fake docker, and the
 planner→driver contract). The **live** multi-container boot has NOT been run
-here: it needs ≥25 G free on `/` and this workstation has ~17 G. When it is run,
+here: it needs ≥25 G free on `/`, and `df -h /` on this workstation showed 3.4 G
+free on 2026-10-07. When it is run,
 the thing to watch is multicast delivery across the bridge — if the host bridge
 filters it, the same guests work with the point-to-point `listen=`/`connect=`
 SPEC, which the launchers already accept.
@@ -195,7 +201,8 @@ make avc-workout PLATFORM=x86 ROLE=pki ENFORCING=1 WORK_DIR=...
 ```
 
 Artifacts land in `out/qemu-runs/avc/<platform>_<role>_<ts>/` (`report.txt`,
-`avc-raw.txt`, `probes.log`, `semodule-l.txt`, `selinux-modules.status`,
+`avc-raw.txt`, `probes.log`, `logins.log`, `semodule-l.txt`,
+`selinux-modules.status`, `manifest.txt`, `getenforce.txt`,
 `keys-provision.log`, `launch/console.log`).
 
 ## Enumerating the Playwright lane (`run-qemu-e2e.sh --list`)
@@ -225,17 +232,24 @@ autodetect, so a tree that has built nothing still describes the lane. The spec 
 is `playwright test --list --reporter=json`; `--reporter=json` is **forced**, because
 a bare `--list` under this config's reporter array still fires every file writer and
 would clobber the last real run's `junit.xml`/`report.json`/`summary.json` in
-`SNAP_REPORT_DIR`. Measured 2026-08-26: 33 spec files / 221 tests enumerated, and
-`SNAP_REPORT_DIR` left empty. When `tests/e2e/node_modules` is missing the spec half
+`SNAP_REPORT_DIR`. Measured 2026-10-07 with `npx playwright test -c
+playwright.config.ts --list --reporter=json` in `tests/e2e`: 35 spec files / 246
+tests enumerated (2026-08-26: 33 files / 221 tests), and nothing written to the
+worktree. When `tests/e2e/node_modules` is missing the spec half
 skips **loudly and by name** (`playwright_skipped` in the JSON, plus a line on
 stderr) and the boot-plan half still answers.
 
 ## Why this lane refuses instead of calling `sudo`
 
-Booting needs uid 0 — `launch-x86.sh`/`launch-pi.sh` loop-mount the golden image to
-lift its kernel out of the boot partition. `run-qemu-e2e.sh` never invokes `sudo`:
+`run-qemu-e2e.sh` refuses to boot unless it is uid 0 (`run-qemu-e2e.sh:340`). Its
+refusal message says the launchers loop-mount the golden image to lift its kernel
+out of the boot partition. That reason is out of date: `launch-x86.sh` has no
+mount code, and since 2026-08-26 `launch-pi.sh --kernel-from-img` reads the FAT boot
+partition at a byte offset with mtools, with a privileged offset mount only as the
+fallback for a non-FAT `/boot`. Whether the lane still needs root for anything else
+is not verified. `run-qemu-e2e.sh` never invokes `sudo`:
 the Studio drives it, and a GUI cannot answer an interactive password prompt. Its
-refusal instead names the three real routes — `--list`/`--dry-run` (no root), the
+refusal names the three routes — `--list`/`--dry-run` (no root), the
 **privileged container** the device-test lane already uses for this same constraint
 (`make qemu-docker-image`, then `docker run --privileged … --entrypoint …`), or a
 shell that is already root.
@@ -268,9 +282,11 @@ sudo ./build-x86-host-stage4.sh --role laptop --person-role user \
 ./tests/qemu/verify-client.sh --dry-run --role laptop      # validate the KEYS payload, don't boot
 ```
 
-The greeter renders under QEMU because the client kernel now carries a generic
-framebuffer fallback (`simpledrm`/sysfb + bochs/qxl; virtio-gpu is in the base
-fragment) and `launch-x86.sh --gpu` attaches a virtio-GPU.
+The greeter renders under QEMU because the client kernel carries a generic
+framebuffer fallback (`simpledrm`/sysfb + bochs/qxl, in
+`specs-x86/kernel/desktop.config`; virtio-gpu is in
+`specs-x86/kernel/hardened-k8s.config`) and `launch-x86.sh --gpu` attaches a
+`virtio-gpu-pci` device.
 
 ## Windows Studio `.bat` e2e (`windows-studio-e2e.sh`)
 
@@ -349,8 +365,7 @@ Every LIMIT is **read from the code**, never hardcoded:
   (`img_size=<ROOT_MiB>`, which every builder emits and `check.sh` already proves
   prints), computes the compact layout `(1 + 512 + ROOT_MiB + 1) MiB`, and asserts the
   built `.img` (or, for `compress=true` rows, its `xz --list` uncompressed size) does not
-  exceed it. The Pi default was reconciled to `9216` here (bugfix #414 had bumped the
-  docs/help/tests but missed `build-rpi5-stage4.sh`'s `ROOT_MiB`).
+  exceed it. The Pi default is `9216` (`build-rpi5-stage4.sh`: `ROOT_MiB=9216`).
 - **BUILD LOAD** — `assert_build_load` proves the 2026-07-15 host-freeze caps are wired
   into the docker build channel: `host_resources.build_memory_flag()`/`default_jobs()`
   produce the caps, `build_driver.docker_memory_args()` carries them as `--memory`, and
