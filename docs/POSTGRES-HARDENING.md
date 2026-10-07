@@ -11,13 +11,17 @@ This document covers the Postgres posture for the application/RBAC databases:
 
 The databases in scope (each its own pod + PVC, ClusterIP-only):
 
-| DB | Namespace | Owner role / DB | Consumer(s) | Tables |
+| DB | Namespace | Owner role / DB | Consumer(s) | Tables (examples) |
 |----|-----------|-----------------|-------------|--------|
-| `route-access-db` | hugmesh-pki | `gateway` / `gateway` | admin-bff (W), pki/be/fe-gateway (R) | `gateway_route_access` |
+| `route-access-db` | hugmesh-pki | `gateway` / `gateway` | admin-bff (W), pki/be/fe/superadmin-gateway (R) | `gateway_route_access` |
 | `federation-db` | hugmesh-backend | `federation` / `federation` | hugmesh-federation-api | `federation_modules`, `user_modules`, `moderation_requests`, `federation_override` |
 | `admin-bff-db` | hugmesh-backend | `adminbff` / `adminbff` | hugmesh-admin-bff-api | `account`, `allowlist`, `bff_session`, `namespace_grant`, `iso_artifacts`, `gateway_route_access` |
 | `mod-bff-db` | hugmesh-backend | `modbff` / `modbff` | hugmesh-mod-bff-api | `mod_action` |
 | `user-bff-db` | hugmesh-backend | `userbff` / `userbff` | hugmesh-user-bff-api | `user_profile`, `user_preference`, `user_block` |
+| `forum-bff-db` | hugmesh-backend | `forumbff` / `forumbff` | hugmesh-forum-bff-api | (Liquibase-managed) |
+| `wiki-bff-db` | hugmesh-backend | `wikibff` / `wikibff` | hugmesh-wiki-bff-api | (Liquibase-managed) |
+| `mesh-bff-db` | hugmesh-backend | `meshbff` / `meshbff` | hugmesh-mesh-bff-api | (Liquibase-managed) |
+| `character-forge-bff-db` | hugmesh-backend | `charforgebff` / `charforgebff` | hugmesh-character-forge-bff-api | (Liquibase-managed) |
 | `casdoor-pg` | hugmesh-pki | `casdoor` / `casdoor` | casdoor | (managed by Casdoor) |
 
 `casdoor-pg` already sources its single `casdoor` user from the ESO `casdoor-db`
@@ -51,6 +55,7 @@ table owner the admin-bff's DDL path uses.
 | route-access-db | `pki_gateway` | `SELECT` on `gateway_route_access` | hugmesh-pki-gateway | `ROUTE_ACCESS_PKI_GATEWAY_PASSWORD` | `route-access-pki-gateway` | `route-access-db.pki_gateway_password` |
 | route-access-db | `be_gateway` | `SELECT` on `gateway_route_access` | hugmesh-be-gateway | `ROUTE_ACCESS_BE_GATEWAY_PASSWORD` | `route-access-be-gateway` | `route-access-db.be_gateway_password` |
 | route-access-db | `fe_gateway` | `SELECT` on `gateway_route_access` | hugmesh-fe-gateway | `ROUTE_ACCESS_FE_GATEWAY_PASSWORD` | `route-access-fe-gateway` | `route-access-db.fe_gateway_password` |
+| route-access-db | `superadmin_gateway` | `SELECT` on `gateway_route_access` | hugmesh-superadmin-gateway | `ROUTE_ACCESS_SUPERADMIN_GATEWAY_PASSWORD` | `route-access-superadmin-gateway` | `route-access-db.superadmin_gateway_password` |
 | federation-db | `federation` (owner) | DDL/owner (Liquibase) | federation-api (Liquibase) | `POSTGRES_PASSWORD` | `federation-db-auth` | `federation-db.password` |
 | federation-db | `federation_app` | DML on all tables + USAGE on schema/sequences | federation-api (R2DBC runtime) | `FEDERATION_APP_PASSWORD` | `federation-db-app-auth` | `federation-db.app_password` |
 | admin-bff-db | `adminbff` (owner) | DDL/owner (Liquibase) | admin-bff (Liquibase) | `POSTGRES_PASSWORD` | `admin-bff-db-auth` | `admin-bff-db.password` |
@@ -59,13 +64,21 @@ table owner the admin-bff's DDL path uses.
 | mod-bff-db | `modbff_app` | DML on all tables + USAGE | mod-bff (R2DBC runtime) | `MODBFF_APP_PASSWORD` | `mod-bff-db-app-auth` | `mod-bff-db.app_password` |
 | user-bff-db | `userbff` (owner) | DDL/owner (Liquibase) | user-bff (Liquibase) | `POSTGRES_PASSWORD` | `user-bff-db-auth` | `user-bff-db.password` |
 | user-bff-db | `userbff_app` | DML on all tables + USAGE | user-bff (R2DBC runtime) | `USERBFF_APP_PASSWORD` | `user-bff-db-app-auth` | `user-bff-db.app_password` |
+| forum-bff-db | `forumbff` (owner) | DDL/owner (Liquibase) | forum-bff (Liquibase) | `POSTGRES_PASSWORD` | `forum-bff-db-auth` | `forum-bff-db.password` |
+| forum-bff-db | `forumbff_app` | DML on all tables + USAGE | forum-bff (R2DBC runtime) | `FORUMBFF_APP_PASSWORD` | `forum-bff-db-app-auth` | `forum-bff-db.app_password` |
+| wiki-bff-db | `wikibff` (owner) | DDL/owner (Liquibase) | wiki-bff (Liquibase) | `POSTGRES_PASSWORD` | `wiki-bff-db-auth` | `wiki-bff-db.password` |
+| wiki-bff-db | `wikibff_app` | DML on all tables + USAGE | wiki-bff (R2DBC runtime) | `WIKIBFF_APP_PASSWORD` | `wiki-bff-db-app-auth` | `wiki-bff-db.app_password` |
+| mesh-bff-db | `meshbff` (owner) | DDL/owner (Liquibase) | mesh-bff (Liquibase) | `POSTGRES_PASSWORD` | `mesh-bff-db-auth` | `mesh-bff-db.password` |
+| mesh-bff-db | `meshbff_app` | DML on all tables + USAGE | mesh-bff (R2DBC runtime) | `MESHBFF_APP_PASSWORD` | `mesh-bff-db-app-auth` | `mesh-bff-db.app_password` |
+| character-forge-bff-db | `charforgebff` (owner) | DDL/owner (Liquibase) | character-forge-bff (Liquibase) | `POSTGRES_PASSWORD` | `character-forge-bff-db-auth` | `character-forge-bff-db.password` |
+| character-forge-bff-db | `charforgebff_app` | DML on all tables + USAGE | character-forge-bff (R2DBC runtime) | `CHARFORGEBFF_APP_PASSWORD` | `character-forge-bff-db-app-auth` | `character-forge-bff-db.app_password` |
 
 The DB pod and its consumer reference the **same Vault property** so the role and
 its credential always stay in sync.
 
 ### How the non-owner role gets DML on Liquibase-managed tables
 
-The four single-consumer DBs create their tables via **Liquibase at app boot**,
+The single-consumer DBs (federation, admin-bff, mod-bff, user-bff, forum-bff, wiki-bff, mesh-bff, character-forge-bff) create their tables via **Liquibase at app boot**,
 *after* Postgres initdb. So the app role's table grants cannot be written as plain
 `GRANT ... ON <table>` at initdb time (the tables don't exist yet). Instead
 `initdb/10-roles.sh` uses **`ALTER DEFAULT PRIVILEGES FOR ROLE <owner>`** so that
@@ -80,8 +93,9 @@ existence so the same file is reusable in the local dev stack).
 #### admin-bff is the one service whose changelogs also GRANT explicitly
 
 Every other BFF relies purely on the `ALTER DEFAULT PRIVILEGES` mechanism above and
-carries **no SQL `GRANT` at all**. hugmesh-admin-bff-api additionally issues ~49
-per-table `GRANT`s from its own changelogs. Those are belt-and-braces — the default
+carries **no SQL `GRANT` at all**. hugmesh-admin-bff-api additionally issues
+per-table `GRANT`s from its own changelogs (81 `GRANT … TO adminbff_app`
+statements across 20 changelog files on `origin/main`, counted 2026-10-07). Those are belt-and-braces — the default
 privileges already cover every table Liquibase creates — but they are **not free**,
 because a `GRANT` to a role that does not exist is a hard error that aborts the
 migration and the pod never starts.
@@ -91,7 +105,8 @@ which is **route-access-db's** role (first data row of the matrix above), not a 
 of admin-bff's own database. The matrix was right; the changelogs had copied a name
 across a datasource boundary. They now target `adminbff_app`.
 
-Two rules follow, and `lint:liquibase-grant-roles` enforces both across **all**
+Three rules follow, and `lint:liquibase-grant-roles`
+(`tests/scripts/test-liquibase-grant-roles.sh`) enforces them across **all**
 services:
 
 1. **`[created]`** — a changelog may only `GRANT` to a role that *that service's own*
@@ -184,17 +199,22 @@ Applied via each DB Deployment's `POSTGRES_*` env + container `args` and the
 - **Auditable logins** — `log_connections`, `log_disconnections`, and
   `log_min_duration_statement=2000` (slow-statement log) so an unexpected superuser
   login or runaway query is visible.
-- **Per-port DB ingress NetworkPolicies** (✅ DONE — merged PR #128, ADR-32) —
+- **Per-port DB ingress NetworkPolicies** (✅ DONE, ADR-32) —
   `manifests/networkpolicy/db-ingress.yaml` adds a default-deny-except Ingress per
-  DB pod that admits ONLY each store's real clients on its real port: the six
-  Postgres pods (`route-access-db`, `admin-bff-db`, `mod-bff-db`, `user-bff-db`,
-  `federation-db`, `forum-bff-db`) on `:5432` and `cassandra` on `:9042`, pinned by
-  namespaceSelector AND podSelector peers. These ship in the **auto-synced**
-  `apps/08-networkpolicy.yaml` Application (tier segmentation auto-sync was
-  activated in merged PR #40; per-pod homeserver/forum isolation in merged PR #56);
-  they are ingress-only (egress stays open), so a missed allow restores
-  connectivity on removal.
-- **Per-DB Vault-PKI server certs** (✅ DONE, ships dark — merged PR #124, ADR-32) —
+  DB pod that admits ONLY each store's real clients on its real port: the nine
+  dedicated Postgres pods (`route-access-db`, `admin-bff-db`, `mod-bff-db`,
+  `user-bff-db`, `federation-db`, `forum-bff-db`, `mesh-bff-db`,
+  `character-forge-bff-db`, `wiki-bff-db`) and `casdoor-pg` / `casdoor-games-pg`
+  on `:5432`, and `cassandra` on `:9042`, pinned by namespaceSelector AND
+  podSelector peers. The file is listed in `manifests/networkpolicy/kustomization.yaml`,
+  which the **auto-synced** `apps/08-networkpolicy.yaml` Application (prune +
+  selfHeal) applies, so the policies are live. (The header comment of
+  `db-ingress.yaml` still says "MANUAL-sync / ships dark"; it predates the
+  auto-sync.) They are ingress-only, so a missed allow restores connectivity on
+  removal. A separate, dark `manifests/networkpolicy/db-egress.yaml` locks DNS-only
+  egress on the six Postgres pods that `tier-egress.yaml` excludes; it is enabled
+  only through the manual `apps/08a-networkpolicy-egress.yaml` overlay.
+- **Per-DB Vault-PKI server certs** (✅ DONE, ships dark, ADR-32) —
   each dedicated Postgres DB now gets a Vault-PKI server cert on disk via the
   existing Vault-PKI + ESO pattern: `pki-externalsecrets.yaml` issues a per-DB
   `VaultDynamicSecret` (`pki_int/issue/<db>`) → `kubernetes.io/tls` Secret
@@ -204,9 +224,10 @@ Applied via each DB Deployment's `POSTGRES_*` env + container `args` and the
   (cert present but unused).
 - **In-cluster TLS — gated, ships dark (`PG_TLS_ENABLED`, default `false`).** DB
   Services are ClusterIP-only and confined by SELinux MCS levels + NetworkPolicy.
-  Wire encryption between an app and its DB is **wired but inert**: each of the six
+  Wire encryption between an app and its DB is **wired but inert**: each of the nine
   DB pods (admin-bff-db, mod-bff-db, user-bff-db, federation-db, forum-bff-db,
-  route-access-db) mounts its Vault-PKI server cert read-only at `/etc/postgres-tls`
+  route-access-db, mesh-bff-db, wiki-bff-db, character-forge-bff-db) mounts its
+  Vault-PKI server cert read-only at `/etc/postgres-tls`
   AND boots through a small init wrapper `entrypoint/pg-tls-entrypoint.sh`
   (a SEPARATE ConfigMap, not in the initdb dir) that mirrors the egress-proxy
   entrypoint idiom:
@@ -226,8 +247,9 @@ Applied via each DB Deployment's `POSTGRES_*` env + container `args` and the
   Vault-PKI server-cert ESO Secret `<db>-mtls` is provisioned/materialized per DB.
   Until then it stays off; the DBs are single-node, same-namespace, and already
   MCS+NetworkPolicy-confined, so the default-off posture is safe. **Out of scope**
-  (no dark-TLS cert mounted — would need new ESO certs first): casdoor/casdoor-games
-  Postgres, akkoma-db, the phpBB forum Postgres, observability Postgres.
+  (no dark-TLS cert mounted — would need new ESO certs first): casdoor,
+  casdoor-games and casdoor-domain Postgres, akkoma-db, the phpBB forum Postgres,
+  the Headwind Postgres, observability Postgres.
 
   **fsGroup / cert readability (live-verify fix):** a live container verify proved
   that with `PG_TLS_ENABLED=true` the pod crash-loops because the `<db>-mtls` Secret
