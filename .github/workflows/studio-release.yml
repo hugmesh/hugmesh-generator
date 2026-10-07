@@ -86,7 +86,19 @@ jobs:
 
       - name: Render the application icon
         working-directory: studio
+        # Qt's `windows` platform, not gen_icons.py's `offscreen` default: offscreen has
+        # no fonts, so the mark's "S" is drawn as an empty box (measured under Wine; see
+        # packaging/wix/README.md). gen_icons.py only setdefault()s the variable, so
+        # setting it here is enough and the script is unchanged.
+        env:
+          QT_QPA_PLATFORM: windows
         run: python packaging/gen_icons.py --out build/icons
+
+      - name: Check the icon has its letter
+        working-directory: studio
+        # An empty box has ~0 white pixels in the centre, a bold sans "S" several
+        # thousand. This is the guard build-msi-wine.sh applies before freezing.
+        run: python packaging/check_icon.py build/icons/icon-256.png
 
       - name: Freeze with PyInstaller
         working-directory: studio
@@ -111,32 +123,37 @@ jobs:
         run: python packaging/wix/make_license_rtf.py --in ../LICENSE --out build/License.rtf
 
       - name: Install WiX
-        run: dotnet tool install --global wix
-
-      - name: Harvest the frozen tree
-        working-directory: studio
-        # Generated, never committed: a PyInstaller onedir is ~2000 files and a
-        # hand-written component list would be stale at the next PySide6 bump — with a
-        # silent failure mode, since a missing DLL only shows up at launch.
+        # PINNED, and the extension at the SAME version. An unpinned `dotnet tool
+        # install` gets WiX 7, which refuses to run (WIX7015) until the project owner
+        # accepts the Open Source Maintenance Fee EULA; 6.0.2 is the last release before
+        # that gate. An unpinned extension would pull 7.0.0 into a 6.x tool (WIX6101).
+        # There is no harvest step: no wix release has a `harvest` command, and
+        # packaging/wix/Files.wxs (committed) expands the frozen tree at build time
+        # with WiX's own <Files> element.
         run: |
-          wix extension add -g WixToolset.Util.wixext
-          wix harvest files -o packaging/wix/Files.wxs `
-            -bindpath dist/hugmesh-studio `
-            -cg AppFiles -dr INSTALLFOLDER `
-            dist/hugmesh-studio
+          dotnet tool install --global wix --version 6.0.2
+          wix --version
+          wix extension add -g WixToolset.UI.wixext/6.0.2
+          wix extension list -g
         shell: pwsh
 
       - name: Build the MSI
         working-directory: studio
+        # AppDir is passed absolute so it does not depend on how Files.wxs resolves a
+        # relative path. Same arguments as the Wine-tested recipe in build-msi-wine.sh.
         run: |
+          $appDir = (Resolve-Path dist/hugmesh-studio).Path
           wix build -arch x64 `
             -define Version=$env:VERSION `
             -define IconFile=build/icons/hugmesh-studio.ico `
             -define LicenseFile=build/License.rtf `
-            -bindpath dist/hugmesh-studio `
+            -define AppDir=$appDir `
             -ext WixToolset.UI.wixext `
             -out "hugmesh-studio-$env:VERSION-x64.msi" `
             packaging/wix/Package.wxs packaging/wix/Files.wxs
+          if ($LASTEXITCODE -ne 0) { throw "wix build failed ($LASTEXITCODE)" }
+          if (-not (Test-Path "hugmesh-studio-$env:VERSION-x64.msi")) { throw "no MSI was written" }
+          Get-Item "hugmesh-studio-$env:VERSION-x64.msi" | Format-List Name, Length
         shell: pwsh
 
       - name: Checksum
