@@ -20,6 +20,7 @@ What is pinned here: the gate itself, the remedy each call site shows, the marke
 fail-closed loading and its absence from both manifests, the domain catalogue and its
 scopes, and the catalogue-order normalisation that keeps the manifest byte-stable.
 """
+import json
 import os
 
 import pytest
@@ -587,3 +588,29 @@ def test_an_unreadable_record_is_a_record_with_nothing_to_say(_state, tmp_path):
     with open(_os.path.join(build_sessions.sessions_dir(), "junk.json"), "w") as fh:
         fh.write("{not json")
     assert ds.session_boot_gate_reason("junk") == ""
+
+
+@pytest.mark.parametrize("config", [
+    None, "oops", [1, 2],
+    {"schema": "hugmesh-worklist/v1", "base": "oops", "entries": []},
+    {"schema": "hugmesh-worklist/v1", "entries": [],
+     "base": {"mode": "mesh", "domains": [{"name": "a.example", "idp": "weird"}],
+              "domain_services_reviewed": ["x"]}},
+], ids=["config-null", "config-string", "config-list", "base-string", "idp-weird"])
+def test_a_parseable_but_malformed_record_is_a_record_with_nothing_to_say(_state,
+                                                                          config):
+    """STRICTER than the unreadable-record test above, which ``build_sessions.find``
+    already answers (it swallows a file that is not JSON): a record that PARSES but
+    whose config is not a worklist — a hand-edited file, or one from a future schema
+    — reaches ``rec.worklist()``, which raises. That is what the gate's own guard is
+    for: no record we can read is a record with nothing to say, never a crash that
+    (through a Qt slot) takes the whole Studio down. Test-red proof: with the
+    try/except in ``session_boot_gate_reason`` removed these five raise."""
+    from hugmesh_studio.core import build_sessions
+    import os as _os
+    _os.makedirs(build_sessions.sessions_dir(), exist_ok=True)
+    with open(_os.path.join(build_sessions.sessions_dir(), "m.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump({"id": "m", "config": config}, fh)
+    assert build_sessions.find("m") is not None, "fixture: find() must return the record"
+    assert ds.session_boot_gate_reason("m") == ""

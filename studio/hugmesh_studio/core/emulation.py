@@ -586,6 +586,22 @@ def playwright_root_blocker() -> str:
         "need no root and work now.")
 
 
+def build_first_mode_note(picked_title: str, inherited_title: str) -> str:
+    """The sentence under the "Build new images first" mode picker (#638), on BOTH
+    faces: the GUI QEMU page's ``build_mode_note`` and the TUI QEMU screen's build
+    sub-state render exactly this. The route into that build passes no Mode screen,
+    so the picker preselects the mode the Studio session is already carrying and has
+    to SAY that it is a leftover, not a choice — and, once the operator picks another,
+    which build Next continues into."""
+    if picked_title == inherited_title:
+        return (f"Preselected: {picked_title} — the build mode this Studio session "
+                "is already carrying (from an earlier flow or a loaded "
+                "configuration), NOT a choice made for this test. Pick the build "
+                "these tests should run against.")
+    return (f"Next continues into the {picked_title} build (the session was "
+            f"carrying {inherited_title}).")
+
+
 # ── whole-mesh save: thin delegates over core/emulation_save ────────────────────────
 
 def plan_mesh_save(plan: EmulationPlan, *, session: str = "", stamp: str = "",

@@ -82,6 +82,33 @@ _CASDOOR_ROLE_MAP = (
 )
 
 
+#: The consent line, in two halves (#661): the tick-box carries the short first
+#: half (a QCheckBox cannot wrap), the word-wrapped label beside it the rest. The
+#: TUI's prompt (tui/localcloud.py) opens with the same first half.
+CONSENT_SHORT = "I understand: k8s will stop to proceed"
+CONSENT_REST = ("— the local Kubernetes (DevOps) stack must come down before these "
+                "node images are configured and built.")
+
+
+class _ConsentText(QtWidgets.QLabel):
+    """The wrapped half of the consent line: a click on it ticks the box it belongs
+    to, so the sentence behaves as one control although only its head is the box."""
+
+    def __init__(self, text: str, box: QtWidgets.QCheckBox, parent=None):
+        super().__init__(text, parent)
+        self._box = box
+        self.setWordWrap(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event):  # noqa: N802 — Qt override
+        try:
+            if event.button() == Qt.MouseButton.LeftButton and self._box.isEnabled():
+                self._box.toggle()
+        except Exception:                    # noqa: BLE001 — never crash on a click
+            pass
+        super().mousePressEvent(event)
+
+
 def _person_roles(roles) -> list[str]:
     return normalize_user_roles(
         [person for granted, person in _CASDOOR_ROLE_MAP if granted in roles])
@@ -219,12 +246,21 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         # ── the k8s gate — INLINE and modeless (no QMessageBox/exec in page logic:
         # a modal here hangs headless tests; the checkbox + isComplete() is the
         # same gate, visible, and Next stays disabled until it is ticked). ──
-        self.confirm = QtWidgets.QCheckBox(
-            "I understand: k8s will stop to proceed — the local Kubernetes "
-            "(DevOps) stack must come down before these node images are "
-            "configured and built.")
+        # A SHORT box plus a word-wrapped sentence beside it (#661). QCheckBox never
+        # wraps its text: with the whole sentence on the box the page's minimum width
+        # was 804 px inside the 736 px window, and every line on the page — this one,
+        # the accounts line, the intro paragraph — was cut off at the right edge with
+        # no sideways scroll. The label is the rest of the sentence and clicking it
+        # ticks the box, so the whole line is still the one control.
+        self.confirm = QtWidgets.QCheckBox(CONSENT_SHORT)
         self.confirm.toggled.connect(self._on_confirm_toggled)
-        lay.addWidget(self.confirm)
+        self.confirm_text = _ConsentText(CONSENT_REST, self.confirm)
+        consent = QtWidgets.QWidget()
+        crow = QtWidgets.QHBoxLayout(consent)
+        crow.setContentsMargins(0, 0, 0, 0)
+        crow.addWidget(self.confirm, 0, Qt.AlignmentFlag.AlignTop)
+        crow.addWidget(self.confirm_text, 1)
+        lay.addWidget(consent)
 
         # The consent ARMS the destructive verb; it never performs it on its own —
         # nothing on this page deletes a cluster without a press. `make kind-down`
@@ -369,6 +405,19 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
         self._sync_gate()
         self._start_k8s_probe()
 
+    def _forget_domain_pages(self) -> None:
+        """Tell the Domains table and the Domain services walk that their rows were
+        replaced under them (see ``validatePage``). By slug through the wizard's page
+        registry, so a flow built without one of the pages (a test wizard, a future
+        route) is not a crash; the pages' own methods say what forgetting means."""
+        ids = getattr(self.wiz, "_page_ids", None) or {}
+        for slug, method in (("domains", "forget_rows"),
+                             ("domain_services", "forget_answers")):
+            page = self.wiz.page(ids[slug]) if slug in ids else None
+            forget = getattr(page, method, None)
+            if forget is not None:
+                forget()
+
     # ---- wizard-flow contract (mirrors the other ModePage side-flow pages) -------
     def applies_to(self, cfg) -> bool:  # noqa: ARG002 — the hook's fixed signature
         # A WIZARD-transient choice, deliberately absent from cfg (ModePage keeps
@@ -457,6 +506,13 @@ class LocalCloudNodesPage(QtWidgets.QWizardPage):
             # the TUI (core.local_mesh_domains.apply_imported_domains), so the two faces
             # cannot import a different set of domains.
             apply_imported_domains(cfg, self._mesh_domains)
+            # The rows were just REPLACED on the SAME configuration object, which the
+            # two image-flow pages that hold a working copy of them cannot see: their
+            # identity check only notices a NEW object (Load config, Redo). A Domains
+            # table filled earlier in this Studio session, or a Domain services walk
+            # made then, would otherwise be written back over the import on the way
+            # to the build screen (post-merge review of PR #644).
+            self._forget_domain_pages()
             # THE SAVED-MESH -> NODE-IMAGE BRIDGE (#579): a mesh that ran Tor builds
             # node images that carry it. Set on the BASE, as the mesh-wide default the
             # Network step owns (it shows there ticked, and can be unticked) — the
