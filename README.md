@@ -282,8 +282,9 @@ _Written 2026-08-05; some entries were re-checked against `origin/main` on 2026-
   automated attestation-verdict API) — see [`docs/MDM.md`](docs/MDM.md)
   "Deferred". The `make phone-*` targets exist, including `phone-mdm-enroll`
   and `phone-attest`.
-- **✅ Orange Pi platform family (EXPERIMENTAL)** — six boards across three SoC
-  vendors, each with its own `specs-<platform>/` tree, builder and `make` target:
+- **✅ Orange Pi platform family (EXPERIMENTAL)** — six builders (seven boards: the
+  Orange Pi 5 builder covers the 5 and the 5 Plus) across two SoC vendors, Rockchip
+  and Allwinner, each with its own `specs-<platform>/` tree, builder and `make` target:
   **Orange Pi 5 / 5 Plus** (Rockchip RK3588/RK3588S, light desktop, `--board`
   axis), **Orange Pi 4 LTS** (Rockchip RK3399, light desktop, single-board,
   blob-free boot chain), and the headless appliance line **Orange Pi Zero 2**
@@ -603,7 +604,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
 | **edge-ai** (x86_64 / Jetson) | `./build-x86-host-stage4.sh --role edge-ai` | GPU inference node: serves an OpenAI-compatible model API (Ollama) to the mesh over k8s + tailnet; NVIDIA + CUDA + nvidia-device-plugin. See [docs/EDGE-AI.md](docs/EDGE-AI.md) |
 | **Frite light desktop** (Libre Computer, arm64) — *opt-in client* | `make frite` (or `./build-frite-stage4.sh`) | LEAN LXDE desktop on the Amlogic La Frite / Le Potato SBC; joins the tailnet + Casdoor login. LIVE + INSTALLER flavors, `--desktop light\|none` |
 | **Jetson Orin edge-AI** (NVIDIA Tegra234, arm64) — **EXPERIMENTAL** | `make jetson` (or `./build-jetson-stage4.sh --role edge-ai\|backend-gpu\|omnibus\|desktop`) | arm64 edge-AI node family on the Jetson Orin Nano/NX: same mesh + KEYS provisioning + shared cluster tree; mainline kernel (NO CUDA yet — the L4T/CUDA flavor is a documented stub). **Hardware validation pending** — see [`specs-jetson/README.md`](specs-jetson/README.md) |
-| **Orange Pi family** (6 boards, arm64) — **EXPERIMENTAL** | `make orangepi5` / `orangepi4-lts` / `orangepizero2` / `orangepizero2w` / `orangepizero3` / `orangepi3-lts` (each `-live` / `-installer` too) | Light desktops on Rockchip (**Orange Pi 5 / 5 Plus** RK3588/RK3588S, `--board` axis; **Orange Pi 4 LTS** RK3399, single-board, blob-free boot chain) and headless appliances on Allwinner (**Zero 2** H616; **Zero 2W** + **Zero 3** H618 — headless is forced, no mainline display-engine driver; **3 LTS** H6, headless by scope). Same mesh + KEYS provisioning. **Hardware validation pending on all six** — see [`docs/BUILD-MATRIX.md`](docs/BUILD-MATRIX.md) and each `specs-orangepi*/README.md` |
+| **Orange Pi family** (6 builders, arm64) — **EXPERIMENTAL** | `make orangepi5` / `orangepi4-lts` / `orangepizero2` / `orangepizero2w` / `orangepizero3` / `orangepi3-lts` (each `-live` / `-installer` too) | Light desktops on Rockchip (**Orange Pi 5 / 5 Plus** RK3588/RK3588S, `--board` axis; **Orange Pi 4 LTS** RK3399, single-board, blob-free boot chain) and headless appliances on Allwinner (**Zero 2** H616; **Zero 2W** + **Zero 3** H618 — headless is forced, no mainline display-engine driver; **3 LTS** H6, headless by scope). Same mesh + KEYS provisioning. **Hardware validation pending on all six** — see [`docs/BUILD-MATRIX.md`](docs/BUILD-MATRIX.md) and each `specs-orangepi*/README.md` |
 
 > The friendlier path is the **Makefile** (`make local` / `make prod` /
 > `make build-all`), which dispatches the same builders inside a self-contained
