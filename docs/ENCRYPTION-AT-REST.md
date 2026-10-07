@@ -19,7 +19,7 @@ same stick that carries the cluster CA and Vault seal material) and/or the node
 | 3 | **etcd Secrets** (kube-apiserver) | Every Kubernetes `Secret` object | **EncryptionConfiguration** `aescbc` (AES-256-CBC) provider; apiserver encrypts before writing to etcd | USB-KEYS `kubernetes/encryption-key` (shared across CPs) or minted on first CP | apiserver reads `/etc/kubernetes/encryption-config.yaml` (kubeadm `apiServer.extraArgs`/`extraVolumes`); `keys-provision` writes it before `kubeadm init`/`join` | **Implemented** |
 | 4 | **etcd data dir at rest** (`/var/lib/etcd`) | The whole etcd KV (incl. non-Secret objects) | **Inherited** from layer 1 **when etcd is relocated onto `/mnt/data`** (`storage.devices[].use_for`); otherwise on the root partition (layer 6) | (inherits layer 1) | (inherits layer 1) | **Implemented when relocated** (else see layer 6) |
 | 5 | **Vault storage** | Vault's own secret store (KV, `pki_int`, planned Transit-KMS) | **Raft integrated storage** on a PVC from StorageClass `hugmesh-local` → the Raft data dir (`/vault/data`) lands under the LUKS `/mnt/data` on the pki node → **inherits layer 1 LUKS**. Vault serves a **TLS listener** (cluster-CA-signed, self-signed bootstrap fallback). **Shamir** seal; the unseal key + bootstrap root token stay on USB-KEYS, never git | USB-KEYS (`vault/unseal-key` + `vault/token`) + layer 1 (storage) | `vault operator init` ONCE; the `vault-unseal` sidecar runs `vault operator unseal` from the mounted key on **every restart** (unattended); Raft state decrypts via layer 1 | **Implemented** (persistent + auto-unseal; was dev `server -dev` in-memory before) |
-| 6 | **Node root partition** (`/`) | OS, `/etc/kubernetes`, kubelet certs, default `/var/lib/etcd` if not relocated | **Not yet LUKS** — see "Documented followup" | n/a | n/a | **Documented followup** |
+| 6 | **Node root partition** (`/`) | OS, `/etc/kubernetes`, kubelet certs, default `/var/lib/etcd` if not relocated | **Installer ISO only:** the builders' `--encrypt-root` flag (auto-on for standalone roles; it forces the installer ISO) makes the installer lay down a LUKS2 root. `specs-x86/installer/install-x86.sh` uses `aes-xts-plain64`, 512-bit, `sha512`/`argon2id`, with an unencrypted ESP at `/boot` and `dracut --add crypt` unlocking it in the initramfs. The rpi5, frite and orangepi installers also call `cryptsetup luksFormat`; the jetson tree has no installer script (`specs-jetson/installer/` holds only `TEGRAFLASH.md`). **Quick-flash raw `.img` files: not LUKS** — see "Documented followup" | root-unlock passphrase typed at install time (never baked); optional extra keyfile or FIDO2 keyslot | passphrase prompt at the initramfs (keyfile on the ESP if one was added) | **Partial** (installer path only; plaintext on a quick-flash `.img`) |
 | 7 | **Build artifacts** (`out/*.img`, `*.fs.tar.xz`) | Flashable node images | Encrypt the artifact host disk / transport; images carry NO secrets (all secrets arrive at first boot from USB-KEYS) | operator's build host | n/a | **Mitigated** (images are secret-free by design) |
 | 8 | **USB-KEYS stick itself** | CA key, LUKS keyfile, etcd key, Vault token | Physically offline; FAT32 (mounted `ro,nosuid,nodev,noexec`). Optionally a LUKS-encrypted KEYS stick | physical custody | n/a | **Mitigated** (offline, physically controlled) |
 
@@ -34,11 +34,21 @@ same stick that carries the cluster CA and Vault seal material) and/or the node
    `/etc/hugmesh/luks/<name>.key` (0600).
 3. Best-effort **TPM2 enrolment** (`systemd-cryptenroll --tpm2-pcrs=7`, else
    `clevis luks bind tpm2`) so the node later unlocks without the USB; harmless
-   no-op where no TPM/tool exists (USB keyfile remains the slot).
+   no-op where no TPM/tool exists (USB keyfile remains the slot). The manifest
+   key `storage.luks_tpm2` (default `true`) turns it off.
 4. `mkfs` + mount the **mapper** device; fstab references it by UUID.
 
 **Every boot**: `/etc/crypttab` opens each volume by UUID — TPM2 token first
 (`tpm2-device=auto`), keyfile fallback — before fstab mounts it.
+
+**Plaintext fallbacks (read before trusting layer 1).** `luks_open_or_format()`
+in `provision.sh` does not stop the provision when it cannot encrypt. It logs a
+warning and returns the raw partition, so the device is used **unencrypted**,
+when: `cryptsetup` is not installed; there is no LUKS keyfile
+(`KEYS/secrets/luks.key`); the partition is not LUKS and `format` is not `true`
+(it refuses to encrypt in place); `cryptsetup luksFormat` fails; or
+`cryptsetup open` fails. Look for `PLAINTEXT` in the first-boot log on every
+node.
 
 ## Key custody summary (NONE in git)
 
@@ -57,24 +67,26 @@ same stick that carries the cluster CA and Vault seal material) and/or the node
   recovery. AES-NI hardware acceleration.
 - **Pi5 nodes** (no on-board TPM): USB-KEYS keyfile is the unlock slot. A Pi with
   a TPM HAT uses `clevis`-tpm2 (kernel ships `KEYS`/`TRUSTED_KEYS` + ARM64 CE AES
-  so no rebuild is needed). `luks_tpm2:true` in `provision.json` gates enrolment.
+  so no rebuild is needed). `storage.luks_tpm2` in `provision.json` (default
+  `true`) gates enrolment.
 
 ## Documented followup (NOT implemented, with reason)
 
-- **Layer 6 — full root-partition (FDE) LUKS**. The node images are *flashed
-  raw `.img`s* (FAT/ext4) with `growroot` expanding the root on first boot; there
-  is no initramfs unlock stage in the current boot path, so encrypting `/`
-  in-place would need an initramfs (clevis/`systemd-cryptsetup`) + a
-  before-pivot unlock that does not exist yet — forcing it would brick boot.
-  **Mitigation today**: every layer that holds *cluster data* (PVCs, relocated
-  etcd, Vault prod storage, backups) is on the LUKS `/mnt/data` (layer 1), and
-  etcd Secrets are independently encrypted (layer 3). **Migration path**: add a
-  LUKS-root + initramfs unlock (TPM2/USB-KEYS) stage to the image builder, then
-  relocate the remaining root-resident state. **`growroot` is already
-  LUKS-aware** so this migration will not have to revisit the first-boot grow:
-  when `/` resolves to a `/dev/mapper/*` device it grows the *backing* partition,
-  runs `cryptsetup resize`, then `resize2fs` the mapper (partition → crypt
-  container → filesystem). With today's plaintext root that code path is inert.
+- **Layer 6 — root-partition (FDE) LUKS for quick-flash images.** The installer
+  path encrypts the root (layer 6 in the table). A *flashed raw `.img`* (FAT/ext4,
+  `growroot` expanding the root on first boot) is still plaintext. Encrypting
+  `/` of such an image in place would need an unlock stage before pivot, and a
+  disk-boot artifact without a matching `initramfs-<kver>.img` has no `rd.luks`
+  unlock at all (the x86 builder fails the build in that case). **Mitigation
+  today**: every layer that holds *cluster data* (PVCs, relocated etcd, Vault prod
+  storage, backups) is on the LUKS `/mnt/data` (layer 1), and etcd Secrets are
+  independently encrypted (layer 3). **Migration path**: ship the encrypted
+  installer layout as the only disk layout for cluster nodes, then relocate the
+  remaining root-resident state. **`growroot` is already LUKS-aware**: when `/`
+  resolves to a `/dev/mapper/*` device it grows the *backing* partition, runs
+  `cryptsetup resize`, then `resize2fs` on the mapper (partition, then crypt
+  container, then filesystem). That path runs on installer-encrypted systems and
+  is inert on a plaintext root.
 - **etcd not relocated → on root (layer 4/6)**. Relocate etcd onto `/mnt/data`
   via `storage.devices[].use_for` (or the root-FDE followup) for full-KV at-rest
   encryption. Secret objects are already encrypted regardless (layer 3).
