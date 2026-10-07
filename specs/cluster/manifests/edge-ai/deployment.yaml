@@ -42,7 +42,10 @@ spec:
           level: "s0:c73"
       containers:
         - name: ollama
-          image: ollama/ollama:latest
+          # Pinned, not :latest: a pod restart must not change the runtime under a running mesh. Keep this tag and
+          # kustomization.yaml's newTag equal (tests/scripts/test-edge-ai-ollama-pin.sh). 0.40.0 is multi-arch
+          # (amd64 + arm64, so the Jetson nodes get the same tag). Newer models are refused by an older Ollama (HTTP 412).
+          image: ollama/ollama:0.40.0
           ports:
             - { name: http, containerPort: 11434, protocol: TCP }
           env:

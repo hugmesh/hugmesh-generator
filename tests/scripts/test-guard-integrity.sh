@@ -701,7 +701,7 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # file on that tree (GUARD_PREMERGE=0), not computed:
 #     182 of 205 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 23 — neither new suite was ever in it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-193}"
+PREMERGE_BASELINE="${GUARD_PREMERGE:-194}"
 
 # 192 -> 193 (denominator 215 -> 216) on 2026-09-30 for #663: the kind sign-in
 # answered 500 because the BFF autoscalers' maxReplicas (6) times the unconfigured
