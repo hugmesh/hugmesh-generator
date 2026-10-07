@@ -179,6 +179,33 @@ def test_every_step_fits_the_width_and_keeps_back_and_next_on_screen(window):
                 f"{_rect_in(b, win)}")
 
 
+def _scroll_ancestors(widget):
+    out, w = [], widget.parentWidget()
+    while w is not None:
+        if isinstance(w, QtWidgets.QScrollArea):
+            out.append(w)
+        w = w.parentWidget()
+    return out
+
+
+def test_the_navigation_row_is_outside_every_scroll_area_and_each_step_has_its_own(window):
+    """The geometry pins above measure where the controls land; this one pins the
+    STRUCTURE that puts them there, so an outer scroll area around the whole page
+    (the pre-fix layout, which can leave Back/Next in view at one size and not at
+    another) cannot come back unnoticed (the skeptic's L8): Back and Next have no
+    QScrollArea ancestor at all, and every step is seen through exactly one — its
+    own, the stack's widget for that step."""
+    win, p = window, window.page
+    for b in (p.back_btn, p.next_btn):
+        assert _scroll_ancestors(b) == [], f"{b.text()!r} scrolls with a step"
+    for i in range(p.stack.count()):
+        sa = p.stack.widget(i)
+        assert isinstance(sa, QtWidgets.QScrollArea), f"step {i} is not scrolled on its own"
+        assert sa.widgetResizable(), f"step {i}'s scroll area does not resize its page"
+        assert _scroll_ancestors(sa) == [], f"step {i} sits inside another scroll area"
+        assert p.step_scroll(i) is sa
+
+
 def test_the_domains_step_shows_its_buttons_and_its_whole_help(window):
     win, p = window, window.page
     _goto(win, fleet_mod.STEP_DOMAINS)

@@ -15,7 +15,9 @@ Pinned here:
 * the GUI's Generate step and the TUI's plan render the SAME lines;
 * (the post-merge review of #645) an export directory this user CANNOT READ is told
   apart from an absent one — the plan says so instead of "not minted" — and
-  GL_ONION_HOSTNAME overrides the exported address as the driver's own card does.
+  GL_ONION_HOSTNAME overrides the exported address as the driver's own card does;
+  a set-but-MALFORMED override is a row of its own (the card would write it to
+  onion.txt as-is; the table must not call that "not minted").
 """
 import io
 import os
@@ -26,8 +28,9 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from hugmesh_studio.core.golive_domains import (                        # noqa: E402
-    NO_EXTRA_DOMAINS_NOTE, ONION_UNREADABLE_HOW, baked_domains, exposure_lines,
-    exposure_rows, onion_export_state, onion_exports, plan_rows)
+    NO_EXTRA_DOMAINS_NOTE, ONION_OVERRIDE_PROBLEM_HOW, ONION_UNREADABLE_HOW,
+    baked_domains, exposure_lines, exposure_rows, onion_export_state, onion_exports,
+    onion_override_problem, plan_rows)
 from hugmesh_studio.core.golive_driver import GoLiveDriver, GoLiveOptions  # noqa: E402
 from hugmesh_studio.tui import app as tui_app                           # noqa: E402
 
@@ -125,34 +128,104 @@ def test_a_typed_domain_that_is_not_baked_is_still_named():
 
 
 # ── unreadable is not absent (the post-merge review of #645) ──────────────────────────
+class _Deny:
+    """Make ``paths`` refuse this process the way a 0700 root-only export refuses a
+    user: with the REAL mode bits when the runner is not root, and with a
+    PermissionError raised from ``open``/``os.listdir`` for exactly those paths when
+    it is (root reads a mode-0 directory, so the bits alone would prove nothing
+    there — the pin must not quietly shrink under a root runner)."""
+
+    def __init__(self, *paths):
+        self.paths = {str(p) for p in paths}
+        self.restore = []
+        self.patched = None
+        if os.geteuid() != 0:
+            for p in paths:
+                self.restore.append((p, p.stat().st_mode & 0o777))
+                p.chmod(0)
+            return
+        import builtins
+        real_open, real_listdir = builtins.open, os.listdir
+        hit = self.paths
+
+        def _blocked(path):
+            path = str(path)
+            return path in hit or any(path.startswith(h + os.sep) for h in hit)
+
+        def fake_open(file, *a, **k):
+            if _blocked(file):
+                raise PermissionError(13, "Permission denied", str(file))
+            return real_open(file, *a, **k)
+
+        def fake_listdir(path="."):
+            if _blocked(path):
+                raise PermissionError(13, "Permission denied", str(path))
+            return real_listdir(path)
+        builtins.open, os.listdir = fake_open, fake_listdir
+        self.patched = (builtins, real_open, real_listdir)
+
+    def undo(self):
+        for p, mode in self.restore:
+            p.chmod(mode)
+        if self.patched:
+            builtins, real_open, real_listdir = self.patched
+            builtins.open, os.listdir = real_open, real_listdir
+            self.patched = None
+
+
 def test_an_unreadable_export_directory_is_told_apart_from_an_absent_one(device):
     """hugmesh-tor-reconcile keeps /var/lib/hugmesh/tor root-only (chmod 0700), so a
     Studio run as a user on a Tor node cannot read it — the NORMAL state there. It used
     to collapse into ("", []) and the plan then said "not minted on this host" about a
-    node that had minted it. The real shape (a mode-0 directory) needs a non-root
-    user; the second shape (an export path that is a file) refuses root too."""
+    node that had minted it. Three shapes: a mode-0 directory, a readable directory
+    with a root-only hostname file, and an export path that is a file."""
     tor = device / "tor"
     assert onion_export_state(str(tor)) == (ONION_A, [("games", ONION_B)], "")
     assert onion_export_state(str(device / "absent-tor")) == ("", [], "")
-    if os.geteuid() != 0:
-        tor.chmod(0)
-        try:
-            primary, per, why = onion_export_state(str(tor))
-            old_shape = onion_exports(str(tor))           # the old shape, still blind
-        finally:
-            tor.chmod(0o700)
-        assert (primary, per) == ("", []) and old_shape == ("", [])
-        assert why.startswith(str(tor)) and "Permission denied" in why, why
-        (tor / "hostname").chmod(0)                       # a readable dir, root-only file
-        try:
-            primary, per, why = onion_export_state(str(tor))
-        finally:
-            (tor / "hostname").chmod(0o644)
-        assert primary == "" and per == [("games", ONION_B)]
-        assert why.startswith(str(tor / "hostname")) and "Permission denied" in why
+    deny = _Deny(tor)
+    try:
+        primary, per, why = onion_export_state(str(tor))
+        old_shape = onion_exports(str(tor))               # the old shape, still blind
+    finally:
+        deny.undo()
+    assert (primary, per) == ("", []) and old_shape == ("", [])
+    assert why.startswith(str(tor)) and "Permission denied" in why, why
+    deny = _Deny(tor / "hostname")                        # a readable dir, root-only file
+    try:
+        primary, per, why = onion_export_state(str(tor))
+    finally:
+        deny.undo()
+    assert primary == "" and per == [("games", ONION_B)]
+    assert why.startswith(str(tor / "hostname")) and "Permission denied" in why
+    assert onion_export_state(str(tor)) == (ONION_A, [("games", ONION_B)], "")  # undone
     primary, per, why = onion_export_state(str(device / "cluster-domain"))
     assert (primary, per) == ("", []) and why.startswith(str(device / "cluster-domain"))
     assert "Not a directory" in why
+
+
+def test_a_directory_that_cannot_be_listed_still_names_itself_as_the_reason(device,
+                                                                           monkeypatch):
+    """The reason is recorded where the listing is refused too, not only where the
+    hostname read is: a directory with x-but-no-r bits lets ``hostname`` be opened by
+    name and refuses ``os.listdir`` — the primary is read, the per-domain onions are
+    NOT, and the plan must say so instead of listing none in silence (the skeptic's
+    O4: dropping the listdir branch's reason stayed green before this pin)."""
+    tor = device / "tor"
+    real_listdir = os.listdir
+
+    def refuse(path="."):
+        if str(path) == str(tor):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_listdir(path)
+    monkeypatch.setattr(os, "listdir", refuse)
+    primary, per, why = onion_export_state(str(tor))
+    assert primary == ONION_A and per == []
+    assert why == f"{tor}: Permission denied", why
+    rows = dict(exposure_rows(["mesh.example"], "mesh.example", "tor-onion", "onion",
+                              "onion (onion)", primary, per, why))
+    # a readable primary wins the onion row; the refused listing is still said
+    assert rows["Tor: this node's onion"].startswith(f"https://{ONION_A}/")
+    assert not any(k.startswith("Tor: domain slug") for k in rows)
 
 
 def test_the_plan_says_the_onion_cannot_be_read_rather_than_not_minted():
@@ -194,23 +267,60 @@ def test_gl_onion_hostname_overrides_the_export_as_the_drivers_card_does(bare_no
                                                                         monkeypatch):
     """specs/usr/lib/hugmesh/go-live-providers.sh ``_glp_onion_hostname`` prints
     GL_ONION_HOSTNAME before reading any file; the table reads the same override, so
-    the two cannot name different addresses. Only a well-formed v3 address counts — a
-    half-typed one must not reach a page as an address to share."""
+    for a well-formed address the two name the same one. Only a well-formed v3 address
+    counts as an address — a half-typed one must not reach a page as one to share."""
     monkeypatch.setenv("GL_ONION_HOSTNAME", ONION_A)
     assert onion_export_state() == (ONION_A, [], "")
     assert onion_exports() == (ONION_A, [])
+    assert onion_override_problem() == ""
     d = GoLiveDriver(GENERATOR_DIR)
     rows = dict(plan_rows(d, GoLiveOptions(provider="tor-onion")))
     assert rows["Tor: this node's onion"].startswith(f"https://{ONION_A}/")
-    monkeypatch.setenv("GL_ONION_HOSTNAME", "not-an-onion")
-    assert onion_export_state() == ("", [], "")
-    rows = dict(plan_rows(d, GoLiveOptions(provider="tor-onion")))
-    assert rows["Tor: this node's onion"].startswith("not minted on this host")
+    assert "Tor: GL_ONION_HOSTNAME" not in rows
+    monkeypatch.delenv("GL_ONION_HOSTNAME")
+    assert onion_override_problem() == ""
     # the override is the PRIMARY only: per-domain onions still come from the export
     monkeypatch.setenv("GL_ONION_HOSTNAME", ONION_A)
     monkeypatch.setenv("GL_ONION_EXPORT_DIR", str(bare_node))
     (bare_node / "games.hostname").write_text(ONION_B + "\n")
     assert onion_export_state() == (ONION_A, [("games", ONION_B)], "")
+
+
+def test_a_malformed_gl_onion_hostname_is_a_row_not_silence(bare_node, device,
+                                                            monkeypatch):
+    """The driver's card prints GL_ONION_HOSTNAME unvalidated — a malformed value goes
+    into onion.txt as the address — while the table drops it. Dropping it in SILENCE
+    told the operator "not minted ... pass GL_ONION_HOSTNAME=<addr>" about a variable
+    they had already set (the skeptic's finding on the first fix). Now the value is
+    named as a problem, under every mechanism, and stands in for "not minted"; a
+    readable export's address is still shown beside it, so the operator sees that
+    the table and the card differ."""
+    monkeypatch.setenv("GL_ONION_HOSTNAME", "not-an-onion")
+    assert onion_export_state(str(bare_node / "absent-tor")) == ("", [], "")
+    why = onion_override_problem()
+    assert why == ONION_OVERRIDE_PROBLEM_HOW.format(value="not-an-onion")
+    assert "'not-an-onion'" in why and "onion.txt" in why and "56 characters" in why
+    d = GoLiveDriver(GENERATOR_DIR)
+    monkeypatch.setenv("GL_ONION_EXPORT_DIR", str(bare_node / "absent-tor"))
+    for provider in ("tor-onion", "cloudflare-tunnel"):
+        rows = dict(plan_rows(d, GoLiveOptions(provider=provider)))
+        assert rows["Tor: GL_ONION_HOSTNAME"] == why, rows
+        assert "Tor: this node's onion" not in rows        # unknown, not "not minted"
+    # a readable export: its address AND the problem, so the difference is visible
+    monkeypatch.setenv("GL_ONION_EXPORT_DIR", str(device / "tor"))
+    rows = dict(plan_rows(d, GoLiveOptions(provider="tor-onion")))
+    assert rows["Tor: this node's onion"].startswith(f"https://{ONION_A}/")
+    assert rows["Tor: GL_ONION_HOSTNAME"] == why
+    # exposure_rows' own contract: the problem row replaces "not minted", never the
+    # unreadable row (both can be true at once and both are said)
+    unread = "/var/lib/hugmesh/tor: Permission denied"
+    rows = dict(exposure_rows(["mesh.example"], "mesh.example", "tor-onion", "onion",
+                              "onion (onion)", "", [], unread, why))
+    assert rows["Tor: this node's onion"].startswith("cannot be read by this user (")
+    assert rows["Tor: GL_ONION_HOSTNAME"] == why
+    rows = dict(exposure_rows(["mesh.example"], "mesh.example", "tor-onion", "onion",
+                              "onion (onion)", "", [], "", ""))
+    assert rows["Tor: this node's onion"].startswith("not minted on this host")
 
 
 # ── the GUI face ─────────────────────────────────────────────────────────────────────
@@ -260,6 +370,16 @@ def test_the_tui_plan_says_the_onion_cannot_be_read(device, monkeypatch):
     n = [p.id for p in d.providers()].index("tor-onion") + 1
     text = _tui_plan(n, [])
     assert "cannot be read by this user (" in text and "not minted" not in text
+
+
+def test_the_tui_plan_names_a_malformed_gl_onion_hostname(bare_node, monkeypatch):
+    """The same row reaches the text-mode plan through the one ``plan_rows`` call."""
+    monkeypatch.setenv("GL_ONION_HOSTNAME", "not-an-onion")
+    d = GoLiveDriver(GENERATOR_DIR)
+    n = [p.id for p in d.providers()].index("tor-onion") + 1
+    text = _tui_plan(n, [])
+    assert "Tor: GL_ONION_HOSTNAME" in text and "'not-an-onion'" in text
+    assert "not minted" not in text
 
 
 pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding (PySide6/PyQt6) installed")

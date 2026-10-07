@@ -38,6 +38,7 @@ STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 BUILDER_X86 = os.path.join(GENERATOR_DIR, "build-x86-host-stage4.sh")
 PROVISION = os.path.join(GENERATOR_DIR, "specs", "etc", "keys-provision", "provision.sh")
+GEN_KEYS = os.path.join(GENERATOR_DIR, "scripts", "gen-provision-keys.sh")
 
 
 def _read(path):
@@ -125,11 +126,11 @@ def _run_import(src, base, manifest):
     return p.stdout
 
 
-def _stick(tmp_path, with_certs=True):
+def _stick(tmp_path, with_certs=True, names=("cluster-ca.crt", "extra.pem")):
     base = tmp_path / "stick"
     (base / "certs").mkdir(parents=True)
     if with_certs:
-        for name in ("cluster-ca.crt", "extra.pem"):
+        for name in names:
             (base / "certs" / name).write_text(
                 "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
     return str(base)
@@ -179,6 +180,18 @@ def test_a_stick_without_certificates_imports_nothing(tmp_path):
     assert "provision_certs rc=0" in out
 
 
+def test_a_stick_whose_only_certificate_is_a_pem_still_imports_it(tmp_path):
+    """The note promises ``*.crt and *.pem``; the step's guard must see a stick that
+    carries only a .pem (a guard on ``*.crt`` alone would skip it — the skeptic's P8,
+    green before this pin)."""
+    path, _manifest_ = _manifest("provision.host.json")
+    base = _stick(tmp_path, names=("only.pem",))
+    out = _run_import(_read(PROVISION), base, path)
+    assert f"CALL cp -f {base}/certs/only.pem /usr/local/share/ca-certificates/" in out
+    assert "CALL update-ca-certificates" in out
+    assert "LOG  Imported certificates from KEYS/certs" in out
+
+
 def test_main_imports_the_certificates_for_every_manifest_right_after_the_files():
     """main() calls provision_certs once, at top level (not inside the
     `if ! ${STANDALONE_IMG}` block), right after provision_files and before
@@ -208,6 +221,24 @@ def test_the_note_names_the_mechanism_it_describes():
     for needle in ("KEYS", "certs/", "*.crt", "*.pem", "trust store",
                    "--vault-addr", "Secrets store step is skipped"):
         assert needle in CLIENT_CA_INHERITANCE_NOTE, needle
+
+
+def test_the_note_is_right_that_gen_provision_keys_tells_the_operator_to_copy_the_ca():
+    """The note says cluster-ca.crt is something gen-provision-keys.sh tells the operator
+    to copy onto the stick from the pki node — not something it mints for a client.
+    Pinned against the script: it prints that instruction (the "Add:" line and the
+    pki -> certs/cluster-ca.crt copy line) and never writes certs/cluster-ca.crt itself
+    on a client stick."""
+    assert "gen-provision-keys.sh tells you to copy there" in CLIENT_CA_INHERITANCE_NOTE
+    src = _read(GEN_KEYS)
+    assert re.search(r'^\s*echo .*Add: .*certs/cluster-ca\.crt', src, re.M), (
+        "gen-provision-keys.sh no longer tells the operator to add certs/cluster-ca.crt "
+        "— the note's clause about it is stale")
+    assert re.search(r'^\s*echo .*pki:.*certs/cluster-ca\.crt\s+->\s+certs/cluster-ca\.crt',
+                     src, re.M), "the pki -> certs/cluster-ca.crt copy instruction is gone"
+    assert not re.search(r'^\s*(cp|openssl|cat) .*certs/cluster-ca\.crt', src, re.M), (
+        "gen-provision-keys.sh now WRITES certs/cluster-ca.crt itself — the note should "
+        "say so instead of telling the operator to copy it")
 
 
 # ── 2. the decision, on both faces ───────────────────────────────────────────────────

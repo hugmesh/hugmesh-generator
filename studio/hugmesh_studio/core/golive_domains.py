@@ -34,7 +34,7 @@ import re
 __all__ = [
     "CLUSTER_DOMAIN_FILE", "DOMAINS_FILE", "ONION_EXPORT_DIR", "NO_EXTRA_DOMAINS_NOTE",
     "ONION_HOSTNAME_ENV", "baked_domains", "onion_export_state", "onion_exports",
-    "exposure_rows", "exposure_lines", "plan_rows",
+    "onion_override_problem", "exposure_rows", "exposure_lines", "plan_rows",
 ]
 
 CLUSTER_DOMAIN_FILE = "/etc/hugmesh/cluster-domain"
@@ -58,8 +58,12 @@ _ONION_RE = re.compile(r"^[a-z2-7]{56}\.onion$")
 
 #: The driver's own override of the exported hostname (specs/usr/lib/hugmesh/
 #: go-live-providers.sh ``_glp_onion_hostname``: a from-a-dev-box preview, or a node
-#: queried over the mesh). The Studio honours the same variable, so the table and the
-#: card the driver writes cannot name different addresses.
+#: queried over the mesh). The Studio honours the same variable, so for a well-formed
+#: value the table and the card the driver writes name the same address. The card
+#: prints the variable UNVALIDATED (it would write ``not-an-onion`` into onion.txt as
+#: the address); the Studio never shows a malformed value as an address — it shows it
+#: as a problem instead (:func:`onion_override_problem`), so the operator learns the
+#: two differ rather than being told to set a variable they already set.
 ONION_HOSTNAME_ENV = "GL_ONION_HOSTNAME"
 
 
@@ -158,6 +162,25 @@ def onion_exports(export_dir: str | None = None) -> tuple[str, list[tuple[str, s
     return primary, per
 
 
+#: The row when ``GL_ONION_HOSTNAME`` is set but is not a v3 .onion address.
+ONION_OVERRIDE_PROBLEM_HOW = (
+    "GL_ONION_HOSTNAME is set but is not a v3 .onion address ({value!r}; 56 characters "
+    "of a-z and 2-7, then .onion) — this table does not use it, but the driver's "
+    "tor-onion card writes it into onion.txt as-is. Unset it, or set it to the address "
+    "in /var/lib/hugmesh/tor/hostname on the node.")
+
+
+def onion_override_problem() -> str:
+    """Why ``GL_ONION_HOSTNAME`` cannot be used as an address: "" when it is unset or a
+    well-formed v3 address (then :func:`onion_export_state` uses it), else a sentence
+    naming the value. :func:`onion_export_state` drops a malformed override on
+    purpose; this is where that fact becomes a row instead of silence."""
+    value = os.environ.get(ONION_HOSTNAME_ENV, "").strip()
+    if not value or _ONION_RE.match(value):
+        return ""
+    return ONION_OVERRIDE_PROBLEM_HOW.format(value=value)
+
+
 #: The onion row when the export exists but this user cannot read it (``{why}`` is
 #: the path and the OS's reason). It must NOT read as "not minted": the export is
 #: root-only by design, and a plan run as the same user writes an onion.txt that is
@@ -173,7 +196,8 @@ ONION_UNREADABLE_HOW = (
 
 def exposure_rows(domains, chosen: str, provider_id: str, mechanism: str,
                   model_label: str, onion: str = "",
-                  domain_onions=(), onion_unreadable: str = "") -> list[tuple[str, str]]:
+                  domain_onions=(), onion_unreadable: str = "",
+                  override_problem: str = "") -> list[tuple[str, str]]:
     """``[(what, how it is reached), ...]`` — the plan for EVERY domain on the device,
     not only the one this run covers.
 
@@ -186,7 +210,11 @@ def exposure_rows(domains, chosen: str, provider_id: str, mechanism: str,
       firewall CLOSED, so they are exposure the operator already has;
     * ``onion_unreadable`` (the third item of :func:`onion_export_state`) is said
       whatever the mechanism too: the export exists, so there IS Tor state on this
-      host, and "not minted" would be a false statement about it."""
+      host, and "not minted" would be a false statement about it;
+    * ``override_problem`` (:func:`onion_override_problem`) gets a row of its own,
+      whatever the mechanism, and stands in for "not minted": a set-but-malformed
+      GL_ONION_HOSTNAME is what the driver's card will write, so the operator must be
+      told that rather than sent to set the variable again."""
     rows: list[tuple[str, str]] = []
     primary = domains[0] if domains else ""
     for name in domains:
@@ -209,10 +237,12 @@ def exposure_rows(domains, chosen: str, provider_id: str, mechanism: str,
     elif onion_unreadable:
         rows.append(("Tor: this node's onion",
                      ONION_UNREADABLE_HOW.format(why=onion_unreadable)))
-    elif mechanism == "onion":
+    elif mechanism == "onion" and not override_problem:
         rows.append(("Tor: this node's onion",
                      "not minted on this host — read /var/lib/hugmesh/tor/hostname on "
                      "the node (built with --with-tor)"))
+    if override_problem:
+        rows.append(("Tor: GL_ONION_HOSTNAME", override_problem))
     for slug, addr in domain_onions:
         rows.append((f"Tor: domain slug '{slug}'",
                      f"https://{addr}/ — its own onion, the same gateway"))
@@ -239,4 +269,4 @@ def plan_rows(driver, opts) -> list[tuple[str, str]]:
     chosen = (opts.domain or "").strip().lower() or (domains[0] if domains else "")
     onion, per, unreadable = onion_export_state()
     return exposure_rows(domains, chosen, p.id if p else "?", mechanism, label,
-                         onion, per, unreadable)
+                         onion, per, unreadable, onion_override_problem())
