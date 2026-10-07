@@ -320,8 +320,10 @@ The TLS front's certificate is the stack's own (minted for the cluster domain), 
 Browser warns once. Whether Tor Browser, which treats `.onion` as a secure context, behaves
 differently on the http port is unmeasured.
 
-**What the onion Host resolves to.** The gateway maps an unknown `Host` to the default domain,
-so the onion serves the default brand (hugmesh-gateway#38 tracks an explicit onion mapping).
+**What the onion Host resolves to.** The compose stack sets no onion tenancy mapping, so the
+gateway maps the onion `Host` to the default domain and the onion serves the default brand.
+hugmesh-gateway#38 (closed, PR #39 merged) added the mapping: with `APP_TENANCY_HOSTS_FILE` or
+`APP_TENANCY_HOSTS` configured, an unmapped `.onion` fails closed.
 
 **Known residuals.** With `ANUBIS=1 TOR=1` only the onion's `:80` is PoW-gated; `:443` reaches the
 TLS front, which forwards to the fe-gateway directly (#586). tor resolves both upstream hostnames
