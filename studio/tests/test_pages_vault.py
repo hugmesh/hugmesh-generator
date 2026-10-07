@@ -358,6 +358,8 @@ def test_the_certificate_list_starts_empty_and_commits_nothing(wiz):
     assert wiz.cfg.to_cli_args() == before
 
 
+@pytest.mark.skipif(not HAVE_CRYPTOGRAPHY,
+                    reason="subject/expiry need python-cryptography (optional dependency)")
 def test_adding_a_pem_records_its_path_and_shows_subject_and_expiry(wiz, monkeypatch):
     page = _mesh_vault(wiz)
     monkeypatch.setattr(vault_mod, "pick_ca_certificates", _picks(CA_ROOT))
