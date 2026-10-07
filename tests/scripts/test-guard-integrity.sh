@@ -712,6 +712,13 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-195}"
 #     suite added and wired                193 of 216
 # The ungated SET pin is unchanged at 23: the new suite was never in it.
 
+# 194 -> 195 (denominator 217 -> 218) on 2026-10-07 for #698 (Local AI without Claude):
+# tests/scripts/test-local-ai-no-claude.sh is the one new gated suite, named in
+# shell-suites.yml's extras job and in the GitLab orphan-guards job. MEASURED by RUNNING
+# this file on the merge with origin/main 3c684661 (GUARD_PREMERGE=0), not computed:
+#     195 of 218 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 23: the new suite was never in it.
+
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
 # wired into shell-suites.yml's alpine job. MEASURED by RUNNING this file on the
