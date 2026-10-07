@@ -1,57 +1,142 @@
-# SELinux node-policy module loading — fleet build-script wiring spec
+# SELinux node-policy module loading
 
-**Status: IMPLEMENTED.** Steps (a)-(d) below are wired, as
-`scripts/_selinux-policy-lib.sh`, into all ten `build-*-stage4.sh` (one source
-line + one call site each, immediately before `banner "Packaging stage4
-tarball"`). The gate is `tests/scripts/test-selinux-policy-install.sh`, run as
-the GATING `SLX` bucket of `tests/build-matrix/check.sh`.
+**Status: IMPLEMENTED.** The nine modules in `specs/selinux/` are compiled at build
+time, installed into every image's policy store, and loaded at first boot. The
+code is `scripts/_selinux-policy-lib.sh`, sourced by all ten `build-*-stage4.sh`
+(one source line and one call site each, immediately before
+`banner "Packaging stage4 tarball"`). The gate is
+`tests/scripts/test-selinux-policy-install.sh`, run as the GATING `SLX` bucket of
+`tests/build-matrix/check.sh`.
 
-**Images still boot PERMISSIVE.** The modules are compiled, installed and loaded;
-nothing flips a node to enforcing. `specs/etc/init.d/selinux-enforce-gate` now
-ships into every image but is INERT — it is in no runlevel and
-`/etc/conf.d/selinux-enforce-gate` says `SELINUX_ENFORCE_GATE="no"` — unless the
-operator sets `HUGMESH_SELINUX_ENFORCE_GATE=1` at build time. That is deliberate:
-the `.te` files still carry rules tagged `# INFERRED-WIDE: narrow after QEMU
-enforcing AVC pass`, which can only be narrowed against real AVC denials from a
-real protected build + boot. Going enforcing on unnarrowed rules risks images
-that boot into a broken state. Permissive + loaded modules + logged AVCs is the
-honest increment; enforcing is the follow-up.
+**Images still boot PERMISSIVE.** The modules are compiled, installed and loaded.
+Nothing flips a node to enforcing.
+`specs/etc/init.d/selinux-enforce-gate` ships into every image but is INERT: it is
+in no runlevel, and `/etc/conf.d/selinux-enforce-gate` says
+`SELINUX_ENFORCE_GATE="no"`, unless the operator sets
+`HUGMESH_SELINUX_ENFORCE_GATE=1` at build time. That is deliberate. The `.te` files
+still carry 59 rules tagged `# INFERRED-WIDE: narrow after QEMU enforcing AVC pass`,
+and these can only be narrowed against a real protected build and boot. Going
+enforcing on unnarrowed rules risks images that boot into a broken state.
+Permissive, with loaded modules and logged AVCs, is the safe increment. Enforcing
+is the follow-up (see "What is left").
 
-Line numbers below were re-located against `main` at implementation time
-(2026-07-30). The ORIGINAL version of this document cited
-`provision.sh:2214-2245` and `build-rpi5-stage4.sh:1304-1379/1531-1641`, all of
-which had drifted — re-locate rather than trust any number here.
+Line numbers drift. This page names functions and files instead. The first
+version of this document cited `provision.sh` and `build-rpi5-stage4.sh` line
+numbers that had all moved by the time it was implemented.
 
-## Two corrections this document needed before it could be executed
+## The nine modules
 
-**(A) The devel headers are not on the build host.** Step (b) below says to use
-`/usr/share/selinux/devel/Makefile` "installed by `sec-policy/selinux-base` on
-the BUILD host". `sec-policy/*` appears nowhere in `Dockerfile.build`, which
-emerges only checkpolicy, semodule-utils, m4, libselinux and policycoreutils — so
-the refpolicy devel tree is NOT on the build host. It IS merged into the target
-sysroot by `sec-policy/selinux-base`, and it is arch-independent m4/make text.
-The lib therefore compiles with the **SYSROOT's headers and the HOST's binaries**
-(`PREFIX`/`BINDIR` pinned to `/usr`, `HEADERDIR` pointed into the sysroot), which
-also means each module is compiled against the refpolicy version the image will
-actually load it into. Nothing is ever compiled on the target.
+| Module | Kind |
+|---|---|
+| `hugmesh_authkeys`, `hugmesh_device_registry_sync`, `hugmesh_domain_reconcile`, `hugmesh_node_storage`, `hugmesh_policy_sync`, `hugmesh_vpn` | **mandatory**: they call base-refpolicy interfaces only. A compile failure fails the build. |
+| `localpath_provisioner`, `otel_collector` | **conditional**: need the upstream `container` and `kubernetes` policy modules in the policy store. |
+| `hugmesh_tor` | **conditional**: needs the upstream `tor` policy module in the policy store. |
 
-**(B) Some modules cannot LOAD on every image — and the test for that was wrong
-until 2026-08-22.**
-`localpath_provisioner` and `otel_collector` call `container_domain_template` /
-`kubernetes_container` / `container_list_log_dirs` / `container_search_logs`.
-This document used to attribute all of those to `sec-policy/selinux-container`.
-That is incorrect: `kubernetes_container()` is defined in
-`services/kubernetes.if` and expands to the attribute
-`kubernetes_container_domain`, which only **`kubernetes.pp`
-(`sec-policy/selinux-kubernetes`)** defines. `hugmesh_tor` was likewise listed as
-mandatory while requiring `tor_t`/`tor_var_lib_t`/`tor_etc_t` from **`tor.pp`
-(`sec-policy/selinux-tor`)**.
+The map is `_SLX_MODULE_DEPS` in the lib. It is explicit, not derived from the
+`.te`, so a reviewer sees the whole conditional surface at once and a wrong entry
+fails at build time instead of at first boot. A conditional module whose
+dependency is absent is skipped, with the Gentoo package that would fix it
+(`sec-policy/selinux-kubernetes`, `sec-policy/selinux-tor`). It never enters the
+manifest. Merge the package into an image and the module builds, installs and is
+required automatically.
 
-The gate was also testing the wrong thing. It asked whether an *interface* was
-present in the refpolicy headers — but `sec-policy/selinux-base` installs the
-**whole** include tree, so every `services/*.if` is on disk regardless of which
-`.pp` modules were merged. Those three therefore compiled happily and then failed
-to load on a real node:
+(The header comment of `_selinux-policy-lib.sh` and `README.md` still say "seven
+mandatory, two conditional". The lib's own map and the gate's `MANDATORY` array
+say six and three.)
+
+## What the builders do
+
+All of it is in `scripts/_selinux-policy-lib.sh`, entry point
+`slx_stage_node_policy <sysroot> <shared_specs>`. It runs after the payload emerge,
+the kernel and bootloader stage, and both arms of the sysroot clean, and before
+anything is packaged. It runs on the x86 **build host**. Nothing is ever compiled
+on the target: `checkmodule`, `semodule_package` and `m4` are x86 host binaries,
+and a cross-built Pi cannot run them. This is also why `sec-policy/selinux-base`
+builds `base.pp` on the build host and defers only the *load* to first boot.
+
+1. **Skip switch.** `HUGMESH_SELINUX_MODULES=0` skips the step, loudly. The node
+   then boots permissive with only the distro base policy.
+2. **Check the sources.** Every `.fc` must have a sibling `.te`. A label-only `.fc`
+   cannot be compiled by the module Makefile and would be silently dropped, so
+   the lib fails on one. (`hugmesh_breakglass.fc` and `hugmesh_oidc_token.fc` were
+   folded into `hugmesh_authkeys.fc`, and no stub `.te` was invented.)
+3. **Find the header tree.** The lib uses the **sysroot's** refpolicy headers and
+   the **host's** binaries (`PREFIX`/`BINDIR` pinned to the host `/usr`,
+   `HEADERDIR` pointed into the sysroot). Each module is therefore compiled against
+   the refpolicy version the image will load it into. On Gentoo,
+   `sec-policy/selinux-base` installs the headers per policy type at
+   `<sysroot>/usr/share/selinux/<type>/include` (with `Makefile`, `build.conf` and
+   `support/`). `/usr/share/selinux/devel` is the Fedora layout; on Gentoo it holds
+   only `doc/policy.xml`. The refpolicy devel tree is **not** on the build host:
+   `Dockerfile.build` emerges only checkpolicy, semodule-utils, m4, libselinux and
+   policycoreutils.
+4. **Check the host tools** (`m4`, `checkmodule`, `semodule_package`). The builders'
+   `HOST_POLICY_TOOLS` gate already provisions them, and the lib re-asserts them at
+   the point of use.
+5. **Skip modules with a missing dependency**, as above.
+6. **Compile each module** to a `.pp`. The lib refuses to install anything if any
+   buildable module fails to compile.
+7. **Install all-or-nothing** into `<sysroot>/usr/share/selinux/<type>/`. It first
+   prunes `.pp` files the previous manifest named whose `.te` has since been
+   withdrawn. The prune goes strictly by the previous manifest, never by glob, so
+   the distro's `base.pp` and other `sec-policy/*` modules are untouched.
+8. **Write the manifest** `/usr/share/hugmesh/selinux-modules.list`, naming exactly
+   what this image installed. The enforce-gate's `check_modules()` reads this
+   manifest. Before the lib existed it used a hardcoded
+   `base container otel_collector localpath_provisioner` list that no image could
+   ever have satisfied.
+9. **Mark the image SELinux-built** and **ship the enforce-gate** service file and
+   conf.d switch (inert by default, as above).
+
+## What first boot does
+
+`provision_selinux()` in the protected `specs/etc/keys-provision/provision.sh` is
+the LAST provisioning step (it relabels the fully provisioned filesystem). It:
+
+- writes `/etc/selinux/config` from the KEYS manifest (`selinux.type` default
+  `mcs`, `selinux.mode` default `permissive`);
+- if the policy store is not built, loads the base policy (`semodule -s <type> -B`,
+  falling back to `semodule -i /usr/share/selinux/<type>/*.pp`);
+- runs the block delimited `BEGIN/END hugmesh node-policy load`. It installs
+  exactly the modules listed in `/usr/share/hugmesh/selinux-modules.list`, batched
+  first and then one by one if the batch fails. Then it reads the verdict back
+  from the store (`semodule -l`) into `/var/lib/keys-provision/selinux-modules.status`
+  (one `<module> loaded|failed|missing-pp` line each). Any module that is not
+  loaded records the `selinux-load-failed` marker, and the enforce-gate then
+  refuses to flip. The extra block is needed because the base-policy load above it
+  runs only when the store is unbuilt, and `semodule -B` rebuilds from the module
+  store, which does not contain the build-installed `.pp` packages until
+  `semodule -i` runs;
+- relabels with `restorecon -RF /`. It does not use `setfiles` first: on a measured
+  image `setfiles` wrote the literal context `kernel` for every path and exited 0.
+  `/.autorelabel` carries the standard request-flag semantics. Nothing on these
+  OpenRC images consumes it at boot, so `provision_selinux()` clears it after a
+  successful relabel and leaves it raised only when the relabel failed. The
+  gate's `check_relabel_clean()` then refuses on it.
+
+The enforce-gate flips a node to enforcing only if
+`check_mode_sane && check_provision_ok && check_modules && check_relabel_clean &&
+check_avc_clean` all pass, and only on a later boot.
+
+## Two corrections the original design needed
+
+**(A) The devel headers are not on the build host.** The first design said to use
+`/usr/share/selinux/devel/Makefile` "installed by `sec-policy/selinux-base` on the
+BUILD host". Neither half is true (see step 3 above). `sec-policy/*` appears
+nowhere in `Dockerfile.build`, and Gentoo does not use the Fedora `devel` layout.
+
+**(B) The module-load gate looked at the wrong thing (fixed 2026-08-22).**
+`localpath_provisioner` and `otel_collector` call `container_domain_template`,
+`kubernetes_container`, `container_list_log_dirs` and `container_search_logs`.
+`kubernetes_container()` is defined in `services/kubernetes.if` and expands to the
+attribute `kubernetes_container_domain`, which only **`kubernetes.pp`
+(`sec-policy/selinux-kubernetes`)** defines. `hugmesh_tor` requires `tor_t`,
+`tor_var_lib_t` and `tor_etc_t` from **`tor.pp` (`sec-policy/selinux-tor`)**.
+
+The old gate asked whether an *interface* was present in the refpolicy headers.
+`sec-policy/selinux-base` installs the **whole** include tree, so every
+`services/*.if` is on disk whichever `.pp` modules were merged. These three
+therefore compiled and then failed to load on a real node:
 
 ```
 FAIL hugmesh_tor            :: Failed to resolve typeattributeset ... cil:11
@@ -59,207 +144,49 @@ FAIL localpath_provisioner  :: Failed to resolve typeattributeset ... cil:20
 FAIL otel_collector         :: Failed to resolve typeattributeset ... cil:20
 ```
 
-measured by booting `hugmesh-x86-amd64-pki-test-20260814T112817Z` (issue #45).
-Because `check_modules()` requires **every** manifest module to be loaded, three
-unloadable modules meant the enforce-gate could never flip — `SELINUX_ENFORCE_GATE`
-would have refused on every boot, silently, even when switched on.
+This was measured by booting `hugmesh-x86-amd64-pki-test-20260814T112817Z`
+(issue #45). Because `check_modules()` requires **every** manifest module to be
+loaded, three unloadable modules meant the enforce-gate could never flip.
+`SELINUX_ENFORCE_GATE` would have refused on every boot, silently, even when
+switched on. The lib now gates on the **policy store** (`<store>/<dep>.pp`), not on
+headers.
 
-The lib now gates on the **policy store** (`<store>/<dep>.pp`), not on headers.
-A module whose dependency is absent is skipped with the package name that would
-fix it, and never enters the manifest — so `check_modules()` demands only modules
-that provably load. Merge `sec-policy/selinux-kubernetes` / `sec-policy/selinux-tor`
-into an image and those modules build, install and are required automatically. The other seven modules call base-refpolicy interfaces only. So the lib
-splits them: the seven are MANDATORY (a compile failure fails the build) and the
-two exemplars are CONDITIONAL (built where the container headers exist, recorded
-as skipped-WITH-REASON where they do not). Every image writes
-`/usr/share/hugmesh/selinux-modules.list` naming exactly what it installed, and
-the enforce-gate's `check_modules()` reads that manifest instead of the old
-hardcoded `base container otel_collector localpath_provisioner` list — which,
-before this change, no image could ever have satisfied.
+## Verification
 
-**Label-only `.fc` files.** `hugmesh_breakglass.fc` and `hugmesh_oidc_token.fc`
-had no `.te`, so the devel Makefile had nothing to compile them into. Per option
-(1) in step (b)'s note they were folded into `hugmesh_authkeys.fc` (the
-login-credential module) and removed; no stub `.te` was invented. The lib now
-FAILS on any `.fc` without a sibling `.te`, so this cannot silently recur.
+- `tests/scripts/test-selinux-policy-install.sh` (the `SLX` bucket) checks that
+  the six mandatory `.pp` land in the store and that the manifest matches.
+- `tests/qemu/avc-workload.sh` and `tests/qemu/avc-workout.sh` drive the modules'
+  domains in a booted guest. They cover `hugmesh_authkeys` (ssh logins, a direct
+  `hugmesh-authorized-keys-lookup`, `sshd -T`) and a `svc_probe` for each
+  reconcile agent, plus `containerd`, `kubelet` and `kubeadm init --dry-run` for the
+  `localpath_provisioner` and `otel_collector` lane.
+- `tests/qemu/assertions.sh` asserts on `selinux-modules.status`.
+- The security-load-bearing path is an SSH login on a registry-enforced node. After
+  `setenforce 1` it must produce no `hugmesh_authkeys_t` or
+  `hugmesh_device_registry_sync_t` AVC denials.
 
-## What exists today (the seams to build against)
+## What is left (deliberately not done here)
 
-1. **`SHARED_SPECS`** is defined at `build-rpi5-stage4.sh:43`
-   (`SHARED_SPECS="${SCRIPT_DIR}/specs"`) and validated to exist at
-   the `[ -d "${SHARED_SPECS}" ]` prereq check. The editable `specs/selinux/`
-   directory lives directly under it as `${SHARED_SPECS}/selinux`. It used to be
-   copied by NOTHING (`git grep 'specs/selinux' -- 'build-*.sh'` returned no
-   hits); `slx_stage_node_policy "${SYSROOT}" "${SHARED_SPECS}"` now stages it.
-
-2. **Host SELinux policy build tools are already gated** at
-   `build-rpi5-stage4.sh:3013-3045`: the block ensures `checkpolicy`,
-   `checkmodule`, `semodule_package` (sys-apps/semodule-utils), and `m4` are
-   present on the x86 **BUILD host** (emerged natively, NOT into the aarch64
-   sysroot), exiting non-zero if they cannot be provided
-   (the `HOST_POLICY_TOOLS` block). These are exactly the tools the refpolicy
-   module-build Makefile needs — so the per-module `.pp` compile below has its
-   prerequisites **already guaranteed at that point in the script.**
-
-3. **The node binaries the modules label are copied in** the arch-agnostic
-   `${SHARED_SPECS}` block ("shared with the x86 build -> SHARED_SPECS"):
-   `hugmesh-authorized-keys-lookup`, `hugmesh-device-registry-sync`,
-   `hugmesh-vpn-runner` and friends. The modules' `.fc` files label these same
-   paths, and the `.pp` install (step c) lands well before the first-boot
-   relabel, so the labels and the modules that declare their types ship
-   together.
-
-4. **`provision_selinux()`** lives in the PROTECTED
-   `specs/etc/keys-provision/provision.sh:2544-2575`. At first boot it:
-   - writes `/etc/selinux/config` (`SELINUXTYPE=mcs`, default permissive);
-   - if the policy store is unbuilt, runs
-     `semodule -s "${type}" -B` **or** falls back to
-     `semodule -s "${type}" -i /usr/share/selinux/"${type}"/*.pp`
-     (**`provision.sh:2562-2564`**) — i.e. it loads **every `*.pp` already
-     present under `${SYSROOT}/usr/share/selinux/${type}/`**;
-   - relabels the filesystem (`setfiles` / `restorecon -RF /`,
-     `provision.sh:2566-2572`) which applies all `.fc` file contexts;
-   - is the LAST provisioning step (`provision.sh:2791`).
-
-   **The implication: if the fleet installs the compiled `.pp` files into
-   `${SYSROOT}/usr/share/selinux/${type}/` at build time, `provision_selinux()`
-   already loads them with the EXISTING `semodule -i .../*.pp` line — no change
-   to provision.sh is needed.** The wiring is entirely in the build script.
-
-## What the builders now do (steps (a)-(d), as implemented)
-
-All of it lives in `scripts/_selinux-policy-lib.sh`; each builder carries one
-sentinelled source line and one sentinelled call site. The call site sits
-immediately before `banner "Packaging stage4 tarball"` — the one late-stage
-banner all ten builders share — which is AFTER the host-policy-tools gate
-(`build-rpi5-stage4.sh:3045`, "Host SELinux policy build tools present …"), AFTER
-the payload emerge, AFTER the kernel/bootloader stage and AFTER both arms of the
-sysroot-clean if/else, and BEFORE anything is packaged or imaged. The steps below
-are the original spec text; where the implementation had to diverge, see the two
-corrections at the top of this document.
-
-### (a) Copy `SHARED_SPECS/selinux` into the build
-
-The modules are arch-agnostic (host-process policy), so copy them once, like the
-other `${SHARED_SPECS}` assets:
-
-```sh
-# Stage the editable node-policy modules into a build scratch dir.
-SELINUX_SRC="${SHARED_SPECS}/selinux"
-SELINUX_BUILD="$(mktemp -d)"
-cp "${SELINUX_SRC}"/*.te "${SELINUX_SRC}"/*.fc "${SELINUX_BUILD}/"
-```
-
-### (b) Compile each module to a `.pp` over `specs/selinux` on the BUILD host
-
-Use the refpolicy devel Makefile, which is installed by `sec-policy/selinux-base`
-on the BUILD host. The tools it invokes (`checkmodule`, `semodule_package`, `m4`)
-are the SAME ones already gated at `build-rpi5-stage4.sh:3016-3021` — so this
-step's prerequisites are guaranteed by the existing checks. One `make` per
-module name (the Makefile derives `<name>.pp` from `<name>.te`/`<name>.fc`):
-
-```sh
-SELINUX_DEVEL_MK=/usr/share/selinux/devel/Makefile   # shipped by selinux-base on the build host
-for te in "${SELINUX_BUILD}"/*.te; do
-    name="$(basename "${te}" .te)"
-    make -C "${SELINUX_BUILD}" -f "${SELINUX_DEVEL_MK}" "${name}.pp" \
-        || { err "SELinux module ${name}.pp failed to compile"; exit 1; }
-done
-```
-
-Notes:
-- The label-only modules that ship **`.fc` with no `.te`**
-  (`hugmesh_breakglass`, `hugmesh_oidc_token`) have nothing for the devel
-  Makefile to compile into a standalone `.pp`. The fleet has two clean options:
-  (1) fold their `.fc` lines into a sibling module's `.fc` that DOES have a `.te`
-  (e.g. add the break-glass line to `hugmesh_authkeys.fc`, the oidc-token
-  line to the future desktop-session module), OR (2) add a one-line stub `.te`
-  (`policy_module(<name>, 1.0.0)` + a `require {}` of the referenced base type:
-  `ssh_home_t` / `user_runtime_t`) so the Makefile emits a `.pp` that carries the
-  file-context. Option (1) matches how `hugmesh_breakglass.fc` already
-  documents "no `.te` domain"; pick it unless a standalone module is wanted.
-- Build the devel Makefile, NOT `emake base` — the base policy is already built
-  by `sec-policy/selinux-base` (see `build-rpi5-stage4.sh:2976-2985`). These are
-  **add-on modules**, compiled with the SAME host toolchain.
-
-### (c) Install the `.pp` into the sysroot store so `provision_selinux()` finds them
-
-`provision_selinux()` loads `/usr/share/selinux/${type}/*.pp`
-(`provision.sh:2563`). Install each compiled `.pp` into the SYSROOT under that
-exact path (`${type}` is `mcs`):
-
-```sh
-SELINUX_TYPE=mcs
-install -d "${SYSROOT}/usr/share/selinux/${SELINUX_TYPE}"
-install -m 0644 "${SELINUX_BUILD}"/*.pp \
-    "${SYSROOT}/usr/share/selinux/${SELINUX_TYPE}/"
-rm -rf "${SELINUX_BUILD}"
-```
-
-No change to `provision.sh` is required — the existing
-`semodule -s "${type}" -i /usr/share/selinux/"${type}"/*.pp` at
-`provision.sh:2563` then loads them at first boot, and the `setfiles /
-restorecon -RF /` at `provision.sh:2566-2572` applies the `.fc` contexts.
-(`/.autorelabel` carries the standard request-flag semantics: nothing on these
-OpenRC images consumes it at boot, so `provision_selinux()` — which performs
-the relabel itself — CLEARS it after a successful relabel and only leaves it
-raised when the relabel failed, which `selinux-enforce-gate`'s
-`check_relabel_clean()` then refuses on. An earlier revision touched the flag
-unconditionally AFTER its own relabel, so the gate could never pass.)
-
-### (d) Cross-built Pi caveat — build the `.pp` on the BUILD host, not first-boot
-
-On the cross-built Pi (`build-rpi5-stage4.sh`) the aarch64 **target** may not
-carry the refpolicy **devel** headers (`/usr/share/selinux/devel/`) at all — and
-even if it did, `checkmodule`/`semodule_package` are x86 build-host binaries that
-cannot run on the Pi. This is the SAME reason `build-rpi5-stage4.sh:2976-2985`
-builds `base.pp` on the BUILD host and defers only the *load* to first boot.
-
-Therefore steps (b)+(c) MUST run on the x86 BUILD host and ship the compiled
-`.pp` artifacts INTO the image; first boot only does `semodule -i` of the
-already-built `.pp` (which needs only target `semodule`, already gated by
-`provision_selinux()` at `provision.sh:2546`). Do **not** attempt
-`make -f .../devel/Makefile` on the target. (`build-x86-host-stage4.sh` is the
-native case where it could compile first-boot, but compile-at-build is the
-uniform, correct path for all three images.)
-
-## Verification the fleet should add
-
-- After (b), assert each expected `.pp` exists
-  (`hugmesh_authkeys.pp`, `hugmesh_device_registry_sync.pp`,
-  `hugmesh_vpn.pp`, `hugmesh_node_storage.pp`, `hugmesh_policy_sync.pp`,
-  plus whatever the label-only modules resolve to per the (b) note); fail the
-  build if any is missing (mirrors the `base.pp` failure mode the existing block
-  already guards).
-- In the QEMU enforcing verification (`tests/qemu/`, PROTECTED), after
-  `setenforce 1`, drive an SSH login on a registry-enforced node and confirm NO
-  `hugmesh_authkeys_t` / `hugmesh_device_registry_sync_t` AVC denials —
-  this is the security-load-bearing path. Collect the permissive-pass AVCs to
-  narrow every rule tagged `# INFERRED-WIDE: narrow after QEMU enforcing AVC
-  pass` in the `.te` files.
-
-## What is left (the follow-up this change deliberately does NOT do)
-
-1. **Narrow the `# INFERRED-WIDE` rules — but NOT from AVC denials.**
-   This step used to read "collect the permissive-pass AVCs and narrow every rule
-   so tagged". **That cannot work**, and the distinction matters:
-
-   * an AVC **denial** is raised for something the policy does **not** allow — it
+1. **Narrow the `# INFERRED-WIDE` rules, but NOT from AVC denials.** An earlier
+   version of this step said to collect the permissive-pass AVCs and narrow every
+   rule so tagged. That cannot work:
+   - an AVC **denial** is raised for something the policy does **not** allow, so it
      tells you what to **ADD**;
-   * narrowing an over-broad `allow` needs what was actually **EXERCISED**, which
+   - narrowing an over-broad `allow` needs what was actually **exercised**, which
      is an **`auditallow`** record (`type=AVC ... granted=`).
 
    Measured: with six modules loaded and the full workload driven in permissive
-   mode, the run produced **zero denials** — correctly, because a deliberately
-   wide rule denies nothing. Denial-collection can never narrow it.
+   mode, the run produced **zero denials**, correctly, because a deliberately wide
+   rule denies nothing. Denial collection can never narrow it.
 
    The instrument is `scripts/selinux-make-auditallow.sh`. It converts each
-   compiled `.pp` back to CIL — which is **post-expansion**, so it captures the
-   28 tagged lines that are interface calls (`corenet_tcp_connect_all_ports(...)`)
-   and not just the 12 that are raw `allow` statements — and rewrites every
+   compiled `.pp` back to CIL, which is **post-expansion**. It therefore captures
+   the 28 tagged lines that are interface calls (`corenet_tcp_connect_all_ports(...)`)
+   and not only the 12 that are raw `allow` statements. It rewrites every
    `(allow <hugmesh_*> ...)` into `(auditallow ...)`. `hugmesh_vpn` alone expands
-   from 19 tagged lines to 217 auditallow rules. The emitted module grants
-   nothing and changes no decision; it makes granted accesses visible:
+   from 19 tagged lines to 224 rules (the figure in the script header; this page
+   used to say 217). The emitted module grants nothing and changes no decision; it
+   makes granted accesses visible:
 
    ```
    scripts/selinux-make-auditallow.sh --pp-tool <sysroot>/usr/libexec/selinux/hll/pp \
@@ -269,14 +196,13 @@ uniform, correct path for all three images.)
    ausearch -m AVC | grep granted=   # exactly what each wide rule really used
    ```
 
-   Two traps, each of which silently produces a clean-looking result:
-   * AVCs land in **`/var/log/audit/audit.log`** (auditd runs), **not dmesg**.
-   * **`runcon` is not installed** on these images, so the obvious "force a denial
+   Two traps each produce a clean-looking result by accident:
+   - AVCs land in **`/var/log/audit/audit.log`** (auditd runs), **not dmesg**.
+   - **`runcon` is not installed** on these images, so the obvious "force a denial
      to prove audit works" probe does nothing and reads as success.
 2. **Then, and only then, enable the gate.** `HUGMESH_SELINUX_ENFORCE_GATE=1`
-   builds an image whose gate may flip to enforcing — and only on a later boot,
-   after `check_mode_sane && check_modules && check_relabel_clean &&
-   check_avc_clean` all pass.
+   builds an image whose gate may flip to enforcing, on a later boot, after the
+   five checks above all pass.
 3. **QEMU enforcing verification** (`tests/qemu/`): after `setenforce 1`, drive an
-   SSH login on a registry-enforced node and confirm no `hugmesh_authkeys_t` /
-   `hugmesh_device_registry_sync_t` AVC denials — the security-load-bearing path.
+   SSH login on a registry-enforced node and confirm no `hugmesh_authkeys_t` or
+   `hugmesh_device_registry_sync_t` AVC denials.
