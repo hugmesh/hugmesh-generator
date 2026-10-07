@@ -75,7 +75,7 @@ UIs:
 | Provider registry | `specs/usr/lib/hugmesh/go-live-providers.sh` | Sourceable data + per-provider emit functions. The driver never hard-codes a provider — it iterates the registry. |
 | CLI front-end | `specs/usr/sbin/hugmesh-go-live-cli` | Thin guided wizard; carries no logic, only calls the driver. Pass-through mode for scripting. |
 | Console menu | `specs/usr/sbin/hugmesh-go-live-menu` | Thin ncurses/whiptail console face (plain-numbered fallback when there is no TTY/whiptail). Prompts secrets masked and hands them to the driver only via a 0600 `--token-file`. Pure subcommand dispatch — no wizard logic. |
-| Studio GUI | `studio/hugmesh_studio/gui/pages/golive.py` | The 7-page desktop wizard, reachable from the tray's **"Go Live…"** entry or `python -m hugmesh_studio --go-live`. Its `core/golive_driver.py` shells out to the same driver subcommands. |
+| Studio GUI | `studio/hugmesh_studio/gui/pages/golive.py` | The 7-page desktop wizard, reachable from the tray's **"Go Live…"** entry or `python -m hugmesh_studio --go-live`. Its `studio/hugmesh_studio/core/golive_driver.py` shells out to the same driver subcommands. |
 | Dev preview | `make go-live` / `make go-live-menu` | Repo-side dry-run of the driver's `plan` (and the console menu), sandboxed away from the host `/etc` via `GL_ETC_HUGMESH`. |
 
 ---
@@ -268,7 +268,7 @@ root path.
 These are **done** and no longer deferred:
 
 - ✅ **ncurses console front-end** — `specs/usr/sbin/hugmesh-go-live-menu`.
-- ✅ **Studio GUI wizard** — `gui/pages/golive.py`, on this driver.
+- ✅ **Studio GUI wizard** — `studio/hugmesh_studio/gui/pages/golive.py`, on this driver.
 - ✅ **All six provider emits** — `byo-domain`, `cloudflare-tunnel`,
   DuckDNS/Cloudflare-DDNS, `tailscale-funnel`, `router-portforward`, `tor-onion`.
 - ✅ **On-image baking** — the two go-live server builders (`build-rpi5-stage4.sh`,
