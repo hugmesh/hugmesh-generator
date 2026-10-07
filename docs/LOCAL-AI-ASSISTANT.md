@@ -461,6 +461,13 @@ ignored), `HUGMESH_REPOS_ROOT`, `LOCAL_AI_ORG` (default `hugmesh`), `TODO_TIMEOU
 What is deliberately **not** here: the prototype's limit-watcher (it reads another
 program's session files) and the CI-sweep triage. The dashboard shows local work only.
 
+**An older personal copy of these scripts** (a `local-runbook` folder kept outside the
+repository, with its queue in `~/.cache/hugmesh-local-queue` and its drafts in
+`~/.cache/hugmesh-local-ai`) uses a different layout. `scripts/local-ai.sh` does not
+read it: a `watch` started from the repository script shows only work queued with the
+repository script, and an old worker keeps running its own jobs unseen by it. Finish or
+stop the old queue first, then queue again with `scripts/local-ai.sh todo`.
+
 The helper files are `draft.sh` and `draft.py` (one draft), `worker.sh` (the queue
 loop), `issues.py` (reads `gh` output: which issues to pick, how to print one) and
 `agent-explicit.sh` (the single explicit-agent door above), all in `scripts/local-ai/`.

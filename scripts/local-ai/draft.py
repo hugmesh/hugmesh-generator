@@ -38,6 +38,9 @@ MAX_ISSUE_CHARS = 6000
 PATH_RE = re.compile(
     r"[\w./-]+\.(?:sh|py|java|ts|tsx|js|md|yml|yaml|json|html|scss|css|xml|properties|toml|cfg|conf)\b"
     r"|\b(?:Makefile|Dockerfile[\w.-]*)\b")
+# Any path with a directory in it, whatever its ending: the issues name files such as
+# specs/usr/sbin/hugmesh-firewall-reconcile (no extension) and specs/selinux/hugmesh_tor.te.
+SLASH_RE = re.compile(r"(?<![\w/.:-])[\w.-]+(?:/[\w.-]+)+")
 TICK_RE = re.compile(r"`([^`\n]{3,60})`")
 IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{4,}(?:[-.][A-Za-z0-9_]+)*\b")
 
@@ -95,8 +98,11 @@ def tokens(issue):
 def pick_files(work, issue):
     tracked = git(work, "ls-files").stdout.splitlines()
     score = {}
-    for m in PATH_RE.finditer(issue):
-        want = m.group(0).lstrip("./")
+    named = [m.group(0) for m in PATH_RE.finditer(issue)]
+    named += [m.group(0).rstrip(".") for m in SLASH_RE.finditer(issue)]
+    for want in dict.fromkeys(w.lstrip("./") for w in named):
+        if not want:
+            continue
         for f in tracked:
             if f == want or f.endswith("/" + want):
                 score[f] = score.get(f, 0.0) + 10.0

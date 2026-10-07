@@ -395,6 +395,27 @@ if [ -z "${names}" ]; then bad "the draft step did not log the environment names
 elif has "${names}" 'TOKEN|SOME_OTHER'; then bad "the draft step inherited a variable outside the allowlist: ${names}"
 else ok "the draft step was handed only: ${names#*names: }"; fi
 
+echo "-- 3c) the files the model is shown: a path the issue names is found, ending or not --"
+PICK="${WORK}/picker"; mkdir -p "${PICK}/specs/usr/sbin" "${PICK}/specs/selinux" "${PICK}/tests/qemu" "${PICK}/docs"
+printf 'a\n' >"${PICK}/specs/usr/sbin/hugmesh-firewall-reconcile"
+printf 'b\n' >"${PICK}/specs/selinux/hugmesh_tor.te"
+printf 'c\n' >"${PICK}/tests/qemu/avc-workload.sh"
+printf 'restart tor restart tor\n' >"${PICK}/docs/OTHER.md"
+git -C "${PICK}" init -q . && git -C "${PICK}" add -A >/dev/null
+picked="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${GEN}/scripts/local-ai" "${PICK}" <<'PYEOF'
+import sys
+sys.path.insert(0, sys.argv[1])
+import draft
+issue = ("Three places say restart: `specs/usr/sbin/hugmesh-firewall-reconcile:13`, "
+         "tests/qemu/avc-workload.sh:31 and specs/selinux/hugmesh_tor.te (authored).")
+print("\n".join(draft.pick_files(sys.argv[2], issue)))
+PYEOF
+)"
+for want in specs/usr/sbin/hugmesh-firewall-reconcile specs/selinux/hugmesh_tor.te tests/qemu/avc-workload.sh; do
+    if has "${picked}" "(^|[[:space:]])${want}([[:space:]]|\$)"; then ok "the picker found ${want}"
+    else bad "the picker missed ${want} (picked: $(tr '\n' ' ' <<<"${picked}"))"; fi
+done
+
 echo "-- 4) a coding agent (AGENT=opencode) gets only the allowlisted environment --"
 rm -rf "${LA_STATE}"; rm -f "${LOG}/ollama.argv"
 la env AGENT=opencode GH_TOKEN=secret-a GITHUB_TOKEN=secret-b REGISTRY_TOKEN=secret-c SOME_OTHER=keep-out \
