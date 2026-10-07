@@ -170,9 +170,9 @@ notice a stale `.m2-registry.env` (or a missing pinned artifact) and re-run
 ## Windows (Docker Desktop) — `scripts/stack-up.ps1`
 
 `make` and `bash` are usually absent on Windows, so a **PowerShell** wrapper does
-the same clone → build → run. It needs **only Docker Desktop**: cloning runs inside
+the same clone → build → run. It needs **only Docker Desktop**. Cloning runs inside
 a throwaway `alpine/git` container (the "bootstrap" path), so you need no host git
-either — just pass a token for private repos.
+either. Pass a token for private repos.
 
 ```powershell
 # From the repo root, in PowerShell:
@@ -182,18 +182,18 @@ pwsh -File scripts\stack-up.ps1 -Env prod -CasdoorIssuer https://id.hugmesh.net
 pwsh -File scripts\stack-up.ps1 -Down                          # tear down (-v)
 ```
 
-On the VPN with public mirrors you can skip the token and point at the mirror:
+On the VPN you can skip the token and point at the mirror:
 
 ```powershell
 pwsh -File scripts\stack-up.ps1 -GitBase https://gitlab.hugmesh.net/hugmesh
 ```
 
-If you DO have git on Windows and prefer it over the container clone, add
+If you have git on Windows and prefer it to the container clone, add
 `-UseHostGit`.
 
 ### One-liner without the script (Docker-only)
 
-A Windows user with *only* Docker (no PowerShell script handy) can clone via the
+With *only* Docker (no PowerShell script), clone via the
 same bootstrap container, then drive compose directly. From the repo root
 (`cmd`/`pwsh`):
 
@@ -212,13 +212,13 @@ docker compose -f tests\stack\compose.local.yaml up -d
 ### Windows gotchas (handled)
 
 - **CRLF:** `.gitattributes` forces **LF** on all `*.sh` / `*.yaml` / `*.conf` /
-  `Dockerfile*` so the shell scripts and gateway route configs work inside the
+  `Dockerfile*`, so the shell scripts and gateway route configs work inside the
   Linux containers even on a Windows checkout. PowerShell stays CRLF.
 - **Path separators:** compose `build.context` paths are **relative** posix paths
-  (`../.stack-src/<repo>`); `STACK_SRC` is passed as `../.stack-src` so the engine
+  (`../.stack-src/<repo>`), and `STACK_SRC` is passed as `../.stack-src`, so the engine
   resolves them identically on both OSes. Bind mounts use compose-relative paths.
-- **Credential passing:** the GitHub token is passed as an **env var** into the
-  bootstrap container (never baked into an image or committed).
+- **Credential passing:** the GitHub token goes into the bootstrap container as an
+  **env var**. It is never baked into an image or committed.
 
 ---
 
@@ -233,13 +233,13 @@ selects the identity issuer the whole stack trusts:
 | creds | **dev placeholders** (committed: `gateway`/`federation`/`adminbff` DB passwords, dev Casdoor client ids) | **real** — sourced from **your env / the keys USB**, NOT committed |
 | domain-ish env (host MATRIX_URL/MASTODON_URL) | `http://localhost:…` | real `https://…` domain |
 
-**Prod creds source:** `make stack-up ENV=prod` only flips the issuer URL. Real
-Casdoor client secrets, DB passwords, and the social-tier secrets are **your
-responsibility to inject** at run time (e.g. `CASDOOR_ISSUER=…`, and edit
+**Prod creds source:** `make stack-up ENV=prod` only flips the issuer URL. You
+must inject the real Casdoor client secrets, DB passwords and social-tier secrets
+at run time (e.g. `CASDOOR_ISSUER=…`, and edit
 `tests/stack/.mastodon.env` / a Casdoor app for the fragment-sync + actions
 machine accounts). Production proper is the k8s cluster (Vault + External Secrets,
-`scripts/gen-cluster-secrets.sh`); this compose stack is a **dev convenience** and
-deliberately ships only dev placeholders so nothing secret is committed.
+`scripts/gen-cluster-secrets.sh`). This compose stack is a **dev convenience** and
+ships only dev placeholders, so nothing secret is committed.
 
 ---
 
@@ -258,10 +258,10 @@ deliberately ships only dev placeholders so nothing secret is committed.
 | (not published) | Cassandra (gateway revocation list + URL registry) — reachable only inside the compose network as `cassandra:9042` |
 
 The fe-gateway routes (`tests/stack/gateway-routes/fe/`) fan out from the front
-door to `/admin/**`, `/login/**`, `/social/**` (matrix/mastodon/forum),
+door to `/admin/**`, `/login/**`, `/social/**` (matrix/mastodon/forum/phpbb),
 `/mod/**`, `/user/**`, `/api-docs/**`, `/wiki/**`, `/owncast/**`, `/tube/**`,
-`/character-studio/**`, `/bff/**` (each of admin/mod/user/forum/wiki/owncast/tube-bff,
-then the admin-bff catch-all), `/_fragments/**` (fragment fleet), and `/be/**`
+`/character-studio/**`, `/character-forge/**`, `/bff/**` (each of
+admin/mod/user/forum/wiki/owncast/tube/character-forge-bff, then the admin-bff catch-all), `/_fragments/**` (fragment fleet), and `/be/**`
 (the be-gateway → federation + actions). Of the platform services, only the fe-gateway
 (and its `https-front` terminator) is published to the host; everything else is
 internal compose DNS, exactly as in the cluster only the gateways are
@@ -272,8 +272,8 @@ ingress-exposed. Casdoor and the social tier publish ports as dev conveniences
 
 ## Alternative social backends — `PHPBB=1` / `AKKOMA=1`
 
-Two third-party servers are available as **options** alongside the first-party
-stack, each behind its own compose profile in
+Two third-party servers are **options** alongside the first-party
+stack. Each sits behind its own compose profile in
 `tests/stack/compose.alt-social.yaml`. Both are **DEFAULT-OFF** (the
 tube/owncast precedent) and independent of `SOCIAL`, so a plain `make stack-up`
 is unaffected:
@@ -283,16 +283,16 @@ is unaffected:
 | `PHPBB=1` | phpBB 3.3 + the `hugmesh/forumapi` extension | the first-party `hugmesh-forum-ui` + `hugmesh-forum-bff-api` | 8081, **and `/social/phpbb/` at the front door** |
 | `AKKOMA=1` | Akkoma v3.20.0 | Mastodon (Akkoma is a Pleroma fork with the same ActivityPub + Mastodon-client API surface) | 4001 |
 
-phpBB is also mounted on the fe-gateway at **`/social/phpbb/`**, a sibling of the
-first-party `/social/forum/`, so the two are comparable at the same front door.
-It is auth-gated identically (all three of `/social/forum/`, `/social/phpbb/`
-and `/social/mastodon/` return 401 unauthenticated). Its route uses
+The fe-gateway also mounts phpBB at **`/social/phpbb/`**, a sibling of the
+first-party `/social/forum/`, so you can compare the two at the same front door.
+Auth gating is identical: `/social/forum/`, `/social/phpbb/`
+and `/social/mastodon/` all return 401 unauthenticated. The phpBB route uses
 `StripPrefix=2`, like the other `/social/*` routes: the image installs phpBB with
 `script_path=/`, so the upstream expects paths rooted at `/`.
 
-Akkoma is reachable on its published port only; it is not wired into the
-gateway, because unlike Mastodon it has no platform OAuth/BFF integration to
-route to. Its Mastodon-compatible API answers directly, e.g.
+Akkoma is reachable on its published port only. The gateway does not route to it,
+because unlike Mastodon it has no platform OAuth/BFF integration. Its
+Mastodon-compatible API answers directly, e.g.
 `curl http://localhost:4001/api/v1/instance`.
 
 ```bash
@@ -301,7 +301,7 @@ make stack-up SOCIAL=1 AKKOMA=1       # Mastodon AND Akkoma together
 make stack-up SOCIAL=1 PHPBB=1 AKKOMA=1
 ```
 
-Each gets its **own Postgres** rather than sharing `mastodon-db`: Akkoma needs
+Each gets its **own Postgres** rather than sharing `mastodon-db`. Akkoma needs
 database-level extensions and phpBB owns its schema outright, so sharing would
 couple two otherwise independent teardowns.
 
@@ -318,8 +318,8 @@ re-read against `hugmesh-forum-api` and `compose.alt-social.yaml` on 2026-10-07.
 
 - **phpBB** — there is no official image on Docker Hub or ghcr;
   `github.com/phpbb/docker` is CI scaffolding pinned to PHP 5.4–7.0, and
-  `bitnami/phpbb` 404s. The stack therefore builds
-  `${STACK_SRC}/hugmesh-forum-api`, which is the phpBB image the cluster deploys
+  `bitnami/phpbb` 404s. The stack builds
+  `${STACK_SRC}/hugmesh-forum-api` instead, the phpBB image the cluster deploys
   (`specs/cluster/manifests/forum/phpbb.yaml`): official phpBB 3.3 plus the
   `hugmesh/forumapi` headless extension. The extension matters. phpBB ships no
   REST API, and `hugmesh-forum-bff-api` can talk to nothing else; a vanilla
