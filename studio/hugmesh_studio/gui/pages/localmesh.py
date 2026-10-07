@@ -2337,7 +2337,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self._tick.stop()          # unconditionally: an idle page must own no clock
         self._settle_run(ok)
         self._refresh_status()
-        self._refresh_code_folders()    # the verb may have created the checkouts
+        try:
+            self._refresh_code_folders()    # the verb may have created the checkouts
+        except Exception:                   # noqa: BLE001 — never skip the re-read below
+            pass
         # A verb is the one thing that CHANGES whether a mesh is up (start, stop,
         # clean), so re-read the real state rather than inferring it from the
         # verb's exit code — a partially-failed bring-up leaves containers behind

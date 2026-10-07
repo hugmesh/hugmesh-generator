@@ -24,6 +24,10 @@ Two rules this widget exists to keep (the lessons behind #647 and #656):
 
 ``opener`` is injectable (``path -> OpenResult``) so a test can click every button
 and assert exactly which folder was handed over, with no subprocess and no desktop.
+Without one, the real openers run and ``host`` (a :class:`core.open_path.Host`)
+stands in for the machine; "Open all" then goes through ``open_folders``, which
+spends ONE waiting budget on all the folders of a domain — the click runs on the
+window's own thread, and an opener that is the file manager never exits.
 """
 from __future__ import annotations
 
@@ -31,7 +35,7 @@ from typing import Callable
 
 from ..qt import Qt, QtCore, QtGui, QtWidgets
 from ...core import code_folders
-from ...core.open_path import OpenResult, open_folder
+from ...core.open_path import OpenResult, open_folder, open_folders
 
 __all__ = ["CodeFoldersWidget", "ElidedLabel", "default_opener"]
 
@@ -42,8 +46,8 @@ def _qt_last_resort(path: str) -> bool:
     return bool(QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path)))
 
 
-def default_opener(path: str) -> OpenResult:
-    return open_folder(path, last_resort=_qt_last_resort)
+def default_opener(path: str, host=None) -> OpenResult:
+    return open_folder(path, last_resort=_qt_last_resort, host=host)
 
 
 class ElidedLabel(QtWidgets.QLabel):
@@ -114,10 +118,12 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         return f"{app.name}  [{', '.join(slugs)}]" if slugs else app.name
 
     def __init__(self, generator_dir: str,
-                 opener: "Callable[[str], OpenResult] | None" = None, parent=None):
+                 opener: "Callable[[str], OpenResult] | None" = None, parent=None,
+                 host=None):
         super().__init__("Code folders — the git checkout behind each app", parent)
         self.generator_dir = generator_dir
-        self._opener = opener or default_opener
+        self._opener = opener
+        self._host = host
         self.map: "code_folders.CodeFolderMap | None" = None
         self.open_buttons: dict[tuple[str, str], QtWidgets.QPushButton] = {}
         self.open_all_buttons: dict[str, QtWidgets.QPushButton] = {}
@@ -140,6 +146,13 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         self.open_root_btn.clicked.connect(self._open_root)
         root_row.addWidget(self.open_root_btn)
         lay.addLayout(root_row)
+        # WHY the root is missing, wrapped: in the one-line path above the sentence
+        # would be elided in the middle at the smallest window ("the build does not
+        # expand ‘~’" is the part the operator needs).
+        self.root_note = QtWidgets.QLabel("")
+        self.root_note.setWordWrap(True)
+        self.root_note.setVisible(False)
+        lay.addWidget(_grey(self.root_note))
 
         self.notice = QtWidgets.QLabel("")
         self.notice.setWordWrap(True)
@@ -167,8 +180,31 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         lay.addLayout(copy_row)
 
     # ── wiring ──────────────────────────────────────────────────────────────────
-    def set_opener(self, opener: "Callable[[str], OpenResult]") -> None:
+    def set_opener(self, opener: "Callable[[str], OpenResult] | None") -> None:
+        """Hand every open to ``opener`` (one call per folder, Open all included);
+        None goes back to the real openers."""
         self._opener = opener
+
+    def set_host(self, host) -> None:
+        """Run the REAL openers against ``host`` (a test's stand-in machine)."""
+        self._opener = None
+        self._host = host
+
+    def _open_paths(self, paths: "list[str]") -> "list[OpenResult]":
+        if self._opener is not None:
+            return [self._opener(p) for p in paths]
+        if len(paths) == 1:
+            return [default_opener(paths[0], self._host)]
+        return open_folders(paths, last_resort=_qt_last_resort, host=self._host)
+
+    def _show_working(self, count: int) -> None:
+        """An opener can take a few seconds, and this runs on the window's thread:
+        say so first, with a synchronous repaint (no event loop re-entry, so a second
+        click cannot sneak in)."""
+        self.result_note.setStyleSheet("")
+        self.result_note.setText("Opening…" if count == 1 else f"Opening {count} folders…")
+        self.result_note.setVisible(True)
+        self.result_note.repaint()
 
     def refresh(self, source_mode: str, source_dir: str, domains,
                 own_name: str = "") -> "code_folders.CodeFolderMap":
@@ -200,8 +236,10 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
         self.open_all_buttons.clear()
         self.rows.clear()
 
-        self.root_path.setText(m.root if m.root_exists else
-                               (f"{m.root} — {m.root_reason}" if m.root else m.root_reason))
+        self.root_path.setText(m.root or m.root_reason)
+        missing_root = bool(m.root) and not m.root_exists
+        self.root_note.setText(m.root_reason if missing_root else "")
+        self.root_note.setVisible(missing_root)
         self.open_root_btn.setEnabled(m.root_exists)
         self.open_root_btn.setToolTip(m.root if m.root_exists else m.root_reason)
         self.notice.setText(m.notice)
@@ -267,20 +305,24 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
     def _open_root(self) -> None:
         if self.map is None or not self.map.root_exists:
             return
-        self._report([self._opener(self.map.root)])
+        self._show_working(1)
+        self._report(self._open_paths([self.map.root]))
 
     def _open_one(self, domain: str, name: str, path: str) -> None:
         app = self.rows.get((domain, name))
         if app is None or not app.openable:
             return
-        self._report([self._opener(path)])
+        self._show_working(1)
+        self._report(self._open_paths([path]))
 
     def _open_all(self, domain: str) -> None:
         if self.map is None:
             return
         for dom in self.map.domains:
             if dom.name == domain:
-                self._report([self._opener(p) for p in dom.openable_paths()])
+                paths = dom.openable_paths()
+                self._show_working(len(paths))
+                self._report(self._open_paths(paths))
                 return
 
     def _report(self, results: list[OpenResult]) -> None:
@@ -311,13 +353,15 @@ class CodeFoldersWidget(QtWidgets.QGroupBox):
             text = (f"Asked the desktop to open {first.path} ({first.how}) — "
                     f"{first.reason}")
             if len(results) > 1:
-                text = f"{len(results)} folders: " + text
+                text = (f"Asked for {len(results)} folders; {len(unverified)} not "
+                        f"confirmed. First: {first.path} ({first.how}) — {first.reason}")
             path = first.path
         self.result_note.setStyleSheet(f"color: {self._COLOUR[state]};")
         self.result_note.setText(text)
         self.result_note.setVisible(True)
         self.result_path.setText(path)
         self.result_path.setVisible(bool(path))
+        self.copy_btn.setText("Copy path")      # a new outcome: forget "Copied"
         self.copy_btn.setVisible(bool(path))
 
     def _copy_path(self) -> None:

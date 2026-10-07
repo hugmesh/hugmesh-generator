@@ -72,16 +72,28 @@ all**; the block has **Open source root**. The folder is the one the build reads
 resolves. The source directory is read exactly as the build reads it, so `~` is not
 expanded (type the full path) and the block names the same folder the coverage line
 above it counts. The block re-reads the disk when a run finishes, so folders the
-Studio just cloned become openable without touching a control. A folder that is not there yet is a disabled button with the reason beside
-it ("not downloaded yet…", "no hugmesh-<name> checkout in …"); a service that runs a
-stock image (Akkoma, tuwunel, the databases) gets a note instead of a row. In
-*Download the source* mode the block says that `make stack-clone` git-resets the
-checkouts under `.stack-src` (only ones holding local commits are kept), and that
-the other mode never touches yours. Opening is verified (`core/open_path.py`:
-`xdg-open`/`gio` on Linux, `explorer.exe` via `wslpath` on WSL2, `os.startfile` on
-Windows, `open` on macOS, with Qt's desktop fallback last and reported as
-unconfirmed); when nothing can be confirmed the block says so inline and offers the
-path to copy. No dialogs.
+Studio just cloned become openable without touching a control. A folder that is not
+there yet is a disabled button with the reason beside it ("not downloaded yet…",
+"no hugmesh-<name> checkout in …"); a service that runs a stock image (Akkoma,
+tuwunel, the databases) gets a note instead of a row. In *Download the source* mode
+the block says that `make stack-clone` git-resets the checkouts under `.stack-src`
+(only ones holding local commits are kept), and that the other mode never touches
+yours.
+
+Opening (`core/open_path.py`) uses `xdg-open`/`gio` on Linux, `explorer.exe` via
+`wslpath` on WSL2, `os.startfile` on Windows and `open` on macOS, with Qt's desktop
+fallback last. Only an opener that exits 0 counts as confirmed. One that is still
+running after 3 seconds (usually the file manager itself) is reported as *asked,
+not confirmed*, in amber, with the path to copy. **Open all** shares one 3-second
+waiting budget across all of a domain's folders (a click runs on the window's own
+thread, so 25 folders must not mean 25 waits); folders handed over after the budget
+is spent are reported as unconfirmed. When nothing can be confirmed the block says
+so inline and offers the path to copy. No dialogs.
+
+The end-to-end scenarios for this block are
+`tests/e2e/features/studio-code-folders/studio-code-folders.feature`, driven by
+`tests/e2e/studio-code-folders-driver.py` (the real wizard, offscreen, with a
+stand-in `xdg-open` on PATH that logs what it is handed).
 
 ## Run
 

@@ -24,9 +24,12 @@ note in ``gui/pages/_logintheme._open_preview``):
     or the handler fails — but only if somebody WAITS for it. So each command-line
     opener is waited on for ``OPENER_WAIT_S`` (the same grace ``open_in_browser``
     uses): exit 0 is a verified handoff, non-zero means THAT opener failed and the
-    next one is tried, still-running means the opener IS the file manager;
+    next one is tried, still-running is reported as ASKED BUT UNCONFIRMED (it is
+    usually the file manager itself, but a stuck prompt looks identical);
   * the Qt fallback comes LAST and is labelled unverified, so the note can say
     "dispatched, not confirmed" instead of lying green;
+  * ``open_folders`` (Open all) shares ONE waiting budget across every folder, so
+    25 folders can never mean 25 waits;
   * a total miss returns the reason and the GUI offers the path to copy — never a
     silent no-op.
 
@@ -47,6 +50,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -55,7 +59,7 @@ from . import platform_info
 # open_in_browser measured for xdg-open/gio, not a second guess at it.
 from .login_preview import _OPENER_WAIT_S as OPENER_WAIT_S
 
-__all__ = ["OpenResult", "Host", "open_folder", "OPENER_WAIT_S",
+__all__ = ["OpenResult", "Host", "open_folder", "open_folders", "OPENER_WAIT_S",
            "HOST_LINUX", "HOST_WSL", "HOST_WINDOWS", "HOST_DARWIN"]
 
 HOST_LINUX = "linux"
@@ -63,10 +67,14 @@ HOST_WSL = "wsl"
 HOST_WINDOWS = "windows"
 HOST_DARWIN = "darwin"
 
-#: A command runner: ``run(argv, capture) -> (exit_code | None, stdout)``. None for
-#: the exit code means the command was still running after OPENER_WAIT_S. The
-#: default launches a real process; tests inject a table.
-Runner = Callable[[list[str], bool], "tuple[int | None, str]"]
+#: A command runner: ``run(argv, capture, wait_s) -> (exit_code | None, stdout)``.
+#: None for the exit code means the command was still running after ``wait_s``
+#: seconds (0 = do not wait at all). The default launches a real process; tests
+#: inject a table.
+Runner = Callable[[list[str], bool, float], "tuple[int | None, str]"]
+
+#: The clock the shared "Open all" wait budget is spent against; a test replaces it.
+_now = time.monotonic
 
 
 @dataclass(frozen=True)
@@ -90,8 +98,9 @@ class OpenResult:
         return f"could not open {self.path} ({self.reason})"
 
 
-def _run_and_wait(argv: list[str], capture: bool) -> "tuple[int | None, str]":
-    """Launch ``argv`` and wait up to OPENER_WAIT_S for its exit status. A launch
+def _run_and_wait(argv: list[str], capture: bool,
+                  wait_s: float = OPENER_WAIT_S) -> "tuple[int | None, str]":
+    """Launch ``argv`` and wait up to ``wait_s`` for its exit status. A launch
     failure (missing binary, EACCES) reads as exit 127 so the caller moves on to
     the next opener instead of raising out of a click handler."""
     try:
@@ -102,7 +111,7 @@ def _run_and_wait(argv: list[str], capture: bool) -> "tuple[int | None, str]":
     except Exception:                  # noqa: BLE001 — any launch failure = "not this one"
         return 127, ""
     try:
-        out, _ = proc.communicate(timeout=OPENER_WAIT_S)
+        out, _ = proc.communicate(timeout=max(0.0, wait_s))
     except subprocess.TimeoutExpired:
         # Deliberately NOT killed: a still-running opener is the file manager
         # itself, and killing it would close the window we just opened.
@@ -141,7 +150,7 @@ def _windows_spelling(path: str, host: Host) -> str:
     UNC form, which every WSL2 kernel serves. "" when neither is available."""
     wslpath = host.which("wslpath")
     if wslpath:
-        code, out = host.run([wslpath, "-w", path], True)
+        code, out = host.run([wslpath, "-w", path], True, OPENER_WAIT_S)
         if code == 0 and out.strip():
             return out.strip()
     if host.wsl_distro:
@@ -150,8 +159,12 @@ def _windows_spelling(path: str, host: Host) -> str:
 
 
 def open_folder(path: str, last_resort: "Callable[[str], bool] | None" = None,
-                host: "Host | None" = None) -> OpenResult:
+                host: "Host | None" = None,
+                wait_s: float = OPENER_WAIT_S) -> OpenResult:
     """Open ``path`` (a directory) in the desktop's file manager. Never raises.
+
+    ``wait_s`` is how long to wait on each command-line opener for its exit status;
+    0 hands the request over and does not wait (the answer is then unconfirmed).
 
     A path that is not a directory is refused up front — every opener below would
     otherwise hand it to a browser or an editor, which "works" and is wrong."""
@@ -181,13 +194,23 @@ def open_folder(path: str, last_resort: "Callable[[str], bool] | None" = None,
         if not exe:
             tried.append(f"{argv[0]} is not installed")
             continue
-        code, _out = host.run([exe, *argv[1:]], False)
+        code, _out = host.run([exe, *argv[1:]], False, wait_s)
         if code == 0:
             return OpenResult(True, True, f"{argv[0]} exited 0", path)
         if code is None:
-            return OpenResult(True, True,
-                              f"{argv[0]} still running after {OPENER_WAIT_S:g}s "
-                              "(it is the file manager)", path)
+            # Not "verified": a file manager that stays up and an opener stuck on a
+            # prompt look the same from here. The folder was asked for; nobody
+            # confirmed a window, so the GUI keeps the path to copy on screen.
+            if wait_s > 0:
+                how = f"{argv[0]} still running after {wait_s:g}s"
+                why = ("That is normal when it is the file manager itself, but "
+                       "nothing confirmed a window opened")
+            else:
+                how = f"{argv[0]} started, not waited for"
+                why = ("It was started without waiting for its answer, so "
+                       "nothing confirmed a window opened")
+            return OpenResult(True, False, how, path,
+                              why + "; if none appeared, copy the path.")
         # non-zero: THIS opener says nothing took the folder (xdg-open: 2/3/4 — no
         # handler, missing tool, action failed). On to the next one.
         tried.append(f"{argv[0]} exited {code}")
@@ -196,7 +219,7 @@ def open_folder(path: str, last_resort: "Callable[[str], bool] | None" = None,
         exe = host.which("explorer.exe")
         win = _windows_spelling(path, host) if exe else ""
         if exe and win:
-            host.run([exe, win], False)
+            host.run([exe, win], False, wait_s)
             # explorer.exe returns 1 whether or not it opened anything, so its exit
             # status proves nothing either way: dispatched, not confirmed.
             return OpenResult(True, False, "explorer.exe", path,
@@ -225,3 +248,32 @@ def open_folder(path: str, last_resort: "Callable[[str], bool] | None" = None,
     return OpenResult(False, False, "none", path,
                       "no file manager took the request (" + "; ".join(tried) + ")"
                       if tried else "no opener is available on this platform")
+
+
+def open_folders(paths: "list[str]",
+                 last_resort: "Callable[[str], bool] | None" = None,
+                 host: "Host | None" = None,
+                 budget_s: float = OPENER_WAIT_S) -> "list[OpenResult]":
+    """Open several folders, spending ONE shared waiting budget across all of them.
+
+    ``open_folder`` waits up to OPENER_WAIT_S on each command-line opener, and an
+    opener that is the file manager never exits — so a loop over 25 folders on the
+    window's thread froze the Studio for about 75 seconds. Here the budget is spent
+    in order: a quick opener that exits 0 costs almost nothing and each folder after
+    it keeps the rest of the budget (so they are still verified); once a slow opener
+    has used it up, the later folders are handed over without waiting and come back
+    as asked-but-unconfirmed. The total wait is therefore at most ``budget_s``.
+
+    If the FIRST folder cannot be opened at all (no opener, no handler), the rest
+    would fail the same way: only that one result is returned."""
+    host = host or Host.detect()
+    left = max(0.0, budget_s)
+    results: list[OpenResult] = []
+    for path in paths:
+        started = _now()
+        res = open_folder(path, last_resort=last_resort, host=host, wait_s=left)
+        results.append(res)
+        left = max(0.0, left - (_now() - started))
+        if not res.opened and len(results) == 1:
+            break
+    return results

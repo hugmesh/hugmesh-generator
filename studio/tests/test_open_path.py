@@ -28,14 +28,22 @@ class FakeHost:
         self.wsl_distro = wsl_distro
         self.environ = {}
         self.calls = []
+        self.waits = []
+        #: seconds of a fake clock each still-running call burns (see _clock below)
+        self.burn = 0.0
+        self.clock = None
 
     def which(self, name):
         return f"/usr/bin/{name}" if name in self.installed else None
 
-    def run(self, argv, capture):
+    def run(self, argv, capture, wait_s):
         self.calls.append(list(argv))
+        self.waits.append(wait_s)
         tool = os.path.basename(argv[0])
-        return self.exits.get(tool, 1), self.outputs.get(tool, "")
+        code = self.exits.get(tool, 1)
+        if code is None and self.clock is not None:
+            self.clock[0] += wait_s            # a still-running opener spends the wait
+        return code, self.outputs.get(tool, "")
 
 
 @pytest.fixture
@@ -95,11 +103,23 @@ def test_nothing_installed_and_no_last_resort(folder):
     assert host.calls == []
 
 
-def test_an_opener_still_running_after_the_grace_is_the_file_manager_itself(folder):
+def test_an_opener_still_running_after_the_grace_is_asked_but_not_verified(folder):
     host = FakeHost(op.HOST_LINUX, installed=["xdg-open"], exits={"xdg-open": None})
     res = op.open_folder(folder, host=host)
-    assert (res.opened, res.verified) == (True, True)
+    assert res.opened is True
+    assert res.verified is False, "a running opener confirmed nothing"
     assert "still running" in res.how
+    assert "nothing confirmed a window" in res.reason
+    assert "copy the path" in res.reason
+    assert host.waits == [op.OPENER_WAIT_S]
+
+
+def test_a_zero_wait_hands_the_request_over_and_says_it_did_not_wait(folder):
+    host = FakeHost(op.HOST_LINUX, installed=["xdg-open"], exits={"xdg-open": None})
+    res = op.open_folder(folder, host=host, wait_s=0)
+    assert (res.opened, res.verified) == (True, False)
+    assert "not waited for" in res.how
+    assert host.waits == [0]
 
 
 def test_a_last_resort_that_raises_cannot_break_the_click(folder):
@@ -216,6 +236,80 @@ def test_the_default_runner_reads_a_real_exit_code(tmp_path):
     assert code == 3 and out.strip() == "hi"
     code, _ = op._run_and_wait(["/nonexistent/opener"], False)
     assert code == 127
+
+
+# ── Open all: ONE waiting budget for any number of folders ─────────────────────
+@pytest.fixture
+def folders(tmp_path):
+    out = []
+    for i in range(25):
+        d = tmp_path / f"hugmesh-app{i}"
+        d.mkdir()
+        out.append(str(d))
+    return out
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    t = [0.0]
+    monkeypatch.setattr(op, "_now", lambda: t[0])
+    return t
+
+
+def test_25_still_running_openers_cost_one_wait_not_25(folders, clock):
+    host = FakeHost(op.HOST_LINUX, installed=["xdg-open"], exits={"xdg-open": None})
+    host.clock = clock
+    results = op.open_folders(folders, host=host)
+    assert len(results) == 25
+    assert sum(host.waits) <= op.OPENER_WAIT_S, (
+        f"the waits add up to {sum(host.waits)}s for 25 folders — a frozen window")
+    assert host.waits[0] == op.OPENER_WAIT_S and set(host.waits[1:]) == {0.0}
+    assert all(r.opened and not r.verified for r in results)
+    assert [r.path for r in results] == folders
+
+
+def test_quick_openers_leave_the_budget_so_every_folder_stays_verified(folders, clock):
+    host = FakeHost(op.HOST_LINUX, installed=["xdg-open"], exits={"xdg-open": 0})
+    host.clock = clock                  # exit 0 burns no fake time
+    results = op.open_folders(folders, host=host)
+    assert all(r.opened and r.verified for r in results)
+    assert host.waits == [op.OPENER_WAIT_S] * 25
+
+
+def test_a_first_folder_nothing_can_open_stops_the_rest(folders, clock):
+    host = FakeHost(op.HOST_LINUX, installed=["xdg-open"], exits={"xdg-open": 2})
+    results = op.open_folders(folders, host=host)
+    assert len(results) == 1 and results[0].opened is False
+    assert len(host.calls) == 1
+
+
+def test_the_budget_is_a_parameter(folders, clock):
+    host = FakeHost(op.HOST_LINUX, installed=["xdg-open"], exits={"xdg-open": None})
+    host.clock = clock
+    op.open_folders(folders[:3], host=host, budget_s=1.5)
+    assert host.waits == [1.5, 0.0, 0.0]
+
+
+def test_open_folders_with_a_real_still_running_opener_is_bounded(tmp_path, monkeypatch):
+    """The measurement the skeptic made, kept as a test: a REAL process that stays
+    running (a fake xdg-open that sleeps), the real runner, five real folders."""
+    import time
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake = bindir / "xdg-open"
+    fake.write_text("#!/bin/sh\nexec sleep 3\n")      # ends by itself; nothing is killed
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    dirs = []
+    for i in range(5):
+        d = tmp_path / f"f{i}"
+        d.mkdir()
+        dirs.append(str(d))
+    started = time.monotonic()
+    results = op.open_folders(dirs, host=op.Host(kind=op.HOST_LINUX), budget_s=0.4)
+    elapsed = time.monotonic() - started
+    assert len(results) == 5 and all(r.opened and not r.verified for r in results)
+    assert elapsed < 2.0, f"{elapsed:.1f}s for 5 folders at a 0.4s budget"
 
 
 def test_module_is_qt_free():

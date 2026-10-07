@@ -359,6 +359,116 @@ def test_a_failed_open_is_reported_red_with_the_reason_and_the_path(wiz, src_tre
     assert block.result_path.text() == block.last_results[0].path
 
 
+class StillRunningHost:
+    """A stand-in machine whose only opener never exits (the file manager itself).
+    It records how long each call was ALLOWED to wait, and spends that time on a
+    fake clock, so the test sees what a real window thread would have waited."""
+    kind = "linux"
+    startfile = None
+    wsl_distro = ""
+    environ = {}
+
+    def __init__(self, clock):
+        self.clock = clock
+        self.calls = []
+        self.waits = []
+
+    def which(self, name):
+        return f"/usr/bin/{name}" if name == "xdg-open" else None
+
+    def run(self, argv, capture, wait_s):
+        self.calls.append(argv[-1])
+        self.waits.append(wait_s)
+        self.clock[0] += wait_s
+        return None, ""
+
+
+def _every_folder_present(tmp_path, ctl, block):
+    """Create ALL the checkouts the map names (a full source tree)."""
+    src = tmp_path / "full"
+    src.mkdir()
+    ctl.src_existing.setChecked(True)
+    ctl.src_dir.setText(str(src))
+    _settle()
+    for app in {a.name for d in block.map.domains for a in d.apps}:
+        (src / app).mkdir(exist_ok=True)
+    ctl.src_dir.setText(str(src) + " ")          # a no-op edit that forces a re-read
+    ctl.src_dir.setText(str(src))
+    _settle()
+    return str(src)
+
+
+def test_open_all_with_a_file_manager_that_never_exits_waits_once_not_per_folder(
+        wiz, tmp_path, monkeypatch):
+    """The freeze the integration skeptic measured: the real open_folder, a fake
+    host whose opener stays running, a domain with every platform checkout."""
+    from hugmesh_studio.core import open_path as op
+    clock = [0.0]
+    monkeypatch.setattr(op, "_now", lambda: clock[0])
+    ctl, _page = _to_source(wiz)
+    block = ctl.code_folders
+    _every_folder_present(tmp_path, ctl, block)
+    own = ctl.mesh_domains.own_name
+    folders = block.map.domains[0].openable_paths()
+    assert len(folders) >= 20, "this test needs a domain with most of its folders present"
+    host = StillRunningHost(clock)
+    block.set_host(host)
+    block.open_all_buttons[own].click()
+    assert len(host.calls) == len(folders)
+    assert sum(host.waits) <= op.OPENER_WAIT_S, (
+        f"{sum(host.waits):.0f}s of waiting on the window's thread for "
+        f"{len(folders)} folders")
+    # nothing confirmed any of it: amber, with the path to copy, never green
+    assert "#a65d00" in block.result_note.styleSheet()
+    assert "#2e7d32" not in block.result_note.styleSheet()
+    assert f"Asked for {len(folders)} folders" in block.result_note.text()
+    assert block.result_path.isVisible() and block.result_path.text() == folders[0]
+    assert block.copy_btn.isVisible()
+
+
+def test_a_single_open_that_stays_running_is_unconfirmed_not_green(
+        wiz, src_tree, monkeypatch):
+    from hugmesh_studio.core import open_path as op
+    clock = [0.0]
+    monkeypatch.setattr(op, "_now", lambda: clock[0])
+    ctl, _page = _to_source(wiz, source_dir=src_tree)
+    block = ctl.code_folders
+    block.set_host(StillRunningHost(clock))
+    path = os.path.join(src_tree, "hugmesh-gateway")
+    block.open_buttons[(ctl.mesh_domains.own_name, "hugmesh-gateway")].click()
+    assert "#a65d00" in block.result_note.styleSheet()
+    assert "nothing confirmed a window" in block.result_note.text()
+    assert block.result_path.isVisible() and block.result_path.text() == path
+
+
+def test_the_copy_button_forgets_a_previous_copy(wiz, src_tree):
+    ctl, _page = _to_source(wiz, source_dir=src_tree)
+    block = ctl.code_folders
+    block.set_opener(FakeOpener("unverified"))
+    key = (ctl.mesh_domains.own_name, "hugmesh-admin-ui")
+    block.open_buttons[key].click()
+    block.copy_btn.click()
+    assert block.copy_btn.text() != "Copy path"
+    block.open_buttons[key].click()
+    assert block.copy_btn.text() == "Copy path"
+
+
+def test_a_missing_root_is_explained_in_a_wrapped_note_not_only_in_the_elided_line(
+        wiz, tmp_path):
+    gone = str(tmp_path / "nope")
+    ctl, _page = _to_source(wiz, source_dir=gone)
+    block = ctl.code_folders
+    assert block.root_path.full_text() == gone
+    assert block.root_note.isVisible() and block.root_note.wordWrap()
+    assert block.root_note.text() == f"{gone} does not exist"
+    ctl.src_dir.setText("~/src")
+    _settle()
+    assert "does not expand" in block.root_note.text()
+    ctl.src_dir.setText(str(tmp_path))
+    _settle()
+    assert not block.root_note.isVisible()
+
+
 def test_no_modal_anywhere_in_the_block():
     import inspect
     src = inspect.getsource(cfw)
