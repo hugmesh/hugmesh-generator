@@ -258,6 +258,26 @@ def test_the_tor_checkbox_and_its_note_are_whole(window):
     assert note.text() and note.isVisible()
 
 
+def test_every_placeholder_is_whole_in_its_field(window):
+    """A field's hint is read before anything is typed; one that is cut at the right
+    edge ("(empty = each builder's d…") says less than it should. Every visible
+    line edit on every step: the placeholder's advance fits the field less its
+    frame and text margins (8 px). Measured before the fix: the Optional services
+    hint needed 536 px in a 514 px field at Fusion 9 pt."""
+    win, p = window, window.page
+    cut = []
+    for i in range(p.stack.count()):
+        _goto(win, i)
+        for le in p.stack.widget(i).findChildren(QtWidgets.QLineEdit):
+            ph = le.placeholderText()
+            if not ph or not le.isVisibleTo(win):
+                continue
+            need = le.fontMetrics().horizontalAdvance(ph)
+            if need > le.width() - 8:
+                cut.append(f"step {i}: {ph[:48]!r} needs {need}px, has {le.width() - 8}px")
+    assert not cut, "; ".join(cut)
+
+
 def test_the_review_refusal_wraps_instead_of_scrolling_sideways(window):
     win, p = window, window.page
     p.cluster_domain.setText("mesh.example")

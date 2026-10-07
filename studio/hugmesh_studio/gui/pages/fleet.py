@@ -426,9 +426,13 @@ class FleetPage(QtWidgets.QWidget):
         self.with_tor_note.setStyleSheet("color: gray;")
         nl.addWidget(self.with_tor_note)
         self.optional_services = QtWidgets.QLineEdit()
+        # short enough to be whole in the field at the window's default size (the
+        # long form was elided at its right edge); the rest is the tooltip
         self.optional_services.setPlaceholderText(
-            "OPTIONAL_SERVICES env for both node builders, space-separated "
-            "(empty = each builder's default)")
+            "OPTIONAL_SERVICES for both node builders (empty = each builder's default)")
+        self.optional_services.setToolTip(
+            "OPTIONAL_SERVICES env for both node builders, space-separated; empty keeps "
+            "each builder's own default")
         nl.addWidget(_row("Optional services", self.optional_services))
         l3.addWidget(node_svcs)
         l3.addStretch(1)
