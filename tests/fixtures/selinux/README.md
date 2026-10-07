@@ -26,7 +26,7 @@ The bug class it exists to catch could have walked straight back in.
 
 ## Why not Debian's `selinux-policy-dev`
 
-The CI image is Debian, and Debian packages a refpolicy header tree — but it is a
+The CI image (`python:3-slim`, job `selinux-policy-verify`) is Debian, and Debian packages a refpolicy header tree — but it is a
 **different** policy tree, not a cheaper copy of this one. This tree carries
 `gentoo_tunables.xml` and Gentoo-specific interfaces. Compiling our modules against
 Debian's refpolicy would fail on interfaces that are perfectly valid in the builds
@@ -37,7 +37,7 @@ we actually ship: a red gate for a non-bug, which is worse than no gate at all.
 The finder tries, in order:
 
 1. `$HUGMESH_SELINUX_HEADERS` (explicit override)
-2. a real build sysroot under `out/`
+2. a real build sysroot, `out/sessions/*/wl-*/sysroot/usr/share/selinux/*/include`
 3. the host's own `/usr/share/selinux/*/include`
 4. **this fixture**
 
@@ -53,8 +53,8 @@ production breaks. The **D-drift** leg guards it:
 
 - the digest must match `refpolicy-headers.sha256`, else the fixture is refused
   outright (a tree that is not what was recorded proves nothing);
-- when a real build sysroot is present, its `sec-policy` version is compared with
-  the pin. It fails **only when the sysroot is newer**. A months-old local build
+- when a real build sysroot is present (`out/sessions/*/wl-*/sysroot` or
+  `out/*/sysroot`), its `sec-policy` version is compared with the pin. It fails **only when the sysroot is newer**. A months-old local build
   tree is not a defect and is not punished for being behind; a tree that is *ahead*
   means this fixture has rotted.
 
@@ -66,7 +66,8 @@ which is why the leg says so out loud rather than passing silently.
 After any fully green build, from the repo root:
 
 ```sh
-SYSROOT=out/wl-pki.rpi5/sysroot          # or out/sessions/<id>/wl-<role>.<board>/sysroot
+# D-real finds only out/sessions/<id>/wl-<role>.<board>/sysroot; D-drift also reads out/<dir>/sysroot.
+SYSROOT=out/sessions/<id>/wl-pki.rpi5/sysroot      # or out/wl-pki.rpi5/sysroot
 VER=$(basename "$SYSROOT"/var/db/pkg/sec-policy/selinux-base-policy-* | sed 's/^selinux-base-policy-//')
 
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='UTC 2026-06-16' \
