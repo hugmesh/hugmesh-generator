@@ -142,6 +142,12 @@ AUDITOR_APP_PACKAGE_NAME_RELEASE = "systems.hugmesh.auditor";
 AUDITOR_APP_SIGNATURE_DIGEST_RELEASE = "<SHA-256 of the release signing cert, uppercase hex>"; // see gen-auditor-signing-key.sh
 ```
 
+The digest declarations are line-wrapped upstream (`... _RELEASE =` on one line,
+the quoted hex on the next). A one-line `sed` such as the commented-out Patch 5
+block in `build.Dockerfile` (`AUDITOR_APP_SIGNATURE_DIGEST_RELEASE = ".*"`)
+therefore matches nothing. Match the stock digest literal instead, the way the
+server's `Dockerfile` does for its own copy of the constant.
+
 Both sides of every local-audit pair must run a build with this updated
 constant — it is compiled in, not runtime-configurable (no
 `BuildConfig.APPLICATION_ID` reference exists anywhere in the tree). Without
@@ -165,8 +171,8 @@ default). Don't confuse the two.
 1. Clone at the pinned `AUDITOR_COMMIT`.
 2. `sed` §1 (`RemoteVerifyJob.java` DOMAIN).
 3. `sed` §2's hostname only (the pin-set is a **manual, CA-dependent step —
-   not scripted**; the Dockerfile prints the regeneration command as a build
-   log comment/warning).
+   not scripted**; the Dockerfile carries the regeneration command only as a
+   `#` comment beside the hostname patch, and prints nothing at build time).
 4. `sed` §3 (cosmetic).
 5. `sed` §4 (applicationId).
 6. §5 is commented out / not applied.

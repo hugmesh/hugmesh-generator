@@ -43,9 +43,9 @@ Auditor is the reference client for this protocol — sovereign end-to-end
 attestation means running BOTH halves ourselves rather than depending on
 `attestation.app` (upstream's own hosted server) or trusting a
 third-party-signed client talking to it. Track 1 (the server) and Track 2
-(this fork) were built together for exactly that reason — see
-`auditor-fork-decision.md` (2026-07-17) for the "commit to the full fork"
-decision this component implements.
+(this fork) were built together for exactly that reason. The "commit to the
+full fork" decision this component implements is recorded in
+`auditor-fork-decision.md` (2026-07-17); that file is not in this repository.
 
 ---
 
@@ -86,8 +86,8 @@ What can silently break on an upstream Auditor rebase:
 
 1. `git fetch upstream main && git log <old-pinned-commit>..upstream/main --oneline`
    — review what changed.
-2. Re-diff `patches.md`'s 4 mandatory patches (§1, §2, §3, §4) against the
-   new tree BEFORE rebasing. Specifically re-check the two risks above:
+2. Re-diff the four patches `build.Dockerfile` applies (`patches.md` §1, §2, §3,
+   §4; §3 is cosmetic) against the new tree BEFORE rebasing. Specifically re-check the two risks above:
    the applicationId/namespace split assumption, and whether the
    `network_security_config.xml` pin-set structure changed shape (not just
    values).
@@ -189,28 +189,26 @@ file to edit
 
 ### 5. Distribute to phones
 
-Distribution is **already wired** — `scripts/phone-wizard.sh` (on `main`)
-has `--tailscale-apk` (adb-installs an APK) and `--apk-signer-sha256` (pins
-the expected signer cert digest, fail-closed on mismatch) for exactly this
-kind of managed-app install; it currently uses that mechanism for the
-Tailscale APK during `enroll`. Track 2 does not need to invent a new
-install path:
+Distribution is **already wired**. `scripts/phone-wizard.sh` has an `attest`
+verb that installs this fork with `--auditor-apk <path>` and pins the signer
+with `--auditor-signer-sha256 <hex>` (fail-closed on mismatch), then prints the
+pairing runbook for the AttestationServer at `--attestation-url`. `make
+phone-attest` wraps it (`AUDITOR_APK=`, `AUDITOR_SIGNER_SHA256=`,
+`ATTESTATION_URL=`). The `wizard` verb runs `attest` as step 4 of 8, right
+after `flash` (see [MDM.md](../../docs/MDM.md#attest--attestationserver-pairing-via-the-hugmesh-forked-auditor)).
 
 ```sh
-# same mechanism phone-wizard already uses for the Tailscale APK —
-# Phase 3 adds a dedicated --auditor-apk flag that reuses this exact code
-# path (adb install -r + apksigner --print-certs signer-pin check,
-# fail-closed on mismatch) rather than building a second install mechanism.
-adb install -r out/app-release.apk
-apksigner verify --print-certs out/app-release.apk   # confirm signer digest before/after
+scripts/phone-wizard.sh attest --serial <S> --auditor-apk out/app-release.apk \
+  --auditor-signer-sha256 <fork-cert-sha256> --attestation-url <attestation-server-console-url>
+
+# by hand, to check the signer digest before or after:
+apksigner verify --print-certs out/app-release.apk
 ```
 
-**Phase 3 (not built here):** wiring an `--auditor-apk <path>` flag into
-`scripts/phone-wizard.sh` (alongside the existing `--tailscale-apk` /
-`--apk-signer-sha256` flags) so `enroll`/`wizard` can install this fork the
-same way it already installs Tailscale, with the same fail-closed signer-pin
-enforcement. This directory only documents that mechanism and produces the
-artifact it would consume — it does not modify `phone-wizard.sh`.
+This directory produces the artifact `attest` consumes. It does not modify
+`phone-wizard.sh`. The `attest` code path was written after the first draft of
+this runbook; like the APK itself, it has never run against a real phone and
+AttestationServer pair.
 
 ---
 
@@ -273,9 +271,9 @@ grep -i 'COPY.*\(jks\|keystore\|properties\)' build.Dockerfile   # must be empty
 - **Reproducible-build status is unresolved** — upstream's dependency
   checksums are pinned (`verify-metadata=true`), but end-to-end build
   reproducibility was not independently confirmed.
-- **`phone-wizard.sh`'s `--auditor-apk` flag does not exist yet** (Phase 3,
-  explicitly out of scope for this directory — see "Distribute to phones"
-  above).
+- **The `attest` verb has not been run against this fork's APK.** `--auditor-apk`
+  exists in `scripts/phone-wizard.sh`, and its tests use mocked adb, but there
+  is no real APK to install yet.
 
 ---
 
