@@ -48,7 +48,7 @@ Qt-free entrypoint (`python3 -m hugmesh_studio.core.local_mesh`, wrapped by
 `make mesh-node-up`), shared verbatim by the GUI launcher, the ncurses `local_mesh_screen`,
 and the Makefile targets. It never enters `resolve_build_target`/`build_make_cmd`.
 
-**The MDM phone wizard (🚧) rides the same non-build precedent, one step
+**The MDM phone wizard (✅) rides the same non-build precedent, one step
 further out.** [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh)
 ([`MDM.md`](MDM.md)) builds no image at all — it
 flashes an externally-released, signature-verified GrapheneOS artifact onto a
@@ -78,8 +78,8 @@ green on channels that do not offer it).
 
 | Channel | Entry point | How a build is described |
 |---|---|---|
-| **CLI** | `./build-{rpi5,x86-host,frite,jetson,orangepi5,orangepi-zero2}-stage4.sh` | flags (`--role`, `--env`, `--board`, `--flavor`, `--desktop`, …) |
-| **make** | `Makefile` targets (`make x86-<role>`, `make rpi-<role>`, `make frite`, `make jetson-<role>`, `make orangepi5`, `make orangepizero2`, `make build-all`, `make build-everything`) | make vars (`ENV=`, `BRAND=`, `RPI_BOARD=`, `FRITE_*=`, `JETSON_*=`, `ORANGEPI5_*=`, `IMG_FLAGS=`, `STANDALONE_FLAGS=`) |
+| **CLI** | `./build-{rpi5,x86-host,frite,jetson,orangepi5,orangepi-zero2,orangepi-zero2w,orangepi-zero3,orangepi3-lts,orangepi4-lts}-stage4.sh` | flags (`--role`, `--env`, `--board`, `--flavor`, `--desktop`, …) |
+| **make** | `Makefile` targets (`make x86-<role>`, `make rpi-<role>`, `make frite`, `make jetson-<role>`, `make orangepi5`, `make orangepizero2`, `make orangepizero2w`, `make orangepizero3`, `make orangepi3-lts`, `make orangepi4-lts`, `make build-all`, `make build-everything`) | make vars (`ENV=`, `BRAND=`, `RPI_BOARD=`, `FRITE_*=`, `JETSON_*=`, `ORANGEPI5_*=` (and the same per Orange Pi platform), `IMG_FLAGS=`, `STANDALONE_FLAGS=`) |
 | **ncurses menu** | `make menu` (`scripts/build-menu.sh`) | interactive screens persisting `OPT_*` state; composes the same make invocation |
 | **Studio GUI** | `studio/` (`python -m hugmesh_studio`) | wizard pages over `ImageConfig`; the same config drives the headless `--print-command` |
 
@@ -111,15 +111,15 @@ admin-bff-api), which maps the Job contract's `IMAGE_TYPE` + `HARDWARE_CLASS`
 strings onto the same generator build targets through its own role whitelists
 (the `HARDWARE_CLASS` convention in that script's header). It deliberately has
 no `env` axis (the Job contract carries no hardening-tier field, so every Job
-build gets the fail-secure `prod` posture), no frite/orangepi5/orangepizero2
+build gets the fail-secure `prod` posture), no frite
 `desktop` axis, and no `flavor=both` on any live/installer platform (its
 ingest contract reports exactly one `imageRef` per build, so a two-artifact
 flavor is a clean rejection everywhere it would otherwise apply). The
 standalone/LUKS posture **is** now reachable through this channel on
-rpi5/frite/orangepi5/orangepizero2, mirroring x86's
+rpi5, frite and every Orange Pi platform, mirroring x86's
 standalone-thin/standalone-thick/standalone-unaffiliated roles: rpi5 gets a
 dedicated `standalone-desktop` role token (it already has a role axis to
-extend), while frite/orangepi5/orangepizero2 (which have no role axis at all)
+extend), while frite and the Orange Pi platforms (which have no role axis at all)
 signal it through a `standalone` *flavor* value instead — both normalize onto
 the real build target plus `--standalone`/`--local-user` (see the
 `HARDWARE_CLASS` convention in `docker/build-image.sh`'s own header). Jetson is
@@ -134,7 +134,7 @@ EXCEPTION" note in `docker/build-image.sh`'s own header).
 
 One row per buildable image cell `(platform, role, env, board, flavor,
 desktop)`; `-` marks an axis a platform does not have. **150 cells** today
-(includes 14 JOB-channel-only standalone-posture probe rows — see below):
+(includes 16 JOB-channel-only standalone-posture probe rows — see below):
 
 ### The role vocabulary — one spelling, everywhere
 
@@ -216,7 +216,7 @@ Two closely-related-hardware situations look similar but resolve differently:
 
 **✅ shipped.** For **every** matrix row the harness proves all five channels
 agree on the cell — entirely **dry-run**: no root, no writes outside `mktemp`,
-no network, no docker/k8s, ~15 s:
+no network, no docker/k8s, about three minutes:
 
 1. **CLI** — invokes the builder with `--print-plan` + the row's flags and
    asserts exit 0 plus exact `PLAN_BUILDER` / `PLAN_ROLE` / `PLAN_ENV` (and
@@ -230,7 +230,7 @@ no network, no docker/k8s, ~15 s:
    `JETSON_BOARD` make-vars).
 4. **GUI** — writes a per-row config JSON and asserts the Studio's headless,
    Qt-free `python -m hugmesh_studio --print-command` emits a command with
-   the right builder / role / axes / env. The 8 standalone-posture rows
+   the right builder / role / axes / env. The 16 standalone-posture rows
    translate the JOB-grammar tokens to the real Studio semantics
    (`role=desktop` / `flavor=installer` + `standalone: true`, exactly like the
    CLI leg) and are additionally proven end-to-end: the printed argv is re-run
@@ -245,10 +245,10 @@ no network, no docker/k8s, ~15 s:
    `test`/`prod` (and frite's own `light`/`none` desktop-weight axis —
    orangepi5/orangepizero2 have no such axis at all) rows probe the same
    whitelist cell — the channel has no such axes (see above) — and
-   `flavor=both` rows (frite/orangepi5/orangepizero2) assert the worker's
-   *documented rejection*. The 8 standalone-posture probe rows (rpi5's
-   `standalone-desktop` role, frite/orangepi5/orangepizero2's `standalone`
-   flavor) assert the JOB channel resolves them onto the real target
+   `flavor=both` rows (every platform with a flavor axis) assert the worker's
+   *documented rejection*. The 16 standalone-posture probe rows (rpi5's
+   `standalone-desktop` role; the `standalone` flavor on frite and every Orange Pi
+   platform) assert the JOB channel resolves them onto the real target
    (`--role desktop` / `--flavor installer`) plus the matching `*_STANDALONE`
    flag going true; the CLI leg of the same rows translates the same
    JOB-channel-only token into the real `--standalone` invocation before
@@ -258,20 +258,20 @@ no network, no docker/k8s, ~15 s:
    (jetson deliberately has none) and an rpi5 `standalone-desktop` role
    combined with `IMAGE_TYPE=client` (rpi5 is never a client platform).
 
-Plus **negative checks** (the `NEG` bucket — **61** as reported by the harness
+Plus **negative checks** (the `NEG` bucket — **72** as reported by the harness
 summary; the families enumerated here are not an exhaustive one-per-check list):
 invalid roles on x86/rpi5/jetson, an invalid
 frite board and desktop, an invalid jetson board, invalid `--env` values on
-x86/jetson/orangepi5/orangepizero2, x86-only flags (`--steam`, `--gpu-driver`)
+x86/jetson and every Orange Pi builder, x86-only flags (`--steam`, `--gpu-driver`)
 rejected by the rpi5 builder, `--standalone` on an rpi5 role with no compatible
 posture, **`--board rpi3` rejected on every non-`desktop` rpi5 role**
 (`backend`/`pki`/`frontend`/`generic` — Pi 3's 1 GB RAM has no headroom for the
 k8s cluster-node stack, so this is enforced, not just undocumented), invalid
-orangepi5 board/flavor, invalid orangepizero2 flavor, `--board` rejected on
-`build-orangepi-zero2-stage4.sh` (it isn't a flag on that builder — one board,
-no axis), **a path-traversal-shaped `--role` value rejected on both
-orangepi5 and orangepizero2** (that flag is an undocumented marker-only escape
-hatch on both builders — neither has a real `--role` axis — that used to flow
+orangepi5 board/flavor, invalid flavor on every flavor-only Orange Pi builder, `--board` rejected on
+the four single-board Orange Pi appliance builders (zero2, zero2w, zero3, 3-lts: it isn't a flag on those builders — one board,
+no axis), **a path-traversal-shaped `--role` value rejected on orangepi5 and
+the four appliance builders** (that flag is an undocumented marker-only escape
+hatch on those builders — none has a real `--role` axis — that used to flow
 unescaped into the artifact-path strings with no allow-list check at all), the
 unaffiliated **identity/look boundary probes** — since the 2026-08-26 split a
 `--theme` / `--wallpaper` / `--accent-color` on the unaffiliated role must be
@@ -285,7 +285,11 @@ premade-theme probes** (an unknown `--theme`, and a path-shaped one like
 resolved only at the branding step ~2100 lines later, so the validator every
 channel preflights with green-lit themes the build then hard-errored on, and
 `[ -d ]` alone never stopped a traversal because the name is concatenated
-straight into `${SPECS_DIR}/branding/themes/<name>`), an unknown platform
+straight into `${SPECS_DIR}/branding/themes/<name>`), a `--desktop` that contradicts a weight-pinning standalone role
+(`standalone-thin` with `--desktop full`, `standalone-thick` with `--desktop thin`,
+`standalone-unaffiliated` with `--desktop thin`), a malformed `--packages-add`
+atom, a `--packages-drop` of a mandatory-payload atom, a malformed
+`--superdomain`, an unknown platform
 refused by the GUI, and the five bogus-`HARDWARE_CLASS` Job-channel
 rejections (the three original whitelist negatives plus the two
 standalone-shaped ones above) — all must exit non-zero, so a typo can never
@@ -294,7 +298,7 @@ including a **completeness gate**: every channel's pass count must equal the
 row count (a crashed channel child or a silently skipped row fails the run,
 never degrades it).
 
-It also runs **33 flag-threading probes**: `STANDALONE_FLAGS` must reach the
+It also runs **42 menu-side flag-threading probes**: `STANDALONE_FLAGS` must reach the
 builder argv on the `x86-%` / `x86-standalone-thin` / `jetson` / `jetson-%` /
 `frite` / `orangepi5` / `orangepizero2` / `orangepizero2w` / `orangepizero3` /
 `orangepi3-lts` / `orangepi4-lts` recipes (the menu's
@@ -307,21 +311,27 @@ end-to-end MENU→MAKE probes prove `build_make_cmd`'s composed invocation lands
 both `OPT_IMGFLAGS` and `OPT_EXTRA_FLAGS` in the builder argv on one target per
 platform (`rpi-backend`, `x86-pki`, `frite`, `jetson-edge-ai`, `orangepi5`,
 `orangepizero2`, `orangepizero2w`, `orangepizero3`, `orangepi3-lts`,
-`orangepi4-lts`), 2 fleet-option threading probes prove
+`orangepi4-lts`), 6 installer-ui probes prove the menu defers to the builder's
+role-aware default (the pristine `OPT_INSTALLER_UI` is empty; `x86-pki`,
+`x86-backend`, `x86-frontend` and `x86-omnibus` emit no `--installer-ui`;
+`x86-standalone-thick` honours an explicit one), 2 fleet-option threading probes prove
 `RESUME`/`PENTEST`/`X86_OMNIBUS`/`FRITE`/`JETSON` all gate to both
 `build-all` and `build-everything`, 1 unaffiliated-menu probe proves the
 `x86-standalone-unaffiliated` recipe carries `--role standalone-unaffiliated`
-and never `--theme`, even with the menu's persisted theme default, and 1
+and `--theme dark` (a look is legal there), and never the `BRAND=` make-var,
+its `brands/*.conf` profile, `--brand-logo` or `--home-seed-code` (identity and
+platform machinery are not), and 1
 ROLESET_ENVVARS docker-boundary probe drives `make -n build-everything
 RPI_BOARD=rpi4 RPI_ROLES="..."` directly (not through the menu — RPI_BOARD/
 RPI_ROLES/SKIP_RPI have no menu widget for the fleet targets at all) and
-asserts RPI_BOARD/RPI_ROLES/ORANGEPIZERO2/ORANGEPIZERO2_FLAVOR all survive
+asserts RPI_BOARD/RPI_ROLES and the ORANGEPIZERO2/ORANGEPIZERO2W/ORANGEPIZERO3
+flags and flavors all survive
 into the composed docker-run recipe — a prior version of `ROLESET_ENVVARS`
-silently dropped all four at that exact boundary, on both the native and
+silently dropped them at that exact boundary, on both the native and
 Docker legs. A recipe that ignores a make-var the menu emits, or a new fleet
 target/knob added without wiring the same gate, can never go green.
 
-The Studio channel gets the same treatment with **51 GUI flag-threading
+The Studio channel gets the same treatment with **73 GUI flag-threading
 probes** (`GUITHR`): for every config-field family the Studio threads to the
 builders (cluster domain, person-role, host identity, secure-boot family,
 artifact selection, u-boot chain, kernel/DTB plumbing, standalone/local-user,
@@ -331,26 +341,35 @@ tokens (including must-NOT-appear grammar), then re-runs the printed argv
 against the real builder with `--print-plan` and asserts acceptance plus the
 matching `PLAN_*` echo (`PLAN_CLUSTER_DOMAIN`, `PLAN_PERSON_ROLE`,
 `PLAN_HOSTNAME`, `PLAN_MESH`, `PLAN_UNAFFILIATED`, …) — every probe is
-builder-accepted, never token-echoed. **12 GUI gating negatives** ride along:
-10 prove a wrong-platform field set in a config JSON emits *no* flag at all on
+builder-accepted, never token-echoed. **17 GUI gating negatives** ride along:
+15 prove a wrong-platform field set in a config JSON emits *no* flag at all on
 ARM configs (steam, gpu-driver, the edge-AI set, the u-boot chain, the
-secure-boot family, node fallback creds, services/games, cluster plane,
-branding assets), and 2 prove the jetson encrypt-root and jetson standalone
+secure-boot family, node fallback creds, release-tag/distdir, services/games,
+cluster plane, a retired or path-shaped theme name, branding assets on the four
+smaller Orange Pi platforms), and 2 prove the jetson encrypt-root and jetson standalone
 hard-blocks still refuse `--print-command` outright. Finally the
 **flag-coverage differ** (`tests/build-matrix/flag-coverage.sh`, the `COVG`
-bucket, 40 checks) parses each builder's live arg-parser case arms and diffs
+bucket, 50 checks: forward, reverse, `--packages-add`, `--packages-drop` and
+`--superdomain` for each of the ten builders) parses each builder's live arg-parser case arms and diffs
 them against the Studio's *real* emission vocabulary (computed by exercising
 `ImageConfig.to_cli_args()` over a capability-table-driven sample battery) in
 both directions: a builder flag with no Studio field and no documented
 allowlist reason, or a Studio-emitted flag no builder parses, fails the run.
 Every probe family is fail-closed behind an expected-count gate. Current
 totals (as reported by the harness bucket summary):
-150 cells × 5 channels + 110 threading probes (42 menu + 68 GUI — incl. the 4
-`character-forge` probes: the tri-state flag pair on x86 AND rpi5 plus the
-`--optional-services` checklist path) + 61 negatives + 50 flag-coverage checks
-+ 11 emerge-group banner probes (`EGB`: 10 builder multisets + the heredoc-safety
-sweep) + 16 taxonomy-parity + 6 web-catalog honesty =
-**1004 checks**.
+150 cells × 5 channels + 115 threading probes (`THRD`: 42 menu-side + 73 GUI) +
+72 negatives (`NEG`) + 50 flag-coverage checks (`COVG`) + 12 emerge-group banner
+probes (`EGB`: 10 builder multisets, the heredoc-safety sweep and the taxonomy
+declaration cross-check) + 24 emerge-plan preview probes (`EPL`) + 16
+taxonomy-parity checks (`TAXO`) + 6 web-catalog honesty checks (`CAT`) = **1045
+checks**, and six more buckets that delegate to their own scripts and fold
+the tally in, each fail-closed on an expected count: `SLX` (161, SELinux
+node-policy install, `tests/scripts/test-selinux-policy-install.sh`), `PCS` (39,
+portage-config sync, `tests/scripts/test-portage-config-sync.sh`), `RAR` (25,
+requested atoms stay resolvable), `SBP` (7, the shared-binpkg smokes, see
+below), `SFO` (14, sendfile-noise patch ordering and residue) and `BCF` (6, the
+image-side `brand.conf` round trip and neutral modprobe.d names). Measured on
+2026-10-07 on `main` (`c257067e`): **1297 passed, 0 failed**.
 
 ```sh
 make matrix-check                 # or: bash tests/build-matrix/check.sh
@@ -401,7 +420,7 @@ deliberately **not** Studio `ImageConfig` fields — they are host/CI
 **build-phase** controls, the same class as `--specs-dir`/`--target`, and are
 carried on the `flag-coverage.sh` allowlist with that documented reason:
 
-- **`--packages-only`** (all six builders) — run the emerge that populates the
+- **`--packages-only`** (all ten builders) — run the emerge that populates the
   per-board `PKGDIR` under `FEATURES=buildpkg`, then `exit 0` **before** any
   image assembly (x86 before Phase 6 mesh; ARM before kernel/img/iso/tar).
   Emits nothing image-shaped; adds a `PLAN_PACKAGES_ONLY=0|1` fact to
@@ -409,7 +428,7 @@ carried on the `flag-coverage.sh` allowlist with that documented reason:
   a GUI knob.
 - **`--distdir DIR`** (+ `SNAP_DISTDIR_SRC` env) — reuse a shared **read-only**
   distfiles (source-tarball) cache. Arch-independent, so one fleet-wide pool is
-  safe on every board (x86 *does* field it as a GUI knob; the five ARM builders
+  safe on every board (x86 *does* field it as a GUI knob; the nine ARM builders
   take it as host plumbing only, hence the ARM allowlist entries).
 
 The **`prebuild-binaries ARCH=<platform> [BOARD=]`** make target computes the
@@ -417,9 +436,12 @@ platform's role-union via the Qt-free `python3 -m
 hugmesh_studio.core.prebuild_union <platform>` module and invokes the builder
 once with `--packages-only` into the per-board pool (MAKE channel). The ncurses
 menu surfaces it as **Build → Prebuild shared binpkg pool** plus a **Shared
-distfiles** option; a non-gating `sharedbinpkg-*` smoke set (`prebuild-smoke.sh`
-+ the three hermetic tests) exercises the target, the per-board pkgdir
-distinctness, the RO-distfiles wiring and the pool fingerprint guard. The
+distfiles** option; a `sharedbinpkg-*` smoke set (`prebuild-smoke.sh` + six
+hermetic tests) exercises the target, the per-board pkgdir distinctness, the
+RO-distfiles wiring, the pool fingerprint guard, the shared build assets, the
+host build-dependency pool and the kernel artifact cache. The set is
+**gating**: the `SBP` bucket scores it into the harness total, and a missing
+smoke counts as a failure. The
 compile-once **speedup + correctness is UNPROVEN without a live fleet build** —
 the mechanism + the fingerprint SIGILL guard ship; the live proof is owed.
 
@@ -439,20 +461,28 @@ This is the contract every channel is verified against.
 
 ## Building the whole matrix for real
 
-`make matrix-check` validates; **`make build-everything`** builds — the
-default fleet (3 RPi5-board `pki`/`backend`/`frontend` roles + 4 x86 cluster
-roles), honoring `ENV=test|prod` and the usual `BRAND=` / `DOMAIN=` /
-`WORK_DIR=` overrides. It threads `scripts/build-all-roles.sh`'s role-selector
-knobs, so partial supersets are one env-var away — every non-default-fleet
-platform/role is **opt-in** here (kept out of the default fleet the same way
-`standalone-thin`/`standalone-thick`/`standalone-unaffiliated` are: they're
-appliances, not cluster nodes, and/or still EXPERIMENTAL):
+`make matrix-check` validates; `make build-all` and `make build-everything`
+build. `make build-all` builds the **default fleet**: 3 RPi5-board
+`pki`/`backend`/`frontend` roles + 4 x86 cluster roles (`pki`, `backend`,
+`frontend`, `backend-gpu`). `make build-everything` builds the **full
+documented matrix**: the same 3 Pi roles, all 12 x86 roles (nodes, `omnibus`,
+`edge-ai`, clients, the three standalone roles), then Frite, Jetson and every
+Orange Pi platform. Both honor `ENV=test|prod` and the usual `BRAND=` /
+`DOMAIN=` / `WORK_DIR=` overrides.
+
+Both thread `scripts/build-all-roles.sh`'s role-selector knobs, so partial
+supersets of the default fleet are one env-var away on `make build-all`. Every
+non-default-fleet platform and role is **opt-in** there (kept out of the
+default fleet the same way `standalone-thin`/`standalone-thick`/
+`standalone-unaffiliated` are: they're appliances, not cluster nodes, and/or
+still EXPERIMENTAL):
 
 | Knob | Adds |
 |---|---|
 | `RPI_ROLES="pki backend frontend desktop"` | the rpi5 `desktop` role to the default set |
 | `RPI_BOARD=rpi4` / `RPI_BOARD=rpi3` | re-targets every selected `RPI_ROLES` at that board (`rpi3` is desktop-only — pair with `RPI_ROLES=desktop`) |
-| `X86_STANDALONE=1` | `standalone-thin`/`standalone-thick` |
+| `X86_OMNIBUS=1` / `X86_ALL=1` | `omnibus` (built first) |
+| `X86_STANDALONE=1` | `standalone-thin`/`standalone-thick`/`standalone-unaffiliated` |
 | `FRITE=1` | the Frite light-desktop (board/flavor/desktop via `FRITE_*`) |
 | `JETSON=1` | the Jetson Orin edge-AI platform *(EXPERIMENTAL)* |
 | `ORANGEPI5=1` | Orange Pi 5 / 5 Plus *(EXPERIMENTAL)* |
@@ -460,10 +490,14 @@ appliances, not cluster nodes, and/or still EXPERIMENTAL):
 | `ORANGEPIZERO2W=1` | Orange Pi Zero 2W headless appliance *(EXPERIMENTAL)* |
 | `ORANGEPIZERO3=1` | Orange Pi Zero 3 headless appliance *(EXPERIMENTAL)* |
 | `ORANGEPI3LTS=1` | Orange Pi 3 LTS headless appliance *(EXPERIMENTAL)* |
+| `ORANGEPI4LTS=1` | Orange Pi 4 LTS light desktop *(EXPERIMENTAL)* |
 
-Each also has an `_ONLY=1` variant (`FRITE_ONLY=1`, `JETSON_ONLY=1`,
-`ORANGEPI5_ONLY=1`, `ORANGEPIZERO2_ONLY=1`, `ORANGEPIZERO2W_ONLY=1`, `ORANGEPIZERO3_ONLY=1`, `ORANGEPI3LTS_ONLY=1`) that builds **only** that platform,
-skipping every other one. `SKIP_X86=1` / `SKIP_RPI=1` drop those instead. See
+Each platform knob also has an `_ONLY=1` variant (`FRITE_ONLY=1`,
+`JETSON_ONLY=1`, `ORANGEPI5_ONLY=1`, `ORANGEPIZERO2_ONLY=1`,
+`ORANGEPIZERO2W_ONLY=1`, `ORANGEPIZERO3_ONLY=1`, `ORANGEPI3LTS_ONLY=1`,
+`ORANGEPI4LTS_ONLY=1`) that builds **only** that platform, skipping every other
+one. `X86_STANDALONE_ONLY=1` does the same for the three standalone roles.
+`SKIP_X86=1` / `SKIP_RPI=1` drop those instead. See
 `scripts/build-all-roles.sh`'s header comment for the full knob list — it is
 independent of (and not verified by) the `matrix.tsv`/`check.sh` harness above,
 since it's a real-build orchestrator rather than a dry-run one; any new
@@ -492,12 +526,12 @@ wiring, not as an afterthought.
   builder the menu offers. That guard makes `config.py`'s `BUILDER_SCRIPTS` the
   reference key set, holds the worklist schema enums / `matrix.tsv` column 1 /
   `prebuild-smoke.sh`'s arch loop / `device-catalog.json`'s `builder.platform` /
-  `PLATFORM_LABELS` to exactly that set, and closes the Orange Pi 3 LTS spelling
-  namespace (`orangepi4-lts` key, `ORANGEPI4LTS_*` env prefix, `OPI4LTS_*` builder
-  vars, `orangepi4lts` Python stem, `orange-pi-4-lts` catalog id) — and the same for the
-  `orangepi3-lts` key, `ORANGEPI3LTS_*` env prefix, `OPI3LTS_*` builder
-  vars, `orangepi3lts` Python/function stem, `orange-pi-3-lts` device id) so a
-  fifth spelling fails the run.
+  `PLATFORM_LABELS` to exactly that set, and closes the spelling namespaces of the
+  two Orange Pi LTS boards: `orangepi3-lts` key, `ORANGEPI3LTS_*` env prefix,
+  `OPI3LTS_*` builder vars, `orangepi3lts` Python/function stem,
+  `orange-pi-3-lts` device id — and the same for `orangepi4-lts` (`ORANGEPI4LTS_*` env prefix,
+  `orange-pi-4-lts` device id) — so a fifth spelling fails the run.
 - **🔭 planned**: run `make matrix-check` as a fail-closed GitLab lint stage
   alongside the other `tests/scripts/*` gates (CI images need `pytest`
-  available for the GUI leg).
+  available for the GUI leg). Today neither `.gitlab-ci.yml` nor
+  `.github/workflows/` names it.
