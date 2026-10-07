@@ -19,9 +19,9 @@ web interface.**
 `.gitlab-ci.yml` (runs on the privileged x86 runner):
 
 1. **iso** — `scripts/build-all-roles.sh` (pki/backend/frontend, aarch64) + `build-x86-host-stage4.sh` (x86 host).
-2. **images** — The `build:images` job dispatches into the **in-cluster Kaniko image-build pipeline** (`specs/cluster/manifests/image-builder/kaniko-build-job.template.yaml`). The pipeline is ALWAYS-ON: `specs/cluster/apps/60-image-builder.yaml` is in the root app-of-apps' recursed `apps/` set, so the build namespace + NetworkPolicy always sync (the Kaniko Job remains a template, so no build pod runs until one is dispatched). The job runs on the default branch + release tags only, and REQUIRES a cluster `KUBECONFIG` on the runner and the ESO-materialized `image-builder-registry` push secret — it no longer no-ops when they are absent, it fails. The service-catalog Kaniko builder (PR #110) is a separate per-`AddService` template, not the general pipeline.
-3. **deliver** — uploads each ISO to the GitLab generic package registry under a
-   stable `…/packages/generic/iso/latest/<name>.iso` path.
+2. **images** — The `build:images` job dispatches into the **in-cluster Kaniko image-build pipeline** (`specs/cluster/manifests/image-builder/kaniko-build-job.template.yaml`). The pipeline is ALWAYS-ON: `specs/cluster/apps/60-image-builder.yaml` is in the root app-of-apps' recursed `apps/` set, so the build namespace + NetworkPolicy always sync (the Kaniko Job remains a template, so no build pod runs until one is dispatched). The job runs on the default branch + release tags only, and REQUIRES a cluster `KUBECONFIG` on the runner and the ESO-materialized `image-builder-registry` push secret — it no longer no-ops when they are absent, it fails (the job is `allow_failure: true`, so the failure stays inside that job). The service-catalog Kaniko builder (`apps/54-service-catalog-builder.yaml`) is a separate per-`AddService` template, not the general pipeline.
+3. **deliver** — on `main`, uploads each ISO to the GitLab generic package registry
+   under a stable `…/packages/generic/iso/latest/<name>.iso` path.
 
 **ISOs contain no keys** — KEYS material is supplied from the USB stick at first
 boot, never baked into or published with an ISO.
@@ -57,9 +57,13 @@ source-of-truth is **scaffolded but not cut over**:
     `character-forge-bff-api`, `federation-api`, `forum-ui`, `mod-bff-api`,
     `remote-fragment`, `user-bff-api`.
   - `snapdragon-deploy.yaml` + `deploy/` (LEGACY_COMPAT, the pre-rebrand
-    descriptor name) — `forum-bff-api`, the last adopter that has not renamed it.
-    The registry, not this list, is the authority; it is gate-checked against the
-    repos themselves.
+    descriptor name) — `forum-bff-api`, the registry's last legacy row (swept
+    2026-08-20). **Stale:** on 2026-10-07 the root of `hugmesh-forum-bff-api`
+    (default branch) ships `hugmesh-deploy.yaml`, not `snapdragon-deploy.yaml`
+    (`gh api repos/hugmesh/hugmesh-forum-bff-api/contents/`), so all 9 adopters now
+    use the new name. The registry row and the legacy generator filter are due for
+    the update that file's own header describes. The registry, not this list, is
+    the authority; it is gate-checked against the repos themselves.
   The catalog generators filter on **both** filenames (two `filters` entries — the
   scmProvider ORs across entries and ANDs inside one, and `pathsExist` is itself an
   AND-list, so a single entry cannot express the disjunction). Until 2026-07-30 they
@@ -98,7 +102,9 @@ poll pulls **only changed packages**
 (`emerge --getbinpkgonly --usepkgonly --update --deep --newuse @world`) from the
 node's `PORTAGE_BINHOST` subtree, then — when a reboot-requiring package changed —
 drops the kured sentinel (`/var/run/reboot-required`) so kured drains+cordons+reboots
-**one node at a time** inside its own maintenance window.
+**one node at a time** inside its own maintenance window. This repo does not deploy
+kured (no Application or manifest under `specs/cluster` installs it): the cluster
+must run it for the sentinel to do anything.
 
 `provision_update()` (keys-provision) bakes the cron drop-in as **plumbing** on every
 target (so a later opt-in actually fires), and the **poller is the runtime gate**. The
@@ -111,8 +117,8 @@ optional KEYS-manifest `.update` block) **enable** and tune it:
 | key       | meaning                                              | default        |
 |-----------|------------------------------------------------------|----------------|
 | `enabled` | master switch; **`true` opts in / enables the pull** | `false` (off)  |
-| `cadence` | cron the node runs                                   | `0 4 * * *`    |
-| `window`  | `HH:MM-HH:MM` local-time gate (live, no re-image)    | `02:00-06:00`  |
+| `cadence` | cron the node runs (rendered into the cron drop-in by keys-provision; the poller treats it as informational) | `0 4 * * *`    |
+| `window`  | `HH:MM-HH:MM` local-time gate (live, no re-image)    | `02:00-06:00` in the shipped ConfigMap; empty (any time) in the poller's baked default |
 | `reboot`  | `if-needed` \| `never` \| `always` (kured-safe)      | `if-needed`    |
 | `staging` | per board/role/`client` cadence (rollout waves)      | `{}`           |
 
