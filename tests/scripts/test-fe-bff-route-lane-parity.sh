@@ -758,8 +758,10 @@ print(f"\ndecision 60 controls: {ttl_caught} caught / {ttl_survived} survived")
 # or the whole container — would deploy that while deployment.yaml still says
 # "0" and the check above stays green.
 #
-# Two layers, because the CI jobs that run this suite (python:3-slim) have no
-# kubectl, so layer (a) is the only layer that gates a merge:
+# Two layers. Layer (a) needs no binary, so it gates anywhere; layer (b) needs
+# kustomize/kubectl, which the CI jobs that run this suite install (GitHub
+# `debian`, GitLab `lint:fe-bff-route-lane-parity`, both pinned; #594) and which
+# a developer host may lack:
 #   (a) ALWAYS: an offline scan of every patch a kustomization can apply.
 #       FAIL if any patch text names the key; if any JSON6902 op's `path` or
 #       `from` is ON THE CHAIN /spec/template/spec/containers/<n>/env — the

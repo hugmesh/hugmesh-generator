@@ -560,8 +560,14 @@ jobs:
     steps:
       - run: |
           apt-get update -qq
-          apt-get install -y --no-install-recommends git jq openssl perl procps make m4 openssh-client libarchive-tools passwd default-jre-headless
+          apt-get install -y --no-install-recommends git jq openssl perl procps make m4 openssh-client libarchive-tools passwd default-jre-headless curl ca-certificates
           pip install --quiet pyyaml
+          # kubectl, pinned to the same release as the `extras` job (#594).
+          # tests/scripts/test-fe-bff-route-lane-parity.sh asserts the kustomize-RENDERED
+          # BFF Deployments only when kustomize or kubectl is on PATH; without it the
+          # run prints "render assertion NOT RUN" and exits 0 on the offline scan alone.
+          curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl
+          chmod +x /usr/local/bin/kubectl
       - uses: actions/checkout@v4
       - name: trust the workspace
         # Container jobs run as root against a checkout git considers foreign, so
@@ -578,9 +584,9 @@ jobs:
           # If the install step ever silently degrades, the whole job would go green
           # having asserted almost nothing. Fail here instead.
           missing=""
-          for b in bash jq openssl python3 git perl make; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+          for b in bash jq openssl python3 git perl make kubectl; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
           [ -z "$missing" ] || { echo "::error::preflight: missing$missing — suites would silently skip"; exit 1; }
-          echo "preflight ok: bash jq openssl python3 git perl make"
+          echo "preflight ok: bash jq openssl python3 git perl make kubectl"
           python3 -c "import yaml" || { echo "::error::pyyaml missing — yaml suites would skip"; exit 1; }
       - name: run suites
         shell: bash

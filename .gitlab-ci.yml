@@ -210,6 +210,12 @@ lint:fe-bff-route-lane-parity:
   tags: [hugmesh-x86]
   before_script:
     - pip install --quiet pyyaml
+    # kubectl, pinned to the same release as the GitHub `extras` job (#594). The suite
+    # asserts the kustomize-RENDERED BFF Deployments only when kustomize or kubectl is
+    # on PATH; without it, it prints "render assertion NOT RUN" and layer (a) stands alone.
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+    - curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl && chmod +x /usr/local/bin/kubectl
+    - command -v kubectl >/dev/null || { echo "TOOLCHAIN MISSING:kubectl — the render leg of the route-lane parity guard would silently not run"; exit 1; }
   script:
     - bash tests/scripts/test-fe-bff-route-lane-parity.sh
 
