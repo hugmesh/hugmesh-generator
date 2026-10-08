@@ -153,18 +153,27 @@ export const SQL_SEED_PATH =
 /**
  * The blanket mfa_required flip in {@link SQL_SEED_PATH} (the `UPDATE
  * gateway_route_access SET mfa_required = true WHERE allow AND (url_pattern =
- * '/bff/admin' OR LIKE '/bff/admin/%' OR = '/bff/superadmin' OR LIKE
- * '/bff/superadmin/%')` statement, right after the decision-28 row-scoped one).
+ * '/bff/admin' OR LIKE '/bff/admin/%' OR LIKE '/bff/%/admin/%' OR =
+ * '/bff/superadmin' OR LIKE '/bff/superadmin/%' OR LIKE '/bff/%/superadmin/%')`
+ * statement, right after the decision-28 row-scoped one). The two `/bff/%/…/%`
+ * arms are operator decision 80b = B (hugmesh-generator#329): the per-service
+ * admin-console rows (forum, wiki, owncast) behind their own service-BFF prefix.
  * Mirrors that WHERE clause; the SQL side is pinned directly by
  * tests/scripts/test-mfa-required-rules.sh, so a drift between the two shows up
  * as THIS module's own rows disagreeing with a hand check of the SQL, not as a
  * silent gap here.
+ *
+ * `%` in a SQL LIKE spans ANY characters, `/` included, so the per-service arms
+ * are `.*` here and not `[^/]+`: `/bff/a/b/admin/x` matches the SQL, and a
+ * single-segment regex would silently disagree with it.
  */
+const SQL_PER_SERVICE_ADMIN = /^\/bff\/.*\/admin\/.*$/;
+const SQL_PER_SERVICE_SUPERADMIN = /^\/bff\/.*\/superadmin\/.*$/;
 function sqlBlanketMfaRequired(row: { allow: boolean; urlPattern: string }): boolean {
   if (!row.allow) return false;
   const p = row.urlPattern;
-  return p === '/bff/admin' || p.startsWith('/bff/admin/')
-      || p === '/bff/superadmin' || p.startsWith('/bff/superadmin/');
+  return p === '/bff/admin' || p.startsWith('/bff/admin/') || SQL_PER_SERVICE_ADMIN.test(p)
+      || p === '/bff/superadmin' || p.startsWith('/bff/superadmin/') || SQL_PER_SERVICE_SUPERADMIN.test(p);
 }
 
 /**

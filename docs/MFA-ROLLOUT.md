@@ -111,8 +111,10 @@ UPDATE gateway_route_access
  WHERE allow = true
    AND (url_pattern = '/bff/admin'
      OR url_pattern LIKE '/bff/admin/%'
+     OR url_pattern LIKE '/bff/%/admin/%'
      OR url_pattern = '/bff/superadmin'
      OR url_pattern LIKE '/bff/superadmin/%'
+     OR url_pattern LIKE '/bff/%/superadmin/%'
      OR (COALESCE(NULLIF(lower(trim(domain)), 'default'), '') <> ''
          AND url_pattern IN ('')))
    AND mfa_required IS DISTINCT FROM true;
@@ -125,23 +127,33 @@ The final `OR` is the **per-domain arm** (issue #47 × the casdoor-choice
 schema): list a `url_pattern` in its `IN (…)` and every **domain-scoped** row
 carrying it gets the same re-apply convergence the two blanket prefixes get.
 It is **empty today** — the empty-string element matches no pattern, so the
-flip set is exactly the 10 rows below — and §1.2a explains when (and when not)
+flip set is exactly the 14 rows below — and §1.2a explains when (and when not)
 to widen it.
 
-That flips **10 rows** (as of this writing) across three gateways:
+The `/bff/admin…` and `/bff/superadmin…` arms are the two original prefixes; the
+`/bff/%/admin/%` and `/bff/%/superadmin/%` arms are the **per-service console
+shape** added by operator decision 80b = B (hugmesh-generator#329, 2026-09-23). `%`
+spans any characters, `/` included, so a later `/bff/<service>/admin/…` row is
+picked up with no edit to the `UPDATE`.
+
+That flips **14 rows** (as of this writing) across three gateways:
 
 | gateway | url_pattern | role |
 |---|---|---|
 | `hugmesh-fe-gateway` | `/bff/admin/**` | `ROLE_ADMIN` |
 | `hugmesh-fe-gateway` | `/bff/admin/phone-fleet/**` | `ROLE_FLEET_ADMIN`, `ROLE_ADMIN`, `ROLE_SUPERADMIN` |
 | `hugmesh-fe-gateway` | `/bff/superadmin/**` | `ROLE_SUPERADMIN` |
+| `hugmesh-fe-gateway` | `/bff/forum/admin/**` | `ROLE_ADMIN` |
+| `hugmesh-fe-gateway` | `/bff/wiki/admin/**` | `ROLE_ADMIN` |
+| `hugmesh-fe-gateway` | `/bff/wiki/superadmin/**` | `ROLE_SUPERADMIN` |
+| `hugmesh-fe-gateway` | `/bff/owncast/admin/**` | `ROLE_ADMIN` |
 | `hugmesh-be-gateway` | `/bff/admin/workloads/**` | `ROLE_ADMIN` |
 | `hugmesh-be-gateway` | `/bff/superadmin/**` | `ROLE_SUPERADMIN` |
 | `hugmesh-be-gateway` | `/bff/superadmin/games-services/**` | `ROLE_SUPERADMIN` |
 | `hugmesh-be-gateway` | `/bff/superadmin/workloads/**` | `ROLE_SUPERADMIN` |
 | `hugmesh-superadmin-gateway` | `/bff/superadmin/**` | `ROLE_SUPERADMIN` |
 
-An **eleventh** row ends up at `mfa_required = true` without being flipped by this
+A **fifteenth** row ends up at `mfa_required = true` without being flipped by this
 `UPDATE`: the `hugmesh-fe-gateway` `/bff/superadmin/games-services/**` **DENY** row,
 which the blanket flip cannot reach (`WHERE allow = true`) and which is seeded by its
 own row-scoped `UPDATE` immediately before it. It is not in the table above because
@@ -166,31 +178,38 @@ checks are still textual — that the `UPDATE` is gateway-blind, allow-only, and
 sqlite3: Postgres is not installed in CI, so **these rules have never been executed
 on Postgres**; the gate says so on every run.
 
-### 1.2a Scope: exactly two prefixes — and what that leaves OUT
+### 1.2a Scope: two prefixes plus one per-service shape — and what that leaves OUT
 
 The authorised scope is the **two path prefixes** `/bff/admin…` and
-`/bff/superadmin…`, blanket *within* them. It is **not** "every admin surface", and
-the difference matters if you are reasoning about what an attacker can still reach
-with a stolen session and no second factor. Seven other admin-ish `/bff/` rows are
-deliberately left `mfa_required=false`:
+`/bff/superadmin…`, blanket *within* them, **plus** (operator decision 80b = B,
+hugmesh-generator#329, answered 2026-09-23) the **per-service console shape**:
+every allow row matching `/bff/%/admin/%` or `/bff/%/superadmin/%`, i.e. the admin
+consoles that live behind a service-BFF's own prefix (today forum, wiki and
+owncast: `/bff/forum/admin/**`, `/bff/wiki/admin/**`, `/bff/wiki/superadmin/**`,
+`/bff/owncast/admin/**`). The operator chose that deliberately over the narrower
+superadmin-only match, knowing it is the larger-lockout-risk option: the §3 step-7
+floor now also needs a fresh second factor to reach those four consoles. It is
+still not "every admin surface", and the difference matters if you are reasoning
+about what an attacker can still reach with a stolen session and no second factor.
+Three other admin-ish `/bff/` rows are deliberately left `mfa_required=false`:
 
 | gateway | url_pattern | role | why it is out of scope |
 |---|---|---|---|
-| `hugmesh-fe-gateway` | `/bff/forum/admin/**` | `ROLE_ADMIN` | per-service admin console seam behind its **own** service-BFF prefix, not under `/bff/admin`. Covering it needs a different predicate *shape* (`LIKE '/bff/%/admin/%'`) |
-| `hugmesh-fe-gateway` | `/bff/wiki/admin/**` | `ROLE_ADMIN` | ditto |
-| `hugmesh-fe-gateway` | `/bff/wiki/superadmin/**` | `ROLE_SUPERADMIN` | ditto — and the **most privileged** of the seven. Governed at the SUPERADMIN floor by #329 (so a plain `ROLE_WIKI` is now refused at the front door), but **not** MFA-gated: it is behind the wiki-bff's own service prefix, so the `UPDATE` cannot reach it without a new predicate *shape*. Flipping the per-service seams is the open operator decision |
-| `hugmesh-fe-gateway` | `/bff/owncast/admin/**` | `ROLE_ADMIN` | ditto |
 | `hugmesh-fe-gateway` | `/bff/mod/**` | `ROLE_ADMIN` | a **moderation** surface; `ROLE_ADMIN` is paired on it only as a superset of `ROLE_MOD`, so gating it would gate moderation, not administration |
 | `hugmesh-be-gateway` | `/bff/image-builds/arch/**` | `ROLE_SUPERADMIN` | privileged by **role**, not by path — a prefix predicate cannot express it |
 | `hugmesh-be-gateway` | `/bff/games-services/instances/**` | `ROLE_GAMES_SERVICES_ADMIN` | ditto (derived `games-services ∩ (admin\|mod)` role) |
 
-Each of the three shapes above would be a **new scope decision**, not a bug fix:
-widening enlarges the §3 step-7 lockout blast radius, so it is the operator's call.
-If you do widen, widen the prose in the same commit — and note that the gate
-enumerates admin-ish surfaces *independently* of the `UPDATE`'s own prefixes and
-cross-checks them against exactly this list, so an **eighth** admin-ish `/bff/` row
-appearing later fails the build until someone decides consciously (and a stale entry
-in the list fails it too).
+The first used to be one of seven: the four per-service console rows (forum,
+wiki admin, wiki superadmin, owncast) were excluded until decision 80b widened the
+predicate, and they are in the §1.2 table now. Each of the three that remain would
+be a **new scope decision**, not a bug fix: widening enlarges the §3 step-7
+lockout blast radius, so it is the operator's call. If you do widen, widen the
+prose in the same commit — and note that the gate enumerates admin-ish surfaces
+*independently* of the `UPDATE`'s own predicate and cross-checks them against
+exactly this list, so a **fourth** admin-ish `/bff/` row appearing later that the
+predicate does not reach fails the build until someone decides consciously (and a
+stale entry in the list fails it too). A new `/bff/<service>/admin/…` row needs no
+such decision: the shape already covers it, so it is gated from its first apply.
 
 #### Per-domain MFA scope (several local domains behind the same gateways — issue #47)
 
@@ -206,7 +225,7 @@ domain. Hence this scope table:
 
 | you want | expressible? | how / why not |
 |---|---|---|
-| the blanket (two prefixes) on every domain, **including** rows someone scoped to one domain under them | **yes — enforced** | the seed `UPDATE` is **domain-blind**, deliberately, like it is gateway-blind. A scoped `mfa_required=false` row under the prefixes is a **phantom exemption**: the unscoped canonical row still applies to that domain and still pulls the MFA floor up, so the false row exempts nothing — the seed re-flips it to make the table say what the gateway does. And a scoped-**only** allow row (a per-domain admin surface with no unscoped twin) must not ship un-MFA'd inside the blanket |
+| the blanket (the two prefixes and the per-service console shape) on every domain, **including** rows someone scoped to one domain under them | **yes — enforced** | the seed `UPDATE` is **domain-blind**, deliberately, like it is gateway-blind. A scoped `mfa_required=false` row under the prefixes is a **phantom exemption**: the unscoped canonical row still applies to that domain and still pulls the MFA floor up, so the false row exempts nothing — the seed re-flips it to make the table say what the gateway does. And a scoped-**only** allow row (a per-domain admin surface with no unscoped twin) must not ship un-MFA'd inside the blanket |
 | require a second factor on **one domain only**, on a surface outside the blanket (per-domain **tightening**) | **yes** | insert a domain-scoped sibling row — same `gateway`/`url_pattern`/`role`, its own `domain`, `allow=true`, `mfa_required=true`. `domainApplies()` keeps it off every other domain. To give it the same re-apply convergence the blanket has, also list its `url_pattern` in the `UPDATE`'s per-domain arm (§1.2) **and** in the gate's `PER_DOMAIN_SCOPE` set — the gate cross-checks the two in both directions |
 | **exempt** one domain from the blanket | **no** | not by a row (see the phantom-exemption note — `decide()` is a sticky OR), and not by the predicate (the blanket rows are **unscoped**, and unscoped rows apply to every domain). A real per-domain exemption means splitting the canonical rows per domain — a new scope decision with the full §3 step-7 blast-radius conversation attached |
 | an **own-IdP domain** (`Domain.idp: own`, PR #71) satisfying MFA | **no (today)** — see the source chain below | its principals authenticate against the domain-local Casdoor and can never carry `MFA_SATISFIED`. On a shared-gateway mesh, treat that whole population like the §2.4 machine callers: enumerate own-IdP domains **before** §3 step 6, or their non-privileged holders (e.g. a pure `ROLE_FLEET_ADMIN`) are 403'd on every `mfa_required` surface with no way to enroll |
@@ -255,7 +274,7 @@ stays `false`:
 
 ```sql
 INSERT INTO gateway_route_access (gateway, url_pattern, role, allow, domain, mfa_required)
-VALUES ('hugmesh-fe-gateway', '/bff/wiki/admin/**', 'ROLE_ADMIN', true, 'brand-x.example', true)
+VALUES ('hugmesh-fe-gateway', '/bff/mod/**', 'ROLE_ADMIN', true, 'brand-x.example', true)
 ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(NULLIF(lower(trim(domain)), 'default'), '')) DO NOTHING;
 ```
 
@@ -421,9 +440,10 @@ only are stored) and a regenerate invalidates the previous set.
 
 ### 2.3 The 10-minute freshness window vs. the blanket prefixes
 
-The rules use the operator-chosen **blanket** scope *within* the two prefixes
-(§1.2a): every `/bff/admin…` and `/bff/superadmin…` allow row, not just the dangerous
-verbs. Combined with the freshness window that means:
+The rules use the operator-chosen **blanket** scope *within* the two prefixes and the
+per-service console shape (§1.2a): every `/bff/admin…`, `/bff/superadmin…`,
+`/bff/<service>/admin/…` and `/bff/<service>/superadmin/…` allow row, not just the
+dangerous verbs. Combined with the freshness window that means:
 
 - Gateway window: `app.mfa.freshness-window`, default **600000 ms = 10 min**. A
   `mfa_satisfied_at` stamp older than that (or in the future) yields no
@@ -433,7 +453,7 @@ verbs. Combined with the freshness window that means:
   `mfaSatisfied`, and the gateway's `BffSessionAuthFilter` simply mirrors that
   boolean into the `MFA_SATISFIED` authority.
 
-**Practical effect:** *all* work under those two prefixes — reading a dashboard,
+**Practical effect:** *all* work under those prefixes and consoles — reading a dashboard,
 listing announcements,
 paging through audit rows — needs a stamp taken within the last 10 minutes, and a
 long admin session will be interrupted roughly every 10 minutes. The operator
@@ -574,22 +594,24 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
      FROM gateway_route_access
     WHERE allow = true
       AND (url_pattern LIKE '/bff/admin%'
-        OR url_pattern LIKE '/bff/superadmin%')
+        OR url_pattern LIKE '/bff/superadmin%'
+        OR url_pattern LIKE '/bff/%/admin/%'
+        OR url_pattern LIKE '/bff/%/superadmin/%')
     ORDER BY 1, 2, 3;
    ```
 
-   Expect the 10 rows in §1.2 at `true` — and read what this query does **not**
+   Expect the 14 rows in §1.2 at `true` — and read what this query does **not**
    show you before you act on it. The `allow = true` clause is not cosmetic: it is
    the **same predicate the flip `UPDATE` uses**, so this query and that `UPDATE`
    agree on scope by construction rather than by coincidence. Since 2026-09-17 that
    scoping also **hides one row**. The seed now carries an `allow = false` row under
    the superadmin prefix — `hugmesh-fe-gateway` `/bff/superadmin/games-services/**`,
    reinstated by operator decision 28 = **D** (hugmesh-generator#347) — and that row
-   carries the floor **too**. **Eleven** rows end up at `mfa_required = true`; this
-   query returns ten of them. A deny row denies at the longest match regardless of
+   carries the floor **too**. **Fifteen** rows end up at `mfa_required = true`; this
+   query returns fourteen of them. A deny row denies at the longest match regardless of
    MFA, which is why the flip leaves it alone, and why an operator reading an
    un-filtered result would see a `false` under a "fully flipped" prefix and think
-   the rollout had failed. Do not now make the opposite mistake: the eleventh row is
+   the rollout had failed. Do not now make the opposite mistake: the fifteenth row is
    **not** missing from the rollout, and the step-up floor is **not** off for the
    games app-store subtree. To audit the **floor** rather than the flip, use:
 
@@ -602,7 +624,7 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
     ORDER BY allow, 1, 2, 3;
    ```
 
-   Expect **11** rows: the 10 above at `allow = true`, plus the one `allow = false`
+   Expect **15** rows: the 14 above at `allow = true`, plus the one `allow = false`
    row in the table below. That row **keeps** the floor over its whole subtree
    rather than removing it, because the gateway computes the privileged step-up
    floor with `GatewayRouteAccessService.isMfaRequiredSurface()` — longest matching
@@ -642,7 +664,7 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
    > `integrate/superadmin` branch also wrote "every row" in place of "the 10 rows"
    > here, predating the count becoming 10 under the same ACCEPT.
 
-   To see the **scope boundary** instead — the 10 gated rows *and* the seven §1.2a
+   To see the **scope boundary** instead — the 14 gated rows *and* the three §1.2a
    rows that are `false` by design — use this, which is the same admin-ish
    enumeration the gate itself performs (path segment `admin`/`superadmin` **or**
    an `*_ADMIN`/`SUPERADMIN` role, which is how the three role-privileged
@@ -659,10 +681,11 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
     ORDER BY mfa_required, 1, 2, 3;
    ```
 
-   Expect **17** rows: the 10 at `true`, then the 7 §1.2a exclusions at `false`.
+   Expect **17** rows: the 14 at `true`, then the 3 §1.2a exclusions at `false`.
    ⚠ Do **not** use `LIKE '/bff/%admin%'` for this — an earlier revision of this
    runbook said that form "also returns the six §1.2a rows". It does not: it
-   returns **four** of the seven, because `/bff/mod/**`,
+   returns **none** of the three that remain (and returned only four of the then
+   seven), because `/bff/mod/**`,
    `/bff/image-builds/arch/**` and `/bff/games-services/instances/**` have no
    `admin` substring in `url_pattern` at all and are excluded by **role**. An
    operator reading that output would conclude those three privileged surfaces
@@ -905,12 +928,13 @@ data.
    ```sql
    UPDATE gateway_route_access SET mfa_required = false
     WHERE url_pattern LIKE '/bff/admin/%' OR url_pattern LIKE '/bff/superadmin/%'
+       OR url_pattern LIKE '/bff/%/admin/%' OR url_pattern LIKE '/bff/%/superadmin/%'
        OR url_pattern IN ('/bff/admin', '/bff/superadmin');
    ```
 
    (The gate runs this one too, against the replayed seed, and asserts that **no**
    row is left `mfa_required=true` afterwards — so a rollback that silently stopped
-   covering one of the prefixes fails the build.)
+   covering one of the prefixes or the per-service console shape fails the build.)
    The gateways pick this up on their next route-access refresh
    (`app.route-access.refresh-interval-ms`, default 5 s) — no restart needed. Note
    this is undone the next time `20-schema.sql` is applied; to make it permanent,

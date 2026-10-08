@@ -163,6 +163,14 @@ import os, re, sqlite3, sys
 # The two prefixes the operator authorised. Blanket WITHIN them, and nothing else:
 # see 20-schema.sql's "NOT IN SCOPE" list and docs/MFA-ROLLOUT.md §1.2a.
 PREFIXES = ("/bff/admin", "/bff/superadmin")
+# ...plus the PER-SERVICE console shape added by operator decision 80b = B
+# (hugmesh-generator#329): `LIKE '/bff/%/admin/%'` / `LIKE '/bff/%/superadmin/%'`.
+# `%` spans ANY characters, `/` included, so these are `.*` and not `[^/]+` -- the
+# model must accept exactly what the SQL accepts, no more and no less. The two
+# shapes are disjoint from PREFIXES (they need a segment BETWEEN `/bff/` and
+# `/admin/`), so a row can never be "under" both.
+PER_SERVICE_SHAPES = (re.compile(r"^/bff/.*/admin/.*$", re.S),
+                      re.compile(r"^/bff/.*/superadmin/.*$", re.S))
 
 # Admin-ish /bff/ surfaces DELIBERATELY outside that scope. Every entry is named
 # and justified in the SQL header + the runbook. This list exists so the coverage
@@ -170,20 +178,17 @@ PREFIXES = ("/bff/admin", "/bff/superadmin")
 # own prefixes: a NEW admin-ish surface that is neither flipped nor listed here
 # FAILS the gate instead of being defined away, and a listed row that no longer
 # exists (or is now flipped) fails too, so the list cannot rot into a rubber stamp.
+#
+# Decision 80b = B (hugmesh-generator#329, 2026-09-23) REMOVED four entries -- the
+# forum, wiki-admin, wiki-superadmin and owncast console seams -- because the
+# UPDATE now carries the per-service shape and flips them. They must stay OUT of
+# this set: a row that is flipped AND listed here fails the STALE_EXCLUSIONS check,
+# which is what makes the list impossible to leave behind. What remains is what the
+# path predicate genuinely cannot (or must not) express.
 DOCUMENTED_EXCLUSIONS = {
     ("hugmesh-be-gateway", "/bff/games-services/instances/**", "ROLE_GAMES_SERVICES_ADMIN"),
     ("hugmesh-be-gateway", "/bff/image-builds/arch/**",        "ROLE_SUPERADMIN"),
-    ("hugmesh-fe-gateway", "/bff/forum/admin/**",              "ROLE_ADMIN"),
     ("hugmesh-fe-gateway", "/bff/mod/**",                      "ROLE_ADMIN"),
-    ("hugmesh-fe-gateway", "/bff/owncast/admin/**",            "ROLE_ADMIN"),
-    ("hugmesh-fe-gateway", "/bff/wiki/admin/**",               "ROLE_ADMIN"),
-    # FIRST per-service *superadmin* seam (#329). Same reason as its
-    # /bff/wiki/admin/** sibling directly above: it lives behind the wiki-bff's
-    # own service prefix, not under the two authorised blanket prefixes, so the
-    # UPDATE cannot reach it without a new predicate SHAPE. Listed -- not
-    # flipped -- deliberately: flipping the per-service seams is the open
-    # operator decision, and this gate must keep saying so out loud.
-    ("hugmesh-fe-gateway", "/bff/wiki/superadmin/**",           "ROLE_SUPERADMIN"),
 }
 
 # PER-DOMAIN MFA SCOPE (issue #47 × casdoor-choice). url_patterns an operator has
@@ -733,7 +738,7 @@ try:
             "SELECT count(*) FROM gateway_route_access").fetchone()[0] == n0 + 1
         # (iv) a per-domain TIGHTENING row outside the blanket prefixes
         con.execute("INSERT INTO gateway_route_access (gateway, url_pattern, role, allow, domain, mfa_required) VALUES "
-                    "('hugmesh-fe-gateway', '/bff/wiki/admin/**', 'ROLE_ADMIN', true, 'brand-x.example', true)\n" + onconf_clause)
+                    "('hugmesh-fe-gateway', '/bff/mod/**', 'ROLE_ADMIN', true, 'brand-x.example', true)\n" + onconf_clause)
         # now RE-APPLY the whole file's DML with the per-domain rows in place
         for s in dml:
             try:
@@ -745,10 +750,10 @@ try:
                           "WHERE domain = 'brand-x.example' AND url_pattern = '/bff/admin/phone-fleet/**'").fetchall()
         pd["blanket_scoped"] = len(got) == 1 and bool(got[0][0])
         got = con.execute("SELECT mfa_required FROM gateway_route_access "
-                          "WHERE domain = 'brand-x.example' AND url_pattern = '/bff/wiki/admin/**'").fetchall()
+                          "WHERE domain = 'brand-x.example' AND url_pattern = '/bff/mod/**'").fetchall()
         pd["tighten_kept"] = len(got) == 1 and bool(got[0][0])
         got = con.execute("SELECT mfa_required FROM gateway_route_access "
-                          "WHERE domain IS NULL AND url_pattern = '/bff/wiki/admin/**'").fetchall()
+                          "WHERE domain IS NULL AND url_pattern = '/bff/mod/**' AND role = 'ROLE_ADMIN'").fetchall()
         pd["tighten_scoped_only"] = len(got) == 1 and not got[0][0]
     except Exception as e:                                      # noqa: BLE001
         pd_err.append(str(e))
@@ -784,7 +789,8 @@ for g, p, r in flipped:
     emit("FLIP", "%s %s %s" % (g, p, r))
 
 def under(pat):
-    return any(pat == pre or pat.startswith(pre + "/") for pre in PREFIXES)
+    return (any(pat == pre or pat.startswith(pre + "/") for pre in PREFIXES)
+            or any(rx.match(pat) for rx in PER_SERVICE_SHAPES))
 
 over = [t for t in flipped if not under(t[1])]
 emit("OVERREACH", len(over))
@@ -1053,10 +1059,10 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
                                 raise
                     scoped = con.execute(
                         "SELECT mfa_required FROM gateway_route_access "
-                        "WHERE domain = 'brand-x.example' AND url_pattern = '/bff/wiki/admin/**'").fetchall()
+                        "WHERE domain = 'brand-x.example' AND url_pattern = '/bff/mod/**'").fetchall()
                     unscoped = con.execute(
                         "SELECT mfa_required FROM gateway_route_access "
-                        "WHERE domain IS NULL AND url_pattern = '/bff/wiki/admin/**'").fetchall()
+                        "WHERE domain IS NULL AND url_pattern = '/bff/mod/**' AND role = 'ROLE_ADMIN'").fetchall()
                 finally:
                     con.execute("ROLLBACK TO docsql")
                     con.execute("RELEASE docsql")
@@ -1653,9 +1659,9 @@ fi
   || bad "$(g ALTER_SHAPE_MISMATCH) column(s) end up shaped differently on a fresh initdb vs an in-place upgrade: $(sed -n 's/^ALTER_SHAPE_MISMATCH_ROW //p' "${W}/real.out" | tr '\n' ';') $(sed -n 's/^ALTER_UNKNOWN_ACTION //p' "${W}/real.out" | tr '\n' ';')"
 
 if [ "${HAVE_UPDATE}" = "1" ]; then
-[ "$(g FLIPPED)" -ge 10 ] \
+[ "$(g FLIPPED)" -ge 15 ] \
   && ok "AFTER the whole file runs, $(g FLIPPED) rows carry mfa_required=true: $(sed -n 's/^FLIP //p' "${W}/real.out" | tr '\n' ';' )" \
-  || bad "after the whole file runs only $(g FLIPPED) rows carry mfa_required=true — expected at least the 10 rows under /bff/admin/** + /bff/superadmin/**"
+  || bad "after the whole file runs only $(g FLIPPED) rows carry mfa_required=true — expected at least the 15 rows (10 under /bff/admin/** + /bff/superadmin/**, 4 per-service admin consoles, and the 1 deliberate deny row)"
 
 # ── #244 ACCEPT: the superadmin platform console at the PUBLIC browser door ────
 # Behavioural, replayed over the FINAL rows, not a grep of the INSERT. The row is
@@ -2307,11 +2313,36 @@ nc "an admin-ish /bff/ surface added but neither flipped nor documented" ADMINIS
     repr("hugmesh-fe-gateway"), repr("/bff/mod/**"), repr("ROLE_MOD"))
 anchor(mod)
 s = s.replace(mod, mod + "\n  (%s, %s, %s, true)," % (
+    repr("hugmesh-fe-gateway"), repr("/bff/tube/ops/**"), repr("ROLE_ADMIN")), 1)'
+
+# Decision 80b = B (hugmesh-generator#329): the per-service console shape. Each arm
+# is proven to bite on its own, so dropping either one (or widening it into a
+# second blanket) is a red build and not a silent narrowing of the MFA scope.
+nc "the per-service ADMIN arm (LIKE '/bff/%/admin/%') dropped from the flip -- the forum/wiki/owncast admin consoles lose the floor" PREFIX_UNFLIPPED 0 \
+   'a = "     OR url_pattern LIKE %s\n" % repr("/bff/%/admin/%")
+anchor(a)
+s = s.replace(a, "", 1)'
+
+nc "the per-service SUPERADMIN arm (LIKE '/bff/%/superadmin/%') dropped from the flip -- the wiki superadmin console loses the floor" PREFIX_UNFLIPPED 0 \
+   'a = "     OR url_pattern LIKE %s\n" % repr("/bff/%/superadmin/%")
+anchor(a)
+s = s.replace(a, "", 1)'
+
+nc "the per-service admin arm widened to every /bff/ path (a second blanket)" OVERREACH 0 \
+   'a = "url_pattern LIKE %s" % repr("/bff/%/admin/%")
+anchor(a)
+s = s.replace(a, "url_pattern LIKE %s" % repr("/bff/%"), 1)'
+
+nc "a NEW per-service console row added later is flipped by the shape, with no edit to the UPDATE" FLIPPED 15 \
+   'mod = "  (%s,  %s,           %s,       true)," % (
+    repr("hugmesh-fe-gateway"), repr("/bff/mod/**"), repr("ROLE_MOD"))
+anchor(mod)
+s = s.replace(mod, mod + "\n  (%s, %s, %s, true)," % (
     repr("hugmesh-fe-gateway"), repr("/bff/tube/admin/**"), repr("ROLE_ADMIN")), 1)'
 
 nc "a documented exclusion that no longer exists (the list rots)" STALE_EXCLUSIONS 0 \
-   'anchor("'"'"'/bff/wiki/admin/**'"'"'")
-s = re.sub(r"^.*%s.*$\n" % re.escape("'"'"'/bff/wiki/admin/**'"'"'"), "", s, flags=re.M)'
+   'anchor("'"'"'/bff/image-builds/arch/**'"'"'")
+s = re.sub(r"^.*%s.*$\n" % re.escape("'"'"'/bff/image-builds/arch/**'"'"'"), "", s, flags=re.M)'
 
 # ── per-domain MFA scope (issue #47), proven to bite ──────────────────────────
 nc "the domain key devolves to the lexical COALESCE(domain, ...) — alias rows duplicate again" DOMAIN_ALIAS_COLLAPSED yes \
@@ -2337,7 +2368,7 @@ s = s.replace(arm, ")", 1)'
 nc "a surface listed in the per-domain arm without documenting it (scope widened on the sly)" DOMAIN_ARM_UNDOCUMENTED 0 \
    'a = "AND url_pattern IN (%s)))" % repr("")
 anchor(a)
-s = s.replace(a, "AND url_pattern IN (%s, %s)))" % (repr(""), repr("/bff/wiki/admin/**")), 1)'
+s = s.replace(a, "AND url_pattern IN (%s, %s)))" % (repr(""), repr("/bff/mod/**")), 1)'
 
 nc "the DROP INDEX upgrade step removed (an upgraded cluster keeps the OLD lexical key and the re-applied INSERT aborts)" UQ_UPGRADE_ORDER yes \
    'a = "DROP INDEX IF EXISTS uq_route_access_row;\n"
@@ -2410,8 +2441,8 @@ s = s.replace(a, "      AND url_pattern LIKE %s" % repr("/bff/%admin%"), 1)'
 # control fails LOUDLY (its own precondition check) rather than silently proving
 # nothing.
 nd "the runbook's verification query silently widened to every row" DOC_SQL_BAD 0 \
-   'a = "    WHERE allow = true\n      AND (url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
-    repr("/bff/admin%"), repr("/bff/superadmin%"))
+   'a = "    WHERE allow = true\n      AND (url_pattern LIKE %s\n        OR url_pattern LIKE %s\n        OR url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
+    repr("/bff/admin%"), repr("/bff/superadmin%"), repr("/bff/%/admin/%"), repr("/bff/%/superadmin/%"))
 anchor(a)
 s = s.replace(a, "    WHERE 1 = 1", 1)'
 
@@ -2428,11 +2459,24 @@ s = s.replace(a, "    WHERE 1 = 1", 1)'
 # runbook's own query disagree with its own prose, and the one a future editor
 # "tidying" the clause away would actually make.
 nd "the runbook's verification query drops ONLY its allow = true clause (the deny row surfaces as an un-flipped row and reads as a failed rollout)" DOC_SQL_BAD 0 \
-   'a = "    WHERE allow = true\n      AND (url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
-    repr("/bff/admin%"), repr("/bff/superadmin%"))
+   'a = "    WHERE allow = true\n      AND (url_pattern LIKE %s\n        OR url_pattern LIKE %s\n        OR url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
+    repr("/bff/admin%"), repr("/bff/superadmin%"), repr("/bff/%/admin/%"), repr("/bff/%/superadmin/%"))
 anchor(a)
-s = s.replace(a, "    WHERE (url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
-    repr("/bff/admin%"), repr("/bff/superadmin%")), 1)'
+s = s.replace(a, "    WHERE (url_pattern LIKE %s\n        OR url_pattern LIKE %s\n        OR url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
+    repr("/bff/admin%"), repr("/bff/superadmin%"), repr("/bff/%/admin/%"), repr("/bff/%/superadmin/%")), 1)'
+
+# Decision 80b: the runbook's verify query must carry the per-service arms too, or
+# it reports 10 of the 14 flipped rows and an operator reads the four consoles as
+# un-gated. Dropping them must move DOC_SQL_BAD.
+nd "the runbook's verification query loses the per-service console arms (it would show 10 of the 14 rows and hide the four consoles)" DOC_SQL_BAD 0 \
+   'a = "\n        OR url_pattern LIKE %s\n        OR url_pattern LIKE %s)\n    ORDER BY 1, 2, 3;" % (repr("/bff/%/admin/%"), repr("/bff/%/superadmin/%"))
+anchor(a)
+s = s.replace(a, ")\n    ORDER BY 1, 2, 3;", 1)'
+
+nd "the runbook's rollback block loses the per-service arms (it would leave the four consoles at mfa_required=true)" DOC_SQL_BAD 0 \
+   'a = "\n       OR url_pattern LIKE %s OR url_pattern LIKE %s" % (repr("/bff/%/admin/%"), repr("/bff/%/superadmin/%"))
+anchor(a)
+s = s.replace(a, "", 1)'
 
 # ── the FLOOR query and the deny-floor table (hugmesh-generator#485) ────────────
 # §5 now carries a second marked query, scoped to the FLOOR rather than to the flip,
