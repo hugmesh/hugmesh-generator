@@ -21,15 +21,12 @@ Two DIFFERENT "idp" axes exist. Do not mix them up:
   registry names: `APP_TENANCY_ISSUERS += https://id.<domain>=<slug>` and
   `APP_TENANCY_HOSTS += <domain>=<slug>` (extend, never rename; this is the Makefile
   `STACK_BRAND_B_ENV` spelling). That registry hard-denies cross-brand token replay.
-* HARD GATE before any BFF takes the registry pair: its `domain='default'`
-  rows must be re-stamped (flipping the registry on existing data silently hides
-  every row). For wiki-bff the re-stamp migration has landed
+* HARD GATE before any BFF takes the registry pair: its `domain='default'` rows
+  must be re-stamped, or the flip silently hides every row. wiki-bff has the re-stamp
   (`RestampTargetEnvironmentPostProcessor`, hugmesh-wiki-bff-api#19): setting
-  `APP_TENANCY_ISSUERS` re-stamps the rows on that same boot. It is a one-way
-  door. Afterwards also pin `SPRING_LIQUIBASE_PARAMETERS_WIKI_RESTAMP_TARGET_DOMAIN`
-  and never remove it; read the warning in
-  `manifests/wiki-bff-api/deployment.yaml` first. Check each other BFF the same
-  way before it takes a pair. Gateways can take the pair first.
+  `APP_TENANCY_ISSUERS` re-stamps on that boot. It is a one-way door; read the
+  warning in `manifests/wiki-bff-api/deployment.yaml` first. Check every other BFF
+  before it takes a pair. Gateways can take the pair first.
 
 ## Lane 1 — single mesh (ApplicationSet)
 
@@ -48,10 +45,10 @@ explicitly NOT a git-committing reconciler, docs/OPTIONAL-SERVICES.md §7.1):
   `_opt_render_installed_services`);
 * runtime — planned: an admin-bff `DomainReconciler` (cross-repo, a clone of
   OptionalServiceReconciler, shipping dark) would mirror the #118 domain-registry
-  rows. It does not exist: admin-bff `main` has no such class (2026-10-07). What does
-  exist is the registry side: each `DomainEntry` in the signed export now carries
-  `idp`, `casdoorOrg`, `nsPrefix`, `appsetRegistered` and the MCS pair, and
-  `hugmesh-domain-reconcile` reads `idp` as a closed enum (`superdomain|own`).
+  rows. No such class exists on admin-bff `main` (2026-10-07). The registry side
+  exists: each signed-export `DomainEntry` carries `idp`, `casdoorOrg`, `nsPrefix`,
+  `appsetRegistered` and the MCS pair, and `hugmesh-domain-reconcile` reads `idp`
+  as a closed enum (`superdomain|own`).
 
 Both roots (`app-of-apps.yaml`, `00-app-of-apps-waved.yaml`) carry the
 `casdoor-domains` ignoreDifferences and the `RespectIgnoreDifferences` keystone.

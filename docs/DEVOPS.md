@@ -70,12 +70,11 @@ Forgejo** as the source of truth. The scaffold exists. The cut-over has not happ
     `remote-fragment`, `user-bff-api`.
   - `snapdragon-deploy.yaml` + `deploy/` (LEGACY_COMPAT, the pre-rebrand descriptor
     name) — `forum-bff-api`, the registry's last legacy row (swept 2026-08-20).
-    **Stale:** on 2026-10-07 the root of `hugmesh-forum-bff-api` (default branch)
-    ships `hugmesh-deploy.yaml`, not `snapdragon-deploy.yaml`
-    (`gh api repos/hugmesh/hugmesh-forum-bff-api/contents/`). So all 9 adopters now
-    use the new name. The registry row and the legacy generator filter are due for the
-    update that the registry's own header describes. The registry, not this list, is
-    the authority, and it is gate-checked against the repos themselves.
+    **Stale:** on 2026-10-07 `hugmesh-forum-bff-api` ships `hugmesh-deploy.yaml` at
+    its root (`gh api repos/hugmesh/hugmesh-forum-bff-api/contents/`), so all 9
+    adopters use the new name. The registry row and the legacy generator filter need
+    the update the registry's header describes. The registry, not this list, is the
+    authority, and the gate checks it against the repos.
 
   The catalog generators filter on **both** filenames (two `filters` entries: the
   scmProvider ORs across entries and ANDs inside one, and `pathsExist` is itself an

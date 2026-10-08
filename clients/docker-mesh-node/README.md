@@ -20,9 +20,9 @@ out a copy-paste `docker run` to onboard a remote box.
      retrying. It becomes reachable the moment a superadmin admits it
      (register-and-approve admission).
 3. Performs a **one-line Casdoor login** (OIDC device-code): it prints a URL + a
-   short code; you open the URL over the tailnet, enter the code, done. If the
-   issuer does not advertise a device-code endpoint, it prints a browser sign-in URL
-   instead. It polls up to 60 times, and the node stays up whether or not you finish.
+   short code; you open the URL over the tailnet, enter the code, done. Without a
+   device-code endpoint on the issuer, it prints a browser sign-in URL instead. It polls
+   up to 60 times. The node stays up either way.
 4. For `superadmin`, it prints the tailnet-only superadmin UI URL
    (`https://superadmin.<domain>/` — no public forward, ADR-17).
 5. Stays running in the background (`--restart unless-stopped`). Its tailnet
@@ -68,9 +68,8 @@ networking** on its own. That is enough to join the tailnet for onboarding.
 
 `mesh-node.cmd` is a double-clickable wrapper for `mesh-node.ps1` (same flags).
 
-Both launchers also take `--name HOST` (`-Name`; sets the tailnet hostname) and
-`--image IMG` (`-Image`; the image tag, default `hugmesh/mesh-node:latest`).
-`install.sh` and `install.ps1` take the same two options.
+The launchers and installers also take `--name HOST` (`-Name`; the tailnet hostname)
+and `--image IMG` (`-Image`; default `hugmesh/mesh-node:latest`).
 
 ---
 
