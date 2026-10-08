@@ -104,8 +104,8 @@ def test_the_note_is_right_that_gen_provision_keys_tells_the_operator_to_copy_th
 
     Whether keys-provision then IMPORTS that file for a client stick is the engine's
     side of the note (issue #588): the text pin above cannot see it, and the executing
-    pins live with the engine fix (studio/tests/test_keys_provision_certs.py on the
-    keys-provision branch), not here."""
+    pins live with the engine fix (studio/tests/test_keys_provision_certs.py), which
+    lands in the same change as this note, not here."""
     assert "gen-provision-keys.sh tells you to copy there" in CLIENT_CA_INHERITANCE_NOTE
     # ... and the sentence that makes the note honest: the operator PUTS the certificates
     # on the stick; the image carries none, so it is not "every certificate in" a stick

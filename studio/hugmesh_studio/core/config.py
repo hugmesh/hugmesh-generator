@@ -928,9 +928,9 @@ CA_CERT_MAX_BYTES = 1 << 20             # 1 MiB: a CA bundle is kilobytes; refus
 #: has no `files` key) imported nothing and the note promised an import that did not
 #: run. The engine fix — the import as its own step, provision_certs, called from
 #: main() for every manifest, with executing pins (studio/tests/
-#: test_keys_provision_certs.py) and the container and client-image proofs — is the
-#: keys-provision branch (fix/keys-provision-certs-every-manifest-20260930); this
-#: note is only true once it has landed. gen-provision-keys.sh does not mint the CA
+#: test_keys_provision_certs.py) and the container and client-image proofs — lands in
+#: the same change as this wording: the note is true of the engine only WITH that
+#: change, so the two must not be separated. gen-provision-keys.sh does not mint the CA
 #: for a client: it tells the operator to copy certs/cluster-ca.crt from the pki node
 #: onto the stick, which is why the note says "the certificates you put there".
 #: studio/tests/test_client_ca_inheritance.py pins the text facts against the
