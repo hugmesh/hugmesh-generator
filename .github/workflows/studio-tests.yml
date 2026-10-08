@@ -68,7 +68,7 @@ concurrency:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     # No workflow in this fleet sets a timeout, which is exactly why 54 runs sat in a
     # queue for a day. 20 minutes is ~25x the suite's real runtime.
     timeout-minutes: 20

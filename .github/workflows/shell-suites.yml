@@ -255,7 +255,7 @@ concurrency:
 jobs:
   alpine:
     name: shell suites (alpine)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     # 40, not 25 (GEN-5). This job runs 133 suites serially and none is dominant
     # (the slowest is ~3 min), so it cannot be split by moving one or two. MEASURED:
     # 15 min 44 s in run 37682082806 (main) and 21 min 21 s in run 37691286476 (the PR
@@ -491,7 +491,7 @@ jobs:
 
   debian:
     name: shell suites (debian/python${{ matrix.part }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 25
     # SPLIT 2026-10-07 (GEN-5). One job ran all 44 suites serially and finished run
     # 37682082806 in 24 min 34 s against a 25-minute timeout; two suites were 16 of
@@ -624,7 +624,7 @@ jobs:
 
   node:
     name: shell suites (node)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 25
     container:
       image: node:24-alpine
@@ -762,7 +762,7 @@ jobs:
 
   extras:
     name: shell suites (tool-heavy)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 25
     container:
       image: python:3.12-slim
