@@ -1,7 +1,9 @@
 # HugMesh security model
 
-Defense-in-depth: every application UI/API is a **distinct identity** at three
-layers, and the container runtime + network are confined to those identities.
+Defense in depth: every application UI/API is meant to be a **distinct identity** at
+three layers (SELinux, Casdoor, Kubernetes). The container runtime and the network
+are confined to those identities. §3 says which parts are enforced and which are
+still the target.
 
 ## 1. LSM — SELinux on every image
 
@@ -29,10 +31,10 @@ Frite, Jetson and Orange Pi kernels. AppArmor is disabled
 ## 2. Containers locked to SELinux roles
 
 `containerd` runs with `enable_selinux = true` and `selinux_category_range = 1024`
-(`specs/etc/containerd/config.toml`), so every pod
-is labelled `container_t` with a unique MCS category pair — pods are mutually
-isolated by SELinux. Kubernetes refines this per workload via
-`securityContext.seLinuxOptions`, giving **each application its own role/level**.
+(`specs/etc/containerd/config.toml`). Every pod is labelled `container_t` with a
+unique MCS category pair, so pods are mutually isolated by SELinux. Kubernetes
+refines this per workload through `securityContext.seLinuxOptions`, which gives
+**each application its own role/level**.
 
 ## 3. The per-application identity matrix
 
@@ -144,81 +146,82 @@ category-isolated volumes.
   `<brand>-pki-gateway`, `-be-gateway`, `-fe-gateway`, `-api`, `-admin-bff-api`,
   `-mod-bff-api`, `-user-bff-api`. See §4.
 
-> **service-catalog-ui note (reservation DISCHARGED 2026-08-26):** this row used to
-> read "no Deployment yet" and mark `s0:c49` *(reserved)* — the console shipped only a
+> **service-catalog-ui note (reservation discharged 2026-08-26).** This row used to
+> read "no Deployment yet" and mark `s0:c49` *(reserved)*. The console shipped only a
 > federation descriptor
 > (`manifests/federation-api/register-superadmin-service-catalog.descriptor.yaml`),
-> a gateway route and route-access rows, with nothing to serve them. The Deployment +
-> Service now exist (`manifests/superadmin-service-catalog-ui/`) and carry exactly the
-> reserved identity: `serviceAccountName: sa-service-catalog-ui` and
+> a gateway route and route-access rows, with nothing to serve them. The Deployment
+> and Service now exist (`manifests/superadmin-service-catalog-ui/`) and carry
+> exactly the reserved identity: `serviceAccountName: sa-service-catalog-ui` and
 > `securityContext.seLinuxOptions: { type: container_t, level: "s0:c49" }`.
 >
-> **What that reservation cost while it was only prose:** `s0:c49` was silently taken
-> by `edge-ai-analysis`, whose manifest picked it as "next free" — correctly, by the
-> only evidence available to it, because a reservation with no Deployment is invisible
-> to both a manifest scan and the `[mcs]` uniqueness gate (which compares *workloads*).
-> The clash surfaced the moment the Deployment was written, and `edge-ai-analysis`
-> was moved to `s0:c87`. The durable fix is not the renumber, it is that
-> `edge-ai-analysis` had **no row in this matrix at all** — an unlisted workload
-> cannot be avoided. Anything holding a category must appear above.
+> **What the reservation cost while it was only prose.** `edge-ai-analysis` took
+> `s0:c49` as "next free". That was correct by the only evidence it had, because a
+> reservation with no Deployment is invisible to a manifest scan and to the `[mcs]`
+> uniqueness gate (which compares *workloads*). The clash surfaced when the
+> Deployment was written, and `edge-ai-analysis` moved to `s0:c87`. The lasting fix
+> is not the renumber. `edge-ai-analysis` had **no row in this matrix at all**, and
+> an unlisted workload cannot be avoided. Anything that holds a category must appear
+> above.
 
-> **`cassandra` MCS note:** category `s0:c63` is injected via the bitnami
-> cassandra 12.3.11 chart's **supported** `podSecurityContext.seLinuxOptions`
-> **and** `containerSecurityContext.seLinuxOptions` values keys
-> (`specs/cluster/apps/00-cassandra.yaml`) — only `seLinuxOptions.level` is set;
-> all other securityContext chart defaults are untouched. This is a clean values
-> override (no chart fork / template patch), so it is **not** an exemption.
+> **`cassandra` MCS note.** Category `s0:c63` is set through the bitnami cassandra
+> 12.3.11 chart's **supported** `podSecurityContext.seLinuxOptions` **and**
+> `containerSecurityContext.seLinuxOptions` values keys
+> (`specs/cluster/apps/00-cassandra.yaml`). Only `seLinuxOptions.level` is set; all
+> other securityContext chart defaults are untouched. This is a clean values override
+> (no chart fork, no template patch), so it is **not** an exemption.
 >
-> **Cassandra auth (live) and TLS (dark, ADR-32):** the per-app least-privilege
-> roles `admin_bff_cass` / `pki_gw_cass` / `be_gw_cass` / `fe_gw_cass` /
-> `sa_gw_cass` / `federation_cass` are **Cassandra-internal DB login roles** (CQL
-> `CREATE ROLE`, deny-by-default under `CassandraAuthorizer`), NOT separate
-> pods/SAs — so they take **no new MCS category**. They are created by the live
-> `cassandra-bootstrap` Job (`apps/00b-cassandra-init.yaml`,
-> `manifests/cassandra-init/`). The dark TLS helper Job
-> (`cassandra-tls-keystore-builder`, `manifests/cassandra-hardening/`) is a
-> Cassandra-tier admin client too. Both Jobs run **under the same `s0:c63`** (set
-> explicitly in their pod `seLinuxOptions.level`), so they introduce no new node
-> service and need **no new `specs/selinux/*.te`/`.fc` module**. **No new
-> listening port** is opened: auth and TLS reuse the Cassandra CQL `:9042` that the
-> `db-ingress-cassandra` NetworkPolicy already covers. The credentials are
-> ESO/Vault only (`secret/<brand>/cassandra-admin`, `…/cassandra-app-creds`) —
+> **Cassandra auth (live) and TLS (dark, ADR-32).** The per-app least-privilege
+> roles `admin_bff_cass`, `pki_gw_cass`, `be_gw_cass`, `fe_gw_cass`, `sa_gw_cass` and
+> `federation_cass` are **Cassandra-internal login roles** (CQL `CREATE ROLE`,
+> deny-by-default under `CassandraAuthorizer`). They are not separate pods or
+> ServiceAccounts, so they take **no new MCS category**. The live `cassandra-bootstrap`
+> Job creates them (`apps/00b-cassandra-init.yaml`, `manifests/cassandra-init/`). The
+> dark TLS helper Job (`cassandra-tls-keystore-builder`,
+> `manifests/cassandra-hardening/`) is also a Cassandra-tier admin client. Both Jobs
+> run **under the same `s0:c63`**, set in their pod `seLinuxOptions.level`. They add
+> no node service and need **no new `specs/selinux/*.te`/`.fc` module**. **No new
+> listening port** is opened: auth and TLS reuse the CQL port `:9042`, which the
+> `db-ingress-cassandra` NetworkPolicy already covers. The credentials come from
+> ESO/Vault only (`secret/<brand>/cassandra-admin`, `…/cassandra-app-creds`) and are
 > never in git. See `docs/CLUSTER-HARDENING-PLAN.md` §H.
 
-> **`velero` cloud-backups MCS note:** the opt-in/inert cloud-backups leg
+> **`velero` cloud-backups MCS note.** The opt-in, inert cloud-backups leg
 > (`specs/cluster/apps/55-velero.yaml`, `specs/cluster/manifests/velero/`) runs
-> THREE distinct pods in the `velero` namespace, each with its own unique
-> category: the Velero **server** `s0:c64` and the **node-agent** DaemonSet
-> `s0:c65` are injected via the upstream Velero 12.0.3 chart's **supported**
-> `podSecurityContext.seLinuxOptions` + `containerSecurityContext.seLinuxOptions`
-> (and `nodeAgent.podSecurityContext` / `nodeAgent.containerSecurityContext`)
-> values keys — only `seLinuxOptions.level` set, all other chart securityContext
-> defaults untouched (same clean values override as cassandra, no fork). The
-> `backups-status-sweep` CronJob carries `s0:c66` on its pod `securityContext`
-> (`specs/cluster/manifests/velero/sweep-cronjob.yaml`). The admin-bff
-> `cloudbackup` **effector** identity (k8s SA `backups-effector`, granted
-> create/get/list/patch on `velero.io` Backup/Restore via
-> `specs/cluster/manifests/velero/rbac.yaml`) runs INSIDE the `admin-bff` pod and
-> therefore inherits `admin-bff`'s `s0:c23` — it does **not** take a category of
-> its own. The whole leg ships dark (app 55/56 manual-sync + the admin-bff
-> `app.backups.effector.enabled=false` default), so these categories are reserved
-> correct-by-construction and become live only on a deliberate superadmin opt-in.
+> THREE distinct pods in the `velero` namespace, each with its own unique category:
+> - the Velero **server** `s0:c64` and the **node-agent** DaemonSet `s0:c65`, set
+>   through the upstream Velero 12.0.3 chart's **supported**
+>   `podSecurityContext.seLinuxOptions` and `containerSecurityContext.seLinuxOptions`
+>   values keys (and `nodeAgent.podSecurityContext` /
+>   `nodeAgent.containerSecurityContext`). Only `seLinuxOptions.level` is set and
+>   every other chart securityContext default is untouched: the same clean values
+>   override as cassandra, with no fork;
+> - the `backups-status-sweep` CronJob, which carries `s0:c66` on its pod
+>   `securityContext` (`specs/cluster/manifests/velero/sweep-cronjob.yaml`).
+>
+> The admin-bff `cloudbackup` **effector** identity (k8s SA `backups-effector`,
+> granted create/get/list/patch on `velero.io` Backup/Restore through
+> `specs/cluster/manifests/velero/rbac.yaml`) runs INSIDE the `admin-bff` pod. It
+> inherits `admin-bff`'s `s0:c23` and does **not** take a category of its own. The
+> whole leg ships dark (apps 55/56 manual-sync, and the admin-bff default
+> `app.backups.effector.enabled=false`). These categories are therefore reserved
+> correct by construction and become live only on a deliberate superadmin opt-in.
 
-> **`coturn` TURN-relay MCS note:** the OPTIONAL, DEFAULT-OFF coturn relay
+> **`coturn` TURN-relay MCS note.** The OPTIONAL, DEFAULT-OFF coturn relay
 > (`specs/cluster/manifests/coturn/`) carries category `s0:c67` on its pod
-> `securityContext.seLinuxOptions.level` (`deployment.yaml`) and runs as the
+> `securityContext.seLinuxOptions.level` (`deployment.yaml`). It runs as the
 > dedicated SA `sa-coturn` (`service-account.yaml`,
-> `automountServiceAccountToken:false` — coturn needs no Kubernetes API). It
-> co-resides in `hugmesh-backend` with tuwunel (`s0:c32`) so they can share the
-> ESO-synced TURN long-term-credential secret (`coturn-shared-secret`), but the
+> `automountServiceAccountToken: false`, because coturn needs no Kubernetes API). It
+> shares the `hugmesh-backend` namespace with tuwunel (`s0:c32`) so that both can use
+> the ESO-synced TURN long-term-credential secret (`coturn-shared-secret`). The
 > unique MCS category keeps the two pods category-isolated. coturn ships dark
-> (RUNTIME-ONLY: no baked Application; gated by the apps/13a element +
-> `installed-services` ConfigMap `coturn:"false"`), so the category becomes live
+> (RUNTIME-ONLY: no baked Application; gated by the apps/13a element and the
+> `installed-services` ConfigMap entry `coturn:"false"`), so the category becomes live
 > only on a deliberate per-domain opt-in. See [`docs/COTURN.md`](COTURN.md).
 
-> **Node-service custom domains:** the host-service SELinux domains in
-> [`specs/selinux/*.te`](../specs/selinux/) are part of this contract for
-> **node** processes (not pods). The full set:
+> **Node-service custom domains.** The host-service SELinux domains in
+> [`specs/selinux/*.te`](../specs/selinux/) are part of this contract for **node**
+> processes (not pods). The full set:
 >
 > | Module (`.te`/`.fc`) | Domain(s) | Confines | Binary / labelled path |
 > |---|---|---|---|
@@ -315,23 +318,26 @@ container in §4.
 
 ## 6. Identity / login (recap)
 
-Casdoor is the OIDC IdP. The superdomain Casdoor ships with **no Ingress** and is
-reached from inside the cluster. A per-domain Casdoor (`idp: own`) carries its own
-Ingress at `id.<clusterDomain>` (`manifests/casdoor-domain/ingress.yaml`). The
-browser's sign-in does not go to Casdoor. Human
-login is a **native, first-party form**: `login-ui` POSTs username/password (+ any
-MFA passcode) to user-bff `POST /bff/login`, which runs PKCE + the internal Casdoor
-`/api/login` + code exchange server-side and returns only an opaque `bff_` session
-cookie (no JWT, `code_verifier`, `state`, or Casdoor URL ever reaches the client).
-Federated sign-up (Google/Discord) and registration stay admin-allowlist-gated
-(two-stage). **Service users** (the per-app identities above) are separate Casdoor
-accounts with service roles (§3 lists which are seeded); the gateways validate the
-Casdoor JWT and the `External-*` headers. No front-door route (fe-gateway,
-be-gateway) exposes Casdoor. The pki-gateway, which is not internet-facing (it is
-served only by the internal ingress on the pki node, LAN/VPN), does route
-`/api/auth/**`, `/login/**` and `/.well-known/**` to Casdoor, and sends
-`/api/signup` and `/api/login` through the signup-gate first
-([`docs/USERNAME-CONFUSABLE.md`](USERNAME-CONFUSABLE.md)).
+Casdoor is the OIDC IdP.
+
+- **Exposure.** The superdomain Casdoor ships with **no Ingress** and is reached from
+  inside the cluster. A per-domain Casdoor (`idp: own`) carries its own Ingress at
+  `id.<clusterDomain>` (`manifests/casdoor-domain/ingress.yaml`). No front-door route
+  (fe-gateway, be-gateway) exposes Casdoor. The pki-gateway is not internet-facing
+  (the internal ingress on the pki node serves it, LAN/VPN only). It does route
+  `/api/auth/**`, `/login/**` and `/.well-known/**` to Casdoor, and it sends
+  `/api/signup` and `/api/login` through the signup-gate first
+  ([`docs/USERNAME-CONFUSABLE.md`](USERNAME-CONFUSABLE.md)).
+- **Human login is a native, first-party form.** The browser's sign-in does not go to
+  Casdoor. `login-ui` POSTs username and password (plus any MFA passcode) to user-bff
+  `POST /bff/login`. user-bff runs PKCE, the internal Casdoor `/api/login` and the
+  code exchange server-side, and returns only an opaque `bff_` session cookie. No
+  JWT, `code_verifier`, `state` or Casdoor URL ever reaches the client.
+- **Sign-up.** Federated sign-up (Google/Discord) and registration stay
+  admin-allowlist-gated (two-stage).
+- **Service users** (the per-app identities in §3) are separate Casdoor accounts with
+  service roles. §3 says which are seeded. The gateways validate the Casdoor JWT and
+  the `External-*` headers.
 
 ## 7. Network — Calico via Vault, configured from KEYS
 
@@ -401,22 +407,31 @@ The CIDRs in the headscale policies, the `--advertise-routes` flags, and
 
 ### Local-first mesh endpoint (no public domain required)
 
-The control server's `server_url` is resolved **local-first** at first boot by
-`provision_headscale` (`resolve_endpoint`), so a node provisioned before any
-public DNS exists is still reachable by its LAN peers. Precedence (highest
-first): `provision.json .headscale.server_url` → `.mesh.endpoint` → the baked
-brand `HEADSCALE_URL` (`/etc/hugmesh/headscale-url`, written at build time
-because env does not survive to first boot) → **default** `http://<the pki
-node's primary RFC1918 LAN IPv4>:8080`. The single `server_url:` line in
-`/etc/headscale/config.yaml` is rewritten **in place** (idempotent) *before*
-`headscale` starts; the baked `http://127.0.0.1:8080` is only an ultimate
-fallback. The tailscale **client** mirrors this: an empty
-`.tailscale.login_server` defaults to the same resolved endpoint. A public
-facade (`scale.<domain>`) can be published later without re-imaging — the
-MagicDNS control-plane name stays stable across the IP→domain transition, so
-clients only re-pin if `login_server` itself changes. `--snat-subnet-routes=false`
-and the fleet-scoped, default-deny ACL are unchanged; the endpoint stays
-on the tailnet/LAN by default (no internet-wide grant).
+`provision_headscale` resolves the control server's `server_url` **local-first** at
+first boot (`resolve_endpoint`), so a node provisioned before any public DNS exists
+is still reachable by its LAN peers. Precedence, highest first:
+
+1. `provision.json .headscale.server_url`;
+2. `.mesh.endpoint`;
+3. the baked brand `HEADSCALE_URL` (`/etc/hugmesh/headscale-url`, written at build
+   time because env does not survive to first boot);
+4. **default** `http://<the pki node's primary RFC1918 LAN IPv4>:8080`.
+
+The single `server_url:` line in `/etc/headscale/config.yaml` is rewritten **in
+place** (idempotent) *before* `headscale` starts. The baked `http://127.0.0.1:8080`
+is only an ultimate fallback.
+
+The tailscale **client** mirrors this. An empty `.tailscale.login_server` defaults to
+the same resolved endpoint on the control node. On a worker or additional control
+plane it defaults to `resolve_control_endpoint`, which takes the override, then the
+baked `HEADSCALE_URL`, then the pki node's LAN IP from `.nodes[]`. A worker never
+points at its own LAN IP.
+
+A public facade (`scale.<domain>`) can be published later without re-imaging. The
+MagicDNS control-plane name stays stable across the IP→domain transition, so clients
+re-pin only if `login_server` itself changes. `--snat-subnet-routes=false` and the
+fleet-scoped, default-deny ACL are unchanged, and the endpoint stays on the
+tailnet/LAN by default (no internet-wide grant).
 
 ### HA control plane + VPN→k8s autodiscovery
 
@@ -447,10 +462,12 @@ endpoint**, never a node IP, as `controlPlaneEndpoint`:
 - **Workers** (`role=worker`) `kubeadm join` the same `cp_dns_name:6443`. The
   `certSANs` in `kubeadm-config.yaml` cover the MagicDNS name, the control-node
   hostname, and loopback so additional CPs/clients validate the API cert.
-- **N-per-role is unconstrained on the mesh.** `tag:hugmesh` (+ per-role
-  tags) are all owned by the single `hugmesh` headscale user and the preauth
-  key is `reusable`, so `tagOwners` gates *which* tags a node may claim, not
-  *how many* nodes — N nodes per role join and mesh with no policy change.
+- **N-per-role is not limited by the policy.** `tag:hugmesh` (+ per-role tags) are
+  all owned by the single `hugmesh` headscale user, so `tagOwners` gates *which*
+  tags a node may claim, not *how many* nodes. N nodes per role join and mesh with
+  no policy change. The limit is the preauth key: the template
+  (`keys-template/provision.json`, `.headscale.preauthkeys[]`) mints one key with
+  `"reusable": false`. Mint one key per node, or set `reusable` to `true`.
 
 ## Status / validation
 
