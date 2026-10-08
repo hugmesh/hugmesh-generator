@@ -25,8 +25,13 @@ Two DIFFERENT "idp" axes exist. Do not mix them up:
   must be re-stamped, or the flip silently hides every row. wiki-bff has the re-stamp
   (`RestampTargetEnvironmentPostProcessor`, hugmesh-wiki-bff-api#19): setting
   `APP_TENANCY_ISSUERS` re-stamps on that boot. It is a one-way door; read the
-  warning in `manifests/wiki-bff-api/deployment.yaml` first. Check every other BFF
-  before it takes a pair. Gateways can take the pair first.
+  warning in `manifests/wiki-bff-api/deployment.yaml` first. After that boot, also set
+  `SPRING_LIQUIBASE_PARAMETERS_WIKI_RESTAMP_TARGET_DOMAIN=<brand>` and never remove
+  it. Without the pin, a later boot with `APP_TENANCY_ISSUERS` removed (an ArgoCD
+  revert does this) refuses to start. The pin overrides the derived target: if the two
+  variables disagree, wiki-bff does not refuse but silently re-stamps every `default`
+  row to the pin's brand. Change them together, in one commit. Check every
+  other BFF before it takes a pair. Gateways can take the pair first.
 
 ## Lane 1 — single mesh (ApplicationSet)
 
@@ -83,8 +88,8 @@ fields).
 The per-domain path is `secret/<slug>/casdoor` (PHASE5-DECISIONS #3: base segment ==
 brand slug). It is ONE KV document with `db_password_plain`, `admin_password` and
 `app_client_secret`. `gen-cluster-secrets.sh` deliberately does NOT mint it, because
-a per-domain path cannot exist before its domain does. The operator (or the
-DomainReconciler lane) writes it when the domain is created.
+a per-domain path cannot exist before its domain does. The operator writes it when the
+domain is created (the planned DomainReconciler would take over this step).
 `tests/scripts/eso_seed_contract.py` classifies the base's placeholder
 (`hugmesh/casdoor-domain`) under `OPERATOR_SEEDED_PATHS`. Until the path exists, the
 instance's pods stay pending on their Secret mounts. That is fail-closed, per-domain
