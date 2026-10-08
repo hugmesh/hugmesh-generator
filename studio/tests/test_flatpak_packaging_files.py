@@ -1291,6 +1291,25 @@ def test_the_output_directory_inside_the_private_one_is_refused_in_any_spelling(
 
 
 @needs_bash
+@pytest.mark.parametrize("where", ["flatpak", "flatpak/private", "."],
+                         ids=["same", "inside", "contains"])
+def test_script_refuses_the_flatpak_directory_under_a_custom_xdg_data_home(tmp_path, where):
+    """XDG_DATA_HOME moves where flatpak keeps the user installation, away from
+    $HOME/.local/share/flatpak; the guard must follow it, or a user with a non-default
+    data home would get the toolchain installed into their own flatpak directory."""
+    data_home = tmp_path / "elsewhere" / "data"
+    data_home = type(tmp_path)(os.path.realpath(data_home))
+    fake_bin, log = _fake_flatpak(tmp_path)
+    result = _run_script(
+        tmp_path, path=fake_bin + os.pathsep + os.environ["PATH"],
+        extra_env={"XDG_DATA_HOME": str(data_home),
+                   "HUGMESH_STUDIO_FLATPAK_USER_DIR": str(data_home / where)})
+    _refused_without_a_flatpak_call(result, log)
+    assert str(data_home / "flatpak") in result.stderr, (
+        "the refusal does not name the XDG_DATA_HOME flatpak directory: " + result.stderr)
+
+
+@needs_bash
 def test_script_refuses_the_system_flatpak_directory(tmp_path):
     fake_bin, log = _fake_flatpak(tmp_path)
     result = _run_script(tmp_path, path=fake_bin + os.pathsep + os.environ["PATH"],
@@ -1665,7 +1684,11 @@ def test_script_sends_every_flatpak_call_to_the_private_directory(tmp_path):
         # FLATPAK_BINARY names the host-side wrapper checked at the end of this test:
         # without it the Builder's host commands start from the host environment and
         # look for the runtime in the user's own flatpak directory.
-        for grant in ("--user", f"--filesystem={private}", f"--env=FLATPAK_USER_DIR={private}",
+        # The output directory is a second grant: the Builder's working directory, repo and
+        # build directory all live under it, and the sandbox cannot see an arbitrary path.
+        assert out != private and not out.startswith(private + os.sep)
+        for grant in ("--user", f"--filesystem={private}", f"--filesystem={out}",
+                      f"--env=FLATPAK_USER_DIR={private}",
                       f"--env=FLATPAK_BINARY={work}/bin/flatpak-private", f"--cwd={work}"):
             assert grant in words, f"the Builder ran without {grant}: {words}"
     build = next(w for w in builder if "--command=flatpak-builder" in w)
