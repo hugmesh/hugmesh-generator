@@ -714,6 +714,36 @@ def test_golive_onion_accepts_a_tor_domain_and_names_one_without_a_front_door(
     assert len(miss) == 1 and "blog.example" in miss[0] and "shop-example" in miss[0]
 
 
+@pytest.mark.parametrize("spelling", ["Mesh.EXAMPLE", "mesh.example.", " mesh.example",
+                                      "MESH.example.\t"])
+def test_golive_reads_the_own_domain_in_any_spelling_the_plan_reads_it_in(
+        tmp_path, monkeypatch, spelling):
+    # plan_rows lowercases and strips what is typed, so the node's own domain typed in
+    # another case, with a root dot or with a stray blank is STILL the node's own: the
+    # preflight must not claim it "has no Tor front door" (post-merge review R-golive).
+    drv = _golive(tmp_path, monkeypatch)
+    opts = GoLiveOptions(provider="tor-onion", domain=spelling)
+    assert [p for p in drv.preflight(opts) if "Tor front door" in p] == []
+    assert [w for w, _h in plan_rows(drv, opts) if "this run's domain" in w] == []
+
+
+@pytest.mark.parametrize("spelling", ["Shop.EXAMPLE", "shop.example.", " shop.example"])
+def test_golive_finds_a_tor_domains_onion_in_any_spelling(tmp_path, monkeypatch, spelling):
+    drv = _golive(tmp_path, monkeypatch)
+    opts = GoLiveOptions(provider="tor-onion", domain=spelling)
+    assert [p for p in drv.preflight(opts) if "Tor front door" in p] == []
+    rows = [h for w, h in plan_rows(drv, opts) if "this run's domain" in w]
+    assert len(rows) == 1 and ONION_A in rows[0], rows
+
+
+def test_golive_still_names_a_domain_with_no_front_door_in_any_spelling(tmp_path,
+                                                                        monkeypatch):
+    drv = _golive(tmp_path, monkeypatch)
+    for spelling in ("Blog.EXAMPLE", "blog.example."):
+        opts = GoLiveOptions(provider="tor-onion", domain=spelling)
+        assert len([p for p in drv.preflight(opts) if "Tor front door" in p]) == 1
+
+
 def test_golive_says_nothing_about_a_front_door_where_the_own_domain_is_unknown(
         tmp_path, monkeypatch):
     # No baked cluster domain (the Studio on a workstation): the typed domain may
@@ -1108,6 +1138,29 @@ def test_a_stack_with_no_tor_domain_chowns_no_per_domain_root(tmp_path):
     finally:
         _stop(proc)
     assert "hugmesh-onion.d" not in log
+
+
+def test_the_slug_and_tenant_limit_is_63_characters_exactly(tmp_path):
+    # The node contract's shape is [a-z0-9][a-z0-9-]{0,62}: 63 characters pass, 64 do
+    # not, for the slug AND for the tenant. Both sides are pinned, so a "-le 62" and a
+    # "-le 64" in valid_key are each red.
+    s63, s64 = "s" * 63, "t" * 64
+    t63, t64 = "u" * 63, "v" * 64
+    proc, ok, snap, snap_map = _run_until_published(
+        tmp_path, f"{s63}={t63} {s64}=brandb brandb={t64}")
+    try:
+        assert ok
+        torrc = (tmp_path / "torrc").read_text()
+        data = str(tmp_path / "data")
+        assert _hs_dirs(torrc) == [f"{data}/hugmesh-onion",
+                                   f"{data}/hugmesh-onion.d/{s63}"], _hs_dirs(torrc)
+        assert f"{s63}.hostname" in snap and f"{s64}.hostname" not in snap
+        assert "brandb.hostname" not in snap
+        lines = [ln for ln in snap_map.splitlines() if not ln.startswith("#")]
+        assert lines == [f"{ONION_P}=default", f"{'z' * 56}.onion={t63}"], lines
+    finally:
+        _, out = _stop(proc)
+    assert out.count("REFUSED TOR_ONION_DOMAINS entry") == 2, out
 
 
 def test_a_malformed_primary_writes_no_map_at_all(tmp_path):
@@ -1535,14 +1588,15 @@ def test_the_lane_resolves_every_domain_readout_and_only_those(tmp_path):
         "hostname": ONION_P, "brandb.hostname": ONION_B, "acme-example.hostname": ONION_A,
         "Bad_Slug.hostname": ONION_A,               # not the node contract's shape
         "junk.hostname": "not-an-onion",            # not a v3 onion
-        ("x" * 64) + ".hostname": ONION_A})         # a slug too long for the contract
+        ("x" * 64) + ".hostname": ONION_A,          # a slug too long for the contract
+        ("y" * 63) + ".hostname": ONION_A})         # the longest slug the contract takes
     assert p.returncode == 0, p.stderr[-400:]
     assert _first(plan, "ENV_ID") == "docker" and _first(plan, "VIA") == "onion-domains"
     assert _first(plan, "TAGS") == ONION_TAGS_DOMAINS
     assert _first(plan, "ONION_BASE_URL") == "https://" + ONION_P
     assert _first(plan, "PROXY") == "socks5://127.0.0.1:9050"
     assert _first(plan, "ONION_DOMAIN_URLS") == \
-        f"acme-example=https://{ONION_A} brandb=https://{ONION_B}"
+        f"acme-example=https://{ONION_A} brandb=https://{ONION_B} {'y' * 63}=https://{ONION_A}"
     assert ".onion" not in _first(plan, "BASE_URL")     # the probe's door stays local
     # a caller's --tags narrow the lane, never widen it
     pt, plan_t, _ = _lane(tmp_path, ["--via", "onion-domains", "--tags", "@smoke",

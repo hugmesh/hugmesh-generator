@@ -443,8 +443,13 @@ class GoLiveDriver:
                 # would list no onion for it.
                 # Said only when this host KNOWS its own domain: on a host with no
                 # baked cluster domain the typed one may well be the node's own.
+                # Compared the way plan_rows compares (golive_domains.norm_domain), so
+                # ‘Example.ORG’, ‘example.org.’ and ‘ example.org’ are the node's own
+                # domain here too, not a Tor domain with no front door.
+                from .golive_domains import norm_domain     # lazy, like tor_domain_onions
                 own = self.autofill_domain()
-                if own and opts.domain != own and not self.domain_onion(opts.domain):
+                if (own and norm_domain(opts.domain) != norm_domain(own)
+                        and not self.domain_onion(norm_domain(opts.domain))):
                     served = ", ".join(sorted(self.tor_domain_onions())) or "none"
                     problems.append(
                         f"{opts.domain} has no Tor front door on this node — the "

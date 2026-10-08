@@ -169,6 +169,14 @@ def exposure_lines(rows) -> list[str]:
     return [f"{w.ljust(width)}  {h}" for w, h in rows]
 
 
+def norm_domain(name) -> str:
+    """A domain spelled for comparison: surrounding whitespace dropped, lower case, and
+    no trailing root dot (``Example.ORG.`` and ``example.org`` are one DNS name). The ONE
+    spelling both :func:`plan_rows` and ``GoLiveDriver.preflight`` compare a typed
+    domain by, so they cannot disagree about whether it is the node's own."""
+    return (name or "").strip().lower().rstrip(".")
+
+
 def plan_rows(driver, opts) -> list[tuple[str, str]]:
     """:func:`exposure_rows` for a live ``GoLiveDriver`` + ``GoLiveOptions`` — the ONE
     call both faces make, so the GUI's Generate step and the TUI's go-live screen
@@ -178,12 +186,12 @@ def plan_rows(driver, opts) -> list[tuple[str, str]]:
     mechanism = p.mechanism if p else ""
     label = f"{p.model} ({p.mechanism})" if p else "(no provider picked)"
     domains = baked_domains(driver.autofill_domain())
-    chosen = (opts.domain or "").strip().lower() or (domains[0] if domains else "")
+    chosen = norm_domain(opts.domain) or (domains[0] if domains else "")
     onion, per = onion_exports()
     # #582: with the onion mechanism a domain names WHICH onion. Said for a domain
     # other than the cluster domain, and only when this host knows its cluster domain
     # (elsewhere the typed one may be the node's own, which the node's onion opens).
-    primary = (driver.autofill_domain() or "").strip().lower()
+    primary = norm_domain(driver.autofill_domain())
     chosen_onion = None
     lookup = getattr(driver, "domain_onion", None)
     if mechanism == "onion" and primary and chosen and chosen != primary and lookup:
