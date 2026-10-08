@@ -60,8 +60,9 @@ tailscale up \
 ```
 
 Resolve `<headscale-url>` the way the fleet does. In order of precedence:
-`provision.json .headscale.server_url`, then the DHCP/registry-advertised endpoint,
-then the baked brand var `HEADSCALE_URL` (`/etc/hugmesh/headscale-url`). See
+`provision.json .headscale.server_url`, then `provision.json .mesh.endpoint`, then
+the baked brand var `HEADSCALE_URL` (`/etc/hugmesh/headscale-url`), then
+`http://<primary-LAN-IPv4>:8080`. See
 [`keys-template/headscale/config.yaml`](../keys-template/headscale/config.yaml)
 and `specs/etc/keys-provision/provision.sh` for endpoint resolution.
 
