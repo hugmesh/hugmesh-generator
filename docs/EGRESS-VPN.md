@@ -176,8 +176,8 @@ of it.
 
 **How it is asserted.** The expected value is read from the DaemonSet's
 `nodeSelector` mapping, the key the kube-scheduler actually evaluates. Every other
-carrier is graded against *that*. An earlier version counted tokens per file, so it
-agreed with itself after a renamed prefix, after a swap to the **pod** opt-in label
+carrier is graded against *that*. An earlier version counted `hugmesh.net/*egress-vpn*`
+tokens per file, so it agreed with itself after a renamed prefix, after a swap to the **pod** opt-in label
 (`hugmesh.net/vpn-egress`, the likeliest mistake), and after the instruction was
 deleted. The current gate finds label-shaped tokens by the Kubernetes label *grammar*
 and classifies each by the action the surrounding prose describes (`nodeSelector`, or
