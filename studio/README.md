@@ -213,7 +213,7 @@ NO_TUI=1 python -m hugmesh_studio.tui              # the same, by environment
 ```
 
 The journey mirrors the GUI's flow (`hugmesh_studio/tui/journey.py` consumes
-`config.WIZARD_PAGE_SLUGS` — one source, both faces): the three-card welcome
+`config.WIZARD_PAGE_SLUGS` — one source, both faces): the two-card welcome
 screen and journey-ordered mode menu, the Themes screen (web login theme:
 colours, header/footer, background effect), the create-nodes-for-local-cloud
 abbreviated wizard (k8s gate + identity import + laptop/node-only worklist),
