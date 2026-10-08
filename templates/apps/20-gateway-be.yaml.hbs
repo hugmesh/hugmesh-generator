@@ -82,6 +82,12 @@ spec:
           - id: headscale-forward
             host: scale.{{CLUSTER_DOMAIN}}
             uri: http://{{BRAND}}-pki-gateway.{{BRAND}}-pki.svc.cluster.local:8080
+            # Relay with the ORIGINAL Host. Spring Cloud Gateway otherwise sends the
+            # upstream URI's host (the pki gateway Service DNS name), so the pki
+            # gateway's own `headscale` route (Host=scale.<domain>, apps/20-gateway-pki)
+            # and its headscale host gate can never match relayed traffic.
+            filters:
+              - PreserveHostHeader
           - id: mastodon-oauth
             host: mastodon.{{CLUSTER_DOMAIN}}
             uri: https://akkoma-proxy.{{BRAND}}-backend.svc.cluster.local:4443
