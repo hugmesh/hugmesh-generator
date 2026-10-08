@@ -54,11 +54,54 @@ finish() {
   la_py write-status 0 "" >/dev/null 2>&1      # pid 0: stopped on purpose
   echo "[$(date +%T)] worker stopped"
 }
+# adopt_stranded — a job under queue/running that this worker is not holding was left
+# there by a worker that died without cleaning up (a crash, a kill -9, a restart of the
+# machine). There is only ever one worker, so nothing else can own it. It goes back to
+# pending with its draft marked queued, so it runs again instead of sitting there for
+# ever while `todo` says it queued it. Two exceptions: a draft.sh that outlived the dead
+# worker and is still working is left alone until it ends, and a draft that already has
+# a final result gets that result filed instead of being drafted a second time.
+adopt_stranded() {
+  local f job line word dir
+  local held
+  for f in "$LA_DIR"/queue/running/*.job; do
+    [ -f "$f" ] || continue
+    job=$(basename "$f")
+    [ "$job" = "$CURRENT" ] && continue
+    line=$(head -n 1 "$f")
+    read -r -a held <<<"$line"
+    dir=""
+    if [ "${#held[@]}" -eq 3 ] && [ "${held[0]}" = "draft" ] && la_valid_repo "${held[1]}" && la_valid_num "${held[2]}"; then
+      dir=$LA_DIR/drafts/${held[1]}-${held[2]}
+    fi
+    if [ -n "$dir" ] && la_proc_is "$(cat "$dir/draft.pid" 2>/dev/null)" "local-ai/draft.sh"; then
+      continue
+    fi
+    word=""
+    [ -n "$dir" ] && word=$(head -c 40 "$dir/STATUS" 2>/dev/null | cut -d' ' -f1)
+    case "$word" in
+      applied|does-not-apply|no-diff)
+        { echo "rc=0 secs=0"; echo "$line"; } >"$LA_DIR/queue/done/${job%.job}.result"
+        rm -f "$f"
+        echo "[$(date +%T)] adopted $job: already finished ($word)"
+        continue ;;
+    esac
+    [ -n "$dir" ] && [ -d "$dir" ] && echo queued >"$dir/STATUS"
+    if grep -qxF -- "$line" "$LA_DIR"/queue/pending/*.job 2>/dev/null; then
+      rm -f "$f"       # the same job was queued again meanwhile; keep that one
+    else
+      mv "$f" "$LA_DIR/queue/pending/$job" 2>/dev/null
+    fi
+    echo "[$(date +%T)] adopted $job: left running by a worker that died, queued again"
+  done
+}
+
 trap finish EXIT
 trap 'exit 0' TERM INT
 
 echo "[$(date +%T)] worker up (pid $$), state $LA_DIR"
 while :; do
+  adopt_stranded
   beat
   job=$(ls -1 "$LA_DIR/queue/pending" 2>/dev/null | sort | head -n 1)
   if [ -z "$job" ]; then

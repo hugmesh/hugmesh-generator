@@ -131,6 +131,7 @@ cmd_todo() {
       --watch) watch=1 ;;
       --dry-run) dry=1 ;;
       -*) usage; return 2 ;;
+      "") echo "todo: an empty argument; give a number of issues or a repository name" >&2; return 2 ;;
       *[!0-9]*) la_valid_repo "$1" || { echo "not a repository name: $1" >&2; return 2; }; repos+=("$1") ;;
       *) n=$1 ;;
     esac

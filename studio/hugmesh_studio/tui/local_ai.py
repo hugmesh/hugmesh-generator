@@ -27,9 +27,14 @@ OPEN_COMMAND = "local-ai"
 FOOTER_KEY = "F2"
 
 
-def status_line(env: dict | None = None) -> str:
-    """The urwid footer line: status plus the key that opens the screen."""
-    return f"{lai.quick_line(env)}   [{FOOTER_KEY}]"
+def status_line(env: dict | None = None, *, key_hint: bool = True) -> str:
+    """The urwid footer line: status plus the key that opens the screen.
+
+    ``key_hint=False`` is for a screen where the key does nothing (the standalone list
+    of previous builds has no journey to open the screen over), so the line never
+    advertises a key that is dead there."""
+    line = lai.quick_line(env)
+    return f"{line}   [{FOOTER_KEY}]" if key_hint else line
 
 
 def plain_status_line(env: dict | None = None) -> str:

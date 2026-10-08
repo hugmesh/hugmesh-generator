@@ -386,10 +386,18 @@ battery() {   # LABEL — the same commands on whichever PATHV is set
     out="$(la bash "${GEN}/scripts/local-ai.sh" draft ../x 1 2>&1)"; rc=$?
     [ "${rc}" -eq 2 ] && [ ! -e "${LA_STATE}/x-1" ] && [ ! -e "${LA_STATE}/drafts/..-x-1" ] \
         && ok "[${label}] draft ../x 1 is refused (exit 2) and makes nothing" || bad "[${label}] draft ../x 1: rc=${rc} ${out}"
+    out="$(la bash "${GEN}/scripts/local-ai.sh" draft .. 1 2>&1)"; rc=$?
+    [ "${rc}" -eq 2 ] && [ ! -e "${LA_STATE}/drafts/..-1" ] \
+        && ok "[${label}] a repository named '..' is refused (it would be the parent folder)" || bad "[${label}] draft .. 1: rc=${rc} ${out}"
+    out="$(la bash "${GEN}/scripts/local-ai.sh" draft a..b 1 2>&1)"; rc=$?
+    [ "${rc}" -eq 2 ] && ok "[${label}] a repository name with '..' inside it is refused" || bad "[${label}] draft a..b 1: rc=${rc} ${out}"
     out="$(la bash "${GEN}/scripts/local-ai.sh" draft -rf 1 2>&1)"; rc=$?
     [ "${rc}" -eq 2 ] && ok "[${label}] a repository name that starts with a dash is refused" || bad "[${label}] draft -rf: rc=${rc} ${out}"
     out="$(la bash "${GEN}/scripts/local-ai.sh" draft hugmesh-fixture 1x 2>&1)"; rc=$?
     [ "${rc}" -eq 2 ] && ok "[${label}] an issue number with a letter in it is refused" || bad "[${label}] draft 1x: rc=${rc} ${out}"
+    out="$(la bash "${GEN}/scripts/local-ai.sh" todo "" --dry-run 2>&1)"; rc=$?
+    [ "${rc}" -eq 2 ] && ! has "${out}" 'Traceback' \
+        && ok "[${label}] todo with an empty argument says what is wrong (exit 2, no traceback)" || bad "[${label}] todo '': rc=${rc} ${out}"
     out="$(la bash "${GEN}/scripts/local-ai.sh" todo ../x --dry-run 2>&1)"; rc=$?
     [ "${rc}" -eq 2 ] && ! has "$(cat "${LOG}/gh.calls" 2>/dev/null)" '\.\./x' \
         && ok "[${label}] todo ../x is refused (exit 2) before gh is asked anything" || bad "[${label}] todo ../x: rc=${rc} ${out}"
@@ -430,6 +438,14 @@ worker_section() {   # LABEL
     [ "$(status_word hugmesh-fixture-1)" = "applied" ] && [ "$(status_word hugmesh-fixture-4)" = "applied" ] \
         && ok "[${label}] the worker drafted both queued issues (STATUS applied)" \
         || bad "[${label}] worker did not finish both drafts: 1=$(status_word hugmesh-fixture-1) 4=$(status_word hugmesh-fixture-4); log: $(tail -3 "${LA_STATE}/worker.log" 2>/dev/null)"
+    # STATUS is written before draft.sh exits and before the worker files the result, so on a
+    # busy machine "both applied" can be seen while one job is still under running/. Wait
+    # (bounded) for the worker to finish filing both before the counts are read.
+    for _ in $(seq 1 60); do
+        [ "$(ls "${LA_STATE}/queue/done" 2>/dev/null | grep -c '\.result$')" -ge 2 ] \
+            && [ -z "$(ls "${LA_STATE}/queue/running" 2>/dev/null)" ] && break
+        sleep 0.5
+    done
     sj="$(la bash "${GEN}/scripts/local-ai.sh" status --json 2>&1)"
     if python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d["worker"]=="running" and d["counts"]["done"]==2 and d["counts"]["pending"]==0 and d["heartbeat_age"] is not None and d["heartbeat_age"]<30 else 1)' "${sj}" 2>/dev/null; then
         ok "[${label}] status --json: worker running with a fresh heartbeat, 2 done, 0 pending"
@@ -497,6 +513,16 @@ server_section() {   # LABEL
         || bad "[${label}] the server (pid ${pid}) is still running after stop --server"
     alive "${unrelated}" && ok "[${label}] an unrelated process survives stop --server" || bad "[${label}] stop --server killed an unrelated process"
     kill "${unrelated}" 2>/dev/null; alive "${pid}" && kill "${pid}" 2>/dev/null
+    # The case that matters: ollama.pid names a process that is NOT an Ollama (the real
+    # server died and the pid was reused). stop --server must read its name and leave it be.
+    sleep 300 & unrelated=$!
+    echo "${unrelated}" >"${LA_STATE}/ollama.pid"
+    out="$(la env OLLAMA_HOST="127.0.0.1:${fp}" bash "${GEN}/scripts/local-ai.sh" stop --server 2>&1)"
+    sleep 0.5
+    if alive "${unrelated}" && has "${out}" 'leaving any other one alone' && ! has "${out}" 'stopped the Ollama'; then
+        ok "[${label}] a process that is not an Ollama survives stop --server even when ollama.pid names it"
+    else bad "[${label}] stop --server signalled the process named in ollama.pid without checking what it is: ${out}"; fi
+    kill "${unrelated}" 2>/dev/null
     [ ! -e "${LOG}/claude-was-run" ] && ok "[${label}] up and stop --server never touched claude" \
         || bad "[${label}] up or stop --server ran the claude command"
 }
@@ -522,6 +548,11 @@ inflight_section() {   # LABEL POINT(gh|model)
     w="$(status_word hugmesh-fixture-1)"
     [ "${w}" = "running" ] && [ -n "$(strays)" ] && ok "[${label}] the draft is in flight (STATUS running, ${point} step holding it)" \
         || bad "[${label}] the draft never got into flight: STATUS=${w}"
+    # the same draft asked for again while a live worker holds it is not queued a second time
+    out="$(la bash "${GEN}/scripts/local-ai.sh" draft --queue hugmesh-fixture 1 2>&1)"
+    has "${out}" '^already queued' && [ "$(ls "${LA_STATE}/queue/pending" | wc -l)" -eq 0 ] \
+        && ok "[${label}] asking again for a draft a live worker is running queues nothing" \
+        || bad "[${label}] a draft the worker holds was queued again: ${out}; pending=$(ls "${LA_STATE}/queue/pending" | wc -l)"
     sj="$(la bash "${GEN}/scripts/local-ai.sh" status --json 2>&1)"
     python3 -c 'import json,sys; d=json.loads(sys.argv[1]); r=[j for j in d["jobs"] if j["kind"]=="draft"]; sys.exit(0 if r and r[0]["state"]=="running" else 1)' "${sj}" 2>/dev/null \
         && ok "[${label}] while it works, the work list shows the draft as running" || bad "[${label}] work list while running: ${sj}"
@@ -561,6 +592,51 @@ has "${out}" 'would queue hugmesh-fixture#1' && ok "todo queues a stranded draft
 printf 'applied files=1\n' >"${LA_STATE}/drafts/hugmesh-fixture-1/STATUS"
 out="$(la bash "${GEN}/scripts/local-ai.sh" todo 1 hugmesh-fixture --dry-run 2>&1)"
 has "${out}" 'skip hugmesh-fixture#1' && ok "todo still skips a finished draft" || bad "todo on a finished draft: ${out}"
+
+echo "-- 3b1b) after a crash, todo really queues the stranded draft and a worker runs it --"
+# A worker that died (kill -9, a restart) leaves its job under queue/running and the draft
+# saying "running" with a dead pid. todo must put a NEW job in pending (the old one was
+# never going to run), and the next worker must finish exactly one draft, not two.
+for PATHV in "${P_NO}" "${P_DECOY}"; do
+    lbl="no claude"; [ "${PATHV}" = "${P_DECOY}" ] && lbl="decoy claude"
+    rm -rf "${LA_STATE}"; printf good >"${LOG}/mode"; rm -f "${LOG}/claude-was-run"
+    mkdir -p "${LA_STATE}/drafts/hugmesh-fixture-1" "${LA_STATE}/queue/running" "${LA_STATE}/queue/pending"
+    printf 'running\n' >"${LA_STATE}/drafts/hugmesh-fixture-1/STATUS"
+    bash -c 'echo $$' >"${LA_STATE}/drafts/hugmesh-fixture-1/draft.pid"     # a pid that has exited
+    printf 'draft hugmesh-fixture 1\n' >"${LA_STATE}/queue/running/20260101-000000-draft-hugmesh-fixture-1.job"
+    # todo 1 picks the smallest open issue, #1, which is the stranded one
+    out="$(la bash "${GEN}/scripts/local-ai.sh" todo 1 hugmesh-fixture 2>&1)"
+    has "${out}" 'queued hugmesh-fixture#1' && ok "[${lbl}] todo reports the stranded draft as queued" \
+        || bad "[${lbl}] todo on a stranded draft: ${out}"
+    for _ in $(seq 1 90); do
+        [ "$(status_word hugmesh-fixture-1)" = "applied" ] && [ -z "$(ls "${LA_STATE}/queue/running" 2>/dev/null)" ] \
+            && [ -z "$(ls "${LA_STATE}/queue/pending" 2>/dev/null)" ] && break
+        sleep 1
+    done
+    n_done="$(ls "${LA_STATE}/queue/done" 2>/dev/null | grep -c '\.result$')"
+    [ "$(status_word hugmesh-fixture-1)" = "applied" ] && [ -z "$(ls "${LA_STATE}/queue/running" 2>/dev/null)" ] \
+        && [ -z "$(ls "${LA_STATE}/queue/pending" 2>/dev/null)" ] && [ "${n_done}" -eq 1 ] \
+        && ok "[${lbl}] the worker finished the stranded draft once: applied, nothing left under running or pending" \
+        || bad "[${lbl}] stranded draft not finished: STATUS=$(status_word hugmesh-fixture-1) running=$(ls "${LA_STATE}/queue/running" 2>/dev/null) pending=$(ls "${LA_STATE}/queue/pending" 2>/dev/null) done=${n_done}; log: $(tail -4 "${LA_STATE}/worker.log" 2>/dev/null)"
+    la bash "${GEN}/scripts/local-ai.sh" stop >/dev/null 2>&1
+    wait_gone 8 >/dev/null
+    [ ! -e "${LOG}/claude-was-run" ] || bad "[${lbl}] the crash-recovery path ran the claude command"
+done
+PATHV="${P_NO}"
+
+echo "-- 3b1c) a job left under running with NO worker does not block queueing the same draft --"
+rm -rf "${LA_STATE}"; mkdir -p "${LA_STATE}/queue/running" "${LA_STATE}/queue/pending"
+printf 'draft hugmesh-fixture 1\n' >"${LA_STATE}/queue/running/20260101-000000-draft-hugmesh-fixture-1.job"
+out="$(la bash "${GEN}/scripts/local-ai.sh" draft --queue hugmesh-fixture 1 2>&1)"
+[ "$(ls "${LA_STATE}/queue/pending" | wc -l)" -eq 1 ] && has "${out}" '^queued ' \
+    && ok "a leftover running job (no worker) is not taken for a queued one" || bad "leftover running job blocked the queue: ${out}"
+out="$(la bash "${GEN}/scripts/local-ai.sh" draft --queue hugmesh-fixture 1 2>&1)"
+[ "$(ls "${LA_STATE}/queue/pending" | wc -l)" -eq 1 ] && has "${out}" '^already queued' \
+    && ok "asking twice for the same draft queues it once" || bad "the same draft was queued twice: ${out}"
+printf 'draft hugmesh-fixture 2\n' >"${LA_STATE}/queue/pending/20260101-000001-other.job"
+la bash "${GEN}/scripts/local-ai.sh" draft --queue hugmesh-fixture 1 >/dev/null 2>&1
+[ "$(ls "${LA_STATE}/queue/pending" | wc -l)" -eq 2 ] \
+    && ok "a different draft waiting in pending does not hide this one" || bad "queue size after the third ask: $(ls "${LA_STATE}/queue/pending" | wc -l)"
 
 echo "-- 3b2) a status file that is old, or whose worker is gone, never says ready --"
 rm -rf "${LA_STATE}"; mkdir -p "${LA_STATE}"
@@ -626,6 +702,24 @@ PYEOF
 for want in specs/usr/sbin/hugmesh-firewall-reconcile specs/selinux/hugmesh_tor.te tests/qemu/avc-workload.sh; do
     if has "${picked}" "(^|[[:space:]])${want}([[:space:]]|\$)"; then ok "the picker found ${want}"
     else bad "the picker missed ${want} (picked: $(tr '\n' ' ' <<<"${picked}"))"; fi
+done
+
+echo "-- 3d) extract_diff: a diff is taken from a reply only when it really is one --"
+exd="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${GEN}/scripts/local-ai" <<'PYEOF'
+import sys
+sys.path.insert(0, sys.argv[1])
+import draft
+fenced = "Sure:\n```diff\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+b\n```\nDone."
+print("fenced", draft.extract_diff(fenced).startswith("--- a/f.txt\n+++ b/f.txt\n"))
+print("fenced-clean", "```" not in draft.extract_diff(fenced) and "Done" not in draft.extract_diff(fenced))
+print("no-plus-line", draft.extract_diff("--- a/f.txt\nthe rest is prose\n") == "")
+print("prose", draft.extract_diff("I would change the file.\n") == "")
+print("githeader", draft.extract_diff("diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n").startswith("diff --git"))
+print("crlf", draft.extract_diff("--- a/f\r\n+++ b/f\r\n@@ -1 +1 @@\r\n-a\r\n+b\r\n").startswith("--- a/f\n"))
+PYEOF
+)"
+for want in fenced fenced-clean no-plus-line prose githeader crlf; do
+    has "${exd}" "^${want} True\$" && ok "extract_diff: ${want}" || bad "extract_diff: ${want} (got: $(tr '\n' ' ' <<<"${exd}"))"
 done
 
 echo "-- 4) a coding agent (AGENT=opencode) gets only the allowlisted environment --"

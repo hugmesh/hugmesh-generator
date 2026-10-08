@@ -7,6 +7,8 @@ to a canvas headlessly; only :func:`run_sessions_review` starts a MainLoop.
 """
 from __future__ import annotations
 
+from typing import Callable
+
 import urwid
 
 from ..core import build_sessions
@@ -26,16 +28,21 @@ def _text_lines(lines: list[str]) -> urwid.ListBox:
 
 
 class SessionsReview:
-    """SESSIONS REVIEW: list → detail / worklist / delete-with-confirm."""
+    """SESSIONS REVIEW: list → detail / worklist / delete-with-confirm.
 
-    def __init__(self) -> None:
+    ``open_local_ai`` is how F2 reaches the Local AI screen: the journey passes a callback
+    that leaves this review and opens it. Run on its own there is nothing to open the
+    screen over, so F2 is not offered and the footer does not claim it."""
+
+    def __init__(self, open_local_ai: Callable[[], None] | None = None) -> None:
+        self._open_local_ai = open_local_ai
         self.mode = "list"                 # list | detail | worklist | confirm
         self.rows: list[model.SessionRow] = []
         self.unreadable: list[str] = []
         self._confirm_row: model.SessionRow | None = None
         self._confirm_stage = ""           # record | artifacts
         self.status = urwid.Text("")
-        self.ai_line = urwid.Text(("muted", local_ai.status_line()))
+        self.ai_line = urwid.Text(("muted", self._ai_text()))
         self.frame = urwid.Frame(
             body=urwid.ListBox(urwid.SimpleFocusListWalker([])),
             header=urwid.Text(("bold", "HugMesh Studio — previous builds")),
@@ -58,12 +65,15 @@ class SessionsReview:
         self.frame.body = urwid.ListBox(urwid.SimpleFocusListWalker(items))
         self._set_help(_LIST_HELP)
 
+    def _ai_text(self) -> str:
+        return local_ai.status_line(key_hint=self._open_local_ai is not None)
+
     def _set_help(self, text: str) -> None:
-        self.ai_line.set_text(("muted", local_ai.status_line()))
+        self.ai_line.set_text(("muted", self._ai_text()))
         self.frame.footer = urwid.Pile([self.status, urwid.Text(text), self.ai_line])
 
     def refresh_ai_line(self) -> None:
-        self.ai_line.set_text(("muted", local_ai.status_line()))
+        self.ai_line.set_text(("muted", self._ai_text()))
 
     def _focused_row(self) -> model.SessionRow | None:
         if self.mode != "list" or not self.rows:
@@ -155,6 +165,11 @@ class SessionsReview:
                 self._confirm_row = None
             self.refresh()
             return
+        if key == "f2":
+            if self._open_local_ai is not None:
+                self._confirm_row = None          # a half-answered delete question is dropped
+                self._open_local_ai()
+            return
         if self.mode != "list":
             return
         if key in ("r", "R"):
@@ -231,8 +246,13 @@ class JourneyApp:
         self.ai_line.set_text(("muted", local_ai.status_line()))
 
     def _open_sessions(self) -> None:
-        self.sessions = SessionsReview()
+        self.sessions = SessionsReview(open_local_ai=self._local_ai_from_sessions)
         self.root.original_widget = self.sessions.frame
+
+    def _local_ai_from_sessions(self) -> None:
+        """F2 on the previous-builds list: back to the journey, Local AI screen open."""
+        self._close_sessions()
+        self.feed(local_ai.OPEN_COMMAND)
 
     def _close_sessions(self) -> None:
         self.sessions = None

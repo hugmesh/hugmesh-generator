@@ -91,7 +91,12 @@ la_enqueue_draft() {
   local want="draft $repo $num"
   local f
   la_dirs
-  for f in "$LA_DIR"/queue/pending/*.job "$LA_DIR"/queue/running/*.job; do
+  # A job under running/ counts only while a live worker holds it; after a crash it is a
+  # leftover that the next worker moves back to pending, so it must not stop a new job
+  # from being queued.
+  local watch=("$LA_DIR"/queue/pending/*.job)
+  if la_worker_pid >/dev/null; then watch+=("$LA_DIR"/queue/running/*.job); fi
+  for f in "${watch[@]}"; do
     [ -f "$f" ] || continue
     if [ "$(cat "$f")" = "$want" ]; then echo "already queued: $(basename "$f")"; return 0; fi
   done

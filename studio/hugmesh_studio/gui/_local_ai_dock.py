@@ -384,6 +384,10 @@ class LocalAIDock(QtWidgets.QFrame):
         self.work_window = None
         self.expanded = load_expanded() if expanded is None else bool(expanded)
         self._history: list = []
+        # Counts the times Clear was pressed. Every request remembers the number it started
+        # under; what comes back from an older one (late words, its finished answer, its
+        # error) is dropped, so Clear cannot be undone by an answer that was still on its way.
+        self._clears = 0
         self._busy = False
         self._stop = threading.Event()
         self._alive = threading.Event()         # set when the dock is destroyed
@@ -571,14 +575,15 @@ class LocalAIDock(QtWidgets.QFrame):
                   "while it loads.")
         history = list(self._history)
         q = self._threads
+        born = self._clears
 
         def work():
             try:
-                answer = self._prompt_fn(text, history, lambda c: q.put("chunk", c),
+                answer = self._prompt_fn(text, history, lambda c: q.put("chunk", (born, c)),
                                      lambda: stop.is_set() or alive.is_set())
-                q.put("done", (text, answer))
+                q.put("done", (born, text, answer))
             except Exception as exc:      # noqa: BLE001 — shown to the person, as a sentence
-                q.put("error", str(exc) or exc.__class__.__name__)
+                q.put("error", (born, str(exc) or exc.__class__.__name__))
         threading.Thread(target=work, name="local-ai-prompt", daemon=True).start()
         return True
 
@@ -589,6 +594,7 @@ class LocalAIDock(QtWidgets.QFrame):
             self.send()
 
     def clear(self) -> None:
+        self._clears += 1
         self._history.clear()
         self.answer.clear()
         if self._busy:
@@ -642,22 +648,30 @@ class LocalAIDock(QtWidgets.QFrame):
             else:
                 self.summary.set_full_text(f"Local AI: status unavailable ({error})")
         elif tag == "chunk":
+            born, piece = value
+            if born != self._clears:
+                return                       # a question the person has since cleared
             if not self._answered:
                 self._answered = True
                 self._say("")
-            self._append(value)
+            self._append(piece)
         elif tag == "done":
-            self._append("\n\n")
-            _text, answer = value
-            if answer.strip():
-                self._history += [{"role": "user", "content": _text},
-                                  {"role": "assistant", "content": answer}]
-                del self._history[:-40]
+            born, _text, answer = value
+            if born == self._clears:
+                self._append("\n\n")
+                if answer.strip():
+                    self._history += [{"role": "user", "content": _text},
+                                      {"role": "assistant", "content": answer}]
+                    del self._history[:-40]
             self._finish_prompt()
         elif tag == "error":
-            self._append(f"\n[{value}]\n\n")
+            born, message = value
+            if born != self._clears:
+                self._finish_prompt()
+                return
+            self._append(f"\n[{message}]\n\n")
             self._finish_prompt()
-            self._say(str(value), 30, warn=True)
+            self._say(str(message), 30, warn=True)
             self.refresh()
         elif tag == "start":
             self.start_btn.setEnabled(True)

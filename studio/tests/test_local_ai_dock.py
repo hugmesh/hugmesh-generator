@@ -561,3 +561,76 @@ def test_the_current_work_button_opens_one_reusable_window(shell, qapp):
     dock.work_btn.click()
     assert dock.work_window is first
     first.close()
+
+
+def test_clear_during_an_answer_is_not_undone_by_the_answer_arriving_late(qapp):
+    """Clear says 'Forget the conversation'. The answer that was still on its way when it
+    was pressed must not put the question and its reply back into the history, nor its
+    words back on the screen, or the next prompt would carry what the person forgot."""
+    gate, seen = threading.Event(), []
+
+    def prompt_fn(text, history, on_chunk, should_stop):
+        seen.append(list(history))
+        on_chunk("partial answer")
+        gate.wait(5)
+        on_chunk(" and the rest")
+        return "partial answer and the rest"
+    dock = dock_mod.LocalAIDock(GENERATOR_DIR, snapshot_fn=make_snapshot, prompt_fn=prompt_fn,
+                                auto_poll=False, expanded=True)
+    dock.show()
+    dock.prompt.setText("q1")
+    assert dock.send()
+    assert wait_for(qapp, lambda: "partial answer" in dock.answer.toPlainText())
+    dock.clear()                                               # mid-answer
+    assert dock._history == [] and dock.answer.toPlainText() == ""
+    gate.set()
+    assert wait_for(qapp, lambda: not dock._busy)
+    assert dock._history == [], dock._history
+    assert dock.answer.toPlainText() == "", dock.answer.toPlainText()
+    dock.prompt.setText("q2")
+    assert dock.send()
+    assert wait_for(qapp, lambda: not dock._busy)
+    assert seen[1] == [], "the next prompt carried what Clear had forgotten"
+    dock.close()
+
+
+def test_an_error_from_a_cleared_question_is_not_shown_on_the_clean_screen(qapp):
+    gate = threading.Event()
+
+    def prompt_fn(text, history, on_chunk, should_stop):
+        gate.wait(5)
+        raise lai.LocalAIError("old failure")
+    dock = dock_mod.LocalAIDock(GENERATOR_DIR, snapshot_fn=make_snapshot, prompt_fn=prompt_fn,
+                                auto_poll=False, expanded=True)
+    dock.show()
+    dock.prompt.setText("q1")
+    dock.send()
+    dock.clear()
+    gate.set()
+    assert wait_for(qapp, lambda: not dock._busy)
+    assert "old failure" not in dock.answer.toPlainText()
+    assert dock.send_btn.text() == "Send" and dock.prompt.isEnabled()
+    dock.close()
+
+
+def test_a_second_prompt_is_refused_while_one_is_running(qapp):
+    """One question at a time: sending while the model is busy must start nothing."""
+    gate, calls = threading.Event(), []
+
+    def prompt_fn(text, history, on_chunk, should_stop):
+        calls.append(text)
+        gate.wait(5)
+        return "ok"
+    dock = dock_mod.LocalAIDock(GENERATOR_DIR, snapshot_fn=make_snapshot, prompt_fn=prompt_fn,
+                                auto_poll=False, expanded=True)
+    dock.show()
+    dock.prompt.setText("first")
+    assert dock.send() is True
+    dock.prompt.setText("second")
+    assert dock.send() is False
+    assert dock.prompt.text() == "second"                      # kept, not swallowed
+    time.sleep(0.2)
+    assert calls == ["first"]
+    gate.set()
+    assert wait_for(qapp, lambda: not dock._busy)
+    dock.close()

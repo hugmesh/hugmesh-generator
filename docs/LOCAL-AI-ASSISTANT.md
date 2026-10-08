@@ -416,6 +416,14 @@ The result is `drafts/<repo>-<n>/STATUS`, whose first word is one of:
 An issue that already has a `drafts/<repo>-<n>/STATUS` is skipped by `todo`; delete that
 directory to have it drafted again.
 
+**After a crash or a restart.** A worker that dies without cleaning up (a kill, a power
+cut) leaves its job under `queue/running` and its draft saying `running`. Nothing is
+working on it, so the Studio lists it as *stalled*. Run `todo` again, or just start the
+worker: a new worker moves every such leftover job back to `queue/pending` (and the
+draft back to `queued`) before it takes work, files the result of a draft that had in
+fact finished instead of drafting it twice, and leaves alone a draft that is still
+running on its own. `todo` itself queues a stranded draft again.
+
 A small local model gets some issues right and many wrong: on the reference PC, two
 real drafts against `qwen3:8b` ran to a clean `does-not-apply` (the model wrote a
 plausible diff for a line that is not in the file). Treat a draft as a head start for a
@@ -519,9 +527,13 @@ so a Claude call that only they make is caught. The guard also stops a draft in 
 middle of reading its issue and in the middle of the model step and requires that no
 process is left, the job is back in `queue/pending` and the draft is `queued`; it
 starts the server (a stub that records its environment: it must be bound to loopback)
-and requires `stop --server` to end that process and leave an unrelated one alone; and
-it refuses `../x`, `.git/` and `..` paths. Each of those checks is shown failing
-against a doctored copy.
+and requires `stop --server` to end that process, and to leave alone an unrelated
+process even when `ollama.pid` names it; it leaves a job under `queue/running` after a
+crash and requires `todo` to queue it again and a new worker to finish it exactly once;
+it asks for a draft a live worker is already running and requires that nothing is queued
+twice; and it refuses `../x`, `..`, `.git/` and `..` paths. Each of those checks was
+shown failing against a doctored copy (the list of copies, and which ones were not
+closed, is in the pull request).
 
 ---
 

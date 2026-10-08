@@ -300,3 +300,47 @@ def test_the_sessions_review_shows_the_line_too(state, tmp_path, monkeypatch):
     from hugmesh_studio.tui import urwid_ui
     review = urwid_ui.SessionsReview()
     assert "Local AI:" in screen_text(review.frame)[-1]
+
+
+@needs_urwid
+def test_f2_works_on_the_previous_builds_list_inside_the_journey(state, tmp_path, monkeypatch):
+    """The review's footer shows [F2]; the key must really open the Local AI screen."""
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
+    from hugmesh_studio.tui import urwid_ui
+    app = urwid_ui.JourneyApp(".")
+    app._open_sessions()
+    assert app.sessions is not None and "[F2]" in app.sessions.ai_line.text
+    app.unhandled("f2")
+    assert app.sessions is None                      # left the review ...
+    assert app.journey.title() == "Local AI"         # ... onto the Local AI screen
+    app.feed("q")
+    assert app.journey.title() == "HugMesh Image Studio"
+
+
+@needs_urwid
+def test_f2_in_every_review_mode_drops_a_pending_delete_question(state, tmp_path, monkeypatch):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
+    from hugmesh_studio.tui import urwid_ui
+    opened = []
+    review = urwid_ui.SessionsReview(open_local_ai=lambda: opened.append(1))
+    review.mode = "confirm"
+    review._confirm_row = object()
+    review.unhandled("f2")
+    assert opened == [1] and review._confirm_row is None
+
+
+@needs_urwid
+def test_the_standalone_review_does_not_advertise_a_key_that_does_nothing(state, tmp_path, monkeypatch):
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
+    from hugmesh_studio.tui import urwid_ui
+    review = urwid_ui.SessionsReview()
+    assert "Local AI:" in review.ai_line.text and "F2" not in review.ai_line.text
+    assert "F2" not in "\n".join(screen_text(review.frame))
+    before = review.frame.body
+    review.unhandled("f2")                           # nothing to open it over: no change, no crash
+    assert review.frame.body is before and review.mode == "list"
+
+
+def test_the_status_line_hint_can_be_left_off(state):
+    assert "[F2]" in local_ai.status_line()
+    assert "[F2]" not in local_ai.status_line(key_hint=False)

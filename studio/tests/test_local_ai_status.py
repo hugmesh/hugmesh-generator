@@ -453,3 +453,37 @@ def test_the_module_runs_as_a_command_without_qt(fake, env):
                        capture_output=True, text=True, timeout=30)
     assert r.returncode == 0 and r.stdout.startswith("Local AI: ready"), r.stderr
     assert "PySide6" not in r.stderr and "PyQt6" not in r.stderr
+
+
+def put_result(env, name, rc, line="draft hugmesh-generator 12"):
+    d = os.path.join(lai.state_dir(env), "queue", "done")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, name + ".result"), "w") as fh:
+        fh.write(f"rc={rc} secs=3\n{line}\n")
+
+
+def test_finished_jobs_are_counted_and_the_failed_ones_are_counted_apart(fake, env, worker_proc):
+    now = put_status(env, worker_proc.pid, age=1.0)
+    put_result(env, "20260101-000000-draft-a-1", 0)
+    put_result(env, "20260101-000001-draft-a-2", 0)
+    put_result(env, "20260101-000002-draft-a-3", 1)
+    put_result(env, "20260101-000003-draft-a-4", 64)
+    snap = lai.read_snapshot(env, now=now, builds=no_builds)
+    assert snap.counts["done"] == 4 and snap.counts["failed"] == 2
+    assert "done 4" in lai.format_status(snap)
+
+
+def test_the_status_line_without_a_server_check_still_counts_what_is_waiting(fake, env):
+    """No worker is running, so the line does not ask the server; it must still tell the
+    person how many jobs are waiting, and say why nothing is moving."""
+    put_job(env, "pending", "20260101-000001-draft-hugmesh-generator-13", "draft hugmesh-generator 13")
+    put_job(env, "pending", "20260101-000002-draft-hugmesh-generator-14", "draft hugmesh-generator 14")
+    line = lai.quick_line(env)
+    assert line == "Local AI: no worker running, 2 queued"
+
+
+def test_a_stopped_worker_with_waiting_jobs_says_so_in_the_summary(fake, env):
+    put_job(env, "pending", "20260101-000001-draft-hugmesh-generator-13", "draft hugmesh-generator 13")
+    snap = lai.read_snapshot(env, builds=no_builds)
+    assert snap.counts["pending"] == 1
+    assert "1 queued" in snap.summary and "worker stopped" in snap.summary
