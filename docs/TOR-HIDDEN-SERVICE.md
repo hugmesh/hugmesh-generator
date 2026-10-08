@@ -376,8 +376,9 @@ wholesale, so a literal list here would silently drop `ingress.className=nginx-i
 **Custody.** The onion keys stay in `tests/stack/.run/kind-tor/hs/` (gitignored, `0700`)
 and survive `make kind-tor-down`, so the address is stable across restarts; delete that
 directory to mint a new one. `make kind-tor-status` and `scripts/kind-tor.sh onion`
-answer only while **this** tor is alive (its pidfile names a live process whose command
-line carries this torrc) — a leftover `hostname` file is not a live door.
+answer only while **this** tor is alive: its pidfile names a running process whose command
+line carries this torrc. A defunct (zombie) tor counts as stopped, and a leftover `hostname`
+file is not a live door.
 
 **Certificate.** The kind Ingress has no TLS block, so `:443` presents ingress-nginx's
 default certificate, not one for the onion. Tor Browser shows a certificate warning on
