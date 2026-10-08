@@ -53,8 +53,9 @@
 #      one caller, the node job of .github/workflows/shell-suites.yml. That job runs
 #      node:24-alpine (musl); MEASURED 2026-09-30, Playwright 1.61.1 there downloads
 #      a 646 MB ubuntu24.04 GLIBC fallback build in 12 s, THIS probe calls it READY
-#      (revision dirs, INSTALLATION_COMPLETE, an exec bit — it never runs the
-#      binary), neither chrome nor chrome-headless-shell can execute on musl, and
+#      (revision dirs, INSTALLATION_COMPLETE, an exec bit — as it
+#      then was; it has since learned to RUN `--version`, B2h-B2j, and that
+#      same install now reports "cannot execute", which this exemption does NOT waive: E1k), neither chrome nor chrome-headless-shell can execute on musl, and
 #      leg G's five real launches then all FAIL with `spawn ... ENOENT`: installing
 #      the browsers there trades one red for five. So the job DECLARES the absence.
 #      It is NOT a skip of leg E. Set to exactly "1", the real probe still runs and
@@ -226,9 +227,11 @@ mk_browsers() { # DIR [revision]
   local rev="${2:-9999}"
   mkdir -p "$1/chromium-${rev}/chrome-linux64" "$1/chromium_headless_shell-${rev}/chrome-headless-shell-linux64"
   : > "$1/chromium-${rev}/INSTALLATION_COMPLETE"
-  : > "$1/chromium-${rev}/chrome-linux64/chrome"
   : > "$1/chromium_headless_shell-${rev}/INSTALLATION_COMPLETE"
-  : > "$1/chromium_headless_shell-${rev}/chrome-headless-shell-linux64/chrome-headless-shell"
+  # the probe RUNS `<binary> --version` (a glibc build on musl has every bit set
+  # and still cannot execute), so the stubs are real scripts that answer it.
+  printf '#!/bin/sh\necho "Chromium stub %s"\n' "${rev}" > "$1/chromium-${rev}/chrome-linux64/chrome"
+  printf '#!/bin/sh\necho "Chromium stub %s"\n' "${rev}" > "$1/chromium_headless_shell-${rev}/chrome-headless-shell-linux64/chrome-headless-shell"
   # the probe demands an EXECUTABLE regular file under each revision dir (a
   # marker-only dir is the fail-open the skeptic proved 2026-08-27), so the
   # stub binaries carry the bit a real install has.
@@ -384,6 +387,35 @@ mv "${B}/chromium_headless_shell-9999" "${b2g_store}/chromium_headless_shell-999
 ln -s "${b2g_store}/chromium_headless_shell-9999" "${B}/chromium_headless_shell-9999"
 probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
 eq "${RC}" "0" "B2g a symlink to the SAME revision (a relocated cache) is READY"
+
+# B2h. THE 2026-09-30 SHAPE (#682): files, marker and exec bit all present, binary
+# cannot run. A shebang naming an interpreter that does not exist fails exactly the
+# way a glibc ELF fails on musl: the kernel cannot find the interpreter, spawn says
+# ENOENT. (An EMPTY +x file is NOT a control: execvp hands it to /bin/sh and it
+# exits 0.)
+fresh b2h; printf '#!/nonexistent/ld-linux-x86-64.so.2\n' > "${B}/chromium_headless_shell-9999/chrome-headless-shell-linux64/chrome-headless-shell"
+chmod +x "${B}/chromium_headless_shell-9999/chrome-headless-shell-linux64/chrome-headless-shell"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+eq "${RC}" "1" "B2h headless-shell binary has the exec bit but cannot be spawned (interpreter missing, the glibc-on-musl shape): exit 1"
+has "chromium-headless-shell r9999 cannot execute" "${ERR}" "B2h the finding is its own named problem"
+has "chrome-headless-shell-linux64/chrome-headless-shell" "${ERR}" "B2h names the binary that does not run"
+has "could not be spawned (ENOENT)" "${ERR}" "B2h says how it failed (the spawn error code, not the static hint)"
+hasnt "chromium r9999 cannot execute" "${ERR}" "B2h the runnable chromium beside it is NOT blamed"
+hasnt "toolchain: READY" "${ERR}" "B2h nothing claims READY"
+
+fresh b2i; printf '#!/nonexistent/ld-linux-x86-64.so.2\n' > "${B}/chromium-9999/chrome-linux64/chrome"
+chmod +x "${B}/chromium-9999/chrome-linux64/chrome"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+eq "${RC}" "1" "B2i headed chromium binary cannot be spawned: exit 1"
+has "chromium r9999 cannot execute" "${ERR}" "B2i named as its own problem"
+hasnt "chromium-headless-shell r9999 cannot execute" "${ERR}" "B2i the runnable headless shell beside it is NOT blamed"
+
+# B2j. it spawns but dies (missing shared library: the loader exits 127).
+fresh b2j; printf '#!/bin/sh\necho "error while loading shared libraries: libnss3.so" >&2\nexit 127\n' > "${B}/chromium-9999/chrome-linux64/chrome"
+chmod +x "${B}/chromium-9999/chrome-linux64/chrome"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+eq "${RC}" "1" "B2j a binary that spawns and exits 127 on --version: exit 1"
+has "exited 127: error while loading shared libraries" "${ERR}" "B2j quotes the first stderr line"
 
 # B3. package.json bumped, lock not regenerated: the DRIFT class, different fix.
 fresh b3; sed -i 's/"pngjs": "\^7.0.0"/"pngjs": "^8.0.0"/' "${T}/package.json"
@@ -739,6 +771,13 @@ ln -s "${B}/chromium_headless_shell-1234" "${B}/chromium_headless_shell-9999"
 probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
 has "ALIASED" "${ERR}" "E1f fixture: the headless-shell dir is a LIVE alias to another revision"
 grade_is 1 stale "E1f a live alias to a different revision: stale"
+
+# a binary that is there and cannot run is installed-but-broken, never 'absent'
+fresh e1k; rm -rf "${B}/chromium-9999"; printf '#!/nonexistent/ld\n' > "${B}/chromium_headless_shell-9999/chrome-headless-shell-linux64/chrome-headless-shell"
+chmod +x "${B}/chromium_headless_shell-9999/chrome-headless-shell-linux64/chrome-headless-shell"
+probe E2E_DIR="${T}" PLAYWRIGHT_BROWSERS_PATH="${B}"
+has "cannot execute" "${ERR}" "E1k fixture: headless shell present but unrunnable, chromium absent"
+grade_is 1 stale "E1k an unrunnable browser beside an absent chromium: stale (the musl glibc-fallback shape is not 'absent')"
 
 # a half-installed pair is not a browserless box
 fresh e1g; rm -rf "${B}/chromium_headless_shell-9999"
