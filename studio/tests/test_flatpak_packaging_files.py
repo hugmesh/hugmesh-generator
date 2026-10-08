@@ -1007,6 +1007,11 @@ def test_build_script_never_runs_sudo_or_a_package_manager():
     # directory and a write to a shell startup file are plain commands. The scripted run
     # covers them instead, by planting a canary in the fake HOME and checking afterwards
     # that nothing there changed (``_home_untouched``): only on the path the run takes.
+    # unshare -r only maps the caller to a root inside a new user namespace: it grants
+    # nothing, so it is a prefix to read through (the command after it is judged), not a
+    # forbidden word of its own. A skeptic listed it as "not caught"; what follows it is.
+    ("unshare -r true", []),
+    ("unshare -r sudo -n true", ["sudo"]),
     ("rm -rf \"$HOME/.local/share/flatpak\"", []),
     ("echo 'export PATH=x' >> \"$HOME/.bashrc\"", []),
 ], ids=["plain", "after-and", "probe", "substitution", "substitution-after-and",
@@ -1044,6 +1049,7 @@ def test_build_script_never_runs_sudo_or_a_package_manager():
         "python-m-pip-version", "pip-in-message",
         "outside-variable", "outside-ssh", "outside-awk", "outside-perl",
         "outside-alias", "outside-unknown-wrapper", "outside-script-command",
+        "unshare-alone-is-not-forbidden", "unshare-then-sudo-is-read",
         "outside-rm-real-flatpak-dir", "outside-write-to-shell-rc"])
 def test_the_forbidden_command_scanner_sees_what_it_must(snippet, expected):
     """The scanner is what the test above stands on, so it is pinned in both directions:
