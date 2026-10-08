@@ -218,47 +218,42 @@ WireGuard is first-class.
 
 ## Tests
 
-- `tests/egress-vpn/test-provision-vpn.sh` — `provision_vpn()` own-domain-only +
-  0600 + cross-tenant DENY + fail-closed no-ops.
-- `tests/egress-vpn/test-split-tunnel.sh` — the runner's `ip rule` priorities,
-  fwmark catch-all, the v4+v6 `default dev wg0` + blackhole kill-switch, `down`
-  teardown, and type-sniff (rootless via a recording fake `ip`; an optional real
-  netns smoke runs under root).
-- `tests/egress-vpn/test-vpn-mark.sh` — the packet-marking leg: marked-services
-  → expected `hugmesh_vpn` nft ruleset, marks-before-labels ordering, idempotent
-  re-runs, out-of-CIDR refusal, fail-closed aborts/rollbacks, full teardown, and
-  the runner/reconcile/builder wiring (rootless via recording fake `nft` +
-  `kubectl`).
-- `tests/egress-vpn/test-vpn-secret-projector.sh` — the delivery leg: the three
-  contract values LIFTED FROM the DaemonSet manifest and asserted against
-  `egress-vpn-secret-contract.env` (this half needs no tooling and can never
-  skip), then the REAL projector loop (extracted from the DaemonSet) run with
-  those manifest values against a contract-aware recording fake `kubectl` —
-  filename == secretRef, 0600, idempotence, prune-on-unassign, a Secret carrying
-  only the old `config` key delivering nothing, and the two fail-closed cases
-  (failed list / empty key never destroy last-good). The first version of this
-  test hardcoded the three values in its own invocation env, so it could not
-  fail on the two that shipped wrong.
-- `tests/egress-vpn/test-secret-contract.sh` — the CROSS-REPO gate: every copy of
-  the contract in this repo's manifests, the `optional-services.yaml` registry
-  entry, the two operator runbooks (the kustomization header's selector, this
-  doc's contract table), plus the admin-bff writer source read out of a sibling
-  checkout (data key, Secret name, label, the `EGRESS_VPN_SECRET_NAMESPACE`
-  lever, both dark-by-default flags) — followed by the COPY CENSUS, which greps
-  for carriers the assertions above do not name and fails on any that is neither
-  verified nor exempt-with-a-reason. Exits 3 INCOMPLETE — never a green SKIP —
-  when the sibling is missing.
-- `tests/egress-vpn/test-optional-service-gate.sh` — the optional-service gate in
-  `build-rpi5-stage4.sh`: default off, and an unselected build prunes the
-  interaction NetworkPolicy, the delivery half and the node packages.
-- `tests/egress-vpn/test-vpn-reconcile-verify.sh` — `vpn-verify.sh`, the
-  signed-export consumer: it accepts a correctly signed envelope and rejects a
-  tampered one.
-- `tests/egress-vpn/test-x86-role-gate.sh` — `--egress-vpn` is desktop-only on
-  every leg: the extracted PKGS block and kernel `ROLE_CLIENT` arm are eval'd for
-  both extensions × both roles, so a node role can never emerge (or compile in)
-  the VPN userspace the builder just told it it would ignore.
+All of these run in CI as the `egress-vpn-node-agents` verify job (`.gitlab-ci.yml`,
+which loops over `tests/egress-vpn/*.sh`). They need only bash and stubbed tools:
+no cluster, no real `nft`/`ip`.
 
-All of the above run in CI as the `egress-vpn-node-agents` verify job
-(`.gitlab-ci.yml`, which loops over `tests/egress-vpn/*.sh`); they need only bash + stubbed tools — never a cluster, never
-real `nft`/`ip`.
+- `tests/egress-vpn/test-provision-vpn.sh` — `provision_vpn()` reads only its own
+  domain, writes `0600`, denies cross-tenant reads, and fails closed.
+- `tests/egress-vpn/test-split-tunnel.sh` — the runner's `ip rule` priorities, the
+  fwmark catch-all, the v4+v6 `default dev wg0` + blackhole kill-switch, `down`
+  teardown and type-sniff (rootless, with a recording fake `ip`; an optional real netns
+  smoke test runs under root).
+- `tests/egress-vpn/test-vpn-mark.sh` — the packet-marking leg: marked-services to the
+  expected `hugmesh_vpn` nft ruleset, marks before labels, idempotent re-runs,
+  out-of-CIDR refusal, fail-closed aborts and rollbacks, full teardown, and the
+  runner/reconcile/builder wiring (rootless, with recording fake `nft` and `kubectl`).
+- `tests/egress-vpn/test-vpn-secret-projector.sh` — the delivery leg. It lifts the three
+  contract values FROM the DaemonSet manifest and checks them against
+  `egress-vpn-secret-contract.env` (this half needs no tooling and cannot skip). Then it
+  runs the REAL projector loop (extracted from the DaemonSet) with those values against
+  a contract-aware recording fake `kubectl`: filename == secretRef, `0600`,
+  idempotence, prune-on-unassign, a Secret with only the old `config` key delivers
+  nothing, and the two fail-closed cases (failed list, empty key) never destroy
+  last-good. The first version hardcoded the three values in its own env, so it could
+  not fail on the two that shipped wrong.
+- `tests/egress-vpn/test-secret-contract.sh` — the CROSS-REPO gate: every copy of the
+  contract in this repo's manifests, the `optional-services.yaml` registry entry, the
+  two operator runbooks (the kustomization header's selector, this page's contract
+  table) and the admin-bff writer source read from a sibling checkout (data key, Secret
+  name, label, the `EGRESS_VPN_SECRET_NAMESPACE` lever, both dark-by-default flags).
+  Then the COPY CENSUS, which fails on any carrier that is neither verified nor exempt
+  with a reason. It exits 3 INCOMPLETE, never a green SKIP, when the sibling is missing.
+- `tests/egress-vpn/test-optional-service-gate.sh` — the optional-service gate in
+  `build-rpi5-stage4.sh`: default off, and an unselected build prunes the interaction
+  NetworkPolicy, the delivery half and the node packages.
+- `tests/egress-vpn/test-vpn-reconcile-verify.sh` — `vpn-verify.sh`, the signed-export
+  consumer: it accepts a correctly signed envelope and rejects a tampered one.
+- `tests/egress-vpn/test-x86-role-gate.sh` — `--egress-vpn` is desktop-only on every
+  leg. The test evals the extracted PKGS block and the kernel `ROLE_CLIENT` arm for
+  both extensions and both roles, so a node role can never emerge (or compile in) the
+  VPN userspace the builder said it would ignore.

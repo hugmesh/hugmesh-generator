@@ -80,12 +80,9 @@ hardcodes that one path for the **shared** credential. The Velero server
 in the git tree. The bucket and endpoint in the BSL are not secret and are
 generator-templated.
 
-A brand whose BSL uses a **dedicated** bucket or credential provisions the
-commented **per-brand ExternalSecret template** at the bottom of the same file
-(target `velero-cloud-credentials-<destination-ref>`, Vault path
-`secret/hugmesh/velero-<destination-ref>`). See
+A **dedicated** per-brand credential uses the per-brand ExternalSecret template at the
+bottom of the same file (Vault path `secret/hugmesh/velero-<destination-ref>`). See
 [Per-brand destinations](#per-brand-destinations-dedicated-bucketcredential).
-Brands on the shared credential need nothing extra.
 
 ## Kopia repository encryption (the repo password)
 

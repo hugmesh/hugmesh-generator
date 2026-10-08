@@ -172,17 +172,21 @@ one instance per local-path node is correct.
 
 ## Verification status (VERIFIED vs NEEDS-NODE)
 
-- **VERIFIED off-node:** the admin-bff ownership matrix / capacity / export tests; the shell
-  logic tests (`tests/node-storage/`): `provision_storage --pool`/`,nofail`, the node-agent
-  verify (genuine accept; unsigned/tampered/foreign/rollback reject) + the `nodePathMap`
-  CAS-patch (PV-binds-to-correct-node) + the pool-manifest build, and the 13b ApplicationSet
-  structure/selector lever. The storage canonical-bytes reconstruction round-trips against the
-  Java `NodeStorageExportService.canonicalBytes` shape. The bake/enable coverage
-  (`test-bake-coverage.sh`) now RUNS both halves against a sandbox sysroot rather than
-  grepping for them, and `test-pool-entrypoint.sh` runs the real `provision.sh --pool` from
-  the agent's own call site against a sandbox fake root: the pool device ends up mounted at
-  its pool path with a `,nofail` fstab entry, the system disk in the same manifest is
-  untouched, and no first-boot step or runlevel change happens.
+- **VERIFIED off-node:**
+  - the admin-bff ownership matrix, capacity and export tests;
+  - the shell logic tests (`tests/node-storage/`): `provision_storage --pool` and
+    `,nofail`; the node-agent verify (accepts a genuine export; rejects unsigned,
+    tampered, foreign and rolled-back ones); the `nodePathMap` CAS-patch
+    (PV-binds-to-correct-node); the pool-manifest build; and the 13b ApplicationSet
+    structure and selector lever;
+  - the storage canonical-bytes reconstruction, which round-trips against the Java
+    `NodeStorageExportService.canonicalBytes` shape;
+  - the bake and enable coverage (`test-bake-coverage.sh`), which RUNS both halves
+    against a sandbox sysroot instead of grepping for them;
+  - `test-pool-entrypoint.sh`, which runs the real `provision.sh --pool` from the
+    agent's own call site against a sandbox fake root. The pool device ends up mounted
+    at its pool path with a `,nofail` fstab entry, the system disk in the same manifest
+    is untouched, and no first-boot step or runlevel change happens.
 - **NEEDS A BOOTED NODE:** end-to-end byte-equality with a live BFF `/export` payload; the
   real `provision_storage --pool` against a PHYSICAL disk (the sandbox stubs
   cryptsetup/mkfs/mount and relaxes the two `[ -b ]` block-device guards, so LUKS format,
