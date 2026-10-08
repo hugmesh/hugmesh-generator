@@ -29,7 +29,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from hugmesh_studio.core import domain_services as ds                 # noqa: E402
 from hugmesh_studio.core.config import (                              # noqa: E402
-    DOMAIN_IDP_OWN, INFRA_SERVICES_CHOICES, Domain)
+    DOMAIN_IDP_OWN, INFRA_SERVICES_CHOICES, Domain, ImageConfig)
 from hugmesh_studio.core.fleet import FleetDomains                     # noqa: E402
 from hugmesh_studio.core.local_mesh_domains import LocalMeshDomains    # noqa: E402
 from hugmesh_studio.tui import domain_services_step, journey          # noqa: E402
@@ -225,6 +225,44 @@ def test_gui_a_tor_domain_renders_a_checked_row_and_the_walk_records_it(wiz):
     page.validatePage()
     assert wiz.cfg.domains[0].tor is True
     assert "tor" not in wiz.cfg.domains[0].optional_services
+
+
+def test_both_faces_list_the_onion_scope_in_their_legend():
+    """Decision 71: the text screen and the page say the same thing about the new
+    scope, taken from core. Dropping it from either legend leaves a person looking at
+    a row whose scope word is explained nowhere."""
+    from hugmesh_studio.gui.pages import domain_services as page_mod
+    line = (f"{ds.SCOPE_LABELS[ds.SCOPE_ONION]}: set {ds.SCOPE_WHERE[ds.SCOPE_ONION]}, "
+            f"binds {ds.SCOPE_BINDS[ds.SCOPE_ONION]}")
+    assert line in domain_services_step.scope_legend()
+    assert line in page_mod._scope_legend()
+    assert len(domain_services_step.scope_legend()) == 4
+
+
+def test_gui_loading_another_config_drops_the_previous_configs_tor_ticks(wiz):
+    """A different configuration object (Load config / Load session / a restart from
+    the previous-builds manager) must not inherit the Tor ticks made on the page for
+    the config before it: the same reset that clears the service selection and the
+    reviewed marks. Walk acme.example with its front door ticked in config A, then
+    load config B that names acme.example with tor False: the tick must not travel,
+    and the walk must write tor False onto B."""
+    from _helpers import advance_to
+    from hugmesh_studio.gui.pages import domain_services as page_mod
+    page = _page_at_added(wiz, tor=True)
+    page._step(1)
+    assert page.tor_front_door() is True
+    b = ImageConfig()
+    b.mode, b.role, b.additional_domains = "mesh", "omnibus", True
+    b.domains = [Domain(name="acme.example", optional_services=["akkoma"], tor=False)]
+    wiz.cfg = b
+    wiz.restart()
+    page = advance_to(wiz, page_mod.DomainServicesPage)
+    page._step(1)
+    assert page.current_domain() == "acme.example"
+    assert page.tor_front_door() is False
+    assert page._tor_box is not None and not page._tor_box.isChecked()
+    page.validatePage()
+    assert wiz.cfg is b and b.domains[0].tor is False
 
 
 def test_gui_services_table_offers_no_infra_slug(wiz):

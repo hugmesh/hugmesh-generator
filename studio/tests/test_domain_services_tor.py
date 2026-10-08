@@ -562,6 +562,38 @@ def test_onion_urls_are_fresh_valid_and_per_slug(tmp_path, monkeypatch):
     assert node.onion_urls() == {} and node.onion_url("brandb") == ""
 
 
+def test_a_readout_that_is_not_a_v3_onion_name_is_never_handed_out_shape(tmp_path, monkeypatch):
+    """The readout directory is shared and root-owned, so the CONTENT is checked as well
+    as the slug: a v3 onion name is exactly 56 characters of the base32 alphabet
+    (a-z and 2-7), then ".onion". Digits 0, 1, 8 and 9, upper case, text before or
+    after the name, and a wrong length are each refused; only the well-formed name is
+    handed out as a login URL."""
+    d = _onion_dir(tmp_path)
+    good = "c" * 55 + "7" + ".onion"                     # uses the digit end of base32
+    bad = {
+        "digit-zero": "0" * 56 + ".onion",
+        "digit-one": "a" * 55 + "1" + ".onion",
+        "digit-eight": "a" * 55 + "8" + ".onion",
+        "digit-nine": "a" * 55 + "9" + ".onion",
+        "upper-case": "A" * 56 + ".onion",
+        "mixed-case": "a" * 55 + "B" + ".onion",
+        "prefix": "evil." + "a" * 56 + ".onion",
+        "suffix": "a" * 56 + ".onion.evil.example",
+        "short": "a" * 55 + ".onion",
+        "long": "a" * 57 + ".onion",
+        "not-onion": "a" * 56 + ".onionx",
+        "empty-label": ".onion",
+    }
+    (d / "good.hostname").write_text(good + "\n")
+    for slug, text in bad.items():
+        (d / f"{slug}.hostname").write_text(text + "\n")
+    node = LocalStackNode(str(tmp_path))
+    monkeypatch.setattr(node, "_tor_started_at", lambda: time.time() - 60)
+    assert node.onion_urls() == {"good": f"https://{good}/"}, sorted(node.onion_urls())
+    for slug in bad:
+        assert node.onion_url(slug) == "", slug
+
+
 class _MonNode:
     """A LocalStackNode stand-in: scripted compose ps, a primary onion, and the
     per-domain readouts ``onion_urls`` would hand out."""
@@ -794,6 +826,9 @@ _STUB_TOR = r'''#!/bin/sh
 # after the directory), record what was published when it started, then idle or die.
 [ "$1" = "-f" ] || { echo "stub tor: expected -f <torrc>, got $*" >&2; exit 64; }
 torrc="$2"
+# real tor writes a HiddenServiceDir's hostname file mode 0600, and cp keeps the
+# source mode: the readouts a host-side reader opens must be chmod-ed by the script
+umask 077
 if [ -n "${STUB_SEEN:-}" ]; then
   ls -a "$STUB_OUT" "$STUB_MAP" > "$STUB_SEEN" 2>/dev/null || true
 fi
@@ -910,6 +945,10 @@ def _stop(proc):
         return -999, ""
 
 
+def _modes(d):
+    return {p.name: stat.S_IMODE(p.stat().st_mode) for p in d.iterdir()}
+
+
 def _hs_dirs(torrc_text):
     return re.findall(r"^HiddenServiceDir (.+)$", torrc_text, re.M)
 
@@ -930,6 +969,13 @@ def test_n_domains_mint_n_stanzas_n_readouts_and_one_host_map(tmp_path):
         assert torrc.count("HiddenServiceVersion 3") == 3
         # readouts: already in place when the primary appeared
         assert snap.get("brandb.hostname", "").strip() == ONION_B
+        # world-readable: the stub tor writes its hostname files 0600 (as real tor
+        # does), and the host-side readers (the Studio's onion_urls, run.sh --via
+        # onion-domains, the live check) read the bind-mounted directory as the
+        # operator, not as the container's user
+        assert _wait(lambda: _modes(tmp_path / "out") ==
+                     {"hostname": 0o644, "brandb.hostname": 0o644,
+                      "acme-example.hostname": 0o644}), _modes(tmp_path / "out")
         assert snap.get("acme-example.hostname", "").strip() == ONION_A
         assert snap_map is not None, "the host map was not written before the primary"
         lines = [ln for ln in snap_map.splitlines() if ln and not ln.startswith("#")]
@@ -947,6 +993,29 @@ def test_n_domains_mint_n_stanzas_n_readouts_and_one_host_map(tmp_path):
     # nothing outlives the container: readouts AND the map
     assert os.listdir(tmp_path / "out") == []
     assert not (tmp_path / "map" / "onion-hosts.map").exists()
+
+
+def test_a_glob_in_the_domain_list_is_never_expanded(tmp_path):
+    """TOR_ONION_DOMAINS is split into words by the shell; a token such as `*=default`
+    must stay a (refused) token and never expand to the names of files in the
+    container's working directory, which would mint an onion for each. Run from a
+    directory that holds a file named `evil=default`."""
+    work = tmp_path / "cwd"
+    work.mkdir()
+    (work / "evil=default").write_text("")
+    env = _sandbox(tmp_path, "*=default brandb=brandb")
+    proc = subprocess.Popen(["sh", ENTRY], env=env, cwd=str(work),
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    primary = tmp_path / "out" / "hostname"
+    ok = _wait(lambda: primary.exists() and primary.read_text().strip())
+    snap = sorted(p.name for p in (tmp_path / "out").iterdir())
+    torrc = (tmp_path / "torrc").read_text() if (tmp_path / "torrc").exists() else ""
+    rc, log = _stop(proc)
+    assert ok, log
+    assert snap == ["brandb.hostname", "hostname"], snap
+    assert "evil" not in torrc
+    assert "REFUSED TOR_ONION_DOMAINS entry '*=default'" in log
+    assert rc == 0
 
 
 def test_the_primary_is_published_only_after_every_domain_key_exists(tmp_path):
