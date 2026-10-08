@@ -91,7 +91,8 @@ def test_no_builder_parses_a_ca_flag():
 
 def test_the_note_names_the_mechanism_it_describes():
     for needle in ("KEYS", "certs/", "*.crt", "*.pem", "trust store",
-                   "--vault-addr", "Secrets store step is skipped"):
+                   "--vault-addr", "Secrets store step is skipped",
+                   "trusts exactly the certificate authorities"):
         assert needle in CLIENT_CA_INHERITANCE_NOTE, needle
 
 

@@ -611,10 +611,20 @@ provision_files() {
 provision_certs() {
     # Bulk: drop everything in KEYS/certs into the system trust anchors
     if ls "${BASE}/certs/"* >/dev/null 2>&1; then
-        mkdir -p /usr/local/share/ca-certificates /etc/ssl/keys
+        mkdir -p /usr/local/share/ca-certificates
         cp -f "${BASE}/certs/"*.crt /usr/local/share/ca-certificates/ 2>/dev/null || true
         cp -f "${BASE}/certs/"*.pem /usr/local/share/ca-certificates/ 2>/dev/null || true
-        cp -f "${BASE}/certs/"*.key /etc/ssl/keys/ 2>/dev/null && chmod 0600 /etc/ssl/keys/* || true
+        # Private keys (certs/*.key -> /etc/ssl/keys, 0600) are copied ONLY for a
+        # manifest that carries a `files` list — exactly the manifests that got them
+        # before this step existed (backend / control-plane). A client, frontend or
+        # standalone stick (no `files` list, or no provision.json) gets the trust
+        # anchors above and nothing else: a stick that carries certs/cluster-ca.key
+        # (the pki custody material) must not put the CA private key on a desktop just
+        # because the CA certificate is now imported there.
+        if jqe '.files'; then
+            mkdir -p /etc/ssl/keys
+            cp -f "${BASE}/certs/"*.key /etc/ssl/keys/ 2>/dev/null && chmod 0600 /etc/ssl/keys/* || true
+        fi
         have update-ca-certificates && update-ca-certificates 2>/dev/null || true
         log "Imported certificates from KEYS/certs"
     fi

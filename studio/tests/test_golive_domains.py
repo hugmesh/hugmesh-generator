@@ -34,9 +34,10 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from hugmesh_studio.core.golive_domains import (                        # noqa: E402
-    NO_EXTRA_DOMAINS_NOTE, ONION_LIST_UNREADABLE_HOW, ONION_OVERRIDE_PROBLEM_HOW,
-    ONION_UNREADABLE_HOW, baked_domains, exposure_lines, exposure_rows,
-    onion_export_state, onion_exports, onion_override_problem, plan_rows)
+    NO_EXTRA_DOMAINS_NOTE, ONION_DOMAIN_FILE_UNREADABLE_HOW, ONION_LIST_UNREADABLE_HOW,
+    ONION_OVERRIDE_PROBLEM_HOW, ONION_UNREADABLE_HOW, baked_domains, exposure_lines, exposure_rows,
+    onion_export_scan, onion_export_state, onion_exports, onion_override_problem,
+    plan_rows)
 from hugmesh_studio.core.golive_driver import GoLiveDriver, GoLiveOptions  # noqa: E402
 from hugmesh_studio.tui import app as tui_app                           # noqa: E402
 
@@ -307,6 +308,61 @@ def test_following_the_unreadable_rows_remedy_keeps_the_per_domain_onions_named(
     assert state == (ONION_A, [("games", ONION_B)], "", "")
     assert "Tor: per-domain onions" not in rows
     assert rows["Tor: domain slug 'games'"].startswith(f"https://{ONION_B}/")
+
+
+def test_one_unreadable_per_domain_file_beside_a_known_primary_is_a_row(device, monkeypatch):
+    """Round-3 review, measured: a readable ``hostname`` and ``shop.hostname`` beside a
+    root-only ``blog.hostname`` showed the primary and ``shop`` and dropped ``blog``
+    with no row — the refusal was filed under the primary's reason, which a known
+    primary never shows. It is now the scan's fifth item and its own row, in the plan
+    for both the onion and a clearnet mechanism, and the onions that DID read stay."""
+    tor = device / "tor"
+    (tor / "shop.hostname").write_text(ONION_B + "\n")
+    (tor / "blog.hostname").write_text(ONION_B + "\n")
+    assert onion_export_scan(str(tor))[4] == ""
+    deny = _Deny(tor / "blog.hostname")
+    try:
+        scan = onion_export_scan(str(tor))
+        state = onion_export_state(str(tor))
+        d = GoLiveDriver(GENERATOR_DIR)
+        plans = {p: plan_rows(d, GoLiveOptions(provider=p, domain="mesh.example"))
+                 for p in ("tor-onion", "cloudflare-tunnel")}
+    finally:
+        deny.undo()
+    primary, per, why, unlistable, refused = scan
+    assert primary == ONION_A and why == "" and unlistable == ""
+    assert per == [("games", ONION_B), ("shop", ONION_B)], per
+    assert refused == f"{tor / 'blog.hostname'}: Permission denied", refused
+    assert state == scan[:4] and len(state) == 4
+    for provider, plan in plans.items():
+        rows = dict(plan)
+        assert rows["Tor: this node's onion"].startswith(f"https://{ONION_A}/"), provider
+        assert rows["Tor: per-domain onions"] == ONION_DOMAIN_FILE_UNREADABLE_HOW.format(
+            why=refused), provider
+        assert "blog.hostname" in rows["Tor: per-domain onions"]
+        assert "cannot be listed" not in rows["Tor: per-domain onions"]
+        assert rows["Tor: domain slug 'shop'"].startswith(f"https://{ONION_B}/")
+        assert any("blog.hostname" in ln for ln in exposure_lines(plan)), provider
+    # the row comes before the slug rows it explains the absence from
+    keys = [k for k, _ in plans["tor-onion"]]
+    assert keys.index("Tor: per-domain onions") < keys.index("Tor: domain slug 'games'")
+    # and with nothing refused there is no such row
+    rows = dict(plan_rows(GoLiveDriver(GENERATOR_DIR),
+                          GoLiveOptions(provider="tor-onion", domain="mesh.example")))
+    assert "Tor: per-domain onions" not in rows
+
+
+def test_an_unreadable_slug_file_is_not_filed_under_the_primarys_reason(device):
+    """The third item is about ``hostname`` alone: with ``hostname`` fine and a slug
+    file refused it stays empty, so the primary's own row can never be blamed for it."""
+    tor = device / "tor"
+    deny = _Deny(tor / "games.hostname")
+    try:
+        primary, per, why, unlistable, refused = onion_export_scan(str(tor))
+    finally:
+        deny.undo()
+    assert primary == ONION_A and per == [] and why == "" and unlistable == ""
+    assert refused.startswith(str(tor / "games.hostname"))
 
 
 def test_the_plan_says_the_onion_cannot_be_read_rather_than_not_minted():

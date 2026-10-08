@@ -33,7 +33,8 @@ import re
 
 __all__ = [
     "CLUSTER_DOMAIN_FILE", "DOMAINS_FILE", "ONION_EXPORT_DIR", "NO_EXTRA_DOMAINS_NOTE",
-    "ONION_HOSTNAME_ENV", "baked_domains", "onion_export_state", "onion_exports",
+    "ONION_HOSTNAME_ENV", "baked_domains", "onion_export_scan", "onion_export_state",
+    "onion_exports",
     "onion_override_problem", "exposure_rows", "exposure_lines", "plan_rows",
 ]
 
@@ -102,7 +103,10 @@ def baked_domains(primary: str = "", domains_file: str | None = None) -> list[st
 
 def onion_export_state(export_dir: str | None = None
                        ) -> tuple[str, list[tuple[str, str]], str, str]:
-    """``(primary onion, [(slug, onion), ...], why a hostname file could not be read,
+    """:func:`onion_export_scan` without its fifth item (the refused per-domain files),
+    kept at four items for the callers that unpack four. A plan wants the scan.
+
+    ``(primary onion, [(slug, onion), ...], why a hostname file could not be read,
     why the directory could not be listed)`` as this host exports them — "" / [] when
     there are none, and the two reasons "" when the export directory is simply absent
     (no Tor on this host).
@@ -131,8 +135,23 @@ def onion_export_state(export_dir: str | None = None
     reconcile-shaped slugs count, from the files AND from the variable — the files
     are written by a root agent, but a half-written, hand-edited or half-typed one
     must not reach a page as an address to share."""
+    return onion_export_scan(export_dir)[:4]
+
+
+def onion_export_scan(export_dir: str | None = None
+                      ) -> tuple[str, list[tuple[str, str]], str, str, str]:
+    """:func:`onion_export_state` plus a fifth item: ``"<path>: <reason>; ..."`` for
+    every ``<slug>.hostname`` file that exists in a LISTABLE directory but cannot be
+    read, "" when none. It is its own item because it hides a different thing from the
+    other two: the primary may be known (the readable ``hostname``, or the
+    ``GL_ONION_HOSTNAME`` override) and the listing may work, while one domain's file
+    is root-only — and the round-3 review measured that case dropping that domain from
+    the plan with no row at all (the reason was filed under the primary's, which a
+    known primary never shows). The third item keeps meaning "``hostname`` itself, or,
+    when it was fine, nothing"; a refused slug file no longer lands in it."""
     d = export_dir or os.environ.get("GL_ONION_EXPORT_DIR", ONION_EXPORT_DIR)
     unreadable = ""
+    refused: list[str] = []
 
     def _lines(name: str) -> list[str]:
         nonlocal unreadable
@@ -140,7 +159,11 @@ def onion_export_state(export_dir: str | None = None
         try:
             return _read_lines(path) or []
         except OSError as e:                    # EACCES through the 0700 directory, ...
-            unreadable = unreadable or f"{path}: {e.strerror or e}"
+            why = f"{path}: {e.strerror or e}"
+            if name == "hostname":
+                unreadable = unreadable or why
+            else:
+                refused.append(why)
             return []
 
     override = os.environ.get(ONION_HOSTNAME_ENV, "").strip()
@@ -165,7 +188,7 @@ def onion_export_state(export_dir: str | None = None
         addr = next((w for w in _lines(fn) if w), "")
         if _SLUG_RE.match(slug) and _ONION_RE.match(addr):
             per.append((slug, addr))
-    return primary, per, unreadable, unlistable
+    return primary, per, unreadable, unlistable, "; ".join(refused)
 
 
 def onion_exports(export_dir: str | None = None) -> tuple[str, list[tuple[str, str]]]:
@@ -221,11 +244,24 @@ ONION_LIST_UNREADABLE_HOW = (
     "on the node.")
 
 
+#: The per-domain row when the directory CAN be listed but one or more of its
+#: ``<slug>.hostname`` files cannot be read (``{why}`` is each path and the OS's reason,
+#: joined with "; "). Said beside a known primary too, and beside onions that did read:
+#: before this row a domain whose file was root-only simply vanished from the plan
+#: (the round-3 review of the #645 fix).
+ONION_DOMAIN_FILE_UNREADABLE_HOW = (
+    "cannot be read by this user ({why}) — a domain with its own onion is missing from "
+    "this table for that reason, not because it has none; the onions that could be "
+    "read are listed here. Run the Studio (or the plan) as root to see it, or read the "
+    "file on the node.")
+
+
 def exposure_rows(domains, chosen: str, provider_id: str, mechanism: str,
                   model_label: str, onion: str = "",
                   domain_onions=(), onion_unreadable: str = "",
                   override_problem: str = "",
-                  listing_unreadable: str = "") -> list[tuple[str, str]]:
+                  listing_unreadable: str = "",
+                  domain_files_unreadable: str = "") -> list[tuple[str, str]]:
     """``[(what, how it is reached), ...]`` — the plan for EVERY domain on the device,
     not only the one this run covers.
 
@@ -279,6 +315,9 @@ def exposure_rows(domains, chosen: str, provider_id: str, mechanism: str,
     if listing_unreadable:
         rows.append(("Tor: per-domain onions",
                      ONION_LIST_UNREADABLE_HOW.format(why=listing_unreadable)))
+    if domain_files_unreadable:
+        rows.append(("Tor: per-domain onions",
+                     ONION_DOMAIN_FILE_UNREADABLE_HOW.format(why=domain_files_unreadable)))
     for slug, addr in domain_onions:
         rows.append((f"Tor: domain slug '{slug}'",
                      f"https://{addr}/ — its own onion, the same gateway"))
@@ -303,7 +342,7 @@ def plan_rows(driver, opts) -> list[tuple[str, str]]:
     label = f"{p.model} ({p.mechanism})" if p else "(no provider picked)"
     domains = baked_domains(driver.autofill_domain())
     chosen = (opts.domain or "").strip().lower() or (domains[0] if domains else "")
-    onion, per, unreadable, unlistable = onion_export_state()
+    onion, per, unreadable, unlistable, refused = onion_export_scan()
     return exposure_rows(domains, chosen, p.id if p else "?", mechanism, label,
                          onion, per, unreadable, onion_override_problem(),
-                         listing_unreadable=unlistable)
+                         listing_unreadable=unlistable, domain_files_unreadable=refused)

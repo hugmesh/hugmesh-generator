@@ -56,6 +56,7 @@ def test_the_import_is_its_own_step_and_not_inside_provision_files():
     for needle in ('cp -f "${BASE}/certs/"*.crt /usr/local/share/ca-certificates/',
                    'cp -f "${BASE}/certs/"*.pem /usr/local/share/ca-certificates/',
                    'cp -f "${BASE}/certs/"*.key /etc/ssl/keys/',
+                   "if jqe '.files'; then",
                    "update-ca-certificates"):
         assert needle in certs, (
             f"keys-provision no longer does {needle!r} in provision_certs — the client "
@@ -167,15 +168,41 @@ def test_a_stick_whose_only_certificate_is_a_pem_still_imports_it(tmp_path):
     assert "LOG  Imported certificates from KEYS/certs" in out
 
 
-def test_a_private_key_on_the_stick_lands_in_etc_ssl_keys_mode_0600(tmp_path):
-    """The step also installs ``certs/*.key`` into /etc/ssl/keys at mode 0600 (the
-    same block, moved whole); the round-2 review's P11 dropped it and stayed green."""
-    path, _manifest_ = _manifest("provision.host.json")
+def test_a_private_key_on_a_files_manifest_stick_lands_in_etc_ssl_keys_mode_0600(tmp_path):
+    """A manifest WITH a files list (backend / control plane) keeps what it always had:
+    ``certs/*.key`` into /etc/ssl/keys at mode 0600."""
+    path, manifest = _manifest("provision.backend.json")
+    assert manifest.get("files"), "the backend example lost its files list"
     base = _stick(tmp_path, names=("cluster-ca.crt", "node.key"))
     out = _run_import(_read(PROVISION), base, path)
     assert f"CALL cp -f {base}/certs/node.key /etc/ssl/keys/" in out
     assert "CALL chmod 0600 /etc/ssl/keys/" in out
-    assert "CALL mkdir -p /usr/local/share/ca-certificates /etc/ssl/keys" in out
+    assert "CALL mkdir -p /etc/ssl/keys" in out
+    assert "CALL mkdir -p /usr/local/share/ca-certificates" in out
+
+
+@pytest.mark.parametrize("example", ["provision.host.json", "provision.frontend.json"])
+def test_a_client_or_frontend_stick_never_gets_a_private_key_copied(tmp_path, example):
+    """The widened import is trust anchors only. A client stick that carries
+    certs/cluster-ca.key (pki custody material) must NOT put that key under
+    /etc/ssl/keys; its certificates are still imported."""
+    path, manifest = _manifest(example)
+    assert "files" not in manifest, example
+    base = _stick(tmp_path, names=("cluster-ca.crt", "cluster-ca.key"))
+    out = _run_import(_read(PROVISION), base, path)
+    assert "/etc/ssl/keys" not in out, out
+    assert ".key" not in out, out
+    assert f"CALL cp -f {base}/certs/cluster-ca.crt /usr/local/share/ca-certificates/" in out
+    assert "CALL update-ca-certificates" in out
+
+
+def test_a_stick_with_no_provision_json_never_gets_a_private_key_copied(tmp_path):
+    """Standalone images and bare sticks run with MANIFEST=/dev/null: the CA
+    certificate is imported, no private key is copied."""
+    base = _stick(tmp_path, names=("cluster-ca.crt", "cluster-ca.key"))
+    out = _run_import(_read(PROVISION), base, "/dev/null")
+    assert "/etc/ssl/keys" not in out and ".key" not in out, out
+    assert f"CALL cp -f {base}/certs/cluster-ca.crt /usr/local/share/ca-certificates/" in out
 
 
 def test_main_imports_the_certificates_for_every_manifest_right_after_the_files():
