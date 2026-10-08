@@ -92,7 +92,7 @@ private half goes ONLY to the BFF.
 
 ---
 
-## 3. The ordered rotation (public first)
+## 3. The ordered rotation (public-first)
 
 > Do these IN ORDER. Do not skip ahead to step 4 until step 3 is confirmed on
 > **every** reachable node.
@@ -267,9 +267,9 @@ verified sync (after you fix the key) flips it to enforcing.
       (section 6).
 - [ ] Old private key decommissioned; old public key kept only for audit (step 7).
 
-## Hardening follow-up (recommended, not built)
+## Hardening follow-up (recommended)
 
-Extend the node verify path to trust **multiple** baked public keys during a
+**Not built.** Extend the node verify path to trust **multiple** baked public keys during a
 rotation window (e.g. a `registry-pub.d/` directory; accept a signature that
 verifies against ANY baked key). That turns the step 2 to step 4 window from a
 "verification gap (fail to last-good)" into a **zero-downtime overlap**: bake

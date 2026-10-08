@@ -31,7 +31,7 @@ beside `ROLE_MATRIX` and `ROLE_MASTODON`. The admin-bff/mod-bff domain-lock flow
 fills them by writing a **separate `domain_lock` table** (ADD-active). It does not
 reuse `access_suspension` (REMOVE-semantics, closed ROLE_PATTERN).
 
-## The three enforcement legs (the generator owns legs 1 and 2)
+## The three enforcement legs (generator owns leg 1 + 2)
 
 Federation is **outbound**, so egress is the authoritative non-federation control.
 Only `homeserver-egress.yaml` (below) restricts egress today, and only for the
@@ -74,7 +74,7 @@ exist but ship dark (`docs/CLUSTER-HARDENING-PLAN.md` §B).
 
 Leg 1 is the foundation. Leg 2 is the Mastodon-specific layer on top.
 
-## What is gated, what ships dark, what is live
+## What is GATED / SHIPS DARK vs LIVE
 
 | artifact | state on `main` | gate |
 |---|---|---|
@@ -106,7 +106,7 @@ dark state.
    egress-proxy (it then loads the allowlist) once the reconcile loop is writing
    the force-local set.
 
-### Live connectivity validation (before relying on the egress lock)
+### LIVE connectivity validation (before relying on the egress lock)
 
 An incomplete allow-set silently breaks a homeserver. After syncing, verify on
 the cluster:
@@ -122,7 +122,7 @@ Rollback: `apps/08-networkpolicy.yaml` auto-syncs with prune and selfHeal, so a
 line from `manifests/networkpolicy/kustomization.yaml` and let the app prune it.
 Direct egress is then restored. To stop the proxy, remove the `egress-proxy` app.
 
-## Custom Akkoma image build and AGPL source publication
+## Custom Akkoma image build + AGPL source publication
 
 Akkoma is **AGPL-3.0**. The custom image (`manifests/akkoma/Dockerfile`) is a
 **derivative work**. AGPL §13 (the network-use clause) requires you to offer the

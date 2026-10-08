@@ -52,7 +52,7 @@ Kubernetes STIG, FIPS 140-3 / 186-5. See also `docs/CRYPTO-AUDIT.md`,
 
 ---
 
-## What REMAINS and is ⏳ LIVE-GATED (enabling blind risks crash-loops)
+## What REMAINS and is ⏳ LIVE-GATED (held; enabling blind risks crash-loops)
 
 These steps are parked until they can be validated **one workload at a time on a
 booted cluster**. Applying them blind risks a crash-loop or a black-holed service.
@@ -124,8 +124,8 @@ against the running image** (`kubectl exec -- id`) before you apply.
 - **Blast radius:** scheduling only. If requests are set too high the pod may go
   Pending, so size them from observed usage first.
 
-### A3. vault — pod runAsNonRoot (partly done)
-- **File:** `specs/cluster/manifests/vault/deployment.yaml`
+### A3. vault — pod runAsNonRoot (init containers already hardened)
+- **File:** `specs/cluster/manifests/vault/deployment.yaml` (**partly done**: see below)
 - **Control:** CIS K8s 5.2.6; 800-190 §4.5.3; FIPS 140-3 (Vault is the crypto core)
 - **Already in place:** the TLS-init init container sets drop ALL,
   allowPrivilegeEscalation false and a read-only root filesystem. The `vault` main
@@ -192,8 +192,8 @@ against the running image** (`kubectl exec -- id`) before you apply.
   pull still works; existing repos are intact (PVC ownership trap, see A4).
 - **Blast radius:** the in-cluster git host / CI source. Devops only.
 
-### A8. kafka (bitnamilegacy/kafka:3.7.1-debian-12-r9, UID 1001)
-- **File:** `specs/cluster/manifests/analytics/kafka/deployment.yaml`
+### A8. kafka (bitnamilegacy/kafka, UID 1001)
+- **File:** `specs/cluster/manifests/analytics/kafka/deployment.yaml` (image `bitnamilegacy/kafka:3.7.1-debian-12-r9`)
 - **Control:** CIS K8s 5.2.5–5.2.9
 - **Change:** pod `runAsNonRoot:true`, `runAsUser:1001`, `fsGroup:1001`, seccomp
   RuntimeDefault; container drop ALL + allowPrivilegeEscalation:false. Writable: the
@@ -203,8 +203,8 @@ against the running image** (`kubectl exec -- id`) before you apply.
   clickhouse consumers still ingest.
 - **Blast radius:** the analytics pipeline only (degrades gracefully).
 
-### A9. clickhouse (clickhouse/clickhouse-server:25.3-alpine, UID 101)
-- **File:** `specs/cluster/manifests/analytics/clickhouse/deployment.yaml`
+### A9. clickhouse (clickhouse/clickhouse-server, UID 101)
+- **File:** `specs/cluster/manifests/analytics/clickhouse/deployment.yaml` (image `clickhouse/clickhouse-server:25.3-alpine`)
 - **Control:** CIS K8s 5.2.5–5.2.9
 - **Change:** pod `runAsNonRoot:true`, `runAsUser:101`, `fsGroup:101`, seccomp
   RuntimeDefault; container drop ALL + allowPrivilegeEscalation:false. Writable:
@@ -383,13 +383,20 @@ against the running image** (`kubectl exec -- id`) before you apply.
 
 ---
 
-## H. Cassandra auth (DONE) and TLS (dark) — enable order
+## H. Cassandra auth + TLS — enable order (DARK overlay, flip live)
 
-**Stage 1, authentication, is live.** The bitnami image defaults
+Status in one line: authentication (Stage 1) is **live**. TLS (Stage 2) is still
+**authored dark** and needs the live flip below.
+
+### Stage 1 — authentication
+
+**Shipped; live on `main`.** The bitnami image defaults
 `CASSANDRA_AUTHENTICATOR=PasswordAuthenticator` and
 `CASSANDRA_AUTHORIZER=CassandraAuthorizer`, so this cluster has always required a
 password. An earlier version of this page said `apps/00-cassandra.yaml` ran with no
-authenticator (effectively AllowAll). That premise was wrong. The pieces now in place:
+authenticator (effectively AllowAll) and listed a five-step "breaking cutover". That
+premise was wrong, and `cassandra-values-overlay.yaml` says so too. Do not re-apply
+those steps. The pieces now in place:
 - `apps/00-cassandra.yaml` takes the superuser from the ESO Secret `cassandra-admin`
   (`dbUser.existingSecret`, Vault `secret/<brand>/cassandra-admin`).
 - `manifests/external-secrets/cassandra-externalsecrets.yaml` materializes
@@ -408,10 +415,12 @@ authenticator (effectively AllowAll). That premise was wrong. The pieces now in 
   `PasswordAuthenticator` + `CassandraAuthorizer` connects a least-privilege role
   WITH its password, denies it WITHOUT, and refuses a read of a non-GRANTed keyspace.
 
-**Stage 2, TLS, ships dark.** `specs/cluster/manifests/cassandra-hardening/` is wired
-by `apps/00a-cassandra-hardening.yaml`, which is **MANUAL-sync** and points at the
-**empty** sibling overlay `manifests/cassandra-hardening-empty` (`resources: []`),
-so it can never auto-apply. Cassandra (`apps/00-cassandra.yaml`) stays plaintext until
+### Stage 2 — TLS (follows Stage 1)
+
+**Ships dark.** `specs/cluster/manifests/cassandra-hardening/` is wired by
+`apps/00a-cassandra-hardening.yaml`, which is **MANUAL-sync** and points at the
+**empty** sibling overlay `manifests/cassandra-hardening-empty` (`resources: []`), so
+it can never auto-apply. Cassandra (`apps/00-cassandra.yaml`) stays plaintext until
 an operator runs the steps below. The overlay's `kustomization.yaml` lists
 `cassandra-auth-config.yaml`, `cassandra-tls-externalsecret.yaml` and
 `cassandra-tls-keystore-builder.yaml`. `cassandra-values-overlay.yaml` and

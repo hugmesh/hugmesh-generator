@@ -32,7 +32,7 @@ To check the wiring yourself, this grep exits `0` on `main`:
 $ grep -rn 'APP_MFA_ENABLED\|APP_MFA_ENFORCE_PRIVILEGED_FLOOR' \
     specs/cluster/charts specs/cluster/apps tests/stack/
 specs/cluster/charts/hugmesh-gateway/values.yaml:...   # the mfa: values block
-specs/cluster/charts/hugmesh-gateway/templates/deployment.yaml:... - name: APP_MFA_ENABLED
+specs/cluster/charts/hugmesh-gateway/templates/deployment.yaml:207: - name: APP_MFA_ENABLED
 tests/stack/test-gateway-mfa-env.sh:...                # the posture pins
 $ echo $?
 0
@@ -824,7 +824,10 @@ exemptions:
   differs in `domain` **for real** is the one legal sibling shape: per-domain
   tightening, §1.2a.
 
-### 5.1 Known gap: the datastore-outage fallback does not match the seed
+### 5.1 Known gap: MFA is not enforced during a dual-datastore outage
+
+During a dual-datastore outage MFA is enforced on fewer surfaces than the Postgres
+seed names, and on two surfaces the seed leaves open.
 
 If both Postgres and the Cassandra mirror are unreachable, the gateway falls back to
 its **baked-in** `CanonicalSeed`. That fallback is **not** the Postgres seed:

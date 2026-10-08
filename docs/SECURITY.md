@@ -251,7 +251,11 @@ category-isolated volumes.
 > rules have not been narrowed. See
 > [`docs/selinux-module-loading.md`](selinux-module-loading.md).
 
-## 4. mTLS between namespaces — Vault-issued certs, one cluster CA
+## 4. mTLS between namespaces — Vault-managed JKS keystores
+
+The heading is a link target and keeps its old wording. Pods do not mount JKS
+keystores from Vault. They use Vault-issued certs, which a `build-keystore` init
+container turns into PKCS12 stores.
 
 Every Java machine user (the Spring Cloud gateways and the Spring services) has its
 own mTLS identity for cross-namespace calls. There are two cert paths, both rooted
@@ -351,7 +355,10 @@ Vault-managed via External Secrets, but no ExternalSecret for them exists in
 NetworkPolicies per tier (`docs/CLUSTER-HARDENING-PLAN.md` §B) complement
 the SELinux isolation. Egress default-deny ships dark.
 
-### Fleet mesh — headscale/tailscale (fleet-scoped, default-deny)
+### Fleet mesh — headscale/tailscale flat L3 (fleet-scoped, default-deny)
+
+The mesh is no longer flat for SSH or node-to-node traffic. Only pod and ClusterIP
+traffic is open between nodes, as below.
 
 Every node joins one tailnet via headscale (control server on the pki/omnibus
 node). The mesh is governed by a **default-deny, tag-based ACL** loaded with

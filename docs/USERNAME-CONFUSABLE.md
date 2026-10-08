@@ -20,7 +20,7 @@ per-layer registration checks live in `user-bff-api`, `hugmesh-actions` and
 `admin-bff-api`. Those repos own their own changes. This page summarizes the
 policy so the GitOps wiring makes sense.
 
-## The skeleton is a recomputable cache, not a unique DB identity
+## The skeleton — a RECOMPUTABLE CACHE, not a unique DB identity
 
 The confusable engine reduces each candidate to a canonical **skeleton** and
 compares skeletons. **The skeleton is not a unique database identity.** It is a
@@ -65,7 +65,7 @@ for the high-value reserved set.
 **Self-exclusion is by exact username only.** A different owner with a confusable
 handle is still flagged.
 
-## The availability endpoint (federation-api, internal)
+## The availability endpoint (federation-api, INTERNAL)
 
 `GET /api/federation/username/{candidate}/availability` →
 `{available, collide, reason: exact|confusable|reserved, matchedWith, skeleton}`.
@@ -85,7 +85,7 @@ list is **exact-only**, so it cannot reject a confusable. The
 [`manifests/signup-gate/`](../specs/cluster/manifests/signup-gate/) proxy closes
 that gap.
 
-### Mechanism: a thin reverse proxy in front of the signup endpoints
+### Mechanism — a thin reverse-proxy in front of the signup endpoints
 
 `signup-gate` (namespace `hugmesh-pki`) is a small stdlib reverse proxy. The
 pki-gateway sends the two username-minting paths to it FIRST, before the
@@ -150,7 +150,7 @@ or an ICU skeleton shift).
   `signup-gate` to `CASDOOR_APPS`, so the per-app client secret is generated and
   stored in Vault.
 
-### Operational prerequisites and scope
+### Operational prerequisites / honest scope
 
 - **The federation availability endpoint must exist.** It does:
   `UsernameAvailabilityController` on `hugmesh-federation-api` `main` serves

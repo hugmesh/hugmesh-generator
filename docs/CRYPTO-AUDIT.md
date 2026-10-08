@@ -51,7 +51,7 @@ Override these to re-tune the whole chain. No logic edits are needed.
 | `keystore.pqcGroups` | gateway `values.yaml` | `""` (off) | PQC hybrid KEX group(s) |
 | `PH_KDF` | `scripts/_passhash-lib.sh` (env) | auto (`yescrypt`→`sha512crypt`) | /etc/shadow password KDF; `sha512crypt` forces the `$6$` fallback |
 
-## Documented as followup (NOT yet implemented, with reason)
+## Documented-as-followup (NOT yet implemented, with reason)
 
 - **SHA-3 inside X.509 certificate signatures** (rows 2, 5). Re-tested 2026-07-15
   with OpenSSL 3.6.3 and Temurin JDK/keytool 25.0.3, the JDK family the gateway is
