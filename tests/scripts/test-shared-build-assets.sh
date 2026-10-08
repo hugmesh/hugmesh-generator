@@ -337,7 +337,11 @@ grep -q 'pool_fingerprint_preflight "${SYSROOT}/var/cache/binpkgs" "${SYSROOT}/e
                                                               || miss+=" profile-keyed-private-guard"
 grep -q 'mount --bind "${X86_POOL_DIR}" "${SYSROOT}/var/cache/binpkgs"' "${p}" \
                                                               || miss+=" bind-mount"
-grep -qE 'X86_POOL_MOUNTED.*umount -l "\$\{SYSROOT\}/var/cache/binpkgs"' "${p}" \
+# The detach on exit: since #659 umount_chroot peels the pool bind through
+# hmr_umount_own (one layer, then a layer count that says so when the bind did
+# not go) and resets the flag on the same line, where it used to be a bare
+# `umount -l` gated on X86_POOL_MOUNTED.
+grep -qE 'hmr_umount_own "\$\{SYSROOT\}/var/cache/binpkgs".*X86_POOL_MOUNTED=false' "${p}" \
                                                               || miss+=" umount-on-exit"
 grep -q 'mountpoint -q "${SYSROOT}/var/cache/binpkgs"' "${p}" || miss+=" post-umount-guard"
 grep -q '_plan SHARED_POOL        "${X86_POOL_DIR' "${p}"     || miss+=" PLAN_SHARED_POOL"

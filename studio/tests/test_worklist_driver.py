@@ -419,6 +419,28 @@ def test_preflight_flags_unwritable_output_dir(tmp_path, monkeypatch):
     assert len(hits) == 1, f"expected exactly one writability problem, got {problems}"
     assert str(out / "sessions") in hits[0]      # names the ancestor actually at fault
     assert "chown" in hits[0]                    # and the remedy
+    # The remedy must never be `chown -R <probe>`: followed on <out>, that hands
+    # the build system (<out>/snap-build-*/sysroot) to the user and the next
+    # --resume builds an image whose every directory is theirs (hugmesh-generator#659).
+    assert "chown -R" not in hits[0].split("(not 'chown -R'")[0]
+    assert "-name sysroot -prune" in hits[0]
+    assert "chown -h" in hits[0]
+
+
+def test_preflight_remedy_quotes_an_output_dir_with_a_space(tmp_path, monkeypatch):
+    # The remedy is a command to paste: a path with a space in it must reach `find`
+    # as ONE argument, or the person is told to chown two other directories.
+    out = tmp_path / "my builds" / "out"
+    (out / "sessions").mkdir(parents=True)
+    workdir = out / "sessions" / "20260930-090000-abcdef"
+    real_access = os.access
+    monkeypatch.setattr(
+        wd.os, "access",
+        lambda p, m: False if os.path.abspath(p) == str(out / "sessions") else real_access(p, m))
+    drv = WorklistDriver(str(tmp_path), _worklist(tmp_path), host=host(), workdir=str(workdir))
+    hits = [p for p in drv.preflight() if "not writable" in p]
+    assert len(hits) == 1
+    assert f"sudo find '{out / 'sessions'}' -type d -name sysroot -prune" in hits[0]
 
 
 def test_preflight_silent_when_output_dir_writable(tmp_path):
