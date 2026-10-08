@@ -114,10 +114,13 @@ def _rect_in(widget, frame):
 
 
 def _whole(label):
-    """A (wrapped) label needs no more height than it has."""
-    need = (label.heightForWidth(label.width()) if label.wordWrap()
-            else label.sizeHint().height())
-    return need <= label.height() + 1
+    """A (wrapped) label needs no more height than it has. A label that does NOT wrap
+    is whole only when its one line also fits the width it was given: otherwise the
+    layout clips the sentence at the right edge and the height alone cannot tell."""
+    if label.wordWrap():
+        return label.heightForWidth(label.width()) <= label.height() + 1
+    return (label.sizeHint().height() <= label.height() + 1
+            and label.sizeHint().width() <= label.width() + 1)
 
 
 def _inside(win, widget):
@@ -348,6 +351,12 @@ def _cloud_domains(qapp, styled, monkeypatch, tmp_path):
     wiz = wizard_mod.StudioWizard(GENERATOR_DIR)
     _restyle(wiz, style, pt)
     wiz.show()
+    # The wizard's own default is medium_size() of the REAL screen (1040x780 on a 1080p
+    # or 1440p one). The offscreen screen is only 800x600, which clamps the window to
+    # 588 px tall, and at a font DPI of 110 or more the Domains table then gets a
+    # 50 px viewport (under three rows): a result that depends on the machine running the
+    # test, not on the page. Pin the size the wizard has on the screens people use.
+    wiz.resize(1040, 780)
     _events()
     pick_mode(wiz, "cloud")
     dom = advance_to(wiz, wizard_mod.DomainsPage)
@@ -365,6 +374,10 @@ def test_the_cloud_domains_step_shows_the_ca_note_whole_beside_its_controls(
         assert note.isVisible() and _inside(wiz, note)
         assert _whole(note), (note.heightForWidth(note.width()), note.height())
         assert note.width() >= 400
+        # a note that cannot wrap makes the whole window as wide as its one line (3592 px
+        # measured), and then every "inside the window" check above is true of a window
+        # nobody can fit on a screen: the window must stay the size it was given
+        assert wiz.width() <= 1100, wiz.width()
         # the table and its two buttons, and the wizard's own buttons, are in the window
         assert dom.table.isVisible() and _inside(wiz, dom.table)
         assert dom.table.viewport().height() >= 3 * dom.table.verticalHeader().defaultSectionSize()
