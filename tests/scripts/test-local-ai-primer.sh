@@ -383,157 +383,288 @@ for r in ROLES:
 
 # ── (j) fact anchors: what the primer SAYS about a name, not just that the name exists ──
 # Rules (a) to (b) only prove that a target, variable, repository or path exists. A primer that swaps
-# what make stack-halt and make stack-down do passes all of them. Each anchor below is a triple:
-# a phrase the primer must contain word for word (so an edit to the claim is noticed), the repository
-# file that backs it, and a pattern that file must match (whitespace runs count as one space). The
-# phrase pins the primer's wording; the pattern pins the repository's truth; change either and this
-# rule goes red until a person reads both again.
+# what make stack-halt and make stack-down do passes all of them. CLAIMS lists EVERY sentence of the
+# primer in full, each with the repository file patterns that back it (whitespace runs count as one
+# space; a file name starting with ! means the pattern must NOT match). Two things are enforced:
+#   (j) each sentence must be in the primer word for word, and each of its patterns must match its
+#       file. An edit to ANY word of a sentence therefore turns the guard red until a person reads the
+#       new sentence against its patterns; a change in the repository file does the same.
+#   (m) each sentence of the primer must be in CLAIMS or in UNANCHORED (below, with the reason), so a
+#       new sentence cannot be added unbacked.
+# What this does NOT prove: a pattern checks the fact it names, not every clause of its sentence. A
+# clause that no pattern names (for example "about 80 seconds") is protected only by the word-for-word
+# pin. That is a tripwire for a person, not a proof that the clause is true.
 def squash(s):
     return re.sub(r"\s+", " ", s)
-ANCHORS = [
-    ("make stack-halt stops and keeps the data; make stack-down deletes the volumes", "Makefile", r"stack-halt: ## stop the local stack but KEEP its data"),
-    ("make stack-halt stops and keeps the data; make stack-down deletes the volumes", "Makefile", r"stack-down: ## stop the local stack and DROP ITS VOLUMES"),
-    ("Front door http://localhost:8088", "docs/LOCAL-STACK.md", r"\*\*http://localhost:8088\*\* \(the fe-gateway front door"),
-    ("https://localhost:8488 is its TLS twin", "docs/LOCAL-STACK.md", r"HTTPS twin \*\*https://localhost:8488\*\*"),
-    ("Only the fe-gateway is published to the host", "docs/LOCAL-STACK.md", r"Only the fe-gateway is published to the"),
-    ("make stack-seed is required afterwards: sign-in fails until it has run", "docs/LOCAL-STACK.md", r"make stack-seed +# REQUIRED for real SSO login"),
-    ("make view LANE=compose or LANE=kind", "Makefile", r"view: ## serve the local front doors in the browser \(LANE=kind\|kind-svc\|compose"),
-    ("(WireGuard is 1420)", "scripts/kind-load-images.sh", r"WireGuard is 1420"),
-    ("IPv6 is not the cause", "scripts/kind-load-images.sh", r"IPv6 look like the culprit\. It is not"),
-    ("Set BUILD_NETWORK=host for make kind-images", "scripts/kind-load-images.sh", r"Use BUILD_NETWORK=host"),
-    ("Order: make kind-up, then make kind-images, then make kind-doctor to check it, then make kind-e2e for the sign-in test", "specs/cluster/bootstrap/kind-local/README.md", r"is `kind-up` THEN `kind-images`"),
-    ("Order: make kind-up, then make kind-images, then make kind-doctor to check it, then make kind-e2e for the sign-in test", "Makefile", r"kind-doctor: ## is the kind cluster capable of running the mesh"),
-    ("Order: make kind-up, then make kind-images, then make kind-doctor to check it, then make kind-e2e for the sign-in test", "Makefile", r"kind-e2e: playwright-deps ## run the native-login e2e"),
-    ("make kind-tor publishes a .onion and runs after make kind-up", "Makefile", r"kind-tor: ## publish the kind front door as a v3 \.onion .*run after kind-up"),
-    ("make kind-images ONLY=hugmesh-host-shell (a comma list is accepted; an unknown name fails)", "Makefile", r"kind-images: stack-clone .*\(ONLY=repo\[,repo\] for a subset\)"),
-    ("make kind-images ONLY=hugmesh-host-shell (a comma list is accepted; an unknown name fails)", "scripts/kind-load-images.sh", r"ONLY: unknown image"),
-    ("make kind-images runs make stack-clone first", "Makefile", r"kind-images: stack-clone "),
-    ("make kind-halt stops without deleting; make kind-down deletes the cluster", "Makefile", r"kind-halt: ## stop the DevOps lane WITHOUT deleting it"),
-    ("make kind-halt stops without deleting; make kind-down deletes the cluster", "Makefile", r"kind-down: ## delete the kind cluster"),
-    ("make stack-clone runs git reset --hard on each checkout", "scripts/clone-all-repos.sh", r"reset --hard --quiet \"origin/\$\{GIT_REF\}\""),
-    ("(a checkout with local commits is kept, not updated)", "scripts/clone-all-repos.sh", r"KEPT: \$\{repo\} has local work not in"),
-    ("The second sets STACK_NO_CLONE=1, so your checkouts are never fetched or reset", "docs/STUDIO-WALKTHROUGH.md", r"sets `STACK_NO_CLONE=1`, so your checkouts are never fetched, updated or `git reset`"),
-    ("The second sets STACK_NO_CLONE=1, so your checkouts are never fetched or reset", "Makefile", r"stack-clone: ## .*\(idempotent; STACK_NO_CLONE=1 skips\)"),
-    ("Java: ./mvnw -B verify (some repos add -s settings.xml)", "docs/LOCAL-AI-ASSISTANT.md", r"`\./mvnw -B verify` \(some repos pass `-s settings\.xml`"),
-    ("Angular: npm ci && npm run build && npm test -- --watch=false", "docs/LOCAL-AI-ASSISTANT.md", r"`npm ci && npm run build && npm test -- --watch=false`"),
-    ("Studio: cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen python -m pytest -q tests/<file>.py", "docs/LOCAL-AI-ASSISTANT.md", r"`HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen python -m pytest -q tests/<file>\.py`"),
-    ("make stack-e2e-bdd-check is the offline check to run before committing a .feature file", "Makefile", r"stack-e2e-bdd-check: ## STARTS NOTHING"),
-    ("run with make stack-e2e-bdd against a live stack", "Makefile", r"stack-e2e-bdd: ## run the GHERKIN e2e lane \(BDD_ENV=docker\|kind\|qemu; docker needs stack-up \+ stack-seed\)"),
-    ("up -d --build hugmesh-user-bff-api", "tests/stack/compose.local.yaml", r"compose\.local\.yaml up -d --build"),
-    ("A cold Java build needs make stack-m2-bootstrap once", "docs/LOCAL-STACK.md", r"run \*\*`make stack-m2-bootstrap` once first\*\*"),
-    ("make stack-m2-check refreshes it", "Makefile", r"re-running stack-m2-bootstrap"),
-    ("Repair with bash scripts/patch-stack-src.sh", "scripts/kind-load-images.sh", r"Repair with: bash scripts/patch-stack-src\.sh"),
-    ("a linked git worktree (its .git is a file) cannot be served: run from a full clone or export ARGOCD_REPO_TOKEN", "specs/cluster/bootstrap/kind-local/bootstrap-kind.sh", r"A linked worktree's \.git is a FILE"),
-    ("a linked git worktree (its .git is a file) cannot be served: run from a full clone or export ARGOCD_REPO_TOKEN", "specs/cluster/bootstrap/kind-local/bootstrap-kind.sh", r"OVERRIDE — ARGOCD_REPO_TOKEN"),
-    ("so other routes answer 503 behind a live route", "specs/cluster/bootstrap/kind-local/README.md", r"answer \*\*503 behind a live"),
-    ("make kind-doctor reports this and never repairs", "specs/cluster/bootstrap/kind-local/README.md", r"It reports and exits non-zero; it never repairs"),
-    ("scripts/studio-launch.sh --detect only reports what the host has", "scripts/studio-launch.sh", r"--detect +print the DETECT report and exit"),
-    ("Every command under scripts/ must be named in docs/", "tests/scripts/test-docs-command-coverage.sh", r"every user-facing command under scripts/ must be # reachable from docs/"),
-    ("No modal dialogs in Studio page logic", "studio/tests/test_devops_halt_controls.py", r"NO MODALS IN PAGE LOGIC"),
-    ("tests/stack/up.sh starts only a mock lane with fake back-ends", "docs/LOCAL-STACK.md", r"The mock lane is untouched, because it runs no gateway at all"),
-    # Added after a reviewer reversed the safety rules, the repo-kind lists and the node-image warning
-    # and the guard stayed green: every sentence below used to be checked for names only.
-    ("hugmesh-generator is the hub: Makefile, scripts/, tests/, docs/, specs/ (cluster manifests), studio/ (the desktop wizard, Python and Qt) and the image builders build-*-stage4.sh.", "README.md", r"Crossdev / native build scripts that produce \*\*hardened Gentoo images\*\*"),
-    ("hugmesh-generator is the hub: Makefile, scripts/, tests/, docs/, specs/ (cluster manifests), studio/ (the desktop wizard, Python and Qt) and the image builders build-*-stage4.sh.", "scripts/clone-all-repos.sh", r"hugmesh-generator # itself is the repo this script ships in — it carries the cluster manifests"),
-    ("A new guard must be shown failing: give it negative controls (a doctored input it must catch) and mutation-check it by breaking the production file and watching it go red.", "tests/scripts/test-kind-doctor.sh", r"THE MUTATION BATTERY"),
-    ("A new guard must be shown failing: give it negative controls (a doctored input it must catch) and mutation-check it by breaking the production file and watching it go red.", "tests/scripts/test-guard-integrity.sh", r"NEGATIVE CONTROLS"),
-    ("Every app is its own repo named hugmesh-<name>.", "scripts/clone-all-repos.sh", r"BOTH the remote repo name AND the directory name"),
-    ("Java: hugmesh-gateway, hugmesh-user-bff-api, hugmesh-admin-bff-api, hugmesh-federation-api.", "scripts/clone-all-repos.sh", r"Gateways \(ONE image, run 3x as pki/be/fe via SPRING_APPLICATION_NAME\) ── hugmesh-gateway # ── Spring backend services ── hugmesh-federation-api hugmesh-admin-bff-api hugmesh-mod-bff-api hugmesh-user-bff-api"),
-    ("Angular: hugmesh-host-shell, hugmesh-login-ui, hugmesh-admin-ui, hugmesh-user-ui.", "scripts/clone-all-repos.sh", r"Angular host \+ federated remotes \(each Dockerfile -> nginx\) ── .*? hugmesh-host-shell hugmesh-admin-ui hugmesh-mod-ui hugmesh-user-ui hugmesh-login-ui"),
-    ("scripts/clone-all-repos.sh (run by make stack-clone) clones them into .stack-src/hugmesh-<name>.", "Makefile", r"GIT_REF='\$\(GIT_REF\)' \\ bash scripts/clone-all-repos\.sh"),
-    ("The compose stack and make kind-images both build from there.", "tests/stack/compose.local.yaml", r"context: \$\{STACK_SRC:-\.\./\.\./\.stack-src\}/hugmesh-gateway"),
-    ("The compose stack and make kind-images both build from there.", "scripts/kind-load-images.sh", r"STACK_SRC=\"\$\{STACK_SRC:-\$\{REPO_ROOT\}/\.stack-src\}\""),
-    ("Do not edit .stack-src.", "scripts/patch-stack-src.sh", r"never hand-edit a sibling checkout"),
-    ("Never hand-edit a repo under .stack-src to get the local stack to build. Add an idempotent patch function to scripts/patch-stack-src.sh instead.", "scripts/patch-stack-src.sh", r"never hand-edit a sibling checkout; # add an idempotent patch function here instead"),
-    ("Work in a scratch clone with no remote.", "docs/LOCAL-AI-ASSISTANT.md", r"The assistant gets a scratch clone \*\*with no remote\*\*"),
-    ("Work in a scratch clone with no remote.", "docs/LOCAL-AI-ASSISTANT.md", r"git remote remove origin +# no remote: git push has nowhere to go"),
-    ("The Studio \"Repo source\" setting is either download and update into .stack-src (the default) or your own folder of hugmesh-<name> checkouts.", "docs/STUDIO-WALKTHROUGH.md", r"\*\*Repo source\*\* — download and update every repo into `\./\.stack-src` \(the default\), or point at a tree of `hugmesh-<name>` checkouts"),
-    ("Docker compose stack (every service on one machine).", "docs/LOCAL-STACK.md", r"# Run the ENTIRE HugMesh stack locally \(docker-compose\)"),
-    ("make stack-up builds and starts it.", "Makefile", r"stack-up: stack-clone .*## clone -> build -> run the FULL stack"),
-    ("make stack-ps lists containers, make stack-logs follows them, make stack-e2e runs the browser tests.", "Makefile", r"stack-ps: ## list the local stack's containers"),
-    ("make stack-ps lists containers, make stack-logs follows them, make stack-e2e runs the browser tests.", "Makefile", r"stack-logs: ## tail logs from the running local stack"),
-    ("make stack-ps lists containers, make stack-logs follows them, make stack-e2e runs the browser tests.", "Makefile", r"stack-e2e: ## run the Playwright e2e suite against the RUNNING local stack"),
-    ("Java services also need the Maven registry flags the Makefile adds, so when unsure use make stack-up.", "Makefile", r"STACK_M2_FLAGS = \$\(if \$\(wildcard \$\(STACK_M2_ENV\)\),--env-file \$\(STACK_M2_ENV\) -f \$\(STACK_M2_COMPOSE\),\)"),
-    ("kind cluster (a slice of the real GitOps cluster).", "specs/cluster/bootstrap/kind-local/README.md", r"It is a slice, not a small > production cluster"),
-    ("Studio (Python, in studio/): the wizard that builds images and starts a local mesh.", "studio/README.md", r"Calamares-style wizard"),
-    ("Studio (Python, in studio/): the wizard that builds images and starts a local mesh.", "studio/README.md", r"local Docker mesh"),
-    ("It wraps the two lanes above and starts nothing until a button is pressed.", "docs/STUDIO-WALKTHROUGH.md", r"Nothing runs until you press a button"),
-    ("It wraps the two lanes above and starts nothing until a button is pressed.", "docs/STUDIO-WALKTHROUGH.md", r"\"Stop mesh\" runs `make stack-halt`"),
-    ("It wraps the two lanes above and starts nothing until a button is pressed.", "docs/STUDIO-WALKTHROUGH.md", r"DevOps lane.*kind-halt"),
-    ("Node images (Gentoo): build-x86-host-stage4.sh, build-rpi5-stage4.sh, make local.", "docs/ARCHITECTURE.md", r"All nodes are hardened Gentoo"),
-    ("Node images (Gentoo): build-x86-host-stage4.sh, build-rpi5-stage4.sh, make local.", "docs/LOCAL-TESTING.md", r"make local +# builds the whole fleet for the LAN \.test domain"),
-    ("They take hours and need privileges. Do not run them.", "docs/STUDIO-WALKTHROUGH.md", r"An image build takes hours"),
-    ("They take hours and need privileges. Do not run them.", "README.md", r"\*\*x86_64 host image\*\* \(native, \*\*root\*\* required\)"),
-    ("Guards in hugmesh-generator: bash tests/scripts/test-<name>.sh.", "docs/LOCAL-AI-ASSISTANT.md", r"\| Shell and guards \(generator\) \| `bash tests/scripts/test-<name>\.sh` \|"),
-    ("They print PASS or FAIL lines and exit non-zero on failure.", "tests/scripts/test-docs-command-coverage.sh", r"ok\(\) +\{ echo \" +PASS"),
-    ("They print PASS or FAIL lines and exit non-zero on failure.", "tests/scripts/test-docs-command-coverage.sh", r"bad\(\) \{ echo \" +FAIL"),
-    ("Use an inline label and an explicit second click.", "studio/tests/test_pages_e2e_environment.py", r"use an inline label; exec\(\) only from a button click"),
-    ("Secrets never go in a prompt, a commit or a doc. Do not read .e2e-credentials, vault files or .env files.", "docs/LOCAL-AI-ASSISTANT.md", r"\*\*No secrets in prompts\.\*\* `\.e2e-credentials`, vault files and `\.env` files stay out"),
-    ("No git push, no sudo, no force.", "docs/LOCAL-AI-ASSISTANT.md", r"Never run: git push, sudo,"),
-    ("Do not run make stack-down, make kind-down, make kind-up or make stack-up unless you were told to.", "docs/LOCAL-AI-ASSISTANT.md", r"docker compose up/down, make stack-\* or make kind-\*"),
-    ("End every task with what you changed, what you ran and its result, and what you did NOT verify.", "docs/LOCAL-AI-ASSISTANT.md", r"End every task with: what you changed, what you ran and its result, and what you did NOT verify"),
-    ("A Maven build that dies after about 11 minutes", "scripts/kind-load-images.sh", r"build will fail ~11 minutes from now"),
-    ("in central\" means a git update reverted the local patches in .stack-src.", "scripts/kind-load-images.sh", r"The \.stack-src patches were reverted by a git update"),
-    ("make kind-up needs read access to the GitOps repo.", "specs/cluster/bootstrap/kind-local/bootstrap-kind.sh", r"a private one needs the token"),
-    ("kind loads images straight into its node and never pulls from Harbor.", "docs/KIND-SSO-E2E-FINDINGS.md", r"\*\*The kind lane never pulls from Harbor at all\*\*"),
-    ("kind loads images straight into its node and never pulls from Harbor.", "docs/KIND-SSO-E2E-FINDINGS.md", r"`kind load` side-loads every first-party image"),
-    ("A kind cluster can list as Ready while pods sit in ImagePullBackOff because make kind-images never ran.", "Makefile", r"`make # kind-images` had never run so no first-party image existed in the node at all"),
-    ("A kind cluster can list as Ready while pods sit in ImagePullBackOff because make kind-images never ran.", "Makefile", r"Nineteen pods were in ImagePullBackOff"),
-]
-nbody = squash(body)
-file_cache = {}
-for phrase, rel, pat in ANCHORS:
-    if squash(phrase) not in nbody:
-        bad("j", "the primer no longer says %r; this fact was checked against %s, so re-read both before changing the anchor" % (phrase[:60], rel)); continue
-    if rel not in file_cache:
-        fp = os.path.join(repo, rel)
-        file_cache[rel] = squash(read(fp)) if exists(fp) else None
-    if file_cache[rel] is None:
-        bad("j", "%s backs the primer's %r but is not in the tree" % (rel, phrase[:50]))
-    elif not re.search(pat, file_cache[rel]):
-        bad("j", "%s no longer says what the primer's %r relies on (pattern %r)" % (rel, phrase[:50], pat[:70]))
-
-# ── (m) coverage: every sentence is anchored or says why it is not ──
-# Anchors only protect the sentences they name, so a new fact added without one would again be checked
-# for names alone. Every sentence of the primer must overlap an anchor phrase above, or appear in
-# UNANCHORED with the reason; a sentence that is in neither turns this red, and so does an UNANCHORED
-# entry that no longer matches a sentence (it would otherwise hide a later edit).
-UNANCHORED = {
-    "You are a local model helping on HugMesh, a self-hosted mesh of services (gateways, back-end services, web apps, identity, chat) that one person can run on their own machine.": "scene-setting for the model; it names no command, path or value",
-    "Use only facts from this primer or from files you have read.": "an instruction to the model, not a claim about the repository",
-    "When you do not know, say so and name the file or command that would tell you.": "an instruction to the model, not a claim about the repository",
-}
 def sentence_list(text):
     for line in text.split("\n"):
         t = squash(line).strip()
         if not t or t.startswith("#"):
             continue
         t = re.sub(r"^(- |\d+\. )", "", t)
-        pos = 0
-        for sent in re.split(r"(?<=[^.]\.)\s+(?=[A-Z])", t):
+        # break after a full stop that follows a non-dot (so "net.hugmesh:... in" stays whole)
+        for sent in re.split(r"(?<=[^.]\.)\s+", t):
             if sent.strip():
-                yield t, sent.strip()
-phrases = sorted({squash(p) for p, _, _ in ANCHORS})
-seen_unanchored = set()
-for line, sent in sentence_list(body):
-    a = line.index(sent)
-    b = a + len(sent)
-    hit = False
-    for ph in phrases:
-        i = line.find(ph)
-        while i != -1:
-            if i < b and i + len(ph) > a:
-                hit = True; break
-            i = line.find(ph, i + 1)
-        if hit: break
-    if sent in UNANCHORED:
-        seen_unanchored.add(sent)
-        if hit:
-            bad("m", "%r is listed as unanchored but an anchor now covers it; delete it from UNANCHORED" % sent[:60])
-    elif not hit:
-        bad("m", "the primer sentence %r has no anchor; add an ANCHORS entry tying it to the repository file that backs it, or list it in UNANCHORED with the reason" % sent[:70])
+                yield sent.strip()
+CLAIMS = [
+    ("hugmesh-generator is the hub: Makefile, scripts/, tests/, docs/, specs/ (cluster manifests), studio/ (the desktop wizard, Python and Qt) and the image builders build-*-stage4.sh.", [
+        ("README.md", r'Crossdev / native build scripts that produce \*\*hardened Gentoo images\*\*'),
+        ("scripts/clone-all-repos.sh", r'hugmesh-generator # itself is the repo this script ships in — it carries the cluster manifests'),
+    ]),
+    ("Every app is its own repo named hugmesh-<name>.", [
+        ("scripts/clone-all-repos.sh", r'BOTH the remote repo name AND the directory name'),
+    ]),
+    ("Java: hugmesh-gateway, hugmesh-user-bff-api, hugmesh-admin-bff-api, hugmesh-federation-api.", [
+        ("scripts/clone-all-repos.sh", r'Gateways \(ONE image, run 3x as pki/be/fe via SPRING_APPLICATION_NAME\) ── hugmesh-gateway # ── Spring backend services ── hugmesh-federation-api hugmesh-admin-bff-api hugmesh-mod-bff-api hugmesh-user-bff-api'),
+    ]),
+    ("Angular: hugmesh-host-shell, hugmesh-login-ui, hugmesh-admin-ui, hugmesh-user-ui.", [
+        ("scripts/clone-all-repos.sh", r'Angular host \+ federated remotes \(each Dockerfile -> nginx\) ── .*? hugmesh-host-shell hugmesh-admin-ui hugmesh-mod-ui hugmesh-user-ui hugmesh-login-ui'),
+    ]),
+    ("scripts/clone-all-repos.sh (run by make stack-clone) clones them into .stack-src/hugmesh-<name>.", [
+        ("Makefile", r"GIT_REF='\$\(GIT_REF\)' \\ bash scripts/clone-all-repos\.sh"),
+    ]),
+    ("The compose stack and make kind-images both build from there.", [
+        ("tests/stack/compose.local.yaml", r'context: \$\{STACK_SRC:-\.\./\.\./\.stack-src\}/hugmesh-gateway'),
+        ("scripts/kind-load-images.sh", r'STACK_SRC=\"\$\{STACK_SRC:-\$\{REPO_ROOT\}/\.stack-src\}\"'),
+    ]),
+    ("Do not edit .stack-src.", [
+        ("scripts/patch-stack-src.sh", r'never hand-edit a sibling checkout'),
+    ]),
+    ("make stack-clone runs git reset --hard on each checkout, so uncommitted edits there vanish (a checkout with local commits is kept, not updated).", [
+        ("scripts/clone-all-repos.sh", r'reset --hard --quiet \"origin/\$\{GIT_REF\}\"'),
+        ("scripts/clone-all-repos.sh", r'KEPT: \$\{repo\} has local work not in'),
+    ]),
+    ("Work in a scratch clone with no remote.", [
+        ("docs/LOCAL-AI-ASSISTANT.md", r'The assistant gets a scratch clone \*\*with no remote\*\*'),
+        ("docs/LOCAL-AI-ASSISTANT.md", r'git remote remove origin +# no remote: git push has nowhere to go'),
+    ]),
+    ("The Studio \"Repo source\" setting is either download and update into .stack-src (the default) or your own folder of hugmesh-<name> checkouts.", [
+        ("docs/STUDIO-WALKTHROUGH.md", r'\*\*Repo source\*\* — download and update every repo into `\./\.stack-src` \(the default\), or point at a tree of `hugmesh-<name>` checkouts'),
+    ]),
+    ("The second sets STACK_NO_CLONE=1, so your checkouts are never fetched or reset.", [
+        ("docs/STUDIO-WALKTHROUGH.md", r'sets `STACK_NO_CLONE=1`, so your checkouts are never fetched, updated or `git reset`'),
+        ("Makefile", r'stack-clone: ## .*\(idempotent; STACK_NO_CLONE=1 skips\)'),
+    ]),
+    ("Docker compose stack (every service on one machine).", [
+        ("docs/LOCAL-STACK.md", r'# Run the ENTIRE HugMesh stack locally \(docker-compose\)'),
+    ]),
+    ("make stack-up builds and starts it.", [
+        ("Makefile", r'stack-up: stack-clone .*## clone -> build -> run the FULL stack'),
+    ]),
+    ("make stack-seed is required afterwards: sign-in fails until it has run.", [
+        ("docs/LOCAL-STACK.md", r'make stack-seed +# REQUIRED for real SSO login'),
+    ]),
+    ("Front door http://localhost:8088.", [
+        ("docs/LOCAL-STACK.md", r'\*\*http://localhost:8088\*\* \(the fe-gateway front door'),
+    ]),
+    ("make stack-ps lists containers, make stack-logs follows them, make stack-e2e runs the browser tests.", [
+        ("Makefile", r"stack-ps: ## list the local stack's containers"),
+        ("Makefile", r'stack-logs: ## tail logs from the running local stack'),
+        ("Makefile", r'stack-e2e: ## run the Playwright e2e suite against the RUNNING local stack'),
+    ]),
+    ("make stack-halt stops and keeps the data; make stack-down deletes the volumes.", [
+        ("Makefile", r'stack-halt: ## stop the local stack but KEEP its data'),
+        ("Makefile", r'stack-down: ## stop the local stack and DROP ITS VOLUMES'),
+    ]),
+    ("Rebuild ONE service: no Makefile target does this; run docker compose -f tests/stack/compose.local.yaml up -d --build hugmesh-user-bff-api (use the service name).", [
+        ("tests/stack/compose.local.yaml", r'compose\.local\.yaml up -d --build'),
+        # A leading ! means the pattern must NOT match: the Makefile has no target that rebuilds one compose service.
+        ("!Makefile", r"(?:^| )stack-(?:rebuild|build-one|up-one|service|restart)[a-z-]*:"),
+    ]),
+    ("Java services also need the Maven registry flags the Makefile adds, so when unsure use make stack-up.", [
+        ("Makefile", r'STACK_M2_FLAGS = \$\(if \$\(wildcard \$\(STACK_M2_ENV\)\),--env-file \$\(STACK_M2_ENV\) -f \$\(STACK_M2_COMPOSE\),\)'),
+    ]),
+    ("Only the fe-gateway is published to the host (https://localhost:8488 is its TLS twin); every other service is reached by its compose name.", [
+        ("docs/LOCAL-STACK.md", r'HTTPS twin \*\*https://localhost:8488\*\*'),
+        ("docs/LOCAL-STACK.md", r'Only the fe-gateway is published to the'),
+        ("docs/LOCAL-STACK.md", r"everything else is internal compose DNS"),
+    ]),
+    ("make view LANE=compose or LANE=kind serves the front doors in a browser.", [
+        ("Makefile", r'view: ## serve the local front doors in the browser \(LANE=kind\|kind-svc\|compose'),
+    ]),
+    ("kind cluster (a slice of the real GitOps cluster).", [
+        ("specs/cluster/bootstrap/kind-local/README.md", r'It is a slice, not a small > production cluster'),
+    ]),
+    ("Order: make kind-up, then make kind-images, then make kind-doctor to check it, then make kind-e2e for the sign-in test.", [
+        ("specs/cluster/bootstrap/kind-local/README.md", r'is `kind-up` THEN `kind-images`'),
+        ("Makefile", r'kind-doctor: ## is the kind cluster capable of running the mesh'),
+        ("Makefile", r'kind-e2e: playwright-deps ## run the native-login e2e'),
+    ]),
+    ("make kind-tor publishes a .onion and runs after make kind-up.", [
+        ("Makefile", r'kind-tor: ## publish the kind front door as a v3 \.onion .*run after kind-up'),
+    ]),
+    ("Rebuild ONE image: make kind-images ONLY=hugmesh-host-shell (a comma list is accepted; an unknown name fails).", [
+        ("Makefile", r'kind-images: stack-clone .*\(ONLY=repo\[,repo\] for a subset\)'),
+        ("scripts/kind-load-images.sh", r'ONLY: unknown image'),
+    ]),
+    ("make kind-images runs make stack-clone first.", [
+        ("Makefile", r'kind-images: stack-clone '),
+    ]),
+    ("make kind-halt stops without deleting; make kind-down deletes the cluster.", [
+        ("Makefile", r'kind-halt: ## stop the DevOps lane WITHOUT deleting it'),
+        ("Makefile", r'kind-down: ## delete the kind cluster'),
+    ]),
+    ("Studio (Python, in studio/): the wizard that builds images and starts a local mesh.", [
+        ("studio/README.md", r'Calamares-style wizard'),
+        ("studio/README.md", r'local Docker mesh'),
+    ]),
+    ("It wraps the two lanes above and starts nothing until a button is pressed.", [
+        ("docs/STUDIO-WALKTHROUGH.md", r'Nothing runs until you press a button'),
+        ("docs/STUDIO-WALKTHROUGH.md", r'\"Stop mesh\" runs `make stack-halt`'),
+        ("docs/STUDIO-WALKTHROUGH.md", r'DevOps lane.*kind-halt'),
+    ]),
+    ("scripts/studio-launch.sh --detect only reports what the host has.", [
+        ("scripts/studio-launch.sh", r'--detect +print the DETECT report and exit'),
+    ]),
+    ("Node images (Gentoo): build-x86-host-stage4.sh, build-rpi5-stage4.sh, make local.", [
+        ("docs/ARCHITECTURE.md", r'All nodes are hardened Gentoo'),
+        ("docs/LOCAL-TESTING.md", r'make local +# builds the whole fleet for the LAN \.test domain'),
+    ]),
+    ("They take hours and need privileges.", [
+        ("docs/STUDIO-WALKTHROUGH.md", r'An image build takes hours'),
+        ("README.md", r'\*\*x86_64 host image\*\* \(native, \*\*root\*\* required\)'),
+    ]),
+    ("Do not run them.", [
+        ("docs/STUDIO-WALKTHROUGH.md", r'An image build takes hours'),
+        ("README.md", r'\*\*x86_64 host image\*\* \(native, \*\*root\*\* required\)'),
+    ]),
+    ("Java: ./mvnw -B verify (some repos add -s settings.xml).", [
+        ("docs/LOCAL-AI-ASSISTANT.md", r'`\./mvnw -B verify` \(some repos pass `-s settings\.xml`'),
+    ]),
+    ("Angular: npm ci && npm run build && npm test -- --watch=false", [
+        ("docs/LOCAL-AI-ASSISTANT.md", r'`npm ci && npm run build && npm test -- --watch=false`'),
+    ]),
+    ("Studio: cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen python -m pytest -q tests/<file>.py (one test file at a time).", [
+        ("docs/LOCAL-AI-ASSISTANT.md", r'`HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen python -m pytest -q tests/<file>\.py`'),
+    ]),
+    ("Guards in hugmesh-generator: bash tests/scripts/test-<name>.sh.", [
+        ("docs/LOCAL-AI-ASSISTANT.md", r'\| Shell and guards \(generator\) \| `bash tests/scripts/test-<name>\.sh` \|'),
+    ]),
+    ("They print PASS or FAIL lines and exit non-zero on failure.", [
+        ("tests/scripts/test-docs-command-coverage.sh", r'ok\(\) +\{ echo \" +PASS'),
+        ("tests/scripts/test-docs-command-coverage.sh", r'bad\(\) \{ echo \" +FAIL'),
+    ]),
+    ("Gherkin end-to-end scenarios live in tests/e2e/features and run with make stack-e2e-bdd against a live stack.", [
+        ("Makefile", r'stack-e2e-bdd: ## run the GHERKIN e2e lane \(BDD_ENV=docker\|kind\|qemu; docker needs stack-up \+ stack-seed\)'),
+    ]),
+    ("make stack-e2e-bdd-check is the offline check to run before committing a .feature file.", [
+        ("Makefile", r'stack-e2e-bdd-check: ## STARTS NOTHING'),
+    ]),
+    ("tests/stack/up.sh starts only a mock lane with fake back-ends, so a pass there says nothing about the real gateways or their route tables.", [
+        ("docs/LOCAL-STACK.md", r'The mock lane is untouched, because it runs no gateway at all'),
+    ]),
+    ("A new guard must be shown failing: give it negative controls (a doctored input it must catch) and mutation-check it by breaking the production file and watching it go red.", [
+        ("tests/scripts/test-kind-doctor.sh", r'THE MUTATION BATTERY'),
+        ("tests/scripts/test-guard-integrity.sh", r'NEGATIVE CONTROLS'),
+    ]),
+    ("Never hand-edit a repo under .stack-src to get the local stack to build.", [
+        ("scripts/patch-stack-src.sh", r'never hand-edit a sibling checkout; # add an idempotent patch function here instead'),
+    ]),
+    ("Add an idempotent patch function to scripts/patch-stack-src.sh instead.", [
+        ("scripts/patch-stack-src.sh", r'never hand-edit a sibling checkout; # add an idempotent patch function here instead'),
+    ]),
+    ("Every command under scripts/ must be named in docs/ (tests/scripts/test-docs-command-coverage.sh fails otherwise).", [
+        ("tests/scripts/test-docs-command-coverage.sh", r'every user-facing command under scripts/ must be # reachable from docs/'),
+    ]),
+    ("No modal dialogs in Studio page logic (validatePage, initializePage, itemChanged): a QMessageBox there hangs the headless tests.", [
+        ("studio/tests/test_devops_halt_controls.py", r'NO MODALS IN PAGE LOGIC'),
+    ]),
+    ("Use an inline label and an explicit second click.", [
+        ("studio/tests/test_pages_e2e_environment.py", r'use an inline label; exec\(\) only from a button click'),
+    ]),
+    ("Secrets never go in a prompt, a commit or a doc.", [
+        ("docs/LOCAL-AI-ASSISTANT.md", r'\*\*No secrets in prompts\.\*\* `\.e2e-credentials`, vault files and `\.env` files stay out'),
+    ]),
+    ("Do not read .e2e-credentials, vault files or .env files.", [
+        ("docs/LOCAL-AI-ASSISTANT.md", r'\*\*No secrets in prompts\.\*\* `\.e2e-credentials`, vault files and `\.env` files stay out'),
+    ]),
+    ("No git push, no sudo, no force.", [
+        ("docs/LOCAL-AI-ASSISTANT.md", r'Never run: git push, sudo,'),
+    ]),
+    ("Do not run make stack-down, make kind-down, make kind-up or make stack-up unless you were told to.", [
+        ("docs/LOCAL-AI-ASSISTANT.md", r'docker compose up/down, make stack-\* or make kind-\*'),
+    ]),
+    ("End every task with what you changed, what you ran and its result, and what you did NOT verify.", [
+        ("docs/LOCAL-AI-ASSISTANT.md", r'End every task with: what you changed, what you ran and its result, and what you did NOT verify'),
+    ]),
+    ("Builds stall with npm ETIMEDOUT after about 80 seconds when the host default route is a tunnel with a smaller MTU than docker's bridge (WireGuard is 1420).", [
+        ("scripts/kind-load-images.sh", r'WireGuard is 1420'),
+        ("scripts/kind-load-images.sh", r"docker's default bridge is MTU 1500\. If the host's default route is a tunnel # with a smaller MTU"),
+        ("scripts/kind-load-images.sh", r"default bridge 79\.5s and FAILING"),
+    ]),
+    ("IPv6 is not the cause.", [
+        ("scripts/kind-load-images.sh", r'IPv6 look like the culprit\. It is not'),
+    ]),
+    ("Set BUILD_NETWORK=host for make kind-images.", [
+        ("scripts/kind-load-images.sh", r'Use BUILD_NETWORK=host'),
+    ]),
+    ("A cold Java build needs make stack-m2-bootstrap once, because the org-private Maven artifacts come from a local registry container.", [
+        ("docs/LOCAL-STACK.md", r'run \*\*`make stack-m2-bootstrap` once first\*\*'),
+    ]),
+    ("Its address changes when Docker restarts; make stack-m2-check refreshes it.", [
+        ("Makefile", r're-running stack-m2-bootstrap'),
+    ]),
+    ("A Maven build that dies after about 11 minutes with \"Could not find artifact net.hugmesh:... in central\" means a git update reverted the local patches in .stack-src.", [
+        ("scripts/kind-load-images.sh", r'build will fail ~11 minutes from now'),
+        ("scripts/kind-load-images.sh", r'The \.stack-src patches were reverted by a git update'),
+    ]),
+    ("Repair with bash scripts/patch-stack-src.sh.", [
+        ("scripts/kind-load-images.sh", r'Repair with: bash scripts/patch-stack-src\.sh'),
+    ]),
+    ("make kind-up needs read access to the GitOps repo.", [
+        ("specs/cluster/bootstrap/kind-local/bootstrap-kind.sh", r'a private one needs the token'),
+    ]),
+    ("By default it serves the checkout to ArgoCD with no token, but a linked git worktree (its .git is a file) cannot be served: run from a full clone or export ARGOCD_REPO_TOKEN.", [
+        ("specs/cluster/bootstrap/kind-local/bootstrap-kind.sh", r"A linked worktree's \.git is a FILE"),
+        ("specs/cluster/bootstrap/kind-local/bootstrap-kind.sh", r'OVERRIDE — ARGOCD_REPO_TOKEN'),
+    ]),
+    ("kind loads images straight into its node and never pulls from Harbor.", [
+        ("docs/KIND-SSO-E2E-FINDINGS.md", r'\*\*The kind lane never pulls from Harbor at all\*\*'),
+        ("docs/KIND-SSO-E2E-FINDINGS.md", r'`kind load` side-loads every first-party image'),
+    ]),
+    ("The kind slice deploys only part of the platform, so other routes answer 503 behind a live route.", [
+        ("specs/cluster/bootstrap/kind-local/README.md", r'answer \*\*503 behind a live'),
+    ]),
+    ("A kind cluster can list as Ready while pods sit in ImagePullBackOff because make kind-images never ran.", [
+        ("Makefile", r'`make # kind-images` had never run so no first-party image existed in the node at all'),
+        ("Makefile", r'Nineteen pods were in ImagePullBackOff'),
+    ]),
+    ("make kind-doctor reports this and never repairs.", [
+        ("specs/cluster/bootstrap/kind-local/README.md", r'It reports and exits non-zero; it never repairs'),
+    ]),
+]
+
+UNANCHORED = {
+    "You are a local model helping on HugMesh, a self-hosted mesh of services (gateways, back-end services, web apps, identity, chat) that one person can run on their own machine.": "scene-setting for the model; it names no command, path or value",
+    "Use only facts from this primer or from files you have read.": "an instruction to the model, not a claim about the repository",
+    "When you do not know, say so and name the file or command that would tell you.": "an instruction to the model, not a claim about the repository",
+}
+primer_sentences = list(sentence_list(body))
+file_cache = {}
+claimed = set()
+for sent, checks in CLAIMS:
+    claimed.add(squash(sent))
+    if squash(sent) not in primer_sentences:
+        bad("j", "the primer no longer says %r; this sentence was checked against %s, so re-read both before changing the claim" % (sent[:70], ", ".join(sorted({c[0].lstrip("!") for c in checks}))))
+        continue
+    for rel, pat in checks:
+        neg = rel.startswith("!")
+        rel = rel.lstrip("!")
+        if rel not in file_cache:
+            fp = os.path.join(repo, rel)
+            file_cache[rel] = squash(read(fp)) if exists(fp) else None
+        if file_cache[rel] is None:
+            bad("j", "%s backs the primer's %r but is not in the tree" % (rel, sent[:50]))
+        elif bool(re.search(pat, file_cache[rel])) == neg:
+            bad("j", "%s %s what the primer's %r relies on (pattern %r)" % (rel, "now has" if neg else "no longer says", sent[:50], pat[:70]))
+# ── (m) coverage: every sentence is claimed or says why it is not ──
+for sent in primer_sentences:
+    if sent in claimed and sent in UNANCHORED:
+        bad("m", "%r is both in CLAIMS and in UNANCHORED; keep one" % sent[:60])
+    elif sent not in claimed and sent not in UNANCHORED:
+        bad("m", "the primer sentence %r has no entry in CLAIMS; add it with the repository file pattern that backs it, or list it in UNANCHORED with the reason" % sent[:70])
 for sent in UNANCHORED:
-    if sent not in seen_unanchored:
+    if sent not in primer_sentences:
         bad("m", "UNANCHORED lists %r, which is no longer a primer sentence" % sent[:60])
 
 # ── (h) questions ──
@@ -771,6 +902,14 @@ anchor_control "the no-push, no-sudo rule turned into permission" "No git push, 
 anchor_control "the node-image warning reversed" "They take hours and need privileges. Do not run them." "They take seconds and need nothing. Run them freely."
 anchor_control "the Do-not-run list for stack-down turned into advice to run them" "Do not run make stack-down, make kind-down, make kind-up or make stack-up unless you were told to." "Run make stack-down, make kind-down, make kind-up and make stack-up whenever you like."
 fresh; primer_sub "Java: hugmesh-gateway, " "Java: " && primer_sub "Angular: hugmesh-host-shell" "Angular: hugmesh-gateway, hugmesh-host-shell" && expect_caught j "the gateway moved from the Java list to the Angular list" || bad "negative control setup: the repo-kind lists were not found"
+# Clauses inside a sentence that holds more than one fact, reversed one at a time (a second reviewer's list).
+anchor_control "a smaller MTU turned into a larger one" "with a smaller MTU than docker's bridge" "with a larger MTU than docker's bridge"
+anchor_control "services reached by compose name turned into published ports" "every other service is reached by its compose name" "every other service is also published to the host"
+anchor_control "'no Makefile target does this' reversed" "no Makefile target does this" "a Makefile target does this"
+anchor_control "'uncommitted edits vanish' reversed" "so uncommitted edits there vanish" "so uncommitted edits there are kept"
+# A new lowercase sentence in the MIDDLE of a line (the splitter once broke only before a capital letter, so a
+# lowercase sentence merged into its neighbour and was never looked at).
+fresh; primer_sub "make kind-images runs make stack-clone first." "make kind-images runs make stack-clone first. make kind-up is safe to run at any time." && expect_caught m "a lowercase sentence added in the middle of a line" || bad "negative control setup: no kind-images sentence"
 # (h) now needs the expected word in the PRIMER: dropping 'no remote' makes scratch-clone unanswerable from it,
 # which the old rule (any repository file would do) let through.
 fresh; primer_sub "Work in a scratch clone with no remote." "Work in a scratch clone." && expect_caught h "a question whose expected word the primer no longer says" || bad "negative control setup: no scratch-clone sentence"
@@ -815,6 +954,8 @@ repo_control "the image script no longer states the tunnel MTU" scripts/kind-loa
 repo_control "the clone script no longer groups the gateway with the Spring services" scripts/clone-all-repos.sh "# ── Spring backend services ──" "# ── Angular services ──"
 repo_control "the Makefile no longer says make stack-up is the full clone-build-run" Makefile "## clone -> build -> run the FULL stack" "## do something else entirely"
 repo_control "the README of the kind lane no longer calls the cluster a slice" specs/cluster/bootstrap/kind-local/README.md "It is a slice, not a small" "It is a whole production"
+repo_control "the Makefile gains a target that rebuilds one compose service, which the primer says does not exist" Makefile "stack-logs: ## tail logs from the running local stack" "stack-rebuild: ## rebuild one service
+stack-logs: ## tail logs from the running local stack"
 repo_control "the kind README no longer states the order" specs/cluster/bootstrap/kind-local/README.md '`kind-up` THEN `kind-images`' '`kind-images` THEN `kind-up`'
 
 # the dry-run rule: a script that drops the role paragraph, and one that drops the primer

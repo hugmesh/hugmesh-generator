@@ -41,20 +41,23 @@ model each column asked, with four planted defects that it must catch.
 
 What it checks about a fact has three levels. Every name (make target, variable, repository, path)
 is checked to exist. Every sentence of the primer except three instructions to the model is then
-tied by an anchor: an exact primer phrase, a repository file and a pattern that file must match,
-listed as `ANCHORS` in the guard (65 phrases, 86 file patterns: for example `make stack-halt`
-keeps the data and `make stack-down` deletes the volumes, the ports 8088 and 8488, the kind order,
-the 1420 tunnel MTU, which repositories are Java and which Angular, the test commands, the
-no-push and no-sudo rules, the warning about node images, and the scratch clone with no remote).
-Changing the claim or the file it rests on turns the guard red until a person reads both. Third,
-the guard fails when a primer sentence has no anchor and is not on the short `UNANCHORED` list, so
-a new fact cannot be added unbacked. What this is and is not: an anchor proves the repository file
-still says what the primer relied on when a person last read both, not that the primer's sentence
-is a correct reading of that file; and each question's expected words must be in the primer text
-itself, not merely somewhere in the repository.
+listed in full in `CLAIMS` in the guard (65 sentences, 94 file patterns), each with the repository
+file text that backs it: for example `make stack-halt` keeps the data and `make stack-down` deletes
+the volumes, the ports 8088 and 8488, the kind order, the 1420 tunnel MTU, which repositories are
+Java and which Angular, the test commands, the no-push and no-sudo rules, the warning about node
+images, and the scratch clone with no remote. The guard fails when a sentence is not word for word in
+the primer, so reversing a rule, moving a repository from the Java list to the Angular list or
+changing any number turns it red until a person reads the new sentence against the file; and it fails
+when a primer sentence is neither listed nor on the short `UNANCHORED` list, so a new fact cannot be
+added unbacked. What this is and is not: a pattern proves the repository file still says what the
+primer relied on when a person last read both, not that every clause of the sentence is a correct
+reading of that file (a clause no pattern names is protected only by the word-for-word match, which
+is a tripwire for a person, not a proof). Each question's expected words must also be in the primer
+text itself, not merely somewhere in the repository.
 
-To add a fact: write it in `primer.md`, name the file that backs it in the sources comment, add an
-anchor for it to the guard (it fails until you do), run the guard. To re-count tokens after a large edit:
+To add a fact: write it in `primer.md`, name the file that backs it in the sources comment, add the
+sentence to `CLAIMS` in the guard with the repository file text that backs it (the guard fails on a
+primer sentence that is not listed, and on a listed sentence that was reworded), run the guard. To re-count tokens after a large edit:
 `scripts/local-ai-agents.sh test --tokens` and update `MEASURED_TOKENS` and `MEASURED_BYTES` at the
 top of the guard.
 
@@ -68,8 +71,9 @@ in the first two columns. An answer passes when it contains the words in `eval/q
 mechanical and nobody judged an answer.
 
 **The score is a range, not one number.** The same command on the same primer and the same models
-was run five times: prepared `hugmesh-agent` scored 18/19 once and 17/19 four times; the plain base
-scored 0/19 four times and 1/19 once. Temperature 0 and a fixed seed do not make the GPU output
+was run five times (the first run, a reviewer's rerun and three later reruns): prepared
+`hugmesh-agent` scored 18/19 once and 17/19 four times; the plain base scored 0/19 four times and
+1/19 once. Temperature 0 and a fixed seed do not make the GPU output
 identical from run to run. The table below is the latest run, on the final primer (17/19 against
 0/19); the 18/19 run differs only in `mock-lane`.
 

@@ -427,9 +427,9 @@ GPU does not repeat itself exactly at temperature 0); one base answer passed on 
 "mock". Quote the range and read the answers (`test --out FILE`), not one number.
 
 **Refresh after the primer changes.** Edit `local-ai/primer.md`, put the file that backs the new
-fact in its trailing sources comment, add an anchor for it in the guard (it fails on a primer sentence that has no
-anchor; the anchors tie each sentence to the repository file that backs it, and the guard checks
-every name and path as well), run `bash tests/scripts/test-local-ai-primer.sh`, then run
+fact in its trailing sources comment, add the sentence to `CLAIMS` in the guard (it fails on a primer sentence that is
+not listed and on a listed sentence that was reworded; each entry ties the sentence to the repository
+file text that backs it, and the guard checks every name and path as well), run `bash tests/scripts/test-local-ai-primer.sh`, then run
 `scripts/local-ai-agents.sh create` again (it rebuilds the four in place) and
 `scripts/local-ai-agents.sh test` to see the score. If the primer grew by more than 15%, count
 its tokens with `scripts/local-ai-agents.sh test --tokens` and update `MEASURED_TOKENS` and
