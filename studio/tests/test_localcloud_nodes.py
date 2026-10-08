@@ -791,6 +791,56 @@ def test_a_forgotten_domains_table_writes_nothing_until_it_is_entered_again(
     assert wiz.cfg.domain_services_reviewed == ["a.example"]   # the record's markers
 
 
+def test_an_import_after_an_earlier_mesh_flow_builds_only_the_imported_accounts(
+        wiz, monkeypatch):
+    """#707, from the first screen: a plain 'Mesh node' flow names alice on the Users
+    table up to the build screen, Back to the main menu, then 'Create nodes for local
+    cloud' for a saved mesh whose account is carol. Before: cfg.users was [alice,
+    carol] after the import and only [alice] at the build screen (the Users table was
+    written back over it)."""
+    from _helpers import enable_configure_users
+    pick_mode(wiz, "mesh")
+    wl = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(wl, "backend.x86")
+    enable_configure_users(wiz)
+    users = advance_to(wiz, wizard_mod.UsersPage)
+    users._add("alice", "x.example")
+    launch = _walk_to_launch(wiz)
+    assert [u.username for u in wiz.cfg.users] == ["alice"], "fixture: alice was written"
+    launch._main_menu()
+    monkeypatch.setattr(lc_mod, "local_mesh_identity",
+                        lambda _gd: (CANNED_DOMAIN, [("carol", ["user"])], False))
+    pick_mode(wiz, "localcloud")
+    page = advance_to(wiz, wizard_mod.LocalCloudNodesPage)
+    page.confirm.setChecked(True)
+    wiz.next()
+    assert [(u.username, u.domain) for u in wiz.cfg.users] == [("carol", CANNED_DOMAIN)], \
+        "the import kept the earlier flow's account"
+    _walk_to_launch(wiz)
+    assert [(u.username, u.domain) for u in wiz.cfg.users] == [("carol", CANNED_DOMAIN)], \
+        "the build screen carries the earlier flow's table, not the saved mesh's account"
+
+
+def test_a_forgotten_users_table_writes_nothing_until_it_is_entered_again(wiz):
+    """collect_all() re-runs every visited page's validatePage. After the import told
+    the Users table to forget its rows, that re-run must not rebuild cfg.users from
+    the (now empty) table, and a table filled before must drop its rows."""
+    from _helpers import enable_configure_users
+    gate = _confirm_and_enter_mesh_chain(wiz)
+    users = wiz.page(wiz._page_ids["users"])
+    assert users._cfg_seen is None and users.table.rowCount() == 0
+    assert users.validatePage() is True
+    assert {u.username for u in wiz.cfg.users} == {"superadmin", "alice", "bob"}
+    enable_configure_users(wiz)
+    advance_to(wiz, wizard_mod.UsersPage)
+    assert users._cfg_seen is wiz.cfg and users.table.rowCount() == 3, "fixture: filled"
+    gate._forget_users_page()
+    assert users.table.rowCount() == 0 and users._cfg_seen is None
+    assert users.validatePage() is True
+    assert {u.username for u in wiz.cfg.users} == {"superadmin", "alice", "bob"}, \
+        "a forgotten table rewrote the accounts"
+
+
 def test_telling_the_pages_is_not_a_crash_when_the_wizard_lacks_one():
     """_forget_domain_pages asks the wizard's page registry by slug. A wizard without
     the registry, or without one of the two pages, or with a page that has no such

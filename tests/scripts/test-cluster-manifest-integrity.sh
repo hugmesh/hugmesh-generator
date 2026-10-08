@@ -162,6 +162,10 @@ CHECKER="$(dirname "${BASH_SOURCE[0]}")/cluster_manifest_integrity.py"
 # real docs dir; a control that needs a MUTATED docs tree overrides this by writing
 # its path into ${WORK}/docsdir (see the [mcs-documented] rationale control).
 export HUGMESH_DOCS_DIR="${REPO}/docs"
+# [relay-host] also reads the brand twin templates/apps/20-gateway-be.yaml.hbs, which
+# lives outside the staged specs/cluster copy; same arrangement as the docs dir (a
+# control that needs a MUTATED template writes its path into ${WORK}/tpldir).
+export HUGMESH_TEMPLATES_DIR="${REPO}/templates"
 [ -f "${HUGMESH_DOCS_DIR}/SECURITY.md" ] || {
   echo "  FAIL cannot find ${HUGMESH_DOCS_DIR}/SECURITY.md — [mcs-documented] has no authority to compare against"; exit 1; }
 
@@ -192,7 +196,7 @@ expect_catch() {
   local label="$1" want="$2" inject="$3"
   local T="${WORK}/tree"
   rm -rf "${T}"; cp -r "${REPO}/specs/cluster" "${T}"
-  rm -f "${WORK}/docsdir"
+  rm -f "${WORK}/docsdir" "${WORK}/tpldir"
   local before after
   before="$(find "${T}" -type f -exec md5sum {} + | sort | md5sum)"
   ( T="${T}"; WORK="${WORK}"; REPO="${REPO}"; eval "${inject}" ) \
@@ -206,12 +210,14 @@ expect_catch() {
   # deliberately mutates something outside the tree and says so via ${WORK}/docsdir.
   local docs="${HUGMESH_DOCS_DIR}"
   [ -f "${WORK}/docsdir" ] && docs="$(cat "${WORK}/docsdir")"
-  if [ "${before}" = "${after}" ] && [ ! -f "${WORK}/docsdir" ]; then
+  local tpl="${HUGMESH_TEMPLATES_DIR}"
+  [ -f "${WORK}/tpldir" ] && tpl="$(cat "${WORK}/tpldir")"
+  if [ "${before}" = "${after}" ] && [ ! -f "${WORK}/docsdir" ] && [ ! -f "${WORK}/tpldir" ]; then
     neg_bad "${label} (INJECTION CHANGED NOTHING — the anchor has drifted; this control proves nothing)"
     return
   fi
   local out rc
-  out="$(HUGMESH_DOCS_DIR="${docs}" python3 "${CHECKER}" "${T}" 2>&1)"; rc=$?
+  out="$(HUGMESH_DOCS_DIR="${docs}" HUGMESH_TEMPLATES_DIR="${tpl}" python3 "${CHECKER}" "${T}" 2>&1)"; rc=$?
   # -F: the check ids contain [] and -, which grep would read as a bracket range.
   if [ "${rc}" -ne 0 ] && grep -qF "  FAIL ${want}" <<<"${out}"; then
     neg_ok "${label} -> caught by ${want}"
@@ -291,6 +297,25 @@ fused=("    for entry in hugmesh-pki-gateway:hugmesh-pki-gateway.hugmesh-pki \\\
        "    for entry in hugmesh-pki-gateway:")
 open(p,"w",encoding="utf-8").write(s.replace(anchor,fused,1))
 PY
+'
+# (4b) hugmesh-generator#622: the be gateway headscale-forward relay loses its
+#      PreserveHostHeader filter, so the pki gateway sees its own Service DNS name
+#      and Host=scale.<domain> can never match its headscale route.
+expect_catch "be headscale-forward relay without PreserveHostHeader" "[relay-host]" '
+  python3 - "$T" <<PY
+import sys
+p=sys.argv[1]+"/apps/20-gateway-be.yaml"
+s=open(p,encoding="utf-8").read()
+assert s.count("              - PreserveHostHeader\n")==1
+open(p,"w",encoding="utf-8").write(s.replace("              - PreserveHostHeader\n","              - AddRequestHeader=X-Relay, 1\n",1))
+PY
+'
+# (4c) ...and the same drift in the brand twin, which is outside the staged tree.
+expect_catch "brand template headscale-forward relay without PreserveHostHeader" "[relay-host]" '
+  rm -rf "$WORK/mtpl"; cp -r "$REPO/templates" "$WORK/mtpl"
+  sed -i "s/^              - PreserveHostHeader$/              - AddRequestHeader=X-Relay, 1/" "$WORK/mtpl/apps/20-gateway-be.yaml.hbs"
+  ! grep -q "PreserveHostHeader" "$WORK/mtpl/apps/20-gateway-be.yaml.hbs"
+  printf "%s" "$WORK/mtpl" > "$WORK/tpldir"
 '
 # (5) a pod mounting an *-mtls Secret that no ExternalSecret produces.
 expect_catch "pod mounts an *-mtls Secret nothing provisions" "[mtls-secret]" '
