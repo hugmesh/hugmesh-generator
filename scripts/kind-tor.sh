@@ -168,13 +168,23 @@ print(json.dumps(kept))
 
 kc() { kubectl --context "${KCTX}" "$@"; }
 
+# pid_alive <pid> — true while <pid> is a RUNNING process. `kill -0` also
+# succeeds on a defunct (zombie) process, which is what a SIGTERMed tor becomes
+# whenever its parent never wait()s for it: a daemonised tor is reparented to
+# PID 1, and in a container whose PID 1 does not reap (a CI job container runs
+# `tail -f /dev/null`) it stays a zombie forever. A defunct tor is a stopped tor.
+pid_alive() {
+  kill -0 "$1" 2>/dev/null || return 1
+  ! grep -q '^State:[[:space:]]*Z' "/proc/$1/status" 2>/dev/null
+}
+
 # tor_pid — prints the pid of THIS script's tor and returns 0, or returns 1.
 tor_pid() {
   local pid
   [ -s "${PIDFILE}" ] || return 1
   pid="$(tr -dc '0-9' < "${PIDFILE}")"
   [ -n "${pid}" ] || return 1
-  kill -0 "${pid}" 2>/dev/null || return 1
+  pid_alive "${pid}" || return 1
   # The pid must be a tor started with OUR torrc: a recycled pid, or another
   # user's tor, must not count as ours.
   tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null | grep -aF -- "${TORRC}" >/dev/null || return 1
@@ -338,8 +348,8 @@ cmd_down() {
   fi
   if pid="$(tor_pid)"; then
     kill "${pid}" 2>/dev/null || true
-    for i in $(seq 1 20); do kill -0 "${pid}" 2>/dev/null || break; sleep 0.5; done
-    kill -0 "${pid}" 2>/dev/null && die "tor (pid ${pid}) did not exit on SIGTERM; left as is"
+    for i in $(seq 1 20); do pid_alive "${pid}" || break; sleep 0.5; done
+    ! pid_alive "${pid}" || die "tor (pid ${pid}) did not exit on SIGTERM; left as is"
     log "tor (pid ${pid}) stopped"
   else
     log "no kind-lane tor running"
