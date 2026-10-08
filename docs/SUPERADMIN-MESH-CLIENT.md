@@ -78,8 +78,8 @@ superadmin mesh rule). It does **not yet** have SSH reach.
 
 SSH destinations in the generated headscale policy key on **server-forced** tags, not
 self-advertised ones. `tag:superadmin` grants the superadmin operator SSH reach.
-[`hugmesh-headscale-forcetags`](../specs/usr/sbin/hugmesh-headscale-forcetags)
-force-assigns it **only**, from a manual allowlist on the **control (pki) node**:
+Only [`hugmesh-headscale-forcetags`](../specs/usr/sbin/hugmesh-headscale-forcetags)
+assigns it, and it reads a manual allowlist on the **control (pki) node**:
 
 ```
 /etc/hugmesh/registry/superadmin-machines.txt   # one machine key per line
