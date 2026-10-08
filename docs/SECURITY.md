@@ -5,52 +5,63 @@ layers, and the container runtime + network are confined to those identities.
 
 ## 1. LSM — SELinux on every image
 
-All images (RPi `pki`/`backend`/`frontend`, x86_64 `host`) build from the
-`hardened/selinux` profile with SELinux as the LSM
-(`CONFIG_LSM="yama,selinux,bpf"`, `lsm=...,selinux` on the kernel
-cmdline). AppArmor is removed.
+All ten stage4 images (the three RPi 5 role images `pki`/`backend`/`frontend`,
+the x86_64 `host`, Frite, Jetson and the Orange Pi family) build from the
+`hardened/selinux` profile (`specs-*/portage/profile/parent`) with SELinux as the
+LSM. The kernel `CONFIG_LSM` is `lockdown,yama,selinux,bpf` on x86 and RPi 5
+(`specs-x86/kernel/hardened-k8s.config`, `specs-rpi5/kernel/hardened-k8s.config`;
+the x86 cmdline carries `lsm=lockdown,yama,selinux,bpf`) and `yama,selinux` on the
+Frite, Jetson and Orange Pi kernels. AppArmor is disabled
+(`disable CONFIG_SECURITY_APPARMOR` in the x86 and RPi 5 fragments).
 
 - **Pi (cross-built):** SELinux policy packages' `pkg_postinst` runs the *target*
   `semodule`, which can't execute under aarch64 cross-emerge — so `keys-provision`
   loads the base policy + relabels the filesystem **natively at first boot**
-  (`provision_selinux()`), starting **permissive** (flip to enforcing after a
-  clean relabel: `setenforce 1` + `SELINUX=enforcing`).
-- **x86 (native):** policy loads at build time.
+  (`provision_selinux()`), starting **permissive**.
+- **x86 (native):** the base policy is already built in the image. The hugmesh
+  node-policy modules (§3) are still loaded at first boot by `provision_selinux()`.
 - Mode/type are set from the KEYS manifest: `selinux.mode` (default `permissive`),
-  `selinux.type` (default `mcs`).
+  `selinux.type` (default `mcs`). Every image boots **permissive**. The
+  `selinux-enforce-gate` service that could flip a node to enforcing ships inert
+  unless the image was built with `HUGMESH_SELINUX_ENFORCE_GATE=1`
+  ([`docs/selinux-module-loading.md`](selinux-module-loading.md)).
 
 ## 2. Containers locked to SELinux roles
 
-`containerd` runs with `enable_selinux = true` (+ category range), so every pod
+`containerd` runs with `enable_selinux = true` and `selinux_category_range = 1024`
+(`specs/etc/containerd/config.toml`), so every pod
 is labelled `container_t` with a unique MCS category pair — pods are mutually
 isolated by SELinux. Kubernetes refines this per workload via
 `securityContext.seLinuxOptions`, giving **each application its own role/level**.
 
 ## 3. The per-application identity matrix
 
-Each app UI/API is one identity across SELinux, Casdoor and Kubernetes, with a
-Vault-managed mTLS keystore:
+Each app UI/API is meant to be one identity across SELinux, Casdoor and Kubernetes,
+with a Vault-issued mTLS certificate. The SELinux level and ServiceAccount columns
+are enforced: `tests/scripts/test-cluster-manifest-integrity.sh`
+([mcs-documented], [workload-sa]) compares them with the manifests. The other two
+columns are the design target; see the status note under the table.
 
-| Application | k8s ServiceAccount | SELinux `seLinuxOptions` (level) | Casdoor user / role | JKS keystore (CN) |
+| Application | k8s ServiceAccount | SELinux `seLinuxOptions` (level) | Casdoor user / role (target) | mTLS cert name (`.cluster.local` is appended) |
 |---|---|---|---|---|
 | `hugmesh-pki-gateway` | `sa-pki-gateway` | `s0:c11` | `svc-pki-gateway` / `ROLE_GATEWAY` | `hugmesh-pki-gateway.hugmesh-pki.svc` |
 | `hugmesh-be-gateway` | `sa-be-gateway` | `s0:c12` | `svc-be-gateway` / `ROLE_GATEWAY` | `hugmesh-be-gateway.hugmesh-backend.svc` |
 | `hugmesh-fe-gateway` | `sa-fe-gateway` | `s0:c13` | `svc-fe-gateway` / `ROLE_GATEWAY` | `hugmesh-fe-gateway.hugmesh-frontend.svc` |
-| `hugmesh-gateway-superadmin` | `sa-gateway-superadmin` | `s0:c17` | `svc-gateway-superadmin` / `ROLE_GATEWAY` | `hugmesh-gateway-superadmin.hugmesh-pki.svc` |
+| `hugmesh-gateway-superadmin` | `sa-gateway-superadmin` | `s0:c17` | `svc-gateway-superadmin` / `ROLE_GATEWAY` | `hugmesh-superadmin-gateway.hugmesh-pki.svc` |
 | `hugmesh-api` (actions) | `sa-api` | `s0:c22` | `svc-api` / `ROLE_API` | `hugmesh-api.hugmesh-backend.svc` |
-| `admin-bff` (api) | `sa-admin-bff` | `s0:c23` | `svc-admin-bff` / `ROLE_ADMIN_API` | `admin-bff.hugmesh-backend.svc` |
+| `admin-bff` (api) | `sa-admin-bff` | `s0:c23` | `svc-admin-bff` / `ROLE_ADMIN_API` | `hugmesh-admin-bff-api.hugmesh-backend.svc` |
 | `admin-bff-db` | `sa-admin-bff-db` | `s0:c26` | (DB) | (non-Java: PEM, no JKS) |
-| `federation-api` | `sa-federation` | `s0:c24` | `svc-federation` / `ROLE_FEDERATION` | `federation-api.hugmesh-backend.svc` |
+| `federation-api` | `sa-federation` | `s0:c24` | `svc-federation` / `ROLE_FEDERATION` | `hugmesh-federation-api.hugmesh-backend.svc` |
 | `federation-db` | `sa-federation-db` | `s0:c25` | (DB) | (non-Java: PEM, no JKS) |
-| `mod-bff-api` | `sa-mod-bff` | `s0:c27` | `svc-mod-bff` / `ROLE_MOD_API` | `mod-bff.hugmesh-backend.svc` |
+| `mod-bff-api` | `sa-mod-bff` | `s0:c27` | `svc-mod-bff` / `ROLE_MOD_API` | `hugmesh-mod-bff-api.hugmesh-backend.svc` |
 | `mod-bff-db` | `sa-mod-bff-db` | `s0:c28` | (DB) | (non-Java: PEM, no JKS) |
-| `user-bff-api` | `sa-user-bff` | `s0:c29` | `svc-user-bff` / `ROLE_USER_API` | `user-bff.hugmesh-backend.svc` |
+| `user-bff-api` | `sa-user-bff` | `s0:c29` | `svc-user-bff` / `ROLE_USER_API` | `hugmesh-user-bff-api.hugmesh-backend.svc` |
 | `user-bff-db` | `sa-user-bff-db` | `s0:c38` | (DB) | (non-Java: PEM, no JKS) |
-| `forum-bff-api` | `sa-forum-bff` | `s0:c53` | `svc-forum-bff` / `ROLE_FORUM_API` | `forum-bff.hugmesh-backend.svc` |
+| `forum-bff-api` | `sa-forum-bff` | `s0:c53` | `svc-forum-bff` / `ROLE_FORUM_API` | `hugmesh-forum-bff-api.hugmesh-backend.svc` |
 | `forum-bff-db` | `sa-forum-bff-db` | `s0:c52` | (DB) | (non-Java: PEM, no JKS) |
-| `wiki-bff-api` | `sa-wiki-bff` | `s0:c69` | `svc-wiki-bff` / `ROLE_WIKI_API` | `wiki-bff.hugmesh-backend.svc` |
+| `wiki-bff-api` | `sa-wiki-bff` | `s0:c69` | `svc-wiki-bff` / `ROLE_WIKI_API` | `hugmesh-wiki-bff-api.hugmesh-backend.svc` |
 | `wiki-bff-db` | `sa-wiki-bff-db` | `s0:c68` | (DB) | (non-Java: PEM, no JKS) |
-| `service-catalog-ui` (superadmin Service Catalog console; tailnet-only) | `sa-service-catalog-ui` | `s0:c49` | `svc-service-catalog-ui` / `ROLE_SUPERADMIN_UI` | `hugmesh-superadmin-service-catalog-ui.hugmesh-frontend.svc` |
+| `service-catalog-ui` (superadmin Service Catalog console; tailnet-only) | `sa-service-catalog-ui` | `s0:c49` | `svc-service-catalog-ui` / `ROLE_SUPERADMIN_UI` | — (no `<app>-mtls` ExternalSecret) |
 | `service-catalog-builder` (Kaniko build pods) | (per-build) | `s0:c54` | (build pod) | (non-Java: no JKS) |
 | `route-access` | `sa-route-access` | `s0:c15` | (DB) | — |
 | `forgejo` (GitOps) | `sa-forgejo` | `s0:c16` | per-app svc user | — |
@@ -104,11 +115,34 @@ Vault-managed mTLS keystore:
 | `character-forge-bff-api` (character-forge — optional, default-off) | per-app SA | `s0:c83` | `svc-character-forge-bff` / `ROLE_CHARACTER_FORGE_API` | `hugmesh-character-forge-bff-api.hugmesh-backend.svc` |
 | `character-forge-ui` (character-forge — optional, default-off) | per-app SA | `s0:c84` | — | — |
 
-The matrix is the contract: `seLinuxOptions.level` per Deployment (added to each
-chart/manifest), a `ServiceAccount` per app, a Casdoor service user+role created
-at bootstrap, and a JKS keystore issued by `gen-keystores.sh`. Each MCS category
-(`s0:cNN`) is **unique** — no two workloads may share one, so a compromised pod
-cannot read another's category-isolated volumes.
+The matrix is the contract for `seLinuxOptions.level` per Deployment and a
+`ServiceAccount` per app. Each MCS category (`s0:cNN`) is **unique** — no two
+workloads may share one, so a compromised pod cannot read another's
+category-isolated volumes.
+
+**Status of the other two columns (checked 2026-10-07).**
+- *Casdoor user / role.* `manifests/casdoor/init-data-configmap.yaml` seeds only
+  `svc-pki-gateway`, `svc-be-gateway`, `svc-fe-gateway` (`ROLE_GATEWAY`),
+  `svc-api` (`ROLE_API`), `svc-admin-bff` (`ROLE_ADMIN_API`) and `svc-signup-gate`
+  (`ROLE_SERVICE`). The `casdoor-init` job also creates client-credentials
+  machine apps for `user-bff` (`ROLE_API`), `matrix` / `mastodon` / `fragment-sync`
+  (`ROLE_USER`), `harbor` and `headscale`. The users and roles shown for the other
+  rows (`svc-gateway-superadmin`, `svc-federation`, `svc-mod-bff`, `svc-user-bff`,
+  `svc-forum-bff`, `svc-wiki-bff`, `svc-service-catalog-ui`,
+  `svc-character-forge-bff`, `ROLE_FEDERATION`, `ROLE_MOD_API`, `ROLE_USER_API`,
+  `ROLE_FORUM_API`, `ROLE_WIKI_API`, `ROLE_SUPERADMIN_UI`,
+  `ROLE_CHARACTER_FORGE_API`) appear nowhere in `specs/`, `scripts/` or `tests/`.
+  They are the target, not the shipped state.
+- *mTLS cert.* Pods do not mount JKS files. Vault `pki_int` issues a short-lived
+  cert per app, External Secrets syncs it into a `<app>-mtls` TLS Secret
+  (`tls.crt`, `tls.key`, `ca.crt`), and a `build-keystore` init container (in the
+  gateway chart and in `manifests/admin-bff-api/deployment.yaml`) turns it into a
+  PKCS12 keystore and truststore in a tmpfs `/stores` volume with a pod-local random
+  password. The cert's CN is the name in the column with `.cluster.local` appended
+  (`common_name` in `manifests/external-secrets/pki-externalsecrets.yaml`). The
+  offline `gen-keystores.sh` fallback keystores cover only seven services:
+  `<brand>-pki-gateway`, `-be-gateway`, `-fe-gateway`, `-api`, `-admin-bff-api`,
+  `-mod-bff-api`, `-user-bff-api`. See §4.
 
 > **service-catalog-ui note (reservation DISCHARGED 2026-08-26):** this row used to
 > read "no Deployment yet" and mark `s0:c49` *(reserved)* — the console shipped only a
@@ -135,19 +169,21 @@ cannot read another's category-isolated volumes.
 > all other securityContext chart defaults are untouched. This is a clean values
 > override (no chart fork / template patch), so it is **not** an exemption.
 >
-> **Cassandra auth/TLS hardening (ADR-32, DARK — `manifests/cassandra-hardening/`):**
-> the per-app least-privilege roles `admin_bff_cass` / `pki_gw_cass` / `be_gw_cass`
-> / `fe_gw_cass` / `sa_gw_cass` / `federation_cass` are **Cassandra-internal DB
-> login roles** (CQL `CREATE ROLE`, deny-by-default under `CassandraAuthorizer`),
-> NOT separate pods/SAs — so they take **no new MCS category**. The two flip-time
-> helper Jobs (`cassandra-bootstrap-roles`, `cassandra-tls-keystore-builder`) are
-> Cassandra-tier admin clients and run **under the same `s0:c63`** (set explicitly
-> in their pod `seLinuxOptions.level`), so they introduce no new node service and
-> need **no new `specs/selinux/*.te`/`.fc` module**. **No new listening port** is
-> opened: auth/TLS reuse the existing Cassandra CQL `:9042` already covered by the
-> `db-ingress-cassandra` NetworkPolicy (PR #128). The credentials are ESO/Vault
-> only (`secret/hugmesh/cassandra-admin`, `…/cassandra-app-creds`) — never in
-> git. See `docs/CLUSTER-HARDENING-PLAN.md` §H for the enable order.
+> **Cassandra auth (live) and TLS (dark, ADR-32):** the per-app least-privilege
+> roles `admin_bff_cass` / `pki_gw_cass` / `be_gw_cass` / `fe_gw_cass` /
+> `sa_gw_cass` / `federation_cass` are **Cassandra-internal DB login roles** (CQL
+> `CREATE ROLE`, deny-by-default under `CassandraAuthorizer`), NOT separate
+> pods/SAs — so they take **no new MCS category**. They are created by the live
+> `cassandra-bootstrap` Job (`apps/00b-cassandra-init.yaml`,
+> `manifests/cassandra-init/`). The dark TLS helper Job
+> (`cassandra-tls-keystore-builder`, `manifests/cassandra-hardening/`) is a
+> Cassandra-tier admin client too. Both Jobs run **under the same `s0:c63`** (set
+> explicitly in their pod `seLinuxOptions.level`), so they introduce no new node
+> service and need **no new `specs/selinux/*.te`/`.fc` module**. **No new
+> listening port** is opened: auth and TLS reuse the Cassandra CQL `:9042` that the
+> `db-ingress-cassandra` NetworkPolicy already covers. The credentials are
+> ESO/Vault only (`secret/<brand>/cassandra-admin`, `…/cassandra-app-creds`) —
+> never in git. See `docs/CLUSTER-HARDENING-PLAN.md` §H.
 
 > **`velero` cloud-backups MCS note:** the opt-in/inert cloud-backups leg
 > (`specs/cluster/apps/55-velero.yaml`, `specs/cluster/manifests/velero/`) runs
@@ -188,35 +224,61 @@ cannot read another's category-isolated volumes.
 > |---|---|---|---|
 > | `localpath_provisioner` | `localpath_provisioner_t`, `localpath_provisioner_helper_t` | local-path-provisioner controller + busybox helper (pod, runtime transition) | `/mnt/{data,usb}/local-path` |
 > | `otel_collector` | `otel_collector_t` | otel-collector DaemonSet (pod, runtime transition) | (no host exec; `/var/log/pods`) |
-> | `hugmesh_authkeys` | `hugmesh_authkeys_t` (+ `hugmesh_authkeys_cache_t`) | the AuthorizedKeysCommand (sshd_t domtrans, runs as nobody) — **security-load-bearing** | `/usr/sbin/hugmesh-authorized-keys-lookup`; `/etc/hugmesh/registry` |
+> | `hugmesh_authkeys` | `hugmesh_authkeys_t` (+ `hugmesh_authkeys_cache_t`) | the AuthorizedKeysCommand (sshd_t domtrans, runs as nobody) — **security-load-bearing**. Its `.fc` also carries the two label-only entries below (no `.te` of their own) | `/usr/sbin/hugmesh-authorized-keys-lookup`; `/etc/hugmesh/registry` |
 > | `hugmesh_device_registry_sync` | `hugmesh_device_registry_sync_t` | Layer-B registry sync daemon (writes the export cache + the sshd_config.d drop-in, reloads sshd) | `/usr/sbin/hugmesh-device-registry-sync` |
-> | `hugmesh_breakglass` | (label only — `ssh_home_t`) | the loopback break-glass authorized_keys file so sshd reads it on enforcing | `/etc/ssh/break-glass.keys` |
+> | (in `hugmesh_authkeys.fc`) break-glass | (label only — `ssh_home_t`) | the loopback break-glass authorized_keys file so sshd reads it on enforcing | `/etc/ssh/break-glass.keys` |
 > | `hugmesh_vpn` | `hugmesh_vpn_runner_t`, `hugmesh_vpn_reconcile_t` (+ `hugmesh_vpn_etc_t`, `hugmesh_vpn_runtime_t`) | egress-VPN runner (net_admin: wg/tun + ip-rule kill-switch) + the signed-export reconcile agent | `/usr/sbin/hugmesh-vpn-runner`, `/usr/sbin/hugmesh-vpn-reconcile`; `/etc/hugmesh/vpn` |
 > | `hugmesh_node_storage` | `hugmesh_node_storage_t` (+ `hugmesh_node_storage_cache_t`) | node-storage reconcile agent (lsblk + FDE pool provision via provision.sh + kubectl nodePathMap patch) | `/usr/sbin/hugmesh-node-storage-reconcile`; `/var/lib/hugmesh/node-storage` |
 > | `hugmesh_domain_reconcile` | `hugmesh_domain_reconcile_t` (+ `hugmesh_domain_reconcile_cache_t`) | domain-registry -> brand-repo bridge (#4): mTLS-fetch + verify the signed cross-domain export, then exec gen-keystores.sh + generate-brand-repos.sh to emit per-domain CA + brand GitOps repos into a node-local staging dir (NO block-device admin — emits files only) | `/usr/sbin/hugmesh-domain-reconcile`; `/var/lib/hugmesh/domain-registry` |
 > | `hugmesh_policy_sync` | `hugmesh_policy_sync_t` | Layer-A headscale policy-sync agent (pki/control node only; renders + applies policy.hujson) | `/usr/sbin/gen-headscale-policy.sh` |
-> | `hugmesh_oidc_token` | (label only — `user_runtime_t`) | the per-user SSO OIDC-token deposit dir read by the desktop bearer-forward GEN-SSO artifact | `/run/user/%{uid}/hugmesh` |
+> | (in `hugmesh_authkeys.fc`) oidc token | (label only — `user_runtime_t`) | the per-user SSO OIDC-token deposit dir read by the desktop bearer-forward GEN-SSO artifact | `/run/user/[^/]+/hugmesh` |
+> | `hugmesh_tor` | `hugmesh_tor_reconcile_t` (+ `hugmesh_tor_etc_t`, `hugmesh_tor_var_lib_t`) | the Tor onion-service reconcile agent (writes the managed `/etc/tor/torrc`, restarts the distro `tor`, exports the `.onion` hostname). The Tor daemon itself is confined by the upstream `tor_t` | `/usr/sbin/hugmesh-tor-reconcile`; `/etc/hugmesh/tor`; `/var/lib/hugmesh/tor` |
 >
-> Each row is a **node module** that loads via the **build-host policy compile**
-> (the `.pp` is built on the x86 BUILD host, NOT first-boot — the Pi cannot run
-> the refpolicy devel toolchain). The shared registry cache type
-> `hugmesh_authkeys_cache_t` (declared in `hugmesh_authkeys.te`) is the
-> on-disk handoff reused by the device-registry-sync, vpn-reconcile,
-> node-storage, and policy-sync domains. See §2 — note that today these custom
-> modules are authored but **not yet compiled/installed by any build step**;
-> wiring the loader is a fleet-owned (protected) build-script change, precisely
-> specified in [`docs/selinux-module-loading.md`](selinux-module-loading.md)
-> (tracked separately, NOT applied in that doc's PR).
+> There are nine `.te` modules. Each is a **node module** compiled by the
+> **build-host policy compile** (the `.pp` is built on the x86 BUILD host, NOT
+> first-boot — the Pi cannot run the refpolicy devel toolchain). The shared
+> registry cache type `hugmesh_authkeys_cache_t` (declared in
+> `hugmesh_authkeys.te`) is the on-disk handoff reused by the device-registry-sync,
+> domain-reconcile, vpn-reconcile, node-storage, and policy-sync domains.
+> `scripts/_selinux-policy-lib.sh`, called from all ten `build-*-stage4.sh`,
+> compiles and installs the modules into every image, and `provision_selinux()`
+> loads them at first boot. `localpath_provisioner`, `otel_collector` and
+> `hugmesh_tor` are installed only where the upstream policy modules they need are
+> present. The images still boot **permissive**; the modules' `# INFERRED-WIDE`
+> rules have not been narrowed. See
+> [`docs/selinux-module-loading.md`](selinux-module-loading.md).
 
-## 4. mTLS between namespaces — Vault-managed JKS keystores
+## 4. mTLS between namespaces — Vault-issued certs, one cluster CA
 
-Each Java machine-user (the Spring Cloud gateways + Spring services) gets its own
-**JKS keystore** (private key + CA-signed cert) — its mTLS identity for
-cross-namespace calls.
+Every Java machine user (the Spring Cloud gateways and the Spring services) has its
+own mTLS identity for cross-namespace calls. There are two cert paths, both rooted
+in one cluster CA (the header of [`scripts/gen-keystores.sh`](../scripts/gen-keystores.sh)
+says the same):
 
-- **Generated** by [`scripts/gen-keystores.sh`](../scripts/gen-keystores.sh) from
-  one cluster CA (run by `gen-provision-keys.sh` on the pki node). Verified by
-  [`tests/keystores/test-keystores.sh`](../tests/keystores/test-keystores.sh).
+- **In-cluster (preferred, what pods use).** Vault `pki_int` imports the cluster CA
+  (provisioned to the `vault` namespace as the `cluster-ca` Secret from the pki
+  USB) and issues a short-lived cert per app. External Secrets syncs each into a
+  `<app>-mtls` TLS Secret (`tls.crt`, `tls.key`, `ca.crt`) in the app's namespace
+  (`manifests/vault-pki`, `manifests/external-secrets/pki-externalsecrets.yaml`).
+  A `build-keystore` init container (gateway chart
+  `specs/cluster/charts/hugmesh-gateway/templates/deployment.yaml`; admin-bff in
+  `manifests/admin-bff-api/deployment.yaml`) builds a PKCS12 keystore and
+  truststore in a tmpfs `/stores` volume. It generates the store password in the
+  init container, so the password is never in git, a Secret or Vault. The app
+  loads it through a generated `application.properties`
+  (`hugmesh.tls.key-store=/stores/keystore.p12`, `…trust-store=/stores/truststore.p12`).
+  The gateway chart sets the TLS protocol floor to TLS 1.3
+  (`server.ssl.enabled-protocols`, `keystore.tlsProtocols`; `docs/CRYPTO-AUDIT.md`
+  row 6).
+- **Offline / USB (the CA and fallback keystores).** `scripts/gen-keystores.sh`,
+  run by `gen-provision-keys.sh` on the pki node, generates the cluster CA
+  (`certs/cluster-ca.crt` is the trust anchor on every KEYS stick), per-service
+  fallback keystores `keystores/<svc>.keystore.jks`, a truststore and
+  `passwords.json`. Because the in-cluster certs chain to this same CA, the offline
+  truststore validates them. No manifest under `specs/cluster` mounts the
+  `.keystore.jks` files. Verified by
+  [`tests/keystores/test-keystores.sh`](../tests/keystores/test-keystores.sh)
+  (26/26 on 2026-10-07).
 - **Multi-tenancy (per-domain CA loop):** by default the generator provisions a
   single domain — byte-/functionally-identical to the pre-multi-tenancy output. A
   build can list multiple brands/domains in
@@ -225,73 +287,102 @@ cross-namespace calls.
   (the same `--ca-cert`/`--ca-key` seam, now per-domain) for each, and writing
   that domain's keystores under `keystores/<brand>/`. Each domain gets a **NARROW
   truststore** (its own root only) so per-brand gateway/BFF/UI instances deny
-  cross-domain mTLS at the trust anchor (defense in depth). One **WIDE
-  multi-anchor truststore** (every domain's root) is built under
-  `keystores/architecture/` for the **architecture tier ONLY** (Vault /
+  cross-domain mTLS at the trust anchor (defense in depth). The gateway chart
+  selects the tier with `keystore.trustTier` (`NARROW` by default, `WIDE` for the
+  architecture tier). One **WIDE multi-anchor truststore** (every domain's root) is
+  built under `keystores/architecture/` for the **architecture tier ONLY** (Vault /
   federation / superadmin), which must validate cross-domain mTLS. With one
   domain the wide store holds exactly the one root (== the narrow store). The
   single-domain byte-identical invariant + the N≥2 narrow/wide tiers + the
   per-domain import path are proven by
   [`tests/keystores/test-keystores-multidomain.sh`](../tests/keystores/test-keystores-multidomain.sh)
-  (which diffs the refactored output against a frozen pre-refactor golden).
+  (30/30 on 2026-10-07; it diffs the refactored output against a frozen
+  pre-refactor golden).
   **CA private keys never go in git** — only public certs/truststores; an
   imported `CA_KEY` path must point at the key-USB / a secret dir.
-- **Vault-managed:** `gen-cluster-secrets.sh` pushes `keystores/*.jks` +
-  `passwords.json` to Vault (KV); the External Secrets Operator syncs each into
-  its namespace as a Secret; the pod mounts it and runs with
-  `-Djavax.net.ssl.keyStore=/pki/<svc>.keystore.jks`.
 
 ## 5. Java truststore from the USB cert chain
 
-`provision_truststore()` builds a PKCS12 truststore (and installs the JKS
-truststore) from the **cluster CA / cert chain on the USB KEYS stick**, then
-publishes `kube-system/hugmesh-truststore`. Java containers mount it and run
-with `-Djavax.net.ssl.trustStore=/pki/truststore.p12
--Djavax.net.ssl.trustStoreType=PKCS12` (set via `JAVA_TOOL_OPTIONS` in the
-charts), so all Java IO trusts the cluster CA.
+`provision_truststore()` builds a PKCS12 truststore (`truststore.p12`) from the
+**cluster CA / cert chain on the USB KEYS stick**, copies any `keystores/*.jks`
+from the stick next to it, and publishes `kube-system/hugmesh-truststore`. The
+node-level truststore serves host-side Java processes: they must be started with
+`-Djavax.net.ssl.trustStore=<that file> -Djavax.net.ssl.trustStoreType=PKCS12` (the
+comment above `provision_truststore()` says so). No `specs/cluster` manifest sets
+those `javax.net.ssl` properties, and `JAVA_TOOL_OPTIONS` is not used for this.
+In-cluster Java pods get their trust anchor from the `build-keystore` init
+container in §4.
 
 ## 6. Identity / login (recap)
 
-Casdoor (`id.<domain>`) is the single OIDC IdP, reached **only from inside the
-cluster** — it has **no public ingress** and the browser never talks to it. Human
+Casdoor is the OIDC IdP. The superdomain Casdoor ships with **no Ingress** and is
+reached from inside the cluster. A per-domain Casdoor (`idp: own`) carries its own
+Ingress at `id.<clusterDomain>` (`manifests/casdoor-domain/ingress.yaml`). The
+browser's sign-in does not go to Casdoor. Human
 login is a **native, first-party form**: `login-ui` POSTs username/password (+ any
 MFA passcode) to user-bff `POST /bff/login`, which runs PKCE + the internal Casdoor
 `/api/login` + code exchange server-side and returns only an opaque `bff_` session
 cookie (no JWT, `code_verifier`, `state`, or Casdoor URL ever reaches the client).
 Federated sign-up (Google/Discord) and registration stay admin-allowlist-gated
 (two-stage). **Service users** (the per-app identities above) are separate Casdoor
-accounts with service roles; the gateways validate the Casdoor JWT and the
-`External-*` headers. No gateway route proxies Casdoor's `/login/oauth/authorize`
-or its hosted UI to the browser.
+accounts with service roles (§3 lists which are seeded); the gateways validate the
+Casdoor JWT and the `External-*` headers. No front-door route (fe-gateway,
+be-gateway) exposes Casdoor. The pki-gateway, which is not internet-facing (it is
+served only by the internal ingress on the pki node, LAN/VPN), does route
+`/api/auth/**`, `/login/**` and `/.well-known/**` to Casdoor, and sends
+`/api/signup` and `/api/login` through the signup-gate first
+([`docs/USERNAME-CONFUSABLE.md`](USERNAME-CONFUSABLE.md)).
 
 ## 7. Network — Calico via Vault, configured from KEYS
 
-Calico is the CNI (`specs/cluster/apps/01-calico.yaml`). Its tunable config
-(pod CIDR, encapsulation/IPIP/VXLAN, BGP ASN, NAT) comes from the KEYS
-`provision.json` `calico` block, and its secrets (e.g. BGP passwords, typha
-mTLS) are Vault-managed via External Secrets. Default-deny NetworkPolicies per
-namespace complement the SELinux isolation.
+Calico is the CNI (`specs/cluster/apps/01-calico.yaml`, Tigera operator). Its
+tunable config (pod CIDR, encapsulation, BGP, NAT, block size) comes from the KEYS
+`provision.json` `calico` block, which `provision_calico()` renders into the
+Installation CR. The app header says its secrets (typha mTLS, BGP passwords) are
+Vault-managed via External Secrets, but no ExternalSecret for them exists in
+`manifests/external-secrets/` and BGP is disabled by default
+(`calico.bgp.enabled: false`), so that part is not built. Default-deny ingress
+NetworkPolicies per tier (`docs/CLUSTER-HARDENING-PLAN.md` §B) complement
+the SELinux isolation. Egress default-deny ships dark.
 
-### Fleet mesh — headscale/tailscale flat L3 (fleet-scoped, default-deny)
+### Fleet mesh — headscale/tailscale (fleet-scoped, default-deny)
 
 Every node joins one tailnet via headscale (control server on the pki/omnibus
-node). The mesh is governed by a **default-deny, tag-based ACL** shipped as
-`specs/etc/headscale/policy.hujson` and loaded with
-`policy.mode: file` + `headscale policy set` (run by `provision_headscale`).
+node). The mesh is governed by a **default-deny, tag-based ACL** loaded with
+`policy.mode: file` (`specs/etc/headscale/config.yaml`) and `headscale policy set`
+(run by `provision_headscale`).
 
 - **Membership tag.** Nodes self-apply `tag:hugmesh` (+ a per-role
-  `tag:pki`/`tag:be`/`tag:fe`/`tag:host`) at join via
-  `tailscale up --advertise-tags=...`. `tagOwners` restricts those tags to the
-  `hugmesh` headscale user (the preauth-key owner), so only enrolled nodes
-  can claim them. With OIDC join, the Casdoor `hugmesh/headscale` group
-  gates enrolment (`allowed_groups`, matching the group's real `<owner>/<name>`
-  claim shape — see `keys-template/headscale/config.yaml`) — two independent
-  membership layers.
-- **Full intra-fleet mesh.** The only `accept` rules are
-  `tag:hugmesh → tag:hugmesh:*` (every node reaches every node, all ports)
-  and `tag:hugmesh → {10.244.0.0/16, 10.96.0.0/12}:*` (pods + ClusterIP
-  services). There is **no internet-wide `*` grant and no exit-node access** —
+  `tag:pki`/`tag:be`/`tag:fe`/`tag:host`) at join through `tailscale up
+  --advertise-tags=...`, which comes from `.tailscale.up_args` in `provision.json`
+  (`keys-template/provision.json`, `keys-template/examples/`). `tagOwners` restricts
+  those tags to the `hugmesh` headscale user (the preauth-key owner), so only
+  enrolled nodes can claim them. With OIDC join, the Casdoor `hugmesh/headscale`
+  group gates enrolment (`allowed_groups`, matching the group's real
+  `<owner>/<name>` claim shape — see `keys-template/headscale/config.yaml`) — two
+  independent membership layers.
+- **Pod/service data plane only.** The one `accept` rule in `acls` is
+  `tag:hugmesh → {10.244.0.0/16, 10.96.0.0/12}:*` (pods + ClusterIP services,
+  all ports). The earlier any-to-any rule `tag:hugmesh → tag:hugmesh:*` was
+  **dropped** ([FIX-DROPMESHRULE]) because it exposed every node's :22 to every
+  other node. There is **no internet-wide `*` grant and no exit-node access** —
   the tailnet is fleet-scoped.
+- **SSH is a separate, default-deny block.** `tailscale up --ssh` is on by default
+  (`.tailscale.ssh`). The `ssh` section of the policy allows only the privileged
+  user (`@@TS_SSH_USER@@`, rewritten by keys-provision; root and other accounts are
+  denied). The image bakes `policy.bootstrap.hujson`, which first boot stages as
+  `/etc/headscale/policy.hujson` unless the KEYS stick carries its own
+  `headscale/policy.hujson` (that wins). On the control node, `gen-headscale-policy.sh`
+  (Layer A of the device-license registry) re-renders it from
+  `policy.hujson.tmpl` after the first signature-verified registry export, with
+  one `ssh` edge per permitted operator and server-forced destination tags
+  (`tag:dev_*`, `tag:dom_*`, `tag:mesh_*`, `tag:superadmin`, set by
+  `hugmesh-headscale-forcetags`, which no node can self-advertise). See
+  [`docs/DEVICE-REGISTRY-KEY-ROTATION.md`](DEVICE-REGISTRY-KEY-ROTATION.md).
+  `specs/etc/headscale/policy.hujson` is a reference copy that the builders no
+  longer bake; neither it nor `keys-template/headscale/policy.hujson` carries the
+  any-to-any rule, though the header comments of both still describe the old
+  full-mesh policy.
 - **Pods/services as one LAN.** Each node advertises the cluster pod
   (`10.244.0.0/16`) and service (`10.96.0.0/12`) CIDRs
   (`--advertise-routes=...`) and accepts approved routes (`--accept-routes`).
@@ -304,7 +395,7 @@ node). The mesh is governed by a **default-deny, tag-based ACL** shipped as
   (`specs/etc/sysctl.d/99-kubernetes.conf`: `net.ipv4.ip_forward=1`,
   `net.ipv6.conf.all.forwarding=1`).
 
-The CIDRs in `policy.hujson`, the `--advertise-routes` flags, and
+The CIDRs in the headscale policies, the `--advertise-routes` flags, and
 `kubeadm-config.yaml` (`podSubnet`/`serviceSubnet`) / `provision.json`
 `.calico.pod_cidr` must stay in sync.
 
@@ -323,8 +414,8 @@ fallback. The tailscale **client** mirrors this: an empty
 `.tailscale.login_server` defaults to the same resolved endpoint. A public
 facade (`scale.<domain>`) can be published later without re-imaging — the
 MagicDNS control-plane name stays stable across the IP→domain transition, so
-clients only re-pin if `login_server` itself changes. `--snat-subnet-routes=
-false` and the fleet-scoped, default-deny ACL are unchanged; the endpoint stays
+clients only re-pin if `login_server` itself changes. `--snat-subnet-routes=false`
+and the fleet-scoped, default-deny ACL are unchanged; the endpoint stays
 on the tailnet/LAN by default (no internet-wide grant).
 
 ### HA control plane + VPN→k8s autodiscovery
@@ -363,9 +454,17 @@ endpoint**, never a node IP, as `controlPlaneEndpoint`:
 
 ## Status / validation
 
-- LSM switch, container SELinux, truststore-from-USB, and keystore generation are
-  implemented; keystore generation is **test-verified** (23/23). The SELinux
-  cross-built Pi image needs a hardware/boot relabel pass to confirm.
-- The per-app `seLinuxOptions`/`ServiceAccount`/Casdoor-user wiring and the Vault
-  PKI→ESO→pod keystore sync are being rolled across the charts/manifests
-  (matrix above is the target); Calico-via-Vault is GitOps-staged.
+Checked against `origin/main` on 2026-10-07.
+
+- **Implemented:** the LSM switch, container SELinux (`enable_selinux`, per-workload
+  `seLinuxOptions.level` and `ServiceAccount`, both checked by
+  `test-cluster-manifest-integrity.sh`), truststore-from-USB, offline keystore and CA
+  generation (`test-keystores.sh` 26/26, `test-keystores-multidomain.sh` 30/30), the
+  Vault PKI → ESO → `build-keystore` path for gateway and admin-bff pods, and the
+  node-policy module build/install/load (§3).
+- **Not enforcing:** every image boots SELinux **permissive**. The nine node modules
+  are loaded, and the enforce-gate ships inert. Whether a cross-built Pi image
+  relabels cleanly still needs a hardware boot check.
+- **Not built as the matrix describes:** most Casdoor service users and roles in §3
+  (see the status note under the matrix), and the Calico typha/BGP ExternalSecrets
+  named in `apps/01-calico.yaml`.
