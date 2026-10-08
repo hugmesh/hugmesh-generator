@@ -739,6 +739,63 @@ def test_a_state_dir_inside_the_source_is_refused(source):
                               state_root=os.path.join(source, "state"))
 
 
+def _standin_environ(tmp_path):
+    """An environment whose `ollama` is a stand-in that records its argv, so the lines a
+    person pastes can be run for real."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    out = tmp_path / "seen-argv.json"
+    (bindir / "ollama").write_text(
+        "#!/bin/sh\n"
+        f"exec {shlex.quote(sys.executable)} -c "
+        f"{shlex.quote('import json,sys,os; json.dump([os.getcwd()] + sys.argv[1:], open(%r, %r))' % (str(out), 'w'))}"
+        ' "$@"\n')
+    (bindir / "ollama").chmod(0o755)
+    return dict(noisy_environ(), PATH=f"{bindir}:/usr/bin:/bin", HOME=str(tmp_path)), out
+
+
+def test_the_lines_shown_after_the_copy_exists_run_clean_in_bash(source, state, tmp_path):
+    """The card shows LaunchResult.command only after the copy was made. Run exactly that
+    text against the made copy: it must exit 0, print no git failure, and start the
+    agent in the copy. (paste_text, which clones first, is what used to be shown, and it
+    fails here with 'already exists' / 'No such remote' / 'a branch named ... exists'.)"""
+    environ, seen = _standin_environ(tmp_path)
+    plan = plan_for(source, state, environ=environ)
+    la.write_brief(plan)
+    la.create_scratch(plan.scratch)
+    res = la.launch(plan, make_host(FakeHost(have=[])))        # no terminal takes it
+    assert not res.opened
+    proc = subprocess.run(["bash", "--noprofile", "--norc", "-c", res.command],
+                          env=environ, capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert "fatal" not in proc.stderr and "error" not in proc.stderr and proc.stderr == ""
+    cwd, *argv = json.load(open(seen))
+    assert os.path.realpath(cwd) == os.path.realpath(plan.cwd)
+    assert argv[:4] == ["launch", "claude", "--model", "qwen3:8b"]
+    assert "git clone" not in res.command and "git remote" not in res.command
+    # the short form is the long form minus the three steps that made the copy
+    assert plan.paste_text.endswith(plan.run_line + "\n")
+    assert res.command == f"cd {shlex.quote(plan.cwd)}\n{plan.run_line}\n"
+
+
+def test_the_copy_command_text_makes_the_copy_and_launches_when_none_exists(
+        source, state, tmp_path):
+    """The other direction: paste_text is for a person with NO copy yet (the Copy button
+    runs before any copy exists). Run it for real: it must make the copy with no remote
+    and start the agent in it, with no failure."""
+    environ, seen = _standin_environ(tmp_path)
+    plan = plan_for(source, state, environ=environ)
+    la.write_brief(plan)
+    assert not os.path.exists(plan.scratch.dest)
+    proc = subprocess.run(["bash", "--noprofile", "--norc", "-c", plan.paste_text],
+                          env=environ, capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert "fatal" not in proc.stderr and "error:" not in proc.stderr
+    assert run_git("remote", cwd=plan.scratch.dest) == ""
+    assert run_git("branch", "--show-current", cwd=plan.scratch.dest) == plan.scratch.branch
+    assert os.path.realpath(json.load(open(seen))[0]) == os.path.realpath(plan.cwd)
+
+
 # ── the terminal ─────────────────────────────────────────────────────────────────
 class FakeHost:
     def __init__(self, kind="linux", have=(), exits=None, environ=None):
@@ -779,7 +836,7 @@ def test_the_first_installed_terminal_is_used_with_the_clone_as_its_folder(plan)
     assert cwd == plan.cwd and plan.cwd in argv
     assert argv[-4:-1] == ["bash", "--noprofile", "--norc"] or "-c" in argv
     assert argv[-1] == plan.shell_command
-    assert res.command == plan.paste_text
+    assert res.command == plan.after_copy_text
 
 
 @pytest.mark.parametrize("name,flag", [
@@ -824,20 +881,20 @@ def test_when_every_terminal_refuses_the_person_gets_the_command(plan):
     res = la.launch(plan, make_host(fake))
     assert not res.opened and not res.verified
     assert "konsole exited 2" in res.reason and "xterm exited 3" in res.reason
-    assert res.command == plan.paste_text and "env -i" in res.command
+    assert res.command == plan.after_copy_text and "env -i" in res.command
 
 
 def test_with_no_terminal_installed_it_says_what_it_looked_for(plan):
     res = la.launch(plan, make_host(FakeHost(have=[])))
     assert not res.opened and "no terminal emulator was found" in res.reason
-    assert "xterm" in res.reason and res.command == plan.paste_text
+    assert "xterm" in res.reason and res.command == plan.after_copy_text
 
 
 def test_no_desktop_session_opens_nothing_and_does_not_try(plan):
     fake = FakeHost(have=["xterm"], environ={"HOME": "/h"})
     res = la.launch(plan, make_host(fake))
     assert not res.opened and fake.runs == []
-    assert "no desktop session" in res.reason and res.command == plan.paste_text
+    assert "no desktop session" in res.reason and res.command == plan.after_copy_text
     wsl = FakeHost(kind="wsl", have=["xterm"], environ={"HOME": "/h"})
     assert "WSL2 without a Linux desktop" in la.launch(plan, make_host(wsl)).reason
 
@@ -853,7 +910,7 @@ def test_windows_and_macos_say_plainly_that_the_window_is_not_offered(plan):
         fake = FakeHost(kind=kind, have=["xterm"])
         res = la.launch(plan, make_host(fake))
         assert not res.opened and word in res.reason and fake.runs == []
-        assert res.command == plan.paste_text
+        assert res.command == plan.after_copy_text
 
 
 def test_the_default_spawner_reports_a_real_exit_and_a_real_still_running(tmp_path, monkeypatch):

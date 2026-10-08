@@ -180,8 +180,11 @@ agent on a model that runs on this PC, in a copy of one app's repository. It doe
   (`-y`, `--yes`, `--experimental-yolo`, ...). A keyring that answers on the desktop session
   bus is still reachable, which is why the agent's commands are for you to read and approve.
 - When no terminal takes the request (no desktop, WSL2 without WSLg, nothing installed, every
-  terminal refused) the card shows the exact lines to run yourself. Native Windows and macOS
-  do not open a window; run the Studio inside WSL2 or follow the doc by hand.
+  terminal refused) the card shows the exact lines to run yourself. After a Start the copy
+  already exists, so those lines are only `cd <copy>` and the launch line; **Copy command**,
+  which can be pressed before any copy exists, also has the clone, remote-removal and branch
+  lines first. Native Windows and macOS do not open a window; run the Studio inside WSL2 or
+  follow the doc by hand.
 
 Code: `core/local_agent.py` (Qt-free) and `gui/pages/_local_agent_widget.py`; tests:
 `tests/test_local_agent.py`, `tests/test_local_agent_gui.py`.

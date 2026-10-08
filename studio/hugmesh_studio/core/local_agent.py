@@ -783,10 +783,20 @@ class Plan:
     #: the same steps as a script a person can paste: clone, no remote, branch, launch
     paste_text: str
     title: str
+    #: the launch line alone (banner, ``env -i ...``, ``ollama launch ...``)
+    run_line: str = ""
 
     @property
     def cwd(self) -> str:
         return self.scratch.dest
+
+    @property
+    def after_copy_text(self) -> str:
+        """The lines to paste once the copy EXISTS: go into it and launch. ``paste_text``
+        clones, drops the remote and makes the branch first, which fail ("already
+        exists", "No such remote") when run against a copy that is already made; the
+        window the card shows when no terminal opened is always that case."""
+        return f"cd {shlex.quote(self.scratch.dest)}\n{self.run_line}\n"
 
 
 def write_brief(plan: Plan) -> str:
@@ -857,7 +867,7 @@ def prepare(*, lane: str, mesh: str, domains: Sequence[str], doors: Sequence[str
     paste_text = "\n".join(setup + [run_line]) + "\n"
     title = f"{AGENTS[agent]['label']} on {model} (local) - {repo}"
     return Plan(agent, model, lane, argv, positional, spec, brief, env, shell_command,
-                paste_text, title)
+                paste_text, title, run_line)
 
 
 # ── the terminal ─────────────────────────────────────────────────────────────────
@@ -961,7 +971,9 @@ def launch(plan: Plan, host: Optional[Host] = None) -> LaunchResult:
     (``create_scratch``). Never raises; on any failure the result carries the command
     for the person to run themselves."""
     host = host or Host.detect()
-    paste = plan.paste_text
+    # The copy exists by now, so the lines to run by hand are the short form; cloning
+    # again would fail on the copy just made.
+    paste = plan.after_copy_text
     if host.kind == "windows":
         return LaunchResult(False, False, "", "The Studio does not open a window on "
                             "Windows: the launch line needs a POSIX shell. Run the Studio "

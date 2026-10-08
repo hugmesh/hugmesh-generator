@@ -77,6 +77,18 @@ class AppChoice:
 
 
 @dataclass(frozen=True)
+class _Snapshot:
+    """The card's inputs at the moment of a press, so the worker thread reads values
+    and never a widget."""
+    lane: str
+    app: "Optional[AppChoice]"
+    agent: str
+    model: str
+    ctx: AgentContext
+    probe: "Optional[la.Probe]"
+
+
+@dataclass(frozen=True)
 class Outcome:
     """What one press did. Exactly one of ``error`` and ``launch`` is set."""
     plan: "Optional[la.Plan]" = None
@@ -502,17 +514,24 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
         self.recheck_btn.setEnabled(not probe_running(self, "_probe_job"))
 
     # ── Start ────────────────────────────────────────────────────────────────────
-    def _prepare_plan(self) -> "la.Plan":
+    def _snapshot(self) -> "_Snapshot":
+        """Everything the worker needs, read HERE, on the GUI thread. The context
+        callable reads the page's widgets (and Re-check rebuilds the app list), and Qt
+        widgets are GUI-thread only: a worker that touched them can abort the Studio."""
         lane, app, agent, model = self.selection()
-        ctx = self.ctx()
-        if app is None:
+        return _Snapshot(lane, app, agent, model, self.ctx(), self.probe)
+
+    def _prepare_plan(self, snap: "_Snapshot") -> "la.Plan":
+        """Pure on the snapshot: touches no widget, so it may run on a worker."""
+        if snap.app is None:
             raise la.ScratchError("No app folder is known yet.")
+        ctx, lane, app = snap.ctx, snap.lane, snap.app
         return la.prepare(
             lane=lane, mesh=ctx.mesh, domains=list(ctx.domains),
             doors=list(ctx.doors.get(lane, ())), repo=app.name, source=app.path,
             source_root=os.path.dirname(app.path), source_mode=ctx.source_mode,
-            generator_dir=self.generator_dir, pr=self.probe, agent=agent, model=model,
-            kind_cluster=ctx.kind_cluster)
+            generator_dir=self.generator_dir, pr=snap.probe, agent=snap.agent,
+            model=snap.model, kind_cluster=ctx.kind_cluster)
 
     def _start(self) -> None:
         if not self.start_btn.isEnabled() or self.probe is None:
@@ -520,10 +539,11 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
         self._show_note("Making the copy and opening a terminal…", _AMBER)
         self.command_box.setVisible(False)
         launcher = self._launcher
+        snap = self._snapshot()
 
         def work() -> Outcome:
             try:
-                plan = self._prepare_plan()
+                plan = self._prepare_plan(snap)
                 la.write_brief(plan)
                 clone = la.create_scratch(plan.scratch)
                 return Outcome(plan, clone, launcher(plan))
@@ -581,9 +601,11 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
                             "Nothing can start yet, so what was copied is what to fix first.")
             return
 
+        snap = self._snapshot()
+
         def work():
             try:
-                plan = self._prepare_plan()
+                plan = self._prepare_plan(snap)
                 la.write_brief(plan)
                 return plan
             except (la.ScratchError, ValueError) as exc:

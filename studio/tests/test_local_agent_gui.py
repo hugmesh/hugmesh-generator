@@ -130,7 +130,7 @@ class Launcher:
         self.plans.append(plan)
         self.threads.append(threading.current_thread())
         return la.LaunchResult(self.opened, self.opened, self.terminal if self.opened else "",
-                               self.reason, plan.paste_text)
+                               self.reason, plan.after_copy_text)
 
 
 def _to(wiz, cls, limit=16):
@@ -443,19 +443,86 @@ def test_an_agent_that_is_not_installed_is_marked_in_the_list(wiz, src_tree):
 
 
 # ── a launch nothing took ────────────────────────────────────────────────────────
-def test_when_no_terminal_takes_the_request_the_exact_lines_are_shown(wiz, src_tree):
-    launcher = Launcher(opened=False, reason="no terminal emulator was found")
-    _ctl, card, _p, _l = _to_bringup(wiz, launcher=launcher, source_dir=src_tree)
+def test_when_no_terminal_takes_the_request_the_exact_lines_are_shown(
+        wiz, src_tree, tmp_path, monkeypatch):
+    """The REAL launch with no terminal installed, so the text in the box is the text
+    the product produces, and then that text is RUN in bash against the copy that was
+    just made: it has to exit 0 and print no git failure, and start the agent."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    seen = tmp_path / "agent-ran.txt"
+    (bindir / "ollama").write_text(f'#!/bin/sh\necho "$PWD $*" > {seen}\n')
+    (bindir / "ollama").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ.get('PATH', '/usr/bin:/bin')}")
+    plans = []
+
+    def no_terminal(plan):
+        plans.append(plan)
+        host = la.Host("linux", which=lambda _c: None, environ={"DISPLAY": ":0"})
+        return la.launch(plan, host)
+
+    _ctl, card, _p, _l = _to_bringup(wiz, launcher=no_terminal, source_dir=src_tree)
     card.start_btn.click()
     card.wait_idle()
     _settle()
-    (plan,) = launcher.plans
+    (plan,) = plans
     assert "#b00020" in card.note.styleSheet()
     assert "No window was opened: no terminal emulator was found" in card.note.text()
     assert card.command_box.isVisible()
-    assert card.command_box.toPlainText().rstrip("\n") == plan.paste_text.rstrip("\n")
-    assert "git remote remove origin" in card.command_box.toPlainText()
+    shown = card.command_box.toPlainText()
+    assert shown.rstrip("\n") == plan.after_copy_text.rstrip("\n")
+    assert "git clone" not in shown and "git remote remove" not in shown
     assert os.path.isdir(plan.cwd), "the copy exists even though no window opened"
+    proc = subprocess.run(["bash", "--noprofile", "--norc", "-c", shown],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr == "", proc.stderr
+    ran = seen.read_text().split()
+    assert os.path.realpath(ran[0]) == os.path.realpath(plan.cwd)
+    assert ran[1:5] == ["launch", "claude", "--model", "qwen3:8b"]
+
+
+def test_the_copy_button_shows_the_long_form_that_makes_the_copy(wiz, src_tree):
+    """Copy command runs BEFORE any copy exists, so it keeps the clone / no-remote /
+    branch lines; only the text shown after a Start drops them."""
+    _ctl, card, _p, _l = _to_bringup(wiz, source_dir=src_tree)
+    card.copy_btn.click()
+    card.wait_idle()
+    _settle()
+    shown = card.command_box.toPlainText()
+    assert shown.startswith("git clone --no-hardlinks -- ")
+    assert "git remote remove origin" in shown and "git switch -c lm/" in shown
+    assert card.copied_text == shown
+
+
+def test_the_workers_never_read_a_widget_or_the_page(wiz, src_tree):
+    """Qt widgets are GUI-thread only (a thread mistake aborts the Studio). The page's
+    context callable, the selection and the app list are all read at the press, on the
+    GUI thread, and the worker is handed the values."""
+    ctl, card, _p, launch = _to_bringup(wiz, source_dir=src_tree)
+    main = threading.main_thread()
+    reads = []
+    real_ctx, real_sel = card._context, card.selection
+
+    def ctx():
+        reads.append(("context", threading.current_thread()))
+        return real_ctx()
+
+    def sel():
+        reads.append(("selection", threading.current_thread()))
+        return real_sel()
+
+    card._context = ctx
+    card.selection = sel
+    for button in (card.start_btn, card.copy_btn):
+        reads.clear()
+        button.click()
+        card.wait_idle()
+        _settle()
+        assert {n for n, _t in reads} >= {"context", "selection"}, reads
+        off = [(n, t.name) for n, t in reads if t is not main]
+        assert not off, f"the worker read the page: {off}"
+    assert launch.plans and launch.threads[0] is not main      # the launch itself is off-thread
 
 
 def test_a_launcher_that_raises_is_shown_not_thrown_into_qt(wiz, src_tree):
