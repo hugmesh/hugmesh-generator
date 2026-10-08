@@ -22,14 +22,15 @@ Drop additional OpenSSH public keys here, one file per user named
 `root.authorized_keys`). On worker sticks `root.authorized_keys` is the
 break-glass key (root login is otherwise locked).
 
-Each file is concatenated into that user's `~/.ssh/authorized_keys` at
-first boot. This is an alternative/supplement to the `ssh_authorized_keys`
-arrays inside `users.json`.
+Each file is merged into that user's `~/.ssh/authorized_keys` at first boot,
+together with the `ssh_authorized_keys` array in `users.json` (and its
+`ssh_authorized_keys_file`); the result is sorted with duplicates dropped. The user
+must exist. `root.authorized_keys` goes to `/root/.ssh/authorized_keys`.
 
 To pin SSH **host** identity across reflashes, place pre-generated host
-keys in `ssh/host/` (`ssh_host_ed25519_key`, `ssh_host_ed25519_key.pub`,
-`ssh_host_rsa_key`, ...). They are installed into `/etc/ssh/` with correct
-permissions, so clients don't see a changed host key after a rebuild.
+keys in `ssh/host/` (files named `ssh_host_*_key` and `ssh_host_*_key.pub`, such
+as `ssh_host_ed25519_key` and `ssh_host_rsa_key`). They are installed into
+`/etc/ssh/` (private 0600, public 0644), so clients don't see a changed host key after a rebuild.
 
 ## In-UI SSH terminal — per-device HOST + BFF DIAL keypairs
 

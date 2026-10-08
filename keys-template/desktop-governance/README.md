@@ -9,12 +9,14 @@ At first boot `provision_desktop_governance()`
 (`KEYS/desktop-governance/`) instead, then renders the templates into their live
 system locations, substituting the `@@CLUSTER_DOMAIN@@` placeholder with the
 node's own domain (resolved from `.client.primary_domain` →
-`/etc/hugmesh/domains` → `.hugmesh.cluster_domain`).
+`/etc/hugmesh/domains` → `.hugmesh.cluster_domain`). STANDALONE images
+(`/etc/hugmesh/standalone`) skip this step entirely.
 
 ## What it configures (all DEFAULT-DENY / ships-dark)
 
 - **Discover → admin-bff registry remote** at `https://api.<domain>/bff/desktop/registry/`,
-  with **Flathub + every default backend disabled**. Empty until a domain admin
+  with the `flathub`, `flathub-beta`, `gnome-nightly`, `kdeapps` and `fedora`
+  remotes removed (`flatpak/flathub-disable.conf`). Empty until a domain admin
   curates apps (gated by the `discover` role). An empty store is the correct
   state, not an error.
 - **polkit sudo gate — the SOLE sudo path on a governed image**: keys-provision
@@ -48,7 +50,10 @@ a KEYS `run[]` hook (all governed-gated + ships-dark):
 
 - `discover/oidc-token-deposit.sh.tmpl` → deposits the SSO access token at
   `${XDG_RUNTIME_DIR}/hugmesh/oidc-token` (per-user, 0600, never exported,
-  `--clear` on logout); inert when ungoverned / no token (empty store).
+  `--clear` on logout); inert when ungoverned / no token (empty store). It reads
+  the token from `HUGMESH_OIDC_ACCESS_TOKEN` or `oidc-token.src` in the same
+  directory. Nothing in this repo sets either, so until the SSO greeter does,
+  the token is empty.
 - `autostart/hugmesh-desktop-sso.desktop.tmpl` → XDG autostart (LXDE + XFCE,
   no `OnlyShowIn`) → the session-start wrapper.
 - `autostart/hugmesh-desktop-sso-start.sh.tmpl` → session-start wrapper:
@@ -57,8 +62,9 @@ a KEYS `run[]` hook (all governed-gated + ships-dark):
   deposit → bearer-forward.
 - `autostart/session-install.sh.tmpl` (+ a ready-to-run `session-install.sh` at
   this dir root) → renders the three templates and publishes the `.desktop`,
-  with the SAME domain resolution + fail-closed `[a-z0-9.-]` validation as
-  `provision.sh`.
+  resolving the domain from `/etc/hugmesh/domains`, else from the `Url=` of the
+  rendered `hugmesh-discover.flatpakrepo`, with the SAME fail-closed `[a-z0-9.-]`
+  validation as `provision.sh`.
 
 ### Wire the run[] hook
 
@@ -72,11 +78,13 @@ Add to your KEYS `provision.json` so it runs as root at end of first boot, after
 ### RESIDUAL #9a
 
 The desktop SSO login uses the `hugmesh-desktop` client id (PKCE public
-client). This PR seeds that client + the `desktop-sudo` role in `casdoor-init`
-(`specs/cluster/manifests/casdoor/`); without it SSO-sudo is inert.
+client). `casdoor-init` seeds that client (`specs/cluster/manifests/casdoor/init-job.yaml`,
+`reconcile_desktop_client`) and the `desktop-sudo` role
+(`init-data-configmap.yaml`); without them SSO-sudo is inert.
 
 ## Files
 
-Mirror of `specs/etc/hugmesh/desktop-governance/` — edit in place if a domain
+Mirror of `specs/etc/hugmesh/desktop-governance/`, plus the ready-to-run
+`session-install.sh` — edit in place if a domain
 needs a different store title / remote layout, but keep `@@CLUSTER_DOMAIN@@`
 intact so first-boot domain substitution works.

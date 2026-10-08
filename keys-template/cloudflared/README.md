@@ -8,24 +8,29 @@ pruned at build time, so this folder is never consulted.
 
 ## What goes here
 
-Pick ONE of the two cloudflared auth styles:
+The Deployment supports ONE auth style today: the token tunnel.
 
-1. **Token tunnel (simplest).** Put the dashboard-issued tunnel token in
-   `tunnel-token` (single line, no newline). keys-provision writes it to Vault at
-   `secret/<brand>/cloudflared` under property `tunnel_token`; the
-   `cloudflared-tunnel-token` ExternalSecret materializes it into the
+1. **Token tunnel.** Put the dashboard-issued tunnel token in `tunnel-token`
+   (single line, no newline). `hugmesh-go-live plan --provider cloudflare-tunnel
+   --token-file FILE` stores a copy at `/etc/hugmesh/keys/cloudflared/tunnel-token`
+   on the node (`--keys-dir` changes the base). **No script reads this file.** keys-provision does not touch
+   `cloudflared/`, and nothing else copies it to Vault. An operator must store the
+   token in Vault at `secret/<brand>/cloudflared`, property `tunnel_token`. The
+   `cloudflared-tunnel-token` ExternalSecret then materializes it into the
    `TUNNEL_TOKEN` env the Deployment consumes.
 
-2. **Named tunnel + credentials.json.** Put `credentials.json` (from
-   `cloudflared tunnel create`) here and set the `tunnel:` / `credentials-file:`
-   keys in `manifests/cloudflared/configmap.yaml`. Same Vault path; store the
-   file's contents as the `credentials_json` property.
+2. **Named tunnel + credentials.json (NOT wired).** The ExternalSecret reads only
+   `tunnel_token`, no `credentials_json` property exists, and the Deployment
+   mounts only the `cloudflared-config` ConfigMap, not a credentials file. The
+   commented `tunnel:` / `credentials-file:` keys in
+   `manifests/cloudflared/configmap.yaml` are a placeholder for future work.
 
 ## Files
 
     tunnel-token            (SECRET — gitignored) the Cloudflare tunnel token
-    credentials.json        (SECRET — gitignored) named-tunnel credentials (alt.)
+    credentials.json        (SECRET — gitignored) named-tunnel credentials (unused, see above)
     tunnel-token.example    committed placeholder showing the expected format
 
-Real values are gitignored (`*.json`, and the `tunnel-token` patterns below);
-only the `.example` placeholder is committed. NEVER commit a real token.
+Real values are gitignored (`keys-template/cloudflared/tunnel-token` and
+`credentials.json`, in the repo `.gitignore`); only the `.example` placeholder is
+committed. NEVER commit a real token.

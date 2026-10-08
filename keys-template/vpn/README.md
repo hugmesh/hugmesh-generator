@@ -14,7 +14,7 @@ the `.conf` they downloaded from their VPN provider) and consumed at first boot 
 > **NEVER commit a real VPN config here.** A `.conf`/`.ovpn` carries the private
 > WireGuard key (or OpenVPN auth) — a secret. The tree below ships with
 > `.gitkeep` placeholders ONLY. The operator drops the brand's actual configs onto
-> the key-USB; `scripts/gen-provision-keys.sh` copies them from `--keys-src` (it
+> the key-USB; `scripts/gen-provision-keys.sh` copies them from `--vpn-src` (it
 > never generates them — only the VPN provider can).
 
 ## Layout
@@ -28,19 +28,23 @@ KEYS/
 ```
 
 - `<domain>` is the **brand / tenant domain** (matches `provision.json`
-  `.hugmesh.cluster_domain` — the node's own residency). `provision_vpn()`
+  `.egress_vpn.domain` if set, else `.hugmesh.cluster_domain` — the node's own
+  residency). `provision_vpn()`
   reads ONLY `KEYS/vpn/<own-domain>/`; a config under another domain's directory is
   **never** installed on this node (per-tenant isolation, defence-in-depth — the
   runtime BFF/ESO path enforces the same domain scope).
 - Multiple `.conf`/`.ovpn` files per domain are allowed (e.g. one per provider
-  region / per public service). The first verified Layer-B reconcile (PR5) or the
-  runtime UI path selects which one is `active.conf`. At provision time **all** of
-  the own-domain configs are staged 0600 under `/etc/hugmesh/vpn/<name>.conf`;
-  the OpenRC service (`hugmesh-egress-vpn`, PR2) reads the symlinked
+  region / per public service). At provision time **all** of the own-domain
+  configs are staged 0600 under `/etc/hugmesh/vpn/<name>.conf` or `<name>.ovpn`,
+  and `active.conf` is pointed at the first one if it does not exist yet (a
+  WireGuard `.conf` wins over an `.ovpn`). The signed reconcile
+  (`hugmesh-vpn-reconcile`) or the runtime UI path re-points `active.conf` later.
+  The OpenRC service (`hugmesh-egress-vpn`) reads the symlinked
   `/etc/hugmesh/vpn/active.conf`.
-- **Type detection**: a `.conf` is treated as WireGuard (`[Interface]` /
-  `[Peer]` sections, `wg-quick`); a `.ovpn` is treated as OpenVPN. The runner
-  type-sniffs the active file at start (PR2).
+- **Type detection**: the runner (`hugmesh-vpn-runner`) sniffs the CONTENT of
+  `active.conf` at start: `[Interface]` / `[Peer]` sections mean WireGuard
+  (`wg-quick`); `remote` / `client` / `dev tun` / `proto` lines mean OpenVPN. The
+  `.ovpn` extension is only a fallback.
 
 ## Files (per `<domain>/`)
 
@@ -48,7 +52,8 @@ KEYS/
   Carries `[Interface] PrivateKey=...` + `[Peer] PublicKey=... Endpoint=...`. The
   node sets `Table=off` and installs its own split-tunnel `ip rule`s (the runner
   does NOT trust the config's `AllowedIPs`/`Table` for routing — it carries only the
-  catch-all `default dev wg0` on table 176). **Secret — 0600, never on git.**
+  catch-all `default dev wg0` on table 176, used only by packets marked `0x76`).
+  **Secret — 0600, never on git.**
 
 - **`*.ovpn`** — an OpenVPN config (fallback when a provider has no WireGuard).
   Carries the remote + inline certs/keys (or references `secrets/` siblings).
@@ -59,10 +64,12 @@ KEYS/
 `scripts/gen-provision-keys.sh` stages each role's USB into `keys-out/` (the
 build-side mirror of the KEYS partition). The VPN configs land at
 `keys-out/vpn/<domain>/` exactly mirroring `KEYS/vpn/<domain>/`, copied from
-`--keys-src` (never generated). `build-all-roles.sh` then writes them onto each
-role's `keys-<role>` folder next to the ISO. Because the configs are secrets, the
-`keys-out/` tree is `.gitignore`d (see `keys-out/vpn/README.md`); only the
-`.gitkeep` placeholder tree under `keys-template/vpn/` is tracked.
+`--vpn-src DIR` (never generated). `--vpn-domain` (else `CLUSTER_DOMAIN`) names the
+domain. `build-all-roles.sh` calls `gen-provision-keys.sh` once per role, writing
+`keys-<role>` folders, but passes no `--vpn-src`; set `VPN_SRC` (and `VPN_DOMAIN`)
+in the environment to stage configs that way. Because the configs are secrets, the
+`keys-out/` tree is `.gitignore`d; only the `.gitkeep` placeholder tree under
+`keys-template/vpn/` is tracked.
 
 ## Fail-closed posture
 
@@ -71,7 +78,7 @@ role's `keys-<role>` folder next to the ISO. Because the configs are secrets, th
   (default-off optional service). Public flows then use the existing Squid
   egress-proxy (v1 keeps akkoma/tuwunel HTTP there); coturn UDP simply egresses
   direct until a config is assigned.
-- When the service IS active, the split-tunnel kill-switch (PR2) makes a
+- When the service IS active, the split-tunnel kill-switch (`hugmesh-vpn-runner`) makes a
   `wg0`-down state **fail closed** for the VPN catch-all (table 176 has only
   `default dev wg0` + a blackhole guard) — a VPN outage takes the *public* egress
   offline rather than leaking the node's real WAN IP. Tailnet/cluster traffic is

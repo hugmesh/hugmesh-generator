@@ -3,8 +3,9 @@
 This folder carries the single update token the go-live wizard's thin DDNS
 driver uses (`hugmesh-go-live plan --provider duckdns`, see
 `docs/GO-LIVE-WIZARD.md`). It is **read-if-present**: absent => nothing consults
-it. The wizard's `plan`/`commit` writes the token here itself (mode 0600) — you
-normally never hand-edit this folder.
+it. `hugmesh-go-live plan --token-file FILE` stores the token (mode 0600) at
+`/etc/hugmesh/keys/ddns/token` on the node (`--keys-dir` changes the base). It
+stores nothing unless you pass `--token-file`.
 
 ## What goes here
 
@@ -15,8 +16,10 @@ picked with `--ddns-service`:
 2. **Cloudflare** — a zone-scoped API token (Zone.DNS Edit on the ONE zone)
    from the dashboard's API Tokens page.
 
-The emitted updater script (`out/go-live/ddns-update.sh`) reads this file at
-RUNTIME — the token is never baked into the script, argv, or cron mail.
+The emitted updater script (`ddns-update.sh`, in the plan's `--out-dir`, default
+`/var/lib/hugmesh/go-live/out`) reads this file at RUNTIME — the token is never
+baked into the script, argv, or cron mail. It also needs `--ddns-subdomain`; the
+updater refuses to run without one.
 
 ## Files
 

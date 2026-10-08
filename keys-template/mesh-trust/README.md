@@ -34,7 +34,8 @@ base's detached signature against **THIS staged key** — **never** against any
 `publicKey` the base envelope advertises.
 
 - **No trust-on-first-use.** A foreign mesh with **no entry here** has no pinned key,
-  so the gate **fails closed** — an unknown mesh is never admitted.
+  so the gate **fails closed** — an unknown mesh is never admitted. A mesh that is
+  unknown, disabled or revoked in `registry.json` is refused too.
 - **Admitting a new foreign mesh is a deliberate act:** add its `registry.json`
   entry (pinned digest + minGeneration) **and** stage its public half here
   out-of-band. Two independent additions, both intentional.
@@ -44,7 +45,7 @@ base's detached signature against **THIS staged key** — **never** against any
 
 ## NEVER commit a real key
 
-Real key files are **git-ignored** (see the `keys-template/mesh-trust/**` rule in
-`.gitignore`). Only the `README.md` and the `*.example` placeholder are committed.
-`scripts/secret-scan.sh` would catch a private key, but the hard rule stands:
+Real key files are **git-ignored** (the
+`keys-template/mesh-trust/*/foreign-provenance-pub.ed25519` rule in `.gitignore`). Only the `README.md` and the `*.example` placeholder are committed.
+`scripts/secret-scan.sh` flags PEM and OpenSSH private-key headers only, so the hard rule stands:
 **this store is pubkeys-only and out-of-band — never place a private key here.**

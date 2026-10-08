@@ -1,10 +1,12 @@
 # KEYS/vault — cluster application secrets
 
-This directory carries the **cluster application secrets** (Casdoor,
-ClickHouse, Uptrace) onto the KEYS stick so a device can come up even when no
-HashiCorp Vault server is reachable. It is produced by
-`scripts/gen-cluster-secrets.sh` and dropped here (or generated straight onto
-the stick by `scripts/make-keys-usb.sh`).
+This directory carries the **cluster application secrets** (Casdoor, the
+databases, the BFFs, Cassandra, Harbor, ClickHouse, Uptrace and more) onto the
+KEYS stick so a device can come up even when no HashiCorp Vault server is
+reachable. It is produced by `scripts/gen-cluster-secrets.sh` (which writes
+`keys-out/vault/`) and dropped here. `scripts/make-keys-usb.sh` copies a
+`keys-out` directory, `vault/` included, onto the stick; it does not generate
+secrets.
 
 ## Bundle layout
 
@@ -12,7 +14,8 @@ the stick by `scripts/make-keys-usb.sh`).
 KEYS/vault/
 ├── secrets.json   the materialized k8s Secrets (namespace -> secretName -> key -> value)
 ├── token          a Vault token (or AppRole secret-id) for later online sync
-└── unseal-key     the Shamir unseal key for the persistent Vault (auto-unseal)
+└── unseal-key     the Shamir unseal key for the persistent Vault (auto-unseal;
+                   you write it after `vault operator init`, the script does not)
 ```
 
 - **`secrets.json`** is the *offline* path: it already holds the exact k8s
@@ -20,7 +23,9 @@ KEYS/vault/
   them directly with no Vault. See `secrets.example.json` for the (redacted)
   shape.
 - **`token`** lets a node that *does* have network reach Vault and reconcile via
-  the External Secrets Operator. Treat it as highly sensitive. `keys-provision`
+  the External Secrets Operator. Treat it as highly sensitive. Without
+  `VAULT_TOKEN` in the environment, `gen-cluster-secrets.sh` writes a
+  `PLACEHOLDER-<hex>` string here. `keys-provision`
   also materializes it into the `vault/vault-bootstrap` Secret the
   `vault-pki-init` Job authenticates with.
 - **`unseal-key`** is the Shamir unseal key for the **persistent** Vault
@@ -73,21 +78,30 @@ the LUKS-encrypted PVC and the sidecar re-unseals it from `vault/vault-unseal`.
 
 ## Provisioning order: Vault first, USB second
 
-1. **Vault (online, preferred).** If the cluster can reach `VAULT_ADDR`, the
+1. **Vault (online, preferred).** If the cluster can reach Vault, the
    External Secrets Operator's `ClusterSecretStore` "hugmesh-vault"
-   (provider `vault`, KV v2, mount `secret`, token auth from the k8s Secret
-   `vault-token` in the `external-secrets` namespace) reads
-   `secret/<brand>/{casdoor,clickhouse,uptrace}` and materializes the k8s
-   Secrets below. The `token` file here seeds that `vault-token` Secret.
+   (provider `vault`, server `https://vault.vault.svc.cluster.local:8200`, KV v2,
+   mount `secret`, token auth from the k8s Secret `vault-token` in the
+   `external-secrets` namespace) reads `secret/<brand>/...` and materializes the
+   k8s Secrets. The `token` file here seeds that `vault-token` Secret when the
+   `.vault` block (or the baked `vault.conf`) names a Vault address.
 2. **USB (offline, fallback).** With no Vault reachable, provisioning consumes
-   `secrets.json` and creates the same k8s Secrets directly. The result is
-   byte-for-byte the Secrets ESO would have produced, so workloads need no
-   change either way.
+   `secrets.json` and creates the same k8s Secrets directly, so workloads need no change either
+   way. The image-pull Secrets (`harbor-registry`, `hugmesh-registry-pull`,
+   `image-builder-registry`) cannot come from the bundle: the Harbor robot
+   accounts behind them are minted in-cluster. `OFFLINE_UNDELIVERABLE` in
+   `tests/scripts/eso_seed_contract.py` lists them.
 
 In both cases the workload manifests keep their existing `secretKeyRef` usage
 unchanged — only the source of the Secret differs.
 
 ## What gets created (FIXED names/keys — do not rename)
+
+The table is an excerpt. The bundle also carries the database, BFF, Cassandra,
+route-access, Harbor, games, forum, tube and other Secrets, in the namespaces
+`<brand>-pki`, `<brand>-backend`, `<brand>-frontend`, `<brand>-games`,
+`<brand>-forum`, `<brand>-tube` and `observability`. `scripts/gen-cluster-secrets.sh`
+is the full list.
 
 | Namespace            | Secret           | Keys                          | Sourced from Vault                              |
 |----------------------|------------------|-------------------------------|-------------------------------------------------|
@@ -113,16 +127,20 @@ knob (`protonmail` default | `gmail` | `outlook` | `smtp` | `none`).
 brand slug). Vault stores keys in `snake_case`; the materialized k8s Secrets use
 the `camelCase`/`kebab-case` keys above — the generator handles the mapping.
 
-The full Vault contract (superset of what the bundle materializes):
+The Vault contract, as an excerpt (every path `gen-cluster-secrets.sh` writes is
+listed after it):
 
 ```
 secret/<brand>/casdoor    : google_client_id, google_client_secret,
                             github_client_id, github_client_secret,
                             discord_client_id, discord_client_secret,
-                            client_id, client_secret, admin_password
+                            client_id, client_secret, admin_password (hash),
+                            admin_password_plain, db_password_plain
 secret/<brand>/casdoor-apps : one key per Casdoor OAuth2 application = that app's
                             client_secret (pki-gateway, be-gateway, fe-gateway,
-                            api, admin-bff, matrix, mastodon, fragment-sync).
+                            api, admin-bff, user-bff, matrix, mastodon,
+                            fragment-sync, signup-gate, harbor, headscale), plus
+                            the signup-gate-webhook shared secret.
                             fragment-sync = the app-fragment-sync machine account
                             the remote-fragment sync sidecar uses (client_credentials
                             -> SERVICE JWT for the federation manifest/bundles).
@@ -137,12 +155,20 @@ secret/<brand>/mail       : provider, host, port, tls, user, password, from,
                             dkim_key  (OPTIONAL — empty user/password = disabled)
 ```
 
+The script also writes: `casdoor-superadmin`, `casdoor-games`, `federation-db`,
+`admin-bff-db`, `admin-bff-mfa`, `user-bff-custody-key`, `user-bff-hs-token`,
+`bff-internal-token`, `mod-bff-db`, `user-bff-db`, `forum-bff-db`, `wiki-bff-db`,
+`mesh-bff-db`, `character-forge-bff-db`, `tube`, `forum`, `forum-db`, `headwind`,
+`akkoma`, `route-access-db`, `cassandra-admin`, `cassandra-app-creds`, `harbor`
+and `velero` (managed backups, optional). It does not write `cloudflared`.
+
 The `cloudflared` entry is the **PROD-only** go-live edge credential. It is
 **read-if-present**: the `cloudflared-tunnel-token` ExternalSecret
 (`manifests/cloudflared`) materializes it into the `cloudflared` Deployment's
 `TUNNEL_TOKEN`. Absent => the tunnel stays down harmlessly. In **ENV=test**
 images the cloudflared app is pruned at build time, so this key is never read.
-Put the raw token in `KEYS/cloudflared/tunnel-token` (see that folder's README).
+No script copies `KEYS/cloudflared/tunnel-token` into Vault; store the token at
+this path yourself (see that folder's README).
 
 ## Regenerating
 
