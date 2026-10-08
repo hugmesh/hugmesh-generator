@@ -243,7 +243,7 @@ DOCKER_RUN := docker run --rm --privileged \
   $(CA_DOCKER_MOUNTS) $(CA_DOCKER_ENV) $(IMAGE)
 
 # ensure-image — auto-build the builder image if it is missing.
-ensure-image:
+ensure-image: ## auto-build the builder image if it is missing
 	@docker image inspect $(IMAGE) >/dev/null 2>&1 \
 	  || { echo "==> builder image '$(IMAGE)' missing — building it (first run is LONG)"; $(MAKE) docker-image; }
 
@@ -1971,7 +1971,7 @@ STACK_M2_FLAGS    = $(if $(wildcard $(STACK_M2_ENV)),--env-file $(STACK_M2_ENV) 
 # This target re-derives the truth and SELF-HEALS by re-running the bootstrap, which
 # is idempotent and skips every already-cached artifact (seconds, not a rebuild).
 .PHONY: stack-m2-check
-stack-m2-check:
+stack-m2-check: ## verify the private maven registry container is live and self-heal it
 	@[ -f $(STACK_M2_ENV) ] || exit 0
 	@live=$$(docker inspect -f '{{.State.Running}}' $(M2_REGISTRY_NAME) 2>/dev/null || echo false); \
 	 ip=$$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $(M2_REGISTRY_NAME) 2>/dev/null || true); \
@@ -2024,7 +2024,7 @@ stack-clone: ## clone/update all hugmesh repos into ./.stack-src (idempotent; ST
 # Rails 7.1 refuses to boot without them) or EMAIL_DOMAIN_ALLOWLIST (required
 # by seed-e2e.sh's @e2e.local personas). The script also self-heals an
 # existing file: only missing/empty keys are generated, nothing is clobbered.
-stack-mastodon-env:
+stack-mastodon-env: ## generate or self-heal the Mastodon env file (idempotent; never clobbers set keys)
 	@bash tests/stack/gen-mastodon-env.sh
 
 stack-m2-bootstrap: ## COLD-BUILD prereq: build the private systems.hugmesh maven artifacts FROM SOURCE + serve them from a local registry container
