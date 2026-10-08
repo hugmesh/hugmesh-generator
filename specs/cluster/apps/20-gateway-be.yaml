@@ -119,6 +119,12 @@ spec:
           - id: headscale-forward
             host: scale.hugmesh.net
             uri: http://hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local:8080
+            # Relay with the ORIGINAL Host. Spring Cloud Gateway otherwise sends the
+            # upstream URI's host (the pki gateway Service DNS name), so the pki
+            # gateway's own `headscale` route (Host=scale.<domain>, apps/20-gateway-pki)
+            # and its headscale host gate can never match relayed traffic.
+            filters:
+              - PreserveHostHeader
           # --- Mastodon (mastodon.hugmesh.net) — specific paths first ---
           # ⚠️ REPOINTED to the akkoma-proxy mTLS sidecar (:4443, https) — the
           # homeservers are network-isolated (manifests/networkpolicy/homeserver-

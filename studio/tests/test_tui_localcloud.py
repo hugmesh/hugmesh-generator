@@ -110,6 +110,24 @@ def test_a_repeat_gate_pass_never_duplicates_the_imported_rows():
     assert sorted(names) == ["alice", "bob", "superadmin"]
 
 
+def test_the_import_replaces_an_earlier_flows_accounts():
+    """#707: accounts an earlier flow of the session left on cfg.users are not part
+    of the saved mesh. Before, they stayed next to the imported ones."""
+    from hugmesh_studio.core.config import User
+    j = _at_gate()
+    j.cfg.users = [User(username="dave", domain="x.example", roles=["user"])]
+    j.feed("y")
+    assert sorted(u.username for u in j.cfg.users) == ["alice", "bob", "superadmin"]
+
+
+def test_a_mesh_with_no_accounts_leaves_none():
+    from hugmesh_studio.core.config import User
+    j = journey.Journey(".")
+    j.cfg.users = [User(username="dave", domain="x.example", roles=["user"])]
+    lc.apply_gate(j, "mesh.example.org", [])
+    assert j.cfg.users == [] and j.cfg.configure_users is False
+
+
 def test_consent_is_asked_afresh_on_every_entry():
     j = _at_gate()
     j.feed("y")
