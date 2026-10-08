@@ -1304,10 +1304,10 @@ fi
 EDGE_AI_WANT=false
 ${EDGE_AI} && [ "${WANT_EDGE_AI}" != "false" ] && EDGE_AI_WANT=true
 [ "${WANT_EDGE_AI}" = "true" ] && EDGE_AI_WANT=true
-if ${EDGE_AI_WANT} && ${ROLE_CLIENT}; then
-    warn "--with-edge-ai on a CLIENT/standalone role has no effect (no cluster tree); the edge-ai service is a k8s NODE service."
-    EDGE_AI_WANT=false
-fi
+# NOTE (hugmesh-generator#615): the CLIENT refusal for this service is NOT here. It
+# used to sit at this line and read ROLE_CLIENT's early `false` default for every
+# role, so it never fired. It lives after the STANDALONE fold, with the tor drop
+# ("Cluster-only optional services: CLIENT roles never carry them").
 if ${EDGE_AI_WANT}; then
     case " ${OPTIONAL_SERVICES} " in
         *" edge-ai "*) ;;
@@ -1336,10 +1336,10 @@ fi
 # CLIENT/standalone desktop is not a cluster member, so it is a no-op there (the
 # gate prunes the slug anyway when the cluster tree is absent).
 WANT_CHARACTER_STUDIO="${WANT_CHARACTER_STUDIO:-}"
-if [ "${WANT_CHARACTER_STUDIO}" = "true" ] && ${ROLE_CLIENT}; then
-    warn "--with-character-studio on a CLIENT/standalone role has no effect (no cluster tree); Character Studio is a frontend cluster service."
-    WANT_CHARACTER_STUDIO=false
-fi
+# NOTE (hugmesh-generator#615): the CLIENT refusal for this service is NOT here. It
+# used to sit at this line and read ROLE_CLIENT's early `false` default for every
+# role, so it never fired. It lives after the STANDALONE fold, with the tor drop
+# ("Cluster-only optional services: CLIENT roles never carry them").
 if [ "${WANT_CHARACTER_STUDIO}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
         *" character-studio "*) ;;
@@ -1352,10 +1352,10 @@ fi
 # CLIENT/standalone desktop is not a cluster member, so it is a no-op there (the
 # gate prunes the slug anyway when the cluster tree is absent).
 WANT_CHARACTER_FORGE="${WANT_CHARACTER_FORGE:-}"
-if [ "${WANT_CHARACTER_FORGE}" = "true" ] && ${ROLE_CLIENT}; then
-    warn "--with-character-forge on a CLIENT/standalone role has no effect (no cluster tree); Character Forge is a cluster service."
-    WANT_CHARACTER_FORGE=false
-fi
+# NOTE (hugmesh-generator#615): the CLIENT refusal for this service is NOT here. It
+# used to sit at this line and read ROLE_CLIENT's early `false` default for every
+# role, so it never fired. It lives after the STANDALONE fold, with the tor drop
+# ("Cluster-only optional services: CLIENT roles never carry them").
 if [ "${WANT_CHARACTER_FORGE}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
         *" character-forge "*) ;;
@@ -1391,10 +1391,10 @@ fi
 # not a cluster member, so it is a no-op there (the gate prunes the slug anyway when
 # the cluster tree is absent).
 WANT_EDGE_AI_TTS="${WANT_EDGE_AI_TTS:-}"
-if [ "${WANT_EDGE_AI_TTS}" = "true" ] && ${ROLE_CLIENT}; then
-    warn "--with-edge-ai-tts on a CLIENT/standalone role has no effect (no cluster tree); edge-ai-tts is a cluster inference service."
-    WANT_EDGE_AI_TTS=false
-fi
+# NOTE (hugmesh-generator#615): the CLIENT refusal for this service is NOT here. It
+# used to sit at this line and read ROLE_CLIENT's early `false` default for every
+# role, so it never fired. It lives after the STANDALONE fold, with the tor drop
+# ("Cluster-only optional services: CLIENT roles never carry them").
 if [ "${WANT_EDGE_AI_TTS}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
         *" edge-ai-tts "*) ;;
@@ -1766,6 +1766,26 @@ if ${ROLE_CLIENT} && _opt_selected tor; then
     OPTIONAL_SERVICES="${_tor_kept# }"
     unset _tor_kept _tor_s
 fi
+
+# ── Cluster-only optional services: CLIENT roles never carry them (#615) ──────────
+# edge-ai, character-studio, character-forge and edge-ai-tts are k8s NODE services
+# (a cluster tree to bake into); a CLIENT / standalone / unaffiliated desktop has no
+# cluster tree. Same shape as the tor drop above and for the same reason: the folds
+# above run BEFORE the role case, and the refusals that used to sit beside them read
+# ROLE_CLIENT's early `false` default, so they never fired -- the user was never told
+# the flag did nothing, and the slug rode in OPTIONAL_SERVICES to every later reader.
+# ROLE_CLIENT is FINAL here, so the drop (however the slug arrived: --with-*,
+# --optional-services or brand.conf) is warned and applied once, for every role.
+for _cs_slug in edge-ai character-studio character-forge edge-ai-tts; do
+    if ${ROLE_CLIENT} && _opt_selected "${_cs_slug}"; then
+        warn "${_cs_slug} selected on CLIENT role '${ROLE}' — dropped: it is a k8s NODE service (no cluster tree on a desktop); nothing ${_cs_slug}-related is baked."
+        _cs_kept=""
+        for _cs_s in ${OPTIONAL_SERVICES}; do [ "${_cs_s}" = "${_cs_slug}" ] || _cs_kept="${_cs_kept} ${_cs_s}"; done
+        OPTIONAL_SERVICES="${_cs_kept# }"
+        unset _cs_kept _cs_s
+    fi
+done
+unset _cs_slug
 
 # ── Boot-chain identifiers (volids / CDLABEL / UKI name / installer cmdline key /
 # partition labels / Secure-Boot cert identity + enrollment-cert dirs).
