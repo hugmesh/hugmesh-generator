@@ -550,7 +550,7 @@ Every refusal renders as an inline label, never a modal. This page's own **Next*
 
 ## Building and finishing
 
-These are the last seven screens. The first two are about accounts, the next two about what gets baked into each image, and the last three are the review, the launch gate, and the build itself.
+These are the last eight screens. The first two are about accounts, the next three about what gets baked into each image (system identity, secrets store, home folder), and the last three are the review, the launch gate, and the build itself.
 
 ### Users — generated accounts, or your own
 
