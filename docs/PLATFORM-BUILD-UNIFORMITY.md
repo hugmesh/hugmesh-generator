@@ -49,6 +49,9 @@ and does not guess.
 >   `--jobs=${JOBS}`; x86 still sets no `EMERGE_LOG_DIR`.
 > * **Platforms:** ten builders now, not eight (see the addendum).
 
+---
+
+## 0. The headline measurement
 
 One session, one mesh, both images, same moment:
 `out/sessions/20260729-233913-719d4e/`. The snapshot was taken at
