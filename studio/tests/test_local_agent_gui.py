@@ -495,6 +495,23 @@ def test_the_copy_button_shows_the_long_form_that_makes_the_copy(wiz, src_tree):
     assert card.copied_text == shown
 
 
+def test_a_new_app_list_updates_the_status_without_a_recheck(wiz, src_tree):
+    """The app list is re-read when the source choice changes (the e2e driver does this
+    after the first look at the machine has already finished). The status and Start
+    must follow it: a list that arrives after the look finished once left the card
+    saying "No app folder is known yet" beside a chosen app."""
+    ctl, card, _p, _l = _to_bringup(wiz)              # no source chosen yet
+    card.wait_idle()
+    _settle()
+    ctl.src_existing.setChecked(True)
+    ctl.src_dir.setText(src_tree)
+    card.refresh_apps()
+    _settle()
+    assert card.app_box.currentText() in (APP, "hugmesh-admin-ui")   # first real repository
+    assert "No app folder" not in card.status.text(), card.status.text()
+    assert card.start_btn.isEnabled(), card.status.text()
+
+
 def test_the_workers_never_read_a_widget_or_the_page(wiz, src_tree):
     """Qt widgets are GUI-thread only (a thread mistake aborts the Studio). The page's
     context callable, the selection and the app list are all read at the press, on the

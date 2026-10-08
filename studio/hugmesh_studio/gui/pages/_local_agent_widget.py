@@ -386,6 +386,10 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
             self.app_box.addItem("(no app folders yet)", "")
         if ctx.lane and self.lane_box.findData(ctx.lane) >= 0 and not self._first_probe_done:
             self.set_lane(ctx.lane)
+        # The list changed with its signals blocked, so nothing else would redraw the
+        # status and Start: a list read after the machine look finished left them
+        # describing the old list ("No app folder is known yet") beside a chosen app.
+        self._sync()
 
     # ── probing ──────────────────────────────────────────────────────────────────
     def showEvent(self, event) -> None:            # noqa: N802
