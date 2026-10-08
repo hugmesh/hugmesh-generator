@@ -5,8 +5,9 @@ accepts. It is a standalone **post-build operator step**. The builders do not ca
 it. It is **not a build channel, not a matrix axis, and not a matrix row**
 ([`BUILD-MATRIX.md`](BUILD-MATRIX.md)). The builder's artifact is unchanged. The tool
 only re-packages an image you already have. The **deploy** half (upload, import and
-register against a provider) is the separate `hugmesh-cloud-deploy` driver, which
-consumes these artifacts. This page covers packaging only.
+register against a provider) is the separate `hugmesh-cloud-deploy` driver
+(`specs/usr/sbin/hugmesh-cloud-deploy`, see [`CLOUD-DEPLOY.md`](CLOUD-DEPLOY.md)),
+which consumes these artifacts. This page covers packaging only.
 
 ## Usage
 
