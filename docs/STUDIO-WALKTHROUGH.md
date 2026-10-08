@@ -610,7 +610,7 @@ The TUI has the same step and refuses the same inputs with the same sentence. It
 
 ### Home folder, encryption & login
 
-Always shown. Four groups, three of them conditional.
+Always shown. The window title reads "Home Folder, Encryption, and Login". Four groups, three of them conditional.
 
 **Home provisioning** — home mode (`create` a fresh home, `adopt` one already on the target, `archive` to bake a tarball into the image, `restore` from a backup; the page explains each), home device, home backup, per-user eCryptfs home on top of the LUKS root, seed stack code, and the archive/seed extras. **Copy This Machine's Home Folder…** is a preset: it selects `archive` mode and points you at the tarball and package-list fields. It copies nothing and runs nothing.
 

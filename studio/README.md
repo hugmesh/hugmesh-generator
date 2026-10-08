@@ -73,6 +73,7 @@ mesh node** from the system tray.
 ```sh
 # Linux, from the root of a checkout (Gentoo can build natively; others need Docker)
 cd studio
+python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt        # PySide6 (or use an existing PyQt6)
 ./hugmesh-studio
 
