@@ -147,6 +147,7 @@ if [ -f "${PKG}" ] && [ -f "${LOCK}" ]; then
   NODE_OUT="$(E2E_DIR="${E2E_DIR}" BROWSERS_PATH="${BROWSERS_PATH}" E2E_BROWSERS="${E2E_BROWSERS}" node - 2>"${NODE_ERR}" <<'JS'
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const dir = process.env.E2E_DIR;
 const browsersPath = process.env.BROWSERS_PATH;
@@ -229,6 +230,36 @@ try {
   problem(`playwright-core does not resolve from ${dir} (${e.code || e.message}) — cannot even read which browser build is needed`);
 }
 const browserSummary = [];
+
+// First file called `target` under root (symlinks followed, unreadable entries skipped).
+const findFile = (root, target) => {
+  const stack = [root];
+  while (stack.length) {
+    const cur = stack.pop();
+    let entries = [];
+    try { entries = fs.readdirSync(cur, { withFileTypes: true }); } catch (e) { continue; }
+    for (const ent of entries) {
+      const p = path.join(cur, ent.name);
+      let st;
+      try { st = fs.statSync(p); } catch (e) { continue; }
+      if (st.isDirectory()) stack.push(p);
+      else if (st.isFile() && ent.name === target) return p;
+    }
+  }
+  return null;
+};
+// Run `<binary> --version`. null when it runs (or there is no such file to run);
+// {exe, why} when the binary is there and does not execute. Fails CLOSED on a
+// spawn error, a timeout, a signal and a non-zero exit.
+const notRunnable = (bdir, target) => {
+  const exe = findFile(bdir, target);
+  if (!exe) return null;
+  const r = spawnSync(exe, ['--version'], { timeout: 20000, encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] });
+  if (r.error) return { exe, why: `could not be spawned (${r.error.code || r.error.message})` };
+  if (r.signal) return { exe, why: `was killed by ${r.signal}` };
+  if (r.status !== 0) return { exe, why: `exited ${r.status}${r.stderr ? ': ' + String(r.stderr).trim().split('\n')[0].slice(0, 200) : ''}` };
+  return null;
+};
 if (pwCoreDir) {
   let descriptors = [];
   try {
@@ -296,7 +327,19 @@ if (pwCoreDir) {
       } else if (!hasExecutable(bdir)) {
         problem(`${name} r${d.revision} is broken: ${bdir} carries INSTALLATION_COMPLETE but contains NO executable file — the binary is gone (partial copy or delete of the cache; the marker is written last, so this is not an interrupted download); reinstall`);
       } else {
-        browserSummary.push(`${name} r${d.revision}`);
+        // The last rung: an executable bit is not a runnable binary. On
+        // node:24-alpine (musl) Playwright downloads a GLIBC ubuntu24.04 fallback
+        // build; every file check above passes, and the kernel then refuses the
+        // ELF because its interpreter (/lib64/ld-linux-x86-64.so.2) is absent, which
+        // spawn reports as a bare ENOENT. So actually RUN the binary. Only the
+        // layouts this probe knows (chrome / chrome-headless-shell on Linux) are
+        // run; an unknown layout is not guessed at (that can only skip this rung).
+        const bad = notRunnable(bdir, name === 'chromium' ? 'chrome' : 'chrome-headless-shell');
+        if (bad) {
+          problem(`${name} r${d.revision} cannot execute: ${bad.exe} is on disk with its exec bit but \`--version\` ${bad.why} — the wrong libc or platform (a glibc build on musl/alpine reports spawn ENOENT), or missing shared libraries; reinstall a build that runs on this host`);
+        } else {
+          browserSummary.push(`${name} r${d.revision}`);
+        }
       }
     }
   }
