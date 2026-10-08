@@ -583,15 +583,8 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   remote + two-SA RBAC), desktop app governance, coturn TURN relay, and the
   gateway MFA privileged floor are all on `main` behind documented default-off
   flags. See [Current State](#current-state) for each flag and its caveats.
-- **🚧 / 🔭 Roadmap** — the kind-cluster SSO e2e (harness shipped; two specs
-  green, most blockers open), SELinux node-policy modules whose load defects are
-  fixed but whose enforcing flip waits on an AVC workout, the live MFA operator
-  flip, desktop-governance go-live (three dark flags, no dial rows, no image ever
-  built), the node-side headscale ACL reload, the DB-hardening flips, a
-  group-call SFU, the desktop-governance SSO greeter/PAM token producer,
-  notifications external channels, and the live optional-services ApplicationSet
-  cut-over. See [Roadmap](#roadmap) and the Roadmap section of
-  [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+- **🚧 / 🔭 Roadmap** — everything not done is listed once, in [Roadmap](#roadmap)
+  and in the Roadmap section of [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Images
 

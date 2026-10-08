@@ -464,9 +464,7 @@ saw the cluster's 404s (hugmesh-generator#366).
 Operator decision 40 (hugmesh-generator#347) aligned compose onto the cluster:
 **all five, both lanes identical**. Two of the five, the `/bff/register/*`
 pair, first had no user-bff handler and 404'd on BOTH lanes. That gap
-closed on 2026-09-18 (hugmesh/hugmesh-user-bff-api#20, commit `dc34c8b`). This
-table was stale about it until this edit (flagged on hugmesh-generator#347
-2026-09-18T07:21Z):
+closed on 2026-09-18 (hugmesh/hugmesh-user-bff-api#20, commit `dc34c8b`):
 
 | path | before (compose) | after (compose + cluster) | served? |
 |---|---|---|---|
