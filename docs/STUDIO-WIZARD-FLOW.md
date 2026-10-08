@@ -1,12 +1,14 @@
 # Studio image-build wizard — the 4-choice → 7-step flow (v1)
 
 > **Status: ✅ shipped in the Studio GUI.** This is the canonical reference for the
-> flow-clarity redesign: the first screen offers **exactly four** clearly-distinct
-> choices, and each choice walks a clear, purpose-labelled sequence of steps. The
-> **emission is unchanged** — `cfg.mode` stays `{standalone, cloud, mesh}`, so
-> `to_cli_args()` / `materialize()` / the builder argv the build-matrix guards are
-> byte-identical for equivalent selections. This is a UI clarity pass, not a build
-> change.
+> flow-clarity redesign: the first screen offered **four** clearly-distinct choices, and
+> each choice walks a clear, purpose-labelled sequence of steps. The mode menu has since
+> grown to **ten cards**: the four below plus six tool cards, which
+> [STUDIO-WALKTHROUGH.md](STUDIO-WALKTHROUGH.md) covers. The ncurses menu and the CLI
+> still mirror the four. The **emission is unchanged** — `cfg.mode` stays
+> `{standalone, cloud, mesh}`, so `to_cli_args()` / `materialize()` / the builder argv the
+> build-matrix guards are byte-identical for equivalent selections. This is a UI clarity
+> pass, not a build change.
 >
 > State key: **✅ shipped** · **🚧 in-flight** · **🔭 planned / deferred**.
 
@@ -46,9 +48,9 @@ Reached only via the Welcome card; its own Next continues into the mode menu.
 
 ## STEP 1 — What do you want to build? (the four choices)
 
-[`mode.py`](../studio/hugmesh_studio/gui/pages/mode.py) presents **exactly four**
-first-screen choices. Three build an image and commit `cfg.mode`; the fourth builds no
-image and runs a node locally.
+[`mode.py`](../studio/hugmesh_studio/gui/pages/mode.py) presents **ten** cards. Four are the
+original choices below: three build an image and commit `cfg.mode`; the fourth builds no
+image and runs a mesh locally.
 
 | First-screen choice | `cfg.mode` | What it is |
 | --- | --- | --- |
@@ -57,21 +59,30 @@ image and runs a node locally.
 | **Mesh desktop client** | `cloud` | A branded desktop that JOINS an existing mesh (tailnet + SSO); loads an admin key-zip / config link. |
 | **Standalone Gentoo desktop** | `standalone` | A personal hardened LUKS/SELinux desktop — or a plain UNAFFILIATED Gentoo desktop with zero HugMesh branding. No mesh, no SSO. |
 
+The other six cards are tools. None of them commits a `cfg.mode`: **Create nodes for local
+cloud** (a gate that rejoins the image flow as an abbreviated mesh wizard), **Run e2e
+tests**, **Mesh emulation**, **Cloud deploy**, **MDM phone** and **MDM Quest headset**.
+
 **The Local Docker mesh choice is a first-class, functional choice** — not a stub. It
-builds no image, so Next flows into the registered terminal
-[`gui/pages/localmesh.py`](../studio/hugmesh_studio/gui/pages/localmesh.py)
-`LocalMeshPage` (the old inline **"Configure & run local mesh…"** popout launcher is
-gone; `LocalMeshDialog` survives only as a standalone-host shim around the same page).
-Because that page ends the branch and its final button starts nothing, the button reads
-**Exit**, not Finish — see `_widgets.label_finish_as_exit`. The page drives
-[`core/local_mesh.py`](../studio/hugmesh_studio/core/local_mesh.py)
-`LocalMeshNode` — a thin subclass of the tray's
-[`core/mesh_node.py`](../studio/hugmesh_studio/core/mesh_node.py) `MeshNode`, so the
-wizard's "run a node here" and the tray's "run a node here" share **one** docker-compose
-lifecycle. The operator supplies a tailnet/headscale auth key (`TS_AUTHKEY`, required),
-an optional node name, and an optional self-hosted headscale login-server URL; the node
-joins the mesh and serves locally. It commits **nothing** to `cfg.mode` and emits nothing
-into any builder argv.
+builds no image. Next flows into
+[`gui/pages/localmesh_choice.py`](../studio/hugmesh_studio/gui/pages/localmesh_choice.py),
+which offers two cards: **Join an existing mesh with a key** (the default) and **Generate a
+new mesh**. Both branches end the path, so their final button reads **Exit**, not Finish —
+see `_widgets.label_finish_as_exit`. The old inline **"Configure & run local mesh…"** popout
+launcher is gone; `LocalMeshDialog` survives only as a standalone-host shim around the same
+[`gui/pages/localmesh.py`](../studio/hugmesh_studio/gui/pages/localmesh.py) `LocalMeshPage`.
+
+- **Join** drives [`core/local_mesh.py`](../studio/hugmesh_studio/core/local_mesh.py)
+  `LocalMeshNode`, a thin subclass of the tray's
+  [`core/mesh_node.py`](../studio/hugmesh_studio/core/mesh_node.py) `MeshNode`. The
+  wizard's "run a node here" and the tray's "run a node here" share **one** docker-compose
+  lifecycle. The operator supplies a tailnet/headscale auth key (`TS_AUTHKEY`, required), an
+  optional node name, and an optional self-hosted headscale login-server URL; the node joins
+  the mesh and serves locally.
+- **Generate** walks nine bring-up steps and mints every credential itself. The steps are
+  listed in the per-path sequences below.
+
+Neither branch commits anything to `cfg.mode` or emits anything into any builder argv.
 
 ---
 
@@ -88,9 +99,9 @@ non-monotonically across a path). The conceptual steps:
 | 2 | Pick the target MACHINE, then the image type / per-node hardware | `role.py` (image paths — **arch-first**: architecture selector → family-grouped searchable device browser (status badges) → the device's derived image-type list → inline board/flavor + the x86 machine-profile preset) · `worklist.py` (mesh: one row per node, with a per-row Encryption column) · `hardware.py` (GPU/Wi-Fi/kernel TUNING + this-machine scan) |
 | 3 | Optional cluster services | the services group on `network.py` (mesh/cloud) |
 | 4 | The domain joined + tailnet/SSO login + first-login registration | `network.py` (cloud) · `users.py` (per-user registration method) |
-| 5 | The Tailscale root domain + the other domains | the Headscale / mesh-networking group on `network.py` · `domains.py` |
-| 6 | Per-domain admins + named users | `domains.py` (default admin) · `users.py` |
-| 7 | Network identity / egress / security + home / encryption / login / packages | `network.py` (standalone) · `system.py` · `home.py` |
+| 5 | The Tailscale root domain + the other domains | the Headscale / mesh-networking group on `network.py` · `domains_choice.py` · `domains.py` · `domain_services.py` (each domain's services) |
+| 6 | Per-domain admins + named users | `domains.py` (default admin) · `users_choice.py` · `users.py` |
+| 7 | Network identity / egress / security + home / encryption / login / packages | `network.py` (standalone) · `system.py` · `vault.py` (mesh) · `home.py` |
 
 ## Per-path physical page sequence (what the user actually clicks through)
 
@@ -101,22 +112,34 @@ collected into `cfg`.
 
 - **Mesh node** (`mesh`) — skips role/hardware (branding is no longer skipped: it
   also hosts the mesh web-login theme):
-  `welcome → mode → idp → worklist → branding → network → keyzip → domains → users → system → home → build`
-- **Local Docker mesh** (side-flow) — terminal wizard page, no image build:
-  `welcome → mode → localmesh` (the `LocalMeshPage` runs the dockerized node in-place;
-  `LocalMeshDialog` only survives as a standalone-host shim around the same page, not
-  the flow's launcher — **Exit** ends the branch here, `isFinalPage()`; the mesh keeps
-  running in Docker after the Studio closes)
-- **Mesh desktop client** (`cloud`) — skips worklist/idp:
-  `welcome → mode → role → hardware → branding → network → keyzip → domains → users → system → home → build`
-- **Standalone Gentoo desktop** (`standalone`) — skips idp/worklist/keyzip/domains/users:
-  `welcome → mode → role → hardware → branding → network → system → home → build`
-  (then `launch → progress`). **The unaffiliated role walks the identical
+  `welcome → mode → idp → worklist → branding → network → keyzip → domains_choice → domains → domain_services → users_choice → users → system → vault → home → build → launch → progress`
+  (`domains` shows only if the Domains choice screen asked for more domains, and `users`
+  only if the Users choice screen asked to name users. `domain_services` shows on every mesh
+  flow, because the mesh's own domain always gets a services page.)
+- **Local Docker mesh** (side-flow) — no image build. `welcome → mode → localmesh_choice`,
+  then either the **join** branch, `localmesh_join`, or the **generate** branch:
+  `localmesh_env → localmesh_domains → localmesh_domain_services → localmesh_source → localmesh_services → localmesh_idp → localmesh_overlay → localmesh_review → localmesh`
+  (`localmesh_overlay` is prod only. The `_LOCALMESH_STEPS` tuple in `gui/wizard.py` is the
+  one place this order is declared; `LocalMeshPage` is last because it is both the
+  bring-up-and-monitor step and the controller that owns every widget on the branch.
+  `LocalMeshDialog` only survives as a standalone-host shim around the same page, not the
+  flow's launcher. **Exit** ends the branch, `isFinalPage()`; the mesh keeps running in
+  Docker after the Studio closes.)
+- **Mesh desktop client** (`cloud`) — skips idp, worklist, the two choice screens and the
+  secrets store:
+  `welcome → mode → role → hardware → branding → network → keyzip → domains → domain_services → users → system → home → build → launch → progress`
+- **Standalone Gentoo desktop** (`standalone`) — skips idp/worklist/keyzip, the whole
+  domains and users group, and the secrets store:
+  `welcome → mode → role → hardware → branding → network → system → home → build → launch → progress`
+  **The unaffiliated role walks the identical
   sequence.** It used to be this same walk *minus* `branding`, because
   `BrandingPage.applies_to` removed the page for that role; the 2026-08-26
   identity/look split put the page back (see below), so there is no longer any
   page-level difference between an unaffiliated and a branded standalone image —
   the difference moved inside the branding screen, to two hidden identity widgets.
+
+Any path may pass through `sessions` between `welcome` and `mode`, if the Welcome page's
+second card was picked.
 
 `ProgressPage` terminates each image path once it lands (WS-REVIEWUI).
 
@@ -145,7 +168,7 @@ becomes applicable again is both reachable and emitted.
 | "Seed stack code" | branded images | `home.py` on an unaffiliated image |
 | Image posture / `--capable` / desktop weight | roles where they genuinely compose | roles whose builder arm already pins them (`role_presets_standalone` / `role_presets_capable`) |
 | Sunshine | tailnet client desktops | standalone mode |
-| "Unaffiliated" | the role ROW | the composable checkbox, in standalone mode only |
+| "Unaffiliated" | the role ROW | the composable checkbox, on the `standalone-unaffiliated` role only (it stays on the other standalone roles, and greys out with a reason in cloud mode) |
 | "Start a local mesh" | the mode menu | the welcome screen |
 
 Two hides are deliberately **not** paired with a clear. `--standalone` and `--capable` on a
@@ -175,12 +198,13 @@ assembled brand dir so the conflict cannot be walked around through a preset.
 
 ## What got clearer in this pass
 
-- The first screen presents **two** cards (was three — see Screen 0); the mode menu it
-  opens presents **four** usable choices; the fourth (Local Docker mesh) is
-  **functional** end-to-end (was previously a crash-on-click dead end — its
+- The first screen presents **two** cards (was three — see Screen 0). The mode menu it
+  opens presents **ten** cards, four of them the original choices; the Local Docker mesh
+  card is **functional** end-to-end (it was a crash-on-click dead end; its
   `LocalMeshConfig`/`LocalMeshDialog` modules now exist and are test-covered).
-- The Welcome subtitle names **all four** paths (dropped the retired "branded cloud
-  image" wording for "mesh desktop client").
+- The Welcome page's **Start building** card names the paths it opens: a mesh node, a local
+  Docker mesh, a desktop image, MDM devices, a cloud publish and the end-to-end test suite.
+  The retired "branded cloud image" wording is now "mesh desktop client".
 - Hard `STEP N` numeric prefixes were dropped from the shared pages' subtitles/hints in
   favour of the descriptive titles they already carried, so the sequence no longer reads
   as `4 → 5/6 → 4/6` when the same page serves different conceptual steps per path.
@@ -193,18 +217,17 @@ assembled brand dir so the conflict cannot be walked around through a preset.
 A GUI-only reorganisation — **emission is byte-identical** (the build-matrix `matrix.tsv`
 + TOTAL are unchanged; the `to_cli_args` golden tests stay green):
 
-- **Machine-first single-image picker** (`role.py`). The user picks the **target machine
-  as a card** (the platform union of `ROLE_CHOICES[mode]` — x86 / Raspberry Pi / La Frite /
-  Orange Pi 5 / Orange Pi Zero 2 / Orange Pi Zero 2W; jetson is mesh-only, so it gets no
-  card here), then the
-  **image type** filtered to what that machine supports, with the board/flavor/desktop
-  knobs inline underneath. The redundant standalone "Platform" combo is **removed** — the
-  card **is** the platform. Chromebook stays an x86 *image type*, not its own card. The
-  reachable `(role, platform)` set is the same catalog, merely pivoted, so `cfg.platform/
-  role/board/flavor` are identical for the same intent.
-- **Machine-profile preset folded onto the x86 card** (out of `hardware.py`). The target
+- **Machine-first single-image picker** (`role.py`). The user picks the **target machine**
+  first. It is an architecture selector over a family-grouped, searchable device browser
+  (see "Arch-first device taxonomy" below), not a row of platform cards as in the first cut.
+  Then comes the **image type**, filtered to what that machine supports, with the
+  board/flavor/desktop knobs inline underneath. The redundant standalone "Platform" combo is
+  **removed**; the device **is** the platform. Chromebook stays an x86 *image type*, not its
+  own device. The reachable `(role, platform)` set is the same catalog, merely pivoted, so
+  `cfg.platform/role/board/flavor` are identical for the same intent.
+- **Machine-profile preset folded onto the x86 machine choice** (out of `hardware.py`). The target
   machine is now defined in **one** place: the profile that seeds GPU/Wi-Fi/kernel
-  defaults lives with the machine card (x86-only — `profiles.json` is all-x86). The
+  defaults lives with the machine choice (x86-only — `profiles.json` is all-x86). The
   Hardware page keeps the GPU/Wi-Fi/Bluetooth/kernel **tuning** and the this-machine scan.
   `hw_profile` is `NON_ARGV` (never emitted); the gpu/wifi/bt it pre-fills are finalised on
   the Hardware page exactly as before, so the argv is unchanged.
