@@ -393,6 +393,16 @@ signing in on brand B's onion. If brand B's own sign-in also fails on its HTTPS 
 `BLOCKED` (the brand's sign-in is broken on that stack), not an onion failure. Its grading is
 pinned offline against a stub gateway (`test_the_live_check_*`); the run itself needs the stack.
 
+**An unproven premise, read before trusting a red.** Brand B's persona signing in at all has
+never been run on this stack: no other scenario signs `e2e-tenant2-user` in anywhere. user-bff
+has **one** login base (`APP_BFF_OIDC_LOGIN_BASE`, `tests/stack/compose.local.yaml`, one Casdoor)
+and that persona lives only in the brand-B Casdoor (`seed-e2e.sh` leg 1b). If that is the whole
+story, the persona cannot sign in on **any** door, brand B's https door included, until a mesh
+gives user-bff a per-tenant login base. The live-check script's row B reports `BLOCKED` for this
+(it tries the https door as a control). The Gherkin scenario has no such control: its sign-in
+step fails with a message that names this before it blames the onion, and the failing run
+attaches a screenshot. Treat a red there as this finding first, an onion finding second.
+
 **The Gherkin lane.** `make stack-e2e-tor-domains` runs `tests/e2e/run.sh --bdd --env docker
 --via onion-domains`: the browser, through Tor, on
 `tests/e2e/features/platform/tor-onion-domains.feature`. The default persona signs in on the

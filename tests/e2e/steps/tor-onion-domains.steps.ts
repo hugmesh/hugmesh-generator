@@ -228,7 +228,27 @@ When('the brand-B persona signs in through the brand-B onion', async ({ world, $
   await dom.page.goto('/login', { timeout: 90_000 });
   // The SAME onboard() every browser scenario uses; its relative goto('/login')
   // resolves against this context's baseURL, i.e. brand B's onion.
-  await onboard(dom.page, DOMAIN_PERSONA, personaPassword(DOMAIN_PERSONA));
+  try {
+    await onboard(dom.page, DOMAIN_PERSONA, personaPassword(DOMAIN_PERSONA));
+  } catch (e) {
+    // A premise that has NEVER been run live (no scenario signs this persona in
+    // anywhere else): user-bff's POST /bff/login talks to ONE Casdoor
+    // (APP_BFF_OIDC_LOGIN_BASE, tests/stack/compose.local.yaml), and brand B's persona
+    // is seeded only into the brand-B Casdoor (seed-e2e.sh leg 1b). If that holds on
+    // this stack, this persona cannot sign in on ANY door, brand B's https door
+    // included, and the failure below is not an onion finding. Say so, so a red here
+    // is read correctly (tests/stack/tor-domains-live-check.sh row B grades the same
+    // thing as BLOCKED by trying the https door as a control).
+    await evidence(dom.page, $testInfo, 'brandb-onion-sign-in-failed');
+    throw new Error(
+      `${DOMAIN_PERSONA} could not sign in on brand B's onion: ${String(e).split('\n')[0]}. `
+      + 'BEFORE blaming the onion, try the same sign-in on brand B\'s https door '
+      + '(tests/stack/tor-domains-live-check.sh row B does, and reports BLOCKED when it '
+      + 'fails too): user-bff has ONE login base (APP_BFF_OIDC_LOGIN_BASE) and this '
+      + 'persona lives only in the brand-B Casdoor, so a mesh without a per-tenant '
+      + 'login base cannot sign it in on any door.',
+    );
+  }
   await evidence(dom.page, $testInfo, 'brandb-onion-signed-in');
 });
 
