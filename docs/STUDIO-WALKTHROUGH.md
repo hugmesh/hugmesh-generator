@@ -1,53 +1,49 @@
 # Studio — the operator's walkthrough
 
-Every page of the HugMesh Image Studio wizard, in the order you meet them, and
-what each one changes.
+Every page of the HugMesh Image Studio wizard, in the order you meet them, and what each
+one changes.
 
-**Read this if** you are standing in front of the Studio for the first time and
-want to know what to click. If you want the flow's *design* — why the pages are
-grouped the way they are, and what parity the other front-ends owe it — read
-[STUDIO-WIZARD-FLOW.md](STUDIO-WIZARD-FLOW.md) instead. If you want to install
+**Read this if** you are standing in front of the Studio for the first time and want to
+know what to click. To learn why the pages are grouped as they are, and what parity the
+other front-ends owe them, read [STUDIO-WIZARD-FLOW.md](STUDIO-WIZARD-FLOW.md). To install
 or run the Studio, read [../studio/README.md](../studio/README.md).
 
 ## The one thing to understand first
 
-**The Studio is not a fixed sequence of screens.** There are twenty-nine pages
-(`WIZARD_PAGE_SLUGS`), and which ones you see depends on what you pick on the build
-menu. One of the twenty-nine, `localmesh`, expands into an eleven-page branch of its
-own. A run that builds a standalone desktop skips nine pages a mesh run walks
-through.
+**The Studio is not a fixed sequence of screens**, whatever the wizard frame suggests.
+There are twenty-nine pages (`WIZARD_PAGE_SLUGS`). Which ones you see depends on what you
+pick on the build menu. One of them, `localmesh`, expands into an eleven-page branch of its
+own. A standalone desktop run skips nine pages that a mesh run walks through.
 
-Two numbers explain the whole shape:
+Two numbers explain the shape:
 
 - **Ten cards** on the build menu.
-- **Three image build modes** — `standalone`, `cloud`, `mesh`. Only these three
-  are ever written to the configuration, and only these three key the skip map.
+- **Three image build modes** — `standalone`, `cloud`, `mesh`. Only these three are ever
+  written to the configuration, and only these three key the skip map.
 
-The other seven cards are side-flows: they raise a transient wizard flag, run
-their own page, and mostly end there without touching the image configuration
-at all. That is why the menu looks like ten choices but the saved config only
-ever records three modes.
+The other seven cards are side-flows. Each raises a transient wizard flag and runs its own
+page. Most end there without touching the image configuration. So the menu looks like ten
+choices, and the saved config records only three modes.
 
-The skip map lives in one place — `MODE_SKIPPED_PAGES` in
-`studio/hugmesh_studio/core/config.py` — and the page order is
-`WIZARD_PAGE_SLUGS` beside it. If this document and that file ever disagree,
-the file is right.
+The skip map lives in one place, `MODE_SKIPPED_PAGES` in
+`studio/hugmesh_studio/core/config.py`. The page order is `WIZARD_PAGE_SLUGS`, beside it.
+If this document and that file disagree, the file is right.
 
 ## Getting in
 
-The Studio is a Qt wizard, but it is not a fixed list of screens. Three screens decide everything that follows: a Welcome screen that routes you, an optional Prior-sessions screen, and the build menu. What you pick on the third one determines which of the remaining twenty-six pages you ever see.
+The Studio is a Qt wizard. Three screens decide everything after them: a Welcome screen that routes you, an optional Prior-sessions screen, and the build menu. Your pick on the build menu decides which of the remaining twenty-six pages you ever see.
 
-The window's **About** button (Qt's Help button, renamed) shows the Studio version and which Qt binding is live, with the licence that binding ships under. It is on the wizard's button row throughout.
+The window's **About** button (Qt's Help button, renamed) shows the Studio version, the Qt binding in use, and the licence that binding ships under. It stays on the wizard's button row throughout.
 
 ### Welcome — "HugMesh Image Studio"
 
-The first screen on every fresh start. It reads a paragraph on what HugMesh is, with a link to the GitHub README's getting-started guide ([`#quick-start`](https://github.com/hugmesh/hugmesh-generator#quick-start)). The link is a real anchor: clicking it hands the URL to your desktop browser. The Studio never fetches it itself.
+The first screen on every fresh start. It has a short paragraph on what HugMesh is, with a link to the GitHub README's getting-started guide ([`#quick-start`](https://github.com/hugmesh/hugmesh-generator#quick-start)). The link is a real anchor: a click hands the URL to your desktop browser. The Studio never fetches it.
 
-Below that is a paragraph about **this machine**, generated from a host probe:
+Below that is a paragraph about **this machine**, built from a host probe:
 
-- If a build backend exists, it says `Build backend: native` (Linux + Gentoo + bash) or `docker`, plus a one-line host summary — OS, WSL version, Gentoo, session type, docker, KVM, root.
-- If neither exists, it says in red that this machine cannot build images yet, and names the fix. Under WSL that fix is Docker Desktop's per-distro WSL Integration checkbox (Settings → Resources → WSL Integration), not a reinstall — and on WSL1, converting the distro to WSL2 first. You can still configure and save an image here and build it elsewhere.
-- Either way, if the generator directory is on a Windows drive **and** this is WSL, or on a network filesystem, a red **SLOW FILESYSTEM** warning appears. Read it. That build does not fail — it stops appearing to move, and you will read it as a hang. The Windows-drive remedy is to put the repo on the Linux filesystem (`git clone … ~/Github/hugmesh-generator`); the network-filesystem remedy is to copy it onto a local disk. The check is made on the filesystem type from `/proc/mounts`, so a symlink from `~/Github` into `/mnt/c` is caught too; only an unreadable mount table falls back to the shape of the path.
+- If a build backend exists, it says `Build backend: native` (Linux + Gentoo + bash) or `docker`, plus a one-line host summary: OS, WSL version, Gentoo, session type, docker, KVM, root.
+- If neither exists, it says in red that this machine cannot build images yet, and names the fix. Under WSL the fix is Docker Desktop's per-distro WSL Integration checkbox (Settings → Resources → WSL Integration), not a reinstall. On WSL1, convert the distro to WSL2 first. You can still configure and save an image here and build it elsewhere.
+- Either way, a red **SLOW FILESYSTEM** warning appears if the generator directory is on a Windows drive **and** this is WSL, or if it is on a network filesystem. Read it. That build does not fail. It stops appearing to move, and you will take it for a hang. If the repo is on a Windows drive, put it on the Linux filesystem (`git clone … ~/Github/hugmesh-generator`). If it is on a network filesystem, copy it onto a local disk. The check uses the filesystem type from `/proc/mounts`, so a symlink from `~/Github` into `/mnt/c` is caught too. Only an unreadable mount table falls back to the shape of the path.
 
 Then two cards. Pick one:
 
@@ -56,43 +52,43 @@ Then two cards. Pick one:
 | **Start building** | the build menu (`mode`) |
 | **Review prior sessions** | the Prior-sessions screen |
 
-**Start building** is pre-selected, so pressing Next or Enter without touching anything takes the ordinary path. **Clicking a card both selects it and advances** — there is no confirm step. Space, Return or Enter on a focused card does the same, and the arrow keys move the selection between cards. Back works normally if you overshoot.
+**Start building** is pre-selected, so Next or Enter with no other input takes the ordinary path. **Clicking a card both selects it and advances**; there is no confirm step. Space, Return or Enter on a focused card does the same, and the arrow keys move the selection between cards. Back works if you overshoot.
 
-(A third card, **Start a local mesh**, was removed on 2026-08-26 — it duplicated the build menu's own **Local Docker mesh** card. That flow is reached through **Start building** now; see `STUDIO-WIZARD-FLOW.md`.)
+(A third card, **Start a local mesh**, was removed on 2026-08-26. It duplicated the build menu's own **Local Docker mesh** card. That flow is now reached through **Start building**; see `STUDIO-WIZARD-FLOW.md`.)
 
-One exception to all of this: a **Restart** from a prior session sets the wizard's start page to the build-progress page. You never see this screen on that path.
+One exception: a **Restart** from a prior session sets the wizard's start page to the build-progress page. You never see this screen on that path.
 
 ### Prior sessions — only if you asked for it
 
-Reached only from Welcome's second card — nothing else routes into it. Its own Next continues to the build menu, carrying whatever you loaded, so it is a stop on the way rather than a dead end. If you have nothing to reuse, skip it.
+Welcome's second card is the only way in. Its own Next continues to the build menu with whatever you loaded, so it is a stop on the way, not a dead end. If you have nothing to reuse, skip it.
 
-**Load config… / Save config…** One loader handles both file shapes: a flat single-image config, and a `hugmesh-worklist/v1` envelope. You do not have to know which you have.
+**Load config… / Save config…** One loader reads both file shapes: a flat single-image config, and a `hugmesh-worklist/v1` envelope. You do not have to know which you have.
 
-- Loading **restarts the wizard**. You are dropped back on the Welcome screen with every page repopulated. That is expected, not a failure.
-- Saving defaults to `hugmesh-image.json`. It writes the envelope when a worklist exists, otherwise flat JSON. Only pages you actually visited are collected, so a page the flow skipped cannot leak stale values into the file.
-- Plaintext secrets are blanked on save — `local-pass`, `luks-pass`, `user-password`, `root-password`. A dialog names the ones that were dropped. Re-enter them before building from that file.
+- Loading **restarts the wizard**. You land back on the Welcome screen with every page repopulated. That is expected, not a failure.
+- Saving defaults to `hugmesh-image.json`. It writes the envelope when a worklist exists, and flat JSON otherwise. It collects only the pages you visited, so a page the flow skipped cannot leak stale values into the file.
+- Saving blanks plaintext secrets — `local-pass`, `luks-pass`, `user-password`, `root-password`. A dialog names the ones it dropped. Re-enter them before you build from that file.
 
-**Previous builds** is a table below the buttons, with a free-text filter and a status dropdown above it. It hides itself completely when there is nothing to list, so a first run shows only the two buttons. It lists persisted build sessions newest-first, plus best-effort discovered `wl-<role>.<platform>` build directories at the top level of the output directory (status honestly `unknown`), plus any record file it could not parse. It refreshes on every visit to the screen — a build you just finished appears without restarting the Studio.
+**Previous builds** is a table below the buttons, with a free-text filter and a status dropdown above it. It hides itself when there is nothing to list, so a first run shows only the two buttons. It lists persisted build sessions, newest first. After them come `wl-<role>.<platform>` build directories found at the top level of the output directory (best effort, status `unknown`), and any record file it could not parse. The table refreshes on every visit, so a build you just finished appears without a Studio restart.
 
 Seven actions:
 
 - **Open build window** — opens the per-build actions window. Clicking or activating a row opens the same one.
-- **Restart** — rebuild the same config into the *same* workdir; existing artifacts are reused or overwritten. The confirm dialog carries a "Resume from existing build tree (`--resume`)" checkbox, pre-checked when `wl-` build trees are already in that workdir, and lists any secrets that were not saved with the session and any secret *files* that were held in memory only. Accepting jumps straight to the build-progress page, which re-runs the full preflight before it launches and prompts for those held files. Restart refuses if the session is running in another Studio process, and offers Redo instead if its artifact directory is gone. (A fleet run restarts through the fleet window instead.)
-- **Redo (edit as new)** — loads that session's config back into the wizard as a new session and returns you to Welcome to walk the pages and edit. A fresh session id and workdir are minted at build time.
-- **Open artifacts** — opens the build directory in your file manager. Disabled when the directory no longer exists.
-- **View errors/log** — the persisted per-image error tails, or the tail of the legacy shared `build.log` for a discovered unmanaged tree. For a stale `running` record it says the process is gone; it never upgrades that to "complete".
-- **Delete** — removes the record. Deleting the artifacts on disk is a separate checkbox that defaults **off**. Refused for a session running elsewhere. (An unmanaged tree or an unreadable record file is deleted outright, on a plain confirm.)
-- **Delete all finished…** — prunes finished records only; running sessions are kept. Same artifacts-are-opt-in checkbox.
+- **Restart** — rebuilds the same config into the *same* workdir; existing artifacts are reused or overwritten. The confirm dialog has a "Resume from existing build tree (`--resume`)" checkbox, pre-checked when `wl-` build trees already sit in that workdir. It lists any secrets that were not saved with the session and any secret *files* held in memory only. Accepting jumps to the build-progress page, which re-runs the full preflight before it launches and prompts for those held files. Restart refuses if another Studio process is running the session, and offers Redo if the artifact directory is gone. (A fleet run restarts through the fleet window.)
+- **Redo (edit as new)** — loads that session's config back into the wizard as a new session and returns you to Welcome, where you walk the pages and edit. A fresh session id and workdir are minted at build time.
+- **Open artifacts** — opens the build directory in your file manager. Disabled when the directory is gone.
+- **View errors/log** — shows the persisted per-image error tails, or the tail of the legacy shared `build.log` for a discovered unmanaged tree. For a stale `running` record it says the process is gone; it never upgrades that to "complete".
+- **Delete** — removes the record. Deleting the artifacts on disk is a separate checkbox, **off** by default. Refused for a session running elsewhere. (An unmanaged tree or an unreadable record file is deleted outright, on a plain confirm.)
+- **Delete all finished…** — prunes finished records only; running sessions stay. Same artifacts-are-opt-in checkbox.
 
-Restart and Redo are disabled for anything that is not a session record — discovered `wl-*` directories and unreadable record files both predate or fail the config snapshot there is nothing to replay.
+Restart and Redo are disabled for anything that is not a session record. Discovered `wl-*` directories and unreadable record files have no config snapshot to replay.
 
 A **Fleet build…** button appears here only when `HUGMESH_STUDIO_ADVANCED` is set truthy (`1`/`true`/`yes`/`on`). It builds every role for a whole release, not the single image this wizard configures. `hugmesh_studio --fleet` reaches it without the flag.
 
 ### What do you want to build?
 
-Ten cards. Clicking one commits the page and advances, same as Welcome. **Standalone Gentoo desktop** is pre-selected on a fresh flow; on a Back-navigation or after loading a config, the card matching the loaded mode is re-selected instead.
+Ten cards. Clicking one commits the page and advances, as on Welcome. **Standalone Gentoo desktop** is pre-selected on a fresh flow. After a Back-navigation or a loaded config, the card that matches the loaded mode is selected instead.
 
-Only **three** of the ten are image builds. Those three are the only values the config's `mode` ever takes, and the only things that change which pages you see:
+Only **three** of the ten build an image. Those three are the only values the config's `mode` ever takes, and the only things that change which pages you see:
 
 | Card | Commits | Then skips (statically) | Default role |
 | --- | --- | --- | --- |
@@ -100,11 +96,18 @@ Only **three** of the ten are image builds. Those three are the only values the 
 | **Mesh desktop client** | `mode=cloud` | Identity provider, the worklist, the two "do you want to configure…" choice screens for domains and users, and the secrets store | `desktop` |
 | **Standalone Gentoo desktop** | `mode=standalone` | Identity provider, the worklist, the key-zip screen, both domains and users screens entirely, and the secrets store | `standalone-thick` |
 
-So a mesh run reads Identity provider → Choose the images to build → Branding → Network → Load your admin config (key-zip or link) → Domains → *Domains & their services* → *Domain services* → Users → *Superusers & domain users* → System identity → Secrets store → Home folder, encryption & login → Review → Build → Building. *Domains & their services* is reachable only if the Domains choice screen before it asked for more domains (`additional_domains`). *Domain services* always shows, because the mesh's own domain always gets a services page. It then walks one page per further named domain. *Superusers & domain users* is reachable only if the Users choice screen before it asked for it (`configure_users`). A build refuses while any domain, the mesh's own included, has never been walked on *Domain services*; see that section below. Standalone is the shortest path: Target machine & image type → Target hardware → Branding → Network → System identity → Home folder, encryption & login → Review → Build → Building. It never sees the Domains, *Domain services* or Users screens at all. Individual pages can still drop themselves beyond the static list when they have nothing to contribute. Four do: Branding (only for an unaffiliated image with no desktop half to theme), Domains, *Domain services* and Users.
+A mesh run reads Identity provider → Choose the images to build → Branding → Network → Load your admin config (key-zip or link) → Domains → *Domains & their services* → *Domain services* → Users → *Superusers & domain users* → System identity → Secrets store → Home folder, encryption & login → Review → Build → Building.
 
-Mesh replaces the role and hardware pages with the worklist, which owns role × platform for the whole set of node images. Committing mesh also runs the mesh-entry defaults every time: it zeroes the theming and home-folder fields the committed role class does not permit, forces tailnet and SSO on, and sets encrypted root from the platform-keyed posture — true wherever the builder has a full-disk-encryption path, false on Jetson, which has none.
+- *Domains & their services* shows only if the Domains choice screen before it asked for more domains (`additional_domains`).
+- *Domain services* always shows, because the mesh's own domain always gets a services page. It then walks one page per further named domain.
+- *Superusers & domain users* shows only if the Users choice screen before it asked for it (`configure_users`).
+- A build refuses while any domain, the mesh's own included, has never been walked on *Domain services*. See that section below.
 
-The other seven cards commit **nothing** to `mode`. They raise a transient flag that the matching page reads. Five of them are terminal: the flow ends there, with no image.
+Standalone is the shortest path: Target machine & image type → Target hardware → Branding → Network → System identity → Home folder, encryption & login → Review → Build → Building. It never sees the Domains, *Domain services* or Users screens. Beyond the static list, four pages can drop themselves when they have nothing to contribute: Branding (only for an unaffiliated image with no desktop half to theme), Domains, *Domain services* and Users.
+
+Mesh replaces the role and hardware pages with the worklist, which owns role × platform for the whole set of node images. Committing mesh also runs the mesh-entry defaults every time. They zero the theming and home-folder fields the committed role class does not permit, force tailnet and SSO on, and set encrypted root from the platform-keyed posture: true wherever the builder has a full-disk-encryption path, false on Jetson, which has none.
+
+The other seven cards commit **nothing** to `mode`. Each raises a transient flag that the matching page reads. Five of them are terminal: the flow ends there, with no image.
 
 | Card | What it is |
 | --- | --- |
@@ -116,35 +119,27 @@ The other seven cards commit **nothing** to `mode`. They raise a transient flag 
 | **MDM Quest headset** | enroll a USB Meta Quest 3/3S |
 | **Create nodes for local cloud** | turn the local Docker mesh into real node images |
 
-Two of those seven are not terminal:
+Two of the seven are not terminal:
 
-- **Run e2e tests** offers "Emulated-device test lanes (QEMU device tests)" against "Run the suite against a running mesh" on its own screen. That arm continues into the **QEMU device tests** page, which in turn offers "Build new images first, then run these tests" — and *that* arm rejoins the image flow. It asks "Which image build should run first?" with the three image builds, preselects the mode this Studio session was already carrying and says so, and commits your pick before the flow continues.
-- **Create nodes for local cloud** is a gate. It imports the local mesh's apex domain, its other domains and its provisioned accounts, then commits `mode=mesh` itself on Next and restricts the worklist to the laptop role plus every mesh role that produces a cluster node. The rest of the flow is an abbreviated mesh wizard. The local Kubernetes stack has to come down first: an inline checkbox takes your consent and *arms* a Stop button that runs `make kind-down` on a worker thread with streamed output and Cancel — nothing is torn down without a press, and Next stays disabled while a cluster is still known to be up or a teardown is in flight. The consent box is cleared afresh on every forward entry.
+- **Run e2e tests** offers "Emulated-device test lanes (QEMU device tests)" against "Run the suite against a running mesh" on its own screen. The test-lanes arm continues into the **QEMU device tests** page, which offers "Build new images first, then run these tests". *That* arm rejoins the image flow. It asks "Which image build should run first?" with the three image builds, preselects the mode this Studio session was already carrying and says so, and commits your pick before the flow continues.
+- **Create nodes for local cloud** is a gate. It imports the local mesh's apex domain, its other domains and its provisioned accounts. On Next it commits `mode=mesh` itself and restricts the worklist to the laptop role plus every mesh role that produces a cluster node. The rest of the flow is an abbreviated mesh wizard. The local Kubernetes stack has to come down first. An inline checkbox takes your consent and *arms* a Stop button, which runs `make kind-down` on a worker thread with streamed output and Cancel. Nothing is torn down without a press. Next stays disabled while a cluster is known to be up or a teardown is in flight. The consent box is cleared on every forward entry.
 
-**The trap on this screen is coming back to it.** Committing a card rewrites state you may have already entered, with no warning:
+**The trap on this screen is coming back to it.** Committing a card rewrites state you may have already entered, and it gives no warning:
 
 - Entering or leaving mesh discards the worklist. Both directions.
-- Committing standalone clears the key-zip path, the domains list, the users list, both "configure domains / configure users" flags, and forces tailnet and SSO off. Those pages are unreachable in standalone, so anything parked in them would otherwise be saved but invisible.
+- Committing standalone clears the key-zip path, the domains list, the users list and both "configure domains / configure users" flags, and forces tailnet and SSO off. Those pages are unreachable in standalone, so anything parked in them would be saved but invisible.
 - Your role resets to the mode default only when the role you had is not valid in the new mode. A valid role survives.
 - Every image-mode commit also rewrites `bundle_source`: on for standalone (except the unaffiliated role, where bundling the generator source is a hard conflict), off for cloud and mesh.
 
-If you have configured a lot and want to try a different build type, save the config first.
+To try a different build type after a lot of configuring, save the config first.
 
 ## Choosing what to build
 
-The screen behind Welcome's **Start building** card is **What do you want to build?** It offers ten cards, and clicking one is the decision — the card commits the page and moves the flow on. Only three of them commit an image mode:
+The screen behind Welcome's **Start building** card is **What do you want to build?** (above). Clicking a card is the decision: it commits the page and moves the flow on. Only three cards commit an image mode (Mesh node → `mesh`, Mesh desktop client → `cloud`, Standalone Gentoo desktop → `standalone`). The other seven run a tool instead of configuring a build.
 
-| Card | Mode |
-| --- | --- |
-| Mesh node | `mesh` |
-| Mesh desktop client | `cloud` |
-| Standalone Gentoo desktop | `standalone` |
+On a terminal page the final button reads **Exit**, not Finish. It closes Studio and does nothing else. Whatever you started keeps running. Those pages are Local Docker mesh, MDM phone, MDM Quest headset, Cloud deploy, Mesh emulation, and Run e2e tests on its "run the suite" arm.
 
-**Standalone Gentoo desktop** is preselected. The other seven cards run a tool instead of configuring a build. Six of those are terminal: Local Docker mesh, MDM phone, MDM Quest headset, Cloud deploy, Mesh emulation, and Run e2e tests on its "run the suite" arm. On a terminal page the final button reads **Exit**, not Finish — pressing it closes Studio and does nothing else. Whatever you started keeps running.
-
-Two cards are exceptions. **Run e2e tests** continues into the QEMU device-test page on its "emulated-device test lanes" arm, and that page rejoins the image flow on its own "build new images first" arm. **Create nodes for local cloud** leads to a page that commits `mode = "mesh"` itself on Next.
-
-Picking one of the seven tool cards raises a flag on the wizard, not a field in the config. Every page whose card you did not pick skips itself, so the flow you walk contains only the pages your choice reached.
+Picking a tool card raises a flag on the wizard, not a field in the config. Every page whose card you did not pick skips itself, so the flow you walk holds only the pages your choice reached.
 
 ### Local Docker mesh
 
@@ -186,35 +181,35 @@ Downstream: nothing. This page emits no image-config fields and ends the path.
 
 ### MDM phone
 
-Reached only from the "MDM phone" card. Flashes a USB-connected Google Pixel with verified GrapheneOS and enrolls it as an MDM-managed mesh device. It is a thin front over `core/phone_wizard.py`, which shells `scripts/phone-wizard.sh` — the same driver the ncurses menu uses. Every gate lives in the driver.
+Reached only from the "MDM phone" card. It flashes a USB-connected Google Pixel with verified GrapheneOS and enrolls it as an MDM-managed mesh device. The page is a thin front over `core/phone_wizard.py`, which shells `scripts/phone-wizard.sh`, the driver the ncurses menu also uses. Every gate lives in the driver.
 
-Asks: device codename (from the driver's vetted catalog `scripts/phone-devices.tsv`, plus a `<detect at run>` entry, and editable), release channel (`stable` default, or beta/alpha), serial (blank means auto when exactly one device is connected), keys dir, login server, a masked auth key, and mesh role.
+It asks for: device codename (from the driver's vetted catalog `scripts/phone-devices.tsv`, plus a `<detect at run>` entry; editable), release channel (`stable` by default, or beta/alpha), serial (blank means auto when exactly one device is connected), keys dir, login server, a masked auth key, and mesh role.
 
-Nine verbs. Seven stream into the log here: Plan (dry-run), Detect, Fetch + verify, Enroll, Profile, Ingest, Status. Two hand off to a real terminal emulator: **Flash (DESTRUCTIVE)** and the **Guided wizard**. That is deliberate — the driver's typed-serial confirmation needs a TTY, and Studio never injects a bypass or pipes `/dev/null` at a confirmation gate.
+Nine verbs. Seven stream into the log here: Plan (dry-run), Detect, Fetch + verify, Enroll, Profile, Ingest, Status. Two hand off to a real terminal emulator: **Flash (DESTRUCTIVE)** and the **Guided wizard**. That is deliberate. The driver's typed-serial confirmation needs a TTY, and Studio never injects a bypass or pipes `/dev/null` at a confirmation gate.
 
-The auth key is never persisted and never lands on argv; a run stages it into a `0600 --authkey-file` that the core shreds afterwards.
+The auth key is never persisted and never lands on argv. A run stages it into a `0600 --authkey-file`, and the core shreds that file afterwards.
 
 Sensible default: leave the codename at `<detect at run>`, keep `stable`, run Plan first.
 
-Trap: Flash and the guided wizard appear to do nothing in the window. They open a terminal. If no terminal can be opened, the status line says so and nothing runs.
+Trap: Flash and the guided wizard seem to do nothing in the window. They open a terminal. If no terminal can be opened, the status line says so and nothing runs.
 
 Downstream: nothing. Terminal.
 
 ### MDM Quest headset
 
-The same driver with `--device-class quest`, so the catalog becomes `scripts/quest-devices.tsv`: `eureka` is the Quest 3, `panther` the Quest 3S. No flash and no release channel — a Quest keeps Horizon OS, and the driver refuses `fetch`, `flash`, `attest` and `profile` for this class with its reasons.
+The same driver with `--device-class quest`, so the catalog becomes `scripts/quest-devices.tsv`: `eureka` is the Quest 3, `panther` the Quest 3S. There is no flash and no release channel. A Quest keeps Horizon OS, and the driver refuses `fetch`, `flash`, `attest` and `profile` for this class and says why.
 
-Asks the same identity block as the phone page (codename, serial, keys dir, login server, masked auth key, mesh role), plus:
+The page asks for the same identity block as the phone page (codename, serial, keys dir, login server, masked auth key, mesh role), plus:
 
 - **Headwind management plane** — server URL, DPC APK path, the expected APK signing-cert SHA-256 (enrollment fails closed on a mismatch), and the Headwind *configuration* the headset self-selects into. Paths, URLs and names only; never secrets.
 - **XR-chat URL** — a toggle plus an `https://` room URL. WebXR needs a secure context.
 - **Thin desktop** — a toggle plus a Moonlight APK path, its signer SHA-256, and a comma-separated list of thin-client tailnet names.
 
-Both toggles gate their own fields, and the values are emitted only while the toggle is on — the driver refuses the value knobs without the capability flag.
+Each toggle gates its own fields, and the values are emitted only while the toggle is on. The driver refuses the value knobs without the capability flag.
 
-Seven verbs. Only the **Guided wizard** goes to a terminal; **MDM-enroll + chat URL** streams here, because the phone's interactive fresh-device gates become non-interactive advisories on a Quest.
+Seven verbs. Only the **Guided wizard** goes to a terminal. **MDM-enroll + chat URL** streams here, because the phone's interactive fresh-device gates become non-interactive advisories on a Quest.
 
-Prerequisite: Developer Mode must be on, which needs a Meta developer account. The driver prints the runbook when the headset is not adb-visible.
+Prerequisite: Developer Mode must be on, and that needs a Meta developer account. The driver prints the runbook when the headset is not adb-visible.
 
 Trap: `panther` is *also* the Pixel 7 codename. The device class picks the catalog, and the driver pins USB vendor 2833 and `ro.product.manufacturer=oculus`, so a phone can never be driven down this path.
 
@@ -222,22 +217,22 @@ Downstream: nothing. Terminal.
 
 ### Cloud deploy
 
-Publishes an **already-built, already-packaged** x86 artifact. It does not build and it does not package: run `scripts/cloud-package.sh` first and point this page at its output (`.qcow2`, `.vhd`, `.img`).
+Publishes an **already-built, already-packaged** x86 artifact. It does not build or package. Run `scripts/cloud-package.sh` first and point this page at its output (`.qcow2`, `.vhd`, `.img`).
 
-Asks: provider (read live from `hugmesh-cloud-deploy list`; Refresh re-reads it, and an empty combo means the driver is not present), image path, domain, region, either a path to a `0600` credentials file or pasted credentials, an output directory for rendered artifacts, a keys dir, and an identity-provider passthrough — Casdoor built-in by default, or Entra / Cognito / other OIDC, which enable issuer, client id and JWKS fields and make the plan emit `idp/idp.conf`.
+It asks for: provider (read live from `hugmesh-cloud-deploy list`; Refresh re-reads it, and an empty combo means the driver is missing), image path, domain, region, a path to a `0600` credentials file or pasted credentials, an output directory for rendered artifacts, a keys dir, and an identity-provider passthrough. The passthrough is Casdoor built-in by default, or Entra / Cognito / other OIDC. The external choices enable issuer, client id and JWKS fields and make the plan emit `idp/idp.conf`.
 
 A read-only monospace pane previews the knobs, the exact plan command, and any blockers. It is pure: nothing runs until you pick a verb.
 
 Four verbs:
 
-- **Plan** renders the provider's artifacts offline. No cloud API is touched.
+- **Plan** renders the provider's artifacts offline. It touches no cloud API.
 - **Status** reads the emitted state hints. It never calls a cloud API either.
 - **Apply** streams here, but only behind the "I understand APPLY executes the plan's emitted apply.sh against a REAL cloud account" tick, and only after `validate()` passes.
 - **Destroy** opens a terminal, where the driver's own confirmation runs.
 
-A fifth button, **Open artifacts folder**, just opens the output directory.
+A fifth button, **Open artifacts folder**, opens the output directory.
 
-Pasted credentials are never persisted and never reach argv; a run stages them into a `0600 --creds-file` tempfile that is shredded afterwards.
+Pasted credentials are never persisted and never reach argv. A run stages them into a `0600 --creds-file` tempfile and shreds it afterwards.
 
 Sensible default: Plan first, read the rendered artifacts, then tick and Apply.
 
@@ -247,43 +242,43 @@ Downstream: nothing. Terminal.
 
 ### Run e2e tests
 
-Added 2026-08-27 at the operator's request — *"remove QEMU device emulation menu item as it does not do anything that cannot be done from the other menu, but add the run e2e tests button"*. It holds the mode-menu slot the **QEMU device tests** card used to hold. That card is gone; the page behind it is not, and this screen is its door.
+Added 2026-08-27 at the operator's request — *"remove QEMU device emulation menu item as it does not do anything that cannot be done from the other menu, but add the run e2e tests button"*. It holds the mode-menu slot that the **QEMU device tests** card used to hold. That card is gone. The page behind it remains, and this screen is its door.
 
 Two arms, chosen by radio.
 
-**Run the suite against a running mesh** (the default, and terminal). This is `tests/e2e` — the Gherkin lane, `make stack-e2e-bdd-env` — against a mesh that is *already serving*. Nothing here starts one.
+**Run the suite against a running mesh** (the default, and terminal). This is `tests/e2e`, the Gherkin lane (`make stack-e2e-bdd-env`), run against a mesh that is *already serving*. Nothing here starts one.
 
-- The **e2e target** chooser is built from `core/e2e_environments.py`, never restated: `docker` (the compose stack), `kind` (the local DevOps cluster) and `qemu` (an emulated device over its forwarded UI port). The choice rides as `SNAP_ENV` on the child process — the same channel `SNAP_ENV=kind make stack-e2e-bdd-env` uses and `tests/e2e/steps/world.ts` reads — so the Studio and a terminal can never target different meshes.
-- Under it the page states what that environment *is*, the exact `make` target and pins a run would use, and the command that would **start** it. That last one is text. The Studio will not spawn it: bringing a QEMU device up needs root, and an unanswerable password prompt does not fail, it hangs.
-- The **readiness** line is a live, off-thread probe (`LocalStackNode.e2e_ready`) asked about *the chosen environment*. Until it answers, the door is shut and says so — nothing established reads as a blocker, never as permission. When it refuses, it names every reason. That same list rides into the feature tree, so its Run button can never be armed against a mesh that cannot host the suite.
-- That gate is deliberately **scoped**. For `kind` and `qemu` it checks only this checkout (`tests/e2e` + `node_modules`) and leaves liveness to the harness, which skips each scenario with a reason naming what to start. The page says so rather than implying a full check. For `qemu` it also reports whether a `qemu-system-*` process is running — as a **note**, never a block, because it cannot see a device emulating inside the runner container.
-- **Identity.** The suite's superadmin scenarios log in as the *minted* superadmin whenever the mesh was bootstrapped from Studio. This page reads that bundle through the bootstrap's own reader and says which brand answered — or that none did, which is the terminal-seeded case where the deterministic e2e defaults apply. It is never silent about which identity a run will use.
+- The **e2e target** chooser is built from `core/e2e_environments.py`, never restated: `docker` (the compose stack), `kind` (the local DevOps cluster) and `qemu` (an emulated device over its forwarded UI port). The choice rides as `SNAP_ENV` on the child process, the same channel `SNAP_ENV=kind make stack-e2e-bdd-env` uses and `tests/e2e/steps/world.ts` reads. So the Studio and a terminal can never target different meshes.
+- Under the chooser the page states what that environment *is*, the exact `make` target and pins a run would use, and the command that would **start** it. That last one is text only. The Studio will not spawn it: bringing a QEMU device up needs root, and an unanswerable password prompt does not fail, it hangs.
+- The **readiness** line is a live, off-thread probe (`LocalStackNode.e2e_ready`) about *the chosen environment*. Until it answers, the door is shut and says so; "nothing established" reads as a blocker, never as permission. When it refuses, it names every reason. The same list goes into the feature tree, so its Run button can never be armed against a mesh that cannot host the suite.
+- That gate is deliberately **scoped**. For `kind` and `qemu` it checks only this checkout (`tests/e2e` + `node_modules`) and leaves liveness to the harness, which skips each scenario with a reason naming what to start. The page says so; it does not imply a full check. For `qemu` it also reports whether a `qemu-system-*` process is running, as a **note**, never a block, because it cannot see a device emulating inside the runner container.
+- **Identity.** The suite's superadmin scenarios log in as the *minted* superadmin whenever the mesh was bootstrapped from Studio. The page reads that bundle through the bootstrap's own reader and says which brand answered. If none did, the mesh was seeded from a terminal and the deterministic e2e defaults apply. The page always says which identity a run will use.
 - **e2e features…** opens the feature tree (non-modal, so a run streams into the log below it): Gherkin features, spec files with their last verdicts and skip reasons, the personas each draws from, the source, and the screenshots a run produced. What you check is what runs.
 
-The 35 handwritten spec files (`tests/e2e/specs/NN-*.spec.ts`) are a separate lane and are **not** run here: `make stack-e2e` from a terminal.
+The 35 handwritten spec files (`tests/e2e/specs/NN-*.spec.ts`) are a separate lane and are **not** run here. Run `make stack-e2e` from a terminal.
 
-**Emulated-device test lanes (QEMU device tests).** Picking this hides everything above and leaves one line: Next continues into the QEMU device-test page, described next.
+**Emulated-device test lanes (QEMU device tests).** This arm hides everything above and leaves one line: Next continues into the QEMU device-test page, described next.
 
 ### QEMU device tests
 
-Reached from **Run e2e tests**, and from nowhere else in the menu — its own card was removed 2026-08-27. (The post-build opt-in is unaffected: the Build screen's "run the QEMU emulated-device tests" checkbox still runs this same containerized harness when a build finishes, with no menu involved.) Keeping the page mattered because it is the only place in Studio that can spawn the Playwright-on-an-emulated-device harness and the SELinux AVC workout — neither of which Mesh emulation offers.
+Reached from **Run e2e tests**, and from nowhere else in the menu; its own card was removed 2026-08-27. (The post-build opt-in is unaffected. The Build screen's "run the QEMU emulated-device tests" checkbox still runs this same containerized harness when a build finishes, with no menu involved.) The page stayed because it is the only place in Studio that can spawn the Playwright-on-an-emulated-device harness and the SELinux AVC workout. Mesh emulation offers neither.
 
-The **test** lane of emulation: ephemeral asserted boots. Boot a session's images, check they provisioned correctly, power them off. Two arms, chosen by radio.
+This is the **test** lane of emulation: ephemeral asserted boots. It boots a session's images, checks they provisioned correctly, and powers them off. Two arms, chosen by radio.
 
-**Images from a previous build session.** Pick a prior session — partial sessions are listed and badged, and the newest complete one is preselected — and run its rows now. An image build takes hours, so retesting must not mean rebuilding. The per-domain gate described under *Mesh emulation* applies here too: run, AVC and Playwright are disabled for a session whose recorded configuration names an unwalked domain.
+**Images from a previous build session.** Pick a prior session and run its rows now. Partial sessions are listed and badged, and the newest complete one is preselected. An image build takes hours, so retesting must not mean rebuilding. The per-domain gate described under *Mesh emulation* applies here too: run, AVC and Playwright are disabled for a session whose recorded configuration names an unwalked domain.
 
-The run envelope is one box, and every knob in it is a field of the same object that authors the spawned command, so the preview cannot drift from what happens:
+The run envelope is one box. Every knob in it is a field of the same object that authors the spawned command, so the preview cannot drift from what happens:
 
 - Concurrent devices — default 2. Each device holds its own guest RAM, so this multiplies the next field.
 - Guest RAM — default 2048 MB.
 - Boot timeout — default 2400 s. A first boot under ARM emulation runs a full-filesystem SELinux relabel before sshd starts.
-- Assertion timeout — default 0, meaning the entrypoint's own default and no flag emitted. This is a different clock from the boot timeout.
+- Assertion timeout — default 0, meaning the entrypoint's own default, with no flag emitted. This clock is separate from the boot timeout.
 - Extra guest logins — additional wheel accounts created on every guest, beyond the payload's own `tester`.
 - Image cache cap — default unbounded. Every `.img.xz` row is decompressed once and kept.
 
-Buttons: **List devices** (enumerates what would run, boots nothing), **Run device tests**, **Read verdicts** (re-reads files and records; starts and stops nothing), **Cancel** (reaches the whole process group, docker children included).
+Buttons: **List devices** (lists what would run, boots nothing), **Run device tests**, **Read verdicts** (re-reads files and records; starts and stops nothing), **Cancel** (reaches the whole process group, docker children included).
 
-Two single-row lanes sit below. The **SELinux AVC workout** (`tests/qemu/avc-workout.sh`) runs against one planned row. The **Playwright browser suite** (`tests/qemu/run-qemu-e2e.sh`) runs against one row, with forwarded UI and SSH ports and a spec/`--grep` passthrough; only rows whose platform has a launcher in that script are offered, and while List specs and Preview need nothing special, the real run needs root — Studio refuses it up front and names the containerized route rather than reaching for sudo.
+Two single-row lanes sit below. The **SELinux AVC workout** (`tests/qemu/avc-workout.sh`) runs against one planned row. The **Playwright browser suite** (`tests/qemu/run-qemu-e2e.sh`) runs against one row, with forwarded UI and SSH ports and a spec/`--grep` passthrough. Only rows whose platform has a launcher in that script are offered. List specs and Preview need nothing special, but the real run needs root. Studio refuses it up front and names the containerized route; it does not reach for sudo.
 
 Read the results table carefully. It has one row per **planned** row, including rows that produced nothing, and only **PASS** is green:
 
@@ -291,9 +286,9 @@ Read the results table carefully. It has one row per **planned** row, including 
 - **STALE** — a verdict from an earlier boot.
 - **NO-RESULT** — planned, the run completed, no verdict emitted.
 
-Two notes sit up front. Docker availability is probed off the GUI thread and gates the run buttons — they stay greyed until the probe answers. KVM is a warning, never a block: without it the runner still produces correct results, but an x86 row goes from minutes to hours (Pi/aarch64 rows are pure emulation either way), and under WSL2 that is the default state unless a `.wslconfig` stanza turns nested virtualisation on.
+Two notes sit up front. Docker availability is probed off the GUI thread and gates the run buttons, which stay greyed until the probe answers. KVM is a warning, never a block. Without it the runner still gives correct results, but an x86 row goes from minutes to hours (Pi/aarch64 rows are pure emulation either way). Under WSL2 that is the default state unless a `.wslconfig` stanza turns nested virtualisation on.
 
-**Build new images first, then run these tests.** Picking this hides everything above and leaves one line: Next continues into the normal image flow with `cfg.qemu_device_tests` set. That is the same flag the Build screen shows as a checkbox, and it stays yours to untick there. Once the Build screen has been reached, its checkbox is the only writer.
+**Build new images first, then run these tests.** This arm hides everything above and leaves one line: Next continues into the normal image flow with `cfg.qemu_device_tests` set. The Build screen shows the same flag as a checkbox, and it stays yours to untick there. Once the Build screen has been reached, its checkbox is the only writer.
 
 Traps:
 
@@ -304,23 +299,23 @@ Traps:
 
 ### Mesh emulation
 
-The **deploy** lane: boots every image of a chosen prior build session as persistent (`--keep-alive`) emulated devices and lets you drive the whole mesh locally.
+The **deploy** lane. It boots every image of a chosen prior build session as persistent (`--keep-alive`) emulated devices and lets you drive the whole mesh locally.
 
-It asks one thing first: which build session's images. Every image in it becomes one device. Partial sessions are marked; the newest complete one is preselected. If that session's recorded configuration names a domain nobody walked on *Domain services*, Start mesh, per-device Start and Replicas Apply are disabled and a note under the picker names the domain and points at **Redo**. Listing, dry runs, stop, ssh and save still work. A session with no record, or one from before the per-domain step existed, is never refused.
+It asks one thing first: which build session's images. Every image in the session becomes one device. Partial sessions are marked, and the newest complete one is preselected. If that session's recorded configuration names a domain nobody walked on *Domain services*, Start mesh, per-device Start and Replicas Apply are disabled. A note under the picker names the domain and points at **Redo**. Listing, dry runs, stop, ssh and save still work. A session with no record, or one from before the per-domain step existed, is never refused.
 
-The device table is driven by the **plan**, not the registry, so rows exist before their guests do and you can see what will boot. Reality is reconciled onto those rows by a poll that keeps running while anything is still booting or asserting, so a mesh coming up repaints itself instead of looking dead for the many minutes an emulated boot takes. Columns: Device, Role, Arch, State, Verdict, Sections, SSH, Login, Actions, QEMU, Save disk, Replicas (0/1). The Replicas column is 0 or 1 because an emulated device is one guest per built image; Apply(1) and Apply(0) run the same runner commands as Start and Stop. Verdicts are graded by the same rules as the test page. Below the table, a collapsed *Running mesh — pods, containers and their addresses* section reads the docker compose project and the kind cluster on this workstation, not the emulated guests.
+The **plan** drives the device table, not the registry, so rows exist before their guests do and you can see what will boot. A poll reconciles reality onto those rows. It keeps running while anything is still booting or asserting, so a mesh coming up repaints itself and does not look dead for the many minutes an emulated boot takes. Columns: Device, Role, Arch, State, Verdict, Sections, SSH, Login, Actions, QEMU, Save disk, Replicas (0/1). The Replicas column is 0 or 1 because an emulated device is one guest per built image. Apply(1) and Apply(0) run the same runner commands as Start and Stop. Verdicts are graded by the same rules as the test page. Below the table, a collapsed *Running mesh — pods, containers and their addresses* section reads the docker compose project and the kind cluster on this workstation, not the emulated guests.
 
 Mesh-wide: Start mesh, Stop all, Refresh, Cancel. Per device: Start, Stop, an SSH button that opens a desktop terminal (with a copy-ready command as fallback), a login dropdown, the QMP console, and Save copy / Overwrite save.
 
-**The web front door.** The keep-alive runner publishes exactly one port per device — ssh, on loopback. The web UI is reached through it. "Open web UI" opens an `ssh -N -L` tunnel from the plan's local UI port to the gateway guest's own `:443` and opens `https://127.0.0.1:<port>/`. TLS is self-signed, so the browser warns once. The page states whether it started a tunnel or reused one, shows the exact command, and offers a Close tunnel button; tunnels also come down when the mesh stops, when the gateway device stops, when you leave the page, and when Studio closes.
+**The web front door.** The keep-alive runner publishes exactly one port per device: ssh, on loopback. The web UI is reached through it. "Open web UI" opens an `ssh -N -L` tunnel from the plan's local UI port to the gateway guest's own `:443`, then opens `https://127.0.0.1:<port>/`. TLS is self-signed, so the browser warns once. The page says whether it started a tunnel or reused one, shows the exact command, and offers a Close tunnel button. Tunnels also come down when the mesh stops, when the gateway device stops, when you leave the page, and when Studio closes.
 
-**Saving the whole mesh.** The first press only *previews*: per-device budget, how many KEYS pieces are present, the fleet total against free space, and a refusal with remedies when the filesystem cannot hold it. Then tick "confirm mesh save" and press again. A save is each disk's full virtual size, 9.5–20.5 GB per device, and the tick is cleared after every run — it is consent for one save, not a mode. Devices are paused for their copy and put back as they were found; the copies are crash-consistent.
+**Saving the whole mesh.** The first press only *previews*: per-device budget, how many KEYS pieces are present, the fleet total against free space, and a refusal with remedies when the filesystem cannot hold it. Then tick "confirm mesh save" and press again. A save is each disk's full virtual size, 9.5–20.5 GB per device. The tick is cleared after every run: it is consent for one save, not a mode. Devices are paused for their copy and put back as they were found. The copies are crash-consistent.
 
 Traps:
 
-- The QMP button reads **"Reset (ends guest)"** and means it. Every launcher runs qemu with `-no-reboot`, so a QMP `system_reset` shuts the guest down and exits instead of rebooting it. It sits behind an inline confirm tick for that reason. Power off ends the guest too — the orderly way. Either way, only Start brings the row back, and that is a full emulated boot.
-- The guests ship `PermitRootLogin no`, and the assertions check that it stays that way. Root is reached by logging in as a wheel user and then `sudo -i`; the login dropdown offers that as its own row.
-- Exiting Studio from this page leaves the emulated devices running. The verbs on the page are what start and stop them.
+- The QMP button reads **"Reset (ends guest)"** and means it. Every launcher runs qemu with `-no-reboot`, so a QMP `system_reset` shuts the guest down and exits; it does not reboot. It sits behind an inline confirm tick for that reason. Power off also ends the guest, the orderly way. Either way, only Start brings the row back, and that is a full emulated boot.
+- The guests ship `PermitRootLogin no`, and the assertions check that it stays that way. Reach root by logging in as a wheel user and running `sudo -i`; the login dropdown offers that as its own row.
+- Exiting Studio from this page leaves the emulated devices running. The verbs on the page start and stop them.
 
 Downstream: nothing reaches the image config. Terminal.
 
@@ -328,13 +323,13 @@ Downstream: nothing reaches the image config. Terminal.
 
 The gate between a running local Docker mesh and the node-image wizard. Unlike its siblings it is an entry, not a destination.
 
-On every forward entry it reads the local mesh's identity **offline** — plain file reads, no docker probe — and shows exactly what will be imported. The apex domain comes from the newest saved-mesh record for this checkout (the defaults if there is none; the summary names the record). Every added domain comes from the same record, with its title, sign-in and per-domain services; a row the import cannot take is listed as "NOT imported" with the reason. The accounts are the ones the Studio itself provisioned: the minted superadmin from the runtime secrets bundle, plus the seeder's persona roster. If the saved mesh ran Tor, a note says the node images will carry the onion too, on x86 and rpi5 node images and never on a laptop or desktop. Passwords are never read; imported user rows carry no secret. Accounts created interactively after go-live are not listed and do not need to be — they live in the mesh's identity tier and stay valid once the node images join the same domain.
+On every forward entry it reads the local mesh's identity **offline** (plain file reads, no docker probe) and shows exactly what it will import. The apex domain comes from the newest saved-mesh record for this checkout; with no record, the defaults apply, and the summary names the record. Every added domain comes from the same record, with its title, sign-in and per-domain services. A row the import cannot take is listed as "NOT imported" with the reason. The accounts are the ones the Studio itself provisioned: the minted superadmin from the runtime secrets bundle, plus the seeder's persona roster. If the saved mesh ran Tor, a note says the node images will carry the onion too, on x86 and rpi5 node images and never on a laptop or desktop. Passwords are never read; imported user rows carry no secret. Accounts created interactively after go-live are not listed and need not be. They live in the mesh's identity tier and stay valid once the node images join the same domain.
 
-Then it asks for consent, as an inline checkbox: *"I understand: k8s will stop to proceed — the local Kubernetes (DevOps) stack must come down before these node images are configured and built."* With a cluster actually up, ticking it arms **Stop Kubernetes now**, which runs `make kind-down` on a worker thread with streamed output and Cancel. That deletes the DevOps lane only — the docker mesh and every one of its volumes are untouched. With nothing running, the button stays greyed and the line under it says there is nothing to stop.
+Then it asks for consent, as an inline checkbox: *"I understand: k8s will stop to proceed — the local Kubernetes (DevOps) stack must come down before these node images are configured and built."* With a cluster actually up, ticking it arms **Stop Kubernetes now**, which runs `make kind-down` on a worker thread with streamed output and Cancel. That deletes the DevOps lane only; the docker mesh and every one of its volumes are untouched. With nothing running, the button stays greyed and the line under it says there is nothing to stop.
 
 ### Stopping the DevOps lane without deleting it
 
-`make kind-down` is the **destructive** control: it deletes the kind cluster and everything in it, and the next bring-up is a full one that comes back empty. When the intent is only to stop the lane, use the halt instead:
+`make kind-down` is the **destructive** control. It deletes the kind cluster and everything in it, and the next bring-up is a full one that comes back empty. To stop the lane without deleting it, use the halt instead:
 
 | command | what it does |
 |---|---|
@@ -342,39 +337,39 @@ Then it asks for consent, as an inline checkbox: *"I understand: k8s will stop t
 | `make kind-halt-status` | Read-only. Says whether the lane is halted, what it suspended, and the sync/health each Application was in at the moment it froze. Refuses rather than guessing if the record cannot be read. |
 | `make kind-resume` | Restores exactly the replica counts and the auto-sync the halt recorded — not "everything", so an Application suspended for some other reason stays suspended. |
 
-**Some pods keep running after a halt, by design.** DaemonSets are never halted (`kindnet`, `kube-proxy`, `local-path-provisioner`, the internal ingress controller), and neither are the static control-plane pods owned by the node — `etcd`, `kube-apiserver`, `kube-controller-manager`, `kube-scheduler`. Stopping those would not be halting the cluster, it would be deleting it. A halted lane therefore shows a handful of Running pods and no mesh workloads.
+**Some pods keep running after a halt, by design.** A halt never touches DaemonSets (`kindnet`, `kube-proxy`, `local-path-provisioner`, the internal ingress controller) or the static control-plane pods the node owns (`etcd`, `kube-apiserver`, `kube-controller-manager`, `kube-scheduler`). Stopping those would delete the cluster, not halt it. A halted lane therefore shows a handful of Running pods and no mesh workloads.
 
-Next stays disabled until three things hold: the box is ticked, no teardown is in flight, and no cluster is still known to be up. After a teardown the page re-probes rather than trusting the exit status, because `kind delete cluster` exits 0 for a cluster that was never there and a failed or cancelled run can leave one half gone. The consent box is cleared again on every entry.
+Next stays disabled until three things hold: the box is ticked, no teardown is in flight, and no cluster is still known to be up. After a teardown the page re-probes and does not trust the exit status, because `kind delete cluster` exits 0 for a cluster that was never there, and a failed or cancelled run can leave one half gone. The consent box is cleared again on every entry.
 
-On Next the page commits the mesh chain itself: `cfg.mode = "mesh"`, the mesh default role if the current one does not belong, source bundling off, mesh defaults applied. It then installs the abbreviation — the worklist offers only `laptop` plus every node-class mesh role (`pki`, `backend`, `frontend`, `backend-gpu`, `omnibus`, `edge-ai`). The person-desktop variants are withdrawn, because a local cloud's devices are its nodes plus your laptop. Any other Mode choice made later lifts the restriction.
+On Next the page commits the mesh chain itself: `cfg.mode = "mesh"`, the mesh default role if the current one does not belong, source bundling off, mesh defaults applied. Then it installs the abbreviation: the worklist offers only `laptop` plus every node-class mesh role (`pki`, `backend`, `frontend`, `backend-gpu`, `omnibus`, `edge-ai`). The person-desktop variants are withdrawn, because a local cloud's devices are its nodes plus your laptop. Any later Mode choice lifts the restriction.
 
-The import is one-shot per entry, so edits you make later — the cluster domain on the Network step, say — are not clobbered when the Build screen re-collects every visited page. Imported superadmins land on the Tailscale root domain and everyone else on the imported apex, and the Users table is made reachable so you can see and edit them. Every Casdoor grant the table knows (`ROLE_SUPERADMIN`, `ROLE_ADMIN`, `ROLE_MOD`, `ROLE_USER`, `ROLE_GAMES`, `ROLE_GAMES_SERVICES`) is carried into the row's roles; a persona with none of them imports as `user`.
+The import runs once per entry, so edits you make later, such as the cluster domain on the Network step, survive when the Build screen re-collects every visited page. Imported superadmins land on the Tailscale root domain and everyone else on the imported apex. The Users table is made reachable so you can see and edit them. The import carries every Casdoor grant the table knows (`ROLE_SUPERADMIN`, `ROLE_ADMIN`, `ROLE_MOD`, `ROLE_USER`, `ROLE_GAMES`, `ROLE_GAMES_SERVICES`) into the row's roles. A persona with none of them imports as `user`.
 
-Trap: this is the only card that both takes something down and changes the mode. If you Back out before pressing Next, nothing is committed to the config — but the cluster you stopped is still stopped.
+Trap: this is the only card that both takes something down and changes the mode. If you Back out before pressing Next, nothing is committed to the config, but the cluster you stopped stays stopped.
 
 ### Identity provider
 
-Not a side-flow. This is a regular flow page, and it is **mesh-only**: the standalone and desktop-client flows skip it outright, so their configuration and emitted arguments are identical to a build made before the page existed. In a mesh run it comes early — the first configuration screen after the mode and side-flow screens. Mesh mode skips the single-image role step, so the worklist is what follows it.
+Not a side-flow. This is a regular flow page, and it is **mesh-only**. The standalone and desktop-client flows skip it outright, so their configuration and emitted arguments are identical to a build made before the page existed. In a mesh run it comes early: the first configuration screen after the mode and side-flow screens. Mesh mode skips the single-image role step, so the worklist follows it.
 
 Four cards: **Casdoor (built-in) — default**, Azure Entra ID, AWS Cognito, Other OIDC provider.
 
-Clicking Casdoor simply proceeds. It commits `idp="casdoor"` and clears the three external fields, so typing values and then changing your mind back leaves no residue.
+Clicking Casdoor proceeds at once. It commits `idp="casdoor"` and clears the three external fields, so typing values and then changing your mind leaves no residue.
 
-Clicking an external provider opens a separate configuration window: a "before you start" page listing the console work you perform yourself at that vendor, an endpoints page (issuer URL, client id, optional JWKS override), and a review page. That window makes no network calls and holds no cloud credentials. It records the values; it does not create your Entra app registration or your Cognito user pool.
+Clicking an external provider opens a separate configuration window with three pages: a "before you start" page listing the console work you do yourself at that vendor, an endpoints page (issuer URL, client id, optional JWKS override), and a review page. The window makes no network calls and holds no cloud credentials. It records the values. It does not create your Entra app registration or your Cognito user pool.
 
-Back on the page you get a read-only echo of what the window produced, a "Configure provider…" button to reopen it, and a preview of the JWKS URL that will be derived if you left the override empty (Entra: `<issuer>/discovery/v2.0/keys`; Cognito: `<issuer>/.well-known/jwks.json`; other: `<issuer>/.well-known/jwks`).
+Back on the page you get a read-only echo of what the window produced, a "Configure provider…" button to reopen it, and a preview of the JWKS URL derived when you leave the override empty (Entra: `<issuer>/discovery/v2.0/keys`; Cognito: `<issuer>/.well-known/jwks.json`; other: `<issuer>/.well-known/jwks`).
 
-Next is gated on the same fail-closed rule the build enforces: an `https://` issuer that byte-matches the `iss` claim your provider actually mints, and a client id. Client *secrets* are never entered here, never baked, and never on any argv.
+Next follows the same fail-closed rule the build enforces: an `https://` issuer that byte-matches the `iss` claim your provider actually mints, and a client id. Client *secrets* are never entered here, never baked, and never on any argv.
 
 Downstream, external mode bakes `/etc/hugmesh/idp.conf`, rewrites the baked cluster tree's issuer and JWKS pins to your provider, and gates the built-in Casdoor apps out of the image. Services then validate tokens your IdP minted.
 
-Read the page's honesty note before choosing one. External mode re-points token **validation** and nothing more. The native first-party `/bff/login` page, MFA step-up stamping, the roles/permissions/groups token model behind the headscale, Harbor and desktop-sudo gates, the signup gate and the role-sync jobs all remain Casdoor-only until the service repos grow per-provider support. Entra additionally mints pairwise per-app `sub` values and per-resource audiences. Cognito carries groups in the `cognito:groups` claim, which the platform's role gates do not read.
+Read the page's honesty note before you choose one. External mode re-points token **validation** and nothing more. The native first-party `/bff/login` page, MFA step-up stamping, the roles/permissions/groups token model behind the headscale, Harbor and desktop-sudo gates, the signup gate and the role-sync jobs all stay Casdoor-only until the service repos grow per-provider support. Entra also mints pairwise per-app `sub` values and per-resource audiences. Cognito carries groups in the `cognito:groups` claim, which the platform's role gates do not read.
 
 Sensible default: Casdoor, unless you already run an identity provider this mesh must trust.
 
 ## Shaping the mesh
 
-These eight screens are where you say what gets built and what it runs. Which of them you see is decided by the card you picked on the mode screen. Ten cards are offered there, but only three commit an image mode — **Standalone Gentoo desktop** (`standalone`), **Mesh desktop client** (`cloud`) and **Mesh node** (`mesh`) — and that mode is what the page flow keys on. **Create nodes for local cloud** commits nothing at the mode screen; its own gate page commits `mesh` and then restricts the image list to the laptop and cluster-node roles, so it walks an abbreviated version of the mesh flow described below.
+These nine screens are where you say what gets built and what it runs. The card you picked on the mode screen decides which of them you see. The mode screen offers ten cards, but only three commit an image mode — **Standalone Gentoo desktop** (`standalone`), **Mesh desktop client** (`cloud`) and **Mesh node** (`mesh`) — and that mode keys the page flow. **Create nodes for local cloud** commits nothing at the mode screen. Its own gate page commits `mesh` and then restricts the image list to the laptop and cluster-node roles, so it walks an abbreviated version of the mesh flow described below.
 
 Every claim here is read off the wizard in `studio/hugmesh_studio/gui/`.
 
@@ -382,15 +377,25 @@ Every claim here is read off the wizard in `studio/hugmesh_studio/gui/`.
 
 Skipped in mesh. Mesh picks role and platform on the worklist screen instead.
 
-You pick three things, top to bottom. First the **architecture** (x86-64, ARM64, ARMv7, RISC-V 64). Then a **device** from a searchable tree grouped by vendor family — 51 devices across 11 families today, with a Status column. Then the **image type**, a list containing only the roles that device really supports in the mode you are in.
+You pick three things, top to bottom. First the **architecture** (x86-64, ARM64, ARMv7, RISC-V 64). Then a **device** from a searchable tree grouped by vendor family: 51 devices across 11 families today, with a Status column. Then the **image type**, a list of only the roles that device supports in the mode you are in.
 
-The catalogue is honest rather than tidy. Unsupported devices are listed with the reason they cannot be built and are not selectable; 27 of the 51 are in that state, including everything under ARMv7 and RISC-V. A device that is buildable but has no image type in *this* mode is also unselectable, with an inline note saying which path does offer it. Search matches the device name, its SoC, and its family or vendor.
+The catalogue is honest rather than tidy. Unsupported devices are listed with the reason they cannot be built, and you cannot select them. 27 of the 51 are in that state, including everything under ARMv7 and RISC-V. A device that is buildable but has no image type in *this* mode is also unselectable, with an inline note saying which path does offer it. Search matches the device name, its SoC, and its family or vendor.
 
-Underneath, only the knobs the chosen platform actually has appear: board, flavor and desktop for La Frite; board plus kernel flavor for Jetson; board for the Raspberry Pi family; board and flavor for Orange Pi 5; flavor alone for each of the other Orange Pi boards (Zero 2, Zero 2W, Zero 3, 3 LTS, 4 LTS). Every La Frite and Orange Pi box also carries U-Boot URL, defconfig and skip rows — flashability-critical on La Frite and Orange Pi 5, optional convenience on the rest; the Raspberry Pi and Jetson boxes carry none. On x86 you also get **Client desktop options** (desktop weight, Steam delivery, the Sunshine stream host, `--capable`, `--unaffiliated`) and the **Machine profile** preset. Some of those hide where the role has already answered them. `--capable` and the desktop-weight row hide on the standalone roles whose builder arm sets them. Sunshine hides in standalone mode, which has no tailnet for it. The `--unaffiliated` box hides on the `standalone-unaffiliated` role, which already is that, and greys out with a reason in cloud mode. A separate **Image posture** box carries `--standalone`, and it appears only where that flag is in scope for the role and platform you have selected.
+Underneath, only the knobs the chosen platform has appear:
+
+- La Frite: board, flavor and desktop.
+- Jetson: board plus kernel flavor.
+- Raspberry Pi family: board.
+- Orange Pi 5: board and flavor.
+- Each of the other Orange Pi boards (Zero 2, Zero 2W, Zero 3, 3 LTS, 4 LTS): flavor alone.
+
+Every La Frite and Orange Pi box also carries U-Boot URL, defconfig and skip rows. They are flashability-critical on La Frite and Orange Pi 5, and an optional convenience on the rest. The Raspberry Pi and Jetson boxes carry none.
+
+On x86 you also get **Client desktop options** (desktop weight, Steam delivery, the Sunshine stream host, `--capable`, `--unaffiliated`) and the **Machine profile** preset. Some of those hide where the role has already answered them. `--capable` and the desktop-weight row hide on the standalone roles whose builder arm sets them. Sunshine hides in standalone mode, which has no tailnet for it. The `--unaffiliated` box hides on the `standalone-unaffiliated` role, which already is that, and greys out with a reason in cloud mode. A separate **Image posture** box carries `--standalone`. It appears only where that flag is in scope for the role and platform you selected.
 
 Sensible defaults: leave the machine profile at "(none / generic)", desktop weight and Steam at "(default)", and the U-Boot rows empty. Standalone opens on `standalone-thick`, cloud on `desktop`.
 
-Downstream, this screen commits role, platform, board, flavor, desktop weight and the composable flags. The machine profile is different: it emits no flag of its own, it pre-fills the GPU driver and the Wi-Fi/Bluetooth fields that the next screen finalises. The hardware scan is not on this screen; it lives on Target hardware.
+Downstream, this screen commits role, platform, board, flavor, desktop weight and the composable flags. The machine profile is different. It emits no flag of its own; it pre-fills the GPU driver and the Wi-Fi/Bluetooth fields that the next screen finalises. The hardware scan is not on this screen; it lives on Target hardware.
 
 Traps worth knowing:
 
@@ -398,23 +403,23 @@ Traps worth knowing:
 - Arrow-keying through the tree can land on a bold family header. That is not a device, so the image-type list empties and Next greys out. Click a device row.
 - Choosing the unaffiliated role, or ticking the composable Unaffiliated box, turns off source bundling and resets the brand id, title, org, logo and lock to their defaults the moment you press Next. The look fields (theme, wallpaper and the rest) are not touched, and the Branding screen stays in the flow.
 - The Jetson `l4t` kernel flavor is accepted by the plan and the matrix, but the l4t kernel build is a stub that hard-errors. Do not select it for a real build.
-- Sunshine is a three-state box and arrives in the middle state, which means "leave the builder default". Checked bakes it, unchecked emits the explicit off.
+- Sunshine is a three-state box that starts in the middle state, which means "leave the builder default". Checked bakes it. Unchecked emits the explicit off.
 
 ### Choose the images to build — mesh only
 
 Skipped in standalone and cloud, which synthesise a single-entry worklist at build time.
 
-This is the multi-image screen. A checkable tree of role x platform rows, grouped under the same device families, with an architecture filter and a search box above it. Each checked row becomes one image with the stable id `<role>.<platform>`. Per row you get Board, Flavor/Desktop, Encryption, Services and an auto-filled Notes column.
+This is the multi-image screen: a checkable tree of role x platform rows, grouped under the same device families, with an architecture filter and a search box above it. Each checked row becomes one image with the stable id `<role>.<platform>`. Per row you get Board, Flavor/Desktop, Encryption, Services and an auto-filled Notes column.
 
-The button labelled **Select the required trio (pki + be + fe)** is the fast path. It checks those three rows on every architecture the filter admits, so with the filter on "All architectures" you get the trio on x86 and on arm64. It is additive and never unchecks a GPU or edge row you already picked. GPU and edge-AI nodes are deferrable — build them here or later from a saved config.
+The button labelled **Select the required trio (pki + be + fe)** is the fast path. It checks those three rows on every architecture the filter admits, so with the filter on "All architectures" you get the trio on x86 and on arm64. It is additive and never unchecks a GPU or edge row you already picked. GPU and edge-AI nodes can wait: build them here, or later from a saved config.
 
-Encryption is per node. "default" inherits the choice made on the Home step; on/off force it for that row. Jetson rows show a disabled "off" because that builder cannot encrypt. The Services column is the one genuinely per-node service knob in the wizard: a Tor onion on x86; Tor, an egress VPN, or both on rpi5; and no combo at all on platforms whose builder can express neither.
+Encryption is per node. "default" inherits the choice made on the Home step; on/off force it for that row. Jetson rows show a disabled "off" because that builder cannot encrypt. The Services column is the one per-node service knob in the wizard: a Tor onion on x86; Tor, an egress VPN, or both on rpi5; and no combo at all on platforms whose builder can express neither.
 
-A fresh mesh flow arrives with one row already checked — the mode default, `omnibus` on x86. Add to it; do not assume it is a placeholder.
+A fresh mesh flow arrives with one row already checked: the mode default, `omnibus` on x86. Add to it; it is not a placeholder.
 
-Checking a desktop-class row asks who uses it. The dialog opens when you tick the row with the mouse — a programmatic check, such as a loaded worklist re-seeding the tree, never opens it. The named people appear in a **Desktop users** table below the tree, and double-clicking a row there edits one. Cancelling the dialog unchecks the row. Next stays disabled until every checked desktop has a named user, and the placeholder row shows in red until it does. That account is created on the internal Tailscale root domain, and the person's role rides the image. The dialog asks for the person's tier (`user`, `mod`, `admin`, `superadmin`) and any grants (`games`, `games-services`). The tier is what `--person-role` bakes into the image; the grants ride only the manifest account, which holds the tier plus every ticked grant, and the **Desktop users** table lists the full set.
+Checking a desktop-class row asks who uses it. The dialog opens when you tick the row with the mouse. A programmatic check, such as a loaded worklist re-seeding the tree, never opens it. The named people appear in a **Desktop users** table below the tree, and double-clicking a row there edits one. Cancelling the dialog unchecks the row. Next stays disabled until every checked desktop has a named user, and the placeholder row shows in red until it does. That account is created on the internal Tailscale root domain, and the person's role rides the image. The dialog asks for the person's tier (`user`, `mod`, `admin`, `superadmin`) and any grants (`games`, `games-services`). The tier is what `--person-role` bakes into the image. The grants ride only the manifest account, which holds the tier plus every ticked grant, and the **Desktop users** table lists the full set.
 
-Two things the survey of this page usually misses. There is a checkbox reading "Also list the 37 devices that cannot be mesh nodes" — off by default, and it brings back read-only rows explaining exactly why each device has nothing to build here. And the combos in this tree ignore the scroll wheel on purpose: a plain combo would silently change a board or an encryption setting under the cursor while you scrolled the table, which is how one node once shipped with the wrong board.
+Two things a survey of this page usually misses. First, a checkbox reads "Also list the 37 devices that cannot be mesh nodes". It is off by default, and it brings back read-only rows that explain why each device has nothing to build here. Second, the combos in this tree ignore the scroll wheel on purpose. A plain combo would change a board or an encryption setting under the cursor while you scrolled the table, which is how one node once shipped with the wrong board.
 
 Downstream, the worklist stamps the base config's role from the first checked row and pins its platform to x86 as the option superset, so later screens show the widest field set. Unchecking a row also removes its id from every domain's "Applies to" list.
 
@@ -422,51 +427,51 @@ Downstream, the worklist stamps the base config's role from the first checked ro
 
 Skipped in mesh, where per-image hardware comes from the worklist row.
 
-Tuning, not machine selection. **Scan THIS machine** autofills from the machine running Studio — not from the target — and fills in the GPU driver and the radio boxes. Then: the GPU driver combo carrying the builder's full matrix (`auto` by default), a CUDA toolkit checkbox, Enable Wi-Fi and Enable Bluetooth (both off by default, deliberately hardened), "compile most everything into the kernel", and an advanced ARM overrides group holding CPU, defconfig, DTB, DTB prefix, kernel image and PCIe Gen3.
+Tuning, not machine selection. **Scan THIS machine** autofills from the machine running Studio, not from the target. It fills in the GPU driver and the radio boxes. The page then offers: the GPU driver combo with the builder's full matrix (`auto` by default), a CUDA toolkit checkbox, Enable Wi-Fi and Enable Bluetooth (both off by default, deliberately hardened), "compile most everything into the kernel", and an advanced ARM overrides group holding CPU, defconfig, DTB, DTB prefix, kernel image and PCIe Gen3.
 
-The ARM group is hidden entirely on x86. The GPU driver, CUDA and kernel-builtin controls are x86-only flags and grey out on ARM. Anything greyed is reset to its default when you press Next, so a value set while another platform was selected does not linger.
+The ARM group is hidden entirely on x86. The GPU driver, CUDA and kernel-builtin controls are x86-only flags and grey out on ARM. Anything greyed is reset to its default when you press Next, so a value set under another platform does not linger.
 
 The CUDA box greys out and clears under a GPU driver that contradicts it, because the builder hard-errors on that pair. Leave the driver at `auto` if you want CUDA implied.
 
 ### Branding
 
-Shown in every mode. An unaffiliated image (the `standalone-unaffiliated` role, or the composable unaffiliated flag) keeps the screen, but its two brand-identity widgets, the brand logo row and the branding lock, are hidden and cleared: a logo and a lock are a brand's marks, and the builder refuses them on that image. The look stays yours: themes, wallpaper, GRUB screens, login background, accent colour and colour scheme. The builder bakes them under neutral names. The page drops out of the flow only for an unaffiliated image with no desktop half to theme.
+Shown in every mode. An unaffiliated image (the `standalone-unaffiliated` role, or the composable unaffiliated flag) keeps the screen, but two brand-identity widgets, the brand logo row and the branding lock, are hidden and cleared. A logo and a lock are a brand's marks, and the builder refuses them on that image. The look stays yours: themes, wallpaper, GRUB screens, login background, accent colour and colour scheme. The builder bakes them under neutral names. The page drops out of the flow only for an unaffiliated image with no desktop half to theme.
 
 Two surfaces with opposite scopes.
 
-**Desktop theme** is baked into the image. It is a top-level either/or between two cards: a premade theme, or custom branding. The premade set is closed and is exactly four — light, dark, purple, grey — each shown as a card with a preview swatch painted from the same numbers that generated the wallpaper; a fifth card, "No premade theme", is the default and ships the stock look. Nothing is appended to that list. Custom branding is eight fields: branding directory, wallpaper, GRUB background, GRUB theme directory, login background, brand logo, colour scheme file, accent colour (seven on an unaffiliated image, which has no logo). The brand lock sits outside the either/or and applies to whichever channel you chose.
+**Desktop theme** is baked into the image. It is a top-level either/or between two cards: a premade theme, or custom branding. The premade set is closed and has exactly four themes: light, dark, purple, grey. Each is a card with a preview swatch painted from the same numbers that generated the wallpaper. A fifth card, "No premade theme", is the default and ships the stock look. Nothing is appended to that list. Custom branding is eight fields: branding directory, wallpaper, GRUB background, GRUB theme directory, login background, brand logo, colour scheme file, accent colour (seven on an unaffiliated image, which has no logo). The brand lock sits outside the either/or and applies to whichever channel you chose.
 
-The either/or is enforced by clearing. Switching to Custom clears your theme selection; switching back to Premade clears all eight paths. Decide which channel you want before you start typing. A saved config that carries both keeps the custom assets and clears the theme, with a note saying so. A saved config naming a theme this generator does not ship is cleared, also with a note, because that name would hard-error the builder.
+Clearing enforces the either/or. Switching to Custom clears your theme selection. Switching back to Premade clears all eight paths. Decide which channel you want before you start typing. A saved config that carries both keeps the custom assets and clears the theme, with a note saying so. A saved config naming a theme this generator does not ship is cleared too, with a note, because that name would hard-error the builder.
 
-The desktop half greys off-x86 and on node-class images, with the reason shown. In mesh it is hidden outright when the worklist has no desktop entry, since there would be nothing to theme. In any of those cases the branding fields are blanked on Next.
+The desktop half greys off-x86 and on node-class images, with the reason shown. In mesh it is hidden outright when the worklist has no desktop entry, since there would be nothing to theme. In each of those cases the branding fields are blanked on Next.
 
-**Web login theme** (inside, the group reads "Themes (the web pages this mesh serves)") is the second half. It shows in mesh only, since a standalone or cloud desktop serves no login page, and the desktop gating never touches it. Pick a primary and a secondary colour, or a preset, plus a dark or light neutral ramp; everything else is derived. No colour is rejected — text tokens are auto-adjusted to WCAG AA, and a live board shows the measured contrast. You can set a font preset or upload a font, in which case licence and source become required. A browser preview writes one self-contained page: the login pane is the real captured page, the chat, feed and forum panes are labelled mockups. A separate modeless editor covers header and footer chrome and the page background effect. These settings apply at container start and need no image rebuild; empty means the shipped brand. The section is open by default in mesh, where it is the reason the screen is shown at all.
+**Web login theme** (inside, the group reads "Themes (the web pages this mesh serves)") is the second half. It shows in mesh only, since a standalone or cloud desktop serves no login page, and the desktop gating never touches it. Pick a primary and a secondary colour, or a preset, plus a dark or light neutral ramp. Everything else is derived. The page rejects no colour: it auto-adjusts text tokens to WCAG AA, and a live board shows the measured contrast. You can set a font preset or upload a font; an upload makes licence and source required. A browser preview writes one self-contained page. The login pane is the real captured page; the chat, feed and forum panes are labelled mockups. A separate modeless editor covers header and footer chrome and the page background effect. These settings apply at container start and need no image rebuild; empty means the shipped brand. The section is open by default in mesh, where it is the reason the screen is shown at all.
 
 ### Domain, Mesh, and Services — every mode
 
-This screen is never skipped. Only its contents are mode-gated. In standalone it is titled "Network Identity, Egress, and Security"; in cloud and mesh, "Domain, Mesh, and Services". Sections are collapsible, and the Security Stack section folds itself away when everything in it is at its default. Every field carries a tooltip saying what it is and which builder flag it becomes; the tooltip is hung on the row, so hovering the caption works as well as hovering the field, and a greyed or hidden control shows the reason it is unavailable instead.
+This screen is never skipped; only its contents are mode-gated. In standalone it is titled "Network Identity, Egress, and Security"; in cloud and mesh, "Domain, Mesh, and Services". Sections are collapsible, and the Security Stack section folds itself away when everything in it is at its default. Every field carries a tooltip saying what it is and which builder flag it becomes. The tooltip hangs on the row, so hovering the caption works as well as hovering the field. A greyed or hidden control shows the reason it is unavailable instead.
 
-**Identity & Domain** carries the brand profile file, brand id, brand title, org, the public apex domain, the games domain and the release state. Two of its groups hide where they mean nothing. The apex domain, games domain and release state show only for cloud and mesh, or on an ARM platform; a standalone x86 image bakes no cluster plane. The brand profile, brand id, title and org hide on an unaffiliated image. When both groups hide, the whole section goes. Blank fields are not left blank: on Next the brand id commits `hugmesh`, the brand title `HugMesh Systems`, the org `hugmesh` and the public apex `hugmesh.net`. Release state at "default" emits nothing — which is not the same as "internal": with no `--release-state` on the argv the value falls to whatever `RELEASE_STATE` a `-C` brand profile sets, and only then to the builders' own default of `internal`.
+**Identity & Domain** carries the brand profile file, brand id, brand title, org, the public apex domain, the games domain and the release state. Two of its groups hide where they mean nothing. The apex domain, games domain and release state show only for cloud and mesh, or on an ARM platform; a standalone x86 image bakes no cluster plane. The brand profile, brand id, title and org hide on an unaffiliated image. When both groups hide, the whole section goes. Blank fields are not left blank: on Next the brand id commits `hugmesh`, the brand title `HugMesh Systems`, the org `hugmesh` and the public apex `hugmesh.net`. Release state at "default" emits nothing, which is not the same as "internal". With no `--release-state` on the argv, the value falls to whatever `RELEASE_STATE` a `-C` brand profile sets, and only then to the builders' own default of `internal`.
 
-**Tailnet + SSO** is editable only for a cloud desktop client, where both boxes arrive checked. Standalone and mesh hide it and show a grey line saying why — mesh forces both on elsewhere, off-screen.
+**Tailnet + SSO** is editable only for a cloud desktop client, where both boxes arrive checked. Standalone and mesh hide it and show a grey line saying why. Mesh forces both on elsewhere, off-screen.
 
-**Headscale / Mesh Networking** shows for cloud and mesh: the Headscale URL (delivered as an environment variable, not a flag), agent version pins, the headscale-only posture, and the **Tailscale root domain** (`--superdomain`; called the orchestration superdomain before this section was renamed). It is editable in mesh and read-only in cloud, where it displays the derived `<brand>.internal`. It is baked twice — as headscale's MagicDNS `base_domain` and to `/etc/hugmesh/superdomain`, the domain superadmin accounts are created on — is permanently internal, and is never the public apex above it.
+**Headscale / Mesh Networking** shows for cloud and mesh: the Headscale URL (delivered as an environment variable, not a flag), agent version pins, the headscale-only posture, and the **Tailscale root domain** (`--superdomain`; called the orchestration superdomain before this section was renamed). It is editable in mesh and read-only in cloud, where it shows the derived `<brand>.internal`. It is baked twice: as headscale's MagicDNS `base_domain`, and to `/etc/hugmesh/superdomain`, the domain superadmin accounts are created on. It is permanently internal and is never the public apex above it.
 
 **Egress VPN** is a profile file plus a lock for managed nodes. The whole section is hidden on node-class images, because a node would otherwise pay for VPN packages and a kernel fragment it can never use.
 
-**Security Stack** holds the proxy stack (auto by default), Snort — on by default — AIDE, and root SSH login, which defaults to `no`. The section folds away when all four are at their defaults.
+**Security Stack** holds the proxy stack (auto by default), Snort (on by default), AIDE, and root SSH login, which defaults to `no`. The section folds away when all four are at their defaults.
 
-**Services & Apps** is one table. Rows are services, columns are the options: On, Hosting/Mode, Setting, and a plain sentence saying what enabling that row does. Groups are Social & Community (akkoma, tuwunel, phpbb), Media & Play (owncast, tube, games), Characters & Avatars (character-studio, character-forge, edge-ai-tts), Network & Access (egress-vpn, workloadConsole), Privacy Services (tor, anubis, media-poisoner), plus AI & Inference and Backing Services. The privacy group is not called "anti-scraping" because anubis is not decided here alone: ticking its row installs it on any build, but leaving it alone still turns its proof-of-work gate on for every `prod` build, and the builder refuses `--exclude-services` for it by name. Which rows appear depends on what the selected platform's builder can actually parse; a row it cannot express is hidden, not greyed. The infra rows `egress-vpn`, `workloadConsole` and `anubis` only appear on rpi5, the one platform whose `--optional-services` catalogue carries them. Tor's x86 row appears only on a cloud or mesh build. AI & inference and Backing services appear only for cloud and mesh. Backing-service rows offer self-hosted, which is the default, or a managed hosted endpoint; tier-3 services are listed read-only with the reason they are refused in v1.
+**Services & Apps** is one table. Rows are services. Columns are On, Hosting/Mode, Setting, and a plain sentence saying what enabling that row does. The groups are Social & Community (akkoma, tuwunel, phpbb), Media & Play (owncast, tube, games), Characters & Avatars (character-studio, character-forge, edge-ai-tts), Network & Access (egress-vpn, workloadConsole), Privacy Services (tor, anubis, media-poisoner), plus AI & Inference and Backing Services. The privacy group is not called "anti-scraping" because this page does not decide anubis alone. Ticking its row installs it on any build, but leaving it alone still turns its proof-of-work gate on for every `prod` build, and the builder refuses `--exclude-services` for it by name. Which rows appear depends on what the selected platform's builder can parse; a row it cannot express is hidden, not greyed. The infra rows `egress-vpn`, `workloadConsole` and `anubis` appear only on rpi5, the one platform whose `--optional-services` catalogue carries them. Tor's x86 row appears only on a cloud or mesh build. AI & inference and Backing services appear only for cloud and mesh. Backing-service rows offer self-hosted, which is the default, or a managed hosted endpoint. Tier-3 services are listed read-only with the reason they are refused in v1.
 
 Traps here are worth reading twice:
 
-- **Ticking replaces, it does not add.** `--optional-services` overrides the built-in set outright. The builders' own defaults (akkoma, tuwunel, phpbb) therefore arrive ticked, and unticking one genuinely removes it.
-- Because of that, unticking every offered row is a real answer and commits an explicit "none", not silence.
-- The Selection dropdown above the table holds two whole-set shortcuts beside the default "pick individually". "Every user-level service" is not the same as ticking every row — it expands a fixed set that excludes the infra services, and every row it decides is set to the state it produces and then locked (user-level rows ticked, an infra slug row unticked) so you can see what it builds.
+- **Ticking replaces, it does not add.** `--optional-services` overrides the built-in set outright. The builders' own defaults (akkoma, tuwunel, phpbb) therefore arrive ticked, and unticking one removes it.
+- So unticking every offered row is a real answer, and it commits an explicit "none", not silence.
+- The Selection dropdown above the table holds two whole-set shortcuts beside the default "pick individually". "Every user-level service" is not the same as ticking every row. It expands a fixed set that excludes the infra services. Every row it decides is set to the state it produces and then locked (user-level rows ticked, an infra slug row unticked), so you can see what it builds.
 - **Services are mesh-wide.** They are baked into the cluster GitOps tree every node shares. The only per-node service choice is the Services column on the worklist screen.
-- On a client or desktop role the builders accept these selections and then ignore them, because a desktop bakes no cluster tree. The page says so in an orange note rather than greying the controls.
-- On an unaffiliated image the whole services table is hidden instead, and its values are cleared so hiding it changes no build.
-- The media cloak (`media-poisoner`) is listed in the service groups but is reachable through no builder flag or slug, so its row never appears on this screen. It exists only on the local Docker mesh surface.
+- On a client or desktop role the builders accept these selections and then ignore them, because a desktop bakes no cluster tree. The page says so in an orange note and does not grey the controls.
+- On an unaffiliated image the whole services table is hidden instead, and its values are cleared, so hiding it changes no build.
+- The media cloak (`media-poisoner`) is listed in the service groups, but no builder flag or slug reaches it, so its row never appears on this screen. It exists only on the local Docker mesh surface.
 
 There is no "exclude services" field any more; ticking what you want is the subtraction. The flag itself still exists for brand profiles.
 
@@ -474,11 +479,11 @@ There is no "exclude services" field any more; ticking what you want is the subt
 
 Skipped in standalone, which has no admin plane. Always shown in the other two.
 
-Two equivalent ways in. Browse to the key-zip your admin generated and press **Import & apply**, or paste their remote-config link and press **Fetch from link…**. Both go through the same extract-and-apply path, so a fetched link behaves identically to a browsed file. On the cloud path this is what lets the desktop join an existing mesh; on the mesh path it carries the fleet Secure-Boot signing key.
+Two equivalent ways in. Browse to the key-zip your admin generated and press **Import & apply**, or paste their remote-config link and press **Fetch from link…**. Both use the same extract-and-apply path, so a fetched link behaves exactly like a browsed file. On the cloud path this is what lets the desktop join an existing mesh. On the mesh path it carries the fleet Secure-Boot signing key.
 
-A third control, off by default, remembers loginable roles from the key-zip for passwordless login. Understand what it does before ticking it: it writes real login credentials to `~/.config/hugmesh-studio/local-login/roles.json` at mode 0600. It never writes database passwords or other machine secrets.
+A third control, off by default, remembers loginable roles from the key-zip for passwordless login. Know what it does before you tick it: it writes real login credentials to `~/.config/hugmesh-studio/local-login/roles.json` at mode 0600. It never writes database passwords or other machine secrets.
 
-Traps: the import happens when you press the button, not when you press Next. Nothing on this screen is required — Next is always enabled, so it is easy to walk past without importing anything. Only `http`, `https` and `file` links are followed, anything else is refused before a connection is attempted, and nothing is contacted until you click Fetch. A fetch runs off the GUI thread and gives up after 60 seconds of silence from the server, so a wedged link cannot freeze the window.
+Traps: the import happens when you press the button, not when you press Next. Nothing on this screen is required, and Next is always enabled, so it is easy to walk past without importing anything. Only `http`, `https` and `file` links are followed. Anything else is refused before a connection is attempted, and nothing is contacted until you click Fetch. A fetch runs off the GUI thread and gives up after 60 seconds of silence from the server, so a wedged link cannot freeze the window.
 
 ### Domains — mesh only
 
