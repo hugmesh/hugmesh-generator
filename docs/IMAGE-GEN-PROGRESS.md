@@ -61,7 +61,8 @@ This repo does not change admin-bff-api. The heading dates from when this was a 
 
 2. **Endpoint.** `POST /bff/internal/image-builds/{id}/progress`
    (`ImageBuildIngestController.progress`). It sits
-   on the same internal boundary as ingest (mTLS plus the internal token) and takes
+   on the same internal boundary as ingest (mTLS is the primary check; the
+   `X-Internal-Token` filter is secondary, and its Secret is optional) and takes
    the `ImageBuildProgressRequest` above. `percent` must be null or 0 to 99. The
    endpoint never changes `image_build.status`. `COMPLETED`, `FAILED` and `ERROR`
    stay with the terminal ingest. It turns the frame into an SSE event with
