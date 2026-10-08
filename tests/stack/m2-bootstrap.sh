@@ -84,6 +84,16 @@ M2_ENV_FILE="${M2_ENV_FILE:-${HERE}/.m2-registry.env}"
 #                                 DOMAIN-SCOPED registration gate (auth-core issue #1 /
 #                                 PR #8) that admin-bff's RegistrationDomainResolver
 #                                 call sites now require.
+#   hugmesh-auth-core 2.5.1  — the ONLY auth-core coordinate the org release chain
+#                                 (hugmesh-auth-core release-chain.yml, RELEASING.md
+#                                 section 4) publishes to GitHub Packages. admin-bff and
+#                                 user-bff both pin it once their JAVA-6 bump merges
+#                                 (2.5.0 -> 2.5.1 and 2.4.2 -> 2.5.1 are source- and
+#                                 binary-compatible). The SHA is auth-core main at the
+#                                 commit whose pom.xml declares 2.5.1. The 2.4.2 and 2.5.0
+#                                 rows STAY until both consumers' mains name 2.5.1: a
+#                                 .stack-src that still holds an older consumer pom needs
+#                                 its jar, and the drift guard serves the SET of rows.
 #
 #   TWO auth-core pins IS THE CORRECT STATE, not a leftover. The consumers are
 #   separate repos on separate release cadences: admin-bff main asks for 2.5.0 and
@@ -119,6 +129,7 @@ PINS=(
   "hugmesh-commons|156b7687db7cb4287db73708d46404a8cb685b3f|hugmesh-commons|2.1.0|jar+tests|net/hugmesh"
   "hugmesh-auth-core|401ca9e38168791e5642125d96dd1f65487b8ff1|hugmesh-auth-core|2.4.2|jar|net/hugmesh"
   "hugmesh-auth-core|1578565de8c54f4358ef3f172ff95767223f3746|hugmesh-auth-core|2.5.0|jar|net/hugmesh"
+  "hugmesh-auth-core|68639eba4522b748f59fecff53ec27be7fadf261|hugmesh-auth-core|2.5.1|jar|net/hugmesh"
 )
 
 M2_REPO="${M2_CACHE}/m2/repository"

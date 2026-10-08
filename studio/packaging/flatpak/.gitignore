@@ -1,0 +1,8 @@
+# What building IN this directory by hand leaves behind (the release workflow does exactly
+# that). ../build-flatpak-local.sh builds elsewhere and writes none of it here.
+build-dir/
+repo/
+.flatpak-builder/
+*.flatpak
+*.flatpak.sha256
+specs.json
