@@ -2,20 +2,21 @@
 
 This is the **authoritative enumeration** for the scaled-concurrent final sweep
 (`tests/e2e/specs/24-final-e2e-sweep.spec.ts` + `swarm-driver.ts`). The spec wires
-a **representative, non-truncated sample** of these rows as executable scenarios;
-this document is the complete list so nothing is *silently* dropped. A row marked
-**WIRED** has an executable scenario today; **DOC** rows are enumerated here and
-activate as their surface lands (the framework primitive already exists for each).
-A row marked **GAP** has no surface to test yet and its scenario is skipped.
+a **representative, non-truncated sample** of these rows as executable scenarios.
+This page lists all of them, so nothing is dropped *silently*. A row marked
+**WIRED** has an executable scenario today. **DOC** rows are listed here and
+activate as their surface lands; the framework primitive already exists for each.
+A row marked **GAP** has no surface to test yet, and its scenario is skipped.
 
 ## The population (procedural, deterministic)
 
-`rbac-roles.ts → generateSwarm()` — default **120 plain users + 4 mods + 2 admins**
-(overridable via `SWARM_USERS/SWARM_MODS/SWARM_ADMINS`). All share one deterministic
-password (`E2E_SWARM_PASSWORD`); `tests/qemu/seed-accounts.sh --roles DIR --swarm N` seeds them and
-**pre-mints a JWT per member** into `PREMINT_DIR` so 126 actors do not serialize at
-Casdoor (`replicas: 1`) login. Mod *m* moderates the non-overlapping user block
-`swarmTargetsForMod(m)` — "mods moderate those below them".
+`rbac-roles.ts → generateSwarm()` builds the default population: **120 plain users +
+4 mods + 2 admins** (override with `SWARM_USERS/SWARM_MODS/SWARM_ADMINS`). All share
+one deterministic password (`E2E_SWARM_PASSWORD`). `tests/qemu/seed-accounts.sh
+--roles DIR --swarm N` seeds them and **pre-mints a JWT per member** into
+`PREMINT_DIR`, so 126 actors do not queue at the Casdoor login (`replicas: 1`). Mod
+*m* moderates the non-overlapping user block `swarmTargetsForMod(m)`: "mods moderate
+those below them".
 
 ## Enforcement layers (the columns)
 
@@ -31,10 +32,10 @@ Casdoor (`replicas: 1`) login. Mod *m* moderates the non-overlapping user block
 
 ## Concurrency invariant (applies to EVERY row)
 
-The whole population acts **simultaneously**; `runConcurrently()` records peak
-in-flight and the sweep asserts `maxInFlight >= floor`, so a run that silently
-serializes (correct results, one at a time) **FAILS** — concurrency is contract.
-**WIRED** — scenario (A).
+The whole population acts **simultaneously**. `runConcurrently()` records the peak
+in-flight count and the sweep asserts `maxInFlight >= floor`, so a run that
+silently serializes (correct results, one at a time) **FAILS**. Concurrency is part
+of the contract. **WIRED**: scenario (A).
 
 ## The matrix
 
@@ -83,26 +84,27 @@ serializes (correct results, one at a time) **FAILS** — concurrency is contrac
 ## Cross-realm authz matrix — systems × games × forum (spec 26)
 
 `tests/e2e/specs/26-rbac-cross-realm-matrix.spec.ts` is the **full cross-realm
-matrix** sibling of the single-invariant cross-realm spec 25. For each realm PAIR
-and each role it asserts **(a) ALLOW** (right realm+role+domain reaches its own
-resources), **(b) DENY isolation** (a principal from realm A / domain X is refused
-the cross-realm + cross-domain resources — a generic `DENY`, never a 404-vs-403
-existence leak), **(c) ROLE_SUPERADMIN cross-realm reach where designed**, and
-**(d) the per-domain least-privilege cascade** (the multi-tenant brand wall). The
-systems + superadmin decisions go through the SHARED `rbac-route-access` oracle;
-the forum rows + the `domain` column (absent from that oracle) are mirrored 1:1 from
-`route-access/initdb/20-schema.sql` **locally in the spec** so specs 12–18/25 are
-unperturbed. **VALIDATES OFFLINE** (no cluster). The live token probe is skipped unless
-`LIVE_GATEWAY=1`, the per-realm Casdoors and the tailnet superadmin gateway are up;
-the spec says live validation is **pending a kernel-fixed x86 image** (the QEMU
-cluster cannot boot yet).
+matrix**, a sibling of the single-invariant cross-realm spec 25. For each realm PAIR
+and each role it asserts four things: **(a) ALLOW** (the right realm, role and domain
+reaches its own resources); **(b) DENY isolation** (a principal from realm A or
+domain X is refused the cross-realm and cross-domain resources, with a generic
+`DENY`, never a 404-vs-403 existence leak); **(c) ROLE_SUPERADMIN cross-realm reach
+where designed**; and **(d) the per-domain least-privilege cascade** (the
+multi-tenant brand wall). The systems and superadmin decisions go through the SHARED
+`rbac-route-access` oracle. The forum rows and the `domain` column, which that oracle
+lacks, are mirrored 1:1 from `route-access/initdb/20-schema.sql` **locally in the
+spec**, so specs 12–18/25 are unperturbed. **VALIDATES OFFLINE** (no cluster). The
+live token probe is skipped unless `LIVE_GATEWAY=1`, the per-realm Casdoors and the
+tailnet superadmin gateway are up. The spec says live validation is **pending a
+kernel-fixed x86 image** (the QEMU cluster cannot boot yet).
 
-The realms: **SYSTEMS** (org `hugmesh`, issuer `id.hugmesh.net`, native
-`ROLE_*`), **GAMES** (org `threewizards`, issuer `id.hugmesh.games`, independent
-Casdoor, native lowercase `player`/`admin`; namespace surfaces `/games/admin/**` +
-`/games/api/admin/**` gated on the DERIVED systems `ROLE_GAMES_ADMIN`), **FORUM**
-(phpBB via forum-bff: `/social/forum/**` + `/bff/forum/**`, access role `ROLE_FORUM`,
-derived `ROLE_FORUM_MOD = ROLE_MOD ∩ ROLE_FORUM`; phpBB itself has NO gateway route).
+The realms: **SYSTEMS** (org `hugmesh`, issuer `id.hugmesh.net`, native `ROLE_*`);
+**GAMES** (org `threewizards`, issuer `id.hugmesh.games`, an independent Casdoor,
+native lowercase `player`/`admin`; the namespace surfaces `/games/admin/**` +
+`/games/api/admin/**` are gated on the DERIVED systems `ROLE_GAMES_ADMIN`);
+**FORUM** (phpBB via forum-bff: `/social/forum/**` + `/bff/forum/**`, access role
+`ROLE_FORUM`, derived `ROLE_FORUM_MOD = ROLE_MOD ∩ ROLE_FORUM`; phpBB itself has NO
+gateway route).
 
 | # | realm pair / role | assertion | kind | status |
 |---|---|---|---|---|
@@ -122,18 +124,18 @@ derived `ROLE_FORUM_MOD = ROLE_MOD ∩ ROLE_FORUM`; phpBB itself has NO gateway 
 | CR14 | per-domain · ROLE_GAMES_ADMIN | cross-brand wall holds for the forum + games surfaces | (d) DENY | **WIRED** |
 | CR15 | per-domain · model | `domainApplies`: NULL/blank/`default` unscoped; a brand row applies to its brand only | fidelity | **WIRED** |
 
-NB the systems→games SYNC **propagation** proof (`ROLE_GAMES_ADMIN`→games `admin`)
-is owned by `hugmesh-actions/e2e` (`sync-steps.ts`) and is NOT duplicated here;
-spec 26 asserts only the cross-realm **authz isolation** half (the catalogue +
+NB: the systems→games SYNC **propagation** proof (`ROLE_GAMES_ADMIN`→games `admin`)
+belongs to `hugmesh-actions/e2e` (`sync-steps.ts`) and is NOT repeated here. Spec 26
+asserts only the cross-realm **authz isolation** half (the catalogue and
 issuer-isolation invariants).
 
 ## WIRED vs DOC — why split
 
-The gateway/bff **contract** assertions are already exhaustively covered by specs
-12–18 (the `gateway_route_access` oracle). The final sweep's NEW value is the
-**concurrent population** + the **per-layer + SSE + disabled-helptext** axes, so it
-wires the rows that exercise *those* axes (A–C, E–G; D is skipped, see A1) and **documents** the rest here
-rather than duplicating specs 12–18 at scale. As the role-conditional **UI** lands,
-the **DOC** UI/SSE rows convert to **WIRED** by filling the spec-18-style stubs
-with `assertDisabledHasHelptext` / `expectSse` — the framework primitives already
-exist in `swarm-driver.ts`.
+The gateway/bff **contract** assertions are already covered in full by specs 12–18
+(the `gateway_route_access` oracle). The final sweep adds the **concurrent
+population** and the **per-layer + SSE + disabled-helptext** axes. It wires the rows
+that exercise those axes (A–C, E–G; D is skipped, see A1) and **documents** the rest
+here, rather than repeating specs 12–18 at scale. As the role-conditional **UI**
+lands, the **DOC** UI/SSE rows become **WIRED** by filling the spec-18-style stubs
+with `assertDisabledHasHelptext` / `expectSse`. Both primitives already exist in
+`swarm-driver.ts`.
