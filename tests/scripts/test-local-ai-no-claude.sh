@@ -636,7 +636,7 @@ printf 'draft hugmesh-fixture 1\n' >"${LA_STATE}/queue/running/20260101-000000-d
 la bash "${GEN}/scripts/local-ai.sh" worker >/dev/null 2>&1
 for _ in $(seq 1 30); do [ -e "${LA_STATE}/queue/done/20260101-000000-draft-hugmesh-fixture-1.result" ] && break; sleep 0.5; done
 [ -e "${LA_STATE}/queue/done/20260101-000000-draft-hugmesh-fixture-1.result" ] \
-    && [ -z "$(ls "${LA_STATE}/queue/running" "${LA_STATE}/queue/pending")" ] && [ ! -s "${LOG}/requests.jsonl" ] \
+    && [ -z "$(ls "${LA_STATE}/queue/running")" ] && [ -z "$(ls "${LA_STATE}/queue/pending")" ] && [ ! -s "${LOG}/requests.jsonl" ] \
     && [ "$(status_word hugmesh-fixture-1)" = "applied" ] \
     && ok "a draft that had finished before the crash is filed as done, not drafted a second time" \
     || bad "finished-before-crash draft: running=$(ls "${LA_STATE}/queue/running") pending=$(ls "${LA_STATE}/queue/pending") STATUS=$(status_word hugmesh-fixture-1) requests=$(wc -l <"${LOG}/requests.jsonl" 2>/dev/null)"
