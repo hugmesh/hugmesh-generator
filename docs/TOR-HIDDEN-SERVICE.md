@@ -42,19 +42,19 @@ daily one. It never execs tor itself, and it converges whatever state it finds:
 | crashed (OpenRC status 32)      | `rc-service tor restart` | nothing — left to the cron |
 | stopped                         | `rc-service tor start` | nothing — OpenRC starts tor right after the oneshot |
 
-**Why the boot oneshot never starts tor.** Because the oneshot is `before tor`, OpenRC
-records tor as `iafter hugmesh-tor-reconcile`. A `rc-service tor start` issued from
-inside the oneshot's `start()` would make that child `openrc-run` wait on the oneshot's
-own exclusive lock. It would print "waiting for hugmesh-tor-reconcile" until the 60 s
+**Why the boot oneshot never starts tor.** The oneshot is `before tor`, so OpenRC
+records tor as `iafter hugmesh-tor-reconcile`. A `rc-service tor start` from inside the
+oneshot's `start()` would make that child `openrc-run` wait on the oneshot's own
+exclusive lock. It would print "waiting for hugmesh-tor-reconcile" until the 60 s
 `WAIT_TIMEOUT` and only then start tor, on every boot. (This comes from reading the
-OpenRC source, `librc-depend.c` and `openrc-run.c`; it has not been seen on a guest.) It
-would also be redundant, since `tor` is linked into the runlevel. So at boot the sequence
-is:
-1. The oneshot writes the directories and the verified torrc. It exports any hostname that
-   is already minted, which is every boot after the first.
+OpenRC source, `librc-depend.c` and `openrc-run.c`. It has not been seen on a guest.)
+The start would also be redundant, because `tor` is linked into the runlevel. So at boot:
+
+1. The oneshot writes the directories and the verified torrc. It exports any hostname
+   that is already minted, which is every boot after the first.
 2. OpenRC starts tor, reading that torrc. This is the only daemon.
-3. The cron's `@reboot` run (no `RC_SVCNAME`) finds tor running and the torrc unchanged,
-   waits for the first-boot keypair and exports it.
+3. The cron's `@reboot` run (no `RC_SVCNAME`) finds tor running and the torrc
+   unchanged, waits for the first-boot keypair and exports it.
 
 The daily run re-asserts all of this. It also starts a tor that an admin stopped by hand,
 so to keep tor down, deselect it or remove the cron drop-in. A healthy tor is never
@@ -326,40 +326,41 @@ make stack-e2e-tor           # the @via:onion sign-in, THROUGH Tor (tests/e2e/ru
 make stack-tor-mechanism-check   # host-tor mechanism proof: no docker, needs the public Tor network
 ```
 
-**Why `:443`, and why https.** The door is `https://<onion>/`, served by the TLS front, for
-these measured reasons (hugmesh-generator#628, live onion, 2026-09-24):
+**Why `:443`, and why https.** The door is `https://<onion>/`, served by the TLS front.
+The reasons were measured (hugmesh-generator#628, live onion, 2026-09-24):
 
 - **A secure context.** Chromium does not treat a `.onion` origin as trustworthy. Over
   `http://<onion>/`, `window.isSecureContext` is `false`, the shell's
   `Cross-Origin-Opener-Policy` is ignored ("the URL's origin was untrustworthy"), and any
   `Secure` cookie the page is sent is dropped.
-- **Parity with the node.** A baked node publishes its onion on `:443` too (the node contract
-  above), so the compose lane, the kind lane and a device are entered the same way.
+- **Parity with the node.** A baked node publishes its onion on `:443` too (the node
+  contract above), so the compose lane, the kind lane and a device are entered the same
+  way.
 - **The session cookie.** user-bff marks `bff_session` `Secure` by default
-  (`APP_SESSION_COOKIE_SECURE`, default `true` in its `application.yml`). The compose stack sets
-  it `false` (`compose.local.yaml`, `hugmesh-user-bff-api`), which is the only reason a sign-in
-  over `http://<onion>/` works locally: `POST http://<onion>/bff/login` answered
-  `Set-Cookie: bff_session=…; HTTPOnly; SameSite=Lax` with no `Secure`. A mesh with the
-  production default would lose the session on the http door.
-- **The Anubis gate.** With `ANUBIS=1 TOR=1` the http door is the proof-of-work gate, whose
-  cookies needed their own fix to work there (#627, below).
+  (`APP_SESSION_COOKIE_SECURE`, default `true` in its `application.yml`). The compose
+  stack sets it `false` (`compose.local.yaml`, `hugmesh-user-bff-api`), which is the only
+  reason a sign-in over `http://<onion>/` works locally: `POST http://<onion>/bff/login`
+  answered `Set-Cookie: bff_session=…; HTTPOnly; SameSite=Lax` with no `Secure`. A mesh
+  with the production default would lose the session on the http door.
+- **The Anubis gate.** With `ANUBIS=1 TOR=1` the http door is the proof-of-work gate,
+  whose cookies needed their own fix to work there (#627, below).
 
-**What is not the reason: CSP `upgrade-insecure-requests`.** Earlier versions of this page
-said the gateway's CSP upgrades every subresource of a page entered over http, so the SPA
+**CSP `upgrade-insecure-requests` is not a reason.** Earlier versions of this page said
+the gateway's CSP upgrades every subresource of a page entered over http, so the SPA
 could not boot over `http://<onion>/`. On the live stack that is false. The SPA documents
-(`/`, `/login`) carry host-shell nginx's nonce CSP, which has no `upgrade-insecure-requests`,
-on both onion ports; the gateway passes that header through. The gateway's own CSP, which does
-end in `upgrade-insecure-requests` (hugmesh-gateway `SecurityConfig`), appears only on
-responses the gateway generates itself, such as the anonymous `401` for `/user` or
-`/social/matrix`, and those never govern the document. In Chromium through the SOCKS client,
-`http://<onion>/` booted the SPA to `/login` with no request upgraded to https. The
-2026-09-23 measurement that suggested otherwise used a test server that put the gateway's
-CSP on the document itself.
+(`/`, `/login`) carry host-shell nginx's nonce CSP, which has no
+`upgrade-insecure-requests`, on both onion ports, and the gateway passes that header
+through. The gateway's own CSP does end in `upgrade-insecure-requests` (hugmesh-gateway
+`SecurityConfig`), but it appears only on responses the gateway generates itself, such as
+the anonymous `401` for `/user` or `/social/matrix`. Those never govern the document. In
+Chromium through the SOCKS client, `http://<onion>/` booted the SPA to `/login` with no
+request upgraded to https. The 2026-09-23 measurement that suggested otherwise used a
+test server that put the gateway's CSP on the document itself.
 
 **HSTS on the http door.** `http://<onion>/` does send `Strict-Transport-Security`
-(host-shell nginx adds it `always`, and nothing strips it on `:80`; the TLS front strips it on
-`:443`). Chromium ignores HSTS received over plain http (RFC 6797 §8.1), so a second http
-visit stays http. Tor Browser's handling of it is unmeasured.
+(host-shell nginx adds it `always`, and nothing strips it on `:80`; the TLS front strips
+it on `:443`). Chromium ignores HSTS received over plain http (RFC 6797 §8.1), so a second
+http visit stays http. Tor Browser's handling of it is unmeasured.
 
 The TLS front's certificate is the stack's own (minted for the cluster domain), so Tor
 Browser warns once. Whether Tor Browser, which treats `.onion` as a secure context, behaves
@@ -431,17 +432,18 @@ TLS front, which forwards to the fe-gateway directly (#586). tor resolves both u
 once, when it parses its torrc, so recreating `hugmesh-fe-gateway` or `hugmesh-https-front` with a
 new container IP needs `hugmesh-tor` recreated too.
 
-**The Anubis cookie on the http door (#627).** Anubis sets its cookies `Secure; SameSite=None`
-by default. On `http://<onion>/` Chromium drops them, returns to `pass-challenge` without them,
-and Anubis answers `500` ("Oh noes!"; its log says "user has cookies disabled"), so the gate
-could not be passed. `make stack-up ANUBIS=1 TOR=1` therefore exports
-`ANUBIS_COOKIE_SECURE='false'` (Makefile `STACK_TOR_ENV`), which `hugmesh-anubis` reads as
-`COOKIE_SECURE`: the cookies lose `Secure` and SameSite drops from `None` to `Lax`. Every other
-bring-up keeps Anubis's default, and a caller's own `ANUBIS_COOKIE_SECURE` wins. The localhost
-door (`:8923`) works either way, because Chromium treats localhost as secure. Not yet exercised
-through the real onion: the live check is Chromium via the SOCKS client on `http://<onion>/`
-ending on the HugMesh `/login` page rather than "Oh noes!", on a stack brought up with this
-change. Tor Browser is a person's check.
+**The Anubis cookie on the http door (#627).** Anubis sets its cookies
+`Secure; SameSite=None` by default. On `http://<onion>/` Chromium drops them, returns to
+`pass-challenge` without them, and Anubis answers `500` ("Oh noes!"; its log says "user
+has cookies disabled"), so the gate could not be passed. `make stack-up ANUBIS=1 TOR=1`
+therefore exports `ANUBIS_COOKIE_SECURE='false'` (Makefile `STACK_TOR_ENV`), which
+`hugmesh-anubis` reads as `COOKIE_SECURE`. The cookies lose `Secure` and SameSite drops
+from `None` to `Lax`. Every other bring-up keeps Anubis's default, and a caller's own
+`ANUBIS_COOKIE_SECURE` wins. The localhost door (`:8923`) works either way, because
+Chromium treats localhost as secure. Not yet exercised through the real onion. The live
+check is Chromium via the SOCKS client on `http://<onion>/` ending on the HugMesh
+`/login` page rather than "Oh noes!", on a stack brought up with this change. Tor Browser
+is a person's check.
 
 The contract is gated offline by `tests/stack/test-tor-flip-wiring.sh` (16 checks, each with a
 mutant that must turn it red).
@@ -475,8 +477,9 @@ wholesale, so a literal list here would silently drop `ingress.className=nginx-i
 **Custody.** The onion keys stay in `tests/stack/.run/kind-tor/hs/` (gitignored, `0700`)
 and survive `make kind-tor-down`, so the address is stable across restarts; delete that
 directory to mint a new one. `make kind-tor-status` and `scripts/kind-tor.sh onion`
-answer only while **this** tor is alive (its pidfile names a live process whose command
-line carries this torrc) — a leftover `hostname` file is not a live door.
+answer only while **this** tor is alive: its pidfile names a running process whose command
+line carries this torrc. A defunct (zombie) tor counts as stopped, and a leftover `hostname`
+file is not a live door.
 
 **Certificate.** The kind Ingress has no TLS block, so `:443` presents ingress-nginx's
 default certificate, not one for the onion. Tor Browser shows a certificate warning on

@@ -2466,7 +2466,10 @@ test:studio-suite:
     # (infra_services / desktop_user / desktop_user_role) reached the wire against an
     # `additionalProperties: false` schema and stayed there: this job skipped it, and
     # the GitHub job (which does install jsonschema) had the node deselected.
-    - pip install --quiet pytest PySide6 jsonschema
+    # cryptography is optional for the product but not for the gate: without it the
+    # certificate subject/expiry path (config.ca_cert_error and friends) degrades and
+    # the tests behind skipif(not HAVE_CRYPTOGRAPHY) skip silently.
+    - pip install --quiet pytest PySide6 jsonschema cryptography
   script:
     # KEEP, for whoever ever needs --deselect/--deselect-style node ids here: they are
     # ROOTDIR-relative. studio/pytest.ini makes rootdir studio/, so an id reads
