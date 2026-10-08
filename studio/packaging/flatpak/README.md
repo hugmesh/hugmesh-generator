@@ -79,14 +79,26 @@ its timestamp), so a checksum identifies one build, not the source it came from.
 
 `../../tests/test_flatpak_packaging_files.py` runs the script against a scripted fake
 `flatpak` as well, through all three smoke tests, and holds it to what this page says:
-every call goes to the private directory and none to `--system`, the Builder is granted
+every call goes to the private directory and none to `--system`, and every `flatpak`
+call that reads or changes an installation names `--user` before its first operand (the
+fake answers one that does not with exit 99 and the run fails; a second test reads every
+line of the script for the same rule, including the validator fallback and the re-run
+branches the first run never reaches), the Builder is granted
 that directory and runs with `flatpak-work/` as its working directory and no
 `--state-dir` (see below), the build uses the release workflow's flags, both validators
 run, the build output may not live inside the private directory, a second run against
-the same output directory is refused, and each smoke test refuses what it must: a
-`--print-specs` that prints nothing, blank lines or anything but JSON objects; a Qt check
-that does not report `qt-ok` with PySide6; an install with any of the five files missing
-or with no launcher exported. The test that the script never runs `sudo` or a package
+the same output directory is refused, a run with too little free space stops before it
+installs (14 GiB on a first run, 4 once the runtimes exist), a second run in the same
+directory skips the remote and the toolchain and uninstalls the old app first, the
+validators fall back to the Builder's copies when the host has none, the bundle is
+renamed from its `.partial` name and not copied, nothing in the user's home directory
+changes (a canary file is planted where flatpak keeps the user's own data), and each
+smoke test refuses what it must: a `--print-specs` that prints nothing, blank lines or
+anything but JSON objects; a Qt check that does not report `qt-ok` with PySide6 (the
+script's own python is RUN against a stub Qt, so a wrong binding, a wrong platform, an
+empty grab and a missing data file are each refused by that python and not only by the
+shell's `qt-ok` guard behind it); an install with any of the five files missing or with
+no launcher exported. The test that the script never runs `sudo` or a package
 manager is a static reading of the script, and it reads exactly the forms its own test
 pins: a command behind an environment assignment, a redirection, a prefix such as
 `env`, `timeout`, `coproc`, `busybox` or `unshare` (past the prefix options that take a
@@ -101,7 +113,10 @@ whole for process calls. What it cannot read (a sourced file, a shell or python 
 pipe, a file or a process substitution) it reports instead of passing. Anything else is
 outside it: a program named through a variable, an alias, a program in another language
 (`awk`, `perl`), a command run on another machine (`ssh`), a wrapper it does not know
-(`taskset`, `script`, ...). The test pins a sample of those as outside, expecting no
+(`taskset`, `script`, ...), and what a command does to files (`rm -rf` of the real
+flatpak directory, a write to `~/.bashrc`: the canary in the scripted run catches those
+only on the path that run takes). `pip`, `npm`, `cargo`, `apk` and the other
+package managers, and `nsenter`, are forbidden words like `apt`. The test pins a sample of those as outside, expecting no
 hit, so that the scanner's reach is written down rather than assumed. (Three mutation
 batteries drove this: the first showed each file-reading check could be lost with the
 suite still green; the second put `sudo` into the script's own two spellings and the
@@ -176,7 +191,7 @@ The script proves that route with one cheap command before the long build depend
 |---|---|---|
 | Tooling | `apt-get install flatpak-builder appstream desktop-file-utils` (needs root) | `org.flatpak.Builder` from flathub, into a private directory |
 | Where it builds | inside the checkout, in `studio/packaging/flatpak` | outside it, under `HUGMESH_STUDIO_FLATPAK_OUT` |
-| Validators, runtime, `flatpak build-bundle`, bundle name, checksum | as listed in the workflow | the same calls, the same names |
+| Validators, runtime, `flatpak build-bundle`, bundle name, checksum | as listed in the workflow | the same calls and names, except that the bundle is first written as `<name>.partial` and renamed when whole. `tests/test_flatpak_packaging_files.py` reads the workflow and compares them. |
 | Smoke test | `--print-specs` is not empty | `--print-specs` is JSON; Qt starts with PySide6; launcher and icons exist |
 | Runs when | on a tag or by hand, on GitHub | whenever you run it |
 
