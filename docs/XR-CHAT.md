@@ -21,16 +21,18 @@ The pieces, by repo:
 
 | Piece | Repo | What it is |
 |---|---|---|
-| **Character Forge** (3D maker) | `hugmesh-character-forge-bff-api` (one multi-surface repo; the brand prefix was renamed by the HugMesh rebrand) | Spring BFF at the root (`/bff/character-forge/**`: Char3DConfig CRUD, one-active-per-owner, cross-user lookup, VN→3D `/map`), `godot/character-forge/` (the Godot 4 maker game + the CANONICAL `character_assembler.gd`), `frontend/` (Angular native-federation remote mounted at `/character-forge`) |
+| **Character Forge** (3D maker) | `hugmesh-character-forge-bff-api` (one multi-surface repo; the brand prefix was renamed by the HugMesh rebrand) | Spring BFF at the root (`/bff/character-forge/**`: Char3DConfig CRUD, one-active-per-owner, cross-user lookup, VN→3D `/map`), `godot/` (a pointer: the Godot 4 maker moved to `hugmesh-games`, `games/character-forge/`, which holds the CANONICAL `scripts/character_assembler.gd`; `godot/character-forge/build/bundle/` keeps a prebuilt web export), `frontend/` (Angular native-federation remote mounted at `/character-forge`) |
 | **The room** | `hugmesh.games` repo, `games/shadows-of-the-net/` | Godot WASM chat chamber; dual mode — `mode=session` (games-portal wasm-game contract) and `mode=matrix` (all I/O via the host page `Chat3D` JS bridge) |
-| **Matrix integration** | `hugmesh-matrix-ui` | `net.hugmesh.chat3d*` state events (room enable/config, scene placements, per-user avatar; legacy `systems.hugmesh.*`/`systems.snapdragon.*` spellings still readable), room-settings section, iframe host for the room, full-mesh WebRTC audio + pose/blendshape data channels, self-hosted MediaPipe face tracking |
+| **Matrix integration** | `hugmesh-matrix-ui` | `net.hugmesh.chat3d*` state events (room enable/config, scene placements, per-user avatar, stage holder; legacy `systems.hugmesh.*`/`systems.snapdragon.*` spellings still readable), room-settings section, iframe host for the room, full-mesh WebRTC audio + pose/blendshape data channels, self-hosted MediaPipe face tracking |
 | **Platform slug** | THIS repo | everything in §2 |
 
-3D realization v1 is **procedural** (parameterized primitive meshes assembled by
-`character_assembler.gd` — no glTF assets), keyed off the STABLE VN
-parameterization (packId / partId / headArchetype / palette regions), never SVG
-geometry. The assembler's part-registry indirection leaves room for a GLB part
-library later.
+The 3D avatar is **procedural** by default (parameterized primitive meshes assembled by
+`character_assembler.gd`), keyed off the STABLE VN parameterization (packId / partId /
+headArchetype / palette regions), never SVG geometry. Where the part registry has a
+vendored CC0/CC-BY GLB or VRM model for a family or body type, the maker mounts that
+mesh on top (the "mesh basis"; a user can also import their own model). A missing
+or over-cap asset falls back to the procedural avatar. Source:
+`hugmesh-games` `games/character-forge/README.md`.
 
 ## 2. What THIS repo bakes — the `character-forge` slug
 
@@ -95,17 +97,19 @@ the homeserver's existing `GET /_matrix/client/v3/voip/turnServer` answer:
   capability note (the `turnAvailable` pattern) instead of pretending.
 - **coturn ON** ([`COTURN.md`](COTURN.md), DEFAULT-OFF runtime slug): relayed
   candidates make room audio reliable across the public internet. Public
-  reachability of the relay is operator work (see COTURN.md §deploy).
+  reachability of the relay is operator work (see COTURN.md §5, "Public reachability").
 
 The mesh is capped by the room's `maxParticipants` (2..16, default 8; a mesh
-warning at ≥8) — an SFU is deliberately out of v1 scope (§6).
+warning at ≥8). This repo ships no SFU (§6).
 
 ## 4. WebXR entry paths
 
 - **Meta Quest 3/3s Browser (WebXR):** the room requests an `immersive-vr`
-  session (`local-floor` with fallbacks) ONLY on a user gesture (the host page's
-  Enter-VR button → `Chat3D.enterVR()`); `sessionSupported` is checked first and
-  the button hidden when absent. NOTE: Quest has **no WebXR face-tracking API**
+  session (`local-floor` required, `bounded-floor` optional) ONLY on a user gesture.
+  Two buttons start it. The in-scene Enter VR button is the reliable one; it is
+  hidden unless `immersive-vr` is supported. The host page's Enter VR button calls
+  `Chat3D.enterVR()`, stays disabled until the room reports ready, and the browser may
+  refuse it. NOTE: Quest has **no WebXR face-tracking API**
   — headset users drive the avatar mouth via mic amplitude, not camera.
 - **Desktop no-headset (first-class):** mouse/WASD orbit + click-to-sit; webcam
   face tracking (self-hosted MediaPipe FaceLandmarker in a Web Worker, camera
@@ -129,17 +133,20 @@ Exports are produced by the orchestrator with the official export templates —
   `xr-spatial-tracking` the embedded WASM cannot start a session.
 - Media (mic) permission prompts happen in-headset; first entry should be done
   once outside VR to accept them comfortably.
-- A mesh-enrolled Quest (the MDM track, [`MDM.md`](MDM.md)) can have the
-  XR-chat entry URL provisioned as a managed browser shortcut — that lane owns
-  its own docs section.
+- A mesh-enrolled Quest (the MDM track, [`MDM.md`](MDM.md) "Quest headsets") can have
+  the XR-chat entry URL (`--xr-chat-url`, https only) provisioned as a Headwind web-page
+  application; the wizard prints the console runbook and fires a `VIEW` intent so the
+  operator can check the room loads.
 
 ## 6. Future work (documented, NOT built)
 
 - **LiveKit / MatrixRTC SFU** as an optional service — replaces the full-mesh
-  cap for larger rooms; a reserved future slot, NOT scheduled. The mesh cap 8
-  stands in until then.
+  cap for larger rooms; a reserved future slot, NOT scheduled. This repo has no
+  such service. `hugmesh-matrix-ui` carries a client path behind a dark MatrixRTC flag
+  (default off): above `maxParticipants` it asks the homeserver for a LiveKit focus and
+  moves voice onto it if one is advertised. Without a focus the mesh cap stands.
 - **Video-as-WebGL-texture** on room surfaces (v1 = poster frame + open-in-panel).
-- **GLB part library / VRM export** for the assembler (indirection is ready).
+- **VRM export** from the assembler. (The GLB/VRM mesh basis, §1, is built; export is not.)
 - **WebXR face tracking** — no Quest 3/3s browser API exists today.
 - **Appservice-side media fan-in** (v1 is client-driven placement).
 
@@ -151,12 +158,10 @@ cluster **services** selected via the optional-services framework, not image
 build options beyond the slug flag documented in §2.
 # XR-CHAT — generator-side notes (thin desktop + streaming legs)
 
-> **Scope note:** this branch (`feat/quest-mdm-setup`) carries the **Quest
-> MDM + thin-desktop** legs of the XR-chat track only. The full XR-chat
-> architecture document (character-forge optional service, Matrix chat3d
-> rooms, WebXR entry paths, coturn dependency, LiveKit/MatrixRTC future work)
-> is owned by the platform-wiring lane and merges into this same file —
-> sections below are scoped to survive that merge.
+> **Scope note:** the sections below cover the **Quest MDM + thin-desktop** legs of the
+> XR-chat track. The architecture above (character-forge optional service, Matrix
+> chat3d rooms, WebXR entry paths, coturn dependency, future work) is the other half
+> of this same file.
 
 ## Quest headsets on the mesh
 
