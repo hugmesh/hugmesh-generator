@@ -344,6 +344,70 @@ def check_route_services(root):
         ok("[route-service]", "all %d in-cluster gateway route targets resolve to a real Service" % total)
 
 
+# ── 4b) a gateway-to-gateway relay MUST preserve the original Host ───────────
+# hugmesh-generator#622. The be gateway's `headscale-forward` route relays
+# Host=scale.<domain> to the pki gateway, whose own `headscale` route (and the
+# SecurityConfig host gate in front of it) match on that same Host. Spring Cloud
+# Gateway sends the UPSTREAM URI's host unless the route carries the
+# PreserveHostHeader filter, so without it the pki gateway sees
+# hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local, no route matches, and headscale
+# is unreachable through the only external path. Nothing else sets the filter, so
+# nothing else would notice. The rule is stated generally: any HOST-predicated route
+# whose target is itself a gateway Service must preserve the Host. The brand twin
+# (templates/apps/20-gateway-be.yaml.hbs) is checked as text, because
+# `{{BRAND}}` is not valid YAML.
+GATEWAY_URI_RE = re.compile(r"^https?://[a-z0-9{}.-]*-gateway\.[a-z0-9{}.-]+")
+def _brand_relay_preserves_host(text):
+    """Line scan of the .hbs twin (not YAML): the `headscale-forward` route block, ended
+    by the next `- id:` at the same indent, must list `- PreserveHostHeader`. Line-based
+    on purpose: a nested-quantifier regex over this text backtracks catastrophically on
+    the very miss it exists to report."""
+    lines = text.split("\n")
+    for n, ln in enumerate(lines):
+        m = re.match(r"^(\s*)- id: headscale-forward\s*$", ln)
+        if not m:
+            continue
+        indent = len(m.group(1))
+        for nxt in lines[n + 1:]:
+            if nxt.lstrip().startswith("- id: ") and len(nxt) - len(nxt.lstrip()) <= indent:
+                break
+            if nxt.strip() == "- PreserveHostHeader":
+                return True
+        return False
+    return False
+
+
+def check_gateway_relay_host(root):
+    relays = 0
+    bad = 0
+    for gw, routes in sorted(_gateways(root).items()):
+        for r in routes:
+            r = r or {}
+            if not r.get("host") or not GATEWAY_URI_RE.match(r.get("uri") or ""):
+                continue
+            relays += 1
+            if "PreserveHostHeader" not in [str(f).split("=")[0] for f in (r.get("filters") or [])]:
+                bad += 1
+                fail("[relay-host]",
+                     "gateway %s route %r relays Host=%s to another gateway (%s) without the "
+                     "PreserveHostHeader filter, so the upstream gateway sees its own Service DNS "
+                     "name and its host-predicated routes can never match"
+                     % (gw, r.get("id"), r.get("host"), r.get("uri")))
+    if not relays:
+        fail("[relay-host]", "found no host-predicated gateway-to-gateway route at all; the "
+             "be gateway headscale-forward relay is gone or this check went vacuous")
+        return
+    tpl_dir = os.environ.get("HUGMESH_TEMPLATES_DIR") or os.path.join(root, "..", "..", "templates")
+    tpl = os.path.join(tpl_dir, "apps", "20-gateway-be.yaml.hbs")
+    if os.path.isfile(tpl):
+        if not _brand_relay_preserves_host(text_of(tpl)):
+            bad += 1
+            fail("[relay-host]", "templates/apps/20-gateway-be.yaml.hbs headscale-forward route has "
+                 "no PreserveHostHeader filter (the brand twin drifted from specs/cluster)")
+    if not bad:
+        ok("[relay-host]", "all %d host-predicated gateway-to-gateway relays preserve the Host header" % relays)
+
+
 # ── 5) route-access seed rows -> real gateway ids ────────────────────────────
 def sql_without_comments(text):
     """The SQL with its `--` line comments removed, single-quoted literals respected.
@@ -2595,6 +2659,7 @@ def main():
     check_yaml(root)
     check_namespaces(root)
     check_route_services(root)
+    check_gateway_relay_host(root)
     check_route_access(root)
     check_route_access_no_bare_wildcard(root)
     check_pki_roles(root)
