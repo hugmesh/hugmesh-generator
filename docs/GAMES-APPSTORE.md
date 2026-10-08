@@ -13,8 +13,10 @@ exposure, degrade. The data model, endpoints and reconciler live in the admin-bf
 ## Rides the `games` slug
 
 The app store needs the games namespace, so it is an **add-on of the `games` optional
-slug**, not a slug of its own. Deselect `games` (or flip it off at runtime) and the
-WHOLE app-store control plane is pruned; see "Degrade" below. The `games` entry in
+slug**, not a slug of its own. Deselect `games` when you build the image and the
+WHOLE app-store control plane is pruned; see "Degrade" below. Switching `games` off at
+runtime only changes the install flag (the live reconciler writes the 13a element list and the
+`installed-services` ConfigMap, never the 13c element). The `games` entry in
 `optional-services.yaml` carries the app-store apps, manifests and routes. The `games` install
 flag in the `installed-services` ConfigMap drives the `games-services` capability greyout
 (`dependsOn: games`). It does not drive the 13c ApplicationSet: that element ships
