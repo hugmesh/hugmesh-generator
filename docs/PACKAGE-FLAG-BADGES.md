@@ -1,40 +1,38 @@
 # Package flag badges — the semantics the Studio must render
 
 _State key: **✅ facts established, all cited to files on this machine** ·
-**⛔ no feature code in this document** — this is the ground-truth lane for the
+**⛔ no feature code in this document**. This is the ground-truth lane for the
 four-column per-package flag display. Everything below was re-derived from
 portage 3.0.81.2's own source, its man pages, the Gentoo tree at
 `/var/db/repos/gentoo`, and real captured output from the live fleet build
-`out/sessions/20260729-233913-719d4e`. Where the operator's stated mapping
-differs from portage's real semantics, the **real** semantics are recorded and
-the difference is called out. Re-checked on 2026-10-07 against the installed
-portage 3.0.82.2: the logic reads the same and the committed flag-state fixture
-regenerates identically. Every portage line number below is 3.0.82.2's; the
-session paths under `out/sessions/` are gone, so the measurements taken from
-them are not re-verifiable._
+`out/sessions/20260729-233913-719d4e`. Where the operator's stated mapping differs
+from portage's real semantics, the **real** semantics are recorded and the
+difference is called out. Re-checked on 2026-10-07 against the installed portage
+3.0.82.2: the logic reads the same, and the committed flag-state fixture
+regenerates identically. Every portage line number below is 3.0.82.2's. The
+session paths under `out/sessions/` are gone, so measurements taken from them
+cannot be re-verified._
 
-The operator asked, during live QA of a real mesh build, for the emerge stage to
-show — per package — **four separate columns** (USE_EXPAND-style flags, plain USE
-flags, KEYWORDS, LICENSE), each appearing **only when it has content**; every
-flag rendered as a **hoverable badge** carrying real documentation; and **colour
-semantics mirroring portage's console output, each colour also carrying a tiny
-emoji** so meaning never depends on colour perception.
+During live QA of a real mesh build, the operator asked the emerge stage to show,
+per package, **four separate columns** (USE_EXPAND-style flags, plain USE flags,
+KEYWORDS, LICENSE). A column appears **only when it has content**. Every flag is a
+**hoverable badge** carrying real documentation. Colours mirror portage's console
+output, and each colour also carries a tiny emoji, so meaning never depends on
+colour perception.
 
-This document establishes what is true, what is reachable offline, and what is
-simply not available — so nothing downstream has to guess.
+This page records what is true, what is reachable offline, and what is not
+available, so nothing downstream has to guess.
 
 ---
 
 ## 0. Three corrections up front
 
-Everything here is verified below. These three matter enough to state first,
-because building to the stated premise instead of the real one would ship a
-badge that means the wrong thing.
+Each point is verified below. These three come first because building to the
+stated premise would ship a badge that means the wrong thing.
 
 **(a) The operator's colour mapping is not portage's.** The ask was "newuse
-(green) / from a dependency (red) / profile (yellow parens)". Portage's actual
-axes are *enablement* and *change since the last merge*, not *who asked for the
-flag*:
+(green) / from a dependency (red) / profile (yellow parens)". Portage's axes are
+*enablement* and *change since the last merge*, not *who asked for the flag*:
 
 | operator's belief | portage 3.0.81.2 reality |
 |---|---|
@@ -48,19 +46,19 @@ the profile default" state. `use.force`/`use.mask` membership is the only
 provenance portage renders, and it renders it as parentheses. Any badge claiming
 richer provenance would be fabricating it.
 
-**(b) The Pi is not building in parallel either.** The premise "x86 should also
-do builds in parallel jobs as pi" rests on the Studio showing `>>> Jobs:` lines
-for rpi5 and none for x86. That line is **not** evidence of parallelism — see
-§6. Both builders run `--jobs=1`, deliberately, for a recorded OOM reason. In
-the live rpi5 log, of the 1 739 scheduler lines, the 562 that report a running
-count **all** say `1 running` — never 2.
+**(b) The Pi is not building in parallel either.** The premise "x86 should also do
+builds in parallel jobs as pi" rests on the Studio showing `>>> Jobs:` lines for
+rpi5 and none for x86. That line is **not** evidence of parallelism (see §6). Both
+builders run `--jobs=1` on purpose, for a recorded OOM reason. In the live rpi5
+log, the 562 of 1 739 scheduler lines that report a running count **all** say
+`1 running`, never 2.
 
 **(c) The resolver display in our logs is an accident, not a channel.** The 229
 `[ebuild …]` lines in `build-pki.x86.log` were printed by
 `depgraph._show_merge_list()` because a **slot conflict** was hit
 (`/usr/lib/python3.12/site-packages/_emerge/depgraph.py:1723`). A build that
-resolves cleanly emits none. Any feature that depends on the resolver emission
-must **cause** that emission, not scrape for it.
+resolves cleanly emits none. A feature that depends on the resolver emission must
+**cause** that emission, not scrape for it.
 
 ---
 
@@ -109,9 +107,9 @@ parentheses**; the sign inside them is the only hint (`(f)` was forced on,
 
 ### 1.1a The parens are two different mechanisms, and the sign separates them
 
-States 12-14 are the ones a naive reading of the table misses, and getting them
-wrong inverts a badge's meaning. `_create_use_string` produces parentheses on
-**two unrelated paths**:
+A naive reading of the table misses states 12-14, and misreading them inverts a
+badge's meaning. `_create_use_string` produces parentheses on **two unrelated
+paths**:
 
 * **the removed-from-IUSE branch** (`output_helpers.py:302-309`) builds its own
   parens and then `continue`s, so it never reaches the forced wrap. It always
@@ -173,10 +171,10 @@ Our builders send emerge's output to a file, not a tty (the x86 builder through
 `_emerge_notice_sink`), so **colour is absent from every log we have** — verified: the fixture
 `emerge-resolver-lines.x86-pki.txt` contains zero escape sequences.
 
-The good news: the `-` prefix, the `*` and `%` suffixes and the parentheses are
-plain ASCII and **all survive**. Of the 14 states, **12 are still uniquely
-recoverable from captured text** (13 distinct renderings, one of which carries
-two states). The exception is a single genuine two-way collision:
+The `-` prefix, the `*` and `%` suffixes and the parentheses are plain ASCII and
+**all survive**. Of the 14 states, **12 are still uniquely recoverable from
+captured text** (13 distinct renderings, one of which carries two states). The
+exception is a single genuine two-way collision:
 
 > **states 10 and 11 both render as `(-f)` in plain text.** Blue `(-f)`
 > ("masked, unchanged") and yellow `(-f)` ("masked, and newly appeared in
@@ -318,12 +316,12 @@ characters** across all 229 rows.
 
 ## 3. Where each of the four columns really comes from
 
-The decisive discovery: **`<sysroot>/var/db/pkg/<cat>/<pf>/` — portage's VDB —
-is part of the captured build output**, and it carries `KEYWORDS`, `LICENSE`,
-`IUSE`, `USE`, `IUSE_EFFECTIVE`, `DESCRIPTION`, `SLOT`, `EAPI`, `FEATURES`,
-`repository` as one-line plain-text files, per merged package. Verified on
-`out/sessions/20260729-233913-719d4e/wl-pki.x86/sysroot`: 319 packages, 2 484
-such files, **215 850 bytes total**. Sample committed as
+**`<sysroot>/var/db/pkg/<cat>/<pf>/` — portage's VDB — is part of the captured
+build output.** For each merged package it holds `KEYWORDS`, `LICENSE`, `IUSE`,
+`USE`, `IUSE_EFFECTIVE`, `DESCRIPTION`, `SLOT`, `EAPI`, `FEATURES` and `repository`
+as one-line plain-text files. Verified on
+`out/sessions/20260729-233913-719d4e/wl-pki.x86/sysroot`: 319 packages, 2 484 such
+files, **215 850 bytes total**. A sample is committed as
 `studio/tests/fixtures/package-flags/vdb-package-metadata.sample.json`.
 
 | column | authoritative source | fallback | unavailable when |
@@ -438,29 +436,26 @@ a non-Gentoo machine. Two honest options:
 
 ### 4.2a The group NAMES are not descriptions, and must not go missing with them
 
-A missing description degrades gracefully: the hover simply says so. A missing
-**group list** does not. `profiles/desc/` serves two unrelated purposes, and only
-the first is per-package data:
+A missing description degrades gracefully: the hover says so. A missing **group
+list** does not. `profiles/desc/` serves two unrelated purposes, and only the first
+is per-package data:
 
 * its file *contents* are the USE_EXPAND flag descriptions (hover text), and
 * its 52 *filenames* are the only offline way to know that
   `python_targets_python3_13` belongs to `PYTHON_TARGETS` at all.
 
-Lose the filenames and the VDB path cannot split anything: every USE_EXPAND flag
-folds back into plain `USE` under its full prefixed name — the flat
-prefix-mixing shape §3.1 records as the elog header's defect — and the
-USE_EXPAND column is never revealed. That is the exact reader the sidecar exists
-to serve, silently regressing to the shape the column was built to fix. The §4.4
-sidecar cannot rescue it either: it maps flags to descriptions and carries no
-group-name list.
+Lose the filenames and the VDB path cannot split anything. Every USE_EXPAND flag
+folds back into plain `USE` under its full prefixed name (the flat, prefix-mixing
+shape §3.1 records as the elog header's defect), and the USE_EXPAND column never
+appears. The §4.4 sidecar cannot rescue it: it maps flags to descriptions and
+carries no group-name list.
 
-So the group list has **three** sources, in order: the live tree
-(authoritative), the `@GROUP:flag` keys of a session sidecar (unioned in — they
-can only name groups a real build saw), and finally a **built-in snapshot of the
-52 names**, which is a small, slow-moving, tree-wide constant rather than
-per-package fact. The snapshot must never be silent: when it is what answered,
-the hover text says so, and says what it could cost (a group added to the tree
-since the snapshot stays folded into plain USE).
+So the group list has **three** sources, in order: the live tree (authoritative);
+the `@GROUP:flag` keys of a session sidecar, unioned in (they can only name groups a
+real build saw); and a **built-in snapshot of the 52 names**, a small, slow-moving,
+tree-wide constant. The snapshot is never silent. When it answers, the hover text
+says so and says what it could cost: a group added to the tree since the snapshot
+stays folded into plain USE.
 
 ### 4.3 Coverage — measured, not assumed
 
@@ -498,9 +493,9 @@ everything a role build touches:
 | `wl-be.x86` | 504 | 49 226 B | 16 565 B |
 | `wl-pki.rpi5` | 717 | 67 232 B | 21 919 B |
 
-**~17-22 KB gzipped per role.** Against a 730 MB build log this is free. Capture
-it and the hover text works forever, on any machine, offline, for archived
-sessions — which is the whole point.
+**~17-22 KB gzipped per role.** Against a 730 MB build log that is free. With the
+sidecar captured, the hover text works on any machine, offline, for archived
+sessions. That is the point.
 
 **Status: not built.** The Studio reads a sidecar if one exists
 (`SIDECAR_BASENAME = "flag-descriptions.json"` in
@@ -529,20 +524,19 @@ palette constants are `TEAL = "#0e7a63"` and `GREEN = "#1a7f37"`; the rest reuse
 Fourteen states is too many badges. They collapse to **six** distinct meanings
 plus one modifier, which is what the operator actually needs to see.
 
-**Palette constraint from this codebase, not from taste.** The Studio does not
-own its background — `studio/hugmesh_studio/gui/styles.py:1-14` records that the
-GUI runs on the *system* palette and that every semantic colour must therefore
-be "the cross-theme compromise that stays legible on BOTH a light and a dark
-background". It already exports `MUTED = "#8a8a8a"`, `WARN = "#c2410c"`,
-`ERROR = "#c5221f"`. Badge colours below follow the same rule: one mid-tone
-value each, no light/dark pair, and the two existing constants reused where the
-meaning matches. Portage's raw bright-ANSI values (`#FF5555`, `#55FF55`,
-`#FFFF55`, `#5555FF`) are *not* usable — they fail contrast on white.
+**Palette constraint from this codebase, not from taste.** The Studio does not own
+its background. `studio/hugmesh_studio/gui/styles.py:1-14` records that the GUI runs
+on the *system* palette, so every semantic colour must be "the cross-theme
+compromise that stays legible on BOTH a light and a dark background". It already
+exports `MUTED = "#8a8a8a"`, `WARN = "#c2410c"`, `ERROR = "#c5221f"`. Badge colours
+follow the same rule: one mid-tone value each, no light/dark pair, and the two
+existing constants reused where the meaning matches. Portage's raw bright-ANSI
+values (`#FF5555`, `#55FF55`, `#FFFF55`, `#5555FF`) fail contrast on white and are
+*not* usable.
 
-Emoji are chosen to be distinguishable at 12 px, unambiguous in monochrome, and
-— deliberately — to differ in **shape**, not just hue, so the badge survives
-deuteranopia/protanopia/tritanopia, greyscale printing, and the operator's
-system theme being either polarity.
+Emoji are chosen to be distinguishable at 12 px and unambiguous in monochrome. They
+differ in **shape**, not just hue, so the badge survives deuteranopia, protanopia,
+tritanopia, greyscale printing, and a system theme of either polarity.
 
 | # | State | portage text | Emoji | Colour | Rationale |
 |---|---|---|---|---|---|
@@ -556,30 +550,29 @@ system theme being either polarity.
 
 Additional rules:
 
-* **The tooltip always states the portage text verbatim** (`-python3_13*`) plus
-  the plain-English meaning plus the flag description from §4. An operator who
-  knows portage should be able to check our reading against theirs in one hover.
+* **The tooltip always states the portage text verbatim** (`-python3_13*`), then
+  the plain-English meaning, then the flag description from §4. An operator who
+  knows portage can check our reading against theirs in one hover.
 * **Every badge is also a text token.** Copy-paste of a row must yield
   `USE="debug -python -test"` exactly as portage printed it.
-* **Do not re-sort.** Preserve `enabled → disabled → removed` (§1.2).
-* **The `(-f)` ambiguity (§1.3) must be visible, not papered over.** If the
-  emission was captured without colour, the padlock badge says "forced/masked"
-  and the tooltip adds "cannot tell from this log whether this flag is also new
-  — the log has no colour". Emitting with `--color=y` removes the caveat.
-  **Equally: it must not be claimed anywhere else.** The caveat belongs to the
-  bare `(-f)` and to nothing else (§1.3); asserting "the log was captured without
-  colour" on a token that arrived *with* colour, or on a shape portage's source
-  proves unambiguous, is a false statement about the operator's own data.
+* **Do not re-sort.** Keep `enabled → disabled → removed` (§1.2).
+* **Show the `(-f)` ambiguity (§1.3); do not paper over it.** If the emission was
+  captured without colour, the padlock badge says "forced/masked" and the tooltip
+  adds "cannot tell from this log whether this flag is also new — the log has no
+  colour". Emitting with `--color=y` removes the caveat. **Do not claim it anywhere
+  else.** The caveat belongs to the bare `(-f)` and nothing else (§1.3). Saying "the
+  log was captured without colour" about a token that arrived *with* colour, or
+  about a shape portage's source proves unambiguous, is a false statement about the
+  operator's own data.
 * **Empty column ⇒ no column.** 68/319 packages have no LICENSE; most have no
-  USE_EXPAND flags. The operator asked for this explicitly and the data backs
-  it.
+  USE_EXPAND flags. The operator asked for this explicitly, and the data backs it.
 
 ---
 
 ## 6. Addendum: the x86 vs Pi parallelism premise
 
-Included because the conclusion is load-bearing for a sibling lane and the
-usual evidence for it is wrong.
+Included because a sibling lane relies on the conclusion, and the usual evidence for
+it is wrong.
 
 **The `>>> Jobs:` line is not a parallelism indicator.** It is printed by
 `JobStatusDisplay`, which is active only in *background mode*
@@ -599,12 +592,11 @@ Either branch turns it on. The fleet's asymmetry is entirely the `quiet` branch:
 | **rpi5** (runs in the build container) | `--jobs=1` on the `cross_emerge` command line (`build-rpi5-stage4.sh:3933`) | `--quiet-build=y` inherited from `Dockerfile.build:98` `EMERGE_DEFAULT_OPTS` | **yes** (via `quiet`) | 1 739 lines |
 | **x86** (runs on the host) | `EMERGE_JOBS=1` → `--jobs 1` (`build-x86-host-stage4.sh:5375, 5478`) | none | **no** | 0 lines |
 
-The container ENV sets `--jobs=4`, but the explicit `--jobs=1` on the
-`cross_emerge` command line wins (emerge prepends `EMERGE_DEFAULT_OPTS` to
-argv). Proof from the log itself — `build-pki.rpi5.log`'s 1 739 scheduler lines
-break down as 896 bare `N of M complete`, 281 `…, 1 merge wait`, and 562
-`…, 1 running`. **The running count is `1` in every line that has one; the
-string `2 running` never appears.**
+The container ENV sets `--jobs=4`, but the explicit `--jobs=1` on the `cross_emerge`
+command line wins (emerge prepends `EMERGE_DEFAULT_OPTS` to argv). The log shows it:
+`build-pki.rpi5.log`'s 1 739 scheduler lines break down as 896 bare
+`N of M complete`, 281 `…, 1 merge wait`, and 562 `…, 1 running`. **The running
+count is `1` in every line that has one; the string `2 running` never appears.**
 
 **So both builders are serial, on purpose.** (The other eight ARM builders are
 not: they pass `--jobs="${JOBS}"`, §7.4.) The reason is recorded in the code
@@ -621,48 +613,48 @@ and must not be discarded:
 > cross-Go build at a time keeps RAM bounded (override with
 > CROSS_EMERGE_JOBS)."*
 
-Whoever raises x86 parallelism must therefore: keep `--load-average`; keep
-`GOMAXPROCS`/`GOFLAGS -p` capped (Go ignores make's jobserver and `-l`, which is
-the actual OOM mechanism); make the degree an env override exactly as rpi5
-already does with `CROSS_EMERGE_JOBS`; and account for the 20 GB xfs scratch
-budget cited at `:5365-5368`. A default of 2 is the *first* untested step, not a
-safe one — the comment says 2 is precisely what was observed to fail.
+Whoever raises x86 parallelism must: keep `--load-average`; keep
+`GOMAXPROCS`/`GOFLAGS -p` capped (Go ignores make's jobserver and `-l`, which is the
+actual OOM mechanism); make the degree an env override, as rpi5 already does with
+`CROSS_EMERGE_JOBS`; and stay within the 20 GB xfs scratch budget cited at
+`:5365-5368`. A default of 2 is the *first* untested step, not a safe one: the
+comment says 2 is exactly what was observed to fail.
 
-A separate, cheaper win is available with **no** OOM risk: adding
-`--quiet-build=y` to the x86 host emerge would give the Studio the same
-scheduler telemetry the Pi already produces, without changing concurrency at
-all. That is a decision for the progress lane, not this one.
+A cheaper win carries **no** OOM risk. Adding `--quiet-build=y` to the x86 host
+emerge would give the Studio the same scheduler telemetry the Pi already produces,
+without changing concurrency. That decision belongs to the progress lane, not this
+one.
 
 ---
 
 ## 7. Open unknowns
 
-1. **No `%` state has ever been observed in a real fleet log.** States 5-8 are
-   proven from portage's source and reproduced through portage's own formatter,
-   but never captured from a fleet build (all our builds are fresh sysroots).
-   They need one warm-sysroot rebuild to be confirmed end-to-end.
+1. **No `%` state has ever been observed in a real fleet log.** States 5-8 are proven
+   from portage's source and reproduced through portage's own formatter, but never
+   captured from a fleet build (all our builds are fresh sysroots). One warm-sysroot
+   rebuild would confirm them end to end.
 2. **No coloured capture exists.** Every conclusion about ANSI codes comes from
-   `portage/output.py` and from driving `colorize()` directly. A real
-   `--color=y` emission has never been captured by the fleet.
+   `portage/output.py` and from driving `colorize()` directly. The fleet has never
+   captured a real `--color=y` emission.
 3. **No builder has run `emerge -pv --color=y`.** The 229-line sample is a
-   slot-conflict by-product at default verbosity. Since the plan preview landed
-   (`scripts/_emerge-plan-lib.sh`), builders do run `--pretend --verbose
-   --color=n` before the multi-package groups, so the verbosity-3 row shape
-   (per-row size, `:slot`, `::repo`, `[oldversion]`) now has real captures:
-   `tests/build-matrix/fixtures/emerge-pretend-plan.verbose*.txt`. Those
-   captures are colourless, and the queued badges-Emit phase (§4.4) is what
-   would add `--color=y`.
-4. **ARM cross builders were not measured.** The eight builders other than
-   rpi5 (frite, jetson and the six Orange Pi platforms) pass
-   `--jobs="${JOBS}"` — not 1 — to `"${CROSS_TARGET}-emerge"` (e.g.
-   `build-frite-stage4.sh:1714`, `build-jetson-stage4.sh:1793`). They were out
-   of scope here; their resolver/telemetry shape is unverified.
+   slot-conflict by-product at default verbosity (§8.3 confirms that a normal build
+   emits no resolver rows). Since the plan preview landed
+   (`scripts/_emerge-plan-lib.sh`), builders do run `--pretend --verbose --color=n`
+   before the multi-package groups, so the verbosity-3 row shape (per-row size,
+   `:slot`, `::repo`, `[oldversion]`) now has real captures:
+   `tests/build-matrix/fixtures/emerge-pretend-plan.verbose*.txt`. Those captures
+   are colourless; the queued badges-Emit phase (§4.4) would add `--color=y`.
+4. **ARM cross builders were not measured.** The eight builders other than rpi5
+   (frite, jetson and the six Orange Pi platforms) pass `--jobs="${JOBS}"`, not 1, to
+   `"${CROSS_TARGET}-emerge"` (e.g. `build-frite-stage4.sh:1714`,
+   `build-jetson-stage4.sh:1793`). They were out of scope here; their
+   resolver/telemetry shape is unverified.
 5. **`USE_EXPAND_HIDDEN` handling is untested.** `output.py:218-238` un-hides a
    hidden group when it is the sole reinstall trigger. No sample exists.
 6. **Non-`gentoo` repositories.** `guru` and `sage-on-gentoo` are enabled on this
-   host; flags from an overlay resolve against that overlay's own
-   `profiles/use.local.desc` and `metadata.xml`, which the coverage measurement
-   did not exercise (the fleet builds pull only from `gentoo`).
+   host. Flags from an overlay resolve against that overlay's own
+   `profiles/use.local.desc` and `metadata.xml`, which the coverage measurement did
+   not exercise (the fleet builds pull only from `gentoo`).
 
 ## 8. Rendering: wrapping and the Configure-view dialog
 
@@ -671,22 +663,22 @@ Both from operator live-QA on 2026-08-06, watching a real x86 build.
 ### 8.1 Badges wrap; the row grows to fit them
 
 `FlagBadgeDelegate.layout_badges()` used to place every badge on ONE line, so a
-package with a wide flag set had its tail clipped at the column edge with no way
-to reach it. Badges now flow onto as many lines as they need and `sizeHint()`
-reserves the height they actually occupy — *"they should be allowed to expand the
-row height to fit all of them"*.
+package with a wide flag set had its tail clipped at the column edge with no way to
+reach it. Badges now flow onto as many lines as they need, and `sizeHint()` reserves
+the height they occupy: *"they should be allowed to expand the row height to fit all
+of them"*.
 
-The wrap is deliberately implemented **inside `layout_badges` alone**, because
-that one function is the shared geometry behind `paint()`, the `helpEvent` hover
-probe and `sizeHint()`. Wrapping in the painter only would have left tooltips
-hit-testing the pre-wrap positions — badges would be painted on line 3 and probed
-on line 1. All three now pass the same `wrap_width` (the column width), so a badge
-is painted where its size was reserved and where the probe looks for it.
+The wrap lives **inside `layout_badges` alone**, because that one function is the
+shared geometry behind `paint()`, the `helpEvent` hover probe and `sizeHint()`.
+Wrapping in the painter only would leave tooltips hit-testing the pre-wrap
+positions: badges painted on line 3 and probed on line 1. All three pass the same
+`wrap_width` (the column width), so a badge is painted where its size was reserved
+and where the probe looks for it.
 
-Two edge cases are gated by executed tests: a column narrower than a single badge
-must still lay every badge out (the "wrap before placing" rule would otherwise
-never place anything and loop), and a resize must re-lay the rows (heights are
-width-dependent, so `sectionResized` schedules a relayout).
+Executed tests gate two edge cases. A column narrower than a single badge must still
+lay every badge out (the "wrap before placing" rule would otherwise never place
+anything and loop). A resize must re-lay the rows, because heights depend on width
+(`sectionResized` schedules a relayout).
 
 ### 8.2 Configure view
 
@@ -696,33 +688,32 @@ column leaves rows that cannot be told apart, which is a broken view rather than
 view preference.
 
 The four badge columns are *auto-revealing* (§5, "empty column ⇒ no column"), so
-the dialog has to beat that in **both** directions or it looks broken:
+the dialog must beat that in **both** directions or it looks broken:
 
 * an operator-hidden column must STAY hidden when a package finally supplies that
-  flag — otherwise the first such package silently undoes their choice mid-build;
-* an operator-shown column must appear IMMEDIATELY, before any content exists —
-  otherwise ticking it appears to do nothing.
+  flag, or the first such package silently undoes the choice mid-build;
+* an operator-shown column must appear IMMEDIATELY, before any content exists, or
+  ticking it appears to do nothing.
 
 So overrides are stored per column (`True`/`False`/absent = auto) and consulted by
 `_sync()`, which both `reset()` and `apply()` route through. Overrides survive
-`reset()` on purpose — a view preference is not run state, and revoking it at the
-start of the next build would read as the dialog forgetting the setting.
-"Reset to automatic" hands columns back to reveal-on-content.
+`reset()` on purpose: a view preference is not run state, and revoking it at the
+start of the next build would look like the dialog forgetting the setting. "Reset to
+automatic" hands columns back to reveal-on-content.
 
 ### 8.3 Confirmed: a normal build emits NO resolver rows (Open unknown #3)
 
 Measured on the operator's live session `20260806-123849-95898e`
-(`build-pki.x86.log`, 32 675 lines and still growing at the time):
-**zero `[ebuild …]` / `[binary …]` rows in BOTH the `system` and `world` emerge
-groups.** This is the empirical confirmation of §7 unknown #3 — the committed
-229-row fixture is a *slot-conflict by-product*, not what a clean build prints.
+(`build-pki.x86.log`, 32 675 lines and still growing at the time): **zero
+`[ebuild …]` / `[binary …]` rows in BOTH the `system` and `world` emerge groups.**
+This confirms §7 unknown #3: the committed 229-row fixture is a *slot-conflict
+by-product*, not what a clean build prints.
 
-The operator's report was that flags showed "on keywords pretty" but not on the
-flags column. That is exactly this: KEYWORDS/LICENSE come from the **VDB** (§3),
-which is on disk for every merged package and therefore always paints, while
-USE/USE_EXPAND need a resolver row (§2) that a normal merge never emits.
-`EMERGE_DEFAULT_OPTS` (x86 builder) carries `--jobs/--usepkg/--binpkg-respect-use`
-and no verbosity.
+The operator reported that flags showed "on keywords pretty" but not on the flags
+column. That is exactly this. KEYWORDS and LICENSE come from the **VDB** (§3), which
+is on disk for every merged package and therefore always paints. USE and USE_EXPAND
+need a resolver row (§2) that a normal merge never emits. `EMERGE_DEFAULT_OPTS` (x86
+builder) carries `--jobs/--usepkg/--binpkg-respect-use` and no verbosity.
 
 **So the USE columns cannot be fixed in the GUI alone — the data is not in the
 log.** Two sources can fill them: the plan-preview `--pretend` emission, which
