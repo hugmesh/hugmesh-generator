@@ -135,7 +135,7 @@ the GUI can do must be a documented command; repo-root `make` fronts:
   python -m hugmesh_studio --scan-hardware --json   # stable machine-readable schema
   ```
 
-- **Build-session history** — the Welcome page's Previous-builds list
+- **Build-session history** — the Prior-sessions page's Previous-builds list
   (`core/build_sessions.py` records; same records, same guards):
 
   ```sh
@@ -206,7 +206,10 @@ python -m hugmesh_studio.tui --sessions            # sessions review (build hist
                                                    #   status · artifacts · delete-with-confirm
 python -m hugmesh_studio.tui --worklist SESSION_ID # read-only worklist table for one session
 python -m hugmesh_studio.tui --meshemu SESSION     # whole-mesh emulation status list
-NO_TUI=1 python -m hugmesh_studio.tui              # force the plain-prompt fallback
+python -m hugmesh_studio.tui --fleet               # fleet build (scripts/build-all-roles.sh)
+python -m hugmesh_studio.tui --go-live             # go-live flow: provider, domain, exposure plan
+python -m hugmesh_studio.tui --plain               # force the plain-prompt fallback
+NO_TUI=1 python -m hugmesh_studio.tui              # the same, by environment
 ```
 
 The journey mirrors the GUI's flow (`hugmesh_studio/tui/journey.py` consumes
