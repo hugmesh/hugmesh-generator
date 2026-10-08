@@ -1,11 +1,15 @@
 # edge-ai-tts image — CPU-default Piper TTS + viseme timeline (VN voice, B3)
 
 The container source for the `edge-ai-tts` optional service — a stateless FastAPI
-wrapper around [rhasspy/piper](https://github.com/OHF-Voice/piper1-gpl) that synthesizes a
-short line of speech **and** returns an even-split **viseme timeline** the matrix-ui VN
-client uses to drive 2D mouth-shape lipsync. It is the greenfield backend core of the VN
-voice feature (B3). Mirrors the structure of the only built FastAPI precedent,
-[`../../edge-ai-analysis/image`](../../edge-ai-analysis/image).
+wrapper around [Piper](https://github.com/OHF-Voice/piper1-gpl) that synthesizes a
+short line of speech **and** returns an even-split **viseme timeline** meant to drive 2D
+mouth-shape lipsync. It is the backend core of the VN voice feature (B3). Mirrors the
+structure of [`../../edge-ai-analysis/image`](../../edge-ai-analysis/image).
+
+> **The matrix-ui client does not use the timeline today.** It drives the VN mouth from
+> audio loudness (amplitude only, "by product decision": matrix-ui `README.md`,
+> `voice-synth.service.ts`), ignores `visemes`, and keeps its TTS call off by default
+> (`VOICE_TTS_ENABLED`, default false).
 
 ON-PREM: all synthesis is local CPU work; nothing leaves the mesh and **no model is
 fetched at request time** — the default voice is baked into the image.
@@ -15,7 +19,7 @@ fetched at request time** — the default voice is baked into the image.
 ```jsonc
 // request
 {
-  "text": "Hello, traveler.",   // required, <= TTS_MAX_CHARS (default 800)
+  "text": "Hello, traveler.",   // required, <= TTS_MAX_CHARS (default 800); also <= 8000 at validation
   "voice": "en_US-amy-medium",  // optional; a voice id installed under /models
   "character": "mira",          // optional; reserved for per-character voices (future)
   "format": "wav"               // "wav" (RIFF base64) | "pcm16" (raw LE base64)
@@ -38,12 +42,15 @@ fetched at request time** — the default voice is baked into the image.
 - `GET /healthz` (liveness — never touches the model) · `GET /readyz` (ready iff the
   default voice files are present on disk).
 - **FAIL-CLOSED**: synthesis errors return HTTP 5xx and never a partial/empty "ok" body;
-  an unknown/uninstalled `voice` is a 404; text past `TTS_MAX_CHARS` is a 413; text that
-  produces no audio (e.g. all punctuation) is a 422. Audio is mandatory; the viseme
-  timeline is best-effort (no phonemes → a single `rest` span).
-- Tenancy is enforced at the be-gateway (`/v1/synthesize/** = ROLE_USER`, a follow-up
-  route PR); this service trusts and stamps the gateway-validated `X-Tenant-ID` /
-  `X-User-ID` headers.
+  an unknown/uninstalled `voice` is a 404; an empty `text`, a `voice` id with a path
+  separator or `..`, or a `format` other than `wav`/`pcm16` is a 400; text past
+  `TTS_MAX_CHARS` is a 413; text past 8000 characters fails request validation (422);
+  text that produces no audio (e.g. all punctuation) is a 422. Audio is mandatory; the
+  viseme timeline is best-effort (no phonemes → a single `rest` span).
+- Tenancy is enforced at the be-gateway (`/v1/synthesize/** = ROLE_USER`: row in
+  `specs/cluster/manifests/route-access/initdb/20-schema.sql`, route in
+  `specs/cluster/apps/20-gateway-be.yaml`); this service trusts and stamps the
+  gateway-validated `X-Tenant-ID` / `X-User-ID` headers.
 
 ### Streaming (follow-up)
 A `POST /v1/synthesize/stream` (WS or chunked) that emits audio chunks + interleaved
@@ -62,15 +69,18 @@ so streaming is a latency optimisation, not a correctness requirement, for short
 
 ### 7-key viseme vocabulary — CONTRACT, keep in sync with matrix-ui `viseme.ts` (B3-PR2)
 `rest · AI · E · O · U · L · MBP`. The collapse table lives in
-[`visemes.py`](./visemes.py); the matrix-ui PR2 `viseme.ts` maps each key → a mouth
-shape. **Add/rename a key here ⇒ mirror it in `viseme.ts`**, or the client falls back to
-`rest` for the unknown key (lipsync degrades to a closed mouth — safe, but silent there).
+[`visemes.py`](./visemes.py). No `viseme.ts` exists in matrix-ui today (see the note at
+the top), so no client reads these keys yet. A client that maps keys to mouth shapes must
+mirror this vocabulary: **add/rename a key here ⇒ mirror it there**, or the client falls
+back to `rest` for the unknown key (lipsync degrades to a closed mouth — safe, but
+silent there).
 
 ### True per-phoneme durations — documented later spike (NOT done here)
-v1 is even-split so it stays deterministic and works for every voice. piper-tts 1.4.x
+v1 is even-split so it stays deterministic and works for every voice. piper-tts 1.4.2
 already exposes `AudioChunk.phoneme_alignments` (audio sample counts per phoneme) when
-the voice model carries alignment metadata — so the true-duration upgrade is a **config
-flag** that consumes those alignments, **not a fork of Piper**. Deferred because (a) not
+the voice model carries alignment metadata and `synthesize(..., include_alignments=True)`
+is passed (`piper/voice.py` in the 1.4.2 wheel) — so the true-duration upgrade is a
+**call flag** that consumes those alignments, **not a fork of Piper**. Deferred because (a) not
 all voices expose alignments and (b) even-split is the simplest correct v1; the upgrade
 lands once the client lipsync is tuned against real timelines.
 
@@ -83,8 +93,9 @@ is a later optional flag, not the default.
 ## Voices
 - The default `en_US-amy-medium` voice (`.onnx` + `.onnx.json`) is downloaded into
   `/models` at **build time** (stage 1) and baked in — the runtime image is offline.
-- Pull additional voices to a **PVC** mounted at `/models` and select them with the
-  `voice` field, e.g.:
+- Add voices under `/models` and select them with the `voice` field. The shipped
+  Deployment mounts no volume there; a volume mounted at `/models` hides the baked
+  voice, so it must hold the default voice too. Fetch a voice with:
   ```sh
   python -m piper.download_voices --download-dir /models en_US-lessac-medium
   ```
@@ -108,20 +119,20 @@ docker push  registry.hugmesh.net/hugmesh/edge-ai-tts:main
 ```
 Runs as non-root (uid 65532) with a read-only rootfs (pod mounts an emptyDir at `/tmp`).
 
-> **NOTE — runtime synthesis was NOT executed in this PR.** This change adds the image
-> source only; a container-build spike (which resolves the heavy `piper-tts` /
-> `onnxruntime` wheels and runs a real `POST /v1/synthesize`) validates synthesis +
-> viseme output before merge. The generator repo is **ASK-to-merge**, so this lands as a
-> DRAFT pending that spike and user review.
+> **NOTE — runtime synthesis has NOT been executed.** No one has built this image and
+> run a real `POST /v1/synthesize` against it in this repo: the container-build spike
+> (resolve the heavy `piper-tts` / `onnxruntime` wheels, then check synthesis and viseme
+> output) is still open. The first `make stack-up TTS=1` run is that spike
+> (`tests/stack/compose.edge-ai-tts.yaml` builds this directory).
 
 ## Follow-up PRs (not in this one)
-The k8s wiring is intentionally separate (PR8–11):
-- **k8s manifests** — `deployment.yaml` / `service.yaml` / `configmap.yaml` /
-  `network-policy.yaml` / `kustomization.yaml` (mirror `../../edge-ai-analysis/`).
-- **generator slug** — `--with-edge-ai-tts` / `--optional-services edge-ai-tts`,
-  DEFAULT-OFF until the image is pushed.
-- **gateway route** — `/v1/synthesize/** = ROLE_USER` route-access on the be-gateway.
-- **matrix-ui PR2** — `viseme.ts` mouth-shape map consuming this 7-key vocabulary.
+The k8s wiring was kept separate from the image source (PR8–11). Status today:
+- **k8s manifests** — landed: `deployment.yaml` / `service.yaml` / `configmap.yaml` /
+  `network-policy.yaml` / `kustomization.yaml` in `specs/cluster/manifests/edge-ai-tts/`.
+- **generator slug** — landed: `--with-edge-ai-tts` / `--optional-services edge-ai-tts`
+  (x86 and rpi5 builders), DEFAULT-OFF until the image is pushed.
+- **gateway route** — landed: `/v1/synthesize/** = ROLE_USER` (see above).
+- **matrix-ui PR2** — not built: there is no `viseme.ts`; matrix-ui is amplitude-only.
 
 ## Run locally (needs the heavy wheels + a voice)
 ```sh
