@@ -27,8 +27,8 @@ Two DIFFERENT "idp" axes exist. Do not mix them up:
   `APP_TENANCY_ISSUERS` re-stamps on that boot. It is a one-way door; read the
   warning in `manifests/wiki-bff-api/deployment.yaml` first. After that boot, also set
   `SPRING_LIQUIBASE_PARAMETERS_WIKI_RESTAMP_TARGET_DOMAIN=<brand>` and never remove
-  it. Without the pin, a later boot with `APP_TENANCY_ISSUERS` removed (an ArgoCD
-  revert does this) refuses to start. The pin overrides the derived target: if the two
+  it. Without the pin, a later boot with `APP_TENANCY_ISSUERS` removed or grown to a
+  second brand (an ArgoCD revert does the first) refuses to start. The pin overrides the derived target: if the two
   variables disagree, wiki-bff does not refuse but silently re-stamps every `default`
   row to the pin's brand. Change them together, in one commit. Check every
   other BFF before it takes a pair. Gateways can take the pair first.
