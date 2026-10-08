@@ -329,6 +329,42 @@ def test_the_plan_says_the_onion_cannot_be_read_rather_than_not_minted():
     assert "Tor: this node's onion" not in rows
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-0 directory, so the shell would find the hostname")
+def test_the_unreadable_rows_claims_about_the_drivers_plan_are_true_when_the_plan_runs(tmp_path):
+    """ONION_UNREADABLE_HOW says two things about the driver, not about the Studio: a plan
+    run as this same user writes onion.txt as NOT-YET-MINTED when the export is
+    root-only, and GL_ONION_HOSTNAME=<addr> is honoured by the driver's card. Neither is
+    read off the text: this EXECUTES the driver's own emitter (the real
+    go-live-providers.sh, as this user, against a mode-0 export directory), because the
+    first reviewer of the #645 fix believed the plan elevates and the sentence would have
+    been false on screen (it does not: only commit and rollback are sudo-wrapped)."""
+    import subprocess
+    lib = os.path.join(GENERATOR_DIR, "specs", "usr", "lib", "hugmesh", "go-live-providers.sh")
+    export = tmp_path / "tor"
+    export.mkdir()
+    (export / "hostname").write_text(ONION_A + "\n")
+    export.chmod(0)
+    assert "plan run as this user writes onion.txt as NOT-YET-MINTED" in ONION_UNREADABLE_HOW
+    assert "GL_ONION_HOSTNAME=<addr>" in ONION_UNREADABLE_HOW
+
+    def emit(extra_env):
+        out = tmp_path / ("out-" + str(len(extra_env)))
+        out.mkdir()
+        env = {k: v for k, v in os.environ.items() if k != "GL_ONION_HOSTNAME"}
+        env.update(GL_ONION_EXPORT_DIR=str(export), **extra_env)
+        r = subprocess.run(["bash", "-c", 'source "$1" >/dev/null 2>&1; glp_emit_tor-onion "$2"',
+                            "emit", lib, str(out)], env=env, capture_output=True, text=True,
+                           timeout=60)
+        assert r.returncode == 0, r.stderr
+        return (out / "onion.txt").read_text()
+
+    try:
+        assert emit({}).startswith("# NOT-YET-MINTED")
+        assert emit({"GL_ONION_HOSTNAME": ONION_A}).strip() == ONION_A
+    finally:
+        export.chmod(0o700)
+
+
 def test_plan_rows_carry_the_unreadable_reason_to_both_faces(device, monkeypatch):
     """The ONE call both faces make: an export path that cannot be read reaches the
     rendered lines as the reason, under the onion AND a clearnet mechanism."""
