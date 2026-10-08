@@ -892,6 +892,38 @@ for sp in "${S4}" "${TDIR}/lnk/sysroot"; do
         || bad "umount_chroot verify (${sp}): rc=${rc}: ${out}"
     rm -f "${STUB_STATE}/still-mounted"
 done
+# 2e. mount_chroot RECORDS the distfiles bind. Everything above sets DISTFILES_MOUNTED by hand, so a
+# builder that stopped setting it after a successful bind would leave the bind stacked (the original
+# leak) with every leg above still green. The distfiles block of mount_chroot, extracted from the
+# builder's own text, is run with a `mount` that succeeds and one that fails: the flag must be true
+# after the first and false after the second.
+run_distfiles_block() {   # <builder> <mount rc> <sysroot> -> prints "flag=<value>" last
+    local b="$1" mrc="$2" sysroot="$3"
+    local sec="${TDIR}/sec-distblock.sh"
+    extract_section "$b" '^    DISTFILES_MOUNTED=false$' 'distfiles-ro' '^\\}$' "${sec}" || return 99
+    sed -i '$d' "${sec}"                                  # drop mount_chroot's own closing brace
+    mkdir -p "${sysroot}/etc/portage" "${TDIR}/distsrc"; : > "${sysroot}/etc/portage/make.conf"
+    timeout "${WALL}" bash -c "
+        set -uo pipefail
+        info(){ :; }; warn(){ :; }
+        mount(){ return ${mrc}; }
+        SYSROOT='${sysroot}'; DISTDIR_SRC='${TDIR}/distsrc'; SHARED_DISTDIR=''
+        blk() {
+$(cat "${sec}")
+        }
+        blk
+        echo \"flag=\${DISTFILES_MOUNTED}\"
+    "
+}
+DB_SYS="${TDIR}/distblock-sysroot"
+out="$(run_distfiles_block "${X86}" 0 "${DB_SYS}" 2>&1)"; rc=$?
+[ "${rc}" -eq 0 ] && [ "${out##*$'\n'}" = "flag=true" ] \
+    && ok "mount_chroot distfiles block: a bind that succeeds sets DISTFILES_MOUNTED=true (so umount_chroot detaches it)" \
+    || bad "mount_chroot distfiles block (mount ok): rc=${rc}: ${out}"
+out="$(run_distfiles_block "${X86}" 32 "${DB_SYS}" 2>&1)"; rc=$?
+[ "${rc}" -eq 0 ] && [ "${out##*$'\n'}" = "flag=false" ] \
+    && ok "mount_chroot distfiles block: a bind that fails leaves DISTFILES_MOUNTED=false (nothing to detach)" \
+    || bad "mount_chroot distfiles block (mount fails): rc=${rc}: ${out}"
 # the binpkgs guard after umount_chroot (x86 section 8): the builder text, extracted, with `mountpoint`
 # stubbed to say the pool is still mounted: it stops, and prints EVERY mount under the sysroot as a
 # umount command (the table fixture), or just the pool's command when the table cannot be read.
@@ -944,6 +976,12 @@ pin_x86() {   # <builder> -> 0 when every pin holds
     n_em="$(awk -v s="${n_mc:-0}" 'NR>s && /^[[:space:]]*emerge[[:space:]]/ {print NR; exit}' "$b")"
     [ -n "${n_mc}" ] && [ -n "${n_lc}" ] && [ -n "${n_em}" ] && [ "${n_mc}" -lt "${n_lc}" ] && [ "${n_lc}" -lt "${n_em}" ] || rc=1
     has "$b" 'hmr_umount_own "${SYSROOT}/var/cache/distfiles-ro"' || rc=1
+    # mount_chroot records the bind it made: DISTFILES_MOUNTED=true is the line right after the
+    # successful `mount --bind ... distfiles-ro` (the executed leg 2e covers the behaviour)
+    local n_db n_dt
+    n_db="$(grep -a -n -F 'if mount --bind "${dd}" "${SYSROOT}/var/cache/distfiles-ro"; then' "$b" | head -1 | cut -d: -f1)"
+    n_dt="$(grep -a -n -E '^[[:space:]]+DISTFILES_MOUNTED=true$' "$b" | head -1 | cut -d: -f1)"
+    [ -n "${n_db}" ] && [ -n "${n_dt}" ] && [ "${n_dt}" -eq $((n_db+1)) ] || rc=1
     has "$b" 'hmr_stale_mount_refuse "${SYSROOT}" "${_stale_mounts}"' || rc=1
     has "$b" 'hmr_seed_marker_write "${BUILD_ROOT}" "${STAGE3_LOCAL}"' || rc=1
     # 4b: the chosen seed is verified AFTER it is chosen and BEFORE anything is
@@ -1188,6 +1226,14 @@ if m="$(mutate stale-marker-kept 's/^    \[ "\$(hmr_seed_marker_read "\${BUILD_R
     [ "$(cat "${B8}/sysroot.seed" 2>/dev/null)" = "stage3-amd64-hardened-openrc-20260101T000000Z.tar.xz" ] && ! pin_x86 "$m" \
         && ok "M32 marker write gated on absence again: a marker naming a gone seed stays stale (leg RED) and the pin is RED" \
         || bad "M32: the stale-marker regression was not caught (marker=$(cat "${B8}/sysroot.seed" 2>/dev/null))"
+fi
+# M41: mount_chroot stops recording the distfiles bind -> umount_chroot never detaches it and the
+# original leak is back; every leg that sets the flag by hand stays green, so only leg 2e and the pin see it.
+if m="$(mutate no-distfiles-flag 's/^\([[:space:]]*\)DISTFILES_MOUNTED=true$/\1DISTFILES_MOUNTED=false/')"; then
+    out="$(run_distfiles_block "$m" 0 "${TDIR}/distblock-sysroot-m33" 2>&1)"; rc=$?
+    [ "${out##*$'\n'}" = "flag=false" ] && ! pin_x86 "$m" \
+        && ok "M41 DISTFILES_MOUNTED=true no longer set after a good bind: leg 2e RED (flag stays false) and the pin is RED" \
+        || bad "M41: mount_chroot not recording the distfiles bind was not caught (rc=${rc}: ${out##*$'\n'})"
 fi
 # M8 (lib): the toolchain comparison short-circuited to 'match' -> the mismatching seed is accepted.
 sed -e 's/^hmr_toolchain_matches() {$/hmr_toolchain_matches() { return 0; }\nhmr_toolchain_matches_real() {/' "${LIB}" > "${TDIR}/mut-lib.sh"
