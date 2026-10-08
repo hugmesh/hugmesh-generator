@@ -83,7 +83,7 @@ logs) and tells you the exact public address. Its dry run is `make go-live`.
 
 ```
         Studio · Local Mesh · “…from scratch”
-        (or  make stack-up  /  ncurses bootstrap)
+        (or  make mesh-bootstrap-up  /  ncurses menu)
                           │
         mint all creds ──►│──► make stack-up ──► make stack-seed
                           │        (full platform stack, superadmin seeded)
