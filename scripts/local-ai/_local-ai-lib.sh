@@ -34,10 +34,13 @@ la_valid_repo() {
 }
 la_valid_num() { case "$1" in ""|*[!0-9]*) return 1 ;; esac; return 0; }
 
-# Run a command detached from the terminal (survives the shell that started it).
-la_detach() {
-  if command -v setsid >/dev/null 2>&1; then setsid "$@"; else nohup "$@"; fi
-}
+# The prefix that detaches a background command from the terminal and the shell that
+# started it. It is a list, not a function, on purpose: the caller writes
+#   "${LA_DETACH[@]}" cmd args >log 2>&1 </dev/null &
+# so that $! is the pid of the command itself. Backgrounding a shell FUNCTION makes $! the
+# pid of a wrapper subshell instead, and then a group kill (kill -- -$!) finds no such
+# group and the pid files point at a process that is not the one doing the work.
+if command -v setsid >/dev/null 2>&1; then LA_DETACH=(setsid); else LA_DETACH=(nohup); fi
 
 # la_proc_is PID NEEDLE — PID is alive AND its command line contains NEEDLE. Process ids
 # are reused, so a pidfile alone is not allowed to decide whether to signal anything.
@@ -95,4 +98,18 @@ la_enqueue_draft() {
   f="$LA_DIR/queue/pending/$(date +%Y%m%d-%H%M%S)-draft-$repo-$num.job"
   printf '%s\n' "$want" >"$f"
   echo "queued $(basename "$f")"
+}
+
+# la_draft_stranded DIR — the draft in DIR says it is running or was interrupted, but no
+# live draft.sh holds it. Such a draft is neither work in progress nor finished, so
+# `todo` queues it again instead of skipping it as "already drafted".
+la_draft_stranded() {
+  local d="$1"
+  local word
+  word=$(head -c 40 "$d/STATUS" 2>/dev/null | cut -d' ' -f1)
+  case "$word" in
+    interrupted) return 0 ;;
+    running) la_proc_is "$(cat "$d/draft.pid" 2>/dev/null)" "local-ai/draft.sh" && return 1; return 0 ;;
+  esac
+  return 1
 }

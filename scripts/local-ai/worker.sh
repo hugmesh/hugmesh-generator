@@ -38,6 +38,15 @@ finish() {
   # Hand the job in hand back: it was not finished, and a stranded file under running/
   # would read as work in progress for ever.
   if [ -n "$CURRENT" ] && [ -f "$LA_DIR/queue/running/$CURRENT" ]; then
+    # The draft it was working on goes back to "queued" with the job, so the Studio does
+    # not list it as running and `todo` does not take it for finished.
+    read -r -a held <"$LA_DIR/queue/running/$CURRENT"
+    if [ "${#held[@]}" -eq 3 ] && [ "${held[0]}" = "draft" ] && la_valid_repo "${held[1]}" && la_valid_num "${held[2]}" \
+       && [ -f "$LA_DIR/drafts/${held[1]}-${held[2]}/STATUS" ]; then
+      case "$(head -c 40 "$LA_DIR/drafts/${held[1]}-${held[2]}/STATUS" | cut -d' ' -f1)" in
+        running|interrupted) echo queued >"$LA_DIR/drafts/${held[1]}-${held[2]}/STATUS" ;;
+      esac
+    fi
     mv "$LA_DIR/queue/running/$CURRENT" "$LA_DIR/queue/pending/$CURRENT" 2>/dev/null
   fi
   rm -f "$PIDFILE"
@@ -65,7 +74,7 @@ while :; do
   read -r -a parts <<<"$line"        # no globbing: a job line is data
   if [ "${#parts[@]}" -eq 3 ] && [ "${parts[0]}" = "draft" ] \
      && la_valid_repo "${parts[1]}" && la_valid_num "${parts[2]}"; then
-    la_detach "$LA_SELF" draft "${parts[1]}" "${parts[2]}" >"$LA_DIR/queue/logs/$name.log" 2>&1 </dev/null &
+    "${LA_DETACH[@]}" "$LA_SELF" draft "${parts[1]}" "${parts[2]}" >"$LA_DIR/queue/logs/$name.log" 2>&1 </dev/null &
     CHILD=$!
     while kill -0 "$CHILD" 2>/dev/null; do
       beat

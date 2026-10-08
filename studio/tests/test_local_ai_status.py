@@ -225,6 +225,37 @@ def test_finished_drafts_are_listed_newest_first_with_their_status(fake, env):
     assert snap.counts["drafts"] == 3
 
 
+@pytest.fixture
+def draft_proc():
+    """A live process whose command line contains ``draft.sh``: what a draft in progress is."""
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "local-ai/draft.sh"])
+    yield p
+    p.kill()
+    p.wait()
+
+
+def test_a_draft_marked_running_with_no_live_process_is_stalled(fake, env, draft_proc):
+    """STATUS 'running' is only a claim. With no draft.sh behind it (it was stopped or killed,
+    the machine restarted) the list must not show it as work in progress."""
+    d = put_draft(env, "hugmesh-generator-3", "running")
+    snap = lai.read_snapshot(env, builds=no_builds)
+    assert snap.of_kind("draft")[0].state == "stalled"
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    open(os.path.join(d, "draft.pid"), "w").write(str(dead.pid))
+    assert lai.read_snapshot(env, builds=no_builds).of_kind("draft")[0].state == "stalled"
+    open(os.path.join(d, "draft.pid"), "w").write(str(os.getpid()))     # alive, but not draft.sh
+    assert lai.read_snapshot(env, builds=no_builds).of_kind("draft")[0].state == "stalled"
+    open(os.path.join(d, "draft.pid"), "w").write(str(draft_proc.pid))
+    assert lai.read_snapshot(env, builds=no_builds).of_kind("draft")[0].state == "running"
+
+
+def test_a_finished_draft_keeps_its_own_word_whatever_draft_pid_says(fake, env):
+    d = put_draft(env, "hugmesh-generator-4", "applied files=1")
+    open(os.path.join(d, "draft.pid"), "w").write("1")
+    assert lai.read_snapshot(env, builds=no_builds).of_kind("draft")[0].state == "applied"
+
+
 def test_a_corrupt_status_file_is_treated_as_no_worker(fake, env):
     root = lai.state_dir(env)
     os.makedirs(root)

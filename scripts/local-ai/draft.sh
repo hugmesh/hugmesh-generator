@@ -33,6 +33,24 @@ mkdir -p "$OUT"
 status() { printf '%s\n' "$*" >"$OUT/STATUS"; }
 note() { printf '[%s] %s\n' "$(date +%T)" "$*" >>"$OUT/agent.log"; }
 status running
+# Who is doing this draft. The Studio lists a draft as running only while this pid is a
+# live draft.sh, so a draft killed in the middle is never shown as work in progress.
+echo $$ >"$OUT/draft.pid"
+TPID=0
+# A stop (SIGTERM from the worker, Ctrl-C) ends the model step too and leaves a STATUS
+# that says so. timeout puts its child in a process group of its own, so the group kill
+# the worker sends does not reach it: it is signalled here, by pid.
+interrupted() {
+  trap - TERM INT HUP
+  if [ "$TPID" -gt 0 ]; then kill -TERM "$TPID" 2>/dev/null; wait "$TPID" 2>/dev/null; fi
+  # A finished result (the signal arrived just after it was written) is left alone.
+  case "$(head -c 7 "$OUT/STATUS" 2>/dev/null)" in
+    running) status "interrupted stopped before it finished; run it again" ;;
+  esac
+  exit 143
+}
+trap interrupted TERM INT HUP
+trap 'rm -f "$OUT/draft.pid"' EXIT
 
 if ! la_gh issue view "$N" --repo "$LA_ORG/$REPO" --json title,body,comments \
      | python3 "$HERE/issues.py" render >"$OUT/issue.md" 2>>"$OUT/agent.log"; then
@@ -69,7 +87,7 @@ cleanup() {
   git -C "$SRC" worktree remove --force "$SCRATCH" >/dev/null 2>&1
   rm -rf "$SCRATCH"
 }
-trap cleanup EXIT
+trap 'cleanup; rm -f "$OUT/draft.pid"' EXIT
 cleanup
 # -f: a scratch folder that a crashed run left registered but missing is taken over
 if ! git -C "$SRC" worktree add -f --detach "$SCRATCH" "$BASE" >>"$OUT/agent.log" 2>&1; then
@@ -81,8 +99,11 @@ note "scratch worktree $SCRATCH at $(git -C "$SCRATCH" rev-parse --short HEAD) (
 timeout "${TODO_TIMEOUT:-1500}" env -i PATH="$PATH" HOME="$HOME" LANG="${LANG:-C.UTF-8}" TERM=dumb \
   OLLAMA_HOST="$host" \
   python3 "$HERE/draft.py" --repo "$REPO" --issue "$N" --out "$OUT" --work "$SCRATCH" \
-    --model "$LA_MODEL" --agent "$AGENT" --timeout "${TODO_TIMEOUT:-1500}" >>"$OUT/agent.log" 2>&1
+    --model "$LA_MODEL" --agent "$AGENT" --timeout "${TODO_TIMEOUT:-1500}" >>"$OUT/agent.log" 2>&1 </dev/null &
+TPID=$!
+wait "$TPID"
 rc=$?
+TPID=0
 case "$(head -c 7 "$OUT/STATUS" 2>/dev/null)" in
   running) status "error the draft step ended without a result (exit $rc; see agent.log)"; exit 1 ;;
 esac

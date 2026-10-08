@@ -51,7 +51,9 @@ cmd_up() {
   mkdir -p "$LA_DIR"
   # The settings docs/LOCAL-AI-ASSISTANT.md section 3 documents; the server listens on loopback only.
   OLLAMA_HOST=$host OLLAMA_CONTEXT_LENGTH=${OLLAMA_CONTEXT_LENGTH:-32768} OLLAMA_FLASH_ATTENTION=1 \
-    OLLAMA_KV_CACHE_TYPE=q8_0 la_detach ollama serve >"$LA_DIR/ollama-serve.log" 2>&1 </dev/null &
+    OLLAMA_KV_CACHE_TYPE=q8_0 "${LA_DETACH[@]}" ollama serve >"$LA_DIR/ollama-serve.log" 2>&1 </dev/null &
+  # $! is ollama itself (the detach prefix execs it), so `stop --server` finds the right
+  # process by name and ends the whole server, not a wrapper around it.
   echo $! >"$LA_DIR/ollama.pid"
   local _
   for _ in $(seq 1 30); do
@@ -67,7 +69,7 @@ cmd_worker() {
   la_dirs
   if [ "${1:-}" = "--foreground" ]; then exec "$HERE/local-ai/worker.sh"; fi
   if pid=$(la_worker_pid); then echo "worker already running (pid $pid)"; return 0; fi
-  la_detach "$HERE/local-ai/worker.sh" >>"$LA_DIR/worker.log" 2>&1 </dev/null &
+  "${LA_DETACH[@]}" "$HERE/local-ai/worker.sh" >>"$LA_DIR/worker.log" 2>&1 </dev/null &
   local _
   for _ in $(seq 1 20); do
     if pid=$(la_worker_pid); then echo "worker started (pid $pid)"; return 0; fi
@@ -145,7 +147,11 @@ cmd_todo() {
     picks=$(printf '%s' "$json" | python3 "$HERE/local-ai/issues.py" pick "$n") || { failed=1; continue; }
     while IFS=$'\t' read -r num size title; do
       [ -n "$num" ] || continue
-      if [ -e "$LA_DIR/drafts/$r-$num/STATUS" ]; then echo "skip $r#$num (already drafted or queued)"; continue; fi
+      # A draft that says "running" but has no live draft.sh behind it (the machine was
+      # restarted, or it was killed) is not done: it is queued again, never skipped.
+      if [ -e "$LA_DIR/drafts/$r-$num/STATUS" ] && ! la_draft_stranded "$LA_DIR/drafts/$r-$num"; then
+        echo "skip $r#$num (already drafted or queued)"; continue
+      fi
       if [ "$dry" = 1 ]; then echo "would queue $r#$num  $title"; continue; fi
       mkdir -p "$LA_DIR/drafts/$r-$num"
       printf '# %s\n' "$title" >"$LA_DIR/drafts/$r-$num/issue.md"

@@ -438,8 +438,19 @@ to that program's name yourself, and nothing else in these scripts can start it.
 refuses any other line — the queue is not a way to run commands. The worker rewrites
 `status.json` every 5 seconds. A worker that stopped answering for 30 seconds is
 reported as *stalled* and a worker whose process is gone as *stopped*; neither ever
-counts as work in progress. `stop` returns the job in hand to the queue, and signals a
-process only when its command line really is the worker (process numbers are reused).
+counts as work in progress. `stop` returns the job in hand to the queue, ends the draft
+it was running (the whole process group, and the model step by its own pid) and marks
+that draft `queued` again, and signals a process only when its command line really is
+the worker (process numbers are reused). `stop --server` ends the Ollama that `up`
+started, using the pid `up` recorded for the server process itself.
+
+A draft is listed as *running* only while the `draft.sh` that owns it is alive (it
+writes `draft.pid` beside `STATUS` and removes it on the way out). A `STATUS` that says
+`running` with no such process behind it is listed as *stalled*, and `todo` queues it
+again instead of skipping it as already drafted. The one-line status shown by the
+terminal faces reads the worker's `status.json` only while that worker is alive and
+beating; otherwise it says `no worker running` and does not claim the server is up or a
+model is loaded, because nobody has asked.
 
 **Where the state lives** — one directory, read by the Studio as well:
 `$HUGMESH_LOCAL_AI_DIR`, else `$XDG_STATE_HOME/hugmesh/local-ai`, else
@@ -451,6 +462,7 @@ drafts/<repo>-<n>/{issue.md,agent.log,draft.diff,STATUS}
 scratch/            temporary worktrees, removed after each draft
 status.json         the worker's heartbeat: pid, time, Ollama up, model loaded, job in hand
 worker.pid  ollama.pid  worker.log  ollama-serve.log
+drafts/<repo>-<n>/draft.pid    the draft.sh working on it, present only while it runs
 ```
 
 Settings: `LOCAL_AI_MODEL` (default `qwen3:8b`), `OLLAMA_HOST` (**loopback only**: any
@@ -502,7 +514,14 @@ key outside `agent-explicit.sh`; it runs the real scripts end to end on a PATH w
 `claude` exists and again with a decoy `claude` first on PATH (the decoy must never
 run); it proves the agent environment is the allowlist, that a non-loopback
 `OLLAMA_HOST` is refused, and that a stalled or dead worker never reads as running.
-Each of those checks is shown failing against a doctored copy.
+The worker, `start`, `stop` and `up` are run on both paths (no claude, and the decoy),
+so a Claude call that only they make is caught. The guard also stops a draft in the
+middle of reading its issue and in the middle of the model step and requires that no
+process is left, the job is back in `queue/pending` and the draft is `queued`; it
+starts the server (a stub that records its environment: it must be bound to loopback)
+and requires `stop --server` to end that process and leave an unrelated one alone; and
+it refuses `../x`, `.git/` and `..` paths. Each of those checks is shown failing
+against a doctored copy.
 
 ---
 

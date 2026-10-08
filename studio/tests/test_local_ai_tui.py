@@ -110,6 +110,32 @@ def test_a_stalled_worker_is_not_shown_as_running(state, worker_proc):
     assert "stalled" in line and "1 running" not in line
 
 
+def test_an_old_status_file_never_says_ready(state, worker_proc):
+    """status.json is a witness only while its writer is alive and beating. One that is an
+    hour old, or whose writer is gone, must not put 'ready, X loaded, idle' on the line."""
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    for pid, age in ((dead.pid, 3600.0), (dead.pid, 0.5), (0, 0.5), (worker_proc.pid, 3600.0)):
+        write_status(state, pid, age=age, up=True, loaded=("qwen3:8b",))
+        line = lai.quick_line()
+        assert "ready" not in line and "loaded" not in line and "idle" not in line, (pid, age, line)
+        assert "no worker running" in line or "stalled" in line, (pid, age, line)
+
+
+def test_the_unknown_server_state_is_not_called_a_problem(state):
+    """A stopped worker does not know whether Ollama is up, so the snapshot must not
+    invent 'Ollama is not answering' either."""
+    write_status(state, 0, age=3600.0, up=True)
+    snap = lai.quick_snapshot()
+    assert snap.ok and snap.checked is False and not snap.ollama_up
+
+
+def test_a_stopped_worker_still_counts_what_is_waiting(state):
+    write_status(state, 0, age=1.0, up=True)
+    queue_job(state, "pending", "20260101-000001-draft-hugmesh-generator-5")
+    assert lai.quick_line() == "Local AI: no worker running, 1 queued"
+
+
 def test_drawing_the_line_makes_no_network_call(state, monkeypatch):
     import urllib.request
 

@@ -12,7 +12,7 @@ it does under ONE directory, and this module only reads it::
     $HUGMESH_LOCAL_AI_DIR, else $XDG_STATE_HOME/hugmesh/local-ai,
     else ~/.local/state/hugmesh/local-ai
         queue/{pending,running,done,logs}   one ``<stamp>-<name>.job`` file per job
-        drafts/<repo>-<n>/{issue.md,agent.log,draft.diff,STATUS}
+        drafts/<repo>-<n>/{issue.md,agent.log,draft.diff,STATUS,draft.pid}
         status.json                          the worker's heartbeat (see below)
         worker.pid, ollama.pid
 
@@ -21,7 +21,10 @@ seconds. A job in ``queue/running`` counts as running only while that heartbeat 
 fresh and the recorded process is alive. A worker that was killed leaves a stale
 ``status.json`` and a stranded job file behind, and reading those as "running" would
 tell the operator work is happening when nothing is. Such a job is reported as
-``stalled`` instead.
+``stalled`` instead. The same goes for a draft whose ``STATUS`` says ``running``: it
+counts as running only while the ``draft.sh`` named in ``draft.pid`` is alive. And the
+terminal status line (``quick_snapshot``) trusts ``status.json`` for the server and the
+loaded model only while that worker is alive and beating.
 
 LOOPBACK ONLY. Everything here talks to Ollama on this machine. ``OLLAMA_HOST`` is
 honoured only when it names a loopback address; any other value is refused before a
@@ -313,7 +316,18 @@ def _drafts(root: str) -> list:
             if line.startswith("# "):
                 title = line[2:].strip()
                 break
-        rows.append(Job("draft", name, (name + "  " + title).strip(), word or "unknown",
+        word = word or "unknown"
+        # "running" is a claim that something is working on it right now. draft.sh writes
+        # its own pid beside STATUS and removes it on the way out; a draft whose process
+        # is gone (stopped, killed, the machine restarted) is stalled, not running.
+        if word == "running":
+            try:
+                draft_pid = int(_read_text(os.path.join(d, "draft.pid"), 20).strip() or 0)
+            except ValueError:
+                draft_pid = 0
+            if not _pid_alive(draft_pid, "draft.sh"):
+                word, rest = "stalled", "no draft process is running it (" + (rest.strip() or "stopped") + ")"
+        rows.append(Job("draft", name, (name + "  " + title).strip(), word,
                         rest.strip(), d, diff if has_diff else "", updated))
     rows.sort(key=lambda j: j.updated, reverse=True)
     return rows[:50]
@@ -414,25 +428,49 @@ def quick_snapshot(env: dict | None = None, *, now: float | None = None) -> Snap
     """A snapshot that makes NO network call: the worker's last ``status.json`` stands in
     for the probe. For a status line that is redrawn on every screen of a terminal
     session, where a fresh HTTP request each time would be slow and would make a test
-    depend on the host it runs on. The Local AI screen takes the live one instead."""
+    depend on the host it runs on. The Local AI screen takes the live one instead.
+
+    ``status.json`` is only a witness while its writer is alive and beating. A stopped
+    worker writes ``ollama_up`` as of the moment it stopped, and a worker that died keeps
+    the last value for ever, so an old or orphaned file is NOT read as "the server is up
+    and X is loaded": the server is then unknown, and the line says it was not checked."""
     env = os.environ if env is None else env
+    now = time.time() if now is None else now
     st = _read_json(os.path.join(state_dir(env), "status.json"))
-    loaded = [m for m in (st.get("model_loaded") or []) if isinstance(m, str)]
-    up = bool(st.get("ollama_up"))
+    pid = st.get("pid") if isinstance(st.get("pid"), int) else 0
+    beat = st.get("heartbeat") if isinstance(st.get("heartbeat"), (int, float)) else None
+    fresh = (beat is not None and now - float(beat) <= STALE_AFTER
+             and bool(pid) and _pid_alive(pid, "local-ai"))
+    loaded = [m for m in (st.get("model_loaded") or []) if isinstance(m, str)] if fresh else []
+    up = bool(st.get("ollama_up")) if fresh else False
     snap = read_snapshot(env, now=now, builds=lambda: [],
                          probe=lambda: (up, loaded or (["(unknown)"] if up else []), loaded, ""))
     snap.checked = False
+    if not fresh:
+        # the "not answering" problem read_snapshot derives from up=False is a guess here
+        snap.problem, snap.fix = "", ""
+        snap.summary = quick_line_for(snap)
     return snap
+
+
+def quick_line_for(snap: Snapshot) -> str:
+    """The sentence for a snapshot whose server state is unknown (no live worker)."""
+    c = snap.counts
+    if snap.worker == "stalled":
+        bits = ["worker stalled (not beating), server not checked"]
+        if c.get("stalled"):
+            bits.append(f"{c['stalled']} stalled")
+    else:
+        bits = ["no worker running"]
+    if c.get("pending"):
+        bits.append(f"{c['pending']} queued")
+    return "Local AI: " + ", ".join(bits)
 
 
 def quick_line(env: dict | None = None, *, now: float | None = None) -> str:
     """One line for a terminal's bottom row: what ``quick_snapshot`` knows, honest about
     not having asked the server just now."""
-    snap = quick_snapshot(env, now=now)
-    if snap.worker == "stopped" and not snap.ollama_up:
-        pending = snap.counts.get("pending", 0)
-        return "Local AI: no worker running" + (f", {pending} queued" if pending else "")
-    return snap.summary
+    return quick_snapshot(env, now=now).summary
 
 
 def summary_line(s: Snapshot) -> str:
