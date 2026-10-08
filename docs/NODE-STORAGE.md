@@ -1,26 +1,26 @@
 # Node Storage
 
-Attach **additional storage** to a specific mesh node and let services use that space on
-that node. Storage is **node-pinned**: a service placed on a pool runs on the node the disk
-is attached to, and its volume binds there.
+Attach **extra storage** to a specific mesh node and let services use that space on
+that node. Storage is **node-pinned**: a service placed on a pool runs on the node the
+disk is attached to, and its volume binds there.
 
-This is an **OPTIONAL, opt-in, add-by-command** feature. It ships **INERT**: with no pool
-registered anywhere, the platform behaves exactly as before (the local-path provisioner keeps
-its `DEFAULT_PATH` on the x86 host; the placement ApplicationSet has zero elements; the
-control-plane tables are empty). The node agent is **baked into every device image and
-enabled on every mesh node** (see *Bake & enable* below) — inert by *content*, not by
-absence: with no registered pool the signed export is the empty body and it provisions
-nothing.
+The feature is **OPTIONAL, opt-in and add-by-command**. It ships **INERT**. With no
+pool registered anywhere, the platform behaves as before: the local-path provisioner
+keeps its `DEFAULT_PATH` on the x86 host, the placement ApplicationSet has zero
+elements, and the control-plane tables are empty. The node agent is **baked into every
+device image and enabled on every mesh node** (see *Bake & enable* below). It is inert
+by *content*, not by absence: with no registered pool the signed export is the empty
+body, and the agent provisions nothing.
 
 ---
 
 ## What it is for
 
-A node has spare disk capacity (an attached SSD/HDD, an extra NVMe) and you want a service —
-Owncast media, LocalTube downloads, a cache, a forum's uploads — to use it **on that node**,
-without re-architecting cluster-wide storage. You attach + register the disk as a *pool*, then
-*assign* a service to it; the mesh schedules the service onto the pool's node and binds a
-node-local PersistentVolume there.
+A node has spare disk (an attached SSD or HDD, an extra NVMe). You want a service
+(Owncast media, LocalTube downloads, a cache, a forum's uploads) to use it **on that
+node**, without redesigning cluster-wide storage. You attach and register the disk as
+a *pool*, then *assign* a service to it. The mesh schedules the service onto the pool's
+node and binds a node-local PersistentVolume there.
 
 ---
 
@@ -38,7 +38,8 @@ node-local PersistentVolume there.
 
 ## Bake & enable (how the agent gets onto a node)
 
-The agent is baked + enabled **exactly like its twin `hugmesh-device-registry-sync`**:
+The agent is baked and enabled **the same way as its twin
+`hugmesh-device-registry-sync`**:
 
 - **Baked by ALL device builders** (`build-*-stage4.sh` — x86 host, rpi5, frite, jetson and
   the six Orange Pi boards) through ONE helper, `bake_node_storage` in
@@ -53,28 +54,29 @@ The agent is baked + enabled **exactly like its twin `hugmesh-device-registry-sy
   boot oneshot into the default runlevel and places the staged cron into
   `/etc/cron.d/hugmesh-node-storage-reconcile` on every mesh node (STANDALONE desktops
   skip it). A stale image without the baked files gets a `warn` and never bricks.
-- **Guarded by a test that RUNS both halves:** `tests/node-storage/test-bake-coverage.sh`
-  executes `bake_node_storage` against a sandbox sysroot (the four files must exist at those
-  exact paths, byte-identical, with those modes), proves every builder reaches the call on a
-  path a mesh node takes — the enclosing branch chain comes from bash's own parser and is
-  evaluated, and an unrecognised gate fails closed — then runs the REAL `provision.sh`
-  first-boot flow against that same sandbox and requires `rc-update` to have been called and
-  the cron to have LANDED in `/etc/cron.d`. That last step is what pins the staged-cron name
-  across both files: the bake writes it and `provision_node_storage` reads it back in one run.
-  It carries negative controls for each class (disabled / unreachable / mis-targeted /
-  dead-enable / name drift), because the previous grep-based version stayed green on all of
-  them.
-- **admin-bff push lever ships DARK:** `NODESTORAGE_RECONCILER_ENABLED` is a *commented*
-  entry in `specs/cluster/manifests/admin-bff-api/deployment.yaml` until the admin-bff lane
-  proves the exact relaxed-binding name. The pull (boot oneshot + 60s cron) is the
-  convergence floor either way — the dark lever only defers the fast push path.
+- **A test RUNS both halves:** `tests/node-storage/test-bake-coverage.sh` executes
+  `bake_node_storage` against a sandbox sysroot. The four files must exist at those
+  exact paths, byte-identical, with those modes. It proves every builder reaches the
+  call on a path a mesh node takes (bash's own parser supplies the enclosing branch
+  chain, which is evaluated, and an unrecognised gate fails closed). Then it runs the
+  REAL `provision.sh` first-boot flow against the same sandbox and requires that
+  `rc-update` was called and the cron LANDED in `/etc/cron.d`. That last step pins the
+  staged-cron name across both files: the bake writes it and `provision_node_storage`
+  reads it back in one run. The test has negative controls for each failure class
+  (disabled, unreachable, mis-targeted, dead-enable, name drift), because the earlier
+  grep-based version stayed green on all of them.
+- **The admin-bff push lever ships DARK.** `NODESTORAGE_RECONCILER_ENABLED` is a
+  *commented* entry in `specs/cluster/manifests/admin-bff-api/deployment.yaml` until
+  the admin-bff lane proves the exact relaxed-binding name. The pull (boot oneshot and
+  60s cron) is the convergence floor either way. The dark lever only defers the fast
+  push path.
 
 ---
 
 ## Who can do it (the ownership ALLOW/DENY matrix)
 
 Storage is **ADMIN-CAPABLE** (unlike SSH licensing, which is superadmin-only) but
-**OWNERSHIP-gated** — the deliberate divergence:
+**OWNERSHIP-gated**. The difference is deliberate:
 
 | caller | node owner | node domain | result |
 |---|---|---|---|
@@ -83,19 +85,19 @@ Storage is **ADMIN-CAPABLE** (unlike SSH licensing, which is superadmin-only) bu
 | ADMIN | SUPERADMIN-owned | any | **DENY (403)** — superadmin-only |
 | ADMIN | ADMIN-owned | another domain | **DENY (403)** — cross-domain |
 
-Enforced in `NodeStorageService.denyReason` (admin-bff). The pool/assignment `domain` is
-stamped from the **node's residency**, never the caller (`[FIX-NODEFAULT]`).
+`NodeStorageService.denyReason` (admin-bff) enforces this. The pool and assignment
+`domain` come from the **node's residency**, never the caller (`[FIX-NODEFAULT]`).
 
 ---
 
 ## Capacity
 
-- Capacity is **WaitForFirstConsumer** (the `hugmesh-local` StorageClass) + an API guard:
-  an assign is rejected (422) when `committed + requested > pool.reserved_bytes`, or when an
-  `is_exclusive` pool already has an active assignment.
-- The node-agent's `df` on the attached disk is **authoritative** over the operator's
-  `reserved_bytes` claim (verified at reconcile).
-- `is_exclusive` defaults true for video (one service per pool).
+- Capacity is **WaitForFirstConsumer** (the `hugmesh-local` StorageClass) plus an API
+  guard. An assign is rejected (422) when `committed + requested > pool.reserved_bytes`,
+  or when an `is_exclusive` pool already has an active assignment.
+- The node agent's `df` on the attached disk is **authoritative** over the operator's
+  `reserved_bytes` claim (checked at reconcile).
+- `is_exclusive` is one service per pool. The admin UI defaults it to true for video pools (`AttachPoolRequest`).
 
 ---
 
@@ -111,14 +113,15 @@ stamped from the **node's residency**, never the caller (`[FIX-NODEFAULT]`).
    the SAME verifier as the device-license registry), then:
    - resolves the disk by serial via `lsblk`,
    - writes a `.storage.devices[]` `pool:{}` manifest and runs `keys-provision --pool`
-     (LUKS2 FDE reused; the pool's crypttab/fstab get `,nofail`). `--pool` is its OWN entry
-     point in `provision.sh` (`provision_storage_pool`), dispatched at the top of `main()`
-     before the DONE-marker / KEYS-media gates: the agent runs on an already-provisioned
-     node with no USB inserted, and those gates used to return 0 before any pool work. It
-     reads the agent's manifest from `HUGMESH_PROVISION_MANIFEST` (default
-     `/var/lib/hugmesh/node-storage/pool-manifest.json`) and never the KEYS media's
-     `provision.json`, and `provision_storage --pool` skips every device without a `pool:{}`
-     marker, so a system disk is never reachable from this path,
+     (LUKS2 FDE reused; the pool's crypttab/fstab get `,nofail`). `--pool` is its OWN
+     entry point in `provision.sh` (`provision_storage_pool`), dispatched at the top of
+     `main()` before the DONE-marker and KEYS-media gates. The agent runs on an
+     already-provisioned node with no USB inserted, and those gates used to return 0
+     before any pool work. It reads the agent's manifest from
+     `HUGMESH_PROVISION_MANIFEST` (default
+     `/var/lib/hugmesh/node-storage/pool-manifest.json`), never the KEYS media's
+     `provision.json`. `provision_storage --pool` skips every device without a `pool:{}`
+     marker, so this path can never reach a system disk,
    - labels the node `hugmesh.net/local-path=true`,
    - CAS-patches the local-path `nodePathMap` so THIS node serves PVs from the pool path.
 4. **Place** (ArgoCD): the `13b-node-storage` ApplicationSet renders one Application per active
@@ -134,30 +137,31 @@ stamped from the **node's residency**, never the caller (`[FIX-NODEFAULT]`).
 ## Local-path provisioner: DaemonSet on a label
 
 The Rancher local-path-provisioner is a **DaemonSet** gated on
-`nodeSelector: hugmesh.net/local-path=true` (not a single Deployment). The control-plane
-(x86 host) always carries that label, so the provisioner runs there exactly as before
-(**full back-compat** — `DEFAULT_PATH` retained); a node-storage node gets the label when its
-first pool is provisioned, so a provisioner instance + a per-node `nodePathMap` entry come up
-there. local-path is a per-node provisioner keyed on the PV's selected node, so one instance
-per local-path node is correct.
+`nodeSelector: hugmesh.net/local-path=true`, not a single Deployment. The control plane
+(x86 host) always carries that label, so the provisioner runs there as before (**full
+back-compat**, `DEFAULT_PATH` kept). A node-storage node gets the label when its first
+pool is provisioned, and a provisioner instance and a per-node `nodePathMap` entry
+come up there. local-path is a per-node provisioner keyed on the PV's selected node, so
+one instance per local-path node is correct.
 
 ---
 
 ## Residuals & cautions (READ THIS)
 
-- **Node-pinned PV = NO HA.** The data lives on ONE node's disk. If that disk/node is lost,
-  the data is lost. **Scope node-pinned storage to REPLACEABLE data** (caches, media,
-  downloads) — NOT a primary database. The admin UI **warns** when you assign a database-shaped
-  service name to a pool.
-- **Disk removal degrades, never bricks.** The pool's crypttab/fstab carry `,nofail`, so a
-  removed disk degrades the pool (its PVs go unavailable) but the node still boots. The
-  node-agent detects the mount-loss and acks `degraded` (the UI chip turns red). A
-  `PodDisruptionBudget` (opt-in per placement) blocks a voluntary node drain from silently
-  taking a placed service down.
-- **Rebalancing a running stateful service = EXPLICIT downtime + manual.** The mesh only
-  *recommends* a move; the operator confirms and runs the migration: **scale to 0 → rsync the
-  old PV → re-point the assignment (revoke old + assign new) → scale back up**. NEVER silent
-  auto-migration. See the `node-storage-migrate.yaml` Job stub (ships suspended/inert).
+- **A node-pinned PV has NO HA.** The data lives on ONE node's disk. If that disk or
+  node is lost, the data is lost. **Use node-pinned storage for REPLACEABLE data**
+  (caches, media, downloads), NOT a primary database. The admin UI **warns** when you
+  assign a database-shaped service name to a pool.
+- **Disk removal degrades; it never bricks.** The pool's crypttab/fstab carry
+  `,nofail`, so a removed disk degrades the pool (its PVs go unavailable) and the node
+  still boots. The node agent detects the mount loss and acks `degraded` (the UI chip
+  turns red). A `PodDisruptionBudget` (opt-in per placement) stops a voluntary node
+  drain from quietly taking a placed service down.
+- **Rebalancing a running stateful service means EXPLICIT downtime and manual work.**
+  The mesh only *recommends* a move. The operator confirms and runs the migration:
+  **scale to 0 → rsync the old PV → re-point the assignment (revoke old + assign new)
+  → scale back up**. There is NEVER a silent auto-migration. See the
+  `node-storage-migrate.yaml` Job stub (ships suspended and inert).
 - **FDE key custody (MVP)** = a shared LUKS key + TPM2 enrolment (reused from
   `provision_storage` / `luks_open_or_format`). See `docs/ENCRYPTION-AT-REST.md`.
 - **Single-issuer clusters** need `app.registry.allow-single-issuer=true` for device
@@ -168,17 +172,21 @@ per local-path node is correct.
 
 ## Verification status (VERIFIED vs NEEDS-NODE)
 
-- **VERIFIED off-node:** the admin-bff ownership matrix / capacity / export tests; the shell
-  logic tests (`tests/node-storage/`): `provision_storage --pool`/`,nofail`, the node-agent
-  verify (genuine accept; unsigned/tampered/foreign/rollback reject) + the `nodePathMap`
-  CAS-patch (PV-binds-to-correct-node) + the pool-manifest build, and the 13b ApplicationSet
-  structure/selector lever. The storage canonical-bytes reconstruction round-trips against the
-  Java `NodeStorageExportService.canonicalBytes` shape. The bake/enable coverage
-  (`test-bake-coverage.sh`) now RUNS both halves against a sandbox sysroot rather than
-  grepping for them, and `test-pool-entrypoint.sh` runs the real `provision.sh --pool` from
-  the agent's own call site against a sandbox fake root: the pool device ends up mounted at
-  its pool path with a `,nofail` fstab entry, the system disk in the same manifest is
-  untouched, and no first-boot step or runlevel change happens.
+- **VERIFIED off-node:**
+  - the admin-bff ownership matrix, capacity and export tests;
+  - the shell logic tests (`tests/node-storage/`): `provision_storage --pool` and
+    `,nofail`; the node-agent verify (accepts a genuine export; rejects unsigned,
+    tampered, foreign and rolled-back ones); the `nodePathMap` CAS-patch
+    (PV-binds-to-correct-node); the pool-manifest build; and the 13b ApplicationSet
+    structure and selector lever;
+  - the storage canonical-bytes reconstruction, which round-trips against the Java
+    `NodeStorageExportService.canonicalBytes` shape;
+  - the bake and enable coverage (`test-bake-coverage.sh`), which RUNS both halves
+    against a sandbox sysroot instead of grepping for them;
+  - `test-pool-entrypoint.sh`, which runs the real `provision.sh --pool` from the
+    agent's own call site against a sandbox fake root. The pool device ends up mounted
+    at its pool path with a `,nofail` fstab entry, the system disk in the same manifest
+    is untouched, and no first-boot step or runlevel change happens.
 - **NEEDS A BOOTED NODE:** end-to-end byte-equality with a live BFF `/export` payload; the
   real `provision_storage --pool` against a PHYSICAL disk (the sandbox stubs
   cryptsetup/mkfs/mount and relaxes the two `[ -b ]` block-device guards, so LUKS format,

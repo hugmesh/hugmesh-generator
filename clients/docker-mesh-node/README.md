@@ -1,13 +1,13 @@
 # HugMesh Docker mesh-node (FD-09)
 
 Turn **any Linux or Windows machine that already runs Docker** into a background
-HugMesh mesh node — **no OS flash, no reinstall**. This is the *third* onboarding
-form, alongside the appliance images (Pi / x86) and the client desktop images
-(laptop / chromebook / desktop). It uses the **same local-file keys** the appliance
-images consume off the KEYS-USB, plus a **one-line Casdoor login**.
+HugMesh mesh node. **No OS flash, no reinstall.** This is the *third* onboarding
+form, after the appliance images (Pi / x86) and the client desktop images (laptop /
+chromebook / desktop). It reads the **same local-file keys** the appliance images
+read off the KEYS-USB, and adds a **one-line Casdoor login**.
 
-Use it when someone needs to lend a workstation/laptop to the mesh quickly, or when
-an admin hands out a copy-paste `docker run` to onboard a remote box.
+Use it to lend a workstation or laptop to the mesh quickly, or when an admin hands
+out a copy-paste `docker run` to onboard a remote box.
 
 ---
 
@@ -17,18 +17,20 @@ an admin hands out a copy-paste `docker run` to onboard a remote box.
 2. Starts `tailscaled` and runs `tailscale up` with the one-time pre-auth key,
    registering this machine on the HugMesh tailnet (Tailscale SSH enabled).
    - If the node is registered but **not yet approved**, it stays up and keeps
-     retrying — it becomes reachable the moment a superadmin admits it
+     retrying. It becomes reachable the moment a superadmin admits it
      (register-and-approve admission).
 3. Performs a **one-line Casdoor login** (OIDC device-code): it prints a URL + a
-   short code; you open the URL over the tailnet, enter the code, done.
+   short code; you open the URL over the tailnet, enter the code, done. Without a
+   device-code endpoint on the issuer, it prints a browser sign-in URL instead. It polls
+   up to 60 times. The node stays up either way.
 4. For `superadmin`, it prints the tailnet-only superadmin UI URL
    (`https://superadmin.<domain>/` — no public forward, ADR-17).
 5. Stays running in the background (`--restart unless-stopped`). Its tailnet
    identity persists in a named Docker volume across restarts.
 
-TUN vs userspace: when `/dev/net/tun` is available (most Linux hosts) it gets full
-kernel mesh routing. On Docker Desktop / locked-down hosts it falls back to
-**userspace networking** automatically — still joins the tailnet for onboarding.
+TUN vs userspace: with `/dev/net/tun` (most Linux hosts) the node gets full kernel
+mesh routing. On Docker Desktop and locked-down hosts it falls back to **userspace
+networking** on its own. That is enough to join the tailnet for onboarding.
 
 ---
 
@@ -66,14 +68,17 @@ kernel mesh routing. On Docker Desktop / locked-down hosts it falls back to
 
 `mesh-node.cmd` is a double-clickable wrapper for `mesh-node.ps1` (same flags).
 
+The launchers and installers also take `--name HOST` (`-Name`; the tailnet hostname)
+and `--image IMG` (`-Image`; default `hugmesh/mesh-node:latest`).
+
 ---
 
 ## Install it (app icon, menu/Start shortcuts, autostart, task-bar tray)
 
-For a non-technical user, the installers add a **task-bar icon** + menu/Start-Menu
-shortcuts so the mesh node can be joined/left without a terminal. All per-user — **no
-root/admin**. The keys folder + role are recorded once (`launch.env`) and reused by
-every shortcut and the tray.
+For a non-technical user, the installers add a **task-bar icon** and menu or
+Start-Menu shortcuts, so the node can be joined and left without a terminal. All of it
+is per-user: **no root or admin**. The keys folder and role are recorded once
+(`launch.env`) and reused by every shortcut and the tray.
 
 ### Linux
 
@@ -114,7 +119,7 @@ Icons live in [`icons/`](icons) (`.svg` + `.png` for Linux, `.ico` for Windows).
 
 ## Keys layout
 
-The keys folder mirrors the KEYS-USB layout the appliance images consume
+The keys folder mirrors the KEYS-USB layout the appliance images read
 (see `specs/etc/keys-provision`). A worked example is in [`keys.example/`](keys.example):
 
 ```
@@ -130,16 +135,16 @@ To use the example: copy `keys.example/` to `mykeys/`, rename
 `tailscale/authkey.example` → `tailscale/authkey` and paste a real one-time key,
 then fill in `login-server` and `casdoor.json`.
 
-> **Never commit real keys.** The pre-auth key is single-use (SEC-08) and the
-> Casdoor client secret is *not* required here (device-code is a public-client
-> flow). Keys are mounted **read-only** at runtime and never baked into the image.
+> **Never commit real keys.** The pre-auth key is single-use (SEC-08). The Casdoor
+> client secret is *not* needed here (device-code is a public-client flow). Keys are
+> mounted **read-only** at runtime and never baked into the image.
 
 ---
 
 ## Admin-generated `docker run` (no scripts)
 
-The launchers above are convenience wrappers. An admin can hand out an equivalent
-raw command — this is exactly what `mesh-node.sh` runs under the hood:
+The launchers above are wrappers. An admin can hand out the raw command instead. It
+is what `mesh-node.sh` runs:
 
 **Linux (with kernel TUN):**
 ```sh
@@ -166,8 +171,8 @@ Then `docker logs -f hugmesh-mesh-node` to follow the join + Casdoor login.
 
 ## Environment overrides
 
-Anything in the keys folder can be overridden by env vars (handy for the raw
-`docker run` form):
+Env vars override anything in the keys folder (handy for the raw `docker run`
+form):
 
 | Var | Meaning |
 | --- | --- |
