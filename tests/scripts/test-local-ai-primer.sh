@@ -26,6 +26,12 @@
 #   (g) the three role files carry the front matter the coding-agent harness reads;
 #   (h) every evaluation question has an expected word that is in the primer or the repository and
 #       is NOT already in the question.
+#   (j) fact anchors: forty claims the primer makes about what a command does or where a service
+#       listens are each tied to an exact primer phrase and a pattern in the repository file that
+#       backs them, so a swapped meaning or a changed port is caught, not only a renamed target;
+#   and, outside the checker: the `test` subcommand (scorer, table, totals, verdict, which model each
+#   column asks) is run against a stub of the Ollama API and against four copies of the script with
+#   one planted defect each.
 #
 # Offline: python3 and bash only, no Ollama, no network. Run: bash tests/scripts/test-local-ai-primer.sh
 set -uo pipefail
@@ -370,6 +376,70 @@ for r in ROLES:
     if not "\n".join(ls[end + 1:]).strip():
         bad("g", "%s.md has no body after the front matter" % r)
 
+# ── (j) fact anchors: what the primer SAYS about a name, not just that the name exists ──
+# Rules (a) to (b) only prove that a target, variable, repository or path exists. A primer that swaps
+# what make stack-halt and make stack-down do passes all of them. Each anchor below is a triple:
+# a phrase the primer must contain word for word (so an edit to the claim is noticed), the repository
+# file that backs it, and a pattern that file must match (whitespace runs count as one space). The
+# phrase pins the primer's wording; the pattern pins the repository's truth; change either and this
+# rule goes red until a person reads both again.
+def squash(s):
+    return re.sub(r"\s+", " ", s)
+ANCHORS = [
+    ("make stack-halt stops and keeps the data; make stack-down deletes the volumes", "Makefile", r"stack-halt: ## stop the local stack but KEEP its data"),
+    ("make stack-halt stops and keeps the data; make stack-down deletes the volumes", "Makefile", r"stack-down: ## stop the local stack and DROP ITS VOLUMES"),
+    ("Front door http://localhost:8088", "docs/LOCAL-STACK.md", r"\*\*http://localhost:8088\*\* \(the fe-gateway front door"),
+    ("https://localhost:8488 is its TLS twin", "docs/LOCAL-STACK.md", r"HTTPS twin \*\*https://localhost:8488\*\*"),
+    ("Only the fe-gateway is published to the host", "docs/LOCAL-STACK.md", r"Only the fe-gateway is published to the"),
+    ("make stack-seed is required afterwards: sign-in fails until it has run", "docs/LOCAL-STACK.md", r"make stack-seed +# REQUIRED for real SSO login"),
+    ("make view LANE=compose or LANE=kind", "Makefile", r"view: ## serve the local front doors in the browser \(LANE=kind\|kind-svc\|compose"),
+    ("(WireGuard is 1420)", "scripts/kind-load-images.sh", r"WireGuard is 1420"),
+    ("IPv6 is not the cause", "scripts/kind-load-images.sh", r"IPv6 look like the culprit\. It is not"),
+    ("Set BUILD_NETWORK=host for make kind-images", "scripts/kind-load-images.sh", r"Use BUILD_NETWORK=host"),
+    ("Order: make kind-up, then make kind-images, then make kind-doctor to check it, then make kind-e2e for the sign-in test", "specs/cluster/bootstrap/kind-local/README.md", r"is `kind-up` THEN `kind-images`"),
+    ("Order: make kind-up, then make kind-images, then make kind-doctor to check it, then make kind-e2e for the sign-in test", "Makefile", r"kind-doctor: ## is the kind cluster capable of running the mesh"),
+    ("Order: make kind-up, then make kind-images, then make kind-doctor to check it, then make kind-e2e for the sign-in test", "Makefile", r"kind-e2e: playwright-deps ## run the native-login e2e"),
+    ("make kind-tor publishes a .onion and runs after make kind-up", "Makefile", r"kind-tor: ## publish the kind front door as a v3 \.onion .*run after kind-up"),
+    ("make kind-images ONLY=hugmesh-host-shell (a comma list is accepted; an unknown name fails)", "Makefile", r"kind-images: stack-clone .*\(ONLY=repo\[,repo\] for a subset\)"),
+    ("make kind-images ONLY=hugmesh-host-shell (a comma list is accepted; an unknown name fails)", "scripts/kind-load-images.sh", r"ONLY: unknown image"),
+    ("make kind-images runs make stack-clone first", "Makefile", r"kind-images: stack-clone "),
+    ("make kind-halt stops without deleting; make kind-down deletes the cluster", "Makefile", r"kind-halt: ## stop the DevOps lane WITHOUT deleting it"),
+    ("make kind-halt stops without deleting; make kind-down deletes the cluster", "Makefile", r"kind-down: ## delete the kind cluster"),
+    ("make stack-clone runs git reset --hard on each checkout", "scripts/clone-all-repos.sh", r"reset --hard --quiet \"origin/\$\{GIT_REF\}\""),
+    ("(a checkout with local commits is kept, not updated)", "scripts/clone-all-repos.sh", r"KEPT: \$\{repo\} has local work not in"),
+    ("The second sets STACK_NO_CLONE=1, so your checkouts are never fetched or reset", "docs/STUDIO-WALKTHROUGH.md", r"sets `STACK_NO_CLONE=1`, so your checkouts are never fetched, updated or `git reset`"),
+    ("The second sets STACK_NO_CLONE=1, so your checkouts are never fetched or reset", "Makefile", r"stack-clone: ## .*\(idempotent; STACK_NO_CLONE=1 skips\)"),
+    ("Java: ./mvnw -B verify (some repos add -s settings.xml)", "docs/LOCAL-AI-ASSISTANT.md", r"`\./mvnw -B verify` \(some repos pass `-s settings\.xml`"),
+    ("Angular: npm ci && npm run build && npm test -- --watch=false", "docs/LOCAL-AI-ASSISTANT.md", r"`npm ci && npm run build && npm test -- --watch=false`"),
+    ("Studio: cd studio && HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen python -m pytest -q tests/<file>.py", "docs/LOCAL-AI-ASSISTANT.md", r"`HUGMESH_STUDIO_NO_ELEVATION=1 QT_QPA_PLATFORM=offscreen python -m pytest -q tests/<file>\.py`"),
+    ("make stack-e2e-bdd-check is the offline check to run before committing a .feature file", "Makefile", r"stack-e2e-bdd-check: ## STARTS NOTHING"),
+    ("run with make stack-e2e-bdd against a live stack", "Makefile", r"stack-e2e-bdd: ## run the GHERKIN e2e lane \(BDD_ENV=docker\|kind\|qemu; docker needs stack-up \+ stack-seed\)"),
+    ("up -d --build hugmesh-user-bff-api", "tests/stack/compose.local.yaml", r"compose\.local\.yaml up -d --build"),
+    ("A cold Java build needs make stack-m2-bootstrap once", "docs/LOCAL-STACK.md", r"run \*\*`make stack-m2-bootstrap` once first\*\*"),
+    ("make stack-m2-check refreshes it", "Makefile", r"re-running stack-m2-bootstrap"),
+    ("Repair with bash scripts/patch-stack-src.sh", "scripts/kind-load-images.sh", r"Repair with: bash scripts/patch-stack-src\.sh"),
+    ("a linked git worktree (its .git is a file) cannot be served: run from a full clone or export ARGOCD_REPO_TOKEN", "specs/cluster/bootstrap/kind-local/bootstrap-kind.sh", r"A linked worktree's \.git is a FILE"),
+    ("a linked git worktree (its .git is a file) cannot be served: run from a full clone or export ARGOCD_REPO_TOKEN", "specs/cluster/bootstrap/kind-local/bootstrap-kind.sh", r"OVERRIDE — ARGOCD_REPO_TOKEN"),
+    ("so other routes answer 503 behind a live route", "specs/cluster/bootstrap/kind-local/README.md", r"answer \*\*503 behind a live"),
+    ("make kind-doctor reports this and never repairs", "specs/cluster/bootstrap/kind-local/README.md", r"It reports and exits non-zero; it never repairs"),
+    ("scripts/studio-launch.sh --detect only reports what the host has", "scripts/studio-launch.sh", r"--detect +print the DETECT report and exit"),
+    ("Every command under scripts/ must be named in docs/", "tests/scripts/test-docs-command-coverage.sh", r"every user-facing command under scripts/ must be # reachable from docs/"),
+    ("No modal dialogs in Studio page logic", "studio/tests/test_devops_halt_controls.py", r"NO MODALS IN PAGE LOGIC"),
+    ("tests/stack/up.sh starts only a mock lane with fake back-ends", "docs/LOCAL-STACK.md", r"The mock lane is untouched, because it runs no gateway at all"),
+]
+nbody = squash(body)
+file_cache = {}
+for phrase, rel, pat in ANCHORS:
+    if squash(phrase) not in nbody:
+        bad("j", "the primer no longer says %r; this fact was checked against %s, so re-read both before changing the anchor" % (phrase[:60], rel)); continue
+    if rel not in file_cache:
+        fp = os.path.join(repo, rel)
+        file_cache[rel] = squash(read(fp)) if exists(fp) else None
+    if file_cache[rel] is None:
+        bad("j", "%s backs the primer's %r but is not in the tree" % (rel, phrase[:50]))
+    elif not re.search(pat, file_cache[rel]):
+        bad("j", "%s no longer says what the primer's %r relies on (pattern %r)" % (rel, phrase[:50], pat[:70]))
+
 # ── (h) questions ──
 qp = os.path.join(ai, "eval", "questions.tsv")
 def norm(s):
@@ -570,6 +640,69 @@ for l in ls:
 open(p, "w").write("\n".join(keep))
 PY
 expect_caught h "too few questions"
+# (j) fact anchors. Each of these edits keeps every NAME the primer uses and changes only what it
+# says about them, which is exactly what rules (a) to (b) cannot see. The first six are the edits
+# a reviewer tried by hand against the earlier guard; all six used to pass.
+primer_sub() { # <old> <new>: replace one exact string in the primer body; non-zero if it is not there
+  python3 - "$T/d/primer.md" "$1" "$2" <<'PY'
+import sys
+p, old, new = sys.argv[1:4]
+s = open(p).read()
+i = s.index("<!-- SOURCES")
+if old not in s[:i]:
+    sys.exit(1)
+open(p, "w").write(s[:i].replace(old, new, 1) + s[i:])
+PY
+}
+anchor_control() { # <why> <old> <new>
+  fresh
+  if ! primer_sub "$2" "$3"; then bad "negative control setup: the primer has no text '$2' ($1)"; return; fi
+  expect_caught j "$1"
+}
+anchor_control "the front door port changed" "Front door http://localhost:8088" "Front door http://localhost:9999"
+anchor_control "stack-halt and stack-down swapped" "make stack-halt stops and keeps the data; make stack-down deletes the volumes" "make stack-down stops and keeps the data; make stack-halt deletes the volumes"
+anchor_control "the tunnel MTU changed" "(WireGuard is 1420)" "(WireGuard is 9000)"
+anchor_control "stack-clone said to run another git command" "make stack-clone runs git reset --hard on each checkout" "make stack-clone runs git clean on each checkout"
+anchor_control "the kind order reversed" "Order: make kind-up, then make kind-images, then make kind-doctor" "Order: make kind-doctor, then make kind-images, then make kind-up"
+anchor_control "the Java test command changed" "Java: ./mvnw -B verify" "Java: ./mvnw -B clean"
+anchor_control "kind-halt and kind-down swapped" "make kind-halt stops without deleting; make kind-down deletes the cluster" "make kind-down stops without deleting; make kind-halt deletes the cluster"
+# The other side of an anchor: the repository stops saying what the primer relies on. The file is
+# doctored in a copy of the tree (every other entry is a symlink to the real one).
+doctor_repo() { # <relative file> <old> <new>
+  python3 - "$REPO" "$T/r" "$1" "$2" "$3" <<'PY'
+import os, shutil, sys
+repo, dst, rel, old, new = sys.argv[1:6]
+shutil.rmtree(dst, ignore_errors=True); os.makedirs(dst)
+def mirror(src, out, parts):
+    for n in os.listdir(src):
+        if n == ".git":
+            continue
+        sp, op = os.path.join(src, n), os.path.join(out, n)
+        if parts and n == parts[0]:
+            if len(parts) == 1:
+                t = open(sp, encoding="utf-8", errors="replace").read()
+                if old not in t:
+                    sys.exit("setup: %r is not in %s" % (old, rel))
+                open(op, "w", encoding="utf-8").write(t.replace(old, new, 1))
+            else:
+                os.makedirs(op); mirror(sp, op, parts[1:])
+        else:
+            os.symlink(sp, op)
+mirror(repo, dst, rel.split("/"))
+PY
+}
+repo_control() { # <why> <file> <old> <new>
+  if ! doctor_repo "$2" "$3" "$4"; then bad "negative control setup: could not doctor $2 ($1)"; return; fi
+  out=$(CHK_SKIP=f python3 "$T/chk.py" "$T/r" "$REPO/local-ai" "$REPO/scripts/local-ai-agents.sh" "$T/corpus.txt" \
+    "$BYTE_LIMIT" "$TOKEN_BUDGET" "$MEASURED_TOKENS" "$MEASURED_BYTES" "$STALE_PERCENT")
+  if printf '%s\n' "$out" | grep -F "(j)" >/dev/null; then ok "negative control: $1 — caught by (j)"
+  else bad "negative control: $1 — NOT caught by (j)"; printf '%s\n' "$out" | sed 's/^/       saw: /' | head -3; fi
+}
+repo_control "the Makefile no longer says stack-halt keeps the data" Makefile "stack-halt: ## stop the local stack but KEEP its data" "stack-halt: ## stop the local stack and drop its data"
+repo_control "the local-stack doc moved the front door" docs/LOCAL-STACK.md "**http://localhost:8088** (the fe-gateway front door" "**http://localhost:9999** (the fe-gateway front door"
+repo_control "the image script no longer states the tunnel MTU" scripts/kind-load-images.sh "WireGuard is 1420" "WireGuard is 9000"
+repo_control "the kind README no longer states the order" specs/cluster/bootstrap/kind-local/README.md '`kind-up` THEN `kind-images`' '`kind-images` THEN `kind-up`'
+
 # the dry-run rule: a script that drops the role paragraph, and one that drops the primer
 SYS_LINE="printf 'SYSTEM \"\"\"\\n%s\\n\\n%s\\n\"\"\"\\n' \"\${primer}\" \"\${role}\""
 variant() { # <out> <old> <new>: copy the script with one exact string replaced; non-zero if nothing changed
@@ -594,6 +727,108 @@ done
 fresh
 if ! variant "$T/variant.sh" '*) [[ "${host}" =~ ^127(\.[0-9]{1,3}){3}$ ]] \' '*) true \'; then bad "negative control setup: the loopback line was not found"
 else out=$(CHK_F_QUICK=1 problems "$T/d" "$T/variant.sh"); if printf '%s\n' "$out" | grep -F "(f)" >/dev/null; then ok "negative control: a script that accepts any OLLAMA_HOST — caught by (f)"; else bad "negative control: a script that accepts any OLLAMA_HOST — NOT caught by (f)"; fi; fi
+
+# ── `test`: the scorer, the table, the verdict and the base column, against a stub Ollama API ──────
+# The prepared-versus-base comparison is the evidence behind the word "prepared", so the code that
+# produces it is checked here with no Ollama at all: a small HTTP server answers /api/version and
+# /api/chat from a fixed table and logs every request, and `test` runs against it with a fixed
+# questions file. The table, the totals and the verdict are compared line for line, then the same
+# checks are run against copies of the script with one defect planted in each of four places
+# (the scorer needs EVERY term, the order marker >> is honoured, the verdict needs a strictly higher
+# score, the base column asks the BASE model) and each copy must fail at least one check.
+echo "== the scorer and the verdict against a stub API"
+cat > "$T/api-stub.py" <<'PY'
+import json, os, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+state = os.environ["STUB_DIR"]
+BASE, PREP = "qwen3:8b", "hugmesh-agent"
+def answer(model, system, q):
+    if open(os.path.join(state, "mode")).read().strip() == "same":
+        return "alpha beta one two y same"
+    if system:                      # a caller's own system message replaces the Modelfile's text
+        return "irrelevant"
+    if model == PREP:
+        return {"q-and": "Alpha and BETA", "q-order": "one, then two", "q-or": "y",
+                "q-md": "**`Same`**"}[q]
+    return {"q-and": "alpha only", "q-order": "two, then one", "q-or": "z",
+            "q-md": "same"}[q]
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def _send(self, obj):
+        b = json.dumps(obj).encode()
+        self.send_response(200); self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def do_GET(self):
+        self._send({"version": "0.0-stub"})
+    def do_POST(self):
+        d = json.loads(self.rfile.read(int(self.headers["content-length"])))
+        msgs = d["messages"]
+        system = next((m["content"] for m in msgs if m["role"] == "system"), "")
+        q = next(m["content"] for m in msgs if m["role"] == "user")
+        with open(os.path.join(state, "requests"), "a") as fh:
+            fh.write("%s\t%s\t%s\n" % (d["model"], "system" if system else "none", q))
+        self._send({"message": {"content": answer(d["model"], system, q)}})
+srv = HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(state, "port"), "w").write(str(srv.server_port))
+srv.serve_forever()
+PY
+printf 'id\tquestion\texpect\nq-and\tq-and\talpha && beta\nq-order\tq-order\tone >> two\nq-or\tq-or\tx || y\nq-md\tq-md\tsame\n' > "$T/stub-questions.tsv"
+mkdir -p "$T/api"; : > "$T/api/requests"; echo differ > "$T/api/mode"
+STUB_DIR="$T/api" python3 "$T/api-stub.py" & API_PID=$!
+trap 'kill "$API_PID" 2>/dev/null; rm -rf "$T"' EXIT
+for _ in $(seq 1 50); do [ -s "$T/api/port" ] && break; sleep 0.1; done
+API_PORT=$(cat "$T/api/port" 2>/dev/null || true)
+stub_reset qwen3:8b hugmesh-agent
+api_test() { # <script> [args]: run `test` against the stub API; stdout to $T/o, stderr to $T/e
+  local sc="$1"; shift
+  PATH="$T/bin:$PATH" STUB_STATE="$T/state" OLLAMA_HOST="127.0.0.1:${API_PORT}" LOCAL_AI_DIR="$REPO/local-ai" \
+    bash "$sc" test --questions "$T/stub-questions.tsv" "$@" >"$T/o" 2>"$T/e"
+}
+api_checks() { # <script> <label>: prints one line per failed check; empty = all held
+  local sc="$1" rc cnt n
+  echo differ > "$T/api/mode"; : > "$T/api/requests"
+  api_test "$sc" --out "$T/api/out.tsv"; rc=$?
+  [ "$rc" = 0 ] || echo "test exited $rc: $(head -c 150 "$T/e")"
+  grep -Fx '| id | base | prepared | prepared+own system message |' "$T/o" >/dev/null || echo "header line differs"
+  for row in '| q-and | FAIL | pass | FAIL |' '| q-order | FAIL | pass | FAIL |' '| q-or | FAIL | pass | FAIL |' '| q-md | pass | pass | FAIL |'; do
+    grep -Fx "$row" "$T/o" >/dev/null || echo "row missing: $row"
+  done
+  grep -Fx '| **total** | **1/4** | **4/4** | **0/4** |' "$T/o" >/dev/null || echo "totals differ: $(grep -F total "$T/o")"
+  grep -Fx 'VERDICT: prepared 4/4 vs base 1/4: prepared answered more correctly' "$T/o" >/dev/null || echo "verdict differs: $(grep -F VERDICT "$T/o")"
+  grep -F 'GAP: ' "$T/o" | grep -F 'prepared scored 0/4' >/dev/null || echo "gap line differs"
+  # which model each column asked, and with what system message
+  n=$(grep -c "^qwen3:8b	none	" "$T/api/requests") ; [ "$n" = 4 ] || echo "base column: $n unprepared requests to the base model, wanted 4"
+  n=$(grep -c "^hugmesh-agent	none	" "$T/api/requests"); [ "$n" = 4 ] || echo "prepared column: $n requests, wanted 4"
+  n=$(grep -c "^hugmesh-agent	system	" "$T/api/requests"); [ "$n" = 4 ] || echo "own-system column: $n requests, wanted 4"
+  n=$(grep -c "^qwen3:8b	system	" "$T/api/requests"); [ "$n" = 0 ] || echo "the base was sent a system message $n times"
+  [ "$(grep -c . "$T/api/out.tsv" 2>/dev/null)" = 13 ] || echo "--out file does not hold a header and 12 answers"
+  # a model that scores no better than the base must not be called better, and --strict must say so
+  echo same > "$T/api/mode"
+  api_test "$sc" --strict; rc=$?
+  [ "$rc" = 1 ] || echo "equal scores with --strict exited $rc, wanted 1"
+  grep -Fx 'VERDICT: prepared 4/4 vs base 4/4: prepared did NOT answer more correctly than the base' "$T/o" >/dev/null || echo "equal-score verdict differs: $(grep -F VERDICT "$T/o")"
+  echo differ > "$T/api/mode"
+  api_test "$sc" --strict; rc=$?
+  [ "$rc" = 0 ] || echo "a better prepared model with --strict exited $rc, wanted 0"
+}
+if [ -z "$API_PORT" ]; then bad "the stub API did not start"
+else
+  fails=$(api_checks "$REPO/scripts/local-ai-agents.sh")
+  if [ -z "$fails" ]; then ok "test prints the table, totals, verdict and gap exactly, asks the right model in each column, and honours --strict"
+  else bad "test against the stub API: $(printf '%s' "$fails" | tr '\n' ';')"; fi
+  battery() { # <why> <old> <new>
+    if ! variant "$T/variant.sh" "$2" "$3"; then bad "negative control setup: the line to break in the script was not found ($1)"; return; fi
+    fails=$(api_checks "$T/variant.sh")
+    if [ -n "$fails" ]; then ok "negative control: $1 — caught ($(printf '%s' "$fails" | head -1 | cut -c1-70))"
+    else bad "negative control: $1 — NOT caught"; fi
+  }
+  battery "a scorer that needs only ONE of the required terms" 'return all(any(found(text, seq) for seq in alts) for alts in terms)' 'return any(any(found(text, seq) for seq in alts) for alts in terms)'
+  battery "a scorer that ignores the >> order" 'pos = i + len(part)' 'pos = 0'
+  battery "a verdict that accepts a tie" 'better = totals[1] > totals[0]' 'better = totals[1] >= totals[0]'
+  battery "a base column that asks the prepared model" 'columns = [("base", base, None), ("prepared", model, None)]' 'columns = [("base", model, None), ("prepared", model, None)]'
+fi
+kill "$API_PID" 2>/dev/null; wait "$API_PID" 2>/dev/null
+trap 'rm -rf "$T"' EXIT
 
 # a harmless edit must stay clean (the checker is not just always-failing)
 fresh; primer_insert "- One more harmless sentence about the lanes."

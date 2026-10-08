@@ -19,7 +19,8 @@
 # documented traps). Each local-ai/modelfiles/<name>.Modelfile holds only the base, the parameters
 # and a role paragraph. This script puts the primer in front of the role paragraph inside the
 # Modelfile's SYSTEM block, so the primer is written once and cannot drift between the four.
-# tests/scripts/test-local-ai-primer.sh checks every make target and path the primer names.
+# tests/scripts/test-local-ai-primer.sh checks every make target, variable, repository and path the
+# primer names, and, for its load-bearing claims, what the primer says about them.
 #
 # WHAT IT WILL NOT DO. It never pulls: a missing base stops with the exact `ollama pull` command
 # (an `ollama create` on a base that is not on disk would download it). It talks only to a

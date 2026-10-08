@@ -421,7 +421,8 @@ Add a --dry-run option. Output only the changed file."
 > the last two are read-only roles with no editing tool.
 
 **Refresh after the primer changes.** Edit `local-ai/primer.md`, put the file that backs the new
-fact in its trailing sources comment, run `bash tests/scripts/test-local-ai-primer.sh`, then run
+fact in its trailing sources comment, add an anchor for it in the guard when it says what a command
+does (the guard checks names and paths everywhere and the wording of the anchored claims), run `bash tests/scripts/test-local-ai-primer.sh`, then run
 `scripts/local-ai-agents.sh create` again (it rebuilds the four in place) and
 `scripts/local-ai-agents.sh test` to see the score. If the primer grew by more than 15%, count
 its tokens with `scripts/local-ai-agents.sh test --tokens` and update `MEASURED_TOKENS` and

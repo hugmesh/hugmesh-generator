@@ -35,10 +35,21 @@ secret-shaped string, a home path, an account name or an attribution line, when 
 not parse, when `create --dry-run` prints anything other than the role file plus the primer plus
 the role text, or when a role file lacks the front matter. It also drives the script's `create`,
 `list` and `remove` against a stand-in `ollama` to prove it never pulls, never overwrites and never
-deletes a model it did not make.
+deletes a model it did not make. It also drives the scorer behind `test` against a stub of the
+Ollama API (fixed answers, a logged request list) and checks the table, totals, verdict and which
+model each column asked, with four planted defects that it must catch.
 
-To add a fact: write it in `primer.md`, name the file that backs it in the sources comment, run
-the guard. To re-count tokens after a large edit:
+What it checks about a fact has two levels. Every name (make target, variable, repository, path) is
+checked to exist. For forty load-bearing claims it also checks what the primer SAYS about the
+name: each is a triple of an exact primer phrase, a repository file and a pattern that file must
+match, listed as `ANCHORS` in the guard (for example `make stack-halt` keeps the data and `make
+stack-down` deletes the volumes, the ports 8088 and 8488, the kind order, the 1420 tunnel MTU, the
+test commands). Changing the claim or the file it rests on turns the guard red until a person reads
+both. A sentence with no anchor is checked for names and paths only, so a new fact that could hurt
+someone if it were wrong needs an anchor added with it.
+
+To add a fact: write it in `primer.md`, name the file that backs it in the sources comment, add an
+anchor for it to the guard when it states what a command does, run the guard. To re-count tokens after a large edit:
 `scripts/local-ai-agents.sh test --tokens` and update `MEASURED_TOKENS` and `MEASURED_BYTES` at the
 top of the guard.
 

@@ -701,19 +701,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # file on that tree (GUARD_PREMERGE=0), not computed:
 #     182 of 205 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 23 — neither new suite was ever in it.
-# 194 -> 195 (denominator 217 -> 218) on 2026-10-07 for hugmesh-generator#697:
-# tests/scripts/test-local-ai-primer.sh joined the gate -- the mesh primer the local Ollama
-# models are built from names only make targets, variables, repositories and paths this
-# repository has, and stays inside its token budget. MEASURED by RUNNING this file on a copy
-# of the tree, not computed:
-#     195 of 218 suites are named by a pull_request-triggered workflow   (the suite named in
-#                                                       shell-suites.yml's DEBIAN job)
-#     194 of 218                                        (named only in .gitlab-ci.yml, which
-#                                                       this branch does alone; check 7b then
-#                                                       lists the suite as ungated)
-# The ungated SET pin is unchanged: the suite is gated, so it is not in PREMERGE_UNGATED.
-# This value is therefore only true once that one workflow line lands.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-195}"
+# 194 -> 194 (denominator 217 -> 218) on 2026-10-07 for hugmesh-generator#697:
+# tests/scripts/test-local-ai-primer.sh is NEW AND NOT YET IN THE GATE. The suite is named by
+# .gitlab-ci.yml's post-merge orphan-guards-verify list only, because the one line that gates it
+# before a merge belongs in .github/workflows/shell-suites.yml (the debian job's '' leg) and a
+# token without the workflow scope cannot push that file. The gated count therefore stays 194
+# while the denominator grows to 218, and the suite is recorded in PREMERGE_UNGATED below with
+# that reason. MEASURED by running this file on the branch: 194 of 218 suites. When the workflow
+# line lands, raise this to 195 and delete the PREMERGE_UNGATED entry in the same commit.
+PREMERGE_BASELINE="${GUARD_PREMERGE:-194}"
 
 # 192 -> 193 (denominator 215 -> 216) on 2026-09-30 for #663: the kind sign-in
 # answered 500 because the BFF autoscalers' maxReplicas (6) times the unconfigured
@@ -876,6 +872,11 @@ PREMERGE_UNGATED=(
   # kind cluster up but no metrics-server synced it goes RED with 2 failures.
   # See the "NOT LISTED HERE" entry in .github/workflows/shell-suites.yml.
   tests/scripts/test-kind-metrics-api.sh
+  # NEW (hugmesh-generator#697) and offline (python3 and bash only), so it BELONGS in the debian
+  # job of .github/workflows/shell-suites.yml; it is listed here only because that one line
+  # needs a token with the workflow scope. Post-merge it runs from .gitlab-ci.yml's
+  # orphan-guards-verify. Delete this entry and raise PREMERGE_BASELINE to 195 with the line.
+  tests/scripts/test-local-ai-primer.sh
   tests/scripts/test-federation-module-slugs.sh
   tests/scripts/test-liquibase-grant-roles.sh
   # RED ON MAIN, and the reds are real defects rather than suite bugs: a jetson
