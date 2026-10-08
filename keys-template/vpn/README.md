@@ -29,9 +29,9 @@ KEYS/
 
 - `<domain>` is the **brand / tenant domain**: `provision.json` `.egress_vpn.domain`
   if set, else `.hugmesh.cluster_domain` (the node's own residency).
-  `provision_vpn()` reads ONLY `KEYS/vpn/<own-domain>/`. It never installs a config
-  from another domain's directory on this node. This is per-tenant isolation as
-  defence in depth; the runtime BFF/ESO path enforces the same domain scope.
+  `provision_vpn()` reads ONLY `KEYS/vpn/<own-domain>/` and never installs a config
+  from another domain's directory. This is per-tenant isolation as defence in
+  depth; the runtime BFF/ESO path enforces the same domain scope.
 - A domain may hold several `.conf`/`.ovpn` files (for example one per provider
   region or per public service). At provision time **all** of the own-domain
   configs are staged 0600 under `/etc/hugmesh/vpn/<name>.conf` or `<name>.ovpn`.
@@ -64,10 +64,10 @@ build-side mirror of the KEYS partition. The VPN configs land at
 `keys-out/vpn/<domain>/`, mirroring `KEYS/vpn/<domain>/` exactly. They are copied
 from `--vpn-src DIR` (never generated). `--vpn-domain` (else `CLUSTER_DOMAIN`)
 names the domain. `build-all-roles.sh` calls `gen-provision-keys.sh` once per role
-and writes `keys-<role>` folders, but it passes no `--vpn-src`. To stage configs
-that way, set `VPN_SRC` (and `VPN_DOMAIN`) in the environment. The configs are
-secrets, so `.gitignore` skips the `keys-out/` tree. Only the `.gitkeep`
-placeholder tree under `keys-template/vpn/` is tracked.
+(writing `keys-<role>` folders) but passes no `--vpn-src`; set `VPN_SRC` (and
+`VPN_DOMAIN`) in the environment to stage configs that way. The configs are
+secrets, so `.gitignore` skips `keys-out/`. Only the `.gitkeep` placeholder tree
+under `keys-template/vpn/` is tracked.
 
 ## Fail-closed posture
 

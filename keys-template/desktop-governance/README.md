@@ -38,7 +38,7 @@ node's own domain (resolved from `.client.primary_domain` →
 
 These files hold hosts and the `desktop-sudo` claim NAME only, never tokens or
 keys. Copy them as they are. The SSO desktop-login deposits the bearer token per
-session at runtime. It is never staged here. The mapper checks it against the
+session at runtime; it is never staged here. The mapper checks it against the
 issuer's PUBLIC JWKS (fetched at runtime, last-good cached).
 
 ## GEN-SSO session-start (Seams #1 + #2)
@@ -86,5 +86,4 @@ The desktop SSO login uses the `hugmesh-desktop` client id (PKCE public client).
 
 Mirror of `specs/etc/hugmesh/desktop-governance/`, plus the ready-to-run
 `session-install.sh`. Edit in place if a domain needs a different store title or
-remote layout. Keep `@@CLUSTER_DOMAIN@@` intact, or first-boot domain
-substitution breaks.
+remote layout, but keep `@@CLUSTER_DOMAIN@@` so first-boot substitution works.

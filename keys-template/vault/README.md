@@ -3,9 +3,9 @@
 This directory carries the **cluster application secrets** (Casdoor, the
 databases, the BFFs, Cassandra, Harbor, ClickHouse, Uptrace and more) on the KEYS
 stick, so a device can come up when no HashiCorp Vault server is reachable.
-`scripts/gen-cluster-secrets.sh` produces them (it writes `keys-out/vault/`), and
-you drop them here. `scripts/make-keys-usb.sh` copies a `keys-out` directory,
-`vault/` included, onto the stick. It does not generate secrets.
+`scripts/gen-cluster-secrets.sh` writes them to `keys-out/vault/`. Drop them here,
+or let `scripts/make-keys-usb.sh` copy a `keys-out` directory, `vault/` included,
+onto the stick. It does not generate secrets.
 
 ## Bundle layout
 
@@ -17,26 +17,26 @@ KEYS/vault/
                    you write it after `vault operator init`, the script does not)
 ```
 
-- **`secrets.json`** is the *offline* path. It already holds the exact k8s Secrets
-  the workloads consume, so provisioning can `kubectl create secret` them with no
+- **`secrets.json`** is the *offline* path. It holds the exact k8s Secrets the
+  workloads consume, so provisioning can `kubectl create secret` them with no
   Vault. See `secrets.example.json` for the (redacted) shape.
-- **`token`** lets a node that *does* have network reach to Vault reconcile through
-  the External Secrets Operator. Treat it as highly sensitive. `keys-provision`
-  also copies it into the `vault/vault-bootstrap` Secret that the `vault-pki-init`
-  Job authenticates with. Without `VAULT_TOKEN` in the environment,
+- **`token`** lets a node that can reach Vault reconcile through the External
+  Secrets Operator. Treat it as highly sensitive. `keys-provision` also copies it
+  into the `vault/vault-bootstrap` Secret that the `vault-pki-init` Job
+  authenticates with. Without `VAULT_TOKEN` in the environment,
   `gen-cluster-secrets.sh` writes a `PLACEHOLDER-<hex>` string here.
 - **`unseal-key`** is the Shamir unseal key for the **persistent** Vault
   (`manifests/vault`: Raft integrated storage on the LUKS `/mnt/data`, TLS
   listener). `keys-provision` copies it into the `vault/vault-unseal` Secret. The
   Vault `vault-unseal` sidecar submits it with `vault operator unseal` on **every
   (re)start**, so Vault comes back **unattended** after a restart. Treat it as
-  highly sensitive. With the root token, it holds the keys to the kingdom.
+  highly sensitive: with the root token, it opens everything.
 
 ## Persistent Vault: ONE-TIME `vault operator init`
 
-The persistent Vault uses **Raft and a Shamir seal**, so you must initialize it
-**once** to mint the unseal key and the root token. After that, auto-unseal needs
-no operator. For the single-control-plane offline model, use a single key share:
+The persistent Vault uses **Raft and a Shamir seal**. Initialize it **once** to
+mint the unseal key and the root token. After that, auto-unseal needs no operator.
+For the single-control-plane offline model, use a single key share:
 
 ```bash
 # 1) After the Vault pod is Running (sealed, uninitialized), exec into it:
@@ -51,7 +51,7 @@ vault operator init -key-shares=1 -key-threshold=1
 vault operator unseal <KEY>
 ```
 
-Then **save both to the offline KEYS stick**, so later provisioning is
+Then **save both to the offline KEYS stick** so later provisioning is
 unattended. Also seed the live cluster Secrets, so the running pod survives a
 restart before the next re-provision:
 
@@ -65,12 +65,11 @@ kubectl -n vault create secret generic vault-bootstrap --from-literal=token='<TO
 After this, restarting the Vault pod is unattended. It reloads the Raft state from
 the LUKS-encrypted PVC, and the sidecar unseals it again from `vault/vault-unseal`.
 
-> The dev Vault kept no durable state, so you must **re-initialize** the `pki_int`
-> engine and the per-app issuing roles **once** on the fresh persistent Vault. The
-> existing `vault-pki-init` Job does exactly that. It is idempotent and re-imports
-> the cluster CA from the mounted `cluster-ca` Secret. Let ArgoCD re-run it after
-> init, or run it by hand. See `manifests/vault-pki` and
-> `docs/ENCRYPTION-AT-REST.md`.
+> The dev Vault kept no durable state, so **re-initialize** the `pki_int` engine
+> and the per-app issuing roles **once** on the fresh persistent Vault. The
+> `vault-pki-init` Job does this. It is idempotent and re-imports the cluster CA
+> from the mounted `cluster-ca` Secret. Let ArgoCD re-run it after init, or run it
+> by hand. See `manifests/vault-pki` and `docs/ENCRYPTION-AT-REST.md`.
 
 ## Provisioning order: Vault first, USB second
 
@@ -88,8 +87,8 @@ the LUKS-encrypted PVC, and the sidecar unseals it again from `vault/vault-unsea
    because the Harbor robot accounts behind them are minted in-cluster.
    `OFFLINE_UNDELIVERABLE` in `tests/scripts/eso_seed_contract.py` lists them.
 
-In both cases the workload manifests keep their existing `secretKeyRef` usage.
-Only the source of the Secret differs.
+Either way the workload manifests keep their `secretKeyRef` usage. Only the
+source of the Secret differs.
 
 ## What gets created (FIXED names/keys — do not rename)
 
@@ -112,11 +111,11 @@ is the full list.
 
 The `casdoor-github` / `casdoor-discord` providers and the `casdoor-smtp` /
 `akkoma-smtp` mail Secrets are **OPTIONAL and absent by default**. OAuth client
-ids and secrets default to placeholders (the `casdoor-init` Job skips seeding a
-provider whose secret is still a placeholder). The mail Secrets go into the
-offline bundle only when a real `mail.user` and `mail.password` resolve. Otherwise
-Casdoor and Akkoma stay on native login with admin-approval registration and **no
-SMTP wired**. See `scripts/gen-cluster-secrets.sh` and the brand `MAIL_PROVIDER`
+ids and secrets default to placeholders (the `casdoor-init` Job skips a provider
+whose secret is still a placeholder). The mail Secrets enter the offline bundle
+only when a real `mail.user` and `mail.password` resolve. Otherwise Casdoor and
+Akkoma stay on native login with admin-approval registration and **no SMTP
+wired**. See `scripts/gen-cluster-secrets.sh` and the brand `MAIL_PROVIDER`
 knob (`protonmail` default | `gmail` | `outlook` | `smtp` | `none`).
 
 `<brand>` defaults to `hugmesh` (the Vault base path segment equals the brand

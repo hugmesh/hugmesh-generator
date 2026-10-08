@@ -2,9 +2,9 @@
 
 This folder holds the Cloudflare Tunnel credential for the public edge of an
 **ENV=prod** image (`apps/12-cloudflared.yaml` and `manifests/cloudflared/`).
-It is **read-if-present**. If it is absent, the cloudflared Deployment stays
-down harmlessly and nothing else is affected. An **ENV=test** image prunes the
-cloudflared app at build time, so it never consults this folder.
+It is **read-if-present**. Without it, the cloudflared Deployment stays down
+harmlessly and nothing else is affected. An **ENV=test** image prunes the
+cloudflared app at build time and never consults this folder.
 
 ## What goes here
 
@@ -15,16 +15,15 @@ The Deployment supports ONE auth style today: the token tunnel.
    --token-file FILE` stores a copy at `/etc/hugmesh/keys/cloudflared/tunnel-token`
    on the node (`--keys-dir` changes the base). **No script reads this file.**
    keys-provision does not touch `cloudflared/`, and nothing else copies it to
-   Vault. An operator must store the token in Vault at
-   `secret/<brand>/cloudflared`, property `tunnel_token`. The
-   `cloudflared-tunnel-token` ExternalSecret then turns it into the `TUNNEL_TOKEN`
-   env the Deployment reads.
+   Vault. An operator must store the token in Vault at `secret/<brand>/cloudflared`,
+   property `tunnel_token`. The `cloudflared-tunnel-token` ExternalSecret turns it
+   into the `TUNNEL_TOKEN` env the Deployment reads.
 
 2. **Named tunnel + credentials.json (NOT wired).** The ExternalSecret reads only
-   `tunnel_token`. No `credentials_json` property exists. The Deployment mounts
-   only the `cloudflared-config` ConfigMap, not a credentials file. The commented
-   `tunnel:` / `credentials-file:` keys in `manifests/cloudflared/configmap.yaml`
-   are a placeholder for future work.
+   `tunnel_token`, no `credentials_json` property exists, and the Deployment
+   mounts only the `cloudflared-config` ConfigMap. The commented `tunnel:` /
+   `credentials-file:` keys in `manifests/cloudflared/configmap.yaml` are a
+   placeholder for future work.
 
 ## Files
 
