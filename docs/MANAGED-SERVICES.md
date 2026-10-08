@@ -1,9 +1,9 @@
 # Managed backing services
 
-Point an in-mesh **backing service** (a datastore/infra the mesh normally runs
-itself) at a **hosted cloud equivalent** (AWS / Azure) on a generated node image,
-INSTEAD OF running it in-cluster. Self-hosted stays the platform default; managed
-mode is a strictly-additive, opt-in config axis.
+Point an in-mesh **backing service** (a datastore or other infra the mesh normally runs
+itself) at a **hosted cloud equivalent** (AWS or Azure) on a generated node image,
+INSTEAD OF running it in-cluster. Self-hosted stays the default. Managed mode is an
+opt-in setting that adds to the platform and removes nothing.
 
 Registry: [`specs/cluster/backing-services.yaml`](../specs/cluster/backing-services.yaml)
 (`kind: BackingServiceRegistry`) is the single declared source of truth. The
@@ -13,8 +13,8 @@ builder's `gate_backing_services()` is its executable twin.
 
 With **no** managed selection (empty `MANAGED_SERVICES`, no `--managed-service`
 flag) every baked byte, consumer endpoint literal, ArgoCD app and ESO line is
-EXACTLY today's mainline. `gate_backing_services()` returns immediately on an empty
-selection. Nothing about the default self-hosted image changes.
+EXACTLY today's mainline. `gate_backing_services()` returns at once on an empty
+selection. The default self-hosted image does not change.
 
 ## How to select
 
@@ -57,38 +57,39 @@ Optional companions (env / brand.conf): `MANAGED_VELERO_BUCKET`,
 
 ## Studio + ncurses surface (M2)
 
-The same axis is selectable in the two interactive front-ends. Every front-end just
-composes the same `--managed-service id=endpoint` the builders parse — the empty
-default (all self-hosted) emits nothing, so an untouched surface is byte-identical.
+Both interactive front-ends select the same axis. Each composes the same
+`--managed-service id=endpoint` the builders parse. The empty default (all
+self-hosted) emits nothing, so an untouched surface is byte-identical.
 
-* **Studio wizard** (`studio/.../gui/pages/network.py`): a **Managed backing
-  services** section on the Domain/mesh/services step. Per tier-1/2 service a
-  *self-hosted (default) / managed* toggle plus an endpoint line-edit that is live
-  only when *managed* is checked; tier-3 services are shown read-only with their
-  blocker note (the builder refuses them in v1). The section is shown for
-  cloud/mesh builds and platform-gated to x86/rpi5 (`gate_widgets`, like
-  `optional_services`); it saves/loads `ImageConfig.managed_services`
-  (`dict[str,str]` id→endpoint). Because it is an `ImageConfig` field it rides the
-  `IMAGE_SPEC_JSON` / `--config` batch+web spec channel automatically.
-* **`ImageConfig.managed_services`** (`studio/.../core/config.py`): scoped
-  `_X86_RPI5` in the platform capability table; `to_cli_args()` emits one
-  `--managed-service id=endpoint` per entry in sorted-id order (empty = no flag);
+* **Studio wizard** (`studio/hugmesh_studio/gui/pages/network.py`): the **Backing
+  Services** group in the single services tree on the *Domain, Mesh, and Services*
+  step (it was a separate "Managed backing services" section before the tree
+  replaced it). Each tier-1/2 service has a *self-hosted (default) / managed* dropdown
+  and an endpoint field that is live only while *managed* is picked. Tier-3 services
+  are read-only with their blocker note, because the builder refuses them in v1. The
+  group shows for cloud/mesh builds and is platform-gated to x86/rpi5 (`gate_widgets`,
+  like `optional_services`). It saves and loads `ImageConfig.managed_services`
+  (`dict[str,str]`, id to endpoint). Being an `ImageConfig` field, it rides the
+  `IMAGE_SPEC_JSON` / `--config` batch and web spec channel with no extra work.
+* **`ImageConfig.managed_services`** (`studio/hugmesh_studio/core/config.py`): scoped
+  `_X86_RPI5` in the platform capability table. `to_cli_args()` emits one
+  `--managed-service id=endpoint` per entry in sorted-id order (empty = no flag).
   `validate_identity()` fail-closes each id to the tier-1/2 set (a tier-3 id is
   REFUSED with its blocker) and shape-checks the endpoint (`host[:port]`/URL, no
-  shell metacharacters). Mesh-wide by nature, so it is a single-image field — NOT a
-  per-node `WorklistEntry` axis (every node talks to the same logical service; the
-  base config's value deepcopies onto every materialized entry).
+  shell metacharacters). Every node talks to the same logical service, so this is a
+  single-image field and NOT a per-node `WorklistEntry` axis. The base config's value
+  deepcopies onto every materialized entry.
 * **ncurses menu** (`scripts/build-menu.sh`): Options → **Managed backing services**
-  (`managed_services_screen`) — per tier-1/2 service pick self-hosted/managed and an
-  endpoint; tier-3 ids are shown but refused. Persisted as the space-separated
-  `OPT_MANAGED_SERVICES` (`id=endpoint` tokens, so a kafka broker-list keeps its
-  commas) via `save_conf`, and composed into the build flags as a repeatable
-  `--managed-service "id=endpoint"` exactly as `OPT_SERVICES` composes
+  (`managed_services_screen`). Per tier-1/2 service you pick self-hosted or managed
+  and an endpoint. Tier-3 ids are shown but refused. The choice persists as the
+  space-separated `OPT_MANAGED_SERVICES` (`id=endpoint` tokens, so a kafka broker list
+  keeps its commas) via `save_conf`, and joins the build flags as a repeatable
+  `--managed-service "id=endpoint"`, the way `OPT_SERVICES` composes
   `--optional-services`.
 
-The **web worklist toggle** (admin-ui) that would surface managed vs self-hosted
-state in the browser is a **separate cross-repo follow-up** (admin-ui + admin-bff),
-not part of this generator-side surface. See the SEAM GAP note at the bottom.
+The **web worklist toggle** (admin-ui) that would show managed vs self-hosted state in
+the browser is a **separate cross-repo follow-up** (admin-ui + admin-bff). It is not
+part of this generator-side surface. See the SEAM GAP note at the bottom.
 
 ## Difficulty ranking (verbatim-honest, from recon)
 
@@ -100,52 +101,50 @@ not part of this generator-side surface. See the SEAM GAP note at the bottom.
 | ClickHouse | ClickHouse Cloud | Easy | 3 endpoint literals; no AWS/Azure first-party | **coded** |
 | Per-service Postgres ×core | RDS / Azure DB Flexible | Medium | dual URL envs per consumer (R2DBC + Liquibase), delete DB apps, re-run role-split SQL out of band, TLS params + truststore CA, Casdoor `sslmode=disable` hardcode, Citus initdb (federation/route-access) incompatible w/ vanilla RDS | **coded** (5 BFF + casdoor-pg) |
 | federation-bundles | S3 / Blob | Easy | `APP_BUNDLES_STORAGE=s3` flag already exists; add `APP_BUNDLES_S3_*` | **coded** |
-| Vault KV + ESO | Secrets Manager / Key Vault | Medium | 1 ClusterSecretStore + ~90 remoteRef renames + writer + provision.sh token-seeding removal | **docs-only** |
+| Vault KV + ESO | Secrets Manager / Key Vault | Medium | 1 ClusterSecretStore + about 80 remoteRef key renames + writer + provision.sh token-seeding removal | **docs-only** |
 | Cassandra | Keyspaces / Cosmos-Cassandra | **Hard** | auth/TLS only in the dark hardening overlay; SigV4/port 9142; LWT/DC semantics; 5 consumers | **docs-only** |
 | Harbor | ECR / ACR | **Hard** | registry host literal in ~30 kustomizations + dockerconfigjson + kaniko; robot-account Job has no analog; ECR 12h token expiry breaks static pull Secret; loses air-gap | **docs-only** |
-| Vault PKI | ACM-PCA / Key Vault certs | **Hardest** | `VaultDynamicSecret` is Vault-only; ~25 `<app>-mtls` + 7 DB certs + rotation; USB-custody cluster-CA-import model has no managed analog | **docs-only** |
+| Vault PKI | ACM-PCA / Key Vault certs | **Hardest** | `VaultDynamicSecret` is Vault-only; about 30 `<app>-mtls` Secrets + 7 DB certs + rotation; USB-custody cluster-CA-import model has no managed analog | **docs-only** |
 
 ## Credentials custody
 
-Managed creds are **operator-supplied only** — the generator NEVER mints a
+Managed creds are **operator-supplied only**. The generator NEVER mints a
 managed-cloud credential, and creds are NEVER on argv or committed.
 
-* **Postgres**: the hosted DB password lives at the SAME Vault path the minted
-  value used (`secret/<brand>/<x>-db`, ESO Secret `<x>-db-auth` / `<x>-db-app-auth`).
-  Seed it via the same env/keys-file `gen-cluster-secrets.sh` already reads.
-* **velero object store** (the gap the recon flagged — the mesh only ever wrote
-  this path by hand): `gen-cluster-secrets.sh` now resolves
-  `MANAGED_VELERO_ACCESS_KEY_ID` / `MANAGED_VELERO_SECRET_ACCESS_KEY` (env ->
-  keys-file `managed.velero.access_key_id` / `.secret_access_key` -> blank). When
-  both resolve it writes `secret/<brand>/velero` (online) and mirrors the
-  materialized `velero-cloud-credentials` Secret (ns `velero`, key `cloud` = AWS
-  INI) into the offline `secrets.json` (chmod 600). **Blank = disabled**: nothing
-  is written (a blank never clobbers a manually-seeded path; velero stays dark).
-  The same write also carries the kopia repo encryption password
-  (`repo_password`, ESO Secret `velero-repo-credentials` key
-  `repository-password`): minted when enabled, pinnable via
-  `MANAGED_VELERO_REPO_PASSWORD` / keys-file `managed.velero.repo_password` —
-  pin it before any re-provision, because rotating it strands existing repos
-  (docs/CLOUD-BACKUPS.md "Kopia repository encryption").
-* **SMTP (SES/ACS)**: reuse the existing `MAIL_*` creds path — set `MAIL_HOST` to
-  the SES/ACS submission endpoint, port 587, `MAIL_TLS=starttls`, and the SES SMTP
-  user/password. Mail stays disabled until a real user+password resolve.
-* **federation-bundles / kafka**: no static-key Secret. Federation bundles use the
-  AWS default credential chain (IRSA / `AWS_ACCESS_KEY_ID` env / instance metadata)
-  — do NOT rely on the dead `app.bundles.s3.access-key` yml keys. Kafka is plaintext
-  today; a TLS+SASL managed broker needs Spring Kafka security props added out of
-  band.
+* **Postgres**: the hosted DB password lives at the SAME Vault path the minted value
+  used (`secret/<brand>/<x>-db`, ESO Secret `<x>-db-auth` / `<x>-db-app-auth`). Seed
+  it through the same env or keys file `gen-cluster-secrets.sh` already reads.
+* **velero object store** (the recon found the mesh only ever wrote this path by
+  hand): `gen-cluster-secrets.sh` now resolves `MANAGED_VELERO_ACCESS_KEY_ID` /
+  `MANAGED_VELERO_SECRET_ACCESS_KEY` (env, then keys-file `managed.velero.access_key_id`
+  / `.secret_access_key`, then blank). When both resolve it writes
+  `secret/<brand>/velero` (online) and mirrors the materialized
+  `velero-cloud-credentials` Secret (ns `velero`, key `cloud` = AWS INI) into the
+  offline `secrets.json` (chmod 600). **Blank = disabled**: nothing is written, a blank
+  never clobbers a manually seeded path, and velero stays dark. The same write also
+  carries the kopia repo encryption password (`repo_password`, ESO Secret
+  `velero-repo-credentials` key `repository-password`). It is minted when enabled and
+  can be pinned with `MANAGED_VELERO_REPO_PASSWORD` / keys-file
+  `managed.velero.repo_password`. Pin it before any re-provision, because rotating it
+  strands existing repos (docs/CLOUD-BACKUPS.md "Kopia repository encryption").
+* **SMTP (SES/ACS)**: reuse the existing `MAIL_*` path. Set `MAIL_HOST` to the SES/ACS
+  submission endpoint, port 587, `MAIL_TLS=starttls`, and the SES SMTP user and
+  password. Mail stays disabled until a real user and password resolve.
+* **federation-bundles / kafka**: no static-key Secret. Federation bundles use the AWS
+  default credential chain (IRSA / `AWS_ACCESS_KEY_ID` env / instance metadata); do NOT
+  rely on the dead `app.bundles.s3.access-key` yml keys. Kafka is plaintext today. A
+  TLS+SASL managed broker needs Spring Kafka security props added out of band.
 
 ## App-level config transport (the fleet trap — avoided)
 
-Where an app must choose local-vs-managed behaviour it is **property-switched**
-(`@ConditionalOnProperty` on an `app.*` key fed by an env var, `matchIfMissing=true`
-on the self-hosted default) — **never** a profile-named
-`application-<x>.properties` under `SPRING_CONFIG_ADDITIONAL_LOCATION`. That
-directory only ADDS a search path; a profile-named file loads only when profile
-`<x>` is active and fails **silently** (six services once shipped keystore
-passwords that never loaded this way). The endpoint rewrite here only changes env
-VALUES already read on the self-hosted path.
+Where an app must choose local or managed behaviour, it is **property-switched**
+(`@ConditionalOnProperty` on an `app.*` key fed by an env var, `matchIfMissing=true` on
+the self-hosted default). It is **never** a profile-named
+`application-<x>.properties` under `SPRING_CONFIG_ADDITIONAL_LOCATION`. That directory
+only ADDS a search path, and a profile-named file loads only when profile `<x>` is
+active, so it fails **silently** (six services once shipped keystore passwords that
+never loaded this way). The endpoint rewrite here only changes env VALUES already read
+on the self-hosted path.
 
 ## Per-service runbooks (tier 1–2)
 
@@ -208,7 +207,7 @@ The builder **refuses** `--managed-service` for these ids and dies with the
 blocker. They are named in the registry so the inventory is complete.
 
 * **vault-kv** (Secrets Manager / Key Vault): mechanical but broad — replace the one
-  `ClusterSecretStore`, rewrite ~90 `remoteRef.key` names, re-point the
+  `ClusterSecretStore`, rewrite about 80 distinct `remoteRef.key` names (141 refs), re-point the
   `gen-cluster-secrets` writer, and drop the vault-token/vault-ca seeding for
   IRSA/workload-identity. Entangled with vault-pki (same server). A dedicated wave.
 * **cassandra** (Keyspaces / Cosmos-Cassandra): auth/TLS knobs live only in the DARK
@@ -242,12 +241,12 @@ make stack-up MANAGED_ADMIN_BFF_R2DBC_URL='r2dbc:postgresql://my.rds:5432/adminb
 
 ## Known SEAM GAP (read side / admin plane)
 
-The read side that a future web management surface (admin-bff / admin-ui) would use
-to display installed vs managed state relies on the per-brand
-`hugmesh-installed-services-<domainSlug>` ConfigMap — which **the generator never
-emits** (only the singular `installed-services` in `hugmesh-policy`). So the
-admin-bff per-brand filter always falls back to the full catalog. A web
-"backing-services" surface must either emit the per-brand ConfigMap or point the
-provider at the policy ConfigMap — **do not depend on the per-brand CM existing**.
-This is a cross-repo lane (admin-bff-api + admin-ui), separate from this
-generator-side work.
+A future web management surface (admin-bff / admin-ui) would read installed vs managed
+state from the per-brand `hugmesh-installed-services-<domainSlug>` ConfigMap. **The
+generator never emits it.** It emits only the singular `installed-services` in
+`hugmesh-policy`, so the admin-bff per-brand filter always falls back to the full
+catalog. (Admin-bff reads the per-brand map today only for the cloud-backup menu, in
+`ConfigMapRunningServiceProvider`.) A web "backing-services" surface must either emit
+the per-brand ConfigMap or point the provider at the policy ConfigMap. **Do not depend
+on the per-brand ConfigMap existing.** This is a cross-repo lane (admin-bff-api +
+admin-ui), separate from the generator-side work.

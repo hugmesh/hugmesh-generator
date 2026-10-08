@@ -1,7 +1,7 @@
 # KEYS USB template
 
 This directory is the template for the **FAT32 "KEYS" USB partition** that
-the Gentoo RPi 5 image reads at first boot. Copy it onto a USB stick (label
+a HugMesh node image reads at first boot (all ten stage4 builders install `keys-provision`; an x86 `--unaffiliated` image does not link it). Copy it onto a USB stick (label
 the FAT32 partition `KEYS`), fill in your secrets, and insert it before the
 first boot. The on-board `keys-provision` service finds it, mounts it
 read-only, and applies everything described below — then writes a marker so
@@ -40,6 +40,11 @@ and SSH keys.
 ./scripts/gen-provision-keys.sh --role control-plane-additional -o keys-pki-02  # HA CP
 ```
 
+`--role` takes one of six KEYS profiles: `pki`, `backend`, `frontend`, `host`,
+`control-plane-additional` or `mesh-extension` (an admin-owned, registry-enforced
+node; see `device-registry/README.md`). A node role such as `omnibus` or `edge-ai`
+is folded to its profile (`omnibus` to `pki`, `edge-ai` to `host`).
+
 `scripts/build-all-roles.sh` does this per role automatically, dropping a
 `keys-<role>` folder next to each ISO in the target directory.
 
@@ -53,12 +58,20 @@ KEYS/                                 (FAT32, volume label "KEYS")
 │   ├── <user>.authorized_keys        per-user SSH public keys
 │   └── host/ssh_host_*_key[.pub]     optional pinned host keys
 ├── headscale/
-│   └── config.yaml                   optional headscale config override
+│   ├── config.yaml                   optional headscale config override
+│   └── policy.hujson                 headscale ACL policy
 ├── tailscale/
 │   └── authkey                       optional tailscale preauth key
 ├── kubernetes/
 │   ├── kubeadm-config.yaml           optional kubeadm config override
+│   ├── encryption-key[.example]      etcd Secret-encryption key (control-plane)
 │   └── pki/                          shared cluster CA / certs
+├── gitops/
+│   └── repo-token                    read-only PAT for the private GitOps repo (never in git)
+├── cloudflared/                      OPTIONAL prod go-live tunnel token (see its README)
+├── ddns/                             OPTIONAL go-live DDNS token (see its README)
+├── device-registry/                  mesh-extension nodes only (Layer-B registry material)
+├── mesh-trust/                       foreign-mesh public keys, pubkeys only
 ├── vault/
 │   ├── token                         Vault token / AppRole secret-id (online sync)
 │   └── secrets.json                  offline copy of the materialized k8s Secrets
@@ -74,41 +87,41 @@ KEYS/                                 (FAT32, volume label "KEYS")
 │   └── discover/                     bearer-forward helper
 └── secrets/
     ├── post-provision.sh             optional run[] hook
+    ├── luks.key[.example]            optional disk-unlock key
+    ├── cifs.cred[.example]           example CIFS backup credentials file
     ├── mail.json                     OPTIONAL SMTP creds (empty = mail disabled)
     └── cluster-creds.json            OPTIONAL mail + GitHub/Discord OAuth creds
 ```
 
-> `vpn/<domain>/` is **OPTIONAL and absent by default** (the egress-VPN is a
-> default-off optional service). It carries the provider-downloaded WireGuard
-> (`.conf`, first-class) / OpenVPN (`.ovpn`, fallback) configs the mesh node uses
-> for OUTGOING / egress traffic on public flows. `provision_vpn()` installs ONLY
-> the node's OWN domain's configs (`.egress_vpn.domain` else
-> `.hugmesh.cluster_domain`), mode `0600`, root-owned, into
-> `/etc/hugmesh/vpn/`. A config under another tenant's `<domain>/` is never
-> installed on this node (per-domain isolation). Stage them with
-> `gen-provision-keys.sh --vpn-src DIR [--vpn-domain D]` (copies verbatim — these
-> are **secrets**, never committed). See `keys-template/vpn/README.md`.
+> `vpn/<domain>/` is **OPTIONAL and absent by default** (the egress-VPN is a default-off
+> optional service). It holds the provider-downloaded WireGuard (`.conf`, first-class)
+> and OpenVPN (`.ovpn`, fallback) configs the mesh node uses for OUTGOING / egress
+> traffic on public flows. `provision_vpn()` installs ONLY the node's OWN domain's configs
+> (`.egress_vpn.domain`, else `.hugmesh.cluster_domain`), mode `0600`, root-owned, into
+> `/etc/hugmesh/vpn/`. A config under another tenant's `<domain>/` is never installed on
+> this node (per-domain isolation). Stage them with
+> `gen-provision-keys.sh --vpn-src DIR [--vpn-domain D]` (copies verbatim; these are
+> **secrets**, never committed). See `keys-template/vpn/README.md`.
 
-> `desktop-governance/` is **OPTIONAL and absent by default**. It carries the
-> desktop app-governance config TEMPLATES for client desktops (laptop /
-> chromebook / desktop). `provision_desktop_governance()` uses these only if the
-> image did not bake them at `/etc/hugmesh/desktop-governance/`, then renders
-> them (substituting the node's domain) into Discover/Flatpak, polkit, and the
-> desktop-sudo mapper (+ its 60s cron).
-> Default-deny / empty-store / ships-dark: no config ⇒ empty Discover store, no
-> user has sudo. These files are **not secrets** (they carry hosts + the
-> `desktop-sudo` claim name, never tokens). See
-> `keys-template/desktop-governance/README.md`.
+> `desktop-governance/` is **OPTIONAL and absent by default**. It holds the desktop
+> app-governance config TEMPLATES for client desktops (laptop / chromebook / desktop).
+> `provision_desktop_governance()` uses them only if the image did not bake them at
+> `/etc/hugmesh/desktop-governance/`. It renders them (substituting the node's domain)
+> into Discover/Flatpak, polkit, and the desktop-sudo mapper (plus its 60s cron).
+> Default-deny, empty store, ships dark: with no config there is an empty Discover store
+> and no user has sudo. These files are **not secrets**; they carry hosts and the
+> `desktop-sudo` claim name, never tokens. See `keys-template/desktop-governance/README.md`.
 
-> `secrets/mail.json` + `secrets/cluster-creds.json` are **OPTIONAL and absent by
-> default**. They carry outbound-mail (SMTP) and OAuth-provider client creds for
-> `scripts/gen-cluster-secrets.sh` (which seeds Vault `secret/<brand>/mail` + the
-> `casdoor-github`/`casdoor-discord`/`casdoor-smtp`/`akkoma-smtp` Secrets). Empty
-> `user`/`password` ⇒ **no SMTP wired**: Casdoor + Akkoma keep native login +
-> admin-approval registration. The brand `MAIL_PROVIDER` knob (`protonmail`
-> default | `gmail` | `outlook` | `smtp` | `none`) selects the host/port/TLS
-> preset. See `secrets/*.example.json` for the shape; `gen-provision-keys.sh`
-> writes the real files (prompting with a 10s timeout, or copying from `--keys-src`).
+> `secrets/mail.json` and `secrets/cluster-creds.json` are **OPTIONAL and absent by
+> default**. They hold outbound-mail (SMTP) and OAuth-provider client creds for
+> `scripts/gen-cluster-secrets.sh`, which seeds Vault `secret/<brand>/mail` and the
+> `casdoor-github`/`casdoor-discord`/`casdoor-smtp`/`akkoma-smtp` Secrets. Empty
+> `user`/`password` means **no SMTP is wired**: Casdoor and Akkoma keep native login and
+> admin-approval registration. The brand `MAIL_PROVIDER` knob (`protonmail` default |
+> `gmail` | `outlook` | `smtp` | `none`) picks the host/port/TLS preset. See
+> `secrets/mail.json.example` and `secrets/cluster-creds.json.example` for the shape.
+> `gen-provision-keys.sh` writes the real files, prompting with a 10s timeout or copying
+> from `--keys-src`.
 
 ## `provision.json`
 
@@ -135,7 +148,7 @@ KEYS/                                 (FAT32, volume label "KEYS")
 | `kubernetes.pki_dir` | Directory on KEYS copied to `/etc/kubernetes/pki` (shared CA across control-plane nodes). |
 | `kubernetes.join.{api_server,token,ca_cert_hash}` | Worker join parameters. Empty `api_server` auto-targets `mesh.cp_dns_name:6443`. |
 | `kubernetes.join.certificate_key` | **Additional control-plane only**: the `--certificate-key` from the first CP's `kubeadm init phase upload-certs` (also persisted at `/etc/hugmesh/kubeadm-certificate-key`). |
-| `hugmesh.role` | `pki` \| `backend` \| `frontend` — selects the cluster app set / namespace this node serves. |
+| `hugmesh.role` | `pki` \| `backend` \| `frontend` \| `host` — selects the cluster app set / namespace this node serves. |
 | `hugmesh.cluster_domain` | The **public apex** for gateways/ingress/Casdoor — the go-live target the wizard flips to a real routable domain. Distinct from `mesh.magic_dns_domain` (the permanently-internal Tailscale root domain, which is never go-live-flipped). |
 | `hugmesh.gitops.{enabled,argocd}` | On the PKI node, bootstrap ArgoCD + the app-of-apps. |
 | `hugmesh.gitops.repo_token_file` | Path on KEYS to a **fine-grained read-only GitHub PAT** (default `gitops/repo-token`) that lets ArgoCD clone the **private** GitOps repo. `provision_hugmesh()` reads it and exports it as `ARGOCD_REPO_TOKEN`; `bootstrap.sh` then creates the `hugmesh-generator-repo` repository Secret **before** the app-of-apps. **NEVER in git**, same offline custody as `vault/token` + `luks.key`. Absent ⇒ `bootstrap.sh` fails closed for the private repo (rotate = rewrite this file + re-run provisioning). |
@@ -224,7 +237,10 @@ If this bundle is present it is **always** applied (and is the sole source when
 `address` is empty): each `namespace → secretName → {key: value}` is created via
 `kubectl create secret generic … --dry-run=client -o yaml | kubectl apply -f -`,
 so the Secrets exist even with no reachable Vault — i.e. they are *also available
-via the attached USB*. The bundle mirrors exactly what ESO would materialize:
+via the attached USB*. The bundle mirrors what ESO would materialize. The table below
+lists the first eight Secrets only; `scripts/gen-cluster-secrets.sh` writes many more
+(`casdoor-db`, `casdoor-admin`, `casdoor-superadmin`, `route-access-*`, `harbor-admin`,
+`headwind-*`, and others — read its `secrets` dict for the full set):
 
 | Namespace | Secret | Keys (from Vault) |
 |---|---|---|

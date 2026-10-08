@@ -1,13 +1,12 @@
 # Edge-AI — GPU inference node serving a model API to the mesh
 
-The **edge-AI** capability adds a GPU **inference node** to the HugMesh mesh: a
-node that runs an [Ollama](https://ollama.com)-based inference server and exposes an
-**OpenAI-compatible model API** (`/v1/chat/completions`, `/v1/embeddings`,
-`/v1/models`) to every other node and device — over **Kubernetes** (in-cluster
-ClusterIP) **and** the **tailnet** (a gateway host route). It also installs the GPU
-device plugin that makes the node's NVIDIA GPU **schedulable for the existing
-GPU-hungry services** (owncast video transcode, coturn/Matrix A/V, LocalTube
-yt-dlp transcode, and future voice STT/TTS).
+The **edge-AI** capability adds a GPU **inference node** to the mesh. The node runs an
+[Ollama](https://ollama.com)-based inference server and serves an **OpenAI-compatible
+model API** (`/v1/chat/completions`, `/v1/embeddings`, `/v1/models`) to every other node
+and device, over **Kubernetes** (in-cluster ClusterIP) **and** the **tailnet** (a gateway
+host route). It also installs the GPU device plugin, which makes the node's NVIDIA GPU
+**schedulable for the existing GPU-hungry services**: owncast video transcode,
+coturn/Matrix A/V, LocalTube yt-dlp transcode, and future voice STT/TTS.
 
 It ships as two cooperating pieces:
 
@@ -16,9 +15,9 @@ It ships as two cooperating pieces:
 | `edge-ai` **node role** | a `backend-gpu`-class worker whose purpose is inference: NVIDIA proprietary + CUDA + the containerd `nvidia` runtime + `app-containers/nvidia-container-toolkit`, labelled `hugmesh.net/edge-ai=true`, and it **auto-selects** the `edge-ai` service | `build-x86-host-stage4.sh --role edge-ai` |
 | `edge-ai` **optional service** | the cluster workload: an Ollama Deployment + Service + the model-library ConfigMap, GPU-scheduled, fronted by the `ai.<domain>` gateway route. DEFAULT-OFF, GPU-gated | `specs/cluster/{apps/54-edge-ai.yaml, manifests/edge-ai/}` |
 
-Both run unchanged on **x86_64** (e.g. the RTX-4060 host) and on the **NVIDIA
-Jetson Orin Nano** (arm64 — see *Jetson* below). The role/service is the shared
-core; the Jetson platform bring-up is additive.
+Both run unchanged on **x86_64** (for example the RTX-4060 host) and on the **NVIDIA
+Jetson Orin Nano** (arm64; see *Jetson* below). The role and service are the shared
+core. The Jetson platform bring-up is additive.
 
 > Running Ollama on your own desktop for a coding assistant, rather than serving the
 > mesh, is covered in [LOCAL-AI-ASSISTANT.md](LOCAL-AI-ASSISTANT.md).
@@ -55,17 +54,17 @@ All three front-ends expose the same knobs (**all-menus parity**):
 The `edge-ai` role defaults `--gpu-driver nvidia` and turns CUDA on; pass an explicit
 `--gpu-driver` to override (an AMD/Intel ROCm edge node is a future path).
 
-**CUDA host compiler = clang, on purpose.** `dev-util/nvidia-cuda-toolkit` caps its
-host compiler below the toolchain the amd64 hardened stage3 seed ships (12.9.2 caps
-at gcc 14; the seed carries gcc 15), and the x86 builder keeps the seed toolchain
-(`--exclude sys-devel/gcc`) — with the toolkit's default gcc leg that combination made
-`edge_ai.x86` structurally unbuildable (session `20260719-103006-a775c2`: resolution
-aborted, zero artifacts). The image therefore builds the toolkit with `USE=clang`
-(`specs-x86/portage/package.use/nvidia`, which documents the full evidence), pulling
-the stable, slotted `llvm-core/clang-19`. Compile CUDA code on the node with
-`nvcc -ccbin clang++-19 …`. The invariant is guarded by
-`scripts/preflight-cuda-host-compiler.sh` (static repo mode runs in CI; a `--sysroot`
-mode is ready for the builder to call right before the payload emerge).
+**CUDA host compiler = clang, on purpose.** `dev-util/nvidia-cuda-toolkit` caps its host
+compiler below the toolchain the amd64 hardened stage3 seed ships (12.9.2 caps at gcc 14;
+the seed carries gcc 15), and the x86 builder keeps the seed toolchain
+(`--exclude sys-devel/gcc`). With the toolkit's default gcc leg that combination made
+`edge_ai.x86` unbuildable (session `20260719-103006-a775c2`: resolution aborted, zero
+artifacts). The image therefore builds the toolkit with `USE=clang`
+(`specs-x86/portage/package.use/nvidia`, which holds the full evidence), pulling the
+stable, slotted `llvm-core/clang-19`. Compile CUDA code on the node with
+`nvcc -ccbin clang++-19 …`. `scripts/preflight-cuda-host-compiler.sh` guards the
+invariant: its static repo mode runs in CI, and a `--sysroot` mode is ready for the
+builder to call right before the payload emerge.
 
 ---
 
@@ -86,8 +85,9 @@ https://ai.<domain>/v1/chat/completions      # role-gated: /v1/** = ROLE_USER fl
 
 The route-access DB (`manifests/route-access/initdb/20-schema.sql`) gates `/v1/**`
 to the authenticated floor (`ROLE_USER`); add a finer `ROLE_EDGE_AI` row (cf.
-`ROLE_OWNCAST`) for per-domain restriction. In-cluster traffic is NetworkPolicy-gated;
-no API key is baked (secrets never live in the image — auth is at the gateway).
+`ROLE_OWNCAST`) for per-domain restriction. The `edge-ai-analysis` and `edge-ai-tts`
+services each carry a NetworkPolicy; the Ollama service itself has none. No API key is
+baked (secrets never live in the image — auth is at the gateway).
 
 ---
 
@@ -120,11 +120,11 @@ model):
 
 | Key | Meaning |
 |---|---|
-| `runtime` | `ollama` (default) or `vllm` |
+| `runtime` | `ollama` (default) or `vllm`. Only Ollama is deployed: the Deployment has no vLLM path, so `vllm` changes the value and nothing else |
 | `preload` | comma list of model tags pulled on first boot (background) |
 | `default-model` | model used when an OpenAI request omits `model` |
 | `context-length` / `keep-alive` / `max-loaded-models` / `num-parallel` / `flash-attention` | serving knobs (env-mapped into the container) |
-| `catalog.json` | the model CATALOG offered to the mesh (tag, kind chat/embedding/vision/asr, params, quant, VRAM) — the admin console renders this |
+| `catalog.json` | the model CATALOG offered to the mesh (tag, kind chat/embedding/vision/asr, params, quant, VRAM) — the admin console renders this. It lists `whisper` (asr), but the Deployment has no whisper sidecar, so speech-to-text is not built |
 
 Build-time, the `--edge-ai-*` flags patch `runtime` / `preload` / `default-model`.
 At runtime, edit the ConfigMap (admin task / GitOps commit) and restart the
@@ -188,44 +188,43 @@ Config (task→model map, NSFW/abuse thresholds, `moderate-action`) is the
 ./build-x86-host-stage4.sh --role edge-ai --with-edge-ai-analysis
 ```
 
-**This is the Phase-A foundation** ([memory: hugmesh-edge-ai-matrix-vn-characters]):
-the on-prem hinge that the AIOps consumer (infra logs → `@system` Matrix DM) and the
-avatar vision-moderation hook (→ federation moderation queue) call. Those consumers
-live in the BFF/federation Java repos and land separately.
+**This is the Phase-A foundation.** It is the on-prem hinge that the AIOps consumer
+(infra logs → `@system` Matrix DM) and the avatar vision-moderation hook (→ federation
+moderation queue) call. Those consumers live in the BFF and federation Java repos and
+land separately.
 
-**Slug:** `edge-ai-analysis`, **DEFAULT-OFF**, `dependsOn: edge-ai` (greyed in the
-console when edge-ai is off). The container is a **separate build artifact** — its
-source is `specs/cluster/manifests/edge-ai-analysis/image/` (FastAPI + Pillow +
-imagehash); build + push `registry.hugmesh.net/hugmesh/edge-ai-analysis:main`
-then select the slug. Keep it deselected until the image is pushed (so no node
-ImagePull-fails). Everything stays on-prem — the wrapper only calls the in-cluster
-Ollama upstream.
+**Slug:** `edge-ai-analysis`, **DEFAULT-OFF**, `dependsOn: edge-ai` (greyed in the console
+when edge-ai is off). The container is a **separate build artifact**. Its source is
+`specs/cluster/manifests/edge-ai-analysis/image/` (FastAPI + Pillow + imagehash). Build and
+push `registry.hugmesh.net/hugmesh/edge-ai-analysis:main`, then select the slug. Keep it
+deselected until the image is pushed, so no node fails its ImagePull. Everything stays
+on-prem: the wrapper only calls the in-cluster Ollama upstream.
 
 ## 4c. Voice synthesis — TTS API for the mesh (`edge-ai-tts`)
 
 The **VN voice feature** (matrix-ui) needs short-line text-to-speech plus a mouth-shape
-timeline for 2D lipsync. The `edge-ai-tts` optional service is a stateless FastAPI
-wrapper around [Piper](https://github.com/OHF-Voice/piper1-gpl) that exposes:
+timeline for 2D lipsync. The `edge-ai-tts` optional service is a stateless FastAPI wrapper
+around [Piper](https://github.com/OHF-Voice/piper1-gpl) that exposes:
 
 | Endpoint | Response |
 |---|---|
 | `POST /v1/synthesize` | `{audioBase64, sampleRate, format, durationMs, voice, visemes[]}` |
 
-**UNLIKE `edge-ai-analysis`, this service has NO `edge-ai` dependency.** It is
-CPU-only and self-contained: the default voice (`.onnx` + `.onnx.json`) is baked
-into the image at build time, no model is fetched and no upstream is called at
-request time — it schedules **anywhere in the mesh**, GPU node or not, and is wired
-on **both** `build-x86-host-stage4.sh` **and** `build-rpi5-stage4.sh` (unlike
-`edge-ai`/`edge-ai-analysis`, which are x86/GPU-only).
+**Unlike `edge-ai-analysis`, this service has NO `edge-ai` dependency.** It is CPU-only
+and self-contained. The default voice (`.onnx` + `.onnx.json`) is baked into the image at
+build time, no model is fetched and no upstream is called at request time. It schedules
+**anywhere in the mesh**, GPU node or not, and both `build-x86-host-stage4.sh` **and**
+`build-rpi5-stage4.sh` wire it. By contrast `edge-ai` needs a GPU node, and
+`edge-ai-analysis` is x86-only and needs `edge-ai`.
 
-It is reached at `https://ai.<domain>/v1/synthesize/**` (be-gateway, `ROLE_USER`
-floor) and in-cluster at `http://hugmesh-edge-ai-tts.hugmesh-inference.svc:8080`.
-Tenancy: the gateway-validated `X-Tenant-ID`/`X-User-ID` headers stamp every response.
-Config (model dir, default voice, Piper `length_scale`/`noise_scale`/`noise_w`,
-`max_chars`) is the `edge-ai-tts` ConfigMap.
+It is reached at `https://ai.<domain>/v1/synthesize/**` (be-gateway, `ROLE_USER` floor)
+and in-cluster at `http://hugmesh-edge-ai-tts.hugmesh-inference.svc:8080`. The
+gateway-validated `X-Tenant-ID`/`X-User-ID` headers stamp every response. The
+`edge-ai-tts` ConfigMap holds the config: model dir, default voice, Piper
+`length_scale`/`noise_scale`/`noise_w`, and `max_chars`.
 
 The **7-key viseme vocabulary** (`rest · AI · E · O · U · L · MBP`) is a CONTRACT with
-matrix-ui's `viseme.ts` mouth-shape map — keep the two in sync (see
+matrix-ui's `viseme.ts` mouth-shape map. Keep the two in sync (see
 `specs/cluster/manifests/edge-ai-tts/image/README.md`).
 
 ```bash
@@ -234,21 +233,20 @@ matrix-ui's `viseme.ts` mouth-shape map — keep the two in sync (see
 ./build-rpi5-stage4.sh     --role backend --with-edge-ai-tts
 ```
 
-**CLI:** `--with-edge-ai-tts` / `--no-edge-ai-tts` (both builders), or list
-`edge-ai-tts` in `--optional-services`. **`scripts/build-menu.sh`:** the *Voice
-synthesis (TTS)* row in **Options → Edge-AI inference** (grouped there for UX only —
-its flag is emitted unconditionally, not gated to a GPU target). **Studio wizard:**
-*Domain, Mesh, and Services* — the `edge-ai-tts` row in the services table's
-Characters & Avatars group (platform-gated like Character Studio, not mode-gated like
-the GPU Edge-AI group);
+**CLI:** `--with-edge-ai-tts` / `--no-edge-ai-tts` (both builders), or list `edge-ai-tts`
+in `--optional-services`. **`scripts/build-menu.sh`:** the *Voice synthesis (TTS)* row in
+**Options → Edge-AI inference**. It sits there for UX only; its flag is emitted
+unconditionally, not gated to a GPU target. **Studio wizard:** *Domain, Mesh, and
+Services*, the `edge-ai-tts` row in the services table's Characters & Avatars group
+(platform-gated like Character Studio, not mode-gated like the GPU Edge-AI group);
 `ImageConfig.edge_ai_tts` → `to_cli_args()`.
 
 **Slug:** `edge-ai-tts`, **DEFAULT-OFF**, **NO `dependsOn`**. The container is a
-**separate build artifact** — its source is
-`specs/cluster/manifests/edge-ai-tts/image/` (FastAPI + piper-tts + onnxruntime,
-CPU); build + push `registry.hugmesh.net/hugmesh/edge-ai-tts:main` then
-select the slug. Keep it deselected until the image is pushed (so no node
-ImagePull-fails). Everything stays on-prem — synthesis is local CPU work.
+**separate build artifact**. Its source is `specs/cluster/manifests/edge-ai-tts/image/`
+(FastAPI + piper-tts + onnxruntime, CPU). Build and push
+`registry.hugmesh.net/hugmesh/edge-ai-tts:main`, then select the slug. Keep it deselected
+until the image is pushed, so no node fails its ImagePull. Everything stays on-prem:
+synthesis is local CPU work.
 
 ## 5. Jetson Orin Nano (arm64 platform — EXPERIMENTAL, buildable)
 
@@ -266,7 +264,7 @@ The platform now has a **buildable EXPERIMENTAL path** — `build-jetson-stage4.
 make jetson JETSON_ROLE=edge-ai                      # the make front door
 ```
 
-Roles: `edge-ai` (default) | `backend-gpu` | `full` | `desktop`; boards
+Roles: `edge-ai` (default) | `backend-gpu` | `omnibus` | `desktop` (the old spelling `full` is still accepted for `omnibus`); boards
 `orin-nano` (default) / `orin-nano-4gb` / `orin-nx-8gb` / `orin-nx-16gb`. The
 default `--kernel-flavor mainline` is the buildable route (gentoo-sources arm64
 + the Tegra234 fragments) and carries **NO CUDA** — the GA10B iGPU needs
@@ -299,7 +297,7 @@ node and could not be exercised in CI. On first GPU-cluster bring-up, verify:
 3. **SELinux** (nodes boot ENFORCING): the device plugin requests `spc_t`. If it is
    denied, scan AVCs (`ausearch -m avc -ts recent`) and add a
    `nvidia_device_plugin` policy module under `specs/selinux/` — keep SELinux in
-   sync with the new role (see [SECURITY.md](SECURITY.md), [memory: hugmesh-selinux-sync]).
+   sync with the new role (see [SECURITY.md](SECURITY.md)).
 4. **edge-ai pod**: `kubectl -n hugmesh-inference get deploy hugmesh-edge-ai`
    becomes Ready; `curl http://<svc>:11434/v1/models` lists the preloaded models;
    `curl https://ai.<domain>/v1/chat/completions` (with a mesh token) returns a
