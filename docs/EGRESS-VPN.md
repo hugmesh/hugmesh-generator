@@ -1,31 +1,31 @@
 # Egress VPN (split-tunnel, fail-closed) — generator-side
 
-Admins + superadmins import provider-downloaded VPN configs (ProtonVPN WireGuard
-`.conf` **first-class**; OpenVPN `.ovpn` fallback) that mesh **nodes** use for
-**OUTGOING / egress** traffic on PUBLIC-facing flows — coturn UDP audio/video,
-made-public services, and (only on explicit assignment) akkoma/matrix federation.
-The tailnet control plane + cluster-internal traffic stay **DIRECT** (split-tunnel).
+Admins and superadmins import VPN configs downloaded from a provider (ProtonVPN
+WireGuard `.conf` is **first-class**; OpenVPN `.ovpn` is the fallback). Mesh **nodes**
+use them for **OUTGOING / egress** traffic on PUBLIC-facing flows: coturn UDP
+audio/video, made-public services, and (only on explicit assignment) akkoma/matrix
+federation. The tailnet control plane and cluster-internal traffic stay **DIRECT**
+(split-tunnel).
 
-This document is the **generator** (node-image) half: the key-USB delivery, the
-node-level OpenRC service + split-tunnel runner, and the optional-services gate.
-The control plane (Liquibase + `/bff/admin/egress-vpn` CRUD/assign), the
-superadmin UI, and the signed-export reconcile bridge live in their own repos /
-PRs.
+This page is the **generator** (node-image) half: key-USB delivery, the node-level
+OpenRC service and split-tunnel runner, and the optional-services gate. The control
+plane (Liquibase and `/bff/admin/egress-vpn` CRUD/assign), the superadmin UI and the
+signed-export reconcile bridge live in their own repos.
 
 ## Node-level, not a per-pod sidecar
 
-A NEW OpenRC service `/etc/init.d/hugmesh-egress-vpn` (Gentoo OpenRC; nodes are
-**-systemd**) brings up ONE `wg-quick` (or `openvpn`) interface per node that
-carries the node's public egress. Carrying the policy once per node — rather than
-a sidecar per pod — keeps the kill-switch + `ip rule` priorities in one place and
-lets the reconcile agent flip a single interface. TCP federation + UDP coturn ride
-the one interface, selected by `fwmark`.
+The OpenRC service `/etc/init.d/hugmesh-egress-vpn` (Gentoo OpenRC; nodes are
+**-systemd**) brings up ONE `wg-quick` (or `openvpn`) interface per node. That
+interface carries the node's public egress. One policy per node, not a sidecar per
+pod, keeps the kill-switch and `ip rule` priorities in one place and lets the
+reconcile agent flip a single interface. TCP federation and UDP coturn share the
+interface, selected by `fwmark`.
 
 ## Split-tunnel = `ip rule` PRIORITY + `Table=off`
 
-`/usr/sbin/hugmesh-vpn-runner` owns ALL routing (wg-quick is forced
-`Table = off`; OpenVPN runs `--route-noexec`). The VPN table (`176`) holds a
-SINGLE forward route, `default dev wg0`:
+`/usr/sbin/hugmesh-vpn-runner` owns ALL routing (wg-quick is forced to
+`Table = off`; OpenVPN runs `--route-noexec`). The VPN table (`176`) holds ONE
+forward route, `default dev wg0`:
 
 | prio | rule | table | effect |
 |---|---|---|---|
@@ -36,16 +36,16 @@ SINGLE forward route, `default dev wg0`:
 | 100 | `fwmark 0x76` | **176** | ONLY marked public traffic → VPN |
 
 The DIRECT rules (prio 10–40, table `main`) ALWAYS beat the VPN catch-all (prio
-100) regardless of `fwmark` — so tailnet + cluster traffic NEVER enters the VPN.
-Only packets MARKED `0x76` (set by `hugmesh-vpn-mark`, below) match the prio-100
-rule and egress via `wg0`.
+100), whatever the `fwmark`. Tailnet and cluster traffic NEVER enters the VPN. Only
+packets MARKED `0x76` (set by `hugmesh-vpn-mark`, below) match the prio-100 rule and
+leave through `wg0`.
 
 ## Packet marking — `hugmesh-vpn-mark`
 
-`/usr/sbin/hugmesh-vpn-mark` is the leg that actually puts traffic ON the
-tunnel. The reconcile agent records the verified export's service slugs in
-`/var/lib/hugmesh/egress-vpn/marked-services`, then runs `hugmesh-vpn-mark
-apply`, which — in the SAME pass, marks before labels —
+`/usr/sbin/hugmesh-vpn-mark` is the leg that puts traffic ON the tunnel. The
+reconcile agent writes the verified export's service slugs to
+`/var/lib/hugmesh/egress-vpn/marked-services`, then runs `hugmesh-vpn-mark apply`.
+In ONE pass, marks before labels, `apply`:
 
 1. resolves each slug to its RUNNING pod IPs over the node's own admin
    kubeconfig (`app.kubernetes.io/name: <slug>`, namespace `hugmesh-backend`;
@@ -59,53 +59,52 @@ apply`, which — in the SAME pass, marks before labels —
    `egress-vpn-interaction` NetworkPolicy loosens their direct egress — which
    the mark then routes into table 176.
 
-FAIL-CLOSED: a malformed `marked-services` row / kubectl failure / rejected
-ruleset aborts with ZERO mutation; a labelling failure rolls back to the fully
-cleared state; `clear` unlabels FIRST and drops the table only when unlabelling
-succeeded (a loosened pod is never left unmarked). The runner's `down` runs
-`hugmesh-vpn-mark clear` BEFORE the routing teardown; the reconcile agent's
-empty-export teardown refuses to accept the export (and retries next cycle) if
-the clear fails. Pod-IP churn converges via the 60s reconcile cron.
+FAIL-CLOSED: a malformed `marked-services` row, a kubectl failure or a rejected
+ruleset aborts with ZERO mutation. A labelling failure rolls back to the fully
+cleared state. `clear` unlabels FIRST and drops the table only if unlabelling
+succeeded, so a loosened pod is never left unmarked. The runner's `down` runs
+`hugmesh-vpn-mark clear` BEFORE the routing teardown. If the clear fails, the
+reconcile agent's empty-export teardown refuses the export and retries next cycle.
+Pod-IP churn converges through the 60s reconcile cron.
 
 ## Kill-switch / FAIL-CLOSED
 
 Table 176 also carries a `blackhole default metric 1000` guard. While `wg0` is up,
-`default dev wg0` wins; if `wg0` DROPS, the route is withdrawn and marked traffic
-hits the blackhole → `EPERM` (**fail closed**) instead of falling through to the
-WAN default. A VPN outage therefore takes the PUBLIC egress offline rather than
-LEAKING the node's real WAN IP. Tailnet/cluster traffic (higher-priority DIRECT
-rules on `main`) is unaffected. The SAME `default dev wg0` + blackhole is installed
-on the **IPv6** table 176 (DNS / v6 leak guard) so a v6-capable marked flow cannot
-bypass the v4 kill-switch.
+`default dev wg0` wins. If `wg0` DROPS, the route is withdrawn and marked traffic hits
+the blackhole and gets `EPERM` (**fail closed**), instead of falling through to the
+WAN default. A VPN outage takes the PUBLIC egress offline. It does not LEAK the
+node's real WAN IP. Tailnet and cluster traffic (higher-priority DIRECT rules on
+`main`) is unaffected. The **IPv6** table 176 gets the SAME `default dev wg0` +
+blackhole (DNS / v6 leak guard), so a v6 marked flow cannot bypass the v4
+kill-switch.
 
 > **Residual risk (by design):** fail-closed means a VPN provider outage takes the
-> assigned PUBLIC service offline (coturn relay / made-public egress) until the
-> tunnel recovers or the assignment is removed. This is the intended trade-off
-> over leaking the node WAN IP. Operators monitor via `hugmesh-vpn-runner
-> status` / the reconcile agent's reported state.
+> assigned PUBLIC service (coturn relay, made-public egress) offline until the tunnel
+> recovers or the assignment is removed. That is the intended trade against leaking
+> the node WAN IP. Monitor with `hugmesh-vpn-runner status` and the reconcile agent's
+> reported state.
 
 ## Secrets off-git
 
-The `.conf`/`.ovpn` ride the key-USB under `KEYS/vpn/<domain>/` (+ the build-side
-`keys-out/vpn/<domain>/`). `provision_vpn()` (in the keys-provision flow) reads
-ONLY the node's OWN domain and installs them `0600` root-owned into
-`/etc/hugmesh/vpn/`, pointing `active.conf` at the first config (WireGuard wins
-over OpenVPN). The runtime UI path instead delivers a config as a K8s Secret via
-ESO; Postgres holds only `secret_ref` + metadata. See `keys-template/vpn/README.md`.
+The `.conf`/`.ovpn` files ride the key-USB under `KEYS/vpn/<domain>/` (and the
+build-side `keys-out/vpn/<domain>/`). `provision_vpn()` (in the keys-provision flow)
+reads ONLY the node's OWN domain. It installs the files `0600`, root-owned, in
+`/etc/hugmesh/vpn/` and points `active.conf` at the first config (WireGuard wins over
+OpenVPN). The runtime UI path delivers a config as a K8s Secret through ESO instead.
+Postgres holds only `secret_ref` and metadata. See `keys-template/vpn/README.md`.
 
 ## Runtime config-byte delivery — the secret-projector
 
 `hugmesh-vpn-reconcile` reads the config BYTES from `${VPN_SECRET_DIR}/<secretRef>`
-on the **node host** (default `/etc/hugmesh/vpn-secret`) — the signed export
-carries only `secretRef` + metadata. `manifests/egress-vpn/` is the hop that puts
-them there: a `secret-projector` DaemonSet that syncs the labelled config Secrets
-onto that hostPath as `0600` root-owned files named after the Secret.
+on the **node host** (default `/etc/hugmesh/vpn-secret`). The signed export carries
+only `secretRef` and metadata. `manifests/egress-vpn/` puts the bytes there: a
+`secret-projector` DaemonSet syncs the labelled config Secrets onto that hostPath as
+`0600` root-owned files named after the Secret.
 
-**The contract** lives in ONE file — `specs/cluster/egress-vpn-secret-contract.env`
-— because it spans two repositories that never build together. The generator's
-reader half (this repo) and the admin-bff writer half both merged green while
-disagreeing on two of the three values, so the delivery leg could not deliver a
-single byte:
+**The contract** lives in ONE file, `specs/cluster/egress-vpn-secret-contract.env`,
+because it spans two repositories that never build together. The generator's reader
+half (this repo) and the admin-bff writer half both merged green while disagreeing on
+two of the three values, so the delivery leg could not deliver a single byte:
 
 | what | contract | the reader shipped | the writer shipped |
 |---|---|---|---|
@@ -116,119 +115,106 @@ single byte:
 
 Resolution, one value at a time:
 
-- **namespace** — the generator's value wins, on the writer's own terms. It is
-  the only one of the three admin-bff exposes as a lever
-  (`EGRESS_VPN_SECRET_NAMESPACE`), and this repo owns the Deployment that sets
-  it, so `manifests/admin-bff-api/deployment.yaml` now points admin-bff at
-  `hugmesh-egress-vpn`. Adopting the writer's `hugmesh-backend` default instead
-  would have handed a node-privileged, host-writing DaemonSet read access to
-  every DB/OIDC/federation Secret in the app tier — RBAC has no label selector,
-  so the namespace is the only expressible boundary.
+- **namespace** — the generator's value wins, on the writer's own terms. It is the
+  only one of the three that admin-bff exposes as a lever
+  (`EGRESS_VPN_SECRET_NAMESPACE`), and this repo owns the Deployment that sets it. So
+  `manifests/admin-bff-api/deployment.yaml` now points admin-bff at
+  `hugmesh-egress-vpn`. The writer's default, `hugmesh-backend`, would have given a
+  node-privileged, host-writing DaemonSet read access to every DB, OIDC and
+  federation Secret in the app tier. RBAC has no label selector, so the namespace is
+  the only boundary that can be expressed.
 - **data key** — admin-bff's value wins. `.addToStringData(secretRef, …)` is
-  hardcoded, has no lever, and is pinned by a merged test; and key == name is
-  deliberate (with it, a plain Secret volume projection already materialises the
-  `${VPN_SECRET_DIR}/<secretRef>` file). `@name` is the contract's sentinel for
-  that derivation — safe because `@` is not a legal Secret data-key character
-  ("Each key must consist of alphanumeric characters, '-', '_' or '.'",
-  core/v1 Secret API reference), so it can never collide with a real key.
+  hardcoded, has no lever, and is pinned by a merged test. Key == name is also
+  deliberate: a plain Secret volume projection then already creates the
+  `${VPN_SECRET_DIR}/<secretRef>` file. `@name` is the contract's sentinel for that
+  derivation. It is safe because `@` is not a legal Secret data-key character
+  ("Each key must consist of alphanumeric characters, '-', '_' or '.'", core/v1
+  Secret API reference), so it never collides with a real key.
 - **write RBAC** — `manifests/egress-vpn/writer-rbac.yaml` grants the admin-bff
-  pod's `backups-effector` SA `get/create/patch/update` on Secrets in that
-  namespace and nowhere else. It was absent, and invisibly so: the writer
-  swallows every failure to `false`, so an RBAC denial is indistinguishable from
-  "delivery is off".
+  pod's `backups-effector` SA `get/create/patch/update` on Secrets in that namespace
+  and nowhere else. It was missing, and nobody could see that: the writer turns every
+  failure into `false`, so an RBAC denial looks the same as "delivery is off".
 
-`tests/egress-vpn/test-secret-contract.sh` asserts every copy of these values —
-in this repo's manifests AND in the admin-bff source, read from a sibling
-checkout — against that one file, and exits 3 (INCOMPLETE, failing the job)
-rather than half-checking when the sibling is absent.
+`tests/egress-vpn/test-secret-contract.sh` checks every copy of these values, in this
+repo's manifests AND in the admin-bff source (read from a sibling checkout), against
+that one file. It exits 3 (INCOMPLETE, failing the job) instead of half-checking when
+the sibling is missing.
 
-**"Every copy" is SEARCHED FOR, not listed.** The first cut of that gate asserted
-the three copies its author knew about and declared one source of truth while a
-FOURTH sat in `specs/cluster/optional-services.yaml` carrying `secretKey:
-config` — the exact broken value — read by nothing. Enumerating one more file
-would have fixed that copy and left the next one just as invisible, so the gate
-now runs a **copy census**: it greps the tree for every machine-read carrier of a
-contract value and requires each to be either *verified* (a comparison in that
-run actually read a value out of it — the set is populated from inside the
-assertion helpers, so deleting an assertion drops the file back out) or
-*exempt with a written reason*. A copy that did not exist when the census was
-written still fails it. The one standing exemption is
+**"Every copy" is SEARCHED FOR, not listed.** The first version of that gate checked
+the three copies its author knew about. A FOURTH sat in
+`specs/cluster/optional-services.yaml` with `secretKey: config`, the broken value,
+and nothing read it. So the gate now runs a **copy census**. It greps the tree for
+every machine-read carrier of a contract value. Each must be *verified* (a comparison
+in that run actually read a value from it) or *exempt with a written reason*. A copy
+added later still fails the census. The one standing exemption is
 `manifests/networkpolicy/egress-vpn-interaction.yaml`, where
-`hugmesh.net/optional-service: egress-vpn` is the slug TAG every
-optional-service object carries, not the Secret selector.
+`hugmesh.net/optional-service: egress-vpn` is the slug TAG every optional-service
+object carries, not the Secret selector.
 
-The registry's three fields are copies and now say so: they sit under a
-`secretContract:` pointer at the contract file, and `secretKey` is `"@name"` —
-QUOTED, because `@` is a YAML reserved indicator that cannot start a plain
-scalar, so bare `@name` is a parse error rather than a string.
+The registry's three fields are copies and say so: they sit under a `secretContract:`
+pointer at the contract file. `secretKey` is `"@name"`, QUOTED, because `@` is a YAML
+reserved indicator that cannot start a plain scalar. A bare `@name` is a parse error.
 
 **SHIPS DARK, twice over.** `manifests/egress-vpn/kustomization.yaml` has
 `resources: []` and is reachable only through the MANUAL-sync
-`apps/13e-egress-vpn.yaml` (no `automated:` block) — the
-`apps/08a-networkpolicy-egress.yaml` pattern. Even once synced, the DaemonSet's
-`nodeSelector: hugmesh.net/egress-vpn=true` matches no node until an
-operator labels the ones holding an assignment. Both halves are pruned wholesale
-with the slug by `gate_optional_services()`.
+`apps/13e-egress-vpn.yaml` (no `automated:` block), the same pattern as
+`apps/08a-networkpolicy-egress.yaml`. Even once synced, the DaemonSet's
+`nodeSelector: hugmesh.net/egress-vpn=true` matches no node until an operator labels
+the nodes that hold an assignment. `gate_optional_services()` prunes both halves with
+the slug.
 
-That node-arming label is the contract's fifth value (`EGRESS_VPN_NODE_LABEL`),
-and it earned its place there: it was written seven ways across the DaemonSet's
-`nodeSelector` and header prose, three runbooks and the registry's
-`nodeDeliveryLabel`, and asserted by none of them. Drift between the key the
-projector selects on and the key a runbook tells an operator to apply does not
-error. Upstream: "the DaemonSet controller will create Pods on nodes which match
-that node selector" — so an unsatisfiable `nodeSelector` produces no Pods at
-all, not even Pending ones, and therefore no scheduling event and no log line.
-It is indistinguishable from a delivery leg that simply has not converged yet.
-Unlike the three Secret values this one is generator-internal; admin-bff has no
-side of it.
+That node-arming label is the contract's fifth value (`EGRESS_VPN_NODE_LABEL`). It
+was written seven ways across the DaemonSet's `nodeSelector` and header prose, three
+runbooks and the registry's `nodeDeliveryLabel`, and nothing asserted any of them.
+Drift between the key the projector selects on and the key a runbook tells an
+operator to apply does not raise an error. Upstream: "the DaemonSet controller will
+create Pods on nodes which match that node selector". So an unsatisfiable
+`nodeSelector` makes no Pods at all, not even Pending ones, and leaves no scheduling
+event and no log line. It looks the same as a delivery leg that has not converged yet.
+Unlike the three Secret values, this one is generator-internal. admin-bff has no side
+of it.
 
-**How it is asserted, and why not the obvious way.** The expected value is read
-from the DaemonSet's `nodeSelector` mapping — the key the kube-scheduler
-actually evaluates — and every other carrier is graded against *that*. The first
-attempt instead counted, per file, how many `hugmesh.net/*egress-vpn*`
-tokens a runbook contained versus how many spelled the contract key: two numbers
-off the same file, which move together for any edit that stays inside the
-pattern. It passed a renamed prefix, it passed the transposition into
-`hugmesh.net/vpn-egress` (the **pod** opt-in label documented 111 lines
-above the node label — the single likeliest way to get this wrong), and it
-passed deleting the instruction outright, printing "every node-label mention
-spells the key" each time. The replacement finds label-shaped tokens by the
-Kubernetes label *grammar*, classifies each one by the action the surrounding
-prose describes (`nodeSelector`, or `label` near `node`) rather than by its
-spelling, requires every node-arming one to equal the scheduler's key, requires
-each file to carry at least one, and requires every remaining label to be named
-as a known non-node label with a reason. A scan that finds nothing agrees with
+**How it is asserted.** The expected value is read from the DaemonSet's
+`nodeSelector` mapping, the key the kube-scheduler actually evaluates. Every other
+carrier is graded against *that*. An earlier version counted tokens per file, so it
+agreed with itself after a renamed prefix, after a swap to the **pod** opt-in label
+(`hugmesh.net/vpn-egress`, the likeliest mistake), and after the instruction was
+deleted. The current gate finds label-shaped tokens by the Kubernetes label *grammar*
+and classifies each by the action the surrounding prose describes (`nodeSelector`, or
+`label` near `node`), not by its spelling. Every node-arming token must equal the
+scheduler's key. Each file must carry at least one. Every other label must be named
+as a known non-node label, with a reason. A scan that finds nothing agrees with
 everything, so finding nothing is red.
 
 **FAIL-CLOSED.** A failed list prunes NOTHING (an API-server blip must not strip a
-node of its VPN config), and a Secret with an empty/absent contract data key is
-skipped rather than truncating a good file. The projector's RBAC is a namespaced
-`Role` with `get`+`list` on `secrets` only — never a `ClusterRole`, no write verb
+node of its VPN config). A Secret with an empty or missing contract data key is
+skipped, not used to cut a good file short. The projector's RBAC is a namespaced
+`Role` with `get`+`list` on `secrets` only: never a `ClusterRole`, and no write verb
 anywhere (the write grant is a separate identity in a separate file). SELinux: the
-pod requests `spc_t` (writing under `/etc` on an enforcing node, like the NVIDIA
-device plugin) and `/etc/hugmesh/vpn-secret` is labelled `hugmesh_vpn_etc_t` by
-`specs/selinux/hugmesh_vpn.fc`, so the reconcile agent reads it under its
-EXISTING pattern — the delivery leg adds no host domain.
+pod requests `spc_t` (it writes under `/etc` on an enforcing node, like the NVIDIA
+device plugin). `specs/selinux/hugmesh_vpn.fc` labels `/etc/hugmesh/vpn-secret` as
+`hugmesh_vpn_etc_t`, so the reconcile agent reads it under its EXISTING pattern. The
+delivery leg adds no host domain.
 
 ## Default-off optional service
 
-The egress VPN is a **default-off** optional service. The OpenRC service + runner
-are baked into every node image but are INERT: the service is NOT linked into a
-runlevel by the builders, and with no `active.conf` the runner is a no-op (public
-egress falls back to the existing Squid egress-proxy / direct). It is enabled by
-the optional-services gate (when selected) or flipped on per-assignment by the
-signed reconcile agent. The gate prunes `net-vpn/wireguard-tools` +
-`net-vpn/openvpn` from images that do not select it.
+The egress VPN is a **default-off** optional service. The OpenRC service and runner
+are baked into every node image but are INERT. The builders do NOT link the service
+into a runlevel, and with no `active.conf` the runner does nothing (public egress
+falls back to the existing Squid egress-proxy, or goes direct). The optional-services
+gate (when selected) or the signed reconcile agent (per assignment) turns it on. The
+gate prunes `net-vpn/wireguard-tools` and `net-vpn/openvpn` from images that do not
+select it.
 
-v1 keeps akkoma/tuwunel HTTP federation on the existing Squid egress-proxy; the
-VPN is primarily for coturn UDP + made-public egress, and akkoma/tuwunel egress is
-loosened onto the VPN only on an explicit assignment.
+v1 keeps akkoma/tuwunel HTTP federation on the existing Squid egress-proxy. The VPN
+is mainly for coturn UDP and made-public egress. akkoma/tuwunel egress moves onto the
+VPN only on an explicit assignment.
 
 ## Type-sniff
 
-`active.conf` is type-sniffed at start: an `[Interface]`/`[Peer]` config →
-`wg-quick`; a `remote …` / `client` / `dev tun` config → `openvpn`. WireGuard is
-first-class.
+The runner type-sniffs `active.conf` at start. An `[Interface]`/`[Peer]` config goes
+to `wg-quick`. A `remote …` / `client` / `dev tun` config goes to `openvpn`.
+WireGuard is first-class.
 
 ## Tests
 
