@@ -7,10 +7,14 @@ to people who do not want to set up a Python environment first.
 
 They package **the same code**. Nothing is added or removed for a packaged build.
 
+**No installer has been released yet.** The workflow exists, but no `studio-v*` tag
+exists, and the site's Downloads page says so. Until one ships, run the Studio from a
+checkout.
+
 | Artifact | Platform | Built by |
 |---|---|---|
 | `hugmesh-studio-<version>-x64.msi` | Windows 10/11 x64 | PyInstaller → WiX v6 |
-| `hugmesh-studio-<version>-x86_64.flatpak` | Any Linux with Flatpak | flatpak-builder, `org.kde.Platform` 6.8 |
+| `hugmesh-studio-<version>-x86_64.flatpak` | x86_64 Linux with Flatpak | flatpak-builder, `org.kde.Platform` 6.8 |
 
 Both are produced by [`.github/workflows/studio-release.yml`](../.github/workflows/studio-release.yml)
 and attached to a GitHub Release, together with `SHA256SUMS` and a `releases.json`
@@ -25,8 +29,11 @@ it cannot package the things the app drives.
 
 So, after installing:
 
-- **You still need a `hugmesh-generator` checkout.** Point the Studio at one on first
-  run. Without it there are no build scripts to run and no cluster specs to read.
+- **You still need a `hugmesh-generator` checkout.** Start the Studio with
+  `--generator-dir <path>`; that is the only way to point it at one. No GUI dialog
+  sets it, and the Start Menu shortcut passes no arguments and starts in the install
+  folder. Without a checkout there are no build scripts to run and no cluster specs
+  to read.
 - **Building images still needs Docker** (any OS), or a Gentoo host for a native
   build. The Studio's own preflight says so when a build is dispatched.
 - **Flashing a device and running an emulated mesh** need host access to block
@@ -63,7 +70,7 @@ Get-FileHash .\hugmesh-studio-1.0.0-x64.msi -Algorithm SHA256
 
 ```bash
 flatpak install --user ./hugmesh-studio-1.0.0-x86_64.flatpak
-flatpak run org.hugmesh.ImageStudio
+flatpak run org.hugmesh.ImageStudio --generator-dir ~/Github/hugmesh-generator
 ```
 
 The bundle needs the `org.kde.Platform` 6.8 runtime (KDE rather than GNOME because
@@ -111,3 +118,8 @@ import time, rather than on a user's desktop.
 
 See [`studio/packaging/wix/README.md`](../studio/packaging/wix/README.md) for the MSI
 specifics.
+
+Two scripts repeat the release jobs on a Linux box with no sudo:
+`studio/packaging/build-msi-wine.sh` builds the MSI under Wine, and
+`studio/packaging/build-flatpak-local.sh` builds and smoke-tests the Flatpak. Neither
+publishes anything.
