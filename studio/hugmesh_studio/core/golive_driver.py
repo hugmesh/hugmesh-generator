@@ -449,7 +449,7 @@ class GoLiveDriver:
                 from .golive_domains import norm_domain     # lazy, like tor_domain_onions
                 own = self.autofill_domain()
                 if (own and norm_domain(opts.domain) != norm_domain(own)
-                        and not self.domain_onion(norm_domain(opts.domain))):
+                        and not self.domain_onion(opts.domain)):
                     served = ", ".join(sorted(self.tor_domain_onions())) or "none"
                     problems.append(
                         f"{opts.domain} has no Tor front door on this node — the "

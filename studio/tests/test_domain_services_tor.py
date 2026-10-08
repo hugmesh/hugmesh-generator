@@ -727,6 +727,15 @@ def test_golive_reads_the_own_domain_in_any_spelling_the_plan_reads_it_in(
     assert [w for w, _h in plan_rows(drv, opts) if "this run's domain" in w] == []
 
 
+def test_golive_reads_a_baked_cluster_domain_in_any_spelling_too(tmp_path, monkeypatch):
+    # The baked file can say "Mesh.Example." as well: the typed "mesh.example" is still
+    # the node's own domain, in the preflight AND in the plan.
+    drv = _golive(tmp_path, monkeypatch, cluster_domain="Mesh.Example.")
+    opts = GoLiveOptions(provider="tor-onion", domain="mesh.example")
+    assert [p for p in drv.preflight(opts) if "Tor front door" in p] == []
+    assert [w for w, _h in plan_rows(drv, opts) if "this run's domain" in w] == []
+
+
 @pytest.mark.parametrize("spelling", ["Shop.EXAMPLE", "shop.example.", " shop.example"])
 def test_golive_finds_a_tor_domains_onion_in_any_spelling(tmp_path, monkeypatch, spelling):
     drv = _golive(tmp_path, monkeypatch)
