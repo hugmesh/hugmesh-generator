@@ -29,10 +29,10 @@ It cannot package the things the app drives.
 So, after installing:
 
 - **You still need a `hugmesh-generator` checkout.** Start the Studio with
-  `--generator-dir <path>`; that is the only way to point it at one. No GUI dialog
-  sets it, and the Start Menu shortcut passes no arguments and starts in the install
-  folder. Without a checkout there are no build scripts to run and no cluster specs
-  to read.
+  `--generator-dir <path>`. Without that flag it uses the current directory. No GUI
+  dialog sets it, and the Start Menu shortcut passes no arguments and starts in the
+  install folder, so the shortcut finds no checkout. Without a checkout there are no
+  build scripts to run and no cluster specs to read.
 - **Building images still needs Docker** (any OS), or a Gentoo host for a native
   build. The Studio's own preflight says so when a build is dispatched.
 - **Flashing a device and running an emulated mesh** need host access to block
