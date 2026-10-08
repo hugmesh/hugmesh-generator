@@ -1,9 +1,8 @@
 # Certificates
 
-Place certificates and keys referenced by the `files[]` array of
-`provision.json` here, plus any `*.crt`/`*.pem` you want added to the
-system trust store and `*.key` files (installed to `/etc/ssl/keys`,
-mode 0600).
+Put here the certificates and keys that the `files[]` array of `provision.json`
+names. Also put here any `*.crt` or `*.pem` you want in the system trust store,
+and any `*.key` files (installed to `/etc/ssl/keys`, mode 0600).
 
 Typical contents for the HugMesh cluster:
 
@@ -16,5 +15,5 @@ Typical contents for the HugMesh cluster:
 | `wildcard.hugmesh.local.crt` / `.key` | Gateway ingress TLS (example name; no script reads it) |
 
 keys-provision builds the Java truststore from `certs/cluster-ca.crt` and every
-other `certs/*.crt` on the stick. Joining the cluster is a separate step: it
+other `certs/*.crt` on the stick. Joining the cluster is a separate step. It
 uses the `kubernetes.join` block of `provision.json`.
