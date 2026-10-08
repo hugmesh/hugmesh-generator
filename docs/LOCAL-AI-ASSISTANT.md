@@ -420,9 +420,16 @@ Add a --dry-run option. Output only the changed file."
 > `local-ai/agents/` holds three role files (`mesh-builder`, `mesh-tester`, `mesh-reviewer`);
 > the last two are read-only roles with no editing tool.
 
+**How far to trust the score.** `scripts/local-ai-agents.sh test` counts an answer as right when it
+contains the expected words, so it is a range and can be fooled. Five runs of the same command on
+the same models gave 17 or 18 of 19 for `hugmesh-agent` and 0 or 1 of 19 for the plain base (the
+GPU does not repeat itself exactly at temperature 0); one base answer passed on an incidental
+"mock". Quote the range and read the answers (`test --out FILE`), not one number.
+
 **Refresh after the primer changes.** Edit `local-ai/primer.md`, put the file that backs the new
-fact in its trailing sources comment, add an anchor for it in the guard when it says what a command
-does (the guard checks names and paths everywhere and the wording of the anchored claims), run `bash tests/scripts/test-local-ai-primer.sh`, then run
+fact in its trailing sources comment, add an anchor for it in the guard (it fails on a primer sentence that has no
+anchor; the anchors tie each sentence to the repository file that backs it, and the guard checks
+every name and path as well), run `bash tests/scripts/test-local-ai-primer.sh`, then run
 `scripts/local-ai-agents.sh create` again (it rebuilds the four in place) and
 `scripts/local-ai-agents.sh test` to see the score. If the primer grew by more than 15%, count
 its tokens with `scripts/local-ai-agents.sh test --tokens` and update `MEASURED_TOKENS` and

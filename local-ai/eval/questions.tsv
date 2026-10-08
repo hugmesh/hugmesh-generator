@@ -1,7 +1,7 @@
 # Mesh questions for scripts/local-ai-agents.sh test. Columns, separated by a TAB: id, question, expect.
 # expect is a substring check, not a judgement. The answer is lowercased and backticks and asterisks are removed.
 #   a && b      both must appear         a || b   either may appear         a >> b   b must appear after a
-# Every expected word comes from local-ai/primer.md or the repository, and tests/scripts/test-local-ai-primer.sh
+# Every expected word is in local-ai/primer.md (so the question is answerable from it), and tests/scripts/test-local-ai-primer.sh
 # fails if one does not, or if the question text itself already contains it.
 id	question	expect
 kind-one-image	On the HugMesh kind lane, how do I rebuild and reload only the host shell image? Give the exact make command.	kind-images && only=

@@ -702,13 +702,15 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     182 of 205 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 23 — neither new suite was ever in it.
 # 194 -> 194 (denominator 217 -> 218) on 2026-10-07 for hugmesh-generator#697:
-# tests/scripts/test-local-ai-primer.sh is NEW AND NOT YET IN THE GATE. The suite is named by
-# .gitlab-ci.yml's post-merge orphan-guards-verify list only, because the one line that gates it
-# before a merge belongs in .github/workflows/shell-suites.yml (the debian job's '' leg) and a
-# token without the workflow scope cannot push that file. The gated count therefore stays 194
-# while the denominator grows to 218, and the suite is recorded in PREMERGE_UNGATED below with
-# that reason. MEASURED by running this file on the branch: 194 of 218 suites. When the workflow
-# line lands, raise this to 195 and delete the PREMERGE_UNGATED entry in the same commit.
+# tests/scripts/test-local-ai-primer.sh is NEW AND NOT YET IN THE PRE-MERGE GATE. The suite is named
+# by .gitlab-ci.yml's post-merge orphan-guards-verify list only. The one line that gates it before a
+# merge belongs in .github/workflows/shell-suites.yml (the debian job's '' leg); that file is not
+# part of this change, so the line was left to whoever owns the workflow, not because it cannot be
+# pushed. The gated count therefore stays 194 while the denominator grows to 218, and the suite is
+# recorded in PREMERGE_UNGATED below. MEASURED by running this file on the branch: 194 of 218
+# suites. When the workflow line lands, raise this by one and delete the PREMERGE_UNGATED entry in
+# the same commit. (A sibling branch, feat/local-ai-dock-and-cli, adds its own suite to the same
+# workflow and sets this number to 195: whichever merges second raises it again.)
 PREMERGE_BASELINE="${GUARD_PREMERGE:-194}"
 
 # 192 -> 193 (denominator 215 -> 216) on 2026-09-30 for #663: the kind sign-in
@@ -873,9 +875,9 @@ PREMERGE_UNGATED=(
   # See the "NOT LISTED HERE" entry in .github/workflows/shell-suites.yml.
   tests/scripts/test-kind-metrics-api.sh
   # NEW (hugmesh-generator#697) and offline (python3 and bash only), so it BELONGS in the debian
-  # job of .github/workflows/shell-suites.yml; it is listed here only because that one line
-  # needs a token with the workflow scope. Post-merge it runs from .gitlab-ci.yml's
-  # orphan-guards-verify. Delete this entry and raise PREMERGE_BASELINE to 195 with the line.
+  # job of .github/workflows/shell-suites.yml; it is listed here only because that one line is not
+  # part of this change. Post-merge it runs from .gitlab-ci.yml's orphan-guards-verify. Delete this
+  # entry and raise PREMERGE_BASELINE by one with the line.
   tests/scripts/test-local-ai-primer.sh
   tests/scripts/test-federation-module-slugs.sh
   tests/scripts/test-liquibase-grant-roles.sh

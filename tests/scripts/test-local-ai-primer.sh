@@ -24,11 +24,16 @@
 #       (FROM resolved), the marker, and SYSTEM = primer + blank line + role text. The expected
 #       text is built HERE from the files, not by the script's own functions;
 #   (g) the three role files carry the front matter the coding-agent harness reads;
-#   (h) every evaluation question has an expected word that is in the primer or the repository and
-#       is NOT already in the question.
-#   (j) fact anchors: forty claims the primer makes about what a command does or where a service
-#       listens are each tied to an exact primer phrase and a pattern in the repository file that
-#       backs them, so a swapped meaning or a changed port is caught, not only a renamed target;
+#   (h) every evaluation question has an expected word that is in the PRIMER (not merely somewhere in
+#       the repository, which let a question become unanswerable from the primer unnoticed) and is NOT
+#       already in the question.
+#   (j) fact anchors: claims the primer makes about what a command does, where a service listens, which
+#       repositories are Java or Angular, what is safe to run, are each tied to an exact primer phrase
+#       and a pattern in the repository file that backs them, so a swapped meaning or a changed port is
+#       caught, not only a renamed target;
+#   (m) coverage: every sentence of the primer overlaps an anchor, or is listed with a reason in
+#       UNANCHORED (the three instructions to the model that state no fact). A new sentence therefore
+#       cannot be added without either backing it or saying why it needs none.
 #   and, outside the checker: the `test` subcommand (scorer, table, totals, verdict, which model each
 #   column asks) is run against a stub of the Ollama API and against four copies of the script with
 #   one planted defect each.
@@ -426,6 +431,54 @@ ANCHORS = [
     ("Every command under scripts/ must be named in docs/", "tests/scripts/test-docs-command-coverage.sh", r"every user-facing command under scripts/ must be # reachable from docs/"),
     ("No modal dialogs in Studio page logic", "studio/tests/test_devops_halt_controls.py", r"NO MODALS IN PAGE LOGIC"),
     ("tests/stack/up.sh starts only a mock lane with fake back-ends", "docs/LOCAL-STACK.md", r"The mock lane is untouched, because it runs no gateway at all"),
+    # Added after a reviewer reversed the safety rules, the repo-kind lists and the node-image warning
+    # and the guard stayed green: every sentence below used to be checked for names only.
+    ("hugmesh-generator is the hub: Makefile, scripts/, tests/, docs/, specs/ (cluster manifests), studio/ (the desktop wizard, Python and Qt) and the image builders build-*-stage4.sh.", "README.md", r"Crossdev / native build scripts that produce \*\*hardened Gentoo images\*\*"),
+    ("hugmesh-generator is the hub: Makefile, scripts/, tests/, docs/, specs/ (cluster manifests), studio/ (the desktop wizard, Python and Qt) and the image builders build-*-stage4.sh.", "scripts/clone-all-repos.sh", r"hugmesh-generator # itself is the repo this script ships in — it carries the cluster manifests"),
+    ("A new guard must be shown failing: give it negative controls (a doctored input it must catch) and mutation-check it by breaking the production file and watching it go red.", "tests/scripts/test-kind-doctor.sh", r"THE MUTATION BATTERY"),
+    ("A new guard must be shown failing: give it negative controls (a doctored input it must catch) and mutation-check it by breaking the production file and watching it go red.", "tests/scripts/test-guard-integrity.sh", r"NEGATIVE CONTROLS"),
+    ("Every app is its own repo named hugmesh-<name>.", "scripts/clone-all-repos.sh", r"BOTH the remote repo name AND the directory name"),
+    ("Java: hugmesh-gateway, hugmesh-user-bff-api, hugmesh-admin-bff-api, hugmesh-federation-api.", "scripts/clone-all-repos.sh", r"Gateways \(ONE image, run 3x as pki/be/fe via SPRING_APPLICATION_NAME\) ── hugmesh-gateway # ── Spring backend services ── hugmesh-federation-api hugmesh-admin-bff-api hugmesh-mod-bff-api hugmesh-user-bff-api"),
+    ("Angular: hugmesh-host-shell, hugmesh-login-ui, hugmesh-admin-ui, hugmesh-user-ui.", "scripts/clone-all-repos.sh", r"Angular host \+ federated remotes \(each Dockerfile -> nginx\) ── .*? hugmesh-host-shell hugmesh-admin-ui hugmesh-mod-ui hugmesh-user-ui hugmesh-login-ui"),
+    ("scripts/clone-all-repos.sh (run by make stack-clone) clones them into .stack-src/hugmesh-<name>.", "Makefile", r"GIT_REF='\$\(GIT_REF\)' \\ bash scripts/clone-all-repos\.sh"),
+    ("The compose stack and make kind-images both build from there.", "tests/stack/compose.local.yaml", r"context: \$\{STACK_SRC:-\.\./\.\./\.stack-src\}/hugmesh-gateway"),
+    ("The compose stack and make kind-images both build from there.", "scripts/kind-load-images.sh", r"STACK_SRC=\"\$\{STACK_SRC:-\$\{REPO_ROOT\}/\.stack-src\}\""),
+    ("Do not edit .stack-src.", "scripts/patch-stack-src.sh", r"never hand-edit a sibling checkout"),
+    ("Never hand-edit a repo under .stack-src to get the local stack to build. Add an idempotent patch function to scripts/patch-stack-src.sh instead.", "scripts/patch-stack-src.sh", r"never hand-edit a sibling checkout; # add an idempotent patch function here instead"),
+    ("Work in a scratch clone with no remote.", "docs/LOCAL-AI-ASSISTANT.md", r"The assistant gets a scratch clone \*\*with no remote\*\*"),
+    ("Work in a scratch clone with no remote.", "docs/LOCAL-AI-ASSISTANT.md", r"git remote remove origin +# no remote: git push has nowhere to go"),
+    ("The Studio \"Repo source\" setting is either download and update into .stack-src (the default) or your own folder of hugmesh-<name> checkouts.", "docs/STUDIO-WALKTHROUGH.md", r"\*\*Repo source\*\* — download and update every repo into `\./\.stack-src` \(the default\), or point at a tree of `hugmesh-<name>` checkouts"),
+    ("Docker compose stack (every service on one machine).", "docs/LOCAL-STACK.md", r"# Run the ENTIRE HugMesh stack locally \(docker-compose\)"),
+    ("make stack-up builds and starts it.", "Makefile", r"stack-up: stack-clone .*## clone -> build -> run the FULL stack"),
+    ("make stack-ps lists containers, make stack-logs follows them, make stack-e2e runs the browser tests.", "Makefile", r"stack-ps: ## list the local stack's containers"),
+    ("make stack-ps lists containers, make stack-logs follows them, make stack-e2e runs the browser tests.", "Makefile", r"stack-logs: ## tail logs from the running local stack"),
+    ("make stack-ps lists containers, make stack-logs follows them, make stack-e2e runs the browser tests.", "Makefile", r"stack-e2e: ## run the Playwright e2e suite against the RUNNING local stack"),
+    ("Java services also need the Maven registry flags the Makefile adds, so when unsure use make stack-up.", "Makefile", r"STACK_M2_FLAGS = \$\(if \$\(wildcard \$\(STACK_M2_ENV\)\),--env-file \$\(STACK_M2_ENV\) -f \$\(STACK_M2_COMPOSE\),\)"),
+    ("kind cluster (a slice of the real GitOps cluster).", "specs/cluster/bootstrap/kind-local/README.md", r"It is a slice, not a small > production cluster"),
+    ("Studio (Python, in studio/): the wizard that builds images and starts a local mesh.", "studio/README.md", r"Calamares-style wizard"),
+    ("Studio (Python, in studio/): the wizard that builds images and starts a local mesh.", "studio/README.md", r"local Docker mesh"),
+    ("It wraps the two lanes above and starts nothing until a button is pressed.", "docs/STUDIO-WALKTHROUGH.md", r"Nothing runs until you press a button"),
+    ("It wraps the two lanes above and starts nothing until a button is pressed.", "docs/STUDIO-WALKTHROUGH.md", r"\"Stop mesh\" runs `make stack-halt`"),
+    ("It wraps the two lanes above and starts nothing until a button is pressed.", "docs/STUDIO-WALKTHROUGH.md", r"DevOps lane.*kind-halt"),
+    ("Node images (Gentoo): build-x86-host-stage4.sh, build-rpi5-stage4.sh, make local.", "docs/ARCHITECTURE.md", r"All nodes are hardened Gentoo"),
+    ("Node images (Gentoo): build-x86-host-stage4.sh, build-rpi5-stage4.sh, make local.", "docs/LOCAL-TESTING.md", r"make local +# builds the whole fleet for the LAN \.test domain"),
+    ("They take hours and need privileges. Do not run them.", "docs/STUDIO-WALKTHROUGH.md", r"An image build takes hours"),
+    ("They take hours and need privileges. Do not run them.", "README.md", r"\*\*x86_64 host image\*\* \(native, \*\*root\*\* required\)"),
+    ("Guards in hugmesh-generator: bash tests/scripts/test-<name>.sh.", "docs/LOCAL-AI-ASSISTANT.md", r"\| Shell and guards \(generator\) \| `bash tests/scripts/test-<name>\.sh` \|"),
+    ("They print PASS or FAIL lines and exit non-zero on failure.", "tests/scripts/test-docs-command-coverage.sh", r"ok\(\) +\{ echo \" +PASS"),
+    ("They print PASS or FAIL lines and exit non-zero on failure.", "tests/scripts/test-docs-command-coverage.sh", r"bad\(\) \{ echo \" +FAIL"),
+    ("Use an inline label and an explicit second click.", "studio/tests/test_pages_e2e_environment.py", r"use an inline label; exec\(\) only from a button click"),
+    ("Secrets never go in a prompt, a commit or a doc. Do not read .e2e-credentials, vault files or .env files.", "docs/LOCAL-AI-ASSISTANT.md", r"\*\*No secrets in prompts\.\*\* `\.e2e-credentials`, vault files and `\.env` files stay out"),
+    ("No git push, no sudo, no force.", "docs/LOCAL-AI-ASSISTANT.md", r"Never run: git push, sudo,"),
+    ("Do not run make stack-down, make kind-down, make kind-up or make stack-up unless you were told to.", "docs/LOCAL-AI-ASSISTANT.md", r"docker compose up/down, make stack-\* or make kind-\*"),
+    ("End every task with what you changed, what you ran and its result, and what you did NOT verify.", "docs/LOCAL-AI-ASSISTANT.md", r"End every task with: what you changed, what you ran and its result, and what you did NOT verify"),
+    ("A Maven build that dies after about 11 minutes", "scripts/kind-load-images.sh", r"build will fail ~11 minutes from now"),
+    ("in central\" means a git update reverted the local patches in .stack-src.", "scripts/kind-load-images.sh", r"The \.stack-src patches were reverted by a git update"),
+    ("make kind-up needs read access to the GitOps repo.", "specs/cluster/bootstrap/kind-local/bootstrap-kind.sh", r"a private one needs the token"),
+    ("kind loads images straight into its node and never pulls from Harbor.", "docs/KIND-SSO-E2E-FINDINGS.md", r"\*\*The kind lane never pulls from Harbor at all\*\*"),
+    ("kind loads images straight into its node and never pulls from Harbor.", "docs/KIND-SSO-E2E-FINDINGS.md", r"`kind load` side-loads every first-party image"),
+    ("A kind cluster can list as Ready while pods sit in ImagePullBackOff because make kind-images never ran.", "Makefile", r"`make # kind-images` had never run so no first-party image existed in the node at all"),
+    ("A kind cluster can list as Ready while pods sit in ImagePullBackOff because make kind-images never ran.", "Makefile", r"Nineteen pods were in ImagePullBackOff"),
 ]
 nbody = squash(body)
 file_cache = {}
@@ -439,6 +492,49 @@ for phrase, rel, pat in ANCHORS:
         bad("j", "%s backs the primer's %r but is not in the tree" % (rel, phrase[:50]))
     elif not re.search(pat, file_cache[rel]):
         bad("j", "%s no longer says what the primer's %r relies on (pattern %r)" % (rel, phrase[:50], pat[:70]))
+
+# ── (m) coverage: every sentence is anchored or says why it is not ──
+# Anchors only protect the sentences they name, so a new fact added without one would again be checked
+# for names alone. Every sentence of the primer must overlap an anchor phrase above, or appear in
+# UNANCHORED with the reason; a sentence that is in neither turns this red, and so does an UNANCHORED
+# entry that no longer matches a sentence (it would otherwise hide a later edit).
+UNANCHORED = {
+    "You are a local model helping on HugMesh, a self-hosted mesh of services (gateways, back-end services, web apps, identity, chat) that one person can run on their own machine.": "scene-setting for the model; it names no command, path or value",
+    "Use only facts from this primer or from files you have read.": "an instruction to the model, not a claim about the repository",
+    "When you do not know, say so and name the file or command that would tell you.": "an instruction to the model, not a claim about the repository",
+}
+def sentence_list(text):
+    for line in text.split("\n"):
+        t = squash(line).strip()
+        if not t or t.startswith("#"):
+            continue
+        t = re.sub(r"^(- |\d+\. )", "", t)
+        pos = 0
+        for sent in re.split(r"(?<=[^.]\.)\s+(?=[A-Z])", t):
+            if sent.strip():
+                yield t, sent.strip()
+phrases = sorted({squash(p) for p, _, _ in ANCHORS})
+seen_unanchored = set()
+for line, sent in sentence_list(body):
+    a = line.index(sent)
+    b = a + len(sent)
+    hit = False
+    for ph in phrases:
+        i = line.find(ph)
+        while i != -1:
+            if i < b and i + len(ph) > a:
+                hit = True; break
+            i = line.find(ph, i + 1)
+        if hit: break
+    if sent in UNANCHORED:
+        seen_unanchored.add(sent)
+        if hit:
+            bad("m", "%r is listed as unanchored but an anchor now covers it; delete it from UNANCHORED" % sent[:60])
+    elif not hit:
+        bad("m", "the primer sentence %r has no anchor; add an ANCHORS entry tying it to the repository file that backs it, or list it in UNANCHORED with the reason" % sent[:70])
+for sent in UNANCHORED:
+    if sent not in seen_unanchored:
+        bad("m", "UNANCHORED lists %r, which is no longer a primer sentence" % sent[:60])
 
 # ── (h) questions ──
 qp = os.path.join(ai, "eval", "questions.tsv")
@@ -469,8 +565,10 @@ else:
                         bad("h", "%s has an empty expected word" % qid); continue
                     if w in norm(q):
                         bad("h", "%s: the expected word %r is already in the question" % (qid, w))
-                    if w not in nb and not in_repo(piece.strip()) and not in_repo(w):
-                        bad("h", "%s: the expected word %r is in neither the primer nor the repository" % (qid, w))
+                    # In the PRIMER, not merely somewhere in the repository: a word the primer no longer
+                    # says makes the question unanswerable from it, and the score would then measure luck.
+                    if w not in nb:
+                        bad("h", "%s: the expected word %r is not in the primer" % (qid, w))
 
 print("\n".join(out))
 PY
@@ -666,6 +764,19 @@ anchor_control "stack-clone said to run another git command" "make stack-clone r
 anchor_control "the kind order reversed" "Order: make kind-up, then make kind-images, then make kind-doctor" "Order: make kind-doctor, then make kind-images, then make kind-up"
 anchor_control "the Java test command changed" "Java: ./mvnw -B verify" "Java: ./mvnw -B clean"
 anchor_control "kind-halt and kind-down swapped" "make kind-halt stops without deleting; make kind-down deletes the cluster" "make kind-down stops without deleting; make kind-halt deletes the cluster"
+# The mutations a reviewer kept green on the first version of this guard: the house rules, the repo-kind
+# lists, the node-image warning and the scratch-clone sentence. Each one flips the meaning and keeps every name.
+anchor_control "the scratch-clone sentence lost its 'no remote'" "Work in a scratch clone with no remote." "Work in a scratch clone."
+anchor_control "the no-push, no-sudo rule turned into permission" "No git push, no sudo, no force." "Feel free to git push and use sudo."
+anchor_control "the node-image warning reversed" "They take hours and need privileges. Do not run them." "They take seconds and need nothing. Run them freely."
+anchor_control "the Do-not-run list for stack-down turned into advice to run them" "Do not run make stack-down, make kind-down, make kind-up or make stack-up unless you were told to." "Run make stack-down, make kind-down, make kind-up and make stack-up whenever you like."
+fresh; primer_sub "Java: hugmesh-gateway, " "Java: " && primer_sub "Angular: hugmesh-host-shell" "Angular: hugmesh-gateway, hugmesh-host-shell" && expect_caught j "the gateway moved from the Java list to the Angular list" || bad "negative control setup: the repo-kind lists were not found"
+# (h) now needs the expected word in the PRIMER: dropping 'no remote' makes scratch-clone unanswerable from it,
+# which the old rule (any repository file would do) let through.
+fresh; primer_sub "Work in a scratch clone with no remote." "Work in a scratch clone." && expect_caught h "a question whose expected word the primer no longer says" || bad "negative control setup: no scratch-clone sentence"
+# (m) a sentence nobody anchored, and an exemption that no longer matches anything.
+fresh; primer_insert "- Run make kind-images before anything else on a new PC."; expect_caught m "a new unanchored sentence"
+fresh; primer_sub "Use only facts from this primer or from files you have read. " "" && expect_caught m "an exemption left behind after its sentence was deleted" || bad "negative control setup: no exemption sentence"
 # The other side of an anchor: the repository stops saying what the primer relies on. The file is
 # doctored in a copy of the tree (every other entry is a symlink to the real one).
 doctor_repo() { # <relative file> <old> <new>
@@ -701,6 +812,9 @@ repo_control() { # <why> <file> <old> <new>
 repo_control "the Makefile no longer says stack-halt keeps the data" Makefile "stack-halt: ## stop the local stack but KEEP its data" "stack-halt: ## stop the local stack and drop its data"
 repo_control "the local-stack doc moved the front door" docs/LOCAL-STACK.md "**http://localhost:8088** (the fe-gateway front door" "**http://localhost:9999** (the fe-gateway front door"
 repo_control "the image script no longer states the tunnel MTU" scripts/kind-load-images.sh "WireGuard is 1420" "WireGuard is 9000"
+repo_control "the clone script no longer groups the gateway with the Spring services" scripts/clone-all-repos.sh "# ── Spring backend services ──" "# ── Angular services ──"
+repo_control "the Makefile no longer says make stack-up is the full clone-build-run" Makefile "## clone -> build -> run the FULL stack" "## do something else entirely"
+repo_control "the README of the kind lane no longer calls the cluster a slice" specs/cluster/bootstrap/kind-local/README.md "It is a slice, not a small" "It is a whole production"
 repo_control "the kind README no longer states the order" specs/cluster/bootstrap/kind-local/README.md '`kind-up` THEN `kind-images`' '`kind-images` THEN `kind-up`'
 
 # the dry-run rule: a script that drops the role paragraph, and one that drops the primer
@@ -727,6 +841,36 @@ done
 fresh
 if ! variant "$T/variant.sh" '*) [[ "${host}" =~ ^127(\.[0-9]{1,3}){3}$ ]] \' '*) true \'; then bad "negative control setup: the loopback line was not found"
 else out=$(CHK_F_QUICK=1 problems "$T/d" "$T/variant.sh"); if printf '%s\n' "$out" | grep -F "(f)" >/dev/null; then ok "negative control: a script that accepts any OLLAMA_HOST — caught by (f)"; else bad "negative control: a script that accepts any OLLAMA_HOST — NOT caught by (f)"; fi; fi
+
+# ── help: the usage text is the whole header comment, not its first dozen lines ─────────────────────
+# usage() once printed a fixed line range, which stopped after the first of the four models and cut off
+# the WHY and WHAT IT WILL NOT DO sections. The expected text is read from the script's leading comment
+# block HERE, with its own rule (everything from line 2 to the first line that is not a comment).
+echo "== help"
+want=$(python3 - "$REPO/scripts/local-ai-agents.sh" <<'PY'
+import re, sys
+lines = open(sys.argv[1]).read().split("\n")[1:]
+out = []
+for l in lines:
+    if not l.startswith("#"):
+        break
+    out.append(re.sub(r"^# ?", "", l))
+print("\n".join(out))
+PY
+)
+for how in help --help -h ""; do
+  got=$(bash "$REPO/scripts/local-ai-agents.sh" $how 2>&1); rc=$?
+  want_rc=0; [ -z "$how" ] && want_rc=2
+  missing=""
+  for w in hugmesh-agent hugmesh-coder hugmesh-reviewer hugmesh-triage "WHY ONE PRIMER" "WHAT IT WILL NOT DO" "A SYSTEM BLOCK IS NOT ALWAYS SENT" "Env:"; do
+    printf '%s\n' "$got" | grep -F -e "$w" >/dev/null || missing="$missing [$w]"
+  done
+  if [ "$rc" = "$want_rc" ] && [ "$got" = "$want" ] && [ -z "$missing" ]; then ok "'${how:-no argument}' prints the whole header (all four models and every section) and exits $want_rc"
+  else bad "'${how:-no argument}': rc=$rc (wanted $want_rc), $(printf '%s\n' "$got" | wc -l) lines against $(printf '%s\n' "$want" | wc -l), missing:$missing"; fi
+done
+bash "$REPO/scripts/local-ai-agents.sh" frobnicate >"$T/o" 2>"$T/e"; rc=$?
+if [ "$rc" = 2 ] && grep -F "unknown subcommand 'frobnicate'" "$T/e" >/dev/null && grep -F "hugmesh-triage" "$T/e" >/dev/null; then ok "an unknown subcommand exits 2, names itself and prints the full usage on stderr"
+else bad "unknown subcommand: rc=$rc, $(head -c 200 "$T/e")"; fi
 
 # ── `test`: the scorer, the table, the verdict and the base column, against a stub Ollama API ──────
 # The prepared-versus-base comparison is the evidence behind the word "prepared", so the code that
@@ -831,9 +975,9 @@ kill "$API_PID" 2>/dev/null; wait "$API_PID" 2>/dev/null
 trap 'rm -rf "$T"' EXIT
 
 # a harmless edit must stay clean (the checker is not just always-failing)
-fresh; primer_insert "- One more harmless sentence about the lanes."
+fresh; primer_sub "Do not run them." "Do  not  run them."; primer_sub "make stack-ps lists containers," "make stack-ps lists  containers,"
 out=$(problems "$T/d")
-if [ -z "$out" ]; then ok "negative control: a harmless added sentence — clean"; else bad "a harmless added sentence was flagged: $out"; fi
+if [ -z "$out" ]; then ok "negative control: doubled spaces — clean"; else bad "a doubled space was flagged: $out"; fi
 
 echo; echo "== local-ai primer: $P passed, $F failed =="
 [ "$F" -eq 0 ]

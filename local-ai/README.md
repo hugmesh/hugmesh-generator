@@ -39,17 +39,22 @@ deletes a model it did not make. It also drives the scorer behind `test` against
 Ollama API (fixed answers, a logged request list) and checks the table, totals, verdict and which
 model each column asked, with four planted defects that it must catch.
 
-What it checks about a fact has two levels. Every name (make target, variable, repository, path) is
-checked to exist. For forty load-bearing claims it also checks what the primer SAYS about the
-name: each is a triple of an exact primer phrase, a repository file and a pattern that file must
-match, listed as `ANCHORS` in the guard (for example `make stack-halt` keeps the data and `make
-stack-down` deletes the volumes, the ports 8088 and 8488, the kind order, the 1420 tunnel MTU, the
-test commands). Changing the claim or the file it rests on turns the guard red until a person reads
-both. A sentence with no anchor is checked for names and paths only, so a new fact that could hurt
-someone if it were wrong needs an anchor added with it.
+What it checks about a fact has three levels. Every name (make target, variable, repository, path)
+is checked to exist. Every sentence of the primer except three instructions to the model is then
+tied by an anchor: an exact primer phrase, a repository file and a pattern that file must match,
+listed as `ANCHORS` in the guard (65 phrases, 86 file patterns: for example `make stack-halt`
+keeps the data and `make stack-down` deletes the volumes, the ports 8088 and 8488, the kind order,
+the 1420 tunnel MTU, which repositories are Java and which Angular, the test commands, the
+no-push and no-sudo rules, the warning about node images, and the scratch clone with no remote).
+Changing the claim or the file it rests on turns the guard red until a person reads both. Third,
+the guard fails when a primer sentence has no anchor and is not on the short `UNANCHORED` list, so
+a new fact cannot be added unbacked. What this is and is not: an anchor proves the repository file
+still says what the primer relied on when a person last read both, not that the primer's sentence
+is a correct reading of that file; and each question's expected words must be in the primer text
+itself, not merely somewhere in the repository.
 
 To add a fact: write it in `primer.md`, name the file that backs it in the sources comment, add an
-anchor for it to the guard when it states what a command does, run the guard. To re-count tokens after a large edit:
+anchor for it to the guard (it fails until you do), run the guard. To re-count tokens after a large edit:
 `scripts/local-ai-agents.sh test --tokens` and update `MEASURED_TOKENS` and `MEASURED_BYTES` at the
 top of the guard.
 
@@ -61,6 +66,12 @@ Measured 2026-10-07 with Ollama 0.40.0 on the reference PC (RTX 4060, 8 GB), one
 in the first two columns. An answer passes when it contains the words in `eval/questions.tsv`
 (a case-insensitive substring check; backticks and asterisks are removed first), so the score is
 mechanical and nobody judged an answer.
+
+**The score is a range, not one number.** The same command on the same primer and the same models
+was run five times: prepared `hugmesh-agent` scored 18/19 once and 17/19 four times; the plain base
+scored 0/19 four times and 1/19 once. Temperature 0 and a fixed seed do not make the GPU output
+identical from run to run. The table below is the latest run, on the final primer (17/19 against
+0/19); the 18/19 run differs only in `mock-lane`.
 
 | question | plain `qwen3:8b` | `hugmesh-agent` | `hugmesh-agent`, caller sends its own system message |
 |---|---|---|---|
@@ -79,23 +90,28 @@ mechanical and nobody judged an answer.
 | no-modals | fail | pass | fail |
 | guard-proof | fail | pass | fail |
 | kind-pause | fail | pass | fail |
-| mock-lane | fail | pass | fail |
+| mock-lane | fail | **fail** | fail |
 | repo-source | fail | pass | fail |
 | hub-repo | fail | pass | fail |
 | pullbackoff | fail | pass | fail |
-| **total** | **0/19** | **18/19** | **0/19** |
+| **total** | **0/19** | **17/19** | **0/19** |
 
 Read this honestly:
 
-* The prepared model answered 18 of 19 and the plain base none, because every question asks for a
-  name that exists only in this repository (a make target, a variable, a script). The base cannot
-  know those; the score shows the primer reaches the model, not that the model is smarter.
-* One miss, `scratch-clone`: asked where an agent should work and what that copy must not have, it
-  said "a scratch clone" and then talked about `.stack-src` instead of saying "no remote".
-* The score moves by a question or two with small changes. An earlier run, on the primer as it was
-  before a few wording edits made the guard pass, scored 17/19 (it also missed `mock-lane`: it answered "no"
-  correctly but did not give the reason, the word "mock"). The questions were not changed after
-  seeing either run.
+* The prepared model answered 17 or 18 of 19 and the plain base none or one, because every question
+  asks for a name that exists only in this repository (a make target, a variable, a script). The base
+  cannot know those; the score shows the primer reaches the model, not that the model is smarter.
+* **The scorer can be fooled by an incidental word.** It only looks for the expected words in the
+  answer text. `mock-lane` expects the word "mock": in a reviewer's rerun (not reproduced in the three runs
+  made afterwards) the plain base rambled for 200 tokens, happened to write "mock" and scored a pass, while the prepared model answered "No, ... does not
+  prove" correctly, never said "mock" and scored a fail. A pass is therefore not proof the answer was
+  right, and a fail is not proof it was wrong. Read `scripts/local-ai-agents.sh test --out FILE` and
+  the answers in it before quoting a number.
+* Two misses on the latest run. `scratch-clone`: asked where an agent should work and what that copy
+  must not have, it said "a scratch clone" and then talked about `.stack-src` instead of saying "no
+  remote". `mock-lane`: the correct "no", without the reason.
+* An earlier run, on the primer as it was before a few wording edits made the guard pass, also
+  scored 17/19. The questions were not changed after seeing any run.
 * **The last column is the finding that matters.** When the caller sends a system message of its
   own (any coding-agent harness does), Ollama uses that instead of the Modelfile's `SYSTEM` text,
   and the prepared model scores the same as the base: 0 of 19. `hugmesh-agent` helps in

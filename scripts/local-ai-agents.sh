@@ -53,7 +53,9 @@ PRIMER_CUT='<!-- SOURCES'
 
 die() { echo "local-ai-agents: $1" >&2; exit "${2:-1}"; }
 
-usage() { sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+# The usage text is this file's own leading comment block (line 2 up to the first line that is not a
+# comment), so it cannot be cut short by a fixed line range when the header grows.
+usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; }
 
 known_model() { # <name>
   local m
