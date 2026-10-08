@@ -2,7 +2,7 @@
 
 STATUS: DESIGN-ONLY (phase 1 of 4). Nothing in this document is implemented;
 every later phase ships dark behind the platform's usual gates. Companion to
-`docs/MESHTASTIC-BRIDGE.md` (the LoRa-mesh / Meshtastic side, live today) —
+`docs/MESHTASTIC-BRIDGE.md` (the LoRa-mesh / Meshtastic side, built today and default-off) —
 this doc covers the OTHER LoRa technology: **LoRaWAN**, the star-topology,
 network-server-managed WAN protocol, and answers two asks:
 
@@ -26,10 +26,15 @@ LoRaWAN frames are small and airtime is regulated. Representative numbers
 | Region / DR | Spreading factor | Bit rate | Max app payload | Airtime, full frame |
 |---|---|---|---|---|
 | EU868 DR0 | SF12/125 kHz | ~250 bps | **51 B** | ~2.8 s |
-| EU868 DR3 | SF9/125 kHz | ~1.76 kbps | 115 B | ~0.21 s |
-| EU868 DR5 | SF7/125 kHz | ~5.47 kbps | 242 B | ~0.07 s |
-| US915 DR0 | SF10/125 kHz | ~980 bps | **11 B** | ~0.4 s (dwell cap) |
-| US915 DR3 | SF7/125 kHz | ~5.47 kbps | 242 B | ~0.07 s |
+| EU868 DR3 | SF9/125 kHz | ~1.76 kbps | 115 B | ~0.68 s |
+| EU868 DR5 | SF7/125 kHz | ~5.47 kbps | 242 B | ~0.40 s |
+| US915 DR0 | SF10/125 kHz | ~980 bps | **11 B** | ~0.37 s (inside the dwell cap) |
+| US915 DR3 | SF7/125 kHz | ~5.47 kbps | 242 B | ~0.40 s |
+
+Airtime is the Semtech SX127x time-on-air formula (AN1200.13): app payload plus 13 B of
+LoRaWAN framing, coding rate 4/5, 8-symbol preamble, CRC on, explicit header, low-data-rate
+optimisation on SF11/SF12. The earlier 0.21 s and 0.07 s figures were wrong: 242 B at 5.47 kbps
+cannot go on air in under 0.35 s.
 
 Regulatory/operational ceilings: **EU868 = 1 % duty cycle** per sub-band —
 **36 s of airtime per hour, per device**. US915 has no duty cycle but a
@@ -45,7 +50,8 @@ Now the arithmetic the "forward tailscale over LoRaWAN" idea runs into:
   budget**, before a single byte of application data.
 - A **WireGuard/Tailscale** handshake is admirably small (148 B + 92 B ≈ one
   or two frames at DR3+) — but the *data plane* is not: persistent-keepalive
-  alone (32 B every 25 s) consumes ~5 s/hour of SF9 airtime, an MTU-sized
+  alone (32 B every 25 s) consumes ~44 s/hour of SF9 airtime (0.31 s × 144),
+  more than the whole 36 s/hour budget, an MTU-sized
   packet (1280–1420 B) cannot fit any LoRaWAN frame and **LoRaWAN has no
   fragmentation for application traffic**, and interactive IP (DNS + TCP
   handshakes + TLS) multiplies the handshake math above per connection.
@@ -74,7 +80,7 @@ must reach its network server. That backhaul, not LoRaWAN, is the WAN.
 
 | Tier | Node's links | Tailnet / k8s participation | Sync participation |
 |---|---|---|---|
-| (a) IP backhaul (direct, or co-located with a LoRaWAN gateway) | ethernet/WiFi/cellular | **Full**: joins the Headscale tailnet normally (`keys-template/provision.json` roles/tags); a gateway-site platform node additionally advertises itself as a **Tailscale subnet router / exit node** for the site (`tailscale.up_args` tag advertising, the existing provision mechanism) so *other* IP devices at the site ride its backhaul | Full (it IS the sync relay) |
+| (a) IP backhaul (direct, or co-located with a LoRaWAN gateway) | ethernet/WiFi/cellular | **Full**: joins the Headscale tailnet normally (`keys-template/provision.json` roles/tags); a gateway-site platform node additionally advertises itself as a **Tailscale subnet router / exit node** for the site (through `tailscale.up_args`, the existing provision mechanism, which already carries `--advertise-tags` and `--advertise-routes`) so *other* IP devices at the site ride its backhaul | Full (it IS the sync relay) |
 | (b) LoRaWAN only | a LoRaWAN end-device (attached serial module or co-packaged radio) | **None.** No kubelet join, no tailnet data plane. In `device_registry` terms the machine is a **far-edge device**: registered, owned, domain-stamped — but its `image_type`/classification marks it non-cluster (it never appears as a k8s Node, no dial-key SSH leg) | Sync frames only (§4): presence, chat relay, registration deltas, admission signals — Class A cadence |
 | (c) Mesh-peer reach only | LoRa-mesh (Meshtastic) hops to a peer that is tier (a) or (b) | None | Store-and-forward via its mesh peers; the peer's meshbridge/LoRaWAN leg carries the frames onward |
 
@@ -148,18 +154,20 @@ schema flexibility we do not need — frame families are versioned in the
 header nibble, and US915 DR0's **11-byte** floor makes every byte count
 (PRESENCE must fit it: `1 hdr + 4 node + 1 battery + 2 uptime-h + 1 flags =
 9 B` ✓). CHAT uses the remaining per-DR budget: `1 hdr + 4 src + 1 seq |
-text[…]` — 45 B of text at EU868 DR0, 236 B at DR3+. Text chunking reuses
+text[…]` — 45 B of text at EU868 DR0, 109 B at EU868 DR3, 236 B at EU868 DR5 and US915 DR3
+(5 B at US915 DR0). Text chunking reuses
 meshbridge's UTF-8-safe chunker with the per-DR budget in place of 233.
 
 ### 4.3 Duty-cycle budgets (worked, EU868 @ DR3/SF9, 1 %)
 
-Per device: 36 s airtime/hour. A full 115 B DR3 frame ≈ 0.21 s; PRESENCE
-(9 B) ≈ 0.08 s.
+Per device: 36 s airtime/hour. A full 115 B DR3 frame ≈ 0.68 s; PRESENCE
+(9 B) ≈ 0.21 s.
 
-- 10-node site, presence @ 15 min: 4 × 0.08 s = **0.3 s/hr/device** — noise.
-- CHAT design target: **≤ 100 full frames/day/device** (~21 s airtime) —
-  inside EU duty *and* TTN fair-use. Enforced by a per-device token bucket in
-  the bridge (burst 5, refill 100/day) + drop-oldest queue, mirroring
+- 10-node site, presence @ 15 min: 4 × 0.21 s = **0.8 s/hr/device** — noise.
+- CHAT design target: **≤ 40 full frames/day/device** (~27 s airtime) —
+  inside EU duty *and* TTN fair-use (~30 s/day). The earlier target of 100
+  frames/day costs ~68 s/day and breaks TTN fair-use. Enforced by a per-device
+  token bucket in the bridge (burst 5, refill 40/day) + drop-oldest queue, mirroring
   meshbridge's existing pacing discipline. Class A downlink reality: a
   tier-(b) device receives CHAT/REG-DELTA **only after it uplinks** (RX
   windows) — sync latency is bounded by the presence cadence, and that is an
@@ -219,7 +227,7 @@ and a subnet router), never a fatter LoRaWAN pipe.
   registered attribution stays a distinct `@mesh-*` virtual user with
   metadata badges, never a real account.
 - **Replay**: LoRaWAN frame counters (strictly-monotonic, NS-enforced) plus
-  our own per-family `seq` nibble in CHAT; receivers drop stale seqs — the
+  our own per-family `seq` byte in CHAT; receivers drop stale seqs — the
   same LRU discipline meshbridge applies to Meshtastic packet ids.
 - **Confidentiality**: AppSKey end-to-end payload encryption NS↔device is
   native LoRaWAN; in-cluster legs ride the existing mTLS fabric.
