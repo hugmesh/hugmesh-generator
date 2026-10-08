@@ -51,7 +51,7 @@ deadlock, verbatim Job-log echo, and exit-code preservation).
 
 ## admin-bff-api companion (spec only — NOT changed here)
 
-This repo does not change admin-bff-api. The other half has since landed on admin-bff-api `main`.
+This repo does not change admin-bff-api. The heading dates from when this was a spec: the other half has since landed on admin-bff-api `main`.
 
 1. **Job env.** `src/main/resources/jobs/image-gen-job.yaml` sets `PROGRESS_URL` to
    `https://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8443/bff/internal/image-builds/${BUILD_ID}/progress`,
