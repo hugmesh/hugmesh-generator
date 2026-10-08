@@ -97,8 +97,8 @@ existence so the same file can be reused in the local dev stack.
 
 Every other BFF relies only on the `ALTER DEFAULT PRIVILEGES` mechanism above and
 carries **no SQL `GRANT` at all**. hugmesh-admin-bff-api additionally issues
-per-table `GRANT`s from its own changelogs (81 `GRANT … TO adminbff_app` statements
-across 20 changelog files on `origin/main`, counted 2026-10-07). These are
+per-table `GRANT`s from its own changelogs (dozens of `GRANT … TO adminbff_app`
+statements spread over its `src/main/resources/db/changelog` files). These are
 belt-and-braces, because the default privileges already cover every table Liquibase
 creates. But they are **not free**: a `GRANT` to a role that does not exist is a
 hard error that aborts the migration, and the pod never starts.
