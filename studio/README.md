@@ -6,15 +6,17 @@ a **local mesh node** from the system tray.
 
 ## What it does
 
-- **Three modes**: a hardened **standalone desktop** (LUKS + SELinux), a **branded cloud
-  image** (tailnet client + SSO, with an admin **key-zip** drop-in), or a **superadmin mesh**
-  (define domains + attach users, then build node images).
+- **Three image modes**: a hardened **standalone desktop** (`standalone`; LUKS + SELinux), a
+  **mesh desktop client** (`cloud`; tailnet client + SSO, with an admin **key-zip** drop-in), or
+  a **mesh node** build (`mesh`; the superadmin defines domains and users, then builds node
+  images). The build menu has ten cards: these three, and seven that run a tool instead of
+  building an image. [docs/STUDIO-WALKTHROUGH.md](../docs/STUDIO-WALKTHROUGH.md) covers all ten.
 - **Role & platform picker** — EVERY documented image role, grouped by mode (the
   all-options-in-all-menus rule, [docs/BUILD-MATRIX.md](../docs/BUILD-MATRIX.md)): both
   standalone variants **plus the two plain-Gentoo arms** — `standalone-unaffiliated`
-  (an x86 desktop with ZERO HugMesh branding/tooling baked; branding pages disable
-  themselves and any conflicting setting fails the command loudly, exactly like the
-  builder) and the rpi5 `generic` unbranded arm64 server; the laptop/chromebook/desktop
+  (an x86 desktop with ZERO HugMesh branding/tooling baked; the brand-identity fields hide
+  themselves, themes and wallpapers stay available, and any conflicting setting fails the
+  command loudly, exactly like the builder) and the rpi5 `generic` unbranded arm64 server; the laptop/chromebook/desktop
   clients **and the arm64 La Frite family** (board + live/installer flavor +
   light/headless desktop); every cluster role on **x86 or Raspberry Pi 5**, plus the
   **NVIDIA Jetson Orin** roles (`edge-ai`, `backend-gpu`, `omnibus`, `jetson-desktop`) —
@@ -62,7 +64,7 @@ a **local mesh node** from the system tray.
 ## Run
 
 ```sh
-# Linux (Gentoo can build natively; others need Docker). Run from this directory.
+# Linux, from the root of a checkout (Gentoo can build natively; others need Docker)
 cd studio
 pip install -r requirements.txt        # PySide6 (or use an existing PyQt6)
 ./hugmesh-studio
