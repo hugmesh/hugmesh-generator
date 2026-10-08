@@ -140,7 +140,12 @@ def apply_gate(journey, domain: str, users: list[tuple[str, list[str]]],
     if with_tor:
         cfg.tor_onion_service = True
     superdomain = cfg.effective_superdomain()
-    existing = {(u.username, u.domain) for u in cfg.users}
+    # The saved mesh's accounts REPLACE ``cfg.users`` (like the domains), the GUI
+    # gate's rule restated (#707): accounts an earlier flow of the session left behind
+    # are not part of this mesh. The (username, domain) dedup keeps a repeat visit —
+    # and a duplicated imported row — from stacking.
+    imported: list[User] = []
+    taken: set[tuple[str, str]] = set()
     for username, roles in users:
         # ``roles`` is one role name or the list of them (issue #228 — the canned
         # fixtures and any older caller still hand in a bare string).
@@ -148,9 +153,10 @@ def apply_gate(journey, domain: str, users: list[tuple[str, list[str]]],
         # superadmins belong to the Tailscale root domain (UsersPage locks
         # them there); everyone else lands on the imported apex.
         dom = superdomain if "superadmin" in roles else cfg.cluster_domain
-        if (username, dom) not in existing:
-            existing.add((username, dom))
-            cfg.users.append(User(username=username, domain=dom, roles=roles))
+        if (username, dom) not in taken:
+            taken.add((username, dom))
+            imported.append(User(username=username, domain=dom, roles=roles))
+    cfg.users = imported
     # make the users step reachable so the imported accounts are visible.
     cfg.configure_users = bool(cfg.users)
 
