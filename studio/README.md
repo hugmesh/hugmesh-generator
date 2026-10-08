@@ -19,7 +19,7 @@ a **local mesh node** from the system tray.
   light/headless desktop); every cluster role on **x86 or Raspberry Pi 5**, plus the
   **NVIDIA Jetson Orin** roles (`edge-ai`, `backend-gpu`, `omnibus`, `jetson-desktop`) —
   Jetson is **EXPERIMENTAL, hardware validation pending**. The platform axis picks the
-  builder script (`build-{x86-host,rpi5,frite,jetson}-stage4.sh`).
+  builder script: `build-x86-host-stage4.sh`, `build-rpi5-stage4.sh`, `build-frite-stage4.sh`, `build-jetson-stage4.sh` and one script per Orange Pi board (`BUILDER_SCRIPTS` in `core/config.py` lists all ten).
 - **Every generator flag** is on a wizard page: hardware/GPU (the builder's **full
   `--gpu-driver` matrix**: all-free / nvidia-free / nvidia / amd-free / amd-pro /
   intel-free / intel-pro / none, or auto), the **test|prod `--env` picker** on the Build
@@ -33,8 +33,9 @@ a **local mesh node** from the system tray.
   catalog** (+ games), client **desktop weight + Steam delivery**, **LUKS root encryption**
   (`--encrypt-root` + keyfile/YubiKey unlock factors), `--compress`/`--resume`, and an
   **extra-flags escape hatch** so any unfielded CLI flag stays expressible.
-- **Secrets are never saved**: `--local-pass` / `--luks-pass` live only in the live command —
-  a saved config JSON always carries them blanked, and saving warns you to re-enter them.
+- **Secrets are never saved**: `--local-pass`, `--luks-pass`, `--user-password` and `--root-password`
+  live only in the live command — a saved config JSON always carries them blanked, and
+  saving warns you to re-enter them.
 - **Hardware scanner**: detect the GPU / Wi-Fi / Bluetooth on the machine you're running on
   (Linux **and** Windows) and pre-fill the build. A **machine menu** ships Framework laptops,
   the ASUS VivoBook, and popular Amazon/Best Buy/Costco/Walmart laptops & gaming desktops.
@@ -50,7 +51,8 @@ a **local mesh node** from the system tray.
   reason, never guessed. Flashing runs post-build via `scripts/flash-disk.sh`
   behind a fresh per-device identity re-check.
 - **Local mesh node**: start/stop/inspect a dockerized node from the **system tray**;
-  the wizard's **local Docker mesh** flow is complete end-to-end from the GUI — a
+  the wizard's **local Docker mesh** flow (join an existing mesh with a key, or generate a
+  new one in a few steps) is complete end-to-end from the GUI — a
   **Check readiness** probe (docker/buildx/disk/maven, read-only), the cold-build
   maven prerequisite (`make stack-m2-bootstrap`) as a button, live **streamed**
   build output with a **Cancel** that stops the whole process group, cold-aware
@@ -60,7 +62,8 @@ a **local mesh node** from the system tray.
 ## Run
 
 ```sh
-# Linux (Gentoo can build natively; others need Docker)
+# Linux (Gentoo can build natively; others need Docker). Run from this directory.
+cd studio
 pip install -r requirements.txt        # PySide6 (or use an existing PyQt6)
 ./hugmesh-studio
 
@@ -170,7 +173,7 @@ explicit log hint ("likely killed by its memory cap") naming the cap value and
 the remedies. Asymmetry, honestly: **native builds cannot be memory-capped
 by the Studio** — on a tight host prefer the Docker backend. On hosts without
 `/proc/meminfo` (Windows/macOS) everything degrades to the historical behavior:
-no cap, flat-8 jobs, no warnings.
+no cap, jobs = `min(cores, 8)`, no warnings.
 
 Tray-only (mesh-node controller):
 
@@ -180,7 +183,7 @@ python -m hugmesh_studio --tray
 
 Fleet builds (every role for the selected platforms in one run — the GUI
 front-end to `scripts/build-all-roles.sh`; also reachable from the wizard's
-welcome page):
+Prior-sessions page, where the button shows only when `HUGMESH_STUDIO_ADVANCED` is set):
 
 ```sh
 python -m hugmesh_studio --fleet
@@ -227,11 +230,8 @@ emerge --ask dev-python/urwid
 
 ## Package a Windows .exe
 
-```sh
-pip install pyinstaller PySide6
-pyinstaller --noconfirm --windowed --name HugMeshImageStudio \
-  --collect-all PySide6 -p . hugmesh_studio/__main__.py
-```
+The PyInstaller spec is committed at `packaging/hugmesh-studio.spec`; the MSI, the Flatpak
+and the local build commands are in [docs/STUDIO-INSTALLERS.md](../docs/STUDIO-INSTALLERS.md).
 
 ## Layout
 
@@ -242,7 +242,8 @@ hugmesh_studio/
   gui/         qt shim (PySide6|PyQt6) · wizard (pages) · tray
   tui/         terminal UI (urwid, OPTIONAL — degrades to plain prompts)  <- headless, unit-testable
   app.py       entry point
-tests/         pytest suite (headless, Qt-free)
+packaging/     PyInstaller spec, WiX (MSI) and Flatpak files
+tests/         pytest suite
 pytest.ini
 ```
 
@@ -252,11 +253,14 @@ without a display.
 ## Tests
 
 ```sh
-cd studio && python -m pytest -q     # needs pytest; no Qt, no display, no root
+cd studio && python -m pytest -q     # needs the `test` extra: pytest, PyYAML, jsonschema, cryptography
 ```
 
-The suite covers the `ImageConfig` → CLI-args translation for all four platforms
-(including the rpi5/jetson role-name maps and the frite axes), the secret-blanking
+Many tests need Qt and skip (`pytest.importorskip`) when no binding is installed. CI runs the Qt-free suite
+(`.github/workflows/studio-tests.yml`).
+
+The suite covers the `ImageConfig` → CLI-args translation for every platform (the
+composite `rpi5-desktop`/`jetson-desktop` role ids, the frite axes), the secret-blanking
 save/load round-trip, the `BuildDriver` native/docker command assembly, and the
 headless `--print-command` CLI path. The repo-level build-matrix harness
 (`tests/build-matrix/check.sh`) additionally exercises the Studio as the GUI
