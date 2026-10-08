@@ -15,28 +15,28 @@
 The wizard lives in [`studio/hugmesh_studio/gui/`](../studio/hugmesh_studio/gui/):
 the page registry + mode-gated flow are in
 [`gui/wizard.py`](../studio/hugmesh_studio/gui/wizard.py); one module per page in
-[`gui/pages/`](../studio/hugmesh_studio/gui/pages/). The 4-choice first screen is
-[`gui/pages/mode.py`](../studio/hugmesh_studio/gui/pages/mode.py).
+[`gui/pages/`](../studio/hugmesh_studio/gui/pages/). The mode menu, which started as the
+4-choice first screen, is [`gui/pages/mode.py`](../studio/hugmesh_studio/gui/pages/mode.py).
 
 ---
 
 ## Screen 0 — Welcome
 
-[`welcome.py`](../studio/hugmesh_studio/gui/pages/welcome.py) — the hugmesh explainer
-(with the README getting-started link) plus TWO large icon buttons (issue #50):
+[`welcome.py`](../studio/hugmesh_studio/gui/pages/welcome.py) — a short explainer of
+HugMesh (with the README getting-started link) and TWO large icon buttons (issue #50):
 **Start building** (→ the mode menu below, journey-ordered) and **Review prior
 sessions** (→ Screen 0b).
 
-The third card, **Start a local mesh**, was removed on **2026-08-26**. It routed to the
-same `LocalMeshPage` as the mode menu's own "Local Docker mesh" card, raising the same
-transient `wiz.localmesh_selected` flag — two doors onto one flow, and one of the
-duplicates behind the operator's report that the wizard "is asking same questions
-seemingly multiple times". The mode menu keeps the card; welcome carries no routing
-target for it, because a target for a card nobody can pick is an unreachable branch in
-`nextId()`. `WelcomePage.validatePage` still lowers the flag unconditionally, so a Back
-navigation out of the mode menu cannot strand a stale `True`. The TUI
-(`tui/journey.py`, `WELCOME_CHOICES`/`WELCOME_TARGET`) dropped the same entry and is
-parity-pinned against this page.
+The third card, **Start a local mesh**, was removed on **2026-08-26**. It led to the same
+`LocalMeshPage` as the mode menu's own "Local Docker mesh" card and raised the same transient
+`wiz.localmesh_selected` flag. That made two doors onto one flow, and it was one of the
+duplicates behind the operator's report that the wizard "is asking same questions seemingly
+multiple times". The mode menu keeps the card. Welcome has no routing target for it, because
+a target for a card nobody can pick is an unreachable branch in `nextId()`.
+`WelcomePage.validatePage` still lowers the flag unconditionally, so going Back out of the
+mode menu cannot leave a stale `True`. The TUI (`tui/journey.py`,
+`WELCOME_CHOICES`/`WELCOME_TARGET`) dropped the same entry and is parity-pinned against this
+page.
 
 ## Screen 0b — Prior sessions
 
@@ -153,11 +153,11 @@ Operator report, against session `20260826-151356-64070a`
 > no inbetween menu for configuring domain. There should be the menu for adding the
 > themes as in the branded images"
 
-No page was ever visited twice — the repeats were the *same question asked by different
-widgets on different screens*. Each was collapsed to a single asker. Every hide below is
+No page was ever visited twice. The repeats were the *same question asked by different
+widgets on different screens*, and each is now asked once. Every hide below is
 **emission-neutral**: the widget is hidden *and* its field reset to the `ImageConfig`
-dataclass default, and the gate is re-evaluated on every `initializePage` so a field that
-becomes applicable again is both reachable and emitted.
+dataclass default. The gate is re-evaluated on every `initializePage`, so a field that
+becomes applicable again is reachable and emitted again.
 
 | Duplicate | Kept | Removed from |
 |---|---|---|
@@ -172,16 +172,16 @@ becomes applicable again is both reachable and emitted.
 | "Start a local mesh" | the mode menu | the welcome screen |
 
 Two hides are deliberately **not** paired with a clear. `--standalone` and `--capable` on a
-role whose builder arm already sets them are *redundant*, not inapplicable: the image is
-byte-identical either way, and clearing would silently rewrite a loaded config on a mere
-page visit. Inapplicable hides (Sunshine, the composable unaffiliated flag) do clear.
+role whose builder arm already sets them are *redundant*, not inapplicable. The image is
+byte-identical either way, and a clear would silently rewrite a loaded config on a mere page
+visit. Inapplicable hides (Sunshine, the composable unaffiliated flag) do clear.
 
 ### Identity vs look on an unaffiliated image
 
 The third ask reverses part of an earlier fix. `BrandingPage` used to delete itself for
-`standalone-unaffiliated`, which was correct while *every* branding flag was a builder
-hard conflict — the screen could only render greyed behind an apology note. The rule is
-now split: **a brand names whose image this is; a wallpaper names nobody.**
+`standalone-unaffiliated`. That was right while *every* branding flag was a builder hard
+conflict: the screen could only show greyed fields behind an apology. The rule is now split:
+**a brand names whose image this is; a wallpaper names nobody.**
 
 - **Identity — still refused**: `--brand`, `--brand-title`, `--org`, `--brand-logo`,
   `--brand-locked`, and a `--config` brand profile.
@@ -190,11 +190,11 @@ now split: **a brand names whose image this is; a wallpaper names nobody.**
   `--color-scheme`, baked under neutral artefact names (`/etc/gentoo/branding`,
   `/usr/sbin/branding`, `gentoo-background.png`).
 
-So the page is back in the flow and only its two identity widgets (the brand-logo row and
+So the page is back in the flow, and only its two identity widgets (the brand-logo row and
 "Lock branding") are hidden and cleared. `--brand-logo` stays on the identity side because
-the logo *is* the mark — the applier installs it as the greeter's default-user-image — and
-because every `--theme` preset ships one, the unaffiliated bake removes `logo.png` from the
-assembled brand dir so the conflict cannot be walked around through a preset.
+the logo *is* the mark: the applier installs it as the greeter's default-user-image. Every
+`--theme` preset ships a logo, so the unaffiliated bake removes `logo.png` from the
+assembled brand dir; otherwise a preset would walk around the conflict.
 
 ## What got clearer in this pass
 
@@ -231,54 +231,56 @@ A GUI-only reorganisation — **emission is byte-identical** (the build-matrix `
   Hardware page keeps the GPU/Wi-Fi/Bluetooth/kernel **tuning** and the this-machine scan.
   `hw_profile` is `NON_ARGV` (never emitted); the gpu/wifi/bt it pre-fills are finalised on
   the Hardware page exactly as before, so the argv is unchanged.
-- **Node fallback login** (`system.py`) is retitled *"Node fallback login (mesh nodes)"*
-  with a clear WHAT/WHEN note, and is **hidden entirely** (not greyed) on flows where it
-  is meaningless — hidden on the desktop standalone/cloud paths and on ARM. On the mesh
-  flow the gate keys on the **worklist entries themselves** — shown iff *any* checked row
-  is a node-class role on the x86 builder — never on the base config: the base role is
-  just the *first* checked row (catalog order puts `rpi5-desktop` before `edge-ai`) and
-  the base platform is forced `x86` for the shared option-superset pages, so a base-keyed
-  gate would hide+clear creds an x86 node row still consumes (emission loss) and show
-  them on an all-ARM worklist that consumes them nowhere. The creds are blanked only when
-  **no** checked entry consumes them. Narrowing the widget to node-class flows is
-  emission-safe (see the honest note below).
-- **Standalone account & disk encryption** (`home.py`) is framed as the primary standalone
-  action (retitled groups + a helper line). A device that cannot do full-disk encryption
+- **Node fallback login** (`system.py`) is retitled *"Node fallback login (mesh nodes)"*,
+  with a note saying WHAT it is and WHEN it applies. It is **hidden entirely** (not greyed)
+  where it means nothing: on the desktop standalone and cloud paths, and on ARM. On the mesh
+  flow the gate reads the **worklist entries themselves**. The group shows iff *any* checked
+  row is a node-class role on the x86 builder. It never reads the base config, because the
+  base role is just the *first* checked row (catalog order puts `rpi5-desktop` before
+  `edge-ai`) and the base platform is forced to `x86` for the shared option-superset pages.
+  A gate on the base config would hide and clear credentials an x86 node row still uses
+  (emission loss), and would show them on an all-ARM worklist that uses them nowhere. The
+  credentials are blanked only when **no** checked entry uses them. Narrowing the widget to
+  node-class flows is emission-safe (see the honest note below).
+- **Standalone account & disk encryption** (`home.py`) is framed as the main standalone
+  action (retitled groups and a helper line). A device that cannot do full-disk encryption
   (jetson's single boot+root partition) **hides** the `--encrypt-root` checkbox and shows
   the reason (`luks_pass` is `_ALL_PLATFORMS` and is left untouched). This branch is dormant
-  in standalone (jetson is not a standalone platform) but correct if reached.
-- **Per-node encryption scoping** (`worklist.py`). The mesh worklist gains a per-row
-  **Encryption** column (`default` / `on` / `off` → `WorklistEntry.encrypt_root`), so the
-  previously-ambiguous "which device gets encrypted?" is answered per node; jetson rows
-  show a disabled *"off — jetson cannot encrypt"* cell. A hint spells out that the
-  unattended LUKS passphrase (set once on the Home step) applies to **every** encrypted node.
-  The column is additive and defaults to `default` (inherit the base), so an untouched
-  worklist is byte-identical to before.
+  in standalone, since jetson is not a standalone platform, but it is correct if reached.
+- **Per-node encryption scoping** (`worklist.py`). The mesh worklist has a per-row
+  **Encryption** column (`default` / `on` / `off` → `WorklistEntry.encrypt_root`). It
+  answers "which device gets encrypted?" per node. Jetson rows show a disabled
+  *"off — jetson cannot encrypt"* cell. A hint says the unattended LUKS passphrase (set once
+  on the Home step) applies to **every** encrypted node. The column is additive and
+  defaults to `default` (inherit the base), so an untouched worklist is byte-identical to
+  before.
 - **Per-image hostname** (`system.py` / `core/worklist.py`; issue #229). System identity
-  was one image-config setting even when generating several images — fine for the
-  timezone and the default account, which stay mesh-wide, but a hostname shared by every
-  node is a collision, not a setting. `WorklistEntry.hostname` is the per-image
-  `-H/--hostname` (`""` = inherit the base, and a blank base lets the builder derive the
-  role name; `materialize()` fails loudly if two images would bake the same name). Two
-  collisions, both refused by `core/worklist.py::duplicate_hostnames` so all three
-  channels are equally strict: two rows carrying the same **typed** name, and a typed
-  name equal to what a **blank** sibling's role switch derives — the second emits one
-  `--hostname` and nothing on the other row, so the argv reads clean and both nodes
-  still boot as that name. Blank-vs-blank is not refused: the builder's own role tables
-  assign those names and always have, so the UIs say it out loud in a note instead.
-  `derived_hostname(entry, brand)` is the single implementation of "what this row bakes
-  when left blank" — the GUI placeholders, the TUI *if blank* column and the model's own
-  refusal all call it, so a shown name cannot disagree with a refused one.
-  On the System step a **multi-row** mesh worklist withdraws the single Hostname
-  row and shows one editor per image, placeholdered with the name that node derives when
-  left blank; a one-row worklist keeps the plain field but writes the entry; both blank
-  the base so one value can never ride onto every node again. Refusals (duplicate name,
-  a name the identity allowlist rejects) are inline, never modal — and the allowlist
-  check runs on **every** path through the page, the single field included, so a bad
-  name is refused where it was typed instead of one page later as *"Cannot assemble the
-  worklist"*. The TUI's System step
-  (`tui/journey.py::SystemScreen`) hosts the same per-image table (`N NAME` / `N -`);
-  headlessly it is `entries[].hostname` in the envelope, and `--print-commands` emits
+  was one image-config setting even when the run builds several images. That suits the
+  timezone and the default account, which stay mesh-wide. It does not suit a hostname: one
+  name on every node is a collision, not a setting. `WorklistEntry.hostname` is the
+  per-image `-H/--hostname`. `""` means inherit the base, and a blank base lets the builder
+  derive the role name. `materialize()` fails loudly if two images would bake the same name.
+  `core/worklist.py::duplicate_hostnames` refuses two collisions, so all three channels are
+  equally strict:
+  - two rows carrying the same **typed** name;
+  - a typed name equal to what a **blank** sibling's role switch derives. The sibling emits
+    no `--hostname`, so the argv reads clean and both nodes still boot under that name.
+
+  Blank-vs-blank is not refused. The builder's own role tables assign those names and
+  always have, so the UIs say so in a note instead. `derived_hostname(entry, brand)` is the
+  single implementation of "what this row bakes when left blank". The GUI placeholders, the
+  TUI *if blank* column and the model's own refusal all call it, so a shown name cannot
+  disagree with a refused one.
+
+  On the System step, a **multi-row** mesh worklist withdraws the single Hostname row and
+  shows one editor per image, placeholdered with the name that node derives when left blank.
+  A one-row worklist keeps the plain field but writes the entry. Both blank the base, so one
+  value can never ride onto every node again. Refusals (a duplicate name, a name the
+  identity allowlist rejects) are inline, never modal. The allowlist check runs on **every**
+  path through the page, the single field included, so a bad name is refused where it was
+  typed and not one page later as *"Cannot assemble the worklist"*. The TUI's System step
+  (`tui/journey.py::SystemScreen`) hosts the same per-image table (`N NAME` / `N -`).
+  Headlessly the name is `entries[].hostname` in the envelope, and `--print-commands` emits
   each image's own `--hostname`. An untouched worklist still emits no `--hostname`.
 
 ## Emission note — the additive manifest fields
@@ -311,20 +313,22 @@ byte-identical for every guarded case.
 ## PARITY-TODO — mirror this flow in the other generator front-ends
 
 Like the mesh-wizard redesign's web spec, the Studio GUI is the **reference**
-implementation of this flow; the other build channels must mirror the same 4-choice → 7-step
-shape so a user gets the same clarity regardless of front-end. The channel map
-and the all-options-in-all-menus rule are in
-[`docs/BUILD-MATRIX.md`](BUILD-MATRIX.md).
+implementation of this flow. The other build channels must mirror the same 4-choice → 7-step
+shape, so a user gets the same clarity from any front-end. The channel map and the
+all-options-in-all-menus rule are in [`docs/BUILD-MATRIX.md`](BUILD-MATRIX.md).
+
+The `#NNN` numbers below are the numbers in commit subjects, and they do not match today's
+GitHub numbers: GitHub's PR #342 is a different change. Find a change with
+`git log --grep='(#342)'`.
 
 **Status (2026-07-16) — most of this section has shipped.** The **ncurses menu** and
 **CLI** four-choice parity, the **Local Docker mesh** face on both channels, and the
-**parity-enforcement** gate all landed in
-[#342](https://github.com/hugmesh/hugmesh-generator/pull/342); the ncurses
+**parity-enforcement** gate all landed in commit `38f1810d` (#342, 2026-07-15). The ncurses
 Local-mesh screen was later extended with the from-scratch bootstrapper (#346) and the
 RPi/Chromebook desktop surfacing (#351). The build-matrix `TAXO` bucket
 (`tests/build-matrix/check.sh` → `run_parity_taxonomy_checks`) proves all three
 front-ends carry the same four golden choices — **16/16 green**, emission byte-identical
-(CLI/MAKE/MENU/GUI/JOB 118 each, 0 failed). **Two items remain deferred (🔭):** the
+(CLI/MAKE/MENU/GUI/JOB 150 each, 0 failed; measured with `make matrix-check` on 2026-10-07, when the matrix had 150 cells). **Two items remain deferred (🔭):** the
 admin web-UI modal (a cross-repo BFF concern, out of scope for the generator repo) and
 the deeper ncurses **machine-first step-2 reshape** (a design-heavy TUI redesign — see
 the marked bullet below). Per-subsection status is inline below:
@@ -338,7 +342,7 @@ the marked bullet below). Per-subsection status is inline below:
 - **✅ #342** Route the three image choices to the existing `OPT_*` make-composition unchanged
   (emission parity is mandatory — the build-matrix MENU column guards it). — the three image
   choices funnel into `build_screen` / `single_role_screen` / `standalone_screen` verbatim;
-  MENU column stays 118/0.
+  the MENU column stays all-green (118 cells when this landed, 150 on 2026-10-07).
 - **✅ #342 (+ #346)** Add a **Local Docker mesh** screen that shells the same lifecycle as the
   Studio launcher — reuse a shared entrypoint over `core/mesh_node.py`'s compose lifecycle (a
   small `hugmesh-mesh-node` helper), prompting for `TS_AUTHKEY` (masked) + optional
