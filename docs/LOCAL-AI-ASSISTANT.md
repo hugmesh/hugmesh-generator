@@ -531,9 +531,8 @@ and requires `stop --server` to end that process, and to leave alone an unrelate
 process even when `ollama.pid` names it; it leaves a job under `queue/running` after a
 crash and requires `todo` to queue it again and a new worker to finish it exactly once;
 it asks for a draft a live worker is already running and requires that nothing is queued
-twice; and it refuses `../x`, `..`, `.git/` and `..` paths. Each of those checks was
-shown failing against a doctored copy (the list of copies, and which ones were not
-closed, is in the pull request).
+twice; and it refuses `../x`, a bare `..` and `.git/` paths. Each of those checks was
+shown failing against a doctored copy of the code it covers.
 
 ---
 

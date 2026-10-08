@@ -624,6 +624,44 @@ for PATHV in "${P_NO}" "${P_DECOY}"; do
 done
 PATHV="${P_NO}"
 
+echo "-- 3b1a) a new worker files a draft that had already finished, and leaves a live one alone --"
+PATHV="${P_NO}"
+# (a) the dead worker's draft had written its result before it died: drafting it again would
+# waste a model run and overwrite the person's diff, so the worker only files the result
+rm -rf "${LA_STATE}"; printf good >"${LOG}/mode"; rm -f "${LOG}/requests.jsonl"
+mkdir -p "${LA_STATE}/drafts/hugmesh-fixture-1" "${LA_STATE}/queue/running" "${LA_STATE}/queue/pending"
+printf 'applied files=1\n' >"${LA_STATE}/drafts/hugmesh-fixture-1/STATUS"
+bash -c 'echo $$' >"${LA_STATE}/drafts/hugmesh-fixture-1/draft.pid"
+printf 'draft hugmesh-fixture 1\n' >"${LA_STATE}/queue/running/20260101-000000-draft-hugmesh-fixture-1.job"
+la bash "${GEN}/scripts/local-ai.sh" worker >/dev/null 2>&1
+for _ in $(seq 1 30); do [ -e "${LA_STATE}/queue/done/20260101-000000-draft-hugmesh-fixture-1.result" ] && break; sleep 0.5; done
+[ -e "${LA_STATE}/queue/done/20260101-000000-draft-hugmesh-fixture-1.result" ] \
+    && [ -z "$(ls "${LA_STATE}/queue/running" "${LA_STATE}/queue/pending")" ] && [ ! -s "${LOG}/requests.jsonl" ] \
+    && [ "$(status_word hugmesh-fixture-1)" = "applied" ] \
+    && ok "a draft that had finished before the crash is filed as done, not drafted a second time" \
+    || bad "finished-before-crash draft: running=$(ls "${LA_STATE}/queue/running") pending=$(ls "${LA_STATE}/queue/pending") STATUS=$(status_word hugmesh-fixture-1) requests=$(wc -l <"${LOG}/requests.jsonl" 2>/dev/null)"
+la bash "${GEN}/scripts/local-ai.sh" stop >/dev/null 2>&1; wait_gone 8 >/dev/null
+# (b) the dead worker's draft.sh is STILL working (it was detached): a second copy must not start
+rm -rf "${LA_STATE}"; printf good >"${LOG}/mode"; rm -f "${LOG}/requests.jsonl"
+mkdir -p "${LA_STATE}/drafts/hugmesh-fixture-1" "${LA_STATE}/queue/running" "${LA_STATE}/queue/pending"
+python3 -c 'import time; time.sleep(120)' local-ai/draft.sh & live=$!
+printf 'running\n' >"${LA_STATE}/drafts/hugmesh-fixture-1/STATUS"
+echo "${live}" >"${LA_STATE}/drafts/hugmesh-fixture-1/draft.pid"
+printf 'draft hugmesh-fixture 1\n' >"${LA_STATE}/queue/running/20260101-000000-draft-hugmesh-fixture-1.job"
+la bash "${GEN}/scripts/local-ai.sh" worker >/dev/null 2>&1
+sleep 12                                            # more than one idle cycle of the worker
+[ -e "${LA_STATE}/queue/running/20260101-000000-draft-hugmesh-fixture-1.job" ] \
+    && [ -z "$(ls "${LA_STATE}/queue/pending")" ] && [ ! -s "${LOG}/requests.jsonl" ] && [ "$(status_word hugmesh-fixture-1)" = "running" ] \
+    && ok "a draft still running on its own after the worker died is left alone (no second copy)" \
+    || bad "live draft was disturbed: running=$(ls "${LA_STATE}/queue/running") pending=$(ls "${LA_STATE}/queue/pending") STATUS=$(status_word hugmesh-fixture-1)"
+kill "${live}" 2>/dev/null; wait "${live}" 2>/dev/null
+# once that process is gone the worker takes the job back and runs it
+for _ in $(seq 1 90); do [ "$(status_word hugmesh-fixture-1)" = "applied" ] && break; sleep 1; done
+[ "$(status_word hugmesh-fixture-1)" = "applied" ] \
+    && ok "when the leftover draft process ends, the worker takes its job back and finishes the draft" \
+    || bad "leftover job not taken back after its process ended: STATUS=$(status_word hugmesh-fixture-1) running=$(ls "${LA_STATE}/queue/running")"
+la bash "${GEN}/scripts/local-ai.sh" stop >/dev/null 2>&1; wait_gone 8 >/dev/null
+
 echo "-- 3b1c) a job left under running with NO worker does not block queueing the same draft --"
 rm -rf "${LA_STATE}"; mkdir -p "${LA_STATE}/queue/running" "${LA_STATE}/queue/pending"
 printf 'draft hugmesh-fixture 1\n' >"${LA_STATE}/queue/running/20260101-000000-draft-hugmesh-fixture-1.job"
