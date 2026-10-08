@@ -16,10 +16,19 @@ the round-trip survival gate, and all honest UI copy live in
 
 ## Interface (the BFF calls this — keep stable)
 
-| Method | Path      | Body                                                                 | Response |
-|--------|-----------|----------------------------------------------------------------------|----------|
-| `POST` | `/poison` | multipart: `image=<file>`, `mode=<none\|light\|glaze\|nightshade>`, `sizes=<csv ints, optional>` | `200 image/jpeg` perturbed bytes; `200` unchanged for `mode=none`/non-image; `413` too large; `415` undecodable image |
-| `GET`  | `/health` | —                                                                    | `200 {"status","backend","available","modes"}` |
+| Method | Path        | Body                                                                 | Response |
+|--------|-------------|----------------------------------------------------------------------|----------|
+| `POST` | `/poison`   | **What the BFF sends:** `application/octet-stream` body (the original bytes) + headers `X-Cloak-Mode`, `X-Cloak-Filename`, `X-Cloak-Content-Type`, `X-Cloak-Thumbnail-Sizes` | `200 application/json` `{ok, backend, poisonedOriginal (base64), thumbnails: [], detail}`; with `mode=none` the original bytes come back unchanged |
+| `POST` | `/poison`   | **Older shape, still accepted:** multipart `image=<file>`, `mode=<none\|light\|glaze\|nightshade>`, `sizes=<csv, optional>` | `200 image/jpeg` perturbed bytes (`mode=none`: the upload unchanged); `422` if `image` is missing |
+| `POST` | `/survival` | `application/octet-stream` body (the bytes the homeserver serves) + headers `X-Cloak-Mode`, `X-Cloak-Size` | `200 {"present","score","detail"}` |
+| `GET`  | `/health`   | —                                                                    | `200 {"status","backend","available","modes","transport"}` |
+
+Both `/poison` shapes also return `413` for a body over 25 MiB, and `415` for a body
+that is not a decodable image when `mode` is not `none`. The mode defaults to `glaze`
+when none is sent. `sizes` takes integers, `WxH` (`240x240`) and the names `small`,
+`thumbnail`, `preview`, `medium`, `original`. `/survival` is the call the BFF's
+round-trip gate makes for each served artifact; it answers `present=false` for
+anything it cannot measure.
 
 `backend` is one of `cuda \| rocm \| cpu \| none`. The BFF proxies it into
 `/bff/user/media/capability` so the UI renders an honest, **hardware-derived**
@@ -31,9 +40,13 @@ expectation (cuda ~1 min Glaze, cpu reduced-strength, none → warn-before-post)
   perturbation (`app/poison.py::_lean_perturb`, Pillow + numpy only). Intentionally
   **weak** — surfaced to the user as *"light"* — and exists so the worker is
   runnable and the BFF round-trip gate is exercisable end-to-end **without a GPU**.
-* **GPU / production (follow-up):** PGD against the same Stable-Diffusion VAE/encoder
-  the published technique targets, via the **open PyTorch reference** (see roadmap).
-  Selected when `detect_backend()` finds CUDA or ROCm torch.
+* **GPU / production (follow-up, NOT built):** PGD against the same Stable-Diffusion
+  VAE/encoder the published technique targets, via the **open PyTorch reference** (see
+  roadmap). Today every mode, `glaze` and `nightshade` included, runs the same
+  `_lean_perturb` with a larger budget (`light` 2, `glaze` 6, `nightshade` 10 on a
+  0..255 scale). `detect_backend()` only *reports* `cuda` or `rocm` when it finds a
+  matching torch build; it does not switch the algorithm. `sizes` is accepted and
+  ignored by the lean backend.
 * **Pi5-only cluster:** the Deployment's `nodeSelector` requires the `amd64` + GPU
   node, so the pod stays **Pending**, its Service has **no Ready endpoints**, and the
   BFF capability probe reports the heavy tier **absent** → lean fallback
@@ -55,8 +68,12 @@ docker build -t media-poisoner:dev .
 #   ROCm: --index-url https://download.pytorch.org/whl/rocm6.2
 ```
 
-CI = **GitLab only** (no GitHub Actions). The kustomization rewrites the image ref
-to the in-cluster Harbor registry like every other first-party app.
+The only CI job in this repo that touches the worker is `lint:media-poisoner-tls` in
+`.gitlab-ci.yml`, which runs the unit tests in `tests/`. No job here builds or pushes
+the image. The kustomization rewrites the image ref to
+`registry.hugmesh.net/hugmesh/hugmesh-media-poisoner:main`, the in-cluster Harbor
+registry, like every other first-party app. For a local run, `make stack-up POISONER=1`
+builds the worker from this directory (`tests/stack/compose.media-poisoner.yaml`).
 
 ## License (read before swapping a real backend in)
 
@@ -77,10 +94,11 @@ CreativeML OpenRAIL-M — **verify acceptability for the deployment** before ena
    VAE/encoder specifically — **not** a generic CLIP surrogate (avoids the
    surrogate-mismatch failure mode).
 3. Poison **every served size** in one call (the `sizes` arg already carries akkoma
-   "small" + Matrix 240×240) so no clean derivative can be regenerated.
+   "small" + Matrix 240×240, but the lean backend ignores it) so no clean derivative
+   can be regenerated.
 4. Keep the BFF's round-trip survival gate authoritative: the worker only applies
    bytes; the BFF re-fetches the homeserver-served original + each thumbnail and
-   decides `protected` vs `protection-degraded`.
+   decides `protected` vs `degraded`.
 5. Roadmap-only (not shippable today): faster/more-robust methods (FastProtect /
    BlurGuard). Track removability research (LightShed, JPEG-bypass) honestly.
 
@@ -105,7 +123,8 @@ as before — fully backward compatible (useful for local/dev runs outside the
 cluster). A **partial** config (cert without key, client CA without server cert,
 missing PEM file) **aborts startup** (fail-closed; never a silent plaintext
 fallback), and `/health` discloses the live transport as `"transport": "mtls" |
-"tls" | "plaintext"`. In the cluster, `POISON_TLS_CERT`/`POISON_TLS_KEY`/
+"tls" | "plaintext"` (`"invalid"` if the process was started around `app/serve.py`
+with a partial config). In the cluster, `POISON_TLS_CERT`/`POISON_TLS_KEY`/
 `POISON_TLS_CLIENT_CA` point at the PEM files projected from the ESO Secret
 `media-poisoner-mtls` (`manifests/external-secrets/media-poisoner-externalsecrets.yaml`
 — the same Vault-PKI -> ESO -> `kubernetes.io/tls` pattern as the akkoma-proxy /
