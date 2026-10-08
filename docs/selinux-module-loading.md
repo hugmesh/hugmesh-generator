@@ -77,8 +77,9 @@ required automatically.
 mandatory, two conditional". The lib's own map and the gate's `MANDATORY` array
 say six and three.)
 
-**First boot.** `provision_selinux()` lives in the protected `specs/etc/keys-provision/provision.sh` is
-the LAST provisioning step (it relabels the fully provisioned filesystem). It:
+**First boot.** `provision_selinux()` lives in the protected
+`specs/etc/keys-provision/provision.sh`. It is the LAST provisioning step, because
+it relabels the fully provisioned filesystem. It:
 
 - writes `/etc/selinux/config` from the KEYS manifest (`selinux.type` default
   `mcs`, `selinux.mode` default `permissive`);

@@ -252,10 +252,16 @@ The **`hugmesh-gateway` image** reads three properties (its own
 The shared chart `specs/cluster/charts/hugmesh-gateway` (used by **all four**
 gateway Applications: `specs/cluster/apps/20-gateway-{pki,be,fe}.yaml` and
 `specs/cluster/apps/22-gateway-superadmin.yaml`) carries an `mfa:` values block,
-and its `templates/deployment.yaml` renders all three into every gateway pod. A live
-pod carries them:
+and its `templates/deployment.yaml` renders all three into every gateway pod. Verify
+that yourself rather than trusting this sentence: the grep exits 0, and a live pod
+carries the env:
 
 ```console
+$ grep -rn 'APP_MFA_ENABLED\|APP_MFA_ENFORCE_PRIVILEGED_FLOOR' \
+    specs/cluster/charts specs/cluster/apps tests/stack/
+$ echo $?
+0
+
 $ kubectl exec -n hugmesh-frontend deploy/hugmesh-fe-gateway -c gateway -- env | grep MFA
 APP_MFA_ENABLED=false
 APP_MFA_ENFORCE_PRIVILEGED_FLOOR=false
