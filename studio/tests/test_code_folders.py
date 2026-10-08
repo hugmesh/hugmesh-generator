@@ -272,6 +272,52 @@ def test_the_existing_root_is_the_exact_path_the_build_reads(gen, typed):
     assert cf.source_root(gen, "existing", typed) == built
 
 
+def test_clone_mode_honours_an_exported_stack_src_like_the_build_does(gen, tmp_path):
+    """The Studio sets no STACK_SRC in clone mode but does not remove an inherited
+    one, and the Makefile's ``?=`` keeps it: the build then reads that folder, so
+    the button must open that folder, not <generator>/.stack-src."""
+    mine = tmp_path / "mysrc"
+    (mine / "hugmesh-gateway").mkdir(parents=True)
+    env = {"STACK_SRC": str(mine)}
+    assert cf.source_root(gen, "clone", "", env) == str(mine)
+    m = cf.code_folder_map(gen, "clone", "", [Domain(name="x.example")], environ=env)
+    assert m.root == str(mine) and m.root_exists
+    gw = _apps(m, "x.example")["hugmesh-gateway"]
+    assert gw.path == str(mine / "hugmesh-gateway") and gw.exists
+    # an empty or unset one is the Makefile default, as before
+    for blank in ({}, {"STACK_SRC": ""}, {"STACK_SRC": "  "}):
+        assert cf.source_root(gen, "clone", "", blank) == os.path.join(
+            os.path.abspath(gen), ".stack-src")
+    # a relative one is read against the generator checkout, where make runs
+    assert cf.source_root(gen, "clone", "", {"STACK_SRC": "../src"}) == os.path.abspath(
+        os.path.join(gen, "..", "src"))
+    # existing mode ignores the inherited value: the node overwrites it
+    assert cf.source_root(gen, "existing", str(tmp_path), env) == str(tmp_path)
+
+
+def test_a_source_dir_that_is_a_file_says_so(gen, tmp_path):
+    f = tmp_path / "afile"
+    f.write_text("x")
+    m = cf.code_folder_map(gen, "existing", str(f), [Domain(name="hugmesh.local")])
+    assert m.root_exists is False
+    assert m.root_reason == f"{f} is a file, not a folder"
+
+
+def test_a_folder_inside_this_repo_is_named_by_where_it_sits():
+    """The real compose files: media-poisoner builds from ``…/media-poisoner/worker``
+    and edge-ai-tts from ``…/edge-ai-tts/image``; their basenames mean nothing."""
+    m = cf.code_folder_map(
+        GENERATOR_DIR, "clone", "",
+        [Domain(name="p.example",
+                optional_services=["media-poisoner", "edge-ai-tts", "tor"])],
+        environ={})
+    names = {a.name for a in m.domains[0].apps if a.kind == cf.KIND_PATH}
+    assert os.path.join("specs", "cluster", "manifests", "media-poisoner", "worker") in names
+    assert os.path.join("specs", "cluster", "manifests", "edge-ai-tts", "image") in names
+    assert os.path.join("tests", "stack", "tor") in names
+    assert not names & {"worker", "image", "tor"}
+
+
 def test_a_typed_tilde_is_not_expanded_so_no_row_points_at_the_real_home(
         gen, tmp_path, monkeypatch):
     home = tmp_path / "home"

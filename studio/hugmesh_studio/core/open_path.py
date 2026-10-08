@@ -264,16 +264,24 @@ def open_folders(paths: "list[str]",
     has used it up, the later folders are handed over without waiting and come back
     as asked-but-unconfirmed. The total wait is therefore at most ``budget_s``.
 
-    If the FIRST folder cannot be opened at all (no opener, no handler), the rest
-    would fail the same way: only that one result is returned."""
+    If the FIRST folder that really is a folder cannot be opened at all (no opener,
+    no handler), the rest would fail the same way: the walk stops there. A path that
+    vanished between the page being drawn and the click is reported on its own and
+    does not count as that first attempt, so it cannot skip the folders after it."""
     host = host or Host.detect()
     left = max(0.0, budget_s)
     results: list[OpenResult] = []
+    attempted = 0
     for path in paths:
+        if not os.path.isdir(path):
+            results.append(open_folder(path, last_resort=last_resort, host=host,
+                                       wait_s=0))
+            continue
+        attempted += 1
         started = _now()
         res = open_folder(path, last_resort=last_resort, host=host, wait_s=left)
         results.append(res)
         left = max(0.0, left - (_now() - started))
-        if not res.opened and len(results) == 1:
+        if not res.opened and attempted == 1:
             break
     return results

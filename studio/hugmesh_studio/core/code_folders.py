@@ -306,11 +306,15 @@ def stack_services(generator_dir: str) -> tuple[StackService, ...]:
 
 
 # ── folders ──────────────────────────────────────────────────────────────────────
-def source_root(generator_dir: str, source_mode: str, source_dir: str) -> str:
+def source_root(generator_dir: str, source_mode: str, source_dir: str,
+                environ=None) -> str:
     """The directory compose resolves ``${STACK_SRC}`` to: the operator's tree in
     ``existing`` mode ("" until one is typed), ``<generator>/.stack-src`` in clone
-    mode — the Makefile's ``STACK_SRC ?= $(CURDIR)/.stack-src`` (the Studio sets no
-    STACK_SRC in clone mode, so the default is what runs).
+    mode — the Makefile's ``STACK_SRC ?= $(CURDIR)/.stack-src``. The Studio sets no
+    STACK_SRC in clone mode, but it does not remove one the operator exported, and
+    ``?=`` keeps an existing value: so a non-empty STACK_SRC in ``environ`` (the
+    process environment by default) IS the clone-mode root, exactly as the build
+    sees it. A relative one is read against the generator checkout, where make runs.
 
     The ``existing`` spelling is EXACTLY ``LocalStackNode._build_env``'s
     ``os.path.abspath(source_dir.strip())`` — no ``~`` expansion, because the build
@@ -320,6 +324,10 @@ def source_root(generator_dir: str, source_mode: str, source_dir: str) -> str:
     if source_mode == "existing":
         sd = (source_dir or "").strip()
         return os.path.abspath(sd) if sd else ""
+    environ = os.environ if environ is None else environ
+    inherited = (environ.get("STACK_SRC") or "").strip()
+    if inherited:
+        return os.path.abspath(os.path.join(os.path.abspath(generator_dir), inherited))
     return os.path.join(os.path.abspath(generator_dir), STACK_SRC_DIR)
 
 
@@ -340,7 +348,14 @@ def _context_folder(context: str, generator_dir: str, root: str, environ):
     path = os.path.normpath(os.path.join(generator_dir, STACK_DIR, expanded)) \
         if not os.path.isabs(expanded) else os.path.normpath(expanded)
     path = os.path.abspath(path)
-    return KIND_PATH, os.path.basename(path.rstrip(os.sep)) or path, path
+    # A folder inside this repo is named by where it sits ("specs/cluster/…/worker"):
+    # its bare basename ("worker", "image") says nothing and two of them could collide.
+    gen = os.path.abspath(generator_dir)
+    if path == gen or not path.startswith(gen + os.sep):
+        name = os.path.basename(path.rstrip(os.sep)) or path
+    else:
+        name = os.path.relpath(path, gen)
+    return KIND_PATH, name, path
 
 
 def _missing_reason(kind: str, name: str, path: str, source_mode: str,
@@ -383,12 +398,14 @@ def code_folder_map(generator_dir: str, source_mode: str, source_dir: str,
     same keys). See the module docstring for what lands on a domain and why."""
     environ = os.environ if environ is None else environ
     generator_dir = os.path.abspath(generator_dir)
-    root = source_root(generator_dir, source_mode, source_dir)
+    root = source_root(generator_dir, source_mode, source_dir, environ)
     root_exists = bool(root) and os.path.isdir(root)
     if root_exists:
         root_reason = ""
     elif source_mode == "existing":
-        root_reason = NO_SOURCE_DIR_REASON if not root else f"{root} does not exist"
+        root_reason = (NO_SOURCE_DIR_REASON if not root
+                       else f"{root} is a file, not a folder" if os.path.exists(root)
+                       else f"{root} does not exist")
         if root and (source_dir or "").strip().startswith("~"):
             root_reason += (" — the build does not expand ‘~’, so type the full "
                             "path (for example /home/you/src)")

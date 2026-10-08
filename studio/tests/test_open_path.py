@@ -283,6 +283,30 @@ def test_a_first_folder_nothing_can_open_stops_the_rest(folders, clock):
     assert len(host.calls) == 1
 
 
+def test_a_folder_that_vanished_does_not_skip_the_folders_after_it(folders, clock):
+    """A folder deleted between the page being drawn and the click is reported on its
+    own; the others are still tried (it is not the "first attempt" that stops the
+    walk)."""
+    import shutil
+    shutil.rmtree(folders[0])
+    host = FakeHost(op.HOST_LINUX, installed=["xdg-open"], exits={"xdg-open": 0})
+    host.clock = clock
+    results = op.open_folders(folders[:3], host=host)
+    assert [r.opened for r in results] == [False, True, True]
+    assert "does not exist" in results[0].reason
+    assert len(host.calls) == 2
+
+
+def test_the_first_real_folder_failing_still_stops_the_walk_after_a_vanished_one(
+        folders, clock):
+    import shutil
+    shutil.rmtree(folders[0])
+    host = FakeHost(op.HOST_LINUX, installed=["xdg-open"], exits={"xdg-open": 2})
+    results = op.open_folders(folders[:4], host=host)
+    assert [r.opened for r in results] == [False, False]     # gone, then the first try
+    assert len(host.calls) == 1
+
+
 def test_the_budget_is_a_parameter(folders, clock):
     host = FakeHost(op.HOST_LINUX, installed=["xdg-open"], exits={"xdg-open": None})
     host.clock = clock

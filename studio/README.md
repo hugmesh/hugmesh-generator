@@ -66,7 +66,9 @@ Domain services step, marked `[<slug>]`. Each row names the git checkout compose
 builds that app from and has an **Open folder** button; every domain has **Open
 all**; the block has **Open source root**. The folder is the one the build reads —
 `<source dir>/hugmesh-<name>` with *Build from a source tree I already have*,
-`./.stack-src/hugmesh-<name>` with *Download the source* — parsed from the
+`./.stack-src/hugmesh-<name>` with *Download the source* (or, if you exported
+`STACK_SRC` before starting the Studio, that folder — the Makefile keeps it and so
+does the block) — parsed from the
 `context:` values of `tests/stack/compose.local.yaml` and the files it includes
 (`core/code_folders.py`), so the rows cannot drift from what `docker compose build`
 resolves. The source directory is read exactly as the build reads it, so `~` is not
@@ -91,9 +93,13 @@ is spent are reported as unconfirmed. When nothing can be confirmed the block sa
 so inline and offers the path to copy. No dialogs.
 
 The end-to-end scenarios for this block are
-`tests/e2e/features/studio-code-folders/studio-code-folders.feature`, driven by
+`tests/e2e/features/studio-code-folders/studio-code-folders.feature` (steps in
+`tests/e2e/steps/studio-code-folders.steps.ts`), driven by
 `tests/e2e/studio-code-folders-driver.py` (the real wizard, offscreen, with a
-stand-in `xdg-open` on PATH that logs what it is handed).
+stand-in `xdg-open` on PATH that logs what it is handed). Run them with
+`cd tests/e2e && SNAP_STUDIO_PYTHON=<python with PySide6 or PyQt6> npx bddgen test &&
+QT_QPA_PLATFORM=offscreen npx playwright test --project=bdd -g "git checkout behind every app"`.
+They need no mesh and start nothing.
 
 ## Run
 
