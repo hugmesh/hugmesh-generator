@@ -21,7 +21,7 @@ default). A default build is byte-identical to a build without this feature.
 LoRa radios ──RF──> Meshtastic device ──serial/TCP──┐
                                                     v
                           ┌──────────────────── meshbridge ─────────────────┐
-                          │ transports: TCP (lorawifi) + serial (USB)       │
+                          │ transports: tcp (LoRa-WiFi), serial (USB), mqtt │
                           │ codec: minimal Meshtastic protobuf + framing    │
                           │ bridge core: rooms<->channels, identity,        │
                           │   dedupe/rate limits, 233-byte chunking         │
@@ -52,8 +52,8 @@ LoRa radios ──RF──> Meshtastic device ──serial/TCP──┐
 
 | Mesh sender | Matrix identity | Display name |
 |---|---|---|
-| Node `!a1b2c3d4` registered by user `alice` | `@mesh-alice:<server>` | `alice (mesh)` |
-| Unregistered node `!a1b2c3d4` | `@mesh-node-a1b2c3d4:<server>` | `<NODEINFO long name> · mesh !a1b2c3d4` |
+| Node `!a1b2c3d4` registered by user `alice` | `@mesh-alice:<server>` | `<registered display name> (mesh)` |
+| Unregistered node `!a1b2c3d4` | `@mesh-node-a1b2c3d4:<server>` | `<NODEINFO long name> · mesh !a1b2c3d4`, or `Mesh node !a1b2c3d4` before a name is heard |
 
 Registration lives in **user-bff** (`POST/GET/DELETE /bff/user/mesh-devices` +
 `PUT /{id}/visibility`, node id unique per platform, owner = validated JWT
@@ -70,8 +70,8 @@ the per-device status + visibility feature (`private`/`friends`/`channels`).
 cryptographically authenticated — anyone with RF access can transmit as any
 node number. Registered attribution therefore renders as a *distinct virtual
 user* (`@mesh-alice`), never the user's real account, every bridged event
-carries `com.hugmesh.mesh` metadata (`{node, device, channel, registered,
-rssi, snr}`), and the UI badges mesh-origin messages "via LoRa mesh". Treat
+carries `com.hugmesh.mesh` metadata (`{node, device, channel, registered}`
+plus `rssi`, `snr` and `hops` when known), and the UI badges mesh-origin messages "via LoRa mesh". Treat
 mesh attribution as convenience, not authentication.
 
 ## Per-room opt-in
@@ -90,8 +90,9 @@ exist; only the canonical type is ever written):
 The room-settings UI writes this and invites `@meshbridge:<server>`; the bridge
 auto-joins on invite, reads the flag, and activates the (device, channel) ↔
 room mapping. Disabling (or a malformed/underprivileged event — the bridge
-re-checks the *sender's* power level) deactivates the mapping and the bridge
-leaves. Messages only flow for rooms with a valid, enabled flag.
+re-checks the *sender's* power level) deactivates the mapping. The bridge
+stays joined: `MatrixClient.leave` exists in `matrix_cs.py` and nothing calls it.
+Messages only flow for rooms with a valid, enabled flag.
 
 ## Message flow rules
 
@@ -142,9 +143,11 @@ Devices are declared in the `meshbridge-devices` ConfigMap (key
   → `config_complete_id`) seeds the node-name db and validates the configured
   channel; reconnect with exponential backoff; 60 s heartbeat keeps TCP alive.
 
-Admin-driven per-node attachment (device_registry-linked rows + signed per-node
-export + on-node reconcile writing this ConfigMap, the node-storage idiom) is
-the planned follow-up; the ConfigMap is the operator surface until then.
+Admin-driven per-node attachment follows the node-storage idiom in three parts. Two
+exist in admin-bff: `/bff/admin/device-radios` (device_registry-linked rows) and a
+SUPERADMIN-only signed per-node export (`GET /export?node=<machine_key_fp>`). The
+third does not: no on-node reconcile agent reads the export and writes this
+ConfigMap. The ConfigMap is the operator surface until it does.
 
 ## Secrets
 
@@ -167,9 +170,10 @@ default-off anyway).
   `dependsOn: tuwunel`).
 - `specs/cluster/apps/13a-optional-services.yaml` + `manifests/policy/
   installed-services-configmap.yaml` — the runtime add/remove lever.
-- `tests/meshbridge/` — stdlib-only unit + integration tests (mock radio
-  speaking real Meshtastic framing, mock homeserver; wire-format vectors
-  generated from the official protobufs, committed as fixtures).
+- `tests/meshbridge/` — stdlib-only codec conformance tests (`test_codec.py`) against
+  wire-format vectors generated from the official protobufs and committed as fixtures
+  (`gen_vectors.py`, `vectors/wire_vectors.json`). There is no mock radio, mock
+  homeserver or bridge-level integration test here.
 
 The bridge app is dependency-free Python 3.12 (stdlib only, `python:3.12-alpine`
 base — the `tuwunel-admin-sync` precedent): a hand-written codec for the small
