@@ -70,12 +70,14 @@ in the first two columns. An answer passes when it contains the words in `eval/q
 (a case-insensitive substring check; backticks and asterisks are removed first), so the score is
 mechanical and nobody judged an answer.
 
-**The score is a range, not one number.** The same command on the same primer and the same models
-was run five times (the first run, a reviewer's rerun and three later reruns): prepared
-`hugmesh-agent` scored 18/19 once and 17/19 four times; the plain base scored 0/19 four times and
-1/19 once. Temperature 0 and a fixed seed do not make the GPU output
+**The score is a range, not one number.** The same command on the same models was run five times
+(the first run, a reviewer's rerun and three later reruns): prepared `hugmesh-agent` scored 18/19
+once and 17/19 four times; the plain base scored 0/19 four times and 1/19 once. Four of the five
+(17/19 against 0/19 three times, and the reviewer's 17/19 against 1/19) were on the primer as it is
+now; the first run (18/19) was made while the primer was still being edited, so treat it as a
+nearby sample, not as the same input. Temperature 0 and a fixed seed do not make the GPU output
 identical from run to run. The table below is the latest run, on the final primer (17/19 against
-0/19); the 18/19 run differs only in `mock-lane`.
+0/19); as recorded at the time, the 18/19 run differed from it only in `mock-lane`.
 
 | question | plain `qwen3:8b` | `hugmesh-agent` | `hugmesh-agent`, caller sends its own system message |
 |---|---|---|---|
