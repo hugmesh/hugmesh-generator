@@ -80,9 +80,10 @@ Each gateway is pointed at the store via `ROUTE_ACCESS_R2DBC_URL` (set in
 - **admin-bff-api** (Spring, backend namespace, behind the gateway): list, add and
   delete on `gateway_route_access` — `GET`, `POST` and `DELETE
   /bff/admin/route-access` in `AdminController`, `ROLE_ADMIN` only, domain-scoped,
-  with no `PUT`. It persists to Postgres with a best-effort Cassandra mirror. It
-  reaches Casdoor for role/user lookups through the hugmesh-pki gateway (JWT) — never
-  calling Casdoor directly except for OAuth2 grants.
+  with no `PUT`. It persists to Postgres with a best-effort Cassandra mirror. Ordinary
+  Casdoor JWT traffic goes through the hugmesh-pki gateway (`PKI_GATEWAY_BASE`). The
+  Casdoor admin write API (add-user, update-role) is a direct call to
+  `CASDOOR_ADMIN_BASE_URL`, and it ships dark (`casdoor.admin.enabled=false`).
 - **admin-ui** (`hugmesh-admin-ui`, ROLE_ADMIN only): a "Gateway access" view (nav
   label "Route access"; `route-access.component`) to list, add and remove
   `(gateway, url_pattern, role/user, allow)` rules.
