@@ -166,9 +166,8 @@ code, and holds and refreshes the JWT under custody. The browser never receives 
 the `code_verifier`, the `state` or any Casdoor URL. The gateway swaps `bff_` for an
 internal custody JWT just before resource-server validation, and the user never sees
 their own JWT. This keeps the r2dbc/Casdoor management stack off the gateway's
-classpath and puts login in the BFF tier. Because there is no front-channel redirect,
-**Casdoor needs no public ingress at all**: front the platform front door with
-Cloudflare and Casdoor stays dark to the internet.
+classpath and puts login in the BFF tier. With no front-channel redirect, **Casdoor
+needs no public ingress at all**.
 
 **Component ownership** (post auth-relocation):
 
@@ -259,9 +258,9 @@ flags lit and the ciphers inert until those Secrets land.
 
 ### Progress
 
-PR numbers in this section come from the pre-squash history. Most do not resolve to
-the same work in the org today (for example `hugmesh-generator#171` is an unrelated
-QEMU change), so rely on the named code, not the number.
+PR numbers here come from the pre-squash history and mostly no longer resolve to the
+same work (`hugmesh-generator#171`, for one, is an unrelated QEMU change). Trust the
+named code, not the number.
 
 **✅ shipped (merged to `main`):**
 
@@ -504,15 +503,14 @@ complete on `main`. Each entry names what lights it and which caveat survives.
 What is **not done**, or only partly done. Some entries have partial code on `main`;
 each says which.
 
-- **🚧 kind-cluster SSO e2e — login path green, the rest open.** The login path passed
-  on 2026-08-06; "Progress" above has the details, and the open items are in
+- **🚧 kind-cluster SSO e2e — login path green, the rest open.** "Progress" above has
+  the 2026-08-06 result. The open items are in
   [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md). They include the harness gap
-  that stops node-side API specs (19, 20, 23, 29) from resolving the cluster
-  hostname, and the non-Spring callers that never got the mTLS client wave. The first
-  run (2026-08-05) failed on fresh-cluster blockers, because the GitOps payload had
-  never been run end to end and every workaround lived in
-  `tests/stack/compose.local.yaml` instead of `specs/cluster`. A green login e2e is
-  not a finished platform.
+  that stops node-side API specs (19, 20, 23, 29) from resolving the cluster hostname,
+  and the non-Spring callers that never got the mTLS client wave. The first run
+  (2026-08-05) failed on fresh-cluster blockers, because the GitOps payload had never
+  run end to end and every workaround lived in `tests/stack/compose.local.yaml`. A
+  green login e2e is not a finished platform.
 - **🔭 The live MFA operator flip** — verify that every privileged principal can
   produce a fresh `mfa_satisfied` stamp. Then flip `mfa.enabled` to `true`. Then, as a
   separate step (`enforce-privileged-floor` is **not** a sub-flag of `enabled`), flip

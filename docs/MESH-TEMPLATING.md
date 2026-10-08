@@ -169,9 +169,8 @@ The `.conf` path is **not** removed. The two shapes stay compatible.
 
 Phase 1 templated only ArgoCD `Application` CRDs (thin pointer repos). Phase 2 proves
 the **overlay-primary, skeleton-fallback** model on a real app repo,
-`hugmesh-login-ui`. It is **additive and opt-in**; no default path changes. (Since
-Phase 4 the overlay lives under `templates/archetypes/angular-mfe/`; the
-`templates/repos/login-ui/` paths below are the Phase 2 originals.)
+`hugmesh-login-ui`. It is **additive and opt-in**; no default path changes. (The paths below are the Phase 2
+originals; since Phase 4 the overlay lives under `templates/archetypes/angular-mfe/`.)
 
 ## Two-tier maintenance model (fork-and-tokenize is BANNED)
 
@@ -406,14 +405,13 @@ pre-staged offline at provision time.** The pins:
   are the half you can verify on the build host.
 
 ## Adversarial-export fuzz suite (the exit gate)
-`tests/domain-registry/test-domain-reconcile-fuzz.sh` runs on the build host (no root,
-no network, scratch containment dir). It feeds malicious-but-well-formed
-profiles and exports (metachar injection, traversal, secret-in-field, protocol
-override, oversized or looping input, YAML splice) and asserts for each one: exit != 0
-(fail-closed), no file outside the scratch dir, and **zero** ack POSTs (a `curl`
-recorder stub sits in PATH). A legitimate export is the positive control: it renders,
-scans and promotes clean, and the writeback does fire, so the gate does not lock out
-good input.
+`tests/domain-registry/test-domain-reconcile-fuzz.sh` runs on the build host (no root, no
+network, scratch containment dir). It feeds malicious-but-well-formed profiles and
+exports (metachar injection, traversal, secret-in-field, protocol override, oversized
+or looping input, YAML splice) and asserts for each: exit != 0, no file outside the
+scratch dir, and **zero** ack POSTs (a `curl` recorder stub sits in PATH). A
+legitimate export is the positive control: it renders, scans and promotes clean, and
+the writeback does fire.
 
 ## Deferred to real-root / real-cluster (never faked)
 1. execution as UID 0 under the actual root cron;
@@ -698,20 +696,19 @@ through the Phase-7 gate, and the combination is refused.
 ## Delivery is now push-ff **OR** PR — `publish-tenant-set.sh --pr`
 
 The default is unchanged: a direct push to `main`, fast-forward-only, never `--force`,
-refusing on tenant-side divergence. `--pr` is the reconciliation path that refusal
-used to dead-end in. It pushes the regenerated tree to the generator-owned branch
-`templating/update-<version>` and then **creates or updates** a Forgejo PR (`POST
-/api/v1/repos/{org}/{repo}/pulls`; on 409 it looks up the existing open PR for that head
-branch and `PATCH`es it). `<version>` is the base ref, taken from the in-tree marker or
-`--ref`; if both are present and disagree, it refuses. "Update per version from other
-repos" therefore works like this: re-render at the new ref, push the same-name branch,
+refusing on tenant-side divergence. `--pr` is the path out of that refusal. It pushes
+the regenerated tree to the generator-owned branch `templating/update-<version>` and
+then **creates or updates** a Forgejo PR (`POST /api/v1/repos/{org}/{repo}/pulls`; on
+409 it looks up the open PR for that head branch and `PATCH`es it). `<version>` is the
+base ref, from the in-tree marker or `--ref`; if both are present and disagree, it
+refuses. To update per version: re-render at the new ref, push the same-name branch,
 and the same PR updates.
 
-The PR branch is regeneration output, replaced whole on every re-render. The push uses a
-forced refspec on `templating/update-*` only, and a namespace hard-guard makes `main`
-unreachable from that push, so main custody is untouched in every mode. PAT custody is
-unchanged: a `GIT_CONFIG_*` env header for git and `-H @0600-file` for curl. The PAT is
-never in argv, never in the URL and never persisted.
+The PR branch is regeneration output, replaced whole on every re-render. The push uses
+a forced refspec on `templating/update-*` only, and a namespace hard-guard makes `main`
+unreachable from it, so main custody is untouched in every mode. PAT custody is
+unchanged: a `GIT_CONFIG_*` env header for git and `-H @0600-file` for curl, never in
+argv, never in the URL, never persisted.
 
 ## Exit gate — `tests/domain-registry/test-templating-rename-pr.sh`
 
