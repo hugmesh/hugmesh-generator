@@ -31,8 +31,9 @@ host-shell` / the tenant-set driver).
 ## What is / isn't templated
 
 - **Class-B anchored edits (`recipe.yaml` on the base's OWN files):**
-  - `federation.config.js`: the host's federation name
-    (`hugmeshHost({ name: 'hugmesh-host' })` -> the derived `HOST_NAME`).
+  - `federation.config.js`: the host's federation name, the `name:` property
+    of the `hugmeshHost({ ... })` call (`name: 'hugmesh-host'` -> the derived
+    `HOST_NAME`). The call also passes `extraSkip`, which stays literal.
   - `src/index.html`: the browser-tab title — the WHOLE title (`BRAND_TITLE`),
     unlike the angular-mfe per-UI `TITLE_WORD` split (the host IS the site).
   - `.gitlab-ci.yml`: only the `include: project:` org/group.

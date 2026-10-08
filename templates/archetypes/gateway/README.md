@@ -1,7 +1,7 @@
 # gateway archetype
 
-Renders the HugMesh **gateway / infra** class (gateway / actions /
-remote-fragment). The Java source is near-zero-token, so this archetype templates
+Renders the HugMesh **gateway / infra** class (gateway and
+actions). The Java source is near-zero-token, so this archetype templates
 the CI include (recipe) + a NEW brand-parameterized **deploy overlay** (class-A
 `deploy/*.hbs`, kustomize-buildable), NOT Java.
 

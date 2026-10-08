@@ -5,8 +5,8 @@ by the per-repo `repos[].identity` row in the structured brand YAML. Seeded from
 the Phase-3 `admin-bff-api` exemplar; proven on `user-bff-api` with only manifest
 identity (no new hand overlay).
 
-Class members (see phase4-repo-archetypes.md): admin / user / mod / forum /
-owncast / tube / wiki-bff-api + federation-api.
+Class members (the Spring-BFF block in `brands/acme.yaml`): admin / user / mod /
+forum / owncast / tube / wiki-bff-api + federation-api.
 
 ## What is / isn't templated
 
@@ -17,7 +17,7 @@ owncast / tube / wiki-bff-api + federation-api.
   - `.gitlab-ci.yml`: only the `include: project:` org/group (`GENERATOR_ORG_GROUP`).
 - **Left literal (per-repo CODE identity, NOT brand):** `spring.application.name`,
   pom `artifactId`, springdoc `packages-to-scan`, Casdoor OIDC application id,
-  `groupId systems.hugmesh`. These make each BFF itself; rebranding them would
+  `groupId net.hugmesh`. These make each BFF itself; rebranding them would
   emit user-bff misconfigured as admin.
 
 ## Files
@@ -28,7 +28,11 @@ owncast / tube / wiki-bff-api + federation-api.
   `hugmesh-parent`: hello endpoint, permitAll-health/authenticated-elsewhere
   SecurityConfig, `${ENV:default}` config, WebTestClient tests, Dockerfile, CI,
   deploy). `mvn package` in a rendered tree is green — the base-absent fallback
-  is now a real example codebase, not a placeholder. SKELETON-ONLY CONSTRAINT:
+  is now a real example codebase, not a placeholder. KNOWN DRIFT: the skeleton
+  `pom.xml` names its parent `systems.hugmesh:hugmesh-parent`, but the published
+  parent is `net.hugmesh:hugmesh-parent` (2.8.0), as the BFF repos use it. The
+  skeleton's Java package, `systems.hugmesh.<slug>`, predates that move too.
+  SKELETON-ONLY CONSTRAINT:
   the identity `app_slug` must match `[a-z0-9]+` (it becomes the Java package
   segment `systems.hugmesh.<slug>`; packages cannot carry `-`). See
   `_skeleton/README.md.hbs` + the recipe header comment.

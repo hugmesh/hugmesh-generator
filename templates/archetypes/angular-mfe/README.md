@@ -10,9 +10,12 @@ wiki / forum-ui + api-docs + character-studio-ui + superadmin-service-catalog-ui
 
 ## What is / isn't templated
 
-- **Class-A shared whole-file (`federation-base.js.hbs`):** byte-identical across
-  the class except the `HOST_NAME` federation-host default — safe wholesale
-  overlay, single source of truth. (Verified identical across login-ui/user-ui.)
+- **Class-A shared whole-file (`federation-base.js.hbs`):** the same code in
+  every class member except the `HOST_NAME` federation-host default — a wholesale
+  overlay, single source of truth. The copies are not byte-identical: comment
+  lines differ in login-ui (a note on `@angular/localize`), api-docs,
+  character-studio-ui and superadmin-service-catalog-ui. The drift check
+  compares the template with login-ui, so it fails against the other members.
 - **Class-B anchored edits (`recipe.yaml` on the base's OWN files):**
   - `package.json`: npm scope only (`@hugmesh/<slug>` -> `@<NPM_SCOPE>/<slug>`);
     the `<slug>` == `ng build <slug>` target is preserved.

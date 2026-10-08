@@ -14,7 +14,7 @@ class-A) and its brand surface is a single CI anchor.
   `include: project:` org/group (`GENERATOR_ORG_GROUP`) — the ONE in-source
   brand token.
 - **NO class-A files, deliberately:** the base owns `deploy/**` (deployment /
-  hpa / kustomization / nginx.conf) and every other path. An archetype
+  hpa / pdb / kustomization / nginx.conf) and every other path. An archetype
   whole-file at a base-owned path would have to render byte-identical forever
   (a standing drift trap) for zero brand value.
 - **Left literal / env-driven:** the sync loop, Casdoor client-credentials
@@ -36,5 +36,5 @@ There is NO runnable skeleton (`_skeleton/` is a pointer README): the real base
 repo IS the example codebase — a minimal fake sync-sidecar would be a
 non-functional lie, so a base-absent render emits the pointer instead.
 
-See docs/FEDERATION-EXAMPLES.md, "remote-fragment runtime bundles", for the
-end-to-end flow.
+See docs/FEDERATION-EXAMPLES.md, section 1 ("The example trio (+ remote-fragment)"),
+for the end-to-end flow.
