@@ -119,9 +119,10 @@ def onion_export_state(export_dir: str | None = None
     the reasons (``"<path>: Permission denied"``) are carried and :func:`exposure_rows`
     says what it cannot see. A missing directory or file stays "" / [] / "" / "".
 
-    THE TWO REASONS ARE SEPARATE because they hide different things: the third item
-    is about the primary (``hostname``, or a ``<slug>.hostname`` that refused); the
-    fourth is about the LISTING, which is the only way the per-domain onions are
+    THE REASONS ARE SEPARATE because they hide different things: the third item is
+    about the primary (``hostname`` itself, never a slug file); the fourth is about
+    the LISTING (a ``<slug>.hostname`` that exists but refuses is the scan's fifth
+    item, :func:`onion_export_scan`), which is the only way the per-domain onions are
     found (decision 68 = A: one ``<slug>.hostname`` per Tor domain). A directory with
     x-but-no-r bits, or a 0700 one with ``GL_ONION_HOSTNAME`` set as the unreadable
     row's own remedy says, yields a KNOWN primary and a refused listing — and the
@@ -283,7 +284,11 @@ def exposure_rows(domains, chosen: str, provider_id: str, mechanism: str,
       of its own, whatever the mechanism and whether or not the primary is known:
       the per-domain onions are found only by listing the directory, so a refused
       listing must be said where they would have been listed, not folded into the
-      primary's row (which a known primary wins)."""
+      primary's row (which a known primary wins);
+    * ``domain_files_unreadable`` (the fifth item of :func:`onion_export_scan`) is a row
+      of its own too, for a ``<slug>.hostname`` that is there and cannot be read; it
+      is said before the onions that did read, so a domain is never missing without a
+      row saying why."""
     rows: list[tuple[str, str]] = []
     primary = domains[0] if domains else ""
     for name in domains:
