@@ -14,7 +14,7 @@
 #
 # Security model: like user-bff/forum-bff, character-forge-bff is an OAuth2
 # RESOURCE SERVER — it VALIDATES the cluster Casdoor JWT itself
-# (CASDOOR_ISSUER_URI, JWKS auto-discovered). Unlike forum-bff it has NO
+# (CASDOOR_ISSUER_URI, keys from CASDOOR_JWKS_URI). Unlike forum-bff it has NO
 # downstream homeserver leg: its only dependency is its own Postgres.
 apiVersion: apps/v1
 kind: Deployment

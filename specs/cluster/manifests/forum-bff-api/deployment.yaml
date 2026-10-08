@@ -12,8 +12,8 @@
 # from the route DB first. Defence-in-depth: forum-bff re-checks role + ownership.
 #
 # Security model: like user-bff/federation-api, forum-bff is an OAuth2 RESOURCE
-# SERVER — it VALIDATES the cluster Casdoor JWT itself (CASDOOR_ISSUER_URI, JWKS
-# auto-discovered) and FORWARDS the caller's bearer token (+ X-HugMesh-JWT)
+# SERVER — it VALIDATES the cluster Casdoor JWT itself (CASDOOR_ISSUER_URI, keys
+# from CASDOOR_JWKS_URI) and FORWARDS the caller's bearer token (+ X-HugMesh-JWT)
 # onward to the phpBB extension over mTLS. It mints/holds NO outbound client creds.
 #
 # phpBB reach: forum-bff is the EGRESS SOURCE into the isolated hugmesh-forum

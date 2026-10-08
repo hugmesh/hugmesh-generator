@@ -12,8 +12,8 @@
 #     manifest + bundles and serves them statically at /_fragments/**.
 #
 # Security model: federation is purely an OAuth2 RESOURCE SERVER. It VALIDATES the
-# cluster Casdoor JWTs presented by those clients (CASDOOR_ISSUER_URI, JWKS
-# auto-discovered) — it mints/holds NO outbound creds, so it needs NO Casdoor app
+# cluster Casdoor JWTs presented by those clients (CASDOOR_ISSUER_URI, keys
+# from CASDOOR_JWKS_URI) — it mints/holds NO outbound creds, so it needs NO Casdoor app
 # or client secret of its own. Fine-grained authz (modules/overrides=ROLE_ADMIN,
 # moderation=ROLE_MOD/ADMIN, manifest GET + bundles=authenticated) is enforced in
 # federation's own SecurityConfig; the be-gateway route is the coarse

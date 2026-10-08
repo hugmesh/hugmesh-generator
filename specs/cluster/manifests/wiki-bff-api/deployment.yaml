@@ -6,7 +6,7 @@
 # Defence-in-depth: wiki-bff re-checks role + ownership.
 #
 # Security model: wiki-bff is an OAuth2 RESOURCE SERVER — it VALIDATES the cluster
-# Casdoor JWT itself (CASDOOR_ISSUER_URI, JWKS auto-discovered). It has NO external
+# Casdoor JWT itself (CASDOOR_ISSUER_URI, keys from CASDOOR_JWKS_URI). It has NO external
 # service calls (no phpBB, no homeserver dial): JWT resource server + R2DBC + mTLS
 # only. The wiki content lives entirely in wiki-bff-db.
 #

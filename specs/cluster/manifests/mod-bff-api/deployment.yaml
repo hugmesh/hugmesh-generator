@@ -9,8 +9,8 @@
 # from the route DB first.
 #
 # Security model: like federation-api, mod-bff is purely an OAuth2 RESOURCE
-# SERVER. It VALIDATES the cluster Casdoor JWT itself (CASDOOR_ISSUER_URI, JWKS
-# auto-discovered) and FORWARDS the caller's bearer token onward to federation-api
+# SERVER. It VALIDATES the cluster Casdoor JWT itself (CASDOOR_ISSUER_URI, keys
+# from CASDOOR_JWKS_URI) and FORWARDS the caller's bearer token onward to federation-api
 # — it mints/holds NO outbound client creds, so it needs NO Casdoor app or client
 # secret of its own.
 apiVersion: apps/v1

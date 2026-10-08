@@ -11,7 +11,7 @@
 # SUPERADMIN supersets) from the route DB first.
 #
 # Security model: an OAuth2 RESOURCE SERVER for inbound (CASDOOR_ISSUER_URI,
-# JWKS auto-discovered), PLUS one outbound identity of its own: a Casdoor
+# keys from CASDOOR_JWKS_URI), PLUS one outbound identity of its own: a Casdoor
 # client-credentials client (APP_CASDOOR_PLATFORM_*) minting the ROLE_SERVICE
 # bearer for user-bff's /bff/user/internal/mesh-devices — presented together
 # with this pod's mTLS client cert (user-bff terminates client-auth=need).
