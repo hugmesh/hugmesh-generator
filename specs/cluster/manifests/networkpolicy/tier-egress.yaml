@@ -80,12 +80,17 @@ spec:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-frontend } }
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
     # 3. route-access-db (:5432) + Cassandra (:9042) live in hugmesh-pki; fe-gateway
-    #    reads route-access + Cassandra. Pin the namespace + ports.
+    #    reads route-access + Cassandra. Casdoor (:8000) is there too: the chart sets
+    #    the fe-gateway's CASDOOR_JWKS_URI to http://casdoor.hugmesh-pki...:8000, so it
+    #    fetches its JWT signing keys in-cluster (hugmesh-generator#693). Without :8000
+    #    this block would cut that fetch the day the frontend cutover is enabled.
+    #    Pin the namespace + ports.
     - to:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-pki } }
       ports:
         - { protocol: TCP, port: 5432 }
         - { protocol: TCP, port: 9042 }
+        - { protocol: TCP, port: 8000 }
     # 4. kube-apiserver — TCP/6443 to the NODE network CIDRs. REPLACES the broken
     #    `ipBlock: 10.96.0.1/32` (:443) ClusterIP carve-out: kube-proxy DNATs the
     #    apiserver ClusterIP to the control-plane node IP:6443 and Calico evaluates
