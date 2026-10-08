@@ -1416,9 +1416,9 @@ def _scripted_flatpak(tmp_path, validators=True):
         "    info)\n"
         "        [ -e \"$installed\" ] || exit 1\n"
         "        case \"$*\" in *--show-commit*) echo 0123abcd ;; esac ;;\n"
-        "    build-bundle)\n"                         # an empty bundle is enough to reach the install step
+        "    build-bundle)\n"                         # not empty: a checksum of nothing must not pass for this one
         "        [ \"${FAKE_FLATPAK_BUNDLE_EXIT-0}\" = 0 ] || exit \"$FAKE_FLATPAK_BUNDLE_EXIT\"\n"
-        "        : > \"$3\" ;;\n"
+        "        printf 'fake flatpak bundle %s\\n' \"$$\" > \"$3\" ;;\n"
         "    install)\n"
         "        case \"$*\" in *--bundle*)\n"
         f"            mkdir -p \"$FLATPAK_USER_DIR/exports/share/applications\"\n"
@@ -1686,7 +1686,9 @@ def test_script_sends_every_flatpak_call_to_the_private_directory(tmp_path):
         "the bundle was copied, not renamed, from its .partial name: a copy that is cut "
         "short leaves the .partial behind and one that is not leaves two bundles")
     with open(bundle, "rb") as handle:
-        digest = hashlib.sha256(handle.read()).hexdigest()
+        content = handle.read()
+    assert content, "the fake wrote an empty bundle: a hard-coded empty-file checksum would pass"
+    digest = hashlib.sha256(content).hexdigest()
     assert _read(bundle + ".sha256").split() == [digest, os.path.basename(bundle)], (
         "the .sha256 file does not name the bundle's own checksum in sha256sum's format")
     assert f"{os.path.basename(bundle)}: OK" in result.stdout, (
