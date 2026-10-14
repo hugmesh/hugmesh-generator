@@ -2456,7 +2456,10 @@ test:studio-suite:
     # (infra_services / desktop_user / desktop_user_role) reached the wire against an
     # `additionalProperties: false` schema and stayed there: this job skipped it, and
     # the GitHub job (which does install jsonschema) had the node deselected.
-    - pip install --quiet pytest PySide6 jsonschema
+    # cryptography is optional for the product but not for the gate: without it the
+    # certificate subject/expiry path (config.ca_cert_error and friends) degrades and
+    # the tests behind skipif(not HAVE_CRYPTOGRAPHY) skip silently.
+    - pip install --quiet pytest PySide6 jsonschema cryptography
   script:
     # KEEP, for whoever ever needs --deselect/--deselect-style node ids here: they are
     # ROOTDIR-relative. studio/pytest.ini makes rootdir studio/, so an id reads
@@ -3426,8 +3429,17 @@ orphan-guards-verify:
     # renders the baked ArgoCD Application against the GIT manifests and EXITS 2 rather
     # than reporting a pass when no kustomize is on PATH (the same reason the GitHub
     # `extras` job carries it). Same apk idiom as the two kustomize-render jobs above.
-    - apk add --no-cache bash jq openssl python3 py3-yaml coreutils grep sed gawk findutils diffutils git tar util-linux openssh-keygen make kubectl
-    - for t in bash jq openssl python3 git tar keytool ssh-keygen make kubectl; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t — this job's image cannot run its guards"; exit 1; }; done
+    # xz: tests/scripts/test-builder-resume-safety.sh builds two tiny stage3-shaped
+    # seed tarballs (.tar.xz, the real seed format) and restores static files from
+    # them with `tar xJf`; GNU tar shells out to xz for -J, so without it the suite
+    # would fail on its fixtures, not on the builder. Named in the preflight below.
+    # MEASURED, 2026-10-07, in eclipse-temurin:21-jdk-alpine with EXACTLY this apk
+    # line, as root (checkout copied in): tests/scripts/test-builder-resume-safety.sh
+    # 128 passed / 0 failed in 94 s (the one `unshare -Ur` leg SKIPs in a
+    # container; the suite re-runs itself against 28 mutated copies of the
+    # library) and tests/scripts/test-makefile-reown-skips-sysroot.sh 9 / 0.
+    - apk add --no-cache bash jq openssl python3 py3-yaml coreutils grep sed gawk findutils diffutils git tar xz util-linux openssh-keygen make kubectl
+    - for t in bash jq openssl python3 git tar xz keytool ssh-keygen make kubectl; do command -v "$t" >/dev/null || { echo "TOOLCHAIN MISSING:$t — this job's image cannot run its guards"; exit 1; }; done
   script:
     - |
       set -u
@@ -3453,6 +3465,7 @@ orphan-guards-verify:
         tests/scripts/test-arm-ro-distdir.sh
         tests/scripts/test-binpkg-pool-fingerprint.sh
         tests/scripts/test-builder-log-paths.sh
+        tests/scripts/test-builder-resume-safety.sh
         tests/scripts/test-calamares-boost-seed.sh
         tests/scripts/test-casdoor-jwt-no-preferred-username.sh
         tests/scripts/test-edge-ai-cuda-host-compiler.sh
@@ -3468,6 +3481,7 @@ orphan-guards-verify:
         tests/scripts/test-installer-ui-node-default.sh
         tests/scripts/test-intltool-preseed.sh
         tests/scripts/test-kernel-artifact-cache.sh
+        tests/scripts/test-makefile-reown-skips-sysroot.sh
         tests/scripts/test-optional-netpol-autosync.sh
         tests/scripts/test-passhash-lib.sh
         tests/scripts/test-platform-key-spelling.sh
