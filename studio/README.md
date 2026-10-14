@@ -205,6 +205,55 @@ do must be a documented command; repo-root `make` fronts: `scan-hardware`,
   build is never deleted (exit 1). The artifact tree goes only on an explicit
   `--delete-artifacts` (core checks the workdir's shape first).
 
+## Local mesh: work on it with a local AI agent (issue #695)
+
+On the **Bring-up** page of the local-mesh path (where both the Docker mesh and the
+kind DevOps lane end) the card **Work on this mesh with a local AI agent** starts a coding
+agent on a model that runs on this PC, in a copy of one app's repository. It does what
+[docs/LOCAL-AI-ASSISTANT.md](../docs/LOCAL-AI-ASSISTANT.md) tells a person to do by hand:
+
+- The card names, in plain words, the first thing that is missing: Ollama not installed,
+  the server not answering on `127.0.0.1:11434`, no pulled model with the **tools**
+  capability, the agent command (`claude`, `opencode`, `codex`) not installed, or the
+  chosen app's folder not being a git repository. **Start local agent chat** stays
+  disabled, with the reason as its tooltip, until nothing is missing. **Re-check** reads the
+  machine again (read-only: `GET /api/tags`, `POST /api/show`, never a generation);
+  **Copy command** is always available. Nothing starts without a press. No dialogs.
+- **Lane** follows the lane whose verb last ran on the page (Start DevOps lane sets it to
+  the kind cluster, Generate & start to the Docker mesh) and only changes what the brief
+  says about rebuilding a service; a lane you pick by hand stays until the next verb. The
+  **App** list follows the Repo source choice, in the stepped wizard and the single-page
+  frame alike.
+- A press makes `<state dir>/agent-work/<mesh>/<repo>` with `git clone --no-hardlinks`,
+  `git remote remove origin` and `git switch -c lm/<timestamp>` from the app's folder
+  (`./.stack-src/hugmesh-<name>`, or your own tree), writes the brief beside it, and opens a
+  terminal (xfce4-terminal, konsole, kitty, gnome-terminal, alacritty, foot, xterm) running
+  `ollama launch <agent> --model <model>` there. A copy is reused only when it has no
+  uncommitted work, no remote and was cloned from the folder's current commit; otherwise a
+  numbered one is made and nothing is deleted. Uncommitted edits in the real folder are not
+  in the copy, and the card says so.
+- The model is `hugmesh-agent` when pulled, else the first model the doc names that is
+  pulled with tools (`qwen3:8b` first), else the first with tools. Cloud models are never
+  offered.
+- The launch environment is an allowlist (`PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TERM`, the
+  display variables, `XDG_*`, `DBUS_SESSION_BUS_ADDRESS`, and `OLLAMA_HOST` only when it
+  points at this machine), applied inside the window with `env -i` under
+  `bash --noprofile --norc`, so `GH_TOKEN`, `GITHUB_TOKEN`, registry and cloud tokens,
+  `SSH_AUTH_SOCK` and `ARGOCD_*` never reach the agent. No auto-approve flag is ever passed
+  (`-y`, `--yes`, `--experimental-yolo`, ...). A keyring that answers on the desktop session
+  bus is still reachable, which is why the agent's commands are for you to read and approve.
+- When no terminal takes the request (no desktop, WSL2 without WSLg, nothing installed, every
+  terminal refused) the card shows the exact lines to run yourself. After a Start the copy
+  already exists, so those lines are only `cd <copy>` and the launch line; **Copy command**,
+  which can be pressed before any copy exists, also has the clone, remote-removal and branch
+  lines first. Every line is chained to the one before with `&&`, so a failed clone or a
+  missing copy stops the rest instead of running them in whatever folder your shell is in.
+  Native Windows and macOS do not open a window; run the Studio inside WSL2 or
+  follow the doc by hand.
+
+Code: `core/local_agent.py` (Qt-free) and `gui/pages/_local_agent_widget.py`; tests:
+`tests/test_local_agent.py`, `tests/test_local_agent_gui.py`.
+
 ## Memory guard (2026-07-15 host-freeze incident)
 
 A dockerized build runs under a **container memory cap** by default (`--memory` and

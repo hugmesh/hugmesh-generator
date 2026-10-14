@@ -87,7 +87,7 @@ The doc set for the image/infra layer. State key used throughout:
 
 - [`TEST-ARCHITECTURE.md`](TEST-ARCHITECTURE.md) — test layering.
 - [`FINAL-E2E-SWEEP-MATRIX.md`](FINAL-E2E-SWEEP-MATRIX.md) — end-to-end sweep matrix.
-- [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md) — 2026-08-05: the first real `KIND_PROFILE=sso` cluster run of the native-login e2e spec. The harness reached Casdoor and minted a session; 16 fresh-cluster blockers surfaced downstream (incl. no gateway can ever become Ready in k8s, and Casdoor's admin account still on its default password) — the current substance of the SSO kind-cluster e2e roadmap item.
+- [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md) — 2026-08-05: the first real `KIND_PROFILE=sso` cluster run of the native-login e2e spec, and the 16 fresh-cluster blockers it surfaced; re-measured 2026-10-14 (blockers 1-16 fixed on `main`, #693 open) — the current substance of the SSO kind-cluster e2e roadmap item.
 
 ## Specifications
 
