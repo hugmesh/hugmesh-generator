@@ -48,6 +48,7 @@ OWNED = (
     "studio/hugmesh_studio/core/local_mesh_domains.py",
     "studio/hugmesh_studio/gui/pages/golive.py",
     "studio/hugmesh_studio/gui/pages/domains.py",
+    "studio/hugmesh_studio/gui/pages/localmesh.py",
     "studio/hugmesh_studio/tui/domains_step.py",
     "studio/hugmesh_studio/tui/localmesh.py",
     "studio/hugmesh_studio/tui/golive.py",
