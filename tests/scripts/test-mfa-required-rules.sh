@@ -1091,6 +1091,110 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
                     doc_bad.append("%s: census returned %r, expected %r (privileged accounts only, "
                                    "TOTP-less first, a mid-enrol or WebAuthn-only operator must NOT "
                                    "read as covered)" % (name, got_c, want_c))
+            elif expect == "mfa-fleet-census":
+                # §9 phase C5b: the PURE fleet owners (fleet_admin and none of the three
+                # roles that short-circuit in the gateway), the one population that
+                # mfa.enabled alone gates. Same admin-bff fixture shape as the census above
+                # plus fleet_entitlement (changelog 306: subject PK, active, expires_at).
+                # Each row is a way an owner could be WRONGLY classified: a fleet owner who
+                # is ALSO admin / game-master / superadmin (short-circuits, not gated at
+                # step 6), the LIKE wildcard '_' (fleet-admin / fleetXadmin must not match
+                # fleet_admin), a SUBSTRING role (fleet_administrator), a spaced CSV, an
+                # entitlement that is inactive, expired, absent, or open-ended, a TOTP still
+                # mid-enrol, a WEBAUTHN-only owner, and a factor owned by someone else.
+                import sqlite3 as _sq
+                fe = _sq.connect(":memory:")
+                fe.executescript("""
+                    CREATE TABLE account (id TEXT PRIMARY KEY, roles TEXT NOT NULL DEFAULT 'user');
+                    CREATE TABLE mfa_factor (id TEXT PRIMARY KEY, owner_subject TEXT NOT NULL,
+                                             type TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT 0);
+                    CREATE TABLE fleet_entitlement (subject TEXT PRIMARY KEY,
+                                             active BOOLEAN NOT NULL DEFAULT 1, seats INT,
+                                             expires_at TIMESTAMP, updated_at TIMESTAMP);
+                    INSERT INTO account VALUES
+                      ('casdoor:f-bare',      'user,fleet_admin'),
+                      ('casdoor:f-totp',      'user,fleet_admin'),
+                      ('casdoor:f-webauthn',  'fleet_admin'),
+                      ('casdoor:f-midenrol',  'user, fleet_admin'),
+                      ('casdoor:f-inactive',  'user,fleet_admin'),
+                      ('casdoor:f-expired',   'user,fleet_admin'),
+                      ('casdoor:f-noent',     'user,fleet_admin'),
+                      ('casdoor:f-and-admin', 'user,fleet_admin,admin'),
+                      ('casdoor:f-and-gm',    'user,fleet_admin,game-master'),
+                      ('casdoor:f-and-super', 'fleet_admin,superadmin'),
+                      ('casdoor:dash',        'user,fleet-admin'),
+                      ('casdoor:wild',        'user,fleetXadmin'),
+                      ('casdoor:substr',      'user,fleet_administrator'),
+                      ('casdoor:plain',       'user,mod');
+                    INSERT INTO mfa_factor VALUES
+                      ('1','casdoor:f-totp',     'TOTP',     1),
+                      ('2','casdoor:f-webauthn', 'WEBAUTHN', 1),
+                      ('3','casdoor:f-midenrol', 'TOTP',     0),
+                      ('4','casdoor:f-bare',     'WEBAUTHN', 0),
+                      ('5','someone-else',       'TOTP',     1);
+                    INSERT INTO fleet_entitlement VALUES
+                      ('casdoor:f-bare',     1, 3,    NULL,                  '2026-01-01 00:00:00'),
+                      ('casdoor:f-totp',     1, NULL, '2999-01-01 00:00:00', '2026-01-01 00:00:00'),
+                      ('casdoor:f-webauthn', 1, NULL, '2999-01-01 00:00:00', '2026-01-01 00:00:00'),
+                      ('casdoor:f-midenrol', 1, NULL, NULL,                  '2026-01-01 00:00:00'),
+                      ('casdoor:f-inactive', 0, NULL, NULL,                  '2026-01-01 00:00:00'),
+                      ('casdoor:f-expired',  1, NULL, '2000-01-01 00:00:00', '2026-01-01 00:00:00'),
+                      ('casdoor:f-and-admin',1, NULL, NULL,                  '2026-01-01 00:00:00');
+                """)
+                got_f = [(r[0], bool(r[2]), bool(r[3]), bool(r[4])) for r in
+                         fe.execute(body.rstrip().rstrip(";")).fetchall()]
+                want_f = [
+                    # un-enrolled first (totp False), entitled before un-entitled, then id
+                    ("casdoor:f-bare",     False, False, True),
+                    ("casdoor:f-midenrol", False, False, True),
+                    ("casdoor:f-webauthn", False, True,  True),
+                    ("casdoor:f-expired",  False, False, False),
+                    ("casdoor:f-inactive", False, False, False),
+                    ("casdoor:f-noent",    False, False, False),
+                    ("casdoor:f-totp",     True,  False, True),
+                ]
+                if got_f != want_f:
+                    doc_bad.append("%s: fleet census returned %r, expected %r (pure fleet_admin only: "
+                                   "admin / game-master / superadmin co-holders, the '_' wildcard and a "
+                                   "substring role must NOT match; inactive and expired entitlements "
+                                   "must read entitled=false; a mid-enrol TOTP must not read as enrolled)"
+                                   % (name, got_f, want_f))
+            elif expect == "casdoor-token-census":
+                # §9 phase C4 / §2.4: the Casdoor `token` table, shaped as casbin/casdoor
+                # v3.80.0 (the tag the cluster pins) defines it. object/token_oauth.go
+                # GetClientCredentialsToken stores User = application.Name (a placeholder
+                # user, Type "application") and GrantType = "client_credentials"; rows
+                # from before the grant_type column existed carry only the placeholder
+                # user. The previous census keyed on an EMPTY user, which no
+                # client_credentials row has, so it could never report a machine token.
+                import sqlite3 as _sq
+                te = _sq.connect(":memory:")
+                te.executescript("""
+                    CREATE TABLE token (owner TEXT, name TEXT, created_time TEXT,
+                                        application TEXT, organization TEXT, "user" TEXT,
+                                        grant_type TEXT);
+                    INSERT INTO token VALUES
+                      ('admin','t1','2026-08-01T10:00:00Z','app-user-bff',     'hugmesh','alice',            'password'),
+                      ('admin','t2','2026-08-02T10:00:00Z','app-user-bff',     'hugmesh','bob',              ''),
+                      ('admin','t3','2026-08-03T10:00:00Z','app-user-bff',     'hugmesh','app-user-bff',     'client_credentials'),
+                      ('admin','t4','2026-08-04T10:00:00Z','app-user-bff',     'hugmesh','app-user-bff',     'client_credentials'),
+                      ('admin','t5','2026-08-05T10:00:00Z','app-fragment-sync','hugmesh','app-fragment-sync',''),
+                      ('admin','t6','2026-08-06T10:00:00Z','app-signup-gate',  'hugmesh','',                 'client_credentials'),
+                      ('admin','t7','2026-08-07T10:00:00Z','app-built-in',     'built-in','admin',           'authorization_code'),
+                      ('admin','t8','2026-08-08T10:00:00Z','app-built-in',     'built-in','admin',           'authorization_code');
+                """)
+                got_t = [tuple(r) for r in te.execute(body.rstrip().rstrip(";")).fetchall()]
+                want_t = [
+                    ("app-fragment-sync", "machine",    1, "2026-08-05T10:00:00Z"),  # user = app name, no grant_type (legacy row)
+                    ("app-signup-gate",   "machine",    1, "2026-08-06T10:00:00Z"),  # grant_type only, empty user
+                    ("app-user-bff",      "machine",    2, "2026-08-04T10:00:00Z"),  # both markers
+                    ("app-built-in",      "user-bound", 2, "2026-08-08T10:00:00Z"),
+                    ("app-user-bff",      "user-bound", 2, "2026-08-02T10:00:00Z"),  # same app also mints user tokens
+                ]
+                if got_t != want_t:
+                    doc_bad.append("%s: casdoor token census returned %r, expected %r (a client_credentials "
+                                   "token has user = its application name and grant_type = client_credentials; "
+                                   "an EMPTY user is not how a machine token looks)" % (name, got_t, want_t))
             elif expect == "per-domain-tightening":
                 # The runbook's per-domain tightening EXAMPLE, executed for real:
                 # its INSERT must land beside the unscoped canonical row, survive
@@ -2181,7 +2285,9 @@ posture_doc_gaps() { # <doc> -> "<where>:<suite basename>" for each declared sui
   s9="$(sed -n '/^## 9\. /,$p' "${doc}")"
   for f in ${POSTURE_SUITES}; do
     b="$(basename "${f}")"
-    printf '%s' "${s6}" | grep -F "${b}" >/dev/null || echo "step6/7:${b}"
+    # a TABLE ROW (the lockstep tables), not just the name somewhere in the range: prose
+    # that mentions a suite does not tell the flip commit what to move in it
+    printf '%s' "${s6}" | grep -E '^[[:space:]]*\|.*'"${b//./\\.}" >/dev/null || echo "step6/7:${b}"
     printf '%s' "${s9}" | grep -F "${b}" >/dev/null || echo "section9:${b}"
   done
 }
@@ -2197,6 +2303,57 @@ gaps="$(posture_doc_gaps "${DOC}")"
 [ -z "${gaps}" ] \
   && ok "runbook §3 steps 6-7 and §9 name every posture suite a cluster flip has to move" \
   || bad "the runbook does not name posture suite(s) a flip turns red: $(echo ${gaps})"
+
+
+# ── §9 structure the first review found wrong: the census blocks exist, the break-glass
+#    cannot commit before it is read, and nothing assumes the opt-in root Application ──
+case ",$(g DOC_SQL_NAMES)," in
+  *,fleet-census,*) ok "the runbook still carries the §9 'fleet-census' query (expect=mfa-fleet-census) — the pure fleet owners step 6 alone gates" ;;
+  *) bad "the runbook's 'fleet-census' query is GONE (names: $(g DOC_SQL_NAMES)) — §9 C5b, the only pre-flight for the population step 6 changes, has no command" ;;
+esac
+case ",$(g DOC_SQL_NAMES)," in
+  *,casdoor-machine-census,*) ok "the runbook still carries the 'casdoor-machine-census' query (expect=casdoor-token-census)" ;;
+  *) bad "the runbook's 'casdoor-machine-census' query is GONE (names: $(g DOC_SQL_NAMES)) — §2.4/C4 has no empirical machine-token check" ;;
+esac
+cat > "${W}/s9pins.py" <<'PY'
+import re, sys
+doc = open(sys.argv[1], encoding="utf-8").read()
+a = doc.find("\n## 9. ")
+if a < 0:
+    print("NO_SECTION_9"); sys.exit(0)
+s9 = doc[a:]
+bad = []
+fences = re.findall(r"```[a-z]*\n(.*?)```", s9, re.S)
+deletes = [f for f in fences if re.search(r"\bDELETE\s+FROM\b", f)]
+if not deletes:
+    bad.append("no fenced DELETE block in section 9 (the break-glass is gone)")
+for f in deletes:
+    if re.search(r"\bSELECT\b", f):
+        bad.append("a section 9 block both SELECTs and DELETEs in one input (a piped heredoc cannot be read before it commits)")
+    if re.search(r"\bCOMMIT\s*;", f):
+        bad.append("a section 9 DELETE block ships ending in COMMIT (the shipped form must be the ROLLBACK dry run)")
+    if not re.search(r"\bROLLBACK\s*;", f):
+        bad.append("a section 9 DELETE block has no ROLLBACK (the shipped form must be the dry run)")
+# the opt-in root: every command that patches hugmesh-root says so, the read is tolerant of its absence
+for ln in s9.split("\n"):
+    if re.search(r"(patch|get)\s+app(lication)?\s+hugmesh-root\b", ln) and "root only" not in ln and "--ignore-not-found" not in ln:
+        bad.append("section 9 command on hugmesh-root without 'root only' / --ignore-not-found: " + ln.strip()[:90])
+if "HUGMESH_GITOPS_ROOT_RECURSE" not in s9:
+    bad.append("section 9 never says the recursing root is opt-in (HUGMESH_GITOPS_ROOT_RECURSE)")
+if not re.search(r"get application hugmesh-root --ignore-not-found", s9):
+    bad.append("section 9 phase B does not detect whether hugmesh-root exists")
+print("\n".join(bad) if bad else "OK")
+PY
+s9_gaps() { python3 "${W}/s9pins.py" "$1"; }
+r9="$(s9_gaps "${DOC}")"
+[ "${r9}" = "OK" ] \
+  && ok "§9: the break-glass DELETE ships as a ROLLBACK dry run in its own block (no SELECT beside it), and every hugmesh-root command is marked root-only or tolerant of its absence" \
+  || bad "§9 structure: ${r9}"
+# the premise those pins rest on, read from the manifests rather than assumed
+grep -qi 'OPT-IN' "${REPO}/specs/cluster/app-of-apps.yaml" \
+  && grep -q 'HUGMESH_GITOPS_ROOT_RECURSE:-0' "${REPO}/specs/cluster/bootstrap/bootstrap.sh" \
+  && ok "premise of the root-only wording: app-of-apps.yaml is still the OPT-IN root and bootstrap.sh still applies it only under HUGMESH_GITOPS_ROOT_RECURSE=1" \
+  || bad "the recursing root is no longer opt-in (app-of-apps.yaml / bootstrap.sh changed): §3 step 7, §6 and §9 phases B, E-bypass and G say a default cluster has no hugmesh-root"
 
 # ── …and each of those proven to bite on a corrupted copy ────────────────────
 echo ""
@@ -2277,6 +2434,47 @@ PY
 MFA_RUNBOOK="${nc9}/doc-edited.md" bash "${HELPER}" floor 2>/dev/null | cmp -s - "${W}/docsql/floor.sql" \
   && bad "negative control: an EDITED runbook block still compared byte-identical to the gate's dump — the comparison is vacuous" \
   || ok "negative control: an edited runbook block no longer matches the gate's dump byte-for-byte"
+
+# (h) the suite named only in prose, not in the lockstep table row
+python3 - "${DOC}" "${nc9}/doc-prose.md" <<'PY'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+row = "   | `tests/stack/test-mfa-flip-wiring.sh` |"
+assert s.count(row) == 1
+open(sys.argv[2], "w", encoding="utf-8").write(s.replace(row, "   - `tests/stack/test-mfa-flip-wiring.sh` -", 1))
+PY
+g8="$(posture_doc_gaps "${nc9}/doc-prose.md")"
+case "${g8}" in *"step6/7:test-mfa-flip-wiring.sh"*) ok "negative control: a suite named in step 6 prose but no longer in the lockstep table row -> reported (${g8})" ;;
+  *) bad "negative control: moving a suite out of the lockstep table was NOT reported (got '${g8}') — the doc pin accepts a name anywhere" ;; esac
+# (i) the break-glass: SELECT folded back into the delete input, and the dry run turned into a commit
+python3 - "${DOC}" "${nc9}/doc-bg1.md" "${nc9}/doc-bg2.md" "${nc9}/doc-bg3.md" "${nc9}/doc-root1.md" "${nc9}/doc-root2.md" "${nc9}/doc-root3.md" <<'PY'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+def put(path, text):
+    open(path, "w", encoding="utf-8").write(text)
+a = "BEGIN;\nDELETE FROM mfa_recovery_code"
+assert s.count(a) == 1
+put(sys.argv[2], s.replace(a, "BEGIN;\nSELECT count(*) FROM mfa_factor;\nDELETE FROM mfa_recovery_code", 1))
+b = "DELETE FROM mfa_factor          WHERE owner_subject = '<owner_subject>';\nROLLBACK;"
+assert s.count(b) == 1
+put(sys.argv[3], s.replace(b, b.replace("ROLLBACK;", "COMMIT;"), 1))
+put(sys.argv[4], s.replace(b, b.replace("\nROLLBACK;", ""), 1))
+r = "patch app hugmesh-root          --type merge -p '{\"spec\":{\"syncPolicy\":{\"automated\":null}}}'   # root only (phase B printed specs/cluster/apps)\n$ $KC -n devops patch app hugmesh-gateway-fe"
+assert s.count(r) == 2
+put(sys.argv[5], s.replace(r, r.replace("   # root only (phase B printed specs/cluster/apps)", ""), 1))
+r2 = "get application hugmesh-root --ignore-not-found"
+assert s.count(r2) == 1
+put(sys.argv[6], s.replace(r2, "get app hugmesh-root hugmesh-gateway-fe", 1))
+i = s.index("\n## 9. ")
+put(sys.argv[7], s[:i] + s[i:].replace("HUGMESH_GITOPS_ROOT_RECURSE", "THE_ROOT_FLAG"))
+PY
+for pair in "bg1:SELECTs and DELETEs in one input" "bg2:ending in COMMIT" "bg3:has no ROLLBACK" "root1:without 'root only'" "root2:does not detect whether hugmesh-root exists" "root3:never says the recursing root is opt-in"; do
+  k="${pair%%:*}"; want="${pair#*:}"
+  f="${nc9}/doc-${k}.md"; [ -f "${f}" ] || f="${nc9}/doc-$(echo "${k}" | sed 's/bg/bg/').md"
+  out="$(s9_gaps "${f}")"
+  case "${out}" in *"${want}"*) ok "negative control (§9 ${k}): reported (${want})" ;;
+    *) bad "negative control (§9 ${k}): NOT reported (got '${out}')" ;; esac
+done
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3) negative controls — each check must BITE on a corrupted copy
@@ -2663,20 +2861,73 @@ s = s.replace(a, "    WHERE (url_pattern LIKE %s\n        OR url_pattern LIKE %s
 # mid-enrol (enabled = false) must not read as an enrolled factor.
 nd "the census stops requiring the factor to be ENABLED (a mid-enrol TOTP reads as a working second factor)" DOC_SQL_BAD 0 \
    'a = "AND f.enabled AND f.type = %s)     AS totp," % repr("TOTP")
-anchor(a)
+anchor(a, 2)   # the census, then the fleet census; replace(..., 1) mutates the first
 s = s.replace(a, "AND f.type = %s)     AS totp," % repr("TOTP"), 1)'
 nd "the census matches the role by SUBSTRING (administrator / superadministrator read as privileged)" DOC_SQL_BAD 0 \
    'a = repr("%,admin,%")
-anchor(a)
+anchor(a, 2)
 s = s.replace(a, repr("%admin%"), 1)'
 nd "the census counts a WEBAUTHN factor as TOTP (the WebAuthn-only recovery-code lockout of section 2.2 reads as covered)" DOC_SQL_BAD 0 \
    'a = "AND f.enabled AND f.type = %s)     AS totp," % repr("TOTP")
-anchor(a)
+anchor(a, 2)
 s = s.replace(a, "AND f.enabled AND f.type IN (%s, %s))     AS totp," % (repr("TOTP"), repr("WEBAUTHN")), 1)'
 nd "the census drops game-master from the privileged set (the floor's third role)" DOC_SQL_BAD 0 \
    'a = "\n    OR %s || replace(a.roles, %s, %s) || %s LIKE %s" % (repr(","), repr(" "), repr(""), repr(","), repr("%,game-master,%"))
 anchor(a)
 s = s.replace(a, "", 1)'
+
+# ── the FLEET census (C5b) and the Casdoor machine-token census (C4), proven to bite ──
+# These two blocks are the ones the first review found missing or vacuous, so every
+# clause of each is broken in turn. The fleet block is the LAST of the census-shaped
+# blocks in the runbook, so its mutators edit the LAST hit of an anchor.
+LAST_HELPER='def _last(a, b, n=None):
+    global s
+    if n is not None:
+        anchor(a, n)
+    i = s.rindex(a)
+    s = s[:i] + b + s[i+len(a):]
+'
+ndl() { nd "$1" "$2" "$3" "${LAST_HELPER}
+$4"; }
+ndl "the fleet census stops requiring the TOTP factor to be ENABLED (a mid-enrol TOTP reads as enrolled)" DOC_SQL_BAD 0 \
+   'a = "AND f.enabled AND f.type = \x27TOTP\x27)     AS totp,"
+_last(a, "AND f.type = \x27TOTP\x27)     AS totp,", 2)'
+ndl "the fleet census counts an INACTIVE entitlement as entitled" DOC_SQL_BAD 0 \
+   'a = "WHERE e.subject = a.id AND e.active\n"
+_last(a, "WHERE e.subject = a.id\n", 1)'
+ndl "the fleet census ignores entitlement EXPIRY" DOC_SQL_BAD 0 \
+   'a = "\n                  AND (e.expires_at IS NULL OR e.expires_at > CURRENT_TIMESTAMP))"
+_last(a, ")", 1)'
+ndl "the fleet census stops excluding admin / game-master / superadmin co-holders (they short-circuit, so step 6 does not gate them)" DOC_SQL_BAD 0 \
+   'a = "   AND NOT (    "
+i = s.rindex(a)
+k = s.index("\n ORDER BY 3, 5 DESC, 1;", i)
+s = s[:i] + s[k:]'
+ndl "the fleet census loses its LIKE escape, so the _ in fleet_admin becomes a wildcard (fleet-admin / fleetXadmin match)" DOC_SQL_BAD 0 \
+   'a = "LIKE \x27%,fleet\\_admin,%\x27 ESCAPE \x27\\\x27"
+_last(a, "LIKE \x27%,fleet_admin,%\x27", 1)'
+ndl "the fleet census matches fleet_admin by SUBSTRING (fleet_administrator reads as a fleet owner)" DOC_SQL_BAD 0 \
+   'a = "LIKE \x27%,fleet\\_admin,%\x27"
+_last(a, "LIKE \x27%fleet\\_admin%\x27", 1)'
+ndl "the fleet census loses its ordering (un-enrolled and entitled owners no longer sort first)" DOC_SQL_BAD 0 \
+   'a = " ORDER BY 3, 5 DESC, 1;"
+_last(a, " ORDER BY 1;", 1)'
+nd "the Casdoor census goes back to keying a machine token on an EMPTY user (the vacuous form it shipped with)" DOC_SQL_BAD 0 \
+   'a = "CASE WHEN grant_type = \x27client_credentials\x27 OR \"user\" = application\n            THEN \x27machine\x27"
+anchor(a)
+s = s.replace(a, "CASE WHEN COALESCE(\"user\", \x27\x27) = \x27\x27\n            THEN \x27machine\x27", 1)'
+nd "the Casdoor census stops reading the grant_type column (a client_credentials token with an empty user is missed)" DOC_SQL_BAD 0 \
+   'a = "grant_type = \x27client_credentials\x27 OR "
+anchor(a)
+s = s.replace(a, "", 1)'
+nd "the Casdoor census stops reading the user = application placeholder (a row from before grant_type existed is missed)" DOC_SQL_BAD 0 \
+   'a = " OR \"user\" = application"
+anchor(a)
+s = s.replace(a, "", 1)'
+nd "the Casdoor census stops grouping by kind (a service that mints BOTH user and machine tokens collapses to one row)" DOC_SQL_BAD 0 \
+   'a = "GROUP BY 1, 2\n ORDER BY 2, 1;"
+anchor(a)
+s = s.replace(a, "GROUP BY 1\n ORDER BY 1;", 1)'
 
 # ── the FLOOR query and the deny-floor table (hugmesh-generator#485) ────────────
 # §5 now carries a second marked query, scoped to the FLOOR rather than to the flip,

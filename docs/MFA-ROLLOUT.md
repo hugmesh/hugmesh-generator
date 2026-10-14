@@ -504,9 +504,10 @@ floor off, narrow the rows (§2.3 (b)), or move that caller to a service account
 opaque session. Raising `APP_MFA_FRESHNESS_WINDOW` does not help it at all — the claim is
 absent, not stale.
 
-**That enumeration has been done once — 2026-08-06, and it came back CLEAN.** Recorded here
-so the operator inherits the answer rather than the chore, with the commands to re-run it,
-because it is a point-in-time result and a new service could invalidate it.
+**That enumeration has been done once — 2026-08-06. The STATIC half came back CLEAN and
+stands; the empirical half was withdrawn (see below).** Recorded here so the operator
+inherits the answer rather than the chore, with the commands to re-run it, because it is a
+point-in-time result and a new service could invalidate it.
 
 *Static, across all 38 repos.* Seven code sites use the `client_credentials` grant
 (admin-bff `FederationOverrideClearClient` / `FederationResolvedFindingsClient` /
@@ -525,22 +526,58 @@ token, and it also dials admin-bff directly. Both reasons independently put it o
 floor. The only other two hits (`auth-core GatewayRevocationClient`, forum-bff
 `PhpbbAdminClient`) are javadoc prose, not calls.
 
-*Empirical, against the live kind cluster.* Casdoor has issued **80 tokens, 100 % of them
-user-bound, zero machine tokens** — `app-built-in` 48 (`profile`) and `app-user-bff` 32
-(`openid profile email`).
+*Empirical: WITHDRAWN as evidence (corrected 2026-10-14).* An earlier revision of this
+section recorded that, on the live kind cluster, Casdoor "has issued **80 tokens, 100 % of
+them user-bound, zero machine tokens**" (`app-built-in` 48, `app-user-bff` 32). That count
+came from a query that classified a token as a machine token when its `user` column was
+empty. A `client_credentials` token never has an empty `user`: at the cluster's pinned tag
+(`casbin/casdoor:3.80.0`, `specs/cluster/manifests/casdoor/deployment.yaml`)
+`object/token_oauth.go` `GetClientCredentialsToken` builds a placeholder user named after
+the **application** (`nullUser := &User{..., Name: application.Name, Type: "application"}`)
+and stores `User: nullUser.Name` together with `GrantType: "client_credentials"`. So the
+query could not match a machine token and its "zero" was guaranteed, whatever was in the
+table. `app-user-bff` is seeded with both `password` and `client_credentials`
+(`init-job.yaml` `reconcile_app`), so some of those 32 may have been machine tokens. Do not
+quote the 80 / 0 figure. The **static** half above is unaffected and stands on its own.
 
-```console
-# static: any machine caller of the two gated prefixes?
-$ git grep -nE '"/bff/(admin|superadmin)' -- src/main/java     # per repo; exclude @*Mapping
-# empirical: has any machine (user-less) token ever been issued?
-$ kubectl exec -n hugmesh-pki <casdoor-pg-pod> -- psql -U casdoor -d casdoor -tAc \
-    "SELECT application, CASE WHEN COALESCE(\"user\",'')='' THEN 'machine' ELSE 'user-bound' END,
-            count(*) FROM token GROUP BY 1,2;"
+The empirical half is now the block below (executed by the gate against a fixture that
+mirrors the 3.80.0 table shape, including both ways a machine token can look: the
+`grant_type` column, and the `user = application` placeholder that rows from before the
+column existed still carry):
+
+<!-- gate:doc-sql name=casdoor-machine-census expect=casdoor-token-census -->
+
+```sql
+SELECT application,
+       CASE WHEN grant_type = 'client_credentials' OR "user" = application
+            THEN 'machine' ELSE 'user-bound' END AS kind,
+       count(*) AS tokens,
+       max(created_time) AS newest
+  FROM token
+ GROUP BY 1, 2
+ ORDER BY 2, 1;
 ```
 
-**So step 6 is clear on this precondition today.** Re-run both checks if a new service is
-added, if an existing one starts calling those prefixes, or if any caller is moved behind a
-gateway instead of cluster-DNS.
+```console
+$ scripts/mfa-runbook-sql.sh casdoor-machine-census | \
+    kubectl -n hugmesh-pki exec -i deploy/casdoor-pg -- \
+    sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -U "$POSTGRES_USER" -d casdoor'
+```
+
+Reading it: `machine` rows are **expected**. `client_credentials` is seeded on every
+confidential app and seven code sites use it (above), so a live cluster will show machine
+rows for the Casdoor applications behind those sites (`app-user-bff`, `app-admin-bff`,
+`app-fragment-sync`, plus whichever applications mesh-bff and actions are configured with;
+read those from their config, they are not assumed here). The stop is a machine row for an
+application that is **not** one of them: that is a caller the static census did not know
+about. The table records the application, not the URL, so this block can **never** say
+that a machine token reached `/bff/admin…` or `/bff/superadmin…`; that question is
+answered by the static half and, after step 6, by `X-Route-Denied` in the gateway logs.
+
+**So step 6 is clear on this precondition only to the extent the static half is.** The
+empirical half has not been run against a live cluster since this correction; re-run both
+if a new service is added, if an existing one starts calling those prefixes, or if any
+caller is moved behind a gateway instead of cluster-DNS.
 
 **One knob that moves a `bff_` carrier onto the JWT path.**
 `hugmesh.gateway.bff-exchange.enabled` (default **false**, set in no manifest) makes
@@ -728,7 +765,11 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
    on purpose. Set the shared chart's `mfa.enabled` value: all four
    gateway Applications point at the one chart, so a chart-level default reaches all
    four; keep it out of the per-app manifests (the gate enforces that). Watch for
-   403s from non-privileged holders of `ROLE_FLEET_ADMIN`.
+   403s from non-privileged holders of `ROLE_FLEET_ADMIN`, and **list them before the
+   flip**: they are the one population this step alone changes (§3.1), and §9's
+   `C5` privileged-operator census does not include them. §9 `C5b` (runbook block
+   `fleet-census`) lists every pure fleet owner with their TOTP state and whether their
+   phone-fleet entitlement is active.
    ⚠ **This is the step that permanently denies machine `client_credentials` traffic.**
    A client-credentials token has no user subject, and `mfa_satisfied_at` is a Casdoor
    *user* Property — so there is nothing to stamp and no second factor to enrol.
@@ -743,10 +784,14 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
    (`tests/scripts/test-mfa-required-rules.sh`, `tests/scripts/test-mfa-raw-jwt-posture.sh`,
    `tests/stack/test-gateway-mfa-env.sh`, `tests/stack/test-mfa-flip-wiring.sh`):
    (A wider sweep of all 21 `tests/**/test-*.sh` files that mention `mfa`, base versus
-   step 6, found no other suite changing result; two of the 21,
-   `test-cluster-manifest-integrity.sh` and `test-tor-flip-wiring.sh`, hit the
-   300 s timeout in both runs there and are therefore unmeasured. The step 7 sweep
-   covered only the four suites below.)
+   step 6, found no other suite changing result. Two of the 21,
+   `test-cluster-manifest-integrity.sh` and `test-tor-flip-wiring.sh`, hit that
+   sweep's 300 s timeout and were re-measured separately with a 900 s one, on the
+   merged tree, under **each** flip on its own (`mfa.enabled: true`, then
+   `mfa.enforcePrivilegedFloor: true`): both stayed green (manifest integrity
+   PASS with 59/59 negative controls; tor flip wiring 74/0). The step 7 sweep
+   otherwise covered only the four suites below, so "no other suite goes red at
+   step 7" is established for those two and for the four, not for the other 15.)
 
    | suite | result | what goes red | what the flip commit has to do |
    |---|---|---|---|
@@ -786,11 +831,17 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
      all four at once;
    * a per-Application override in `specs/cluster/apps/*.yaml` is exactly what the
      posture gate fails the build on (§1.3), in every spelling;
-   * both the root Application (`specs/cluster/app-of-apps.yaml`: `recurse: true`,
-     `automated: {prune: true, selfHeal: true}`) **and** each gateway Application
-     (`syncPolicy.automated: {prune: true, selfHeal: true}`) revert a hand-patch of the
-     Application or of the Deployment env, so `kubectl set env` and `kubectl patch app`
-     last until the next reconcile.
+   * each gateway Application (`syncPolicy.automated: {prune: true, selfHeal: true}`)
+     reverts a hand-patch of the Deployment env, so `kubectl set env` lasts until the
+     next reconcile. A repo-recursing root Application `hugmesh-root`
+     (`specs/cluster/app-of-apps.yaml`, `automated: {prune: true, selfHeal: true}`)
+     would also revert a patch of the gateway *Application*, **but that root is opt-in
+     and absent from a default cluster**: `bootstrap.sh` applies the baked Application
+     set directly, creates `hugmesh-root` only under `HUGMESH_GITOPS_ROOT_RECURSE=1`,
+     and **deletes** a pre-existing one (`specs/cluster/bootstrap/bootstrap.sh`, "Retire a
+     recursing root"). §9 phase B reads which case you are in; §9's bypass and rollback
+     commands branch on it. (`hugmesh-root-waved`, `00-app-of-apps-waved.yaml`, is
+     non-automated and pruned from the baked tree; it never reverts anything.)
    The honest options are: **(a)** flip all four from one reviewed commit and rely on
    the canary session plus §6's rollback (the default, and what §9 phase E gives
    commands for); **(b)** a deliberate, temporary GitOps bypass for a single gateway
@@ -958,9 +1009,10 @@ data.
    again without a factor. This is the first thing to try; it needs no DB access.
    ⚠ **On a cluster that auto-syncs, "set it" means one of two things, and only the
    first is durable.** (i) Revert the flip commit (set `mfa.enforcePrivilegedFloor`
-   back to `false` in the shared chart) and let ArgoCD sync — the root Application and
-   every gateway Application run `automated: {prune: true, selfHeal: true}`, so a
-   `kubectl set env` or `kubectl patch` is **reverted by the next reconcile**.
+   back to `false` in the shared chart) and let ArgoCD sync — every gateway Application
+   runs `automated: {prune: true, selfHeal: true}` (and so does the opt-in
+   `hugmesh-root`, where the cluster has one: §3 step 7), so a `kubectl set env` or
+   `kubectl patch` is **reverted by the next reconcile**.
    (ii) For minutes-matter relief, suspend auto-sync first, then change the env —
    exact commands are §9 phase G, and they leave drift you must reconcile afterwards.
 2. **Full disable:** set `APP_MFA_ENABLED=false` as well. `decide()` then ignores
@@ -1184,15 +1236,25 @@ APP_MFA_FRESHNESS_WINDOW=600000
 
 Expect `false` / `false` / `600000` four times. Anything else means somebody already
 flipped something outside git — resolve that **before** going on. Also confirm what
-ArgoCD thinks is deployed:
+ArgoCD thinks is deployed, and **whether this cluster has a repo-recursing root at all**
+(phases E-bypass and G branch on it):
 
 ```console
-$ $KC -n devops get app hugmesh-root hugmesh-gateway-pki hugmesh-gateway-be \
+$ $KC -n devops get application hugmesh-root --ignore-not-found \
+      -o jsonpath='{.spec.source.path}{"\n"}'
+$ $KC -n devops get app hugmesh-gateway-pki hugmesh-gateway-be \
       hugmesh-gateway-fe hugmesh-gateway-superadmin \
       -o custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,REV:.status.sync.revision
 ```
 
-Expect `Synced` / `Healthy`, and `REV` equal to the commit you reviewed in phase A.
+The first command prints `specs/cluster/apps` if a recursing root exists (this is the
+same test `bootstrap.sh` uses before it retires one) and **nothing** if not. Nothing is
+the default: the root is opt-in (`HUGMESH_GITOPS_ROOT_RECURSE=1`, `specs/cluster/app-of-apps.yaml`)
+and `bootstrap.sh` removes a leftover one, so on a default cluster there is no
+`hugmesh-root` and every command below that names it is **skipped** (marked *root only*).
+Note which case you are in; if the root exists add it to the second command and expect it
+`Synced` / `Healthy` too. On the four gateway Applications expect `Synced` / `Healthy`,
+and `REV` equal to the commit you reviewed in phase A.
 
 ### Phase C — the preconditions that lock you out if skipped (reads only)
 
@@ -1217,12 +1279,13 @@ $ for v in APP_MFA_WEBAUTHN_RP_ID APP_MFA_WEBAUTHN_ORIGINS APP_CASDOOR_MFA_ENABL
     $KC -n hugmesh-backend get deploy hugmesh-admin-bff-api \
       -o jsonpath="{.spec.template.spec.containers[*].env[?(@.name==\"$v\")].value}"; echo
   done
-$ $KC -n hugmesh-backend logs deploy/hugmesh-admin-bff-api --since=24h | grep -c 'MFA MISCONFIGURED'
+$ $KC -n hugmesh-backend logs deploy/hugmesh-admin-bff-api --since=24h | grep -c 'MFA MISCONFIGURED' || true
 ```
 
 Expect your own domain on the first two (not `admin.hugmesh.net` unless that *is* your
 domain, and never `localhost`), `true` on the third, and `0` from the grep (the boot
-guard's banner, §4.3 — absence is only meaningful if that image carries the guard).
+guard's banner, §4.3 — absence is only meaningful if that image carries the guard; the
+trailing `|| true` is there because `grep -c` exits 1 when the count is 0).
 
 **C3. The seeded rules are what §1.2 says** — 10 flipped, 11 carrying the floor. Run
 the two runbook blocks, unmodified, against the route-access database
@@ -1244,24 +1307,30 @@ upgraded in place and these come back short, re-apply `20-schema.sql` (§3 step 
 do **not** hand-edit rows (§5).
 
 **C4. The machine-caller census (§2.4) — re-run it, it is a point-in-time answer.**
-The §2.4 result is from 2026-08-06; the static half is a `git grep` per repo and the
-empirical half is:
+The static half (a `git grep` per repo, in §2.4) is the part that answers "does a machine
+caller reach `/bff/admin…` or `/bff/superadmin…`". The empirical half is the runbook block
+`casdoor-machine-census`, which lists which Casdoor applications have minted
+`client_credentials` tokens (a machine token carries `grant_type = 'client_credentials'`
+and a placeholder `user` equal to its application name, **not** an empty user; §2.4
+cites the pinned Casdoor source):
 
 ```console
-$ $KC -n hugmesh-pki exec -i deploy/casdoor-pg -- sh -c \
-    'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -U "$POSTGRES_USER" -d casdoor -tA' <<'SQL'
-SELECT application,
-       CASE WHEN COALESCE("user", '') = '' THEN 'machine' ELSE 'user-bound' END,
-       count(*)
-  FROM token GROUP BY 1, 2;
-SQL
+$ scripts/mfa-runbook-sql.sh casdoor-machine-census | \
+    $KC -n hugmesh-pki exec -i deploy/casdoor-pg -- \
+    sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -U "$POSTGRES_USER" -d casdoor'
 ```
 
-Expect **no `machine` rows**. Any `machine` row on `/bff/admin…` or `/bff/superadmin…`
-traffic is a §2.4 stop: it is denied permanently the moment step 6 lands. (The table
-and column names are Casdoor's, not this repo's, and were not re-checked here; the
-casdoor Deployment is `casdoor-pg` in `hugmesh-pki` per
-`specs/cluster/manifests/casdoor/pg.yaml`.)
+Do **not** expect zero `machine` rows: `client_credentials` is seeded on every
+confidential app and the seven call sites in §2.4 use it, so machine rows for those
+applications are normal. Compare the `application` column with that list. A machine row
+for an application that is **not** on it is a §2.4 stop (a caller the census did not
+know about); resolve it before step 6, because a machine token is denied permanently on
+`mfa_required` routes the moment step 6 lands. The block cannot tell you which URL a token
+reached, so a clean result here is not evidence that nothing machine-driven calls the
+gated prefixes; only §2.4's static census and the gateway logs say that. (The Casdoor
+Deployment is `casdoor-pg` in `hugmesh-pki`, database `casdoor`, user from the pod's
+`POSTGRES_USER`, per `specs/cluster/manifests/casdoor/pg.yaml`; the `token` columns used
+are those of `casbin/casdoor:3.80.0`, which the cluster pins.)
 
 **C5. Every privileged operator has an ENABLED TOTP factor** — the census the runbook
 had no command for. The query below lists **every** account whose cached roles include
@@ -1322,8 +1391,56 @@ ready. The census is only as complete as what it can see, and three blind spots 
 * An `idp: own` domain's principals cannot enrol at all (§1.2a); enumerate those
   domains separately.
 
-**C6. Each operator PROVES a fresh stamp — a human step, no command can do it for
-them.** For every row from C5: sign in at the real console, open the login-ui security
+**C5b. The pure fleet owners — the one population step 6 (`mfa.enabled` alone) changes.**
+C5 lists `superadmin`, `admin` and `game-master`, and those three short-circuit in the
+gateway before the `mfa_required` decision (§3.1), so until step 7 they are not gated at
+all. The population that **is** gated at step 6 is an account with `fleet_admin` and none
+of those three: it reaches `/bff/admin/phone-fleet/**` today and, once step 6 lands,
+gets `403` + `X-Route-Denied` until it holds a fresh stamp. These are customer-facing
+accounts (phone-fleet owners), not operators. The `account.roles` token is lowercase
+`fleet_admin` (the gateway authority `ROLE_FLEET_ADMIN`, upper-cased by auth-core's
+`BffCookieAuthenticationWebFilter`). `entitled` is the same test the admin-bff entitlement
+wall applies (an `active` `fleet_entitlement` row, not expired; changelog
+`306-fleet-entitlement.xml`), keyed on `account.id` as the opaque-session carrier does.
+
+<!-- gate:doc-sql name=fleet-census expect=mfa-fleet-census -->
+
+```sql
+SELECT a.id,
+       a.roles,
+       EXISTS (SELECT 1 FROM mfa_factor f
+                WHERE f.owner_subject = a.id AND f.enabled AND f.type = 'TOTP')     AS totp,
+       EXISTS (SELECT 1 FROM mfa_factor f
+                WHERE f.owner_subject = a.id AND f.enabled AND f.type = 'WEBAUTHN') AS webauthn,
+       EXISTS (SELECT 1 FROM fleet_entitlement e
+                WHERE e.subject = a.id AND e.active
+                  AND (e.expires_at IS NULL OR e.expires_at > CURRENT_TIMESTAMP))   AS entitled
+  FROM account a
+ WHERE ',' || replace(a.roles, ' ', '') || ',' LIKE '%,fleet\_admin,%' ESCAPE '\'
+   AND NOT (    ',' || replace(a.roles, ' ', '') || ',' LIKE '%,superadmin,%'
+             OR ',' || replace(a.roles, ' ', '') || ',' LIKE '%,admin,%'
+             OR ',' || replace(a.roles, ' ', '') || ',' LIKE '%,game-master,%')
+ ORDER BY 3, 5 DESC, 1;
+```
+
+```console
+$ scripts/mfa-runbook-sql.sh fleet-census | $KC -n hugmesh-backend exec -i deploy/admin-bff-db -- \
+    sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -U adminbff -d adminbff'
+```
+
+Rows are sorted un-enrolled first, then entitled first. **A row with `totp = f` and
+`entitled = t` is someone who loses the phone console at step 6** until they enrol and
+step up. That is a decision, not a stop: either have them enrol first (they can; `/bff/mfa/**`
+has no route row, §2.1) or announce the loss. A row with `entitled = f` already gets
+`403 fleet entitlement required` and is unaffected by step 6. Unlike C6 this is not a
+person-by-person proof; nobody can make a customer enrol, and the census only tells you
+whom to tell. It sees only accounts with a cached `account` row (the C5 first bullet),
+carriers keyed on the Casdoor `sub` rather than `account.id` (the C5 second bullet; also
+why `entitled` can read `f` for an owner whose entitlement is keyed on a `sub`), and not
+the principals of an `idp: own` domain (§1.2a), who cannot enrol at all.
+
+**C6. Each privileged operator PROVES a fresh stamp — a human step, no command can do it
+for them.** For every row from C5: sign in at the real console, open the login-ui security
 page, complete the TOTP challenge (`POST /bff/mfa/challenge`, body
 `{"factor":"totp","credential":"<code>"}`, driven by the page), then reach an
 `/bff/admin…` page **within 10 minutes**. Afterwards you can read the stamp back
@@ -1370,8 +1487,9 @@ $ for gw in hugmesh-pki-gateway:hugmesh-pki hugmesh-be-gateway:hugmesh-backend \
 ```
 
 What you should and should **not** see (§3.1): a pure `ROLE_FLEET_ADMIN` without a
-stamp now gets `403` with `X-Route-Denied` on `/bff/admin/phone-fleet/**`; admins and
-superadmins are unchanged. **A quiet cluster is not evidence that admin MFA works.**
+stamp now gets `403` with `X-Route-Denied` on `/bff/admin/phone-fleet/**` (the C5b rows
+with `totp = f`, `entitled = t`; re-run `fleet-census` and compare with who actually
+complains); admins and superadmins are unchanged. **A quiet cluster is not evidence that admin MFA works.**
 Soak here as long as you like; this state is the recommended resting point.
 
 **E2. Step 7 (`mfa.enforcePrivilegedFloor`) — option (a).** Rehearse on compose first
@@ -1391,22 +1509,26 @@ git.** Auto-sync must be suspended or it reverts you within a reconcile (§3 ste
 This is a **drift you create on purpose and must undo**:
 
 ```console
-$ $KC -n devops patch app hugmesh-root          --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'
+$ $KC -n devops patch app hugmesh-root          --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'   # root only (phase B printed specs/cluster/apps)
 $ $KC -n devops patch app hugmesh-gateway-fe    --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'
 $ $KC -n hugmesh-frontend set env deploy/hugmesh-fe-gateway -c gateway APP_MFA_ENFORCE_PRIVILEGED_FLOOR=true
 $ $KC -n hugmesh-frontend rollout status deploy/hugmesh-fe-gateway --timeout=300s
 ```
 
-Undo it by re-enabling auto-sync on the root (`{"spec":{"syncPolicy":{"automated":
-{"prune":true,"selfHeal":true}}}}`), which re-applies the Application specs from git,
-then confirming phase B shows the value git says. **Until you do, every other
-reconcile-driven fix on those four gateways is frozen.** Not run against a live
-cluster; ArgoCD behaviour here is read from the manifests only.
+Skip the first line on a cluster without the root (the default, phase B). Undo it by
+re-enabling auto-sync with
+`{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}`: on the root
+(*root only*), which re-applies the Application specs from git, **and on
+`hugmesh-gateway-fe` itself** (on a cluster without a root nothing else re-applies its
+spec, so this patch is the whole undo), then confirming phase B shows the value git says.
+**Until you do, reconcile-driven fixes are frozen** on `hugmesh-fe-gateway` (and, with a
+root, on every Application). Not run against a live cluster; ArgoCD behaviour here is
+read from the manifests only.
 
 ### Phase F — after each flip
 
 Re-run phase B, the C3 `floor` block (still `(11 rows)` — a flip must not move data),
-and the C5/C6 queries. Watch the four gateways' logs for a burst of `403` /
+and the C5/C5b/C6 queries. Watch the four gateways' logs for a burst of `403` /
 `X-Route-Denied` from principals you did not expect; each is either an operator who
 missed C6 or a caller the §2.4 census did not know about.
 
@@ -1417,30 +1539,52 @@ revert** of the flip commit (its pins revert with it). The fast path, when minut
 matter, is to suspend auto-sync and change the env, then reconcile afterwards:
 
 ```console
-$ $KC -n devops patch app hugmesh-root          --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'
+$ $KC -n devops patch app hugmesh-root          --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'   # root only (phase B printed specs/cluster/apps)
 $ $KC -n devops patch app hugmesh-gateway-fe    --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'
 $ $KC -n hugmesh-frontend set env deploy/hugmesh-fe-gateway -c gateway APP_MFA_ENFORCE_PRIVILEGED_FLOOR=false
 $ $KC -n hugmesh-frontend rollout status deploy/hugmesh-fe-gateway --timeout=300s
 ```
 
-(Repeat the last two lines for each affected gateway from the table above; for a full
-disable add `APP_MFA_ENABLED=false`.) **Break-glass for one operator with no usable
-factor** — look first, delete second, inside one transaction you read before you
-commit. `<owner_subject>` is the value from the C5 `id` column:
+(Skip the first line on a cluster without the root, the default. Repeat the second, third
+and fourth lines for each affected gateway from the table above; for a full disable add
+`APP_MFA_ENABLED=false`. Afterwards re-enable auto-sync as in E-bypass, on each patched
+Application and, *root only*, on the root.) **Break-glass for one operator with no usable
+factor**, in two separate commands, because a single piped heredoc cannot be read before
+it commits (psql would run the SELECT, the DELETEs and the COMMIT in one go).
+`<owner_subject>` is the value from the C5 `id` column, **or** the unmatched
+`owner_subject` from the second list under C5 when the operator enrolled on a raw-JWT
+carrier (it is a bare UUID there, not `casdoor:<handle>`).
+
+**G1. Look (read-only; nothing to commit):**
 
 ```console
 $ $KC -n hugmesh-backend exec -i deploy/admin-bff-db -- \
-    sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -U adminbff -d adminbff' <<'SQL'
-BEGIN;
+    sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -v ON_ERROR_STOP=1 -U adminbff -d adminbff' <<'SQL'
 SELECT 'mfa_factor', count(*) FROM mfa_factor WHERE owner_subject = '<owner_subject>'
 UNION ALL SELECT 'mfa_recovery_code', count(*) FROM mfa_recovery_code WHERE owner_subject = '<owner_subject>'
 UNION ALL SELECT 'webauthn_credential', count(*) FROM webauthn_credential WHERE owner_subject = '<owner_subject>';
+SQL
+```
+
+Read the three counts. All zero means you have the wrong `owner_subject`: stop.
+
+**G2. Delete, as shipped a dry run.** The block below ends in `ROLLBACK;`, so as written
+it deletes nothing and prints each statement's `DELETE n`. Compare those `n` with the G1
+counts; only if they match, run it again with the last line changed to `COMMIT;`:
+
+```console
+$ $KC -n hugmesh-backend exec -i deploy/admin-bff-db -- \
+    sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -v ON_ERROR_STOP=1 -U adminbff -d adminbff' <<'SQL'
+BEGIN;
 DELETE FROM mfa_recovery_code   WHERE owner_subject = '<owner_subject>';
 DELETE FROM webauthn_credential WHERE owner_subject = '<owner_subject>';
 DELETE FROM mfa_factor          WHERE owner_subject = '<owner_subject>';
-COMMIT;
+ROLLBACK;
 SQL
 ```
+
+(None of the three tables has a foreign key to another, changelog `151-mfa-factors.xml`,
+so the order is not load-bearing.)
 
 That operator can then sign in again and re-enrol **TOTP first** (§2.2) —
 enrolment is reachable with the floor on (§2.1: `/bff/mfa/**` has no route row), and
@@ -1451,8 +1595,9 @@ The data rollback (§6 step 3) is `scripts/mfa-runbook-sql.sh rollback | …psql
 ### What this checklist does not prove
 
 It does not prove that Postgres executes the runbook's SQL **blocks** (the gate runs
-those on sqlite; only the seed has a Postgres leg, §1.2) — C3 and C5 are their first
-contact with Postgres. It does not enumerate
+those on sqlite; only the seed has a Postgres leg, §1.2) — C3, C4, C5 and C5b are their
+first contact with Postgres. The C4 fixture mirrors the `token` table as read from the
+Casdoor 3.80.0 source, not a table dumped from a live Casdoor. It does not enumerate
 privileged Casdoor users who never logged in (C5, first bullet). It does not prove the
 suspended-auto-sync commands against your ArgoCD version. And it cannot make an
 operator enrol: C6 is a person at a keyboard.
