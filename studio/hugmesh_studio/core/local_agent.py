@@ -795,8 +795,10 @@ class Plan:
         """The lines to paste once the copy EXISTS: go into it and launch. ``paste_text``
         clones, drops the remote and makes the branch first, which fail ("already
         exists", "No such remote") when run against a copy that is already made; the
-        window the card shows when no terminal opened is always that case."""
-        return f"cd {shlex.quote(self.scratch.dest)}\n{self.run_line}\n"
+        window the card shows when no terminal opened is always that case. The lines are
+        chained with &&: a pasted line that fails must stop the rest, or the agent
+        would start in whatever folder the person's shell was already in."""
+        return f"cd {shlex.quote(self.scratch.dest)} &&\n{self.run_line}\n"
 
 
 def write_brief(plan: Plan) -> str:
@@ -852,7 +854,9 @@ def prepare(*, lane: str, mesh: str, domains: Sequence[str], doors: Sequence[str
         banner = ""
     else:
         banner = (f"printf '%s\\n' {shlex.quote('Brief for this session: ' + spec.brief_path)} "
-                  f"{shlex.quote('Tell the agent to read that file first.')}; ")
+                  f"{shlex.quote('Tell the agent to read that file first.')} && ")
+    # The banner is chained with && like everything else: with a ";" a failed cd would
+    # still reach the agent line and start it in the terminal's own folder.
     run_line = f"{banner}{_env_prefix(env)} {quoted}"
     shell_command = (
         f"cd {shlex.quote(spec.dest)} && {run_line}; st=$?; "
@@ -864,7 +868,9 @@ def prepare(*, lane: str, mesh: str, domains: Sequence[str], doors: Sequence[str
         "git remote remove origin",
         f"git switch -c {shlex.quote(spec.branch)}",
     ] if not spec.reuse else [f"cd {shlex.quote(spec.dest)}"]
-    paste_text = "\n".join(setup + [run_line]) + "\n"
+    # One chain, a line each: a failed clone must not leave the later lines (drop the
+    # remote, make a branch, start the agent) to run in the person's own repository.
+    paste_text = " &&\n".join(setup + [run_line]) + "\n"
     title = f"{AGENTS[agent]['label']} on {model} (local) - {repo}"
     return Plan(agent, model, lane, argv, positional, spec, brief, env, shell_command,
                 paste_text, title, run_line)

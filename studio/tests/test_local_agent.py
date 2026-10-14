@@ -592,10 +592,11 @@ def test_the_pasted_text_clones_without_a_remote_and_launches(source, state):
     plan = plan_for(source, state)
     lines = plan.paste_text.splitlines()
     assert lines[0].startswith("git clone --no-hardlinks -- ")
-    assert lines[2] == "git remote remove origin"
-    assert lines[3].startswith("git switch -c lm/")
+    assert lines[2] == "git remote remove origin &&"
+    assert lines[3].startswith("git switch -c lm/") and lines[3].endswith(" &&")
     assert lines[4].startswith("env -i ")
-    assert lines.index("git remote remove origin") < len(lines) - 1
+    # every line but the last hands over to the next with &&, so one failure stops all
+    assert all(ln.endswith(" &&") for ln in lines[:-1])
 
 
 # ── the scratch clone ────────────────────────────────────────────────────────────
@@ -775,7 +776,7 @@ def test_the_lines_shown_after_the_copy_exists_run_clean_in_bash(source, state, 
     assert "git clone" not in res.command and "git remote" not in res.command
     # the short form is the long form minus the three steps that made the copy
     assert plan.paste_text.endswith(plan.run_line + "\n")
-    assert res.command == f"cd {shlex.quote(plan.cwd)}\n{plan.run_line}\n"
+    assert res.command == f"cd {shlex.quote(plan.cwd)} &&\n{plan.run_line}\n"
 
 
 def test_the_copy_command_text_makes_the_copy_and_launches_when_none_exists(
@@ -794,6 +795,85 @@ def test_the_copy_command_text_makes_the_copy_and_launches_when_none_exists(
     assert run_git("remote", cwd=plan.scratch.dest) == ""
     assert run_git("branch", "--show-current", cwd=plan.scratch.dest) == plan.scratch.branch
     assert os.path.realpath(json.load(open(seen))[0]) == os.path.realpath(plan.cwd)
+
+
+@pytest.fixture
+def bystander(tmp_path):
+    """A person's OWN repository, with an origin remote and a branch, standing in for
+    whatever folder their shell or a new terminal window happens to start in."""
+    own = tmp_path / "own-work"
+    upstream = tmp_path / "upstream.git"
+    run_git("init", "-q", "--bare", str(upstream))
+    own.mkdir()
+    run_git("init", "-q", "-b", "main", cwd=own)
+    (own / "mine.txt").write_text("do not touch\n")
+    run_git("add", "mine.txt", cwd=own)
+    run_git("commit", "-q", "-m", "mine", cwd=own)
+    run_git("remote", "add", "origin", str(upstream), cwd=own)
+    return str(own)
+
+
+def _untouched(own):
+    return (run_git("remote", "-v", cwd=own).count("origin") == 2
+            and run_git("branch", "--list", cwd=own).split() == ["*", "main"])
+
+
+def _run_in(own, script, environ):
+    return subprocess.run(["bash", "--noprofile", "--norc", "-c", script], cwd=own,
+                          env=environ, input="\n", capture_output=True, text=True,
+                          timeout=60)
+
+
+def test_pasted_lines_whose_clone_fails_change_nothing_in_the_folder_they_run_in(
+        source, state, tmp_path, bystander):
+    """The skeptic's reproduction: the source is gone, git clone fails, and the lines
+    after it used to run anyway in the person's own repository - dropping ITS origin
+    remote, branching it, and starting the agent there."""
+    environ, seen = _standin_environ(tmp_path)
+    plan = plan_for(source, state, environ=environ)
+    la.write_brief(plan)
+    shutil.rmtree(source)
+    proc = _run_in(bystander, plan.paste_text, environ)
+    assert proc.returncode != 0
+    assert "fatal" in proc.stderr
+    assert _untouched(bystander), run_git("remote", "-v", cwd=bystander)
+    assert not os.path.exists(seen), "the agent was started anyway"
+    assert not os.path.exists(plan.scratch.dest)
+
+
+def test_pasted_lines_for_an_existing_copy_stop_when_the_copy_is_gone(
+        source, state, tmp_path, bystander):
+    environ, seen = _standin_environ(tmp_path)
+    plan = plan_for(source, state, environ=environ)
+    la.write_brief(plan)
+    la.create_scratch(plan.scratch)
+    again = plan_for(source, state, environ=environ)          # sees the copy: reuse
+    assert again.scratch.reuse
+    shutil.rmtree(again.scratch.dest)
+    for text in (again.paste_text, again.after_copy_text):
+        proc = _run_in(bystander, text, environ)
+        assert proc.returncode != 0
+        assert _untouched(bystander)
+        assert not os.path.exists(seen)
+
+
+@pytest.mark.parametrize("agent,prompt_form", [("claude", True), ("opencode", False)])
+def test_the_window_command_does_not_start_the_agent_when_the_copy_is_missing(
+        source, state, tmp_path, bystander, agent, prompt_form):
+    """bash -c <shell_command> starts in whatever folder the terminal chose. With the
+    copy missing the cd fails; the agent (both the claude form and the banner form that
+    opencode and codex use) must not run there."""
+    environ, seen = _standin_environ(tmp_path)
+    plan = plan_for(source, state, environ=environ, agent=agent,
+                    pr=good_probe(agents=tuple(la.AGENTS)))
+    assert plan.uses_brief_argument is prompt_form
+    la.write_brief(plan)                                       # the copy is NOT made
+    assert not os.path.exists(plan.scratch.dest)
+    proc = _run_in(bystander, plan.shell_command, environ)
+    assert not os.path.exists(seen), "the agent was started outside the copy"
+    assert "No such file" in proc.stderr
+    assert "[agent exited with status 1" in proc.stdout
+    assert _untouched(bystander)
 
 
 # ── the terminal ─────────────────────────────────────────────────────────────────

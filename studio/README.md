@@ -183,7 +183,9 @@ agent on a model that runs on this PC, in a copy of one app's repository. It doe
   terminal refused) the card shows the exact lines to run yourself. After a Start the copy
   already exists, so those lines are only `cd <copy>` and the launch line; **Copy command**,
   which can be pressed before any copy exists, also has the clone, remote-removal and branch
-  lines first. Native Windows and macOS do not open a window; run the Studio inside WSL2 or
+  lines first. Every line is chained to the one before with `&&`, so a failed clone or a
+  missing copy stops the rest instead of running them in whatever folder your shell is in.
+  Native Windows and macOS do not open a window; run the Studio inside WSL2 or
   follow the doc by hand.
 
 Code: `core/local_agent.py` (Qt-free) and `gui/pages/_local_agent_widget.py`; tests:
