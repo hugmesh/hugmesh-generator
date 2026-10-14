@@ -917,6 +917,14 @@ PREMERGE_UNGATED=(
   tests/casdoor/test-jwt-custom-token.sh
   tests/device-registry/test-layer-a-headscale-acl.sh
   tests/egress-vpn/test-secret-contract.sh
+  # Offline, bash + python3 only, 48 passed / 0 failed on 2026-10-14 (#654 D12:
+  # the driver refuses `commit` for a Tor address; its three-mutation battery is
+  # inside). It belongs in shell-suites.yml's ALPINE job beside
+  # tests/go-live/test-go-live-driver.sh, and .gitlab-ci.yml's
+  # orphan-guards-verify already runs it post-merge. Listed here, not gated,
+  # only because the lane that added it may not edit .github/: the operator adds
+  # the one line there, raises PREMERGE_BASELINE by one and drops this entry.
+  tests/go-live/test-onion-refuse.sh
   tests/pentest/nuclei/test-templates.sh
   # Needs `unshare -Urm` (a private user+mount namespace) to stack REAL bind
   # mounts under a scratch build system and drive the x86 builder's own
