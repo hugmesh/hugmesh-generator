@@ -352,9 +352,17 @@ The hardening lives in `specs/cluster/manifests/cassandra-hardening/` and ships
 **DARK**: nothing in the auto-synced ArgoCD tree references it, and the wired
 ArgoCD app `apps/00a-cassandra-hardening.yaml` is **MANUAL-sync** pointing at the
 **empty** sibling overlay (`manifests/cassandra-hardening-empty`, `resources: []`),
-so it can never auto-apply (belt-and-braces, the same idiom as held PR #132). The
-default Cassandra (`apps/00-cassandra.yaml`) stays `AllowAllAuthenticator` +
-plaintext, byte-identical to today, until an operator runs the steps below.
+so it can never auto-apply (belt-and-braces, the same idiom as held PR #132).
+
+> **Status, re-measured 2026-10-14 on origin/main (supersedes the original text of
+> this section).** Stage 1 (authentication) is **LIVE, not dark**: Cassandra never
+> ran `AllowAllAuthenticator` (the bitnami image defaults to `PasswordAuthenticator`
+> + `CassandraAuthorizer`), `apps/00-cassandra.yaml` takes its superuser from the ESO
+> Secret `cassandra-admin` (`dbUser.existingSecret`, line 53) and the per-app roles
+> come from `apps/00b-cassandra-init.yaml`. The Stage 1 steps below are the
+> historical record; do not re-run them. **Only Stage 2 (TLS) is open**, and
+> `docs/DB-HARDENING-RUNBOOK.md` part B says what is and is not in the tree for it.
+
 **`cqlsh` allow/deny + GRANT enforcement was validated out-of-cluster** (a Cassandra
 5.0.5 container with `PasswordAuthenticator`+`CassandraAuthorizer`: a least-privilege
 role connects WITH its password and is denied WITHOUT, and a non-GRANTed keyspace

@@ -942,6 +942,16 @@ PREMERGE_UNGATED=(
   # .gitlab-ci.yml's lint:optional-service-slug-closure — nothing on the GitHub side
   # runs it; `make e2e-ungated` runs it locally. Leave it listed until #106 lands.
   tests/scripts/test-optional-service-slug-closure.sh
+  # Lands outside the pull_request gate ONLY because wiring it there means an edit
+  # under .github/workflows/shell-suites.yml, which the change that added it was
+  # not permitted to make (operator action, 2026-10-14). It is NOT an exemption on
+  # the merits: it is offline, needs python3 + openssl + bash (it was MEASURED only
+  # on a developer host, 196 passed / 0 failed / 0 skipped, NOT in a shell-suites
+  # image), and is run post-merge by .gitlab-ci.yml's lint:pg-tls-preflight. Wire it
+  # into shell-suites.yml's DEBIAN job, measure it there, and DELETE this entry (the
+  # baseline then moves 196 -> 197). The same goes for the next entry.
+  tests/scripts/test-netpol-egress-scope.sh
+  tests/scripts/test-pg-tls-preflight.sh
   tests/scripts/test-service-env-contract.sh
   tests/stack/test-gateway-auth-flag-parity.sh
   tests/stack/test-m2-bootstrap.sh

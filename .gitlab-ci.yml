@@ -166,6 +166,35 @@ lint:db-connection-budget:
   script:
     - bash tests/scripts/test-db-connection-budget.sh
 
+# The stop in front of the PG_TLS_ENABLED flip (docs/DB-HARDENING-RUNBOOK.md). Each
+# dedicated Postgres mounts <db>-mtls with `optional: true` and runs `strategy:
+# Recreate`, so flipping the gate before that ESO Secret exists takes the DB down.
+# scripts/pg-tls-preflight.sh refuses the flip; this job pins its DB table to the
+# manifests and drives it against a stub kubectl and real openssl certificates,
+# then mutates it to prove each guard bites. Offline, no cluster, no network. The
+# real-kubectl jsonpath cross-check SKIPs loudly here (no kubectl in the image).
+lint:pg-tls-preflight:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends openssl >/dev/null
+  script:
+    - bash tests/scripts/test-pg-tls-preflight.sh
+
+# The egress cutover path (docs/DB-HARDENING-RUNBOOK.md part C). The overlay's old
+# "uncomment ../networkpolicy/tier-egress.yaml" step cannot render under kustomize's
+# default load restrictor; scripts/netpol-egress-scope.py carves one namespace into
+# the overlay directory instead. This pins coverage of tier-egress.yaml, that the
+# overlay still renders zero objects, and (with a real kubectl) that each carved file
+# renders. The kubectl legs SKIP loudly in this image (no kubectl).
+lint:netpol-egress-scope:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/scripts/test-netpol-egress-scope.sh
+
 # External Matrix/Mastodon CLIENT reachability gate. The fe route table ends in a
 # /** catch-all to the Angular shell, whose nginx serves index.html for anything
 # unrouted — so a MISSING protocol route does not 404, it returns 200 text/html

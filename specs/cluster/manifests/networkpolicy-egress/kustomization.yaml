@@ -11,14 +11,21 @@ kind: Kustomization
 # permanently Synced/empty. This is the inert-until-enabled state.
 #
 # TO ENABLE (only after LIVE on-cluster validation, ONE namespace at a time):
-#   1. Uncomment the resource line below to pull in tier-egress.yaml (which carries
-#      all five per-namespace blocks). To stage per-namespace, copy ONLY the block(s)
-#      for the namespace you are cutting over into a scoped file and reference that
-#      instead — NEVER enable all five namespaces in one sync.
-#   2. Manually sync apps/08a-networkpolicy-egress.yaml (it has NO `automated:` block).
-#   3. Smoke-test that namespace's egress (DNS, DB, Vault, ArgoCD reconcile) before
-#      proceeding to the next namespace. ROLLBACK = re-comment + manual sync (egress
-#      policies removed -> egress fully open again).
+#   ⚠ DO NOT uncomment a `../networkpolicy/tier-egress.yaml` line here. This header used
+#   to say to, and it cannot render: kustomize's default load restrictor refuses a FILE
+#   outside this directory ("security; file '.../networkpolicy/tier-egress.yaml' is not
+#   in or below '.../networkpolicy-egress'"), so the manual-sync app would sit in a
+#   ComparisonError at the moment the step was followed. The file also carries all five
+#   tiers, which is the opposite of one-at-a-time. tests/scripts/test-netpol-egress-scope.sh
+#   reproduces the error with the real kubectl and pins the replacement below.
+#   1. Carve ONE namespace into a file INSIDE this directory:
+#        scripts/netpol-egress-scope.py <namespace> [--with-db-egress]
+#      (--list prints the namespaces; backend and pki also take the per-DB-pod DNS locks
+#      from db-egress.yaml with --with-db-egress.) Order, preconditions, smoke tests and
+#      rollback per namespace, `devops` LAST: docs/DB-HARDENING-RUNBOOK.md part C.
+#   2. List the generated file(s) under `resources:` below, commit, merge.
+#   3. Manually sync apps/08a-networkpolicy-egress.yaml (it has NO `automated:` block).
+#   4. Smoke-test that namespace's egress (DNS, DB, Vault, ArgoCD reconcile) before
+#      proceeding to the next namespace. ROLLBACK = remove the line + manual sync (egress
+#      policies pruned -> egress fully open again).
 resources: []
-  # - ../networkpolicy/tier-egress.yaml   # default-deny EGRESS per tier — ENABLE per-namespace, live-validate-only
-  # - ../networkpolicy/db-egress.yaml     # DNS-only EGRESS lock on the six Postgres pods tier-egress excludes (five backend *-bff-db/federation-db + route-access-db). Same gate as tier-egress: ENABLE per-namespace, live-validate-only. It shipped through the AUTO-SYNC app for one commit (PR #325) — a six-pod, self-healing default-deny with no live validation; moved here 2026-09-09.

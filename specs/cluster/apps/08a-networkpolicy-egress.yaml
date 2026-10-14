@@ -20,8 +20,9 @@
 # TO ENABLE (deliberate, staged, operator-driven — DO NOT until the gate below is met):
 #   GATE: live cluster validated.
 #   1. On the live cluster, dry-run / trace the egress allow-set for ONE namespace.
-#   2. Uncomment ONLY that namespace's policy into manifests/networkpolicy-egress
-#      (see its kustomization.yaml header) — NEVER all namespaces at once.
+#   2. Carve ONLY that namespace's policy into manifests/networkpolicy-egress with
+#      scripts/netpol-egress-scope.py and list it in that kustomization.yaml (its header
+#      says why a `../networkpolicy/...` line cannot work) — NEVER all namespaces at once.
 #   3. `argocd app sync networkpolicy-egress` (MANUAL — there is no auto-sync here),
 #      then smoke-test that namespace: DNS resolves, every gateway hop works, each
 #      BFF reaches its DB, ESO reaches Vault, and (for devops LAST) ArgoCD still
