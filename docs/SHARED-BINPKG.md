@@ -579,6 +579,13 @@ builders' `--print-plan` report `PLAN_KERNEL_CACHE=<root>|off`.
 
 ## Honest limits (owed proof)
 
+- **Measurement plan and instrument now exist; the number does not.** The protocol
+  (legs A-E: same-board rerun, cross-role, cross-board isolation, correctness of the
+  reused image, x86) is [`BINPKG-MEASUREMENT-PLAN.md`](BINPKG-MEASUREMENT-PLAN.md), and
+  `scripts/binpkg-reuse-report.py` turns two build logs into the compile-once reuse rate
+  and speedup (`make binpkg-reuse-report`). It is tested only on synthetic fixture logs.
+  The same page records what the fingerprint guard does NOT prove, including that no
+  builder salts a target pool with the gcc/glibc identity the library header names.
 - The compile-once **speedup and end-to-end correctness are UNPROVEN** in this change,
   because the sandbox cannot run a real cross-build. Every change here rests on static
   review, `bash -n`, the build-matrix parity and flag-coverage gates, and hermetic

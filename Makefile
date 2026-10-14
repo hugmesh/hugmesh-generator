@@ -2643,3 +2643,22 @@ e2e-ungated: ## MANUAL ONLY: run ALL the PREMERGE_UNGATED suites (24 of 24 by de
 .PHONY: builder-unmount-real-check
 builder-unmount-real-check: ## OPT-IN, needs unshare -Urm (a developer host, not a CI container): the builder's unmount and stale-mount refusal against real stacked binds, through awkward path spellings
 	bash tests/scripts/test-builder-unmount-real.sh
+
+# binpkg-reuse-report: the compile-once measurement. Reads TWO builder logs (a COLD
+# run from an empty pool, a WARM run of the same board+role after it) and prints how
+# many packages portage compiled versus merged from the shared binpkg pool, plus the
+# whole-run speedup when COLD_WALL / WARM_WALL (seconds, h:mm:ss or 1h2m3s) are given.
+# Protocol that produces the two logs: docs/BINPKG-MEASUREMENT-PLAN.md. Reads logs
+# only; touches no pool, no build tree, no network.
+#   make binpkg-reuse-report COLD=cold.log WARM=warm.log COLD_WALL=3h WARM_WALL=40m
+.PHONY: binpkg-reuse-report
+binpkg-reuse-report: ## compile-once speedup from two build logs (COLD=<log> WARM=<log> [COLD_WALL= WARM_WALL= MIN_REUSE=]); see docs/BINPKG-MEASUREMENT-PLAN.md
+	@test -n "$(COLD)" -a -n "$(WARM)" || { echo "usage: make binpkg-reuse-report COLD=<cold build log> WARM=<warm build log> [COLD_WALL=3h WARM_WALL=40m MIN_REUSE=90]"; exit 2; }
+	python3 -I scripts/binpkg-reuse-report.py --cold '$(COLD)' --warm '$(WARM)' \
+	  $(if $(COLD_WALL),--cold-wall '$(COLD_WALL)',) $(if $(WARM_WALL),--warm-wall '$(WARM_WALL)',) \
+	  $(if $(MIN_REUSE),--min-reuse '$(MIN_REUSE)',)
+
+# binpkg-reuse-report-check: the harness's own hermetic test (synthetic fixture logs).
+.PHONY: binpkg-reuse-report-check
+binpkg-reuse-report-check: ## test the compile-once measurement harness against synthetic fixture logs
+	bash tests/scripts/test-binpkg-reuse-report.sh
