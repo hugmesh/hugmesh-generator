@@ -393,8 +393,10 @@ none), and compose green is not evidence for the cluster._
   principal can produce a fresh `mfa_satisfied` stamp, then flip `mfa.enabled` →
   `true`, then (separately — `enforce-privileged-floor` is **not** a sub-flag of
   `enabled`) `enforcePrivilegedFloor` → `true`, moving the posture-gate
-  expectations in lockstep. Order and lockout preconditions:
-  [`docs/MFA-ROLLOUT.md`](docs/MFA-ROLLOUT.md).
+  expectations in lockstep (three suites for the first flip, two for the second —
+  measured, listed in the runbook's §3 steps 6-7). Order, lockout preconditions and
+  the exact operator commands:
+  [`docs/MFA-ROLLOUT.md`](docs/MFA-ROLLOUT.md) §3 and §9.
 - **🚧 SELinux — both acknowledged load defects are FIXED; enforcing now waits
   on an AVC workout that has not run yet.** Updated 2026-08-19; this section
   previously acknowledged that the modules bake and the loader is wired "but

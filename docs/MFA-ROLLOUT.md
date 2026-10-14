@@ -27,6 +27,15 @@ that.** Seeding the `mfa_required` rules (below) is inert until *you* flip a fla
 > it lands there is no knob" caveat below is HISTORICAL. What has NOT changed is the
 > hard precondition: enrolling every privileged operator (§2) still gates the flip,
 > and the cluster still ships `false` deliberately.
+>
+> **Re-measured 2026-10-14 on `main` (c0c46601).** Nothing code-side is left to land:
+> the chart block, the rendered env, the `mfa_required` rows (10 flipped + 1 deny row
+> carrying the floor) and the posture gates are all present and green. What is left
+> is the operator's live flip, and **§9 is the checklist for it, with the exact
+> commands.** Two things in the older text were wrong and are corrected below rather
+> than left to mislead: the flip changes **three** gate suites, not one (§3 steps 6
+> and 7), and "do the floor on one gateway first" cannot be done through the chart
+> (§3 step 7).
 
 The feature shipped as **two halves in two commits**, and this runbook was written
 with the first one. The table records which half contributed what.
@@ -162,9 +171,14 @@ replaying the file's own statements in file order, never inferred from the text 
 one statement — so a later statement that un-flips, deletes or partially reverts one
 of these rows is caught by the *result*, in any spelling. (A handful of *intent*
 checks are still textual — that the `UPDATE` is gateway-blind, allow-only, and says
-`IS DISTINCT FROM true` — but nothing about the file's net effect is.) The engine is
-sqlite3: Postgres is not installed in CI, so **these rules have never been executed
-on Postgres**; the gate says so on every run.
+`IS DISTINCT FROM true` — but nothing about the file's net effect is.) The default
+engine is sqlite3, and a plain local run says so. Since leg 1c the seed is **also**
+replayed verbatim on a real Postgres — twice, under `ON_ERROR_STOP`, nothing
+translated or skipped — whenever `POSTGRES_HOST` is set, and `.gitlab-ci.yml`'s
+`lint:mfa-required-rules` always sets it (a `postgres:16-alpine` service container).
+That leg replays the **seed**; the runbook's own SQL blocks (§3 step 4, §9) are still
+executed on sqlite only, so their first contact with Postgres is the operator's.
+(Whether that CI job is running at all is not something this file can tell you.)
 
 ### 1.2a Scope: exactly two prefixes — and what that leaves OUT
 
@@ -329,8 +343,9 @@ privileged floor is `false` on **both** sides.
 > and all), `helm.valuesObject`, and `helm.parameters` (including indexed names like
 > `extraEnv[0].name`), for **both** spellings — the chart's `mfa.enabled` /
 > `mfa.enforcePrivilegedFloor` and a raw `APP_MFA_*` container env injected through
-> `extraEnv`, which is the only mechanism the chart supports until the companion
-> lands. A `helm.valueFiles` / `helm.fileParameters` reference, or an `APP_MFA_*`
+> `extraEnv`, the raw escape hatch that bypasses the chart's `mfa:` block (it was the
+> only mechanism before the companion landed; it is audited because it still works).
+> A `helm.valueFiles` / `helm.fileParameters` reference, or an `APP_MFA_*`
 > env sourced from a Secret, **fails the gate as un-auditable** rather than quietly
 > reading as a pass. The chart's own `mfa:` defaults are asserted too, the moment
 > that block exists.
@@ -720,52 +735,74 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
    Enumerate any such caller on `/bff/admin…` / `/bff/superadmin…` **before** this flip.
    Human callers are fine on both carriers, but a raw-JWT human must **re-mint** after
    completing MFA (nothing does it for them). Read §2.4 before flipping.
-   ⚠ **The flip commit must also move the companion gate's expectation pin, in
-   the same change.** `tests/stack/test-gateway-mfa-env.sh` hard-pins the cluster
-   posture OFF in an `EXPECT_*` table near the top of the file:
 
-   ```sh
-   EXPECT_APP_MFA_ENABLED="false"                    # cluster/chart
-   EXPECT_APP_MFA_FRESHNESS_WINDOW="600000"
-   EXPECT_APP_MFA_ENFORCE_PRIVILEGED_FLOOR="false"
-   CEXPECT_APP_MFA_ENABLED="true"                    # compose dev stack
-   CEXPECT_APP_MFA_FRESHNESS_WINDOW="600000"
-   CEXPECT_APP_MFA_ENFORCE_PRIVILEGED_FLOOR="false"
-   ```
+   ⚠ **The flip commit changes THREE gate suites, not one.** An earlier revision of
+   this step named only `tests/stack/test-gateway-mfa-env.sh`. Measured 2026-10-14 on
+   `main` (c0c46601) by setting `mfa.enabled: true` in the shared chart's
+   `values.yaml` and nothing else, then running every MFA suite
+   (`tests/scripts/test-mfa-required-rules.sh`, `tests/scripts/test-mfa-raw-jwt-posture.sh`,
+   `tests/stack/test-gateway-mfa-env.sh`, `tests/stack/test-mfa-flip-wiring.sh`):
 
-   Every rendered gateway release is asserted against the `EXPECT_*` half, so a
-   flip commit that changes the chart but not `EXPECT_APP_MFA_ENABLED` turns that
-   lint gate red. That is by design (the pin exists so the posture can never
-   drift silently); the red is telling you to move the pin **deliberately**, not
-   to delete the gate. One more thing that commit has to face in the open: the
-   script has a self-check that refuses to run at all when
-   `EXPECT_APP_MFA_ENABLED` and `CEXPECT_APP_MFA_ENABLED` agree — the two tables
-   exist precisely because that pair is asymmetric — so flipping the cluster to
-   `true` while compose is also `true` means rethinking that guard in the same
-   review. (The self-check covers `APP_MFA_ENABLED` only; the floor pins in step
-   7 are `false` on both sides and are not subject to it.)
-7. **Only then consider `APP_MFA_ENFORCE_PRIVILEGED_FLOOR`** — same chart value, also
-   available today. This is the step that actually gates admins and superadmins. Expect
-   503s during each gateway's cold-start priming window. Do it on one gateway first
-   (the fe gateway, which carries `/bff/admin/**`) and keep a second authenticated
-   superadmin session open on another browser as a canary before touching the
-   superadmin gateway.
-   ⚠ Same pin rule as step 6, on the floor row of the table shown there:
-   `tests/stack/test-gateway-mfa-env.sh` pins
-   `EXPECT_APP_MFA_ENFORCE_PRIVILEGED_FLOOR="false"` (cluster) **and**
-   `CEXPECT_APP_MFA_ENFORCE_PRIVILEGED_FLOOR="false"` (compose — the dev stack
-   floor stays off in the committed file; `make stack-up MFA_FLOOR=1` is the
-   supported per-run override, see step 5, and it does not touch the pin). A
-   cluster floor flip must move `EXPECT_APP_MFA_ENFORCE_PRIVILEGED_FLOOR` in the
-   same change or the gate goes red — and rehearse it on compose with
-   `MFA_FLOOR=1` + `tests/e2e/specs/29-mfa-privileged-floor.spec.ts` first, which
-   is the only place the floor's behaviour is exercised end to end.
+   | suite | result | what goes red | what the flip commit has to do |
+   |---|---|---|---|
+   | `tests/stack/test-gateway-mfa-env.sh` | **8 FAIL** | (2) chart value is not boolean `false`; (4) ×5 — each of the four rendered releases **and** the bare chart defaults emit `APP_MFA_ENABLED=true` against the pin; (6) `ASYMMETRY LOST: compose='true' cluster='true'`; (8a) `MUTATOR DID NOT LAND` | set `EXPECT_APP_MFA_ENABLED="true"` (the `EXPECT_*` table near the top); then decide what (6) means once both sides are `true` (the script refuses to run when `EXPECT_APP_MFA_ENABLED` and `CEXPECT_APP_MFA_ENABLED` agree — replace the asymmetry self-check with an explicit "cluster and compose are both ON" pin, do not delete it); and invert (8a)'s mutator, which today rewrites `enabled: false` to `true` and therefore finds nothing to mutate |
+   | `tests/scripts/test-mfa-required-rules.sh` | **1 FAIL** | the posture block: *"the shared chart's mfa: block defaults BOTH enabled and enforcePrivilegedFloor off"* | this check has **no `EXPECT_*` table** — the OFF state is hard-coded in the `case "$(q CHART_MFA_BLOCK)"` arm (`CHART_MFA_ENABLED` must be `not-true`). Change the `enabled` half to `true`, keep the floor half `not-true`, and reword the message |
+   | `tests/stack/test-mfa-flip-wiring.sh` | **1 FAIL** | (5a) `chart values mfa.enabled changed` — the chart default is hard-coded `false` there too | change the (5a) pin to `true` and its message |
+   | `tests/scripts/test-mfa-raw-jwt-posture.sh` | green | — | nothing; it pins the §2.4 taxonomy, not the posture |
+
+   All three red suites are the *posture* pins the operator chose on purpose; red is
+   the signal to move them **deliberately in the same reviewed commit**, not to
+   delete a gate. Do **not** put the flip in a branch that only touches
+   `values.yaml`: CI will be red for three independent reasons and the reviewer has
+   no list. `.github/workflows/shell-suites.yml` and `.gitlab-ci.yml` wire these
+   suites by path, so none of those files needs an edit for the flip itself.
+7. **Only then consider `APP_MFA_ENFORCE_PRIVILEGED_FLOOR`** — same chart value
+   (`mfa.enforcePrivilegedFloor`), also available today. This is the step that
+   actually gates admins and superadmins. Expect 503s during each gateway's
+   cold-start priming window, and keep a second authenticated superadmin session open
+   on another browser as a canary.
+
+   ⚠ **Pin rule, measured the same way (2026-10-14: `mfa.enforcePrivilegedFloor:
+   true` alone).** Two suites go red; `test-mfa-flip-wiring.sh` and
+   `test-mfa-raw-jwt-posture.sh` stay green:
+
+   | suite | result | what goes red | what the flip commit has to do |
+   |---|---|---|---|
+   | `tests/stack/test-gateway-mfa-env.sh` | **6 FAIL** | (2) `mfa.enforcePrivilegedFloor wrong`; (4) ×5 — four releases + chart defaults emit `APP_MFA_ENFORCE_PRIVILEGED_FLOOR=true` | `EXPECT_APP_MFA_ENFORCE_PRIVILEGED_FLOOR="true"` (cluster only — `CEXPECT_APP_MFA_ENFORCE_PRIVILEGED_FLOOR` stays `"false"`: the dev stack floor stays off in the committed file and `make stack-up MFA_FLOOR=1` is the per-run override that does not touch the pin) |
+   | `tests/scripts/test-mfa-required-rules.sh` | **1 FAIL** | the same posture-block check as step 6, floor half | change the floor half of that arm to `true`; the no-app-manifest-turns-the-floor-on check stays as is |
+
+   Rehearse it first on compose with `make stack-up MFA_FLOOR=1` +
+   `tests/e2e/specs/29-mfa-privileged-floor.spec.ts` — the only place the floor's
+   behaviour is exercised end to end.
+
+   ⚠ **"Do the floor on one gateway first" cannot be done through the chart, and an
+   earlier revision of this step told you to.** Verified from the manifests:
+   * all four gateway Applications render the **one** chart, so a chart value reaches
+     all four at once;
+   * a per-Application override in `specs/cluster/apps/*.yaml` is exactly what the
+     posture gate fails the build on (§1.3), in every spelling;
+   * both the root Application (`specs/cluster/app-of-apps.yaml`: `recurse: true`,
+     `automated: {prune: true, selfHeal: true}`) **and** each gateway Application
+     (`syncPolicy.automated: {prune: true, selfHeal: true}`) revert a hand-patch of the
+     Application or of the Deployment env, so `kubectl set env` and `kubectl patch app`
+     last until the next reconcile.
+   The honest options are: **(a)** flip all four from one reviewed commit and rely on
+   the canary session plus §6's rollback (the default, and what §9 phase E gives
+   commands for); **(b)** a deliberate, temporary GitOps bypass for a single gateway
+   (§9 phase E-bypass — it works only while auto-sync is suspended and leaves drift
+   that must be reverted); or **(c)** a gate change that lets a named gateway
+   Application carry its own pin — a new scope decision for the operator, not
+   something the runbook can assume exists. Note which paths each gateway owns before
+   choosing: `hugmesh-fe-gateway` carries `/bff/admin/**`, `phone-fleet` and
+   `/bff/superadmin/**`; `hugmesh-be-gateway` carries `/bff/admin/workloads/**` and
+   `/bff/superadmin/**`; `hugmesh-superadmin-gateway` carries `/bff/superadmin/**`
+   (§1.2). A floor on `fe` alone leaves the `be` and `superadmin` doors un-floored.
 
 ### 3.1 What actually changes at each step (be honest about the small print)
 
 With `enabled=true` but `enforce-privileged-floor=false` — the recommended
 intermediate state — `ROLE_SUPERADMIN`, `ROLE_ADMIN` and `ROLE_GAME-MASTER`
-short-circuit in `GatewayRouteAccessFilter` **before** `decide()` runs. So of the 9
+short-circuit in `GatewayRouteAccessFilter` **before** `decide()` runs. So of the 10
 flipped rows, the only one that changes behaviour is
 **`/bff/admin/phone-fleet/** → ROLE_FLEET_ADMIN`**: a pure fleet owner is not
 privileged, so it reaches `decide()`, and without a fresh `MFA_SATISFIED` marker it
@@ -832,6 +869,25 @@ For your own domain these must be rewritten (the `rebrand_sysroot` path rewrites
   `admin.<domain>`, that origin must be listed too, or WebAuthn silently fails
   there and only TOTP works.
 
+### 4.3 Two things that look like levers and are not (re-read 2026-10-14)
+
+* **`role_mfa_policy` enforces nothing.** admin-bff carries a per-`(domain, role)`
+  `role_mfa_policy` table with an admin write path (`RoleMfaPolicyService`,
+  `RoleMfaPolicyController`; changelog `150-mfa-substrate.xml`). Its own javadoc is
+  explicit that "nothing in the request pipeline consults it yet" — `/bff/login`,
+  `/bff/session`, the introspect leg and the step-up gates behave as before, and the
+  gateway's route-level enforcement stays behind `app.mfa.enabled`. Editing a row
+  there will not gate anyone and is not part of this rollout. (The service pins
+  `superadmin` and `admin` to `required=true` regardless of any row, mirroring §2.)
+  Cross-repo, so not gate-pinned.
+* **`MfaPreconditionBootGuard` (auth-core) only WARNs by default.** It reports a
+  missing factor key and a loopback WebAuthn RP-ID/origin allowlist (§4.1, §4.2) with
+  a `*** MFA MISCONFIGURED ***` banner in the admin-bff log, and aborts the boot only
+  if `APP_MFA_PRECONDITIONS_FAIL_FAST=true` is set — which no manifest here sets.
+  Absence of the banner is a useful signal (§9 phase C2 greps for it) but not a gate;
+  whether the **deployed** admin-bff image carries the guard depends on its pinned
+  version, which this repo cannot see.
+
 ---
 
 ## 5. Do not hand-edit rows
@@ -895,6 +951,13 @@ data.
    `APP_MFA_ENFORCE_PRIVILEGED_FLOOR=false` on the affected gateway(s) and restart.
    The privileged bypasses come back and admins/superadmins reach the admin plane
    again without a factor. This is the first thing to try; it needs no DB access.
+   ⚠ **On a cluster that auto-syncs, "set it" means one of two things, and only the
+   first is durable.** (i) Revert the flip commit (set `mfa.enforcePrivilegedFloor`
+   back to `false` in the shared chart) and let ArgoCD sync — the root Application and
+   every gateway Application run `automated: {prune: true, selfHeal: true}`, so a
+   `kubectl set env` or `kubectl patch` is **reverted by the next reconcile**.
+   (ii) For minutes-matter relief, suspend auto-sync first, then change the env —
+   exact commands are §9 phase G, and they leave drift you must reconcile afterwards.
 2. **Full disable:** set `APP_MFA_ENABLED=false` as well. `decide()` then ignores
    `mfa_required` entirely and `MFA_SATISFIED` is no longer even derived, so every
    flipped row is inert again. The authority set returns to the legacy shape.
@@ -921,9 +984,13 @@ data.
    rendered env, not the chart values.
 5. **Break-glass for a locked-out operator with no factor:** there is no in-band
    path (the recovery-regenerate endpoint is itself step-up gated). Use cluster
-   access — `kubectl exec` to the admin-bff's Postgres and delete that subject's
-   rows from the MFA factor tables (changelogs `150-mfa-substrate.xml`,
-   `151-mfa-factors.xml`), or roll back per step 1 — then re-enroll. If you have no
+   access — `kubectl exec` to the admin-bff's Postgres
+   (`deploy/admin-bff-db`, namespace `hugmesh-backend`, database/user `adminbff`) and
+   delete that subject's rows from the MFA factor **tables** `mfa_factor`,
+   `mfa_recovery_code` and `webauthn_credential` (created by changelogs
+   `151-mfa-factors.xml`; `owner_subject` is the key — see §9 phase C for which value
+   that is per carrier), or roll back per step 1 — then re-enroll. The exact
+   commands are §9 phase G. If you have no
    cluster access either, you are relying on someone who does; make sure that
    person exists and is not the same single operator before step 7.
 
@@ -943,8 +1010,10 @@ data.
 | `tests/stack/compose.local.yaml` | **yes** | dev stack: gateway `SPRING_APPLICATION_NAME`s, `APP_CASDOOR_MFA_ENABLED`, `APP_MFA_FACTOR_KEY`, the initdb mount of the seed, AND the gateway `APP_MFA_*` trio (`APP_MFA_ENABLED=true` — the deliberate dev-vs-cluster asymmetry) |
 | `specs/cluster/charts/hugmesh-gateway/values.yaml` | **yes** | shared gateway chart; carries the `mfa:` block (`enabled: false`) reaching all four gateways, rendered by `templates/deployment.yaml` |
 | `tests/stack/test-gateway-mfa-env.sh` | **yes** | pins BOTH postures (cluster `false` / compose `true`) and refuses to run if that asymmetry disappears |
-| `specs/cluster/charts/hugmesh-gateway/templates/deployment.yaml` | file exists; the MFA env is **no — companion (§0)** | will render `APP_MFA_ENABLED` / `APP_MFA_FRESHNESS_WINDOW` / `APP_MFA_ENFORCE_PRIVILEGED_FLOOR` into every gateway pod. Today it renders none of them, and the sweep in §1.3 watches this file specifically — it is the one place a single edit reaches all four gateways |
-| `tests/stack/test-gateway-mfa-env.sh`, `tests/stack/gateway_mfa_env.py` | **no — companion (§0)** | the companion's own gate over that wiring. Its posture parser overlaps this branch's; **collapse the two into one shared helper once both have landed** (deliberately not shared now — importing across an unmerged branch would break CI) |
+| `specs/cluster/charts/hugmesh-gateway/templates/deployment.yaml` | **yes** | renders `APP_MFA_ENABLED` / `APP_MFA_FRESHNESS_WINDOW` / `APP_MFA_ENFORCE_PRIVILEGED_FLOOR` (from `.Values.mfa.*`) into every gateway pod; the sweep in §1.3 watches this file specifically — it is the one place a single edit reaches all four gateways |
+| `tests/stack/gateway_mfa_env.py` | **yes** | the helper behind `test-gateway-mfa-env.sh`; its posture parser overlaps `test-mfa-required-rules.sh`'s and the two have not been collapsed into one shared helper |
+| `tests/stack/test-mfa-flip-wiring.sh` | **yes** | pins the `MFA=1` switch per lane (§8) and the chart default `mfa.enabled: false` (its check (5a)) — one of the three posture suites a cluster flip must move (§3 step 6) |
+| `scripts/kind-mfa-posture.sh` | **yes** | reads `APP_MFA_ENABLED` back off the kind fe-gateway pod (§8.1); §9 phase B generalises the same read to all four gateways and all three variables |
 
 Cross-repo (not changeable from here):
 `hugmesh-gateway` `filter/GatewayRouteAccessFilter.java`,
@@ -1036,3 +1105,349 @@ step). The observable difference is that a pure `ROLE_FLEET_ADMIN` on
 `--type merge` replaces `spec.source.helm.parameters` wholesale, so a patch that sets
 only `mfa.enabled` drops the kind lane's `ingress.className: nginx-internal` override
 and nothing routes.
+
+---
+
+## 9. Operator checklist — the live flip, with the exact commands
+
+Everything before this section says *why*; this is the order and the commands. It
+exists because the only thing left on the MFA privileged floor is a live action on a
+real cluster, and the earlier text spread its commands over eight sections. **None of
+this has been run against a live cluster by the person who wrote it** — the commands
+are derived from the committed manifests (every namespace, Deployment, container,
+database and Secret name below is cited to one) and the SQL that is marked is
+*executed* by `tests/scripts/test-mfa-required-rules.sh`, but a command that has
+never met your cluster can still be wrong. Each phase says what it proves; stop at
+the first phase that does not come back as stated.
+
+Conventions: `$KC` is `kubectl` pointed at the **operator's** cluster context, checked
+with `kubectl config current-context` first. Nothing below is for the kind lane
+(§8.1 covers that). The runbook's own SQL blocks are fed to `psql` through
+`scripts/mfa-runbook-sql.sh <name>`, which prints the block **byte-for-byte as the
+gate ran it** (`--list` shows the names); never retype them.
+
+The four gateways, from `specs/cluster/apps/20-gateway-*.yaml` and
+`22-gateway-superadmin.yaml` (Deployment name = `instance.name`, container `gateway`):
+
+| gateway Deployment | namespace | ArgoCD Application (ns `devops`) |
+|---|---|---|
+| `hugmesh-pki-gateway` | `hugmesh-pki` | `hugmesh-gateway-pki` |
+| `hugmesh-be-gateway` | `hugmesh-backend` | `hugmesh-gateway-be` |
+| `hugmesh-fe-gateway` | `hugmesh-frontend` | `hugmesh-gateway-fe` |
+| `hugmesh-superadmin-gateway` | `hugmesh-pki` | `hugmesh-gateway-superadmin` |
+
+### Phase A — the repo side is green (workstation, no cluster)
+
+```console
+$ git fetch origin && git status -sb          # you are reviewing the commit you will deploy
+$ for t in tests/scripts/test-mfa-required-rules.sh \
+           tests/scripts/test-mfa-raw-jwt-posture.sh \
+           tests/stack/test-gateway-mfa-env.sh \
+           tests/stack/test-mfa-flip-wiring.sh; do bash "$t" >/dev/null 2>&1; echo "$? $t"; done
+0 tests/scripts/test-mfa-required-rules.sh
+0 tests/scripts/test-mfa-raw-jwt-posture.sh
+0 tests/stack/test-gateway-mfa-env.sh
+0 tests/stack/test-mfa-flip-wiring.sh
+```
+
+All four must print `0` **before** the flip commit (a gate that is already red proves
+nothing about your change). The flip commit then turns three of them red until their
+pins move (§3 steps 6 and 7) and must leave all four green again.
+`tests/stack/test-gateway-mfa-env.sh` cross-checks its model against a real `helm
+template` when `helm` is on `PATH` and prints `SKIP (9)` when it is not — run it with
+`REQUIRE_HELM=1` so a missing helm is a failure, not a quieter green.
+`tests/scripts/test-mfa-required-rules.sh` needs only `python3` (it replays the seed on
+the stdlib `sqlite3` engine; set `POSTGRES_HOST` to replay it on a real Postgres too).
+
+### Phase B — read the LIVE posture, per gateway (proves: you know the starting state)
+
+The committed chart says `false`; the pod is the truth (§6 item 4). Read the env the
+**process** carries, on all four, all three variables:
+
+```console
+$ for gw in hugmesh-pki-gateway:hugmesh-pki hugmesh-be-gateway:hugmesh-backend \
+            hugmesh-fe-gateway:hugmesh-frontend hugmesh-superadmin-gateway:hugmesh-pki; do
+    d=${gw%%:*}; ns=${gw##*:}; echo "== $d ($ns)"
+    $KC -n "$ns" exec "deploy/$d" -c gateway -- env | grep '^APP_MFA_' | sort
+  done
+== hugmesh-pki-gateway (hugmesh-pki)
+APP_MFA_ENABLED=false
+APP_MFA_ENFORCE_PRIVILEGED_FLOOR=false
+APP_MFA_FRESHNESS_WINDOW=600000
+... (the same three lines for each of the other three)
+```
+
+Expect `false` / `false` / `600000` four times. Anything else means somebody already
+flipped something outside git — resolve that **before** going on. Also confirm what
+ArgoCD thinks is deployed:
+
+```console
+$ $KC -n devops get app hugmesh-root hugmesh-gateway-pki hugmesh-gateway-be \
+      hugmesh-gateway-fe hugmesh-gateway-superadmin \
+      -o custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,REV:.status.sync.revision
+```
+
+Expect `Synced` / `Healthy`, and `REV` equal to the commit you reviewed in phase A.
+
+### Phase C — the preconditions that lock you out if skipped (reads only)
+
+All of C is read-only. Every command here can be run today, with enforcement off.
+
+**C1. The factor key exists and is non-empty** (§4.1; Secret `admin-bff-mfa`, key
+`factor-key`, from `specs/cluster/manifests/admin-bff-api/deployment.yaml`). The value
+is **not** printed:
+
+```console
+$ $KC -n hugmesh-backend get secret admin-bff-mfa -o jsonpath='{.data.factor-key}' | wc -c
+```
+
+Expect a number well above `0` (a base64 256-bit key is 44). `0` or `No resources`
+means step 1 of §3 is not done and nobody can enrol TOTP.
+
+**C2. WebAuthn RP-ID and origins are your real domain** (§4.2):
+
+```console
+$ for v in APP_MFA_WEBAUTHN_RP_ID APP_MFA_WEBAUTHN_ORIGINS APP_CASDOOR_MFA_ENABLED; do
+    printf '%s=' "$v"
+    $KC -n hugmesh-backend get deploy hugmesh-admin-bff-api \
+      -o jsonpath="{.spec.template.spec.containers[*].env[?(@.name==\"$v\")].value}"; echo
+  done
+$ $KC -n hugmesh-backend logs deploy/hugmesh-admin-bff-api --since=24h | grep -c 'MFA MISCONFIGURED'
+```
+
+Expect your own domain on the first two (not `admin.hugmesh.net` unless that *is* your
+domain, and never `localhost`), `true` on the third, and `0` from the grep (the boot
+guard's banner, §4.3 — absence is only meaningful if that image carries the guard).
+
+**C3. The seeded rules are what §1.2 says** — 10 flipped, 11 carrying the floor. Run
+the two runbook blocks, unmodified, against the route-access database
+(`deploy/route-access-db`, namespace `hugmesh-pki`, database and owner role
+`gateway`, password from the pod's own `POSTGRES_PASSWORD`, per
+`specs/cluster/manifests/route-access/deployment.yaml`):
+
+```console
+$ for b in verify floor; do
+    echo "== $b"
+    scripts/mfa-runbook-sql.sh "$b" | $KC -n hugmesh-pki exec -i deploy/route-access-db -- \
+      sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -U gateway -d gateway'
+  done
+```
+
+Expect `(10 rows)` for `verify`, all `mfa_required = t`, and `(11 rows)` for `floor`
+(the extra one is the `allow = f` games-services row, §3 step 4). If the cluster was
+upgraded in place and these come back short, re-apply `20-schema.sql` (§3 step 4);
+do **not** hand-edit rows (§5).
+
+**C4. The machine-caller census (§2.4) — re-run it, it is a point-in-time answer.**
+The §2.4 result is from 2026-08-06; the static half is a `git grep` per repo and the
+empirical half is:
+
+```console
+$ $KC -n hugmesh-pki exec -i deploy/casdoor-pg -- sh -c \
+    'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -U "$POSTGRES_USER" -d casdoor -tA' <<'SQL'
+SELECT application,
+       CASE WHEN COALESCE("user", '') = '' THEN 'machine' ELSE 'user-bound' END,
+       count(*)
+  FROM token GROUP BY 1, 2;
+SQL
+```
+
+Expect **no `machine` rows**. Any `machine` row on `/bff/admin…` or `/bff/superadmin…`
+traffic is a §2.4 stop: it is denied permanently the moment step 6 lands. (The table
+and column names are Casdoor's, not this repo's, and were not re-checked here; the
+casdoor Deployment is `casdoor-pg` in `hugmesh-pki` per
+`specs/cluster/manifests/casdoor/pg.yaml`.)
+
+**C5. Every privileged operator has an ENABLED TOTP factor** — the census the runbook
+had no command for. The query below lists **every** account whose cached roles include
+`superadmin`, `admin` or `game-master`, with whether it holds an enabled TOTP and/or
+WebAuthn factor. TOTP specifically, not "any factor", because only the TOTP path issues
+recovery codes (§2.2). It is executed by the gate against a fixture schema that
+mirrors changelogs `004-account.xml` and `151-mfa-factors.xml`.
+
+<!-- gate:doc-sql name=census expect=mfa-census -->
+
+```sql
+SELECT a.id,
+       a.roles,
+       EXISTS (SELECT 1 FROM mfa_factor f
+                WHERE f.owner_subject = a.id AND f.enabled AND f.type = 'TOTP')     AS totp,
+       EXISTS (SELECT 1 FROM mfa_factor f
+                WHERE f.owner_subject = a.id AND f.enabled AND f.type = 'WEBAUTHN') AS webauthn
+  FROM account a
+ WHERE ',' || replace(a.roles, ' ', '') || ',' LIKE '%,superadmin,%'
+    OR ',' || replace(a.roles, ' ', '') || ',' LIKE '%,admin,%'
+    OR ',' || replace(a.roles, ' ', '') || ',' LIKE '%,game-master,%'
+ ORDER BY 3, 1;
+```
+
+```console
+$ scripts/mfa-runbook-sql.sh census | $KC -n hugmesh-backend exec -i deploy/admin-bff-db -- \
+    sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -U adminbff -d adminbff'
+```
+
+(`deploy/admin-bff-db`, namespace `hugmesh-backend`, database and owner role
+`adminbff`, from `specs/cluster/manifests/admin-bff-db/deployment.yaml`.) Rows are
+sorted un-enrolled first. **Every row must show `totp = t`.** A row with `totp = f` and
+`webauthn = t` is the §2.2 hazard (WebAuthn-only, no recovery codes) and is **not**
+ready. The census is only as complete as what it can see, and three blind spots matter:
+
+* `account.roles` is a **cached copy** that admin-bff re-syncs from the Casdoor
+  id_token on every native login (changelog `260-account-roles-check-relax.xml`). A
+  privileged Casdoor user who has **never logged in through `/bff/login`** has no
+  `account` row, therefore no opaque session, therefore **cannot enrol at all**, and is
+  invisible here. Compare against Casdoor's own role membership (Casdoor admin UI →
+  Roles → `superadmin`, `admin`, `game-master`) and have each missing person log in
+  once. *No SQL is given for the Casdoor side: its `role` table layout was not
+  verified from this repo.*
+* `owner_subject` is **carrier-dependent** (auth-core `MfaEnrollmentController.subjectOf`):
+  an opaque `bff_` session enrols under `account.id` (`casdoor:<handle>`), a raw JWT
+  under the Casdoor `sub` UUID. The join above is correct for the native-login web
+  console, which is the only carrier that can complete `POST /bff/mfa/challenge`
+  (§2.4). Look at what is **not** matched:
+
+  ```console
+  $ echo "SELECT owner_subject, type, enabled FROM mfa_factor ORDER BY 1,2;" | \
+      $KC -n hugmesh-backend exec -i deploy/admin-bff-db -- \
+      sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -U adminbff -d adminbff'
+  ```
+
+  An `owner_subject` that looks like a bare UUID is a raw-JWT enrolment keyed under
+  the `sub`; it will not appear in the census and its holder must be checked by hand.
+* An `idp: own` domain's principals cannot enrol at all (§1.2a); enumerate those
+  domains separately.
+
+**C6. Each operator PROVES a fresh stamp — a human step, no command can do it for
+them.** For every row from C5: sign in at the real console, open the login-ui security
+page, complete the TOTP challenge (`POST /bff/mfa/challenge`, body
+`{"factor":"totp","credential":"<code>"}`, driven by the page), then reach an
+`/bff/admin…` page **within 10 minutes**. Afterwards you can read the stamp back
+(token column deliberately not selected):
+
+```console
+$ echo "SELECT account_id, mfa_satisfied, mfa_satisfied_at, now() - mfa_satisfied_at AS age
+          FROM bff_session
+         WHERE mfa_satisfied AND expires_at > now()
+         ORDER BY mfa_satisfied_at DESC;" | \
+    $KC -n hugmesh-backend exec -i deploy/admin-bff-db -- \
+    sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -U adminbff -d adminbff'
+```
+
+Every privileged `account_id` from C5 must appear at least once with `mfa_satisfied =
+t`. Record each operator's recovery codes at enrol time (shown once, §2.2). Do **not**
+go on until C5 is fully `totp = t` **and** every row has appeared here.
+
+**C7. Two people hold cluster access.** §6 item 5's break-glass needs `kubectl` on the
+admin-bff database; if the only person who can do it is the one being locked out,
+there is no way back. Name the second person now.
+
+### Phase D — decide the shape of the floor flip (a decision, not a command)
+
+§3 step 7 cannot canary one gateway through git (§3 step 7's warning). Decide, in
+writing, before phase E: **(a)** all four at once from one commit, **(b)** the
+temporary bypass in phase E on `hugmesh-fe-gateway` first, or **(c)** extend the gate
+to allow a per-gateway pin. This section implements (a) and (b).
+
+### Phase E — flip, one flag at a time, one reviewed commit each
+
+**E1. Step 6 (`mfa.enabled`).** One commit that changes, together: the chart value
+`specs/cluster/charts/hugmesh-gateway/values.yaml` `mfa.enabled: true`, and the three
+suites' pins exactly as §3 step 6's table lists (`test-gateway-mfa-env.sh`,
+`test-mfa-required-rules.sh`, `test-mfa-flip-wiring.sh`). Re-run phase A: all four
+`0`. Merge, let ArgoCD sync, then re-run **phase B**: `APP_MFA_ENABLED=true` on all
+four, floor still `false`, window still `600000`. Wait for rollouts:
+
+```console
+$ for gw in hugmesh-pki-gateway:hugmesh-pki hugmesh-be-gateway:hugmesh-backend \
+            hugmesh-fe-gateway:hugmesh-frontend hugmesh-superadmin-gateway:hugmesh-pki; do
+    $KC -n "${gw##*:}" rollout status "deploy/${gw%%:*}" --timeout=300s
+  done
+```
+
+What you should and should **not** see (§3.1): a pure `ROLE_FLEET_ADMIN` without a
+stamp now gets `403` with `X-Route-Denied` on `/bff/admin/phone-fleet/**`; admins and
+superadmins are unchanged. **A quiet cluster is not evidence that admin MFA works.**
+Soak here as long as you like; this state is the recommended resting point.
+
+**E2. Step 7 (`mfa.enforcePrivilegedFloor`) — option (a).** Rehearse on compose first
+(`make stack-up MFA_FLOOR=1`, then `MFA_FLOOR=1 npx playwright test
+29-mfa-privileged-floor` from `tests/e2e`). Have **two** superadmin sessions open on
+two browsers, each with a stamp taken in the last few minutes, and the C7 person on
+call. One commit: `mfa.enforcePrivilegedFloor: true` plus the two suite pins from §3
+step 7's table. Merge, sync, re-run phase B (`APP_MFA_ENFORCE_PRIVILEGED_FLOOR=true`
+everywhere), and expect `503` + `Retry-After: 5` for privileged callers during each
+gateway's cold start (§2). Then, from a session whose stamp is **older than 10
+minutes**, load an `/bff/admin…` page: expect `403` + `X-Route-Denied`; complete the
+challenge on the security page and reload: expect it to pass. A page outside the floor
+(for example `/bff/forum/admin/**`, §1.2a) must be untouched.
+
+**E-bypass. Option (b): the floor on `hugmesh-fe-gateway` only, temporarily, outside
+git.** Auto-sync must be suspended or it reverts you within a reconcile (§3 step 7).
+This is a **drift you create on purpose and must undo**:
+
+```console
+$ $KC -n devops patch app hugmesh-root          --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'
+$ $KC -n devops patch app hugmesh-gateway-fe    --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'
+$ $KC -n hugmesh-frontend set env deploy/hugmesh-fe-gateway -c gateway APP_MFA_ENFORCE_PRIVILEGED_FLOOR=true
+$ $KC -n hugmesh-frontend rollout status deploy/hugmesh-fe-gateway --timeout=300s
+```
+
+Undo it by re-enabling auto-sync on the root (`{"spec":{"syncPolicy":{"automated":
+{"prune":true,"selfHeal":true}}}}`), which re-applies the Application specs from git,
+then confirming phase B shows the value git says. **Until you do, every other
+reconcile-driven fix on those four gateways is frozen.** Not run against a live
+cluster; ArgoCD behaviour here is read from the manifests only.
+
+### Phase F — after each flip
+
+Re-run phase B, the C3 `floor` block (still `(11 rows)` — a flip must not move data),
+and the C5/C6 queries. Watch the four gateways' logs for a burst of `403` /
+`X-Route-Denied` from principals you did not expect; each is either an operator who
+missed C6 or a caller the §2.4 census did not know about.
+
+### Phase G — rollback and break-glass, commands
+
+Order is §6: floor first, then `enabled`, data last. **The durable rollback is a git
+revert** of the flip commit (its pins revert with it). The fast path, when minutes
+matter, is to suspend auto-sync and change the env, then reconcile afterwards:
+
+```console
+$ $KC -n devops patch app hugmesh-root          --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'
+$ $KC -n devops patch app hugmesh-gateway-fe    --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'
+$ $KC -n hugmesh-frontend set env deploy/hugmesh-fe-gateway -c gateway APP_MFA_ENFORCE_PRIVILEGED_FLOOR=false
+$ $KC -n hugmesh-frontend rollout status deploy/hugmesh-fe-gateway --timeout=300s
+```
+
+(Repeat the last two lines for each affected gateway from the table above; for a full
+disable add `APP_MFA_ENABLED=false`.) **Break-glass for one operator with no usable
+factor** — look first, delete second, inside one transaction you read before you
+commit. `<owner_subject>` is the value from the C5 `id` column:
+
+```console
+$ $KC -n hugmesh-backend exec -i deploy/admin-bff-db -- \
+    sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -U adminbff -d adminbff' <<'SQL'
+BEGIN;
+SELECT 'mfa_factor', count(*) FROM mfa_factor WHERE owner_subject = '<owner_subject>'
+UNION ALL SELECT 'mfa_recovery_code', count(*) FROM mfa_recovery_code WHERE owner_subject = '<owner_subject>'
+UNION ALL SELECT 'webauthn_credential', count(*) FROM webauthn_credential WHERE owner_subject = '<owner_subject>';
+DELETE FROM mfa_recovery_code   WHERE owner_subject = '<owner_subject>';
+DELETE FROM webauthn_credential WHERE owner_subject = '<owner_subject>';
+DELETE FROM mfa_factor          WHERE owner_subject = '<owner_subject>';
+COMMIT;
+SQL
+```
+
+That operator can then sign in again and re-enrol **TOTP first** (§2.2) —
+enrolment is reachable with the floor on (§2.1: `/bff/mfa/**` has no route row), and
+only the *removal* of a factor and the recovery-code regeneration are step-up gated.
+The data rollback (§6 step 3) is `scripts/mfa-runbook-sql.sh rollback | …psql…` against
+`route-access-db`, exactly as in C3.
+
+### What this checklist does not prove
+
+It does not prove that Postgres executes the runbook's SQL **blocks** (the gate runs
+those on sqlite; only the seed has a Postgres leg, §1.2) — C3 and C5 are their first
+contact with Postgres. It does not enumerate
+privileged Casdoor users who never logged in (C5, first bullet). It does not prove the
+suspended-auto-sync commands against your ArgoCD version. And it cannot make an
+operator enrol: C6 is a person at a keyboard.

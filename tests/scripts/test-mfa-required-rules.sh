@@ -1005,6 +1005,12 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
     for name, expect, block in DOC_RE.findall(doctext):
         doc_names.append(name)
         body = dedent(block).strip()
+        # Optional 3rd argv: a directory to drop each block's body into, so the shell
+        # side can compare scripts/mfa-runbook-sql.sh (what an operator actually runs)
+        # against the very text this checker parsed and executed.
+        if len(sys.argv) > 3 and os.path.isdir(sys.argv[3]):
+            with open(os.path.join(sys.argv[3], name + ".sql"), "w", encoding="utf-8") as _bf:
+                _bf.write(body + "\n")
         try:
             if expect == "identical-to-seed":
                 if body.strip() != raw_flip.strip():
@@ -1035,6 +1041,56 @@ if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
                         "missing=%s unexpected=%s"
                         % (name, len(got), len(want), expect,
                            sorted(want - got)[:4], sorted(got - want)[:4]))
+            elif expect == "mfa-census":
+                # The runbook's §9 privileged-operator census (admin-bff database,
+                # NOT the route-access database every other block runs against), so
+                # it gets its own throwaway engine with a fixture schema that mirrors
+                # hugmesh-admin-bff-api changelogs 004-account.xml (account: id,
+                # roles CSV) and 151-mfa-factors.xml (mfa_factor: owner_subject,
+                # type TOTP|WEBAUTHN, enabled). Each fixture row is a way an operator
+                # could be WRONGLY classified: a role that merely CONTAINS "admin"
+                # (a substring match would pull it in), a CSV with spaces, a TOTP
+                # still mid-enrol (enabled=false), a WEBAUTHN-only operator (the §2.2
+                # hazard), a non-privileged user, and a factor owned by someone else.
+                import sqlite3 as _sq
+                ce = _sq.connect(":memory:")
+                ce.executescript("""
+                    CREATE TABLE account (id TEXT PRIMARY KEY, roles TEXT NOT NULL DEFAULT 'user');
+                    CREATE TABLE mfa_factor (id TEXT PRIMARY KEY, owner_subject TEXT NOT NULL,
+                                             type TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT 0);
+                    INSERT INTO account VALUES
+                      ('casdoor:root',        'user,superadmin'),
+                      ('casdoor:adm-none',    'user,admin'),
+                      ('casdoor:adm-webauthn','user,admin'),
+                      ('casdoor:gm-midenrol', 'user,game-master'),
+                      ('casdoor:gm-both',     'game-master'),
+                      ('casdoor:sa-spaces',   'user, admin'),
+                      ('casdoor:plain-mod',   'user,mod'),
+                      ('casdoor:trap',        'user,administrator,superadministrator');
+                    INSERT INTO mfa_factor VALUES
+                      ('1','casdoor:root',        'TOTP',     1),
+                      ('2','casdoor:adm-webauthn','WEBAUTHN', 1),
+                      ('3','casdoor:gm-midenrol', 'TOTP',     0),
+                      ('4','casdoor:gm-both',     'TOTP',     1),
+                      ('5','casdoor:gm-both',     'WEBAUTHN', 1),
+                      ('6','casdoor:plain-mod',   'TOTP',     1),
+                      ('7','someone-else',        'TOTP',     1);
+                """)
+                got_c = [(r[0], r[1], bool(r[2]), bool(r[3])) for r in
+                         ce.execute(body.rstrip().rstrip(";")).fetchall()]
+                want_c = [
+                    ("casdoor:adm-none",     "user,admin",       False, False),
+                    ("casdoor:adm-webauthn", "user,admin",       False, True),
+                    ("casdoor:gm-midenrol",  "user,game-master", False, False),
+                    ("casdoor:sa-spaces",    "user, admin",      False, False),
+                    ("casdoor:gm-both",      "game-master",      True,  True),
+                    ("casdoor:root",         "user,superadmin",  True,  False),
+                ]
+                # ORDER matters: the runbook promises un-enrolled operators sort first.
+                if got_c != want_c:
+                    doc_bad.append("%s: census returned %r, expected %r (privileged accounts only, "
+                                   "TOTP-less first, a mid-enrol or WebAuthn-only operator must NOT "
+                                   "read as covered)" % (name, got_c, want_c))
             elif expect == "per-domain-tightening":
                 # The runbook's per-domain tightening EXAMPLE, executed for real:
                 # its INSERT must land beside the unscoped canonical row, survive
@@ -1557,7 +1613,7 @@ PY
 # ─────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "── 1) mfa_required rules in the canonical seed ──"
-python3 "${W}/check.py" "${SQL}" "${DOC}" > "${W}/real.out" 2>"${W}/real.err" \
+mkdir -p "${W}/docsql" && python3 "${W}/check.py" "${SQL}" "${DOC}" "${W}/docsql" > "${W}/real.out" 2>"${W}/real.err" \
   || { echo "  FAIL checker crashed:"; cat "${W}/real.err"; exit 1; }
 g() { sed -n "s/^$1 //p" "${W}/real.out" | head -1; }
 
@@ -2055,6 +2111,173 @@ esac
   && ok "every marked runbook query returns exactly what the prose around it promises (a previous revision told operators that LIKE '/bff/%admin%' 'also returns the six rows that are false by design' — run for real it returns THREE of the six, because the other three have no 'admin' substring in url_pattern)" \
   || bad "$(g DOC_SQL_BAD) runbook SQL block(s) do not do what the prose says: $(sed -n 's/^DOC_SQL_BAD_ROW //p' "${W}/real.out" | tr '\n' ';')"
 
+
+# ── §9 operator checklist: the census block, the helper, and the posture-suite list ──
+# docs/MFA-ROLLOUT.md §9 is what the operator runs on a real cluster. Three things in it
+# are checkable here without one, and each had no gate before:
+#   (1) the `census` query (privileged accounts vs enabled TOTP factors) — executed above
+#       against a fixture schema (expect=mfa-census); here we only require it to EXIST,
+#       because a deleted census silently takes §9 phase C5 back to "go and look";
+#   (2) scripts/mfa-runbook-sql.sh, the thing an operator pipes the runbook's SQL through,
+#       must print every marked block BYTE-FOR-BYTE as this gate parsed it — otherwise the
+#       "executed by the gate" claim stops transferring to the cluster;
+#   (3) §3 steps 6/7 and §9 must name EVERY suite that pins the cluster-OFF posture. The
+#       2026-10-14 measurement found the runbook naming one of the three that go red when
+#       the chart default flips; this makes the list a checked fact, and the discovery
+#       below catches a FOURTH such suite being added without the runbook learning of it.
+case ",$(g DOC_SQL_NAMES)," in
+  *,census,*) ok "the runbook still carries the §9 'census' query (expect=mfa-census) — privileged accounts vs ENABLED TOTP factors, run for real against a fixture schema" ;;
+  *) bad "the runbook's 'census' query is GONE (names: $(g DOC_SQL_NAMES)) — §9 phase C5 has no command for 'every privileged operator has a working second factor'" ;;
+esac
+
+HELPER="${REPO}/scripts/mfa-runbook-sql.sh"
+if [ ! -f "${HELPER}" ]; then
+  bad "scripts/mfa-runbook-sql.sh is missing — §9 tells the operator to pipe the runbook's SQL through it"
+else
+  list_got="$(bash "${HELPER}" --list 2>/dev/null | paste -sd, -)"
+  [ "${list_got}" = "$(g DOC_SQL_NAMES)" ] \
+    && ok "scripts/mfa-runbook-sql.sh --list names exactly the blocks this gate executes (${list_got})" \
+    || bad "scripts/mfa-runbook-sql.sh --list says '${list_got}' but the gate executes '$(g DOC_SQL_NAMES)'"
+  helper_bad=""; helper_n=0
+  for f in "${W}/docsql/"*.sql; do
+    n="$(basename "${f}" .sql)"; helper_n=$((helper_n+1))
+    bash "${HELPER}" "${n}" 2>/dev/null | cmp -s - "${f}" || helper_bad="${helper_bad} ${n}"
+  done
+  [ "${helper_n}" = "$(g DOC_SQL_BLOCKS)" ] \
+    && ok "the gate dumped all ${helper_n} runbook SQL block bodies for the byte comparison" \
+    || bad "the gate dumped ${helper_n} block bodies but the runbook marks $(g DOC_SQL_BLOCKS) — the byte comparison below is not covering every block"
+  [ -z "${helper_bad}" ] \
+    && ok "scripts/mfa-runbook-sql.sh prints every marked block byte-for-byte as the gate parsed and executed it" \
+    || bad "scripts/mfa-runbook-sql.sh output differs from the gate's parse for:${helper_bad} — an operator would run text the gate never proved"
+  hn_out="$(bash "${HELPER}" no-such-block 2>/dev/null)"; hn_rc=$?
+  [ "${hn_rc}" -ne 0 ] && [ -z "${hn_out}" ] \
+    && ok "the helper fails closed on an unknown block name (rc=${hn_rc}, nothing on stdout, so a pipe into psql runs nothing)" \
+    || bad "the helper answered an unknown block name with rc=${hn_rc} and stdout '${hn_out}' — a pipe into psql would run it"
+  he_out="$(bash "${HELPER}" 2>/dev/null)"; he_rc=$?
+  [ "${he_rc}" -ne 0 ] && [ -z "${he_out}" ] \
+    && ok "the helper fails closed on no argument (rc=${he_rc})" \
+    || bad "the helper accepted no argument (rc=${he_rc}, stdout '${he_out}')"
+fi
+
+# The suites that hard-code the cluster-OFF posture. Declared by hand AND re-discovered
+# from the tree: a test script that mentions `mfa.enabled` and the shared gateway chart is
+# presumed to pin it. NOT_POSTURE_SUITES records the reviewed exceptions, with the reason.
+POSTURE_SUITES="tests/stack/test-gateway-mfa-env.sh tests/scripts/test-mfa-required-rules.sh tests/stack/test-mfa-flip-wiring.sh"
+# test-kind-tor.sh only builds a fixture whose helm parameters include mfa.enabled; it asserts nothing about the chart default.
+NOT_POSTURE_SUITES="tests/scripts/test-kind-tor.sh"
+posture_discovered() { # <repo-root> -> relative paths of suites that look like posture pins
+  ( cd "$1" && grep -rlE 'mfa\.enabled' tests --include='test-*.sh' 2>/dev/null \
+      | while read -r f; do grep -qE 'charts/hugmesh-gateway|hugmesh-gateway/values\.yaml' "$f" && echo "$f"; done ) | sort
+}
+posture_undeclared() { # <repo-root> -> discovered suites that are neither declared nor reviewed-exempt
+  local f; for f in $(posture_discovered "$1"); do
+    case " ${POSTURE_SUITES} ${NOT_POSTURE_SUITES} " in *" ${f} "*) ;; *) echo "${f}" ;; esac
+  done
+}
+posture_missing_files() { local f; for f in ${POSTURE_SUITES}; do [ -f "$1/${f}" ] || echo "${f}"; done; }
+posture_doc_gaps() { # <doc> -> "<where>:<suite basename>" for each declared suite the runbook fails to name
+  local doc="$1" f b s6 s9
+  s6="$(sed -n '/^6\. \*\*Turn on/,/^### 3\.1/p' "${doc}")"
+  s9="$(sed -n '/^## 9\. /,$p' "${doc}")"
+  for f in ${POSTURE_SUITES}; do
+    b="$(basename "${f}")"
+    printf '%s' "${s6}" | grep -F "${b}" >/dev/null || echo "step6/7:${b}"
+    printf '%s' "${s9}" | grep -F "${b}" >/dev/null || echo "section9:${b}"
+  done
+}
+miss="$(posture_missing_files "${REPO}")"
+[ -z "${miss}" ] \
+  && ok "every declared posture suite exists ($(echo ${POSTURE_SUITES} | wc -w) suites)" \
+  || bad "declared posture suite(s) missing from the tree: ${miss}"
+und="$(posture_undeclared "${REPO}")"
+[ -z "${und}" ] \
+  && ok "no OTHER test suite looks like a cluster-posture pin (found by scanning tests/ for mfa.enabled + the shared gateway chart)" \
+  || bad "suite(s) that look like cluster-posture pins are not in this gate's POSTURE_SUITES list, so the runbook cannot be naming them: ${und}"
+gaps="$(posture_doc_gaps "${DOC}")"
+[ -z "${gaps}" ] \
+  && ok "runbook §3 steps 6-7 and §9 name every posture suite a cluster flip has to move" \
+  || bad "the runbook does not name posture suite(s) a flip turns red: $(echo ${gaps})"
+
+# ── …and each of those proven to bite on a corrupted copy ────────────────────
+echo ""
+echo "── 2c) negative controls (§9 checklist) ──"
+nc9="${W}/nc9"; rm -rf "${nc9}"; mkdir -p "${nc9}/tests/stack"
+# (a) the runbook stops naming one posture suite in steps 6-7
+python3 - "${DOC}" "${nc9}/doc-noname.md" <<'PY'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+a = s.index("6. **Turn on `APP_MFA_ENABLED`")
+b = s.index("### 3.1 ")
+seg = s[a:b]
+assert "test-mfa-flip-wiring.sh" in seg
+open(sys.argv[2], "w", encoding="utf-8").write(s[:a] + seg.replace("test-mfa-flip-wiring.sh", "the-third-suite") + s[b:])
+PY
+g1="$(posture_doc_gaps "${nc9}/doc-noname.md")"
+case "${g1}" in *"step6/7:test-mfa-flip-wiring.sh"*) ok "negative control: runbook step 6-7 text no longer naming test-mfa-flip-wiring.sh -> reported (${g1})" ;;
+  *) bad "negative control: dropping a suite name from steps 6-7 was NOT reported (got '${g1}') — the doc pin is vacuous" ;; esac
+# (b) §9 stops naming one
+python3 - "${DOC}" "${nc9}/doc-no9.md" <<'PY'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+a = s.index("## 9. ")
+seg = s[a:]
+assert "test-gateway-mfa-env.sh" in seg
+open(sys.argv[2], "w", encoding="utf-8").write(s[:a] + seg.replace("test-gateway-mfa-env.sh", "the-first-suite"))
+PY
+g2="$(posture_doc_gaps "${nc9}/doc-no9.md")"
+case "${g2}" in *"section9:test-gateway-mfa-env.sh"*) ok "negative control: §9 no longer naming test-gateway-mfa-env.sh -> reported (${g2})" ;;
+  *) bad "negative control: dropping a suite name from §9 was NOT reported (got '${g2}')" ;; esac
+# (c) a FOURTH suite that pins the chart default appears
+printf '#!/usr/bin/env bash\ngrep -q "enabled: false" specs/cluster/charts/hugmesh-gateway/values.yaml # mfa.enabled pin\n' > "${nc9}/tests/stack/test-new-posture-pin.sh"
+u3="$(posture_undeclared "${nc9}")"
+[ "${u3}" = "tests/stack/test-new-posture-pin.sh" ] \
+  && ok "negative control: a new suite pinning mfa.enabled against the shared chart -> reported as undeclared (${u3})" \
+  || bad "negative control: a new posture-pinning suite was NOT discovered (got '${u3}') — the discovery is vacuous"
+# (d) the discovery does not cry wolf on a suite that only MENTIONS mfa.enabled
+printf '#!/usr/bin/env bash\necho "mfa.enabled is documented elsewhere"\n' > "${nc9}/tests/stack/test-unrelated.sh"
+u4="$(posture_undeclared "${nc9}")"
+[ "${u4}" = "tests/stack/test-new-posture-pin.sh" ] \
+  && ok "negative control (other direction): a suite that merely mentions mfa.enabled, with no gateway chart, stays silent" \
+  || bad "negative control (other direction): discovery flagged '${u4}' — it cries wolf on an unrelated suite"
+# (e) the declared suites disappear
+m5="$(posture_missing_files "${nc9}" | wc -l)"
+[ "${m5}" = "3" ] \
+  && ok "negative control: a tree carrying none of the declared posture suites -> all 3 reported missing" \
+  || bad "negative control: posture_missing_files reported ${m5} of 3 on an empty tree"
+# (f) the helper against a runbook with a DUPLICATED block name, with no blocks, and unreadable
+python3 - "${DOC}" "${nc9}/doc-dup.md" <<'PY'
+import re, sys
+s = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r'<!--\s*gate:doc-sql\s+name=floor\s+expect=every-floor-row\s*-->', s)
+assert m
+dup = s[:m.start()] + s[m.start():m.end()].replace("name=floor", "name=verify") + s[m.end():]
+open(sys.argv[2], "w", encoding="utf-8").write(dup)
+PY
+d_out="$(MFA_RUNBOOK="${nc9}/doc-dup.md" bash "${HELPER}" verify 2>/dev/null)"; d_rc=$?
+[ "${d_rc}" -ne 0 ] && [ -z "${d_out}" ] \
+  && ok "negative control: the helper refuses a runbook with two blocks of the same name (rc=${d_rc}, stdout empty)" \
+  || bad "negative control: the helper ran an AMBIGUOUS block (rc=${d_rc}, stdout $(printf '%s' "${d_out}" | wc -c) bytes)"
+printf '# no blocks here\n' > "${nc9}/doc-empty.md"
+e_out="$(MFA_RUNBOOK="${nc9}/doc-empty.md" bash "${HELPER}" floor 2>/dev/null)"; e_rc=$?
+[ "${e_rc}" -ne 0 ] && [ -z "${e_out}" ] \
+  && ok "negative control: the helper refuses a runbook with no marked blocks (rc=${e_rc})" \
+  || bad "negative control: the helper answered a block-less runbook (rc=${e_rc}, stdout '${e_out}')"
+u_out="$(MFA_RUNBOOK="${nc9}/does-not-exist.md" bash "${HELPER}" floor 2>/dev/null)"; u_rc=$?
+[ "${u_rc}" -ne 0 ] && [ -z "${u_out}" ] \
+  && ok "negative control: the helper refuses an unreadable runbook (rc=${u_rc})" \
+  || bad "negative control: the helper answered an unreadable runbook (rc=${u_rc})"
+# (g) the byte comparison itself bites: a runbook whose block was edited prints different text than the gate's dump
+python3 - "${DOC}" "${nc9}/doc-edited.md" <<'PY'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+a = "    WHERE mfa_required = true\n    ORDER BY allow, 1, 2, 3;"
+assert s.count(a) == 1
+open(sys.argv[2], "w", encoding="utf-8").write(s.replace(a, "    WHERE mfa_required = true\n    ORDER BY allow, 1, 2, 4;", 1))
+PY
+MFA_RUNBOOK="${nc9}/doc-edited.md" bash "${HELPER}" floor 2>/dev/null | cmp -s - "${W}/docsql/floor.sql" \
+  && bad "negative control: an EDITED runbook block still compared byte-identical to the gate's dump — the comparison is vacuous" \
+  || ok "negative control: an edited runbook block no longer matches the gate's dump byte-for-byte"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3) negative controls — each check must BITE on a corrupted copy
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2433,6 +2656,27 @@ nd "the runbook's verification query drops ONLY its allow = true clause (the den
 anchor(a)
 s = s.replace(a, "    WHERE (url_pattern LIKE %s\n        OR url_pattern LIKE %s)" % (
     repr("/bff/admin%"), repr("/bff/superadmin%")), 1)'
+
+# ── the §9 census query, proven to bite (it runs against a fixture schema) ────
+# Each mutation is a way the census could quietly report an operator as covered when
+# they are not. The first is the one that matters most: a TOTP row that is still
+# mid-enrol (enabled = false) must not read as an enrolled factor.
+nd "the census stops requiring the factor to be ENABLED (a mid-enrol TOTP reads as a working second factor)" DOC_SQL_BAD 0 \
+   'a = "AND f.enabled AND f.type = %s)     AS totp," % repr("TOTP")
+anchor(a)
+s = s.replace(a, "AND f.type = %s)     AS totp," % repr("TOTP"), 1)'
+nd "the census matches the role by SUBSTRING (administrator / superadministrator read as privileged)" DOC_SQL_BAD 0 \
+   'a = repr("%,admin,%")
+anchor(a)
+s = s.replace(a, repr("%admin%"), 1)'
+nd "the census counts a WEBAUTHN factor as TOTP (the WebAuthn-only recovery-code lockout of section 2.2 reads as covered)" DOC_SQL_BAD 0 \
+   'a = "AND f.enabled AND f.type = %s)     AS totp," % repr("TOTP")
+anchor(a)
+s = s.replace(a, "AND f.enabled AND f.type IN (%s, %s))     AS totp," % (repr("TOTP"), repr("WEBAUTHN")), 1)'
+nd "the census drops game-master from the privileged set (the floor's third role)" DOC_SQL_BAD 0 \
+   'a = "\n    OR %s || replace(a.roles, %s, %s) || %s LIKE %s" % (repr(","), repr(" "), repr(""), repr(","), repr("%,game-master,%"))
+anchor(a)
+s = s.replace(a, "", 1)'
 
 # ── the FLOOR query and the deny-floor table (hugmesh-generator#485) ────────────
 # §5 now carries a second marked query, scoped to the FLOOR rather than to the flip,
