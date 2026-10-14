@@ -764,9 +764,9 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     198 of 222 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (24 suite(s))
 # 198 of 223 -> 198 of 224 and ungated SET 25 -> 26 on 2026-10-14 for the 13a cut-over
-# matrix (the 222 / 24 above is the figure at #629's own merge; origin/main 5f450a48
-# measures 223 / 25 when run, one suite later): tests/scripts/test-optional-services-cutover-matrix.sh is a new suite that is
-# NOT named by a pull_request workflow (it is wired post-merge by .gitlab-ci.yml and
+# matrix (the 222 / 24 above is the figure at #629's own merge; origin/main measures
+# 223 / 25 when run, one suite later): tests/scripts/test-optional-services-cutover-matrix.sh
+# is a new suite that is NOT named by a pull_request workflow (it is wired post-merge by .gitlab-ci.yml and
 # recorded in PREMERGE_UNGATED above), so the denominator rose and the gated count did
 # not. MEASURED by RUNNING this file on the tree (GUARD_PREMERGE=0), not computed:
 #     198 of 224 suites are named by a pull_request-triggered workflow
