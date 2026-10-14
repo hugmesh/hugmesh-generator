@@ -35,6 +35,9 @@ the local fix.
 > profile does not deploy — those specs are out of scope here and this result
 > says nothing about them. **"the e2e is green" is not "the platform is finished"**.
 >
+> **Re-measured 2026-10-14:** blockers 1-16 hold on `main`, and #693 (item 27) is the
+> next one: [see the last section](#re-measured-2026-10-14).
+>
 > **Item status on 2026-10-07 (`origin/main` @ `cbf5d9a6`).** Items 5-15 are
 > fixed on `main` (#540-#544, #551, #552; marked in the table). Item 24 is fixed in
 > the gateway source. Items 17, 25 and 26 are still open. Item 20 has a helper
@@ -276,3 +279,52 @@ session minting over cluster mTLS. What it does not mean: the rest of the suite
 (matrix, mastodon, forum, discord, RBAC realms) drives services this profile
 does not deploy. Those specs are out of scope here and say nothing about their
 health either way.
+
+## Re-measured 2026-10-14
+
+Blockers 1-16 are re-checked on `origin/main` @ `c0c46601` against the tree and
+the offline guards, not against a cluster. Nothing here was run on a live cluster; the last kind run on record is
+the 2026-08-06 one above (and the 2026-10-07 rebuild, which found item 27). The
+`#NNN` numbers in the table above are issue or branch numbers from the original
+write-up, not reliable GitHub pull request numbers (`gh pr view 534` is an
+unrelated Studio change, and several of the others do not resolve), so this table
+cites commits.
+
+| # | State on main | Evidence |
+|---|---|---|
+| 1 | Fixed for kind only | `bootstrap-kind.sh` mints a throwaway `cluster-ca`; `vault-pki/pki-init-job.yaml` still mounts it `optional: true`. A real cluster still needs the operator's CA (operator-only). |
+| 2 | Fixed for kind | `vault secrets enable -path=secret -version=2 kv` in `bootstrap-kind.sh`. |
+| 3 | Fixed | `tests/scripts/test-eso-seed-contract.sh`: 29 passed, 0 failed. |
+| 4 | Fixed | `07320e1a`; `vault-pki/pki-init-configmap.yaml` role loop. |
+| 5 | Fixed | `cff35917`; `charts/hugmesh-gateway/templates/deployment.yaml:189-191` sets `SPRING_CASSANDRA_USERNAME` / `_PASSWORD`; `test-cassandra-cluster-wiring.sh`: 44 negative controls, PASS. |
+| 6 | Fixed | `cff35917`, `1d57735d`; `manifests/cassandra-init/` and `apps/00b-cassandra-init.yaml`; `bootstrap-kind.sh` lists it in `APP_NAMES` for the sso profile. |
+| 7 | Fixed | `effd9364`; the chart's readiness and liveness probes accept 200 or 401 (`deployment.yaml:241-262`); `tests/stack/test-probe-auth-surface.sh`: 16 negative controls, PASS. |
+| 8 | Fixed | `da6d970a`, `668d386e`; `casdoor/app-conf-configmap.yaml:56` sets `initDataFile = "/init_data.json"`; `init-data-configmap.yaml` declares the `applications` block the import needs. |
+| 9 | Fixed in the manifests | Same commit: `init_data.json` and `casdoor-init` set the admin password from the ESO value. The live IdP behind a given cluster is not measured. |
+| 10 | Fixed | `da6d970a`; `casdoor/init-job.yaml` reads response bodies; `test-casdoor-init-honesty.sh`: 67 passed, 0 failed. |
+| 11-13 | Fixed | `7742bde3`; `user-bff-api/deployment.yaml:168` (`CASDOOR_ORG`), `:496` (client id), `:508` (redirect URI). |
+| 14 | Fixed | `7742bde3`; `test-service-env-contract.sh` PASS with 27 negative controls. It reads the BFF source checkouts it finds next to this repo (here: `SERVICE_SRC_ROOT=/home/magus/Github`, whose HEADs are not all `origin/main`), so treat that run as indicative; CI clones the services itself. |
+| 15 | Fixed | `7742bde3`; `admin-bff-api/deployment.yaml:769-773` takes `SVC_PASSWORD` from `user-bff-hs-token` / `svc-password`. |
+| 16 | Fixed in source | `0cb9221` is an ancestor of `hugmesh-admin-bff-api` `origin/main` (`b51e02af`); that tree has 0 `TO admin_bff` and 169 `adminbff_app` under `src/main/resources`; `admin-bff-api/deployment.yaml:273-274` connects as `adminbff_app`. Whether the `:main` image a cluster pulls was rebuilt after it is not verified. |
+
+Items 18-19 and 21-24 are marked fixed in the table above and were not re-run.
+Still open: 17 (the kind lane never pulls from Harbor), 20 (harness; specs 19, 20
+and 23 still use the built-in `request` fixture), 25 and 26. A guard run today
+agrees with the notes on 25: `tests/scripts/test-outbound-mtls-client.sh` passes
+14 of 14 with `EXEMPT_HTTP_TLS` still naming the four exempt call sites.
+
+### 27. The BFFs cannot validate a Casdoor JWT on kind (hugmesh-generator#693)
+
+**OPEN on main.** `POST /bff/login` mints the cookie (spec 27 stays green), but the
+first call that validates a token, `GET /bff/session`, answers 500: the ten
+kustomize-managed JWT-validating manifests set only `CASDOOR_ISSUER_URI`
+(`https://id.hugmesh.net`), the signing-key fetch goes to that name, and it does
+not resolve inside the cluster. The gateway chart already sets `CASDOOR_JWKS_URI`
+to the in-cluster Service. The fix is the manifests plus three NetworkPolicies
+that admit the pods the hugmesh-pki tier policy did not
+(`manifests/networkpolicy/casdoor-jwks-ingress.yaml`), guarded offline by
+`tests/scripts/test-bff-jwks-in-cluster.sh` (25 negative controls). It is in
+draft pull request #709, which conflicts with current main only in
+`tests/scripts/test-guard-integrity.sh` (the suite census). The live proof (`make kind-tor`, then
+`make kind-e2e-tor`, on a fresh bootstrap) has not been run. Until it has, the
+spec 27 PASS above proves less than "login works".

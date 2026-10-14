@@ -310,10 +310,12 @@ since shipped.
 - a cross-repo **NetworkPolicy egress peer** user-bff → admin-bff internal `:8080`
   (manifests/generator).
 - **SSO end-to-end live e2e** — kind + Playwright, proving the browser holds only `bff_`.
-  **Update (2026-08-05):** the harness now exists (`KIND_PROFILE=sso`, `make
-  kind-images|kind-up|kind-e2e|kind-down`) and reached a real Casdoor login, but
-  the run is **not green** — it fails on 16 enumerated fresh-cluster payload
-  blockers, of which 5–16 are still unfixed. See
+  **Update (2026-10-14):** the harness exists (`KIND_PROFILE=sso`, `make
+  kind-images|kind-up|kind-e2e|kind-down`) and reached a real Casdoor login. The
+  16 fresh-cluster payload blockers it found on 2026-08-05 are fixed on `main`
+  (re-measured against the tree and the offline guards, not a cluster). The next
+  one is open: `GET /bff/session` 500s on kind because the BFF manifests set no
+  in-cluster `CASDOOR_JWKS_URI` (#693, draft pull request #709). See
   [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md).
 
 ## GitOps
@@ -499,22 +501,17 @@ are complete on `main`; each entry names what lights it and what caveat survives
 What is genuinely **not done**. Nothing here has a working default-off
 implementation on `main`.
 
-- **🚧 kind-cluster SSO e2e — harness shipped, proof NOT achieved.**
+- **🚧 kind-cluster SSO e2e — harness shipped, payload blockers fixed, JWT leg open.**
   `KIND_PROFILE=sso` + `make kind-images|kind-up|kind-e2e|kind-down` stand up a
-  real cluster, and the chain now reaches Casdoor and mints a session against a
-  real IdP — but the e2e is **not green**. It fails on 16 enumerated fresh-cluster
-  blockers, because the GitOps payload had never been run end to end and every
-  workaround lived in `tests/stack/compose.local.yaml` instead of `specs/cluster`.
-  Fixed in-repo: the `cluster-ca` / Vault KV mount / node-label items plus
-  `fix/cluster-secret-contract-drift` and `fix/pki-role-san-namespace`. **Not
-  fixed (5–16):** Cassandra credentials + keyspace bootstrap, gateway probes
-  hitting a role-gated actuator path (no gateway can become Ready in k8s), Casdoor
-  never importing `init_data.json` (the IdP keeps the well-known default admin
-  password), `casdoor-init` never checking API responses, `CASDOOR_ORG` /
-  client-id / redirect-uri / namespace pre-rebrand defaults across the BFFs, a
-  hard-required `SVC_PASSWORD` nothing provides, and an admin-bff Liquibase
-  `GRANT` to a role no initdb creates. See
-  [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md).
+  real cluster, and the chain reaches Casdoor and mints a session against a real
+  IdP. The 16 fresh-cluster blockers of the first run are fixed on `main` (item 1
+  for kind only; item 16 in the admin-bff source, image rebuild unverified), as
+  re-measured on 2026-10-14 against the tree, not a cluster. **Open:** the BFFs
+  fetch Casdoor's signing keys from a public host that does not resolve
+  in-cluster, so `GET /bff/session` answers 500 (#693, draft pull request #709);
+  the Harbor pull path is never exercised on kind (finding 17); findings 20, 25
+  and 26. The last recorded green run (2026-08-06) covers the cookie mint only.
+  See [`KIND-SSO-E2E-FINDINGS.md`](KIND-SSO-E2E-FINDINGS.md).
 - **🔭 The live MFA operator flip** — verify every privileged principal can
   produce a fresh `mfa_satisfied` stamp, then flip `mfa.enabled` → `true`, then
   (separately: `enforce-privileged-floor` is **not** a sub-flag of `enabled`)
