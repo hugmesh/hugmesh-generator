@@ -468,7 +468,9 @@ are complete on `main`; each entry names what lights it and what caveat survives
   `hugmesh-admin-bff-api`. Dark behind `app.desktop.registry.enabled=false` /
   `app.desktop.remote-install.enabled=false`. ⚠️ The SSO greeter/PAM **token
   producer** is still deferred, so the deposit path has no producer even once the
-  flags flip. See [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md) §7.
+  flags flip. The go-live
+  preconditions (security re-review, `device_ssh_dial` rows, dial-key mount) are in
+  [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md) §7.
 - **✅ Encrypted versioned backups** — Velero server + node-agent (Kopia) as
   `apps/55-velero.yaml` and the BSL + ESO credentials + least-privilege RBAC +
   status-sweep CronJob as `apps/56-velero-config.yaml`; per-domain + superadmin,

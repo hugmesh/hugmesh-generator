@@ -212,6 +212,78 @@ the native amd64 chroot build with grub-EFI.
   (Increment 2); until it lands the deposit path has no producer and the whole
   leg stays inert-by-default.
 
+#### Go-live preconditions (the three dark flags)
+
+Three admin-BFF flags decide whether the platform can open a shell on, or run an
+install on, a tenant device. All three are **off**, and nothing here flips them.
+They are now findable and overridable:
+
+| Flag | Env var | admin-BFF property |
+|---|---|---|
+| live WebSocket terminal transport | `DEVICE_TERMINAL_ENABLED` | `app.device-terminal.enabled` |
+| the real, host-key-pinned dial | `DEVICE_TERMINAL_DIAL_ENABLED` | `app.device-terminal.dial.enabled` |
+| one-click Flatpak remote-install | `DESKTOP_REMOTE_INSTALL_ENABLED` | `app.desktop.remote-install.enabled` |
+
+Where each is declared: the BFF's `application.yml` (all three, default `false`;
+`app.desktop.remote-install.enabled` had **no** yaml entry before, only a bean
+condition with `matchIfMissing = true`), the cluster Deployment
+(`specs/cluster/manifests/admin-bff-api/deployment.yaml`, literal `"false"`), and
+the compose stack (`tests/stack/compose.local.yaml`, `${NAME:-false}`, so setting
+the variable in the environment `docker compose` runs under overrides it). On the
+cluster the lever is editing the manifest value in a reviewed commit:
+`apps/31-admin-bff-api.yaml` is `automated {prune, selfHeal}`, so `kubectl set
+env` is reverted on the next reconcile.
+`tests/desktop-governance/test-governance-flags-visible.sh` pins all of this and
+goes red if a flag is removed, hardcoded, defaulted on, or set true on the cluster
+without its mount. It is the review point: the commit that flips a flag updates it.
+
+What each flag needs before it does anything:
+
+1. **The dial flag carries a mandatory security re-review.** Flipping
+   `DEVICE_TERMINAL_DIAL_ENABLED` replaces the fail-closed
+   `UnconfiguredDeviceSshChannelFactory` with the sshj factory that opens SSH
+   sessions from the BFF to tenant devices. The re-review comes **before** the
+   flip; it is a precondition, not a follow-up. The terminal and the
+   remote-install share this one trust path, so the remote-install flag adds no
+   second one.
+2. **`device_ssh_dial` rows must exist and be ACTIVE.** The factory refuses a
+   device unless its row is `ACTIVE` **and** the host key the device presents
+   matches the row's pinned `host_key_fp`. TOFU is forbidden: no auto-accept. A
+   row carries `device_id` (one row per device), `dial_user`, `host_key_pub`,
+   `host_key_fp` (a `SHA256:` pin; an MD5 pin cannot become ACTIVE), `dial_pub_fp`,
+   `vault_ref` and `k8s_secret_name` (pointers, never key bytes),
+   `seeded_by_build_id`, `generation`, and `status` in `PENDING | ACTIVE |
+   REVOKED`. Rows are not written by hand: an image build seeds one as `PENDING`
+   when its ingest reports the device's host key and dial public-key fingerprint,
+   and a **SUPERADMIN** activates it with a step-up
+   (`POST /bff/superadmin/desktop/dials/{deviceId}/activate`; `422` for an
+   unpinned row or a `root`/blank dial user). Activation answers `503` while the
+   dial flag is false, so rows can be seeded but not activated until after the
+   flip. Revoke is allowed at any time. The 2026-08 audit found **zero rows** on
+   the running mesh; with no desktop image ever built (the default
+   `X86_ROLE_LIST` is `pki backend frontend backend-gpu`) nothing can have
+   seeded one. Re-measure before relying on that.
+3. **The per-device dial private key must be mounted into the BFF pod.** The
+   factory reads `<key-mount-path>/<k8s_secret_name>/<key-file>` at dial time
+   (default `/var/run/secrets/device-ssh-dial/device-ssh-<deviceId>/
+   dial_private_key`). One ExternalSecret per device is rendered from
+   `specs/cluster/manifests/external-secrets/device-ssh-externalsecret.tpl.yaml`
+   (a template, not applied by any Application). **No manifest in this tree
+   mounts those Secrets into the admin-BFF Deployment** (measured by grep,
+   2026-10-14), so even with ACTIVE rows the dial fails closed on a missing key
+   file. This is an open design item, not a flag: a static Deployment cannot name
+   per-device volumes that are created dynamically.
+4. **`DEVICE_TERMINAL_ENABLED` and `DESKTOP_REMOTE_INSTALL_ENABLED`** need nothing
+   beyond 1 to 3, and are inert without them: the connect-time license and
+   step-up re-checks always run, and with the dial seam unconfigured every dial
+   attempt is refused. An admin-BFF image older than the `application.yml` entry
+   silently ignores `DESKTOP_REMOTE_INSTALL_ENABLED`.
+5. **A desktop image must exist.** The desktop boot-verify (Qt6/KF6 Discover
+   pull, the `hugmesh-desktop` PKCE client, the desktop-sudo claim to polkit
+   path) has never run, because no laptop / chromebook / desktop image has ever
+   been built. The SSO-sudo leg also stays inert until the greeter / PAM token
+   producer lands (FD-07 increment 2).
+
 ## Provisioning manifest additions (keys-provision)
 
 ```jsonc
