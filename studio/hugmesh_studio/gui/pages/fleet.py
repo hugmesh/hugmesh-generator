@@ -69,6 +69,7 @@ from ...core.config import (
 from ...core.fleet import (FLEET_LANE_NOTE, FleetConfig, FleetDomains, FleetDriver,
                            commit_fleet_domains, fleet_domain_fields,
                            fleet_domains_from_config, seed_fleet_domains)
+from ._scroll import scrollable
 from ._widgets import _file_picker, _row
 from .domain_services import DomainServicesWidget
 from .domains import _COL_IDP, DomainsTableWidget
@@ -421,7 +422,13 @@ class FleetPage(QtWidgets.QWidget):
         self.stack.addWidget(p_dom)
 
         # ── step 5: DOMAIN SERVICES — one page per domain, own domain first ──
-        p_svc = QtWidgets.QWidget(); lsv = QtWidgets.QVBoxLayout(p_svc)
+        # SCROLLS, like the image flow's page and the local docker mesh's step (#647,
+        # looked at): the shared body is taller than this page at its default size —
+        # two checkbox tables, the state line and the read-only table — and in a
+        # plain layout the services table kept its minimum height while the widgets
+        # under it were laid out over its lower rows (measured under Fusion, Breeze
+        # and Oxygen: the front-door row painted across the third service group).
+        p_svc = QtWidgets.QWidget(); lsv = scrollable(p_svc)
         self.domain_services = DomainServicesWidget(
             scope_cfg=None, entries=None, lane_note=FLEET_LANE_NOTE)
         lsv.addWidget(self.domain_services)
