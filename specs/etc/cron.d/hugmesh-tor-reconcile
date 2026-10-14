@@ -21,8 +21,17 @@
 # ArgoCD Application) from a control-plane node, withdraws the ones no longer
 # exported. The API server and ArgoCD come up long after the @reboot export, so it
 # runs on a 5-minute floor; a steady state is one read and no write.
+# * (every minute) — hugmesh-tor-export-sync (hugmesh-generator#629, the node half of
+# hugmesh-admin-bff-api#108): fetches admin-bff's SIGNED per-node Tor export over the
+# node's mTLS identity, verifies it against the baked key-USB public half (refuses
+# unsigned, tampered, replayed or foreign exports and changes nothing), applies the
+# managed upstream / domains files atomically, re-runs hugmesh-tor-reconcile when a
+# file changed, and reports this node's exported onions back (POST
+# /bff/internal/tor/onions) after every pass. The same 60 s convergence floor the
+# egress-VPN reconcile uses; a steady state is one GET, one POST and no write.
 #
 # Field order: min hour dom month dow user command
 @reboot root sleep 90; /usr/sbin/hugmesh-tor-reconcile >> /var/log/hugmesh-tor-reconcile.log 2>&1
 0 0 * * * root /usr/sbin/hugmesh-tor-reconcile >> /var/log/hugmesh-tor-reconcile.log 2>&1
 */5 * * * * root /usr/sbin/hugmesh-tor-ingress-admit >> /var/log/hugmesh-tor-ingress-admit.log 2>&1
+* * * * * root /usr/sbin/hugmesh-tor-export-sync >> /var/log/hugmesh-tor-export-sync.log 2>&1
