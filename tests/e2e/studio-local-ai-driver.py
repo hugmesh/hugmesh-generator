@@ -228,6 +228,29 @@ def main(argv):
         app.processEvents()            # the button was just re-labelled: let the bar re-lay out before the grab
         grab("3-started")
 
+        # ── act 3a: a half-typed question is abandoned with Escape ──
+        # The dock is a text field on a QDialog (the wizard): an Escape the line edit does
+        # not take CLOSES THE WHOLE WINDOW. With text in the prompt it must clear the
+        # prompt and go no further; the window's `rejected` is watched to prove it.
+        from hugmesh_studio.gui.qt import QtGui
+        rejected = []
+        wiz.rejected.connect(lambda: rejected.append(True))
+        dock.prompt.setText("What does the dock ta")
+        dock.prompt.setFocus()
+        app.processEvents()
+        for kind in (QtCore.QEvent.Type.KeyPress, QtCore.QEvent.Type.KeyRelease):
+            app.sendEvent(dock.prompt, QtGui.QKeyEvent(
+                kind, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier, "\x1b"))
+        app.processEvents()
+        report["escape"] = {
+            "how": "QKeyEvent(Key_Escape) via QApplication.sendEvent",
+            "promptAfter": dock.prompt.text(), "windowRejected": bool(rejected),
+            "windowVisible": wiz.isVisible(), "promptHasFocus": dock.prompt.hasFocus(),
+            "page": type(wiz.currentPage()).__name__,
+        }
+        grab("3a-escape-cleared-the-prompt")
+        modal_check("escape")
+
         # ── act 3: a question, answered by the loopback model, streaming ──
         # The wizard page is read before and after Enter: a prompt line that let the key
         # travel on would press the wizard's default button (Next) along with sending.
@@ -240,7 +263,6 @@ def main(argv):
         try:
             # a real Enter key press delivered through Qt's event system (QtTest is not
             # part of every binding install; QKeyEvent is)
-            from hugmesh_studio.gui.qt import QtGui
             for kind in (QtCore.QEvent.Type.KeyPress, QtCore.QEvent.Type.KeyRelease):
                 app.sendEvent(dock.prompt, QtGui.QKeyEvent(
                     kind, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier, "\r"))

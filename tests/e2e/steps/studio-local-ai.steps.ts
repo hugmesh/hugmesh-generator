@@ -58,6 +58,10 @@ interface DockReport {
     pressedWhileBusy: boolean; answerRightAfter: string; answerAfterTheModelFinished: string;
     historyAfter: number; sendButtonAfter: string; promptEnabled: boolean;
   };
+  escape?: {
+    how: string; promptAfter: string; windowRejected: boolean; windowVisible: boolean;
+    promptHasFocus: boolean; page: string;
+  };
 }
 
 function driverPath(): string {
@@ -160,6 +164,19 @@ Then('pressing Enter in the prompt did not move the wizard off its page', async 
     .toEqual(p.wizardBeforeEnter);
 });
 
+Then('Escape in the prompt cleared a half-typed question and did not close the Studio window',
+  async ({ world }) => {
+    const e = report(world).escape;
+    expect(e, 'the driver did not press Escape in the prompt').toBeTruthy();
+    // a real key, not a call to clear(): only a key can travel on to the wizard, and the
+    // wizard is a QDialog, which closes itself on an Escape nobody claimed
+    expect(e!.how, 'Escape was not delivered as a key event').toMatch(/^QKeyEvent/);
+    expect(e!.promptAfter, 'Escape left the half-typed question in the prompt').toBe('');
+    expect(e!.windowRejected, 'Escape in the prompt closed the Studio window').toBe(false);
+    expect(e!.windowVisible).toBe(true);
+    expect(e!.promptHasFocus, 'the prompt lost the focus on Escape').toBe(true);
+  });
+
 Then('the dock asked the model named by LOCAL_AI_MODEL, the same one the command line asks',
   async ({ world }) => {
     const r = report(world);
@@ -193,7 +210,8 @@ Then('the Local AI dock opened no modal dialog', async ({ world }) => {
 Then('a grab exists for each act of the Local AI dock scenario', async ({ world }) => {
   const r = report(world);
   const names = r.grabs.map((g) => g.name);
-  expect(names).toEqual(['1-opened-collapsed', '2-expanded', '3-started', '4-answer-streaming', '5-after-clear']);
+  expect(names).toEqual(['1-opened-collapsed', '2-expanded', '3-started', '3a-escape-cleared-the-prompt',
+    '4-answer-streaming', '5-after-clear']);
   for (const g of r.grabs) {
     expect(fs.statSync(g.png).size, `${g.png} is empty`).toBeGreaterThan(0);
   }
