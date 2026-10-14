@@ -463,6 +463,15 @@ class FleetPage(QtWidgets.QWidget):
         self.stack.addWidget(_scrolled(p_dom))
 
         # ── step 5: DOMAIN SERVICES — one page per domain, own domain first ──
+        # SCROLLS, like the image flow's page and the local docker mesh's step (#647,
+        # looked at): the shared body is taller than this page at its default size —
+        # two checkbox tables, the state line and the read-only table — and in a
+        # plain layout the services table kept its minimum height while the widgets
+        # under it were laid out over its lower rows (measured under Fusion, Breeze
+        # and Oxygen: the front-door row painted across the third service group).
+        # The scrolling is ``_scrolled`` below, the same as every other step: a second
+        # scroll area inside the page (``scrollable(p_svc)``) nested two scroll areas
+        # and test_fleet_window_layout refuses it.
         p_svc = QtWidgets.QWidget(); lsv = QtWidgets.QVBoxLayout(p_svc)
         self.domain_services = DomainServicesWidget(
             scope_cfg=None, entries=None, lane_note=FLEET_LANE_NOTE)
