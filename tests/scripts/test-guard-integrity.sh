@@ -755,17 +755,26 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     197 of 221 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (24 suite(s))
 #
-# 197 -> 198 (denominator 221 -> 222) on 2026-10-14 for #698 (Local AI without Claude):
-# re-measured on the merge of feat/local-ai-dock-and-cli with origin/main 702b590d,
-# which carried the 197 above (the branch had written 195 of 218 against 3c684661
-# before #659, #663, the edge-ai pin and #582 landed, so this line conflicted and
-# main's block is kept). tests/scripts/test-local-ai-no-claude.sh is the one new
-# gated suite, named in shell-suites.yml's debian job and in .gitlab-ci.yml's
-# orphan-guards-verify job. MEASURED by RUNNING this file on the merged tree
-# (GUARD_PREMERGE=0), not computed:
+# 197 -> 198 (denominator 221 -> 222) on 2026-10-14 for #629 (iss/629-tor-reconcile-
+# apply-export-report-onions, from origin/main 702b590d): one new suite,
+# tests/scripts/test-tor-export-sync.sh (the signed Tor export consumer + onion report),
+# landed on disk in the same commit that wires it into shell-suites.yml's alpine job
+# (beside tests/scripts/test-tor-node-contract.sh, which pins its wiring). MEASURED by
+# RUNNING this file on the tree with the suite wired (GUARD_PREMERGE=0), not computed:
 #     198 of 222 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (24 suite(s))
-PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
+#
+# 198 -> 199 (denominator 222 -> 223) on 2026-10-14 for #698 (Local AI without Claude):
+# re-measured on the merge of feat/local-ai-dock-and-cli with origin/main af55ccce,
+# which carried the 198 above for #629. Both sides had written "197 -> 198" for a
+# different new suite against 702b590d, so this line conflicted twice today; main's
+# block is kept and the branch's step is re-measured on top of it. tests/scripts/
+# test-local-ai-no-claude.sh is the one new gated suite, named in shell-suites.yml's
+# debian job and in .gitlab-ci.yml's orphan-guards-verify job. MEASURED by RUNNING
+# this file on the merged tree (GUARD_PREMERGE=0), not computed:
+#     199 of 223 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (24 suite(s))
+PREMERGE_BASELINE="${GUARD_PREMERGE:-199}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
