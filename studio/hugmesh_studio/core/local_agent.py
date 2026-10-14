@@ -47,6 +47,7 @@ No auto-approve flag is ever passed (``FORBIDDEN_FLAGS``), including ``ollama la
 """
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import os
@@ -217,6 +218,11 @@ def build_env(environ=None, *, terminal: bool = False) -> "dict[str, str]":
 
 Fetch = Callable[..., "tuple[int, bytes]"]
 
+#: What a request to the server can raise. ``HTTPException`` is NOT an OSError: a
+#: non-HTTP service on the port answers with a line urllib cannot parse
+#: (``BadStatusLine``), and a connection cut mid-body is ``IncompleteRead``.
+_FETCH_ERRORS = (OSError, ValueError, http.client.HTTPException)
+
 
 def _http(method: str, url: str, body=None, timeout: float = HTTP_TIMEOUT_S):
     """One request to the server. Proxies are bypassed on purpose: a corporate proxy
@@ -288,7 +294,7 @@ def probe(environ=None, *, which: "Callable[[str], Optional[str]]" = shutil.whic
     base = f"http://{server}"
     try:
         status, raw = fetch("GET", base + "/api/tags", None, HTTP_TIMEOUT_S)
-    except (OSError, ValueError) as exc:           # refused, timed out, no route
+    except _FETCH_ERRORS as exc:                   # refused, timed out, no route, not HTTP
         return Probe(ollama_path, server, False, _short_error(exc), note, (), agents)
     if status != 200:
         return Probe(ollama_path, server, False,
@@ -314,8 +320,17 @@ def probe(environ=None, *, which: "Callable[[str], Optional[str]]" = shutil.whic
             caps = _show_capabilities(fetch, base, name)
         models.append(ModelInfo(
             name=name, tools="tools" in (caps or []), cloud=_is_cloud(name, entry),
-            size_bytes=int(entry.get("size") or 0)))
+            size_bytes=_size_bytes(entry.get("size"))))
     return Probe(ollama_path, server, True, "", note, tuple(models), agents)
+
+
+def _size_bytes(value) -> int:
+    """The size field as an int, or 0: it is only shown, so an odd value (a string, a
+    list, a float that a client wrote) must not turn the whole probe into a crash."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _show_capabilities(fetch: Fetch, base: str, name: str) -> "list[str]":
@@ -325,7 +340,7 @@ def _show_capabilities(fetch: Fetch, base: str, name: str) -> "list[str]":
             return []
         caps = json.loads(raw.decode("utf-8", "replace")).get("capabilities")
         return [str(c) for c in caps] if isinstance(caps, list) else []
-    except (OSError, ValueError, AttributeError):
+    except (*_FETCH_ERRORS, AttributeError):
         return []
 
 

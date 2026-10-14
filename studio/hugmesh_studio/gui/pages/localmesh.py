@@ -1788,11 +1788,18 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         lay.addWidget(brow_box)
         # LOCAL AI AGENT (#695). The Docker mesh and the kind DevOps lane end on this one
         # page, so one card serves both (its Lane drop-down only changes the brief). It
-        # reads the source choice and domains at press time through the context callable,
-        # so no refresh hook is needed here.
+        # reads the source choice and domains at press time through the context callable;
+        # the one hook is completeChanged, which fires at every verb start and end, so the
+        # card's Lane follows the lane whose verb just ran (Start DevOps lane -> kind).
         self.local_agent = LocalAgentWidget(
             self.generator_dir, context=lambda: context_from_page(self))
         lay.addWidget(self.local_agent)
+        self.completeChanged.connect(self.local_agent.refresh_apps)
+        # The source cards too: the stepped wizard re-shows the card after the Repo
+        # source step, but the single-page frame has no step change, so a changed
+        # source choice there would keep listing the other tree's apps until Re-check.
+        self.src_existing.toggled.connect(lambda _on: self.local_agent.refresh_apps())
+        self.src_dir.textChanged.connect(lambda _t: self.local_agent.refresh_apps())
 
         # ── RUNNING-MESH MONITOR (operator ask, 2026-09-01): every pod and container
         # of BOTH lanes, its addresses, and an Open button only where the browser may

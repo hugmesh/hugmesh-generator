@@ -24,13 +24,12 @@ No dialog is opened anywhere in this file (a source scan in the tests holds that
 no window is repositioned by code (a move request does nothing on Wayland).
 
 THE APP LIST is the service-to-folder map of the Code folders block (issue #689,
-``core/code_folders.py``) when that module is present; a minimal scan of the source
-root's ``hugmesh-*`` folders otherwise. That fallback is a MERGE POINT: once #689 is on
-the branch the fallback is dead code and can go.
+``core/code_folders.py``): the same rows, so the two blocks can never disagree about
+which folder an app builds from. Only when that map raises does the card fall back to a
+plain scan of the source root's ``hugmesh-*`` folders, and it says so.
 """
 from __future__ import annotations
 
-import importlib
 import os
 import time
 from dataclasses import dataclass, field
@@ -38,12 +37,13 @@ from typing import Callable, Optional
 
 from ..qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from ..flow_layout import flow_box
+from ...core import code_folders as cf
 from ...core import local_agent as la
 from ...core.e2e_catalogue import STACK_SRC_DIR
 from ._widgets import own_probe, probe_running
 
 __all__ = ["AgentContext", "AppChoice", "Outcome", "LocalAgentWidget", "list_apps",
-           "context_from_page", "TITLE"]
+           "context_from_page", "lane_from_page", "TITLE"]
 
 TITLE = "Work on this mesh with a local AI agent"
 _GREEN, _AMBER, _RED = "#2e7d32", "#a65d00", "#b00020"
@@ -65,7 +65,10 @@ class AgentContext:
     source_mode: str = "clone"
     source_dir: str = ""
     kind_cluster: str = ""
-    lane: str = la.LANE_DOCKER
+    #: the lane the page last ran a verb on ("" = none yet: the card keeps its pick),
+    #: and how many lane verbs have run (a new one is followed even on the same lane)
+    lane: str = ""
+    lane_runs: int = 0
 
 
 @dataclass(frozen=True)
@@ -98,34 +101,22 @@ class Outcome:
 
 
 # ── the app list ─────────────────────────────────────────────────────────────────
-def _code_folders_module():
-    """The #689 folder map, or None until that change is on this branch."""
-    try:
-        return importlib.import_module("...core.code_folders", __package__)
-    except ImportError:
-        return None
-
-
 def list_apps(generator_dir: str, ctx: AgentContext) -> "tuple[list[AppChoice], str]":
     """``(apps, note)``. The apps of every domain once each, with the folder the build
     reads. ``note`` says where the list came from when it is not the full map."""
-    cf = _code_folders_module()
-    if cf is not None:
-        rows = list(ctx.domain_rows) or [{"name": ctx.mesh or "mesh",
-                                           "optional_services": [], "idp": ""}]
-        try:
-            m = cf.code_folder_map(generator_dir, ctx.source_mode, ctx.source_dir, rows)
-            seen: dict[str, AppChoice] = {}
-            for dom in m.domains:
-                for app in dom.apps:
-                    if app.kind == cf.KIND_REPO and app.path and app.path not in seen:
-                        seen[app.path] = AppChoice(app.name, app.path, bool(app.exists),
-                                                   app.missing_reason)
-            return sorted(seen.values(), key=lambda a: a.name), ""
-        except Exception as exc:                  # noqa: BLE001 — a card must not break the page
-            note = f"the app map failed ({type(exc).__name__}); listing folders instead"
-    else:
-        note = "listing the hugmesh-* folders of the source root"
+    rows = list(ctx.domain_rows) or [{"name": ctx.mesh or "mesh",
+                                       "optional_services": [], "idp": ""}]
+    try:
+        m = cf.code_folder_map(generator_dir, ctx.source_mode, ctx.source_dir, rows)
+        seen: dict[str, AppChoice] = {}
+        for dom in m.domains:
+            for app in dom.apps:
+                if app.kind == cf.KIND_REPO and app.path and app.path not in seen:
+                    seen[app.path] = AppChoice(app.name, app.path, bool(app.exists),
+                                               app.missing_reason)
+        return sorted(seen.values(), key=lambda a: a.name), ""
+    except Exception as exc:                      # noqa: BLE001 — a card must not break the page
+        note = f"the app map failed ({type(exc).__name__}); listing folders instead"
     if ctx.source_mode == "existing":
         root = os.path.abspath(os.path.expanduser(ctx.source_dir)) if ctx.source_dir.strip() else ""
     else:
@@ -140,8 +131,42 @@ def list_apps(generator_dir: str, ctx: AgentContext) -> "tuple[list[AppChoice], 
     return [AppChoice(n, os.path.join(root, n), True) for n in names], note
 
 
+#: The words of the Bring-up page's verb labels that say which lane a run belonged to.
+#: The page keeps one run record per verb it ran, with the label the person saw; the
+#: most recent run on a lane decides the card's Lane drop-down, so a person who just
+#: pressed "Start DevOps lane" is not handed the Docker brief. A test pins these words
+#: against the page's own ``_launch(...)`` labels, so a renamed verb fails loudly
+#: instead of silently reading as Docker.
+_KIND_LABEL_WORDS = ("devops",)
+_DOCKER_LABEL_WORDS = ("mesh node", "bootstrapping", "the stack", "docker")
+
+
+def lane_from_page(page) -> str:
+    """The lane of the page's most recent lane verb, or "" when none has run (a
+    readiness check, a save or a browser door belongs to neither and is skipped)."""
+    return _lane_runs(page)[0]
+
+
+def _lane_runs(page) -> "tuple[str, int]":
+    """``(lane, n)``: the lane of the most recent lane verb and how many lane verbs
+    have run. The count lets the card follow every NEW lane verb, not only a change
+    of lane, while a pick made between verbs is left alone."""
+    lane, count = "", 0
+    for run in getattr(page, "_runs", None) or ():
+        label = str(getattr(run, "label", "") or "").lower()
+        if any(word in label for word in _KIND_LABEL_WORDS):
+            lane = la.LANE_KIND
+        elif any(word in label for word in _DOCKER_LABEL_WORDS):
+            lane = la.LANE_DOCKER
+        else:
+            continue
+        count += 1
+    return lane, count
+
+
 def context_from_page(page) -> AgentContext:
-    """Read the Bring-up page's current choices. Called at press time and on show."""
+    """Read the Bring-up page's current choices. Called at press time, on show and
+    when a verb starts or ends (the page's ``completeChanged``)."""
     try:
         own = page._own_domain_name()
     except Exception:                              # noqa: BLE001 — a half-built page
@@ -157,12 +182,13 @@ def context_from_page(page) -> AgentContext:
     except Exception:                              # noqa: BLE001
         cluster = ""
     port = os.environ.get("PUBLIC_HOST_PORT") or "8088"
+    lane, lane_runs = _lane_runs(page)
     return AgentContext(
         mesh=own or (names[0] if names else ""), domains=names, domain_rows=rows,
         doors={la.LANE_DOCKER: (f"http://localhost:{port}",), la.LANE_KIND: ()},
         source_mode="existing" if existing else "clone",
         source_dir=page.src_dir.text().strip() if existing else "",
-        kind_cluster=cluster)
+        kind_cluster=cluster, lane=lane, lane_runs=lane_runs)
 
 
 # ── small pieces ─────────────────────────────────────────────────────────────────
@@ -273,6 +299,8 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
         self._first_probe_done = False
         self._probe_job = None
         self._work_job = None
+        #: the page's (lane, lane_runs) as last applied to the drop-down (refresh_apps)
+        self._page_lane: "tuple[str, int]" = ("", 0)
 
         lay = QtWidgets.QVBoxLayout(self)
         lay.addWidget(_wrapped(_INTRO, grey=True))
@@ -373,9 +401,11 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
         self.app_box.clear()
         for a in self.apps:
             self.app_box.addItem(a.name if a.exists else f"{a.name} (not downloaded)", a.path)
-        # Keep the person's pick; otherwise the first app whose folder exists, so a map
-        # that lists every platform app does not open on one that is not downloaded.
-        i = next((n for n, a in enumerate(self.apps) if keep and a.path == keep.path), -1)
+        # Keep the person's pick when its folder exists; otherwise the first app whose
+        # folder does, so a map that lists every platform app does not open on one that
+        # is not downloaded (a pick of one that never existed was a default, not a choice).
+        i = next((n for n, a in enumerate(self.apps)
+                  if keep and keep.exists and a.path == keep.path), -1)
         if i < 0:
             i = next((n for n, a in enumerate(self.apps) if a.exists), -1)
         if i >= 0:
@@ -384,7 +414,11 @@ class LocalAgentWidget(QtWidgets.QGroupBox):
         self.app_box.setEnabled(bool(self.apps))
         if not self.apps:
             self.app_box.addItem("(no app folders yet)", "")
-        if ctx.lane and self.lane_box.findData(ctx.lane) >= 0 and not self._first_probe_done:
+        key = (ctx.lane, ctx.lane_runs)
+        if ctx.lane and key != self._page_lane and self.lane_box.findData(ctx.lane) >= 0:
+            # The page ran a lane verb since the last look: follow it. A lane the person
+            # picked by hand stays (across a re-check or a save) until the next verb.
+            self._page_lane = key
             self.set_lane(ctx.lane)
         # The list changed with its signals blocked, so nothing else would redraw the
         # status and Start: a list read after the machine look finished left them

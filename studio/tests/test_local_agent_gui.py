@@ -22,10 +22,12 @@ Pinned here:
 
 Set LOCAL_AGENT_SHOTS=<dir> to save a PNG of the card in each state.
 """
+import ast
 import inspect
 import os
 import subprocess
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -284,6 +286,179 @@ def test_a_press_hands_the_launcher_the_right_command_folder_environment_and_bri
     assert card.note.isVisible() and "#2e7d32" in card.note.styleSheet()
     assert "konsole" in card.note.text() and plan.title in card.note.text()
     assert card.command_box.isVisible() and "env -i" in card.command_box.toPlainText()
+
+
+def _run_verb(ctl, label):
+    """What the page does around a verb, minus the verb: it records one run with the
+    label the person saw and emits completeChanged at the start and the end."""
+    ctl._runs.append(lm._StageRun(label, []))
+    ctl.completeChanged.emit()
+    _settle()
+
+
+def test_the_lane_follows_the_verb_the_page_last_ran(wiz, src_tree):
+    """A person who just pressed Start DevOps lane must not be handed the Docker
+    brief: the Lane drop-down follows the page's most recent lane verb, a hand pick
+    stays until the page's lane changes, and the brief says the lane in use."""
+    ctl, card, _p, launch = _to_bringup(wiz, source_dir=src_tree)
+    assert card.lane_box.currentData() == la.LANE_DOCKER          # nothing ran yet
+    _run_verb(ctl, "Starting the DevOps lane")
+    assert card.lane_box.currentData() == la.LANE_KIND
+    _pick(card, APP)
+    card.start_btn.click()
+    assert card.wait_idle()
+    _settle()
+    (plan,) = launch.plans
+    assert plan.lane == la.LANE_KIND
+    assert "Lane: kind" in open(plan.scratch.brief_path, encoding="utf-8").read()
+    _run_verb(ctl, "Bootstrapping")                                 # the Docker lane
+    assert card.lane_box.currentData() == la.LANE_DOCKER
+    card.set_lane(la.LANE_KIND)                                     # a hand pick ...
+    _run_verb(ctl, "Saving mesh")                                   # ... not a lane verb
+    card.recheck()
+    card.wait_idle()
+    _settle()
+    assert card.lane_box.currentData() == la.LANE_KIND, "a hand pick survives a re-check"
+    _run_verb(ctl, "Halting the DevOps lane")
+    _run_verb(ctl, "Stopping the stack")
+    assert card.lane_box.currentData() == la.LANE_DOCKER
+    card.set_lane(la.LANE_KIND)                                     # a hand pick ...
+    _run_verb(ctl, "Stopping and cleaning Docker")                  # ... then a NEW verb
+    assert card.lane_box.currentData() == la.LANE_DOCKER, "every new lane verb is followed"
+
+
+def test_the_lane_words_match_every_verb_label_of_the_page():
+    """The words the card reads a lane from are pinned to the page's own ``_launch``
+    labels, read from its source: every devops-* verb classifies as kind, the Docker
+    lane's verbs as Docker, and a readiness check, a save or a browser door as neither."""
+    src = open(lm.__file__, encoding="utf-8").read()
+    labels = {}
+    for node in ast.walk(ast.parse(src)):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "_launch" and node.args
+                and isinstance(node.args[0], ast.Constant)):
+            continue
+        verb = next((k.value.value for k in node.keywords
+                     if k.arg == "verb" and isinstance(k.value, ast.Constant)), "")
+        labels[node.args[0].value] = verb
+    assert len(labels) >= 12, labels
+    assert any(v.startswith("devops") for v in labels.values())
+    for label, verb in labels.items():
+        got = law.lane_from_page(SimpleNamespace(_runs=[SimpleNamespace(label=label)]))
+        if verb.startswith("devops"):
+            assert got == la.LANE_KIND, (label, verb)
+        elif verb in ("up", "clean") or "mesh node" in label or "the stack" in label:
+            assert got == la.LANE_DOCKER, (label, verb)
+        else:
+            assert got == "", (label, verb)
+    assert law.lane_from_page(SimpleNamespace(_runs=[])) == ""
+    assert law.lane_from_page(SimpleNamespace()) == ""              # a half-built page
+    # the most recent lane verb decides, whatever came after it
+    page = SimpleNamespace(_runs=[SimpleNamespace(label=l) for l in
+                                  ("Bootstrapping", "Starting the DevOps lane", "Saving mesh")])
+    assert law.lane_from_page(page) == la.LANE_KIND
+
+
+def _window_shot(window, name):
+    if not SHOTS:
+        return
+    os.makedirs(SHOTS, exist_ok=True)
+    _settle(3)
+    window.grab().save(os.path.join(SHOTS, f"local-agent-{name}.png"))
+
+
+@pytest.fixture
+def frame(qapp, src_tree):
+    """The single-page frame (LocalMeshDialog) on the own tree, with the fakes installed
+    before the card's first show. No QWizard around it: nothing but the page's own
+    signals can reach the card, which is what the hook tests need."""
+    dlg = lm.LocalMeshDialog(GENERATOR_DIR)
+    page = dlg.page
+    card = page.local_agent
+    card.set_prober(Prober(probe_of()))
+    launch = Launcher()
+    card.set_launcher(launch)
+    dlg.resize(*SMALLEST)
+    dlg.show()
+    page.src_existing.setChecked(True)
+    page.src_dir.setText(src_tree)
+    assert card.wait_idle()
+    _settle(3)
+    yield dlg, page, card, launch
+    dlg.close()
+    dlg.deleteLater()
+
+
+def test_the_lane_follows_the_page_in_the_single_page_frame_too(frame, src_tree):
+    """The stepped wizard happens to re-show the card when a verb starts (QWizard's own
+    reaction to completeChanged), which hides a missing hook; the frame does not, so
+    this is the test that fails when the page stops telling the card a verb ran."""
+    _dlg, page, card, launch = frame
+    assert card.lane_box.currentData() == la.LANE_DOCKER
+    _run_verb(page, "Starting the DevOps lane")
+    assert card.lane_box.currentData() == la.LANE_KIND
+    _pick(card, APP)
+    card.start_btn.click()
+    assert card.wait_idle()
+    _settle()
+    (plan,) = launch.plans
+    assert plan.lane == la.LANE_KIND
+    assert "Lane: kind" in open(plan.scratch.brief_path, encoding="utf-8").read()
+    _run_verb(page, "Stopping the stack")
+    assert card.lane_box.currentData() == la.LANE_DOCKER
+    card.set_lane(la.LANE_KIND)
+    _run_verb(page, "Saving mesh")
+    assert card.lane_box.currentData() == la.LANE_KIND, "a hand pick survives a save"
+    _run_verb(page, "Stopping and cleaning Docker")
+    assert card.lane_box.currentData() == la.LANE_DOCKER, "every new lane verb is followed"
+
+
+@pytest.mark.parametrize("size", [SMALLEST, NORMAL], ids=["736x736", "1040x706"])
+def test_the_card_and_the_code_folders_block_never_overlap(frame, src_tree, size):
+    """#689's Code folders block and this card are mounted by the same page. In the
+    single-page frame both are on one page: each sits whole inside the content, the
+    block (Repo source) above the card (Bring-up), and neither covers the other."""
+    dlg, page, card, _launch = frame
+    block = page.code_folders
+    dlg.resize(*size)
+    _settle(3)
+    # the frame has no step change to re-show the card: the source cards tell it
+    assert {a.name for a in card.apps} >= {APP, "hugmesh-admin-ui"}
+    assert card.selection()[1].path.startswith(src_tree + os.sep)
+    assert card.start_btn.isEnabled(), card.status.text()
+    scroll = page._content_scroll
+    content = scroll.widget()
+    assert card.isVisible() and block.isVisible()
+    assert scroll.horizontalScrollBar().maximum() == 0
+    cr, br = _rect_in(card, content), _rect_in(block, content)
+    assert content.rect().contains(cr) and content.rect().contains(br), (cr, br)
+    assert not cr.intersects(br), (cr, br)
+    assert br.bottom() < cr.top(), "Repo source sits above Bring-up"
+    assert cr.width() >= 400 and br.width() >= 400, (cr.width(), br.width())
+    scroll.ensureWidgetVisible(block, 0, 0)
+    _window_shot(dlg, f"frame-code-folders-{size[0]}x{size[1]}")
+    scroll.ensureWidgetVisible(card, 0, 0)
+    _window_shot(dlg, f"frame-card-{size[0]}x{size[1]}")
+    _assert_geometry(card, page, "frame", size)
+
+
+def test_in_the_stepped_wizard_the_block_and_the_card_are_on_different_steps(wiz, src_tree):
+    ctl, card, _p, _l = _to_bringup(wiz, source_dir=src_tree, size=SMALLEST)
+    block = ctl.code_folders
+    assert isinstance(wiz.currentPage(), lm.LocalMeshPage) and card.isVisible()
+    assert not block.isVisible() and not ctl.isAncestorOf(block)
+    ctl._content_scroll.ensureWidgetVisible(card, 0, 0)
+    _window_shot(wiz, "wizard-bringup-736x736")
+    for _ in range(16):
+        if isinstance(wiz.currentPage(), lm.LocalMeshSourcePage):
+            break
+        wiz.back()
+    page = wiz.currentPage()
+    assert isinstance(page, lm.LocalMeshSourcePage)
+    _settle(3)
+    assert page.isAncestorOf(block) and block.isVisible()
+    assert not card.isVisible()
+    _window_shot(wiz, "wizard-repo-source-736x736")
 
 
 def test_the_selected_app_is_the_one_copied(wiz, src_tree):

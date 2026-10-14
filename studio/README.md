@@ -219,6 +219,11 @@ agent on a model that runs on this PC, in a copy of one app's repository. It doe
   disabled, with the reason as its tooltip, until nothing is missing. **Re-check** reads the
   machine again (read-only: `GET /api/tags`, `POST /api/show`, never a generation);
   **Copy command** is always available. Nothing starts without a press. No dialogs.
+- **Lane** follows the lane whose verb last ran on the page (Start DevOps lane sets it to
+  the kind cluster, Generate & start to the Docker mesh) and only changes what the brief
+  says about rebuilding a service; a lane you pick by hand stays until the next verb. The
+  **App** list follows the Repo source choice, in the stepped wizard and the single-page
+  frame alike.
 - A press makes `<state dir>/agent-work/<mesh>/<repo>` with `git clone --no-hardlinks`,
   `git remote remove origin` and `git switch -c lm/<timestamp>` from the app's folder
   (`./.stack-src/hugmesh-<name>`, or your own tree), writes the brief beside it, and opens a

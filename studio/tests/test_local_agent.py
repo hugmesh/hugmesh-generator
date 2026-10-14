@@ -19,6 +19,7 @@ lane notes, and every one was broken once to watch its test fail):
   through to the next, that no desktop / Windows / macOS gets the command to paste,
   and that the paste text never carries a token.
 """
+import http.client
 import json
 import os
 import re
@@ -232,6 +233,43 @@ def test_something_else_on_the_port_is_not_an_ollama_server(fake):
     pr = la.probe(ENV, which=which_all({"ollama", "claude"}), fetch=fake)
     assert not pr.server_up
     assert [p.code for p in la.diagnose(pr)] == ["server_down"]
+
+
+@pytest.mark.parametrize("exc", [http.client.BadStatusLine("garbage\r\n"),
+                                 http.client.IncompleteRead(b"{"),
+                                 http.client.RemoteDisconnected("closed")])
+def test_a_non_http_service_on_the_port_is_server_down_not_a_crash(exc):
+    """http.client's errors are not OSErrors: a listener that is not HTTP answers
+    with a line urllib cannot parse, and a connection cut mid-body is an
+    IncompleteRead. probe() says it never raises, so these must read as "server not
+    answering", with the reason, not as a crash the card has to catch."""
+    pr = la.probe(ENV, which=which_all({"ollama", "claude"}), fetch=FakeServer(down=exc))
+    assert not pr.server_up and pr.server_error
+    (p,) = la.diagnose(pr, "claude")
+    assert p.code == "server_down" and "not answering" in p.what
+
+
+def test_a_show_call_that_dies_mid_body_reads_as_no_tools():
+    tags = FakeServer([tools_entry("a:1", caps=None)])
+
+    def fetch(method, url, body=None, timeout=2.0):
+        if method == "POST":
+            raise http.client.IncompleteRead(b"{")
+        return tags(method, url, body, timeout)
+
+    pr = la.probe(ENV, which=which_all({"ollama"}), fetch=fetch)
+    assert pr.server_up and [(m.name, m.tools) for m in pr.models] == [("a:1", False)]
+
+
+@pytest.mark.parametrize("size", ["big", [1], {"n": 1}, None, 3.5, "7"])
+def test_an_odd_size_field_never_stops_the_probe(size):
+    """The size is only shown. A client that wrote a string or a list there must not
+    turn the whole model list into "server not answering"."""
+    fake = FakeServer([tools_entry("a:1", size=size), tools_entry("b:2")])
+    pr = la.probe(ENV, which=which_all({"ollama"}), fetch=fake)
+    assert pr.server_up and [m.name for m in pr.models] == ["a:1", "b:2"]
+    assert pr.models[0].size_bytes == (7 if size == "7" else 3 if size == 3.5 else 0)
+    assert pr.models[1].size_bytes == 5_000_000_000
 
 
 def test_ollama_not_installed_is_reported_first_even_with_a_server_up():
