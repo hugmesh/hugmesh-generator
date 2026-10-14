@@ -193,9 +193,11 @@ _As of 2026-08-05. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   operator-deferred opt-in overlay** (`manifests/coturn-public`: `hostNetwork`
   relay pod, the `coturn-public-config` public-IP/URI knobs, a
   `/etc/hugmesh/coturn-public` firewall marker, an unproxied A/AAAA record, and a
-  public cert for non-fleet clients). ⚠️ **No SFU exists** — coturn is a 1:1/mesh
-  relay only; scalable group calls (MatrixRTC / Element Call / LiveKit) are
-  genuinely not built. See [`docs/COTURN.md`](docs/COTURN.md).
+  public cert for non-fleet clients). ⚠️ **No SFU is deployed** — coturn is a 1:1/mesh
+  relay only. The MatrixRTC / LiveKit client half is merged and dark in
+  `hugmesh-matrix-ui`; the server half is designed, not built
+  ([`docs/GROUP-CALL-SFU.md`](docs/GROUP-CALL-SFU.md)). See
+  [`docs/COTURN.md`](docs/COTURN.md).
 - **✅ Encrypted versioned backups — ships dark** — Velero server + node-agent
   (Kopia filesystem/PV backups) as `apps/55-velero.yaml`, and the
   BackupStorageLocation + ESO-sourced object-store credentials + least-privilege
@@ -448,8 +450,12 @@ none), and compose green is not evidence for the cluster._
   `lockdown=integrity`; the 8 ARM boards ship neither, which is now asserted in
   both directions rather than papered over by the QEMU harness appending its own
   `lockdown=integrity` to boards that never had it.
-- **🔭 Group-call SFU.** coturn gives 1:1/mesh TURN relay only. Scalable group
-  calls (MatrixRTC / Element Call / LiveKit) do not exist in any form.
+- **🔭 Group-call SFU.** coturn gives 1:1/mesh TURN relay only. The MatrixRTC
+  client half (decision 102a/102b, hugmesh-admin-bff-api#98) is merged and dark
+  in `hugmesh-matrix-ui` behind `__HUG_MATRIX_RTC__`. The server half (a LiveKit
+  SFU, lk-jwt-service, their secret, tuwunel's `livekit_url`, public
+  reachability) is not built and nothing was run against a live mesh. Design and
+  staged plan: [`docs/GROUP-CALL-SFU.md`](docs/GROUP-CALL-SFU.md).
 - **🔭 Desktop-governance go-live — three dark flags, zero dial rows, no image.**
   All three governance flags still default off, and one of them is invisible:
   `app.device-terminal.enabled` and `app.device-terminal.dial.enabled` are in the

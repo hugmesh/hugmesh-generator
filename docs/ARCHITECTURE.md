@@ -93,7 +93,7 @@ flowchart TD
         KINDE2E["kind SSO e2e: harness shipped, NOT green (16 cluster blockers)"]
         MFAFLIP["MFA: the live-cluster operator flip (MFA-ROLLOUT.md)"]
         ENFORCE["SELinux enforcing (nodes boot permissive)"]
-        SFU["Group-call SFU — does not exist"]
+        SFU["Group-call SFU: client half dark, server half not built"]
         NOTIFY["Notifications: external channels"]
     end
 
@@ -525,8 +525,10 @@ implementation on `main`.
   (no runlevel, `SELINUX_ENFORCE_GATE="no"`). The `.te` rules are still tagged
   `INFERRED-WIDE` and can only be narrowed against AVC logs from a real protected
   build + boot. See [`selinux-module-loading.md`](selinux-module-loading.md).
-- **🔭 Group-call SFU** — coturn is a 1:1/mesh relay only; MatrixRTC / Element
-  Call / LiveKit-class group calling does not exist in any form.
+- **🔭 Group-call SFU** — coturn is a 1:1/mesh relay only. The MatrixRTC client
+  half is merged and dark in `hugmesh-matrix-ui` (`__HUG_MATRIX_RTC__`, default
+  off); the server half (LiveKit, lk-jwt-service, tuwunel `livekit_url`) is
+  designed but not built. See [`GROUP-CALL-SFU.md`](GROUP-CALL-SFU.md).
 - **🔭 Desktop-governance SSO greeter / PAM token producer** (FD-07 increment 2).
 - **🚧 MDM phones (GrapheneOS on Pixel)** — the fourth onboarding form: `scripts/phone-wizard.sh` flashes signature-verified GrapheneOS, enrolls the handset into the Tailscale root domain (headscale tailnet, ADR-14 register-and-approve), escrows a separately-encrypted enterprise profile, and emits a `phone-ingest/v2` device-registry record; Azure Intune is a co-equal provider alongside Headwind. Real pre-deploy gaps remain — see [`MDM.md`](MDM.md) "Deferred".
 - **🚧 Notifications external channels** — Matrix DM + Akkoma feed + phpBB + email
