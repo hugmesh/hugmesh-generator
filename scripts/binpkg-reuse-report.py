@@ -401,7 +401,6 @@ def analyse(cold, warm, cold_max_binary_pct, max_set_diff_pct=10.0):
         "warm": {"compiled": warm.compiled, "binary": warm.binary, "wall_s": warm.wall},
         "warm_reuse_pct": pct(warm.binary, warm.merges + len(missing_from_warm)),
         "compile_reduction_pct": reduction,
-        "compiles_avoided": cold.compiled - warm.compiled,
         "wall_speedup": speedup,
         "wall_speedup_comparable": speedup_comparable,
         "wall_saved_s": (cold.wall - warm.wall) if cold.wall and warm.wall else None,
@@ -444,9 +443,9 @@ def render(res, cold, warm):
     w("  warm reuse rate            %s of the warm run's merges came from the pool (%d atoms "
       "cold merged that warm never did count as not reused)"
       % (fmt_pct(res["warm_reuse_pct"]), cs["missing_from_warm"]))
-    w("  compile reduction          %s (%d fewer source compiles; %d cold-compiled atoms "
+    w("  compile reduction          %s (%d cold-compiled atoms "
       "never merged in warm count as still compiled)"
-      % (fmt_pct(res["compile_reduction_pct"]), res["compiles_avoided"], cs["absent_from_warm"])
+      % (fmt_pct(res["compile_reduction_pct"]), cs["absent_from_warm"])
       if res["compile_reduction_pct"] is not None else
       "  compile reduction          n/a (cold compiled nothing)")
     w("  hit rate on cold's set     %s (%d of the %d atoms cold compiled were reused; "

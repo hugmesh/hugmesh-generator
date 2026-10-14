@@ -87,7 +87,7 @@ emerge-only speedup; the compile counts are the exact figure and need no clock.
 second build appends to it behind a `==== <name> start <stamp> ====` header.
 `--list-segments` shows them; `--cold-segment 1 --warm-segment 2` selects one build each.
 Default is the last. The segment splitter and the `Emerging` parser were run read-only
-against two real logs in the shared tree. The 84 MB x86 `build.log`: 5 build headers, 301
+against two real logs in the shared tree. The 84 MB x86 `build.log`: 4 build headers, 301
 `Emerging` lines, none `binary`, none with a tail. A real Pi session log,
 `out/sessions/20260924-060521-e5443c/build-pki.rpi5.log`: 238 `Emerging` lines, 45 with
 no tail (host) and 193 ending ` for /out/wl-pki.rpi5/sysroot/` (target), none ending
@@ -206,7 +206,7 @@ speedup: `baseline wall` against `prebuild wall + treatment wall`.
 
 ### Leg C: isolation (must show NO cross-board reuse)
 
-After Leg A on rpi5, in the **same** `WORK_DIR`, build `RPI_BOARD=rpi4` (a72). Expect:
+After Leg A on rpi5, in the **same** `WORK_DIR`, build `RPI_BOARD=rpi4 RPI_ROLES=backend` (a72; the default roles are `pki backend frontend`, appended to one log, and the last segment would then be `frontend`, not the leg A role). Expect:
 
 * **target** merges all `compiled` (a new pool `snap-build-pi4`): the report's
   `by root → target` line is the check, and run this as `--cold <leg A cold> --warm <rpi4>`
@@ -226,7 +226,7 @@ cp "$M/shared/pkgdir/snap-build-pi5/.hugmesh-pool-fingerprint" \
    "$M/shared/pkgdir/snap-build-pi4/.hugmesh-pool-fingerprint"
 ```
 
-then build rpi4 again. It must die with `binpkg pool ABI MISMATCH` (a76 stamp against an
+then build rpi4 again (same `RPI_ROLES=backend`). It must die with `binpkg pool ABI MISMATCH` (a76 stamp against an
 a72 build). Feed that log to the report as the warm side: it must exit **2**.
 Restore the real stamp afterwards (or `rm -rf` the pi4 pool) before reusing that
 `WORK_DIR`.

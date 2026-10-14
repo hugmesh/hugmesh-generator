@@ -290,14 +290,19 @@ case "$(cat "${TMP}/t.txt")" in *"MEASUREMENT VALID"*) ok "text report prints th
 if command -v make >/dev/null 2>&1; then
     INJ="${TMP}/inj"; mkdir -p "${INJ}"
     mk() { make -s -C "${REPO}" binpkg-reuse-report "$@" >"${TMP}/mk.out" 2>&1; }
-    mk COLD="x\"; touch ${INJ}/dq; \"" WARM=w
-    mk COLD="x'; touch ${INJ}/sq; '" WARM=w
-    mk COLD="x\`touch ${INJ}/bt\`" WARM=w
-    mk COLD="x\$\$(touch ${INJ}/sub)" WARM=w
-    mk COLD="${FX}/cold.log" WARM="w\"; touch ${INJ}/dq2; \"" 
-    mk COLD="${FX}/cold.log" WARM="${FX}/warm-full.log" COLD_WALL="1h\"; touch ${INJ}/dq3; \"" 
-    mk COLD="${FX}/cold.log" WARM="${FX}/warm-full.log" MIN_REUSE="1'; touch ${INJ}/sq2; '"
-    mk COLD="${FX}/cold.log" WARM="${FX}/warm-full.log" MIN_HIT_RATE="1'; touch ${INJ}/sq3; '"
+    # every one of the six variables takes each payload in turn, the other five held valid
+    for v in COLD WARM COLD_WALL WARM_WALL MIN_REUSE MIN_HIT_RATE; do
+        for k in dq sq bt sub; do
+            case "${k}" in
+                dq) pay="x\"; touch ${INJ}/${v}-dq; \"";;
+                sq) pay="x'; touch ${INJ}/${v}-sq; '";;
+                bt) pay="x\`touch ${INJ}/${v}-bt\`";;
+                sub) pay="x\$\$(touch ${INJ}/${v}-sub)";;
+            esac
+            args=(COLD="${FX}/cold.log" WARM="${FX}/warm-full.log" COLD_WALL=1h WARM_WALL=30m MIN_REUSE=1 MIN_HIT_RATE=1)
+            mk "${args[@]}" "${v}=${pay}"
+        done
+    done
     expect_eq "make: no injected command ran (quote, backtick, \$(...) in any value)" "$(ls "${INJ}" | tr '\n' ' ')" ""
     # a real path holding a space and both quote kinds is read as ONE argument
     ODD="${TMP}/it's a \"cold\" log.log"; cp "${FX}/cold.log" "${ODD}"
@@ -306,6 +311,8 @@ if command -v make >/dev/null 2>&1; then
     make -s -C "${REPO}" binpkg-reuse-report COLD="${FX}/cold.log" WARM="${FX}/warm-partial.log" MIN_HIT_RATE=95 >"${TMP}/mk.out" 2>&1; rc=$?
     # make turns the script's exit 1 into its own exit 2; the gate line is the proof it arrived
     case "$(cat "${TMP}/mk.out")" in *"GATE --min-hit-rate"*"want >= 95.0"*"got 90.0"*"FAIL"*) ok "make: MIN_HIT_RATE=95 reaches the gate (partial is 90.0 -> FAIL)";; *) bad "make: MIN_HIT_RATE did not reach the gate";; esac
+    make -s -C "${REPO}" binpkg-reuse-report COLD="${FX}/cold.log" WARM="${FX}/warm-partial.log" MIN_REUSE=95 >"${TMP}/mk.out" 2>&1
+    case "$(cat "${TMP}/mk.out")" in *"GATE --min-reuse"*"FAIL"*) ok "make: MIN_REUSE=95 reaches the gate";; *) bad "make: MIN_REUSE did not reach the gate";; esac
     expect_eq "make: a failed gate fails the target" "$([ "${rc}" -ne 0 ] && echo nonzero)" nonzero
     make -s -C "${REPO}" binpkg-reuse-report COLD="${FX}/cold.log" >"${TMP}/mk.out" 2>&1; rc=$?
     expect_eq "make: a missing WARM is a usage error (exit 2)" "${rc}" 2
