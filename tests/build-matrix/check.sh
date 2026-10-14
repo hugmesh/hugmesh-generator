@@ -2457,6 +2457,8 @@ run_nongating_smokes() {
                 "installer-ui-node-default:${REPO_DIR}/tests/scripts/test-installer-ui-node-default.sh" \
                 "host-selinux-tools:${REPO_DIR}/tests/scripts/test-host-selinux-tools.sh" \
                 "builder-log-paths:${REPO_DIR}/tests/scripts/test-builder-log-paths.sh" \
+                "builder-resume-safety:${REPO_DIR}/tests/scripts/test-builder-resume-safety.sh" \
+                "makefile-reown-skips-sysroot:${REPO_DIR}/tests/scripts/test-makefile-reown-skips-sysroot.sh" \
                 "dracut-cross-lib:${REPO_DIR}/tests/scripts/test-dracut-cross-lib.sh" \
                 "host-mutation-guard:${REPO_DIR}/tests/scripts/test-host-mutation-guard.sh" \
                 "sharedbinpkg-prebuild-target:${TEST_DIR}/prebuild-smoke.sh" \

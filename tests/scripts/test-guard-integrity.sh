@@ -701,8 +701,23 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # file on that tree (GUARD_PREMERGE=0), not computed:
 #     182 of 205 suites are named by a pull_request-triggered workflow
 # The ungated SET pin is unchanged at 23 — neither new suite was ever in it.
-PREMERGE_BASELINE="${GUARD_PREMERGE:-195}"
-
+# 192 -> 194 (denominator 215 -> 218, ungated SET 23 -> 24) on 2026-09-30 for
+# hugmesh-generator#659 (iss/659-x86-builder-resume-static-restore, on origin/main
+# 5c5ae084 — which already carried the 192 above): three new suites landed on
+# disk in the same commit that wires two of them. tests/scripts/
+# test-builder-resume-safety.sh (the --resume owner gate, seed choice, static
+# restore, link test, stale-mount refusal and umount_chroot, executed against
+# fixtures and stubs, with a mutation battery) and tests/scripts/
+# test-makefile-reown-skips-sysroot.sh (the Makefile's chown-artifacts never
+# descends into a build system) joined the gate in shell-suites.yml's alpine job
+# and .gitlab-ci.yml's orphan-guards-verify (which gained xz for the .tar.xz seed
+# fixtures). tests/scripts/test-builder-unmount-real.sh (the same unmount against
+# REAL stacked binds in a user+mount namespace) is ungated with its reason in
+# PREMERGE_UNGATED below and runs from `make builder-unmount-real-check`.
+# MEASURED by RUNNING this file on that tree (GUARD_PREMERGE=0), not computed:
+#     194 of 218 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (24 suite(s))
+#
 # 192 -> 193 (denominator 215 -> 216) on 2026-09-30 for #663: the kind sign-in
 # answered 500 because the BFF autoscalers' maxReplicas (6) times the unconfigured
 # R2DBC pool (10) exceeded the app role's CONNECTION LIMIT (20).
@@ -711,6 +726,35 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-195}"
 # MEASURED by RUNNING this file on the tree, not computed:
 #     suite added and wired                193 of 216
 # The ungated SET pin is unchanged at 23: the new suite was never in it.
+#
+# 194 / 193 -> 195 (denominator 219) on 2026-10-07: RE-MEASURED on the MERGE of
+# iss/659-x86-builder-resume-static-restore with origin/main f4a6a899, which carried
+# the 193 above from #663 while the branch carried the 194 above from #659 (both
+# written against 192 on 5c5ae084). The three suites are disjoint, so the gated count
+# is 192 + 2 + 1 and the denominator 215 + 3 + 1. MEASURED by RUNNING this file on
+# that merged tree (GUARD_PREMERGE=0), not computed:
+#     195 of 219 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (24 suite(s))
+#
+# 195 -> 196 (denominator 219 -> 220) on 2026-10-07: re-measured on the merge of this
+# branch with origin/main e14a94a7, which gained tests/scripts/test-edge-ai-ollama-pin.sh
+# (gated, baseline 193 -> 194 on main) after the 195 above was measured. MEASURED by
+# RUNNING this file on that merged tree (GUARD_PREMERGE=0), not computed:
+#     196 of 220 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (24 suite(s))
+#
+# 196 -> 197 (denominator 220 -> 221) on 2026-10-14: re-measured on the LANDING merge
+# of iss/582-per-domain-tor with origin/main c0c46601 (#708 landed after the branch's
+# last merge). This value line CONFLICTED: main said 196 of 220 (the #659 / #663 /
+# edge-ai-ollama-pin steps above, ungated SET 24) and the branch said 195 of 218
+# (its own 193 -> 194 -> 195 steps for tests/scripts/test-gateway-vanity-domains.sh,
+# written below, ungated SET 23). Main's block and its 24-entry PREMERGE_UNGATED are
+# kept; the branch adds exactly one gated suite, tests/scripts/
+# test-gateway-vanity-domains.sh (shell-suites.yml's extras job, helm). MEASURED by
+# RUNNING this file on the merged tree (GUARD_PREMERGE=0), not computed:
+#     197 of 221 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (24 suite(s))
+PREMERGE_BASELINE="${GUARD_PREMERGE:-197}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
@@ -874,6 +918,18 @@ PREMERGE_UNGATED=(
   tests/device-registry/test-layer-a-headscale-acl.sh
   tests/egress-vpn/test-secret-contract.sh
   tests/pentest/nuclei/test-templates.sh
+  # Needs `unshare -Urm` (a private user+mount namespace) to stack REAL bind
+  # mounts under a scratch build system and drive the x86 builder's own
+  # umount_chroot, stale-mount listing and printed umount commands against the
+  # kernel, through eight spellings of the build system's path (#659). Docker's
+  # default seccomp profile blocks those namespaces, so in every shell-suites
+  # image it exits 2 SKIPPED-LOUDLY having run ZERO assertions — MEASURED in
+  # alpine:3 with that job's apk set before it was listed here. Gating it would
+  # raise the coverage number by one and gate nothing. `make
+  # builder-unmount-real-check` runs it on a developer host (16 passed there,
+  # 2026-09-30); the same code paths are proven against a fixture table,
+  # pre-merge, by tests/scripts/test-builder-resume-safety.sh.
+  tests/scripts/test-builder-unmount-real.sh
   tests/scripts/test-e2e-cli-lane.sh
   tests/scripts/test-e2e-coverage-matrix.sh
   tests/scripts/test-e2e-env-interface-dimensions.sh

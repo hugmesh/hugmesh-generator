@@ -251,8 +251,17 @@ ensure-image: ## auto-build the builder image if it is missing
 # invoking host user so host-side qemu/flash/read need no sudo. HOST_UID is set
 # by DOCKER_RUN (the default path); on a bare host run it is the caller's own
 # uid, so the chown is a harmless no-op.
+#
+# It must NOT descend into a build system (<work dir>/snap-build-*/sysroot). It
+# did (`chown -R ... "$(WORK_DIR)"`), and the next `--resume` built an image out
+# of a tree the operator owned: every directory in it uid 1002, sshd and tor
+# refusing to start, the build green (hugmesh-generator#659). The artifacts
+# (.img/.iso/.fs.tar.xz/stage4, logs, keys, sessions/, shared/, isoroot, the
+# locks) still go to the user; any directory named `sysroot` is pruned, at any
+# depth, so a custom --build-subdir is covered too. `chown -h` changes a
+# symlink itself rather than following it into the sysroot.
 define chown-artifacts
-	@[ -n "$(HOST_UID)" ] && $(SUDO) chown -R $(HOST_UID):$(HOST_GID) "$(WORK_DIR)" 2>/dev/null || true
+	@[ -n "$(HOST_UID)" ] && $(SUDO) find "$(WORK_DIR)" -type d -name sysroot -prune -o -exec chown -h $(HOST_UID):$(HOST_GID) {} + 2>/dev/null || true
 endef
 
 # RPi5/RPi4/RPi3 board axis (--board rpi5|rpi4|rpi3 on build-rpi5-stage4.sh; ONE
@@ -2653,5 +2662,21 @@ stack-e2e-coverage-check: stack-e2e-bdd-gen ## OFFLINE: the coverage matrix is c
 # never under out/.
 .PHONY: e2e-ungated
 
-e2e-ungated: ## MANUAL ONLY: run ALL the PREMERGE_UNGATED suites (22 of 22 by default since #347 decision 32c; E2E_UNGATED_SET=e2e for just the 8 test-e2e-* ones, ~21 min)
+e2e-ungated: ## MANUAL ONLY: run ALL the PREMERGE_UNGATED suites (24 of 24 by default since #347 decision 32c; E2E_UNGATED_SET=e2e for just the 8 test-e2e-* ones, ~21 min)
 	bash tests/scripts/run-ungated-lane.sh
+
+# builder-unmount-real-check: the x86 builder's own umount_chroot, its
+# stale-mount listing and the umount commands its refusal prints, driven against
+# REAL stacked bind mounts in a private user+mount namespace, with the build
+# system reached through eight spellings (a symlink, a space, a non-ASCII name,
+# a relative path, ...) and thirty awkward directory names decoded back from the
+# kernel's table (tests/scripts/test-builder-unmount-real.sh,
+# hugmesh-generator#659). No root, no build, no docker — but it needs
+# `unshare -Urm`, which docker's default seccomp profile blocks, so no
+# shell-suites CI container can run it: there it exits 2 SKIPPED-LOUDLY, and it
+# is listed in PREMERGE_UNGATED with that reason. Run it on a developer host.
+# The fixture-driven half of the same proof is gated pre-merge
+# (tests/scripts/test-builder-resume-safety.sh).
+.PHONY: builder-unmount-real-check
+builder-unmount-real-check: ## OPT-IN, needs unshare -Urm (a developer host, not a CI container): the builder's unmount and stale-mount refusal against real stacked binds, through awkward path spellings
+	bash tests/scripts/test-builder-unmount-real.sh
