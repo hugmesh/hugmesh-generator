@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import sys
+import http.client
 import time
 
 import pytest
@@ -385,6 +386,34 @@ def test_send_prompt_can_be_stopped_between_chunks(fake, env):
     answer = lai.send_prompt("hi", "qwen3:8b", env=env, on_chunk=got.append,
                              should_stop=lambda: len(got) >= 1)
     assert answer == "Hel"
+
+
+def test_a_stream_cut_inside_a_chunk_is_a_local_ai_error_not_a_bare_http_exception(fake, env):
+    """The server dies mid-answer. http.client raises IncompleteRead there, which is an
+    HTTPException and NOT an OSError, so the old ``except (URLError, OSError)`` let it
+    escape to the caller as a raw traceback — out of the text screen's input loop, out of
+    ``--local-ai-prompt``. It must come out as the one error type every caller catches,
+    saying what happened and keeping the words that did arrive."""
+    fake.cut_in_chunk = True
+    got = []
+    with pytest.raises(lai.LocalAIError, match="cut off") as info:
+        lai.send_prompt("hi", "qwen3:8b", env=env, on_chunk=got.append)
+    assert got == ["Hel", "lo "], "the pieces before the cut must still have been delivered"
+    assert not isinstance(info.value, http.client.HTTPException)
+    assert "Try again" in str(info.value)
+    assert len([r for r in fake.requests if r[1] == "/api/chat"]) == 1, \
+        "a cut stream is reported, never silently retried"
+
+
+def test_a_stream_that_ends_without_done_is_not_passed_off_as_a_whole_answer(fake, env):
+    """A cut BETWEEN chunks reaches http.client as a clean end of file (its readline
+    peeks and swallows the IncompleteRead), so no exception is raised at all. Ollama
+    always closes an answer with a ``done`` line; a stream that ends without one was cut."""
+    fake.cut_between_chunks = True
+    got = []
+    with pytest.raises(lai.LocalAIError, match="cut off"):
+        lai.send_prompt("hi", "qwen3:8b", env=env, on_chunk=got.append)
+    assert got == ["Hel", "lo ", "there"]
 
 
 # ── starting the assistant ──────────────────────────────────────────────────────────

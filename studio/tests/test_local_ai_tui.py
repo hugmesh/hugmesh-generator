@@ -11,6 +11,7 @@ Three groups, each driven without a terminal and without the Ollama on the host:
   * COMMAND LINE: ``--local-ai-status [--json]`` and ``--local-ai-prompt`` print what the
     dock shows and exit non-zero with a plain sentence when Ollama is down.
 """
+import http.client
 import io
 import json
 import os
@@ -23,6 +24,9 @@ from _local_ai_fake import FakeOllama
 
 from hugmesh_studio.core import local_ai_status as lai
 from hugmesh_studio.tui import journey, local_ai, plain
+
+#: the real prompt function, taken before the autouse fixture below replaces it
+REAL_SEND_PROMPT = lai.send_prompt
 
 
 @pytest.fixture
@@ -198,6 +202,31 @@ def test_a_failing_model_is_a_message_not_a_crash(state, monkeypatch):
     monkeypatch.setattr(lai, "send_prompt", boom)
     rc, text = run_plain("local-ai\nhello\nq\n")
     assert rc == 0 and "scripts/local-ai.sh up" in text
+
+
+def test_an_answer_cut_mid_stream_is_shown_inline_and_the_screen_keeps_working(state, monkeypatch):
+    """``send_prompt`` wraps what it knows; the screen must still survive what it does
+    not. An IncompleteRead (http.client's word for a stream cut inside a chunk) is not a
+    LocalAIError and not an OSError: raised from the prompt function it used to escape
+    ``feed`` and take the whole text-mode input loop down with a traceback."""
+    def cut(*a, **k):
+        raise http.client.IncompleteRead(b"Hel")
+    monkeypatch.setattr(lai, "send_prompt", cut)
+    rc, text = run_plain("local-ai\nhello\nr\nsecond\nq\n")
+    assert rc == 0, "the input loop died on the model's failure"
+    assert "IncompleteRead" in text, "the failure must be shown in words on the screen"
+    assert text.count("local-ai> ") >= 4, "the screen must stay up and keep taking input"
+
+
+def test_a_real_cut_stream_through_the_screen_is_one_sentence_not_a_traceback(state, fake, monkeypatch):
+    """End to end: the screen's own prompt function, the real ``send_prompt``, a fake
+    Ollama that drops the connection mid-chunk."""
+    fake.cut_in_chunk = True
+    monkeypatch.setenv("OLLAMA_HOST", fake.host)
+    monkeypatch.setattr(lai, "send_prompt", REAL_SEND_PROMPT)
+    rc, text = run_plain("local-ai\nhello\nq\n")
+    assert rc == 0
+    assert "cut off" in text and "Traceback" not in text and "IncompleteRead" not in text
 
 
 def test_start_clear_and_refresh_on_the_screen():

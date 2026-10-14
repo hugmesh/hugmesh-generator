@@ -127,18 +127,43 @@ class _ElidedLabel(QtWidgets.QLabel):
         return QtCore.QSize(40, super().minimumSizeHint().height())
 
 
+def _key_code(event) -> int:
+    """``event.key()`` as a plain integer. PyQt6 returns an int; PySide6 from 6.4 returns
+    an enum member, which does not compare equal to an int from the other binding's
+    table. Deciding on the code works for both."""
+    key = event.key()
+    try:
+        return int(key)
+    except (TypeError, ValueError):
+        return int(getattr(key, "value", -1))
+
+
+_SEND_KEYS = (int(Qt.Key.Key_Return), int(Qt.Key.Key_Enter))
+_ESCAPE = int(Qt.Key.Key_Escape)
+
+
 class _PromptLine(QtWidgets.QLineEdit):
-    """The prompt box. Enter here means "send" and nothing else.
+    """The prompt box. Enter here means "send", Escape means "never mind", nothing else.
 
     A plain QLineEdit emits ``returnPressed`` and then leaves the key UNACCEPTED, so the
     dialog it sits in gets it next and presses its default button. The dock sits in a
     QWizard on every page: that button is Next, or on the worklist page the one that
-    commits a build. So the key is accepted here once the line has handled it; every
-    other key goes where it always went."""
+    commits a build. So the key is accepted here once the line has handled it.
+
+    Escape is the other key a QDialog claims: unaccepted, it CLOSES THE WHOLE STUDIO
+    WINDOW. A person who starts a question and thinks better of it should lose the
+    question, not the Studio, so Escape with text in the line clears the line and stops
+    there. On an empty line it is not ours and travels on as it always did. Every other
+    key goes where it always went."""
 
     def keyPressEvent(self, event):
+        code = _key_code(event)
+        if code == _ESCAPE and self.text():
+            self.clear()
+            event.accept()
+            return
         super().keyPressEvent(event)
-        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+        if code in _SEND_KEYS:
             event.accept()
 
 

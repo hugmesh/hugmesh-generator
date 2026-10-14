@@ -399,11 +399,111 @@ def test_enter_in_the_prompt_sends_and_leaves_the_wizard_on_its_page(shell, qapp
     assert sent == ["hello local model"]
     assert (wiz.currentId(), wiz.currentPage().title()) == (page_before, title_before), \
         f"Enter in the prompt moved the wizard to {wiz.currentPage().title()!r}"
-    # and a key the prompt does not own still reaches the wizard: Escape is Cancel there
+    # ordinary typing still lands in the prompt...
     assert dock.prompt.text() == ""
     qapp.sendEvent(dock.prompt, QtGui.QKeyEvent(QtCore.QEvent.Type.KeyPress, Qt.Key.Key_A,
                                                 Qt.KeyboardModifier.NoModifier, "a"))
     assert dock.prompt.text() == "a", "ordinary typing no longer reaches the prompt"
+    # ...and a key the prompt does not own still travels on to the wizard. Escape on an
+    # EMPTY prompt line is the wizard's (QDialog: Cancel); a prompt that accepted every
+    # key would keep it, and this is the assertion that catches that.
+    dock.prompt.clear()
+    seen = _KeysSeenBy(wiz)
+    rejected = []
+    wiz.rejected.connect(lambda: rejected.append(True))
+    press_key(qapp, dock.prompt, Qt.Key.Key_Escape, "\x1b")
+    assert int(Qt.Key.Key_Escape) in seen.keys, "Escape on an empty prompt never reached the wizard"
+    assert rejected, "Escape on an empty prompt no longer cancels the window as it always did"
+
+
+class _KeysSeenBy(QtCore.QObject):
+    """Records every key press that arrives at ``target`` itself (not at its children),
+    which is where an unaccepted key from the prompt lands next."""
+
+    def __init__(self, target):
+        super().__init__(target)
+        self.keys = []
+        target.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QtCore.QEvent.Type.KeyPress:
+            self.keys.append(dock_mod._key_code(event))
+        return False
+
+
+def press_key(qapp, widget, key, text):
+    for kind in (QtCore.QEvent.Type.KeyPress, QtCore.QEvent.Type.KeyRelease):
+        qapp.sendEvent(widget, QtGui.QKeyEvent(kind, key, Qt.KeyboardModifier.NoModifier, text))
+    qapp.processEvents()
+
+
+def test_escape_in_the_prompt_clears_a_half_typed_question_instead_of_closing_the_studio(shell, qapp):
+    """The dock puts a text field on EVERY wizard page, and a QWizard is a QDialog: an
+    Escape that the line edit does not take closes the whole window. A person who
+    starts a question and thinks better of it must lose the question, not the Studio.
+    Only that case is consumed; Escape on an empty line still cancels, as before."""
+    wiz = open_at(shell, qapp, NORMAL)
+    dock = wiz.local_ai_dock
+    dock.set_expanded(True)
+    qapp.processEvents()
+    rejected = []
+    wiz.rejected.connect(lambda: rejected.append(True))
+    dock.prompt.setText("why does the build")
+    dock.prompt.setFocus()
+    qapp.processEvents()
+    press_key(qapp, dock.prompt, Qt.Key.Key_Escape, "\x1b")
+    assert dock.prompt.text() == "", "Escape did not clear the half-typed question"
+    assert not rejected and wiz.isVisible(), "Escape with text in the prompt closed the Studio window"
+    assert dock.prompt.hasFocus(), "the prompt must keep the focus after it is cleared"
+    # the same key on the now-empty line is the wizard's, exactly as before the dock existed
+    press_key(qapp, dock.prompt, Qt.Key.Key_Escape, "\x1b")
+    assert rejected, "Escape on the empty prompt must still cancel the window"
+
+
+def test_the_prompt_reads_the_key_as_an_int_or_as_an_enum_member(qapp, monkeypatch):
+    """PyQt6's ``event.key()`` is an int; PySide6 >= 6.4 hands back an enum member. The
+    prompt decides on the integer code, so both bindings see Enter and Escape."""
+    import enum
+
+    class Keys(enum.Enum):                 # another binding's enum: same codes, not an int
+        Return = int(Qt.Key.Key_Return)
+        Enter = int(Qt.Key.Key_Enter)
+        Escape = int(Qt.Key.Key_Escape)
+        A = int(Qt.Key.Key_A)
+
+    class StubEvent:
+        def __init__(self, key):
+            self._key, self.accepted = key, False
+
+        def key(self):
+            return self._key
+
+        def accept(self):
+            self.accepted = True
+
+    for member in Keys:
+        assert dock_mod._key_code(StubEvent(member)) == member.value
+    assert dock_mod._key_code(StubEvent(int(Qt.Key.Key_Return))) == int(Qt.Key.Key_Return)
+    assert dock_mod._key_code(StubEvent(Qt.Key.Key_Return)) == int(Qt.Key.Key_Return)
+    # and the whole key handler, driven with the enum-returning event: the parent class's
+    # handler is stubbed so a non-Qt event object can travel through it
+    passed_on = []
+    monkeypatch.setattr(QtWidgets.QLineEdit, "keyPressEvent", lambda self, e: passed_on.append(e))
+    line = dock_mod._PromptLine()
+    for member in (Keys.Return, Keys.Enter):
+        ev = StubEvent(member)
+        line.keyPressEvent(ev)
+        assert ev.accepted, f"{member.name} as an enum member was not recognised as Send"
+    line.setText("half")
+    ev = StubEvent(Keys.Escape)
+    line.keyPressEvent(ev)
+    assert ev.accepted and line.text() == "", "Escape as an enum member did not clear the line"
+    ev = StubEvent(Keys.Escape)
+    line.keyPressEvent(ev)
+    assert not ev.accepted, "Escape on an empty line must travel on"
+    ev = StubEvent(Keys.A)
+    line.keyPressEvent(ev)
+    assert not ev.accepted and passed_on[-1] is ev
 
 
 def test_a_second_prompt_carries_the_conversation_and_clear_forgets_it(qapp):

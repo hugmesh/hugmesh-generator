@@ -33,6 +33,7 @@ No account, no hosted service and no key is involved.
 """
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import os
@@ -638,10 +639,15 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
                                  {"Content-Type": "application/json"})
     deadline = time.monotonic() + total_timeout
     out: list[str] = []
+    finished = False                   # a ``done`` line arrived, or the caller said stop
+    cut = ("The connection to Ollama was cut off before the answer finished "
+           "({n} words arrived). Try again; if it keeps happening, look at the server's "
+           "log (journalctl --user -u ollama, or the terminal it runs in).")
     try:
         with _opener().open(req, timeout=timeout) as resp:
             for raw in resp:
                 if should_stop is not None and should_stop():
+                    finished = True
                     break
                 if time.monotonic() > deadline:
                     raise LocalAIError(f"The model took longer than {int(total_timeout)} "
@@ -660,6 +666,7 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
                     if on_chunk is not None:
                         on_chunk(chunk)
                 if piece.get("done"):
+                    finished = True
                     break
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
@@ -668,11 +675,20 @@ def send_prompt(text: str, model: str | None = None, *, env: dict | None = None,
     except TimeoutError:
         raise LocalAIError(f"No answer for {int(timeout)} seconds; the model may still be "
                            "loading. Try again in a minute.") from None
+    except http.client.HTTPException as exc:
+        # The stream died inside a chunk: http.client raises IncompleteRead, which is NOT
+        # an OSError, so without this clause it left here as a bare traceback.
+        raise LocalAIError(cut.format(n=len("".join(out).split()))) from exc
     except (urllib.error.URLError, OSError) as exc:
         if "timed out" in str(exc):
             raise LocalAIError(f"No answer for {int(timeout)} seconds; the model may still "
                                "be loading. Try again in a minute.") from None
         raise LocalAIError(_down_message(env)) from None
+    if not finished:
+        # The stream died BETWEEN chunks: http.client's readline sees a clean end of file
+        # and raises nothing. Ollama ends every answer with a ``done`` line, so a stream
+        # without one was cut, and a truncated answer must not pass for a whole one.
+        raise LocalAIError(cut.format(n=len("".join(out).split())))
     return "".join(out)
 
 

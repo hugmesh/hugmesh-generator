@@ -120,6 +120,12 @@ class LocalAIScreen:
         except lai.LocalAIError as exc:
             self.message = str(exc)
             return
+        except Exception as exc:            # noqa: BLE001 — shown on the screen, never out of the loop
+            # ``send_prompt`` wraps what it knows about; this is for what it does not. An
+            # exception leaving here would leave ``feed``, and with it the whole text-mode
+            # input loop, as a traceback.
+            self.message = f"The model call failed: {exc.__class__.__name__}: {exc}"
+            return
         self.history += [{"role": "user", "content": line.strip()},
                          {"role": "assistant", "content": answer}]
         del self.history[:-40]

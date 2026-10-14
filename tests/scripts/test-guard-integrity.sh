@@ -777,23 +777,16 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 #     198 of 222 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (24 suite(s))
 #
-# 198 -> 199 (denominator 222 -> 223) on 2026-10-14 for #698 (Local AI without Claude):
-# re-measured on the merge of feat/local-ai-dock-and-cli with origin/main af55ccce,
-# which carried the 198 above for #629. Both sides had written "197 -> 198" for a
-# different new suite against 702b590d, so this line conflicted twice today; main's
-# block is kept and the branch's step is re-measured on top of it. tests/scripts/
-# test-local-ai-no-claude.sh is the one new gated suite, named in shell-suites.yml's
-# debian job and in .gitlab-ci.yml's orphan-guards-verify job. MEASURED by RUNNING
-# this file on the merged tree (GUARD_PREMERGE=0), not computed:
-#     199 of 223 suites are named by a pull_request-triggered workflow
-#     PASS the ungated SET matches its pin exactly (24 suite(s))
-# Re-measured the same way on the merge with origin/main e3e95369 (main had since
-# listed tests/go-live/test-onion-refuse.sh and tests/scripts/test-bff-jwks-in-cluster.sh
-# in PREMERGE_UNGATED, both still waiting for their shell-suites.yml line): the gated
-# count is unchanged, only the denominator and the ungated set moved:
-#     199 of 225 suites are named by a pull_request-triggered workflow
-#     PASS the ungated SET matches its pin exactly (26 suite(s))
-PREMERGE_BASELINE="${GUARD_PREMERGE:-199}"
+# 198 -> 198 (denominator +1) on 2026-10-14 for #698 (Local AI without Claude):
+# tests/scripts/test-local-ai-no-claude.sh landed on disk and in .gitlab-ci.yml's
+# orphan-guards-verify job, but NOT in shell-suites.yml: the change that added it was
+# not permitted to edit .github, so the suite is recorded in PREMERGE_UNGATED below as a
+# wiring gap (the same shape as the two tests/desktop-governance entries there) and the
+# gated count does not move. MEASURED by RUNNING this file on the merge of
+# feat/local-ai-dock-and-cli with origin/main 700b832e (GUARD_PREMERGE=0), not computed:
+#     198 of 227 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (29 suite(s))
+PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
@@ -1018,6 +1011,14 @@ PREMERGE_UNGATED=(
   tests/scripts/test-kind-metrics-api.sh
   tests/scripts/test-federation-module-slugs.sh
   tests/scripts/test-liquibase-grant-roles.sh
+  # NOT an exemption, a wiring gap: offline, bash + python3 + git only (it builds a
+  # PATH with no claude binary and runs scripts/local-ai.sh under it), so it WOULD run
+  # in the shell-suites debian job. It is listed solely because the change that added
+  # it (#698, the Local AI dock and CLI) was not permitted to edit
+  # .github/workflows/shell-suites.yml. It IS run post-merge, by .gitlab-ci.yml's
+  # orphan-guards-verify. TO CLOSE THIS: add the path to that job's SUITES list, delete
+  # this entry and raise PREMERGE_BASELINE by one to the number this file then prints.
+  tests/scripts/test-local-ai-no-claude.sh
   # RED ON MAIN, and the reds are real defects rather than suite bugs: a jetson
   # builder that bakes the cluster tree without resolving the gate at all, two
   # selection-rendered artefacts the boot path still sources from git, a git

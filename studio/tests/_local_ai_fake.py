@@ -19,6 +19,15 @@ class FakeOllama:
         self.stall = 0.0             # seconds before the first chunk
         self.chunk_delay = 0.0       # seconds between chunks: lets a test act mid-answer
         self.redirect = False
+        # A stream that dies. Ollama streams with chunked transfer encoding, so this
+        # fake does too when one of these is set. ``cut_in_chunk``: the server declares a
+        # chunk longer than it sends and drops the connection — http.client raises
+        # IncompleteRead (an HTTPException, NOT an OSError) from the reader's loop.
+        # ``cut_between_chunks``: the connection drops after a whole chunk, with no
+        # terminating chunk and no ``done`` line — http.client's readline sees a clean
+        # end of file, so the reader is handed a truncated answer with no error at all.
+        self.cut_in_chunk = False
+        self.cut_between_chunks = False
         self.requests = []           # (method, path, body-dict)
         outer = self
 
@@ -62,6 +71,9 @@ class FakeOllama:
                     return
                 self.send_response(200)
                 self.send_header("Content-Type", "application/x-ndjson")
+                if outer.cut_in_chunk or outer.cut_between_chunks:
+                    self._stream_then_cut()
+                    return
                 self.end_headers()
                 if outer.stall:
                     time.sleep(outer.stall)
@@ -76,6 +88,27 @@ class FakeOllama:
                     self.wfile.write(json.dumps({"done": True}).encode() + b"\n")
                 except (BrokenPipeError, ConnectionResetError):
                     pass
+
+            def _stream_then_cut(self):
+                """Chunked encoding, every chunk but the last written whole, then the
+                connection is dropped: inside the last chunk (declared longer than sent)
+                or right after it (no terminating chunk, no ``done`` line)."""
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                lines = [json.dumps({"message": {"content": c}, "done": False}).encode() + b"\n"
+                         for c in outer.chunks]
+                try:
+                    for data in lines[:-1]:
+                        self.wfile.write(f"{len(data):X}\r\n".encode() + data + b"\r\n")
+                    last = lines[-1]
+                    if outer.cut_in_chunk:
+                        self.wfile.write(f"{len(last) + 64:X}\r\n".encode() + last[:len(last) // 2])
+                    else:
+                        self.wfile.write(f"{len(last):X}\r\n".encode() + last + b"\r\n")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                self.close_connection = True
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
         self.port = self.server.server_address[1]

@@ -500,7 +500,10 @@ loop), `issues.py` (reads `gh` output: which issues to pick, how to print one) a
   status (`Local AI: ready, qwen3:8b loaded, 2 queued, 1 running`), a chevron that
   expands it into a prompt line and an answer area (Enter sends, and only sends: the
   wizard stays on the page you were on, so a question never presses Next or starts a
-  build; the answer streams in), a **Start local assistant** button (runs `scripts/local-ai.sh start` detached)
+  build; Escape with text in the prompt clears the prompt and nothing else, and on an
+  empty prompt it is the window's Cancel as everywhere else; the answer streams in, and
+  a connection that drops mid-answer is reported in words under the status line rather
+  than passed off as a finished answer), a **Start local assistant** button (runs `scripts/local-ai.sh start` detached)
   and a **Current work** button that opens a window listing the queue, the drafts with
   their STATUS and a button to open each draft diff, the model loaded and the Studio's
   own running builds. The bar remembers whether you left it open or closed. Nothing
