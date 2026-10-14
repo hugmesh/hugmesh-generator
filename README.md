@@ -476,26 +476,24 @@ none), and compose green is not evidence for the cluster._
   email adapters on top of the shipped in-app MVP + SSE push.
 - **🚧 Live ApplicationSet cut-over for optional services** — the build-time
   prune ships; the hardcoded `30-*/50-*` Applications still own the workloads.
-- **🔭 Headscale ACL — the BFF push leg is dark, and the LIVE node applier is
-  broken.** The write seam itself landed (`HeadscalePolicyClient`, `GET`/`PUT
-  /api/v1/policy`, real impl + Noop default, leader-gated reconciler), so this is
-  no longer a read-only story; it stays dark behind
-  `app.registry.headscale-acl.enabled=false`, blocked on the single-writer
-  decision (headscale runs `policy: mode: file`, the node renderer is the writer,
-  while `PUT /api/v1/policy` is DB-mode only). Two open defects sit underneath.
-  **The guard against the silent no-op is not on org `main`:** the
-  `requireDbPolicyMode()` context-failure check exists only in `.stack-src`, so on
-  `main` today enabling the flag against the file-mode fleet boots clean and then
-  4xx-degrades every 60s forever behind one WARN line while an operator believes
-  push is live. **The node-side applier never reloads headscale:** commit
-  `e1743555` fixed exactly this in `provision.sh` (capture stderr, restart
-  headscale) but the RECURRING writer `specs/usr/sbin/gen-headscale-policy.sh`
-  still calls `headscale policy set` and ignores the same mode-`file` error — so
-  the pki node rewrites `policy.hujson` every 60s and the running headscale never
-  loads it, and Layer-A revocations do not propagate. The cross-repo parity gate
-  that would catch this cannot run either: it exits 3 ("COMPILE SIDE NOT CHECKED")
-  because it hardcodes the pre-rename `systems/hugmesh` package path against a
-  tree that is now `net/hugmesh`.
+- **🔭 Headscale ACL — the BFF push leg is dark, and the fleet is still file-mode.**
+  The write seam landed (`HeadscalePolicyClient`, `GET`/`PUT /api/v1/policy`, real
+  impl + Noop default, leader-gated reconciler) and stays dark behind
+  `app.registry.headscale-acl.enabled=false`. Decision 101 = B made the BFF the only
+  policy writer, which needs headscale in `policy.mode: database`; the fleet as built
+  still runs `mode: file` with the node renderer writing, tracked in
+  hugmesh-generator#634 (switch the mode, seed the stored policy so the tailnet does
+  not fall to allow-all, retire the node-side writer; needs a live control node to
+  confirm). Until then **nobody may flip `enabled`**. The BFF now refuses to wire the
+  push client unless it declares `policy-mode: database`
+  (`HeadscaleAclConfig.requireDbPolicyMode`, hugmesh-admin-bff-api), but headscale's
+  API does not report its mode, so the guard can only check the declaration.
+  The `gen-headscale-policy.sh` apply leg now captures the `policy set` refusal,
+  restarts headscale to load the rewritten file (as `provision.sh` does since
+  `e1743555`), waits for it to answer before forcing tags, and retries an apply that
+  failed. `tests/device-registry/test-layer-a-headscale-acl.sh` runs against the
+  `net/hugmesh` BFF tree; its two policy-mode checks stay red against a `database` BFF
+  until #634 lands, by design.
 - **🔭 Live in-cluster image build. (needs a live cluster)** The Kaniko manifests,
   the namespace + NetworkPolicy, the ESO wiring, the always-on ArgoCD Application
   (out of `apps-optional/`) and the `ROLE_IMAGE_BUILDER` seed + gateway route row
