@@ -3494,6 +3494,7 @@ orphan-guards-verify:
         tests/domain-registry/test-foreign-ingest-fuzz.sh
         tests/go-live/test-go-live-driver.sh
         tests/go-live/test-go-live-reconcile-verify.sh
+        tests/go-live/test-onion-refuse.sh
         tests/keystores/test-keystores.sh
         tests/keystores/test-keystores-external-ca.sh
         tests/keystores/test-keystores-multidomain.sh
