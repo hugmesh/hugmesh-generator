@@ -16,6 +16,19 @@ const plan = {
   features: [], reportDir: null, runId: null, evidenceDir: null,
   hostResolver: null, generateArgv: [], argv: [],
   via: null, onionBaseUrl: null, proxy: null, onionNote: null,
+  // --via onion-domains: {slug: "https://<onion>"} per Tor domain, from the same
+  // "<slug>=<url> ..." list run.sh exports as SNAP_ONION_DOMAIN_URLS; null when the
+  // lane has none (the tab-separated plan carries it as ONION_DOMAIN_URLS).
+  onionDomainUrls: null,
+};
+
+const domainUrls = (value) => {
+  const out = {};
+  for (const entry of value.split(/\s+/).filter(Boolean)) {
+    const eq = entry.indexOf('=');
+    if (eq > 0) out[entry.slice(0, eq)] = entry.slice(eq + 1);
+  }
+  return Object.keys(out).length ? out : null;
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -39,6 +52,7 @@ for await (const line of rl) {
     case 'ONION_BASE_URL': plan.onionBaseUrl = value || null; break;
     case 'PROXY':         plan.proxy = value || null; break;
     case 'ONION_NOTE':    plan.onionNote = value || null; break;
+    case 'ONION_DOMAIN_URLS': plan.onionDomainUrls = domainUrls(value); break;
     case 'FEATURE':       plan.features.push(value); break;
     case 'GENARGV':       plan.generateArgv.push(value); break;
     case 'ARGV':          plan.argv.push(value); break;
