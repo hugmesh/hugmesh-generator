@@ -166,6 +166,25 @@ lint:db-connection-budget:
   script:
     - bash tests/scripts/test-db-connection-budget.sh
 
+# In-cluster JWKS gate (hugmesh-generator#693). Every BFF's application.yml reads
+# jwk-set-uri from CASDOOR_JWKS_URI, falling back to the public issuer host +
+# /.well-known/jwks. On a cluster where id.hugmesh.net does not resolve (kind) a
+# manifest that sets only CASDOOR_ISSUER_URI makes every signed-in call answer 500
+# ("Could not obtain the keys"). This job reads the manifests and the gateway chart
+# and fails when a container that sets CASDOOR_ISSUER_URI has no literal in-cluster
+# CASDOOR_JWKS_URI, when that URL names a Service or port the tree does not create,
+# or when the wired NetworkPolicies do not admit that pod to the Casdoor pod port.
+# Exemptions carry a reason and a predicate and rot loudly. Offline, no cluster,
+# no network.
+lint:bff-jwks-in-cluster:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    - bash tests/scripts/test-bff-jwks-in-cluster.sh
+
 # External Matrix/Mastodon CLIENT reachability gate. The fe route table ends in a
 # /** catch-all to the Angular shell, whose nginx serves index.html for anything
 # unrouted — so a MISSING protocol route does not 404, it returns 200 text/html
@@ -1072,6 +1091,16 @@ lint:tor-onion-ingress:
   script:
     - apt-get update -qq && apt-get install -y --no-install-recommends jq >/dev/null
     - bash tests/scripts/test-tor-onion-ingress.sh
+
+# The fe-gateway's vanity-subdomain route per brand domain (hugmesh-generator#582):
+# `vanityDomains[i]` extends the route's Host predicate AND the Ingress hosts, and the
+# suite's own controls remove each half in a staged copy. A REAL `helm template`, so
+# this inherits lint:gateway-mfa-env's pinned, sha256-verified, fail-closed helm
+# install. The suite FAILS (never skips) without helm or PyYAML.
+lint:gateway-vanity-domains:
+  extends: lint:gateway-mfa-env
+  script:
+    - bash tests/scripts/test-gateway-vanity-domains.sh
 
 # MFA OPERATIONAL FLIP wiring gate (issue #47). The companion of the two jobs
 # above: they pin the default-OFF POSTURE, this one pins the SWITCH — MFA=1 must
@@ -2790,7 +2819,7 @@ desktop-governance-verify:
     # RSA keypair, signs real RS256 JWTs and runs the RENDERED python mapper
     # against a real JWKS. That suite hard-FAILs (not skips) without them, which
     # is the correct shape — a missing tool must never read as "crypto verified".
-    - apk add --no-cache bash jq coreutils grep sed gawk findutils diffutils python3 openssl
+    - apk add --no-cache bash jq coreutils grep sed gawk findutils diffutils python3 py3-yaml openssl
   script:
     - bash tests/desktop-governance/test-provision-desktop-governance.sh
     - bash tests/desktop-governance/test-gen-sso-session-start.sh
@@ -2800,6 +2829,14 @@ desktop-governance-verify:
     # alg=none rejection and rogue-key rejection, i.e. the entire reason a token
     # cannot mint sudo. Same tool set as the two legs above; 21 assertions.
     - bash tests/desktop-governance/test-desktop-sudo-mapper.sh
+    # The three dark device-exec flags (terminal, dial, remote-install) must stay
+    # declared, overridable and off in the cluster manifest + compose, and the go-live
+    # preconditions doc must exist. PyYAML (py3-yaml above) parses both files.
+    - bash tests/desktop-governance/test-governance-flags-visible.sh
+    # The SSO token producer (FD-07 increment 2): real device-flow client against a
+    # local fake issuer, then its output through the REAL deposit and the REAL
+    # mapper. Same tool set (python3 + openssl); hard-fails without them.
+    - bash tests/desktop-governance/test-sso-token-producer.sh
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -2807,6 +2844,9 @@ desktop-governance-verify:
         - specs/etc/hugmesh/desktop-governance/**/*
         - keys-template/desktop-governance/**/*
         - tests/desktop-governance/**/*
+        - specs/cluster/manifests/admin-bff-api/deployment.yaml
+        - tests/stack/compose.local.yaml
+        - docs/CLIENT-IMAGES.md
         - .gitlab-ci.yml
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
@@ -3455,6 +3495,7 @@ orphan-guards-verify:
         tests/domain-registry/test-foreign-ingest-fuzz.sh
         tests/go-live/test-go-live-driver.sh
         tests/go-live/test-go-live-reconcile-verify.sh
+        tests/go-live/test-onion-refuse.sh
         tests/keystores/test-keystores.sh
         tests/keystores/test-keystores-external-ca.sh
         tests/keystores/test-keystores-multidomain.sh
