@@ -225,6 +225,19 @@ def test_finished_drafts_are_listed_newest_first_with_their_status(fake, env):
     assert snap.counts["drafts"] == 3
 
 
+def test_a_draft_just_queued_with_no_diff_yet_is_still_the_newest(fake, env):
+    """``todo`` writes STATUS before any draft.diff exists. The missing diff must not cost
+    the draft its place: the list says newest first, and this one is the newest."""
+    put_draft(env, "hugmesh-generator-1", "applied files=1 diff_lines=9", diff="--- a\n+++ b\n")
+    d = os.path.join(lai.state_dir(env), "drafts", "hugmesh-generator-2")
+    os.makedirs(d)
+    open(os.path.join(d, "STATUS"), "w").write("queued\n")
+    os.utime(os.path.join(lai.state_dir(env), "drafts", "hugmesh-generator-1", "STATUS"), (1, 1))
+    drafts = lai.read_snapshot(env, builds=no_builds).of_kind("draft")
+    assert [d.id for d in drafts] == ["hugmesh-generator-2", "hugmesh-generator-1"]
+    assert drafts[0].state == "queued" and drafts[0].diff_path == ""
+
+
 @pytest.fixture
 def draft_proc():
     """A live process whose command line contains ``draft.sh``: what a draft in progress is."""

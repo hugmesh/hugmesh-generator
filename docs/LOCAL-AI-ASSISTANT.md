@@ -517,6 +517,10 @@ loop), `issues.py` (reads `gh` output: which issues to pick, how to print one) a
 * **Command line.** `python -m hugmesh_studio --local-ai-status [--json]` and
   `python -m hugmesh_studio --local-ai-prompt "question"`; both exit non-zero with a
   plain sentence when Ollama is down.
+* **One model.** The window, the text screen and the command line all ask the model
+  `LOCAL_AI_MODEL` names (else `qwen3:8b` when it is pulled, else the first pulled
+  model), never whatever happens to be loaded, so the same question goes to the same
+  model whichever face you type it into.
 
 ### 11.3 How this is kept honest
 

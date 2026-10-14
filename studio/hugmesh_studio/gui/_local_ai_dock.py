@@ -552,10 +552,11 @@ class LocalAIDock(QtWidgets.QFrame):
 
     # ---- the prompt -----------------------------------------------------------------
     def _default_prompt(self, text, history, on_chunk, should_stop):
-        model = None
-        if self.snapshot is not None and self.snapshot.loaded:
-            model = self.snapshot.loaded[0]
-        return lai.send_prompt(text, model, history=history, on_chunk=on_chunk,
+        # No model is named here on purpose: ``send_prompt`` then asks ``pick_model``, the
+        # one place $LOCAL_AI_MODEL and the default are honoured, exactly as the command
+        # line and the text UI do. Preferring whatever happens to be loaded would make the
+        # dock answer from a different model than the other faces under the same settings.
+        return lai.send_prompt(text, history=history, on_chunk=on_chunk,
                                should_stop=should_stop)
 
     def send(self) -> bool:

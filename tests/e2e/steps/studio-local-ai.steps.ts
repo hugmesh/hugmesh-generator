@@ -42,6 +42,10 @@ interface DockReport {
     ollamaHostSeenByScript: string | null; ownSession: boolean; note: string;
     startLogWritten: boolean; workWindowOpened: boolean;
   };
+  faces?: {
+    modelSetting: string; loaded: string[]; cliExit: number; cliAnswer: string;
+    cliStderr: string; cliModelAsked: string | null;
+  };
   prompt?: {
     text: string; enter: string; promptClearedOnSend: boolean; sendButtonWhileBusy: string;
     busy: boolean; streamedBeforeClear: boolean; answerBeforeClear: string;
@@ -139,8 +143,22 @@ Then('the question went to the loopback model only and its answer streamed into 
     expect(p.answerBeforeClear).toContain(`You: ${p.text}`);
     expect(p.answerBeforeClear).toContain('The dock talks');
     expect(p.requestsToModel).toEqual(['/api/chat']);
-    expect(p.modelAsked).toBe('qwen3:8b');
     expect(r.model).toMatch(/^127\.0\.0\.1:\d+$/);
+  });
+
+Then('the dock asked the model named by LOCAL_AI_MODEL, the same one the command line asks',
+  async ({ world }) => {
+    const r = report(world);
+    const f = r.faces;
+    expect(f, 'the driver did not ask the command line first').toBeTruthy();
+    expect(f!.cliExit, `--local-ai-prompt failed: ${f!.cliStderr}`).toBe(0);
+    expect(f!.cliAnswer).toBe('Hello there');
+    // the setting names a pulled model that is NOT the loaded one, so a face that
+    // preferred the loaded model would show up here as a different name
+    expect(f!.loaded).not.toContain(f!.modelSetting);
+    expect(f!.cliModelAsked).toBe(f!.modelSetting);
+    expect(r.prompt!.modelAsked, 'the dock asked a different model than the command line')
+      .toBe(f!.cliModelAsked);
   });
 
 Then('Clear pressed mid-answer left the answer area empty and the conversation forgotten',

@@ -13,6 +13,9 @@ snapshot and the start request are fakes. What each group pins, and what breaks 
     window keeps painting while a slow one is in flight; nothing starts until the dock is
     shown.
   * NO MODALS — nothing the dock does opens a modal dialog.
+  * ONE MODEL — the dock asks the same model as ``--local-ai-prompt`` under the same
+    environment. Breaks if the dock picks a model on its own (the loaded one, say)
+    instead of letting the shared ``pick_model`` decide.
 
 The screenshots the operator reads are produced by the same calls (see the lane notes);
 what is asserted here is the geometry they show.
@@ -22,12 +25,17 @@ import threading
 import time
 
 import pytest
+from _local_ai_fake import FakeOllama
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("hugmesh_studio.gui.qt", reason="no Qt binding (PySide6/PyQt6) installed")
 
+from hugmesh_studio import app as studio_app                           # noqa: E402
 from hugmesh_studio.core import local_ai_status as lai                 # noqa: E402
+
+#: the real prompt function, taken before the autouse fixture replaces it for every test
+REAL_SEND_PROMPT = lai.send_prompt
 from hugmesh_studio.core.platform_info import HostInfo                 # noqa: E402
 from hugmesh_studio.gui import _local_ai_dock as dock_mod              # noqa: E402
 from hugmesh_studio.gui import shell as shell_mod                      # noqa: E402
@@ -634,3 +642,69 @@ def test_a_second_prompt_is_refused_while_one_is_running(qapp):
     gate.set()
     assert wait_for(qapp, lambda: not dock._busy)
     dock.close()
+
+
+def test_clear_mid_answer_tells_the_running_prompt_to_stop(qapp):
+    """Clear forgets the conversation, and that includes the answer still arriving: the
+    prompt function must see ``should_stop()`` turn true, or the dock would stay busy
+    (Send reads Stop, a new question is refused) until the forgotten answer ran out."""
+    gate, flag = threading.Event(), {}
+
+    def prompt_fn(text, history, on_chunk, should_stop):
+        on_chunk("partial")
+        gate.wait(5)
+        flag["stop"] = should_stop()
+        return "partial"
+    dock = dock_mod.LocalAIDock(GENERATOR_DIR, snapshot_fn=make_snapshot, prompt_fn=prompt_fn,
+                                auto_poll=False, expanded=True)
+    dock.show()
+    dock.prompt.setText("q1")
+    assert dock.send()
+    assert wait_for(qapp, lambda: "partial" in dock.answer.toPlainText())
+    dock.clear()                                               # mid-answer
+    gate.set()
+    assert wait_for(qapp, lambda: not dock._busy)
+    assert flag.get("stop") is True, "Clear did not tell the running prompt to stop"
+    dock.close()
+
+
+# ── ONE MODEL ────────────────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("asked, loaded, expect", [
+    ("qwen2.5-coder:7b", ["qwen3:8b"], "qwen2.5-coder:7b"),   # LOCAL_AI_MODEL wins over the loaded one
+    ("", ["qwen2.5-coder:7b"], "qwen3:8b"),                    # no setting: the pulled default, not the loaded one
+], ids=["LOCAL_AI_MODEL-set", "LOCAL_AI_MODEL-unset"])
+def test_the_dock_asks_the_same_model_as_the_command_line(qapp, monkeypatch, tmp_path,
+                                                           asked, loaded, expect, capsys):
+    """One place picks the model (``pick_model``) and every face goes through it. Both
+    requests here hit the same fake, so the ``model`` each one carries is compared on the
+    wire, not inferred."""
+    fake = FakeOllama()
+    try:
+        fake.models = [{"name": "qwen3:8b"}, {"name": "qwen2.5-coder:7b"}]
+        fake.loaded = [{"name": n} for n in loaded]
+        monkeypatch.setenv("OLLAMA_HOST", fake.host)
+        monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "studio"))
+        if asked:
+            monkeypatch.setenv(lai.MODEL_ENV, asked)
+        else:
+            monkeypatch.delenv(lai.MODEL_ENV, raising=False)
+        monkeypatch.setattr(lai, "send_prompt", REAL_SEND_PROMPT)   # this test wants the wire
+
+        assert studio_app.main(["--local-ai-prompt", "hi"]) == 0
+        capsys.readouterr()
+        snap = make_snapshot(models=[m["name"] for m in fake.models], loaded=list(loaded))
+        dock = dock_mod.LocalAIDock(GENERATOR_DIR, snapshot_fn=lambda: snap,
+                                    auto_poll=False, expanded=True)
+        dock.show()
+        dock.apply_snapshot(snap)                      # what a poll does: the dock knows what is loaded
+        assert dock.snapshot.loaded == loaded
+        dock.prompt.setText("hi")
+        assert dock.send()
+        assert wait_for(qapp, lambda: not dock._busy)
+        dock.close()
+
+        chats = [r[2]["model"] for r in fake.requests if r[1] == "/api/chat"]
+        assert len(chats) == 2, fake.requests
+        assert chats == [expect, expect], f"CLI asked {chats[0]}, dock asked {chats[1]}"
+    finally:
+        fake.close()

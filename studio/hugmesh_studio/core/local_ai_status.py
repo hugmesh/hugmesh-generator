@@ -68,10 +68,6 @@ STALE_AFTER = 30.0
 
 DOC = "docs/LOCAL-AI-ASSISTANT.md"
 
-#: Draft states (the first word of a draft's ``STATUS`` file) that mean it is over.
-_OVER = ("applied", "does-not-apply", "no-diff", "no-issue", "no-ollama", "no-model",
-         "no-checkout", "error")
-
 
 class LocalAIError(RuntimeError):
     """A failure with a message fit to show a person as it stands."""
@@ -335,9 +331,14 @@ def _drafts(root: str) -> list:
         diff = os.path.join(d, "draft.diff")
         try:
             has_diff = os.path.getsize(diff) > 0
+        except OSError:
+            has_diff = False
+        # read apart from the diff: a draft that was only just queued has no draft.diff
+        # yet, and it is the newest, not the oldest
+        try:
             updated = os.path.getmtime(status_path)
         except OSError:
-            has_diff, updated = False, 0.0
+            updated = 0.0
         title = ""
         for line in _read_text(os.path.join(d, "issue.md"), 400).splitlines():
             if line.startswith("# "):

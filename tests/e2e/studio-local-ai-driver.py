@@ -17,19 +17,24 @@ two stand-ins that keep the run on this machine and start nothing of the operato
   real queue worker on the box running the suite. ``start_assistant`` itself is the
   real function: it spawns the stand-in exactly as it would spawn the real script.
 
+Before the window opens, the plain command line (``python -m hugmesh_studio
+--local-ai-prompt``) asks the same fake under the same ``$LOCAL_AI_MODEL``, so the step
+file can hold the dock to the model the command line asked, not to whatever was loaded.
+
 Both state folders (the Studio's and the local-AI one) are scratch, and the local-AI one
 is seeded with one queued job and one finished draft so the status line has something
 to count.
 
 Prints ONE JSON object on the LAST stdout line (the step file's contract):
-``{ok, binding, png, grabs:[{name,png}], dock:{...}, start:{...}, prompt:{...},
-clear:{...}, modal, errors:[...]}``. Exit codes: 0 driven and grabbed, 2 bad usage,
-3 no Qt binding, 4 the Studio could not be built or driven.
+``{ok, binding, png, grabs:[{name,png}], faces:{...}, dock:{...}, start:{...},
+prompt:{...}, clear:{...}, modal, errors:[...]}``. Exit codes: 0 driven and grabbed,
+2 bad usage, 3 no Qt binding, 4 the Studio could not be built or driven.
 """
 import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -109,9 +114,26 @@ def main(argv):
         _fail(4, f"cannot import the Studio ({type(exc).__name__}: {exc})")
 
     fake = FakeOllama()
+    os.environ["OLLAMA_HOST"] = fake.host
+
+    # ── act 0: the command line, under the same setting the dock will see ──
+    # Two models pulled, only the default loaded, and $LOCAL_AI_MODEL naming the OTHER
+    # one: the faces agree only if neither prefers what happens to be loaded. The plain
+    # CLI goes first so its one request can be told apart from the dock's.
+    model_setting = "qwen2.5-coder:7b"
+    fake.models = [{"name": "qwen3:8b"}, {"name": model_setting}]
+    os.environ[lai.MODEL_ENV] = model_setting
+    cli = subprocess.run([sys.executable, "-m", "hugmesh_studio", "--local-ai-prompt",
+                          "Which model answers?"], cwd=studio_root, env=dict(os.environ),
+                         capture_output=True, text=True, timeout=120)
+    faces = {
+        "modelSetting": model_setting, "loaded": [m["name"] for m in fake.loaded],
+        "cliExit": cli.returncode, "cliAnswer": cli.stdout.strip(), "cliStderr": cli.stderr[-400:],
+        "cliModelAsked": next((b.get("model") for m, p, b in fake.requests if m == "POST"), None),
+    }
+    del fake.requests[:]                            # the dock's requests are counted alone
     fake.chunks = ["The dock talks ", "to the model on ", "this machine ", "only."]
     fake.chunk_delay = 0.6
-    os.environ["OLLAMA_HOST"] = fake.host
 
     # the real start_assistant, pointed at the stand-in script (the dock asks for the
     # repository's; that one would start a real server and worker on this box)
@@ -120,7 +142,7 @@ def main(argv):
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     report = {"ok": True, "binding": BINDING, "grabs": [], "errors": [], "modal": None,
-              "standInStartScript": stand_in, "model": fake.host}
+              "standInStartScript": stand_in, "model": fake.host, "faces": faces}
 
     def pump(cond, timeout=10.0):
         end = time.monotonic() + timeout
