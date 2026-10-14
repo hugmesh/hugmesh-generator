@@ -388,6 +388,35 @@ spec:
             # tests/egress-vpn/test-secret-contract.sh.
             - { name: EGRESS_VPN_SECRET_DELIVERY_ENABLED, value: "false" }
             - { name: EGRESS_VPN_SECRET_NAMESPACE,        value: "hugmesh-egress-vpn" }
+            # ── Desktop governance: the three SHIPS-DARK device-exec flags ─────
+            # Declared here, all "false", so the lever is VISIBLE and REVIEWABLE.
+            # Before this block no manifest named them, and one of the three
+            # (app.desktop.remote-install.enabled) had no application.yml entry
+            # either, so nothing told an operator the switch existed. `kubectl set
+            # env` is NOT the lever: apps/31-admin-bff-api.yaml is automated
+            # {prune,selfHeal} and reverts it on the next reconcile. The lever is
+            # editing the value below in a reviewed commit.
+            #
+            # DO NOT FLIP THESE AS A BUNDLE, and not before the preconditions in
+            # docs/CLIENT-IMAGES.md section 7 "Go-live preconditions":
+            #  - DEVICE_TERMINAL_DIAL_ENABLED=true wires the host-key-PINNED sshj
+            #    channel factory. It REQUIRES a mandatory security re-review first,
+            #    and it is INERT without ACTIVE device_ssh_dial rows (per-device
+            #    host_key_fp pin, TOFU forbidden; rows are seeded PENDING by an
+            #    image-build ingest and activated by a SUPERADMIN, which itself 503s
+            #    while this flag is false) AND the per-device ESO-synced dial-key
+            #    Secrets mounted under /var/run/secrets/device-ssh-dial. This
+            #    Deployment mounts none, and no manifest in this tree delivers them.
+            #  - DEVICE_TERMINAL_ENABLED=true opens the live WebSocket transport; the
+            #    connect-time license + step-up re-checks run regardless.
+            #  - DESKTOP_REMOTE_INSTALL_ENABLED=true wires the exec client that rides
+            #    the SAME dial factory, so it dials nothing while the dial flag is
+            #    false. Needs an admin-bff image that carries the application.yml
+            #    entry; an older image ignores this env var silently.
+            # Pinned by tests/desktop-governance/test-governance-flags-visible.sh.
+            - { name: DEVICE_TERMINAL_ENABLED,        value: "false" }
+            - { name: DEVICE_TERMINAL_DIAL_ENABLED,   value: "false" }
+            - { name: DESKTOP_REMOTE_INSTALL_ENABLED, value: "false" }
             # ── Node-storage reconciler (the push-with-ack leg) — SHIPS DARK ───
             # NODESTORAGE_RECONCILER_ENABLED gates admin-bff's node-storage push
             # reconciler: the FAST propagation path that pushes the signed
