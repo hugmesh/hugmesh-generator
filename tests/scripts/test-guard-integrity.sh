@@ -742,7 +742,19 @@ else ALLOW_TEXT="$(printf '%s\n' "${ALLOW_UNWIRED[@]}")"; fi
 # RUNNING this file on that merged tree (GUARD_PREMERGE=0), not computed:
 #     196 of 220 suites are named by a pull_request-triggered workflow
 #     PASS the ungated SET matches its pin exactly (24 suite(s))
-PREMERGE_BASELINE="${GUARD_PREMERGE:-196}"
+#
+# 196 -> 197 (denominator 220 -> 221) on 2026-10-14: re-measured on the LANDING merge
+# of iss/582-per-domain-tor with origin/main c0c46601 (#708 landed after the branch's
+# last merge). This value line CONFLICTED: main said 196 of 220 (the #659 / #663 /
+# edge-ai-ollama-pin steps above, ungated SET 24) and the branch said 195 of 218
+# (its own 193 -> 194 -> 195 steps for tests/scripts/test-gateway-vanity-domains.sh,
+# written below, ungated SET 23). Main's block and its 24-entry PREMERGE_UNGATED are
+# kept; the branch adds exactly one gated suite, tests/scripts/
+# test-gateway-vanity-domains.sh (shell-suites.yml's extras job, helm). MEASURED by
+# RUNNING this file on the merged tree (GUARD_PREMERGE=0), not computed:
+#     197 of 221 suites are named by a pull_request-triggered workflow
+#     PASS the ungated SET matches its pin exactly (24 suite(s))
+PREMERGE_BASELINE="${GUARD_PREMERGE:-197}"
 
 # 182 -> 192 (denominator 205 -> 215) on 2026-09-30 for #385: the census gained a
 # THIRD spelling, bare `tests/*.sh` at depth 1, and the ten suites it exposed were
@@ -754,6 +766,32 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-196}"
 # The ungated SET pin is unchanged at 23: none of the ten is in PREMERGE_UNGATED.
 # tests/e2e-extra-personas.sh is NOT counted: it is a sourced data library named
 # in NOT_SUITES, verified to be sourced.
+#
+# 193 -> 194 (denominator 216 -> 217) on 2026-10-07 for #582 (iss/582-per-domain-tor,
+# merged onto origin/main f4a6a899, which carried the 193 above for #663; this branch
+# had earlier written the same 192 -> 193 step for its own suite against 20178822,
+# before #663 landed on main, so the two met in a merge conflict on this line and
+# the branch's step is re-measured here on top of main's): one new suite, wired into
+# shell-suites.yml's extras job (helm): tests/scripts/test-gateway-vanity-domains.sh
+# — the fe-gateway's vanity-subdomain route and Ingress hosts per brand domain,
+# rendered with a real `helm template`. MEASURED by RUNNING this file on the merged
+# tree (GUARD_PREMERGE=0), not computed:
+#     194 of 217 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 23 — the new suite was never in it.
+#
+# 194 -> 195 (denominator 217 -> 218) on 2026-10-07, the merge of origin/main
+# e14a94a7 into iss/582-per-domain-tor. Main and this branch had EACH raised the value
+# line above from 193 to 194, for a different new suite, so git merged the identical
+# one-line edit with no conflict and the file said 194 for a tree that now holds two
+# new suites: main's tests/scripts/test-edge-ai-ollama-pin.sh and this branch's
+# tests/scripts/test-gateway-vanity-domains.sh. Each side measured green alone
+# (194 of 217); the merged tree printed
+#     FAIL pre-merge suite coverage rose to 195, baseline still says 194
+# MEASURED by RUNNING this file on the merged tree (GUARD_PREMERGE=0), not computed:
+#     195 of 218 suites are named by a pull_request-triggered workflow
+# The ungated SET pin is unchanged at 23 — neither suite was ever in it. A merge that
+# lands another suite after this one must re-measure again: a silent clean merge of
+# this line is exactly how the number went stale.
 
 # 164 -> 165 on 2026-09-16: tests/scripts/test-argocd-serverside-diff.sh joined the
 # gate with the harbor Server-Side Diff annotation (hugmesh-generator#354). MEASURED
