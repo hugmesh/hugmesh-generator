@@ -454,20 +454,23 @@ none), and compose green is not evidence for the cluster._
 - **🔭 Group-call SFU.** coturn gives 1:1/mesh TURN relay only. Scalable group
   calls (MatrixRTC / Element Call / LiveKit) do not exist in any form.
 - **🔭 Desktop-governance go-live — three dark flags, zero dial rows, no image.**
-  All three governance flags still default off, and one of them is invisible:
-  `app.device-terminal.enabled` and `app.device-terminal.dial.enabled` are in the
-  admin-BFF `application.yml`, but `app.desktop.remote-install.enabled` exists
-  only as a `@ConditionalOnProperty(..., matchIfMissing = true)` bean condition
-  with no yaml entry at all. Nothing overrides any of them in any cluster manifest
-  or compose file. Flipping the dial flag additionally requires a mandatory
-  security re-review **and** `device_ssh_dial` rows — the table has zero rows on
-  the running mesh, and the pinned channel factory refuses without an ACTIVE row
-  carrying a matching `host_key_fp` (TOFU forbidden), so the flag is inert even
-  when true. And no laptop / chromebook / desktop image has ever been built: the
-  default `X86_ROLE_LIST` is `pki backend frontend backend-gpu`, and 28 build sessions contain no
-  such artifact — so the desktop boot-verify (Qt6/KF6 Discover pull, the
-  `hugmesh-desktop` PKCE client, the desktop-sudo claim → polkit path) has never
-  run.
+  All three governance flags still default off (`DEVICE_TERMINAL_ENABLED`,
+  `DEVICE_TERMINAL_DIAL_ENABLED`, `DESKTOP_REMOTE_INSTALL_ENABLED`), but they are
+  no longer invisible: each has an admin-BFF `application.yml` entry
+  (`app.desktop.remote-install.enabled` previously existed only as a
+  `matchIfMissing = true` bean condition), is declared `"false"` in the cluster
+  Deployment and read through `${NAME:-false}` in compose, and
+  `tests/desktop-governance/test-governance-flags-visible.sh` pins that. What
+  remains is not a flag flip: flipping the dial flag needs a mandatory security
+  re-review **and** `device_ssh_dial` rows (zero on the mesh audited 2026-08; the
+  pinned channel factory refuses without an ACTIVE row carrying a matching
+  `host_key_fp`, TOFU forbidden), **and** the per-device dial-key Secrets mounted
+  into the BFF pod, which no manifest does today. No laptop / chromebook /
+  desktop image has ever been built (the default `X86_ROLE_LIST` is `pki backend
+  frontend backend-gpu`, and 28 build sessions contain no such artifact), so the
+  desktop boot-verify (Qt6/KF6 Discover pull, the `hugmesh-desktop` PKCE client,
+  the desktop-sudo claim → polkit path) has never run. Preconditions in full:
+  [`docs/CLIENT-IMAGES.md`](docs/CLIENT-IMAGES.md) §7 "Go-live preconditions".
 - **🚧 Desktop-governance SSO token producer** (FD-07 increment 2) — the producer
   is written and unit-tested (`specs/etc/hugmesh/desktop-governance/sso/`), but
   unproven against a live Casdoor device endpoint and on a desktop image; the

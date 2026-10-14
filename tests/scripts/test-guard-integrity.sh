@@ -937,6 +937,14 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-198}"
 # node_modules and a chromium no shell-suites image carries.
 PREMERGE_UNGATED=(
   tests/casdoor/test-jwt-custom-token.sh
+  # NOT an exemption, a wiring gap: this suite is offline (bash + python3 + PyYAML)
+  # and WOULD run in the shell-suites image, but wiring it into
+  # .github/workflows/shell-suites.yml is an edit the author of this suite was not
+  # permitted to make. It is gated post-merge today by .gitlab-ci.yml's
+  # desktop-governance-verify. TO CLOSE THIS: add the path to the SUITES list in
+  # shell-suites.yml (with py3-yaml in that job's apk set), delete this entry and
+  # raise PREMERGE_BASELINE by one to the number this file then prints.
+  tests/desktop-governance/test-governance-flags-visible.sh
   # NOT a claim that it cannot gate: it needs only bash + python3 + openssl, the
   # tool set its three siblings in tests/desktop-governance/ already run under in
   # shell-suites.yml. It is listed solely because the change that added it could
