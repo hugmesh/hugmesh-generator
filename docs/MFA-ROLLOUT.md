@@ -742,6 +742,11 @@ today** — steps 6–7 were gated on the companion change from §0, which has m
    `values.yaml` and nothing else, then running every MFA suite
    (`tests/scripts/test-mfa-required-rules.sh`, `tests/scripts/test-mfa-raw-jwt-posture.sh`,
    `tests/stack/test-gateway-mfa-env.sh`, `tests/stack/test-mfa-flip-wiring.sh`):
+   (A wider sweep of all 21 `tests/**/test-*.sh` files that mention `mfa`, base versus
+   step 6, found no other suite changing result; two of the 21,
+   `test-cluster-manifest-integrity.sh` and `test-tor-flip-wiring.sh`, hit the
+   300 s timeout in both runs there and are therefore unmeasured. The step 7 sweep
+   covered only the four suites below.)
 
    | suite | result | what goes red | what the flip commit has to do |
    |---|---|---|---|
