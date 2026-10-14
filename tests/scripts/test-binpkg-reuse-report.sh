@@ -3,10 +3,13 @@
 # the instrument that turns two builder logs (cold pool, warm pool) into the
 # compile-once speedup docs/SHARED-BINPKG.md lists as UNPROVEN.
 #
-# HERMETIC: runs the real script over SYNTHETIC fixture logs in
-# tests/scripts/fixtures/binpkg-reuse/ (hand-written in the shape of a builder log,
-# NOT captures of a real build). What this proves is that the arithmetic and the
-# refusal rules are right. It proves nothing about the speedup of a real board: that
+# HERMETIC: runs the real script over fixture logs in tests/scripts/fixtures/binpkg-reuse/.
+# Most are SYNTHETIC (hand-written in the shape of a builder log, NOT captures of a real
+# build); the real-*.log files are verbatim EXCERPTS of real Pi and x86 builder logs
+# (their first line says which, and which lines were derived). The synthetic ones fix
+# the arithmetic and the refusal rules; the real-shape ones fix the line shape the
+# host/target split reads, which a hand-written fixture got wrong once (it used
+# " to /", a tail no real log has). It proves nothing about the speedup of a real board: that
 # is operator_only, protocol in docs/BINPKG-MEASUREMENT-PLAN.md.
 #
 # Fixture truth table (10 merges per build: 4 in `system`, 6 in `image`):
@@ -17,8 +20,13 @@
 #   warm-mismatch.log  the guard's FATAL ABI-MISMATCH text
 #   warm-failed.log    a ">>> Failed to emerge" line
 #   empty.log          no portage lines at all
-#   host-cold/host-warm.log  one atom merged twice ("to /" host tool, "for <sysroot>" target),
-#                     the host line repeated once as a --resume would: 2 merges, not 1 or 3
+#   host-cold/host-warm.log  one atom merged twice (a literal " to /" host tool, "for <sysroot>"
+#                     target), the host line repeated once as a --resume would: 2 merges, not 1 or 3
+#   real-pi5-cold.log   22 real Pi merges: 6 host (NO tail) + 16 target (" for /out/wl-pki.rpi5/sysroot/")
+#   real-pi5-warm.log   the same, sysroot dir renamed (wl-pki-2.rpi5), 20 from the pool, host
+#                     libseccomp and target readline compiled again
+#   real-pi5-warm-short.log  its system group only: 8 atoms of the cold set never merged
+#   real-x86-cold/warm.log   5 real native-chroot merges, no tail anywhere
 #   session-two-builds.log  cold then warm in ONE file (the shared build.log shape)
 set -uo pipefail
 
@@ -93,6 +101,7 @@ expect_eq "fingerprint-guard refusal in the warm log -> exit 2" "${rc}" 2
 case "$(cat "${TMP}/o.txt")" in *"ABI MISMATCH"*) ok "mismatch: reason names the guard";; *) bad "mismatch: reason missing";; esac
 run --cold "${FX}/cold.log" --warm "${FX}/warm-failed.log" >"${TMP}/o.txt" 2>&1; rc=$?
 expect_eq "failed emerge in the warm log -> exit 2" "${rc}" 2
+case "$(cat "${TMP}/o.txt")" in *"retried"*) ok "failed emerge: says a retried failure counts too";; *) bad "failed emerge: retry caveat missing";; esac
 run --cold "${FX}/empty.log" --warm "${FX}/warm-full.log" >"${TMP}/o.txt" 2>&1; rc=$?
 expect_eq "log with no Emerging line -> exit 2" "${rc}" 2
 run --cold "${FX}/cold.log" --warm "${FX}/warm-full.log" --min-reuse 1 --cold-max-binary-pct 0 \
@@ -127,6 +136,50 @@ expect_eq "host+target merge of one atom: hit rate on cold's set" "$(jget "${J}"
 expect_eq "host+target merge: by_root host warm binary" "$(jget "${J}" 'd["by_root"]["host"]["warm_binary"]')" 1
 expect_eq "host+target merge: by_root target warm binary" "$(jget "${J}" 'd["by_root"]["target"]["warm_binary"]')" 1
 expect_eq "host+target merge: by_root host cold compiled" "$(jget "${J}" 'd["by_root"]["host"]["cold_compiled"]')" 1
+
+# -- (5c) REAL line shapes: a Pi build prints NO tail for a host tool and " for <sysroot>/" for
+# the target; the sysroot directory differs between two Studio builds ---------------------
+J="${TMP}/pi.json"
+run --cold "${FX}/real-pi5-cold.log" --warm "${FX}/real-pi5-warm.log" --json >"${J}"; rc=$?
+expect_eq "real pi: exit status" "${rc}" 0
+expect_eq "real pi: valid" "$(jget "${J}" 'd["valid"]')" True
+expect_eq "real pi: by_root keys" "$(jget "${J}" 'sorted(d["by_root"])')" "['host', 'target']"
+expect_eq "real pi: host (tail-less) cold compiled" "$(jget "${J}" 'd["by_root"]["host"]["cold_compiled"]')" 6
+expect_eq "real pi: target cold compiled" "$(jget "${J}" 'd["by_root"]["target"]["cold_compiled"]')" 16
+expect_eq "real pi: host warm binary / compiled" "$(jget "${J}" '(d["by_root"]["host"]["warm_binary"], d["by_root"]["host"]["warm_compiled"])')" "(5, 1)"
+expect_eq "real pi: host warm reuse pct" "$(jget "${J}" 'd["by_root"]["host"]["warm_reuse_pct"]')" 83.3
+expect_eq "real pi: target warm binary / compiled" "$(jget "${J}" '(d["by_root"]["target"]["warm_binary"], d["by_root"]["target"]["warm_compiled"])')" "(15, 1)"
+# the sysroot directory was renamed between the runs: every target atom must still be matched
+expect_eq "real pi: renamed sysroot: hit rate on cold's set (20 of 22)" "$(jget "${J}" 'd["common_set"]["hit_rate_pct"]')" 90.9
+expect_eq "real pi: renamed sysroot: nothing absent from warm" "$(jget "${J}" 'd["common_set"]["absent_from_warm"]')" 0
+expect_eq "real pi: renamed sysroot: no phantom new work" "$(jget "${J}" 'd["new_compiles_in_warm"]')" "[]"
+expect_eq "real pi: the two pool misses, one per role" "$(jget "${J}" 'd["recompiled_despite_pool"]')" "['sys-libs/libseccomp-2.6.1 [system] host', 'sys-libs/readline-8.3_p6 [system] target']"
+# a genuine miss under a renamed sysroot is a MISS, not new work (the skeptic's case)
+sed -e 's/^>>> Emerging binary (\(1[0-9]*\) of 137) \(sys-apps\/attr\)/>>> Emerging (\1 of 137) \2/' \
+    "${FX}/real-pi5-warm.log" >"${TMP}/pi-warm-miss.log"
+run --cold "${FX}/real-pi5-cold.log" --warm "${TMP}/pi-warm-miss.log" --json >"${J}"
+expect_eq "real pi: a miss under a renamed sysroot is named a MISS (3 misses)" "$(jget "${J}" 'len(d["recompiled_despite_pool"])')" 3
+expect_eq "real pi: ...and is not new work" "$(jget "${J}" 'd["new_compiles_in_warm"]')" "[]"
+# atoms cold compiled that warm never merged count AGAINST the hit rate, and say so
+J="${TMP}/pishort.json"
+run --cold "${FX}/real-pi5-cold.log" --warm "${FX}/real-pi5-warm-short.log" --json >"${J}"; rc=$?
+expect_eq "short warm: still a valid run" "${rc}" 0
+expect_eq "short warm: 8 atoms absent" "$(jget "${J}" 'd["common_set"]["absent_from_warm"]')" 8
+expect_eq "short warm: hit rate counts absent as not reused (12 of 22)" "$(jget "${J}" 'd["common_set"]["hit_rate_pct"]')" 54.5
+expect_eq "short warm: hit rate of those warm merged (12 of 14)" "$(jget "${J}" 'd["common_set"]["hit_rate_of_merged_pct"]')" 85.7
+expect_eq "short warm: a note names the absent atoms" "$(jget "${J}" 'any("never merged in the warm run" in n for n in d["notes"])')" True
+run --cold "${FX}/real-pi5-cold.log" --warm "${FX}/real-pi5-warm-short.log" >"${TMP}/t.txt"
+case "$(cat "${TMP}/t.txt")" in *"of those warm merged     85.7%"*) ok "text report prints both hit rates";; *) bad "text report lacks the second hit rate";; esac
+# a native (x86 chroot) build prints no tail on any line: ONE root, not "everything is a host tool"
+J="${TMP}/x86.json"
+run --cold "${FX}/real-x86-cold.log" --warm "${FX}/real-x86-warm.log" --json >"${J}"; rc=$?
+expect_eq "real x86: exit status" "${rc}" 0
+expect_eq "real x86: by_root is one native root" "$(jget "${J}" 'sorted(d["by_root"])')" "['native']"
+expect_eq "real x86: native cold compiled / warm binary" "$(jget "${J}" '(d["by_root"]["native"]["cold_compiled"], d["by_root"]["native"]["warm_binary"])')" "(5, 5)"
+expect_eq "real x86: a note says there is no host/target split" "$(jget "${J}" 'any("native build" in n for n in d["notes"])')" True
+# one run with a root tail and one without is not a comparable split
+run --cold "${FX}/real-pi5-cold.log" --warm "${FX}/real-x86-warm.log" --json >"${J}"
+expect_eq "tail in one run only: a note says the split is not comparable" "$(jget "${J}" 'any("not comparable" in n for n in d["notes"])')" True
 
 # -- (6) wall spellings --------------------------------------------------------------
 for spelling in "7200" "2:00:00" "2h" "120:00" "1h60m"; do

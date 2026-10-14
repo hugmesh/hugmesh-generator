@@ -18,9 +18,17 @@ WHAT IT COUNTS (portage's own markers, the same lines the Studio parser reads)
     ">>> Emerging binary (N of M) cat/pkg-ver::repo [for|to <root>]"   from the pool
     "==> Emerge group: <g>"                                            group banner
     "==> Emerge plan: <g> total=M binary=B ebuild=E"                   the pretend plan
-    A package is keyed (group, atom, root-tail): the same atom merged "to /" (a host
-    tool) and "for /sysroot/" (the target) is two merges, and a repeated line (a
-    --resume re-announcing a package) is one.
+    A package is keyed (group, atom, ROLE), where the role comes from the root tail
+    portage prints only when the merge root is not "/":
+        no tail (a literal " to /" too)  HOST   a tool merged into the builder's own root
+                                               (the arm host-bdep pool, #72 section 4)
+        " for /out/<dir>/sysroot/"      TARGET a package merged into the image sysroot
+    The same atom merged into both is two merges, and a repeated line (a --resume
+    re-announcing a package) is one. The ROLE is the key, not the path: a Studio
+    worklist build gets a new sysroot directory (wl-<entry-id>) per run, so keying on
+    the path would make every target atom of a re-run look absent from the first.
+    A native build (the x86 chroot) prints no tail on any line; there the split does
+    not exist and the report says so ("native") instead of calling every merge a host.
 
 WHAT IT REFUSES TO CALL A MEASUREMENT (exit 2, report still printed)
     * a log with no Emerging line at all (wrong file, or a build that never reached
@@ -65,8 +73,9 @@ SEGMENT_RE = re.compile(r"^={4}\s+.*\bstart\s+\d{8}T\d{6}Z\b")
 GROUP_RE = re.compile(r"^==>\s*Emerge group:\s*(\S+)\s*$")
 PLAN_TOTAL_RE = re.compile(
     r"^==>\s*Emerge plan:\s*(\S+)\s+total=(\d+)(?:\s+binary=(\d+)\s+ebuild=(\d+))?\s*$")
-# The root tail (" for /out/x/sysroot/", " to /") is kept as part of the key; the
-# atom is everything up to "::repo". Mirrors studio/.../emerge_packages.py _COUNTER_RE.
+# The root tail (" for /out/x/sysroot/") only classifies the merge as host or target (see
+# root_role); the atom is everything up to "::repo". Mirrors
+# studio/.../emerge_packages.py _COUNTER_RE.
 EMERGING_RE = re.compile(
     r"^>>>\s+Emerging(\s+binary)?\s+\((\d+) of (\d+)\)\s+(\S+?)(?:::\S+)?"
     r"(?:\s+(?:for|to)\s+(\S+))?\s*$")
@@ -76,6 +85,12 @@ UNSTAMPED_RE = re.compile(r"adopting an UNSTAMPED binpkg pool")
 MIGRATE_RE = re.compile(r"MIGRATING binpkg pool stamp")
 
 NO_GROUP = "(before-first-group)"
+
+
+def root_role(tail: str) -> str:
+    """Portage prints a root tail only when the merge root is not "/", so a merge into the
+    builder's own root has none; a merge into the image sysroot has " for <sysroot>/"."""
+    return "host" if tail in ("", "/") else "target"
 
 
 def clean(line: str) -> str:
@@ -125,7 +140,7 @@ def parse_wall(text):
 class Run:
     def __init__(self, label, path, header):
         self.label, self.path, self.header = label, path, header
-        self.groups = OrderedDict()      # group -> {"compiled": set, "binary": set}
+        self.groups = OrderedDict()      # group -> {"compiled": set, "binary": set} of (atom, role)
         self.plans = {}                  # group -> (total, binary|None, ebuild|None), last wins
         self.failed = 0
         self.mismatch = 0
@@ -157,7 +172,7 @@ class Run:
             m = EMERGING_RE.match(ln)
             if m:
                 kind = "binary" if m.group(1) else "compiled"
-                self._g(group)[kind].add((m.group(4), m.group(5) or ""))
+                self._g(group)[kind].add((m.group(4), root_role(m.group(5) or "")))
                 continue
             if FAILED_RE.match(ln):
                 self.failed += 1
@@ -186,8 +201,8 @@ class Run:
         return self.compiled + self.binary
 
     def atoms(self, kind):
-        """{(group, atom, tail)} for a kind, across groups."""
-        return {(g, a, t) for g, d in self.groups.items() for (a, t) in d[kind]}
+        """{(group, atom, role)} for a kind, across groups."""
+        return {(g, a, r) for g, d in self.groups.items() for (a, r) in d[kind]}
 
 
 def pct(num, den):
@@ -238,7 +253,8 @@ def analyse(cold, warm, cold_max_binary_pct):
                             "a build that never reached portage" % r.label)
         if r.failed:
             problems.append("%s log contains %d '>>> Failed to emerge' line(s): a partial run "
-                            "proves nothing" % (r.label, r.failed))
+                            "proves nothing (a failure portage retried or kept going past "
+                            "counts too: rerun from a clean log)" % (r.label, r.failed))
         if r.mismatch:
             problems.append("%s log contains a fingerprint-guard refusal ('binpkg pool ABI "
                             "MISMATCH'): the pool was refused, not reused" % r.label)
@@ -264,6 +280,25 @@ def analyse(cold, warm, cold_max_binary_pct):
     common_absent = cold_compiled - warm_binary - warm_compiled
     new_in_warm = warm_compiled - cold_compiled - cold.atoms("binary")
     common_den = len(common_hit) + len(common_miss)
+    if common_absent:
+        notes.append("%d of the %d atoms cold compiled were never merged in the warm run (a "
+                     "different package set, or the run stopped early): the hit rate counts "
+                     "them as not reused; 'of those warm merged' leaves them out"
+                     % (len(common_absent), len(cold_compiled)))
+
+    # No merge in either run carries a root tail: a native build (the x86 chroot), where
+    # every merge goes into the builder's own root and there is no host/target split.
+    tailed = {r.label: any(role == "target" for _g, _a, role in
+                           r.atoms("compiled") | r.atoms("binary")) for r in (cold, warm)}
+    native = not any(tailed.values())
+    if cold.merges and warm.merges and tailed["cold"] != tailed["warm"]:
+        notes.append("only the %s run has merges with a root tail (' for <sysroot>'): the "
+                     "host/target split is not comparable between the two runs"
+                     % ("cold" if tailed["cold"] else "warm"))
+    if native and cold.merges and warm.merges:
+        notes.append("no merge carries a root tail: a native build, every merge went into "
+                     "the builder's own root; the host/target split does not apply")
+    role_name = (lambda r: "native") if native else (lambda r: r)
 
     cold_groups, warm_groups = set(cold.groups), set(warm.groups)
     if cold.merges and warm.merges and cold_groups != warm_groups:
@@ -287,20 +322,24 @@ def analyse(cold, warm, cold_max_binary_pct):
         speedup = round(cold.wall / warm.wall, 2)
     reduction = pct(cold.compiled - warm.compiled, cold.compiled) if cold.compiled else None
 
-    # Host tools merged "to /" (the builder's own root) versus the target image: the
-    # arm host-bdep pool (#72 section 4) is judged on the first, the per-board pool on
-    # the second, and one number for both would hide which leg missed.
+    # Host tools (no root tail: merged into the builder's own root) versus the target
+    # image (" for <sysroot>"): the arm host-bdep pool (#72 section 4) is judged on the
+    # first, the per-board pool on the second, and one number for both would hide which
+    # leg missed. A native build has one root, reported as "native".
     def split(run):
-        d = {"host": {"compiled": 0, "binary": 0}, "target": {"compiled": 0, "binary": 0}}
+        d = {}
         for kind in ("compiled", "binary"):
-            for _g, _a, tail in run.atoms(kind):
-                d["host" if tail == "/" else "target"][kind] += 1
+            for _g, _a, role in run.atoms(kind):
+                d.setdefault(role_name(role), {"compiled": 0, "binary": 0})[kind] += 1
         return d
     cs_, ws_ = split(cold), split(warm)
-    by_root = {k: {"cold_compiled": cs_[k]["compiled"], "cold_binary": cs_[k]["binary"],
-                   "warm_compiled": ws_[k]["compiled"], "warm_binary": ws_[k]["binary"],
-                   "warm_reuse_pct": pct(ws_[k]["binary"], ws_[k]["binary"] + ws_[k]["compiled"])}
-               for k in ("host", "target")}
+    empty = {"compiled": 0, "binary": 0}
+    by_root = {}
+    for k in (("native",) if native else ("host", "target")):
+        c, w = cs_.get(k, empty), ws_.get(k, empty)
+        by_root[k] = {"cold_compiled": c["compiled"], "cold_binary": c["binary"],
+                      "warm_compiled": w["compiled"], "warm_binary": w["binary"],
+                      "warm_reuse_pct": pct(w["binary"], w["binary"] + w["compiled"])}
 
     per_group = OrderedDict()
     for g in list(cold.groups) + [g for g in warm.groups if g not in cold.groups]:
@@ -327,12 +366,13 @@ def analyse(cold, warm, cold_max_binary_pct):
             "reused_in_warm": len(common_hit),
             "recompiled_in_warm": len(common_miss),
             "absent_from_warm": len(common_absent),
-            "hit_rate_pct": pct(len(common_hit), common_den),
+            "hit_rate_pct": pct(len(common_hit), len(cold_compiled)),
+            "hit_rate_of_merged_pct": pct(len(common_hit), common_den),
         },
-        "recompiled_despite_pool": sorted("%s [%s]%s" % (a, g, (" " + t) if t else "")
-                                          for g, a, t in common_miss),
-        "new_compiles_in_warm": sorted("%s [%s]%s" % (a, g, (" " + t) if t else "")
-                                       for g, a, t in new_in_warm),
+        "recompiled_despite_pool": sorted("%s [%s]%s" % (a, g, "" if native else " " + r)
+                                          for g, a, r in common_miss),
+        "new_compiles_in_warm": sorted("%s [%s]%s" % (a, g, "" if native else " " + r)
+                                       for g, a, r in new_in_warm),
         "per_group": per_group,
         "by_root": by_root,
     }
@@ -365,6 +405,8 @@ def render(res, cold, warm):
       "%d recompiled; %d not merged in warm)"
       % (fmt_pct(cs["hit_rate_pct"]), cs["reused_in_warm"], cs["cold_compiled_atoms"],
          cs["recompiled_in_warm"], cs["absent_from_warm"]))
+    w("    of those warm merged     %s (reused / (reused + recompiled); leaves out the %d "
+      "not merged in warm)" % (fmt_pct(cs["hit_rate_of_merged_pct"]), cs["absent_from_warm"]))
     if res["wall_speedup"] is None:
         w("  wall speedup               unknown (supply --cold-wall and --warm-wall)")
     else:
@@ -377,7 +419,8 @@ def render(res, cold, warm):
           % (g, d["cold_compiled"], d["cold_binary"], d["warm_compiled"], d["warm_binary"],
              fmt_pct(d["warm_reuse_pct"])))
     w("")
-    w("  by root (compiled/binary; host = merged 'to /', target = into the image):")
+    w("  by root (compiled/binary; host = no root tail, merged into the builder's own root;")
+    w("  target = ' for <sysroot>', into the image; native = a build with one root):")
     for k, d in res["by_root"].items():
         w("    %-14s cold %4d/%-4d warm %4d/%-4d warm reuse %s"
           % (k, d["cold_compiled"], d["cold_binary"], d["warm_compiled"], d["warm_binary"],

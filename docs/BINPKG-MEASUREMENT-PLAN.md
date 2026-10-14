@@ -1,6 +1,6 @@
 # Measuring the compile-once speedup of the shared binpkg pools
 
-_State key: **✅ harness shipped and tested on synthetic logs** · **⚠️ no real number
+_State key: **✅ harness shipped and tested on synthetic logs and real-log excerpts** · **⚠️ no real number
 exists**. Nothing in this repository has ever compared a build that filled a binpkg pool
 with a build that reused it. This page is the protocol for that comparison and the
 instrument that reads its result. Running it needs privileged docker and hours of
@@ -50,10 +50,10 @@ It does **not** prove, and no test in the tree can prove:
 
 | figure | meaning |
 |---|---|
-| compiled / from the pool, per run, per emerge group and host-vs-target | counts of `>>> Emerging` and `>>> Emerging binary` lines, the markers portage itself prints |
+| compiled / from the pool, per run, per emerge group and host-vs-target | counts of `>>> Emerging` and `>>> Emerging binary` lines, the markers portage itself prints. **Host** = a merge with no root tail (into the builder's own root: the 33-49 host tools); **target** = ` for /out/<dir>/sysroot/` (into the image). A native build (x86) has no tail anywhere, so it is reported as one `native` root, not as a host. |
 | warm reuse rate | warm `binary / (binary + compiled)` |
 | compile reduction | `(cold compiled − warm compiled) / cold compiled` |
-| hit rate on cold's set | of the atoms cold compiled, how many warm merged from the pool, recompiled, or did not merge |
+| hit rate on cold's set | of the atoms cold compiled, how many warm merged from the pool. Atoms warm never merged count as **not** reused; a second line, "of those warm merged", leaves them out, and a note names how many there were |
 | pool MISS list | atoms cold compiled that warm compiled **again** despite the pool: the actionable output |
 | new work list | atoms warm compiled that cold never saw (changed spec between runs) |
 | wall speedup | `cold wall / warm wall`, only when you supply both walls |
@@ -66,7 +66,8 @@ python3 scripts/binpkg-reuse-report.py --help          # segments, --json, gates
 **It refuses to call a run a measurement (exit 2)** when: a log has no `>>> Emerging`
 line; the cold log is not cold (more than 10 % of its merges came from a pool, or the
 guard warned `adopting an UNSTAMPED binpkg pool`); either log holds a guard refusal
-(`binpkg pool ABI MISMATCH`); either holds `>>> Failed to emerge`. Gates
+(`binpkg pool ABI MISMATCH`); either holds `>>> Failed to emerge` (a failure portage
+retried, or went on past, counts too: rerun from a clean log). Gates
 (`--min-reuse`, `--min-compile-reduction`, `--min-speedup`) exit 1 when unmet, and an
 **unknown** figure (no wall supplied) never passes a gate.
 
@@ -81,12 +82,28 @@ emerge-only speedup; the compile counts are the exact figure and need no clock.
 second build appends to it behind a `==== <name> start <stamp> ====` header.
 `--list-segments` shows them; `--cold-segment 1 --warm-segment 2` selects one build each.
 Default is the last. The segment splitter and the `Emerging` parser were run read-only
-against the 84 MB real x86 `build.log` in the shared tree (5 build headers, 301
-`Emerging` lines, none `binary`): they read it without error. That proves the line shapes
-match a real log; it is not a cold/warm pair and says nothing about reuse.
+against two real logs in the shared tree. The 84 MB x86 `build.log`: 5 build headers, 301
+`Emerging` lines, none `binary`, none with a tail. A real Pi session log,
+`out/sessions/20260924-060521-e5443c/build-pki.rpi5.log`: 238 `Emerging` lines, 45 with
+no tail (host) and 193 ending ` for /out/wl-pki.rpi5/sysroot/` (target), none ending
+` to /`. That log is a failed build (40 `Failed to emerge` lines and a "stage4 payload
+incomplete" error), so the report calls it `MEASUREMENT INVALID`, correctly. Fixed against a
+copy of itself with `Emerging` turned into `Emerging binary` and the sysroot directory
+renamed, it reads 45 host and 156 target, all reused. That proves the line shapes match
+real logs; it is not a real cold/warm pair and says nothing about reuse. The log header
+(`==== <name> (<subdir>) start ...`) and the per-image log name
+(`build-${BUILD_SUBDIR#wl-}.log`) are in all ten stage4 builders; the root-tail shape was
+read from the rpi5 builder's logs and the x86 log only, not from the other eight.
+
+**Atoms are keyed by role, not by path.** Portage prints a root tail only when the merge
+root is not `/`, so a host tool has none and a target package has ` for <sysroot>/`. The
+sysroot directory differs between two Studio builds (`wl-<entry-id>`), so the report keys
+on host/target, not on the path; otherwise every target atom of the second run would look
+absent from the first and a real pool miss would be filed as "new work".
 
 **x86 caveat.** The x86 builder emerges natively in a chroot, so its `Emerging` lines
-carry no ` for <root>`/` to <root>` tail and everything is counted as `target`.
+carry no tail at all. The host/target split does not exist there; the report says
+`native` and notes it. Leg C's host/target reading is for the arm builders.
 
 ---
 
@@ -189,9 +206,10 @@ After Leg A on rpi5, in the **same** `WORK_DIR`, build `RPI_BOARD=rpi4` (a72). E
 * **target** merges all `compiled` (a new pool `snap-build-pi4`): the report's
   `by root → target` line is the check, and run this as `--cold <leg A cold> --warm <rpi4>`
   only for the numbers, never as a speedup;
-* **host** merges (`to /`, the shared `host-amd64-bdep` leg, keyed on the builder's gcc and
-  glibc and not on the board) mostly `binary`: this is the #72 section 4 reuse rate, the
-  figure `SHARED-BINPKG.md` owes.
+* **host** merges (no root tail: merged into the builder's own root; the shared
+  `host-amd64-bdep` leg, keyed on the builder's gcc and glibc and not on the board) mostly
+  `binary`: this is the #72 section 4 reuse rate, the figure `SHARED-BINPKG.md` owes.
+  Read it from `by root → host`.
 
 Then the guard's real-build proof. The first rpi4 build already created
 `shared/pkgdir/snap-build-pi4`, so a plain `cp -a` of the pi5 pool would nest it inside
@@ -251,8 +269,10 @@ figure and the git SHA, hardware and date, or leave the bullet and name what fai
 ## What this harness cannot do
 
 * It cannot produce the numbers. It was tested on **synthetic** fixture logs
-  (`tests/scripts/fixtures/binpkg-reuse/`, hand-written, labelled as such), so it proves
-  the arithmetic and the refusal rules, not any property of a real build.
+  (`tests/scripts/fixtures/binpkg-reuse/`, hand-written, labelled as such) and on short
+  `real-*.log` **excerpts** of real Pi and x86 logs (verbatim lines, labelled, and the
+  warm sides derived by hand). That proves the arithmetic, the refusal rules and the line
+  shapes, not any property of a real cold/warm pair.
 * It counts lines portage prints. A log lost to truncation, `--quiet` output, or a
   differently formatted portage version would undercount; the `Failed to emerge` and
   no-`Emerging` refusals catch the gross cases, not a subtle format change.

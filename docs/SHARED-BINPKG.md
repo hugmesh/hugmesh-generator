@@ -583,7 +583,7 @@ builders' `--print-plan` report `PLAN_KERNEL_CACHE=<root>|off`.
   (legs A-E: same-board rerun, cross-role, cross-board isolation, correctness of the
   reused image, x86) is [`BINPKG-MEASUREMENT-PLAN.md`](BINPKG-MEASUREMENT-PLAN.md), and
   `scripts/binpkg-reuse-report.py` turns two build logs into the compile-once reuse rate
-  and speedup (`make binpkg-reuse-report`). It is tested only on synthetic fixture logs.
+  and speedup (`make binpkg-reuse-report`). It is tested only on synthetic fixture logs and short excerpts of real ones, never on a real cold/warm pair.
   The same page records what the fingerprint guard does NOT prove, including that no
   builder salts a target pool with the gcc/glibc identity the library header names.
 - The compile-once **speedup and end-to-end correctness are UNPROVEN** in this change,

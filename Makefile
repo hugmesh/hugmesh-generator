@@ -2688,14 +2688,17 @@ builder-unmount-real-check: ## OPT-IN, needs unshare -Urm (a developer host, not
 # Protocol that produces the two logs: docs/BINPKG-MEASUREMENT-PLAN.md. Reads logs
 # only; touches no pool, no build tree, no network.
 #   make binpkg-reuse-report COLD=cold.log WARM=warm.log COLD_WALL=3h WARM_WALL=40m
+# _binpkg_shq: single-quote a value for the shell, so a value holding a quote cannot
+# break out of the command line.
+_binpkg_shq = '$(subst ','\'',$(1))'
 .PHONY: binpkg-reuse-report
 binpkg-reuse-report: ## compile-once speedup from two build logs (COLD=<log> WARM=<log> [COLD_WALL= WARM_WALL= MIN_REUSE=]); see docs/BINPKG-MEASUREMENT-PLAN.md
 	@test -n "$(COLD)" -a -n "$(WARM)" || { echo "usage: make binpkg-reuse-report COLD=<cold build log> WARM=<warm build log> [COLD_WALL=3h WARM_WALL=40m MIN_REUSE=90]"; exit 2; }
-	python3 -I scripts/binpkg-reuse-report.py --cold '$(COLD)' --warm '$(WARM)' \
-	  $(if $(COLD_WALL),--cold-wall '$(COLD_WALL)',) $(if $(WARM_WALL),--warm-wall '$(WARM_WALL)',) \
-	  $(if $(MIN_REUSE),--min-reuse '$(MIN_REUSE)',)
+	python3 -I scripts/binpkg-reuse-report.py --cold $(call _binpkg_shq,$(COLD)) --warm $(call _binpkg_shq,$(WARM)) \
+	  $(if $(COLD_WALL),--cold-wall $(call _binpkg_shq,$(COLD_WALL)),) $(if $(WARM_WALL),--warm-wall $(call _binpkg_shq,$(WARM_WALL)),) \
+	  $(if $(MIN_REUSE),--min-reuse $(call _binpkg_shq,$(MIN_REUSE)),)
 
-# binpkg-reuse-report-check: the harness's own hermetic test (synthetic fixture logs).
+# binpkg-reuse-report-check: the harness's own hermetic test (synthetic fixture logs and real-log excerpts).
 .PHONY: binpkg-reuse-report-check
-binpkg-reuse-report-check: ## test the compile-once measurement harness against synthetic fixture logs
+binpkg-reuse-report-check: ## test the compile-once measurement harness against synthetic fixture logs and real-log excerpts
 	bash tests/scripts/test-binpkg-reuse-report.sh
