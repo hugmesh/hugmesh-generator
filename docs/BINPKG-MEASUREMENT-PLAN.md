@@ -50,7 +50,7 @@ It does **not** prove, and no test in the tree can prove:
 
 | figure | meaning |
 |---|---|
-| compiled / from the pool, per run, per emerge group and host-vs-target | counts of `>>> Emerging` and `>>> Emerging binary` lines, the markers portage itself prints. **Host** = a merge with no root tail (into the builder's own root: the 33-49 host tools); **target** = ` for /out/<dir>/sysroot/` (into the image). A native build (x86) has no tail anywhere, so it is reported as one `native` root, not as a host. |
+| compiled / from the pool, per run, per emerge group and host-vs-target | counts of `>>> Emerging` and `>>> Emerging binary` lines, the markers portage itself prints. **Host** = a merge with no root tail (into the builder's own root: wave 1 (#46) counted 33-49 such host tools per arm image; the three real Pi logs in the shared tree hold 42, 42 and 45); **target** = ` for /out/<dir>/sysroot/` (into the image). A native build (x86) has no tail anywhere, so it is reported as one `native` root, not as a host. |
 | warm reuse rate | warm `binary / (binary + compiled)` |
 | compile reduction | `(cold compiled − warm compiled) / cold compiled` |
 | hit rate on cold's set | of the atoms cold compiled, how many warm merged from the pool. Atoms warm never merged count as **not** reused; a second line, "of those warm merged", leaves them out, and a note names how many there were |

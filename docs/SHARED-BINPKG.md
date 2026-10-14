@@ -341,7 +341,8 @@ all ten builders carry the wiring. Studio side:
 
 ## The host-side BDEPEND pool (arm cross builds; PR #72 §4)
 
-Cross builds merge every BDEPEND **"to /"** (the builder container's own root) under
+Cross builds merge every BDEPEND **"to /"** (the builder container's own root; in a build
+log such a merge prints no root tail at all, only a target merge prints ` for <sysroot>/`) under
 the crossdev wrapper's `--root-deps=rdeps`. The wave-1 measurement (#46) found 33–49
 such amd64 host tools source-compiled *per arm image*, because the container's
 default `PKGDIR` dies with the container. These host tools are **executed by the
@@ -624,7 +625,7 @@ builders' `--print-plan` report `PLAN_KERNEL_CACHE=<root>|off`.
   make.conf wiring, target isolation) are proven hermetically in
   `tests/scripts/test-host-bdep-pool.sh`. That a real second arm build installs its
   33–49 host bdeps as `[binary]` is owed from the next fleet build's emerge logs (the
-  same "to /" batch wave 1 counted). The other seven cross builders carry no leg yet;
+  same batch of tail-less `>>> Emerging` lines wave 1 counted). The other seven cross builders carry no leg yet;
   wiring them is the same four hunks. Portage's concurrent index handling under
   `binpkg-multi-instance` has not been exercised by a real concurrent fleet build here.
 - **Signed-kernel cache (G4): what is NOT done and NOT proven.**
