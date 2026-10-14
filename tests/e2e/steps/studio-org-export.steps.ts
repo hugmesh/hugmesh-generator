@@ -51,6 +51,9 @@ interface Facts {
   tableResults?: string[]; applyEnabledAfter?: boolean;
   ghCalls?: string[]; gitCalls?: string[]; bareRepos?: Record<string, BareRepo>;
   renameMapField?: { text: string; visible: boolean; width: number };
+  ownServices?: string[]; gitCallsAtWalkStart?: number;
+  preexisting?: { target: string; branch: string; refsBefore: string[]; shaBefore: string;
+    refsAfter?: string[]; shaAfter?: string };
   // domains-org
   ownDomain?: string; typed?: { ownCell: string; stateOwnOrgBeforeNext: string };
   nextAccepted?: boolean; noteVisible?: boolean; noteText?: string;
@@ -141,6 +144,16 @@ When('I walk the Go-Live wizard to the export step for a saved mesh naming the o
   async ({ world }, org: string) => {
     expect(org).toBe('exampleorg');
     drive(world, ['--scenario', 'export', '--action', 'apply']);
+  });
+
+When('I walk the Go-Live wizard to the export step for a saved mesh whose own domain selects {string} and press Plan',
+  async ({ world }, services: string) => {
+    drive(world, ['--scenario', 'export', '--action', 'plan', '--own-services', services]);
+  });
+
+When('I walk the Go-Live wizard to the export step with {string} already holding content on its {string} branch in the stand-in GitHub, and apply it with the name typed',
+  async ({ world }, target: string, branch: string) => {
+    drive(world, ['--scenario', 'export', '--action', 'apply', '--preexisting', `${target}:${branch}`]);
   });
 
 When('I walk the Go-Live wizard to the export step with a fake token planted in {string} and press Plan',
@@ -314,6 +327,77 @@ Then('git was never asked to force, mirror, delete or prune', async ({ world }) 
   expect(calls.some((c) => /^push\b/.test(c)), 'no push was logged').toBe(true);
   expect(forbiddenGitCalls(calls), 'git calls with a forbidden flag').toEqual([]);
 });
+
+// ── the own domain's services reach the plan ─────────────────────────────────
+
+Then('the plan lists {string} for the own domain\'s selected service and marks it {string}',
+  async ({ world }, target: string, action: string) => {
+    const f = facts(world);
+    const rows = planRows(world);
+    expect(f.ownServices, 'the saved mesh selects a service on its own domain').not.toEqual([]);
+    const row = rows.find((r) => r.target === target);
+    expect(row, `${target} is not on the plan; targets: ${rows.map((r) => r.target).join(', ')}`)
+      .toBeDefined();
+    expect((row as PlanRow).action).toBe(action);
+    expect((f.tableActions ?? [])[rows.indexOf(row as PlanRow)], 'the table shows it').toBe(action);
+    if ((row as PlanRow).blocked) {
+      expect(f.applyEnabledTyped, 'Apply armed on a blocked plan').toBe(false);
+    }
+  });
+
+// ── an existing repository is refused, whatever branch its content is on ─────
+
+Then('the plan marks {string} as {string} and Apply refuses it as an existing non-empty repository',
+  async ({ world }, target: string, planAction: string) => {
+    const f = facts(world);
+    const rows = planRows(world);
+    const row = rows.find((r) => r.target === target) as PlanRow;
+    expect(row, `${target} is not on the plan`).toBeDefined();
+    expect(row.action).toBe(planAction);
+    expect(f.resultRows, `apply reported nothing: ${f.applyStatus}`).not.toBeNull();
+    const res = (f.resultRows ?? []).find((r) => r.target === target);
+    expect(res, `${target} has no result row`).toBeDefined();
+    expect(res?.action).toBe('refused: existing non-empty repository');
+    expect(res?.skipped, 'the refusal names the branch the content is on')
+      .toContain(f.preexisting?.branch ?? '<no branch>');
+    expect(res?.branch, 'a branch was chosen for a refused repository').toBe('');
+    const cell = (f.tableResults ?? [])[rows.indexOf(row)] ?? '';
+    expect(cell.split(/\s+/)[0], 'the Result column').toBe('refused:');
+  });
+
+Then('that repository still holds only its {string} branch at the same commit and git never pushed to it',
+  async ({ world }, branch: string) => {
+    const f = facts(world);
+    const p = f.preexisting;
+    expect(p, 'no pre-existing repository was planted').toBeDefined();
+    expect(p?.branch).toBe(branch);
+    expect(p?.refsBefore).toEqual([`refs/heads/${branch}`]);
+    expect(p?.refsAfter, 'the refs after apply').toEqual([`refs/heads/${branch}`]);
+    expect(p?.shaAfter, 'the branch moved').toBe(p?.shaBefore);
+    const name = (p?.target ?? '').split('/')[1];
+    const walkCalls = (f.gitCalls ?? []).slice(f.gitCallsAtWalkStart ?? 0);
+    const pushes = walkCalls.filter((c) => /^push\b/.test(c) && c.includes(`/${name}.git`));
+    expect(pushes, 'git push to the refused repository').toEqual([]);
+  });
+
+Then('every other planned repository and the site hold exactly one commit on main in the stand-in GitHub',
+  async ({ world }) => {
+    const f = facts(world);
+    const rows = planRows(world);
+    const refused = f.preexisting?.target ?? '';
+    const others = rows.filter((r) => r.target !== refused);
+    expect(others.length, 'other repositories on the plan').toBeGreaterThan(0);
+    for (const r of f.resultRows ?? []) {
+      if (r.target === refused) continue;
+      expect(r.skipped, `${r.target} skipped`).toBe('');
+      expect(r.branch).toBe('main');
+    }
+    for (const r of others) {
+      const name = r.target.split('/')[1];
+      expect(f.bareRepos?.[name]?.commits, `${name}: commits on main`).toBe(1);
+    }
+    expect(forbiddenGitCalls(f.gitCalls ?? []), 'git calls with a forbidden flag').toEqual([]);
+  });
 
 // ── a banned marker ──────────────────────────────────────────────────────────
 

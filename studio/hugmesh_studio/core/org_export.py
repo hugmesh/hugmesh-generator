@@ -69,7 +69,9 @@ branch), so the build steps are spelled inline, taken from the repositories' own
 ``ci.yml`` files.
 
 NEVER: a force push, a delete, a mirror, or a push into an existing non-empty
-repository — unless its ``main`` already holds exactly the snapshot tree (reported
+repository — whatever branch its content lives on (apply lists EVERY head and reads
+``gh``'s ``isEmpty`` too; a repository with a ``master`` and no ``main`` is non-empty)
+— unless its ``main`` already holds exactly the snapshot tree (reported
 ``unchanged``) or the config chose ``update: branch`` (pushed to ``export/<stamp>``,
 nothing opened). Credentials are POINTERS: the person's own ``gh auth login`` and git
 credential helper at run time; no token is ever read, stored or passed.
@@ -389,14 +391,24 @@ class ExportCandidate:
         return ExportConfig(**kw)
 
 
-def _candidates_from_rows(rows, own_name: str, own_org: str, *, source_mode: str,
-                          source_dir: str, generator_dir: str, where: str,
-                          path: str) -> list[ExportCandidate]:
+def _candidates_from_rows(rows, own_name: str, own_org: str, *, own_services=(),
+                          source_mode: str, source_dir: str, generator_dir: str,
+                          where: str, path: str) -> list[ExportCandidate]:
+    """The own domain first (when it names an org), then every row that does. The
+    own domain's selected services come from its OWN ROW when the rows carry one (a
+    saved-mesh record lists the own domain among ``domains[]``), else from
+    ``own_services`` (an ImageConfig keeps them as ``cluster_domain_services``) — they
+    used to be dropped here, so the one domain most worth exporting was planned
+    without the repositories its services add."""
     out: list[ExportCandidate] = []
     seen: set[str] = set()
     own = (own_name or "").strip()
     if own and (own_org or "").strip():
-        out.append(ExportCandidate(own, own_org.strip(), [], source_mode, source_dir,
+        services = list(own_services or [])
+        for row in rows or ():
+            if str(_get(row, "name", "") or "").strip() == own:
+                services = list(_get(row, "optional_services", []) or []) or services
+        out.append(ExportCandidate(own, own_org.strip(), services, source_mode, source_dir,
                                    generator_dir, where, path))
         seen.add(own)
     for row in rows or ():
@@ -453,6 +465,8 @@ def candidates_from_file(path: str, generator_dir: str = "") -> list[ExportCandi
         return _candidates_from_rows(
             data.get("domains") or (), str(data.get("cluster_domain") or ""),
             str(data.get("cluster_domain_github_org") or ""),
+            own_services=[s for s in (data.get("cluster_domain_services") or ())
+                          if isinstance(s, str)],
             source_mode="clone", source_dir="", generator_dir=generator_dir,
             where=where, path=path)
     raise ValueError(f"{path}: neither an export config, an image config nor a "
@@ -1062,13 +1076,22 @@ def _push_one(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
             res.skipped = f"gh repo create failed: {r.err.strip()[:160]}"
             return res
         res.action = "create"
-    heads = _run_checked(runner, calls, ["git", "ls-remote", "--heads", url,
-                                         "refs/heads/main"], cwd=rp.workdir,
-                         env=_git_env(cfg, stamp), timeout=120)
+    # EVERY branch, not just main: a repository whose content lives on master (or any
+    # other branch) has no main and used to pass as empty — apply then pushed a new
+    # main into it and reported 'update (empty repository)' on a repository gh had
+    # just called non-empty. gh's own isEmpty answer counts as well.
+    heads = _run_checked(runner, calls, ["git", "ls-remote", "--heads", url],
+                         cwd=rp.workdir, env=_git_env(cfg, stamp), timeout=120)
     if heads.returncode != 0:
         res.skipped = f"git ls-remote failed: {heads.err.strip()[:160]}"
         return res
-    if heads.text.strip():
+    branches = [ln.split("\t", 1)[1].removeprefix("refs/heads/")
+                for ln in heads.text.splitlines() if "\t" in ln]
+    try:
+        info = json.loads(view.text or "{}") if view.returncode == 0 else {}
+    except ValueError:
+        info = {}
+    if "main" in branches:
         # main exists: equal tree -> unchanged; else branch mode or refuse
         fetch = _run_checked(runner, calls, ["git", "fetch", "-q", url, "refs/heads/main"],
                              cwd=rp.workdir, env=_git_env(cfg, stamp), timeout=600)
@@ -1084,6 +1107,16 @@ def _push_one(runner, calls, rp: RepoPlan, cfg: ExportConfig, stamp: str,
             res.action = "refused: existing non-empty repository"
             res.skipped = ("main already holds a different tree; choose 'update via "
                            "branch' to push export/<stamp> instead")
+            return res
+        res.branch = f"export/{stamp}"
+        res.action = "update via branch"
+    elif branches or info.get("isEmpty") is False:
+        # non-empty, but nothing on main: never a push into it
+        holds = ", ".join(branches) if branches else "content gh reports as non-empty"
+        if cfg.update != UPDATE_BRANCH:
+            res.action = "refused: existing non-empty repository"
+            res.skipped = (f"the repository has no main but holds {holds}; choose "
+                           "'update via branch' to push export/<stamp> instead")
             return res
         res.branch = f"export/{stamp}"
         res.action = "update via branch"

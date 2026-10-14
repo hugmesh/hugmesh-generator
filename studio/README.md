@@ -296,7 +296,9 @@ segments and repository names rewritten inside files (Java packages, Maven group
 Angular scopes and label keys are deliberately left alone), and creates a
 `<domain>.github.io` site repository whose workflows clone every exported repository and
 run what each one's own CI runs. Plan is the default and touches nothing; Apply needs the
-org name typed (GUI/TUI) or `--apply` (CLI); nothing is ever force-pushed or deleted. The
+org name typed (GUI/TUI, letter case does not matter) or `--apply` (CLI); nothing is ever
+force-pushed or deleted, and an existing repository that already holds something — on
+`main` or on any other branch — is refused unless *update via branch* is chosen. The
 step can be pointed at a config file (its rules are taken whole), and a **Rename map**
 field (`r FILE` in the TUI, `--rename-map` in the CLI) merges extra rules — the way to drop
 a file a `refused: banned marker` row names; the generator's own two test fixtures need
@@ -314,7 +316,7 @@ The engine is `core/org_export.py` (Qt-free; every git/gh call through one injec
 so `tests/test_org_export.py` proves it against bare repositories and a fake `gh`). The
 end-to-end scenarios are `tests/e2e/features/studio-org-export/studio-org-export.feature`,
 driven by `tests/e2e/studio-org-export-driver.py` (the real wizards offscreen over the same
-stand-ins; run as the Code folders ones above, with `-g "Export to GitHub org"`). The
+stand-ins; run as the Code folders ones above, with `-g "exports a domain's repositories"`). The
 full flow, the rename map's format and what a person still has to set up are in
 [docs/GOLIVE-ORG-EXPORT.md](../docs/GOLIVE-ORG-EXPORT.md).
 

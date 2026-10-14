@@ -12,9 +12,15 @@ Two things are pinned, both case-insensitively:
 * the engine's built-in defaults (ExportConfig(), the default rename rules) name no
   concrete organisation, brand or domain.
 
-The forbidden strings are spelled from PARTS in this file, because this file is one
-of the owned files the guard reads. The mutation test plants one into a COPY of an
-owned file and shows the checker refuses it, then the copy is discarded.
+The forbidden string is spelled from PARTS in this file, because this file is one of
+the owned files the guard reads — and it is the ONE short stem only: a substring check
+on it catches every longer spelling (the domain, the organisation slug), so writing
+those out here would add no check and would put the private names into the
+repository, which is the very thing this guard exists to stop. Longer private
+spellings, if wanted, live with the operator's setup OUTSIDE the repository: a file
+named by ``HUGMESH_ORG_EXPORT_PRIVATE_NAMES`` (one string per line) is read when set.
+The mutation test plants a forbidden spelling into a COPY of an owned file and shows
+the checker refuses it, then the copy is discarded.
 """
 from __future__ import annotations
 
@@ -28,14 +34,26 @@ from hugmesh_studio.core import org_export as oe
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(STUDIO_ROOT)
 
-# the private target's names, assembled so they never appear whole in this file
+# the private target's name stem, assembled so it never appears whole in this file
 _A = "snap" + "dragon"
-FORBIDDEN = (
-    _A,                      # any case, any form: covers the three longer spellings too
-    _A + ".systems",
-    _A + "-systems",
-    "lavender-" + _A,
-)
+
+
+def _private_names() -> tuple[str, ...]:
+    """Extra forbidden strings from the operator's folder outside the repository
+    (``HUGMESH_ORG_EXPORT_PRIVATE_NAMES``: a file, one string per line, ``#`` comments);
+    none when the variable is unset or the file is unreadable."""
+    path = os.environ.get("HUGMESH_ORG_EXPORT_PRIVATE_NAMES", "").strip()
+    if not path:
+        return ()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = [ln.strip().lower() for ln in fh]
+    except OSError:
+        return ()
+    return tuple(ln for ln in lines if ln and not ln.startswith("#"))
+
+
+FORBIDDEN = (_A, *_private_names())
 
 #: Every file this feature owns (repo-relative). A path that does not exist is
 #: skipped, so the list can name the whole owns list; directories are walked.
@@ -82,14 +100,14 @@ def owned_files() -> list[str]:
     return out
 
 
-def forbidden_hits(path: str) -> list[str]:
+def forbidden_hits(path: str, needles=None) -> list[str]:
     """``["<path>:<line no>: <string>", ...]`` for every forbidden string in the file,
     read as bytes (a NUL byte must not make the check skip the file)."""
     with open(path, "rb") as fh:
         data = fh.read()
     text = data.decode("utf-8", "replace").lower()
     hits: list[str] = []
-    for needle in FORBIDDEN:
+    for needle in (needles or FORBIDDEN):
         if needle not in text:
             continue
         for i, line in enumerate(text.splitlines(), 1):
@@ -153,6 +171,45 @@ def test_the_checker_catches_a_planted_name_in_a_copy_of_an_owned_file(tmp_path)
     nul = tmp_path / "with_nul.txt"
     nul.write_bytes(b"x\0y\n" + _A.encode() + b"\n")
     assert forbidden_hits(str(nul))
+
+
+def test_the_guard_itself_spells_only_the_assembled_stem():
+    """The built-in list is the one assembled stem: any longer private spelling written
+    out here would be the leak the guard exists to stop (skeptic, round 1)."""
+    assert tuple(FORBIDDEN[:1]) == (_A,)
+    with open(os.path.abspath(__file__), encoding="utf-8") as fh:
+        me = fh.read().lower()
+    assert _A not in me                         # never whole, even in a comment
+    assembled = '"snap" + ' + '"dragon"'        # (built here so this line is not a hit)
+    assert me.count(assembled) == 1             # assembled exactly once
+
+
+def test_private_spellings_come_from_a_file_outside_the_repository(tmp_path, monkeypatch):
+    """The operator's longer spellings are read from ``HUGMESH_ORG_EXPORT_PRIVATE_NAMES``
+    when set — a file in their folder, never a line in this repository — and the
+    checker refuses them like the built-in stem."""
+    monkeypatch.delenv("HUGMESH_ORG_EXPORT_PRIVATE_NAMES", raising=False)
+    assert _private_names() == ()
+    names = tmp_path / "private-names.txt"
+    names.write_text("# the operator's own spellings\nPlaceholder-Private-Org\n\n"
+                     "placeholder.private.example\n")
+    monkeypatch.setenv("HUGMESH_ORG_EXPORT_PRIVATE_NAMES", str(names))
+    extra = _private_names()
+    assert extra == ("placeholder-private-org", "placeholder.private.example")
+    monkeypatch.setenv("HUGMESH_ORG_EXPORT_PRIVATE_NAMES", str(tmp_path / "missing.txt"))
+    assert _private_names() == ()              # unreadable: none, the guard still runs
+    src = os.path.join(REPO_ROOT, "studio/hugmesh_studio/core/org_export.py")
+    copy = tmp_path / "org_export_mutated.py"
+    shutil.copyfile(src, copy)
+    with open(copy, "a", encoding="utf-8") as fh:
+        fh.write("\nDEFAULT_ORG = 'Placeholder-Private-Org'\n")
+    assert forbidden_hits(str(copy)) == []                   # the stem alone misses it
+    hits = forbidden_hits(str(copy), (_A, *extra))
+    assert hits and all(h.endswith(": placeholder-private-org") for h in hits), hits
+    me = os.path.abspath(__file__)                           # this test spells them
+    for path in owned_files():                               # the tree is clean of them too
+        if os.path.abspath(path) != me:
+            assert forbidden_hits(path, extra) == []
 
 
 @pytest.mark.parametrize("rel", [r for r in OWNED if r.endswith(".py")])

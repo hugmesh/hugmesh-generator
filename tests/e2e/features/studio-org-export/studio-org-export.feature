@@ -10,7 +10,11 @@
 #     org name; a planted banned marker blocks that repository and names the file,
 #     and the Rename map field is the way to drop the file and go on;
 #   * Apply leaves exactly one fresh commit per repository plus the site, authored
-#     as the person running it, and git is never asked to force, mirror or delete.
+#     as the person running it, and git is never asked to force, mirror or delete;
+#   * the repositories planned for a domain include what its selected optional
+#     services add, for the mesh's own domain too;
+#   * an existing repository that already holds something is refused and left
+#     untouched — whatever branch its content is on, main or not.
 #
 # Every scenario walks the REAL wizards offscreen from their first page (the
 # local-mesh wizard to its Domains step; the Go-Live wizard to its export step)
@@ -81,6 +85,25 @@ Feature: The Studio exports a domain's repositories to its GitHub org
     And every snapshot commit is authored as the person running the export
     And the result column reports create for every row and Apply is disarmed again
     And git was never asked to force, mirror, delete or prune
+    And the Studio grab is a non-empty PNG
+
+  # ── the own domain's selected services add their repositories ─────────────
+  @interface:studio
+  Scenario: the own domain's selected service puts its repository on the plan @interface:studio
+    When I walk the Go-Live wizard to the export step for a saved mesh whose own domain selects "phpbb" and press Plan
+    Then the plan lists "exampleorg/example-forum-api" for the own domain's selected service and marks it "missing source"
+    And the stand-in GitHub holds no repository and every gh call during the plan was a repo view
+    And no dialog opened in the org-export walk
+    And the Studio grab is a non-empty PNG
+
+  # ── an existing repository with content on another branch is refused ──────
+  @interface:studio
+  Scenario: an existing repository holding content on another branch is refused by Apply and left untouched @interface:studio
+    When I walk the Go-Live wizard to the export step with "example-parent" already holding content on its "master" branch in the stand-in GitHub, and apply it with the name typed
+    Then the plan marks "exampleorg/example-parent" as "exists (compared at apply)" and Apply refuses it as an existing non-empty repository
+    And that repository still holds only its "master" branch at the same commit and git never pushed to it
+    And every other planned repository and the site hold exactly one commit on main in the stand-in GitHub
+    And no dialog opened in the org-export walk
     And the Studio grab is a non-empty PNG
 
   # ── a banned marker blocks that repository; the Rename map field clears it ─

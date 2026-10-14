@@ -1,7 +1,7 @@
 # Go-Live: export a domain's repositories to a GitHub organisation
 
-An **optional** step of the Go-Live wizard. It is dark until a domain names a GitHub
-organisation; every mesh built before the field existed sees exactly the pages it
+An **optional** step of the Go-Live wizard. The step is hidden until a domain names a
+GitHub organisation; every mesh built before the field existed sees exactly the pages it
 always did.
 
 The ask it answers: *"export the needed repositories in a domain to a given github org
@@ -140,7 +140,8 @@ existing-repository pickers are seeded from it and stay editable), and the step'
 ## 3. Apply
 
 In the GUI, **Apply** is armed only by typing the organisation's name into the
-confirmation field (inline; no dialog). In the text-mode step it is `apply <org>`.
+confirmation field (inline; no dialog; letter case does not matter, as GitHub slugs
+are case-insensitive). In the text-mode step it is `apply <org>`.
 From a terminal it is `--org-export APPLY --apply`.
 
 For every repository that is not blocked, apply:
@@ -156,8 +157,12 @@ For every repository that is not blocked, apply:
 * pushes it to `main` with a plain `git push` — **never** `--force`, never a delete,
   never a mirror;
 * on an existing non-empty repository: reports **unchanged** when `main` already
-  holds exactly the snapshot tree, otherwise **refuses** — unless the plan chose
-  *update via branch*, in which case it pushes `export/<stamp>` and opens nothing;
+  holds exactly the snapshot tree, otherwise **refuses** — also when the content lives
+  on another branch (`master`, say) and there is no `main` at all: apply lists every
+  branch of the target and takes `gh`'s own "not empty" answer into account, so it
+  never pushes a new `main` into a repository that already holds something — unless
+  the plan chose *update via branch*, in which case it pushes `export/<stamp>` and
+  opens nothing;
 * writes `<out>/org-export-result-<stamp>.json`: every repository, its URL, the commit
   and what was skipped, so a run can be audited and re-run.
 
@@ -236,8 +241,10 @@ for the export step — with a folder of bare repositories as GitHub, a fake `gh
 logging `git` shim first on PATH, so every assertion reads what was created, pushed and
 logged rather than the Studio's own say-so. Run them with
 `cd tests/e2e && SNAP_STUDIO_PYTHON=<python with PySide6 or PyQt6> npx bddgen test &&
-QT_QPA_PLATFORM=offscreen npx playwright test --project=bdd -g "Export to GitHub org"`.
-They need no mesh, no network and start nothing.
+QT_QPA_PLATFORM=offscreen npx playwright test --project=bdd -g "exports a domain's repositories"`
+(the `-g` filter is a case-sensitive regex over the generated titles; this one matches
+the feature's title and selects its nine scenarios). They need no mesh, no network and
+start nothing.
 
 ## 7. What a person must still do
 

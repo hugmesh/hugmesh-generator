@@ -438,6 +438,48 @@ def test_an_existing_different_repository_is_refused_unless_update_via_branch(wo
     assert len(_bare_log(world, "example-parent", "export/20260303T000000Z")) == 1
 
 
+def test_a_repository_whose_content_is_on_another_branch_is_refused_too(world):
+    """Measured before the fix: apply asked the remote for ``refs/heads/main`` ONLY, so
+    a repository whose content lives on ``master`` looked empty — apply pushed a new
+    ``main`` into it with the default ``update: refuse`` and reported the action as
+    'update (empty repository)', on a repository the plan's own probe had just called
+    non-empty (skeptic, round 1, blocker 2)."""
+    cfg, runner = world["cfg"], world["runner"]
+    bare = _bare(world, "example-parent")
+    os.makedirs(os.path.dirname(bare))
+    _git(world["gh_root"], "init", "-q", "--bare", "-b", "master", bare)
+    other = world["tmp"] / "other"
+    other.mkdir()
+    (other / "README.md").write_text("theirs, on master\n")
+    _git(str(other), "init", "-q", "-b", "master")
+    _git(str(other), "add", "-A")
+    _git(str(other), "-c", "commit.gpgsign=false", "commit", "-q", "-m", "theirs")
+    _git(str(other), "push", "-q", bare, "HEAD:refs/heads/master")
+    theirs = _git(bare, "rev-parse", "master")
+    assert _git(bare, "for-each-ref", "--format=%(refname)").splitlines() == ["refs/heads/master"]
+    p = oe.plan(cfg, runner, stamp="20260101T000000Z")
+    parent = next(r for r in p.repos if r.source == "hugmesh-parent")
+    assert parent.action == "exists (compared at apply)"
+    res = oe.apply(p, runner)
+    r = next(x for x in res.repos if x.target == "exampleorg/example-parent")
+    assert r.action == "refused: existing non-empty repository", (r.action, r.skipped)
+    assert "master" in r.skipped and r.branch == ""
+    assert _git(bare, "rev-parse", "master") == theirs
+    assert _git(bare, "for-each-ref", "--format=%(refname)").splitlines() == ["refs/heads/master"]
+    pushes = [c for c in runner.calls if c[:2] == ["git", "push"] and "example-parent" in c[3]]
+    assert pushes == [], pushes
+    # update via branch: export/<stamp> beside master, no main invented
+    cfg.update = oe.UPDATE_BRANCH
+    p2 = oe.plan(cfg, runner, stamp="20260303T000000Z")
+    res2 = oe.apply(p2, runner)
+    r2 = next(x for x in res2.repos if x.target == "exampleorg/example-parent")
+    assert r2.action == "update via branch" and r2.branch == "export/20260303T000000Z"
+    assert not r2.skipped
+    assert sorted(_git(bare, "for-each-ref", "--format=%(refname)").splitlines()) == \
+        ["refs/heads/export/20260303T000000Z", "refs/heads/master"]
+    assert _git(bare, "rev-parse", "master") == theirs
+
+
 def test_a_missing_checkout_is_reported_not_invented(world):
     cfg, runner = world["cfg"], world["runner"]
     shutil.rmtree(os.path.join(world["src"], "hugmesh-commons"))
@@ -675,7 +717,7 @@ def test_candidates_from_the_fixture_mesh_config_and_a_saved_mesh_record(tmp_pat
     c = cands[0]
     assert (c.domain, c.org, c.source_mode, c.source_dir, c.generator_dir) == \
         ("mesh.example", "exampleorg", "existing", "/src", "/gen")
-    assert c.optional_services == [] or c.optional_services == ["phpbb"]
+    assert c.optional_services == ["phpbb"]          # the own row's services travel
     assert "my mesh" in c.where
     cfg = oe.load_config(str(path))
     assert cfg.domain == "mesh.example" and cfg.org == "exampleorg"
@@ -685,6 +727,62 @@ def test_candidates_from_the_fixture_mesh_config_and_a_saved_mesh_record(tmp_pat
                                "visibility": "public", "rename_map": {"repos": {"a": "b"}}}))
     cfg = oe.load_config(str(gen), generator_dir="/g")
     assert cfg.visibility == "public" and cfg.rename_map["repos"] == {"a": "b"}
+
+
+def test_the_own_domains_selected_services_reach_its_repository_set(world, tmp_path, monkeypatch):
+    """Measured before the fix: every door built the OWN domain's candidate with no
+    services, so the repositories its selected services add (the phpbb profile's
+    hugmesh-forum-api in the test world) were never planned for it — while an added
+    row with the same services got them (skeptic, round 1, mutation M16 survived)."""
+    from hugmesh_studio.core import saved_meshes
+    gen = world["gen"]
+    own_row = {"name": "mesh.example", "title": "", "idp": "superdomain",
+               "optional_services": ["phpbb"], "github_org": "exampleorg"}
+    added_row = {"name": "chat.mesh.example", "title": "", "idp": "own",
+                 "optional_services": ["phpbb"], "github_org": "otherorg"}
+
+    def names_for(c):
+        return oe.domain_repo_names(c.to_config(generator_dir=gen, source_mode="existing",
+                                                source_dir=world["src"]))[0]
+
+    # a saved-mesh record through the config-file door
+    rec = {"id": "m1", "label": "my mesh", "generator_dir": gen,
+           "config": {"cluster_domain": "mesh.example", "source_mode": "existing",
+                      "source_dir": world["src"], "domains": [own_row, added_row]}}
+    path = tmp_path / "rec.json"
+    path.write_text(json.dumps(rec))
+    cands = oe.candidates_from_file(str(path))
+    assert [(c.domain, c.org, c.optional_services) for c in cands] == \
+        [("mesh.example", "exampleorg", ["phpbb"]), ("chat.mesh.example", "otherorg", ["phpbb"])]
+    assert "hugmesh-forum-api" in names_for(cands[0])
+    assert "hugmesh-forum-api" in names_for(cands[1])
+    # the same record through the Studio state dir (what the Go-Live step scans)
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    sm = saved_meshes.SavedMesh(id="20260101-000000-abcd", label="my mesh", generator_dir=gen)
+    sm.config = dict(rec["config"])
+    saved_meshes.save(sm)
+    scanned = oe.saved_mesh_candidates()
+    assert [(c.domain, c.optional_services) for c in scanned] == \
+        [("mesh.example", ["phpbb"]), ("chat.mesh.example", ["phpbb"])]
+    assert "hugmesh-forum-api" in names_for(scanned[0])
+    # an ImageConfig: the own domain's services are cluster_domain_services
+    img = {"mode": "mesh", "cluster_domain": "mesh.example",
+           "cluster_domain_github_org": "exampleorg", "cluster_domain_services": ["phpbb"],
+           "domains": [{"name": "chat.mesh.example", "optional_services": [], "idp": "own"}]}
+    ipath = tmp_path / "image.json"
+    ipath.write_text(json.dumps(img))
+    cands = oe.candidates_from_file(str(ipath), gen)
+    assert [(c.domain, c.org, c.optional_services) for c in cands] == \
+        [("mesh.example", "exampleorg", ["phpbb"])]
+    assert "hugmesh-forum-api" in names_for(cands[0])
+    # ... and load_config, the CLI's door, carries them into the plan itself
+    cfg = oe.load_config(str(ipath), generator_dir=gen)
+    cfg.source_mode, cfg.source_dir = "existing", world["src"]
+    assert cfg.optional_services == ["phpbb"]
+    assert "hugmesh-forum-api" in oe.domain_repo_names(cfg)[0]
+    # without the selection the forum api is NOT in the set: the assertion above bites
+    cfg.optional_services = []
+    assert "hugmesh-forum-api" not in oe.domain_repo_names(cfg)[0]
 
 
 def test_saved_mesh_candidates_scan_the_studio_state_dir(tmp_path, monkeypatch):

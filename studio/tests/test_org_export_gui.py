@@ -509,6 +509,32 @@ def test_plan_then_typed_org_arms_apply_and_the_run_goes_through_the_runner(
     _shot(golive, "golive-org-export-applied.png", tmp_path)
 
 
+def test_the_own_domains_selected_services_reach_the_steps_plan(golive, world, qapp, tmp_path):
+    """The saved mesh's own domain selects phpbb: the step's plan must list the
+    repository that profile adds (hugmesh-forum-api). Measured before the fix: the
+    candidate door dropped the own row's services, so the table showed the default
+    set only (skeptic, round 1, blocker 1 / mutation M16)."""
+    saved_mesh_naming_the_org(world, services=["phpbb"])
+    golive.export_runner = world["runner"]
+    golive.export_remote_base = f"file://{world['gh_root']}/"
+    _at_generate(golive)
+    golive.next()
+    page = golive.currentPage()
+    assert isinstance(page, golive_mod.GoLiveOrgExportPage)
+    assert page.export_config().optional_services == ["phpbb"]
+    page.out_dir.setText(str(tmp_path / "out"))
+    page.plan_btn.click()
+    _wait_worker(page, qapp)
+    assert page.plan is not None, page.status.text()
+    targets = [page.table.item(r, 1).text() for r in range(page.table.rowCount())]
+    assert "exampleorg/example-forum-api" in targets, targets
+    # the test world holds no checkout for it: planned, reported, and Apply stays off
+    forum = next(r for r in page.plan.repos if r.source == "hugmesh-forum-api")
+    assert forum.action == "missing source"
+    page.confirm.setText("exampleorg")
+    assert not page.apply_btn.isEnabled()
+
+
 def test_apply_without_the_typed_name_is_refused_inline(golive, world, qapp, tmp_path):
     saved_mesh_naming_the_org(world)
     golive.export_runner = world["runner"]
@@ -612,6 +638,9 @@ def test_a_config_files_rules_reach_the_plan_and_the_rename_map_field_works(
     # viewport, wide enough for a path, on the first screen at the smallest size
     page.rename_map.setText(str(rm))
     page.rename_map.editingFinished.emit()
+    # ... and fixing the field clears the stale red line a failed Plan left (it used
+    # to stay until the next Plan: correctness skeptic, round 1, concern 1)
+    assert "nope.json" not in page.status.text(), page.status.text()
     golive.resize(820, 640)
     _settle(qapp, 10)
     viewport = page._content_scroll.viewport()

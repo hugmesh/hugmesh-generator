@@ -30,7 +30,11 @@ THE SCENARIOS (``--scenario``)
                org name, or Apply with it. ``--plant-marker REPO`` first commits a
                fake fine-grained token into that source repository;
                ``--rename-map exclusions`` points the page's Rename map field at a
-               file excluding that planted path.
+               file excluding that planted path; ``--own-services phpbb`` puts that
+               selection on the saved mesh's own domain (its profile's repository
+               must then be on the plan); ``--preexisting TARGET:BRANCH`` plants
+               somebody else's commit on BRANCH of the stand-in's TARGET repository
+               before the walk (apply must refuse it and leave it untouched).
 
 WHAT IS REAL AND WHAT IS A STAND-IN
   real      : StudioWizard and GoLiveWizard, every page in between, the Domains
@@ -341,7 +345,33 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
             fh.write("TOKEN=%s\n" % token)
         fixture_git(src, "add", "-A")
         fixture_git(src, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "plant a marker")
-    saved_mesh_naming_the_org(world, label="e2e mesh")
+    preexisting_bare = ""
+    if args.preexisting:
+        # somebody else's repository already under the org, its content on BRANCH
+        # (master by default) and no main at all — the shape that used to pass as
+        # empty, so apply pushed a new main into it
+        target, _, branch = args.preexisting.partition(":")
+        branch = branch or "master"
+        preexisting_bare = os.path.join(world["gh_root"], OWN_ORG_DEFAULT, target + ".git")
+        os.makedirs(os.path.dirname(preexisting_bare), exist_ok=True)
+        fixture_git(world["gh_root"], "init", "-q", "--bare", "-b", branch, preexisting_bare)
+        theirs = os.path.join(scratch, "theirs")
+        os.makedirs(theirs)
+        with open(os.path.join(theirs, "README.md"), "w", encoding="utf-8") as fh:
+            fh.write("somebody else's content, on %s\n" % branch)
+        fixture_git(theirs, "init", "-q", "-b", branch)
+        fixture_git(theirs, "add", "-A")
+        fixture_git(theirs, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "theirs")
+        fixture_git(theirs, "push", "-q", preexisting_bare, "HEAD:refs/heads/" + branch)
+        result["preexisting"] = {
+            "target": "%s/%s" % (OWN_ORG_DEFAULT, target), "branch": branch,
+            "refsBefore": _refs(fixture_git, preexisting_bare),
+            "shaBefore": fixture_git(preexisting_bare, "rev-parse", branch)}
+    saved_mesh_naming_the_org(world, label="e2e mesh",
+                              services=[s for s in args.own_services.split(",") if s])
+    result["ownServices"] = [s for s in args.own_services.split(",") if s]
+    # the git shim logged the set-up above too: the walk's own calls start here
+    result["gitCallsAtWalkStart"] = len(_lines(git_log))
     wiz = gl.GoLiveWizard(args.generator_dir)
     wiz.export_remote_base = "file://%s/" % world["gh_root"]    # the offline rehearsal seam
     wiz.resize(1040, 706)
@@ -432,9 +462,17 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
                 log = []
             bare[target] = {"commits": len(log), "log": log}
     result["bareRepos"] = bare
+    if preexisting_bare:
+        result["preexisting"]["refsAfter"] = _refs(fixture_git, preexisting_bare)
+        result["preexisting"]["shaAfter"] = fixture_git(
+            preexisting_bare, "rev-parse", result["preexisting"]["branch"])
     result["dialogsOpen"] = _dialogs(app, wiz)
     if args.grab:
         _grab(wiz, args.grab, result, "golive")
+
+
+def _refs(fixture_git, bare: str) -> list:
+    return sorted(fixture_git(bare, "for-each-ref", "--format=%(refname)").splitlines())
 
 
 def main(argv: "list[str]") -> int:
@@ -452,6 +490,12 @@ def main(argv: "list[str]") -> int:
     ap.add_argument("--rename-map", choices=("none", "exclusions"), default="none",
                     help="export: point the Rename map field at a file excluding the "
                          "planted path")
+    ap.add_argument("--own-services", default="",
+                    help="export: comma-separated optional services selected on the "
+                         "saved mesh's own domain")
+    ap.add_argument("--preexisting", default="",
+                    help="export: TARGET[:BRANCH] — plant somebody else's commit on that "
+                         "branch (default master) of the stand-in's TARGET before the walk")
     args = ap.parse_args(argv)
 
     generator_dir = os.path.abspath(args.generator_dir)

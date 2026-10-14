@@ -192,12 +192,13 @@ def bare_log(world, target: str, ref: str = "main") -> list[str]:
     return git(bare(world, target), "log", "--format=%H %an <%ae>", ref).splitlines()
 
 
-def saved_mesh_naming_the_org(world, label: str = "exported mesh") -> str:
+def saved_mesh_naming_the_org(world, label: str = "exported mesh", services=()) -> str:
     """A saved-mesh record in the (isolated) Studio state dir whose own domain names
-    the org and whose source is the world's checkouts — what the Go-Live step finds.
-    The record's config is an ordinary LocalMeshBootstrapConfig.to_dict(); the two
-    repositories the test world does not hold are skipped through the record's
-    generic twin, written next to it for the step's 'config file' door."""
+    the org (and selects ``services``) and whose source is the world's checkouts —
+    what the Go-Live step finds. The record's config is an ordinary
+    LocalMeshBootstrapConfig.to_dict(); the two repositories the test world does not
+    hold are skipped through the record's generic twin, written next to it for the
+    step's 'config file' door."""
     from hugmesh_studio.core import saved_meshes
     from hugmesh_studio.core.config import Domain
     from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
@@ -207,6 +208,7 @@ def saved_mesh_naming_the_org(world, label: str = "exported mesh") -> str:
     rec.config = LocalMeshBootstrapConfig(
         cluster_domain="mesh.example", source_mode="existing", source_dir=world["src"],
         domains=bootstrap_domain_records(
-            [Domain(name="mesh.example", github_org="exampleorg")], "mesh.example")
+            [Domain(name="mesh.example", github_org="exampleorg",
+                    optional_services=list(services))], "mesh.example")
     ).to_dict()
     return saved_meshes.save(rec)

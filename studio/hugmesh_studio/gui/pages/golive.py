@@ -821,6 +821,7 @@ class GoLiveOrgExportPage(QtWidgets.QWizardPage):
             cfg = self.export_config()
         except (OSError, ValueError) as exc:               # the rename-map file
             self._say(f"{self.rename_map.text().strip()}: {exc}")
+            self._rename_map_said = True       # so a fixed field clears this line too
             return
         if cfg is None:
             self._say(NO_EXPORT_DOMAINS_NOTE)

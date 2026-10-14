@@ -195,6 +195,23 @@ def test_export_plans_through_the_runner_and_applies_only_on_the_typed_org(world
     assert "visibility must be one of" in j.status
 
 
+def test_the_own_domains_selected_services_reach_the_tui_plan(world):
+    """The text-mode twin of the GUI test: the own domain's phpbb selection puts
+    hugmesh-forum-api on the plan (as 'missing source' in the test world)."""
+    saved_mesh_naming_the_org(world, services=["phpbb"])
+    j, screen = _golive_at_plan(world)
+    j.feed("x")
+    j.feed("p")
+    assert screen.export_plan is not None, j.status
+    assert screen.export_plan.config.optional_services == ["phpbb"]
+    text = "\n".join(j.lines())
+    assert "exampleorg/example-forum-api" in text
+    forum = next(r for r in screen.export_plan.repos if r.source == "hugmesh-forum-api")
+    assert forum.action == "missing source"
+    j.feed("apply exampleorg")
+    assert not os.path.isdir(os.path.join(world["gh_root"], "exampleorg"))
+
+
 def test_a_config_file_can_be_added_with_c(world, tmp_path):
     import json
     cfg_path = tmp_path / "export.json"
