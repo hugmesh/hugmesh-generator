@@ -57,6 +57,7 @@ from .local_services import (
     PROFILE_MEDIA_POISONER, KIND_LANE_LABEL, kind_slugs,
 )
 from .egress_conf import validate_egress_conf
+from .domain_services import tor_domain_entries
 from .local_stack_node import M2_BOOTSTRAP_HINT, LocalStackNode
 from .mesh_node import MeshNode
 
@@ -168,10 +169,15 @@ def _domain_record(x: dict) -> dict:
     """One recorded domain row, coerced to its JSON shape (str fields, a list of str
     slugs) — see ``LocalMeshBootstrapConfig.domains``."""
     svcs = x.get("optional_services") or ()
-    return {"name": str(x.get("name") or "").strip(),
-            "title": str(x.get("title") or "").strip(),
-            "idp": str(x.get("idp") or "superdomain"),
-            "optional_services": [str(s) for s in svcs] if isinstance(svcs, (list, tuple)) else []}
+    rec = {"name": str(x.get("name") or "").strip(),
+           "title": str(x.get("title") or "").strip(),
+           "idp": str(x.get("idp") or "superdomain"),
+           "optional_services": [str(s) for s in svcs] if isinstance(svcs, (list, tuple)) else []}
+    # the domain's own Tor front door (#582): OMIT-WHEN-FALSE, and only a real
+    # ``true`` counts — a hand-edited "yes" must not mint an onion.
+    if x.get("tor") is True:
+        rec["tor"] = True
+    return rec
 
 
 @dataclass
@@ -606,7 +612,24 @@ class LocalMeshBootstrap:
                               idp_client_id=self.cfg.idp_client_id.strip(),
                               idp_jwks=self.cfg.effective_idp_jwks(),
                               own_idp_domains=self.cfg.own_idp_domains,
-                              kind_addons=self.cfg.kind_addons)
+                              kind_addons=self.cfg.kind_addons,
+                              tor_domains=self.tor_domains())
+
+    def tor_domains(self) -> list[tuple[str, str, str]]:
+        """``[(name, slug, tenant), ...]`` — the recorded domains with their OWN Tor
+        front door (#582), minus the mesh's own domain (its front door is the primary
+        onion). What LocalStackNode threads as TOR_ONION_DOMAINS and the plan prints;
+        they do nothing unless Tor is on for the mesh."""
+        own = (self.cfg.cluster_domain or "").strip() or self.cfg.resolved_domain()
+        # The TENANT follows what this stack actually registers: a name is its own
+        # brand only when it is in ``own_idp_domains`` (the list own_casdoor turns
+        # into APP_TENANCY_HOSTS), whatever the recorded row's ``idp`` says — the
+        # host map must never name a tenant the gateway has no issuer for.
+        own_idp = {n.strip() for n in self.cfg.own_idp_domains}
+        rows = [dict(r, idp=("own" if (r.get("name") or "").strip() in own_idp
+                             else "superdomain"))
+                for r in self.cfg.domains]
+        return tor_domain_entries(rows, own_name=own)
 
     def _mesh_node(self) -> LocalMeshNode:
         return LocalMeshNode(self.generator_dir, LocalMeshConfig(
@@ -912,6 +935,15 @@ class LocalMeshBootstrap:
             lines.append("             publishes the fe-gateway as a v3 .onion, reachable")
             lines.append("             in Tor Browser (no public IP/DNS/ports). The address")
             lines.append("             is reported at the end + via `make stack-onion`.")
+            # per-domain onions (#582): one more HiddenService per Tor domain, each
+            # registered in the gateway host map. Empty renders NOTHING.
+            for name, slug, tenant in self.tor_domains():
+                lines.append(f"             + {name}: its own onion (key ‘{slug}’), "
+                             f"served as brand ‘{tenant}’")
+        elif self.tor_domains():
+            lines.append("          -> NO onion for the Tor domains ("
+                         + ", ".join(n for n, _s, _t in self.tor_domains())
+                         + "): Tor is off for this mesh")
         if _wl:
             lines.append(f"          -> login-ui image ships i18n/{{{_wl}}}.json catalogs")
         if c.login_theme_css.strip():
