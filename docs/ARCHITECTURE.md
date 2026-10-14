@@ -471,7 +471,9 @@ are complete on `main`; each entry names what lights it and what caveat survives
   `app.desktop.remote-install.enabled=false`. ⚠️ The SSO token **producer**
   (`hugmesh-sso-token`, RFC 8628 device flow) is written and unit-tested but has
   never run against a live Casdoor or on an image, so the sudo leg is inert in
-  practice even once the flags flip. See [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md) §7.
+  practice even once the flags flip. The go-live preconditions (security
+  re-review, `device_ssh_dial` rows, dial-key mount) are in
+  [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md) §7.
 - **✅ Encrypted versioned backups** — Velero server + node-agent (Kopia) as
   `apps/55-velero.yaml` and the BSL + ESO credentials + least-privilege RBAC +
   status-sweep CronJob as `apps/56-velero-config.yaml`; per-domain + superadmin,

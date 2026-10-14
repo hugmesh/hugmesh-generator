@@ -805,6 +805,17 @@ services:
       # specs/cluster/manifests/admin-bff-api/deployment.yaml, which sets both.
       ANUBIS_ENABLED: ${ANUBIS_ENABLED:-false}
       ANUBIS_MANAGEMENT_URL: ${ANUBIS_MANAGEMENT_URL:-http://hugmesh-anubis:9090}
+      # Desktop governance: the three ships-dark device-exec flags, VISIBLE and overridable
+      # (e.g. DEVICE_TERMINAL_ENABLED=true via STACK_ENV or the shell). All default false,
+      # the same posture as specs/cluster/manifests/admin-bff-api/deployment.yaml, which
+      # pins the literal "false". Overriding the dial flag here does NOT make it usable:
+      # a device needs an ACTIVE device_ssh_dial row with a pinned host key AND a
+      # per-device dial-key Secret mounted under /var/run/secrets/device-ssh-dial, and
+      # this service mounts none. Preconditions: docs/CLIENT-IMAGES.md section 7.
+      # Pinned by tests/desktop-governance/test-governance-flags-visible.sh.
+      DEVICE_TERMINAL_ENABLED: ${DEVICE_TERMINAL_ENABLED:-false}
+      DEVICE_TERMINAL_DIAL_ENABLED: ${DEVICE_TERMINAL_DIAL_ENABLED:-false}
+      DESKTOP_REMOTE_INSTALL_ENABLED: ${DESKTOP_REMOTE_INSTALL_ENABLED:-false}
       # Platform-capability k8s probe: application.yml defaults
       # PLATFORM_CAPABILITIES_K8S_ENABLED to TRUE (cluster deployments), but compose has
       # no k8s API server — the fabric8 client autoconfigures to the unresolvable
