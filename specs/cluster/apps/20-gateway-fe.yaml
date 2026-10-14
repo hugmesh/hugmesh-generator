@@ -644,8 +644,17 @@ spec:
           # hop presents the fe-gateway client cert. The vanity resolve is still a
           # PUBLIC read at the federation app layer (permitAll GET vanity/**) — mTLS
           # only authenticates the GATEWAY pod to federation, not the end user.
+          # PER BRAND DOMAIN (hugmesh-generator#582): `vanity: true` tells the chart
+          # that this is the route each entry of `vanityDomains` extends — for a
+          # brand domain `brandb.example` listed there the predicate becomes
+          # Host=*.hugmesh.net,*.brandb.example and the Ingress admits
+          # *.brandb.example beside the extraHosts entry above. The literal `host`
+          # stays the cluster domain's own (the builders' rebrand rewrites it with
+          # every other hugmesh.net). `vanityDomains` is never set in git and has no
+          # writer yet — see the chart's values.yaml.
           - id: vanity-subdomain
             host: "*.hugmesh.net"
+            vanity: true
             uri: https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080
             filters:
               - SetPath=/api/federation/vanity
