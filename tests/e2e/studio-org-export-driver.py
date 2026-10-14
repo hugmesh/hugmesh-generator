@@ -426,6 +426,12 @@ def scenario_export(args, app, result: dict, scratch: str, bindir: str, git_log:
     page.confirm.setText(plan.config.org)
     app.processEvents()
     result["applyEnabledTyped"] = page.apply_btn.isEnabled()
+    # the same name in another letter case arms too (slugs are case-insensitive)
+    page.confirm.setText(plan.config.org.swapcase())
+    app.processEvents()
+    result["applyEnabledOtherCase"] = page.apply_btn.isEnabled()
+    page.confirm.setText(plan.config.org)
+    app.processEvents()
     if args.action == "plan":
         page.confirm.setText("")
     elif args.action == "apply-untyped":

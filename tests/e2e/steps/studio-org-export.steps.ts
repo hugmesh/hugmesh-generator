@@ -271,11 +271,16 @@ Then('git was not asked to push anything during the plan', async ({ world }) => 
   expect(pushes, 'git push during a plan').toEqual([]);
 });
 
-Then('Apply is disarmed until the org name is typed exactly', async ({ world }) => {
+// GitHub slugs are case-insensitive, so the arming compares case-insensitively too
+// (the GUI and the TUI alike; docs/GOLIVE-ORG-EXPORT.md says so): a wrong NAME never
+// arms, a different letter CASE of the right name does.
+Then('Apply is disarmed until the org name is typed, in any letter case', async ({ world }) => {
   const f = facts(world);
   expect(f.applyEnabledBeforeTyping, 'Apply armed before typing').toBe(false);
   expect(f.applyEnabledWrongName, 'Apply armed by a wrong name').toBe(false);
-  expect(f.applyEnabledTyped, 'Apply did not arm with the exact name').toBe(true);
+  expect(f.applyEnabledTyped, 'Apply did not arm with the name as configured').toBe(true);
+  expect(f.applyEnabledOtherCase, 'Apply did not arm with the name in another letter case')
+    .toBe(true);
 });
 
 // ── apply ────────────────────────────────────────────────────────────────────

@@ -187,7 +187,10 @@ def test_the_guard_itself_spells_only_the_assembled_stem():
 def test_private_spellings_come_from_a_file_outside_the_repository(tmp_path, monkeypatch):
     """The operator's longer spellings are read from ``HUGMESH_ORG_EXPORT_PRIVATE_NAMES``
     when set — a file in their folder, never a line in this repository — and the
-    checker refuses them like the built-in stem."""
+    checker refuses them like the built-in stem. Every check here names its needles
+    explicitly (the stem, or the spellings this test wrote), so the test is independent
+    of the import-time ``FORBIDDEN``: when the variable was set at import to a file
+    naming a string the tree contains, only the guard proper fails, not this test."""
     monkeypatch.delenv("HUGMESH_ORG_EXPORT_PRIVATE_NAMES", raising=False)
     assert _private_names() == ()
     names = tmp_path / "private-names.txt"
@@ -203,7 +206,7 @@ def test_private_spellings_come_from_a_file_outside_the_repository(tmp_path, mon
     shutil.copyfile(src, copy)
     with open(copy, "a", encoding="utf-8") as fh:
         fh.write("\nDEFAULT_ORG = 'Placeholder-Private-Org'\n")
-    assert forbidden_hits(str(copy)) == []                   # the stem alone misses it
+    assert forbidden_hits(str(copy), (_A,)) == []            # the stem alone misses it
     hits = forbidden_hits(str(copy), (_A, *extra))
     assert hits and all(h.endswith(": placeholder-private-org") for h in hits), hits
     me = os.path.abspath(__file__)                           # this test spells them

@@ -65,7 +65,7 @@ Feature: The Studio exports a domain's repositories to its GitHub org
     And the plan lists the targets "exampleorg/example-actions, exampleorg/example-build-config, exampleorg/example-parent, exampleorg/example-commons, exampleorg/example-auth-core, exampleorg/example-generator, exampleorg/mesh.example.github.io"
     And the stand-in GitHub holds no repository and every gh call during the plan was a repo view
     And git was not asked to push anything during the plan
-    And Apply is disarmed until the org name is typed exactly
+    And Apply is disarmed until the org name is typed, in any letter case
     And the Studio grab is a non-empty PNG
     And the evidence manifest holds a "widget-grab" artefact for this scenario
 
