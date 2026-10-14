@@ -208,9 +208,16 @@ the native amd64 chroot build with grub-EFI.
   LOCAL group, so polkit resolves it through the stock `files` NSS source and
   nothing in the identity stack is touched (default-deny by construction).
   Everything renders only on a governed image with a valid domain (ships-dark).
-  The SSO greeter/PAM **token producer** stays 🔭 DEFERRED with FD-07
-  (Increment 2); until it lands the deposit path has no producer and the whole
-  leg stays inert-by-default.
+  The token **producer** now exists as code
+  (`specs/etc/hugmesh/desktop-governance/sso/hugmesh-sso-token.py.tmpl`): an
+  RFC 8628 device-flow client for the seeded `hugmesh-desktop` public client,
+  run by the session-start wrapper, writing the `oidc-token.src` drop the
+  deposit reads, with an optional `pam_exec` logout clear. It is unit-tested
+  end to end against the real deposit and mapper
+  (`tests/desktop-governance/test-sso-token-producer.sh`) but NEVER run against
+  a live Casdoor or on an image, and a lightdm-greeter / password-grant PAM
+  login (FD-07 proper) is still 🔭 DEFERRED. The whole leg stays inert until the
+  governance flags flip and a governed image exists.
 
 ## Provisioning manifest additions (keys-provision)
 

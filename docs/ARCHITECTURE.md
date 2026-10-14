@@ -466,9 +466,10 @@ are complete on `main`; each entry names what lights it and what caveat survives
   remote-install over the device-SSH-license transport; client side in
   `specs/etc/hugmesh/desktop-governance/`, server side a controller set in
   `hugmesh-admin-bff-api`. Dark behind `app.desktop.registry.enabled=false` /
-  `app.desktop.remote-install.enabled=false`. ⚠️ The SSO greeter/PAM **token
-  producer** is still deferred, so the deposit path has no producer even once the
-  flags flip. See [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md) §7.
+  `app.desktop.remote-install.enabled=false`. ⚠️ The SSO token **producer**
+  (`hugmesh-sso-token`, RFC 8628 device flow) is written and unit-tested but has
+  never run against a live Casdoor or on an image, so the sudo leg is inert in
+  practice even once the flags flip. See [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md) §7.
 - **✅ Encrypted versioned backups** — Velero server + node-agent (Kopia) as
   `apps/55-velero.yaml` and the BSL + ESO credentials + least-privilege RBAC +
   status-sweep CronJob as `apps/56-velero-config.yaml`; per-domain + superadmin,
@@ -527,7 +528,9 @@ implementation on `main`.
   build + boot. See [`selinux-module-loading.md`](selinux-module-loading.md).
 - **🔭 Group-call SFU** — coturn is a 1:1/mesh relay only; MatrixRTC / Element
   Call / LiveKit-class group calling does not exist in any form.
-- **🔭 Desktop-governance SSO greeter / PAM token producer** (FD-07 increment 2).
+- **🚧 Desktop-governance SSO token producer** (FD-07 increment 2): code and
+  unit tests landed; unproven on a live Casdoor and on an image; the
+  lightdm-greeter / password-grant PAM login is not built.
 - **🚧 MDM phones (GrapheneOS on Pixel)** — the fourth onboarding form: `scripts/phone-wizard.sh` flashes signature-verified GrapheneOS, enrolls the handset into the Tailscale root domain (headscale tailnet, ADR-14 register-and-approve), escrows a separately-encrypted enterprise profile, and emits a `phone-ingest/v2` device-registry record; Azure Intune is a co-equal provider alongside Headwind. Real pre-deploy gaps remain — see [`MDM.md`](MDM.md) "Deferred".
 - **🚧 Notifications external channels** — Matrix DM + Akkoma feed + phpBB + email
   adapters on top of the shipped in-app MVP; mod-bff `notify_channels` directive.

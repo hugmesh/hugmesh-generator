@@ -2800,6 +2800,10 @@ desktop-governance-verify:
     # alg=none rejection and rogue-key rejection, i.e. the entire reason a token
     # cannot mint sudo. Same tool set as the two legs above; 21 assertions.
     - bash tests/desktop-governance/test-desktop-sudo-mapper.sh
+    # The SSO token producer (FD-07 increment 2): real device-flow client against a
+    # local fake issuer, then its output through the REAL deposit and the REAL
+    # mapper. Same tool set (python3 + openssl); hard-fails without them.
+    - bash tests/desktop-governance/test-sso-token-producer.sh
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:

@@ -52,8 +52,17 @@ hook deliver both (all governed-gated and ships-dark):
   `${XDG_RUNTIME_DIR}/hugmesh/oidc-token` (per-user, 0600, never exported,
   `--clear` on logout). Inert when ungoverned or when there is no token (empty
   store). It reads the token from `HUGMESH_OIDC_ACCESS_TOKEN` or `oidc-token.src`
-  in the same directory. Nothing in this repo sets either, so until the SSO
-  greeter does, the token is empty.
+  in the same directory. `sso/hugmesh-sso-token.py.tmpl` is the producer of that
+  drop (below); with no producer and no greeter the token is empty.
+  `--clear` (session start) removes only the deposit; `--clear-all` (logout) also
+  removes the drop and the producer's refresh token.
+- `sso/hugmesh-sso-token.py.tmpl` → the token PRODUCER. RFC 8628 device flow
+  against the `hugmesh-desktop` public client, run by the session-start wrapper
+  before the deposit. It shows a code and URL, polls, and writes `oidc-token.src`
+  (0600). It is not a trust anchor: the mapper re-verifies the token. Optional
+  logout hook: `session optional pam_exec.so quiet seteuid
+  /etc/hugmesh/desktop-governance/hugmesh-sso-token --pam`. Not proven against a
+  live Casdoor or on an image.
 - `autostart/hugmesh-desktop-sso.desktop.tmpl` → XDG autostart (LXDE + XFCE, no
   `OnlyShowIn`) → the session-start wrapper.
 - `autostart/hugmesh-desktop-sso-start.sh.tmpl` → session-start wrapper. It
@@ -61,7 +70,7 @@ hook deliver both (all governed-gated and ships-dark):
   (the merged bearer-forward's Plasma-only `shutdown/` hook never fires here), and
   chains deposit → bearer-forward.
 - `autostart/session-install.sh.tmpl` (plus a ready-to-run `session-install.sh` at
-  the root of this directory) → renders the three templates and publishes the
+  the root of this directory) → renders the four templates and publishes the
   `.desktop`. It resolves the domain from `/etc/hugmesh/domains`, else from the
   `Url=` of the rendered `hugmesh-discover.flatpakrepo`, with the SAME fail-closed
   `[a-z0-9.-]` validation as `provision.sh`.

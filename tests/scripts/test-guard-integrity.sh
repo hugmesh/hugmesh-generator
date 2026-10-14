@@ -877,6 +877,13 @@ PREMERGE_BASELINE="${GUARD_PREMERGE:-196}"
 # node_modules and a chromium no shell-suites image carries.
 PREMERGE_UNGATED=(
   tests/casdoor/test-jwt-custom-token.sh
+  # NOT a claim that it cannot gate: it needs only bash + python3 + openssl, the
+  # tool set its three siblings in tests/desktop-governance/ already run under in
+  # shell-suites.yml. It is listed solely because the change that added it could
+  # not edit .github/workflows/shell-suites.yml. It IS run post-merge, by
+  # .gitlab-ci.yml's desktop-governance-verify. WIRE IT into that SUITES list, then
+  # delete this entry and raise PREMERGE_BASELINE by one.
+  tests/desktop-governance/test-sso-token-producer.sh
   tests/device-registry/test-layer-a-headscale-acl.sh
   tests/egress-vpn/test-secret-contract.sh
   tests/pentest/nuclei/test-templates.sh

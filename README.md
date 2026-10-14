@@ -226,9 +226,10 @@ _As of 2026-08-05. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   Discover/Flatpak wiring, autostart SSO deposit scripts); the server side is a
   full controller set in `hugmesh-admin-bff-api`. Dark behind
   `app.desktop.registry.enabled=false` / `app.desktop.remote-install.enabled=false`.
-  ⚠️ **Honest gap:** the SSO greeter/PAM **token producer** is still 🔭 deferred
-  (FD-07 increment 2), so the deposit path has no producer and the sudo leg is
-  inert even once the flags flip. (The original SSSD `id_provider = oidc` design
+  ⚠️ **Honest gap:** the SSO token **producer** (FD-07 increment 2) is now code
+  (`hugmesh-sso-token`, an RFC 8628 device-flow client) and unit-tested against
+  the real deposit and mapper, but it has never run against a live Casdoor or on
+  an image, so the sudo leg stays inert until the flags flip on a governed image. (The original SSSD `id_provider = oidc` design
   was retracted — that syntax exists in no released SSSD.) See
   [`docs/CLIENT-IMAGES.md`](docs/CLIENT-IMAGES.md) §7.
 - **✅ Workload Console — ships dark (the WHOLE console, not just an RBAC
@@ -465,9 +466,10 @@ none), and compose green is not evidence for the cluster._
   such artifact — so the desktop boot-verify (Qt6/KF6 Discover pull, the
   `hugmesh-desktop` PKCE client, the desktop-sudo claim → polkit path) has never
   run.
-- **🔭 Desktop-governance SSO greeter / PAM token producer** (FD-07 increment 2)
-  — without it the deposited-token path has no producer, so the SSO-sudo leg
-  stays inert even after the governance flags above flip.
+- **🚧 Desktop-governance SSO token producer** (FD-07 increment 2) — the producer
+  is written and unit-tested (`specs/etc/hugmesh/desktop-governance/sso/`), but
+  unproven against a live Casdoor device endpoint and on a desktop image; the
+  lightdm-greeter / password-grant PAM login is not built.
 - **🔭 Notifications external channels** — Matrix DM + Akkoma feed + phpBB +
   email adapters on top of the shipped in-app MVP + SSE push.
 - **🚧 Live ApplicationSet cut-over for optional services** — the build-time
@@ -581,7 +583,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   boot**, the live MFA operator flip, desktop-governance go-live (three dark
   flags, no dial rows, no image ever built), the broken node-side headscale ACL
   reload, the DB-hardening flips, a group-call SFU, the desktop-governance SSO
-  greeter/PAM token producer, notifications external channels, and the live
+  token producer (written, unproven on a live IdP or an image), notifications external channels, and the live
   optional-services ApplicationSet cut-over. See
   [Roadmap](#roadmap) and the Roadmap section of
   [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
