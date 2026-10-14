@@ -2,8 +2,9 @@
 
 ONE FILE PER MESH, ``brand-record.json``, in the Studio state folder (never in the
 shared brands/ checkout). It holds an explicit ``superbrand`` block (id, title,
-organisation, public name, internal root name, central sign-in, the default look and
-the default ways to reach it, plus the login style and decoration) and a ``brands``
+organisation, public name, internal root name, central sign-in, the default look —
+which holds the sign-in page's style and decoration — and the default ways to reach
+it) and a ``brands``
 list of rows (``config.Domain``). Everything else is a PROJECTION of it:
 
 * the mesh manifest — ``superbrand.id`` becomes the manifest's ``brand``, the internal
@@ -26,7 +27,10 @@ THE COPY SITES. A Domain field used to have about ten places that copied rows by
 literal key list, and each dropped a key it did not know. They are listed by name in
 :data:`COPY_SITES`; every one now copies by the field list (``config.DOMAIN_FIELDS``),
 and studio/tests/test_brand_record_copy_sites.py drives one row through all of them and
-back, then deletes a key at each site in turn and shows the round trip go red.
+back, then deletes a key at each site in turn and shows the round trip go red. Two
+sites are NOT converted and are named in :data:`COPY_SITES_STILL_DROPPING`: the
+window's Domains table rebuilds every row from its cells, so a Next through it erases
+a brand's id, look, ways and sign-in port today. They belong to the brands-table lane.
 
 Qt-free; the screens and the text front end call this, never the other way round.
 """
@@ -50,8 +54,10 @@ from .validate import IdentityValidationError, validate_brand_title
 
 __all__ = [
     "SCHEMA", "RECORD_FILENAME", "DESIGNS_SUBDIR", "LOOK_KEYS", "COPY_SITES",
+    "COPY_SITES_STILL_DROPPING",
     "Superbrand", "BrandRecord", "RecordRefused", "ProfileRefused",
-    "brand_id", "brand_id_problem", "profile_names", "look_problems", "secret_problems",
+    "brand_id", "brand_id_problem", "stored_id_problem", "profile_names",
+    "look_problems", "secret_problems",
     "record_problems", "set_ways", "effective_look", "way_effects", "show_record_lines",
     "builder_profile", "parse_builder_profile", "write_branding_dir",
     "record_from_image_config", "apply_record_to_image_config",
@@ -88,6 +94,15 @@ COPY_SITES: tuple[str, ...] = (
     "fleet.fleet_domains_from_config",
 )
 
+#: Copy sites that STILL rebuild a row from a literal key list and so drop ``id``,
+#: ``look``, ``ways`` and ``issuer_port`` (the window's Domains table; the Docker
+#: mesh page commits through the same ``rows()``). Named here so the claim above is
+#: exact; converting them is the brands-table lane's (it owns gui/pages/domains.py).
+COPY_SITES_STILL_DROPPING: tuple[str, ...] = (
+    "gui.pages.domains.DomainsTableBody.rows",
+    "gui.pages.localmesh.LocalMeshPage._commit_domains",
+)
+
 # ── the id rule (D4) ─────────────────────────────────────────────────────────────────
 #: The strictest rule in use: a DNS label of at most 59 characters, starting and ending
 #: alphanumeric (the registry's DomainSlug rule; hugmesh-tor-reconcile allows 63 and the
@@ -118,6 +133,28 @@ def profile_names(generator_dir: str) -> tuple[str, ...]:
     except OSError:
         pass
     return tuple(sorted(out - set(RESERVED_IDS)))
+
+
+#: Why a stored id must still equal the derived one. The Docker mesh's stack node
+#: (core/local_stack_node.py) hands own_casdoor the brand NAMES only, so its tenant
+#: keys and compose services derive the id from the name while the Tor key folder
+#: (domain_services.onion_slug) reads the stored one; a stored id that differs would
+#: mint the onion for a tenant the gateway never registers. Refused here until that
+#: file passes ids (own_casdoor.tenancy_env/compose_overlay already take them).
+STORED_ID_MUST_MATCH = ("the Docker mesh still derives a brand's id from its public "
+                        "name, so the record accepts only that id today")
+
+
+def stored_id_problem(row) -> str:
+    """Why a row's STORED id cannot be kept ("" when it can): it differs from the id
+    its public name derives (D4: one text every consumer shares, and today the Docker
+    mesh is a consumer that derives)."""
+    stored = str(getattr(row, "id", "") or "").strip()
+    name = str(getattr(row, "name", "") or "")
+    if not stored or stored == default_brand_id(name):
+        return ""
+    return (f"its stored id ‘{stored}’ differs from the id its public name derives "
+            f"(‘{default_brand_id(name)}’); {STORED_ID_MUST_MATCH}")
 
 
 def brand_id_problem(candidate: str, *, superbrand_id: str = "", taken=(),
@@ -164,11 +201,20 @@ class Superbrand:
     central_signin: str = ""
     look: dict[str, Any] = field(default_factory=dict)
     ways: dict[str, Any] = field(default_factory=dict)
-    login_style: str = ""
-    login_decor: str = ""
 
     def effective_internal_root(self) -> str:
         return self.internal_root.strip() or f"{self.id.strip() or 'hugmesh'}.internal"
+
+    # The sign-in page's shape and menu decoration are the look's ``style`` and
+    # ``decor`` fields, nothing else: one representation, so show-record, the image
+    # config and the manifest header cannot read different values for the same thing.
+    @property
+    def login_style(self) -> str:
+        return str((self.look or {}).get("style") or "")
+
+    @property
+    def login_decor(self) -> str:
+        return str((self.look or {}).get("decor") or "")
 
     def to_dict(self) -> dict[str, Any]:
         """Every key that says something; an empty one is left out so an older file
@@ -187,9 +233,17 @@ class Superbrand:
                     v = {}
                 elif not isinstance(v, dict):
                     raise ValueError(f"superbrand.{k} must be an object, got {v!r}")
+                v = dict(v)
             else:
                 v = "" if v is None else str(v)
             kw[k] = v
+        # a block written with separate login_style/login_decor keys (an early shape
+        # of this record) folds them into the look; the look's own value wins
+        look = kw.setdefault("look", {})
+        for old, new in (("login_style", "style"), ("login_decor", "decor")):
+            v = (d or {}).get(old)
+            if isinstance(v, str) and v and not look.get(new):
+                look[new] = v
         return cls(**kw)
 
 
@@ -246,12 +300,13 @@ class BrandRecord:
 
     @classmethod
     def _from_manifest(cls, m: dict[str, Any]) -> "BrandRecord":
+        look = {k: str(m.get(src)) for k, src in (("style", "login_style"),
+                                                   ("decor", "login_decor"))
+                if m.get(src)}
         sb = Superbrand(id=str(m.get("brand") or ""), title=str(m.get("brand_title") or ""),
                         org=str(m.get("org") or ""),
                         public_name=str(m.get("cluster_domain") or ""),
-                        internal_root=str(m.get("superdomain") or ""),
-                        login_style=str(m.get("login_style") or ""),
-                        login_decor=str(m.get("login_decor") or ""))
+                        internal_root=str(m.get("superdomain") or ""), look=look)
         rows = [ImageConfig._domain_from_dict(x) for x in (m.get("domains") or [])
                 if isinstance(x, dict)]
         return cls(superbrand=sb, brands=rows)
@@ -336,14 +391,24 @@ def default_internal_name(record: BrandRecord, row) -> str:
     return f"{brand_id(row)}.{record.superbrand.effective_internal_root()}"
 
 
-def ways_problems(ways: dict[str, Any], where: str, *, internal_root: str = "") -> list[str]:
-    """Why a ways block cannot be saved ([] when it can)."""
+def ways_problems(ways: dict[str, Any], where: str, *, internal_root: str = "",
+                  superbrand: bool = False) -> list[str]:
+    """Why a ways block cannot be saved ([] when it can). ``tor`` is a key of the
+    SUPERBRAND's block only (the mesh's own Tor address); a brand's Tor address is
+    its row's ``tor`` field, which set_ways writes, so a ``tor`` key in a brand's
+    ways would be a second place saying the same thing and is refused."""
     problems: list[str] = []
     if not isinstance(ways, dict):
         return [f"{where}: ways must be an object"]
+    allowed = ("internal_name", "public") + (("tor",) if superbrand else ())
     for k in ways:
-        if k not in ("internal_name", "public", "tor"):
-            problems.append(f"{where}: unknown way ‘{k}’ (internal_name, public)")
+        if k not in allowed:
+            problems.append(f"{where}: unknown way ‘{k}’ ({', '.join(allowed)})"
+                            + ("" if superbrand or k != "tor" else
+                               "; a brand's Tor address is its tor field, written by "
+                               "set_ways"))
+    if superbrand and "tor" in ways and not isinstance(ways["tor"], bool):
+        problems.append(f"{where}: ways.tor must be yes or no (true/false)")
     name = ways.get("internal_name")
     if name is not None:
         if not isinstance(name, str) or not _DNS_NAME_RE.match(name):
@@ -396,7 +461,7 @@ def set_ways(record: BrandRecord, bid: str, *, internal_name: str | None = None,
     if is_sb and tor is not None:
         ways["tor"] = bool(tor)
     problems = ways_problems(ways, f"brand {bid}",
-                             internal_root=sb.effective_internal_root())
+                             internal_root=sb.effective_internal_root(), superbrand=is_sb)
     problems += secret_problems(ways, f"brand {bid}.ways")
     if problems:
         return problems
@@ -523,19 +588,15 @@ def record_problems(record: BrandRecord, *, unaffiliated: bool = False,
             problems.append(f"superbrand: {e}")
     problems += look_problems(sb.look, "superbrand")
     problems += ways_problems(sb.ways, "superbrand",
-                              internal_root=sb.effective_internal_root())
-    if sb.login_style or sb.login_decor:
-        from . import theme
-        if sb.login_style and sb.login_style not in theme.STYLE_VARIANTS:
-            problems.append(f"superbrand: unknown login_style ‘{sb.login_style}’")
-        if sb.login_decor and sb.login_decor not in theme.DECOR_VARIANTS:
-            problems.append(f"superbrand: unknown login_decor ‘{sb.login_decor}’")
+                              internal_root=sb.effective_internal_root(), superbrand=True)
     seen: list[str] = []
     for d in record.brands:
         bid = brand_id(d)
         p = brand_id_problem(bid, superbrand_id=sid, taken=seen, profiles=profiles)
         if p:
             problems.append(f"brand {d.name or bid}: {p}")
+        elif (d.id or "").strip() and bid != default_brand_id(d.name):
+            problems.append(f"brand {d.name}: {stored_id_problem(d)}")
         seen.append(bid)
         if d.title:
             try:
@@ -597,7 +658,6 @@ def record_from_image_config(cfg: ImageConfig) -> BrandRecord:
     block (D5) and its Domain rows as the brands."""
     sb = Superbrand(id=cfg.brand, title=cfg.brand_title, org=cfg.org,
                     public_name=cfg.cluster_domain, internal_root=cfg.superdomain,
-                    login_style=cfg.login_style, login_decor=cfg.login_decor,
                     look=_look_from_image_config(cfg))
     rows = [ImageConfig._domain_from_dict(r) for r in domain_rows_to_dict(cfg.domains)]
     return BrandRecord(superbrand=sb, brands=rows)
@@ -626,9 +686,11 @@ def apply_record_to_image_config(record: BrandRecord, cfg: ImageConfig) -> None:
     if sb.public_name:
         cfg.cluster_domain = sb.public_name
     cfg.superdomain = sb.internal_root
+    # the look is the one place style and decoration live (Superbrand.login_style
+    # reads it); an empty look value says nothing and leaves the field alone
     cfg.login_style = sb.login_style
     cfg.login_decor = sb.login_decor
-    look = sb.look or {}
+    look = {k: v for k, v in (sb.look or {}).items() if v}
     if "primary" in look:
         cfg.login_primary_color = look["primary"]
     if "secondary" in look:
@@ -679,10 +741,26 @@ def record_from_bootstrap(cfg) -> BrandRecord:
 def apply_record_to_bootstrap(record: BrandRecord, cfg) -> None:
     """Write the record onto a bootstrap config, in place (``up --record``): the
     superbrand's id and public name onto ``brand``/``cluster_domain``, the block onto
-    ``superbrand``, the brands onto ``domains`` and ``own_idp_domains``. Everything
-    that is not the record's to say (env, services, source, the auth key) is left as
-    the caller set it."""
+    ``superbrand``, the brands onto ``domains`` and ``own_idp_domains``, and the
+    superbrand's Tor way (``ways.tor``, set_ways' one field) onto ``with_tor``, so the
+    mesh show-record describes is the mesh that starts. A flag that says the opposite
+    (``--with-tor`` or a ``--services`` selection) is a contradiction, not an
+    override: ValueError, and nothing is applied. Everything that is not the record's
+    to say (env, source, the auth key) is left as the caller set it."""
     sb = record.superbrand
+    if "tor" in (sb.ways or {}):
+        want = bool(sb.ways["tor"])
+        if cfg.services is not None and cfg.effective_with_tor() != want:
+            raise ValueError(
+                f"the brand record says this mesh has {'a' if want else 'no'} Tor "
+                f"address, but --services {'leaves out' if want else 'names'} tor: "
+                "change the record's way (set_ways) or the selection, not both")
+        if cfg.services is None and cfg.with_tor and not want:
+            raise ValueError("the brand record says this mesh has no Tor address, but "
+                             "--with-tor was given: change the record's way (set_ways) "
+                             "or drop the flag")
+        if cfg.services is None:
+            cfg.with_tor = want
     if sb.id:
         cfg.brand = sb.id
     if sb.public_name:
@@ -726,6 +804,8 @@ def show_record_lines(record: BrandRecord, *, env: str = "test") -> list[str]:
         lines.append(f"    {k:<10} {v or '(shipped page)':<24} — {src}")
     lines.append("  ways to reach it:")
     _append_ways(lines, way_effects(record))
+    own_names = [d.name.strip() for d in record.brands
+                 if d.idp == DOMAIN_IDP_OWN and (d.name or "").strip()]
     for d in record.brands:
         bid = brand_id(d)
         lines.append("")
@@ -733,7 +813,8 @@ def show_record_lines(record: BrandRecord, *, env: str = "test") -> list[str]:
                      + (f" — {d.title}" if d.title else ""))
         lines.append(f"  {plain_words.term('sign_in')}: "
                      f"{plain_words.SIGN_IN.get(d.idp, d.idp)}"
-                     + (f"; sign-in port {d.issuer_port}" if d.issuer_port else ""))
+                     + (f"; {sign_in_port_sentence(d, own_names)}"
+                        if d.idp == DOMAIN_IDP_OWN else ""))
         lines.append("  look:")
         for k, (v, src) in effective_look(record, d).items():
             lines.append(f"    {k:<10} {v or '(shipped page)':<24} — {src}")
@@ -751,6 +832,24 @@ def show_record_lines(record: BrandRecord, *, env: str = "test") -> list[str]:
             if k in ("BRAND", "BRAND_TITLE", "SUPERDOMAIN")}
     lines.append("  builder profile:   " + " ".join(f"{k}='{v}'" for k, v in prof.items()))
     return lines
+
+
+def sign_in_port_sentence(row, own_names) -> str:
+    """The sign-in port line of one own-sign-in brand: the port the record stores AND
+    the port the Docker mesh publishes today. The stack node (core/local_stack_node.py)
+    still allocates by table position (own_casdoor.port_for), so when the two differ
+    the sentence says both; a printout that called the stored port effective would be
+    wrong about the running mesh."""
+    name = (getattr(row, "name", "") or "").strip()
+    stored = int(getattr(row, "issuer_port", 0) or 0)
+    docker = own_casdoor.port_for(own_names.index(name)) if name in own_names else 0
+    if not stored:
+        return (f"sign-in port {docker} on the Docker mesh (by table position; "
+                "none recorded)")
+    if stored == docker:
+        return f"sign-in port {stored} (recorded; the Docker mesh publishes it there too)"
+    return (f"sign-in port {stored} recorded — the Docker mesh still publishes it at "
+            f"{docker} (by table position) until the mesh reads the record")
 
 
 def _append_ways(lines: list[str], effects) -> None:
@@ -956,6 +1055,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--record", required=True, help="the brand-record.json to read")
     p.add_argument("--out", default="", help="profile: where to write it (default: stdout)")
     p.add_argument("--env", default="test", choices=("test", "prod"))
+    p.add_argument("--generator-dir", default="",
+                   help="a hugmesh-generator checkout: validate refuses a brand id that "
+                        "names one of its brands/*.conf profiles (as `up` does)")
     args = p.parse_args(argv)
     try:
         rec = load_record(args.record)
@@ -969,7 +1071,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.verb == "manifest":
         print(_dump(manifest_from_record(rec)), end="")
         return 0
-    problems = record_problems(rec) + secret_problems(rec.to_dict(), "record")
+    profiles = profile_names(args.generator_dir) if args.generator_dir else ()
+    problems = (record_problems(rec, profiles=profiles)
+                + secret_problems(rec.to_dict(), "record"))
     if args.verb == "validate":
         for pr in problems:
             print(f"  - {pr}")

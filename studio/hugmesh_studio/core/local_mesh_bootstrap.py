@@ -1062,10 +1062,20 @@ class LocalMeshBootstrap:
             lines.append(f"             domain signs in via the superdomain Casdoor "
                          f"({c.issuer()}")
             lines.append("             = tenant `default`):")
+            # the stack node allocates by table position and reads no stored port
+            # (#654): when the record stores a different one, say so here rather than
+            # print a port this mesh will not publish on
+            stored_ports = {str(r.get("name") or "").strip(): r.get("issuer_port")
+                            for r in c.domains
+                            if isinstance(r.get("issuer_port"), int)
+                            and not isinstance(r.get("issuer_port"), bool)}
             for i, name in enumerate(c.own_idp_domains):
                 lines.append(f"             * {name}: host port "
                              f"{own_casdoor.port_for(i)}, issuer "
                              f"{own_casdoor.issuer_for(name, i)}")
+                if stored_ports.get(name) and stored_ports[name] != own_casdoor.port_for(i):
+                    lines.append(f"               (the brand record stores sign-in port "
+                                 f"{stored_ports[name]}; this mesh does not read it yet)")
         # The DOMAINS the Studio's Domains step recorded (#494). Empty (the default,
         # and every flow that never opened the step) renders NOTHING. Per-domain
         # services are shown as what they are on this lane: recorded, not what picks
@@ -1775,12 +1785,15 @@ def _show_record_cli(args: argparse.Namespace) -> int:
     try:
         cfg = _cfg_from_args(args)
     except (OSError, ValueError) as e:
-        print(f"[refused] cannot read the brand record: {e}", file=sys.stderr)
+        print(f"[refused] brand record: {e}", file=sys.stderr)
         return 2
     rec = brand_model.record_from_bootstrap(cfg)
     for line in brand_model.show_record_lines(rec, env=cfg.env):
         print(line)
-    problems = brand_model.record_problems(rec)
+    # the same check `up` runs (validate()), profiles included, so a record shown
+    # clean here is never refused at the start
+    problems = brand_model.record_problems(
+        rec, profiles=brand_model.profile_names(args.generator_dir))
     if problems:
         print("")
         print("PROBLEMS (this record would be refused):")
@@ -2027,7 +2040,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg = _cfg_from_args(args)
     except (OSError, ValueError) as e:
-        print(f"[refused] cannot read the brand record: {e}", file=sys.stderr)
+        print(f"[refused] brand record: {e}", file=sys.stderr)
         return 2
     boot = LocalMeshBootstrap(args.generator_dir, cfg)
 

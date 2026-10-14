@@ -8,6 +8,7 @@
 // slot common.steps.ts uses, so `the command succeeded`, `the command failed` and
 // `the command output contains` are REUSED as-is. Every step text below starts with
 // "a scratch brand record", "I show the brand record", "I print the Docker mesh plan",
+// "I ask the Docker mesh plan",
 // "I write the builder profile", "the record output", "every look value", "every term",
 // "for brand", "the generated profile", "no builder profile" or "the builder harness",
 // and was grepped across steps/ before it was written.
@@ -53,13 +54,16 @@ function writeRecord(world: { set(k: string, v: unknown): void }, record: unknow
   return file;
 }
 
-function acmeRecord(title: string) {
+function acmeRecord(title: string, tor = true) {
   return {
     schema: 1,
     superbrand: {
       id: 'acme', title, org: 'example', public_name: 'mesh.example',
       internal_root: 'acme.internal',
       look: { primary: '#112233', font: 'System UI' },
+      // the superbrand's Tor way: the record, not a command-line flag, is what turns
+      // Tor on for the Docker plan below (D10)
+      ways: { tor },
     },
     brands: [
       { name: 'shop.mesh.example', title: 'Shop', idp: 'own', tor: true,
@@ -117,6 +121,12 @@ Given('a scratch brand record {string} with a superbrand and the brands {string}
     writeRecord(world, acmeRecord('Acme Mesh'));
   });
 
+Given('a scratch brand record {string} whose superbrand has no Tor address',
+  async ({ world }, superbrand: string) => {
+    expect(superbrand).toBe('acme');
+    writeRecord(world, acmeRecord('Acme Mesh', false));
+  });
+
 Given('a scratch brand record whose superbrand title is a command that would create a sentinel file',
   async ({ world }) => {
     const dir = fresh();
@@ -138,6 +148,12 @@ When('I show the brand record in a fresh Studio process', async ({ world }) => {
 });
 
 When('I print the Docker mesh plan from the brand record in a fresh Studio process', async ({ world }) => {
+  // no --with-tor here on purpose: the record's superbrand way is what the plan reads
+  studio(world, 'local_mesh_bootstrap', ['plan', '--record', world.get<string>(REC_KEY),
+    '--generator-dir', REPO_ROOT]);
+});
+
+When('I ask the Docker mesh plan for Tor on the command line against the brand record', async ({ world }) => {
   studio(world, 'local_mesh_bootstrap', ['plan', '--record', world.get<string>(REC_KEY),
     '--with-tor', '--generator-dir', REPO_ROOT]);
 });

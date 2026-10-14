@@ -3,8 +3,8 @@
 This document is the one place the words of the brand model are written down
 (hugmesh-generator#654, decisions D1 to D5 and D10). The Studio reads the same
 words from one table, `studio/hugmesh_studio/core/plain_words.py`, and
-`tests/scripts/test-brand-words.sh` checks that the table and this document agree,
-so a screen cannot quietly start calling the same thing by a second name.
+`studio/tests/test_brand_record_words.py` checks that the table and this document
+agree, so a screen cannot quietly start calling the same thing by a second name.
 
 Every example here uses placeholders (`acme`, `mesh.example`, `example`). Nothing
 specific to any real organisation belongs in this repository.
@@ -54,10 +54,8 @@ One file per mesh, `brand-record.json`, in the Studio state folder
     "public_name": "mesh.example",
     "internal_root": "acme.internal",
     "central_signin": "https://id.mesh.example",
-    "look": {"primary": "#112233", "font": "System UI"},
-    "ways": {"tor": true},
-    "login_style": "glass",
-    "login_decor": "none"
+    "look": {"primary": "#112233", "font": "System UI", "style": "glass"},
+    "ways": {"tor": true}
   },
   "brands": [
     {"name": "shop.mesh.example", "title": "Shop", "idp": "own", "tor": true,
@@ -100,11 +98,26 @@ in `-pki` (another brand's PKI namespace), or already taken by another brand.
 
 The id is the same text as the registry's namespace prefix, the tenant key of a
 brand with its own sign-in, the Tor key-folder name, the brand column of the
-certificate list and the Vault path segment. No consumer derives its own. A brand
-with its own sign-in has its sign-in port stored in the record (`issuer_port`) and
-never recomputed from its position in the table: removing or reordering a brand moves
-nobody else's sign-in. While the test-only `BRAND_B` knob is set it owns port 8001 and
-the Studio's brands start at 8002.
+certificate list and the Vault path segment. Today one consumer still derives it:
+the Docker mesh's stack node (`core/local_stack_node.py`) hands `own_casdoor` the
+brand names only, so its tenant keys and compose services come from the name while
+the Tor key folder (`domain_services.onion_slug`) reads the stored id. A stored id
+that differs from the derived one would therefore mint an onion for a tenant the
+gateway never registers, and the record **refuses it** (`brand_model.stored_id_problem`)
+until that file passes the record's ids — `own_casdoor.tenancy_env` and
+`compose_overlay` already take an `ids` mapping. Until then every consumer derives
+the same text, which is the one-id rule kept the only way it can be kept today.
+
+A brand with its own sign-in has its sign-in port stored in the record
+(`issuer_port`); the stored port is what `issuer_ports` keeps when a brand is removed
+or reordered. The Docker mesh does not read it yet: the stack node still publishes
+Casdoor by table position (`own_casdoor.port_for`), so `show-record` prints both
+numbers when they differ ("sign-in port 8002 recorded — the Docker mesh still
+publishes it at 8001") and the plan says the same under the own-sign-in list. The
+stored port becomes the published port when the stack node passes
+`brand_model.issuer_ports(record)` to `own_casdoor`, which already accepts it. While
+the test-only `BRAND_B` knob is set it owns port 8001 and the Studio's brands start at
+8002.
 
 ## The look: inherit, then override
 
@@ -112,7 +125,11 @@ The superbrand's `look` holds the default for eight fields: `primary`, `secondar
 `preset`, `mode`, `font`, `style`, `decor`, `bg_effect`. A brand's `look` holds only
 the fields it changes. `brand_model.effective_look` resolves a brand's look field by
 field and says where each value comes from — "inherited from the superbrand" or
-"this brand's own". An unknown field or an unknown value is refused on save.
+"this brand's own". An unknown field or an unknown value is refused on save. The
+sign-in page's shape and menu decoration are the look's `style` and `decor` and
+nothing else: the image config's `login_style`/`login_decor` and the manifest header's
+keys of the same name are projections of those two look fields, so `show-record`, the
+image config and the manifest cannot read different values for one thing.
 
 ## The ways to reach a brand
 
@@ -122,7 +139,12 @@ address (yes or no — the row's `tor` field, the same field the manifest, the D
 mesh and the builders read), and a public name through a provider (the provider, its
 non-secret inputs, and a pointer to the file that holds its token). The Go-Live
 wizard is the one editing home for all of it; the mesh page's Tor switch writes the
-same field through the same function.
+same field through the same function. The superbrand's own Tor address is
+`superbrand.ways.tor`, and `up --record` / `plan --record` start the mesh with Tor on
+or off from it: a `--with-tor` or `--services` flag that says the opposite is a
+contradiction and is refused with the reason, never quietly overridden, so the mesh
+`show-record` describes is the mesh that starts. A record without the key leaves the
+flags as they were.
 
 What each start path does with a recorded way today is printed by `show-record` and
 held in `plain_words.WAY_EFFECT`. In short: the Tor choice is applied on the Docker
@@ -140,7 +162,8 @@ on a device.
   same two functions, so they cannot disagree.
 - **The Docker mesh**: `hugmesh-mesh-bootstrap up --record FILE` starts a mesh from
   a record (the record decides the brand, the public name, the brands and their
-  sign-ins; every other flag still applies), and `show-record --record FILE` prints
+  sign-ins, and whether the mesh starts with Tor on; every other flag still
+  applies), and `show-record --record FILE` prints
   every brand's effective look with the source of each value and the effect of each
   way on each path, in the words above, from a fresh process.
 - **The image builders**: a generated shell profile
@@ -170,6 +193,14 @@ each dropped a key it did not know. They are listed by name in
 `studio/tests/test_brand_record_copy_sites.py` drives one row through all of them and
 back (image config, local mesh, saved mesh, image config again, fleet), then deletes a
 key at each site in turn and shows the round trip go red.
+
+Two sites are **not converted** and are named in `brand_model.COPY_SITES_STILL_DROPPING`:
+the window's Domains table (`gui/pages/domains.py`, `DomainsTableBody.rows`, which the
+Docker mesh page's `_commit_domains` also uses) rebuilds every row from its cells, so a
+Next through either table erases a brand's `id`, `look`, `ways` and `issuer_port`
+today. Those files belong to the brands-table lane of the same design; until it
+lands, a record edited through the window keeps those keys only on the paths listed
+above.
 
 ## The unaffiliated rule
 

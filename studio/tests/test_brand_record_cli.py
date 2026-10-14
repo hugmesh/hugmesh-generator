@@ -51,7 +51,9 @@ def test_show_record_prints_every_brand_with_sources_effects_and_the_models_word
     assert "superbrand: acme — Acme Mesh" in out
     assert "brand shop-mesh-example: shop.mesh.example — Shop" in out
     assert "brand blog-mesh-example: blog.mesh.example — Blog" in out
-    assert f"sign-in: {plain_words.SIGN_IN['own']}; sign-in port 8002" in out
+    assert (f"sign-in: {plain_words.SIGN_IN['own']}; sign-in port 8002 recorded — the "
+            "Docker mesh still publishes it at 8001 (by table position) until the mesh "
+            "reads the record") in out
     assert f"sign-in: {plain_words.SIGN_IN['superdomain']}" in out
     shop = out.split("brand shop-mesh-example")[1].split("brand blog-mesh-example")[0]
     assert "primary    #aa0000                  — this brand's own" in shop
@@ -105,6 +107,50 @@ def test_up_record_starts_from_the_record_and_keeps_every_other_flag(tmp_path, m
     plan = capsys.readouterr().out
     assert "Brand:      acme  (Acme Mesh)" in plan
     assert "shop.mesh.example: its own onion (key ‘shop-mesh-example’), served as brand ‘shop-mesh-example’" in plan
+
+
+def test_plan_record_applies_the_records_tor_way_and_refuses_a_contradicting_flag(tmp_path, capsys):
+    """The record's superbrand says Tor yes: plan --record (no --with-tor) starts the
+    mesh with Tor on and mints the brand's onion; --services without tor contradicts
+    it and is refused with the reason; a record saying no refuses --with-tor."""
+    path = _record_file(tmp_path)
+    rec = bm.load_record(path)
+    assert bm.set_ways(rec, "acme", tor=True) == []
+    bm.save_record(rec, path)
+    rc = main(["plan", "--record", path, "--generator-dir", GENERATOR_DIR])
+    out = capsys.readouterr().out
+    assert rc == 0 and "TOR=on" in out
+    assert "shop.mesh.example: its own onion (key ‘shop-mesh-example’), served as brand ‘shop-mesh-example’" in out
+    assert "NO onion" not in out
+    # the plan says the record's sign-in port is not what this mesh publishes on
+    assert "host port 8001" in out
+    assert "(the brand record stores sign-in port 8002; this mesh does not read it yet)" in out
+    rc = main(["plan", "--record", path, "--services", "tuwunel", "--generator-dir", GENERATOR_DIR])
+    err = capsys.readouterr().err
+    assert rc == 2 and "says this mesh has a Tor address, but --services leaves out tor" in err
+    assert bm.set_ways(rec, "acme", tor=False) == []
+    bm.save_record(rec, path)
+    rc = main(["plan", "--record", path, "--with-tor", "--generator-dir", GENERATOR_DIR])
+    err = capsys.readouterr().err
+    assert rc == 2 and "says this mesh has no Tor address, but --with-tor was given" in err
+    rc = main(["plan", "--record", path, "--generator-dir", GENERATOR_DIR])
+    out = capsys.readouterr().out
+    assert rc == 0 and "TOR=off" in out and "NO onion for the Tor domains" in out
+    # show-record on the same record gives the same answer as the plan
+    rc = main(["show-record", "--record", path, "--generator-dir", GENERATOR_DIR])
+    out = capsys.readouterr().out
+    assert rc == 0 and "Tor address: no" in out.split("brand shop-mesh-example")[0]
+
+
+def test_show_record_refuses_a_brand_id_that_names_a_profile_as_up_does(tmp_path, capsys):
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"schema": 1, "superbrand": {"id": "acme"},
+                               "brands": [{"name": "example", "idp": "superdomain"}]}))
+    rc = main(["show-record", "--record", str(bad), "--generator-dir", GENERATOR_DIR])
+    out = capsys.readouterr().out
+    assert rc == 1 and "names an existing brands/example.conf profile" in out
+    assert bm.main(["validate", "--record", str(bad), "--generator-dir", GENERATOR_DIR]) == 1
+    assert "names an existing brands/example.conf profile" in capsys.readouterr().out
 
 
 def test_plan_record_is_the_same_record_the_saved_mesh_round_trips(tmp_path):

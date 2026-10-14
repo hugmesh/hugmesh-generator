@@ -12,7 +12,13 @@
 * set_ways is the one writer of the Tor way (the row's ``tor`` field);
 * effective_look says where each value comes from, in the model's words;
 * issuer ports are stored, never recomputed from position; BRAND_B owns 8001;
-* the unaffiliated rule's fourth site: identity refused, look allowed.
+* the unaffiliated rule's fourth site: identity refused, look allowed;
+* one id for every consumer: a stored id reaches the Tor key folder AND the sign-in
+  registry, and a stored id the Docker mesh cannot honour yet is refused;
+* one representation of the sign-in page's style: the look, read by show-record, the
+  image config and the manifest header alike;
+* the superbrand's Tor way is applied on the start path, and a flag that contradicts
+  it is refused rather than overridden.
 """
 from __future__ import annotations
 
@@ -23,8 +29,9 @@ import subprocess
 import pytest
 
 from hugmesh_studio.core import brand_model as bm
-from hugmesh_studio.core import own_casdoor, plain_words
-from hugmesh_studio.core.config import DOMAIN_IDP_OWN, Domain, ImageConfig
+from hugmesh_studio.core import domain_services, own_casdoor, plain_words
+from hugmesh_studio.core.config import (DOMAIN_IDP_OWN, Domain, ImageConfig,
+                                        domain_from_record_row)
 from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrapConfig
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -77,8 +84,7 @@ def test_a_newer_schema_is_refused_not_guessed():
 
 
 def test_manifest_is_a_projection_of_the_record():
-    rec = _record()
-    rec.superbrand.login_style = "glass"
+    rec = _record()                                  # its look says style glass
     m = bm.manifest_from_record(rec)
     assert m["brand"] == "acme" and m["superdomain"] == "acme.internal"
     assert m["cluster_domain"] == "mesh.example" and m["login_style"] == "glass"
@@ -109,6 +115,49 @@ def test_image_config_and_record_convert_both_ways():
     assert other.additional_domains is True
 
 
+def test_style_and_decor_have_one_representation_the_look():
+    """show-record, the image config and the manifest header read the SAME value:
+    a record whose look says glass gives cfg.login_style glass and a manifest header
+    login_style glass (before this, two fields were never reconciled and show-record
+    printed a style the image config never got)."""
+    rec = bm.BrandRecord(superbrand=bm.Superbrand(id="acme", look={"style": "glass",
+                                                                   "decor": "none"}))
+    assert bm.record_problems(rec) == []
+    assert bm.effective_look(rec)["style"] == ("glass", plain_words.LOOK_SOURCE["default"])
+    assert rec.superbrand.login_style == "glass" and rec.superbrand.login_decor == "none"
+    cfg = ImageConfig(mode="mesh", role="omnibus")
+    bm.apply_record_to_image_config(rec, cfg)
+    assert cfg.login_style == "glass" and cfg.login_decor == "none"
+    m = bm.manifest_from_record(rec)
+    assert m["login_style"] == "glass" and m["login_decor"] == "none"
+    # the saved block carries the look only — no second key to disagree with it
+    assert set(rec.superbrand.to_dict()) == {"id", "look"}
+    # an early block with separate login_style/login_decor keys folds into the look,
+    # and the look's own value wins when both are present
+    early = bm.Superbrand.from_dict({"id": "acme", "login_style": "sharp",
+                                     "login_decor": "none", "look": {"style": "glass"}})
+    assert early.look == {"style": "glass", "decor": "none"} and early.login_style == "glass"
+    # a pre-#654 manifest's header style lands in the look too
+    old = bm.BrandRecord.from_dict({"brand": "acme", "login_style": "sharp", "domains": []})
+    assert old.superbrand.look == {"style": "sharp"}
+    # an unknown value is refused once, through the look
+    bad = bm.BrandRecord(superbrand=bm.Superbrand(id="acme", look={"style": "wobbly"}))
+    assert [p for p in bm.record_problems(bad) if "style" in p] == [
+        "superbrand: unknown look.style ‘wobbly’"]
+
+
+def test_an_empty_look_value_sets_nothing_on_the_image_config():
+    """look.bg_effect "" passes validation (an empty value says nothing); applying it
+    must not write "" into a field whose table has no "" (theme.BG_EFFECTS)."""
+    rec = bm.BrandRecord(superbrand=bm.Superbrand(id="acme", look={"bg_effect": "",
+                                                                   "primary": "#112233"}))
+    assert bm.record_problems(rec) == []
+    cfg = ImageConfig(mode="mesh", role="omnibus")
+    before = cfg.login_bg_effect
+    bm.apply_record_to_image_config(rec, cfg)
+    assert cfg.login_bg_effect == before and cfg.login_primary_color == "#112233"
+
+
 # ── the id rule (D4) ───────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("candidate,why", [
     ("", "needs an id"),
@@ -137,6 +186,54 @@ def test_a_good_id_passes_and_the_default_is_the_slug_of_the_public_name():
     assert bm.brand_id(Domain(name="shop.mesh.example")) == "shop-mesh-example"
     assert bm.brand_id(Domain(name="shop.mesh.example", id="shop")) == "shop"
     assert bm.brand_id(Domain(name="shop.mesh.example", id="shop")) == own_casdoor.slug("shop")
+
+
+def test_a_stored_id_reaches_every_consumer_or_is_refused():
+    """D4: one text every consumer shares. The Tor key folder reads the stored id
+    (this assertion is what the skeptics' surviving mutation lacked), own_casdoor's
+    registry and overlay read it when given the ids mapping, and the two agree for one
+    row. The Docker mesh's stack node does not pass that mapping yet, so a record
+    whose stored id differs from the derived one is REFUSED with that reason, and a
+    stored id equal to the derived one is accepted — every consumer then derives the
+    same text."""
+    row = Domain(name="shop.mesh.example", id="shop", idp=DOMAIN_IDP_OWN, tor=True)
+    assert domain_services.onion_slug("shop.mesh.example", "shop") == "shop"
+    assert domain_services.onion_slug("shop.mesh.example") == "shop-mesh-example"
+    assert domain_services.onion_tenant(row) == "shop"
+    ids = {"shop.mesh.example": "shop"}
+    env = own_casdoor.tenancy_env(["shop.mesh.example"], "http://localhost:8000", ids=ids)
+    assert env["APP_TENANCY_HOSTS"] == "shop.mesh.example=shop"
+    assert env["APP_TENANCY_ISSUERS"].endswith(
+        "http://casdoor-shop.localtest.me:8001=shop")
+    overlay = own_casdoor.compose_overlay(["shop.mesh.example"], ids=ids)
+    assert "  casdoor-shop:\n" in overlay and "casdoor-shop-pg:" in overlay
+    assert "shop-mesh-example" not in overlay
+    # the onion's tenant IS the tenant the registry maps the brand's host to
+    registered = dict(h.split("=") for h in env["APP_TENANCY_HOSTS"].split(","))
+    assert domain_services.onion_tenant(row) == registered["shop.mesh.example"]
+    # without ids every function derives exactly what it did before
+    assert own_casdoor.tenancy_env(["a.example"], "http://x") == own_casdoor.tenancy_env(
+        ["a.example"], "http://x", ids={})
+    assert own_casdoor.compose_overlay(["a.example"]) == own_casdoor.compose_overlay(
+        ["a.example"], ids=None)
+    # the record refuses the split while the stack node derives
+    rec = _record()
+    rec.brands[0].id = "shop"
+    problems = bm.record_problems(rec)
+    assert problems == ["brand shop.mesh.example: its stored id ‘shop’ differs from the id "
+                        "its public name derives (‘shop-mesh-example’); "
+                        + bm.STORED_ID_MUST_MATCH]
+    assert bm.stored_id_problem(rec.brands[0]) and bm.STORED_ID_MUST_MATCH in bm.stored_id_problem(rec.brands[0])
+    rec.brands[0].id = "shop-mesh-example"
+    assert bm.record_problems(rec) == [] and bm.stored_id_problem(rec.brands[0]) == ""
+    assert bm.stored_id_problem(Domain(name="shop.mesh.example")) == ""
+
+
+def test_a_recorded_row_with_an_empty_sign_in_takes_the_default():
+    """The lenient loader's empty-idp branch (a hand-edited saved mesh)."""
+    assert domain_from_record_row({"name": "a.example", "idp": ""}).idp == "superdomain"
+    assert domain_from_record_row({"name": "a.example", "idp": None}).idp == "superdomain"
+    assert domain_from_record_row({"name": "a.example", "idp": "own"}).idp == "own"
 
 
 def test_profile_names_read_the_brands_folder_minus_the_ca_registry():
@@ -314,6 +411,50 @@ def test_set_ways_is_the_one_writer_and_writes_the_tor_field(tmp_path):
     # the superbrand's own ways
     assert bm.set_ways(rec, "acme", tor=True) == []
     assert rec.superbrand.ways["tor"] is True
+    # a brand's Tor address is its tor field: a tor key in a brand's ways is a second
+    # place saying the same thing, and is refused by name
+    assert bm.ways_problems({"tor": True}, "brand x") == [
+        "brand x: unknown way ‘tor’ (internal_name, public); a brand's Tor address is "
+        "its tor field, written by set_ways"]
+    assert bm.ways_problems({"tor": True}, "superbrand", superbrand=True) == []
+    assert bm.ways_problems({"tor": "yes"}, "superbrand", superbrand=True) == [
+        "superbrand: ways.tor must be yes or no (true/false)"]
+    assert bm.ways_problems({"other": 1}, "superbrand", superbrand=True) == [
+        "superbrand: unknown way ‘other’ (internal_name, public, tor)"]
+    rec.brands[0].ways = {"tor": True}
+    assert any("a brand's Tor address is its tor field" in p for p in bm.record_problems(rec))
+
+
+def test_the_superbrands_tor_way_drives_the_start_path_and_a_contradicting_flag_is_refused():
+    """What show-record prints and what up --record starts are ONE answer: the
+    record's ways.tor becomes with_tor; a flag saying the opposite is refused, never
+    silently overridden; a record without the key leaves the flags alone."""
+    rec = _record()
+    assert bm.set_ways(rec, "acme", tor=True) == []
+    cfg = LocalMeshBootstrapConfig()
+    bm.apply_record_to_bootstrap(rec, cfg)
+    assert cfg.with_tor is True and cfg.effective_with_tor() is True
+    assert bm.record_from_bootstrap(cfg).superbrand.ways["tor"] is True
+    # a matching selection is fine; one that leaves tor out contradicts the record
+    bm.apply_record_to_bootstrap(rec, LocalMeshBootstrapConfig(services=("tor",)))
+    with pytest.raises(ValueError, match="leaves out tor"):
+        bm.apply_record_to_bootstrap(rec, LocalMeshBootstrapConfig(services=("tuwunel",)))
+    # the record says no: --with-tor contradicts it; a selection naming tor too
+    assert bm.set_ways(rec, "acme", tor=False) == []
+    off = LocalMeshBootstrapConfig(with_tor=True)
+    with pytest.raises(ValueError, match="--with-tor was given"):
+        bm.apply_record_to_bootstrap(rec, off)
+    assert off.brand != "acme"                     # nothing applied on a refusal
+    with pytest.raises(ValueError, match="names tor"):
+        bm.apply_record_to_bootstrap(rec, LocalMeshBootstrapConfig(services=("tor",)))
+    plain = LocalMeshBootstrapConfig()
+    bm.apply_record_to_bootstrap(rec, plain)
+    assert plain.with_tor is False
+    # no way recorded: the flags are the caller's
+    rec.superbrand.ways = {}
+    kept = LocalMeshBootstrapConfig(with_tor=True)
+    bm.apply_record_to_bootstrap(rec, kept)
+    assert kept.with_tor is True
 
 
 def test_way_effects_cover_every_way_on_every_path_in_the_models_words():
@@ -352,6 +493,24 @@ def test_brand_b_owns_8001_so_studio_brands_start_at_8002():
     # without a mapping the table-position rule is byte-identical to before
     assert own_casdoor.compose_overlay(["a.example"]) == own_casdoor.compose_overlay(
         ["a.example"], {})
+
+
+def test_the_sign_in_port_line_says_what_the_docker_mesh_does_today():
+    """The stored port is RECORDED; the stack node still publishes by table position,
+    so show-record never calls a stored port effective when the mesh will not use it."""
+    own = ["shop.mesh.example", "forum.mesh.example"]
+    assert bm.sign_in_port_sentence(Domain(name="shop.mesh.example", idp=DOMAIN_IDP_OWN,
+                                           issuer_port=8002), own) == (
+        "sign-in port 8002 recorded — the Docker mesh still publishes it at 8001 (by "
+        "table position) until the mesh reads the record")
+    assert bm.sign_in_port_sentence(Domain(name="forum.mesh.example", idp=DOMAIN_IDP_OWN,
+                                           issuer_port=8002), own) == (
+        "sign-in port 8002 (recorded; the Docker mesh publishes it there too)")
+    assert bm.sign_in_port_sentence(Domain(name="forum.mesh.example", idp=DOMAIN_IDP_OWN),
+                                    own) == (
+        "sign-in port 8002 on the Docker mesh (by table position; none recorded)")
+    lines = "\n".join(bm.show_record_lines(_record()))
+    assert "sign-in port 8001 on the Docker mesh (by table position; none recorded)" in lines
 
 
 # ── the unaffiliated rule (D20) ────────────────────────────────────────────────────
