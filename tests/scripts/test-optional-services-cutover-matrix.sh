@@ -463,6 +463,12 @@ mkdir -p "${WORK}/outside"
 rm -rf "${d:?}/${rpath}"; ln -s "${WORK}/outside" "${d}/${rpath}"
 redset i1h "runtime-only ${rslug}'s directory is a SYMLINK to a directory outside the tree" "I1" 'resolves to \.\./'
 
+d="$(stage i1l)"
+# the target is exactly the PARENT of the tree root: it resolves to '..', which is neither
+# '.' nor begins with '../'
+rm -rf "${d:?}/${rpath}"; ln -s "${WORK}" "${d}/${rpath}"
+redset i1l "runtime-only ${rslug}'s directory is a SYMLINK to the parent of the tree root" "I1" 'resolves to \.\.\)'
+
 d="$(stage i1i)"
 rm -rf "${d:?}/${rpath}"; ln -s "${WORK}/i1i/${r2path}" "${d}/${rpath}"
 redset i1i "runtime-only ${rslug}'s directory is a symlink to ${r2slug}'s (one real directory, two claims)" "I6" 'all name manifest dir'
